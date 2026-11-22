@@ -76,10 +76,14 @@ func operations() []growth.Operation {
 			Resource: "accounts.mediationGroups.mediationAbExperiments", Class: growth.ClassOperate,
 			Roles: inventoryManagers, Permissions: writeScopes,
 			Reason: limitedNote},
+		// KEEPING THE TREATMENT REPLACES THE GROUP'S LINES with its own, so
+		// every control line it lacks is removed, as a line set to REMOVED is:
+		// admin. Keeping the control changes no line (Pausing names it).
 		{ID: "admob.accounts.mediationGroups.mediationAbExperiments.stop", Method: "POST",
 			Path:     api + "/v1beta/accounts/{accountsId}/mediationGroups/{mediationGroupsId}/mediationAbExperiments:stop",
-			Resource: "accounts.mediationGroups.mediationAbExperiments", Class: growth.ClassOperate,
-			Roles: inventoryManagers, Permissions: writeScopes,
+			Resource: "accounts.mediationGroups.mediationAbExperiments", Class: growth.ClassOperate, Danger: true,
+			Fields: []growth.FieldRule{{Field: "variantChoice", Class: growth.ClassAdmin, Pausing: []string{variantA}}},
+			Roles:  inventoryManagers, Permissions: writeScopes,
 			Reason: limitedNote},
 		{ID: networkReportOp, Method: "POST", Path: api + "/v1/accounts/{accountsId}/networkReport:generate",
 			Resource: "accounts.networkReport", Class: growth.ClassRead, Reads: true, Roles: reportReaders,
@@ -92,6 +96,12 @@ func operations() []growth.Operation {
 			Permissions: readScopes},
 	}
 }
+
+// The variants an experiment is stopped keeping.
+const (
+	variantA = "VARIANT_CHOICE_A"
+	variantB = "VARIANT_CHOICE_B"
+)
 
 // The report operations, which the report tools call.
 const (

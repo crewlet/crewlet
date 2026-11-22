@@ -140,7 +140,7 @@ func classOf(req googlegrowth.Request, before []byte) growth.Class {
 }
 
 // mapKey is a map entry's key in a field's name, as a mask writes it.
-var mapKey = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`\["(?:[^"\\]|\\.)*"\]`) })
+var mapKey = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`\["[^"]*"\]`) })
 
 // canonical is a field's name without its map keys.
 func canonical(field string) string { return mapKey().ReplaceAllString(field, "") }
@@ -266,6 +266,13 @@ func maskChanges(mask string, before, after map[string]any) []growth.Change {
 		b, a := walk(before, steps), walk(after, steps)
 		switch {
 		case len(steps) == 1 && steps[0].name == linesField && steps[0].key != "":
+			if a == nil {
+				// A LINE THE MASK NAMES AND THE BODY LEAVES OUT IS CLEARED,
+				// which removes it.
+				was, _ := b.(map[string]any)
+				out = append(out, growth.Change{Field: label + ".state", Before: was["state"], After: lineRemoved})
+				continue
+			}
 			out = append(out, lineChanges(label, b, a)...)
 		case len(steps) == 1 && steps[0].name == linesField:
 			bl, _ := b.(map[string]any)
@@ -310,17 +317,15 @@ func union(a, b map[string]any) map[string]bool {
 	return out
 }
 
-// lineChanges are the fields of one mediation line that differ, before to after.
+// lineChanges are the fields of one mediation line that differ, before to
+// after. A line named whole is replaced whole, so a field the new line leaves
+// out is cleared (a state cleared is no ENABLED or DISABLED, so admin).
 func lineChanges(label string, before, after any) []growth.Change {
 	b, _ := before.(map[string]any)
 	a, _ := after.(map[string]any)
 	var out []growth.Change
 	for _, k := range sortedKeys(union(b, a)) {
 		if slices.Contains(lineOutputs, k) || reflect.DeepEqual(b[k], a[k]) {
-			continue
-		}
-		// A FIELD THE NEW LINE LEAVES OUT IS NOT CHANGED: Google keeps it.
-		if _, set := a[k]; !set {
 			continue
 		}
 		out = append(out, growth.Change{Field: label + "." + k, Before: b[k], After: a[k]})
@@ -333,10 +338,20 @@ type step struct{ name, key string }
 
 // maskStep is one segment: a snake_case name, optionally ["key"].
 var maskStep = sync.OnceValue(func() *regexp.Regexp {
-	return regexp.MustCompile(`^([a-z][a-z0-9_]*)(?:\["((?:[^"\\]|\\.)*)"\])?`)
+	return regexp.MustCompile(`^([a-z][a-z0-9_]*)(?:\["([^"\\]*)"\])?`)
 })
 
-// parseMask reads a mask path into its steps, names in the body's camelCase.
+// mapKeys are the map fields a mask may index, and the shape of each one's
+// keys: a mediation line's ID (negative for a new line) and an ad unit's ID.
+var mapKeys = sync.OnceValue(func() map[string]*regexp.Regexp {
+	return map[string]*regexp.Regexp{
+		linesField:       regexp.MustCompile(`^-?[0-9]{1,20}$`),
+		"adUnitMappings": regexp.MustCompile(`^ca-app-pub-[0-9]{16}/[0-9]{1,20}$`),
+	}
+})
+
+// parseMask reads a mask path into its steps, names in the body's camelCase:
+// false for a path of another shape, or a key no map of that name holds.
 func parseMask(path string) ([]step, bool) {
 	var out []step
 	for path != "" {
@@ -344,7 +359,11 @@ func parseMask(path string) ([]step, bool) {
 		if m == nil {
 			return nil, false
 		}
-		out = append(out, step{name: camel(m[1]), key: m[2]})
+		s := step{name: camel(m[1]), key: m[2]}
+		if shape, indexed := mapKeys()[s.name]; m[0] != m[1] && (!indexed || !shape.MatchString(s.key)) {
+			return nil, false
+		}
+		out = append(out, s)
 		path = path[len(m[0]):]
 		if path == "" {
 			break

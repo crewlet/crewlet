@@ -30,10 +30,14 @@
 // with typed arguments, and one generic tool per class names any method of
 // its class. Nothing in AdMob spends money or publishes: AdMob pays the
 // publisher, and every write configures monetization, so each is operate,
-// except two irreversible changes classed admin per call: linking a new app
-// to its store listing, and removing a mediation line. Ten methods are what
-// Google calls limited access; they stay offered, and Google's 403 says how
-// to get them allowed.
+// except the irreversible changes classed admin per call: linking a new app
+// to its store listing, removing a mediation line, and stopping an A/B
+// experiment keeping the treatment's lines, which removes the control lines it
+// lacks. A patch is classed by its update mask, so a change names one, and
+// every spelling Google reads that the engine would not (a proto-named body
+// field, an unknown query key, a map key of another shape) is refused. Ten
+// methods are what Google calls limited access; they stay offered, and
+// Google's 403 says how to get them allowed.
 //
 // # Somebody else's words
 //

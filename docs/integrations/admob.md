@@ -16,7 +16,7 @@ An agent is on at one level across every publisher account it is granted.
 |---|---|---|
 | `read` (the default) | Accounts, apps, ad units, ad unit mappings, ad sources and their adapters, mediation groups, and the network, mediation and campaign reports | Any role reads accounts and inventory; the reports need Reports and performance data at View |
 | `operate` | Everything `read` can, plus changes made at once and recorded: new apps by name, ad units, ad unit mappings, mediation groups and their lines (ad source, eCPM, mode, enabled or disabled, ad units), and starting or stopping a mediation A/B experiment | Inventory management at View and manage, or Manager; and the sign-in made again to allow changes |
-| `administer` | Everything `operate` can, plus asking an administrator to approve each change that cannot be undone: linking a new app to its store listing, removing a mediation line | The same as `operate` |
+| `administer` | Everything `operate` can, plus asking an administrator to approve each change that cannot be undone: linking a new app to its store listing, removing a mediation line, stopping an A/B experiment keeping the treatment's lines | The same as `operate` |
 
 Raising an agent to `operate` or `administer` asks for a fresh sign-in (step-up).
 
@@ -63,20 +63,20 @@ Google calls ten methods limited access (marked in the table below): they answer
 | `admob_ad_unit_create` | operate | Creates an ad unit for an app |
 | `admob_ad_unit_mapping_create` | operate | Maps ad units to an ad source's adapter, one or up to 100 at once |
 | `admob_mediation_group_upsert` | operate | Creates a mediation group, or changes one by its update mask |
-| `admob_ab_experiment` | operate | Starts a mediation A/B experiment, or stops the running one keeping either variant |
+| `admob_ab_experiment` | operate | Starts a mediation A/B experiment, or stops the running one keeping the control |
 | `admob_read` | read | Any method that only reads, by its ID |
 | `admob_operate` | operate | Any change, by its method's ID |
-| `admob_admin` | admin | Linking a new app to its store listing, or removing a mediation line: asked first |
+| `admob_admin` | admin | Linking a new app to its store listing, removing a mediation line, or keeping an experiment's treatment: asked first |
 
-A change is classed per call from what it sets: creating an app is `operate` and setting its `linkedAppInfo.appStoreId` is `admin`, since Google says a store link cannot be undone; a mediation line's state set to `ENABLED` or `DISABLED` is `operate` and `REMOVED` is `admin`, whether the update mask names the line's state, the whole line, or the whole line map that leaves the line out. An update mask the engine cannot read is refused before Google is asked. A call on the wrong tool for what it changes is refused with the tool that may make it.
+A change is classed per call from what it sets: creating an app is `operate` and setting its `linkedAppInfo.appStoreId` is `admin`, since Google says a store link cannot be undone; a mediation line's state set to `ENABLED` or `DISABLED` is `operate`, and `REMOVED`, or any other state, is `admin`, whether the update mask names the line's state, the whole line (a field it leaves out is cleared), a line the body leaves out, or the whole line map that leaves the line out; stopping an experiment keeping the treatment (`VARIANT_CHOICE_B`) replaces the group's lines with the treatment's, so it is `admin` too. A change names its fields in `updateMask`: one without, a mask the engine cannot read, a body field spelled as its proto name (`linked_app_info`) and a query parameter the method does not take (`update_mask`) are refused before Google is asked, since Google reads each of them and the engine's class would not. A call on the wrong tool for what it changes is refused with the tool that may make it.
 
 **What a call may reach:**
 - An account outside the agent's list is refused before Google is asked, and so is a batch item naming another account's ad unit.
 - The account listing is cut to the agent's accounts.
 
-**What an agent reads:** every value Google answers with is fenced as somebody else's words: app, ad unit, mediation group and line names are typed by your account's users, store listing names by whoever owns the listing, and ad source, adapter and campaign names by third parties. A report's dimension that carries a name has a `_NAME` column beside its ID, fenced. An ad unit mapping's configuration values are a third-party network's identifiers, some of them keys, so they are withheld from every answer and the access log keeps their digest.
+**What an agent reads:** an app's approval state (`ACTION_REQUIRED`, `IN_REVIEW`, `APPROVED`) and its store link are in the app listing; an app not yet approved serves no ads, and its fix is in AdMob. Every value Google answers with is fenced as somebody else's words: app, ad unit, mediation group and line names are typed by your account's users, store listing names by whoever owns the listing, and ad source, adapter and campaign names by third parties. A report's dimension that carries a name has a `_NAME` column beside its ID, fenced. An ad unit mapping's configuration values are a third-party network's identifiers, some of them keys, so they are withheld from every answer and the access log keeps their digest.
 
-**Reports:** a report's days are cut in the account's reporting time zone, or in `America/Los_Angeles`, the one other zone Google accepts. Money is a decimal string of the account's currency (or the one asked for), never summed across currencies. An answer carries at most 2,000 rows and says when Google had more, passing Google's own row count on as an estimate, which Google says may be off; earnings are marked estimated, since Google restates recent days; and Google's warnings (data delayed, a zone or currency changed) are passed through.
+**Reports:** a report's days are cut in the account's reporting time zone, or in `America/Los_Angeles`, the one other zone Google accepts. Money is a decimal string of the account's currency (or the one asked for), never summed across currencies. An answer carries at most 2,000 rows and says it is cut when Google had more (the engine asks for one row past the limit), passing Google's own row count on as an estimate, which Google says may be off; a campaign report, which Google caps at no row count, is refused with a remedy when it is larger than one answer holds; earnings are marked estimated, since Google restates recent days; and Google's warnings (data delayed, a zone or currency changed) are passed through.
 
 ## Configuration
 
@@ -118,7 +118,7 @@ Each row is one method the engine offers, with its class, the least role Google 
 | `admob.accounts.mediationGroups.create` | accounts.mediationGroups | `POST /v1beta/accounts/{accountsId}/mediationGroups` | operate | Inventory management, View and manage | admob.monetization (limited access) |
 | `admob.accounts.mediationGroups.patch` | accounts.mediationGroups | `PATCH /v1beta/accounts/{accountsId}/mediationGroups/{mediationGroupsId}` | operate, admin by field | Inventory management, View and manage | admob.monetization (limited access) |
 | `admob.accounts.mediationGroups.mediationAbExperiments.create` | accounts.mediationGroups.mediationAbExperiments | `POST /v1beta/accounts/{accountsId}/mediationGroups/{mediationGroupsId}/mediationAbExperiments` | operate | Inventory management, View and manage | admob.monetization (limited access) |
-| `admob.accounts.mediationGroups.mediationAbExperiments.stop` | accounts.mediationGroups.mediationAbExperiments | `POST /v1beta/accounts/{accountsId}/mediationGroups/{mediationGroupsId}/mediationAbExperiments:stop` | operate | Inventory management, View and manage | admob.monetization (limited access) |
+| `admob.accounts.mediationGroups.mediationAbExperiments.stop` | accounts.mediationGroups.mediationAbExperiments | `POST /v1beta/accounts/{accountsId}/mediationGroups/{mediationGroupsId}/mediationAbExperiments:stop` | operate, admin by field | Inventory management, View and manage | admob.monetization (limited access) |
 | `admob.accounts.networkReport.generate` | accounts.networkReport | `POST /v1/accounts/{accountsId}/networkReport:generate` | read | Reports and performance data, View | admob.readonly or admob.report |
 | `admob.accounts.mediationReport.generate` | accounts.mediationReport | `POST /v1/accounts/{accountsId}/mediationReport:generate` | read | Reports and performance data, View | admob.readonly or admob.report |
 | `admob.accounts.campaignReport.generate` | accounts.campaignReport | `POST /v1beta/accounts/{accountsId}/campaignReport:generate` | read | Reports and performance data, View | admob.readonly or admob.report |
@@ -126,7 +126,7 @@ Each row is one method the engine offers, with its class, the least role Google 
 **Notes on the classing:**
 - No method spends money or publishes: AdMob pays the publisher, and every write configures monetization. Enabling a mediation line or raising its eCPM changes which ad source serves, not money paid out, so it is `operate`.
 - No method deletes. An app, an ad unit or a mapping created through the API stays; ad units are archived in AdMob, permanently.
-- Stopping an A/B experiment is `operate` whichever variant it keeps: the group stays editable afterwards.
+- Stopping an A/B experiment keeping the control changes no line, so it is `operate`; keeping the treatment removes every control line the treatment lacks, so it is `admin`. The API offers no read of an experiment before it stops, so its leader (`variantLeader`) is in the stop's answer, not before it.
 
 **What no tool reaches, because AdMob offers no API for it:** users and roles, MCM relationships, terms, closing the account, payments, blocking controls, privacy and messaging, app-ads.txt, archiving apps and ad units, and managing campaigns. A person does these in AdMob.
 

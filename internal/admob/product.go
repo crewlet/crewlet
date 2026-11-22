@@ -33,7 +33,7 @@ func New(company func() *config.Company, env func() *config.Resolver, grant goog
 		company: company,
 		client: &googlegrowth.Client{
 			Kind: string(Kind), Name: "AdMob", Company: company, Env: env, Grant: grant, Audit: audit, HTTP: hc,
-			Secrets: []string{secretField}, Refused: vendorRefusal,
+			Secrets: []string{secretField}, Texts: []string{"displayName", "unitType"}, Refused: vendorRefusal,
 		},
 		now:      time.Now,
 		accounts: newAccountCache(),
@@ -183,6 +183,14 @@ func newRequest(op growth.Operation, path, query map[string]string, body map[str
 				"parameter %q. No vendor was reached.", op.ID, name))
 		}
 	}
+	for name := range query {
+		// A QUERY KEY THE METHOD DOES NOT TAKE could carry a field mask under
+		// its proto name (update_mask) that the engine never read.
+		if !slices.Contains(queryKeys(op), name) {
+			return googlegrowth.Request{}, refusal(growth.RefusedInvalid, fmt.Sprintf("%s takes no query "+
+				"parameter %q; it takes %s. No vendor was reached.", op.ID, name, orNone(queryKeys(op))))
+		}
+	}
 	if key := snakeKey(body); key != "" {
 		return googlegrowth.Request{}, refusal(growth.RefusedInvalid, fmt.Sprintf("the body's field %q is "+
 			"spelled as the API's proto name; give it as its JSON name, %q, which the engine classes the "+
@@ -193,10 +201,18 @@ func newRequest(op growth.Operation, path, query map[string]string, body map[str
 		return req, err
 	}
 	if op.Method == "PATCH" {
-		for _, p := range maskPaths(query["updateMask"]) {
+		paths := maskPaths(query["updateMask"])
+		if len(paths) == 0 {
+			// NO MASK IS EVERY FIELD THE BODY SETS at Google, a whole line map
+			// replaced: a change names what it changes.
+			return googlegrowth.Request{}, refusal(growth.RefusedInvalid, "a change names the fields it "+
+				"sets in updateMask; Google replaces each field it names, and only those. No vendor was reached.")
+		}
+		for _, p := range paths {
 			if _, ok := parseMask(p); !ok {
 				return googlegrowth.Request{}, refusal(growth.RefusedInvalid, fmt.Sprintf("updateMask path %q is "+
-					"not one AdMob takes: snake_case fields, a map entry as name[\"key\"], joined by dots. "+
+					"not one AdMob takes: snake_case fields joined by dots, a line as "+
+					"mediation_group_lines[\"<line id>\"] and its ad unit as ad_unit_mappings[\"<ad unit id>\"]. "+
 					"No vendor was reached.", p))
 			}
 		}
@@ -204,6 +220,28 @@ func newRequest(op growth.Operation, path, query map[string]string, body map[str
 	req.Account = path["accountsId"]
 	req.Diff = diffOf(op, body, req.Query.Get("updateMask"))
 	return req, nil
+}
+
+// queryKeys are the query parameters op takes: a listing's paging, and its
+// filter where Google offers one; a patch's update mask; nothing else.
+func queryKeys(op growth.Operation) []string {
+	switch {
+	case op.Method == "PATCH":
+		return []string{"updateMask"}
+	case op.ID == "admob.accounts.mediationGroups.list" || op.ID == "admob.accounts.adUnits.adUnitMappings.list":
+		return []string{"pageSize", "pageToken", "filter"}
+	case strings.HasSuffix(op.ID, ".list"):
+		return []string{"pageSize", "pageToken"}
+	}
+	return nil
+}
+
+// orNone is names as a list, "none" for none.
+func orNone(names []string) string {
+	if len(names) == 0 {
+		return "none"
+	}
+	return strings.Join(names, ", ")
 }
 
 // vendorRefusal says Google's refusal of req in words the agent acts on; nil
