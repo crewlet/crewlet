@@ -219,6 +219,37 @@ func TestAGoogleAdsAccountIsAnAccount(t *testing.T) {
 	find(t, read(c), atlas.KindAccount, "google/ads")
 }
 
+// A SEARCH CONSOLE SITE IS AN ACCOUNT, with the analytics capability: a
+// domain property keyed as Search Console writes it, URL prefixes by their
+// host, one account for a host, and nothing withheld; a company that names no
+// site holds the vendor alone.
+//
+// Mutation: key a URL prefix by the site as written, and its `//` is
+// withheld rather than shown.
+func TestASearchConsoleSiteIsAnAccount(t *testing.T) {
+	t.Parallel()
+	c := derive.AcmeCompany()
+	c.Integrations.SearchConsole = &config.SearchConsole{Enabled: true, Sites: []string{
+		"sc-domain:example.com", "https://www.example.com/", "https://www.example.com/blog/"}}
+	d := derive.FromSettings(c, "r1", derive.AcmeDeployment).Claims(now)
+	for _, w := range d.Withheld {
+		if strings.HasPrefix(w.Where, "integrations.search_console") {
+			t.Errorf("%s was withheld: %s", w.Where, w.Reason)
+		}
+	}
+	v := read(c)
+	for key, ref := range map[string]string{"google/search-console/sc-domain:example.com": "sc-domain:example.com",
+		"google/search-console/www.example.com": "www.example.com"} {
+		account := find(t, v, atlas.KindAccount, key)
+		if account.Name != "Search Console" || !slices.Contains(factOf(account, atlas.FactCapability), "analytics") ||
+			!slices.Equal(factOf(account, atlas.FactAccountRef), []string{ref}) {
+			t.Errorf("%s is %+v", key, account)
+		}
+	}
+	c.Integrations.SearchConsole.Sites = nil
+	find(t, read(c), atlas.KindAccount, "google/search-console")
+}
+
 // A TOOL SERVER IS KNOWN BY ITS COMMAND, NEVER ITS ARGUMENTS: an argument is
 // where a person passes a token by mistake, and it is no secret position.
 func TestAToolServerIsKnownByItsCommandNotItsArguments(t *testing.T) {

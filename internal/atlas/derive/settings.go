@@ -136,6 +136,7 @@ var integrationRows = map[integration.Kind]func(b *builder, c *config.Company, z
 	integration.KindAppStoreConnect: appStoreConnect,
 	integration.KindGoogleAnalytics: googleAnalytics,
 	integration.KindGoogleAds:       googleAds,
+	integration.KindSearchConsole:   searchConsole,
 	integration.KindAtlassian:       atlassian,
 }
 
@@ -408,6 +409,31 @@ func googleAds(b *builder, c *config.Company, _ map[string]atlas.Ref) {
 	for i, cu := range g.Customers {
 		b.account("integrations.google_ads.customers["+strconv.Itoa(i)+"].id", atlas.VendorGoogle, "ads/"+cu.ID,
 			cu.ID, "Google Ads", g.Enabled, atlas.CapabilityAdvertising)
+	}
+}
+
+// searchConsole records each Search Console site the company names, keyed by
+// what the site is, or the vendor alone where it names none: a domain
+// property as Search Console writes it (sc-domain:example.com), a URL prefix
+// by its host, since a key holds no scheme's `//`. URL prefixes on one host
+// are one account, which the company holds at Search Console as one site.
+func searchConsole(b *builder, c *config.Company, _ map[string]atlas.Ref) {
+	g := c.Integrations.SearchConsole
+	if g == nil {
+		return
+	}
+	if len(g.Sites) == 0 {
+		b.account("integrations.search_console", atlas.VendorGoogle, "search-console", "", "Search Console",
+			g.Enabled, atlas.CapabilityAnalytics)
+		return
+	}
+	for i, site := range g.Sites {
+		id := site
+		if !strings.HasPrefix(site, "sc-domain:") {
+			id = hostOf(site)
+		}
+		b.account("integrations.search_console.sites["+strconv.Itoa(i)+"]", atlas.VendorGoogle,
+			"search-console/"+id, id, "Search Console", g.Enabled, atlas.CapabilityAnalytics)
 	}
 }
 

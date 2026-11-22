@@ -115,6 +115,10 @@ Hosts: `searchconsole.googleapis.com` for the Search Console API, `www.googleapi
 - Site Verification has no read-only scope and the Indexing API one scope, so their reads are minted with those; the token is spent on that read alone.
 - `urlTestingTools.mobileFriendlyTest.run` is never offered: Google retired the Mobile-Friendly Test on December 1, 2023, and the method answers `403`.
 
+## What the atlas shows
+
+Each site the company narrows agents to (`integrations.search_console.sites`) is an account with the `analytics` capability: a domain property keyed as Search Console writes it (`sc-domain:example.com`), a URL prefix by its host, so the URL prefixes of one host are one account. A company that names none shows Search Console as one account ([the atlas](../concepts/atlas.md)).
+
 ## Search Console's limits worth knowing
 
 - Search Analytics allows 1,200 queries a minute per site and per user, and has a load quota: past it, Google asks for 15 minutes' wait. Queries grouped by page and query over long ranges cost the most.
