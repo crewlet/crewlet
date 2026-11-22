@@ -202,8 +202,8 @@ func backupRefusal(err error) refusal {
 			retryAfter: httpjson.RetrySeconds(logGapRetry),
 			hint: "a log a restore would replay from the store copy no longer holds every " +
 				"record the copy needs; take the backup again, whose copy stands past them, " +
-				"and if it is refused the same way look for backup_hold_not_renewed in " +
-				"this node's log"}
+				"and if it is refused the same way look for " + statelog.HoldNotRenewedEvent +
+				" in this node's log"}
 	}
 	return refusal{status: http.StatusInternalServerError, code: httpjson.CodeBackupFailed}
 }

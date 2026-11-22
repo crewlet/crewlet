@@ -100,7 +100,7 @@ The store carries a **position**: the replicated rows are derived from an ordere
 
 **The gap is only replayable while the log still has the records**, and the fleet's trim deletes a record once every counted node has committed past it. A backup is not a counted node, so two things close that window:
 
-- **A trim hold** is taken before the first byte is copied, at the position this node's appliers stand at, and released when the manifest is written. It is *heartbeated*: a pin that outlived its owner would stop the trim for ever, so the fleet ignores a hold nobody has renewed. A node that cannot write the hold refuses the backup.
+- **A trim hold** is taken before the first byte is copied, at the position this node's appliers stand at, and released when the manifest is written. It is *heartbeated*: a pin that outlived its owner would stop the trim for ever, so the fleet's trim reads past a hold it has watched go a minute unrenewed. A node that cannot write the hold refuses the backup.
 - **An assertion**: the log's first surviving sequence must be at or below the copy's position plus one, checked per domain after the stream snapshots, from bounds those snapshots captured. It makes "restorable" a *checkable inequality*. A backup that cannot assert it writes **no manifest**.
 
 The manifest records the position **read from the copy itself**, not the live database: the checkpoint commits with the rows, so the position inside a file is the only one describing that file, and the applier ran throughout the copy. The hold and the assertion cover every registered domain, a domain at position zero included.
@@ -161,7 +161,7 @@ Twenty copies rather than fifty-six: **≈ 875 GB** at the same estate, for a re
 
 The announcement, the trim hold and the manifest's `node_id` are keyed on the node's **resolved** id: `node.id` when the file sets it, else `CREWLET_NODE_ID`, else the default. A node named only through the variable (the container-orchestrator shape) would otherwise share one blank key with every such node.
 
-**A pin that outlives its owner is visible.** `crewlet.backup.holds` is how many trim holds the fleet carries; a count that does not return to zero is a backup that crashed mid-copy. Until the stale bound expires that pin the trim does not advance, with no other symptom until the log walks into its ceiling.
+**A pin that outlives its owner is visible.** `crewlet.backup.holds` is how many trim holds the fleet carries; a count that does not return to zero is a backup that crashed mid-copy. The trim reads past that pin once it has watched it go a minute unrenewed: at its second look, within half an hour of the crash, and a quarter of an hour more after its duty moved. Until then the trim does not advance past it. The pin stays in the register, and the count stays up, until its node replaces or releases it.
 
 **Name the owner.** `retention.backup_owner` is free text (a person, a team, a scheduler's name) that `crewlet backup` records in the manifest as durable evidence of who was responsible for the artefact somebody is restoring. `crewlet validate` warns when it is unset, and every node logs the same warning at every start (`config_advisory`).
 
