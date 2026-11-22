@@ -170,3 +170,32 @@ func TestAnExecutorRunsLimitReportReachesItsSignIn(t *testing.T) {
 		t.Errorf("limits %+v, want the 5-hour and weekly windows seen at %v", got, reportedAt)
 	}
 }
+
+// codexRunLimits is the limit report a Codex executor run's result carries,
+// as its runner composes it from the rollout's rate_limits (executor's
+// codexLimitsLine): a five-hour window at 37.5% and a weekly one used up.
+const codexRunLimits = `{"item":{"type":"crewlet.codex_rate_limits","state":"reached","window":"10080",` +
+	`"resets_at":1795372440,"windows":` +
+	`{"10080":{"used":1,"resets_at":1795372440},"300":{"used":0.375,"resets_at":1795287240}}}}`
+
+// A CODEX RUN'S PLAN WINDOWS ARE READ BY THEIR LENGTH, the one used up as
+// reached, so a spent plan sits its entry out: Codex names its windows by
+// position, which says nothing of which window is which.
+//
+// The profile is the one harness.New builds an entry from, validated: a
+// report its own validation refuses would refuse every codex entry.
+//
+// Mutation: drop the codex profile's limit_reports, map a window by position,
+// or match the report anywhere but the profile's event_type_path, and this
+// goes red.
+func TestACodexRunsPlanWindowsAreReadByTheirLength(t *testing.T) {
+	t.Parallel()
+	got, reached := readLimitReports(shipped(t, "codex", "gpt-6.1-sol").profile, codexRunLimits)
+	sameReadings(t, "a codex run's report", got, []reading{
+		{llm.LimitSession, 5, "", llm.LimitOK, 0.375, 1795287240},
+		{llm.LimitWeekly, 168, "", llm.LimitReached, 1, 1795372440},
+	})
+	if reached == nil || reached.Window != llm.LimitWeekly {
+		t.Errorf("the report reached %+v, want the weekly window", reached)
+	}
+}
