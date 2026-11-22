@@ -14,7 +14,7 @@ func keyList() []setup.Requirement {
 	var out []setup.Requirement
 	for _, role := range []string{"marketing", "admin"} {
 		set := &setup.Set{ID: "main_keys", Label: "API keys", Item: "key", Add: "Add a key", Pick: "Role",
-			Missing: "Add at least one API key.", Min: 1,
+			Hint: "A key ID and .p8 file per role: at least one.", Min: 1,
 			Entry: setup.Choice{Value: role, Label: strings.ToUpper(role[:1]) + role[1:]}}
 		base := "integrations.app_store_connect.connections.main.keys." + role
 		out = append(out,
@@ -36,8 +36,9 @@ func TestASetNeedsItsMinimumOfWholeEntries(t *testing.T) {
 	t.Parallel()
 	reqs := keyList()
 	short := setup.CheckSets(reqs, nil)
-	if short == nil || short.Problem != "Add at least one API key." || short.Field != "marketing_key_id" {
-		t.Fatalf("an empty set answered %+v, want its own sentence at its first field", short)
+	want := "Add a key to continue. A key ID and .p8 file per role: at least one."
+	if short == nil || short.Problem != want || short.Field != "marketing_key_id" {
+		t.Fatalf("an empty set answered %+v, want its control and its hint at its first field", short)
 	}
 	half := setup.CheckSets(reqs, map[string]string{"admin_key_id": "ABC123DEFG"})
 	if half == nil || half.Field != "admin_private_key" || half.Problem != "The Admin key needs its private key (.p8) too." {

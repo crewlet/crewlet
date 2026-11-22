@@ -2,7 +2,11 @@
  * App Store analytics' turn-on: which connections a company names, read off
  * its setup form, and each app's outcome in words.
  */
-import type { SetupAppStoreAnalyticsApp, SetupToolState } from "~/contract/setup.ts";
+import type {
+  SetupAppStoreAnalyticsApp,
+  SetupRequirement,
+  SetupToolState,
+} from "~/contract/setup.ts";
 
 /** A connection's issuer ID field, whose config path names the connection. */
 const ISSUER = /^integrations\.app_store_connect\.connections\.([a-z][a-z0-9-]*)\.issuer_id$/;
@@ -35,24 +39,22 @@ export function analyticsLine(a: SetupAppStoreAnalyticsApp): string {
 const KEY =
   /^integrations\.app_store_connect\.connections\.([a-z][a-z0-9-]*)\.keys\.([a-z_]+)\.private_key$/;
 
-/** One connected key: its connection, its slot and the form's label for it. */
+/** One connected key: its connection, its slot and its name by role. */
 export interface ConnectedKey {
   connection: string;
   slot: string;
   label: string;
 }
 
-/** The keys the setup form shows stored, each once, in its order. */
-export function connectedKeys(states: readonly SetupToolState[]): ConnectedKey[] {
+/** The keys among a set's fields the document holds, each once, named by role ("Marketing key"). */
+export function connectedKeys(fields: readonly SetupRequirement[]): ConnectedKey[] {
   const out: ConnectedKey[] = [];
-  for (const state of states) {
-    for (const r of state.requirements) {
-      const m = KEY.exec(r.config_path);
-      if (!m || !r.present) continue;
-      const [, connection, slot] = m as unknown as [string, string, string];
-      if (!out.some((k) => k.connection === connection && k.slot === slot)) {
-        out.push({ connection, slot, label: r.label.replace(/ \(\.p8\)$/, "") });
-      }
+  for (const r of fields) {
+    const m = KEY.exec(r.config_path);
+    if (!m || !r.present || !r.set) continue;
+    const [, connection, slot] = m as unknown as [string, string, string];
+    if (!out.some((k) => k.connection === connection && k.slot === slot)) {
+      out.push({ connection, slot, label: `${r.set.entry.label} ${r.set.item}` });
     }
   }
   return out;
