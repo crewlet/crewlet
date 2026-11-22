@@ -2571,6 +2571,50 @@ test("a revealed field is marked required and follows its question", () => {
   expect(labels[token]).not.toContain("(optional)");
 });
 
+// AN ANSWER GATED AWAY IS OFF THE BANNER'S COUNT: the banner counts what is
+// still on the form. Mutation: count every marked field, and "One answer is
+// not filled in yet." stays over a form with no field left to fill in.
+test("a marked field gated away takes its count off the banner", async () => {
+  stubFetch(() => new Response("{}", { status: 200 }));
+  const coverage: SetupToolState = {
+    ...tool,
+    key: "github",
+    configured: true,
+    requirements: [
+      {
+        field: "provisioning.org_webhook",
+        label: "Which GitHub activity should reach your agents",
+        kind: "choice",
+        config_path: "x",
+        required: false,
+        present: true,
+        value: "false",
+        choices: [
+          { value: "false", label: "Apps" },
+          { value: "true", label: "Every repository" },
+        ],
+      },
+      { ...gated },
+    ],
+  };
+  const { baseElement } = render(
+    <SetupForm
+      sections={[{ name: "GitHub", tool: coverage }]}
+      title="GitHub"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  const trigger = () => baseElement.querySelector(".crewlet-select__trigger") as HTMLElement;
+  choose(trigger(), /Every repository/);
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await eventually(() =>
+    expect(screen.getByText("One answer is not filled in yet.")).toBeDefined(),
+  );
+  choose(trigger(), /Apps/);
+  expect(baseElement.textContent).not.toContain("not filled in yet");
+});
+
 /*
  * A WRITE IN FLIGHT CANNOT BE CANCELLED.
  *
@@ -3911,10 +3955,9 @@ function appStore(overrides: Partial<SetupRequirement>[] = []): SetupToolState {
       id: "main_keys",
       label: "API keys",
       item: "key",
-      hint: "Add at least one. Start with Marketing; one key per role keeps access least-privileged.",
+      hint: "A key ID and .p8 file per Apple role: at least one, Marketing first.",
       add: "Add a key",
       pick: "Role",
-      missing: "Add at least one API key: its role, key ID and .p8 file.",
       min: 1,
       entry: { value: role, label, hint },
     };
@@ -3993,17 +4036,19 @@ test("App Store Connect's keys are one list up front that says what it needs", (
   expect(more.contains(set)).toBe(false);
   expect(set.querySelector("legend")?.textContent).toBe("API keys");
   expect(within(set).getByRole("button", { name: "Add a key" })).toBeDefined();
-  expect(within(set).getByText(/Add at least one\. Start with Marketing/)).toBeDefined();
+  expect(within(set).getByText(/at least one, Marketing first\./)).toBeDefined();
   expect(set.textContent).not.toMatch(/optional/i);
   expect(screen.queryByLabelText("Key ID")).toBeNull();
   expect(more.querySelector("summary")?.textContent).toBe("More settings (1)");
 });
 
-// NO KEY IS SAID AT THE SET, BEFORE ANYTHING IS SENT, in the operator's words:
-// never `integrations.app_store_connect.connections.main.keys`. Mutation: drop
-// the set check from the pre-submit pass, and the form posts and the engine
-// refuses it by path.
-test("connecting with no key says so at the keys and sends nothing", async () => {
+// NO KEY IS SAID AT THE SET, BEFORE ANYTHING IS SENT, by the control that
+// answers it, as an empty field says "Fill this in": the hint above already
+// says what a key holds, so the error never says it again, and never
+// `integrations.app_store_connect.connections.main.keys`. Mutation: drop the
+// set check from the pre-submit pass, and the form posts and the engine
+// refuses it by path; say the set's whole need again, and it reads twice.
+test("connecting with no key says so at the keys, once, and sends nothing", async () => {
   const spy = stubFetch(() => new Response("{}", { status: 200 }));
   const { baseElement } = renderAppStore();
   fireEvent.change(screen.getByLabelText("Issuer ID"), {
@@ -4011,9 +4056,49 @@ test("connecting with no key says so at the keys and sends nothing", async () =>
   });
   fireEvent.click(screen.getByRole("button", { name: "Connect" }));
   const set = baseElement.querySelector("fieldset.int-set") as HTMLFieldSetElement;
-  await eventually(() => expect(within(set).getByText(/Add at least one API key/)).toBeDefined());
+  await eventually(() => expect(within(set).getByText("Add a key to continue.")).toBeDefined());
+  expect(set.textContent?.match(/at least one/g)).toHaveLength(1);
   expect(baseElement.textContent).not.toContain("integrations.");
   expect(sent(spy)).toBeUndefined();
+});
+
+// AN ERROR IS ABOUT THE VALUE IT JUDGED: answering a marked field takes its
+// error off, and the banner counts what is still unanswered, as adding a key
+// takes the set's off. Mutation: keep field errors until the next submit, and
+// a filled Issuer ID still reads "Fill this in to continue." under "2 answers".
+test("answering a marked field clears its error and the banner counts what is left", async () => {
+  stubFetch(() => new Response("{}", { status: 200 }));
+  const { baseElement } = renderAppStore();
+  fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+  await eventually(() =>
+    expect(screen.getByText("2 answers are not filled in yet.")).toBeDefined(),
+  );
+  const issuer = screen.getByLabelText("Issuer ID");
+  expect(issuer.closest(".field")?.textContent).toContain("Fill this in to continue.");
+  fireEvent.change(issuer, { target: { value: "57246542-96fe-1a63-e053-0824d011072a" } });
+  expect(issuer.closest(".field")?.textContent).not.toContain("Fill this in to continue.");
+  expect(screen.getByText("One answer is not filled in yet.")).toBeDefined();
+  fireEvent.click(screen.getByRole("button", { name: "Add a key" }));
+  choose(screen.getByLabelText("Role"), "Marketing");
+  expect(baseElement.textContent).not.toContain("not filled in yet");
+  expect(baseElement.textContent).not.toContain("Add a key to continue.");
+});
+
+// A REMOVED ENTRY TAKES ITS ERRORS WITH IT: the banner counts only what is
+// still on the form. Mutation: count every marked key, and removing the
+// empty key leaves "3 answers" over one marked field.
+test("removing a marked key takes its errors off the banner's count", async () => {
+  stubFetch(() => new Response("{}", { status: 200 }));
+  renderAppStore();
+  fireEvent.click(screen.getByRole("button", { name: "Add a key" }));
+  choose(screen.getByLabelText("Role"), "Admin");
+  fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+  await eventually(() =>
+    expect(screen.getByText("3 answers are not filled in yet.")).toBeDefined(),
+  );
+  const entry = screen.getByRole("region", { name: "Admin key" });
+  fireEvent.click(within(entry).getByRole("button", { name: "Remove" }));
+  expect(screen.getByText("One answer is not filled in yet.")).toBeDefined();
 });
 
 // ADD A KEY PICKS THE ROLE, THEN ASKS FOR THE KEY ID AND THE .P8, both needed,
@@ -4051,7 +4136,7 @@ test("adding a key by role asks for its ID and .p8 and sends the key whole", asy
   expect(body.values.main_marketing_key_id).toBe("ABC123DEFG");
   expect(body.values.main_marketing_private_key).toBe(P8);
   expect(baseElement.querySelector("fieldset.int-set")?.textContent).not.toContain(
-    "Add at least one API key",
+    "Add a key to continue.",
   );
 });
 
@@ -4100,6 +4185,6 @@ test("a held key opens on the form, and a refusal of the keys is said at the set
   });
   fireEvent.click(screen.getByRole("button", { name: "Connect" }));
   const set = baseElement.querySelector("fieldset.int-set") as HTMLFieldSetElement;
-  await eventually(() => expect(within(set).getByText(/Add at least one API key/)).toBeDefined());
+  await eventually(() => expect(within(set).getByText("Add a key to continue.")).toBeDefined());
   expect(baseElement.textContent).not.toContain("app_store_connect.connections");
 });
