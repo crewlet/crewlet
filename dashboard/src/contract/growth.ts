@@ -73,7 +73,7 @@ export interface GrowthConnection {
   roles_held: string[];
   accounts: GrowthAccount[];
   /** Whether the company narrows it to no named accounts, so it reaches whatever its credentials reach. */
-  open?: boolean;
+  open: boolean;
   /** Why Crewlet could not read what it reaches, in words a person acts on. */
   unread?: string;
 }

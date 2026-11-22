@@ -75,6 +75,7 @@ const CONNECTIONS: GrowthConnection[] = [
         state: "suspended",
       },
     ],
+    open: false,
   },
   {
     id: "eu",
@@ -83,6 +84,7 @@ const CONNECTIONS: GrowthConnection[] = [
     state: "connecting",
     roles_held: [],
     accounts: [],
+    open: false,
   },
 ];
 
