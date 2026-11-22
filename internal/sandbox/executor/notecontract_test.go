@@ -43,6 +43,12 @@ var noteFixtures = map[string]noteFixture{
 		confirms: pluginAdmitsNotesAtTheRunsNextStep,
 		reaches:  pluginReadsTheBridgesOwnNotesRoute,
 	},
+	executor.PiName: {
+		reads:    true,
+		wakeRead: executor.PiWakeRead,
+		confirms: executor.PiConfirmsATake,
+		reaches:  piReachesTheBridgesRoute,
+	},
 }
 
 // noteFixtureOf is h's fixture, failing the case where h supplies none.
