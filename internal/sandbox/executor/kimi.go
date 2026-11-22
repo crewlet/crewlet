@@ -38,6 +38,7 @@ var (
 	_ recordConfirmer   = Kimi{}
 	_ artifactHolder    = Kimi{}
 	_ artifactDirHolder = Kimi{}
+	_ inPlaceGate       = Kimi{}
 	_ notesOffExplainer = Kimi{}
 	_ carrier           = Kimi{}
 	_ saver             = Kimi{}

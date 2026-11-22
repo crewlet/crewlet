@@ -44,14 +44,16 @@ func TestEveryCarrierRefusesABoxThatNamedNoReleaseAndJudgesAWriterAlone(t *testi
 	}
 }
 
-// AN UNREAD WRITER CONTINUES IN NO BOX, for every carrier: a session whose
-// writer named no release this build reads (a pre-release, a snapshot, a
-// record with none, which releaseOf reads as "") is refused alone and beside a
-// box of every release, saying so; read as current, it would be carried into
-// a box older than the release that wrote it.
+// AN UNREAD WRITER CONTINUES IN NO BOX, for every carrier (Kimi Code's too): a
+// session whose writer named no release this build reads (a pre-release, a
+// snapshot, none, which releaseOf reads as "") is refused alone and beside a
+// box of every release, saying why; read as current, it would be carried into
+// a box older than its writer. And a Codex or Kimi Code box of another release
+// than its one supported continues not even its own copy ([inPlaceGate]).
 //
 // Mutation: take an unread writer for a current one in any carrier's
-// ContinuesWriter, and its row goes red.
+// ContinuesWriter, or let either box continue its own copy on another release,
+// and a row goes red.
 func TestAnUnreadWriterContinuesInNoBox(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -62,14 +64,22 @@ func TestAnUnreadWriterContinuesInNoBox(t *testing.T) {
 		{"claude-code", ClaudeCode{}, []string{"2.1.310", "2.1.322", "9.0.0"}},
 		{"opencode", OpenCode{}, []string{"2.0.32", "2.2.7", "9.0.0"}},
 		{"codex", Codex{}, []string{codexCarryRelease}},
+		{"kimi-code", Kimi{}, []string{kimiSupported}},
 	} {
-		if ok, why := c.carrier.ContinuesWriter(""); ok || !strings.Contains(why, "named no release") {
-			t.Errorf("%s: an unread writer continues %v (%q), want refused as naming no release", c.name, ok, why)
+		if ok, why := c.carrier.ContinuesWriter(""); ok || why == "" {
+			t.Errorf("%s: an unread writer continues %v (%q), want refused, saying why", c.name, ok, why)
 		}
 		for _, box := range c.boxes {
-			if ok, why := c.carrier.Continues(box, ""); ok || !strings.Contains(why, "named no release") {
+			if ok, why := c.carrier.Continues(box, ""); ok || why == "" {
 				t.Errorf("%s: an unread writer continues %v (%q) in box %s, want refused", c.name, ok, why, box)
 			}
+		}
+	}
+	// EVERY CARRIER WHOSE BOX HOLDS A RELEASE TO ITS OWN COPY refuses another
+	// release in place, as its run's gate does ([inPlaceGate]).
+	for name, gate := range map[string]inPlaceGate{"codex": Codex{}, "kimi-code": Kimi{}} {
+		if ok, why := gate.continuesInPlace("9.9.9"); ok || why == "" {
+			t.Errorf("%s: a box of 9.9.9 continues its own copy %v (%q), want refused", name, ok, why)
 		}
 	}
 }

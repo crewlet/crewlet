@@ -64,6 +64,22 @@ func (Kimi) meter(context.Context, io.Reader, string, string, *passBudget) (mete
 	return meterReading{}, nil
 }
 
+// continuesInPlace reports whether a box whose Kimi Code is release box
+// continues a session at all, the copy it holds as much as one carried to it
+// ([inPlaceGate]): only on [kimiSupported], as the run's own gate holds it
+// ([kimiSessionGate]), so the engine asks before a relaunch hands the brief
+// that continues the box's copy.
+func (Kimi) continuesInPlace(box string) (bool, string) {
+	if box == kimiSupported {
+		return true, ""
+	}
+	if box == "" {
+		box = "a release it could not read"
+	}
+	return false, fmt.Sprintf("this box runs Kimi Code %.64s, and a session is continued only on %s, the "+
+		"release Crewlet supports", box, kimiSupported)
+}
+
 // kimiSessionGate is the part of a run's script that names the session its
 // driver runs in (s), whether it continues the one asked (k) and, where it
 // could not, why (w), setting the driver's arguments. As [copilotSessionGate]:
