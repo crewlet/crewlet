@@ -109,14 +109,6 @@ export const DIRECTORY: Group[] = [
       { kind: "app", key: "admob" },
     ],
   },
-  {
-    key: "growth",
-    label: "Marketing and growth",
-    lines: [
-      { kind: "app", key: "google_analytics" },
-      { kind: "app", key: "admob" },
-    ],
-  },
 ];
 
 /** The catalogue entry an app line or a product line stands for. */
