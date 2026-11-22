@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -495,15 +494,6 @@ func museMCP(s sandbox.MCPServer) museMCPServer {
 	return out
 }
 
-// writeMuseJSON renders v, indented, into file.
-func writeMuseJSON(ctx context.Context, box sandbox.Sandbox, file string, v any) error {
-	blob, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return err
-	}
-	return box.WriteFile(ctx, file, blob)
-}
-
 // museNonce is a run's own suffix to its servers' names: twelve hex digits
 // from the system's random source, new every run, so the run's servers are
 // under names no file of the repository's can declare beforehand (a trusted
@@ -527,7 +517,7 @@ func writeMuseServers(ctx context.Context, box sandbox.Sandbox, dir string, serv
 			return fmt.Errorf("executor: the MCP server %q is not named as Muse Code reads a server's name: "+
 				"letters, digits, '-' and '_', at most 50", name)
 		}
-		if err := writeMuseJSON(ctx, box, dir+"/"+name+"-"+nonce+".json", museMCP(s)); err != nil {
+		if err := writeJSON(ctx, box, dir+"/"+name+"-"+nonce+".json", museMCP(s)); err != nil {
 			return fmt.Errorf("executor: writing the MCP server %q for Muse Code: %w", name, err)
 		}
 	}
@@ -573,7 +563,7 @@ func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 	if system != "" {
 		settings.Run = &museRun{SystemPromptAppend: system}
 	}
-	if err := writeMuseJSON(ctx, box, paths.MuseSettings(), settings); err != nil {
+	if err := writeJSON(ctx, box, paths.MuseSettings(), settings); err != nil {
 		return "", fmt.Errorf("executor: writing Muse Code's settings: %w", err)
 	}
 	nonce := museNonce()
