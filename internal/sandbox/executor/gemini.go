@@ -103,6 +103,9 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 		// before anything else: an older one never runs ([releaseGate]).
 		releaseRead(GeminiCLI{}.VersionCommand()),
 		releaseGate("Gemini CLI", geminiRelease),
+		// THE TELEMETRY'S NAMES GO before Gemini CLI starts: the run turns no
+		// Gemini CLI telemetry on, so it starts without them ([otelExportUnset]).
+		otelExportUnset,
 		"node " + q(paths.GeminiHelper()) + " pin " + q(paths.GeminiProjects()) + " " + GeminiProjectSlug + " || exit 1",
 		strings.TrimSuffix(chatSessionGate(session, paths, geminiGate(paths, fresh)), "\n"),
 		// THE RECORD, before the harness starts, so a run killed before it
