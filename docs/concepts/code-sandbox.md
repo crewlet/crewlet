@@ -2476,9 +2476,12 @@ the server the id of the session the run works in, as `CREWLET_STEER_SESSION` on
     `again` for then, and lands plain at the next step. The engine grants it
     only for a person's note or a late call, and counts it as one of the
     note's serves when it grants it, so a note that never folds spends
-    nothing. One the engine answers spent, or one folded again, is given up:
-    never confirmed, its id posted to the route's `folded`, which the engine
-    logs as `steer_note_folded`, and its review reads it. A wake or a run's
+    nothing. An admission under the second id that fails is made again after
+    a pause, under the same id (OpenCode answers a repeat under an id it holds
+    with the first, measured on 2.3.2). One the engine answers spent, one
+    folded again, or one the execution settles on before it is admitted, is
+    given up: never confirmed, its id posted to the route's `folded`, which the
+    engine logs as `steer_note_folded`, and its review reads it. A wake or a run's
     message is served once and never admitted again: folded, it runs as a turn
     after the run. A compaction that fails confirms and posts nothing.
   - **A note's poll serves span the run's jobs**: each job a poll first serves
