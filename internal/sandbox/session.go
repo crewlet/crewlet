@@ -800,7 +800,7 @@ var standbyWait = captureLife + captureWaitTick
 // wait's end, the read of the turn's row past it and the settle it decides
 // ([Coordinator.namedAtWaitsEnd]), its last read, and its takeover. Each at
 // the slowest crossing, since the standby and the wait reading it may be any
-// two nodes. Two hours, fifty minutes and thirty-two seconds today.
+// two nodes. Two hours, forty-nine minutes and thirty-two seconds today.
 var standbyWindow = SessionTakeBudget + discardGrace + standbyWait + 6*captureStampBudget
 
 // standbyBudget is how long after the instant a read stood by
@@ -872,18 +872,17 @@ const (
 )
 
 // SessionScrubWait bounds the scrub of a session as it streams out of its box,
-// both readings of its tar.
-//
-// SEVEN MINUTES, from the measured worst: the minute a take may wait for its
-// spool's room ([spoolRoomWait]), the archive read twice out of a box at its
-// floor pace of a mebibyte a second (96 s at 48 MiB), and the slowest session
-// a harness writes scrubbed at its 256 MiB of plaintext (256 s, 261 s at worst
-// under the engine's memory limit): 417 s counted apart though the last two
-// overlap. Only sessions a harness writes set it. A take still scrubbing at
-// its end FAILS CLOSED: nothing is kept, its place is refused and the last
-// kept copy stands, so a box costs only its own session
-// (docs/concepts/code-sandbox.md, "Seven minutes for the scrub"; ADR-0073).
-const SessionScrubWait = 7 * time.Minute
+// both readings of its tar. SIX MINUTES, the measured worst rounded up: the
+// minute a take may wait for its spool's room ([spoolRoomWait]), the archive
+// read twice out of a box at a mebibyte a second (96 s at 48 MiB), and the
+// slowest session a harness writes at its 256 MiB of plaintext, a string torn
+// at its last line, 183 s: its 177.4 s on the base times the HIGHEST ratio of
+// the alternated runs, 1.03 at the default against 1.00 under the memory limit
+// and at GOGC=10. 339 s apart. A take still scrubbing at its end FAILS CLOSED:
+// nothing is kept, its place is refused and the last kept copy stands, so a
+// box costs only its own session (ADR-0073; docs/concepts/code-sandbox.md,
+// "Six minutes for the scrub").
+const SessionScrubWait = 6 * time.Minute
 
 // SessionTakeBudget is the most a take adds to the read of a box it is made in:
 // the pack ([SessionPackWait]) and the scrub ([SessionScrubWait]).
@@ -951,7 +950,7 @@ const keepReadRoom = sessionRecordBudget
 // ([SessionTakeBudget], [captureStampBudget], [Coordinator.takeContext]), the
 // digest it leaves in the box ([discardGrace], [stampContext]), the keep, which
 // starts as the take returns its spool ([SessionKeepBudget]), and the stamp of
-// what came of it ([captureStampBudget]). An hour, two and a half minutes and
+// what came of it ([captureStampBudget]). An hour, one and a half minutes and
 // a fraction at today's bounds.
 var takeLife = SessionTakeBudget + captureStampBudget + discardGrace + SessionKeepBudget + captureStampBudget
 
@@ -1367,12 +1366,14 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	if err != nil {
 		return nil, refuse(calls, err.Error())
 	}
-	// ROOM FOR ITS SPOOL AT THE SEALED BOUND, before anything the take holds,
+	// ROOM FOR ITS SPOOLS AT THE SEALED BOUND, before anything the take holds,
 	// in a save's order: room, the pack slot, then the take's own slots, so no
-	// take waits for room holding what a save holding room waits for. Shrunk to
-	// the archive's counted size once its size is known. None within the wait
-	// keeps nothing and stamps nothing ([spoolRoomWait]).
-	room, refused := c.awaitSpoolRoom(ctx, executorkeep.SealedMaxBytes)
+	// take waits for room holding what a save holding room waits for. The
+	// sealed spool's part is shrunk to the archive's counted size once its size
+	// is known, and the scrub's is shrunk and given back as its spool tells it
+	// ([takeRoomBytes]). None within the wait keeps nothing and stamps nothing
+	// ([spoolRoomWait]).
+	room, refused := c.awaitSpoolRoom(ctx, takeRoomBytes)
 	if refused != nil {
 		why := refused.reason()
 		if standing {
@@ -1392,6 +1393,12 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 			room.release()
 		}
 	}()
+	scrubbing := room.split(takeRoomBytes - executorkeep.SealedMaxBytes)
+	defer scrubbing.release()
+	dir, err := c.spoolHere()
+	if err != nil {
+		return nil, refuse(calls, takeRefusal(ctx, err))
+	}
 	// ONE PACK AT A TIME in a box that shares the node's memory
 	// ([Coordinator.sharedPack]): a take packs on demand, and its pack is
 	// made once TakeSession returns, before the stream the spool reads.
@@ -1400,7 +1407,8 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		return nil, refuse(calls, takeRefusal(ctx, err))
 	}
 	taken, err := taker.TakeSession(ctx, box, SessionTake{Pack: at.pack, Scrub: scrub,
-		MaxBytes: executorkeep.SessionMaxBytes, Scope: current.AgentID})
+		MaxBytes: executorkeep.SessionMaxBytes, Scope: current.AgentID, Session: current.Launch.Minted,
+		Spool: scrubbing.spooling(dir)})
 	give()
 	if err != nil {
 		return nil, refuse(calls, takeRefusal(ctx, err))
@@ -2289,6 +2297,11 @@ func (c *Coordinator) readLost(ctx context.Context, run PendingRun) (*spooledCap
 	if !c.capturing() {
 		return nil, nil, nil
 	}
+	// A MINTING JOB'S SESSION IS BOUND BEFORE ITS LOSS TAKES IT (minted.go): a
+	// bind neither made nor refused hands the read back, to be made again.
+	if _, err := c.bindMinted(ctx, run, box, runner); undecidedBind(err) {
+		return nil, nil, storeSilent(ctx, fmt.Errorf("sandbox: binding lost run %s's session: %w", run.TurnID, err))
+	}
 	spooled, kept := c.takeCapture(ctx, run, box, runner, at)
 	return spooled, kept, nil
 }
@@ -2702,6 +2715,14 @@ func (c *Coordinator) recordCapture(ctx context.Context, run PendingRun, stamp S
 		outcome, why = CaptureUnresolved, fmt.Sprint(err)
 		return false, err
 	})
+	// A MINTED SESSION'S CLAIM GOES ONCE THE LOG NAMES IT (minted.go): the
+	// log's seek guards the id from here, so the claim is no longer needed.
+	if id := stamp.SessionID; outcome == CaptureLanded && id != "" && id == run.Launch.Minted {
+		if err := c.pending.ReleaseSessionClaim(context.WithoutCancel(ctx), turn, id); err != nil {
+			log.InfoContext(ctx, "executor_session_claim_kept", "turn_id", turn, "session", id,
+				"error", err.Error(), "detail", "the claim goes with the run's record instead")
+		}
+	}
 	return outcome, why, fenced
 }
 

@@ -35,11 +35,11 @@ func TestASaveNotTakenIsRemovedFromItsBox(t *testing.T) {
 	runner, b := sessionBox(t, "2.1.310")
 	runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
 	p := paths(b)
-	saved, err := runner.PackSave(t.Context(), b, takerA)
+	saved, err := runner.PackSave(t.Context(), b, takerA, "")
 	if err != nil || saved.Path == "" {
 		t.Fatalf("PackSave = %+v, %v", saved, err)
 	}
-	other, err := runner.PackSave(t.Context(), b, takerB)
+	other, err := runner.PackSave(t.Context(), b, takerB, "")
 	if err != nil || other.Path == "" {
 		t.Fatalf("PackSave for the second taker = %+v, %v", other, err)
 	}
@@ -53,7 +53,7 @@ func TestASaveNotTakenIsRemovedFromItsBox(t *testing.T) {
 	if !boxHas(t, b, other.Path) {
 		t.Errorf("the release of one save removed another taker's, at %s", other.Path)
 	}
-	if taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Save: saved.Path,
+	if taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), Save: saved.Path,
 		MaxBytes: takeBound}); err != nil || taken.Body != nil {
 		t.Errorf("a take of a released save = %+v, %v; want nothing", taken, err)
 	}
@@ -213,7 +213,7 @@ func takenWhole(t *testing.T, runner *executor.Runner, b sandbox.Sandbox, path s
 	scrub ...string) (sandbox.SessionArchive, []byte) {
 
 	t.Helper()
-	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Save: path, Scrub: scrub,
+	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), Save: path, Scrub: scrub,
 		MaxBytes: takeBound})
 	if err != nil || taken.Body == nil {
 		t.Fatalf("the take of the save at %s = %+v, %v", path, taken, err)
@@ -273,7 +273,7 @@ func TestASaveDuringASubagentIsTakenAndToldWhatTheSubagentDid(t *testing.T) {
 	threadMember := strings.TrimPrefix(thread, p.ClaudeConfigDir()+"/")
 	spilledMember := strings.TrimPrefix(spilled, p.ClaudeConfigDir()+"/")
 
-	saved, err := runner.PackSave(t.Context(), b, takerA)
+	saved, err := runner.PackSave(t.Context(), b, takerA, "")
 	if err != nil {
 		t.Fatalf("the save made as a subagent's thread grew was refused: %v", err)
 	}
@@ -307,7 +307,7 @@ func TestASaveDuringASubagentIsTakenAndToldWhatTheSubagentDid(t *testing.T) {
 	}
 
 	// SAVED AGAIN once the line has landed, both calls are held.
-	again, err := runner.PackSave(t.Context(), b, takerA)
+	again, err := runner.PackSave(t.Context(), b, takerA, "")
 	if err != nil {
 		t.Fatalf("the save made once the subagent's line landed was refused: %v", err)
 	}

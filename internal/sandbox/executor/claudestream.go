@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/activityline"
@@ -520,8 +521,10 @@ func (d *claudeEvents) Result() sandbox.Result {
 // own prints as it hands the model a note or a late call ([ClaudeCode.hookAnswer]):
 // the event that fired it, then the line's own opening (measured on 2.1.263
 // and 2.1.310).
-var claudeSteerPrefix = regexp.MustCompile(`^(?:` + claudeEventToolBatch + `|` +
-	claudeEventFinish + `) says: crewlet: `)
+var claudeSteerPrefix = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^(?:` + claudeEventToolBatch + `|` +
+		claudeEventFinish + `) says: crewlet: `)
+})
 
 // claudeSteerLine is a [activityline.TagSteer] line: the first line of what the run's own hook
 // said ([claudeSteerSaid]), redacted and bounded as a live line is
@@ -561,7 +564,7 @@ func claudeSteerSaid(subtype string, raw json.RawMessage) (string, bool) {
 // claudeSteerContent is [claudeSteerSaid] of an informational record's content,
 // decoded.
 func claudeSteerContent(content string) (string, bool) {
-	loc := claudeSteerPrefix.FindStringIndex(content)
+	loc := claudeSteerPrefix().FindStringIndex(content)
 	if loc == nil {
 		return "", false
 	}

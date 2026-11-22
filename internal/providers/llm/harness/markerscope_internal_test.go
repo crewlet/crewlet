@@ -99,8 +99,7 @@ func TestOnlyAVendorsOwnReportInTheAnswerClassifies(t *testing.T) {
 func TestTheDefaultMarkerScopeSurvivesForTheVendorsThatNeedIt(t *testing.T) {
 	t.Parallel()
 	narrowed := map[string]harnessprofile.MarkerScope{
-		"kimi-code": harnessprofile.MarkerScopeStderr,
-		"pi":        harnessprofile.MarkerScopeStderr,
+		"pi": harnessprofile.MarkerScopeStderr,
 		// The other direction: OpenCode 2.0 reports a failure as an event of
 		// its own on stdout, which may follow an answer it located.
 		"opencode": harnessprofile.MarkerScopeEvents,

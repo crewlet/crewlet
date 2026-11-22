@@ -2232,13 +2232,10 @@ readers see in the release notes. See below.
    changed for someone running Crewlet), not a commit log. Labels group it:
    Dependabot's `dependencies` label sorts bumps last (`.github/release.yml`).
 
-**A pull request's CI run stops at its first failed job.** Every job of
-`ci.yml` must pass before a merge, so one red job already means another push,
-which cancels the run. So [`ci-cancel.yml`](.github/workflows/ci-cancel.yml)
-cancels the rest as soon as a job fails, freeing runners other pull requests
-wait for; the run shows the first failure, not every one. **Re-run failed
-jobs** re-runs the cancelled jobs too, so a flaky failure costs the whole run
-again. A run on `main` is never cancelled.
+**A pull request's CI run finishes every job**, even after one fails, so it
+shows every failure at once and one push can fix them all. **Re-run failed
+jobs** re-runs only the failed ones. A new push to the pull request cancels
+its previous run.
 
 Small, focused PRs are easier to review. For a substantial change (a new
 subsystem, a reshaped config format) open an issue first to discuss the

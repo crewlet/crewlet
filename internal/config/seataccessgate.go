@@ -82,10 +82,8 @@ func (c *Company) SeatAccessConnected(kind string) bool {
 		return in.GoogleCloud != nil
 	case "ssh":
 		return in.SSH != nil
-	case "app_store_connect":
-		return in.AppStoreConnect != nil
 	}
-	return false
+	return isGrowthSeat(kind) && in.growthBlock(kind) != nil
 }
 
 // SeatAccessPending reports an integration the company connects whose seats

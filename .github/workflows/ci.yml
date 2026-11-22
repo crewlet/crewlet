@@ -16,10 +16,8 @@ permissions:
 # A PUSH TO A PULL REQUEST CANCELS THAT PULL REQUEST'S RUN FOR THE COMMIT IT
 # REPLACED. Nobody can merge the replaced commit, so its run only holds
 # runners — two dozen jobs of them — that the new commit's run is queueing
-# for. The one other cancel is ci-cancel.yml's, which stops a pull request's
-# run at its first failed job, by the same reasoning: every job here has to
-# pass before a merge, so a red one already means the push that would cancel
-# the rest.
+# for. A failed job cancels nothing else: a run that finishes shows every
+# failure at once, so one push can fix them all.
 #
 # The group is UNIQUE PER RUN for every other event, and that is the half that
 # is easy to get wrong. A group keyed on the ref would put every push to main
@@ -118,7 +116,7 @@ jobs:
       # file's: setup-go exports GOTOOLCHAIN=local to every later step, so a
       # workflow-level `auto` was overridden and never reached a Go command.
       - &setup-go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@v7.1.0
         with:
           go-version-file: go.mod
           # The caches are the steps below; see THE GO CACHES above.
@@ -702,8 +700,7 @@ jobs:
   # off for main's run, every leg of which runs to the end: a red main records
   # every failure it has, and each shard saves its build cache and its package
   # durations, which a cancelled leg never does.
-  # A pull request's run needs no fail-fast either: ci-cancel.yml stops all of
-  # it, not one matrix, at its first failed job.
+  # A pull request's run keeps every leg running too, for the same record.
   test:
     name: test (race) ${{ matrix.shard }}/${{ strategy.job-total }}
     needs: plan
@@ -884,9 +881,10 @@ jobs:
       # The race detector is not optional: the engine's concurrency model is
       # real parallelism, so every "atomic because single-threaded" assumption
       # is a data race until the detector says otherwise. -count=1, -race and
-      # -timeout 30m all live in the Makefile now; 30m is a HANG DETECTOR
-      # rather than a budget, because go's own default is 10 minutes PER
-      # PACKAGE.
+      # -timeout 45m all live in the Makefile now; 45m is a HANG DETECTOR
+      # rather than a budget, 1.4 times the slowest package's race run
+      # (internal/sandbox/executor, 1,918 s on two cores), because go's own
+      # default is 10 minutes PER PACKAGE.
       #
       # THE PACKAGES THAT RUN ALONE ARE EXCLUDED, and run in the `end-to-end
       # gates` shards below. Not a coverage cut (CI runs both and `make check`
