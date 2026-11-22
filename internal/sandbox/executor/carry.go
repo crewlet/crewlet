@@ -7,11 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"regexp"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
 )
@@ -167,27 +166,32 @@ func runStartOf(cursor string) string {
 	return id
 }
 
-// releasePattern is a release's MAJOR.MINOR.PATCH, wherever a harness's
-// `--version` prints it: first for Claude Code (`2.1.310 (Claude Code)`),
-// after a name for OpenCode (`opencode v2.0.32`).
-var releasePattern = sync.OnceValue(func() *regexp.Regexp {
-	return regexp.MustCompile(`[0-9]+\.[0-9]+\.[0-9]+`)
-})
-
 // releaseOf is the release a harness's `--version` printed, "2.1.310", or ""
-// where it printed none this code can read.
+// where it printed none this code can read: a bare MAJOR.MINOR.PATCH alone
+// ([harnessprofile.Release]), so a pre-release names none.
 //
-// The pattern has no length, but what it reads was printed in the box (the
-// record is agent-writable, `--version` whatever PATH finds), so a file-long
-// run of digits would read as a release. So it is held to a release's shape
-// ([sandbox.ValidRelease]), as the launch's record holds it: past the
-// executor log's bound it is refused, never cut, since a shortened release
-// names another; read as none, every reader takes it for a current one.
+// What it reads was printed in the box (the record is agent-writable,
+// `--version` whatever PATH finds), so a file-long run of digits would read
+// as a release. So it is held to a release's shape ([sandbox.ValidRelease]),
+// as the launch's record holds it: past the executor log's bound it is
+// refused, never cut, since a shortened release names another; read as none,
+// it continues no Codex session, and Claude Code's and OpenCode's readers
+// each take it as their rules say.
 func releaseOf(printed string) string {
-	if release := releasePattern().FindString(printed); sandbox.ValidRelease(release) {
+	if release := harnessprofile.Release(printed); sandbox.ValidRelease(release) {
 		return release
 	}
 	return ""
+}
+
+// bareReleaseShell is the script's side of [releaseOf]: it sets the shell
+// variable name to the bare MAJOR.MINOR.PATCH the `--version` output in v
+// names, else "", so a box's gate and the engine's check read one release.
+// Globbing is off while v is split: it is the box's own words.
+func bareReleaseShell(name string) string {
+	return fmt.Sprintf(`%[1]s=; set -f; for rw in $v; do rw=${rw#v}; rw=${rw%%.}; case "$rw" in [0-9]*) %[1]s=$rw; break;; esac; done; set +f
+case "$%[1]s" in *[!0-9.]*|.*|*.|*..*|*.*.*.*) %[1]s= ;; *.*.*) ;; *) %[1]s= ;; esac
+`, name)
 }
 
 // captured describes the session archive the box's last run packed
