@@ -36,20 +36,17 @@ fm && l == "---" { fm = 0; print; next }
 fm { if (l ~ /^[^ \t#-][^:]*:/) { key = l; sub(/:.*/, "", key); keep = (key in ok) } if (keep) print; next }
 { print }`
 
-// claudeRepoGate is the part of a Claude Code run's script that hands the
-// harness, at or after [claudeRepoFloor], its repositories' instructions
-// without their settings: the working directory and each repository checked
-// out directly under it. Each is added with `--add-dir`, which with
-// CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD ([claudeSessionLayout]) loads its
-// CLAUDE.md, imports, `.claude/CLAUDE.md` and `.claude/rules` as a native
-// session does, and nothing of its settings. Its CLAUDE.local.md is imported
-// from a directory of the run's own, added too. Its `.claude/skills`,
-// `commands` and `agents` are copied, links dropped, into a plugin of the run's
-// own named after it (never [sandbox.SkillNamespace]), their frontmatter cut
-// to [claudeRepoKeys] by awk (a file whose cut fails is not copied; a box with
-// no awk copies none, and says so). The roots are listed, NUL-separated, for
-// the nested hook ([claudeNestedHooks]), whose settings the run is handed; a
-// box with no note helper says it runs without it ([writeClaudeNested]).
+// claudeRepoGate is the script part that hands the harness, at or after
+// [claudeRepoFloor], the instructions of the working directory and of each
+// repository checked out under it, without their settings: each added with
+// `--add-dir`, which with CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD loads its
+// CLAUDE.md, imports, `.claude/CLAUDE.md` and `.claude/rules` as native does,
+// its CLAUDE.local.md imported from a directory of the run's own. Its skills,
+// commands and agents are copied, links dropped, into a plugin of the run's own
+// named after it (never [sandbox.SkillNamespace]), frontmatter cut to
+// [claudeRepoKeys] by awk (a failed cut copies nothing; no awk, none, said).
+// The roots are listed, NUL-separated, for the nested hook
+// ([claudeNestedHooks]); a box without the helper says so ([writeClaudeNested]).
 func claudeRepoGate(paths Paths) string {
 	q := shellword.Quote
 	var b strings.Builder

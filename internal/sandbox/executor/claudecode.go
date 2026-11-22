@@ -937,8 +937,7 @@ const claudeProjectDir = "crewlet"
 // (2.1.234+); auto memory off; the compaction window; DISABLE_AUTOUPDATER 1
 // (the package doc's "A box's release is pinned"); and the repositories'
 // CLAUDE.md family read through `--add-dir`. The transcript's trim is the
-// script's, by release ([claudeLocalGCFloor]); the retention sweep is held off by
-// [claudeSettings], since no variable reaches it.
+// script's ([claudeLocalGCFloor]); [claudeSettings] holds the retention sweep off.
 func claudeSessionLayout(paths Paths, window sandbox.ExecutorWindow) []Pinned {
 	return []Pinned{
 		{Name: "CLAUDE_CONFIG_DIR", Value: paths.ClaudeConfigDir()},
