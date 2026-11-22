@@ -2458,7 +2458,9 @@ the server the id of the session the run works in, as `CREWLET_STEER_SESSION` on
   **cancels every steer the plugin admitted and OpenCode never delivered**
   (`session.inbox.cancel`, an id of the plugin's own shape and nothing else); the
   record alone carries the note, read once, by the review or the next launch's
-  brief.
+  brief. A run killed mid-way never gets there, and its pending steers stay in
+  the box's copy (measured on 2.3.2), so a run continuing that copy cancels
+  them the same way before its server starts.
 - **It confirms only what the model is sent plain**: OpenCode runs the
   plugin's `context` hook on every model request before sending it, and only
   where a user message of that request *is* the note (the message OpenCode made

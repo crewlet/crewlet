@@ -56,8 +56,9 @@
 // carried on in the same session would be handed it ahead of its next prompt
 // while the continuation's brief carries it as well: the run's script cancels
 // every such admission once the run has ended (opencode.go,
-// openCodeLeftoverSteers), so the record alone holds the note and whatever
-// reads the turn next reads it once. An execution OpenCode starts itself
+// openCodeLeftoverSteers), and a run continuing the copy a killed run left
+// cancels its leftovers before it starts (openCodeStaleSteers), so the record
+// alone holds the note and whatever reads the turn next reads it once. An execution OpenCode starts itself
 // afterwards opens the gate again. The session is the one the
 // run's script names, handed over as CREWLET_STEER_SESSION; another session
 // of the server's — a subagent's — is never read from or written to.

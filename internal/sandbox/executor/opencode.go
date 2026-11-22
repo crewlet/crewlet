@@ -802,6 +802,7 @@ func openCodeSessionGate(session Session, paths Paths, rewired bool) string {
 		q("crewlet: this run was asked to continue the OpenCode session "+session.ID+
 			", and starts a new session, "+session.Fresh+", instead: "),
 		q(paths.FreshBrief()), q(paths.FreshBrief()))
+	line(`%s`, openCodeStaleSteers())
 	if rewired {
 		// THE RUN IS WIRED TO THE SESSION IT STARTS
 		// ([sandbox.RunRequest.FreshWiring]): a fresh session's values
@@ -1017,25 +1018,47 @@ func openCodeExporter(sync time.Duration, file string) string {
 		strconv.FormatFloat(sync.Seconds(), 'f', -1, 64), file)
 }
 
+// openCodeSteerIDs reads, from a `session.inbox.list` answer on stdin, the
+// ids of the steers the notes plugin admitted ([OpenCode.inboxID]), one a
+// line, as text (a note's quotes are escaped there): the listing is
+// `{"data":[{"id":"msg_…",…}]}` (measured on 2.3.2,
+// testdata/opencode/2.3.2/inbox-list.json), and an id OpenCode minted is
+// never of the plugin's shape.
+const openCodeSteerIDs = `grep -o '"id":"msg_[0-9a-f]\{32\}"' | sed 's/^"id":"//; s/"$//' | sort -u`
+
 // openCodeLeftoverSteers is the script's line that cancels every steer the
 // run's notes plugin admitted to the session (sid) and OpenCode never
 // delivered, once `opencode run` has exited and before the server stops. Such
 // a note already waits on the run's record for the review or the next brief,
-// but the session's inbox is durable: left pending, OpenCode put it before a
-// continued run's next prompt too, and the model read it twice. Only
-// the plugin's own ids ([OpenCode.inboxID]) are read out of the listing, as
-// text (a note's quotes are escaped there), from the answer file, as every
-// bounded call's answer is ([openCodeAnswerFile]). Each call is bounded ([openCodeCallWait]) and the
+// but the session's inbox is durable: left pending, OpenCode puts it before a
+// continued run's next prompt too, and the model reads it twice (measured on
+// 2.3.2, across a server's restart). The listing goes to the answer file, as
+// every bounded call's does ([openCodeAnswerFile]), its ids read by
+// [openCodeSteerIDs]. Each call is bounded ([openCodeCallWait]) and the
 // cancels share one bound more, so the tail spends two bounds at most
 // ([openCodeEndPath]). A failed listing or cancel costs only the duplicate.
 func openCodeLeftoverSteers(ans string, times openCodeTimes) string {
 	return fmt.Sprintf(`if bounded inbox %[2]d - opencode api --server "$url" session.inbox.list --param sessionID="$sid" > %[1]s 2> /dev/null; then `+
 		`kd=$(( $(%[3]s) + %[2]d )); `+
-		`for id in $(grep -o '"id":"msg_[0-9a-f]\{32\}"' %[1]s | sed 's/^"id":"//; s/"$//' | sort -u); do `+
+		`for id in $(%[4]s < %[1]s); do `+
 		`kr=$(( kd - $(%[3]s) )); [ "$kr" -ge 1 ] || break; `+
 		`bounded cancel "$kr" - opencode api --server "$url" session.inbox.cancel --param sessionID="$sid"`+
 		` --param inboxID="$id" > /dev/null 2>&1; done; fi; rm -f %[1]s`,
-		ans, secs(times.call), times.clock)
+		ans, secs(times.call), times.clock, openCodeSteerIDs)
+}
+
+// openCodeStaleSteers is the session gate's line that cancels, in a session
+// the run continues in its box's own copy, every steer an earlier run's
+// notes plugin admitted and OpenCode never delivered: a run killed mid-way
+// never reached its own cancels ([openCodeLeftoverSteers]), and its pending
+// steers survive in the box's copy (measured on 2.3.2), which OpenCode would
+// hand this run ahead of its brief while the brief retells them. Through
+// private servers and unbounded, as every call of the gate is
+// ([openCodeSessionGate]); this run's own plugin has admitted nothing yet.
+func openCodeStaleSteers() string {
+	return `if [ "$k" = yes ] && inbox=$(opencode api --standalone session.inbox.list --param sessionID="$sid" < /dev/null 2> /dev/null); then ` +
+		`for id in $(printf '%s\n' "$inbox" | ` + openCodeSteerIDs + `); do ` +
+		`opencode api --standalone session.inbox.cancel --param sessionID="$sid" --param inboxID="$id" < /dev/null > /dev/null 2>&1; done; fi`
 }
 
 // openCodeReadiness is the script's test of one `mcp.list` answer, `$s`,

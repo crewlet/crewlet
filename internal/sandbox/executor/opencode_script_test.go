@@ -2,7 +2,9 @@ package executor_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -888,29 +890,60 @@ func TestOnlyTheServerIsHandedTheRunsSession(t *testing.T) {
 	})
 }
 
+// inboxItem is one pending item of a session's inbox, as a case lists it.
+type inboxItem struct{ id, text, delivery string }
+
+// inboxOf is `session.inbox.list`'s answer holding items, each OpenCode 2.3.2's
+// own item for a steer the notes plugin admitted (testdata/opencode/2.3.2/
+// inbox-list.json) with its id, text and delivery replaced.
+func inboxOf(t *testing.T, items ...inboxItem) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", "opencode", "2.3.2", "inbox-list.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var captured struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &captured); err != nil || len(captured.Data) != 1 {
+		t.Fatalf("the captured inbox is %s, want one item: %v", raw, err)
+	}
+	out := make([]map[string]any, 0, len(items))
+	for _, it := range items {
+		item := maps.Clone(captured.Data[0])
+		payload, _ := item["payload"].(map[string]any)
+		payload = maps.Clone(payload)
+		payload["text"] = it.text
+		item["id"], item["payload"], item["delivery"] = it.id, payload, it.delivery
+		out = append(out, item)
+	}
+	answer, err := json.Marshal(map[string]any{"data": out})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(answer)
+}
+
 // NOTHING THE NOTES PLUGIN ADMITTED IS LEFT PENDING IN THE SESSION. A note
 // admitted as the session settles waits on the run's record, and would also
 // stay in the session's inbox, which a run carried on in the session hands its
 // model beside the continuation brief's copy. So after the run and before its
 // server stops, the script cancels every inbox item of the plugin's shape and
 // nothing else (an id OpenCode minted, an id inside a note's text). A run wired
-// to no notes asks nothing. The listing is OpenCode 2's own shape.
+// to no notes asks nothing. The listing is OpenCode 2.3.2's own ([inboxOf]).
 //
 // Mutation: drop the cancel, run it after the server stops, or match any
 // `msg_` id, and this goes red.
 func TestARunCancelsTheNotesItsSessionNeverDelivered(t *testing.T) {
 	t.Parallel()
 	const (
-		ours      = "msg_30292d427a87e479be9f88cba42963ca"
-		oursToo   = "msg_05536338060eb18a87638c49f196ffcf"
-		theirs    = "msg_01JB8V9Q4XG2W7M3R5T6Y8Z0AB"
-		inText    = "msg_00000000000000000000000000000000"
-		pendingAt = `"time":{"created":1793072423854},"type":"user"`
+		ours    = "msg_30292d427a87e479be9f88cba42963ca"
+		oursToo = "msg_05536338060eb18a87638c49f196ffcf"
+		theirs  = "msg_01JB8V9Q4XG2W7M3R5T6Y8Z0AB"
+		inText  = "msg_00000000000000000000000000000000"
 	)
-	inbox := `{"data":[` +
-		`{"id":"` + ours + `","sessionID":"SES",` + pendingAt + `,"payload":{"text":"use \"id\":\"` + inText + `\" here"},"delivery":"steer"},` +
-		`{"id":"` + oursToo + `","sessionID":"SES",` + pendingAt + `,"payload":{"text":"second"},"delivery":"steer"},` +
-		`{"id":"` + theirs + `","sessionID":"SES",` + pendingAt + `,"payload":{"text":"queued"},"delivery":"queue"}]}`
+	inbox := inboxOf(t, inboxItem{ours, `use "id":"` + inText + `" here`, "steer"},
+		inboxItem{oursToo, "second", "steer"}, inboxItem{theirs, "queued", "queue"})
 	forEachShell(t, func(t *testing.T, sh boxShell) {
 		for _, wired := range []bool{true, false} {
 			req := sandbox.RunRequest{MCPServers: bridgeOnly}
@@ -947,6 +980,53 @@ func TestARunCancelsTheNotesItsSessionNeverDelivered(t *testing.T) {
 			if want := []string{oursToo, ours}; !slices.Equal(got, want) {
 				t.Errorf("cancelled %v, want the plugin's two pending notes %v and nothing else", got, want)
 			}
+		}
+	})
+}
+
+// A KILLED JOB'S PENDING NOTES NEVER REACH THE NEXT RUN IN ITS BOX'S COPY. A
+// run killed mid-way never cancels what its notes plugin admitted, and the
+// box's copy keeps those steers pending, which OpenCode would hand a run
+// continuing that copy ahead of its brief while the brief retells them. So a
+// run continuing its box's own copy cancels every steer of the plugin's shape
+// before its server starts, through a private server, whether or not it is
+// wired to notes; a run starting a new session asks nothing. The listing is
+// OpenCode 2.3.2's own ([inboxOf]).
+//
+// Mutation: drop the gate's cancel, run it after the server starts, or match
+// any `msg_` id, and this goes red.
+func TestAKilledJobsPendingNotesNeverReachTheNextRunInItsCopy(t *testing.T) {
+	t.Parallel()
+	const (
+		leftover = "msg_8a2c0f4e9b1d7a6c3e5f0b2d4a6c8e0f"
+		minted   = "msg_01JB8V9Q4XG2W7M3R5T6Y8Z0AB"
+	)
+	inbox := inboxOf(t, inboxItem{leftover, "Target the release branch.", "steer"},
+		inboxItem{minted, "queued", "queue"})
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		run := runScript(t, scriptOpts{shell: sh, session: &continuingOpenCode, held: []string{carriedOpenCode},
+			req: sandbox.RunRequest{Resume: carriedOpenCode}, env: []string{"FAKE_INBOX=" + inbox}})
+		if run.code != 0 {
+			t.Fatalf("exit %d:\n%s", run.code, run.stderr)
+		}
+		listed := run.callIndex("api --standalone session.inbox.list")
+		if listed < 0 || listed > run.callIndex("serve ") ||
+			!strings.Contains(run.calls[listed], "sessionID="+carriedOpenCode) {
+			t.Fatalf("the box's copy's inbox was not listed before the server started:\n%s",
+				strings.Join(run.calls, "\n"))
+		}
+		cancelled := strings.Fields(strings.TrimSpace(readIn(t, run.dir, "cancelled")))
+		if len(cancelled) != 3 || cancelled[0] != carriedOpenCode || cancelled[1] != leftover ||
+			cancelled[2] != "stopped" {
+			t.Errorf("cancelled %v, want the killed job's note %s alone, before any server", cancelled, leftover)
+		}
+
+		fresh := runScript(t, scriptOpts{shell: sh, env: []string{"FAKE_INBOX=" + inbox}})
+		if fresh.code != 0 || slices.ContainsFunc(fresh.calls, func(c string) bool {
+			return strings.Contains(c, "session.inbox")
+		}) {
+			t.Errorf("a run starting a new session asked about an inbox (exit %d):\n%s", fresh.code,
+				strings.Join(fresh.calls, "\n"))
 		}
 	})
 }
