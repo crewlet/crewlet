@@ -142,6 +142,7 @@ type fakePlay struct {
 	replies     map[string]string
 	commits     []string
 	failCommit  bool
+	dropReply   bool
 	sub         map[string]any
 	product     map[string]any
 	uploaded    [][]byte
@@ -259,6 +260,13 @@ func (f *fakePlay) serve(w http.ResponseWriter, r *http.Request) {
 	case path == "/androidpublisher/v3/applications/com.acme.app/reviews/r1:reply":
 		text, _ := body["replyText"].(string)
 		f.replies["r1"] = text
+		if f.dropReply {
+			// THE REPLY IS POSTED AND ITS ANSWER LOST: the connection closes.
+			if conn, _, err := w.(http.Hijacker).Hijack(); err == nil {
+				_ = conn.Close()
+			}
+			return
+		}
 		answer(map[string]any{"result": map[string]any{"replyText": text}})
 	case path == "/androidpublisher/v3/applications/com.acme.app/subscriptions/pro" && r.Method == http.MethodGet:
 		answer(f.sub)
@@ -525,6 +533,33 @@ func TestAReviewThatMovedVoidsTheApproval(t *testing.T) {
 	})
 	if !errors.Is(err, growth.ErrMoved) || len(w.f.replies) != 0 {
 		t.Fatalf("a moved review answered %v, posted %v", err, w.f.replies)
+	}
+}
+
+// A REPLY WHOSE ANSWER IS LOST IS UNKNOWN, NOT FAILED: Google may have posted
+// it, so the agent is told to read the review, and the access log records the
+// act's outcome as unknown.
+//
+// Mutation: read a lost answer as a timeout, and the reply reads failed.
+func TestAReplyWhoseAnswerIsLostIsUnknown(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, "operate")
+	w.f.dropReply = true
+	args := map[string]any{"app": "com.acme.app", "reason": "answer",
+		"replies": []any{map[string]any{"review": "r1", "text": "Thanks!"}}}
+	out, err := w.answer(t, "google_play_reply_to_reviews", args, true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	posted, ok := out.(googleplay.Posted)
+	if !ok || len(posted.Replies) != 1 || posted.Replies[0].Status != "unknown" {
+		t.Fatalf("a reply whose answer was lost answered %+v", out)
+	}
+	w.audit.mu.Lock()
+	step, last := w.audit.steps[len(w.audit.steps)-1], w.audit.records[len(w.audit.records)-1]
+	w.audit.mu.Unlock()
+	if step != growth.StepFailed || last.Failure != growth.FailureUnknownOutcome {
+		t.Errorf("the access log ends %s with %q, want failed with an unknown outcome", step, last.Failure)
 	}
 }
 
