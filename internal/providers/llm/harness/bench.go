@@ -309,6 +309,11 @@ type RunEnd struct {
 	Answer, Error string
 	Failed        bool
 
+	// NoLimit says the run's runner read its ending as no limit, whatever
+	// its words (sandbox.Result.NoLimitExit): a limit it would classify is
+	// none, a refused sign-in still one.
+	NoLimit bool
+
 	// Event is the harness's own terminal event, verbatim, where it prints one
 	// (Claude Code's result line): how the vendor said the run ended in
 	// fields — a status code — beside the words of Answer and Error.
@@ -416,6 +421,9 @@ func (p *Provider) endedHit(end RunEnd, at time.Time) (markerHit, harnessOutput,
 	}
 	out.stdout = strings.Join(lines, "\n")
 	hit, ok := classifyMarkers(p.profile, out)
+	if ok && end.NoLimit && hit.Kind == llm.KindRateLimit {
+		return markerHit{}, out, false
+	}
 	return hit, out, ok
 }
 

@@ -18,6 +18,7 @@ import { product } from "../../words.ts";
 import {
   CLOUD_FIELDS,
   canExecute,
+  cloudsOf,
   credentialWord,
   factsOf,
   methodsFor,
@@ -79,6 +80,12 @@ export function methodWords(harness: string, method: Method): { label: string; d
       label: "API key",
       detail:
         "A key for an OpenAI-compatible endpoint, such as DashScope's. Allowed on any engine.",
+    };
+  if (method === "cloud" && harness === "gemini-cli")
+    return {
+      label: "Google Vertex AI",
+      detail:
+        "Your Google Cloud project's Vertex AI, on its API key, under Google Cloud's agreement.",
     };
   if (method === "host-login" && facts.login === "adopt")
     return {
@@ -274,7 +281,7 @@ export function SignInStep({
               <Select
                 id={field.id}
                 value={draft.cloud}
-                options={(Object.keys(CLOUD_FIELDS) as Cloud[]).map((c) => ({
+                options={cloudsOf(draft.harness).map((c) => ({
                   value: c,
                   label: CLOUD_FIELDS[c].label,
                 }))}

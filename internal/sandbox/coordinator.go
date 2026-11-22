@@ -293,8 +293,10 @@ type RunEnding struct {
 	// Event is the harness's own terminal event — see [Result.Event].
 	Event string
 	// Limits is the run's last limit report — see [Result.Limits].
-	Limits  string
-	Success bool
+	Limits string
+	// NoLimitExit says the run's exit names no limit — see [Result.NoLimitExit].
+	NoLimitExit bool
+	Success     bool
 	// Refused says the provider refused the request its harness made as built
 	// ([requestRefused]): the resume carries its round on once in a fresh
 	// session, or ends the turn on the provider's message.
@@ -1756,7 +1758,7 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.ExecutorFinished,
 		CacheReadTokens: result.CacheReadTokens, CacheWriteTokens: result.CacheWriteTokens,
 		Engine: run.Launch.Bridged.Plus(EngineSpend{Aux: result.Condensed}),
 		Ended: RunEnding{Text: result.Text, Error: result.Error, Event: result.Event,
-			Limits: result.Limits, Success: result.Success, At: run.Launch.CollectedAt, Refused: requestRefused(run, result)},
+			Limits: result.Limits, NoLimitExit: result.NoLimitExit, Success: result.Success, At: run.Launch.CollectedAt, Refused: requestRefused(run, result)},
 	}, seen)
 	return err
 }

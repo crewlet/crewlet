@@ -828,7 +828,7 @@ type Requests struct {
 	Owner *RecordOwner `yaml:"owner,omitempty"`
 
 	// LateCalls declares that the record shows a request's calls only once
-	// they have run — OpenCode prints a call as it completes, Gemini CLI
+	// they have run — OpenCode prints a call as it completes, Gemini CLI 0.65
 	// writes a response's calls into its entry after running them — so each
 	// request is told to the host once the record has moved past it (a rule
 	// closed it, another request began, or the run ended) rather than as it

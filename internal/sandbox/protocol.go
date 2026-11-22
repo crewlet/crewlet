@@ -626,6 +626,13 @@ type Result struct {
 	// harness.Provider.RunEnded; empty past [MaxRunEventBytes] ([boundBox]).
 	Limits string
 
+	// NoLimitExit says the run's exit status is not the one its harness ends
+	// a run with on its vendor's limit, so its ending reads as no limit
+	// whatever its words say: a box file the model can write could spell one.
+	// Set by a runner that knows that status (Gemini CLI's 173), never by one
+	// that does not, whose endings read as they always have.
+	NoLimitExit bool
+
 	// Transcript is the agent's activity log — what it said, each tool it
 	// called and the first line of what it ran — rebuilt from its own
 	// output, or its stderr where the harness streams nothing better. It is the

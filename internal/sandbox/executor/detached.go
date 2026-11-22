@@ -293,6 +293,16 @@ type limitReporter interface {
 	limitReport() string
 }
 
+// limitGate is a harness whose run's limit is its own word only where the
+// harness itself failed the run on its vendor's API error, which its exit
+// status names ([GeminiCLI.limitExit]): elsewhere the collection marks the
+// run's ending as no limit ([sandbox.Result.NoLimitExit]), so a line the run's
+// own output put in the stream (a box file its model can write) sits nothing
+// out.
+type limitGate interface {
+	limitExit(code int) bool
+}
+
 // windowReporter is a decoder that reads off its run's stream the least context
 // window the run's harness reported holding a model to
 // ([sandbox.Result.ReportedWindow]): Claude Code's off its result lines
@@ -1127,6 +1137,13 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	result, refused, err = memoryKills(pieces.memory, result, refused, code)
 	if err != nil {
 		return sandbox.Result{}, err
+	}
+	// A LIMIT ONLY AT THE HARNESS'S OWN API FAILURE ([limitGate]); a status
+	// that does not read is no such failure.
+	if gate, ok := r.harness.(limitGate); ok {
+		if n, err := strconv.Atoi(code); err != nil || !gate.limitExit(n) {
+			result.NoLimitExit = true
+		}
 	}
 
 	// Whether the job was ended on request, as its script recorded

@@ -1,8 +1,10 @@
 package executor
 
 import (
+	"bytes"
 	"cmp"
 	"context"
+	"errors"
 	"io"
 	"maps"
 	"slices"
@@ -303,4 +305,24 @@ const (
 func ClaudeConfirmsATake(t *testing.T) {
 	t.Run("a hook record names only the takes it was asked", hookRecordNamesOnlyTheTakesItWasAsked)
 	t.Run("a hook's event is held to its type", hooksEventIsHeldToItsType)
+}
+
+// RunnerNamed is a runner driving the harness this build names name.
+func RunnerNamed(name string) *Runner { return New(harnessNamed(name)) }
+
+// GeminiConfirmsATake is Gemini CLI's case of the note contract's confirm path
+// (TestANoteServedIsConfirmedOffItsJobsOwnRecord): the take script's record of
+// its takes, confirmed in order off the session's own user messages.
+func GeminiConfirmsATake(t *testing.T) {
+	t.Run("a run's receipts are read off its takes and its session", geminiReceiptsAreReadOffItsTakesAndItsSession)
+}
+
+// ReadGeminiSession is the transcript a Gemini CLI main session file reads as
+// ([transcriptBuilder.geminiSession]), held to bounds.
+func ReadGeminiSession(ctx context.Context, raw []byte, bounds TranscriptBounds) (Transcript, error) {
+	b := newTranscriptBuilder(0, bounds, TranscriptFilter{})
+	if err := b.geminiSession(ctx, bytes.NewReader(raw)); err != nil && !errors.Is(err, errTranscriptPage) {
+		return Transcript{}, err
+	}
+	return Transcript{Entries: b.entries, Places: b.places, From: b.from, Next: b.next, Cut: b.cut}, nil
 }

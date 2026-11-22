@@ -1113,8 +1113,16 @@ codex:
     - sentinel: "run `codex login`"
 
 gemini-cli:
+  # A seat's executor runs Gemini CLI in a box (internal/sandbox/executor's
+  # GeminiCLI). It refuses no run as root (measured on 0.70.0, run as root in
+  # the measuring container) and keeps no temporary variable of its own (it
+  # takes the system's). The template is E2B's prebuilt Gemini CLI image
+  # (docs.e2b.dev/agents/gemini-cli.md).
+  executor:
+    runner: true
+    e2b_template: gemini
   binary: gemini
-  written_for: "Gemini CLI 0.65.x, measured on 0.58.0 and 0.65.0 (`gemini --version`)"
+  written_for: "Gemini CLI 0.70.x, measured on 0.65.0 and 0.70.0 (`gemini --version`)"
   version_args: ["--version"]
   # MEASURED on 0.58.0 and 0.65.0 through this backend's own code path — the
   # built-in profile, harness.New and Complete — with the harness pointed at a
@@ -1328,12 +1336,14 @@ gemini-cli:
   # EACH REQUEST, FROM THE CHAT RECORD the harness keeps as it goes — `json`
   # output prints nothing until the run is over. Each response is a `gemini`
   # entry with its id, prose, model and counts, written as the response
-  # arrives, and written WHOLE again once its calls have run, with the calls
-  # in it (whole). So the record shows a request's calls only after they ran
-  # (late_calls): a request is told once a later entry follows it — the
-  # `user` entry carrying its calls' results closes it — and its counts are
-  # charged when they are first read. The counts are the request's whole
-  # prompt (promptTokenCount), the cached part inside it.
+  # arrives and written WHOLE again with its calls (whole): 0.65.0 only once
+  # they have run, 0.70.0 first with them scheduled, before they run, then
+  # again once they have. So on 0.65.0 the record shows a request's calls only
+  # after they ran (late_calls), which costs 0.70.0 nothing: a request is told
+  # once a later entry follows it — the `user` entry carrying its calls'
+  # results closes it — and its counts are charged when they are first read.
+  # The counts are the request's whole prompt (promptTokenCount), the cached
+  # part inside it.
   #
   # The file is named after the first eight characters of the session id,
   # which no glob can spell, so it is told by its first line, which names
@@ -1341,7 +1351,9 @@ gemini-cli:
   # is joined to its request by name and arguments.
   #
   # Measured on 0.65.0: each request's counts as it was written, their sum
-  # equal to the final report's, and each call in the record once it had run.
+  # equal to the final report's, and each call in the record once it had run;
+  # read again over 0.70.0's record, each request told once with its calls
+  # and charged once (harness's TestGeminis070RecordIsToldARequestAtATimeOnceWithItsCalls).
   requests:
     source: file
     in: home
@@ -1381,17 +1393,33 @@ gemini-cli:
   volatile_paths: [".gemini/tmp", ".gemini/history", ".gemini/projects.json"]
   host_credential_paths: [".gemini/oauth_creds.json", ".gemini/google_accounts.json"]
   api_key_env: "GEMINI_API_KEY"
+  # What signs Gemini CLI in from an entry's env under auth.mode env: the
+  # switch that sends it to Vertex AI, whose own credentials (GOOGLE_API_KEY,
+  # or an application-default credentials file) ride the same env. Listed so a
+  # run in a remote box on Vertex is signed in, as Claude Code's cloud switches
+  # are, and so the switch beside another mode's credential is refused.
+  sign_in_env: ["GOOGLE_GENAI_USE_VERTEXAI"]
+  # Which Vertex AI project and region a switch reaches, none of it a
+  # credential: two entries that differ here are two sign-ins, and a limit one
+  # meets does not sit the other out.
+  identity_env: ["GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION"]
   # A project id is configuration, not a credential, and Gemini genuinely
   # needs the ambient one on a Workspace account.
   passthrough_env: ["GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION"]
   login_args: []
-  # A failed call exits non-zero with the harness's error on stderr. A spent daily
-  # quota is a TerminalQuotaError; a per-minute limit is retried ten times and
-  # then reported as a RetryableQuotaError; neither prints the API's
-  # RESOURCE_EXHAUSTED on its own.
+  # A failed call exits non-zero with the harness's error on stderr, and a
+  # seat's run says it again in its stream's result: a spent daily quota is a
+  # TerminalQuotaError, "You have exhausted your daily quota on this model.",
+  # after one try, the plan's limit, which sits the entry out. A per-minute
+  # limit is retried ten times over some 220 s and then reported as a
+  # RetryableQuotaError: transient, the vendor's own class says so, and it sits
+  # nothing out. Both exit 173, so the words decide and never the exit code
+  # alone; a seat's run is read as a limit only where it exited 173 (the
+  # executor's limitGate, sandbox.Result.NoLimitExit), since its words are a
+  # box file its model can write (measured on 0.65.0 and 0.70.0).
   limit_markers:
     - sentinel: "TerminalQuotaError"
-    - sentinel: "RetryableQuotaError"
+    - sentinel: "exhausted your daily quota"
   # A refused login is relayed with the API's UNAUTHENTICATED, a refused key
   # with the API's own sentence, and a login the call could not use — none
   # copied, or one Google's token endpoint did not accept — with the harness's
@@ -1400,6 +1428,12 @@ gemini-cli:
     - sentinel: "UNAUTHENTICATED"
     - sentinel: "API key not valid"
     - sentinel: "Manual authorization is required"
+    # A GOOGLE LOGIN WHOSE ACCOUNT NO CODE ASSIST TIER TAKES: Gemini CLI asks
+    # Google which tier a login may use and fails with IneligibleTierError,
+    # its message the reasons Google gave (INELIGIBLE_ACCOUNT, RESTRICTED_AGE,
+    # UNSUPPORTED_LOCATION, VALIDATION_REQUIRED …; read from 0.70.0's bundle).
+    # The login's own refusal, upstream: never a generic one.
+    - sentinel: "IneligibleTierError"
 
 qwen-code:
   binary: qwen

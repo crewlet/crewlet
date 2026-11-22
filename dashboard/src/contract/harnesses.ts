@@ -79,7 +79,8 @@ export const HARNESS_FACTS: Readonly<Record<string, HarnessFacts>> = {
   },
   "gemini-cli": {
     binary: "gemini",
-    signIns: ["api-key", "host-login"],
+    executor: true,
+    signIns: ["api-key", "host-login", "cloud"],
     keyEnv: "GEMINI_API_KEY",
     login: "adopt",
     efforts: [],

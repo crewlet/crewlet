@@ -43,6 +43,14 @@ var noteFixtures = map[string]noteFixture{
 		confirms: pluginAdmitsNotesAtTheRunsNextStep,
 		reaches:  pluginReadsTheBridgesOwnNotesRoute,
 	},
+	executor.GeminiCLIName: {
+		reads: true,
+		wakeRead: func(t *testing.T, wake string) []executor.TranscriptEntry {
+			return readGemini(t, geminiSessionWith(t, wake))
+		},
+		confirms: executor.GeminiConfirmsATake,
+		reaches:  geminiTakeReachesTheBridgeTool,
+	},
 }
 
 // noteFixtureOf is h's fixture, failing the case where h supplies none.

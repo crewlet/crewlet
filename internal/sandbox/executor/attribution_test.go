@@ -319,6 +319,7 @@ var creditBoxes = map[string]func(t *testing.T) (*executor.Runner, sandbox.Sandb
 				"sh \"$HOME/scenario.sh\" > \"$HOME/observed\" 2> \"$HOME/observed.err\"\n")
 		return runner, b
 	},
+	executor.GeminiCLIName: geminiCreditBox,
 	executor.OpenCodeName: func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 		runner, b := openCodeBox(t, t.TempDir())
 		standIn := strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`, "d="+shQuote(t.TempDir()), 1)
@@ -327,6 +328,40 @@ var creditBoxes = map[string]func(t *testing.T) (*executor.Runner, sandbox.Sandb
 		writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/opencode", standIn)
 		return runner, b
 	},
+}
+
+// geminiCreditBox is creditBoxes' Gemini CLI box ([geminiBox]): its stand-in
+// runs the scenario.
+func geminiCreditBox(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
+	t.Helper()
+	return geminiBox(t, "sh \"$HOME/scenario.sh\" > \"$HOME/observed\" 2> \"$HOME/observed.err\"\n"+
+		"echo '{\"type\":\"result\",\"status\":\"success\"}'\n")
+}
+
+// geminiBox is a real box with a Gemini CLI runner's plumbing and a stand-in
+// `gemini` that writes a prompt when asked to export one, as the run's script
+// asks first, and otherwise runs run.
+func geminiBox(t *testing.T, run string) (*executor.Runner, sandbox.Sandbox) {
+	t.Helper()
+	local, err := sandbox.NewLocal(sandbox.LocalOptions{Placement: sandbox.Direct, StateDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("NewLocal: %v", err)
+	}
+	b, err := local.Create(t.Context(), sandbox.Spec{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() { b.Close(t.Context()) })
+	runner := executor.NewGeminiCLI()
+	if err = runner.Install(t.Context(), b); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	// NODE ON THE BOX'S OWN PATH, as an image that runs Gemini CLI has it: a
+	// login shell's profile may reset PATH to the system's.
+	writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/node", "#!/bin/sh\nexec "+shQuote(geminiNode(t))+` "$@"`+"\n")
+	writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/gemini",
+		"#!/bin/sh\nif [ -n \"${GEMINI_WRITE_SYSTEM_MD:-}\" ]; then echo prompt > \"$GEMINI_WRITE_SYSTEM_MD\"; exit 42; fi\n"+run)
+	return runner, b
 }
 
 // runScenario runs req in b to its end and holds the scenario's last commit
