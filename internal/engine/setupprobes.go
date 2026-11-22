@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/expo"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/gitlab"
+	"github.com/crewlet/crewlet/internal/googleanalytics"
 	"github.com/crewlet/crewlet/internal/googlecloud"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/jira"
@@ -52,5 +53,6 @@ func SetupProbes() map[integration.Kind]setup.Probe {
 		integration.KindScaleway:        scaleway.Probe(nil),
 		integration.KindSlack:           slack.Probe(nil),
 		integration.KindSSH:             sshint.Probe(nil),
+		integration.KindGoogleAnalytics: googleanalytics.Probe(nil),
 	}
 }

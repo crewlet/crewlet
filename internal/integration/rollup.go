@@ -84,6 +84,7 @@ var Tools = []Tool{
 	{Key: "meta_ads", Surfaces: []ToolSurface{{string(KindMetaAds), "Meta Ads Manager"}}},
 	{Key: "app_store_connect", Surfaces: []ToolSurface{{string(KindAppStoreConnect), "App Store Connect"}}},
 	{Key: "apple_ads", Surfaces: []ToolSurface{{string(KindAppleAds), "Apple Ads"}}},
+	{Key: "google_analytics", Surfaces: []ToolSurface{{string(KindGoogleAnalytics), "Google Analytics"}}},
 }
 
 // ToolState is a tool's standing in the one question a person asks of it: does

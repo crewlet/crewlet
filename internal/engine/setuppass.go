@@ -68,6 +68,7 @@ func (e *Engine) setupPasses() []setup.Pass {
 		&metaAdsPass{engine: e},
 		&appStoreConnectPass{engine: e},
 		&appleAdsPass{engine: e},
+		&googleAnalyticsPass{engine: e},
 		&atlassianPass{engine: e},
 	}
 }
