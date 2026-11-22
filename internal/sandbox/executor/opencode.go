@@ -1087,7 +1087,8 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 		// is denied: it asks a PERSON through a form a headless run cancels,
 		// where the bridge's `ask_and_wait` parks the run on an answer. Every
 		// document's rules are added in OpenCode's order, so these, last,
-		// decide.
+		// decide among them; an agent's own rules, a repository's included,
+		// are read after them (2.3.2).
 		"permissions": []map[string]string{
 			{"action": "*", "resource": "*", "effect": "allow"},
 			{"action": "question", "resource": "*", "effect": "deny"},
@@ -1106,14 +1107,30 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 		// run the brief on an agent the cap never reached.
 		"default_agent": openCodeAgent,
 	}
+	agent := map[string]any{}
 	// THE RUN'S TURN CAP, as the agent's `steps` (Claude Code's --max-turns,
 	// [ClaudeCode.Command]): the one bound on an executor's work, already
 	// reconciled into Limits. Absent at zero, which is uncapped: OpenCode
 	// refuses a step count below one.
 	if req.Limits.MaxTurns > 0 {
-		cfg["agents"] = map[string]any{
-			openCodeAgent: map[string]any{"steps": req.Limits.MaxTurns, "disabled": false},
+		agent["steps"] = req.Limits.MaxTurns
+		agent["disabled"] = false
+	}
+	// THE ENTRY'S WEB DENIED IN THE PERMISSIONS TOO, the run's and its agent's,
+	// beside the web tools' plugins taken out below: Code Mode's `execute`
+	// fetches under the webfetch permission, and on 2.3.2 a repository's agent
+	// rule allowing it outranked the run's own rules until the agent's denied
+	// it as well.
+	if req.WebDenied {
+		denied := []map[string]string{
+			{"action": "webfetch", "resource": "*", "effect": "deny"},
+			{"action": "websearch", "resource": "*", "effect": "deny"},
 		}
+		cfg["permissions"] = append(cfg["permissions"].([]map[string]string), denied...)
+		agent["permissions"] = denied
+	}
+	if len(agent) > 0 {
+		cfg["agents"] = map[string]any{openCodeAgent: agent}
 	}
 	values := &openCodeValueFiles{dir: paths.OpenCodeValues()}
 	wired := openCodeWiring(sandbox.Wiring{MCPServers: req.MCPServers, Steer: req.Steer,
@@ -1138,7 +1155,7 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 	if wired.servers != nil {
 		cfg["mcp"] = map[string]any{"servers": wired.servers}
 	}
-	var plugins []map[string]any
+	var plugins []any
 	if req.Steer.Set() {
 		if err := box.WriteFile(ctx, paths.OpenCodeSteerPlugin()+"/"+openCodeSteerEntry, openCodeSteerPlugin); err != nil {
 			return "", fmt.Errorf("executor: writing OpenCode's notes plugin: %w", err)
@@ -1164,6 +1181,14 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 			"package": paths.OpenCodeSkillsPlugin(),
 			"options": map[string]string{"url": wired.skills},
 		})
+	}
+	// THE ENTRY'S WEB TOOLS OFF where it denies them, as its runs on the engine
+	// host have none: their plugins taken out, which on 2.3.2 left webfetch
+	// and websearch unregistered for the run and every subagent, an agent of
+	// the repository's own allowing them included. A repository's `plugins`
+	// naming them again does not bring them back.
+	if req.WebDenied {
+		plugins = append(plugins, "-opencode.tool.webfetch", "-opencode.tool.websearch")
 	}
 	// AND ON EVERY RUN THE PLUGIN THAT KEEPS omitted OUT OF THE COMMANDS ITS
 	// MODEL RUNS (opencode_toolenv.js), last.
