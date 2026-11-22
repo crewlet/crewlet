@@ -16,15 +16,40 @@ func (p Paths) MuseSettings() string { return p.MuseConfig() + "/settings.json" 
 // XDG_DATA_HOME is unset for the harness, so this is the one place.
 func (p Paths) MuseSessions() string { return p.Home + "/.local/share/muse/sessions" }
 
-// MuseSettingsFresh is where a continuing run's settings are written a second
-// time, wired to the job's other token, for a session its script starts in the
-// continued one's place ([sandbox.RunRequest.FreshWiring]); the script moves it
-// over [Paths.MuseSettings] where it starts one and removes it where it
-// continues ([museSessionGate]). Beside the run's other artefacts, never in
-// the directory Muse reads.
-func (p Paths) MuseSettingsFresh() string { return p.WorkDir() + "/muse-settings-fresh.json" }
-
 // MuseChildLines is where a run's script keeps, before its harness starts, how
 // many lines each subagent's record of the session already holds, which its
 // usage after the run is read past ([museChildUsage]).
 func (p Paths) MuseChildLines() string { return p.WorkDir() + "/muse-child-lines" }
+
+// MuseSkills is where a Muse Code run's own skills are written, one
+// directory each, named as listed (`crewlet:<name>`): the box home's
+// `.agents/skills`, which Muse catalogues as the user's (measured on 1.4.25).
+func (p Paths) MuseSkills() string { return p.Home + "/.agents/skills" }
+
+// MuseServers is the directory of a Muse Code run's MCP server definitions,
+// one JSON file each, which its script adds to its settings with `muse mcp
+// add-json` once the notes plugin is approved: an approval rewrites the
+// settings and drops a server's `required` and `tool_timeout_sec` (measured).
+// MuseServersFresh holds a fresh session's, wired to the job's other token.
+func (p Paths) MuseServers() string { return p.WorkDir() + "/muse-servers" }
+
+// MuseServersFresh is [Paths.MuseServers] for a session a continuing run's
+// script starts of its own ([museSessionGate]).
+func (p Paths) MuseServersFresh() string { return p.WorkDir() + "/muse-servers-fresh" }
+
+// MuseTakeConfig is the note helper's take config ([museTake]), which every
+// hook of the run reads; MuseTakeConfigFresh is a fresh session's, which the
+// script moves over it where it starts one.
+func (p Paths) MuseTakeConfig() string { return p.WorkDir() + "/muse-take.json" }
+
+// MuseTakeConfigFresh is [Paths.MuseTakeConfig] for a session a continuing
+// run's script starts of its own.
+func (p Paths) MuseTakeConfigFresh() string { return p.WorkDir() + "/muse-take-fresh.json" }
+
+// MuseNotesPlugin is the notes plugin's package ([musePluginManifest]), which
+// the run's script installs and approves.
+func (p Paths) MuseNotesPlugin() string { return p.WorkDir() + "/muse-notes-plugin" }
+
+// MuseNoteHelper is the note helper's build for the box (internal/notehelper),
+// written at each launch of a run wired to its notes or skills.
+func (p Paths) MuseNoteHelper() string { return p.WorkDir() + "/muse-notehelper" }
