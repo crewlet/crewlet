@@ -4447,9 +4447,16 @@ hermes:
   # removed when it stops; `hermes gateway stop` stops the home's gateway and
   # exits 0 when there is none, a stale pid file left by a killed one included
   # (measured, about 3 s).
+  #
+  # --yes, BECAUSE A CALL CUT SHORT LEAVES ITS TURN RUNNING IN THE GATEWAY:
+  # killing the client mid-turn stopped neither the turn nor its tool, and
+  # `gateway stop` then refused ("1 live session(s) would be interrupted",
+  # exit 1), which is the very case the stop is for. With --yes it interrupted
+  # the turn, the tool's process ended with it, and the gateway was gone in
+  # 11 s (measured on 0.23.3).
   home_daemon:
     pid_file: ".hermes/gateway.pid"
-    stop_args: ["gateway", "stop"]
+    stop_args: ["gateway", "stop", "--yes"]
   # `hermes auth` with no subcommand is the interactive credential wizard, and
   # it is what brokers an OAuth sign-in. `hermes login` still exists and its
   # help says "Deprecated. Use `hermes auth`".
