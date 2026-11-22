@@ -1,12 +1,12 @@
 /**
- * The Advisor's run at the head of its page: how long a running run has run,
- * the steps it reported with the newest on its line, and the sources it could
- * not read.
+ * The Advisor's run at the head of its page: one line of where it stands,
+ * what a running run is doing now and how far through its questions it is,
+ * every step folded under Steps, and the sources it could not read.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
-import { RunLine, runView, runWords, type ViewRun } from "./Run.tsx";
+import { RunLine, runDetail, runState, runView, runWords, type ViewRun } from "./Run.tsx";
 
 afterEach(cleanup);
 
@@ -33,34 +33,85 @@ const running: ViewRun = {
   repaired: {},
   deepSkipped: null,
   keptFrom: null,
+  agenda: null,
 };
 
-// A RUN IS FOLLOWED, NEVER WAITED ON: its elapsed time and what it is doing
-// now are on its line, the steps before under it.
-test("a running run says how long it has run and the lead it is testing, its steps under it", () => {
+// A RUN IS FOLLOWED, NEVER WAITED ON, AND SAID CONCISELY: one line of its
+// state and how long it has run, what it is doing now under it, and every
+// step it reported folded under Steps rather than listed on the page.
+// Mutation: list the steps open, and the head is a log again.
+test("a running run says its state, how long, and what it is doing now, its steps folded", async () => {
   render(<RunLine run={running} now={NOW} />);
-  expect(
-    screen.getByText("Running for 1m 12s. Testing: releases pile up behind one seat."),
-  ).toBeDefined();
-  const steps = screen.getByRole("list", { name: "What the run did so far" });
-  expect(steps.textContent).toBe("Reading flow hours.");
+  expect(screen.getByText("Running checks")).toBeDefined();
+  expect(screen.getByText("1m 12s")).toBeDefined();
+  expect(screen.getByText("Testing: releases pile up behind one seat.")).toBeDefined();
+  expect(screen.queryByRole("list", { name: "What the run did" })).toBeNull();
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: /Steps/ }));
+  });
+  const steps = screen.getByRole("list", { name: "What the run did" });
+  expect([...steps.querySelectorAll("li")].map((li) => li.textContent)).toEqual([
+    "Reading flow hours.",
+    "Testing: releases pile up behind one seat.",
+  ]);
 });
 
-test("a run that could not read a source says so", () => {
+// HOW FAR A DEEP RUN IS: its questions answered, as a meter under its line.
+test("an investigation says how many of its questions it has answered", () => {
   render(
-    <RunLine
-      run={{
-        ...running,
-        status: "done",
-        endedAt: "2026-11-20T09:59:50Z",
-        progress: [],
-        unread: ["flow"],
-      }}
-      now={NOW}
-    />,
+    <RunLine run={{ ...running, kind: "deep", agenda: { items: 9, answered: 3 } }} now={NOW} />,
   );
-  expect(screen.getByText(/^All checks ran just now\. Could not read /)).toBeDefined();
-  expect(screen.queryByRole("list")).toBeNull();
+  expect(screen.getByText("Investigating")).toBeDefined();
+  expect(screen.getByText("3 of 9 answered")).toBeDefined();
+  const meter = screen.getByRole("meter");
+  expect(meter.getAttribute("aria-valuetext")).toBe("3 of 9 questions answered");
+});
+
+test("a run that could not read a source says so, in short and in full", () => {
+  const unread: ViewRun = {
+    ...running,
+    status: "done",
+    endedAt: "2026-11-20T09:59:50Z",
+    progress: [],
+    unread: ["flow"],
+  };
+  render(<RunLine run={unread} now={NOW} />);
+  expect(screen.getByText("Checked just now")).toBeDefined();
+  expect(runState(unread, NOW)).toMatchObject({
+    tone: "warning",
+    notes: ["nothing new", "1 source not read"],
+  });
+  expect(runDetail(unread, NOW)).toMatch(/^All checks ran just now\. Could not read /);
+  expect(screen.queryByRole("button", { name: /Steps/ })).toBeNull();
+});
+
+// AN ENDED RUN IS ONE LINE: what it moved, the bound it stopped at and what
+// it left out, each a word or two; the sentence in full is its tooltip.
+test("an ended investigation says what it moved and where it stopped, in a few words", () => {
+  const ended: ViewRun = {
+    ...running,
+    kind: "deep",
+    status: "done",
+    endedAt: "2026-11-20T09:57:00Z",
+    opened: 2,
+    resolved: 1,
+    dropped: 1,
+    stoppedBy: "minutes",
+  };
+  expect(runState(ended, NOW)).toEqual({
+    label: "Investigated 3 minutes ago",
+    tone: "warning",
+    pulse: false,
+    notes: ["2 new", "1 closed", "hit its time limit", "1 left out"],
+  });
+  expect(runState({ ...ended, stoppedBy: "done", dropped: 0 }, NOW).tone).toBe("success");
+  expect(
+    runState({ ...ended, deepSkipped: "kept", keptFrom: "2026-11-20T08:00:00Z" }, NOW),
+  ).toMatchObject({
+    label: "Checked 3 minutes ago",
+    notes: ["2 new", "1 closed", "investigation kept"],
+  });
+  expect(runState(runView(null), NOW).label).toBe("Not run yet");
 });
 
 test("no run yet, and a run that did not finish, are said as such", () => {
