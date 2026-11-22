@@ -3,7 +3,6 @@ package harnessprofile
 import (
 	"encoding/base64"
 	"encoding/json"
-	"maps"
 	"os"
 	"reflect"
 	"slices"
@@ -339,36 +338,4 @@ func testLogins(t *testing.T, path string) map[string]testLogin {
 		t.Fatalf("%s: %v", path, err)
 	}
 	return logins
-}
-
-// A .ENV IS READ AS HERMES READS IT, AND WRITTEN SO IT READS BACK: comments and
-// blank lines skipped, an `export ` prefix, spaces around the name, double
-// quotes with their escapes, single quotes as written, an unquoted value
-// ending at a `#` after a space, a quoted one at its closing quote; a name set
-// twice is refused; what encodeDotenv writes parses to the same variables.
-//
-// Mutation: keep a comment line, keep the export prefix, cut an unquoted value
-// at a `#` with no space before it, leave a double-quoted value's escapes in,
-// take a name set twice, or write a value with a space unquoted.
-func TestADotenvIsReadAsHermesReadsIt(t *testing.T) {
-	t.Parallel()
-	got, err := parseDotenv([]byte("\ufeff# a comment\n\nexport A=1\n  B = two  \nC=\"x \\\"q\\\" \\\\ y\" # note\n" +
-		"D='a # b'\nE=foo#bar\nF=val # trailing\nnoequals\n=novalue\nG=\"open\n"))
-	want := map[string]string{"A": "1", "B": "two", "C": `x "q" \ y`, "D": "a # b", "E": "foo#bar", "F": "val", "G": `"open`}
-	if err != nil || !maps.Equal(got, want) {
-		t.Errorf("parseDotenv = %v, %v; want %v", got, err, want)
-	}
-	if _, err := parseDotenv([]byte("A=1\nexport A=2\n")); err == nil {
-		t.Error("a name set twice was read")
-	}
-	vars := map[string]any{"PLAIN": "abc", "SPACED": "a b", "HASH": "a#b", "QUOTE": `say "hi" \ 'x'`, "EMPTY": ""}
-	back, err := parseDotenv(encodeDotenv(vars))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for key, value := range vars {
-		if back[key] != value {
-			t.Errorf("%s written and read back is %q, want %q", key, back[key], value)
-		}
-	}
 }

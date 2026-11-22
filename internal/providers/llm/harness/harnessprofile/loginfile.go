@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/crewlet/crewlet/internal/envfile"
 )
 
 // FileRule is how one credential file travels between the shared login and a
@@ -152,14 +155,14 @@ func (r FileRule) SameAccount(home, shared []byte) bool {
 // toml reports whether the file is TOML.
 func (r FileRule) toml() bool { return strings.HasSuffix(r.Name, ".toml") }
 
-// dotenv reports whether the file is a `.env` file ([parseDotenv]).
+// dotenv reports whether the file is a `.env` file ([envfile.ReadFile]).
 func (r FileRule) dotenv() bool { return strings.HasSuffix(r.Name, ".env") }
 
 // decode reads content as the file's format into an object; empty content is
 // an empty object.
 func (r FileRule) decode(content []byte) (map[string]any, error) {
 	if r.dotenv() {
-		vars, err := parseDotenv(content)
+		vars, err := envfile.ReadFile(content)
 		if err != nil {
 			return nil, err
 		}
@@ -194,7 +197,10 @@ func (r FileRule) encode(doc map[string]any, like []byte) ([]byte, error) {
 	var out []byte
 	switch {
 	case r.dotenv():
-		out = encodeDotenv(doc)
+		var err error
+		if out, err = r.encodeEnv(doc); err != nil {
+			return nil, err
+		}
 	case r.toml():
 		var buf bytes.Buffer
 		if err := toml.NewEncoder(&buf).Encode(doc); err != nil {
@@ -223,6 +229,21 @@ func (r FileRule) encode(doc map[string]any, like []byte) ([]byte, error) {
 		out = bytes.TrimRight(out, "\n")
 	}
 	return out, nil
+}
+
+// encodeEnv writes doc a variable a line, sorted, each as [envfile.FormatAssignment]
+// writes it; a value no line can carry is refused.
+func (r FileRule) encodeEnv(doc map[string]any) ([]byte, error) {
+	var out bytes.Buffer
+	for _, name := range slices.Sorted(maps.Keys(doc)) {
+		line, err := envfile.FormatAssignment(name, fmt.Sprint(doc[name]))
+		if err != nil {
+			return nil, fmt.Errorf("writing %s: %w", r.Name, err)
+		}
+		out.WriteString(line)
+		out.WriteByte('\n')
+	}
+	return out.Bytes(), nil
 }
 
 // commentHeader is content's leading lines that open with `//`.
