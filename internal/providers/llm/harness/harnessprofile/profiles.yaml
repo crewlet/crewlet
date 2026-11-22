@@ -3311,6 +3311,13 @@ muse-code:
   # agent binary entirely, so a profile relocating credentials with it would
   # silently get the default path.)
   credential_paths: [".config/muse/auth.json"]
+  # A signed-in call mints an API key as it starts (`POST /muse-code/key`,
+  # with the login's access token) and writes the key and its base URL into
+  # auth.json (measured on 1.4.25); subs_active comes from the same answer.
+  # `muse login` stores all three from its own mint, and a call's carry keeps
+  # the login's.
+  run_keys:
+    auth.json: [providers.meta.api_key, providers.meta.api_base_url, providers.meta.subs_active]
   # THE WHOLE DATA DIRECTORY, not a list of children. .local/share/muse holds
   # the session logs (sessions/YYYY/MM/DD/<id>/session.jsonl) and the personal
   # project memory the vendor documents as living "on your machine outside the
