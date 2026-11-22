@@ -38,7 +38,6 @@ The roles Google Analytics gives, least first: **Viewer** (sees settings and dat
 | `google_analytics_mark_key_event` | operate | Marks an event as a key event |
 | `google_analytics_read` | read | Any method that only reads, by its ID |
 | `google_analytics_operate` | operate | Any reversible change, by its method's ID |
-| `google_analytics_spend` | spend | Turning on a BigQuery export, or exporting an event it left out, which raises money owed to Google Cloud: asked first |
 | `google_analytics_admin` | admin | Any account, access, link, key or irreversible change, by its method's ID: asked first |
 
 A write whose class depends on what it changes is classed per call from its update mask and its new values, however the mask and the body spell a field (`displayName` or `display_name`, `updateMask` or `update_mask`): renaming a custom metric is `operate`, and taking off its revenue or cost restriction is `admin`. A field no rule names takes the method's highest class, and a `*` mask counts every field the resource holds, since it replaces them all. A call on the wrong tool for what it changes is refused with the tool that may make it.
@@ -158,7 +157,7 @@ Each row is one method the engine offers, with its class, the least role Google 
 | `analyticsadmin.properties.bigQueryLinks.list` | properties.bigQueryLinks | `GET /v1alpha/properties/{propertiesId}/bigQueryLinks` | read | Viewer (property) | analytics.readonly |
 | `analyticsadmin.properties.bigQueryLinks.get` | properties.bigQueryLinks | `GET /v1alpha/properties/{propertiesId}/bigQueryLinks/{bigQueryLinksId}` | read | Viewer (property) | analytics.readonly |
 | `analyticsadmin.properties.bigQueryLinks.create` | properties.bigQueryLinks | `POST /v1alpha/properties/{propertiesId}/bigQueryLinks` | admin | Editor (property) plus OWNER (or the listed IAM permissions) on the Cloud project | analytics.edit |
-| `analyticsadmin.properties.bigQueryLinks.patch` | properties.bigQueryLinks | `PATCH /v1alpha/properties/{propertiesId}/bigQueryLinks/{bigQueryLinksId}` | operate, spend or admin by field | Editor (property) | analytics.edit |
+| `analyticsadmin.properties.bigQueryLinks.patch` | properties.bigQueryLinks | `PATCH /v1alpha/properties/{propertiesId}/bigQueryLinks/{bigQueryLinksId}` | operate or admin by field | Editor (property) | analytics.edit |
 | `analyticsadmin.properties.bigQueryLinks.delete` | properties.bigQueryLinks | `DELETE /v1alpha/properties/{propertiesId}/bigQueryLinks/{bigQueryLinksId}` | admin | Editor (property) | analytics.edit |
 | `analyticsadmin.properties.calculatedMetrics.list` | properties.calculatedMetrics | `GET /v1alpha/properties/{propertiesId}/calculatedMetrics` | read | Viewer (property) | analytics.readonly |
 | `analyticsadmin.properties.calculatedMetrics.get` | properties.calculatedMetrics | `GET /v1alpha/properties/{propertiesId}/calculatedMetrics/{calculatedMetricsId}` | read | Viewer (property) | analytics.readonly |
@@ -272,7 +271,7 @@ Each row is one method the engine offers, with its class, the least role Google 
 
 **Notes on the classing:**
 - `recurringAudienceLists.create` only reads data, but no method stops or deletes the standing job it makes, so it is `admin`.
-- No method publishes, and none spends money through Google Analytics itself. A BigQuery link's exports raise money owed to Google Cloud, so turning one on, or taking an event off its exclusions, is `spend`; turning one off, or excluding another event, is a brake made at once (`operate`). Google Analytics names no amount, so these acts are held for an administrator without spending caps.
+- No method publishes, and none spends money through Google Analytics itself. A BigQuery link's exports bill the linked Google Cloud project, with no amount a spending cap could hold, so turning one on, or taking an event off its exclusions, is `admin` (billing setup, asked first at a fresh sign-in); turning one off, or excluding another event, is a brake made at once (`operate`).
 - Methods behind an Analytics 360 property or a limited rollout are offered; Google answers 400 or 403 where the property lacks them.
 
 ## What the atlas shows
