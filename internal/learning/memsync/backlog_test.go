@@ -466,11 +466,11 @@ func TestARowWhosePublishFailedIsWhereTheNextPublishStarts(t *testing.T) {
 
 // A PUBLISH SKIPS WHAT ANOTHER PUBLISH OF THE SEAT HAD ACKNOWLEDGED.
 //
-// No call takes a seat's lock, so two publishes of one seat's range can
-// overlap (a flush waits only for the rows the cycle has out). The mark is
-// reread at each page, so a page starts above what the other call had
-// acknowledged, and each sends again at most the page it already held. The
-// case widens the overlap: it runs the second publish whole inside the first's
+// No call takes a seat's lock, and the mark is reread at each page, so a page
+// starts above what another call of the range had acknowledged, and each sends
+// again at most the page it already held. The cycle and the flush no longer
+// send at once (the flush waits for the cycle's rows), so this guards the
+// reread itself: the case runs the second publish whole inside the first's
 // publish of its first row.
 //
 // Mutation: read the mark once per table rather than at each page, and the

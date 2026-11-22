@@ -99,6 +99,13 @@
 // publish: its pending acknowledgements live on the client this node shares
 // with the coordination store, and with no timeout set there an unanswered one
 // is held for the process's life, where a request per row ends with its bound.
+// A drain flushes every seat at once (seat.Host.ReleaseAll). Across a link the
+// link's one window bounds all their rows; on a member each seat has up to 64
+// rows and a page out, 3,200 rows and some 67 MiB at fifty seats (vectors go
+// as base64), inside what the memory stream queues before it stores
+// (nats-server's max_buffered_msgs and max_buffered_size, 100,000 and 128 MiB
+// by default). A row refused there is not acknowledged, so it is sent again by
+// the next publish, or lost with the flush as a crash loses it.
 //
 // A ROW SENT IS CARRIED WHOLE. A call's context (a cycle's thirty seconds, a
 // flush's five) decides only whether a row is sent. Each row is waited for

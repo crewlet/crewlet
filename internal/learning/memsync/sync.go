@@ -44,24 +44,27 @@ const boundaryReadTimeout = 5 * time.Second
 // holds before publishing them, always at least one row ([exportPage]).
 //
 // Bytes, not rows: one row can hold up to the transport's 8 MiB, and a drain
-// flushes every held seat at once (seat.Host.ReleaseAll), a page each: about
-// 51 MiB at fifty seats. It bounds memory and what a publish has out at once,
-// since no row of the next page is sent before the page's last is answered
-// ([Syncer.publishPage]). A mebibyte is about a hundred rows of 1 536-dimension
-// vectors, so a page's one index seek is under a percent of what it feeds;
-// less pays a seek every few rows, more only raises the drain's peak. A
-// judgement, not a measurement.
+// flushes every held seat at once (seat.Host.ReleaseAll), each holding a page
+// and the encoded bodies of the rows it has out, a page again and a third more
+// for a vector's base64: about 117 MiB at fifty seats. It bounds memory and
+// what a publish has out, since no row of the next page is sent before the
+// page's last is answered ([Syncer.publishPage]). A mebibyte is about a
+// hundred rows of 1 536-dimension vectors, so a page's one index seek is under
+// a percent of what it feeds; less pays a seek every few rows, more only
+// raises the drain's peak. A judgement, not a measurement.
 const exportPageBytes = 1 << 20
 
 // rowsInFlight is how many rows a publish has sent and not yet had answered
 // ([Syncer.publishPage]). One at a time, a publish carried a row a broker round
 // trip whatever the link's rate: a flush's five seconds about fifty rows at
 // 100 ms (crewlet/crewlet#1041). 64 carries some 3,000 there, past the hundreds
-// a vector fill stamps again, and is what the heartbeat already sends at once
-// on the same connection (seat's renewConcurrency). It binds only small rows:
-// what is out is never more than a page ([exportPageBytes]), and across a link
-// no more than the link's one window ([Config.Window]), which 64 rows of some
-// 2 KiB fill, so a request sent behind them is still answered in its term.
+// a vector fill stamps again, and is what the heartbeat sends at once on the
+// same connection (seat's renewConcurrency). What is out is never more than a
+// page ([exportPageBytes]), and across a link no more than its one window
+// ([Config.Window]), which 64 rows of 2 KiB fill, so a request behind them
+// keeps its term. A member's drain, every seat at once, has 3,200 rows and
+// some 67 MiB out at fifty seats, inside the memory stream's ingest queue
+// (nats-server's default 100,000 messages and 128 MiB; package doc).
 const rowsInFlight = 64
 
 // AgentIDFor derives a seat's stable id from its handle (ADR-0013), or "" where
@@ -130,8 +133,9 @@ type Syncer struct {
 
 	// window is the ONE window of the link this node's connection crosses
 	// ([Config.Window]), which every replay pull takes from before it is
-	// asked and which bounds what it carries ([Syncer.pullBound]); nil in a
-	// member's own process.
+	// asked and which bounds what it carries ([Syncer.pullBound]), and every
+	// published row before it is sent ([Syncer.sendRow]); nil in a member's
+	// own process.
 	window *jsapi.Window
 
 	// link is the meter of the link this node's connection crosses
@@ -337,8 +341,9 @@ func (s *Syncer) PublishBacklog(ctx context.Context, handle string) (Carried, er
 
 // Releasing turns the seat's live holding here to releasing, and says whether
 // there was one: from now on its memory is the release's flush's to carry
-// ([Syncer.FlushOwn], [Syncer.FlushBacklog]), and a cycle sends no more rows. The release flushes only on true, so a seat whose hydration here failed
-// or never ran flushes nothing, rather than put this node's possibly older
+// ([Syncer.FlushOwn], [Syncer.FlushBacklog]), and a cycle sends no more rows.
+// The release flushes only on true, so a seat whose hydration here failed or
+// never ran flushes nothing, rather than put this node's possibly older
 // profiles, skills and onboarding marker over the changelog's. A taking that
 // fails after its hydration completed is live, and flushes back the
 // changelog's own copies, which puts nothing older over them.
