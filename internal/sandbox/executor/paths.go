@@ -975,9 +975,9 @@
 // render: the run's own instructions and every instruction file it discovers
 // (the global AGENTS.md, an AGENTS.md on the way up from the working
 // directory, and, read as a superset, every CLAUDE.md beside them), with a
-// removal sentence for each directory it walks; the run's skills and the
-// guidance of the MCP servers the run's bridge serves it, which the engine
-// knows; the date and the environment. Two are NOT CHARGED: the id of each
+// removal sentence for each directory it walks; the run's skills, and its
+// bridged servers' guidance and Code Mode catalogs, which the engine knows;
+// the date and the environment. Two are NOT CHARGED: the id of each
 // skill a changed list names as gone, and a skill OpenCode finds in a folder
 // of its own (a configuration directory's `skill` or `skills`, `.claude/skills`
 // and `.agents/skills` in the home and on the way up), which only a job that

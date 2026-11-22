@@ -403,19 +403,21 @@ func TestASummarizedTellIsBounded(t *testing.T) {
 // THE RUN'S SOURCES ARE WHAT ITS SERVER IS HANDED. In the box that holds the
 // session's copy the launch charges what OpenCode tells the session before its
 // first request: the run's instructions as its runner writes them, its skills,
-// what each server its bridge serves says it is for, and, apart, every server
+// what each server its bridge serves says it is for and offers, and, apart, every server
 // the box dials itself, whose instructions only the box knows and which makes
 // the box no point there. A server naming the job took over is the bridge's,
 // never the box's own.
 //
-// Mutation: hand the launch no guidance, or count a server the bridge took
-// over as one the box dials, and a case goes red.
+// Mutation: hand the launch no guidance or no catalogs, or count a server the
+// bridge took over as one the box dials, and a case goes red.
 func TestTheRunsSourcesAreWhatItsServerIsHanded(t *testing.T) {
 	t.Parallel()
 	req := launchReq("t1")
 	req.System = "the seat's instructions"
 	req.Skills = []Skill{{Name: "deploy", Description: "how to deploy"}}
 	req.MCPGuidance = map[string]string{"tracker": "the tracker's instructions"}
+	req.MCPCatalogs = map[string][]CatalogTool{"tracker": {{Name: "file_bug", Description: "File a bug.",
+		Schema: map[string]any{"type": "object"}}}}
 	own := map[string]MCPServer{"repo": {Command: "repo-mcp"}, "crewlet": {Command: "stale"}}
 	bridged := map[string]MCPServer{"crewlet": {Transport: TransportHTTP, URL: "https://engine.example.com/mcp/j"}}
 	req.MCPServers = withServers(own, bridged)
@@ -425,6 +427,8 @@ func TestTheRunsSourcesAreWhatItsServerIsHanded(t *testing.T) {
 		t.Errorf("the box dials %q itself, want repo alone", got.Unsized)
 	case !reflect.DeepEqual(got.Guidance, req.MCPGuidance):
 		t.Errorf("the run's servers say %q, want what the launch was handed", got.Guidance)
+	case !reflect.DeepEqual(got.Catalogs, req.MCPCatalogs):
+		t.Errorf("the run's servers offer %+v, want what the launch was handed", got.Catalogs)
 	case got.System != buildSystem(req) || !strings.Contains(got.System, "the seat's instructions"):
 		t.Errorf("the run's instructions read %q, want its runner's", got.System)
 	case !reflect.DeepEqual(got.Skills, req.Skills) || !got.Steered:
