@@ -38,7 +38,7 @@ var geminiTakeScript []byte
 
 // geminiHookAnswerUnits bounds a Gemini CLI run's hook answer, in UTF-16
 // units: 9,000, the least that holds the engine's shared bounds, a widest note
-// (4,493) and its widest item (4,505) a blank line apart (ADR-0176, section
+// (4,493) and its widest item (4,505) a blank line apart (ADR-0177, section
 // 2). The AfterAgent block's reason was measured whole to 1 MB on 0.70.0, so
 // it fits with room to spare.
 const geminiHookAnswerUnits = 9000

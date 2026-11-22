@@ -69,3 +69,44 @@ func geminiReceiptsAreReadOffItsTakesAndItsSession(t *testing.T) {
 		}
 	}
 }
+
+// AN EMPTY RECORD OF TAKES SETTLES, A MISSING ONE WAITS. WriteConfig leaves
+// the record empty before the run, so a take the script never recorded (its
+// hook killed between the bridge's answer and the record) reads absent once
+// the job is over, and is served again; a box with no record at all lost it,
+// and its takes stay undecided whether or not the job is over.
+//
+// Mutations, each red: read a missing record as empty; read an empty record
+// as unreadable.
+func TestAnEmptyRecordOfTakesSettlesAndAMissingOneWaits(t *testing.T) {
+	t.Parallel()
+	asked := []sandbox.AskedTake{{Take: "take-a"}}
+	const session = "11111111-2222-4333-8444-555555555555"
+	for name, tc := range map[string]struct {
+		record       bool
+		ended        bool
+		absent       bool
+		undecidedWhy bool
+	}{
+		"empty, the job working": {record: true, undecidedWhy: true},
+		"empty, the job over":    {record: true, ended: true, absent: true},
+		"missing, the job over":  {ended: true, undecidedWhy: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			b := sandbox.NewFakeSandbox("box-1")
+			p := PathsFor(b)
+			if tc.record {
+				if err := b.WriteFile(t.Context(), p.GeminiTakes(), nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got := GeminiCLI{}.readMainThread(t.Context(), b, p, sandbox.MainThreadAsk{Session: session,
+				Takes: asked, Ended: tc.ended}).Receipts
+			if len(got.Held) != 0 || (len(got.Absent) == 1) != tc.absent || (got.Why != "") != tc.undecidedWhy {
+				t.Errorf("held %q, absent %q, why %q; want absent %v, undecided %v",
+					got.Held, got.Absent, got.Why, tc.absent, tc.undecidedWhy)
+			}
+		})
+	}
+}

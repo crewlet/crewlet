@@ -43,11 +43,12 @@ func (i *geminiProbeInbox) asked() []string {
 // it, the take script under node with the hook's JSON on stdin, against a real
 // bridge: AfterAgent takes at the finish, hands Gemini CLI the note as the
 // block's reason without the take's token, and records the token beside the
-// text's digest; AfterTool takes nothing; a finish continuing on a block takes nothing.
+// text's digest; AfterTool takes nothing; a finish continuing on a block takes
+// a waiting note again (0.70.0 delivers a second block: session-twin-end).
 //
 // Mutations, each red: name the finish by another boundary than the bridge's;
 // take at AfterTool; read the bridge's address from anywhere but the take
-// script's configuration.
+// script's configuration; take nothing while stop_hook_active.
 func geminiTakeReachesTheBridgeTool(t *testing.T) {
 	t.Parallel()
 	node := geminiNode(t)
@@ -72,6 +73,11 @@ echo '{"type":"result","status":"success"}'`)
 		} `json:"hooks"`
 	}
 	readJSON(t, filepath.Join(record, "settings.json"), &settings)
+	// THE RUN'S RECORD OF TAKES EXISTS, EMPTY, BEFORE ANY HOOK FIRES, so a
+	// take never recorded reads absent once the job ends rather than undecided.
+	if before, err := box.ReadFile(t.Context(), p.GeminiTakes()); err != nil || len(before) != 0 {
+		t.Errorf("before any hook the record of takes is %q (%v), want an empty file", before, err)
+	}
 	// EACH HOOK, PLAYED AS THE HARNESS PLAYS IT: its command, in sh, the
 	// hook's input on stdin.
 	play := func(event string, input map[string]any) []string {
@@ -103,6 +109,7 @@ echo '{"type":"result","status":"success"}'`)
 	if len(answers) != 1 {
 		t.Fatalf("AfterAgent has %d hooks, want one", len(answers))
 	}
+	answers0 := answers[0]
 	var answer map[string]any
 	if err := json.Unmarshal([]byte(answers[0]), &answer); err != nil {
 		t.Fatalf("the AfterAgent hook's answer is not a hook's JSON: %v\n%s", err, answers[0])
@@ -116,10 +123,10 @@ echo '{"type":"result","status":"success"}'`)
 		t.Errorf("the take script recorded %q (%v), want the take's token beside its text's digest", recorded, err)
 	}
 	continuing := map[string]any{"hook_event_name": "AfterAgent", "stop_hook_active": true}
-	if answers := play("AfterAgent", continuing); len(answers) != 1 || answers[0] != "{}" {
-		t.Errorf("a finish continuing on a block was answered %q, want nothing", answers)
+	if answers := play("AfterAgent", continuing); len(answers) != 1 || answers[0] != answers0 {
+		t.Errorf("a finish continuing on a block, a note waiting, was answered %q, want the block %q", answers, answers0)
 	}
-	if got := inbox.asked(); !slices.Equal(got, []string{mcpbridge.SteerEventFinish}) {
-		t.Errorf("the inbox was asked at %v, want the finish alone", got)
+	if got := inbox.asked(); !slices.Equal(got, []string{mcpbridge.SteerEventFinish, mcpbridge.SteerEventFinish}) {
+		t.Errorf("the inbox was asked at %v, want both finishes", got)
 	}
 }

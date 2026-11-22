@@ -4,9 +4,10 @@
 // has one, and nothing is installed or fetched.
 //
 // AT AfterTool it reports a skill the model activated to the run's skill
-// route. AT AfterAgent, as the run is about to finish, it takes the run's
-// notes, unless the run is already continuing on an earlier block
-// (stop_hook_active): one call of the bridge's unlisted steer_take tool over
+// route. AT AfterAgent, at every finish, one continuing an earlier block
+// included (0.70.0 honours each block), it takes the run's notes: no loop,
+// since the bridge serves an item once and an empty take blocks nothing. One
+// call of the bridge's unlisted steer_take tool over
 // streamable HTTP (initialize, initialized, tools/call), whose text is the
 // hook's whole answer, rendered by the engine in Gemini CLI's own JSON and
 // printed as it came. Nothing here decides what a note is or whether it was read; the engine
@@ -50,7 +51,6 @@ async function hook(config, input) {
     await reportSkill(config, input)
   }
   if (event !== "AfterAgent" || !config.endpoint || !config.tool) return ""
-  if (input.stop_hook_active === true) return ""
   return recorded(config, await take(config, finishBoundary))
 }
 

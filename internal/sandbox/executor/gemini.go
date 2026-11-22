@@ -187,6 +187,20 @@ func (g GeminiCLI) WriteConfig(ctx context.Context, box sandbox.Sandbox, req san
 			return "", fmt.Errorf("executor: writing %s for Gemini CLI: %w", path, err)
 		}
 	}
+	if req.Steer.Set() {
+		// THE TAKES FILE EXISTS BEFORE THE RUN, so an empty one says nothing was
+		// handed over (a take whose hook was killed before its record reads
+		// absent once the job ends) and only a missing one reads undecided.
+		// Appended to, never truncated: an earlier job's takes in a reused box
+		// are still read ([GeminiCLI.readMainThread]).
+		res, err := box.Exec(ctx, ": >> "+sandbox.ShellQuote(paths.GeminiTakes()), sandbox.ExecOptions{})
+		if err == nil && res.ExitCode != 0 {
+			err = fmt.Errorf("exited %d: %s", res.ExitCode, strings.TrimSpace(res.Stderr))
+		}
+		if err != nil {
+			return "", fmt.Errorf("executor: creating Gemini CLI's record of takes: %w", err)
+		}
+	}
 	return "", nil
 }
 
@@ -250,7 +264,7 @@ func geminiSettings(req sandbox.RunRequest, paths Paths, hooked bool) map[string
 }
 
 // geminiHookTimeout bounds one firing of the take script: the ten seconds the
-// note contract gives a hook (ADR-0176, section 2), twice the bridge's own
+// note contract gives a hook (ADR-0177, section 2), twice the bridge's own
 // five-second answer budget. Gemini CLI kills a hook at it (SIGTERM, SIGKILL
 // five seconds on) and carries on; it sends no cancel (measured on 0.70.0).
 const geminiHookTimeout = 10 * time.Second

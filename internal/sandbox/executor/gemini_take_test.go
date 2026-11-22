@@ -68,11 +68,11 @@ func (b *takeBridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // IT CAME. Driven under node against a stand-in bridge with the configuration
 // WriteConfig writes: an AfterAgent firing takes as Stop with no agent,
 // records the take's token beside its text's digest and prints the answer
-// whole but the token; a finish already continuing on a block
-// takes nothing; an AfterTool firing takes nothing; and an activated skill is
-// reported by the name it was handed under.
+// whole but the token, a finish continuing an earlier block included; an
+// AfterTool firing takes nothing; and an activated skill is reported by the
+// name it was handed under.
 //
-// Mutations, each red: take at AfterTool; drop the stop_hook_active check;
+// Mutations, each red: take at AfterTool; take nothing while stop_hook_active;
 // report the skill by Gemini CLI's spelling; hand Gemini CLI the token;
 // record no take.
 func TestTheTakeScriptTakesAtTheFinishAlone(t *testing.T) {
@@ -92,7 +92,7 @@ func TestTheTakeScriptTakesAtTheFinishAlone(t *testing.T) {
 		"at the finish": {input: map[string]any{"hook_event_name": "AfterAgent", "stop_hook_active": false},
 			event: "Stop"},
 		"at a finish continuing on a block": {input: map[string]any{"hook_event_name": "AfterAgent",
-			"stop_hook_active": true}},
+			"stop_hook_active": true}, event: "Stop"},
 		"after a skill's activation": {input: map[string]any{"hook_event_name": "AfterTool",
 			"tool_name": "activate_skill", "tool_input": map[string]any{"name": "crewlet-probe"},
 			"tool_response": map[string]any{"llmContent": "<activated_skill name=\"crewlet-probe\">"}},
