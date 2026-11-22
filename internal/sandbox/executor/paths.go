@@ -395,12 +395,12 @@
 // [NodeWork.MemoryPools] adds up the pools a node runs, each at its worst by
 // the constant beside its measurement, half again, the heap's room under the
 // memory limit: where it hosts boxes, the base tier at its turns
-// (node.max_concurrent, bounding every read of its runs' boxes) and its
-// peers' reads, the takes and both large slots;
-// and the transcript reads its API or its seats make. A Gitlet node keeps them
-// before sizing its git lanes and background budget (gitproc's
-// Options.Reserve), from the engine, which alone reads the roles: a registry
-// filled at run time would size them by whichever pools had started first.
+// (node.max_concurrent, bounding every read of its runs' boxes) and its peers'
+// reads, the takes, the large slot at its larger holder ([largeReadHeldBytes]),
+// and the readings' at a chain; and the transcript reads its API or its seats
+// make. A Gitlet node keeps them first (gitproc's Options.Reserve), from the
+// engine, which alone reads the roles: a registry filled at run time would size
+// them by whichever pools had started first.
 //
 // # A hook's note, confirmed off its job's main thread
 //
@@ -853,16 +853,16 @@
 // message; one in the meter beside it measures nothing (meterContained,
 // measure.go); each is told under panics.ScopeSessionTake.
 //
-// AT MOST [scrubHeldBytes] IS HELD, derived from the code's own figures: two
-// text scrubs at once (a line or a `.json` file read both ways), each its
-// redaction's stages (redact.Stream's own figure) beside its stage's chunk, a
-// [valueStream] and a string's encoder; two JSON rewrites, each its scanner,
-// its read buffer and a frame a container open; the readers and writers of
-// the archive's gzip and tar; and the plan, a sixteenth of the plaintext at
-// most and a 512th for its texts' digests. About 120 MiB at the scrub's bound,
-// 16.5 MiB of it the plan, which a real session leaves nearly empty. A test
-// holds the figure at a smaller bound, and BenchmarkTheScrubAtThePlaintextBound
-// measures it at the real one, both readings of the tar from a file on disk.
+// AT MOST [scrubHeldBytes] IS HELD: two text scrubs at once (a line or a
+// `.json` file read both ways), each its redaction's stages (redact.Stream's
+// figure) beside its stage's chunk, a [valueStream] and a string's encoder; two
+// JSON rewrites, each its scanner, its read buffer and a frame a container
+// open; the readers and writers of the archive's gzip and tar; and the plan, a
+// sixteenth of the plaintext at most and a 512th for its texts' digests. About
+// 129 MiB at the scrub's bound and [scrubLongestMax], 16.5 MiB of it the plan
+// and 9 MiB that value, near nothing in a real session. A test holds it at a
+// smaller bound, and BenchmarkTheScrubAtThePlaintextBound measures it at the
+// real one, both readings from a file on disk.
 // On two cores of the build machine:
 //
 //	one string to the bound:   15.1 s a scrub, held 16.7 MiB (256 MiB from 28 MiB)
