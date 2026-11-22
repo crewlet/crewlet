@@ -15,7 +15,6 @@ const (
 	toolMarkKeyEvent   = "google_analytics_mark_key_event"
 	toolRead           = "google_analytics_read"
 	toolOperate        = "google_analytics_operate"
-	toolSpend          = "google_analytics_spend"
 	toolAdmin          = "google_analytics_admin"
 )
 
@@ -23,7 +22,7 @@ const (
 func genericTools() map[growth.Class]string {
 	return map[growth.Class]string{
 		growth.ClassRead: toolRead, growth.ClassOperate: toolOperate,
-		growth.ClassSpend: toolSpend, growth.ClassAdmin: toolAdmin,
+		growth.ClassAdmin: toolAdmin,
 	}
 }
 
@@ -90,7 +89,7 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 			Description: "Mark an event as a key event on a property. It changes reporting only; unmarking is google_analytics_admin's keyEvents.delete.",
 			Parameters:  keyEvent},
 	}
-	for _, class := range []growth.Class{growth.ClassRead, growth.ClassOperate, growth.ClassSpend, growth.ClassAdmin} {
+	for _, class := range []growth.Class{growth.ClassRead, growth.ClassOperate, growth.ClassAdmin} {
 		var ids []string
 		for _, op := range ops {
 			if comesTo(op, class) {
@@ -125,11 +124,8 @@ func genericDescription(class growth.Class) string {
 	case growth.ClassOperate:
 		return "Call any reversible Google Analytics change by its method's ID: settings, definitions, audiences, " +
 			"annotations. Recorded in the access log; nobody is asked."
-	case growth.ClassSpend:
-		return "Ask an administrator to approve a Google Analytics change that raises money owed to Google " +
-			"(turning on a BigQuery export); held until they answer."
 	default:
-		return "Ask an administrator to approve a Google Analytics account, access, link, key or irreversible change, " +
+		return "Ask an administrator to approve a Google Analytics account, access, link, key, billing or irreversible change, " +
 			"by its method's ID; held until they answer, at a fresh step-up."
 	}
 }

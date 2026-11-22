@@ -62,9 +62,9 @@ func (e *Engine) growthProducts() []builtin.GrowthProduct {
 		e.growth = []builtin.GrowthProduct{
 			appstoreconnect.New(appstoreconnect.Deps{Company: e.runningConfig, Resolve: e.resolver().Value,
 				Audit: e.GrowthAudit(), Leases: growthLeases{engine: e}, Signals: e.GrowthSignals()}),
-			googleanalytics.New(e.runningConfig, e.resolver, e, e.GrowthAudit(), nil),
+			googleanalytics.New(e.runningConfig, e.resolver, e, e.GrowthAudit(), growthLeases{engine: e}, nil),
 			googleads.New(e.runningConfig, e.resolver, e, e.GrowthAudit(), growthLeases{engine: e}, e.GrowthAudit(), nil),
-			searchconsole.New(e.runningConfig, e.resolver, e, e.GrowthAudit(), nil, nil),
+			searchconsole.New(e.runningConfig, e.resolver, e, e.GrowthAudit(), growthLeases{engine: e}, nil, nil),
 		}
 	})
 	return e.growth

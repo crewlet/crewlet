@@ -1,7 +1,3 @@
-// Code generated from the Google Ads coverage matrix; DO NOT EDIT BY HAND.
-// The matrix is docs/integrations/google-ads.md, held to this table by
-// TestTheDocsMatrixIsTheCatalog.
-
 package googleads
 
 import "github.com/crewlet/crewlet/internal/growth"
@@ -9,6 +5,8 @@ import "github.com/crewlet/crewlet/internal/growth"
 // operations is every method of the Google Ads API, each with its class (the
 // highest a call can come to, and the others its rule allows), the access
 // levels that may call it and the scope the engine mints for it.
+// docs/integrations/google-ads.md is the same table for people
+// (TestTheDocsMatrixIsTheCatalog).
 func operations() []growth.Operation {
 	return []growth.Operation{
 		{ID: "googleads.customers.accountBudgetProposals.mutate", Method: "POST", Path: adsAPI + "/v26/customers/{customersId}/accountBudgetProposals:mutate", Resource: "AccountBudgetProposalService", Class: growth.ClassAdmin, Classes: []growth.Class{growth.ClassOperate, growth.ClassSpend}, Roles: []string{"admin"}, Permissions: []string{scopeAdwords}, Danger: true},

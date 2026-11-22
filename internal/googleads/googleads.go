@@ -31,14 +31,37 @@
 // removing a restriction are spend; pausing, lowering and adding a negative
 // are operate; new or changed ad text is public; removals of containers,
 // links, users and billing are admin. A rule that cannot read what it compares
-// classes the change as the highest it allows.
+// classes the change as the highest it allows, and an enum it compares is read
+// by its name: Google also takes its number, which names none of the values
+// a rule lowers.
+//
+// The rules name fields in snake_case and read a body's keys in either
+// spelling, as Google does; a body naming one field in both with two values is
+// refused, since which one Google keeps is not the engine's to guess. Each
+// method's operations are read from its own field: mutate_operations for
+// GoogleAdsService.Mutate and a batch job's staging, operations for a
+// service's mutate.
+//
+// # A call acts in one account
+//
+// A call acts in the customer its path names (the operation's template's) or,
+// where it names none, its body's customer_id; every resource name its body
+// holds, at any depth, is that customer's.
+//
+// # An approval binds what the rules read
+//
+// What an approval binds is the live state its rules read (googlegrowth's
+// Client.BeforeRead), so the class and the binding are on one reading; a
+// batch job's run binds the job's operation count and the class its staging
+// came to.
 //
 // # Spend is held to the company's caps
 //
 // A spend call is checked against the account's caps before a person is asked
-// and again when it is applied, under the account's lease (internal/spendguard):
-// capacity.go reads the account's daily capacity live with GAQL and what an
-// operation adds to it.
+// and again when it is applied, inside the one write lease googlegrowth holds
+// on the account for every write, by spendguard's Recheck, so no act holds two
+// leases: capacity.go reads the account's daily capacity live with GAQL and
+// what an operation adds to it.
 //
 // # Somebody else's words
 //

@@ -27,7 +27,7 @@ An **entry** is one thing the company runs on. Its kind is from a closed set, an
 | `tool_server` | Tool server | Tools and models | an MCP server |
 | `model_provider` | Model | Tools and models | a model entry and its vendor |
 
-What a vendor does for the company (chat, tracking, code hosting, CI, monitoring, DNS, CDN, compute, a model API) is an account's **capabilities**, not a kind per product: "which CDN do we use" is the account with the `cdn` capability. An unknown vendor is an account with the vendor `other` and a name.
+What a vendor does for the company (chat, tracking, code hosting, CI, monitoring, DNS, CDN, compute, a model API, analytics, advertising) is an account's **capabilities**, not a kind per product: "which CDN do we use" is the account with the `cdn` capability. An unknown vendor is an account with the vendor `other` and a name.
 
 **Relations** point from the thing that relies to the thing relied on, so "what depends on X" is one walk against the arrows. Drawn at rest: `runs_on`, `depends_on`, `exposes`, `resolves_to`, `in_zone`, `fronted_by`. Shown when an entry is selected: `served_by`, `built_from`, `deployed_by`, `monitored_by`, `belongs_to`, `documented_in` (a Doclet page), `owned_by` (a seat or a unit).
 

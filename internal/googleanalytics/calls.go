@@ -2,7 +2,6 @@ package googleanalytics
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -22,7 +21,7 @@ func (p *Product) Run(ctx context.Context, call growth.Call) (any, error) {
 	case toolRealtime:
 		return p.realtime(ctx, call)
 	}
-	req, class, err := p.requestOf(ctx, call)
+	req, class, err := p.requestOf(call)
 	if err != nil {
 		return nil, err
 	}
@@ -44,12 +43,22 @@ func (p *Product) Run(ctx context.Context, call growth.Call) (any, error) {
 // requestOf is a write or generic tool's request and the class of its tool:
 // a curated tool's built from its typed arguments, a generic tool's from the
 // operation it names.
-func (p *Product) requestOf(ctx context.Context, call growth.Call) (googlegrowth.Request, growth.Class, error) {
+func (p *Product) requestOf(call growth.Call) (googlegrowth.Request, growth.Class, error) {
 	if call.Tool == toolMarkKeyEvent {
 		req, err := p.markKeyEvent(call)
 		return req, growth.ClassOperate, err
 	}
-	return p.generic(ctx, call)
+	return p.generic(call)
+}
+
+// built is call's request held to the seat's scope, kept where that failed,
+// for the record of it.
+func (p *Product) built(ctx context.Context, call growth.Call) (googlegrowth.Request, error) {
+	req, _, err := p.requestOf(call)
+	if err == nil {
+		err = p.inScope(ctx, call.Handle, req)
+	}
+	return req, err
 }
 
 // cut is how an answer to req is cut to handle's properties: only where req
@@ -110,65 +119,24 @@ func (p *Product) cutToScope(handle string, v any) any {
 	return obj
 }
 
-// generic builds a generic tool's request and the class its tool makes.
-func (p *Product) generic(ctx context.Context, call growth.Call) (googlegrowth.Request, growth.Class, error) {
+// generic builds a generic tool's request and the class its tool makes; a
+// request built before a refusal is kept, for the record of it.
+func (p *Product) generic(call growth.Call) (googlegrowth.Request, growth.Class, error) {
 	tool, ok := p.Catalog().Tool(call.Tool)
 	if !ok {
 		return googlegrowth.Request{}, "", refusal(growth.RefusedNotFound, call.Tool+" is not a Google Analytics tool.")
 	}
 	id, _ := call.Args["operation"].(string)
 	if !slices.Contains(tool.Operations, id) {
-		return googlegrowth.Request{}, "", refusal(growth.RefusedInvalid, fmt.Sprintf("%s cannot call %q: name one of its "+
-			"operations. No vendor was reached.", call.Tool, id))
+		return googlegrowth.Request{}, tool.Class, refusal(growth.RefusedInvalid, fmt.Sprintf("%s cannot call "+
+			"%q: name one of its operations. No vendor was reached.", call.Tool, id))
 	}
 	op, _ := p.Catalog().Operation(id)
 	req, err := newRequest(op, stringMap(call.Args["path"]), stringMap(call.Args["query"]), objectArg(call.Args["body"]))
-	if err != nil {
-		return googlegrowth.Request{}, "", err
+	if err == nil && strings.HasPrefix(id, "mp.") {
+		err = p.measurementSecret(call.Handle, &req)
 	}
-	if id == "analyticsadmin.accounts.list" || id == "analyticsadmin.properties.list" {
-		// THE TWO LISTINGS that name no property or account are read through
-		// the summaries' scope cut, never as a way around it.
-		req.Account = ""
-	}
-	if strings.HasPrefix(id, "mp.") {
-		if err := p.measurementSecret(ctx, call.Handle, &req); err != nil {
-			return googlegrowth.Request{}, "", err
-		}
-	}
-	return req, tool.Class, nil
-}
-
-// classOf is the class req comes to: its operation's, or for a field-classed
-// write the class of what it changes, from its target's live fields and the
-// new values. The framework holds it to the tool's class.
-func (p *Product) classOf(ctx context.Context, handle string, req googlegrowth.Request) (growth.Class, error) {
-	if len(req.Op.Fields) == 0 {
-		return req.Op.Class, nil
-	}
-	before, err := p.before(ctx, handle, req)
-	if err != nil {
-		return "", err
-	}
-	var current map[string]any
-	_ = json.Unmarshal(before, &current)
-	return growth.Classify(req.Op, req.Changes(current)), nil
-}
-
-// before is the target's live state, the JSON Google answers for it, or none
-// for a create.
-func (p *Product) before(ctx context.Context, handle string, req googlegrowth.Request) ([]byte, error) {
-	address := req.Resource()
-	if address == "" {
-		return nil, nil
-	}
-	get := growth.Operation{ID: req.Op.ID + ".before", Method: "GET", Path: address, Class: growth.ClassRead,
-		Permissions: readScope(req.Op)}
-	raw, err := p.client.Send(ctx, handle, googlegrowth.Request{Op: get, Address: address})
-	if err != nil {
-		return nil, err
-	}
-	return raw, nil
+	return req, tool.Class, err
 }
 
 // readScope is the scope a write's target is read back with: the readonly

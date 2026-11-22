@@ -5,66 +5,102 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/googlegrowth"
 	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/spendguard"
 )
 
-// prepared is a write as the engine will make it: its request held to the
-// seat's scope, the live state its rules read (as the held binding's
-// before-state) and the class it comes to.
-type prepared struct {
-	held  googlegrowth.Held
-	ruled ruled
-}
-
-// prepare builds call's request, holds it to the seat's scope, reads what its
-// rules compare and classes it. Its request is kept on a later failure, for
-// the record of it.
-func (p *Product) prepare(ctx context.Context, call growth.Call) (prepared, error) {
-	req, err := p.requestOf(call)
-	if err != nil {
-		return prepared{}, err
-	}
+// targets reads every resource req's rules compare against, as handle's
+// identity (googlegrowth's Client.BeforeRead): the state an approval binds
+// and the rules read, so a call is classed and bound on one reading. A batch
+// job's run holds the job as Google counts its operations and the class its
+// staging came to, so what was staged after an approval moves its binding.
+func (p *Product) targets(ctx context.Context, handle string, req googlegrowth.Request) ([]byte, bool, error) {
 	ops, _ := parse(req.Op, req.Body)
-	if err = p.inScope(call.Handle, req, ops); err != nil {
-		return prepared{held: googlegrowth.Held{Req: req}}, err
-	}
 	names := append(toRead(ops), recommendationsToRead(req.Body)...)
+	job := runOf(req)
+	if job != "" {
+		names = append(names, job)
+	}
 	masks := map[string][]string{}
 	for _, o := range ops {
 		if o.kind == opUpdate {
 			masks[o.name] = o.mask
 		}
 	}
-	l := p.readLive(ctx, call.Handle, names, masks)
-	r, err := classify(req.Op, req.Body, l, func() (growth.Class, bool) {
-		if p.staged == nil {
-			return "", false
+	l := p.readLive(ctx, handle, names, masks)
+	if job != "" && p.staged != nil {
+		c, ok, err := p.staged.StagedClass(ctx, string(Kind), req.Account, req.Params["batchJobsId"])
+		if err != nil {
+			return nil, false, fmt.Errorf("googleads: read what batch job %s staged: %w", job, err)
 		}
-		c, ok, readErr := p.staged.StagedClass(ctx, string(Kind), req.Account, req.Params["batchJobsId"])
-		return c, ok && readErr == nil
-	})
-	if err != nil {
-		return prepared{held: googlegrowth.Held{Req: req}}, err
+		if ok {
+			s := l[job]
+			if s == nil {
+				s = state{}
+			}
+			s[stagedClass] = string(c)
+			l[job] = s
+		}
 	}
-	// THE LIVE STATE IS THE BINDING'S BEFORE-STATE: a target that moves under
-	// an approval moves the digest, and nothing is sent.
-	before, _ := json.Marshal(l)
-	return prepared{held: googlegrowth.NewHeld(req, before), ruled: r}, nil
+	before, err := json.Marshal(l)
+	return before, err == nil, err
+}
+
+// stagedClass is the field of a batch job's state holding the class its
+// staging came to, from the access log: no GAQL field holds it.
+const stagedClass = "crewlet_staged_class"
+
+// runOf is the batch job req runs, "" for any other request.
+func runOf(req googlegrowth.Request) string {
+	if ruleOf[req.Op.ID] != "FR-BATCH" || !strings.HasSuffix(req.Op.ID, ".run") {
+		return ""
+	}
+	return req.Account + "/batchJobs/" + req.Params["batchJobsId"]
+}
+
+// ruledOf is what h comes to under its rules, read on the state its binding
+// holds.
+func ruledOf(h googlegrowth.Held) (ruled, error) {
+	var l live
+	_ = json.Unmarshal(h.Before, &l)
+	return classify(h.Req.Op, h.Req.Body, l, func() (growth.Class, bool) {
+		c := growth.Class(str(l[runOf(h.Req)][stagedClass]))
+		return c, c != ""
+	})
+}
+
+// prepared is call's request held to the seat's scope and to its targets as
+// read now, once, and what its rules make of that reading. Its request is
+// kept on a later failure, for the record of it.
+func (p *Product) prepared(ctx context.Context, call growth.Call) (googlegrowth.Held, ruled, error) {
+	req, err := p.requestOf(call)
+	if err != nil {
+		return googlegrowth.Held{}, ruled{}, err
+	}
+	if err = p.inScope(call.Handle, req); err != nil {
+		return googlegrowth.Held{Req: req}, ruled{}, err
+	}
+	h, err := p.client.Read(ctx, call.Handle, req)
+	if err != nil {
+		return h, ruled{}, err
+	}
+	r, err := ruledOf(h)
+	return h, r, err
 }
 
 // Prepare classes a write against its targets as read now, holds a spend to
 // the account's caps before a person is asked, and builds what is asked.
 func (p *Product) Prepare(ctx context.Context, call growth.Call) (growth.Hold, error) {
-	pr, err := p.prepare(ctx, call)
+	h, r, err := p.prepared(ctx, call)
 	if err != nil {
 		return growth.Hold{}, err
 	}
-	hold := p.client.Hold(call, pr.held, pr.ruled.class)
-	if pr.ruled.class == growth.ClassSpend {
-		f, err := p.checkSpend(ctx, call.Handle, pr)
+	hold := p.client.Hold(call, h, r.class)
+	if r.class == growth.ClassSpend {
+		f, err := p.checkSpend(ctx, call.Handle, h.Req, r)
 		if err != nil {
 			return growth.Hold{}, err
 		}
@@ -76,16 +112,16 @@ func (p *Product) Prepare(ctx context.Context, call growth.Call) (growth.Hold, e
 // Card is a held call's decision card as its targets read now, with a
 // spend's figures against the caps.
 func (p *Product) Card(ctx context.Context, call growth.Call, binding string) (growth.Card, error) {
-	pr, err := p.prepare(ctx, call)
+	h, r, err := p.prepared(ctx, call)
 	if err != nil {
 		return growth.Card{}, err
 	}
-	card := p.client.Card(call, pr.held, binding, pr.ruled.class)
+	card := p.client.Card(call, h, binding, r.class)
 	for i := range card.Acts {
-		card.Acts[i].Danger = card.Acts[i].Danger || pr.ruled.danger
+		card.Acts[i].Danger = card.Acts[i].Danger || r.danger
 	}
-	if pr.ruled.class == growth.ClassSpend {
-		f, err := p.checkSpend(ctx, call.Handle, pr)
+	if r.class == growth.ClassSpend {
+		f, err := p.checkSpend(ctx, call.Handle, h.Req, r)
 		if err != nil {
 			return growth.Card{}, err
 		}
@@ -94,55 +130,56 @@ func (p *Product) Card(ctx context.Context, call growth.Call, binding string) (g
 	return card, nil
 }
 
-// Apply makes a prepared write once, reading its targets again first and
-// sending nothing where they moved since binding was taken. A spend is held to
-// the caps again under the account's lease, and made inside it.
+// Apply makes a prepared write once, building it again and, under the
+// account's one write lease (googlegrowth's Client.Apply), holding it to the
+// seat's scope, reading its targets again, sending nothing where they moved
+// since binding was taken, and holding a spend to the caps as they read then.
 func (p *Product) Apply(ctx context.Context, call growth.Call, binding string) (any, error) {
-	pr, err := p.prepare(ctx, call)
-	class := pr.ruled.class
-	if class == "" {
-		tool, _ := p.Catalog().Tool(call.Tool)
-		class = tool.Class
-	}
-	if err != nil || class != growth.ClassSpend {
-		return p.client.Apply(ctx, call, pr.held, err, binding, class, nil)
-	}
-	customer := customerOf(pr.held.Req)
-	var out any
-	_, guardErr := p.guard(call.Handle).Apply(ctx, customer, pr.ruled.ops,
-		func(ctx context.Context) (spendguard.Account, spendguard.Caps, error) {
-			return p.spendAccount(ctx, call.Handle, customer)
-		},
-		func(ctx context.Context) error {
-			var applyErr error
-			out, applyErr = p.client.Apply(ctx, call, pr.held, nil, binding, class, nil)
-			return applyErr
-		})
-	if refused, ok := errors.AsType[*spendguard.Refusal](guardErr); ok {
-		r := p.client.Record(call, pr.held.Req, class, pr.held.Before)
-		r.Failure = growth.FailureCapExceeded
-		p.client.Fail(ctx, r)
-		return nil, refusal(growth.RefusedForbidden, "Google Ads was not changed: "+refused.Error()+".")
-	}
-	return out, guardErr
+	req, err := p.requestOf(call)
+	return p.client.Apply(ctx, call, googlegrowth.Write{Req: req, Err: err, Class: p.toolClass(call.Tool),
+		Scope: func(context.Context) error { return p.inScope(call.Handle, req) },
+		Check: func(ctx context.Context, h googlegrowth.Held) error { return p.recheckSpend(ctx, call.Handle, h) },
+	}, binding)
 }
 
-// guard is the spend guard reading capacity as handle's identity.
+// recheckSpend holds an allowed spend to its account's caps again, inside the
+// lease the client holds on the account (spendguard's Recheck), so no act
+// holds two leases; a refusal fails the act over its caps, and nothing is sent.
+func (p *Product) recheckSpend(ctx context.Context, handle string, h googlegrowth.Held) error {
+	r, err := ruledOf(h)
+	if err != nil || r.class != growth.ClassSpend {
+		return err
+	}
+	customer := customerOf(h.Req)
+	_, err = p.guard(handle).Recheck(ctx, r.ops, func(ctx context.Context) (spendguard.Account, spendguard.Caps,
+		error) {
+		return p.spendAccount(ctx, handle, customer)
+	})
+	if refused, ok := errors.AsType[*spendguard.Refusal](err); ok {
+		return &googlegrowth.CallError{Failure: growth.FailureCapExceeded, Err: refusal(growth.RefusedForbidden,
+			"Google Ads was not changed: "+refused.Error()+".")}
+	}
+	return err
+}
+
+// guard is the spend guard reading capacity as handle's identity. It holds no
+// lease of its own: an apply rechecks inside the account's write lease.
 func (p *Product) guard(handle string) *spendguard.Guard[[]operation] {
 	return spendguard.New(string(Kind), capacity{now: p.now, search: func(ctx context.Context, customer, gaql string) (
 		[]map[string]any, error) {
 		return p.search(ctx, handle, customer, gaql)
-	}}, p.leases)
+	}}, nil)
 }
 
 // checkSpend holds a prepared spend to its account's caps now.
-func (p *Product) checkSpend(ctx context.Context, handle string, pr prepared) (spendguard.Figures, error) {
-	customer := customerOf(pr.held.Req)
+func (p *Product) checkSpend(ctx context.Context, handle string, req googlegrowth.Request, r ruled) (
+	spendguard.Figures, error) {
+	customer := customerOf(req)
 	acct, caps, err := p.spendAccount(ctx, handle, customer)
 	if err != nil {
 		return spendguard.Figures{}, err
 	}
-	f, err := p.guard(handle).Check(ctx, acct, caps, pr.ruled.ops)
+	f, err := p.guard(handle).Check(ctx, acct, caps, r.ops)
 	if refused, ok := errors.AsType[*spendguard.Refusal](err); ok {
 		return f, refusal(growth.RefusedForbidden, "nobody was asked: "+refused.Error()+".")
 	}

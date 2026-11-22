@@ -129,4 +129,13 @@ func TestADaysCapacityCountsEachBudgetOnce(t *testing.T) {
 	if got := enabled.daily() - a.daily(); got != 1000 {
 		t.Errorf("enabling the paused campaign adds %d, want its 1000", got)
 	}
+	// AN ENUM BY ITS NUMBER (2 is ENABLED) counts as serving: Google takes it.
+	//
+	// Mutation: read the status by its name alone, and enabling by number
+	// adds nothing the caps hold.
+	byNumber := a.applying([]operation{{service: "campaign", kind: opUpdate, name: "c",
+		object: map[string]any{"status": float64(2)}, mask: []string{"status"}}})
+	if got := byNumber.daily() - a.daily(); got != 1000 {
+		t.Errorf("enabling the paused campaign by its status's number adds %d, want its 1000", got)
+	}
 }

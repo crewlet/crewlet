@@ -12,8 +12,10 @@ import (
 )
 
 // comparedFields is what each kind's rules read of a resource beyond an update's
-// own mask: its status, how it bids, what it points at and what it is.
+// own mask: its status, how it bids, what it points at and what it is; and of
+// a batch job a run approves, how many operations it holds.
 var comparedFields = map[string][]string{
+	"batch_job":                        {"status", "metadata.operation_count"},
 	"campaign":                         {"status", "bidding_strategy_type", "campaign_budget"},
 	"campaign_budget":                  {"amount_micros", "total_amount_micros"},
 	"bidding_strategy":                 {"type"},
@@ -111,7 +113,9 @@ func (p *Product) search(ctx context.Context, handle, customer, gaql string) ([]
 			Next    string           `json:"nextPageToken"`
 		}
 		if err := json.Unmarshal(raw, &resp); err != nil {
-			return nil, &googlegrowth.CallError{Failure: growth.FailureUnknownOutcome,
+			// A SEARCH CHANGES NOTHING: an answer it cannot read is Google's
+			// fault, never an outcome of the act it serves that is not known.
+			return nil, &googlegrowth.CallError{Failure: growth.FailureVendorUnavailable,
 				Err: fmt.Errorf("googleads: decode a search on %s: %w", customer, err)}
 		}
 		out = append(out, resp.Results...)
