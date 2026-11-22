@@ -22,7 +22,7 @@ import (
 const QwenCodeName = "qwen-code"
 
 // QwenCode drives Qwen Code (`qwen`) over ACP, its Agent Client Protocol
-// mode, from a helper in the box (qwen_helper.mjs), measured on 0.28.3
+// mode, from a helper in the box (qwen_helper.mjs), measured on 0.28.4
 // against a stub of an OpenAI-compatible API
 // (docs/concepts/code-sandbox.md, "Qwen Code", says what a run does). ACP
 // rather than `-p`: only ACP has a mid-run route for a note that Qwen Code
@@ -39,7 +39,7 @@ func (QwenCode) Name() string { return QwenCodeName }
 
 // Session mints the run's own session: Qwen Code takes the id a new ACP
 // session is created under (session/new's `_meta` `qwen-code/sessionId`) and
-// refuses one it already holds (session_id_conflict, measured on 0.28.3), so
+// refuses one it already holds (session_id_conflict, measured on 0.28.4), so
 // every run gets a fresh uuid. No run continues a Qwen Code session yet: the
 // runner carries none, so a continued conversation starts a fresh one.
 func (QwenCode) Session(sandbox.RunRequest) Session { return Session{ID: uuid.NewString()} }
@@ -86,7 +86,7 @@ const qwenDashScope = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 // Pins are what a run needs whatever the image says: the run's text in place
 // of Qwen Code's opening identity sentence, the rest of its prompt kept
 // (QWEN_SYSTEM_IDENTITY_MD, the profile's channel, measured under ACP on
-// 0.28.3); no catalogue fetch from models.dev, a connection of its own every
+// 0.28.4); no catalogue fetch from models.dev, a connection of its own every
 // run; and the entry's model, which Qwen Code reads from OPENAI_MODEL under
 // its OpenAI sign-in (as measured under ACP).
 //
@@ -185,12 +185,12 @@ func (q QwenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 
 // qwenSkillName is the name a run's skill is written and listed under:
 // [sandbox.Skill.Listed] with its colon a dash, a name of the shape Qwen Code
-// was measured listing and loading (0.28.3); the helper maps it back as it
+// was measured listing and loading (0.28.4); the helper maps it back as it
 // reports a load.
 func qwenSkillName(s sandbox.Skill) string { return sandbox.SkillNamespace + "-" + s.Name }
 
 // qwenDenied is every tool of Qwen Code's a headless run must not reach,
-// each removed outright by `permissions.deny` (measured under ACP on 0.28.3:
+// each removed outright by `permissions.deny` (measured under ACP on 0.28.4:
 // none of the four offered): agent, a subagent whose loop Qwen Code never
 // asks for notes in; ask_user_question, which asks nobody; and plan mode,
 // which stops the run to wait for an approval nobody gives.
@@ -216,7 +216,7 @@ func qwenSettings(req sandbox.RunRequest, paths Paths) map[string]any {
 			"chatRecording":    true,
 		},
 		"memory": map[string]any{"enableManagedAutoMemory": false, "enableManagedAutoDream": false},
-		// No follow-up suggestion: over ACP, 0.28.3 sends one more request
+		// No follow-up suggestion: over ACP, 0.28.4 sends one more request
 		// after a finished turn to suggest the user's next prompt, whose
 		// counts no session/update carries (measured against the stub).
 		"ui":          map[string]any{"enableFollowupSuggestions": false},
@@ -230,7 +230,7 @@ func qwenSettings(req sandbox.RunRequest, paths Paths) map[string]any {
 	}
 	// THE RUN'S ROUND CAP, as Qwen Code caps a session's model requests: at
 	// the cap the turn ends with ACP's stopReason max_turn_requests (measured
-	// on 0.28.3: a cap of 2 and of 3 ended after 2 and 3 requests, a run done
+	// on 0.28.4: a cap of 2 and of 3 ended after 2 and 3 requests, a run done
 	// in 3 under a cap of 5 ended end_turn). A run is a session of its own, so
 	// the session's count is the run's.
 	if req.Limits.MaxTurns > 0 {
@@ -276,8 +276,8 @@ const qwenHookTimeout = 10 * time.Second
 // milliseconds where the engine sets a wait, so a question the seat parks on
 // is held to the engine's hold rather than Qwen Code's ten minutes; and
 // `alwaysLoadTools` for a server whose tools are offered on every request,
-// which 0.28.3 otherwise hides behind its tool search and refuses a direct
-// call to.
+// which 0.28.4 otherwise hides behind its tool search (a request offered
+// tool_search and tool_call, none of the server's tools; measured).
 func qwenMCP(s sandbox.MCPServer) map[string]any {
 	var out map[string]any
 	if s.Transport == sandbox.TransportHTTP {
@@ -318,10 +318,10 @@ type qwenHelperConfig struct {
 }
 
 // qwenMCPWait bounds the wait for the run's MCP servers to connect before its
-// prompt goes in: the bridge connected 0.4 to 0.7 s after session/new
-// (measured on 0.28.3), and sixty seconds is the room an OpenCode run's
-// servers get for the same bridge (openCodeMCPWait), short of holding a seat
-// for a bridge that is not coming.
+// prompt goes in: a server the settings name connected 0.3 s after
+// session/new (measured on 0.28.4), and sixty seconds is the room an OpenCode
+// run's servers get for the same bridge (openCodeMCPWait), short of holding a
+// seat for a bridge that is not coming.
 const qwenMCPWait = 60 * time.Second
 
 // qwenHelperConfigOf is req's [qwenHelperConfig].
@@ -349,7 +349,7 @@ func qwenHelperConfigOf(req sandbox.RunRequest, paths Paths) qwenHelperConfig {
 // from the settings and the endpoint from OPENAI_BASE_URL, as the profile's
 // text phases sign in; and its paid login, read from the home's
 // subscription_credentials.json, its endpoint a constant of the bundle
-// (0.28.3's own names, NOT MEASURED against Qwen's service).
+// (0.28.4's own names, NOT MEASURED against Qwen's service).
 const (
 	qwenAuthOpenAI       = "openai"
 	qwenAuthSubscription = "qwen-subscription"

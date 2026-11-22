@@ -17,11 +17,11 @@
 // # A run's commits credit Crewlet, through git
 //
 // A run whose request asks for it ([sandbox.RunRequest.Attribution]) has every
-// commit it authors as itself carry `Co-authored-by: Crewlet
-// <noreply@crewlet.ai>` and the Crewlet trailers naming its seat, its run and
-// its work item, added by a git hook the runner installs in the box and the wrapper points git at through the
-// run's environment — the same for every harness, and whether or not the model
-// remembered anything (attribution.go, attribution_hook.sh).
+// commit it authors as itself carry a `Co-authored-by` crediting [CoAuthor] and
+// the Crewlet trailers naming its seat, its run and its work item, added by a
+// git hook the runner installs in the box and the wrapper points git at through
+// the run's environment — the same for every harness, and whether or not the
+// model remembered anything (attribution.go, attribution_hook.sh).
 //
 // # A run's output is read as a stream
 //
