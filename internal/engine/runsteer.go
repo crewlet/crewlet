@@ -2222,7 +2222,9 @@ func (i *runInbox) Wait(ctx context.Context, after int) ([]mcpbridge.SteerNote, 
 	// THE JOB'S OWN ITEMS AND A PERSON'S NOTES ALONE: one for another job is
 	// never served to this one, so the cursor below would stop at it for good.
 	for _, o := range forJob(opened, launch) {
-		if o.held.Seq <= after {
+		// A NOTE AT ITS POLL BUDGET is no new job's ([sandbox.RunNote.PollServes]):
+		// passed over, never stopped at, so the notes after it are served.
+		if o.held.Seq <= after || (o.held.Served != launch && o.held.PollServes >= o.held.MaxServes()) {
 			continue
 		}
 		due = append(due, o)
@@ -2259,6 +2261,50 @@ func (i *runInbox) Wait(ctx context.Context, after int) ([]mcpbridge.SteerNote, 
 		})
 	}
 	return out, changed
+}
+
+// Again grants the job's harness its second admission of the notes named that
+// a compaction folded, each under its own id ([executor.AgainID]), and names
+// those at their poll budget — see [mcpbridge.SteerInbox]. COUNTED WHEN SERVED,
+// never offered: a note that never folds spends nothing.
+func (i *runInbox) Again(ctx context.Context, ids []string) (map[string]string, []string, error) {
+	launch, _ := i.bound()
+	if launch == "" {
+		return nil, nil, mcpbridge.ErrNoteUntaken
+	}
+	granted, spent, err := i.steers.store.AgainNotes(ctx, i.ident.turn.TurnID, sandbox.NoteAgain{IDs: ids,
+		Launch: launch, Statuses: steerTakeStatuses})
+	if err != nil {
+		return nil, nil, err
+	}
+	out := make(map[string]string, len(granted))
+	for _, id := range granted {
+		out[id] = executor.AgainID(i.harness, launch, id)
+	}
+	return out, spent, nil
+}
+
+// Folded says each note named that the job's harness gave up once a compaction
+// folded it and it could not be admitted again, once a note — see [mcpbridge.SteerInbox]. Only a note
+// the job holds, by its id: the log carries no word of the note's.
+func (i *runInbox) Folded(ctx context.Context, ids []string) {
+	launch, watch := i.bound()
+	if launch == "" {
+		return
+	}
+	_, opened, _ := watch.snapshot()
+	for _, o := range forJob(opened, launch) {
+		if !slices.Contains(ids, o.held.ID) {
+			continue
+		}
+		turn, id := i.ident.turn.TurnID, o.held.ID
+		i.steers.warnOnce(turn, "folded/"+id, func() {
+			log.WarnContext(ctx, "steer_note_folded", "turn_id", turn, "launch_id", launch, "note_id", id,
+				"detail", "the run's harness compacted over the note and could not admit it again (compacted "+
+					"twice, or its poll serves spent), so its model was never handed it as a current instruction; "+
+					"it waits for the review")
+		})
+	}
 }
 
 // Read records the notes named read at the run's next step, and publishes them

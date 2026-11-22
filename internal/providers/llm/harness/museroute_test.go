@@ -16,17 +16,22 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
-// Muse Code, as the fake plays it: the crewlet server from the run's own `-c
-// mcpServers.crewlet=` setting and its tools only where `-c run.toolset=`
-// admits them; every server the home's settings file names started beside it,
-// and every plugin server it approves; the call's id and its key sent in
-// `_meta`; and the record its exec stream — a model task per request, the
-// request's prose in fragments, a tool task's side effect per call — ending
-// in the run's counts per model (the prompt with its cached part in it) and
-// a terminal event (measured on 1.4.13; see the profile).
+// Muse Code, as the fake plays it: no MCP server at all unless the run trusts
+// its workspace; the crewlet server from the run's own `-c mcpServers.crewlet=`
+// setting and its tools only where `-c run.toolset=` admits them; every server
+// the home's settings file names started beside it, and every plugin it
+// approves; the call's id and its key sent in `_meta`; and the record its exec
+// stream (a model task per request, the request's prose in fragments, a tool
+// task's side effect per call) ending in the run's counts per model (the
+// prompt with its cached part in it) and a terminal event whose reason stderr
+// repeats (measured on 1.4.25; see the profile).
 func init() {
 	fakeHarnesses["muse-code"] = fakeHarness{
 		server: func() (string, []string, error) {
+			if !slices.Contains(os.Args, "--trust-workspace") {
+				return "", nil, fmt.Errorf("invalid run configuration: unknown tool `mcp__crewlet__*` " +
+					"(the workspace is untrusted, so every MCP server was withheld)")
+			}
 			if started := museHomeServers(); len(started) > 0 {
 				fmt.Fprintln(os.Stderr, "fake muse: started the home's own MCP servers", started)
 				os.Exit(77)
@@ -59,8 +64,8 @@ func init() {
 	}
 }
 
-// museHomeServers is every server 1.4.13 starts from the seat's home: the ones
-// its settings file names, and each plugin server it approves.
+// museHomeServers is everything a trusted run starts from the seat's home: the
+// servers its settings file names, and each plugin capability it approves.
 func museHomeServers() []string {
 	raw, _ := os.ReadFile(filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "muse", "settings.json")) //nolint:gosec // the fake's home
 	var settings struct {
@@ -132,7 +137,7 @@ func (m *museRecorder) end(script fakeScript, total fakeUsage, _ string) int {
 		"output_tokens": total.Output, "reasoning_tokens": 0}}})
 	if script.Exit != 0 {
 		m.event("run.terminal.failed", map[string]any{"terminal": "failed", "reason": script.Result})
-		fmt.Fprintln(os.Stderr, "run ended with Failed")
+		fmt.Fprintln(os.Stderr, "run ended with Failed: "+script.Result)
 		return script.Exit
 	}
 	m.event("run.terminal.completed", map[string]any{"terminal": "completed", "text": strings.Join(m.texts, "")})
@@ -140,17 +145,17 @@ func (m *museRecorder) end(script fakeScript, total fakeUsage, _ string) int {
 }
 
 // MUSE CODE'S RUN IS READ FROM ITS EXEC STREAM, AND ITS HOME STARTS NO SERVER OF ITS
-// OWN. The crewlet server is declared on argv (`-c`), the toolset admits its tools, and
-// the home's settings file (its servers start on every call) is the profile's own. Each
-// model task is a request, its prose the fragments after it; each call is a tool task's
-// side effect, joined by the key sent in `_meta`. The stream carries no per-request
-// counts: each is estimated as read and the run's count settles the rest, hence prompts
-// of a real size (an estimate is never refunded). The host is told the harness waits 300
-// seconds, does not re-read the list, and runs a response's calls in turn.
+// OWN. The crewlet server is declared on argv (`-c`) in a trusted run, the toolset
+// admits its tools, and the home's settings file (its servers start on every call) is
+// the profile's own. Each model task is a request, its prose the fragments after it;
+// each call is a tool task's side effect, joined by the key sent in `_meta`. No count
+// per request: each is estimated as read and the run's count settles the rest, hence
+// prompts of a real size. The host is told the harness waits 300 seconds, does not
+// re-read the list, and runs a response's calls in turn.
 //
-// Mutation: drop run.toolset and the seat's tools are unreachable; drop the settings seed
-// and the planted server starts; join by callId and no call joins; read the prompt as less
-// its cached part and it is charged 1,000 tokens more than it spent.
+// Mutation: drop run.toolset or --trust-workspace and the seat's tools are unreachable;
+// drop the settings seed and the planted server starts; join by callId and no call
+// joins; read the prompt as less its cached part and it is charged 1,000 tokens more.
 func TestMuseCodesRunIsReadFromItsExecStream(t *testing.T) {
 	t.Parallel()
 	script := routeCase
@@ -198,14 +203,13 @@ func TestMuseCodesRunIsReadFromItsExecStream(t *testing.T) {
 	}
 }
 
-// A FAILED MUSE CODE RUN SAYS WHY IN ITS TERMINAL EVENT, and only there: its
-// stderr says "run ended with Failed" and nothing else, so the reason a spent
-// plan is told by is the run.terminal.failed event's — read by field, as the
-// harness's own failure event, and never the run's other lines.
+// A FAILED MUSE CODE RUN IS TOLD BY ITS REASON: the run.terminal.failed event's,
+// read by field as the harness's own failure event, which 1.4.25 repeats on
+// stderr after "run ended with Failed:". A spent plan sits the entry out.
 //
-// Mutation: drop the profile's failure event, and the spent plan is a server
-// failure.
-func TestAFailedMuseCodeRunSaysWhyInItsTerminalEvent(t *testing.T) {
+// Mutation: drop the rate_limit_error limit marker, and the spent plan is a
+// server failure.
+func TestAFailedMuseCodeRunIsToldByItsReason(t *testing.T) {
 	t.Parallel()
 	p := fakeAs(t, "muse-code", fakeScript{Exit: 1,
 		Result:    "API error 429: slow down (rate_limit_error) (after 4 provider attempts)",
