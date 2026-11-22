@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/googlegrowth"
 	"github.com/crewlet/crewlet/internal/growth"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Leases hold an app's write lease across the fleet (the engine's growth act
@@ -188,7 +189,7 @@ func (p *Product) inScope(handle string, req googlegrowth.Request) error {
 	case account != "":
 		if !slices.Contains(b.Apps, account) || !company.Reaches(account) {
 			return refusal(growth.RefusedForbidden, "app "+account+" is not one of this agent's apps ("+
-				strings.Join(b.Apps, ", ")+"). No vendor was reached.")
+				words.Or(b.Apps)+"). No vendor was reached.")
 		}
 	}
 	return nil

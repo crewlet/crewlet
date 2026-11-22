@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strings"
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/googlegrowth"
 	"github.com/crewlet/crewlet/internal/growth"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 const (
@@ -80,7 +80,7 @@ func (p *Product) imagesAct(ctx context.Context, call growth.Call) (act, error) 
 	language, _ := call.Args["language"].(string)
 	kind, _ := call.Args["image_type"].(string)
 	if !slices.Contains(imageTypes(), kind) {
-		return act{}, refusal(growth.RefusedInvalid, "image_type is one of "+strings.Join(imageTypes(), ", ")+
+		return act{}, refusal(growth.RefusedInvalid, "image_type is one of "+words.Or(imageTypes())+
 			". No vendor was reached.")
 	}
 	path := map[string]string{"packageName": app, "language": language, "imageType": kind}
