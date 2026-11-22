@@ -201,10 +201,10 @@ func (p Profile) Clone() Profile {
 			out.LoginKeys[name] = slices.Clone(keys)
 		}
 	}
-	if p.RunKeys != nil {
-		out.RunKeys = make(map[string][]string, len(p.RunKeys))
-		for name, keys := range p.RunKeys {
-			out.RunKeys[name] = slices.Clone(keys)
+	if p.RefreshKeys != nil {
+		out.RefreshKeys = make(map[string][]string, len(p.RefreshKeys))
+		for name, keys := range p.RefreshKeys {
+			out.RefreshKeys[name] = slices.Clone(keys)
 		}
 	}
 	if p.IdentityKeys != nil {

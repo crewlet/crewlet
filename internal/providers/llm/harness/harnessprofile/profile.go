@@ -1024,17 +1024,19 @@ type Profile struct {
 	// named is never seeded. A file not named here is a login file, whole.
 	LoginKeys map[string][]string `yaml:"login_keys,omitempty"`
 
-	// RunKeys names, by a credential file's NAME, the keys (dotted, into a
-	// JSON object) the harness writes into that file during a run, which are
-	// not the login its sign-in made: Muse Code mints an API key as each run
-	// starts and writes it there. A run's login carried out keeps the shared
-	// login's value of each ([KeepLoginKeys]); a login command's takes all.
-	RunKeys map[string][]string `yaml:"run_keys,omitempty"`
+	// RefreshKeys names, by a credential file's NAME, the key paths (`*` for
+	// every key of an object or index of an array there) a refresh carries back
+	// from a seat's or a local box's copy: its tokens and their expiry. Every
+	// other byte, an endpoint, a provider choice, a key a run minted, stays as
+	// the shared login holds it ([FileRule.Carry]); a file not named here
+	// carries nothing back. A login command takes the whole file.
+	RefreshKeys map[string][]string `yaml:"refresh_keys,omitempty"`
 
 	// IdentityKeys names, by a credential file's NAME, the key paths (`*` for
-	// every key of the object there) whose values say which login it is: whose
-	// account, at which provider. Codex's auth.json names its ChatGPT account at
-	// tokens.account_id. A refresh a seat's call or a local box's run carries
+	// every key of the object there; a last `@subject` for a JWT's subject
+	// claims) whose values say which login it is: whose account, at which
+	// provider. Codex's auth.json names its ChatGPT account at tokens.account_id
+	// and in its id_token. A refresh a seat's call or a local box's run carries
 	// back is written only where each holds what the shared login's does
 	// ([FileRule.SameAccount]): a refresh keeps its account. A file naming no
 	// account (a token and its expiry alone) has none, and its profile says so.
@@ -2242,15 +2244,18 @@ func (p *Profile) validateHomePaths(add func(string, ...any)) {
 			}
 		}
 	}
-	for _, name := range slices.Sorted(maps.Keys(p.RunKeys)) {
+	for _, name := range slices.Sorted(maps.Keys(p.RefreshKeys)) {
 		if byName[name] == "" {
-			add("run_keys names %q, which is the file name of no credential_paths entry — "+
-				"run keys say which keys of a credential file its harness writes during a run", name)
+			add("refresh_keys names %q, which is the file name of no credential_paths entry — "+
+				"refresh keys say which fields of a credential file a refresh carries back", name)
 		}
-		for i, key := range p.RunKeys[name] {
-			if slices.Contains(strings.Split(key, "."), "") {
-				add("run_keys.%s[%d] %q is no key path — name the key, its parents' keys before "+
-					"it, each joined by a dot", name, i, key)
+		if len(p.RefreshKeys[name]) == 0 {
+			add("refresh_keys.%s is empty — name the token fields a refresh carries back", name)
+		}
+		for i, key := range p.RefreshKeys[name] {
+			if parts := strings.Split(key, "."); slices.Contains(parts, "") || slices.Contains(parts, subjectPart) {
+				add("refresh_keys.%s[%d] %q is no key path — name the key, its parents' keys "+
+					"before it, each joined by a dot", name, i, key)
 			}
 		}
 	}
@@ -2263,9 +2268,10 @@ func (p *Profile) validateHomePaths(add func(string, ...any)) {
 			add("identity_keys.%s is empty — name the keys that name the login's account", name)
 		}
 		for i, key := range p.IdentityKeys[name] {
-			if slices.Contains(strings.Split(key, "."), "") {
+			if parts := strings.Split(key, "."); slices.Contains(parts, "") ||
+				slices.Index(parts, subjectPart) >= 0 && slices.Index(parts, subjectPart) != len(parts)-1 {
 				add("identity_keys.%s[%d] %q is no key path — name the key, its parents' keys "+
-					"before it, each joined by a dot", name, i, key)
+					"before it, each joined by a dot, and %s only last", name, i, key, subjectPart)
 			}
 		}
 	}

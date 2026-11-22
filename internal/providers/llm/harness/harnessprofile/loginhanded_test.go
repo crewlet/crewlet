@@ -143,7 +143,8 @@ func TestAnUntypedCredentialsRefreshIsCarried(t *testing.T) {
 
 // ONLY A STORE'S DOCUMENT IS HELD TO THE HANDED LOGIN: Profile.KeepLogin
 // filters the file named CredentialStoreDocument, a name no credential path
-// may take, and leaves every other file to its run keys.
+// may take; any other file carries only its refresh keys, and one naming none
+// carries nothing.
 //
 // Mutation: filter every file, or none.
 func TestOnlyAStoresDocumentIsHeldToTheHandedLogin(t *testing.T) {
@@ -151,10 +152,10 @@ func TestOnlyAStoresDocumentIsHeldToTheHandedLogin(t *testing.T) {
 	handed := storeDoc(t, keyCred("cred_k", "sk-ant-handed"))
 	home := storeDoc(t, keyCred("cred_k", "sk-ant-handed"), keyCred("cred_new", "sk-ant-other"))
 	store := &Profile{CredentialStore: &CredentialStore{}}
-	if got := store.KeepLogin(CredentialStoreDocument, home, handed); string(got) != string(handed) {
-		t.Errorf("a store's document carried back\n%s", got)
+	if got, err := store.KeepLogin(CredentialStoreDocument, home, handed); err != nil || string(got) != string(handed) {
+		t.Errorf("a store's document carried back %s, %v", got, err)
 	}
-	if got := store.KeepLogin("auth.json", home, handed); string(got) != string(home) {
-		t.Errorf("another file of a store's profile was filtered:\n%s", got)
+	if got, err := store.KeepLogin("auth.json", home, handed); err != nil || string(got) != string(handed) {
+		t.Errorf("a file naming no refresh keys carried back %s, %v; want nothing", got, err)
 	}
 }

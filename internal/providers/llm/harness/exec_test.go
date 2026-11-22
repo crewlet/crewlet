@@ -486,6 +486,13 @@ func fakeProvider(t *testing.T, env map[string]string, overrides map[string]any)
 	for k, v := range overrides {
 		base[k] = v
 	}
+	// A FAKE LOGIN REFRESHES ITS TOKEN: a creds.json carries its "token" back
+	// unless the case says otherwise, as every login file names what it may.
+	if paths, ok := base["credential_paths"].([]any); ok && slices.Contains(paths, any(".fake/creds.json")) {
+		if _, set := base["refresh_keys"]; !set {
+			base["refresh_keys"] = map[string]any{"creds.json": []any{"token"}}
+		}
+	}
 	p, err := New(Config{
 		Key: "sub", Harness: "custom", StateDir: dir, Overrides: base,
 		Timeout: 20 * time.Second, MaxConcurrent: 2, Env: fakeChildEnv(env),

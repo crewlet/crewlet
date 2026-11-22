@@ -1349,9 +1349,8 @@ func (p *Provider) SandboxCredentials() map[string]string {
 
 // SandboxCredentialRules is, by each of [Provider.SandboxCredentials]' paths,
 // the rule its file is seeded and written back by ([harnessprofile.FileRule]):
-// a mixed file's login fields alone, its run keys as the shared login holds
-// them, and only a copy of the seeded login's account. Nil where there are no
-// paths.
+// a mixed file's login fields alone, a refresh's token fields alone, and only
+// a copy of the seeded login's account. Nil where there are no paths.
 func (p *Provider) SandboxCredentialRules() map[string]harnessprofile.FileRule {
 	var out map[string]harnessprofile.FileRule
 	for rel := range p.SandboxCredentials() {

@@ -3,7 +3,6 @@ package harnessprofile
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"reflect"
 	"slices"
@@ -18,10 +17,11 @@ import (
 // whether a copy is the seeded login's account at all ([FileRule.SameAccount]).
 // One rule, so the engine host and a box never disagree on a file.
 //
-// A file is a LOGIN FILE, carried whole, or a MIXED one, where the harness also
-// reads its own settings beside the login: LoginKeys names the login's fields,
-// and nothing else of it is seeded or carried, so a setting written in one home
-// reaches no other. A zero FileRule is a login file with no other rule.
+// A file is seeded whole, or, MIXED with the harness's own settings, as its
+// login's fields alone (LoginKeys). A refresh carries back its token fields
+// alone (RefreshKeys); every other byte, an endpoint, a provider choice or a
+// setting, stays as the shared copy holds it. A zero FileRule seeds a file
+// whole and carries nothing back.
 type FileRule struct {
 	// Name is the file's name in the shared directory, which says its format
 	// (TOML for a `.toml` name, a `.env` file's variables for a `.env` one, else
@@ -35,9 +35,9 @@ type FileRule struct {
 	// ([Profile.LoginKeys]); none for a login file.
 	LoginKeys []string `json:"login_keys,omitempty"`
 
-	// RunKeys are the key paths the harness writes during a run, which a
-	// refresh carries as the shared copy holds them ([Profile.RunKeys]).
-	RunKeys []string `json:"run_keys,omitempty"`
+	// RefreshKeys are the key paths a refresh carries back from a home's copy
+	// ([Profile.RefreshKeys]): its tokens and their expiry.
+	RefreshKeys []string `json:"refresh_keys,omitempty"`
 
 	// IdentityKeys are the key paths saying which login the file is: whose
 	// account, at which provider ([Profile.IdentityKeys]).
@@ -49,7 +49,7 @@ func (p *Profile) FileRule(name string) FileRule {
 	return FileRule{
 		Name:         name,
 		LoginKeys:    slices.Clone(p.LoginKeys[name]),
-		RunKeys:      slices.Clone(p.RunKeys[name]),
+		RefreshKeys:  slices.Clone(p.RefreshKeys[name]),
 		IdentityKeys: slices.Clone(p.IdentityKeys[name]),
 	}
 }
@@ -80,51 +80,41 @@ func (r FileRule) Seed(shared []byte) ([]byte, error) {
 }
 
 // Carry is what a refresh writes of home, a home's copy, over shared, the
-// shared copy: a login file as home has it, a mixed one shared with only its
-// login's fields taken from home (a field home lacks dropped); then every run
-// key as shared holds it ([KeepLoginKeys]), and a store's document held to the
-// logins shared holds ([KeepHandedCredentials]). Where the result means what
-// shared does it is shared, byte for byte. A mixed copy either side cannot
-// read carries nothing: shared.
-func (r FileRule) Carry(home, shared []byte) []byte {
-	out := home
-	if r.Mixed() {
-		out = r.mergeLogin(home, shared)
-	}
-	out = KeepLoginKeys(out, shared, r.RunKeys)
+// shared copy: shared with each of its refresh keys as home holds it, a key home
+// lacks left as shared holds it, and a store's document held to the logins
+// shared holds ([KeepHandedCredentials]). Where the result means what shared or
+// home does it is that copy, byte for byte. A copy either side cannot read
+// carries nothing: shared, and the reason.
+func (r FileRule) Carry(home, shared []byte) ([]byte, error) {
 	if r.Name == CredentialStoreDocument {
-		out = KeepHandedCredentials(out, shared)
+		return KeepHandedCredentials(home, shared), nil
 	}
-	return out
-}
-
-// mergeLogin is shared with each of the login's fields as home holds it.
-func (r FileRule) mergeLogin(home, shared []byte) []byte {
+	if len(r.RefreshKeys) == 0 {
+		return shared, nil
+	}
 	h, err := r.decode(home)
 	if err != nil {
-		return shared
+		return shared, fmt.Errorf("reading the home's %s: %w", r.Name, err)
 	}
 	s, err := r.decode(shared)
 	if err != nil {
-		return shared
+		return shared, fmt.Errorf("reading the shared %s: %w", r.Name, err)
 	}
 	was, _ := r.decode(shared)
-	for _, key := range r.LoginKeys {
-		path := strings.Split(key, ".")
-		if v, held := lookupKey(h, path); held {
-			setKey(s, path, v)
-		} else {
-			dropKey(s, path)
-		}
+	for _, key := range r.RefreshKeys {
+		carryKey(s, h, strings.Split(key, "."))
 	}
-	if reflect.DeepEqual(s, was) {
-		return shared
+	switch {
+	case reflect.DeepEqual(s, was):
+		return shared, nil
+	case reflect.DeepEqual(s, h):
+		return home, nil
 	}
 	out, err := r.encode(s, commentHeader(shared))
 	if err != nil {
-		return shared
+		return shared, err
 	}
-	return out
+	return out, nil
 }
 
 // SameAccount reports whether home and shared, two copies of the file, are
@@ -166,8 +156,12 @@ func (r FileRule) dotenv() bool { return strings.HasSuffix(r.Name, ".env") }
 // an empty object.
 func (r FileRule) decode(content []byte) (map[string]any, error) {
 	if r.dotenv() {
+		vars, err := parseDotenv(content)
+		if err != nil {
+			return nil, err
+		}
 		doc := map[string]any{}
-		for key, value := range parseDotenv(content) {
+		for key, value := range vars {
 			doc[key] = value
 		}
 		return doc, nil
@@ -183,11 +177,7 @@ func (r FileRule) decode(content []byte) (map[string]any, error) {
 	if len(bytes.TrimSpace(body)) == 0 {
 		return map[string]any{}, nil
 	}
-	doc, ok := jsonObject(body)
-	if !ok {
-		return nil, errors.New("not a JSON object")
-	}
-	return doc, nil
+	return jsonObject(body)
 }
 
 // encode writes doc in the file's format, header (a JSON file's leading `//`

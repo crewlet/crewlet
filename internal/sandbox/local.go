@@ -453,7 +453,7 @@ func collectCredentials(ctx context.Context, l boxLayout, seeded map[string]seed
 			switch outcome := got[relative]; outcome {
 			case writeBackWritten:
 				localLog.Info("local_sandbox_credential_refreshed", "sandbox_id", l.id, "file", relative)
-			case writeBackChanged, writeBackRemoved, writeBackOtherAccount:
+			case writeBackChanged, writeBackRemoved, writeBackOtherAccount, writeBackUnreadable:
 				// WARN: the one trace that a refresh the run made went nowhere;
 				// two in a row on one login are worth a look. It names the file,
 				// never what either copy holds.
@@ -472,6 +472,8 @@ type writeBack string
 // outcome in which a login the run refreshed was not written back: one
 // sentence apiece, because each leaves a different thing behind.
 var supersededDetail = map[writeBack]string{
+	writeBackUnreadable: "the box's copy of this login could not be read, so nothing of it was " +
+		"written back, and the shared one was kept",
 	writeBackOtherAccount: "the box's copy of this login names another account than the shared " +
 		"one, so it is no refresh of it, and the shared one was kept",
 	writeBackChanged: "the run refreshed this login, but the shared one changed after the box " +
@@ -496,6 +498,9 @@ const (
 	// writeBackRemoved: the shared login was removed while the box ran —
 	// `crewlet llm logout` — and a box never creates one.
 	writeBackRemoved writeBack = "removed"
+	// writeBackUnreadable: a file of the box's copy could not be read, so
+	// nothing of it can be told apart, and the shared one was kept.
+	writeBackUnreadable writeBack = "unreadable"
 	// writeBackOtherAccount: the box's copy names another account than the
 	// shared login ([harnessprofile.FileRule.SameAccount]), so it is no refresh of
 	// that login, and the shared one was kept.
@@ -518,6 +523,9 @@ func writeBackLogin(
 ) (map[string]writeBack, error) {
 	got := map[string]writeBack{}
 	changed := map[string][]byte{}
+	// held is the box's copy of every seeded file it still holds, which the
+	// account check reads whole, changed or not.
+	held := map[string][]byte{}
 	byName := map[string]string{}
 	home, err := l.openHome()
 	switch {
@@ -547,6 +555,9 @@ func writeBackLogin(
 			}
 			return nil, readErr
 		}
+		if present {
+			held[relative] = content
+		}
 		if !present || seedDigest(rec.Rule, content) == rec.Seed {
 			got[relative] = writeBackIdle
 			continue
@@ -572,12 +583,18 @@ func writeBackLogin(
 	if err != nil {
 		return nil, fmt.Errorf("reading the shared login: %w", err)
 	}
-	// ONLY THE LOGIN IS CARRIED ([harnessprofile.FileRule.Carry]): a mixed
-	// file's login fields, never a run key or a setting the run wrote, and a
-	// store's document held to the logins it was handed. A file that then is
-	// the shared one changed nothing.
-	for name, content := range changed {
-		kept := seeded[byName[name]].Rule.Carry(content, current[name])
+	// ONLY TOKENS ARE CARRIED ([harnessprofile.FileRule.Carry]): a file's
+	// refresh keys, never an endpoint, a key the run minted or a setting it
+	// wrote, and a store's document held to the logins it was handed. A file
+	// that then is the shared one changed nothing.
+	for _, name := range slices.Sorted(maps.Keys(changed)) {
+		kept, carryErr := seeded[byName[name]].Rule.Carry(changed[name], current[name])
+		if carryErr != nil {
+			// A COPY THAT CANNOT BE READ carries nothing: the shared login
+			// stays, said as unreadable, never with the parser's words, which
+			// may quote the file.
+			return verdict(writeBackUnreadable), nil
+		}
 		if bytes.Equal(kept, current[name]) {
 			delete(changed, name)
 			got[byName[name]] = writeBackIdle
@@ -605,9 +622,17 @@ func writeBackLogin(
 	}
 	// A COPY NAMING ANOTHER ACCOUNT IS NO REFRESH of this login
 	// ([harnessprofile.FileRule.SameAccount]): the whole login stays as it is.
-	// Asked of the login the box was seeded with, which current is here.
-	for name, content := range changed {
-		if !seeded[byName[name]].Rule.SameAccount(content, current[name]) {
+	// Asked of EVERY file of the box's copy, changed or not, against the login
+	// it was seeded with, which current is here: a token file swapped beside an
+	// untouched file naming the account is caught by the token's own subject,
+	// and a file naming the account that the box dropped names none.
+	for _, relative := range slices.Sorted(maps.Keys(login.files)) {
+		rec := seeded[relative]
+		if rec.Seed == "" || len(rec.Rule.IdentityKeys) == 0 {
+			continue
+		}
+		copied, present := held[relative]
+		if !present || !rec.Rule.SameAccount(copied, current[filepath.Base(login.files[relative])]) {
 			return verdict(writeBackOtherAccount), nil
 		}
 	}

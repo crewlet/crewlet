@@ -1,16 +1,50 @@
 {
-  "codex": {
-    "other": {
-      "auth.json": "{\n  \"auth_mode\": \"chatgpt\",\n  \"OPENAI_API_KEY\": null,\n  \"tokens\": {\n    \"id_token\": \"id-access-9\",\n    \"access_token\": \"access-9\",\n    \"refresh_token\": \"refresh-9\",\n    \"account_id\": \"acct-other\"\n  },\n  \"last_refresh\": \"2026-11-22T11:00:00Z\"\n}\n"
+  "claude-code": {
+    "carried": {
+      ".credentials.json": "{\n  \"claudeAiOauth\": {\n    \"accessToken\": \"access-2\",\n    \"expiresAt\": 1795003600000,\n    \"refreshToken\": \"refresh-2\",\n    \"scopes\": [\n      \"user:inference\"\n    ],\n    \"subscriptionType\": \"max\"\n  }\n}\n"
     },
     "refresh": {
-      "auth.json": "{\n  \"auth_mode\": \"chatgpt\",\n  \"OPENAI_API_KEY\": null,\n  \"tokens\": {\n    \"id_token\": \"id-access-2\",\n    \"access_token\": \"access-2\",\n    \"refresh_token\": \"refresh-2\",\n    \"account_id\": \"acct-seat\"\n  },\n  \"last_refresh\": \"2026-11-22T11:00:00Z\"\n}\n"
+      ".credentials.json": "{\n  \"claudeAiOauth\": {\n    \"accessToken\": \"access-2\",\n    \"refreshToken\": \"refresh-2\",\n    \"expiresAt\": 1795003600000,\n    \"scopes\": [\n      \"user:inference\"\n    ],\n    \"subscriptionType\": \"PINNED-CHANGE\"\n  }\n}\n"
     },
     "seed": {
-      "auth.json": "{\n  \"auth_mode\": \"chatgpt\",\n  \"OPENAI_API_KEY\": null,\n  \"tokens\": {\n    \"id_token\": \"id-access-1\",\n    \"access_token\": \"access-1\",\n    \"refresh_token\": \"refresh-1\",\n    \"account_id\": \"acct-seat\"\n  },\n  \"last_refresh\": \"2026-11-22T10:00:00Z\"\n}\n"
+      ".credentials.json": "{\n  \"claudeAiOauth\": {\n    \"accessToken\": \"access-1\",\n    \"refreshToken\": \"refresh-1\",\n    \"expiresAt\": 1795000000000,\n    \"scopes\": [\n      \"user:inference\"\n    ],\n    \"subscriptionType\": \"max\"\n  }\n}\n"
+    }
+  },
+  "codex": {
+    "carried": {
+      "auth.json": "{\n  \"OPENAI_API_KEY\": null,\n  \"auth_mode\": \"chatgpt\",\n  \"last_refresh\": \"2026-11-22T11:00:00Z\",\n  \"tokens\": {\n    \"access_token\": \"access-2\",\n    \"account_id\": \"acct-seat\",\n    \"id_token\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJ1c2VyLWFjY3Qtc2VhdCIsImlhdCI6MiwiaHR0cHM6Ly9hcGkub3BlbmFpLmNvbS9hdXRoIjp7ImNoYXRncHRfYWNjb3VudF9pZCI6ImFjY3Qtc2VhdCJ9fQ.c2ln\",\n    \"refresh_token\": \"refresh-2\"\n  }\n}\n"
+    },
+    "other": {
+      "auth.json": "{\n  \"auth_mode\": \"chatgpt\",\n  \"OPENAI_API_KEY\": null,\n  \"tokens\": {\n    \"id_token\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJ1c2VyLWFjY3Qtb3RoZXIiLCJpYXQiOjEsImh0dHBzOi8vYXBpLm9wZW5haS5jb20vYXV0aCI6eyJjaGF0Z3B0X2FjY291bnRfaWQiOiJhY2N0LW90aGVyIn19.c2ln\",\n    \"access_token\": \"access-9\",\n    \"refresh_token\": \"refresh-9\",\n    \"account_id\": \"acct-other\"\n  },\n  \"last_refresh\": \"2026-11-22T11:00:00Z\"\n}\n"
+    },
+    "refresh": {
+      "auth.json": "{\n  \"auth_mode\": \"PINNED-CHANGE\",\n  \"OPENAI_API_KEY\": null,\n  \"tokens\": {\n    \"id_token\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJ1c2VyLWFjY3Qtc2VhdCIsImlhdCI6MiwiaHR0cHM6Ly9hcGkub3BlbmFpLmNvbS9hdXRoIjp7ImNoYXRncHRfYWNjb3VudF9pZCI6ImFjY3Qtc2VhdCJ9fQ.c2ln\",\n    \"access_token\": \"access-2\",\n    \"refresh_token\": \"refresh-2\",\n    \"account_id\": \"acct-seat\"\n  },\n  \"last_refresh\": \"2026-11-22T11:00:00Z\"\n}\n"
+    },
+    "seed": {
+      "auth.json": "{\n  \"auth_mode\": \"chatgpt\",\n  \"OPENAI_API_KEY\": null,\n  \"tokens\": {\n    \"id_token\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJ1c2VyLWFjY3Qtc2VhdCIsImlhdCI6MSwiaHR0cHM6Ly9hcGkub3BlbmFpLmNvbS9hdXRoIjp7ImNoYXRncHRfYWNjb3VudF9pZCI6ImFjY3Qtc2VhdCJ9fQ.c2ln\",\n    \"access_token\": \"access-1\",\n    \"refresh_token\": \"refresh-1\",\n    \"account_id\": \"acct-seat\"\n  },\n  \"last_refresh\": \"2026-11-22T10:00:00Z\"\n}\n"
+    },
+    "swap": {
+      "auth.json": "{\n  \"auth_mode\": \"chatgpt\",\n  \"OPENAI_API_KEY\": null,\n  \"tokens\": {\n    \"id_token\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJ1c2VyLWFjY3Qtb3RoZXIiLCJpYXQiOjEsImh0dHBzOi8vYXBpLm9wZW5haS5jb20vYXV0aCI6eyJjaGF0Z3B0X2FjY291bnRfaWQiOiJhY2N0LW90aGVyIn19.c2ln\",\n    \"access_token\": \"access-9\",\n    \"refresh_token\": \"refresh-9\",\n    \"account_id\": \"acct-seat\"\n  },\n  \"last_refresh\": \"2026-11-22T11:00:00Z\"\n}\n"
     }
   },
   "copilot": {
+    "broken": [
+      {
+        "copy": {
+          "config.json": "// User settings belong in settings.json.\n// This file is managed automatically.\n{\"copilotTokens\": {\"https://github.com:seat\": \"token-1\"}, \"lastLoggedInUser\": {\"host\": \"https://github.com\", \"login\": \"seat\"}, \"lastLoggedInUser\": {\"host\": \"https://github.com\", \"login\": \"other\"}, \"loggedInUsers\": [{\"host\": \"https://github.com\", \"login\": \"seat\"}]}\n"
+        },
+        "logged": false
+      },
+      {
+        "copy": {
+          "config.json": "// User settings belong in settings.json.\n// This file is managed automatically.\n{\"copilotTokens\": {\"https://github.com:seat\": \"token-1\"},\n// \"trustedFolders\": [\"PLANTED-SETTING\"],\n\"lastLoggedInUser\": {\"host\": \"https://github.com\", \"login\": \"seat\"}, \"loggedInUsers\": [{\"host\": \"https://github.com\", \"login\": \"seat\"}]}\n"
+        },
+        "logged": false
+      }
+    ],
+    "carried": {
+      "config.json": "// User settings belong in settings.json.\n// This file is managed automatically.\n{\n  \"copilotTokens\": {\n    \"https://github.com:seat\": \"token-1\"\n  },\n  \"lastLoggedInUser\": {\n    \"host\": \"https://github.com\",\n    \"login\": \"seat\"\n  },\n  \"loggedInUsers\": [\n    {\n      \"host\": \"https://github.com\",\n      \"login\": \"seat\"\n    }\n  ],\n  \"firstLaunchAt\": \"2026-11-01T00:00:00.000Z\",\n  \"trustedFolders\": [\n    \"SHARED-SETTING\"\n  ]\n}\n"
+    },
     "other": {
       "config.json": "// User settings belong in settings.json.\n// This file is managed automatically.\n{\n  \"copilotTokens\": {\n    \"https://github.com:other\": \"token-9\"\n  },\n  \"lastLoggedInUser\": {\n    \"host\": \"https://github.com\",\n    \"login\": \"other\"\n  },\n  \"loggedInUsers\": [\n    {\n      \"host\": \"https://github.com\",\n      \"login\": \"other\"\n    }\n  ],\n  \"firstLaunchAt\": \"2026-11-22T00:00:00.000Z\",\n  \"authTokens\": {\n    \"https://github.com:other:github\": {\n      \"token\": \"token-9\"\n    }\n  }\n}\n"
     },
@@ -25,71 +59,174 @@
     }
   },
   "cursor-agent": {
+    "broken": [
+      {
+        "copy": {
+          "auth.json": "{\"accessToken\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJ1c2VyLTQyIiwiaWF0IjoyfQ.c2ln\", \"refreshToken\":",
+          "cli-config.json": "{\n  \"authInfo\": {\n    \"email\": \"seat@example.com\",\n    \"displayName\": \"Seat\",\n    \"userId\": 42\n  }\n}\n"
+        },
+        "logged": true
+      },
+      {
+        "copy": {
+          "auth.json": "{\"accessToken\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJ1c2VyLTQyIiwiaWF0IjoyfQ.c2ln\", \"refreshToken\": \"refresh-2\", \"refreshToken\": \"refresh-3\"}",
+          "cli-config.json": "{\n  \"authInfo\": {\n    \"email\": \"seat@example.com\",\n    \"displayName\": \"Seat\",\n    \"userId\": 42\n  }\n}\n"
+        },
+        "logged": true
+      },
+      {
+        "copy": {
+          "auth.json": "{\n  \"accessToken\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJ1c2VyLTQyIiwiaWF0IjoyfQ.c2ln\",\n  \"refreshToken\": \"refresh-2\",\n  \"apiKey\": \"PINNED-CHANGE\"\n}\ntrailing",
+          "cli-config.json": "{\n  \"authInfo\": {\n    \"email\": \"seat@example.com\",\n    \"displayName\": \"Seat\",\n    \"userId\": 42\n  }\n}\n"
+        },
+        "logged": true
+      },
+      {
+        "copy": {
+          "auth.json": "{\n  \"accessToken\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJ1c2VyLTQyIiwiaWF0IjoyfQ.c2ln\",\n  \"refreshToken\": \"refresh-2\",\n  \"apiKey\": \"PINNED-CHANGE\"\n}\n",
+          "cli-config.json": "not json"
+        },
+        "logged": true
+      }
+    ],
+    "carried": {
+      "auth.json": "{\n  \"accessToken\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJ1c2VyLTQyIiwiaWF0IjoyfQ.c2ln\",\n  \"refreshToken\": \"refresh-2\"\n}\n",
+      "cli-config.json": "{\n  \"version\": 1,\n  \"authInfo\": {\n    \"email\": \"seat@example.com\",\n    \"displayName\": \"Seat\",\n    \"userId\": 42\n  },\n  \"permissions\": {\n    \"allow\": [\n      \"SHARED-SETTING\"\n    ]\n  }\n}\n"
+    },
     "other": {
-      "auth.json": "{\n  \"accessToken\": \"access-9\",\n  \"refreshToken\": \"refresh-9\"\n}\n",
+      "auth.json": "{\n  \"accessToken\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJ1c2VyLTQzIiwiaWF0IjoxfQ.c2ln\",\n  \"refreshToken\": \"refresh-9\"\n}\n",
       "cli-config.json": "{\n  \"version\": 1,\n  \"authInfo\": {\n    \"email\": \"other@example.com\",\n    \"displayName\": \"Seat\",\n    \"userId\": 43\n  }\n}\n"
     },
     "planted": {
-      "auth.json": "{\n  \"accessToken\": \"access-1\",\n  \"refreshToken\": \"refresh-1\"\n}\n",
+      "auth.json": "{\n  \"accessToken\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJ1c2VyLTQyIiwiaWF0IjoxfQ.c2ln\",\n  \"refreshToken\": \"refresh-1\"\n}\n",
       "cli-config.json": "{\n  \"version\": 1,\n  \"authInfo\": {\n    \"email\": \"seat@example.com\",\n    \"displayName\": \"Seat\",\n    \"userId\": 42\n  },\n  \"permissions\": {\n    \"allow\": [\n      \"PLANTED-SETTING\"\n    ]\n  }\n}\n"
     },
     "refresh": {
-      "auth.json": "{\n  \"accessToken\": \"access-2\",\n  \"refreshToken\": \"refresh-2\"\n}\n",
+      "auth.json": "{\n  \"accessToken\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJ1c2VyLTQyIiwiaWF0IjoyfQ.c2ln\",\n  \"refreshToken\": \"refresh-2\",\n  \"apiKey\": \"PINNED-CHANGE\"\n}\n",
       "cli-config.json": "{\n  \"version\": 1,\n  \"authInfo\": {\n    \"email\": \"seat@example.com\",\n    \"displayName\": \"Seat\",\n    \"userId\": 42\n  }\n}\n"
     },
     "seed": {
-      "auth.json": "{\n  \"accessToken\": \"access-1\",\n  \"refreshToken\": \"refresh-1\"\n}\n",
+      "auth.json": "{\n  \"accessToken\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJ1c2VyLTQyIiwiaWF0IjoxfQ.c2ln\",\n  \"refreshToken\": \"refresh-1\"\n}\n",
       "cli-config.json": "{\n  \"version\": 1,\n  \"authInfo\": {\n    \"email\": \"seat@example.com\",\n    \"displayName\": \"Seat\",\n    \"userId\": 42\n  },\n  \"permissions\": {\n    \"allow\": [\n      \"SHARED-SETTING\"\n    ]\n  }\n}\n"
+    },
+    "swap": {
+      "auth.json": "{\n  \"accessToken\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJ1c2VyLTQzIiwiaWF0IjoxfQ.c2ln\",\n  \"refreshToken\": \"refresh-9\"\n}\n",
+      "cli-config.json": "{\n  \"authInfo\": {\n    \"email\": \"seat@example.com\",\n    \"displayName\": \"Seat\",\n    \"userId\": 42\n  }\n}\n"
     }
   },
   "gemini-cli": {
+    "carried": {
+      "google_accounts.json": "{\n  \"active\": \"seat@example.com\",\n  \"old\": []\n}\n",
+      "oauth_creds.json": "{\n  \"access_token\": \"access-2\",\n  \"expiry_date\": 1795003600000,\n  \"id_token\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJnb29nbGUtc2VhdCIsImlhdCI6Mn0.c2ln\",\n  \"refresh_token\": \"refresh-1\",\n  \"scope\": \"https://www.googleapis.com/auth/cloud-platform\",\n  \"token_type\": \"Bearer\"\n}\n"
+    },
     "other": {
       "google_accounts.json": "{\n  \"active\": \"other@example.com\",\n  \"old\": []\n}\n",
-      "oauth_creds.json": "{\n  \"access_token\": \"access-9\",\n  \"refresh_token\": \"refresh-9\",\n  \"scope\": \"https://www.googleapis.com/auth/cloud-platform\",\n  \"token_type\": \"Bearer\",\n  \"expiry_date\": 1795003600000\n}\n"
+      "oauth_creds.json": "{\n  \"access_token\": \"access-9\",\n  \"refresh_token\": \"refresh-9\",\n  \"scope\": \"https://www.googleapis.com/auth/cloud-platform\",\n  \"token_type\": \"Bearer\",\n  \"expiry_date\": 1795003600000,\n  \"id_token\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJnb29nbGUtb3RoZXIiLCJpYXQiOjF9.c2ln\"\n}\n"
     },
     "refresh": {
       "google_accounts.json": "{\n  \"active\": \"seat@example.com\",\n  \"old\": []\n}\n",
-      "oauth_creds.json": "{\n  \"access_token\": \"access-2\",\n  \"refresh_token\": \"refresh-1\",\n  \"scope\": \"https://www.googleapis.com/auth/cloud-platform\",\n  \"token_type\": \"Bearer\",\n  \"expiry_date\": 1795003600000\n}\n"
+      "oauth_creds.json": "{\n  \"access_token\": \"access-2\",\n  \"refresh_token\": \"refresh-1\",\n  \"scope\": \"PINNED-CHANGE\",\n  \"token_type\": \"Bearer\",\n  \"expiry_date\": 1795003600000,\n  \"id_token\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJnb29nbGUtc2VhdCIsImlhdCI6Mn0.c2ln\"\n}\n"
     },
     "seed": {
       "google_accounts.json": "{\n  \"active\": \"seat@example.com\",\n  \"old\": []\n}\n",
-      "oauth_creds.json": "{\n  \"access_token\": \"access-1\",\n  \"refresh_token\": \"refresh-1\",\n  \"scope\": \"https://www.googleapis.com/auth/cloud-platform\",\n  \"token_type\": \"Bearer\",\n  \"expiry_date\": 1795000000000\n}\n"
+      "oauth_creds.json": "{\n  \"access_token\": \"access-1\",\n  \"refresh_token\": \"refresh-1\",\n  \"scope\": \"https://www.googleapis.com/auth/cloud-platform\",\n  \"token_type\": \"Bearer\",\n  \"expiry_date\": 1795000000000,\n  \"id_token\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJnb29nbGUtc2VhdCIsImlhdCI6MX0.c2ln\"\n}\n"
+    },
+    "swap": {
+      "google_accounts.json": "{\n  \"active\": \"seat@example.com\",\n  \"old\": []\n}\n",
+      "oauth_creds.json": "{\n  \"access_token\": \"access-9\",\n  \"refresh_token\": \"refresh-9\",\n  \"scope\": \"https://www.googleapis.com/auth/cloud-platform\",\n  \"token_type\": \"Bearer\",\n  \"expiry_date\": 1795003600000,\n  \"id_token\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJnb29nbGUtb3RoZXIiLCJpYXQiOjF9.c2ln\"\n}\n"
     }
   },
   "grok": {
+    "carried": {
+      "auth.json": "{\n  \"https://auth.x.ai::client-placeholder\": {\n    \"auth_mode\": \"oidc\",\n    \"email\": \"seat@example.com\",\n    \"expires_at\": \"2026-11-22T11:00:00Z\",\n    \"key\": \"access-2\",\n    \"oidc_client_id\": \"client-placeholder\",\n    \"oidc_issuer\": \"https://auth.x.ai\",\n    \"refresh_token\": \"refresh-2\",\n    \"user_id\": \"user-seat\"\n  }\n}\n"
+    },
     "other": {
       "auth.json": "{\n  \"https://auth.x.ai::client-placeholder\": {\n    \"key\": \"access-9\",\n    \"auth_mode\": \"oidc\",\n    \"user_id\": \"user-other\",\n    \"email\": \"seat@example.com\",\n    \"refresh_token\": \"refresh-9\",\n    \"expires_at\": \"2026-11-22T11:00:00Z\",\n    \"oidc_issuer\": \"https://auth.x.ai\",\n    \"oidc_client_id\": \"client-placeholder\"\n  }\n}\n"
     },
     "refresh": {
-      "auth.json": "{\n  \"https://auth.x.ai::client-placeholder\": {\n    \"key\": \"access-2\",\n    \"auth_mode\": \"oidc\",\n    \"user_id\": \"user-seat\",\n    \"email\": \"seat@example.com\",\n    \"refresh_token\": \"refresh-2\",\n    \"expires_at\": \"2026-11-22T11:00:00Z\",\n    \"oidc_issuer\": \"https://auth.x.ai\",\n    \"oidc_client_id\": \"client-placeholder\"\n  }\n}\n"
+      "auth.json": "{\n  \"https://auth.x.ai::client-placeholder\": {\n    \"key\": \"access-2\",\n    \"auth_mode\": \"oidc\",\n    \"user_id\": \"user-seat\",\n    \"email\": \"seat@example.com\",\n    \"refresh_token\": \"refresh-2\",\n    \"expires_at\": \"2026-11-22T11:00:00Z\",\n    \"oidc_issuer\": \"https://PINNED-CHANGE.example.com\",\n    \"oidc_client_id\": \"client-placeholder\"\n  }\n}\n"
     },
     "seed": {
       "auth.json": "{\n  \"https://auth.x.ai::client-placeholder\": {\n    \"key\": \"access-1\",\n    \"auth_mode\": \"oidc\",\n    \"user_id\": \"user-seat\",\n    \"email\": \"seat@example.com\",\n    \"refresh_token\": \"refresh-1\",\n    \"expires_at\": \"2026-11-22T10:00:00Z\",\n    \"oidc_issuer\": \"https://auth.x.ai\",\n    \"oidc_client_id\": \"client-placeholder\"\n  }\n}\n"
     }
   },
   "hermes": {
+    "broken": [
+      {
+        "copy": {
+          ".env": "ANTHROPIC_API_KEY=key-1\nANTHROPIC_API_KEY=key-9\n",
+          "auth.json": "{\n  \"version\": 1,\n  \"active_provider\": \"PINNED-CHANGE\",\n  \"providers\": {\n    \"nous\": {\n      \"access_token\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJub3VzLXNlYXQiLCJzY29wZSI6ImluZmVyZW5jZTppbnZva2UiLCJpYXQiOjJ9.c2ln\",\n      \"refresh_token\": \"refresh-2\",\n      \"client_id\": \"hermes-cli\",\n      \"portal_base_url\": \"https://PINNED-CHANGE.example.com\",\n      \"inference_base_url\": \"https://inference.example.com\",\n      \"obtained_at\": \"2026-11-22T10:30:00Z\",\n      \"expires_at\": \"2026-11-22T11:00:00Z\",\n      \"expires_in\": 3600\n    }\n  },\n  \"credential_pool\": {\n    \"nous\": [\n      {\n        \"id\": \"p1\",\n        \"label\": \"device\",\n        \"access_token\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJub3VzLXNlYXQiLCJzY29wZSI6ImluZmVyZW5jZTppbnZva2UiLCJpYXQiOjJ9.c2ln\",\n        \"refresh_token\": \"refresh-2\"\n      }\n    ]\n  }\n}\n",
+          "nous_auth.json": "{\n  \"access_token\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJub3VzLXNlYXQiLCJzY29wZSI6ImluZmVyZW5jZTppbnZva2UiLCJpYXQiOjJ9.c2ln\",\n  \"refresh_token\": \"refresh-2\",\n  \"portal_base_url\": \"https://PINNED-CHANGE.example.com\",\n  \"obtained_at\": \"2026-11-22T10:30:00Z\",\n  \"expires_at\": \"2026-11-22T11:00:00Z\"\n}\n"
+        },
+        "logged": true
+      }
+    ],
+    "carried": {
+      ".env": "# Written by hermes setup\nexport ANTHROPIC_API_KEY=key-1\nOPENAI_BASE_URL=\"https://SHARED-SETTING.example.com/v1\"  # a setting\nHERMES_SETTING='SHARED-SETTING'\n",
+      "auth.json": "{\n  \"active_provider\": \"nous\",\n  \"credential_pool\": {\n    \"nous\": [\n      {\n        \"access_token\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJub3VzLXNlYXQiLCJzY29wZSI6ImluZmVyZW5jZTppbnZva2UiLCJpYXQiOjF9.c2ln\",\n        \"id\": \"p1\",\n        \"label\": \"device\",\n        \"refresh_token\": \"refresh-1\"\n      }\n    ]\n  },\n  \"providers\": {\n    \"nous\": {\n      \"access_token\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJub3VzLXNlYXQiLCJzY29wZSI6ImluZmVyZW5jZTppbnZva2UiLCJpYXQiOjJ9.c2ln\",\n      \"client_id\": \"hermes-cli\",\n      \"expires_at\": \"2026-11-22T11:00:00Z\",\n      \"expires_in\": 3600,\n      \"inference_base_url\": \"https://inference.example.com\",\n      \"obtained_at\": \"2026-11-22T10:30:00Z\",\n      \"portal_base_url\": \"https://portal.example.com\",\n      \"refresh_token\": \"refresh-2\"\n    }\n  },\n  \"version\": 1\n}\n",
+      "nous_auth.json": "{\n  \"access_token\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJub3VzLXNlYXQiLCJzY29wZSI6ImluZmVyZW5jZTppbnZva2UiLCJpYXQiOjJ9.c2ln\",\n  \"expires_at\": \"2026-11-22T11:00:00Z\",\n  \"obtained_at\": \"2026-11-22T10:30:00Z\",\n  \"portal_base_url\": \"https://portal.example.com\",\n  \"refresh_token\": \"refresh-2\"\n}\n"
+    },
     "other": {
       ".env": "ANTHROPIC_API_KEY=key-9\n",
-      "auth.json": "{\n  \"version\": 1,\n  \"active_provider\": \"nous\",\n  \"providers\": {\n    \"nous\": {\n      \"access_token\": \"access-9\",\n      \"refresh_token\": \"refresh-9\",\n      \"client_id\": \"hermes-cli\",\n      \"portal_base_url\": \"https://portal.example.com\",\n      \"expires_at\": \"2026-11-22T11:00:00Z\"\n    }\n  }\n}\n",
-      "nous_auth.json": "{\n  \"refresh_token\": \"refresh-9\",\n  \"portal_base_url\": \"https://portal.example.com\"\n}\n"
+      "auth.json": "{\n  \"version\": 1,\n  \"active_provider\": \"nous\",\n  \"providers\": {\n    \"nous\": {\n      \"access_token\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJub3VzLW90aGVyIiwic2NvcGUiOiJpbmZlcmVuY2U6aW52b2tlIiwiaWF0IjoxfQ.c2ln\",\n      \"refresh_token\": \"refresh-9\",\n      \"client_id\": \"hermes-cli\",\n      \"portal_base_url\": \"https://portal.example.com\",\n      \"inference_base_url\": \"https://inference.example.com\",\n      \"obtained_at\": \"2026-11-22T10:00:00Z\",\n      \"expires_at\": \"2026-11-22T11:00:00Z\",\n      \"expires_in\": 3600\n    }\n  },\n  \"credential_pool\": {\n    \"nous\": [\n      {\n        \"id\": \"p1\",\n        \"label\": \"device\",\n        \"access_token\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJub3VzLW90aGVyIiwic2NvcGUiOiJpbmZlcmVuY2U6aW52b2tlIiwiaWF0IjoxfQ.c2ln\",\n        \"refresh_token\": \"refresh-9\"\n      }\n    ]\n  }\n}\n",
+      "nous_auth.json": "{\n  \"access_token\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJub3VzLW90aGVyIiwic2NvcGUiOiJpbmZlcmVuY2U6aW52b2tlIiwiaWF0IjoxfQ.c2ln\",\n  \"refresh_token\": \"refresh-9\",\n  \"portal_base_url\": \"https://portal.example.com\",\n  \"obtained_at\": \"2026-11-22T10:00:00Z\",\n  \"expires_at\": \"2026-11-22T11:00:00Z\"\n}\n"
     },
     "planted": {
       ".env": "ANTHROPIC_API_KEY=key-1\nOPENAI_BASE_URL=https://PLANTED-SETTING.example.com/v1\n",
-      "auth.json": "{\n  \"version\": 1,\n  \"active_provider\": \"nous\",\n  \"providers\": {\n    \"nous\": {\n      \"access_token\": \"access-1\",\n      \"refresh_token\": \"refresh-1\",\n      \"client_id\": \"hermes-cli\",\n      \"portal_base_url\": \"https://portal.example.com\",\n      \"expires_at\": \"2026-11-22T11:00:00Z\"\n    }\n  }\n}\n",
-      "nous_auth.json": "{\n  \"refresh_token\": \"refresh-1\",\n  \"portal_base_url\": \"https://portal.example.com\"\n}\n"
+      "auth.json": "{\n  \"version\": 1,\n  \"active_provider\": \"nous\",\n  \"providers\": {\n    \"nous\": {\n      \"access_token\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJub3VzLXNlYXQiLCJzY29wZSI6ImluZmVyZW5jZTppbnZva2UiLCJpYXQiOjF9.c2ln\",\n      \"refresh_token\": \"refresh-1\",\n      \"client_id\": \"hermes-cli\",\n      \"portal_base_url\": \"https://portal.example.com\",\n      \"inference_base_url\": \"https://inference.example.com\",\n      \"obtained_at\": \"2026-11-22T10:00:00Z\",\n      \"expires_at\": \"2026-11-22T11:00:00Z\",\n      \"expires_in\": 3600\n    }\n  },\n  \"credential_pool\": {\n    \"nous\": [\n      {\n        \"id\": \"p1\",\n        \"label\": \"device\",\n        \"access_token\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJub3VzLXNlYXQiLCJzY29wZSI6ImluZmVyZW5jZTppbnZva2UiLCJpYXQiOjF9.c2ln\",\n        \"refresh_token\": \"refresh-1\"\n      }\n    ]\n  }\n}\n",
+      "nous_auth.json": "{\n  \"access_token\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJub3VzLXNlYXQiLCJzY29wZSI6ImluZmVyZW5jZTppbnZva2UiLCJpYXQiOjF9.c2ln\",\n  \"refresh_token\": \"refresh-1\",\n  \"portal_base_url\": \"https://portal.example.com\",\n  \"obtained_at\": \"2026-11-22T10:00:00Z\",\n  \"expires_at\": \"2026-11-22T11:00:00Z\"\n}\n"
     },
     "refresh": {
       ".env": "ANTHROPIC_API_KEY=key-1\n",
-      "auth.json": "{\n  \"version\": 1,\n  \"active_provider\": \"nous\",\n  \"providers\": {\n    \"nous\": {\n      \"access_token\": \"access-2\",\n      \"refresh_token\": \"refresh-2\",\n      \"client_id\": \"hermes-cli\",\n      \"portal_base_url\": \"https://portal.example.com\",\n      \"expires_at\": \"2026-11-22T11:00:00Z\"\n    }\n  }\n}\n",
-      "nous_auth.json": "{\n  \"refresh_token\": \"refresh-2\",\n  \"portal_base_url\": \"https://portal.example.com\"\n}\n"
+      "auth.json": "{\n  \"version\": 1,\n  \"active_provider\": \"PINNED-CHANGE\",\n  \"providers\": {\n    \"nous\": {\n      \"access_token\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJub3VzLXNlYXQiLCJzY29wZSI6ImluZmVyZW5jZTppbnZva2UiLCJpYXQiOjJ9.c2ln\",\n      \"refresh_token\": \"refresh-2\",\n      \"client_id\": \"hermes-cli\",\n      \"portal_base_url\": \"https://PINNED-CHANGE.example.com\",\n      \"inference_base_url\": \"https://inference.example.com\",\n      \"obtained_at\": \"2026-11-22T10:30:00Z\",\n      \"expires_at\": \"2026-11-22T11:00:00Z\",\n      \"expires_in\": 3600\n    }\n  },\n  \"credential_pool\": {\n    \"nous\": [\n      {\n        \"id\": \"p1\",\n        \"label\": \"device\",\n        \"access_token\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJub3VzLXNlYXQiLCJzY29wZSI6ImluZmVyZW5jZTppbnZva2UiLCJpYXQiOjJ9.c2ln\",\n        \"refresh_token\": \"refresh-2\"\n      }\n    ]\n  }\n}\n",
+      "nous_auth.json": "{\n  \"access_token\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJub3VzLXNlYXQiLCJzY29wZSI6ImluZmVyZW5jZTppbnZva2UiLCJpYXQiOjJ9.c2ln\",\n  \"refresh_token\": \"refresh-2\",\n  \"portal_base_url\": \"https://PINNED-CHANGE.example.com\",\n  \"obtained_at\": \"2026-11-22T10:30:00Z\",\n  \"expires_at\": \"2026-11-22T11:00:00Z\"\n}\n"
     },
     "seed": {
       ".env": "# Written by hermes setup\nexport ANTHROPIC_API_KEY=key-1\nOPENAI_BASE_URL=\"https://SHARED-SETTING.example.com/v1\"  # a setting\nHERMES_SETTING='SHARED-SETTING'\n",
-      "auth.json": "{\n  \"version\": 1,\n  \"active_provider\": \"nous\",\n  \"providers\": {\n    \"nous\": {\n      \"access_token\": \"access-1\",\n      \"refresh_token\": \"refresh-1\",\n      \"client_id\": \"hermes-cli\",\n      \"portal_base_url\": \"https://portal.example.com\",\n      \"expires_at\": \"2026-11-22T11:00:00Z\"\n    }\n  }\n}\n",
-      "nous_auth.json": "{\n  \"refresh_token\": \"refresh-1\",\n  \"portal_base_url\": \"https://portal.example.com\"\n}\n"
+      "auth.json": "{\n  \"version\": 1,\n  \"active_provider\": \"nous\",\n  \"providers\": {\n    \"nous\": {\n      \"access_token\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJub3VzLXNlYXQiLCJzY29wZSI6ImluZmVyZW5jZTppbnZva2UiLCJpYXQiOjF9.c2ln\",\n      \"refresh_token\": \"refresh-1\",\n      \"client_id\": \"hermes-cli\",\n      \"portal_base_url\": \"https://portal.example.com\",\n      \"inference_base_url\": \"https://inference.example.com\",\n      \"obtained_at\": \"2026-11-22T10:00:00Z\",\n      \"expires_at\": \"2026-11-22T11:00:00Z\",\n      \"expires_in\": 3600\n    }\n  },\n  \"credential_pool\": {\n    \"nous\": [\n      {\n        \"id\": \"p1\",\n        \"label\": \"device\",\n        \"access_token\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJub3VzLXNlYXQiLCJzY29wZSI6ImluZmVyZW5jZTppbnZva2UiLCJpYXQiOjF9.c2ln\",\n        \"refresh_token\": \"refresh-1\"\n      }\n    ]\n  }\n}\n",
+      "nous_auth.json": "{\n  \"access_token\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJub3VzLXNlYXQiLCJzY29wZSI6ImluZmVyZW5jZTppbnZva2UiLCJpYXQiOjF9.c2ln\",\n  \"refresh_token\": \"refresh-1\",\n  \"portal_base_url\": \"https://portal.example.com\",\n  \"obtained_at\": \"2026-11-22T10:00:00Z\",\n  \"expires_at\": \"2026-11-22T11:00:00Z\"\n}\n"
+    },
+    "swap": {
+      ".env": "ANTHROPIC_API_KEY=key-1\n",
+      "auth.json": "{\n  \"version\": 1,\n  \"active_provider\": \"nous\",\n  \"providers\": {\n    \"nous\": {\n      \"access_token\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJub3VzLW90aGVyIiwic2NvcGUiOiJpbmZlcmVuY2U6aW52b2tlIiwiaWF0IjoxfQ.c2ln\",\n      \"refresh_token\": \"refresh-9\",\n      \"client_id\": \"hermes-cli\",\n      \"portal_base_url\": \"https://portal.example.com\",\n      \"inference_base_url\": \"https://inference.example.com\",\n      \"obtained_at\": \"2026-11-22T10:00:00Z\",\n      \"expires_at\": \"2026-11-22T11:00:00Z\",\n      \"expires_in\": 3600\n    }\n  },\n  \"credential_pool\": {\n    \"nous\": [\n      {\n        \"id\": \"p1\",\n        \"label\": \"device\",\n        \"access_token\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJub3VzLW90aGVyIiwic2NvcGUiOiJpbmZlcmVuY2U6aW52b2tlIiwiaWF0IjoxfQ.c2ln\",\n        \"refresh_token\": \"refresh-9\"\n      }\n    ]\n  }\n}\n",
+      "nous_auth.json": "{\n  \"access_token\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJub3VzLXNlYXQiLCJzY29wZSI6ImluZmVyZW5jZTppbnZva2UiLCJpYXQiOjF9.c2ln\",\n  \"refresh_token\": \"refresh-1\",\n  \"portal_base_url\": \"https://portal.example.com\",\n  \"obtained_at\": \"2026-11-22T10:00:00Z\",\n  \"expires_at\": \"2026-11-22T11:00:00Z\"\n}\n"
     }
   },
   "kimi-code": {
+    "broken": [
+      {
+        "copy": {
+          "config.toml": "default_model = \"kimi-code/kimi-for-coding\"\ndefault_provider = \"managed:kimi-code\"\nthinking = true\nproviders = { \"managed:kimi-code\" = { type = \"kimi\", api_key = \"\", base_url = \"https://other.example.com/coding/v1\", oauth = { storage = \"file\", key = \"oauth/kimi-code\" } } }\nmodels = { \"kimi-code/kimi-for-coding\" = { provider = \"managed:kimi-code\", model = \"kimi-for-coding\" } }\nservices = { moonshot_search = { base_url = \"https://api.example.com/coding/v1/search\" } }\n",
+          "kimi-code.json": "{\n  \"access_token\": \"access-2\",\n  \"refresh_token\": \"refresh-2\",\n  \"expires_at\": 1795003600,\n  \"scope\": \"PINNED-CHANGE\",\n  \"token_type\": \"Bearer\",\n  \"expires_in\": 900\n}\n"
+        },
+        "logged": true
+      },
+      {
+        "copy": {
+          "config.toml": "default_model = \"kimi-code/kimi-for-coding\"\ndefault_provider = \"managed:kimi-code\"\nthinking = true\n\n[providers.\"managed:kimi-code\"]\ntype = \"kimi\"\napi_key = \"\"\nbase_url = \"https://api.example.com/coding/v1\"\n# base_url = \"https://other.example.com/coding/v1\"\n\n[providers.\"managed:kimi-code\".oauth]\nstorage = \"file\"\nkey = \"oauth/kimi-code\"\n\n[models.\"kimi-code/kimi-for-coding\"]\nprovider = \"managed:kimi-code\"\nmodel = \"kimi-for-coding\"\n\n[services.moonshot_search]\nbase_url = \"https://api.example.com/coding/v1/search\"\n",
+          "kimi-code.json": "{\n  \"access_token\": \"access-1\",\n  \"refresh_token\": \"refresh-1\",\n  \"expires_at\": 1795000000,\n  \"scope\": \"kimi-code\",\n  \"token_type\": \"Bearer\",\n  \"expires_in\": 900\n}\n"
+        },
+        "logged": false
+      },
+      {
+        "copy": {
+          "config.toml": "default_model = \"kimi-code/kimi-for-coding\"\ndefault_provider = \"managed:kimi-code\"\nthinking = true\nthinking = false\n\n[providers.\"managed:kimi-code\"]\ntype = \"kimi\"\napi_key = \"\"\nbase_url = \"https://api.example.com/coding/v1\"\n\n[providers.\"managed:kimi-code\".oauth]\nstorage = \"file\"\nkey = \"oauth/kimi-code\"\n\n[models.\"kimi-code/kimi-for-coding\"]\nprovider = \"managed:kimi-code\"\nmodel = \"kimi-for-coding\"\n\n[services.moonshot_search]\nbase_url = \"https://api.example.com/coding/v1/search\"\n",
+          "kimi-code.json": "{\n  \"access_token\": \"access-2\",\n  \"refresh_token\": \"refresh-2\",\n  \"expires_at\": 1795003600,\n  \"scope\": \"PINNED-CHANGE\",\n  \"token_type\": \"Bearer\",\n  \"expires_in\": 900\n}\n"
+        },
+        "logged": true
+      },
+      {
+        "copy": {
+          "config.toml": "default_model = \"kimi-code/kimi-for-coding\"\ndefault_provider = \"managed:kimi-code\"\nthinking = true\n\n[providers.\"managed:kimi-code\"]\ntype = \"kimi\"\napi_key = \"\"\nbase_url = \"https://api.example.com/coding/v1\"\n\n[providers.\"managed:kimi-code\".oauth]\nstorage = \"file\"\nkey = \"oauth/kimi-code\"\n\n[models.\"kimi-code/kimi-for-coding\"]\nprovider = \"managed:kimi-code\"\nmodel = \"kimi-for-coding\"\n\n[services.moonshot_search]\nbase_url = \"https://api.example.com/coding/v1/search\"\n",
+          "kimi-code.json": "{\"access_token\": \"access-2\", \"access_token\": \"access-3\", \"refresh_token\": \"refresh-2\"}"
+        },
+        "logged": true
+      }
+    ],
+    "carried": {
+      "config.toml": "default_model = \"kimi-code/kimi-for-coding\"\ndefault_provider = \"managed:kimi-code\"\nthinking = true\n\n[providers.\"managed:kimi-code\"]\ntype = \"kimi\"\napi_key = \"\"\nbase_url = \"https://api.example.com/coding/v1\"\n\n[providers.\"managed:kimi-code\".oauth]\nstorage = \"file\"\nkey = \"oauth/kimi-code\"\n\n[models.\"kimi-code/kimi-for-coding\"]\nprovider = \"managed:kimi-code\"\nmodel = \"kimi-for-coding\"\n\n[services.moonshot_search]\nbase_url = \"https://api.example.com/coding/v1/search\"\n\n[[hooks]]\nname = \"SHARED-SETTING\"\n",
+      "kimi-code.json": "{\n  \"access_token\": \"access-2\",\n  \"expires_at\": 1795003600,\n  \"expires_in\": 900,\n  \"refresh_token\": \"refresh-2\",\n  \"scope\": \"kimi-code\",\n  \"token_type\": \"Bearer\"\n}\n"
+    },
     "other": {
       "config.toml": "default_model = \"kimi-code/kimi-for-coding\"\ndefault_provider = \"managed:kimi-code\"\nthinking = true\n\n[providers.\"managed:kimi-code\"]\ntype = \"kimi\"\napi_key = \"\"\nbase_url = \"https://other.example.com/coding/v1\"\n\n[providers.\"managed:kimi-code\".oauth]\nstorage = \"file\"\nkey = \"oauth/kimi-code\"\n\n[models.\"kimi-code/kimi-for-coding\"]\nprovider = \"managed:kimi-code\"\nmodel = \"kimi-for-coding\"\n\n[services.moonshot_search]\nbase_url = \"https://other.example.com/coding/v1/search\"\n",
       "kimi-code.json": "{\n  \"access_token\": \"access-9\",\n  \"refresh_token\": \"refresh-9\",\n  \"expires_at\": 1795003600,\n  \"scope\": \"kimi-code\",\n  \"token_type\": \"Bearer\",\n  \"expires_in\": 900\n}\n"
@@ -100,22 +237,53 @@
     },
     "refresh": {
       "config.toml": "default_model = \"kimi-code/kimi-for-coding\"\ndefault_provider = \"managed:kimi-code\"\nthinking = true\n\n[providers.\"managed:kimi-code\"]\ntype = \"kimi\"\napi_key = \"\"\nbase_url = \"https://api.example.com/coding/v1\"\n\n[providers.\"managed:kimi-code\".oauth]\nstorage = \"file\"\nkey = \"oauth/kimi-code\"\n\n[models.\"kimi-code/kimi-for-coding\"]\nprovider = \"managed:kimi-code\"\nmodel = \"kimi-for-coding\"\n\n[services.moonshot_search]\nbase_url = \"https://api.example.com/coding/v1/search\"\n",
-      "kimi-code.json": "{\n  \"access_token\": \"access-2\",\n  \"refresh_token\": \"refresh-2\",\n  \"expires_at\": 1795003600,\n  \"scope\": \"kimi-code\",\n  \"token_type\": \"Bearer\",\n  \"expires_in\": 900\n}\n"
+      "kimi-code.json": "{\n  \"access_token\": \"access-2\",\n  \"refresh_token\": \"refresh-2\",\n  \"expires_at\": 1795003600,\n  \"scope\": \"PINNED-CHANGE\",\n  \"token_type\": \"Bearer\",\n  \"expires_in\": 900\n}\n"
     },
     "seed": {
       "config.toml": "default_model = \"kimi-code/kimi-for-coding\"\ndefault_provider = \"managed:kimi-code\"\nthinking = true\n\n[providers.\"managed:kimi-code\"]\ntype = \"kimi\"\napi_key = \"\"\nbase_url = \"https://api.example.com/coding/v1\"\n\n[providers.\"managed:kimi-code\".oauth]\nstorage = \"file\"\nkey = \"oauth/kimi-code\"\n\n[models.\"kimi-code/kimi-for-coding\"]\nprovider = \"managed:kimi-code\"\nmodel = \"kimi-for-coding\"\n\n[services.moonshot_search]\nbase_url = \"https://api.example.com/coding/v1/search\"\n\n[[hooks]]\nname = \"SHARED-SETTING\"\n",
       "kimi-code.json": "{\n  \"access_token\": \"access-1\",\n  \"refresh_token\": \"refresh-1\",\n  \"expires_at\": 1795000000,\n  \"scope\": \"kimi-code\",\n  \"token_type\": \"Bearer\",\n  \"expires_in\": 900\n}\n"
     }
   },
-  "pi": {
-    "other": {
-      "auth.json": "{\n  \"openai-codex\": {\n    \"type\": \"oauth\",\n    \"access\": \"access-9\",\n    \"refresh\": \"refresh-9\",\n    \"expires\": 1795003600000,\n    \"accountId\": \"acct-other\"\n  }\n}\n"
+  "muse-code": {
+    "carried": {
+      "auth.json": "{\n  \"providers\": {\n    \"meta\": {\n      \"access_token\": \"access-2\",\n      \"api_base_url\": \"https://api.example.com\",\n      \"api_key\": \"key-login\",\n      \"expires_at\": 1795003600,\n      \"mechanism\": \"oauth\",\n      \"obtained_via\": \"device_code\",\n      \"refresh_token\": \"refresh-2\",\n      \"subs_active\": true\n    }\n  },\n  \"schema_version\": 1\n}\n"
+    },
+    "planted": {
+      "auth.json": "{\n  \"schema_version\": 1,\n  \"providers\": {\n    \"meta\": {\n      \"access_token\": \"access-1\",\n      \"refresh_token\": \"refresh-1\",\n      \"expires_at\": 1795000000,\n      \"mechanism\": \"oauth\",\n      \"obtained_via\": \"device_code\",\n      \"api_key\": \"key-minted\",\n      \"api_base_url\": \"https://PLANTED-SETTING.example.com\",\n      \"subs_active\": true\n    }\n  }\n}\n"
     },
     "refresh": {
-      "auth.json": "{\n  \"openai-codex\": {\n    \"type\": \"oauth\",\n    \"access\": \"access-2\",\n    \"refresh\": \"refresh-2\",\n    \"expires\": 1795003600000,\n    \"accountId\": \"acct-seat\"\n  }\n}\n"
+      "auth.json": "{\n  \"schema_version\": 1,\n  \"providers\": {\n    \"meta\": {\n      \"access_token\": \"access-2\",\n      \"refresh_token\": \"refresh-2\",\n      \"expires_at\": 1795003600,\n      \"mechanism\": \"oauth\",\n      \"obtained_via\": \"device_code\",\n      \"api_key\": \"key-minted\",\n      \"api_base_url\": \"https://PINNED-CHANGE.example.com\",\n      \"subs_active\": false\n    }\n  }\n}\n"
     },
     "seed": {
-      "auth.json": "{\n  \"openai-codex\": {\n    \"type\": \"oauth\",\n    \"access\": \"access-1\",\n    \"refresh\": \"refresh-1\",\n    \"expires\": 1795000000000,\n    \"accountId\": \"acct-seat\"\n  }\n}\n"
+      "auth.json": "{\n  \"schema_version\": 1,\n  \"providers\": {\n    \"meta\": {\n      \"access_token\": \"access-1\",\n      \"refresh_token\": \"refresh-1\",\n      \"expires_at\": 1795000000,\n      \"mechanism\": \"oauth\",\n      \"obtained_via\": \"device_code\",\n      \"api_key\": \"key-login\",\n      \"api_base_url\": \"https://api.example.com\",\n      \"subs_active\": true\n    }\n  }\n}\n"
+    }
+  },
+  "pi": {
+    "carried": {
+      "auth.json": "{\n  \"anthropic\": {\n    \"access\": \"anthropic-access-2\",\n    \"expires\": 1795003600000,\n    \"refresh\": \"anthropic-refresh-2\",\n    \"type\": \"oauth\"\n  },\n  \"openai-codex\": {\n    \"access\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJ1c2VyLWFjY3Qtc2VhdCIsImlhdCI6MiwiaHR0cHM6Ly9hcGkub3BlbmFpLmNvbS9hdXRoIjp7ImNoYXRncHRfYWNjb3VudF9pZCI6ImFjY3Qtc2VhdCJ9fQ.c2ln\",\n    \"accountId\": \"acct-seat\",\n    \"expires\": 1795003600000,\n    \"refresh\": \"refresh-2\",\n    \"type\": \"oauth\"\n  }\n}\n"
+    },
+    "other": {
+      "auth.json": "{\n  \"anthropic\": {\n    \"type\": \"oauth\",\n    \"access\": \"anthropic-access-9\",\n    \"refresh\": \"anthropic-refresh-9\",\n    \"expires\": 1795003600000\n  },\n  \"openai-codex\": {\n    \"type\": \"oauth\",\n    \"access\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJ1c2VyLWFjY3Qtb3RoZXIiLCJpYXQiOjEsImh0dHBzOi8vYXBpLm9wZW5haS5jb20vYXV0aCI6eyJjaGF0Z3B0X2FjY291bnRfaWQiOiJhY2N0LW90aGVyIn19.c2ln\",\n    \"refresh\": \"refresh-9\",\n    \"expires\": 1795003600000,\n    \"accountId\": \"acct-other\"\n  }\n}\n"
+    },
+    "refresh": {
+      "auth.json": "{\n  \"anthropic\": {\n    \"type\": \"PINNED-CHANGE\",\n    \"access\": \"anthropic-access-2\",\n    \"refresh\": \"anthropic-refresh-2\",\n    \"expires\": 1795003600000\n  },\n  \"openai-codex\": {\n    \"type\": \"oauth\",\n    \"access\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJ1c2VyLWFjY3Qtc2VhdCIsImlhdCI6MiwiaHR0cHM6Ly9hcGkub3BlbmFpLmNvbS9hdXRoIjp7ImNoYXRncHRfYWNjb3VudF9pZCI6ImFjY3Qtc2VhdCJ9fQ.c2ln\",\n    \"refresh\": \"refresh-2\",\n    \"expires\": 1795003600000,\n    \"accountId\": \"acct-seat\"\n  }\n}\n"
+    },
+    "seed": {
+      "auth.json": "{\n  \"anthropic\": {\n    \"type\": \"oauth\",\n    \"access\": \"anthropic-access-1\",\n    \"refresh\": \"anthropic-refresh-1\",\n    \"expires\": 1795000000000\n  },\n  \"openai-codex\": {\n    \"type\": \"oauth\",\n    \"access\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJ1c2VyLWFjY3Qtc2VhdCIsImlhdCI6MSwiaHR0cHM6Ly9hcGkub3BlbmFpLmNvbS9hdXRoIjp7ImNoYXRncHRfYWNjb3VudF9pZCI6ImFjY3Qtc2VhdCJ9fQ.c2ln\",\n    \"refresh\": \"refresh-1\",\n    \"expires\": 1795000000000,\n    \"accountId\": \"acct-seat\"\n  }\n}\n"
+    },
+    "swap": {
+      "auth.json": "{\n  \"anthropic\": {\n    \"type\": \"oauth\",\n    \"access\": \"anthropic-access-9\",\n    \"refresh\": \"anthropic-refresh-9\",\n    \"expires\": 1795003600000\n  },\n  \"openai-codex\": {\n    \"type\": \"oauth\",\n    \"access\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJ1c2VyLWFjY3Qtb3RoZXIiLCJpYXQiOjEsImh0dHBzOi8vYXBpLm9wZW5haS5jb20vYXV0aCI6eyJjaGF0Z3B0X2FjY291bnRfaWQiOiJhY2N0LW90aGVyIn19.c2ln\",\n    \"refresh\": \"refresh-9\",\n    \"expires\": 1795003600000,\n    \"accountId\": \"acct-seat\"\n  }\n}\n"
+    }
+  },
+  "qwen-code": {
+    "carried": {
+      "subscription_credentials.json": "{\n  \"baseUrl\": \"https://auth.qwen.ai\",\n  \"clientId\": \"qwen-code-cli\",\n  \"models\": [\n    \"qwen3-coder-plus\"\n  ],\n  \"revision\": 1,\n  \"tokens\": {\n    \"access_token\": \"access-2\",\n    \"expiresAt\": 1795003600000,\n    \"expires_in\": 3600,\n    \"refresh_token\": \"refresh-2\",\n    \"scope\": \"openid\",\n    \"token_type\": \"Bearer\"\n  }\n}\n"
+    },
+    "refresh": {
+      "subscription_credentials.json": "{\n  \"revision\": 1,\n  \"baseUrl\": \"https://PINNED-CHANGE.example.com\",\n  \"clientId\": \"qwen-code-cli\",\n  \"models\": [\n    \"qwen3-coder-plus\"\n  ],\n  \"tokens\": {\n    \"access_token\": \"access-2\",\n    \"refresh_token\": \"refresh-2\",\n    \"token_type\": \"Bearer\",\n    \"scope\": \"openid\",\n    \"expires_in\": 3600,\n    \"expiresAt\": 1795003600000\n  }\n}\n"
+    },
+    "seed": {
+      "subscription_credentials.json": "{\n  \"revision\": 1,\n  \"baseUrl\": \"https://auth.qwen.ai\",\n  \"clientId\": \"qwen-code-cli\",\n  \"models\": [\n    \"qwen3-coder-plus\"\n  ],\n  \"tokens\": {\n    \"access_token\": \"access-1\",\n    \"refresh_token\": \"refresh-1\",\n    \"token_type\": \"Bearer\",\n    \"scope\": \"openid\",\n    \"expires_in\": 3600,\n    \"expiresAt\": 1795000000000\n  }\n}\n"
     }
   }
 }
