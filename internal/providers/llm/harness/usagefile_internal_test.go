@@ -285,6 +285,8 @@ func TestTheHermesProfileDeniesItsToolsAndReadsItsRealTokens(t *testing.T) {
 //   - auxiliary.title_generation.enabled false: no billed request for a title.
 //   - memory.memory_enabled and memory.user_profile_enabled false: else MEMORY.md
 //     and USER.md are read into every prompt.
+//   - gateway.unmanaged_idle_exit_seconds 5: else a gateway a dead engine left
+//     holds that call's environment for 600 s.
 //
 // NO `model` SECTION (a login's provider lives in auth.json, which travels) and
 // no toolsets (`--toolsets web` on argv is the denial). Mutation: drop a
@@ -321,6 +323,7 @@ func assertHermesSeedKeepsACallToItself(t *testing.T, p harnessprofile.Profile) 
 		{[]string{"auxiliary", "title_generation", "enabled"}, false},
 		{[]string{"memory", "memory_enabled"}, false},
 		{[]string{"memory", "user_profile_enabled"}, false},
+		{[]string{"gateway", "unmanaged_idle_exit_seconds"}, 5},
 	} {
 		if got := at(want.path...); got != want.value {
 			t.Errorf("config.yaml %s = %#v, want %#v", strings.Join(want.path, "."), got, want.value)
