@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -41,7 +42,24 @@ func (QwenCode) notesHeld(ctx context.Context, box sandbox.Sandbox, session Sess
 		return nil, fmt.Errorf("opening %s: %w", file, err)
 	}
 	defer r.Close()
-	return qwenNotesHeld(r, takes, maxLineBytes)
+	return qwenNotesHeld(r, takes, qwenRunFrom(ctx, box, session.ID), maxLineBytes)
+}
+
+// qwenRunFrom is the first line of session's chat file the box's last run
+// wrote, 0 where the box's record of where it began ([Paths.QwenRunStart])
+// names another session or none: a session the run started holds no record
+// before it.
+func qwenRunFrom(ctx context.Context, box sandbox.Sandbox, session string) int {
+	raw, err := box.ReadFile(ctx, PathsFor(box).QwenRunStart())
+	if err != nil {
+		return 0
+	}
+	id, count, ok := strings.Cut(strings.TrimSpace(string(raw)), " ")
+	n, err := strconv.Atoi(count)
+	if !ok || id != session || err != nil || n < 0 {
+		return 0
+	}
+	return n
 }
 
 // qwenChatFile is the chat file Qwen Code records session in, "" for none:
@@ -66,24 +84,25 @@ func qwenChatFile(ctx context.Context, box sandbox.Sandbox, session string) (str
 }
 
 // qwenNotesHeld is the inbox ids of takes, in serve order, whose items the
-// session read from r holds as a current instruction: each record whose
-// handed text's digest is the next take's matches it, so two takes of
-// identical text need two records. A match is settled only by the next
-// assistant record, the reply to a request that carried the note plain; a
-// compaction before it keeps the match only where the note survives plain in
-// the history Qwen Code goes on with, past the summary (ADR-0177: a note read
-// only inside a compaction summary is not read). A match no reply follows
-// (the request failed, was cancelled or the run was killed) is not held, so
-// the note is served again. A line past bound or one that does not decode
-// drops every pending match: it may have been a compaction that summarized
-// them, so the note is served again rather than confirmed unseen.
-func qwenNotesHeld(r io.Reader, takes []ServedTake, bound int) ([]string, error) {
+// session read from r holds as a current instruction: each record, at or past
+// the line from where the takes' run began, whose handed text's digest is the
+// next take's matches it, so two takes of identical text need two records. A
+// match is settled only by the next assistant record, the reply to a request
+// that carried the note plain; a compaction before it keeps the match only
+// where the note survives plain in the history Qwen Code goes on with, past
+// the summary (ADR-0177). A match no reply follows is not held, so the note is
+// served again. A line past bound or one that does not decode drops every
+// pending match: it may have been a compaction that summarized them.
+func qwenNotesHeld(r io.Reader, takes []ServedTake, from, bound int) ([]string, error) {
 	type match struct{ id, digest string }
 	var settled []string
 	var pending []match
-	next := 0
+	next, at := 0, -1
 	framing := "\n" + qwenNoteFraming
 	err := readLines(bufio.NewReaderSize(r, lineChunkBytes), bound, func(line []byte) error {
+		if at++; at < from {
+			return nil
+		}
 		var record struct {
 			Type          string          `json:"type"`
 			Subtype       string          `json:"subtype"`
@@ -127,6 +146,7 @@ func qwenNotesHeld(r io.Reader, takes []ServedTake, bound int) ([]string, error)
 		}
 		return nil
 	}, func(int64) error {
+		at++
 		pending = pending[:0]
 		return nil
 	})

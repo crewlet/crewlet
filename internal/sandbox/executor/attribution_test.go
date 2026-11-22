@@ -345,9 +345,20 @@ func geminiCreditBox(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 }
 
 // geminiBox is a real box with a Gemini CLI runner's plumbing and a stand-in
-// `gemini` that writes a prompt when asked to export one, as the run's script
-// asks first, and otherwise runs run.
+// `gemini` that prints its release when asked, writes a prompt when asked to
+// export one, and otherwise runs run.
 func geminiBox(t *testing.T, run string) (*executor.Runner, sandbox.Sandbox) {
+	t.Helper()
+	return geminiBoxAt(t, geminiCapturedRelease, run)
+}
+
+// geminiCapturedRelease is the Gemini CLI release whose output the suite's
+// fixtures were captured from (testdata/gemini/0.70.0).
+const geminiCapturedRelease = "0.70.0"
+
+// geminiBoxAt is [geminiBox] whose Gemini CLI prints release to `--version`,
+// as the run's script reads it before its gate.
+func geminiBoxAt(t *testing.T, release, run string) (*executor.Runner, sandbox.Sandbox) {
 	t.Helper()
 	local, err := sandbox.NewLocal(sandbox.LocalOptions{Placement: sandbox.Direct, StateDir: t.TempDir()})
 	if err != nil {
@@ -366,7 +377,8 @@ func geminiBox(t *testing.T, run string) (*executor.Runner, sandbox.Sandbox) {
 	// login shell's profile may reset PATH to the system's.
 	writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/node", "#!/bin/sh\nexec "+shQuote(geminiNode(t))+` "$@"`+"\n")
 	writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/gemini",
-		"#!/bin/sh\nif [ -n \"${GEMINI_WRITE_SYSTEM_MD:-}\" ]; then echo prompt > \"$GEMINI_WRITE_SYSTEM_MD\"; exit 42; fi\n"+run)
+		"#!/bin/sh\ncase \"$1\" in --version) echo "+shQuote(release)+"; exit 0;; esac\n"+
+			"if [ -n \"${GEMINI_WRITE_SYSTEM_MD:-}\" ]; then echo prompt > \"$GEMINI_WRITE_SYSTEM_MD\"; exit 42; fi\n"+run)
 	return runner, b
 }
 

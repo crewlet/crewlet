@@ -31,6 +31,11 @@
 //                     count) once they are recorded: no reply is recorded,
 //                     and the prompt is answered with an error
 //
+// session/load answers the load of a session the helper continues as ACP's
+// loadSession does: the session's history replayed first as session/update
+// (one agent message here, its text replayedHistory), then the load's answer;
+// the load's parameters are logged.
+//
 // Like Qwen Code it records a drained note in the session's chat file as a
 // `mid_turn_user_message` record, the captured record's shape with the note's
 // text, at once, BEFORE the request that carries it (as 0.28.3 does); the
@@ -44,6 +49,9 @@ const log = (entry) => fs.appendFileSync(env.QWEN_FAKE_LOG, JSON.stringify(entry
 const capture = (file) => fs.readFileSync(file, "utf8").split("\n").filter((l) => l !== "").map((l) => JSON.parse(l))
 
 const start = capture(env.QWEN_FAKE_START)
+
+// replayedHistory is the text of the history a load replays.
+const replayedHistory = "REPLAYED-HISTORY of the loaded session"
 const turn = capture(env.QWEN_FAKE_TURN)
 const chatLines = fs.readFileSync(path.join(path.dirname(env.QWEN_FAKE_TURN), "chat-note.jsonl"), "utf8").split("\n")
 const chatTemplate = JSON.parse(chatLines.find((l) => l.includes('"mid_turn_user_message"')))
@@ -100,7 +108,7 @@ function ask(method, params) {
 }
 
 function chatFile() {
-  const key = process.cwd().replace(/[^a-zA-Z0-9]/g, "-")
+  const key = fs.realpathSync(process.cwd()).replace(/[^a-zA-Z0-9]/g, "-")
   return path.join(env.QWEN_FAKE_HOME, "projects", key, "chats", session + ".jsonl")
 }
 function record(notes) {
@@ -183,6 +191,13 @@ process.stdin.on("data", (chunk) => {
       case "session/new":
         session = m.params?._meta?.["qwen-code/sessionId"] ?? ""
         answer(m.id, answersTo(start, "session/new")[0], sessionOf(start))
+        break
+      case "session/load":
+        session = m.params?.sessionId ?? ""
+        log({ load: m.params })
+        send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: session,
+          update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: replayedHistory } } } })
+        send({ jsonrpc: "2.0", id: m.id, result: {} })
         break
       case "qwen/status/workspace/mcp":
         statusAsks++

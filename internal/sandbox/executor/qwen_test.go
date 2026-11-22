@@ -122,13 +122,15 @@ func TestAQwenRunsSettingsAreTheMeasuredShapesAndFollowItsWiring(t *testing.T) {
 
 // A QWEN RUN IS ITS HELPER UNDER THE END PROTOCOL, ITS TEXT ADDED TO QWEN
 // CODE'S PROMPT. The script publishes its pid and traps an end before it
-// starts `node <helper> run <config> <session>`, so an end request reaches
-// the helper as SIGTERM, which it answers with session/cancel; the run's
+// starts `node <helper> run <config> <session> <new|load>`, its session the
+// one the gate named, so an end request reaches the helper as SIGTERM, which
+// it answers with session/cancel; the run's
 // text names QWEN_SYSTEM_IDENTITY_MD, the channel that keeps Qwen Code's own
 // prompt; the models.dev fetch is off; the entry's model is OPENAI_MODEL.
 //
 // Mutations, each red: start the helper outside launchHarness (no end
-// protocol); leave the session off its command line; pin QWEN_SYSTEM_MD.
+// protocol); leave the session or its mode off its command line; name a
+// session the gate did not; pin QWEN_SYSTEM_MD.
 func TestAQwenRunIsItsHelperUnderTheEndProtocol(t *testing.T) {
 	t.Parallel()
 	q := executor.QwenCode{}
@@ -136,8 +138,9 @@ func TestAQwenRunIsItsHelperUnderTheEndProtocol(t *testing.T) {
 	session := q.Session(req)
 	p := executor.Paths{Home: "/home/box"}
 	script := scriptOf(t, q.Command(req, session, p, ""))
-	for _, want := range []string{"trap endask USR1",
-		"node '" + p.QwenHelper() + "' run '" + p.QwenHelperConfig() + "' '" + session.ID + "' <&3 3<&- &"} {
+	for _, want := range []string{"trap endask USR1", "s='" + session.ID + "' k=no w= cf=\n",
+		`if [ "$k" = yes ]; then m=load; else m=new; fi`,
+		"node '" + p.QwenHelper() + "' run '" + p.QwenHelperConfig() + `' "$s" "$m" <&3 3<&- &`} {
 		if !strings.Contains(script, want) {
 			t.Errorf("the script lacks %q:\n%s", want, script)
 		}

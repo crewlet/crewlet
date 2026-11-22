@@ -75,8 +75,9 @@ echo '{"type":"result","status":"success"}'`)
 	}
 	readJSON(t, filepath.Join(record, "settings.json"), &settings)
 	// THE HOOK RECORDS IN THE RECORD OF THE SESSION GEMINI CLI WAS HANDED, which
-	// exists, empty, before any hook fires: a take never recorded reads absent
-	// once the job ends rather than undecided.
+	// exists before any hook fires, holding only where the run began in the
+	// session (its first line, for a session the run starts): a take never
+	// recorded reads absent once the job ends rather than undecided.
 	args, err := os.ReadFile(filepath.Join(record, "args"))
 	if err != nil {
 		t.Fatal(err)
@@ -91,8 +92,8 @@ echo '{"type":"result","status":"success"}'`)
 	if session == "" || takes != p.GeminiTakes(session) {
 		t.Fatalf("the hook records in %q, want the record of the session Gemini CLI was handed (%q)", takes, session)
 	}
-	if before, err := box.ReadFile(t.Context(), takes); err != nil || len(before) != 0 {
-		t.Errorf("before any hook the record of takes is %q (%v), want an empty file", before, err)
+	if before, err := box.ReadFile(t.Context(), takes); err != nil || string(before) != `{"from":0}`+"\n" {
+		t.Errorf("before any hook the record of takes is %q (%v), want the run's start alone", before, err)
 	}
 	// EACH HOOK, PLAYED AS THE HARNESS PLAYS IT: its command, in sh, the
 	// hook's input on stdin.

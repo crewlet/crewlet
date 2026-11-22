@@ -613,7 +613,7 @@
 // own, saying why, where it can do neither. Whether a box can continue a
 // carried session at all is its harness's release, asked of the box
 // ([Runner.CheckCarry]). What each harness's archive holds, and never holds,
-// is the harness's own: see carry.go, [ClaudeCode] and [OpenCode].
+// is the harness's own: see carry.go and each harness's carry.
 //
 // A SESSION ITS HARNESS IS STILL WORKING IN is packed by the engine, beside
 // it, by the pack the run's own end makes held to a stricter rule — every file
