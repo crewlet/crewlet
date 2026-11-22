@@ -185,21 +185,39 @@ func TestThePollsCarryTheRunsTokenAndAskAgainAfterA503(t *testing.T) {
 	}
 }
 
-// A ROUTE THAT REFUSES THE HELPER ENDS IT: a 401 is a token that no longer
-// resolves, and asking again would ask forever.
-func TestARouteThatRefusesTheHelperEndsIt(t *testing.T) {
+// A NOTES ROUTE THAT REFUSES THE HELPER ENDS ONLY ITS POLLS: a 401 is a token
+// that no longer resolves, and asking again would ask forever, but the cap
+// goes on, since a helper that ended would leave the turn unbounded and its
+// run's guard would stop it.
+//
+// Mutation: end the helper on the notes route's refusal, or poll again after
+// it, and this goes red.
+func TestANotesRouteThatRefusesTheHelperEndsOnlyItsPolls(t *testing.T) {
 	t.Parallel()
 	bridge := newFakeBridge(t, testToken, 401)
 	app := newFakeAppServer(t, "turn-1", 0)
 	threadFile := filepath.Join(t.TempDir(), "thread.id")
 	writeThread(t, threadFile, "thread-A")
-	h := startHelper(t, bridge, app, threadFile)
-	if code := <-h.code; code != exitError {
-		t.Errorf("exit status %d on a 401, want %d", code, exitError)
+	h := startHelperWith(t, bridge, app, threadFile, "-notes-env", "NOTES_ROUTE", "-step-cap", "2")
+	h.stderr.await(func(s string) bool { return strings.Contains(s, "refused the helper") })
+	tokens(t, app, "thread-A", "turn-1", 100)
+	tokens(t, app, "thread-A", "turn-1", 200)
+	interrupted := make(chan struct{})
+	go func() {
+		app.interrupts.await(func(c []interruptCall) bool { return len(c) == 1 })
+		close(interrupted)
+	}()
+	select {
+	case code := <-h.code:
+		h.code <- code
+		t.Fatalf("the helper ended with %d on the notes route's 401, its cap unheld:\n%s", code, h.stderr.String())
+	case <-interrupted:
 	}
-	h.code <- exitError
-	if !strings.Contains(h.stderr.String(), "refused the helper") {
-		t.Errorf("stderr does not say the route refused it:\n%s", h.stderr.String())
+	if code := h.stop(); code != exitDone {
+		t.Errorf("exit status %d, want %d; stderr:\n%s", code, exitDone, h.stderr.String())
+	}
+	if p := bridge.polls.all(); len(p) != 1 {
+		t.Errorf("the route was polled %d times, want once: a refusal ends the polls", len(p))
 	}
 }
 
@@ -377,11 +395,15 @@ func TestTheStepCapInterruptsTheTurnAtItsNthResponse(t *testing.T) {
 	}
 }
 
-// -INTERRUPT-ONCE INTERRUPTS THE TURN IN FLIGHT AND EXITS 0, AND EXITS 0
-// WITH NO TURN TO INTERRUPT: none listed (no interrupt sent), or one listed
-// that ended before the interrupt reached it. With no thread file it cannot
-// tell, and so does an interrupt Codex failed: it exits 1.
-func TestInterruptOnceLeavesNoTurnRunning(t *testing.T) {
+// -INTERRUPT-ONCE EXITS 0 ONLY WHERE IT CUT A TURN SHORT: it interrupts the
+// turn in flight and exits 0; with no turn to interrupt, none listed (no
+// interrupt sent) or one listed that ended before the interrupt reached it,
+// it exits 3, so the run's guard stops the harness before a later turn runs
+// with no helper bounding it. With no thread file it cannot tell, and so does
+// an interrupt Codex failed: it exits 1.
+//
+// Mutation: exit 0 where no turn was in flight, and the "no turn" rows go red.
+func TestInterruptOnceExitsZeroOnlyWhereItCutATurnShort(t *testing.T) {
 	t.Parallel()
 	cases := map[string]struct {
 		turn, listed    string
@@ -390,8 +412,8 @@ func TestInterruptOnceLeavesNoTurnRunning(t *testing.T) {
 		interrupts      []string
 	}{
 		"a turn in flight":            {turn: "turn-5", code: exitDone, interrupts: []string{"turn-5"}},
-		"no turn":                     {code: exitDone},
-		"a turn that ended meanwhile": {listed: "turn-5", code: exitDone, interrupts: []string{"turn-5"}},
+		"no turn":                     {code: exitNothing},
+		"a turn that ended meanwhile": {listed: "turn-5", code: exitNothing, interrupts: []string{"turn-5"}},
 		"no thread file":              {turn: "turn-5", noThread: true, code: exitError},
 		"an interrupt that failed":    {turn: "turn-5", fails: true, code: exitError, interrupts: []string{"turn-5"}},
 	}
