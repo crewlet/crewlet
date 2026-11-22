@@ -218,11 +218,13 @@ func TestOpenCodeWritesNoAGENTSmdForARequestWithNoSystemPrompt(t *testing.T) {
 // is allowed, so the policy is an allowlist only while it opens by denying
 // every action and then allows exactly webfetch and websearch: an allow for
 // anything else reopens a tool, and a deny-list in place of the first rule
-// lets through every tool a release adds. Measured on 2.3.2, this seed
-// offers those two and `skill`, whose every call it refuses. The seed also turns off the built-in
-// `opencode.tools` plugin, which adds OpenCode's own session tools and a
-// system-prompt sentence telling the model to call one through `execute`, a
-// tool no call is offered.
+// lets through every tool a release adds. The seed also turns off the
+// built-in `opencode.tool.skill` plugin, whose `skill` tool 2.3.2 offers
+// whatever the policy says, and `opencode.tools`, which adds OpenCode's own
+// session tools and a system-prompt sentence telling the model to call one
+// through `execute`. Measured on 2.3.2, this seed offers those two alone.
+//
+// Mutation: drop either plugin from the seed, and this goes red.
 func TestOpenCodesSeedOffersTheWebToolsAndNothingElse(t *testing.T) {
 	t.Parallel()
 	p := openCode(t)
@@ -263,8 +265,27 @@ func TestOpenCodesSeedOffersTheWebToolsAndNothingElse(t *testing.T) {
 	if want := []string{"webfetch", "websearch"}; !slices.Equal(allowed, want) {
 		t.Errorf("the seed allows %q, want exactly %q", allowed, want)
 	}
-	if !slices.Contains(doc.Plugins, "-opencode.tools") {
-		t.Errorf("plugins = %q leaves the built-in opencode.tools plugin on", doc.Plugins)
+	denial := ""
+	if p.WebDenial != nil {
+		for _, seed := range p.WebDenial.SeedFiles {
+			if filepath.Base(seed.Path) == "opencode.json" {
+				denial = seed.Content
+			}
+		}
+	}
+	var denied struct {
+		Plugins []string `json:"plugins"`
+	}
+	if err := json.Unmarshal([]byte(denial), &denied); err != nil {
+		t.Fatalf("the web denial's opencode.json is not JSON: %v", err)
+	}
+	for _, off := range []string{"-opencode.tools", "-opencode.tool.skill"} {
+		if !slices.Contains(doc.Plugins, off) {
+			t.Errorf("plugins = %q leaves the built-in %s plugin on", doc.Plugins, off[1:])
+		}
+		if !slices.Contains(denied.Plugins, off) {
+			t.Errorf("the web denial's plugins = %q leave the built-in %s plugin on", denied.Plugins, off[1:])
+		}
 	}
 }
 
