@@ -261,8 +261,16 @@ func (r *Runner) archiveAt(ctx context.Context, box sandbox.Sandbox, path string
 // ([scrubTar]) reads what its first read; an agent rewriting it since is the
 // box's doing, which the restorer's checks meet.
 func (r *Runner) OpenCapture(ctx context.Context, box sandbox.Sandbox) (sandbox.SessionArchive, io.ReadCloser, error) {
+	return r.openCapture(ctx, box, "")
+}
+
+// openCapture is [Runner.OpenCapture] of a minting harness's job bound to
+// bound ([sandbox.SessionTake.Session]), which OpenCapture names none of.
+func (r *Runner) openCapture(ctx context.Context, box sandbox.Sandbox, bound string) (sandbox.SessionArchive,
+	io.ReadCloser, error) {
+
 	paths := PathsFor(box)
-	rec, refusal, err := r.readSessionRecord(ctx, box, paths)
+	rec, refusal, err := r.readSessionRecord(ctx, box, paths, bound)
 	if err != nil {
 		return sandbox.SessionArchive{}, nil, fmt.Errorf("executor: reading which session the run packed: %w", err)
 	}
