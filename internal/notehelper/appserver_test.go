@@ -203,6 +203,30 @@ func TestFoundTurnReadsCodexsRefusalOnly(t *testing.T) {
 	}
 }
 
+// READY HOLDS WHILE NO TURN IS IN FLIGHT, so the loop polls the route only
+// while a note can be steered: asked under a context already ended, ready
+// answers that context's error with no turn, and nil with one.
+func TestReadyHoldsWhileNoTurnIsInFlight(t *testing.T) {
+	t.Parallel()
+	app := newFakeAppServer(t, "", 0)
+	a := joined(t, app)
+	ended, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := a.ready(ended); !errors.Is(err, context.Canceled) {
+		t.Errorf("ready with no turn in flight = %v, want it held until its context ended", err)
+	}
+	app.startTurn(t, "thread-A", "turn-1")
+	awaitTurn(a, "turn-1")
+	if err := a.ready(ended); err != nil {
+		t.Errorf("ready with turn-1 in flight = %v, want nil", err)
+	}
+	app.completeTurn(t, "thread-A", "turn-1")
+	awaitTurn(a, "")
+	if err := a.ready(ended); !errors.Is(err, context.Canceled) {
+		t.Errorf("ready once turn-1 completed = %v, want it held again", err)
+	}
+}
+
 // THE HELPER'S CONNECTION ENDS WITH THE APP-SERVER'S: ready answers errGone,
 // so the loop exits rather than waiting on a turn that never comes.
 func TestReadyAnswersGoneOnceTheAppServerHangsUp(t *testing.T) {
