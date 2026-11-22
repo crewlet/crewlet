@@ -2,8 +2,8 @@
 
 - **Status:** accepted
 - **Authority:** `internal/coord`
-- **Enforced-by:** `internal/coord/kv.TestAPointerReadAcrossALeafsLinkCarriesNoBody`, `internal/coord/kv.TestABodyAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk`, `internal/coord/kv.TestABodysReadIsGivenTheArrivalOfItsRecordedSize`, `internal/coord/kv.TestAFlipLandsWithinHalfTheBodysRetentionOfItsWrite`, `internal/coord/kv.TestAFlipIsGivenTwiceTheBodysWriteAtItsBound`, `internal/coord/kv.TestABodysCrossingIsHeldToWhatAKeyHolds`, `internal/maintenance.TestTheBodySweepRunsUnderTheDutyAtItsOwnHorizon`, `internal/engine.TestAPostureAcrossASlowLinkIsReadNotAssumed`, `internal/engine.TestAReconcilerAcrossASlowLinkAppliesARevisionAtItsBound`
-- **Measured:** at the slowest link pace allowed (30 s a MiB), a leader read's reply is a third larger than the value, so no record above 47.1 KiB is read inside a probe's 1.875 s and above 127.1 KiB every read without a deadline fails at the five-second read term; a company at its bound made the activation pointer an 8 MiB reply, 240 s. The pointer at its 8 KiB bound is a 12,144-byte reply, 0.35 s; a typical one about 0.06 s.
+- **Enforced-by:** `internal/coord/kv.TestAPointerReadAcrossALeafsLinkCarriesNoBody`, `internal/coord/kv.TestABodyAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk`, `internal/coord/kv.TestABodysReadIsGivenTheArrivalOfItsRecordedSize`, `internal/coord/kv.TestAFlipLandsWithinHalfTheBodysRetentionOfItsWrite`, `internal/coord/kv.TestAFlipIsGivenTwiceTheBodysWriteAtItsBound`, `internal/coord/kv.TestABodysCrossingIsHeldToWhatAKeyHolds`, `internal/maintenance.TestTheBodySweepRunsUnderTheDutyAtItsOwnHorizon`, `internal/engine.TestAPostureAcrossASlowLinkIsReadNotAssumed`, `internal/engine.TestAReconcilerAcrossASlowLinkAppliesARevisionAtItsBound`, `internal/coord/kv.TestEveryReadIsGivenTheCrossingOfItsClassBound`, `internal/coord/kv.TestASmallClassCrossesTheFloorInsideTheReadTerm`, `internal/coord/kv.TestASettledWriteIsHeldToItsClassBound`, `internal/coord/kv.TestARunsListingAcrossALeafsLinkDeliversItsRecordsInItsPass`, `internal/coord/kv.TestAWatchAcrossASlowLinkDeliversARecordLongerThanTwoHeartbeatsToCross`, `internal/coord/kv.TestTheMarkerSweepAcrossALinkCarriesHeadersOnly`
+- **Measured:** at the slowest link pace allowed (30 s a MiB), a leader read's reply is a third larger than the value, so no record above 47.1 KiB is read inside a probe's 1.875 s and above 127.1 KiB every read without a deadline fails at the five-second read term; a company at its bound made the activation pointer an 8 MiB reply, 240 s. The pointer at its 8 KiB bound is a 12,144-byte reply, 0.35 s; a typical one about 0.06 s. A class read at the term is at most 16 KiB (`coord.SmallValueBytes`): a 23,064-byte reply, 0.66 s. A pass's quiet and a watch's heartbeat are 5 s plus the raw crossing of the largest value under the filter: 185.0 s for a run's value across a link, 5 s in process. The client's KV watch, at its fixed 5 s heartbeat, never delivered a record taking 20 s or 25 s to cross (3.9 copies carried in four times its crossing); the bucket's own watcher delivered each once, at 20.7 s and 25.7 s.
 - **Cost-when-tried:** the company document inside the activation pointer (#1149): every probe, heartbeat and tick on every node read it whole, so on a leaf a large company failed `/ready`, every reconcile tick and the boot, and above about 50 KB the pointer reads alone filled a floor link.
 - **Tag-status:** unreleased
 
@@ -21,6 +21,15 @@ the node's link at the slowest pace allowed.** Three clauses:
    boot, a hot listing) reads a small record, and the large bytes are a class
    of their own, named on it by size and digest. Only the reader that needs
    them pays their crossing, sized to the size recorded.
+
+Clauses 1 and 2 are declared where each bucket opens (`internal/coord/kv`'s
+holdings): a class names its keys, its bound and how its reads wait. A run's
+value is read with its reply's crossing and no handling, since a writer waits
+on it; a body with its arrival; the pointer and every record of a few KiB at
+the term. A pass and a watch over a filter wait the raw crossing of the
+largest class under it, and a watch is the bucket's own consumer, whose
+heartbeat is that wait: the client's resets a delivery longer than two of its
+five-second beats and never lands it.
 
 The activation pointer is the first case of clause 3. It is at most 8 KiB
 (`coord.MaxPointerBytes`), its summary at most 4 KiB as it encodes
@@ -54,6 +63,6 @@ bytes its own key.
 
 ## What this does not decide
 
-The other record classes and read shapes the rule binds (a listing's pass, a
-watch, the runs' standing at boot, presence rows) follow in the rest of #1814,
-each declaring its bound and the read it is given.
+The other record classes and read shapes the rule binds (the runs' standing at
+boot, presence rows) follow in the rest of #1814, each declaring its bound and
+the read it is given.

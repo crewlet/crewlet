@@ -110,11 +110,11 @@
 //
 // # A read is given the time its bytes take to cross
 //
-// A read across a leaf's link is given the time the bytes it may carry take to
-// cross at the slowest pace allowed. A reader that cannot wait that long (a
-// probe, a boot) reads a small record naming the large bytes by size and
-// digest; only the reader that needs them pays their crossing (ADR-0175). So
-// the activation pointer ([MaxPointerBytes]) names its body ([BodyRef]).
+// A read across a leaf's link is given the time its key class's bound
+// ([HoldValue]) takes to cross at the slowest pace allowed. A reader that
+// cannot wait that long (a probe, a boot) reads a small record naming large
+// bytes by size and digest; only the reader that needs them pays their
+// crossing (ADR-0175). So the activation pointer names its body ([BodyRef]).
 //
 // # A definite answer is a CURRENT one
 //
