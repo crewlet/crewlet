@@ -2740,6 +2740,34 @@
         "null"
       ]
     },
+    "GoogleOAuthClient": {
+      "additionalProperties": false,
+      "properties": {
+        "client_id": {
+          "description": "The OAuth client's ID: <project number>-<id>.apps.googleusercontent.com.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "client_secret": {
+          "description": "The OAuth client's secret, usually ${GOOGLE_OAUTH_CLIENT_SECRET}; shown back as __redacted__. Every consent product signing in as this client may name the same variable.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "GrowthCap": {
       "additionalProperties": false,
       "properties": {
