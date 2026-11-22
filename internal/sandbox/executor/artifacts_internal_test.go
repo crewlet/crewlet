@@ -96,3 +96,33 @@ func TestAReusedBoxKeepsNoKimiCopilotOrMuseArtifacts(t *testing.T) {
 		}
 	}
 }
+
+// A RUNNER NAMES EACH ARTIFACT ONCE, A FILE OR A DIRECTORY: the clear removes
+// its files one by one and its directories whole, so a directory listed among
+// its files too is cleared by the wrong rule beside the right one, and a test
+// of either list alone passes it. Every registered runner that names both
+// keeps them disjoint.
+//
+// Mutation: list one of any runner's directories among its files, and its
+// row goes red.
+func TestARunnersArtifactFilesAndDirectoriesAreDisjoint(t *testing.T) {
+	t.Parallel()
+	p := PathsFor(sandbox.NewFakeSandbox("box-1"))
+	both := 0
+	for _, h := range Registered() {
+		files, ok := h.(artifactHolder)
+		dirs, okDirs := h.(artifactDirHolder)
+		if !ok || !okDirs {
+			continue
+		}
+		both++
+		for _, dir := range dirs.artifactDirs(p) {
+			if slices.Contains(files.artifactFiles(p), dir) {
+				t.Errorf("%s names %s both a file and a directory", h.Name(), dir)
+			}
+		}
+	}
+	if both == 0 {
+		t.Fatal("no registered runner names both files and directories, so nothing was held")
+	}
+}
