@@ -72,7 +72,7 @@ jobs:
           persist-credentials: false
 
       # go.mod's own toolchain, as ci.yml's build job installs it.
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@v7.1.0
         with:
           go-version-file: go.mod
           cache: false

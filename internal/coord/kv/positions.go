@@ -73,13 +73,11 @@ func (f *FleetStore) Positions(ctx context.Context) ([]coord.NodePositions, erro
 //
 // IN THE POSITIONS BUCKET, the one with no age: a hold that expired on a timer
 // would release the pin while its owner was still reading, the hole it exists
-// to close. A crashed holder is bounded by the trim's own stale window.
+// to close. A crashed holder is bounded by the trim, which reads past a hold it
+// has watched go unrenewed past its own stale window.
 func (f *FleetStore) PutHold(ctx context.Context, h coord.TrimHold) error {
 	if err := h.Validate(); err != nil {
 		return err
-	}
-	if h.At.IsZero() {
-		h.At = time.Now().UTC()
 	}
 	body, err := json.Marshal(h)
 	if err != nil {
@@ -95,20 +93,49 @@ func (f *FleetStore) PutHold(ctx context.Context, h coord.TrimHold) error {
 //
 // A DECODE FAILURE IS RAISED: a dropped hold raises the trim floor, deleting
 // records its holder is in the middle of copying.
+//
+// EACH HOLD IS READ AGAIN FROM THE LEADER, after the walk names it: the pass
+// reads a random member, whose live Put the listing trusts, and the trim
+// watches each hold's newest write, so a member's older copy would read as a
+// pin left unrenewed. A handful of holds, one leader read each, once a tick.
 func (f *FleetStore) Holds(ctx context.Context) ([]coord.TrimHold, error) {
-	var out []coord.TrimHold
-	err := f.eachPositionKey(ctx, "hold", "the trim holds",
-		func(key string, value []byte, _ time.Time) error {
-			var hold coord.TrimHold
-			if err := json.Unmarshal(value, &hold); err != nil {
-				return fmt.Errorf("coord: the trim hold at %s does not "+
-					"decode: a hold skipped here raises the trim floor and "+
-					"deletes records its holder is copying: %w", key, err)
-			}
-			out = append(out, hold)
+	var keys []string
+	if err := f.eachPositionKey(ctx, "hold", "the trim holds",
+		func(key string, _ []byte, _ time.Time) error {
+			keys = append(keys, key)
 			return nil
-		})
-	return out, err
+		}); err != nil {
+		return nil, err
+	}
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	read, err := newLeaderReader(f.js, f.positions)
+	if err != nil {
+		return nil, unavailable("read the trim holds", err)
+	}
+	out := make([]coord.TrimHold, 0, len(keys))
+	for _, key := range keys {
+		kve, readErr := read.live(ctx, key)
+		switch {
+		case errors.Is(readErr, jetstream.ErrKeyNotFound):
+			// RELEASED SINCE THE WALK: what replaces it landed first, and
+			// the trim duty reads it after the holds.
+			continue
+		case readErr != nil:
+			return nil, unavailable("read the trim holds",
+				fmt.Errorf("read %q from the leader: %w", key, readErr))
+		}
+		var hold coord.TrimHold
+		if decodeErr := json.Unmarshal(kve.Value(), &hold); decodeErr != nil {
+			return nil, fmt.Errorf("coord: the trim hold at %s does not "+
+				"decode: a hold skipped here raises the trim floor and "+
+				"deletes records its holder is copying: %w", key, decodeErr)
+		}
+		hold.Revision = kve.Revision()
+		out = append(out, hold)
+	}
+	return out, nil
 }
 
 // ReleaseHold removes one.
