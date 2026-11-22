@@ -1078,10 +1078,10 @@ const (
 	// at 3 MiB over a 2.3 MB baseline and is set so a bundle that doubled the
 	// baseline is still refused; screens fetched only when opened (the rich
 	// editor, the brand and folder screens, the assistant's panel, Gitlet) and
-	// kit releases account for its growth, and the last measure was 7229.6 KiB,
-	// after Google Analytics' connect form, identity step and catalogue entry.
+	// kit releases account for its growth, and the last measure was 7231.5 KiB,
+	// after Google Ads' catalogue entry, access words and atlas capability.
 	// A raise names the measured size and its cause in its commit.
-	treeBudget = 5<<20 + 2110<<10
+	treeBudget = 5<<20 + 2112<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
