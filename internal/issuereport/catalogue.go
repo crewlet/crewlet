@@ -365,7 +365,7 @@ func CatalogueJSON() ([]byte, error) {
 	err := enc.Encode(catalogueExport{Schema: SchemaVersion, Enums: map[string][]string{
 		"engine.os":             enumStrings(knownOS),
 		"engine.arch":           enumStrings(knownArch),
-		"harness.name":          enumStrings(knownHarnesses),
+		"harness.name":          enumStrings(knownHarnesses()),
 		"topology.nodes":        enumStrings(knownNodeBuckets),
 		"topology.stream":       enumStrings(knownStreams),
 		"topology.coordination": enumStrings(knownCoordination),

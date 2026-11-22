@@ -27,6 +27,7 @@
 import type { Coverage } from "./coverage.ts";
 import type { ToolAnnotations, ToolRow } from "./tools.ts";
 import type { DelegatedAct, HeldDelegation } from "./delegated.ts";
+import type { GrowthCard } from "./growth.ts";
 
 /**
  * A server's condition across the fleet, decided by the engine. `disabled`:
@@ -1335,6 +1336,8 @@ export interface McpHeldCall {
   digest: string;
   /** When the call was held; "" where the row does not say. */
   held_at: string;
+  /** When a growth act lapses unanswered (a day after `held_at`); "" for a call that waits until answered. */
+  lapses_at?: string;
   /**
    * A call its tool asks about every time (an SSH operate command, a merge, a
    * deploy): answered Allow once or Deny alone.
@@ -1342,12 +1345,14 @@ export interface McpHeldCall {
   fixed?: boolean;
   /**
    * Who answers it where not the seat's lead: `ssh` for an SSH operate
-   * command's approvers, `release` for a merge's or a deploy's.
+   * command's approvers, `release` for a merge's or a deploy's, `admin` for a
+   * growth act, which an administrator alone answers at a fresh step-up.
    */
   approvers?: string;
   /**
-   * What approving it does (ADR-0125): `ssh_operate`, `pr_merge`, `deploy`, or
-   * `other`, which is never delegated.
+   * What approving it does (ADR-0125): `ssh_operate`, `pr_merge`, `deploy`,
+   * a growth act (`ad_spend`, `public_post`, `account_admin`, ADR-0171), or
+   * `other`. The last four are never delegated.
    */
   act: DelegatedAct;
   /**
@@ -1368,10 +1373,12 @@ export interface McpHeldWhole {
   launch_id: string;
   question: string;
   context: string;
-  /** Every argument the call would send, opened from its seal. */
+  /** Every argument the call would send, opened from its seal; redacted once it is answered. */
   arguments: Record<string, unknown>;
-  /** What Allow once of a call read whole names, so it is given only from a surface that showed all of it. */
+  /** What Allow once of a call read whole names, so it is given only from a surface that showed all of it; "" once answered. */
   arguments_sha256: string;
+  /** A held growth act's decision card (`growth.Card`), read live from its product; null for any other call. */
+  card: GrowthCard | null;
 }
 
 /**

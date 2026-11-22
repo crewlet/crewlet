@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/googlecloud"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/integration/integrationtest"
@@ -123,9 +124,9 @@ func TestStrangersInTheIdentityProjectAreReported(t *testing.T) {
 	writes := len(w.sync.f.wrote())
 	w.sync.f.edit(func(f *fakeGoogle) {
 		f.accounts["401"] = &fakeAccount{Email: "deploy@" + identity + ".iam.gserviceaccount.com", UniqueID: "401"}
-		f.accounts["402"] = &fakeAccount{Email: googlecloud.AccountEmail(googlecloud.AccountID(testCompany, "ops"), identity),
+		f.accounts["402"] = &fakeAccount{Email: googleauth.AccountEmail(googlecloud.AccountID(testCompany, "ops"), identity),
 			UniqueID: "402", DisplayName: googlecloud.DisplayName(testCompany, "ops")}
-		f.accounts["403"] = &fakeAccount{Email: googlecloud.AccountEmail(googlecloud.AccountID("Other", "sre"), identity),
+		f.accounts["403"] = &fakeAccount{Email: googleauth.AccountEmail(googlecloud.AccountID("Other", "sre"), identity),
 			UniqueID: "403", DisplayName: googlecloud.DisplayName("Other", "sre")}
 	})
 	res, err := w.company(t.Context())

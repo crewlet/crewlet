@@ -169,6 +169,13 @@ func TestLagIsConfirmedOnlyByAFailureOrByOutlastingTheGrace(t *testing.T) {
 		{"an attempt still running", FleetView{TargetEpoch: 8, AppliedEpoch: 7, BehindFor: ReconcileInterval}, false},
 		{"an instant inside the grace", FleetView{TargetEpoch: 8, AppliedEpoch: 7, BehindFor: LagGrace - time.Nanosecond}, false},
 		{"the grace outlasted", FleetView{TargetEpoch: 8, AppliedEpoch: 7, BehindFor: LagGrace}, true},
+		// THE BODY'S CROSSING EXTENDS THE GRACE: a node still reading a large
+		// body across a link is propagating, not lagging. Mutation: drop
+		// BodyCrossing from LagConfirmed and the first row confirms.
+		{"inside the grace and the body's crossing", FleetView{TargetEpoch: 8, AppliedEpoch: 7,
+			BehindFor: LagGrace + 4*time.Minute - time.Nanosecond, BodyCrossing: 4 * time.Minute}, false},
+		{"past the grace and the body's crossing", FleetView{TargetEpoch: 8, AppliedEpoch: 7,
+			BehindFor: LagGrace + 4*time.Minute, BodyCrossing: 4 * time.Minute}, true},
 		{"an attempt that failed", FleetView{TargetEpoch: 8, AppliedEpoch: 7, SelfStatus: StatusError, Attempts: 1}, true},
 		{"an attempt that degraded", FleetView{TargetEpoch: 8, AppliedEpoch: 7, SelfStatus: StatusDegraded, Attempts: 1}, true},
 	} {

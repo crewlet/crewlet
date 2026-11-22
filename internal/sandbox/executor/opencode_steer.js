@@ -1,7 +1,7 @@
 // crewlet.steer — the plugin an OpenCode run's server loads to admit a person's
 // notes to the run's turn into the run's own session, at its next step.
 //
-// The engine embeds this file (steer.go) and writes it into the run's work
+// The engine embeds this file (opencodesteer.go) and writes it into the run's work
 // directory as index.js, a directory of its own that the run's configuration
 // names with the run's notes route as its one option — a {file:} reference,
 // so the configuration holds a path and never the route's token
@@ -14,11 +14,33 @@
 // (`delivery: "steer"`): OpenCode promotes every steer waiting at its next step
 // boundary — after the tool results of the step in flight, or at the boundary
 // after a final step that made no tool call — as a user message the next model
-// request carries, and reports it delivered (`session.inbox.delivered`). Only
-// then is it confirmed read to the engine, which records it read by the run's
-// job; a note admitted and never delivered is never confirmed, and waits for
-// the run's review. Measured on OpenCode 2.0.32 and 2.1.4.
+// request carries, and reports it delivered (`session.inbox.delivered`).
 //
+// CONFIRMED ONLY ONCE THE MODEL IS SENT IT PLAIN. Delivery is not reading: a
+// step boundary that tips the session past its compaction point promotes the
+// note and then compacts, and the model gets it only inside the checkpoint,
+// framed as history (ADR-0177's confirm). So the plugin confirms a note to the
+// engine — which records it read by the run's job — only from the session's
+// "context" hook, which OpenCode runs on every model request before sending
+// it, and only where a user message of that request IS the note: the message
+// OpenCode made of the plugin's own admission, named by the id the note was
+// admitted under (2.3.0 hands the hook each message's id), holding one text
+// part equal to the note's text. So one message confirms one note, a note of
+// the same words, an earlier run's or a checkpoint quoting it never does, and a
+// message of any other shape confirms nothing. Between a compaction's start
+// and end no request confirms anything. The hook does no I/O: OpenCode holds
+// the request until it returns. A note delivered and never seen plain
+// when the session's compaction ends was folded: the plugin asks the route's
+// `again` for a second id to admit it under, ONCE, which the engine grants
+// only within the note's serves and only for a person's note or a late call
+// (a wake is served once and never re-admitted), counting it as a serve then,
+// so a note that never folds spends nothing. A note the engine answers spent,
+// or one folded again, is given up: never confirmed, its id posted to the
+// route's `folded` so the engine says why it waits for the review. A failed
+// compaction confirms and posts nothing. Measured on 2.3.0: the hook precedes
+// the delivered event, which precedes the compaction's start; a re-admitted
+// note lands plain one step later.
+
 // ONLY WHILE THE SESSION'S EXECUTION RUNS. Notes are polled and admitted
 // between the run's session's `session.execution.started` (or any step of it
 // starting) and its `succeeded`, `failed` or `interrupted`, and each with
@@ -47,7 +69,8 @@
 // second after it began, so no answer can drive the plugin into a loop of
 // requests. A refusal of the route — its token no longer resolves (401), or the
 // run has no notes route (404) — ends the plugin for the rest of the run: its
-// notes wait for its review. The cleanup setup returns ends everything at once.
+// notes wait for its review. The cleanup setup returns stops polling at once,
+// and lets the confirmations in flight finish first (endWaitMs).
 //
 // IT WRITES NOTHING, anywhere: OpenCode reloads a configured plugin whose
 // directory changes, and the notes themselves never touch the box's disk.
@@ -59,8 +82,18 @@
 // favour (`timeout: false`).
 const pollAbortMs = 20_000
 
-// readAbortMs bounds one confirmation: a single write on the run's record.
+// readAbortMs bounds one confirmation, ask for second ids, or post of folded
+// notes: a single write on the run's record.
 const readAbortMs = 10_000
+
+// endWaitMs bounds how long the cleanup waits for the confirmations, asks and
+// folds in flight before it ends them. OpenCode awaits a plugin's cleanup when its
+// server is stopped, and exited within 0.2 s of one ending (measured on
+// 2.3.0); the run's script kills the server five seconds after asking
+// it to stop (internal/sandbox's JobStopGrace), so four leaves it that second.
+// A post the end cuts costs a duplicate, never a lost note: the note waits on
+// the record, served, for the review.
+const endWaitMs = 4_000
 
 // The pause after a failed request: a second, doubling to thirty, reset by the
 // next request that succeeds — so a bridge that is down delays a note by at
@@ -92,21 +125,36 @@ export default {
 }
 
 // arm starts the plugin's work for one session and returns its cleanup.
-function arm(ctx, url, session) {
+async function arm(ctx, url, session) {
   // life is the plugin's whole run: the cleanup, or a refusal, ends it.
   const life = new AbortController()
   // gate is open — a controller of its own — while the session's execution runs.
   let gate = null
+  // stopping is set by the cleanup: nothing is polled or admitted any more.
+  let stopping = false
+  // compacting is set from the session's compaction's start to its end.
+  let compacting = false
   // cursor is the place of the last note admitted, which a poll asks past.
   let cursor = 0
-  // admitted maps the inbox id each note was handed to the session under to
-  // the note's own id; owed holds the notes delivered and not yet confirmed.
+  // held is every note admitted and not yet settled, by its id: {id, text,
+  // inbox, again, delivered, readmitted, plain}. admitted maps each inbox id a
+  // note was handed to the session under — its first and its `again` — to its
+  // id. owed holds the notes seen plain and not yet confirmed, asking the notes
+  // folded whose second id is not answered yet, folded the notes given up and
+  // not yet posted.
+  const held = new Map()
   const admitted = new Map()
   const owed = new Set()
-  let confirming = false
+  const asking = new Set()
+  const folded = new Set()
+  // confirming, askingAgain and folding are the loops in flight, null when
+  // idle.
+  let confirming = null
+  let askingAgain = null
+  let folding = null
 
   const open = () => {
-    if (gate !== null || life.signal.aborted) return
+    if (gate !== null || life.signal.aborted || stopping) return
     gate = new AbortController()
     quietly(poll(gate.signal))
   }
@@ -114,6 +162,90 @@ function arm(ctx, url, session) {
     if (gate === null) return
     gate.abort()
     gate = null
+  }
+
+  // see is the session's "context" hook: the request about to go to the model.
+  // No I/O and no await, since OpenCode holds the request on it. Fails closed
+  // while the session compacts: its summary runs no context hook on 2.3.0
+  // (measured), and a request then is none a note may be confirmed off.
+  const see = (input) => {
+    if (compacting || input?.sessionID !== session || !Array.isArray(input.messages)) return
+    for (const message of input.messages) {
+      const note = typeof message?.id === "string" ? held.get(admitted.get(message.id)) : undefined
+      if (note === undefined || note.plain || plainText(message) !== note.text) continue
+      note.plain = true
+      note.text = null
+      owed.add(note.id)
+    }
+    if (owed.size > 0) confirm()
+  }
+
+  // compacted settles the notes a compaction of the session folded: each
+  // delivered and never seen plain is asked a second id for, once, or, folded
+  // again, given up.
+  const compacted = () => {
+    for (const note of [...held.values()]) {
+      if (!note.delivered || note.plain) continue
+      note.delivered = false
+      if (note.readmitted) {
+        giveUp(note)
+        continue
+      }
+      if (gate !== null && !stopping) asking.add(note.id)
+    }
+    // ONE ASK FOR EVERY NOTE THE COMPACTION FOLDED.
+    if (asking.size > 0) askAgain()
+  }
+
+  // giveUp drops a note folded with no admission left: never confirmed, and
+  // posted so the engine says why it waits for the review.
+  const giveUp = (note) => {
+    held.delete(note.id)
+    folded.add(note.id)
+    fold()
+  }
+
+  // answered takes the route's answer to an ask for second ids: each note
+  // granted one is admitted again under it, each spent is given up, and any
+  // other (a wake, served once) is dropped, waiting for its own fallback.
+  const answered = (text, named) => {
+    let answer
+    try {
+      answer = JSON.parse(text)
+    } catch {
+      return false
+    }
+    const granted = answer?.again
+    const spent = answer?.spent
+    if (granted === null || typeof granted !== "object" || !Array.isArray(spent)) return false
+    for (const id of named) {
+      asking.delete(id)
+      const note = held.get(id)
+      if (note === undefined) continue
+      const again = granted[id]
+      if (typeof again === "string" && again.startsWith("msg_") && again !== note.inbox) {
+        note.again = again
+        note.readmitted = true
+        admitted.set(again, note.id)
+        if (gate !== null && !stopping) quietly(readmit(note))
+      } else if (spent.includes(id)) giveUp(note)
+      else held.delete(id)
+    }
+    return true
+  }
+
+  const readmit = async (note) => {
+    try {
+      await ctx.session.prompt({
+        sessionID: session,
+        id: note.again,
+        text: note.text,
+        delivery: "steer",
+        resume: false,
+      })
+    } catch {
+      // NOT ADMITTED AGAIN: the note waits on the record for its review.
+    }
   }
 
   // on reads one event of the server's: only the run's own session's.
@@ -131,13 +263,20 @@ function arm(ctx, url, session) {
         close()
         return
       case "session.inbox.delivered": {
-        const note = admitted.get(data.inboxID)
-        if (note === undefined) return
-        admitted.delete(data.inboxID)
-        owed.add(note)
-        quietly(confirm())
+        const note = held.get(admitted.get(data.inboxID))
+        if (note !== undefined && !note.plain) note.delivered = true
         return
       }
+      case "session.compaction.started":
+        compacting = true
+        return
+      case "session.compaction.ended":
+        compacting = false
+        compacted()
+        return
+      case "session.compaction.failed":
+        compacting = false
+        return
     }
   }
 
@@ -205,9 +344,16 @@ function arm(ctx, url, session) {
       // A gate closed meanwhile admits nothing more: what is left is asked
       // for again by the next execution's poll, or read by the review.
       if (gated.aborted || life.signal.aborted) return true
-      // KNOWN BEFORE IT IS ADMITTED, because OpenCode can deliver a note
-      // before the call that admitted it has returned.
-      admitted.set(note.inbox, note.id)
+      // KNOWN WHILE IT IS ADMITTED, because OpenCode can deliver a note
+      // before the call that admitted it has returned; LET GO IF IT FAILS, so
+      // a note held is one admitted. Only the message of its own admitted id
+      // confirms it, which a failed admission never has.
+      const fresh = !held.has(note.id)
+      if (fresh) {
+        held.set(note.id, { id: note.id, text: note.message, inbox: note.inbox, again: undefined,
+          delivered: false, readmitted: false, plain: false })
+        admitted.set(note.inbox, note.id)
+      }
       try {
         await ctx.session.prompt({
           sessionID: session,
@@ -217,6 +363,10 @@ function arm(ctx, url, session) {
           resume: false,
         })
       } catch {
+        if (fresh) {
+          held.delete(note.id)
+          admitted.delete(note.inbox)
+        }
         return false
       }
       cursor = note.seq
@@ -224,42 +374,99 @@ function arm(ctx, url, session) {
     return true
   }
 
-  // confirm records every note delivered and not yet confirmed as read, until
-  // none is owed. One at a time; a failed confirmation is made again after a
-  // pause, and a note never confirmed waits for the run's review. Every note
-  // owed is one this job's poll returned: at most a turn's ten notes and the
-  // job's own items, ten late calls and four wakes, which is what one read may
-  // name (internal/api/mcpbridge's steerReadIDs).
-  const confirm = async () => {
-    if (confirming) return
-    confirming = true
-    try {
+  // post sends every id in ids to the route's verb, one request at a time,
+  // until none is left; a failed request is made again after a pause. Every
+  // id posted is one this job's poll returned: at most a turn's ten notes and
+  // the job's own items, ten late calls and four wakes, which is what one
+  // request may name (internal/api/mcpbridge's steerReadIDs).
+  const post = async (verb, ids) => {
+    let wait = 0
+    while (ids.size > 0 && !life.signal.aborted) {
+      const named = [...ids]
+      const answer = await call(life.signal, "POST", url + "/" + verb, JSON.stringify({ ids: named }), readAbortMs)
+      if (answer.refused) {
+        life.abort()
+        return
+      }
+      if (answer.ok) {
+        for (const id of named) ids.delete(id)
+        wait = 0
+        continue
+      }
+      wait = next(wait)
+      await sleep(wait, life.signal)
+    }
+  }
+
+  // confirm records every note seen plain and not yet confirmed as read; fold
+  // posts every note given up. Each runs one loop at a time, and the cleanup
+  // waits for both.
+  const confirm = () => {
+    confirming ??= post("read", owed).finally(() => {
+      confirming = null
+      if (owed.size > 0 && !life.signal.aborted) confirm()
+    })
+  }
+  const fold = () => {
+    folding ??= post("folded", folded).finally(() => {
+      folding = null
+      if (folded.size > 0 && !life.signal.aborted) fold()
+    })
+  }
+  // askAgain asks the route for a second id for every note asking holds, one
+  // request at a time, a failed one made again after a pause.
+  const askAgain = () => {
+    askingAgain ??= (async () => {
       let wait = 0
-      while (owed.size > 0 && !life.signal.aborted) {
-        const ids = [...owed]
-        const answer = await call(life.signal, "POST", url + "/read", JSON.stringify({ ids }), readAbortMs)
+      while (asking.size > 0 && !life.signal.aborted) {
+        const named = [...asking]
+        const answer = await call(life.signal, "POST", url + "/again", JSON.stringify({ ids: named }), readAbortMs)
         if (answer.refused) {
           life.abort()
           return
         }
-        if (answer.ok) {
-          for (const id of ids) owed.delete(id)
+        if (answer.ok && answered(answer.text, named)) {
           wait = 0
           continue
         }
         wait = next(wait)
         await sleep(wait, life.signal)
       }
-    } finally {
-      confirming = false
+    })().finally(() => {
+      askingAgain = null
+      if (asking.size > 0 && !life.signal.aborted) askAgain()
+    })
+  }
+  const settled = async () => {
+    while (confirming !== null || askingAgain !== null || folding !== null) {
+      await Promise.allSettled([confirming, askingAgain, folding])
     }
   }
 
+  // THE HOOK BEFORE ANY REQUEST: OpenCode holds every prompt until setup has
+  // resolved. A release without the hook confirms nothing: its notes wait for
+  // the review, the safe side.
+  try {
+    await ctx.session.hook("context", see)
+  } catch {
+    // Said above: nothing is confirmed.
+  }
   quietly(listen())
   return async () => {
-    life.abort()
+    stopping = true
     close()
+    await Promise.race([settled(), sleep(endWaitMs, life.signal)])
+    life.abort()
   }
+}
+
+// plainText is a model request's user message's text where the message IS one
+// text part, else null: the form OpenCode hands the "context" hook on every
+// release measured. Any other form — a string, extra parts — matches no note.
+function plainText(message) {
+  if (message?.role !== "user" || !Array.isArray(message.content) || message.content.length !== 1) return null
+  const part = message.content[0]
+  return part?.type === "text" && typeof part.text === "string" ? part.text : null
 }
 
 // wellFormed says whether a poll's note is one the plugin can admit.

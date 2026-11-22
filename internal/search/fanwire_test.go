@@ -3,6 +3,7 @@ package search_test
 import (
 	"context"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,7 +27,7 @@ func TestASlicedSearchTravelsAndComesBackRanked(t *testing.T) {
 	// The peer answers for its own row and nothing else.
 	stop, err := search.ServeSlices(t.Context(), peer, "n2", cannedScan{
 		lexical: []search.Scored{{Key: "page:remote", Score: 0.7}},
-	})
+	}, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("serve slices: %v", err)
 	}
@@ -72,7 +73,7 @@ func TestANodeOutsideTheTableDoesNotVolunteer(t *testing.T) {
 	// otherwise collect a legitimate answerer and never see the volunteer.
 	// A silent node leaves the scatter to time out with nothing.
 	stop, err := search.ServeSlices(t.Context(), startClient(t, broker), "n99",
-		cannedScan{lexical: []search.Scored{{Key: "page:n99", Score: 0.5}}})
+		cannedScan{lexical: []search.Scored{{Key: "page:n99", Score: 0.5}}}, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("serve slices: %v", err)
 	}
@@ -144,6 +145,48 @@ func TestAPeerThatCannotReadTheRequestIsSimplyAbsent(t *testing.T) {
 }
 
 // cannedScan answers with a fixed slice, so the wire is what is under test.
+// A SLICE HOLDS ITS WEIGHT BEFORE IT SCANS: with the node's answer budget held
+// by others past what a coordinator waits, the slice scans nothing and answers
+// nothing, which the coordinator counts as its range missing.
+//
+// Mutations, each red: scan before holding; scan on after the hold is refused.
+func TestASliceHoldsItsWeightBeforeItScans(t *testing.T) {
+	t.Parallel()
+	broker := memory.NewBroker()
+	answers := queue.NewAnswerBudget(nil)
+	release, err := answers.Acquire(t.Context(), queue.AnswerHistory, queue.AnswerBudgetBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	scan := &countedScan{}
+	stop, err := search.ServeSlices(t.Context(), startClient(t, broker), "n2", scan, answers)
+	if err != nil {
+		t.Fatalf("serve slices: %v", err)
+	}
+	t.Cleanup(func() { _ = stop(context.WithoutCancel(t.Context())) })
+	table := []search.Assigned{{Node: "n2", Shards: search.Assignment{From: 0, To: 64}}}
+	deadline, cancel := context.WithTimeout(t.Context(), 2*search.SliceAnswerWait)
+	defer cancel()
+	got, err := search.Broker{Queue: startClient(t, broker)}.Scatter(deadline,
+		search.FanQuery{Text: "anything", Methods: []search.Method{search.MethodLexical}}, table)
+	if err != nil {
+		t.Fatalf("scatter: %v", err)
+	}
+	if len(got) != 0 || scan.calls.Load() != 0 {
+		t.Errorf("behind a held budget the slice answered %d times and scanned %d, want neither",
+			len(got), scan.calls.Load())
+	}
+}
+
+// countedScan answers nothing and counts its scans.
+type countedScan struct{ calls atomic.Int32 }
+
+func (c *countedScan) Scan(context.Context, search.FanQuery, search.Assignment) (search.Slice, error) {
+	c.calls.Add(1)
+	return search.Slice{}, nil
+}
+
 type cannedScan struct{ lexical []search.Scored }
 
 func (c cannedScan) Scan(context.Context, search.FanQuery, search.Assignment) (search.Slice, error) {

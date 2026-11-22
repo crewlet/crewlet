@@ -1214,7 +1214,7 @@ type SessionContinuation struct {
 	// the session's first request is the launch's to judge in its box (an
 	// OpenCode session whose count has a bound): handed where the box's point
 	// does not prove the brief the launch would hand sends the session whole
-	// ([OpenCodePoint.SendsWhole]). Nil where the runner judged the first
+	// ([BoxPoint.SendsWhole]). Nil where the runner judged the first
 	// request itself. Count and CountProvider are what that is judged by: the
 	// count the runner judged the kept path by, and the provider of the reply it
 	// is anchored on.
@@ -1776,7 +1776,7 @@ const exactMayCompact = "its harness may compact the session in this box before 
 	"reading"
 
 // boxJudge is how a launch judges, in its box, whether an OpenCode session it
-// continues reaches its first request whole ([OpenCodePoint.SendsWhole]): the
+// continues reaches its first request whole ([BoxPoint.SendsWhole]): the
 // path (`kept` or `in_place`), the count and the anchoring reply's provider,
 // the ask, and the point, read at most once.
 type boxJudge struct {
@@ -1785,7 +1785,7 @@ type boxJudge struct {
 	provider string
 	ask      PointAsk
 	read     bool
-	point    OpenCodePoint
+	point    BoxPoint
 }
 
 // sendsWhole reports whether the session j judges reaches its first request
@@ -1803,16 +1803,16 @@ func (c *Coordinator) sendsWhole(ctx context.Context, req LaunchRequest, box San
 	return j.point.SendsWhole(j.count, j.provider, provider, brief)
 }
 
-// readPoint is box's OpenCode point as runner reads it ([PointReader]), no
+// readPoint is box's point as runner reads it ([PointReader]), no
 // point where it reads none or the box could not be asked.
-func readPoint(ctx context.Context, box Sandbox, runner Runner, ask PointAsk) OpenCodePoint {
+func readPoint(ctx context.Context, box Sandbox, runner Runner, ask PointAsk) BoxPoint {
 	reader, ok := runner.(PointReader)
 	if !ok {
-		return OpenCodePoint{Mark: PointUnread, Why: "the box's runner reads no OpenCode point"}
+		return BoxPoint{Mark: PointUnread, Why: "the box's runner reads no box point"}
 	}
-	point, err := reader.ReadOpenCodePoint(ctx, box, ask)
+	point, err := reader.ReadBoxPoint(ctx, box, ask)
 	if err != nil {
-		return OpenCodePoint{Mark: PointUnread,
+		return BoxPoint{Mark: PointUnread,
 			Why: redact.Secrets("the box could not be asked for its OpenCode point: " + err.Error())}
 	}
 	return point
@@ -1831,7 +1831,7 @@ func (c *Coordinator) mayCompact(ctx context.Context, req LaunchRequest, j *boxJ
 		"agent", req.Turn.AgentHandle, "path", j.path, "bound", bound, "mark", string(mark),
 		"provider", j.provider, "model", req.Model, "release", j.point.Release, "point", j.point.Tokens,
 		"never", j.point.Never, "point_mark", string(j.point.Mark), "detail", j.point.Why,
-		"box_tokens", OpenCodeCharge(j.point.BoxBytes), "brief_tokens", OpenCodeCharge(int64(len(brief))),
+		"box_tokens", j.point.Charge.Tokens(j.point.BoxBytes), "brief_tokens", j.point.Charge.Tokens(int64(len(brief))),
 		"outcome", mayCompactOutcome)
 }
 

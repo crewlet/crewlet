@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -132,6 +133,12 @@ type Spec struct {
 	// what the box is made with and every setup step runs with, the run's
 	// telemetry added at the job's start.
 	Env map[string]string
+
+	// SignInEnv is the names in Env that sign the run's harness in: its
+	// profile's token, key and sign-in variables, and the entry's credentials
+	// ([RunRequest.SignInEnv]). The harness reads them; the commands its model
+	// runs are started without them.
+	SignInEnv []string
 
 	// CredentialFiles is a subscription-harness login: a path relative to the
 	// box home mapped to an absolute path on the ENGINE HOST.
@@ -778,6 +785,15 @@ type Sandbox interface {
 	// every read: opening one could block.
 	ReadFile(ctx context.Context, path string) ([]byte, error)
 
+	// OpenWhole opens a file [Sandbox.ReadFile] would read whole, for a
+	// reader that weighs it before reading (a collection holding the node's
+	// answer budget): at most the bytes it held when opened, with that size,
+	// read from the one open, so a file renamed over it after cannot swap in.
+	// Past the whole-read cap it is refused as ReadFile refuses it, its
+	// [*FileTooLargeError] naming the size, and nothing stays open; missing is
+	// nothing and 0. The caller closes it.
+	OpenWhole(ctx context.Context, path string) (io.ReadCloser, int64, error)
+
 	// OpenFile streams a file front to back, for a MACHINE STREAM decoded
 	// once in bounded memory: a harness's event log, read at
 	// collection a line at a time. Nothing is refused for its size, since
@@ -1033,8 +1049,10 @@ type Runner interface {
 	// running ([JobState]).
 	Poll(ctx context.Context, box Sandbox, handle RunHandle) (JobState, error)
 
-	// Collect reads the finished job's result out of the box.
-	Collect(ctx context.Context, box Sandbox, handle RunHandle) (Result, error)
+	// Collect reads the finished job's result out of the box, holding its
+	// weight of answers, the node's answer budget, while it reads (in a
+	// peer's box read, until the reply is written: [queue.Replying]).
+	Collect(ctx context.Context, box Sandbox, handle RunHandle, answers *queue.AnswerBudget) (Result, error)
 
 	// Follow begins a LIVE READING of what a job says about itself, for a
 	// person watching the run ([LiveReading]): advanced a read at a time,
@@ -1111,7 +1129,14 @@ type RunRequest struct {
 	// where Resume is: a run that starts a session is handed Brief.
 	FreshBrief string
 
-	Env    map[string]string
+	Env map[string]string
+
+	// SignInEnv is the names in Env its harness signs in by ([Spec.SignInEnv]).
+	// The runner hands them to the harness and keeps them, with its own wiring's
+	// variables, out of the environment of the commands the model runs, through
+	// the harness's own mechanism for that environment.
+	SignInEnv []string
+
 	Limits Limits
 
 	// Model is the model the run works under, written in the grammar of the
@@ -1128,6 +1153,12 @@ type RunRequest struct {
 	// Effort is the entry's reasoning effort, in its harness's own levels, which
 	// the runner passes its harness its own way. Empty: the harness's default.
 	Effort string
+
+	// WebDenied is the entry's `web_tools: denied`: the runner hands its
+	// harness none of the harness's own web tools, as the entry's runs on the
+	// engine host have none. The run's shell, and any code it runs, reach
+	// only what the box cell's egress policy allows.
+	WebDenied bool
 
 	// MCPServers are the MCP servers the engine hands the run, keyed by
 	// server name: its tool bridge, and the seat's servers that run in its
@@ -1342,7 +1373,8 @@ func (w SteerWiring) Set() bool { return w.Server != "" && w.Tool != "" && w.URL
 // A helper rather than an interface method, so a Runner implements three
 // primitives instead of four and the two shapes cannot drift apart — the
 // blocking one IS the detached one with a wait in the middle.
-func Run(ctx context.Context, r Runner, box Sandbox, req RunRequest, wait WaitFunc) (Result, error) {
+func Run(ctx context.Context, r Runner, box Sandbox, req RunRequest, wait WaitFunc,
+	answers *queue.AnswerBudget) (Result, error) {
 	handle, err := r.Start(ctx, box, req)
 	if err != nil {
 		return Result{}, err
@@ -1353,7 +1385,7 @@ func Run(ctx context.Context, r Runner, box Sandbox, req RunRequest, wait WaitFu
 	}); err != nil {
 		return Result{}, err
 	}
-	return r.Collect(ctx, box, handle)
+	return r.Collect(ctx, box, handle, answers)
 }
 
 // WaitFunc blocks until a predicate holds or the context ends. Injected so the

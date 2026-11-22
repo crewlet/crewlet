@@ -175,6 +175,8 @@ func everySeam(t *testing.T) queries.Sources {
 		Delegated: emptyVerdicts{},
 		// AND WHAT A RULE CAN NAME FROM THE COMPANY'S GITHUB.
 		DelegatedGitHub: ruleGitHub{},
+		// WHAT AGENTS CHANGED ON THE GROWTH ACCOUNTS, off the same empty log.
+		Growth: emptyGrowth{},
 		// THE ATLAS, read off a node that runs no company yet.
 		Atlas:    builtin.AtlasDeps{},
 		Insights: coordmemory.NewFleet(),
@@ -201,6 +203,8 @@ func everySeam(t *testing.T) queries.Sources {
 		ChatSearch: emptyChat{},
 		ChatDraft:  emptyChat{},
 		ChatReads:  coordmemory.NewFleet(),
+		// A PERSON'S HOME BOARD, the coordination twin's.
+		HomeBoards: coordmemory.NewFleet(),
 		// THE MODEL QUESTIONS, each its own seam: what this node resolved
 		// for each model, the fleet's device sign-ins, and the catalogue a
 		// model step suggests from. Every engine that serves the API wires
@@ -784,6 +788,12 @@ func (emptyVerdicts) Verdicts(context.Context, accessdomain.VerdictQuery, statel
 
 func (emptyVerdicts) OpenVerdict(accessdomain.VerdictRow) (string, string, []string, error) {
 	return "", "", nil, nil
+}
+
+type emptyGrowth struct{}
+
+func (emptyGrowth) Changes(context.Context, accessdomain.GrowthQuery, statelog.Freshness) (accessdomain.GrowthPage, error) {
+	return accessdomain.GrowthPage{Complete: true}, nil
 }
 
 // noResearch reads no page, for the sweep that only needs the seat filled.

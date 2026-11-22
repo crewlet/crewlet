@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/seataccess"
@@ -27,6 +28,11 @@ type Options struct {
 	// Seats are the agents' accounts the access ledger records, by seat
 	// handle to unique ID.
 	Seats map[string]string
+
+	// Growth are the seats' growth identities the core records: Crewlet's
+	// accounts too, by unique ID, or by email while only the intent to make
+	// one is recorded.
+	Growth []coord.GoogleIdentity
 
 	// InUse are the levels a seat that is on holds ([seataccess.LevelsInUse]):
 	// a level Google's roles cannot be granted at is a problem only for one.
@@ -76,10 +82,18 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	for _, uid := range opts.Seats {
 		recorded[uid] = true
 	}
+	intended := map[string]bool{}
+	for _, rec := range opts.Growth {
+		if rec.Made() {
+			recorded[rec.UniqueID] = true
+		} else {
+			intended[rec.Email] = true
+		}
+	}
 	ours := displayName(opts.Company, "")
 	for _, a := range accounts {
 		switch {
-		case a.Email == c.Provisioner() || recorded[a.UniqueID]:
+		case a.Email == c.Provisioner() || recorded[a.UniqueID] || intended[a.Email]:
 		case strings.HasPrefix(a.Email, accountPrefix) && strings.HasPrefix(a.DisplayName, ours):
 			res.orphaned = append(res.orphaned, a.Email)
 		case !strings.HasPrefix(a.Email, accountPrefix):

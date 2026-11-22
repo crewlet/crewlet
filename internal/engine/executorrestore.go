@@ -57,6 +57,18 @@ func (r executorRestore) Session(ctx context.Context, handle, turn string) (exec
 	return restoreRow(read.Session, err)
 }
 
+var _ sandbox.SessionHolders = executorRestore{}
+
+// SessionHeld reads whether any turn's row names the session id through the
+// estate router's reads, at the level a bind asks ([executordomain.BindRead]):
+// what a minted session's bind asks of a fresh id (internal/sandbox, minted.go).
+func (r executorRestore) SessionHeld(ctx context.Context, sessionID string) (bool, error) {
+	if r.engine.router == nil {
+		return false, errors.New("this node has no estate router to read the executor log through")
+	}
+	return r.engine.router.ExecutorReads().SessionHeld(ctx, sessionID, executordomain.BindRead())
+}
+
 // restoreRow is a point read of a turn's row as the sandbox's restore takes it:
 // the row made its view ([executordomain.Session.Kept]), and the log's
 // not-found as [sandbox.ErrTurnRowNotFound] — IN THE SANDBOX'S WORDS, since it
@@ -108,6 +120,7 @@ func (l *agentLauncher) ProbeSession(ctx context.Context) runner.SessionBasis {
 	// whatever branch answered it: the in-place path is judged too, where no
 	// kept session is continued.
 	basis.Window = l.continuationWindow()
+	basis.Traits = sessionTraits()
 	if !basis.Continues() && !basis.ContinuesBase() && !l.conversation.leftNone() {
 		log.InfoContext(ctx, "executor_session_not_continued", "seat", l.seat.Handle(),
 			"turn_id", l.turn.RunID, "detail", basis.Why,
@@ -294,13 +307,14 @@ func (l *agentLauncher) sessionHoldings(ctx context.Context, basis runner.Sessio
 }
 
 // continuationWindow is what the seat's executor chain may hold a continued
-// Claude Code run to ([runner.SessionBasis.Window]): the least standard window
-// over every Claude Code member, each on its entry's route ([claudeRoute]),
-// since the launch picks its member only as it launches; Known only where
-// every one is known. Not Known where the node has no sandbox runtime, the
-// chain cannot be read, or it holds no Claude Code member: a continuation is
-// then told as one that may compact, never held whole on a window nobody
-// read.
+// run to ([runner.SessionBasis.Window]): the least window over every member
+// whose harness compacts by its window, each on its entry's coarse route
+// ([executor.WindowAsk.Exact] unset), since the launch picks its member only as
+// it launches; Known only where every one is known
+// ([sandbox.ExecutorWindow.Least]). Not Known where the node has no sandbox
+// runtime, the chain cannot be read, or it holds no such member: a
+// continuation is then told as one that may compact, never held whole on a
+// window nobody read.
 func (l *agentLauncher) continuationWindow() sandbox.ExecutorWindow {
 	rt := l.engine.sandbox.Load()
 	manager := l.company.catalogue
@@ -317,40 +331,29 @@ func (l *agentLauncher) continuationWindow() sandbox.ExecutorWindow {
 	)
 	for _, m := range members {
 		agent, ok := m.Provider.(*harness.Provider)
-		if !ok || agent.Harness() != executor.ClaudeCodeName {
+		if !ok {
 			continue
 		}
-		w := sandbox.ClaudeCodeWindowOn(agent.ModelArgument(), claudeRoute(agent.AuthMode()))
+		w, compacts := executor.Window(agent.Harness(), windowAsk(agent, false))
 		switch {
+		case !compacts:
 		case !seen:
 			least, seen = w, true
-		case !w.Known:
-			least.Known = false
-		case w.Standard < least.Standard:
-			least.Standard = w.Standard
+		default:
+			least = least.Least(w)
 		}
-	}
-	if !seen {
-		return sandbox.ExecutorWindow{}
 	}
 	return least
 }
 
-// claudeRoute is the route a Claude Code member reaches its model by, as far as
-// the telling reads it ([sandbox.ClaudeRoute]): Anthropic's own API for an entry
-// signed in with a login, a key or the host's own environment, each of which
-// hands the harness first-party credentials alone (config refuses a sign-in
-// switch in such an entry's env); and a route this build cannot name for an
-// entry signed in by its own env, and for a mode this build does not know,
-// which is held to the least window off Anthropic's API, the side that tells
-// more. The launch floor reads the entry's platform exactly ([claudePlatform]),
-// since there a smaller window costs a session rather than words.
-func claudeRoute(mode harness.AuthMode) sandbox.ClaudeRoute {
-	switch mode {
-	case harness.AuthSubscription, harness.AuthAPIKey, harness.AuthInheritEnv:
-		return sandbox.ClaudeRouteAnthropic
+// sessionTraits is what a relaunch reads of every harness this build drives
+// ([runner.SessionBasis.Traits]), by name.
+func sessionTraits() map[string]sandbox.SessionTraits {
+	traits := make(map[string]sandbox.SessionTraits, len(executor.Names()))
+	for _, name := range executor.Names() {
+		traits[name] = executor.SessionTraits(name)
 	}
-	return sandbox.ClaudeRouteElsewhere
+	return traits
 }
 
 // chainRestores is whether some member of seat's executor chain that a launch

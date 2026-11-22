@@ -14,6 +14,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/queue"
 )
 
 // The in-process test doubles live in the package, not a _test.go file: the
@@ -246,6 +248,20 @@ func (s *FakeSandbox) ReadFile(ctx context.Context, p string) ([]byte, error) {
 		return nil, err
 	}
 	return readCapped(s.delivering(bytes.NewReader(content)), p, s.ReadCap())
+}
+
+// OpenWhole opens the file as it stands now, refused past the box's whole-read
+// cap as [FakeSandbox.ReadFile] refuses it.
+func (s *FakeSandbox) OpenWhole(ctx context.Context, p string) (io.ReadCloser, int64, error) {
+	content, err := s.content(p)
+	if err != nil {
+		return nil, 0, err
+	}
+	size := int64(len(content))
+	if limit := s.ReadCap(); size > int64(limit) {
+		return nil, 0, &FileTooLargeError{Path: p, Limit: limit, Size: size}
+	}
+	return io.NopCloser(s.streaming(p, content)), size, nil
 }
 
 // OpenFile streams the file whole, as every real backend does: a machine
@@ -648,14 +664,33 @@ type FakeRunner struct {
 
 	// MainThread, when set, answers a collection's read of a job's main
 	// thread ([FakeRunner.ReadMainThread]); unset, it answers no reading,
-	// which a Claude Code collection takes for a thread not read. Set it
-	// before the first collection.
+	// which a collection of a runner that reads its thread takes for a thread
+	// not read. Set it before the first collection.
 	MainThread func(ctx context.Context, box Sandbox, ask MainThreadAsk) MainThreadReading
+
+	// Thread is what [FakeRunner.ThreadTraits] answers: what the harness
+	// this fake stands in for settles by reading its main thread; zero reads
+	// none. Set it before the first collection.
+	Thread ThreadTraits
+
+	// Pin is what [FakeRunner.PinnedWindow] answers of a model, 0 where it
+	// is unset: the window the harness this fake stands in for pins a run to.
+	Pin func(model string) int
 
 	// TakesNotes is what [FakeRunner.ReadsNotes] answers: whether the
 	// harness this fake stands in for takes a person's notes between its own
 	// steps. Set it before the first collection.
 	TakesNotes bool
+
+	// NotesOff is what [FakeRunner.NotesOffWhy] answers: what in a box can
+	// switch the reading of notes of the harness this fake stands in for off,
+	// "" where it says nothing. Set it before the first collection.
+	NotesOff string
+
+	// Reports, where set, makes the fake a minting runner (minted.go): what
+	// [FakeRunner.ReportedSession] answers of a job's box. Set it before the
+	// launch whose job should mint.
+	Reports func(ctx context.Context, box Sandbox, handle RunHandle) (string, error)
 
 	// CallIDKey is what [FakeRunner.CallIDMeta] answers: the `_meta` key the
 	// harness this fake stands in for sends each call's id under, "" for
@@ -763,9 +798,9 @@ type FakeRunner struct {
 	released []string
 	packs    int
 	// Point, when set, is what a read of a box's OpenCode point answers
-	// ([FakeRunner.ReadOpenCodePoint]); unset, every read is an error, a box
+	// ([FakeRunner.ReadBoxPoint]); unset, every read is an error, a box
 	// that could not be asked. Set it before the launch that reads.
-	Point func(PointAsk) (OpenCodePoint, error)
+	Point func(PointAsk) (BoxPoint, error)
 	// pointAsks is every ask a read of a point was handed, in order.
 	pointAsks []PointAsk
 
@@ -908,6 +943,22 @@ func (r *FakeRunner) Name() string { return r.name }
 // whose harness takes a person's notes between its steps gives the coordinator.
 func (r *FakeRunner) ReadsNotes() bool { return r.TakesNotes }
 
+// MintsSession answers whether [FakeRunner.Reports] is set: the fake stands in
+// for a harness that mints its session's id as it runs.
+func (r *FakeRunner) MintsSession() bool { return r.Reports != nil }
+
+// ReportedSession answers [FakeRunner.Reports], "" where it is unset.
+func (r *FakeRunner) ReportedSession(ctx context.Context, box Sandbox, handle RunHandle) (string, error) {
+	if r.Reports == nil {
+		return "", nil
+	}
+	return r.Reports(ctx, box, handle)
+}
+
+// NotesOffWhy answers [FakeRunner.NotesOff]: the optional answer a runner gives
+// the warning a run that never asked for its notes gets ([notesOffExplainer]).
+func (r *FakeRunner) NotesOffWhy() string { return r.NotesOff }
+
 // CallIDMeta answers [FakeRunner.CallIDKey]: the optional answer a runner whose
 // harness names each of its calls gives the launch ([CallIdentifier]).
 func (r *FakeRunner) CallIDMeta() string { return r.CallIDKey }
@@ -994,7 +1045,7 @@ func (r *FakeRunner) Poll(ctx context.Context, box Sandbox, handle RunHandle) (J
 
 // Collect returns the result a test queued with [FakeRunner.Finish], or the
 // one the job's play answered.
-func (r *FakeRunner) Collect(ctx context.Context, box Sandbox, handle RunHandle) (Result, error) {
+func (r *FakeRunner) Collect(ctx context.Context, box Sandbox, handle RunHandle, _ *queue.AnswerBudget) (Result, error) {
 	r.mu.Lock()
 	if r.CollectErr != nil {
 		r.mu.Unlock()
@@ -1271,6 +1322,14 @@ func (r *FakeRunner) TakeSession(ctx context.Context, box Sandbox, take SessionT
 	if session.TakeErr != nil {
 		return TakenSession{}, session.TakeErr
 	}
+	// A MINTING FAKE'S SESSION IS THE ONE BOUND TO ITS JOB, as a real runner
+	// names it ([SessionTake.Session]); one with none bound takes nothing.
+	if r.MintsSession() {
+		if take.Session == "" {
+			return TakenSession{}, fmt.Errorf("fake: %w: no session is bound to the job", ErrSessionBindRefused)
+		}
+		archive.SessionID = take.Session
+	}
 	if session.Taking != nil {
 		session.Taking(ctx)
 	}
@@ -1391,7 +1450,7 @@ func (r *FakeRunner) StreamedReads() int {
 // no sessions, or holds none), and an error for a taker that names nobody or
 // a box that is paused or reclaimed. [FakeRunner.Packing] runs first, and
 // [FakeRunner.PackSaveErr] fails it.
-func (r *FakeRunner) PackSave(ctx context.Context, box Sandbox, taker string) (SessionArchive, error) {
+func (r *FakeRunner) PackSave(ctx context.Context, box Sandbox, taker, session string) (SessionArchive, error) {
 	r.mu.Lock()
 	saves, packing, failed := r.SavesSessions, r.Packing, r.PackSaveErr
 	r.mu.Unlock()
@@ -1400,6 +1459,8 @@ func (r *FakeRunner) PackSave(ctx context.Context, box Sandbox, taker string) (S
 		return SessionArchive{}, nil
 	case taker == "":
 		return SessionArchive{}, errors.New("fake: a save names no taker")
+	case r.MintsSession() && session == "":
+		return SessionArchive{}, fmt.Errorf("fake: %w: no session is bound to the job", ErrSessionBindRefused)
 	}
 	if fake, ok := box.(*FakeSandbox); ok && fake.unreadable() {
 		return SessionArchive{}, fmt.Errorf("fake: box %s is paused or reclaimed, and its session cannot be "+
@@ -1422,6 +1483,9 @@ func (r *FakeRunner) PackSave(ctx context.Context, box Sandbox, taker string) (S
 	r.packs++
 	archive := r.Session.Archive
 	archive.Path = path.Join(box.Home(), "session-save."+taker+"."+strconv.Itoa(r.packs))
+	if r.MintsSession() {
+		archive.SessionID = session
+	}
 	r.saves[archive.Path] = fakeSave{box: box.ID(), archive: archive, body: bytes.Clone(r.Session.Body)}
 	r.packedIn[archive.Path] = box.ID()
 	return archive, nil
@@ -1591,15 +1655,15 @@ func (r *FakeRunner) Started() []RunRequest {
 
 var _ PointReader = (*FakeRunner)(nil)
 
-// ReadOpenCodePoint records ask and answers [FakeRunner.Point] of it, an error
+// ReadBoxPoint records ask and answers [FakeRunner.Point] of it, an error
 // where it is unset.
-func (r *FakeRunner) ReadOpenCodePoint(_ context.Context, _ Sandbox, ask PointAsk) (OpenCodePoint, error) {
+func (r *FakeRunner) ReadBoxPoint(_ context.Context, _ Sandbox, ask PointAsk) (BoxPoint, error) {
 	r.mu.Lock()
 	r.pointAsks = append(r.pointAsks, ask)
 	point := r.Point
 	r.mu.Unlock()
 	if point == nil {
-		return OpenCodePoint{}, errors.New("fake: this runner reads no OpenCode point")
+		return BoxPoint{}, errors.New("fake: this runner reads no box point")
 	}
 	return point(ask)
 }
@@ -1613,6 +1677,26 @@ func (r *FakeRunner) PointAsks() []PointAsk {
 }
 
 var _ mainThreadReader = (*FakeRunner)(nil)
+
+// ThreadTraits answers [FakeRunner.Thread].
+func (r *FakeRunner) ThreadTraits() ThreadTraits {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.Thread
+}
+
+var _ windowPinner = (*FakeRunner)(nil)
+
+// PinnedWindow answers [FakeRunner.Pin] of model, 0 where it is unset.
+func (r *FakeRunner) PinnedWindow(model string) int {
+	r.mu.Lock()
+	pin := r.Pin
+	r.mu.Unlock()
+	if pin == nil {
+		return 0
+	}
+	return pin(model)
+}
 
 // ReadMainThread answers a collection's read of a job's main thread with what
 // [FakeRunner.MainThread] says, and no reading where it is unset.

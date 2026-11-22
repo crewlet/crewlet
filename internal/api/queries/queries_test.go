@@ -258,6 +258,8 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"agent": "everybody", "live_call": "everybody", "tokens": "everybody",
 		"token_series": "everybody", "seat_activity": "everybody", "turn_outcomes": "everybody",
 		"viewer": "everybody", "schedule_runs": "everybody",
+		// THE ASKER'S OWN HOME BOARD, read under their seat and nobody else's.
+		"home_board": "everybody",
 		// WHAT A PAGE'S LINES NAME: each reference is decided by the
 		// question its own page asks, so the ask itself grants nothing.
 		"references": "everybody",
@@ -331,6 +333,9 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		// AND WHAT A RULE CAN NAME FROM THE COMPANY'S GITHUB: the
 		// administrator's, who writes the rule into the document.
 		"delegated_repositories": "admin", "delegated_branches": "admin", "delegated_checks": "admin",
+		// WHAT AGENTS CHANGED ON THE GROWTH ACCOUNTS, the company-wide
+		// trail's (ADR-0171).
+		"growth_changes": "decided_by:" + string(authz.ActionAuditRead),
 
 		// THE ARTIFACTS: the listing and the folder tree are everybody's and
 		// filtered row by row and folder by folder;

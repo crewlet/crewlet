@@ -349,6 +349,8 @@ type buildOpts struct {
 
 	// skip is the meta-tools no record renders (runner.Config.SkipNames).
 	skip []string
+	// runs is the runs in flight around the run ([runner.Config.Runs]).
+	runs runner.RunsAround
 }
 
 func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Runner, *tools.Registry) {
@@ -438,6 +440,7 @@ func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Run
 		Subagent:          opts.subagent,
 		Ask:               opts.ask,
 		Checkout:          opts.checkout,
+		Runs:              opts.runs,
 		Turn:              runTurn,
 		Budget:            opts.budget,
 		Compact:           opts.compact,

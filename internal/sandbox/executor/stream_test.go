@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
@@ -155,7 +157,7 @@ func TestACollectionReadsAStreamPastTheCap(t *testing.T) {
 	b.Put(p.Findings(), "Outcome: succeeded\nOpened https://github.com/acme/api/pull/12")
 	b.Put(p.ExitCode(), "0")
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -189,7 +191,7 @@ func TestALinePastTheBoundIsSkippedAndSaid(t *testing.T) {
 		`{"type":"text","part":{"text":"Built it."}}`,
 	}, "\n"))
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -230,7 +232,7 @@ func TestTheErrorStreamIsReadFromItsEndAndItsStartIsSaid(t *testing.T) {
 	b.Put(p.ExitCode(), "1")
 
 	reads := &tailReads{Sandbox: b}
-	res, err := runner.Collect(t.Context(), reads, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), reads, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -295,7 +297,7 @@ func TestTheWholeFailureIsWhatOneCondensationCanTake(t *testing.T) {
 			b.Put(p.Err(), stderr)
 			b.Put(p.ExitCode(), "1")
 
-			res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+			res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 			if err != nil {
 				t.Fatalf("Collect: %v", err)
 			}
@@ -341,7 +343,7 @@ func TestAFailureWhoseSentencesFillTheBoundSaysItsStreamWasNotShown(t *testing.T
 	b.Put(p.Err(), "a warning\nthe last line")
 	b.Put(p.ExitCode(), "1")
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -378,7 +380,7 @@ func TestAnErrorStreamOfWhoseEndNothingIsShownIsSaid(t *testing.T) {
 			b.Put(p.Err(), c.stderr)
 			b.Put(p.ExitCode(), "1")
 
-			res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+			res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 			if err != nil {
 				t.Fatalf("Collect: %v", err)
 			}
@@ -407,7 +409,7 @@ func TestAReportPastTheCapDegradesOnlyItself(t *testing.T) {
 	b.Put(p.Err(), "a warning")
 	b.Put(p.ExitCode(), "0")
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v; want the refusal to stay inside its piece", err)
 	}
@@ -443,7 +445,7 @@ func TestAnUnreadableBoxIsAnErrorNotAPiece(t *testing.T) {
 			}
 			return nil
 		}
-		if _, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}); !errors.Is(err, errBoxUnreadable) {
+		if _, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil)); !errors.Is(err, errBoxUnreadable) {
 			t.Errorf("an unreadable %s collected with %v; want the read's error", path, err)
 		}
 	}
@@ -470,7 +472,19 @@ func (b *tailReads) ReadTail(ctx context.Context, path string, n int) (sandbox.F
 	return b.Sandbox.ReadTail(ctx, path, n)
 }
 
-// asked is every n a ReadTail of path asked for, in order.
+// OpenTail counts what it asks for as ReadTail does: a collection opens the
+// error stream's end before it weighs its pieces.
+func (b *tailReads) OpenTail(ctx context.Context, path string, n int64) (io.ReadCloser, int64, error) {
+	b.mu.Lock()
+	if b.asks == nil {
+		b.asks = map[string][]int{}
+	}
+	b.asks[path] = append(b.asks[path], int(n))
+	b.mu.Unlock()
+	return b.Sandbox.OpenTail(ctx, path, n)
+}
+
+// asked is every n a ReadTail or OpenTail of path asked for, in order.
 func (b *tailReads) asked(path string) []int {
 	b.mu.Lock()
 	defer b.mu.Unlock()

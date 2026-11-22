@@ -161,6 +161,10 @@ any Atlas holder's ask that one integration be read for the atlas now rather
 than on its next scheduled read, which the engine honours within a minute and
 refuses for a source read less than five minutes ago
 ([Sources](atlas.md#sources-and-refresh-now)).
+And one more is a person's own arrangement: `save_home_board`, their Home board
+on the dashboard, kept under the seat they hold so it follows them to every
+browser, and refused `stale_version` when it was saved again after they read
+it ([Saving your Home board](../reference/api-endpoints.md#saving-your-home-board)).
 Eleven more change the company's atlas, each a claim in the person's own name
 and none an agent's: `atlas_add_entry`, `atlas_correct`, `atlas_confirm`,
 `atlas_relate`, `atlas_unrelate`, `atlas_set_owner`, `atlas_retire`,
@@ -530,6 +534,20 @@ answers, with the commands that clone it, and the box's git reaches nothing
 the run did not check out ([Code
 Sandbox](../concepts/code-sandbox.md#repositories-on-gitlet)).
 
+**Nor are the three tools for the runs around a run:** `list_runs`,
+`message_run` and `wait_for_run`, offered on an executor's run's surface beside
+`ask_and_wait` when its launch found other runs in flight around it, its seat's or other seats' on its work,
+including work one of the two filed or wrote
+([A seat's runs see each other](../concepts/code-sandbox.md#a-seats-runs-see-each-other)).
+`list_runs` takes nothing and answers each run's `turn_id`, `seat`, `this_seat`, `relation` (`same_item`,
+`same_conversation`, `linked_item`, `on_what_you_wrote` or `wrote_what_you_are_on`), `stage`,
+`work_item`, `same_requester` and `takes_messages`, and for a run working for
+the same requester its `conversation` kind, `this_conversation`, `branch`,
+`started` and `title`, the title fenced. `message_run` takes a `turn_id` and
+`text` (at most 1,000 characters, never cut). `wait_for_run` takes a `turn_id`,
+a `reason` and the `branch` the run pushed, records the wait, and tells the run
+to end its turn.
+
 **Every revision is a commit id or a ref.** A whole or abbreviated commit id
 (7 or more hex digits) costs nothing; anything else — a branch, a tag, a
 whole ref, `HEAD` — is resolved to the commit it points at as part of the
@@ -856,6 +874,7 @@ and has a **gate**, which its authority row decides:
 | Health | `health` | `fleet_health` and `code_status` ([The deployment's health](#the-deployments-health)) |
 | Atlas | `atlas` | `atlas_search`, `atlas_get` and `atlas_trace` ([The company's atlas](#the-companys-atlas)) |
 | Servers | `servers` | The company's servers over SSH: `ssh_read`, `ssh_operate` and `ask_to_operate` ([SSH](../integrations/ssh.md#the-agents-tools)) |
+| Growth | `growth` | Each growth product's tools, filed from its catalog: reads, recorded changes, and spend, publishing and account changes an administrator approves first ([The sixteen rules](../concepts/identity-and-access.md#the-sixteen-rules)) |
 | Colleagues | `colleagues` | Finding a colleague, asking another agent a question |
 | Memory and skills | `memory` | The agent's own notes, past turns, sessions and skills |
 | MCP discovery | `discovery` | `list_mcp_server_tools` and `activate_tool`, handed to the onboarding pass and a worker so it can reach its MCP servers' tools (an executor holds every tool its seat does from launch, and its harness defers a server's tools itself) |
@@ -879,6 +898,9 @@ and has a **gate**, which its authority row decides:
 | `ssh_read` | An agent whose SSH access is on with a server |
 | `ssh_operate` | An agent whose SSH access is at `operate`: `ssh_operate`, each call also waiting for the company's delegate, an administrator or a named approver, and `ask_to_operate` |
 | `delegated_decisions` | An agent a rule of [delegated decisions](delegated-decisions.md) names a delegate: `review_delegated`, filed under Work items |
+| `growth_read` | An agent on the tool's growth product at `read` or above: its reads |
+| `growth_operate` | An agent on the product at `operate` or above: reversible changes, recorded, and spend or publishing, each call waiting for an administrator |
+| `growth_administer` | An agent on the product at `administer`: account, access and irreversible changes, each call waiting for an administrator |
 
 An administrator passes every app gate. A group whose surface the company does
 not run is not there: a company on Jira holds no Worklet tool, one on Slack no
@@ -1386,8 +1408,11 @@ A call to a tool at `approve` is never made until a person answers it
   the model is told the seat's own run, its executor, may ask.
 - **What the call would send stays sealed.** The arguments ride the run's
   record encrypted under the fleet keyring, never in the question, call log or
-  ledger, and are shown only to who may approve: an administrator (the MCP
-  answer's `approvals`) and the seat's lead (the run on the executors board).
+  ledger, and are shown only to an administrator (the MCP answer's
+  `approvals`) and the seat's lead (the run on the executors board): as the
+  call would send them to a person who may answer it while it waits, and with
+  any credential in them replaced by a marker in every other view, a call
+  already answered included.
 - **An administrator or the seat's lead answers it**, with
   [`POST /mcp-approvals/{id}`](../reference/api-endpoints.md#post-mcp-approvalsid),
   a person and never Ask Crewlet:

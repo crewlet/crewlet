@@ -74,6 +74,7 @@ import {
   EVERYTHING,
   FAST_NOTE,
   categoryTip,
+  either,
   isFastModel,
   product,
 } from "../../words.ts";
@@ -303,7 +304,8 @@ export function UseItFor({
     const job = jobsOf(draft.intent)[0];
     return job ? draft.uses.jobs[job] : [];
   }, [draft.uses, draft.intent]);
-  const noCoding = `${product(draft.harness)} cannot run a seat's executor. Choose Claude Code or OpenCode to code.`;
+  const coders = either(draft.executors.map(product));
+  const noCoding = `${product(draft.harness)} cannot run a seat's executor. Choose ${coders} to code.`;
   const slow = draft.model.trim() !== "" && !isFastModel(draft.model);
 
   const options: ChoiceListOption[] = CHOICES.map((intent) => {

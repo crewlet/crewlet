@@ -869,6 +869,10 @@ func New(opts Options) (*App, error) {
 		sources.Delegated = d.DelegatedReads()
 		sources.DelegatedGitHub = d.DelegatedGitHub()
 	}
+	// And what agents changed on the growth accounts (ADR-0171).
+	if g, ok := opts.Runtime.(growthRuntime); ok {
+		sources.Growth = g.GrowthReads()
+	}
 	// And the company's atlas, where the runtime reads one (ADR-0126).
 	if a, ok := opts.Runtime.(atlasRuntime); ok {
 		sources.Atlas = a.AtlasReads()
@@ -924,6 +928,7 @@ func New(opts Options) (*App, error) {
 	}, Detail: sources.MCPServer, Restarter: opts.Runtime.MCPRestarter(), Checker: opts.Runtime.MCPChecker(),
 		Drafts: drafts, Documents: documents, Tools: toolDocuments, Values: opts.Runtime.MCPValues(), Now: now,
 		SignIns: opts.Runtime.MCPSignIns(), Approvals: opts.Runtime.MCPApprovals(), HeldCalls: sources.HeldCalls,
+		Cards:   opts.Runtime.GrowthCards(),
 		Reviews: reviewDesk(sources, opts.Runtime.MCPAccepted()), Audit: opts.Audit,
 		// OVER THE CHART, which an approval asks: whether the caller leads
 		// the seat whose run made the held call.
@@ -1070,7 +1075,7 @@ func New(opts Options) (*App, error) {
 	// The inbound edge. Exempt from the guard by prefix (see the auth
 	// package) because each route authenticates by provider credential,
 	// which is why every one of them verifies before it does anything.
-	if err := a.mountWebhooks(mux, opts.Inbound, opts.Runtime.MCPLanding(), now); err != nil {
+	if err := a.mountWebhooks(mux, opts.Inbound, opts.Runtime.OAuthLanding(), now); err != nil {
 		return nil, err
 	}
 	// The SANDBOX TELEMETRY edge, exempt by the same prefix rule and for
@@ -1462,7 +1467,7 @@ type Inbound struct {
 }
 
 // mountWebhooks registers the inbound edge.
-func (a *App) mountWebhooks(mux httpjson.Router, in Inbound, signIns webhooks.MCPSignIns,
+func (a *App) mountWebhooks(mux httpjson.Router, in Inbound, signIns webhooks.OAuthSignIns,
 	now func() time.Time) error {
 
 	receiver, err := webhooks.New(webhooks.Options{
@@ -1476,7 +1481,7 @@ func (a *App) mountWebhooks(mux httpjson.Router, in Inbound, signIns webhooks.MC
 		Now:        now,
 
 		SlackInstalls: in.SlackInstalls,
-		MCPSignIns:    signIns,
+		OAuthSignIns:  signIns,
 	})
 	if err != nil {
 		return fmt.Errorf("api: %w", err)

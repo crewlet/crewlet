@@ -556,6 +556,11 @@ type capturingJS struct {
 	ops []fakeOp
 }
 
+// Options is the client's own, which a row's budget is counted from.
+func (j *capturingJS) Options() jetstream.JetStreamOptions {
+	return jetstream.JetStreamOptions{DefaultTimeout: jsapi.RequestTerm}
+}
+
 func (j *capturingJS) Publish(_ context.Context, subject string, data []byte,
 	_ ...jetstream.PublishOpt) (*jetstream.PubAck, error) {
 

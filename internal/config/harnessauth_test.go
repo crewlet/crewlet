@@ -45,9 +45,31 @@ func TestAHarnessCredentialWithNowhereToGoIsRefused(t *testing.T) {
 		{
 			name: "api-key on a harness that reads no key from its environment",
 			lines: []string{"harness: kimi-code",
-				`auth: {mode: api-key, api_key: "${KIMI_API_KEY}"}`},
+				`auth: {mode: api-key, api_key: "${KIMI_API_KEY}"}`,
+				`overrides: {api_key_env: "", api_key_model_env: ""}`},
 			path: "providers.llm.sub.auth.mode", kind: ErrConflict,
 			says: "config.toml), so put it there",
+		},
+		{
+			// Kimi Code takes a key from its environment only beside a model
+			// of its own, which would swap the entry's model and provider and
+			// sign it in uncounted.
+			name:  "the model a key goes beside written into env",
+			lines: []string{"harness: kimi-code", `env: {KIMI_MODEL_NAME: kimi-k3}`},
+			path:  "providers.llm.sub.env.KIMI_MODEL_NAME", kind: ErrConflict,
+			says: "Give the key as auth.api_key with auth.mode api-key, and the model as model",
+		},
+		{
+			name:  "the key a model goes beside written into env",
+			lines: []string{"harness: kimi-code", `env: {KIMI_MODEL_API_KEY: "${MOONSHOT_API_KEY}"}`},
+			path:  "providers.llm.sub.env.KIMI_MODEL_API_KEY", kind: ErrConflict,
+			says: "the key as auth.api_key with auth.mode api-key",
+		},
+		{
+			name:  "inherit-env on a harness that takes its key only beside its model",
+			lines: []string{"harness: kimi-code", "auth: {mode: inherit-env}"},
+			path:  "providers.llm.sub.auth.mode", kind: ErrConflict,
+			says: "reads that key only beside its model in KIMI_MODEL_NAME",
 		},
 		{
 			// OPENAI_API_KEY holds other vendors' keys too, and Qwen Code
@@ -343,6 +365,31 @@ func TestASharedKeyVariableIsNeverAnEntrysFallback(t *testing.T) {
 		entry := LLMProvider{Harness: agent, Model: "m", Auth: HarnessAuth{Mode: AuthAPIKey}}
 		if got := entry.CredentialSources("sub").APIKey.Fallback; got != want {
 			t.Errorf("%s: an api-key entry naming no key falls back to %q, want %q", agent, got, want)
+		}
+	}
+}
+
+// A KIMI CODE ENTRY SIGNS IN WITH A KEY UNDER API-KEY: the harness reads its
+// metered key beside a model of its own, which the engine sets from the entry
+// (measured on 2.7.2), so an api-key entry is admitted, as a login
+// entry is.
+//
+// Mutation: drop kimi-code's api_key_env, and the api-key entry is refused as
+// one whose key reaches nothing.
+func TestAKimiCodeEntrySignsInWithAKeyUnderAPIKey(t *testing.T) {
+	t.Parallel()
+	for _, lines := range [][]string{
+		{"harness: kimi-code", `auth: {mode: api-key, api_key: "${MOONSHOT_API_KEY}"}`},
+		{"harness: kimi-code", `env: {KIMI_MODEL_BASE_URL: "https://api.moonshot.ai/v1"}`,
+			`auth: {mode: api-key, api_key: "${MOONSHOT_API_KEY}"}`},
+		{"harness: kimi-code"},
+	} {
+		cfg, err := ParseCompanyDocument([]byte(harnessEntry(lines...)))
+		if err != nil {
+			t.Fatalf("parse %q: %v", lines, err)
+		}
+		if err := cfg.ValidateAdmission(); err != nil {
+			t.Errorf("%q: ValidateAdmission() = %v, want it admitted", lines, err)
 		}
 	}
 }

@@ -48,6 +48,7 @@ import { SessionReading } from "~/lib/frameSession.ts";
 import { LiveSocket, Store, sessionRestored, type SessionAnswer } from "~/protocol/index.ts";
 import type { ReactNode } from "react";
 import { afterMicrotasks } from "~/test/settle.ts";
+import { healthFrame } from "~/test/health.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -67,15 +68,19 @@ function headerOf(menu: HTMLElement): HTMLElement {
   return header!;
 }
 
-function block(viewer: ViewerState, seatName = ""): ReactNode {
-  const store = new Store();
+function block(
+  viewer: ViewerState,
+  seatName = "",
+  store = new Store(),
+  compact = false,
+): ReactNode {
   const socket = new LiveSocket(store);
   return (
     <ClientContext.Provider value={{ store, socket }}>
       <SessionReading>
         <Router>
           <ToastProvider>
-            <UserBlock viewer={viewer} seatName={seatName} />
+            <UserBlock viewer={viewer} seatName={seatName} compact={compact} />
           </ToastProvider>
         </Router>
       </SessionReading>
@@ -1067,5 +1072,45 @@ describe("the folded foot", () => {
     expect(within(dialog).getByRole("radiogroup", { name: "Mode" })).toBeDefined();
     expect(within(dialog).getByRole("radiogroup", { name: "Density" })).toBeDefined();
     expect(within(dialog).getByRole("combobox", { name: "Theme" })).toBeDefined();
+  });
+});
+
+describe("the build at the foot", () => {
+  // THE ENGINE'S OWN VERSION, as its health push says it, under the row, and
+  // kept through a dropped socket. Mutation: read `useEngineHealth` and the
+  // line goes with the socket.
+  test("is the engine's version from its health, a quiet line under the row, kept through a dropped socket", () => {
+    const store = new Store();
+    render(block(ada, "", store));
+    // No push yet: no line, never a guess.
+    expect(document.querySelector(".crewlet-account-row__build")).toBeNull();
+    act(() => store.applyHealth(healthFrame({ version: "v1.4.0" })));
+    const line = document.querySelector(".crewlet-account-row__build")!;
+    expect(line.textContent).toBe("Crewlet v1.4.0");
+    expect(line.getAttribute("title")).toBe("Crewlet v1.4.0");
+    // Outside the reader's menu button, so it names nobody.
+    expect(line.closest("button")).toBeNull();
+    act(() => store.setConnected(false));
+    expect(document.querySelector(".crewlet-account-row__build")?.textContent).toBe(
+      "Crewlet v1.4.0",
+    );
+    // A new build answers on the next push.
+    act(() => store.applyHealth(healthFrame({ version: "main-3fa94c1d02be" })));
+    expect(document.querySelector(".crewlet-account-row__build")?.textContent).toBe(
+      "Crewlet main-3fa94c1d02be",
+    );
+  });
+
+  test("folded, it is a line of the face's tooltip, not a line of its own", async () => {
+    const store = new Store();
+    store.applyHealth(healthFrame({ version: "v1.4.0" }));
+    render(block(ada, "", store, true));
+    expect(document.querySelector(".crewlet-account-row__build")).toBeNull();
+    const face = document.querySelector<HTMLElement>(".crewlet-account-row__who--compact")!;
+    // Keyboard focus opens a tooltip: the key, then a real focus.
+    fireEvent.keyDown(document.body, { key: "Tab" });
+    act(() => face.focus());
+    const tip = await screen.findByRole("tooltip");
+    expect(tip.lastElementChild?.textContent).toBe("Crewlet v1.4.0");
   });
 });

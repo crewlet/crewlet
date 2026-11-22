@@ -101,17 +101,20 @@
 // error means unknown — there is no error worth special-casing into a
 // definite answer about who holds what.
 //
-// ONE CLAIM'S ERROR IS A DEFINITE FACT ABOUT WHAT THE STORE HOLDS, and it is
-// still not a fourth answer: [Custody.ClaimCustody] wrapping
-// [ErrCustodyUndecidable], for a batch whose keeper record the store holds and
-// nothing can read as a keeper. It decides nothing about ownership — not
-// "mine", not "another node's" — so the caller keeps and deletes nothing,
-// exactly as on unknown. What it is NOT is an outage: the store answered,
-// about that one record, and will answer the same until the record is removed
-// or ages out, so a caller that waited on it as on a store it could not reach
-// would wait out the record's month — and one working through many batches
-// would stop at this one, holding every batch behind it on a record no wait
-// clears. So it is told apart, and the caller goes on to the next batch.
+// ONE CLAIM'S ERROR IS A DEFINITE FACT ABOUT WHAT THE STORE HOLDS, and still
+// not a fourth answer: [ErrCustodyUndecidable], a keeper record nothing can
+// read. It decides no ownership, so the caller keeps and deletes nothing, as
+// on unknown; but the store answered, and answers the same until the record
+// goes, so waiting on it as on an outage would stall every batch behind it.
+// So it is told apart, and the caller goes on to the next batch.
+//
+// # A read is given the time its bytes take to cross
+//
+// A read across a leaf's link is given the time the bytes it may carry take to
+// cross at the slowest pace allowed. A reader that cannot wait that long (a
+// probe, a boot) reads a small record naming the large bytes by size and
+// digest; only the reader that needs them pays their crossing (ADR-0175). So
+// the activation pointer ([MaxPointerBytes]) names its body ([BodyRef]).
 //
 // # A definite answer is a CURRENT one
 //
@@ -213,16 +216,17 @@
 //
 // # A person's own record here is their SEAT's
 //
-// One record in this store is a PERSON'S rather than the company's or a
-// node's: their chat read state — the cursors, mutes and do-not-disturb of
-// [ChatReads]. It is keyed by the name iam.RecordOwner gives a principal's own
-// record, which for everybody chat admits is the human seat they act as, so
-// it follows the rule every personal record follows (ADR-0032): it belongs to
-// the SEAT, and the seat's next holder inherits it — the person themselves
-// once reinstated, or a successor once they are moved to another seat or
-// removed — exactly as the seat's tracker inbox, pins and personal views pass.
-// It ends when the seat leaves the company, never when its holder does; see
-// chatread.go for why neither a person id nor an agent id is the key.
+// Two records in this store are a PERSON'S rather than the company's or a
+// node's: their chat read state ([ChatReads]) and their Home board
+// ([HomeBoards]). Each is keyed by the name iam.RecordOwner gives a
+// principal's own record, which for everybody they admit is the human seat
+// they act as, so each follows the rule every personal record follows
+// (ADR-0032): it belongs to the SEAT, and the seat's next holder inherits it
+// (the person themselves once reinstated, or a successor once they are moved to
+// another seat or removed), exactly as the seat's tracker inbox, pins and
+// personal views pass. Each ends when the seat leaves the company, never when
+// its holder does; see chatread.go for why neither a person id nor an agent id
+// is the key.
 //
 // # A seat's save ledger lives in the uploads bucket
 //

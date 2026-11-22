@@ -160,6 +160,7 @@ export const FAMILIES: Readonly<Record<AtlasFamily, GraphEdgeFamily>> = {
 export const VENDORS: Readonly<Record<AtlasVendor, { name: string; mark?: MarkVendor }>> = {
   aws: { name: "AWS", mark: "aws" },
   anthropic: { name: "Anthropic" },
+  apple: { name: "Apple" },
   atlassian: { name: "Atlassian", mark: "atlassian" },
   cloudflare: { name: "Cloudflare", mark: "cloudflare" },
   cursor: { name: "Cursor" },
@@ -173,6 +174,7 @@ export const VENDORS: Readonly<Record<AtlasVendor, { name: string; mark?: MarkVe
   google: { name: "Google" },
   google_cloud: { name: "Google Cloud", mark: "google-cloud" },
   mattermost: { name: "Mattermost", mark: "mattermost" },
+  meta: { name: "Meta" },
   openai: { name: "OpenAI" },
   scaleway: { name: "Scaleway", mark: "scaleway" },
   slack: { name: "Slack", mark: "slack" },
@@ -402,3 +404,6 @@ export const COVERAGE: Readonly<Record<AtlasCoverageSource, string>> = {
 export function valueWord(text: string): string {
   return text.replaceAll("_", " ");
 }
+
+/** What a count of the atlas log the engine cut at its bytes says beside it. */
+export const ACTIVITY_CUT = "The count stopped at its limit: some days and entries are not in it.";

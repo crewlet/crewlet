@@ -793,12 +793,12 @@ func TestFleetCarriesEachNodesConfigState(t *testing.T) {
 		Coord: backend, Plane: plane, NodeID: "node-a",
 	}, "fleet", nil))
 
-	if body["target_epoch"] != float64(1) {
+	if body["target_epoch"] != float64(published.Epoch) {
 		t.Errorf("target_epoch = %v, want the activation pointer", body["target_epoch"])
 	}
 	nodes, _ := body["nodes"].([]any)
 	node, _ := nodes[0].(map[string]any)
-	if node["config_epoch"] != float64(1) || node["config_status"] != "ok" {
+	if node["config_epoch"] != float64(published.Epoch) || node["config_status"] != "ok" {
 		t.Errorf("config columns = %v", node)
 	}
 	reported, present := node["config_reported_at"]
@@ -1601,9 +1601,11 @@ func (s *stubProfiles) Count(context.Context, string) (int, error) { return len(
 // fleet view has to survive one of its columns being unreadable.
 type brokenPlane struct{}
 
-func (brokenPlane) Payload(context.Context, string) (json.RawMessage, bool, error) {
+func (brokenPlane) Body(context.Context, coord.Activation) (json.RawMessage, bool, error) {
 	return nil, false, errUnreadablePlane
 }
+
+func (brokenPlane) BodyCrossing(coord.Activation) time.Duration { return 0 }
 
 func (brokenPlane) Activate(context.Context, coord.ActivationRequest) (coord.Activation, error) {
 	return coord.Activation{}, errUnreadablePlane
@@ -2524,7 +2526,12 @@ func TestEveryIntegrationKindCanBeReported(t *testing.T) {
 	cfg.Integrations.Scaleway = &config.Scaleway{Enabled: true}
 	cfg.Integrations.AWS = &config.AWS{Enabled: true}
 	cfg.Integrations.GoogleCloud = &config.GoogleCloud{Enabled: true}
+	cfg.Integrations.GoogleAnalytics = &config.GoogleAnalytics{Enabled: true}
+	cfg.Integrations.AdMob = &config.AdMob{Enabled: true}
 	cfg.Integrations.SSH = &config.SSH{Enabled: true}
+	cfg.Integrations.MetaAds = &config.MetaAds{Enabled: true}
+	cfg.Integrations.AppStoreConnect = &config.AppStoreConnect{Enabled: true}
+	cfg.Integrations.AppleAds = &config.AppleAds{Enabled: true}
 
 	body := asMap(t, answer(t, queries.Sources{
 		Company: companySource(t, cfg),

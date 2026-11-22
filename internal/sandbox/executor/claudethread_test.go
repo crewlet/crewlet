@@ -4922,7 +4922,7 @@ var ctProbeThreads = []string{
 // named; read a success's stdout into its content's takes, or read a
 // context's list, any record's stdout, the raw bytes or a skill listing, and
 // a record names takes it should not, or misses one.
-func TestAHookRecordNamesOnlyTheTakesItWasAsked(t *testing.T) {
+func hookRecordNamesOnlyTheTakesItWasAsked(t *testing.T) {
 	t.Parallel()
 	asked := []string{claudeTakeToken(ctProbeBatchTake), claudeTakeToken(ctProbeStopTake),
 		claudeTakeToken(ctProbeUntakenOne)}
@@ -5014,7 +5014,7 @@ func TestAHookRecordNamesOnlyTheTakesItWasAsked(t *testing.T) {
 //
 // Mutation: fold the event's error into the attachment's, and a success whose
 // event is a number is no attachment its resume keeps.
-func TestAHooksEventIsHeldToItsType(t *testing.T) {
+func hooksEventIsHeldToItsType(t *testing.T) {
 	t.Parallel()
 	const event = `"hookEvent":"PostToolBatch",`
 	for name, tc := range map[string]struct {

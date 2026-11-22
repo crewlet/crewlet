@@ -266,6 +266,27 @@ Each ends by itself. A sync that cannot see its own write after 3 minutes says s
 
 **Disconnecting turns every agent off:** it disables each account this engine made and removes its roles, and deletes the accounts if you also choose to remove them. The identity project, provisioner, pool and provider are yours and stay; remove the provider's key if you will not reconnect.
 
+## Google's growth products sign in through this identity
+
+Google's growth products (Google Analytics, Search Console, Google Ads and Google Play) sign in through the identity project this connection sets up. No Google Cloud project needs to be prepared for them, but each needs Google Cloud connected with its provisioning block. The design is [ADR-0172](../../adr/0172-a-google-growth-product-signs-in-as-each-seats-own-growth-identity-never-its-cloud-identity.md).
+
+**Each agent gets a second account, its growth identity,** used for those products alone:
+- Its ID is `crewlet-g-` plus the agent's handle (cut to 15 characters) plus 4 characters, and its display name ends in `growth`.
+- It is never the agent's Google Cloud account, and its tokens never leave the engine: no agent's box holds one. You add its email in each product, at the role the agent may act with.
+- Crewlet makes it when the agent's first growth product turns on and turns it off when the last turns off or the agent is removed. It keeps the account, so the roles you gave it return with the agent; delete it in the identity project if the agent will not return. Turning Google Cloud off for an agent leaves it working.
+- It is recorded by Google's unique ID and never adopted by name. If somebody turns it off at Google, Crewlet reports it and leaves it off.
+
+**The company reads its figures as its own reader,** `crewlet-gr-` plus the company's name (cut to 14 characters) plus 4 characters. When a growth product is on, the Cloud Shell block makes it, enables that product's APIs in the identity project, and lets only this company's Crewlet act as it. You add its email once in each product, at the product's read role.
+
+### Products that refuse service accounts sign in with a person's consent
+
+AdSense and AdMob accept no service account, so the company reaches them through one person's consent, which Crewlet keeps ([ADR-0178](../../adr/0178-an-integrations-consent-grant-is-a-named-grant-of-the-same-machinery.md)). [AdMob](admob.md) connects this way; AdSense arrives with its own integration. A product's sign-in covers reading alone until an agent may change settings; then a person signs in again for both. For each:
+- **Your own OAuth client.** Create an OAuth client (Web application) in a Google Cloud project you control, add Crewlet's callback address (`<api.external_url>/webhooks/mcp-oauth`) as a redirect URI, and put its ID and secret in the product's `oauth.client_id` and `oauth.client_secret`, the secret as a `${VAR}`. Several products may share one client and one variable.
+- **Publish its consent screen** ("In production"), or use an Internal (Workspace) app. Google expires the sign-in of an external app left in Testing after seven days; a refusal about then says so.
+- **An administrator signs in** with Google from the product's page, at a fresh step-up. Crewlet asks for exactly the scopes the product's agents need, keeps the grant only if Google granted exactly those, seals the refresh token where no operator view reaches, and renews it on every node. Crewlet needs `api.external_url` for this: Google sends the browser back to it, and offers no device sign-in for these products.
+- **Signing in again** replaces the grant and revokes nothing at Google. If Google refuses to renew the sign-in, the product reports `credential_rejected` and Crewlet stops asking Google until somebody signs in again.
+- **Signing out or disconnecting** deletes Crewlet's copy, and revokes the access at Google only when no other product's sign-in uses a client in the same Cloud project, since Google's revocation would end that one too. When it does not revoke, the answer says how to remove Crewlet at myaccount.google.com. Separate projects per product make every sign-out a revocation.
+
 ## Configuration
 
 ```yaml

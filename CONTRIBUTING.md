@@ -265,6 +265,7 @@ git diff --exit-code -- $UI_OUT                               #   no tracked fil
 test -z "$(git ls-files --others -- $UI_OUT)"                 #   and none is untracked
 cd dashboard && npm run typecheck && npm test                 # dashboard-test
 cd dashboard && npm run test:layout                           #   and its layout suites
+make notehelper && git diff --exit-code -- internal/sandbox/executor/notehelper  # notehelper-check
 ```
 
 Capture the formatting list BEFORE handing it to gofmt, and copy that form into
@@ -437,6 +438,17 @@ same two commands, merging or rebasing:
 ```bash
 make dashboard && git add -A -- static/dashboard static/artifacts static/protocol
 ```
+
+`make notehelper-check` gates the note helper's committed builds the same way.
+`internal/notehelper` runs inside a box, so the engine embeds a gzipped build
+per box arch from `internal/sandbox/executor/notehelper/`. `make notehelper`
+writes them reproducibly (go.mod's toolchain, `-trimpath`, no VCS stamp, an
+empty build id, gzipped by `internal/notehelper/gzipbuild` rather than the
+`gzip` program, whose output is its version's), and the gate rebuilds and diffs
+them. A change to `internal/notehelper`, to go.mod's toolchain or to a module it
+links (`golang.org/x/net`) commits the rebuild with it: `make notehelper`, then
+commit both `.gz` files. Two branches that both rebuilt them are rebuilt again,
+never merged.
 
 `go mod tidy -diff` gates the silent half of tidiness (an *under*-tidy module
 already stops `go build ./...`): a `require` left behind when its last import was
@@ -1243,6 +1255,13 @@ request and decides whether it lands. Eleven things to know:
   rebuilds and pushes it: see [A dashboard bump brings its own
   bundle](#a-dashboard-bump-brings-its-own-bundle). Bumps that leave the output
   unchanged (`@types/*`, `prettier`, a byte-identical build tool) get no commit.
+- **A Go bump that moves the note helper's builds gets them rebuilt.** A Go
+  build carries its modules' versions, so a bump of a module `internal/notehelper`
+  links (`golang.org/x/net`) changes the committed builds, which ci.yml's build
+  job rebuilds and diffs.
+  [`dependabot-notehelper.yml`](.github/workflows/dependabot-notehelper.yml)
+  rebuilds and pushes them: see [A Go bump brings its own note helper
+  builds](#a-go-bump-brings-its-own-note-helper-builds).
 - **A Playwright MCP bump waits for a person.** The tree a seat's box installs
   (`internal/browser/boxhelper/tree/`) has an npm entry and no group; its pull
   request never merges itself, and stays red until `internal/browser`'s release
@@ -1469,6 +1488,20 @@ Nothing checks any of this, and the workflow holds a credential that can write
 to a branch. Read the `if:` on both jobs, each job's `permissions:` and the
 token's scope on any diff that touches
 [`.github/workflows/dependabot-dashboard.yml`](.github/workflows/dependabot-dashboard.yml).
+
+### A Go bump brings its own note helper builds
+
+[`.github/workflows/dependabot-notehelper.yml`](.github/workflows/dependabot-notehelper.yml)
+is the same workflow for `internal/sandbox/executor/notehelper/`, run when
+Dependabot opens or updates a pull request that touches `go.mod` or `go.sum`. It
+runs `make notehelper` and, if either build differs, commits both as
+`build(notehelper): rebuild the note helper for this dependency bump`; a bump of
+a module the helper does not link pushes nothing. Its guards, its two jobs, its
+token and its `[dependabot skip]` are the bundle workflow's, line for line, and
+change with them. Its `push` job writes the two builds by name, after checking
+the handed-over directory holds exactly those two regular gzip files, and ci.yml
+rebuilds them from source on the new head, so a build the untrusted job altered
+fails the gate rather than landing. Read it as the bundle workflow on any diff.
 
 ### A Playwright MCP bump is read before it lands
 
@@ -2236,13 +2269,10 @@ readers see in the release notes. See below.
    changed for someone running Crewlet), not a commit log. Labels group it:
    Dependabot's `dependencies` label sorts bumps last (`.github/release.yml`).
 
-**A pull request's CI run stops at its first failed job.** Every job of
-`ci.yml` must pass before a merge, so one red job already means another push,
-which cancels the run. So [`ci-cancel.yml`](.github/workflows/ci-cancel.yml)
-cancels the rest as soon as a job fails, freeing runners other pull requests
-wait for; the run shows the first failure, not every one. **Re-run failed
-jobs** re-runs the cancelled jobs too, so a flaky failure costs the whole run
-again. A run on `main` is never cancelled.
+**A pull request's CI run finishes every job**, even after one fails, so it
+shows every failure at once and one push can fix them all. **Re-run failed
+jobs** re-runs only the failed ones. A new push to the pull request cancels
+its previous run.
 
 Small, focused PRs are easier to review. For a substantial change (a new
 subsystem, a reshaped config format) open an issue first to discuss the

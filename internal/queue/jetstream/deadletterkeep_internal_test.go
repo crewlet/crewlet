@@ -111,7 +111,7 @@ func TestADrainWaitsForAReturnsDeadLetter(t *testing.T) {
 	dispatched := make(chan struct{})
 	go func() {
 		defer close(dispatched)
-		a.dispatchOne(t.Context(), msg, func(context.Context, *events.Event) queue.Result {
+		a.dispatchOne(t.Context(), msg, false, func(context.Context, *events.Event) queue.Result {
 			return queue.Pass("newer_record", nil)
 		})
 	}()
@@ -327,7 +327,7 @@ func TestABackendsOwnHandBackIsInFlightUntilSettled(t *testing.T) {
 	t.Parallel()
 	for name, handBack := range map[string]func(a *attachment, msg *answeredMsg){
 		"the single path": func(a *attachment, msg *answeredMsg) {
-			a.dispatchOne(t.Context(), msg, func(context.Context, *events.Event) queue.Result {
+			a.dispatchOne(t.Context(), msg, false, func(context.Context, *events.Event) queue.Result {
 				t.Error("a handler ran on a delivery a hold met")
 				return queue.Ack()
 			})

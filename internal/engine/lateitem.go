@@ -19,16 +19,23 @@ import (
 )
 
 // maxLateItemUnits is the most UTF-16 units the account of one late call may
-// take ([lateItemMessage]): what one Claude Code hook answer has left beside a
-// person's widest note ([executor.ClaudeRoomBeside]), so the two always share
-// one answer and neither reaches Claude Code's move of a long context into a
-// file. COMPUTED from the bounds it is read against, never written out.
-var maxLateItemUnits = executor.ClaudeRoomBeside(widestNote())
+// take ([lateItemMessage]), and a wake item and a message from another run with
+// it ([maxWakeItemUnits]): THE ENGINE'S OWN BOUND, never a runner's. 4,505 is
+// what a 9,000-unit hook answer leaves beside a person's widest note
+// ([widestNoteUnits]) and its two-unit separator, so on Claude Code, the
+// tightest runner, the two always share one answer; every runner's ceiling is
+// held to it (TestEveryRunnersCeilingHoldsTheLargestItem), and a runner that
+// measures lower lowers it for all.
+const maxLateItemUnits = 4505
+
+// widestNoteUnits is [widestNote]'s length in UTF-16 units, the engine's bound
+// on what a person's note takes of an answer.
+const widestNoteUnits = 4493
 
 // widestNote is a person's note at its widest as a hook hands it over: from a
 // sender at the widest handle a note names ([iam.MaxLogin]), its text at
 // [steer.MaxNoteRunes] characters of two UTF-16 units each, in the wider of
-// the two renderings a hook's answer uses.
+// the two renderings a hook's answer uses ([widestNoteUnits]).
 func widestNote() string {
 	by, text := strings.Repeat("a", iam.MaxLogin), strings.Repeat("\U0001F680", steer.MaxNoteRunes)
 	plain, before := prompts.SteerMessage(by, text), prompts.SteerMessageSentBefore(by, text)

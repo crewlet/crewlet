@@ -23,6 +23,23 @@
 // cache entries ([SeatIssuer]), and a token is never handed to a caller that
 // asked for scopes it was not minted with.
 //
+// # Two identities per seat, never one
+//
+// A seat signs in to Google's growth products as its own growth identity,
+// never its Google Cloud account, whose token is in the agent's box; the
+// company reads its figures as its own reader. Both are named here
+// ([GrowthAccountID], [ReaderAccountID]) and their tokens never leave the
+// engine (ADR-0172).
+//
+// # A product that refuses service accounts takes a person's consent
+//
+// AdSense and AdMob accept no service account. Such a product registers a
+// [Consent]: its one scope and the company's own OAuth client. This package
+// holds Google's consent facts (the fixed endpoints, [ConsentParams], the
+// exact-scope check, a client's Cloud project and the Testing-mode reading);
+// the grant itself is the engine's, one implementation with the MCP servers'
+// (ADR-0178).
+//
 // # The configuration stays where it is
 //
 // The identity is configured by integrations.google_cloud.provisioning (the

@@ -121,8 +121,8 @@ type Role struct {
 	// field naming the model that run is on would be two spellings of one
 	// setting — and the phases that remain here are the SATELLITES an
 	// operator points somewhere cheaper. They are also where a harness with no
-	// in-box runner serves a seat: only claude-code and opencode can be its
-	// executor ([ExecutorHarnesses]), and any harness can be its reviewer.
+	// in-box runner serves a seat: only a harness with one can be its executor
+	// ([ExecutorHarnesses]), and any harness can be its reviewer.
 	LLMReview    ProviderKeys `yaml:"llm_review,omitempty" json:"llm_review,omitzero" desc:"Provider chain for the reviewer."`
 	LLMSubagent  ProviderKeys `yaml:"llm_subagent,omitempty" json:"llm_subagent,omitzero" desc:"Provider chain for spawned sub-agents."`
 	LLMAuxiliary ProviderKeys `yaml:"llm_auxiliary,omitempty" json:"llm_auxiliary,omitzero" desc:"Cheap model for reflection and summaries."`
@@ -348,7 +348,7 @@ type RoleSandbox struct {
 	// [org.DefaultMaxConcurrentRuns]; 0 or less is refused, since a seat that
 	// can hold no run could take no turn. A pointer so a seat that names the
 	// default and one that says nothing stay apart on a round trip.
-	MaxConcurrentRuns *int `yaml:"max_concurrent_runs,omitempty" json:"max_concurrent_runs,omitempty" js:"min=1" desc:"How many of this seat's executor runs hold it at once, at most one per conversation. Unset = 1."`
+	MaxConcurrentRuns *int `yaml:"max_concurrent_runs,omitempty" json:"max_concurrent_runs,omitempty" js:"min=1" desc:"How many of this seat's executor runs hold it at once, at most one per conversation. Unset = 2."`
 
 	// MCP names which of the seat's MCP servers run in its box rather than
 	// reach it over the seat's tool bridge, which every executor box is
@@ -416,7 +416,7 @@ func (s *RoleSandbox) validate(path Path) error {
 	if s.MaxConcurrentRuns != nil && *s.MaxConcurrentRuns < 1 {
 		p.add(at(path, "max_concurrent_runs"), ErrOutOfRange,
 			"%d (a seat holding no run could take no turn; omit the field for "+
-				"one run at a time, or set a count of 1 or more)", *s.MaxConcurrentRuns)
+				"the default of two, or set a count of 1 or more)", *s.MaxConcurrentRuns)
 	}
 	for i := range s.Setup {
 		p.wrap(s.Setup[i].validate(idx(at(path, "setup"), i)))
@@ -453,20 +453,25 @@ func (s *RoleSandbox) EnvValue(key string) (string, bool) {
 // the server that consumes them. Nothing in this block scopes knowledge
 // reads either; read scope is the org-wide knowledge block only.
 type RoleIntegrations struct {
-	GitHub       *RoleGitHub       `yaml:"github,omitempty" json:"github,omitempty" desc:"This seat's own GitHub App: whether it is on, its permissions, and where."`
-	Slack        *RoleSlack        `yaml:"slack,omitempty" json:"slack,omitempty" desc:"This seat's own Slack app: whether it is on."`
-	Mattermost   *RoleMattermost   `yaml:"mattermost,omitempty" json:"mattermost,omitempty" desc:"This seat's Mattermost bot: whether it is on, its roles and its channels."`
-	Datadog      *RoleDatadog      `yaml:"datadog,omitempty" json:"datadog,omitempty" desc:"This seat's Datadog service account: whether it is on and its role."`
-	GitLab       *RoleGitLab       `yaml:"gitlab,omitempty" json:"gitlab,omitempty" desc:"This seat's GitLab service account: whether it is on, its role and its projects."`
-	Jira         *RoleJira         `yaml:"jira,omitempty" json:"jira,omitempty" desc:"This seat's Jira access: whether it is on, its project role and its projects."`
-	Confluence   *RoleConfluence   `yaml:"confluence,omitempty" json:"confluence,omitempty" desc:"This seat's Confluence access: whether it is on, its space role and its spaces."`
-	Cloudflare   *RoleCloudflare   `yaml:"cloudflare,omitempty" json:"cloudflare,omitempty" desc:"This seat's own Cloudflare account API token: whether it is on and its level."`
-	Expo         *RoleExpo         `yaml:"expo,omitempty" json:"expo,omitempty" desc:"This seat's own Expo robot user: whether it is on and its level."`
-	DigitalOcean *RoleDigitalOcean `yaml:"digitalocean,omitempty" json:"digitalocean,omitempty" desc:"This seat's own DigitalOcean personal access token: whether it is on and its level."`
-	Scaleway     *RoleScaleway     `yaml:"scaleway,omitempty" json:"scaleway,omitempty" desc:"This seat's own Scaleway IAM application: whether it is on, its level and its projects."`
-	AWS          *RoleAWS          `yaml:"aws,omitempty" json:"aws,omitempty" desc:"This seat's own IAM role: whether it is on and its level."`
-	GoogleCloud  *RoleGoogleCloud  `yaml:"google_cloud,omitempty" json:"google_cloud,omitempty" desc:"This seat's own Google Cloud service account: whether it is on, its level and its projects."`
-	SSH          *RoleSSH          `yaml:"ssh,omitempty" json:"ssh,omitempty" desc:"This seat's SSH access: whether it is on, its level and its servers."`
+	GitHub          *RoleGitHub          `yaml:"github,omitempty" json:"github,omitempty" desc:"This seat's own GitHub App: whether it is on, its permissions, and where."`
+	Slack           *RoleSlack           `yaml:"slack,omitempty" json:"slack,omitempty" desc:"This seat's own Slack app: whether it is on."`
+	Mattermost      *RoleMattermost      `yaml:"mattermost,omitempty" json:"mattermost,omitempty" desc:"This seat's Mattermost bot: whether it is on, its roles and its channels."`
+	Datadog         *RoleDatadog         `yaml:"datadog,omitempty" json:"datadog,omitempty" desc:"This seat's Datadog service account: whether it is on and its role."`
+	GitLab          *RoleGitLab          `yaml:"gitlab,omitempty" json:"gitlab,omitempty" desc:"This seat's GitLab service account: whether it is on, its role and its projects."`
+	Jira            *RoleJira            `yaml:"jira,omitempty" json:"jira,omitempty" desc:"This seat's Jira access: whether it is on, its project role and its projects."`
+	Confluence      *RoleConfluence      `yaml:"confluence,omitempty" json:"confluence,omitempty" desc:"This seat's Confluence access: whether it is on, its space role and its spaces."`
+	Cloudflare      *RoleCloudflare      `yaml:"cloudflare,omitempty" json:"cloudflare,omitempty" desc:"This seat's own Cloudflare account API token: whether it is on and its level."`
+	Expo            *RoleExpo            `yaml:"expo,omitempty" json:"expo,omitempty" desc:"This seat's own Expo robot user: whether it is on and its level."`
+	DigitalOcean    *RoleDigitalOcean    `yaml:"digitalocean,omitempty" json:"digitalocean,omitempty" desc:"This seat's own DigitalOcean personal access token: whether it is on and its level."`
+	Scaleway        *RoleScaleway        `yaml:"scaleway,omitempty" json:"scaleway,omitempty" desc:"This seat's own Scaleway IAM application: whether it is on, its level and its projects."`
+	AWS             *RoleAWS             `yaml:"aws,omitempty" json:"aws,omitempty" desc:"This seat's own IAM role: whether it is on and its level."`
+	GoogleCloud     *RoleGoogleCloud     `yaml:"google_cloud,omitempty" json:"google_cloud,omitempty" desc:"This seat's own Google Cloud service account: whether it is on, its level and its projects."`
+	SSH             *RoleSSH             `yaml:"ssh,omitempty" json:"ssh,omitempty" desc:"This seat's SSH access: whether it is on, its level and its servers."`
+	MetaAds         *RoleMetaAds         `yaml:"meta_ads,omitempty" json:"meta_ads,omitempty" desc:"This seat's Meta Ads access: whether it is on, its level, its ad accounts and whether it reaches what no ad account owns."`
+	AppStoreConnect *RoleAppStoreConnect `yaml:"app_store_connect,omitempty" json:"app_store_connect,omitempty" desc:"This seat's App Store Connect access: whether it is on, its level and its apps."`
+	AppleAds        *RoleAppleAds        `yaml:"apple_ads,omitempty" json:"apple_ads,omitempty" desc:"This seat's Apple Ads access: whether it is on, its level and its ad accounts."`
+	GoogleAnalytics *RoleGoogleAnalytics `yaml:"google_analytics,omitempty" json:"google_analytics,omitempty" desc:"This seat's Google Analytics access: whether it is on, its level and its properties."`
+	AdMob           *RoleAdMob           `yaml:"admob,omitempty" json:"admob,omitempty" desc:"This seat's AdMob access: whether it is on, its level and its publisher accounts."`
 }
 
 // IsZero lets an unset block drop out of a round trip.
@@ -474,7 +479,7 @@ func (r RoleIntegrations) IsZero() bool {
 	return r.GitHub == nil && r.Slack == nil && r.Mattermost == nil &&
 		r.Datadog == nil && r.GitLab == nil && r.Jira == nil && r.Confluence == nil &&
 		r.Cloudflare == nil && r.Expo == nil && r.DigitalOcean == nil && r.Scaleway == nil && r.AWS == nil &&
-		r.GoogleCloud == nil && r.SSH == nil
+		r.GoogleCloud == nil && r.SSH == nil && !r.holdsGrowthSeat()
 }
 
 // RoleGitHub is a seat's own GitHub App.
@@ -891,6 +896,7 @@ func (r *Role) Seat() *org.Role {
 	if b := r.Integrations.SSH; b != nil && SeatAccessOn(b.Enabled) && len(b.Hosts) > 0 {
 		seat.SSHLevel = b.LevelOrDefault()
 	}
+	seat.GrowthLevels = r.GrowthLevels()
 
 	if s := r.Sandbox; s != nil {
 		env := make(map[string]string, len(s.Env))

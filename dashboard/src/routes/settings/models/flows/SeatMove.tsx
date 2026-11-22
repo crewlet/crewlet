@@ -79,7 +79,7 @@ export function SeatMoveDialog({
   const next = movedUses(model.uses, ask);
   const name = seatName(data.seats, ask.seat);
   const moves = seatChangesOf(data, model.key, model.uses, next);
-  const draft = { ...draftOf(model), uses: next, intent: intentOf(next) };
+  const draft = { ...draftOf(model, data.executors), uses: next, intent: intentOf(next) };
   const editing = { base: baseOf(model), was: model.uses };
   const dropped = data.doc ? nextDocument(data.doc, draft, editing).dropped : [];
   const what = listed(ask.categories.map((c) => CATEGORY_WORDS[c].short.toLowerCase()));

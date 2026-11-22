@@ -396,7 +396,7 @@ func fleet(t *testing.T, factory Factory) []*member {
 		db := storetest.OpenNode(t, filepath.Join(t.TempDir(), fmt.Sprintf("n%d.db", i)), store.Options{})
 		t.Cleanup(func() { _ = db.Close() })
 		m := &member{id: fmt.Sprintf("node-%d", i), q: q, log: db.Events()}
-		stop, err := eventfan.Serve(t.Context(), q, m.id, m.log)
+		stop, err := eventfan.Serve(t.Context(), q, m.id, m.log, queue.NewAnswerBudget(nil))
 		if err != nil {
 			t.Fatalf("serve %s: %v", m.id, err)
 		}

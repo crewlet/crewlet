@@ -6,8 +6,9 @@
 // notifications in the last second, has this fire already been claimed, has
 // this trigger already been worked, who is on this agent-to-agent channel,
 // where is each node on the config pointer. The same sweep keeps each state-log
-// domain's operation ledger ([StatelogJobs]) and the coordination store's
-// removal markers ([MarkerJobs]), which no clock ages and every listing re-reads.
+// domain's operation ledger ([StatelogJobs]), the coordination store's
+// removal markers ([MarkerJobs]), which no clock ages and every listing
+// re-reads, and the activation's superseded bodies ([BodyJobs]).
 //
 // They were all designed to be swept — every one of their migrations says
 // so, and each ships the index a range delete needs. The failure to avoid is
@@ -48,13 +49,14 @@
 // that keeps a removed seat's mail for an undo keeps its work for one too; and
 // before the record is deleted, because nothing retires the seat again after.
 //
-// A human seat's chat read state is judged the same way and for the same
-// reason ([ChatReadJobs], chatreads.go): it lives in a coordination bucket with
-// no age, so the record of a seat that left is forgotten only by a decision
-// taken against the human seats of the company the fleet is pointed at —
-// stamped when a sweep first finds the seat gone, forgotten
-// [ChatReadForgetGrace] later, the mailbox's grace, so a seat restored inside
-// it gets back its mail and its rooms together.
+// A human seat's personal records, its chat read state and its Home board, are
+// judged the same way and for the same reason, by one reconcile with a job per
+// kind ([ChatReadJobs], [HomeBoardJobs], seatrecords.go): each lives in the
+// coordination store with no age, so the record of a seat that left is
+// forgotten only by a decision taken against the human seats of the company
+// the fleet is pointed at, stamped when a sweep first finds the seat gone,
+// forgotten the mailbox's grace later, so a seat restored inside it gets back
+// its mail, its rooms and its Home together.
 //
 // # Never a replicated row
 //

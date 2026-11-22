@@ -35,7 +35,7 @@ import (
 // identity's, and a credential its vendor refuses fails its instances, which
 // the failing and partial kinds read.
 func mcpConditions(c *Company, statuses map[string]coord.NodeStatusRecord,
-	grants map[string]coord.MCPGrant) []statelog.MCPServerCondition {
+	grants map[string]coord.OAuthGrant) []statelog.MCPServerCondition {
 
 	servers := make([]string, 0, len(c.Config.MCPServers))
 	signedIn := map[string]bool{}
@@ -90,7 +90,7 @@ func mcpConditions(c *Company, statuses map[string]coord.NodeStatusRecord,
 
 // signInCondition is a server's sign-in as its grant record holds it, or
 // none held.
-func signInCondition(grants map[string]coord.MCPGrant, server string) *statelog.MCPSignInCondition {
+func signInCondition(grants map[string]coord.OAuthGrant, server string) *statelog.MCPSignInCondition {
 	g, held := grants[server]
 	if !held {
 		return &statelog.MCPSignInCondition{}
@@ -109,13 +109,13 @@ func signInCondition(grants map[string]coord.MCPGrant, server string) *statelog.
 // reading: read afresh where a person signs c in to any server, and the last
 // good reading carried across a store that cannot answer, as the status records
 // are. Nil where no server is signed in to by a person's grant.
-func (e *Engine) grantsReading(ctx context.Context, c *Company) map[string]coord.MCPGrant {
+func (e *Engine) grantsReading(ctx context.Context, c *Company) map[string]coord.OAuthGrant {
 	if !slices.ContainsFunc(c.Config.MCPServers, func(s config.MCPServer) bool { return s.PersonSignIn() }) ||
 		e.backends == nil || e.backends.Fleet == nil {
 		return nil
 	}
 	in := &e.entryInputs
-	grants, err := e.backends.Fleet.ListMCPGrants(ctx)
+	grants, err := e.backends.Fleet.ListOAuthGrants(ctx, coord.MCPGrantFamily)
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	if err != nil {
@@ -123,9 +123,9 @@ func (e *Engine) grantsReading(ctx context.Context, c *Company) map[string]coord
 			"detail", "the MCP sign-in alarms are judged on the last grants this node read")
 		return in.grants
 	}
-	in.grants = make(map[string]coord.MCPGrant, len(grants))
+	in.grants = make(map[string]coord.OAuthGrant, len(grants))
 	for _, g := range grants {
-		in.grants[g.Server] = g
+		in.grants[g.Name] = g
 	}
 	return in.grants
 }

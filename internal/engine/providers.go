@@ -12,9 +12,8 @@
 // does not fit (failurehold.go, conversationhold.go; ADR-0117); absorbing a
 // wake a completed turn read past (seenthrough.go; ADR-0120); settling a task
 // on its pull request with no turn (changesettle.go; ADR-0121); and a remote
-// MCP server's OAuth grant, its refresh token sealed and each node's access
-// token in memory, renewed under a fleet lease (mcpoauth.go,
-// mcpserviceidentity.go; ADR-0075).
+// MCP server's or an integration's OAuth grant, its refresh token sealed,
+// its access token in memory (oauthgrant.go; ADR-0075, ADR-0178).
 //
 // # The core runtime
 //
@@ -353,11 +352,11 @@
 // item or about a record its calls wrote, by exact identity ([routeOf],
 // [sandbox.BridgeLog.Wrote]); another writer's never on that rule (ADR-0109).
 // One router per busy seat ([Engine.seatRunsMoved]), nudged by the inbox's and
-// lane's streams, the seat's dispatch going idle and a backstop
-// ([routeBackstop]); each wake decided once per job. A claimed wake's delivery
-// is skipped `joined`, naming its turn, its seen-through mark moved at the
-// claim and its owed answer the resumed turn's ([runSteers.turnReply]); an
-// unread one runs on its own (ADR-0167).
+// lane's streams, an idle dispatch and a backstop ([routeBackstop]); each wake
+// decided once per job. A claimed wake's delivery is skipped `joined`, naming
+// its turn, its seen-through mark moved at the claim and its owed answer the
+// resumed turn's ([runSteers.turnReply]); an unread one runs on its own
+// (ADR-0167).
 //
 // A wake that rule leaves about the run's work, or a lead's ([candidate]), is
 // described once per job by one call on the role's `triage` chain
@@ -367,7 +366,7 @@
 // request is put to the run's requester and the seat's leads as a fold-in on
 // the run's row ([Engine.askFoldIn]); approved, it joins as the approver's
 // note ([Engine.fileFoldIn]), else it waits (ADR-0109). A waiting person is
-// told why, once ([Engine.tellWaiting]).
+// told why, once ([Engine.tellWaiting]). Runs see each other (ADR-0176).
 package engine
 
 import (

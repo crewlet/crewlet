@@ -122,7 +122,7 @@ func TestASessionNoWindowCanCarryIsNotContinued(t *testing.T) {
 }
 
 // A SESSION THE LAUNCH'S MODEL CANNOT CARRY IS NOT CONTINUED. The launch reads the
-// window its run is pinned to ([sandbox.ClaudeCodeWindow]), so a session kept
+// window its run is pinned to ([floorWindow]), so a session kept
 // under a long window, continued on a member whose model has a standard one,
 // starts a session of its own rather than one whose first request cannot be sent.
 //
@@ -140,7 +140,7 @@ func TestASessionTheLaunchsModelCannotCarryIsNotContinued(t *testing.T) {
 		"a standard window cannot":            {model: "claude-haiku-4-5", context: 600_000},
 		"a standard window carries a smaller": {model: "claude-haiku-4-5", context: 150_000, continues: true},
 		"an unknown model is held to the fallback": {model: "claude-next-preview",
-			context: sandbox.FallbackExecutorWindow},
+			context: 200_000},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -152,7 +152,7 @@ func TestASessionTheLaunchsModelCannotCarryIsNotContinued(t *testing.T) {
 			if (got.Session != nil) != c.continues {
 				t.Fatalf("the session continues: %v, want %v", got.Session != nil, c.continues)
 			}
-			if want := sandbox.ClaudeCodeWindow(c.model).Carries(floor.context, floor.brief); !want && c.continues {
+			if want := claudeWindowOf(c.model).Carries(floor.context, floor.brief); !want && c.continues {
 				t.Errorf("the floor kept (%d, %d), which the run's own window cannot carry", floor.context, floor.brief)
 			}
 		})
@@ -181,7 +181,7 @@ func TestEachSessionALaunchMayContinueIsHeldToItsOwnFloor(t *testing.T) {
 	// and not with a long one.
 	const contextTokens = 150_000
 	short, long := "carry on", strings.Repeat("a call the copy may lack. ", 40_000)
-	window := sandbox.ClaudeCodeWindow(model)
+	window := claudeWindowOf(model)
 	carriesShort := window.Carries(contextTokens, harness.EstimateTokens(short))
 	carriesLong := window.Carries(contextTokens, harness.EstimateTokens(long))
 	if !carriesShort || carriesLong {

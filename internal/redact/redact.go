@@ -1,15 +1,11 @@
-// Package redact is THE secret-redaction pass for free text leaving the
-// engine.
-//
-// Anything the engine ships to a place a person or a model reads — a tool
-// result, a harness transcript, a setup-step failure, an event-store
-// payload — can carry a credential it never meant to. A cloned repo URL with
-// the token in it, a harness that echoes its key on failure, a provisioning
-// command whose ${VAR} was resolved before it ran.
+// Package redact is THE secret-redaction pass for free text the engine ships
+// to a person or a model, which can carry a credential it never meant to: a
+// cloned repo's URL with its token, a harness echoing its key, a command whose
+// ${VAR} was resolved before it ran.
 //
 // There is deliberately only one of these: a second copy is how a surface ends
-// up redacting a token shape its neighbour already knows about. It imports
-// nothing from the rest of Crewlet so every layer can depend on it.
+// up redacting a token shape its neighbour already knows about. Its only
+// Crewlet import is plainjson, a leaf: every layer can depend on it.
 //
 // The patterns are a DENYLIST OF KNOWN CREDENTIAL SHAPES, which bounds what
 // this can promise: it catches the vendor prefixes, the engine's own per-run
@@ -82,6 +78,15 @@
 // value; and a quoted key's name running back that far is the key's own
 // string, its value redacted.
 //
+// # Settled in one pass
+//
+// Settled is the largest line start no hold's bar stands over ([bar]), an
+// unread key's counted at the rewritable point there ([heldLines.sweep]),
+// which only falls as the start does. One sweep down the bars finds it: a move
+// skips only barred starts, a passed unread bar wakes once the point falls to
+// it, and the sweep stops where none stands. A claim beside a block lowers the
+// point and needs no bar: the block's and its own cover what it would skip.
+//
 // # A text that arrives in pieces
 //
 // [Stream] redacts a text written to it in pieces and writes, put together,
@@ -100,31 +105,29 @@
 // text whole at any length: its caller holds it.
 //
 // A stage decides with the whole-text code over its window ([rule.decide],
-// [keyReading]) and trusts a decision only where the window holds all it read.
-// Every rule reads no further than MaxReach and the bytes around it from where
-// it decides, so a window holding that much past a decision and behind it
-// decides it as the whole text does. What no window holds is carried from one
-// to the next instead: the SEQUENCE, where the rule looks next and the values
-// it replaced within reach, which the password's rule reads its next value
-// beside; and an open RUN, a match or a value decided where it begins whose
-// rest runs on (a token's body, a JSON Web Token's signature, a password's
-// value), written as its marker, or a marker a piece, and read on with the
-// run's own test rather than held, the dots a Google token may end before and
-// the backslashes a value may end before counted rather than held, and
-// written out a piece at a time once the run ends. Each stage reads its own
-// input, since a marker stands for a run of any length; and so a stage that
-// claims tokens or AWS secrets in the text as written, holding markers that
-// stand for more of it than a step, or one that is still being read, decides
-// up to the last marker it holds, since no token's or AWS secret's read
-// crosses a marker's `[` ([ruleStage.markerToStepAt]).
+// [keyReading]) and trusts a decision only where the window holds all it read,
+// MaxReach and the bytes around it either side (above). What no window holds is
+// carried from one to the next instead: the SEQUENCE, where the rule looks next
+// and the values it replaced within reach, which the password's rule reads its
+// next value beside; and an open RUN, a match or a value decided where it
+// begins whose rest runs on (a token's body, a JSON Web Token's signature, a
+// password's value), written as its marker, or a marker a piece, and read on
+// with the run's own test rather than held, the dots a Google token and the
+// backslashes a value may end before counted, and written out a piece at a
+// time once the run ends. Each stage reads its own input, since a marker
+// stands for a run of any length; and so a stage that claims tokens or AWS
+// secrets in the text as written, holding markers that stand for more of it
+// than a step, or one that is still being read, decides up to the last marker
+// it holds, since no token's or AWS secret's read crosses a marker's `[`
+// ([ruleStage.markerToStepAt]).
 //
 // The keys' blocks read what the rules claim in the text as written
-// ([claims]), so the rules run twice: as a second instance of the same stages
-// over the text as written, running ahead of the keys' stage and keeping where
-// each place of what they write stands in that text, and over what the keys'
-// stage writes. The keys' stage reads an armour's block once the claims
-// through its window are decided, or once the text has run the claims' lag
-// past the window, whatever they say (below).
+// ([claims]), so the rules run twice: over that text, as a second instance of
+// the stages running ahead of the keys' stage and keeping where each place
+// they write stands in it, and over what the keys' stage writes. That stage
+// reads an armour's block once the claims through its window are decided, or
+// once the text has run the claims' lag past the window, whatever they say
+// (below).
 //
 // A STREAM'S MEMORY IS ITS STAGES' WINDOWS, WHATEVER THE TEXT. A rule's stage
 // holds MaxReach behind where it resumes and a step past it, about 290 KiB, in
@@ -133,7 +136,7 @@
 // window, the text they trail it by, which it caps at the claims' lag: once the
 // text has run that far past a window, about 5.3 MiB, it decides the window
 // whatever its claims say. With every rule run twice, and the claims' readers,
-// that is at most about 21 MiB of text, and about 26 MiB of the edits, values
+// that is at most about 21 MiB of text, and about 28 MiB of the edits, values
 // and claims the stages keep beside it, where a text is markers end to end (a
 // JSON Web Token every fifteen bytes). So a stream allocates its buffers, about
 // 16 MiB, and past them under a quarter of a byte a byte of a session or a PDF,
@@ -246,17 +249,16 @@
 // marker where the value was, and no armour on it.
 //
 // A KEY'S MARKER IS READ AS THE WORDS IT REPLACED where a key's label is read
-// back to the markup its line opened ([labelStart]). The claims read a table
+// back to the markup its line opened ([labelStart]), as the claims read a table
 // row holding a key's text before a password's key as written, the key's
-// letters and digits as words of the label, so the row's closing closes its
-// opening and the value is read below; the rule, reading the key's marker as
-// punctuation, stopped at it, took the closing for the value and published
-// the value, and where that was a key's piece before an END, a second pass
-// redacted it. Where the key's text holds what no label does (a `+`), the
-// claims stop inside it and take the closing for the value, while the rule
-// reads on across the marker and redacts the value below: what the claims
-// take is punctuation, so nothing a claim names is shown, and a second pass,
-// the marker in both readings, reads the row as the first pass's rule did.
+// letters and digits as words of the label: the row's closing closes its
+// opening and the value is read below in both readings, where read as
+// punctuation the marker would end the label. Where the key's text holds what
+// no label does (a `+`), the claims stop inside it and take the closing for the
+// value, while the rule reads on across the marker and redacts the value below:
+// what the claims take is punctuation, so nothing a claim names is shown, and a
+// second pass, the marker in both readings, reads the row as the first pass's
+// rule did.
 //
 // A STRING'S LINES ARE READ AS THE LINES THEY STAND FOR where markup closes
 // the key's piece of a string: an escaped break after the markup ends the
@@ -288,14 +290,15 @@
 // block's first line before the block, whose keys begin no further than
 // MaxReach before it, inside what the stage holds, and asks of the claims
 // over that stretch, so a claim handed or ended late there is a miss. A claim
-// is a key, its separator's end, its value's start and end and its three
-// seams ([aValue]), 56 bytes, held while a window may still ask of it.
+// is a key, its separator's end, its value's start and end, its three seams
+// and its second range ([aValue]), 72 bytes, held while a window may still ask
+// of it.
 //
 // # What a password's rule still publishes
 //
 // A password's value is read on its key's line, or on a later one where the
-// wrapping every line of the text shares puts it (readValue). What neither
-// reading finds is published:
+// wrapping every line shares puts it ([readValue]); what neither finds is
+// published:
 //
 //   - a value under a quoted key whose name is more than a name — letters,
 //     digits, `_`, `-` and `.` — such as `{"Admin Password": "x"}`: a quote
@@ -312,10 +315,8 @@
 //   - a value on a line that opens with the punctuation the key's line has
 //     straight before its key, after words that line does not repeat — a
 //     list's dash after a logged message (`msg: - Password:` over
-//     `- hunter2x9`), the first line of a string no markup closes the key in
-//     (`{"text": "> Password:\n> hunter2x9"}`) — which is read as the value:
-//     the gutter is read from the line's start, and ends where the two lines'
-//     words part;
+//     `- hunter2x9`) — which is read as the value: the gutter is read from
+//     the line's start, and ends where the two lines' words part;
 //   - a value written over several lines — a YAML block scalar, a YAML
 //     sequence under the key, a heredoc — of which the first word at most is
 //     read, and a diff whose key is on a context line and whose value
@@ -470,7 +471,7 @@ func (r rule) apply(text string) string {
 	// prior is every value replaced so far, which the next one is read
 	// beside ([readValue]).
 	var prior [][2]int
-	start, end, found := r.next(text, 0, nil)
+	start, end, also, found := r.nextAlso(text, 0, nil)
 	if !found {
 		return text
 	}
@@ -484,7 +485,13 @@ func (r rule) apply(text string) string {
 		if r.value != nil {
 			prior = append(prior, [2]int{start, end})
 		}
-		start, end, found = r.next(text, end, prior)
+		if also[1] > also[0] {
+			b.WriteString(text[done:also[0]])
+			r.write(&b, text[also[0]:also[1]])
+			done, end = also[1], also[1]
+			prior = append(prior, also)
+		}
+		start, end, also, found = r.nextAlso(text, end, prior)
 	}
 	b.WriteString(text[done:])
 	return b.String()
@@ -637,17 +644,19 @@ func (w *valueWriter) piece(b io.StringWriter, holds bool) {
 // run on into a `-----END` written straight after it — is the pattern's match
 // as if the text ended at the armour.
 func (r rule) next(text string, from int, prior [][2]int) (int, int, bool) {
-	return nextIn(r, text, from, prior)
+	start, end, _, found := r.nextAlso(text, from, prior)
+	return start, end, found
 }
 
-func nextIn[T textual](r rule, text T, from int, prior [][2]int) (int, int, bool) {
+// nextAlso is [rule.next] with the second range a password's value names.
+func (r rule) nextAlso(text string, from int, prior [][2]int) (int, int, [2]int, bool) {
 	for {
-		key, value, found := decideIn(r, text, from, prior)
+		key, value, _, also, _, found := decideReadIn(r, text, from, prior)
 		if !found {
-			return 0, 0, false
+			return 0, 0, also, false
 		}
 		if value[1] > value[0] {
-			return value[0], value[1], true
+			return value[0], value[1], also, true
 		}
 		from = beyond(text, key[0])
 	}
@@ -669,7 +678,7 @@ func (r rule) decide(text string, from int, prior [][2]int) (key, replaced [2]in
 }
 
 func decideIn[T textual](r rule, text T, from int, prior [][2]int) (key, replaced [2]int, found bool) {
-	key, replaced, _, _, found = decideReadIn(r, text, from, prior)
+	key, replaced, _, _, _, found = decideReadIn(r, text, from, prior)
 	return key, replaced, found
 }
 
@@ -677,40 +686,40 @@ func decideIn[T textual](r rule, text T, from int, prior [][2]int) (key, replace
 // gutter of the key's line ends, where what the line the value was read on
 // ends in begins, and where the markup the key's line opened ends, each or 0
 // ([aValue]).
-func (r rule) decideRead(text string, from int, prior [][2]int) (key, replaced [2]int, seams [3]int, found bool) {
-	key, replaced, seams, _, found = decideReadIn(r, text, from, prior)
-	return key, replaced, seams, found
+func (r rule) decideRead(text string, from int, prior [][2]int) (key, replaced [2]int, seams [3]int, also [2]int, found bool) {
+	key, replaced, seams, also, _, found = decideReadIn(r, text, from, prior)
+	return key, replaced, seams, also, found
 }
 
 // decideReadIn is [rule.decideRead] of a text of either kind ([textual]), and
 // whether a password's value is its run read in the whole text ([aValue]).
-func decideReadIn[T textual](r rule, text T, from int, prior [][2]int) (key, replaced [2]int, seams [3]int, ran, found bool) {
+func decideReadIn[T textual](r rule, text T, from int, prior [][2]int) (key, replaced [2]int, seams [3]int, also [2]int, ran, found bool) {
 	for from <= len(text) {
 		start, end, found := findIn(r, text, from)
 		if !found {
-			return key, replaced, seams, false, false
+			return key, replaced, seams, also, false, false
 		}
 		if r.read != nil {
 			v := callRead(r.read, text, start, end, prior)
-			return [2]int{start, end}, [2]int{v.from, v.to}, [3]int{v.gutter, v.ending, v.opening}, v.ran, true
+			return [2]int{start, end}, [2]int{v.from, v.to}, [3]int{v.gutter, v.ending, v.opening}, v.also, v.ran, true
 		}
 		if r.value != nil {
 			valueStart, valueEnd := callValue(r.value, text, start, end, prior)
-			return [2]int{start, end}, [2]int{valueStart, valueEnd}, seams, false, true
+			return [2]int{start, end}, [2]int{valueStart, valueEnd}, seams, also, false, true
 		}
 		at := armourIn(text, start, end)
 		if at == end {
-			return [2]int{start, end}, [2]int{start, end}, seams, false, true
+			return [2]int{start, end}, [2]int{start, end}, seams, also, false, true
 		}
 		// The match as if the text ended at the armour: the rule's first
 		// match there, which no place before start has, since none had
 		// one in the whole text. None, and the search goes on past it.
 		if s, e, found := findIn(r, text[:at], start); found {
-			return [2]int{s, e}, [2]int{s, e}, seams, false, true
+			return [2]int{s, e}, [2]int{s, e}, seams, also, false, true
 		}
 		from = at + reFindIndex(pemArmourAt(), text[at:])[1]
 	}
-	return key, replaced, seams, false, false
+	return key, replaced, seams, also, false, false
 }
 
 // find is the rule's first match at or after from: its pattern's, held to its
@@ -806,6 +815,14 @@ var rules = sync.OnceValue(func() []rule {
 		token(runTokenPattern, "run-token").bounded(&boundFunc{runTokenWithin[string], runTokenWithin[[]byte]}),
 		token(googleTokenPattern, "google-token"),
 		token(jwtPattern, "jwt").bounded(&boundFunc{jwtWithin[string], jwtWithin[[]byte]}),
+		// A Google refresh token (`1//0` and some hundred base64url
+		// characters), which a consent grant holds and a token endpoint's
+		// error can echo, and a Google OAuth client's secret. Sixty at least,
+		// so a run inside a base64 blob, where `+` and `/` end it within a
+		// few dozen, is no token. Before the vendors' rules, for the Google
+		// access token's reason: a long base64url body spells their prefixes.
+		token(`1//0[0-9A-Za-z_-]{60,}`, "google-refresh-token"),
+		token(`GOCSPX-[0-9A-Za-z_-]{20,}`, "google-client-secret"),
 		token(`sk-proj-[A-Za-z0-9_-]{20,}`, "api-key"),
 		token(`sk-ant-[A-Za-z0-9_-]{20,}`, "api-key"),
 		token(`sk-[A-Za-z0-9_-]{20,}`, "api-key"),
@@ -1333,9 +1350,83 @@ func passwordValue[T textual](text T, start, end int, prior [][2]int) (int, int)
 	return v.from, v.to
 }
 
-// readValue is the value a [passwordRule] match names, the match beginning at
-// start and ending at end, prior being every value the rule replaced before
-// it, in order: see [aValue].
+// readValue is the value a [passwordRule] match names, from start to end, prior
+// being every value the rule replaced before it, in order ([aValue]): the
+// reading of [readValueAs], and where the key's line opens a string after a
+// quote, which the text does not say is the one the escaped breaks belong to,
+// the readings from the string's quote and from the line's start as well. A reading on a later piece that the first overlaps joins it; one that
+// does not is [aValue]'s also, the second range, held to [MaxReach] past the
+// key and not to its line, since a reading can join two later pieces. Read one
+// way alone, a value the other way names was published, and a second pass
+// read the line the first wrote otherwise.
+func readValue[T textual](whole T, start, end int, prior [][2]int) aValue {
+	v := readValueAs(whole, start, end, prior, 0)
+	if !v.firstQuote {
+		return v
+	}
+	for _, pick := range []int{1, 2} {
+		o := readValueAs(whole, start, end, prior, pick)
+		// EVERY READING HOLDS WHAT IT READS, whatever it finds: a text cut
+		// before the line that decides a reading has no result from it yet,
+		// so the value is decided only where each reading is ([valueHolds]).
+		// Held by the result alone, a cut text read no second range, and the
+		// value a later line gives was shown past the cut.
+		v.decided, v.unread = max(v.decided, o.decided), v.unread && o.unread
+		if o.to > o.from && (o.from < end || sameLine(whole, o.from, start)) {
+			// A reading on the key's own line is no reading of a piece.
+			continue
+		}
+		if o.to <= o.from || o.from < v.to && v.from < o.to && v.to > v.from {
+			if o.to > o.from && v.to > v.from {
+				v.from, v.to = min(v.from, o.from), max(v.to, o.to)
+			}
+			continue
+		}
+		o.to = min(o.to, len(whole), start+MaxReach)
+		if o.to <= o.from {
+			continue
+		}
+		switch {
+		case v.to <= v.from:
+			v.from, v.to, v.ran = o.from, o.to, false
+		case v.also[1] <= v.also[0]:
+			v.also = [2]int{o.from, o.to}
+		case o.from < v.also[1] && v.also[0] < o.to:
+			v.also = [2]int{min(v.also[0], o.from), max(v.also[1], o.to)}
+		}
+	}
+	if v.also[1] > v.also[0] && v.also[0] < v.to && v.from < v.also[1] {
+		v.from, v.to, v.also = min(v.from, v.also[0]), max(v.to, v.also[1]), [2]int{}
+	}
+	if v.also[1] > v.also[0] && v.also[0] < v.from {
+		v.from, v.to, v.also = v.also[0], v.also[1], [2]int{v.from, v.to}
+		v.ran = false
+	}
+	return v
+}
+
+// quotedMarker is where a marker begins in text at i past a quote, escaped or
+// not, that opens it, or i where none does: the quote a value was written in,
+// left standing when a pass replaced the value inside it.
+func quotedMarker[T textual](text T, i int) int {
+	for _, q := range []string{`\"`, `"`, `'`} {
+		if tHasPrefix(text[i:], q) && markerLen(text[i+len(q):]) > 0 {
+			return i + len(q)
+		}
+	}
+	return i
+}
+
+// sameLine reports whether a and b, a <= or > b, lie on one line of text.
+func sameLine[T textual](text T, a, b int) bool {
+	a, b = min(a, b), max(a, b)
+	end, _ := lineAt(text, a)
+	return b <= end
+}
+
+// readValueAs is the value a [passwordRule] match from start to end names, prior
+// every value replaced before it ([aValue]), a first piece's gutter picked by
+// pick: 0 by the line read, 1 from the string's quote, 2 from the line's start.
 //
 // A VALUE IS READ WHERE ITS WRAPPING PUTS IT. A password's key and its value a
 // line apart are two lines of whatever wraps every line of the text — a
@@ -1407,16 +1498,22 @@ func passwordValue[T textual](text T, start, end int, prior [][2]int) (int, int)
 // bound and took the key's own closing (`| Password: |` over a value a line
 // long and `| Password: |`). The value's own run, once it begins, is read in
 // the whole text ([valueEnd]).
-func readValue[T textual](whole T, start, end int, prior [][2]int) aValue {
+func readValueAs[T textual](whole T, start, end int, prior [][2]int, pick int) (v aValue) {
 	text := whole[:min(len(whole), start+MaxReach)]
 	end = min(end, len(text))
 	sep := start + tIndexAny(text[start:end], ":=") + 1
-	r := valueRead[T]{text: text, whole: whole, start: start, end: end, from: end, prior: prior}
+	r := valueRead[T]{text: text, whole: whole, start: start, end: end, from: end, prior: prior, pick: pick}
+	defer func() { v.firstQuote = len(r.wrapper) != 0 && !r.later }()
 	if !tContains(text[sep:end], "\n") && !tContains(text[sep:end], `\n`) {
 		// The separator's line goes on: what follows it there, past the
 		// markup that closes what the line opened, its first word read as
 		// the rule's `\S+` read it.
 		r.from, r.opening = pastMarkup(text, start, sep-1, end, prior)
+		if q := quotedMarker(text, r.from); q > r.from {
+			// A quote and then a marker: a pass took the value, as a
+			// marker where the value begins says ([valueRead.lines]).
+			r.from = q
+		}
 		word := wordEnd(text, r.from)
 		switch {
 		case word > r.from && isValue(text[r.from:word]):
@@ -1620,6 +1717,11 @@ type aValue struct {
 	// ([valueRead.ending]); and opening where the markup the key's line
 	// opened and the read closed ends ([pastMarkup]).
 	gutter, ending, opening int
+	// also is a second range a reading of an ambiguous first piece names,
+	// after [from, to), or zeros; firstQuote whether the read's key sat on
+	// a string's first piece after a quote.
+	also       [2]int
+	firstQuote bool
 }
 
 // valueRead is a [readValue] in progress.
@@ -1650,10 +1752,15 @@ type valueRead[T textual] struct {
 	// read once each: from its piece's start and from its real line's; and
 	// none whether that line has none, beginning past the bound
 	// ([gutterFrom]); los where each was read from.
-	gutters [2]T
-	none    [2]bool
-	read    [2]bool
-	los     [2]int
+	gutters [3]T
+	none    [3]bool
+	read    [3]bool
+	los     [3]int
+	wrapper T
+	pick    int
+	// later is whether the wrapper is the string's first piece's, the key
+	// being on a later piece of it ([valueRead.gutter]).
+	later bool
 	// gutterAt is where on the key's line the gutter of the line the read
 	// is at ends, and endingAt where on the line the value was read on what
 	// it ends in begins ([aValue]), each or 0. opening is where the markup
@@ -1750,6 +1857,13 @@ func (r *valueRead[T]) restOfLine(pos int) (int, bool, bool) {
 		// The string goes on to another escaped line: one of its lines.
 		return pos, true, false
 	}
+	if _, at := r.gutterOf(rest, false); at > 0 && !wordless(rest) {
+		// The rest spells the key's line's own gutter and holds a word: the
+		// string's next line, written in the same wrapping. A rest that
+		// matches only the string's quote, as a shell's append after its
+		// closing quote does, spells none of it and is the suffix.
+		return pos, true, false
+	}
 	r.setSuffix(rest)
 	return next, false, false
 }
@@ -1763,6 +1877,11 @@ func (r *valueRead[T]) keyOnRest(pos int) bool {
 	word := rest
 	if i := tIndexByte(rest, ' '); i >= 0 {
 		word = rest[:i]
+	}
+	if i := tIndex(rest, keyMarker); i >= 0 {
+		// A key's block can hold line breaks: a key past its marker may
+		// stand on another line of the text as written.
+		rest = rest[:i]
 	}
 	return len(rest) != 0 && !isValue(word) && keyedIndex(passwordRule(), rest) >= 0
 }
@@ -2002,6 +2121,9 @@ func (r *valueRead[T]) gutterEnd(content T, crossed bool) int {
 func (r *valueRead[T]) gutterOf(content T, crossed bool) (int, int) {
 	g := r.gutter(crossed)
 	k := gutterIndex(crossed)
+	if !crossed && len(r.wrapper) != 0 && (r.pick == 2 || r.pick == 0 && tHasPrefixOf(tTrimLeft(content, " \t"), r.wrapper)) {
+		g, k = r.gutters[2], 2
+	}
 	if r.none[k] {
 		return leadingMarkers(content), 0
 	}
@@ -2053,8 +2175,27 @@ func (r *valueRead[T]) gutter(crossed bool) T {
 	if !r.read[k] {
 		lo := segmentStart(r.text, r.start)
 		found := lo == 0 || r.text[lo-1] == '\n' || lo >= 2 && tEqual(r.text[lo-2:lo], `\n`)
-		if found && r.markupOnly && (lo == 0 || r.text[lo-1] == '\n') {
-			lo = stringOpening(r.text, lo, r.start)
+		if !crossed && found && (lo == 0 || r.text[lo-1] == '\n') {
+			if open := stringOpening(r.text, lo, r.start, r.prior); open > lo {
+				r.gutters[2], r.none[2] = gutterFrom(r.text, lo, found, r.start, r.prior)
+				r.los[2], r.read[2] = lo, true
+				r.wrapper = tTrimLeft(r.text[lo:open], " \t")
+				lo = open
+			}
+		} else if !crossed && found {
+			// A later piece of a string: a line below that opens with what
+			// the string's first piece has up to its quote is a line the
+			// same wrapping wrote, read past it.
+			rl := lineStartAbove(r.text, r.start)
+			first := lo
+			if i := tIndex(r.text[rl:lo], `\n`); i >= 0 {
+				first = rl + i
+			}
+			if open := stringOpening(r.text, rl, first, r.prior); open > rl {
+				r.wrapper = tTrimLeft(r.text[rl:open], " \t")
+				r.gutters[2], r.none[2] = r.wrapper, false
+				r.los[2], r.read[2], r.later = rl, true, true
+			}
 		}
 		if crossed {
 			lo = lineStartAbove(r.text, r.start)
@@ -2068,18 +2209,15 @@ func (r *valueRead[T]) gutter(crossed bool) T {
 }
 
 // stringOpening is where the string a key at start is written in begins on the
-// real line that starts at lo: past the last quote before the key that no
-// backslash escapes, or lo where there is none ([valueRead.gutter]). Read from
-// the line's start, the rows below a markup-closed key spelled none of its
-// gutter, and a row's opening was taken for the value. Only a first piece
-// holds what its line has before the string; a later one begins inside it,
-// and a quote there is the text's. ONLY WHERE MARKUP CLOSES THE KEY: a key's
-// block can join a later piece to the first, and read from the quote, that
-// piece has a gutter the claims, reading the later one, never see, and the
-// value read past it runs on into the next key's line.
-func stringOpening[T textual](text T, lo, start int) int {
+// real line that starts at lo: past the last quote before start that no
+// backslash escapes and no value prior holds, or lo where there is none
+// ([valueRead.gutter]). Read from the line's start alone, the rows below a key
+// in a string spelled none of its gutter, and a row's opening was taken for the
+// value. A later piece begins inside its string, so its wrapping is what the
+// string's first piece has up to this opening, start being that piece's end.
+func stringOpening[T textual](text T, lo, start int, prior [][2]int) int {
 	for i := start - 1; i >= lo; i-- {
-		if text[i] == '"' && (i == lo || text[i-1] != '\\') {
+		if text[i] == '"' && (i == lo || text[i-1] != '\\') && !inSpan(prior, i) {
 			return i + 1
 		}
 	}
@@ -2624,6 +2762,10 @@ func valueHolds(text string, read *int) []valueHold {
 		if v.to > v.from {
 			prior = append(prior, [2]int{v.from, v.to})
 			from = v.to
+			if v.also[1] > v.also[0] {
+				prior = append(prior, v.also)
+				from = v.also[1]
+			}
 		}
 	}
 	if k := pendingKey().indexAtEnd(text); k >= 0 {
@@ -4834,7 +4976,7 @@ type claims struct {
 	// ending's start and the opening's end, each or 0), and where each AWS
 	// secret's key begins and its separator ends ([claimed]).
 	tokens    [][2]int
-	passwords [][7]int
+	passwords [][9]int
 	// endings are the passwords whose value was read on a line it ends as
 	// the key's did, as indexes of passwords, in the order of their
 	// endings ([claims.endingApart]).
@@ -4970,7 +5112,7 @@ func (c *claims) take(blocks [][2]int) {
 func (c *claims) build() {
 	// In the order of their keys, which [claims.apart] and
 	// [claims.shortOfValues] search: an AWS secret's are claimed apart.
-	slices.SortFunc(c.passwords, func(a, b [7]int) int { return cmp.Compare(a[0], b[0]) })
+	slices.SortFunc(c.passwords, func(a, b [9]int) int { return cmp.Compare(a[0], b[0]) })
 	whole := slices.Clone(c.tokens)
 	named := slices.Clone(c.tokens)
 	c.endings = c.endings[:0]
@@ -4996,6 +5138,9 @@ func (c *claims) build() {
 			continue
 		}
 		whole = append(whole, [2]int{p[2], p[3]})
+		if p[8] > p[7] {
+			whole = append(whole, [2]int{p[7], p[8]})
+		}
 	}
 	c.whole, c.named = mergeSpans(whole), mergeSpans(named)
 }
@@ -5079,10 +5224,14 @@ func (c *claims) apartIn(spans, known [][2]int) [][2]int {
 		lineEnd, _ := lineAt(c.text, s[1])
 		limit := min(lineEnd, s[1]+MaxReach)
 		c.askedBegins(s[1], limit+1)
-		i, _ := slices.BinarySearchFunc(c.passwords, s[1], func(p [7]int, at int) int { return cmp.Compare(p[0], at) })
+		i, _ := slices.BinarySearchFunc(c.passwords, s[1], func(p [9]int, at int) int { return cmp.Compare(p[0], at) })
 		for ; i < len(c.passwords) && c.passwords[i][0] <= limit; i++ {
 			p := c.passwords[i]
-			if inSpan(known, p[0]) || !c.readsAValue(p) {
+			if inSpan(known, p[0]) {
+				continue
+			}
+			s, out = c.pieceApart(s, p, out)
+			if !c.readsAValue(p) {
 				continue
 			}
 			s, out = c.gutterApart(s, p, known, out)
@@ -5098,7 +5247,7 @@ func (c *claims) apartIn(spans, known [][2]int) [][2]int {
 // gutterApart is s, a span, written apart from the gutter of the line the key
 // of p, a password's claim, is on, and the line break before it ([aValue]),
 // the piece before them appended to out.
-func (c *claims) gutterApart(s [2]int, p [7]int, known, out [][2]int) ([2]int, [][2]int) {
+func (c *claims) gutterApart(s [2]int, p [9]int, known, out [][2]int) ([2]int, [][2]int) {
 	if p[4] <= 0 || p[4] > len(c.text) {
 		return s, out
 	}
@@ -5120,12 +5269,48 @@ func (c *claims) gutterApart(s [2]int, p [7]int, known, out [][2]int) ([2]int, [
 	return s, out
 }
 
+// pieceApart is s, a span, written apart from the escaped break before the
+// piece of a string the key of p, a password's claim, is on, where s runs
+// across it from the string's first piece, the piece before appended to out.
+// Joined to the first piece, the key's piece was read by the first piece's
+// gutter, and its value against the wrong lines. The key's line keeps its own
+// gutter: the claim's (p[4]), or the one the block's first piece opens with
+// where the key's piece opens with it too. A block that begins on a later
+// piece stays joined.
+func (c *claims) pieceApart(s [2]int, p [9]int, out [][2]int) ([2]int, [][2]int) {
+	seg := segmentStart(c.text, p[0])
+	lineBreak := breakBefore(c.text, seg)
+	if seg-lineBreak != 2 || c.text[lineBreak] != '\\' || s[0] >= lineBreak || s[1] <= lineBreak {
+		return s, out
+	}
+	if f := segmentStart(c.text, s[0]); f != 0 && c.text[f-1] != '\n' {
+		// The block begins on a later piece: joined as main joins it.
+		return s, out
+	}
+	out = append(out, [2]int{s[0], lineBreak})
+	// The gutter the block's first piece has before it, where the key's
+	// piece opens with it too, stays as written.
+	f, g := segmentStart(c.text, s[0]), s[0]
+	for g > f && strings.IndexByte("|>#* \t", c.text[g-1]) >= 0 {
+		g--
+	}
+	gutter := c.text[g:s[0]]
+	s[0] = max(s[0], seg)
+	switch {
+	case p[4] > s[0] && p[4] <= p[0]:
+		s[0] = p[4]
+	case gutter != "" && strings.HasPrefix(c.text[seg:], gutter) && seg+len(gutter) <= p[0]:
+		s[0] = seg + len(gutter)
+	}
+	return s, out
+}
+
 // openingApart is s, a span, written apart from the markup the key of p, a
 // password's claim, has before its label that the read closed, past the
 // gutter ([aValue]): the markup and the spaces among it, and, where only
 // spaces stand before it on the key's line, those and the line break before
 // them, the piece before them appended to out.
-func (c *claims) openingApart(s [2]int, p [7]int, out [][2]int) ([2]int, [][2]int) {
+func (c *claims) openingApart(s [2]int, p [9]int, out [][2]int) ([2]int, [][2]int) {
 	end := p[6]
 	if end <= p[4] || end > len(c.text) || s[0] >= end {
 		return s, out
@@ -5183,7 +5368,7 @@ func (c *claims) endingApart(s [2]int, out [][2]int) ([2]int, [][2]int) {
 // the block the first cut ([claims.apart]). A window places the start of a
 // value it holds none of, and of a word that names none, one past its end
 // ([keyStage.claimsIn]), where it has no line to read.
-func (c *claims) readsAValue(p [7]int) bool {
+func (c *claims) readsAValue(p [9]int) bool {
 	if p[3] > p[2] {
 		return true
 	}
@@ -5223,7 +5408,7 @@ func (c *claims) opensAlike(start, seg, gutterEnd int, known [][2]int) bool {
 func (c *claims) shortOfValues(start, end int) int {
 	c.load()
 	c.asked(start, end+1)
-	i, _ := slices.BinarySearchFunc(c.passwords, start, func(p [7]int, at int) int { return cmp.Compare(p[0], at) })
+	i, _ := slices.BinarySearchFunc(c.passwords, start, func(p [9]int, at int) int { return cmp.Compare(p[0], at) })
 	for ; i < len(c.passwords) && c.passwords[i][0] < end; i++ {
 		p := c.passwords[i]
 		if p[3] <= p[2] || p[2] < end {
@@ -5425,7 +5610,7 @@ func promptAt(line string) int {
 // token's base64 — is one run with the value as written and another beside
 // the value's marker, which a second pass would read as a key's text where
 // the first read a claimed run.
-func claimed(text string) (tokens [][2]int, passwords [][7]int) {
+func claimed(text string) (tokens [][2]int, passwords [][9]int) {
 	w := passwordInput(text, nil)
 	for _, e := range w.edits {
 		tokens = append(tokens, [2]int{e[2], e[3]})
@@ -5443,13 +5628,13 @@ func claimed(text string) (tokens [][2]int, passwords [][7]int) {
 			if !ok {
 				break
 			}
-			passwords, from = append(passwords, [7]int{w.at(start), w.at(end), w.at(end), w.at(end), 0, 0, 0}), end
+			passwords, from = append(passwords, [9]int{w.at(start), w.at(end), w.at(end), w.at(end), 0, 0, 0, 0, 0}), end
 		}
 	}
 	password := rules()[len(rules())-1]
 	var prior [][2]int
 	for from := 0; ; {
-		key, value, seams, ok := password.decideRead(w.text, from, prior)
+		key, value, seams, also, ok := password.decideRead(w.text, from, prior)
 		if !ok {
 			break
 		}
@@ -5459,11 +5644,18 @@ func claimed(text string) (tokens [][2]int, passwords [][7]int) {
 			}
 		}
 		if value[1] > value[0] {
-			passwords = append(passwords, [7]int{w.at(key[0]), w.at(key[1]), w.at(value[0]), w.at(value[1]), seams[0], seams[1], seams[2]})
+			a := [2]int{}
+			if also[1] > also[0] {
+				a = [2]int{w.at(also[0]), w.at(also[1])}
+			}
+			passwords = append(passwords, [9]int{w.at(key[0]), w.at(key[1]), w.at(value[0]), w.at(value[1]), seams[0], seams[1], seams[2], a[0], a[1]})
 			prior, from = append(prior, value), value[1]
+			if also[1] > also[0] {
+				prior, from = append(prior, also), also[1]
+			}
 			continue
 		}
-		passwords, from = append(passwords, [7]int{w.at(key[0]), w.at(key[1]), w.at(key[1]), w.at(key[1]), seams[0], seams[1], seams[2]}), beyond(w.text, key[0])
+		passwords, from = append(passwords, [9]int{w.at(key[0]), w.at(key[1]), w.at(key[1]), w.at(key[1]), seams[0], seams[1], seams[2], 0, 0}), beyond(w.text, key[0])
 	}
 	return tokens, passwords
 }
@@ -6097,6 +6289,12 @@ func Settled(text string) int {
 type settling[T textual] struct {
 	text          T
 	scanned, asks int
+	// ask, where an in-package test sets it, answers in settle's place, so
+	// the tests' HeldToTheLoop holds every ask a stream makes to a second
+	// reading of its holds; nil, the ask is settle's. Held here, an ask
+	// costs the loop alone: holding the refusing layouts at sampled cuts
+	// instead read each layout's megabytes again, 545 s without race.
+	ask func(string) int
 }
 
 // next is how much more of the text is settled, the text left as it is.
@@ -6108,7 +6306,11 @@ func (s *settling[T]) next() int {
 		return 0
 	}
 	s.asks++
-	n, _ := settle(string(s.text[:from+i+1]))
+	text := string(s.text[:from+i+1])
+	if s.ask != nil {
+		return s.ask(text)
+	}
+	n, _ := settle(text)
 	return n
 }
 
@@ -6147,106 +6349,166 @@ func (s *growing) settle(hand func([]byte)) {
 // ([readKeys]), the back hold's ([backHold]), the password's rule's
 // ([passwordInput]) and the holds' ([valueHolds]), each over the text once,
 // and the last two once more where the keys were read beside the values
-// ([claims]). A reader called again for every line the text holds is the
-// cost this counts; a rescan inside one reader is that reader's own test's.
-//
-// THE COUNT IS WHAT THE TEST OF ONE READ JUDGES, not the time Settled takes.
-// Read again in every prefix a hold cut the text at, Settled cost its lines
-// times its length, and that was timed first, against [Secrets] and then
-// against Settled itself over a text eight times smaller: both ratios were a
-// claim about how busy the runner was, and each passed on a quiet machine and
-// failed in CI's race job beside the other packages. The bytes the holds read
-// are the property itself, and no scheduler moves them.
+// ([claims]). A reader called again for every line the text holds is the cost
+// this counts; a rescan inside one reader is that reader's own test's. The
+// test of one read judges the count, not a time: timed against [Secrets], the
+// ratio moved with how busy the runner was, and no scheduler moves the bytes.
+// The holds they read are then resolved by [heldLines.settled].
 func settle(text string) (settled, read int) {
+	h, read := holding(text)
+	return h.settled(), read
+}
+
+// heldLines is what holds a text's complete lines back from settling: the
+// keys' blocks, the one still open and the back hold ([readKeys],
+// [backHold]), and the password keys whose value a later line decides
+// ([valueHolds]); claims are those of the holds read where the keys were read
+// beside the values ([claims]).
+type heldLines struct {
+	whole      string
+	spans      [][2]int
+	open, back int
+	holds      []valueHold
+	claims     []valueHold
+}
+
+// holding reads text's complete lines for what holds them back, and counts
+// the bytes it handed its readers ([settle]).
+func holding(text string) (h heldLines, read int) {
 	end := strings.LastIndexByte(text, '\n') + 1
+	h = heldLines{whole: text[:end], open: -1, back: -1}
 	if end == 0 {
-		return 0, 0
+		return h, 0
 	}
-	whole := text[:end]
 	reading := func(s string) string { read += len(s); return s }
-	spans, open, c := readKeys(reading(whole))
-	back := backHold(reading(whole))
-	keys := func(settled int) (int, bool) {
-		moved := false
-		if open >= 0 && settled > lineStart(whole, open) {
-			settled, moved = lineStart(whole, open), true
-		}
-		if back >= 0 && settled > lineStart(whole, back) {
-			settled, moved = lineStart(whole, back), true
-		}
-		for _, s := range spans {
-			if s[0] < settled && settled < s[1] {
-				settled, moved = lineStart(whole, s[0]), true
-			}
-		}
-		return settled, moved
-	}
-	settled = end
-	for moved := true; moved; {
-		settled, moved = keys(settled)
-	}
-	// rewritable is where the lines the keys hold begin: what is written
-	// next may still read any of them as a key's, or as no longer one — a
-	// one-line key an END below reads back across into a block, a block an
-	// END closes, a block a password's claim may yet cut apart (below) —
-	// and a password's value decided on such a line may be decided again
-	// once it reads otherwise ([passwordInput]).
-	rewritable := settled
-	written := spans
+	var c *claims
+	h.spans, h.open, c = readKeys(reading(h.whole))
+	h.back = backHold(reading(h.whole))
+	written := h.spans
 	if c != nil {
-		written = c.apart(slices.Clone(spans))
+		written = c.apart(slices.Clone(h.spans))
 	}
-	input := passwordInput(reading(whole), written)
-	holds := valueHolds(input.text, &read)
-	for k, h := range holds {
-		holds[k].start, holds[k].decided = input.at(h.start), input.at(h.decided)
+	input := passwordInput(reading(h.whole), written)
+	h.holds = valueHolds(input.text, &read)
+	for k, v := range h.holds {
+		h.holds[k].start, h.holds[k].decided = input.at(v.start), input.at(v.decided)
 	}
 	// The keys were read beside the passwords' values as the text reads
 	// with no block replaced ([claims]), and a value read so is decided
 	// by its own lines too: a key whose claim a cut would decide otherwise
 	// is held with it, since the text after the cut is read with no claim
 	// on that value, and an END there reads it back as the key's.
-	var claimHolds []valueHold
 	if c != nil && c.read {
-		raw := passwordInput(reading(whole), nil)
-		for _, h := range valueHolds(raw.text, &read) {
-			h.start, h.decided = raw.at(h.start), raw.at(h.decided)
-			holds = append(holds, h)
-			claimHolds = append(claimHolds, h)
+		raw := passwordInput(reading(h.whole), nil)
+		for _, v := range valueHolds(raw.text, &read) {
+			v.start, v.decided = raw.at(v.start), raw.at(v.decided)
+			h.holds = append(h.holds, v)
+			h.claims = append(h.claims, v)
 		}
 	}
-	for {
-		var moved bool
-		settled, moved = keys(settled)
-		// A block that reaches the line of a password's key before the
-		// key is written apart from that line's gutter by the line the
-		// value is read on ([claims.apart]): while that is undecided, so
-		// is the block, and its lines are rewritable: once it is cut, a
-		// key line above whose value the rule read no further than the
-		// block reads the gutter the cut leaves as its value.
-		for _, h := range claimHolds {
-			if h.decided < settled {
-				continue
+	return h, read
+}
+
+// bar is a hold as the line starts it keeps the settled point from: it stands
+// over each q with lo < q <= hi, and moves a point there to lo's line. An
+// unread hold's stands only where hi is at or past the rewritable point
+// ([heldLines.sweep]).
+type bar struct {
+	lo, hi int
+	unread bool
+}
+
+// settled is the largest line start no bar stands over, an unread hold's
+// counted at the rewritable point of that line start (the package doc's
+// "Settled in one pass"): a sweep of the keys' bars finds where that point
+// begins, and a sweep of every bar, the claims' pairs lowering it, the line
+// start.
+func (h heldLines) settled() int {
+	end := len(h.whole)
+	// Room on the stack for the bars a live view's ask most often holds, at
+	// a line end of what it has not shown: an open block, the back hold, a
+	// block and a hold, so the ask allocates nothing for them, an allocation
+	// being a few percent of reading a short text. More grow onto the heap.
+	var room [4]bar
+	bars := room[:0]
+	if h.open >= 0 {
+		bars = append(bars, bar{lo: h.open, hi: end})
+	}
+	if h.back >= 0 {
+		bars = append(bars, bar{lo: h.back, hi: end})
+	}
+	for _, s := range h.spans {
+		bars = append(bars, bar{lo: s[0], hi: s[1] - 1})
+	}
+	slices.SortFunc(bars, byHi)
+	rw := h.sweep(bars, end, end, nil)
+	for _, v := range h.holds {
+		bars = append(bars, bar{lo: v.start, hi: v.decided, unread: v.unread})
+	}
+	slices.SortFunc(bars, byHi)
+	return h.sweep(bars, end, rw, h.claimPairs())
+}
+
+// byHi orders bars by hi, highest first.
+func byHi(a, b bar) int { return cmp.Compare(b.hi, a.hi) }
+
+// sweep is the largest line start at or below q no bar stands over, bars in
+// [byHi] order. rw is the rewritable point, where the lines the keys hold
+// begin: what is written next may still read any of them as a key's, or as no
+// longer one (a one-line key an END below reads back into a block, a block an
+// END closes, a block a claim may yet cut apart), and a password's value
+// decided on such a line may be decided again ([passwordInput]), so an unread
+// hold decided there stands. Each of pairs lowers rw to its lo once q is at or
+// below its hi.
+func (h heldLines) sweep(bars []bar, q, rw int, pairs []bar) int {
+	var waiting []bar // unread bars passed while rw stood above their hi
+	next, woken := 0, 0
+	lower := func() {
+		for {
+			for ; next < len(pairs) && pairs[next].hi >= q; next++ {
+				rw = min(rw, pairs[next].lo)
 			}
-			ls := lineStart(whole, h.start)
-			for _, s := range spans {
-				if s[1] > ls && s[1] <= h.start {
-					rewritable = min(rewritable, lineStart(whole, s[0]))
-					if settled > lineStart(whole, s[0]) {
-						settled, moved = lineStart(whole, s[0]), true
-					}
-				}
+			if woken == len(waiting) || waiting[woken].hi < rw {
+				return
 			}
-		}
-		for _, h := range holds {
-			if h.start < settled && h.decided >= settled && (!h.unread || h.decided >= rewritable) {
-				settled, moved = lineStart(whole, h.start), true
+			if b := waiting[woken]; b.lo < q {
+				q = lineStart(h.whole, b.lo)
 			}
-		}
-		if !moved {
-			return settled, read
+			woken++
 		}
 	}
+	lower()
+	for _, b := range bars {
+		switch {
+		case b.hi < q:
+			return q
+		case b.unread && b.hi < rw:
+			waiting = append(waiting, b)
+		case b.lo < q:
+			q = lineStart(h.whole, b.lo)
+			lower()
+		}
+	}
+	return q
+}
+
+// claimPairs are the claims' holds each beside a block that ends on its key's
+// line before the key, in [byHi] order: until the value's line, the cut apart
+// from that line's gutter ([claims.apart]) is undecided, so the block's lines
+// are rewritable from lo, the block's line, and a key line above whose value
+// the rule read no further than the block may yet read the gutter as its own.
+func (h heldLines) claimPairs() []bar {
+	var pairs []bar
+	for _, v := range h.claims {
+		ls := lineStart(h.whole, v.start)
+		// The spans are apart and in order, so their ends are too.
+		i, _ := slices.BinarySearchFunc(h.spans, ls, func(s [2]int, ls int) int { return cmp.Compare(s[1], ls+1) })
+		for ; i < len(h.spans) && h.spans[i][1] <= v.start; i++ {
+			pairs = append(pairs, bar{lo: lineStart(h.whole, h.spans[i][0]), hi: v.decided})
+		}
+	}
+	slices.SortFunc(pairs, byHi)
+	return pairs
 }
 
 // lineStart is the start of the line holding byte i.

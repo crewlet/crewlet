@@ -42,15 +42,6 @@ func TestTheModelsScreenReadsAnEntryAsTheEngineDoes(t *testing.T) {
 		}
 	}
 	seatJobFields(t, tree)
-	body, err := clientsource.Literal(tree, "EXECUTOR_HARNESSES")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := clientsource.Strings(body), strs(config.ExecutorHarnesses); !slices.Equal(
-		slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(want))) {
-		t.Errorf("contract/models.ts EXECUTOR_HARNESSES is %v, want exactly the engine's "+
-			"executor harnesses %v", got, want)
-	}
 	var unset config.LLMProvider
 	for _, tc := range []struct{ name, want string }{
 		{"DEFAULT_HARNESS", unset.HarnessName()},
@@ -152,8 +143,10 @@ roles:
 }
 
 // THE MODELS SCREEN KNOWS EVERY HARNESS AS ITS PROFILE READS: the sign-ins, key
-// variable, login, web and Ask Crewlet rules, and effort levels HARNESS_FACTS
-// gives each built-in harness are its profile's, so the wizard offers nothing the engine refuses.
+// variable, login, web and Ask Crewlet rules and effort levels HARNESS_FACTS
+// gives each built-in harness are its profile's, so the wizard offers nothing
+// the engine refuses. Which harness runs a seat's executor is not among them:
+// `llm_entries` serves it (`executor_harnesses`).
 func TestTheModelsScreenKnowsEveryHarnessAsItsProfileReads(t *testing.T) {
 	t.Parallel()
 	body, err := clientsource.Literal(clientsource.Tree(t), "HARNESS_FACTS")

@@ -158,7 +158,12 @@ func DesiredOf(role *config.Role, lane Lane) (Desired, bool) {
 			d.Permissions = Permissions(b.Permissions)
 		}
 	default:
-		return Desired{}, false
+		// A growth product's seat block, read through config's one shape.
+		a, ok := role.GrowthSeatAccess(string(lane))
+		if !ok {
+			return Desired{}, false
+		}
+		d = Desired{Enabled: config.SeatAccessOn(a.On), Level: a.Level}
 	}
 	_, d.Scope = role.SeatScope(string(lane))
 	return d.NormalizedFor(lane), true
@@ -264,7 +269,9 @@ func SetDesired(role *config.Role, lane Lane, d Desired) error {
 			in.GitHub.Permissions = map[string]config.GitHubAccess(d.Permissions)
 		}
 	default:
-		return fmt.Errorf("seataccess: %q is not a lane this build manages", lane)
+		if !role.SetGrowthSeatAccess(string(lane), config.GrowthSeatAccess{On: &on, Level: d.Level, Scope: d.Scope}) {
+			return fmt.Errorf("seataccess: %q is not a lane this build manages", lane)
+		}
 	}
 	return nil
 }

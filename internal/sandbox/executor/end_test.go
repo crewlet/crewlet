@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/shellword"
@@ -140,7 +141,7 @@ func TestAnEndedClaudeCodeRunPacksAsItsOwnEndDoes(t *testing.T) {
 		if done := boxFile(t, box, p.Done()); done != "143\n" {
 			t.Errorf("the done marker holds %q, want the harness's status", done)
 		}
-		res, err := runner.Collect(t.Context(), box, handle)
+		res, err := runner.Collect(t.Context(), box, handle, queue.NewAnswerBudget(nil))
 		if err != nil {
 			t.Fatalf("Collect: %v", err)
 		}
@@ -206,7 +207,7 @@ func TestAClaudeCodeHarnessThatOutlivesItsGraceIsKilledThenPacked(t *testing.T) 
 		if code := boxFile(t, box, p.ExitCode()); code != "137\n" {
 			t.Errorf("the run exited %q, want the killed harness's 137", code)
 		}
-		res, err := runner.Collect(t.Context(), box, handle)
+		res, err := runner.Collect(t.Context(), box, handle, queue.NewAnswerBudget(nil))
 		if err != nil {
 			t.Fatalf("Collect: %v", err)
 		}
@@ -420,7 +421,7 @@ func TestAPackKilledMidwayLeavesNoArchiveWhereTheTakeReads(t *testing.T) {
 		if ended := boxFile(t, box, p.JobEnded()); ended != "asked\n" {
 			t.Errorf("the job killed mid-pack has its end recorded as %q, want asked", ended)
 		}
-		res, err := runner.Collect(t.Context(), box, handle)
+		res, err := runner.Collect(t.Context(), box, handle, queue.NewAnswerBudget(nil))
 		if err != nil {
 			t.Fatalf("Collect: %v", err)
 		}
@@ -533,7 +534,7 @@ func TestACollectionSaysItsJobWasEnded(t *testing.T) {
 			b.Put(p.ExitCode(), tc.code)
 			b.Put(p.Findings(), "fixed the flake")
 			b.Put(p.JobEnded(), tc.ended)
-			res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{CommandID: "1"})
+			res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{CommandID: "1"}, queue.NewAnswerBudget(nil))
 			if err != nil {
 				t.Fatalf("Collect: %v", err)
 			}

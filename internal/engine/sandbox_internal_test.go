@@ -1497,3 +1497,34 @@ func (q *deliveredOnAttach) outcome() (queue.Result, bool) {
 	defer q.mu.Unlock()
 	return q.got, q.delivered
 }
+
+// A FAKE RUN STATES WHAT ITS HARNESS'S RUNNER STATES: the double stands in for
+// the box, never for the harness, so its reading of the main thread, the
+// window it pins and what it says can switch its notes off are the real
+// runner's, and a fake run is collected and warned about as its harness's is.
+//
+// Mutation: drop any one copy in fakeRunners, and a harness goes red.
+func TestAFakeRunStatesWhatItsHarnesssRunnerStates(t *testing.T) {
+	t.Parallel()
+	real, stated := sandboxRunners(), false
+	for name, runner := range fakeRunners(nil) {
+		fake, want := runner.(*sandbox.FakeRunner), real[name].(*executor.Runner)
+		if fake.Thread != sandbox.ThreadTraitsOf(want) {
+			t.Errorf("%s: the fake reads its thread as %+v, its runner as %+v", name, fake.Thread,
+				sandbox.ThreadTraitsOf(want))
+		}
+		if fake.NotesOff != want.NotesOffWhy() {
+			t.Errorf("%s: the fake says %q switches its notes off, its runner %q", name, fake.NotesOff,
+				want.NotesOffWhy())
+		}
+		stated = stated || want.NotesOffWhy() != ""
+		for _, model := range []string{"sonnet", "opus", "anthropic/claude-sonnet-4-5"} {
+			if got, pinned := fake.PinnedWindow(model), want.PinnedWindow(model); got != pinned {
+				t.Errorf("%s: the fake pins %s to %d, its runner to %d", name, model, got, pinned)
+			}
+		}
+	}
+	if !stated {
+		t.Error("no harness's runner says what switches its notes off, so the copy above proves nothing")
+	}
+}

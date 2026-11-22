@@ -119,6 +119,58 @@
         "null"
       ]
     },
+    "AdMob": {
+      "additionalProperties": false,
+      "properties": {
+        "accounts": {
+          "description": "Publisher IDs agents may be given (pub- and 16 digits), at most 50. Absent: every AdMob account the person who signs in reaches. Optional.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "approvers": {
+          "description": "Handles of human seats an agent's admin acts are routed to first. Only an administrator answers one, at a fresh step-up; without approvers every administrator is asked. Optional.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Turn the integration on. Needs oauth, the company's own OAuth client, and a person's Google sign-in on the integration's page.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "oauth": {
+          "$ref": "#/$defs/GoogleOAuthClient",
+          "description": "The company's own OAuth client (a Web application, in a Google Cloud project it controls), which the sign-in is made as. Required when enabled."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "Advisor": {
       "additionalProperties": false,
       "properties": {
@@ -155,6 +207,281 @@
           "description": "The most tokens one investigation may spend, charged to the company and no seat: 100000 to 20000000. Absent: 2000000.",
           "type": [
             "integer",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "AppStoreConnect": {
+      "additionalProperties": false,
+      "properties": {
+        "approvers": {
+          "description": "Optional. Handles of human seats asked first about a reply, a submission, a price or an account change an agent asks for. Only an administrator may answer; without this list every administrator is asked.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "apps": {
+          "description": "Optional. Apple IDs (digits) of the apps agents may be given. Absent: every app the connections' keys reach.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "connections": {
+          "additionalProperties": {
+            "$ref": "#/$defs/AppStoreConnectTeam"
+          },
+          "description": "The App Store Connect teams the engine reaches, each under its connection id (lowercase letters, digits and hyphens, starting with a letter). Required when enabled.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Turn the integration on.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "AppStoreConnectKey": {
+      "additionalProperties": false,
+      "properties": {
+        "key_id": {
+          "description": "The key's ID: ten capital letters and digits, shown beside the key in App Store Connect.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "private_key": {
+          "description": "Reference to the sealed .p8 private key App Store Connect gave when the key was created, from BEGIN PRIVATE KEY to END PRIVATE KEY. Apple keeps no copy.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "AppStoreConnectKeys": {
+      "additionalProperties": false,
+      "properties": {
+        "access_to_reports": {
+          "$ref": "#/$defs/AppStoreConnectKey",
+          "description": "Optional. A key with the Access to Reports role: sales and trends reports."
+        },
+        "admin": {
+          "$ref": "#/$defs/AppStoreConnectKey",
+          "description": "Optional. A key with the Admin role: users, keys, agreements, and every account change, each held for an administrator."
+        },
+        "app_manager": {
+          "$ref": "#/$defs/AppStoreConnectKey",
+          "description": "Optional. A key with the App Manager role: versions, submissions, prices, TestFlight external testing, in-app purchases."
+        },
+        "customer_support": {
+          "$ref": "#/$defs/AppStoreConnectKey",
+          "description": "Optional. A key with the Customer Support role: replies to customer reviews."
+        },
+        "developer": {
+          "$ref": "#/$defs/AppStoreConnectKey",
+          "description": "Optional. A key with the Developer role (with access to certificates, identifiers and profiles where given): builds, certificates, devices, bundle IDs and profiles."
+        },
+        "finance": {
+          "$ref": "#/$defs/AppStoreConnectKey",
+          "description": "Optional. A key with the Finance role: sales, finance and analytics reports."
+        },
+        "marketing": {
+          "$ref": "#/$defs/AppStoreConnectKey",
+          "description": "Optional. A key with the Marketing role: listings, reviews, custom product pages, in-app events, internal TestFlight groups."
+        },
+        "sales": {
+          "$ref": "#/$defs/AppStoreConnectKey",
+          "description": "Optional. A key with the Sales role: sales and analytics reports."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "AppStoreConnectTeam": {
+      "additionalProperties": false,
+      "properties": {
+        "issuer_id": {
+          "description": "The team's issuer ID, a UUID shown on Users and Access, Integrations, App Store Connect API.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "keys": {
+          "$ref": "#/$defs/AppStoreConnectKeys",
+          "description": "The team's API keys, one per Apple role, each optional; at least one. The engine calls through the least-privileged key that can make each call and never falls back to another when one is refused."
+        },
+        "vendor_number": {
+          "description": "Optional. The team's vendor number (digits, on Payments and Financial Reports), which sales and finance reports need.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "AppleAds": {
+      "additionalProperties": false,
+      "properties": {
+        "ad_accounts": {
+          "description": "Optional. IDs (digits) of the ad accounts agents may be given. Absent: every ad account the connections' API users reach.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "approvers": {
+          "description": "Optional. Handles of human seats asked first about a spend, a creative or an account change an agent asks for. Only an administrator may answer; without this list every administrator is asked.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "connections": {
+          "additionalProperties": {
+            "$ref": "#/$defs/AppleAdsConnection"
+          },
+          "description": "The Apple Ads API users the engine signs in as, each under its connection id (lowercase letters, digits and hyphens, starting with a letter). Required when enabled.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Turn the integration on.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "spend": {
+          "$ref": "#/$defs/GrowthSpend",
+          "description": "Optional. The spending caps per ad account, in its currency. An ad account without both caps refuses every spend act; reads, operate changes and pausing still work."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "AppleAdsConnection": {
+      "additionalProperties": false,
+      "properties": {
+        "client_id": {
+          "description": "The API user's client ID, SEARCHADS. followed by an identifier, shown under Account Settings, API once its public key is uploaded.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "key_id": {
+          "description": "The uploaded public key's ID, shown beside the client ID.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "org_id": {
+          "description": "Optional. The organization's ID (digits), shown beside the account name in Apple Ads. When set, the API user must answer it.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "private_key": {
+          "description": "Reference to the sealed private key whose public half was uploaded, the PEM block from BEGIN EC PRIVATE KEY to END EC PRIVATE KEY that openssl ecparam wrote. Apple keeps no copy.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
+        },
+        "team_id": {
+          "description": "The API user's team ID, SEARCHADS. followed by an identifier, shown beside the client ID.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
             "null"
           ]
         }
@@ -1585,7 +1912,7 @@
           ]
         },
         "kinds": {
-          "description": "The kinds of request this rule delegates: ssh_operate (an agent's command on a server as its operate user), pr_merge (merging a change at the head it was asked about, ask_to_merge) and deploy (deploying a commit that holds merged changes, ask_to_deploy). other is never delegated.",
+          "description": "The kinds of request this rule delegates: ssh_operate (an agent's command on a server as its operate user), pr_merge (merging a change at the head it was asked about, ask_to_merge) and deploy (deploying a commit that holds merged changes, ask_to_deploy). ad_spend, public_post, account_admin and other are never delegated.",
           "items": {
             "type": [
               "string",
@@ -2297,6 +2624,54 @@
         "null"
       ]
     },
+    "GoogleAnalytics": {
+      "additionalProperties": false,
+      "properties": {
+        "approvers": {
+          "description": "Handles of human seats an agent's admin acts are routed to first. Only an administrator answers one, at a fresh step-up; without approvers every administrator is asked. Optional.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Turn the integration on. Needs integrations.google_cloud on with its provisioning block, whose identity agents sign in through.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "properties": {
+          "description": "Numeric Google Analytics property IDs agents may be given, at most 200. Absent: every property an agent's identity is added to. Optional.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "GoogleCloud": {
       "additionalProperties": false,
       "properties": {
@@ -2356,6 +2731,98 @@
             "string",
             "number",
             "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "GoogleOAuthClient": {
+      "additionalProperties": false,
+      "properties": {
+        "client_id": {
+          "description": "The OAuth client's ID: <project number>-<id>.apps.googleusercontent.com.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "client_secret": {
+          "description": "The OAuth client's secret, usually ${GOOGLE_OAUTH_CLIENT_SECRET}; shown back as __redacted__. Every consent product signing in as this client may name the same variable.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "GrowthCap": {
+      "additionalProperties": false,
+      "properties": {
+        "account": {
+          "description": "The ad account's ID, as the vendor writes it.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "currency": {
+          "description": "The account's currency as an ISO 4217 code (EUR). It must equal the account's own currency, read live, or every spend call on the account is refused.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "daily": {
+          "description": "The ceiling on the account's daily capacity after any approved change, a decimal amount in the account's currency (200.00). It limits the budgets agents may set, not what the vendor delivers on one day.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "per_change": {
+          "description": "The most one approved change may add to the account's daily capacity, a decimal amount in the account's currency (50.00).",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "GrowthSpend": {
+      "additionalProperties": false,
+      "properties": {
+        "accounts": {
+          "description": "The spending caps of each ad account agents may ask to spend on. An account without both caps refuses every spend call; reads, operate calls and pausing still work.",
+          "items": {
+            "$ref": "#/$defs/GrowthCap"
+          },
+          "type": [
+            "array",
             "null"
           ]
         }
@@ -2526,6 +2993,18 @@
     "Integrations": {
       "additionalProperties": false,
       "properties": {
+        "admob": {
+          "$ref": "#/$defs/AdMob",
+          "description": "AdMob: agents read and change app monetization through one Google sign-in by a person who manages the account, made as the company's own OAuth client. Absent = disabled."
+        },
+        "app_store_connect": {
+          "$ref": "#/$defs/AppStoreConnect",
+          "description": "App Store Connect teams and their API keys, one per Apple role, through which the engine makes every call for the agents. Absent = disabled."
+        },
+        "apple_ads": {
+          "$ref": "#/$defs/AppleAds",
+          "description": "Apple Ads API users, each one organization's client credentials and private key, through which the engine makes every Apple Ads Platform API call for the agents. Absent = disabled."
+        },
         "atlassian": {
           "$ref": "#/$defs/Atlassian",
           "description": "Atlassian organization and its unscoped API key, used to create one service account per agent. Absent = accounts are made by hand."
@@ -2578,6 +3057,10 @@
           "$ref": "#/$defs/GitLab",
           "description": "GitLab instance, webhook signing and provisioning. Absent = disabled."
         },
+        "google_analytics": {
+          "$ref": "#/$defs/GoogleAnalytics",
+          "description": "Google Analytics 4: agents read and manage properties as their own Google growth identity, through the Google Cloud connection's identity. Absent = disabled."
+        },
         "google_cloud": {
           "$ref": "#/$defs/GoogleCloud",
           "description": "Google Cloud provisioner service account and federation key, used to create one service account per agent and grant it on the projects prepared for Crewlet. Absent = disabled."
@@ -2589,6 +3072,10 @@
         "mattermost": {
           "$ref": "#/$defs/Mattermost",
           "description": "Mattermost instance and team. Absent = disabled."
+        },
+        "meta_ads": {
+          "$ref": "#/$defs/MetaAds",
+          "description": "The company's Meta app and one system user's tokens, through which the engine makes every Marketing API call for the agents. Absent = disabled."
         },
         "scaleway": {
           "$ref": "#/$defs/Scaleway",
@@ -3590,6 +4077,116 @@
         "null"
       ]
     },
+    "MetaAds": {
+      "additionalProperties": false,
+      "properties": {
+        "ad_accounts": {
+          "description": "Optional. IDs of the ad accounts agents may be given, act_ and its digits (bare digits are read as act_ and them). Absent: every ad account the system user is assigned.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "admin_token": {
+          "description": "Optional. Reference to the sealed token of the same system user with business_management, used only for account changes an administrator allows (users, assets, catalogs, deletes), never for a read or a change made at once.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
+        },
+        "app_id": {
+          "description": "The company's own Meta app's ID (digits), a Business app with the Marketing API product. Required when enabled.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "app_secret": {
+          "description": "Reference to the sealed app secret, from the app's Basic settings. Every call carries a proof made with it, so turn on Require App Secret in the app's Advanced settings. Required when enabled.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
+        },
+        "approvers": {
+          "description": "Optional. Handles of human seats asked first about a spend, something customers see or an account change an agent asks for. Only an administrator may answer; without this list every administrator is asked.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "business_id": {
+          "description": "Optional. The business portfolio's ID (digits). When set, the system user's ad accounts are read as this business's.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Turn the integration on.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "operate_token": {
+          "description": "Optional. Reference to the sealed token of the same system user with ads_management, for operate changes and the spend and public acts an administrator allows. Without it agents read only.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
+        },
+        "read_token": {
+          "description": "Reference to the sealed token of the app's Employee system user with ads_read and no permission that writes, for every read. Required when enabled.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
+        },
+        "spend": {
+          "$ref": "#/$defs/GrowthSpend",
+          "description": "Optional. The spending caps per ad account (act_ and its digits), in its currency. An ad account without both caps refuses every spend act; reads, operate changes and pausing still work."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "PersonalMemory": {
       "additionalProperties": false,
       "properties": {
@@ -4268,6 +4865,144 @@
         "null"
       ]
     },
+    "RoleAdMob": {
+      "additionalProperties": false,
+      "properties": {
+        "accounts": {
+          "description": "Publisher IDs this agent may reach, within integrations.admob.accounts when that is set. Required when the agent is on.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Whether this agent may reach AdMob.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "level": {
+          "description": "read (the default): accounts, apps, ad units, mediation and reports. operate: also creates apps, ad units and mappings, and changes mediation groups and A/B experiments, at once. administer: also asks an administrator to approve what cannot be undone: linking an app to its store listing, removing a mediation line.",
+          "enum": [
+            "read",
+            "operate",
+            "administer",
+            "",
+            null
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "RoleAppStoreConnect": {
+      "additionalProperties": false,
+      "properties": {
+        "apps": {
+          "description": "Apple IDs of the apps this agent may touch. Required while enabled.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Whether this agent may use App Store Connect through the engine's tools. No agent holds a key.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "level": {
+          "description": "read (the default): reads apps, listings, reviews, TestFlight, reports. operate: also edits drafts and internal testing, and asks an administrator for anything customers or external testers see. administer: also asks for account changes (users, keys, certificates, devices, profiles, agreements).",
+          "enum": [
+            "read",
+            "operate",
+            "administer",
+            "",
+            null
+          ]
+        },
+        "team_resources": {
+          "description": "Optional. Let this agent reach the team's resources no app owns (users, devices, certificates, profiles, sandbox testers, reports across apps), within its level.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "RoleAppleAds": {
+      "additionalProperties": false,
+      "properties": {
+        "ad_accounts": {
+          "description": "IDs (digits) of the ad accounts this agent may touch. Required while enabled.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Whether this agent may use Apple Ads through the engine's tools. No agent holds a key or a token.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "level": {
+          "description": "read (the default): reads campaigns, ad groups, keywords, ads, creatives and reports. operate: also pauses, lowers budgets and bids, adds negative keywords at once, and asks an administrator for any spend or creative customers see. administer: also asks for ad account changes and deletes.",
+          "enum": [
+            "read",
+            "operate",
+            "administer",
+            "",
+            null
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "RoleAvatar": {
       "additionalProperties": false,
       "properties": {
@@ -4664,6 +5399,49 @@
         "null"
       ]
     },
+    "RoleGoogleAnalytics": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether this agent may reach Google Analytics. Off turns its Google growth identity off once no other Google growth product is on for it.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "level": {
+          "description": "read (the default): reports and settings, nothing changed. operate: also reversible changes such as key events, custom definitions and links' settings. administer: also asks an administrator to approve account, access, key and other irreversible changes, one each.",
+          "enum": [
+            "read",
+            "operate",
+            "administer",
+            "",
+            null
+          ]
+        },
+        "properties": {
+          "description": "Numeric property IDs this agent may reach, within integrations.google_analytics.properties when that is set. Required when the agent is on.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "RoleGoogleCloud": {
       "additionalProperties": false,
       "properties": {
@@ -4720,6 +5498,18 @@
     "RoleIntegrations": {
       "additionalProperties": false,
       "properties": {
+        "admob": {
+          "$ref": "#/$defs/RoleAdMob",
+          "description": "This seat's AdMob access: whether it is on, its level and its publisher accounts."
+        },
+        "app_store_connect": {
+          "$ref": "#/$defs/RoleAppStoreConnect",
+          "description": "This seat's App Store Connect access: whether it is on, its level and its apps."
+        },
+        "apple_ads": {
+          "$ref": "#/$defs/RoleAppleAds",
+          "description": "This seat's Apple Ads access: whether it is on, its level and its ad accounts."
+        },
         "aws": {
           "$ref": "#/$defs/RoleAWS",
           "description": "This seat's own IAM role: whether it is on and its level."
@@ -4752,6 +5542,10 @@
           "$ref": "#/$defs/RoleGitLab",
           "description": "This seat's GitLab service account: whether it is on, its role and its projects."
         },
+        "google_analytics": {
+          "$ref": "#/$defs/RoleGoogleAnalytics",
+          "description": "This seat's Google Analytics access: whether it is on, its level and its properties."
+        },
         "google_cloud": {
           "$ref": "#/$defs/RoleGoogleCloud",
           "description": "This seat's own Google Cloud service account: whether it is on, its level and its projects."
@@ -4763,6 +5557,10 @@
         "mattermost": {
           "$ref": "#/$defs/RoleMattermost",
           "description": "This seat's Mattermost bot: whether it is on, its roles and its channels."
+        },
+        "meta_ads": {
+          "$ref": "#/$defs/RoleMetaAds",
+          "description": "This seat's Meta Ads access: whether it is on, its level, its ad accounts and whether it reaches what no ad account owns."
         },
         "scaleway": {
           "$ref": "#/$defs/RoleScaleway",
@@ -4902,6 +5700,58 @@
         "null"
       ]
     },
+    "RoleMetaAds": {
+      "additionalProperties": false,
+      "properties": {
+        "ad_accounts": {
+          "description": "IDs of the ad accounts this agent may touch, act_ and its digits. Required while enabled.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "business_resources": {
+          "description": "Optional. Let this agent reach what no ad account owns (the business portfolio, Pages, Instagram accounts, pixels, catalogs, apps, billing), within its level, and name it in a change.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Whether this agent may use Meta Ads through the engine's tools. No agent holds a token.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "level": {
+          "description": "read (the default): reads ad accounts, campaigns, ad sets, ads, creatives, audiences and insights. operate: also pauses, lowers budgets and bids and makes changes nothing serves yet at once, and asks an administrator for any spend or anything customers see. administer: also asks for account changes and deletes.",
+          "enum": [
+            "read",
+            "operate",
+            "administer",
+            "",
+            null
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "RolePlacement": {
       "additionalProperties": false,
       "properties": {
@@ -5006,7 +5856,7 @@
           ]
         },
         "max_concurrent_runs": {
-          "description": "How many of this seat's executor runs hold it at once, at most one per conversation. Unset = 1.",
+          "description": "How many of this seat's executor runs hold it at once, at most one per conversation. Unset = 2.",
           "minimum": 1,
           "type": [
             "integer",

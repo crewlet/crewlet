@@ -130,6 +130,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/admob"
+	"github.com/crewlet/crewlet/internal/appleads"
+	"github.com/crewlet/crewlet/internal/appstoreconnect"
+	"github.com/crewlet/crewlet/internal/metaads"
+
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
@@ -147,6 +152,8 @@ import (
 	"github.com/crewlet/crewlet/internal/expo"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/gitlab"
+	"github.com/crewlet/crewlet/internal/googleanalytics"
+	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/googlecloud"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -246,6 +253,10 @@ type Options struct {
 	// lives, which is what it can prove.
 	SlackApps func() map[string]string
 
+	// Consents starts, reads and gives up an integration's consent grant
+	// (consent.go). Nil answers those routes 501.
+	Consents ConsentSignIns
+
 	// StateCipher seals the GitHub App state and MUST be the fleet's own
 	// keyring, the same on every node: where the begin and the callback land on
 	// different nodes, any other refuses every completion. Required; config
@@ -267,6 +278,10 @@ type Options struct {
 	// SSH is the engine's half of Test connection and the SSH audit.
 	SSH SSHAccess
 
+	// AppStoreAnalytics turns App Store analytics on with an Admin key pasted
+	// once; nil on a node that reaches no App Store Connect, which answers 503.
+	AppStoreAnalytics AppStoreAnalytics
+
 	// Access is the engine's per-seat access: each seat's setting, account and
 	// last sync on every integration managing one account per agent, the plan
 	// a draft would take, and the sync a save starts ([Access]).
@@ -287,6 +302,7 @@ type Service struct {
 	// slackApps is which Slack app each seat authenticates as, from the
 	// engine. See [Options.SlackApps].
 	slackApps func() map[string]string
+	consents  ConsentSignIns
 	secrets   setup.Secrets
 	passes    *setup.Runner
 	// access is the engine's per-seat access. See [Options.Access].
@@ -297,9 +313,11 @@ type Service struct {
 	// sshTests is [Options.SSHTests].
 	sshTests SSHTests
 	// ssh is [Options.SSH].
-	ssh     SSHAccess
-	clock   func() time.Time
-	appFlow *AppFlow
+	ssh SSHAccess
+	// analytics is [Options.AppStoreAnalytics].
+	analytics AppStoreAnalytics
+	clock     func() time.Time
+	appFlow   *AppFlow
 
 	// guard decides every route and the credential write one adds. No chart: no
 	// verb here asks a relation.
@@ -360,10 +378,12 @@ func New(opts Options) (*Service, error) {
 		access:         opts.Access,
 		sshTests:       opts.SSHTests,
 		ssh:            opts.SSH,
+		analytics:      opts.AppStoreAnalytics,
 		probes:         maps.Clone(opts.Probes),
 		sink:           opts.Sink,
 		status:         opts.Status,
 		slackApps:      opts.SlackApps,
+		consents:       opts.Consents,
 		clock:          now,
 		guard:          authz.ContextGuard(authz.NoChart{}),
 		writer: setup.Writer{
@@ -408,6 +428,13 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// person's hand.
 	post("POST /setup/integrations/{kind}/provision", authz.EffectRewrites, s.provision)
 	post("POST /setup/integrations/{kind}/check", authz.EffectReads, s.check)
+	// An integration's consent grant (consent.go): a sign-in makes a
+	// credential the engine seals, so a start and a sign-out add
+	// `secrets.write` to the connect verb in the handler.
+	post("POST /setup/integrations/{kind}/consent", authz.EffectCreates, s.startConsent)
+	mount("DELETE /setup/integrations/{kind}/consent", authz.ActionSetupConnect, s.signOutConsent)
+	// OUTSIDE /setup/integrations/{kind}/: the id is a sign-in's.
+	mount("GET /setup/consent-sign-ins/{id}", authz.ActionSetupRead, s.consentSignIn)
 	// One agent's own app: a GitHub App is one bot identity, so an app per
 	// agent is the only way each acts as itself.
 	post("POST /setup/integrations/github/app", authz.EffectCreates, s.beginApp)
@@ -463,6 +490,16 @@ func (s *Service) Routes(mux authz.Mux) error {
 	mount("GET /setup/integrations/ssh/audit", authz.ActionSSHAuditRead, s.sshAudit)
 	// A rotation seals a new authority or replaces the current one.
 	post("POST /setup/integrations/ssh/rotation", authz.EffectRewrites, s.sshRotation)
+	// ONE ACTION REMOVES AN APP STORE CONNECT KEY, the document's slot and then
+	// its sealed .p8 (appstorekeys.go).
+	mount("DELETE /setup/integrations/app_store_connect/keys/{connection}/{slot}", authz.ActionSetupConnect,
+		s.appStoreKeyRemove)
+	// A PASTED ADMIN KEY IS ITS OWN VERB, an administrator's in person at a
+	// step-up, never the connect verb a lead may hold (appstoreanalytics.go).
+	if err := router.Handle("POST /setup/integrations/app_store_connect/analytics", authz.Policy{
+		Action: authz.ActionAppStoreAnalyticsEnable, Effect: authz.EffectCreates}, http.HandlerFunc(s.appStoreAnalytics)); err != nil {
+		failures = append(failures, err)
+	}
 	return errors.Join(failures...)
 }
 
@@ -950,6 +987,27 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		reqs = expo.Requirements(block, s.resolve)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
+	case integration.KindMetaAds:
+		// No roster: no seat holds a token (ADR-0170).
+		block := company.Integrations.MetaAds
+		guide = metaads.Guide()
+		reqs = metaads.Requirements(block, s.resolve)
+		configured = block != nil
+		enabled = block.GrowthEnabled()
+	case integration.KindAppStoreConnect:
+		// No roster: no seat holds a key (ADR-0170).
+		block := company.Integrations.AppStoreConnect
+		guide = appstoreconnect.Guide()
+		reqs = appstoreconnect.Requirements(block, s.resolve)
+		configured = block != nil
+		enabled = block.GrowthEnabled()
+	case integration.KindAppleAds:
+		// No roster: no seat holds a key (ADR-0170).
+		block := company.Integrations.AppleAds
+		guide = appleads.Guide()
+		reqs = appleads.Requirements(block, s.resolve)
+		configured = block != nil
+		enabled = block.GrowthEnabled()
 	case integration.KindDigitalOcean:
 		// No roster, as for Expo.
 		block := company.Integrations.DigitalOcean
@@ -977,7 +1035,7 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		// in the document.
 		block := company.Integrations.GoogleCloud
 		guide = googlecloud.Guide()
-		reqs = googlecloud.Requirements(company.Name, block, s.resolve)
+		reqs = googlecloud.Requirements(company.Name, block, googleauth.EnabledProducts(company), s.resolve)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindSSH:
@@ -986,6 +1044,22 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		block := company.Integrations.SSH
 		guide = sshint.Guide()
 		reqs = sshint.Requirements(block, s.resolve)
+		configured = block != nil
+		enabled = block != nil && block.Enabled
+	case integration.KindAdMob:
+		// No roster: every agent reaches AdMob through the company's consent
+		// grant, and no seat holds a token (ADR-0170).
+		block := company.Integrations.AdMob
+		guide = admob.Guide()
+		reqs = admob.Requirements(company, s.resolve)
+		configured = block != nil
+		enabled = block.GrowthEnabled()
+	case integration.KindGoogleAnalytics:
+		// No roster and no credential: agents sign in as their growth
+		// identities, which the Google identity pass makes.
+		block := company.Integrations.GoogleAnalytics
+		guide = googleanalytics.Guide()
+		reqs = googleanalytics.Requirements(company)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindSlack:
@@ -2080,7 +2154,7 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 	if seatsOff == nil {
 		seatsOff = []string{}
 	}
-	httpjson.Write(w, http.StatusOK, map[string]any{
+	answer := map[string]any{
 		"key": kind, "removed": true,
 		"revision_id": applied.RevisionID, "epoch": applied.Epoch,
 		// The agents this revision turned off, by handle; each keeps what it
@@ -2088,7 +2162,12 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 		"seats_off": seatsOff,
 		// Named, not deleted (`crewlet secrets unset`).
 		"orphaned_secrets": orphaned,
-	})
+	}
+	// A consent grant given up with the block, and what Google was asked.
+	if applied.Consent != nil {
+		answer["oauth"] = applied.Consent
+	}
+	httpjson.Write(w, http.StatusOK, answer)
 }
 
 // refuse maps a write failure onto this surface's answers.

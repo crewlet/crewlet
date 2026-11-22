@@ -137,6 +137,19 @@ type RunNote struct {
 	// confirmed from.
 	Serves []HookServed `json:"serves,omitempty"`
 
+	// PollServes is how many times polls served the note across the run's
+	// jobs: one for each job a poll first served it to ([PendingStore.ServeNotes])
+	// and one for each second admission granted ([PendingStore.AgainNotes]), up
+	// to [RunNote.MaxServes]. A note at it is served to no new job by a poll and
+	// waits for the review, as a note at its hook serves does: a hook's budget
+	// is one job's, a poll's the run's, since its serves record no per-job count.
+	PollServes int `json:"poll_serves,omitempty"`
+
+	// Readmitted is the job last granted the note's second admission
+	// ([PendingStore.AgainNotes]), whose ask made again is granted again at no
+	// cost; empty where none was.
+	Readmitted string `json:"readmitted,omitempty"`
+
 	// For is the one job the item is for, where the store made it that job's
 	// alone. Filed by the store alone, never by a filer
 	// ([PendingStore.FileNote] refuses one with [ErrNoteKind]): a late-call
@@ -319,6 +332,10 @@ type HookServed struct {
 	// to the job's session, and what a settle finds the serve by
 	// ([PendingStore.SettleHook]).
 	Take string `json:"take"`
+
+	// Digest is a poll serve's digest of the item it handed
+	// ([InboxItem.Digest]); empty for a hook's.
+	Digest string `json:"digest,omitempty"`
 
 	// Launch is the job whose hook was served.
 	Launch string `json:"launch"`
@@ -742,6 +759,35 @@ type NoteServe struct {
 	// Wakes is how many wakes the poll hands over of each wake item it names,
 	// by id ([handsWhole]).
 	Wakes map[string]int
+
+	// Inbox is how the harness admits each note, by note id, for a harness
+	// whose session record confirms a take: the serve is then recorded under
+	// the item's id, as a hook's is under its token, beside its digest, so a
+	// read asks the record for either and a settle finds it by the id
+	// ([PendingStore.SettleHook]). Nil for a harness confirmed otherwise,
+	// whose serve records no take.
+	Inbox map[string]InboxItem
+}
+
+// InboxItem is how a harness admits one note a poll serves it: the id it
+// admits the note under, and the digest of the note's text as the poll
+// renders it (SHA-256, hex; executor.ItemDigest), for a record that holds the
+// text rather than the id. The text itself is never stored (ADR-0067).
+type InboxItem struct {
+	ID     string
+	Digest string
+}
+
+// NoteAgain is a job's ask for its harness's second admission of notes a
+// compaction folded ([PendingStore.AgainNotes]), pinned as a poll's serve is
+// ([NoteServe]): to the job, the statuses it may be granted in, and an
+// undecided ending.
+type NoteAgain struct {
+	// IDs are the notes asked for, by id.
+	IDs []string
+
+	Launch   string
+	Statuses []string
 }
 
 // HookServe is a hook's take serving notes to its job's harness
@@ -902,6 +948,7 @@ func (s *CoordStore) FileNote(ctx context.Context, turnID string, filing NoteFil
 	// FILED WAITING, SERVED TO NOBODY: what a note's reads and serves say is
 	// the store's to record, never a filer's to hand in.
 	note.Read, note.Served, note.Place, note.Serves = nil, "", 0, nil
+	note.PollServes, note.Readmitted = 0, ""
 	var (
 		filed NoteFiled
 		read  PendingRun
@@ -1142,16 +1189,30 @@ func (s *CoordStore) ServeNotes(ctx context.Context, turnID string, serve NoteSe
 		}
 		notes := slices.Clone(run.Steer.Notes)
 		marked := false
+		at := s.clock()
 		for i, held := range notes {
 			if !held.Waiting() || !held.IsFor(serve.Launch) || !slices.Contains(serve.IDs, held.ID) ||
 				!handsWhole(held, serve.Wakes) {
 				continue
 			}
 			if held.Served != serve.Launch {
+				// A NEW JOB SPENDS ONE OF THE NOTE'S POLL SERVES; past them it
+				// waits for the review ([RunNote.PollServes]).
+				if held.PollServes >= held.MaxServes() {
+					continue
+				}
 				held.Served = serve.Launch
-				notes[i] = held
+				held.PollServes++
 				marked = true
 			}
+			if item := serve.Inbox[held.ID]; item.ID != "" && !slices.ContainsFunc(held.Serves, func(h HookServed) bool {
+				return h.Launch == serve.Launch && h.Take == item.ID
+			}) {
+				held.Serves = append(slices.Clone(held.Serves), HookServed{Take: item.ID, Digest: item.Digest,
+					Launch: serve.Launch, Boundary: string(types.SteerBoundaryStep), At: at})
+				marked = true
+			}
+			notes[i] = held
 			served = append(served, held)
 		}
 		run.Steer.Notes = notes
@@ -1170,6 +1231,60 @@ func (s *CoordStore) ServeNotes(ctx context.Context, turnID string, serve NoteSe
 		return nil, nil
 	}
 	return served, nil
+}
+
+// AgainNotes grants a job's harness its second admission of notes a
+// compaction folded, and answers which it granted and which it may not. See
+// the contract on [PendingStore].
+//
+// THROUGH THE WRITE A LIVE RUN TAKES, pinned as a poll's serve is
+// ([CoordStore.ServeNotes]): a run whose ending is decided grants nothing.
+func (s *CoordStore) AgainNotes(ctx context.Context, turnID string, ask NoteAgain) (granted, spent []string,
+	err error) {
+	if len(ask.IDs) == 0 {
+		return nil, nil, nil
+	}
+	if ask.Launch == "" || len(ask.Statuses) == 0 {
+		return nil, nil, fmt.Errorf("sandbox: an ask for run %s's notes again names no job or no status it "+
+			"may grant in", turnID)
+	}
+	_, _, found, err := s.writeFound(ctx, turnID, true, Fence{}, func(run *PendingRun) bool {
+		granted, spent = nil, nil
+		if run.LaunchID != ask.Launch || !slices.Contains(ask.Statuses, run.Status) {
+			return false
+		}
+		notes := slices.Clone(run.Steer.Notes)
+		marked := false
+		for i, held := range notes {
+			if !held.Waiting() || !held.IsFor(ask.Launch) || held.IsWake() || held.Served != ask.Launch ||
+				!slices.Contains(ask.IDs, held.ID) {
+				continue
+			}
+			switch {
+			case held.Readmitted == ask.Launch:
+			case held.PollServes >= held.MaxServes():
+				spent = append(spent, held.ID)
+				continue
+			default:
+				held.PollServes++
+				held.Readmitted = ask.Launch
+				notes[i] = held
+				marked = true
+			}
+			granted = append(granted, held.ID)
+		}
+		run.Steer.Notes = notes
+		return marked
+	})
+	switch {
+	case errors.Is(err, ErrRunEnding):
+		return nil, nil, nil
+	case err != nil:
+		return nil, nil, err
+	case !found:
+		return nil, nil, nil
+	}
+	return granted, spent, nil
 }
 
 // errSettleUnnamed is a settle that names no take.

@@ -125,9 +125,9 @@ type executorIndexed struct {
 	ordered bool
 }
 
-// The indexes the reads are held to, beside the six the statements name
+// The indexes the reads are held to, beside the seven the statements name
 // themselves (sessionKey, conversationIdx, lineIdx, endedIdx, seatIdx,
-// heldIdx).
+// heldIdx, sessionIdx).
 const (
 	tombKey       = "sqlite_autoindex_executor_session_tombs_1"
 	removalKey    = "sqlite_autoindex_executor_seat_removals_1"
@@ -215,6 +215,9 @@ func executorReads(t *testing.T) map[string]executorIndexed {
 		"a served turn dropped":         seek(servesKey, dropServedStatement, seat, turn, key),
 		"a turn's served rows deleted":  seek(servesKey, turnServedStatement, seat, turn),
 
+		// WHETHER A MINTED SESSION IS FRESH: any row naming its id.
+		"whether a session is held": seek(sessionIdx, sessionHeldStatement, "s-1"),
+
 		// A SEAT'S PAGE, the latest begun first.
 		"a seat's page": inOrder(seatIdx, pageStatement, seat, 1<<62, DefaultPageSize+1),
 
@@ -279,6 +282,7 @@ func executorCensuses() map[string]executorPlanned {
 func executorPasses() map[string]executorPlanned {
 	return map[string]executorPlanned{
 		"the seats holding sessions":      {handlesStatement, nil},
+		"a page of them":                  {handlesPageStatement, []any{"ana"}},
 		"the sessions by sealing key":     {sealedKeysStatement, nil},
 		"the bases every live turn holds": {heldEverywhereStatement, nil},
 	}

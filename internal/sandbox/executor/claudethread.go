@@ -2,6 +2,7 @@ package executor
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"encoding/json/jsontext"
@@ -2313,4 +2314,103 @@ func (r *threadRestarts) See(h threadHead) bool {
 		return !root
 	}
 	return root
+}
+
+var _ mainThreadHarness = ClaudeCode{}
+
+// readMainThread is Claude Code's read of the main thread of ask's session in
+// box, in the order mainthread.go's file comment states. The release and the saved
+// compaction mark the count alone: takes asked are read in the walk all the
+// same, the chain first on each line, unless no walk could decide one
+// ([unreadTakes]). A count marked before the walk leaves no estimate of the
+// next request, so the floor reads the copy's last request's input.
+func (ClaudeCode) readMainThread(ctx context.Context, box sandbox.Sandbox, paths Paths,
+	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
+
+	var reading sandbox.MainThreadReading
+	takes := ask.Takes
+	if why := unreadTakes(ask); why != "" {
+		reading.Receipts, takes = sandbox.TakeReceipts{Why: why}, nil
+	}
+	if !ask.Count && !ask.Next && len(takes) == 0 {
+		return reading
+	}
+	early := false
+	marked := func(mark sandbox.CountMark) {
+		early = true
+		if ask.Count && reading.Count == nil {
+			reading.Count = &sandbox.ResumedCount{Mark: mark}
+		}
+	}
+	unread := func(why string) sandbox.MainThreadReading {
+		marked(sandbox.CountUnread)
+		if len(takes) > 0 {
+			reading.Receipts = sandbox.TakeReceipts{Why: why}
+		}
+		return reading
+	}
+	thread, ok := claudeMainThread(ask.Session)
+	if !ok {
+		return unread("no session names the job's main thread")
+	}
+	if ask.Release == "" || !releaseAtLeast(ask.Release, claudeCountFloor) {
+		marked(sandbox.CountRelease)
+	}
+	saved, _ := claudePrecompact(ask.Session)
+	for _, name := range saved {
+		if early {
+			break
+		}
+		// Its size, never its body: an empty file is one the harness cannot
+		// read, so it holds no saved compaction.
+		tail, err := box.ReadTail(ctx, paths.ClaudeConfigDir()+"/"+name, 0)
+		switch {
+		case err != nil:
+			marked(sandbox.CountUnread)
+		case tail.Size > 0:
+			marked(sandbox.CountPrecompact)
+		}
+	}
+	counts, nexts := ask.Count && !early, ask.Next && !early
+	if !counts && !nexts && len(takes) == 0 {
+		return reading
+	}
+	body, err := box.OpenFile(ctx, paths.ClaudeConfigDir()+"/"+thread)
+	if err != nil {
+		return unread("the thread did not open")
+	}
+	defer func() { _ = body.Close() }()
+	var large passBudget
+	defer large.release()
+	var (
+		readings []threadReading
+		count    resumedReading
+		next     nextReading
+		hooks    *hookReading
+	)
+	if len(takes) > 0 {
+		chain := &chainReading{c: newThreadChain("")}
+		hooks = newHookReading(chain, takes)
+		readings = append(readings, chain)
+	}
+	if counts {
+		readings = append(readings, &count)
+	}
+	if nexts {
+		readings = append(readings, &next)
+	}
+	if hooks != nil {
+		readings = append(readings, hooks)
+	}
+	walkThread(ctx, body, threadPlainMax, &large, readings...)
+	if counts {
+		reading.Count = count.count(0)
+	}
+	if nexts {
+		reading.Next = next.next()
+	}
+	if hooks != nil {
+		reading.Receipts = hooks.receipts(ctx, ask)
+	}
+	return reading
 }

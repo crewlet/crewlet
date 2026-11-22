@@ -223,7 +223,7 @@ func TestAKeyLinesOpeningIsShownAsItSettlesAsTheWholeTextHasIt(t *testing.T) {
 					n = min(n, len(c.text)-at)
 					pending += c.text[at : at+n]
 					at += n
-					cut := Settled(pending)
+					cut := SettledByBoth(t, pending)
 					shown.WriteString(Secrets(pending[:cut]))
 					pending = pending[cut:]
 				}
@@ -350,18 +350,18 @@ func TestAClaimReadsInAWindowAsNamingWhatItNames(t *testing.T) {
 	text := strings.Repeat("x", 100)
 	for _, c := range []struct {
 		name  string
-		w     [7]int
+		w     [9]int
 		value bool
 	}{
-		{"no value, its separator's end past the window", [7]int{90, 150, 150, 150, 0, 0, 0}, false},
-		{"no value, its separator's end to come", [7]int{90, -1, -1, -1, 0, 0, 0}, false},
-		{"no value, its separator's end set past the window since", [7]int{90, 150, -1, 150, 0, 0, 0}, false},
-		{"no value, its separator's end set in the window since", [7]int{90, 95, -1, 95, 0, 0, 0}, false},
-		{"a value past the window", [7]int{90, 95, 150, 160, 0, 0, 0}, true},
-		{"a value read open past the window", [7]int{90, 95, 150, -1, 0, 0, 0}, true},
+		{"no value, its separator's end past the window", [9]int{90, 150, 150, 150, 0, 0, 0, 0, 0}, false},
+		{"no value, its separator's end to come", [9]int{90, -1, -1, -1, 0, 0, 0, 0, 0}, false},
+		{"no value, its separator's end set past the window since", [9]int{90, 150, -1, 150, 0, 0, 0, 0, 0}, false},
+		{"no value, its separator's end set in the window since", [9]int{90, 95, -1, 95, 0, 0, 0, 0, 0}, false},
+		{"a value past the window", [9]int{90, 95, 150, 160, 0, 0, 0, 0, 0}, true},
+		{"a value read open past the window", [9]int{90, 95, 150, -1, 0, 0, 0, 0, 0}, true},
 	} {
 		k := &keyStage{}
-		k.sources = []*claimSource{{keys: k, words: [][7]int{c.w}}}
+		k.sources = []*claimSource{{keys: k, words: [][9]int{c.w}}}
 		p := k.claimsIn(text, 0).passwords[0]
 		if got := p[3] > p[2]; got != c.value {
 			t.Errorf("%s: the window reads %v as naming a value: %v, want %v", c.name, p, got, c.value)
@@ -384,7 +384,7 @@ func TestAKeyABlockHoldsCutsNoOtherBlock(t *testing.T) {
 	key := strings.Index(text, "passwd:")
 	value := strings.LastIndex(text, g+testKeyLine) + len(g)
 	spans := [][2]int{{0, line + len(g+testEnd)}, {strings.LastIndex(text, testBegin), len(text) - 1}}
-	c := &claims{text: text, read: true, passwords: [][7]int{{key, key + len("passwd:"), value, value + len(testKeyLine), line + len(g), 0, 0}}}
+	c := &claims{text: text, read: true, passwords: [][9]int{{key, key + len("passwd:"), value, value + len(testKeyLine), line + len(g), 0, 0, 0, 0}}}
 	c.build()
 	if got := c.apartIn(slices.Clone(spans), spans); !slices.Equal(got, spans) {
 		t.Errorf("the blocks %v were written as %v", spans, got)
@@ -440,7 +440,7 @@ func TestAClaimEndedNamesWhatItNamedOpen(t *testing.T) {
 	k := &keyStage{}
 	src := &claimSource{keys: k}
 	k.sources = []*claimSource{src}
-	src.valued([3]int{10, 15, -1}, 16, [3]int{})
+	src.valued([3]int{10, 15, -1}, 16, [3]int{}, [2]int{})
 	src.endWord(-1, 30)
 	src.word([3]int{40, -1, -1})
 	src.endWord(45, 45)
@@ -668,6 +668,37 @@ func TestAStringsLinesAreReadAsTheLinesTheyStandFor(t *testing.T) {
 		}
 		if twice := Secrets(once); twice != once {
 			t.Errorf("a second pass changed\n%q\nto\n%q", once, twice)
+		}
+	}
+}
+
+// A VALUE ON THE NEXT LINE OF A STRING THE KEY OPENS IS READ PAST THE STRING'S
+// WRAPPING: a key on a string's first piece after its quote, under no markup
+// closing it, and the value on the string's next piece behind the same gutter,
+// redacted by Secrets and by a stream fed the text a line at a time, every
+// stage past its first window, whatever the gutter.
+//
+// Mutation: read the rest of the key's line past an escaped break as its
+// suffix even where it spells the key line's gutter
+// ([valueRead.restOfLine]), and the value is shown.
+func TestAValueOnAStringsNextLineIsReadPastItsWrapping(t *testing.T) {
+	t.Parallel()
+	filler := strings.Repeat("the build passed ok\n", (stageStep+2*MaxReach)/20+2)
+	for _, gutter := range []string{"> ", "- ", "# ", "// ", "| ", "* ", "1. "} {
+		text := `{"text": "` + gutter + `Password:\n` + gutter + `hunter2x9"}` + "\n"
+		if got := Secrets(text); strings.Contains(got, "hunter2x9") {
+			t.Errorf("gutter %q: Secrets shows the value: %q", gutter, got)
+		}
+		whole := filler + text
+		var lines []int
+		for i := range len(whole) {
+			if whole[i] == '\n' {
+				lines = append(lines, i+1)
+			}
+		}
+		if got := streamed(whole, lines); strings.Contains(got, "hunter2x9") || got != Secrets(whole) {
+			t.Errorf("gutter %q: a stream a line at a time shows the value or parts from Secrets: %q", gutter,
+				got[len(got)-min(len(got), 120):])
 		}
 	}
 }

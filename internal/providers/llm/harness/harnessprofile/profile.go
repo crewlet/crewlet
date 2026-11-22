@@ -244,6 +244,34 @@ type LimitEvent struct {
 
 	// Reset reads the instant out of the sentence at SaidPath.
 	Reset ResetReading `yaml:",inline"`
+
+	// In is where the report is looked for ([EventSource]): stdout by default.
+	In EventSource `yaml:"in,omitempty"`
+}
+
+// EventSource is where a [LimitEvent] or an [AuthEvent] is looked for.
+type EventSource string
+
+const (
+	// EventsInStdout is the run's stdout, decoded a line at a time: the default.
+	EventsInStdout EventSource = ""
+	// EventsInRecord is the record the harness keeps of its session
+	// ([Profile.Requests] with source file), followed for every run, a text
+	// function's included, and read only for a run the harness failed, since a
+	// process of the run can write the file. For a harness whose stdout and
+	// stderr no longer say how a run ended: Kimi Code 2.7 prints a failed run's
+	// class only on its session's `turn.ended` line.
+	EventsInRecord EventSource = "record"
+)
+
+// Valid reports whether s is a source this package reads.
+func (s EventSource) Valid() bool { return s == EventsInStdout || s == EventsInRecord }
+
+// ReadsRecordEvents reports whether a limit or sign-in event is looked for in
+// the harness's record ([EventsInRecord]), which every run then follows.
+func (p *Profile) ReadsRecordEvents() bool {
+	return slices.ContainsFunc(p.LimitEvents, func(e LimitEvent) bool { return e.In == EventsInRecord }) ||
+		slices.ContainsFunc(p.AuthEvents, func(e AuthEvent) bool { return e.In == EventsInRecord })
 }
 
 // MarkerScope says WHERE a harness's failure prose can appear, and therefore
@@ -262,7 +290,7 @@ const (
 	// sat the entry out. A sentinel that is not words ("429") still false-positives.
 	MarkerScopeAnswerAndStderr MarkerScope = "answer-and-stderr"
 	// MarkerScopeStderr searches stderr only, for a harness whose failures
-	// never reach the answer (kimi-code, pi; measured). Narrow only where the
+	// never reach the answer (pi; measured). Narrow only where the
 	// answer is an impossible place for the report: hermes prints a refused
 	// key on stdout with exit 2 (0.21.5).
 	MarkerScopeStderr MarkerScope = "stderr"
@@ -929,6 +957,15 @@ type Profile struct {
 	// OPENAI_BASE_URL names (DashScope's by default): the host's OpenAI key
 	// would go to another vendor.
 	APIKeyEnvShared bool `yaml:"api_key_env_shared,omitempty"`
+
+	// APIKeyModelEnv is the variable the harness reads its model from when its
+	// key variable signs it in, for a harness whose metered key is part of a
+	// model of its own: Kimi Code's KIMI_MODEL_NAME, beside KIMI_MODEL_API_KEY,
+	// adds a provider that becomes its default and refuses a --model naming
+	// any other (2.7.2). Under auth.mode api-key the entry's model goes
+	// here and model_args is not passed; under any other mode it is removed.
+	// The engine owns it, as it does api_key_env: an entry's env may not set it.
+	APIKeyModelEnv string `yaml:"api_key_model_env,omitempty"`
 
 	// EnvSignIn declares that the harness reads its model provider's credential
 	// from its OWN environment, under that provider's variable, so a
@@ -1662,6 +1699,7 @@ func (p *Profile) problems() []string {
 	}
 	p.validateLimitEvents(add)
 	p.validateEventReports(add)
+	p.validateAPIKeyModelEnv(add)
 	p.validateSignIn(add)
 	// An auth marker fires KindAuth, which exhausts the credential as a
 	// spent plan does, so an unusable sentinel costs the same as above.
@@ -2381,20 +2419,19 @@ func (r ResetReading) validate(what string, add func(string, ...any)) {
 // model cannot write it: a JSON event stream with a discriminator, matched on
 // that discriminator and on at least one field beside it.
 func (p *Profile) validateLimitEvents(add func(string, ...any)) {
-	if len(p.LimitEvents) == 0 {
-		return
-	}
-	if p.EffectiveOutput() != OutputJSONL || len(p.EventTypePath) == 0 {
+	onStdout := slices.ContainsFunc(p.LimitEvents, func(e LimitEvent) bool { return e.In == EventsInStdout })
+	if onStdout && (p.EffectiveOutput() != OutputJSONL || len(p.EventTypePath) == 0) {
 		add("limit_events needs output: %s and an event_type_path: on any other "+
 			"output a line of the model's answer is a line of stdout, and it could spell "+
 			"the report out", OutputJSONL)
 	}
 	for i, e := range p.LimitEvents {
 		what := fmt.Sprintf("limit_events[%d]", i)
-		discriminated := slices.ContainsFunc(e.Match, func(m Match) bool {
+		if e.In != EventsInStdout {
+			p.validateRecordEvent(what, e.In, e.Match, add)
+		} else if discriminated := slices.ContainsFunc(e.Match, func(m Match) bool {
 			return slices.Equal(m.Path, p.EventTypePath)
-		})
-		if !discriminated || len(e.Match) < 2 {
+		}); !discriminated || len(e.Match) < 2 {
 			add("%s.match must name the event type at event_type_path and at least one "+
 				"field the harness writes beside it, e.g. an error flag or a status code", what)
 		}
@@ -2403,6 +2440,44 @@ func (p *Profile) validateLimitEvents(add func(string, ...any)) {
 				"the sentence at said_path", what)
 		}
 		e.Reset.validate(what, add)
+	}
+}
+
+// validateAPIKeyModelEnv holds [Profile.APIKeyModelEnv] to a key it goes beside
+// and a model it can carry: without api_key_env no mode puts it in place, and
+// one sharing a name with the key or the token would overwrite it.
+func (p *Profile) validateAPIKeyModelEnv(add func(string, ...any)) {
+	name := p.APIKeyModelEnv
+	switch {
+	case name == "":
+	case p.APIKeyEnv == "":
+		add("api_key_model_env %q is set with no api_key_env: the model goes beside the "+
+			"key, under auth.mode api-key", name)
+	case name == p.APIKeyEnv || name == p.TokenEnv || IsCredentialName(name):
+		add("api_key_model_env %q names a credential variable: it carries the model, "+
+			"beside the key in api_key_env", name)
+	case !p.TakesModel():
+		add("api_key_model_env %q is set, but model_args takes no {model}: the harness "+
+			"takes no model to put there", name)
+	}
+}
+
+// validateRecordEvent holds a limit or sign-in event looked for in the
+// harness's record ([EventsInRecord]) to a record there is: a file the harness
+// keeps, read by [Profile.Requests]. The record names no discriminator, so the
+// match carries its own: at least two fields, the event's type and its class.
+func (p *Profile) validateRecordEvent(what string, in EventSource, match []Match, add func(string, ...any)) {
+	if !in.Valid() {
+		add("%s.in %q (want %q, or nothing for stdout)", what, in, EventsInRecord)
+		return
+	}
+	if p.Requests == nil || p.Requests.Source != SourceFile {
+		add("%s.in is %s, but requests names no file the harness keeps its record in "+
+			"(requests: source: %s)", what, in, SourceFile)
+	}
+	if len(match) < 2 {
+		add("%s.match must name the record's event type and at least one field the "+
+			"harness writes beside it, e.g. an error code", what)
 	}
 }
 

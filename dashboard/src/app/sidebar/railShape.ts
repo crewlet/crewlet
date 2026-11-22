@@ -3,8 +3,8 @@
  * group headings, or `compact`, the kit's narrow rail of glyphs with each
  * named group folded into one tile (`Sidebar.tsx`).
  *
- * A CHOICE ABOUT ONE DESK, kept per reader in this browser the way a reader's
- * Home board is (`lib/readerStore.ts`): it is nobody else's, so it is never the
+ * A CHOICE ABOUT ONE DESK, kept per reader in this browser the way a page's
+ * kept range is (`lib/readerStore.ts`): it is nobody else's, so it is never the
  * engine's, and one browser shared by two people keeps each their own. A tab
  * that has not learned its reader keeps the choice for the visit.
  *

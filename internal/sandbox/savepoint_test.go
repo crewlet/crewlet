@@ -373,7 +373,7 @@ func TestACapturePointRisesOnlyWhereItsTakeNamesTheHeldCapturesNewestCompaction(
 			omitted: []int{3}},
 		"the continued capture, one compaction": {take: new("msg_1"), launch: continued(new("msg_1")),
 			through: 7, omitted: []int{3}},
-		"an OpenCode capture, one compaction": {harness: OpenCodeHarness, take: new("msg_1"),
+		"an OpenCode capture, one compaction": {harness: "opencode", take: new("msg_1"),
 			launch: continued(new("msg_1")), through: 7, omitted: []int{3}},
 		"a compaction since the continued capture": {take: new("msg_2"), launch: continued(new("msg_1"))},
 		"a take whose identity was not read":       {launch: continued(new("msg_1"))},
@@ -427,7 +427,7 @@ func TestACapturePointRisesOnlyWhereItsTakeNamesTheHeldCapturesNewestCompaction(
 			t.Parallel()
 			run := PendingRun{TurnID: "t1", LaunchID: job, LaunchSeq: cmp.Or(tc.launchSeq, 2), Launch: tc.launch,
 				Kept: tc.kept, Capture: tc.kept}
-			capture := SessionCapture{Harness: cmp.Or(tc.harness, ClaudeCodeHarness), BridgeSeq: 99,
+			capture := SessionCapture{Harness: cmp.Or(tc.harness, "claude-code"), BridgeSeq: 99,
 				BridgeOpen: []int{98}, Omitted: []int{97}, LateOmitted: []int{96}}
 			capture.placeAtZero(run.Launch)
 			capture.ResumedCount = &ResumedCount{Tokens: 1, Restart: tc.take}
@@ -497,14 +497,15 @@ func TestAClaudeCodeSaveOutsideTheResumeReadSetIsNeverRaised(t *testing.T) {
 		resumeRead bool
 		through    int
 	}{
-		"Claude Code, a release whose resume was not read": {harness: ClaudeCodeHarness},
-		"Claude Code, a release whose resume was read":     {harness: ClaudeCodeHarness, resumeRead: true, through: 7},
-		"OpenCode": {harness: OpenCodeHarness, through: 7},
+		"Claude Code, a release whose resume was not read": {harness: "claude-code"},
+		"Claude Code, a release whose resume was read":     {harness: "claude-code", resumeRead: true, through: 7},
+		"OpenCode": {harness: "opencode", through: 7},
 	} {
 		save := SessionCapture{Harness: tc.harness, Interrupted: true,
 			ResumedCount: &ResumedCount{Tokens: 1, Restart: new("u-1")}}
 		save.placeAtZero(run.Launch)
-		save.placeAtNewest(savePlaces{run: run, resumeRead: tc.resumeRead})
+		save.placeAtNewest(savePlaces{run: run, resumeRead: tc.resumeRead,
+			needsResumeRead: testThreadTraits[tc.harness].PlacesWithResumeRead})
 		if through, _ := save.SavePoint(); through != tc.through {
 			t.Errorf("%s: the save is placed at %d, want %d", name, through, tc.through)
 		}

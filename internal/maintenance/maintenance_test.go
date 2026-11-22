@@ -889,6 +889,47 @@ func TestTheMarkerSweepRunsUnderTheDutyAtItsOwnHorizon(t *testing.T) {
 	}
 }
 
+// fakeBodies records the cutoffs the body sweep was driven with.
+type fakeBodies struct{ cutoffs []time.Time }
+
+func (b *fakeBodies) SweepBodies(_ context.Context, cutoff time.Time) (int64, error) {
+	b.cutoffs = append(b.cutoffs, cutoff)
+	return 2, nil
+}
+
+// THE ACTIVATION'S BODIES ARE SWEPT ONCE PER FLEET, AT THEIR OWN HORIZON:
+// coord.BodyRetention, argued against the flip that may still name a body,
+// not the markers' three hours, which would keep every superseded body three
+// times as long.
+//
+// Mutation: sweep the bodies at coord.MarkerRetention, or per node, and the
+// job's horizon or scope is wrong.
+func TestTheBodySweepRunsUnderTheDutyAtItsOwnHorizon(t *testing.T) {
+	t.Parallel()
+	if jobs := maintenance.BodyJobs(nil); len(jobs) != 0 {
+		t.Fatalf("a nil body sweep produced %d jobs", len(jobs))
+	}
+	b := &fakeBodies{}
+	jobs := maintenance.BodyJobs(b)
+	if len(jobs) != 1 {
+		t.Fatalf("jobs = %d, want the one body sweep", len(jobs))
+	}
+	job := jobs[0]
+	if job.Name != "activation_bodies" || job.Scope != maintenance.Fleet {
+		t.Fatalf("job = %q scope %v, want activation_bodies under the duty", job.Name, job.Scope)
+	}
+	if got := job.Horizon(); got != coord.BodyRetention {
+		t.Errorf("horizon = %v, want coord.BodyRetention", got)
+	}
+	cutoff := base.Add(-coord.BodyRetention)
+	if n, err := job.Run(context.Background(), base, cutoff); err != nil || n != 2 {
+		t.Fatalf("Run = (%d, %v), want the store's count", n, err)
+	}
+	if len(b.cutoffs) != 1 || !b.cutoffs[0].Equal(cutoff) {
+		t.Errorf("the sweep saw cutoffs %v, want %v", b.cutoffs, cutoff)
+	}
+}
+
 // opsLedger is one log's operation ledger, counting what it was asked to purge.
 type opsLedger struct {
 	rows  int64

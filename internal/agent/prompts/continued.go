@@ -501,7 +501,7 @@ func LateCallArrived(outcome, call string, submission bool) string {
 		text += "\n\nIt is not this work's submission: the run that made it had stopped waiting for it before it" +
 			" returned, and this work's submission is the one this run makes when its work is done."
 	}
-	return text
+	return carried(text)
 }
 
 // earlierSubmission tells a run that a successful `submit_work` among the calls

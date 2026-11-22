@@ -55,6 +55,12 @@ func TestHowLongWorkStoodInEachStateIsReadOffTheFlowRecord(t *testing.T) {
 	if len(got) != len(want) {
 		t.Fatalf("flow hours %+v, want %+v", got, want)
 	}
+	// PAST THE ANSWER'S BYTES THE SUMS ARE REFUSED, never cut: a reader takes
+	// totals over the whole window.
+	if cut, err := r.reader.FlowHours(statelog.WithAnswerBytes(t.Context(), 1), worklet.FlowHoursQuery{Since: from,
+		Until: from.Add(4 * time.Hour), Level: statelog.ReadStale}); err == nil {
+		t.Errorf("flow hours past one row's bytes were answered as %+v, not refused", cut)
+	}
 	for i := range want {
 		if got[i] != want[i] {
 			t.Errorf("row %d = %+v, want %+v", i, got[i], want[i])
@@ -81,6 +87,10 @@ func TestHowLongWorkStoodInEachStateIsReadOffTheFlowRecord(t *testing.T) {
 		Until: from.Add(8 * time.Hour), Level: statelog.ReadStale})
 	if err != nil || len(pickups) != 2 || pickups[0] != 30*time.Minute || pickups[1] != 2*time.Hour {
 		t.Errorf("pickups %v (%v), want half an hour and two hours", pickups, err)
+	}
+	if cut, err := r.reader.FlowPickups(statelog.WithAnswerBytes(t.Context(), 1), worklet.FlowHoursQuery{
+		Since: from, Until: from.Add(8 * time.Hour), Level: statelog.ReadStale}); err == nil {
+		t.Errorf("pickups past one row's bytes were answered as %v, not refused", cut)
 	}
 	if _, err := r.reader.FlowHours(t.Context(), worklet.FlowHoursQuery{Since: from, Until: from.Add(15 * 24 * time.Hour),
 		Level: statelog.ReadStale}); err == nil {

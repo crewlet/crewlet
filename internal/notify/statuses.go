@@ -114,6 +114,21 @@ func (s *Statuses) Explain(ctx context.Context, handle, wake string, metadata ma
 	return false
 }
 
+// ExplainTurn tells the conversation a turn holds its indicator on why its
+// work is about to wait, as wake, on whichever backend holds the turn
+// ([StatusDriver.ExplainTurn]); it reports whether any did.
+func (s *Statuses) ExplainTurn(handle, turnID, wake, why string) bool {
+	if s == nil {
+		return false
+	}
+	for _, d := range s.drivers {
+		if d.ExplainTurn(handle, turnID, wake, why) {
+			return true
+		}
+	}
+	return false
+}
+
 // Dequeue takes the waits of these wakes away on every backend
 // ([StatusDriver.Dequeue]): a driver that queued none of them does nothing.
 func (s *Statuses) Dequeue(ctx context.Context, handle string, wakes []string) {

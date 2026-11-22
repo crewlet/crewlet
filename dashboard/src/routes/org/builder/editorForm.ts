@@ -315,7 +315,7 @@ export function wholeNumberError(typed: string): string | undefined {
 export function runCapError(typed: string): string | undefined {
   const t = typed.trim();
   if (t === "" || /^0*[1-9]\d*$/.test(t)) return undefined;
-  return "Write a whole number of at least 1, or leave it empty for one.";
+  return "Write a whole number of at least 1, or leave it empty for two.";
 }
 
 // ---------------------------------------------------------------------------

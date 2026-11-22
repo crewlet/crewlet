@@ -87,6 +87,8 @@ export interface HelperModelProps {
   onApplied: () => void;
   /** How wide the picker is: its own words' width, or its place's whole width in a column of them. */
   width?: "auto" | "full";
+  /** A bordered field, or a quiet value that draws its box under the pointer or focus, in a list of them. */
+  appearance?: "field" | "quiet";
 }
 
 /** The helper's model: a picker for a reader who may choose, its name for anybody else. */
@@ -97,6 +99,7 @@ export function HelperModel({
   canAssign,
   onApplied,
   width = "auto",
+  appearance = "field",
 }: HelperModelProps) {
   const { name } = HELPERS[helper];
   const write = useSettingWrite({
@@ -151,6 +154,7 @@ export function HelperModel({
         ariaLabel={`${name}'s model`}
         size="sm"
         width={width}
+        appearance={appearance}
         value={shown ?? NONE}
         options={options}
         disabled={write.busy}

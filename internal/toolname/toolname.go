@@ -100,6 +100,20 @@ const (
 // read: a literal copy of it compiled and passed.
 const AskAndWait = "ask_and_wait"
 
+// The executor run's tools for the runs around it (ADR-0176): offered on the
+// run's surface of its own, beside [AskAndWait], while its seat holds other
+// runs, and named by no authority row. The engine hands them to the runner,
+// the run's brief names them, and [WaitForRun] ends the run's job as
+// [AskAndWait] does.
+const (
+	// ListRuns lists the other runs in flight around the caller's.
+	ListRuns = "list_runs"
+	// MessageRun sends one of them a message, read at its next step.
+	MessageRun = "message_run"
+	// WaitForRun parks the caller's run until one of them leaves its seat.
+	WaitForRun = "wait_for_run"
+)
+
 // The onboarding pass's two tools, which the builtins implement. The runner
 // offers them without discovery, the skill guard exempts the terminator, and
 // the prompts, the learning store's brief and the round-cap extension name

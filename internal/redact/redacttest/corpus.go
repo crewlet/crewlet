@@ -52,6 +52,7 @@ func Shapes() []Shape {
 		{"run-token", "crewlet_rt1." + body(8) + ".seat-1." + "1700000000" + "." + body(43)},
 		{"google-token", "ya29." + body(30)},
 		{"jwt", "eyJ" + body(12) + ".eyJ" + body(12) + "." + body(16)},
+		{"google-client-secret", "GOCSPX-" + body(28)},
 		{"openai-project-key", "sk-proj-" + body(32)},
 		{"anthropic-key", "sk-ant-api03-" + body(40)},
 		{"openai-key", "sk-" + body(32)},

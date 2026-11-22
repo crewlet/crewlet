@@ -411,8 +411,9 @@ func TestSeedReadsEverySeatsNewestTurns(t *testing.T) {
 	var seats []string
 	for i, q := range history.turns {
 		seats = append(seats, q.AgentID)
-		if q.Limit != observe.SeedTurnsFor(1) || q.Sort != store.TurnSortStarted {
-			t.Errorf("turn read %+v, want the newest %d by start", q, observe.SeedTurnsFor(1))
+		if q.Limit != observe.SeedTurnsFor(org.DefaultMaxConcurrentRuns) || q.Sort != store.TurnSortStarted {
+			t.Errorf("turn read %+v, want the newest %d by start", q,
+				observe.SeedTurnsFor(org.DefaultMaxConcurrentRuns))
 		}
 		// ONE READING OF THE CLOCK for every windowed read of the seed.
 		if !history.turnsAt[i].Equal(history.spendAt) {
@@ -430,8 +431,8 @@ func TestSeedReadsEverySeatsNewestTurns(t *testing.T) {
 
 // A SEAT RUNNING SEVERAL TURNS AT ONCE IS READ DEEP ENOUGH FOR ALL OF THEM: up
 // to its sandbox.max_concurrent_runs turns may be parked, so its read holds
-// that many, one that died mid-flight, and its newest ended turn — while a
-// seat of one is read for the three it always was.
+// that many, one that died mid-flight, and its newest ended turn — a seat at
+// the default of two for four.
 //
 // Mutation: read every seat for a fixed three, and the seat of three loses a
 // parked turn or its last ended one.
@@ -454,8 +455,8 @@ func TestSeedReadsEachSeatDeepEnoughForItsCap(t *testing.T) {
 	if got := limits[seatID(t, o, "ada")]; got != 5 {
 		t.Errorf("ada, three turns at once, is read for %d turns, want 5", got)
 	}
-	if got := limits[seatID(t, o, "bob")]; got != 3 {
-		t.Errorf("bob, one turn at a time, is read for %d turns, want 3", got)
+	if got := limits[seatID(t, o, "bob")]; got != 4 {
+		t.Errorf("bob, at the default of two turns at once, is read for %d turns, want 4", got)
 	}
 }
 
@@ -579,7 +580,7 @@ func fanQueue(t *testing.T, broker *memory.Broker, log *store.EventLog, id strin
 		t.Fatalf("start %s: %v", id, err)
 	}
 	t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(t.Context())) })
-	stop, err := eventfan.Serve(t.Context(), q, id, log)
+	stop, err := eventfan.Serve(t.Context(), q, id, log, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("serve %s: %v", id, err)
 	}

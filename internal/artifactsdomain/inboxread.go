@@ -227,30 +227,55 @@ func inboxIn(ctx context.Context, tx *sql.Tx, q InboxQuery, limit int, now time.
 		return InboxPage{}, err
 	}
 	if len(scanned) == limit {
-		last := scanned[len(scanned)-1]
-		page.Next = statelog.Position{Stream: last.LogStream, Generation: last.LogGeneration,
-			Seq: last.LogSeq}.String()
+		page.Next = noticePlace(scanned[len(scanned)-1])
 	}
+	// A NOTICE IS HELD WITH THE HEAD IT FIRST NAMES, which carries the
+	// artifact's shares, so a page cut at its bytes answers no head of a
+	// notice it left out. A recipient holds one notice per record, so the
+	// cut never splits a position (internal/inbox's Source).
+	held := statelog.RowsOf(ctx)
 	for _, n := range scanned {
-		if _, seen := page.Heads[n.Artifact]; !seen {
-			head, found, err := readHeadTx(ctx, tx, n.Artifact) //nolint:govet // shadow: scoped to this loop
-			if err != nil {
+		head, live := page.Heads[n.Artifact]
+		var named *Head
+		if !live {
+			var found bool
+			if head, found, err = readHeadTx(ctx, tx, n.Artifact); err != nil {
 				return InboxPage{}, err
 			}
-			if found && head.Status == StatusLive {
-				page.Heads[n.Artifact] = head
+			if live = found && head.Status == StatusLive; live {
+				named = &head
 			}
 		}
 		mark := classifier.Classify(inbox.Ref{RecordID: n.RecordID,
 			At:     inbox.Position{Stream: n.LogStream, Generation: n.LogGeneration, Seq: n.LogSeq},
 			Reason: string(n.Reason)}, now)
 		n.Primary, n.Read, n.Snoozed, n.SnoozedUntil = mark.Primary, mark.Read, mark.Snoozed, mark.SnoozedUntil
-		if head, live := page.Heads[n.Artifact]; live {
+		if live {
 			n.Title, n.ArtifactKind = head.Title, head.Kind
+		}
+		if !held.TakeEncoded(heldNotice{Notice: n, Head: named}) {
+			page.Next = noticePlace(page.Notices[len(page.Notices)-1])
+			break
+		}
+		if named != nil {
+			page.Heads[n.Artifact] = *named
 		}
 		page.Notices = append(page.Notices, n)
 	}
 	return page, nil
+}
+
+// heldNotice is one notice as an inbox page's bytes count it: with the head
+// it adds to the page, if any.
+type heldNotice struct {
+	Notice InboxNotice `json:"notice"`
+	Head   *Head       `json:"head,omitempty"`
+}
+
+// noticePlace is a notice's place on the artifacts log: the cursor a page
+// ending at it answers.
+func noticePlace(n InboxNotice) string {
+	return statelog.Position{Stream: n.LogStream, Generation: n.LogGeneration, Seq: n.LogSeq}.String()
 }
 
 // inboxScan is one inbox read's scan: whose notices, the exclusive bounds on

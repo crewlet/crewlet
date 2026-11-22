@@ -568,7 +568,7 @@ With the engine **stopped** it writes this node's own store, as the [offer](#wha
 
 **It never refuses a file for its charter.** A company file whose mission or policy breaks the [charter's rules](../concepts/configuration.md#mission-vision-and-policies) (past its length, or on two lines) ran under an earlier build, and restore or migration must work: each fault is printed as a `warning (admission): …` line and the file is imported, both ways. Through a node it sends `PUT /config?import=true`, which judges the charter warn-only (an edit is judged on what it changes). That mode is `admin`'s: `CREWLET_API_TOKEN` must be a Tier A token, or a machine token whose owner holds `admin`. The revision records `source: file`, as offline does, and the credential in `operator_id`. Every other rule holds as for any write.
 
-`-summary` is the audit note (default `imported from <path>`). Through the API the revision records the author the node resolved: `created_by` is `token:<id>` for a Tier A token, a person's seat for a person (every person holds one), the owner for a person's machine token; `created_by_kind` is `operator` or `human`; `operator_id` names the credential. Offline it is the invoking operator (`$CREWLET_OPERATOR`, else `$USER`, else `$LOGNAME`, kind `operator`, no credential) and `source` is `file`; neither is settable from the command line. The author travels with the revision to every node.
+`-summary` is the audit note (default `imported from <path>`, the path cut to 512 bytes); one past the 4,096 bytes the activation pointer carries, as the pointer encodes it, is refused before anything is stored, naming the flag. Through the API the revision records the author the node resolved: `created_by` is `token:<id>` for a Tier A token, a person's seat for a person (every person holds one), the owner for a person's machine token; `created_by_kind` is `operator` or `human`; `operator_id` names the credential. Offline it is the invoking operator (`$CREWLET_OPERATOR`, else `$USER`, else `$LOGNAME`, kind `operator`, no credential) and `source` is `file`; neither is settable from the command line. The author travels with the revision to every node.
 
 Through the API an import is `admin`'s alone: `PUT /config?import=true` is refused `403` to a [unit's lead](api-endpoints.md#a-lead-edits-their-own-team) before the body is read, even for a file changing only their units; leads use `PUT` or `PATCH /config` or the entity routes. Offline anyone who can open the store on the host can write it.
 
@@ -2859,7 +2859,7 @@ is sent as a seat's call, so it runs under the prompt a seat does.
 
 For an entry some agent seat's executor chain holds, `doctor` also prints
 `executor` lines: the seats that launch on it; whether its harness has an in-box
-runner — only `claude-code` and `opencode` do, and another harness is skipped at
+runner — only `claude-code`, `opencode` and `kimi-code` do, and another harness is skipped at
 launch and serves those seats' phases on this host only, which is a line and
 not a problem; and the tool bridge its box dials — for a `direct` cell this
 node's own listener on loopback where the node binds `api.port`, whatever its

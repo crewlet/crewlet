@@ -114,6 +114,10 @@ type Sources struct {
 	// reads (ADR-0125); nil serves no such question.
 	Delegated DelegatedReads
 
+	// Growth is the access log's growth records, which `growth_changes`
+	// reads (ADR-0171); nil serves no such question.
+	Growth GrowthReads
+
 	// DelegatedGitHub is the company's GitHub a rule's form offers
 	// (delegatedgithub.go); nil serves none of its three questions.
 	DelegatedGitHub DelegatedGitHub
@@ -353,9 +357,10 @@ type Sources struct {
 	RunAnswers *sandbox.AnswerSeal
 
 	// HeldCalls opens the arguments of a call a run holds for a person's
-	// approval (ADR-0077), for a reader who may approve it: an executor
-	// row's `held_arguments` and the MCP answer's `approvals`. Nil, or a
-	// seal that does not open here, answers them null.
+	// approval (ADR-0077): an executor row's `held_arguments` and the MCP
+	// answer's `approvals`, as sent to who may answer the call while it
+	// waits and redacted to every other reader. Nil, or a seal that does
+	// not open here, answers them null.
 	HeldCalls *sandbox.CallSeal
 
 	// ExecutorTail is a running executor's live output, ANSWERED BY THE
@@ -503,6 +508,10 @@ type Sources struct {
 	// process cannot say", which the rail reports rather than badging
 	// every room with its whole history.
 	ChatReads ChatReads
+
+	// HomeBoards is where each person's Home board is kept, in coordination.
+	// Nil leaves `home_board` unregistered: this node keeps none.
+	HomeBoards HomeBoards
 
 	// WebhookBase is where a THIRD-PARTY APP reaches this deployment
 	// (`config.API.WebhookBase`: `api.public.external_url` where `api.public`
@@ -815,6 +824,11 @@ func Register(r *Registry, s Sources) {
 	// no seat" is the answer a screen needs in order to say what to bind.
 	// Everybody's, since the answer is about the asker and nobody else.
 	r.Register("viewer", Everybody(), s.viewer)
+	// THE ASKER'S OWN HOME BOARD, everybody's for the viewer's reason, where
+	// this node reaches the store that keeps it.
+	if s.HomeBoards != nil {
+		r.Register("home_board", Everybody(), s.homeBoard)
+	}
 	if s.Catalogue != nil {
 		r.Register("llm_models", Requires(iam.GrantAdmin), s.llmModels)
 	}
@@ -1169,6 +1183,11 @@ func Register(r *Registry, s Sources) {
 		// WHAT DELEGATES DECIDED, for the people they answer to: decided
 		// per caller against the rules' escalate_to (ADR-0125).
 		r.Register("delegated_decisions", DecidedBy(authz.ActionDelegatedRead), s.delegatedDecisions)
+	}
+	if s.Growth != nil {
+		// THE RECENT AGENT CHANGES TO THE COMPANY'S GROWTH ACCOUNTS, the
+		// company-wide trail's question (ADR-0171).
+		r.Register("growth_changes", DecidedBy(authz.ActionAuditRead), s.growthChanges)
 	}
 	if s.DelegatedGitHub != nil {
 		// WHAT A RULE CAN NAME FROM THE COMPANY'S GITHUB, for the

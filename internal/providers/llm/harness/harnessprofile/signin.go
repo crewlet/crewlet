@@ -122,6 +122,9 @@ type AuthEvent struct {
 	// SaidPath is where in the event the vendor's own sentence is. Empty
 	// shows the whole line.
 	SaidPath Path `yaml:"said_path,omitempty"`
+
+	// In is where the report is looked for ([EventSource]): stdout by default.
+	In EventSource `yaml:"in,omitempty"`
 }
 
 // DeviceCodePatterns reads a device sign-in's verification address and its
@@ -346,7 +349,8 @@ func (p *Profile) validateDeviceLogin(add func(string, ...any)) {
 // a limit event to: matched on fields the harness writes, never on the model's
 // words.
 func (p *Profile) validateEventReports(add func(string, ...any)) {
-	if (len(p.LimitReports) > 0 || len(p.AuthEvents) > 0) &&
+	authOnStdout := slices.ContainsFunc(p.AuthEvents, func(e AuthEvent) bool { return e.In == EventsInStdout })
+	if (len(p.LimitReports) > 0 || authOnStdout) &&
 		(p.EffectiveOutput() != OutputJSONL || len(p.EventTypePath) == 0) {
 		add("limit_reports and auth_events need output: %s and an event_type_path: on "+
 			"any other output a line of the model's answer is a line of stdout", OutputJSONL)
@@ -364,7 +368,12 @@ func (p *Profile) validateEventReports(add func(string, ...any)) {
 		e.validate(fmt.Sprintf("limit_reports[%d]", i), names(e.Match), add)
 	}
 	for i, e := range p.AuthEvents {
-		discriminated(fmt.Sprintf("auth_events[%d]", i), e.Match)
+		what := fmt.Sprintf("auth_events[%d]", i)
+		if e.In != EventsInStdout {
+			p.validateRecordEvent(what, e.In, e.Match, add)
+			continue
+		}
+		discriminated(what, e.Match)
 	}
 	for i, w := range p.LimitWindows {
 		if problem := sentinelProblem(w.Contains); problem != "" {
@@ -440,7 +449,7 @@ func (p Profile) cloneSignIn(out *Profile) {
 	if p.AuthEvents != nil {
 		out.AuthEvents = make([]AuthEvent, len(p.AuthEvents))
 		for i, e := range p.AuthEvents {
-			out.AuthEvents[i] = AuthEvent{Match: cloneMatches(e.Match), SaidPath: slices.Clone(e.SaidPath)}
+			out.AuthEvents[i] = AuthEvent{Match: cloneMatches(e.Match), SaidPath: slices.Clone(e.SaidPath), In: e.In}
 		}
 	}
 	out.SignInEnv = slices.Clone(p.SignInEnv)

@@ -85,13 +85,13 @@ type fleetRevision struct {
 // that landed mid-tick was refused, and on a refusing node every write lost
 // the compare-and-set, a 409 nothing could clear. Every node answers alike.
 // FROM THIS NODE'S HISTORY WHERE IT HOLDS THE REVISION, else from the body the
-// pointer carries ([configplane.RevisionOf]); A READ NEVER WRITES. WITH NO
+// pointer names ([configplane.RevisionOf]); A READ NEVER WRITES. WITH NO
 // POINTER, the company this node knows ([store.Configs.Restorable]), and a
 // write built on it is create-only. An unreadable coordination store stays
 // [coord.ErrUnavailable], 503: "no company" and "could not ask" send a write
 // to opposite outcomes, and guessing the first replaces a running company.
 func (s *Service) current(ctx context.Context) (fleetRevision, bool, error) {
-	var bodiless *coord.Activation
+	var missing *coord.Activation
 	for {
 		target, pointed, err := s.plane.Target(ctx)
 		if err != nil {
@@ -114,7 +114,7 @@ func (s *Service) current(ctx context.Context) (fleetRevision, bool, error) {
 			held.ActivatedAt = target.At
 			return fleetRevision{revision: held, pointed: true}, true, nil
 		}
-		payload, found, err := s.plane.Payload(ctx, target.RevisionID)
+		payload, found, err := s.plane.Body(ctx, target)
 		if err != nil {
 			return fleetRevision{}, false, fmt.Errorf("configapi: read the fleet's revision %s: %w",
 				target.RevisionID, err)
@@ -123,18 +123,16 @@ func (s *Service) current(ctx context.Context) (fleetRevision, bool, error) {
 			return fleetRevision{revision: configplane.RevisionOf(target, payload), pointed: true,
 				fleet: true}, true, nil
 		}
-		// THE POINTER MOVED between the two reads, taking its body with
-		// it: read it again. Each round that finds it moved is another
-		// write landing, so this ends when they stop. A pointer found
-		// UNMOVED with no body is not a race to wait out — every
-		// activation carries its body, so it is a pointer nothing this
-		// build writes — and is answered as the fault it is.
-		if bodiless != nil && bodiless.Epoch == target.Epoch &&
-			bodiless.RevisionID == target.RevisionID {
-			return fleetRevision{}, false, fmt.Errorf("configapi: the fleet's activation "+
-				"names revision %s and carries no body for it", target.RevisionID)
+		// THE POINTER MOVED ON between the two reads and the sweep took the
+		// body it named: read it again. Each round that finds it moved is
+		// another write landing, so this ends when they stop. A pointer found
+		// UNMOVED naming a body the store lacks is no race to wait out (the
+		// sweep keeps the body a pointer names) and is the fault it is.
+		if missing != nil && missing.Epoch == target.Epoch && missing.RevisionID == target.RevisionID {
+			return fleetRevision{}, false, fmt.Errorf("configapi: the fleet's activation names "+
+				"revision %s and the store holds no body for it", target.RevisionID)
 		}
-		bodiless = &target
+		missing = &target
 	}
 }
 

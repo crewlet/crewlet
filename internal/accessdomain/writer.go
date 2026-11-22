@@ -899,6 +899,7 @@ var expirableStatements = []string{
 	`SELECT 1 FROM access_certificates WHERE at < ? LIMIT 1`,
 	`SELECT 1 FROM access_commands WHERE at < ? LIMIT 1`,
 	`SELECT 1 FROM access_verdicts WHERE at < ? LIMIT 1`,
+	`SELECT 1 FROM access_growth WHERE at < ? LIMIT 1`,
 }
 
 // expirableBefore reports whether an expiry through `before` would take a row.

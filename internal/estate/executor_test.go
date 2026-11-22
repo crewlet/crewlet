@@ -238,12 +238,26 @@ func (l *logbook) Unended(_ context.Context, before time.Time, limit int) ([]exe
 		Turn: liveTurn, At: before}}, nil
 }
 
+func (l *logbook) HandlesPage(ctx context.Context, _ string,
+	fresh statelog.Freshness) (executordomain.HandlesPage, error) {
+	handles, err := l.Handles(ctx, fresh)
+	return executordomain.HandlesPage{Handles: handles}, err
+}
+
 func (l *logbook) Handles(_ context.Context, fresh statelog.Freshness) ([]string, error) {
 	l.asked("handles", fresh)
 	if fresh.Level == statelog.ReadStale {
 		return nil, fmt.Errorf("%w: list the seats holding sessions", executordomain.ErrIncomplete)
 	}
 	return []string{"cto", "swe"}, nil
+}
+
+// heldSession is the one session id the logbook's rows name.
+const heldSession = "session_0b9c1d3e-5f70-4a8b-9c1d-2e3f4a5b6c7d"
+
+func (l *logbook) SessionHeld(_ context.Context, sessionID string, fresh statelog.Freshness) (bool, error) {
+	l.asked("session_held", fresh)
+	return sessionID == heldSession, nil
 }
 
 func (l *logbook) SealedKeys(context.Context) (executordomain.SealedCount, error) {
@@ -420,6 +434,12 @@ func TestEveryExecutorOperationCrossesWhole(t *testing.T) {
 			"read as a shorter list", err)
 	}
 
+	for id, want := range map[string]bool{heldSession: true, "session_7d6c5b4a-3f2e-4d1c-8b9a-07f5e3d1c9b0": false} {
+		if held, err := reads.SessionHeld(ctx, id, linearizable); err != nil || held != want {
+			t.Errorf("session %s held = (%v, %v), want %v", id, held, err, want)
+		}
+	}
+
 	count, err := reads.SealedKeys(ctx)
 	if err != nil || count.Values["k0"] != 1 || count.Values["k1"] != 2 || count.Outside("k1") != 1 {
 		t.Errorf("sealed keys = (%+v, %v)", count, err)
@@ -507,7 +527,7 @@ func TestEveryExecutorOperationCrossesWhole(t *testing.T) {
 	book.mu.Lock()
 	defer book.mu.Unlock()
 	for _, want := range []string{"head:linearizable", "session:session", "sessions:consistent_prefix",
-		"search:linearizable", "handles:linearizable", "handles:stale"} {
+		"search:linearizable", "handles:linearizable", "handles:stale", "session_held:linearizable"} {
 		if !slices.Contains(book.heard, want) {
 			t.Errorf("the serving node never read %s, as the caller asked: heard %v", want, book.heard)
 		}

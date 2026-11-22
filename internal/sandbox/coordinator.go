@@ -493,7 +493,7 @@ type CoordinatorOptions struct {
 	// SteersConfirmed publishes, as delivered, every note and wake item a hook's
 	// serve to the run's job is recorded as having handed over ([readByServeOf]),
 	// the engine claiming each wake. Called on every Claude Code box read, asked
-	// or not ([Coordinator.settleHookReceipts]), so a verdict whose answer was
+	// or not ([Coordinator.settleReceipts]), so a verdict whose answer was
 	// lost is published by the next read. Ids derive from the turn and each note,
 	// so a repeat is the same records; nil publishes nothing.
 	SteersConfirmed func(ctx context.Context, run PendingRun, notes []RunNote)
@@ -681,6 +681,11 @@ type CoordinatorOptions struct {
 	// continues no kept session: a relaunch continues at most its own box's.
 	Restore SessionRestore
 
+	// Holders is whether a session id is any turn's in the executor log, which a
+	// minted session's bind asks of a fresh id (minted.go). Nil refuses every
+	// fresh id, so a minting harness's job binds only the session it continued.
+	Holders SessionHolders
+
 	// Saves is the fleet's ledger of each seat's saves, which a save of a running
 	// job is charged against before its stamp (saveledger.go): the engine's
 	// coordination store. Nil takes no save.
@@ -696,6 +701,11 @@ type CoordinatorOptions struct {
 	// ([SpoolMeter]): the engine's meter records them in the node's metrics. Nil
 	// measures nothing.
 	Spools SpoolMeter
+
+	// AnswerBudget is the node's answer budget every collection of a run's
+	// box holds its weight of while it reads ([Runner.Collect]), its peers'
+	// payload answers beside. Nil is a budget of this coordinator's own.
+	AnswerBudget *queue.AnswerBudget
 
 	// Now is the clock, injectable for tests.
 	Now func() time.Time
@@ -786,6 +796,7 @@ type Coordinator struct {
 	// ([relaunchCaptureWait]); holdingsWait bounds reading what a cut-off
 	// session holds ([holdingsReadWait]).
 	restore      SessionRestore
+	holders      SessionHolders // [CoordinatorOptions.Holders]
 	relaunchWait time.Duration
 	holdingsWait time.Duration
 	// endWait is how long a read waits for a job its script was asked to end
@@ -815,6 +826,8 @@ type Coordinator struct {
 	// spoolRoom is the room every spool of this process shares, in bytes
 	// ([spoolRoomBytes], spoolroom.go).
 	spoolRoom *spoolRoom
+	// answerBudget is the node's answer budget ([CoordinatorOptions.AnswerBudget]).
+	answerBudget *queue.AnswerBudget
 
 	// mainThreadWait bounds reading a job's main thread at its collection
 	// ([MainThreadReadWait], [Coordinator.readMainThread]); verdictWait and
@@ -847,10 +860,16 @@ type Coordinator struct {
 	// conversations (seatcap.go). Under mu.
 	reserved map[string]int
 	heldRuns map[string]heldRun
-	// waiting is each seat's conversations a delivery waits on, held at the
-	// head of its inbox while a run works them ([Coordinator.HoldForConversation]).
-	// Under mu.
-	waiting map[string]map[string]struct{}
+	// waitingRuns is each run parked by `wait_for_run` this node counts, by
+	// turn: out of [Holding], its keys stay held while it waits, so its mail
+	// waits aside behind it (ADR-0176's amendment). Under mu.
+	waitingRuns map[string]heldRun
+	// freed is each seat's keys its runs leaving [Holding] freed, readmitted
+	// on its inbox where no run still holds them ([Coordinator.readmitFreed]),
+	// and asideFull each seat whose inbox holds as many deliveries aside as it
+	// keeps ([Coordinator.HoldForAside]). Under mu.
+	freed     map[string][]freedKey
+	asideFull map[string]bool
 
 	// moves counts what this node has done to each seat's runs that a recount
 	// from the store must not be read across (every [Coordinator.adjustLocked]
@@ -1074,10 +1093,12 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		sessions:           opts.Sessions,
 		keep:               opts.Keep,
 		restore:            opts.Restore,
+		holders:            opts.Holders,
 		saves: saveState{ledger: opts.Saves, slots: make(chan struct{}, maxConcurrentSaves),
 			memos: map[string]*saveMemo{}},
 		sharedPack:   make(chan struct{}, 1),
 		spoolRoom:    newSpoolRoom(opts.Spools),
+		answerBudget: opts.AnswerBudget,
 		relaunchWait: relaunchCaptureWait,
 		holdingsWait: holdingsReadWait,
 		endWait:      JobEndWait,
@@ -1097,7 +1118,9 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		runs:         map[string]seatRuns{},
 		reserved:     map[string]int{},
 		heldRuns:     map[string]heldRun{},
-		waiting:      map[string]map[string]struct{}{},
+		waitingRuns:  map[string]heldRun{},
+		freed:        map[string][]freedKey{},
+		asideFull:    map[string]bool{},
 		moves:        map[string]uint64{},
 		attempts:     map[answerKey]map[string]answerBudget{},
 		retries:      map[string]*answerRetry{},
@@ -1148,6 +1171,9 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		c.taker = newTakerLease(opts.Takers, opts.Incarnation, opts.TakerTTL)
 	}
 	c.sweepSpools()
+	if c.answerBudget == nil {
+		c.answerBudget = queue.NewAnswerBudget(nil)
+	}
 	return c, nil
 }
 
@@ -1386,20 +1412,20 @@ func (c *Coordinator) moved(handle string) {
 	c.moves[handle]++
 }
 
-// seatFreed signals [ConversationBusy] for a seat one of whose runs has just
-// left [Holding], and [SeatFull] where that freed a slot below its cap, so an
-// answer owed on it is resumed now rather than at its backstop, and tells
-// [CoordinatorOptions.Busy] of a seat that became busy or free. Called outside
-// c.mu, which [Coordinator.Readmit] takes.
-func (c *Coordinator) seatFreed(handle string, was, now seatRuns) {
-	if now.holding < was.holding {
-		c.mu.Lock()
-		c.pruneWaitingLocked(handle)
-		c.mu.Unlock()
+// seatFreed readmits on the seat's inbox what its runs leaving [Holding] freed
+// ([Coordinator.readmitFreed]), signals [ConversationBusy] for a seat one of
+// whose runs has just left, and [SeatFull] where that freed a slot below its
+// cap, so an answer owed on it is resumed now rather than at its backstop, and
+// tells [CoordinatorOptions.Busy] of a seat that became busy or free. Called
+// outside c.mu, which [Coordinator.Readmit] takes.
+func (c *Coordinator) seatFreed(ctx context.Context, handle string, was, now seatRuns) {
+	c.readmitFreed(ctx, handle)
+	// A RUN PARKED ON A WAIT ENDING frees the conversations it kept busy too.
+	if now.holding < was.holding || now.awaiting < was.awaiting {
 		c.Readmit(ConversationBusy, handle)
-		if now.holding < c.capOf(handle) {
-			c.Readmit(SeatFull, handle)
-		}
+	}
+	if now.holding < was.holding && now.holding < c.capOf(handle) {
+		c.Readmit(SeatFull, handle)
 	}
 	if (was.holding > 0) != (now.holding > 0) && c.busy != nil {
 		c.busy(handle)
@@ -1429,7 +1455,10 @@ func (c *Coordinator) OnEvent(ctx context.Context, ev *events.Event) error {
 	case *types.ExecutorAnswerGiven:
 		if payload.FoldIn != "" {
 			// A FOLD-IN'S ANSWER IS RECORDED ALREADY (AnswerDesk.AnswerFoldIn):
-			// this delivery only tells the seat's router to read it.
+			// this delivery only hands back the wake it decides, should it wait
+			// aside ([Coordinator.readmitFoldIn]), and tells the seat's router
+			// to read it.
+			c.readmitFoldIn(ctx, *payload)
 			if c.foldInAnswered != nil {
 				c.foldInAnswered(payload.AgentHandle)
 			}
@@ -1509,7 +1538,7 @@ func (c *Coordinator) syncSeat(ctx context.Context, handle string) {
 			c.runs[handle] = counts
 		}
 		c.mu.Unlock()
-		c.seatFreed(handle, was, counts)
+		c.seatFreed(ctx, handle, was, counts)
 		// The hold follows the recount, as it follows every transition.
 		c.reconcileHold(ctx, handle)
 		return
@@ -2052,14 +2081,11 @@ type noteReader interface{ ReadsNotes() bool }
 // never asked for its turn's notes ([RunSteer.Pulled]), telling a run whose
 // harness's reading was switched off from one with nothing to read.
 //
-// RELIABLE for a harness that reads notes: a Claude Code run reaches its Stop
-// hook, an OpenCode plugin asks as the session starts working. A run that
-// succeeded without asking had its reading disabled (Claude Code: a managed
-// policy allowing only managed hooks or disabling all, or a release older than
-// 2.1.163, executor claudeNotesFloor; OpenCode: a policy denying the plugin or a
-// plugin that failed to load), and every note waited for its review. Only for a
-// run whose record names its seat ([LaunchRequest.SteerSeat]); logged on the
-// collecting node.
+// RELIABLE for a harness that reads notes: its reader asks before the run can
+// succeed. A run that succeeded without asking had its reading disabled, as
+// its runner says what can do that ([notesOffWhy]), and every note waited for
+// its review. Only for a run whose record names its seat
+// ([LaunchRequest.SteerSeat]); logged on the collecting node.
 func (c *Coordinator) warnNotesUnasked(ctx context.Context, run PendingRun, result Result) {
 	if !result.Success || len(run.Steer.Seat) == 0 || run.Steer.Pulled == run.LaunchID {
 		return
@@ -2075,17 +2101,14 @@ func (c *Coordinator) warnNotesUnasked(ctx context.Context, run PendingRun, resu
 	if reader, ok := runner.(noteReader); !ok || !reader.ReadsNotes() {
 		return
 	}
+	detail := "the run succeeded and its harness never asked for its turn's notes, so a note sent " +
+		"while it worked waited for its review instead of reaching it between its steps. Something in " +
+		"the box switched the harness's reading off"
+	if why := notesOffWhy(runner); why != "" {
+		detail += ": " + why
+	}
 	log.WarnContext(ctx, "steer_reader_never_ran", "turn_id", run.TurnID,
-		"launch_id", run.LaunchID, "agent", run.Harness,
-		"detail", "the run succeeded and its harness never asked for its turn's notes, so a "+
-			"note sent while it worked waited for its review instead of reaching it between its "+
-			"steps. Something in the box switched the harness's reading off: for Claude Code, a "+
-			"managed policy that allows only managed hooks (allowManagedHooksOnly, "+
-			"strictPluginOnlyCustomization) or disables every hook (disableAllHooks), or a "+
-			"release older than 2.1.163, the oldest whose Stop hook's answer reaches the model, "+
-			"which the run starts without its hooks and whose error stream says so; "+
-			"for OpenCode, a managed policy that denies the run's notes plugin "+
-			"(integration.use), or a plugin OpenCode failed to load, which its own log names")
+		"launch_id", run.LaunchID, "agent", run.Harness, "detail", detail)
 }
 
 // readBox is the part of a collection touching the box, made on its host's node:
@@ -2134,8 +2157,12 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 			over = c.endJob(ctx, run, box, runner, sawWorking)
 		}
 	}
-	result, err := runner.Collect(ctx, box, run.Handle())
+	result, err := runner.Collect(ctx, box, run.Handle(), c.answerBudget)
 	if err != nil {
+		return Result{}, false, err
+	}
+	// A MINTING JOB'S SESSION IS BOUND AS IT IS COLLECTED (minted.go).
+	if run, result, err = c.bindCollected(ctx, run, runner, result); err != nil {
 		return Result{}, false, err
 	}
 	// THE JOB'S OWN RECORD THAT A REQUEST ENDED IT ([Result.JobEnd]) is the same
@@ -2182,7 +2209,7 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 	// answer handing the read back box-answered ([boxAnsweredError]).
 	reading := c.readMainThread(ctx, run, box, runner, read, at, result)
 	result.ResumedCount, result.CountProvider, result.NextRequest = reading.Count, reading.Provider, reading.Next
-	if err := c.settleHookReceipts(ctx, run, reading.Receipts, read); err != nil {
+	if err := c.settleReceipts(ctx, run, reading.Receipts, read); err != nil {
 		return Result{}, false, &boxAnsweredError{err: err, end: at.harnessEnd()}
 	}
 	spooled, kept := c.takeCapture(ctx, run, box, runner, at)
@@ -2216,7 +2243,7 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 }
 
 // hookVerdictWait is the reason one verdict on a job's hooks' serves is given
-// ([Coordinator.settleHookReceipts]): a store's slow moment, ten seconds, as
+// ([Coordinator.settleReceipts]): a store's slow moment, ten seconds, as
 // every row write's reason; [Coordinator.rowContext] adds the row's crossing
 // ([BoxReadBudget] counts both for a read that asks receipts).
 const hookVerdictWait = 10 * time.Second
@@ -2226,14 +2253,15 @@ const hookVerdictWait = 10 * time.Second
 // read is handed back.
 const hookVerdictRetry = time.Second
 
-// settleHookReceipts settles run's job's hooks' serves by what the job's session
-// showed of them ([PendingStore.SettleHook]) and publishes every note and wake a
-// serve handed over ([CoordinatorOptions.SteersConfirmed]) on every Claude Code read.
+// settleReceipts settles run's job's serves by what the job's record showed of
+// them ([PendingStore.SettleHook]) and publishes every note and wake a serve
+// handed over ([CoordinatorOptions.SteersConfirmed]) on every read of a job
+// whose runner confirms off that record ([ThreadTraits.Receipts]).
 // A verdict the store does not answer within its room is [ErrStoreSilent],
 // returned before the read's take; the package doc's "A HOOK'S NOTE" says why.
-func (c *Coordinator) settleHookReceipts(ctx context.Context, run PendingRun, receipts HookReceipts,
+func (c *Coordinator) settleReceipts(ctx context.Context, run PendingRun, receipts TakeReceipts,
 	read BoxRead) error {
-	if run.Harness != ClaudeCodeHarness {
+	if !c.threadTraits(run.Harness).Receipts {
 		return nil
 	}
 	notes, asked := run.Steer.Notes, askedTakes(run)
@@ -2274,7 +2302,7 @@ func (c *Coordinator) settleHookReceipts(ctx context.Context, run PendingRun, re
 // [Coordinator.verdictRetry] after each error, until its room (the reason and the
 // row's crossing, [Coordinator.rowContext]) is spent. Each attempt decides on the
 // record as it stands, so one finding an earlier write landed answers the same.
-func (c *Coordinator) settleVerdict(ctx context.Context, run PendingRun, receipts HookReceipts) ([]RunNote,
+func (c *Coordinator) settleVerdict(ctx context.Context, run PendingRun, receipts TakeReceipts) ([]RunNote,
 	error) {
 	row, cancel := c.rowContext(ctx, c.verdictWait)
 	defer cancel()
@@ -2509,7 +2537,7 @@ func (c *Coordinator) publishCollected(ctx context.Context, run PendingRun, resu
 			"turn_id", run.TurnID, "launch_id", run.LaunchID)
 		return run.Launch
 	}
-	ev := events.New(collectedRecord(run, facts, result, c.now()), events.TraceContext{
+	ev := events.New(collectedRecord(run, facts, result, c.pinnedWindow(run.Harness, facts.Model), c.now()), events.TraceContext{
 		TraceID: run.TraceID, ParentSpanID: run.SpanID,
 	})
 	ev.Source = run.Role
@@ -2529,7 +2557,8 @@ func (c *Coordinator) publishCollected(ctx context.Context, run PendingRun, resu
 // which is on the resumed phase record, so the two never sum past the turn's
 // spend. Its clock is the store's instant for the launch and this node's for the
 // collection, so DURATION includes the waiter's poll interval.
-func collectedRecord(run PendingRun, facts LaunchRecord, result Result, collected time.Time) types.ExecutorCollected {
+func collectedRecord(run PendingRun, facts LaunchRecord, result Result, pinned int,
+	collected time.Time) types.ExecutorCollected {
 	// THE SESSION AND RELEASE THE BOX NAMED are held to the shapes a harness gives
 	// them, whatever the runner or host made of them: each is the box's word, and
 	// one of any other shape is none, never cut (a shortened id names another).
@@ -2594,10 +2623,9 @@ func collectedRecord(run PendingRun, facts LaunchRecord, result Result, collecte
 		HarnessSessionContinued: result.Continued,
 		HarnessSessionFellBack:  BoundFellBack(result.FellBack),
 	}
-	// The window the run was pinned to, from the model its launch recorded.
-	if run.Harness == ClaudeCodeHarness {
-		rec.ContextWindowTokens = ClaudeCodeWindow(facts.Model).Tokens
-	}
+	// The window the run was pinned to, as its runner pins the model its launch
+	// recorded ([windowPinner]), none for a runner that pins none.
+	rec.ContextWindowTokens = pinned
 	if kept := result.Kept; kept != nil {
 		rec.SessionTakenBytes = kept.Bytes
 		// AND WHY IT WAS NOT KEPT, at the executor log's bound for the reason: it
@@ -3038,6 +3066,16 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.ExecutorAnsw
 			answered(run, types.AnswerUnoffered)
 			return AnswerNotMine, nil
 		}
+		if run.HeldCall != nil && run.HeldCall.Lapsed(c.now()) && given.Choice != HeldDeny {
+			// A LAPSED CALL TAKES DENY ALONE, the engine's own or a person's:
+			// an allow arriving between the lapse and the sweep would make a
+			// call on figures a day old (ADR-0171).
+			log.WarnContext(ctx, "sandbox_answer_lapsed",
+				"turn_id", given.TurnID, "approval", given.Approval, "choice", given.Choice,
+				"answered_by", given.AnsweredBy, "lapsed_at", run.HeldCall.LapsesAt)
+			answered(run, types.AnswerNotAwaiting)
+			return AnswerNotMine, nil
+		}
 		// WHAT IT SAYS, MEASURED AS `answer_executor` MEASURED IT: as authored,
 		// trimmed, before redaction, the one string both ends hold to
 		// [MaxAnswerTextBytes], so a tool-accepted answer is never refused here
@@ -3201,12 +3239,17 @@ func answerGivenOf(run PendingRun, given types.ExecutorAnswerGiven, trigger *eve
 	if _, err := AnswerText(run.Decision, given.Choice, given.Answer); err != nil {
 		return AnswerWords{}, RecordedAnswer{}, err
 	}
+	waited, err := waitedOf(run, given.Waited)
+	if err != nil {
+		return AnswerWords{}, RecordedAnswer{}, err
+	}
 	words := AnswerWords{
 		// Redacted HERE, as a chat reply is: it is sealed on the row and handed
 		// as is to the harness, whose box and session keep it.
 		Text: redact.Secrets(strings.TrimSpace(given.Answer)), Choice: given.Choice,
 		Via: types.AnswerViaOperator,
 		By:  given.AnsweredBy, ByKind: given.AnsweredByKind, OperatorID: given.OperatorID,
+		Waited: waited,
 	}
 	answer := RecordedAnswer{
 		EventIDs: []string{trigger.ID.String()}, PostedAt: trigger.Timestamp, RecordedAt: now,
@@ -5741,8 +5784,10 @@ func (c *Coordinator) ReleaseSeat(handle string) {
 	maps.DeleteFunc(c.writing, func(_ string, w *runWrites) bool { return w.handle == handle })
 	// AND ITS SLOTS AND HELD RUNS with them: a recovery here counts afresh.
 	delete(c.reserved, handle)
-	delete(c.waiting, handle)
+	delete(c.freed, handle)
+	delete(c.asideFull, handle)
 	maps.DeleteFunc(c.heldRuns, func(_ string, r heldRun) bool { return r.handle == handle })
+	maps.DeleteFunc(c.waitingRuns, func(_ string, r heldRun) bool { return r.handle == handle })
 	// AND A STOP OF ONE OF ITS LAUNCHES NO FRAME TOOK: its turns run on the next
 	// holder.
 	maps.DeleteFunc(c.launchStops, func(_ string, s launchStop) bool { return s.handle == handle })
@@ -5879,6 +5924,10 @@ type AskedRun struct {
 	// from who answered, never set beside Refused: a refused reply is no answer.
 	Withdrawn bool
 
+	// Waited is how the run a wait was for left its seat's slots, where the
+	// engine answered a run parked by `wait_for_run` (ADR-0176); nil otherwise.
+	Waited *types.RunWaited
+
 	// Refused is set where the question's outcome is no answer but the REFUSAL of a
 	// reply too large to be one ([PendingRun.AnswerRefusal]): what the run is told
 	// (how many messages, the figures) in place of an answer, Answer and By empty.
@@ -5919,5 +5968,6 @@ func askedRun(run PendingRun, answer AnswerWords) *AskedRun {
 		BoxKept:   run.SandboxID != "",
 		Label:     answer.Label,
 		Withdrawn: WithdrawnBy(run, answer.By, answer.ByKind),
+		Waited:    answer.Waited,
 	}
 }
