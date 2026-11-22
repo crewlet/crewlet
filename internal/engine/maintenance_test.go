@@ -106,6 +106,10 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// (the trash reaper's retention delete), and its anchors go by the
 		// trim (see pages_ops).
 		"executor_ops",
+		// Each human seat's Home board, in the ageless positions register:
+		// unswept, a removed seat's widgets stay for the life of the
+		// deployment.
+		"home_board",
 		// The identity estate's ledger, per data node like every domain's.
 		// Not its authentication trail's horizons: those rows are
 		// identity-claimed, so a record on the log retires them, never one
@@ -309,6 +313,7 @@ func TestEveryRetentionOutlastsTheSweepInterval(t *testing.T) {
 		"counterparty_profiles": maintenance.CounterpartyRetention,
 		"seat_mailboxes":        maintenance.MailboxRetirementGrace,
 		"chat_read_state":       maintenance.ChatReadForgetGrace,
+		"home_board":            maintenance.HomeBoardForgetGrace,
 		// No native backend has a row sweep: an applier writes its rows,
 		// and chat's message horizon is a prune record a fleet duty
 		// publishes. Their operation ledgers are the exception, one entry

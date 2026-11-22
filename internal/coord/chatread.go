@@ -176,24 +176,14 @@ type PersonChatRead struct {
 // from the FIRST sweep that saw the seat missing (restamping would restart it
 // every tick and forget nobody); the zero instant clears it.
 func (s ChatReadState) WithAbsence(since time.Time) (ChatReadState, bool) {
-	switch {
-	case since.IsZero() && s.AbsentSince.IsZero():
-		return s, false
-	case since.IsZero():
-		s.AbsentSince = time.Time{}
-		return s, true
-	case !s.AbsentSince.IsZero():
-		return s, false
-	}
-	s.AbsentSince = since.UTC()
-	return s, true
+	stamp, changed := stampAbsence(s.AbsentSince, since)
+	s.AbsentSince = stamp
+	return s, changed
 }
 
 // AbsentBy reports whether the state has been stamped absent at or before
 // cutoff: the one condition under which [ChatReads.ForgetChatRead] removes it.
-func (s ChatReadState) AbsentBy(cutoff time.Time) bool {
-	return !s.AbsentSince.IsZero() && !s.AbsentSince.After(cutoff)
-}
+func (s ChatReadState) AbsentBy(cutoff time.Time) bool { return absentBy(s.AbsentSince, cutoff) }
 
 // ChatReader is one seat holding read state, as the reconcile lists them: the
 // handle, and when the seat was first found missing from the company.

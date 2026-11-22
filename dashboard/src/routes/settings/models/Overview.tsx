@@ -1,8 +1,9 @@
 /**
- * Settings › Models, the one page: how the company's models stand in four
- * figures, what is wrong with them (the engine's alarms), every model with
- * its condition, its sign-in and who runs on it, then under it who runs on
- * which model, Ask Crewlet and the Advisor then every seat (`SeatJobs.tsx`).
+ * Settings › Models, the one page: a lede, what is wrong (the engine's
+ * alarms), how the models stand in three figures, every model with its
+ * condition, its sign-in and who runs on it, then the section saying who runs
+ * on which model, Ask Crewlet and the Advisor then every seat (`SeatJobs.tsx`).
+ * With no model it is one first-run card ([FirstRun]).
  *
  * A member reads the same list without the sign-in, the tokens or the actions
  * (`llm_entries`' member reading names no credential and no usage), so the one
@@ -15,10 +16,13 @@
 
 import { useId, type ReactNode } from "react";
 import {
+  AvatarStack,
   Button,
   Callout,
   Card,
   EmptyState,
+  IconTile,
+  PageNote,
   RelativeTime,
   StatCard,
   StatGroup,
@@ -26,7 +30,7 @@ import {
   Tooltip,
   VisuallyHidden,
 } from "@crewlethq/ui";
-import { CpuGlyph, PlusGlyph } from "@crewlethq/icons/glyphs";
+import { PlusGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { href } from "~/app/router.tsx";
@@ -35,8 +39,9 @@ import { fmtCount, listed, plural } from "~/lib/format.ts";
 import { UNSPENT_CALLS, callsWords } from "~/lib/spend.ts";
 import { CATEGORY_JOBS, CATEGORY_ORDER, SEAT_JOBS, everythingSeats } from "~/lib/modelUses.ts";
 import type { Seat } from "~/lib/seats.ts";
+import { seatBadge } from "~/ui/SeatAvatar.tsx";
 import { Alarms } from "./Alarms.tsx";
-import { HarnessMark, MARK_SIZE } from "./HarnessMark.tsx";
+import { HARNESS_MARKS, HarnessMark, MARK_SIZE } from "./HarnessMark.tsx";
 import type { ModelsData, ModelView } from "./data.ts";
 import { JobGlyph, type Job } from "./JobGlyph.tsx";
 import { EntryMenu, HealthLine, SignInLine, type OnFlow } from "./parts.tsx";
@@ -266,10 +271,10 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
     (m) => m.entry.health === "rejected" || m.entry.health === "no_sign_in",
   ).length;
   const sitting = models.filter((m) => m.entry.health === "sitting_out").length;
+  const expiring = models.filter((m) => m.entry.health === "expiring").length;
   // NOT TESTED IS NOT BROKEN: a model nobody has called yet is said as that,
   // apart from the ones that cannot answer.
   const untested = models.filter((m) => m.entry.health === "untested").length;
-  const notReady = models.length - ready - untested;
   const unused = models.filter((m) => !inUse(m)).length;
   const usage = models.reduce(
     (sum, m) => {
@@ -297,6 +302,8 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
         </PageActions>
       ) : null}
 
+      <PageNote>{LEDE}</PageNote>
+
       {!admin ? (
         <Callout variant="info" title="Read-only">
           You can see which models the company runs and whether each can answer. Changing a model or
@@ -306,9 +313,11 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
 
       <Alarms data={data} onFlow={onFlow} />
 
+      {models.length === 0 ? <FirstRun data={data} onAdd={add} /> : null}
+
       {models.length > 0 ? (
         <Card padding="none">
-          <StatGroup columns={admin ? 4 : 3}>
+          <StatGroup columns={admin ? 3 : 2}>
             <StatCard
               label="Models"
               value={models.length}
@@ -318,8 +327,8 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
                   : "every one in use"
               }
             />
-            {/* A COUNT OF THE FEW, NOT "3 OF 4" (QA Minor 14): the tile names how
-                many answer and, under it, exactly how many do not. */}
+            {/* ONE TILE FOR HOW THEY STAND: how many answer, and under it every
+                one that does not by its condition, in the worst one's tone. */}
             <StatCard
               label="Ready"
               value={ready}
@@ -328,23 +337,13 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
                 ready === models.length
                   ? "every model answers"
                   : listed([
-                      ...(notReady > 0 ? [`${plural(notReady, "model")} not ready`] : []),
-                      ...(untested > 0 ? [`${untested} not tested yet`] : []),
-                    ])
-              }
-            />
-            <StatCard
-              label="Sitting out or cannot sign in"
-              value={sitting + refused}
-              sub={
-                sitting + refused === 0
-                  ? "no limit hit, no sign-in refused"
-                  : listed([
-                      ...(sitting ? [`${sitting} sitting out`] : []),
                       ...(refused ? [`${refused} cannot sign in`] : []),
+                      ...(sitting ? [`${sitting} sitting out`] : []),
+                      ...(expiring ? [`${expiring} expiring soon`] : []),
+                      ...(untested ? [`${untested} not tested yet`] : []),
                     ])
               }
-              subTone={refused ? "danger" : sitting ? "warning" : undefined}
+              subTone={refused ? "danger" : sitting || expiring ? "warning" : undefined}
             />
             {admin ? (
               <StatCard
@@ -366,28 +365,8 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
         </Card>
       ) : null}
 
-      <Card padding="none">
-        {models.length === 0 ? (
-          <EmptyState
-            size="compact"
-            icon={<CpuGlyph size="xl" />}
-            title="No model yet"
-            description={
-              admin
-                ? "Add one to give the agents a model to run on."
-                : "An admin adds the models the agents run on."
-            }
-            {...(admin
-              ? {
-                  action: (
-                    <Button variant="primary" size="small" onClick={add}>
-                      Add a model
-                    </Button>
-                  ),
-                }
-              : {})}
-          />
-        ) : (
+      {models.length > 0 ? (
+        <Card padding="none">
           <DataGrid<ModelView>
             name="models"
             defaultSort="model"
@@ -472,13 +451,84 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
                 : []),
             ]}
           />
-        )}
-      </Card>
+        </Card>
+      ) : null}
 
-      {/* UNDER THE MODELS: who runs on which, the helpers then the seats, on one
-          card. KEPT WITH NO MODEL, every row reading Not set, so a company sees
-          which seats wait for one. */}
-      <WhoRuns data={data} />
+      {/* UNDER THE MODELS: who runs on which, the helpers then the seats. Drawn
+          once there is a model to pick; before that the first-run card names
+          who waits. */}
+      {models.length > 0 ? <WhoRuns data={data} /> : null}
     </div>
+  );
+}
+
+/** What the page is for, said once under the page bar as every Settings section's lede is. */
+const LEDE = "The models your company runs, and who runs on each.";
+
+/**
+ * The page with no model: one card picturing the harnesses a model can run on,
+ * naming who waits for one, and offering the add. With nothing to pick, no
+ * row per seat is drawn; the waiting seats are this card's stack and sentence.
+ */
+function FirstRun({ data, onAdd }: { data: ModelsData; onAdd: () => void }) {
+  const waiting = data.seats.map((s) => ({
+    id: s.handle,
+    ...seatBadge(s.name || s.handle, s.kind, s.avatar),
+  }));
+  const who = listed([
+    ASSISTANT_USE.label,
+    "the Advisor",
+    ...(waiting.length > 0 ? [plural(waiting.length, "seat")] : []),
+  ]);
+  return (
+    <Card padding="none">
+      <EmptyState
+        size="compact"
+        illustration={
+          <span className="models-first-run__marks" aria-hidden="true">
+            {Object.keys(HARNESS_MARKS).map((h) => (
+              <IconTile key={h} shape="disc" tone="neutral" size="sm">
+                <HarnessMark harness={h} size={16} />
+              </IconTile>
+            ))}
+          </span>
+        }
+        title="No model yet"
+        description={
+          <span className="models-first-run__body">
+            <span>
+              A model is a coding harness, such as Claude Code or Codex, signed in to its vendor.{" "}
+              {data.admin ? "Add one and choose who runs on it." : "An admin adds models here."}
+            </span>
+            <span className="models-first-run__waiting">
+              {waiting.length > 0 ? (
+                <AvatarStack
+                  members={waiting}
+                  size="xs"
+                  label={`Waiting for a model: ${listed(waiting.map((w) => w.name))}`}
+                />
+              ) : null}
+              <Text as="span" variant="caption" tone="secondary">
+                {`${who} are waiting for one.`}
+              </Text>
+            </span>
+          </span>
+        }
+        {...(data.admin
+          ? {
+              action: (
+                <Button
+                  leadingIcon={<PlusGlyph size="sm" />}
+                  variant="primary"
+                  size="small"
+                  onClick={onAdd}
+                >
+                  Add model
+                </Button>
+              ),
+            }
+          : {})}
+      />
+    </Card>
   );
 }
