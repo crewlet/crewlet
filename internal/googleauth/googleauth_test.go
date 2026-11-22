@@ -1,10 +1,12 @@
 package googleauth_test
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"errors"
+	"net"
 	"net/http"
 	"slices"
 	"strings"
@@ -168,6 +170,13 @@ func TestAReadWaitsOutARateLimitAndAWriteDoesNot(t *testing.T) {
 	if googleauth.Status(err) != http.StatusTooManyRequests || len(f.clock.waits()) != 0 {
 		t.Errorf("a limited write answered %v after waits %v, want its 429 at once", err, f.clock.waits())
 	}
+	// A READ TAKEN IN A POST BODY (a report) changes nothing, so it waits as a GET does.
+	f.edit(func(f *fakeGoogle) { f.limited = 1 })
+	f.clock.resetWaits()
+	err = conn.DoRead(t.Context(), http.MethodPost, "https://analyticsdata.googleapis.com/v1beta/x", token, map[string]any{}, nil)
+	if err != nil || !slices.Equal(f.clock.waits(), []time.Duration{3 * time.Second}) {
+		t.Errorf("a limited report answered %v after waits %v, want one wait and its answer", err, f.clock.waits())
+	}
 }
 
 // A CALLER'S OWN MISTAKE IS NOT HELD AS GOOGLE'S REFUSAL: a token asked for
@@ -188,5 +197,46 @@ func TestACallersMistakeIsNeverHeldAsAGoogleRefusal(t *testing.T) {
 	}
 	if _, err := issuer.Token(t.Context(), conn, seatAccount, []string{analytics}, time.Minute); err != nil {
 		t.Errorf("a proper ask after the mistake answered %v, want a token", err)
+	}
+}
+
+// roundTrip is a transport answering every request with what it says.
+type roundTrip func(*http.Request) (*http.Response, error)
+
+func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// A REQUEST THAT FAILED NAMES ITS PATH ALONE: a credential in the address's
+// query (a Measurement Protocol secret, which no redaction knows by name)
+// reaches no error, whether the request was never built or never answered,
+// and the failure's cause is kept, so a deadline is still told.
+//
+// Mutation: format the transport's error whole, or drop its cause, and the
+// secret is in the error or the deadline is lost.
+func TestAFailedRequestNeverQuotesItsQuery(t *testing.T) {
+	t.Parallel()
+	const secret = "Zx8kQ2pL4mN7vB1cR5tY9w"
+	const address = "https://www.google-analytics.com/mp/collect?measurement_id=G-1&api_secret=" + secret
+	reset := &net.OpError{Op: "read", Net: "tcp", Err: errors.New("connection reset by peer")}
+	conn, _ := connectionOver(t, roundTrip(func(*http.Request) (*http.Response, error) { return nil, reset }))
+	err := conn.Do(t.Context(), http.MethodPost, address, "", map[string]any{"client_id": "1.2"}, nil)
+	if err == nil || strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "api_secret") ||
+		!strings.Contains(err.Error(), "www.google-analytics.com/mp/collect") ||
+		!errors.Is(err, googleauth.ErrUnreached) || !errors.Is(err, reset) {
+		t.Errorf("a reset request answered %q, want its path alone and the reset kept", err)
+	}
+	expired, cancel := context.WithDeadline(t.Context(), time.Unix(0, 0))
+	defer cancel()
+	waits := roundTrip(func(r *http.Request) (*http.Response, error) {
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})
+	conn, _ = connectionOver(t, waits)
+	err = conn.Do(expired, http.MethodPost, address, "", map[string]any{}, nil)
+	if err == nil || strings.Contains(err.Error(), secret) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("a request past its deadline answered %q, want the deadline told without the secret", err)
+	}
+	err = conn.Do(t.Context(), http.MethodGet, address+"\x7f", "", nil, nil)
+	if err == nil || strings.Contains(err.Error(), secret) {
+		t.Errorf("a request that could not be built answered %q, which quotes the secret", err)
 	}
 }

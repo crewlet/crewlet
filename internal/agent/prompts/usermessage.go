@@ -127,13 +127,13 @@ func BuildPhaseUserMessage(m UserMessage) Prompt {
 // work is judged against. The note is last and verbatim.
 func SteerMessage(sender, note string) string {
 	who, lead := steerSender(sender)
-	return "## A note from " + who + ", sent while this turn was running" +
+	return carried("## A note from " + who + ", sent while this turn was running" +
 		"\n" + lead + " sent this through Crewlet while the work was under way." +
 		" It is not a new request and not a repeat of the task: it corrects or" +
 		" adds to the work in hand and stands for the rest of this turn; where" +
 		" it and the task disagree, the note is the later word. What has" +
 		" already been done stays unless the note says otherwise." +
-		"\n\n" + strings.TrimSpace(note)
+		"\n\n" + strings.TrimSpace(note))
 }
 
 // SteerMessageSentBefore is a person's note handed to a reader after a note
@@ -145,11 +145,11 @@ func SteerMessage(sender, note string) string {
 // the later word, since it arrived last.
 func SteerMessageSentBefore(sender, note string) string {
 	who, lead := steerSender(sender)
-	return "## A note from " + who + ", sent while this turn was running" +
+	return carried("## A note from " + who + ", sent while this turn was running" +
 		"\n" + lead + " sent this through Crewlet while the work was under way, before a later note" +
 		" already handed to this turn: where the two disagree, the later note stands; otherwise this" +
 		" note corrects or adds to the work in hand and stands for the rest of this turn." +
-		"\n\n" + strings.TrimSpace(note)
+		"\n\n" + strings.TrimSpace(note))
 }
 
 // steerSender is who a note names its sender as, in its heading and leading

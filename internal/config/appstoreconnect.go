@@ -229,6 +229,24 @@ func (c *Company) AppStoreConnectSeat(handle string) *RoleAppStoreConnect {
 // GrowthKind is the seat block's integration kind, the company block's.
 func (*RoleAppStoreConnect) GrowthKind() string { return (*AppStoreConnect)(nil).GrowthKind() }
 
+// SeatAccess is the block as seat access reads it.
+func (r *RoleAppStoreConnect) SeatAccess() GrowthSeatAccess {
+	return GrowthSeatAccess{On: r.Enabled, Level: string(growth.LevelOf(r.Level)), Scope: r.Apps}
+}
+
+// SetSeatAccess writes the block from seat access; team_resources is kept.
+func (r *RoleAppStoreConnect) SetSeatAccess(a GrowthSeatAccess) {
+	r.Enabled, r.Level, r.Apps = a.On, a.Level, a.Scope
+}
+
+func (r *RoleAppStoreConnect) seatScopeKey() string { return "apps" }
+func (r *RoleAppStoreConnect) seatEnabled() **bool  { return &r.Enabled }
+
+// check holds the block to the company's reach.
+func (r *RoleAppStoreConnect) check(c *Company, p *problems, here Path) {
+	c.checkAppStoreConnect(p, here, r)
+}
+
 // GrowthSeatLevel is the seat's level while its block is on, "" while off.
 func (r *RoleAppStoreConnect) GrowthSeatLevel() string {
 	if r == nil || r.Enabled == nil || !*r.Enabled {
