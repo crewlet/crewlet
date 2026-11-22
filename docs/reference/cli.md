@@ -2869,8 +2869,9 @@ every launch on that entry would be refused
 ([The executor's run in a box](../concepts/llm-backends.md#the-executors-run-in-a-box)).
 Where its runner names a release floor (Codex's 0.171.0), a `direct` cell's
 harness, this host's own, below it, or failing its runner's probe (`codex
-app-server --help`), is a problem; any other cell's box holds its own harness to
-the floor at each run, which is a line.
+app-server --help`), is a problem, and a newer one a line saying its runs start
+fresh sessions; any other cell's box holds its own harness to the floor at each
+run, which is a line.
 
 Both commands answer "signed in" the same way, from the environment the harness is
 actually given rather than from the configuration: credential files a login

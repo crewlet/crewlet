@@ -161,7 +161,9 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 
 	line(`rm -f %s %s %s`, sock, thread, threadNext)
 	// No --ignore-user-config: app-server has none, and the config.toml it
-	// always loads is the run's own ([Paths.CodexLiveConfig]).
+	// always loads is the run's own ([Paths.CodexLiveConfig]). Started in the
+	// script's own directory, exec's: under --remote a relative path and an
+	// item's cwd resolve against the SERVER's (CODEX-MEASURE §18).
 	line(`codex app-server --listen %s %s < /dev/null > %s 2>&1 &`,
 		q("unix://"+paths.CodexSocket()), strings.Join(codexPosture(req), " "), serverLog)
 	line(`apid=$!`)
@@ -268,7 +270,8 @@ func codexHelped(req sandbox.RunRequest) bool {
 // codexStartHelper starts the note helper (internal/notehelper) for req's
 // run, and the guard that fails the run closed where the helper ends while
 // Codex still works: the guard marks it lost ([Paths.CodexHelperLost]) and
-// interrupts the turn in flight with the helper's -interrupt-once. Every route
+// interrupts the turn in flight with the helper's -interrupt-once, or, where
+// that cannot tell whether a turn runs (exit 1), stops the app-server. Every route
 // reaches the helper's environment alone, never argv nor Codex's, since each
 // carries the job's token; the helper's errors are the run's.
 func codexStartHelper(req sandbox.RunRequest, paths Paths) string {
@@ -290,7 +293,7 @@ func codexStartHelper(req sandbox.RunRequest, paths Paths) string {
 	return fmt.Sprintf(`chmod 700 %[1]s || exit 1
 %[2]s%[3]s%[4]s < /dev/null > /dev/null &
 hpid=$!
-( while kill -0 $$ 2> /dev/null && kill -0 "$hpid" 2> /dev/null; do sleep %[5]s; done; kill -0 $$ 2> /dev/null || exit 0; : > %[6]s; %[3]s -interrupt-once < /dev/null > /dev/null ) &
+( while kill -0 $$ 2> /dev/null && kill -0 "$hpid" 2> /dev/null; do sleep %[5]s; done; kill -0 $$ 2> /dev/null || exit 0; : > %[6]s; %[3]s -interrupt-once < /dev/null > /dev/null || end "$apid" again ) &
 gpid=$!
 `, helper, env, base, flags, codexGuardPoll, q(paths.CodexHelperLost()))
 }
