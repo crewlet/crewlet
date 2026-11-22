@@ -322,6 +322,11 @@ func TestALateCallReachesAnOpenCodeJobAtItsNextPollAndIsReadOnItsConfirmation(t 
 	if served := noteOn(t, r.store, r.turn, item.ID); served.Served != r.next.LaunchID || !served.Waiting() {
 		t.Fatalf("the item holds %+v once polled, want it served to the job, waiting", served)
 	}
+	// AND, FOLDED BY A COMPACTION, IT IS ADMITTED AGAIN AS A NOTE IS.
+	if granted, _, err := inbox.Again(t.Context(), []string{item.ID}); err != nil ||
+		granted[item.ID] != executor.AgainID(executor.OpenCodeName, r.next.LaunchID, item.ID) {
+		t.Fatalf("the ask for the item's second admission answered %v, %v, want its job's second id", granted, err)
+	}
 	if err := inbox.Read(t.Context(), []string{item.ID}); err != nil {
 		t.Fatalf("Read: %v", err)
 	}

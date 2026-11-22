@@ -631,7 +631,8 @@ func worstRow(t *testing.T) PendingRun {
 		told := read()
 		told.Retold = read()
 		notes[i] = RunNote{ID: uuid.NewString(), Seq: math.MaxInt - i, Sealed: []byte(plain(MaxNoteSealedBytes)),
-			At: worstAt, Served: uuid.NewString(), Place: math.MaxInt, Serves: serves(), Read: told}
+			At: worstAt, Served: uuid.NewString(), Place: math.MaxInt, Serves: serves(), Read: told,
+			PollServes: MaxNoteServes, Readmitted: uuid.NewString()}
 	}
 	// AND A JOB'S ITEMS, as many as the row holds ([MaxJobItems]): late-call
 	// items, the one kind the store files, each carrying its call at the
@@ -642,6 +643,7 @@ func worstRow(t *testing.T) PendingRun {
 		job := uuid.NewString()
 		notes = append(notes, RunNote{ID: lateItemID(job, math.MaxInt), Seq: math.MaxInt - len(notes),
 			At: worstAt, Served: uuid.NewString(), Place: math.MaxInt, Serves: serves(), For: job, Read: read(),
+			PollServes: MaxNoteServes, Readmitted: uuid.NewString(),
 			LateCall: &LateCall{Round: uuid.NewString(), Call: worstItemCall(t)}})
 	}
 	// AND THE TURN'S WAKE ITEMS, as many as the row holds ([MaxTurnWakes]): each
@@ -658,7 +660,7 @@ func worstRow(t *testing.T) PendingRun {
 		}
 		notes = append(notes, RunNote{ID: wakeItemID(job, plain(MaxWakeIDBytes)), Seq: math.MaxInt - len(notes),
 			At: worstAt, Served: uuid.NewString(), Place: math.MaxInt, Serves: serves()[:MaxWakeServes], For: job,
-			Read: read(), Wake: &WakeItem{Wakes: wakes}})
+			PollServes: MaxWakeServes, Read: read(), Wake: &WakeItem{Wakes: wakes}})
 	}
 	// AND THE TELLINGS, as many as the row holds ([MaxCallTellings]), each of
 	// a round and a job at their widest ids, every number at its widest, a
