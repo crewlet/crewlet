@@ -209,7 +209,13 @@ func launchRigRestoring(t *testing.T, c *Company, bridge *mcpbridge.Bridge,
 	t.Helper()
 	runners := map[string]*sandbox.FakeRunner{
 		"claude-code": sandbox.NewFakeRunner("claude-code"),
+		"codex":       sandbox.NewFakeRunner("codex"),
+		"copilot":     sandbox.NewFakeRunner("copilot"),
+		"gemini-cli":  sandbox.NewFakeRunner("gemini-cli"),
+		"kimi-code":   sandbox.NewFakeRunner("kimi-code"),
+		"muse-code":   sandbox.NewFakeRunner("muse-code"),
 		"opencode":    sandbox.NewFakeRunner("opencode"),
+		"qwen-code":   sandbox.NewFakeRunner("qwen-code"),
 	}
 	providers := map[sandbox.Placement]sandbox.Provider{}
 	for _, p := range sandbox.Placements {
@@ -226,7 +232,9 @@ func launchRigRestoring(t *testing.T, c *Company, bridge *mcpbridge.Bridge,
 	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
 		Providers: providers, DefaultPlacement: sandbox.Direct,
 		Runners: map[string]sandbox.Runner{
-			"claude-code": runners["claude-code"], "opencode": runners["opencode"],
+			"claude-code": runners["claude-code"], "codex": runners["codex"], "copilot": runners["copilot"],
+			"gemini-cli": runners["gemini-cli"], "kimi-code": runners["kimi-code"], "muse-code": runners["muse-code"],
+			"opencode": runners["opencode"], "qwen-code": runners["qwen-code"],
 		},
 		DefaultSetup:     defaults,
 		AttributeCommits: c.Config.Providers.Sandbox.AttributesCommits(),
@@ -359,7 +367,7 @@ func TestALaunchPlacesTheRunInItsMembersCell(t *testing.T) {
 // and the denied entry's run goes out with its web tools.
 func TestAnEntrysWebDenialReachesItsExecutor(t *testing.T) {
 	t.Parallel()
-	for _, agent := range []string{"claude-code", "opencode"} {
+	for _, agent := range []string{"claude-code", "codex", "copilot", "opencode"} {
 		for _, denied := range []bool{true, false} {
 			t.Run(fmt.Sprintf("%s denied %v", agent, denied), func(t *testing.T) {
 				t.Parallel()
@@ -475,7 +483,7 @@ func TestALaunchRunsOnItsMembersOwnHarness(t *testing.T) {
 func TestALaunchPassesOverAMemberWithNoRunnerAndAnnouncesNothing(t *testing.T) {
 	t.Parallel()
 	c, seat := chainCompany(t,
-		chainMember{key: "codex", agent: "codex", model: "gpt-golden"},
+		chainMember{key: "grok", agent: "grok", model: "grok-golden"},
 		chainMember{key: "api", agent: "claude-code", model: "claude-golden"},
 	)
 	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
@@ -536,14 +544,14 @@ func TestALaunchWithEveryRunnerSittingOutIsAnExhaustedChain(t *testing.T) {
 // this goes red.
 func TestAChainWithNoRunnerMemberIsRefusedNamingIt(t *testing.T) {
 	t.Parallel()
-	c, seat := chainCompany(t, chainMember{key: "codex", agent: "codex", model: "gpt-golden"},
+	c, seat := chainCompany(t, chainMember{key: "grok", agent: "grok", model: "grok-golden"},
 		chainMember{key: "cursor", agent: "cursor-agent", model: "cursor-golden"})
 	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	}))
 	l := launcherOn(e, c, seat, "t1")
 	_, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
-	if err == nil || !strings.Contains(err.Error(), `("codex" and "cursor")`) ||
+	if err == nil || !strings.Contains(err.Error(), `("grok" and "cursor")`) ||
 		!strings.Contains(err.Error(), words.Or(executor.Names())) {
 		t.Fatalf("LaunchExecutor = %v, want a refusal naming the chain and the runners", err)
 	}

@@ -37,6 +37,8 @@ var (
 	_ inboxDelivery     = Kimi{}
 	_ recordConfirmer   = Kimi{}
 	_ artifactHolder    = Kimi{}
+	_ artifactDirHolder = Kimi{}
+	_ inPlaceGate       = Kimi{}
 	_ notesOffExplainer = Kimi{}
 	_ carrier           = Kimi{}
 	_ saver             = Kimi{}
@@ -503,16 +505,19 @@ func kimiMCP(s sandbox.MCPServer) map[string]any {
 	return out
 }
 
-// artifacts is what a Kimi run leaves in its box of its own: its agent profile,
-// which a later run must not find among its subagents, and its driver and its
-// settings and their fresh copies, which hold the notes route's token. Its
-// MCP servers are written whole by every run, its sessions are kept, and the
-// session its driver reported goes with every run's ([Runner.ClearArtifacts]).
-func (Kimi) artifacts(p Paths) (files, dirs []string) {
-	files = []string{p.KimiDriver(), p.KimiSettings(), p.KimiServerPid(), p.KimiSettingsFresh(),
+// artifactFiles is the files a Kimi run leaves in its box of its own: its
+// driver and its settings and their fresh copies, which hold the notes route's
+// token. Its MCP servers are written whole by every run, its sessions are
+// kept, and the session its driver reported goes with every run's
+// ([Runner.ClearArtifacts]).
+func (Kimi) artifactFiles(p Paths) []string {
+	return []string{p.KimiDriver(), p.KimiSettings(), p.KimiServerPid(), p.KimiSettingsFresh(),
 		p.KimiMCPConfigFresh(), p.KimiLinesBefore()}
-	return files, []string{p.KimiAgents() + "/" + kimiProfileDir}
 }
+
+// artifactDirs is the directory a Kimi run leaves in its box of its own: its
+// agent profile's, which a later run must not find among its subagents.
+func (Kimi) artifactDirs(p Paths) []string { return []string{p.KimiAgents() + "/" + kimiProfileDir} }
 
 // notesOffWhy is what switches Kimi's reading of notes off: a release before
 // [kimiSupported], which the script refuses, or a driver that could not reach

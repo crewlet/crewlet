@@ -90,7 +90,7 @@ type Spec struct {
 	// name the same cell.
 	Placement Placement
 
-	// Harness names the runner: "claude-code", "opencode", …
+	// Harness names the runner: "claude-code", "codex", "opencode".
 	Harness string
 
 	// TurnID is the turn whose run the box is made for. A box on the
