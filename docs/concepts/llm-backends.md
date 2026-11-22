@@ -1094,7 +1094,7 @@ instead the seat's system prompt, which tells it the run ends with that call.
 Its rounds are uncapped unless the seat's `role.sandbox.max_turns`, else
 `providers.sandbox.default_max_turns`, sets a turn cap, which becomes the
 harness's own on Claude Code (`--max-turns`) and OpenCode (its agent
-`steps`); a Codex run's script counts its rounds and ends Codex at the cap.
+`steps`); a Codex run's note helper counts its model responses and interrupts the turn at the cap.
 #### The tool bridge
 
 The seat's tools cannot be shipped into the box: most are MCP children
