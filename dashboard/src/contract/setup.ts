@@ -5,7 +5,16 @@
 
 /** What sort of value a requirement holds (`setup.Kinds`); a toggle is a JSON boolean. */
 export type SetupRequirementKind =
-  "secret" | "url" | "id" | "choice" | "text" | "handle" | "email" | "toggle" | "add_identity" | "consent";
+  | "secret"
+  | "url"
+  | "id"
+  | "choice"
+  | "text"
+  | "handle"
+  | "email"
+  | "toggle"
+  | "add_identity"
+  | "consent";
 
 /** One step at the app: `{link}` in `text` is the vendor link of the field `link` names. */
 export interface SetupStep {
