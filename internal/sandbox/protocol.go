@@ -1141,6 +1141,12 @@ type RunRequest struct {
 	// the runner passes its harness its own way. Empty: the harness's default.
 	Effort string
 
+	// WebDenied is the entry's `web_tools: denied`: the runner hands its
+	// harness none of the harness's own web tools, as the entry's runs on the
+	// engine host have none. The run's shell, and any code it runs, reaches
+	// the network the box's cell allows, which no harness flag bounds.
+	WebDenied bool
+
 	// MCPServers are the MCP servers the engine hands the run, keyed by
 	// server name: its tool bridge, and the seat's servers that run in its
 	// box. SERVER-LEVEL ONLY — there is no per-tool allowlist, because the
