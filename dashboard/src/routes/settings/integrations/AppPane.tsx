@@ -17,6 +17,8 @@
  * header say what the change left without anybody pressing Check now.
  */
 
+import { GrowthProductSection } from "~/components/growth/GrowthProduct.tsx";
+import { GROWTH_PRODUCTS } from "~/components/growth/words.ts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Callout, Tabs } from "@crewlethq/ui";
 import { RotateCwGlyph } from "@crewlethq/icons/glyphs";
@@ -46,6 +48,8 @@ import {
 import { useAccess, useOperatorManaged } from "./access/api.ts";
 import { AgentsAccess } from "./access/AgentsAccess.tsx";
 import { SshServers } from "./SshServers.tsx";
+import { AppStoreAnalytics, AppStoreKeys } from "./AppStoreAnalytics.tsx";
+import { analyticsConnections, connectedKeys } from "./appStoreAnalytics.ts";
 import { accessHold, lanesOf, needsAttention, statusOf } from "./access/logic.ts";
 
 /** The tool's one primary action, worded for what it opens. */
@@ -384,6 +388,23 @@ export function AppPane({
             <SettingsSummary tool={tool} />
             {/* THE SERVERS, and each one's Atlas inventory: SSH's own answer. */}
             {tool.entry.key === "ssh" && <SshServers managed={model.managed} />}
+            {/* A GROWTH PRODUCT'S connections, the vendor's roles, and a spending product's caps. */}
+            {GROWTH_PRODUCTS.has(tool.entry.key) && (
+              <GrowthProductSection
+                kind={tool.entry.key}
+                product={tool.entry.name}
+                row={model.rows.get(tool.entry.key)}
+              />
+            )}
+            {/* APP STORE ANALYTICS, turned on with an Admin key pasted once. */}
+            {tool.entry.key === "app_store_connect" && (
+              <>
+                <AppStoreKeys keys={connectedKeys(tool.sections.map((s) => s.tool))} />
+                <AppStoreAnalytics
+                  connections={analyticsConnections(tool.sections.map((s) => s.tool))}
+                />
+              </>
+            )}
             <Button
               size="small"
               variant="secondary"

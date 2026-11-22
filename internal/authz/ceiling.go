@@ -127,7 +127,7 @@ func DecideWithinApps(ctx context.Context, p iam.Principal, c Ceiling, a Action,
 		// turn nobody woke: the zero must be the closed end.
 		return Decision{Reason: ReasonCeiling}
 	}
-	r := rules[a]
+	r, _ := ruleOf(a)
 	apps := r.anyOf
 	if r.app != "" {
 		apps = []iam.Grant{r.app}
@@ -177,7 +177,7 @@ func DecideWithinApps(ctx context.Context, p iam.Principal, c Ceiling, a Action,
 // composes a turn's requester only when it is needed asks first: a verb no
 // app gates asks nothing of the requester's apps, so it costs no read of them.
 func NamesApp(a Action) bool {
-	r := rules[a]
+	r, _ := ruleOf(a)
 	return r.app != "" || len(r.anyOf) > 0
 }
 

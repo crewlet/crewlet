@@ -51,6 +51,7 @@ import type { LogPosition } from "./session.ts";
 // `protocol.js`, where the `~` alias does not exist.
 import type { BUDGET_WINDOWS } from "../contract/config.ts";
 import type { SettingRange } from "../contract/limits.ts";
+import type { GrowthChangesAnswer } from "../contract/growth.ts";
 import type { OBJECT_FINDINGS, OBJECTS_STATES } from "../contract/fleet.ts";
 import type { BudgetState, GROUPS } from "../contract/spend.ts";
 import type { EXECUTOR_TAIL_OUTCOMES } from "../contract/executor.ts";
@@ -8556,6 +8557,8 @@ export interface QueryMap {
   work_flow: WorkFlowAnswer;
   company_feed: CompanyFeedAnswer;
   decisions: DecisionsAnswer;
+  /** The agents' growth acts, newest first (`internal/accessdomain`), an administrator's read. */
+  growth_changes: GrowthChangesAnswer;
   answered_decisions: AnsweredDecisionsAnswer;
   /* THE CHAT FAMILY IS THE CHATLET APP'S, ALL OF IT, and asked for the seat the
      caller acts as and nobody else: none of these takes a handle — there is

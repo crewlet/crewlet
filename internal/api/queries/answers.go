@@ -114,6 +114,10 @@ type Sources struct {
 	// reads (ADR-0125); nil serves no such question.
 	Delegated DelegatedReads
 
+	// Growth is the access log's growth records, which `growth_changes`
+	// reads (ADR-0171); nil serves no such question.
+	Growth GrowthReads
+
 	// DelegatedGitHub is the company's GitHub a rule's form offers
 	// (delegatedgithub.go); nil serves none of its three questions.
 	DelegatedGitHub DelegatedGitHub
@@ -1170,6 +1174,11 @@ func Register(r *Registry, s Sources) {
 		// WHAT DELEGATES DECIDED, for the people they answer to: decided
 		// per caller against the rules' escalate_to (ADR-0125).
 		r.Register("delegated_decisions", DecidedBy(authz.ActionDelegatedRead), s.delegatedDecisions)
+	}
+	if s.Growth != nil {
+		// THE RECENT AGENT CHANGES TO THE COMPANY'S GROWTH ACCOUNTS, the
+		// company-wide trail's question (ADR-0171).
+		r.Register("growth_changes", DecidedBy(authz.ActionAuditRead), s.growthChanges)
 	}
 	if s.DelegatedGitHub != nil {
 		// WHAT A RULE CAN NAME FROM THE COMPANY'S GITHUB, for the

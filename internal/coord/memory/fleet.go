@@ -155,6 +155,9 @@ type Fleet struct {
 	grants     entryRecords[coord.MCPGrant, coord.MCPGrantUpdate]
 	mcpSignIns entryRecords[coord.MCPSignIn, coord.MCPSignIn]
 
+	// googleIdentities are each seat's Google growth identity, by handle.
+	googleIdentities entryRecords[coord.GoogleIdentity, coord.GoogleIdentity]
+
 	// version is the one counter every versioned write draws from, sandbox
 	// runs, mailbox records and chat read records alike. Store-wide rather
 	// than per record, as a KV revision is, so a record deleted and created
@@ -246,6 +249,7 @@ func NewFleet() *Fleet {
 		insightRecords:    newInsightRecords(),
 		grants:            newGrantRecords(),
 		mcpSignIns:        newMCPSignInRecords(),
+		googleIdentities:  newGoogleIdentityRecords(),
 		accepted:          newAcceptedRecords(),
 		bodies:            map[string]storedBody{},
 	}

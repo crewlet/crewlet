@@ -731,6 +731,9 @@ func withHeld(run sandbox.PendingRun, opened runOpened, row map[string]any) map[
 			// answers and why it reached people, which an escalation's
 			// card shows before the call itself (ADR-0125).
 			"act": held.Act, "delegation": delegationOf(held.Delegation),
+			// WHEN A GROWTH ACT LAPSES unanswered, "" for a call that waits
+			// until answered (ADR-0171).
+			"lapses_at": isoOrEmpty(held.LapsesAt),
 		}
 		row["held_arguments"] = opened.held
 	}
