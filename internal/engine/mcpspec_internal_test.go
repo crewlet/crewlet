@@ -248,6 +248,7 @@ func TestEveryPassThatMintsASeatsCredentialDeclaresItsPlan(t *testing.T) {
 		integration.KindAppStoreConnect: "no seat holds an App Store Connect key",
 		integration.KindGoogleAnalytics: "no pass mints a seat's Google Analytics credential: its tokens are minted at use",
 		integration.KindGoogleAds:       "no pass mints a seat's Google Ads credential: its tokens are minted at use",
+		integration.KindGooglePlay:      "no pass mints a seat's Google Play credential: its tokens are minted at use",
 	}
 	e := &Engine{}
 	for _, pass := range e.setupPasses() {

@@ -40,6 +40,7 @@ type Integrations struct {
 	AWS             *AWS             `yaml:"aws,omitempty" json:"aws,omitempty" desc:"The Crewlet stack in an AWS account and the engine's certificate authority, used to create one IAM role per agent through IAM Roles Anywhere. Absent = disabled."`
 	GoogleAnalytics *GoogleAnalytics `yaml:"google_analytics,omitempty" json:"google_analytics,omitempty" desc:"Google Analytics 4: agents read and manage properties as their own Google growth identity, through the Google Cloud connection's identity. Absent = disabled."`
 	GoogleAds       *GoogleAds       `yaml:"google_ads,omitempty" json:"google_ads,omitempty" desc:"Google Ads: agents read and manage accounts as their own Google growth identity, through the Google Cloud connection's identity, spend held to each account's caps. Absent = disabled."`
+	GooglePlay      *GooglePlay      `yaml:"google_play,omitempty" json:"google_play,omitempty" desc:"Google Play: agents read and manage apps as their own Google growth identity, through the Google Cloud connection's identity, publishing held for an administrator. Absent = disabled."`
 	SSH             *SSH             `yaml:"ssh,omitempty" json:"ssh,omitempty" desc:"The engine's SSH certificate authority and the servers agents may reach with short-lived certificates it signs. Absent = disabled."`
 
 	AppStoreConnect *AppStoreConnect `yaml:"app_store_connect,omitempty" json:"app_store_connect,omitempty" desc:"App Store Connect teams and their API keys, one per Apple role, through which the engine makes every call for the agents. Absent = disabled."`
@@ -158,6 +159,9 @@ func (i *Integrations) validate(path Path) error {
 	}
 	if i.GoogleAds != nil {
 		p.wrap(i.GoogleAds.validate(i, at(path, "google_ads")))
+	}
+	if i.GooglePlay != nil {
+		p.wrap(i.GooglePlay.validate(i, at(path, "google_play")))
 	}
 	if i.SSH != nil {
 		p.wrap(i.SSH.validate(at(path, "ssh")))

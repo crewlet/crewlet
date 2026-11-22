@@ -84,6 +84,7 @@ var Tools = []Tool{
 	{Key: "app_store_connect", Surfaces: []ToolSurface{{string(KindAppStoreConnect), "App Store Connect"}}},
 	{Key: "google_analytics", Surfaces: []ToolSurface{{string(KindGoogleAnalytics), "Google Analytics"}}},
 	{Key: "google_ads", Surfaces: []ToolSurface{{string(KindGoogleAds), "Google Ads"}}},
+	{Key: "google_play", Surfaces: []ToolSurface{{string(KindGooglePlay), "Google Play"}}},
 }
 
 // ToolState is a tool's standing in the one question a person asks of it: does
