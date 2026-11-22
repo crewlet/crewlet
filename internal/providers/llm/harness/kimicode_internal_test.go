@@ -10,8 +10,8 @@ import (
 )
 
 // The invariants the built-in kimi-code profile keeps, each measured against
-// Kimi Code 0.42.0 and 2.3.1 through this package's own Complete (see the
-// profile's comments): every call hands the harness an agent file it accepts, a
+// Kimi Code through this package's own code path (see the profile's comments,
+// which say on which release): every call hands the harness an agent file it accepts, a
 // seat's text comes before anything per call, and nothing a call writes about
 // itself outlives the calls that share the seat's home.
 
@@ -41,8 +41,8 @@ func fakeChannel(ch harnessprofile.Channel) map[string]any {
 // EVERY CALL HANDS THE HARNESS AN AGENT FILE WITH A BODY, and a seat's text opens it.
 //
 // Kimi Code trims the body and refuses one that trims to nothing ("Missing
-// prompt body", exit 1, on both builds measured) — so a call whose file came
-// out empty fails whatever it asked. The replacing body is the engine's text
+// prompt body", exit 1, measured on 2.7.2), so a call whose file came out
+// empty fails whatever it asked. The replacing body is the engine's text
 // alone and is empty for a call with no system prompt, which therefore has to
 // take the appending one: driven through Complete with the shipped channels,
 // for each kind of call with and without a system prompt.
@@ -50,6 +50,9 @@ func fakeChannel(ch harnessprofile.Channel) map[string]any {
 // And where there is text, NOTHING comes before it: the vendor's default
 // carries the call's directory, its listing and the AGENTS.md chain, so it
 // follows the engine's text rather than leading it.
+//
+// Mutation: send a call with no system prompt down its own kind's route in
+// routeFor, and a side pass with none hands the harness an empty body.
 func TestKimiCodeNeverHandsItsHarnessAnAgentFileWithNoBody(t *testing.T) {
 	t.Parallel()
 	kimi := kimiCode(t)

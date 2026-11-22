@@ -23,9 +23,9 @@ import (
 // own with a call; and the record the wire log it keeps in the seat's home
 // under a directory named after the working directory — its profile.bind
 // naming that directory, then per step its request, its usage (the prompt
-// without its cached part), its prose and calls, and the step's end — with the
-// assistant's messages on stdout and a failure on stderr (measured on 2.3.2;
-// see the profile).
+// without its cached part), its prose and calls, and the step's end, with the
+// assistant's messages on stdout and a failed run's class in the log alone
+// (measured on 2.7.2; see the profile).
 func init() {
 	fakeHarnesses["kimi-code"] = fakeHarness{
 		server: func() (string, []string, error) {
@@ -53,7 +53,7 @@ func init() {
 	}
 }
 
-// kimiHomeServers is every server 2.3.2 starts from the seat's home: the ones
+// kimiHomeServers is every server 2.7.2 starts from the seat's home: the ones
 // its mcp.json names and, for each plugin installed.json lists, the plugin's.
 func kimiHomeServers() []string {
 	home := os.Getenv("KIMI_CODE_HOME")
@@ -81,7 +81,7 @@ func kimiHomeServers() []string {
 	return names
 }
 
-// kimiSessionDir is where 2.3.2 keeps a run's session: under the home, in a
+// kimiSessionDir is where 2.7.2 keeps a run's session: under the home, in a
 // directory named after the working directory — its base name and a digest
 // of its path, which no glob the engine writes can spell.
 func kimiSessionDir(cwd, session string) string {
@@ -211,34 +211,13 @@ func TestKimiCodesRunIsReadFromTheWireLogItKeepsForIt(t *testing.T) {
 	}, llm.Usage{Input: 340, Output: 29, CacheRead: 100})
 }
 
-// A FAILED KIMI CODE RUN SAYS WHY ON STDERR, and is judged by it: the harness
-// prints its own classification of the provider's answer — `provider.<kind>:`
-// and the upstream message — and exits 1, where a spent plan's words are read
-// as a text function's are.
-//
-// Mutation: drop provider.rate_limit from the profile's limit markers, and the
-// spent plan is a server failure.
-func TestAFailedKimiCodeRunSaysWhyOnStderr(t *testing.T) {
-	t.Parallel()
-	p := fakeAs(t, "kimi-code", fakeScript{Exit: 1,
-		Stderr:    "error: failed to run prompt: provider.rate_limit: 429 slow down\n",
-		Responses: []fakeResponse{{Calls: []fakeCall{{Name: "search"}}, Usage: fakeUsage{Input: 5, Output: 5}}}},
-		func(c *Config) { c.Auth = Auth{Mode: AuthSubscription} })
-	host := newTestHost(t, "search")
-	host.handle("search", func(context.Context, map[string]any) (string, bool) { return "3 results", false })
-	_, err := p.Complete(t.Context(), phase(host))
-	if kind := llm.KindOf(err); kind != llm.KindRateLimit {
-		t.Fatalf("err = %v (%v), want the spent plan the harness reported on stderr", err, kind)
-	}
-}
-
-// A FAILED KIMI CODE 2.7 RUN SAYS WHY ONLY IN ITS RECORD: stderr says the turn
+// A FAILED KIMI CODE RUN SAYS WHY ONLY IN ITS RECORD: stderr says the turn
 // failed and no more, and the wire log the run is read from ends on turn.ended
 // with the harness's class, which judges it.
 //
 // Mutation: stop feeding the record's lines to its reports in serveTools, and
 // the spent plan is a server failure.
-func TestAFailedKimiCode27RunSaysWhyOnlyInItsRecord(t *testing.T) {
+func TestAFailedKimiCodeRunSaysWhyOnlyInItsRecord(t *testing.T) {
 	t.Parallel()
 	p := fakeAs(t, "kimi-code", fakeScript{Exit: 1, Stderr: kimi27Stderr, RecordEnd: kimi27Spent,
 		Responses: []fakeResponse{{Calls: []fakeCall{{Name: "search"}}, Usage: fakeUsage{Input: 5, Output: 5}}}},
