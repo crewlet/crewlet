@@ -375,7 +375,7 @@ func TestAWebDeniedOpenCodeRunHasNoWebTool(t *testing.T) {
 		b := sandbox.NewFakeSandbox("box-1")
 		path, err := executor.OpenCode{}.WriteConfig(t.Context(), b, sandbox.RunRequest{
 			MCPServers: seatServers(), Limits: sandbox.Limits{MaxTurns: 40}, WebDenied: denied,
-		}, executor.PathsFor(b))
+		}, executor.Session{}, executor.PathsFor(b))
 		if err != nil {
 			t.Fatalf("WriteConfig: %v", err)
 		}
