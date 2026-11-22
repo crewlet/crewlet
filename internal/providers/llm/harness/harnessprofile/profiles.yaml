@@ -4405,11 +4405,36 @@ hermes:
     - ".hermes/.env"
     - ".hermes/auth.json"
     - ".hermes/shared/nous_auth.json"
-  # All three are login files, carried whole: auth.json's provider choice,
-  # Nous login and pool, and its shared copy hold tokens, a client id, portal
-  # URLs and a minted agent key, but no account (measured on 0.23.3 against
-  # stubs), so NO identity_keys; .env holds the keys `hermes auth` stores, and
-  # a seat's toolsets write no file. Its settings are config.yaml, seeded.
+  # auth.json (the provider choice, the Nous login and pool) and its shared
+  # copy are login files, carried whole: tokens, a client id, portal URLs and a
+  # minted agent key, but no account (measured on 0.23.3 against stubs), so NO
+  # identity_keys there. .env is a MIXED FILE: it is every variable the harness
+  # starts with, base URLs and tool settings beside the keys, so a home is
+  # seeded with, and a refresh carries back, only the provider API keys: each
+  # provider's api_key_env_vars in 0.23.3's PROVIDER_REGISTRY, enumerated with
+  # its own interpreter, and OPENROUTER_API_KEY, which it reads apart. A key
+  # names whose account it is and never refreshes, so the same keys are its
+  # identity. A custom endpoint's key, named by its URL, is no such key: an
+  # entry on one gives it through its env (env_sign_in).
+  login_keys:
+    .env: &hermes_env_keys [
+      ACTUAL_API_KEY, AI_GATEWAY_API_KEY, ALIBABA_CODING_PLAN_API_KEY,
+      ALIBABA_CODING_PLAN_CN_API_KEY, ALIBABA_TOKEN_PLAN_API_KEY,
+      ALIBABA_TOKEN_PLAN_CN_API_KEY, ANTHROPIC_API_KEY, ANTHROPIC_TOKEN,
+      ARCEEAI_API_KEY, AZURE_FOUNDRY_API_KEY, CLAUDE_CODE_OAUTH_TOKEN,
+      COMMANDCODE_API_KEY, DASHSCOPE_API_KEY, DEEPINFRA_API_KEY,
+      DEEPSEEK_API_KEY, FIREWORKS_API_KEY, GEMINI_API_KEY, GLM_API_KEY,
+      GMI_API_KEY, GOOGLE_API_KEY, HF_TOKEN, KILOCODE_API_KEY, KIMI_API_KEY,
+      KIMI_CN_API_KEY, KIMI_CODING_API_KEY, LM_API_KEY, META_API_KEY,
+      META_MODEL_API_KEY, MINIMAX_API_KEY, MINIMAX_CN_API_KEY, MODEL_API_KEY,
+      NEBIUS_API_KEY, NEBIUS_TOKEN_FACTORY_API_KEY, NOVITA_API_KEY,
+      NVIDIA_API_KEY, OLLAMA_API_KEY, OPENAI_API_KEY, OPENCODE_GO_API_KEY,
+      OPENCODE_ZEN_API_KEY, OPENROUTER_API_KEY, RAMP_ROUTER_API_KEY,
+      ROUTER_API_KEY, STEPFUN_API_KEY, TOKENHUB_API_KEY, TOKENPLAN_API_KEY,
+      UPSTAGE_API_KEY, XAI_API_KEY, XIAOMI_API_KEY, ZAI_API_KEY, Z_AI_API_KEY
+    ]
+  identity_keys:
+    .env: *hermes_env_keys
   # A GATEWAY PER HOME RUNS EVERY `-z` TURN (hermes_cli/oneshot.py: "The run
   # itself goes through the gateway"). The first call into a home starts
   # `hermes gateway run --idle-exit` in a session of its own, with that call's

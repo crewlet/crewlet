@@ -2,6 +2,7 @@ package harnessprofile
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
 	"reflect"
 	"slices"
@@ -255,6 +256,21 @@ func TestEveryHarnessSaysWhichLoginItsFilesAre(t *testing.T) {
 			continue
 		}
 		p, _ := Builtin(name)
+		if name == "hermes" {
+			// Its .env's keys are 0.23.3's provider registry, read whole: held
+			// here to the keys a seat signs in with and to no base URL.
+			env := p.LoginKeys[".env"]
+			for _, key := range []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"} {
+				if !slices.Contains(env, key) {
+					t.Errorf("hermes: .env's login_keys lack %s", key)
+				}
+			}
+			if slices.ContainsFunc(env, func(k string) bool { return !strings.HasSuffix(k, "_KEY") && !strings.HasSuffix(k, "_TOKEN") }) {
+				t.Errorf("hermes: .env's login_keys %v name a variable that is no key", env)
+			}
+			w.login = map[string][]string{".env": env}
+			w.identity = map[string][]string{".env": env}
+		}
 		if !reflect.DeepEqual(p.LoginKeys, w.login) {
 			t.Errorf("%s: login_keys = %v, want %v", name, p.LoginKeys, w.login)
 		}
@@ -317,4 +333,30 @@ func testLogins(t *testing.T, path string) map[string]testLogin {
 		t.Fatalf("%s: %v", path, err)
 	}
 	return logins
+}
+
+// A .ENV IS READ AS HERMES READS IT, AND WRITTEN SO IT READS BACK: comments and
+// blank lines skipped, an `export ` prefix, spaces around the name, a later
+// line winning, double quotes with their escapes, single quotes as written, an
+// unquoted value ending at a `#` after a space, a quoted one at its closing
+// quote; what encodeDotenv writes parses to the same variables.
+//
+// Mutation: keep a comment line, keep the export prefix, cut an unquoted value
+// at a `#` with no space before it, leave a double-quoted value's escapes in,
+// or write a value with a space unquoted.
+func TestADotenvIsReadAsHermesReadsIt(t *testing.T) {
+	t.Parallel()
+	got := parseDotenv([]byte("\ufeff# a comment\n\nexport A=1\n  B = two  \nC=\"x \\\"q\\\" \\\\ y\" # note\n" +
+		"D='a # b'\nE=foo#bar\nF=val # trailing\nA=3\nnoequals\n=novalue\nG=\"open\n"))
+	want := map[string]string{"A": "3", "B": "two", "C": `x "q" \ y`, "D": "a # b", "E": "foo#bar", "F": "val", "G": `"open`}
+	if !maps.Equal(got, want) {
+		t.Errorf("parseDotenv = %v, want %v", got, want)
+	}
+	vars := map[string]any{"PLAIN": "abc", "SPACED": "a b", "HASH": "a#b", "QUOTE": `say "hi" \ 'x'`, "EMPTY": ""}
+	back := parseDotenv(encodeDotenv(vars))
+	for key, value := range vars {
+		if back[key] != value {
+			t.Errorf("%s written and read back is %q, want %q", key, back[key], value)
+		}
+	}
 }
