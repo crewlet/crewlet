@@ -50,16 +50,17 @@ func TestAReusedBoxKeepsNoHarnesssFilesOrDirectories(t *testing.T) {
 	}
 }
 
-// KIMI CODE'S AND COPILOT'S ARTIFACTS ARE CLEARED, each split as the contract
-// names them: their files one by one (Kimi's driver and settings, Copilot's
-// instructions and tool environment) and their directories whole (Kimi's
-// profile directory, Copilot's extension), whichever runner clears the box.
+// KIMI CODE'S, COPILOT'S AND MUSE CODE'S ARTIFACTS ARE CLEARED, each split as
+// the contract names them: their files one by one (Kimi's driver and settings,
+// Copilot's instructions and tool environment, Muse's note helper and take
+// configs) and their directories whole (Kimi's profile directory, Copilot's
+// extension, Muse's MCP servers and plugin), whichever runner clears the box.
 // Named through the old (files, dirs) method, neither satisfied the contract
 // and the clear left both runners' files behind.
 //
 // Mutation: drop either runner's artifactFiles or artifactDirs, or name a
 // directory among its files, and its row goes red.
-func TestAReusedBoxKeepsNoKimiOrCopilotArtifacts(t *testing.T) {
+func TestAReusedBoxKeepsNoKimiCopilotOrMuseArtifacts(t *testing.T) {
 	t.Parallel()
 	box := sandbox.NewFakeSandbox("box-1")
 	p := PathsFor(box)
@@ -78,6 +79,7 @@ func TestAReusedBoxKeepsNoKimiOrCopilotArtifacts(t *testing.T) {
 	}{
 		{"kimi-code", (Kimi{}).artifactFiles(p), (Kimi{}).artifactDirs(p)},
 		{"copilot", (Copilot{}).artifactFiles(p), (Copilot{}).artifactDirs(p)},
+		{"muse-code", (Muse{}).artifactFiles(p), (Muse{}).artifactDirs(p)},
 	} {
 		if len(c.files) == 0 || len(c.dirs) == 0 {
 			t.Errorf("%s names files %v and directories %v, want both", c.name, c.files, c.dirs)

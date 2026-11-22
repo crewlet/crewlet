@@ -212,6 +212,7 @@ func launchRigRestoring(t *testing.T, c *Company, bridge *mcpbridge.Bridge,
 		"codex":       sandbox.NewFakeRunner("codex"),
 		"copilot":     sandbox.NewFakeRunner("copilot"),
 		"kimi-code":   sandbox.NewFakeRunner("kimi-code"),
+		"muse-code":   sandbox.NewFakeRunner("muse-code"),
 		"opencode":    sandbox.NewFakeRunner("opencode"),
 	}
 	providers := map[sandbox.Placement]sandbox.Provider{}
@@ -230,7 +231,7 @@ func launchRigRestoring(t *testing.T, c *Company, bridge *mcpbridge.Bridge,
 		Providers: providers, DefaultPlacement: sandbox.Direct,
 		Runners: map[string]sandbox.Runner{
 			"claude-code": runners["claude-code"], "codex": runners["codex"], "copilot": runners["copilot"],
-			"kimi-code": runners["kimi-code"], "opencode": runners["opencode"],
+			"kimi-code": runners["kimi-code"], "muse-code": runners["muse-code"], "opencode": runners["opencode"],
 		},
 		DefaultSetup:     defaults,
 		AttributeCommits: c.Config.Providers.Sandbox.AttributesCommits(),

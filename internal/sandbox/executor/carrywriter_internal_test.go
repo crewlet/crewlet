@@ -44,12 +44,12 @@ func TestEveryCarrierRefusesABoxThatNamedNoReleaseAndJudgesAWriterAlone(t *testi
 	}
 }
 
-// AN UNREAD WRITER CONTINUES IN NO BOX, for every carrier (all five): a
+// AN UNREAD WRITER CONTINUES IN NO BOX, for every carrier (all six): a
 // session whose writer named no release this build reads (a pre-release, a
 // snapshot, none, which releaseOf reads as "") is refused alone and beside a
 // box of every release, saying why; read as current, it would be carried into
-// a box older than its writer. And a Codex, Copilot or Kimi Code box of another
-// release than its one supported continues not even its own copy
+// a box older than its writer. And a Codex, Copilot, Kimi Code or Muse Code box
+// of another release than its one supported continues not even its own copy
 // ([inPlaceGate]).
 //
 // Mutation: take an unread writer for a current one in any carrier's
@@ -67,6 +67,7 @@ func TestAnUnreadWriterContinuesInNoBox(t *testing.T) {
 		{"codex", Codex{}, []string{codexCarryRelease}},
 		{"copilot", Copilot{}, []string{copilotFloor()}},
 		{"kimi-code", Kimi{}, []string{kimiSupported}},
+		{"muse-code", Muse{}, []string{museSupported}},
 	} {
 		if ok, why := c.carrier.ContinuesWriter(""); ok || why == "" {
 			t.Errorf("%s: an unread writer continues %v (%q), want refused, saying why", c.name, ok, why)
@@ -79,21 +80,23 @@ func TestAnUnreadWriterContinuesInNoBox(t *testing.T) {
 	}
 	// EVERY CARRIER WHOSE BOX HOLDS A RELEASE TO ITS OWN COPY refuses another
 	// release in place, as its run's gate does ([inPlaceGate]).
-	for name, gate := range map[string]inPlaceGate{"codex": Codex{}, "copilot": Copilot{}, "kimi-code": Kimi{}} {
+	for name, gate := range map[string]inPlaceGate{
+		"codex": Codex{}, "copilot": Copilot{}, "kimi-code": Kimi{}, "muse-code": Muse{},
+	} {
 		if ok, why := gate.continuesInPlace("9.9.9"); ok || why == "" {
 			t.Errorf("%s: a box of 9.9.9 continues its own copy %v (%q), want refused", name, ok, why)
 		}
 	}
 }
 
-// KIMI CODE AND COPILOT JUDGE A WRITER ALONE AS THEY DO BESIDE A BOX: only a
-// session their one supported release wrote continues ([carrier]
+// KIMI CODE, COPILOT AND MUSE CODE JUDGE A WRITER ALONE AS THEY DO BESIDE A
+// BOX: only a session their one supported release wrote continues ([carrier]
 // ContinuesWriter, which the restorer asks with no box), any other writer
 // refused saying why, and Continues beside a supported box answers the same.
 //
-// Mutation: answer yes in either runner's ContinuesWriter, or judge a writer
+// Mutation: answer yes in any of their ContinuesWriter, or judge a writer
 // otherwise than its Continues does, and its row goes red.
-func TestKimiAndCopilotContinueOnlyTheirOneReleasesWriter(t *testing.T) {
+func TestSingleReleaseCarriersContinueOnlyTheirOneReleasesWriter(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
 		name      string
@@ -102,6 +105,7 @@ func TestKimiAndCopilotContinueOnlyTheirOneReleasesWriter(t *testing.T) {
 	}{
 		{"kimi-code", Kimi{}, kimiSupported},
 		{"copilot", Copilot{}, copilotFloor()},
+		{"muse-code", Muse{}, museSupported},
 	} {
 		for writer, want := range map[string]bool{c.supported: true, "9.9.9": false, "0.0.1": false, "": false} {
 			ok, why := c.carrier.ContinuesWriter(writer)
@@ -116,18 +120,17 @@ func TestKimiAndCopilotContinueOnlyTheirOneReleasesWriter(t *testing.T) {
 	}
 }
 
-// KIMI CODE'S AND COPILOT'S ARCHIVES ARE METERED AS NO FIGURE: this build
-// reads no count or estimate of their sessions' next request off an archive,
-// so the take's meter of either states none and fails nothing, whatever the
-// archive holds (on main both went through Claude Code's reader, which read
-// nothing of them either).
+// KIMI CODE'S, COPILOT'S AND MUSE CODE'S ARCHIVES ARE METERED AS NO FIGURE:
+// this build reads no count or estimate of their sessions' next request off
+// an archive, so the take's meter of each states none and fails nothing,
+// whatever the archive holds.
 //
-// Mutation: hand either runner Claude Code's or Codex's meter, or a figure
-// read off any line, and its row goes red.
-func TestKimiAndCopilotArchivesAreMeteredAsNoFigure(t *testing.T) {
+// Mutation: hand any of them Claude Code's or Codex's meter, or a figure read
+// off any line, and its row goes red.
+func TestSingleReleaseArchivesAreMeteredAsNoFigure(t *testing.T) {
 	t.Parallel()
 	archive := `{"type":"usage.record","input_tokens":123456}` + "\n"
-	for name, c := range map[string]carrier{"kimi-code": Kimi{}, "copilot": Copilot{}} {
+	for name, c := range map[string]carrier{"kimi-code": Kimi{}, "copilot": Copilot{}, "muse-code": Muse{}} {
 		read, err := c.meter(t.Context(), strings.NewReader(archive), "s-1", "1.0.0", nil)
 		if err != nil || read != (meterReading{}) {
 			t.Errorf("%s: the meter reads %+v (%v), want no figure", name, read, err)
