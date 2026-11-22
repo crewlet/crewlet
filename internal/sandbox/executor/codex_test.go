@@ -182,6 +182,36 @@ func TestACodexOlderThanItsFloorStartsNothing(t *testing.T) {
 	}
 }
 
+// A CODEX BOX CONTINUES ITS OWN COPY OF A SESSION ONLY ON THE ONE SUPPORTED
+// RELEASE, as the engine asks it before a relaunch in the box hands the brief
+// that continues the copy: exactly 0.171.0 does; a newer, older or pre-release
+// Codex does not, naming what it found. A runner whose harness holds no
+// release to its own copy answers yes without asking the box.
+//
+// Mutation: answer yes for every Codex, compare releases by order, or read a
+// pre-release as its numbers, and a row goes red.
+func TestACodexBoxTakesUpItsOwnCopyOnlyOnTheOneSupportedRelease(t *testing.T) {
+	t.Parallel()
+	for release, want := range map[string]string{
+		"0.171.0": "", "0.172.0": "Codex 0.172.0", "0.170.9": "Codex 0.170.9",
+		"0.171.0-alpha.1": "named no release",
+	} {
+		runner, box, _ := codexBox(t, release)
+		check, err := runner.CheckInPlace(t.Context(), box)
+		if err != nil {
+			t.Fatalf("%s: CheckInPlace: %v", release, err)
+		}
+		if check.Continues != (want == "") || !strings.Contains(check.Why, want) {
+			t.Errorf("%s: continues its copy %v (%q), want %v naming %q", release, check.Continues, check.Why,
+				want == "", want)
+		}
+	}
+	_, box, _ := codexBox(t, "0.172.0")
+	if check, err := executor.NewClaudeCode().CheckInPlace(t.Context(), box); err != nil || !check.Continues {
+		t.Errorf("a Claude Code runner answers %+v, %v for its own copy, want it continued unasked", check, err)
+	}
+}
+
 // codexRealBoxsNotesReachTheBridgesRoute is Codex's case of the contract's
 // route: a real box wired to a real bridge's notes route runs the note helper
 // the engine embeds, which polls the route the script handed it in its
