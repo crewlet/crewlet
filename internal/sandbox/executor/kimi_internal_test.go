@@ -499,7 +499,7 @@ func TestKimiWriteConfigWritesTheRunsOwnProfileServersAndDriver(t *testing.T) {
 			URL: "http://engine:1/mcp", Headers: map[string]string{"Authorization": "Bearer t"},
 			CallTimeout: 600e9}},
 		Steer: sandbox.SteerWiring{Server: "crewlet", Tool: "steer_take", URL: "http://engine:1/mcp/steer"}}
-	got, err := (Kimi{}).WriteConfig(t.Context(), box, req, paths)
+	got, err := (Kimi{}).WriteConfig(t.Context(), box, req, Session{}, paths)
 	if err != nil || got != paths.KimiSettings() {
 		t.Fatalf("WriteConfig = %q, %v", got, err)
 	}
@@ -538,7 +538,7 @@ func TestKimiWriteConfigWritesTheRunsOwnProfileServersAndDriver(t *testing.T) {
 	}
 
 	again := sandbox.RunRequest{Model: "k", Env: map[string]string{kimiKeyEnv: "sk"}}
-	if _, err := (Kimi{}).WriteConfig(t.Context(), box, again, paths); err != nil {
+	if _, err := (Kimi{}).WriteConfig(t.Context(), box, again, Session{}, paths); err != nil {
 		t.Fatal(err)
 	}
 	var second kimiSettings
