@@ -13,6 +13,7 @@
     ],
     "harness.name": [
       "claude-code",
+      "codex",
       "opencode",
       "copilot",
       "kimi-code"
