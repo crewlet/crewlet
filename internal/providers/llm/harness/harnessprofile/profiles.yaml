@@ -3925,6 +3925,15 @@ kimi-code:
   credential_paths:
     - ".kimi-code/credentials/kimi-code.json"
     - ".kimi-code/config.toml"
+  # THE LOGIN IN config.toml IS ITS TABLES, not the file: `kimi login` writes
+  # the provider with its OAuth reference, the models, the default model, the
+  # thinking default and the search and fetch services (2.7.2's
+  # applyManagedKimiCodeConfig), and the same file is where the harness reads
+  # hooks, which it runs, permission rules and tool settings. So a box is
+  # handed only these tables of the shared copy, again before every run, and
+  # never writes the file back: a run's refresh is credentials/kimi-code.json.
+  login_tables:
+    config.toml: [default_model, default_provider, models, providers, services, thinking]
   # Sessions, their index, the logs, the project registry and the telemetry
   # queue: what a call writes about itself.
   #

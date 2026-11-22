@@ -4151,6 +4151,10 @@ type executorRun struct {
 	// file during a run ([sandbox.Spec.CredentialRunKeys]).
 	fileKeys map[string][]string
 
+	// fileTables is, by a path of files, the top-level keys of that TOML file
+	// that are its login ([sandbox.Spec.CredentialTables]).
+	fileTables map[string][]string
+
 	// signIn is env without the integrations' box defaults and the seat's
 	// own credentials for a tool: what the run's sign-in is judged on, since
 	// neither ever signs a harness in.
@@ -4215,6 +4219,7 @@ func newExecutorRun(agent *harness.Provider, seat runEnv) executorRun {
 		signInNames: signInNames(agent, entry),
 		files:       agent.SandboxCredentials(),
 		fileKeys:    agent.SandboxCredentialRunKeys(),
+		fileTables:  agent.SandboxCredentialTables(),
 		homePaths:   integrationsOwn(agent, seat.homePaths),
 	}
 	for _, name := range slices.Sorted(maps.Keys(seat.credentials)) {
