@@ -525,7 +525,8 @@ type HomeDaemon struct {
 	// its daemon runs and removes when it stops.
 	PIDFile string `yaml:"pid_file,omitempty"`
 	// StopArgs is the harness's own command that stops the daemon of the home
-	// it runs in, and exits 0 when there is none.
+	// it runs in, a turn the daemon still runs included, and exits 0 when
+	// there is none.
 	StopArgs []string `yaml:"stop_args,omitempty"`
 }
 
