@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
 // THE EXECUTOR, AS A TEST RUNS IT: a launchable chain member, a catalogue, a
@@ -43,15 +44,25 @@ const runnerKey = "cli"
 // does not exist: the rig's double plays the run, and a phase that falls
 // through to it by mistake fails rather than starting a real harness on the
 // machine running the suite.
-func runnerEntry(t *testing.T) phase.Entry {
+func runnerEntry(t *testing.T) phase.Entry { return runnerEntryOn(t, executor.ClaudeCodeName) }
+
+// runnerEntryOn is [runnerEntry] on the harness named, signed in as that
+// harness takes a key: Claude Code by its API key, OpenCode by its provider's
+// key in its env.
+func runnerEntryOn(t *testing.T, name string) phase.Entry {
 	t.Helper()
-	provider, err := harness.New(harness.Config{
-		Key: runnerKey, Harness: "claude-code", Model: "sonnet",
+	cfg := harness.Config{
+		Key: runnerKey, Harness: name, Model: "sonnet",
 		StateDir:  t.TempDir(),
 		Overrides: map[string]any{"binary": filepath.Join(t.TempDir(), "no-cli-here")},
 		Timeout:   time.Minute,
 		Auth:      harness.Auth{Mode: harness.AuthAPIKey, APIKey: "sk-ant-not-real"},
-	})
+	}
+	if name == executor.OpenCodeName {
+		cfg.Model, cfg.Auth = "anthropic/claude-sonnet-4", harness.Auth{}
+		cfg.Env = map[string]string{"ANTHROPIC_API_KEY": "sk-ant-not-real"}
+	}
+	provider, err := harness.New(cfg)
 	if err != nil {
 		t.Fatalf("harness.New: %v", err)
 	}
@@ -64,7 +75,13 @@ func runnerEntry(t *testing.T) phase.Entry {
 // member with an in-box runner.
 func runnable(t *testing.T, entries []phase.Entry, seats ...*org.Role) *phase.Registry {
 	t.Helper()
-	models, err := phase.NewRegistry(append(entries, runnerEntry(t)))
+	return runnableOn(t, executor.ClaudeCodeName, entries, seats...)
+}
+
+// runnableOn is [runnable] with its runner entry on the harness named.
+func runnableOn(t *testing.T, runnerHarness string, entries []phase.Entry, seats ...*org.Role) *phase.Registry {
+	t.Helper()
+	models, err := phase.NewRegistry(append(entries, runnerEntryOn(t, runnerHarness)))
 	if err != nil {
 		t.Fatalf("phase.NewRegistry: %v", err)
 	}

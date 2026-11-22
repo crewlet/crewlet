@@ -41,7 +41,7 @@ import type {
 import { type InboxChange, LIVE_CALL_DETAIL, MAX_EVENTS } from "../contract/wire.ts";
 import type { EngineHealth } from "../contract/health.ts";
 import type { ToolRow } from "../contract/tools.ts";
-import { comparePositions, type LogPosition } from "./session.ts";
+import { APPLIED_REVISION, comparePositions, session, type LogPosition } from "./session.ts";
 
 /**
  * How many completed-phase envelopes a tab keeps, PAYLOAD AND ALL.
@@ -556,6 +556,15 @@ function emptyState(): StoreState {
   };
 }
 
+/**
+ * A revision this node applied, said to every read that asks again on one
+ * (`APPLIED_REVISION`), whether a push or a snapshot carried it.
+ */
+function announceApplied(was: number | undefined, health: EngineHealth | null | undefined): void {
+  if (health && was !== undefined && health.applied_epoch > was)
+    session.written(null, null, [APPLIED_REVISION]);
+}
+
 export class Store {
   state: StoreState = emptyState();
 
@@ -635,8 +644,10 @@ export class Store {
     // socket is open; deriving it from a payload's contents meant a snapshot
     // arriving over the degraded REST fallback announced a live connection
     // that did not exist.
+    const was = this.state.lastHealth?.applied_epoch;
     if (snap.health) this.state.health = this.state.lastHealth = snap.health;
     this.emit(...ALL_DATA_SLICES);
+    announceApplied(was, snap.health);
   }
 
   /**
@@ -822,10 +833,12 @@ export class Store {
   }
 
   applyHealth(health: EngineHealth | null | undefined): void {
+    const was = this.state.lastHealth?.applied_epoch;
     this.state.health = health ?? null;
     if (health) this.state.lastHealth = health;
     this.link(!!health);
     this.emit("health");
+    announceApplied(was, health);
   }
 
   setConnected(value: boolean): void {

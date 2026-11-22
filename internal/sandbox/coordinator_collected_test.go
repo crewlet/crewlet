@@ -286,7 +286,7 @@ func TestTheRecordsTwoReasonsAreRedactedAsItIsPublished(t *testing.T) {
 		Text:     "done",
 		FellBack: "OpenCode did not import it: Error: ghp_" + body,
 		Kept:     &SessionKept{NotKept: "the box's session could not be taken: ghp_" + body},
-	}, time.Now())
+	}, 0, time.Now())
 	for field, said := range map[string]string{
 		"harness_session_fell_back": rec.HarnessSessionFellBack,
 		"session_not_kept":          rec.SessionNotKept,
@@ -426,7 +426,7 @@ func TestACollectedRecordNamesAContextExhaustedRun(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			rec := collectedRecord(PendingRun{}, LaunchRecord{}, c.result, time.Now())
+			rec := collectedRecord(PendingRun{}, LaunchRecord{}, c.result, 0, time.Now())
 			if rec.ErrorKind != c.want {
 				t.Errorf("ErrorKind = %q, want %q", rec.ErrorKind, c.want)
 			}
@@ -467,7 +467,7 @@ func TestACollectedRecordNamesARunKilledForMemory(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			rec := collectedRecord(PendingRun{Placement: string(c.cell)}, LaunchRecord{}, c.result, time.Now())
+			rec := collectedRecord(PendingRun{Placement: string(c.cell)}, LaunchRecord{}, c.result, 0, time.Now())
 			if rec.ErrorKind != c.kind || rec.MemoryKills != c.kills || rec.MemoryBytes != c.result.MemoryBytes {
 				t.Errorf("record kind %q, kills %d, ceiling %d; want %q, %d, %d",
 					rec.ErrorKind, rec.MemoryKills, rec.MemoryBytes, c.kind, c.kills, c.result.MemoryBytes)
@@ -476,24 +476,34 @@ func TestACollectedRecordNamesARunKilledForMemory(t *testing.T) {
 	}
 }
 
-// A CLAUDE CODE RECORD STATES THE WINDOW ITS RUN WAS PINNED TO, from the model its
-// launch recorded, so a report of a context loop names the window that run had.
+// A COLLECTED RECORD STATES THE WINDOW ITS RUNNER PINNED ITS RUN TO, from the
+// model its launch recorded ([windowPinner]), and none for a runner that pins
+// none, so a report of a context loop names the window that run had.
 //
-// Mutation: read a fixed window, or set it for another harness, and a row goes red.
-func TestACollectedRecordStatesTheWindowOfItsModel(t *testing.T) {
+// Mutation: read a fixed window, or one for a runner that pins none, and a row
+// goes red.
+func TestACollectedRecordStatesTheWindowItsRunnerPinned(t *testing.T) {
 	t.Parallel()
+	pins := NewFakeRunner("pins")
+	pins.Pin = func(model string) int {
+		if model == "a-long-model" {
+			return 1_000_000
+		}
+		return 200_000
+	}
 	for name, c := range map[string]struct {
-		harness, model string
-		want           int
+		runner Runner
+		model  string
+		want   int
 	}{
-		"a long-window model":     {ClaudeCodeHarness, "claude-opus-5-5", 1_000_000},
-		"a standard-window model": {ClaudeCodeHarness, "claude-haiku-4-5", 200_000},
-		"an unknown model":        {ClaudeCodeHarness, "claude-next-preview", FallbackExecutorWindow},
-		"another harness":         {"opencode", "anthropic/claude-opus-5-5", 0},
+		"a long-window model":     {pins, "a-long-model", 1_000_000},
+		"a standard-window model": {pins, "another-model", 200_000},
+		"a runner that pins none": {NewFakeRunner("none"), "a-long-model", 0},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			rec := collectedRecord(PendingRun{Harness: c.harness}, LaunchRecord{Model: c.model}, Result{}, time.Now())
+			rec := collectedRecord(PendingRun{}, LaunchRecord{Model: c.model}, Result{},
+				pinnedWindow(c.runner, c.model), time.Now())
 			if rec.ContextWindowTokens != c.want {
 				t.Errorf("ContextWindowTokens = %d, want %d", rec.ContextWindowTokens, c.want)
 			}

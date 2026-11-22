@@ -287,7 +287,7 @@ func TestATaskToldAgainCarriesTheAnswersItsBriefTold(t *testing.T) {
 			func(r *runner.Resume) {
 				if summary {
 					// Counting nothing, it may be a summary: every kept lead is told.
-					r.Run.Harness = sandbox.ClaudeCodeHarness
+					r.Run.Harness = "claude-code"
 				}
 				r.Bridged = []runner.BridgedCall{approved,
 					numbered("slack_history", map[string]any{"channel": "C1"}, 2, 2)}
@@ -351,7 +351,7 @@ func TestEveryAnswerIsToldOnceUnderTheOldestTaskThatCarriesIt(t *testing.T) {
 	newer := sandbox.Lead{Kind: sandbox.LeadKindTask, Job: "job-4", Seq: 4, Round: 1, Task: &sandbox.LeadTask{}}
 	brief := relaunchedInBox(t, inBoxCarryNamed(t, "a replaced sign-in"), sandbox.HarnessEndOwnRun, nil,
 		func(r *runner.Resume) {
-			r.Run.Harness = sandbox.ClaudeCodeHarness
+			r.Run.Harness = "claude-code"
 			r.Leads = []runner.ResumeLead{
 				keptLead(answerOf("job-1", 1, 1, "the first answer")),
 				keptLead(older), keptLead(answerOf("job-2", 2, 1, "the older task's carry")),

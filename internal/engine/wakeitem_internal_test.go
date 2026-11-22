@@ -120,7 +120,7 @@ func TestAWakeItemIsHandedToItsJobAsAWakeAndNeverAsANote(t *testing.T) {
 	}
 	run := mustRow(t, store, "run-1")
 	token := provenance.NewBoundary()
-	box := runs.inbox(identityOfRun(run), 1)
+	box := runs.inbox(identityOfRun(run), 1, run.Harness)
 	box.Bind(ctx, launch, token)
 	t.Cleanup(box.Close)
 	viewHolds(t, box, steer.MaxPendingNotes+1)
@@ -282,10 +282,6 @@ func TestAWakeItemsMessageFitsBesideAPersonsWidestNote(t *testing.T) {
 	if executor.UTF16Len(cut) > maxWakeItemUnits || !strings.Contains(cut, "characters past what is shown here") {
 		t.Errorf("a lone wake past the room runs %d units, or says nothing of its cut:\n%s",
 			executor.UTF16Len(cut), cut)
-	}
-	if room := executor.ClaudeRoomBeside(widestNote()); maxWakeItemUnits != room {
-		t.Errorf("a wake item is held to %d units, and a hook's answer has %d beside the widest note",
-			maxWakeItemUnits, room)
 	}
 }
 

@@ -390,19 +390,20 @@ export const GATE: Record<BuiltinGate, { label: string; detail: string }> = {
     detail:
       "Agents a delegated decisions rule names a delegate, on the requests put to them, within the rules Crewlet enforces.",
   },
+  // THE GROWTH LEVELS BY WHAT THEY LET AN AGENT DO, under the Growth group's heading.
   growth_read: {
-    label: "Growth read",
-    detail: "Agents on the tool's marketing or growth product at read or above: reads only.",
+    label: "View",
+    detail: "Agents on the tool's growth product at View or above: reads only.",
   },
   growth_operate: {
-    label: "Growth operate",
+    label: "Manage",
     detail:
-      "Agents on the product at operate or above: reversible changes, recorded, and spend or publishing an admin approves first.",
+      "Agents on the product at Manage or above: reversible changes, recorded, and spend or publishing an admin approves first.",
   },
   growth_administer: {
-    label: "Growth administer",
+    label: "Administer",
     detail:
-      "Agents on the product at administer: account, access and irreversible changes, each one an admin approves first.",
+      "Agents on the product at Administer: account, access and irreversible changes, each one an admin approves first.",
   },
 };
 

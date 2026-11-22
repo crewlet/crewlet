@@ -106,22 +106,22 @@ type RequestMeasure struct {
 // nextReading). A continuing launch is held to it with its brief
 // (internal/engine's continuedFloor) rather than to the last request's input
 // ([RequestMeasure]), which under-counts the reply and what followed and
-// over-counts past a compaction. Tokens at three characters a token,
-// OlderTokens at four ([ClaudeTextRate]; 0 where the harness counts one
-// rate); zero is no figure. Never carried and never on the executor log: the
+// over-counts past a compaction. Tokens at the harness's own rate,
+// OlderTokens at its older rate for older models ([ExecutorWindow.OlderText];
+// 0 where the harness counts one rate); zero is no figure. Never carried and never on the executor log: the
 // package doc ("the harness's own estimate of a session's next request").
 type NextRequest struct {
 	Tokens      int64
 	OlderTokens int64
 }
 
-// At is n at model's rate ([ClaudeTextRate]): OlderTokens for a model Claude
-// Code counts at four characters a token where n holds that figure, else
-// Tokens, which is the larger, so a model this build cannot place is held to
-// more and never less. Zero where n is no figure, a figure below zero among
-// it.
-func (n NextRequest) At(model string) int64 {
-	if n.OlderTokens > 0 && ClaudeTextRate(model) == claudeOlderTextRate {
+// At is n at the rate older says the next request's model is counted at
+// ([ExecutorWindow.OlderText]): OlderTokens where it is the older rate and n
+// holds that figure, else Tokens, which is the larger, so a model this build
+// cannot place is held to more and never less. Zero where n is no figure, a
+// figure below zero among it.
+func (n NextRequest) At(older bool) int64 {
+	if n.OlderTokens > 0 && older {
 		return n.OlderTokens
 	}
 	return max(n.Tokens, 0)

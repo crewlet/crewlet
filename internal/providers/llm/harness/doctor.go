@@ -859,14 +859,13 @@ func (p *Provider) executor(opts DiagnoseOptions) (lines, problems []string) {
 				"its work. Set it to a URL that box reaches the node at",
 			orNone(opts.Cell), bridgeURLVar, p.key))
 	}
-	if opts.RunsAsRoot && p.harness == string(config.HarnessClaudeCode) &&
+	if root := config.RootProblem(p.harness, p.key, config.Placement(opts.Cell)); opts.RunsAsRoot && root != "" &&
 		config.RunsAsEngineUser(config.Placement(opts.Cell)) {
 		// ALONGSIDE THE BRIDGE'S VERDICT, not instead of it: both are launches
 		// that fail at a seat's first work. The smoke run cannot show it,
-		// because it runs the deny-local-tools profile, not the executor's
-		// bypassPermissions mode.
-		lines = append(lines, "user: root — Claude Code refuses its executor's permission mode")
-		problems = append(problems, config.RootClaudeCodeProblem(p.key, config.Placement(opts.Cell)))
+		// because it runs the deny-local-tools profile, not the executor's mode.
+		lines = append(lines, "user: root — "+p.harness+" refuses its executor's permission mode")
+		problems = append(problems, root)
 	}
 	return lines, problems
 }

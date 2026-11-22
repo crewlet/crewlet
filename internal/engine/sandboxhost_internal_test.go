@@ -137,7 +137,7 @@ func TestABoxReadWaitsAsLongAsItsKindTakes(t *testing.T) {
 	capped := sandbox.PendingRun{TurnID: "t0", Deadline: time.Now().Add(time.Hour).UTC()}
 	for _, run := range []sandbox.PendingRun{uncapped, capped} {
 		for _, read := range sandbox.BoxReads {
-			if got, want := fresh.budget(run, read), sandbox.BoxReadBudget(run, read); got != want {
+			if got, want := fresh.budget(run, read), sandbox.BoxReadBudget(run, read, runnerThreadTraits()[run.Harness]); got != want {
 				t.Errorf("a node's %s ask of a run capped at %v waits %v, want %v", read, run.Deadline, got, want)
 			}
 		}

@@ -23,14 +23,16 @@ export interface AssistantControl {
   unavailable: AssistantUnavailable | null;
   /** Open it (focusing where `focus` says), or close it and hand focus back. */
   toggle: (focus?: AssistantFocus) => void;
-  /** Open it with a question typed elsewhere (the palette's row), for the panel to ask. */
+  /** Open it with a question typed elsewhere (the palette's row), asked in the conversation open now. */
   ask: (question: string) => void;
   /**
-   * Open it with a question in its box, for the person to read, change and
-   * send: a question a screen offers about what it shows ("Ask Crewlet about
-   * this"), which is the person's to ask, never sent as their words for them.
+   * Ask about something a screen shows ("Ask Crewlet about this"): always in
+   * a NEW conversation, with the page attached, never in the one open or used
+   * last, which is about something else. `send` asks it at once; without it
+   * the question waits in the box for the person to read, change and send,
+   * where the screen worded it and it is not to be sent as theirs.
    */
-  draft: (question: string) => void;
+  askAbout: (question: string, how: { send: boolean }) => void;
 }
 
 /** A frame with no assistant: nothing opens, and the reason says so. */
@@ -44,7 +46,7 @@ const NONE: AssistantControl = {
   },
   toggle: () => {},
   ask: () => {},
-  draft: () => {},
+  askAbout: () => {},
 };
 
 export const AssistantControlContext = createContext<AssistantControl>(NONE);
@@ -75,21 +77,61 @@ export interface QueuedQuestion {
   text: string;
   /** Ask it at once where the panel can; false puts it in the box. */
   send: boolean;
+  /**
+   * Start a new conversation for it: a question about something a screen
+   * shows. The queue carries this because only the panel holds the
+   * conversation, and one taken into whatever it held was the last topic's.
+   */
+  fresh: boolean;
 }
 
 let queued: QueuedQuestion | null = null;
 const waiting = new Set<() => void>();
 
-/** Queue a question for the panel to ask. */
+/** Queue a question for the panel to ask in the conversation it holds. */
 export function queueQuestion(question: string): void {
-  queued = { text: question, send: true };
+  queued = { text: question, send: true, fresh: false };
   for (const listener of waiting) listener();
 }
 
-/** Queue a question for the panel's box, for the person to send. */
-export function queueDraft(question: string): void {
-  queued = { text: question, send: false };
+/** Queue a question about what a screen shows, for a new conversation: asked where `send`, else put in its box. */
+export function queueAbout(question: string, send: boolean): void {
+  queued = { text: question, send, fresh: true };
   for (const listener of waiting) listener();
+}
+
+/** How the frame holds the panel, for the verbs that hand it a question. */
+export interface PanelHold {
+  open: boolean;
+  /** Ask Crewlet's own page is the screen: its conversation takes the question and nothing opens. */
+  here: boolean;
+  /** The reader may not ask: nothing is queued. */
+  closed: boolean;
+  /** Open the panel with focus in its composer. */
+  show: () => void;
+  /** Put focus in the open panel's composer. */
+  focusComposer: () => void;
+}
+
+/** The frame's `ask` and `askAbout`: each queues its question and opens the panel to take it. */
+export function askVerbs(hold: PanelHold): Pick<AssistantControl, "ask" | "askAbout"> {
+  const reach = (focusBox: boolean) => {
+    if (!hold.open && !hold.here) hold.show();
+    else if (focusBox) hold.focusComposer();
+  };
+  return {
+    ask: (question) => {
+      if (hold.closed) return;
+      queueQuestion(question);
+      reach(false);
+    },
+    askAbout: (question, { send }) => {
+      if (hold.closed) return;
+      queueAbout(question, send);
+      // Only a question left in the box takes focus from the screen it came from.
+      reach(!send);
+    },
+  };
 }
 
 /** Take the queued question, if any; it is the taker's from here. */

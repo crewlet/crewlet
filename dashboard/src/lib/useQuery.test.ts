@@ -14,6 +14,7 @@ import { useQuery } from "./useQuery.ts";
 import { TRANSCRIPT_QUERY_TIMEOUT_MS } from "~/contract/wire.ts";
 import { useClient, useConnection } from "./store-hooks.ts";
 import { eventually, settled } from "~/test/settle.ts";
+import { APPLIED_REVISION, session } from "~/protocol/session.ts";
 
 vi.mock("./store-hooks.ts", () => ({
   useClient: vi.fn(),
@@ -198,4 +199,20 @@ test("a question's wait reaches the socket, and its signal ends with the questio
   named.unmount();
   expect(signal.aborted).toBe(true);
   expect((call("fleet")[3] as AbortSignal).aborted).toBe(false);
+});
+
+// A REVISION THIS NODE APPLIED asks again what a reconnect asks again: a read
+// that opted out of reconnects (a transcript, a code search) is not moved by one.
+test("a revision this node applied asks again every read that a reconnect would, and no other", async () => {
+  const query = asked();
+  renderHook(() => useQuery("limits"));
+  renderHook(() => useQuery("settings", undefined, { refetchOnReconnect: false }));
+  await settled();
+  const count = (what: string) => query.mock.calls.filter((c) => c[0] === what).length;
+  expect([count("limits"), count("settings")]).toEqual([1, 1]);
+  act(() => {
+    session.written(null, null, [APPLIED_REVISION]);
+  });
+  await eventually(() => expect(count("limits")).toBe(2));
+  expect(count("settings")).toBe(1);
 });
