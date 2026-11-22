@@ -278,8 +278,9 @@ func TestGrokPrunesWhatACallLeaves(t *testing.T) {
 // Planted in a seat's home through the engine, 1.0.92 sent ~/.grok's AGENTS.md,
 // rules, skills and commands, ~/.claude's CLAUDE.md, rules and skills and
 // ~/.cursor's skills with every request, and ran ~/.grok/hooks/hooks.json. The
-// generation's prune takes each, the login stays, and the home's config.toml
-// turns the other vendors' skills, rules and instruction files off.
+// generation's prune takes each and any requirements.toml, the login stays, and
+// the home's config.toml turns the other vendors' skills, rules and instruction
+// files off and carries the key 1.0.92 would otherwise rewrite it to add.
 //
 // Mutations, each red: drop .grok/hooks from volatile_paths; drop `skills =
 // false` from the Cursor cell; add .grok to volatile_paths (the login goes).
@@ -299,6 +300,7 @@ func TestAGrokCallStartsWithNothingItsHomeHeld(t *testing.T) {
 		".grok/skills/s/SKILL.md",
 		".grok/commands/c.md",
 		".grok/hooks/hooks.json",
+		".grok/requirements.toml",
 		".claude/CLAUDE.md",
 		".claude/rules/r.md",
 		".claude/skills/s/SKILL.md",
@@ -337,6 +339,10 @@ func TestAGrokCallStartsWithNothingItsHomeHeld(t *testing.T) {
 		if !strings.Contains(config, cell) {
 			t.Errorf("the home's config.toml seed lacks %q:\n%s", cell, config)
 		}
+	}
+	if !strings.Contains(config, "[marketplace]\ndefault_skills_installs_purged = true\n") {
+		t.Errorf("the home's config.toml seed lacks the key 1.0.92 adds on a home's first call, "+
+			"so that call rewrites the file mid-generation:\n%s", config)
 	}
 }
 
