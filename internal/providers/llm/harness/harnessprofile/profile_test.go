@@ -722,9 +722,11 @@ func TestAPlatformSectionIsResolvedBeforeOverrides(t *testing.T) {
 
 // A LOGIN KEY DECIDES WHETHER A FILE HOLDS A LOGIN, AND NOTHING ELSE DOES. Only
 // a file login_keys names is read, its `//` header lines set aside as Copilot
-// harness writes them; an empty value is no login; and a file the rule cannot read
-// is taken for one, the direction that never drops somebody's login. A key may
-// only name a credential file, and must say which key.
+// harness writes them; a file holding any of its keys is a login, Copilot's
+// second copy (authTokens) alone included; an empty value is no login; and a
+// file the rule cannot read is taken for one, the direction that never drops
+// somebody's login. A key may only name a credential file, and must say which
+// keys.
 func TestALoginKeyDecidesWhetherAFileHoldsALogin(t *testing.T) {
 	t.Parallel()
 	p, err := Load("copilot", nil)
@@ -740,8 +742,11 @@ func TestALoginKeyDecidesWhetherAFileHoldsALogin(t *testing.T) {
 		"a token":                {"config.json", header + `{"copilotTokens": {"https://github.com:someone": "placeholder"}}`, true},
 		"an emptied token table": {"config.json", header + `{"copilotTokens": {}}`, false},
 		"a null token table":     {"config.json", `{"copilotTokens": null}`, false},
-		"unreadable":             {"config.json", "not json at all", true},
-		"a file no key names":    {"other.json", `{}`, true},
+		"its second copy alone": {"config.json", header + `{"copilotTokens": {}, ` +
+			`"authTokens": {"https://github.com:someone:github": {"token": "placeholder"}}}`, true},
+		"both copies emptied": {"config.json", `{"copilotTokens": {}, "authTokens": {}}`, false},
+		"unreadable":          {"config.json", "not json at all", true},
+		"a file no key names": {"other.json", `{}`, true},
 	} {
 		if got := p.HoldsLogin(tc.file, []byte(tc.content)); got != tc.want {
 			t.Errorf("%s: HoldsLogin = %v, want %v", name, got, tc.want)
@@ -752,8 +757,9 @@ func TestALoginKeyDecidesWhetherAFileHoldsALogin(t *testing.T) {
 		keys map[string]any
 		says string
 	}{
-		"a file no credential path has": {map[string]any{"hosts.json": "token"}, `login_keys names "hosts.json"`},
-		"no key":                        {map[string]any{"config.json": ""}, "login_keys.config.json is empty"},
+		"a file no credential path has": {map[string]any{"hosts.json": []any{"token"}}, `login_keys names "hosts.json"`},
+		"no key":                        {map[string]any{"config.json": []any{}}, "login_keys.config.json is empty"},
+		"an empty key":                  {map[string]any{"config.json": []any{"copilotTokens", ""}}, "login_keys.config.json is empty"},
 	} {
 		if _, err := Load("copilot", map[string]any{"login_keys": tc.keys}); err == nil ||
 			!strings.Contains(err.Error(), tc.says) {

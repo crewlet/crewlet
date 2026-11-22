@@ -2330,7 +2330,7 @@ cursor-agent:
   # signed in or not (measured); a login adds the account it is for under
   # authInfo (read from the 2026.10.22 bundle), and it is a login only then.
   login_keys:
-    cli-config.json: "authInfo"
+    cli-config.json: ["authInfo"]
   # What a call leaves in the seat's home, measured on 2026.10.22: a chat
   # directory, and per call-directory a projects entry holding the trust
   # marker, the call's transcript and a worker log — one more entry for every
@@ -2425,7 +2425,9 @@ cursor-agent:
       - match: [{path: ["type"], equals: "tool_call"}, {path: ["subtype"], equals: "completed"}]
         closes: true
   login_args: ["login"]
-  logout_args: ["logout"]
+  # No logout_args: 1.0.114 has no logout command (`copilot logout` exits 1 on
+  # "Invalid command format", and `copilot --help` lists none, measured);
+  # `/logout` is a slash command. A logout removes the login's files.
   status_args: ["status"]
   # NOT MEASURED, the limit markers below: generic phrases rather than this
   # harness's own sentences, safe to keep only because of WHERE they are matched
@@ -2705,10 +2707,15 @@ copilot:
   #
   # The same file is the harness's own record of itself — it writes
   # `firstLaunchAt` there on its first start, signed in or not (measured) —
-  # so it is a login only while it holds copilotTokens.
+  # so it is a login only while it holds a token. It keeps one under two keys:
+  # on its first use of a login under `copilotTokens` (`{"https://github.com:
+  # <login>": "<token>"}`) it adds the same token under `authTokens`
+  # (`{"https://github.com:<login>:github": {"token": "<token>"}}`), and signs
+  # in from `authTokens` alone, `copilotTokens` empty or absent (measured on
+  # 1.0.114, offline, with a stand-in login).
   credential_paths: [".copilot/config.json"]
   login_keys:
-    config.json: "copilotTokens"
+    config.json: ["copilotTokens", "authTokens"]
   # What a call leaves in the seat's home, measured on 1.0.114: a session
   # directory holding the call's events, the session database every session
   # is indexed in (which the harness's own session_store_sql tool queries)
