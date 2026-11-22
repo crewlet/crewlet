@@ -195,6 +195,7 @@ func TestEveryHarnessSaysHowEachLoginFileTravels(t *testing.T) {
 		"qwen-code": {refresh: keys{"subscription_credentials.json": {"tokens.access_token", "tokens.refresh_token", "tokens.expiresAt", "tokens.expires_in"}},
 			identity: keys{"subscription_credentials.json": {"tokens.access_token.@subject"}}},
 		"opencode": {},
+		"custom":   {},
 		"cursor-agent": {login: keys{"cli-config.json": {"authInfo"}}, refresh: keys{"auth.json": {"accessToken", "refreshToken"}},
 			identity: keys{"cli-config.json": {"authInfo.userId"}, "auth.json": {"accessToken.@subject"}}},
 		"copilot": {login: keys{"config.json": {"copilotTokens", "authTokens", "lastLoggedInUser", "loggedInUsers"}},
@@ -246,7 +247,9 @@ func TestEveryHarnessSaysHowEachLoginFileTravels(t *testing.T) {
 		}
 		login, measured := logins[name]
 		if !measured {
-			if name != "opencode" {
+			// A profile naming no login file (a credential store's, the
+			// operator's own template) has no file shapes to hold.
+			if len(p.CredentialPaths) > 0 {
 				t.Errorf("%s: no login shapes in testdata/logins.json", name)
 			}
 			continue
