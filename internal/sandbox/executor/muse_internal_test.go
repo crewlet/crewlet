@@ -611,3 +611,25 @@ func TestEveryMuseRunNamesItsServersAfresh(t *testing.T) {
 		seen[n] = true
 	}
 }
+
+// A SERVER'S NAME IS HELD, THE RUN'S SUFFIX INCLUDED, TO WHAT MUSE CODE SHOWS
+// WHOLE: a name that fits once `-<12 hex>` is added is written under the
+// longer name; one a character longer is refused, naming the room left.
+//
+// Mutation: hold the name without its suffix, and the longer one is written.
+func TestAMuseServerNameIsHeldWithItsSuffix(t *testing.T) {
+	const nonce = "0123456789ab"
+	box := sandbox.NewFakeSandbox("b")
+	fits := strings.Repeat("a", museServerNameMax-len(nonce)-1)
+	server := sandbox.MCPServer{URL: "http://e/mcp"}
+	if err := writeMuseServers(t.Context(), box, "/s", map[string]sandbox.MCPServer{fits: server}, nonce); err != nil {
+		t.Fatalf("a %d-character name: %v", len(fits), err)
+	}
+	if _, err := box.ReadFile(t.Context(), "/s/"+fits+"-"+nonce+".json"); err != nil {
+		t.Fatalf("the server is not written under its name and the run's suffix: %v", err)
+	}
+	err := writeMuseServers(t.Context(), box, "/s", map[string]sandbox.MCPServer{fits + "b": server}, nonce)
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("at most %d (", len(fits))) {
+		t.Fatalf("a %d-character name: %v, want it refused naming %d", len(fits)+1, err, len(fits))
+	}
+}
