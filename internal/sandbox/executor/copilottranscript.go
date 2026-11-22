@@ -175,23 +175,23 @@ func (b *transcriptBuilder) copilotCalls(raw json.RawMessage, at time.Time) erro
 // ([CopilotClientTurnID]), `steering` or `queued`, then a main agent's request
 // ([copilotMainRequest]) begun after the line ([copilotBegan]), with no
 // compaction between that may have left it only in the summary (ADR-0177): one
-// not stated failed, unless it carried the note over whole among the newest
-// inputs its start counts (`retainedInputMessages`; measured on 1.0.114,
-// compacted-queued). The line alone is no proof (ruling 1 of #1818's design):
+// not stated failed, unless the note stands among the trailing messages its
+// start counts (`retainedInputMessages`; measured on 1.0.114,
+// compacted-queued), every main line the model reads counted as one
+// ([copilotMessage]). The line alone is no proof (ruling 1 of #1818's design):
 // a kill or a refusal can follow it. A last line with no newline is a write
-// cut off; a line past the bound is no line.
+// cut off; a line past the bound or of no kind read is no note, though it
+// counts as a message.
 func copilotNotesHeld(ctx context.Context, events io.Reader, takes []ServedTake) ([]string, error) {
 	asked := make(map[string]string, len(takes))
 	for _, take := range takes {
 		asked[CopilotClientTurnID(take.InboxID)] = take.InboxID
 	}
-	// pending is each note sent and not yet held, by its line; inputs the
-	// number of every line of the main agent's user messages, answered the
-	// last of its answers (a message or a tool's result), and retained the
-	// notes the compaction started last carries over whole.
+	// pending is each note sent and not yet held, by its line; messages the
+	// number of every line that may be a message the main agent's model reads,
+	// and retained the notes the compaction started last carries over whole.
 	pending := map[string]copilotPending{}
-	var inputs []int
-	answered := 0
+	var messages []int
 	var retained map[string]bool
 	held := map[string]bool{}
 	n := 0
@@ -207,14 +207,18 @@ func copilotNotesHeld(ctx context.Context, events io.Reader, takes []ServedTake)
 		moved = moved[:0]
 		ev, ok := decodeCopilotNoteLine(line)
 		if !ok {
+			// A line of no kind this read knows may be a message.
+			messages = append(messages, n)
 			return nil
+		}
+		if ev.AgentID == "" && copilotMessage(ev.Type) {
+			messages = append(messages, n)
 		}
 		switch ev.Type {
 		case "user.message":
 			if ev.AgentID != "" {
 				return nil
 			}
-			inputs = append(inputs, n)
 			inbox, ours := asked[ev.Data.ClientTurnID]
 			at, timed := copilotTime(ev.Timestamp)
 			// A line whose time cannot be read is one no request can be
@@ -240,12 +244,8 @@ func copilotNotesHeld(ctx context.Context, events io.Reader, takes []ServedTake)
 					moved = append(moved, inbox)
 				}
 			}
-		case "assistant.message", "tool.execution_complete":
-			if ev.AgentID == "" {
-				answered = n
-			}
 		case "session.compaction_start":
-			retained = copilotRetained(pending, inputs, answered, looseInt(ev.Data.RetainedInputMessages))
+			retained = copilotRetained(pending, messages, looseInt(ev.Data.RetainedInputMessages))
 		case "session.compaction_complete":
 			// Past a compaction, a request may carry the note only inside
 			// its summary: only one that says it failed keeps every note, and
@@ -260,7 +260,13 @@ func copilotNotesHeld(ctx context.Context, events io.Reader, takes []ServedTake)
 			retained = nil
 		}
 		return nil
-	}, func(int64) error { n++; moved = moved[:0]; return nil })
+	}, func(int64) error {
+		// A line past the bound may be a message (a tool's long result).
+		n++
+		moved = moved[:0]
+		messages = append(messages, n)
+		return nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("executor: reading which notes the Copilot session holds: %w", err)
 	}
@@ -279,16 +285,16 @@ func copilotNotesHeld(ctx context.Context, events io.Reader, takes []ServedTake)
 }
 
 // copilotRetained is the pending notes a compaction starting now carries over
-// whole: among the last count of the main agent's user messages, inputs by
-// line, and after its last answer, the line answered, since what it keeps is
-// the conversation's TRAILING messages ([copilotNoteLine]). Under either
-// reading of that count, user messages or messages of any role, a note an
-// answer followed is no trailing one.
-func copilotRetained(pending map[string]copilotPending, inputs []int, answered int, count int64) map[string]bool {
-	if count <= 0 || len(inputs) == 0 {
+// whole: those among the last count of messages, by line, since what it keeps
+// is the conversation's TRAILING messages ([copilotNoteLine]). Counting every
+// line that may be a message makes the window no wider than Copilot's under
+// any reading of its count (user messages, or messages of every role), so a
+// note an answer, a tool's result or a notification followed falls out of it.
+func copilotRetained(pending map[string]copilotPending, messages []int, count int64) map[string]bool {
+	if count <= 0 || len(messages) == 0 {
 		return nil
 	}
-	from := max(inputs[len(inputs)-int(min(count, int64(len(inputs))))], answered+1)
+	from := messages[len(messages)-int(min(count, int64(len(messages))))]
 	kept := map[string]bool{}
 	for inbox, note := range pending {
 		if note.line >= from {
@@ -296,6 +302,22 @@ func copilotRetained(pending map[string]copilotPending, inputs []int, answered i
 		}
 	}
 	return kept
+}
+
+// copilotMessage reports whether a main line of kind may be a message the
+// model reads: every kind but the session's own bookkeeping (measured on
+// 1.0.114's records), so a kind this read does not know counts as one, which
+// can only narrow the window [copilotRetained] reads.
+func copilotMessage(kind string) bool {
+	switch kind {
+	case "hook.start", "hook.end", "assistant.turn_start", "assistant.turn_end", "tool.execution_start", "abort",
+		"session.start", "session.resume", "session.shutdown", "session.info", "session.warning", "session.error",
+		"session.permissions_changed", "session.model_change", "session.usage_record", "session.usage_checkpoint",
+		"session.compaction_start", "session.compaction_complete",
+		"subagent.started", "subagent.configured", "subagent.completed":
+		return false
+	}
+	return true
 }
 
 // copilotPending is a note sent and not yet held: its line's number and time.
