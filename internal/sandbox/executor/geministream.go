@@ -10,7 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// Gemini CLI's stream-json, as 0.70.0 and 0.65.0 print it: one event a line,
+// Gemini CLI's stream-json, as 0.70.0 prints it: one event a line,
 // live (a call's tool_use is written before the tool returns), of six kinds
 // — init, message, tool_use, tool_result, error and result — and the usage
 // line the run's script appends ([geminiUsageEvent]).

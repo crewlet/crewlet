@@ -627,7 +627,7 @@ A run that continues its session also records **where it began in it**: once its
 **A carried session's instructions are the run's own.** OpenCode keeps, per session, the instructions it last told the model: the system prompt is rendered from the ones held when they were last settled, and a changed instruction file is handed over as an "instruction update" message in the conversation. That state is a row of its own, and a session with none reads its instructions as its first, into the system prompt with no update (OpenCode's `session/instruction-state.ts` at 2.0.32 and 2.2.5). An import writes the session and its messages and no such row (`session/transfer.ts` at the same two), so the first request in the box a session was carried into reads its instructions as the session's first: the run's standing instructions, written to its instruction file on every run, are its system prompt, and no earlier turn's are in the conversation as updates. In the box that already holds the session the state is kept, and an instruction file that changed between two of its runs is handed over once, as OpenCode does for any change.
 ### Gemini CLI
 
-Drives **Gemini CLI** (npm's `@google/gemini-cli`; measured on 0.70.0, and 0.65.0 for the session format). A box image installs it with `npm install -g @google/gemini-cli@0.70.0` on node 20 or newer; the run's helper and hook are plain node scripts, so the node Gemini CLI needs is all they need. Runs headless, the brief on stdin:
+Drives **Gemini CLI** (npm's `@google/gemini-cli`; measured on 0.70.0). A box image installs it with `npm install -g @google/gemini-cli@0.70.0` on node 20 or newer; the run's helper and hook are plain node scripts, so the node Gemini CLI needs is all they need. Runs headless, the brief on stdin:
 
 `gemini -p "" --output-format stream-json --approval-mode yolo -m <model> --allowed-mcp-server-names <each of the run's servers> --session-id <id>`
 
@@ -654,7 +654,7 @@ with `GEMINI_CLI_TRUST_WORKSPACE=true` (an untrusted directory exits 55 before a
 
 ### Qwen Code
 
-Drives **Qwen Code** (npm's `@qwen-code/qwen-code`; measured on 0.28.3, and 0.26.1 for the notes route and the session format) over ACP, its Agent Client Protocol mode. A box image installs it with `npm install -g @qwen-code/qwen-code@0.28.3` on node 22 or newer; the run's helper is a plain node script, so the node Qwen Code needs is all it needs. The run's harness is that helper, `node <home>/.crewlet/qwen-helper.mjs run <home>/.crewlet/qwen-helper.json <session>`, which reads the brief on stdin and runs it as one ACP turn of
+Drives **Qwen Code** (npm's `@qwen-code/qwen-code`; measured on 0.28.3) over ACP, its Agent Client Protocol mode. A box image installs it with `npm install -g @qwen-code/qwen-code@0.28.3` on node 22 or newer; the run's helper is a plain node script, so the node Qwen Code needs is all it needs. The run's harness is that helper, `node <home>/.crewlet/qwen-helper.mjs run <home>/.crewlet/qwen-helper.json <session>`, which reads the brief on stdin and runs it as one ACP turn of
 
 `qwen --acp --auth-type openai --approval-mode yolo`
 
