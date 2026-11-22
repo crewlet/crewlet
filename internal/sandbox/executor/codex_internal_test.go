@@ -290,3 +290,31 @@ func TestACodexRunRefusedItsKeyReadsTheTurnsFinalWord(t *testing.T) {
 		t.Errorf("a run cut off mid-retry reads its failure off a retry: %q", retried.Error)
 	}
 }
+
+// A CODEX RUN WHOSE SOCKET WOULD PASS A UNIX SOCKET'S PATH IS REFUSED BEFORE
+// ANYTHING IS WRITTEN, naming the setting an operator shortens: a local box's
+// home sits under providers.sandbox.local.state_dir. A socket at the 107-byte
+// bound is not refused for it.
+//
+// Mutation: drop the check, hold it with ">=", or word the refusal without the
+// setting, and a case goes red.
+func TestACodexSocketPastAUnixPathIsRefusedNamingTheStateDir(t *testing.T) {
+	t.Parallel()
+	at := func(n int) Paths {
+		p := Paths{Home: "/"}
+		p.Home = "/" + strings.Repeat("h", n-len(p.CodexSocket()))
+		if got := len(p.CodexSocket()); got != n {
+			t.Fatalf("the case's socket is %d bytes, want %d", got, n)
+		}
+		return p
+	}
+	box := sandbox.NewFakeSandbox("box-1")
+	_, err := Codex{}.WriteConfig(t.Context(), box, sandbox.RunRequest{Brief: "go"}, at(maxCodexSocketPath+1))
+	if err == nil || !strings.Contains(err.Error(), "providers.sandbox.local.state_dir") {
+		t.Errorf("a socket of %d bytes is refused with %v, want the setting named", maxCodexSocketPath+1, err)
+	}
+	if _, err := (Codex{}).WriteConfig(t.Context(), box, sandbox.RunRequest{Brief: "go"}, at(maxCodexSocketPath)); err != nil &&
+		strings.Contains(err.Error(), "unix socket") {
+		t.Errorf("a socket at the %d-byte bound is refused: %v", maxCodexSocketPath, err)
+	}
+}

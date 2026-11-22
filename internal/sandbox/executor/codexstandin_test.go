@@ -1,6 +1,7 @@
 package executor_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -221,7 +222,15 @@ exit 2
 // directory its stand-in records to.
 func codexBox(t *testing.T, release string) (*executor.Runner, sandbox.Sandbox, string) {
 	t.Helper()
-	local, err := sandbox.NewLocal(sandbox.LocalOptions{Placement: sandbox.Direct, StateDir: t.TempDir()})
+	// A STATE DIRECTORY OF ITS OWN under the system's temp root, never the
+	// test's, whose name runs the box's socket past the 107 bytes a unix
+	// socket's path holds, which the runner rightly refuses.
+	state, err := os.MkdirTemp("", "codex") //nolint:usetesting // t.TempDir is named for the test, past a socket path's bound
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(state) })
+	local, err := sandbox.NewLocal(sandbox.LocalOptions{Placement: sandbox.Direct, StateDir: state})
 	if err != nil {
 		t.Fatalf("NewLocal: %v", err)
 	}
@@ -229,7 +238,8 @@ func codexBox(t *testing.T, release string) (*executor.Runner, sandbox.Sandbox, 
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	t.Cleanup(func() { box.Close(t.Context()) })
+	// A teardown's context outlives the test's, which ends before cleanups run.
+	t.Cleanup(func() { box.Close(context.WithoutCancel(t.Context())) })
 	runner := executor.NewCodex()
 	if err = runner.Install(t.Context(), box); err != nil {
 		t.Fatalf("Install: %v", err)
