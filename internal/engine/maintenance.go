@@ -113,6 +113,9 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 		// whatever the chat backend, because the records outlive a move off
 		// Chatlet. See [maintenance.ChatReadJobs].
 		jobs = append(jobs, maintenance.ChatReadJobs(fleet, e.humanSeatHandles)...)
+		// AND EACH HUMAN SEAT'S HOME BOARD, for the same reason, judged by
+		// the same reconcile. See [maintenance.HomeBoardJobs].
+		jobs = append(jobs, maintenance.HomeBoardJobs(fleet, e.humanSeatHandles)...)
 		// The NATIVE backends' records: only some of their classes age out,
 		// so no bucket age expresses the retention. Contributed only where
 		// THIS node runs the backend; the duty is a singleton, so one node's

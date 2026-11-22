@@ -161,6 +161,10 @@ any Atlas holder's ask that one integration be read for the atlas now rather
 than on its next scheduled read, which the engine honours within a minute and
 refuses for a source read less than five minutes ago
 ([Sources](atlas.md#sources-and-refresh-now)).
+And one more is a person's own arrangement: `save_home_board`, their Home board
+on the dashboard, kept under the seat they hold so it follows them to every
+browser, and refused `stale_version` when it was saved again after they read
+it ([Saving your Home board](../reference/api-endpoints.md#saving-your-home-board)).
 Eleven more change the company's atlas, each a claim in the person's own name
 and none an agent's: `atlas_add_entry`, `atlas_correct`, `atlas_confirm`,
 `atlas_relate`, `atlas_unrelate`, `atlas_set_owner`, `atlas_retire`,

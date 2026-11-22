@@ -4206,6 +4206,13 @@ var ACTIONS = {
 		refreshes: [],
 		scope: "person"
 	},
+	save_home_board: {
+		args: ["board", "if_match"],
+		domain: null,
+		apps: [],
+		refreshes: ["home_board"],
+		scope: "person"
+	},
 	set_priorities: {
 		args: [
 			"handle",
