@@ -44,17 +44,26 @@ const MaxValueCrossing = 780_025_663_374 * time.Nanosecond
 // size and its bound, so this text names neither bound.
 var ErrValueTooLarge = errors.New("coord: a write past what the store takes")
 
-// HoldValue refuses a value of size bytes written to key past [MaxValueBytes],
-// with [ErrValueTooLarge] naming the three; nil for one that fits. Every
-// backend refuses a value by it.
-func HoldValue(key string, size int) error {
-	if size <= MaxValueBytes {
+// HoldValue refuses a value of size bytes written to key past bound, the most
+// a value of key's class may be ([MaxValueBytes], [MaxPointerBytes]), with
+// [ErrValueTooLarge] naming all three; nil for one that fits. Every backend
+// refuses a value by it, with the bound its store declares for the key.
+func HoldValue(key string, size, bound int) error {
+	if size <= bound {
 		return nil
 	}
-	return fmt.Errorf("%w: %d bytes for %s, past the %d one key holds — every read of a key "+
-		"carries its value base64-encoded in one reply, which a leaf's link closes on past the "+
-		"transport", ErrValueTooLarge, size, key, MaxValueBytes)
+	return fmt.Errorf("%w: %d bytes for %s, past the %d a value of its kind may be: every read "+
+		"of it carries it whole in one reply, given only the time that bound takes to cross a link",
+		ErrValueTooLarge, size, key, bound)
 }
+
+// SmallValueBytes is the most a value may be whose reads keep the read term
+// alone, given no crossing of their own (internal/coord/kv's key classes, the
+// activation pointer's among them): at this bound a read's reply
+// (internal/jsapi's ReplyBytes, the most write header included) is 23,064
+// bytes, 0.66 s at the floor, inside internal/jsprovision's ReadTerm of a
+// second. internal/coord/kv holds the figure to it.
+const SmallValueBytes = 16 << 10
 
 // MaxPointerBytes is the most the activation pointer may be ([ActivationValue]):
 // every probe, heartbeat and tick on every node reads it, so its read must
@@ -108,14 +117,4 @@ func HoldSummary(summary string) error {
 			ErrSummaryTooLong, n, MaxSummaryBytes)
 	}
 	return nil
-}
-
-// HoldPointer refuses an activation pointer of size bytes past
-// [MaxPointerBytes] with [ErrValueTooLarge]; nil for one that fits.
-func HoldPointer(size int) error {
-	if size <= MaxPointerBytes {
-		return nil
-	}
-	return fmt.Errorf("%w: %d bytes for the activation pointer, past the %d it may be, since every "+
-		"probe on every node reads it", ErrValueTooLarge, size, MaxPointerBytes)
 }

@@ -196,7 +196,7 @@ func (b settledBucket) carriedBack(key string, value []byte) error {
 	if len(value) <= coord.MaxValueBytes {
 		return nil
 	}
-	return coord.HoldValue(b.Bucket()+"/"+key, len(value))
+	return coord.HoldValue(b.Bucket()+"/"+key, len(value), coord.MaxValueBytes)
 }
 
 // Put writes a value whatever the key holds, held to what its leader's read

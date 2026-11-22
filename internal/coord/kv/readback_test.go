@@ -108,7 +108,7 @@ func TestACreateRefusedForItsValuesSizeWasNeverSent(t *testing.T) {
 // reads as an outage.
 func TestARefusalMadeBeforeAnythingWasSentIsNeverMarked(t *testing.T) {
 	t.Parallel()
-	refused := coord.HoldValue("crewlet_test/key", coord.MaxValueBytes+1)
+	refused := coord.HoldValue("crewlet_test/key", coord.MaxValueBytes+1, coord.MaxValueBytes)
 	for name, err := range map[string]error{
 		"unavailable":  unavailable("write the key", refused),
 		"writeUnknown": writeUnknown("write the key", refused),
