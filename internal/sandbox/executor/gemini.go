@@ -101,7 +101,7 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 	lines := []string{
 		// THE RELEASE, read once for the gate, the record and the session's,
 		// before anything else: an older one never runs ([releaseGate]).
-		`v=$(gemini --version < /dev/null 2> /dev/null | head -n 1)`,
+		releaseRead(GeminiCLI{}.VersionCommand()),
 		releaseGate("Gemini CLI", geminiRelease),
 		"node " + q(paths.GeminiHelper()) + " pin " + q(paths.GeminiProjects()) + " " + GeminiProjectSlug + " || exit 1",
 		strings.TrimSuffix(chatSessionGate(session, paths, geminiGate(paths, fresh)), "\n"),
