@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/maintenance"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -2092,8 +2093,8 @@ func (e *Engine) joinExpectation(s *stateLog) func(context.Context) ([]string, e
 // ([statelog.CollectOffers]). Sorted, so one fleet is one expectation:
 //
 //   - every live data node, each running a donor (its row may lag a beat);
-//   - every node whose fresh row names an artefact ([donorRowFresh]), whatever
-//     its presence: a draining node gives presence up first but serves its
+//   - every node whose row the store took lately and names an artefact
+//     ([donorRowWithin]), whatever its presence: a draining node gives presence up first but serves its
 //     donor until its state log stops, and in a rolling upgrade it likely
 //     holds the newest artefact;
 //   - this node only when its own donor serves (ownServing): the boot's join
@@ -2106,7 +2107,7 @@ func joinDonors(now time.Time, own string, ownServing bool,
 		named[p.NodeID] = true
 	}
 	for _, row := range rows {
-		if now.Sub(row.At) <= donorRowFresh && namesArtefact(row) {
+		if namesArtefact(row) && (row.StoredAt.IsZero() || now.Sub(row.StoredAt) <= donorRowWithin) {
 			named[row.NodeID] = true
 		}
 	}
@@ -2118,12 +2119,22 @@ func joinDonors(now time.Time, own string, ownServing bool,
 	return slices.Sorted(maps.Keys(named))
 }
 
-// donorRowFresh is how recently a node must have written its register row for
-// a join to wait on the artefact it names ([joinDonors]): four heartbeats, as
+// donorRowFresh is how recently, on one clock, a node must have written its
+// register row for a join to wait on the artefact it names: four heartbeats, as
 // [statelog.TrimHoldStale] derives, since a node may miss three and still run
 // its donor. Waiting on a node just dead costs the [statelog.OfferWindow];
-// leaving out a running one costs its offer, maybe the only one.
+// leaving out a running one costs its offer, maybe the only one. Judged across
+// two clocks as [donorRowWithin].
 const donorRowFresh = 4 * statelog.PositionHeartbeat
+
+// donorRowWithin is how long ago, by this node's clock, the store may have
+// taken a row for [joinDonors] to name its node: [donorRowFresh] plus twice
+// [objstore.AssumedClockSkew], since the stored instant is the store leader's
+// clock and this node's may stand the skew the other way. A joiner reads once
+// and has nothing to watch, and at boot nothing has measured its clock yet. Too
+// long costs a stopped node's [statelog.OfferWindow]; too short leaves out a
+// draining donor's offer.
+const donorRowWithin = donorRowFresh + 2*objstore.AssumedClockSkew
 
 // namesArtefact reports whether a register row says its node holds an
 // artefact of the estate ([stampSnapshot]): a size on the row, or a snapshot
