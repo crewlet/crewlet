@@ -57,7 +57,7 @@ const (
 	AnswerTail AnswerKind = "tail"
 	// AnswerCodeSearch is one Gitlet node's part of a code search
 	// (internal/codesearch).
-	AnswerCodeSearch AnswerKind = "code_search"
+	AnswerCodeSearch AnswerKind = "codesearch"
 	// AnswerSlice is one node's slice of a knowledge search (internal/search).
 	AnswerSlice AnswerKind = "search_slice"
 	// AnswerMCPCheck is one node's test of an MCP server (internal/engine).
