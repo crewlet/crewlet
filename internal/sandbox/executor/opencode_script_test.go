@@ -80,7 +80,6 @@ serve)
   printf '%s' "${OPENCODE_CONFIG_DIR-}" > "$d/serve-config-dir"
   ls -A "${OPENCODE_CONFIG_DIR:-$d/none}" > "$d/serve-config-dir-held" 2> /dev/null
   (cd "$HOME" && find . -path ./.crewlet -prune -o -type f -print) > "$d/serve-home" 2> /dev/null
-  cp "$d/creds" "$d/serve-creds" 2> /dev/null
   if [ -n "${FAKE_VALUES:-}" ]; then
     cat "$FAKE_VALUES/v1" > "$d/served-value" 2> /dev/null
     if [ -e "$FAKE_VALUES-fresh" ]; then echo yes; else echo no; fi > "$d/served-beside-other"
@@ -174,6 +173,7 @@ run)
   authed
   sid= prev=; for a; do [ "$prev" != --session ] || sid=$a; prev=$a; done; hold "$sid"
   cat > "$d/brief"
+  cp "$d/creds" "$d/run-creds" 2> /dev/null
   printf '%s' "${OPENCODE_PASSWORD:-${OPENCODE_SERVER_PASSWORD:-}}" > "$d/run-password"
   if [ -n "${FAKE_REFRESH+set}" ]; then printf '%s' "$FAKE_REFRESH" > "$d/db"; fi
   [ -z "${FAKE_RUN_TERM_EXIT:-}" ] || trap 'exit "$FAKE_RUN_TERM_EXIT"' TERM
@@ -1445,8 +1445,9 @@ func TestABoxsLoginIsImportedAndTheRefreshedOneWrittenBack(t *testing.T) {
 		if imported := readIn(t, run.dir, "imported"); imported != seededLogin {
 			t.Errorf("imported %q, want the login the box was given", imported)
 		}
-		if run.callIndex("auth import --standalone") > run.callIndex("serve ") {
-			t.Errorf("the login was imported after the server started:\n%s", strings.Join(run.calls, "\n"))
+		if imp := run.callIndex("auth import --server"); imp < run.callIndex("serve ") || imp > run.callIndex("run ") {
+			t.Errorf("the login was not imported through the run's server before its client started:\n%s",
+				strings.Join(run.calls, "\n"))
 		}
 		if run.document != refreshedLogin {
 			t.Errorf("the box's login is %q, want the refreshed export", run.document)

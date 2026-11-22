@@ -298,10 +298,10 @@ func openCodePackNow(paths Paths, session, staged, dest string, room bool) strin
 	answer := q(staged + "/answer")
 	var b strings.Builder
 	b.WriteString("sid=" + q(session) + " packed=\n" + openCodeStandalonePins)
-	// ITS OWN EMPTY CONFIGURATION DIRECTORY, as the run's ([openCodeScript]):
-	// a pack loads nothing a run left in the box.
-	fmt.Fprintf(&b, `cfgdir=%[1]s; trap 'rm -rf "$cfgdir"' EXIT; rm -rf "$cfgdir" && mkdir -p "$cfgdir" || exit %[2]d; OPENCODE_CONFIG_DIR=$cfgdir; export OPENCODE_CONFIG_DIR`+"\n",
-		q(staged+".config"), packFailed)
+	// A CONFIGURATION DIRECTORY INSIDE ITS OWN STAGING ONE, which the pack
+	// makes anew and removes ([openCodePack]): a pack loads nothing a run left
+	// in the box. OpenCode makes the directory where it is missing.
+	fmt.Fprintf(&b, "OPENCODE_CONFIG_DIR=%s; export OPENCODE_CONFIG_DIR\n", q(staged+"/opencode-config"))
 	if room {
 		// THE ROOM BEFORE ANY OPENCODE PROCESS, the probe's included: the
 		// probe is a standalone OpenCode too. No database yet is no session
@@ -506,17 +506,6 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	line(`quit() { trap '' USR1; trap - EXIT TERM INT HUP; unbound; end "$harness"; harness=; unsync; [ -z "$imported" ] || keep quit %s --standalone; stop; exit "$1"; }`, next)
 	line(`trap 'unsync; stop' EXIT`)
 	line(`trap 'quit 143' TERM; trap 'quit 130' INT; trap 'quit 129' HUP`)
-	// THE LOGIN, where the box was given one ([Paths.CredentialDocument], a
-	// local box's): imported before the server starts, and exported over the
-	// document while the run works and as it ends ([openCodeLoginSync]). A
-	// remote box is given none and signs in with the run environment's key.
-	// Either way the database holds no other login when the server starts
-	// ([openCodeForgetLogins]).
-	b.WriteString(openCodeForgetLogins(ans))
-	line(`if [ -s %s ]; then`, doc)
-	line(`  opencode auth import --standalone < %s > /dev/null || { echo 'crewlet: OpenCode refused the login this box was given — sign the engine in again with crewlet llm login' >&2; exit 1; }`, doc)
-	line(`  imported=1`)
-	line(`fi`)
 	b.WriteString(openCodeSessionGate(session, paths, req.FreshWiring != nil))
 	// THE RECORD, before the server and the run, so a run killed or ended
 	// before it reported anything still says which session it took up and why
@@ -535,8 +524,7 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	// configuration, as OPENCODE_CONFIG_CONTENT, which OpenCode ranks above a
 	// repository's opencode.json and .opencode/, and, for a run wired to its
 	// notes, the session its notes plugin admits them to. The client and the
-	// `api` calls are answered by it; the login's import and export are handed
-	// none of it.
+	// `api` calls, the login's import among them, are answered by it.
 	steered := ""
 	if req.Steer.Set() {
 		steered = `CREWLET_STEER_SESSION="$sid" `
@@ -558,6 +546,17 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	line(`url=$(sed -n 's/^server listening on //p' %s)`, srv)
 	line(`OPENCODE_PASSWORD=$(sed -n 's/^server password //p' %s); export OPENCODE_PASSWORD`, srv)
 	line(`rm -f %s`, srv)
+	// THE LOGIN, where the box was given one ([Paths.CredentialDocument], a
+	// local box's): imported through the run's own server, once every login
+	// its database held is removed ([openCodeForgetLogins]), and exported over
+	// the document while the run works and as it ends ([openCodeLoginSync]).
+	// A remote box is given none and signs in with the run environment's key.
+	// Through the server, so no second OpenCode runtime opens the database.
+	b.WriteString(openCodeForgetLogins(ans, secs(times.call)))
+	line(`if [ -s %s ]; then`, doc)
+	line(`  opencode auth import --server "$url" < %s > /dev/null || { echo 'crewlet: OpenCode refused the login this box was given — sign the engine in again with crewlet llm login' >&2; exit 1; }`, doc)
+	line(`  imported=1`)
+	line(`fi`)
 	line(`if [ -n "$imported" ]; then`)
 	line(`  %s &`, openCodeExporter(times.sync, loop))
 	line(`  xpid=$!`)
@@ -671,15 +670,17 @@ func openCodeHomeConfig(paths Paths) []string {
 	return out
 }
 
-// openCodeForgetLogins removes every login the box's database holds, through
-// ans: an earlier run's import, and whatever else was stored since. The run
-// imports its own after, so only the login it was handed signs it in. A
-// database still holding one after the removal ends the run before it starts.
-func openCodeForgetLogins(ans string) string {
-	list := fmt.Sprintf(`opencode api --standalone credential.list < /dev/null > %[1]s 2>&1 || { echo "crewlet: OpenCode could not list the logins its database holds: $(cat %[1]s)" >&2; exit 1; }`, ans)
+// openCodeForgetLogins removes, through the run's server and ans, every login
+// the box's database holds: an earlier run's import, and whatever else was
+// stored since. The run imports its own after, so only the login it was handed
+// signs it in. A database still holding one ends the run before its client
+// starts. Each call is bounded by wait seconds.
+func openCodeForgetLogins(ans string, wait int) string {
+	list := fmt.Sprintf(`bounded forget %[2]d - opencode api --server "$url" credential.list > %[1]s 2>&1 || { echo "crewlet: OpenCode could not list the logins its database holds: $(cat %[1]s)" >&2; exit 1; }`, ans, wait)
 	return list + "\n" +
 		`if grep -q '"id":' ` + ans + `; then` + "\n" +
-		`  grep -o '"id":"[^"]*","integrationID":' ` + ans + ` | sed 's/^"id":"\([^"]*\)".*/\1/' | while IFS= read -r id; do opencode api --standalone credential.remove --param credentialID="$id" < /dev/null > /dev/null 2>&1; done` + "\n" +
+		`  grep -o '"id":"[^"]*","integrationID":' ` + ans + ` | sed 's/^"id":"\([^"]*\)".*/\1/' > ` + ans + `.ids` + "\n" +
+		fmt.Sprintf(`  while IFS= read -r id; do bounded forget %d - opencode api --server "$url" credential.remove --param credentialID="$id" > /dev/null 2>&1; done < %s.ids; rm -f %s.ids`, wait, ans, ans) + "\n" +
 		"  " + list + "\n" +
 		`  if grep -q '"id":' ` + ans + `; then echo 'crewlet: OpenCode kept a login the run could not remove, so the run does not start' >&2; exit 1; fi` + "\n" +
 		"fi\nrm -f " + ans + "\n"
