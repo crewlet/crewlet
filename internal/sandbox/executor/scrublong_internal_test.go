@@ -738,7 +738,10 @@ func runLiveBytesChild(t *testing.T) map[string]shapeHeld {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.CommandContext(t.Context(), self, "-test.run=^"+t.Name()+"$", "-test.count=1", "-test.v")
+	// THE CHILD HAS NO TIMEOUT OF ITS OWN, not go's default ten minutes,
+	// which a race run passes: the parent's -test.timeout detects a hang.
+	cmd := exec.CommandContext(t.Context(), self, "-test.run=^"+t.Name()+"$", "-test.count=1", "-test.v",
+		"-test.timeout=0")
 	cmd.Env = append(os.Environ(), liveBytesChild+"=1", "GODEBUG="+strings.TrimPrefix(
 		os.Getenv("GODEBUG")+",gcstoptheworld=1,gctrace=1", ","))
 	var stdout, stderr strings.Builder
