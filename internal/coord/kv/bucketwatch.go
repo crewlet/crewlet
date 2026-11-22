@@ -14,6 +14,7 @@ package kv
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -44,6 +45,44 @@ func (b settledBucket) Watch(ctx context.Context, keys string, opts ...jetstream
 // WatchAll is [settledBucket.Watch] of every key.
 func (b settledBucket) WatchAll(ctx context.Context, opts ...jetstream.WatchOpt) (jetstream.KeyWatcher, error) {
 	return b.Watch(ctx, jetstream.AllKeys, opts...)
+}
+
+// errClientWatch is a call the client's handle serves through its own KV
+// watch, refused on a settled bucket: its heartbeat cuts a value still
+// crossing a link, so a listing goes through [eachEntryUnder] and a watch
+// through [settledBucket.Watch].
+var errClientWatch = errors.New("served only through the client's watch, whose " +
+	"five-second heartbeat cuts a value still crossing a link")
+
+// refuseClientWatch is method of the bucket refused ([errClientWatch]).
+func (b settledBucket) refuseClientWatch(method string) error {
+	return fmt.Errorf("coord/kv: %s of %s: %w; list through eachEntryUnder, watch through Watch",
+		method, b.Bucket(), errClientWatch)
+}
+
+// WatchFiltered is refused ([errClientWatch]): a watch takes one filter.
+func (b settledBucket) WatchFiltered(context.Context, []string, ...jetstream.WatchOpt) (jetstream.KeyWatcher, error) {
+	return nil, b.refuseClientWatch("WatchFiltered")
+}
+
+// Keys is refused ([errClientWatch]).
+func (b settledBucket) Keys(context.Context, ...jetstream.WatchOpt) ([]string, error) {
+	return nil, b.refuseClientWatch("Keys")
+}
+
+// ListKeys is refused ([errClientWatch]).
+func (b settledBucket) ListKeys(context.Context, ...jetstream.WatchOpt) (jetstream.KeyLister, error) {
+	return nil, b.refuseClientWatch("ListKeys")
+}
+
+// ListKeysFiltered is refused ([errClientWatch]).
+func (b settledBucket) ListKeysFiltered(context.Context, ...string) (jetstream.KeyLister, error) {
+	return nil, b.refuseClientWatch("ListKeysFiltered")
+}
+
+// History is refused ([errClientWatch]).
+func (b settledBucket) History(context.Context, string, ...jetstream.WatchOpt) ([]jetstream.KeyValueEntry, error) {
+	return nil, b.refuseClientWatch("History")
 }
 
 // watchHeaders is [settledBucket.Watch] delivering each key's headers alone.
