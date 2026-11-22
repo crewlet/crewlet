@@ -2094,9 +2094,9 @@ func (e *Engine) joinExpectation(s *stateLog) func(context.Context) ([]string, e
 //
 //   - every live data node, each running a donor (its row may lag a beat);
 //   - every node whose row the store took lately and names an artefact
-//     ([donorRowWithin]), whatever its presence: a draining node gives presence up first but serves its
-//     donor until its state log stops, and in a rolling upgrade it likely
-//     holds the newest artefact;
+//     ([donorRowWithin]), whatever its presence: a draining node gives
+//     presence up first but serves its donor until its state log stops, and
+//     in a rolling upgrade it likely holds the newest artefact;
 //   - this node only when its own donor serves (ownServing): the boot's join
 //     runs before any donor starts and would wait the whole window on itself.
 func joinDonors(now time.Time, own string, ownServing bool,
