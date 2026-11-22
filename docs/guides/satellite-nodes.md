@@ -452,7 +452,9 @@ It is a full engine process with roles subtracted. Before choosing a host:
   - **A restart loses** what the changelog had not acknowledged, since the
     deleted store takes it along: a graceful stop flushes each seat for five
     seconds (some 700 notes with their vectors across a leaf link to another
-    region, or a few thousand smaller rows); a crash flushes nothing.
+    region, or a few thousand smaller rows), less what the seat's last cycle
+    still had crossing, which the flush waits for first; a crash flushes
+    nothing.
   - **After every boot**, each seat it takes carries back what its hydration
     brought in, in one turn a cycle that its seats share. That turn gets what
     is left of the several thousand rows a cycle carries across such a link
@@ -461,9 +463,9 @@ It is a full engine process with roles subtracted. Before choosing a host:
     [what a crash and a handoff lose](../concepts/seat-ownership.md#a-seats-memory-follows-it)).
 - **A fair queue at the link's bottleneck, each way.** The satellite holds its
   uploads, downloads, walks, memory replays and memory publishes to one window
-  across its link, both ways together, four seconds at the floor, so a small request behind
-  them is answered inside its five-second term even at thirty seconds a
-  mebibyte. The floor is the rate the link gives the node's broker traffic
+  across its link, both ways together, four seconds at the floor, so a small
+  request behind them is answered inside its five-second term even at thirty
+  seconds a mebibyte. The floor is the rate the link gives the node's broker traffic
   beside its own background reads: a link at exactly thirty seconds a mebibyte
   whose presence reads take two fifths of it carries a full window in 6.7
   seconds. A first-in-first-out queue adds whatever else it holds to that
