@@ -321,7 +321,7 @@ func (e *Engine) StartMCPSignIn(ctx context.Context, name string, by iam.Actor) 
 		return MCPSignInStarted{}, fmt.Errorf("engine: the state of server %s's sign-in: %w", name, err)
 	}
 	authorize, err := oauth.AuthorizeURL(ep, oauth.Client{Kind: client.Kind, ID: client.ID},
-		redirect, state, key.Challenge, scopes)
+		redirect, state, key.Challenge, scopes, nil)
 	if err != nil {
 		return MCPSignInStarted{}, &MCPSignInRefusal{Status: http.StatusConflict,
 			Reason: err.Error(), Remedy: "Ask the server's vendor; nothing was signed in"}
