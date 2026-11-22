@@ -24,7 +24,7 @@ import { Button, Callout, Tabs } from "@crewlethq/ui";
 import { RotateCwGlyph } from "@crewlethq/icons/glyphs";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { SetupForm, heldReason } from "../SetupForm.tsx";
+import { SetupForm, heldReason, setsIn } from "../SetupForm.tsx";
 import { listed } from "~/lib/format.ts";
 import { href } from "~/app/router.tsx";
 import { WATCH_MS } from "../recheck.ts";
@@ -385,7 +385,20 @@ export function AppPane({
         )}
         {tab === "settings" && (
           <div className="int-tab">
-            <SettingsSummary tool={tool} />
+            <SettingsSummary
+              tool={tool}
+              // APP STORE CONNECT'S KEYS, each with its Remove, are the API keys row itself.
+              drawSet={
+                tool.entry.key === "app_store_connect"
+                  ? (_set, held) => (
+                      <AppStoreKeys
+                        keys={connectedKeys(held.flatMap((e) => e.fields))}
+                        named={setsIn(tool.sections.flatMap((s) => s.tool.requirements)).length > 1}
+                      />
+                    )
+                  : undefined
+              }
+            />
             {/* THE SERVERS, and each one's Atlas inventory: SSH's own answer. */}
             {tool.entry.key === "ssh" && <SshServers managed={model.managed} />}
             {/* A GROWTH PRODUCT'S connections, the vendor's roles, and a spending product's caps. */}
@@ -398,12 +411,9 @@ export function AppPane({
             )}
             {/* APP STORE ANALYTICS, turned on with an Admin key pasted once. */}
             {tool.entry.key === "app_store_connect" && (
-              <>
-                <AppStoreKeys keys={connectedKeys(tool.sections.map((s) => s.tool))} />
-                <AppStoreAnalytics
-                  connections={analyticsConnections(tool.sections.map((s) => s.tool))}
-                />
-              </>
+              <AppStoreAnalytics
+                connections={analyticsConnections(tool.sections.map((s) => s.tool))}
+              />
             )}
             <Button
               size="small"
