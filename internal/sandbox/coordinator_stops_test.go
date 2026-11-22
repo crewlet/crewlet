@@ -1335,6 +1335,13 @@ func (s *refusingStore) BindSession(ctx context.Context, turnID string, bind Ses
 	return s.inner.BindSession(ctx, turnID, bind)
 }
 
+func (s *refusingStore) ReleaseSessionClaim(ctx context.Context, turnID, sessionID string) error {
+	if s.called("ReleaseSessionClaim") {
+		return errRefusedCall
+	}
+	return s.inner.ReleaseSessionClaim(ctx, turnID, sessionID)
+}
+
 func (s *refusingStore) OweRefusal(ctx context.Context, turnID, launch string, owed OwedRefusal,
 	fence Fence,
 ) (bool, error) {
