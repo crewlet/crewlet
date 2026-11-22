@@ -10,7 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// A GROWTH TOOL IS FILED FROM ITS CATALOG: under Marketing and growth, gated
+// A GROWTH TOOL IS FILED FROM ITS CATALOG: under Growth, gated
 // by the least level its class needs, and listed in the catalogue in its
 // catalog's order, with no row written for it here.
 //

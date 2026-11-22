@@ -942,6 +942,57 @@ test("a secret name the reader types is kept, whatever the name of the model bec
   expect((screen.getByLabelText(/Stored as/) as HTMLInputElement).value).toBe("MY_OWN_KEY");
 });
 
+/**
+ * THE MODEL STEP FOLLOWS THE PROVIDER: a model typed for Anthropic is cleared
+ * when the provider becomes OpenAI, with its key, and the step's example, hint
+ * and secret name are OpenAI's. Kept, an Anthropic id was saved as `openai/...`.
+ */
+test("a changed provider clears the model and key typed for the last one, and the step shows the new one's example", () => {
+  answers.llm_models = { source: "none", aliases: [], models: [], reason: "" };
+  show();
+  fireEvent.change(screen.getByRole("textbox", { name: /Name/ }), { target: { value: "oc" } });
+  fireEvent.click(screen.getByRole("radio", { name: /OpenCode/ }));
+  press("Continue");
+  fireEvent.change(keyField(), { target: { value: "sk-ant-api03-fake" } });
+  press("Continue");
+  const model = () => screen.getByRole("combobox", { name: /^Model/ }) as HTMLInputElement;
+  expect(model().placeholder).toBe("claude-sonnet-5-5");
+  fireEvent.change(model(), { target: { value: "claude-sonnet-5-5" } });
+  expect(screen.getByText(/Sent as anthropic\/claude-sonnet-5-5\./)).toBeTruthy();
+
+  press("Back");
+  fireEvent.click(screen.getByRole("combobox", { name: /Provider/ }));
+  fireEvent.mouseDown(screen.getByRole("option", { name: "OpenAI" }));
+  expect((keyField() as HTMLInputElement).value).toBe("");
+  expect(keyField().getAttribute("placeholder")).toBe("sk-…");
+  expect((screen.getByLabelText(/Stored as/) as HTMLInputElement).value).toBe("OPENAI_API_KEY");
+  fireEvent.change(keyField(), { target: { value: "sk-fake-openai" } });
+  press("Continue");
+  expect(heading()).toBe("Model");
+  expect(model().value).toBe("");
+  expect(model().placeholder).toBe("gpt-5.5");
+  expect(screen.getByText(/Sent as openai\/<model>\./)).toBeTruthy();
+});
+
+/**
+ * THE STORED KEY IS ITS OWN SCOPE'S: replacing it ends when the method moves,
+ * so "Keep the stored key" never names the old secret for another sign-in.
+ */
+test("a replaced key's Keep is offered only on its own method, and the secret follows the method", () => {
+  show({ editing: "sonnet", target: { step: "signin", focus: "credential" } });
+  expect(screen.getByRole("button", { name: /Keep the stored key/ })).toBeTruthy();
+  const method = (value: string) =>
+    fireEvent.click(document.querySelector(`input[type="radio"][value="${value}"]`)!);
+  method("token");
+  expect(screen.queryByRole("button", { name: /Keep the stored/ })).toBeNull();
+  expect((screen.getByLabelText(/Stored as/) as HTMLInputElement).value).toBe(
+    "CLAUDE_CODE_OAUTH_TOKEN",
+  );
+  method("api-key");
+  expect(screen.getByText("ANTHROPIC_API_KEY_SONNET")).toBeTruthy();
+  expect(screen.getByRole("button", { name: /Replace the key/ })).toBeTruthy();
+});
+
 /** A model check whose lines are `lines`, as the engine answers one. */
 const checked = (
   lines: { check: string; ok: boolean; detail: string; kind?: string; remedy?: string }[],

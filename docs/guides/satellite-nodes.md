@@ -456,9 +456,8 @@ It is a full engine process with roles subtracted. Before choosing a host:
   - **After every boot**, each seat it takes carries back what its hydration
     brought in, in one turn a cycle that its seats share. That turn gets what
     is left of the three hundred rows or so a cycle carries across such a link
-    after every seat's own rows and its profiles and skills (carried first).
-    While those outlast a cycle, the turn still comes once in every lap of the
-    seats ([#1040](https://github.com/crewlet/crewlet/issues/1040); see
+    after every seat's own rows (carried first). While those outlast a cycle,
+    the turn still comes once in every lap of the seats (see
     [what a crash and a handoff lose](../concepts/seat-ownership.md#a-seats-memory-follows-it)).
 - **A fair queue at the link's bottleneck, each way.** The satellite holds its
   uploads, downloads, walks and memory replays to one window across its link,

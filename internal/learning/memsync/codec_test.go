@@ -77,17 +77,9 @@ func countRows(t *testing.T, db *store.DB, tableName string) int {
 }
 
 // exportAll reads every row of the seat's a turn would carry from spec above
-// after, as a turn reads them, and returns the mark it would leave (after
-// itself for a whole-each-cycle table).
+// after, as a turn reads them, and returns the mark it would leave.
 func exportAll(t *testing.T, db *store.DB, spec table, after int64) ([]Row, int64) {
 	t.Helper()
-	if spec.wholeEachCycle {
-		rows, err := exportWhole(t.Context(), db.SQL(), spec, seat)
-		if err != nil {
-			t.Fatalf("export %s: %v", spec.name, err)
-		}
-		return rows, after
-	}
 	var rows []Row
 	for {
 		page, more, err := exportPage(t.Context(), db.SQL(), spec, seat, after)
@@ -228,27 +220,16 @@ func TestTheWatermarkOnlyCarriesWhatIsNew(t *testing.T) {
 	db := openStore(t)
 	seedMemory(t, db)
 
-	episodes := tables[1]
-	if episodes.name != "episodes" {
-		t.Fatalf("fixture drifted: tables[1] is %s", episodes.name)
-	}
-	first, high := exportAll(t, db, episodes, 0)
-	if len(first) != 1 {
-		t.Fatalf("first export carried %d rows", len(first))
-	}
-	again, _ := exportAll(t, db, episodes, high)
-	if len(again) != 0 {
-		t.Errorf("the watermark re-carried %d rows nothing had changed about", len(again))
-	}
-
-	// A table rewritten in place carries whole: a watermark cannot see an update.
-	profiles := tables[2]
-	if profiles.name != "counterparty_profiles" || !profiles.wholeEachCycle {
-		t.Fatalf("fixture drifted: tables[2] is %s", profiles.name)
-	}
-	whole, _ := exportAll(t, db, profiles, 1<<40)
-	if len(whole) != 1 {
-		t.Errorf("a whole-each-cycle table carried %d rows past a high watermark", len(whole))
+	for _, spec := range tables {
+		first, high := exportAll(t, db, spec, 0)
+		if len(first) != 1 {
+			t.Fatalf("the first export of %s carried %d rows, want the seed's one", spec.name,
+				len(first))
+		}
+		if again, _ := exportAll(t, db, spec, high); len(again) != 0 {
+			t.Errorf("the watermark re-carried %d rows of %s nothing had changed about",
+				len(again), spec.name)
+		}
 	}
 }
 
@@ -367,7 +348,7 @@ func TestEveryAgentKeyedTableTravels(t *testing.T) {
 }
 
 // A node that lost a seat while a peer kept learning, and took it back, holds
-// the peer's wholeEachCycle rows rather than its own stale copy, which its next
+// the peer's mutable rows rather than its own stale copy, which its next
 // publish would put over the peer's learning for the whole fleet.
 func TestAReturningNodeTakesThePeersUpdatesOverItsOwnStaleRow(t *testing.T) {
 	t.Parallel()
