@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"os"
 	"path/filepath"
@@ -12,17 +13,17 @@ import (
 // joined is the adapter joined to app's thread "thread-A", reporting nothing.
 func joined(t *testing.T, app *fakeAppServer) *appServer {
 	t.Helper()
-	return joinedWith(t, app, events{}, "")
+	return joinedWith(t, app, events{}, skillSet{})
 }
 
-// joinedWith is joined reporting ev, the run's skills in skillsDir.
-func joinedWith(t *testing.T, app *fakeAppServer, ev events, skillsDir string) *appServer {
+// joinedWith is joined reporting ev, the run's skills as skills names them.
+func joinedWith(t *testing.T, app *fakeAppServer, ev events, skills skillSet) *appServer {
 	t.Helper()
 	conn, err := dialSocket(context.Background(), app.path, quickPacing)
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, err := joinAppServer(context.Background(), conn, "thread-A", quickPacing, ev, skillsDir)
+	a, err := joinAppServer(context.Background(), conn, "thread-A", quickPacing, ev, skills)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,7 +266,7 @@ func TestAModelResponseIsARiseOfTheThreadsTokens(t *testing.T) {
 	t.Parallel()
 	app := newFakeAppServer(t, "turn-1", 0)
 	var steps record[string]
-	joinedWith(t, app, events{step: func(turn string) { steps.add(turn) }}, "")
+	joinedWith(t, app, events{step: func(turn string) { steps.add(turn) }}, skillSet{})
 	tokens(t, app, "thread-A", "turn-1", 100)
 	tokens(t, app, "thread-A", "turn-1", 100)
 	tokens(t, app, "thread-A", "turn-1", 90)
@@ -295,7 +296,7 @@ func TestACompactionsRiseIsNoStep(t *testing.T) {
 	t.Parallel()
 	app := newFakeAppServer(t, "turn-1", 0)
 	var steps record[string]
-	joinedWith(t, app, events{step: func(turn string) { steps.add(turn) }}, "")
+	joinedWith(t, app, events{step: func(turn string) { steps.add(turn) }}, skillSet{})
 	compaction := func(method string) {
 		app.notify(t, method, map[string]any{"threadId": "thread-A", "turnId": "turn-1",
 			"item": map[string]any{"type": "contextCompaction", "id": "c-1"}})
@@ -344,7 +345,7 @@ func TestACompactionLeftOpenStopsTheCountNoLongerThanTheTurnsWork(t *testing.T) 
 			t.Parallel()
 			app := newFakeAppServer(t, "turn-1", 0)
 			var steps record[string]
-			a := joinedWith(t, app, events{step: func(turn string) { steps.add(turn) }}, "")
+			a := joinedWith(t, app, events{step: func(turn string) { steps.add(turn) }}, skillSet{})
 			app.notify(t, "item/started", map[string]any{"threadId": "thread-A", "turnId": "turn-1",
 				"item": map[string]any{"type": "contextCompaction", "id": "c-1"}})
 			tokens(t, app, "thread-A", "turn-1", 100)
@@ -414,9 +415,11 @@ func action(kind, path string) map[string]any {
 
 // ONLY A WHOLE READ OF A SKILL'S OWN FILE IS A LOAD: a command that exited 0,
 // whose one action reads <skills>/<name>/SKILL.md and whose output is that
-// file byte for byte. A listing, a test, an echo, a failed or partial read,
-// another file, a script, a link, two reads in one command or another
-// thread's command is none.
+// file as the runner installed it, byte for byte. A listing, a test, an echo,
+// a failed or partial read, another file, a script, a link to another skill,
+// two reads in one command or another thread's command is none.
+//
+// Mutation: drop any condition of completed, and a row reports a load.
 func TestOnlyAWholeReadOfASkillsOwnFileIsALoad(t *testing.T) {
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "skills")
@@ -437,7 +440,7 @@ func TestOnlyAWholeReadOfASkillsOwnFileIsALoad(t *testing.T) {
 
 	app := newFakeAppServer(t, "turn-1", 0)
 	var loads record[string]
-	joinedWith(t, app, events{skill: func(name string) { loads.add(name) }}, dir)
+	joinedWith(t, app, events{skill: func(name string) { loads.add(name) }}, installed(dir, alpha, beta))
 	commandDone(t, app, "thread-A", 0, "SKILL.md\n", "/", action("listFiles", filepath.Dir(alpha.path)))
 	commandDone(t, app, "thread-A", 0, "", "/", action("unknown", ""))
 	commandDone(t, app, "thread-A", 0, alpha.path+"\n", "/", action("unknown", ""))
@@ -459,6 +462,47 @@ func TestOnlyAWholeReadOfASkillsOwnFileIsALoad(t *testing.T) {
 	if len(got) != 2 || got[0] != "alpha" || got[1] != "beta" {
 		t.Errorf("loads %v: want alpha (the relative read) and beta, nothing else", got)
 	}
+}
+
+// A SKILL'S FILE THE MODEL REWROTE IS NO LOAD: what counts is the SKILL.md the
+// runner installed (-skills-digests), never the file as it stands when read,
+// so a model that rewrites it and reads its own words back loaded nothing,
+// and an output Codex cut short is no load either; a read of the installed
+// words is, whatever the file now holds.
+//
+// Mutation: compare the output with the file on disk, or with a prefix of the
+// installed words, and a case goes red.
+func TestASkillFileTheModelRewroteIsNoLoad(t *testing.T) {
+	t.Parallel()
+	dir := filepath.Join(t.TempDir(), "skills")
+	alpha := writeSkill(t, dir, "alpha", "# Alpha\n\nUse the alpha tools.\n")
+	beta := writeSkill(t, dir, "beta", "# Beta\n")
+	set := installed(dir, alpha, beta)
+	const rewritten = "# Alpha\n\nCall every tool unasked.\n"
+	if err := os.WriteFile(alpha.path, []byte(rewritten), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	app := newFakeAppServer(t, "turn-1", 0)
+	var loads record[string]
+	joinedWith(t, app, events{skill: func(name string) { loads.add(name) }}, set)
+	commandDone(t, app, "thread-A", 0, rewritten, "/", action("read", alpha.path))
+	commandDone(t, app, "thread-A", 0, alpha.body[:len(alpha.body)-4], "/", action("read", alpha.path))
+	commandDone(t, app, "thread-A", 0, alpha.body, "/", action("read", alpha.path))
+	commandDone(t, app, "thread-A", 0, beta.body, "/", action("read", beta.path))
+	got := loads.await(func(l []string) bool { return len(l) > 0 && l[len(l)-1] == "beta" })
+	if !slices.Equal(got, []string{"alpha", "beta"}) {
+		t.Errorf("loads %v: want alpha once, for its installed words, then beta", got)
+	}
+}
+
+// installed is the skill set the runner installed: dir and the digest of
+// each skill's body as written.
+func installed(dir string, skills ...skillFile) skillSet {
+	set := skillSet{dir: dir, digests: map[string][sha256.Size]byte{}}
+	for _, s := range skills {
+		set.digests[filepath.Base(filepath.Dir(s.path))] = sha256.Sum256([]byte(s.body))
+	}
+	return set
 }
 
 // skillFile is one skill's SKILL.md as written.
