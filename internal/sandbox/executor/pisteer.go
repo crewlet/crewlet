@@ -43,7 +43,8 @@ const (
 // registers and those that must offer a tool ([piRequired]), the seat's
 // standing instructions, the notes route ("" for none), the turn cap (0 for
 // none), the run's skill files by absolute path with the name each is listed
-// under, and the skill route ("" for none).
+// under, the skill route ("" for none), and the names the model's shell runs
+// without ([sandbox.RunRequest.SignInEnv]).
 type piExtensionSettings struct {
 	Servers  []piServer        `json:"servers"`
 	Required []string          `json:"required"`
@@ -52,6 +53,7 @@ type piExtensionSettings struct {
 	Cap      int               `json:"cap,omitempty"`
 	Skills   map[string]string `json:"skills,omitempty"`
 	SkillURL string            `json:"skillURL,omitempty"`
+	Withheld []string          `json:"withheld,omitempty"`
 }
 
 // piServer is one MCP server the extension registers: its name and the

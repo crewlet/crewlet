@@ -440,8 +440,11 @@ func TestAPiNoteIsHeldOnlyByAnAnswerOnItsBranch(t *testing.T) {
 // the job's other token; and the agent directory's own server list empty, so
 // no server there replaces one the extension registers.
 //
+// The names that sign pi in are the ones the model's shell runs without, in
+// both copies.
+//
 // Mutation: leave the fresh copy on the continued token, drop the required
-// bridge, or key a skill by a relative path: this goes red.
+// bridge, drop the withheld names, or key a skill by a relative path: this goes red.
 func TestAPiRunsExtensionCarriesItsOwnWiring(t *testing.T) {
 	t.Parallel()
 	box := sandbox.NewFakeSandbox("b")
@@ -461,6 +464,7 @@ func TestAPiRunsExtensionCarriesItsOwnWiring(t *testing.T) {
 	}
 	req := sandbox.RunRequest{System: "SEAT", MCPServers: bridge("old"), Steer: steer("old"), SkillLoads: loads("old"),
 		Limits:      sandbox.Limits{MaxTurns: 7},
+		SignInEnv:   []string{"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"},
 		Skills:      []sandbox.Skill{{Name: "deploy", Description: "Deploys.", Body: "Do it."}},
 		FreshWiring: &sandbox.Wiring{MCPServers: bridge("new"), Steer: steer("new"), SkillLoads: loads("new")}}
 	file, err := (Pi{}).WriteConfig(t.Context(), box, req, p)
@@ -490,7 +494,7 @@ func TestAPiRunsExtensionCarriesItsOwnWiring(t *testing.T) {
 		}
 		if !slices.Equal(s.Required, []string{"crewlet"}) || s.Cap != 7 || s.Notes != "http://e/mcp/"+token+"/steer" ||
 			s.SkillURL != "http://e/mcp/"+token+"/skill" || s.Skills[skill] != "crewlet:deploy" ||
-			!strings.HasPrefix(s.System, "SEAT\n\n") {
+			!strings.HasPrefix(s.System, "SEAT\n\n") || !slices.Equal(s.Withheld, []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY"}) {
 			t.Errorf("%s is written %+v", path, s)
 		}
 	}
@@ -595,5 +599,37 @@ func TestACarriedPiSessionReadsBackAsItsTranscript(t *testing.T) {
 	}
 	if last := got.Entries[len(got.Entries)-1]; last.Kind != EntryModel || last.Text != "Finished the tool tour." {
 		t.Fatalf("the transcript ends %+v", last)
+	}
+}
+
+// A REAL PI 1.6.0 RUN'S SHELL RUNS WITHOUT ITS SIGN-IN: in the capture of a run
+// whose extension withholds STUB_KEY, the name its model provider's key is
+// under, the model was reached with that key, and the bash tool's command and
+// a child of it saw no STUB_KEY while a seat's own credential (OTHER_SECRET)
+// and every other variable stayed.
+//
+// Mutation: re-capture with the extension's spawn hook removed: the command
+// prints the key, and this goes red.
+func TestAPiRunsShellRunsWithoutItsSignIn(t *testing.T) {
+	t.Parallel()
+	raw := piFixture(t, "shell.stream.jsonl")
+	if got := (Pi{}).Parse(raw); !got.Success || got.Turns != 2 {
+		t.Fatalf("the run did not reach its model: success %v, %d requests, %q", got.Success, got.Turns, got.Error)
+	}
+	var printed string
+	for l := range bytes.Lines(raw) {
+		ev, ok := decodePiLine(l)
+		if ok && ev.Type == "tool_execution_end" && ev.ToolName == "bash" {
+			var r struct {
+				Content []piContent `json:"content"`
+			}
+			if err := json.Unmarshal(ev.Result, &r); err != nil {
+				t.Fatal(err)
+			}
+			printed = r.Content[0].Text
+		}
+	}
+	if printed != "STUB_KEY=unset OTHER=s3 KEEP=yes\n1\nchild=unset\n" {
+		t.Fatalf("the model's shell printed %q", printed)
 	}
 }

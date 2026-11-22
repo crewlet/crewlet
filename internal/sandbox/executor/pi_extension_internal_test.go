@@ -82,6 +82,7 @@ type piProbeReport struct {
 	Result     json.RawMessage `json:"result"`
 	Event      json.RawMessage `json:"event"`
 	Message    string          `json:"message"`
+	Names      []string        `json:"names"`
 }
 
 // piProbe is the rendered extension running under node against the stand-in
@@ -102,6 +103,7 @@ func startPiProbe(t *testing.T, settings piExtensionSettings) *piProbe {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
+	WritePiAPIStub(t, dir)
 	ext := filepath.Join(dir, "extension.mjs")
 	if err := os.WriteFile(ext, []byte(source), 0o600); err != nil {
 		t.Fatal(err)
@@ -395,4 +397,29 @@ func TestThePiExtensionReportsASkillLoad(t *testing.T) {
 	}
 	call.reply(200, "{}")
 	p.expect("handled")
+}
+
+// THE MODEL'S SHELL RUNS WITHOUT THE NAMES THAT SIGN PI IN: the extension
+// registers pi's own bash tool again, its spawn hook leaving those names out
+// of every command's environment and keeping the rest (a seat's own tool
+// credentials among them); a run naming none leaves pi's bash tool as it is.
+// The same, in a real 1.6.0 run: TestAPiRunsShellRunsWithoutItsSignIn.
+//
+// Mutation: hand the hook's environment back whole, or drop the
+// registration: this goes red.
+func TestThePiExtensionRunsTheShellWithoutTheSignIn(t *testing.T) {
+	t.Parallel()
+	p := startPiProbe(t, piExtensionSettings{Withheld: []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY"}})
+	if r := p.expect("tool"); r.Name != "bash" {
+		t.Fatalf("the extension registered %q, want pi's bash tool", r.Name)
+	}
+	p.expect("loaded")
+	p.send(map[string]any{"op": "spawn", "name": "bash", "env": map[string]string{"ANTHROPIC_API_KEY": "sk-ant-x",
+		"OPENAI_API_KEY": "sk-y", "GITHUB_TOKEN": "ghs_z", "PATH": "/bin"}})
+	if got := p.expect("spawned").Names; len(got) != 2 || got[0] != "GITHUB_TOKEN" || got[1] != "PATH" {
+		t.Fatalf("the shell's environment holds %v", got)
+	}
+
+	plain := startPiProbe(t, piExtensionSettings{})
+	plain.expect("loaded")
 }
