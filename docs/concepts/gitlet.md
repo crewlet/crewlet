@@ -2244,11 +2244,15 @@ At the default lanes, with and without seats beside Gitlet (MiB, rounded):
 | 16 GiB, eight cores | no | 97 | 284 | 1 024 | 1 024 | 27 | 6 105 | 1 802 |
 | 16 GiB, eight cores | yes | 1 650 | 284 | 1 024 | 1 024 | 24 | 5 426 | 1 600 |
 
-A node keeps at least one transfer, so 2 GiB running seats beside Gitlet keeps
-367 MiB more than its memory. Small and development installs run there, so it
-still boots and serves, and logs `code_cache_memory_short` once at boot with the
-figures; at the default `node.max_concurrent`, give a node running seats beside
-Gitlet 4 GiB of memory or more in all.
+Its pools, page cache and read lane alone outgrow 2 GiB, and a node keeps at
+least one transfer, so 2 GiB running seats beside Gitlet keeps 367 MiB more
+than its memory, and its Go memory limit, 1 411 MiB, sits below the 1 741 MiB
+its pools and answers in flight keep: under concurrent load at the bounds its
+pools exceed the node, so expect GC pressure, then the out-of-memory killer.
+Small and development installs run there, so it still boots and serves, and
+logs `code_cache_memory_short` once at boot with the figures; at the default
+`node.max_concurrent`, give a node running seats beside Gitlet 4 GiB of memory
+or more in all, or run Gitlet on a node of its own.
 
 The budget does not bound the clones themselves, which take the node's git
 transfer slots, four a core and no more than one for each 512 MiB of the memory the
@@ -4987,7 +4991,7 @@ A Gitlet node's [cache](#the-cache-on-a-gitlet-node) logs under the component `g
 | `code_cache_map_count_unread` | `WARN` | `/proc/sys/vm/max_map_count` could not be read (`error`), so mapped runs are bounded as if the count were Linux's default (`assumed`, 65 530). A sandboxed kernel hiding `/proc/sys`; nothing to do unless the host lowered the count below default, which lowers what every process on it may map. |
 | `code_cache_memory_changed` | `INFO` | The node's memory read differently (a container resized in place) and `maintenance_budget` moved with it; `was` is the earlier reading. The git lanes keep their boot sizes until a restart. |
 | `code_cache_memory_unreadable` | `WARN` | Memory could not be read again; the last reading and budget stand until a read succeeds. Once until then. |
-| `code_cache_memory_short` | `WARN` | At boot, what the node keeps for everything but background work (`memory_reserved`: what the engine `kept` beside Gitlet (the Go runtime's share for the executor's pools and the answers in flight, the store's page cache and its read lane), 224 MiB for each of its `transfer_slots`, and the serving share) is past its `memory` by `shortfall`: with its pools, its transfers and its serving share at their worst at once, the node is out of memory. It still boots and serves. Give it `memory_needed` or more, the least memory that holds what it keeps at these lanes, since the serving share grows with the memory (4 GiB or more in all where it runs seats beside Gitlet at the default `node.max_concurrent`, [The budget](#the-cache-on-a-gitlet-node)); or, where `gitlet.max_transfers` is set, fewer transfers; or, on a node running seats, a lower `node.max_concurrent` (8.0 MiB a turn). Once a boot. |
+| `code_cache_memory_short` | `WARN` | At boot, what the node keeps for everything but background work (`memory_reserved`: what the engine `kept` beside Gitlet (the Go runtime's share for the executor's pools and the answers in flight, the store's page cache and its read lane), 224 MiB for each of its `transfer_slots`, and the serving share) is past its `memory` by `shortfall`: with its pools, its transfers and its serving share at their worst at once, the node is out of memory. It still boots and serves. Its `remedy` names the cause. Where the engine's pools pass what the memory less its transfers leaves the Go runtime, the Go limit sits below them: under concurrent load at the bounds the pools exceed the node, so expect GC pressure, then the out-of-memory killer, and give it 4 GiB or more, or run Gitlet on a node of its own. Otherwise give it `memory_needed` or more, the least memory that holds what it keeps at these lanes, since the serving share grows with the memory (4 GiB or more in all where it runs seats beside Gitlet at the default `node.max_concurrent`, [The budget](#the-cache-on-a-gitlet-node)); or, where `gitlet.max_transfers` is set, fewer transfers; or, on a node running seats, a lower `node.max_concurrent` (8.0 MiB a turn). Once a boot. |
 | `code_cache_trashed` | `WARN` | At boot, something in the cache that is not a repository's current copy was moved aside to be removed: a copy an interrupted rebuild left, a stray, or a copy in another build's format (`why` says which). Nothing is lost: the rows and object store bring the repository back at its next fetch. |
 | `code_cache_state_unreadable` | `WARN` | A copy has no readable record of what it holds. It is kept; its next fetch reads the repository whole, reusing every pack held. Recurring, it is the disk. |
 | `code_cache_evicted` | `INFO` | A copy was evicted to bring the cache under its byte budget, least recently used first; `idle_for` is how long it was unused. Its next fetch is a cold sync. Frequent, the budget is too small for the repositories served. |

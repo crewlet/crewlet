@@ -1819,10 +1819,13 @@ Gitlet by what is left
 transcript reads its API answers and 1 650 MiB where it runs seats too, 284 MiB for the answers in flight, a
 sixteenth of its memory for the page cache and 128 MiB a core for git's reads, so give it that much more. They are the executor's in-process pools alone: a node
 running seats also holds its harness calls and boxes
-([Replica count](#replica-count)). On 2 GiB of memory in all, such a node's one
-transfer takes it past its memory: it still boots and serves, logging
+([Replica count](#replica-count)). On 2 GiB of memory in all, such a node's pools
+alone take it past its memory, and its Go memory limit sits below them: under
+concurrent load at the bounds expect GC pressure, then the out-of-memory killer.
+It still boots and serves, logging
 `code_cache_memory_short` once, but at the default `node.max_concurrent` give a
-node running seats beside Gitlet 4 GiB of memory or more in all.
+node running seats beside Gitlet 4 GiB of memory or more in all, or run Gitlet
+on a node of its own.
 
 The node that publishes also holds:
 
