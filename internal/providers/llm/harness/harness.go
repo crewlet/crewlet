@@ -361,7 +361,7 @@ func (p *Provider) String() string {
 // whose file carries policy is passed on every call
 // ([harnessprofile.SystemPromptFile]), and its replacing form would render an
 // EMPTY system prompt, which Kimi Code refuses ("Missing prompt body", exit 1,
-// on 0.42.0 and 2.3.1). Every caller sends one today; this holds the next
+// on 2.7.2). Every caller sends one today; this holds the next
 // that does not.
 func (p *Provider) routeFor(req llm.Request) harnessprofile.Route {
 	if system, _ := SplitSystem(req); system == "" {

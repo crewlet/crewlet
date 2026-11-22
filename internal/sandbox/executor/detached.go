@@ -45,7 +45,7 @@ func deliveredRefs(texts ...string) []string {
 		}
 	}
 	for _, text := range texts {
-		if refs := prPattern.FindAllString(text, -1); len(refs) > 0 {
+		if refs := prPattern().FindAllString(text, -1); len(refs) > 0 {
 			return refs
 		}
 	}
@@ -55,13 +55,15 @@ func deliveredRefs(texts ...string) []string {
 // deliveredLine is one line naming a delivered ref — `Delivered: <ref>` — read
 // whatever a report lays it out with: a list marker before it, emphasis
 // around the label, any case. What follows the colon is [namedRef]'s to judge.
-var deliveredLine = regexp.MustCompile(
-	`(?im)^[ \t]*(?:[-*+][ \t]+|\d+[.)][ \t]+)?[*_]*delivered[*_]*[ \t]*:[*_]*[ \t]*(.*)$`)
+var deliveredLine = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(
+		`(?im)^[ \t]*(?:[-*+][ \t]+|\d+[.)][ \t]+)?[*_]*delivered[*_]*[ \t]*:[*_]*[ \t]*(.*)$`)
+})
 
 // namedRefs is every ref a text names on a `Delivered:` line, in its order.
 func namedRefs(text string) []string {
 	var refs []string
-	for _, m := range deliveredLine.FindAllStringSubmatch(text, -1) {
+	for _, m := range deliveredLine().FindAllStringSubmatch(text, -1) {
 		if ref, ok := namedRef(m[1]); ok {
 			refs = append(refs, ref)
 		}
@@ -98,8 +100,10 @@ func namedRef(rest string) (string, bool) {
 // never a host with credentials (a remote, not a ref); the number ends at a
 // word boundary. Only a fallback, because a URL the run merely referenced reads
 // exactly like one it opened.
-var prPattern = regexp.MustCompile(
-	`https?://[^\s/?#@:]+(?::\d+)?/[\w.\-/]+/(?:pull|pulls|pull-requests|pullrequest|merge_requests)/\d+\b`)
+var prPattern = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(
+		`https?://[^\s/?#@:]+(?::\d+)?/[\w.\-/]+/(?:pull|pulls|pull-requests|pullrequest|merge_requests)/\d+\b`)
+})
 
 // Harness is what one harness contributes on top of the shared plumbing: its
 // invocation, its config file, where its stdout lands and how its result is
