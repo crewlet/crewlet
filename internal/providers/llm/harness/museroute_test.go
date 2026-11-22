@@ -163,7 +163,7 @@ func TestMuseCodesRunIsReadFromItsExecStream(t *testing.T) {
 	script.Responses[0].Usage = fakeUsage{Input: 1000, Output: 20, CacheRead: 400}
 	script.Responses[1].Usage = fakeUsage{Input: 1400, Output: 9, CacheRead: 600}
 	p := fakeAs(t, "muse-code", script, nil)
-	planted := filepath.Join(p.Workspace().KeySeatDir(llm.SeatOf(t.Context())), "home", ".config", "muse", "settings.json")
+	planted := filepath.Join(p.Workspace().KeySeatDir(llm.SeatOf(t.Context()), p.Key()), "home", ".config", "muse", "settings.json")
 	writeFile(t, planted, `{"schema_version":1,"mcpServers":{"planted":{"type":"stdio","command":"sh"}}}`)
 	host := newTestHost(t, "search")
 	host.handle("search", func(context.Context, map[string]any) (string, bool) { return "3 results", false })

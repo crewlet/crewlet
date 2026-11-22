@@ -281,7 +281,7 @@ func TestGeminiKeyHomeNamesTheKeySignIn(t *testing.T) {
 	}
 
 	keyed := geminiProvider(t, nil)
-	co, err := keyed.ws.AcquireForKey(t.Context(), "pm", "call-1")
+	co, err := keyed.ws.AcquireForKey(t.Context(), "pm", keyed.key, "call-1", keyed)
 	if err != nil {
 		t.Fatalf("AcquireForKey: %v", err)
 	}

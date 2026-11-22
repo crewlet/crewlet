@@ -282,14 +282,13 @@ func TestTheHermesProfileDeniesItsToolsAndReadsItsRealTokens(t *testing.T) {
 // to the $HERMES_HOME/config.yaml settings that keep a call to itself:
 //   - agent.coding_context "off": a project marker above the working directory
 //     would switch on a coding brief naming tools the call lacks.
-//   - auxiliary.title_generation.enabled false: else a second, billed request
-//     re-sends the prompt, outside the usage report.
+//   - auxiliary.title_generation.enabled false: no billed request for a title.
 //   - memory.memory_enabled and memory.user_profile_enabled false: else MEMORY.md
-//     and USER.md are read into every prompt and shared by concurrent calls.
+//     and USER.md are read into every prompt.
 //
 // NO `model` SECTION (a login's provider lives in auth.json, which travels) and
-// no toolsets (`--toolsets web` on argv is the denial).
-// Mutation: drop a setting, or add a `model:` section, and this is red.
+// no toolsets (`--toolsets web` on argv is the denial). Mutation: drop a
+// setting, or add a `model:` section, and this is red.
 func assertHermesSeedKeepsACallToItself(t *testing.T, p harnessprofile.Profile) {
 	t.Helper()
 	if home := p.ConfigEnv["HERMES_HOME"]; home != ".hermes" {
