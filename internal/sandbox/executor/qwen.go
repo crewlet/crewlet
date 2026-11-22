@@ -122,7 +122,7 @@ func (QwenCode) readsCommands() {}
 // ([Paths.QwenSkills]); extensions stay on disk, unloaded (the helper's
 // `--extensions none`); agents are denied in the settings.
 var qwenHome = runHome{State: ".qwen", Owned: []string{"skills", "commands", "rules", "QWEN.md", "AGENTS.md", ".env"},
-	Memory: []string{"QWEN.md", "AGENTS.md"}}
+	Memory: []string{"QWEN.md", "AGENTS.md"}, WalksEnv: true}
 
 var (
 	_ artifactHolder    = QwenCode{}

@@ -164,7 +164,7 @@ func (GeminiCLI) readsCommands() {}
 // and environment file. Extensions stay on disk, unloaded ([geminiFlags]);
 // agents are off in the settings.
 var geminiHome = runHome{State: ".gemini", Owned: []string{"skills", "policies", "commands", "GEMINI.md", ".env"},
-	Memory: []string{"GEMINI.md"}}
+	Memory: []string{"GEMINI.md"}, WalksEnv: true}
 
 // Events is a new decoder for one stream ([geminiEvents]).
 func (GeminiCLI) Events() Decoder { return &geminiEvents{} }
