@@ -5,7 +5,16 @@
 
 /** What sort of value a requirement holds (`setup.Kinds`); a toggle is a JSON boolean. */
 export type SetupRequirementKind =
-  "secret" | "url" | "id" | "choice" | "text" | "handle" | "email" | "toggle" | "consent";
+  | "secret"
+  | "url"
+  | "id"
+  | "choice"
+  | "text"
+  | "handle"
+  | "email"
+  | "toggle"
+  | "add_identity"
+  | "consent";
 
 /** One step at the app: `{link}` in `text` is the vendor link of the field `link` names. */
 export interface SetupStep {
@@ -21,6 +30,41 @@ export interface SetupStep {
 export interface SetupCaution {
   title: string;
   body: string;
+}
+
+/** An identity a person adds at the vendor; `seat` names the agent when `level` is "seat". */
+interface SetupIdentityStep {
+  email: string;
+  role: { id: string; name: string };
+  where: { url: string; words: string };
+  level: "company" | "seat";
+  seat?: string;
+  /** Whether the engine saw the identity hold the role. */
+  state: "present" | "missing" | "unknown";
+}
+
+/**
+ * A list the form builds an entry at a time, at least `min` entries, each
+ * answering every field of its entry (App Store Connect's keys by role).
+ * Every member requirement carries it, with its own `entry`.
+ */
+export interface SetupSet {
+  id: string;
+  /** Heads the list ("API keys"). */
+  label: string;
+  /** One entry in a sentence ("key"). */
+  item: string;
+  /** The line under the label: what is needed, and which entry first. */
+  hint: string;
+  /** The control that adds an entry ("Add a key"). */
+  add: string;
+  /** Labels the choice of which entry to add ("Role"). */
+  pick: string;
+  /** Said when fewer than `min` entries are added. */
+  missing: string;
+  min: number;
+  /** This requirement's entry: its value, how it is picked, what it unlocks. */
+  entry: { value: string; label: string; hint?: string };
 }
 
 /** One input an integration needs; every word the form draws comes from here. */
@@ -52,6 +96,8 @@ export interface SetupRequirement {
   mintable?: boolean;
   /** The engine's rendering of a minted value's public half, to copy to the app. */
   public?: { text: string; language: string };
+  /** An `add_identity` step: the email to add at the vendor, at which role and where. */
+  identity?: SetupIdentityStep;
   /** Written from its default without being asked. */
   hidden?: boolean;
   /** The one line under the field, under fifteen words. */
@@ -64,6 +110,12 @@ export interface SetupRequirement {
   format?: string;
   /** The one form a value has to take at the app; absent is a token. */
   shape?: string;
+  /** A value that spans lines (a PEM key): a box that keeps line breaks. */
+  multiline?: boolean;
+  /** The file types such a value comes in, for a file picker. */
+  accept?: string;
+  /** The set this is one entry's field of; required once the entry is added. */
+  set?: SetupSet;
   /** The reconcile finding this input clears; the server's join, not read here. */
   blocks?: string;
   /** What the document holds here, for everything that is not a credential. */

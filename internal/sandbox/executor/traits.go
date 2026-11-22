@@ -134,9 +134,16 @@ func harnessNamed(name string) Harness {
 }
 
 // artifactHolder is a harness whose runs leave files of their own in a box
-// ([Runner.ClearArtifacts]): files removed one by one, dirs whole.
+// ([Runner.ClearArtifacts]), removed one by one.
 type artifactHolder interface {
-	artifacts(p Paths) (files, dirs []string)
+	artifactFiles(p Paths) []string
+}
+
+// artifactDirHolder is a harness whose runs leave directories of their own in
+// a box ([Runner.ClearArtifacts]), removed whole: apart from [artifactHolder],
+// since a harness that leaves none (Codex) has none to name.
+type artifactDirHolder interface {
+	artifactDirs(p Paths) []string
 }
 
 // boxPointHarness is a harness that compacts at a point only its box can say
@@ -161,4 +168,11 @@ func (r *Runner) ReadBoxPoint(ctx context.Context, box sandbox.Sandbox,
 	point, err := h.readBoxPoint(ctx, box, ask)
 	point.Charge = SessionTraits(r.harness.Name()).Charge
 	return point, err
+}
+
+// StartsFresh reports whether the runner's harness continues no earlier
+// session ([resumer]), so every launch on it starts one of its own.
+func (r *Runner) StartsFresh() bool {
+	c, ok := r.harness.(resumer)
+	return !ok || !c.Resumes()
 }

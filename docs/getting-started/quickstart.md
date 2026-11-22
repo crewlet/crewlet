@@ -264,9 +264,7 @@ providers:
     plan:
       model: sonnet
 
-    # OpenAI's models through Codex: for a seat's reviewer, workers and side
-    #   passes (llm_review, llm_subagent, …); only claude-code and opencode run
-    #   a seat's executor
+    # OpenAI's models through Codex
     gpt:
       harness: codex
       model: gpt-5

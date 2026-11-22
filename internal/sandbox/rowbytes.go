@@ -267,7 +267,7 @@ const (
 // grew.
 const (
 	measuredOtherFields = 2_344_079
-	measuredSpare       = 375_221
+	measuredSpare       = 375_025
 )
 
 // The per-call bounds of the bridged call log. See [MaxBridgeCallBytes].
@@ -407,7 +407,7 @@ const (
 	// [InFlightBytes] — [MaxCallsInFlight] raised, say — fails
 	// TestACallInFlightIsHeldToItsShare until this figure, and the table and
 	// docs/concepts/code-sandbox.md that state it, move with it.
-	LogRestBytes = 1_768_558
+	LogRestBytes = 1_768_362
 
 	// MaxPriorCalls bounds [BridgeLog.PriorCalls]: the tool names a turn's
 	// earlier rounds called with success. Five hundred and twelve is past

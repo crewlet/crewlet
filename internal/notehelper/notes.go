@@ -7,9 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -32,41 +30,19 @@ var errRefused = errors.New("the notes route refused the helper; its notes wait 
 const maxAnswer = 1 << 20
 
 // poller asks the notes route for the notes past a cursor.
-type poller struct {
-	// route is the job's notes route, which holds the run's token in its
-	// path: never printed ([scrub]).
-	route  string
-	client *http.Client
-}
-
-// newPoller is a poller of route, refused where route is no http(s) address.
-func newPoller(route string) (*poller, error) {
-	u, err := url.Parse(route)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		// The parse error quotes the route, so it is not wrapped.
-		return nil, errors.New("the notes route is not an http or https address")
-	}
-	return &poller{
-		route: strings.TrimSuffix(route, "/"),
-		client: &http.Client{
-			// THE ROUTE NEVER REDIRECTS, and one followed would carry the
-			// token's path to wherever it pointed: a 3xx is a failed poll.
-			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		},
-	}, nil
-}
+type poller struct{ *route }
 
 // poll is the notes past after, oldest first, asked for within bound.
 func (p *poller) poll(ctx context.Context, after int, bound time.Duration) ([]note, error) {
 	ctx, cancel := context.WithTimeout(ctx, bound)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.route+"/notes?after="+strconv.Itoa(after), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.url+"/notes?after="+strconv.Itoa(after), nil)
 	if err != nil {
-		return nil, p.scrub(err)
+		return nil, p.scrub("polling", err)
 	}
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return nil, p.scrub(err)
+		return nil, p.scrub("polling", err)
 	}
 	defer resp.Body.Close()
 	switch {
@@ -81,7 +57,7 @@ func (p *poller) poll(ctx context.Context, after int, bound time.Duration) ([]no
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxAnswer+1))
 	if err != nil {
-		return nil, p.scrub(err)
+		return nil, p.scrub("polling", err)
 	}
 	if len(body) > maxAnswer {
 		return nil, fmt.Errorf("polling the notes route: its answer is past %d bytes", maxAnswer)
@@ -95,14 +71,4 @@ func (p *poller) poll(ctx context.Context, after int, bound time.Duration) ([]no
 		}
 	}
 	return answer.Notes, nil
-}
-
-// scrub is err with the route taken out: net/http's errors quote the whole
-// address, token and all, and the run's error stream is no place for it.
-func (p *poller) scrub(err error) error {
-	var u *url.Error
-	if errors.As(err, &u) {
-		err = u.Err
-	}
-	return errors.New("polling the notes route: " + strings.ReplaceAll(err.Error(), p.route, "the notes route"))
 }

@@ -70,6 +70,28 @@ export interface ToolStory {
 }
 
 export const STORIES: Record<string, ToolStory> = {
+  meta_ads: {
+    does: [
+      "Read ad accounts, campaigns, ad sets, ads and insights in the ad accounts you choose",
+      "Pause, and lower budgets and bids, where you allow it",
+      "Ask you before any change that can raise spending, every time",
+    ],
+    identity:
+      "Agents never hold a Meta token. Crewlet keeps one system user's tokens from your own Meta app and makes every call for them.",
+    byHand:
+      "In your business portfolio, create a Business app and an Employee system user, assign it the ad accounts, generate its tokens and paste them here.",
+  },
+  apple_ads: {
+    does: [
+      "Read campaigns, keywords, search terms and performance in the ad accounts you choose",
+      "Pause, lower bids and budgets, and add negative keywords where you allow it",
+      "Ask you before any change that can raise spending, every time",
+    ],
+    identity:
+      "Agents never hold Apple Ads access. Crewlet keeps the company's API users and makes every call for them.",
+    byHand:
+      "Invite an API user in Apple Ads, make its key pair with OpenSSL, upload the public key under that user's Account Settings, API, and paste the private key and the IDs Apple shows here. Apple has no API that creates users or keys.",
+  },
   app_store_connect: {
     does: [
       "Read your apps, listings, reviews, TestFlight builds, sales and analytics",
@@ -205,6 +227,72 @@ export const STORIES: Record<string, ToolStory> = {
       "Crewlet signs a certificate for each agent's session that names the agent and its turn, so each server's log says which agent ran each command.",
     byHand:
       "Save to create Crewlet's certificate authority, then add each server, compare its host key with the server's console, and run the server setup Crewlet gives you as root.",
+  },
+  google_analytics: {
+    does: [
+      "Read traffic, engagement, key events and revenue reports for the properties you choose",
+      "Change settings, key events, custom definitions and audiences where you allow operate",
+      "Ask you before any account, access, link or irreversible change, every time",
+    ],
+    identity:
+      "Each agent has its own Google identity in your Google identity project; you add it to the property at the role it may act with. Its tokens never leave Crewlet.",
+    byHand:
+      "Connect Google Cloud first and run its setup block again, which turns on the Analytics APIs, then add each agent's email in Admin, Property access management.",
+  },
+  admob: {
+    does: [
+      "Read network, mediation and campaign reports for the publisher accounts you choose",
+      "Create apps, ad units and mappings, and tune mediation groups and A/B experiments where you allow operate",
+      "Ask you before linking an app to its store or removing a mediation line, every time",
+    ],
+    identity:
+      "A person who manages your AdMob account signs in with Google once, as your own OAuth client; every agent reaches AdMob through that sign-in, which never leaves Crewlet.",
+    byHand:
+      "Make an OAuth client (Web application) in a Google Cloud project you control, turn on the AdMob API there, add Crewlet's callback address and publish its consent screen, then sign in with Google here.",
+  },
+  adsense: {
+    does: [
+      "Read earnings reports, sites, alerts, policy issues and payments for the publisher accounts you choose",
+      "Create and rename ad units and custom channels where you allow operate",
+      "Ask you before a live ad unit's size changes, a channel is deleted or a platform's sub-account changes, every time",
+    ],
+    identity:
+      "A person who manages your AdSense account signs in with Google once, as your own OAuth client; every agent reaches AdSense through that sign-in, which never leaves Crewlet.",
+    byHand:
+      "Make an OAuth client (Web application) in a Google Cloud project you control, turn on the AdSense Management API there, add Crewlet's callback address and publish its consent screen, then sign in with Google here.",
+  },
+  google_ads: {
+    does: [
+      "Read campaign, ad, keyword and search term reports for the accounts you choose",
+      "Pause campaigns and ads, lower budgets and bids, and add negatives where you allow operate",
+      "Ask you before any change that can raise spend, publishes ad text or removes, held to your caps",
+    ],
+    identity:
+      "Each agent has its own Google identity in your Google identity project; you add it to the account at the access level it may act with. Its tokens never leave Crewlet.",
+    byHand:
+      "Connect Google Cloud first and run its setup block again, which turns on the Google Ads API, then add each agent's email in Admin, Access and security, and set each account's spending caps.",
+  },
+  search_console: {
+    does: [
+      "Read search performance, sitemaps and URL inspection for the sites you choose",
+      "Submit sitemaps, and notify Google of job posting and livestream pages, where you allow operate",
+      "Ask you before adding or removing a property, verifying a site or changing its owners, every time",
+    ],
+    identity:
+      "Each agent has its own Google identity in your Google identity project; you add it to each property at the permission it may act with. Its tokens never leave Crewlet.",
+    byHand:
+      "Connect Google Cloud first and run its setup block again, which turns on the Search Console APIs, then add each agent's email in Settings, Users and permissions.",
+  },
+  google_play: {
+    does: [
+      "Read reviews, listings, releases, products, vitals and the monthly reports for the apps you choose",
+      "Draft releases, halt rollouts and manage testers and draft products where you allow operate",
+      "Ask you before any reply, listing, image, release, price or refund: building and uploading stays with Expo",
+    ],
+    identity:
+      "Each agent has its own Google identity in your Google identity project; you invite it in Play Console with the app permissions it may act with. Its tokens never leave Crewlet.",
+    byHand:
+      "Connect Google Cloud first and run its setup block again, which turns on the Play APIs, then invite each agent's email in Play Console, Users and permissions.",
   },
 };
 

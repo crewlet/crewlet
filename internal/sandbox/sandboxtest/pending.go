@@ -255,6 +255,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"ARunRowCarriesItsRepositoriesAndFloor", testARunRowCarriesItsRepositoriesAndFloor},
 		{"AnEarlierRunsLeadsAreNoneOfTheTurnsNextRuns", testAnEarlierRunsLeadsAreNoneOfTheTurnsNextRuns},
 		{"AClaimWhoseRunHasNoRecordBindsNothing", testAClaimWhoseRunHasNoRecordBindsNothing},
+		{"AClaimACrashLeftNeverBlocksItsOwnJob", testAClaimACrashLeftNeverBlocksItsOwnJob},
 	}
 	raw = append(raw, noteRawCases...)
 	raw = append(raw, bytesRawCases...)
@@ -4868,7 +4869,7 @@ func testAudienceFieldsSurviveAStatusFlipByABuildThatDoesNotKnowThem(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created, err := runs.CreateSandboxRun(t.Context(), "t1", body); err != nil || !created {
+	if created, err := runs.CreateSandboxRun(t.Context(), "t1", body, nil); err != nil || !created {
 		t.Fatalf("seed the newer build's row: created=%v err=%v", created, err)
 	}
 
@@ -6165,7 +6166,7 @@ func testListRunsListsEveryStatus(t *testing.T, s sandbox.PendingStore, runs coo
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created, err := runs.CreateSandboxRun(t.Context(), "t2", body); err != nil || !created { //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
+	if created, err := runs.CreateSandboxRun(t.Context(), "t2", body, nil); err != nil || !created { //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		t.Fatalf("seed the newer build's row: created=%v err=%v", created, err)
 	}
 	listed, err := s.ListRuns(t.Context())

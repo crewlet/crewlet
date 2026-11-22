@@ -16,10 +16,8 @@ permissions:
 # A PUSH TO A PULL REQUEST CANCELS THAT PULL REQUEST'S RUN FOR THE COMMIT IT
 # REPLACED. Nobody can merge the replaced commit, so its run only holds
 # runners — two dozen jobs of them — that the new commit's run is queueing
-# for. The one other cancel is ci-cancel.yml's, which stops a pull request's
-# run at its first failed job, by the same reasoning: every job here has to
-# pass before a merge, so a red one already means the push that would cancel
-# the rest.
+# for. A failed job cancels nothing else: a run that finishes shows every
+# failure at once, so one push can fix them all.
 #
 # The group is UNIQUE PER RUN for every other event, and that is the half that
 # is easy to get wrong. A group keyed on the ref would put every push to main
@@ -118,7 +116,7 @@ jobs:
       # file's: setup-go exports GOTOOLCHAIN=local to every later step, so a
       # workflow-level `auto` was overridden and never reached a Go command.
       - &setup-go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@v7.1.0
         with:
           go-version-file: go.mod
           # The caches are the steps below; see THE GO CACHES above.
@@ -702,8 +700,7 @@ jobs:
   # off for main's run, every leg of which runs to the end: a red main records
   # every failure it has, and each shard saves its build cache and its package
   # durations, which a cancelled leg never does.
-  # A pull request's run needs no fail-fast either: ci-cancel.yml stops all of
-  # it, not one matrix, at its first failed job.
+  # A pull request's run keeps every leg running too, for the same record.
   test:
     name: test (race) ${{ matrix.shard }}/${{ strategy.job-total }}
     needs: plan
@@ -842,8 +839,11 @@ jobs:
       # locks with npm into CREWLET_PLAYWRIGHT_TREE_CACHE (the Makefile's `##@
       # The locked Playwright tree`), and name it (PLAYWRIGHT_TREE_ENV). Cached
       # as the floor Node is and for its reasons, keyed on the two files and the
-      # recipe's `layout=` line, which are all that names a tree, and on no
-      # arch: the lock holds no package of a platform's own (boxhelper's
+      # recipe's `layout=` line, which are all that names a tree, on the
+      # installed digest beside them, which an intact tree's .complete names
+      # (a tree restored under another would be installed again on every run
+      # and, the restore a hit, never saved), and on no arch: the lock holds no
+      # package of a platform's own (boxhelper's
       # TestTheLockIsTheReleaseSomebodyRead), so the tree is the same on every
       # runner. Without it every shard of every run would ask npm's registry.
       - &playwright-tree-cache-dir
@@ -858,21 +858,37 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ${{ env.CREWLET_PLAYWRIGHT_TREE_CACHE }}
-          key: playwright-tree-${{ runner.os }}-l${{ steps.playwright-tree-key.outputs.layout }}.${{ hashFiles('internal/browser/boxhelper/tree/package.json', 'internal/browser/boxhelper/tree/package-lock.json') }}
-      # NODE, because this half runs internal/sandbox/executor's probe of
-      # the OpenCode notes plugin the engine embeds, which drives the plugin
-      # under plain `node` against a stand-in of the bridge's notes route, and
-      # internal/browser/boxhelper's cases, which install the Playwright tree
-      # with the npm it brings — and `make test` refuses to start without them
-      # (require-node, require-npm). The cases never skip here: `make test`
-      # requires every prerequisite of the suite (internal/prereqtest's
-      # CREWLET_REQUIRE_PREREQUISITES), so a missing node fails them, and the
-      # skip a bare local loop takes is declared nowhere in internal/skipgate.
-      # `latest` for the reasons the `gates` job below gives; its npm installs
-      # the Playwright tree when the restore above brought none.
+          key: playwright-tree-${{ runner.os }}-l${{ steps.playwright-tree-key.outputs.layout }}.${{ hashFiles('internal/browser/boxhelper/tree/package.json', 'internal/browser/boxhelper/tree/package-lock.json', 'internal/browser/boxhelper/tree/installed.sha256') }}
+      # NODE, because this half runs internal/sandbox/executor's probes of
+      # the OpenCode plugins and the Kimi Code driver the engine embeds,
+      # each under plain `node` against a stand-in of what it talks to, and
+      # internal/browser/boxhelper's cases, which run the box helper under
+      # this node and the floor's, each box installing the Playwright tree
+      # with that Node's own npm, offline — and `make test` refuses to start
+      # without them (require-node, require-npm). The cases never skip here:
+      # `make test` requires every prerequisite of the suite
+      # (internal/prereqtest's CREWLET_REQUIRE_PREREQUISITES), so a missing
+      # node fails them, and the skip a bare local loop takes is declared
+      # nowhere in internal/skipgate. `latest` for the reasons the `gates` job
+      # below gives; its npm installs the Playwright tree when the restore
+      # above brought none, and again, offline, in every box of this node the
+      # box helper's cases lay out.
       - uses: actions/setup-node@v7
         with:
           node-version: latest
+      # CHROMIUM'S OWN SANDBOX. GitHub's Ubuntu runners keep AppArmor's
+      # restriction on unprivileged user namespaces, which Chromium's own
+      # sandbox needs, so a box helper case whose cell requires it would prove
+      # only that the browser is withheld (`chromium_sandbox_unavailable`).
+      # Lifted, for the whole shard, it proves the sandbox runs: under
+      # `required`, internal/browser/boxhelper's
+      # TestARequiredSandboxIsOnOrTheBrowserIsWithheld reads the browser's own
+      # sandbox page through the shim, and
+      # TestChromiumRunsWithTheListedCommandLine its command line; their oracle
+      # (boxhelpertest.SandboxRuns) says which a host takes. The runner is
+      # discarded with the job.
+      - name: Chromium's own sandbox, allowed its user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       # THE MAKEFILE IS THE COMMAND, rather than a copy of it. Every other job
       # here inlines its own, and CLAUDE.md's rule that "the Makefile is the
       # command CI runs" was therefore held by hand —
@@ -884,9 +900,10 @@ jobs:
       # The race detector is not optional: the engine's concurrency model is
       # real parallelism, so every "atomic because single-threaded" assumption
       # is a data race until the detector says otherwise. -count=1, -race and
-      # -timeout 30m all live in the Makefile now; 30m is a HANG DETECTOR
-      # rather than a budget, because go's own default is 10 minutes PER
-      # PACKAGE.
+      # -timeout 45m all live in the Makefile now; 45m is a HANG DETECTOR
+      # rather than a budget, 1.4 times the slowest package's race run
+      # (internal/sandbox/executor, 1,918 s on two cores), because go's own
+      # default is 10 minutes PER PACKAGE.
       #
       # THE PACKAGES THAT RUN ALONE ARE EXCLUDED, and run in the `end-to-end
       # gates` shards below. Not a coverage cut (CI runs both and `make check`
@@ -935,7 +952,7 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: ${{ env.CREWLET_PLAYWRIGHT_TREE_CACHE }}
-          key: playwright-tree-${{ runner.os }}-l${{ steps.playwright-tree-key.outputs.layout }}.${{ hashFiles('internal/browser/boxhelper/tree/package.json', 'internal/browser/boxhelper/tree/package-lock.json') }}
+          key: playwright-tree-${{ runner.os }}-l${{ steps.playwright-tree-key.outputs.layout }}.${{ hashFiles('internal/browser/boxhelper/tree/package.json', 'internal/browser/boxhelper/tree/package-lock.json', 'internal/browser/boxhelper/tree/installed.sha256') }}
       # The sshd test images, main only and a miss only, but from the shard that
       # ran internal/ssh rather than the first: sshdtest marks the directory
       # complete once it holds a tar of every image, and only that shard has.

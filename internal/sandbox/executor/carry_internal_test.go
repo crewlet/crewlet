@@ -131,12 +131,13 @@ func TestAReleasePastTheLogsBoundIsNone(t *testing.T) {
 	at := strings.Repeat("1", executorkeep.HarnessVersionMaxBytes-len(".0.0")) + ".0.0"
 	line := strings.Repeat("2", 1<<20) + ".1.310 (Claude Code)"
 	for printed, want := range map[string]string{
-		"2.1.310 (Claude Code)": "2.1.310",
-		"opencode v2.3.2":       "2.3.2",
-		at + " (Claude Code)":   at,
-		"9" + at:                "",
-		at + "9 (Claude Code)":  "",
-		line:                    "",
+		"2.1.310 (Claude Code)":       "2.1.310",
+		"opencode v2.3.2":             "2.3.2",
+		"GitHub Copilot CLI 1.0.114.": "1.0.114",
+		at + " (Claude Code)":         at,
+		"9" + at:                      "",
+		at + "9 (Claude Code)":        "",
+		line:                          "",
 	} {
 		if got := releaseOf(printed); got != want {
 			t.Errorf("releaseOf(%.40q, %d bytes) = %.40q, want %q", printed, len(printed), got, want)

@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/activityline"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 func init() { Register(OpenCode{}) }
@@ -91,16 +92,16 @@ const openCodeMCPWait = 60 * time.Second
 
 // openCodeCallWait bounds one call a run's script makes to its own server
 // whose answer is a few KiB at most: the readiness `mcp.list`, `session.get`,
-// the leftover steers' inbox list and cancels, the end's `session.interrupt`
-// and the login's `auth export`. Past it the call is ended and the script goes
-// on as where the server is gone ([openCodeBounded]).
+// the leftover steers' inbox list and cancels, the end's `session.interrupt`,
+// the login's export and import, and the stored logins' list and removal. Past
+// it the call is ended and the script goes on as where the server is gone, or,
+// before the client, ends the run ([openCodeBounded], [openCodeForgetLogins]).
 //
 // TEN SECONDS, about three times the slowest such call measured on 2.3.2: a
 // readiness `mcp.list` answers in 0.4 s, and in 3.5 s where the server's
 // OTLP endpoint refuses connections (a 2-core container; the other kinds
-// untested on 2.3.2). Past it a call costs only what a gone server costs: a
-// usage line, a steer left, an unsettled step. OpenCode bounds nothing itself:
-// its client waits on a call as long as an answering server takes.
+// untested on 2.3.2). Past it a call costs what a gone server does. OpenCode
+// bounds nothing itself: its client waits as long as an answering server takes.
 const openCodeCallWait = 10 * time.Second
 
 // openCodeSessionCallWait bounds one call a run's script makes to its own
@@ -174,7 +175,7 @@ func (OpenCode) NoteInstruction() string { return OpenCodeSteerInstruction }
 // ([openCodeCapture]) and measured ([openCodeContext]), every call bounded
 // ([openCodeBounded]), an end on request honoured (end.go).
 func (OpenCode) Command(req sandbox.RunRequest, session Session, paths Paths, _ string) string {
-	return "sh -c " + sandbox.ShellQuote(openCodeScript(req, session, paths, openCodeRunTimes()))
+	return "sh -c " + shellword.Quote(openCodeScript(req, session, paths, openCodeRunTimes()))
 }
 
 // openCodeRunTimes is the waits every run's script runs at ([openCodeTimes]).
@@ -294,9 +295,13 @@ func (OpenCode) PackSave(paths Paths, rec sessionRecord, staged, dest string) (s
 func openCodePackNow(paths Paths, session, staged, dest string, room bool) string {
 	// A probe read as "no session" recorded a session the box held as none,
 	// and the turn's end named an older capture as its last.
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	var b strings.Builder
 	b.WriteString("sid=" + q(session) + " packed=\n" + openCodeStandalonePins)
+	// A CONFIGURATION DIRECTORY INSIDE ITS OWN STAGING ONE, which the pack
+	// makes anew and removes ([openCodePack]): a pack loads nothing a run left
+	// in the box. OpenCode makes the directory where it is missing.
+	fmt.Fprintf(&b, "OPENCODE_CONFIG_DIR=%s; export OPENCODE_CONFIG_DIR\n", q(staged+"/opencode-config"))
 	if room {
 		// THE ROOM BEFORE ANY OPENCODE PROCESS, the probe's included: the
 		// probe is a standalone OpenCode too. No database yet is no session
@@ -310,7 +315,7 @@ func openCodePackNow(paths Paths, session, staged, dest string, room bool) strin
 	b.WriteString(`if probe=$(opencode api --standalone session.get --param sessionID="$sid" < /dev/null 2>&1); then held=$probe; else held=; fi` + "\n")
 	fmt.Fprintf(&b, `case "$held" in *%s*) ;; *) case "$probe" in %s) exit %d;; esac; `+
 		`printf '%%s\n' "${probe:-OpenCode answered nothing about the session}" >&2; exit %d;; esac`+"\n",
-		sandbox.ShellQuote(`"id":"`+session+`"`), openCodeNotHeld, packNothing, packFailed)
+		shellword.Quote(`"id":"`+session+`"`), openCodeNotHeld, packNothing, packFailed)
 	if room {
 		fmt.Fprintf(&b, `[ -n "$bounded" ] || { echo "crewlet: OpenCode's database is not at $db, so the memory its export takes cannot be bounded" >&2; exit %d; }`+"\n",
 			packFailed)
@@ -370,32 +375,31 @@ func (OpenCode) layout() archiveLayout { return archiveDocument }
 
 // Continues reports whether a session written by OpenCode release writer can
 // be continued in a box whose OpenCode is release box ([carrier]): only where
-// both are exactly [openCodeRelease], an unreadable release included in the
-// rest, which start fresh.
-func (OpenCode) Continues(box, writer string) (bool, string) {
-	if box != openCodeRelease {
+// both are exactly [openCodeRelease]; a box whose release does not read
+// refuses ([boxNamedNoRelease]), and any other pair starts fresh.
+func (o OpenCode) Continues(box, writer string) (bool, string) {
+	switch {
+	case !releaseReads(box):
+		return false, boxNamedNoRelease("OpenCode")
+	case box != openCodeRelease:
 		return false, fmt.Sprintf("this box runs OpenCode %s, and a carried session continues only on "+
-			"OpenCode %s", releaseSaid(box), openCodeRelease)
+			"OpenCode %s", box, openCodeRelease)
 	}
-	return OpenCode{}.Writes(writer)
+	return o.ContinuesWriter(writer)
 }
 
-// Writes reports whether a session OpenCode release writer wrote is one a box
-// continues: exactly [openCodeRelease] ([carrier]).
-func (OpenCode) Writes(writer string) (bool, string) {
+// ContinuesWriter reports whether a session OpenCode release writer wrote can
+// be continued at all ([carrier]): exactly [openCodeRelease]. A writer that
+// does not read continues nowhere ([writerNamedNoRelease]).
+func (OpenCode) ContinuesWriter(writer string) (bool, string) {
+	if !releaseReads(writer) {
+		return false, writerNamedNoRelease("OpenCode")
+	}
 	if writer != openCodeRelease {
 		return false, fmt.Sprintf("the session was written by OpenCode %s, and only a session %s wrote "+
-			"continues in another box", releaseSaid(writer), openCodeRelease)
+			"continues in another box", writer, openCodeRelease)
 	}
 	return true, ""
-}
-
-// releaseSaid is release as a sentence names it, an unreadable one said so.
-func releaseSaid(release string) string {
-	if release == "" {
-		return "of a release it did not say"
-	}
-	return release
 }
 
 // openCodeOlderCheck is the script's refusal of a box whose OpenCode 2 is
@@ -426,13 +430,13 @@ func openCodeOlderCheck() string {
 // and the message list's pages, each measured before it is printed
 // ([openCodeContext]). An unbounded call's answer is read through `$(…)`.
 func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times openCodeTimes) string {
-	doc := sandbox.ShellQuote(paths.CredentialDocument())
-	next := sandbox.ShellQuote(paths.CredentialDocument() + ".next")
-	loop := sandbox.ShellQuote(paths.CredentialDocument() + ".sync")
-	srv := sandbox.ShellQuote(paths.WorkDir() + "/opencode-server")
-	vrr := sandbox.ShellQuote(paths.WorkDir() + "/opencode-version")
+	doc := shellword.Quote(paths.CredentialDocument())
+	next := shellword.Quote(paths.CredentialDocument() + ".next")
+	loop := shellword.Quote(paths.CredentialDocument() + ".sync")
+	srv := shellword.Quote(paths.WorkDir() + "/opencode-server")
+	vrr := shellword.Quote(paths.WorkDir() + "/opencode-version")
 	ans := openCodeAnswerFile(paths)
-	cfg := sandbox.ShellQuote(paths.OpenCodeConfig())
+	cfg := shellword.Quote(paths.OpenCodeConfig())
 
 	// The brief goes on stdin ([Output.BriefOnStdin]), since OpenCode
 	// re-quotes an argv prompt; the session is named ([OpenCode.Session]) so
@@ -451,7 +455,7 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 		if req.Effort != "" {
 			model += "#" + req.Effort
 		}
-		run = append(run, "--model", sandbox.ShellQuote(model))
+		run = append(run, "--model", shellword.Quote(model))
 	}
 
 	var b strings.Builder
@@ -484,6 +488,14 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	// one whose release does not read as three numbers is let run, as a
 	// release the engine cannot read is taken for a current one.
 	line(`%s`, openCodeOlderCheck())
+	// THE RUN LOADS ONLY THE CONFIGURATION ITS LAUNCH WRITES, before any
+	// command that reads one: OpenCode's global directory is the run's own,
+	// empty ([Paths.OpenCodeConfigDir]), and what it reads from the home and
+	// the workspace's parent is removed ([openCodeHomeConfig]).
+	line(`rm -rf %[1]s && mkdir -p %[1]s || { echo 'crewlet: the run could not make its OpenCode configuration directory' >&2; exit 1; }`,
+		shellword.Quote(paths.OpenCodeConfigDir()))
+	line(`OPENCODE_CONFIG_DIR=%s; export OPENCODE_CONFIG_DIR`, shellword.Quote(paths.OpenCodeConfigDir()))
+	line(`rm -rf %s`, strings.Join(openCodeHomeConfig(paths), " "))
 	// THE SERVER'S PASSWORD IS ITS OWN: `opencode serve` given
 	// OPENCODE_PASSWORD or OPENCODE_SERVER_PASSWORD prints none, and the
 	// listen wait would run out. So both are unset, the wait asks for the
@@ -523,21 +535,13 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	line(`quit() { trap '' USR1; trap - EXIT TERM INT HUP; unbound; end "$harness"; harness=; unsync; [ -z "$imported" ] || keep quit %s --standalone; stop; exit "$1"; }`, next)
 	line(`trap 'unsync; stop' EXIT`)
 	line(`trap 'quit 143' TERM; trap 'quit 130' INT; trap 'quit 129' HUP`)
-	// THE LOGIN, where the box was given one ([Paths.CredentialDocument], a
-	// local box's): imported before the server starts, and exported over the
-	// document while the run works and as it ends ([openCodeLoginSync]). A
-	// remote box is given none and signs in with the run environment's key.
-	line(`if [ -s %s ]; then`, doc)
-	line(`  opencode auth import --standalone < %s > /dev/null || { echo 'crewlet: OpenCode refused the login this box was given — sign the engine in again with crewlet llm login' >&2; exit 1; }`, doc)
-	line(`  imported=1`)
-	line(`fi`)
 	b.WriteString(openCodeSessionGate(session, paths, req.FreshWiring != nil))
 	// THE RECORD, before the server and the run, so a run killed or ended
 	// before it reported anything still says which session it took up and why
 	// it began again. The release last, as the harness printed it
 	// ([parseSessionRecord]).
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$sid" "$k" "$w" "$v" > %s`,
-		sandbox.ShellQuote(paths.SessionRecord()))
+		shellword.Quote(paths.SessionRecord()))
 	// A REQUEST BEFORE THE SERVER LISTENS starts no server and no run: the job
 	// is recorded as ended before its harness started, and the EXIT trap stops
 	// the server. A session the box holds is packed by the read that asked
@@ -549,8 +553,7 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	// configuration, as OPENCODE_CONFIG_CONTENT, which OpenCode ranks above a
 	// repository's opencode.json and .opencode/, and, for a run wired to its
 	// notes, the session its notes plugin admits them to. The client and the
-	// `api` calls are answered by it; the login's import and export are handed
-	// none of it.
+	// `api` calls, the login's import among them, are answered by it.
 	steered := ""
 	if req.Steer.Set() {
 		steered = `CREWLET_STEER_SESSION="$sid" `
@@ -572,6 +575,18 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	line(`url=$(sed -n 's/^server listening on //p' %s)`, srv)
 	line(`OPENCODE_PASSWORD=$(sed -n 's/^server password //p' %s); export OPENCODE_PASSWORD`, srv)
 	line(`rm -f %s`, srv)
+	// THE LOGIN, where the box was given one ([Paths.CredentialDocument], a
+	// local box's): imported through the run's own server, once every login
+	// its database held is removed ([openCodeForgetLogins]), and exported over
+	// the document while the run works and as it ends ([openCodeLoginSync]).
+	// A remote box is given none and signs in with the run environment's key.
+	// Through the server, so no second OpenCode runtime opens the database.
+	// Before the client, so an end request ends each call and starts no run.
+	b.WriteString(openCodeForgetLogins(ans, secs(times.call)))
+	line(`if [ -z "$endasked" ] && [ -s %s ]; then`, doc)
+	line(`  if bounded login %d e opencode auth import --server "$url" %s > /dev/null 2>&1; then imported=1; elif [ -z "$endasked" ]; then echo 'crewlet: OpenCode refused the login this box was given — sign the engine in again with crewlet llm login' >&2; exit 1; fi`,
+		secs(times.call), doc)
+	line(`fi`)
 	line(`if [ -n "$imported" ]; then`)
 	line(`  %s &`, openCodeExporter(times.sync, loop))
 	line(`  xpid=$!`)
@@ -649,8 +664,8 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 // reader stops at the release. Anything that fails writes no `from`, and the
 // capture names no start: "not known", never "the whole session".
 func openCodeRunStart(paths Paths, times openCodeTimes, ans string) string {
-	rec := sandbox.ShellQuote(paths.SessionRecord())
-	next := sandbox.ShellQuote(paths.SessionRecord() + ".next")
+	rec := shellword.Quote(paths.SessionRecord())
+	next := shellword.Quote(paths.SessionRecord() + ".next")
 	return fmt.Sprintf(`if [ "$k" = yes ] && bounded start %[1]d e opencode api --server "$url" session.message.list --param sessionID="$sid" --param order=desc --param limit=1 > %[2]s 2> /dev/null; then rs=$(listcursor %[2]s); [ -z "$rs" ] || { printf 'id %%s\ncontinued %%s\nwhy %%s\nfrom %%s\nrelease %%s\n' "$sid" "$k" "$w" "$rs" "$v" > %[4]s && mv -f %[4]s %[3]s; }; fi; rm -f %[2]s %[4]s
 `, secs(times.sessionCall), ans, rec, next)
 }
@@ -664,7 +679,42 @@ func openCodeRunStart(paths Paths, times openCodeTimes, ans string) string {
 // The export and the message list's pages have their own ([openCodePack],
 // [openCodeContext]).
 func openCodeAnswerFile(paths Paths) string {
-	return sandbox.ShellQuote(paths.WorkDir() + "/opencode-answer")
+	return shellword.Quote(paths.WorkDir() + "/opencode-answer")
+}
+
+// openCodeHomeConfig is every path under a box's home OpenCode reads as
+// configuration or instructions besides its global directory, shell-quoted:
+// the skill roots it reads from any home, Claude Code's instructions and
+// skills, and what the project walk finds in the home, the workspace's parent.
+// Measured on 2.3.2: each loaded from a box's home, and none once removed.
+// OPENCODE_DISABLE_CLAUDE_CODE is no substitute: it drops the repository's
+// CLAUDE.md and .claude/skills as well.
+func openCodeHomeConfig(paths Paths) []string {
+	rel := []string{".agents/skills", ".claude/CLAUDE.md", ".claude/skills", ".opencode", "opencode.json",
+		"opencode.jsonc", "AGENTS.md", "CLAUDE.md", "CONTEXT.md"}
+	out := make([]string, len(rel))
+	for i, r := range rel {
+		out[i] = shellword.Quote(paths.Home + "/" + r)
+	}
+	return out
+}
+
+// openCodeForgetLogins removes, through the run's server and ans, every login
+// the box's database holds: an earlier run's import, and whatever else was
+// stored since. The run imports its own after, so only the login it was handed
+// signs it in. A database still holding one ends the run before its client
+// starts. Each call is bounded by wait seconds and ended by an end request,
+// after which nothing more is asked: no run starts.
+func openCodeForgetLogins(ans string, wait int) string {
+	list := fmt.Sprintf(`bounded forget %[2]d e opencode api --server "$url" credential.list > %[1]s 2>&1 || [ -n "$endasked" ] || { echo "crewlet: OpenCode could not list the logins its database holds: $(cat %[1]s)" >&2; exit 1; }`, ans, wait)
+	return `if [ -z "$endasked" ]; then` + "\n" +
+		"  " + list + "\n" +
+		`  if [ -z "$endasked" ] && grep -q '"id":' ` + ans + `; then` + "\n" +
+		`    grep -o '"id":"[^"]*","integrationID":' ` + ans + ` | sed 's/^"id":"\([^"]*\)".*/\1/' > ` + ans + `.ids` + "\n" +
+		fmt.Sprintf(`    while IFS= read -r id; do bounded forget %d e opencode api --server "$url" credential.remove --param credentialID="$id" > /dev/null 2>&1; done < %s.ids; rm -f %s.ids`, wait, ans, ans) + "\n" +
+		"    " + list + "\n" +
+		`    if [ -z "$endasked" ] && grep -q '"id":' ` + ans + `; then echo 'crewlet: OpenCode kept a login the run could not remove, so the run does not start' >&2; exit 1; fi` + "\n" +
+		"  fi\n  rm -f " + ans + "\nfi\n"
 }
 
 // openCodeSessionGate decides, before the run's server starts (it is handed
@@ -682,7 +732,7 @@ func openCodeAnswerFile(paths Paths) string {
 func openCodeSessionGate(session Session, paths Paths, rewired bool) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	if !session.Continues {
 		line(`sid=%s k=no w=`, q(session.ID))
 		return b.String()
@@ -714,6 +764,10 @@ func openCodeSessionGate(session Session, paths Paths, rewired bool) string {
 	}
 	line(`if [ -z "$h" ]; then`)
 	line(`  if [ ! -s %s ]; then w='it is not in this box, and no export of it was carried here'`, carried)
+	// A BOX RELEASE THAT DOES NOT READ continues nothing carried, as the
+	// engine's check holds it ([boxNamedNoRelease]): no bare MAJOR.MINOR.PATCH
+	// in what `--version` printed, as [releaseOf] reads one.
+	line(`  elif ! { %s[ -n "$rv" ]; }; then w=%s`, bareReleaseShell("rv"), q(boxNamedNoRelease("OpenCode")))
 	line(`  elif ! command -v gzip > /dev/null 2>&1; then w='this box has no gzip to unpack its export with'`)
 	line(`  else`)
 	line(`    rm -rf %s`, q(staged))
@@ -734,7 +788,7 @@ func openCodeSessionGate(session Session, paths Paths, rewired bool) string {
 	// over it. Recorded before the import, a failed import would leave the
 	// line naming a copy that does not hold it.
 	line(`      case "$out" in *%s*) %s || w=%s;; *) w="OpenCode did not import it: $(printf '%%s' "$out" | tr '\n' ' ')";; esac`,
-		q("Imported session: "+session.ID), recordDigest(paths, "sid", "d"), q(restoreDigestUnrecorded))
+		q("Imported session: "+session.ID), recordDigest(paths, "sid"), q(restoreDigestUnrecorded))
 	line(`    fi`)
 	line(`    rm -rf %s`, q(staged))
 	line(`  fi`)
@@ -797,7 +851,7 @@ func openCodeCapture(paths Paths, times openCodeTimes) string {
 func openCodePack(paths Paths, staged, dest, server, call string, bounded bool) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	export, capture, failed := q(staged+"/export.json"), q(staged+"/capture"), q(staged+"/error")
 	bound := ""
 	if bounded {
@@ -830,7 +884,7 @@ func openCodePack(paths Paths, staged, dest, server, call string, bounded bool) 
 func openCodeContext(paths Paths, times openCodeTimes) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	line(`ctxfile=%s ctxcur= ctxn=0 ctxleft=%d`, sandbox.ShellQuote(paths.WorkDir()+"/opencode-context"),
+	line(`ctxfile=%s ctxcur= ctxn=0 ctxleft=%d`, shellword.Quote(paths.WorkDir()+"/opencode-context"),
 		openCodeContextBytes)
 	line(`while [ -z "$endasked" ] && [ "$ctxn" -lt %d ]; do`, openCodeContextPages)
 	line(`  ctxn=$((ctxn + 1))`)
@@ -917,7 +971,7 @@ func openCodeBounded(paths Paths, times openCodeTimes) string {
 	return fmt.Sprintf(`bcur=
 bounded() { bt=$1 bw=$2 bx=$3; shift 3; bf=%[1]s"$bt"; if [ "$bx" = e ] && [ -n "$endasked" ]; then return 124; fi; rm -f "$bf.pid" "$bf.done"; ( trap 'echo 143 > "$bf.done"; exit 143' TERM HUP; "$@" < /dev/null & echo $! > "$bf.pid"; wait $!; echo $? > "$bf.done" ) & bs=$! bcur=$bt bn=0; bd=$(( $(%[2]s) + bw )); until [ -s "$bf.done" ]; do if { [ "$bx" = e ] && [ -n "$endasked" ]; } || { [ $((bn %% 10)) = 0 ] && [ "$(%[2]s)" -ge "$bd" ]; }; then unbound; return 124; fi; sleep 0.1; bn=$((bn + 1)); done; wait "$bs" 2> /dev/null || wait "$bs" 2> /dev/null; bc=$(cat "$bf.done"); rm -f "$bf.pid" "$bf.done"; bcur=; return "$bc"; }
 unbound() { [ -n "$bcur" ] || return 0; bf=%[1]s"$bcur" bi=0; until [ -s "$bf.pid" ] || [ "$bi" -ge %[3]d ]; do sleep 0.1; bi=$((bi + 1)); done; bp=$(cat "$bf.pid" 2> /dev/null); [ -z "$bp" ] || [ -s "$bf.done" ] || kill "$bp" 2> /dev/null; bi=0; until [ -s "$bf.done" ] || [ "$bi" -ge %[3]d ]; do sleep 0.1; bi=$((bi + 1)); done; if [ ! -s "$bf.done" ] && [ -n "$bp" ]; then kill -9 "$bp" 2> /dev/null; bi=0; until [ -s "$bf.done" ] || [ "$bi" -ge %[3]d ]; do sleep 0.1; bi=$((bi + 1)); done; fi; [ ! -s "$bf.done" ] || wait "$bs" 2> /dev/null || wait "$bs" 2> /dev/null; rm -f "$bf.pid" "$bf.done"; bcur=; }
-`, sandbox.ShellQuote(paths.WorkDir()+"/opencode-call-"), times.clock, grace)
+`, shellword.Quote(paths.WorkDir()+"/opencode-call-"), times.clock, grace)
 }
 
 // openCodeEndCalls is every call a run's script makes to its own server that
@@ -1000,7 +1054,7 @@ func openCodeReadiness(servers map[string]sandbox.MCPServer) string {
 		present := `"name":` + jsonStringify(name)
 		pending := present + `,"status":{"status":"pending"`
 		fmt.Fprintf(&b, "  case \"$s\" in *%s*) case \"$s\" in *%s*) ready=0;; esac;; *) ready=0;; esac\n",
-			sandbox.ShellQuote(present), sandbox.ShellQuote(pending))
+			shellword.Quote(present), shellword.Quote(pending))
 	}
 	return b.String()
 }
@@ -1023,13 +1077,13 @@ func openCodeShadowCheck(servers map[string]sandbox.MCPServer) string {
 		if !servers[name].AlwaysLoaded {
 			continue
 		}
-		prefix := sandbox.ShellQuote(`"name":` + strings.TrimSuffix(jsonStringify(name), `"`))
+		prefix := shellword.Quote(`"name":` + strings.TrimSuffix(jsonStringify(name), `"`))
 		fmt.Fprintf(&b, "  r=$s\n")
 		fmt.Fprintf(&b, "  while :; do case \"$r\" in *%s*) r=${r#*%s};; *) break;; esac\n", prefix, prefix)
 		fmt.Fprintf(&b, "    case \"$r\" in [!\\\"%s]*) echo \"crewlet: this box's OpenCode configuration declares an MCP "+
 			"server named \"%s\"${r%%%%\\\"*}, whose tools OpenCode would name like those of the run's own server "+
 			"\"%s\" (\"%s\"_<tool>); rename it in the image's or the repository's OpenCode configuration\" >&2; exit 1;; esac\n",
-			kept, sandbox.ShellQuote(name), sandbox.ShellQuote(name), sandbox.ShellQuote(name))
+			kept, shellword.Quote(name), shellword.Quote(name), shellword.Quote(name))
 		fmt.Fprintf(&b, "  done\n")
 	}
 	return b.String()
@@ -1086,13 +1140,20 @@ func jsonStringify(s string) string {
 // `plugins`, after any `-<id>` removal beneath. Every path is under the work
 // dir ([openCodeReferable]). Written every run: the script refuses to run
 // without it.
-func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error) {
-	if req.System != "" || len(req.MCPServers) > 0 || req.Steer.Set() || len(req.Skills) > 0 {
-		if err := openCodeReferable(paths.WorkDir()); err != nil {
-			return "", fmt.Errorf("executor: this box's home %q cannot be named in an OpenCode "+
-				"run's configuration: %w; a local box's home is under providers.sandbox.local.state_dir, "+
-				"which needs a path without such characters", paths.Home, err)
-		}
+func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
+	paths Paths) (string, error) {
+	// THE COMMANDS ITS MODEL RUNS START WITHOUT WHAT THE HARNESS ALONE READS:
+	// the names it signs in by and its own variables, on every run
+	// (opencode_toolenv.js).
+	omitted, refused := toolEnvOmitted(req.SignInEnv, openCodeHarnessEnv...)
+	if refused != nil {
+		return "", refused
+	}
+	// So every run's configuration names a path under the work dir.
+	if err := openCodeReferable(paths.WorkDir()); err != nil {
+		return "", fmt.Errorf("executor: this box's home %q cannot be named in an OpenCode "+
+			"run's configuration: %w; a local box's home is under providers.sandbox.local.state_dir, "+
+			"which needs a path without such characters", paths.Home, err)
 	}
 	cfg := map[string]any{
 		"$schema": "https://opencode.ai/config.json",
@@ -1108,7 +1169,8 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 		// is denied: it asks a PERSON through a form a headless run cancels,
 		// where the bridge's `ask_and_wait` parks the run on an answer. Every
 		// document's rules are added in OpenCode's order, so these, last,
-		// decide.
+		// decide among them; an agent's own rules, a repository's included,
+		// are read after them (2.3.2).
 		"permissions": []map[string]string{
 			{"action": "*", "resource": "*", "effect": "allow"},
 			{"action": "question", "resource": "*", "effect": "deny"},
@@ -1133,14 +1195,30 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 		// none goes out (measured); a compaction runs as it always does.
 		"compaction": map[string]any{"background": false},
 	}
+	agent := map[string]any{}
 	// THE RUN'S TURN CAP, as the agent's `steps` (Claude Code's --max-turns,
 	// [ClaudeCode.Command]): the one bound on an executor's work, already
 	// reconciled into Limits. Absent at zero, which is uncapped: OpenCode
 	// refuses a step count below one.
 	if req.Limits.MaxTurns > 0 {
-		cfg["agents"] = map[string]any{
-			openCodeAgent: map[string]any{"steps": req.Limits.MaxTurns, "disabled": false},
+		agent["steps"] = req.Limits.MaxTurns
+		agent["disabled"] = false
+	}
+	// THE ENTRY'S WEB DENIED IN THE PERMISSIONS TOO, the run's and its agent's,
+	// beside the web tools' plugins taken out below: Code Mode's `execute`
+	// fetches under the webfetch permission, and on 2.3.2 a repository's agent
+	// rule allowing it outranked the run's own rules until the agent's denied
+	// it as well.
+	if req.WebDenied {
+		denied := []map[string]string{
+			{"action": "webfetch", "resource": "*", "effect": "deny"},
+			{"action": "websearch", "resource": "*", "effect": "deny"},
 		}
+		cfg["permissions"] = append(cfg["permissions"].([]map[string]string), denied...)
+		agent["permissions"] = denied
+	}
+	if len(agent) > 0 {
+		cfg["agents"] = map[string]any{openCodeAgent: agent}
 	}
 	values := &openCodeValueFiles{dir: paths.OpenCodeValues()}
 	wired := openCodeWiring(sandbox.Wiring{MCPServers: req.MCPServers, Steer: req.Steer,
@@ -1165,7 +1243,7 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 	if wired.servers != nil {
 		cfg["mcp"] = map[string]any{"servers": wired.servers}
 	}
-	var plugins []map[string]any
+	var plugins []any
 	if req.Steer.Set() {
 		if err := box.WriteFile(ctx, paths.OpenCodeSteerPlugin()+"/"+openCodeSteerEntry, openCodeSteerPlugin); err != nil {
 			return "", fmt.Errorf("executor: writing OpenCode's notes plugin: %w", err)
@@ -1192,9 +1270,23 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 			"options": map[string]string{"url": wired.skills},
 		})
 	}
-	if len(plugins) > 0 {
-		cfg["plugins"] = plugins
+	// THE ENTRY'S WEB TOOLS OFF where it denies them, as its runs on the engine
+	// host have none: their plugins taken out, which on 2.3.2 left webfetch
+	// and websearch unregistered for the run and every subagent, an agent of
+	// the repository's own allowing them included. A repository's `plugins`
+	// naming them again does not bring them back.
+	if req.WebDenied {
+		plugins = append(plugins, "-opencode.tool.webfetch", "-opencode.tool.websearch")
 	}
+	// AND ON EVERY RUN THE PLUGIN THAT KEEPS omitted OUT OF THE COMMANDS ITS
+	// MODEL RUNS (opencode_toolenv.js), last.
+	if err := box.WriteFile(ctx, paths.OpenCodeToolEnvPlugin()+"/"+openCodeSteerEntry, openCodeToolEnvPlugin); err != nil {
+		return "", fmt.Errorf("executor: writing OpenCode's tool-environment plugin: %w", err)
+	}
+	cfg["plugins"] = append(plugins, map[string]any{
+		"package": paths.OpenCodeToolEnvPlugin(),
+		"options": map[string]any{"names": omitted},
+	})
 	for _, v := range values.files {
 		if err := box.WriteFile(ctx, v.path, []byte(v.value)); err != nil {
 			return "", fmt.Errorf("executor: writing a value of OpenCode's configuration: %w", err)
@@ -2031,9 +2123,12 @@ func (OpenCode) notesOffWhy() string {
 		"failed to load, which its own log names"
 }
 
-// artifacts is what an OpenCode run leaves in its box of its own.
-func (OpenCode) artifacts(p Paths) (files, dirs []string) {
-	return []string{p.OpenCodeConfig()},
-		[]string{p.OpenCodeValues(), p.OpenCodeValuesFresh(), p.OpenCodeSteerPlugin(), p.OpenCodeSkills(),
-			p.OpenCodeSkillsPlugin()}
+// artifactFiles is the files an OpenCode run leaves in its box of its own.
+func (OpenCode) artifactFiles(p Paths) []string { return []string{p.OpenCodeConfig()} }
+
+// artifactDirs is the directories an OpenCode run leaves in its box of its
+// own.
+func (OpenCode) artifactDirs(p Paths) []string {
+	return []string{p.OpenCodeValues(), p.OpenCodeValuesFresh(), p.OpenCodeSteerPlugin(), p.OpenCodeSkills(),
+		p.OpenCodeSkillsPlugin(), p.OpenCodeToolEnvPlugin(), p.OpenCodeConfigDir()}
 }

@@ -2859,7 +2859,7 @@ is sent as a seat's call, so it runs under the prompt a seat does.
 
 For an entry some agent seat's executor chain holds, `doctor` also prints
 `executor` lines: the seats that launch on it; whether its harness has an in-box
-runner — only `claude-code` and `opencode` do, and another harness is skipped at
+runner — only `claude-code`, `codex`, `gemini-cli`, `qwen-code`, `opencode`, `copilot`, `muse-code` and `kimi-code` do, and another harness is skipped at
 launch and serves those seats' phases on this host only, which is a line and
 not a problem; and the tool bridge its box dials — for a `direct` cell this
 node's own listener on loopback where the node binds `api.port`, whatever its
@@ -2867,6 +2867,11 @@ roles, and for any other cell `CREWLET_MCP_BRIDGE_URL`, whose absence there is
 a problem, since
 every launch on that entry would be refused
 ([The executor's run in a box](../concepts/llm-backends.md#the-executors-run-in-a-box)).
+Where its runner names a release floor (Codex's 0.171.0), a `direct` cell's
+harness, this host's own, below it, naming no release (a pre-release, which a
+run refuses too), or failing its runner's probe (`codex app-server --help`), is
+a problem, and a newer one a line saying its runs start fresh sessions; any other cell's box holds its own harness to the floor at each
+run, which is a line.
 
 Both commands answer "signed in" the same way, from the environment the harness is
 actually given rather than from the configuration: credential files a login

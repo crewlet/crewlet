@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
@@ -16,9 +18,9 @@ import (
 
 func (h *fleetHarness) createRun(turnID, value string) bool {
 	h.t.Helper()
-	created, err := h.f.CreateSandboxRun(h.ctx, turnID, []byte(value))
+	created, err := h.f.CreateSandboxRun(h.ctx, turnID, []byte(value), nil)
 	if err != nil {
-		h.t.Fatalf("CreateSandboxRun(%s): %v", turnID, err)
+		h.t.Fatalf("CreateSandboxRun(%s, nil): %v", turnID, err)
 	}
 	return created
 }
@@ -377,7 +379,7 @@ var runCases = []fleetCase{{
 			if staged := landedFor("the peer's delete", ok, err); staged != nil {
 				return coord.SandboxRunChange{}, staged
 			}
-			ok, err = peer.CreateSandboxRun(h.ctx, "turn-1", []byte(`{"status":"running"}`))
+			ok, err = peer.CreateSandboxRun(h.ctx, "turn-1", []byte(`{"status":"running"}`), nil)
 			if staged := landedFor("the peer's create", ok, err); staged != nil {
 				return coord.SandboxRunChange{}, staged
 			}
@@ -586,7 +588,7 @@ var runCases = []fleetCase{{
 }, {
 	name: "an unnamed run is an error, not a lost race",
 	fn: func(h *fleetHarness) {
-		created, err := h.f.CreateSandboxRun(h.ctx, "", []byte(`{}`))
+		created, err := h.f.CreateSandboxRun(h.ctx, "", []byte(`{}`), nil)
 		if err == nil {
 			h.t.Error("CreateSandboxRun accepted a run with no turn id")
 		}
@@ -604,4 +606,105 @@ var runCases = []fleetCase{{
 			h.t.Error("WatchSandboxRun watched a run with no turn id")
 		}
 	},
+}, {
+	// WHAT A RUN'S WRITER STATES IS WHAT THE STANDING LISTS: the boot's epoch
+	// floor and a seat's listings select on it without reading a record, so a
+	// standing behind its record would floor a seat below a lease its run
+	// carries, or hand a seat another's runs. Each record once, at the
+	// version its value stands at; a part or a session claim is no record.
+	//
+	// Mutation: drop Standing from a backend's write, and the second state
+	// is not listed; widen the listing past a record's key, and the part or
+	// the claim is listed.
+	name: "a run's standing is the one its last write stated",
+	fn: func(h *fleetHarness) {
+		seat := uuidOf(1)
+		first, second := coord.StandingOf(seat, "swe", 3), coord.StandingOf(seat, "swe", 7)
+		if created, err := h.f.CreateSandboxRun(h.ctx, "turn-1", []byte(`{"status":"launching"}`),
+			&first); err != nil || !created {
+			h.t.Fatalf("CreateSandboxRun = (%v, %v), want created", created, err)
+		}
+		h.putRunPart("turn-1", coord.RunLog, `{"calls":[]}`)
+		claim := coord.SessionClaim{Session: claimedSession, Turn: "turn-1", Launch: "job-1"}
+		if ok, err := h.f.CreateSessionClaim(h.ctx, claim); err != nil || !ok {
+			h.t.Fatalf("CreateSessionClaim = (%v, %v), want claimed", ok, err)
+		}
+		if got := h.standings(); len(got) != 1 || got["turn-1"].Standing == nil ||
+			*got["turn-1"].Standing != first {
+			h.t.Fatalf("the standings after the create = %+v, want turn-1's alone, at epoch 3", got)
+		}
+		written, _ := h.mutateRun("turn-1", func(coord.Record) (coord.SandboxRunChange, error) {
+			return coord.SandboxRunChange{Put: []byte(`{"status":"running"}`), Standing: &second}, nil
+		})
+		got := h.standings()["turn-1"]
+		if got.Standing == nil || *got.Standing != second || got.Version != written.Version {
+			h.t.Errorf("the standing after the change = %+v, want epoch 7 at version %d", got, written.Version)
+		}
+		if !got.Standing.Names("swe") || got.Standing.Names("qa") {
+			h.t.Errorf("the standing names swe %v and qa %v, want swe alone",
+				got.Standing.Names("swe"), got.Standing.Names("qa"))
+		}
+	},
+}, {
+	// A WRITE STATING NONE LEAVES NONE: an older build writes a record
+	// without its standing, and a reader that kept the standing an earlier
+	// write stated would select on what the record no longer says.
+	//
+	// Mutation: keep a record's standing through a write stating none.
+	name: "a write stating none lists none",
+	fn: func(h *fleetHarness) {
+		stated := coord.StandingOf(uuidOf(2), "qa", 4)
+		if _, err := h.f.CreateSandboxRun(h.ctx, "turn-1", []byte(`{"status":"running"}`), &stated); err != nil {
+			h.t.Fatalf("CreateSandboxRun: %v", err)
+		}
+		h.createRun("turn-2", `{"status":"running"}`)
+		h.putRun("turn-1", `{"status":"resumed"}`)
+		got := h.standings()
+		if len(got) != 2 || got["turn-1"].Standing != nil || got["turn-2"].Standing != nil {
+			h.t.Errorf("the standings = %+v, want both runs listed, stating none", got)
+		}
+	},
+}, {
+	// A STANDING IS STATED WITH THE VALUE IT DESCRIBES: beside a delete or no
+	// write it describes nothing, and a backend writing it alone would part
+	// it from its record.
+	name: "a standing beside a delete, or with no value, is refused",
+	fn: func(h *fleetHarness) {
+		h.createRun("turn-1", `{"status":"running"}`)
+		before, _ := h.run("turn-1")
+		stated := coord.StandingOf(uuidOf(3), "swe", 1)
+		for name, change := range map[string]coord.SandboxRunChange{
+			"a delete": {Delete: true, Standing: &stated},
+			"no value": {Standing: &stated},
+		} {
+			_, changed, err := h.f.MutateSandboxRun(h.ctx, "turn-1",
+				func(coord.Record) (coord.SandboxRunChange, error) { return change, nil })
+			if err == nil || changed {
+				h.t.Errorf("a standing beside %s answered (%v, %v), want a refusal", name, changed, err)
+			}
+		}
+		if after, found := h.run("turn-1"); !found || after.Version != before.Version {
+			h.t.Errorf("the store holds (%+v, %v), want the record untouched (%+v)", after, found, before)
+		}
+		if got := h.standings()["turn-1"]; got.Standing != nil {
+			h.t.Errorf("the refused changes left a standing %+v", got.Standing)
+		}
+	},
 }}
+
+// standings is every record's standing, by turn id.
+func (h *fleetHarness) standings() map[string]coord.StoodRun {
+	h.t.Helper()
+	listed, err := h.f.SandboxRunStandings(h.ctx)
+	if err != nil {
+		h.t.Fatalf("SandboxRunStandings: %v", err)
+	}
+	out := map[string]coord.StoodRun{}
+	for _, stood := range listed {
+		out[stood.TurnID] = stood
+	}
+	return out
+}
+
+// uuidOf is a seat id the cases tell apart by n.
+func uuidOf(n byte) uuid.UUID { return uuid.UUID{15: n} }

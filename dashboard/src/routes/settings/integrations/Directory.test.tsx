@@ -325,7 +325,10 @@ test("the directory groups by need, with Crewlet's own service first in each", a
       "Cloud and Infrastructure",
       ["AWS", "Cloudflare", "DigitalOcean", "Google Cloud", "Scaleway", "SSH"],
     ],
-    ["Mobile apps", ["Expo", "App Store Connect"]],
+    ["Mobile apps", ["Expo", "App Store Connect", "Google Play"]],
+    ["Advertising", ["Google Ads", "Meta Ads Manager", "Apple Ads"]],
+    ["Analytics", ["Google Analytics", "Search Console"]],
+    ["Ad revenue", ["AdSense", "AdMob"]],
   ]);
 });
 

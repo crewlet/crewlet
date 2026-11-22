@@ -1007,6 +1007,102 @@ func TestAnEvictedNodesBackupIsForgottenOnceNoLogCountsIt(t *testing.T) {
 	}
 }
 
+// pinOneLog puts one hold on one identity log of e, at seq 1 of the log's
+// current generation, as a holder's put names it, and answers the log.
+func pinOneLog(t *testing.T, e *Engine, r *retention) *runningLog {
+	t.Helper()
+	running := identityLogs(t, e.core.Load().log)[0]
+	stream := running.spec.Name
+	if err := r.fleet.PutHold(t.Context(), coord.TrimHold{
+		Owner:  coord.HoldOwner("node-holder", "backup"),
+		Reason: "a backup copying the log",
+		Streams: map[string]coord.Position{stream: {Stream: stream,
+			Generation: running.runner.Committed().Generation, Seq: 1}},
+	}); err != nil {
+		t.Fatalf("pin the %s log: %v", running.domain.Name(), err)
+	}
+	return running
+}
+
+// minHoldAfterTick runs one trim tick and answers the min_hold term the duty
+// published for running's log.
+func minHoldAfterTick(t *testing.T, r *retention, running *runningLog) coord.TrimTerm {
+	t.Helper()
+	r.tick(t.Context())
+	floor, published, err := r.fleet.Floor(t.Context(), running.domain.Name())
+	if err != nil || !published {
+		t.Fatalf("read the %s log's published floor: (published %v) %v",
+			running.domain.Name(), published, err)
+	}
+	for _, term := range floor.Terms {
+		if term.Name == string(statelog.TermMinHold) {
+			return term
+		}
+	}
+	t.Fatalf("the %s log's floor carries no min_hold term: %+v", running.domain.Name(), floor.Terms)
+	return coord.TrimTerm{}
+}
+
+// A HOLD PINS THE TRIM WHATEVER THE DUTY'S CLOCK READS. A duty holder two
+// hours ahead of the holder is inside twice the clock skew the fleet allows,
+// and a live pin it ignored would let it purge the records a backup or a join
+// is copying. The trim judges a hold on what it watched, never on a clock.
+func TestAHoldPinsTheTrimWhateverTheDutysClockReads(t *testing.T) {
+	t.Parallel()
+	e, _ := aRunningNode(t)
+	r := quietRetention(t, e)
+	running := pinOneLog(t, e, r)
+	ahead := time.Now().UTC().Add(2*time.Hour + 5*time.Minute)
+	r.now = func() time.Time { return ahead }
+	if term := minHoldAfterTick(t, r, running); !term.Known || term.Seq != 1 {
+		t.Fatalf("with the duty's clock 2h5m ahead the min_hold term reads %+v, "+
+			"want it known at 1: a live pin was ignored on a clock", term)
+	}
+}
+
+// A HOLD NOBODY RENEWS IS IGNORED ONCE THE DUTY WATCHED IT PAST THE BOUND: one
+// write listed at two ticks more than the bound apart, on the duty's own
+// watch, is a crashed holder, and pinning on it would stop the trim for good.
+func TestAHoldNobodyRenewsIsIgnoredOnceTheDutyWatchedItPastTheBound(t *testing.T) {
+	t.Parallel()
+	e, _ := aRunningNode(t)
+	r := quietRetention(t, e)
+	running := pinOneLog(t, e, r)
+	w0 := time.Now()
+	r.watch.Now = func() time.Time { return w0 }
+	if term := minHoldAfterTick(t, r, running); !term.Known || term.Seq != 1 {
+		t.Fatalf("the hold's first listing reads %+v, want it known at 1", term)
+	}
+	past := w0.Add(statelog.TrimHoldStale + time.Nanosecond)
+	r.watch.Now = func() time.Time { return past }
+	if term := minHoldAfterTick(t, r, running); term.Seq != statelog.SeqUnbounded {
+		t.Fatalf("a hold watched unrenewed past the %v bound reads %+v, want it "+
+			"read past: a crashed holder pins the log until its ceiling",
+			statelog.TrimHoldStale, term)
+	}
+}
+
+// A STEP OF THE DUTY'S WALL CLOCK NEVER AGES A HOLD: the watch counts on its
+// own clock, so a duty clock moved two minutes while the watch moved thirty
+// seconds still reads the hold as live.
+func TestAStepOfTheDutysWallClockNeverAgesAHold(t *testing.T) {
+	t.Parallel()
+	e, _ := aRunningNode(t)
+	r := quietRetention(t, e)
+	running := pinOneLog(t, e, r)
+	w0, t0 := time.Now(), time.Now().UTC()
+	r.watch.Now = func() time.Time { return w0 }
+	r.now = func() time.Time { return t0 }
+	minHoldAfterTick(t, r, running)
+	w1, t1 := w0.Add(30*time.Second), t0.Add(2*time.Minute)
+	r.watch.Now = func() time.Time { return w1 }
+	r.now = func() time.Time { return t1 }
+	if term := minHoldAfterTick(t, r, running); !term.Known || term.Seq != 1 {
+		t.Fatalf("after the duty's clock stepped two minutes and the watch's "+
+			"thirty seconds the hold reads %+v, want it known at 1", term)
+	}
+}
+
 // THE RETENTION DUTY READS ONE CLOCK, ITS ALARMS' AGES INCLUDED: every report,
 // evaluation and tick reads [retention.clock], and so must the alarm tracker,
 // or on a duty whose clock a case moves (the only way to reach a fence window

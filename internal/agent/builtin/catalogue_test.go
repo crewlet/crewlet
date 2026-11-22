@@ -30,7 +30,7 @@ func TestEveryToolASeatIsOfferedIsFiledOnce(t *testing.T) {
 		return humanOnly
 	})
 	offered := slices.Concat(registered, toolname.Discovery())
-	catalogued := builtin.Catalogued()
+	catalogued := slices.DeleteFunc(builtin.Catalogued(), unwiredGrowthTool)
 
 	for _, name := range offered {
 		f, ok := builtin.FilingOf(name)

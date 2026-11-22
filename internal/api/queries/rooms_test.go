@@ -2,6 +2,7 @@ package queries_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"reflect"
 	"regexp"
@@ -98,6 +99,10 @@ func (emptyAdvisor) Episodes(context.Context, string, statelog.Freshness) ([]adv
 func (emptyAdvisor) LiveProgress(context.Context, statelog.Freshness) (string, []advisordomain.ProgressLine, bool, error) {
 	return "", nil, false, nil
 }
+func (emptyAdvisor) Checkpoint(context.Context, string, statelog.Freshness) (json.RawMessage, bool, error) {
+	return nil, false, nil
+}
+
 func (emptyAdvisor) RunProgress(context.Context, string, statelog.Freshness) ([]advisordomain.ProgressLine, error) {
 	return nil, nil
 }

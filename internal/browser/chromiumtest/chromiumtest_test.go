@@ -138,6 +138,65 @@ func TestAPinIsNamedRequiredOrSkipped(t *testing.T) {
 	}
 }
 
+// A PIN'S VERSION IS THE ONE ITS BUILD ANSWERED: Version is the four numbers
+// the build a pin's variable names gave --version, the newest's and the
+// floor's alike, and a path neither names is refused, so no case names a
+// version that is not a pin's own. Not parallel: it sets the variables.
+//
+// Mutations, each red: hand back the major alone; answer for any path, the
+// variables unread.
+func TestAPinsVersionIsTheOneItsBuildAnswered(t *testing.T) {
+	floor := browser.MinChromiumMajor
+	newestVersion, floorVersion := fmt.Sprintf("%d.0.8103.38", floor+4), fmt.Sprintf("%d.0.8010.52", floor)
+	newestBuild, floorBuild := stub(t, newestVersion), stub(t, floorVersion)
+	t.Setenv(prereqtest.RequireEnv, "1")
+	t.Setenv(newestEnv, newestBuild)
+	t.Setenv(floorEnv, floorBuild)
+	for _, tc := range []struct{ name, chrome, want, fatal string }{
+		{name: "the newest", chrome: newestBuild, want: newestVersion},
+		{name: "the floor", chrome: floorBuild, want: floorVersion},
+		{name: "a build no pin names", chrome: stub(t, newestVersion), fatal: "neither pin's build"},
+		{name: "no path", fatal: "neither pin's build"},
+	} {
+		var got string
+		ended := prereqtest.Run(t, func(tb testing.TB) { got = Version(tb, tc.chrome) })
+		if !strings.Contains(ended.Fatal, tc.fatal) || (tc.fatal == "") != (ended.Fatal == "") || got != tc.want {
+			t.Errorf("%s: Version is %q (failed %q), want %q (a failure saying %q)", tc.name, got, ended.Fatal,
+				tc.want, tc.fatal)
+		}
+	}
+}
+
+// A PIN'S BUILD IS THE DIRECTORY ITS ZIP UNPACKED: Unpacked is the
+// chrome-<platform> directory a build keeps its executable in on this
+// platform, read from the executable's path, and a path laid out any other
+// way is refused rather than read as a build.
+//
+// Mutations, each red: hand back the directory above it; take whatever
+// directory the executable sits in.
+func TestAPinsBuildIsTheDirectoryItsZipUnpacked(t *testing.T) {
+	t.Parallel()
+	b, ok := builds[runtime.GOOS+"/"+runtime.GOARCH]
+	if !ok {
+		t.Fatalf("no build layout for %s/%s, a platform the engine is released for", runtime.GOOS, runtime.GOARCH)
+	}
+	root, exe := t.TempDir(), filepath.FromSlash(b.exe)
+	build := filepath.Join(root, "build", b.dir)
+	for _, tc := range []struct{ name, chrome, want string }{
+		{name: "a build's executable", chrome: filepath.Join(build, exe), want: build},
+		{name: "an executable in another directory", chrome: filepath.Join(root, "elsewhere", exe)},
+		{name: "a relative path", chrome: filepath.Join(b.dir, exe)},
+		{name: "the build's directory", chrome: build},
+	} {
+		var got string
+		ended := prereqtest.Run(t, func(tb testing.TB) { got = Unpacked(tb, tc.chrome) })
+		refused := strings.Contains(ended.Fatal, "not where a Chrome for Testing build keeps its executable")
+		if got != tc.want || refused != (tc.want == "") {
+			t.Errorf("%s: Unpacked(%s) is %q (failed %q), want %q", tc.name, tc.chrome, got, ended.Fatal, tc.want)
+		}
+	}
+}
+
 // holdingEnv runs TestALaunchedBrowserEndsWithItsTestBinary as the binary it
 // kills: one that launches the build the variable names and holds it.
 const holdingEnv = "CHROMIUMTEST_HOLD_A_BROWSER"

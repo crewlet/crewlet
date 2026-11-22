@@ -61,7 +61,7 @@ case "$1" in
   echo "${FAKE_VERSION:-opencode v2.3.2}" ;;
 auth)
   case "$2" in
-  import) cat > "$d/imported"; cp "$d/imported" "$d/db" ;;
+  import) f=; for a; do f=$a; done; if [ -f "$f" ]; then cat "$f"; else cat; fi > "$d/imported"; cp "$d/imported" "$d/db" ;;
   export)
     [ "$3" != --server ] || { authed; hangs auth.export; }
     if [ -n "${FAKE_EXPORT_SLEEP:-}" ]; then : > "$d/exporting"; sleep "$FAKE_EXPORT_SLEEP"; fi
@@ -70,6 +70,9 @@ auth)
 serve)
   printf '%s|%s' "${OPENCODE_PASSWORD:-}" "${OPENCODE_SERVER_PASSWORD:-}" > "$d/serve-env"
   printf '%s' "${OPENCODE_CONFIG_CONTENT-}" > "$d/serve-config"
+  printf '%s' "${OPENCODE_CONFIG_DIR-}" > "$d/serve-config-dir"
+  ls -A "${OPENCODE_CONFIG_DIR:-$d/none}" > "$d/serve-config-dir-held" 2> /dev/null
+  (cd "$HOME" && find . -path ./.crewlet -prune -o -type f -print) > "$d/serve-home" 2> /dev/null
   if [ -n "${FAKE_VALUES:-}" ]; then
     cat "$FAKE_VALUES/v1" > "$d/served-value" 2> /dev/null
     if [ -e "$FAKE_VALUES-fresh" ]; then echo yes; else echo no; fi > "$d/served-beside-other"
@@ -92,6 +95,14 @@ serve)
 api)
   if [ "$2" = --standalone ]; then shift 2; else authed; shift 3; hangs "$1"; fi
   case "$1" in
+  credential.list)
+    [ -e "$d/creds" ] || for id in ${FAKE_CREDS-}; do echo "$id"; done > "$d/creds"
+    printf '{"data":[' ; sep=
+    while IFS= read -r id; do printf '%s{"id":"%s","integrationID":"anthropic","label":"key","active":true,"value":{"type":"key","key":"k"}}' "$sep" "$id"; sep=,; done 2> /dev/null < "$d/creds"
+    echo ']}' ;;
+  credential.remove)
+    id=${3#credentialID=}; echo "$id" >> "$d/removed"
+    [ "$id" = "${FAKE_STUCK_CRED-}" ] || { grep -vxF "$id" "$d/creds" > "$d/creds.next"; mv "$d/creds.next" "$d/creds"; } ;;
   mcp.list)
     n=$(cat "$d/polls" 2> /dev/null || echo 0); n=$((n+1)); echo "$n" > "$d/polls"
     if [ -n "${FAKE_MCP_LIST:-}" ]; then printf '%s\n' "$FAKE_MCP_LIST"; exit 0; fi
@@ -155,6 +166,7 @@ run)
   authed
   sid= prev=; for a; do [ "$prev" != --session ] || sid=$a; prev=$a; done; hold "$sid"
   cat > "$d/brief"
+  cp "$d/creds" "$d/run-creds" 2> /dev/null
   printf '%s' "${OPENCODE_PASSWORD:-${OPENCODE_SERVER_PASSWORD:-}}" > "$d/run-password"
   if [ -n "${FAKE_REFRESH+set}" ]; then printf '%s' "$FAKE_REFRESH" > "$d/db"; fi
   [ -z "${FAKE_RUN_TERM_EXIT:-}" ] || trap 'exit "$FAKE_RUN_TERM_EXIT"' TERM
@@ -209,6 +221,9 @@ type scriptOpts struct {
 	values, freshValues string
 	// pages is the fake's `session.message.list` answer by cursor, "first" for none.
 	pages map[string]string
+	// planted is files the box's home holds as the run starts, by their path
+	// under it, as an earlier run in the box could have left them.
+	planted map[string]string
 }
 
 // scriptConfig is the run configuration a case's script finds, as
@@ -273,6 +288,14 @@ func startScript(t *testing.T, o scriptOpts) *scriptJob {
 		}
 	}
 	writeStandIn(t, filepath.Join(bin, "opencode"), fakeOpenCode)
+	for rel, content := range o.planted {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(home, rel)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(home, rel), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	alive := serverPipe(t, dir)
 	paths := executor.Paths{Home: home}
 	if !o.unconfigured {
@@ -718,12 +741,12 @@ func forEachShell(t *testing.T, test func(t *testing.T, sh boxShell)) {
 }
 
 // loginFree reports whether name, in a box's work directory, is a file a run's
-// script leaves there that holds no login: its configuration ([scriptConfig]),
-// its session record, export and export digests, and its end protocol's pid
-// and end records.
+// script leaves there that holds no login: its configuration ([scriptConfig])
+// and configuration directory, its session record, export and export digests,
+// and its end protocol's pid and end records.
 func loginFree(p executor.Paths, name string) bool {
-	for _, path := range []string{p.OpenCodeConfig(), p.SessionRecord(), p.SessionCapture(), p.SessionDigests(),
-		p.JobScript(), p.JobEnded()} {
+	for _, path := range []string{p.OpenCodeConfig(), p.OpenCodeConfigDir(), p.SessionRecord(), p.SessionCapture(),
+		p.SessionDigests(), p.JobScript(), p.JobEnded()} {
 		if name == filepath.Base(path) {
 			return true
 		}
@@ -1288,8 +1311,9 @@ func TestABoxsLoginIsImportedAndTheRefreshedOneWrittenBack(t *testing.T) {
 		if imported := readIn(t, run.dir, "imported"); imported != seededLogin {
 			t.Errorf("imported %q, want the login the box was given", imported)
 		}
-		if run.callIndex("auth import --standalone") > run.callIndex("serve ") {
-			t.Errorf("the login was imported after the server started:\n%s", strings.Join(run.calls, "\n"))
+		if imp := run.callIndex("auth import --server"); imp < run.callIndex("serve ") || imp > run.callIndex("run ") {
+			t.Errorf("the login was not imported through the run's server before its client started:\n%s",
+				strings.Join(run.calls, "\n"))
 		}
 		if run.document != refreshedLogin {
 			t.Errorf("the box's login is %q, want the refreshed export", run.document)

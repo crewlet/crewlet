@@ -548,6 +548,12 @@ func (p *Provider) diagnose(ctx context.Context, opts DiagnoseOptions, refused [
 					"it was written for %s", path, strings.Join(p.profile.VersionArgs, " "),
 				orNone(p.profile.WrittenFor)))
 		}
+		if line, problem := p.executorRelease(ctx, opts, version); line != "" {
+			c.set(CheckExecutor, strings.TrimPrefix(c.at(CheckExecutor).Detail+"\n"+line, "\n"))
+			if problem != "" {
+				c.fail(CheckExecutor, CheckKindConfig, problem)
+			}
+		}
 	}
 
 	for _, problem := range refused {
@@ -1343,6 +1349,23 @@ func (p *Provider) SandboxCredentials() map[string]string {
 	}
 	if len(out) == 0 {
 		return nil
+	}
+	return out
+}
+
+// SandboxCredentialRunKeys is, by each of [Provider.SandboxCredentials]' paths,
+// the keys its harness writes into that file during a run
+// ([harnessprofile.Profile.RunKeys]), which a box writing the login back keeps
+// as the shared login holds them. Nil where it names none.
+func (p *Provider) SandboxCredentialRunKeys() map[string][]string {
+	var out map[string][]string
+	for rel := range p.SandboxCredentials() {
+		if keys := p.profile.RunKeys[filepath.Base(rel)]; len(keys) > 0 {
+			if out == nil {
+				out = map[string][]string{}
+			}
+			out[rel] = slices.Clone(keys)
+		}
 	}
 	return out
 }

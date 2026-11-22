@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // ocSaveSession is the session an OpenCode save case's run worked in: the one
@@ -31,7 +32,7 @@ func openCodeSaving(t *testing.T, release, vars string) (*executor.Runner, sandb
 	runner, b := openCodeBox(t, t.TempDir())
 	dir := t.TempDir()
 	writeBoxStandIn(t, b, paths(b).BinDir()+"/opencode",
-		strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`, "d="+shQuote(dir)+vars, 1))
+		strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`, "d="+shellword.Quote(dir)+vars, 1))
 	if err := b.WriteFile(t.Context(), paths(b).SessionRecord(),
 		[]byte("id "+ocSaveSession+"\ncontinued no\nrelease "+release+"\n")); err != nil {
 		t.Fatal(err)
@@ -95,7 +96,7 @@ func TestAnOpenCodeSaveIsExportedBesideItsServerToItsTakersOwnPath(t *testing.T)
 	if err := b.WriteFile(t.Context(), p.SessionCapture(), []byte(capture)); err != nil {
 		t.Fatal(err)
 	}
-	saved, err := runner.PackSave(t.Context(), b, takerA)
+	saved, err := runner.PackSave(t.Context(), b, takerA, "")
 	if err != nil {
 		t.Fatalf("PackSave: %v", err)
 	}
@@ -130,7 +131,7 @@ func TestAnOpenCodeSaveIsExportedBesideItsServerToItsTakersOwnPath(t *testing.T)
 			t.Errorf("a call of the save ran with the pins %q, want the models fetch and the updater off", line)
 		}
 	}
-	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Save: saved.Path, MaxBytes: takeBound})
+	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), Save: saved.Path, MaxBytes: takeBound})
 	if err != nil || taken.Body == nil {
 		t.Fatalf("the take of the save = %+v, %v", taken, err)
 	}
@@ -169,14 +170,14 @@ func TestAnOpenCodeSaveSaysNothingOnlyOnOpenCodesOwnWord(t *testing.T) {
 			dir string) {
 			broken := strings.Replace(fakeOpenCode, answers, `echo "Error: database is locked" >&2; exit 1`, 1)
 			writeBoxStandIn(t, b, paths(b).BinDir()+"/opencode",
-				strings.Replace(broken, `d="$FAKE_DIR"`, "d="+shQuote(dir), 1))
+				strings.Replace(broken, `d="$FAKE_DIR"`, "d="+shellword.Quote(dir), 1))
 		}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			runner, b, dir := openCodeSaving(t, "2.3.2", "")
 			tc.edit(t, b, dir)
-			saved, err := runner.PackSave(t.Context(), b, takerA)
+			saved, err := runner.PackSave(t.Context(), b, takerA, "")
 			switch {
 			case tc.says == "" && (err != nil || saved != (sandbox.SessionArchive{})):
 				t.Errorf("the save = %+v, %v; want nothing saved and no error", saved, err)
@@ -229,7 +230,7 @@ func TestAnOpenCodeExportPastWhatTheScrubReadsIsNeverPacked(t *testing.T) {
 				}
 				var err error
 				if pack == "save" {
-					_, err = runner.PackSave(t.Context(), b, takerA)
+					_, err = runner.PackSave(t.Context(), b, takerA, "")
 				} else {
 					var body io.ReadCloser
 					_, body, _, err = runner.PackCapture(t.Context(), b, true)
@@ -265,7 +266,7 @@ func TestAnOpenCodeExportPastWhatTheScrubReadsIsNeverPacked(t *testing.T) {
 func TestAnOpenCodeSaveWhoseExportFailsLeavesNothing(t *testing.T) {
 	t.Parallel()
 	runner, b, dir := openCodeSaving(t, "2.3.2", "")
-	before, err := runner.PackSave(t.Context(), b, takerA)
+	before, err := runner.PackSave(t.Context(), b, takerA, "")
 	if err != nil {
 		t.Fatalf("the save before: %v", err)
 	}
@@ -274,7 +275,7 @@ func TestAnOpenCodeSaveWhoseExportFailsLeavesNothing(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "export-fails"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runner.PackSave(t.Context(), b, takerA); err == nil ||
+	if _, err := runner.PackSave(t.Context(), b, takerA, ""); err == nil ||
 		!strings.Contains(err.Error(), "the export broke off") {
 		t.Errorf("the save whose export broke off = %v, want it failed with what OpenCode said", err)
 	}
@@ -305,7 +306,7 @@ func TestAnOpenCodeSaveOfAReleaseNoProbeMeasuredIsRefusedUnpacked(t *testing.T) 
 		t.Run("release "+strconv.Quote(release), func(t *testing.T) {
 			t.Parallel()
 			runner, b, dir := openCodeSaving(t, release, "")
-			saved, err := runner.PackSave(t.Context(), b, takerA)
+			saved, err := runner.PackSave(t.Context(), b, takerA, "")
 			if err == nil || !strings.Contains(err.Error(), strconv.Quote(release)) ||
 				!strings.Contains(err.Error(), "never measured") {
 				t.Errorf("the save of OpenCode %q = %+v, %v; want it refused, naming the release", release,
@@ -334,11 +335,11 @@ func TestATakeOfAnOpenCodeSaveCountsItAndNamesItsNewestCompaction(t *testing.T) 
 	if err := os.WriteFile(filepath.Join(dir, "export-doc"), doc, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	saved, err := runner.PackSave(t.Context(), b, takerA)
+	saved, err := runner.PackSave(t.Context(), b, takerA, "")
 	if err != nil {
 		t.Fatalf("PackSave: %v", err)
 	}
-	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Save: saved.Path, MaxBytes: takeBound})
+	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), Save: saved.Path, MaxBytes: takeBound})
 	if err != nil || taken.Body == nil {
 		t.Fatalf("the take of the save = %+v, %v", taken, err)
 	}
@@ -386,7 +387,7 @@ func TestAnOpenCodeSaveWaitsForTheRoomItsExportTakes(t *testing.T) {
 				if err := os.Remove(openCodeDatabase(b)); err != nil {
 					t.Fatal(err)
 				}
-				_, err := runner.PackSave(t.Context(), b, takerA)
+				_, err := runner.PackSave(t.Context(), b, takerA, "")
 				if err == nil || errors.Is(err, sandbox.ErrSaveNoRoom) || !strings.Contains(err.Error(), "database is not at") {
 					t.Errorf("the save = %v; want it failed for the database it could not find", err)
 				}
@@ -416,7 +417,7 @@ func TestAnOpenCodeSaveWaitsForTheRoomItsExportTakes(t *testing.T) {
 				t.Fatalf("reading the box's room: %v", err)
 			}
 			refused := tc.database+tc.wal > 0 && strings.TrimSpace(res.Stdout) != ""
-			_, err = runner.PackSave(t.Context(), b, takerA)
+			_, err = runner.PackSave(t.Context(), b, takerA, "")
 			if !refused {
 				if err != nil {
 					t.Errorf("the save failed: %v; want it saved (the box's room reads %q)", err, res.Stdout)

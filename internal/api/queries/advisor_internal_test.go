@@ -221,6 +221,10 @@ func (l noticeLog) LatestRun(context.Context, statelog.Freshness) (advisordomain
 func (noticeLog) LiveProgress(context.Context, statelog.Freshness) (string, []advisordomain.ProgressLine, bool, error) {
 	return "", nil, false, nil
 }
+func (noticeLog) Checkpoint(context.Context, string, statelog.Freshness) (json.RawMessage, bool, error) {
+	return nil, false, nil
+}
+
 func (noticeLog) RunProgress(context.Context, string, statelog.Freshness) ([]advisordomain.ProgressLine, error) {
 	return nil, nil
 }
@@ -297,7 +301,11 @@ func TestABlockingFindingsNoticeNamesItsFinding(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return got.(AdvisorNotices).Notices
+		// Without the build's own API retirements, which follow its catalogs and
+		// the date rather than any finding.
+		return slices.DeleteFunc(got.(AdvisorNotices).Notices, func(n notice.Notice) bool {
+			return n.Class == notice.ClassAPIVersionRetiring
+		})
 	}
 	got := notices(row)
 	if len(got) != 1 || got[0].Finding == nil || got[0].Finding.ID != "f-1" || got[0].Finding.Fix != f.Fix.Sentence {

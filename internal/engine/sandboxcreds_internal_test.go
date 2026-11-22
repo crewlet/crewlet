@@ -97,6 +97,27 @@ func TestARemoteRunWithNoTravellingCredentialIsRefused(t *testing.T) {
 	}
 }
 
+// A CODEX ENTRY SIGNED IN BY ITS CHATGPT LOGIN ALONE IS REFUSED A REMOTE BOX,
+// as a Claude Code login is: the login's auth.json stays on the engine host,
+// where Codex rotates its refresh token (every ten days, measured on 0.171.0),
+// and a key in CODEX_API_KEY is what travels; a local box needs neither.
+//
+// Mutation: let a codex login's files count in a remote box, or refuse a local
+// one, and a case goes red.
+func TestACodexLoginAloneIsRefusedARemoteBox(t *testing.T) {
+	t.Parallel()
+	c, seat := creditedCompany(t, "codex")
+	if err := guardOn(t, c, seat, sandbox.E2B, nil); err == nil {
+		t.Error("a remote run signed in by a ChatGPT login alone was launched")
+	}
+	if err := guardOn(t, c, seat, sandbox.E2B, map[string]string{"CODEX_API_KEY": "sk-placeholder"}); err != nil {
+		t.Errorf("a remote run with CODEX_API_KEY was refused: %v", err)
+	}
+	if err := guardOn(t, c, seat, sandbox.Direct, nil); err != nil {
+		t.Errorf("a local run signed in by the login was refused: %v", err)
+	}
+}
+
 // THE OTHER CASE GETS THE OTHER REMEDY. Claude Code mints a headless token
 // that travels to any box, so the fix is one command, not a placement change
 // that would move a seat onto the engine host for no reason.
@@ -364,6 +385,30 @@ func TestASeatsOwnClaudeCodeSignInPassesTheRemoteGuard(t *testing.T) {
 	if err := guardOn(t, oc, ocSeat, sandbox.E2B,
 		map[string]string{"CLAUDE_CODE_USE_BEDROCK": "1"}); err == nil {
 		t.Error("an opencode run was let through on Claude Code's cloud toggle")
+	}
+}
+
+// A GEMINI CLI RUN ON VERTEX AI IS SIGNED IN IN A REMOTE BOX: its switch,
+// GOOGLE_GENAI_USE_VERTEXAI, signs it in from the run's environment (the
+// profile's sign_in_env), as Claude Code's cloud switches sign Claude Code in.
+// Only Gemini CLI's switch counts for it, and only for it: Claude Code's
+// Vertex switch signs no Gemini run in, and Gemini's no Claude Code run.
+//
+// Mutation, red: drop sign_in_env from the gemini-cli profile.
+func TestAGeminiRunOnVertexPassesTheRemoteGuard(t *testing.T) {
+	t.Parallel()
+	gc, seat := creditedCompany(t, "gemini-cli")
+	if err := guardOn(t, gc, seat, sandbox.E2B, map[string]string{
+		"GOOGLE_GENAI_USE_VERTEXAI": "true", "GOOGLE_CLOUD_PROJECT": "acme",
+	}); err != nil {
+		t.Errorf("a Gemini run on Vertex AI was refused: %v", err)
+	}
+	if err := guardOn(t, gc, seat, sandbox.E2B, map[string]string{"CLAUDE_CODE_USE_VERTEX": "1"}); err == nil {
+		t.Error("a Gemini run was let through on Claude Code's Vertex switch")
+	}
+	cc, ccSeat := creditedCompany(t, "claude-code")
+	if err := guardOn(t, cc, ccSeat, sandbox.E2B, map[string]string{"GOOGLE_GENAI_USE_VERTEXAI": "true"}); err == nil {
+		t.Error("a Claude Code run was let through on Gemini CLI's Vertex switch")
 	}
 }
 

@@ -27,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // remoteHost is the name every case's remote is written with: httptest's TLS
@@ -545,11 +546,11 @@ func TestARemoteRunsLinesNameNoneOfItsSecrets(t *testing.T) {
 			for _, s := range tc.echoed {
 				// stderr: a whole line; stdout: one line written in two
 				// pieces, split inside the secret.
-				fmt.Fprintf(&body, "printf 'remote: this host was sent %%s\\n' %s >&2\n", quote(s))
+				fmt.Fprintf(&body, "printf 'remote: this host was sent %%s\\n' %s >&2\n", shellword.Quote(s))
 				half := len(s) / 2
-				fmt.Fprintf(&body, "printf 'heard %%s' %s; printf '%%s\\n' %s\n", quote(s[:half]), quote(s[half:]))
+				fmt.Fprintf(&body, "printf 'heard %%s' %s; printf '%%s\\n' %s\n", shellword.Quote(s[:half]), shellword.Quote(s[half:]))
 			}
-			fmt.Fprintf(&body, "printf 'fatal: the last line names %%s' %s >&2\nexit 128\n", quote(tc.echoed[0]))
+			fmt.Fprintf(&body, "printf 'fatal: the last line names %%s' %s >&2\nexit 128\n", shellword.Quote(tc.echoed[0]))
 			res, err := remoteRun(t, body.String(), r)
 			var exit *gitproc.ExitError
 			if !errors.As(err, &exit) {
@@ -604,7 +605,7 @@ func TestACredentialAcrossARemoteRunsStderrCutIsShownInNoPart(t *testing.T) {
 				t.Fatalf("the cut falls %d bytes from the end in %d, want %d in at most %d",
 					len(after), len(text), gitproc.StderrTail, 2*gitproc.StderrTail)
 			}
-			res, err := remoteRun(t, "printf '%s' "+quote(text)+" >&2\nexit 128\n",
+			res, err := remoteRun(t, "printf '%s' "+shellword.Quote(text)+" >&2\nexit 128\n",
 				resolve(t, gitproc.RemoteEnv{Resolver: publicDNS()}, "https://"+remoteHost+"/r.git", false))
 			if err == nil {
 				t.Fatal("the stand-in's exit 128 answered no error")
@@ -639,7 +640,7 @@ func TestACredentialAcrossARemoteRunsStderrCutIsShownInNoPart(t *testing.T) {
 func TestARemoteRunIsHeldToItsRemote(t *testing.T) {
 	t.Parallel()
 	ran := filepath.Join(t.TempDir(), "ran")
-	p := fakePool(t, "printf '%s\\n' \"$1\" >> "+quote(ran), gitproc.Options{})
+	p := fakePool(t, "printf '%s\\n' \"$1\" >> "+shellword.Quote(ran), gitproc.Options{})
 	runs := func() int {
 		body, err := os.ReadFile(ran)
 		if errors.Is(err, os.ErrNotExist) {

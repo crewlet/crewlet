@@ -2,11 +2,11 @@ package executor
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // sessionMinter is a harness that mints its own session id as it starts, so no
@@ -33,9 +33,9 @@ func (p Paths) sessionReportStaging() string { return p.SessionReport() + ".next
 // has minted the id held in the shell variable idVar, before the prompt goes
 // in: the id written to the staging file, then renamed over the report.
 func reportSession(paths Paths, idVar string) string {
-	staged := sandbox.ShellQuote(paths.sessionReportStaging())
+	staged := shellword.Quote(paths.sessionReportStaging())
 	return `printf '%s\n' "$` + idVar + `" > ` + staged + ` && mv -f ` + staged + ` ` +
-		sandbox.ShellQuote(paths.SessionReport())
+		shellword.Quote(paths.SessionReport())
 }
 
 // ErrSessionReport is a minting run's report of its session refused: not one
@@ -112,24 +112,34 @@ func (r *Runner) reportedSession(ctx context.Context, box sandbox.Sandbox, paths
 	return id, nil
 }
 
-// mintedRecord is rec with its id the session a minting run reported, for a
-// reader with no run handle (carry, take, a save): the record says whether the
-// run continued, so a resume that reported nothing keeps the id it continued.
-// A refused report names no session, so nothing is packed or carried under it.
-func (r *Runner) mintedRecord(ctx context.Context, box sandbox.Sandbox, paths Paths,
-	rec sessionRecord) (sessionRecord, string, error) {
+// boundRecord is rec naming bound, the session bound to the job
+// (sandbox.LaunchRecord.Minted), for a reader with no run handle (carry, take,
+// a save), where the box still says that session: its report, or a record of
+// a resume that reported nothing. A job with none bound, a refused report, or
+// a record or report naming another session since the bind is refused, wrapping
+// [ErrSessionReport], so nothing is packed or carried under an id never bound.
+func (r *Runner) boundRecord(ctx context.Context, box sandbox.Sandbox, paths Paths, rec sessionRecord,
+	bound string) (sessionRecord, error) {
 
+	switch {
+	case bound == "":
+		return sessionRecord{}, fmt.Errorf("%w: no session is bound to the job", ErrSessionReport)
+	case rec.id != "" && rec.id != bound:
+		return sessionRecord{}, fmt.Errorf("%w: the box's record names session %q, and the job is bound to %q",
+			ErrSessionReport, rec.id, bound)
+	}
 	var asked sandbox.RunHandle
 	if rec.continued {
-		asked.SessionID = rec.id
+		asked.SessionID = bound
 	}
 	id, err := r.reportedSession(ctx, box, paths, asked, rec)
 	switch {
-	case errors.Is(err, ErrSessionReport):
-		return sessionRecord{}, err.Error(), nil
 	case err != nil:
-		return sessionRecord{}, "", err
+		return sessionRecord{}, err
+	case id != bound:
+		return sessionRecord{}, fmt.Errorf("%w: the box names session %q, and the job is bound to %q",
+			ErrSessionReport, id, bound)
 	}
-	rec.id = id
-	return rec, "", nil
+	rec.id = bound
+	return rec, nil
 }

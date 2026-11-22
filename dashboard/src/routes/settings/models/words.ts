@@ -177,11 +177,14 @@ export const ADVISOR_USE = {
   tip: "Sets advisor.model. The Advisor is the company's, so no seats are picked; its checks run without a model too, with no explanations.",
 } as const;
 
-/** Every seat job at once. */
+/** Every seat job at once, and each helper that has no model yet. */
 export const EVERYTHING = {
   label: "Everything",
   hint: "Use this model for every seat job: coding, reviewing and delegations, and routines and evaluations.",
-  tip: "Sets the seat's llm to this model and clears llm_review, llm_subagent, llm_auxiliary, llm_judge and llm_triage, so every seat job resolves to it. Ask Crewlet and the Advisor are separate: choose each on its own.",
+  helpers: "Also Ask Crewlet and the Advisor, where either has no model yet.",
+  tip: "Sets the seat's llm to this model and clears llm_review, llm_subagent, llm_auxiliary, llm_judge and llm_triage, so every seat job resolves to it.",
+  helpersTip:
+    "Sets assistant.model and advisor.model where either names none of the company's models; a helper on a model moves only by its own switch.",
 } as const;
 
 /**

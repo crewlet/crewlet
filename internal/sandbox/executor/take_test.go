@@ -22,11 +22,21 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/shellword"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // takeBound is the archive bound every take here is made within: a session's.
 const takeBound = executorkeep.SessionMaxBytes
+
+// testSpool is a take's spool in a directory of the test's own, in the room a
+// take holds for its scrub's spool.
+func testSpool(t testing.TB) sandbox.SessionSpool {
+	t.Helper()
+	return sandbox.SessionSpool{Dir: t.TempDir(),
+		Bytes: 2*executorkeep.GzipMostBytes(executorkeep.SealedMaxBytes) - executorkeep.SealedMaxBytes,
+		Held:  func(int64) {}}
+}
 
 // keptAndOpened is a taken session as a later launch opens it: sealed into a
 // spool, uploaded and read back through the session store, so a case greps what
@@ -130,7 +140,7 @@ func TestAKeptSessionCarriesNoSecretTheEnginePutInItsBox(t *testing.T) {
 		t.Fatalf("the run's session was not captured:\n%s", boxFile(t, b, paths(b).Err()))
 	}
 	for _, pack := range []bool{false, true} {
-		taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{
+		taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t),
 			Pack: pack, Scrub: []string{plantedSecret, plantedQuoted}, MaxBytes: takeBound})
 		if err != nil || taken.Body == nil {
 			t.Fatalf("pack %v: TakeSession = %+v, %v", pack, taken, err)
@@ -235,13 +245,13 @@ func TestATakeIsBoundedByTheArchiveItKeeps(t *testing.T) {
 	if res.Captured == nil {
 		t.Fatalf("the run's session was not captured:\n%s", boxFile(t, b, paths(b).Err()))
 	}
-	if _, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{MaxBytes: res.Captured.Size - 1}); err == nil {
+	if _, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), MaxBytes: res.Captured.Size - 1}); err == nil {
 		t.Error("an archive a byte past the take's bound was taken")
 	}
 	if _, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{}); err == nil {
 		t.Error("a take naming no bound was made")
 	}
-	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{MaxBytes: res.Captured.Size})
+	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), MaxBytes: res.Captured.Size})
 	if err != nil || taken.Body == nil {
 		t.Fatalf("an archive at the take's bound: %+v, %v", taken, err)
 	}
@@ -271,7 +281,7 @@ func TestAPackThatFailsIsAnErrorAndNoTranscriptIsNoSession(t *testing.T) {
 		if err == nil || body != nil || !strings.Contains(err.Error(), "the disk broke") {
 			t.Fatalf("PackCapture with a tar that breaks = %+v, %v, %v; want an error saying why", described, body, err)
 		}
-		if _, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Pack: true,
+		if _, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), Pack: true,
 			MaxBytes: takeBound}); err == nil {
 			t.Fatal("a take whose pack failed answered no error")
 		}
@@ -282,7 +292,7 @@ func TestAPackThatFailsIsAnErrorAndNoTranscriptIsNoSession(t *testing.T) {
 		_, ran := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
 		said := "tar: projects/" + executor.ClaudeProjectDir + "/" + ran.SessionID +
 			"/subagents/workflow/agent-a1b2c3d4e5f6a7b8c.jsonl: Cannot open: Permission denied"
-		writeBoxStandIn(t, b, paths(b).BinDir()+"/tar", "#!/bin/sh\necho "+shQuote(said)+" >&2\nexit 2\n")
+		writeBoxStandIn(t, b, paths(b).BinDir()+"/tar", "#!/bin/sh\necho "+shellword.Quote(said)+" >&2\nexit 2\n")
 		_, body, _, err := runner.PackCapture(t.Context(), b, false)
 		if body != nil {
 			_ = body.Close()
@@ -296,7 +306,7 @@ func TestAPackThatFailsIsAnErrorAndNoTranscriptIsNoSession(t *testing.T) {
 		t.Parallel()
 		runner, b := sessionBox(t, "2.1.310")
 		_, res := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
-		if _, err := b.Exec(t.Context(), "rm -f "+shQuote(transcriptOf(b, res.SessionID)),
+		if _, err := b.Exec(t.Context(), "rm -f "+shellword.Quote(transcriptOf(b, res.SessionID)),
 			sandbox.ExecOptions{}); err != nil {
 			t.Fatal(err)
 		}
@@ -304,7 +314,7 @@ func TestAPackThatFailsIsAnErrorAndNoTranscriptIsNoSession(t *testing.T) {
 		if err != nil || body != nil {
 			t.Fatalf("PackCapture with no transcript = %+v, %v, %v; want nothing", described, body, err)
 		}
-		taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Pack: true, MaxBytes: takeBound})
+		taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), Pack: true, MaxBytes: takeBound})
 		if err != nil || taken.Body != nil {
 			t.Fatalf("a take with no transcript = %+v, %v; want nothing", taken, err)
 		}
@@ -347,8 +357,8 @@ func TestTwoReadsOfOneJobAtOnceNeverMoveAHalfMadeArchive(t *testing.T) {
 				_, ran := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
 				// THE SCRIPT'S OWN ARCHIVE GONE, as a job killed before its
 				// harness exited never left one.
-				if _, err := b.Exec(t.Context(), "rm -f "+shQuote(paths(b).SessionCapture())+" "+
-					shQuote(paths(b).SessionDigests()), sandbox.ExecOptions{}); err != nil {
+				if _, err := b.Exec(t.Context(), "rm -f "+shellword.Quote(paths(b).SessionCapture())+" "+
+					shellword.Quote(paths(b).SessionDigests()), sandbox.ExecOptions{}); err != nil {
 					t.Fatal(err)
 				}
 				return runner, b, ran.SessionID
@@ -374,7 +384,7 @@ func TestTwoReadsOfOneJobAtOnceNeverMoveAHalfMadeArchive(t *testing.T) {
 				runner, b := openCodeBox(t, t.TempDir())
 				dir := t.TempDir()
 				writeBoxStandIn(t, b, paths(b).BinDir()+"/opencode",
-					strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`, "d="+shQuote(dir), 1))
+					strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`, "d="+shellword.Quote(dir), 1))
 				const session = "ses_0123456789abcdef0123456789"
 				if err := b.WriteFile(t.Context(), paths(b).SessionRecord(),
 					[]byte("id "+session+"\nrelease 2.3.2\n")); err != nil {
@@ -402,8 +412,8 @@ func TestTwoReadsOfOneJobAtOnceNeverMoveAHalfMadeArchive(t *testing.T) {
 		name string
 		take sandbox.SessionTake
 	}{
-		{name: "a read of a job that left no archive", take: sandbox.SessionTake{MaxBytes: takeBound}},
-		{name: "a read that packs the job as it stands", take: sandbox.SessionTake{Pack: true, MaxBytes: takeBound}},
+		{name: "a read of a job that left no archive", take: sandbox.SessionTake{Spool: testSpool(t), MaxBytes: takeBound}},
+		{name: "a read that packs the job as it stands", take: sandbox.SessionTake{Spool: testSpool(t), Pack: true, MaxBytes: takeBound}},
 	}
 	for _, h := range harnesses {
 		t.Run(h.name, func(t *testing.T) {
@@ -550,12 +560,12 @@ func meetingPacks(t *testing.T, b sandbox.Sandbox, packer, word, aside, flags st
 		if err != nil {
 			t.Fatalf("no %s on this machine's PATH: %v", name, err)
 		}
-		return shQuote(found)
+		return shellword.Quote(found)
 	}
-	at := func(name string) string { return shQuote(filepath.Join(flags, name)) }
+	at := func(name string) string { return shellword.Quote(filepath.Join(flags, name)) }
 	return "#!/bin/sh\n" +
 		"own=" + tool(packer) + " whole=" + at("whole") + "\n" +
-		`if [ "$1" != ` + shQuote(word) + ` ]; then exec "$own" "$@"; fi` + "\n" +
+		`if [ "$1" != ` + shellword.Quote(word) + ` ]; then exec "$own" "$@"; fi` + "\n" +
 		`if ` + claim(filepath.Join(flags, "claimed")) + `; then` + "\n" +
 		`  "$own" "$@"; st=$?` + "\n" +
 		`  : > ` + at("first-packed") + "\n" +
@@ -568,7 +578,7 @@ func meetingPacks(t *testing.T, b sandbox.Sandbox, packer, word, aside, flags st
 		`[ "$st" = 0 ] || exit "$st"` + "\n" +
 		`size=$(` + tool("wc") + ` -c < "$whole"); cut=$((size / 2))` + "\n" +
 		tool("head") + ` -c "$cut" "$whole" >&3` + "\n" +
-		`for d in ` + shQuote(paths(b).WorkDir()) + `/session-pack-staging.*; do if [ -d "$d" ]; then ` +
+		`for d in ` + shellword.Quote(paths(b).WorkDir()) + `/session-pack-staging.*; do if [ -d "$d" ]; then ` +
 		`printf '%s\n' "$d"; fi; done > ` + at("staging") + "\n" +
 		`: > ` + at("second-half") + "\n" +
 		`printf 'half\n' > ` + at("half") + "\n" +
@@ -584,7 +594,7 @@ func meetingPacks(t *testing.T, b sandbox.Sandbox, packer, word, aside, flags st
 // by pattern since each is named for its pack (executor.Paths.SessionPackStaging).
 func packStagingLeft(t *testing.T, box sandbox.Sandbox) []string {
 	t.Helper()
-	res, err := box.Exec(t.Context(), "for d in "+shQuote(paths(box).WorkDir())+"/session-pack-staging.*; do "+
+	res, err := box.Exec(t.Context(), "for d in "+shellword.Quote(paths(box).WorkDir())+"/session-pack-staging.*; do "+
 		`if [ -e "$d" ] || [ -L "$d" ]; then printf '%s\n' "$d"; fi; done`, sandbox.ExecOptions{})
 	if err != nil {
 		t.Fatalf("asking the box for its packs' staging directories: %v", err)
@@ -711,8 +721,8 @@ type readBack struct {
 
 // takeWhole takes the session of b's job, which is over, as a read of it does
 // (packed now where the job left no archive), and reads it to its end.
-func takeWhole(ctx context.Context, runner *executor.Runner, b sandbox.Sandbox) readBack {
-	taken, err := runner.TakeSession(ctx, b, sandbox.SessionTake{MaxBytes: takeBound})
+func takeWhole(ctx context.Context, t testing.TB, runner *executor.Runner, b sandbox.Sandbox) readBack {
+	taken, err := runner.TakeSession(ctx, b, sandbox.SessionTake{Spool: testSpool(t), MaxBytes: takeBound})
 	switch {
 	case err != nil:
 		return readBack{err: err}
@@ -753,9 +763,9 @@ func overJobs() []overJob {
 				_, ran := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
 				forgetCapture(t, b)
 				goOn := func() {
-					line := shQuote(`{"type":"user","text":"` + wentOnMark + `"}`)
+					line := shellword.Quote(`{"type":"user","text":"` + wentOnMark + `"}`)
 					if _, err := b.Exec(t.Context(), "printf '%s\\n' "+line+" >> "+
-						shQuote(transcriptOf(b, ran.SessionID)), sandbox.ExecOptions{}); err != nil {
+						shellword.Quote(transcriptOf(b, ran.SessionID)), sandbox.ExecOptions{}); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -774,7 +784,7 @@ func overJobs() []overJob {
 				runner, b := openCodeBox(t, t.TempDir())
 				dir := t.TempDir()
 				writeBoxStandIn(t, b, paths(b).BinDir()+"/opencode",
-					strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`, "d="+shQuote(dir), 1))
+					strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`, "d="+shellword.Quote(dir), 1))
 				const session = "ses_0123456789abcdef0123456789"
 				if err := b.WriteFile(t.Context(), paths(b).SessionRecord(),
 					[]byte("id "+session+"\nrelease 2.3.2\n")); err != nil {
@@ -813,7 +823,7 @@ func overJobs() []overJob {
 func startTake(t *testing.T, runner *executor.Runner, held *heldTake) <-chan readBack {
 	t.Helper()
 	read := make(chan readBack, 1)
-	go func() { read <- takeWhole(t.Context(), runner, held) }()
+	go func() { read <- takeWhole(t.Context(), t, runner, held) }()
 	select {
 	case <-held.held:
 	case got := <-read:
@@ -930,8 +940,8 @@ func TestTheJobsOwnEndPackLandingAsAReadStreamsChangesNothingItReads(t *testing.
 			p := paths(b)
 			first := newHeldTake(b, false, h.at)
 			read := startTake(t, runner, first)
-			if res, err := b.Exec(t.Context(), "printf '%s' "+shQuote(final)+" > "+shQuote(p.SessionCapture()+".next")+
-				" && mv -f "+shQuote(p.SessionCapture()+".next")+" "+shQuote(p.SessionCapture()),
+			if res, err := b.Exec(t.Context(), "printf '%s' "+shellword.Quote(final)+" > "+shellword.Quote(p.SessionCapture()+".next")+
+				" && mv -f "+shellword.Quote(p.SessionCapture()+".next")+" "+shellword.Quote(p.SessionCapture()),
 				sandbox.ExecOptions{}); err != nil || res.ExitCode != 0 {
 				t.Fatalf("landing the job's own end pack: %v (exit %d) %s", err, res.ExitCode, res.Stderr)
 			}
@@ -1104,7 +1114,7 @@ func TestAPacksReleaseIsHeldToItsTakesOwnDeadline(t *testing.T) {
 			}
 			executor.Clocked(runner, func() time.Time { return made })
 			watched := &releaseWatch{Sandbox: b}
-			if got := takeWhole(ctx, runner, watched); got.err != nil {
+			if got := takeWhole(ctx, t, runner, watched); got.err != nil {
 				t.Fatalf("the take was refused: %v", got.err)
 			}
 			watched.mu.Lock()

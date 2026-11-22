@@ -146,16 +146,16 @@ type SandboxProvider struct {
 	//
 	// UNCAPPED UNLESS SET. How many rounds a task takes is the harness's own
 	// loop to judge, as when a person runs it. A positive value becomes the
-	// harness's turn cap (Claude Code's --max-turns, OpenCode's agent steps).
-	// Without one a run ends when it finishes, at a scheduled turn's
-	// timeout_seconds, or when a person stops it, never on its box's clock (see
-	// default_timeout_seconds) or part-way through a token budget.
+	// harness's turn cap (Claude Code's --max-turns, OpenCode's agent steps, a
+	// Codex run's helper's count). Without one a run ends when it finishes, at a
+	// scheduled turn's timeout_seconds, or when a person stops it, never on its
+	// box's clock (see default_timeout_seconds) or part-way through a budget.
 	//
 	// A PLAIN INT: zero (left out or 0) is uncapped, every other value the cap.
 	DefaultMaxTurns int `yaml:"default_max_turns,omitempty" json:"default_max_turns,omitempty" js:"min=0" desc:"Agentic-round cap for one executor run on seats that name none. Unset or 0 = uncapped."`
 
 	// CommitAttribution says whether every commit an executor authors as itself
-	// credits Crewlet: `Co-authored-by: Crewlet <noreply@crewlet.ai>`,
+	// credits Crewlet: `Co-authored-by: Crewlet <noreply@crewlet.com>`,
 	// `Crewlet-Seat:` the seat, `Crewlet-Run:` the run's turn and
 	// `Crewlet-Work-Item:` the item it is charged to. Git adds it
 	// through a hook the run's box is given (internal/sandbox/executor), so it
@@ -166,7 +166,7 @@ type SandboxProvider struct {
 	// ON UNLESS TURNED OFF: a history reader needs where a commit came from, and
 	// the credit changes nothing a commit does. A POINTER, because unset is
 	// "on": a plain bool's zero would turn it off.
-	CommitAttribution *bool `yaml:"commit_attribution,omitempty" json:"commit_attribution,omitempty" desc:"Credit Crewlet on every commit an executor authors as itself: Co-authored-by: Crewlet <noreply@crewlet.ai>, Crewlet-Seat naming the seat, Crewlet-Run naming the run, and Crewlet-Work-Item naming the item its turn is charged to. Unset = true; false = credit nothing."`
+	CommitAttribution *bool `yaml:"commit_attribution,omitempty" json:"commit_attribution,omitempty" desc:"Credit Crewlet on every commit an executor authors as itself: Co-authored-by: Crewlet <noreply@crewlet.com>, Crewlet-Seat naming the seat, Crewlet-Run naming the run, and Crewlet-Work-Item naming the item its turn is charged to. Unset = true; false = credit nothing."`
 
 	// Setup is the engine-wide provisioning applied to every box before
 	// each seat's own extras. The engine ships NO steps of its own — git
@@ -185,8 +185,9 @@ type E2BSandbox struct {
 	// Domain points at a self-hosted cluster. Empty is the vendor cloud.
 	//
 	// ONE FIELD IS THE WHOLE CLOUD-TO-SELF-HOSTED SWITCH: the control-plane
-	// address and every box's own hostname are both derived from it, so
-	// there is no second address that can disagree with the first.
+	// address and every box's own hostname are derived from it, a box's unless
+	// E2B answers a domain of its own for it, so no second setting can
+	// disagree with the first.
 	Domain string `yaml:"domain,omitempty" json:"domain,omitempty" desc:"Self-hosted sandbox cluster domain; empty = vendor cloud."`
 
 	// Template is the box image.
@@ -718,7 +719,7 @@ func (s *SandboxSetupStep) validate(path Path) error {
 // whatever its run checks out (internal/engine,
 // TestABoxIsConfiguredByEnvironment).
 func ReservedSandboxEnv() []string {
-	return append([]string{"CREWLET_GIT_TOKEN", "CREWLET_GIT_URL"}, ReservedCheckEnv()...)
+	return append([]string{"CREWLET_GIT_ACCESS_FILE", "CREWLET_GIT_URL"}, ReservedCheckEnv()...)
 }
 
 // ReservedCheckEnv is every variable the engine sets in a CHECK'S box alone:
@@ -750,8 +751,9 @@ var reservedSandboxEnvReasons = map[string]string{
 		"its own credential, and a value here would send those reads, and that credential, elsewhere",
 	"CREWLET_CHECK_SUMMARY": "it is the file a check's command writes its summary to, read back when the " +
 		"check ends, and a value here would have the summary written where it is never read",
-	"CREWLET_GIT_TOKEN": "it is the run's own credential on Gitlet, minted for each " +
-		"of its launches on a node that serves it, and a value here would break its clones and pushes",
+	"CREWLET_GIT_ACCESS_FILE": "it is the file in the box holding the run's own credential on Gitlet, " +
+		"minted for each of its launches on a node that serves it, and a value here would break its clones " +
+		"and pushes",
 	"CREWLET_GIT_URL": "it is the base a run clones Gitlet's repositories from and " +
 		"pushes them to (CREWLET_BOX_GIT_URL on the launching node), and a value here would send its git " +
 		"elsewhere",

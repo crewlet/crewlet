@@ -1,6 +1,8 @@
 package derive
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net/url"
 	"path"
@@ -133,7 +135,15 @@ var integrationRows = map[integration.Kind]func(b *builder, c *config.Company, z
 	integration.KindAWS:             aws,
 	integration.KindGoogleCloud:     googleCloud,
 	integration.KindSSH:             sshHosts,
+	integration.KindMetaAds:         metaAds,
 	integration.KindAppStoreConnect: appStoreConnect,
+	integration.KindAppleAds:        appleAds,
+	integration.KindGoogleAnalytics: googleAnalytics,
+	integration.KindAdMob:           adMob,
+	integration.KindAdSense:         adSense,
+	integration.KindGoogleAds:       googleAds,
+	integration.KindSearchConsole:   searchConsole,
+	integration.KindGooglePlay:      googlePlay,
 	integration.KindAtlassian:       atlassian,
 }
 
@@ -359,6 +369,20 @@ func expo(b *builder, c *config.Company, _ map[string]atlas.Ref) {
 		atlas.CapabilityAppDelivery)
 }
 
+// metaAds records the connected Meta business portfolio, keyed by its ID
+// where the document names it, else by its app's ID; neither is a secret.
+func metaAds(b *builder, c *config.Company, _ map[string]atlas.Ref) {
+	m := c.Integrations.MetaAds
+	if m == nil {
+		return
+	}
+	where, key := "integrations.meta_ads.business_id", strings.TrimSpace(m.BusinessID)
+	if key == "" {
+		where, key = "integrations.meta_ads.app_id", strings.TrimSpace(m.AppID)
+	}
+	b.account(where, atlas.VendorMeta, key, key, "Meta Ads Manager", m.Enabled)
+}
+
 // appStoreConnect records each connected App Store Connect team, keyed by its
 // issuer ID, which is not a secret.
 func appStoreConnect(b *builder, c *config.Company, _ map[string]atlas.Ref) {
@@ -370,6 +394,151 @@ func appStoreConnect(b *builder, c *config.Company, _ map[string]atlas.Ref) {
 		issuer := strings.ToLower(a.Connections[id].IssuerID)
 		b.account("integrations.app_store_connect.connections."+id+".issuer_id", atlas.VendorApple, issuer, issuer,
 			"App Store Connect", a.Enabled, atlas.CapabilityAppDelivery)
+	}
+}
+
+// appleAds records each connected Apple Ads organization, keyed by its ID
+// where the document names it, else by its API user's client ID; neither is a
+// secret.
+func appleAds(b *builder, c *config.Company, _ map[string]atlas.Ref) {
+	a := c.Integrations.AppleAds
+	if a == nil {
+		return
+	}
+	for _, id := range a.ConnectionIDs() {
+		conn := a.Connections[id]
+		where, key := "integrations.apple_ads.connections."+id+".org_id", strings.TrimSpace(conn.OrgID)
+		if key == "" {
+			where, key = "integrations.apple_ads.connections."+id+".client_id", strings.ToLower(conn.ClientID)
+		}
+		b.account(where, atlas.VendorApple, key, key, "Apple Ads", a.Enabled)
+	}
+}
+
+// googleAnalytics records each Google Analytics property the company narrows
+// agents to, keyed by its ID, or the vendor alone where it names none.
+func googleAnalytics(b *builder, c *config.Company, _ map[string]atlas.Ref) {
+	g := c.Integrations.GoogleAnalytics
+	if g == nil {
+		return
+	}
+	if len(g.Properties) == 0 {
+		b.account("integrations.google_analytics", atlas.VendorGoogle, "analytics", "", "Google Analytics",
+			g.Enabled, atlas.CapabilityAnalytics)
+		return
+	}
+	for i, id := range g.Properties {
+		b.account("integrations.google_analytics.properties["+strconv.Itoa(i)+"]", atlas.VendorGoogle,
+			"analytics/"+id, id, "Google Analytics", g.Enabled, atlas.CapabilityAnalytics)
+	}
+}
+
+// adMob records each AdMob publisher account the company narrows agents to,
+// keyed by its ID, or the vendor alone where it names none.
+func adMob(b *builder, c *config.Company, _ map[string]atlas.Ref) {
+	a := c.Integrations.AdMob
+	if a == nil {
+		return
+	}
+	if len(a.Accounts) == 0 {
+		b.account("integrations.admob", atlas.VendorGoogle, "admob", "", "AdMob", a.Enabled,
+			atlas.CapabilityMonetization)
+		return
+	}
+	for i, id := range a.Accounts {
+		b.account("integrations.admob.accounts["+strconv.Itoa(i)+"]", atlas.VendorGoogle, "admob/"+id, id,
+			"AdMob", a.Enabled, atlas.CapabilityMonetization)
+	}
+}
+
+// adSense records each AdSense publisher account the company narrows agents
+// to, keyed by its ID, or the vendor alone where it names none.
+func adSense(b *builder, c *config.Company, _ map[string]atlas.Ref) {
+	a := c.Integrations.AdSense
+	if a == nil {
+		return
+	}
+	if len(a.Accounts) == 0 {
+		b.account("integrations.adsense", atlas.VendorGoogle, "adsense", "", "AdSense", a.Enabled,
+			atlas.CapabilityMonetization)
+		return
+	}
+	for i, id := range a.Accounts {
+		b.account("integrations.adsense.accounts["+strconv.Itoa(i)+"]", atlas.VendorGoogle, "adsense/"+id, id,
+			"AdSense", a.Enabled, atlas.CapabilityMonetization)
+	}
+}
+
+// googleAds records each Google Ads account the company names, keyed by its
+// customer ID, or the vendor alone where it names none.
+func googleAds(b *builder, c *config.Company, _ map[string]atlas.Ref) {
+	g := c.Integrations.GoogleAds
+	if g == nil {
+		return
+	}
+	if len(g.Customers) == 0 {
+		b.account("integrations.google_ads", atlas.VendorGoogle, "ads", "", "Google Ads", g.Enabled,
+			atlas.CapabilityAdvertising)
+		return
+	}
+	for i, cu := range g.Customers {
+		b.account("integrations.google_ads.customers["+strconv.Itoa(i)+"].id", atlas.VendorGoogle, "ads/"+cu.ID,
+			cu.ID, "Google Ads", g.Enabled, atlas.CapabilityAdvertising)
+	}
+}
+
+// searchConsole records each Search Console site the company names as an
+// account, or the vendor alone where it names none: a domain property keyed
+// as Search Console writes it (sc-domain:example.com), and a URL prefix by its
+// host and a short digest of the site, with the site as its site fact. A key
+// holds no scheme's `//`, and one host holds several properties (a path, http
+// beside https), each its own account; the digest also keeps its account
+// reference from joining another Google account named by the host.
+func searchConsole(b *builder, c *config.Company, _ map[string]atlas.Ref) {
+	g := c.Integrations.SearchConsole
+	if g == nil {
+		return
+	}
+	if len(g.Sites) == 0 {
+		b.account("integrations.search_console", atlas.VendorGoogle, "search-console", "", "Search Console",
+			g.Enabled, atlas.CapabilityAnalytics)
+		return
+	}
+	for i, site := range g.Sites {
+		where := "integrations.search_console.sites[" + strconv.Itoa(i) + "]"
+		if strings.HasPrefix(site, "sc-domain:") {
+			b.account(where, atlas.VendorGoogle, "search-console/"+site, site, "Search Console", g.Enabled,
+				atlas.CapabilityAnalytics)
+			continue
+		}
+		sum := sha256.Sum256([]byte(site))
+		id := hostOf(site) + "/" + hex.EncodeToString(sum[:siteDigestBytes])
+		if r, ok := b.account(where, atlas.VendorGoogle, "search-console/"+id, id, "Search Console", g.Enabled,
+			atlas.CapabilityAnalytics); ok {
+			b.says(where, r, atlas.FactSite, site)
+		}
+	}
+}
+
+// siteDigestBytes is how much of a site's SHA-256 its account's key holds:
+// 48 bits tell apart the at most 1000 properties a company names.
+const siteDigestBytes = 6
+
+// googlePlay records each Google Play app the company narrows agents to,
+// keyed by its package name, or the vendor alone where it names none.
+func googlePlay(b *builder, c *config.Company, _ map[string]atlas.Ref) {
+	g := c.Integrations.GooglePlay
+	if g == nil {
+		return
+	}
+	if len(g.Apps) == 0 {
+		b.account("integrations.google_play", atlas.VendorGoogle, "play", "", "Google Play", g.Enabled,
+			atlas.CapabilityAppDelivery)
+		return
+	}
+	for i, app := range g.Apps {
+		b.account("integrations.google_play.apps["+strconv.Itoa(i)+"]", atlas.VendorGoogle, "play/"+app, app,
+			"Google Play", g.Enabled, atlas.CapabilityAppDelivery)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // box mints a fake sandbox with the shared plumbing installed, reading whole
@@ -239,8 +240,8 @@ func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
 	// in a statement of its own (joined by `&&`, one removal that failed would
 	// keep them all), under the work directory quoted, so a home path holding a
 	// space is never split into words.
-	saves := "; rm -rf " + sandbox.ShellQuote(p.WorkDir()) + "/session-save*"
-	packs := "; rm -rf " + sandbox.ShellQuote(p.WorkDir()) + "/session-pack-staging.*"
+	saves := "; rm -rf " + shellword.Quote(p.WorkDir()) + "/session-save*"
+	packs := "; rm -rf " + shellword.Quote(p.WorkDir()) + "/session-pack-staging.*"
 	if !strings.HasSuffix(cleared, saves+packs) {
 		t.Fatalf("the clear does not end with %q, every save's files and every pack's removed: %s", saves+packs,
 			cleared)
@@ -738,12 +739,13 @@ func TestTheBoxsNotesRouteNamesTheEngineHostAsTheBoxReachesIt(t *testing.T) {
 	var cfg struct {
 		Plugins []openCodePlugin `json:"plugins"`
 	}
-	if err = json.Unmarshal(raw, &cfg); err != nil || len(cfg.Plugins) != 1 {
+	if err = json.Unmarshal(raw, &cfg); err != nil || len(runPlugins(cfg.Plugins)) != 1 {
 		t.Fatalf("the configuration names no notes plugin (%v):\n%s", err, raw)
 	}
-	file, ok := referencedPath(cfg.Plugins[0].Options.URL)
+	steer := runPlugins(cfg.Plugins)[0]
+	file, ok := referencedPath(steer.Options.URL)
 	if !ok {
-		t.Fatalf("the plugin's route is %q, want a reference to a file", cfg.Plugins[0].Options.URL)
+		t.Fatalf("the plugin's route is %q, want a reference to a file", steer.Options.URL)
 	}
 	value, err := b.ReadFile(t.Context(), file)
 	if err != nil {

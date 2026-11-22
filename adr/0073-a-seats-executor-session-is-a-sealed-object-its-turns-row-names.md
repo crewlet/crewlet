@@ -168,11 +168,11 @@ follows (internal/sandbox's `session.go` and `handed.go`, internal/engine's
 before the box is paused or reclaimed: the archive, packed where it must be,
 streamed through the scrub and sealed under the fleet keyring into a spool on
 the node's own disk, bounded by the pack's and the scrub's waits
-(`SessionTakeBudget`). The scrub's, `SessionScrubWait`, is seven minutes, from
+(`SessionTakeBudget`). The scrub's, `SessionScrubWait`, is six minutes, from
 its measured worst: the slowest session a harness writes at the scrub's
-256 MiB of plaintext (`scrubPlainMax`), 261 s, and the archive read twice out
+256 MiB of plaintext (`scrubPlainMax`), 183 s, and the archive read twice out
 of a box at a mebibyte a second, 96 s at 48 MiB, and the minute a take may
-wait for its spool's room (`spoolRoomWait`), 417 s; lines that are no JSON, which
+wait for its spool's room (`spoolRoomWait`), 339 s; lines that are no JSON, which
 only a corrupted transcript holds, do not set it. A take past it FAILS CLOSED:
 nothing is kept, its place is refused and the last kept copy stands, so a box
 can only cost its own session. The KEEP — the upload at the object store's
@@ -316,13 +316,13 @@ a loss's add `JobEndBudget` (the wait and the kill, 145 seconds) to a
 collection's at the host's three-quarter share, about 193.3 seconds more, so a
 host's take after an end at its bound is still given its whole
 `SessionTakeBudget`. As `BoxReadBudget` (`internal/sandbox/boxhost.go`) computes
-it, a collection of a turn with no cap waits about 5,100.1 seconds (a Claude
+it, a collection of a turn with no cap waits about 5,020.1 seconds (a Claude
 Code one 36 more, for its main thread's read, `MainThreadReadWait`, below) and
-a stop's or a loss's about 5,293.5: the poll's 60-second bound, and at the
-share the take's 540 seconds, its reservation's 30, three 30-second graces and
+a stop's or a loss's about 5,213.5: the poll's 60-second bound, and at the
+share the take's 480 seconds, its reservation's 30, three 30-second graces and
 the four changes of the run's row its host makes, each at the slowest node's
 crossing (`coord.MaxValueCrossing`, about 780.03 seconds), so
-60 + 3,780.1 / 0.75. The figures first given here, 460 and 653 seconds, were
+60 + 3,720.1 / 0.75. The figures first given here, 460 and 653 seconds, were
 from before those changes were counted at their crossings.
 `internal/sandbox.TestABoxReadGivesEachChangeOfTheRowItsHostMakesItsCrossing`
 holds the collection's terms and
@@ -699,8 +699,8 @@ read do, with the record that the cap ended a job it saw working on top, at
 its grace and the slowest node's crossing (`recordsTheCap`), whether or not
 the cap has passed on the asker's clock, since the host decides on its own as
 it reads; a collection of a turn with none waits as it did. As the code
-computes them, that is about 6,373.5 seconds for a collection of a turn with a
-cap, 5,100.1 + (145 + 30 + 780.03) / 0.75, and about 5,100.1 for one with none
+computes them, that is about 6,293.5 seconds for a collection of a turn with a
+cap, 5,020.1 + (145 + 30 + 780.03) / 0.75, and about 5,020.1 for one with none
 (the derivation is in the amendment above), and a Claude Code collection waits
 36 seconds more for its main thread's read (`MainThreadReadWait`,
 `internal/sandbox.TestTheBoxReadBudgetHoldsTheMainThreadRead`). A Claude Code
@@ -3736,7 +3736,7 @@ crossing (internal/sandbox's `session.go`): the keep's two reads each in a
 room of their own beside the upload's pace (`keepReadRoom`,
 `SessionKeepBudget`, twenty-six minutes), a mint past it refusing the capture
 and a listing past it deciding nothing; a take's life from its instant
-(`takeLife`, an hour and two and a half minutes) and a takeover's (`takeOverLife`,
+(`takeLife`, an hour and one and a half minutes) and a takeover's (`takeOverLife`,
 an hour and twenty), the longer of them a capture's life (`captureLife`);
 and a read standing by's window from its own instant, its take's rest, its
 own wait, the read of the turn's row on the log past it and the settle it
@@ -4927,11 +4927,14 @@ never one whose lock is held (`Coordinator.sweepSpools`). The age sweep and
 its bound are gone.
 
 **Every spool of a process shares one room**, `(maxConcurrentSaves + 1) ×
-executorkeep.SealedMaxBytes` (`sandbox.spoolRoomBytes`), 240.06 MiB. A save takes room at
-the sealed bound before its pack slot and never waits, so saves leave a final
-take the fifth session's room; a take waits for room at the sealed bound at
+sandbox.takeRoomBytes` (`sandbox.spoolRoomBytes`), 481.17 MiB: a take's room
+is a sealed session at its bound for its sealed spool, taken first, and as
+much again for its scrub's spool, each with what gzip adds to input it cannot
+shrink and to the scrub spool's members. A save takes a take's room before its pack slot and never waits, so
+saves leave a final take the fifth take's room; a take waits for its room at
 most a minute (`spoolRoomWait`) before its pack slot and its scrub's slots, a
-save's order, shrinks it to its archive's counted size once packed, and past
+save's order, shrinks its sealed part to its archive's counted size once
+packed and its scrub's part as that spool is read back and removed, and past
 the minute keeps nothing and stamps nothing. Every seal is refused before it
 writes past its room, a save's what its seat's ledger counted.
 

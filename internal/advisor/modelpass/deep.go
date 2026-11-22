@@ -38,11 +38,13 @@ type Reads interface {
 	Answer(ctx context.Context, name string, params map[string]any) (any, error)
 }
 
-// Question is one read the deep run may ask.
+// Question is one read the deep run may ask. Words is what it reads as its
+// step says it to the administrator ("token spend"); the model is not told it.
 type Question struct {
 	Name   string `json:"name"`
 	Params string `json:"params"`
 	About  string `json:"about"`
+	Words  string `json:"-"`
 }
 
 // DeepData is what one deep run reads.
@@ -162,7 +164,7 @@ func RunDeepFrom(ctx context.Context, deps Deps, d DeepData, b DeepBounds, progr
 		surf.agenda, out.Resumed = resumedAgenda(surf.agenda, resume.Agenda)
 		surf.reads = lastRead(resume.Reads)
 		surf.kept = slices.Clone(resume.Reads)
-		surf.line(fmt.Sprintf("resumed after a takeover: %d of %d agenda items already answered", out.Resumed,
+		surf.line(fmt.Sprintf("Picked up where it stopped: %d of %d questions already answered", out.Resumed,
 			len(surf.agenda)))
 	}
 	runCtx, cancel := context.WithTimeout(ctx, time.Duration(b.Minutes)*time.Minute)
@@ -338,8 +340,9 @@ func (s *deepSurface) ToolDefs() []llm.ToolDef {
 			Parameters: object([]string{"name"}, map[string]any{
 				"name":   map[string]any{"type": "string"},
 				"params": map[string]any{"type": "object"}})},
-		{Name: ProgressTool, Description: "Say in one short line what you are doing now, such as " +
-			"\"reading flow hours\" or \"testing: releases pile up behind one seat\". Shown to the administrator.",
+		{Name: ProgressTool, Description: "Say in one short plain line what you are doing now, as the " +
+			"administrator reads it, naming no tool, read or parameter, such as \"Checking why work waits\" or " +
+			"\"Testing: releases pile up behind one seat\". Shown to the administrator.",
 			Parameters: object([]string{"text"}, map[string]any{
 				"text": map[string]any{"type": "string", "maxLength": maxProgressRunes}})},
 		{Name: LookTool, Description: "Look at one part of an answer you already read, by its path, such as " +
@@ -469,7 +472,7 @@ func (s *deepSurface) snapshot() (toolloop.ToolResult, error) {
 	if again {
 		return toolloop.ToolResult{Output: "You read the snapshot already: look at snapshot.<path> for any part of it."}, nil
 	}
-	s.line("reading the snapshot")
+	s.line("Reading the company's numbers")
 	raw, err := json.Marshal(s.data.Snapshot)
 	if err != nil {
 		return toolloop.ToolResult{}, err
@@ -578,13 +581,14 @@ func (s *deepSurface) read(ctx context.Context, args map[string]any) (toolloop.T
 		return toolloop.ToolResult{Output: fmt.Sprintf("You read this already as %s: look at %s.<path> for any "+
 			"part of it.", before, before)}, nil
 	}
-	s.line("reading " + asking)
+	said := s.readSaid(name, params)
+	s.line("Reading " + said)
 	answer, err := s.data.Reads.Answer(ctx, name, params)
 	if err != nil {
 		s.mu.Lock()
 		s.failed[name] = true
 		s.mu.Unlock()
-		s.line("could not read " + name)
+		s.line("Could not read " + said)
 		return toolloop.ToolResult{Failed: true, Cause: mcp.RefusalInvalid,
 			Output: fmt.Sprintf("%s could not be read: %v", name, err)}, nil
 	}
@@ -614,14 +618,62 @@ func (s *deepSurface) read(ctx context.Context, args map[string]any) (toolloop.T
 	return s.shown(as, whole, len(raw))
 }
 
-// askedAs is one read as a progress line names it: its name and its
-// parameters in order ("work_items assignee=sre status_group=todo").
+// askedAs is one read as the run keeps it asked: its name and its
+// parameters in order ("work_items assignee=sre status_group=active").
 func askedAs(name string, params map[string]any) string {
 	parts := []string{name}
 	for _, k := range slices.Sorted(maps.Keys(params)) {
 		parts = append(parts, fmt.Sprintf("%s=%v", k, params[k]))
 	}
 	return strings.Join(parts, " ")
+}
+
+// readSaid is one read as its step says it: what it reads, then whose and
+// over when where its parameters say ("token spend for sre, last 7 days").
+// Paging, limits and ids say nothing to a reader and are left out.
+func (s *deepSurface) readSaid(name string, params map[string]any) string {
+	words := name
+	for _, q := range s.data.Reads.Questions() {
+		if q.Name == name && q.Words != "" {
+			words = q.Words
+		}
+	}
+	arg := func(k string) string {
+		v, ok := params[k]
+		if !ok || v == nil {
+			return ""
+		}
+		return strings.TrimSpace(fmt.Sprint(v))
+	}
+	for _, k := range []string{"seat", "assignee", "name"} {
+		if v := arg(k); v != "" {
+			words += " for " + v
+			break
+		}
+	}
+	var scope []string
+	if v := arg("status_group"); v != "" {
+		scope = append(scope, strings.ReplaceAll(v, "_", " "))
+	}
+	if v := arg("week"); v != "" {
+		scope = append(scope, v)
+	}
+	days := arg("days")
+	if r := strings.TrimSuffix(arg("range"), "d"); days == "" && r != arg("range") {
+		days = r
+	}
+	switch since, until := arg("since"), arg("until"); {
+	case since != "" && until != "":
+		scope = append(scope, since+" to "+until)
+	case days != "" && arg("previous") == "true":
+		scope = append(scope, "the "+days+" days before")
+	case days != "":
+		scope = append(scope, "last "+days+" days")
+	}
+	if len(scope) == 0 {
+		return words
+	}
+	return words + ", " + strings.Join(scope, ", ")
 }
 
 // say keeps one progress line and tells it.
@@ -726,8 +778,15 @@ func (s *deepSurface) verdict(args map[string]any) toolloop.ToolResult {
 	left := open(s.agenda)
 	s.mu.Unlock()
 	s.keep()
-	s.line(fmt.Sprintf("%s %s: %s", id, v, note))
+	s.line(verdictWords[Verdict(v)] + ": " + note)
 	return toolloop.ToolResult{Output: fmt.Sprintf("recorded; %d items still have no verdict", len(left))}
+}
+
+// verdictWords is each verdict as its step says it.
+var verdictWords = map[Verdict]string{
+	VerdictConfirmed:  "Confirmed",
+	VerdictRefuted:    "Ruled out",
+	VerdictUnreadable: "Could not check",
 }
 
 // add puts one of the run's own questions on its agenda.
@@ -749,7 +808,7 @@ func (s *deepSurface) add(args map[string]any) toolloop.ToolResult {
 	s.agenda = append(s.agenda, AgendaItem{ID: id, Source: AgendaModel, Question: question, Numbers: []AgendaNumber{}})
 	s.mu.Unlock()
 	s.keep()
-	s.line(fmt.Sprintf("added %s: %s", id, question))
+	s.line("New question: " + question)
 	return toolloop.ToolResult{Output: fmt.Sprintf("added as %s; it needs a verdict too", id)}
 }
 
