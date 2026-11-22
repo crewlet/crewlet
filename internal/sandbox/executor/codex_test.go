@@ -431,13 +431,13 @@ func TestACodexRunStartsFromItsOwnConfigurationEveryRun(t *testing.T) {
 
 // NO COMMAND LINE AND NO MODEL SHELL CARRIES THE BRIDGE'S TOKEN, which is in
 // the path of every bridge URL: the run's script, the app-server's and exec's
-// argv, and the helper's command line name files, and the notes and skill
-// routes reach the helper's environment alone, which the model's shell policy
-// excludes too.
+// argv, and the helper's command line name files and variables, never a
+// route's value; the notes and skill routes reach the helper's environment
+// alone, never Codex's, and the model's shell policy excludes them by name.
 //
 // Mutation: put the MCP url or the notes route on a command line, export the
-// route to Codex, or record no digest of the skill as written, and this goes
-// red.
+// route to Codex, drop a route from the shell policy's exclude list, or record
+// no digest of the skill as written, and this goes red.
 func TestNoCodexCommandLineCarriesTheBridgesToken(t *testing.T) {
 	t.Parallel()
 	const token = "run-token-placeholder"
@@ -451,10 +451,17 @@ func TestNoCodexCommandLineCarriesTheBridgesToken(t *testing.T) {
 	}
 	runner, box, record := codexBox(t, "0.171.0")
 	runToEnd(t, runner, box, req)
+	// A VALUE, NEVER A NAME: the shell policy on the server's argv names the
+	// routes' variables to exclude them, and carries neither route.
 	for _, file := range []string{"server-argv", "exec-argv", "env"} {
 		if got := strings.Join(recorded(t, record, file), "\n"); strings.Contains(got, token) ||
-			strings.Contains(got, "CREWLET_NOTES_URL") || strings.Contains(got, "CREWLET_SKILLS_URL") {
-			t.Errorf("%s carries the bridge's route:\n%s", file, got)
+			strings.Contains(got, codexBridgeURL) {
+			t.Errorf("%s carries the bridge's token or a route:\n%s", file, got)
+		}
+	}
+	for _, kv := range recorded(t, record, "env") {
+		if strings.HasPrefix(kv, "CREWLET_NOTES_URL=") || strings.HasPrefix(kv, "CREWLET_SKILLS_URL=") {
+			t.Errorf("Codex's environment carries a route meant for the helper alone: %s", kv)
 		}
 	}
 	p := executor.PathsFor(box)
