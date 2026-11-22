@@ -249,6 +249,10 @@ type Options struct {
 	// lives, which is what it can prove.
 	SlackApps func() map[string]string
 
+	// Consents starts, reads and gives up an integration's consent grant
+	// (consent.go). Nil answers those routes 501.
+	Consents ConsentSignIns
+
 	// StateCipher seals the GitHub App state and MUST be the fleet's own
 	// keyring, the same on every node: where the begin and the callback land on
 	// different nodes, any other refuses every completion. Required; config
@@ -294,6 +298,7 @@ type Service struct {
 	// slackApps is which Slack app each seat authenticates as, from the
 	// engine. See [Options.SlackApps].
 	slackApps func() map[string]string
+	consents  ConsentSignIns
 	secrets   setup.Secrets
 	passes    *setup.Runner
 	// access is the engine's per-seat access. See [Options.Access].
@@ -374,6 +379,7 @@ func New(opts Options) (*Service, error) {
 		sink:           opts.Sink,
 		status:         opts.Status,
 		slackApps:      opts.SlackApps,
+		consents:       opts.Consents,
 		clock:          now,
 		guard:          authz.ContextGuard(authz.NoChart{}),
 		writer: setup.Writer{
@@ -418,6 +424,13 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// person's hand.
 	post("POST /setup/integrations/{kind}/provision", authz.EffectRewrites, s.provision)
 	post("POST /setup/integrations/{kind}/check", authz.EffectReads, s.check)
+	// An integration's consent grant (consent.go): a sign-in makes a
+	// credential the engine seals, so a start and a sign-out add
+	// `secrets.write` to the connect verb in the handler.
+	post("POST /setup/integrations/{kind}/consent", authz.EffectCreates, s.startConsent)
+	mount("DELETE /setup/integrations/{kind}/consent", authz.ActionSetupConnect, s.signOutConsent)
+	// OUTSIDE /setup/integrations/{kind}/: the id is a sign-in's.
+	mount("GET /setup/consent-sign-ins/{id}", authz.ActionSetupRead, s.consentSignIn)
 	// One agent's own app: a GitHub App is one bot identity, so an app per
 	// agent is the only way each acts as itself.
 	post("POST /setup/integrations/github/app", authz.EffectCreates, s.beginApp)
