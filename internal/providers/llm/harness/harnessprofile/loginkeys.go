@@ -64,9 +64,14 @@ type absentIdentity struct{}
 
 // carryKey sets the value at path in dst, the shared copy, to src's, a home's:
 // a `*` part walks every key of an object, or index of an array, that both
-// hold, so an entry the home added is never carried; a value the home lacks
-// leaves dst's, and a parent dst lacks takes nothing.
+// hold, so an entry the home added is never carried. Only a leaf dst already
+// holds takes a value, and only a string for a string or a number for a
+// number ([sameScalar]): a value the home lacks, or of another kind, leaves
+// dst's. A path ending at an object or array carries nothing.
 func carryKey(dst, src any, path []string) {
+	if len(path) == 0 {
+		return
+	}
 	if path[0] == "*" {
 		switch d := dst.(type) {
 		case map[string]any:
@@ -94,12 +99,34 @@ func carryKey(dst, src any, path []string) {
 		return
 	}
 	if len(path) == 1 {
-		d[path[0]] = from
+		if current, present := d[path[0]]; present && sameScalar(current, from) {
+			d[path[0]] = from
+		}
 		return
 	}
 	if next, present := d[path[0]]; present {
 		carryKey(next, from, path[1:])
 	}
+}
+
+// sameScalar reports whether a and b are both strings, or both numbers of one
+// decoder's kind: a JSON number, a TOML integer or a TOML float.
+func sameScalar(a, b any) bool {
+	switch a.(type) {
+	case string:
+		_, ok := b.(string)
+		return ok
+	case json.Number:
+		_, ok := b.(json.Number)
+		return ok
+	case int64:
+		_, ok := b.(int64)
+		return ok
+	case float64:
+		_, ok := b.(float64)
+		return ok
+	}
+	return false
 }
 
 // withoutCommentLines is content with every line opening with `//` set aside:

@@ -87,11 +87,21 @@
           "cli-config.json": "not json"
         },
         "logged": true
+      },
+      {
+        "copy": {
+          "auth.json": "// a comment line\n{\n  \"accessToken\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJ1c2VyLTQyIiwiaWF0IjoyfQ.c2ln\",\n  \"refreshToken\": \"refresh-2\",\n  \"apiKey\": \"PINNED-CHANGE\"\n}\n",
+          "cli-config.json": "{\n  \"authInfo\": {\n    \"email\": \"seat@example.com\",\n    \"displayName\": \"Seat\",\n    \"userId\": 42\n  }\n}\n"
+        },
+        "logged": true
       }
     ],
     "carried": {
       "auth.json": "{\n  \"accessToken\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJ1c2VyLTQyIiwiaWF0IjoyfQ.c2ln\",\n  \"refreshToken\": \"refresh-2\"\n}\n",
       "cli-config.json": "{\n  \"version\": 1,\n  \"authInfo\": {\n    \"email\": \"seat@example.com\",\n    \"displayName\": \"Seat\",\n    \"userId\": 42\n  },\n  \"permissions\": {\n    \"allow\": [\n      \"SHARED-SETTING\"\n    ]\n  }\n}\n"
+    },
+    "dropped": {
+      "auth.json": "{\n  \"accessToken\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJ1c2VyLTQyIiwiaWF0IjoyfQ.c2ln\",\n  \"refreshToken\": \"refresh-2\",\n  \"apiKey\": \"PINNED-CHANGE\"\n}\n"
     },
     "other": {
       "auth.json": "{\n  \"accessToken\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJ1c2VyLTQzIiwiaWF0IjoxfQ.c2ln\",\n  \"refreshToken\": \"refresh-9\"\n}\n",
@@ -118,6 +128,9 @@
     "carried": {
       "google_accounts.json": "{\n  \"active\": \"seat@example.com\",\n  \"old\": []\n}\n",
       "oauth_creds.json": "{\n  \"access_token\": \"access-2\",\n  \"expiry_date\": 1795003600000,\n  \"id_token\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJnb29nbGUtc2VhdCIsImlhdCI6Mn0.c2ln\",\n  \"refresh_token\": \"refresh-1\",\n  \"scope\": \"https://www.googleapis.com/auth/cloud-platform\",\n  \"token_type\": \"Bearer\"\n}\n"
+    },
+    "dropped": {
+      "oauth_creds.json": "{\n  \"access_token\": \"access-2\",\n  \"refresh_token\": \"refresh-1\",\n  \"scope\": \"PINNED-CHANGE\",\n  \"token_type\": \"Bearer\",\n  \"expiry_date\": 1795003600000,\n  \"id_token\": \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJnb29nbGUtc2VhdCIsImlhdCI6Mn0.c2ln\"\n}\n"
     },
     "other": {
       "google_accounts.json": "{\n  \"active\": \"other@example.com\",\n  \"old\": []\n}\n",

@@ -1549,12 +1549,11 @@ func (w *Workspace) carry(
 		return nil, false, nil
 	}
 	if gen.Mode == syncRefresh {
-		// A COPY NAMING ANOTHER ACCOUNT IS NO REFRESH of this login
-		// ([harnessprofile.FileRule.SameAccount]): the whole login stays as it
-		// is. Asked of EVERY seeded file the home holds, changed or not, against
-		// current, the seeded login here: a token file swapped beside an
-		// untouched file naming the account is caught by the token's own
-		// subject, and a file naming the account that the home dropped names none.
+		// A COPY WHOSE ACCOUNT FIELDS OR ID TOKEN NAME ANOTHER ACCOUNT is not
+		// carried ([harnessprofile.FileRule.SameAccount]): the whole login stays
+		// as it is. Asked of EVERY seeded file, changed or not, against current,
+		// the seeded login here; a file holding them that the home dropped
+		// names none.
 		var other []string
 		for _, name := range slices.Sorted(maps.Keys(gen.Seeded)) {
 			rule := w.profile.FileRule(name)

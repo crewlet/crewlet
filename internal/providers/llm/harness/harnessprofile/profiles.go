@@ -201,6 +201,7 @@ func (p Profile) Clone() Profile {
 			out.LoginKeys[name] = slices.Clone(keys)
 		}
 	}
+	out.CommentLines = slices.Clone(p.CommentLines)
 	if p.RefreshKeys != nil {
 		out.RefreshKeys = make(map[string][]string, len(p.RefreshKeys))
 		for name, keys := range p.RefreshKeys {

@@ -106,16 +106,16 @@ func TestALoginsAccountIsReadAtItsIdentityKeys(t *testing.T) {
 }
 
 // A REFRESH CARRIES ITS TOKENS ALONE AND FAILS CLOSED: a home is seeded with a
-// mixed file's login fields alone; a refresh carries back exactly its refresh
-// keys, `*` walking an object's entries and an array's indices both copies
-// hold, while an endpoint, a field or an entry the home added, and a field the
-// home dropped, stay as the shared copy has them; a file naming no refresh keys
-// carries nothing; and a copy either side cannot read (malformed, a key named
-// twice, anything after the object) carries nothing, saying why.
+// mixed file's login fields alone; a refresh carries exactly its refresh keys'
+// leaves the shared copy holds, of the same kind, in the shared copy's layout
+// and never as the home's bytes; anything else stays as shared has it, a key
+// ending in `*` carries nothing; and a copy either side cannot read (malformed,
+// a key twice, anything after it, a `//` line where none is declared) carries
+// nothing, saying why. refresh_keys refuses a path ending in `*`.
 //
-// Mutation: seed a mixed file whole, carry a home's copy whole, carry an added
-// entry or field, drop a field the home lacks, or return the home's copy on a
-// copy that does not read.
+// Mutation: seed a mixed file whole, carry a copy whole or as its bytes, carry
+// an added leaf or one of another kind, read `//` lines in every file, or take
+// a trailing `*`.
 func TestARefreshCarriesItsTokensAloneAndFailsClosed(t *testing.T) {
 	t.Parallel()
 	mixed := FileRule{Name: "config.toml", LoginKeys: []string{"default_provider", "providers"}}
@@ -124,22 +124,41 @@ func TestARefreshCarriesItsTokensAloneAndFailsClosed(t *testing.T) {
 	if err != nil || strings.Contains(string(seed), "SHARED-SETTING") || !strings.Contains(string(seed), "https://a.example") {
 		t.Errorf("a mixed file seeded %q, %v; want its login alone", seed, err)
 	}
-	rule := FileRule{Name: "auth.json", RefreshKeys: []string{"token", "*.access", "pool.*.access"}}
-	shared := `{"token":"t1","url":"https://a.example","x":{"access":"a1","type":"oauth"},"pool":[{"access":"p1"}]}`
+	rule := FileRule{Name: "auth.json", RefreshKeys: []string{"token", "*.access", "pool.*.access", "n", "added", "x"}}
+	shared := `{"token":"t1","n":1,"url":"https://a.example","x":{"access":"a1","type":"oauth"},"pool":[{"access":"p1"}]}`
 	for name, tc := range map[string]struct{ home, want string }{
-		"tokens alone": {`{"token":"t2","url":"https://b.example","x":{"access":"a2","type":"key"},` +
-			`"y":{"access":"added"},"pool":[{"access":"p2"},{"access":"added"}],"added":1}`,
-			"{\n  \"pool\": [\n    {\n      \"access\": \"p2\"\n    }\n  ],\n  \"token\": \"t2\",\n" +
-				"  \"url\": \"https://a.example\",\n  \"x\": {\n    \"access\": \"a2\",\n    \"type\": \"oauth\"\n  }\n}\n"},
-		"a token dropped": {`{"url":"https://a.example","x":{"access":"a1","type":"oauth"},"pool":[{"access":"p1"}]}`, shared},
+		"tokens alone, in the shared copy's layout": {`{"token":"t2","n":2,"url":"https://b.example",` +
+			`"x":{"access":"a2","type":"key"},"y":{"access":"added"},"pool":[{"access":"p2"},{"access":"added"}],"added":1}`,
+			`{"n":2,"pool":[{"access":"p2"}],"token":"t2","url":"https://a.example","x":{"access":"a2","type":"oauth"}}`},
+		"a token dropped": {`{"n":1,"url":"https://a.example","x":{"access":"a1","type":"oauth"},"pool":[{"access":"p1"}]}`, shared},
 		"its own copy":    {shared, shared},
-		"the home's copy, every field one": {`{"token":"t2","url":"https://a.example","x":{"access":"a1","type":"oauth"},"pool":[{"access":"p1"}]}`,
-			`{"token":"t2","url":"https://a.example","x":{"access":"a1","type":"oauth"},"pool":[{"access":"p1"}]}`},
+		"a leaf of another kind": {`{"token":{"t":"t2"},"n":"2","url":"https://a.example","x":{"access":"a1","type":"oauth"},"pool":[{"access":"p1"}]}`,
+			shared},
+		"the home's bytes, every field one": {"{\"pool\":[{\"access\":\"p1\"}],\"token\":\"t2\",\"n\":1,\n\"url\":\"https://a.example\"," +
+			"\"x\":{\"access\":\"a1\",\"type\":\"oauth\"}}",
+			`{"n":1,"pool":[{"access":"p1"}],"token":"t2","url":"https://a.example","x":{"access":"a1","type":"oauth"}}`},
 	} {
 		if got, err := rule.Carry([]byte(tc.home), []byte(shared)); err != nil || string(got) != tc.want {
 			t.Errorf("%s: carried\n%s\n%v; want\n%s", name, got, err, tc.want)
 		}
 	}
+	indented := "{\n  \"token\": \"t1\"\n}\n"
+	if got, err := rule.Carry([]byte(`{"token":"t2"}`), []byte(indented)); err != nil || string(got) != "{\n  \"token\": \"t2\"\n}\n" {
+		t.Errorf("over an indented copy carried %q, %v; want it indented", got, err)
+	}
+	commented := FileRule{Name: "config.json", RefreshKeys: []string{"token"}, CommentLines: true}
+	if got, err := commented.Carry([]byte("// box\n{\"token\":\"t2\"}\n"), []byte("// shared\n{\"token\":\"t1\"}\n")); err != nil ||
+		string(got) != "// shared\n{\"token\":\"t2\"}\n" {
+		t.Errorf("a file with comment lines carried %q, %v; want the shared header over the token", got, err)
+	}
+	if got, err := rule.Carry([]byte("// a line\n{\"token\":\"t2\"}"), []byte(shared)); err == nil || string(got) != shared {
+		t.Errorf("a comment line in a file without them carried %s, %v; want nothing and why", got, err)
+	}
+	if got, err := (FileRule{Name: "auth.json", RefreshKeys: []string{"*"}}).Carry([]byte(`{"a":"2"}`), []byte(`{"a":"1"}`)); err != nil ||
+		string(got) != `{"a":"1"}` {
+		t.Errorf("a refresh key ending in * carried %s, %v; want nothing", got, err)
+	}
+	carryKey(map[string]any{"a": "1"}, map[string]any{"a": "2"}, nil)
 	for name, home := range map[string]string{
 		"malformed":         `{"token":`,
 		"a key named twice": `{"token":"t2","token":"t3"}`,
@@ -159,11 +178,14 @@ func TestARefreshCarriesItsTokensAloneAndFailsClosed(t *testing.T) {
 		keys map[string]any
 		says string
 	}{
-		"login_keys empty":       {map[string]any{"login_keys": map[string]any{"config.json": []any{}}}, "login_keys.config.json is empty"},
-		"login_keys empty part":  {map[string]any{"login_keys": map[string]any{"config.json": []any{"a..b"}}}, "is no key path"},
-		"refresh_keys elsewhere": {map[string]any{"refresh_keys": map[string]any{"hosts.json": []any{"t"}}}, `refresh_keys names "hosts.json"`},
-		"refresh_keys empty":     {map[string]any{"refresh_keys": map[string]any{"config.json": []any{}}}, "refresh_keys.config.json is empty"},
-		"refresh_keys a subject": {map[string]any{"refresh_keys": map[string]any{"config.json": []any{"t.@subject"}}}, "is no key path"},
+		"login_keys empty":        {map[string]any{"login_keys": map[string]any{"config.json": []any{}}}, "login_keys.config.json is empty"},
+		"login_keys empty part":   {map[string]any{"login_keys": map[string]any{"config.json": []any{"a..b"}}}, "is no key path"},
+		"refresh_keys elsewhere":  {map[string]any{"refresh_keys": map[string]any{"hosts.json": []any{"t"}}}, `refresh_keys names "hosts.json"`},
+		"refresh_keys empty":      {map[string]any{"refresh_keys": map[string]any{"config.json": []any{}}}, "refresh_keys.config.json is empty"},
+		"refresh_keys a subject":  {map[string]any{"refresh_keys": map[string]any{"config.json": []any{"t.@subject"}}}, "is no key path"},
+		"refresh_keys ending *":   {map[string]any{"refresh_keys": map[string]any{"config.json": []any{"copilotTokens.*"}}}, "is no key path"},
+		"refresh_keys a lone *":   {map[string]any{"refresh_keys": map[string]any{"config.json": []any{"*"}}}, "is no key path"},
+		"comment_lines elsewhere": {map[string]any{"comment_lines": []any{"hosts.json"}}, `comment_lines[0] "hosts.json"`},
 	} {
 		if _, err := Load("copilot", tc.keys); err == nil || !strings.Contains(err.Error(), tc.says) {
 			t.Errorf("%s: err = %v, want one saying %q", name, err, tc.says)
