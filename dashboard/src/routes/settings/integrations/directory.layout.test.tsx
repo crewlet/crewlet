@@ -32,7 +32,7 @@ const SERVICES: BuiltInService[] = (["chat", "worklet", "doclet", "gitlet"] as c
 const GROWTH: [key: string, name: string, vendor: Vendor][] = [
   ["google_play", "Google Play", "google-play"],
   ["google_ads", "Google Ads", "google-ads"],
-  ["meta_ads", "Meta Ads", "meta-ads"],
+  ["meta_ads", "Meta Ads Manager", "meta-ads"],
   ["apple_ads", "Apple Ads", "apple-ads"],
   ["google_analytics", "Google Analytics", "google-analytics"],
   ["search_console", "Search Console", "google-search-console"],
@@ -114,7 +114,7 @@ describe.each(["light", "dark"] as const)("on a %s document", (theme) => {
       await mount(width, theme, EVERY, ATTENTION);
       expect(drawn().slice(-4)).toEqual([
         ["Mobile apps", ["Expo", "App Store Connect", "Google Play"]],
-        ["Advertising", ["Google Ads", "Meta Ads", "Apple Ads"]],
+        ["Advertising", ["Google Ads", "Meta Ads Manager", "Apple Ads"]],
         ["Analytics", ["Google Analytics", "Search Console"]],
         ["Ad revenue", ["AdSense", "AdMob"]],
       ]);
@@ -145,11 +145,12 @@ describe.each(["light", "dark"] as const)("on a %s document", (theme) => {
     "with this build's catalogue only the groups with a served product are drawn at %ipx",
     async (width) => {
       await mount(width, theme, CATALOG);
-      const labels = drawn().map(([heading]) => heading);
-      expect(labels).not.toContain("Advertising");
-      expect(labels).not.toContain("Analytics");
-      expect(labels).not.toContain("Ad revenue");
-      expect(drawn().at(-1)).toEqual(["Mobile apps", ["Expo", "App Store Connect"]]);
+      expect(drawn().slice(-4)).toEqual([
+        ["Mobile apps", ["Expo", "App Store Connect"]],
+        ["Advertising", ["Meta Ads Manager", "Apple Ads"]],
+        ["Analytics", ["Google Analytics"]],
+        ["Ad revenue", ["AdMob"]],
+      ]);
       expect(overflowing(host!)).toEqual([]);
     },
   );
