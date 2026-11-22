@@ -719,18 +719,26 @@ func copilotMCP(s sandbox.MCPServer) map[string]any {
 	return out
 }
 
-// artifactFiles is the files a Copilot run leaves in its box of its own: its
-// standing instructions in its home, which a later run with none must not
-// find, a fresh session's extension beside the work directory, and its tool
-// environment file. Its settings are written whole by every run, and its
-// sessions are kept.
+// artifactFiles is the files a Copilot run leaves in its box of its own (its
+// standing instructions, a fresh session's extension beside the work
+// directory, its tool environment) and every other file in its home a run
+// would load that its launch does not write ([Paths.CopilotLoaded]), an
+// earlier run's or the image's: a Copilot run loads only the configuration
+// its launch writes. Its settings are written whole by every run; its login
+// and sessions are kept.
 func (Copilot) artifactFiles(p Paths) []string {
-	return []string{p.CopilotInstructions(), p.CopilotExtensionFresh(), p.CopilotToolEnv()}
+	loaded, _ := p.CopilotLoaded()
+	return append([]string{p.CopilotInstructions(), p.CopilotExtensionFresh(), p.CopilotToolEnv()}, loaded...)
 }
 
-// artifactDirs is the directory a Copilot run leaves in its box of its own:
-// its extension's in its home, which a later run with none must not find.
-func (Copilot) artifactDirs(p Paths) []string { return []string{p.CopilotExtension()} }
+// artifactDirs is the directories in a Copilot run's home it would load that
+// its launch does not write ([Paths.CopilotLoaded]), removed whole: its
+// extensions (the run's own extension among them, which a later run with
+// none must not find), hooks, plugins, skills, agents and instructions.
+func (Copilot) artifactDirs(p Paths) []string {
+	_, loaded := p.CopilotLoaded()
+	return loaded
+}
 
 // notesOffWhy is what switches Copilot's reading of notes off: a managed policy
 // that allows only managed hooks (allowManagedHooksOnly), which stops an
