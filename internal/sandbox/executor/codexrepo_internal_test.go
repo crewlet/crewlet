@@ -119,23 +119,21 @@ func skillsIn(t *testing.T, p Paths) []string {
 	return names
 }
 
-// A CODEX RUN IS HANDED ITS CHECKOUTS' INSTRUCTIONS AND SKILLS, NOT THEIR
-// CONFIGURATION, from the note helper as its launch writes it (0600): the
-// gate runs it, which writes each checkout's instructions labelled with its
-// root, the repositories the run pushes to first, and sets the nested hook,
-// saying nothing. Each checkout's .codex/skills and .agents/skills come as
-// `<repository>:<skill>`, frontmatter cut to the kept keys, a link not
-// copied, listed under its repository's name even where its frontmatter
-// names a seat's skill, and a repository named for the seats' namespace
-// under a name of its own.
+// A CODEX RUN IS HANDED ITS CHECKOUTS' INSTRUCTIONS AND SKILLS, from the note
+// helper as its launch writes it (0600): the gate runs it, which writes each
+// checkout's instructions labelled with its root, the repositories the run
+// pushes to first, and sets the nested hook, saying nothing. Each checkout's
+// .codex/skills and .agents/skills come whole as `<repository>:<skill>`, links
+// followed as Codex follows them, only the name rewritten, so a skill whose
+// frontmatter names a seat's skill and a repository named for the seats'
+// namespace each list under a name of their own.
 //
-// Mutation: test the helper with -x, keep a skill's hooks or model or its own
-// name, copy a link, or name a repository's skill `crewlet:`, and a check
-// goes red.
+// Mutation: test the helper with -x, drop a frontmatter key, skip a linked
+// skill or file, or keep a skill's own name, and a check goes red.
 func TestACodexRunIsHandedItsCheckoutsInstructionsAndSkills(t *testing.T) {
 	t.Parallel()
-	skill := "---\nname: build\ndescription: Builds it.\nhooks:\n  PostToolUse: []\nmodel: gpt-planted\n" +
-		"mcp_servers:\n  evil: {}\nallowed-tools: [Bash]\nunknown: x\n---\nRun make.\n"
+	skill := "---\nname: build\ndescription: Builds it.\nhooks:\n  PostToolUse: []\nmodel: gpt-other\n" +
+		"allowed-tools: [Bash]\n---\nRun make.\n"
 	p, work := codexRepoBox(t, map[string]string{
 		"zeta/.git/":                               "",
 		"zeta/AGENTS.md":                           "ZETA\n",
@@ -148,9 +146,15 @@ func TestACodexRunIsHandedItsCheckoutsInstructionsAndSkills(t *testing.T) {
 		"alpha/.agents/skills/plain/SKILL.md":      "no frontmatter\n",
 		"crewlet/.git/":                            "",
 		"crewlet/.codex/skills/mine/SKILL.md":      "---\nname: mine\ndescription: Mine.\n---\n",
+		"shared/notes.md":                          "SHARED\n",
 	})
-	if err := os.Symlink(filepath.Join(work, "alpha/.codex/skills/build"), filepath.Join(work, "alpha/.codex/skills/via-link")); err != nil {
-		t.Fatal(err)
+	for link, target := range map[string]string{
+		"alpha/.codex/skills/via-link":       filepath.Join(work, "alpha/.codex/skills/build"),
+		"alpha/.codex/skills/build/notes.md": filepath.Join(work, "shared/notes.md"),
+	} {
+		if err := os.Symlink(target, filepath.Join(work, link)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	withNoteHelper(t, p)
 	stderr, hooked := runCodexRepoGate(t, p, work, "", "zeta", "alpha")
@@ -161,15 +165,19 @@ func TestACodexRunIsHandedItsCheckoutsInstructionsAndSkills(t *testing.T) {
 	if got := readHome(t, p.CodexHome()+"/AGENTS.md"); got != want {
 		t.Errorf("CODEX_HOME/AGENTS.md is\n%q\nwant\n%q", got, want)
 	}
-	if got, want := skillsIn(t, p), []string{"alpha:build", "alpha:lint", "alpha:sneaky", "crewlet-2:mine"}; !slices.Equal(got, want) {
+	if got, want := skillsIn(t, p), []string{"alpha:build", "alpha:lint", "alpha:sneaky", "alpha:via-link", "crewlet-2:mine"}; !slices.Equal(got, want) {
 		t.Errorf("the run's Codex skills are %q, want %q", got, want)
 	}
-	build := readHome(t, p.CodexSkills()+"/alpha:build/SKILL.md")
-	if build != "---\nname: \"alpha:build\"\ndescription: Builds it.\nallowed-tools: [Bash]\n---\nRun make.\n" {
-		t.Errorf("the copied skill reads\n%s", build)
+	renamed := "---\nname: \"alpha:build\"\ndescription: Builds it.\nhooks:\n  PostToolUse: []\nmodel: gpt-other\n" +
+		"allowed-tools: [Bash]\n---\nRun make.\n"
+	if got := readHome(t, p.CodexSkills()+"/alpha:build/SKILL.md"); got != renamed {
+		t.Errorf("the copied skill reads\n%s\nwant\n%s", got, renamed)
 	}
-	if readHome(t, p.CodexSkills()+"/alpha:build/scripts/run.sh") != "make\n" {
-		t.Error("the skill's own files were not copied")
+	for path, body := range map[string]string{"alpha:build/scripts/run.sh": "make\n", "alpha:build/notes.md": "SHARED\n",
+		"alpha:via-link/scripts/run.sh": "make\n"} {
+		if got := readHome(t, p.CodexSkills()+"/"+path); got != body {
+			t.Errorf("the skill's file %s reads %q, want %q", path, got, body)
+		}
 	}
 	if sneaky := readHome(t, p.CodexSkills()+"/alpha:sneaky/SKILL.md"); !strings.HasPrefix(sneaky, "---\nname: \"alpha:sneaky\"\n") ||
 		strings.Contains(sneaky, "crewlet:deploy") {
@@ -177,12 +185,12 @@ func TestACodexRunIsHandedItsCheckoutsInstructionsAndSkills(t *testing.T) {
 	}
 }
 
-// A REPOSITORY'S SKILLS ARE REACHED THROUGH NO LINK: a .codex or .agents that
-// links out of its checkout, or a skills directory that does, copies nothing,
-// whatever the link reaches (here the run's own Codex home).
+// A REPOSITORY'S LINKED SKILLS ARE COPIED AS CODEX LISTS THEM: a .codex or
+// .agents that is a link, and a skills directory that is one, are followed,
+// wherever they lead.
 //
-// Mutation: check only the last component for a link, and a check goes red.
-func TestARepositorysSkillsAreReachedThroughNoLink(t *testing.T) {
+// Mutation: refuse a link anywhere on a skill's path, and a check goes red.
+func TestARepositorysLinkedSkillsAreCopiedAsCodexListsThem(t *testing.T) {
 	t.Parallel()
 	p, work := codexRepoBox(t, map[string]string{
 		"beta/.git/":                        "",
@@ -205,8 +213,8 @@ func TestARepositorysSkillsAreReachedThroughNoLink(t *testing.T) {
 		}
 	}
 	runCodexRepoGate(t, p, work, "")
-	if got := skillsIn(t, p); len(got) != 0 {
-		t.Errorf("skills reached through a link were copied: %q", got)
+	if got, want := skillsIn(t, p), []string{"beta:x", "delta:x", "gamma:y"}; !slices.Equal(got, want) {
+		t.Errorf("the run's Codex skills are %q, want %q", got, want)
 	}
 }
 
@@ -300,8 +308,7 @@ func TestABoxWithoutAwkStartsWithoutRepositorySkills(t *testing.T) {
 // THE NESTED HOOK IS TRUSTED BY THE HASH CODEX COMPUTES: the hash of a hook's
 // identity is Codex 0.171.0's own, measured through its hooks/list for a
 // default hook and for the run's nested hook in a box at /w/box, whose
-// trusted hook ran with no variable of the app-server's (`env -i`; without
-// it the hook had them all) and whose context reached the next request.
+// trusted hook ran and whose context reached the model's next request.
 //
 // Mutation: hash the command alone, or leave the context limit in at its
 // default, and a hash goes red.
@@ -312,11 +319,11 @@ func TestTheNestedHookIsTrustedByTheHashCodexComputes(t *testing.T) {
 		t.Errorf("a default hook hashes to %s", got)
 	}
 	hook, state := codexNestedHookFlags(Paths{Home: "/w/box"})
-	if !strings.Contains(state, `"sha256:cf26de3a4fda773cc1000c3c7754f689cd872c2a90fbfd889be15f2a67827792"`) ||
+	if !strings.Contains(state, `"sha256:f0a3fd9a31a118d840dba1ab369d8718daf8e4eac3592b74931cc72002d58d1f"`) ||
 		!strings.Contains(state, codexNestedHookKey) {
 		t.Errorf("the nested hook's trust is %s", state)
 	}
-	if !strings.Contains(hook, `timeout=10,additionalContextLimit=32768`) || !strings.Contains(hook, `command="env -i `) {
+	if !strings.Contains(hook, `timeout=10,additionalContextLimit=32768`) || !strings.Contains(hook, "-adapter codex-nested") {
 		t.Errorf("the nested hook is %s", hook)
 	}
 }

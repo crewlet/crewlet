@@ -231,12 +231,12 @@ func checkoutNames(work string, first []string) ([]string, error) {
 
 // checkoutName reports whether name is a checkout directly under work: one
 // path element, no leading dot and no line break (the handed file holds a
-// name a line), a directory and never a link to one, holding .git.
+// name a line), a directory or a link to one, holding .git.
 func checkoutName(work, name string) bool {
 	if name == "" || strings.HasPrefix(name, ".") || strings.ContainsAny(name, "\n"+string(filepath.Separator)) {
 		return false
 	}
-	info, err := os.Lstat(filepath.Join(work, name))
+	info, err := os.Stat(filepath.Join(work, name))
 	if err != nil || !info.IsDir() {
 		return false
 	}
@@ -245,29 +245,19 @@ func checkoutName(work, name string) bool {
 }
 
 // rootInstructions is root's AGENTS.override.md, else AGENTS.md, as Codex reads
-// it started at root, cut to budget bytes on a rune boundary, invalid UTF-8
-// replaced, and how many bytes it took; "" and 0 for none, for an empty
-// budget, for a file that resolves outside root, and for one of whitespace
-// alone, which Codex hands no section and charges nothing for.
+// it started at root, links followed, cut to budget bytes on a rune boundary,
+// invalid UTF-8 replaced, and how many bytes it took; "" and 0 for none, for
+// an empty budget, and for a file of whitespace alone, which Codex hands no
+// section and charges nothing for.
 func rootInstructions(root string, budget int) (string, int) {
 	if budget <= 0 {
 		return "", 0
 	}
-	realRoot, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		return "", 0
-	}
 	for _, name := range []string{"AGENTS.override.md", "AGENTS.md"} {
-		path, err := filepath.EvalSymlinks(filepath.Join(root, name))
-		if err != nil {
-			continue
-		}
+		path := filepath.Join(root, name)
 		info, err := os.Stat(path)
 		if err != nil || !info.Mode().IsRegular() {
 			continue
-		}
-		if !strings.HasPrefix(path, realRoot+string(filepath.Separator)) {
-			return "", 0
 		}
 		raw, err := readBounded(path, int64(budget))
 		if err != nil {
@@ -279,7 +269,7 @@ func rootInstructions(root string, budget int) (string, int) {
 		if strings.TrimSpace(string(raw)) == "" {
 			return "", 0
 		}
-		return strings.ToValidUTF8(string(raw), "�"), len(raw)
+		return strings.ToValidUTF8(string(raw), "\uFFFD"), len(raw)
 	}
 	return "", 0
 }
