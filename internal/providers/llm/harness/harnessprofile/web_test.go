@@ -76,6 +76,44 @@ func TestWebDeniedIsRefusedOnAProfileWithNoDenial(t *testing.T) {
 	}
 }
 
+// A DENIAL CAN REPLACE THE SYSTEM PROMPT'S CHANNELS: kimi-code's allowlist rides
+// its agent file, so an entry denying the web runs both channels' file without
+// Kimi's web tools, while a seat keeping the web runs them listed. The clone
+// keeps the denial's channels apart from the profile it was copied from.
+//
+// Mutation: leave the channels in withWebDenied, or share them in Clone — the
+// case fails.
+func TestAWebDenialReplacesTheSystemPromptChannels(t *testing.T) {
+	t.Parallel()
+	seat, err := Load("kimi-code", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	denied, err := Load("kimi-code", map[string]any{"web_tools": "denied"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string][2]Channel{"system_prompt": {seat.SystemPrompt, denied.SystemPrompt},
+		"append_system_prompt": {seat.AppendSystemPrompt, denied.AppendSystemPrompt}} {
+		kept, off := c[0].File.Template, c[1].File.Template
+		for _, tool := range []string{"FetchURL", "WebSearch"} {
+			if !strings.Contains(kept, tool) || strings.Contains(off, tool) {
+				t.Errorf("%s: %s listed for the seat %v and under denial %v", name, tool,
+					strings.Contains(kept, tool), strings.Contains(off, tool))
+			}
+		}
+		if !strings.Contains(off, "mcp__crewlet__*") {
+			t.Errorf("%s: the denied file lists no engine tool:\n%s", name, off)
+		}
+	}
+	builtin, _ := Builtin("kimi-code")
+	copied := builtin.Clone()
+	copied.WebDenial.AppendSystemPrompt.File.Template = "changed"
+	if again, _ := Builtin("kimi-code"); again.WebDenial.AppendSystemPrompt.File.Template == "changed" {
+		t.Error("a clone's denial shares its channel with the built-in")
+	}
+}
+
 // AN OVERRIDE THE DENIAL WOULD DISCARD IS REFUSED, naming the field to edit
 // instead: applied either way round, one of the two things the operator wrote
 // would never run.
@@ -94,6 +132,13 @@ func TestAnOverrideTheWebDenialWouldDiscardIsRefused(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "override web_denial.seed_files instead") {
 		t.Fatalf("err = %v, want the refusal naming web_denial.seed_files", err)
+	}
+	_, err = Load("kimi-code", map[string]any{
+		"web_tools":            "denied",
+		"append_system_prompt": map[string]any{"args": []any{"--agent-file", "{file}"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "override web_denial.append_system_prompt instead") {
+		t.Fatalf("err = %v, want the refusal naming web_denial.append_system_prompt", err)
 	}
 	// The same complete_args beside a stance that keeps web on is an
 	// ordinary override.
@@ -123,7 +168,7 @@ func TestTheWebStanceIsHeldToItsShape(t *testing.T) {
 		want      string
 	}{
 		"unknown stance": {map[string]any{"web_tools": "off"}, `web_tools "off" (want allowed, denied or search)`},
-		"empty denial":   {map[string]any{"web_tools": "denied", "web_denial": map[string]any{}}, "web_denial sets neither"},
+		"empty denial":   {map[string]any{"web_tools": "denied", "web_denial": map[string]any{}}, "web_denial sets none of"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
