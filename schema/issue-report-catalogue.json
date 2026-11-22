@@ -13,7 +13,9 @@
     ],
     "harness.name": [
       "claude-code",
-      "opencode"
+      "opencode",
+      "copilot",
+      "kimi-code"
     ],
     "topology.coordination": [
       "local",

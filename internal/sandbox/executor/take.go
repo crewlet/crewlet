@@ -39,20 +39,24 @@ var _ sandbox.SessionTaker = (*Runner)(nil)
 // SessionTakesAtOnce is how many takes this process scrubs at once, each
 // holding a slot of [sessionTakes] from before it asks its box for anything
 // to its scrub's and its meter's end. 29: a take at its base holds at most
-// 11.56 MiB, its scrub's 8.22 (BenchmarkATakeAtItsBase) and its meter's 3.34
-// (BenchmarkAMeterAtItsBase) at once, the most of nine runs each, one a
-// process, on a dedicated two-core slot, read in bytes; 29 times over is 335
-// MiB, within the base tier's 340.6 MiB (64 reads at [baseTierReadBytes], the
-// package doc's "A collection's read of a thread"): so the takes at their base
-// hold no more than every read of the tier does.
+// 11.64 MiB ([takeBaseHeldBytes]); 29 times over is 337.5 MiB, within the
+// base tier's 340.6 MiB (64 reads at [baseTierReadBytes], the package doc's
+// "A collection's read of a thread"): so the takes at their base hold no
+// more than every read of the tier does.
 const SessionTakesAtOnce = 29
 
 // takeBaseHeldBytes is what a take at its base holds at most, its scrub's and
-// its meter's at once: 11.56 MiB ([SessionTakesAtOnce]), the scrub's 8.22 and
-// the meter's 3.34, each to the KiB.
+// its meter's at once, 11.64 MiB: each part's live high-water, the scrub's
+// 8.00 MiB (BenchmarkATakeAtItsBase, its spool's gzip writer among it) and the
+// meter's 3.53 (BenchmarkAMeterAtItsBase), the most of 30 runs each, one a
+// process, on a two-core slot, live bytes under a stop-the-world GC at every
+// 1% of growth, to the KiB; and 1% of each beside it, what that sampling can
+// miss: a buffer allocated and dropped within 1% of the heap's growth.
 const (
-	scrubBaseHeldBytes = 8418 << 10
-	meterBaseHeldBytes = 3420 << 10
+	scrubBaseLiveBytes = 8189 << 10
+	meterBaseLiveBytes = 3610 << 10
+	scrubBaseHeldBytes = scrubBaseLiveBytes + scrubBaseLiveBytes/100
+	meterBaseHeldBytes = meterBaseLiveBytes + meterBaseLiveBytes/100
 	takeBaseHeldBytes  = scrubBaseHeldBytes + meterBaseHeldBytes
 )
 
@@ -124,6 +128,10 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 		return sandbox.TakenSession{}, errors.New("executor: a take names no bound on the archive it keeps, " +
 			"and a session is never read out of a box unbounded")
 	}
+	if take.Spool.Dir == "" || take.Spool.Bytes <= 0 || take.Spool.Held == nil {
+		return sandbox.TakenSession{}, errors.New("executor: a take names no spool for its scrub, which " +
+			"spools on its process's own disk in the room the take holds")
+	}
 	// ONE OF [SessionTakesAtOnce], held by the scrub's goroutine to its end,
 	// and given back here where none starts.
 	freeSlot, slotErr := takeSessionSlot(ctx)
@@ -186,7 +194,8 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 	scrubbing, stopScrub := context.WithCancel(ctx)
 	metering, stopMeter := context.WithCancel(ctx)
 	remembered := &memoUse{memo: r.memo, scope: take.Scope}
-	bounds := plainBounds(scrubPlainMax).gatedBy(scrubbing, large).remembering(remembered)
+	bounds := plainBounds(scrubPlainMax).gatedBy(scrubbing, large).remembering(remembered).
+		spooling(spoolPlace{dir: take.Spool.Dir, room: take.Spool.Bytes, held: take.Spool.Held})
 	scrub := newScrubber(take.Scrub)
 	archive.RunStart = keptRunStart(scrub, archive.RunStart)
 	read, write := io.Pipe()
@@ -257,7 +266,7 @@ func logMemoUse(ctx context.Context, use *memoUse) {
 	}
 	entries, evicted := use.memo.size()
 	log.InfoContext(ctx, "executor_session_scrub_memo", "hits", use.n.hits, "misses", use.n.misses,
-		"diverged", use.n.diverged, "checked", use.n.checked, "entries", entries, "evicted", evicted)
+		"diverged", use.n.diverged, "entries", entries, "evicted", evicted)
 }
 
 // scrubContained runs scrub, the take's scrub of a box's archive, a panic in it
@@ -783,21 +792,21 @@ const (
 func packDigest(paths Paths, session, staged string) string {
 	q := sandbox.ShellQuote
 	return fmt.Sprintf(`{ d=$(cksum < %[1]s 2> /dev/null) && %[2]s || { printf '%%s\n' %[3]s > %[4]s 2> /dev/null; false; }; }`,
-		q(staged+"/capture"), recordDigest(paths, session, "d"), q(digestUnrecorded), q(staged+"/error"))
+		q(staged+"/capture"), recordDigest(paths, session), q(digestUnrecorded), q(staged+"/error"))
 }
 
 // recordDigest is the part of a box's script that records the line `<session>
-// <digest>` — the values of the shell variables session and digest name — in
-// the box's list of the archives its copy holds ([Paths.SessionDigests]) and
-// reads it back: true only where the digest is not empty and the line is
-// there after. READ BACK, never taken on the append's word: a write a full
+// <digest>` — the values of the shell variable session names and of d, which
+// every caller's cksum fills — in the box's list of the archives its copy
+// holds ([Paths.SessionDigests]) and reads it back: true only where the digest
+// is not empty and the line is there after. READ BACK, never taken on the append's word: a write a full
 // disk lost can be one its writer was told landed. What every pack records
 // before it moves its archive into place ([packDigest]), and every restore
 // before its run continues what it restored ([claudeSessionGate],
 // [openCodeSessionGate]).
-func recordDigest(paths Paths, session, digest string) string {
-	return fmt.Sprintf(`[ -n "$%[2]s" ] && { printf '%%s %%s\n' "$%[1]s" "$%[2]s" >> %[3]s; } 2> /dev/null && grep -qxF "$%[1]s $%[2]s" %[3]s 2> /dev/null`,
-		session, digest, sandbox.ShellQuote(paths.SessionDigests()))
+func recordDigest(paths Paths, session string) string {
+	return fmt.Sprintf(`[ -n "$d" ] && { printf '%%s %%s\n' "$%[1]s" "$d" >> %[2]s; } 2> /dev/null && grep -qxF "$%[1]s $d" %[2]s 2> /dev/null`,
+		session, sandbox.ShellQuote(paths.SessionDigests()))
 }
 
 // digestUnrecorded is why a pack whose digest the box did not record failed

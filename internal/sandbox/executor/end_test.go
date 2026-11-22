@@ -567,7 +567,7 @@ func TestATakeOfAnEndedJobPacksOnlyWhereItsScriptLeftNoArchive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	taken, err := runner.TakeSession(t.Context(), box, sandbox.SessionTake{MaxBytes: takeBound})
+	taken, err := runner.TakeSession(t.Context(), box, sandbox.SessionTake{Spool: testSpool(t), MaxBytes: takeBound})
 	if err != nil || taken.Body == nil {
 		t.Fatalf("TakeSession of the archive the script left = %+v, %v", taken, err)
 	}
@@ -581,7 +581,7 @@ func TestATakeOfAnEndedJobPacksOnlyWhereItsScriptLeftNoArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 	digests := boxFile(t, box, p.SessionDigests())
-	taken, err = runner.TakeSession(t.Context(), box, sandbox.SessionTake{MaxBytes: takeBound})
+	taken, err = runner.TakeSession(t.Context(), box, sandbox.SessionTake{Spool: testSpool(t), MaxBytes: takeBound})
 	if err != nil || taken.Body == nil {
 		t.Fatalf("a take of an over job that left no archive = %+v, %v; want one packed now", taken, err)
 	}
