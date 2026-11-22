@@ -2879,6 +2879,8 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// gets, its row read through the same router's reads and its object
 		// fetched through the same store. See executorrestore.go.
 		Restore: executorRestore{engine: e},
+		// AND WHETHER A MINTED SESSION'S ID IS ANY TURN'S, through the same reads.
+		Holders: executorRestore{engine: e},
 		// A seat's inbox is held while one of its runs holds it or an
 		// answer's resume is owed, and a retried resume asks the seat's
 		// conditions first — see [seatHold] and [Engine.mayResumeAnswer].

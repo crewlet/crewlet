@@ -212,7 +212,7 @@ func TestSettledIsExactOverTranscriptsOfEveryShape(t *testing.T) {
 		text := b.String()
 		want := redact.Secrets(text)
 		sizes := []int{1 + rng.IntN(5), 1 + rng.IntN(80), 1 + rng.IntN(400)}
-		if got, _ := settle(text, sizes); got != want {
+		if got, _ := settle(t, text, sizes); got != want {
 			t.Fatalf("trial %d, in pieces of %v:\ntext %q\n got %q\nwant %q", trial, sizes, text, got, want)
 		}
 	}
@@ -237,7 +237,7 @@ func TestAKeyLineAboveABlockWhoseCutIsUndecidedIsHeld(t *testing.T) {
 	} {
 		want := redact.Secrets(text)
 		for _, sizes := range [][]int{{1}, {7}, {64}, {len(text)}} {
-			if got, _ := settle(text, sizes); got != want {
+			if got, _ := settle(t, text, sizes); got != want {
 				t.Errorf("%s in pieces of %v:\n got %q\nwant %q", name, sizes, got, want)
 			}
 		}
