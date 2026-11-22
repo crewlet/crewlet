@@ -100,6 +100,10 @@ func TestAnIdentifierShapeHoldsAPasteAndRefusesAMint(t *testing.T) {
 		{setup.ShapeScalewayAccessKey, "SCWABCDEFGHIJ0123456", true},
 		{setup.ShapeScalewayAccessKey, "SCWABCDEFGHIJ012345", false},
 		{setup.ShapeScalewayAccessKey, "scwabcdefghij0123456", false},
+		{setup.ShapeMetaToken, "EAAGm0PX4ZCpsBA" + strings.Repeat("Zx9", 12), true},
+		{setup.ShapeMetaToken, "EAAGm0PX4Z", false},
+		{setup.ShapeMetaToken, "eaaGm0PX4ZCpsBA" + strings.Repeat("Zx9", 12), false},
+		{setup.ShapeMetaToken, "EAAGm0PX4ZCpsBA" + strings.Repeat("Zx-", 12), false},
 		{setup.ShapeAppleKeyID, "2X9R4HXF34", true},
 		{setup.ShapeAppleKeyID, "2x9r4hxf34", false},
 		{setup.ShapeAppleKeyID, "2X9R4HXF3", false},
@@ -122,6 +126,9 @@ func TestAnIdentifierShapeHoldsAPasteAndRefusesAMint(t *testing.T) {
 		if value, err := shape.Mint(func() string { return "minted" }); err == nil || value != "" {
 			t.Errorf("%s minted %q", shape, value)
 		}
+	}
+	if value, err := setup.ShapeMetaToken.Mint(func() string { return "minted" }); err == nil || value != "" {
+		t.Errorf("a Meta token was minted: %q", value)
 	}
 }
 

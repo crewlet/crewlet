@@ -132,6 +132,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/appleads"
 	"github.com/crewlet/crewlet/internal/appstoreconnect"
+	"github.com/crewlet/crewlet/internal/metaads"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/auth"
@@ -984,6 +985,13 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		reqs = expo.Requirements(block, s.resolve)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
+	case integration.KindMetaAds:
+		// No roster: no seat holds a token (ADR-0170).
+		block := company.Integrations.MetaAds
+		guide = metaads.Guide()
+		reqs = metaads.Requirements(block, s.resolve)
+		configured = block != nil
+		enabled = block.GrowthEnabled()
 	case integration.KindAppStoreConnect:
 		// No roster: no seat holds a key (ADR-0170).
 		block := company.Integrations.AppStoreConnect

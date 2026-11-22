@@ -70,6 +70,17 @@ export interface ToolStory {
 }
 
 export const STORIES: Record<string, ToolStory> = {
+  meta_ads: {
+    does: [
+      "Read ad accounts, campaigns, ad sets, ads and insights in the ad accounts you choose",
+      "Pause, and lower budgets and bids, where you allow it",
+      "Ask you before any change that can raise spending, every time",
+    ],
+    identity:
+      "Agents never hold a Meta token. Crewlet keeps one system user's tokens from your own Meta app and makes every call for them.",
+    byHand:
+      "In your business portfolio, create a Business app and an Employee system user, assign it the ad accounts, generate its tokens and paste them here.",
+  },
   apple_ads: {
     does: [
       "Read campaigns, keywords, search terms and performance in the ad accounts you choose",

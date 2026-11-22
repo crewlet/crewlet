@@ -25,6 +25,7 @@ const (
 	VendorGoogle       Vendor = "google"
 	VendorGoogleCloud  Vendor = "google_cloud"
 	VendorMattermost   Vendor = "mattermost"
+	VendorMeta         Vendor = "meta"
 	VendorOpenAI       Vendor = "openai"
 	VendorScaleway     Vendor = "scaleway"
 	VendorSlack        Vendor = "slack"
@@ -36,7 +37,7 @@ const (
 var Vendors = []Vendor{
 	VendorAWS, VendorAnthropic, VendorApple, VendorAtlassian, VendorCloudflare, VendorCursor,
 	VendorDatadog, VendorDigitalOcean, VendorE2B, VendorExpo, VendorGitHub,
-	VendorGitLab, VendorGitlet, VendorGoogle, VendorGoogleCloud, VendorMattermost,
+	VendorGitLab, VendorGitlet, VendorGoogle, VendorGoogleCloud, VendorMattermost, VendorMeta,
 	VendorOpenAI, VendorScaleway, VendorSlack, VendorXAI, VendorOther,
 }
 

@@ -131,6 +131,10 @@ const (
 	// company's servers with and ingests nothing.
 	KindSSH Kind = "ssh"
 
+	// KindMetaAds reaches the company's Meta ad accounts for the agents
+	// through the engine's own tools and ingests nothing.
+	KindMetaAds Kind = "meta_ads"
+
 	// KindAppStoreConnect reaches the company's App Store Connect teams for
 	// the agents through the engine's own tools and ingests nothing.
 	KindAppStoreConnect Kind = "app_store_connect"
@@ -154,7 +158,7 @@ const (
 var Kinds = []Kind{
 	KindSlack, KindMattermost, KindJira, KindConfluence,
 	KindGitHub, KindGitLab, KindDatadog, KindCloudflare, KindExpo, KindDigitalOcean,
-	KindScaleway, KindAWS, KindGoogleCloud, KindSSH, KindAppStoreConnect, KindAppleAds, KindAtlassian,
+	KindScaleway, KindAWS, KindGoogleCloud, KindSSH, KindMetaAds, KindAppStoreConnect, KindAppleAds, KindAtlassian,
 }
 
 // ConvergeOrder is the order the reconcile loop VISITS surfaces in, which is
@@ -174,7 +178,7 @@ var ConvergeOrder = []Kind{
 	KindAtlassian, KindJira, KindConfluence,
 	KindSlack, KindMattermost,
 	KindGitHub, KindGitLab, KindDatadog, KindCloudflare, KindExpo, KindDigitalOcean,
-	KindScaleway, KindAWS, KindGoogleCloud, KindSSH, KindAppStoreConnect, KindAppleAds,
+	KindScaleway, KindAWS, KindGoogleCloud, KindSSH, KindMetaAds, KindAppStoreConnect, KindAppleAds,
 }
 
 // Valid reports whether k is a surface this build knows.
@@ -252,11 +256,11 @@ func (k Kind) Ingress() Ingress {
 // then receives everything said in its team; Atlassian only CREATES accounts
 // (Jira and Confluence have their own webhook and parser). So "no parser turns
 // deliveries into work" warns about Mattermost and means nothing for Atlassian.
-// Cloudflare, Expo, DigitalOcean, Scaleway, AWS, Google Cloud, SSH, App Store
-// Connect and Apple Ads are likewise: credentials there are minted, pasted or
-// issued, and nothing they send is routed to a seat.
+// Cloudflare, Expo, DigitalOcean, Scaleway, AWS, Google Cloud, SSH, Meta Ads,
+// App Store Connect and Apple Ads are likewise: credentials there are minted,
+// pasted or issued, and nothing they send is routed to a seat.
 func (k Kind) Ingests() bool {
 	return k != KindAtlassian && k != KindCloudflare && k != KindExpo && k != KindDigitalOcean &&
-		k != KindScaleway && k != KindAWS && k != KindGoogleCloud && k != KindSSH && k != KindAppStoreConnect &&
-		k != KindAppleAds
+		k != KindScaleway && k != KindAWS && k != KindGoogleCloud && k != KindSSH && k != KindMetaAds &&
+		k != KindAppStoreConnect && k != KindAppleAds
 }

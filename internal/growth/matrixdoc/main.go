@@ -12,6 +12,7 @@ import (
 	_ "github.com/crewlet/crewlet/internal/appleads"        // registers its catalog
 	_ "github.com/crewlet/crewlet/internal/appstoreconnect" // registers its catalog
 	"github.com/crewlet/crewlet/internal/growth"
+	_ "github.com/crewlet/crewlet/internal/metaads" // registers its catalog
 )
 
 func main() {

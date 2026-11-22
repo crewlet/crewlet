@@ -149,6 +149,12 @@ func DesiredOf(role *config.Role, lane Lane) (Desired, bool) {
 			return Desired{}, false
 		}
 		d = Desired{Enabled: config.SeatAccessOn(b.Enabled), Level: b.LevelOrDefault()}
+	case LaneMetaAds:
+		b := in.MetaAds
+		if b == nil {
+			return Desired{}, false
+		}
+		d = Desired{Enabled: config.SeatAccessOn(b.Enabled), Level: string(growth.LevelOf(b.Level)), Scope: b.AdAccounts}
 	case LaneAppStoreConnect:
 		b := in.AppStoreConnect
 		if b == nil {
@@ -267,6 +273,11 @@ func SetDesired(role *config.Role, lane Lane, d Desired) error {
 			in.SSH = &config.RoleSSH{}
 		}
 		in.SSH.Enabled, in.SSH.Level, in.SSH.Hosts = &on, d.Level, d.Scope
+	case LaneMetaAds:
+		if in.MetaAds == nil {
+			in.MetaAds = &config.RoleMetaAds{}
+		}
+		in.MetaAds.Enabled, in.MetaAds.Level, in.MetaAds.AdAccounts = &on, d.Level, d.Scope
 	case LaneAppStoreConnect:
 		if in.AppStoreConnect == nil {
 			in.AppStoreConnect = &config.RoleAppStoreConnect{}
