@@ -55,6 +55,10 @@ const (
 	// seatIdx is a seat's rows in the order they began: its page.
 	seatIdx = "executor_sessions_seat_idx"
 
+	// sessionIdx is the rows naming one session id, whatever their seat:
+	// whether a minted id is fresh ([Reader.SessionHeld]).
+	sessionIdx = "executor_sessions_session_idx"
+
 	// heldIdx is the bases live turns hold: a PARTIAL index over exactly the
 	// rows that hold one (live, no capture landed, naming a base), whose
 	// predicate every statement through it repeats word for word, which is

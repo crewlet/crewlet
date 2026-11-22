@@ -347,6 +347,12 @@ func (c *Coordinator) saveInHand(ctx, duty context.Context, job saveJob, out sav
 	if class != "" {
 		return end(class, why)
 	}
+	// A MINTING JOB'S SESSION IS BOUND BEFORE IT IS PACKED (minted.go).
+	if row, err = c.bindMinted(ctx, row, box, runner); errors.Is(err, errNoSessionReported) {
+		return end(saveNothing, err.Error())
+	} else if err != nil {
+		return end(saveFailed, fmt.Sprintf("the job's session was not bound: %v", err))
+	}
 	policy, why := c.savePolicy(ctx)
 	if why != "" {
 		return end(saveNotYet, why)
