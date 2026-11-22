@@ -68,6 +68,10 @@ type Client struct {
 	// ReadScopes are the scopes a write's target is read back with; nil reads
 	// with the write's own.
 	ReadScopes func(op growth.Operation) []string
+	// BeforeRead is the product's read of a write's targets where no one
+	// resource holds them (a batch naming them in its body), false where the
+	// write's own resource is read ([Request.Resource]); nil is never.
+	BeforeRead func(req Request) (Request, bool, error)
 }
 
 // CallError is a call that reached for Google and did not get its result,

@@ -23,9 +23,23 @@ func NewHeld(req Request, before []byte) Held {
 	return Held{Req: req, Before: before, Binding: req.Digest(before)}
 }
 
-// Read is req held to its target as Google answers for it now, or to none for
-// a write that acts on nothing one read returns ([Request.Resource]).
+// Read is req held to its target as Google answers for it now: the product's
+// read of a batch's targets ([Client.BeforeRead]), its resource, or none for a
+// write that acts on nothing one read returns ([Request.Resource]).
 func (c *Client) Read(ctx context.Context, handle string, req Request) (Held, error) {
+	if c.BeforeRead != nil {
+		get, ok, err := c.BeforeRead(req)
+		if err != nil {
+			return Held{Req: req}, err
+		}
+		if ok {
+			raw, err := c.Send(ctx, handle, get)
+			if err != nil {
+				return Held{Req: req}, err
+			}
+			return NewHeld(req, raw), nil
+		}
+	}
 	address := req.Resource()
 	if address == "" {
 		return NewHeld(req, nil), nil
@@ -44,8 +58,15 @@ func (c *Client) Read(ctx context.Context, handle string, req Request) (Held, er
 }
 
 // Class is the class h comes to against its target as read now
-// ([growth.Classify]), on the same bytes its binding holds.
-func (h Held) Class() growth.Class { return growth.Classify(h.Req.Op, h.changes()) }
+// ([growth.Classify]), on the same bytes its binding holds, each field by
+// the lowerCamel name a catalog's rules use.
+func (h Held) Class() growth.Class {
+	changes := h.changes()
+	for i := range changes {
+		changes[i].Field = LowerCamel(changes[i].Field)
+	}
+	return growth.Classify(h.Req.Op, changes)
+}
 
 // changes is what h changes on its target as it reads now.
 func (h Held) changes() []growth.Change {
@@ -94,27 +115,37 @@ func (c *Client) Card(call growth.Call, h Held, binding string, class growth.Cla
 	}
 }
 
-// Apply makes a write once and records it at its tool's class: an operate
-// call at once (made or failed), or an approved held call, whose
-// administrator's answer is recorded first and which acts only on the act's
-// one answer (applied, void or failed, every way it ends). req is the
-// product's fresh build of the call, held to the seat's scope; built is why
-// that failed. Under the account's lease and within growth.ApplyBound it reads
-// the target again and sends nothing where binding no longer holds. cut
-// shapes the answer.
-func (c *Client) Apply(ctx context.Context, call growth.Call, req Request, built error, binding string,
-	class growth.Class, cut func(any) any) (any, error) {
+// Write is one write as a product hands it to [Client.Apply]: its request,
+// built afresh from the call, or Err where that failed (the request kept as
+// far as it was built, for the record); its tool's class, which every record
+// of it names; the product's scope check, which Apply runs under the lease;
+// and how its answer is cut, nil for not at all.
+type Write struct {
+	Req   Request
+	Err   error
+	Class growth.Class
+	Scope func(ctx context.Context) error
+	Cut   func(any) any
+}
+
+// Apply makes w once and records it: an operate call at once (made or
+// failed), or an approved held call, whose administrator's answer is recorded
+// first and which acts only on the act's one answer (applied, void or failed,
+// every way it ends). Under the account's lease and within growth.ApplyBound
+// it holds w to the seat's scope, reads its target again, and sends nothing
+// where binding no longer holds.
+func (c *Client) Apply(ctx context.Context, call growth.Call, w Write, binding string) (any, error) {
 	held := call.HeldCall != ""
-	r := c.Record(call, req, class)
+	r := c.Record(call, w.Req, w.Class)
 	if held {
 		if err := c.allow(ctx, r, call.Approver); err != nil {
 			return nil, err
 		}
 	}
-	if built != nil {
-		return nil, c.failEarly(ctx, held, r, built)
+	if w.Err != nil {
+		return nil, c.failEarly(ctx, held, r, w.Err)
 	}
-	release, err := c.hold(ctx, "write/"+c.Kind+"/"+req.AccountOrTarget())
+	release, err := c.hold(ctx, "write/"+c.Kind+"/"+w.Req.AccountOrTarget())
 	if err != nil {
 		return nil, c.failEarly(ctx, held, r, err)
 	}
@@ -123,18 +154,23 @@ func (c *Client) Apply(ctx context.Context, call growth.Call, req Request, built
 	// lease could lapse; the records take the caller's context.
 	act, cancel := context.WithTimeout(ctx, growth.ApplyBound)
 	defer cancel()
-	h, err := c.Read(act, call.Handle, req)
+	if w.Scope != nil {
+		if err = w.Scope(act); err != nil {
+			return nil, c.failEarly(ctx, held, r, err)
+		}
+	}
+	h, err := c.Read(act, call.Handle, w.Req)
 	if err != nil {
 		return nil, c.failEarly(ctx, held, r, err)
 	}
-	r = h.record(c, call, class)
+	r = h.record(c, call, w.Class)
 	if !growth.BindingHolds(binding, h.Binding) {
 		if held {
 			c.note(ctx, growth.StepVoid, r)
 		}
 		return nil, growth.ErrMoved
 	}
-	out, err := c.SendAndRead(act, call.Handle, h.Req, cut)
+	out, err := c.SendAndRead(act, call.Handle, h.Req, w.Cut)
 	switch {
 	case err != nil:
 		r.Failure = failureOfStep(err)
