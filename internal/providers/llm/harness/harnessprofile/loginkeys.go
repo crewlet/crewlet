@@ -59,34 +59,6 @@ func KeepLoginKeys(home, shared []byte, keys []string) []byte {
 	return append(out, '\n')
 }
 
-// SameLoginIdentity reports whether home and shared, two copies of one
-// credential file, name one account at each of keys ([Profile.IdentityKeys]):
-// each key's value alike in both, or absent from both. Either copy no JSON
-// object names no account it can be held to, so it is the same only where
-// keys names none.
-func SameLoginIdentity(home, shared []byte, keys []string) bool {
-	if len(keys) == 0 {
-		return true
-	}
-	h, ok := jsonObject(home)
-	if !ok {
-		return false
-	}
-	s, ok := jsonObject(shared)
-	if !ok {
-		return false
-	}
-	for _, key := range keys {
-		path := strings.Split(key, ".")
-		hv, inHome := lookupKey(h, path)
-		sv, inShared := lookupKey(s, path)
-		if inHome != inShared || !reflect.DeepEqual(hv, sv) {
-			return false
-		}
-	}
-	return true
-}
-
 // jsonObject is content read as a JSON object, its numbers as written.
 func jsonObject(content []byte) (map[string]any, bool) {
 	dec := json.NewDecoder(bytes.NewReader(content))

@@ -248,16 +248,17 @@ const (
 // the box was given, "" for a file the shared login did not hold then.
 //
 // THE SEED IS WHAT A WRITE-BACK IS JUDGED AGAINST, not the shared login at
-// teardown: putting a stale seed back over a login the host refreshed since,
-// its refresh token rotated away, logs every seat out. AN ABSENT FILE IS
-// RECORDED TOO (one added since is a newer login); RUN KEYS
-// ([Spec.CredentialRunKeys]) go back as the shared login holds them, and
-// IDENTITY KEYS ([Spec.CredentialIdentityKeys]) must name its account.
+// teardown: an idle box's copy differs from that once anybody else writes, and
+// putting a stale seed back over a login the host refreshed meanwhile, whose
+// refresh token the vendor had already rotated away, logs every seat out.
+//
+// AN ABSENT FILE IS RECORDED TOO (a file added since the seed is a newer login
+// as much as one changed), and RUN KEYS ([Spec.CredentialRunKeys]) are written
+// back as the shared login holds them: a key minted in the run stays in the box.
 type seededCredential struct {
-	Source       string   `json:"source"`
-	Seed         string   `json:"seed"`
-	RunKeys      []string `json:"run_keys,omitempty"`
-	IdentityKeys []string `json:"identity_keys,omitempty"`
+	Source  string   `json:"source"`
+	Seed    string   `json:"seed"`
+	RunKeys []string `json:"run_keys,omitempty"`
 }
 
 // boxLogin is one login a box is seeded with: the files of one shared
@@ -312,7 +313,7 @@ func loginsOf(files map[string]string) []boxLogin {
 // operator-overridable profile, so they go through hostbox.SafeJoin: a
 // "../../etc/cron.d/x" would otherwise write a host file.
 func seedCredentials(
-	ctx context.Context, l boxLayout, files map[string]string, runKeys, identityKeys map[string][]string,
+	ctx context.Context, l boxLayout, files map[string]string, runKeys map[string][]string,
 ) map[string]seededCredential {
 	seeded := map[string]seededCredential{}
 	for _, login := range loginsOf(files) {
@@ -325,7 +326,6 @@ func seedCredentials(
 		}
 		for relative, rec := range got {
 			rec.RunKeys = slices.Clone(runKeys[relative])
-			rec.IdentityKeys = slices.Clone(identityKeys[relative])
 			seeded[relative] = rec
 		}
 	}
@@ -437,7 +437,7 @@ func collectCredentials(ctx context.Context, l boxLayout, seeded map[string]seed
 			switch outcome := got[relative]; outcome {
 			case writeBackWritten:
 				localLog.Info("local_sandbox_credential_refreshed", "sandbox_id", l.id, "file", relative)
-			case writeBackChanged, writeBackRemoved, writeBackOtherAccount:
+			case writeBackChanged, writeBackRemoved:
 				// WARN: the one trace that a refresh the run made went nowhere;
 				// two in a row on one login are worth a look. It names the file,
 				// never what either copy holds.
@@ -454,10 +454,9 @@ type writeBack string
 
 // supersededDetail is what local_sandbox_credential_superseded says of each
 // outcome in which a login the run refreshed was not written back: one
-// sentence apiece, because each leaves a different thing behind.
+// sentence apiece, because the two leave different things behind — a newer
+// login kept, and no login at all.
 var supersededDetail = map[writeBack]string{
-	writeBackOtherAccount: "the box's copy of this login names another account than the shared " +
-		"one, so it is no refresh of it, and the shared one was kept",
 	writeBackChanged: "the run refreshed this login, but the shared one changed after the box " +
 		"was seeded — another seat's refresh, or a new crewlet llm login — so the shared one " +
 		"was kept, being the newer",
@@ -480,10 +479,6 @@ const (
 	// writeBackRemoved: the shared login was removed while the box ran —
 	// `crewlet llm logout` — and a box never creates one.
 	writeBackRemoved writeBack = "removed"
-	// writeBackOtherAccount: the box's copy names another account than the
-	// shared login ([seededCredential.IdentityKeys]), so it is no refresh of
-	// that login, and the shared one was kept.
-	writeBackOtherAccount writeBack = "other_account"
 )
 
 // writeBackLogin writes the files of one login the run CHANGED back over the
@@ -595,14 +590,6 @@ func writeBackLogin(
 				return verdict(writeBackRemoved), nil
 			}
 			return verdict(writeBackChanged), nil
-		}
-	}
-	// A COPY NAMING ANOTHER ACCOUNT IS NO REFRESH of this login
-	// ([seededCredential.IdentityKeys]): the whole login stays as it is.
-	// Asked of the login the box was seeded with, which current is here.
-	for name, content := range changed {
-		if !harnessprofile.SameLoginIdentity(content, current[name], seeded[byName[name]].IdentityKeys) {
-			return verdict(writeBackOtherAccount), nil
 		}
 	}
 	err = commit(login.dir, names, next)
@@ -1079,7 +1066,7 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	}
 
 	l.reapOrphans(ctx, time.Duration(spec.TimeoutSec)*time.Second)
-	seeded := seedCredentials(ctx, layout, spec.CredentialFiles, spec.CredentialRunKeys, spec.CredentialIdentityKeys)
+	seeded := seedCredentials(ctx, layout, spec.CredentialFiles, spec.CredentialRunKeys)
 	// The box records what it was seeded with and stamps itself alive before
 	// anyone can reap it.
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml

@@ -159,12 +159,6 @@ type Spec struct {
 	// shared login's value of each (harnessprofile.KeepLoginKeys).
 	CredentialRunKeys map[string][]string
 
-	// CredentialIdentityKeys is, by a path of CredentialFiles, the keys naming
-	// the account its login is: a local box writes the file back only where
-	// each holds what the shared login's does
-	// (harnessprofile.SameLoginIdentity).
-	CredentialIdentityKeys map[string][]string
-
 	// Repos are the repositories on Gitlet this run is
 	// given, each resolved at launch ([RunRepo]), at most [MaxRunRepos]. Empty
 	// for a run that clones nothing from Gitlet — a repository on
