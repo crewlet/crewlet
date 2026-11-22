@@ -191,7 +191,9 @@ func TestTheModelsScreenKnowsEveryHarnessAsItsProfileReads(t *testing.T) {
 		if len(p.DeviceLoginArgs) > 0 {
 			signIns = append(signIns, "device")
 		}
-		if len(p.SignInEnv) > 0 {
+		// A CLOUD is a switch among the names the harness signs in by, never
+		// a token there: Copilot's GH_TOKEN signs it in as a key would.
+		if slices.ContainsFunc(p.SignInEnv, func(name string) bool { return !harnessprofile.IsCredentialName(name) }) {
 			signIns = append(signIns, "cloud")
 		}
 		listed, err := clientsource.Property(facts, "signIns")

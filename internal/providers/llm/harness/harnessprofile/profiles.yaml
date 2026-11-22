@@ -2609,11 +2609,22 @@ copilot:
   # a GitHub token.
   host_credential_paths: [".copilot/config.json"]
   # Copilot authenticates with a GitHub token, read from COPILOT_GITHUB_TOKEN,
-  # then GH_TOKEN, then GITHUB_TOKEN (read from the 1.0.103 bundle): this is
-  # the first of the three and the harness's own, so it outranks the generic two,
-  # which a code-host integration's token is kept under. Reached deliberately
-  # through auth.mode api-key or inherit-env, never forwarded silently.
+  # then GH_TOKEN, then GITHUB_TOKEN, ALL THREE ABOVE ITS OWN LOGIN. Measured on
+  # 1.0.114 (--log-level debug): its sign-in tries Hmac, ApiKey and
+  # CopilotApiToken, then GitHubToken (these variables), and only then
+  # UserToken (the login config.json or a keychain holds) and GhCli; a GitHub
+  # App installation token (ghs_) in GITHUB_TOKEN is taken as GitHubToken.
+  # `copilot help environment` says the same: "takes precedence over
+  # previously stored credentials". COPILOT_GITHUB_TOKEN is the harness's own,
+  # reached deliberately through auth.mode api-key or inherit-env.
   api_key_env: "COPILOT_GITHUB_TOKEN"
+  # THE GENERIC TWO SIGN COPILOT IN AS SURELY: listed, a code-host
+  # integration's token kept under one (GitHub's GITHUB_TOKEN) is withheld from
+  # a Copilot executor's box rather than signing its model calls in over the
+  # seat's login, and auth.mode env takes a GitHub token under either. The
+  # agent's git and gh still have the token: the GitHub integration's file,
+  # ~/.config/crewlet/github-token, is written whatever its variable is.
+  sign_in_env: ["GH_TOKEN", "GITHUB_TOKEN"]
   login_args: ["login"]
   logout_args: ["logout"]
   # NOT MEASURED, the limit markers below: generic phrases rather than this
