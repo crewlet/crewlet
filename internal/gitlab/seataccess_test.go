@@ -510,8 +510,14 @@ func TestOptionsAreGitLabsRolesPlusLiveCustomRoles(t *testing.T) {
 	t.Parallel()
 	g := newGLSite(t)
 	g.roles = `[{"id": 7, "name": "Incident responder", "base_access_level": 40}]`
-	s := openGL(t, g, []string{"acme/api"})
-	opts, err := s.Options(context.Background(), seataccess.LaneGitLab)
+	in := seataccess.OpenInput{
+		Config: glCompany(g.server.URL, []string{"acme/api"}, &config.RoleGitLab{Enabled: on(), AccessLevel: 20}),
+	}
+	s, err := gitlab.Vendor{}.Open(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts, err := seataccess.ReadOptions(context.Background(), gitlab.Vendor{}, s, in, seataccess.LaneGitLab)
 	if err != nil {
 		t.Fatal(err)
 	}

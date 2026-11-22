@@ -102,7 +102,9 @@ func (accessVendor) FixedLevels(seataccess.Lane) []seataccess.Level {
 	}
 }
 
-// Options is the two fixed levels and the registered hosts.
+// Options is the two fixed levels and each registered host's name; the hosts
+// are the document's ([accessVendor.Reach]), which [seataccess.ReadOptions]
+// applies.
 func (s *accessSession) Options(_ context.Context, lane seataccess.Lane) (seataccess.Options, error) {
 	levels := accessVendor{}.FixedLevels(lane)
 	block := s.company.Integrations.SSH
@@ -115,10 +117,7 @@ func (s *accessSession) Options(_ context.Context, lane seataccess.Lane) (seatac
 	if len(names) == 0 {
 		names = nil
 	}
-	return seataccess.Options{
-		Lane: lane, Levels: levels, Scoped: true, ScopeRequired: true,
-		Scope: block.HostIDs(), ScopeLive: true, ScopeNames: names,
-	}, nil
+	return seataccess.Options{Lane: lane, Levels: levels, ScopeNames: names}, nil
 }
 
 // Observe is each seat's setting in the document: a seat that is on holds

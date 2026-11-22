@@ -274,12 +274,10 @@ func (accessVendor) FixedLevels(seataccess.Lane) []seataccess.Level {
 	return levels
 }
 
-// Options is Mattermost's four accesses and the company's channels.
+// Options is Mattermost's four accesses; the channels are the document's
+// ([accessVendor.Reach]), which [seataccess.ReadOptions] applies.
 func (s *accessSession) Options(_ context.Context, lane seataccess.Lane) (seataccess.Options, error) {
-	scope := s.companyChannels()
-	return seataccess.Options{
-		Lane: lane, Levels: accessVendor{}.FixedLevels(lane), Scope: scope, ScopeOpen: len(scope) == 0,
-	}, nil
+	return seataccess.Options{Lane: lane, Levels: accessVendor{}.FixedLevels(lane)}, nil
 }
 
 // Observe reads back every seat's bot: the document's seats and every seat
