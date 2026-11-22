@@ -192,6 +192,9 @@ func (p *Product) report(ctx context.Context, call growth.Call) (reportAnswer, e
 	}
 	acct, err := p.accountOf(ctx, call, accountID)
 	if err != nil {
+		// THE CALL'S ONE OUTCOME is its failure, where the lookup it needed
+		// reached Google and failed.
+		p.client.MadeOrFailed(ctx, call, probe, growth.ClassRead, err)
 		return reportAnswer{}, err
 	}
 	zoneName := acct.TimeZone
@@ -233,7 +236,9 @@ func (p *Product) report(ctx context.Context, call growth.Call) (reportAnswer, e
 	} else {
 		// ONE ROW MORE THAN THE LIMIT tells a full answer from a cut one.
 		spec["maxReportRows"] = limit + 1
-		streamedSpec(call.Args, spec, zoneName != acct.TimeZone)
+		if err = streamedSpec(call.Args, spec, zoneName != acct.TimeZone, closed); err != nil {
+			return reportAnswer{}, err
+		}
 	}
 	req, err := newRequest(op, map[string]string{"accountsId": accountID}, nil, map[string]any{"reportSpec": spec})
 	if err != nil {
@@ -244,7 +249,7 @@ func (p *Product) report(ctx context.Context, call growth.Call) (reportAnswer, e
 	if id == campaignReportOp && errors.As(err, &syntax) {
 		// THE ONE REPORT GOOGLE CAPS AT NO ROW COUNT: an answer past the most
 		// one call reads is cut, and reads as broken JSON.
-		err = &googlegrowth.CallError{Failure: growth.FailureVendorRefused, Err: refusal(growth.RefusedInvalid,
+		err = &googlegrowth.CallError{Failure: growth.FailureUnknownOutcome, Err: refusal(growth.RefusedInvalid,
 			"the campaign report is larger than one answer holds; narrow its dates or dimensions.")}
 	}
 	var messages []googleReport
@@ -343,10 +348,14 @@ func date(day string) map[string]any {
 }
 
 // streamedSpec adds a network or mediation report's filters, sorting,
-// localization and zone; foreign is a zone other than the account's.
-func streamedSpec(args, spec map[string]any, foreign bool) {
+// localization and zone, held to the report's closed lists; foreign is a zone
+// other than the account's.
+func streamedSpec(args, spec map[string]any, foreign bool, closed [2][]string) error {
 	var filters []any
 	for _, f := range listOf(args["dimension_filters"]) {
+		if err := within("dimension_filters.dimension", []string{argString(f, "dimension")}, closed[0]); err != nil {
+			return err
+		}
 		filters = append(filters, map[string]any{"dimension": f["dimension"],
 			"matchesAny": map[string]any{"values": f["matches_any"]}})
 	}
@@ -356,10 +365,23 @@ func streamedSpec(args, spec map[string]any, foreign bool) {
 	var sorts []any
 	for _, s := range listOf(args["sort"]) {
 		cond := map[string]any{"order": s["order"]}
-		if d, ok := s["dimension"]; ok {
-			cond["dimension"] = d
+		if err := within("sort.order", []string{argString(s, "order")}, []string{"ASCENDING", "DESCENDING"}); err != nil {
+			return err
 		}
-		if m, ok := s["metric"]; ok {
+		d, byDim := s["dimension"].(string)
+		m, byMetric := s["metric"].(string)
+		switch {
+		case byDim == byMetric:
+			return refusal(growth.RefusedInvalid, "each sort names a dimension or a metric. No vendor was reached.")
+		case byDim:
+			if err := within("sort.dimension", []string{d}, closed[0]); err != nil {
+				return err
+			}
+			cond["dimension"] = d
+		default:
+			if err := within("sort.metric", []string{m}, closed[1]); err != nil {
+				return err
+			}
 			cond["metric"] = m
 		}
 		sorts = append(sorts, cond)
@@ -380,6 +402,7 @@ func streamedSpec(args, spec map[string]any, foreign bool) {
 	if foreign {
 		spec["timeZone"] = argString(args, "time_zone")
 	}
+	return nil
 }
 
 // listOf is a list argument's objects.
