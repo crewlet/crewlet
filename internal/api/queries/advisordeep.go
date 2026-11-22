@@ -26,21 +26,21 @@ type AskQuestion func(ctx context.Context, what string, p Params) (any, error)
 // advisorReads is every question the deep run may ask, with its parameters
 // and what it answers, in the order it lists them.
 var advisorReads = []modelpass.Question{
-	{Name: "advisor_snapshot", Params: "{range: 7d|14d|30d}", About: "the company's stats and chart series over the range, each stat beside the range before"},
-	{Name: "advisor_findings", Params: "{state: open|closed, severity, area, class, limit, cursor}", About: "the Advisor's findings as kept, with their facts and fixes"},
-	{Name: "advisor_finding", Params: "{id}", About: "one finding with its history"},
-	{Name: "advisor_run", Params: "{}", About: "the latest run: what each class concluded, and what it could not read"},
-	{Name: "advisor_reports", Params: "{limit, cursor}", About: "the weekly reports' summaries"},
-	{Name: "advisor_report", Params: "{week}", About: "one week's report with its metrics"},
-	{Name: "seat_activity", Params: "{seat, days, previous}", About: "every seat's turns over the days: started, by outcome, tokens"},
-	{Name: "tokens", Params: "{days, since, until, previous, seat}", About: "token spend by seat, model and day"},
-	{Name: "schedules", Params: "{}", About: "every schedule with its cadence and its last fires"},
-	{Name: "schedule_runs", Params: "{scope_type, scope_id, name, limit}", About: "one schedule's runs and what each did"},
-	{Name: "work_workload", Params: "{unit}", About: "who holds how much open work, by status"},
-	{Name: "work_flow", Params: "{bucket, points, project}", About: "the company's work over time: created, started, done"},
+	{Name: "advisor_snapshot", Params: "{range: 7d|14d|30d}", About: "the company's stats and chart series over the range, each stat beside the range before", Words: "the company's numbers"},
+	{Name: "advisor_findings", Params: "{state: open|closed, severity, area, class, limit, cursor}", About: "the Advisor's findings as kept, with their facts and fixes", Words: "the findings"},
+	{Name: "advisor_finding", Params: "{id}", About: "one finding with its history", Words: "one finding"},
+	{Name: "advisor_run", Params: "{}", About: "the latest run: what each class concluded, and what it could not read", Words: "the last run"},
+	{Name: "advisor_reports", Params: "{limit, cursor}", About: "the weekly reports' summaries", Words: "the weekly reports"},
+	{Name: "advisor_report", Params: "{week}", About: "one week's report with its metrics", Words: "a weekly report"},
+	{Name: "seat_activity", Params: "{seat, days, previous}", About: "every seat's turns over the days: started, by outcome, tokens", Words: "seat activity"},
+	{Name: "tokens", Params: "{days, since, until, previous, seat}", About: "token spend by seat, model and day", Words: "token spend"},
+	{Name: "schedules", Params: "{}", About: "every schedule with its cadence and its last fires", Words: "the schedules"},
+	{Name: "schedule_runs", Params: "{scope_type, scope_id, name, limit}", About: "one schedule's runs and what each did", Words: "schedule runs"},
+	{Name: "work_workload", Params: "{unit}", About: "who holds how much open work, by status", Words: "who holds open work"},
+	{Name: "work_flow", Params: "{bucket, points, project}", About: "the company's work over time: created, started, done", Words: "the flow of work"},
 	{Name: "work_items", Params: "{status_group: " + worklet.StatusGroupWords() + ", assignee: a seat's handle, type, limit, cursor}",
-		About: "work items narrowed by status, assignee and type"},
-	{Name: "work_projects", Params: "{limit}", About: "the projects with their task counts"},
+		About: "work items narrowed by status, assignee and type", Words: "work items"},
+	{Name: "work_projects", Params: "{limit}", About: "the projects with their task counts", Words: "the projects"},
 }
 
 // advisorPrincipal is the Advisor as it asks the engine's questions: the
