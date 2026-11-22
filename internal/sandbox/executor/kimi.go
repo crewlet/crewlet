@@ -478,13 +478,20 @@ func kimiMCP(s sandbox.MCPServer) map[string]any {
 
 // artifacts is what a Kimi run leaves in its box of its own: its agent profile,
 // which a later run must not find among its subagents, and its driver and its
-// settings and their fresh copies, which hold the notes route's token. Its
-// MCP servers are written whole by every run, its sessions are kept, and the
-// session its driver reported goes with every run's ([Runner.ClearArtifacts]).
+// settings and their fresh copies, which hold the notes route's token. And
+// everything in the home Kimi loads as the user's own, whatever wrote it: the
+// skills, the personal AGENTS.md files, the installed plugins, the saved
+// workspace trust and config.toml, which a local box hands again with only
+// its login's tables (measured on 2.7.2), so a run loads only the config its
+// launch writes. Its MCP servers are written whole by every run, its sessions
+// and login tokens are kept, and the session its driver reported goes with
+// every run's ([Runner.ClearArtifacts]).
 func (Kimi) artifacts(p Paths) (files, dirs []string) {
-	files = []string{p.KimiDriver(), p.KimiSettings(), p.KimiServerPid(), p.KimiSettingsFresh(),
-		p.KimiMCPConfigFresh(), p.KimiLinesBefore()}
-	return files, []string{p.KimiAgents() + "/" + kimiProfileDir}
+	files = append([]string{p.KimiDriver(), p.KimiSettings(), p.KimiServerPid(), p.KimiSettingsFresh(),
+		p.KimiMCPConfigFresh(), p.KimiLinesBefore(), p.KimiInstructions(), p.KimiConfig()},
+		p.KimiUserInstructions()...)
+	return files, []string{p.KimiAgents() + "/" + kimiProfileDir, p.KimiSkills(), p.KimiUserSkills(),
+		p.KimiPlugins(), p.KimiTrust()}
 }
 
 // notesOffWhy is what switches Kimi's reading of notes off: a release before
