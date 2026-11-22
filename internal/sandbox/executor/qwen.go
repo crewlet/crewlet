@@ -95,12 +95,22 @@ func qwenScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	// of the same text this run is handed was never delivered as.
 	line(`n=0; [ -z "$cf" ] || n=$(wc -l < "$cf" | tr -d ' '); printf '%s %s\n' "$s" "$n" > ` + q(paths.QwenRunStart()))
 	line(`if [ "$k" = yes ]; then m=load; else m=new; fi`)
+	// THE TELEMETRY'S NAMES GO before Qwen Code starts: the run turns no Qwen
+	// Code telemetry on, so it starts without them. Its key is in its settings,
+	// never the environment ([QwenCode.Output]).
+	line(otelExportUnset)
 	b.WriteString(launchHarness("node "+q(paths.QwenHelper())+" run "+q(paths.QwenHelperConfig())+` "$s" "$m"`, paths))
 	line(qwenLocate(paths))
 	b.WriteString(chatPack(paths, packAt{staged: paths.SessionStaging(), dest: paths.SessionCapture()}, paths.QwenDir()))
 	line(`exit "$code"`)
 	return b.String()
 }
+
+// otelExportUnset is the shell removing every OTEL_EXPORTER_OTLP_ variable
+// from the environment, whatever its name, as an operator may add any: run
+// before a harness whose telemetry the runner never turns on (Gemini CLI's,
+// Qwen Code's), so the harness starts without them.
+const otelExportUnset = `for n in $(env | sed -n 's/^\(OTEL_EXPORTER_OTLP_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$n"; done`
 
 // Output is the helper's stream on stdout, which is also the result: the
 // session/update lines Qwen Code sent and the helper's own, ending with how

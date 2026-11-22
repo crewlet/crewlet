@@ -241,3 +241,51 @@ func TestOnlyTheMatchingQuotaAfterAReal429SitsAQwenEntryOut(t *testing.T) {
 		})
 	}
 }
+
+// A QWEN RUN STARTS ITS HARNESS WITHOUT THE TELEMETRY'S NAMES OR A BRIDGE
+// VARIABLE. The script starts the helper, and with it Qwen Code, without any
+// OTEL_EXPORTER_OTLP_ variable, whatever its name, or the key, which its
+// settings hold; no variable carries the bridge's address or token, which its
+// settings and helper configuration hold; the Gitlet names and the rest stay.
+// The helper's stand-in records the environment it starts with.
+//
+// Mutations, each red: leave the telemetry's names in the environment; match
+// only the names the engine hands; drop the Gitlet names too; hand the
+// bridge's address through a variable.
+func TestAQwenRunStartsItsHarnessWithoutTheTelemetryOrABridgeVariable(t *testing.T) {
+	t.Parallel()
+	runner, b := qwenBox(t, `env > "$HOME/helper-env"
+echo '{"type":"crewlet_qwen_end","stop_reason":"end_turn"}'
+`)
+	const bridge = "http://127.0.0.1:7/mcp/bridge-token-placeholder"
+	_, res := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "begin",
+		MCPServers: map[string]sandbox.MCPServer{"crewlet": {Name: "crewlet", Transport: sandbox.TransportHTTP,
+			URL: bridge}},
+		Steer: sandbox.SteerWiring{Server: "crewlet", Tool: "steer_take", URL: bridge + "/steer"},
+		Env: map[string]string{
+			"OTEL_EXPORTER_OTLP_ENDPOINT":        "https://engine.example.com/otlp/run-token-placeholder/v1/traces",
+			"OTEL_EXPORTER_OTLP_HEADERS":         "",
+			"OTEL_EXPORTER_OTLP_PROTOCOL":        "http/protobuf",
+			"OTEL_EXPORTER_OTLP_LOGS_ENDPOINT":   "https://collector.example.com/v1/logs",
+			"OTEL_EXPORTER_OTLP_CUSTOM_OPERATOR": "an operator's",
+			"OPENAI_API_KEY":                     "key-placeholder",
+			"OTEL_RESOURCE_ATTRIBUTES":           "crewlet.turn_id=t",
+			sandbox.GitURLVar:                    "https://git.example.com/box/git",
+			sandbox.GitAccessFileVar:             "/home/box/.crewlet/git-access",
+		}})
+	if !res.Success {
+		t.Fatalf("the run failed: %q / %q", res.Error, res.Transcript)
+	}
+	env := boxFile(t, b, b.Home()+"/helper-env")
+	for _, line := range strings.Split(env, "\n") {
+		if strings.HasPrefix(line, "OTEL_EXPORTER_OTLP_") || strings.HasPrefix(line, "OPENAI_API_KEY=") ||
+			strings.Contains(line, "bridge-token-placeholder") {
+			t.Errorf("Qwen Code starts with %q, want it absent", line)
+		}
+	}
+	for _, kept := range []string{sandbox.GitURLVar + "=", sandbox.GitAccessFileVar + "=", "OTEL_RESOURCE_ATTRIBUTES="} {
+		if !strings.Contains(env, "\n"+kept) && !strings.HasPrefix(env, kept) {
+			t.Errorf("Qwen Code starts without %s, which the run was handed", strings.TrimSuffix(kept, "="))
+		}
+	}
+}
