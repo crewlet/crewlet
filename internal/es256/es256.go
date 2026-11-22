@@ -2,8 +2,10 @@
 // the vendors that take a token the engine signs itself: App Store Connect
 // signs every request with a team key, and Apple Ads a client secret.
 //
-// A leaf of the standard library. The private key is read from a PKCS#8 PEM
-// block, held only in memory by its caller, and never written anywhere.
+// A leaf of the standard library. The private key is read from one PEM block,
+// PKCS #8 (App Store Connect's .p8 file) or SEC 1 (the `EC PRIVATE KEY` OpenSSL
+// writes, which Apple Ads asks for), held only in memory by its caller, and
+// never written anywhere.
 package es256
 
 import (
@@ -20,23 +22,35 @@ import (
 	"strings"
 )
 
-// ErrNotP256 is a value that is not one PKCS#8 PEM block holding a P-256 key.
-var ErrNotP256 = errors.New("es256: not one PKCS#8 PEM block holding a P-256 private key")
+// ErrNotP256 is a value that is not one PEM block holding a P-256 key.
+var ErrNotP256 = errors.New("es256: not one PKCS #8 or SEC 1 PEM block holding a P-256 private key")
 
-// ParseKey reads a PKCS#8 PEM private key (`BEGIN PRIVATE KEY`) holding a
-// P-256 key, as App Store Connect's .p8 file and the engine's minted keys are.
-// Text around the block is refused, so a paste of two keys is not one.
+// ParseKey reads one PEM private key holding a P-256 key: PKCS #8 (`BEGIN
+// PRIVATE KEY`), as App Store Connect's .p8 file and the engine's minted keys
+// are, or SEC 1 (`BEGIN EC PRIVATE KEY`), as `openssl ecparam -genkey` writes
+// Apple Ads' key. Text around the block is refused, so a paste of two keys is
+// not one.
 func ParseKey(value string) (*ecdsa.PrivateKey, error) {
 	block, rest := pem.Decode([]byte(strings.TrimSpace(value)))
-	if block == nil || block.Type != "PRIVATE KEY" || strings.TrimSpace(string(rest)) != "" {
+	if block == nil || strings.TrimSpace(string(rest)) != "" {
 		return nil, ErrNotP256
 	}
-	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
-	if err != nil {
-		return nil, ErrNotP256
+	var key *ecdsa.PrivateKey
+	switch block.Type {
+	case "PRIVATE KEY":
+		parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+		if err != nil {
+			return nil, ErrNotP256
+		}
+		key, _ = parsed.(*ecdsa.PrivateKey)
+	case "EC PRIVATE KEY":
+		parsed, err := x509.ParseECPrivateKey(block.Bytes)
+		if err != nil {
+			return nil, ErrNotP256
+		}
+		key = parsed
 	}
-	key, ok := parsed.(*ecdsa.PrivateKey)
-	if !ok || key.Curve != elliptic.P256() {
+	if key == nil || key.Curve != elliptic.P256() {
 		return nil, ErrNotP256
 	}
 	return key, nil

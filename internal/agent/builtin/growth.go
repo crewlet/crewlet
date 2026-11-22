@@ -29,8 +29,8 @@ import (
 // is (a fixed tool, Allow once or Deny), read live once before it is held
 // ([preparedTool]) and answered by an administrator alone at a fresh step-up;
 // it lapses unanswered after a day. Every write is classed by its product
-// against its target first, and refused here where it comes to more than its
-// tool makes. No credential reaches a box: the product makes every call in the
+// against its target first, refused here where it comes to more than its tool
+// makes, and made at once where a held tool's call comes to operate (a lower). No credential reaches a box: the product makes every call in the
 // engine. Every step is on the access log: a held call's ask once it is held
 // ([GrowthAudit]), and what the product makes by the product.
 
@@ -196,6 +196,13 @@ func (t *growthTool) CallForTurn(ctx context.Context, turn *turnctx.Turn, args m
 	if r := t.within(ctx, hold); r != nil {
 		return *r, nil
 	}
+	return t.makeNow(ctx, turn, handle, call, hold)
+}
+
+// makeNow makes a prepared call nobody is asked about, on the reading it was
+// classed on.
+func (t *growthTool) makeNow(ctx context.Context, turn *turnctx.Turn, handle string, call growth.Call,
+	hold growth.Hold) (tools.Result, error) {
 	answer, err := t.product.Apply(ctx, call, hold.Binding)
 	switch {
 	case errors.Is(err, growth.ErrMoved):
@@ -304,16 +311,25 @@ func (t *growthHeldTool) BeforeHold(ctx context.Context, turn *turnctx.Turn, _ m
 }
 
 // PrepareHold reads the call's target live and builds its hold, which records
-// its ask on the access log once it is held.
+// its ask on the access log once it is held. A call that comes, as its target
+// reads now, to a class nobody is asked about (a lower or a pause sent through
+// a spend tool) is made at once instead: a brake never waits on a step-up
+// (package growth), and the seat's level already allows operate.
 func (t *growthHeldTool) PrepareHold(ctx context.Context, turn *turnctx.Turn, args map[string]any) (HeldPrep, *tools.Result) {
 	handle := turn.Handle()
-	hold, err := t.product.Prepare(ctx, growth.Call{Handle: handle, Turn: turn.RunID, Tool: t.Name(), Args: args})
+	call := growth.Call{Handle: handle, Turn: turn.RunID, Tool: t.Name(), Args: args}
+	hold, err := t.product.Prepare(ctx, call)
 	if err != nil {
 		r := growthFailure(ctx, t.Name(), err)
 		return HeldPrep{}, &r
 	}
 	if r := t.within(ctx, hold); r != nil {
 		return HeldPrep{}, r
+	}
+	if !hold.Class.Held() && t.product.Level(handle).Allows(hold.Class) {
+		call.ID = uuid.Must(uuid.NewV7()).String()
+		r, _ := t.makeNow(ctx, turn, handle, call, hold)
+		return HeldPrep{}, &r
 	}
 	ask := hold.Ask
 	ask.Product, ask.Tool, ask.Class = t.product.Catalog().Kind, t.Name(), t.def.Class

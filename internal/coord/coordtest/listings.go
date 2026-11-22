@@ -111,6 +111,68 @@ var listingCases = []fleetCase{{
 		}
 	},
 }, {
+	// A HOLD'S REVISION IS THE STORE'S, NEVER THE WRITER'S. The trim ignores
+	// a hold only once it has watched one write of it stand unrenewed past
+	// its bound, and it names that write by this revision. A renewal handed
+	// back under the revision before it reads as a live pin left standing,
+	// which the trim then ignores; a revision the writer could set would let
+	// a writer decide what the trim watched.
+	name: "a trim hold read back carries its store's revision",
+	fn: func(h *fleetHarness) {
+		const owner, other = "n0/backup", "n1/join"
+		put := func(who string, revision uint64) {
+			h.t.Helper()
+			if err := h.f.PutHold(h.ctx, coord.TrimHold{Owner: who, Revision: revision,
+				Streams: map[string]coord.Position{"LOG": {Stream: "LOG", Generation: 1, Seq: 5}},
+			}); err != nil {
+				h.t.Fatalf("PutHold(%s): %v", who, err)
+			}
+		}
+		revisionOf := func(who string) uint64 {
+			h.t.Helper()
+			holds, err := h.f.Holds(h.ctx)
+			if err != nil {
+				h.t.Fatalf("Holds: %v", err)
+			}
+			for _, hold := range holds {
+				if hold.Owner == who {
+					return hold.Revision
+				}
+			}
+			h.t.Fatalf("the register lists %+v, with no hold of %s's", holds, who)
+			return 0
+		}
+		const offered = 1 << 62
+		put(owner, offered)
+		first := revisionOf(owner)
+		if first == 0 || first == offered {
+			h.t.Fatalf("the hold came back at revision %d: want the store's own, "+
+				"neither zero (a hold the trim never watches) nor the %d its "+
+				"writer offered", first, uint64(offered))
+		}
+		put(owner, offered)
+		renewed := revisionOf(owner)
+		if renewed == first {
+			h.t.Fatalf("a renewal came back at revision %d, the first write's: "+
+				"the trim would read a renewed hold as one left standing and "+
+				"ignore a live pin", renewed)
+		}
+		if err := h.f.ReleaseHold(h.ctx, owner); err != nil {
+			h.t.Fatalf("ReleaseHold: %v", err)
+		}
+		put(owner, offered)
+		if again := revisionOf(owner); again == first || again == renewed {
+			h.t.Fatalf("a hold taken again after its release came back at "+
+				"revision %d, one an earlier hold of the owner's held (%d, %d)",
+				again, first, renewed)
+		}
+		put(other, 0)
+		if theirs := revisionOf(other); theirs == 0 {
+			h.t.Fatalf("a second owner's hold came back at revision 0, which " +
+				"the trim never watches")
+		}
+	},
+}, {
 	// The retention sweep lists the registry to decide which removed
 	// seats' mailboxes to retire, and it rewrites the records it judges
 	// while other nodes' sweeps are listing them.

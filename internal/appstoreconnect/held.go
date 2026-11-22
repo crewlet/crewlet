@@ -308,10 +308,7 @@ func (p *Product) hold(ctx context.Context, resource string) (func(), error) {
 
 // Denied records that an administrator denied the call, or that it lapsed.
 func (p *Product) Denied(ctx context.Context, call growth.Call) error {
-	step, answerer := growth.StepDenied, call.Approver
-	if call.Approver == "" || call.Approver == engineActor {
-		step, answerer = growth.StepLapsed, ""
-	}
+	step, answerer := call.Denial()
 	var rec growth.Record
 	if call.Tool == ToolReply {
 		m, rs, err := p.replies(ctx, call)
@@ -375,10 +372,6 @@ func earlyFailure(err error) growth.Failure {
 	}
 	return growth.FailureEngineError
 }
-
-// engineActor is who the engine's own answer names, as its lapse sweep
-// answers (internal/engine).
-const engineActor = "engine"
 
 func classOfTool(tool string) growth.Class {
 	if c, ok := toolClass[tool]; ok {
