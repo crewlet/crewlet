@@ -297,9 +297,7 @@ func TestTheKimiDriverEndsOnRequestByCancellingTheTurn(t *testing.T) {
 		if waiting {
 			break
 		}
-		select {
-		case <-time.After(20 * time.Millisecond): //fixedwait:liveness
-		}
+		<-time.After(20 * time.Millisecond) //fixedwait:liveness
 	}
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatal(err)
