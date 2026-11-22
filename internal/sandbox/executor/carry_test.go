@@ -687,16 +687,15 @@ func versionBox(printed string, code int, errText string, asked *[]string) *sand
 // THE CONTINUATION CHECK HOLDS THE BOX HARNESS'S RELEASE TO THE FLOORS: the
 // writing harness, this build's format, a box at or past its floor (Claude Code
 // 2.1.310, OpenCode 2.0.32) and no older than the writer; Claude Code only a
-// session 2.1.300 or later wrote; Codex box and writer exactly 0.171.0, Muse
-// Code's 1.4.25, Gemini CLI's 0.70.0 and Qwen Code's 0.28.4. An unread box
-// release or writer refuses, for every harness. The printed release is
-// returned whatever the answer; a harness not answering is no continuation, a
-// box not asked an error; one login-shell exec, its bin first on PATH.
+// session 2.1.300 or later wrote; box and writer exactly Codex 0.171.0, Muse
+// Code 1.4.25, Gemini CLI 0.70.0 and Qwen Code 0.28.4. An unread box release
+// or writer refuses, for every harness. The printed release is returned
+// whatever the answer; a harness not answering is no continuation, a box not
+// asked an error; one login-shell exec, its bin first on PATH.
 //
 // Mutation: compare against the writer's floor alone, let an older box take a
-// newer writer's session, read an unreadable box release or writer as
-// current, or let a Gemini or Qwen release other than the one continue, and a
-// row goes red.
+// newer writer's session, read an unread box release or writer as current, or
+// let a Gemini or Qwen release but the one continue, and a row goes red.
 func TestTheContinuationCheckHoldsTheBoxsReleaseToTheFloors(t *testing.T) {
 	t.Parallel()
 	claudeArchive := func(release string) sandbox.SessionArchive {
