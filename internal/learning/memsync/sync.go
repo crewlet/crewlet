@@ -1,6 +1,7 @@
 package memsync
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -44,12 +45,24 @@ const boundaryReadTimeout = 5 * time.Second
 //
 // Bytes, not rows: one row can hold up to the transport's 8 MiB, and a drain
 // flushes every held seat at once (seat.Host.ReleaseAll), a page each: about
-// 51 MiB at fifty seats. It bounds memory, not round trips: each row is its
-// own publish and moves the mark as it is acknowledged. A mebibyte is about a
-// hundred rows of 1 536-dimension vectors, so a page's one index seek is under
-// a percent of what it feeds; less pays a seek every few rows, more only
-// raises the drain's peak. A judgement, not a measurement.
+// 51 MiB at fifty seats. It bounds memory and what a publish has out at once,
+// since no row of the next page is sent before the page's last is answered
+// ([Syncer.publishPage]). A mebibyte is about a hundred rows of 1 536-dimension
+// vectors, so a page's one index seek is under a percent of what it feeds;
+// less pays a seek every few rows, more only raises the drain's peak. A
+// judgement, not a measurement.
 const exportPageBytes = 1 << 20
+
+// rowsInFlight is how many rows a publish has sent and not yet had answered
+// ([Syncer.publishPage]). One at a time, a publish carried a row a broker round
+// trip whatever the link's rate: a flush's five seconds about fifty rows at
+// 100 ms (crewlet/crewlet#1041). 64 carries some 3,000 there, past the hundreds
+// a vector fill stamps again, and is what the heartbeat already sends at once
+// on the same connection (seat's renewConcurrency). It binds only small rows:
+// what is out is never more than a page ([exportPageBytes]), and across a link
+// no more than the link's one window ([Config.Window]), which 64 rows of some
+// 2 KiB fill, so a request sent behind them is still answered in its term.
+const rowsInFlight = 64
 
 // AgentIDFor derives a seat's stable id from its handle (ADR-0013), or "" where
 // there is none to derive. An empty id is no address on the changelog (the
@@ -87,6 +100,10 @@ type Syncer struct {
 	// A seat with none is published by nobody here. Under mu, in memory, as
 	// marks are.
 	holdings map[string]*seatHolding
+
+	// inFlight is how many rows a publish has out at once: [rowsInFlight],
+	// and 1 in a case that steps through a publish a row at a time.
+	inFlight int
 
 	// beforePage, a test's seam unset in production, is called with a range and
 	// a table before each page's start is read: the window between
@@ -149,7 +166,8 @@ func New(db *store.DB, js jetstream.JetStream, agentID AgentIDFor, cfg Config) (
 		return nil, nil
 	}
 	s := &Syncer{db: db, js: js, agentID: agentID, marks: map[markKey]int64{},
-		holdings: map[string]*seatHolding{}, timing: jsprovision.Clustered(cfg.Clustered).Timing()}
+		holdings: map[string]*seatHolding{}, timing: jsprovision.Clustered(cfg.Clustered).Timing(),
+		inFlight: rowsInFlight}
 	switch {
 	case cfg.AcrossLink && cfg.Window == nil:
 		return nil, errors.New("memsync: a node whose connection reaches the memory changelog " +
@@ -182,8 +200,8 @@ func (s *Syncer) info(ctx context.Context, msg string, args ...any) {
 
 // holding is who this node's holding of a seat lets publish its memory: the
 // memory sync cycle while live, the release's flush while releasing, never both
-// but for the one row a cycle was sending as the release began
-// ([Syncer.stillHolds]), and neither before the hydration here completes or
+// (the flush starts once the rows the cycle had out are answered,
+// [Syncer.awaitLanded]), and neither before the hydration here completes or
 // after the release forgets it. The changelog is last writer wins per row, so
 // it is safe only with one publisher of a seat at a time (package doc, "How it
 // is fixed").
@@ -197,7 +215,7 @@ const (
 
 	// releasing is a seat whose release has begun ([Syncer.Releasing]): the
 	// release's flush carries it ([Syncer.FlushOwn], [Syncer.FlushBacklog]),
-	// and a cycle partway through it stops at its next row.
+	// and a cycle partway through it sends no more rows.
 	releasing holding = "releasing"
 )
 
@@ -215,13 +233,28 @@ type seatHolding struct {
 	// sequence as the hydration completed ([Syncer.recordBoundary]). Fixed for
 	// the holding's life.
 	boundary int64
+
+	// flying is the rows the cycle's calls have sent and not yet had answered
+	// and marked, and landed, made as the release begins, is closed once none
+	// is: both under [Syncer.mu] ([Syncer.awaitLanded]).
+	flying int
+	landed chan struct{}
+
+	// released is closed as the release begins, waking a cycle's row waiting
+	// for the link's window ([Syncer.takeWindow]).
+	released chan struct{}
+}
+
+// newHolding is a live holding whose own writes begin above boundary.
+func newHolding(boundary int64) *seatHolding {
+	return &seatHolding{state: live, boundary: boundary, released: make(chan struct{})}
 }
 
 // ErrNotHeld is what a publish answers when this node's holding of the seat
 // does not let that call carry it ([holding]): at once when the call begins,
-// or at its next row when the holding changes under it. To a cycle it is
-// nothing to report; a release flushes only a holding [Syncer.Releasing]
-// turned, so to a flush it is a holding that ended under it.
+// or at the next row it would send when the holding changes under it. To a
+// cycle it is nothing to report; a release flushes only a holding
+// [Syncer.Releasing] turned, so to a flush it is a holding that ended under it.
 // errors.Is-comparable.
 var ErrNotHeld = errors.New("memsync: this node's holding of the seat does not let this " +
 	"call publish it")
@@ -260,9 +293,11 @@ func (s *Syncer) seat(handle string) seatRef {
 // own pass's ([Syncer.PublishOwn]) or its backlog's ([Syncer.PublishBacklog]),
 // which the caller tells apart by the call it made.
 type Carried struct {
-	// Rows is every row acknowledged, each of which moved a mark of the
-	// call's range: no later publish of that range sends it again, until it
-	// changes or a restart or a release zeroes the marks.
+	// Rows is every row acknowledged before the first that was not, in the
+	// order sent, each of which moved a mark of the call's range: no later
+	// publish of that range sends it again, until it changes or a restart or
+	// a release zeroes the marks. A row acknowledged after one that failed
+	// moved none and is not counted.
 	Rows int
 
 	// StoppedIn is the table a publish that did not reach its end stopped
@@ -274,12 +309,13 @@ type Carried struct {
 // every held seat ahead of the turn their backlogs share (a release calls
 // [Syncer.FlushOwn]): what this node's holding wrote or changed, stamped above
 // its boundary. It answers [ErrNotHeld] and reads nothing unless the holding
-// is live, and checks again before each row ([Syncer.stillHolds]). Each table
-// ([tables]) goes a page at a time ([exportPage]) above the larger of the
-// boundary and its own mark, read again each page since another call of the
-// range may have moved it; the mark moves past each acknowledged row, so a cut
-// publish keeps what it carried. It returns at the first error, with what was
-// acknowledged.
+// is live, and checks again before each row it sends ([Syncer.stillHolds]).
+// Each table ([tables]) goes a page at a time ([exportPage]) above the larger
+// of the boundary and its own mark, read again each page since another call of
+// the range may have moved it; a page's rows go out [rowsInFlight] at a time,
+// and the mark moves past each acknowledged in order, so a cut publish keeps
+// what it carried ([Syncer.publishPage]). It returns at the first error, with
+// what was acknowledged.
 func (s *Syncer) PublishOwn(ctx context.Context, handle string) (Carried, error) {
 	return s.publish(ctx, handle, live, ownRange)
 }
@@ -301,8 +337,7 @@ func (s *Syncer) PublishBacklog(ctx context.Context, handle string) (Carried, er
 
 // Releasing turns the seat's live holding here to releasing, and says whether
 // there was one: from now on its memory is the release's flush's to carry
-// ([Syncer.FlushOwn], [Syncer.FlushBacklog]), and a cycle stops at its next
-// row. The release flushes only on true, so a seat whose hydration here failed
+// ([Syncer.FlushOwn], [Syncer.FlushBacklog]), and a cycle sends no more rows. The release flushes only on true, so a seat whose hydration here failed
 // or never ran flushes nothing, rather than put this node's possibly older
 // profiles, skills and onboarding marker over the changelog's. A taking that
 // fails after its hydration completed is live, and flushes back the
@@ -322,12 +357,19 @@ func (s *Syncer) Releasing(handle string) bool {
 		return false
 	}
 	held.state = releasing
+	close(held.released)
+	held.landed = make(chan struct{})
+	if held.flying == 0 {
+		close(held.landed)
+	}
 	return true
 }
 
 // FlushOwn is [Syncer.PublishOwn] for the release's last turn, from the marks
 // the cycles left, carried only while the holding is releasing
 // ([Syncer.Releasing]); otherwise it answers [ErrNotHeld] and reads nothing.
+// It starts once every row the cycle had out is answered ([Syncer.awaitLanded]),
+// and answers ctx's cause, carrying nothing, if ctx ends first.
 func (s *Syncer) FlushOwn(ctx context.Context, handle string) (Carried, error) {
 	return s.publish(ctx, handle, releasing, ownRange)
 }
@@ -360,6 +402,11 @@ func (s *Syncer) publish(ctx context.Context, handle string, under holding,
 	if held == nil {
 		return carried, ErrNotHeld
 	}
+	if under == releasing {
+		if err := s.awaitLanded(ctx, handle, held); err != nil {
+			return carried, err
+		}
+	}
 	for _, spec := range tables {
 		if err := s.publishPages(ctx, handle, ref, spec, held, under, of, &carried); err != nil {
 			carried.StoppedIn = spec.name
@@ -373,10 +420,10 @@ func (s *Syncer) publish(ctx context.Context, handle string, under holding,
 	return carried, nil
 }
 
-// publishPages carries a table's rows in one range a page at a time,
-// while held is the seat's holding in state under, moving the range's mark
-// past each acknowledged row: own above the larger of mark and boundary,
-// backlog above the mark up to the boundary, where reaching it ends the range.
+// publishPages carries a table's rows in one range a page at a time
+// ([Syncer.publishPage]), while held is the seat's holding in state under: own
+// above the larger of mark and boundary, backlog above the mark up to the
+// boundary, where reaching it ends the range.
 func (s *Syncer) publishPages(ctx context.Context, handle string, ref seatRef, spec table,
 	held *seatHolding, under holding, of markRange, carried *Carried) error {
 
@@ -403,18 +450,10 @@ func (s *Syncer) publishPages(ctx context.Context, handle string, ref seatRef, s
 		if err != nil {
 			return err
 		}
-		for _, row := range page {
-			if !s.stillHolds(handle, held, under) {
-				return ErrNotHeld
-			}
-			if err := s.publishRow(ctx, handle, ref, spec, row.row); err != nil {
-				return err
-			}
-			// After the acknowledgement, never before: a mark moved first
-			// would skip, for the process's life, the rows whose publish
-			// failed.
-			s.setMark(handle, spec.name, of, row.mark, held)
-			carried.Rows++
+		acked, err := s.publishPage(ctx, handle, ref, spec, page, held, under, of)
+		carried.Rows += acked
+		if err != nil {
+			return err
 		}
 		if !more {
 			if of == backlogRange {
@@ -428,14 +467,119 @@ func (s *Syncer) publishPages(ctx context.Context, handle string, ref seatRef, s
 	}
 }
 
-// publishRow puts one row on its subject and waits for the changelog to
-// acknowledge it.
-func (s *Syncer) publishRow(ctx context.Context, handle string, ref seatRef, spec table, row Row) error {
+// publishPage carries one page of a table's rows in their order, up to
+// [Syncer.inFlight] sent and not yet answered at once, and says how many were
+// acknowledged before the first that was not. Answers are taken in the order
+// the rows were sent, and the range's mark moves past each acknowledged one,
+// never before: moved first, it would skip for the process's life a row whose
+// publish failed. A row that fails or goes unanswered ends the page with the
+// mark at the row before it, and every row after it is waited for but neither
+// marked nor counted, so the next publish sends it again from there. Every
+// row it sends is answered before it returns, which ends each row's goroutine.
+func (s *Syncer) publishPage(ctx context.Context, handle string, ref seatRef, spec table,
+	page []exported, held *seatHolding, under holding, of markRange) (int, error) {
+
+	answers := make([]<-chan error, 0, min(len(page), s.inFlight))
+	acked := 0
+	// stopped is why no more rows are sent; failed, the first answer that was
+	// no acknowledgement, after which none counts.
+	var stopped, failed error
+	for done := 0; done < len(answers) || (stopped == nil && len(answers) < len(page)); {
+		if stopped == nil && len(answers) < len(page) && len(answers)-done < s.inFlight {
+			answer, err := s.sendRow(ctx, handle, ref, spec, page[len(answers)].row, held, under)
+			if err != nil {
+				stopped = err
+				continue
+			}
+			answers = append(answers, answer)
+			continue
+		}
+		switch err := <-answers[done]; {
+		case err == nil && failed == nil:
+			s.setMark(handle, spec.name, of, page[done].mark, held)
+			acked++
+		case err != nil && failed == nil:
+			failed = err
+			stopped = cmp.Or(stopped, err)
+		}
+		// Marked first, so a flush waiting for this row reads its mark.
+		s.answered(held, under)
+		done++
+	}
+	return acked, cmp.Or(failed, stopped)
+}
+
+// sendRow sends one row and answers where its answer will come: nil once the
+// changelog acknowledged it, or why not. Nothing is sent while held is not the
+// seat's holding in state under ([ErrNotHeld]) or once ctx has ended; across a
+// link the row first takes its bytes from the link's window ([Config.Window]),
+// given back once it is answered.
+func (s *Syncer) sendRow(ctx context.Context, handle string, ref seatRef, spec table, row Row,
+	held *seatHolding, under holding) (<-chan error, error) {
+
+	if !s.stillHolds(handle, held, under) {
+		return nil, ErrNotHeld
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	body, err := encode(row)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if _, err := s.js.Publish(ctx, spec.subject(ref.AgentID, row.Values), body); err != nil {
+	took := 0
+	if s.window != nil {
+		took = jsapi.RequestBytes(len(body))
+		if err = s.takeWindow(ctx, held, under, took); err != nil {
+			return nil, fmt.Errorf("memsync: publish a %s row for %s: wait for the link's window: %w",
+				spec.name, handle, err)
+		}
+	}
+	// Asked again once the window let it out, which can take as long as the
+	// rows ahead of it take to cross.
+	if !s.sending(handle, held, under) {
+		if took > 0 {
+			s.window.Give(took)
+		}
+		return nil, ErrNotHeld
+	}
+	answer := make(chan error, 1)
+	go func() {
+		sent := s.publishRow(ctx, handle, spec, spec.subject(ref.AgentID, row.Values), body)
+		if took > 0 {
+			s.window.Give(took)
+		}
+		answer <- sent
+	}()
+	return answer, nil
+}
+
+// takeWindow takes n bytes of the link's window for a row, inside ctx and, for
+// a cycle's row, only until the release begins ([ErrNotHeld]): a cycle waiting
+// there counts off none of its rows already answered, and the flush waits for
+// those ([Syncer.awaitLanded]).
+func (s *Syncer) takeWindow(ctx context.Context, held *seatHolding, under holding, n int) error {
+	if under != live {
+		return s.window.Take(ctx, n)
+	}
+	taking, stop := context.WithCancelCause(ctx)
+	defer stop(nil)
+	go func() {
+		select {
+		case <-held.released:
+			stop(ErrNotHeld)
+		case <-taking.Done():
+		}
+	}()
+	return s.window.Take(taking, n)
+}
+
+// publishRow puts one row's body on its subject and waits for the changelog to
+// acknowledge it.
+func (s *Syncer) publishRow(ctx context.Context, handle string, spec table, subject string,
+	body []byte) error {
+
+	if _, err := s.js.Publish(ctx, subject, body); err != nil {
 		return fmt.Errorf("memsync: publish a %s row for %s: %w", spec.name, handle, err)
 	}
 	return nil
@@ -645,16 +789,60 @@ func (s *Syncer) holdingIn(handle string, under holding) *seatHolding {
 }
 
 // stillHolds says held is still the seat's holding here, in state under: asked
-// before each row a publish carries.
-//
-// Asked before the send and not held across it, so the one row in flight as
-// the holding changes can still land after a release's flush carried a newer
-// copy of it. Closing that would hold the lock across a broker round trip, on
-// which every other seat's publish and the release itself would wait.
+// before each row a publish sends.
 func (s *Syncer) stillHolds(handle string, held *seatHolding, under holding) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.holdings[handle] == held && held.state == under
+}
+
+// sending is [Syncer.stillHolds] as a row is sent, and counts the row a live
+// holding's call sends as one the flush waits for ([Syncer.awaitLanded]). Under
+// one lock with the release's turn ([Syncer.Releasing]), so a cycle's row is
+// either counted before the release begins or never sent.
+func (s *Syncer) sending(handle string, held *seatHolding, under holding) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.holdings[handle] != held || held.state != under {
+		return false
+	}
+	if under == live {
+		held.flying++
+	}
+	return true
+}
+
+// answered counts off a row [Syncer.sending] counted, once its answer is taken
+// and its mark moved, and lets the flush start once the release has begun and
+// no row of the cycle's is out.
+func (s *Syncer) answered(held *seatHolding, under holding) {
+	if under != live {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if held.flying--; held.flying == 0 && held.landed != nil {
+		close(held.landed)
+	}
+}
+
+// awaitLanded waits, inside ctx, until every row the cycle sent under the
+// seat's holding before its release began is answered and marked, and answers
+// ctx's cause if ctx ends first. So no copy a cycle read before the release
+// lands after the flush's copy of the same row, and the flush starts past what
+// they carried. A row whose answer never came inside its own bound can still
+// land later: the broker may take it after the client stopped waiting.
+func (s *Syncer) awaitLanded(ctx context.Context, handle string, held *seatHolding) error {
+	s.mu.Lock()
+	landed := held.landed
+	s.mu.Unlock()
+	select {
+	case <-landed:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("memsync: wait for the rows of %s the memory sync cycle had sent as its "+
+			"release began: %w", handle, context.Cause(ctx))
+	}
 }
 
 // recordBoundary reads where this node's change sequence stands (node
@@ -682,7 +870,7 @@ func (s *Syncer) recordBoundary(ctx context.Context, handle string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.holdings[handle] = &seatHolding{state: live, boundary: last}
+	s.holdings[handle] = newHolding(last)
 	return nil
 }
 
@@ -693,8 +881,7 @@ func (s *Syncer) recordBoundary(ctx context.Context, handle string) error {
 // this node holds for the seat, carried back after what it writes (package doc,
 // "How it is fixed"); old marks would not skip what another node wrote
 // meanwhile anyway, since a hydration stamps every row it inserts above them. A
-// publish in flight stops at its next row, and the row it was sending moves no
-// mark.
+// publish in flight sends no more rows, and those it has out move no mark.
 func (s *Syncer) Forget(handle string) {
 	if s == nil {
 		return

@@ -279,7 +279,7 @@ func TestWhatAHoldingWritesGoesBeforeWhatItsHydrationBroughtIn(t *testing.T) {
 	name[subjectOf(skills, "s1")], name[marker] = "the skill s1", "the marker"
 
 	js := &roundTripJS{}
-	s.js = js
+	stepping(s).js = js
 	turn := turnOf(t, s, js)
 	if !slices.Equal(turn.own, wantOwn) || turn.ownErr != nil {
 		t.Errorf("the own pass had %s acknowledged (%v), want %s: what the seat wrote or "+
@@ -349,7 +349,7 @@ func TestARestartsFlushCarriesWhatTheSeatWroteBeforeWhatTheStoreKept(t *testing.
 				return ctx.Err()
 			}
 		}}
-		s.js = js
+		stepping(s).js = js
 		turn := turnFor(t, s, js, flushBound)
 		flushed := slices.Concat(turn.own, turn.backlog)
 		if len(flushed) == 0 || flushed[0] != written {
@@ -508,9 +508,9 @@ func TestTheRowAtTheBoundaryIsTheBacklogsAndIsCarriedOnce(t *testing.T) {
 
 // TWO PUBLISHES OF A SEAT AT ONCE KEEP EACH RANGE'S MARKS SOUND.
 //
-// A cycle takes no seat lock, so it and a release's flush can overlap. Here a
-// whole second call runs inside the first's publish of its first row, over 300
-// held notes and 300 written. At every publish, every row of either range at
+// No call takes a seat lock, so two calls of a seat can overlap. Here a whole
+// second call runs inside the first's publish of its first row, over 300 held
+// notes and 300 written. At every publish, every row of either range at
 // or below its mark has been acknowledged and no mark moved back; a page read
 // after the other call's acks starts above them, and different ranges never
 // read or move each other's marks.
@@ -649,7 +649,7 @@ func TestAForgottenSeatCarriesNothingUntilItsNextHydration(t *testing.T) {
 	db := openStore(t)
 	held := writeNotesUnder(t, db, "b", 200, 0)
 	js := &roundTripJS{}
-	s := newSyncer(db, js, func(string) string { return seat.AgentID })
+	s := stepping(newSyncer(db, js, func(string) string { return seat.AgentID }))
 	if err := s.recordBoundary(t.Context(), seat.Handle); err != nil {
 		t.Fatalf("record the boundary: %v", err)
 	}
@@ -720,7 +720,7 @@ func TestARestartMidDrainCarriesTheBacklogAgainBehindWhatTheSeatWrites(t *testin
 		}
 		return nil
 	}}
-	first.js = drainJS
+	stepping(first).js = drainJS
 	if turn := turnOf(t, first, drainJS); len(drainJS.acked) != 100 ||
 		!errors.Is(errors.Join(turn.ownErr, turn.backlogErr), refused) {
 		t.Fatalf("the first holding's turn had %d rows acknowledged and ended on (%v, %v), want 100 "+
@@ -736,7 +736,7 @@ func TestARestartMidDrainCarriesTheBacklogAgainBehindWhatTheSeatWrites(t *testin
 	writtenAfter := writeNotesUnder(t, kept, "F", 1, 0)
 	name := names{}.noted(t, held).noted(t, writtenAfter)
 	js := &roundTripJS{}
-	second.js = js
+	stepping(second).js = js
 	turn := turnOf(t, second, js)
 	carried := slices.Concat(turn.own, turn.backlog)
 	if want := slices.Concat(notesOf(t, writtenAfter), notesOf(t, held)); !slices.Equal(carried, want) {
@@ -904,7 +904,7 @@ func TestAHydrationCutAsItsBoundaryIsReadRecordsNoneAndBeginsNoHolding(t *testin
 			written := writeNotesUnder(t, fresh, "F", 1, 0)
 			name := names{}.noted(t, peerNotes).noted(t, written)
 			js := &roundTripJS{}
-			s.js = js
+			stepping(s).js = js
 			turn := turnOf(t, s, js)
 			if want := notesOf(t, written); !slices.Equal(turn.own, want) {
 				t.Errorf("the own pass had %s acknowledged, want %s alone", name.said(turn.own),
