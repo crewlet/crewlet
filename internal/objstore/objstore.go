@@ -336,7 +336,7 @@ const RecordWithin = 12 * time.Hour
 // bound under every rule judging an instant one machine stamped by another's
 // clock (collect.PendingGrace against [RecordWithin], gitlet's RetireGrace,
 // PruneGrace, PushDaysKept and hold thresholds, sandbox's capture, standby,
-// box-read and ledger rules), each argued at its rule. Any TWO held machines
+// box-read and ledger rules, the engine's join donors), each argued at its rule. Any TWO held machines
 // differ by up to TWICE it, so each margin takes twice it. Nodes without the
 // data role and external NATS servers are unmeasured: run NTP on every one
 // (docs/guides/deployment.md). AN HOUR: further off means no NTP at all, and
