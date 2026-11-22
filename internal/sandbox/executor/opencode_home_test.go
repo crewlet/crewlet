@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // openCodeHomePlants is every file a box's home can hold that OpenCode 2.3.2
@@ -66,8 +67,8 @@ func TestARunLoadsNoConfigurationItsHomeHolds(t *testing.T) {
 
 // THE BOX'S DATABASE HOLDS ONLY THE LOGIN THE RUN WAS HANDED: every login it
 // held before (an earlier run's import, or one stored since) is removed
-// before the import, and a login OpenCode would not remove ends the run
-// before its server starts.
+// through the run's server before the import, and a login OpenCode would not
+// remove ends the run before its client starts.
 //
 // Mutation: skip the removal, or import before it, or carry on past a login
 // still held.
@@ -81,22 +82,22 @@ func TestABoxsDatabaseHoldsOnlyTheLoginItWasHanded(t *testing.T) {
 		if removed := readIn(t, run.dir, "removed"); removed != "cred_1\ncred_planted\n" {
 			t.Errorf("removed %q, want every login the database held", removed)
 		}
-		if held := readIn(t, run.dir, "serve-creds"); strings.TrimSpace(held) != "" {
-			t.Errorf("the database still held %q as the server started", held)
+		if held := readIn(t, run.dir, "run-creds"); strings.TrimSpace(held) != "" {
+			t.Errorf("the database still held %q as the run's client started", held)
 		}
 		last := -1
 		for i, c := range run.calls {
-			if strings.HasPrefix(c, "api --standalone credential.") {
+			if strings.HasPrefix(c, "api --server") && strings.Contains(c, " credential.") {
 				last = i
 			}
 		}
-		if imp := run.callIndex("auth import"); imp < last {
-			t.Errorf("the login was imported before the database was emptied:\n%s", strings.Join(run.calls, "\n"))
+		if imp := run.callIndex("auth import --server"); last < 0 || imp < last {
+			t.Errorf("the login was not imported after the database was emptied:\n%s", strings.Join(run.calls, "\n"))
 		}
 
 		run = runScript(t, scriptOpts{shell: sh, login: seededLogin,
 			env: []string{"FAKE_CREDS=cred_planted", "FAKE_STUCK_CRED=cred_planted"}})
-		if run.code == 0 || run.callIndex("serve") >= 0 || run.callIndex("auth import") >= 0 {
+		if run.code == 0 || run.callIndex("run ") >= 0 || run.callIndex("auth import") >= 0 {
 			t.Errorf("a database keeping a login it was told to remove still ran (exit %d):\n%s",
 				run.code, strings.Join(run.calls, "\n"))
 		}
@@ -106,19 +107,20 @@ func TestABoxsDatabaseHoldsOnlyTheLoginItWasHanded(t *testing.T) {
 	})
 }
 
-// A PACK LOADS NOTHING A RUN LEFT: its standalone calls read an empty
-// configuration directory of its own, made before its first call, never the
-// box's global one or the run's.
+// A PACK LOADS NOTHING A RUN LEFT: its standalone calls read a configuration
+// directory inside the pack's own staging directory, which the pack makes
+// anew and removes, set before its first call; never the box's global one or
+// the run's.
 //
 // Mutation: drop the pack's OPENCODE_CONFIG_DIR, or set it after a call.
 func TestAPackLoadsNoConfigurationARunLeft(t *testing.T) {
 	t.Parallel()
 	paths := executor.Paths{Home: "/home/crewlet"}
-	pack := executor.OpenCode{}.Pack(paths, carriedOpenCode, paths.SessionPackStaging("p1"),
-		paths.SessionPackHeld("p1"), false)
-	set := strings.Index(pack, "export OPENCODE_CONFIG_DIR")
-	if set < 0 || !strings.Contains(pack, `rm -rf "$cfgdir" && mkdir -p "$cfgdir"`) {
-		t.Fatalf("the pack does not run on an empty configuration directory of its own:\n%s", pack)
+	staged := paths.SessionPackStaging("p1")
+	pack := executor.OpenCode{}.Pack(paths, carriedOpenCode, staged, paths.SessionPackHeld("p1"), false)
+	set := strings.Index(pack, "OPENCODE_CONFIG_DIR="+shellword.Quote(staged+"/opencode-config")+"; export OPENCODE_CONFIG_DIR")
+	if set < 0 {
+		t.Fatalf("the pack does not run on a configuration directory inside its staging one:\n%s", pack)
 	}
 	if first := strings.Index(pack, "opencode "); first < set {
 		t.Errorf("the pack calls OpenCode before its configuration directory is set:\n%s", pack)
