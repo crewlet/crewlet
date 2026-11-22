@@ -149,10 +149,11 @@ func criterionStatus(o operation, l live) growth.Class {
 		return read
 	}
 	neg, ok := negative(o, l)
-	enabling := str(o.object["status"]) == "ENABLED"
+	status, named := o.object["status"].(string)
+	enabling := status == "ENABLED"
 	switch {
-	case !ok:
-		return spend
+	case !ok, !named:
+		return spend // a status by its number may enable a targeting criterion or pause an exclusion
 	case neg:
 		return pick(enabling, operate, spend)
 	}
@@ -496,7 +497,7 @@ func accountBudgetFamily() family {
 // Google make its type's changes unasked, so it is that type's class.
 func subscriptionFamily() family {
 	byStatus := func(o operation, _ live) growth.Class {
-		if str(o.object["status"]) != "ENABLED" {
+		if status, named := o.object["status"].(string); named && status != "ENABLED" {
 			return operate
 		}
 		return recommendationClass(str(o.object["type"]))

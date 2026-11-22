@@ -1,6 +1,9 @@
 package googleads
 
 import (
+	"fmt"
+	"maps"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -36,7 +39,43 @@ func camel(s string) string {
 	return strings.Join(parts, "")
 }
 
-// snaked is a JSON value with every object key in snake_case.
+// canonical is a request body with every object key in snake_case, as the
+// rules and GAQL name fields. Google takes a field by either spelling, so one
+// named in both with two values is refused: which value Google keeps is not
+// the engine's to guess, and the rules would read the other.
+func canonical(v any, at string) (any, error) {
+	switch t := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for _, k := range slices.Sorted(maps.Keys(t)) {
+			key := snake(k)
+			inner, err := canonical(t[k], at+key+".")
+			if err != nil {
+				return nil, err
+			}
+			if seen, ok := out[key]; ok && !reflect.DeepEqual(seen, inner) {
+				return nil, refusal(growth.RefusedInvalid, fmt.Sprintf("the body names %s%s twice, in two "+
+					"spellings with two values: name each field once. No vendor was reached.", at, key))
+			}
+			out[key] = inner
+		}
+		return out, nil
+	case []any:
+		out := make([]any, len(t))
+		for i, inner := range t {
+			c, err := canonical(inner, fmt.Sprintf("%s%d.", at, i))
+			if err != nil {
+				return nil, err
+			}
+			out[i] = c
+		}
+		return out, nil
+	}
+	return v, nil
+}
+
+// snaked is a JSON value with every object key in snake_case: Google's own
+// answers, and a request body [canonical] admitted.
 func snaked(v any) any {
 	switch t := v.(type) {
 	case map[string]any:
@@ -86,20 +125,25 @@ func kindOf(name string) (customer, kind string, ok bool) {
 }
 
 // serviceOfMutate is the operation type a service's mutate method acts on:
-// googleads.customers.campaignBudgets.mutate is campaign_budget.
+// googleads.customers.campaignBudgets.mutate is campaign_budget,
+// mutateRecommendationSubscription recommendation_subscription, and
+// CustomerService's googleads.customers.mutate customer.
 func serviceOfMutate(id string) (string, bool) {
+	if id == "googleads.customers.mutate" {
+		return "customer", true
+	}
 	rest, ok := strings.CutPrefix(id, "googleads.customers.")
 	if !ok {
 		return "", false
 	}
-	collection, ok := strings.CutSuffix(rest, ".mutate")
-	if !ok || strings.Contains(collection, ".") {
+	collection, verb, ok := strings.Cut(rest, ".")
+	if !ok || !strings.HasPrefix(verb, "mutate") || strings.Contains(verb, ".") {
 		return "", false
 	}
 	return singular(collection), true
 }
 
-// operationsOf parses one operation list item: a create, an update with its
+// operationOf parses one operation list item: a create, an update with its
 // mask or a remove, of service.
 func operationOf(service string, raw any) (operation, bool) {
 	m, _ := snaked(raw).(map[string]any)
@@ -156,31 +200,31 @@ func leaves(m map[string]any, prefix string) []string {
 
 // parse is every operation a call of op makes with body (in REST's JSON),
 // each of its service; false where op holds no operations the engine reads.
+// The field read is op's own: GoogleAdsService.Mutate and a batch job's
+// staging take mutate_operations, a service's mutate operations.
 func parse(op growth.Operation, body map[string]any) ([]operation, bool) {
-	if items, ok := body["mutateOperations"].([]any); ok {
-		// GoogleAdsService.Mutate and a batch job's staged operations: each
-		// item names its own operation type.
+	m, _ := snaked(body).(map[string]any)
+	if ruleOf[op.ID] == "FR-MUTATE" {
+		// Each item names its own operation type.
 		var out []operation
-		for _, item := range items {
+		for _, item := range list(m["mutate_operations"]) {
 			for key, inner := range object(item) {
-				service := strings.TrimSuffix(snake(key), "_operation")
+				service := strings.TrimSuffix(key, "_operation")
 				o, ok := operationOf(service, inner)
 				if !ok {
-					o = operation{service: service, kind: opCreate, object: object(snaked(inner))}
+					o = operation{service: service, kind: opCreate, object: object(inner)}
 				}
 				out = append(out, o)
 			}
 		}
-		return out, true
+		return out, len(out) > 0
 	}
 	service, ok := serviceOfMutate(op.ID)
 	if !ok {
 		return nil, false
 	}
-	var raws []any
-	if list, ok := body["operations"].([]any); ok {
-		raws = list
-	} else if one, ok := body["operation"]; ok {
+	raws := list(m["operations"])
+	if one, ok := m["operation"]; ok && raws == nil {
 		raws = []any{one}
 	}
 	out := make([]operation, 0, len(raws))

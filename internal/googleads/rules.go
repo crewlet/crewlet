@@ -138,10 +138,12 @@ func (r fieldRule) classOf(before, after any, unread bool) growth.Class {
 		return r.hi
 	}
 	if r.how == toward {
-		if s, ok := after.(string); ok && slices.Contains(r.values, s) {
-			return r.hi
+		// AN ENUM IS READ BY ITS NAME: Google also takes its number, and a
+		// value that names none of the others may be one of values.
+		if s, ok := after.(string); ok && !slices.Contains(r.values, s) {
+			return r.lo
 		}
-		return r.lo
+		return r.hi
 	}
 	if r.how == optsIn {
 		return pick(optedIn(before, after), r.hi, r.lo)
@@ -156,13 +158,19 @@ func (r fieldRule) classOf(before, after any, unread bool) growth.Class {
 		}
 		b, okB := number(before)
 		a, okA := number(after)
-		if !okB || !okA {
+		switch {
+		case !okA:
+			return r.hi
+		case !okB:
 			return pick(before == nil, r.lo, r.hi) // a cap added where there was none narrows
 		}
 		cmp := a.Cmp(b)
 		return pick((r.how == raise && cmp > 0) || (r.how == lower && cmp < 0), r.hi, r.lo)
 	case on:
-		return pick(truthy(after) && !truthy(before), r.hi, r.lo)
+		// Only a false set is no switch turned on: a cleared or unreadable
+		// value may be Google's default, which can be on.
+		set, isBool := after.(bool)
+		return pick((!isBool || set) && !truthy(before), r.hi, r.lo)
 	case off:
 		return pick(truthy(before) && !truthy(after), r.hi, r.lo)
 	case earlier, later:
@@ -181,17 +189,23 @@ func (r fieldRule) classOf(before, after any, unread bool) growth.Class {
 	return r.hi
 }
 
-// optedIn reports whether an asset automation list turns a type OPTED_IN that
-// was not before.
+// optedIn reports whether an asset automation list may turn a type OPTED_IN
+// that was not before: a list cleared or unreadable takes Google's defaults,
+// and a status not named (its number) may be OPTED_IN.
 func optedIn(before, after any) bool {
+	items, ok := after.([]any)
+	if !ok {
+		return true
+	}
 	was := map[string]string{}
 	for _, e := range list(before) {
 		m, _ := e.(map[string]any)
 		was[str(m["asset_automation_type"])] = str(m["asset_automation_status"])
 	}
-	for _, e := range list(after) {
+	for _, e := range items {
 		m, _ := e.(map[string]any)
-		if str(m["asset_automation_status"]) == "OPTED_IN" && was[str(m["asset_automation_type"])] != "OPTED_IN" {
+		status, named := m["asset_automation_status"].(string)
+		if (!named || status == "OPTED_IN") && was[str(m["asset_automation_type"])] != "OPTED_IN" {
 			return true
 		}
 	}

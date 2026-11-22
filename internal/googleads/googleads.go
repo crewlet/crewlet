@@ -31,7 +31,16 @@
 // removing a restriction are spend; pausing, lowering and adding a negative
 // are operate; new or changed ad text is public; removals of containers,
 // links, users and billing are admin. A rule that cannot read what it compares
-// classes the change as the highest it allows.
+// classes the change as the highest it allows, and an enum it compares is read
+// by its name: Google also takes its number, which names none of the values
+// a rule lowers.
+//
+// The rules name fields in snake_case and read a body's keys in either
+// spelling, as Google does; a body naming one field in both with two values is
+// refused, since which one Google keeps is not the engine's to guess. Each
+// method's operations are read from its own field: mutate_operations for
+// GoogleAdsService.Mutate and a batch job's staging, operations for a
+// service's mutate.
 //
 // # A call acts in one account
 //

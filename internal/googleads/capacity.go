@@ -106,8 +106,10 @@ func (a account) applying(ops []operation) account {
 			if o.kind == opCreate {
 				c.status = "ENABLED"
 			}
-			if s := str(o.object["status"]); s != "" {
-				c.status = s
+			if s, set := o.object["status"]; set {
+				// A status by its number may be ENABLED: counted as serving.
+				status, named := s.(string)
+				c.status = pick(named, status, "ENABLED")
 			}
 			if b := str(o.object["campaign_budget"]); b != "" {
 				c.budget = b
