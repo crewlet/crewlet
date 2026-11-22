@@ -1282,6 +1282,12 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		log.InfoContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", at.name, "detail", why)
 		return nil, &SessionKept{NotKept: why}
 	}
+	// A MINTING JOB'S SESSION IS BOUND BEFORE IT IS TAKEN (minted.go).
+	if current, err = c.bindMinted(ctx, current, box, runner); err != nil {
+		why := fmt.Sprintf("the job's session was not bound: %v", err)
+		log.InfoContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", at.name, "detail", why)
+		return nil, &SessionKept{NotKept: why}
+	}
 	standing := false
 	if last := current.Capture; last != nil && last.LaunchSeq == current.LaunchSeq &&
 		last.Launch == run.LaunchID && last.Final {
