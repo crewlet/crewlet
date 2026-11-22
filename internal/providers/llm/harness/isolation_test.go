@@ -182,6 +182,25 @@ func TestThePiProfileArgvParsesAgainstTheRealHarness(t *testing.T) {
 
 // allowsAfterFlag reports whether every want follows flag before the next
 // flag begins.
+// valuesAfterEvery is every value after every occurrence of flag, up to the
+// next flag: a list flag a harness takes once per value (Copilot's) is read
+// whole, not only at its first occurrence.
+func valuesAfterEvery(args []string, flag string) []string {
+	var out []string
+	for i, arg := range args {
+		if arg != flag {
+			continue
+		}
+		for _, v := range args[i+1:] {
+			if strings.HasPrefix(v, "--") {
+				break
+			}
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 func allowsAfterFlag(args []string, flag string, want ...string) bool {
 	for i, arg := range args {
 		if arg != flag {
@@ -617,11 +636,12 @@ func TestTheDoctorProvesAWebFetchIsRefused(t *testing.T) {
 //
 // The set itself is pinned: it is the S2 measurement (Claude Code and Codex
 // measured refused, OpenCode derived from its policy format, pi shipping no
-// web tool), and a profile gaining a web_denial is a decision that lands here
-// with its measurement.
+// web tool) and Copilot's (web_fetch measured absent on 1.0.114), and a
+// profile gaining a web_denial is a decision that lands here with its
+// measurement.
 func TestEveryAssistantProfileTurnsTheWebOff(t *testing.T) {
 	t.Parallel()
-	want := []string{"claude-code", "codex", "opencode", "pi"}
+	want := []string{"claude-code", "codex", "copilot", "opencode", "pi"}
 	if got := harnessprofile.WebDeniable(); !slices.Equal(got, want) {
 		t.Errorf("profiles with a web denial = %v, want %v", got, want)
 	}
@@ -645,6 +665,9 @@ func TestEveryAssistantProfileTurnsTheWebOff(t *testing.T) {
 			if p.MCP != nil && len(p.MCP.CompleteArgs) > 0 {
 				argvs = append(argvs, p.MCP.CompleteArgs)
 			}
+			if p.MCP != nil && len(p.MCP.Args) > 0 {
+				argvs = append(argvs, slices.Concat(p.CompleteArgs, p.MCP.Args, p.MCP.AllowArgs))
+			}
 			for _, argv := range argvs {
 				for _, arg := range argv {
 					if strings.Contains(arg, `web_search="live"`) || strings.Contains(arg, `web_search="cached"`) ||
@@ -652,11 +675,16 @@ func TestEveryAssistantProfileTurnsTheWebOff(t *testing.T) {
 						t.Errorf("argv still turns a web search on: %q", arg)
 					}
 				}
-				for _, flag := range []string{"--allowedTools", "--allowed-tools", "--allow-tool"} {
+				for _, flag := range []string{"--allowedTools", "--allowed-tools", "--allow-tool", "--available-tools"} {
 					for _, tool := range []string{"WebFetch", "WebSearch", "web_fetch", "web_search"} {
-						if allowsAfterFlag(argv, flag, tool) {
+						if slices.Contains(valuesAfterEvery(argv, flag), tool) {
 							t.Errorf("argv allows %s through %s: %q", tool, flag, argv)
 						}
+					}
+				}
+				for _, flag := range []string{"--allow-all-urls", "--allow-url"} {
+					if slices.Contains(argv, flag) {
+						t.Errorf("argv allows URLs through %s: %q", flag, argv)
 					}
 				}
 			}
