@@ -11,8 +11,8 @@
 
 **Every agent seat's executor is its coding CLI's own agentic run, in a box.**
 The CLI drives its own loop with its own shell and editor, fully permissioned
-(Claude Code under `bypassPermissions`, OpenCode with every action allowed but
-`question`), because a headless run has nobody to answer a permission prompt.
+(Claude Code under `bypassPermissions`, Codex under `danger-full-access` with
+approval `never`, OpenCode with every action allowed but `question`), because a headless run has nobody to answer a permission prompt.
 The seat's tools reach it as one MCP server over the bridge
 (`internal/api/mcpbridge`), and every bridged call is decided by the same
 surface as a phase on this host: the seat's grant and the skill guard, the
@@ -20,7 +20,7 @@ seat fence before and after the call, the tool's schema through `tools.Invoke`
 with its canonical arguments
 ([ADR-0059](0059-a-tools-contract-is-its-validators-and-every-fault-comes-back-at-once.md)),
 and the run's end. The run ends by calling `submit_work` there. Only a
-CLI with an in-box runner can be one, Claude Code and OpenCode
+CLI with an in-box runner can be one, Claude Code, Codex and OpenCode
 (`config.ExecutorHarnesses`); every other CLI serves the reviewer, delegated workers,
 the onboarding pass and the side passes, which stay the engine's own tool loop
 on this host. A seat whose executor chain has no such member is refused, and
