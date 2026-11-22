@@ -1053,7 +1053,7 @@ const (
 	// the shell links: everything a reader downloads before the first screen
 	// can draw. It began at 300 KiB, under two seconds on a 1.5 Mbit/s link
 	// (the slow end of a phone tether), and has moved up with each kit release
-	// and frame feature; the last measure was 433.3 KiB, about 2.37 seconds,
+	// and frame feature; the last measure was 433.4 KiB, about 2.37 seconds,
 	// after kit 0.168.2 and the account row's build line.
 	// The one sheet carries every design-system rule by rule (see
 	// TestNoLazyStylesheetCarriesTheDesignSystem), so kit releases grow it even
