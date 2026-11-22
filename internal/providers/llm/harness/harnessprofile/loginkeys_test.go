@@ -71,3 +71,53 @@ func TestMuseCodesProfileNamesTheKeysItsCallsMint(t *testing.T) {
 		}
 	}
 }
+
+// A LOGIN'S ACCOUNT IS READ AT ITS IDENTITY KEYS: two copies are one account
+// only where each key [Profile.IdentityKeys] names holds alike in both, or is
+// absent from both; a refresh that changes its tokens and keeps the account is
+// one, a copy naming another account, dropping it or naming a key is not, and
+// a copy that is no JSON object names none it can be held to. Codex's profile
+// names its account and stored key in auth.json, and identity_keys refuses a
+// file no credential path has, an empty list and a key path with an empty part.
+//
+// Mutation: compare the whole file, read only the first key, take an absent
+// key for a match against a present one, or drop codex's identity_keys.
+func TestALoginsAccountIsReadAtItsIdentityKeys(t *testing.T) {
+	t.Parallel()
+	keys := []string{"tokens.account_id", "OPENAI_API_KEY"}
+	seed := []byte(`{"OPENAI_API_KEY":null,"tokens":{"account_id":"acct-A","access_token":"a1"},"last_refresh":"1"}`)
+	for copyOf, want := range map[string]bool{
+		`{"OPENAI_API_KEY":null,"tokens":{"account_id":"acct-A","access_token":"a2"},"last_refresh":"2"}`: true,
+		`{"OPENAI_API_KEY":null,"tokens":{"account_id":"acct-B","access_token":"b1"},"last_refresh":"2"}`: false,
+		`{"OPENAI_API_KEY":null,"tokens":{"access_token":"a2"}}`:                                          false,
+		`{"OPENAI_API_KEY":"sk-other","tokens":{"account_id":"acct-A","access_token":"a2"}}`:              false,
+		`not json`: false,
+	} {
+		if got := SameLoginIdentity([]byte(copyOf), seed, keys); got != want {
+			t.Errorf("SameLoginIdentity(%s) = %v, want %v", copyOf, got, want)
+		}
+	}
+	if !SameLoginIdentity([]byte("not json"), seed, nil) {
+		t.Error("a file with no identity keys is held to an account")
+	}
+	p, ok := Builtin("codex")
+	if !ok {
+		t.Fatal("no codex profile")
+	}
+	if !slices.Equal(p.IdentityKeys["auth.json"], keys) {
+		t.Errorf("codex's identity_keys for auth.json are %v, want %v", p.IdentityKeys["auth.json"], keys)
+	}
+	for name, tc := range map[string]struct {
+		keys map[string]any
+		says string
+	}{
+		"a file no credential path has": {map[string]any{"hosts.json": []any{"token"}}, `identity_keys names "hosts.json"`},
+		"an empty list":                 {map[string]any{"auth.json": []any{}}, "identity_keys.auth.json is empty"},
+		"an empty part":                 {map[string]any{"auth.json": []any{"tokens..account_id"}}, "is no key path"},
+	} {
+		if _, err := Load("codex", map[string]any{"identity_keys": tc.keys}); err == nil ||
+			!strings.Contains(err.Error(), tc.says) {
+			t.Errorf("%s: err = %v, want one saying %q", name, err, tc.says)
+		}
+	}
+}
