@@ -272,34 +272,24 @@ func TestThePluginConfirmsANoteOnlyOnceItsModelIsSentItPlain(t *testing.T) {
 		note := noteNumbered(1)
 		held := admitAll(t, route, pr, note)
 		pr.event("a", "session.inbox.delivered", steerSession, map[string]any{"inboxID": note.Inbox})
-		pr.send(map[string]any{"op": "fail-prompts", "name": "a", "count": 100})
+		// HELD, THEN REFUSED once the execution settled: the plugin's next
+		// look finds the gate closed.
+		pr.send(map[string]any{"op": "hold-prompts", "name": "a"})
+		pr.send(map[string]any{"op": "fail-prompts", "name": "a", "count": 1})
 		pr.event("a", "session.compaction.ended", steerSession, nil)
 		answerAgain(t, route, []mcpbridge.SteerNote{note}, []string{note.ID}, nil)
 		wantReadmitted(t, pr.expect("prompt-started").Input, steerSession, note)
+		pr.event("a", "session.execution.succeeded", steerSession, nil)
+		route.letGo(held, "the session's execution succeeded")
+		pr.send(map[string]any{"op": "release-prompts", "name": "a"})
 		if pr.expect("prompt").OK {
 			t.Fatal("the stand-in admitted again what it was told to refuse")
 		}
-		// THE GATE CLOSES during the pause: the note is given up, posted
-		// folded, never left held unconfirmed.
-		pr.event("a", "session.execution.succeeded", steerSession, nil)
-		route.letGo(held, "the session's execution succeeded")
 		fold := route.next("POST folded", "post the note it could not admit again before the execution settled")
 		if fold.body != `{"ids":["note-1"]}` {
 			t.Errorf("the fold reads %s, want note-1's id alone", fold.body)
 		}
 		fold.reply(http.StatusNoContent, "")
-		// The retries made before the gate closed, each refused, then none.
-		for drain := time.After(1200 * time.Millisecond); ; {
-			select {
-			case r := <-pr.reports:
-				if r.Op != "subscribed" && r.Op != "prompt-started" && (r.Op != "prompt" || r.OK) {
-					t.Fatalf("after its pauses the plugin reported %s (%+v)", r.Op, r)
-				}
-				continue
-			case <-drain:
-			}
-			break
-		}
 		pr.quiet(1500*time.Millisecond, "a note given up is never admitted again")
 		route.none(300*time.Millisecond, "a note given up is never confirmed nor posted again")
 	})
