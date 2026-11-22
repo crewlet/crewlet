@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // AN OPENCODE SESSION IS PACKED ON DEMAND BY ITS OWN STANDALONE EXPORT, AND KEPT
@@ -33,7 +34,7 @@ func TestAnOpenCodeSessionIsPackedOnDemandAndKeptScrubbed(t *testing.T) {
 	runner, b := openCodeBox(t, t.TempDir())
 	dir := t.TempDir()
 	writeBoxStandIn(t, b, paths(b).BinDir()+"/opencode",
-		strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`, "d="+shQuote(dir), 1))
+		strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`, "d="+shellword.Quote(dir), 1))
 	const session = "ses_0123456789abcdef0123456789"
 	if err := b.WriteFile(t.Context(), paths(b).SessionRecord(),
 		[]byte("id "+session+"\nrelease 2.0.32\n")); err != nil {
@@ -105,7 +106,7 @@ func TestAnOpenCodeSessionPackedOnDemandIsPackedWhole(t *testing.T) {
 	runner, b := openCodeBox(t, t.TempDir())
 	dir := t.TempDir()
 	writeBoxStandIn(t, b, paths(b).BinDir()+"/opencode", strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`,
-		"d="+shQuote(dir)+" FAKE_PIPE_CUT="+strconv.Itoa(pipeCut), 1))
+		"d="+shellword.Quote(dir)+" FAKE_PIPE_CUT="+strconv.Itoa(pipeCut), 1))
 	const session = "ses_0123456789abcdef0123456789"
 	if err := b.WriteFile(t.Context(), paths(b).SessionRecord(),
 		[]byte("id "+session+"\nrelease 2.0.32\n")); err != nil {
@@ -164,7 +165,7 @@ func TestAnEndedOpenCodeJobsSessionIsTakenAsItsScriptExportedIt(t *testing.T) {
 	// A CLIENT STILL WORKING AS ITS JOB IS ENDED: it works until its session
 	// is interrupted, and exits 7 however it is ended.
 	writeBoxStandIn(t, b, paths(b).BinDir()+"/opencode", strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`,
-		"d="+shQuote(dir)+" FAKE_RUN_UNTIL=interrupted FAKE_RUN_EXIT=7 FAKE_RUN_TERM_EXIT=7", 1))
+		"d="+shellword.Quote(dir)+" FAKE_RUN_UNTIL=interrupted FAKE_RUN_EXIT=7 FAKE_RUN_TERM_EXIT=7", 1))
 	handle, err := runner.Start(t.Context(), b, sandbox.RunRequest{Brief: "fix the flake"})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -229,7 +230,7 @@ func TestAnOpenCodeSessionTheBoxCouldNotBeAskedAboutIsAFailedPack(t *testing.T) 
 	}
 	broken := strings.Replace(fakeOpenCode, answers, `echo "Error: database is locked" >&2; exit 1`, 1)
 	writeBoxStandIn(t, b, paths(b).BinDir()+"/opencode",
-		strings.Replace(broken, `d="$FAKE_DIR"`, "d="+shQuote(dir), 1))
+		strings.Replace(broken, `d="$FAKE_DIR"`, "d="+shellword.Quote(dir), 1))
 	const session = "ses_0123456789abcdef0123456789"
 	if err := b.WriteFile(t.Context(), paths(b).SessionRecord(),
 		[]byte("id "+session+"\nrelease 2.0.32\n")); err != nil {

@@ -2330,7 +2330,7 @@ cursor-agent:
   # signed in or not (measured); a login adds the account it is for under
   # authInfo (read from the 2026.10.22 bundle), and it is a login only then.
   login_keys:
-    cli-config.json: "authInfo"
+    cli-config.json: ["authInfo"]
   # What a call leaves in the seat's home, measured on 2026.10.22: a chat
   # directory, and per call-directory a projects entry holding the trust
   # marker, the call's transcript and a worker log — one more entry for every
@@ -2425,7 +2425,9 @@ cursor-agent:
       - match: [{path: ["type"], equals: "tool_call"}, {path: ["subtype"], equals: "completed"}]
         closes: true
   login_args: ["login"]
-  logout_args: ["logout"]
+  # No logout_args: 1.0.114 has no logout command (`copilot logout` exits 1 on
+  # "Invalid command format", and `copilot --help` lists none, measured);
+  # `/logout` is a slash command. A logout removes the login's files.
   status_args: ["status"]
   # NOT MEASURED, the limit markers below: generic phrases rather than this
   # harness's own sentences, safe to keep only because of WHERE they are matched
@@ -2705,10 +2707,15 @@ copilot:
   #
   # The same file is the harness's own record of itself — it writes
   # `firstLaunchAt` there on its first start, signed in or not (measured) —
-  # so it is a login only while it holds copilotTokens.
+  # so it is a login only while it holds a token. It keeps one under two keys:
+  # on its first use of a login under `copilotTokens` (`{"https://github.com:
+  # <login>": "<token>"}`) it adds the same token under `authTokens`
+  # (`{"https://github.com:<login>:github": {"token": "<token>"}}`), and signs
+  # in from `authTokens` alone, `copilotTokens` empty or absent (measured on
+  # 1.0.114, offline, with a stand-in login).
   credential_paths: [".copilot/config.json"]
   login_keys:
-    config.json: "copilotTokens"
+    config.json: ["copilotTokens", "authTokens"]
   # What a call leaves in the seat's home, measured on 1.0.114: a session
   # directory holding the call's events, the session database every session
   # is indexed in (which the harness's own session_store_sql tool queries)
@@ -3766,7 +3773,8 @@ kimi-code:
     KIMI_LOOP_MAX_ATTEMPTS_PER_STEP: "3"
     # The vendor's own switch for its telemetry, which is on by default and is
     # a connection that is not the call's own: events keyed to a device id in
-    # the seat's home, sent with the seat's login, and — when a send fails —
+    # the seat's home, each request bearing the login's access token (measured
+    # on 2.7.2), and — when a send fails —
     # kept on disk under the home for the next start to send, which is one
     # call's trace waiting for the next. Read in 2.7.2's source, where it is
     # checked before the sink is started at all. Measured on 2.7.2 through the
@@ -3886,7 +3894,10 @@ kimi-code:
           cache_read: [["event", "usage", "inputCacheRead"]]
           cache_write: [["event", "usage", "inputCacheCreation"]]
   # TWO FILES, because this harness splits its login across them: `kimi login`
-  # writes the OAuth token to credentials/oauth/kimi-code.json AND injects the
+  # writes the OAuth token to credentials/kimi-code.json (its storage key
+  # `oauth/kimi-code`, filed by its last part; measured on 2.7.2: a run reads it
+  # there and writes a refreshed token back over it, and finds no credential in
+  # credentials/oauth/kimi-code.json) AND injects the
   # provider's `[providers.<name>.oauth]` reference into config.toml, which
   # also carries `default_model` and the `[models]` catalogue every `--model`
   # alias resolves against. A seat home with only the token has no provider
@@ -3895,7 +3906,7 @@ kimi-code:
   # Their base names differ (`kimi-code.json`, `config.toml`), which is what
   # the shared credential directory keys on.
   credential_paths:
-    - ".kimi-code/credentials/oauth/kimi-code.json"
+    - ".kimi-code/credentials/kimi-code.json"
     - ".kimi-code/config.toml"
   # Sessions, their index, the logs, the project registry and the telemetry
   # queue: what a call writes about itself.
@@ -3920,7 +3931,8 @@ kimi-code:
   # call where an entry turns telemetry back on.
   #
   # What else persists carries nothing of a call: `device_id`, one per home;
-  # `cache/query-store`, made with empty shards; `locks`, its lock files.
+  # `cache/query-store`, made with empty shards; `locks`, its lock files;
+  # `oauth/<key>`, the lock a token refresh takes.
   volatile_paths:
     - ".kimi-code/sessions"
     - ".kimi-code/session_index.jsonl"
@@ -3929,7 +3941,7 @@ kimi-code:
     - ".kimi-code/.projects-write-lock"
     - ".kimi-code/telemetry"
   host_credential_paths:
-    - ".kimi-code/credentials/oauth/kimi-code.json"
+    - ".kimi-code/credentials/kimi-code.json"
     - ".kimi-code/config.toml"
   # A real one-shot subcommand, not a slash command: `kimi login` runs the
   # RFC 8628 device-code flow, prints the verification URL and user code to
