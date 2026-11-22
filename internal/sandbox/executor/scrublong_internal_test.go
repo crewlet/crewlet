@@ -10,8 +10,13 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
+	"os"
+	"os/exec"
 	"runtime"
+	"runtime/debug"
+	"runtime/metrics"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"unsafe"
 
@@ -583,48 +588,134 @@ func (f refusingWriter) Write([]byte) (int, error) { return 0, f.err }
 
 // THE SCRUB HOLDS NO MORE THAN THE FIGURE ITS DOC STATES, AND NOTHING THAT
 // GROWS WITH A STRING: a session of one string near a test's plaintext bound
-// of 32 MiB, scrubbed both readings, holds at most scrubHeldBytes's figure
-// between two reads of its archive, and one four times as long no more than a
-// little over that. Read off the heap in use after a collection at every
-// sixty-fourth read against the heap before the scrub; not in parallel, since
-// another case's heap would be read as the scrub's. The real bound is
+// of 32 MiB, scrubbed both readings, holds at most scrubHeldBytes's figure,
+// less what one GC step can hide, and one four times as long no more than a
+// little over that. Read in live bytes as the take's base is ([atLiveBytes]),
+// in a child of this test under GODEBUG=gcstoptheworld=1, which GODEBUG must
+// name as the process starts; not in parallel, since another case's heap
+// would be read as the scrub's. The real bound is
 // BenchmarkTheScrubAtThePlaintextBound's.
 //
-// Mutation: read a long string whole rather than through the streams, or hold
-// a transcript's line to learn what it is, and the longer string holds it.
+// Mutation: read a long string whole rather than through the streams, hold a
+// transcript's line to learn what it is, or drop a term from scrubHeldBytes.
 func TestTheScrubHoldsNoMoreThanItsStatedFigure(t *testing.T) {
+	if os.Getenv(liveBytesChild) == "" {
+		runLiveBytesChild(t)
+		return
+	}
+	if !strings.Contains(os.Getenv("GODEBUG"), "gcstoptheworld=1") {
+		t.Fatal("the child reads live bytes only under GODEBUG=gcstoptheworld=1, which its env does not name")
+	}
+	defer debug.SetGCPercent(debug.SetGCPercent(liveBytesGOGC))
 	const plain = 32 << 20
 	s := newScrubber([]string{longValue})
-	held := func(n int) int64 {
+	figure := scrubHeldBytes(plain, len(jsonEscaped(longValue)))
+	held := func(n int) (high, miss int64) {
 		archive := func() []byte {
 			r := rand.New(rand.NewPCG(1170, uint64(n)))
 			line := `{"type":"user","message":{"content":"` + base64Run(r, n, 100, n/2) + `"}}` + "\n"
 			return tarOf(t, map[string]string{"projects/p/s.jsonl": line})
 		}()
-		var most uint64
-		reopen := func() (io.ReadCloser, error) { return io.NopCloser(&heapSampler{b: archive, most: &most}), nil }
-		defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
-		runtime.GC()
-		var before runtime.MemStats
-		runtime.ReadMemStats(&before)
-		most = before.HeapAlloc
-		first := &heapSampler{b: archive, most: &most}
-		if err := scrubTar(first, reopen, io.Discard, s, scrubBounds{plain: plain}); err != nil {
+		before := liveNow()
+		watch := watchLiveCycles()
+		if err := scrubTar(bytes.NewReader(archive), reopenOf(archive), io.Discard, s,
+			scrubBounds{plain: plain}); err != nil {
 			t.Fatalf("a session of one string of %d bytes was refused: %v", n, err)
 		}
-		return int64(most) - int64(before.HeapAlloc)
+		most, missed := watch.stop()
+		if missed != 0 {
+			t.Fatalf("the watch missed %d of the GC's cycles, whose live heap is then unread", missed)
+		}
+		// THE MISS: between two marks the heap grows by at most liveBytesGOGC
+		// percent of what the last one found, at most the archive's heap and
+		// the figure on it; a peak that rises and falls inside that step is
+		// never marked.
+		return int64(most) - int64(before), (int64(before) + figure) * liveBytesGOGC / 100
 	}
-	small, large := held(6<<20), held(24<<20)
-	figure := scrubHeldBytes(plain, len(jsonEscaped(longValue)))
-	t.Logf("held %d KiB for a string of 6 MiB, %d KiB for one of 24 MiB; the figure at a %d MiB reading is %d KiB",
-		small>>10, large>>10, plain>>20, figure>>10)
-	if large > figure {
-		t.Errorf("the scrub held %d bytes, past the %d its doc states at this bound", large, figure)
+	small, _ := held(6 << 20)
+	large, miss := held(24 << 20)
+	t.Logf("held %d KiB for a string of 6 MiB, %d KiB for one of 24 MiB, %d KiB unseen at most; the figure at a "+
+		"%d MiB reading is %d KiB", small>>10, large>>10, miss>>10, plain>>20, figure>>10)
+	if large+miss > figure {
+		t.Errorf("the scrub held %d bytes, and %d more can rise unseen, past the %d its doc states at this bound",
+			large, miss, figure)
 	}
 	if large-small > 2<<20 {
 		t.Errorf("a string four times as long held %d bytes more: the scrub holds what grows with the string",
 			large-small)
 	}
+}
+
+// liveBytesChild marks the child [TestTheScrubHoldsNoMoreThanItsStatedFigure]
+// runs itself in; liveBytesGOGC is the child's GC percent, the finest a step
+// of heap growth between two marks can be.
+const (
+	liveBytesChild = "CREWLET_TEST_LIVE_BYTES_CHILD"
+	liveBytesGOGC  = 1
+)
+
+// runLiveBytesChild runs t's test again in a child of this binary under
+// GODEBUG=gcstoptheworld=1, failing t where the child fails or never ran it.
+func runLiveBytesChild(t *testing.T) {
+	t.Helper()
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.CommandContext(t.Context(), self, "-test.run=^"+t.Name()+"$", "-test.count=1", "-test.v")
+	cmd.Env = append(os.Environ(), liveBytesChild+"=1", "GODEBUG="+strings.TrimPrefix(
+		os.Getenv("GODEBUG")+",gcstoptheworld=1", ","))
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "--- PASS: "+t.Name()) {
+		t.Fatalf("the child reading live bytes did not pass (%v):\n%s", err, out)
+	}
+	t.Logf("the child reading live bytes:\n%s", out)
+}
+
+// liveNow is the live heap after a forced collection.
+func liveNow() uint64 {
+	runtime.GC()
+	s := []metrics.Sample{{Name: "/gc/heap/live:bytes"}}
+	metrics.Read(s)
+	return s[0].Value.Uint64()
+}
+
+// liveCycles watches every GC cycle from its start to [liveCycles.stop],
+// reading the live heap each one marked: a goroutine reads the cycle count
+// and the live heap as each cycle ends, and counts the cycles it read none
+// of, so a reading that missed a peak says so.
+type liveCycles struct {
+	quit         atomic.Bool
+	done         chan struct{}
+	most, missed uint64
+}
+
+func watchLiveCycles() *liveCycles {
+	w := &liveCycles{done: make(chan struct{})}
+	s := []metrics.Sample{{Name: "/gc/cycles/total:gc-cycles"}, {Name: "/gc/heap/live:bytes"}}
+	metrics.Read(s)
+	last := s[0].Value.Uint64()
+	go func() {
+		defer close(w.done)
+		for !w.quit.Load() {
+			metrics.Read(s)
+			if c := s[0].Value.Uint64(); c != last {
+				w.missed += c - last - 1
+				w.most = max(w.most, s[1].Value.Uint64())
+				last = c
+			}
+			runtime.Gosched()
+		}
+	}()
+	return w
+}
+
+// stop ends the watch: the most live heap a cycle marked, and the cycles it
+// read none of.
+func (w *liveCycles) stop() (most, missed uint64) {
+	w.quit.Store(true)
+	<-w.done
+	return w.most, w.missed
 }
 
 // heapSampler hands b over in reads, and reads the heap in use after a
