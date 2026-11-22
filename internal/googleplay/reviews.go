@@ -326,6 +326,11 @@ func (p *Product) applyReplies(ctx context.Context, call growth.Call, approved s
 		return nil, p.failEarly(ctx, true, rec, err)
 	}
 	defer release()
+	// THE REVIEWS ARE READ AGAIN UNDER THE LEASE, so two batches answering one
+	// review cannot both pass on what each read before the other posted.
+	if m, err = p.replies(ctx, call); err != nil {
+		return nil, p.failEarly(ctx, true, rec, err)
+	}
 	if !growth.BindingHolds(approved, replyBinding(m)) {
 		p.client.Note(ctx, growth.StepVoid, rec)
 		return nil, growth.ErrMoved

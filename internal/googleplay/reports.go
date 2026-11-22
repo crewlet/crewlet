@@ -84,6 +84,12 @@ func objectApp(object string) string {
 func (p *Product) objectInScope(b *config.RoleGooglePlay, object string) error {
 	app := objectApp(object)
 	if app == "" {
+		// AN ACCOUNT-WIDE REPORT HOLDS EVERY APP OF THE ACCOUNT, listed by the
+		// company or not, so it is given on purpose: an agent at administer.
+		if b.LevelOrDefault() != growth.LevelAdminister {
+			return refusal(growth.RefusedForbidden, object+" is an account-wide report, covering every app of the "+
+				"developer account, which only an agent at administer reads. No vendor was reached.")
+		}
 		return p.reachesAll(b, object+" is an account-wide report, which covers every app of the account")
 	}
 	if !slices.Contains(b.Apps, app) || !p.company().Reaches(app) {

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"slices"
@@ -161,6 +162,12 @@ func (p *Product) readBefores(ctx context.Context, handle string, a *act, editID
 		get := growth.Operation{ID: a.steps[i].req.Op.ID + ".before", Method: "GET", Path: address,
 			Class: growth.ClassRead, Permissions: []string{scopePublisher}}
 		raw, err := p.client.Send(ctx, handle, googlegrowth.Request{Op: get, Address: address})
+		if refused, ok := errors.AsType[*growth.Refusal](err); ok && refused.Kind == growth.RefusedNotFound {
+			// A TARGET NOT THERE YET (a new listing language, a track an earlier
+			// step creates) holds no state; its class stays unlowered (classOf).
+			a.steps[i].before = nil
+			continue
+		}
 		if err != nil {
 			return err
 		}
@@ -183,7 +190,8 @@ func (p *Product) beforeAddress(req googlegrowth.Request) (string, bool) {
 	if req.Op.Method == "POST" && !verb && !staged(req.Op) {
 		return "", false
 	}
-	return address, slices.Contains(getTemplates(p.Catalog()), path)
+	// GOOGLE SPELLS ONE PATH TWO WAYS (onetimeproducts.patch, oneTimeProducts.get).
+	return address, slices.ContainsFunc(getTemplates(p.Catalog()), func(t string) bool { return strings.EqualFold(t, path) })
 }
 
 // getTemplates are the catalog's read paths, which a target may be read at.
@@ -271,7 +279,9 @@ func classOf(req googlegrowth.Request, before []byte) growth.Class {
 	op := req.Op
 	var current map[string]any
 	_ = json.Unmarshal(before, &current)
-	if s, ok := stateHolds(op, req, current); ok {
+	// A RULE ON THE TARGET'S STATE LOWERS ONLY ON A STATE READ: an unread
+	// target keeps the stricter class.
+	if s, ok := stateHolds(op, req, current); ok && (current != nil || bodyRule(op.ID)) {
 		op.Class = s
 	}
 	for _, f := range op.Fields {
@@ -280,6 +290,11 @@ func classOf(req googlegrowth.Request, before []byte) growth.Class {
 		}
 	}
 	return op.Class
+}
+
+// bodyRule reports a state rule read off the request alone, never its target.
+func bodyRule(id string) bool {
+	return id == "androidpublisher.inappproducts.insert" || id == "androidpublisher.orders.reviewrefund"
 }
 
 // stateHolds is the class op's state rule gives req on a target reading

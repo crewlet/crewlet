@@ -136,11 +136,17 @@ func (p *Product) trackAct(app, track string, releases []any, summary string) (a
 
 // draftsOrHalts reports whether a track change only drafts or halts: every
 // release it sets is a draft, a halt of a release now rolling out or halted,
-// or one the track holds unchanged. A release it leaves out is kept by Google
-// unless a new live release replaces it, which is public itself.
+// or one the track holds unchanged, and every live release of the track is
+// still in it, since leaving one out retracts it.
 func draftsOrHalts(current, body map[string]any) bool {
 	now, _ := current["releases"].([]any)
 	next, _ := body["releases"].([]any)
+	for _, r := range now {
+		rel, _ := r.(map[string]any)
+		if live := fmt.Sprint(rel["status"]); live != "draft" && releaseOf(next, rel["versionCodes"]) == nil {
+			return false
+		}
+	}
 	for _, r := range next {
 		rel, _ := r.(map[string]any)
 		status, _ := rel["status"].(string)

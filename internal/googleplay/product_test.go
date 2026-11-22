@@ -264,6 +264,8 @@ func (f *fakePlay) serve(w http.ResponseWriter, r *http.Request) {
 		answer(f.sub)
 	case path == "/androidpublisher/v3/applications/com.acme.app/subscriptions/pro" && r.Method == http.MethodPatch:
 		answer(f.sub)
+	case path == "/androidpublisher/v3/applications/com.acme.app/oneTimeProducts/gems" && r.Method == http.MethodGet:
+		answer(map[string]any{"productId": "gems", "purchaseOptions": []any{map[string]any{"state": "ACTIVE"}}})
 	case path == "/androidpublisher/v3/applications/com.acme.app/inappproducts/coins" && r.Method == http.MethodGet:
 		answer(f.product)
 	case path == "/androidpublisher/v3/applications/com.acme.app/orders/o1" && r.Method == http.MethodGet:
@@ -573,7 +575,8 @@ func TestAHaltIsOperateAndChangesNothingElse(t *testing.T) {
 }
 
 // A RELEASE THAT REACHES USERS IS PUBLIC: a rollout through the operate tool
-// is refused as above its class, a draft through it is made.
+// is refused as above its class, and so is a draft that leaves the track's
+// live releases out, which retracts them; a draft beside them is made.
 //
 // Mutation: make draftsOrHalts answer true, and the rollout is made at once.
 func TestAReleaseThatReachesUsersIsPublic(t *testing.T) {
@@ -587,10 +590,20 @@ func TestAReleaseThatReachesUsersIsPublic(t *testing.T) {
 	if _, err := w.call(t, "google_play_operate", rollout); !errors.As(err, &above) || above.class != growth.ClassPublic {
 		t.Fatalf("a rollout through operate answered %v", err)
 	}
-	draft := map[string]any{"operation": "androidpublisher.edits.tracks.patch",
+	drop := map[string]any{"operation": "androidpublisher.edits.tracks.update",
 		"path": map[string]any{"packageName": "com.acme.app", "track": "production"},
 		"body": map[string]any{"track": "production", "releases": []any{map[string]any{
 			"versionCodes": []any{"43"}, "status": "draft"}}}}
+	if _, err := w.call(t, "google_play_operate", drop); !errors.As(err, &above) || above.class != growth.ClassPublic {
+		t.Fatalf("a draft dropping the live releases answered %v", err)
+	}
+	w.f.mu.Lock()
+	kept := append([]any{}, w.f.track["releases"].([]any)...)
+	w.f.mu.Unlock()
+	draft := map[string]any{"operation": "androidpublisher.edits.tracks.patch",
+		"path": map[string]any{"packageName": "com.acme.app", "track": "production"},
+		"body": map[string]any{"track": "production", "releases": append(kept, map[string]any{
+			"versionCodes": []any{"43"}, "status": "draft"})}}
 	if _, err := w.call(t, "google_play_operate", draft); err != nil {
 		t.Fatal(err)
 	}
@@ -625,10 +638,9 @@ func TestACommitNeverCancelsAReviewUnlessAsked(t *testing.T) {
 	cancel := map[string]any{"operation": "androidpublisher.edits.commit",
 		"path":  map[string]any{"packageName": "com.acme.app"},
 		"query": map[string]any{"changesInReviewBehavior": "CANCEL_IN_REVIEW_AND_SUBMIT"},
-		"steps": []any{map[string]any{"operation": "androidpublisher.edits.tracks.patch",
-			"path": map[string]any{"packageName": "com.acme.app", "track": "production"},
-			"body": map[string]any{"track": "production", "releases": []any{map[string]any{
-				"versionCodes": []any{"43"}, "status": "draft"}}}}}}
+		"steps": []any{map[string]any{"operation": "androidpublisher.edits.testers.patch",
+			"path": map[string]any{"packageName": "com.acme.app", "track": "beta"},
+			"body": map[string]any{"googleGroups": []any{"beta@example.com"}}}}}
 	if _, err := w.call(t, "google_play_operate", cancel); !errors.As(err, &above) || above.class != growth.ClassPublic {
 		t.Fatalf("a commit cancelling a review through operate answered %v", err)
 	}
@@ -649,7 +661,8 @@ func TestAFailedCommitLeavesNoEditOpen(t *testing.T) {
 }
 
 // A WRITE IS CLASSED BY ITS TARGET AS READ NOW: a subscription with no live
-// base plan is operate to change and public once one is live; a tax setting
+// base plan is operate to change and public once one is live; a one-time
+// product read under Google's other spelling of its path is live; a tax setting
 // is admin; a refund review is spend to approve and admin to decline.
 //
 // Mutation: drop stateHolds, and every draft change asks a person.
@@ -671,6 +684,13 @@ func TestAWriteIsClassedByItsTargetAsReadNow(t *testing.T) {
 	if _, err := w.call(t, "google_play_operate", patch(map[string]any{"listings": []any{}})); !errors.As(err, &above) ||
 		above.class != growth.ClassPublic {
 		t.Fatalf("a live subscription's change answered %v", err)
+	}
+	gems := map[string]any{"operation": "androidpublisher.monetization.onetimeproducts.patch",
+		"path":  map[string]any{"packageName": "com.acme.app", "productId": "gems"},
+		"query": map[string]any{"updateMask": "listings", "regionsVersion.version": "2025/03"},
+		"body":  map[string]any{"listings": []any{}}}
+	if _, err := w.call(t, "google_play_operate", gems); !errors.As(err, &above) || above.class != growth.ClassPublic {
+		t.Fatalf("a live one-time product's change answered %v", err)
 	}
 	tax := patch(map[string]any{"taxAndComplianceSettings": map[string]any{}})
 	tax["reason"] = "r"
@@ -767,6 +787,10 @@ func TestTheReportsBucketIsReadAsTheCompanyReaderCutToTheSeat(t *testing.T) {
 	r := out.(googleplay.Report)
 	if r.TotalRows != 2 || r.Columns[2] != "Daily Device Installs" || !strings.Contains(r.Rows, "2026-11-02") {
 		t.Fatalf("the report reads %+v", r)
+	}
+	if _, err = w.call(t, "google_play_read_report", map[string]any{"object": "earnings/earnings_202611.zip"}); !refused(err) ||
+		!strings.Contains(err.Error(), "administer") {
+		t.Fatalf("a read seat's account-wide report answered %v", err)
 	}
 	for i, c := range w.f.calls {
 		if strings.Contains(c, "/storage/") && !strings.HasPrefix(w.f.bearers[i], "Bearer ya29.reader-") {
