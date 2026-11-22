@@ -188,11 +188,11 @@ func TestABackupTheFleetsStateRefusesSaysWhatToDo(t *testing.T) {
 		names  string // a log line the hint must send the operator to
 	}{
 		{fmt.Errorf("backup: the record at CREWLET_TRACKER_LOG sequence 9: %w: version 2",
-			objstore.ErrRecordUnreadable), http.StatusConflict, "record_unreadable"},
+			objstore.ErrRecordUnreadable), http.StatusConflict, "record_unreadable", ""},
 		{fmt.Errorf("backup: the record at CREWLET_TRACKER_LOG sequence 9: %w (this node holds \"k1\")",
-			statelog.ErrRecordUnverified), http.StatusConflict, "record_unverified"},
+			statelog.ErrRecordUnverified), http.StatusConflict, "record_unverified", ""},
 		{fmt.Errorf("backup: the copy's checkpoint on CREWLET_TRACKER_LOG: %w",
-			statelog.ErrStreamRecreated), http.StatusConflict, "log_recreated"},
+			statelog.ErrStreamRecreated), http.StatusConflict, "log_recreated", ""},
 		{fmt.Errorf("%w: CREWLET_TRACKER_LOG holds no record 5", backup.ErrLogGap),
 			http.StatusServiceUnavailable, "log_gap", statelog.HoldNotRenewedEvent},
 	} {
