@@ -118,12 +118,12 @@ func (r repoRun) workdir(t *testing.T) string {
 // PUSHES TO FIRST: each repository checked out directly under the working
 // directory hands its AGENTS.override.md, else AGENTS.md, labelled with its
 // root, those first names in their order, the rest by name; a directory with
-// no .git, a link to a checkout, a checkout under a dot-name and the working
-// directory's own AGENTS.md hand nothing and are not handed. An earlier run's
-// AGENTS.md is replaced.
+// no .git, a checkout under a dot-name and the working directory's own
+// AGENTS.md (which Codex reads itself) hand nothing and are not handed. An
+// earlier run's AGENTS.md is replaced.
 //
 // Mutation: read AGENTS.md before the override, ignore first, take a
-// directory without .git, a link or a dot-name, or keep the earlier file.
+// directory without .git or a dot-name, or keep the earlier file.
 func TestTheLaunchHandsEachCheckoutsInstructionsTheReposItPushesToFirst(t *testing.T) {
 	t.Parallel()
 	r := newRepoRun(t, map[string]string{
@@ -140,9 +140,6 @@ func TestTheLaunchHandsEachCheckoutsInstructionsTheReposItPushesToFirst(t *testi
 		".hidden/.git/":            "",
 		".hidden/AGENTS.md":        "HIDDEN\n",
 	})
-	if err := os.Symlink(filepath.Join(r.work, "zeta"), filepath.Join(r.work, "linked")); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.WriteFile(r.agents, []byte("EARLIER-RUN\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -286,11 +283,12 @@ func TestACheckoutClonedDuringTheRunIsHandedItsRootInstructionsOnce(t *testing.T
 	}
 }
 
-// ONLY A CHECKOUT'S OWN FILE IS HANDED: an AGENTS.md that is a link out of its
-// checkout, and a link to a checkout in the working directory, hand nothing.
+// LINKS ARE FOLLOWED AS CODEX FOLLOWS THEM: an AGENTS.md that links out of
+// its checkout hands the file it reaches, and a link to a checkout in the
+// working directory is a checkout.
 //
-// Mutation: follow a link out of the checkout, or take a link for a checkout.
-func TestOnlyACheckoutsOwnFileIsHanded(t *testing.T) {
+// Mutation: refuse a linked file or a linked checkout, and a check goes red.
+func TestLinksAreFollowedAsCodexFollowsThem(t *testing.T) {
 	t.Parallel()
 	r := newRepoRun(t, nil)
 	r.launch(t, 32<<10)
@@ -312,7 +310,10 @@ func TestOnlyACheckoutsOwnFileIsHanded(t *testing.T) {
 	if err := os.Symlink(other, filepath.Join(r.work, "linked-dir")); err != nil {
 		t.Fatal(err)
 	}
-	if got := r.fire(t); got != "" {
-		t.Errorf("a link handed %q", got)
+	work := r.workdir(t)
+	want := "# AGENTS.md instructions for " + work + "/linked-dir\n\n<INSTRUCTIONS>\nLINKED-DIR\n\n</INSTRUCTIONS>\n\n" +
+		"# AGENTS.md instructions for " + work + "/linked-file\n\n<INSTRUCTIONS>\nOUTSIDE\n\n</INSTRUCTIONS>"
+	if got := r.fire(t); got != want {
+		t.Errorf("the firing handed\n%q\nwant\n%q", got, want)
 	}
 }

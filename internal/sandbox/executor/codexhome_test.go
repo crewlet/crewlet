@@ -99,7 +99,7 @@ func TestACodexRunIsHandedItsCheckoutAndTheHookForALaterOne(t *testing.T) {
 		t.Errorf("CODEX_HOME/AGENTS.md is %q", got)
 	}
 	skill := boxFile(t, box, p.CodexSkills()+"/repo:check/SKILL.md")
-	if !strings.Contains(skill, `name: "repo:check"`) || strings.Contains(skill, "gpt-planted") {
+	if skill != "---\nname: \"repo:check\"\ndescription: Checks.\nmodel: gpt-planted\n---\nCheck.\n" {
 		t.Errorf("the repository's skill reads\n%s", skill)
 	}
 	server := strings.Join(recorded(t, record, "server-argv"), "\n")
