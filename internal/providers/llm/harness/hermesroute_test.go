@@ -20,15 +20,15 @@ import (
 )
 
 // Hermes Agent, as the fake plays it (`-z`): the servers its home's
-// config.yaml names, `${VAR}` filled from its environment — only those the
-// -t list names started, every one if there is no list — and their tools
-// offered by name only with the config's tool search off; its config's shell
-// hooks run (with hooks_auto_accept), the post_api_request one handed each
-// response — the model's own call names, before the harness repairs one, and the
-// request's counts, the prompt less its cached part — on stdin, in the call's
-// directory; no id with a call; the answer, or why it failed, on stdout; and
-// the run's counts in the --usage-file report (measured on 0.21.5; see the
-// profile).
+// config.yaml names, `${VAR}` filled from its environment, and the tools of
+// only those the -t list names offered (every one's if there is no list), by
+// name only with the config's tool search off; its config's shell hooks run
+// (with hooks_auto_accept), the post_api_request one handed each response (the
+// model's own call names, before the harness repairs one, and the request's
+// counts, the prompt less its cached part) on stdin, in the gateway's working
+// directory rather than the call's; no id with a call; the answer, or why it
+// failed, on stdout; and the run's counts in the --usage-file report, the
+// prompt with its cache (measured on 0.23.3; see the profile).
 func init() {
 	fakeHarnesses["hermes"] = fakeHarness{
 		server: func() (string, []string, error) {
@@ -39,22 +39,22 @@ func init() {
 			if config.Tools.ToolSearch.Enabled != "off" {
 				return "", nil, fmt.Errorf("tool search is on, so the server's tools sit behind tool_call")
 			}
-			started := map[string]hermesServer{}
+			offered := map[string]hermesServer{}
 			only := strings.Split(argAfter("--toolsets"), ",")
 			for name, server := range config.MCPServers {
 				if argAfter("--toolsets") == "" || slices.Contains(only, name) {
-					started[name] = server
+					offered[name] = server
 				}
 			}
-			for name := range started {
+			for name := range offered {
 				if name != "crewlet" {
-					fmt.Fprintln(os.Stderr, "fake hermes: started the home's own MCP server", name)
+					fmt.Fprintln(os.Stderr, "fake hermes: offered the tools of the home's own MCP server", name)
 					os.Exit(77)
 				}
 			}
-			crewlet, ok := started["crewlet"]
+			crewlet, ok := offered["crewlet"]
 			if !ok {
-				return "", nil, fmt.Errorf("the -t list starts no crewlet server")
+				return "", nil, fmt.Errorf("the -t list offers no crewlet server")
 			}
 			args := make([]string, len(crewlet.Args))
 			for i, a := range crewlet.Args {
@@ -154,8 +154,10 @@ func (h *hermesRecorder) asked(i int, r fakeResponse, _ []string) {
 		return
 	}
 	// The command as the harness runs it: split as a shell would, in the
-	// call's directory, the payload on stdin.
+	// gateway's working directory (the harness's install, never the call's),
+	// with the run's environment, the payload on stdin.
 	cmd := exec.Command("sh", "-c", h.hook) //nolint:gosec // the profile's own hook
+	cmd.Dir = os.TempDir()
 	cmd.Stdin = strings.NewReader(string(payload))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		fmt.Fprintln(os.Stderr, "fake hermes: the hook failed:", err, string(out))
@@ -167,7 +169,8 @@ func (h *hermesRecorder) answered(int, fakeResponse, []string, []string) {}
 
 func (h *hermesRecorder) end(script fakeScript, total fakeUsage, last string) int {
 	if path := argAfter("--usage-file"); path != "" {
-		raw, _ := json.Marshal(map[string]any{"input_tokens": total.Input, "output_tokens": total.Output,
+		raw, _ := json.Marshal(map[string]any{"input_tokens": total.Input + total.CacheRead + total.CacheWrite,
+			"output_tokens":     total.Output,
 			"cache_read_tokens": total.CacheRead, "cache_write_tokens": total.CacheWrite})
 		_ = os.WriteFile(path, raw, 0o600)
 	}
@@ -179,24 +182,24 @@ func (h *hermesRecorder) end(script fakeScript, total fakeUsage, last string) in
 	return 0
 }
 
-// HERMES AGENT'S RUN IS READ FROM THE RECORD ITS OWN HOOK WRITES, AND ITS HOME
-// STARTS NO SERVER BUT THE SEAT'S. The seat's server is declared in the home's
-// config.yaml with its relay command and socket from the run's environment;
-// the -t list starts it alone, a text function's none. Each
-// response reaches the hook the same file declares, which appends its prose,
-// calls and counts (the prompt less its cached part) to a file in the call's
-// directory. Calls carry no id, so one is joined by name and arguments; the
-// host is told it waits 600 seconds, re-reads no list, calls one by one.
+// HERMES AGENT'S RUN IS READ FROM THE RECORD ITS OWN HOOK WRITES, AND IT IS
+// OFFERED NO SERVER'S TOOLS BUT THE SEAT'S. The -t list offers the seat's server,
+// declared in the home's config.yaml with its relay from the run's environment,
+// alone. Each response reaches the hook, which runs outside the call's directory
+// and appends its prose, calls and counts (the prompt less its cached part) to
+// the file the run's environment names. Calls carry no id, so one is joined by
+// name and arguments; the host is told it waits 600 seconds, re-reads no list.
 //
-// Mutation: drop the route's -t list, and the planted server starts; turn tool
-// search on, and the seat's tools are unreachable; drop the hook, and no
-// request is seen; read input as the whole prompt, and 100 is charged, not 140.
+// Mutation: drop the route's -t list, and the planted server's tools are
+// offered; turn tool search on, and the seat's tools are unreachable; drop the
+// hook or CREWLET_HERMES_RECORD, and no request is seen; drop
+// input_includes_cache, and the report's 440 is charged for 340.
 func TestHermesRunIsReadFromTheRecordItsHookWrites(t *testing.T) {
 	t.Parallel()
 	p := fakeAs(t, "hermes", routeCase, func(c *Config) {
 		c.Auth = Auth{Mode: AuthSubscription}
 		// A server the home's config names beside the seat's — the -t
-		// list is what keeps it from starting.
+		// list is what keeps its tools from being offered.
 		c.Overrides["seed_files"] = hermesSeedsWith(t, "  planted:\n    command: sh\n")
 	})
 	host := holdsTheRoute(t, p, llm.ServeOptions{
@@ -240,12 +243,11 @@ func hermesSeedsWith(t *testing.T, servers string) []any {
 
 // A CALL THE HARNESS REPAIRED IS RECORDED AS THE MODEL ASKED FOR IT. Hermes Agent
 // rewrites a call to an unknown tool to the closest listed one and runs that
-// (difflib, ratio 0.7 or more), with the model's own arguments: measured, a
-// model asking for mcp__crewlet__echoo had echo called. Its stream and its
-// session store both show the repaired name; the post_api_request hook fires
-// before the repair, so the record names what the model wrote — the name the
-// tool loop's host refuses a rewritten call by, rather than running a tool the
-// model never asked for.
+// (difflib, ratio 0.7 or more), with the model's own arguments: measured on
+// 0.23.3, a model asking for mcp__crewlet__echoo had echo called, and the
+// post_api_request hook, which fires before the repair, recorded echoo: the
+// name the tool loop's host refuses a rewritten call by, rather than running a
+// tool the model never asked for.
 //
 // Mutation: record the repaired name, and the host is told the model asked for
 // the tool that ran.
@@ -277,7 +279,7 @@ func TestHermesRecordsTheNameTheModelAskedFor(t *testing.T) {
 // is the seat's, written once for every call, so the server's timeout there is
 // a literal rather than a value rendered per run: it has to be the profile's
 // tool_timeout_seconds, or the host answers a slow call later than the harness
-// gives up on it (measured: a timeout of 4 gave a 10 s call up at 4.0 s).
+// gives up on it (measured on 0.23.3: a timeout of 4 gave a 20 s call up at 4.0 s).
 //
 // Mutation: change either number alone, and this fails.
 func TestHermesServerTimeoutIsTheOneTheHostIsTold(t *testing.T) {
