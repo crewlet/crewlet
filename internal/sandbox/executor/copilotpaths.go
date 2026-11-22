@@ -30,27 +30,18 @@ func (p Paths) CopilotInstructions() string { return p.CopilotHome() + "/copilot
 // a turn cap, and removed where it has neither.
 func (p Paths) CopilotExtension() string { return p.CopilotHome() + "/extensions/crewlet-notes" }
 
-// CopilotCache is the directory a Copilot run keeps its cache in, pinned as
-// COPILOT_CACHE_HOME ([Copilot.Pins]) over a seat's or the image's own and
-// over XDG_CACHE_HOME, so the clear removes the one Copilot reads. 1.0.114
-// extracts its own package there and runs it on every launch, with no check
-// of what it finds, and its grep tool runs the rg there by absolute path; with
-// the directory gone it extracts the package again from its binary, offline
-// too (measured).
-func (p Paths) CopilotCache() string { return p.Home + "/.cache/copilot" }
-
-// CopilotLoaded is every place in the box home Copilot loads from that a run's
-// launch does not write, measured on 1.0.114 to load in prompt mode: user
-// extensions (the whole directory, the run's own written after), hooks, MCP
-// servers, installed plugins, skills (Copilot's and the home's
-// `.agents/skills`), custom agents and instruction files; the language servers
-// and saved model providers its help names; and its cache ([Paths.CopilotCache]).
-// The login (`config.json`) and the session store are not among them.
+// CopilotLoaded is every place in the box home Copilot loads configuration
+// from that a run's launch does not write, measured on 1.0.114 to load in
+// prompt mode: user extensions (the whole directory, the run's own written
+// after), hooks, MCP servers, installed plugins, skills (Copilot's and the
+// home's `.agents/skills`), custom agents and instruction files; and the
+// language servers and saved model providers its help names. The login
+// (`config.json`) and the session store are not among them.
 func (p Paths) CopilotLoaded() (files, dirs []string) {
 	h := p.CopilotHome()
 	return []string{h + "/mcp-config.json", h + "/lsp-config.json", h + "/providers.json"},
 		[]string{h + "/extensions", h + "/hooks", h + "/installed-plugins", h + "/installed-plugins.lock",
-			h + "/skills", p.Home + "/.agents/skills", h + "/agents", h + "/instructions", p.CopilotCache()}
+			h + "/skills", p.Home + "/.agents/skills", h + "/agents", h + "/instructions"}
 }
 
 // CopilotSessionDir is session's directory under the run's home: its
