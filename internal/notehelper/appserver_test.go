@@ -417,9 +417,11 @@ func action(kind, path string) map[string]any {
 // whose one action reads <skills>/<name>/SKILL.md and whose output is that
 // file as the runner installed it, byte for byte. A listing, a test, an echo,
 // a failed or partial read, another file, a script, a link to another skill,
-// two reads in one command or another thread's command is none.
+// two reads in one command (its output both files or the first alone), a
+// non-read action naming the file, or another thread's command is none.
 //
-// Mutation: drop any condition of completed, and a row reports a load.
+// Mutation: drop any condition of completed, or hold the actions to at least
+// one rather than exactly one, and a row reports a load.
 func TestOnlyAWholeReadOfASkillsOwnFileIsALoad(t *testing.T) {
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "skills")
@@ -453,6 +455,10 @@ func TestOnlyAWholeReadOfASkillsOwnFileIsALoad(t *testing.T) {
 	commandDone(t, app, "thread-A", 0, alpha.body, "/", action("unknown", ""))
 	commandDone(t, app, "thread-A", 0, alpha.body, "/", action("read", link))
 	commandDone(t, app, "thread-A", 0, alpha.body+beta.body, "/", action("read", alpha.path), action("read", beta.path))
+	// Two actions whose output is the first file's alone: still two actions.
+	commandDone(t, app, "thread-A", 0, alpha.body, "/", action("read", alpha.path), action("read", beta.path))
+	// An action that names the file but reads nothing, its output the file's.
+	commandDone(t, app, "thread-A", 0, alpha.body, "/", action("search", alpha.path))
 	commandDone(t, app, "thread-sub", 0, alpha.body, "/", action("read", alpha.path))
 	// A relative path read in the skills directory, then another skill.
 	commandDone(t, app, "thread-A", 0, alpha.body, dir, action("read", "alpha/SKILL.md"))
@@ -521,7 +527,12 @@ func writeSkill(t *testing.T, dir, name, body string) skillFile {
 	return skillFile{path: path, body: body}
 }
 
-// skillOf takes exactly <dir>/<name>/SKILL.md, name one plain element.
+// skillOf takes exactly <dir>/<name>/SKILL.md, name one plain element: a
+// SKILL.md beside the skills directory, whose relative path is ../SKILL.md, is
+// no skill.
+//
+// Mutation: drop the IsLocal check, and the parent's SKILL.md reads as skill
+// "..".
 func TestSkillOfTakesExactlyASkillsOwnFile(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{
@@ -531,6 +542,7 @@ func TestSkillOfTakesExactlyASkillsOwnFile(t *testing.T) {
 		"/h/skills/alpha/skill.md":        "",
 		"/h/other/alpha/SKILL.md":         "",
 		"/h/skills/../skills2/a/SKILL.md": "",
+		"/h/SKILL.md":                     "",
 	}
 	for path, want := range cases {
 		got, ok := skillOf("/h/skills", filepath.Clean(path))
