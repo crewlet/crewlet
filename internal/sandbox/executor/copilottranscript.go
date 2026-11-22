@@ -177,11 +177,9 @@ func (b *transcriptBuilder) copilotCalls(raw json.RawMessage, at time.Time) erro
 // compaction between that may have left it only in the summary (ADR-0177): one
 // not stated failed, unless the note stands among the trailing messages its
 // start counts (`retainedInputMessages`; measured on 1.0.114,
-// compacted-queued), every line the model may read counted as one
-// ([copilotWindow]). The line alone is no proof (ruling 1 of #1818's design):
-// a kill or a refusal can follow it. A last line with no newline is a write
-// cut off; a line past the bound or of no kind read is no note, though it
-// counts as a message.
+// compacted-queued), as [copilotWindow] counts them. The line alone is no
+// proof (ruling 1 of #1818's design): a kill or a refusal can follow it. A
+// last line with no newline is a write cut off; one past the bound, no note.
 func copilotNotesHeld(ctx context.Context, events io.Reader, takes []ServedTake) ([]string, error) {
 	asked := make(map[string]string, len(takes))
 	for _, take := range takes {
