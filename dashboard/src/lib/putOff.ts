@@ -10,7 +10,7 @@
  * bucket is near its ceiling" and decided to live with it for a week still
  * needs their Inbox and badge to stop counting it, or the count stops meaning
  * anything. So the mark is theirs, kept per reader on this browser
- * (`lib/readerStore.ts`), the way their Home's board is, and every control that
+ * (`lib/readerStore.ts`), the way their sidebar's shape is, and every control that
  * sets it says "on this browser": it hides nothing from anybody else, and
  * nothing on another desk.
  *

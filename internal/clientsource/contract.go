@@ -419,6 +419,8 @@ var contract = []Entry{
 	{"SetupVerdict", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
 	{"SetupVerdictFact", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
 	{"SetupVerdictWarning", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
+	{"SetupConsentSignIn", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
+	{"SetupConsentRevocation", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
 
 	// memory.ts
 	{"AgentMemory", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},

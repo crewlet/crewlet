@@ -236,14 +236,14 @@ func TestAServiceIdentityIsIssuedItsTokenAtUseAndKeepsNothing(t *testing.T) {
 		t.Fatalf("node b was handed %q (%v), want a token of its own", other, err)
 	}
 
-	if _, found, err := a.backends.Fleet.MCPGrant(t.Context(), "vendor"); err != nil || found {
+	if _, found, err := a.backends.Fleet.OAuthGrant(t.Context(), coord.MCPGrantFamily, "vendor"); err != nil || found {
 		t.Fatalf("a service identity recorded a grant: %t, %v", found, err)
 	}
 	if _, found, err := fleetsecrets.New(a.backends.Fleet, a.cipher).Estate().Held(t.Context(),
-		grantRow("vendor")); err != nil || found {
+		grantRow(coord.MCPGrantFamily, "vendor")); err != nil || found {
 		t.Fatalf("a service identity sealed a grant: %t, %v", found, err)
 	}
-	if signIns, err := a.backends.Fleet.ListMCPSignIns(t.Context()); err != nil || len(signIns) != 0 {
+	if signIns, err := a.backends.Fleet.ListOAuthSignIns(t.Context(), coord.MCPGrantFamily); err != nil || len(signIns) != 0 {
 		t.Fatalf("a service identity left sign-ins %v, %v", signIns, err)
 	}
 }
@@ -350,16 +350,16 @@ func TestAServiceIdentityIsNeverSignedInToAndRaisesNoSignInAlarm(t *testing.T) {
 	if _, err := a.StartMCPSignIn(t.Context(), "vendor", signingJane); !errors.Is(err, ErrMCPServiceIdentity) {
 		t.Fatalf("a sign-in to a service identity answered %v", err)
 	}
-	stale := coord.MCPGrant{Server: "vendor", Grant: uuid.New(), Client: "dcr", ClientID: "registered",
+	stale := coord.OAuthGrant{Name: "vendor", Grant: uuid.New(), Client: "dcr", ClientID: "registered",
 		Issuer: v.srv.URL, Resource: v.srv.URL + "/mcp", By: signingJane.Name, ByKind: signingJane.Kind,
 		At: a.now()}
-	if _, _, err := a.backends.Fleet.CreateMCPGrant(t.Context(), stale); err != nil {
+	if _, _, err := a.backends.Fleet.CreateOAuthGrant(t.Context(), coord.MCPGrantFamily, stale); err != nil {
 		t.Fatal(err)
 	}
 	if source, ok := sourceOf(t, a).(*oauthSource); !ok || source.service == nil {
 		t.Fatalf("a service identity's server starts with a person's grant: %#v", source)
 	}
-	conds := mcpConditions(a.Company(), nil, map[string]coord.MCPGrant{"vendor": stale})
+	conds := mcpConditions(a.Company(), nil, map[string]coord.OAuthGrant{"vendor": stale})
 	if len(conds) != 1 || conds[0].SignIn != nil {
 		t.Fatalf("a service identity has a sign-in condition: %+v", conds)
 	}

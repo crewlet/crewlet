@@ -59,9 +59,9 @@ export const STORAGE_KEYS = {
    */
   starred: "crewlet_starred/",
   /**
-   * The PREFIX of each reader's Home board, the widgets they placed and how
-   * they arranged them (`routes/home/board/model.ts`): the reader's id
-   * follows it.
+   * The PREFIX of each reader's Home board as the engine last answered it,
+   * drawn on a cold load until it answers again, or kept here alone for a
+   * sign-in holding no seat (`routes/home/board/kept.ts`): the reader's id follows it.
    */
   homeBoard: "crewlet_home_board/",
   /**

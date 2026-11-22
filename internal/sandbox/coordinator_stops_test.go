@@ -1328,6 +1328,13 @@ func (s *refusingStore) MarkSessionStart(ctx context.Context, turnID, launch str
 	return s.inner.MarkSessionStart(ctx, turnID, launch, start)
 }
 
+func (s *refusingStore) BindSession(ctx context.Context, turnID string, bind SessionBind) (PendingRun, error) {
+	if s.called("BindSession") {
+		return PendingRun{}, errRefusedCall
+	}
+	return s.inner.BindSession(ctx, turnID, bind)
+}
+
 func (s *refusingStore) OweRefusal(ctx context.Context, turnID, launch string, owed OwedRefusal,
 	fence Fence,
 ) (bool, error) {

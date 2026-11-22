@@ -121,11 +121,17 @@ const (
 	// so a toggle rendered as a choice would produce a patch the config
 	// surface rejects on every submission.
 	KindToggle Kind = "toggle"
+
+	// KindConsent is a sign-in a person makes at the vendor, never a value
+	// the document holds: its control starts the integration's consent
+	// sign-in (`POST /setup/integrations/{kind}/consent`, ADR-0178), and the
+	// engine keeps the grant. Nothing is submitted for it.
+	KindConsent Kind = "consent"
 )
 
 // Kinds is every kind, in no significant order.
 var Kinds = []Kind{
-	KindSecret, KindURL, KindID, KindChoice, KindText, KindHandle, KindEmail, KindToggle,
+	KindSecret, KindURL, KindID, KindChoice, KindText, KindHandle, KindEmail, KindToggle, KindConsent,
 }
 
 // Valid reports whether k is a kind this build knows.
@@ -635,6 +641,10 @@ func (r Requirement) Noun() string {
 // ([secrets.StrayProblem]), and its shape, where it has one, holds it to the
 // vendor's alphabet.
 func (r Requirement) ValueProblem(value string) string {
+	if r.Kind == KindConsent {
+		return fmt.Sprintf("The %s is a sign-in at the vendor, not a value: press its Sign in button, "+
+			"and the engine keeps what the vendor grants.", r.Noun())
+	}
 	if _, isRef := envref.Whole(value); isRef {
 		return ""
 	}
