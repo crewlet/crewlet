@@ -214,7 +214,15 @@ export const INTEGRATION_TOOLS = {
   aws: ["aws"],
   google_cloud: ["google_cloud"],
   ssh: ["ssh"],
+  meta_ads: ["meta_ads"],
   app_store_connect: ["app_store_connect"],
+  apple_ads: ["apple_ads"],
+  google_analytics: ["google_analytics"],
+  admob: ["admob"],
+  adsense: ["adsense"],
+  google_ads: ["google_ads"],
+  search_console: ["search_console"],
+  google_play: ["google_play"],
 } as const;
 
 /**

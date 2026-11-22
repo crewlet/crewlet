@@ -45,7 +45,7 @@ func deliveredRefs(texts ...string) []string {
 		}
 	}
 	for _, text := range texts {
-		if refs := prPattern.FindAllString(text, -1); len(refs) > 0 {
+		if refs := prPattern().FindAllString(text, -1); len(refs) > 0 {
 			return refs
 		}
 	}
@@ -55,13 +55,15 @@ func deliveredRefs(texts ...string) []string {
 // deliveredLine is one line naming a delivered ref — `Delivered: <ref>` — read
 // whatever a report lays it out with: a list marker before it, emphasis
 // around the label, any case. What follows the colon is [namedRef]'s to judge.
-var deliveredLine = regexp.MustCompile(
-	`(?im)^[ \t]*(?:[-*+][ \t]+|\d+[.)][ \t]+)?[*_]*delivered[*_]*[ \t]*:[*_]*[ \t]*(.*)$`)
+var deliveredLine = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(
+		`(?im)^[ \t]*(?:[-*+][ \t]+|\d+[.)][ \t]+)?[*_]*delivered[*_]*[ \t]*:[*_]*[ \t]*(.*)$`)
+})
 
 // namedRefs is every ref a text names on a `Delivered:` line, in its order.
 func namedRefs(text string) []string {
 	var refs []string
-	for _, m := range deliveredLine.FindAllStringSubmatch(text, -1) {
+	for _, m := range deliveredLine().FindAllStringSubmatch(text, -1) {
 		if ref, ok := namedRef(m[1]); ok {
 			refs = append(refs, ref)
 		}
@@ -98,8 +100,10 @@ func namedRef(rest string) (string, bool) {
 // never a host with credentials (a remote, not a ref); the number ends at a
 // word boundary. Only a fallback, because a URL the run merely referenced reads
 // exactly like one it opened.
-var prPattern = regexp.MustCompile(
-	`https?://[^\s/?#@:]+(?::\d+)?/[\w.\-/]+/(?:pull|pulls|pull-requests|pullrequest|merge_requests)/\d+\b`)
+var prPattern = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(
+		`https?://[^\s/?#@:]+(?::\d+)?/[\w.\-/]+/(?:pull|pulls|pull-requests|pullrequest|merge_requests)/\d+\b`)
+})
 
 // Harness is what one harness contributes on top of the shared plumbing: its
 // invocation, its config file, where its stdout lands and how its result is
@@ -150,7 +154,9 @@ type Harness interface {
 	// the path the harness is pointed at, or "" when there is nothing to write.
 	// It also writes the system text where the harness reads it from
 	// ([Paths.System]) when there is any, and nothing when there is none.
-	WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error)
+	// session is the run's, named before it ([Harness.Session]).
+	WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, session Session,
+		paths Paths) (string, error)
 }
 
 // Session is the harness session one run works in, as [Runner.Start] settles it
@@ -291,6 +297,16 @@ type contextReader interface {
 // ([sandbox.Result.Limits]): Claude Code's `rate_limit_event`.
 type limitReporter interface {
 	limitReport() string
+}
+
+// limitGate is a harness whose run's limit is its own word only where the
+// harness itself failed the run on its vendor's API error, which its exit
+// status names ([GeminiCLI.limitExit]): elsewhere the collection marks the
+// run's ending as no limit ([sandbox.Result.NoLimitExit]), so a line the run's
+// own output put in the stream (a box file its model can write) sits nothing
+// out.
+type limitGate interface {
+	limitExit(code int) bool
 }
 
 // windowReporter is a decoder that reads off its run's stream the least context
@@ -497,8 +513,8 @@ func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 // the old result; a previous job's hooks name a bridge session its end closed;
 // its end-protocol records ([Paths.JobScript], [Paths.JobEnded]) would aim an
 // end request at another process or read as this run's own; its session record,
-// capture, saves and staging would be collected as this run's or wait in the box
-// for its life; its fresh-session wiring ([Paths.MCPConfigFresh]) would sit
+// report, capture, saves and staging would be collected as this run's (a stale
+// report bound as this run's session) or wait in the box for its life; its fresh-session wiring ([Paths.MCPConfigFresh]) would sit
 // beside a run that has none. Directories go whole, so no stale value, plugin or
 // commit hook survives, and every file a run starts with is new to its box: across
 // a VM mount, a harness opening a host-replaced file finds nothing for ~1 s.
@@ -508,7 +524,8 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	out := r.harness.Output(p)
 	files := []string{p.Done(), p.ExitCode(), p.MemoryBefore(), p.MemoryAfter(), p.Result(), p.Findings(), p.Brief(), p.FreshBrief(), p.System(),
 		p.BaseResult(),
-		p.SessionRecord(), p.SessionCapture(), p.SessionCarried(), p.MCPConfig(), p.MCPConfigFresh(),
+		p.SessionRecord(), p.SessionReport(), p.sessionReportStaging(), p.SessionCapture(), p.SessionCarried(),
+		p.MCPConfig(), p.MCPConfigFresh(),
 		p.JobScript(), p.JobScript() + ".next", p.JobEnded(), p.JobEnded() + ".next"}
 	dirs := []string{p.CommitAttribution(), p.SessionStaging()}
 	// EVERY HARNESS'S, not this run's alone: the box may last have run another.
@@ -646,7 +663,7 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 		}
 		req.FreshWiring = &wired
 	}
-	configPath, err := r.harness.WriteConfig(ctx, box, req, paths)
+	configPath, err := r.harness.WriteConfig(ctx, box, req, session, paths)
 	if err != nil {
 		return sandbox.RunHandle{}, err
 	}
@@ -1069,6 +1086,19 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	if !sandbox.ValidSessionID(result.SessionID) {
 		result.SessionID = rec.id
 	}
+	// A MINTING HARNESS'S SESSION IS THE ONE ITS SCRIPT REPORTED, never one it
+	// printed or its record names (minter.go): a refused report is a piece the
+	// run did not report, so it collects no session and no capture, and the run
+	// fails closed.
+	if r.MintsSession() {
+		minted, mintErr := r.reportedSession(ctx, box, paths, handle, rec)
+		if errors.Is(mintErr, ErrSessionReport) {
+			refused, minted = append(refused, mintErr.Error()), ""
+		} else if mintErr != nil {
+			return sandbox.Result{}, mintErr
+		}
+		result.SessionID, rec.id = minted, minted
+	}
 	result.Continued, result.HarnessVersion = rec.continued, releaseOf(rec.release)
 	result.FellBack = sandbox.BoundFellBack(rec.why)
 	if result.Captured, err = r.captured(ctx, box, paths, rec); err != nil {
@@ -1127,6 +1157,13 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	result, refused, err = memoryKills(pieces.memory, result, refused, code)
 	if err != nil {
 		return sandbox.Result{}, err
+	}
+	// A LIMIT ONLY AT THE HARNESS'S OWN API FAILURE ([limitGate]); a status
+	// that does not read is no such failure.
+	if gate, ok := r.harness.(limitGate); ok {
+		if n, convErr := strconv.Atoi(code); convErr != nil || !gate.limitExit(n) {
+			result.NoLimitExit = true
+		}
 	}
 
 	// Whether the job was ended on request, as its script recorded

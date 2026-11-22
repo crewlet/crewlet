@@ -68,6 +68,7 @@ import {
   TableDateCell,
   TableEntityCell,
   TableNumberCell,
+  TableTwoLineCell,
   Tag,
 } from "@crewlethq/ui";
 import { LayoutDashboardGlyph, Columns3Glyph } from "@crewlethq/icons/glyphs";
@@ -314,12 +315,8 @@ export function Projects() {
         // that gives way to every content-sized one beside it.
         floor: "10rem",
         sortValue: (row) => row.name || row.key,
-        cell: (row) => (
-          <span className="col">
-            <span className="truncate">{row.name || row.key}</span>
-            {row.purpose && <span className="t-caption truncate">{row.purpose}</span>}
-          </span>
-        ),
+        // The name over its purpose, in the kit's two-line cell.
+        cell: (row) => <TableTwoLineCell value={row.name || row.key} detail={row.purpose} />,
       },
       {
         key: "lead",

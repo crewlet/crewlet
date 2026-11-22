@@ -41,7 +41,7 @@ func piReachesTheBridgesRoute(t *testing.T) {
 	p := executor.PathsFor(box)
 	if _, err := (executor.Pi{}).WriteConfig(t.Context(), box, sandbox.RunRequest{
 		Steer: sandbox.SteerWiring{Server: "crewlet", Tool: mcpbridge.SteerTool, URL: mcpbridge.SteerURL(endpoint)},
-	}, p); err != nil {
+	}, executor.Session{}, p); err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
 	extension, err := box.ReadFile(t.Context(), p.PiExtension())

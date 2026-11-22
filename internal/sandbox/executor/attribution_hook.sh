@@ -21,26 +21,55 @@
 _crewlet_hook=${0##*/}
 _crewlet_dir=${0%/*}
 
-# THE RUN'S ENTRY, found by its value rather than assumed to be the last one:
-# a command may append entries of its own after it.
-_crewlet_entry=
+# THE RUN'S ENTRY, its GIT_CONFIG_PARAMETERS item naming this directory
+# (attribution.go: hooksParameter), found as a whole item rather than assumed
+# to be the last: git appends a command's own -c settings after it. Items are
+# separated by one space and a quote inside one is written '\'', so no other
+# item can hold this one between spaces. _crewlet_rest is the rest, with every
+# copy of it set aside.
+_crewlet_entry=@HOOKS_ENTRY@
+_crewlet_rest=" ${GIT_CONFIG_PARAMETERS-} "
+_crewlet_found=
+while :; do
+	case $_crewlet_rest in
+	*" $_crewlet_entry "*) ;;
+	*) break ;;
+	esac
+	_crewlet_found=1
+	_crewlet_before=${_crewlet_rest%%" $_crewlet_entry "*}
+	_crewlet_rest="$_crewlet_before ${_crewlet_rest#*" $_crewlet_entry "}"
+done
+# Git refuses a leading space as a bogus format.
+_crewlet_rest=${_crewlet_rest# }
+_crewlet_rest=${_crewlet_rest% }
+
+# A HARNESS'S BLANK core.hooksPath, set aside with the run's entry: Gemini
+# CLI's shell appends GIT_CONFIG_COUNT entries emptying it to keep the
+# repository's hooks from running, and the run's entry, read after every COUNT
+# entry, already outranks them; left in place, it would hide the repository's
+# hooks from the lookup below. An entry giving a directory stays: it is the
+# run environment's own, which the run's entry outranks.
+_crewlet_blank=
 _crewlet_i=0
 while [ "$_crewlet_i" -lt "${GIT_CONFIG_COUNT:-0}" ] 2>/dev/null; do
 	eval "_crewlet_key=\${GIT_CONFIG_KEY_$_crewlet_i-} _crewlet_value=\${GIT_CONFIG_VALUE_$_crewlet_i-}"
-	if [ "$_crewlet_key" = core.hooksPath ] && [ "$_crewlet_value" = "$_crewlet_dir" ]; then
-		_crewlet_entry=$_crewlet_i
-	fi
+	case $_crewlet_key in
+	[cC][oO][rR][eE].[hH][oO][oO][kK][sS][pP][aA][tT][hH])
+		[ -n "$_crewlet_value" ] || _crewlet_blank="$_crewlet_blank GIT_CONFIG_KEY_$_crewlet_i=crewlet.hooksPath"
+		;;
+	esac
 	_crewlet_i=$((_crewlet_i + 1))
 done
 
-# THE REPOSITORY'S OWN HOOK: where git would look for it with the run's entry
-# renamed to a key git does not read — the repository's core.hooksPath (a
-# husky directory, say) or its hooks directory. Asked of git rather than
-# worked out here, so a relative path, a worktree and a bare repository are
-# all resolved the way git resolves them.
+# THE REPOSITORY'S OWN HOOK: where git would look for it with those entries
+# set aside — the repository's core.hooksPath (a husky directory, say) or its
+# hooks directory. Asked of git rather than worked out here, so a relative
+# path, a worktree and a bare repository are all resolved the way git
+# resolves them. Each blank entry is renamed to a key git does not read, a
+# word with no space or quote, so it is expanded unquoted.
 _crewlet_own=
-if [ -n "$_crewlet_entry" ]; then
-	_crewlet_own=$(env "GIT_CONFIG_KEY_$_crewlet_entry=crewlet.hooksPath" \
+if [ -n "$_crewlet_found" ]; then
+	_crewlet_own=$(env GIT_CONFIG_PARAMETERS="$_crewlet_rest" $_crewlet_blank \
 		git rev-parse --git-path "hooks/$_crewlet_hook" 2>/dev/null) || _crewlet_own=
 fi
 case $_crewlet_own in "$_crewlet_dir"/*) _crewlet_own= ;; esac

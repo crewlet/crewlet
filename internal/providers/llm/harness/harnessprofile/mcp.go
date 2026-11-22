@@ -799,8 +799,8 @@ type Requests struct {
 	// hands the server its own id for the call under — the id the record's
 	// call paths read — so the engine joins a call to the request that asked
 	// for it by id: `claudecode/toolUseId` for Claude Code, `callId` for
-	// Codex and Muse Code. Empty: the harness sends none, and a call is joined
-	// by its name and arguments.
+	// Codex and Muse Code, `com.github.copilot/toolCallId` for Copilot. Empty:
+	// the harness sends none, and a call is joined by its name and arguments.
 	CallIDMeta string `yaml:"call_id_meta,omitempty"`
 
 	// HostPrefix is how the harness spells one of the server's tools to its
@@ -827,9 +827,9 @@ type Requests struct {
 	// {session} needs none.
 	Owner *RecordOwner `yaml:"owner,omitempty"`
 
-	// LateCalls declares that the record shows a request's calls only once
-	// they have run — OpenCode prints a call as it completes, Gemini CLI
-	// writes a response's calls into its entry after running them — so each
+	// LateCalls declares that the record shows a request before its calls —
+	// OpenCode prints a call as it completes, Gemini CLI 0.70 writes a
+	// response's entry once before its calls and again with them — so each
 	// request is told to the host once the record has moved past it (a rule
 	// closed it, another request began, or the run ended) rather than as it
 	// is read. Its usage is still charged as it is read.

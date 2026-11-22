@@ -212,8 +212,8 @@ func (s *Server) Listed() <-chan struct{} { return s.listed }
 // client has listed again, up to [relistWait], so the request the answer lets
 // the harness make already offers its model the new tools. Answered at once
 // instead, the harness asked its model again before its re-list landed — Gemini
-// harness, Copilot and OpenCode were measured offering an activated tool one
-// request late, a request spent on a model that could not yet call it.
+// harness and OpenCode were measured offering an activated tool one request
+// late, a request spent on a model that could not yet call it.
 func (s *Server) HoldAnswersForRelist() {
 	s.mu.Lock()
 	defer s.mu.Unlock()

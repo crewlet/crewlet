@@ -9,6 +9,7 @@ import (
 	"io"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -168,7 +169,9 @@ func runStartOf(cursor string) string {
 // releasePattern is a release's MAJOR.MINOR.PATCH, wherever a harness's
 // `--version` prints it: first for Claude Code (`2.1.310 (Claude Code)`),
 // after a name for OpenCode (`opencode v2.0.32`).
-var releasePattern = regexp.MustCompile(`[0-9]+\.[0-9]+\.[0-9]+`)
+var releasePattern = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`[0-9]+\.[0-9]+\.[0-9]+`)
+})
 
 // releaseOf is the release a harness's `--version` printed, "2.1.310", or ""
 // where it printed none this code can read.
@@ -180,7 +183,7 @@ var releasePattern = regexp.MustCompile(`[0-9]+\.[0-9]+\.[0-9]+`)
 // executor log's bound it is refused, never cut, since a shortened release
 // names another; read as none, every reader takes it for a current one.
 func releaseOf(printed string) string {
-	if release := releasePattern.FindString(printed); sandbox.ValidRelease(release) {
+	if release := releasePattern().FindString(printed); sandbox.ValidRelease(release) {
 		return release
 	}
 	return ""
@@ -239,8 +242,16 @@ func (r *Runner) archiveAt(ctx context.Context, box sandbox.Sandbox, path string
 // ([scrubTar]) reads what its first read; an agent rewriting it since is the
 // box's doing, which the restorer's checks meet.
 func (r *Runner) OpenCapture(ctx context.Context, box sandbox.Sandbox) (sandbox.SessionArchive, io.ReadCloser, error) {
+	return r.openCapture(ctx, box, "")
+}
+
+// openCapture is [Runner.OpenCapture] of a minting harness's job bound to
+// bound ([sandbox.SessionTake.Session]), which OpenCapture names none of.
+func (r *Runner) openCapture(ctx context.Context, box sandbox.Sandbox, bound string) (sandbox.SessionArchive,
+	io.ReadCloser, error) {
+
 	paths := PathsFor(box)
-	rec, refusal, err := r.readSessionRecord(ctx, box, paths)
+	rec, refusal, err := r.readSessionRecord(ctx, box, paths, bound)
 	if err != nil {
 		return sandbox.SessionArchive{}, nil, fmt.Errorf("executor: reading which session the run packed: %w", err)
 	}

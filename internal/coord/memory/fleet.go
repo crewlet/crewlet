@@ -76,6 +76,10 @@ type Fleet struct {
 	conversationHoldRevision uint64
 	seen                     map[string]seenMark
 	seenRevision             uint64
+	// sessionClaims is each minted session's claim, by session id, and the
+	// counter its revisions are drawn from.
+	sessionClaims        map[string]coord.SessionClaim
+	sessionClaimRevision uint64
 	// boxReadings is each seat's box readings, by seat and cell.
 	boxReadings map[boxReadingKey]coord.BoxReading
 	mailboxes   map[uuid.UUID]coord.MailboxRecord
@@ -161,7 +165,7 @@ type Fleet struct {
 	googleIdentities entryRecords[coord.GoogleIdentity, coord.GoogleIdentity]
 
 	// version is the one counter every versioned write draws from, sandbox
-	// runs, mailbox records, chat read records and Home boards alike. Store-wide rather
+	// runs, mailbox records, chat read records, trim holds and Home boards alike. Store-wide rather
 	// than per record, as a KV revision is, so a record deleted and created
 	// again never hands back a version an older incarnation of it already
 	// used: a caller still holding that version must lose, not win against a
@@ -234,6 +238,7 @@ func NewFleet() *Fleet {
 		homeBoards:        map[string]homeBoard{},
 		atlasWakes:        map[string]coord.AtlasWake{},
 		conversationHolds: map[uuid.UUID]map[string]coord.ConversationHold{},
+		sessionClaims:     map[string]coord.SessionClaim{},
 		seen:              map[string]seenMark{},
 		boxReadings:       map[boxReadingKey]coord.BoxReading{},
 		mailboxes:         map[uuid.UUID]coord.MailboxRecord{},
@@ -455,14 +460,14 @@ func (f *Fleet) Activate(_ context.Context, req coord.ActivationRequest) (coord.
 
 	// HELD TO THE KV's BOUNDS, the body to what one key holds and the
 	// pointer, at its widest, to its own, refused before anything changes.
-	if err = coord.HoldValue("the activation's body", len(payload)); err != nil {
+	if err = coord.HoldValue("the activation's body", len(payload), coord.MaxValueBytes); err != nil {
 		return coord.Activation{}, err
 	}
 	size, err := coord.ActivationBytes(req)
 	if err != nil {
 		return coord.Activation{}, fmt.Errorf("coord/memory: %w", err)
 	}
-	if err = coord.HoldPointer(size); err != nil {
+	if err = coord.HoldValue("the activation pointer", size, coord.MaxPointerBytes); err != nil {
 		return coord.Activation{}, err
 	}
 	// The body, then the pointer, as the KV writes them (see
@@ -1084,7 +1089,7 @@ func (f *Fleet) PutIntegrationStatus(_ context.Context, kind string, value []byt
 	if kind == "" {
 		return errors.New("coord/memory: an integration status needs a surface name")
 	}
-	if err := coord.HoldValue("the integration status of "+kind, len(value)); err != nil {
+	if err := coord.HoldValue("the integration status of "+kind, len(value), coord.MaxValueBytes); err != nil {
 		return err
 	}
 	f.mu.Lock()
@@ -1122,7 +1127,7 @@ func (f *Fleet) PutAtlasSourceStatus(_ context.Context, kind string, value []byt
 	if kind == "" {
 		return errors.New("coord/memory: an atlas source standing needs a source name")
 	}
-	if err := coord.HoldValue("the atlas source standing of "+kind, len(value)); err != nil {
+	if err := coord.HoldValue("the atlas source standing of "+kind, len(value), coord.MaxValueBytes); err != nil {
 		return err
 	}
 	f.mu.Lock()
@@ -1159,7 +1164,7 @@ func (f *Fleet) PutAtlasSourceRefresh(_ context.Context, kind string, value []by
 	if kind == "" {
 		return errors.New("coord/memory: an atlas source refresh ask needs a source name")
 	}
-	if err := coord.HoldValue("the atlas source refresh ask for "+kind, len(value)); err != nil {
+	if err := coord.HoldValue("the atlas source refresh ask for "+kind, len(value), coord.MaxValueBytes); err != nil {
 		return err
 	}
 	f.mu.Lock()

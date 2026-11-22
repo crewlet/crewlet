@@ -2,10 +2,12 @@ package executor_test
 
 import (
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/gitlet/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
@@ -19,7 +21,7 @@ const (
 
 // ONLY A RUN WHOSE REQUEST ASKS FOR ATTRIBUTION HAS ITS GIT POINTED AT THE
 // HOOK: the hook is linked under every hook name in the run's own directory,
-// and the wrapper exports the GIT_CONFIG entry naming it after clearing the
+// and the wrapper exports the GIT_CONFIG_PARAMETERS item naming it after clearing the
 // profile's variables and before the harness starts. A run that asks for none
 // links no hook and exports no entry, so its git is exactly the box's.
 //
@@ -56,7 +58,7 @@ func TestOnlyARunAskingForAttributionHasItsGitPointedAtTheHook(t *testing.T) {
 			if linked != tc.credits {
 				t.Fatalf("the hook was linked: %v, want %v (%q)", linked, tc.credits, b.Commands())
 			}
-			exported := strings.Index(script, "GIT_CONFIG_VALUE_")
+			exported := strings.Index(script, "export GIT_CONFIG_PARAMETERS=")
 			if (exported >= 0) != tc.credits {
 				t.Fatalf("the run's git is pointed at a hooks directory: %v, want %v:\n%s",
 					exported >= 0, tc.credits, script)
@@ -64,7 +66,7 @@ func TestOnlyARunAskingForAttributionHasItsGitPointedAtTheHook(t *testing.T) {
 			if !tc.credits {
 				return
 			}
-			if !strings.Contains(script[exported:], p.GitHooks()) {
+			if !strings.Contains(script[exported:], "core.hooksPath="+p.GitHooks()) {
 				t.Errorf("the entry does not name the run's hooks directory %s:\n%s", p.GitHooks(), script)
 			}
 			launch := strings.Index(script, "claude -p")
@@ -112,7 +114,7 @@ func TestARunWhoseNameIsNotOneLineIsRefusedBeforeItStarts(t *testing.T) {
 // beside the harness's own co-author, and under --no-verify; the repository's
 // hooks still run and refuse, from .git/hooks or its own core.hooksPath; a
 // person's commit cherry-picked or amended is not credited; the run's own
-// GIT_CONFIG entries hold, a profile resetting the count drops nothing; a run
+// GIT_CONFIG entries hold, a profile setting git's parameters drops nothing; a run
 // named by nothing credits the co-author alone, one asking for none nothing.
 //
 // Mutation: compare nothing before crediting and the person's commits are
@@ -201,10 +203,11 @@ git merge -q --no-ff -m "merge side" side`,
 			script: `echo a > a; git add a; git commit -qm "add a"; git who`,
 			want:   []string{"who:seat\n"},
 		},
-		"under a profile that resets the count": {
+		"under a profile that sets git's parameters": {
 			attribution: turn7, credits: 1, names: 1,
-			profile: "export GIT_CONFIG_COUNT=0\n",
-			script:  `echo a > a; git add a; git commit -qm "add a"`,
+			profile: "export GIT_CONFIG_PARAMETERS=\"'core.hooksPath=/nowhere' 'alias.who=log -1 --format=who:%an'\"\n",
+			script:  `echo a > a; git add a; git commit -qm "add a"; git who`,
+			want:    []string{"who:seat\n"},
 		},
 		"named by nothing": {
 			attribution: &sandbox.CommitAttribution{}, credits: 1, names: 0,
@@ -217,8 +220,7 @@ git merge -q --no-ff -m "merge side" side`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			runner, b := realBox(t)
-			p := executor.PathsFor(b)
+			runner, b := creditBoxes[executor.ClaudeCodeName](t)
 			if tc.profile != "" {
 				if err := b.WriteFile(t.Context(), b.Home()+"/.profile", []byte(tc.profile)); err != nil {
 					t.Fatalf("write the profile: %v", err)
@@ -227,51 +229,232 @@ git merge -q --no-ff -m "merge side" side`,
 			if err := b.WriteFile(t.Context(), b.Home()+"/scenario.sh", []byte(scenarioPrelude+tc.script+scenarioEnd)); err != nil {
 				t.Fatalf("write the scenario: %v", err)
 			}
-			// It answers `--version` without running the scenario: every run's
-			// script asks the release first, and a second run finds its commits made.
-			writeBoxStandIn(t, b, p.BinDir()+"/claude",
-				"#!/bin/sh\ncase \"$1\" in --version) echo '2.1.310 (Claude Code)'; exit 0;; esac\n"+
-					"sh \"$HOME/scenario.sh\" > \"$HOME/observed\" 2> \"$HOME/observed.err\"\n")
+			runScenario(t, runner, b, sandbox.RunRequest{Brief: "commit", Env: tc.env, Attribution: tc.attribution},
+				tc.credits, tc.names, tc.want)
+		})
+	}
+}
 
-			handle, err := runner.Start(t.Context(), b, sandbox.RunRequest{Brief: "commit",
-				Env: tc.env, Attribution: tc.attribution})
-			if err != nil {
-				t.Fatalf("Start: %v", err)
-			}
-			deadline := time.Now().Add(60 * time.Second)
-			for {
-				state, err := runner.Poll(t.Context(), b, handle)
-				if err != nil {
-					t.Fatalf("Poll: %v", err)
-				}
-				if state.Over() {
-					break
-				}
-				if time.Now().After(deadline) {
-					t.Fatal("the run never finished")
-				}
-				time.Sleep(20 * time.Millisecond)
-			}
-
-			observed, _ := b.ReadFile(t.Context(), b.Home()+"/observed")
-			errs, _ := b.ReadFile(t.Context(), b.Home()+"/observed.err")
-			report := "\n--- observed\n" + string(observed) + "--- stderr\n" + string(errs)
-			_, message, ok := strings.Cut(string(observed), scenarioMessage)
-			if !ok {
-				t.Fatalf("the scenario never reached its last commit's message:%s", report)
-			}
-			if got := strings.Count(message, credit); got != tc.credits {
-				t.Errorf("the commit credits Crewlet %d times, want %d:%s", got, tc.credits, report)
-			}
-			if got := strings.Count(message, runCredit); got != tc.names {
-				t.Errorf("the commit names the run %d times, want %d:%s", got, tc.names, report)
-			}
-			for _, want := range tc.want {
-				if !strings.Contains(string(observed), want) {
-					t.Errorf("the scenario did not show %q:%s", want, report)
-				}
+// EVERY RUNNER'S COMMITS ARE CREDITED HOWEVER ITS SHELL CALLS GIT: each
+// registered runner's whole run in a real box, its harness a stand-in running
+// git as its model's shell would, under the run's environment and the pinned
+// git. A commit is credited once through plain git, git by its absolute path,
+// `--no-verify`, `-c` settings of its own, and appended GIT_CONFIG_COUNT
+// entries blanking core.hooksPath (Gemini CLI's shell appends exactly these);
+// the repository's own hooks are still handed on and still refuse.
+//
+// Mutations, each red: point git at the hook with a GIT_CONFIG_COUNT entry
+// (the blank-entry cases go uncredited); keep the blank entry in the hook's
+// lookup (the repository's refusal is lost); leave the run's item in the
+// lookup (nothing handed on); drop a runner from creditBoxes (named).
+func TestEveryRunnersCommitsAreCreditedHoweverItsShellCallsGit(t *testing.T) {
+	t.Parallel()
+	git := gittest.Require(t)
+	const blanked = `n=${GIT_CONFIG_COUNT:-0}
+for kv in credential.helper= core.fsmonitor= core.hooksPath= core.sshCommand= core.editor= sequence.editor= core.pager=cat; do
+	export "GIT_CONFIG_KEY_$n=${kv%%=*}" "GIT_CONFIG_VALUE_$n=${kv#*=}"; n=$((n + 1))
+done
+export GIT_CONFIG_COUNT=$n GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_SYSTEM=/dev/null GIT_TERMINAL_PROMPT=0
+`
+	cases := map[string]struct {
+		script string
+		want   []string
+	}{
+		"plain git": {script: `echo a > a; git add a; git commit -qm "add a"`},
+		"git by its absolute path": {
+			script: `echo a > a; "$CREWLET_GIT" add a; "$CREWLET_GIT" commit -qm "add a"`,
+		},
+		"committed with --no-verify": {script: `echo a > a; git add a; git commit -q --no-verify -m "add a"`},
+		"with -c settings of its own": {
+			script: `echo a > a; git add a; git -c commit.verbose=false -c core.quotePath=false commit -qm "add a"`,
+		},
+		"under a harness's blank core.hooksPath": {
+			script: blanked + `echo a > a; git add a; git commit -qm "add a"`,
+		},
+		"the repository's hooks under a harness's blank core.hooksPath": {
+			script: blanked + `printf '#!/bin/sh\ngrep -q OK "$1" || { echo refused by the repository >&2; exit 1; }\n' > .git/hooks/commit-msg
+chmod +x .git/hooks/commit-msg
+echo a > a; git add a
+if git commit -qm "not good enough" 2>/dev/null; then echo committed anyway; else echo refused; fi
+git commit -qm "OK now"`,
+			want: []string{"refused\n"},
+		},
+	}
+	for _, name := range executor.Names() {
+		boxed, ok := creditBoxes[name]
+		if !ok {
+			t.Errorf("runner %s has no box in creditBoxes, so nothing shows its commits credited", name)
+			continue
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			for what, tc := range cases {
+				t.Run(what, func(t *testing.T) {
+					t.Parallel()
+					runner, b := boxed(t)
+					prelude := "export CREWLET_GIT=" + shQuote(git) + "\nPATH=" + shQuote(filepath.Dir(git)) + ":$PATH\n"
+					if err := b.WriteFile(t.Context(), b.Home()+"/scenario.sh",
+						[]byte(prelude+scenarioPrelude+tc.script+scenarioEnd)); err != nil {
+						t.Fatalf("write the scenario: %v", err)
+					}
+					runScenario(t, runner, b, sandbox.RunRequest{Brief: "commit",
+						Attribution: &sandbox.CommitAttribution{Run: "turn-7"}}, 1, 1, tc.want)
+				})
 			}
 		})
+	}
+}
+
+// creditBoxes is, for every registered runner by name, a real box whose
+// harness stand-in runs $HOME/scenario.sh as the harness's model would: from
+// the harness process the run's wrapper started, so under the environment it
+// gave, its output in $HOME/observed and $HOME/observed.err.
+var creditBoxes = map[string]func(t *testing.T) (*executor.Runner, sandbox.Sandbox){
+	// It answers `--version` without running the scenario: every run's script
+	// asks the release first.
+	executor.ClaudeCodeName: func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
+		runner, b := realBox(t)
+		writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/claude",
+			"#!/bin/sh\ncase \"$1\" in --version) echo '2.1.310 (Claude Code)'; exit 0;; esac\n"+
+				"sh \"$HOME/scenario.sh\" > \"$HOME/observed\" 2> \"$HOME/observed.err\"\n")
+		return runner, b
+	},
+	executor.GeminiCLIName: geminiCreditBox,
+	// Its helper's stand-in runs the scenario: Qwen Code and its shell run
+	// under the helper's environment, which the wrapper gave it.
+	executor.QwenCodeName: func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
+		return qwenBox(t, "sh \"$HOME/scenario.sh\" > \"$HOME/observed\" 2> \"$HOME/observed.err\"\n"+
+			"echo '{\"type\":\"crewlet_qwen_end\",\"stop_reason\":\"end_turn\"}'\n")
+	},
+	executor.OpenCodeName: func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
+		runner, b := openCodeBox(t, t.TempDir())
+		standIn := strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`, "d="+shQuote(t.TempDir()), 1)
+		standIn = strings.Replace(standIn, "run)\n  authed\n",
+			"run)\n  sh \"$HOME/scenario.sh\" > \"$HOME/observed\" 2> \"$HOME/observed.err\"\n  authed\n", 1)
+		writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/opencode", standIn)
+		return runner, b
+	},
+	// One `copilot` process is the run; its stand-in answers the release check
+	// every run's script asks first, then runs the scenario.
+	executor.CopilotName: func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
+		return standInBox(t, executor.NewCopilot(), map[string]string{"copilot": "#!/bin/sh\n" +
+			"case \"$1\" in --version) echo 'GitHub Copilot CLI 1.0.114.'; exit 0;; esac\n" + scenarioRun})
+	},
+	// One `muse exec` is the run, and its shell inherits its environment whole;
+	// the script's other calls (the release, `muse mcp` and `muse plugins`
+	// wiring the run) only answer.
+	executor.MuseName: func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
+		return standInBox(t, executor.NewMuse(), map[string]string{"muse": "#!/bin/sh\n" +
+			"case \"$1\" in --version) echo 'Muse Code 1.4.25 (1.4.25-R9361.1)'; exit 0;; exec) ;; *) exit 0;; esac\n" +
+			scenarioRun})
+	},
+	// Kimi Code and its shell run under the driver's environment, which the
+	// wrapper gave it (the driver starts `kimi web` with its own), so the
+	// driver's `node` stand-in runs the scenario.
+	executor.KimiName: func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
+		return standInBox(t, executor.NewKimi(), map[string]string{
+			"kimi": "#!/bin/sh\ncase \"$1\" in --version) echo 2.7.2; exit 0;; esac\nexit 1\n",
+			"node": "#!/bin/sh\n" + scenarioRun,
+		})
+	},
+	// One `pi` process is the run, and its bash tool's commands run under the
+	// environment its extension hands them; the stand-in answers the release
+	// check every run's script asks first, then runs the scenario.
+	executor.PiName: func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
+		return standInBox(t, executor.NewPi(), map[string]string{"pi": "#!/bin/sh\n" +
+			"case \"$1\" in --version) echo 1.6.0; exit 0;; esac\n" + scenarioRun})
+	},
+}
+
+// scenarioRun is a stand-in's line running $HOME/scenario.sh as its harness's
+// model would, its output where [runScenario] reads it.
+const scenarioRun = "sh \"$HOME/scenario.sh\" > \"$HOME/observed\" 2> \"$HOME/observed.err\"\n"
+
+// standInBox is a real box with runner's plumbing installed and each stand-in
+// on the box's own PATH under its name.
+func standInBox(t *testing.T, runner *executor.Runner, standIns map[string]string) (*executor.Runner, sandbox.Sandbox) {
+	t.Helper()
+	local, err := sandbox.NewLocal(sandbox.LocalOptions{Placement: sandbox.Direct, StateDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("NewLocal: %v", err)
+	}
+	b, err := local.Create(t.Context(), sandbox.Spec{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() { b.Close(t.Context()) })
+	if err = runner.Install(t.Context(), b); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	for name, script := range standIns {
+		writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/"+name, script)
+	}
+	return runner, b
+}
+
+// geminiCreditBox is creditBoxes' Gemini CLI box ([geminiBox]): its stand-in
+// runs the scenario.
+func geminiCreditBox(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
+	t.Helper()
+	return geminiBox(t, "sh \"$HOME/scenario.sh\" > \"$HOME/observed\" 2> \"$HOME/observed.err\"\n"+
+		"echo '{\"type\":\"result\",\"status\":\"success\"}'\n")
+}
+
+// geminiBox is a real box with a Gemini CLI runner's plumbing and a stand-in
+// `gemini` that writes a prompt when asked to export one, as the run's script
+// asks first, and otherwise runs run.
+func geminiBox(t *testing.T, run string) (*executor.Runner, sandbox.Sandbox) {
+	t.Helper()
+	local, err := sandbox.NewLocal(sandbox.LocalOptions{Placement: sandbox.Direct, StateDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("NewLocal: %v", err)
+	}
+	b, err := local.Create(t.Context(), sandbox.Spec{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() { b.Close(t.Context()) })
+	runner := executor.NewGeminiCLI()
+	if err = runner.Install(t.Context(), b); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	// NODE ON THE BOX'S OWN PATH, as an image that runs Gemini CLI has it: a
+	// login shell's profile may reset PATH to the system's.
+	writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/node", "#!/bin/sh\nexec "+shQuote(geminiNode(t))+` "$@"`+"\n")
+	writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/gemini",
+		"#!/bin/sh\nif [ -n \"${GEMINI_WRITE_SYSTEM_MD:-}\" ]; then echo prompt > \"$GEMINI_WRITE_SYSTEM_MD\"; exit 42; fi\n"+run)
+	return runner, b
+}
+
+// runScenario runs req in b to its end and holds the scenario's last commit
+// to credits co-author lines and names lines naming the run, and its output
+// to holding every want.
+func runScenario(t *testing.T, runner *executor.Runner, b sandbox.Sandbox, req sandbox.RunRequest,
+	credits, names int, want []string) {
+	t.Helper()
+	handle, err := runner.Start(t.Context(), b, req)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	awaitOver(t, runner, b, handle, time.Minute, "a scenario's few commits take seconds, so the run is stuck")
+	observed, _ := b.ReadFile(t.Context(), b.Home()+"/observed")
+	errs, _ := b.ReadFile(t.Context(), b.Home()+"/observed.err")
+	harness, _ := b.ReadFile(t.Context(), executor.PathsFor(b).Err())
+	report := "\n--- observed\n" + string(observed) + "--- stderr\n" + string(errs) + "--- harness\n" + string(harness)
+	_, message, ok := strings.Cut(string(observed), scenarioMessage)
+	if !ok {
+		t.Fatalf("the scenario never reached its last commit's message:%s", report)
+	}
+	if got := strings.Count(message, credit); got != credits {
+		t.Errorf("the commit credits Crewlet %d times, want %d:%s", got, credits, report)
+	}
+	if got := strings.Count(message, runCredit); got != names {
+		t.Errorf("the commit names the run %d times, want %d:%s", got, names, report)
+	}
+	for _, w := range want {
+		if !strings.Contains(string(observed), w) {
+			t.Errorf("the scenario did not show %q:%s", w, report)
+		}
 	}
 }
 
@@ -286,7 +469,7 @@ export GIT_CONFIG_NOSYSTEM=1
 cd "$HOME"; git init -q repo; cd repo
 git config user.name seat; git config user.email seat@example.com; git config commit.gpgsign false
 person() {
-	env GIT_CONFIG_COUNT=0 GIT_AUTHOR_NAME=person GIT_AUTHOR_EMAIL=person@example.com \
+	env GIT_CONFIG_COUNT=0 GIT_CONFIG_PARAMETERS= GIT_AUTHOR_NAME=person GIT_AUTHOR_EMAIL=person@example.com \
 		GIT_COMMITTER_NAME=person GIT_COMMITTER_EMAIL=person@example.com "$@"
 }
 `

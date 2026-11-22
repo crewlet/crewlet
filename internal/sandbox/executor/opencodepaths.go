@@ -45,6 +45,12 @@ func (p Paths) OpenCodeValuesFresh() string { return p.WorkDir() + "/opencode-va
 // the plugin itself writes nothing at all.
 func (p Paths) OpenCodeSteerPlugin() string { return p.WorkDir() + "/opencode-steer" }
 
+// OpenCodeToolEnvPlugin is the DIRECTORY of the plugin that keeps the variables
+// the harness alone reads out of the commands an OpenCode run's model runs
+// (opencode_toolenv.js), written and named as the notes plugin is
+// ([Paths.OpenCodeSteerPlugin]), and for the same reasons a directory of its own.
+func (p Paths) OpenCodeToolEnvPlugin() string { return p.WorkDir() + "/opencode-tool-env" }
+
 // OpenCodeSkills is the DIRECTORY an OpenCode run's own skills are written into
 // ([sandbox.RunRequest.Skills], [OpenCode.WriteConfig]), a directory per skill,
 // and named in the run's configuration's `skills`. Its own, under WorkDir, for

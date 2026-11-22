@@ -27,3 +27,20 @@ func TestAnOpenCodeInboxIDIsStableAndTheJobsOwn(t *testing.T) {
 		}
 	}
 }
+
+// THE IDS ARE THEIR DERIVATION, PINNED: a note's inbox id and its second id
+// for one job, as the plugin admits them and a 2.3.0 session's messages carry
+// them, so a change to either derivation, which orphans every admission a
+// running plugin made, cannot pass unseen.
+//
+// Mutation: change the hash's input or its cut, or derive the second id
+// without its suffix, and this goes red.
+func TestAnOpenCodeNotesIDsAreTheirDerivation(t *testing.T) {
+	t.Parallel()
+	if got := executor.InboxID(executor.OpenCodeName, "job-1", "note-1"); got != "msg_851130aa607ac525a700344a00ecb940" {
+		t.Errorf("note-1's inbox id for job-1 is %q", got)
+	}
+	if got := executor.AgainID(executor.OpenCodeName, "job-1", "note-1"); got != "msg_f2364a7946a1a890cdecc9a36e911001" {
+		t.Errorf("note-1's second id for job-1 is %q", got)
+	}
+}

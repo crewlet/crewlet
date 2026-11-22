@@ -677,6 +677,11 @@ type FakeRunner struct {
 	// is unset: the window the harness this fake stands in for pins a run to.
 	Pin func(model string) int
 
+	// Fresh is what [FakeRunner.StartsFresh] answers: the harness this fake
+	// stands in for continues no earlier session. Set it before the first
+	// launch.
+	Fresh bool
+
 	// TakesNotes is what [FakeRunner.ReadsNotes] answers: whether the
 	// harness this fake stands in for takes a person's notes between its own
 	// steps. Set it before the first collection.
@@ -686,6 +691,11 @@ type FakeRunner struct {
 	// switch the reading of notes of the harness this fake stands in for off,
 	// "" where it says nothing. Set it before the first collection.
 	NotesOff string
+
+	// Reports, where set, makes the fake a minting runner (minted.go): what
+	// [FakeRunner.ReportedSession] answers of a job's box. Set it before the
+	// launch whose job should mint.
+	Reports func(ctx context.Context, box Sandbox, handle RunHandle) (string, error)
 
 	// CallIDKey is what [FakeRunner.CallIDMeta] answers: the `_meta` key the
 	// harness this fake stands in for sends each call's id under, "" for
@@ -937,6 +947,18 @@ func (r *FakeRunner) Name() string { return r.name }
 // ReadsNotes answers [FakeRunner.TakesNotes]: the optional answer a runner
 // whose harness takes a person's notes between its steps gives the coordinator.
 func (r *FakeRunner) ReadsNotes() bool { return r.TakesNotes }
+
+// MintsSession answers whether [FakeRunner.Reports] is set: the fake stands in
+// for a harness that mints its session's id as it runs.
+func (r *FakeRunner) MintsSession() bool { return r.Reports != nil }
+
+// ReportedSession answers [FakeRunner.Reports], "" where it is unset.
+func (r *FakeRunner) ReportedSession(ctx context.Context, box Sandbox, handle RunHandle) (string, error) {
+	if r.Reports == nil {
+		return "", nil
+	}
+	return r.Reports(ctx, box, handle)
+}
 
 // NotesOffWhy answers [FakeRunner.NotesOff]: the optional answer a runner gives
 // the warning a run that never asked for its notes gets ([notesOffExplainer]).
@@ -1305,6 +1327,18 @@ func (r *FakeRunner) TakeSession(ctx context.Context, box Sandbox, take SessionT
 	if session.TakeErr != nil {
 		return TakenSession{}, session.TakeErr
 	}
+	// ITS SCRUB SPOOLS NOTHING, so its spool holds nothing.
+	if take.Spool.Held != nil {
+		take.Spool.Held(0)
+	}
+	// A MINTING FAKE'S SESSION IS THE ONE BOUND TO ITS JOB, as a real runner
+	// names it ([SessionTake.Session]); one with none bound takes nothing.
+	if r.MintsSession() {
+		if take.Session == "" {
+			return TakenSession{}, fmt.Errorf("fake: %w: no session is bound to the job", ErrSessionBindRefused)
+		}
+		archive.SessionID = take.Session
+	}
 	if session.Taking != nil {
 		session.Taking(ctx)
 	}
@@ -1425,7 +1459,7 @@ func (r *FakeRunner) StreamedReads() int {
 // no sessions, or holds none), and an error for a taker that names nobody or
 // a box that is paused or reclaimed. [FakeRunner.Packing] runs first, and
 // [FakeRunner.PackSaveErr] fails it.
-func (r *FakeRunner) PackSave(ctx context.Context, box Sandbox, taker string) (SessionArchive, error) {
+func (r *FakeRunner) PackSave(ctx context.Context, box Sandbox, taker, session string) (SessionArchive, error) {
 	r.mu.Lock()
 	saves, packing, failed := r.SavesSessions, r.Packing, r.PackSaveErr
 	r.mu.Unlock()
@@ -1434,6 +1468,8 @@ func (r *FakeRunner) PackSave(ctx context.Context, box Sandbox, taker string) (S
 		return SessionArchive{}, nil
 	case taker == "":
 		return SessionArchive{}, errors.New("fake: a save names no taker")
+	case r.MintsSession() && session == "":
+		return SessionArchive{}, fmt.Errorf("fake: %w: no session is bound to the job", ErrSessionBindRefused)
 	}
 	if fake, ok := box.(*FakeSandbox); ok && fake.unreadable() {
 		return SessionArchive{}, fmt.Errorf("fake: box %s is paused or reclaimed, and its session cannot be "+
@@ -1456,6 +1492,9 @@ func (r *FakeRunner) PackSave(ctx context.Context, box Sandbox, taker string) (S
 	r.packs++
 	archive := r.Session.Archive
 	archive.Path = path.Join(box.Home(), "session-save."+taker+"."+strconv.Itoa(r.packs))
+	if r.MintsSession() {
+		archive.SessionID = session
+	}
 	r.saves[archive.Path] = fakeSave{box: box.ID(), archive: archive, body: bytes.Clone(r.Session.Body)}
 	r.packedIn[archive.Path] = box.ID()
 	return archive, nil
@@ -1656,6 +1695,13 @@ func (r *FakeRunner) ThreadTraits() ThreadTraits {
 }
 
 var _ windowPinner = (*FakeRunner)(nil)
+
+// StartsFresh is [FakeRunner.Fresh] ([freshStarter]).
+func (r *FakeRunner) StartsFresh() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.Fresh
+}
 
 // PinnedWindow answers [FakeRunner.Pin] of model, 0 where it is unset.
 func (r *FakeRunner) PinnedWindow(model string) int {

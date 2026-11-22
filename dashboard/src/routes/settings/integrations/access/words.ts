@@ -395,6 +395,29 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     tool: "ssh_read, ssh_operate and ask_to_operate, built in",
     issued: "15 minutes",
   },
+  meta_ads: {
+    name: "Meta Ads Manager",
+    access: "Level on its ad accounts",
+    turnOn:
+      "Turning it on lets the agent use the chosen ad accounts at the chosen level through Crewlet's own tools. Nothing is created at Meta, and the agent holds no token.",
+    off: "The agent's next Meta Ads call is refused.",
+    remove: "There is nothing to remove: the agent never held a token.",
+    rotate:
+      "The agent holds no token, so there is nothing to rotate. Replace a system user's token on the integration's page.",
+    scope: {
+      noun: "Ad accounts",
+      singular: "ad account",
+      empty: "No ad account",
+      none: "No ad accounts are reachable yet",
+      noneLink: {
+        label: "Connect your Meta app",
+        doc: "meta-ads",
+        anchor: "connect-your-meta-app",
+      },
+    },
+    tool: "meta_ads tools, built in",
+    issued: "never: Crewlet makes every call",
+  },
   app_store_connect: {
     name: "App Store Connect",
     access: "Level on its apps",
@@ -413,6 +436,167 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     },
     tool: "app_store_connect tools, built in",
     issued: "never: Crewlet makes every call",
+  },
+  apple_ads: {
+    name: "Apple Ads",
+    access: "Level on its ad accounts",
+    turnOn:
+      "Turning it on lets the agent use the chosen ad accounts at the chosen level through Crewlet's own tools. Nothing is created at Apple, and the agent holds no key.",
+    off: "The agent's next Apple Ads call is refused.",
+    remove: "There is nothing to remove: the agent never held a key.",
+    rotate:
+      "The agent holds no key, so there is nothing to rotate. Replace an API user's key on the integration's page.",
+    scope: {
+      noun: "Ad accounts",
+      singular: "ad account",
+      empty: "No ad account",
+      none: "No ad accounts are reachable yet",
+      noneLink: { label: "Connect an API user", doc: "apple-ads", anchor: "connect-an-api-user" },
+    },
+    tool: "apple_ads tools, built in",
+    issued: "never: Crewlet makes every call",
+  },
+  google_analytics: {
+    name: "Google Analytics",
+    access: "Level on its properties",
+    turnOn:
+      "Turning it on gives the agent its own Google identity, if it has none, and lets it reach the chosen properties at the chosen level. Add the identity's email to each property in Google Analytics at the role its level needs.",
+    off: "Crewlet stops minting the agent's tokens at once, and turns its Google identity off once no other Google growth product is on for it. Its roles in Google Analytics stay, so turning it back on restores them.",
+    remove:
+      "There is nothing to remove here: the agent's Google identity is kept off with its roles.",
+    rotate:
+      "Crewlet mints the agent's tokens for an hour at a time, so there is nothing to rotate.",
+    scope: {
+      noun: "Properties",
+      singular: "property",
+      empty: "No property",
+      none: "No properties are listed yet",
+      noneLink: {
+        label: "Connecting Crewlet",
+        doc: "google-analytics",
+        anchor: "connecting-crewlet",
+      },
+    },
+    tool: "google_analytics tools, built in",
+    issued: "an hour",
+  },
+  admob: {
+    name: "AdMob",
+    access: "Level on its publisher accounts",
+    turnOn:
+      "Turning it on lets the agent reach the chosen publisher accounts at the chosen level, through the company's Google sign-in. Nothing is made at Google.",
+    off: "Crewlet refuses the agent's AdMob calls at once. The company's sign-in stays for the other agents.",
+    remove: "There is nothing to remove here: the agent holds no account or token at Google.",
+    rotate:
+      "The agent holds no credential: Crewlet renews the company's sign-in, so there is nothing to rotate.",
+    scope: {
+      noun: "Accounts",
+      singular: "account",
+      empty: "No account",
+      none: "No publisher accounts are listed yet",
+      noneLink: {
+        label: "Connecting Crewlet",
+        doc: "admob",
+        anchor: "connecting-crewlet",
+      },
+    },
+    tool: "admob tools, built in",
+    issued: "never: Crewlet makes every call",
+  },
+  adsense: {
+    name: "AdSense",
+    access: "Level on its publisher accounts",
+    turnOn:
+      "Turning it on lets the agent reach the chosen publisher accounts at the chosen level, through the company's Google sign-in. Nothing is made at Google.",
+    off: "Crewlet refuses the agent's AdSense calls at once. The company's sign-in stays for the other agents.",
+    remove: "There is nothing to remove here: the agent holds no account or token at Google.",
+    rotate:
+      "The agent holds no credential: Crewlet renews the company's sign-in, so there is nothing to rotate.",
+    scope: {
+      noun: "Accounts",
+      singular: "account",
+      empty: "No account",
+      none: "No publisher accounts are listed yet",
+      noneLink: {
+        label: "Connecting Crewlet",
+        doc: "adsense",
+        anchor: "connecting-crewlet",
+      },
+    },
+    tool: "adsense tools, built in",
+    issued: "never: Crewlet makes every call",
+  },
+  google_ads: {
+    name: "Google Ads",
+    access: "Level on its accounts",
+    turnOn:
+      "Turning it on gives the agent its own Google identity, if it has none, and lets it reach the chosen accounts at the chosen level. Add the identity's email to each account in Google Ads at the access level its level needs.",
+    off: "Crewlet stops minting the agent's tokens at once, and turns its Google identity off once no other Google growth product is on for it. Its access in Google Ads stays, so turning it back on restores it.",
+    remove:
+      "There is nothing to remove here: the agent's Google identity is kept off with its access.",
+    rotate:
+      "Crewlet mints the agent's tokens for an hour at a time, so there is nothing to rotate.",
+    scope: {
+      noun: "Accounts",
+      singular: "account",
+      empty: "No account",
+      none: "No accounts are listed yet",
+      noneLink: {
+        label: "Connecting Crewlet",
+        doc: "google-ads",
+        anchor: "connecting-crewlet",
+      },
+    },
+    tool: "google_ads tools, built in",
+    issued: "an hour",
+  },
+  search_console: {
+    name: "Search Console",
+    access: "Level on its sites",
+    turnOn:
+      "Turning it on gives the agent its own Google identity, if it has none, and lets it reach the chosen sites at the chosen level. Add the identity's email to each property in Search Console at the permission its level needs.",
+    off: "Crewlet stops minting the agent's tokens at once, and turns its Google identity off once no other Google growth product is on for it. Its permissions in Search Console stay, so turning it back on restores them.",
+    remove:
+      "There is nothing to remove here: the agent's Google identity is kept off with its permissions.",
+    rotate:
+      "Crewlet mints the agent's tokens for an hour at a time, so there is nothing to rotate.",
+    scope: {
+      noun: "Sites",
+      singular: "site",
+      empty: "No site",
+      none: "No sites are listed yet",
+      noneLink: {
+        label: "Connecting Crewlet",
+        doc: "google-search-console",
+        anchor: "connecting-crewlet",
+      },
+    },
+    tool: "search_console tools, built in",
+    issued: "an hour",
+  },
+  google_play: {
+    name: "Google Play",
+    access: "Level on its apps",
+    turnOn:
+      "Turning it on gives the agent its own Google identity, if it has none, and lets it reach the chosen apps at the chosen level. Invite the identity's email in Play Console with the app permissions its level needs.",
+    off: "Crewlet stops minting the agent's tokens at once, and turns its Google identity off once no other Google growth product is on for it. Its permissions in Play Console stay, so turning it back on restores it.",
+    remove:
+      "There is nothing to remove here: the agent's Google identity is kept off with its permissions.",
+    rotate:
+      "Crewlet mints the agent's tokens for an hour at a time, so there is nothing to rotate.",
+    scope: {
+      noun: "Apps",
+      singular: "app",
+      empty: "No app",
+      none: "No apps are listed yet",
+      noneLink: {
+        label: "Connecting Crewlet",
+        doc: "google-play",
+        anchor: "connecting-crewlet",
+      },
+    },
+    tool: "google_play tools, built in",
+    issued: "an hour",
   },
 };
 

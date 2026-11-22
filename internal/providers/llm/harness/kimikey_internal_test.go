@@ -4,6 +4,8 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
 // A KIMI CODE KEY GOES BESIDE ITS MODEL: under api-key the harness is signed in
@@ -48,5 +50,26 @@ func TestAKimiCodeKeyGoesBesideItsModel(t *testing.T) {
 		if slices.Contains([]string{"KIMI_MODEL_NAME=other", "KIMI_MODEL_API_KEY=sk-planted"}, kv) {
 			t.Errorf("subscription: the call's environment carries %s", kv)
 		}
+	}
+}
+
+// A KIMI CODE LOGIN IS WHERE 2.7.2 KEEPS IT: `kimi login` files its token under
+// its storage key's last part, credentials/kimi-code.json, and a run reads it
+// there and writes a refreshed token back over it (measured on 2.7.2: a token
+// at credentials/oauth/kimi-code.json is "no credential configured"). The
+// login is carried both ways at that path, beside config.toml.
+//
+// Mutation: name credentials/oauth/kimi-code.json, or drop either file from
+// either list — the case fails.
+func TestAKimiCodeLoginIsCarriedWhereTheHarnessKeepsIt(t *testing.T) {
+	t.Parallel()
+	p, ok := harnessprofile.Builtin("kimi-code")
+	if !ok {
+		t.Fatal("no built-in kimi-code profile")
+	}
+	want := []string{".kimi-code/credentials/kimi-code.json", ".kimi-code/config.toml"}
+	if !slices.Equal(p.CredentialPaths, want) || !slices.Equal(p.HostCredentialPaths, want) {
+		t.Errorf("credential_paths = %q, host_credential_paths = %q, want %q", p.CredentialPaths,
+			p.HostCredentialPaths, want)
 	}
 }

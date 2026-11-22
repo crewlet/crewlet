@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/period"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -1212,6 +1213,9 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 		return vendor.declaredAt(c) != ""
 	}
 	in := c.Integrations
+	if slices.Contains(growthBlockKeys(), surface) {
+		return in.growthBlock(surface) != nil
+	}
 	switch surface {
 	case "jira":
 		return in.Jira != nil
@@ -1237,8 +1241,6 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 		return in.GoogleCloud != nil
 	case "ssh":
 		return in.SSH != nil
-	case "app_store_connect":
-		return in.AppStoreConnect != nil
 	case "atlassian":
 		return in.Atlassian != nil
 	default:
@@ -1772,6 +1774,17 @@ func (c *Company) validateSandboxPlacement() error {
 				"%q needs the %s backend configured under providers.sandbox "+
 					"(this catalogue has %s)",
 				run, run.backend(), words.And(catalogue.available()))
+		case run == PlacementE2B && catalogue.E2B != nil && catalogue.E2B.Template == "":
+			// E2B BOXES THE HARNESS ITS PREBUILT TEMPLATE HOLDS, and a harness
+			// E2B prebuilds none of would start in its bare image and fail
+			// every launch at its first command.
+			if runner, _ := harnessprofile.ExecutorOf(entry.HarnessName()); runner.E2BTemplate == "" {
+				p.add(where, ErrConflict,
+					"an e2b box runs %s only from a template that holds it, and E2B prebuilds "+
+						"none and providers.sandbox.e2b names none: build one holding %s and name "+
+						"it as providers.sandbox.e2b.template, or place this entry elsewhere",
+					entry.HarnessName(), entry.HarnessName())
+			}
 		}
 	}
 

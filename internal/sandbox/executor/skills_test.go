@@ -93,7 +93,7 @@ func TestARunsSkillRouteIsDialledAsTheBoxSeesTheEngine(t *testing.T) {
 	if want == skillWiring().URL {
 		t.Fatal("the fixture's box dials the engine as the engine host does; the case proves nothing")
 	}
-	if len(cfg.Plugins) != 1 || openCodeValue(t, b, cfg.Plugins[0].Options.URL) != want {
+	if plugins := runPlugins(cfg.Plugins); len(plugins) != 1 || openCodeValue(t, b, plugins[0].Options.URL) != want {
 		t.Errorf("plugins = %+v, want the skill route as the box dials it (%s)", cfg.Plugins, want)
 	}
 }

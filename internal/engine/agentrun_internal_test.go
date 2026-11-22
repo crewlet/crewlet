@@ -57,6 +57,8 @@ type chainMember struct {
 	spent bool
 	// env is the entry's env, as resolved.
 	env map[string]string
+	// webDenied is the entry's `overrides: {web_tools: denied}`.
+	webDenied bool
 }
 
 // harnessProvider is a REAL harness provider for m: the question every case here
@@ -89,6 +91,9 @@ func harnessProvider(t *testing.T, m chainMember) *harness.Provider {
 			"limit_reports": nil, "auth_events": nil,
 			"mcp": map[string]any{"failure_events": []any{}},
 		}
+	}
+	if m.webDenied {
+		overrides["web_tools"] = "denied"
 	}
 	provider, err := harness.New(harness.Config{
 		Key: m.key, Harness: m.agent, Model: m.model, StateDir: t.TempDir(),
@@ -345,6 +350,38 @@ func TestALaunchPlacesTheRunInItsMembersCell(t *testing.T) {
 	}
 }
 
+// AN ENTRY'S WEB DENIAL REACHES ITS EXECUTOR: a run launched on an entry with
+// `web_tools: denied` is handed to its runner as one whose harness gets no web
+// tool of its own, as the entry's runs on the engine host get none, and a run
+// on an entry that keeps the web is not.
+//
+// Mutation: leave webDenied unset in newExecutorRun, or off the launch request,
+// and the denied entry's run goes out with its web tools.
+func TestAnEntrysWebDenialReachesItsExecutor(t *testing.T) {
+	t.Parallel()
+	for _, agent := range []string{"claude-code", "opencode"} {
+		for _, denied := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s denied %v", agent, denied), func(t *testing.T) {
+				t.Parallel()
+				c, seat := chainCompany(t, chainMember{key: "api", agent: agent,
+					model: "anthropic/claude-golden", webDenied: denied})
+				e, runners := launchRigRunners(t, c, bridgeFor(t, mcpbridge.Options{
+					Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+				}))
+				l := launcherOn(e, c, seat, "t1")
+				if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err != nil {
+					t.Fatalf("LaunchExecutor: %v", err)
+				}
+				started := runners[agent].Started()
+				if len(started) != 1 || started[0].WebDenied != denied {
+					t.Fatalf("started %d runs, the first web denied %v; want one, web denied %v",
+						len(started), len(started) > 0 && started[0].WebDenied, denied)
+				}
+			})
+		}
+	}
+}
+
 // FALLBACK AT LAUNCH. A head whose plan is spent on this node is passed over
 // for the next member that can take the run, and the run is that member's
 // whole: its model, its harness and the entry the job is recorded under — which is
@@ -491,20 +528,22 @@ func TestALaunchWithEveryRunnerSittingOutIsAnExhaustedChain(t *testing.T) {
 // take it: config refuses this chain on every write, so reaching it is a
 // company built by hand, and the operator's to fix rather than a retry's. The
 // chain is said as a list and the harnesses as the set an entry picks from, each
-// quoted, never as Go prints a slice or a list joined by hand.
+// quoted, never as Go prints a slice or a list joined by hand. Its members are on
+// harnesses no build runs in a box, and the harnesses are every runner this build
+// registers, as the refusal names them.
 //
 // Mutation: print the chain with brackets or the harnesses joined by commas and
 // this goes red.
 func TestAChainWithNoRunnerMemberIsRefusedNamingIt(t *testing.T) {
 	t.Parallel()
 	c, seat := chainCompany(t, chainMember{key: "codex", agent: "codex", model: "gpt-golden"},
-		chainMember{key: "gemini", agent: "gemini-cli", model: "gemini-golden"})
+		chainMember{key: "cursor", agent: "cursor-agent", model: "cursor-golden"})
 	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	}))
 	l := launcherOn(e, c, seat, "t1")
 	_, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
-	if err == nil || !strings.Contains(err.Error(), `("codex" and "gemini")`) ||
+	if err == nil || !strings.Contains(err.Error(), `("codex" and "cursor")`) ||
 		!strings.Contains(err.Error(), words.Or(executor.Names())) {
 		t.Fatalf("LaunchExecutor = %v, want a refusal naming the chain and the runners", err)
 	}

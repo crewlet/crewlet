@@ -258,7 +258,7 @@ func piSessionGate(session Session, paths Paths, rewired bool) string {
 	line(`  elif ! pirestore; then w='its archive could not be restored'`)
 	// Continued only once its digest is recorded and read back, for
 	// [claudeSessionGate]'s reason.
-	line(`  elif ! { %s; }; then w=%s`, recordDigest(paths, "s", "d"), q(restoreDigestUnrecorded))
+	line(`  elif ! { %s; }; then w=%s`, recordDigest(paths, "s"), q(restoreDigestUnrecorded))
 	line(`  fi`)
 	line(`  rm -rf %s`, q(staged))
 	line(`fi`)
@@ -411,7 +411,8 @@ const piHomeMCP = `{"mcpServers":{}}`
 // ([Paths.PiExtension]), returned as the file `-e` names, with a fresh
 // session's copy beside it ([sandbox.RunRequest.FreshWiring]). What an earlier
 // run wrote the clear removes first ([Pi.artifacts]).
-func (p Pi) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error) {
+func (p Pi) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
+	paths Paths) (string, error) {
 	if err := box.WriteFile(ctx, paths.PiAgentDir()+"/mcp.json", []byte(piHomeMCP)); err != nil {
 		return "", fmt.Errorf("executor: writing Pi's own MCP servers: %w", err)
 	}

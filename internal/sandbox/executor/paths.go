@@ -383,12 +383,12 @@
 // BenchmarkTheMainThreadReadAtItsBound, twice that loaded), holds it until its
 // own MainThreadReadWait cuts it. One such line to the bound, 18.6 to 18.8 s
 // (20.8 to 21.7 s estimating), one record of few facts, holds none. That
-// waiter, a later one, or one behind a take's piece (which holds the slot its
-// whole scrub, 261 s at the bound) ends with [errLargeWait] and reads as no
-// reading (count unread), the safe side, as a read past MainThreadReadWait
-// is, the wait spent inside it. The longest piece the archive's bound admits,
-// a 46 MiB OpenCode image (a 64.3 MB data URI), held it 8.7 s (4.8 from the
-// memo) and 19 MiB in a real take.
+// waiter, a later one, or one behind a take's piece (which holds the slot as
+// its first reading redacts it, 183 s at the bound) ends with [errLargeWait]
+// and reads as no reading (count unread), the safe side, as a read past
+// MainThreadReadWait is, the wait spent inside it. The longest piece the
+// archive's bound admits, a 46 MiB OpenCode image (a 64.3 MB data URI), held
+// it 8.7 s (4.8 from the memo) and 19 MiB in a real take.
 //
 // # The memory a node keeps for these pools
 //
@@ -605,15 +605,15 @@
 // # A run's harness session, carried between boxes
 //
 // Every run names the harness session it works in before the harness starts
-// ([Harness.Session]), records which it took up ([Paths.SessionRecord]), and
-// packs it once the harness exits ([Paths.SessionCapture],
-// [Runner.OpenCapture]); a run handed a session packed in another box restores
-// it before its harness takes it up, never over a box whose own copy already
-// holds that archive ([Paths.SessionDigests]), and starts a session of its
-// own, saying why, where it can do neither. Whether a box can continue a
-// carried session at all is its harness's release, asked of the box
-// ([Runner.CheckCarry]). What each harness's archive holds, and never holds,
-// is the harness's own: see carry.go, [ClaudeCode] and [OpenCode].
+// ([Harness.Session]; a harness minting its id reports it, [sessionMinter]),
+// records which it took up ([Paths.SessionRecord]), and packs it once the
+// harness exits ([Paths.SessionCapture], [Runner.OpenCapture]); a run handed a
+// session packed in another box restores it before its harness takes it up,
+// never over a box whose copy holds that archive ([Paths.SessionDigests]), and
+// starts its own, saying why, where it can do neither. Whether a
+// box can continue a carried session is its harness's release, asked of the
+// box ([Runner.CheckCarry]). What each archive holds is its harness's: see
+// carry.go, [ClaudeCode] and [OpenCode].
 //
 // A SESSION ITS HARNESS IS STILL WORKING IN is packed by the engine, beside
 // it, by the pack the run's own end makes held to a stricter rule — every file
@@ -623,8 +623,8 @@
 // that packs it alone ([Runner.PackCapture], [Paths.SessionPackHeld]), and a
 // SAVE, packed to a place of that save's own, named after its taker
 // ([Runner.PackSave], [Paths.SessionSave]), for the take that names it alone —
-// neither ever where the job's final archive is read. Both runners make a
-// save ([saver], [Runner.Saves]), OpenCode's by its own export (below);
+// neither ever where the job's final archive is read. Every runner saves
+// ([saver], [Runner.Saves]), OpenCode by its own export (below);
 // whether a job moved since its last save is how far its harness's event
 // stream ran ([Runner.Streamed]); and a save no take will read is removed
 // from its box ([Runner.ReleaseSave]). And a job that is over and left no archive is
@@ -775,64 +775,63 @@
 // decided once that many bytes past it are read, or the text has ended, and a
 // value taken out lies within them.
 //
-// TWO READINGS. What a line, or a `.json` file, is, JSON or text, is known only
-// at its end, and what a transcript's line loses of its loaded tool
-// definitions only once its last key is read; and a tar names each file's size
-// before its bytes. So a tar is read TWICE: the first reading reads each line
-// and each `.json` file as JSON alone, counting what it would write, and keeps
-// a PLAN; the second writes what the first counted. The first that is no JSON
-// ends it; the next goes on from it, reading it and every later one both ways
-// ([tarPlan.unitAhead]). Every rewrite here is a pure function of what it
-// reads, so the second reading writes what the first counted, and a member
-// that comes out another length changed between the two, which fails the
-// take. Both ways run on the scrub's own goroutine, where the take contains a
-// panic ([measureFile]).
+// TWO READINGS, THE SECOND A COPY. What a line, or a `.json` file, is, JSON or
+// text, is known only at its end, and what a transcript's line loses of its
+// loaded tool definitions only once its last key is read; and a tar names each
+// file's size before its bytes. So the first reading rewrites the archive into
+// the take's SPOOL ([unitSpool]: gzip at the kept archive's level, in its
+// process's spool directory), counting each file's size as kept, and the
+// second writes the tar from it, never the box ([spoolCopy]): a header names
+// the size of what follows it, whatever the box's archive does meanwhile.
+// Members before a reading's resume point are kept as the first reading read
+// them; the member it resumes in is checked by name, kind and length
+// ([tarPlan.memberAt]). The first reads each line and `.json` file as JSON
+// alone; the first that is no JSON ends it, and the next goes on from it,
+// reading it as text and every later one both ways ([tarPlan.unitAhead]), each
+// way held to [wayRoomBytes] until the unit's is known ([candidate]): a JSON
+// way past it goes into a gzip member of its own, cut back out of the spool
+// where the text is kept, and a unit whose text was let go before its JSON
+// failed is read once more, as text, all within the first reading. Both ways
+// run on the scrub's own goroutine, where the take contains a panic
+// ([measureFile]). The spool is removed on every way out, before the take's
+// body ends, and held to the room the take holds for it (internal/sandbox's
+// takeRoomBytes): a spool that would pass it refuses the take.
 //
-// THE PLAN ([tarPlan]) is four streams of bits, each written by the first
+// THE PLAN ([tarPlan]) is two streams of bits, each written by the first
 // reading in the order it decides them and read back by the second in that
-// order, whatever the tar holds: for each member its kind, and for a regular
-// file its size as rewritten, whether it is kept as text, and how many line
-// bits its transcript took; for each line of two bytes or more, whether it is
-// kept as text (a shorter line no pass changes); for each line that loses a
-// definition, how far it lies from the cut before it, which list it loses them
-// from, how many elements that list holds and a bit each, set for one cut; and
-// each text the redaction left unchanged (below). So it is AT MOST A SIXTEENTH
-// OF THE PLAINTEXT, and the texts' digests a 2,048th: a member's header is 512
-// bytes against a few dozen bits, a line with a bit two bytes or more, a
-// list's element, a byte and its comma, one bit, and its cut a few dozen more,
-// which the record it is cut out of pays for. A record of its own for each
-// member, line or cut would let a box's archive of a mebibyte hold the engine
-// host to gibibytes between the two readings.
+// order: for each member its kind, and for a regular file its size as kept;
+// and each line that loses a definition: where the spool holds it, which list,
+// how many elements it holds, the bytes the cut takes and a bit each, set for
+// one cut. So it is AT MOST A SIXTEENTH OF THE PLAINTEXT: a member's header is
+// 512 bytes against a few dozen bits, a list's element, a byte and its comma,
+// one bit, and its cut a few dozen more, which the record it is cut out of
+// pays for. A record of its own for each member, line or cut would let a box's
+// archive of a mebibyte hold the engine host to gibibytes between the two
+// readings.
 //
-// AN EXPORT IS READ TWICE TOO, THE FIRST READING DRY ([scrubDocument]): a
-// reading refuses a document only once it has read it, and read once, what it
-// rewrote before a refusal, a published key among it where the redaction
-// refused, would reach the take's pipe, uploader, checksum and meter. A second
-// reading that comes out another length, or that the scanner refuses, is an
-// export that changed between the two.
+// AN EXPORT IS SPOOLED TOO ([scrubDocument]): a reading refuses a document
+// only once it has read it, and what it rewrote before a refusal would else
+// reach the take's pipe, uploader, checksum and meter.
 //
 // A TEXT A TAKE FOUND UNCHANGED IS NOT REDACTED AGAIN. The redaction is the
 // scrub's cost, and every turn's take scrubs the whole session: a whole-PDF
-// read, its base64 twice, cost 4.3 s a take. So the first
-// reading plans each text of [scrubPieceBaseBytes] or more (a line read as
-// text, a name or string, a file) it finds the redaction leaves unchanged, by
-// its place and the SHA-256 digest of each chunk of that length
-// ([firstPieces]); the second writes such a text a chunk at a time, each once
-// it matches its digest, and redacts every other ([secondPieces]). And the
-// process remembers what its own full scrubs found unchanged ([scrubMemo]): a
-// text's length and the digest of its digests, under its first chunk's digest
-// and the take's agent, never the text. A first reading writes a text whose
-// first chunk the memo knows as it is, and checks the whole at its end; one
-// the memo does not know whole reads the archive again without that chunk's
-// answer ([firstReadings]). Every digest is of the by-value pass's output under
-// the take's own values. SOUND because the redaction's answer for a text is
-// the text's alone (redact.Stream; its rules are the build's): each text has a
-// redaction of its own, a key's credential is judged on its raw name, and a
-// credential's value never reaches it. In memory alone: a restart, a deploy or
-// a seat's move to another node costs one take at most what it costs without.
-// On two cores of the build machine, two runs each
-// (BenchmarkASecondTakeOfAPDFSession), that read's take came to 4.3 s with no
-// memo, 2.8 s as a process's first and 1.2 s as its second.
+// read, its base64 twice, cost 6.1 s a take. So the process remembers what its
+// own full scrubs found unchanged ([scrubMemo]): of a text of
+// [scrubPieceBaseBytes] or more (a line read as text, a name or string, a
+// file), its length and the digest of its chunks' SHA-256 digests, under its
+// first chunk's digest and the take's agent, never the text. A first reading
+// writes a text whose first chunk the memo knows as it is, and checks the
+// whole at its end; one the memo does not know whole reads the archive again,
+// its spool emptied, without that chunk's answer ([firstReadings]). Every
+// digest is of the by-value pass's output under the take's own values. SOUND
+// because the redaction's answer for a text is the text's alone
+// (redact.Stream; its rules are the build's): each text has a redaction of its
+// own, a key's credential is judged on its raw name, and a credential's value
+// never reaches it. In memory alone: a restart, a deploy or a seat's move to
+// another node costs one take at most what it costs without. On two cores of
+// the build machine, two runs each (BenchmarkASecondTakeOfAPDFSession), that
+// read's take came to 6.1 s with no memo, 5.2 s as a process's first and 3.4 s
+// as its second.
 //
 // # The scrub's bounds, and what it holds
 //
@@ -857,24 +856,25 @@
 // `.json` file read both ways), each its redaction's stages (redact.Stream's
 // figure) beside its stage's chunk, a [valueStream] and a string's encoder; two
 // JSON rewrites, each its scanner, its read buffer and a frame a container
-// open; the readers and writers of the archive's gzip and tar; and the plan, a
-// sixteenth of the plaintext at most and a 512th for its texts' digests. About
-// 129 MiB at the scrub's bound and [scrubLongestMax], 16.5 MiB of it the plan
-// and 9 MiB that value, near nothing in a real session. A test holds it at a
-// smaller bound, and BenchmarkTheScrubAtThePlaintextBound measures it at the
-// real one, both readings from a file on disk.
+// open; the readers and writers of the archive's gzip and tar, and of the
+// spool; a unit's two ways; and the plan, a sixteenth of the plaintext. About
+// 132 MiB at the bound and [scrubLongestMax], 16 MiB of it the plan and 12 MiB
+// that value, near nothing in a real session. A test holds it at a smaller
+// bound, and BenchmarkTheScrubAtThePlaintextBound measures it at the real one,
+// both readings from a file on disk.
 // On two cores of the build machine:
 //
-//	one string to the bound:   15.1 s a scrub, held 16.7 MiB (256 MiB from 28 MiB)
-//	a million short lines:     33.9 s a scrub, held 1.5 MiB (160 MiB from 19 MiB)
-//	tiny definitions:          29.8 to 30.8 s a scrub, held 17.4 MiB (256 MiB from 0.5 MiB)
-//	a string of `pwd=x `:      256 s a scrub
-//	a file of `pwd=x` lines:   234.8 s a scrub
-//	`pwd=` lines, torn:        177.4 s a scrub
+//	one string to the bound:   16.2 s a scrub, held 17.8 MiB (256 MiB from 28 MiB)
+//	a million short lines:     22.1 s a scrub, held 1.4 MiB (160 MiB from 19 MiB)
+//	tiny definitions:          21.2 to 21.9 s a scrub, held 17.4 MiB (256 MiB from 0.5 MiB)
+//	a string of `pwd=x `:      136 s a scrub
+//	a file of `pwd=x` lines:   123 s a scrub
+//	`pwd=` lines, torn:        183 s a scrub
 //
 // The last three, a harness's tool results, set SessionScrubWait (its sum and
-// why a take past it fails closed are in code-sandbox.md). The string is
-// redacted once, as JSON in its first reading.
+// why a take past it fails closed are in code-sandbox.md); the torn string,
+// read on from its last line, the slowest. A string is redacted once, as JSON
+// in its first reading.
 //
 // # A definition the scrub renamed is cut out of its line
 //
@@ -920,12 +920,12 @@
 //
 // DECIDED IN THE FIRST READING, APPLIED IN THE SECOND: whether a line loses a
 // definition is known only at its end (the attachment's last `type`, its last
-// `entries`, a marker anywhere), and the second reading writes the list before
-// it reads that end. The first reading's half ([definitionsReading]) keeps a
-// bit for each element of the list being read and of the last one read before
-// it, which a later `entries` or `attachment` replaces, so at most a bit for
-// each two bytes of the line; the second's ([definitionCut]) reads the plan's
-// cut back as it writes.
+// `entries`, a marker anywhere), and the first reading spools the list before
+// it reads that end. Its half ([definitionsReading]) keeps a bit for each
+// element of the list being read and of the last one read before it, which a
+// later `entries` or `attachment` replaces, so at most a bit for each two bytes
+// of the line; the second's ([cutFilter]) copies the line less the elements
+// cut and their commas.
 //
 // # An OpenCode continuation's first request, judged in its box
 //

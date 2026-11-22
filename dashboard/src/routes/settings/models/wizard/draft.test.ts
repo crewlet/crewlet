@@ -129,6 +129,54 @@ describe("the entry", () => {
     });
   });
 
+  test("Gemini CLI's cloud is Vertex AI, switched on as Gemini CLI reads it, its key by reference", () => {
+    const entity = entityOf(
+      draft({
+        harness: "gemini-cli",
+        method: "cloud",
+        cloud: "gemini-vertex",
+        cloudFields: {
+          GOOGLE_CLOUD_PROJECT: "acme",
+          GOOGLE_CLOUD_LOCATION: "us-central1",
+          GOOGLE_API_KEY: "AIza-secret",
+        },
+      }),
+    );
+    expect(entity.auth).toEqual({ mode: "env" });
+    expect(entity.env).toEqual({
+      GOOGLE_GENAI_USE_VERTEXAI: "true",
+      GOOGLE_CLOUD_PROJECT: "acme",
+      GOOGLE_CLOUD_LOCATION: "us-central1",
+      GOOGLE_API_KEY: "${GOOGLE_API_KEY_SONNET_KEY}",
+    });
+    // READ BACK AS ITS OWN CLOUD, never Claude Code's gateway.
+    const raw = {
+      harness: "gemini-cli",
+      model: "gemini-2.5-pro",
+      auth: entity.auth,
+      env: entity.env,
+    };
+    const back = draftOf(view({ harness: "gemini-cli", model: "gemini-2.5-pro", raw }), EXECUTORS);
+    expect([back.method, back.cloud]).toEqual(["cloud", "gemini-vertex"]);
+  });
+
+  test("a harness's clouds are its own: moving to Gemini CLI leaves Claude Code's behind", () => {
+    const fresh = { original: null, taken: [], named: false };
+    const bedrock = draft({
+      method: "cloud",
+      cloud: "bedrock",
+      cloudFields: { AWS_REGION: "us-west-2" },
+    });
+    const gemini = withChoices(bedrock, { harness: "gemini-cli" }, fresh).draft;
+    expect([gemini.cloud, gemini.cloudFields]).toEqual(["gemini-vertex", {}]);
+    // AN EDIT ON ANOTHER METHOD that turns to its cloud takes Gemini CLI's too.
+    const keyed = draftOf(
+      view({ harness: "gemini-cli", model: "gemini-2.5-pro", raw: { harness: "gemini-cli" } }),
+      EXECUTORS,
+    );
+    expect(withChoices(keyed, { method: "cloud" }, fresh).draft.cloud).toBe("gemini-vertex");
+  });
+
   test("OpenCode reads its provider's key from env and names its provider in the model", () => {
     const entity = entityOf(
       draft({

@@ -375,6 +375,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		PauseTTL:        pauseTTL(settings),
 		MaxTurns:        maxTurnsFor(settings),
 		Env:             run.env,
+		SignInEnv:       run.signInNames,
 		CredentialFiles: run.files,
 	})
 	// THE PICKED MEMBER'S LOGIN, the one the box will actually run under:
@@ -457,15 +458,13 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		// WHAT OF ITS ENVIRONMENT IS A CREDENTIAL, which only this side can
 		// tell, for its session's scrub.
 		Secrets: launchSecrets(agent, runEnv, run.env),
-		// THE NAMES THAT SIGN ITS HARNESS IN, which its runner keeps out of
-		// the model's shell.
-		SignInEnv: run.signInNames,
 		// AND THE PATHS ITS BOX FILES ARE NAMED BY, under the box's home,
 		// joined onto the box's own once the launch has one.
 		HomePaths:   run.homePaths,
 		Skills:      req.Skills.Box(),
 		Model:       run.model,
 		Effort:      run.effort,
+		WebDenied:   run.webDenied,
 		ProviderKey: member.Key,
 		// THE SIGN-IN THE JOB'S HARNESS IS HANDED, on the job's record: what
 		// its collection compares the entry's against ([Engine.signInReplaced]).

@@ -179,7 +179,15 @@ const SURFACE_NAMES: Record<string, string> = {
   aws: "AWS",
   google_cloud: "Google Cloud",
   ssh: "SSH",
+  meta_ads: "Meta Ads Manager",
   app_store_connect: "App Store Connect",
+  apple_ads: "Apple Ads",
+  google_analytics: "Google Analytics",
+  admob: "AdMob",
+  adsense: "AdSense",
+  google_ads: "Google Ads",
+  search_console: "Search Console",
+  google_play: "Google Play",
 };
 
 /** One tool's surfaces, in the engine's grouping, named for this screen. */
@@ -266,12 +274,38 @@ export const CATALOG: Entry[] = [
     doc: "expo",
   },
   {
+    key: "meta_ads",
+    name: "Meta Ads Manager",
+    description:
+      "Ad accounts, campaigns, ad sets, budgets and insights for Facebook and Instagram ads.",
+    vendor: "meta-ads",
+    surfaces: surfacesOf("meta_ads"),
+    doc: "meta-ads",
+  },
+  {
     key: "app_store_connect",
     name: growthProductName("app_store_connect"),
     description: "Apps, listings, reviews and replies, TestFlight, prices, sales and analytics.",
     vendor: "app-store-connect",
     surfaces: surfacesOf("app_store_connect"),
     doc: "app-store-connect",
+  },
+  {
+    key: "apple_ads",
+    name: "Apple Ads",
+    description:
+      "Campaigns, ad groups, keywords, budgets and reports for App Store and Apple Maps ads.",
+    vendor: "apple-ads",
+    surfaces: surfacesOf("apple_ads"),
+    doc: "apple-ads",
+  },
+  {
+    key: "google_play",
+    name: "Google Play",
+    description: "Store listings, reviews and replies, releases, products, prices and vitals.",
+    vendor: "google-play",
+    surfaces: surfacesOf("google_play"),
+    doc: "google-play",
   },
   {
     key: "digitalocean",
@@ -306,6 +340,48 @@ export const CATALOG: Entry[] = [
     vendor: "ssh",
     surfaces: surfacesOf("ssh"),
     doc: "ssh",
+  },
+  {
+    key: "google_analytics",
+    name: "Google Analytics",
+    description: "Properties, traffic and conversion reports, and every setting.",
+    vendor: "google-analytics",
+    surfaces: surfacesOf("google_analytics"),
+    doc: "google-analytics",
+  },
+  {
+    key: "admob",
+    name: "AdMob",
+    description: "App earnings, ad units and mediation, and every setting the API offers.",
+    vendor: "google-admob",
+    surfaces: surfacesOf("admob"),
+    doc: "admob",
+  },
+  {
+    key: "adsense",
+    name: "AdSense",
+    description:
+      "Website earnings, sites, ad units, channels and policy alerts, and every setting the API offers.",
+    vendor: "google-adsense",
+    surfaces: surfacesOf("adsense"),
+    doc: "adsense",
+  },
+  {
+    key: "google_ads",
+    name: "Google Ads",
+    description: "Campaigns, budgets, bids, ads and reports, spend held to your caps.",
+    vendor: "google-ads",
+    surfaces: surfacesOf("google_ads"),
+    doc: "google-ads",
+  },
+  {
+    key: "search_console",
+    name: "Search Console",
+    description:
+      "Search performance, sitemaps, URL inspection, verification and Indexing API notices.",
+    vendor: "google-search-console",
+    surfaces: surfacesOf("search_console"),
+    doc: "google-search-console",
   },
 ];
 

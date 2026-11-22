@@ -7,12 +7,20 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/admob"
+	"github.com/crewlet/crewlet/internal/adsense"
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/appleads"
 	"github.com/crewlet/crewlet/internal/appstoreconnect"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/googleads"
+	"github.com/crewlet/crewlet/internal/googleanalytics"
+	"github.com/crewlet/crewlet/internal/googleplay"
 	"github.com/crewlet/crewlet/internal/growth"
+	"github.com/crewlet/crewlet/internal/metaads"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/searchconsole"
 )
 
 // The growth tools on this node (ADR-0170): each product reads the running
@@ -37,6 +45,15 @@ const (
 	growthActPoll = 200 * time.Millisecond
 )
 
+var (
+	_ builtin.GrowthProduct = (*googleanalytics.Product)(nil)
+	_ builtin.GrowthProduct = (*admob.Product)(nil)
+	_ builtin.GrowthProduct = (*adsense.Product)(nil)
+	_ builtin.GrowthProduct = (*googleads.Product)(nil)
+	_ builtin.GrowthProduct = (*searchconsole.Product)(nil)
+	_ builtin.GrowthProduct = (*googleplay.Product)(nil)
+)
+
 // GrowthToolDeps are the growth tools' dependencies on this node, or the zero
 // value (which registers none) without an engine.
 func GrowthToolDeps(e *Engine) builtin.GrowthDeps {
@@ -51,8 +68,19 @@ func GrowthToolDeps(e *Engine) builtin.GrowthDeps {
 func (e *Engine) growthProducts() []builtin.GrowthProduct {
 	e.growthOnce.Do(func() {
 		e.growth = []builtin.GrowthProduct{
+			metaads.New(metaads.Deps{Company: e.runningConfig, Resolve: e.resolver().Value, Audit: e.GrowthAudit(),
+				Leases: growthLeases{engine: e}, Renewals: metaAdsRenewals{engine: e}, Signals: e.GrowthSignals()}),
 			appstoreconnect.New(appstoreconnect.Deps{Company: e.runningConfig, Resolve: e.resolver().Value,
 				Audit: e.GrowthAudit(), Leases: growthLeases{engine: e}, Signals: e.GrowthSignals()}),
+			appleads.New(appleads.Deps{Company: e.runningConfig, Resolve: e.resolver().Value,
+				Audit: e.GrowthAudit(), Leases: growthLeases{engine: e}, Signals: e.GrowthSignals()}),
+			googleanalytics.New(e.runningConfig, e.resolver, e, e.GrowthAudit(), growthLeases{engine: e}, nil),
+			e.adMob(),
+			e.adSense(),
+			googleads.New(e.runningConfig, e.resolver, e, e.GrowthAudit(), growthLeases{engine: e}, nil),
+			searchconsole.New(e.runningConfig, e.resolver, e, e.GrowthAudit(), growthLeases{engine: e}, nil, nil),
+			googleplay.New(googleplay.Deps{Company: e.runningConfig, Env: e.resolver, Tokens: e, Audit: e.GrowthAudit(),
+				Leases: growthLeases{engine: e}, Reader: e, Media: growthMedia{engine: e}}),
 		}
 	})
 	return e.growth

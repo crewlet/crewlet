@@ -28,18 +28,18 @@ func TestTheBoxRecipesCloneFromGitlet(t *testing.T) {
 	boxRecipes(t, gitlettest.SoloOptions{}, gittest.Require(t))
 }
 
-// boxRecipes is the box half of Gitlet's suite: the steps that give a coding
-// box its repositories (the version check, the coding clone, the check's
-// single-commit checkout) run as a box runs them, `sh -c` in its working
-// directory under its git (the pin, or the client floor's 2.40.4) with
-// EXACTLY the engine's box environment (sandbox.BoxGit, ADR-0093), over a
-// global credential helper answering as a PERSON, which the engine's reset
-// must keep from ever answering Gitlet. Each invariant is stated at its check.
+// boxRecipes is the box half of Gitlet's suite: the steps giving a coding box
+// its repositories (the version check, the coding clone, a check's commit) run
+// as a box runs them, `sh -c` in its working directory under its git (the pin,
+// or the client floor's 2.40.4) with EXACTLY the engine's box environment
+// (sandbox.BoxGit, ADR-0093), its token only in the file it names, over a
+// global person's helper the reset keeps out.
 //
-// Mutations, each red: a commit hook in the coding recipe; checking the clone
-// out at its HEAD rather than its base; no --skip-checks (the cone naming
-// [odd] and !bang is refused); no --single-branch (every seat's work arrives
-// and is tracked); no reset of the helper list (every request is refused).
+// Mutations, each red: a commit hook in the coding recipe; the clone at HEAD,
+// not its base; no --skip-checks (the cone naming [odd] and !bang refused); no
+// --single-branch (every seat's work tracked); no reset of the helper list
+// (every request refused); the helper back in GIT_CONFIG_COUNT (the harness's
+// blank entries refuse the fetch), or reading the token from a variable.
 func boxRecipes(t *testing.T, opts gitlettest.SoloOptions, git string) {
 	t.Helper()
 	ctx := t.Context()
@@ -214,6 +214,18 @@ func boxRecipes(t *testing.T, opts gitlettest.SoloOptions, git string) {
 		t.Errorf("after fetching %s the coding clone tracks %q, want origin/main alone", other, got)
 	}
 
+	// UNDER A HARNESS'S BLANK ENTRIES, the box's own credential still answers:
+	// Gemini CLI's shell appends GIT_CONFIG_COUNT entries emptying
+	// credential.helper (resetting the helper list) and the rest, with no
+	// prompt, and the engine's helper, in GIT_CONFIG_PARAMETERS, is read after
+	// them, so a fetch and a push from that shell go through as the run.
+	blanked := append(appendConfig(t, box, "credential.helper", "", "core.fsmonitor", "", "core.hooksPath", "",
+		"core.sshCommand", "", "core.editor", "", "sequence.editor", "", "core.pager", "cat"),
+		"GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0")
+	runGit(t, clone, blanked, "fetch", "-q", "origin", other)
+	runGit(t, clone, blanked, "commit", "-q", "--allow-empty", "-m", "from a harness's shell")
+	runGit(t, clone, blanked, "push", "-q", "origin", branch)
+
 	// A RUN CONTINUING THE SEAT'S OWN BRANCH starts at its tip, off the
 	// default branch: fetched by its id, and the other seats' work still not.
 	own := repo
@@ -300,8 +312,10 @@ func boxRecipes(t *testing.T, opts gitlettest.SoloOptions, git string) {
 }
 
 // boxEnv is a box's environment over the client environment env, as the
-// engine's launch makes it: git's directory first on PATH, and the engine's
-// box git environment (g) over env, its own git configuration kept.
+// engine's launch makes it: git's directory first on PATH, the engine's box
+// git environment (g) over env, its own git configuration kept, and g's token
+// written to a file of its own that the environment names by its path; no
+// variable holds the token.
 func boxEnv(t testing.TB, env []string, git string, g sandbox.BoxGit) []string {
 	t.Helper()
 	run := map[string]string{}
@@ -314,6 +328,16 @@ func boxEnv(t testing.TB, env []string, git string, g sandbox.BoxGit) []string {
 		t.Fatalf("the box's git environment: %v", err)
 	}
 	maps.Copy(run, engine)
+	access := filepath.Join(t.TempDir(), "git-access")
+	if err := os.WriteFile(access, []byte(g.Token), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run[sandbox.GitAccessFileVar] = access
+	for name, value := range run {
+		if strings.Contains(value, g.Token) {
+			t.Fatalf("the box's variable %s holds its token, which only its file holds", name)
+		}
+	}
 	run["PATH"] = filepath.Dir(git) + string(os.PathListSeparator) + os.Getenv("PATH")
 	out := make([]string, 0, len(run))
 	for _, name := range slices.Sorted(maps.Keys(run)) {

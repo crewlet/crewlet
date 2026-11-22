@@ -1392,3 +1392,115 @@ func testAPollServeIsRecordedUnderItsInboxIDAndSettledByIt(t *testing.T, s sandb
 			"off msg_w", idsOf(settled), n)
 	}
 }
+
+// A POLL SERVES A NOTE TO NO NEW JOB PAST ITS BUDGET. Each job a poll first
+// serves a note to spends one of its [sandbox.RunNote.MaxServes] poll serves,
+// a poll of the same job again none, so however often the run is relaunched
+// the note is served to that many jobs, and the next job's poll serves it
+// nothing: it waits for the review, served to the last job it reached.
+//
+// Mutation: count every poll, or serve past the budget, and this goes red.
+func testAPollServesANoteToNoNewJobPastItsBudget(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	const turn = "t-poll-budget"
+	statuses := []string{sandbox.StatusLaunching, sandbox.StatusRunning}
+	poll := func(job string) []string {
+		t.Helper()
+		served, err := s.ServeNotes(ctx, turn, sandbox.NoteServe{IDs: []string{"n-1"}, Launch: job,
+			Statuses: statuses})
+		if err != nil {
+			t.Fatalf("the poll of job %s: %v", job, err)
+		}
+		return idsOf(served)
+	}
+	job := mustLaunched(t, s, run(turn))
+	mustFile(t, s, turn, "n-1")
+	for k := 1; k <= sandbox.MaxNoteServes; k++ {
+		if k > 1 {
+			mustClaim(t, s, turn)
+			job = mustLaunched(t, s, run(turn))
+		}
+		for range 2 {
+			if got := poll(job); !slices.Equal(got, []string{"n-1"}) {
+				t.Fatalf("job %d's poll served %v, want n-1", k, got)
+			}
+		}
+		if n := notesByID(t, s, turn)["n-1"]; n.PollServes != k || n.Served != job {
+			t.Fatalf("job %d's polls left the note at %d poll serves, served to %q, want %d, to the job", k,
+				n.PollServes, n.Served, k)
+		}
+	}
+	last := job
+	mustClaim(t, s, turn)
+	next := mustBeginLaunch(t, s, run(turn))
+	if got := poll(next); len(got) != 0 {
+		t.Errorf("a job past the note's budget was served %v", got)
+	}
+	if n := notesByID(t, s, turn)["n-1"]; !n.Waiting() || n.Served != last || n.PollServes != sandbox.MaxNoteServes {
+		t.Errorf("the note past its budget is %+v, want it waiting for the review, served to the last job", n)
+	}
+}
+
+// A SECOND ADMISSION IS GRANTED ONCE A JOB, WITHIN THE POLL BUDGET: a note a
+// poll served the job is granted, spending one of its poll serves, and the
+// same job's ask made again is granted at no cost; a note the job was never
+// served, a wake item and a note no record holds are neither granted nor
+// spent; and at its budget a note is answered spent, nothing written. A job the
+// record moved on from is granted nothing.
+//
+// Mutation: spend at every ask, grant past the budget or a wake, or grant a
+// note the job was never served, and this goes red.
+func testASecondAdmissionIsGrantedOnceAJobWithinThePollBudget(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	const turn = "t-again"
+	statuses := []string{sandbox.StatusLaunching, sandbox.StatusRunning}
+	job := mustLaunched(t, s, run(turn))
+	mustFile(t, s, turn, "n-1")
+	mustFile(t, s, turn, "n-2")
+	wake := fileWake(t, s, turn, job, sealedWake("w-1", 64))
+	serve := func(job string, ids ...string) {
+		t.Helper()
+		if _, err := s.ServeNotes(ctx, turn, sandbox.NoteServe{IDs: ids, Launch: job, Statuses: statuses,
+			Wakes: map[string]int{wake.ID: 1}}); err != nil {
+			t.Fatalf("the poll: %v", err)
+		}
+	}
+	again := func(job string, ids ...string) (granted, spent []string) {
+		t.Helper()
+		granted, spent, err := s.AgainNotes(ctx, turn, sandbox.NoteAgain{IDs: ids, Launch: job, Statuses: statuses})
+		if err != nil {
+			t.Fatalf("the ask: %v", err)
+		}
+		return granted, spent
+	}
+	serve(job, "n-1", wake.ID)
+	for range 2 {
+		if granted, spent := again(job, "n-1", "n-2", wake.ID, "planted"); !slices.Equal(granted, []string{"n-1"}) ||
+			len(spent) != 0 {
+			t.Fatalf("the ask answered %v granted and %v spent, want n-1 granted alone", granted, spent)
+		}
+	}
+	notes := notesByID(t, s, turn)
+	if n := notes["n-1"]; n.PollServes != 2 || n.Readmitted != job {
+		t.Errorf("the ask, made twice, left n-1 at %d poll serves, readmitted by %q, want two, by the job",
+			n.PollServes, n.Readmitted)
+	}
+	if n2, w := notes["n-2"], notes[wake.ID]; n2.PollServes != 0 || w.PollServes != 1 || w.Readmitted != "" {
+		t.Errorf("the ask spent n-2's serves (%d) or the wake's (%d, readmitted %q)", n2.PollServes,
+			w.PollServes, w.Readmitted)
+	}
+	mustClaim(t, s, turn)
+	next := mustBeginLaunch(t, s, run(turn))
+	if granted, _ := again(job, "n-1"); len(granted) != 0 {
+		t.Errorf("a job the record moved on from was granted %v", granted)
+	}
+	serve(next, "n-1")
+	if granted, spent := again(next, "n-1"); len(granted) != 0 || !slices.Equal(spent, []string{"n-1"}) {
+		t.Errorf("the ask at the budget answered %v granted and %v spent, want n-1 spent", granted, spent)
+	}
+	if n := notesByID(t, s, turn)["n-1"]; n.PollServes != sandbox.MaxNoteServes || n.Readmitted != job ||
+		!n.Waiting() {
+		t.Errorf("the note at its budget is %+v, want it waiting at %d poll serves, readmitted by the first job",
+			n, sandbox.MaxNoteServes)
+	}
+}
