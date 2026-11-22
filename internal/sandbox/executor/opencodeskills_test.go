@@ -33,10 +33,11 @@ func TestAnOpenCodeRunTakesItsSkillsAsADirectoryItsConfigurationNames(t *testing
 	if !slices.Equal(cfg.Skills, []string{p.OpenCodeSkills()}) {
 		t.Errorf("skills = %v, want the run's own directory", cfg.Skills)
 	}
-	if len(cfg.Plugins) != 1 || cfg.Plugins[0].Package != p.OpenCodeSkillsPlugin() {
+	plugins := runPlugins(cfg.Plugins)
+	if len(plugins) != 1 || plugins[0].Package != p.OpenCodeSkillsPlugin() {
 		t.Fatalf("plugins = %+v, want the skill-load plugin alone", cfg.Plugins)
 	}
-	if got := openCodeValue(t, b, cfg.Plugins[0].Options.URL); got != skillWiring().URL {
+	if got := openCodeValue(t, b, plugins[0].Options.URL); got != skillWiring().URL {
 		t.Errorf("the plugin's route is %q, want %q", got, skillWiring().URL)
 	}
 	if got, want := boxFile(t, b, p.OpenCodeSkills()+"/crewlet:mcp-github/SKILL.md"),
@@ -68,7 +69,7 @@ func TestAnOpenCodeRunWiredToItsNotesNamesBothPlugins(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	var packages []string
-	for _, plugin := range cfg.Plugins {
+	for _, plugin := range runPlugins(cfg.Plugins) {
 		packages = append(packages, plugin.Package)
 	}
 	if !slices.Equal(packages, []string{p.OpenCodeSteerPlugin(), p.OpenCodeSkillsPlugin()}) {
