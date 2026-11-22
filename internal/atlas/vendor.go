@@ -25,6 +25,7 @@ const (
 	VendorGoogle       Vendor = "google"
 	VendorGoogleCloud  Vendor = "google_cloud"
 	VendorMattermost   Vendor = "mattermost"
+	VendorMeta         Vendor = "meta"
 	VendorOpenAI       Vendor = "openai"
 	VendorScaleway     Vendor = "scaleway"
 	VendorSlack        Vendor = "slack"
@@ -36,7 +37,7 @@ const (
 var Vendors = []Vendor{
 	VendorAWS, VendorAnthropic, VendorApple, VendorAtlassian, VendorCloudflare, VendorCursor,
 	VendorDatadog, VendorDigitalOcean, VendorE2B, VendorExpo, VendorGitHub,
-	VendorGitLab, VendorGitlet, VendorGoogle, VendorGoogleCloud, VendorMattermost,
+	VendorGitLab, VendorGitlet, VendorGoogle, VendorGoogleCloud, VendorMattermost, VendorMeta,
 	VendorOpenAI, VendorScaleway, VendorSlack, VendorXAI, VendorOther,
 }
 
@@ -66,6 +67,8 @@ const (
 	CapabilityModelAPI      Capability = "model_api"
 	CapabilityAppDelivery   Capability = "app_delivery"
 	CapabilityIdentity      Capability = "identity"
+	CapabilityAnalytics     Capability = "analytics"
+	CapabilityMonetization  Capability = "monetization"
 )
 
 // Capabilities is every capability.
@@ -73,7 +76,7 @@ var Capabilities = []Capability{
 	CapabilityChat, CapabilityTracker, CapabilityKnowledge, CapabilityCodeHosting,
 	CapabilityCI, CapabilityMonitoring, CapabilityAlerting, CapabilityDNS, CapabilityCDN,
 	CapabilityCompute, CapabilityObjectStorage, CapabilityDatabase, CapabilityEmail,
-	CapabilityModelAPI, CapabilityAppDelivery, CapabilityIdentity,
+	CapabilityModelAPI, CapabilityAppDelivery, CapabilityIdentity, CapabilityAnalytics, CapabilityMonetization,
 }
 
 // Valid reports whether c is a member of the closed set.

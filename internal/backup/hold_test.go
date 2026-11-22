@@ -127,7 +127,7 @@ func TestTheBackupPinsTheLogWhileItCopiesAndReleasesIt(t *testing.T) {
 	}
 	if held.released != 1 {
 		t.Fatalf("the hold was released %d time(s) — a pin that outlives its "+
-			"owner stops the trim until the stale bound expires it",
+			"owner stops the trim until the trim has watched it go unrenewed",
 			held.released)
 	}
 	if remaining, err := fleet.Holds(t.Context()); err != nil || len(remaining) != 0 {

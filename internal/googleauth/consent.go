@@ -26,7 +26,7 @@ const (
 // ConsentParams are the authorization request's own parameters: a refresh
 // token (`access_type=offline`), asked for on every sign-in (`prompt=consent`,
 // so a second sign-in is issued one too), and nothing granted earlier added
-// to it (`include_granted_scopes=false`), so the grant is the one scope asked.
+// to it (`include_granted_scopes=false`), so the grant is the scopes asked.
 func ConsentParams() url.Values {
 	return url.Values{"access_type": {"offline"}, "prompt": {"consent"},
 		"include_granted_scopes": {"false"}}
@@ -42,9 +42,11 @@ type Consent struct {
 	// Name is what a person calls it ("AdSense").
 	Name string
 
-	// Scope is the one scope the grant asks for, in full. One, so Google's
-	// granular consent can never grant part of it.
-	Scope string
+	// Scopes is the set of scopes a sign-in asks for under c, each in full:
+	// what the seats' levels need now (reading alone, or changes too). The
+	// grant is kept only as exactly that set, so Google's granular consent
+	// can never grant part of it.
+	Scopes func(c *config.Company) []string
 
 	// Client is the company's own OAuth client as c configures it (the
 	// block's `oauth.client_id` and `oauth.client_secret`), false where c
@@ -75,8 +77,8 @@ func RegisterConsent(p Consent) {
 	consents.Lock()
 	defer consents.Unlock()
 	switch {
-	case p.Kind == "" || p.Name == "" || p.Scope == "" || strings.ContainsAny(p.Scope, " \t") || p.Client == nil:
-		panic(fmt.Sprintf("googleauth: consent product %q needs its kind, name, one scope and client", p.Kind))
+	case p.Kind == "" || p.Name == "" || p.Scopes == nil || p.Client == nil:
+		panic(fmt.Sprintf("googleauth: consent product %q needs its kind, name, scopes and client", p.Kind))
 	case slices.ContainsFunc(consents.products, func(q Consent) bool { return q.Kind == p.Kind }):
 		panic(fmt.Sprintf("googleauth: consent product %q registered twice", p.Kind))
 	}
@@ -95,17 +97,31 @@ func ConsentOf(kind integration.Kind) (Consent, bool) {
 	return Consent{}, false
 }
 
-// ErrScopeNotGranted is a sign-in whose grant is not exactly the one scope
-// asked for: a person unticked it on Google's granular consent screen, or
-// Google added another.
-var ErrScopeNotGranted = errors.New("the sign-in did not grant exactly the one scope asked for; " +
-	"sign in again and leave the access ticked")
+// ErrScopeNotGranted is a sign-in whose grant is not exactly the scopes asked
+// for: a person unticked one on Google's granular consent screen, or Google
+// added another.
+var ErrScopeNotGranted = errors.New("the sign-in did not grant exactly the scopes asked for; " +
+	"sign in again and leave every access ticked")
+
+// ConsentScopes is the scopes p's sign-in asks for under c, refused where it
+// names none or a scope that is no single word.
+func ConsentScopes(p Consent, c *config.Company) ([]string, error) {
+	scopes := p.Scopes(c)
+	if len(scopes) == 0 || slices.ContainsFunc(scopes, func(s string) bool {
+		return s == "" || strings.ContainsAny(s, " \t")
+	}) {
+		return nil, fmt.Errorf("googleauth: %s names no scopes to sign in for", p.Name)
+	}
+	return slices.Clone(scopes), nil
+}
 
 // CheckConsentScope refuses a token answer whose granted scopes are not
-// exactly asked. Silence is refused too: Google always names what it granted,
-// and granular consent means one cannot assume the request was granted.
-func CheckConsentScope(asked string, granted []string) error {
-	if len(granted) != 1 || granted[0] != asked {
+// exactly asked, in any order. Silence is refused too: Google always names
+// what it granted, and granular consent means one cannot assume the request
+// was granted.
+func CheckConsentScope(asked, granted []string) error {
+	a, g := slices.Sorted(slices.Values(asked)), slices.Sorted(slices.Values(granted))
+	if len(a) == 0 || !slices.Equal(slices.Compact(a), slices.Compact(g)) {
 		return ErrScopeNotGranted
 	}
 	return nil
