@@ -173,7 +173,7 @@ Crewlet is the engine; you choose the surfaces your agents work on: [Choosing yo
 
 | | Options |
 |---|---|
-| **LLM** | Every model through the vendor's own [harness](docs/concepts/llm-backends.md): Claude Code for Anthropic's (Claude plan or API key), Codex for OpenAI's, **OpenCode for open models** on OpenRouter, a hosted provider or your own server. Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, Copilot, Muse Code or Kimi Code runs each seat's executor |
+| **LLM** | Every model through the vendor's own [harness](docs/concepts/llm-backends.md): Claude Code for Anthropic's (Claude plan or API key), Codex for OpenAI's, **OpenCode for open models** on OpenRouter, a hosted provider or your own server. Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, Copilot, Muse Code, Kimi Code or Pi runs each seat's executor |
 | **Tracker** | [Jira](docs/integrations/jira.md) (Cloud or Data Center) or [GitLab](docs/integrations/gitlab.md) / [GitHub](docs/integrations/github.md) issues |
 | **Knowledge base** | [Confluence](docs/integrations/confluence.md) (searched at turn start and on demand, as the asking seat) |
 | **Code host** | [Gitlet, the engine's own](docs/concepts/gitlet.md) (clone and push over HTTPS, changes reviewed in the dashboard, can run beside a vendor), [GitLab](docs/integrations/gitlab.md) (gitlab.com or self-hosted) or [GitHub](docs/integrations/github.md) (github.com or Enterprise Server) |

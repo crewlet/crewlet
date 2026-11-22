@@ -201,7 +201,7 @@ live-editable, so the first version does not need to be the last.
      passes, through `llm_review`, `llm_subagent`, `llm_auxiliary`,
      `llm_judge` or `llm_triage`: every agent seat's executor is its harness's
      own run, which only `claude-code`, `codex`, `gemini-cli`, `qwen-code`, `opencode`,
-     `copilot`, `muse-code` and `kimi-code` can be, so the seat's `llm` names one of those beside it.
+     `copilot`, `muse-code`, `kimi-code` and `pi` can be, so the seat's `llm` names one of those beside it.
 
    **Write `providers.sandbox` with the model**, because every agent seat's
    executor runs in a box from it and a company with an agent seat and a
@@ -257,7 +257,7 @@ once they have signed in on it, below). The integrations that come later are
 about where their PEOPLE are, not about what the company can do.
 
 **First pass** — no `integrations`, no `mcp_servers`, one LLM provider
-(Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, Copilot, Muse Code or Kimi Code) and the `providers.sandbox` step 5 writes with
+(Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, Copilot, Muse Code, Kimi Code or Pi) and the `providers.sandbox` step 5 writes with
 it, the org chart with a `project` and `space` per unit and a `channel`
 per team that should have a room, and one schedule on the top seat so a
 turn actually fires:
