@@ -276,10 +276,9 @@ func (r *Runner) openCapture(ctx context.Context, box sandbox.Sandbox, bound str
 
 // CheckCarry answers whether archive, packed in ANOTHER box, can be continued
 // in box, asked before the run starts there and before its brief is chosen
-// (briefs are written before the box is acquired): the box harness's release,
-// read by one login-shell exec of its `--version` with the box's bin directory
-// first on PATH as the wrapper puts it ([withBoxBin]), held against the
-// writer, the archive's format and the harness's floors ([carrier.Continues]).
+// (briefs are written before the box is acquired): the box harness's release
+// ([Runner.boxRelease]), held against the writer, the archive's format and
+// the harness's floors ([carrier.Continues]).
 // The release read is returned either way, with whether its resume was read
 // ([claudeResumeRead], [sandbox.UnheldTelling]): a brief told by a reading
 // goes only to the writer's release ([sandbox.ExactTelling]).
@@ -291,18 +290,11 @@ func (r *Runner) CheckCarry(ctx context.Context, box sandbox.Sandbox, archive sa
 	if !ok {
 		return sandbox.CarryCheck{Why: r.harness.Name() + " carries no session between boxes"}, nil
 	}
-	ask := "PATH=" + shellword.Quote(PathsFor(box).BinDir()) + `:"$PATH"; export PATH; exec ` +
-		carries.VersionCommand() + " < /dev/null"
-	res, err := box.Exec(ctx, "sh -lc "+shellword.Quote(ask), sandbox.ExecOptions{TimeoutSec: harnessVersionWait.Seconds()})
-	if err != nil {
-		return sandbox.CarryCheck{}, fmt.Errorf("executor: asking the box's %s for its release: %w",
-			r.harness.Name(), err)
+	release, silent, err := r.boxRelease(ctx, box, carries)
+	if err != nil || silent != "" {
+		return sandbox.CarryCheck{Why: silent}, err
 	}
-	if res.ExitCode != 0 {
-		return sandbox.CarryCheck{Why: fmt.Sprintf("the box's %s did not say its release: `%s` exited %d: %s",
-			r.harness.Name(), carries.VersionCommand(), res.ExitCode, firstLine(res.Stderr, transcriptDetailLimit))}, nil
-	}
-	check := sandbox.CarryCheck{Version: releaseOf(res.Stdout)}
+	check := sandbox.CarryCheck{Version: release}
 	check.ResumeRead = r.resumeRead(check.Version)
 	if restores, why := r.Restores(archive); !restores {
 		check.Why = why
@@ -310,6 +302,91 @@ func (r *Runner) CheckCarry(ctx context.Context, box sandbox.Sandbox, archive sa
 	}
 	check.Continues, check.Why = carries.Continues(check.Version, archive.Version)
 	return check, nil
+}
+
+// inPlaceGate is a [carrier] whose box continues no session, not even the
+// copy it holds, on a release it was not read for: Codex, Kimi Code, Copilot
+// and Muse Code, whose one supported release alone continues a session
+// ([Codex.continuesInPlace], [Kimi.continuesInPlace],
+// [Copilot.continuesInPlace], [Muse.continuesInPlace]).
+type inPlaceGate interface {
+	carrier
+	continuesInPlace(box string) (bool, string)
+}
+
+// CheckInPlace answers whether box's harness continues the copy of a session
+// the box itself holds ([sandbox.SessionRestorer]), asked before a relaunch
+// in the box chooses the brief that continues it: yes without asking for a
+// harness that holds no release to it, else its release read as
+// [Runner.CheckCarry] reads it and held to its harness's rule
+// ([inPlaceGate]), and then the release that wrote the copy held to the
+// writer's ([carrier.ContinuesWriter]), so a copy a newer release wrote is
+// not continued by a box downgraded since. Three answers, as CheckCarry's.
+func (r *Runner) CheckInPlace(ctx context.Context, box sandbox.Sandbox) (sandbox.CarryCheck, error) {
+	gate, ok := r.harness.(inPlaceGate)
+	if !ok {
+		return sandbox.CarryCheck{Continues: true}, nil
+	}
+	release, silent, err := r.boxRelease(ctx, box, gate)
+	if err != nil || silent != "" {
+		return sandbox.CarryCheck{Why: silent}, err
+	}
+	check := sandbox.CarryCheck{Version: release, ResumeRead: r.resumeRead(release)}
+	if check.Continues, check.Why = gate.continuesInPlace(release); !check.Continues {
+		return check, nil
+	}
+	writer, unknown, err := copyWriter(ctx, box)
+	switch {
+	case err != nil:
+		return sandbox.CarryCheck{}, err
+	case unknown != "":
+		check.Continues, check.Why = false, unknown
+		return check, nil
+	}
+	check.Continues, check.Why = gate.ContinuesWriter(writer)
+	return check, nil
+}
+
+// copyWriter is the release that wrote the copy of a session box holds, as
+// [releaseOf] reads it: the release the record of the box's last run names
+// ([Paths.SessionRecord]), the run whose session a relaunch in the box is
+// offered, written before its harness ran. Why it is not known where the box
+// holds no record (a box reads a missing file as empty) or one it refuses;
+// an error where the box could not be asked.
+func copyWriter(ctx context.Context, box sandbox.Sandbox) (writer, unknown string, err error) {
+	recorded, refusal, err := readWhole(ctx, box, PathsFor(box).SessionRecord(),
+		"the record of the session its harness ran in")
+	switch {
+	case err != nil:
+		return "", "", fmt.Errorf("executor: reading the record of the box's last run: %w", err)
+	case refusal != "":
+		return "", copyWriterUnknown + refusal, nil
+	case strings.TrimSpace(recorded) == "":
+		return "", copyWriterUnknown + "its last run left no record", nil
+	}
+	return releaseOf(parseSessionRecord(recorded).release), "", nil
+}
+
+// copyWriterUnknown opens why a box continues no copy whose writer it cannot
+// name ([copyWriter]).
+const copyWriterUnknown = "the box cannot say which release wrote its copy of the session: "
+
+// boxRelease is the release box's harness says, read by one login-shell exec
+// of its `--version` with the box's bin directory first on PATH as the
+// wrapper puts it ([withBoxBin]), as [releaseOf] reads it; why it said none
+// where the command failed; and an error where the box could not be asked.
+func (r *Runner) boxRelease(ctx context.Context, box sandbox.Sandbox, carries carrier) (release, silent string, err error) {
+	ask := "PATH=" + shellword.Quote(PathsFor(box).BinDir()) + `:"$PATH"; export PATH; exec ` +
+		carries.VersionCommand() + " < /dev/null"
+	res, err := box.Exec(ctx, "sh -lc "+shellword.Quote(ask), sandbox.ExecOptions{TimeoutSec: harnessVersionWait.Seconds()})
+	if err != nil {
+		return "", "", fmt.Errorf("executor: asking the box's %s for its release: %w", r.harness.Name(), err)
+	}
+	if res.ExitCode != 0 {
+		return "", fmt.Sprintf("the box's %s did not say its release: `%s` exited %d: %s", r.harness.Name(),
+			carries.VersionCommand(), res.ExitCode, firstLine(res.Stderr, transcriptDetailLimit)), nil
+	}
+	return releaseOf(res.Stdout), "", nil
 }
 
 // resumeReader is a [carrier] whose releases' resumes this build read.
@@ -343,12 +420,35 @@ func (r *Runner) Restores(archive sandbox.SessionArchive) (bool, string) {
 		return false, fmt.Sprintf("the session's archive is format %d, and this build restores %s's "+
 			"format %d alone", archive.Format, r.harness.Name(), carries.ArchiveFormat())
 	}
-	// THE WRITER'S FLOOR ALONE: a box release that cannot be read is taken
-	// for a current one, so an empty one asks nothing of the box.
-	return carries.Continues("", archive.Version)
+	return carries.ContinuesWriter(archive.Version)
 }
 
 var _ sandbox.SessionRestorer = (*Runner)(nil)
+
+// boxNamedNoRelease is why a box whose harness's `--version` printed no
+// release this build reads continues no carried session, for every harness:
+// a release no rule here was read for is never taken for a current one.
+func boxNamedNoRelease(harness string) string {
+	return fmt.Sprintf("this box's %s named no release this build reads, so it continues no session "+
+		"carried from another box", harness)
+}
+
+// releaseReads reports whether version, as a harness's `--version` printed it,
+// is a release this code reads ([releaseNumbers]).
+func releaseReads(version string) bool {
+	_, ok := releaseNumbers(version)
+	return ok
+}
+
+// writerNamedNoRelease is why a session whose writer named no release this
+// build reads ([releaseOf]: a pre-release, a snapshot, none at all) continues
+// in no box, for every harness: a session no rule here was read for is never
+// taken for a current release's, which a box older than its writer would then
+// continue.
+func writerNamedNoRelease(harness string) string {
+	return fmt.Sprintf("the session was written by a %s that named no release this build reads, so no "+
+		"box continues it", harness)
+}
 
 // carriedOlder is the reason a box's release cannot continue a session a newer
 // one wrote, shared by both harnesses: a release reads what it and those before it

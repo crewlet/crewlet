@@ -1,11 +1,11 @@
 /**
  * One finding as a row of the Advisor's lists: its headline, one line of why,
- * the numbers behind it, ONE press that says what it does ("Let Agent SWE
- * watch the engine's health", "Take a backup", "Open ENG-12"), and a
- * menu with the rest (the fix's other changes, Snooze, Dismiss with a reason,
- * Ask Crewlet). Everything else is behind Details: the model's explanation,
- * the records, when it was found and checked (`view.ts` reads the row off
- * the finding).
+ * the numbers behind it, at most ONE press, for a fix that acts ("Let Agent
+ * SWE watch the engine's health", "Take a backup"), and a menu with the rest
+ * (a page to open, such as "Open the seat", the fix's other changes, Snooze,
+ * Dismiss with a reason, Ask Crewlet). Everything else is behind Details: the
+ * model's explanation, the records, when it was found and checked (`view.ts`
+ * reads the row off the finding).
  *
  * APPLY CONFIRMS IN PLACE: the press opens the re-check and the change's
  * preview under the row itself ([ApplyPanel]), where the person confirms.
@@ -42,7 +42,7 @@ import { marked } from "~/ui/Problems.tsx";
 import type { AdvisorKeptFinding, AdvisorRecordRef } from "~/protocol/advisorFindings.ts";
 import type { DismissReason } from "./decisions.tsx";
 import { figure } from "./Numbers.tsx";
-import { REASSIGN, findingView, type ViewAction, type ViewStat } from "./view.ts";
+import { REASSIGN, findingView, rowActions, type ViewAction, type ViewStat } from "./view.ts";
 import { toneOf } from "./words.ts";
 
 /** A cited record's page and how a list names it; null for one that has no page. */
@@ -270,22 +270,26 @@ function menuEntry(
 /**
  * The row's menu: what a person answers a finding with besides its fix. `name`
  * is what the menu is for, where the finding's title is not enough to tell it
- * from its neighbours (a subject inside a row of one class).
+ * from its neighbours (a subject inside a row of one class). In a list `row`,
+ * a press that only opens a page leads it ([rowActions]).
  */
 export function FindingMenu({
   f,
   actions,
   now,
   name = f.title,
+  row = false,
 }: {
   f: AdvisorKeptFinding;
   actions: RowActions;
   now: number;
   name?: string;
+  row?: boolean;
 }) {
   if (f.state !== "open") return null;
-  const others = findingView(f)
-    .actions.secondary.map((a, i) => menuEntry(f, a, actions, i))
+  const view = findingView(f).actions;
+  const others = (row ? rowActions(view) : view).secondary
+    .map((a, i) => menuEntry(f, a, actions, i))
     .filter((e): e is MenuEntry => e !== null);
   const items: MenuEntry[] = [
     ...others,
@@ -378,7 +382,7 @@ export function findingItem(
   applyFor: ApplyFor | null = null,
 ): AttentionItem {
   const view = findingView(f);
-  const primary = view.actions.primary;
+  const primary = rowActions(view.actions).primary;
   const applying = open !== null && open.id === f.id && applyFor !== null;
   const label = view.actions.primary?.kind === "apply" ? view.actions.primary.label : "the fix";
   return {
@@ -396,7 +400,7 @@ export function findingItem(
     action: (
       <span className="advisor-row-actions">
         {primary ? <ActionButton f={f} action={primary} actions={actions} /> : null}
-        <FindingMenu f={f} actions={actions} now={now} />
+        <FindingMenu f={f} actions={actions} now={now} row />
       </span>
     ),
     details: <Details f={f} now={now} />,
@@ -496,7 +500,7 @@ export function groupItem(
       <ul className="advisor-group" aria-label={`Each of the ${subjectsWords(findings)}`}>
         {findings.map((f) => {
           const name = f.subject.name || f.subject.id;
-          const primary = findingView(f).actions.primary;
+          const primary = rowActions(findingView(f).actions).primary;
           const line = [...findingView(f).stats.map(statWords), ...marks(f, now)].join(" · ");
           return (
             <li key={f.id} className="advisor-group__row">
@@ -514,7 +518,7 @@ export function groupItem(
                 {primary ? (
                   <ActionButton f={f} action={primary} actions={actions} subject={name} />
                 ) : null}
-                <FindingMenu f={f} actions={actions} now={now} name={`${name}: ${f.title}`} />
+                <FindingMenu f={f} actions={actions} now={now} name={`${name}: ${f.title}`} row />
               </span>
             </li>
           );

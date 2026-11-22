@@ -62,7 +62,10 @@ test("a pasted Admin key turns analytics on once and is not kept", async () => {
   await waitFor(() => expect(open.getAttribute("aria-disabled")).not.toBe("true"));
   fireEvent.click(open);
   fireEvent.change(screen.getByLabelText("Admin key ID"), { target: { value: "P1A2S3T4E5" } });
-  const key = screen.getByLabelText("Admin key (.p8)") as HTMLTextAreaElement;
+  const key = screen.getByRole("textbox", { name: "Admin key (.p8)" }) as HTMLTextAreaElement;
+  // A KEY IS NEVER SHOWN: the box is masked, and a file picker reads the .p8.
+  expect(key.classList.contains("crewlet-value-field__key-box--masked")).toBe(true);
+  expect(screen.getByRole("button", { name: "Choose file: Admin key (.p8)" })).toBeTruthy();
   fireEvent.change(key, { target: { value: KEY } });
   fireEvent.click(screen.getByRole("button", { name: "Turn on" }));
   await screen.findByText("App 111: turned on.");

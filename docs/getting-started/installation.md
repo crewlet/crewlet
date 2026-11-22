@@ -36,7 +36,7 @@ host, executable by the engine's user and on its `PATH` (or named by path with
 | Open models on any provider, a local server included | `opencode` | `opencode` | **OpenCode 2**: `@opencode/cli` on npm. Not 1.x's `opencode-ai`, which cannot run the engine's profile |
 
 [Supported harnesses](../concepts/llm-backends.md#supported-harnesses) lists the rest.
-Only `claude-code`, `gemini-cli`, `qwen-code`, `opencode`, `copilot`, `muse-code`, `kimi-code` and `pi` can run a seat's **executor** (its harness's
+Only `claude-code`, `codex`, `gemini-cli`, `qwen-code`, `opencode`, `copilot`, `muse-code`, `kimi-code` and `pi` can run a seat's **executor** (its harness's
 own run in a [code sandbox](../concepts/code-sandbox.md) box), so every agent
 seat needs one of them in its `llm` chain; the others serve the reviewer,
 workers and side passes. The executor's harness runs in the box, not as the

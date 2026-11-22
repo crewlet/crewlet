@@ -16,11 +16,11 @@ import (
 // and mailbox across it, on a message past the transport's eight-mebibyte
 // max_payload (nats-server leafnode.go, maxPayloadViolation). So a value fits a
 // 6,290,688-byte read (internal/jsapi's MaxReadable) beside the most header a
-// key's write carries, which internal/coord/kv derives and holds this figure
-// to. It binds a sandbox run's row and parts (internal/sandbox's RowBytes) and
-// the activation's body, the company document sealed ([BodyRef], held by
-// internal/api/configapi); other records' own fields keep them far below it.
-const MaxValueBytes = 6_290_542
+// write carries, a run's standing in it ([RunStanding]), which internal/coord/kv
+// derives and holds this figure to. It binds a run's row and parts
+// (internal/sandbox's RowBytes) and the activation's body ([BodyRef], held by
+// internal/api/configapi); other records keep far below it.
+const MaxValueBytes = 6_290_346
 
 // MaxValueCrossing is the longest a CHANGE of a run's value at [MaxValueBytes],
 // a read-decide-write ([SandboxRuns.MutateSandboxRun]), takes to cross a node's
@@ -61,8 +61,8 @@ func HoldValue(key string, size, bound int) error {
 // SmallValueBytes is the most a declared class read at the read term alone,
 // given no crossing of its own, may hold (internal/coord/kv's key classes,
 // the activation pointer's among them): at this bound a read's reply
-// (internal/jsapi's ReplyBytes, the most write header included) is 23,064
-// bytes, 0.66 s at the floor, inside internal/jsprovision's ReadTerm of a
+// (internal/jsapi's ReplyBytes, the most write header included) is 23,328
+// bytes, 0.67 s at the floor, inside internal/jsprovision's ReadTerm of a
 // second. internal/coord/kv holds the figure to it.
 const SmallValueBytes = 16 << 10
 
@@ -70,7 +70,7 @@ const SmallValueBytes = 16 << 10
 // every probe, heartbeat and tick on every node reads it, so its read must
 // cross a link at the slowest pace allowed inside a probe's 1.875 s. At this
 // bound a read's reply (internal/jsapi's ReplyBytes, the most write header
-// included) is 12,144 bytes: 0.35 s at the floor. Its fixed fields take under 600 bytes and
+// included) is 12,404 bytes: 0.35 s at the floor. Its fixed fields take under 600 bytes and
 // [MaxSummaryBytes] 4 KiB, so the rest is room for an origin no valid one
 // approaches. The company document rides its own key, named by the pointer.
 const MaxPointerBytes = 8 << 10

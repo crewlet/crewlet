@@ -171,10 +171,9 @@ func unproductiveFinding(c *config.Company, p place, t fireTally) Finding {
 		Class: ClassScheduleUnproductive, Severity: SeverityCosts, Actor: ActorOwner,
 		Source: SourceEvidence, Area: AreaSchedules, Subject: p.subject(),
 		Title: "Schedules that rarely change anything.",
-		Why: "In the last 7 days each of its fires started a turn on the agent's models, and " +
-			"almost none moved any work: no work item, page or code changed, only comments or " +
-			"nothing. A check that waits for something to happen is better as a work item " +
-			"dated for when to look.",
+		Why: "Its runs are paid for and buy almost nothing. A run moves work when it changes a work " +
+			"item, a page or code; comments alone do not. A check that waits for something to " +
+			"happen is better as a work item dated for when to look.",
 		Item:     fmt.Sprintf("%s (%s in %d runs)", s.Name, changedSaid(t.moved), t.fires),
 		Evidence: []Fact{{Key: "fires", Value: int64(t.fires)}, {Key: "moved", Value: int64(t.moved)}},
 		Fix:      scheduleFix(c, p, config.Warning{}),

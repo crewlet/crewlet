@@ -133,9 +133,11 @@ func (u UsagePaths) PromptTokens(input, cacheRead, cacheWrite int) int {
 // OpenCode 2.0 keeps logins in the same SQLite file as every session, so
 // copying it would carry one seat's conversations to every other seat and
 // pruning it would delete the login. The document is the login of record
-// ([CredentialStoreDocument]); each generation imports it into an empty
-// database and exports at its end, carried back only as a compare-and-swap
-// against the seed under hostbox.LockCredentials (Workspace.syncCredentialsOut).
+// ([CredentialStoreDocument]): a JSON array of credentials, each an object
+// with a string id. Each generation imports it into an empty database and
+// exports at its end, carried back only as a compare-and-swap against the seed
+// under hostbox.LockCredentials (Workspace.syncCredentialsOut), holding the
+// handed logins alone ([KeepHandedCredentials]).
 type CredentialStore struct {
 	// ExportArgs print every login the harness holds as one document on stdout.
 	ExportArgs []string `yaml:"export_args,omitempty"`
@@ -809,7 +811,7 @@ type Profile struct {
 	// respectively: the flag choosing the sign-in, for a harness that picks
 	// one on argv and runs another without it. Qwen Code's `--auth-type
 	// openai` and `--auth-type qwen-subscription`: its OpenAI sign-in otherwise
-	// needs OPENAI_MODEL set beside the key (0.28.3). Lists replace wholesale
+	// needs OPENAI_MODEL set beside the key (0.28.4). Lists replace wholesale
 	// on override, as CompleteArgs does.
 	KeyArgs          []string `yaml:"key_args,omitempty"`
 	SubscriptionArgs []string `yaml:"subscription_args,omitempty"`

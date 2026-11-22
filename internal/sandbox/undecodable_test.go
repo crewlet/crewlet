@@ -15,7 +15,7 @@ var garbled = []byte("{not json")
 // for all any reader can tell.
 func writeGarbled(t *testing.T, store *CoordStore) {
 	t.Helper()
-	if created, err := store.runs.CreateSandboxRun(t.Context(), "t-garbled", garbled); err != nil || !created {
+	if created, err := store.runs.CreateSandboxRun(t.Context(), "t-garbled", garbled, nil); err != nil || !created {
 		t.Fatalf("CreateSandboxRun = %v, %v", created, err)
 	}
 }

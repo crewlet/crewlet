@@ -1942,6 +1942,8 @@ older build:
     base version waits on that census before publishing one, and an envelope
     never refuses what a newer build may add to it;
   - a parked run's unknown keys ride `PendingRun.Extra`;
+  - a run's standing this build cannot read (an older build wrote the record
+    without its headers) is judged on its record, read whole, never skipped;
   - a data node refuses an estate request whose arguments or actor hold a key
     its build does not declare, rather than run it without the key (the router
     leaves every input field at its zero off the wire, so only a request that

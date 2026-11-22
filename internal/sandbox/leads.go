@@ -328,9 +328,9 @@ type TurnLeads struct {
 //
 //	the leads it keeps .............. MaxKeptLeadBytes          524,288  (512 KiB)
 //	its own fields, measured ........ measuredLeadsFields            85
-//	to spare, measured .............. measuredLeadsSpare      5,766,169
+//	to spare, measured .............. measuredLeadsSpare      5,765,973
 //	                                                          ---------
-//	                                  RowBytes                6,290,542
+//	                                  RowBytes                6,290,346
 //
 // The spare is room for a later build's part keys ([leadsPart.Extra]); a key
 // added to a LEAD comes out of the leads' own share.
@@ -359,7 +359,7 @@ type leadsPart struct {
 // either restates both here and in the table.
 const (
 	measuredLeadsFields = 85
-	measuredLeadsSpare  = 5_766_169
+	measuredLeadsSpare  = 5_765_973
 )
 
 // MarshalJSON writes the part with the keys a later build added to it.
