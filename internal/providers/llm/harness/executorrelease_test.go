@@ -72,6 +72,7 @@ func TestADirectBoxsCodexIsHeldToItsRunnersFloorAndProbe(t *testing.T) {
 		"newer, fresh sessions only":       {0, "codex-cli 0.172.0", direct, ""},
 		"below the floor":                  {0, "codex-cli 0.170.2", direct, "drives 0.171.0 or later"},
 		"a pre-release":                    {0, "codex-cli 0.172.0-alpha.1", direct, "names no release"},
+		"a pre-release of three parts":     {0, "codex-cli 0.172.0-rc", direct, "names no release"},
 		"no app-server":                    {1, "codex-cli 0.171.0", direct, "app-server --help` exited 1"},
 		"a remote cell": {1, "codex-cli 0.150.0", DiagnoseOptions{ExecutorSeats: []string{"swe"},
 			ExecutorHarnesses: []string{"codex"}, Cell: "e2b"}, ""},
