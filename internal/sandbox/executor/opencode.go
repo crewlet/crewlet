@@ -1060,7 +1060,8 @@ func jsonStringify(s string) string {
 // `plugins`, after any `-<id>` removal beneath. Every path is under the work
 // dir ([openCodeReferable]). Written every run: the script refuses to run
 // without it.
-func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error) {
+func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
+	paths Paths) (string, error) {
 	// THE COMMANDS ITS MODEL RUNS START WITHOUT WHAT THE HARNESS ALONE READS:
 	// the names it signs in by and its own variables, on every run
 	// (opencode_toolenv.js).

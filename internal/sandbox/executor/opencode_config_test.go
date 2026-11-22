@@ -211,7 +211,7 @@ func TestTheRunsConfigurationIsWrittenUnderItsWorkDirectory(t *testing.T) {
 	path, err := executor.OpenCode{}.WriteConfig(t.Context(), box, sandbox.RunRequest{
 		System: "the seat's standing instructions", MCPServers: seatServers(),
 		Limits: sandbox.Limits{MaxTurns: 40},
-	}, p)
+	}, executor.Session{}, p)
 	if err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
@@ -259,7 +259,7 @@ func TestEveryServerValueIsReadFromAFile(t *testing.T) {
 	servers := seatServers()
 	want := serverValues(servers)
 
-	path, err := executor.OpenCode{}.WriteConfig(t.Context(), box, sandbox.RunRequest{MCPServers: servers}, p)
+	path, err := executor.OpenCode{}.WriteConfig(t.Context(), box, sandbox.RunRequest{MCPServers: servers}, executor.Session{}, p)
 	if err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
@@ -326,7 +326,7 @@ func TestTheEntriesTheRunOwnsStateDisabledFalse(t *testing.T) {
 	b := sandbox.NewFakeSandbox("box-1")
 	path, err := executor.OpenCode{}.WriteConfig(t.Context(), b, sandbox.RunRequest{
 		MCPServers: seatServers(), Limits: sandbox.Limits{MaxTurns: 40},
-	}, executor.PathsFor(b))
+	}, executor.Session{}, executor.PathsFor(b))
 	if err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
@@ -375,7 +375,7 @@ func TestAWebDeniedOpenCodeRunHasNoWebTool(t *testing.T) {
 		b := sandbox.NewFakeSandbox("box-1")
 		path, err := executor.OpenCode{}.WriteConfig(t.Context(), b, sandbox.RunRequest{
 			MCPServers: seatServers(), Limits: sandbox.Limits{MaxTurns: 40}, WebDenied: denied,
-		}, executor.PathsFor(b))
+		}, executor.Session{}, executor.PathsFor(b))
 		if err != nil {
 			t.Fatalf("WriteConfig: %v", err)
 		}
@@ -440,7 +440,7 @@ func TestTheNotesPluginIsWrittenAndItsRouteReferenced(t *testing.T) {
 	path, err := executor.OpenCode{}.WriteConfig(t.Context(), box, sandbox.RunRequest{
 		MCPServers: seatServers(),
 		Steer:      sandbox.SteerWiring{Server: "crewlet", Tool: "steer_take", URL: route},
-	}, p)
+	}, executor.Session{}, p)
 	if err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
@@ -480,7 +480,7 @@ func TestTheNotesPluginIsWrittenAndItsRouteReferenced(t *testing.T) {
 	// A RUN WIRED TO NO NOTES: no notes plugin named, none written.
 	_, bare := openCodeBox(t, t.TempDir())
 	bp := executor.PathsFor(bare)
-	path, err = executor.OpenCode{}.WriteConfig(t.Context(), bare, sandbox.RunRequest{MCPServers: seatServers()}, bp)
+	path, err = executor.OpenCode{}.WriteConfig(t.Context(), bare, sandbox.RunRequest{MCPServers: seatServers()}, executor.Session{}, bp)
 	if err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
@@ -530,7 +530,7 @@ func TestAHomeAReferenceCannotNameIsRefused(t *testing.T) {
 		} {
 			b := homed{FakeSandbox: sandbox.NewFakeSandbox("box-1"), home: home}
 			p := executor.PathsFor(b)
-			_, err := executor.OpenCode{}.WriteConfig(t.Context(), b, req, p)
+			_, err := executor.OpenCode{}.WriteConfig(t.Context(), b, req, executor.Session{}, p)
 			if err == nil || !strings.Contains(err.Error(), "providers.sandbox.local.state_dir") ||
 				!strings.Contains(err.Error(), fmt.Sprintf("%q", home)) {
 				t.Errorf("home %q, %s: WriteConfig = %v, want it refused naming the home and the setting", home, what, err)
@@ -542,7 +542,7 @@ func TestAHomeAReferenceCannotNameIsRefused(t *testing.T) {
 	}
 	b := homed{FakeSandbox: sandbox.NewFakeSandbox("box-1"), home: "/srv/r&d <boxes>/home"}
 	if _, err := (executor.OpenCode{}).WriteConfig(t.Context(), b,
-		sandbox.RunRequest{MCPServers: seatServers()}, executor.PathsFor(b)); err != nil {
+		sandbox.RunRequest{MCPServers: seatServers()}, executor.Session{}, executor.PathsFor(b)); err != nil {
 		t.Errorf("a home holding & < > was refused: %v", err)
 	}
 }
@@ -560,7 +560,7 @@ func TestAReusedBoxKeepsNoEarlierRunsConfiguration(t *testing.T) {
 	runner, box := openCodeBox(t, t.TempDir())
 	p := executor.PathsFor(box)
 	if _, err := (executor.OpenCode{}).WriteConfig(t.Context(), box,
-		sandbox.RunRequest{MCPServers: seatServers(), Steer: steerWiring}, p); err != nil {
+		sandbox.RunRequest{MCPServers: seatServers(), Steer: steerWiring}, executor.Session{}, p); err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
 	if err := runner.ClearArtifacts(t.Context(), box); err != nil {
@@ -574,7 +574,7 @@ func TestAReusedBoxKeepsNoEarlierRunsConfiguration(t *testing.T) {
 
 	if _, err := (executor.OpenCode{}).WriteConfig(t.Context(), box, sandbox.RunRequest{
 		MCPServers: map[string]sandbox.MCPServer{"crewlet": seatServers()["crewlet"]},
-	}, p); err != nil {
+	}, executor.Session{}, p); err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
 	entries, err := os.ReadDir(p.OpenCodeValues())

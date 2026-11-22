@@ -367,7 +367,7 @@ func TestTheMuseScriptWiresItsPluginBeforeItsServers(t *testing.T) {
 func TestAMuseRunWithASignInNameNoShellCanUnsetIsRefused(t *testing.T) {
 	box := sandbox.NewFakeSandbox("b")
 	_, err := (Muse{}).WriteConfig(t.Context(), box, sandbox.RunRequest{Brief: "x",
-		SignInEnv: []string{"META_API_KEY", "BAD-NAME"}}, PathsFor(box))
+		SignInEnv: []string{"META_API_KEY", "BAD-NAME"}}, Session{}, PathsFor(box))
 	if err == nil || !strings.Contains(err.Error(), "BAD-NAME") {
 		t.Fatalf("err = %v, want the name refused", err)
 	}
