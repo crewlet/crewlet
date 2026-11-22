@@ -183,6 +183,16 @@ func releaseOf(printed string) string {
 	return ""
 }
 
+// bareReleaseShell is the script's side of [releaseOf]: it sets the shell
+// variable name to the bare MAJOR.MINOR.PATCH the `--version` output in v
+// names, else "", so a box's gate and the engine's check read one release.
+// Globbing is off while v is split: it is the box's own words.
+func bareReleaseShell(name string) string {
+	return fmt.Sprintf(`%[1]s=; set -f; for rw in $v; do rw=${rw#v}; case "$rw" in [0-9]*) %[1]s=$rw; break;; esac; done; set +f
+case "$%[1]s" in *[!0-9.]*|.*|*.|*..*|*.*.*.*) %[1]s= ;; *.*.*) ;; *) %[1]s= ;; esac
+`, name)
+}
+
 // captured describes the session archive the box's last run packed
 // ([Paths.SessionCapture]), for the session rec names, or nil where there is
 // none ([Runner.archiveAt]).

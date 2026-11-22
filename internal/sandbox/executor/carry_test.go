@@ -575,9 +575,10 @@ func TestABoxWhoseCopyDoesNotHoldTheCarriedArchiveHasItReplaced(t *testing.T) {
 // why on the error stream and in the report, and report that the run did not
 // continue.
 //
-// Mutation: resume whatever the restore did, or take an unreadable release for a
-// current one, and the run continues a session no rule was read for; record no
-// reason, and the report says nothing of why.
+// Mutation: resume whatever the restore did, or take an unreadable release (a
+// pre-release, as releaseOf reads one) for a current one, and the run
+// continues a session no rule was read for; record no reason, and the report
+// says nothing of why.
 func TestACarriedSessionTheBoxCannotRestoreStartsANewOne(t *testing.T) {
 	t.Parallel()
 	first, a := sessionBox(t, "2.1.310")
@@ -599,6 +600,8 @@ func TestACarriedSessionTheBoxCannotRestoreStartsANewOne(t *testing.T) {
 	}{
 		"a box older than the floor": {release: "2.1.309", archive: capture, why: "older than 2.1.310"},
 		"a box whose release does not read": {release: "nightly", archive: capture,
+			why: "named no release this build reads"},
+		"a box on a pre-release": {release: "2.1.311-beta.1", archive: capture,
 			why: "named no release this build reads"},
 		"an archive with no transcript": {release: "2.1.310", archive: empty.String(),
 			why: "could not be restored"},

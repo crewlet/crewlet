@@ -88,14 +88,10 @@ func (Codex) Command(req sandbox.RunRequest, session Session, paths Paths, _ str
 // codexReleaseRead reads the box's `codex --version` once, as v.
 const codexReleaseRead = "v=$(codex --version < /dev/null 2> /dev/null)\n"
 
-// codexReleaseParse reads v as [releaseOf] does, a bare MAJOR.MINOR.PATCH
-// alone: n is the first word starting with a digit (after an optional v)
-// where it is one, else "", so a pre-release reads as none; its numbers are
-// a, b and c; and `at`, [claudeRelease]'s, is false for a release that does
-// not read. Globbing is off while v is split: it is the box's own words.
-const codexReleaseParse = `n=; set -f; for rw in $v; do rw=${rw#v}; case "$rw" in [0-9]*) n=$rw; break;; esac; done; set +f
-case "$n" in *[!0-9.]*|.*|*.|*..*|*.*.*.*) n= ;; *.*.*) ;; *) n= ;; esac
-a=${n%%.*}; r=${n#*.}; b=${r%%.*}; c=${r##*.}
+// codexReleaseParse reads v as [releaseOf] does ([bareReleaseShell]): n is
+// the bare release, "" for a pre-release or none; its numbers are a, b and c;
+// and `at`, [claudeRelease]'s, is false for a release that does not read.
+var codexReleaseParse = bareReleaseShell("n") + `a=${n%%.*}; r=${n#*.}; b=${r%%.*}; c=${r##*.}
 at() { [ -n "$n" ] && { [ "$a" -gt "$1" ] || { [ "$a" -eq "$1" ] && { [ "$b" -gt "$2" ] || { [ "$b" -eq "$2" ] && [ "$c" -ge "$3" ]; }; }; }; }; }
 `
 
