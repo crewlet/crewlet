@@ -54,9 +54,6 @@ type musePayload struct {
 	// Calls and Models are the run's usage, once per run.
 	Calls  int         `json:"calls"`
 	Models []museUsage `json:"models"`
-
-	// Turns is the cap the script's [museCapMark] line names.
-	Turns int `json:"turns"`
 }
 
 // museUsage is one model's usage on `run.usage` (`models[]`), or one request's
@@ -221,7 +218,12 @@ func (d *museEvents) Line(line []byte) {
 	case museChildMark:
 		d.marked = true
 	case museCapMark:
-		d.capTurns = p.Turns
+		// ITS OWN FIELD, beside its type: the script writes no payload.
+		var mark struct {
+			Turns int `json:"turns"`
+		}
+		_ = json.Unmarshal(line, &mark)
+		d.capTurns = mark.Turns
 	case "runtime.session":
 		// ONLY AFTER THE MARK: the script adds the run's subagents' requests
 		// there, and the stream itself prints no record of a session.
