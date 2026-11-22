@@ -140,9 +140,9 @@ func (s Sources) latestRun(ctx context.Context) (*AdvisorRunSummary, error) {
 	// HOW FAR IT IS, from the checkpoint it keeps as it answers its agenda.
 	var agenda *AdvisorAgenda
 	if flying {
-		body, found, err := s.Advisor.Checkpoint(ctx, live, advisorFresh)
-		if err != nil {
-			return nil, advisorUnreadable(err)
+		body, found, cerr := s.Advisor.Checkpoint(ctx, live, advisorFresh)
+		if cerr != nil {
+			return nil, advisorUnreadable(cerr)
 		}
 		var kept modelpass.Checkpoint
 		if found && json.Unmarshal(body, &kept) == nil {
