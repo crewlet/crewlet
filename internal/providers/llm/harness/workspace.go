@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -73,6 +74,11 @@ type seatState struct {
 	// by the call that opens a generation and let go by the last call out:
 	// non-nil exactly while inflight is above zero.
 	held func()
+
+	// turn is held by the one call a home whose harness keeps a daemon runs
+	// at a time ([harnessprofile.HomeDaemon]), from before its generation
+	// opens until after it closes.
+	turn chan struct{}
 }
 
 // workspaceKey is a workspace's identity: the resolved state directory and
@@ -180,11 +186,14 @@ func (w *Workspace) SeatDir(seat string) string {
 	return filepath.Join(w.root, "seats", seatSlug(seat))
 }
 
-// KeySeatDir is one seat's KEY HOME — where its calls that sign in with a key
-// run ([Workspace.AcquireForKey]) — beside the login homes rather than among
-// them, so a sweep for a login to carry out never lists one.
-func (w *Workspace) KeySeatDir(seat string) string {
-	return filepath.Join(w.root, "key-seats", seatSlug(seat))
+// KeySeatDir is one seat's KEY HOME for one entry, where that entry's calls
+// for the seat that sign in with a key run ([Workspace.AcquireForKey]), beside
+// the login homes rather than among them, so a sweep for a login to carry out
+// never lists one. Per entry because what a key signs a harness in to may stay
+// in its home while a call of the generation runs, and a fallback entry's call
+// must not go out on the previous entry's key.
+func (w *Workspace) KeySeatDir(seat, entry string) string {
+	return filepath.Join(w.root, "key-seats", seatSlug(seat), seatSlug(entry))
 }
 
 // loginHome is the home every `crewlet llm` auth command runs the harness in,
@@ -276,6 +285,13 @@ func seatSlug(seat string) string {
 	return slug + "-" + hex.EncodeToString(sum[:])[:16]
 }
 
+// daemonStopper runs the harness's own stop command for the daemon it keeps in a
+// home ([harnessprofile.HomeDaemon]). The PROVIDER implements it, for the reason
+// it implements [loginStore]: running the harness takes its environment.
+type daemonStopper interface {
+	stopDaemon(ctx context.Context, home, cache string) error
+}
+
 // loginStore moves a [harnessprofile.CredentialStore]'s document into and out of a
 // home through the harness's own commands.
 //
@@ -315,7 +331,10 @@ type Checkout struct {
 	record string
 	// store is the generation's way back out for a login held in the harness's
 	// own database: whichever provider seeded the home exports from it.
-	store    loginStore
+	store loginStore
+	// stopper stops the home's daemon as the call releases it, nil where the
+	// profile declares none or no provider runs the call.
+	stopper  daemonStopper
 	released bool
 }
 
@@ -333,20 +352,22 @@ type Checkout struct {
 // HARNESS ([Shared]).
 func (w *Workspace) Acquire(ctx context.Context, seat, callID string, store loginStore) (*Checkout, error) {
 	dir := w.SeatDir(seat)
-	checkout, err := w.checkOut(dir, callID, func(state *seatState) error {
-		return w.openGeneration(ctx, seatSlug(seat), dir, state, store)
+	stopper, _ := store.(daemonStopper)
+	checkout, err := w.checkOut(ctx, dir, callID, func(state *seatState) error {
+		return w.openGeneration(ctx, seatSlug(seat), dir, state, store, stopper)
 	})
 	if err != nil {
 		return nil, err
 	}
 	checkout.record = filepath.Join(dir, generationFile)
 	checkout.store = store
+	checkout.stopper = stopper
 	return checkout, nil
 }
 
 // AcquireForKey prepares a place for one call whose harness signs in with a KEY —
 // an entry under auth.mode api-key, or inherit-env handing it the engine's own
-// key — in the seat's key home ([Workspace.KeySeatDir]).
+// key, in the key home of the seat and the entry ([Workspace.KeySeatDir]).
 //
 // A HOME APART FROM THE LOGIN'S: a harness may keep what a key signs it in to in
 // its login's own file (Cursor Agent writes the session and key to auth.json and
@@ -354,26 +375,46 @@ func (w *Workspace) Acquire(ctx context.Context, seat, callID string, store logi
 // login of record and sign every subscription seat in with the key. So a key
 // home is never seeded with the login and nothing is carried out: each
 // generation opens and closes it with no credential file ([Workspace.dropCopies]).
-func (w *Workspace) AcquireForKey(ctx context.Context, seat, callID string) (*Checkout, error) {
-	dir := w.KeySeatDir(seat)
-	checkout, err := w.checkOut(dir, callID, func(state *seatState) error {
-		return w.openKeyGeneration(ctx, dir, state)
+func (w *Workspace) AcquireForKey(
+	ctx context.Context, seat, entry, callID string, stopper daemonStopper,
+) (*Checkout, error) {
+	dir := w.KeySeatDir(seat, entry)
+	checkout, err := w.checkOut(ctx, dir, callID, func(state *seatState) error {
+		return w.openKeyGeneration(ctx, dir, state, stopper)
 	})
 	if err != nil {
 		return nil, err
 	}
 	checkout.keyed = true
+	checkout.stopper = stopper
 	return checkout, nil
 }
 
 // checkOut is the part of a checkout the two kinds of home share: the call's
 // own working directory, prepared, and the seat's generation opened by open
-// when the call is its first.
-func (w *Workspace) checkOut(dir, callID string, open func(*seatState) error) (_ *Checkout, err error) {
+// when the call is its first, and, for a harness that keeps a daemon for its
+// home, the home's one turn, waited for under ctx ([seatState.turn]).
+func (w *Workspace) checkOut(
+	ctx context.Context, dir, callID string, open func(*seatState) error,
+) (_ *Checkout, err error) {
 	state := w.seatState(dir)
 	home := filepath.Join(dir, "home")
 	cache := filepath.Join(dir, "cache")
 	work := filepath.Join(dir, "work", seatSlug(callID))
+
+	if w.profile.HomeDaemon != nil {
+		select {
+		case state.turn <- struct{}{}:
+		case <-ctx.Done():
+			return nil, fmt.Errorf("harness: waiting for the seat's call in %q to end: %w",
+				dir, context.Cause(ctx))
+		}
+		defer func() {
+			if err != nil {
+				<-state.turn
+			}
+		}()
+	}
 
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -436,12 +477,16 @@ func (w *Workspace) checkOut(dir, callID string, open func(*seatState) error) (_
 // profile's, then a key home's own over them
 // ([harnessprofile.Profile.KeySeedFiles]). On success the lock is the seat's to
 // hold until its last call is out.
-func (w *Workspace) openKeyGeneration(ctx context.Context, dir string, state *seatState) error {
+func (w *Workspace) openKeyGeneration(ctx context.Context, dir string, state *seatState, stopper daemonStopper) error {
 	release, err := w.lockSeat(ctx, dir)
 	if err != nil {
 		return err
 	}
 	home := filepath.Join(dir, "home")
+	if err := w.stopDaemon(ctx, stopper, home, filepath.Join(dir, "cache")); err != nil {
+		release()
+		return err
+	}
 	if err := errors.Join(w.dropCopies(home), w.prune(home), w.seedFiles(home, harnessprofile.SeedHome),
 		writeSeeds(home, w.profile.KeySeedFiles)); err != nil {
 		release()
@@ -456,7 +501,7 @@ func (w *Workspace) openKeyGeneration(ctx context.Context, dir string, state *se
 // home — see [Workspace.Acquire]. On success the lock is the seat's to hold
 // until its last call is out; on failure it is let go.
 func (w *Workspace) openGeneration(
-	ctx context.Context, slug, dir string, state *seatState, store loginStore,
+	ctx context.Context, slug, dir string, state *seatState, store loginStore, stopper daemonStopper,
 ) (err error) {
 	home := filepath.Join(dir, "home")
 	cache := filepath.Join(dir, "cache")
@@ -470,6 +515,11 @@ func (w *Workspace) openGeneration(
 			release()
 		}
 	}()
+	// BEFORE THE CARRY: a daemon an engine that ended mid-call left would
+	// otherwise still write the login being carried out.
+	if err = w.stopDaemon(ctx, stopper, home, cache); err != nil {
+		return err
+	}
 	w.sweep(ctx, store, slug)
 	carried, err := w.carryOut(ctx, home, cache, store, record, seatRemedy(record))
 	if err != nil {
@@ -518,6 +568,10 @@ func (c *Checkout) Release(ctx context.Context) error {
 		return nil
 	}
 	c.released = true
+	if c.ws.profile.HomeDaemon != nil {
+		// Let go after everything below, the generation's lock included.
+		defer func() { <-c.seat.turn }()
+	}
 
 	// The scratch directory goes first and unconditionally: it is this
 	// call's alone, and leaving it behind on an error path is how a state
@@ -540,18 +594,22 @@ func (c *Checkout) Release(ctx context.Context) error {
 			c.seat.held = nil
 		}
 	}()
+	// The daemon goes first, so nothing writes the home while its login is
+	// carried out and pruned. One that would not stop is reported and stopped
+	// again as the next generation opens.
+	stopErr := c.ws.stopDaemon(ctx, c.stopper, c.Home, c.Cache)
 	if c.keyed {
 		// Nothing to carry: what a key signed the harness in to goes with
 		// the generation ([Workspace.AcquireForKey]).
-		return errors.Join(workErr, c.ws.dropCopies(c.Home), c.ws.prune(c.Home))
+		return errors.Join(workErr, stopErr, c.ws.dropCopies(c.Home), c.ws.prune(c.Home))
 	}
 	if _, err := c.ws.syncCredentialsOut(ctx, c.Home, c.Cache, c.store, c.seat.gen); err != nil {
-		return errors.Join(workErr, fmt.Errorf("harness: the login in %q could not be "+
+		return errors.Join(workErr, stopErr, fmt.Errorf("harness: the login in %q could not be "+
 			"carried back to the shared directory, so the home was kept as it is for the "+
 			"next generation to carry out: %w", c.Home, err))
 	}
 	pruneErr := c.ws.prune(c.Home)
-	return errors.Join(workErr, pruneErr, clearGeneration(c.record))
+	return errors.Join(workErr, stopErr, pruneErr, clearGeneration(c.record))
 }
 
 // carryRefreshed carries a login the harness refreshed WHILE ITS CALL GOES ON
@@ -592,7 +650,7 @@ func (w *Workspace) seatState(dir string) *seatState {
 	defer w.mu.Unlock()
 	state, ok := w.seats[dir]
 	if !ok {
-		state = &seatState{}
+		state = &seatState{turn: make(chan struct{}, 1)}
 		w.seats[dir] = state
 	}
 	return state
@@ -627,6 +685,39 @@ func (w *Workspace) prune(home string) error {
 	// the first temporary file it opens rather than making the directory.
 	if err := os.MkdirAll(tempDir(home), 0o700); err != nil {
 		return fmt.Errorf("harness: preparing the seat's temporary directory: %w", err)
+	}
+	return nil
+}
+
+// stopDaemon ends the daemon the harness keeps for home ([harnessprofile.HomeDaemon])
+// while its pid file says one runs: through the harness's own stop command, and
+// then the file must be gone. Nothing to do for a profile with no daemon, or a
+// caller with no provider to run the harness (a test's bare workspace).
+func (w *Workspace) stopDaemon(ctx context.Context, stopper daemonStopper, home, cache string) error {
+	d := w.profile.HomeDaemon
+	if d == nil || stopper == nil {
+		return nil
+	}
+	pidFile, err := harnessprofile.UnderRoot(home, d.PIDFile)
+	if err != nil {
+		return err
+	}
+	running := func() (bool, error) {
+		_, err := os.Stat(pidFile)
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
+		}
+		return err == nil, err
+	}
+	if up, err := running(); err != nil || !up {
+		return err
+	}
+	if err := stopper.stopDaemon(ctx, home, cache); err != nil {
+		return fmt.Errorf("harness: stopping the daemon %s keeps for %q: %w", w.harness, home, err)
+	}
+	if up, err := running(); err != nil || up {
+		return errors.Join(err, fmt.Errorf("harness: %s still records a daemon in %s after "+
+			"its own stop command (home_daemon.stop_args)", w.harness, pidFile))
 	}
 	return nil
 }

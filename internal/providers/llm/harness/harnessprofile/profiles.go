@@ -233,6 +233,10 @@ func (p Profile) Clone() Profile {
 		out.ToolsOff = &ToolsOff{Args: args, Refuses: append([]string(nil), p.ToolsOff.Refuses...),
 			Note: p.ToolsOff.Note}
 	}
+	if p.HomeDaemon != nil {
+		out.HomeDaemon = &HomeDaemon{PIDFile: p.HomeDaemon.PIDFile,
+			StopArgs: slices.Clone(p.HomeDaemon.StopArgs)}
+	}
 	if p.CredentialStore != nil {
 		out.CredentialStore = &CredentialStore{
 			ExportArgs: append([]string(nil), p.CredentialStore.ExportArgs...),
