@@ -214,9 +214,9 @@ func newRequest(op growth.Operation, path, query map[string]string, body map[str
 		for _, p := range paths {
 			if steps, ok := parseMask(p); !ok || !documentedMask(steps) {
 				return googlegrowth.Request{}, refusal(growth.RefusedInvalid, fmt.Sprintf("updateMask path %q is "+
-					"not one AdMob takes: snake_case fields joined by dots, a line as "+
-					"mediation_group_lines[\"<line id>\"] and its ad unit as ad_unit_mappings[\"<ad unit id>\"]. "+
-					"No vendor was reached.", p))
+					"not one Google documents for a mediation group; give mediation_group_lines[\"<line id>\"], "+
+					"or under it .state, .cpm_micros, .cpm_mode, .display_name or .ad_unit_mappings[\"<ad unit "+
+					"id>\"], or targeting.ad_unit_ids. No vendor was reached.", p))
 			}
 		}
 	}
@@ -243,8 +243,8 @@ func groupBodyMatches(op growth.Operation, path map[string]string, body map[stri
 		}
 	case "admob.accounts.mediationGroups.patch", "admob.accounts.mediationGroups.create":
 		lines, _ := body[linesField].(map[string]any)
-		for key, v := range lines {
-			l, _ := v.(map[string]any)
+		for _, key := range sortedKeys(lines) {
+			l, _ := lines[key].(map[string]any)
 			if id, set := l["id"]; set && id != key {
 				return bad("line %q gives id %v; a line's id is its key in mediationGroupLines.", key, id)
 			}
