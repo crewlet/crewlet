@@ -41,8 +41,9 @@ func recorded(t *testing.T, record, name string) []string {
 // token, is in the configuration file and on no command line; the posture is
 // on the server's argv; CODEX_HOME is the box's own.
 //
-// Mutation: charge turn.completed's usage, put the MCP servers on argv, drop
-// the thread watcher, or the CODEX_HOME pin, and this goes red.
+// Mutation: charge turn.completed's usage, put the MCP servers on argv, or
+// drop the CODEX_HOME pin, and this goes red. (The report made while the run
+// is live is TestACodexRunEndedOnRequestStopsExecThenItsServer's.)
 func TestACodexRunReportsTheThreadItsHarnessMintedAndIsChargedItsRollout(t *testing.T) {
 	t.Parallel()
 	runner, box, record := codexBox(t, "0.171.0")
@@ -407,8 +408,10 @@ func TestACodexRunReadsItsLoginWhereALocalBoxIsSeededWithIt(t *testing.T) {
 // earlier run or the model left in CODEX_HOME's config.toml is replaced whole
 // by the run's, readable by the box's user alone.
 //
-// Mutation: append to the file, or leave a stale one where none was staged,
-// and this goes red.
+// Mutation: install no configuration, or leave it readable beyond the box's
+// user, and this goes red. The install's whole replacement is
+// TestACodexRunStartsOnTheConfigurationOfTheSessionItStarts's to catch: here
+// the run's clear removes the old file before the install.
 func TestACodexRunStartsFromItsOwnConfigurationEveryRun(t *testing.T) {
 	t.Parallel()
 	runner, box, _ := codexBox(t, "0.171.0")
@@ -496,17 +499,20 @@ func TestNoCodexCommandLineCarriesTheBridgesToken(t *testing.T) {
 }
 
 // A CODEX RUN TORN DOWN ENDS IN ORDER WITHIN ITS GRACE: on the group's
-// SIGTERM, exec goes first, then the app-server, sent SIGTERM again since it
-// finishes the turn in flight on the first (measured on 0.171.0), and the
-// session is packed before the run exits.
+// SIGTERM, the script's teardown ends exec first, then the app-server, and the
+// session is packed before the run exits. The stand-in exec outlives the
+// group's SIGTERM and ends on the script's own, so the order is the script's,
+// never the group's.
 //
-// Mutation: stop the app-server before exec, send it one SIGTERM, or drop the
-// pack from the teardown, and this goes red.
+// Mutation: stop the app-server before exec in the teardown, or drop the pack
+// from it, and this goes red.
 func TestACodexRunTornDownEndsInOrderAndPacksItsSession(t *testing.T) {
 	t.Parallel()
 	runner, box, record := codexBox(t, "0.171.0")
-	if err := os.WriteFile(filepath.Join(record, "block"), nil, 0o600); err != nil {
-		t.Fatalf("arm the stand-in: %v", err)
+	for name, body := range map[string]string{"block": "", "exec-terms": "2"} {
+		if err := os.WriteFile(filepath.Join(record, name), []byte(body), 0o600); err != nil {
+			t.Fatalf("arm the stand-in: %v", err)
+		}
 	}
 	handle, err := runner.Start(t.Context(), box, sandbox.RunRequest{Brief: "go"})
 	if err != nil {
@@ -522,6 +528,45 @@ func TestACodexRunTornDownEndsInOrderAndPacksItsSession(t *testing.T) {
 	}
 	if boxFile(t, box, executor.PathsFor(box).SessionCapture()) == "" {
 		t.Error("the torn-down run packed no session")
+	}
+}
+
+// A CODEX RUN ENDED ON REQUEST STOPS EXEC, THEN ITS SERVER, AND PACKS ITS
+// SESSION, every signal the script's own (the end request reaches the script
+// alone, never the group): exec is ended first; the app-server, which
+// finishes the turn in flight on one SIGTERM (measured on 0.171.0), is sent
+// SIGTERM again until it goes, never left to the grace's SIGKILL; the session
+// is packed and the end recorded. While the run is live, the thread `exec
+// --json` reported is already reported, by the script's watcher.
+//
+// Mutation: drop the thread watcher, send the app-server one SIGTERM, or end
+// it before exec, and this goes red.
+func TestACodexRunEndedOnRequestStopsExecThenItsServer(t *testing.T) {
+	t.Parallel()
+	runner, box, record := codexBox(t, "0.171.0")
+	if err := os.WriteFile(filepath.Join(record, "block"), nil, 0o600); err != nil {
+		t.Fatalf("arm the stand-in: %v", err)
+	}
+	p := executor.PathsFor(box)
+	handle, err := runner.Start(t.Context(), box, sandbox.RunRequest{Brief: "go"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitForFile(t, filepath.Join(record, "working"), "the stand-in to work")
+	waitForFile(t, p.SessionReport(), "the thread to be reported while the run is live")
+	if got := boxFile(t, box, p.SessionReport()); got != codexStandInThread+"\n" {
+		t.Errorf("the live report holds %q, want the thread exec reported", got)
+	}
+	askEnd(t, runner, box, handle)
+	awaitOver(t, runner, box, handle, 15*time.Second, "the end was asked")
+	if order := recorded(t, record, "order"); !slices.Equal(order, []string{"exec", "server"}) {
+		t.Errorf("the end stopped %q, want exec, then the app-server on the script's own SIGTERMs", order)
+	}
+	if boxFile(t, box, p.SessionCapture()) == "" {
+		t.Error("the ended run packed no session")
+	}
+	if got := strings.TrimSpace(boxFile(t, box, p.JobEnded())); got != "asked" {
+		t.Errorf("the run's end is recorded %q, want asked", got)
 	}
 }
 
