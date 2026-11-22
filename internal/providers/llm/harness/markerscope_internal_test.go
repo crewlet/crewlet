@@ -342,7 +342,7 @@ func TestTheEventsScopeDoesNotSearchStderr(t *testing.T) {
 // A FAILED RUN WITH TOOLS IS CLASSIFIED BY ITS OWN FAILURE EVENTS. Its answer
 // is its record's last prose, which a failed run never wrote, and a harness whose
 // stderr says only that it failed says why in a failure event alone (Muse
-// Code's run.terminal.failed reason, beside "run ended with Failed"): read
+// Code 1.4.13's run.terminal.failed reason, beside "run ended with Failed"): read
 // beside stderr, by the profile's fields, a spent plan there sits the entry
 // out. Only a failed run's — a run that went on past a failure event did not
 // fail of it.

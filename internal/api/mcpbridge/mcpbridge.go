@@ -58,7 +58,9 @@
 //   - THE NOTES ROUTE ([SteerPattern]) a plugin polls: GET `notes?after=<seq>` holds
 //     up to [steerHold] and answers the notes past the cursor, each recorded served
 //     before it is answered ([SteerInbox.Wait]); POST `read` records the notes the
-//     harness put before its model.
+//     harness put before its model plain; POST `again` grants, by id alone, the second
+//     admission of notes a compaction folded ([SteerInbox.Again]); POST `folded` names
+//     the ones it gave up ([SteerInbox.Folded]).
 //
 // THE BRIDGE DECIDES NOTHING ABOUT NOTES: what waits, fits, is read and recorded
 // is the inbox's (internal/engine, runsteer.go). The bridge routes a call to the
