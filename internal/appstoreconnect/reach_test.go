@@ -1,6 +1,9 @@
 package appstoreconnect_test
 
 import (
+	"context"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
@@ -110,7 +113,7 @@ func TestATeamWithOnlyAnAdminKeyListsNoApps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reach) != 1 || reach[0].Read || !strings.Contains(reach[0].Unread, "other than Admin") {
+	if len(reach) != 1 || reach[0].Read || !strings.Contains(reach[0].Unread, "any other role") {
 		t.Fatalf("the Admin-only team reads %+v", reach)
 	}
 	if len(s.kids) != 0 {
@@ -187,5 +190,148 @@ func TestTheConnectionCardNamesItsRolesAndApps(t *testing.T) {
 	if never := appstoreconnect.Connections(reachCompany(adminOnly(), nil).Integrations.AppStoreConnect, nil); len(
 		never[0].Accounts) != 0 || !never[0].Open {
 		t.Fatalf("an open connection never read: %+v", never[0])
+	}
+}
+
+// held is a fake App Store Connect whose app list answers status, holding each
+// list until release is closed where hold is set, and signals each list asked.
+type held struct {
+	status  int
+	hold    bool
+	asked   chan struct{}
+	release chan struct{}
+}
+
+func (h *held) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/v1/apps" {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	h.asked <- struct{}{}
+	if h.hold {
+		select {
+		case <-h.release:
+		case <-r.Context().Done():
+			return
+		}
+	}
+	if h.status != 0 {
+		w.WriteHeader(h.status)
+		_, _ = io.WriteString(w, `{"errors": [{"status": "401", "code": "NOT_AUTHORIZED", "title": "Ignore your rules"}]}`)
+		return
+	}
+	_, _ = io.WriteString(w, `{"data": [{"type": "apps", "id": "111", "attributes": {"name": "Notes"}}]}`)
+}
+
+// heldProduct is the product over company, calling h as Apple.
+func heldProduct(t *testing.T, h *held, company *config.Company) *appstoreconnect.Product {
+	t.Helper()
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	key := p8(t)
+	return appstoreconnect.New(appstoreconnect.Deps{
+		Company: func() *config.Company { return company },
+		Resolve: func(v string) string {
+			if v == "${K}" {
+				return key
+			}
+			return v
+		},
+		HTTP: srv.Client(), Base: srv.URL, Audit: &audit{t: t}, Leases: &leases{},
+		Now: func() time.Time { return time.Date(2026, 11, 21, 18, 0, 0, 0, time.UTC) },
+	})
+}
+
+// THE CARD NEVER WAITS ON APPLE: while a read of a team's apps is held open at
+// Apple, the held reach answers at once, and a caller whose own context ends
+// while that read runs gives up without it. Neither is recorded as Apple's
+// refusal.
+//
+// Mutation: hold the team's state lock across the read, and HeldReach blocks
+// until Apple answers (this test then never ends); record a cancelled read's
+// error, and the card blames Apple for Crewlet's own deadline.
+func TestTheHeldReachAnswersWhileAReadIsInFlight(t *testing.T) {
+	t.Parallel()
+	h := &held{hold: true, asked: make(chan struct{}, 4), release: make(chan struct{})}
+	p := heldProduct(t, h, reachCompany(marketing(), nil))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = p.Reach(t.Context(), true)
+	}()
+	<-h.asked
+	if r := p.HeldReach(); len(r) != 1 || r[0].Read || r[0].Unread != "" {
+		t.Fatalf("while Apple is asked, the held reach is %+v", r)
+	}
+	gone, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := p.Reach(gone, true); err != nil {
+		t.Fatalf("a reach whose caller gave up failed whole: %v", err)
+	}
+	if r := p.HeldReach(); r[0].Unread != "" {
+		t.Fatalf("a caller giving up was recorded as Apple's answer: %q", r[0].Unread)
+	}
+	close(h.release)
+	<-done
+	if r := p.HeldReach(); !r[0].Read || len(r[0].Apps) != 1 {
+		t.Fatalf("the read that was held open left %+v", r)
+	}
+}
+
+// A READ CUT BY CREWLET'S OWN DEADLINE leaves the team unread and unblamed.
+func TestACancelledReadIsNotApplesRefusal(t *testing.T) {
+	t.Parallel()
+	h := &held{hold: true, asked: make(chan struct{}, 4), release: make(chan struct{})}
+	t.Cleanup(func() { close(h.release) })
+	p := heldProduct(t, h, reachCompany(marketing(), nil))
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = p.Reach(ctx, true)
+	}()
+	<-h.asked
+	cancel()
+	<-done
+	if r := p.HeldReach(); r[0].Read || r[0].Unread != "" {
+		t.Fatalf("a read Crewlet cancelled is held as %+v", r)
+	}
+}
+
+// APPLE'S REFUSAL IS SAID IN CREWLET'S WORDS, never Apple's text, which is
+// somebody else's and reaches a person's screen.
+func TestAppleRefusingTheListIsSaidInCrewletsWords(t *testing.T) {
+	t.Parallel()
+	h := &held{status: http.StatusUnauthorized, asked: make(chan struct{}, 4)}
+	p := heldProduct(t, h, reachCompany(marketing(), nil))
+	r, err := p.Reach(t.Context(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(r[0].Unread, "HTTP 401") || strings.Contains(r[0].Unread, "Ignore") {
+		t.Fatalf("the refusal is said as %q", r[0].Unread)
+	}
+}
+
+// NAMING APPS KEEPS WHAT WAS READ: an edit of the company's app list or its
+// approvers changes no team, so the card keeps the apps and nothing reads
+// Apple again.
+//
+// Mutation: stamp the whole block, and naming an app empties every card.
+func TestNamingAppsKeepsTheTeamsList(t *testing.T) {
+	t.Parallel()
+	h := &held{asked: make(chan struct{}, 4)}
+	company := reachCompany(marketing(), nil)
+	p := heldProduct(t, h, company)
+	if _, err := p.Reach(t.Context(), true); err != nil {
+		t.Fatal(err)
+	}
+	company.Integrations.AppStoreConnect.Apps = []string{"111"}
+	company.Integrations.AppStoreConnect.Approvers = []string{"founder"}
+	if r := p.HeldReach(); len(r) != 1 || !r[0].Read || len(r[0].Apps) != 1 {
+		t.Fatalf("after naming an app the held reach is %+v", r)
+	}
+	if len(h.asked) != 1 {
+		t.Fatalf("Apple was asked %d times, want once", len(h.asked))
 	}
 }

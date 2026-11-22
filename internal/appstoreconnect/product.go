@@ -80,11 +80,18 @@ type team struct {
 	client     *Client
 	slots      []string
 
+	// mu guards the held list alone, never across a read of Apple, so the
+	// card and the Agents tab answer at once while a read is in flight.
 	mu     sync.Mutex
 	apps   []appInfo
 	appsAt time.Time
 	// unread is why the last read of apps failed, "" where it did not.
 	unread string
+	// listed counts the reads that listed the apps.
+	listed int
+	// reading admits one read of the team's apps at a time: a caller that
+	// waits for it gives up when its context ends.
+	reading chan struct{}
 }
 
 // appInfo is one app a team reaches.
@@ -147,9 +154,10 @@ func (p *Product) clock(status int, date time.Time) {
 	}
 }
 
-// stampOf digests the block, so teams are rebuilt when it changes.
+// stampOf digests the block's connections, so teams are rebuilt when one
+// changes; naming apps or approvers keeps every team and the apps it read.
 func stampOf(block *config.AppStoreConnect) string {
-	data, _ := json.Marshal(block)
+	data, _ := json.Marshal(block.Connections)
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }
@@ -184,7 +192,7 @@ func (p *Product) teamsNow() ([]*team, error) {
 		client := NewClient(p.deps.Base, strings.TrimSpace(p.deps.Resolve(c.IssuerID)), keys, p.deps.HTTP)
 		client.now, client.answered = p.deps.Now, p.clock
 		teams = append(teams, &team{id: id, vendor: strings.TrimSpace(p.deps.Resolve(c.VendorNumber)),
-			client: client, slots: slots})
+			client: client, slots: slots, reading: make(chan struct{}, 1)})
 	}
 	p.stamp, p.teams = stamp, teams
 	return teams, nil
@@ -200,20 +208,48 @@ func (p *Product) appsOf(ctx context.Context, t *team) ([]appInfo, error) {
 }
 
 // readApps is [Product.appsOf], read again where fresh; a failed read is
-// recorded on t for [Product.HeldReach] and keeps the list read before.
+// recorded on t for [Product.HeldReach] and keeps the list read before. One
+// read of a team runs at a time, and one that ends while a caller waited for
+// it answers that caller.
 func (p *Product) readApps(ctx context.Context, t *team, fresh bool) ([]appInfo, error) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
-	if !fresh && !t.appsAt.IsZero() && p.deps.Now().Sub(t.appsAt) < reachTTL {
+	seen := t.listed
+	if !fresh && t.current(p.deps.Now()) {
+		defer t.mu.Unlock()
 		return t.apps, nil
 	}
+	t.mu.Unlock()
+	select {
+	case t.reading <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-t.reading }()
+	t.mu.Lock()
+	if t.listed != seen || (!fresh && t.current(p.deps.Now())) {
+		defer t.mu.Unlock()
+		return t.apps, nil
+	}
+	t.mu.Unlock()
 	apps, err := p.listApps(ctx, t)
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	if err != nil {
-		t.unread = unreadWords(err)
+		// CREWLET'S OWN DEADLINE IS NOT APPLE'S ANSWER: a caller that gave up
+		// leaves the team's last word as it was.
+		if ctx.Err() == nil {
+			t.unread = unreadWords(err)
+		}
 		return nil, err
 	}
 	t.apps, t.appsAt, t.unread = apps, p.deps.Now(), ""
+	t.listed++
 	return apps, nil
+}
+
+// current reports t's list read within reachTTL of now; t.mu is held.
+func (t *team) current(now time.Time) bool {
+	return !t.appsAt.IsZero() && now.Sub(t.appsAt) < reachTTL
 }
 
 // listApps reads every app t reaches from Apple, through the least-privileged
