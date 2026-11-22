@@ -1886,9 +1886,13 @@ breaks it is not started, fails on its row with the reason (the address is
 never quoted, since a resolved one can carry a secret), and no executor's box
 is given it.
 
-These are admission rules: a revision stored before them still applies, and
+A name's characters and length, the prefix, the keys and the address are
+admission rules: a revision stored before them still applies, and
 `crewlet validate` and the warnings on a config read name each one, at the path
-a write keeping it is refused at.
+a write keeping it is refused at. The names `crewlet` and `container` are
+refused at apply too, like every
+[runnable rule](../concepts/configuration.md#what-a-stored-revision-is-held-to):
+nothing applies a revision with a server under either.
 
 #### A tool's name
 
