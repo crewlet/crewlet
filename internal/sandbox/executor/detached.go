@@ -698,14 +698,18 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 		return sandbox.RunHandle{}, err
 	}
 	if out.BriefOnStdin {
-		if err = box.WriteFile(ctx, paths.Brief(), []byte(req.Brief)); err != nil {
+		brief, fresh := req.Brief, req.FreshBrief
+		if _, ok := r.harness.(commandReader); ok {
+			brief, fresh = briefNotACommand(brief), briefNotACommand(fresh)
+		}
+		if err = box.WriteFile(ctx, paths.Brief(), []byte(brief)); err != nil {
 			return sandbox.RunHandle{}, fmt.Errorf("executor: writing the brief: %w", err)
 		}
 		// AND THE BRIEF A SESSION OF ITS OWN IS HANDED, for a run that
 		// continues one: its script points its harness at it where it starts
 		// a new session in the one's place ([sandbox.RunRequest.FreshBrief]).
-		if session.Continues && req.FreshBrief != "" {
-			if err = box.WriteFile(ctx, paths.FreshBrief(), []byte(req.FreshBrief)); err != nil {
+		if session.Continues && fresh != "" {
+			if err = box.WriteFile(ctx, paths.FreshBrief(), []byte(fresh)); err != nil {
 				return sandbox.RunHandle{}, fmt.Errorf("executor: writing the brief a new session is handed: %w", err)
 			}
 		}
