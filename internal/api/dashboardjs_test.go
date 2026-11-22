@@ -1079,11 +1079,12 @@ const (
 	// at 3 MiB over a 2.3 MB baseline and is set so a bundle that doubled the
 	// baseline is still refused; screens fetched only when opened (the rich
 	// editor, the brand and folder screens, the assistant's panel, Gitlet) and
-	// kit releases account for its growth, and the last measure was 7308.5 KiB,
+	// kit releases account for its growth, and the last measure was 7309.2 KiB,
 	// after kit 0.170.1 and the Google Analytics logo (two 21 KB files beside
-	// its data), the setup form's sets and the Advisor's one-line run head.
+	// its data), the setup form's sets, the Advisor's one-line run head and
+	// App Store Connect's app chooser and connection card.
 	// A raise names the measured size and its cause in its commit.
-	treeBudget = 5<<20 + 2189<<10
+	treeBudget = 5<<20 + 2190<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
