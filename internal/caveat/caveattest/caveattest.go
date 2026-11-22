@@ -131,7 +131,9 @@ var valueFields = []string{"tool", "outcome", "position", "op_id", "id", "item",
 	"requested_at", "requested_by",
 	// A SCHEDULE RUN NOW: the schedule by the identity a screen opens it by,
 	// and each run's trace, which its history row carries too.
-	"scope_type", "scope_id", "trace_id"}
+	"scope_type", "scope_id", "trace_id",
+	// A HOME BOARD SAVED: the seat it is kept under, by its handle.
+	"seat"}
 
 // writtenForThePerson are the answers whose text at one path is a model's
 // answer written FOR the person who asked, by tool and path: the product

@@ -1,9 +1,10 @@
 /**
- * Who runs on which model, under the list: one card, one row anatomy for the
- * helpers and the seats, drawn from the models' own uses.
+ * Who runs on which model, under the list: a titled section, one card, one
+ * row anatomy for the helpers and the seats, drawn from the models' own uses.
  *
- * The invariants: Helpers then Seats, each row its identity and its model's
- * picker in one column, with no header row; every model named in full (its
+ * The invariants: a heading and one line saying what the section is for;
+ * Helpers then Seats, each row its identity and its model's quiet picker in
+ * one column, with no header row; a member's "Not set" in the quiet ink; every model named in full (its
  * harness's mark, its key and the model it runs by name, the id where nothing
  * names it); a seat on one model shows one picker, which sets all three
  * categories; "Split by job" and "Use one model" live in the row's menu, and a
@@ -206,6 +207,40 @@ test("helpers and seats are rows of one anatomy on one card, with no header row"
   expect(within(rowOf("pm")).getByRole("link", { name: /Product Manager/ })).toBeDefined();
   expect(screen.queryByRole("table")).toBeNull();
   expect(screen.queryAllByRole("columnheader")).toHaveLength(0);
+});
+
+// A TITLED SECTION, and pickers that read as values: a column of bordered
+// boxes read as a form to fill in, so each picker draws its box only under the
+// pointer or focus, as wide as what it says.
+test("the section is titled, and every picker is a quiet one as wide as its value", () => {
+  mount();
+  const heading = screen.getByRole("heading", { name: "Who runs on which model" });
+  const section = heading.closest("section")!;
+  expect(section.textContent).toContain("Choose the model each helper and seat runs on.");
+  const pickers = within(section).getAllByRole("combobox");
+  expect(pickers.length).toBeGreaterThan(2);
+  for (const picker of pickers) {
+    const quiet =
+      picker.closest(".crewlet-select--quiet") ?? picker.querySelector(".crewlet-select--quiet");
+    expect(
+      quiet ?? (picker.classList.contains("crewlet-select--quiet") ? picker : null),
+    ).not.toBeNull();
+    expect(
+      picker.closest(".crewlet-select--auto") ??
+        (picker.classList.contains("crewlet-select--auto") ? picker : null),
+    ).not.toBeNull();
+  }
+});
+
+// A MEMBER'S "NOT SET" is a word to read, in the tertiary ink; a model, and a
+// hand split's models, are values, in the value's ink.
+test("a member reads Not set in the quiet ink and a model or a hand split in the value's", () => {
+  mount({ ...company({ admin: false }), assistant: { key: null } });
+  const notSet = screen.getAllByText("Not set");
+  for (const word of notSet) expect(word.className).toContain("crewlet-text--tone-tertiary");
+  expect(rowOf("backend-engineer").querySelector(".crewlet-text--tone-tertiary")).toBeNull();
+  const split = within(rowOf("qa")).getByText(/ \+ /);
+  expect(split.className).not.toContain("crewlet-text--tone-tertiary");
 });
 
 // THE MODEL IN FULL: its key and, quieter, the model it runs by name, read

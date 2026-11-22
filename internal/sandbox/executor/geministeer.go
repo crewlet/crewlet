@@ -109,8 +109,7 @@ func (GeminiCLI) hookAnswer(event, take string, notes []HookNote) string {
 }
 
 // geminiTake is what the take script reads ([Paths.GeminiTakeConfig]): the
-// bridge's endpoint and headers, the tool a take calls, the skill route, and
-// where it records each take ([Paths.GeminiTakes]).
+// bridge's endpoint and headers, the tool a take calls and the skill route.
 // A file, so no token is on a hook's command line or in any process's
 // environment.
 type geminiTake struct {
@@ -118,14 +117,13 @@ type geminiTake struct {
 	Headers   map[string]string `json:"headers,omitempty"`
 	Tool      string            `json:"tool,omitempty"`
 	Skills    string            `json:"skills,omitempty"`
-	Takes     string            `json:"takes,omitempty"`
 	Namespace string            `json:"namespace"`
 }
 
 // geminiTakeConfig renders the run's [geminiTake]: refused where the notes
 // name a server the run is not handed, which would leave every take without
 // an endpoint.
-func geminiTakeConfig(req sandbox.RunRequest, paths Paths) ([]byte, error) {
+func geminiTakeConfig(req sandbox.RunRequest) ([]byte, error) {
 	take := geminiTake{Namespace: sandbox.SkillNamespace}
 	if req.SkillLoads.Set() {
 		take.Skills = req.SkillLoads.URL
@@ -136,7 +134,7 @@ func geminiTakeConfig(req sandbox.RunRequest, paths Paths) ([]byte, error) {
 			return nil, fmt.Errorf("executor: the run's notes name the %q server, which the run is not "+
 				"handed over HTTP, so no take could reach it", w.Server)
 		}
-		take.Endpoint, take.Headers, take.Tool, take.Takes = server.URL, server.Headers, w.Tool, paths.GeminiTakes()
+		take.Endpoint, take.Headers, take.Tool = server.URL, server.Headers, w.Tool
 	}
 	return json.Marshal(take)
 }
