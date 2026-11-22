@@ -20,7 +20,7 @@ This is how an agent answers a message, works a ticket, implements a feature, ma
 | Claude Code | `--disallowedTools WebFetch WebSearch` | 2.1.330: both refused, in subagents too, with a repository's settings allowing them and an agent of its own listing them |
 | OpenCode | the `opencode.tool.webfetch` and `opencode.tool.websearch` plugins removed, and both actions denied in the run's rules and its agent's | 2.3.2: neither registered for the run or a subagent, a repository's agent allowing them and its `plugins` naming them again included; Code Mode's `fetch` refused |
 
-The run's shell, and any code it runs (OpenCode's Code Mode in an agent the repository allows the web), reach whatever network the box's cell allows: no harness flag bounds them, so a run that must not reach the web needs a cell whose egress is closed.
+Turning the web off turns off the harness's web tools. The run's shell, and any code it runs, reach only what the box cell's egress policy allows.
 
 Code lives in `internal/sandbox/`: the provider, the manager, the harness runners under `executor/`, the waiters, the coordinator, the pending store, `launch.go` (plumbing between an executor's launch in `internal/engine/agentrun.go` and its detached run), `boxhost.go` (keeps a `direct` or `container` box with the node that launched it, [ADR-0065](../../adr/0065-a-local-box-is-driven-by-the-node-that-launched-it.md)) and `answerseal.go` (seals a person's answer onto the run's row).
 
