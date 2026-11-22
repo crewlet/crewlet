@@ -29,7 +29,7 @@ const (
 
 func init() {
 	object := map[string]any{"type": "object"}
-	growth.Register("fakeads", func() growth.Catalog {
+	growth.RegisterFunc("fakeads", func() growth.Catalog {
 		return growth.Catalog{
 			Kind: "fakeads", API: "Fake Ads API", Version: "v1",
 			Roles: []growth.Role{{ID: "ADMIN", Name: "Admin", Note: "Manages the account."}},

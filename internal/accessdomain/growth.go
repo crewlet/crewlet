@@ -297,8 +297,45 @@ func checkGrowthObject(field, value string, required bool) error {
 	return checkGrowthWords(field, value)
 }
 
-// validate refuses a growth record the log could not hold or must not keep.
-func (n NewGrowth) validate() error {
+// GrowthOf is a product's record of step as the log takes it, each published
+// text as its SHA-256 and length: the words never reach the log.
+func GrowthOf(step growth.Step, r growth.Record) NewGrowth {
+	n := NewGrowth{
+		Handle: r.Handle, Turn: r.Turn, Call: r.Call, HeldCall: r.HeldCall, Product: r.Product,
+		Connection: r.Connection, Account: r.Account, Target: r.Target, Tool: r.Tool, Class: r.Class,
+		Step: step, Answerer: r.Answerer, Via: r.Via, Operation: r.Operation, Before: r.Before, Failure: r.Failure,
+	}
+	for _, c := range r.Changes {
+		if c.Text {
+			n.Changes = append(n.Changes, PublishedText(c.Field, c.Label, c.Before, c.After))
+			continue
+		}
+		n.Changes = append(n.Changes, GrowthChange{Field: c.Field, Label: c.Label, Before: c.Before, After: c.After,
+			Money: c.Money})
+	}
+	if m := r.Money; m != nil {
+		n.Money = &GrowthMoney{Currency: m.Currency, DeltaMicros: m.DeltaMicros, DailyMicros: m.DailyMicros,
+			DailyAfterMicros: m.DailyAfterMicros, PerChangeCapMicros: m.PerChangeCapMicros,
+			DailyCapMicros: m.DailyCapMicros}
+	}
+	return n
+}
+
+// GrowthFieldRecordable reports whether a growth record may name field: a
+// vendor field's path that names neither a person's data nor a credential.
+func GrowthFieldRecordable(field string) bool { return checkGrowthField(field) == nil }
+
+// GrowthValueRecordable reports whether a growth record may keep value in the
+// clear: within its bound, holding neither a credential nor an email address.
+func GrowthValueRecordable(value string) bool { return checkGrowthValue("a value", value) == nil }
+
+// GrowthIDRecordable reports whether a growth record may name value as an
+// account or a target.
+func GrowthIDRecordable(value string) bool { return checkGrowthObject("an id", value, true) == nil }
+
+// Validate refuses a growth record the log could not hold or must not keep:
+// what [Writer.Growth] refuses before it writes.
+func (n NewGrowth) Validate() error {
 	if err := checkSeat(n.Handle); err != nil {
 		return err
 	}
@@ -395,15 +432,8 @@ func (n NewGrowth) answeredBy() GrowthAnswerer {
 
 // validate refuses a change the log could not hold or must not keep.
 func (c GrowthChange) validate() error {
-	if !growthFieldPattern().MatchString(c.Field) {
-		return invalid("a changed field is a vendor field's path: letters, digits, and _ . [ ] -, at most 128")
-	}
-	if word, ok := namesAny(c.Field, personalWords); ok {
-		return invalid("field %s names a person's %s: a growth record keeps no personal data, so count "+
-			"the people instead", c.Field, word)
-	}
-	if word, ok := namesAny(c.Field, credentialWords); ok || redact.NamesPassword(c.Field) {
-		return invalid("field %s names a credential (%s): a growth record never carries one", c.Field, word)
+	if err := checkGrowthField(c.Field); err != nil {
+		return err
 	}
 	if err := checkText("a change's label", c.Label, GrowthLabelMaxBytes); err != nil {
 		return err
@@ -421,10 +451,7 @@ func (c GrowthChange) validate() error {
 		return invalid("field %s carries a text's digests and is not marked as text", c.Field)
 	}
 	for _, v := range []struct{ side, value string }{{"before", c.Before}, {"after", c.After}} {
-		if err := checkText("field "+c.Field+"'s value "+v.side, v.value, GrowthValueMaxBytes); err != nil {
-			return err
-		}
-		if err := checkGrowthWords("field "+c.Field+"'s value "+v.side, v.value); err != nil {
+		if err := checkGrowthValue("field "+c.Field+"'s value "+v.side, v.value); err != nil {
 			return err
 		}
 		if _, err := strconv.ParseInt(v.value, 10, 64); c.Money && v.value != "" && err != nil {
@@ -432,6 +459,29 @@ func (c GrowthChange) validate() error {
 		}
 	}
 	return nil
+}
+
+// checkGrowthField refuses a changed field's name the log may not keep.
+func checkGrowthField(field string) error {
+	if !growthFieldPattern().MatchString(field) {
+		return invalid("a changed field is a vendor field's path: letters, digits, and _ . [ ] -, at most 128")
+	}
+	if word, ok := namesAny(field, personalWords); ok {
+		return invalid("field %s names a person's %s: a growth record keeps no personal data, so count "+
+			"the people instead", field, word)
+	}
+	if word, ok := namesAny(field, credentialWords); ok || redact.NamesPassword(field) {
+		return invalid("field %s names a credential (%s): a growth record never carries one", field, word)
+	}
+	return nil
+}
+
+// checkGrowthValue refuses a value the log may not keep in the clear.
+func checkGrowthValue(name, value string) error {
+	if err := checkText(name, value, GrowthValueMaxBytes); err != nil {
+		return err
+	}
+	return checkGrowthWords(name, value)
 }
 
 // validateText holds a published text to its digests: its words never reach
@@ -481,7 +531,7 @@ func (w *Writer) Growth(ctx context.Context, c Call, n NewGrowth) (statelog.Resu
 	if err := c.validate(); err != nil {
 		return statelog.Result{}, err
 	}
-	if err := n.validate(); err != nil {
+	if err := n.Validate(); err != nil {
 		return statelog.Result{}, err
 	}
 	act := n.HeldCall

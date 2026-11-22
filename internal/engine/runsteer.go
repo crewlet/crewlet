@@ -56,6 +56,11 @@ const SteerSeatDomain = "seat.steer.seat"
 // own, so no note opens as a wake nor a wake as a person's note.
 const SteerWakeDomain = "seat.wake.item"
 
+// SteerRunDomain is the key domain a message one run sends another with
+// `message_run` is sealed in on the receiving run's record (ADR-0176): its own,
+// so no wake opens as a run's message nor a run's message as a wake.
+const SteerRunDomain = "seat.run.message"
+
 // steerTakeStatuses are the statuses a run's own harness takes notes in: from the
 // launch that opens its job — the job may be working before its turn has
 // parked into the record — to the claim of its completion.
@@ -133,6 +138,7 @@ type runSteers struct {
 	note *sealPair
 	seat *sealPair
 	wake *sealPair
+	run  *sealPair
 
 	store sandbox.PendingStore
 	pub   queue.Publisher
@@ -217,10 +223,10 @@ func newSealPair(domain string, ring recordseal.Keyring) (*sealPair, error) {
 	return &sealPair{signer: signer, verifier: verifier}, nil
 }
 
-// steerSeals is the three seals a run's record carries notes and wakes under,
-// built over the fleet keyring before anything is opened, as every channel's
-// are.
-type steerSeals struct{ note, seat, wake *sealPair }
+// steerSeals is the four seals a run's record carries notes, wakes and other
+// runs' messages under, built over the fleet keyring before anything is
+// opened, as every channel's are.
+type steerSeals struct{ note, seat, wake, run *sealPair }
 
 func newSteerSeals(ring recordseal.Keyring) (steerSeals, error) {
 	note, err := newSealPair(SteerNoteDomain, ring)
@@ -235,18 +241,23 @@ func newSteerSeals(ring recordseal.Keyring) (steerSeals, error) {
 	if err != nil {
 		return steerSeals{}, err
 	}
-	return steerSeals{note: note, seat: seat, wake: wake}, nil
+	run, err := newSealPair(SteerRunDomain, ring)
+	if err != nil {
+		return steerSeals{}, err
+	}
+	return steerSeals{note: note, seat: seat, wake: wake, run: run}, nil
 }
 
 // Domains is the key domains the seals sign in, for the gate that holds every
 // channel's domains apart.
-func (s steerSeals) Domains() (string, string, string) {
-	return SteerNoteDomain, SteerSeatDomain, SteerWakeDomain
+func (s steerSeals) Domains() (string, string, string, string) {
+	return SteerNoteDomain, SteerSeatDomain, SteerWakeDomain, SteerRunDomain
 }
 
 // newRunSteers is a node's run steers over its run store and its queue.
 func newRunSteers(seals steerSeals, store sandbox.PendingStore, pub queue.Publisher) *runSteers {
-	return &runSteers{note: seals.note, seat: seals.seat, wake: seals.wake, store: store, pub: pub, now: time.Now}
+	return &runSteers{note: seals.note, seat: seals.seat, wake: seals.wake, run: seals.run, store: store, pub: pub,
+		now: time.Now}
 }
 
 // claimingIn is s recording the wakes its runs read in completions, the

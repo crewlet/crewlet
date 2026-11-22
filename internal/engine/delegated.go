@@ -121,8 +121,8 @@ func (d delegatedDesk) Held(ctx context.Context, id string) (sandbox.PendingRun,
 	return d.answers().Held(ctx, id)
 }
 
-func (d delegatedDesk) Arguments(run sandbox.PendingRun) (map[string]any, error) {
-	return sandbox.NewCallSeal(d.engine.cipher).OpenArguments(run.TurnID, *run.HeldCall)
+func (d delegatedDesk) RawArguments(run sandbox.PendingRun) (map[string]any, error) {
+	return sandbox.NewCallSeal(d.engine.cipher).OpenRawArguments(run.TurnID, *run.HeldCall)
 }
 
 // Leads reports whether lead is answerable for seat: one of its managers, or
@@ -255,7 +255,7 @@ func (e *Engine) wakeDelegates(ctx context.Context, run sandbox.PendingRun) {
 		// (ownRequest).
 		if e.backends != nil && e.backends.Fleet != nil {
 			escalateHeld(ctx, sandbox.NewCoordStore(e.backends.Fleet), sshServers{engine: e},
-				delegatedDesk{engine: e}.Arguments, run, word, said, time.Now())
+				delegatedDesk{engine: e}.RawArguments, run, word, said, time.Now())
 		}
 		return
 	}
@@ -294,7 +294,7 @@ func (e *Engine) answerMergedAlready(ctx context.Context, run sandbox.PendingRun
 		return false
 	}
 	desk := delegatedDesk{engine: e}
-	return mergedAlready(ctx, run, desk.Arguments, builtin.ReleaseDeps{Pulls: releasePulls{engine: e}}.MergedAlready,
+	return mergedAlready(ctx, run, desk.RawArguments, builtin.ReleaseDeps{Pulls: releasePulls{engine: e}}.MergedAlready,
 		sshServers{engine: e}, desk.answerAsEngine)
 }
 
@@ -402,7 +402,7 @@ func (e *Engine) delegatedRequest(ctx context.Context, handle string,
 	if e.answerMergedAlready(ctx, run) {
 		return nil, false
 	}
-	args, err := desk.Arguments(run)
+	args, err := desk.RawArguments(run)
 	if err != nil {
 		return &types.DelegatedRequest{Unread: "its arguments do not open on this node"}, true
 	}
@@ -612,7 +612,7 @@ func (s *delegatedSweep) pass(ctx context.Context) {
 	rules := delegatedRules{engine: s.engine}
 	store := sandbox.NewCoordStore(s.engine.backends.Fleet)
 	sweepDelegated(ctx, store, rules, rules.Limits().Deadline,
-		sshServers{engine: s.engine}, delegatedDesk{engine: s.engine}.Arguments, s.now())
+		sshServers{engine: s.engine}, delegatedDesk{engine: s.engine}.RawArguments, s.now())
 	sweepLapsed(ctx, store, delegatedDesk{engine: s.engine}.answerAsEngine, s.now())
 }
 

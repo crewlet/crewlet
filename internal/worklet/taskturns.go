@@ -309,11 +309,21 @@ func readTaskTurns(ctx context.Context, tx *sql.Tx, task string, below int64,
 	if err := segs.Err(); err != nil {
 		return nil, "", fmt.Errorf("worklet: read the segments of task %s's turns: %w", task, err)
 	}
+	// Held to the answer's bytes ([statelog.RowsOf]) over the folded turns, in
+	// page order: a cut page's cursor is the anchor of the last turn walked
+	// past, so the next page starts at the turn refused.
+	held := statelog.RowsOf(ctx)
 	out := make([]TaskTurn, 0, len(keys))
-	for _, key := range keys {
-		if turn := folded[key]; turn != nil {
-			out = append(out, *turn)
+	for i, key := range keys {
+		turn := folded[key]
+		if turn == nil {
+			continue
 		}
+		if !held.TakeEncoded(*turn) {
+			next = strconv.FormatInt(anchors[keys[i-1]], 10)
+			break
+		}
+		out = append(out, *turn)
 	}
 	return out, next, nil
 }

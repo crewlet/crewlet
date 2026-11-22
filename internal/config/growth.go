@@ -345,21 +345,16 @@ var growthConnectionID = sync.OnceValue(func() *regexp.Regexp {
 	return regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 })
 
-// checkGrowthConnections holds a block's connection names to their shape, each
-// once: a block may hold several connections to its vendor (several teams,
-// organizations or business portfolios), each named by its id.
+// checkGrowthConnections holds a block's connection ids, the keys of its
+// connections, to their shape: a block may hold several connections to its
+// vendor (several teams, organizations or business portfolios), each under its
+// id, a map key so a setup form's merge patch can address one.
 func checkGrowthConnections(p *problems, here Path, ids []string) {
-	seen := map[string]bool{}
-	for i, id := range ids {
-		at := at(idx(here, i), "id")
-		switch {
-		case !growthConnectionID().MatchString(id):
-			p.add(at, ErrUnknownValue, "%q is not a connection id: lowercase letters, digits and "+
+	for _, id := range ids {
+		if !growthConnectionID().MatchString(id) {
+			p.add(entry(here, id), ErrUnknownValue, "%q is not a connection id: lowercase letters, digits and "+
 				"hyphens, starting with a letter, at most 32", id)
-		case seen[id]:
-			p.add(at, ErrConflict, "%q names two connections", id)
 		}
-		seen[id] = true
 	}
 }
 

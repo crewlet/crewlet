@@ -133,6 +133,17 @@ func (d *atlasDesk) PurgeDigest(_ context.Context, c atlasdomain.Call, digest st
 	return d.wrote("purge_value:"+digest, c)
 }
 
+func (d *atlasDesk) LivePage(ctx context.Context, _ string, fresh statelog.Freshness) (atlasdomain.Live, string, error) {
+	live, err := d.Live(ctx, fresh)
+	return live, "", err
+}
+
+func (d *atlasDesk) PurgesPage(ctx context.Context, _ int64,
+	fresh statelog.Freshness) ([]atlasdomain.PurgeRow, int64, error) {
+	rows, err := d.Purges(ctx, fresh)
+	return rows, 0, err
+}
+
 func (d *atlasDesk) Live(context.Context, statelog.Freshness) (atlasdomain.Live, error) {
 	return atlasdomain.Live{Complete: true}, nil
 }

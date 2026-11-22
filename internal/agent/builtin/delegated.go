@@ -90,8 +90,9 @@ type DelegatedDesk interface {
 	Limits() delegated.Limits
 	// Held is the active run whose row holds held call id.
 	Held(ctx context.Context, id string) (sandbox.PendingRun, bool, error)
-	// Arguments are run's held call's arguments, opened from their seal.
-	Arguments(run sandbox.PendingRun) (map[string]any, error)
+	// RawArguments are run's held call's arguments as it would send them,
+	// for the delegate deciding it ([sandbox.CallSeal.OpenRawArguments]).
+	RawArguments(run sandbox.PendingRun) (map[string]any, error)
 	// Leads reports whether lead is answerable for seat in the chart.
 	Leads(ctx context.Context, lead, seat string) (bool, error)
 	// Labels are the labels of item, none for no item.
@@ -284,7 +285,7 @@ func (t *reviewDelegated) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return refused(tools.RefusalConflict, t.Name()+" didn't decide anything: the digest does not name "+
 			"the request as it waits, so this verdict is not of the request you were shown. Escalate it."), nil
 	}
-	callArgs, err := desk.Arguments(run)
+	callArgs, err := desk.RawArguments(run)
 	if err != nil {
 		return faulted(ctx, t.Name(), err, t.Name()+" didn't decide anything: the request does not open on "+
 			"this node, so it cannot be decided here. Escalate it."), nil

@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -164,6 +165,13 @@ func (s *nodeSecretSink) Discard(ctx context.Context) error {
 	return s.SecretStoreSink.Discard(ctx)
 }
 
+// provisionSummary is the summary of a provisioning run's re-activation, the
+// names it sealed cut to [summaryPartBytes]: a run seals any number of them, and
+// a summary past coord.MaxSummaryBytes is refused, leaving them inactive.
+func provisionSummary(names []string) string {
+	return "reload: provisioning sealed " + textcut.Within(strings.Join(names, ", "), summaryPartBytes)
+}
+
 // Flush implements [provision.TokenSink]: the run's one re-activation, for
 // every value it sealed.
 //
@@ -180,7 +188,7 @@ func (s *nodeSecretSink) Flush(ctx context.Context) error {
 	if len(names) == 0 {
 		return s.SecretStoreSink.Flush(ctx)
 	}
-	summary := "reload: provisioning sealed " + strings.Join(names, ", ")
+	summary := provisionSummary(names)
 	outcome := &flushOutcome{}
 	for attempt := 0; ; attempt++ {
 		reloaded, err := s.reload(ctx, summary)

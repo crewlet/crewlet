@@ -30,7 +30,7 @@ var opListPages = define("pages.list", opRead, pagesDomain, false,
 			return doclet.Listing{}, errNoHalf
 		}
 		return b.Pages.List(ctx, a.Filter, a.Fresh)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 type getPageArgs struct {
 	Ref   string
@@ -43,32 +43,50 @@ var opGetPage = define("pages.get", opRead, pagesDomain, false,
 			return doclet.Detail{}, errNoHalf
 		}
 		return b.Pages.Get(ctx, a.Ref, a.Fresh)
-	})
+	}).oneAnswer()
 
 type skillPagesArgs struct {
 	Container string
+	After     string
 	Fresh     statelog.Freshness
 }
 
+// skillPagesPage is a page of a container's skill pages and the cursor of the
+// page after it, empty on the last.
+type skillPagesPage struct {
+	Pages []doclet.Page
+	Next  string
+}
+
 var opSkillPages = define("pages.skill_pages", opRead, pagesDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, a skillPagesArgs) ([]doclet.Page, error) {
+	func(ctx context.Context, b Backend, _ *Actor, a skillPagesArgs) (skillPagesPage, error) {
 		if b.Pages == nil {
-			return nil, errNoHalf
+			return skillPagesPage{}, errNoHalf
 		}
-		return b.Pages.SkillPages(ctx, a.Container, a.Fresh)
-	})
+		pages, next, err := b.Pages.SkillPagesPage(ctx, a.Container, a.After, a.Fresh)
+		return skillPagesPage{Pages: pages, Next: next}, err
+	}).rowsTo(statelog.AnswerBytes)
 
 type containersArgs struct {
+	After string
 	Fresh statelog.Freshness
 }
 
+// containersPage is a page of containers and the key the next one starts
+// after.
+type containersPage struct {
+	Containers []doclet.ContainerListing
+	Next       string
+}
+
 var opContainers = define("pages.containers", opRead, pagesDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, a containersArgs) ([]doclet.ContainerListing, error) {
+	func(ctx context.Context, b Backend, _ *Actor, a containersArgs) (containersPage, error) {
 		if b.Pages == nil {
-			return nil, errNoHalf
+			return containersPage{}, errNoHalf
 		}
-		return b.Pages.Containers(ctx, a.Fresh)
-	})
+		list, next, err := b.Pages.ContainersPage(ctx, a.After, a.Fresh)
+		return containersPage{Containers: list, Next: next}, err
+	}).rowsTo(statelog.AnswerBytes)
 
 // A PAGE'S ACTIVITY, a container's, or the whole knowledge base's.
 var opPageActivity = define("pages.activity", opRead, pagesDomain, false,
@@ -77,7 +95,7 @@ var opPageActivity = define("pages.activity", opRead, pagesDomain, false,
 			return doclet.PageActivity{}, errNoHalf
 		}
 		return b.Pages.Activity(ctx, q)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 var opPageTurnsMoved = define("pages.turns_moved", opRead, pagesDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q doclet.TurnsMovedQuery) (map[string]bool, error) {
@@ -85,7 +103,7 @@ var opPageTurnsMoved = define("pages.turns_moved", opRead, pagesDomain, false,
 			return nil, errNoHalf
 		}
 		return b.Pages.TurnsMovedPages(ctx, q)
-	})
+	}).perAsked()
 
 type revisionArgs struct {
 	PageID  string
@@ -106,7 +124,7 @@ var opRevision = define("pages.revision", opRead, pagesDomain, false,
 		}
 		rev, found, err := b.Pages.Revision(ctx, a.PageID, a.Version, a.Fresh)
 		return aRevision{Revision: rev, Found: found}, err
-	})
+	}).oneAnswer()
 
 // keyed reports a page write the caller made REPEATABLE: one whose actor
 // carries the caller's own operation key ([doclet.Actor.OpKey]), from which the
@@ -349,7 +367,7 @@ var opKnowledgeSearch = define("knowledge.search", opRead, pagesDomain, false,
 			return knowledge.Result{}, errNoHalf
 		}
 		return b.Knowledge.Answer(ctx, a.query(b))
-	}).floorless()
+	}).oneAnswer().floorless()
 
 // WHETHER THE INDEX IS STILL BUILDING, which is what turns an empty search into
 // "still indexing" — asked, like the search, of the index over the knowledge
@@ -360,7 +378,7 @@ var opKnowledgeBuilding = define("knowledge.building", opRead, pagesDomain, fals
 			return false, errNoHalf
 		}
 		return b.Knowledge.Building(ctx), nil
-	}).floorless()
+	}).oneAnswer().floorless()
 
 // ---- the usage domain's reads ------------------------------------------- //
 
@@ -396,7 +414,7 @@ var opUsageSpend = define("usage.spend", opRead, usageDomain, false,
 			return usage.Page[usage.SpendRow]{}, errNoHalf
 		}
 		return b.Usage.SpendPage(ctx, a.Query, a.After, b.pageBytes)
-	}).floorless()
+	}).ownBound(usagePageBytes).floorless()
 
 var opUsageSeatTurns = define("usage.seat_turns", opRead, usageDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a usagePageArgs[usage.SpendQuery]) (usage.Page[usage.TurnsRow], error) {
@@ -404,7 +422,7 @@ var opUsageSeatTurns = define("usage.seat_turns", opRead, usageDomain, false,
 			return usage.Page[usage.TurnsRow]{}, errNoHalf
 		}
 		return b.Usage.SeatTurnsPage(ctx, a.Query, a.After, b.pageBytes)
-	}).floorless()
+	}).ownBound(usagePageBytes).floorless()
 
 var opUsagePersonSpend = define("usage.person_spend", opRead, usageDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a usagePageArgs[usage.PersonQuery]) (usage.Page[usage.PersonRow], error) {
@@ -412,7 +430,7 @@ var opUsagePersonSpend = define("usage.person_spend", opRead, usageDomain, false
 			return usage.Page[usage.PersonRow]{}, errNoHalf
 		}
 		return b.Usage.PersonSpendPage(ctx, a.Query, a.After, b.pageBytes)
-	}).floorless()
+	}).ownBound(usagePageBytes).floorless()
 
 var opUsageSeatDays = define("usage.seat_days", opRead, usageDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a usagePageArgs[usage.SpendQuery]) (usage.Page[usage.SeatDay], error) {
@@ -420,7 +438,7 @@ var opUsageSeatDays = define("usage.seat_days", opRead, usageDomain, false,
 			return usage.Page[usage.SeatDay]{}, errNoHalf
 		}
 		return b.Usage.SeatDaysPage(ctx, a.Query, a.After, b.pageBytes)
-	}).floorless()
+	}).ownBound(usagePageBytes).floorless()
 
 // scheduleRunsPage is [UsageReader.ScheduleRuns]'s two answers, named.
 type scheduleRunsPage struct {
@@ -435,7 +453,7 @@ var opUsageScheduleRuns = define("usage.schedule_runs", opRead, usageDomain, fal
 		}
 		runs, more, err := b.Usage.ScheduleRuns(ctx, q)
 		return scheduleRunsPage{Runs: runs, More: more}, err
-	}).floorless()
+	}).rowsTo(statelog.AnswerBytes).floorless()
 
 var opUsagePageReads = define("usage.page_reads", opRead, usageDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a usagePageArgs[usage.PageReadsQuery]) (usage.Page[usage.PageRead], error) {
@@ -443,7 +461,7 @@ var opUsagePageReads = define("usage.page_reads", opRead, usageDomain, false,
 			return usage.Page[usage.PageRead]{}, errNoHalf
 		}
 		return b.Usage.PageReadsPage(ctx, a.Query, a.After, b.pageBytes)
-	}).floorless()
+	}).ownBound(usagePageBytes).floorless()
 
 // readsElidedArgs is a range of company days, both inclusive.
 type readsElidedArgs struct {
@@ -456,7 +474,7 @@ var opUsageReadsElided = define("usage.reads_elided", opRead, usageDomain, false
 			return 0, errNoHalf
 		}
 		return b.Usage.ReadsElided(ctx, a.From, a.To)
-	}).floorless()
+	}).oneAnswer().floorless()
 
 // A SERVER'S TOOL CALLS ARE ONE ANSWER, NOT PAGED: one row per (tool, seat)
 // summed across nodes and days, so a longer window adds no row. At a couple of
@@ -469,7 +487,7 @@ var opUsageServerToolCalls = define("usage.server_tool_calls", opRead, usageDoma
 			return nil, errNoHalf
 		}
 		return b.Usage.ServerToolCalls(ctx, q)
-	}).floorless()
+	}).rowsTo(statelog.AnswerBytes).floorless()
 
 // A SEAT'S TURNS BY WAKE AND OUTCOME are one answer, one row per (seat, wake,
 // disposition, outcome) over the range, every node and day summed.
@@ -479,7 +497,7 @@ var opUsageTurnLedger = define("usage.turn_ledger", opRead, usageDomain, false,
 			return nil, errNoHalf
 		}
 		return b.Usage.TurnLedger(ctx, q)
-	}).floorless()
+	}).rowsTo(statelog.AnswerBytes).floorless()
 
 var opUsageToolsElided = define("usage.tools_elided", opRead, usageDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a readsElidedArgs) (int64, error) {
@@ -487,7 +505,7 @@ var opUsageToolsElided = define("usage.tools_elided", opRead, usageDomain, false
 			return 0, errNoHalf
 		}
 		return b.Usage.ToolsElided(ctx, a.From, a.To)
-	}).floorless()
+	}).oneAnswer().floorless()
 
 // repoReadsArgs is one page of a repository's readers: the read's query, the
 // reader the page before it ended on — empty for the first — and the bytes its
@@ -511,7 +529,7 @@ var opUsageRepoReads = define("usage.repo_reads", opRead, usageDomain, false,
 			budget = b.pageBytes
 		}
 		return b.Usage.RepoReadsPage(ctx, a.Query, a.After, budget)
-	}).floorless()
+	}).ownBound(usagePageBytes).floorless()
 
 var opUsageRepoReadsElided = define("usage.repo_reads_elided", opRead, usageDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q usage.RepoReadsQuery) (int64, error) {
@@ -519,7 +537,7 @@ var opUsageRepoReadsElided = define("usage.repo_reads_elided", opRead, usageDoma
 			return 0, errNoHalf
 		}
 		return b.Usage.RepoReadsElided(ctx, q)
-	}).floorless()
+	}).oneAnswer().floorless()
 
 // linkedFromArgs names the page whose backlinks are asked for, by its id.
 type linkedFromArgs struct {
@@ -537,7 +555,7 @@ var opLinkedFrom = define("knowledge.linked_from", opRead, pagesDomain, false,
 			return search.Backlinks{}, errNoHalf
 		}
 		return b.Backlinks.LinkedFrom(ctx, a.PageID)
-	}).floorless().alsoReads(trackerDomain)
+	}).oneAnswer().floorless().alsoReads(trackerDomain)
 
 // ---- the identity directory ---------------------------------------------- //
 
@@ -596,20 +614,21 @@ var opIdentityBinding = define("identity.binding", opRead, identityDomain, false
 			return bound{}, err
 		}
 		return bound{Binding: bindingOf(seen), Vouch: vouch}, nil
-	})
+	}).oneAnswer()
 
 // WHO HOLDS EACH HUMAN SEAT, read whole in one snapshot — the party registry is
-// rebuilt whole from it, never patched. An error is UNKNOWN and crosses as one:
-// an empty answer is a real reading ("nobody is bound to anything"), and an
-// asker that read an outage as one would hand every suspended person's seat
-// back to the chart.
+// rebuilt whole from it, never patched — and refused past the answer's bytes
+// rather than cut ([iamdomain.Reader.SeatHoldersHeld]). An error is UNKNOWN
+// and crosses as one: an empty answer is a real reading ("nobody is bound to
+// anything"), and an asker that read an outage as one would hand every
+// suspended person's seat back to the chart.
 var opSeatHolders = define("identity.seat_holders", opRead, identityDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, _ struct{}) ([]iamdomain.SeatHolder, error) {
 		if b.Identity == nil {
 			return nil, errNoHalf
 		}
-		return b.Identity.SeatHolders(ctx)
-	})
+		return b.Identity.SeatHoldersHeld(ctx)
+	}).rowsTo(statelog.AnswerBytes)
 
 // seatArgs names the one seat a holder question is about.
 type seatArgs struct {
@@ -646,7 +665,7 @@ var opRequester = define("identity.requester", opRead, identityDomain, false,
 			return heldRequester{}, err
 		}
 		return heldRequester{Requester: requester, Held: held}, nil
-	})
+	}).oneAnswer()
 
 // WHAT A PRESENTED MACHINE TOKEN IS CHECKED AGAINST, read in one snapshot (the
 // credential, its owner, how far this node vouches for both) and answered
@@ -674,4 +693,4 @@ var opIdentityMachineToken = define("identity.machine_token", opRead, identityDo
 			return TokenFacts{}, err
 		}
 		return factsOf(row, key, a.Nonce), nil
-	})
+	}).oneAnswer()

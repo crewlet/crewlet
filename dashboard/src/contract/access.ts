@@ -49,6 +49,7 @@ export type AccessLaneKey =
   | "aws"
   | "google_cloud"
   | "ssh"
+  | "app_store_connect"
   | "google_analytics"
   | "google_ads"
   | "search_console";

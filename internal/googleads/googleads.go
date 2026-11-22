@@ -111,7 +111,7 @@ func catalog() growth.Catalog {
 }
 
 func init() {
-	growth.Register(string(Kind), catalog)
+	growth.RegisterFunc(string(Kind), catalog)
 	googleauth.Register(googleauth.Product{
 		Kind: Kind, Name: "Google Ads",
 		APIs: []string{"googleads.googleapis.com"},

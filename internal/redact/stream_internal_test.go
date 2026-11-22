@@ -448,7 +448,7 @@ func (p *pipeline) held() streamHeld {
 				h.rooms += 32 * cap(*st.handed)
 			}
 			if st.raw != nil {
-				h.entries += 32*len(st.raw.edits) + 16*len(st.src.tokens) + 56*len(st.src.words)
+				h.entries += 32*len(st.raw.edits) + 16*len(st.src.tokens) + 72*len(st.src.words)
 				h.stageEdits = max(h.stageEdits, len(st.raw.edits))
 			}
 			if st.to != nil {
@@ -495,7 +495,7 @@ func longestMarker() int {
 // blocks' reach) and a step past it, and while it waits on claims the text
 // every claims stage holds past its resume. An edit stands for a marker,
 // fifteen bytes of input at least, at 32 bytes; a value, six bytes, at 16, as
-// many again while trimmed; a claim, five bytes (`pwd:` and a break), at 56;
+// many again while trimmed; a claim, five bytes (`pwd:` and a break), at 72;
 // the early windows, [earlyWindows] at 32 in each of two lists and at 16 in
 // the list of what was written at each; and the room for the edits the claims
 // stages hand on ([handedEdits]).
@@ -511,7 +511,7 @@ func streamBound() (text, entries int) {
 	keys := keysBytes
 	lag := (table - 1 + 1) * (stageStep + pieceBytes + longestMarker())
 	text = (table+tracking)*streamWindow + keys + lag + pieceBytes
-	entries = tracking*streamWindow*32/15 + 2*2*16*((stageReach+8)/6+1) + (keys+stageStep)*56/5 + 2*32*earlyWindows + 16*earlyWindows +
+	entries = tracking*streamWindow*32/15 + 2*2*16*((stageReach+8)/6+1) + (keys+stageStep)*72/5 + 2*32*earlyWindows + 16*earlyWindows +
 		32*handedEdits()
 	return text, entries
 }

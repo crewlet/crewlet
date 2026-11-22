@@ -81,6 +81,7 @@ var Tools = []Tool{
 	{Key: "aws", Surfaces: []ToolSurface{{string(KindAWS), "AWS"}}},
 	{Key: "google_cloud", Surfaces: []ToolSurface{{string(KindGoogleCloud), "Google Cloud"}}},
 	{Key: "ssh", Surfaces: []ToolSurface{{string(KindSSH), "SSH"}}},
+	{Key: "app_store_connect", Surfaces: []ToolSurface{{string(KindAppStoreConnect), "App Store Connect"}}},
 	{Key: "google_analytics", Surfaces: []ToolSurface{{string(KindGoogleAnalytics), "Google Analytics"}}},
 	{Key: "google_ads", Surfaces: []ToolSurface{{string(KindGoogleAds), "Google Ads"}}},
 	{Key: "search_console", Surfaces: []ToolSurface{{string(KindSearchConsole), "Search Console"}}},

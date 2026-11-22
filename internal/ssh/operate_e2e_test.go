@@ -216,7 +216,7 @@ func TestAHeldOperateCallApprovedOnceRunsOnce(t *testing.T) {
 		t.Fatalf("the server ran the call before it was approved: %q lines", out)
 	}
 	parked := desk.asks[0].Held
-	opened, err := seal.OpenArguments("run-1", *parked)
+	opened, err := seal.OpenRawArguments("run-1", *parked)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -148,7 +148,7 @@ func levelScopes() map[string][]string {
 }
 
 func init() {
-	growth.Register(string(Kind), catalog)
+	growth.RegisterFunc(string(Kind), catalog)
 	googleauth.Register(googleauth.Product{
 		Kind: Kind, Name: "Search Console",
 		APIs: []string{"searchconsole.googleapis.com", "siteverification.googleapis.com",

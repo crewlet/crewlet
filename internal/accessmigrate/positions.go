@@ -92,6 +92,7 @@ var desiredKeys = map[seataccess.Lane][]string{
 	seataccess.LaneScaleway:        {"enabled", "level", "projects"},
 	seataccess.LaneGoogleCloud:     {"enabled", "level", "projects"},
 	seataccess.LaneSSH:             {"enabled", "level", "hosts"},
+	seataccess.LaneAppStoreConnect: {"enabled", "level", "apps"},
 	seataccess.LaneGoogleAnalytics: {"enabled", "level", "properties"},
 	seataccess.LaneGoogleAds:       {"enabled", "level", "customers"},
 	seataccess.LaneSearchConsole:   {"enabled", "level", "sites"},
