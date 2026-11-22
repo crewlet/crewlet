@@ -340,6 +340,12 @@ var creditBoxes = map[string]func(t *testing.T) (*executor.Runner, sandbox.Sandb
 		return standInBox(t, executor.NewCopilot(), map[string]string{"copilot": "#!/bin/sh\n" +
 			"case \"$1\" in --version) echo 'GitHub Copilot CLI 1.0.114.'; exit 0;; esac\n" + scenarioRun})
 	},
+	// One `muse` process is the run, and its shell inherits its environment
+	// whole.
+	executor.MuseName: func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
+		return standInBox(t, executor.NewMuse(), map[string]string{"muse": "#!/bin/sh\n" +
+			"case \"$1\" in --version) echo 'Muse Code 1.4.25 (1.4.25-R9361.1)'; exit 0;; esac\n" + scenarioRun})
+	},
 	// Kimi Code and its shell run under the driver's environment, which the
 	// wrapper gave it (the driver starts `kimi web` with its own), so the
 	// driver's `node` stand-in runs the scenario.
