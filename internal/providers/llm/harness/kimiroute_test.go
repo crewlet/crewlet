@@ -20,12 +20,12 @@ import (
 // .kimi-code/mcp.json, read only in a trusted workspace; every server the
 // home's mcp.json or one of its installed plugins names started beside it; the
 // server's tools offered only where the agent file allows them; no id of its
-// own with a call; and the record the wire log it keeps in the seat's home
-// under a directory named after the working directory — its profile.bind
-// naming that directory, then per step its request, its usage (the prompt
-// without its cached part), its prose and calls, and the step's end, with the
-// assistant's messages on stdout and a failed run's class in the log alone
-// (measured on 2.7.2; see the profile).
+// own with a call; and the wire log it keeps in the seat's home under a
+// directory named after the working directory: its profile.bind naming that
+// directory, then per step its usage (the prompt without its cached part, and
+// a model named only by alias), its prose and calls, and the step's end. The
+// assistant's messages are on stdout, and a failed run's class is in the log
+// alone (measured on 2.7.2; see the profile).
 func init() {
 	fakeHarnesses["kimi-code"] = fakeHarness{
 		server: func() (string, []string, error) {
@@ -92,7 +92,6 @@ func kimiSessionDir(cwd, session string) string {
 
 type kimiRecorder struct {
 	wire  *json.Encoder
-	model string
 	steps []string
 }
 
@@ -126,8 +125,7 @@ func (k *kimiRecorder) loop(event map[string]any) {
 	_ = k.wire.Encode(map[string]any{"type": "context.append_loop_event", "agentId": "main", "event": event})
 }
 
-func (k *kimiRecorder) begin(model string, tools []string) {
-	k.model = model
+func (k *kimiRecorder) begin(_ string, tools []string) {
 	cwd, _ := os.Getwd()
 	offered := []any{map[string]any{"name": "FetchURL"}}
 	for _, name := range tools {
@@ -148,9 +146,8 @@ func (k *kimiRecorder) asked(i int, r fakeResponse, ids []string) {
 	step := fmt.Sprintf("step-%d", i+1)
 	k.steps = append(k.steps, step)
 	k.loop(map[string]any{"type": "step.begin", "uuid": step, "step": i + 1})
-	_ = k.wire.Encode(map[string]any{"type": "llm.request", "agentId": "main", "kind": "loop", "model": k.model})
 	_ = k.wire.Encode(map[string]any{"type": "usage.record", "agentId": "main", "usageScope": "turn",
-		"usage": kimiUsage(r.Usage)})
+		"model": "__kimi_env_model__", "usage": kimiUsage(r.Usage)})
 	if r.Text != "" {
 		k.loop(map[string]any{"type": "content.part", "stepUuid": step, "part": map[string]any{"type": "text", "text": r.Text}})
 		raw, _ := json.Marshal(map[string]any{"role": "assistant", "content": r.Text})
