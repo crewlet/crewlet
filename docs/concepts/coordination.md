@@ -190,12 +190,18 @@ makes ending it safe. The client sends the marker that ends a pass on a
 delivery, so a pass whose pending messages are all removed before it reaches
 them — the last counters of a window ageing out, a marker another node's sweep
 purged — receives nothing and would wait for ever: measured as one listing of
-an idle budget bucket that held its caller for nine minutes. So once the
-index has answered, a pass that goes **five seconds** without a delivery is
-ended there (the broker's own idle interval for this kind of consumer), and
-every key the index named that it had not delivered is read from the leader
-like any other key it lost. Every delivery restarts the five seconds, so only
-a pass the broker has stopped feeding is ever ended this way. The marker
+an idle budget bucket that held its caller for nine minutes. So a pass that
+goes quiet is ended there, and every key the index named that it had not
+delivered is read from the leader like any other key it lost. The index is read
+before the pass begins: across a link its answer would otherwise cross behind
+the values the pass is already delivering. Quiet is **five seconds** without a
+delivery (the broker's own idle interval for this kind of consumer) in the
+store's own process; across a link it adds the time the largest value the pass
+may deliver takes to cross at the slowest pace allowed, as stored rather than
+base64-encoded: 185 seconds for the sandbox runs, five for a bucket read at the
+term. Every delivery restarts it, so only a pass the broker has stopped feeding,
+or one whose pending messages were removed, is ever ended this way; across a
+link the second holds a listing of the runs up to 185 seconds. The marker
 sweep, which nothing certifies and which owes nobody a complete answer, ends a
 pass that goes quiet the same way and sweeps the rest on its next tick.
 
@@ -210,7 +216,7 @@ bridge opens it for the turn's notes. A first answer is
 the one a node replaces its copy with, so it is certified like any other: a
 pause the pass had not delivered when it ended is read from the leader rather
 than left out, which would lift that seat's hold, and a pass that goes quiet is
-ended after the same five seconds rather than leaving the node with no answer
+ended after the same quiet rather than leaving the node with no answer
 — and deferring every delivery it receives — until somebody next pauses or
 resumes a seat. The changes then come from the same consumer, so none can fall
 between the answer and the first change, and a revision of a record no newer
@@ -219,6 +225,20 @@ state pushed late would put a tab back on a cursor its person had moved past.
 It costs what a listing costs, once for each watch a node starts — a family's
 at boot, a run's each time the node takes the run up — and again whenever a
 watch has to be re-opened.
+
+A watch of a shared-state bucket, and the pass under each of its listings, is
+the store's **own consumer**, not the client library's KV watch. That one has
+the broker send a heartbeat every five seconds and starts its consumer over
+when nothing arrived in ten; no heartbeat passes a value still crossing, so
+across a link a value longer than ten seconds to arrive is cut and sent again
+for ever. Measured, a run's record taking 20 or 25 seconds to cross never
+arrived, and about four copies of it were carried in four times its crossing.
+The store's consumer beats at the pass's quiet for what it watches, so the same
+records arrived once, at 20.5 and 25.6 seconds. The cost is a lost consumer
+noticed after up to twice that quiet: six minutes for a run's watch across a
+link, ten seconds in process. The marker sweep's consumer carries headers
+alone, which cross in milliseconds, and beats every five seconds. Every
+crossing is counted for one value on the link at a time, as a write's is.
 
 A key live from before the listing began until after it ended is therefore in
 it, however often it was rewritten in between and whichever replica served the
@@ -237,7 +257,7 @@ a bucket with no age would otherwise keep the marker of every record it ever
 removed, and every listing whose pass met one would read it again, so without
 the sweep a listing's cost grew with every record the company had ever
 removed. It is never a read per key, unless the broker stopped delivering a
-pass for a whole five seconds and the rest of it had to be read key by key.
+pass for a whole quiet and the rest of it had to be read key by key.
 
 Past the broker's page size for that index, **100,000 keys under one
 filter**, the index is read a page at a time, each page its own leader read,
@@ -413,7 +433,9 @@ that window.
 ### What one key holds
 
 **A value is at most 6,290,542 bytes** (`coord.MaxValueBytes`), on every
-backend, and a write past it is refused before anything is sent, as too large
+backend, and at most what its key's class declares: each bucket names its
+classes where it is opened. A write past either is refused before anything
+is sent, as too large
 (`coord.ErrValueTooLarge`): a definite answer no retry changes, never the
 store being unavailable. The leader read's reply carries the value
 base64-encoded in JSON, a third larger, and a node without `data` reads the
@@ -434,7 +456,12 @@ The activation pointer that names the body is held to 8 KiB
 because every probe on every node reads it: at its bound its read crosses the
 slowest link allowed in a third of a second. The body is read only by a node
 that lacks the revision, given the time its recorded size takes to cross.
-Every other record is bounded by its own fields far below it.
+Every other record is kept far below it by its own fields, but its bucket
+declares no class yet, so it is held to what one key holds and read at the
+term until [#1814](https://github.com/crewlet/crewlet/issues/1814) declares
+each bucket's classes. A class declared to be read within the read term alone,
+as the pointer is, is at most 16 KiB (`coord.SmallValueBytes`): its read
+crosses the slowest link in two thirds of a second.
 
 ### A compare-and-set waits for the leader to decide
 
@@ -503,19 +530,21 @@ A read of a **large value waits as long as its reply takes to cross.** The
 leader's reply carries the value base64-encoded in JSON, a third larger, heard
 only once its last byte is in. A read is otherwise re-asked every two seconds
 and never waits longer than thirty seconds, the longest silence the broker
-keeps. For a bucket whose values are budgeted to what one key holds (a sandbox
-run's record and the parts beside it) a reply at the bound is eight mebibytes:
-four minutes across a link at the floor. Held to thirty seconds, a record past
+keeps. Each class of key is read by the time its bound takes. A sandbox run's record
+and the parts beside it are budgeted to what one key holds, so a reply at the
+bound is eight mebibytes: four minutes across a link at the floor. Held to thirty seconds, a record past
 about 768 KiB could not be read across a slow link, nor changed by the
 read-decide-write every change is; and each two-second re-ask put another
 whole reply on the link the first was still crossing. So across a link a read
-of such a bucket is given the crossing of a reply at its bound at the floor,
-beyond the read term and the thirty seconds, and is asked once. On a member's
+of a run's key is given the crossing of a reply at its bound at the floor,
+beyond the read term and the thirty seconds, and is asked once. An activation
+body is given its arrival as well, the time to build and decode it, since no
+writer waits on its read. On a member's
 own connection, which crosses nothing, it keeps the read term: a caller waits
 within a reason of its own (five seconds at the shortest), and a request a
 member dropped across an election is asked again two seconds later, where the
 new leader answers it. Building and decoding an eight-mebibyte reply takes
-tens of milliseconds. A bucket of small values keeps the read term and the
+tens of milliseconds. A class of small values keeps the read term and the
 thirty seconds wherever the node is.
 
 ---
@@ -663,7 +692,7 @@ The sweep removes only what it saw. It purges each key **through the marker's ow
 
 The same sweep removes a part kept beside an executor's record — its bridged tool log, or the sealed secrets its box was handed — whose run has no record, written before the cutoff: the one value a removal can leave behind, when the node removing a run stops between the record's removal and its parts'. It is found in the same pass of the runs' bucket the marker sweep makes, which already names every record and every part, so a sweep walks the bucket once: a part whose record that pass holds no value for is a candidate, its record is then read from the leader, and the part is removed only as the pass found it, so a run written again under its turn keeps its parts. The removal that ends a run leaves a part alone where a record stands beside it again by then: that is the turn's next run, whose launch opens the log to its own job and writes its own job's handed secrets.
 
-The pass carries each key's metadata, never its value, so a sweep moves no run log.
+The pass's consumer delivers each key's headers only, never its value, so a sweep moves no run log.
 
 ### Superseded bodies are swept
 

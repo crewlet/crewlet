@@ -155,7 +155,7 @@ func open(t testing.TB, c jetstream.JetStream, reach kv.Reach) *kv.FleetStore {
 //
 // NOT THE LEADER'S READ a change of the run makes: on a member's connection
 // it is re-asked every two seconds while nobody answers (internal/coord/kv's
-// holdingLarge), and its reply carries a row at its bound base64-encoded in
+// runs class), and its reply carries a row at its bound base64-encoded in
 // eight mebibytes, seconds to build under load and the race detector, so
 // each re-ask could run out the lookup ceiling on load the case is not about.
 func (a Across) Holds(t testing.TB, turnID string) (coord.Record, bool) {
