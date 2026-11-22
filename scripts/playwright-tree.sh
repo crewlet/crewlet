@@ -8,10 +8,11 @@
 # Prints the absolute path of the installed tree and nothing else on stdout, installing it first unless an intact tree
 # is already there. A refusal, npm's output and an install's failure go to stderr. Exits 0 with the path printed; 1
 # when an install failed: npm's own failure (a registry or mirror it could not reach, a package whose bytes the lock's
-# SHA-512 refuses), npm outliving the install's bound, a tree that is not exactly the lock's, or publishing the tree at
-# its name; 2 when it was asked something it refuses — an argument, the manifest or the lock missing beside it, a cache
-# that is not an absolute path, or a tool the machine lacks (a SHA-256 tool; node, or an npm older than min_npm below,
-# for an install) — before anything is fetched.
+# SHA-512 refuses), npm outliving the install's bound, a tree the box helper's check refuses (below), or publishing the
+# tree at its name; 2 when it was asked something it refuses — an argument, the manifest, the lock, the installed digest
+# or the box helper's check missing beside it, an installed digest that is not one line of 64 lowercase hex digits, a
+# cache that is not an absolute path, or a tool the machine lacks (a SHA-256 tool; node, or an npm older than min_npm
+# below, for an install) — before anything is fetched.
 #
 # Environment (optional):
 #   CREWLET_PLAYWRIGHT_TREE_CACHE   where trees are kept; ${XDG_CACHE_HOME:-$HOME/.cache}/crewlet/playwright-tree
@@ -27,22 +28,34 @@
 # which this recipe follows rather than restates: <digest>-l<layout>, where <digest> is the first 12 hex digits of the
 # SHA-256 over the two files' SHA-256s, installed into a directory of its own beside the name, .complete written last,
 # published with `ln -s`, a crashed installer's leftovers swept. A tree is INTACT when the name resolves to a directory
-# holding .complete, the lock byte for byte, npm's record of what it installed and the npm cache that install filled.
+# holding .complete, which names the installed digest beside the lock, the lock byte for byte, npm's record of what it
+# installed and the npm cache that install filled.
+#
+# A TREE IS PUBLISHED ONLY ONCE THE BOX HELPER'S OWN CHECK PASSES, the one a seat's box holds its install to before it
+# publishes a tree (internal/browser/boxhelper/js/tree.mjs's checkInstalled, run under node), so the suite's tree and
+# every box's are held by one implementation: npm's record of what it installed names exactly the lock's packages,
+# nothing in the tree is a link or anything else but a file or a directory, and the digest of the files it installed
+# is the one tree/installed.sha256 holds (boxhelper's package doc defines it). npm's status proves nothing: it answers
+# 0 having installed nothing under a setting the command line missed, and a file it could not write is only a warning
+# to it. A refusal names the digest the installed files have, which a bump of the lock writes there (CONTRIBUTING.md,
+# "A Playwright MCP bump is read before it lands").
 #
 # ITS OWN SUITE is scripts/playwright-tree_test.sh (`make playwright-tree-test`, in `make check` and ci.yml's `build +
 # vet`): each refusal above before any request, an intact tree handed back with no request and no npm, a registry
 # nobody answers at and a lock whose bytes the registry does not serve, every npm setting that would change what is
 # installed set in the environment and an npmrc, each flag and bound on npm's command line, an npm whose record of
-# the install is not the lock's, an npm that ignores TERM stopped by the bound, an install interrupted or finished
-# leaving nothing running, another lock installed beside the first, a name pointing at no intact tree installed over,
-# two installers at once leaving one tree, and a crashed installer's leftovers swept — each against a stand-in
-# registry on 127.0.0.1 behind a refused proxy, so no case reads the network.
+# the install is not the lock's, one that left a file short, a digest naming other files, an npm that ignores TERM
+# stopped by the bound, an install interrupted or finished leaving nothing running, another lock installed beside the
+# first, a name pointing at no intact tree installed over, a tree checked against another digest among them, two
+# installers at once leaving one tree, and a crashed installer's leftovers swept — each against a stand-in registry on
+# 127.0.0.1 behind a refused proxy, so no case reads the network.
 set -eu
 
 # layout is the version of how this recipe lays a tree out — npm's flags below, the npm cache beside node_modules,
-# .complete, and what `intact` reads — and the one part of the recipe a tree's name carries, as scripts/chromium.sh's
-# is. ci.yml's cache of the tree is keyed on this line beside the two files.
-layout=1
+# .complete and what it names, and what `intact` reads — and the one part of the recipe a tree's name carries, as
+# scripts/chromium.sh's is. ci.yml's cache of the tree is keyed on this line beside the lock's two files and the
+# installed digest.
+layout=2
 
 # min_npm is the oldest npm major the recipe runs: internal/browser/boxhelper.MinNPMMajor, the npm the oldest Node the
 # box helper supports bundles, which boxhelper's TestTheTreeRecipeRefusesTheNPMTheHelperRefuses holds this line to.
@@ -63,16 +76,32 @@ bound=300 grace=5
 	exit 2
 }
 
-# The two files are read BESIDE this script, whatever CDPATH holds: scripts/git.sh says why, and the same `cd` is here.
+# What the recipe reads is read BESIDE this script, whatever CDPATH holds: scripts/git.sh says why, and the same `cd`
+# is here.
 unset CDPATH
 here=$(cd "$(dirname "$0")" && pwd)
-src=$here/../internal/browser/boxhelper/tree
-for file in package.json package-lock.json; do
-	if [ ! -r "$src/$file" ]; then
-		echo "playwright-tree.sh: $src/$file is missing: the recipe installs the manifest and the lock it finds beside itself" >&2
+helper=$here/../internal/browser/boxhelper
+src=$helper/tree
+for file in tree/package.json tree/package-lock.json tree/installed.sha256 js/tree.mjs; do
+	if [ ! -r "$helper/$file" ]; then
+		echo "playwright-tree.sh: $helper/$file is missing: the recipe installs the manifest and the lock it finds beside itself, and holds the install to the installed digest and the box helper's check beside them" >&2
 		exit 2
 	fi
 done
+
+# installed is the digest of the files a whole install of the lock holds: tree/installed.sha256 is that one line, as
+# boxhelper's TestTheInstalledDigestNamesTheFilesTheLockInstalls reads it. Read by the builtin, never cat: an intact
+# tree is handed back with nothing on PATH but what naming it takes. A line with no newline is still read, and the
+# comparison with the file whole refuses it.
+installed=""
+IFS= read -r installed <"$src/installed.sha256" || :
+case $installed in
+*[!0123456789abcdef]*) installed="" ;;
+esac
+if [ ${#installed} -ne 64 ] || ! printf '%s\n' "$installed" | cmp -s - "$src/installed.sha256"; then
+	echo "playwright-tree.sh: $src/installed.sha256 is not one line of 64 lowercase hex digits, the digest of the files a whole install of the lock holds, which this recipe's refusal of a tree names (CONTRIBUTING.md, \"A Playwright MCP bump is read before it lands\")" >&2
+	exit 2
+fi
 
 # A tree's name is the two files' digest, so even an intact tree needs a SHA-256 tool to be found.
 if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
@@ -109,10 +138,12 @@ esac
 name=$(printf '%s' "$both" | cut -c1-12)-l$layout
 link=$cache/$name
 
-# intact DIR: DIR is a whole tree of this lock, its npm cache included, which boxhelper's cases install from.
+# intact DIR: DIR is a whole tree of this lock, checked against this installed digest, its npm cache included, which
+# boxhelper's cases install from.
 intact() {
-	[ -d "$1" ] && [ -f "$1/.complete" ] && [ -f "$1/node_modules/.package-lock.json" ] &&
-		[ -d "$1/npm-cache/_cacache" ] && cmp -s "$1/package-lock.json" "$src/package-lock.json"
+	[ -d "$1" ] && [ -f "$1/.complete" ] && printf '%s\n' "$installed" | cmp -s - "$1/.complete" &&
+		[ -f "$1/node_modules/.package-lock.json" ] && [ -d "$1/npm-cache/_cacache" ] &&
+		cmp -s "$1/package-lock.json" "$src/package-lock.json"
 }
 if intact "$link"; then
 	echo "$link"
@@ -209,37 +240,34 @@ if [ "$npm_status" -ne 0 ]; then
 	exit 1
 fi
 
-# exactly DIR: npm's own record of what it installed in DIR names exactly the lock's packages, each at the lock's
-# version, address and SHA-512, and DIR holds no link. npm answers 0 having installed nothing under a setting the
-# command line missed, so its status alone proves nothing.
-exactly() {
-	[ -z "$(find "$1" -type l)" ] || {
-		echo "playwright-tree.sh: the install left links in $1: $(find "$1" -type l | head -n 3 | tr '\n' ' ')" >&2
-		return 1
-	}
-	node -e '
-const { readFileSync } = require("node:fs");
-const packages = (file) => JSON.parse(readFileSync(process.argv[1] + file, "utf8")).packages || {};
-let want, got;
+# The box helper's check (the header says why), over the build directory, its lock and the installed digest, in the
+# check's own words: each problem it found. The files' digest alone is no failure of npm's, since npm's record is the
+# lock and nothing is a link: either the lock moved and tree/installed.sha256 has not, or npm left a file out or short,
+# so its refusal names the file to change and the digest a bump writes there.
+if ! node --input-type=module -e '
+import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+const [module, dir, digest, file] = process.argv.slice(1);
+let problems;
 try {
-  want = packages("/package-lock.json");
-  got = packages("/node_modules/.package-lock.json");
-} catch (e) {
-  console.error("playwright-tree.sh: npm left no record of what it installed: " + e.message);
+  const { checkInstalled } = await import(pathToFileURL(module).href);
+  problems = await checkInstalled(dir, readFileSync(`${dir}/package-lock.json`), digest);
+} catch (err) {
+  console.error(`playwright-tree.sh: the check of the box helper, ${module}, did not run: ${err.message}`);
   process.exit(1);
 }
-delete want[""];
-const odd = [...new Set([...Object.keys(want), ...Object.keys(got)])].filter((key) => !want[key] || !got[key] ||
-  ["version", "resolved", "integrity"].some((field) => want[key][field] !== got[key][field]));
-if (odd.length) {
-  console.error("playwright-tree.sh: npm did not install exactly the lock: " + odd.sort().join(", "));
+const [only] = problems;
+if (problems.length === 1 && only.files !== undefined) {
+  console.error(`playwright-tree.sh: nothing is published from ${dir}: npm installed exactly the lock, by its record, and the files it installed have the digest ${only.files}, where ${file} names ${digest}. A bump of the lock writes ${only.files} into ${file} (CONTRIBUTING.md, "A Playwright MCP bump is read before it lands"); with no bump, npm left a file out or short, as a full disk, a quota or a refused path lets it do with no error, and the install is to run again once that is cleared.`);
   process.exit(1);
-}' "$1"
 }
-if ! exactly "$build"; then
+if (problems.length > 0) {
+  console.error(`playwright-tree.sh: npm did not install exactly the lock in ${dir}, so nothing is published: ${problems.map((p) => p.words).join("; ")}`);
+  process.exit(1);
+}' "$helper/js/tree.mjs" "$build" "$installed" "$src/installed.sha256" </dev/null; then
 	exit 1
 fi
-: >"$build/.complete"
+printf '%s\n' "$installed" >"$build/.complete"
 if ! intact "$build"; then
 	echo "playwright-tree.sh: the tree in $build is not whole after its install" >&2
 	exit 1

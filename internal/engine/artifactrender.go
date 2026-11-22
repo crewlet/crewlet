@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactserve"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 	"github.com/crewlet/crewlet/static"
 )
 
@@ -112,7 +113,7 @@ const shotRemoveTimeout = 30
 
 func (s shotBox) Replace(ctx context.Context, dir string, files []builtin.BoxFile) ([]string, error) {
 	abs := path.Join(s.box.Home(), dir)
-	res, err := s.box.Exec(ctx, "rm -rf -- "+sandbox.ShellQuote(abs),
+	res, err := s.box.Exec(ctx, "rm -rf -- "+shellword.Quote(abs),
 		sandbox.ExecOptions{TimeoutSec: shotRemoveTimeout})
 	switch {
 	case err != nil:

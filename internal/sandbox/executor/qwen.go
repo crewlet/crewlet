@@ -14,6 +14,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // QwenCodeName is this runner's config name.
@@ -47,7 +48,7 @@ func (QwenCode) Session(sandbox.RunRequest) Session { return Session{ID: uuid.Ne
 // request reaches the helper as SIGTERM, which it answers with
 // session/cancel, never passing the signal to Qwen Code (qwen_helper.mjs).
 func (QwenCode) Command(req sandbox.RunRequest, session Session, paths Paths, _ string) string {
-	return "sh -c " + sandbox.ShellQuote(qwenScript(session, paths, sandbox.JobStopGrace))
+	return "sh -c " + shellword.Quote(qwenScript(session, paths, sandbox.JobStopGrace))
 }
 
 // qwenScript is a Qwen Code run's script, giving its helper stop to go once
@@ -57,8 +58,8 @@ func qwenScript(session Session, paths Paths, stop time.Duration) string {
 	var b strings.Builder
 	b.WriteString(endPrologue(paths, stop))
 	b.WriteString(endHarness(""))
-	b.WriteString(launchHarness("node "+sandbox.ShellQuote(paths.QwenHelper())+" run "+
-		sandbox.ShellQuote(paths.QwenHelperConfig())+" "+sandbox.ShellQuote(session.ID), paths))
+	b.WriteString(launchHarness("node "+shellword.Quote(paths.QwenHelper())+" run "+
+		shellword.Quote(paths.QwenHelperConfig())+" "+shellword.Quote(session.ID), paths))
 	b.WriteString(`exit "$code"` + "\n")
 	return b.String()
 }
@@ -218,8 +219,8 @@ func qwenSettings(req sandbox.RunRequest, paths Paths) map[string]any {
 			"matcher": "skill",
 			"hooks": []any{map[string]any{
 				"type": "command", "timeout": int(qwenHookTimeout / time.Second),
-				"command": "node " + sandbox.ShellQuote(paths.QwenHelper()) + " skill " +
-					sandbox.ShellQuote(paths.QwenHelperConfig()),
+				"command": "node " + shellword.Quote(paths.QwenHelper()) + " skill " +
+					shellword.Quote(paths.QwenHelperConfig()),
 			}},
 		}}}
 	}
