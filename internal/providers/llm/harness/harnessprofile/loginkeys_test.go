@@ -2,6 +2,7 @@ package harnessprofile
 
 import (
 	"encoding/json"
+	"os"
 	"reflect"
 	"slices"
 	"strings"
@@ -76,36 +77,52 @@ func TestMuseCodesProfileNamesTheKeysItsCallsMint(t *testing.T) {
 // only where each key [Profile.IdentityKeys] names holds alike in both, or is
 // absent from both; a refresh that changes its tokens and keeps the account is
 // one, a copy naming another account, dropping it or naming a key is not, and
-// a copy that is no JSON object names none it can be held to. Codex's profile
-// names its account and stored key in auth.json, and identity_keys refuses a
-// file no credential path has, an empty list and a key path with an empty part.
+// a copy that is no JSON object names none it can be held to. A `*` part holds
+// every entry of the object there, its set of entries too, and `//` lines are
+// set aside. identity_keys refuses a file no credential path has, an empty
+// list and a key path with an empty part.
 //
 // Mutation: compare the whole file, read only the first key, take an absent
-// key for a match against a present one, or drop codex's identity_keys.
+// key for a match against a present one, read `*` as a literal key, drop an
+// entry's absence under `*`, or read `//` lines as JSON.
 func TestALoginsAccountIsReadAtItsIdentityKeys(t *testing.T) {
 	t.Parallel()
-	keys := []string{"tokens.account_id", "OPENAI_API_KEY"}
-	seed := []byte(`{"OPENAI_API_KEY":null,"tokens":{"account_id":"acct-A","access_token":"a1"},"last_refresh":"1"}`)
-	for copyOf, want := range map[string]bool{
-		`{"OPENAI_API_KEY":null,"tokens":{"account_id":"acct-A","access_token":"a2"},"last_refresh":"2"}`: true,
-		`{"OPENAI_API_KEY":null,"tokens":{"account_id":"acct-B","access_token":"b1"},"last_refresh":"2"}`: false,
-		`{"OPENAI_API_KEY":null,"tokens":{"access_token":"a2"}}`:                                          false,
-		`{"OPENAI_API_KEY":"sk-other","tokens":{"account_id":"acct-A","access_token":"a2"}}`:              false,
-		`not json`: false,
+	for name, tc := range map[string]struct {
+		keys        []string
+		seed, other string
+		want        bool
+	}{
+		"a refresh keeping the account": {[]string{"tokens.account_id", "OPENAI_API_KEY"},
+			`{"OPENAI_API_KEY":null,"tokens":{"account_id":"acct-A","access_token":"a1"},"last_refresh":"1"}`,
+			`{"OPENAI_API_KEY":null,"tokens":{"account_id":"acct-A","access_token":"a2"},"last_refresh":"2"}`, true},
+		"another account": {[]string{"tokens.account_id", "OPENAI_API_KEY"},
+			`{"OPENAI_API_KEY":null,"tokens":{"account_id":"acct-A"}}`,
+			`{"OPENAI_API_KEY":null,"tokens":{"account_id":"acct-B"}}`, false},
+		"the account dropped": {[]string{"tokens.account_id", "OPENAI_API_KEY"},
+			`{"OPENAI_API_KEY":null,"tokens":{"account_id":"acct-A"}}`,
+			`{"OPENAI_API_KEY":null,"tokens":{}}`, false},
+		"the second key changed": {[]string{"tokens.account_id", "OPENAI_API_KEY"},
+			`{"OPENAI_API_KEY":null,"tokens":{"account_id":"acct-A"}}`,
+			`{"OPENAI_API_KEY":"sk-other","tokens":{"account_id":"acct-A"}}`, false},
+		"no JSON":          {[]string{"tokens.account_id"}, `{"tokens":{"account_id":"acct-A"}}`, `not json`, false},
+		"no keys, no JSON": {nil, `{"tokens":{"account_id":"acct-A"}}`, `not json`, true},
+		"every entry's account kept": {[]string{"*.user_id"},
+			`{"https://a.example::c":{"user_id":"u1","key":"k1"}}`,
+			`{"https://a.example::c":{"user_id":"u1","key":"k2"}}`, true},
+		"an entry's account changed": {[]string{"*.user_id"},
+			`{"https://a.example::c":{"user_id":"u1"}}`, `{"https://a.example::c":{"user_id":"u2"}}`, false},
+		"an entry added": {[]string{"*.user_id"},
+			`{"https://a.example::c":{"user_id":"u1"}}`,
+			`{"https://a.example::c":{"user_id":"u1"},"https://b.example::c":{"user_id":"u2"}}`, false},
+		"an entry's account dropped": {[]string{"*.user_id"},
+			`{"https://a.example::c":{"user_id":"u1"}}`, `{"https://a.example::c":{"key":"k2"}}`, false},
+		"comment lines set aside": {[]string{"lastLoggedInUser"},
+			"// managed\n{\"lastLoggedInUser\":{\"login\":\"seat\"}}\n",
+			"// managed\n{\"lastLoggedInUser\":{\"login\":\"seat\"},\"firstLaunchAt\":\"x\"}\n", true},
 	} {
-		if got := SameLoginIdentity([]byte(copyOf), seed, keys); got != want {
-			t.Errorf("SameLoginIdentity(%s) = %v, want %v", copyOf, got, want)
+		if got := SameLoginIdentity([]byte(tc.other), []byte(tc.seed), tc.keys); got != tc.want {
+			t.Errorf("%s: SameLoginIdentity = %v, want %v", name, got, tc.want)
 		}
-	}
-	if !SameLoginIdentity([]byte("not json"), seed, nil) {
-		t.Error("a file with no identity keys is held to an account")
-	}
-	p, ok := Builtin("codex")
-	if !ok {
-		t.Fatal("no codex profile")
-	}
-	if !slices.Equal(p.IdentityKeys["auth.json"], keys) {
-		t.Errorf("codex's identity_keys for auth.json are %v, want %v", p.IdentityKeys["auth.json"], keys)
 	}
 	for name, tc := range map[string]struct {
 		keys map[string]any
@@ -120,4 +137,87 @@ func TestALoginsAccountIsReadAtItsIdentityKeys(t *testing.T) {
 			t.Errorf("%s: err = %v, want one saying %q", name, err, tc.says)
 		}
 	}
+}
+
+// EVERY HARNESS NAMES THE ACCOUNT ITS LOGIN IS, OR SAYS IT HAS NONE TO NAME:
+// each built-in profile's identity_keys are the keys its measured login shape
+// names an account at (or none, for a login of tokens alone), a new profile
+// has to be placed here, and on each harness's own login shape
+// (testdata/identity-logins.json) a refresh of the seeded account is one
+// account with the seed, and another account's login is not.
+//
+// Mutation: drop or misname any profile's identity_keys, or add a profile
+// without deciding its keys here.
+func TestEveryHarnessNamesTheAccountItsLoginIs(t *testing.T) {
+	t.Parallel()
+	want := map[string]map[string][]string{
+		"claude-code":  nil,
+		"codex":        {"auth.json": {"tokens.account_id", "OPENAI_API_KEY"}},
+		"gemini-cli":   {"google_accounts.json": {"active"}},
+		"qwen-code":    nil,
+		"opencode":     nil,
+		"cursor-agent": {"cli-config.json": {"authInfo.userId"}},
+		"copilot":      {"config.json": {"lastLoggedInUser", "loggedInUsers"}},
+		"grok":         {"auth.json": {"*.user_id"}},
+		"muse-code":    nil,
+		"kimi-code":    nil,
+		"hermes":       nil,
+		"pi":           {"auth.json": {"openai-codex.accountId"}},
+	}
+	logins := identityLogins(t, "testdata/identity-logins.json")
+	for _, name := range BuiltinNames() {
+		keys, decided := want[name]
+		if !decided {
+			t.Errorf("%s: no decision on its identity_keys here; read its login shape and add it", name)
+			continue
+		}
+		p, _ := Builtin(name)
+		if !reflect.DeepEqual(p.IdentityKeys, keys) {
+			t.Errorf("%s: identity_keys = %v, want %v", name, p.IdentityKeys, keys)
+		}
+		login, measured := logins[name]
+		if len(keys) > 0 && !measured {
+			t.Errorf("%s: names identity keys but has no login in testdata/identity-logins.json", name)
+			continue
+		}
+		if same := sameAccount(p, login.Refresh, login.Seed); measured && !same {
+			t.Errorf("%s: a refresh of the seeded account reads as another account", name)
+		}
+		if same := sameAccount(p, login.Other, login.Seed); measured && same {
+			t.Errorf("%s: another account's login reads as the seeded one", name)
+		}
+	}
+}
+
+// sameAccount reports whether every file of login names seed's account at p's
+// identity keys.
+func sameAccount(p Profile, login, seed map[string]string) bool {
+	for name, content := range login {
+		if !SameLoginIdentity([]byte(content), []byte(seed[name]), p.IdentityKeys[name]) {
+			return false
+		}
+	}
+	return true
+}
+
+// identityLogin is one harness's login shapes in testdata/identity-logins.json,
+// each a login by file name: as seeded, refreshed, and another account's.
+type identityLogin struct {
+	Seed    map[string]string `json:"seed"`
+	Refresh map[string]string `json:"refresh"`
+	Other   map[string]string `json:"other"`
+}
+
+// identityLogins reads the login shapes at path by harness.
+func identityLogins(t *testing.T, path string) map[string]identityLogin {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logins map[string]identityLogin
+	if err := json.Unmarshal(raw, &logins); err != nil {
+		t.Fatalf("%s: %v", path, err)
+	}
+	return logins
 }

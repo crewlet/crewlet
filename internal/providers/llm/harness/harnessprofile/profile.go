@@ -1031,10 +1031,12 @@ type Profile struct {
 	RunKeys map[string][]string `yaml:"run_keys,omitempty"`
 
 	// IdentityKeys names, by a credential file's NAME, the keys (dotted, into a
-	// JSON object) whose values say which account its login is: Codex's
-	// auth.json names its ChatGPT account at tokens.account_id. A login a local
-	// box's run carries back is written only where each holds what the shared
-	// login's does ([SameLoginIdentity]): a refresh keeps its account.
+	// JSON object, `*` for every key of the object there) whose values say which
+	// account its login is: Codex's auth.json names its ChatGPT account at
+	// tokens.account_id. A refresh a seat's call or a local box's run carries
+	// back is written only where each holds what the shared login's does
+	// ([SameLoginIdentity]): a refresh keeps its account. A file naming no
+	// account (a token and its expiry alone) has none, and its profile says so.
 	IdentityKeys map[string][]string `yaml:"identity_keys,omitempty"`
 
 	// VolatilePaths are sessions, transcripts, history and todo state,
@@ -2812,23 +2814,17 @@ func (p *Profile) ValidateCredentials(name string) error {
 // top-level keys it names is set to something other than null or an empty
 // string, object or array.
 //
-// Read as JSON with every `//` line set aside, since Copilot CLI's plaintext
-// login file opens with two. A file that does not read that way IS taken for a
-// login: guessing harder means parsing a vendor's format, and the opposite
-// wrong guess is a login the engine would not carry, export or keep.
+// Read as JSON with every `//` line set aside ([withoutCommentLines]). A file
+// that does not read that way IS taken for a login: guessing harder means
+// parsing a vendor's format, and the opposite wrong guess is a login the
+// engine would not carry, export or keep.
 func (p *Profile) HoldsLogin(name string, content []byte) bool {
 	keys, named := p.LoginKeys[name]
 	if !named {
 		return true
 	}
-	var lines []string
-	for line := range strings.Lines(string(content)) {
-		if !strings.HasPrefix(strings.TrimSpace(line), "//") {
-			lines = append(lines, line)
-		}
-	}
 	var doc map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(strings.Join(lines, "")), &doc); err != nil {
+	if err := json.Unmarshal(withoutCommentLines(content), &doc); err != nil {
 		return true
 	}
 	for _, key := range keys {

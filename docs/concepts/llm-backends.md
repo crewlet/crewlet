@@ -2634,8 +2634,10 @@ in between (another seat's refresh, your `crewlet llm
 login` or `-from-host` while seats were mid-call, a `crewlet llm logout`), the newer
 login is kept and the seat's is dropped, with a `harness_login_superseded` warning
 naming the provider and the file (never what either holds) and how the shared login
-moved (`changed` or `removed`). The check and the write are one step under a lock
-beside the credentials directory (`credentials.lock`), which the engine's seats,
+moved (`changed` or `removed`). A copy naming another account than the shared
+login at its profile's `identity_keys` is no refresh of it either: the shared login
+stays, and the warning says `other_account`. The check and the write are one step
+under a lock beside the credentials directory (`credentials.lock`), which the engine's seats,
 every `crewlet llm` command (each a process of its own) and a [local coding
 box](code-sandbox.md)'s teardown, writing back what its run refreshed, take alike.
 `crewlet llm status` follows the same rule, so it can neither revert a refresh that
@@ -2957,7 +2959,7 @@ it runs on.
 | `marker_path` | Under `marker_scope: events`, where in such an event the failure class is; a sentinel must equal it. Refused beside any other scope. |
 | `login_keys` | By a credential file's name, the top-level keys that file holds a login under — for a file the harness also keeps its own state in (`copilot`'s `config.json` and `copilotTokens` and `authTokens`, which Copilot keeps the same token under; `cursor-agent`'s `cli-config.json` and `authInfo`). Holding none of them such a file is not a login: `doctor` does not report it, a bundle does not carry it, a logout leaves it, and it does not keep a configured bundle from being restored. Read as JSON once lines opening with `//` are set aside; a file that does not read that way counts as a login. Each name must be a `credential_paths` file name. |
 | `run_keys` | By a credential file's name, the keys (dotted, into a JSON object) the harness writes into that file during a run or call, which are not the login its sign-in made: `muse-code`'s calls mint an API key and write it, with its base URL, into `auth.json`. A login carried back from a seat's call or a local box's run keeps the shared login's value of each, so a file that changed only there changes nothing; a login command (`crewlet llm login`) takes the whole file. Each name must be a `credential_paths` file name. |
-| `identity_keys` | By a credential file's name, the keys (dotted, into a JSON object) whose values say which account the file's login is: `codex`'s `auth.json` names its ChatGPT account at `tokens.account_id` and a stored key at `OPENAI_API_KEY`. A login a local box's run carries back is written only where each holds what the shared login's does, absent from both included; a copy naming another account is no refresh of the login, and the shared one stays. |
+| `identity_keys` | By a credential file's name, the keys (dotted, into a JSON object; `*` stands for every key of the object there) whose values say which account the file's login is: `codex`'s `auth.json` names its ChatGPT account at `tokens.account_id` and a stored key at `OPENAI_API_KEY`, `grok`'s `auth.json` each entry's `*.user_id`. A refresh a seat's call or a local box's run carries back is written only where each holds what the shared login's does, absent from both included; a copy naming another account is no refresh of the login, and the shared one stays. A file read as JSON once lines opening with `//` are set aside. A file naming no account (tokens and their expiry alone) has none. Each name must be a `credential_paths` file name. |
 | `host_credential_paths` | Where the harness keeps its login in a person's own home, for `-from-host`: each names a file, under a file name `credential_paths` also has, because an adopted file is kept under its name and a seat is seeded only with those names. |
 | `local_tools` | The profile's stance on the harness's own tools: `denied` or `vendor-default`. |
 | `local_tools_note` | Why a `vendor-default` stance is one. |
