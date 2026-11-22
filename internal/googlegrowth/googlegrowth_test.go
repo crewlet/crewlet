@@ -140,6 +140,82 @@ func TestAWriteIsClassedAsGoogleReadsIt(t *testing.T) {
 	}
 }
 
+// A BATCH'S TARGETS ARE READ THROUGH THE PRODUCT'S READ: where no one resource
+// holds what a write changes, the product's before-read is what the binding
+// holds; where it has none, the write's own resource is read; and its refusal
+// reaches no vendor.
+//
+// Mutation: ignore the product's before-read, and a batch binds its request
+// alone.
+func TestABatchsTargetsAreReadThroughTheProductsRead(t *testing.T) {
+	t.Parallel()
+	var got []string
+	w := newWorld(t, roundTrip(func(r *http.Request) (*http.Response, error) {
+		got = append(got, r.Method+" "+r.URL.Path+"?"+r.URL.RawQuery)
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"items":[1]}`))}, nil
+	}))
+	batch := growth.Operation{ID: "x.items.batchDelete", Method: "POST", Class: growth.ClassAdmin,
+		Path: "https://x.googleapis.com/v1/accounts/{accountsId}/items:batchDelete"}
+	get := growth.Operation{ID: "x.items.batchGet", Method: "GET", Class: growth.ClassRead,
+		Path: "https://x.googleapis.com/v1/accounts/{accountsId}/items:batchGet"}
+	w.client.BeforeRead = func(req googlegrowth.Request) (googlegrowth.Request, bool, error) {
+		if req.Op.ID != batch.ID {
+			return googlegrowth.Request{}, false, nil
+		}
+		if req.Field("refuse") != nil {
+			return googlegrowth.Request{}, false, errors.New("refused")
+		}
+		read, err := googlegrowth.NewRequest(get, req.Params, map[string]string{"names": "accounts/1/items/2"}, nil)
+		return read, true, err
+	}
+	req, _ := googlegrowth.NewRequest(batch, map[string]string{"accountsId": "1"}, nil, map[string]any{"names": []any{"accounts/1/items/2"}})
+	h, err := w.client.Read(t.Context(), "seat-a", req)
+	if err != nil || string(h.Before) != `{"items":[1]}` || len(got) != 1 ||
+		got[0] != "GET /v1/accounts/1/items:batchGet?names=accounts%2F1%2Fitems%2F2" {
+		t.Fatalf("the batch read %v into %s, %v", got, h.Before, err)
+	}
+	patchReq, _ := googlegrowth.NewRequest(patch, map[string]string{"accountsId": "1", "itemsId": "2"}, nil, nil)
+	if _, err := w.client.Read(t.Context(), "seat-a", patchReq); err != nil || got[1] != "GET /v1/accounts/1/items/2?" {
+		t.Errorf("a patch read %v, %v", got, err)
+	}
+	refused, _ := googlegrowth.NewRequest(batch, map[string]string{"accountsId": "1"}, nil, map[string]any{"refuse": true})
+	if _, err := w.client.Read(t.Context(), "seat-a", refused); err == nil || len(got) != 2 {
+		t.Errorf("a refused before-read answered %v and reached %v", err, got)
+	}
+}
+
+// A PERSON IS SHOWN THE REQUEST AS WRITTEN: a field, and the keys inside its
+// value (a Measurement Protocol event's own page_title), read on the card,
+// the question and the record as Google receives them, though the write is
+// classed by lowerCamel names.
+//
+// Mutation: show a change under its lowerCamel name, or recase the keys
+// inside its value, and a person reads clientId and pageTitle where Google
+// gets client_id and page_title.
+func TestAPersonIsShownTheRequestAsWritten(t *testing.T) {
+	t.Parallel()
+	op := growth.Operation{ID: "x.collect", Method: "POST", Path: "https://x.example.com/collect", Class: growth.ClassAdmin}
+	req, err := googlegrowth.NewRequest(op, nil, nil, map[string]any{"client_id": "1.2",
+		"events": []any{map[string]any{"name": "page_view", "params": map[string]any{"page_title": "Home"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &googlegrowth.Client{Kind: "x", Name: "X"}
+	call := growth.Call{Handle: "seat-a", Tool: "x_admin", HeldCall: "h"}
+	h := googlegrowth.NewHeld(req, nil)
+	hold := c.Hold(call, h, growth.ClassAdmin)
+	card, _ := json.Marshal(c.Card(call, h, h.Binding, growth.ClassAdmin).Acts)
+	for _, words := range []string{hold.Context, string(card)} {
+		if !strings.Contains(words, "client_id") || !strings.Contains(words, "page_title") ||
+			strings.Contains(words, "clientId") || strings.Contains(words, "pageTitle") {
+			t.Errorf("a person is shown %s", words)
+		}
+	}
+	if len(hold.Ask.Changes) != 2 || hold.Ask.Changes[0].Field != "client_id" {
+		t.Errorf("the ask records %+v", hold.Ask.Changes)
+	}
+}
+
 // AN APPROVAL BINDS TO THE EXACT REQUEST AND ITS TARGET: the digest moves
 // with the body, the query and the before-state, and with nothing else.
 func TestABindingMovesWithTheRequestOrItsTarget(t *testing.T) {
@@ -521,8 +597,8 @@ func TestTwoAppliesOnOneTargetMakeOneCall(t *testing.T) {
 	}
 	<-it.reads
 	apply := func(id string, out chan<- error) {
-		_, err := w.client.Apply(t.Context(), growth.Call{ID: id, Handle: "seat-a", Tool: "x_ads_operate"}, req, nil,
-			h.Binding, growth.ClassOperate, nil)
+		_, err := w.client.Apply(t.Context(), growth.Call{ID: id, Handle: "seat-a", Tool: "x_ads_operate"},
+			googlegrowth.Write{Req: req, Class: growth.ClassOperate}, h.Binding)
 		out <- err
 	}
 	first, second := make(chan error, 1), make(chan error, 1)
@@ -549,10 +625,12 @@ func TestTwoAppliesOnOneTargetMakeOneCall(t *testing.T) {
 	}
 }
 
-// AN APPLY IS CUT AT growth.ApplyBound: the target's read and the write under
-// the lease carry its deadline, so nothing acts once the lease could lapse.
+// AN APPLY IS CUT AT growth.ApplyBound: the product's scope check (which may
+// read Google), the target's read and the write all run under the lease and
+// carry its deadline, so nothing acts once the lease could lapse.
 //
-// Mutation: drop the bound, and the requests carry the caller's context alone.
+// Mutation: drop the bound, or check the scope before the lease, and a read
+// carries the caller's context alone or runs unleased.
 func TestAnApplyIsCutAtItsBound(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
@@ -566,13 +644,27 @@ func TestAnApplyIsCutAtItsBound(t *testing.T) {
 			map[string]string{"updateMask": "name"}, map[string]any{"name": "new"})
 		start := time.Now()
 		h := googlegrowth.NewHeld(req, []byte(`{"name":"old"}`))
-		if _, err := w.client.Apply(t.Context(), growth.Call{ID: "c", Handle: "seat-a", Tool: "x_ads_operate"}, req,
-			nil, h.Binding, growth.ClassOperate, nil); err != nil {
+		leased := false
+		scope := func(ctx context.Context) error {
+			d, _ := ctx.Deadline()
+			deadlines = append(deadlines, d)
+			w.leases.mu.Lock()
+			_, leased = w.leases.held["write/x_ads/accounts/1/items/2"]
+			w.leases.mu.Unlock()
+			return nil
+		}
+		if _, err := w.client.Apply(t.Context(), growth.Call{ID: "c", Handle: "seat-a", Tool: "x_ads_operate"},
+			googlegrowth.Write{Req: req, Class: growth.ClassOperate, Scope: scope}, h.Binding); err != nil {
 			t.Fatal(err)
 		}
-		if len(deadlines) != 2 || !deadlines[0].Equal(start.Add(growth.ApplyBound)) ||
-			!deadlines[1].Equal(start.Add(growth.ApplyBound)) {
-			t.Errorf("the read's and the write's deadlines are %v, want %s from the start", deadlines, growth.ApplyBound)
+		if len(deadlines) != 3 || !leased {
+			t.Fatalf("the scope check, the read and the write carried deadlines %v (scope under the lease: %v)",
+				deadlines, leased)
+		}
+		for _, d := range deadlines {
+			if !d.Equal(start.Add(growth.ApplyBound)) {
+				t.Errorf("deadlines %v, want each %s from the start", deadlines, growth.ApplyBound)
+			}
 		}
 	})
 }
@@ -595,18 +687,21 @@ func TestAHeldCallsAnswerIsRecordedBeforeItActs(t *testing.T) {
 		map[string]string{"updateMask": "name"}, map[string]any{"name": "new"})
 	h, _ := w.client.Read(t.Context(), "seat-a", req)
 	call := growth.Call{Handle: "seat-a", Tool: "x_ads_admin", HeldCall: "held-1", Approver: "founder"}
-	if _, err := w.client.Apply(t.Context(), call, req, nil, h.Binding, growth.ClassAdmin, nil); err != nil {
+	admin := func(req googlegrowth.Request, err error) googlegrowth.Write {
+		return googlegrowth.Write{Req: req, Err: err, Class: growth.ClassAdmin}
+	}
+	if _, err := w.client.Apply(t.Context(), call, admin(req, nil), h.Binding); err != nil {
 		t.Fatal(err)
 	}
 	lapsed := growth.Call{Handle: "seat-a", Tool: "x_ads_admin", HeldCall: "held-2", Approver: growth.EngineActor}
 	w.client.Denied(t.Context(), lapsed, req, growth.ClassAdmin)
 	lapsed.Approver = "founder"
-	if _, err := w.client.Apply(t.Context(), lapsed, req, nil, h.Binding, growth.ClassAdmin, nil); err == nil {
+	if _, err := w.client.Apply(t.Context(), lapsed, admin(req, nil), h.Binding); err == nil {
 		t.Error("an allow after the lapse was applied")
 	}
 	unbuilt, err := googlegrowth.NewRequest(patch, map[string]string{"accountsId": "1"}, nil, nil)
 	call3 := growth.Call{Handle: "seat-a", Tool: "x_ads_admin", HeldCall: "held-3", Approver: "founder"}
-	if _, aerr := w.client.Apply(t.Context(), call3, unbuilt, err, h.Binding, growth.ClassAdmin, nil); aerr == nil {
+	if _, aerr := w.client.Apply(t.Context(), call3, admin(unbuilt, err), h.Binding); aerr == nil {
 		t.Error("an unbuilt request was applied")
 	}
 	w.client.Denied(t.Context(), growth.Call{Handle: "seat-a", Tool: "x_ads_admin", HeldCall: "held-4",

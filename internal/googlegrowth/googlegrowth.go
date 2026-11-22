@@ -17,10 +17,12 @@
 //
 // Google takes a field by its lowerCamel JSON name or its proto name, in the
 // body and in the update mask (`updateMask` or `update_mask`), so
-// [Request.Changes] reads both spellings as the lowerCamel name a catalog's
-// rules use; a body naming one field in two spellings with two values is read
-// as neither value, which no rule lowers. A `*` mask replaces the whole
-// resource, so it changes every field the target holds as well as the body's.
+// [Request.Changes] reads a field's value in either spelling and
+// [Held.Class] classes it by the lowerCamel name a catalog's rules use, while
+// a card and a record show the request as written; a body naming one field in
+// two spellings with two values is read as neither value, which no rule
+// lowers. A `*` mask replaces the whole resource, so it changes every field
+// the target holds as well as the body's.
 //
 // # A held call binds to what a person saw
 //
@@ -184,30 +186,38 @@ func (r Request) verb() string {
 }
 
 // Changes is what the request changes on before, field by field, each named
-// in lowerCamel (package doc, "A write is classed as Google reads it"): the
-// fields its update masks name, every field the body sets where it names
-// none, and for a `*` mask those and every field before holds.
+// and valued as the request writes it, so a card shows what Google receives:
+// the fields its update masks name, every field the body sets where it names
+// none, and for a `*` mask those and every field before holds. Values are read
+// in either spelling Google takes (package doc), and [Held.Class] classes each
+// field by its lowerCamel name.
 func (r Request) Changes(before map[string]any) []growth.Change {
-	body, _ := canonical(r.Body).(map[string]any)
-	current, _ := canonical(before).(map[string]any)
 	fields, masked := r.masked()
 	if !masked || slices.Contains(fields, "*") {
-		fields = slices.Collect(maps.Keys(body))
+		fields = slices.Collect(maps.Keys(r.Body))
 		if masked {
 			// A `*` MASK REPLACES THE RESOURCE: a field the body leaves out is cleared.
-			fields = append(fields, slices.Collect(maps.Keys(current))...)
+			named := map[string]bool{}
+			for _, f := range fields {
+				named[LowerCamel(f)] = true
+			}
+			for k := range before {
+				if !named[LowerCamel(k)] {
+					fields = append(fields, k)
+				}
+			}
 		}
 	}
 	sort.Strings(fields)
 	fields = slices.Compact(fields)
 	out := make([]growth.Change, 0, len(fields))
 	for _, f := range fields {
-		out = append(out, growth.Change{Field: f, Before: Lookup(current, f), After: Lookup(body, f)})
+		out = append(out, growth.Change{Field: f, Before: Lookup(before, f), After: Lookup(r.Body, f)})
 	}
 	return out
 }
 
-// masked is every path the request's update masks name, in lowerCamel, and
+// masked is every path the request's update masks name, as written, and
 // whether it names any: Google reads `updateMask` and `update_mask` alike.
 func (r Request) masked() ([]string, bool) {
 	var out []string
@@ -218,7 +228,7 @@ func (r Request) masked() ([]string, bool) {
 		for _, v := range values {
 			for _, f := range strings.Split(v, ",") {
 				if f = strings.TrimSpace(f); f != "" {
-					out = append(out, LowerCamel(f))
+					out = append(out, f)
 				}
 			}
 		}
@@ -226,19 +236,9 @@ func (r Request) masked() ([]string, bool) {
 	return out, len(out) > 0
 }
 
-// Field is a dotted lowerCamel field's value in the request's body, read in
+// Field is a dotted field's value in the request's body, each key read in
 // either spelling Google takes (package doc), nil where it is absent.
-func (r Request) Field(field string) any {
-	body, _ := canonical(r.Body).(map[string]any)
-	return Lookup(body, field)
-}
-
-// Ambiguous reports whether v is a field a body names in two spellings with
-// two values ([Request.Field]).
-func Ambiguous(v any) bool {
-	_, ok := v.(conflict)
-	return ok
-}
+func (r Request) Field(field string) any { return Lookup(r.Body, field) }
 
 // LowerCamel is a dotted field path as Google's lowerCamel JSON names it:
 // `daily_export_enabled` is `dailyExportEnabled`, and a lowerCamel path is
@@ -271,39 +271,29 @@ type conflict struct{}
 // MarshalJSON says the field is named twice, for a card and a record.
 func (conflict) MarshalJSON() ([]byte, error) { return []byte(`"(named twice, with two values)"`), nil }
 
-// canonical is a JSON value with every object's keys in lowerCamel, a key
-// named in two spellings with two values a [conflict].
-func canonical(v any) any {
-	switch t := v.(type) {
-	case map[string]any:
-		out := make(map[string]any, len(t))
-		for _, k := range slices.Sorted(maps.Keys(t)) {
-			key, val := LowerCamel(k), canonical(t[k])
-			if prev, seen := out[key]; seen && !reflect.DeepEqual(prev, val) {
-				val = conflict{}
-			}
-			out[key] = val
-		}
-		return out
-	case []any:
-		out := make([]any, len(t))
-		for i, e := range t {
-			out[i] = canonical(e)
-		}
-		return out
-	}
-	return v
-}
-
-// Lookup is a dotted field's value in a JSON object, nil where it is absent.
+// Lookup is a dotted field's value in a JSON object, each key on its path
+// matched by its lowerCamel name and its value returned as written: a key
+// named in two spellings with two values is a [conflict], and the keys inside
+// the value (a Measurement Protocol event's own) are left as they are.
 func Lookup(m map[string]any, field string) any {
 	var cur any = m
-	for _, part := range strings.Split(field, ".") {
+	for _, part := range strings.Split(LowerCamel(field), ".") {
 		obj, ok := cur.(map[string]any)
 		if !ok {
 			return nil
 		}
-		cur = obj[part]
+		var found any
+		seen := false
+		for _, k := range slices.Sorted(maps.Keys(obj)) {
+			if LowerCamel(k) != part {
+				continue
+			}
+			if seen && !reflect.DeepEqual(found, obj[k]) {
+				return conflict{}
+			}
+			found, seen = obj[k], true
+		}
+		cur = found
 	}
 	return cur
 }

@@ -103,17 +103,19 @@ func (a *fakeAudit) take() ([]growth.Step, []growth.Record) {
 	return steps, records
 }
 
-// fakeLeases holds one lease per resource, in process, and names each taken.
+// fakeLeases holds one lease per resource, in process, and names each taken
+// and each held now.
 type fakeLeases struct {
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
 	taken []string
+	held  map[string]bool
 }
 
 func (l *fakeLeases) Hold(_ context.Context, resource string) (func(), error) {
 	l.mu.Lock()
 	if l.locks == nil {
-		l.locks = map[string]*sync.Mutex{}
+		l.locks, l.held = map[string]*sync.Mutex{}, map[string]bool{}
 	}
 	m, ok := l.locks[resource]
 	if !ok {
@@ -123,7 +125,22 @@ func (l *fakeLeases) Hold(_ context.Context, resource string) (func(), error) {
 	l.taken = append(l.taken, resource)
 	l.mu.Unlock()
 	m.Lock()
-	return m.Unlock, nil
+	l.mu.Lock()
+	l.held[resource] = true
+	l.mu.Unlock()
+	return func() {
+		l.mu.Lock()
+		delete(l.held, resource)
+		l.mu.Unlock()
+		m.Unlock()
+	}, nil
+}
+
+// holding reports whether resource's lease is held now.
+func (l *fakeLeases) holding(resource string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.held[resource]
 }
 
 // fakeAnalytics is the Admin and Data APIs: account 77 holding properties 111
@@ -137,8 +154,15 @@ type fakeAnalytics struct {
 	writes   int
 	secret   string
 	lastBody map[string]any
-	// queries are the Measurement Protocol's queries, as Google got them.
+	// queries are the Measurement Protocol's and batchGet's queries, as Google
+	// got them.
 	queries []string
+	// bindings are property 111's access bindings by name.
+	bindings map[string]map[string]any
+	// leases are the product's leases, and summariesLeased whether account
+	// 88's lease was held at each read of the account summaries.
+	leases          *fakeLeases
+	summariesLeased []bool
 }
 
 func (f *fakeAnalytics) serve(w http.ResponseWriter, r *http.Request) {
@@ -158,6 +182,9 @@ func (f *fakeAnalytics) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case r.URL.Path == "/v1beta/accountSummaries":
+		if f.leases != nil {
+			f.summariesLeased = append(f.summariesLeased, f.leases.holding("write/google_analytics/accounts/88"))
+		}
 		answer(map[string]any{"accountSummaries": []any{map[string]any{
 			"account": "accounts/77", "displayName": "Acme",
 			"propertySummaries": []any{
@@ -217,8 +244,22 @@ func (f *fakeAnalytics) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		answer(map[string]any{"validationMessages": []any{}})
 	case r.Method == http.MethodPost && (r.URL.Path == "/v1alpha/properties:createRollupProperty" ||
-		r.URL.Path == "/v1beta/accounts:provisionAccountTicket"):
+		r.URL.Path == "/v1beta/accounts:provisionAccountTicket" ||
+		r.URL.Path == "/v1alpha/properties/111/accessBindings:batchDelete" ||
+		r.URL.Path == "/v1alpha/properties/111/dataStreams/3/eventEditRules:reorder" ||
+		r.URL.Path == "/v1beta/properties/111/audienceExports"):
 		write(map[string]any{"name": "ok"})
+	case r.URL.Path == "/v1alpha/properties/111/accessBindings:batchGet":
+		f.queries = append(f.queries, r.URL.RawQuery)
+		var found []any
+		for _, name := range r.URL.Query()["names"] {
+			found = append(found, f.bindings[name])
+		}
+		answer(map[string]any{"accessBindings": found})
+	case r.URL.Path == "/v1beta/accounts/88" && r.Method == http.MethodGet:
+		answer(map[string]any{"name": "accounts/88", "displayName": "Acme labs"})
+	case r.URL.Path == "/v1beta/accounts/88" && r.Method == http.MethodPatch:
+		write(map[string]any{"name": "accounts/88", "displayName": body["displayName"]})
 	default:
 		w.WriteHeader(http.StatusNotFound)
 		answer(map[string]any{"error": map[string]any{"code": 404, "status": "NOT_FOUND", "message": "no " + r.URL.Path}})
@@ -286,10 +327,13 @@ roles:
 	f := &fakeAnalytics{metric: map[string]any{"name": "properties/111/customMetrics/9", "displayName": "Revenue",
 		"restrictedMetricType": []any{"REVENUE_DATA"}}, secret: "s3cr3t-value-of-the-stream",
 		link: map[string]any{"name": "properties/111/bigQueryLinks/4", "dailyExportEnabled": true,
-			"streamingExportEnabled": false, "excludedEvents": []any{"page_view"}}}
+			"streamingExportEnabled": false, "excludedEvents": []any{"page_view"}},
+		bindings: map[string]map[string]any{"properties/111/accessBindings/5": {
+			"name": "properties/111/accessBindings/5", "roles": []any{"predefinedRoles/viewer"}}}}
 	srv := httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(srv.Close)
 	tokens, audit, leases := &fakeTokens{}, &fakeAudit{t: t}, &fakeLeases{}
+	f.leases = leases
 	p := googleanalytics.New(func() *config.Company { return company }, func() *config.Resolver { return env },
 		tokens, audit, leases, &http.Client{Transport: httpxtest.Rewrite(t, srv)})
 	return &world{p: p, f: f, tokens: tokens, audit: audit, leases: leases}
@@ -772,7 +816,8 @@ func TestTheMeasurementProtocolSecretIsFilledOnlyAsItIsSent(t *testing.T) {
 	const name = "properties/111/dataStreams/3/measurementProtocolSecrets/8"
 	mp := func(op, secret string) map[string]any {
 		return map[string]any{"operation": op, "query": map[string]any{"api_secret_name": secret, "measurement_id": "G-1"},
-			"body": map[string]any{"client_id": "1.2", "events": []any{map[string]any{"name": "signup"}}}}
+			"body": map[string]any{"client_id": "1.2", "events": []any{map[string]any{"name": "signup",
+				"params": map[string]any{"page_title": "Home"}}}}}
 	}
 	got, err := w.call(t, "google_analytics_read", mp("mp.debug_collect", name))
 	if err != nil {
@@ -809,6 +854,16 @@ func TestTheMeasurementProtocolSecretIsFilledOnlyAsItIsSent(t *testing.T) {
 	asked, _ := json.Marshal(hold)
 	if err != nil || hold.Class != growth.ClassAdmin || strings.Contains(string(asked), w.f.secret) || len(w.f.called()) != 0 {
 		t.Fatalf("the ask is %s, %v", asked, err)
+	}
+	// THE CARD AND THE QUESTION SHOW WHAT GOOGLE RECEIVES: the event's own
+	// page_title and the body's client_id, as written.
+	card, _ := w.p.Card(t.Context(), call, hold.Binding)
+	shown, _ := json.Marshal(card.Acts)
+	for _, words := range []string{hold.Context, string(shown)} {
+		if !strings.Contains(words, "page_title") || !strings.Contains(words, "client_id") ||
+			strings.Contains(words, "pageTitle") || strings.Contains(words, "clientId") {
+			t.Errorf("a person is shown %s, not the request as written", words)
+		}
 	}
 	w.f.mu.Lock()
 	w.f.secret = "rotated-secret-value"
@@ -851,5 +906,34 @@ func TestAWriteReadsItsTargetOnceUnderItsPropertysLease(t *testing.T) {
 	defer w.leases.mu.Unlock()
 	if !slices.Equal(w.leases.taken, []string{"write/google_analytics/properties/111"}) {
 		t.Errorf("the apply took leases %v", w.leases.taken)
+	}
+}
+
+// AN ACCOUNT'S WRITE HOLDS ITS SCOPE UNDER THE LEASE: the account's summaries,
+// which decide whether the seat reaches every property in it, are read again
+// under the account's lease, with the target, never before it.
+//
+// Mutation: hold the call to the seat's scope before the lease, and the apply
+// reads the summaries unleased.
+func TestAnAccountsWriteHoldsItsScopeUnderTheLease(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, "administer", "111", "333")
+	call := growth.Call{Handle: "growth-lead", Tool: "google_analytics_admin", HeldCall: "held-acct", Approver: "founder",
+		Args: map[string]any{"operation": "analyticsadmin.accounts.patch", "path": map[string]any{"accountsId": "88"},
+			"query": map[string]any{"updateMask": "displayName"}, "body": map[string]any{"displayName": "Labs"}}}
+	hold, err := w.p.Prepare(t.Context(), call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.f.mu.Lock()
+	w.f.summariesLeased = nil
+	w.f.mu.Unlock()
+	if _, err := w.p.Apply(t.Context(), call, hold.Binding); err != nil {
+		t.Fatal(err)
+	}
+	w.f.mu.Lock()
+	defer w.f.mu.Unlock()
+	if len(w.f.summariesLeased) == 0 || slices.Contains(w.f.summariesLeased, false) || w.f.writes != 1 {
+		t.Errorf("the apply read the summaries leased %v (writes %d)", w.f.summariesLeased, w.f.writes)
 	}
 }

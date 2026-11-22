@@ -39,12 +39,15 @@ func (p *Product) Card(ctx context.Context, call growth.Call, binding string) (g
 	return p.client.Card(call, h, binding, h.Class()), nil
 }
 
-// Apply makes a prepared write once, building it again and reading its target
-// again under its account's lease, and sending nothing where it moved since
-// binding was taken (googlegrowth's Client.Apply).
+// Apply makes a prepared write once, building it again and, under its
+// account's lease, holding it to the seat's scope (an account's summaries
+// read included) and reading its target again, sending nothing where it moved
+// since binding was taken (googlegrowth's Client.Apply).
 func (p *Product) Apply(ctx context.Context, call growth.Call, binding string) (any, error) {
-	req, err := p.built(ctx, call)
-	return p.client.Apply(ctx, call, req, err, binding, p.toolClass(call.Tool), p.cut(call.Handle, req))
+	req, _, err := p.requestOf(call)
+	return p.client.Apply(ctx, call, googlegrowth.Write{Req: req, Err: err, Class: p.toolClass(call.Tool),
+		Scope: func(ctx context.Context) error { return p.inScope(ctx, call.Handle, req) },
+		Cut:   p.cut(call.Handle, req)}, binding)
 }
 
 // Denied records that an administrator denied the held call, or that it
