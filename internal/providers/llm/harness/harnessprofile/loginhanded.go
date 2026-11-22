@@ -78,23 +78,53 @@ func credentialList(content []byte) ([]map[string]any, bool) {
 // handed login had none ([sameLogin]).
 var refreshTokenKeys = []string{"access", "refresh", "expires"}
 
-// sameLogin reports whether run is handed after a refresh: the same credential
-// (every field but its value and active the same), an OAuth login of the same
-// method, every value field a refresh leaves alone the same, and its access
-// token naming the same account ([sameSubject]). A key never refreshes, so a
-// changed one is another login.
+// sameLogin reports whether run is handed after a refresh. A credential whose
+// value names its type (OpenCode's shape, [sameTypedLogin]) is held to that
+// type's refresh. Any other is the same login where its integrationID and
+// label agree and every top-level token of handed that is a JWT naming an
+// account names the same one in run ([sameSubject]): the store's fields are
+// not known, so nothing else in it can be told apart from a refresh.
 func sameLogin(handed, run map[string]any) bool {
+	if _, typed := typedValue(handed); typed {
+		return sameTypedLogin(handed, run)
+	}
+	for _, key := range []string{"integrationID", "label"} {
+		if !reflect.DeepEqual(handed[key], run[key]) {
+			return false
+		}
+	}
+	for key, v := range handed {
+		if !sameSubject(v, run[key]) {
+			return false
+		}
+	}
+	return true
+}
+
+// typedValue is c's value where it is an object naming its type.
+func typedValue(c map[string]any) (map[string]any, bool) {
+	v, ok := c["value"].(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	_, ok = v["type"].(string)
+	return v, ok
+}
+
+// sameTypedLogin is [sameLogin] for a credential of OpenCode's shape: the same
+// credential (every field but its value and active the same), an OAuth login
+// of the same method, every value field a refresh leaves alone the same, and
+// its access token naming the same account ([sameSubject]). A key never
+// refreshes, so a changed one is another login.
+func sameTypedLogin(handed, run map[string]any) bool {
 	for _, key := range unionKeys(handed, run) {
 		if key != "value" && key != "active" && !reflect.DeepEqual(handed[key], run[key]) {
 			return false
 		}
 	}
-	hv, ok := handed["value"].(map[string]any)
+	hv, _ := typedValue(handed)
+	rv, ok := typedValue(run)
 	if !ok || hv["type"] != "oauth" {
-		return false
-	}
-	rv, ok := run["value"].(map[string]any)
-	if !ok {
 		return false
 	}
 	for _, key := range unionKeys(hv, rv) {
@@ -110,12 +140,17 @@ func sameLogin(handed, run map[string]any) bool {
 	return sameSubject(hv["access"], rv["access"])
 }
 
-// refreshed is handed with run's tokens, and run's metadata where handed had
-// none.
+// refreshed is the credential carried for handed, which run refreshed: of
+// OpenCode's shape, handed with run's tokens and run's metadata where handed
+// had none; of any other, run's.
 func refreshed(handed, run map[string]any) map[string]any {
+	hv, typed := typedValue(handed)
+	if !typed {
+		return maps.Clone(run)
+	}
 	out := maps.Clone(handed)
-	value := maps.Clone(handed["value"].(map[string]any))
-	rv := run["value"].(map[string]any)
+	value := maps.Clone(hv)
+	rv, _ := typedValue(run)
 	for _, key := range refreshTokenKeys {
 		if v, ok := rv[key]; ok {
 			value[key] = v
