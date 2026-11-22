@@ -1075,11 +1075,6 @@ codex:
   # written by neither release.
   volatile_paths: [".codex/sessions"]
   host_credential_paths: [".codex/auth.json"]
-  # The account a login is: a ChatGPT sign-in's at tokens.account_id, a key
-  # stored by `codex login --with-api-key` at OPENAI_API_KEY. A refresh keeps
-  # both, so a box's copy naming others is written back over no login.
-  identity_keys:
-    auth.json: ["tokens.account_id", "OPENAI_API_KEY"]
   # CODEX_API_KEY, not OPENAI_API_KEY: `codex exec` signs its requests with the
   # first, and sends no Authorization header at all with only the second set
   # (measured on both releases).
