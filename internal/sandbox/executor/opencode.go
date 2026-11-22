@@ -1631,6 +1631,8 @@ type openCodeEvents struct {
 	overflowed bool
 	sawEvent   bool
 	sawLine    bool
+	// ended is whether the newest step ended the run ([openCodeEvents.Ended]).
+	ended bool
 
 	// usage is the session's usage report, when the script printed one, and
 	// usageBefore the one a continued run's script printed before the run
@@ -1700,6 +1702,10 @@ func (d *openCodeEvents) Line(line []byte) {
 		d.named[id] = true
 	}
 	switch ev.Type {
+	case "step_start":
+		d.ended = false
+	case "step_finish":
+		d.ended = ev.Part.Reason != openCodeStepCalls
 	case "text":
 		if chunk := strings.TrimSpace(ev.Part.Text); chunk != "" {
 			if !d.following {
@@ -1713,6 +1719,7 @@ func (d *openCodeEvents) Line(line []byte) {
 			d.transcript.add(l)
 		}
 	case "error":
+		d.ended = true
 		d.errText = errorText(ev.Error)
 		d.overflowed = openCodeContextOverflow(ev.Error)
 		d.transcript.add(activityline.Words(activityline.TagError, d.errText))
@@ -1912,6 +1919,15 @@ func (d *openCodeEvents) Skipped(n int64, bound int) {
 	}
 	d.transcript.skip(n, bound)
 }
+
+// openCodeStepCalls is the reason a step ends on that another follows: the
+// model called tools, whose results the next step answers.
+const openCodeStepCalls = "tool-calls"
+
+// Ended implements [Decoder]: a step that ended for any reason but tool calls,
+// with no step begun after it, or an `error` event, which `opencode run`
+// prints as it gives up.
+func (d *openCodeEvents) Ended() bool { return d.ended }
 
 func (d *openCodeEvents) Result() sandbox.Result {
 	if !d.sawLine {

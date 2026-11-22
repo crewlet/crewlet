@@ -294,6 +294,9 @@ func (d *geminiEvents) runSpend() (runSpend, bool) {
 	return runSpend{input: u.Input - u.Cached + u.Tool, cacheRead: u.Cached, output: u.Output + u.Thoughts}, true
 }
 
+// Ended implements [Decoder]: the stream's `result` event.
+func (d *geminiEvents) Ended() bool { return d.result != nil }
+
 func (d *geminiEvents) Result() sandbox.Result {
 	d.flushSaid()
 	if !d.sawLine {
