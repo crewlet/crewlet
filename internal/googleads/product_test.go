@@ -25,6 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/spendguard/spendguardtest"
+	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
 const (
@@ -96,11 +97,16 @@ type fakeAds struct {
 	managers  []string
 	writes    int
 	trace     []string
-	// batchOps is how many operations the batch job holds, staged the class
-	// the access log says they came to.
+	// totals are the budgets that are total budgets, by their whole amount.
+	totals map[string]int64
+	// portfolio is the portfolio strategy each campaign runs on, if any.
+	portfolio map[string]string
+	// recs are the recommendations, each a type and the budget it targets.
+	recs map[string][2]string
+	// batchOps is how many operations the batch job holds.
 	batchOps int
-	staged   growth.Class
-	// brokenCustomer answers the customer's own search with what is no JSON.
+	// brokenCustomer answers the customer's own search in a shape no search
+	// answer has.
 	brokenCustomer bool
 }
 
@@ -109,13 +115,6 @@ func (f *fakeAds) note(s string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.trace = append(f.trace, s)
-}
-
-// StagedClass is the access log's word on what the batch job staged.
-func (f *fakeAds) StagedClass(context.Context, string, string, string) (growth.Class, bool, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.staged, f.staged != "", nil
 }
 
 // leases is the engine's growth act lease, in process, noting each hold and
@@ -167,7 +166,7 @@ func (f *fakeAds) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case strings.HasSuffix(r.URL.Path, "/googleAds:search") && f.brokenCustomer && strings.Contains(query, "FROM customer"):
-		_, _ = w.Write([]byte("not json"))
+		_, _ = w.Write([]byte(`{"results": "no rows"}`))
 	case strings.HasSuffix(r.URL.Path, "/googleAds:search"):
 		answer(map[string]any{"results": f.search(query)})
 	case strings.HasSuffix(r.URL.Path, ":listPlannableUserLists"):
@@ -230,8 +229,17 @@ func (f *fakeAds) search(q string) []any {
 		}
 	case strings.Contains(q, "FROM campaign_budget"):
 		for _, n := range named() {
-			rows = append(rows, map[string]any{"campaignBudget": map[string]any{"resourceName": n,
-				"amountMicros": fmt.Sprint(f.budgets[n])}})
+			b := map[string]any{"resourceName": n, "amountMicros": fmt.Sprint(f.budgets[n]),
+				"referenceCount": fmt.Sprint(f.uses(n))}
+			if total, ok := f.totals[n]; ok {
+				b["totalAmountMicros"] = fmt.Sprint(total)
+			}
+			rows = append(rows, map[string]any{"campaignBudget": b})
+		}
+	case strings.Contains(q, "FROM recommendation"):
+		for _, n := range named() {
+			rows = append(rows, map[string]any{"recommendation": map[string]any{"resourceName": n,
+				"type": f.recs[n][0], "campaignBudget": f.recs[n][1]}})
 		}
 	case strings.Contains(q, "FROM batch_job"):
 		for _, n := range named() {
@@ -241,21 +249,38 @@ func (f *fakeAds) search(q string) []any {
 	case strings.Contains(q, "FROM campaign "):
 		for _, n := range named() {
 			c := f.campaigns[n]
-			rows = append(rows, map[string]any{"campaign": map[string]any{"resourceName": n, "status": c[0],
-				"campaignBudget": c[1], "biddingStrategyType": "MANUAL_CPC"}})
+			campaign := map[string]any{"resourceName": n, "status": c[0], "campaignBudget": c[1],
+				"biddingStrategyType": "MANUAL_CPC"}
+			if p := f.portfolio[n]; p != "" {
+				campaign["biddingStrategyType"], campaign["biddingStrategy"] = "TARGET_CPA", p
+			}
+			rows = append(rows, map[string]any{"campaign": campaign})
 		}
 	}
 	return rows
+}
+
+// uses is how many campaigns run on budget, as Google's reference_count
+// counts them.
+func (f *fakeAds) uses(budget string) int {
+	n := 0
+	for _, c := range f.campaigns {
+		if c[1] == budget {
+			n++
+		}
+	}
+	return n
 }
 
 // world is a product on a company whose seat growth-lead is at administer on
 // one account, reached through its manager, capped at 50.00 a change and
 // 200.00 a day.
 type world struct {
-	p     *googleads.Product
-	f     *fakeAds
-	audit *fakeAudit
-	held  int
+	p       *googleads.Product
+	f       *fakeAds
+	audit   *fakeAudit
+	held    int
+	company *config.Company
 }
 
 func newWorld(t *testing.T) *world {
@@ -300,8 +325,8 @@ roles:
 	t.Cleanup(srv.Close)
 	audit := &fakeAudit{}
 	p := googleads.New(func() *config.Company { return company }, func() *config.Resolver { return env },
-		fakeTokens{}, audit, &leases{f: f}, f, &http.Client{Transport: httpxtest.Rewrite(t, srv)})
-	return &world{p: p, f: f, audit: audit}
+		fakeTokens{}, audit, &leases{f: f}, &http.Client{Transport: httpxtest.Rewrite(t, srv)})
+	return &world{p: p, f: f, audit: audit, company: company}
 }
 
 // aboveTool is the framework's refusal of a change above its tool's class.
@@ -568,21 +593,27 @@ func TestEveryWriteHoldsTheAccountsOneLease(t *testing.T) {
 	}
 }
 
-// AN APPROVED BATCH RUN IS MADE ONLY ON WHAT WAS STAGED WHEN IT WAS ASKED: an
-// operation staged after the approval moves the binding, and nothing runs.
+// RUNNING A BATCH JOB IS ADMIN, AND AN APPROVED RUN IS MADE ONLY ON WHAT WAS
+// STAGED WHEN IT WAS ASKED: nothing the engine can read says what its staged
+// operations do against the account as it stands at the run, so it is asked
+// of an administrator, and an operation staged after the approval moves the
+// binding, so nothing runs.
 //
-// Mutation: bind a run to its request alone, and the job runs what nobody
-// was asked about.
-func TestAnApprovedBatchRunIsMadeOnlyOnItsStaging(t *testing.T) {
+// Mutation: bind a run to its request alone, or class it below admin, and the
+// job runs what nobody was asked about.
+func TestRunningABatchJobIsAdminAndMadeOnlyOnItsStaging(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
-	w.f.batchOps, w.f.staged = 2, growth.ClassPublic
-	call := growth.Call{Handle: "growth-lead", Tool: "google_ads_publish", Args: map[string]any{
-		"operation": "googleads.customers.batchJobs.run",
-		"path":      map[string]any{"customersId": customer, "batchJobsId": "5"}}}
+	w.f.batchOps = 2
+	args := map[string]any{"operation": "googleads.customers.batchJobs.run",
+		"path": map[string]any{"customersId": customer, "batchJobsId": "5"}}
+	if _, _, err := w.call(t, "google_ads_spend", args); !refused(err) {
+		t.Fatalf("a batch run on the spend tool answered %v", err)
+	}
+	call := growth.Call{Handle: "growth-lead", Tool: "google_ads_admin", Args: args}
 	hold, err := w.p.Prepare(t.Context(), call)
-	if err != nil || hold.Class != growth.ClassPublic {
-		t.Fatalf("a run of public staging is held as %s, %v", hold.Class, err)
+	if err != nil || hold.Class != growth.ClassAdmin || hold.Ask.Money != nil {
+		t.Fatalf("a batch run is held as %s (money %+v), %v", hold.Class, hold.Ask.Money, err)
 	}
 	w.f.mu.Lock()
 	w.f.batchOps = 3
@@ -590,13 +621,6 @@ func TestAnApprovedBatchRunIsMadeOnlyOnItsStaging(t *testing.T) {
 	call.HeldCall, call.Approver = "held-1", "founder"
 	if _, err := w.p.Apply(t.Context(), call, hold.Binding); !errors.Is(err, growth.ErrMoved) || w.f.writes != 0 {
 		t.Fatalf("a run staged further after its approval answered %v (writes %d)", err, w.f.writes)
-	}
-	w.f.mu.Lock()
-	w.f.batchOps, w.f.staged = 2, growth.ClassSpend
-	w.f.mu.Unlock()
-	call.HeldCall = "held-2"
-	if _, err := w.p.Apply(t.Context(), call, hold.Binding); !errors.Is(err, growth.ErrMoved) || w.f.writes != 0 {
-		t.Fatalf("a run whose staging came to more answered %v (writes %d)", err, w.f.writes)
 	}
 }
 
@@ -720,5 +744,223 @@ func TestAnUnreadableSearchIsNoUnknownOutcome(t *testing.T) {
 		w.f.writes != 0 {
 		t.Errorf("the apply is recorded %s %q after %d writes", w.audit.steps[len(w.audit.steps)-1], last.Failure,
 			w.f.writes)
+	}
+}
+
+// A SEAT'S ACCOUNTS ARE HELD AGAIN UNDER THE LEASE: an approved raise on an
+// account taken off the seat since it was asked sends nothing, and fails as
+// the seat's access lowered.
+//
+// Mutation: hold the call to the seat's accounts only when it is asked, and
+// the approval is made on an account the seat no longer reaches.
+func TestASeatsAccountsAreHeldAgainWhenAnApprovalIsMade(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	call := growth.Call{Handle: "growth-lead", Tool: "google_ads_set_budget",
+		Args: map[string]any{"budget": budget1, "amount": "120.00"}}
+	hold, err := w.p.Prepare(t.Context(), call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.company.Roles[0].Integrations.GoogleAds.Customers = []string{"9999999999"}
+	call.HeldCall, call.Approver = "held-1", "founder"
+	if _, err := w.p.Apply(t.Context(), call, hold.Binding); !refused(err) {
+		t.Fatalf("an approval on an account the seat lost answered %v", err)
+	}
+	w.audit.mu.Lock()
+	defer w.audit.mu.Unlock()
+	last := w.audit.recs[len(w.audit.recs)-1]
+	if w.audit.steps[len(w.audit.steps)-1] != growth.StepFailed || last.Failure != growth.FailureAccessLowered ||
+		w.f.writes != 0 {
+		t.Errorf("the apply is recorded %s %q after %d writes", w.audit.steps[len(w.audit.steps)-1], last.Failure,
+			w.f.writes)
+	}
+}
+
+// moveTo is a campaigns.mutate moving campaign to budget.
+func moveTo(campaign, budget string) map[string]any {
+	return map[string]any{"operation": "googleads.customers.campaigns.mutate",
+		"path": map[string]any{"customersId": customer},
+		"body": map[string]any{"operations": []any{map[string]any{"update": map[string]any{"resourceName": campaign,
+			"campaignBudget": budget}, "updateMask": "campaignBudget"}}}}
+}
+
+// A BUDGET MOVE AND A BIDDING SWITCH ARE CLASSED ON WHAT THE ENGINE READS OF
+// THEM: a campaign moved off its own daily budget onto a smaller one, or onto
+// a total budget whose whole is smaller, operates; onto a larger one, a
+// larger total, off a budget another campaign keeps, or off a total budget,
+// spends; and a campaign given a standard scheme of its own, or one on a
+// portfolio, spends.
+//
+// Mutation: compare against the budget the campaign leaves without reading
+// it, a total budget by its daily amount, a budget another campaign keeps as
+// freed, or a campaign's scheme by its type alone, and a raise is made at once.
+func TestABudgetMoveAndABiddingSwitchAreClassedOnWhatTheEngineReads(t *testing.T) {
+	t.Parallel()
+	const (
+		small, big           = "customers/1234567890/campaignBudgets/31", "customers/1234567890/campaignBudgets/32"
+		total, bigTotal      = "customers/1234567890/campaignBudgets/33", "customers/1234567890/campaignBudgets/34"
+		shared, totalLeft    = "customers/1234567890/campaignBudgets/35", "customers/1234567890/campaignBudgets/36"
+		onShared, onTotalOff = "customers/1234567890/campaigns/4", "customers/1234567890/campaigns/5"
+	)
+	w := newWorld(t)
+	w.f.mu.Lock()
+	for name, amount := range map[string]int64{small: 1_000_000, big: 120_000_000, shared: 100_000_000,
+		totalLeft: 200_000_000} {
+		w.f.budgets[name] = amount
+	}
+	w.f.totals = map[string]int64{total: 50_000_000, bigTotal: 140_000_000, totalLeft: 60_000_000}
+	w.f.campaigns["customers/1234567890/campaigns/3"] = [2]string{"PAUSED", shared}
+	w.f.campaigns[onShared] = [2]string{"PAUSED", shared}
+	w.f.campaigns[onTotalOff] = [2]string{"PAUSED", totalLeft}
+	w.f.portfolio = map[string]string{pausedC: "customers/1234567890/biddingStrategies/9"}
+	w.f.mu.Unlock()
+	targetCpa := func(campaign string) map[string]any {
+		return map[string]any{"operation": "googleads.customers.campaigns.mutate",
+			"path": map[string]any{"customersId": customer},
+			"body": map[string]any{"operations": []any{map[string]any{"update": map[string]any{
+				"resourceName": campaign, "targetCpa": map[string]any{"targetCpaMicros": "1"}},
+				"updateMask": "targetCpa.targetCpaMicros"}}}}
+	}
+	for name, tc := range map[string]struct {
+		args map[string]any
+		want growth.Class
+	}{
+		"moved onto a smaller budget":       {moveTo(enabledC, small), growth.ClassOperate},
+		"moved onto a smaller total budget": {moveTo(enabledC, total), growth.ClassOperate},
+		"moved onto a larger budget":        {moveTo(enabledC, big), growth.ClassSpend},
+		"moved onto a larger total budget":  {moveTo(enabledC, bigTotal), growth.ClassSpend},
+		"moved off a budget another keeps":  {moveTo(onShared, small), growth.ClassSpend},
+		"moved off a total budget":          {moveTo(onTotalOff, small), growth.ClassSpend},
+		"given a target CPA of its own":     {targetCpa(enabledC), growth.ClassSpend},
+		"on a portfolio given its own CPA":  {targetCpa(pausedC), growth.ClassSpend},
+	} {
+		if _, hold, err := w.call(t, "google_ads_operate", tc.args); hold.Class != tc.want ||
+			(err != nil && !errors.As(err, new(*aboveTool))) {
+			t.Errorf("a campaign %s is %s (%v), want %s", name, hold.Class, err, tc.want)
+		}
+	}
+}
+
+// A SPEND BESIDE AN ADMIN ACT IS HELD TO THE CAPS: a budget raised past the
+// change cap in the same Mutate as an ad group removed is refused before
+// anyone is asked, and one within it is asked as admin with its figures.
+//
+// Mutation: hold a call to the caps only when its top class is spend, and the
+// raise is asked as an account change with no figures and no cap.
+func TestASpendBesideAnAdminActIsHeldToTheCaps(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	mutate := func(amount string) growth.Call {
+		return growth.Call{Handle: "growth-lead", Tool: "google_ads_admin", Args: map[string]any{
+			"operation": "googleads.customers.googleAds.mutate", "path": map[string]any{"customersId": customer},
+			"body": map[string]any{"mutateOperations": []any{
+				map[string]any{"campaignBudgetOperation": map[string]any{"update": map[string]any{
+					"resourceName": budget1, "amountMicros": amount}, "updateMask": "amountMicros"}},
+				map[string]any{"adGroupOperation": map[string]any{"remove": "customers/1234567890/adGroups/2"}},
+			}}}}
+	}
+	if _, err := w.p.Prepare(t.Context(), mutate("900000000000")); !refused(err) ||
+		!strings.Contains(err.Error(), "per-change") {
+		t.Fatalf("a raise past the cap beside a removal answered %v", err)
+	}
+	hold, err := w.p.Prepare(t.Context(), mutate("120000000"))
+	if err != nil || hold.Class != growth.ClassAdmin || hold.Ask.Money == nil || hold.Ask.Money.DeltaMicros != 20_000_000 {
+		t.Fatalf("a raise within the cap beside a removal is held as %s (money %+v), %v", hold.Class,
+			hold.Ask.Money, err)
+	}
+}
+
+// AN AMOUNT AS A TOOL'S ARGUMENTS CARRY IT IS HELD TO THE CAPS: every
+// transport decodes a call's arguments with json.Number, and a budget raised
+// by a JSON number past the change cap is refused before anyone is asked.
+//
+// Mutation: read a json.Number amount as unchanged in capacity, and the
+// raise adds nothing the caps refuse.
+func TestAnAmountAsAToolsArgumentsCarryItIsHeldToTheCaps(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	args, err := toolargs.Decode([]byte(`{"operation": "googleads.customers.campaignBudgets.mutate",
+		"path": {"customersId": "` + customer + `"}, "body": {"operations": [{"update": {"resourceName": "` +
+		budget1 + `", "amountMicros": 900000000000}, "updateMask": "amountMicros"}]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = w.p.Prepare(t.Context(), growth.Call{Handle: "growth-lead", Tool: "google_ads_spend", Args: args})
+	if !refused(err) || !strings.Contains(err.Error(), "per-change") {
+		t.Fatalf("a raise by a JSON number past the cap answered %v", err)
+	}
+}
+
+// A BUDGET RECOMMENDATION APPLIED IS HELD TO THE CAPS BY ITS NEW AMOUNT, on
+// the budget Google says it targets: one past the change cap is refused
+// before anyone is asked, and one at Google's own amount is admin.
+//
+// Mutation: hand the caps no operation for an apply, and the new amount
+// passes both caps.
+func TestABudgetRecommendationAppliedIsHeldToTheCaps(t *testing.T) {
+	t.Parallel()
+	const rec = "customers/1234567890/recommendations/abc"
+	w := newWorld(t)
+	w.f.recs = map[string][2]string{rec: {"CAMPAIGN_BUDGET", budget1}}
+	apply := func(params map[string]any) growth.Call {
+		item := map[string]any{"resourceName": rec}
+		for k, v := range params {
+			item[k] = v
+		}
+		return growth.Call{Handle: "growth-lead", Tool: "google_ads_admin", Args: map[string]any{
+			"operation": "googleads.customers.recommendations.apply", "path": map[string]any{"customersId": customer},
+			"body": map[string]any{"operations": []any{item}}}}
+	}
+	if _, err := w.p.Prepare(t.Context(), apply(map[string]any{"campaignBudget": map[string]any{
+		"newBudgetAmountMicros": "900000000000"}})); !refused(err) || !strings.Contains(err.Error(), "per-change") {
+		t.Fatalf("a budget recommendation past the cap answered %v", err)
+	}
+	if hold, err := w.p.Prepare(t.Context(), apply(nil)); err != nil || hold.Class != growth.ClassAdmin {
+		t.Fatalf("a budget recommendation at Google's amount is held as %s, %v", hold.Class, err)
+	}
+}
+
+// A CUSTOMER NAMED ALONE IS HELD TO THE CALL'S ACCOUNT, except where the
+// method's purpose is to name another: another account named as a resource
+// of the account itself is refused before Google, while a manager linking a
+// client, or a client moving to a new manager, names it.
+//
+// Mutation: match full resource names alone, or allow another account at any
+// path of an exempt method, and the call reaches another account.
+func TestACustomerNamedAloneIsHeldToTheCallsAccount(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	call := func(id string, body map[string]any) growth.Call {
+		return growth.Call{Handle: "growth-lead", Tool: "google_ads_admin", Args: map[string]any{"operation": id,
+			"path": map[string]any{"customersId": customer}, "body": body}}
+	}
+	for name, c := range map[string]growth.Call{
+		"another account renamed": call("googleads.customers.mutate", map[string]any{"operation": map[string]any{
+			"update":     map[string]any{"resourceName": "customers/9999999999", "descriptiveName": "x"},
+			"updateMask": "descriptiveName"}}),
+		"another account outside the field": call("googleads.customers.customerClientLinks.mutate",
+			map[string]any{"operation": map[string]any{"create": map[string]any{"clientCustomer": "customers/1",
+				"hidden": "customers/9999999999"}}}),
+	} {
+		if _, err := w.p.Prepare(t.Context(), c); !refused(err) || !strings.Contains(err.Error(), "9999999999") {
+			t.Errorf("%s answered %v", name, err)
+		}
+	}
+	for name, c := range map[string]growth.Call{
+		"a client linked": call("googleads.customers.customerClientLinks.mutate", map[string]any{
+			"operation": map[string]any{"create": map[string]any{"clientCustomer": "customers/9999999999"}}}),
+		"a manager moved to": call("googleads.customers.customerManagerLinks.moveManagerLink", map[string]any{
+			"customerId": customer, "newManager": "customers/9999999999",
+			"previousCustomerManagerLink": "customers/1234567890/customerManagerLinks/1112223334~5"}),
+	} {
+		if hold, err := w.p.Prepare(t.Context(), c); err != nil || hold.Class != growth.ClassAdmin {
+			t.Errorf("%s is held as %s, %v", name, hold.Class, err)
+		}
+	}
+	for _, c := range pathsCalled(w.f) {
+		if strings.Contains(c, "9999999999") || !strings.HasSuffix(c, "googleAds:search") {
+			t.Errorf("Google was asked %s", c)
+		}
 	}
 }

@@ -22,8 +22,11 @@ type SeatAccess struct {
 	Product integration.Kind
 	Lane    seataccess.Lane
 	// Name is the product's name for a person.
-	Name   string
-	Levels []seataccess.Level
+	Name string
+	// Levels builds the product's levels, least first, when one is asked
+	// for, never at init: a product registers at init, which every push's
+	// hook pays for (cmd/crewlet's TestTheHookPaysLittleForTheEnginesInit).
+	Levels func() []seataccess.Level
 	// Scope is the company's narrowing of what seats may be given, nil where
 	// it names none.
 	Scope func(c *config.Company) []string
@@ -61,7 +64,7 @@ func (v SeatAccess) Reach(c *config.Company, _ *org.Organization, _ seataccess.L
 }
 
 // FixedLevels is the product's levels, least first.
-func (v SeatAccess) FixedLevels(seataccess.Lane) []seataccess.Level { return v.Levels }
+func (v SeatAccess) FixedLevels(seataccess.Lane) []seataccess.Level { return v.Levels() }
 
 // Open builds a session from the company's block. A product that is off, or
 // without the Google identity it signs in through, is not configured.
@@ -88,7 +91,7 @@ type seatSession struct {
 // Options is the levels and the company's scope.
 func (s *seatSession) Options(_ context.Context, lane seataccess.Lane) (seataccess.Options, error) {
 	reach := s.access.Reach(s.company, nil, lane)
-	return seataccess.Options{Lane: lane, Levels: s.access.Levels, Scoped: true, ScopeRequired: true,
+	return seataccess.Options{Lane: lane, Levels: s.access.Levels(), Scoped: true, ScopeRequired: true,
 		Scope: reach.Scope, ScopeOpen: reach.Open, ScopeLive: true}, nil
 }
 

@@ -44,10 +44,10 @@ Google Ads' access levels, least first: **Email only** and **Billing** (no API m
 | `google_ads_spend` | spend | Any change that can raise spend: asked first, held to the caps |
 | `google_ads_admin` | admin | Any removal, user, link, billing or account change: asked first |
 
-**A mutate is classed by every operation it holds.** Each create, update (by its field mask) and remove is classed by its service's rule, against what the account holds now: enabling, raising a budget, a bid or a target, widening a network, a date range, a match type or targeting, and removing a negative or an exclusion are `spend`; pausing, lowering and adding a negative are `operate`; new or changed ad text, links of assets that show, and policy exemptions are `public`; removing campaigns, ad groups and other containers, links, users and billing are `admin`. A change the engine cannot tell up from down (a value it could not read, a list it cannot compare, an enum given by its number rather than its name) is classed as the highest its rule allows. Google takes a field by its camelCase or snake_case name, and so do the rules; a body naming one field both ways with two values is refused. A request of several operations is the highest of them, and a call on the wrong tool for what it changes is refused with the tool that may make it. Running a batch job takes the class of what was staged into it, and one whose staging the engine holds no record of is refused; an approved run binds the job's operations as they were when it was asked, so one staged since makes it ask again.
+**A mutate is classed by every operation it holds.** Each create, update (by its field mask) and remove is classed by its service's rule, against what the account holds now: enabling, raising a budget, a bid or a target, widening a network, a date range, a match type or targeting, and removing a negative or an exclusion are `spend`; pausing, lowering and adding a negative are `operate`; new or changed ad text, links of assets that show, and policy exemptions are `public`; removing campaigns, ad groups and other containers, links, users and billing are `admin`. A change the engine cannot tell up from down (a value it could not read, a list it cannot compare, an enum given as anything but the name a rule lowers on, such as its number or another case) is classed as the highest its rule allows. A value set where the account holds none is a raise, except a ceiling or a target whose absence is no limit (a bid ceiling, a maximize-conversions target CPA, a target ROAS); a criterion's `negative` is what it is in the account, never what an update sends. Google takes a field by its camelCase or snake_case name, and so do the rules; a body naming one field both ways with two values is refused. A request of several operations is the highest of them, and a call on the wrong tool for what it changes is refused with the tool that may make it. Staging operations into a batch job is classed by them as though they were made then. Running the job is `admin`: Google gives no read of a job's operations and the access log keeps them only as digests, so nothing can class them, or hold them to the caps, as the account stands when the job runs. An approved run binds the job's operation count when it was asked, so one staged since makes it ask again.
 
 **What a call may reach:**
-- A call acts in the account its path names or, for a planning method whose path names none, its body's `customer_id`. An account outside the agent's list is refused before Google is asked, and so is a body that names another account's resource anywhere in it, or a `customer_id` other than the path's.
+- A call acts in the account its path names or, for a planning method whose path names none, its body's `customer_id`. An account outside the agent's list is refused before Google is asked, and so is a body that names another account's resource, or another account itself (`customers/{id}`), anywhere in it, or a `customer_id` other than the path's. The one exception is the field a method exists to name another account by, which may be outside the agent's list too: a manager's new client (`customerClientLinks.mutate`), the manager a client moves to (`moveManagerLink`) and the account a product link joins (`productLinks.create`), each `admin`.
 - The accessible-accounts listing is cut to the agent's accounts.
 
 **How an approved change is made:** the administrator's answer is recorded first, and the change is made only on the call's one answer: a call that lapsed or was denied is never made. Every write holds its account's one lease while the engine checks the agent's accounts, reads the targets again, holds a spend to the caps and sends it, so two changes to one account never pass on the same reading.
@@ -60,7 +60,14 @@ Each account has two caps, in its own currency:
 - **per_change**: the most one approved change may add to the account's daily capacity.
 - **daily**: the ceiling on that daily capacity after any approved change.
 
-The daily capacity is the daily budget of every enabled, unended campaign, a shared budget counted once, and a total budget as what is left of it over its remaining days, rounded up. A spend is checked against both caps before an administrator is asked, so nobody is asked to allow what would be refused, and checked again when it is made, under the account's write lease, so two approved raises cannot both pass the daily cap. A change that adds nothing (a broader match, a raised bid) is still asked: the class comes from the change, never its amount. The caps bound the budgets agents may set; Google may spend up to twice a campaign's daily budget on one day, and no more than 30.4 times it over a month.
+The daily capacity is the daily budget of every enabled, unended campaign, a shared budget counted once, and a total budget as what is left of it over its remaining days, rounded up. A spend is checked against both caps before an administrator is asked, so nobody is asked to allow what would be refused, and checked again when it is made, under the account's write lease, so two approved raises cannot both pass the daily cap. A change that adds nothing (a broader match, a raised bid) is still asked: the class comes from the change, never its amount.
+
+What a call adds is measured whatever else it holds:
+- A call that spends is held to the caps even where it comes to `admin`: a budget raise beside an ad group removed is asked as an account change, with its figures, and refused over a cap.
+- Every budget the call names is read, so a budget no campaign uses yet counts once a campaign is put on it.
+- An amount is read as the rules read it, a JSON number or a decimal string, and one that is no whole number of micros is refused.
+- Graduating an experiment counts each experiment campaign as serving on the budget its mapping names, and a budget recommendation applied with its new amount is that budget's change.
+- A method whose request names no amount a cap could hold is `admin` ([ADR-0171](../../adr/0171-spend-public-and-admin-acts-are-held-for-an-administrator-never-a-delegate.md)): see the notes below the method table. The caps bound the budgets agents may set; Google may spend up to twice a campaign's daily budget on one day, and no more than 30.4 times it over a month.
 
 ## Configuration
 
@@ -125,9 +132,9 @@ Each row is one method the engine offers, with its class (or the classes its rul
 | `googleads.customers.generateTargetingSuggestionMetrics` | AudienceInsightsService | `POST /v26/customers/{customersId}:generateTargetingSuggestionMetrics` | read | Read only |
 | `googleads.customers.audiences.mutate` | AudienceService | `POST /v26/customers/{customersId}/audiences:mutate` | operate | Standard |
 | `googleads.customers.removeCampaignAutomaticallyCreatedAsset` | AutomaticallyCreatedAssetRemovalService | `POST /v26/customers/{customersId}:removeCampaignAutomaticallyCreatedAsset` | public | Standard |
-| `googleads.customers.batchJobs.mutate` | BatchJobService | `POST /v26/customers/{customersId}/batchJobs:mutate` | operate, public, spend or admin by operation (FR-BATCH) | Standard |
+| `googleads.customers.batchJobs.mutate` | BatchJobService | `POST /v26/customers/{customersId}/batchJobs:mutate` | operate or admin by operation (FR-BATCH) | Standard |
 | `googleads.customers.batchJobs.listResults` | BatchJobService | `GET /v26/customers/{customersId}/batchJobs/{batchJobsId}:listResults` | read | Read only |
-| `googleads.customers.batchJobs.run` | BatchJobService | `POST /v26/customers/{customersId}/batchJobs/{batchJobsId}:run` | operate, public, spend or admin by operation (FR-BATCH) | Standard |
+| `googleads.customers.batchJobs.run` | BatchJobService | `POST /v26/customers/{customersId}/batchJobs/{batchJobsId}:run` | admin | Standard |
 | `googleads.customers.batchJobs.addOperations` | BatchJobService | `POST /v26/customers/{customersId}/batchJobs/{batchJobsId}:addOperations` | operate, public, spend or admin by operation (FR-MUTATE) | Standard |
 | `googleads.listBenchmarksAvailableDates` | BenchmarksService | `POST /v26:listBenchmarksAvailableDates` | read | Read only |
 | `googleads.listBenchmarksLocations` | BenchmarksService | `POST /v26:listBenchmarksLocations` | read | Read only |
@@ -147,7 +154,7 @@ Each row is one method the engine offers, with its class (or the classes its rul
 | `googleads.customers.campaignCriteria.mutate` | CampaignCriterionService | `POST /v26/customers/{customersId}/campaignCriteria:mutate` | operate, spend or admin by operation (FR-CAMPAIGN-CRITERION) | Standard |
 | `googleads.customers.campaignCustomizers.mutate` | CampaignCustomizerService | `POST /v26/customers/{customersId}/campaignCustomizers:mutate` | public | Standard |
 | `googleads.customers.campaignDrafts.mutate` | CampaignDraftService | `POST /v26/customers/{customersId}/campaignDrafts:mutate` | operate or admin by operation (FR-ENTITY) | Standard |
-| `googleads.customers.campaignDrafts.promote` | CampaignDraftService | `POST /v26/customers/{customersId}/campaignDrafts/{campaignDraftsId}:promote` | spend | Standard |
+| `googleads.customers.campaignDrafts.promote` | CampaignDraftService | `POST /v26/customers/{customersId}/campaignDrafts/{campaignDraftsId}:promote` | admin | Standard |
 | `googleads.customers.campaignDrafts.listAsyncErrors` | CampaignDraftService | `GET /v26/customers/{customersId}/campaignDrafts/{campaignDraftsId}:listAsyncErrors` | read | Read only |
 | `googleads.customers.CampaignGoalConfigs.mutate` | CampaignGoalConfigService | `POST /v26/customers/{customersId}/CampaignGoalConfigs:mutate` | operate, public or spend by operation (FR-GOAL) | Standard |
 | `googleads.customers.campaignGroups.mutate` | CampaignGroupService | `POST /v26/customers/{customersId}/campaignGroups:mutate` | operate or admin by operation (FR-ENTITY) | Standard |
@@ -157,14 +164,14 @@ Each row is one method the engine offers, with its class (or the classes its rul
 | `googleads.customers.campaignSharedSets.mutate` | CampaignSharedSetService | `POST /v26/customers/{customersId}/campaignSharedSets:mutate` | operate or spend by operation (FR-SHARED-SET-LINK) | Standard |
 | `googleads.customers.generateCreatorInsights` | ContentCreatorInsightsService | `POST /v26/customers/{customersId}:generateCreatorInsights` | read | Read only |
 | `googleads.customers.generateTrendingInsights` | ContentCreatorInsightsService | `POST /v26/customers/{customersId}:generateTrendingInsights` | read | Read only |
-| `googleads.customers.conversionActions.mutate` | ConversionActionService | `POST /v26/customers/{customersId}/conversionActions:mutate` | operate or admin by operation (FR-ENTITY) | Standard |
+| `googleads.customers.conversionActions.mutate` | ConversionActionService | `POST /v26/customers/{customersId}/conversionActions:mutate` | operate, spend or admin by operation (FR-CONVERSION-ACTION) | Standard |
 | `googleads.customers.uploadConversionAdjustments` | ConversionAdjustmentUploadService | `POST /v26/customers/{customersId}:uploadConversionAdjustments` | operate | Standard |
 | `googleads.customers.conversionCustomVariables.mutate` | ConversionCustomVariableService | `POST /v26/customers/{customersId}/conversionCustomVariables:mutate` | operate | Standard |
 | `googleads.customers.conversionGoalCampaignConfigs.mutate` | ConversionGoalCampaignConfigService | `POST /v26/customers/{customersId}/conversionGoalCampaignConfigs:mutate` | operate | Standard |
 | `googleads.customers.uploadClickConversions` | ConversionUploadService | `POST /v26/customers/{customersId}:uploadClickConversions` | operate | Standard |
 | `googleads.customers.uploadCallConversions` | ConversionUploadService | `POST /v26/customers/{customersId}:uploadCallConversions` | operate | Standard |
-| `googleads.customers.conversionValueRules.mutate` | ConversionValueRuleService | `POST /v26/customers/{customersId}/conversionValueRules:mutate` | operate or admin by operation (FR-ENTITY) | Standard |
-| `googleads.customers.conversionValueRuleSets.mutate` | ConversionValueRuleSetService | `POST /v26/customers/{customersId}/conversionValueRuleSets:mutate` | operate or admin by operation (FR-ENTITY) | Standard |
+| `googleads.customers.conversionValueRules.mutate` | ConversionValueRuleService | `POST /v26/customers/{customersId}/conversionValueRules:mutate` | operate, spend or admin by operation (FR-VALUE-RULE) | Standard |
+| `googleads.customers.conversionValueRuleSets.mutate` | ConversionValueRuleSetService | `POST /v26/customers/{customersId}/conversionValueRuleSets:mutate` | operate, spend or admin by operation (FR-VALUE-RULE) | Standard |
 | `googleads.customers.customAudiences.mutate` | CustomAudienceService | `POST /v26/customers/{customersId}/customAudiences:mutate` | operate or admin by operation (FR-ENTITY) | Standard |
 | `googleads.customers.customConversionGoals.mutate` | CustomConversionGoalService | `POST /v26/customers/{customersId}/customConversionGoals:mutate` | operate or admin by operation (FR-ENTITY) | Standard |
 | `googleads.customers.customInterests.mutate` | CustomInterestService | `POST /v26/customers/{customersId}/customInterests:mutate` | operate | Standard |
@@ -193,8 +200,8 @@ Each row is one method the engine offers, with its class (or the classes its rul
 | `googleads.customers.experiments.endExperiment` | ExperimentService | `POST /v26/customers/{customersId}/experiments/{experimentsId}:endExperiment` | admin | Standard |
 | `googleads.customers.experiments.listExperimentAsyncErrors` | ExperimentService | `GET /v26/customers/{customersId}/experiments/{experimentsId}:listExperimentAsyncErrors` | read | Read only |
 | `googleads.customers.experiments.graduateExperiment` | ExperimentService | `POST /v26/customers/{customersId}/experiments/{experimentsId}:graduateExperiment` | spend | Standard |
-| `googleads.customers.experiments.scheduleExperiment` | ExperimentService | `POST /v26/customers/{customersId}/experiments/{experimentsId}:scheduleExperiment` | spend | Standard |
-| `googleads.customers.experiments.promoteExperiment` | ExperimentService | `POST /v26/customers/{customersId}/experiments/{experimentsId}:promoteExperiment` | spend | Standard |
+| `googleads.customers.experiments.scheduleExperiment` | ExperimentService | `POST /v26/customers/{customersId}/experiments/{experimentsId}:scheduleExperiment` | admin | Standard |
+| `googleads.customers.experiments.promoteExperiment` | ExperimentService | `POST /v26/customers/{customersId}/experiments/{experimentsId}:promoteExperiment` | admin | Standard |
 | `googleads.geoTargetConstants.suggest` | GeoTargetConstantService | `POST /v26/geoTargetConstants:suggest` | read | Read only |
 | `googleads.customers.Goals.mutate` | GoalService | `POST /v26/customers/{customersId}/Goals:mutate` | operate, public or spend by operation (FR-GOAL) | Standard |
 | `googleads.googleAdsFields.get` | GoogleAdsFieldService | `GET /v26/googleAdsFields/{googleAdsFieldsId}` | read | Any authenticated user |
@@ -205,7 +212,7 @@ Each row is one method the engine offers, with its class (or the classes its rul
 | `googleads.customers.startIdentityVerification` | IdentityVerificationService | `POST /v26/customers/{customersId}:startIdentityVerification` | admin | Admin |
 | `googleads.customers.getIdentityVerification` | IdentityVerificationService | `GET /v26/customers/{customersId}/getIdentityVerification` | read | Read only |
 | `googleads.incentives.fetchIncentive` | IncentiveService | `GET /v26/incentives:fetchIncentive` | read | Any authenticated user |
-| `googleads.customers.incentives.applyIncentive` | IncentiveService | `POST /v26/customers/{customersId}/incentives/{incentivesId}:applyIncentive` | spend | Admin |
+| `googleads.customers.incentives.applyIncentive` | IncentiveService | `POST /v26/customers/{customersId}/incentives/{incentivesId}:applyIncentive` | admin | Admin |
 | `googleads.customers.invoices.list` | InvoiceService | `GET /v26/customers/{customersId}/invoices` | read | Read only |
 | `googleads.customers.keywordPlanAdGroupKeywords.mutate` | KeywordPlanAdGroupKeywordService | `POST /v26/customers/{customersId}/keywordPlanAdGroupKeywords:mutate` | operate or admin by operation (FR-ENTITY) | Standard |
 | `googleads.customers.keywordPlanAdGroups.mutate` | KeywordPlanAdGroupService | `POST /v26/customers/{customersId}/keywordPlanAdGroups:mutate` | operate or admin by operation (FR-ENTITY) | Standard |
@@ -220,7 +227,7 @@ Each row is one method the engine offers, with its class (or the classes its rul
 | `googleads.customers.labels.mutate` | LabelService | `POST /v26/customers/{customersId}/labels:mutate` | operate or admin by operation (FR-ENTITY) | Standard |
 | `googleads.customers.checkLocalServicesEligibility` | LocalServicesEligibilityService | `POST /v26/customers/{customersId}:checkLocalServicesEligibility` | read | Read only |
 | `googleads.customers.localServices.appendLeadConversation` | LocalServicesLeadService | `POST /v26/customers/{customersId}/localServices:appendLeadConversation` | public | Standard |
-| `googleads.customers.localServicesLeads.provideLeadFeedback` | LocalServicesLeadService | `POST /v26/customers/{customersId}/localServicesLeads/{localServicesLeadsId}:provideLeadFeedback` | spend | Standard |
+| `googleads.customers.localServicesLeads.provideLeadFeedback` | LocalServicesLeadService | `POST /v26/customers/{customersId}/localServicesLeads/{localServicesLeadsId}:provideLeadFeedback` | admin | Standard |
 | `googleads.customers.multiPartyAuthReview.resolve` | MultiPartyAuthReviewService | `POST /v26/customers/{customersId}/multiPartyAuthReview:resolve` | admin | Admin |
 | `googleads.customers.offlineUserDataJobs.create` | OfflineUserDataJobService | `POST /v26/customers/{customersId}/offlineUserDataJobs:create` | operate | Standard |
 | `googleads.customers.offlineUserDataJobs.addOperations` | OfflineUserDataJobService | `POST /v26/customers/{customersId}/offlineUserDataJobs/{offlineUserDataJobsId}:addOperations` | operate | Standard |
@@ -237,13 +244,13 @@ Each row is one method the engine offers, with its class (or the classes its rul
 | `googleads.customers.generateReachForecast` | ReachPlanService | `POST /v26/customers/{customersId}:generateReachForecast` | read | Read only |
 | `googleads.listPlannableUserLists` | ReachPlanService | `POST /v26:listPlannableUserLists` | read | Read only |
 | `googleads.listPlannableUserInterests` | ReachPlanService | `POST /v26:listPlannableUserInterests` | read | Read only |
-| `googleads.customers.recommendations.apply` | RecommendationService | `POST /v26/customers/{customersId}/recommendations:apply` | operate, public or spend by operation (FR-RECOMMENDATION) | Standard |
+| `googleads.customers.recommendations.apply` | RecommendationService | `POST /v26/customers/{customersId}/recommendations:apply` | operate, public, spend or admin by operation (FR-RECOMMENDATION) | Standard |
 | `googleads.customers.recommendations.dismiss` | RecommendationService | `POST /v26/customers/{customersId}/recommendations:dismiss` | operate | Standard |
 | `googleads.customers.recommendations.generate` | RecommendationService | `POST /v26/customers/{customersId}/recommendations:generate` | read | Read only |
-| `googleads.customers.recommendationSubscriptions.mutateRecommendationSubscription` | RecommendationSubscriptionService | `POST /v26/customers/{customersId}/recommendationSubscriptions:mutateRecommendationSubscription` | operate, public or spend by operation (FR-REC-SUBSCRIPTION) | Standard |
+| `googleads.customers.recommendationSubscriptions.mutateRecommendationSubscription` | RecommendationSubscriptionService | `POST /v26/customers/{customersId}/recommendationSubscriptions:mutateRecommendationSubscription` | operate, public, spend or admin by operation (FR-REC-SUBSCRIPTION) | Standard |
 | `googleads.customers.remarketingActions.mutate` | RemarketingActionService | `POST /v26/customers/{customersId}/remarketingActions:mutate` | operate | Standard |
 | `googleads.customers.reservations.quoteCampaigns` | ReservationService | `POST /v26/customers/{customersId}/reservations:quoteCampaigns` | read | Standard |
-| `googleads.customers.reservations.bookCampaigns` | ReservationService | `POST /v26/customers/{customersId}/reservations:bookCampaigns` | spend | Standard |
+| `googleads.customers.reservations.bookCampaigns` | ReservationService | `POST /v26/customers/{customersId}/reservations:bookCampaigns` | admin | Standard |
 | `googleads.customers.generateShareablePreviews` | ShareablePreviewService | `POST /v26/customers/{customersId}:generateShareablePreviews` | read | Read only |
 | `googleads.customers.sharedCriteria.mutate` | SharedCriterionService | `POST /v26/customers/{customersId}/sharedCriteria:mutate` | operate or spend by operation (FR-NEGATIVE-LIST) | Standard |
 | `googleads.customers.sharedSets.mutate` | SharedSetService | `POST /v26/customers/{customersId}/sharedSets:mutate` | operate or spend by operation (FR-SHARED-SET) | Standard |
@@ -270,7 +277,9 @@ Each row is one method the engine offers, with its class (or the classes its rul
 
 **Notes on the classing:**
 - Nothing is offered at `never`: no method is technically impossible or forbidden by Google's terms. Methods behind an allowlist (reservations, incentives, benchmarks, new Customer Match and click-conversion adopters) are offered; Google answers 403 where the account is not allowlisted.
-- `ProvideLeadFeedback` and `ApplyIncentive` are `spend`: a lead's credit and an incentive's terms move money.
+- A method whose request names no amount a cap could hold is `admin`, not `spend`: running a batch job, promoting a draft, scheduling or promoting an experiment, booking reservations, applying an incentive (its terms move money) and lead feedback (a lead's credit). Graduating an experiment is `spend`, held to the caps by the budgets its mappings name.
+- A recommendation applied is its type's class. A type that may set a budget is `spend` only where the request names the new amount (`campaignBudget.newBudgetAmountMicros`), held to the caps on the budget the recommendation targets, and `admin` otherwise; subscribing to such a type is `admin`, since Google picks the amount each time it applies one.
+- A conversion value rule, and a conversion action's value settings, are `spend` where they make a conversion worth more, as goals are: value bidding bids more.
 - Removes are terminal in Google Ads, so removing a container is `admin`; removing an ad or an asset link retracts published content and is `public`.
 
 ## What the atlas shows

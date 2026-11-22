@@ -273,15 +273,26 @@ type tokenAnswer struct {
 	Place  string `json:"place"`
 }
 
-// places says where each method's token goes.
-var places = map[string]string{
-	"META":        "Add the token, a meta tag, to the head of the site's home page.",
-	"FILE":        "Serve a file of this name, holding the line google-site-verification: and its name, at the site's root.",
-	"ANALYTICS":   "The site's home page must carry the Google Analytics tag of a property this identity can edit; the token is not placed.",
-	"TAG_MANAGER": "The site's home page must carry the Google Tag Manager container this identity publishes to; the token is not placed.",
-	"DNS_TXT":     "Add the token as a TXT record on the domain.",
-	"DNS_CNAME":   "Add the token's name and target as a CNAME record on the domain.",
-	"DNS":         "Add the token as a TXT record on the domain.",
+// placeOf says where a method's token goes: a switch rather than a map, which
+// would be built at init, on every push's hook.
+func placeOf(method string) string {
+	switch method {
+	case "META":
+		return "Add the token, a meta tag, to the head of the site's home page."
+	case "FILE":
+		return "Serve a file of this name, holding the line google-site-verification: and its name, at the site's root."
+	case "ANALYTICS":
+		return "The site's home page must carry the Google Analytics tag of a property this identity can edit; " +
+			"the token is not placed."
+	case "TAG_MANAGER":
+		return "The site's home page must carry the Google Tag Manager container this identity publishes to; " +
+			"the token is not placed."
+	case "DNS_TXT", "DNS":
+		return "Add the token as a TXT record on the domain."
+	case "DNS_CNAME":
+		return "Add the token's name and target as a CNAME record on the domain."
+	}
+	return ""
 }
 
 // verificationToken is search_console_verification_token.
@@ -312,7 +323,7 @@ func (p *Product) verificationToken(ctx context.Context, call growth.Call) (toke
 	if err != nil {
 		return tokenAnswer{}, err
 	}
-	return tokenAnswer{Site: site, Method: method, Token: r.Token, Place: places[method] +
+	return tokenAnswer{Site: site, Method: method, Token: r.Token, Place: placeOf(method) +
 		" Then ask to verify with search_console_verify_site."}, nil
 }
 

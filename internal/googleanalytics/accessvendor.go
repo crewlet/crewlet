@@ -7,19 +7,21 @@ import (
 	"github.com/crewlet/crewlet/internal/seataccess"
 )
 
-// Google Analytics' half of per-seat access is the shape every Google growth
-// product shares (googlegrowth.SeatAccess): its levels and its properties.
+// seatAccess is Google Analytics' half of per-seat access, the shape every
+// Google growth product shares (googlegrowth.SeatAccess): its levels and its
+// properties. A value the compiler lays out, so registering it at init
+// allocates nothing of its own.
+var seatAccess = googlegrowth.SeatAccess{Product: Kind, Lane: seataccess.LaneGoogleAnalytics,
+	Name: "Google Analytics", Levels: levels, Scope: propertiesOf}
 
-func init() {
-	seataccess.Register(googlegrowth.SeatAccess{
-		Product: Kind, Lane: seataccess.LaneGoogleAnalytics, Name: "Google Analytics", Levels: levels(),
-		Scope: func(c *config.Company) []string {
-			if c.Integrations.GoogleAnalytics == nil {
-				return nil
-			}
-			return c.Integrations.GoogleAnalytics.Properties
-		},
-	})
+func init() { seataccess.Register(&seatAccess) }
+
+// propertiesOf is the properties the company names, nil where it names none.
+func propertiesOf(c *config.Company) []string {
+	if c.Integrations.GoogleAnalytics == nil {
+		return nil
+	}
+	return c.Integrations.GoogleAnalytics.Properties
 }
 
 // levels is the three levels, least first. Operate and administer each raise

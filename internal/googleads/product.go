@@ -19,26 +19,18 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// Staged answers the highest class a batch job's staged operations came to,
-// from the access log's records of them (the engine's GrowthAudit); false
-// where it holds none.
-type Staged interface {
-	StagedClass(ctx context.Context, kind, account, batchJob string) (growth.Class, bool, error)
-}
-
 // Product is Google Ads as the growth tools reach it.
 type Product struct {
 	company func() *config.Company
 	client  *googlegrowth.Client
-	staged  Staged
 	now     func() time.Time
 }
 
 // New is the product on the engine's active document, resolver, tokens,
-// access log, apply leases and staged batch jobs; hc is nil in production.
+// access log and apply leases; hc is nil in production.
 func New(company func() *config.Company, env func() *config.Resolver, tokens googlegrowth.Tokens,
-	audit googlegrowth.Audit, leases googlegrowth.Leaser, staged Staged, hc *http.Client) *Product {
-	p := &Product{company: company, staged: staged, now: time.Now, client: &googlegrowth.Client{
+	audit googlegrowth.Audit, leases googlegrowth.Leaser, hc *http.Client) *Product {
+	p := &Product{company: company, now: time.Now, client: &googlegrowth.Client{
 		Kind: string(Kind), Name: "Google Ads", Company: company, Env: env, Tokens: tokens, Audit: audit,
 		Leases: leases, HTTP: hc, Refused: vendorRefusal,
 	}}
@@ -134,8 +126,9 @@ func customerOf(req googlegrowth.Request) string {
 
 // inScope refuses req where it acts in a customer the seat may not reach, or
 // where its body names a resource of another customer than the one it acts
-// in, at any depth: what an operation acts on and every resource its fields
-// point at.
+// in, or another customer itself, at any depth: what an operation acts on and
+// every resource its fields point at. A field whose purpose is to name
+// another account (otherAccount) may.
 func (p *Product) inScope(handle string, req googlegrowth.Request) error {
 	b := p.seat(handle)
 	if b == nil {
@@ -146,13 +139,29 @@ func (p *Product) inScope(handle string, req googlegrowth.Request) error {
 		return refusal(growth.RefusedForbidden, "account "+customer+" is not one of this agent's accounts ("+
 			words.Or(b.Customers)+"). No vendor was reached.")
 	}
-	for _, name := range namesIn(req.Body) {
-		if owner, _, _ := kindOf(name); owner != customer {
+	for _, n := range namesIn(req.Body, "") {
+		if owner, _ := ownerOf(n.name); owner != customer && n.path != otherAccount(req.Op.ID) {
 			return refusal(growth.RefusedForbidden, fmt.Sprintf("the body names %s, which is not in the account "+
-				"the call acts in (%s). No vendor was reached.", name, cmp.Or(customer, "none")))
+				"the call acts in (%s). No vendor was reached.", n.name, cmp.Or(customer, "none")))
 		}
 	}
 	return nil
+}
+
+// otherAccount is the body field, of the methods with one, whose purpose is
+// to name another Google Ads account than the one the call acts in, which may
+// be outside the seat's accounts too: a manager's new client, the manager a
+// client moves to, the account a product link joins. Each method is admin.
+func otherAccount(id string) string {
+	switch id {
+	case "googleads.customers.customerClientLinks.mutate":
+		return "operation.create.client_customer"
+	case "googleads.customers.customerManagerLinks.moveManagerLink":
+		return "new_manager"
+	case "googleads.customers.productLinks.create":
+		return "product_link.google_ads.customer"
+	}
+	return ""
 }
 
 // vendorRefusal says Google's refusal of req in words the agent acts on.
@@ -201,25 +210,45 @@ func (p *Product) toolClass(name string) growth.Class {
 	return tool.Class
 }
 
-// namesIn is every resource name a body holds, at any depth.
-func namesIn(v any) []string {
+// named is a resource name a body holds, at its dotted snake_case path; a
+// list's items share the list's path.
+type named struct{ path, name string }
+
+// namesIn is every resource name, and every customer named alone, a body
+// holds below path, at any depth.
+func namesIn(v any, path string) []named {
 	switch t := v.(type) {
 	case string:
-		if _, _, ok := kindOf(t); ok {
-			return []string{t}
+		if _, ok := ownerOf(t); ok {
+			return []named{{path: path, name: t}}
 		}
 	case map[string]any:
-		var out []string
+		var out []named
 		for _, k := range slices.Sorted(maps.Keys(t)) {
-			out = append(out, namesIn(t[k])...)
+			out = append(out, namesIn(t[k], strings.TrimPrefix(path+"."+snake(k), "."))...)
 		}
 		return out
 	case []any:
-		var out []string
+		var out []named
 		for _, inner := range t {
-			out = append(out, namesIn(inner)...)
+			out = append(out, namesIn(inner, path)...)
 		}
 		return out
 	}
 	return nil
+}
+
+// customerName is a customer named alone: customers/{id}.
+var customerName = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^customers/([0-9]{1,20})$`) })
+
+// ownerOf is the customer a resource name belongs to, or the one a customer
+// name names; ok is false for anything else.
+func ownerOf(name string) (customer string, ok bool) {
+	if owner, _, ok := kindOf(name); ok {
+		return owner, true
+	}
+	if m := customerName().FindStringSubmatch(name); m != nil {
+		return m[1], true
+	}
+	return "", false
 }

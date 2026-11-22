@@ -204,7 +204,7 @@ func leaves(m map[string]any, prefix string) []string {
 // staging take mutate_operations, a service's mutate operations.
 func parse(op growth.Operation, body map[string]any) ([]operation, bool) {
 	m, _ := snaked(body).(map[string]any)
-	if ruleOf[op.ID] == "FR-MUTATE" {
+	if ruleOf()[op.ID] == "FR-MUTATE" {
 		// Each item names its own operation type.
 		var out []operation
 		for _, item := range list(m["mutate_operations"]) {

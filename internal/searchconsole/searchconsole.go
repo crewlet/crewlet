@@ -147,26 +147,25 @@ func catalog() growth.Catalog {
 	}
 }
 
-// Scopes per seat level, for the growth identity's registration: what each
-// level's calls are minted with. Each call mints the scopes its operation
-// names, within these.
-func levelScopes() map[string][]string {
-	read := []string{scopeReadonly, scopeVerify, scopeVerifyOnly, scopeIndexing}
-	return map[string][]string{
-		string(growth.LevelRead):       read,
-		string(growth.LevelOperate):    append(read[:len(read):len(read)], scopeManage),
-		string(growth.LevelAdminister): append(read[:len(read):len(read)], scopeManage),
-	}
-}
+// The registration's lists, laid out by the compiler rather than made at
+// init, which every push's hook pays for: the APIs, the scopes each seat
+// level's calls are minted with (each call mints the scopes its operation
+// names, within these), and the company reader's.
+var (
+	searchAPIs   = []string{"searchconsole.googleapis.com", "siteverification.googleapis.com", "indexing.googleapis.com"}
+	readScopes   = []string{scopeReadonly, scopeVerify, scopeVerifyOnly, scopeIndexing}
+	manageScopes = []string{scopeReadonly, scopeVerify, scopeVerifyOnly, scopeIndexing, scopeManage}
+	readerScopes = []string{scopeReadonly}
+)
 
 func init() {
 	growth.RegisterFunc(string(Kind), catalog)
 	googleauth.Register(googleauth.Product{
-		Kind: Kind, Name: "Search Console",
-		APIs: []string{"searchconsole.googleapis.com", "siteverification.googleapis.com",
-			"indexing.googleapis.com"},
-		Scopes:       levelScopes(),
-		ReaderScopes: []string{scopeReadonly},
-		On:           func(c *config.Company) bool { return c.Integrations.GrowthEnabled(string(Kind)) },
+		Kind: Kind, Name: "Search Console", APIs: searchAPIs, ReaderScopes: readerScopes, On: enabled,
+		Scopes: map[string][]string{string(growth.LevelRead): readScopes,
+			string(growth.LevelOperate): manageScopes, string(growth.LevelAdminister): manageScopes},
 	})
 }
+
+// enabled reports whether c turns Search Console on.
+func enabled(c *config.Company) bool { return c.Integrations.GrowthEnabled(string(Kind)) }
