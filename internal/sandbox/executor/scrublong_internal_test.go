@@ -618,7 +618,7 @@ func TestTheScrubHoldsNoMoreThanItsStatedFigure(t *testing.T) {
 		// THE MISS: between two marks the heap grows by at most liveBytesGOGC
 		// percent of what the last one found, at most the heap before and the
 		// figure on it; a peak that rises and falls inside that step is never
-		// marked. The trace's MiB, cut down, are read one up.
+		// marked.
 		miss := (h.before + figure) * liveBytesGOGC / 100
 		t.Logf("%s held %d KiB, %d KiB unseen at most, of a figure of %d KiB", sh.name, h.high>>10, miss>>10,
 			figure>>10)
@@ -689,8 +689,8 @@ func boundShapes() []boundShape {
 }
 
 // scrubBoundShapes scrubs each of [boundShapes] in the child, marking on
-// stderr, among the GC trace, where each begins, with the live heap before
-// it, and ends.
+// stdout, apart from the GC trace on stderr, the live heap before each and
+// the GC cycles it began and ended after.
 func scrubBoundShapes(t *testing.T) {
 	for _, want := range []string{"gcstoptheworld=1", "gctrace=1"} {
 		if !strings.Contains(os.Getenv("GODEBUG"), want) {
@@ -702,17 +702,17 @@ func scrubBoundShapes(t *testing.T) {
 		archive := sh.archive(t)
 		values := newScrubber(sh.values)
 		before := liveNow()
-		fmt.Fprintf(os.Stderr, "%s begin %d %s\n", liveBytesMark, before, sh.name)
+		fmt.Printf("%s %d %d %s\n", liveBytesMark, before, gcCycles(), sh.name)
 		if err := scrubTar(bytes.NewReader(archive), reopenOf(archive), io.Discard, values,
 			scrubBounds{plain: liveBytesPlain}); err != nil {
 			t.Fatalf("%s was refused: %v", sh.name, err)
 		}
-		fmt.Fprintf(os.Stderr, "%s end\n", liveBytesMark)
+		fmt.Printf("%s %d\n", liveBytesMark, gcCycles())
 	}
 }
 
 // liveBytesChild marks the child [TestTheScrubHoldsNoMoreThanItsStatedFigure]
-// runs itself in, and liveBytesMark its lines among the GC trace;
+// runs itself in, and liveBytesMark its lines on stdout;
 // liveBytesGOGC is the child's GC percent, the finest a step of heap growth
 // between two marks can be; liveBytesPlain is the shapes' plaintext bound.
 const (
@@ -722,8 +722,8 @@ const (
 	liveBytesPlain = 32 << 20
 )
 
-// gcTraceLive is a GC trace line's live heap after its mark, in MiB.
-var gcTraceLive = regexp.MustCompile(`^gc \d+ @.*, \d+->\d+->(\d+) MB, `)
+// gcTraceLive is a GC trace line's cycle and live heap after its mark, in MiB.
+var gcTraceLive = regexp.MustCompile(`^gc (\d+) @.*, \d+->\d+->(\d+) MB, `)
 
 // shapeHeld is what a shape held at most over the live heap before it, and
 // that heap.
@@ -741,36 +741,63 @@ func runLiveBytesChild(t *testing.T) map[string]shapeHeld {
 	cmd := exec.CommandContext(t.Context(), self, "-test.run=^"+t.Name()+"$", "-test.count=1", "-test.v")
 	cmd.Env = append(os.Environ(), liveBytesChild+"=1", "GODEBUG="+strings.TrimPrefix(
 		os.Getenv("GODEBUG")+",gcstoptheworld=1,gctrace=1", ","))
-	out, err := cmd.CombinedOutput()
-	if err != nil || !strings.Contains(string(out), "--- PASS: "+t.Name()) {
-		t.Fatalf("the child reading live bytes did not pass (%v):\n%s", err, out)
+	var stdout, stderr strings.Builder
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err = cmd.Run(); err != nil || !strings.Contains(stdout.String(), "--- PASS: "+t.Name()) {
+		t.Fatalf("the child reading live bytes did not pass (%v):\n%s", err, stdout.String())
+	}
+	// EACH CYCLE'S LIVE HEAP, by its number, off the trace the runtime
+	// writes whole to stderr, which nothing of the child's interleaves.
+	live := map[int64]int64{}
+	for line := range strings.Lines(stderr.String()) {
+		if m := gcTraceLive.FindStringSubmatch(line); m != nil {
+			cycle, cycleErr := strconv.ParseInt(m[1], 10, 64)
+			mib, mibErr := strconv.ParseInt(m[2], 10, 64)
+			if cycleErr != nil || mibErr != nil {
+				t.Fatalf("the child's GC trace line %q", line)
+			}
+			live[cycle] = mib
+		}
 	}
 	held := map[string]shapeHeld{}
 	var name string
 	var shape shapeHeld
-	for line := range strings.Lines(string(out)) {
-		line = strings.TrimSpace(line)
-		switch rest, ok := strings.CutPrefix(line, liveBytesMark+" "); {
-		case ok && rest == "end":
-			held[name], name = shape, ""
-		case ok:
-			var before int64
-			if _, scanErr := fmt.Sscanf(rest, "begin %d", &before); scanErr != nil {
+	var from int64
+	for line := range strings.Lines(stdout.String()) {
+		rest, ok := strings.CutPrefix(strings.TrimSpace(line), liveBytesMark+" ")
+		if !ok {
+			continue
+		}
+		var before, cycles int64
+		if name == "" {
+			if _, scanErr := fmt.Sscanf(rest, "%d %d", &before, &cycles); scanErr != nil {
 				t.Fatalf("the child's mark %q: %v", line, scanErr)
 			}
-			name = rest[strings.Index(rest[len("begin "):], " ")+len("begin ")+1:]
+			name, from = strings.SplitN(rest, " ", 3)[2], cycles
 			shape = shapeHeld{before: before}
-		case name != "":
-			if m := gcTraceLive.FindStringSubmatch(line); m != nil {
-				mib, parseErr := strconv.ParseInt(m[1], 10, 64)
-				if parseErr != nil {
-					t.Fatal(parseErr)
-				}
-				shape.high = max(shape.high, (mib+1)<<20-shape.before)
-			}
+			continue
 		}
+		if _, scanErr := fmt.Sscanf(rest, "%d", &cycles); scanErr != nil {
+			t.Fatalf("the child's mark %q: %v", line, scanErr)
+		}
+		for c := from + 1; c <= cycles; c++ {
+			mib, traced := live[c]
+			if !traced {
+				t.Fatalf("%s: the child's GC trace has no line for cycle %d", name, c)
+			}
+			// THE TRACE'S MIB ARE CUT DOWN, so each is read one up.
+			shape.high = max(shape.high, (mib+1)<<20-shape.before)
+		}
+		held[name], name = shape, ""
 	}
 	return held
+}
+
+// gcCycles is how many GC cycles this process has completed.
+func gcCycles() uint64 {
+	s := []metrics.Sample{{Name: "/gc/cycles/total:gc-cycles"}}
+	metrics.Read(s)
+	return s[0].Value.Uint64()
 }
 
 // liveNow is the live heap after a forced collection.
