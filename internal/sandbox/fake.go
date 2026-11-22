@@ -1327,6 +1327,10 @@ func (r *FakeRunner) TakeSession(ctx context.Context, box Sandbox, take SessionT
 	if session.TakeErr != nil {
 		return TakenSession{}, session.TakeErr
 	}
+	// ITS SCRUB SPOOLS NOTHING, so its spool holds nothing.
+	if take.Spool.Held != nil {
+		take.Spool.Held(0)
+	}
 	// A MINTING FAKE'S SESSION IS THE ONE BOUND TO ITS JOB, as a real runner
 	// names it ([SessionTake.Session]); one with none bound takes nothing.
 	if r.MintsSession() {
