@@ -6,8 +6,8 @@ import (
 )
 
 // THE DOCTOR'S SMOKE TEST CERTIFIES EVERY SHIPPED TOOL ROUTE, and says how each
-// harness's calls are joined to its record: Codex and Muse Code by the id each
-// sends in `_meta`, every other by name and arguments. It runs the route a
+// harness's calls are joined to its record: Codex, Copilot and Muse Code by the
+// id each sends in `_meta`, every other by name and arguments. It runs the route a
 // seat's phase runs — the profile's configuration, the relay, the record — so
 // a route the doctor passes is one a seat can use. The requests are of a real
 // size: a record with no counts per request (Muse Code's) is charged an
@@ -22,7 +22,7 @@ func TestTheSmokeTestCertifiesEveryShippedToolRoute(t *testing.T) {
 		"gemini-cli":   "joined to its record by name and arguments",
 		"qwen-code":    "joined to its record by name and arguments",
 		"opencode":     "joined to its record by name and arguments",
-		"copilot":      "joined to its record by name and arguments",
+		"copilot":      "joined to its record by the id it sends in _meta com.github.copilot/toolCallId",
 		"grok":         "joined to its record by name and arguments",
 		"pi":           "joined to its record by name and arguments",
 		"kimi-code":    "joined to its record by name and arguments",
