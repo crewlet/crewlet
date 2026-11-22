@@ -206,8 +206,8 @@ func (r BoxRead) mayEnd(run PendingRun) bool {
 // THE QUARTER LEFT HOLDS THE CROSSINGS ALONE: clock distance and waits for the
 // host's own reads need none of it. The request's two hops at the slowest pace
 // ([objstore.PaceFor]: thirty seconds a hop) and the reply's two at the broker's
-// ceiling (four minutes a hop) are nine minutes, against over twenty-one in the
-// quarter of the shortest budget (an uncapped collection's, about 86). An absolute
+// ceiling (four minutes a hop) are nine minutes, against about twenty-one in the
+// quarter of the shortest budget (an uncapped collection's, about 84). An absolute
 // margin would cut a dead host's wait by ten minutes for a second rule beside the
 // tail's. A wait its asker's context cuts far below budget is that cut's defect (#1405).
 const BoxReadAnswerShare = answerShare
