@@ -71,6 +71,15 @@ var StatusGroups = []StatusGroup{
 // Valid reports whether a group off the wire is one this build knows.
 func (g StatusGroup) Valid() bool { return slices.Contains(StatusGroups, g) }
 
+// StatusGroupWords is the four as a caller writes them: "not_started|active|done|closed".
+func StatusGroupWords() string {
+	words := make([]string, len(StatusGroups))
+	for i, g := range StatusGroups {
+		words[i] = string(g)
+	}
+	return strings.Join(words, "|")
+}
+
 // Open reports a group where work has not finished.
 func (g StatusGroup) Open() bool {
 	return g == GroupNotStarted || g == GroupActive

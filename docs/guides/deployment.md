@@ -1323,7 +1323,10 @@ draining, and rolling upgrades. The two things that bite hardest:
 executors' records (the boot's epoch floor, which raises each seat's fencing epoch above the highest its records carry before a node claims it; each seat's recovery; the completion poll; the reply-to-parked-executor lookup; a seat's retirement; the dashboard) skips a
 record that does not decode and logs it at error as
 `sandbox_run_undecodable` with its key; every readable record is worked
-as usual, so the node starts and its seats are prepared. Its seat, status and
+as usual, so the node starts and its seats are prepared. The epoch floor reads a
+record whole only where it states no standing (one an older version wrote), so
+it skips only such a record and floors any other by the standing its last write
+stated. Its seat, status and
 owner cannot be known, so nothing polls, resumes, ends, deletes or rewrites it: a retirement ends the seat's readable records and leaves
 it as it is. A listing that fails as a whole still stops the boot,
 naming the bucket. Remove the record once you know its executor is over (its box,

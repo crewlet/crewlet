@@ -81,8 +81,8 @@ type headlineFunc func(f Finding, who string, n func(string) int64) string
 func headlines() map[Class]headlineFunc {
 	return map[Class]headlineFunc{
 		ClassHealthUnheld: func(_ Finding, _ string, n func(string) int64) string {
-			return fmt.Sprintf("None of the company's %s may read the engine's health, so a server alarm "+
-				"reaches nobody.", countSaid(int(n("agents")), "agent", "agents"))
+			return fmt.Sprintf("None of the company's %s may read the engine's health.",
+				countSaid(int(n("agents")), "agent", "agents"))
 		},
 		ClassAgentMentionsWithoutAsk: func(_ Finding, _ string, n func(string) int64) string {
 			return fmt.Sprintf("%d of %d agent comments this week woke %s without asking anything.",
@@ -148,7 +148,7 @@ func headlines() map[Class]headlineFunc {
 				countSaid(int(n("questions")), "open question", "open questions"))
 		},
 		ClassMergeNoChecks: func(_ Finding, who string, n func(string) int64) string {
-			return fmt.Sprintf("%s into %s were put to people this week because the branch requires no check.",
+			return fmt.Sprintf("%s into %s went to people this week; its branch requires no check.",
 				countSaid(int(n("merges")), "merge", "merges"), who)
 		},
 		ClassPoolWaits: func(_ Finding, who string, n func(string) int64) string {
@@ -196,7 +196,7 @@ func headlines() map[Class]headlineFunc {
 				countSaid(int(n("seats")), "seat", "seats"), n("busy_percent"))
 		},
 		ClassRemoveSeat: func(_ Finding, who string, n func(string) int64) string {
-			return fmt.Sprintf("%s's %s sat idle %d%% of their capacity this week.", who,
+			return fmt.Sprintf("%s's %s sat idle %d%% of their capacity over two weeks.", who,
 				countSaid(int(n("seats")), "seat", "seats"), n("idle_percent"))
 		},
 		ClassSandboxUnstartable: paused,

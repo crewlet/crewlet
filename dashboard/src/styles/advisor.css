@@ -5,23 +5,44 @@
  * first screen of a reader who never opens it does not carry it.
  */
 
-/* The Advisor's page (routes/advisor): its head, when the checks last ran,
-   then Run now and the model, on one wrapping row. THE LINE TAKES A LINE OF
-   ITS OWN where it cannot have 16rem beside the controls (a phone), and the
-   controls wrap under it; on a wide screen all three share the row. */
+/* The Advisor's page head: the run's line, then Run and the range, on one
+   wrapping row. The line takes a row of its own where it cannot have 16rem
+   beside the controls (a phone). */
 .advisor-head {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--spacing-2) var(--spacing-3);
 }
 
 .advisor-head__run {
+  display: grid;
   flex: 1 1 16rem;
+  gap: var(--spacing-1);
+  min-width: 0;
 }
 
 .advisor-head__run > p {
   margin: 0;
+}
+
+/* What a running run is doing now: one line, cut where it is longer. */
+.advisor-run__now {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.advisor-run__meter {
+  max-width: 20rem;
+}
+
+/* Steps and the checks that could not judge, side by side, folded. */
+.advisor-run__folds {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0 var(--spacing-4);
 }
 
 .advisor-head__controls {
@@ -274,10 +295,13 @@
   background: var(--color-surface-subtle);
 }
 
-/* A running run's steps so far, under its line, the newest last. */
+/* Every step a run reported, oldest first, folded under Steps; at most half
+   the view, so the findings below stay in reach. */
 .advisor-run__steps {
   display: grid;
   gap: var(--spacing-1);
+  max-height: calc(100cqb / 2);
   margin: var(--spacing-1) 0 0;
   padding-left: var(--spacing-4);
+  overflow-y: auto;
 }

@@ -43,6 +43,9 @@ func TestEveryClassLeadsWithItsNumber(t *testing.T) {
 		if len(f.Evidence) == 0 {
 			t.Errorf("%s states no facts to show as its stats", f.Class)
 		}
+		for _, long := range advisor.LongLines(f) {
+			t.Error(long)
+		}
 	}
 	classes := append(append(advisor.EvidenceClasses(), advisor.AtlasClasses()...), advisor.ClassHealthUnheld)
 	for _, class := range classes {

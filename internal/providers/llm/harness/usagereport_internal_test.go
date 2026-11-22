@@ -125,10 +125,10 @@ func TestAnUnreadableUsageReportIsSaidOutLoud(t *testing.T) {
 
 // A FAILED RUN'S REPORT IS NOT DRIFT. A call the harness said failed is refused and
 // charged nothing, so a report holding no counts is no fallback to warn of —
-// and Hermes writes its counts as null for exactly the calls an operator reads
-// the log about, a refused key and a spent plan (measured on 0.21.5). The same
-// report on a run that exited 0 still warns, which is what keeps this from
-// being a rule about nulls.
+// and Hermes writes no counts for exactly the calls an operator reads the log
+// about, a refused key and a spent plan (measured on 0.23.3: input and output
+// 0, the rest null). The same report on a run that exited 0 still warns, which
+// is what keeps this from being a rule about nulls.
 //
 // NOT PARALLEL: it reads the process's log, as the case above does.
 //

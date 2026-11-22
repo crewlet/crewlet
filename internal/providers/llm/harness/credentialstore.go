@@ -41,6 +41,20 @@ func (p *Provider) exportLogin(ctx context.Context, home, cache string) ([]byte,
 	return []byte(out), nil
 }
 
+// stopDaemon implements [daemonStopper]: the profile's stop command, in home,
+// with the home's environment, so the harness finds the daemon it keeps there.
+// A credential child: the daemon's command line and its own output may quote
+// what the environment signs it in with.
+func (p *Provider) stopDaemon(ctx context.Context, home, cache string) error {
+	captures, err := p.ws.capturesDir()
+	if err != nil {
+		return err
+	}
+	_, err = p.runAuxiliary(ctx, auxiliary{args: p.ws.profile.HomeDaemon.StopArgs,
+		dir: home, outDir: captures, env: p.homeEnv(home, cache), credential: true})
+	return err
+}
+
 // providerKey implements [loginStore]: the providers.llm key, for the log lines
 // a sync writes.
 func (p *Provider) providerKey() string { return p.key }
