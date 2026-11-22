@@ -538,7 +538,9 @@ export function Home() {
           />
         ) : (
           <ArrangeBoard editing={editing} columns={stacked ? 1 : COLUMNS}>
-            <ArrangeGrid>
+            {/* Packed: a card starts under the nearest card above it in its
+                columns, so a short card beside a tall one leaves no hole. */}
+            <ArrangeGrid pack>
               {page.map((id) => {
                 const w = findWidget(board, id);
                 if (!w) return null;

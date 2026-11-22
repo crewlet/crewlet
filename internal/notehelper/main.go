@@ -4,7 +4,15 @@
 // starts before the harness and stops with it.
 //
 //	notehelper -adapter codex-app-server -socket $RUN/codex.sock \
-//	    -thread-file $RUN/thread.id -notes-env CREWLET_NOTES_URL
+//	    -thread-file $RUN/thread.id -notes-env CREWLET_NOTES_URL \
+//	    -step-cap 200 -cap-marker $RUN/capped \
+//	    -skills-env CREWLET_SKILLS_URL -skills-dir $CODEX_HOME/skills \
+//	    -skill-digest crewlet:deploy=<sha256 hex>
+//	notehelper -adapter codex-app-server -socket $RUN/codex.sock \
+//	    -thread-file $RUN/thread.id -interrupt-once
+//
+// Beside the notes it bounds a turn and reports skill loads, for a harness
+// that does neither itself; each part runs only where its flags ask.
 //
 // or, for a harness whose hook runs it once per firing (once.go):
 //
@@ -29,13 +37,14 @@
 // poll (the bridge serves it again until the run's record shows it); one the
 // harness took is not asked for again, since the cursor passes it.
 //
-// # The route is a secret
+// # The routes are secrets
 //
-// The notes route carries the run's bridge token in its path
-// (mcpbridge.SteerURL), so it is read from the environment variable
-// -notes-env names, never from the command line, which every process in the
-// box can read, and it is never printed: an error names "the notes route",
-// never its address ([scrub]).
+// The notes route and the skill route carry the run's bridge token in their
+// paths (mcpbridge.SteerURL, mcpbridge.SkillURL), so each is read from the
+// environment variable -notes-env or -skills-env names, never from the
+// command line, which every process in the box can read, and never printed:
+// an error names "the notes route" or "the skill route", never its address
+// ([route.scrub]).
 //
 // # When it polls
 //
@@ -48,6 +57,32 @@
 // a second after it began, so no answer can drive the helper into a loop of
 // requests.
 //
+// # The step cap
+//
+// -step-cap N ends a turn at its Nth model response, counted per turn, the
+// unit of Claude Code's --max-turns, which a context compaction's request is
+// not: the adapter counts the responses ([events]), and at N the helper
+// writes -cap-marker, by a rename, and then interrupts the turn ([stepCap]).
+// The marker says the cap fired, never that a turn was cut short: a turn
+// whose Nth response was its final answer completes, and the run reads its
+// cap only where its record of the turn says the interrupt aborted it. An
+// interrupt that fails is asked again at the turn's next response.
+// -interrupt-once stands in for a helper that ended before its turn did: it
+// joins, interrupts the turn in flight and exits, saying whether it cut one
+// short, and the run's guard stops the harness where it did not, so killing
+// the helper never leaves a turn without its bound.
+//
+// # Skill loads
+//
+// With -skills-env, -skills-dir and a -skill-digest per skill the helper
+// reports each load of one of the run's skills to the skill route, as
+// OpenCode's plugin does ([reporter]): a load is what the adapter can prove the
+// model read whole as the runner installed it (for Codex, a command whose
+// output's SHA-256 is the one -skill-digest names for that SKILL.md, on the
+// command line the runner fixed before the model ran, [appServer.completed]),
+// and nothing else is one, so the bridge's guard fails closed on everything
+// the helper cannot prove.
+//
 // # Once per firing
 //
 // A harness whose hooks run a program (Muse Code's) runs the helper once per
@@ -59,11 +94,14 @@
 // # Exit
 //
 // 0 on SIGTERM or SIGINT, and once the harness's connection closes (the run
-// is over); 1 when the route refuses the helper (401 or 404: its token no
-// longer resolves, or the run has no notes route) or the harness cannot be
-// reached; 2 for a command line or environment it cannot run with. Every
-// error goes to stderr, which the run's script sends to the run's error
-// stream.
+// is over); 1 when the harness cannot be reached; 2 for a command line or
+// environment it cannot run with. A route that refuses the helper (401 or 404:
+// its token no longer resolves, or the run has no such route) ends only what
+// that route is for, logged: the notes route its polls, the skill route its
+// reports, the cap and the other route going on. -interrupt-once exits 0 once
+// it interrupted the turn in flight, 3 where no turn was in flight to
+// interrupt, and 1 where it cannot tell. Every error goes to stderr, which the
+// run's script sends to the run's error stream.
 //
 // # Its builds
 //
@@ -89,6 +127,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 )
 
@@ -97,6 +136,9 @@ const (
 	exitDone  = 0
 	exitError = 1
 	exitUsage = 2
+	// exitNothing is -interrupt-once finding no turn in flight: nothing was
+	// cut short, so the next turn would start with no helper bounding it.
+	exitNothing = 3
 )
 
 func main() {
@@ -110,13 +152,21 @@ func main() {
 }
 
 // adapters is every harness the helper can hand a note to, by -adapter.
-var adapters = map[string]func(ctx context.Context, f flags, p pacing) (harness, error){
+var adapters = map[string]func(ctx context.Context, f flags, p pacing, ev events) (harness, error){
 	"codex-app-server": openAppServer,
 }
 
 // flags is the command line.
 type flags struct {
 	adapter, socket, threadFile, notesEnv string
+	stepCap                               int
+	capMarker                             string
+	interruptOnce                         bool
+	skillsEnv, skillsDir                  string
+	digests                               digestFlag
+	// skills is the run's skills as -skills-dir and -skill-digest name them,
+	// set before the adapter opens: no flag of its own.
+	skills skillSet
 
 	// A one-shot adapter's (once.go): the take config's file, whether the
 	// hook reports skill loads and whether it takes no notes, and the hook's
@@ -137,6 +187,13 @@ func run(ctx context.Context, args []string, getenv func(string) string, stderr 
 	set.StringVar(&f.socket, "socket", "", "the harness's unix socket")
 	set.StringVar(&f.threadFile, "thread-file", "", "the file the run's script writes the harness's thread id to")
 	set.StringVar(&f.notesEnv, "notes-env", "", "the environment variable holding the bridge's notes route")
+	set.IntVar(&f.stepCap, "step-cap", 0, "end a turn at this many model responses (0: no cap)")
+	set.StringVar(&f.capMarker, "cap-marker", "", "the file written, before the interrupt, when the step cap ends a turn")
+	set.BoolVar(&f.interruptOnce, "interrupt-once", false, "interrupt the turn in flight, if any, and exit")
+	set.StringVar(&f.skillsEnv, "skills-env", "", "the environment variable holding the bridge's skill route")
+	set.StringVar(&f.skillsDir, "skills-dir", "", "the directory of the run's skills, one directory per skill holding its SKILL.md")
+	f.digests = digestFlag{}
+	set.Var(f.digests, "skill-digest", "name=sha256-hex: a skill's SKILL.md as the runner wrote it, once per skill")
 	if err := set.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -148,21 +205,59 @@ func run(ctx context.Context, args []string, getenv func(string) string, stderr 
 	case !ok:
 		logger.Printf("-adapter %q is not one the helper has; -help lists them", f.adapter)
 		return exitUsage
-	case f.notesEnv == "":
-		logger.Print("-notes-env is required: the environment variable holding the notes route")
+	case f.interruptOnce:
+		return interruptOnce(ctx, f, p, open, logger)
+	case f.stepCap < 0:
+		logger.Printf("-step-cap %d is below 0; 0 is no cap", f.stepCap)
+		return exitUsage
+	case f.capMarker != "" && f.stepCap == 0:
+		logger.Print("-cap-marker is written only by a step cap: set -step-cap too")
+		return exitUsage
+	case (f.skillsEnv == "") != (f.skillsDir == "") || (f.skillsEnv == "") != (len(f.digests) == 0):
+		logger.Print("-skills-env, -skills-dir and -skill-digest go together: the skill route, where the " +
+			"skills are, and what the runner wrote there")
+		return exitUsage
+	case f.notesEnv == "" && f.stepCap == 0 && f.skillsEnv == "":
+		logger.Print("nothing to do: set -notes-env, -step-cap or -skills-env")
 		return exitUsage
 	}
-	route := getenv(f.notesEnv)
-	if route == "" {
-		logger.Printf("the environment variable %s holds no notes route; set it to the run's notes route", f.notesEnv)
-		return exitUsage
+	var poll *poller
+	var skills *reporter
+	for _, want := range []struct {
+		env, name string
+		set       func(*route)
+	}{
+		{f.notesEnv, "the notes route", func(r *route) { poll = &poller{r} }},
+		{f.skillsEnv, "the skill route", func(r *route) { skills = newReporter(r) }},
+	} {
+		if want.env == "" {
+			continue
+		}
+		raw := getenv(want.env)
+		if raw == "" {
+			logger.Printf("the environment variable %s holds no route; set it to %s", want.env, want.name)
+			return exitUsage
+		}
+		r, err := newRoute(raw, want.name)
+		if err != nil {
+			logger.Printf("%s: %v", want.env, err)
+			return exitUsage
+		}
+		want.set(r)
 	}
-	poll, err := newPoller(route)
-	if err != nil {
-		logger.Printf("%s: %v", f.notesEnv, err)
-		return exitUsage
+	if f.skillsDir != "" {
+		f.skills = skillSet{dir: f.skillsDir, digests: f.digests}
 	}
-	h, err := open(ctx, f, p)
+	var ev events
+	var capped *stepCap
+	if f.stepCap > 0 {
+		capped = newStepCap(f.stepCap, f.capMarker)
+		ev.step = capped.step
+	}
+	if skills != nil {
+		ev.skill = skills.loaded
+	}
+	h, err := open(ctx, f, p, ev)
 	switch {
 	case ctx.Err() != nil:
 		return exitDone
@@ -174,10 +269,66 @@ func run(ctx context.Context, args []string, getenv func(string) string, stderr 
 		return exitError
 	}
 	defer h.close()
-	err = (&loop{poll: poll, h: h, log: logger, pace: p}).run(ctx)
+	work, stop := context.WithCancel(ctx)
+	var wg sync.WaitGroup
+	if capped != nil {
+		wg.Go(func() { capped.run(work, h, logger) })
+	}
+	if skills != nil {
+		wg.Go(func() { skills.run(work, logger) })
+	}
+	defer func() {
+		stop()
+		wg.Wait()
+	}()
+	if poll != nil {
+		err = (&loop{poll: poll, h: h, log: logger, pace: p}).run(ctx)
+		switch {
+		case ctx.Err() != nil, errors.Is(err, errGone):
+			return exitDone
+		case !errors.Is(err, errRefused):
+			logger.Print(err)
+			return exitError
+		}
+		// THE NOTES ROUTE ALONE REFUSED THE HELPER: its polls end, and the cap
+		// and the skill reports go on, since a helper that ended would leave
+		// the turn unbounded (the run's guard would stop it). Said in the one
+		// line that names the refusal, so a reader knows the polls are over.
+		logger.Printf("%v: note polling has ended; the step cap and skill reports go on", err)
+	}
+	// The helper caps and reports until the run is over.
+	select {
+	case <-h.gone():
+	case <-ctx.Done():
+	}
+	return exitDone
+}
+
+// interruptOnce is -interrupt-once: join, interrupt the turn in flight and
+// exit, 0 where it interrupted one, [exitNothing] where none was in flight,
+// 1 where that cannot be known. The run's script runs it once the
+// long-running helper has ended before the turn did, and stops the harness
+// on anything but 0: a turn not yet started when the helper ended would run
+// with no cap at all.
+func interruptOnce(ctx context.Context, f flags, p pacing,
+	open func(context.Context, flags, pacing, events) (harness, error), logger *log.Logger) int {
+	h, err := open(ctx, f, p, events{})
 	switch {
-	case ctx.Err() != nil, errors.Is(err, errGone):
+	case errors.Is(err, errUsage):
+		logger.Print(err)
+		return exitUsage
+	case err != nil:
+		logger.Print(err)
+		return exitError
+	}
+	defer h.close()
+	err = h.interrupt(ctx, "")
+	switch {
+	case err == nil:
 		return exitDone
+	case errors.Is(err, errNotNow):
+		logger.Print("no turn was in flight to interrupt")
+		return exitNothing
 	default:
 		logger.Print(err)
 		return exitError

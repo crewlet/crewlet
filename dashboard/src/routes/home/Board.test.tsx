@@ -267,6 +267,21 @@ describe("at rest", () => {
   });
 });
 
+// A SHORT CARD BESIDE A TALL ONE LEAVES NO HOLE: Home asks the kit to pack its
+// board (ArrangeGrid `pack`), at rest and while arranged. jsdom lays nothing
+// out, so the kit's browser suite measures the packing itself.
+describe("the board's packing", () => {
+  const grids = () => [...document.querySelectorAll<HTMLElement>(".home .crewlet-arrange-grid")];
+  test("packs the page's cards, at rest and while arranged", async () => {
+    mount();
+    await settle();
+    expect(grids().length).toBeGreaterThan(0);
+    expect(grids().every((g) => g.hasAttribute("data-packed"))).toBe(true);
+    await editHome();
+    expect(grids().every((g) => g.hasAttribute("data-packed"))).toBe(true);
+  });
+});
+
 // A COMPANY RUNNING JIRA HIDES THE TRACKER'S WIDGETS, and each row closes up
 // over them: Tokens by team stood alone in a third of its row with two thirds
 // of the board empty beside it. Every row the board draws is as wide as the

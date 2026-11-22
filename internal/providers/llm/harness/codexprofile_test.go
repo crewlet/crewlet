@@ -26,8 +26,8 @@ func codexSetting(args []string, value string) bool {
 // THE CODEX PROFILE KEEPS THE HARNESS TO ITS CALL: nothing from above the call's
 // directory, nothing kept from one call for the next, and of codex's own tools
 // web search and an apply_patch that writes nothing. Each of these was
-// measured on 0.153.4 and 0.164.0 to be what removes the thing named; the
-// profile's comments carry the measurements.
+// measured on 0.171.0 to be what removes the thing named; the profile's
+// comments carry the measurements.
 func TestTheCodexProfileKeepsTheHarnessToItsCall(t *testing.T) {
 	t.Parallel()
 	p, ok := harnessprofile.Builtin("codex")
@@ -44,20 +44,20 @@ func TestTheCodexProfileKeepsTheHarnessToItsCall(t *testing.T) {
 		t.Errorf("complete_args = %v, want --sandbox read-only, so apply_patch writes nothing", p.CompleteArgs)
 	}
 	for setting, why := range map[string]string{
-		"project_root_markers=[]":                             "the call's directory is the project root, so nothing above it is read",
+		"project_root_markers=[]":                             "the walk stops at the call's directory even with no .git file there",
 		"skills.include_instructions=false":                   "no skills block",
 		"skills.bundled.enabled=false":                        "no bundled skills installed into the seat's home",
 		"features.shell_tool=false":                           "no shell",
-		"features.unified_exec=false":                         "no shell",
+		"features.unified_exec=false":                         "set beside shell_tool, changing nothing on its own",
 		"features.shell_snapshot=false":                       "no snapshot of the shell kept in the home",
 		"features.view_image=false":                           "no image viewer",
 		"features.goals=false":                                "no goal tools",
 		"features.multi_agent=false":                          "no sub-agents, and no tool_search with them",
-		"features.image_generation=false":                     "no image generation",
-		"features.apps=false":                                 "no connectors",
-		"features.plugins=false":                              "no plugins",
+		"features.image_generation=false":                     "set; its effect not observable on an API-key run",
+		"features.apps=false":                                 "set; its effect not observable on an API-key run",
+		"features.plugins=false":                              "set; its effect not observable on an API-key run",
 		"features.hooks=false":                                "no hooks",
-		"features.memories=false":                             "no memories",
+		"features.memories=false":                             "set; its effect not observable on an API-key run",
 		"tools.experimental_request_user_input.enabled=false": "no question put to a user who is not there",
 	} {
 		if !codexSetting(p.CompleteArgs, setting) {
@@ -74,9 +74,9 @@ func TestTheCodexProfileKeepsTheHarnessToItsCall(t *testing.T) {
 
 // A SEAT KEEPS CODEX'S OWN PROMPT AND A SIDE PASS REPLACES IT. The seat's text
 // rides the AGENTS.md codex reads from the call's directory, and codex cuts that
-// file at project_doc_max_bytes without a word — 32 KiB unless told otherwise,
-// measured to cut a 240 KB seat prompt — so the cap is the largest the setting
-// takes. The side pass's switches that drop codex's permissions and
+// file at project_doc_max_bytes — 32 KiB unless told otherwise, measured on
+// 0.171.0 to cut a 240 KB seat prompt, an error item saying so — so the cap is
+// the largest the setting takes. The side pass's switches that drop codex's permissions and
 // environment blocks belong to the replacing channel alone: a seat keeps them.
 func TestTheCodexChannelsKeepOrReplaceItsPromptWhole(t *testing.T) {
 	t.Parallel()
@@ -116,8 +116,7 @@ func TestCodexIsHandedTheReplacingFileAsAPathItTakesVerbatim(t *testing.T) {
 	}
 }
 
-// A real `codex exec --json` stream from 0.164.0 (0.153.4 prints the same
-// lines), against a stand-in for the Responses API that summarised its
+// A `codex exec --json` stream of the shape 0.171.0 prints, against a stand-in for the Responses API that summarised its
 // reasoning and reported 1,000 input tokens, 600 of them cached, and 50 output,
 // 20 of them reasoning. Verbatim but for three more reconnect lines like the
 // first.

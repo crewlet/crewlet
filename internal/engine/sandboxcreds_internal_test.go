@@ -97,6 +97,27 @@ func TestARemoteRunWithNoTravellingCredentialIsRefused(t *testing.T) {
 	}
 }
 
+// A CODEX ENTRY SIGNED IN BY ITS CHATGPT LOGIN ALONE IS REFUSED A REMOTE BOX,
+// as a Claude Code login is: the login's auth.json stays on the engine host,
+// where Codex rotates its refresh token (every ten days, measured on 0.171.0),
+// and a key in CODEX_API_KEY is what travels; a local box needs neither.
+//
+// Mutation: let a codex login's files count in a remote box, or refuse a local
+// one, and a case goes red.
+func TestACodexLoginAloneIsRefusedARemoteBox(t *testing.T) {
+	t.Parallel()
+	c, seat := creditedCompany(t, "codex")
+	if err := guardOn(t, c, seat, sandbox.E2B, nil); err == nil {
+		t.Error("a remote run signed in by a ChatGPT login alone was launched")
+	}
+	if err := guardOn(t, c, seat, sandbox.E2B, map[string]string{"CODEX_API_KEY": "sk-placeholder"}); err != nil {
+		t.Errorf("a remote run with CODEX_API_KEY was refused: %v", err)
+	}
+	if err := guardOn(t, c, seat, sandbox.Direct, nil); err != nil {
+		t.Errorf("a local run signed in by the login was refused: %v", err)
+	}
+}
+
 // THE OTHER CASE GETS THE OTHER REMEDY. Claude Code mints a headless token
 // that travels to any box, so the fix is one command, not a placement change
 // that would move a seat onto the engine host for no reason.

@@ -40,6 +40,8 @@ var (
 	_ inboxDelivery     = Kimi{}
 	_ recordConfirmer   = Kimi{}
 	_ artifactHolder    = Kimi{}
+	_ artifactDirHolder = Kimi{}
+	_ inPlaceGate       = Kimi{}
 	_ notesOffExplainer = Kimi{}
 	_ carrier           = Kimi{}
 	_ saver             = Kimi{}
@@ -520,20 +522,25 @@ func kimiMCP(s sandbox.MCPServer) map[string]any {
 	return out
 }
 
-// artifacts is what a Kimi run leaves in its box of its own: its agent profile,
-// which a later run must not find among its subagents, and its driver and its
-// settings and their fresh copies, which hold the notes route's token. And
-// everything in the home Kimi loads as the user's own, whatever wrote it: the
-// skills, the personal AGENTS.md files, the installed plugins and the saved
-// workspace trust (measured on 2.7.2), so a run loads only the config its
+// artifactFiles is the files a Kimi run leaves in its box of its own: its
+// driver and its settings and their fresh copies, which hold the notes route's
+// token, and the personal AGENTS.md files Kimi loads as the user's own,
+// whatever wrote them (measured on 2.7.2), so a run loads only the config its
 // launch writes; its config.toml is rewritten to its login
 // ([writeKimiLoginConfig]). Its MCP servers are written whole by every run,
 // its sessions and login are kept, and the session its driver reported goes
 // with every run's ([Runner.ClearArtifacts]).
-func (Kimi) artifacts(p Paths) (files, dirs []string) {
-	files = append([]string{p.KimiDriver(), p.KimiSettings(), p.KimiServerPid(), p.KimiSettingsFresh(),
+func (Kimi) artifactFiles(p Paths) []string {
+	return append([]string{p.KimiDriver(), p.KimiSettings(), p.KimiServerPid(), p.KimiSettingsFresh(),
 		p.KimiMCPConfigFresh(), p.KimiLinesBefore(), p.KimiInstructions()}, p.KimiUserInstructions()...)
-	return files, []string{p.KimiAgents() + "/" + kimiProfileDir, p.KimiSkills(), p.KimiUserSkills(),
+}
+
+// artifactDirs is the directories a Kimi run leaves in its box of its own, or
+// that its home holds for Kimi to load as the user's own: its agent profile's,
+// which a later run must not find among its subagents, the skills, the
+// installed plugins and the saved workspace trust.
+func (Kimi) artifactDirs(p Paths) []string {
+	return []string{p.KimiAgents() + "/" + kimiProfileDir, p.KimiSkills(), p.KimiUserSkills(),
 		p.KimiPlugins(), p.KimiTrust()}
 }
 

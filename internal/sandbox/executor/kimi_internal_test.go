@@ -574,7 +574,7 @@ func readJSON(t *testing.T, box sandbox.Sandbox, file string, v any) {
 // the home, its sessions or its login.
 func TestAKimiRunsArtifactsAreItsOwnFiles(t *testing.T) {
 	paths := PathsFor(sandbox.NewFakeSandbox("b"))
-	files, dirs := (Kimi{}).artifacts(paths)
+	files, dirs := (Kimi{}).artifactFiles(paths), (Kimi{}).artifactDirs(paths)
 	if !slices.Equal(dirs, []string{paths.KimiAgents() + "/crewlet", paths.KimiSkills(), paths.KimiUserSkills(),
 		paths.KimiPlugins(), paths.KimiTrust()}) ||
 		!slices.Contains(files, paths.KimiSettings()) || !slices.Contains(files, paths.KimiDriver()) ||

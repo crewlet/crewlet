@@ -1,5 +1,5 @@
-// A stand-in for `qwen --acp` that replays Qwen Code 0.28.3's own ACP
-// messages, captured on the build VM (testdata/qwen/0.28.3/acp-*.jsonl), to
+// A stand-in for `qwen --acp` that replays Qwen Code 0.28.4's own ACP
+// messages, captured on the build VM (testdata/qwen/0.28.4/acp-*.jsonl), to
 // the helper the suite drives (qwen_helper_test.go). Each capture line is the
 // probe's log of one message: `dir` out (the probe's) or in-* (Qwen Code's).
 // The stand-in answers each request of the helper's with the capture's answer
@@ -34,7 +34,7 @@
 //
 // Like Qwen Code it records a drained note in the session's chat file as a
 // `mid_turn_user_message` record, the captured record's shape with the note's
-// text, at once, BEFORE the request that carries it (as 0.28.3 does); the
+// text, at once, BEFORE the request that carries it (as 0.28.4 does); the
 // reply to that request, the captured assistant record, only once the turn
 // goes on; and exits once its stdin closes.
 import fs from "node:fs"
