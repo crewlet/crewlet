@@ -11,7 +11,6 @@
  */
 
 import { ChoiceCards, FormField, Input, Text } from "@crewlethq/ui";
-import { EXECUTOR_HARNESSES } from "../../executors.ts";
 import { HarnessMark, MARK_SIZE } from "../../HarnessMark.tsx";
 import { either, product } from "../../words.ts";
 import {
@@ -51,9 +50,9 @@ const HARNESS_WORDS: Readonly<Record<string, { description: string; methods: str
 };
 
 /** What a harness with no box runner does: its turns on the host, and Ask Crewlet where the engine allows it. */
-export function hostOnly(harness: string): string {
+export function hostOnly(harness: string, executors: readonly string[]): string {
   const name = product(harness);
-  const coding = either(EXECUTOR_HARNESSES.map(product));
+  const coding = either(executors.map(product));
   if (factsOf(harness).assistant)
     return `${name} runs a seat's turns on the engine host and Ask Crewlet. A seat's coding runs in a box on ${coding}.`;
   const assistant = either(HARNESSES.filter((h) => factsOf(h).assistant).map(product));
@@ -140,7 +139,12 @@ export function HarnessStep({
             media: <HarnessMark harness={a} size={MARK_SIZE} />,
             ...(words ? { description: words.description } : {}),
             facts: [
-              { label: "Jobs", value: canExecute({ harness: a }) ? "All jobs" : "All but coding" },
+              {
+                label: "Jobs",
+                value: canExecute({ harness: a, executors: draft.executors })
+                  ? "All jobs"
+                  : "All but coding",
+              },
               ...(words ? [{ label: "Method", value: words.methods }] : []),
             ],
           };
@@ -148,7 +152,7 @@ export function HarnessStep({
       />
       {canExecute(draft) ? null : (
         <Text as="p" variant="caption" tone="secondary">
-          {hostOnly(draft.harness)}
+          {hostOnly(draft.harness, draft.executors)}
         </Text>
       )}
     </>
