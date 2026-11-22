@@ -187,6 +187,7 @@ const SURFACE_NAMES: Record<string, string> = {
   adsense: "AdSense",
   google_ads: "Google Ads",
   search_console: "Search Console",
+  google_play: "Google Play",
 };
 
 /** One tool's surfaces, in the engine's grouping, named for this screen. */
@@ -297,6 +298,14 @@ export const CATALOG: Entry[] = [
     vendor: "apple-ads",
     surfaces: surfacesOf("apple_ads"),
     doc: "apple-ads",
+  },
+  {
+    key: "google_play",
+    name: "Google Play",
+    description: "Store listings, reviews and replies, releases, products, prices and vitals.",
+    vendor: "google-play",
+    surfaces: surfacesOf("google_play"),
+    doc: "google-play",
   },
   {
     key: "digitalocean",

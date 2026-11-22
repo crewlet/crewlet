@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/googleads"
 	"github.com/crewlet/crewlet/internal/googleanalytics"
+	"github.com/crewlet/crewlet/internal/googleplay"
 	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/metaads"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -50,6 +51,7 @@ var (
 	_ builtin.GrowthProduct = (*adsense.Product)(nil)
 	_ builtin.GrowthProduct = (*googleads.Product)(nil)
 	_ builtin.GrowthProduct = (*searchconsole.Product)(nil)
+	_ builtin.GrowthProduct = (*googleplay.Product)(nil)
 )
 
 // GrowthToolDeps are the growth tools' dependencies on this node, or the zero
@@ -77,6 +79,8 @@ func (e *Engine) growthProducts() []builtin.GrowthProduct {
 			e.adSense(),
 			googleads.New(e.runningConfig, e.resolver, e, e.GrowthAudit(), growthLeases{engine: e}, nil),
 			searchconsole.New(e.runningConfig, e.resolver, e, e.GrowthAudit(), growthLeases{engine: e}, nil, nil),
+			googleplay.New(googleplay.Deps{Company: e.runningConfig, Env: e.resolver, Tokens: e, Audit: e.GrowthAudit(),
+				Leases: growthLeases{engine: e}, Reader: e, Media: growthMedia{engine: e}}),
 		}
 	})
 	return e.growth

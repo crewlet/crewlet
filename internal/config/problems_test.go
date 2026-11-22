@@ -244,6 +244,7 @@ var humanSeatKeys = []humanSeatKey{
 	{"integrations.apple_ads", "{enabled: false}", seatAccessOnHumanSeat},
 	{"integrations.google_ads", "{enabled: false}", seatAccessOnHumanSeat},
 	{"integrations.search_console", "{enabled: false}", seatAccessOnHumanSeat},
+	{"integrations.google_play", "{enabled: false}", seatAccessOnHumanSeat},
 	{"avatar", "{character: hexlet, color: cyan}", avatarOnHuman},
 }
 

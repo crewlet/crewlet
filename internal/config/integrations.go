@@ -41,6 +41,7 @@ type Integrations struct {
 	GoogleAnalytics *GoogleAnalytics `yaml:"google_analytics,omitempty" json:"google_analytics,omitempty" desc:"Google Analytics 4: agents read and manage properties as their own Google growth identity, through the Google Cloud connection's identity. Absent = disabled."`
 	GoogleAds       *GoogleAds       `yaml:"google_ads,omitempty" json:"google_ads,omitempty" desc:"Google Ads: agents read and manage accounts as their own Google growth identity, through the Google Cloud connection's identity, spend held to each account's caps. Absent = disabled."`
 	SearchConsole   *SearchConsole   `yaml:"search_console,omitempty" json:"search_console,omitempty" desc:"Google Search Console, with Site Verification and the Indexing API: agents read and manage properties as their own Google growth identity, through the Google Cloud connection's identity. Absent = disabled."`
+	GooglePlay      *GooglePlay      `yaml:"google_play,omitempty" json:"google_play,omitempty" desc:"Google Play: agents read and manage apps as their own Google growth identity, through the Google Cloud connection's identity, publishing held for an administrator. Absent = disabled."`
 	SSH             *SSH             `yaml:"ssh,omitempty" json:"ssh,omitempty" desc:"The engine's SSH certificate authority and the servers agents may reach with short-lived certificates it signs. Absent = disabled."`
 	AdMob           *AdMob           `yaml:"admob,omitempty" json:"admob,omitempty" desc:"AdMob: agents read and change app monetization through one Google sign-in by a person who manages the account, made as the company's own OAuth client. Absent = disabled."`
 	AdSense         *AdSense         `yaml:"adsense,omitempty" json:"adsense,omitempty" desc:"AdSense: agents read and change website monetization through one Google sign-in by a person who manages the account, made as the company's own OAuth client. Absent = disabled."`
@@ -167,6 +168,9 @@ func (i *Integrations) validate(path Path) error {
 	}
 	if i.SearchConsole != nil {
 		p.wrap(i.SearchConsole.validate(i, at(path, "search_console")))
+	}
+	if i.GooglePlay != nil {
+		p.wrap(i.GooglePlay.validate(i, at(path, "google_play")))
 	}
 	if i.SSH != nil {
 		p.wrap(i.SSH.validate(at(path, "ssh")))

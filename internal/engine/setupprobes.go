@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/googleads"
 	"github.com/crewlet/crewlet/internal/googleanalytics"
 	"github.com/crewlet/crewlet/internal/googlecloud"
+	"github.com/crewlet/crewlet/internal/googleplay"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/mattermost"
@@ -53,6 +54,7 @@ func SetupProbes() map[integration.Kind]setup.Probe {
 		integration.KindGitLab:          gitlab.Probe(nil),
 		integration.KindGoogleCloud:     googlecloud.Probe(nil),
 		integration.KindGoogleAds:       googleads.Probe(nil),
+		integration.KindGooglePlay:      googleplay.Probe(nil),
 		integration.KindJira:            jira.Probe(nil),
 		integration.KindMattermost:      mattermost.Probe(nil, nil),
 		integration.KindScaleway:        scaleway.Probe(nil),

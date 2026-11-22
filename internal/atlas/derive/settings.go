@@ -143,6 +143,7 @@ var integrationRows = map[integration.Kind]func(b *builder, c *config.Company, z
 	integration.KindAdSense:         adSense,
 	integration.KindGoogleAds:       googleAds,
 	integration.KindSearchConsole:   searchConsole,
+	integration.KindGooglePlay:      googlePlay,
 	integration.KindAtlassian:       atlassian,
 }
 
@@ -522,6 +523,24 @@ func searchConsole(b *builder, c *config.Company, _ map[string]atlas.Ref) {
 // siteDigestBytes is how much of a site's SHA-256 its account's key holds:
 // 48 bits tell apart the at most 1000 properties a company names.
 const siteDigestBytes = 6
+
+// googlePlay records each Google Play app the company narrows agents to,
+// keyed by its package name, or the vendor alone where it names none.
+func googlePlay(b *builder, c *config.Company, _ map[string]atlas.Ref) {
+	g := c.Integrations.GooglePlay
+	if g == nil {
+		return
+	}
+	if len(g.Apps) == 0 {
+		b.account("integrations.google_play", atlas.VendorGoogle, "play", "", "Google Play", g.Enabled,
+			atlas.CapabilityAppDelivery)
+		return
+	}
+	for i, app := range g.Apps {
+		b.account("integrations.google_play.apps["+strconv.Itoa(i)+"]", atlas.VendorGoogle, "play/"+app, app,
+			"Google Play", g.Enabled, atlas.CapabilityAppDelivery)
+	}
+}
 
 func digitalocean(b *builder, c *config.Company, _ map[string]atlas.Ref) {
 	d := c.Integrations.DigitalOcean
