@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // codexThread is the thread of the rollout fixture ([codexRolloutFixture]).
@@ -62,10 +64,19 @@ func codexShell(t *testing.T, dir, script string) (string, string, int) {
 }
 
 // codexGate runs the session gate for session in p's box, from dir, wired
-// for a fresh session where rewired, and returns what it named: sid, k and w.
+// for a fresh session where rewired, on a box whose Codex is the supported
+// release, and returns what it named: sid, k and w.
 func codexGate(t *testing.T, p Paths, dir string, session Session, rewired bool) (s, k, w, stderr string) {
 	t.Helper()
-	out, errText, code := codexShell(t, dir, codexSessionGate(session, p, rewired)+`printf '%s\n%s\n%s\n' "$sid" "$k" "$w"`)
+	return codexGateOn(t, p, dir, session, rewired, "codex-cli "+codexCarryRelease)
+}
+
+// codexGateOn is [codexGate] on a box whose `codex --version` printed version.
+func codexGateOn(t *testing.T, p Paths, dir string, session Session, rewired bool,
+	version string) (s, k, w, stderr string) {
+	t.Helper()
+	out, errText, code := codexShell(t, dir, "v="+sandbox.ShellQuote(version)+"\n"+
+		codexSessionGate(session, p, rewired)+`printf '%s\n%s\n%s\n' "$sid" "$k" "$w"`)
 	if code != 0 {
 		t.Fatalf("the gate exited %d: %s", code, errText)
 	}
@@ -387,5 +398,43 @@ func TestACodexRunStartsOnTheConfigurationOfTheSessionItStarts(t *testing.T) {
 	if _, errText, code := codexShell(t, p.Home, codexSessionGate(Session{}, p, false)+"echo started"); code != 1 ||
 		!strings.Contains(errText, "does not start") {
 		t.Errorf("a run with no configuration exited %d (%s), want 1 and why", code, errText)
+	}
+}
+
+// A CODEX BOX RESTORES A CARRIED SESSION ONLY ON THE ONE SUPPORTED RELEASE, as
+// the engine's check judges it: a box whose `codex --version` holds no
+// release, or one other than 0.171.0, older or newer, restores nothing and
+// starts a new session, saying why in the engine's own words.
+//
+// Mutation: drop either check, read the release otherwise than releaseOf
+// does, or word the reason otherwise than Codex.Continues, and a row fails.
+func TestACodexBoxRestoresACarriedSessionOnlyOnTheOneSupportedRelease(t *testing.T) {
+	t.Parallel()
+	packed := codexBox(t, codexRolloutFixture(t))
+	if _, errText, code := codexShell(t, packed.Home, "sid="+codexThread+" packed=\n"+codexCapture(packed)); code != 0 {
+		t.Fatalf("the capture exited %d: %s", code, errText)
+	}
+	archive := codexFile(t, packed.SessionCapture())
+	_, engine := Codex{}.Continues("0.172.0", codexCarryRelease)
+	for _, c := range []struct {
+		version, k, why string
+	}{
+		{"codex-cli 0.171.0", "yes", ""},
+		{"codex-cli 0.172.0", "no", engine},
+		{"codex-cli 0.170.9", "no", "this box runs Codex 0.170.9, and only Codex 0.171.0"},
+		{"codex-cli dev", "no", boxNamedNoRelease("Codex")},
+		{"", "no", boxNamedNoRelease("Codex")},
+	} {
+		p := codexBox(t, nil)
+		if err := os.WriteFile(p.SessionCarried(), archive, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, k, w, _ := codexGateOn(t, p, p.Home, Session{ID: codexThread, Continues: true}, false, c.version)
+		if k != c.k || (c.why == "" && w != "") || !strings.Contains(w, c.why) {
+			t.Errorf("%q: continued %q because %q, want %q because %q", c.version, k, w, c.k, c.why)
+		}
+		if _, err := os.Stat(codexRestoredRollout(p, codexThread)); (c.k == "yes") != (err == nil) {
+			t.Errorf("%q: restored %v, want %v", c.version, err == nil, c.k == "yes")
+		}
 	}
 }
