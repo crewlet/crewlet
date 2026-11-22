@@ -1030,6 +1030,13 @@ type Profile struct {
 	// login's value of each ([KeepLoginKeys]); a login command's takes all.
 	RunKeys map[string][]string `yaml:"run_keys,omitempty"`
 
+	// IdentityKeys names, by a credential file's NAME, the keys (dotted, into a
+	// JSON object) whose values say which account its login is: Codex's
+	// auth.json names its ChatGPT account at tokens.account_id. A login a local
+	// box's run carries back is written only where each holds what the shared
+	// login's does ([SameLoginIdentity]): a refresh keeps its account.
+	IdentityKeys map[string][]string `yaml:"identity_keys,omitempty"`
+
 	// VolatilePaths are sessions, transcripts, history and todo state,
 	// relative to the seat home, deleted before and after every call: a hidden
 	// harness memory would make turns non-reproducible and carry one task's
@@ -2238,6 +2245,21 @@ func (p *Profile) validateHomePaths(add func(string, ...any)) {
 			if slices.Contains(strings.Split(key, "."), "") {
 				add("run_keys.%s[%d] %q is no key path — name the key, its parents' keys before "+
 					"it, each joined by a dot", name, i, key)
+			}
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(p.IdentityKeys)) {
+		if byName[name] == "" {
+			add("identity_keys names %q, which is the file name of no credential_paths entry — "+
+				"identity keys say which keys of a credential file name its login's account", name)
+		}
+		if len(p.IdentityKeys[name]) == 0 {
+			add("identity_keys.%s is empty — name the keys that name the login's account", name)
+		}
+		for i, key := range p.IdentityKeys[name] {
+			if slices.Contains(strings.Split(key, "."), "") {
+				add("identity_keys.%s[%d] %q is no key path — name the key, its parents' keys "+
+					"before it, each joined by a dot", name, i, key)
 			}
 		}
 	}

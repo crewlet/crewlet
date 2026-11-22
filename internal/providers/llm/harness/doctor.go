@@ -1353,6 +1353,23 @@ func (p *Provider) SandboxCredentials() map[string]string {
 	return out
 }
 
+// SandboxCredentialIdentityKeys is, by each of [Provider.SandboxCredentials]'
+// paths, the keys naming the account its login is
+// ([harnessprofile.Profile.IdentityKeys]), which a box writing the login back
+// holds to the shared login's. Nil where it names none.
+func (p *Provider) SandboxCredentialIdentityKeys() map[string][]string {
+	var out map[string][]string
+	for rel := range p.SandboxCredentials() {
+		if keys := p.profile.IdentityKeys[filepath.Base(rel)]; len(keys) > 0 {
+			if out == nil {
+				out = map[string][]string{}
+			}
+			out[rel] = slices.Clone(keys)
+		}
+	}
+	return out
+}
+
 // SandboxCredentialRunKeys is, by each of [Provider.SandboxCredentials]' paths,
 // the keys its harness writes into that file during a run
 // ([harnessprofile.Profile.RunKeys]), which a box writing the login back keeps
