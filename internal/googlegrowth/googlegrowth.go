@@ -6,6 +6,14 @@
 // properties, sites or customers a seat names), its tool words and how it
 // shapes an answer.
 //
+// # A consent product sends as the company's grant
+//
+// Google refuses service accounts at AdSense and AdMob, so their calls go as
+// the company's consent grant ([Client.Grant]): one token every seat shares,
+// renewed once where Google answers 401, on the same call path as a seat's
+// ([googleauth.Transport]). Nothing at Google then tells two seats apart, so
+// the product holds each seat to its level and scope alone.
+//
 // # A request addresses its operation's resource and nothing else
 //
 // [NewRequest] fills an operation's `{name}` path parameters with IDs alone,
@@ -61,6 +69,10 @@ type Request struct {
 	// Account is set by the product: "properties/123", a site, a customer;
 	// "" where the call acts in none, and the log then names its target.
 	Account string
+	// Diff, where set, is the product's reading of what the request changes
+	// on its target: for an update mask that is not the body's field names
+	// (a map entry's key, a snake_case path). Nil reads the mask ([Request.Changes]).
+	Diff func(before map[string]any) []growth.Change
 }
 
 // pathParam is one `{name}` of an operation's path.
@@ -141,8 +153,12 @@ func (r Request) verb() string {
 }
 
 // Changes is what the request changes on before, field by field: the fields
-// its update mask names (every field the body sets for `*` or no mask).
+// its update mask names (every field the body sets for `*` or no mask), or
+// its product's own reading ([Request.Diff]).
 func (r Request) Changes(before map[string]any) []growth.Change {
+	if r.Diff != nil {
+		return r.Diff(before)
+	}
 	var fields []string
 	mask := strings.TrimSpace(r.Query.Get("updateMask"))
 	if mask == "" || mask == "*" {
