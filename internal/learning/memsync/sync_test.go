@@ -440,8 +440,10 @@ func TestRepublishingCollapsesOntoOneMessagePerRow(t *testing.T) {
 }
 
 // The watermark is what keeps the steady-state cost proportional to what the
-// seat just learned. A second publish with nothing new must carry nothing —
-// except the small mutable tables, which are carried whole by design.
+// seat just learned. A second publish with nothing new carries nothing, the
+// mutable tables included (crewlet/crewlet#1040).
+//
+// Mutation: carry a mutable table whole, and this goes red.
 func TestASecondPublishCarriesOnlyWhatIsNew(t *testing.T) {
 	t.Parallel()
 	conn := broker(t)
@@ -457,15 +459,9 @@ func TestASecondPublishCarriesOnlyWhatIsNew(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second publish: %v", err)
 	}
-	whole := 0
-	for _, spec := range tables {
-		if spec.wholeEachCycle {
-			whole++
-		}
-	}
-	if again.Rows != whole {
-		t.Fatalf("a second publish carried %d rows, want only the %d "+
-			"whole-each-cycle tables", again.Rows, whole)
+	if again != (Carried{}) {
+		t.Fatalf("a second publish answered %+v, want nothing carried: nothing changed "+
+			"since the first", again)
 	}
 }
 
