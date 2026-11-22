@@ -131,9 +131,9 @@ func (q QwenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 		paths.QwenSettings():     settings,
 	}
 	for _, s := range req.Skills {
-		file, err := skillFile(qwenSkillName(s), s.Description, s.Body)
-		if err != nil {
-			return "", err
+		file, fileErr := skillFile(qwenSkillName(s), s.Description, s.Body)
+		if fileErr != nil {
+			return "", fileErr
 		}
 		files[paths.QwenSkills()+"/"+qwenSkillName(s)+"/SKILL.md"] = file
 	}

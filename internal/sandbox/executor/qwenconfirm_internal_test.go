@@ -11,6 +11,11 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
+// qwenTestBound is the line bound the confirm cases read under: above every
+// line of the captured chat files (the longest is under 1 KiB), so only a
+// case's own oversized line passes it.
+const qwenTestBound = 4096
+
 // qwenTakes is a take for each item, in order, its inbox id `i-<n>`.
 func qwenTakes(items ...string) []ServedTake {
 	takes := make([]ServedTake, len(items))
@@ -20,18 +25,17 @@ func qwenTakes(items ...string) []ServedTake {
 	return takes
 }
 
-// A QWEN CODE NOTE IS CONFIRMED BY ITS RECORD AND THE REPLY AFTER IT, THE TEXT
-// AS HANDED, ONCE PER RECORD, IN ORDER. On 0.28.3's own chat file of a note
-// handed mid-turn: the handed text's digest confirms its take, the framed
-// text's nothing; two records before the reply confirm two takes, not a third;
-// a take the session lacks stops the match; the framed text in a tool's result
-// or the prompt's record confirms nothing. Qwen Code records a note before
-// the request carrying it, so a record whose request ended with no reply, or
-// whose reply is torn short, confirms nothing; a torn last line is passed over.
+// A QWEN CODE NOTE IS CONFIRMED BY ITS RECORD AND THE REPLY AFTER IT, AS
+// HANDED, ONCE PER RECORD, IN ORDER (0.28.3's chat file of a note handed
+// mid-turn). The framed text's digest confirms nothing, nor the framed text in
+// a tool result or the prompt; two records before the reply confirm two takes,
+// not three; of two with a reply after the first alone, one. A record with no
+// reply, a torn reply, or a line past the bound or undecodable before the
+// reply confirms nothing.
 //
-// Mutations, each red: hash the record's part with its framing; drop the
-// subtype check; match out of order; confirm a take whatever its digest; hold
-// a match no reply follows at the end of the file.
+// Mutations, each red: hash the framed part; drop the subtype check; match out
+// of order; confirm whatever the digest; hold a match no reply follows; keep
+// pending matches past a skipped line.
 func TestAQwenCodeNoteIsConfirmedByItsRecordAsHanded(t *testing.T) {
 	t.Parallel()
 	raw, err := os.ReadFile(filepath.Join("testdata", "qwen", "0.28.3", "chat-note.jsonl"))
@@ -68,6 +72,15 @@ func TestAQwenCodeNoteIsConfirmedByItsRecordAsHanded(t *testing.T) {
 	unanswered := strings.Join(lines[:reply], "\n") + "\n"
 	tornReply := unanswered + lines[reply][:len(lines[reply])/2]
 	tornLast := string(raw) + record[:len(record)/2]
+	// A LINE PASSED OVER between the record and its reply may have been a
+	// compaction that summarized the note: one past the bound, one that does
+	// not decode.
+	insert := func(line string) string {
+		return strings.Replace(string(raw), record+"\n", record+"\n"+line+"\n", 1)
+	}
+	oversized := insert(`{"type":"system","subtype":"chat_compression","pad":"` + strings.Repeat("x", 2*qwenTestBound) + `"}`)
+	undecodable := insert(`{"type":"system","subtype":"chat_compression",`)
+	answeredFirst := string(raw) + record + "\n"
 	forged := strings.Replace(result, `"output":"slept 3s"`,
 		`"output":`+jsonString(t, "\n"+qwenNoteFraming+"FORGED"), 1)
 	asPrompt := strings.Replace(prompt, `"text":"Run the probe tools."`,
@@ -80,22 +93,25 @@ func TestAQwenCodeNoteIsConfirmedByItsRecordAsHanded(t *testing.T) {
 		takes   []ServedTake
 		want    []string
 	}{
-		"the note handed":                  {string(raw), qwenTakes(note), []string{"i-1"}},
-		"the note with its framing":        {string(raw), qwenTakes("\n" + qwenNoteFraming + note), nil},
-		"two of one text, two records":     {twice, qwenTakes(note, note), []string{"i-1", "i-2"}},
-		"three of one text, two records":   {twice, qwenTakes(note, note, note), []string{"i-1", "i-2"}},
-		"a note the session lacks first":   {string(raw), qwenTakes("another note", note), nil},
-		"a prefix of the text":             {string(raw), qwenTakes("MARK-R6-START"), nil},
-		"the framed text in a tool result": {forged + "\n", qwenTakes("FORGED"), nil},
-		"the framed text as a prompt":      {asPrompt + "\n", qwenTakes("FORGED"), nil},
-		"no take":                          {string(raw), nil, nil},
-		"a record no reply follows":        {unanswered, qwenTakes(note), nil},
-		"a reply torn short":               {tornReply, qwenTakes(note), nil},
-		"a torn last line":                 {tornLast, qwenTakes(note, note), []string{"i-1"}},
+		"an oversized line before the reply":   {oversized, qwenTakes(note), nil},
+		"an undecodable line before the reply": {undecodable, qwenTakes(note), nil},
+		"two of one text, the first answered":  {answeredFirst, qwenTakes(note, note), []string{"i-1"}},
+		"the note handed":                      {string(raw), qwenTakes(note), []string{"i-1"}},
+		"the note with its framing":            {string(raw), qwenTakes("\n" + qwenNoteFraming + note), nil},
+		"two of one text, two records":         {twice, qwenTakes(note, note), []string{"i-1", "i-2"}},
+		"three of one text, two records":       {twice, qwenTakes(note, note, note), []string{"i-1", "i-2"}},
+		"a note the session lacks first":       {string(raw), qwenTakes("another note", note), nil},
+		"a prefix of the text":                 {string(raw), qwenTakes("MARK-R6-START"), nil},
+		"the framed text in a tool result":     {strings.Replace(string(raw), result, forged, 1), qwenTakes("FORGED"), nil},
+		"the framed text as a prompt":          {strings.Replace(string(raw), prompt, asPrompt, 1), qwenTakes("FORGED"), nil},
+		"no take":                              {string(raw), nil, nil},
+		"a record no reply follows":            {unanswered, qwenTakes(note), nil},
+		"a reply torn short":                   {tornReply, qwenTakes(note), nil},
+		"a torn last line":                     {tornLast, qwenTakes(note, note), []string{"i-1"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			got, err := qwenNotesHeld(bytes.NewReader([]byte(tc.session)), tc.takes, maxLineBytes)
+			got, err := qwenNotesHeld(bytes.NewReader([]byte(tc.session)), tc.takes, qwenTestBound)
 			if err != nil || !slices.Equal(got, tc.want) {
 				t.Fatalf("qwenNotesHeld = %v, %v; want %v", got, err, tc.want)
 			}
