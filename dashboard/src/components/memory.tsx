@@ -26,6 +26,7 @@ import {
   TableNumberCell,
   TableDateCell,
   TableTextCell,
+  TableTwoLineCell,
   type DataGridColumn,
 } from "@crewlethq/ui";
 import { Modal } from "./Modal.tsx";
@@ -217,12 +218,7 @@ export function learnedSkillColumns(
       header: "Skill",
       floor: "14rem",
       phoneLead: true,
-      cell: (r) => (
-        <span className="col">
-          <span>{r.title || r.key}</span>
-          {r.summary && <span className="t-caption truncate">{r.summary}</span>}
-        </span>
-      ),
+      cell: (r) => <TableTwoLineCell value={r.title || r.key} detail={r.summary} />,
     },
     {
       key: "uses",

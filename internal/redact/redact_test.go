@@ -123,7 +123,7 @@ func TestARunTokenIsTakenWholeAndOnce(t *testing.T) {
 			t.Errorf("%s: a second pass changed %q to %q", name, got, again)
 		}
 		for _, sizes := range [][]int{{1}, {5, 400}} {
-			if shown, _ := settle(c.text, sizes); shown != c.want {
+			if shown, _ := settle(t, c.text, sizes); shown != c.want {
 				t.Errorf("%s in pieces of %v: shown as it settled\n%q\nwant\n%q", name, sizes, shown, c.want)
 			}
 		}
@@ -171,7 +171,7 @@ func TestARunTokenNeverTakesAnEscapedLineBreak(t *testing.T) {
 			t.Errorf("%s: a second pass changed %q to %q", name, got, again)
 		}
 		for _, sizes := range [][]int{{1}, {5, 400}} {
-			if shown, _ := settle(c.text, sizes); shown != c.want {
+			if shown, _ := settle(t, c.text, sizes); shown != c.want {
 				t.Errorf("%s in pieces of %v: shown as it settled\n%q\nwant\n%q", name, sizes, shown, c.want)
 			}
 		}
@@ -247,7 +247,7 @@ func TestASessionsCredentialIsTakenWholeAndOnce(t *testing.T) {
 			t.Errorf("%s: a second pass changed %q to %q", name, got, again)
 		}
 		for _, sizes := range [][]int{{1}, {5, 400}} {
-			if shown, _ := settle(c.text, sizes); shown != c.want {
+			if shown, _ := settle(t, c.text, sizes); shown != c.want {
 				t.Errorf("%s in pieces of %v: shown as it settled\n%q\nwant\n%q", name, sizes, shown, c.want)
 			}
 		}
@@ -351,7 +351,7 @@ func TestAnAWSSessionsSecretsAreTakenByTheirKeys(t *testing.T) {
 			t.Errorf("%s: a second pass changed %q to %q", name, got, again)
 		}
 		for _, sizes := range [][]int{{1}, {5, 400}} {
-			if shown, _ := settle(c.text, sizes); shown != c.want {
+			if shown, _ := settle(t, c.text, sizes); shown != c.want {
 				t.Errorf("%s in pieces of %v: shown as it settled\n%q\nwant\n%q", name, sizes, shown, c.want)
 			}
 		}
@@ -543,7 +543,7 @@ func TestAPasswordsKeyIsReadAsTheTextWritesIt(t *testing.T) {
 			t.Errorf("%s: a second pass changed %q to %q", name, got, again)
 		}
 		for _, sizes := range [][]int{{1}, {5, 400}} {
-			if shown, _ := settle(c.text, sizes); shown != c.want {
+			if shown, _ := settle(t, c.text, sizes); shown != c.want {
 				t.Errorf("%s in pieces of %v: shown as it settled\n%q\nwant\n%q", name, sizes, shown, c.want)
 			}
 		}
@@ -790,7 +790,7 @@ func TestAPasswordsValueIsReadWhereItsWrappingPutsIt(t *testing.T) {
 			t.Errorf("%s: %q still holds something to replace", name, got)
 		}
 		for _, sizes := range [][]int{{1}, {5, 400}} {
-			if shown, _ := settle(c.text, sizes); shown != c.want {
+			if shown, _ := settle(t, c.text, sizes); shown != c.want {
 				t.Errorf("%s in pieces of %v: shown as it settled\n%q\nwant\n%q", name, sizes, shown, c.want)
 			}
 		}
@@ -929,7 +929,7 @@ func TestAPasswordsValueIsReadNoFurtherThanAValueIs(t *testing.T) {
 			t.Errorf("%s: a second pass changed %q to %q", name, got, again)
 		}
 		for _, sizes := range [][]int{{1}, {5, 400}} {
-			if shown, _ := settle(c.text, sizes); shown != c.want {
+			if shown, _ := settle(t, c.text, sizes); shown != c.want {
 				t.Errorf("%s in pieces of %v: shown as it settled\n%q\nwant\n%q", name, sizes, shown, c.want)
 			}
 		}
