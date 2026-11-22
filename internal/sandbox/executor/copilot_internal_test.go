@@ -288,6 +288,44 @@ func TestACopilotRunPastItsCapFailsWhateverItsExtensionSaid(t *testing.T) {
 	}
 }
 
+// A subagent's events name it on their envelope, beside their type, never in
+// their data (subagent-note: a note served while a `task` subagent ran, which
+// made two requests to the main agent's three): its requests are none of a
+// capped run's main requests, and its lines are its own thread.
+//
+// Mutation: read the agent off the event's data — the cap of 3 fails on five
+// requests, and the subagent's answer files under the main thread.
+func TestACopilotSubagentIsToldByItsEnvelope(t *testing.T) {
+	const agent = "716fbfd1-ea35-4e3d-bd51-33d8863b10de"
+	stream := append([]byte(copilotCapLine(3)+"\n"+copilotArmedLine(t)),
+		copilotCollected(t, "subagent-note.stream.jsonl", "subagent-note.events.jsonl", 0)...)
+	dec := &copilotEvents{}
+	_ = eachLine(bytes.NewReader(stream), dec, maxLineBytes)
+	if res := dec.Result(); !res.Success || dec.requests != 5 || dec.mainRequests != 3 {
+		t.Fatalf("result = %+v over %d requests, %d of them main; want the answer over 5, 3 main",
+			res, dec.requests, dec.mainRequests)
+	}
+	archive := copilotArchive(t, map[string][]byte{
+		"session-state/ffffffff-ffff-4fff-8fff-000000000107/events.jsonl": copilotFixture(t,
+			"subagent-note.events.jsonl"),
+	})
+	got, err := newTranscriptBuilder(0, TranscriptReadBounds(), TranscriptFilter{}).decode(t.Context(),
+		Copilot{}, bytes.NewReader(archive))
+	if err != nil {
+		t.Fatal(err)
+	}
+	threads := map[string]string{}
+	for _, e := range got.Entries {
+		if e.Kind == EntryModel {
+			threads[e.Text] = e.Thread
+		}
+	}
+	if threads["SUB DONE"] != agent || threads["ANSWER main saw note"] != "" {
+		t.Fatalf("model entries by thread = %v, want the subagent's under %s, the main agent's under none",
+			threads, agent)
+	}
+}
+
 // A seat tool a repository's hook refused fails the run, saying so: the run
 // could not do its work through its seat.
 //

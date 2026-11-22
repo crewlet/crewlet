@@ -90,7 +90,7 @@ func (b *transcriptBuilder) copilotLine(line []byte) error {
 		return b.notARecord(len(line))
 	}
 	data := ev.Data
-	b.thread = data.AgentID
+	b.thread = ev.AgentID
 	at := claudeTime(ev.Timestamp)
 	switch ev.Type {
 	case "user.message":

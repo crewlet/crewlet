@@ -175,16 +175,18 @@ func (p *copilotProbe) send(command map[string]any) {
 	}
 }
 
-// event hands the extension one session event; agent names a subagent's.
+// event hands the extension one session event; agent names a subagent's, on
+// the envelope as Copilot puts it (subagent-note).
 func (p *copilotProbe) event(typ, agent string, data map[string]any) {
 	p.t.Helper()
 	if data == nil {
 		data = map[string]any{}
 	}
+	event := map[string]any{"type": typ, "data": data}
 	if agent != "" {
-		data["agentId"] = agent
+		event["agentId"] = agent
 	}
-	p.send(map[string]any{"op": "event", "event": map[string]any{"type": typ, "data": data}})
+	p.send(map[string]any{"op": "event", "event": event})
 }
 
 // hook calls the extension's hook name with input.

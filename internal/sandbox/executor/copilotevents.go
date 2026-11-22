@@ -16,7 +16,11 @@ import (
 // the stream `{type: "result", sessionId, exitCode, usage}`. DECODED LOOSELY: a
 // field a release retyped reads as zero, and the rest still read.
 type copilotEvent struct {
-	Type      string          `json:"type"`
+	Type string `json:"type"`
+	// AgentID names a subagent's event, on the line's envelope beside its
+	// type; the main agent's and the session's carry none (measured on
+	// 1.0.114, subagent-note).
+	AgentID   string          `json:"agentId"`
 	Data      copilotData     `json:"data"`
 	Timestamp string          `json:"timestamp"`
 	SessionID string          `json:"sessionId"`
@@ -28,9 +32,8 @@ type copilotEvent struct {
 type copilotData struct {
 	SessionID string `json:"sessionId"`
 
-	// AgentID names a subagent's event; the main agent's carry none. A
-	// message a subagent wrote also names the call that started it.
-	AgentID          string `json:"agentId"`
+	// ParentToolCallID names the call that started the subagent a turn is
+	// of.
 	ParentToolCallID string `json:"parentToolCallId"`
 
 	// Content is a message's text; ClientTurnID and Delivery a user
@@ -218,7 +221,7 @@ func (d *copilotEvents) Line(line []byte) {
 	}
 	d.sawEvent = true
 	data := ev.Data
-	root := data.AgentID == "" && data.ParentToolCallID == ""
+	root := ev.AgentID == "" && data.ParentToolCallID == ""
 	switch ev.Type {
 	case "session.start":
 		d.sessionID = firstNonBlank(data.SessionID, d.sessionID)
@@ -276,7 +279,7 @@ func (d *copilotEvents) Line(line []byte) {
 			d.spent.CacheReadTokens += u.CacheReadTokens
 			d.spent.CacheWriteTokens += u.CacheWriteTokens
 			d.requests++
-			if data.AgentID == "" {
+			if ev.AgentID == "" {
 				d.mainRequests++
 			}
 			if u.MaxPromptTokens > 0 && (d.window == 0 || u.MaxPromptTokens < d.window) {

@@ -19,8 +19,8 @@
 // never posts the route's /read.
 //
 // ONLY WHILE THE MAIN AGENT WORKS. The route is polled from the main agent's
-// `assistant.turn_start` until its `assistant.idle`; a subagent's events (they
-// carry an agentId) open nothing. As the main agent stops (onAgentStop) the
+// `assistant.turn_start` until its `assistant.idle`; a subagent's events (their
+// envelope carries an agentId) open nothing. As the main agent stops (onAgentStop) the
 // route is asked once more, briefly (stopAskMs), so a note waiting then is
 // answered by this run rather than left for its review.
 //
@@ -223,9 +223,10 @@ async function stop(session, cap) {
 }
 
 // mainAgent is false for an event or a hook input of a subagent, which names
-// its agent; the main agent's name none.
+// its agent beside its type (an event's envelope, not its data); the main
+// agent's name none.
 function mainAgent(v) {
-  return !(typeof v?.agentId === "string" || typeof v?.data?.agentId === "string")
+  return typeof v?.agentId !== "string"
 }
 
 function wellFormed(note) {
