@@ -134,7 +134,7 @@ func TestARefusedSignInIsReadFromTheHarnessFields(t *testing.T) {
 
 // CODEX'S RESET IS READ FROM ITS SENTENCE, IN THE ZONE IT WAS HANDED. Codex
 // writes no rate-limit event on `exec --json` and names its reset as a local
-// time with no zone (0.150.1), so the engine pins TZ on the child and reads the
+// time with no zone (0.171.0), so the engine pins TZ on the child and reads the
 // time in it. "for <model>" names a limit of one model.
 //
 // Mutation: read the time in UTC, and the reset lands seven hours off; drop
