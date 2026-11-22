@@ -268,3 +268,56 @@ func TestTheMuseScriptHandsTheKeyOnStdinAlone(t *testing.T) {
 		t.Errorf("after the environment: %q, want the flag, the key on stdin and no key file", rest)
 	}
 }
+
+// NO REPOSITORY FILE DISPLACES OR IMPERSONATES THE RUN'S CHANNELS (a launched
+// run whose checkout declares a `crewlet` server and a hook writing a
+// take-shaped line on its stderr, in a home holding a decoy plugin of the
+// notes plugin's name): the model reached the bridge under the run's own
+// name, the repository's take token confirms nothing, and the run's own take
+// is held.
+//
+// Mutation: name the bridge `crewlet`, or hold a token off any hook's run.
+func TestARepositoryCannotDisplaceOrImpersonateTheMuseChannels(t *testing.T) {
+	held := museHeldOf(t, museFixture(t, "launched-repository.session.jsonl"))
+	if !held[claudeTakeToken("aaaaaaaa-0000-4000-8000-000000000011")] ||
+		held[claudeTakeToken("ffffffff-0000-4000-8000-000000000001")] ||
+		held[claudeTakeToken("ffffffff-0000-4000-8000-000000000002")] {
+		t.Fatalf("held %v: want the run's own take alone", held)
+	}
+	reached := false
+	for l := range bytes.Lines(museFixture(t, "launched-repository.result.jsonl")) {
+		var p musePayload
+		env, ok := decodeMuseEnvelope(l)
+		if !ok || env.PayloadType != "tool.result" || json.Unmarshal(env.Payload, &p) != nil {
+			continue
+		}
+		name, _ := strings.CutPrefix(p.Facts.ToolName, "mcp__crewlet_")
+		suffix, tool, _ := strings.Cut(name, "__")
+		if len(suffix) == 12 && tool == "echo" && p.Facts.Outcome == "success" {
+			reached = true
+		}
+	}
+	if !reached {
+		t.Fatal("the model reached no bridge tool under the run's own server name")
+	}
+}
+
+// THE SCRIPT REMOVES A PLUGIN OF THE NOTES PLUGIN'S NAME BEFORE IT INSTALLS AND
+// APPROVES ITS OWN, and adds the servers after the approval, which rewrites
+// the settings: an earlier plugin of that name never runs as the run's, and
+// the servers keep `required` and their wait.
+//
+// Mutation: install before removing, or add the servers first.
+func TestTheMuseScriptWiresItsPluginBeforeItsServers(t *testing.T) {
+	script := museWiring(Paths{Home: "/h"})
+	order := []string{"muse plugins remove " + museNotesPlugin, "muse plugins install ",
+		"muse plugins approve " + museNotesPlugin, "muse mcp add-json "}
+	last := -1
+	for _, step := range order {
+		at := strings.Index(script, step)
+		if at <= last {
+			t.Fatalf("%q is not after the step before it in:\n%s", step, script)
+		}
+		last = at
+	}
+}
