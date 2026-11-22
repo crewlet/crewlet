@@ -460,7 +460,8 @@ func TestAKimiRunIsPinnedToItsHomeAndItsEntrysRoute(t *testing.T) {
 			t.Errorf("the script unsets %s, which the entry set or the run pins", kept)
 		}
 	}
-	if !slices.Contains(off, "KIMI_CODE_BASE_URL") || !slices.Contains(off, "KIMI_MODEL_PROVIDER_TYPE") {
+	if !slices.Contains(off, "KIMI_CODE_BASE_URL") || !slices.Contains(off, "KIMI_MODEL_PROVIDER_TYPE") ||
+		!slices.Contains(off, "KIMI_WEB_SEARCH_API_KEY") {
 		t.Errorf("unset %v, want every routing variable the entry left unset", off)
 	}
 	login := sandbox.RunRequest{Model: "kimi-code/kimi-for-coding"}
@@ -473,7 +474,8 @@ func TestAKimiRunIsPinnedToItsHomeAndItsEntrysRoute(t *testing.T) {
 		t.Error("a login's run keeps an env model the image set")
 	}
 	for _, name := range []string{"KIMI_CODE_TRUST_WORKSPACE", "KIMI_LOOP_MAX_STEPS_PER_TURN",
-		sandbox.OtelUpstreamEndpointVar, sandbox.OtelUpstreamHeadersVar, "OTEL_EXPORTER_OTLP_PROTOCOL"} {
+		sandbox.OtelUpstreamEndpointVar, sandbox.OtelUpstreamHeadersVar, "OTEL_EXPORTER_OTLP_PROTOCOL",
+		"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_METRICS_HEADERS", "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"} {
 		if !slices.Contains((Kimi{}).Output(paths).Unset, name) {
 			t.Errorf("%s is not removed whatever set it", name)
 		}
