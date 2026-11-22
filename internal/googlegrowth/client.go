@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -22,12 +24,20 @@ type Tokens interface {
 
 // Audit is the access log's record of each step of a growth act (the engine's
 // GrowthAudit, ADR-0171): what a call made at once did, and a held call's
-// outcome. The held call's ask is recorded by the engine from [growth.Hold.Ask].
+// answer and outcome. The held call's ask is recorded by the engine from
+// [growth.Hold.Ask]. first is false where the act already holds the step.
 type Audit interface {
-	Made(ctx context.Context, r growth.Record) (bool, error)
-	Applied(ctx context.Context, r growth.Record) (bool, error)
-	Void(ctx context.Context, r growth.Record) (bool, error)
-	Failed(ctx context.Context, r growth.Record) (bool, error)
+	Made(ctx context.Context, r growth.Record) (first bool, err error)
+	Verdict(ctx context.Context, step growth.Step, r growth.Record) (first bool, err error)
+	Applied(ctx context.Context, r growth.Record) (first bool, err error)
+	Void(ctx context.Context, r growth.Record) (first bool, err error)
+	Failed(ctx context.Context, r growth.Record) (first bool, err error)
+}
+
+// Leaser holds one lease on a resource at a time, fleet-wide (the engine's
+// growth act lease).
+type Leaser interface {
+	Hold(ctx context.Context, resource string) (release func(), err error)
 }
 
 // TokenLife is how long a minted token must stay good: one call's bound with
@@ -46,6 +56,8 @@ type Client struct {
 	Env        func() *config.Resolver
 	Tokens     Tokens
 	Audit      Audit
+	// Leases hold one applied write per account at a time; nil sends no write.
+	Leases Leaser
 	// HTTP is the transport Google is reached through; nil in production.
 	HTTP *http.Client
 	// Secrets are the fields of an answer that hold a credential.
@@ -53,6 +65,9 @@ type Client struct {
 	// Refused says Google's refusal of a request in the product's words; nil
 	// passes Google's error on.
 	Refused func(req Request, api *googleauth.APIError) error
+	// ReadScopes are the scopes a write's target is read back with; nil reads
+	// with the write's own.
+	ReadScopes func(op growth.Operation) []string
 }
 
 // CallError is a call that reached for Google and did not get its result,
@@ -65,8 +80,10 @@ type CallError struct {
 func (e *CallError) Error() string { return e.Err.Error() }
 func (e *CallError) Unwrap() error { return e.Err }
 
-// FailureOf is why a call sent to Google failed, never Google's own words.
-func FailureOf(err error) growth.Failure {
+// FailureOf is why a call sent to Google failed, never Google's own words. A
+// write that got no answer of Google's own (no reply, a reset, its deadline)
+// may have reached Google, so what it did is not known.
+func FailureOf(err error, write bool) growth.Failure {
 	if api, ok := errors.AsType[*googleauth.APIError](err); ok {
 		switch {
 		case api.Status == http.StatusUnauthorized:
@@ -78,7 +95,11 @@ func FailureOf(err error) growth.Failure {
 		}
 		return growth.FailureVendorRefused
 	}
-	if errors.Is(err, context.DeadlineExceeded) {
+	var netErr net.Error
+	switch {
+	case write:
+		return growth.FailureUnknownOutcome
+	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &netErr) && netErr.Timeout():
 		return growth.FailureTimedOut
 	}
 	return growth.FailureVendorUnavailable
@@ -102,20 +123,44 @@ func (c *Client) Send(ctx context.Context, handle string, req Request) ([]byte, 
 		}
 		bearer = token.Token
 	}
+	address, err := c.address(ctx, req)
+	if err != nil {
+		return nil, err
+	}
 	var body any
 	if req.Body != nil {
 		body = req.Body
 	}
 	var raw json.RawMessage
 	if req.Reads() {
-		err = conn.DoRead(ctx, req.Op.Method, req.URL(), bearer, body, &raw)
+		err = conn.DoRead(ctx, req.Op.Method, address, bearer, body, &raw)
 	} else {
-		err = conn.Do(ctx, req.Op.Method, req.URL(), bearer, body, &raw)
+		err = conn.Do(ctx, req.Op.Method, address, bearer, body, &raw)
 	}
 	if err != nil {
-		return nil, &CallError{FailureOf(err), c.refused(req, err)}
+		return nil, &CallError{FailureOf(err, !req.Reads()), c.refused(req, err)}
 	}
 	return raw, nil
+}
+
+// address is where req is sent: its query as [Request.Fill] makes it. A fill
+// that failed sent nothing, so it fails as the read it is.
+func (c *Client) address(ctx context.Context, req Request) (string, error) {
+	if req.Fill == nil {
+		return req.URL(), nil
+	}
+	q := url.Values{}
+	for k, v := range req.Query {
+		q[k] = append([]string(nil), v...)
+	}
+	q, err := req.Fill(ctx, q)
+	if err != nil {
+		if _, ok := errors.AsType[*CallError](err); ok {
+			return "", err
+		}
+		return "", &CallError{FailureOf(err, false), err}
+	}
+	return req.Address + "?" + q.Encode(), nil
 }
 
 // refused is Google's refusal in the product's words, where it has any.

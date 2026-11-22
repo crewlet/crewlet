@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -21,13 +20,14 @@ type Product struct {
 	client  *googlegrowth.Client
 }
 
-// New is the product on the engine's active document, resolver, tokens and
-// access log; hc is nil in production.
+// New is the product on the engine's active document, resolver, tokens,
+// access log and apply leases; hc is nil in production.
 func New(company func() *config.Company, env func() *config.Resolver, tokens googlegrowth.Tokens,
-	audit googlegrowth.Audit, hc *http.Client) *Product {
+	audit googlegrowth.Audit, leases googlegrowth.Leaser, hc *http.Client) *Product {
 	return &Product{company: company, client: &googlegrowth.Client{
 		Kind: string(Kind), Name: "Google Analytics", Company: company, Env: env, Tokens: tokens,
-		Audit: audit, HTTP: hc, Secrets: []string{"secretValue", "channelToken"}, Refused: vendorRefusal,
+		Audit: audit, Leases: leases, HTTP: hc, Secrets: []string{"secretValue", "channelToken"},
+		Refused: vendorRefusal, ReadScopes: readScope,
 	}}
 }
 
@@ -198,12 +198,4 @@ func (p *Product) accountProperties(ctx context.Context, handle, account string)
 		return out, nil
 	}
 	return nil, nil
-}
-
-// Denied logs that a person denied the held call, or that it lapsed; the
-// verdict itself is the held call's record.
-func (p *Product) Denied(ctx context.Context, call growth.Call) error {
-	slog.InfoContext(ctx, "growth_call_denied", "kind", string(Kind), "tool", call.Tool, "seat", call.Handle,
-		"held_call", call.HeldCall)
-	return nil
 }

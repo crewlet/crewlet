@@ -12,11 +12,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/googleanalytics"
 	"github.com/crewlet/crewlet/internal/googleauth"
@@ -39,22 +41,45 @@ func (f *fakeTokens) GoogleGrowthToken(_ context.Context, handle string, scopes 
 		ExpiresAt: time.Now().Add(time.Hour)}, nil
 }
 
-// fakeAudit is the access log: every step a product records, in order.
+// fakeAudit is the access log: every step a product records, in order. It
+// refuses a record the log's own validation refuses, failing the test, and
+// keeps one answer and one outcome per act.
 type fakeAudit struct {
+	t       *testing.T
 	mu      sync.Mutex
 	steps   []growth.Step
 	records []growth.Record
+	phases  map[string]bool
 }
 
 func (a *fakeAudit) add(step growth.Step, r growth.Record) (bool, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if err := accessdomain.GrowthOf(step, r).Validate(); err != nil {
+		a.t.Errorf("the access log refuses the %s record %+v: %v", step, r, err)
+		return false, err
+	}
+	phase := r.Call + r.HeldCall + "/outcome"
+	if step == growth.StepAllowed || step == growth.StepDenied || step == growth.StepLapsed {
+		phase = r.Call + r.HeldCall + "/answer"
+	}
+	if a.phases == nil {
+		a.phases = map[string]bool{}
+	}
+	if r.HeldCall != "" && a.phases[phase] {
+		return false, nil
+	}
+	a.phases[phase] = true
 	a.steps, a.records = append(a.steps, step), append(a.records, r)
 	return true, nil
 }
 
 func (a *fakeAudit) Made(_ context.Context, r growth.Record) (bool, error) {
 	return a.add(growth.StepMade, r)
+}
+
+func (a *fakeAudit) Verdict(_ context.Context, step growth.Step, r growth.Record) (bool, error) {
+	return a.add(step, r)
 }
 
 func (a *fakeAudit) Applied(_ context.Context, r growth.Record) (bool, error) {
@@ -78,15 +103,42 @@ func (a *fakeAudit) take() ([]growth.Step, []growth.Record) {
 	return steps, records
 }
 
-// fakeAnalytics is the Admin and Data APIs: two properties in one account,
-// one out of the seat's scope, a custom metric and a key event to change.
+// fakeLeases holds one lease per resource, in process, and names each taken.
+type fakeLeases struct {
+	mu    sync.Mutex
+	locks map[string]*sync.Mutex
+	taken []string
+}
+
+func (l *fakeLeases) Hold(_ context.Context, resource string) (func(), error) {
+	l.mu.Lock()
+	if l.locks == nil {
+		l.locks = map[string]*sync.Mutex{}
+	}
+	m, ok := l.locks[resource]
+	if !ok {
+		m = &sync.Mutex{}
+		l.locks[resource] = m
+	}
+	l.taken = append(l.taken, resource)
+	l.mu.Unlock()
+	m.Lock()
+	return m.Unlock, nil
+}
+
+// fakeAnalytics is the Admin and Data APIs: account 77 holding properties 111
+// and 222, account 88 holding 333, a custom metric, a BigQuery link and a
+// stream secret on 111, and the Measurement Protocol.
 type fakeAnalytics struct {
 	mu       sync.Mutex
 	calls    []string
 	metric   map[string]any
+	link     map[string]any
 	writes   int
 	secret   string
 	lastBody map[string]any
+	// queries are the Measurement Protocol's queries, as Google got them.
+	queries []string
 }
 
 func (f *fakeAnalytics) serve(w http.ResponseWriter, r *http.Request) {
@@ -99,6 +151,11 @@ func (f *fakeAnalytics) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	var body map[string]any
 	_ = json.NewDecoder(r.Body).Decode(&body)
+	write := func(v any) {
+		f.writes++
+		f.lastBody = body
+		answer(v)
+	}
 	switch {
 	case r.URL.Path == "/v1beta/accountSummaries":
 		answer(map[string]any{"accountSummaries": []any{map[string]any{
@@ -107,6 +164,9 @@ func (f *fakeAnalytics) serve(w http.ResponseWriter, r *http.Request) {
 				map[string]any{"property": "properties/111", "displayName": "Acme web"},
 				map[string]any{"property": "properties/222", "displayName": "Acme shop"},
 			},
+		}, map[string]any{
+			"account": "accounts/88", "displayName": "Acme labs",
+			"propertySummaries": []any{map[string]any{"property": "properties/333", "displayName": "Labs"}},
 		}}})
 	case r.URL.Path == "/v1beta/properties/111:runReport":
 		answer(map[string]any{
@@ -128,37 +188,69 @@ func (f *fakeAnalytics) serve(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Path == "/v1beta/properties/111/customMetrics/9" && r.Method == http.MethodGet:
 		answer(f.metric)
 	case r.URL.Path == "/v1beta/properties/111/customMetrics/9" && r.Method == http.MethodPatch:
-		f.writes++
-		f.lastBody = body
 		for k, v := range body {
 			f.metric[k] = v
 		}
-		answer(f.metric)
+		write(f.metric)
+	case r.URL.Path == "/v1alpha/properties/111/bigQueryLinks/4" && r.Method == http.MethodGet:
+		answer(f.link)
+	case r.URL.Path == "/v1alpha/properties/111/bigQueryLinks/4" && r.Method == http.MethodPatch:
+		for k, v := range body {
+			f.link[k] = v
+		}
+		write(f.link)
 	case r.URL.Path == "/v1beta/properties/111/keyEvents" && r.Method == http.MethodPost:
-		f.writes++
-		f.lastBody = body
-		answer(map[string]any{"name": "properties/111/keyEvents/5", "eventName": body["eventName"]})
+		write(map[string]any{"name": "properties/111/keyEvents/5", "eventName": body["eventName"]})
 	case r.URL.Path == "/v1beta/properties/111/dataStreams/3/measurementProtocolSecrets":
 		answer(map[string]any{"measurementProtocolSecrets": []any{map[string]any{
 			"name": "properties/111/dataStreams/3/measurementProtocolSecrets/8", "secretValue": f.secret,
 		}}})
+	case r.URL.Path == "/v1beta/properties/111/dataStreams/3/measurementProtocolSecrets/8":
+		answer(map[string]any{"name": "properties/111/dataStreams/3/measurementProtocolSecrets/8",
+			"displayName": "Server", "secretValue": f.secret})
+	case r.URL.Path == "/debug/mp/collect" || r.URL.Path == "/mp/collect":
+		f.queries = append(f.queries, r.URL.RawQuery)
+		if r.URL.Path == "/mp/collect" {
+			f.writes++
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		answer(map[string]any{"validationMessages": []any{}})
+	case r.Method == http.MethodPost && (r.URL.Path == "/v1alpha/properties:createRollupProperty" ||
+		r.URL.Path == "/v1beta/accounts:provisionAccountTicket"):
+		write(map[string]any{"name": "ok"})
 	default:
 		w.WriteHeader(http.StatusNotFound)
 		answer(map[string]any{"error": map[string]any{"code": 404, "status": "NOT_FOUND", "message": "no " + r.URL.Path}})
 	}
 }
 
+// called is every call Google got since the last, as "METHOD /path".
+func (f *fakeAnalytics) called() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := f.calls
+	f.calls = nil
+	return out
+}
+
 // world is a product on a company whose seat `growth-lead` is on at level
-// with properties 111 only.
+// with properties, 111 alone where none are given.
 type world struct {
 	p      *googleanalytics.Product
 	f      *fakeAnalytics
 	tokens *fakeTokens
 	audit  *fakeAudit
+	leases *fakeLeases
+	// held numbers the held calls call makes, each its own act.
+	held int
 }
 
-func newWorld(t *testing.T, level string) *world {
+func newWorld(t *testing.T, level string, properties ...string) *world {
 	t.Helper()
+	if len(properties) == 0 {
+		properties = []string{"111"}
+	}
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -182,7 +274,7 @@ roles:
   - name: Growth lead
     handle: growth-lead
     integrations:
-      google_analytics: {enabled: true, level: ` + level + `, properties: ["111"]}
+      google_analytics: {enabled: true, level: ` + level + `, properties: ["` + strings.Join(properties, `", "`) + `"]}
 `
 	company, err := config.ParseCompanyDocument([]byte(doc))
 	if err != nil {
@@ -192,18 +284,21 @@ roles:
 		"GOOGLE_CLOUD_FEDERATION_KEY": string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})),
 	})
 	f := &fakeAnalytics{metric: map[string]any{"name": "properties/111/customMetrics/9", "displayName": "Revenue",
-		"restrictedMetricType": []any{"REVENUE_DATA"}}, secret: "s3cr3t-value-of-the-stream"}
+		"restrictedMetricType": []any{"REVENUE_DATA"}}, secret: "s3cr3t-value-of-the-stream",
+		link: map[string]any{"name": "properties/111/bigQueryLinks/4", "dailyExportEnabled": true,
+			"streamingExportEnabled": false, "excludedEvents": []any{"page_view"}}}
 	srv := httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(srv.Close)
-	tokens, audit := &fakeTokens{}, &fakeAudit{}
+	tokens, audit, leases := &fakeTokens{}, &fakeAudit{t: t}, &fakeLeases{}
 	p := googleanalytics.New(func() *config.Company { return company }, func() *config.Resolver { return env },
-		tokens, audit, &http.Client{Transport: httpxtest.Rewrite(t, srv)})
-	return &world{p: p, f: f, tokens: tokens, audit: audit}
+		tokens, audit, leases, &http.Client{Transport: httpxtest.Rewrite(t, srv)})
+	return &world{p: p, f: f, tokens: tokens, audit: audit, leases: leases}
 }
 
 // call makes tool's call as the framework does (internal/agent/builtin): a
 // read is run; any other call is prepared, its class held to its tool's and
-// its binding to a digest, and applied on that binding.
+// its binding to a digest, and applied on that binding, a held one as the
+// administrator `founder` allowed it.
 func (w *world) call(t *testing.T, tool string, args map[string]any) (any, error) {
 	t.Helper()
 	call := growth.Call{ID: "call-1", Handle: "growth-lead", Turn: "turn-1", Tool: tool, Args: args}
@@ -223,6 +318,10 @@ func (w *world) call(t *testing.T, tool string, args map[string]any) (any, error
 	}
 	if hold.Class.Rank() > def.Class.Rank() {
 		return nil, &aboveTool{class: hold.Class}
+	}
+	if def.Class.Held() {
+		w.held++
+		call.ID, call.HeldCall, call.Approver = "", "held-"+strconv.Itoa(w.held), "founder"
 	}
 	return w.p.Apply(t.Context(), call, hold.Binding)
 }
@@ -313,33 +412,49 @@ func TestAReportFencesThePublicsWordsAndPassesGooglesFlags(t *testing.T) {
 	}
 }
 
-// A WRITE IS MADE AT THE CLASS OF WHAT IT CHANGES: renaming a custom metric is
-// operate and is made; taking its revenue restriction off is admin, refused on
-// the operate tool, and made only on the held admin tool once approved, with
-// nothing sent when the metric moved since the person was asked.
+// A WRITE IS MADE AT THE CLASS OF WHAT IT CHANGES, as Google reads it: a
+// rename is operate; lifting a revenue restriction is admin however the mask
+// is spelled, refused on the operate tool and made on the held admin tool once
+// approved, unless the metric moved since.
 //
-// Mutation: classify by the operation alone, and the restriction is lifted
-// with nobody asked.
+// Mutation: classify by the operation alone, or read the mask by its
+// camelCase key and spelling only, and the restriction is lifted with nobody
+// asked.
 func TestAWriteIsMadeAtTheClassOfWhatItChanges(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t, "administer")
-	rename := map[string]any{"operation": "analyticsadmin.properties.customMetrics.patch",
-		"path":  map[string]any{"propertiesId": "111", "customMetricsId": "9"},
-		"query": map[string]any{"updateMask": "displayName"}, "body": map[string]any{"displayName": "Gross revenue"}}
+	metric := func(query, body map[string]any) map[string]any {
+		return map[string]any{"operation": "analyticsadmin.properties.customMetrics.patch",
+			"path": map[string]any{"propertiesId": "111", "customMetricsId": "9"}, "query": query, "body": body}
+	}
+	rename := metric(map[string]any{"updateMask": "displayName"}, map[string]any{"displayName": "Gross revenue"})
 	if _, err := w.call(t, "google_analytics_operate", rename); err != nil {
 		t.Fatalf("an operate rename answered %v", err)
 	}
-	lift := map[string]any{"operation": "analyticsadmin.properties.customMetrics.patch",
-		"path":  map[string]any{"propertiesId": "111", "customMetricsId": "9"},
-		"query": map[string]any{"updateMask": "restrictedMetricType"}, "body": map[string]any{"restrictedMetricType": []any{}}}
-	if _, err := w.call(t, "google_analytics_operate", lift); !errors.As(err, new(*aboveTool)) ||
-		!strings.Contains(err.Error(), string(growth.ClassAdmin)) {
-		t.Fatalf("lifting a restriction on the operate tool answered %v", err)
+	for name, tc := range map[string]struct {
+		args map[string]any
+		want growth.Class
+	}{
+		"a lift": {metric(map[string]any{"updateMask": "restrictedMetricType"},
+			map[string]any{"restrictedMetricType": []any{}}), growth.ClassAdmin},
+		"a snake_case lift": {metric(map[string]any{"updateMask": "restricted_metric_type"},
+			map[string]any{"restricted_metric_type": []any{}}), growth.ClassAdmin},
+		"a lift by update_mask": {metric(map[string]any{"update_mask": "restrictedMetricType"},
+			map[string]any{"restrictedMetricType": []any{}}), growth.ClassAdmin},
+		"a lift by replacement": {metric(map[string]any{"updateMask": "*"},
+			map[string]any{"displayName": "Revenue"}), growth.ClassAdmin},
+	} {
+		if _, err := w.call(t, "google_analytics_operate", tc.args); !errors.As(err, new(*aboveTool)) ||
+			!strings.Contains(err.Error(), string(tc.want)) {
+			t.Errorf("%s on the operate tool answered %v, want it refused as %s", name, err, tc.want)
+		}
 	}
+	lift := metric(map[string]any{"updateMask": "restricted_metric_type"}, map[string]any{"restrictedMetricType": []any{}})
 	writes := w.f.writes
-	call := growth.Call{Handle: "growth-lead", Tool: "google_analytics_admin", Args: lift}
+	call := growth.Call{Handle: "growth-lead", Tool: "google_analytics_admin", Args: lift, HeldCall: "held-a",
+		Approver: "founder"}
 	hold, err := w.p.Prepare(t.Context(), call)
-	if err != nil || len(hold.Binding) != 64 || writes != w.f.writes {
+	if err != nil || len(hold.Binding) != 64 || writes != w.f.writes || hold.Class != growth.ClassAdmin {
 		t.Fatalf("prepare: %+v, %v (writes %d, then %d)", hold, err, writes, w.f.writes)
 	}
 	card, err := w.p.Card(t.Context(), call, hold.Binding)
@@ -355,6 +470,7 @@ func TestAWriteIsMadeAtTheClassOfWhatItChanges(t *testing.T) {
 	if w.f.writes != writes {
 		t.Fatal("a call whose target moved was sent")
 	}
+	call.HeldCall = "held-b"
 	fresh, _ := w.p.Prepare(t.Context(), call)
 	if _, err := w.p.Apply(t.Context(), call, fresh.Binding); err != nil || w.f.writes != writes+1 {
 		t.Fatalf("an approved call answered %v (writes %d)", err, w.f.writes)
@@ -394,54 +510,64 @@ func TestTheReadToolCannotNameAWrite(t *testing.T) {
 }
 
 // EVERY ACT IS ON THE ACCESS LOG ONCE, WITH ITS OUTCOME: a call made at once is
-// made or failed with Google's reason, a call refused before Google is no act,
-// a held call's ask carries its target's digests, and an allowed one is void
-// where its target moved, failed where the seat's scope no longer allows it,
-// and applied once made. Free words go as a digest, never as themselves.
+// made or failed with Google's reason and records no change where it reads, a
+// call refused before Google is no act, a held call's ask carries its target's
+// digests, an allowed one records its answer before it acts and then is void
+// where its target moved, failed where the seat's scope no longer allows it or
+// its request cannot be built again, and applied once made, and a denial or a
+// lapse is its answer. Free words go as a digest, never as themselves.
 //
-// Mutation: record before the scope check, and a refused call is logged as made.
+// Mutation: record before the scope check, record a read's body, act before
+// the answer, or skip the failure of an unbuilt request, and a refused call is
+// logged as made, a read logs what was asked, or an outcome has no answer.
 func TestEveryActIsRecordedOnceWithItsOutcome(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t, "administer")
-	one := func(want growth.Step) growth.Record {
+	recorded := func(want ...growth.Step) []growth.Record {
 		t.Helper()
 		steps, records := w.audit.take()
-		if len(steps) != 1 || steps[0] != want {
-			t.Fatalf("recorded %v, want one %s", steps, want)
+		if !slices.Equal(steps, want) {
+			t.Fatalf("recorded %v, want %v", steps, want)
 		}
-		r := records[0]
-		if r.Product != "google_analytics" || r.Connection != "google-cloud" || len(r.Operation) != 64 ||
-			r.Account == "" || r.Handle != "growth-lead" {
-			t.Fatalf("record %+v", r)
+		for _, r := range records {
+			if r.Product != "google_analytics" || r.Connection != "google-cloud" || len(r.Operation) != 64 ||
+				r.Account == "" || r.Handle != "growth-lead" {
+				t.Fatalf("record %+v", r)
+			}
 		}
-		return r
+		return records
 	}
 	if _, err := w.call(t, "google_analytics_run_report", map[string]any{"property": "111", "metrics": []any{"sessions"}}); err != nil {
 		t.Fatal(err)
 	}
-	if r := one(growth.StepMade); r.Call != "call-1" || r.Turn != "turn-1" || r.Class != growth.ClassRead ||
-		r.Account != "properties/111" || r.Before != "" {
+	if r := recorded(growth.StepMade)[0]; r.Call != "call-1" || r.Turn != "turn-1" || r.Class != growth.ClassRead ||
+		r.Account != "properties/111" || r.Before != "" || len(r.Changes) != 0 {
 		t.Errorf("a report is recorded as %+v", r)
+	}
+	if _, err := w.call(t, "google_analytics_read", map[string]any{"operation": "analyticsdata.properties.runReport",
+		"path": map[string]any{"propertiesId": "111"}, "body": map[string]any{"dimensionFilter": "x"}}); err != nil {
+		t.Fatal(err)
+	}
+	if r := recorded(growth.StepMade)[0]; len(r.Changes) != 0 {
+		t.Errorf("a read records its body as changes: %+v", r.Changes)
 	}
 	if _, err := w.call(t, "google_analytics_run_realtime_report", map[string]any{"property": "111"}); err == nil {
 		t.Fatal("a throttled report answered no error")
 	}
-	if r := one(growth.StepFailed); r.Failure != growth.FailureRateLimited {
+	if r := recorded(growth.StepFailed)[0]; r.Failure != growth.FailureRateLimited {
 		t.Errorf("a throttled report failed as %q", r.Failure)
 	}
 	if _, err := w.call(t, "google_analytics_run_report", map[string]any{"property": "222"}); !refused(err) {
 		t.Fatalf("a report out of scope answered %v", err)
 	}
-	if steps, _ := w.audit.take(); len(steps) != 0 {
-		t.Errorf("a call refused before Google was recorded as %v", steps)
-	}
+	recorded()
 	rename := map[string]any{"operation": "analyticsadmin.properties.customMetrics.patch",
 		"path":  map[string]any{"propertiesId": "111", "customMetricsId": "9"},
 		"query": map[string]any{"updateMask": "displayName"}, "body": map[string]any{"displayName": "Gross revenue"}}
 	if _, err := w.call(t, "google_analytics_operate", rename); err != nil {
 		t.Fatal(err)
 	}
-	r := one(growth.StepMade)
+	r := recorded(growth.StepMade)[0]
 	if len(r.Changes) != 1 || !r.Changes[0].Text || r.Changes[0].Field != "displayName" || r.Class != growth.ClassOperate {
 		t.Errorf("a rename's change is recorded as %+v", r.Changes)
 	}
@@ -449,7 +575,8 @@ func TestEveryActIsRecordedOnceWithItsOutcome(t *testing.T) {
 	lift := map[string]any{"operation": "analyticsadmin.properties.customMetrics.patch",
 		"path":  map[string]any{"propertiesId": "111", "customMetricsId": "9"},
 		"query": map[string]any{"updateMask": "restrictedMetricType"}, "body": map[string]any{"restrictedMetricType": []any{}}}
-	call := growth.Call{Handle: "growth-lead", Turn: "turn-1", Tool: "google_analytics_admin", Args: lift, HeldCall: "held-1"}
+	call := growth.Call{Handle: "growth-lead", Turn: "turn-1", Tool: "google_analytics_admin", Args: lift,
+		HeldCall: "held-1", Approver: "founder"}
 	hold, err := w.p.Prepare(t.Context(), call)
 	if err != nil || len(hold.Ask.Before) != 64 || len(hold.Ask.Operation) != 64 || len(hold.Ask.Changes) != 1 ||
 		hold.Ask.Account != "properties/111" || hold.Ask.Target != "properties/111/customMetrics/9" {
@@ -461,24 +588,51 @@ func TestEveryActIsRecordedOnceWithItsOutcome(t *testing.T) {
 	if _, err := w.p.Apply(t.Context(), call, hold.Binding); !errors.Is(err, growth.ErrMoved) {
 		t.Fatalf("a moved target answered %v", err)
 	}
-	if r := one(growth.StepVoid); r.HeldCall != "held-1" || r.Class != growth.ClassAdmin {
-		t.Errorf("a void call is recorded as %+v", r)
+	answered := recorded(growth.StepAllowed, growth.StepVoid)
+	if a, v := answered[0], answered[1]; a.Answerer != "founder" || a.HeldCall != "held-1" || a.Class != growth.ClassAdmin ||
+		v.HeldCall != "held-1" || v.Answerer != "" {
+		t.Errorf("an allowed void call is recorded as %+v then %+v", a, v)
 	}
+	if _, err := w.p.Apply(t.Context(), call, hold.Binding); err == nil {
+		t.Fatal("an act answered twice was applied")
+	}
+	recorded()
+	call.HeldCall = "held-2"
 	fresh, _ := w.p.Prepare(t.Context(), call)
 	if _, err := w.p.Apply(t.Context(), call, fresh.Binding); err != nil {
 		t.Fatal(err)
 	}
-	one(growth.StepApplied)
+	recorded(growth.StepAllowed, growth.StepApplied)
 
-	outside := growth.Call{Handle: "growth-lead", Tool: "google_analytics_admin", HeldCall: "held-2",
+	outside := growth.Call{Handle: "growth-lead", Tool: "google_analytics_admin", HeldCall: "held-3", Approver: "founder",
 		Args: map[string]any{"operation": "analyticsadmin.properties.customMetrics.patch",
 			"path":  map[string]any{"propertiesId": "222", "customMetricsId": "9"},
 			"query": map[string]any{"updateMask": "restrictedMetricType"}, "body": map[string]any{}}}
 	if _, err := w.p.Apply(t.Context(), outside, fresh.Binding); !refused(err) {
 		t.Fatalf("an allowed call out of scope answered %v", err)
 	}
-	if r := one(growth.StepFailed); r.Failure != growth.FailureAccessLowered || r.HeldCall != "held-2" {
+	if r := recorded(growth.StepAllowed, growth.StepFailed)[1]; r.Failure != growth.FailureAccessLowered || r.HeldCall != "held-3" {
 		t.Errorf("an allowed call out of scope is recorded as %+v", r)
+	}
+	for i, args := range []map[string]any{
+		{"operation": "analyticsadmin.properties.nope", "path": map[string]any{"propertiesId": "111"}},
+		{"operation": "mp.collect", "query": map[string]any{"api_secret_name": "properties/111/secret"}},
+	} {
+		unbuilt := growth.Call{Handle: "growth-lead", Tool: "google_analytics_admin", HeldCall: "unbuilt-" + strconv.Itoa(i),
+			Approver: "founder", Args: args}
+		if _, err := w.p.Apply(t.Context(), unbuilt, fresh.Binding); !refused(err) {
+			t.Fatalf("an allowed call that cannot be built answered %v", err)
+		}
+		if r := recorded(growth.StepAllowed, growth.StepFailed)[1]; r.Failure != growth.FailureEngineError {
+			t.Errorf("an allowed call that cannot be built is recorded as %+v", r)
+		}
+	}
+	denied := growth.Call{Handle: "growth-lead", Tool: "google_analytics_admin", HeldCall: "held-4", Approver: "founder", Args: lift}
+	_ = w.p.Denied(t.Context(), denied)
+	denied.HeldCall, denied.Approver = "held-5", growth.EngineActor
+	_ = w.p.Denied(t.Context(), denied)
+	if rs := recorded(growth.StepDenied, growth.StepLapsed); rs[0].Answerer != "founder" || rs[1].Answerer != "" {
+		t.Errorf("a denial and a lapse are recorded as %+v and %+v", rs[0], rs[1])
 	}
 }
 
@@ -498,5 +652,101 @@ func TestACuratedWriteToolIsPreparedAndApplied(t *testing.T) {
 	}
 	if steps, records := w.audit.take(); len(steps) != 1 || steps[0] != growth.StepMade || records[0].Call != "call-1" {
 		t.Errorf("recorded %v", steps)
+	}
+}
+
+// THE MEASUREMENT PROTOCOL'S SECRET IS FILLED IN ONLY AS A CALL IS SENT: the
+// agent names the stream's secret, the name is read through the secret's own
+// method and its path rules, its property is held to the seat's scope, Google
+// gets the value, and no answer, question, ask or record holds it.
+//
+// Mutation: concatenate the name into the path raw, skip the scope check, or
+// fill the secret when the call is built, and a malformed name reaches Google,
+// another property's stream is written, or the value is in the ask's digest.
+func TestTheMeasurementProtocolSecretIsFilledOnlyAsItIsSent(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, "administer")
+	const name = "properties/111/dataStreams/3/measurementProtocolSecrets/8"
+	mp := func(op, secret string) map[string]any {
+		return map[string]any{"operation": op, "query": map[string]any{"api_secret_name": secret, "measurement_id": "G-1"},
+			"body": map[string]any{"client_id": "1.2", "events": []any{map[string]any{"name": "signup"}}}}
+	}
+	got, err := w.call(t, "google_analytics_read", mp("mp.debug_collect", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(got)
+	_, records := w.audit.take()
+	logged, _ := json.Marshal(records)
+	if len(w.f.queries) != 1 || !strings.Contains(w.f.queries[0], "api_secret="+w.f.secret) ||
+		strings.Contains(w.f.queries[0], "api_secret_name") || strings.Contains(string(raw), w.f.secret) ||
+		strings.Contains(string(logged), w.f.secret) {
+		t.Errorf("Google got %v, the agent %s, the log %s", w.f.queries, raw, logged)
+	}
+	w.f.called()
+	for what, args := range map[string]map[string]any{
+		"another property's secret": mp("mp.debug_collect", "properties/222/dataStreams/3/measurementProtocolSecrets/8"),
+		"a malformed name":          mp("mp.debug_collect", name+"?alt=media"),
+		"a dot segment":             mp("mp.debug_collect", "properties/111/dataStreams/3/measurementProtocolSecrets/.."),
+		"the secret itself": {"operation": "mp.debug_collect",
+			"query": map[string]any{"api_secret_name": name, "api_secret": "guess"}},
+	} {
+		if _, err := w.call(t, "google_analytics_read", args); !refused(err) {
+			t.Errorf("%s answered %v, want it refused", what, err)
+		}
+	}
+	for _, c := range w.f.called() {
+		if !strings.HasPrefix(c, "GET /v1beta/accountSummaries") {
+			t.Errorf("Google was asked %s", c)
+		}
+	}
+	call := growth.Call{Handle: "growth-lead", Tool: "google_analytics_admin", Args: mp("mp.collect", name),
+		HeldCall: "held-mp", Approver: "founder"}
+	hold, err := w.p.Prepare(t.Context(), call)
+	asked, _ := json.Marshal(hold)
+	if err != nil || hold.Class != growth.ClassAdmin || strings.Contains(string(asked), w.f.secret) || len(w.f.called()) != 0 {
+		t.Fatalf("the ask is %s, %v", asked, err)
+	}
+	w.f.mu.Lock()
+	w.f.secret = "rotated-secret-value"
+	w.f.mu.Unlock()
+	if _, err := w.p.Apply(t.Context(), call, hold.Binding); err != nil {
+		t.Fatalf("an approved collect answered %v", err)
+	}
+	_, records = w.audit.take()
+	logged, _ = json.Marshal(records)
+	if w.f.writes != 1 || !strings.Contains(w.f.queries[len(w.f.queries)-1], "api_secret=rotated-secret-value") ||
+		strings.Contains(string(logged), "secret-value") {
+		t.Errorf("Google got %v (writes %d), the log %s", w.f.queries, w.f.writes, logged)
+	}
+}
+
+// A WRITE READS ITS TARGET ONCE AND IS MADE UNDER ITS PROPERTY'S LEASE: its
+// class and its binding are taken on one read, and the apply holds the lease
+// of the property it acts in.
+//
+// Mutation: class and bind on two reads, or apply without the lease, and the
+// test counts the second read or finds no lease taken.
+func TestAWriteReadsItsTargetOnceUnderItsPropertysLease(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, "operate")
+	call := growth.Call{ID: "call-1", Handle: "growth-lead", Tool: "google_analytics_operate", Args: map[string]any{
+		"operation": "analyticsadmin.properties.customMetrics.patch",
+		"path":      map[string]any{"propertiesId": "111", "customMetricsId": "9"},
+		"query":     map[string]any{"updateMask": "displayName"}, "body": map[string]any{"displayName": "Gross"}}}
+	hold, err := w.p.Prepare(t.Context(), call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := w.f.called(); !slices.Equal(got, []string{"GET /v1beta/properties/111/customMetrics/9"}) {
+		t.Errorf("Prepare asked Google %v, want one read of the metric", got)
+	}
+	if _, err := w.p.Apply(t.Context(), call, hold.Binding); err != nil {
+		t.Fatal(err)
+	}
+	w.leases.mu.Lock()
+	defer w.leases.mu.Unlock()
+	if !slices.Equal(w.leases.taken, []string{"write/google_analytics/properties/111"}) {
+		t.Errorf("the apply took leases %v", w.leases.taken)
 	}
 }

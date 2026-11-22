@@ -3,91 +3,102 @@ package googleanalytics
 import (
 	"context"
 	"encoding/json"
+	"net/url"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/googlegrowth"
 	"github.com/crewlet/crewlet/internal/growth"
 )
 
-// prepared builds call's request, holds it to the seat's scope, classes it
-// against its target as read now and reads that target. Its request is kept
-// on a later failure, for the record of it.
-func (p *Product) prepared(ctx context.Context, call growth.Call) (googlegrowth.Held, growth.Class, error) {
-	req, _, err := p.requestOf(ctx, call)
+// prepared is call's request held to the seat's scope and to its target as
+// read now, once: its class and its binding are on the same bytes.
+func (p *Product) prepared(ctx context.Context, call growth.Call) (googlegrowth.Held, error) {
+	req, err := p.built(ctx, call)
 	if err != nil {
-		return googlegrowth.Held{}, "", err
+		return googlegrowth.Held{}, err
 	}
-	if err = p.inScope(ctx, call.Handle, req); err != nil {
-		return googlegrowth.Held{Req: req}, "", err
-	}
-	class, err := p.classOf(ctx, call.Handle, req)
-	if err != nil {
-		return googlegrowth.Held{Req: req}, "", err
-	}
-	before, err := p.before(ctx, call.Handle, req)
-	if err != nil {
-		return googlegrowth.Held{Req: req}, "", err
-	}
-	return googlegrowth.NewHeld(req, before), class, nil
+	return p.client.Read(ctx, call.Handle, req)
 }
 
 // Prepare classes a write against its target as read now and builds what a
 // person is asked where it is held.
 func (p *Product) Prepare(ctx context.Context, call growth.Call) (growth.Hold, error) {
-	h, class, err := p.prepared(ctx, call)
+	h, err := p.prepared(ctx, call)
 	if err != nil {
 		return growth.Hold{}, err
 	}
-	return p.client.Hold(call, h, class), nil
+	return p.client.Hold(call, h, h.Class()), nil
 }
 
 // Card is a held call's decision card as its target reads now.
 func (p *Product) Card(ctx context.Context, call growth.Call, binding string) (growth.Card, error) {
-	h, class, err := p.prepared(ctx, call)
+	h, err := p.prepared(ctx, call)
 	if err != nil {
 		return growth.Card{}, err
 	}
-	return p.client.Card(call, h, binding, class), nil
+	return p.client.Card(call, h, binding, h.Class()), nil
 }
 
-// Apply makes a prepared write once, reading its target again first and
-// sending nothing where it moved since binding was taken.
+// Apply makes a prepared write once, building it again and reading its target
+// again under its account's lease, and sending nothing where it moved since
+// binding was taken (googlegrowth's Client.Apply).
 func (p *Product) Apply(ctx context.Context, call growth.Call, binding string) (any, error) {
-	h, class, err := p.prepared(ctx, call)
-	if class == "" {
-		tool, _ := p.Catalog().Tool(call.Tool)
-		class = tool.Class
-	}
-	return p.client.Apply(ctx, call, h, err, binding, class, p.cut(call.Handle, h.Req))
+	req, err := p.built(ctx, call)
+	return p.client.Apply(ctx, call, req, err, binding, p.toolClass(call.Tool), p.cut(call.Handle, req))
 }
 
-// measurementSecret fills a Measurement Protocol call's api_secret from the
-// stream secret its `api_secret_name` names, which the agent never reads:
-// the secret's property is held to the seat's scope like any other call.
-func (p *Product) measurementSecret(ctx context.Context, handle string, req *googlegrowth.Request) error {
+// Denied records that an administrator denied the held call, or that it
+// lapsed: its one answer.
+func (p *Product) Denied(ctx context.Context, call growth.Call) error {
+	req, _, _ := p.requestOf(call)
+	p.client.Denied(ctx, call, req, p.toolClass(call.Tool))
+	return nil
+}
+
+// toolClass is the class of the tool named, which every record of its call
+// names: the class the call was made, or asked and answered, at.
+func (p *Product) toolClass(name string) growth.Class {
+	tool, _ := p.Catalog().Tool(name)
+	return tool.Class
+}
+
+// secretGetOp reads a stream's Measurement Protocol secret.
+const secretGetOp = "analyticsadmin.properties.dataStreams.measurementProtocolSecrets.get"
+
+// measurementSecret makes a Measurement Protocol call act in the property of
+// the stream secret its `api_secret_name` names, which the seat's scope then
+// holds like any other. The secret, which the agent never reads, is filled in
+// only as the call is sent, so its digest, card and records hold the name.
+func (p *Product) measurementSecret(handle string, req *googlegrowth.Request) error {
 	name := req.Query.Get("api_secret_name")
 	parts := strings.Split(name, "/")
-	if len(parts) != 6 || parts[0] != "properties" || parts[2] != "dataStreams" || parts[4] != "measurementProtocolSecrets" {
+	if req.Query.Has("api_secret") || len(parts) != 6 || parts[0] != "properties" || parts[2] != "dataStreams" ||
+		parts[4] != "measurementProtocolSecrets" {
 		return refusal(growth.RefusedInvalid, "name the stream's Measurement Protocol secret as query.api_secret_name, "+
-			"properties/<id>/dataStreams/<id>/measurementProtocolSecrets/<id>. No vendor was reached.")
+			"properties/<id>/dataStreams/<id>/measurementProtocolSecrets/<id>, and never its value. No vendor was reached.")
 	}
-	req.Account = "properties/" + parts[1]
-	if err := p.inScope(ctx, handle, *req); err != nil {
-		return err
-	}
-	get := growth.Operation{ID: "analyticsadmin.properties.dataStreams.measurementProtocolSecrets.get",
-		Method: "GET", Path: adminAPI + "/v1beta/" + name, Class: growth.ClassRead, Permissions: []string{scopeReadonly}}
-	raw, err := p.client.Send(ctx, handle, googlegrowth.Request{Op: get, Address: get.Path})
+	op, _ := p.Catalog().Operation(secretGetOp)
+	get, err := newRequest(op, map[string]string{"propertiesId": parts[1], "dataStreamsId": parts[3],
+		"measurementProtocolSecretsId": parts[5]}, nil, nil)
 	if err != nil {
 		return err
 	}
-	var secret struct {
-		Value string `json:"secretValue"`
+	req.Account = get.Account
+	req.Fill = func(ctx context.Context, q url.Values) (url.Values, error) {
+		raw, err := p.client.Send(ctx, handle, get)
+		if err != nil {
+			return nil, err
+		}
+		var secret struct {
+			Value string `json:"secretValue"`
+		}
+		if err := json.Unmarshal(raw, &secret); err != nil || secret.Value == "" {
+			return nil, &googlegrowth.CallError{Failure: growth.FailureVendorRefused, Err: refusal(
+				growth.RefusedNotFound, name+" holds no secret value, so nothing was sent.")}
+		}
+		q.Del("api_secret_name")
+		q.Set("api_secret", secret.Value)
+		return q, nil
 	}
-	if err := json.Unmarshal(raw, &secret); err != nil || secret.Value == "" {
-		return refusal(growth.RefusedNotFound, name+" holds no secret value. No vendor was reached.")
-	}
-	req.Query.Del("api_secret_name")
-	req.Query.Set("api_secret", secret.Value)
 	return nil
 }

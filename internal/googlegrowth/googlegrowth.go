@@ -8,42 +8,65 @@
 //
 // # A request addresses its operation's resource and nothing else
 //
-// [NewRequest] fills an operation's `{name}` path parameters with IDs alone,
-// so a call can never reach another resource than the one its operation
-// names, and the host is the catalog's, so a seat's token only goes to Google.
+// [NewRequest] fills an operation's `{name}` path parameters with IDs alone
+// and refuses one its path does not name, so a call can never reach another
+// resource than the one its operation names, and the host is the catalog's,
+// so a seat's token only goes to Google.
+//
+// # A write is classed as Google reads it
+//
+// Google takes a field by its lowerCamel JSON name or its proto name, in the
+// body and in the update mask (`updateMask` or `update_mask`), so
+// [Request.Changes] reads both spellings as the lowerCamel name a catalog's
+// rules use; a body naming one field in two spellings with two values is read
+// as neither value, which no rule lowers. A `*` mask replaces the whole
+// resource, so it changes every field the target holds as well as the body's.
 //
 // # A held call binds to what a person saw
 //
 // [Request.Digest] is the SHA-256 of the exact request and of its target's
-// before-state. [Client.Apply] reads the target again and sends nothing where
-// the digest moved, recording the outcome: applied, void, or failed with a
-// closed reason.
+// before-state. [Client.Apply] records the administrator's answer first and
+// acts only on the act's one answer; then, under the account's apply lease
+// and within growth.ApplyBound, it reads the target again and sends nothing
+// where the digest moved, recording the outcome: applied, void, or failed
+// with a closed reason. A write that went unanswered may have reached Google,
+// so its outcome is unknown, never "unavailable" ([FailureOf]).
 //
 // # Every act on the access log
 //
 // A call made at once is made, or failed with its reason; a call refused
-// before Google is no act. A change's free words (a name, a description, an
-// email) go as their digest and length, never as themselves ([RecordChange]).
+// before Google is no act. A read records no change. A change to a field whose
+// name says it holds somebody's words (a name, a description, an email, a
+// URI), or whose value is structured, goes as its digest and length, never as
+// itself; a field the log may not name is left out and counted
+// ([RecordChange]).
 //
-// # Credentials Google returns
+// # Credentials
 //
 // A secret an answer carries (a Measurement Protocol secret, a channel token)
-// is replaced before an agent reads it ([Client.Secrets], [Scrub]).
+// is replaced before an agent reads it ([Client.Secrets], [Scrub]). A secret a
+// request carries is filled into its query only as it is sent
+// ([Request.Fill]), so no digest, card or record holds it, and a failed
+// request's error names its path alone (internal/googleauth).
 package googlegrowth
 
 import (
 	"bytes"
 	"cmp"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/url"
+	"reflect"
 	"regexp"
 	"slices"
 	"sort"
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/crewlet/crewlet/internal/growth"
 )
@@ -61,6 +84,9 @@ type Request struct {
 	// Account is set by the product: "properties/123", a site, a customer;
 	// "" where the call acts in none, and the log then names its target.
 	Account string
+	// Fill makes the query sent from Query, adding a credential only as the
+	// request is sent; nil sends Query. It reads nothing it changes.
+	Fill func(ctx context.Context, q url.Values) (url.Values, error)
 }
 
 // pathParam is one `{name}` of an operation's path.
@@ -82,13 +108,16 @@ func NewRequest(op growth.Operation, path, query map[string]string, body map[str
 // path parameter may hold (a site's URL, a sitemap's). Every `{name}` must be
 // given and is escaped into one path segment, and a value made only of dots is
 // refused whatever the rule says, since a dot segment would address the
-// resource above: a call can never reach another resource than its
-// operation's.
+// resource above; a parameter the path does not name is refused, since a
+// product reads where a call acts from its parameters. A refused request
+// keeps its operation and body, for the record of it.
 func NewRequestWith(op growth.Operation, path, query map[string]string, body map[string]any,
 	valid func(name, value string) bool) (Request, error) {
 	var missing []string
+	named := map[string]bool{}
 	address := pathParam().ReplaceAllStringFunc(op.Path, func(m string) string {
 		name := m[1 : len(m)-1]
+		named[name] = true
 		v, ok := path[name]
 		if !ok || strings.Trim(v, ".") == "" || !valid(name, v) {
 			missing = append(missing, name)
@@ -96,13 +125,25 @@ func NewRequestWith(op growth.Operation, path, query map[string]string, body map
 		}
 		return url.PathEscape(v)
 	})
-	if len(missing) > 0 {
-		return Request{}, growth.Refuse(growth.RefusedInvalid, fmt.Sprintf("%s needs these path parameters, "+
-			"each in its own form: %s. No vendor was reached.", op.ID, strings.Join(missing, ", ")))
-	}
 	q := url.Values{}
 	for k, v := range query {
 		q.Set(k, v)
+	}
+	refused := Request{Op: op, Body: body, Query: q}
+	if len(missing) > 0 {
+		return refused, growth.Refuse(growth.RefusedInvalid, fmt.Sprintf("%s needs these path parameters, "+
+			"each in its own form: %s. No vendor was reached.", op.ID, strings.Join(missing, ", ")))
+	}
+	var stray []string
+	for name := range path {
+		if !named[name] {
+			stray = append(stray, name)
+		}
+	}
+	if len(stray) > 0 {
+		sort.Strings(stray)
+		return refused, growth.Refuse(growth.RefusedInvalid, fmt.Sprintf("%s's path names no %s; give only "+
+			"the path parameters its path names. No vendor was reached.", op.ID, strings.Join(stray, ", ")))
 	}
 	return Request{Op: op, Address: address, Body: body, Query: q, Params: path}, nil
 }
@@ -119,12 +160,14 @@ func (r Request) URL() string {
 func (r Request) Reads() bool { return r.Op.Class == growth.ClassRead }
 
 // Resource is the address of what a write acts on, for its before-state: the
-// path without its custom verb (`:archive`), or "" for a create, which acts on
-// nothing that exists yet. The verb is read off the operation's template, since
-// an ID may hold a colon itself.
+// path without its custom verb (`:archive`), or "" for a create and for a
+// custom verb on a collection (`properties:createRollupProperty`), which act
+// on nothing that one read returns. The verb is read off the operation's
+// template, since an ID may hold a colon itself.
 func (r Request) Resource() string {
 	verb := r.verb()
-	if r.Op.Method == "POST" && verb == "" {
+	onCollection := verb != "" && !strings.HasSuffix(strings.TrimSuffix(r.Op.Path, ":"+verb), "}")
+	if r.Op.Method == "POST" && (verb == "" || onCollection) {
 		return ""
 	}
 	return strings.TrimSuffix(r.Address, ":"+verb)
@@ -140,28 +183,116 @@ func (r Request) verb() string {
 	return last[i+1:]
 }
 
-// Changes is what the request changes on before, field by field: the fields
-// its update mask names (every field the body sets for `*` or no mask).
+// Changes is what the request changes on before, field by field, each named
+// in lowerCamel (package doc, "A write is classed as Google reads it"): the
+// fields its update masks name, every field the body sets where it names
+// none, and for a `*` mask those and every field before holds.
 func (r Request) Changes(before map[string]any) []growth.Change {
-	var fields []string
-	mask := strings.TrimSpace(r.Query.Get("updateMask"))
-	if mask == "" || mask == "*" {
-		for k := range r.Body {
-			fields = append(fields, k)
+	body, _ := canonical(r.Body).(map[string]any)
+	current, _ := canonical(before).(map[string]any)
+	fields, masked := r.masked()
+	if !masked || slices.Contains(fields, "*") {
+		fields = slices.Collect(maps.Keys(body))
+		if masked {
+			// A `*` MASK REPLACES THE RESOURCE: a field the body leaves out is cleared.
+			fields = append(fields, slices.Collect(maps.Keys(current))...)
 		}
-		sort.Strings(fields)
-	} else {
-		for _, f := range strings.Split(mask, ",") {
-			if f = strings.TrimSpace(f); f != "" {
-				fields = append(fields, f)
+	}
+	sort.Strings(fields)
+	fields = slices.Compact(fields)
+	out := make([]growth.Change, 0, len(fields))
+	for _, f := range fields {
+		out = append(out, growth.Change{Field: f, Before: Lookup(current, f), After: Lookup(body, f)})
+	}
+	return out
+}
+
+// masked is every path the request's update masks name, in lowerCamel, and
+// whether it names any: Google reads `updateMask` and `update_mask` alike.
+func (r Request) masked() ([]string, bool) {
+	var out []string
+	for key, values := range r.Query {
+		if k := LowerCamel(key); k != "updateMask" && !strings.HasPrefix(k, "updateMask.") {
+			continue
+		}
+		for _, v := range values {
+			for _, f := range strings.Split(v, ",") {
+				if f = strings.TrimSpace(f); f != "" {
+					out = append(out, LowerCamel(f))
+				}
 			}
 		}
 	}
-	out := make([]growth.Change, 0, len(fields))
-	for _, f := range fields {
-		out = append(out, growth.Change{Field: f, Before: Lookup(before, f), After: Lookup(r.Body, f)})
+	return out, len(out) > 0
+}
+
+// Field is a dotted lowerCamel field's value in the request's body, read in
+// either spelling Google takes (package doc), nil where it is absent.
+func (r Request) Field(field string) any {
+	body, _ := canonical(r.Body).(map[string]any)
+	return Lookup(body, field)
+}
+
+// Ambiguous reports whether v is a field a body names in two spellings with
+// two values ([Request.Field]).
+func Ambiguous(v any) bool {
+	_, ok := v.(conflict)
+	return ok
+}
+
+// LowerCamel is a dotted field path as Google's lowerCamel JSON names it:
+// `daily_export_enabled` is `dailyExportEnabled`, and a lowerCamel path is
+// itself.
+func LowerCamel(path string) string {
+	parts := strings.Split(path, ".")
+	for i, part := range parts {
+		var b strings.Builder
+		upper := false
+		for _, c := range part {
+			switch {
+			case c == '_' && b.Len() > 0:
+				upper = true
+			case upper:
+				b.WriteRune(unicode.ToUpper(c))
+				upper = false
+			default:
+				b.WriteRune(c)
+			}
+		}
+		parts[i] = b.String()
 	}
-	return out
+	return strings.Join(parts, ".")
+}
+
+// conflict is a field a body names in two spellings with two values. It is no
+// string, number, boolean or list, so no rule reads it as a pause or a lower.
+type conflict struct{}
+
+// MarshalJSON says the field is named twice, for a card and a record.
+func (conflict) MarshalJSON() ([]byte, error) { return []byte(`"(named twice, with two values)"`), nil }
+
+// canonical is a JSON value with every object's keys in lowerCamel, a key
+// named in two spellings with two values a [conflict].
+func canonical(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for _, k := range slices.Sorted(maps.Keys(t)) {
+			key, val := LowerCamel(k), canonical(t[k])
+			if prev, seen := out[key]; seen && !reflect.DeepEqual(prev, val) {
+				val = conflict{}
+			}
+			out[key] = val
+		}
+		return out
+	case []any:
+		out := make([]any, len(t))
+		for i, e := range t {
+			out[i] = canonical(e)
+		}
+		return out
+	}
+	return v
 }
 
 // Lookup is a dotted field's value in a JSON object, nil where it is absent.
