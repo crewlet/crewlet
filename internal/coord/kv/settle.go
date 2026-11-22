@@ -135,9 +135,10 @@ func (h holding) most(keys string) class {
 }
 
 var (
-	// undeclared is a class with no bound of its own, held to
-	// [coord.MaxValueBytes]: records of a few KiB by their fields, read at
-	// the term.
+	// undeclared is a bucket's that declares no class yet: held to
+	// [coord.MaxValueBytes] and read at the term, as its records of a few
+	// KiB by their fields allow but nothing holds them to. #1814 declares
+	// each bucket's classes and then makes the default SmallValueBytes.
 	undeclared = class{bound: coord.MaxValueBytes, reply: replyTerm}
 	// runValue is a sandbox run's record or part, budgeted to
 	// [coord.MaxValueBytes] (internal/sandbox's RowBytes), whose reads decide
