@@ -50,17 +50,18 @@ func TestAReusedBoxKeepsNoHarnesssFilesOrDirectories(t *testing.T) {
 	}
 }
 
-// KIMI CODE'S, COPILOT'S AND MUSE CODE'S ARTIFACTS ARE CLEARED, each split as
-// the contract names them: their files one by one (Kimi's driver and settings,
-// Copilot's instructions and tool environment, Muse's note helper and take
-// configs) and their directories whole (Kimi's profile directory, Copilot's
-// extension, Muse's MCP servers and plugin), whichever runner clears the box.
-// Named through the old (files, dirs) method, neither satisfied the contract
-// and the clear left both runners' files behind.
+// KIMI CODE'S, COPILOT'S, MUSE CODE'S AND QWEN CODE'S ARTIFACTS ARE CLEARED,
+// each split as the contract names them: their files one by one (Kimi's
+// driver and settings, Copilot's instructions and tool environment, Muse's
+// note helper and take configs, Qwen's settings and helper) and their
+// directories whole (Kimi's profile directory, Copilot's extension, Muse's
+// MCP servers and plugin, Qwen's skills), whichever runner clears the box.
+// Named through the old (files, dirs) method, none satisfied the contract and
+// the clear left their files behind.
 //
-// Mutation: drop either runner's artifactFiles or artifactDirs, or name a
+// Mutation: drop any of their artifactFiles or artifactDirs, or name a
 // directory among its files, and its row goes red.
-func TestAReusedBoxKeepsNoKimiCopilotOrMuseArtifacts(t *testing.T) {
+func TestAReusedBoxKeepsNoneOfASplitRunnersArtifacts(t *testing.T) {
 	t.Parallel()
 	box := sandbox.NewFakeSandbox("box-1")
 	p := PathsFor(box)
@@ -80,6 +81,7 @@ func TestAReusedBoxKeepsNoKimiCopilotOrMuseArtifacts(t *testing.T) {
 		{"kimi-code", (Kimi{}).artifactFiles(p), (Kimi{}).artifactDirs(p)},
 		{"copilot", (Copilot{}).artifactFiles(p), (Copilot{}).artifactDirs(p)},
 		{"muse-code", (Muse{}).artifactFiles(p), (Muse{}).artifactDirs(p)},
+		{"qwen-code", (QwenCode{}).artifactFiles(p), (QwenCode{}).artifactDirs(p)},
 	} {
 		if len(c.files) == 0 || len(c.dirs) == 0 {
 			t.Errorf("%s names files %v and directories %v, want both", c.name, c.files, c.dirs)

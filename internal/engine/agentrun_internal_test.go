@@ -211,9 +211,11 @@ func launchRigRestoring(t *testing.T, c *Company, bridge *mcpbridge.Bridge,
 		"claude-code": sandbox.NewFakeRunner("claude-code"),
 		"codex":       sandbox.NewFakeRunner("codex"),
 		"copilot":     sandbox.NewFakeRunner("copilot"),
+		"gemini-cli":  sandbox.NewFakeRunner("gemini-cli"),
 		"kimi-code":   sandbox.NewFakeRunner("kimi-code"),
 		"muse-code":   sandbox.NewFakeRunner("muse-code"),
 		"opencode":    sandbox.NewFakeRunner("opencode"),
+		"qwen-code":   sandbox.NewFakeRunner("qwen-code"),
 	}
 	providers := map[sandbox.Placement]sandbox.Provider{}
 	for _, p := range sandbox.Placements {
@@ -231,7 +233,8 @@ func launchRigRestoring(t *testing.T, c *Company, bridge *mcpbridge.Bridge,
 		Providers: providers, DefaultPlacement: sandbox.Direct,
 		Runners: map[string]sandbox.Runner{
 			"claude-code": runners["claude-code"], "codex": runners["codex"], "copilot": runners["copilot"],
-			"kimi-code": runners["kimi-code"], "muse-code": runners["muse-code"], "opencode": runners["opencode"],
+			"gemini-cli": runners["gemini-cli"], "kimi-code": runners["kimi-code"], "muse-code": runners["muse-code"],
+			"opencode": runners["opencode"], "qwen-code": runners["qwen-code"],
 		},
 		DefaultSetup:     defaults,
 		AttributeCommits: c.Config.Providers.Sandbox.AttributesCommits(),
