@@ -105,9 +105,9 @@ func HoldTail(ctx context.Context, spec TailHold) (*TailPin, error) {
 					pin.log.WarnContext(beat, HoldNotRenewedEvent,
 						"owner", spec.Owner, "error", err.Error(),
 						"detail", "the trim ignores a pin it has watched go unrenewed past "+
-							TrimHoldStale.String()+", so a pin that misses three "+
-							"renewals in a row stops protecting the tail its "+
-							"holder needs; the next beat tries again")
+							TrimHoldStale.String()+", so a pin unrenewed that long "+
+							"stops protecting the tail its holder needs once the "+
+							"trim has listed it twice; the next beat tries again")
 				}
 			}
 		}
