@@ -31,6 +31,14 @@ func (p Paths) CodexNotesURLFresh() string { return p.WorkDir() + "/codex-notes-
 // ([sandbox.Skill.Listed]).
 func (p Paths) CodexSkills() string { return p.CodexHome() + "/skills" }
 
+// CodexExecPID is where a run held to a round cap records the pid of its
+// `codex exec`, for the watcher that ends it at the cap ([codexCapWatch]).
+func (p Paths) CodexExecPID() string { return p.WorkDir() + "/codex-exec-pid" }
+
+// CodexCapped is the mark the cap's watcher leaves where it ended the run at
+// its round cap ([codexCapWatch]).
+func (p Paths) CodexCapped() string { return p.WorkDir() + "/codex-capped" }
+
 // maxCodexSocketPath is the longest [Paths.CodexSocket] a box can listen on:
 // a Linux sockaddr_un holds 108 bytes, its terminating NUL among them.
 const maxCodexSocketPath = 107

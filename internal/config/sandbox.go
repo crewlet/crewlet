@@ -146,10 +146,10 @@ type SandboxProvider struct {
 	//
 	// UNCAPPED UNLESS SET. How many rounds a task takes is the harness's own
 	// loop to judge, as when a person runs it. A positive value becomes the
-	// harness's turn cap (Claude Code's --max-turns, OpenCode's agent steps).
-	// Without one a run ends when it finishes, at a scheduled turn's
-	// timeout_seconds, or when a person stops it, never on its box's clock (see
-	// default_timeout_seconds) or part-way through a token budget.
+	// harness's turn cap (Claude Code's --max-turns, OpenCode's agent steps, a
+	// Codex run's script's count). Without one a run ends when it finishes, at a
+	// scheduled turn's timeout_seconds, or when a person stops it, never on its
+	// box's clock (see default_timeout_seconds) or part-way through a budget.
 	//
 	// A PLAIN INT: zero (left out or 0) is uncapped, every other value the cap.
 	DefaultMaxTurns int `yaml:"default_max_turns,omitempty" json:"default_max_turns,omitempty" js:"min=0" desc:"Agentic-round cap for one executor run on seats that name none. Unset or 0 = uncapped."`

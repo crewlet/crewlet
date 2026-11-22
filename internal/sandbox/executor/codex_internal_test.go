@@ -219,3 +219,16 @@ default_tools_approval_mode = "approve"
 		t.Errorf("the configuration is\n%s\nwant\n%s", got, want)
 	}
 }
+
+// A RUN ITS SCRIPT ENDED AT ITS ROUND CAP READS AS CAPPED, never as a success,
+// whatever answer it gave before the cap.
+//
+// Mutation: drop the cap event's reading, and this goes red.
+func TestACodexRunEndedAtItsCapReadsAsCapped(t *testing.T) {
+	t.Parallel()
+	stream := string(codexStream(t, "stream-mcp.jsonl")) + `{"type":"` + codexCappedEvent + `","rounds":3}` + "\n"
+	res := Codex{}.Parse([]byte(stream))
+	if res.Success || !res.RoundCapped || !strings.Contains(res.Error, "round cap of 3") {
+		t.Errorf("a capped run reads success %v, capped %v, %q", res.Success, res.RoundCapped, res.Error)
+	}
+}

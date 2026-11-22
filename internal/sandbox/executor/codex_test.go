@@ -449,3 +449,26 @@ func TestACodexRunTornDownEndsInOrderAndPacksItsSession(t *testing.T) {
 		t.Error("the torn-down run packed no session")
 	}
 }
+
+// A CODEX RUN ENDS AT ITS ROUND CAP, role.sandbox.max_turns, as Claude Code's
+// --max-turns ends one: Codex has no setting for it, so the script counts the
+// model responses the run's rollout records and ends Codex at the cap, and the
+// run reads as capped, never as a success or an end on request.
+//
+// Mutation: drop the watcher, count the session's earlier rounds, or read the
+// mark as an end on request, and this goes red.
+func TestACodexRunEndsAtItsRoundCap(t *testing.T) {
+	t.Parallel()
+	runner, box, record := codexBox(t, "0.171.0")
+	if err := os.WriteFile(filepath.Join(record, "block"), nil, 0o600); err != nil {
+		t.Fatalf("arm the stand-in: %v", err)
+	}
+	_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go",
+		Limits: sandbox.Limits{MaxTurns: 1}})
+	if res.Success || !res.RoundCapped {
+		t.Errorf("a run past its cap collects success %v, capped %v (%q)", res.Success, res.RoundCapped, res.Error)
+	}
+	if order := recorded(t, record, "order"); !slices.Equal(order, []string{"exec", "server"}) {
+		t.Errorf("the cap stopped %q, want Codex, then its server", order)
+	}
+}
