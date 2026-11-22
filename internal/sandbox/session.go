@@ -1400,7 +1400,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		return nil, refuse(calls, takeRefusal(ctx, err))
 	}
 	taken, err := taker.TakeSession(ctx, box, SessionTake{Pack: at.pack, Scrub: scrub,
-		MaxBytes: executorkeep.SessionMaxBytes, Scope: current.AgentID})
+		MaxBytes: executorkeep.SessionMaxBytes, Scope: current.AgentID, Session: current.Launch.Minted})
 	give()
 	if err != nil {
 		return nil, refuse(calls, takeRefusal(ctx, err))
@@ -2289,6 +2289,11 @@ func (c *Coordinator) readLost(ctx context.Context, run PendingRun) (*spooledCap
 	if !c.capturing() {
 		return nil, nil, nil
 	}
+	// A MINTING JOB'S SESSION IS BOUND BEFORE ITS LOSS TAKES IT (minted.go): a
+	// bind neither made nor refused hands the read back, to be made again.
+	if _, err := c.bindMinted(ctx, run, box, runner); undecidedBind(err) {
+		return nil, nil, storeSilent(ctx, fmt.Errorf("sandbox: binding lost run %s's session: %w", run.TurnID, err))
+	}
 	spooled, kept := c.takeCapture(ctx, run, box, runner, at)
 	return spooled, kept, nil
 }
@@ -2702,6 +2707,14 @@ func (c *Coordinator) recordCapture(ctx context.Context, run PendingRun, stamp S
 		outcome, why = CaptureUnresolved, fmt.Sprint(err)
 		return false, err
 	})
+	// A MINTED SESSION'S CLAIM GOES ONCE THE LOG NAMES IT (minted.go): the
+	// log's seek guards the id from here, so the claim is no longer needed.
+	if id := stamp.SessionID; outcome == CaptureLanded && id != "" && id == run.Launch.Minted {
+		if err := c.pending.ReleaseSessionClaim(context.WithoutCancel(ctx), turn, id); err != nil {
+			log.InfoContext(ctx, "executor_session_claim_kept", "turn_id", turn, "session", id,
+				"error", err.Error(), "detail", "the claim goes with the run's record instead")
+		}
+	}
 	return outcome, why, fenced
 }
 
