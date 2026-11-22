@@ -321,14 +321,12 @@ func openCodePackNow(paths Paths, session, staged, dest string, room bool) strin
 }
 
 // openCodeStandalonePins is what every standalone call of a pack on demand runs
-// under: the models fetch and the updater off, and loopback first in NO_PROXY
-// and no_proxy, so a proxy the box's environment names never takes the
-// in-process server a standalone call reaches over HTTP on loopback. On
-// 2.3.2 a standalone export with no pins, behind a proxy that never answers,
-// finished as fast as with them (measured); the pins keep a save, which every
-// running job takes every interval, from depending on that.
-const openCodeStandalonePins = `export OPENCODE_DISABLE_MODELS_FETCH=1 OPENCODE_DISABLE_AUTOUPDATE=1` + "\n" +
-	`NO_PROXY="127.0.0.1,localhost,::1${NO_PROXY:+,$NO_PROXY}" no_proxy="127.0.0.1,localhost,::1${no_proxy:+,$no_proxy}"; export NO_PROXY no_proxy` + "\n"
+// under: the models fetch and the updater off, so a save, which every running
+// job takes every interval, reaches nothing off the box (2.3.2 refreshes its
+// models.dev catalogue where the fetch is not switched off, seen in a run's
+// events). No proxy pin: a proxy that never answers held up no 2.3.2
+// standalone export (measured).
+const openCodeStandalonePins = `export OPENCODE_DISABLE_MODELS_FETCH=1 OPENCODE_DISABLE_AUTOUPDATE=1` + "\n"
 
 // openCodeSaveNeedFactor and openCodeSaveNeedBase are the memory an OpenCode
 // save's export is held to need: the factor times its database's bytes and

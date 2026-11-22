@@ -81,7 +81,7 @@ func exported(t *testing.T, dir string) bool {
 
 // AN OPENCODE SAVE IS EXPORTED BESIDE ITS SERVER TO ITS TAKER'S OWN PATH: by a
 // private server (`--standalone`), every call with the models fetch and the
-// updater off and loopback first in NO_PROXY and no_proxy, to a place named
+// updater off, to a place named
 // after its taker, its digest kept, its staging gone and the job's capture as
 // it was; the take that names it reads that export.
 //
@@ -125,12 +125,9 @@ func TestAnOpenCodeSaveIsExportedBesideItsServerToItsTakersOwnPath(t *testing.T)
 		t.Errorf("the save did not export through a private server alone; OpenCode was asked:\n%s", calls)
 	}
 	for line := range strings.Lines(readIn(t, dir, "pinned")) {
-		pins := strings.SplitN(strings.TrimSpace(line), "|", 5)
-		if len(pins) != 5 || pins[0] != "1" || pins[1] != "1" ||
-			!strings.HasPrefix(pins[2], "127.0.0.1,localhost,::1") ||
-			!strings.HasPrefix(pins[3], "127.0.0.1,localhost,::1") {
-			t.Errorf("a call of the save ran with the pins %q, want the models fetch and the updater off and "+
-				"loopback first in NO_PROXY and no_proxy", line)
+		pins := strings.SplitN(strings.TrimSpace(line), "|", 3)
+		if len(pins) != 3 || pins[0] != "1" || pins[1] != "1" {
+			t.Errorf("a call of the save ran with the pins %q, want the models fetch and the updater off", line)
 		}
 	}
 	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Save: saved.Path, MaxBytes: takeBound})

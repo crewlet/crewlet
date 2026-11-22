@@ -33,7 +33,7 @@ import (
 const fakeOpenCode = `#!/bin/sh
 d="$FAKE_DIR"
 echo "$*" >> "$d/calls"
-printf '%s|%s|%s|%s|%s %s\n' "${OPENCODE_DISABLE_MODELS_FETCH-}" "${OPENCODE_DISABLE_AUTOUPDATE-}" "${NO_PROXY-}" "${no_proxy-}" "$1" "$2" >> "$d/pinned"
+printf '%s|%s|%s %s\n' "${OPENCODE_DISABLE_MODELS_FETCH-}" "${OPENCODE_DISABLE_AUTOUPDATE-}" "$1" "$2" >> "$d/pinned"
 printf '%s|%s %s\n' "${OPENCODE_CONFIG_CONTENT+handed}" "$1" "$2" >> "$d/configured"
 printf '%s|%s %s\n' "${CREWLET_STEER_SESSION-}" "$1" "$2" >> "$d/steered"
 authed() {

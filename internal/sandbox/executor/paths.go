@@ -642,10 +642,9 @@
 // beside one stopped mid-step or killed, untested). A save holds the
 // session to its last settled message: the step in flight is absent, and its
 // calls are the job's own, told past any point the save states. Every
-// standalone call runs with the models fetch and the updater off and loopback
-// first in NO_PROXY ([openCodeStandalonePins]): a standalone call reaches its
-// own in-process server over HTTP on loopback; a proxy that never answers held
-// up no 2.3.2 export (measured).
+// standalone call runs with the models fetch and the updater off
+// ([openCodeStandalonePins]); a proxy that never answers held up no 2.3.2
+// export (measured).
 //
 // BOUNDED BY THE EXPORT'S BYTES: one empty or past [heldPlainMax], what a kept
 // session's scrub reads, is refused before gzip. The database bounds nothing,

@@ -4636,8 +4636,7 @@ session rows, 7 to 8 saves in 30 s on a loaded 2-core slot with none failed on
 either side (beside one stopped mid-step or killed, untested on 2.3.2). A save
 holds the session's settled messages: the step in flight is absent, and its
 calls lie past any point the save states. Every standalone call runs with the
-models fetch and the updater off and loopback first in `NO_PROXY`, which
-OpenCode's own loopback requests could otherwise send through a proxy.
+models fetch and the updater off, so a save reaches nothing off the box.
 
 **Bounded by the export, never the database.** After the export and before
 gzip, every pack made on demand requires the export's bytes in 1 to
