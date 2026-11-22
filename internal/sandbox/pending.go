@@ -852,6 +852,12 @@ type SessionBind struct {
 	Launch    string
 	ID        string
 	Continued bool
+
+	// Fresh, where set, is asked whether ID may be bound as a new session,
+	// AFTER the claim is taken and before the record binds it (the executor
+	// log's seek, [Coordinator.freshSession]): its error refuses the bind, as
+	// it says, and releases the claim this bind took.
+	Fresh func(ctx context.Context, id string) error
 }
 
 // ErrJobReplaced is what [PendingStore.AppendBridgeCall] answers BESIDE TRUE for
@@ -2761,11 +2767,16 @@ type PendingStore interface {
 	// again answers as bound; another, a job that continued its session reporting any id
 	// but that one, one that started its own reporting the one it was asked to continue,
 	// another job's record, a gone one, and an id another live run claims are
-	// [ErrSessionBindRefused]. The claim, fleet-wide, is taken before the record is
-	// written and goes with the record, a relaunch's job taking its turn's over. NO
-	// FENCE: a fact about the job, as a settle is. Whether any turn's row names the id is
-	// the caller's to ask first ([Coordinator.bindMinted]).
+	// [ErrSessionBindRefused]. The claim, fleet-wide, is taken first, then [SessionBind.Fresh]
+	// asked, then the record written; a relaunch's job takes its turn's claim over, and the
+	// claim goes on a failed bind, a landed capture ([PendingStore.ReleaseSessionClaim]) or
+	// the record's end. NO FENCE: a fact about the job, as a settle is.
 	BindSession(ctx context.Context, turnID string, bind SessionBind) (PendingRun, error)
+
+	// ReleaseSessionClaim removes turnID's claim of a session it bound, once the
+	// executor log names the session (its capture landed) and so guards the id
+	// itself; a claim another run holds, or none, is left alone.
+	ReleaseSessionClaim(ctx context.Context, turnID, sessionID string) error
 
 	// MarkEndedAtDeadline records that the collection of the job named saw it still
 	// working past its turn's wall-clock cap and is ending it
@@ -3757,19 +3768,23 @@ func (l LaunchRecord) readBriefs(brief, fresh []int) []int {
 // a session of its own, since continuing in place would hand the guard skill loads made
 // perhaps in the other session. THIS IS THE IN-PLACE RELAUNCH'S WORD ALONE: a kept capture
 // names its session from the box's own record ([SessionCapture.SessionID]) and continues
-// it in whichever box it gets. A minting harness's job ran the one bound ([LaunchRecord.Minted]).
+// it in whichever box it gets. A minting job ran the one bound where it continued none or
+// its box started its own ([LaunchRecord.Minted]); the token's word stands over it.
 func (r PendingRun) SessionRan() string {
-	if r.Launch.Minted != "" {
-		return r.Launch.Minted
-	}
 	switch r.Launch.SessionStart {
 	case SessionStartFresh:
+		if r.Launch.Minted != "" {
+			return r.Launch.Minted
+		}
 		return r.Launch.FreshSessionID
 	case SessionStartContinued:
 		return r.SessionID
 	}
-	if r.Launch.FreshSessionID != "" {
+	switch {
+	case r.Launch.FreshSessionID != "":
 		return ""
+	case r.SessionID == "":
+		return r.Launch.Minted
 	}
 	return r.SessionID
 }
