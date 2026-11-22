@@ -1830,8 +1830,8 @@ recorded `delivered`, is never then recorded `expired`.
 
 **Every item keeps to characters every harness carries.** As the engine hands
 a person's note, a late call's account, a wake or another run's message to a
-model, each C0 and C1 control character but tab and newline, and U+2028 and
-U+2029, is shown as U+FFFD, one UTF-16 unit as each was, so no bound moves;
+model, every control character but tab and newline, and U+2028 and U+2029, is
+shown as U+FFFD, one UTF-16 unit as each was, so no bound moves;
 what the engine keeps stays as written. JSON then escapes nothing in an item
 but the quote, the backslash, tab and newline, so an item of N units is at most
 3N bytes beside its framing in a hook's answer or a poll's message.
