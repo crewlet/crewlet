@@ -28,8 +28,6 @@ interface HarnessFacts {
   effortModels?: readonly { match: string; levels: readonly string[] }[];
   /** Why it has no effort setting the engine passes. */
   effortNote?: string;
-  /** It runs a seat's executor in a box: its profile lists a runner (`executor`). */
-  executor?: boolean;
 }
 
 /** Every built-in harness bar `custom`, as its profile reads, so the wizard offers only what the
@@ -37,7 +35,6 @@ interface HarnessFacts {
 export const HARNESS_FACTS: Readonly<Record<string, HarnessFacts>> = {
   "claude-code": {
     binary: "claude",
-    executor: true,
     webDeniable: true,
     assistant: true,
     signIns: ["api-key", "host-login", "token", "cloud"],
@@ -69,7 +66,6 @@ export const HARNESS_FACTS: Readonly<Record<string, HarnessFacts>> = {
     efforts: ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
   },
   opencode: {
-    executor: true,
     binary: "opencode",
     webDeniable: true,
     signIns: ["api-key", "host-login"],
@@ -79,7 +75,6 @@ export const HARNESS_FACTS: Readonly<Record<string, HarnessFacts>> = {
   },
   "gemini-cli": {
     binary: "gemini",
-    executor: true,
     signIns: ["api-key", "host-login", "cloud"],
     keyEnv: "GEMINI_API_KEY",
     login: "adopt",
@@ -89,7 +84,6 @@ export const HARNESS_FACTS: Readonly<Record<string, HarnessFacts>> = {
   },
   "qwen-code": {
     binary: "qwen",
-    executor: true,
     signIns: ["api-key", "host-login"],
     keyEnv: "OPENAI_API_KEY",
     keyShared: true,
