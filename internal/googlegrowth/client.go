@@ -95,10 +95,11 @@ type Client struct {
 	// ReadScopes are the scopes a write's target is read back with; nil reads
 	// with the write's own.
 	ReadScopes func(op growth.Operation) []string
-	// BeforeRead is the product's read of a write's targets where no one
-	// resource holds them (a batch naming them in its body), false where the
-	// write's own resource is read ([Request.Resource]); nil is never.
-	BeforeRead func(req Request) (Request, bool, error)
+	// BeforeRead is the product's read of a write's targets, as handle,
+	// where no one resource holds them (a batch naming them in its body, a
+	// mutate's every resource): their state as the binding holds it, false
+	// where the write's own resource is read ([Request.Resource]); nil is never.
+	BeforeRead func(ctx context.Context, handle string, req Request) (before []byte, ok bool, err error)
 	// Grant, where set, is what every call is sent as: the company's consent
 	// grant, never a seat's identity, so the seat's level and scope are the
 	// engine's alone to hold.
@@ -203,25 +204,23 @@ func (c *Client) sendAsGrant(ctx context.Context, req Request) ([]byte, error) {
 	return raw, nil
 }
 
-// sendOn makes req at address on t with bearer, a read's 429 waited out.
+// sendOn makes req at address on t with bearer and its API's headers, a
+// read's 429 waited out.
 func sendOn(ctx context.Context, t *googleauth.Transport, req Request, address, bearer string) (json.RawMessage, error) {
-	var body any
+	call := googleauth.Call{Method: req.Op.Method, Address: address, Bearer: bearer, Header: req.Header,
+		Reads: req.Reads()}
 	if req.Body != nil {
-		body = req.Body
-	}
-	do := t.Do
-	if req.Reads() {
-		do = t.DoRead
+		call.Body = req.Body
 	}
 	if req.Raw {
 		var kept googleauth.Raw
-		if err := do(ctx, req.Op.Method, address, bearer, body, &kept); err != nil {
+		if err := t.Send(ctx, call, &kept); err != nil {
 			return nil, err
 		}
 		return json.Marshal(map[string]string{"contentType": kept.ContentType, "data": string(kept.Data)})
 	}
 	var raw json.RawMessage
-	return raw, do(ctx, req.Op.Method, address, bearer, body, &raw)
+	return raw, t.Send(ctx, call, &raw)
 }
 
 // address is where req is sent: its query as [Request.Fill] makes it. A fill

@@ -369,15 +369,26 @@ func (c *Connection) CallAs(ctx context.Context, account, method, address string
 // Google refuses for a quota answers the same status, and a wait clears no
 // quota.
 func (c *Transport) Do(ctx context.Context, method, address, bearer string, body, out any) error {
-	return c.do(ctx, method == http.MethodGet, method, address, bearer, body, out)
+	return c.Send(ctx, Call{Method: method, Address: address, Bearer: bearer, Body: body,
+		Reads: method == http.MethodGet}, out)
 }
 
-// do is one call, waiting out a short 429 where reads.
-func (c *Transport) do(ctx context.Context, reads bool, method, address, bearer string, body, out any) error {
+// Call is one request to Google: its method, address, bearer (none for ""),
+// the headers its API asks beyond the engine's own (Google Ads' manager), its
+// body, and whether it changes nothing, which waits out a short 429.
+type Call struct {
+	Method, Address, Bearer string
+	Header                  http.Header
+	Body                    any
+	Reads                   bool
+}
+
+// Send makes call, waiting out a short 429 where it reads.
+func (c *Transport) Send(ctx context.Context, call Call, out any) error {
 	for attempt := 0; ; attempt++ {
-		err := c.once(ctx, method, address, bearer, body, out)
+		err := c.once(ctx, call, out)
 		api, ok := errors.AsType[*APIError](err)
-		if !ok || api.Status != http.StatusTooManyRequests || !reads {
+		if !ok || api.Status != http.StatusTooManyRequests || !call.Reads {
 			return err
 		}
 		limit := httpx.VendorRateLimit()
@@ -395,13 +406,15 @@ func (c *Transport) do(ctx context.Context, reads bool, method, address, bearer 
 // method (a report or a query taken in a POST body): its 429 is waited out
 // as a GET's is.
 func (c *Transport) DoRead(ctx context.Context, method, address, bearer string, body, out any) error {
-	return c.do(ctx, true, method, address, bearer, body, out)
+	return c.Send(ctx, Call{Method: method, Address: address, Bearer: bearer, Body: body, Reads: true}, out)
 }
 
 // once sends one request and decodes its answer into out, or keeps it as
 // sent where out is a [*Raw]. It is the only place a request to Google is
-// built.
-func (c *Transport) once(ctx context.Context, method, address, bearer string, body, out any) error {
+// built; the engine's own headers are set last, so no API's header stands in
+// for them.
+func (c *Transport) once(ctx context.Context, call Call, out any) error {
+	method, address, bearer, body := call.Method, call.Address, call.Bearer, call.Body
 	var reader io.Reader
 	contentType := ""
 	switch b := body.(type) {
@@ -420,10 +433,14 @@ func (c *Transport) once(ctx context.Context, method, address, bearer string, bo
 		return fmt.Errorf("googleauth: build %s %s: %w", method, PathOf(address), pathOnly(err, address))
 	}
 	raw, bytesAnswer := out.(*Raw)
+	for name, values := range call.Header {
+		req.Header[http.CanonicalHeaderKey(name)] = values
+	}
 	req.Header.Set("Accept", "application/json")
 	if bytesAnswer {
 		req.Header.Set("Accept", "*/*")
 	}
+	req.Header.Del("Authorization")
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}

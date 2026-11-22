@@ -1,6 +1,7 @@
 package googleanalytics
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"strings"
@@ -128,10 +129,10 @@ func batchReads() map[string]batchRead {
 
 // beforeRead reads a batch's targets back through its parent's batchGet, each
 // held to the call's own parent, so no binding outside it is named.
-func (p *Product) beforeRead(req googlegrowth.Request) (googlegrowth.Request, bool, error) {
+func (p *Product) beforeRead(ctx context.Context, handle string, req googlegrowth.Request) ([]byte, bool, error) {
 	br, ok := batchReads()[req.Op.ID]
 	if !ok {
-		return googlegrowth.Request{}, false, nil
+		return nil, false, nil
 	}
 	requests, _ := req.Field("requests").([]any)
 	names := make([]string, 0, len(requests))
@@ -140,21 +141,25 @@ func (p *Product) beforeRead(req googlegrowth.Request) (googlegrowth.Request, bo
 		name, _ := googlegrowth.Lookup(m, br.name).(string)
 		id, under := strings.CutPrefix(name, req.Account+"/accessBindings/")
 		if !under || !googlegrowth.IDParam("", id) {
-			return googlegrowth.Request{}, false, refusal(growth.RefusedInvalid, fmt.Sprintf("each of "+
+			return nil, false, refusal(growth.RefusedInvalid, fmt.Sprintf("each of "+
 				"body.requests names a binding of %s as %s/accessBindings/<id> in its %s. No vendor was reached.",
 				req.Account, req.Account, br.name))
 		}
 		names = append(names, name)
 	}
 	if len(names) == 0 {
-		return googlegrowth.Request{}, false, refusal(growth.RefusedInvalid, req.Op.ID+" names no binding in "+
+		return nil, false, refusal(growth.RefusedInvalid, req.Op.ID+" names no binding in "+
 			"body.requests. No vendor was reached.")
 	}
 	op, _ := p.Catalog().Operation(br.get)
 	get, err := newRequest(op, req.Params, nil, nil)
 	if err != nil {
-		return googlegrowth.Request{}, false, err
+		return nil, false, err
 	}
 	get.Query["names"] = names
-	return get, true, nil
+	raw, err := p.client.Send(ctx, handle, get)
+	if err != nil {
+		return nil, false, err
+	}
+	return raw, true, nil
 }

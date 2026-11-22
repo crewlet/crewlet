@@ -526,6 +526,30 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     tool: "adsense tools, built in",
     issued: "never: Crewlet makes every call",
   },
+  google_ads: {
+    name: "Google Ads",
+    access: "Level on its accounts",
+    turnOn:
+      "Turning it on gives the agent its own Google identity, if it has none, and lets it reach the chosen accounts at the chosen level. Add the identity's email to each account in Google Ads at the access level its level needs.",
+    off: "Crewlet stops minting the agent's tokens at once, and turns its Google identity off once no other Google growth product is on for it. Its access in Google Ads stays, so turning it back on restores it.",
+    remove:
+      "There is nothing to remove here: the agent's Google identity is kept off with its access.",
+    rotate:
+      "Crewlet mints the agent's tokens for an hour at a time, so there is nothing to rotate.",
+    scope: {
+      noun: "Accounts",
+      singular: "account",
+      empty: "No account",
+      none: "No accounts are listed yet",
+      noneLink: {
+        label: "Connecting Crewlet",
+        doc: "google-ads",
+        anchor: "connecting-crewlet",
+      },
+    },
+    tool: "google_ads tools, built in",
+    issued: "an hour",
+  },
 };
 
 /** The line a read-only Agents tab shows when the Kubernetes operator manages access. */

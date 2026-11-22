@@ -220,6 +220,7 @@ export const INTEGRATION_TOOLS = {
   google_analytics: ["google_analytics"],
   admob: ["admob"],
   adsense: ["adsense"],
+  google_ads: ["google_ads"],
 } as const;
 
 /**

@@ -153,6 +153,7 @@ import (
 	"github.com/crewlet/crewlet/internal/expo"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/gitlab"
+	"github.com/crewlet/crewlet/internal/googleads"
 	"github.com/crewlet/crewlet/internal/googleanalytics"
 	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/googlecloud"
@@ -1069,6 +1070,14 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		block := company.Integrations.GoogleAnalytics
 		guide = googleanalytics.Guide()
 		reqs = googleanalytics.Requirements(company)
+		configured = block != nil
+		enabled = block != nil && block.Enabled
+	case integration.KindGoogleAds:
+		// No roster and no credential: as Google Analytics, spend held to
+		// each account's caps.
+		block := company.Integrations.GoogleAds
+		guide = googleads.Guide()
+		reqs = googleads.Requirements(company)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindSlack:

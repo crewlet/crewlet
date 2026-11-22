@@ -459,6 +459,22 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		add("adsense", in.AdSense.Enabled, nil, map[string]any{"client_id": client,
 			"accounts": in.AdSense.Accounts, "roles": growthRoles("adsense")})
 	}
+	if in.GoogleAds != nil {
+		// NO SECRET: the accounts agents may be given, which carry caps, and
+		// its catalog's access levels with what each allows.
+		capped := []string{}
+		if in.GoogleAds.Spend != nil {
+			for _, c := range in.GoogleAds.Spend.Accounts {
+				capped = append(capped, c.Account)
+			}
+		}
+		customers := []string{}
+		for _, c := range in.GoogleAds.Customers {
+			customers = append(customers, c.ID)
+		}
+		add("google_ads", in.GoogleAds.Enabled, nil, map[string]any{
+			"customers": customers, "capped": capped, "roles": growthRoles("google_ads")})
+	}
 	if in.Atlassian != nil {
 		// THE ORGANIZATION, not a third product: where the account itself is
 		// created, which no site API can do. It reconciles identities,
