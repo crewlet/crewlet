@@ -30,7 +30,7 @@ func writtenGemini(t *testing.T, req sandbox.RunRequest) (map[string]any, *sandb
 	t.Helper()
 	b := sandbox.NewFakeSandbox("box-1")
 	p := executor.PathsFor(b)
-	if _, err := (executor.GeminiCLI{}).WriteConfig(t.Context(), b, req, p); err != nil {
+	if _, err := (executor.GeminiCLI{}).WriteConfig(t.Context(), b, req, executor.Session{}, p); err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
 	var settings map[string]any
@@ -113,7 +113,7 @@ func TestAGeminiRunWhoseNotesNameNoServerIsRefused(t *testing.T) {
 	req := geminiWired()
 	req.Steer.Server = "elsewhere"
 	b := sandbox.NewFakeSandbox("box-1")
-	if _, err := (executor.GeminiCLI{}).WriteConfig(t.Context(), b, req, executor.PathsFor(b)); err == nil ||
+	if _, err := (executor.GeminiCLI{}).WriteConfig(t.Context(), b, req, executor.Session{}, executor.PathsFor(b)); err == nil ||
 		!strings.Contains(err.Error(), "elsewhere") {
 		t.Fatalf("WriteConfig answered %v, want the notes' server refused", err)
 	}

@@ -3,7 +3,7 @@ package commentgate
 // excessInventory is, per package directory, the comment lines past
 // blockBound the package held when the bound arrived. It only moves down.
 var excessInventory = map[string]int{
-	"internal/redact":           963,
+	"internal/redact":           961,
 	"internal/sandbox/executor": 35,
 }
 

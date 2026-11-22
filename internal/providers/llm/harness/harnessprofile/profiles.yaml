@@ -1436,6 +1436,11 @@ gemini-cli:
     - sentinel: "IneligibleTierError"
 
 qwen-code:
+  # A seat's executor, over ACP (internal/sandbox/executor, qwen.go). No E2B
+  # template: no prebuilt image is known to hold Qwen Code, so a company names
+  # its own. Nothing measured refuses root under --approval-mode yolo.
+  executor:
+    runner: true
   binary: qwen
   written_for: "Qwen Code 0.23.x to 0.26.x, measured on 0.23.4 and 0.26.1 (`qwen --version`)"
   version_args: ["--version"]
@@ -1454,14 +1459,13 @@ qwen-code:
   #                                array came back as the seat's reply.
   #   --approval-mode default      a tool the settings below do not allow is
   #                                refused, since a headless run cannot ask.
-  #   --auth-type openai           the sign-in, under api_key_env below.
+  #
+  # The sign-in follows, by mode (key_args, subscription_args below).
   complete_args:
     - "--output-format"
     - "stream-json"
     - "--approval-mode"
     - "default"
-    - "--auth-type"
-    - "openai"
   local_tools: denied
   # The settings in the seat's home, each a switch both builds read:
   #
@@ -1537,7 +1541,7 @@ qwen-code:
   web_tools_note: "no web denial: removing web_fetch and web_search from the seeded allow list would be one, but it has not been measured against a qwen harness, so this profile cannot serve the assistant"
   seed_files:
     - path: .qwen/settings.json
-      content: '{"general":{"chatRecording":false,"enableAutoUpdate":false,"preventSystemSleep":false},"privacy":{"usageStatisticsEnabled":false},"memory":{"enableManagedAutoMemory":false,"enableManagedAutoDream":false,"enableAutoSkill":false},"model":{"openAILoggingDir":"~/.qwen/openai-logs","generationConfig":{"maxRetries":0}},"skills":{"disabledLevels":["project","user","extension","bundled"]},"disableAllHooks":true,"tools":{"core":["web_fetch","web_search"]},"permissions":{"allow":["web_fetch","web_search"],"deny":["advisor","agent","artifact","ask_user_question","create_sub_session","cron_create","cron_delete","cron_list","display_image","edit","enter_plan_mode","enter_worktree","exec","exit_plan_mode","exit_worktree","get_goal","glob","grep_search","image_gen","list_agents","list_directory","loop_wakeup","lsp","manage_memory","monitor","notebook_edit","omni_caption_audio","omni_caption_image","omni_clip_audio","omni_clip_image","omni_clip_video","omni_convert_image","omni_downsample_audio","omni_downsample_image","omni_downscale_video","omni_extract_audio","omni_extract_keyframes","omni_ocr_image","omni_recall_media_memory","omni_transcribe_audio","omni_understand_video_segments","propose_goal","read_file","read_mcp_resource","record_artifact","record_source","report_findings","request_shutdown","run_shell_command","save_memory","search_memory","send_message","skill","structured_output","task_create","task_list","task_stop","task_update","team_create","team_delete","team_plan_approval","todo_write","tool_call","tool_search","update_goal","workflow","write_file","zoom_image"]}}'
+      content: '{"general":{"chatRecording":false,"enableAutoUpdate":false,"preventSystemSleep":false},"privacy":{"usageStatisticsEnabled":false},"memory":{"enableManagedAutoMemory":false,"enableManagedAutoDream":false,"enableAutoSkill":false},"model":{"openAILoggingDir":"~/.qwen/openai-logs","generationConfig":{"maxRetries":0}},"skills":{"disabledLevels":["project","user","extension","bundled"]},"disableAllHooks":true,"tools":{"core":["web_fetch","web_search"]},"permissions":{"allow":["web_fetch","web_search"],"deny":["advisor","agent","artifact","ask_user_question","autofix_pr","create_sub_session","cron_create","cron_delete","cron_list","display_image","edit","enter_plan_mode","enter_worktree","exec","exit_plan_mode","exit_worktree","get_goal","glob","grep_search","image_gen","list_agents","list_directory","loop_wakeup","lsp","manage_memory","monitor","notebook_edit","omni_caption_audio","omni_caption_image","omni_clip_audio","omni_clip_image","omni_clip_video","omni_convert_image","omni_downsample_audio","omni_downsample_image","omni_downscale_video","omni_extract_audio","omni_extract_keyframes","omni_ocr_image","omni_recall_media_memory","omni_transcribe_audio","omni_understand_video_segments","propose_goal","read_file","read_mcp_resource","record_artifact","record_source","report_findings","request_shutdown","run_shell_command","save_memory","search_memory","send_message","skill","structured_output","task_create","task_list","task_stop","task_update","team_create","team_delete","team_plan_approval","todo_write","tool_call","tool_search","update_goal","workflow","write_file","zoom_image"]}}'
     - path: .qwen/.env
       in: work
       content: "# This call's environment is the engine's; nothing above this directory is read.\n"
@@ -1685,20 +1689,27 @@ qwen-code:
     - ".qwen/QWEN.md"
     - ".qwen/AGENTS.md"
     - ".qwen/rules"
-  # THE SIGN-IN IS AN API KEY. Qwen OAuth, the login this profile once
-  # adopted, is refused by both builds' own auth check ("Qwen OAuth free
-  # tier was discontinued on 2026-04-15", read from both bundles), and
-  # `qwen auth` is listed as removed, so there is no login to adopt and no
-  # token. The
-  # harness's OpenAI-compatible sign-in is what runs, chosen by --auth-type
-  # above: the key in OPENAI_API_KEY, the endpoint in OPENAI_BASE_URL, which
-  # an entry sets in env to its provider's (DashScope's, a Coding Plan's, any
-  # OpenAI-compatible one; unset, the harness falls back to an endpoint of its
-  # own), and the model from the entry's `model`. Without --auth-type the harness
-  # chooses that sign-in only when OPENAI_MODEL or QWEN_MODEL is set as well,
-  # and otherwise exits "No auth type is selected". DASHSCOPE_API_KEY, the
-  # variable this profile named before, is read by neither build's model
-  # sign-in.
+  # A KEY, OR QWEN CODE'S PAID LOGIN. The key is the harness's
+  # OpenAI-compatible sign-in, chosen by --auth-type: the key in
+  # OPENAI_API_KEY, the endpoint in OPENAI_BASE_URL, which an entry sets in env
+  # to its provider's (DashScope's, a Coding Plan's, any OpenAI-compatible one;
+  # unset, the harness falls back to an endpoint of its own), and the model
+  # from the entry's `model`. Without --auth-type the harness chooses that
+  # sign-in only when OPENAI_MODEL or QWEN_MODEL is set as well, and otherwise
+  # exits "No auth type is selected". DASHSCOPE_API_KEY, the variable this
+  # profile named before, is read by neither build's model sign-in.
+  #
+  # The login is 0.28's "Qwen Account with Subscription" (Plus or Pro),
+  # `--auth-type qwen-subscription`, made with the harness by hand and
+  # adopted: its tokens in subscription_credentials.json in the home's .qwen
+  # (baseUrl, clientId, tokens {access_token, refresh_token, expiresAt},
+  # models), its endpoint overridden by QWEN_SUBSCRIPTION_BASE_URL. Read from
+  # 0.28.3's bundle and docs, NOT MEASURED against Qwen's service. Free Qwen
+  # OAuth stays refused by the harness itself ("Qwen OAuth free tier was
+  # discontinued on 2026-04-15").
+  key_args: ["--auth-type", "openai"]
+  subscription_args: ["--auth-type", "qwen-subscription"]
+  credential_paths: [".qwen/subscription_credentials.json"]
   api_key_env: "OPENAI_API_KEY"
   # A name other vendors' keys go in too, sent to whatever OPENAI_BASE_URL
   # names: an entry names its key, and nothing falls back to this variable.
@@ -1709,6 +1720,28 @@ qwen-code:
   # refused before any request.
   limit_markers:
     - sentinel: "[API Error: 429"
+  # A SEAT'S RUN ENDS ON A SPENT QUOTA ONLY IN ITS HELPER'S LIMIT LINE. Over
+  # ACP, Qwen Code flattens every 429 to "Rate limit exceeded. Try again
+  # later." (0.28.3), and only the session's chat file keeps the provider's
+  # words, in the error record of each failed request. The helper quotes the
+  # record of the request that failed last, and only once Qwen Code failed the
+  # turn on the 429 (the executor's limitGate reads the line only from a run
+  # whose exit status says so): a spent quota sits the entry out, a rate limit
+  # is transient and sits nothing out. The provider sentences of OpenAI's and
+  # DashScope's spent quotas, as the measured runs relayed them.
+  limit_events:
+    - match:
+        - {path: ["type"], equals: "crewlet_qwen_limit"}
+        - {path: ["error_message"], prefix: "429 You exceeded your current quota"}
+      said_path: ["error_message"]
+    - match:
+        - {path: ["type"], equals: "crewlet_qwen_limit"}
+        - {path: ["error_message"], prefix: "429 Free allocated quota exceeded"}
+      said_path: ["error_message"]
+    - match:
+        - {path: ["type"], equals: "crewlet_qwen_limit"}
+        - {path: ["error_message"], prefix: "429 Allocated quota exceeded"}
+      said_path: ["error_message"]
   auth_markers:
     - sentinel: "[API Error: 401"
     - sentinel: "Missing API key for OpenAI-compatible auth"
@@ -2970,17 +3003,18 @@ muse-code:
   # would make the profile say something false about the model to buy nothing
   # — an unknown family already falls back to the same catalogue default.
   #
-  # MEASURED ON 1.4.13, the newest release, AND ON 1.0.3, through the engine's
+  # MEASURED ON 1.4.25 (as on 1.4.13 and 1.0.3 before it) through the engine's
   # own code path against a stub HTTP endpoint on 127.0.0.1 standing in for
-  # Meta's Model API: seat calls and a side pass, with the state directory
-  # inside a git checkout whose root, and a directory between it and the state
-  # directory, each held an AGENTS.md, a CLAUDE.md, .claude/ and .agents/
-  # rules and skills, .muse/rules, a .env and an .mcp.json, and with another
-  # harness's personal rules and skills planted in the seat's home. None of them
-  # reached a request, the tools offered were the ones named below, the engine
-  # read each answer, and a 401 and a 429 were classified as the sentinels
-  # below say.
-  written_for: "Muse Code 1.4.x, measured on 1.4.13 (`muse --version` prints `Muse Code 1.4.13 (1.4.13-R6996.1)`)"
+  # Meta's Model API: a call with tools over the real relay and side passes,
+  # with the state directory inside a git checkout whose root, and a directory
+  # between it and the state directory, each held an AGENTS.md, a CLAUDE.md,
+  # .claude/, .agents/ and .muse/ rules, skills, hooks and settings naming a
+  # server, a .env and an .mcp.json, and with another harness's personal rules,
+  # skills and servers planted in the seat's home. None of them reached a
+  # request, started or ran, the tools offered were the ones named below, the
+  # engine read each answer, and a 401 and a 429 were classified as the
+  # sentinels below say.
+  written_for: "Muse Code 1.4.25 (`muse --version` prints `Muse Code 1.4.25 (1.4.25-R9361.1)`)"
   version_args: ["--version"]
   # `muse exec`, the vendor's own headless surface: one prompt, run to
   # completion, the run's events on stdout. Its startup preamble goes to
@@ -2990,16 +3024,12 @@ muse-code:
   # MUSE_NO_AUTO_UPDATE note under env below, which is why that variable is
   # part of the profile rather than an operator's problem.
   #
-  # --json IS NOT OPTIONAL HERE, and the reason is the failure classification
-  # rather than the answer. THIS HARNESS PRINTS NO FAILURE CAUSE ON STDERR: a
-  # failed run writes the fixed string "run ended with Failed" there and
-  # nothing else, and the real reason exists only in the `run.terminal.failed`
-  # event's `payload.reason`. Without --json a spent plan and a dead login
-  # reach this backend as a bare exit 1 that no marker can read. The seat's
-  # chain still moves on, a failed run being a SERVER failure, but a spent
-  # plan then never sits the entry out — every round of every seat starts a
-  # harness to be refused again, the waste limit_markers exist to prevent — and
-  # all the operator is told is "run ended with Failed".
+  # --json is the stream the answer, the counts and each request are read
+  # from (below), and where a failed run's cause is read by field: the
+  # `run.terminal.failed` event's `payload.reason`. 1.4.25 also writes it on
+  # stderr, as `run ended with Failed: <reason>`; 1.4.13 wrote only the fixed
+  # "run ended with Failed" there, so without the event a spent plan was a
+  # bare exit 1 that no marker could read.
   #
   # --no-session-log is this harness's isolation flag and the counterpart of
   # claude-code's --no-session-persistence: no retained session event log, so
@@ -3025,30 +3055,38 @@ muse-code:
   # apply still refuses the call rather than running it.
   #
   # --no-foreign-personal-context keeps OTHER HARNESSES' personal rules and skills
-  # out of the call. Measured on both builds: a ~/.claude/CLAUDE.md and a
-  # skill under ~/.claude/skills, planted in the seat's home, reached the
-  # developer message without the flag and did not with it. The binary also
-  # reads CLAUDE_CONFIG_DIR and CODEX_HOME, which an entry's env could point
-  # at another harness's real home.
+  # out of the call. Measured on 1.4.25 as on the earlier builds: a
+  # ~/.claude/CLAUDE.md and a skill under ~/.claude/skills, planted in the
+  # seat's home, reached the developer message without the flag and did not
+  # with it. The binary also reads CLAUDE_CONFIG_DIR and CODEX_HOME, which an
+  # entry's env could point at another harness's real home. Its own personal
+  # skills (the home's .agents/skills) are read with or without the flag and
+  # trusted or not; nothing but the harness writes the seat's home.
   #
-  # --disable-reminders turns off the harness's REMINDER OBSERVERS: on 1.4.13 two
-  # (goal and verify), on 1.0.3 three (skill, goal and verify), each a model
-  # request of its own that re-sends the call's prompt — the engine's whole
-  # transcript — under instructions of its own, beside the main request.
-  # Measured, a 1.4.13 call then makes exactly one model request. They are
-  # billed like any request, and each is one the engine never asked for.
-  # 1.0.x HAS NO SUCH FLAG and refuses it ("unknown option
-  # --disable-reminders", exit 2, measured), which is why this profile is
-  # written for 1.4.x: an operator still on 1.0.x drops it in
-  # overrides.complete_args, and that build's observers then run.
+  # --disable-reminders turns off the harness's REMINDER OBSERVERS, each a
+  # model request of its own that re-sends the call's prompt (the engine's
+  # whole transcript) under instructions of its own, beside the main request:
+  # on 1.4.25 the goal observer (four requests beside a call's two, measured),
+  # on 1.4.13 goal and verify, on 1.0.3 skill, goal and verify. With the flag
+  # a 1.4.25 call makes one model request per turn. They are billed like any
+  # request, and each is one the engine never asked for. 1.0.x HAS NO SUCH FLAG
+  # and refuses it ("unknown option --disable-reminders", exit 2, measured).
   #
   # NOT --sandbox-network: it governs the OS sandbox around SHELL commands,
-  # and the seeded toolset leaves no shell to sandbox. Not --trust-workspace
-  # either. Untrusted, the harness admits no project rules, skills or hooks:
-  # measured, nothing from the checkout around the state directory reached a
-  # request on either build, and the engine's `.git` marker in the call's
-  # directory ends the harness's walk for project files there besides. Trusted, it
-  # also adds six subagent tools past the toolset.
+  # and the seeded toolset leaves no shell to sandbox.
+  #
+  # --trust-workspace IS WHAT GIVES A CALL ITS TOOLS: 1.4.25 withholds every
+  # MCP server, a `-c` one included, from a workspace it does not trust, and
+  # the toolset naming `mcp__crewlet__*` then fails the run ("invalid run
+  # configuration: unknown tool"). The trust is this run's only and the
+  # workspace is the call's own directory, which holds only what the engine
+  # writes. The engine's `.git` marker there is what keeps the checkout out:
+  # measured on 1.4.25, trusted in a directory of the same checkout without the
+  # marker, both levels' AGENTS.md reached the request and both .mcp.json
+  # servers started; with it, none did, and no planted hook ran. A hook file in
+  # the call's directory itself would run; nothing writes one there. The tool
+  # surface stays exactly the toolset, trusted; on 1.4.13 trust added six
+  # subagent tools past it, which is why this profile is written for 1.4.25.
   #
   # Not --max-model-steps: breaching it exits 1, so a cap would DISCARD a
   # finished answer, and timeout_seconds already bounds the call from the
@@ -3062,6 +3100,7 @@ muse-code:
     - "--disable-write"
     - "--no-foreign-personal-context"
     - "--disable-reminders"
+    - "--trust-workspace"
   # Denied by REPLACING THE TOOL SURFACE, which is the only thing on this harness
   # that does: `run.toolset` is an allowlist of exact tool names, validated
   # against the real registry at startup, and it is what makes bash,
@@ -3070,12 +3109,13 @@ muse-code:
   # --allowed-tools, no --deny-tool and no project-level settings file.
   #
   # The two names are the harness's own web tools, the one local surface this
-  # backend never denies. Measured on 1.4.13, they are the whole tool array:
-  # `web_search`, and `web_fetch` ("HTTP or HTTPS URL to fetch"). On 1.0.3
+  # backend never denies. Measured on 1.4.25, trusted, they are the whole of
+  # the harness's own namespace: `web_search`, and `web_fetch`. On 1.0.3
   # `web_fetch` is gated off by a remote rollout, so naming it admits nothing
   # there, and three engine-owned tools survive any toolset — read_skill,
   # snooze_reminder and write_todos, which read the harness's own skill catalogue,
-  # pause its reminders and keep its todo list; 1.4.13 offers none of them.
+  # pause its reminders and keep its todo list; 1.4.13 and 1.4.25 offer none of
+  # them.
   #
   # provider_retry.max_retries is 3 because the harness's own retries otherwise
   # outlast the call. It retries a 429 with a delay that doubles from one
@@ -3091,11 +3131,16 @@ muse-code:
   #
   # "schema_version": 1 is MANDATORY: a settings file without it fails every
   # command at startup with `malformed settings file`.
+  #
+  # telemetry.enabled false keeps the harness from reporting to api.meta.ai.
+  # Measured on 1.4.25 through a logging proxy: a run keeping its session log
+  # made 11 connections there, and none with the setting; a --no-session-log
+  # run made none either way, which this does not rely on.
   local_tools: denied
   web_tools_note: "no web denial: an empty run.toolset would be one, but it has not been measured against a muse-code harness, so this profile cannot serve the assistant"
   seed_files:
     - path: .config/muse/settings.json
-      content: '{"schema_version":1,"run":{"toolset":["web_search","web_fetch"]},"provider_retry":{"max_retries":3}}'
+      content: '{"schema_version":1,"run":{"toolset":["web_search","web_fetch"]},"provider_retry":{"max_retries":3},"telemetry":{"enabled":false}}'
   model_args: ["--model", "{model}"]
   # Read from 1.4.13: `none` is refused on Meta's provider and `ultra` is
   # gated, so neither is offered.
@@ -3105,18 +3150,18 @@ muse-code:
   # THE APPEND CHANNEL IS AN UNDOCUMENTED VARIABLE:
   # TBH_EVAL_APPEND_SYSTEM_PROMPT_FILE names a file whose text the harness
   # appends, after a blank line, at the very end of its own instructions —
-  # 48,043 characters on 1.4.13 and 37,518 on 1.0.3, opening "You are Muse
-  # Code, an agentic harness (command line interface) that helps users with
-  # software engineering tasks." Measured through the engine on both builds:
-  # the vendor's instructions were kept whole, they were byte-identical from
+  # 64,155 characters on 1.4.25, opening "You are Muse Code, an agentic coding
+  # CLI (command line interface) that helps users with software engineering
+  # tasks." (48,043 on 1.4.13, 37,518 on 1.0.3). Measured through the engine on
+  # each: the vendor's instructions were kept whole, they were byte-identical from
   # one call to the next, so nothing per-call stands before the engine's text,
   # and the per-call workspace root travels in the developer message after
   # them. The variable is in the binary's own list of what it reads at startup
-  # on both builds, and is no part of the vendor's documentation, so a release
+  # on each build, and is no part of the vendor's documentation, so a release
   # may drop it without notice — and the seat's text would then reach the
   # model nowhere, with no error. An operator who would rather not depend on
   # it sets `overrides: {append_system_prompt: {env: ""}}`, which returns the
-  # text to the transcript under the vendor's prompt; a build other than 1.4.x
+  # text to the transcript under the vendor's prompt; a build other than 1.4.25
   # is the moment to check, which is what written_for and `crewlet llm
   # doctor` are for.
   #
@@ -3180,23 +3225,21 @@ muse-code:
   # THE SEAT'S TOOLS: one stdio server, declared for the one run by `-c`, the
   # harness's per-run setting, which takes a JSON value — the only per-run channel
   # this harness has for a server. Its settings file names servers too, but it is
-  # the seat's, which every call shares; its project files are read only from
-  # a trusted workspace, and nothing here trusts one (measured outside the
-  # engine, which a run from inside a checkout cannot be — the harness refuses a
-  # TMPDIR inside the repository: --trust-workspace started a checkout's
-  # .mcp.json server, and without it none); and a plugin's server
-  # needs an approval in that same settings file. Measured on 1.4.13 through the
+  # the seat's, which every call shares; its project files are read from the
+  # trusted call directory alone, which the `.git` marker bounds (see
+  # --trust-workspace above); and a plugin's server or hook needs an approval
+  # in that same settings file. Measured on 1.4.25 (and 1.4.13) through the
   # engine's own code path against a local stand-in, with servers planted in
-  # the home's settings file, in ~/.claude.json and ~/.codex/config.toml, and
-  # in an .mcp.json and a .muse/settings.json at every level of a checkout
-  # above the call: the model was offered the seat's tools and the two web
-  # tools, and no other server started. The seed_files settings file is what
-  # keeps the home's out — without it the planted server started on every
-  # call, text functions included — and, naming no approval, what keeps an
-  # installed plugin's server from starting (measured outside the engine: an
-  # installed, approved plugin's server started on a text function, and with
-  # the seeded file in place of the settings it did not); plugins live under
-  # the volatile .local/share/muse besides.
+  # ~/.claude.json and ~/.codex/config.toml, and in an .mcp.json and a
+  # .muse/settings.json at every level of a checkout above the call: the model
+  # was offered the seat's tools and the two web tools, and no other server
+  # started. The seed_files settings file is what keeps the home's out
+  # (without it a server planted there started on every call, text functions
+  # included, on 1.4.13) and, naming no approval, what keeps an installed
+  # plugin from running (measured outside the engine: an installed, approved
+  # plugin's server started on 1.4.13 and its hooks ran on a trusted 1.4.25
+  # run, and with the seeded file in place of the settings neither did);
+  # plugins live under the volatile .local/share/muse besides.
   #
   # run.toolset, set for the run, adds `mcp__crewlet__*` to the two web
   # tools; the model sees the tools as `mcp__crewlet__<name>`.
@@ -3215,8 +3258,8 @@ muse-code:
   # its own: a run's rounds are bounded by the phase's (a stand-in that
   # always called a tool drew 1,128 requests in 90 s).
   #
-  # A failed run's cause is its run.terminal.failed event's reason; stderr
-  # says only "run ended with Failed".
+  # A failed run's cause is its run.terminal.failed event's reason, read by
+  # field; 1.4.25 also writes it on stderr after "run ended with Failed:".
   mcp:
     args:
       - "-c"

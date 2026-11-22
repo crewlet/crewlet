@@ -1137,7 +1137,7 @@ func (l *agentLauncher) member(ctx context.Context, manager *sandbox.Manager,
 // member whose cell a run of the seat can land in.
 //
 // Refused when there is none. Config refuses this chain on every write ("needs
-// a claude-code, opencode or gemini-cli member"), so reaching it is a company built by hand
+// a claude-code, opencode, gemini-cli or qwen-code member"), so reaching it is a company built by hand
 // or a catalogue built without the runners: either way the operator's to fix,
 // and a retry changes nothing, which is the class it carries
 // ([sandbox.WhyConfiguration]). So does a company with no providers.llm entry

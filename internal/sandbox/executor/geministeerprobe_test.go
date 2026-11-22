@@ -47,8 +47,8 @@ func (i *geminiProbeInbox) asked() []string {
 // a waiting note again (0.70.0 delivers a second block: session-twin-end).
 //
 // Mutations, each red: name the finish by another boundary than the bridge's;
-// take at AfterTool; read the bridge's address from anywhere but the take
-// script's configuration; take nothing while stop_hook_active.
+// take at AfterTool; read the bridge's address elsewhere than the take config;
+// take nothing while stop_hook_active; name the record after another session.
 func geminiTakeReachesTheBridgeTool(t *testing.T) {
 	t.Parallel()
 	node := geminiNode(t)
@@ -56,7 +56,7 @@ func geminiTakeReachesTheBridgeTool(t *testing.T) {
 	endpoint := probeBridge(t, inbox, &probeLedger{})
 	record := t.TempDir()
 	runner, box := geminiBox(t, `cp "$HOME/.gemini/settings.json" '`+record+`/settings.json'
-printf %s "$`+executor.GeminiTakesEnv+`" > '`+record+`/takes'
+printf '%s\n' "$@" > '`+record+`/args'
 cat > '`+record+`/stdin'
 echo '{"type":"result","status":"success"}'`)
 	p := executor.PathsFor(box)
@@ -74,12 +74,22 @@ echo '{"type":"result","status":"success"}'`)
 		} `json:"hooks"`
 	}
 	readJSON(t, filepath.Join(record, "settings.json"), &settings)
-	// THE SESSION'S RECORD OF TAKES EXISTS, EMPTY, BEFORE ANY HOOK FIRES, so a
-	// take never recorded reads absent once the job ends rather than undecided.
-	named, err := os.ReadFile(filepath.Join(record, "takes"))
-	takes := string(named)
-	if err != nil || !strings.HasPrefix(takes, p.GeminiTakesDir()+"/") || !strings.HasSuffix(takes, ".jsonl") {
-		t.Fatalf("the run named its record of takes %q (%v), want a session's under %s", takes, err, p.GeminiTakesDir())
+	// THE HOOK RECORDS IN THE RECORD OF THE SESSION GEMINI CLI WAS HANDED, which
+	// exists, empty, before any hook fires: a take never recorded reads absent
+	// once the job ends rather than undecided.
+	args, err := os.ReadFile(filepath.Join(record, "args"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := ""
+	if _, after, ok := strings.Cut(string(args), "--session-id\n"); ok {
+		session, _, _ = strings.Cut(after, "\n")
+	}
+	var take struct{ Takes string }
+	readJSON(t, p.GeminiTakeConfig(), &take)
+	takes := take.Takes
+	if session == "" || takes != p.GeminiTakes(session) {
+		t.Fatalf("the hook records in %q, want the record of the session Gemini CLI was handed (%q)", takes, session)
 	}
 	if before, err := box.ReadFile(t.Context(), takes); err != nil || len(before) != 0 {
 		t.Errorf("before any hook the record of takes is %q (%v), want an empty file", before, err)
@@ -95,8 +105,7 @@ echo '{"type":"result","status":"success"}'`)
 				}
 				raw, _ := json.Marshal(input)
 				cmd := exec.CommandContext(t.Context(), "sh", "-c", hook.Command)
-				cmd.Env = append(os.Environ(), "PATH="+filepath.Dir(node)+":"+os.Getenv("PATH"),
-					executor.GeminiTakesEnv+"="+takes)
+				cmd.Env = append(os.Environ(), "PATH="+filepath.Dir(node)+":"+os.Getenv("PATH"))
 				cmd.Stdin = strings.NewReader(string(raw))
 				out, err := cmd.Output()
 				if err != nil {

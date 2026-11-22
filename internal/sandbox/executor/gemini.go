@@ -19,7 +19,7 @@ import (
 const GeminiCLIName = "gemini-cli"
 
 // GeminiCLI drives Gemini CLI (`gemini`) headless, its event stream on stdout
-// (measured on 0.70.0 and 0.65.0 against a stub of the Gemini API;
+// (measured on 0.70.0 against a stub of the Gemini API;
 // docs/concepts/code-sandbox.md, "Gemini CLI", says what a run does).
 type GeminiCLI struct{}
 
@@ -57,14 +57,9 @@ func (GeminiCLI) Command(req sandbox.RunRequest, session Session, paths Paths, _
 	return "sh -c " + sandbox.ShellQuote(geminiScript(req, session, paths))
 }
 
-// geminiTakesEnv names the run's record of takes to its hook
-// ([Paths.GeminiTakes]); the hook's configuration is written before the run's
-// session is named, so the session's path rides the run's environment.
-const geminiTakesEnv = "CREWLET_GEMINI_TAKES"
-
 // geminiExportExit is what `gemini` exits with once GEMINI_WRITE_SYSTEM_MD
 // has written its default prompt: it writes the file and stops before any
-// model request (measured on 0.70.0 and 0.65.0, zero requests at the stub).
+// model request (measured on 0.70.0, zero requests at the stub).
 const geminiExportExit = 42
 
 // geminiScript is a Gemini CLI run's script. It pins the project slug, exports
@@ -87,12 +82,10 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 	run := "gemini " + flags + " --session-id " + q(session.ID) + "; code=$?"
 	// THE SESSION'S RECORD OF TAKES EXISTS, EMPTY, BEFORE THE RUN: an empty
 	// record settles a take never recorded (its hook killed first) as absent
-	// once the job ends, and only a missing one, lost with its box, waits. The
-	// hook finds it in the run's environment, which Gemini CLI hands it whole.
+	// once the job ends, and only a missing one, lost with its box, waits.
 	if req.Steer.Set() {
-		takes := paths.GeminiTakes(session.ID)
-		lines = append(lines, "mkdir -p "+q(paths.GeminiTakesDir())+" && : >> "+q(takes)+" || exit 1")
-		run = geminiTakesEnv + "=" + q(takes) + " " + run
+		lines = append(lines, "mkdir -p "+q(paths.GeminiTakesDir())+" && : >> "+q(paths.GeminiTakes(session.ID))+
+			" || exit 1")
 	}
 	// A RUN WITH NO STANDING INSTRUCTIONS keeps Gemini CLI's own prompt as it
 	// is, so nothing is exported or named.
@@ -155,7 +148,8 @@ func (GeminiCLI) Parse(stdout []byte) sandbox.Result { return decodeAll(&geminiE
 // the run's skills, and, where notes or skills are wired, the take script and
 // its configuration. It returns "": Gemini CLI reads its settings from its
 // home, never from a path it is handed.
-func (g GeminiCLI) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error) {
+func (g GeminiCLI) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, session Session,
+	paths Paths) (string, error) {
 	files := map[string][]byte{
 		paths.GeminiHelper(): geminiHelperScript,
 		paths.GeminiPolicy(): []byte(geminiPolicy),
@@ -165,7 +159,7 @@ func (g GeminiCLI) WriteConfig(ctx context.Context, box sandbox.Sandbox, req san
 	}
 	hooked := req.Steer.Set() || len(req.Skills) > 0
 	if hooked {
-		take, err := geminiTakeConfig(req)
+		take, err := geminiTakeConfig(req, paths.GeminiTakes(session.ID))
 		if err != nil {
 			return "", err
 		}

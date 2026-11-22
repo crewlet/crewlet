@@ -150,7 +150,9 @@ type Harness interface {
 	// the path the harness is pointed at, or "" when there is nothing to write.
 	// It also writes the system text where the harness reads it from
 	// ([Paths.System]) when there is any, and nothing when there is none.
-	WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error)
+	// session is the run's, named before it ([Harness.Session]).
+	WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, session Session,
+		paths Paths) (string, error)
 }
 
 // Session is the harness session one run works in, as [Runner.Start] settles it
@@ -507,8 +509,8 @@ func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 // the old result; a previous job's hooks name a bridge session its end closed;
 // its end-protocol records ([Paths.JobScript], [Paths.JobEnded]) would aim an
 // end request at another process or read as this run's own; its session record,
-// capture, saves and staging would be collected as this run's or wait in the box
-// for its life; its fresh-session wiring ([Paths.MCPConfigFresh]) would sit
+// report, capture, saves and staging would be collected as this run's (a stale
+// report bound as this run's session) or wait in the box for its life; its fresh-session wiring ([Paths.MCPConfigFresh]) would sit
 // beside a run that has none. Directories go whole, so no stale value, plugin or
 // commit hook survives, and every file a run starts with is new to its box: across
 // a VM mount, a harness opening a host-replaced file finds nothing for ~1 s.
@@ -518,7 +520,8 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	out := r.harness.Output(p)
 	files := []string{p.Done(), p.ExitCode(), p.MemoryBefore(), p.MemoryAfter(), p.Result(), p.Findings(), p.Brief(), p.FreshBrief(), p.System(),
 		p.BaseResult(),
-		p.SessionRecord(), p.SessionCapture(), p.SessionCarried(), p.MCPConfig(), p.MCPConfigFresh(),
+		p.SessionRecord(), p.SessionReport(), p.sessionReportStaging(), p.SessionCapture(), p.SessionCarried(),
+		p.MCPConfig(), p.MCPConfigFresh(),
 		p.JobScript(), p.JobScript() + ".next", p.JobEnded(), p.JobEnded() + ".next"}
 	dirs := []string{p.CommitAttribution(), p.SessionStaging()}
 	// EVERY HARNESS'S, not this run's alone: the box may last have run another.
@@ -656,7 +659,7 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 		}
 		req.FreshWiring = &wired
 	}
-	configPath, err := r.harness.WriteConfig(ctx, box, req, paths)
+	configPath, err := r.harness.WriteConfig(ctx, box, req, session, paths)
 	if err != nil {
 		return sandbox.RunHandle{}, err
 	}
@@ -1078,6 +1081,19 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	stated := result.SessionID
 	if !sandbox.ValidSessionID(result.SessionID) {
 		result.SessionID = rec.id
+	}
+	// A MINTING HARNESS'S SESSION IS THE ONE ITS SCRIPT REPORTED, never one it
+	// printed or its record names (minter.go): a refused report is a piece the
+	// run did not report, so it collects no session and no capture, and the run
+	// fails closed.
+	if r.MintsSession() {
+		minted, mintErr := r.reportedSession(ctx, box, paths, handle, rec)
+		if errors.Is(mintErr, ErrSessionReport) {
+			refused, minted = append(refused, mintErr.Error()), ""
+		} else if mintErr != nil {
+			return sandbox.Result{}, mintErr
+		}
+		result.SessionID, rec.id = minted, minted
 	}
 	result.Continued, result.HarnessVersion = rec.continued, releaseOf(rec.release)
 	result.FellBack = sandbox.BoundFellBack(rec.why)
