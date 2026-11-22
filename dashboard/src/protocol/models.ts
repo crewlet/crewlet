@@ -190,6 +190,8 @@ export type ModelEntriesAnswer =
       nodes: ModelNode[];
       entries: ModelEntry[];
       alarms: ModelAlarm[] | null;
+      /** The harnesses this node's build runs a seat's executor on, in the profiles' order. */
+      executor_harnesses: string[];
     }
   | {
       reading: "member";
@@ -197,6 +199,8 @@ export type ModelEntriesAnswer =
       nodes: ModelNode[];
       entries: MemberModelEntry[];
       alarms: null;
+      /** The harnesses this node's build runs a seat's executor on, in the profiles' order. */
+      executor_harnesses: string[];
     };
 
 /** One runner cell's probe on one node. */

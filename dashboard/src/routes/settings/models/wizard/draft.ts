@@ -22,7 +22,6 @@ import {
   type RunnerCellName,
 } from "~/contract/models.ts";
 import { HARNESS_FACTS } from "~/contract/harnesses.ts";
-import { EXECUTOR_HARNESSES } from "../executors.ts";
 import { isReferenceName } from "~/lib/references.ts";
 import {
   applyUses,
@@ -73,6 +72,11 @@ export interface Draft {
   uses: Uses;
   /** What the model is for, as Use it for offers it; `custom` once uses are set seat by seat. */
   intent: Intent;
+  /**
+   * The harnesses the engine runs a seat's executor on (`ModelsData.executors`),
+   * which decide whether the draft's harness can run coding. Not written.
+   */
+  executors: readonly string[];
 }
 
 /** The harnesses a model can be added on, in the order offered: the three that run coding or most work, then by name. */
@@ -101,8 +105,9 @@ const NO_FACTS: HarnessFacts = { binary: "", signIns: [], efforts: [] };
 /** What the engine's profile says about adding a model on the harness; empty for one it does not ship. */
 export const factsOf = (harness: string): HarnessFacts => HARNESS_FACTS[harness] ?? NO_FACTS;
 
-/** Whether the draft's harness can run a seat's coding (`EXECUTOR_HARNESSES`, held to the engine). */
-export const canExecute = (d: Pick<Draft, "harness">) => EXECUTOR_HARNESSES.includes(d.harness);
+/** Whether the draft's harness can run a seat's coding: one the engine runs an executor on. */
+export const canExecute = (d: Pick<Draft, "harness" | "executors">) =>
+  d.executors.includes(d.harness);
 
 /** The sign-in methods a harness offers, in its facts' order: the one allowed on any engine first. */
 export const methodsOf = (harness: string): readonly Method[] => factsOf(harness).signIns;
@@ -270,7 +275,7 @@ export const KEY_RULE = `Lowercase letters, digits, dots, hyphens and underscore
 const KEY_PATTERN = new RegExp(MODEL_KEY_PATTERN);
 
 /** The steps a draft walks, ending on Review: Where it runs only for a harness that runs coding. */
-export function stepsFor(d: Pick<Draft, "harness">): WizardStep[] {
+export function stepsFor(d: Pick<Draft, "harness" | "executors">): WizardStep[] {
   return WIZARD_STEPS.filter((s) => s !== "runs" || canExecute(d));
 }
 
@@ -296,7 +301,7 @@ function referenced(value: unknown): string | null {
 const ref = (variable: string) => `\${${variable}}`;
 
 /** A blank draft for a new model: Claude Code on an API key, used for nothing yet. */
-export function emptyDraft(): Draft {
+export function emptyDraft(executors: readonly string[]): Draft {
   return {
     key: "",
     harness: DEFAULT_HARNESS,
@@ -315,6 +320,7 @@ export function emptyDraft(): Draft {
     webDenied: false,
     uses: noUses(),
     intent: "none",
+    executors,
   };
 }
 
@@ -664,8 +670,8 @@ function variableOf(model: ModelView, method: Method): string {
  * back from the entry, and the uses the engine reports for it. The credential
  * is never read back; a stored one is kept unless replaced.
  */
-export function draftOf(model: ModelView): Draft {
-  const d = emptyDraft();
+export function draftOf(model: ModelView, executors: readonly string[]): Draft {
+  const d = emptyDraft(executors);
   const raw = model.raw ?? {};
   const env = isRecord(raw.env) ? raw.env : {};
   const method = methodOf(model);
