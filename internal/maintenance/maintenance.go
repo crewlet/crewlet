@@ -49,13 +49,14 @@
 // that keeps a removed seat's mail for an undo keeps its work for one too; and
 // before the record is deleted, because nothing retires the seat again after.
 //
-// A human seat's chat read state is judged the same way and for the same
-// reason ([ChatReadJobs], chatreads.go): it lives in a coordination bucket with
-// no age, so the record of a seat that left is forgotten only by a decision
-// taken against the human seats of the company the fleet is pointed at —
-// stamped when a sweep first finds the seat gone, forgotten
-// [ChatReadForgetGrace] later, the mailbox's grace, so a seat restored inside
-// it gets back its mail and its rooms together.
+// A human seat's personal records, its chat read state and its Home board, are
+// judged the same way and for the same reason, by one reconcile with a job per
+// kind ([ChatReadJobs], [HomeBoardJobs], seatrecords.go): each lives in the
+// coordination store with no age, so the record of a seat that left is
+// forgotten only by a decision taken against the human seats of the company
+// the fleet is pointed at, stamped when a sweep first finds the seat gone,
+// forgotten the mailbox's grace later, so a seat restored inside it gets back
+// its mail, its rooms and its Home together.
 //
 // # Never a replicated row
 //

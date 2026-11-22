@@ -351,15 +351,17 @@ var subjectOf = map[string]subject{
 	chatlet.DeleteMessageTool: {kind: authz.KindMessage, inTool: true},
 
 	// And a read cursor is the caller's own record: `mark_chat_read` takes
-	// no handle.
+	// no handle. So is a Home board.
 	chatlet.MarkChatReadTool: {kind: authz.KindPerson},
+	SaveHomeBoardTool:        {kind: authz.KindPerson},
 }
 
 // ownBookkeeping are the tools whose every write is the CALLER'S OWN
-// BOOKKEEPING (read cursors, inbox marks on either log, pins), each a personal
-// tool taking no name ([subjectOf]), so it acts only for its caller. Declared
-// beside [subjectOf] because the runtime audit files these under a type of
-// their own that the company's activity feed leaves out (internal/api/operator).
+// BOOKKEEPING (read cursors, inbox marks on either log, pins, a Home board),
+// each a personal tool taking no name ([subjectOf]), so it acts only for its
+// caller. Declared beside [subjectOf] because the runtime audit files these
+// under a type of their own that the company's activity feed leaves out
+// (internal/api/operator).
 var ownBookkeeping = map[string]bool{
 	worklet.MarkInboxTool:    true,
 	worklet.SetPinsTool:      true,
@@ -367,6 +369,7 @@ var ownBookkeeping = map[string]bool{
 	CodeMarkViewedTool:       true,
 	ArtifactMarkInboxTool:    true,
 	chatlet.MarkChatReadTool: true,
+	SaveHomeBoardTool:        true,
 }
 
 // OwnBookkeeping reports whether every write a tool makes is the caller's own
