@@ -1644,8 +1644,10 @@ it:
     for as long as the harness waits for it. A hook the harness gave up on, or
     whose connection failed, is waited for no longer: nobody reads its answer.
   - **The notes route**, `/mcp/{token}/steer/notes?after=<seq>`,
-    `/mcp/{token}/steer/read` and `/mcp/{token}/steer/folded` (ids alone, for
-    the notes a plugin gave up), which a plugin inside the harness polls: a poll is
+    `/mcp/{token}/steer/read`, `/mcp/{token}/steer/again` and
+    `/mcp/{token}/steer/folded` (ids alone, for the second admission of a note
+    a compaction folded and for the notes a plugin gave up), which a plugin
+    inside the harness polls: a poll is
     held for up to **ten seconds** while no note waits, and answered at once
     when one arrives. Once the node is stopping, or the session's opening has
     ended, a held poll is let go and every later one turned away with a `503`
@@ -2167,13 +2169,20 @@ the server the id of the session the run works in, as `CREWLET_STEER_SESSION` on
   session past its compaction point delivers the note and then compacts, and
   the model gets it only inside the checkpoint, framed as history.
   - A note delivered and never sent plain when the session's compaction ends
-    is **admitted again once**, under a second id the route serves beside its
-    first (`again`, a person's note's or a late call's alone), and lands plain
-    at the next step. One folded again is given up: never confirmed, its id
-    posted to the route's `folded`, which the engine logs as
-    `steer_note_folded`, and its review reads it. A wake or a run's message is
-    served once and never admitted again: folded, it runs as a turn after the
-    run. A compaction that fails confirms and posts nothing.
+    is **admitted again once**, under a second id the plugin asks the route's
+    `again` for then, and lands plain at the next step. The engine grants it
+    only for a person's note or a late call, and counts it as one of the
+    note's serves when it grants it, so a note that never folds spends
+    nothing. One the engine answers spent, or one folded again, is given up:
+    never confirmed, its id posted to the route's `folded`, which the engine
+    logs as `steer_note_folded`, and its review reads it. A wake or a run's
+    message is served once and never admitted again: folded, it runs as a turn
+    after the run. A compaction that fails confirms and posts nothing.
+  - **A note's poll serves span the run's jobs**: each job a poll first serves
+    it to spends one, a poll of the same job again none, and a second
+    admission one more, up to three for a note or a late call and one for a
+    wake. A note at its budget is served to no new job and waits for its
+    review.
   - A note admitted and never delivered is never confirmed, and its review reads
     it.
   - One delivered whose confirmation never landed (its harness cut off first, or
@@ -3158,7 +3167,7 @@ What an operator should recognize:
 - **`steer_cancel_unheard`** (a log line, at warning, with `take` and `note_id`): a job's session proved it never took a note its hook was served, and the bridge heard no cancel of that call: the harness gave the answer up without saying so. The note waits for the run's review or the next launch's brief. Many of them say a Claude Code release that no longer sends a cancel for a hook it gives up, whose notes then wait for the review rather than the job's next step.
 - **`mcp_bridge_steer_call_unread`** (a log line, at warning, once a run's session on the bridge): a hook's `steer_take` came with a JSON-RPC id the bridge could not read, so a cancel of it cannot be matched: what it serves is settled by the job's session alone, when its box is read.
 - **`steer_reader_never_ran`** (a log line, at warning, on the node that collects the run): a run whose harness takes a person's notes between its steps succeeded without asking for them once — a Claude Code run always asks at its finish, and an OpenCode run's plugin as soon as its session starts working — so something in its box switched its reading off: for Claude Code its [hooks](#claude-codes-hooks), by a managed policy that allows only managed hooks or disables them all, or a harness older than 2.1.163, which the run starts without them (its error stream says so); for OpenCode its [plugin](#opencodes-notes-plugin), by a managed policy that denies it or a load that failed, which OpenCode's own log names. Any note sent while it worked waited for its review rather than reaching it between its steps. The line names the run, its job and its harness, and what can switch that harness's reading off, as its runner states it.
-- **`steer_note_folded`** (a log line, at warning, on the node holding the run's opening): an OpenCode run's session compacted twice over a note, once on its first admission and again on the one the plugin [admits again](#opencodes-notes-plugin), so its model never had it as a current instruction. The note is never recorded read; it waits for the run's review. The line names the note, its job and its turn, never a word of the note. A run whose session is that close to its compaction point is worth a larger context window or a smaller brief.
+- **`steer_note_folded`** (a log line, at warning, on the node holding the run's opening): an OpenCode run's session compacted over a note and the plugin could not [admit it again](#opencodes-notes-plugin): it was folded a second time, or its serves were spent, so its model never had it as a current instruction. The note is never recorded read; it waits for the run's review. The line names the note, its job and its turn, never a word of the note. A run whose session is that close to its compaction point is worth a larger context window or a smaller brief.
 - **`a hook in the run stopped its loop before it finished (Claude Code terminal_reason hook_stopped)`** — a hook of the repository's or the image's own settings exited 2 or returned a block, and Claude Code ended the run part-way while reporting a success subtype. The run is a failure saying so; the run's own steering hooks never block. Fix or remove that hook in the repository or the image.
 - **`this box's home "…" cannot be named in an OpenCode run's configuration`** — an OpenCode run's configuration names its instruction file, its notes plugin and its servers' values by paths under the box's home ([OpenCode](#opencode)), and this home is one the configuration's text cannot carry: relative, or holding a brace, a quote, a backslash or a control character. A local box's home is under `providers.sandbox.local.state_dir`; move it to a path without one. The run starts nothing.
 - **`crewlet: the run has no OpenCode configuration at …`** (the run's error output) — the configuration the runner writes before every OpenCode run was not there, or was empty, when the run's script started: something in the box removed it between the two. The script stops before it imports a login or starts a server, and the next run writes the file again.

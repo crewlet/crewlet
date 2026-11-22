@@ -1286,6 +1286,13 @@ func (s *refusingStore) ServeNotes(ctx context.Context, turnID string, serve Not
 	return s.inner.ServeNotes(ctx, turnID, serve)
 }
 
+func (s *refusingStore) AgainNotes(ctx context.Context, turnID string, ask NoteAgain) ([]string, []string, error) {
+	if s.called("AgainNotes") {
+		return nil, nil, errRefusedCall
+	}
+	return s.inner.AgainNotes(ctx, turnID, ask)
+}
+
 func (s *refusingStore) SettleTake(ctx context.Context, turnID string, settle NoteSettle) ([]RunNote, error) {
 	if s.called("SettleTake") {
 		return nil, errRefusedCall

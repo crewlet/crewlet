@@ -316,13 +316,16 @@ func TestALateCallReachesAnOpenCodeJobAtItsNextPollAndIsReadOnItsConfirmation(t 
 	viewHolds(t, inbox, 1)
 	notes, _ := inbox.Wait(t.Context(), 0)
 	if len(notes) != 1 || notes[0].ID != item.ID || !strings.HasPrefix(notes[0].Message, prompts.LateCallHead) ||
-		notes[0].Inbox != executor.InboxID(executor.OpenCodeName, r.next.LaunchID, item.ID) ||
-		notes[0].Again != executor.AgainID(executor.OpenCodeName, r.next.LaunchID, item.ID) {
-		t.Fatalf("the poll was answered %+v, want the late call alone, in the engine's words, with its "+
-			"second id for a compaction that folds it", notes)
+		notes[0].Inbox != executor.InboxID(executor.OpenCodeName, r.next.LaunchID, item.ID) {
+		t.Fatalf("the poll was answered %+v, want the late call alone, in the engine's words", notes)
 	}
 	if served := noteOn(t, r.store, r.turn, item.ID); served.Served != r.next.LaunchID || !served.Waiting() {
 		t.Fatalf("the item holds %+v once polled, want it served to the job, waiting", served)
+	}
+	// AND, FOLDED BY A COMPACTION, IT IS ADMITTED AGAIN AS A NOTE IS.
+	if granted, _, err := inbox.Again(t.Context(), []string{item.ID}); err != nil ||
+		granted[item.ID] != executor.AgainID(executor.OpenCodeName, r.next.LaunchID, item.ID) {
+		t.Fatalf("the ask for the item's second admission answered %v, %v, want its job's second id", granted, err)
 	}
 	if err := inbox.Read(t.Context(), []string{item.ID}); err != nil {
 		t.Fatalf("Read: %v", err)

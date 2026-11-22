@@ -43,8 +43,12 @@ type fakeInbox struct {
 	cancels []sandbox.NoteCall
 	reads   [][]string
 	folds   [][]string
-	answer  string
-	readErr error
+	agains  [][]string
+	// spentIDs are the notes an ask for a second admission finds at their
+	// budget.
+	spentIDs []string
+	answer   string
+	readErr  error
 }
 
 func newFakeInbox() *fakeInbox { return &fakeInbox{changed: make(chan struct{})} }
@@ -85,6 +89,23 @@ func (i *fakeInbox) Read(_ context.Context, ids []string) error {
 	}
 	i.reads = append(i.reads, ids)
 	return i.readErr
+}
+
+// Again grants every note asked its id with "again:" before it, but those in
+// spentIDs, which it answers spent; it records each ask.
+func (i *fakeInbox) Again(_ context.Context, ids []string) (map[string]string, []string, error) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.agains = append(i.agains, ids)
+	granted, spent := map[string]string{}, []string(nil)
+	for _, id := range ids {
+		if slices.Contains(i.spentIDs, id) {
+			spent = append(spent, id)
+			continue
+		}
+		granted[id] = "again:" + id
+	}
+	return granted, spent, nil
 }
 
 func (i *fakeInbox) Folded(_ context.Context, ids []string) {
@@ -805,6 +826,67 @@ func TestAFoldIsGatedLikeAReadAndCarriesIDsAlone(t *testing.T) {
 	if res, err := f.server.Client().Get(url); err == nil {
 		if res.StatusCode != http.StatusMethodNotAllowed {
 			t.Errorf("a GET of folded answered %d, want 405", res.StatusCode)
+		}
+		_ = res.Body.Close()
+	}
+}
+
+// AN ASK FOR A SECOND ADMISSION IS GATED LIKE A READ AND ANSWERS IDS ALONE:
+// behind the run's own token (a forged or finished one is the bridge's 401 and
+// the inbox is never asked), its body bounded as a read's, only the ids reach
+// the inbox, and the answer is the id each granted note is admitted under and
+// the ids at their budget, which the plugin gives up: never a note's words.
+//
+// Mutation: answer `again` before serveSteer's token routing, skip its body's
+// bounds, or drop the spent ids from the answer, and this goes red.
+func TestAnAskForASecondAdmissionIsGatedLikeAReadAndAnswersIDsAlone(t *testing.T) {
+	t.Parallel()
+	f := newSteerFixture(t, time.Minute)
+	f.inbox.spentIDs = []string{"n-2"}
+	finished := newSteerFixture(t, time.Minute)
+	finished.bridge.Close("run-1")
+	post := func(url, body string) (int, string) {
+		res, err := f.server.Client().Post(url, "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		raw, _ := io.ReadAll(res.Body)
+		return res.StatusCode, string(raw)
+	}
+	const withText = `{"ids":["n-1","n-2"],"message":"the note's own words"}`
+	for name, url := range map[string]string{
+		"forged":   f.server.URL + mcpbridge.PathPrefix + "v1.run-1.99999999999.x/steer/again",
+		"finished": mcpbridge.SteerURL(finished.url) + "/again",
+	} {
+		if got, _ := post(url, withText); got != http.StatusUnauthorized {
+			t.Errorf("an ask under a %s token answered %d, want 401", name, got)
+		}
+	}
+	url := mcpbridge.SteerURL(f.url) + "/again"
+	if got, _ := post(url, `{"ids":[]}`); got != http.StatusBadRequest {
+		t.Errorf("an ask naming nothing answered %d, want 400", got)
+	}
+	if got, _ := post(url, `{"ids":["`+strings.Repeat("a", 70<<10)+`"]}`); got != http.StatusRequestEntityTooLarge {
+		t.Errorf("a 70 KiB ask answered %d, want 413", got)
+	}
+	status, body := post(url, withText)
+	if status != http.StatusOK || strings.TrimSpace(body) != `{"again":{"n-1":"again:n-1"},"spent":["n-2"]}` {
+		t.Errorf("an ask answered %d %s, want n-1 granted and n-2 spent, ids alone", status, body)
+	}
+	f.inbox.mu.Lock()
+	agains := slices.Clone(f.inbox.agains)
+	f.inbox.mu.Unlock()
+	finished.inbox.mu.Lock()
+	finishedAgains := len(finished.inbox.agains)
+	finished.inbox.mu.Unlock()
+	if len(agains) != 1 || !slices.Equal(agains[0], []string{"n-1", "n-2"}) || finishedAgains != 0 {
+		t.Errorf("the inboxes were asked %v and %d, want the one well-formed ask's ids alone", agains,
+			finishedAgains)
+	}
+	if res, err := f.server.Client().Get(url); err == nil {
+		if res.StatusCode != http.StatusMethodNotAllowed {
+			t.Errorf("a GET of again answered %d, want 405", res.StatusCode)
 		}
 		_ = res.Body.Close()
 	}

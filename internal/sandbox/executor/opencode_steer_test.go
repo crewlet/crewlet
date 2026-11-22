@@ -334,7 +334,6 @@ func (p *probe) quiet(d time.Duration, why string) {
 func noteNumbered(seq int) mcpbridge.SteerNote {
 	id := "note-" + string(rune('0'+seq))
 	return mcpbridge.SteerNote{Seq: seq, ID: id, Inbox: executor.InboxID(executor.OpenCodeName, "job-1", id),
-		Again:   executor.AgainID(executor.OpenCodeName, "job-1", id),
 		Message: "## A note from ada, sent while this turn was running\n\nnote " + id}
 }
 
@@ -355,10 +354,16 @@ func wantAdmitted(t *testing.T, input map[string]any, session string, note mcpbr
 }
 
 // wantReadmitted is [wantAdmitted] for the note's one admission again, under
-// its second id, once a compaction folded the first.
+// its second id ([againOf]), once a compaction folded the first.
 func wantReadmitted(t *testing.T, input map[string]any, session string, note mcpbridge.SteerNote) {
 	t.Helper()
-	wantAdmittedAs(t, input, session, note, note.Again)
+	wantAdmittedAs(t, input, session, note, againOf(note))
+}
+
+// againOf is the second id the engine grants note in job-1, the job every
+// case's notes are served to.
+func againOf(note mcpbridge.SteerNote) string {
+	return executor.AgainID(executor.OpenCodeName, "job-1", note.ID)
 }
 
 func wantAdmittedAs(t *testing.T, input map[string]any, session string, note mcpbridge.SteerNote, id string) {
@@ -686,10 +691,11 @@ func pluginAdmitsNotesAtTheRunsNextStep(t *testing.T) {
 // notes it holds, answered past each poll's cursor, and every read the route
 // handed it.
 type routeInbox struct {
-	mu    sync.Mutex
-	notes []mcpbridge.SteerNote
-	reads chan []string
-	folds chan []string
+	mu     sync.Mutex
+	notes  []mcpbridge.SteerNote
+	reads  chan []string
+	folds  chan []string
+	agains chan []string
 }
 
 func (i *routeInbox) Take(context.Context, string, *sandbox.NoteCall) string { return "" }
@@ -717,6 +723,16 @@ func (i *routeInbox) Read(_ context.Context, ids []string) error {
 
 func (i *routeInbox) Folded(_ context.Context, ids []string) { i.folds <- ids }
 
+// Again grants every note asked its second id in job-1.
+func (i *routeInbox) Again(_ context.Context, ids []string) (map[string]string, []string, error) {
+	i.agains <- ids
+	granted := map[string]string{}
+	for _, id := range ids {
+		granted[id] = executor.AgainID(executor.OpenCodeName, "job-1", id)
+	}
+	return granted, nil, nil
+}
+
 func (i *routeInbox) Close() {}
 
 // THE PLUGIN READS THE BRIDGE'S OWN NOTES ROUTE: run against a real bridge (its
@@ -727,21 +743,20 @@ func (i *routeInbox) Close() {}
 // admitting, confirming or giving up nothing with no error anywhere, since the
 // plugin skips a note it cannot read.
 //
-// Mutation: rename `inbox`, `again`, `message` or `seq` on
-// mcpbridge.SteerNote, or `ids` on the route's read, or the `folded` verb, or
-// the field the plugin reads for any of them, and this goes red.
+// Mutation: rename `inbox`, `message` or `seq` on mcpbridge.SteerNote, `ids`
+// on the route's read, the `again` answer's fields, or the `again` or
+// `folded` verb, or the field the plugin reads for any of them, and this goes
+// red.
 func pluginReadsTheBridgesOwnNotesRoute(t *testing.T) {
 	t.Parallel()
 	node := nodeForNotes(t)
 	entry := steerEntry(t)
 	note := mcpbridge.SteerNote{Seq: 3, ID: "req-7", Inbox: executor.InboxID(executor.OpenCodeName, "job-1", "req-7"),
-		Again:   executor.AgainID(executor.OpenCodeName, "job-1", "req-7"),
 		Message: "## A note from ada, sent while this turn was running\n\nTarget the release branch."}
 	folded := mcpbridge.SteerNote{Seq: 4, ID: "req-8", Inbox: executor.InboxID(executor.OpenCodeName, "job-1", "req-8"),
-		Again:   executor.AgainID(executor.OpenCodeName, "job-1", "req-8"),
 		Message: "## A note from ada, sent while this turn was running\n\nAnd tag it."}
 	inbox := &routeInbox{notes: []mcpbridge.SteerNote{note, folded}, reads: make(chan []string, 4),
-		folds: make(chan []string, 4)}
+		folds: make(chan []string, 4), agains: make(chan []string, 4)}
 	endpoint := probeBridge(t, inbox, &probeLedger{})
 
 	pr := startProbe(t, node, entry)
@@ -767,12 +782,15 @@ func pluginReadsTheBridgesOwnNotesRoute(t *testing.T) {
 			pr.stderrText())
 	}
 	// THE OTHER NOTE IS FOLDED TWICE: admitted again under the second id the
-	// route served, then given up through the route's fold.
+	// route granted it, then given up through the route's fold.
 	pr.event("a", "session.inbox.delivered", steerSession, map[string]any{"inboxID": folded.Inbox})
 	pr.event("a", "session.compaction.ended", steerSession, nil)
 	wantReadmitted(t, pr.expect("prompt-started").Input, steerSession, folded)
 	pr.expect("prompt")
-	pr.event("a", "session.inbox.delivered", steerSession, map[string]any{"inboxID": folded.Again})
+	if asked := <-inbox.agains; len(asked) != 1 || asked[0] != folded.ID {
+		t.Errorf("the route handed the inbox the ask %v, want the folded note's id %q", asked, folded.ID)
+	}
+	pr.event("a", "session.inbox.delivered", steerSession, map[string]any{"inboxID": againOf(folded)})
 	pr.event("a", "session.compaction.ended", steerSession, nil)
 	select {
 	case ids := <-inbox.folds:

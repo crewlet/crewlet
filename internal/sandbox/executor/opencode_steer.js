@@ -26,11 +26,13 @@
 // equal to the note's text, so a checkpoint quoting it never matches and a
 // message of any other shape confirms nothing. The hook does no I/O: OpenCode
 // holds the request until it returns. A note delivered and never seen plain
-// when the session's compaction ends was folded: it is admitted again ONCE,
-// under the second id the engine serves for it (`again`, a note's or a late
-// call's alone; a wake is served once and never re-admitted), and a note
-// folded again is given up: never confirmed, its id posted to the route's
-// `folded` so the engine says why it waits for the review. A failed
+// when the session's compaction ends was folded: the plugin asks the route's
+// `again` for a second id to admit it under, ONCE, which the engine grants
+// only within the note's serves and only for a person's note or a late call
+// (a wake is served once and never re-admitted), counting it as a serve then,
+// so a note that never folds spends nothing. A note the engine answers spent,
+// or one folded again, is given up: never confirmed, its id posted to the
+// route's `folded` so the engine says why it waits for the review. A failed
 // compaction confirms and posts nothing. Measured on 2.0.32, 2.1.4, 2.2.7 and
 // 2.3.0: the hook precedes the delivered event, which precedes the
 // compaction's start; a re-admitted note lands plain one step later.
@@ -76,12 +78,12 @@
 // favour (`timeout: false`).
 const pollAbortMs = 20_000
 
-// readAbortMs bounds one confirmation, or one post of folded notes: a single
-// write on the run's record.
+// readAbortMs bounds one confirmation, ask for second ids, or post of folded
+// notes: a single write on the run's record.
 const readAbortMs = 10_000
 
-// endWaitMs bounds how long the cleanup waits for the confirmations and folds
-// in flight before it ends them. OpenCode awaits a plugin's cleanup when its
+// endWaitMs bounds how long the cleanup waits for the confirmations, asks and
+// folds in flight before it ends them. OpenCode awaits a plugin's cleanup when its
 // server is stopped, and exited within 0.2 s of one ending (measured on the
 // four releases); the run's script kills the server five seconds after asking
 // it to stop (internal/sandbox's JobStopGrace), so four leaves it that second.
@@ -131,14 +133,18 @@ async function arm(ctx, url, session) {
   // held is every note admitted and not yet settled, by its id: {id, text,
   // inbox, again, delivered, readmitted, plain}. admitted maps each inbox id a
   // note was handed to the session under — its first and its `again` — to its
-  // id. owed holds the notes seen plain and not yet confirmed, folded the notes
-  // given up and not yet posted.
+  // id. owed holds the notes seen plain and not yet confirmed, asking the notes
+  // folded whose second id is not answered yet, folded the notes given up and
+  // not yet posted.
   const held = new Map()
   const admitted = new Map()
   const owed = new Set()
+  const asking = new Set()
   const folded = new Set()
-  // confirming and folding are the posting loops in flight, null when idle.
+  // confirming, askingAgain and folding are the loops in flight, null when
+  // idle.
   let confirming = null
+  let askingAgain = null
   let folding = null
 
   const open = () => {
@@ -170,26 +176,57 @@ async function arm(ctx, url, session) {
   }
 
   // compacted settles the notes a compaction of the session folded: each
-  // delivered and never seen plain is admitted again once, or given up.
+  // delivered and never seen plain is asked a second id for, once, or, folded
+  // again, given up.
   const compacted = () => {
     for (const note of [...held.values()]) {
       if (!note.delivered || note.plain) continue
       note.delivered = false
-      if (note.again !== undefined && !note.readmitted && gate !== null && !stopping) {
-        note.readmitted = true
-        admitted.set(note.again, note.id)
-        quietly(readmit(note))
+      if (note.readmitted) {
+        giveUp(note)
         continue
       }
-      // FOLDED TWICE, or an item served once (no `again`): never confirmed.
-      // Only a note given up after its second admission is posted; a wake
-      // takes its own fallback, a turn after the run.
-      held.delete(note.id)
-      if (note.readmitted) {
-        folded.add(note.id)
-        fold()
-      }
+      if (gate !== null && !stopping) asking.add(note.id)
     }
+    // ONE ASK FOR EVERY NOTE THE COMPACTION FOLDED.
+    if (asking.size > 0) askAgain()
+  }
+
+  // giveUp drops a note folded with no admission left: never confirmed, and
+  // posted so the engine says why it waits for the review.
+  const giveUp = (note) => {
+    held.delete(note.id)
+    folded.add(note.id)
+    fold()
+  }
+
+  // answered takes the route's answer to an ask for second ids: each note
+  // granted one is admitted again under it, each spent is given up, and any
+  // other (a wake, served once) is dropped, waiting for its own fallback.
+  const answered = (text, named) => {
+    let answer
+    try {
+      answer = JSON.parse(text)
+    } catch {
+      return false
+    }
+    const granted = answer?.again
+    const spent = answer?.spent
+    if (granted === null || typeof granted !== "object" || !Array.isArray(spent)) return false
+    for (const id of named) {
+      asking.delete(id)
+      const note = held.get(id)
+      if (note === undefined) continue
+      const again = granted[id]
+      if (typeof again === "string" && again.startsWith("msg_") && again !== note.inbox) {
+        note.again = again
+        note.readmitted = true
+        admitted.set(again, note.id)
+        if (gate !== null && !stopping) quietly(readmit(note))
+      } else if (spent.includes(id)) giveUp(note)
+      else held.delete(id)
+    }
+    return true
   }
 
   const readmit = async (note) => {
@@ -298,7 +335,7 @@ async function arm(ctx, url, session) {
       // KNOWN BEFORE IT IS ADMITTED, because OpenCode can deliver a note
       // before the call that admitted it has returned.
       if (!held.has(note.id)) {
-        held.set(note.id, { id: note.id, text: note.message, inbox: note.inbox, again: note.again,
+        held.set(note.id, { id: note.id, text: note.message, inbox: note.inbox, again: undefined,
           delivered: false, readmitted: false, plain: false })
       }
       admitted.set(note.inbox, note.id)
@@ -357,8 +394,34 @@ async function arm(ctx, url, session) {
       if (folded.size > 0 && !life.signal.aborted) fold()
     })
   }
+  // askAgain asks the route for a second id for every note asking holds, one
+  // request at a time, a failed one made again after a pause.
+  const askAgain = () => {
+    askingAgain ??= (async () => {
+      let wait = 0
+      while (asking.size > 0 && !life.signal.aborted) {
+        const named = [...asking]
+        const answer = await call(life.signal, "POST", url + "/again", JSON.stringify({ ids: named }), readAbortMs)
+        if (answer.refused) {
+          life.abort()
+          return
+        }
+        if (answer.ok && answered(answer.text, named)) {
+          wait = 0
+          continue
+        }
+        wait = next(wait)
+        await sleep(wait, life.signal)
+      }
+    })().finally(() => {
+      askingAgain = null
+      if (asking.size > 0 && !life.signal.aborted) askAgain()
+    })
+  }
   const settled = async () => {
-    while (confirming !== null || folding !== null) await Promise.allSettled([confirming, folding])
+    while (confirming !== null || askingAgain !== null || folding !== null) {
+      await Promise.allSettled([confirming, askingAgain, folding])
+    }
   }
 
   // THE HOOK BEFORE ANY REQUEST: OpenCode holds every prompt until setup has
@@ -399,9 +462,7 @@ function wellFormed(note) {
     typeof note.inbox === "string" &&
     note.inbox.startsWith("msg_") &&
     typeof note.message === "string" &&
-    note.message !== "" &&
-    (note.again === undefined ||
-      (typeof note.again === "string" && note.again.startsWith("msg_") && note.again !== note.inbox))
+    note.message !== ""
   )
 }
 

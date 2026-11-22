@@ -801,6 +801,10 @@ func (i *quietInbox) Wait(context.Context, int) ([]mcpbridge.SteerNote, <-chan s
 
 func (*quietInbox) Read(context.Context, []string) error { return nil }
 
+func (*quietInbox) Again(context.Context, []string) (map[string]string, []string, error) {
+	return nil, nil, nil
+}
+
 func (*quietInbox) Folded(context.Context, []string) {}
 
 func (*quietInbox) Close() {}

@@ -2672,6 +2672,15 @@ type PendingStore interface {
 	// served nothing ([NoteServe.Wakes]).
 	ServeNotes(ctx context.Context, turnID string, serve NoteServe) ([]RunNote, error)
 
+	// AgainNotes grants a job's harness the second admission of each note the ask
+	// names that waits, a poll served that job, and is a person's note or a late
+	// call's item, pinned as a serve is ([NoteAgain]): granted spends one of the
+	// note's poll serves ([RunNote.PollServes]) unless that job was granted it
+	// already; spent, at its budget, it is given up and waits for the review.
+	// Any other note is neither: a wake item, served once, is never admitted
+	// again. A gone or ending record grants nothing, never an error.
+	AgainNotes(ctx context.Context, turnID string, ask NoteAgain) (granted, spent []string, err error)
+
 	// SettleTake settles a take whose TakeNotes answered an error, by the identity its
 	// read named ([NoteRead.Take]): its write may have landed with the answer lost, or
 	// may land yet. It answers every note whose read that take recorded, each first

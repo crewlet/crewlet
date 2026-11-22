@@ -37,6 +37,10 @@ const probeTake = "5e2d1c0b-9a87-4f65-b432-10fedcba9876"
 
 func (i *probeInbox) Cancelled(context.Context, sandbox.NoteCall) {}
 
+func (i *probeInbox) Again(context.Context, []string) (map[string]string, []string, error) {
+	return nil, nil, nil
+}
+
 func (i *probeInbox) Folded(context.Context, []string) {}
 
 func (i *probeInbox) Take(_ context.Context, event string, _ *sandbox.NoteCall) string {

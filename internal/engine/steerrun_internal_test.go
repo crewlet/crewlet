@@ -2007,6 +2007,10 @@ func (h *heldInbox) Wait(context.Context, int) ([]mcpbridge.SteerNote, <-chan st
 
 func (h *heldInbox) Read(context.Context, []string) error { return mcpbridge.ErrNoteUntaken }
 
+func (h *heldInbox) Again(context.Context, []string) (map[string]string, []string, error) {
+	return nil, nil, mcpbridge.ErrNoteUntaken
+}
+
 func (h *heldInbox) Folded(context.Context, []string) {}
 
 func (h *heldInbox) Close() {

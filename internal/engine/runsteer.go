@@ -2222,7 +2222,9 @@ func (i *runInbox) Wait(ctx context.Context, after int) ([]mcpbridge.SteerNote, 
 	// THE JOB'S OWN ITEMS AND A PERSON'S NOTES ALONE: one for another job is
 	// never served to this one, so the cursor below would stop at it for good.
 	for _, o := range forJob(opened, launch) {
-		if o.held.Seq <= after {
+		// A NOTE AT ITS POLL BUDGET is no new job's ([sandbox.RunNote.PollServes]):
+		// passed over, never stopped at, so the notes after it are served.
+		if o.held.Seq <= after || (o.held.Served != launch && o.held.PollServes >= o.held.MaxServes()) {
 			continue
 		}
 		due = append(due, o)
@@ -2253,43 +2255,37 @@ func (i *runInbox) Wait(ctx context.Context, after int) ([]mcpbridge.SteerNote, 
 		if o.held.Served != launch && !served[o.held.ID] {
 			break
 		}
-		note := mcpbridge.SteerNote{
+		out = append(out, mcpbridge.SteerNote{
 			Seq: o.held.Seq, ID: o.held.ID, Inbox: executor.InboxID(i.harness, launch, o.held.ID),
 			Message: messages[k],
-		}
-		if readmittable(o.held, launch) {
-			note.Again = executor.AgainID(i.harness, launch, o.held.ID)
-		}
-		out = append(out, note)
+		})
 	}
 	return out, changed
 }
 
-// pollAdmissions is how many times a poll's harness may admit one item to a
-// job: under its inbox id, and once more under its `again` id where a
-// compaction folded the first ([mcpbridge.SteerNote.Again]). OpenCode answers
-// a repeat admission under a held id with the first, so however often the item
-// is polled the two ids are every admission there can be.
-const pollAdmissions = 2
-
-// readmittable reports whether a poll serves n its `again` id: where its serve
-// budget for the job ([sandbox.RunNote.MaxServes]) holds both admissions beside
-// the serves the record already holds there, so the bound holds across both
-// ids. A person's note or a late call's item, unserved, has room; a wake item,
-// a run's message among them, is served once ([sandbox.MaxWakeServes]) and
-// never admitted again: folded, it runs as a turn after the run.
-func readmittable(n sandbox.RunNote, launch string) bool {
-	held := 0
-	for _, s := range n.Serves {
-		if s.Launch == launch {
-			held++
-		}
+// Again grants the job's harness its second admission of the notes named that
+// a compaction folded, each under its own id ([executor.AgainID]), and names
+// those at their poll budget — see [mcpbridge.SteerInbox]. COUNTED WHEN SERVED,
+// never offered: a note that never folds spends nothing.
+func (i *runInbox) Again(ctx context.Context, ids []string) (map[string]string, []string, error) {
+	launch, _ := i.bound()
+	if launch == "" {
+		return nil, nil, mcpbridge.ErrNoteUntaken
 	}
-	return held+pollAdmissions <= n.MaxServes()
+	granted, spent, err := i.steers.store.AgainNotes(ctx, i.ident.turn.TurnID, sandbox.NoteAgain{IDs: ids,
+		Launch: launch, Statuses: steerTakeStatuses})
+	if err != nil {
+		return nil, nil, err
+	}
+	out := make(map[string]string, len(granted))
+	for _, id := range granted {
+		out[id] = executor.AgainID(i.harness, launch, id)
+	}
+	return out, spent, nil
 }
 
-// Folded says each note named that the job's harness gave up after a second
-// compaction folded it, once a note — see [mcpbridge.SteerInbox]. Only a note
+// Folded says each note named that the job's harness gave up once a compaction
+// folded it and it could not be admitted again, once a note — see [mcpbridge.SteerInbox]. Only a note
 // the job holds, by its id: the log carries no word of the note's.
 func (i *runInbox) Folded(ctx context.Context, ids []string) {
 	launch, watch := i.bound()
@@ -2304,8 +2300,9 @@ func (i *runInbox) Folded(ctx context.Context, ids []string) {
 		turn, id := i.ident.turn.TurnID, o.held.ID
 		i.steers.warnOnce(turn, "folded/"+id, func() {
 			log.WarnContext(ctx, "steer_note_folded", "turn_id", turn, "launch_id", launch, "note_id", id,
-				"detail", "the run's harness compacted twice over the note, so its model was never handed "+
-					"it as a current instruction; it waits for the review")
+				"detail", "the run's harness compacted over the note and could not admit it again (compacted "+
+					"twice, or its poll serves spent), so its model was never handed it as a current instruction; "+
+					"it waits for the review")
 		})
 	}
 }
