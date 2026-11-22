@@ -36,7 +36,7 @@ func init() {
 			Operations: []growth.Operation{
 				{ID: "campaigns.list", Method: "GET", Path: "/campaigns", Class: growth.ClassRead},
 				{ID: "campaign.update", Method: "POST", Path: "/campaigns/{id}", Class: growth.ClassOperate,
-					Fields: []growth.FieldRule{{Field: "status", Class: growth.ClassSpend, Pausing: []string{"PAUSED"}},
+					Fields: []growth.FieldRule{{Field: "status", Class: growth.ClassSpend, Pausing: []any{"PAUSED"}},
 						{Field: "daily_budget", Class: growth.ClassSpend, Lower: growth.ClassOperate},
 						{Field: "owner", Class: growth.ClassAdmin}}},
 				{ID: "users.create", Method: "POST", Path: "/users", Class: growth.ClassAdmin, Roles: []string{"ADMIN"}},
@@ -102,7 +102,8 @@ func (f *fakeAds) Run(_ context.Context, call growth.Call) (any, error) {
 }
 
 // classOf classes call as a product does: its tool's operation over the
-// fields it changes, the budget as read now.
+// fields it changes, the budget as read now. The campaign names the target,
+// as a product's path would, and changes nothing.
 func (f *fakeAds) classOf(call growth.Call) growth.Class {
 	if f.class != "" {
 		return f.class
@@ -112,6 +113,9 @@ func (f *fakeAds) classOf(call growth.Call) growth.Class {
 	op, _ := c.Operation(def.Operations[0])
 	var changes []growth.Change
 	for _, field := range slices.Sorted(maps.Keys(call.Args)) {
+		if field == "campaign" {
+			continue
+		}
 		ch := growth.Change{Field: field, After: call.Args[field]}
 		if field == "daily_budget" {
 			ch.Before = f.budget
