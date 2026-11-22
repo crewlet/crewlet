@@ -118,6 +118,13 @@
  * highlight rests on, and puts back the theme in effect when the list closes
  * or the pointer leaves it; Enter or a click applies (see `app/appearance.tsx`).
  *
+ * # The build is the foot's last line
+ *
+ * "Crewlet" and the engine's version as its health push says it, quiet, under
+ * the row (the kit's `AccountRow` `build`): the last node this tab reached
+ * (`useLastHealth`), so it stays through a dropped socket until the next
+ * connection's snapshot replaces it.
+ *
  * # Folded, the foot is the places and the reader's face
  *
  * In the compact sidebar (`railShape.ts`) the foot has no room for a name, so
@@ -159,6 +166,7 @@ import { refusalText } from "~/lib/refusal.ts";
 import { useFrameSession } from "~/lib/frameSession.ts";
 import { goSignIn, signOut } from "~/lib/session.ts";
 import { useClient } from "~/lib/store-hooks.ts";
+import { useLastHealth } from "~/lib/useLastHealth.ts";
 import { SignOutEverywhereDialog } from "~/components/SignOutEverywhere.tsx";
 import { readerName, type ViewerState } from "~/lib/viewer.ts";
 import { accessLine } from "~/lib/access.ts";
@@ -338,6 +346,7 @@ export function UserBlock({
   const account = accountOf(viewer, session, failed);
   // THE ACCOUNT'S ROW IS THIS BLOCK, so it is current where the Account is.
   const here = workspaceOf(route.path) === ACCOUNT.key;
+  const version = useLastHealth()?.version;
 
   // A PRINCIPAL THAT IS NOT A PERSON (an API token's session, a service
   // account) is told by its login, never by the session's `kind`, which is a
@@ -422,6 +431,7 @@ export function UserBlock({
         // reach the whole line without opening the menu.
         title={menu ? (via ? `Signed in ${via}. ${MENU_TITLE}` : MENU_TITLE) : undefined}
         linkSuffix=", your menu"
+        build={version ? `Crewlet ${version}` : undefined}
         // FOLDED, THE FACE STANDS ALONE: the places are tiles above it and
         // Preferences is in its menu.
         actions={
