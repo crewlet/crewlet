@@ -87,6 +87,7 @@ var Tools = []Tool{
 	{Key: "google_analytics", Surfaces: []ToolSurface{{string(KindGoogleAnalytics), "Google Analytics"}}},
 	{Key: "admob", Surfaces: []ToolSurface{{string(KindAdMob), "AdMob"}}},
 	{Key: "adsense", Surfaces: []ToolSurface{{string(KindAdSense), "AdSense"}}},
+	{Key: "google_ads", Surfaces: []ToolSurface{{string(KindGoogleAds), "Google Ads"}}},
 }
 
 // ToolState is a tool's standing in the one question a person asks of it: does

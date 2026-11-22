@@ -32,7 +32,10 @@
 //
 // Two allowed raises read on the same capacity could both pass the daily cap.
 // Apply holds the lease `spend/<kind>/<account>` ([Leaser]) while it re-reads
-// Daily, re-checks and applies, so the second sees the first's effect.
+// Daily, re-checks and applies, so the second sees the first's effect. A
+// product that holds one lease per account around every write it makes there
+// (Google's, internal/googlegrowth) runs [Guard.Recheck] inside it instead, so
+// no act holds two leases.
 //
 // spendguardtest is the one contract suite every Capacity runs.
 package spendguard
@@ -185,15 +188,24 @@ func (g *Guard[Op]) Apply(ctx context.Context, account string, op Op,
 		return Figures{}, fmt.Errorf("spendguard: holding %s's apply lease: %w", account, err)
 	}
 	defer release()
+	f, err := g.Recheck(ctx, op, read)
+	if err != nil {
+		return f, err
+	}
+	return f, apply(ctx)
+}
+
+// Recheck is Apply's checks for a product that holds the account's one apply
+// lease itself, around every write it makes there: it reads the account and
+// caps again (read) and holds op to them on live capacity. Outside such a
+// lease, two raises read on one capacity could both pass the daily cap.
+func (g *Guard[Op]) Recheck(ctx context.Context, op Op, read func(ctx context.Context) (Account, Caps, error)) (
+	Figures, error) {
 	// READ AGAIN INSIDE THE LEASE: what was read before it may be the state
 	// another applier was about to change.
 	acct, caps, err := read(ctx)
 	if err != nil {
 		return Figures{}, err
 	}
-	f, err := g.Check(ctx, acct, caps, op)
-	if err != nil {
-		return f, err
-	}
-	return f, apply(ctx)
+	return g.Check(ctx, acct, caps, op)
 }

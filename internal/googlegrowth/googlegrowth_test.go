@@ -158,15 +158,19 @@ func TestABatchsTargetsAreReadThroughTheProductsRead(t *testing.T) {
 		Path: "https://x.googleapis.com/v1/accounts/{accountsId}/items:batchDelete"}
 	get := growth.Operation{ID: "x.items.batchGet", Method: "GET", Class: growth.ClassRead,
 		Path: "https://x.googleapis.com/v1/accounts/{accountsId}/items:batchGet"}
-	w.client.BeforeRead = func(req googlegrowth.Request) (googlegrowth.Request, bool, error) {
+	w.client.BeforeRead = func(ctx context.Context, handle string, req googlegrowth.Request) ([]byte, bool, error) {
 		if req.Op.ID != batch.ID {
-			return googlegrowth.Request{}, false, nil
+			return nil, false, nil
 		}
 		if req.Field("refuse") != nil {
-			return googlegrowth.Request{}, false, errors.New("refused")
+			return nil, false, errors.New("refused")
 		}
 		read, err := googlegrowth.NewRequest(get, req.Params, map[string]string{"names": "accounts/1/items/2"}, nil)
-		return read, true, err
+		if err != nil {
+			return nil, false, err
+		}
+		raw, err := w.client.Send(ctx, handle, read)
+		return raw, err == nil, err
 	}
 	req, _ := googlegrowth.NewRequest(batch, map[string]string{"accountsId": "1"}, nil, map[string]any{"names": []any{"accounts/1/items/2"}})
 	h, err := w.client.Read(t.Context(), "seat-a", req)
@@ -714,6 +718,51 @@ func TestAHeldCallsAnswerIsRecordedBeforeItActs(t *testing.T) {
 	it.mu.Lock()
 	defer it.mu.Unlock()
 	if it.writes != 1 {
+		t.Errorf("Google was written %d times", it.writes)
+	}
+}
+
+// A PRODUCT'S LAST CHECK RUNS UNDER THE LEASE AND SENDS NOTHING IT REFUSES:
+// once the target read again holds the binding, a refusal (a spend over the
+// caps read now) ends the allowed act failed with the check's reason.
+//
+// Mutation: skip the check, or run it before the lease, and the write is sent
+// or the check reads what another apply is about to change.
+func TestAProductsLastCheckRunsUnderTheLease(t *testing.T) {
+	t.Parallel()
+	it := &item{name: "old", reads: make(chan struct{}, 8), release: make(chan struct{}), writing: make(chan struct{}, 1)}
+	close(it.release)
+	srv := httptest.NewServer(http.HandlerFunc(it.serve))
+	t.Cleanup(srv.Close)
+	w := newWorld(t, httpxtest.Rewrite(t, srv))
+	req, _ := googlegrowth.NewRequest(patch, map[string]string{"accountsId": "1", "itemsId": "2"},
+		map[string]string{"updateMask": "name"}, map[string]any{"name": "new"})
+	req.Account = "accounts/1"
+	h, _ := w.client.Read(t.Context(), "seat-a", req)
+	call := growth.Call{Handle: "seat-a", Tool: "x_ads_spend", HeldCall: "held-1", Approver: "founder"}
+	leased := false
+	_, err := w.client.Apply(t.Context(), call, googlegrowth.Write{Req: req, Class: growth.ClassSpend,
+		Check: func(ctx context.Context, read googlegrowth.Held) error {
+			w.leases.mu.Lock()
+			_, held := w.leases.held["write/x_ads/accounts/1"]
+			w.leases.mu.Unlock()
+			_, bounded := ctx.Deadline()
+			leased = held && bounded && read.Binding == h.Binding
+			return &googlegrowth.CallError{Failure: growth.FailureCapExceeded, Err: errors.New("over the daily cap")}
+		}}, h.Binding)
+	if err == nil || !leased {
+		t.Fatalf("a refused check answered %v (checked under the lease: %v)", err, leased)
+	}
+	got := w.audit.taken()
+	w.audit.mu.Lock()
+	last := w.audit.recs[len(w.audit.recs)-1]
+	w.audit.mu.Unlock()
+	if strings.Join(steps(got), ",") != "allowed,failed" || last.Failure != growth.FailureCapExceeded {
+		t.Errorf("recorded %v with %q, want allowed then failed over the caps", got, last.Failure)
+	}
+	it.mu.Lock()
+	defer it.mu.Unlock()
+	if it.writes != 0 {
 		t.Errorf("Google was written %d times", it.writes)
 	}
 }

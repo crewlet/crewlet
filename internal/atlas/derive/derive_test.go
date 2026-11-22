@@ -233,6 +233,20 @@ func TestAnAdSensePublisherAccountIsAnAccount(t *testing.T) {
 	find(t, read(c), atlas.KindAccount, "google/adsense")
 }
 
+// A GOOGLE ADS ACCOUNT IS AN ACCOUNT, keyed by its customer ID, with the
+// advertising capability; a company that names none holds the vendor alone.
+func TestAGoogleAdsAccountIsAnAccount(t *testing.T) {
+	t.Parallel()
+	c := derive.AcmeCompany()
+	c.Integrations.GoogleAds = &config.GoogleAds{Enabled: true, Customers: []config.GoogleAdsCustomer{{ID: "1234567890"}}}
+	account := find(t, read(c), atlas.KindAccount, "google/ads/1234567890")
+	if account.Name != "Google Ads" || !slices.Contains(factOf(account, atlas.FactCapability), "advertising") {
+		t.Errorf("the customer's account is %+v", account)
+	}
+	c.Integrations.GoogleAds.Customers = nil
+	find(t, read(c), atlas.KindAccount, "google/ads")
+}
+
 // A TOOL SERVER IS KNOWN BY ITS COMMAND, NEVER ITS ARGUMENTS: an argument is
 // where a person passes a token by mistake, and it is no secret position.
 func TestAToolServerIsKnownByItsCommandNotItsArguments(t *testing.T) {

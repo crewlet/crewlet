@@ -28,16 +28,12 @@ func NewHeld(req Request, before []byte) Held {
 // write that acts on nothing one read returns ([Request.Resource]).
 func (c *Client) Read(ctx context.Context, handle string, req Request) (Held, error) {
 	if c.BeforeRead != nil {
-		get, ok, err := c.BeforeRead(req)
+		before, ok, err := c.BeforeRead(ctx, handle, req)
 		if err != nil {
 			return Held{Req: req}, err
 		}
 		if ok {
-			raw, err := c.Send(ctx, handle, get)
-			if err != nil {
-				return Held{Req: req}, err
-			}
-			return NewHeld(req, raw), nil
+			return NewHeld(req, before), nil
 		}
 	}
 	address := req.Resource()
@@ -120,13 +116,17 @@ func (c *Client) Card(call growth.Call, h Held, binding string, class growth.Cla
 // far as it was built, for the record); its tool's class, which every record
 // of it names; the product's scope check, which Apply runs under the lease;
 // the product's own read of its target where Google serves no get, nil for
-// [Client.Read]; and how its answer is cut, nil for not at all.
+// [Client.Read]; its last check there, on the target read again once the
+// binding holds (a spend's caps, internal/spendguard), whose refusal ends the
+// act failed with its reason; and how its answer is cut. A nil check or cut is
+// none.
 type Write struct {
 	Req   Request
 	Err   error
 	Class growth.Class
 	Scope func(ctx context.Context) error
 	Read  func(ctx context.Context) ([]byte, error)
+	Check func(ctx context.Context, h Held) error
 	Cut   func(any) any
 }
 
@@ -134,8 +134,8 @@ type Write struct {
 // failed), or an approved held call, whose administrator's answer is recorded
 // first and which acts only on the act's one answer (applied, void or failed,
 // every way it ends). Under the account's lease and within growth.ApplyBound
-// it holds w to the seat's scope, reads its target again, and sends nothing
-// where binding no longer holds.
+// it holds w to the seat's scope, reads its target again, sends nothing where
+// binding no longer holds, and checks it last.
 func (c *Client) Apply(ctx context.Context, call growth.Call, w Write, binding string) (any, error) {
 	held := call.HeldCall != ""
 	r := c.Record(call, w.Req, w.Class)
@@ -171,6 +171,11 @@ func (c *Client) Apply(ctx context.Context, call growth.Call, w Write, binding s
 			c.note(ctx, growth.StepVoid, r)
 		}
 		return nil, growth.ErrMoved
+	}
+	if w.Check != nil {
+		if err = w.Check(act, h); err != nil {
+			return nil, c.failEarly(ctx, held, r, err)
+		}
 	}
 	out, err := c.SendAndRead(act, call.Handle, h.Req, w.Cut)
 	switch {

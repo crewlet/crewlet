@@ -38,9 +38,10 @@
 // before-state. [Client.Apply] records the administrator's answer first and
 // acts only on the act's one answer; then, under the account's apply lease
 // and within growth.ApplyBound, it reads the target again and sends nothing
-// where the digest moved, recording the outcome: applied, void, or failed
-// with a closed reason. A write that went unanswered may have reached Google,
-// so its outcome is unknown, never "unavailable" ([FailureOf]).
+// where the digest moved or the product's last check refuses it (a spend's
+// caps), recording the outcome: applied, void, or failed with a closed
+// reason. A write that went unanswered may have reached Google, so its
+// outcome is unknown, never "unavailable" ([FailureOf]).
 //
 // # Every act on the access log
 //
@@ -69,6 +70,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"net/http"
 	"net/url"
 	"reflect"
 	"regexp"
@@ -91,6 +93,9 @@ type Request struct {
 	Query   url.Values
 	// Params are the path parameters the call gave, by name.
 	Params map[string]string
+	// Header is what the API asks beyond the engine's own headers: Google
+	// Ads' login-customer-id, naming the manager an account is reached through.
+	Header http.Header
 	// Account is set by the product: "properties/123", a site, a customer;
 	// "" where the call acts in none, and the log then names its target.
 	Account string

@@ -139,6 +139,7 @@ var integrationRows = map[integration.Kind]func(b *builder, c *config.Company, z
 	integration.KindGoogleAnalytics: googleAnalytics,
 	integration.KindAdMob:           adMob,
 	integration.KindAdSense:         adSense,
+	integration.KindGoogleAds:       googleAds,
 	integration.KindAtlassian:       atlassian,
 }
 
@@ -461,6 +462,24 @@ func adSense(b *builder, c *config.Company, _ map[string]atlas.Ref) {
 	for i, id := range a.Accounts {
 		b.account("integrations.adsense.accounts["+strconv.Itoa(i)+"]", atlas.VendorGoogle, "adsense/"+id, id,
 			"AdSense", a.Enabled, atlas.CapabilityMonetization)
+	}
+}
+
+// googleAds records each Google Ads account the company names, keyed by its
+// customer ID, or the vendor alone where it names none.
+func googleAds(b *builder, c *config.Company, _ map[string]atlas.Ref) {
+	g := c.Integrations.GoogleAds
+	if g == nil {
+		return
+	}
+	if len(g.Customers) == 0 {
+		b.account("integrations.google_ads", atlas.VendorGoogle, "ads", "", "Google Ads", g.Enabled,
+			atlas.CapabilityAdvertising)
+		return
+	}
+	for i, cu := range g.Customers {
+		b.account("integrations.google_ads.customers["+strconv.Itoa(i)+"].id", atlas.VendorGoogle, "ads/"+cu.ID,
+			cu.ID, "Google Ads", g.Enabled, atlas.CapabilityAdvertising)
 	}
 }
 
