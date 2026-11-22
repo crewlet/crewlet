@@ -1100,3 +1100,46 @@ func TestATornTranscriptAPackPaddedWithNULsIsCutBackWhenItIsRestored(t *testing.
 		}
 	})
 }
+
+// A BOX CONTINUES ITS OWN COPY ONLY WHERE THE RELEASE THAT WROTE IT IS ITS
+// ONE SUPPORTED RELEASE, for every runner whose harness holds a release to its
+// own copy (Codex, Copilot, Kimi Code, Muse Code): the box on that release
+// still refuses a copy its last run's record says a newer release wrote, as
+// a box downgraded since would hold, and one with no record at all, naming
+// why; the copy that release wrote is continued.
+//
+// Mutation: check the box's release alone in CheckInPlace, read the writer
+// from anywhere but the box's record, or take a missing record for a
+// current writer, and a row goes red.
+func TestABoxContinuesOnlyACopyItsOneReleaseWrote(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		runner             *executor.Runner
+		printed, newer     string
+		supported, refused string
+	}{
+		{executor.NewCodex(), "codex-cli 0.171.0", "codex-cli 0.172.0", "0.171.0", "0.172.0"},
+		{executor.NewCopilot(), "GitHub Copilot CLI 1.0.114.", "GitHub Copilot CLI 1.0.115.", "1.0.114", "1.0.115"},
+		{executor.NewKimi(), "2.7.2", "2.7.3", "2.7.2", "2.7.3"},
+		{executor.NewMuse(), "Muse Code 1.4.25 (1.4.25-R9361.1)", "Muse Code 1.4.26 (1.4.26-R1.1)", "1.4.25", "1.4.26"},
+	} {
+		for writer, want := range map[string]string{c.printed: "", c.newer: c.refused, "": "left no record"} {
+			var asked []string
+			b := versionBox(c.printed+"\n", 0, "", &asked)
+			if writer != "" {
+				record := "id s-1\ncontinued yes\nwhy \nrelease " + writer + "\n"
+				if err := b.WriteFile(t.Context(), paths(b).SessionRecord(), []byte(record)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			check, err := c.runner.CheckInPlace(t.Context(), b)
+			if err != nil {
+				t.Fatalf("%s, writer %q: CheckInPlace: %v", c.runner.Name(), writer, err)
+			}
+			if check.Continues != (want == "") || !strings.Contains(check.Why, want) || check.Version != c.supported {
+				t.Errorf("%s, a copy written by %q: %+v, want continued %v naming %q", c.runner.Name(), writer,
+					check, want == "", want)
+			}
+		}
+	}
+}
