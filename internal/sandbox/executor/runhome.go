@@ -10,46 +10,61 @@ import (
 	"github.com/crewlet/crewlet/internal/shellword"
 )
 
-// runHome is what a harness that discovers its configuration by walking its
-// home and its working directory (Gemini CLI, Qwen Code) may load besides what
-// its launch writes, and so what the launch removes before every run: a reused
-// box's home outlives its runs and its user can write all of it.
-//
-// State is the harness's directory under the home (`.gemini`, `.qwen`); Owned
-// the entries under it that hold skills, commands, rules, memory or an
-// environment file, removed whole; Memory the instruction files the harness
-// reads from the home itself and from the working directory. The working
-// directory is the box's own, never a checkout (a checkout is cloned below
-// it), so its State directory goes too where it is not the home's.
+// runHome is what a harness may load from a reused box besides what its launch
+// writes (Gemini CLI, Qwen Code, Codex), and so what the launch removes before
+// every run: a reused box's home outlives its runs and its user can write all
+// of it. The working directory is the box's own, never a checkout (a checkout
+// is cloned below it), so its State directory goes too where it is not the
+// home's.
 type runHome struct {
-	State  string
-	Owned  []string
+	// State is the harness's directory under the home (`.gemini`, `.qwen`,
+	// `.codex`), and Owned the entries under it that hold skills, commands,
+	// rules, memory or an environment file, removed whole.
+	State string
+	Owned []string
+	// Memory is the instruction files the harness reads from the home itself
+	// and from the working directory.
 	Memory []string
+	// Outside is entries under the home but outside State that the harness
+	// reads, removed whole (Codex's `.agents/skills`).
+	Outside []string
+	// WalksEnv says the harness reads the first `.env` on the walk from its
+	// working directory upward (Gemini CLI to `/`, Qwen Code beside the home's
+	// own): the home's and the working directory's go, and the working
+	// directory is left an empty `<State>/.env`, so the walk ends where it
+	// starts and no file above the box's home is read or touched. Codex reads
+	// its State's `.env` alone, an Owned entry.
+	WalksEnv bool
 }
 
 // pruneScript is the shell command that removes h's files from home and from
-// the run's working directory, and leaves an empty `<State>/.env` there. Both
-// harnesses read the first environment file on the walk from that directory
-// upward (Gemini CLI to `/`), so the walk ends where it starts and no file
-// above the box's home is read or touched; Qwen Code also reads the home's
-// `.env` files whatever the walk found, which go with the rest.
+// the run's working directory, and leaves the walk's empty `<State>/.env`
+// there where h walks for one.
 func (h runHome) pruneScript(home string) string {
 	q := shellword.Quote
 	state := home + "/" + h.State
-	removed := []string{q(home + "/.env")}
+	var removed []string
+	inWork := []string{`"$PWD/` + h.State + `"`}
+	if h.WalksEnv {
+		removed = append(removed, q(home+"/.env"))
+		inWork = append(inWork, `"$PWD/.env"`)
+	}
 	for _, entry := range h.Owned {
 		removed = append(removed, q(state+"/"+entry))
 	}
 	for _, name := range h.Memory {
 		removed = append(removed, q(home+"/"+name))
-	}
-	inWork := []string{`"$PWD/` + h.State + `"`, `"$PWD/.env"`}
-	for _, name := range h.Memory {
 		inWork = append(inWork, `"$PWD/`+name+`"`)
 	}
-	return "rm -rf -- " + strings.Join(removed, " ") +
-		` && if [ "$PWD" != ` + q(home) + ` ]; then rm -rf -- ` + strings.Join(inWork, " ") + `; fi` +
-		` && mkdir -p -- "$PWD/` + h.State + `" && printf '%s\n' ` + q(runEnvSeed) + ` > "$PWD/` + h.State + `/.env"`
+	for _, entry := range h.Outside {
+		removed = append(removed, q(home+"/"+entry))
+	}
+	script := "rm -rf -- " + strings.Join(removed, " ") +
+		` && if [ "$PWD" != ` + q(home) + ` ]; then rm -rf -- ` + strings.Join(inWork, " ") + `; fi`
+	if h.WalksEnv {
+		script += ` && mkdir -p -- "$PWD/` + h.State + `" && printf '%s\n' ` + q(runEnvSeed) + ` > "$PWD/` + h.State + `/.env"`
+	}
+	return script
 }
 
 // runEnvSeed is the empty environment file's one line.

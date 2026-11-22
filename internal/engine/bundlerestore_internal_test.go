@@ -386,8 +386,7 @@ providers:
       model: gpt-5
       harness: codex
 roles:
-  # A person's seat: codex can run no seat's executor, and the bundle
-  # restored is the entry's whoever runs on it.
+  # A person's seat: the bundle restored is the entry's whoever runs on it.
   - name: CEO
     handle: ceo
     kind: human
