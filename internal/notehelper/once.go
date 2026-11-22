@@ -78,8 +78,10 @@ func readTakeConfig(path string) (takeConfig, error) {
 	if err != nil {
 		return c, fmt.Errorf("the take config could not be opened: %w", err)
 	}
-	defer f.Close()
 	raw, err := io.ReadAll(io.LimitReader(f, maxConfig+1))
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
 	if err != nil || len(raw) > maxConfig {
 		return c, errors.New("the take config could not be read whole")
 	}
@@ -109,7 +111,7 @@ func take(ctx context.Context, cfg takeConfig, boundary string) (answer, token s
 	if err = client.open(ctx); err != nil {
 		return "", "", err
 	}
-	defer client.close()
+	defer client.close(ctx)
 	text, err := client.call(ctx, cfg.Tool, map[string]string{"event": boundary, "agent": ""})
 	if err != nil || text == "" {
 		return "", "", err
@@ -202,7 +204,8 @@ func (c *mcpClient) open(ctx context.Context) error {
 }
 
 // call calls tool with args and is its text content, "" where it answered
-// an error or no text.
+// no text; an answer that is no tool result, or a tool error, is an error
+// naming which, so the take hands nothing over and says why.
 func (c *mcpClient) call(ctx context.Context, tool string, args any) (string, error) {
 	msg, err := c.rpc(ctx, 2, map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/call",
 		"params": map[string]any{"name": tool, "arguments": args}})
@@ -218,8 +221,11 @@ func (c *mcpClient) call(ctx context.Context, tool string, args any) (string, er
 			} `json:"content"`
 		} `json:"result"`
 	}
-	if json.Unmarshal(msg, &answer) != nil || answer.Result == nil || answer.Result.IsError {
-		return "", nil
+	if err = json.Unmarshal(msg, &answer); err != nil || answer.Result == nil {
+		return "", fmt.Errorf("the bridge answered %s with no tool result", tool)
+	}
+	if answer.Result.IsError {
+		return "", fmt.Errorf("the bridge answered %s with a tool error", tool)
 	}
 	var text strings.Builder
 	for _, part := range answer.Result.Content {
@@ -231,12 +237,13 @@ func (c *mcpClient) call(ctx context.Context, tool string, args any) (string, er
 }
 
 // close ends the session, within a second of its own: the bridge ends an
-// abandoned one anyway.
-func (c *mcpClient) close() {
+// abandoned one anyway. Under ctx stripped of its cancellation, since the
+// take it ends may have ended on that very cancellation.
+func (c *mcpClient) close(ctx context.Context) {
 	if c.session == "" {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.endpoint, nil)
 	if err != nil {

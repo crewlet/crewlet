@@ -15,12 +15,14 @@ import (
 )
 
 // fakeMCP is a bridge's MCP endpoint as a take sees it: it answers
-// initialize, initialized and one tools/call of steer_take with answer,
-// as an event stream with a progress notice before the result, and records
-// each call's arguments and the skill route's posts.
+// initialize, initialized and one tools/call of steer_take with answer (or
+// with reply whole, where it is set), as an event stream with a progress
+// notice before the result, and records each call's arguments and the skill
+// route's posts.
 type fakeMCP struct {
 	srv    *httptest.Server
 	answer string
+	reply  string
 	mu     sync.Mutex
 	calls  []map[string]string
 	skills []string
@@ -68,6 +70,9 @@ func (m *fakeMCP) serve(w http.ResponseWriter, r *http.Request) {
 		m.calls = append(m.calls, msg.Params.Arguments)
 		result, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 2,
 			"result": map[string]any{"content": []any{map[string]string{"type": "text", "text": m.answer}}}})
+		if m.reply != "" {
+			result = []byte(m.reply)
+		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(w, "event: message\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\n\n"+
 			"event: message\ndata: "+string(result)+"\n\n")
@@ -168,6 +173,33 @@ func TestAMuseFiringKeepsTheWidestItemRaw(t *testing.T) {
 	if stderr != "[crewlet take t-1]\n" || !strings.Contains(stdout, text) || len(stdout) > museAnswerBytes {
 		t.Errorf("stdout is %d bytes (raw %v), stderr %q: want the text raw within %d", len(stdout),
 			strings.Contains(stdout, text), stderr, museAnswerBytes)
+	}
+}
+
+// A TAKE THE BRIDGE DID NOT ANSWER WITH A RESULT HANDS NOTHING OVER AND SAYS
+// WHY: a tool error, or a JSON-RPC error with no result, writes nothing on
+// stdout and no token on stderr, so nothing is confirmed and the take's notes
+// are told again, and the hook's stderr names the answer.
+//
+// Mutation: read either answer as an empty take.
+func TestATakeAnsweredWithNoResultHandsNothingOver(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct{ reply, says string }{
+		"tool error": {`{"jsonrpc":"2.0","id":2,"result":{"isError":true,"content":[{"type":"text",` +
+			`"text":"{\"crewlet_take\":\"[crewlet take t-1]\"}"}]}}`, "with a tool error"},
+		"no result": {`{"jsonrpc":"2.0","id":2,"error":{"code":-32000,"message":"down"}}`, "with no tool result"},
+	} {
+		m := newFakeMCP(t, "")
+		m.mu.Lock()
+		m.reply = c.reply
+		m.mu.Unlock()
+		code, stdout, stderr := fire(t, []string{"-adapter", "muse-hook", "-config", takeConfigFile(t, m), "-slot", "1"},
+			`{"hook_event_name":"PostToolUse","tool_name":"bash"}`, museEnv)
+		if code != exitDone || stdout != "" || strings.Contains(stderr, "[crewlet take") ||
+			!strings.Contains(stderr, c.says) {
+			t.Errorf("%s: exit %d, stdout %q, stderr %q; want nothing handed over and %q said", name, code,
+				stdout, stderr, c.says)
+		}
 	}
 }
 
