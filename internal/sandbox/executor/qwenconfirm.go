@@ -2,6 +2,7 @@ package executor
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -73,8 +74,9 @@ func qwenChatFile(ctx context.Context, box sandbox.Sandbox, session string) (str
 // the history Qwen Code goes on with, past the summary (ADR-0177: a note read
 // only inside a compaction summary is not read). A match no reply follows
 // (the request failed, was cancelled or the run was killed) is not held, so
-// the note is served again. A line that does not decode is passed over, as a
-// torn last line is.
+// the note is served again. A line past bound or one that does not decode
+// drops every pending match: it may have been a compaction that summarized
+// them, so the note is served again rather than confirmed unseen.
 func qwenNotesHeld(r io.Reader, takes []ServedTake, bound int) ([]string, error) {
 	type match struct{ id, digest string }
 	var settled []string
@@ -92,7 +94,11 @@ func qwenNotesHeld(r io.Reader, takes []ServedTake, bound int) ([]string, error)
 				} `json:"parts"`
 			} `json:"message"`
 		}
-		if json.Unmarshal(line, &record) != nil {
+		if len(bytes.TrimSpace(line)) == 0 {
+			return nil
+		}
+		if !decodes(json.Unmarshal, line, &record) {
+			pending = pending[:0]
 			return nil
 		}
 		switch {
@@ -120,7 +126,10 @@ func qwenNotesHeld(r io.Reader, takes []ServedTake, bound int) ([]string, error)
 			}
 		}
 		return nil
-	}, func(int64) error { return nil })
+	}, func(int64) error {
+		pending = pending[:0]
+		return nil
+	})
 	return settled, err
 }
 

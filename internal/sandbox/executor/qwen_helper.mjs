@@ -561,14 +561,16 @@ class Inbox {
   // confirms the matches an assistant record follows: a response to a request
   // that carried them plain. A compaction before it keeps a match only where
   // its text survives plain past the summary (ADR-0177; qwenconfirm.go's
-  // qwenNotesHeld, the same rule); one it drops is served again.
+  // qwenNotesHeld, the same rule); one it drops is served again. A line that
+  // does not parse drops every match: it may have been a compaction that
+  // summarized them, so their notes are served again rather than confirmed.
   record(line) {
-    if (!line.includes("mid_turn_user_message") && !line.includes("chat_compression") &&
-      !line.includes('"assistant"')) return
+    if (line.trim() === "") return
     let r
     try {
       r = JSON.parse(line)
     } catch {
+      this.matched = []
       return
     }
     if (r?.type === "assistant") {

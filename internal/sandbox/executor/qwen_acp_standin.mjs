@@ -16,8 +16,9 @@
 //   QWEN_FAKE_HOME    the home Qwen Code records sessions under
 //   QWEN_FAKE_LOG     where the stand-in writes what it saw, a JSON line each
 //   QWEN_FAKE_NEVER_CONNECT  the MCP status never says connected
-//   QWEN_FAKE_AWAIT_NOTES    asks again at a drain until it is first handed
-//                     a note, as later tool batches would
+//   QWEN_FAKE_AWAIT_NOTES    asks again at a drain until it has been handed
+//                     notes at that many drains (1 for any set value but a
+//                     count), as later tool batches would
 //   QWEN_FAKE_DIE_AFTER_NOTE exits at once after it is handed a note, before
 //                     recording it
 //   QWEN_FAKE_CHAT_SEED a chat file of Qwen Code's laid in place before the
@@ -25,9 +26,10 @@
 //   QWEN_FAKE_COMPACT a file of one chat_compression record of Qwen Code's,
 //                     recorded between the notes' records and the response
 //                     after them
-//   QWEN_FAKE_FAIL_AFTER_NOTE fails the request that carries a note once it
-//                     is recorded: no reply is recorded, and the prompt is
-//                     answered with an error
+//   QWEN_FAKE_FAIL_AFTER_NOTE fails the request that carries the notes of
+//                     that many-th drain to hand any (1 for any set value but a
+//                     count) once they are recorded: no reply is recorded,
+//                     and the prompt is answered with an error
 //
 // Like Qwen Code it records a drained note in the session's chat file as a
 // `mid_turn_user_message` record, the captured record's shape with the note's
@@ -62,7 +64,10 @@ function answersTo(capture, method) {
 const sessionOf = (capture) => answersTo(capture, "session/new")[0]?.result?.sessionId ?? ""
 
 let session = ""
-let handedAny = false
+// handed is how many drains have handed notes; count reads a variable that
+// names a number of drains, 1 for any other set value.
+let handed = 0
+const count = (value) => (Number.parseInt(value ?? "", 10) > 0 ? Number.parseInt(value, 10) : 1)
 const replace = (text, from) => (from === "" ? text : text.split(from).join(session))
 const strip = (m) => {
   const { dir, ...message } = m
@@ -128,17 +133,17 @@ async function replay(promptID) {
         const notes = got?.result?.messages ?? []
         log({ drain: notes, ms })
         if (notes.length > 0) {
-          handedAny = true
+          handed++
           if (env.QWEN_FAKE_DIE_AFTER_NOTE) process.exit(1)
           record(notes)
-          if (env.QWEN_FAKE_FAIL_AFTER_NOTE) {
+          if (env.QWEN_FAKE_FAIL_AFTER_NOTE && handed === count(env.QWEN_FAKE_FAIL_AFTER_NOTE)) {
             send({ jsonrpc: "2.0", id: promptID, error: { code: -32603, message: "Internal error" } })
             return
           }
           owedReply = true
           break
         }
-        if (!env.QWEN_FAKE_AWAIT_NOTES || handedAny || tries >= 200) break
+        if (!env.QWEN_FAKE_AWAIT_NOTES || handed >= count(env.QWEN_FAKE_AWAIT_NOTES) || tries >= 200) break
         await new Promise((resolve) => setTimeout(resolve, 50))
       }
     } else if (m.dir === "out" && m.method === "session/cancel") {

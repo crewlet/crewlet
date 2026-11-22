@@ -17,8 +17,9 @@ func (p Paths) QwenSettings() string { return p.QwenDir() + "/settings.json" }
 func (p Paths) QwenSkills() string { return p.WorkDir() + "/qwen-skills" }
 
 // QwenHelper is the helper the run's script starts as its harness and its
-// skill hook runs ([qwenHelperScript]); QwenHelperConfig is what it reads:
-// the session, the servers to wait for and the routes, so no token is on a
-// command line or in any process's environment.
-func (p Paths) QwenHelper() string       { return p.WorkDir() + "/qwen-helper.mjs" }
+// skill hook runs ([qwenHelperScript]).
+func (p Paths) QwenHelper() string { return p.WorkDir() + "/qwen-helper.mjs" }
+
+// QwenHelperConfig is what the helper reads: the servers to wait for and the
+// routes, so no token is on a command line or in any process's environment.
 func (p Paths) QwenHelperConfig() string { return p.WorkDir() + "/qwen-helper.json" }

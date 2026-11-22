@@ -40,7 +40,7 @@ func (b *transcriptBuilder) qwenSession(ctx context.Context, r io.Reader) error 
 			return err
 		}
 		var w qwenRecordWire
-		if !wireObject(line) || wireAlias(line, &w) != nil {
+		if !wireObject(line) || !decodes(wireAlias, line, &w) {
 			return nil
 		}
 		if looseString(w.Type) == "system" && looseString(w.Subtype) == "chat_compression" {
@@ -49,7 +49,7 @@ func (b *transcriptBuilder) qwenSession(ctx context.Context, r io.Reader) error 
 		var message struct {
 			Parts json.RawMessage `json:"parts"`
 		}
-		if !wireObject(w.Message) || wireAlias(w.Message, &message) != nil {
+		if !wireObject(w.Message) || !decodes(wireAlias, w.Message, &message) {
 			return nil
 		}
 		at := carriedInstant(claudeStamp(w.Timestamp))

@@ -33,12 +33,15 @@ func nodeForQwen(t *testing.T) string {
 // which every helper run here creates, so the replayed messages name it.
 const qwenCapturedSession = "11111111-2222-4333-8444-000000000001"
 
-// qwenNote is one note the stand-in bridge serves.
+// qwenNote is one note the stand-in bridge serves; After, where set, holds it
+// back until the note of that id is confirmed read, so it reaches a later
+// drain than that note.
 type qwenNote struct {
 	Seq     int    `json:"seq"`
 	ID      string `json:"id"`
 	Inbox   string `json:"inbox"`
 	Message string `json:"message"`
+	After   string `json:"-"`
 }
 
 // qwenBridge is a stand-in for the run's notes and skill routes: it serves
@@ -69,7 +72,7 @@ func (b *qwenBridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		after, _ := strconv.Atoi(r.URL.Query().Get("after"))
 		served := []qwenNote{}
 		for _, n := range b.notes {
-			if n.Seq > after && !slices.Contains(b.reads, n.ID) {
+			if n.Seq > after && !slices.Contains(b.reads, n.ID) && (n.After == "" || slices.Contains(b.reads, n.After)) {
 				served = append(served, n)
 			}
 		}
@@ -338,18 +341,43 @@ func TestAQwenNoteWhoseRequestFailedIsServedAgain(t *testing.T) {
 	}
 }
 
+// OF TWO IDENTICAL QWEN NOTES, ONLY THE ONE A REPLY FOLLOWS IS CONFIRMED. Two
+// notes of one text reach two drains; the request carrying the first is
+// answered, the one carrying the second fails after its record. Each record
+// matches its own note in order, and only the first has a reply after it, so
+// exactly one is confirmed and the other is served again.
+//
+// Mutations, each red: confirm a match at stop whatever followed it; confirm
+// a note at its record; settle every match on any reply, the second's record
+// counted against the first's reply.
+func TestOfTwoIdenticalQwenNotesOnlyTheRepliedOneIsConfirmed(t *testing.T) {
+	t.Parallel()
+	const text = "## A note from eve, sent while this turn was running\nuse staging"
+	bridge := newQwenBridge(t, qwenNote{Seq: 1, ID: "n-1", Inbox: "qwen_1", Message: text},
+		qwenNote{Seq: 2, ID: "n-2", Inbox: "qwen_2", Message: text, After: "n-1"})
+	run := startQwenHelper(t, bridge.steer(), "acp-note.jsonl", nil, "QWEN_FAKE_AWAIT_NOTES=2",
+		"QWEN_FAKE_FAIL_AFTER_NOTE=2")
+	lines, code := run.finish(t)
+	if notes := typed(lines, "crewlet_qwen_note"); code == 0 || len(notes) != 2 {
+		t.Fatalf("the run exited %d having handed %v, want both notes handed and a failure", code, notes)
+	}
+	if got := bridge.read(); !slices.Equal(got, []string{"n-1"}) {
+		t.Errorf("the notes confirmed read are %v, want n-1 alone", got)
+	}
+}
+
 // A NOTE A COMPACTION KEEPS ONLY IN ITS SUMMARY IS NOT CONFIRMED (ADR-0177).
 // The stand-in records the note, then Qwen Code 0.28.3's own chat_compression
 // record of a note drained at the compaction point (chat-compact.jsonl), its
-// note the case's, then the response after it. Kept plain in the history past
-// the summary prefix, the note is confirmed; moved from that tail into the
-// summary entry, a part of its own, it is not, and the engine serves it again.
+// note the case's, then the response after it. Kept plain past the prefix,
+// behind another entry or not, the note is confirmed; moved into the summary
+// entry, kept in a model entry, under a wider contextPrefixLength, or behind
+// a line that does not parse, it is not, and the engine serves it again.
 //
-// Kept only in a model entry of the tail, it is not either.
-//
-// Mutations, each red: pass compaction records over (the summarized note is
-// confirmed); count the summary entry as kept (the tail read from 0); confirm
-// a note at its record, before the response after it; count a model entry.
+// Mutations, each red: pass compaction records over; read the tail from 0;
+// confirm a note at its record; count a model entry; ignore
+// contextPrefixLength; read only the first entry past the prefix; keep matches
+// past a line that does not parse.
 func TestAQwenNoteACompactionOnlySummarizedIsNotConfirmed(t *testing.T) {
 	t.Parallel()
 	const marker = "MARK-CN-START note at the compaction point MARK-CN-END"
@@ -368,18 +396,23 @@ func TestAQwenNoteACompactionOnlySummarizedIsNotConfirmed(t *testing.T) {
 	quoted := strings.Trim(string(mustJSON(t, note.Message)), `"`)
 	summarized := strings.Replace(strings.Replace(compaction, tail, "", 1),
 		summary, `"parts":[{"text":"`+marker+`"},{"text":"<state_snapshot>`, 1)
-	modelTail := strings.Replace(compaction, `{"role":"user","parts":[{"functionResponse"`,
-		`{"role":"model","parts":[{"functionResponse"`, 1)
-	if modelTail == compaction {
-		t.Fatal("the capture's tail holds no user entry for the note")
+	const noteEntry = `{"role":"user","parts":[{"functionResponse"`
+	modelTail := strings.Replace(compaction, noteEntry, `{"role":"model","parts":[{"functionResponse"`, 1)
+	behind := strings.Replace(compaction, noteEntry, `{"role":"user","parts":[{"text":"another entry"}]},`+noteEntry, 1)
+	wider := strings.Replace(compaction, `"contextPrefixLength":2`, `"contextPrefixLength":3`, 1)
+	if modelTail == compaction || behind == compaction || wider == compaction {
+		t.Fatal("the capture's tail holds no user entry for the note, or its record no context prefix")
 	}
 	for name, tc := range map[string]struct {
 		record string
 		want   []string
 	}{
-		"kept plain past the summary":  {compaction, []string{"n-1"}},
-		"kept only inside the summary": {summarized, nil},
-		"kept in a model entry":        {modelTail, nil},
+		"kept plain past the summary":          {compaction, []string{"n-1"}},
+		"kept only inside the summary":         {summarized, nil},
+		"kept in a model entry":                {modelTail, nil},
+		"behind another entry past the prefix": {behind, []string{"n-1"}},
+		"a wider context prefix":               {wider, nil},
+		"an undecodable line before the reply": {`{"type":"system","subtype":"chat_compression",`, nil},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
