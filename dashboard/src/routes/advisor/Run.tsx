@@ -19,7 +19,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Button, Disclosure, Meter, StatusLine, Text, useToast, type Tone } from "@crewlethq/ui";
 import { ago } from "~/lib/ago.ts";
 import { useNow } from "~/lib/clock.ts";
-import { fmtCount, fmtElapsed, plural } from "~/lib/format.ts";
+import { fmtCount, fmtElapsed, plural, relTime } from "~/lib/format.ts";
 import { unreadNames } from "~/lib/advisorUnread.ts";
 import type { AdvisorRunSummary } from "~/protocol/advisorFindings.ts";
 import { runNow, useLatestRun } from "./api.ts";
@@ -254,7 +254,7 @@ export interface RunState {
 /** Where the run stands, in a word and a few short notes. */
 export function runState(run: ViewRun, now: number): RunState {
   const deep = run.kind === "deep";
-  const when = ago(run.endedAt ?? run.startedAt, now);
+  const at = run.endedAt ?? run.startedAt;
   const unread = run.unread.length > 0 ? [`${plural(run.unread.length, "source")} not read`] : [];
   switch (run.status) {
     case "none":
@@ -274,7 +274,7 @@ export function runState(run: ViewRun, now: number): RunState {
         label: deep ? "Investigation failed" : "Last run failed",
         tone: "danger",
         pulse: false,
-        notes: [ago(run.startedAt, now)],
+        notes: [relTime(run.startedAt, now)],
       };
   }
   const moved = [
@@ -298,7 +298,7 @@ export function runState(run: ViewRun, now: number): RunState {
   ];
   const warn = unread.length > 0 || Boolean(bound) || (deep && run.deepSkipped === "no_model");
   return {
-    label: `${investigated ? "Investigated" : "Checked"} ${when}`,
+    label: investigated ? `Investigated ${ago(at, now)}` : `Checked ${ago(at, now)}`,
     tone: warn ? "warning" : "success",
     pulse: false,
     notes,

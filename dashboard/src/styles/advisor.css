@@ -295,11 +295,12 @@
   background: var(--color-surface-subtle);
 }
 
-/* Every step a run reported, oldest first, folded under Steps. */
+/* Every step a run reported, oldest first, folded under Steps; at most half
+   the view, so the findings below stay in reach. */
 .advisor-run__steps {
   display: grid;
   gap: var(--spacing-1);
-  max-height: 16rem;
+  max-height: calc(100cqb / 2);
   margin: var(--spacing-1) 0 0;
   padding-left: var(--spacing-4);
   overflow-y: auto;
