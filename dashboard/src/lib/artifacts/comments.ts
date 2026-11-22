@@ -3,6 +3,7 @@
 import type {
   ArtifactCommentAnchor,
   ArtifactCommentThread,
+  ArtifactCommentsAnswer,
   ArtifactKind,
   SlideNode,
 } from "~/protocol/index.ts";
@@ -208,4 +209,32 @@ export function boardAnchorAt(
     if (x >= 0 && y >= 0 && x < b.w && y < b.h) return { kind: "design", board: b.id, x, y };
   }
   return null;
+}
+
+/** One answer's threads followed by the next page's: a thread the first cut inside its remarks
+ *  takes the rest from the second, and each page's counts add up. */
+export function joinCommentPages(
+  read: ArtifactCommentsAnswer,
+  page: ArtifactCommentsAnswer,
+): ArtifactCommentsAnswer {
+  const threads = [...read.threads];
+  const rest = [...page.threads];
+  const last = threads[threads.length - 1];
+  if (last && rest[0]?.continued && rest[0].id === last.id) {
+    const more = rest.shift()!;
+    threads[threads.length - 1] = {
+      ...last,
+      remarks: [...last.remarks, ...more.remarks],
+      remarks_cut: more.remarks_cut,
+    };
+  }
+  return {
+    ...page,
+    counts: {
+      open: read.counts.open + page.counts.open,
+      resolved: read.counts.resolved + page.counts.resolved,
+      outdated: read.counts.outdated + page.counts.outdated,
+    },
+    threads: [...threads, ...rest],
+  };
 }

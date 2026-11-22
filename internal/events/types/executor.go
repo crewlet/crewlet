@@ -269,11 +269,11 @@ type ExecutorCollected struct {
 	// company's `turn_engine.conversation_session.enabled` off.
 	SessionTakenBytes int64  `json:"session_taken_bytes,omitempty"`
 	SessionNotKept    string `json:"session_not_kept,omitempty"`
-	// ContextWindowTokens is the context window a Claude Code run was pinned to
-	// (CLAUDE_CODE_AUTO_COMPACT_WINDOW), from the model it ran
-	// (internal/sandbox's ClaudeCodeWindow): the harness compacts under the
-	// smaller of it and the model's own window as it holds the model. Absent
-	// for a harness whose window the engine does not set.
+	// ContextWindowTokens is the context window a run was pinned to, from the
+	// model it ran, as its runner pins it (internal/sandbox's windowPinner;
+	// Claude Code's CLAUDE_CODE_AUTO_COMPACT_WINDOW): the harness compacts under
+	// the smaller of it and the model's own window as it holds the model.
+	// Absent for a harness whose window the engine does not set.
 	ContextWindowTokens int `json:"context_window_tokens,omitempty"`
 	// Brief is which of the four briefs the launch handed its run:
 	// `continued` (the turn's session, in its last box), `continued_new_box`

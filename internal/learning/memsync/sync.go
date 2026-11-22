@@ -39,10 +39,8 @@ const consumerCleanupTimeout = 5 * time.Second
 // trouble, and the seat is refused until the next sweep.
 const boundaryReadTimeout = 5 * time.Second
 
-// exportPageBytes is how many bytes of carried values one read of a watermark
-// table holds before publishing them, always at least one row ([exportPage]);
-// a whole-each-cycle table is still read whole ([exportWhole]) until
-// crewlet/crewlet#1040.
+// exportPageBytes is how many bytes of carried values one read of a table
+// holds before publishing them, always at least one row ([exportPage]).
 //
 // Bytes, not rows: one row can hold up to the transport's 8 MiB, and a drain
 // flushes every held seat at once (seat.Host.ReleaseAll), a page each: about
@@ -91,7 +89,7 @@ type Syncer struct {
 	holdings map[string]*seatHolding
 
 	// beforePage, a test's seam unset in production, is called with a range and
-	// a watermark table before each page's start is read: the window between
+	// a table before each page's start is read: the window between
 	// one page's last mark and the next page's read.
 	beforePage func(of markRange, table string)
 
@@ -228,7 +226,7 @@ type seatHolding struct {
 var ErrNotHeld = errors.New("memsync: this node's holding of the seat does not let this " +
 	"call publish it")
 
-// markRange is one of the two ranges a seat's rows of a watermark table fall
+// markRange is one of the two ranges a seat's rows of a table fall
 // in about its boundary: each is carried by a call of its own and marked
 // apart.
 type markRange string
@@ -262,35 +260,28 @@ func (s *Syncer) seat(handle string) seatRef {
 // own pass's ([Syncer.PublishOwn]) or its backlog's ([Syncer.PublishBacklog]),
 // which the caller tells apart by the call it made.
 type Carried struct {
-	// Rows is every row acknowledged: of an own pass, the whole-each-cycle
-	// tables' included.
+	// Rows is every row acknowledged, each of which moved a mark of the
+	// call's range: no later publish of that range sends it again, until it
+	// changes or a restart or a release zeroes the marks.
 	Rows int
 
-	// Marked is the rows among them that moved a mark of the call's range:
-	// the rows no later publish of that range sends again, until a restart
-	// or a release zeroes the marks. Of a backlog, every row it carried.
-	Marked int
-
 	// StoppedIn is the table a publish that did not reach its end stopped
-	// in, and Whole says it is a whole-each-cycle table, which keeps nothing
-	// of a cut publish: only an own pass carries one.
+	// in, which keeps what the publish carried of it.
 	StoppedIn string
-	Whole     bool
 }
 
 // PublishOwn is the seat's OWN PASS, which the engine's memory sync cycle gives
 // every held seat ahead of the turn their backlogs share (a release calls
-// [Syncer.FlushOwn]): what this node's holding wrote, then the tables sent
-// whole, so a cut likelier falls on those than on the seat's new rows
-// ([ownPassOrder]). It answers [ErrNotHeld] and reads nothing unless the
-// holding is live, and checks again before each row ([Syncer.stillHolds]). A
-// watermark table goes a page at a time ([exportPage]) above the larger of the
+// [Syncer.FlushOwn]): what this node's holding wrote or changed, stamped above
+// its boundary. It answers [ErrNotHeld] and reads nothing unless the holding
+// is live, and checks again before each row ([Syncer.stillHolds]). Each table
+// ([tables]) goes a page at a time ([exportPage]) above the larger of the
 // boundary and its own mark, read again each page since another call of the
 // range may have moved it; the mark moves past each acknowledged row, so a cut
-// publish keeps what it carried. A whole-each-cycle table keeps nothing of a
-// cut one. It returns at the first error, with what was acknowledged.
+// publish keeps what it carried. It returns at the first error, with what was
+// acknowledged.
 func (s *Syncer) PublishOwn(ctx context.Context, handle string) (Carried, error) {
-	return s.publish(ctx, handle, live, ownRange, ownPassOrder)
+	return s.publish(ctx, handle, live, ownRange)
 }
 
 // PublishBacklog carries the seat's BACKLOG, its rows at or below the boundary
@@ -298,14 +289,14 @@ func (s *Syncer) PublishOwn(ctx context.Context, handle string) (Carried, error)
 // is fixed"), and says what the changelog acknowledged. The memory sync cycle
 // calls it after the held seats' own passes; a release calls
 // [Syncer.FlushBacklog]. Live holdings only, checked as [Syncer.PublishOwn]'s
-// are. Each watermark table ([backlogPassOrder]) goes a page at a time
+// are. Each table ([tables]) goes a page at a time
 // ([exportBacklogPage]) above its backlog mark, up to the boundary. A table
 // read to the boundary, every row acknowledged, has its mark set there and is
 // never read again: every row at or below it had committed when the boundary
-// was read. That move counts nothing in [Carried.Marked]. It returns at the
+// was read. That move counts nothing in [Carried.Rows]. It returns at the
 // first error, with what was acknowledged.
 func (s *Syncer) PublishBacklog(ctx context.Context, handle string) (Carried, error) {
-	return s.publish(ctx, handle, live, backlogRange, backlogPassOrder)
+	return s.publish(ctx, handle, live, backlogRange)
 }
 
 // Releasing turns the seat's live holding here to releasing, and says whether
@@ -338,22 +329,22 @@ func (s *Syncer) Releasing(handle string) bool {
 // the cycles left, carried only while the holding is releasing
 // ([Syncer.Releasing]); otherwise it answers [ErrNotHeld] and reads nothing.
 func (s *Syncer) FlushOwn(ctx context.Context, handle string) (Carried, error) {
-	return s.publish(ctx, handle, releasing, ownRange, ownPassOrder)
+	return s.publish(ctx, handle, releasing, ownRange)
 }
 
 // FlushBacklog is [Syncer.PublishBacklog] for the release's last turn, after
 // [Syncer.FlushOwn]: the same backlog, carried only while the seat's holding
 // here is releasing.
 func (s *Syncer) FlushBacklog(ctx context.Context, handle string) (Carried, error) {
-	return s.publish(ctx, handle, releasing, backlogRange, backlogPassOrder)
+	return s.publish(ctx, handle, releasing, backlogRange)
 }
 
-// publish carries one range of a seat's memory, the tables in order, under the
-// seat's holding in state under, and says what the changelog acknowledged of
-// it: the body of [Syncer.PublishOwn], [Syncer.PublishBacklog],
+// publish carries one range of a seat's memory, the tables in the registry's
+// order, under the seat's holding in state under, and says what the changelog
+// acknowledged of it: the body of [Syncer.PublishOwn], [Syncer.PublishBacklog],
 // [Syncer.FlushOwn] and [Syncer.FlushBacklog].
-func (s *Syncer) publish(ctx context.Context, handle string, under holding, of markRange,
-	order []table) (Carried, error) {
+func (s *Syncer) publish(ctx context.Context, handle string, under holding,
+	of markRange) (Carried, error) {
 
 	var carried Carried
 	if s == nil {
@@ -369,47 +360,20 @@ func (s *Syncer) publish(ctx context.Context, handle string, under holding, of m
 	if held == nil {
 		return carried, ErrNotHeld
 	}
-	for _, spec := range order {
-		var err error
-		if spec.wholeEachCycle {
-			err = s.publishWhole(ctx, handle, ref, spec, held, under, &carried)
-		} else {
-			err = s.publishPages(ctx, handle, ref, spec, held, under, of, &carried)
-		}
-		if err != nil {
-			carried.StoppedIn, carried.Whole = spec.name, spec.wholeEachCycle
+	for _, spec := range tables {
+		if err := s.publishPages(ctx, handle, ref, spec, held, under, of, &carried); err != nil {
+			carried.StoppedIn = spec.name
 			return carried, err
 		}
 	}
 	if carried.Rows > 0 {
 		log.DebugContext(ctx, "memory_published", "seat", handle, "range", of,
-			"under", under, "rows", carried.Rows, "marked", carried.Marked)
+			"under", under, "rows", carried.Rows)
 	}
 	return carried, nil
 }
 
-// publishWhole carries every one of the seat's rows of a wholeEachCycle table,
-// while held is the seat's holding in state under.
-func (s *Syncer) publishWhole(ctx context.Context, handle string, ref seatRef, spec table,
-	held *seatHolding, under holding, carried *Carried) error {
-
-	rows, err := exportWhole(ctx, s.db.SQL(), spec, ref)
-	if err != nil {
-		return err
-	}
-	for _, row := range rows {
-		if !s.stillHolds(handle, held, under) {
-			return ErrNotHeld
-		}
-		if err := s.publishRow(ctx, handle, ref, spec, row); err != nil {
-			return err
-		}
-		carried.Rows++
-	}
-	return nil
-}
-
-// publishPages carries a watermark table's rows in one range a page at a time,
+// publishPages carries a table's rows in one range a page at a time,
 // while held is the seat's holding in state under, moving the range's mark
 // past each acknowledged row: own above the larger of mark and boundary,
 // backlog above the mark up to the boundary, where reaching it ends the range.
@@ -451,7 +415,6 @@ func (s *Syncer) publishPages(ctx context.Context, handle string, ref seatRef, s
 			// failed.
 			s.setMark(handle, spec.name, of, row.mark, held)
 			carried.Rows++
-			carried.Marked++
 		}
 		if !more {
 			if of == backlogRange {

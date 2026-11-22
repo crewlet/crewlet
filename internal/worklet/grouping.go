@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -478,6 +479,23 @@ func groupRows(ctx context.Context, tx *sql.Tx, axis groupAxis, key string,
 	rows, _, err := readTasks(ctx, tx, columnSet(axis, key, set), terms,
 		limit, at)
 	return rows, err
+}
+
+// holdGroups holds a board's rows to the answer's bytes, in the order the
+// answer carries them ([answerRows]): each column's rows, then its lanes'.
+// A column cut short, or emptied once an earlier one was, says so as every
+// column does: [Group.Count] is over the whole set, and a board loads the
+// rest with `group=<key>`.
+func holdGroups(held *statelog.RowBytes, groups []Group) {
+	for i := range groups {
+		for j := range groups[i].Rows {
+			if !held.TakeEncoded(groups[i].Rows[j]) {
+				groups[i].Rows = groups[i].Rows[:j]
+				break
+			}
+		}
+		holdGroups(held, groups[i].Subgroups)
+	}
 }
 
 // columnSet is a set narrowed to one column of an axis — what a column's or a

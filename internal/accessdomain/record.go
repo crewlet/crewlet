@@ -22,7 +22,9 @@ import (
 //   - 2: a verdict on a delegated request ([KindVerdict]: [OpVerdict], and
 //     [OpResealed] on its subject), which a build at 1 has no applier or
 //     table for.
-const RecordVersion = 2
+//   - 3: a step of a growth act ([KindGrowth]: [OpGrowth]), which a build at
+//     2 has no applier or table for.
+const RecordVersion = 3
 
 // baseRecordVersion is version 1, the base format.
 const baseRecordVersion = 1
@@ -41,6 +43,7 @@ const GateRecordVersion = 1
 // a verdict's reseal included.
 var versionedFields = statelog.RecordFields{
 	{Name: "Subject.Kind verdict", Since: 2, Path: []string{"subject", "k"}, Equals: string(KindVerdict)},
+	{Name: "Subject.Kind growth", Since: 3, Path: []string{"subject", "k"}, Equals: string(KindGrowth)},
 }
 
 // VersionedFields is the table, for the conformance suite.
@@ -64,6 +67,9 @@ const (
 	// OpVerdict records one giver's verdict on a delegated request,
 	// create-only.
 	OpVerdict OpKind = "verdict"
+
+	// OpGrowth records one step of a growth act, create-only.
+	OpGrowth OpKind = "growth"
 
 	// OpResealed moves one command's or verdict's sealed text onto the
 	// keyring's active key, on the record's own subject: the same text,
@@ -94,8 +100,8 @@ const (
 
 // OpKinds are every op, in the order they are documented.
 var OpKinds = []OpKind{
-	OpTold, OpIssued, OpRan, OpVerdict, OpResealed, OpForget, OpExpire, OpEviction, OpGeneration,
-	OpBarrier, OpTrimmed,
+	OpTold, OpIssued, OpRan, OpVerdict, OpGrowth, OpResealed, OpForget, OpExpire, OpEviction,
+	OpGeneration, OpBarrier, OpTrimmed,
 }
 
 // Valid reports whether an op off the wire is one this build knows.

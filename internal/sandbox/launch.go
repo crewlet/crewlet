@@ -524,7 +524,7 @@ type Continuation struct {
 	// be a summary, beside Brief, where its first request is the launch's to
 	// judge in the box (an OpenCode copy whose count has a bound), and
 	// SummarizedTold what it told of the round: handed where the box's point
-	// does not prove Brief sends the copy whole ([OpenCodePoint.SendsWhole]).
+	// does not prove Brief sends the copy whole ([BoxPoint.SendsWhole]).
 	// "" where the runner judged the first request itself. Count and
 	// CountProvider are the copy's count off the job's record and the
 	// provider of the reply it is anchored on, which it is judged by.

@@ -63,6 +63,9 @@ func PredefinedRoles() map[string]string { return predefinedRoles() }
 // Reject is how the loop reads a failure: the credential's, or a fault.
 func Reject(err error) error { return googleauth.Reject(err) }
 
+// GrowthDescription is what a growth identity says of itself.
+func GrowthDescription(company, handle string) string { return growthDescription(company, handle) }
+
 // Seat-facing names a test asserts on.
 func DisplayName(company, handle string) string { return displayName(company, handle) }
 func Description(company, handle string) string { return description(company, handle) }

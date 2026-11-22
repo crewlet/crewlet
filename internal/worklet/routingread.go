@@ -88,8 +88,8 @@ type RoutingAnswer struct {
 	RetainedFrom time.Time `json:"retained_from,omitzero"`
 
 	// Truncated says the list was cut at [MaxRoutingRows], which only a
-	// peer writing a larger set can cause; a short list must not look
-	// complete.
+	// peer writing a larger set can cause, or at the answer's bytes
+	// ([statelog.RowsOf]); a short list must not look complete.
 	Truncated bool `json:"truncated,omitempty"`
 
 	// Addressed and Fallback count the returned list.
@@ -280,6 +280,7 @@ func readRoutingRecipients(ctx context.Context, tx *sql.Tx, record string) (
 	defer func() { _ = rows.Close() }()
 
 	out := make([]RoutingRecipient, 0, 8)
+	held := statelog.RowsOf(ctx)
 	for rows.Next() {
 		if len(out) == MaxRoutingRows {
 			// THE EXTRA ROW IS EVIDENCE, never an answer.
@@ -306,6 +307,10 @@ func readRoutingRecipients(ctx context.Context, tx *sql.Tx, record string) (
 			// A RANK WITHOUT A FALLBACK IS NOISE a surface would
 			// render as "1st substitute" beside an assignee.
 			recipient.FallbackRank = 0
+		}
+		if !held.TakeEncoded(recipient) {
+			truncated = true
+			break
 		}
 		out = append(out, recipient)
 	}

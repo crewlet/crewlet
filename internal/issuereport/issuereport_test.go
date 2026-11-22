@@ -360,7 +360,7 @@ func identityProblems(e Entry) []string {
 			if !e.Harness {
 				problems = append(problems, "harness.name on a class with no harness")
 			}
-			product *= len(knownHarnesses)
+			product *= len(knownHarnesses())
 			continue
 		}
 		i := slices.IndexFunc(e.Facts, func(f Fact) bool { return f.Key == path })
@@ -501,7 +501,7 @@ func assertAllowlisted(t *testing.T, body []byte) {
 		"engine.go":             goShape(),
 		"engine.os":             inSet(enumStrings(knownOS)),
 		"engine.arch":           inSet(enumStrings(knownArch)),
-		"harness.name":          inSet(enumStrings(knownHarnesses)),
+		"harness.name":          inSet(enumStrings(knownHarnesses())),
 		"harness.version":       harnessShape(),
 		"topology.nodes":        inSet(enumStrings(knownNodeBuckets)),
 		"topology.stream":       inSet(enumStrings(knownStreams)),

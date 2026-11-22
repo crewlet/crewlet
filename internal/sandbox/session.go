@@ -1434,7 +1434,8 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		stamp.placeAt(*calls, current.Launch)
 	} else {
 		stamp.placeAtZero(current.Launch)
-		places = &savePlaces{run: current, resumeRead: taken.ResumeRead}
+		places = &savePlaces{run: current, resumeRead: taken.ResumeRead,
+			needsResumeRead: placesWithResumeRead(runner)}
 	}
 	stamp.At = c.now().UTC()
 	// THE PLACE IS RESERVED WITHIN THE TAKE'S OWN TIME — the room its context
@@ -2269,14 +2270,14 @@ func (c *Coordinator) readLost(ctx context.Context, run PendingRun) (*spooledCap
 	over := c.endJob(ctx, run, box, runner, nil)
 	// THE RELEASE ALONE: a failed Collect leaves it "", which confirms nothing.
 	var result Result
-	if asksMainThread(run, BoxReadLoss) {
-		if collected, err := runner.Collect(ctx, box, run.Handle()); err == nil {
+	if asksMainThread(run, BoxReadLoss, ThreadTraitsOf(runner)) {
+		if collected, err := runner.Collect(ctx, box, run.Handle(), c.answerBudget); err == nil {
 			result.HarnessVersion = collected.HarnessVersion
 		}
 	}
 	at := readCapture(BoxReadLoss, result, over)
 	reading := c.readMainThread(ctx, run, box, runner, BoxReadLoss, at, result)
-	if err := c.settleHookReceipts(ctx, run, reading.Receipts, BoxReadLoss); err != nil {
+	if err := c.settleReceipts(ctx, run, reading.Receipts, BoxReadLoss); err != nil {
 		return nil, nil, err
 	}
 	if !c.capturing() {
@@ -2340,7 +2341,7 @@ func nextCaptureSeq(run PendingRun) int64 {
 	return 1
 }
 
-// maxScrubBytes bounds what one capture scrubs out by value, in all: what its
+// MaxScrubBytes bounds what one capture scrubs out by value, in all: what its
 // box was handed (by its launch and the poll's renewals, bounded together,
 // [MaxHandedBytes]) and its seeded logins read again, in the box and on the
 // host ([Coordinator.scrubValues]).
@@ -2350,8 +2351,9 @@ func nextCaptureSeq(run PendingRun) int64 {
 // scrub, which holds every value whole in one replacer, costs the host a few
 // mebibytes at most. The box's own code can write its login file, and a file
 // of millions of short strings built a replacer of a gibibyte on the engine
-// host before a byte of the session was read. A capture past it is refused.
-const maxScrubBytes = 4 * MaxHandedBytes
+// host before a byte of the session was read. A capture past it is refused,
+// so it bounds the longest value the executor's scrub holds too.
+const MaxScrubBytes = 4 * MaxHandedBytes
 
 // scrubValues is every value a capture of run's box scrubs out by value: what
 // its launch handed the box and every token the poll renewed in it since,
@@ -2362,7 +2364,7 @@ const maxScrubBytes = 4 * MaxHandedBytes
 // as holding less than its box among them ([ErrHandedIncomplete]), which
 // refuses the capture rather than scrub less; and refused too past its bounds
 // — a login read again larger than a whole launch may hand
-// ([MaxHandedBytes]), or values past [maxScrubBytes] in all — since the box's
+// ([MaxHandedBytes]), or values past [MaxScrubBytes] in all — since the box's
 // code can write its login and the scrub holds every value whole.
 func (c *Coordinator) scrubValues(ctx context.Context, run PendingRun, box Sandbox) ([]string, error) {
 	sealed, err := c.pending.Handed(ctx, run)
@@ -2413,9 +2415,9 @@ func (c *Coordinator) scrubValues(ctx context.Context, run PendingRun, box Sandb
 	for _, v := range values {
 		total += len(v)
 	}
-	if total > maxScrubBytes {
+	if total > MaxScrubBytes {
 		return nil, fmt.Errorf("the values the session would be scrubbed of are %d bytes in all, past "+
-			"the %d a capture holds for its scrub, so it is not kept", total, maxScrubBytes)
+			"the %d a capture holds for its scrub, so it is not kept", total, MaxScrubBytes)
 	}
 	return values, nil
 }

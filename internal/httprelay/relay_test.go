@@ -89,7 +89,7 @@ func fleet(t *testing.T, h http.Handler, tune func(*Relay)) (entry, holder *node
 				}
 				return n.verdict.Load().(Verdict)
 			},
-			Handler: handler,
+			Handler: handler, Answers: queue.NewAnswerBudget(nil),
 		})
 		if err != nil {
 			t.Fatalf("New: %v", err)
@@ -149,7 +149,7 @@ func bubbledHolder(t *testing.T, h http.Handler) *Relay {
 	t.Helper()
 	rl, err := New(Options{
 		Fabric: silentFabric{}, Name: "testrelay", Node: "holder", Owner: "holder:incarnation", Keyring: ring,
-		Admit: func(*http.Request) Verdict { return Serve }, Handler: h,
+		Admit: func(*http.Request) Verdict { return Serve }, Handler: h, Answers: queue.NewAnswerBudget(nil),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

@@ -44,7 +44,7 @@
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { ClientContext } from "./store-hooks.ts";
 import { useAskedAgainOnFailure } from "./failedReads.ts";
-import { EVERY_QUESTION, session } from "~/protocol/session.ts";
+import { APPLIED_REVISION, EVERY_QUESTION, session } from "~/protocol/session.ts";
 import {
   isAbort,
   RestError,
@@ -68,8 +68,9 @@ export interface RestOptions {
    */
   refetchOnFocus?: boolean;
   /**
-   * Re-read, quietly, when the socket reconnects. Default true: an answer
-   * read before a reconnect is about a company that has since moved. Off
+   * Re-read, quietly, when the socket reconnects, and (when true) when this
+   * node applies a revision. Default true: an answer read before a reconnect
+   * is about a company that has since moved. Off
    * only for a read whose answer is used once and then let go, where a
    * second answer would redo work rather than correct it: a gallery
    * preview's ticket, read again, reloads the page already drawn in its
@@ -280,14 +281,14 @@ export function useRest<T>(
 
   // A WRITE WHOSE REACH NOBODY CAN NAME re-reads every answer, quietly: a
   // change the assistant applied for the person (`protocol/session.ts`'s
-  // EVERY_QUESTION). A REST read has no question kind for a narrower write
-  // to name, so this is the one write it hears.
+  // EVERY_QUESTION), or a revision this node applied (APPLIED_REVISION).
   useEffect(() => {
     if (key === null) return;
     return session.onWritten((_, refreshes) => {
-      if (refreshes.includes(EVERY_QUESTION)) void run(true);
+      const applied = refetchOnReconnect === true && refreshes.includes(APPLIED_REVISION);
+      if (applied || refreshes.includes(EVERY_QUESTION)) void run(true);
     });
-  }, [key, run]);
+  }, [key, run, refetchOnReconnect]);
 
   // THE CONTEXT, NOT `useClient`: a dialog or a screen rendered outside the
   // shell (its own tests among them) has no socket, and a loader that threw

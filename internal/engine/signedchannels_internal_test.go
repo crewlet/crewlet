@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/httprelay"
 	"github.com/crewlet/crewlet/internal/presence"
+	"github.com/crewlet/crewlet/internal/queue"
 	queuemem "github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -73,7 +74,8 @@ func claimedDomains(t *testing.T) map[string]string {
 	relay, err := httprelay.New(httprelay.Options{
 		Fabric: queuemem.NewBroker().Client(), Name: mcpbridge.RelayName, Node: "node-a",
 		Owner: "node-a:1", Keyring: ring, Handler: http.NotFoundHandler(),
-		Admit: func(*http.Request) httprelay.Verdict { return httprelay.Refuse },
+		Admit:   func(*http.Request) httprelay.Verdict { return httprelay.Refuse },
+		Answers: queue.NewAnswerBudget(nil),
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
@@ -249,7 +250,7 @@ func openCodeRunStep(message string) string {
 // OPENCODE'S FIGURE IS ITS SESSION'S NEWEST SETTLED MESSAGE THAT MEASURED A PROMPT,
 // read off the message-list pages the run's script printed, newest first, one
 // message a page. Interrupted, refused, in-flight and unmeasured steps are
-// passed over, as an export's are (measure.go's measuredPrompt); the figure is
+// passed over, as an export's are (opencodemeasure.go's measuredPrompt); the figure is
 // the run's own where its stream named that step, else an earlier job's.
 //
 // Mutation: take the newest message whatever it holds, or one in flight, and a
@@ -434,7 +435,7 @@ func TestTheMeasureRidesOutOfTheCollection(t *testing.T) {
 		b.Put(p.Stream(), claudeAssistant("msg_1", "null", claudeUsageOf(20, 4000, 300))+"\n"+result+"\n")
 		b.Put(p.Result(), result)
 		b.Put(p.ExitCode(), "0")
-		res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+		res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 		if err != nil {
 			t.Fatalf("Collect: %v", err)
 		}
@@ -450,7 +451,7 @@ func TestTheMeasureRidesOutOfTheCollection(t *testing.T) {
 		b.Put(p.Result(), openCodeRunStep("msg_1")+"\n"+
 			openCodeContextLine(openCodePage(openCodeSettled("msg_1", 1015, 200, 0)))+"\n")
 		b.Put(p.ExitCode(), "0")
-		res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+		res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 		if err != nil {
 			t.Fatalf("Collect: %v", err)
 		}
@@ -489,7 +490,7 @@ func TestAReadingThatFailedIsSaidAtWarning(t *testing.T) {
 		b.Put(p.Stream(), c.stream+"\n"+result+"\n")
 		b.Put(p.Result(), result)
 		b.Put(p.ExitCode(), "0")
-		if _, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}); err != nil {
+		if _, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil)); err != nil {
 			t.Fatalf("%s: Collect: %v", c.name, err)
 		}
 		var said []string

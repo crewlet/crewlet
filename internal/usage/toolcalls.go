@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -77,6 +78,7 @@ func ServerToolCalls(ctx context.Context, estate Estate, q ServerToolCallsQuery)
 			return err
 		}
 		defer func() { _ = rows.Close() }()
+		held := statelog.RowsOf(ctx)
 		for rows.Next() {
 			var (
 				r    ServerToolCallsRow
@@ -88,6 +90,9 @@ func ServerToolCalls(ctx context.Context, estate Estate, q ServerToolCallsQuery)
 			}
 			if last != 0 {
 				r.LastAt = store.DecodeTime(last)
+			}
+			if !held.TakeEncoded(r) {
+				return pastAnswer("the calls to " + q.Server + "'s tools")
 			}
 			out = append(out, r)
 		}

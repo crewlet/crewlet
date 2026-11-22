@@ -760,8 +760,8 @@ func worstRow(t *testing.T) PendingRun {
 	held := &HeldCall{ID: uuid.NewString(), LaunchID: uuid.NewString(), Server: plain(32), Tool: plain(128),
 		Raw: plain(128), Digest: plain(64), Arguments: plain(MaxHeldArgsBytes - 2), Fixed: true,
 		Approvers: plain(32), Binding: plain(maxHeldBindingBytes), Acting: acting, Act: plain(32),
-		Subject: plain(maxHeldBindingBytes), Delegation: delegation, HeldAt: worstAt, CallingAt: worstAt,
-		MadeAt: worstAt}
+		Subject: plain(maxHeldBindingBytes), Delegation: delegation, HeldAt: worstAt, LapsesAt: worstAt,
+		CallingAt: worstAt, MadeAt: worstAt}
 	held.Result = heldResultAtItsWorst(t, *held)
 	// THE CALL A PERSON APPROVED, as the store records it on the held call
 	// ([approvedCall]) and a reset carries it on to the log it is owed to
@@ -1181,6 +1181,9 @@ var zeroInTheWorstRow = func() map[string]string {
 			"theirs",
 		"Steer.Notes[0].LateCall": "the walk reads the first note, a person's, which hands no job a call " +
 			"(RunNote.LateCall); the worst row's job items each carry theirs at its widest (worstItemCall)",
+		"Steer.Notes[0].Serves[0].Digest": "a poll's serve records its item's digest and no call, a hook's a " +
+			"call and no digest (PendingStore.ServeNotes, ServeHook), and the call, which the worst row's serves " +
+			"keep at its widest, weighs more",
 		"Steer.Notes[0].Wake": "the walk reads the first note, a person's, which hands no job a wake " +
 			"(RunNote.Wake); the worst row's wake items, as many as it holds (MaxTurnWakes), each carry theirs " +
 			"at their bound",

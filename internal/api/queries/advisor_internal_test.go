@@ -152,7 +152,7 @@ func TestTheAdvisorNoticesTheFleetsAlarms(t *testing.T) {
 	if known {
 		t.Error("node-c has not evaluated its alarms, and the fleet's read as known")
 	}
-	got := notice.Read(nil, fleet, nil, since.Add(notice.AlarmAfter))
+	got := notice.Read(nil, fleet, nil, nil, since.Add(notice.AlarmAfter))
 	title, person, _ := statelog.PersonWords(statelog.KindApplyLag)
 	want := []notice.Notice{{Class: notice.ClassAlarm, Subject: advisor.Subject{Kind: notice.SubjectAlarm, Name: "apply_lag"},
 		Since: since, Nodes: []string{"node-a", "node-b"}, Title: title, Person: person}}

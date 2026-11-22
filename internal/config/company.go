@@ -335,7 +335,7 @@ func (c *Company) validateAdmission(o *org.Organization) error {
 		c.validateFileRules(), c.validateMCPNames(), c.validateAssistant(), c.validateAdvisor(), c.validateSeatAccess(),
 		c.validateMCPRegistry(), c.validateMCPAccess(o), c.validateBoxToolLevels(),
 		c.validateMCPLimits(o), c.Code.validateAdmission(field("code")), c.validateSSHApprovers(),
-		c.validateDelegatedDecisions(o))
+		c.validateDelegatedDecisions(o), c.validateGrowth())
 }
 
 // validateUnitIDs requires an id on every authored unit, at any depth. See
@@ -1237,6 +1237,8 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 		return in.GoogleCloud != nil
 	case "ssh":
 		return in.SSH != nil
+	case "app_store_connect":
+		return in.AppStoreConnect != nil
 	case "atlassian":
 		return in.Atlassian != nil
 	default:
@@ -1586,11 +1588,12 @@ func (c *Company) validateExecutors() error {
 			p.add(at(seat.path, "llm"), ErrConflict,
 				"this seat's executor chain is %s, and no member of it can run the "+
 					"executor: a seat's executor is its harness's own run, which "+
-					"only %s have. Point `llm` at an entry with harness: claude-code or "+
-					"opencode (and keep these entries for the reviewer, workers and "+
+					"only %s have. Point `llm` at an entry with harness: %s "+
+					"(and keep these entries for the reviewer, workers and "+
 					"side passes with llm_review, llm_subagent, llm_auxiliary, "+
-					"llm_judge or llm_triage), or move one of them to claude-code or opencode",
-				c.describeChain(seat.chain), words.And(ExecutorHarnesses))
+					"llm_judge or llm_triage), or move one of them to %s",
+				c.describeChain(seat.chain), words.And(ExecutorHarnesses()), words.Or(ExecutorHarnesses()),
+				words.Or(ExecutorHarnesses()))
 			continue
 		}
 		if seat.named {
@@ -1629,9 +1632,8 @@ func (c *Company) validateExecutors() error {
 			"a seat that names no `llm` runs its executor on this entry, %s, and it "+
 				"drives %s, which cannot run an executor: a seat's executor is its "+
 				"harness's own run, which only %s have. %s. Move this entry to "+
-				"claude-code or opencode, or point those seats' `llm` at an entry "+
-				"that drives one",
-			which, entry.HarnessName(), words.And(ExecutorHarnesses), seats)
+				"%s, or point those seats' `llm` at an entry that drives one",
+			which, entry.HarnessName(), words.And(ExecutorHarnesses()), seats, words.Or(ExecutorHarnesses()))
 	}
 	return p.err()
 }
@@ -1665,7 +1667,7 @@ func (c *Company) executorWarnings() []Warning {
 			"so a launch skips it and runs on %s alone. That is fine if it is there "+
 			"for the reviewer, workers and side passes, which fall back to `llm`; "+
 			"otherwise take it out",
-			handle, c.describeChain(skipped), words.And(ExecutorHarnesses), c.describeChain(runners)))
+			handle, c.describeChain(skipped), words.And(ExecutorHarnesses()), c.describeChain(runners)))
 		models := make([]words.Said, len(skipped))
 		for i, key := range skipped {
 			models[i] = words.Said(c.ModelName(key))

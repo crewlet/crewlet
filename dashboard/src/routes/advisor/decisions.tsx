@@ -95,18 +95,18 @@ export function useDecisions(reload: () => void) {
 /**
  * Ask Crewlet about a finding, or null where the reader may not ask: the
  * finding's own page, so the page context names it and its facts stand beside
- * the conversation, with the question waiting in the box for the person to
- * send or change ([questionAbout]). Never asked for them: the drawer sent a
- * question they had not read, in their name.
+ * a new conversation, with the question waiting in the box for the person to
+ * send or change: the action's own, else [questionAbout]. Never asked for
+ * them: the drawer sent a question they had not read, in their name.
  */
-export function useAskAbout(): ((f: AdvisorKeptFinding) => void) | null {
+export function useAskAbout(): ((f: AdvisorKeptFinding, question?: string) => void) | null {
   const assistant = useAssistantControl();
   const nav = useNavigator();
   const route = useRoute();
   if (assistant.unavailable) return null;
-  return (f) => {
+  return (f, question) => {
     const page = ["advisor", "findings", f.id];
     if (route.path.join("/") !== page.join("/")) nav.to(page);
-    assistant.draft(questionAbout(f));
+    assistant.askAbout(question ?? questionAbout(f), { send: false });
   };
 }

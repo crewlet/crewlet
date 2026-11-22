@@ -25,6 +25,7 @@ type receivedAccess struct {
 	issued   []accessdomain.NewCertificate
 	ran      []accessdomain.SealedCommand
 	verdicts []accessdomain.SealedVerdict
+	growth   []accessdomain.NewGrowth
 }
 
 func (a *receivedAccess) For(context.Context, string) (estate.Backend, bool) {
@@ -56,6 +57,14 @@ func (a *receivedAccess) VerdictSealed(_ context.Context, _ accessdomain.Call, _
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.verdicts = append(a.verdicts, sealed)
+	return statelog.Result{Outcome: statelog.OutcomeApplied}, nil
+}
+
+func (a *receivedAccess) Growth(_ context.Context, _ accessdomain.Call,
+	n accessdomain.NewGrowth) (statelog.Result, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.growth = append(a.growth, n)
 	return statelog.Result{Outcome: statelog.OutcomeApplied}, nil
 }
 

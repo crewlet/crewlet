@@ -843,7 +843,9 @@ const pageStatement = `SELECT ` + sessionColumns + `, first_seq
 
 // Sessions is one page of a seat's rows, the latest begun first, after cursor
 // (empty for the first page), at the level fresh asks for: the seat's sessions
-// as a read surface and a seat's own search list them.
+// as a read surface and a seat's own search list them. A page holds its rows to
+// the bytes the read carries ([statelog.RowsOf]), so it may end short of limit
+// with a cursor: a caller pages on Next, never on a page's length.
 //
 // Paged by where each row began, which nothing moves: every other position on a
 // row moves with a capture, its end or a release, and a cursor over one would
@@ -872,6 +874,7 @@ func (r *Reader) Sessions(ctx context.Context, handle, cursor string, limit int,
 			return queryErr
 		}
 		var begun []int64
+		held := statelog.RowsOf(ctx)
 		for rows.Next() {
 			var first int64
 			s, scanErr := scanSession(trailing{rows, &first})
@@ -879,14 +882,23 @@ func (r *Reader) Sessions(ctx context.Context, handle, cursor string, limit int,
 				_ = rows.Close()
 				return scanErr
 			}
+			if !held.TakeEncoded(s) {
+				break
+			}
 			out.Sessions, begun = append(out.Sessions, s), append(begun, first)
 		}
 		if closeErr := errors.Join(rows.Err(), rows.Close()); closeErr != nil {
 			return closeErr
 		}
-		if len(out.Sessions) > limit {
+		// A PAGE CUT SHORT BY ITS BYTES goes on from its last kept row, as a
+		// full one does. Heads beside them are one entry per conversation of
+		// at most MaxPageSize rows, each key a row already carries: small.
+		switch {
+		case len(out.Sessions) > limit:
 			out.Sessions = out.Sessions[:limit]
 			out.Next = strconv.FormatInt(begun[limit-1], 10)
+		case held.Cut():
+			out.Next = strconv.FormatInt(begun[len(begun)-1], 10)
 		}
 		var headErr error
 		out.Heads, headErr = headsOf(ctx, tx, handle, out.Sessions)
@@ -1127,6 +1139,52 @@ func (r *Reader) Handles(ctx context.Context, fresh statelog.Freshness) ([]strin
 		return nil, fmt.Errorf("executordomain: list the seats holding sessions: %w", err)
 	case !answer.Complete:
 		return nil, fmt.Errorf("%w: list the seats holding sessions", ErrIncomplete)
+	}
+	return out, nil
+}
+
+// handlesPageStatement is every seat holding a row after a handle, in order.
+const handlesPageStatement = `
+	SELECT DISTINCT agent_handle FROM executor_sessions WHERE agent_handle > ? ORDER BY agent_handle`
+
+// HandlesPage is one page of the seats holding a row: the handles after the
+// page before's Next, in order, and Next where more follow.
+type HandlesPage struct {
+	Handles []string
+	Next    string
+}
+
+// HandlesPage is [Reader.Handles] a page at a time, after `after` (empty for
+// the first), as a node holding no data reads it: one answer each, held to the
+// bytes the read carries ([statelog.RowsOf]); its caller pages on Next.
+func (r *Reader) HandlesPage(ctx context.Context, after string, fresh statelog.Freshness) (HandlesPage, error) {
+	var out HandlesPage
+	answer, err := r.log.Read(ctx, fresh.Query(DomainScope(), true), func(tx *sql.Tx) error {
+		out = HandlesPage{}
+		rows, queryErr := tx.QueryContext(ctx, handlesPageStatement, after)
+		if queryErr != nil {
+			return queryErr
+		}
+		held := statelog.RowsOf(ctx)
+		for rows.Next() {
+			var handle string
+			if scanErr := rows.Scan(&handle); scanErr != nil {
+				_ = rows.Close()
+				return scanErr
+			}
+			if !held.TakeEncoded(handle) {
+				out.Next = out.Handles[len(out.Handles)-1]
+				break
+			}
+			out.Handles = append(out.Handles, handle)
+		}
+		return errors.Join(rows.Err(), rows.Close())
+	})
+	switch {
+	case err != nil:
+		return HandlesPage{}, fmt.Errorf("executordomain: list the seats holding sessions: %w", err)
+	case !answer.Complete:
+		return HandlesPage{}, fmt.Errorf("%w: list the seats holding sessions", ErrIncomplete)
 	}
 	return out, nil
 }

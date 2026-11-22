@@ -26,7 +26,7 @@ var opTasks = define("tracker.tasks", opRead, trackerDomain, false,
 		}
 		a.Query.Units = b.Units
 		return b.Tracker.Tasks(ctx, a.Query, a.Now)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 type taskArgs struct {
 	IDOrKey string
@@ -54,18 +54,19 @@ var opTask = define("tracker.task", opRead, trackerDomain, false,
 		}
 		a.Want.Units = b.Units
 		return b.Tracker.Task(ctx, a.IDOrKey, a.Want, a.Fresh)
-	})
+	}).oneAnswer()
 
 // viewsArgs is a views query as it crosses, with the zone its pinned counts
 // cut relative dates on carried by name ([zoneArg]).
 type viewsArgs struct {
 	Query worklet.ViewQuery
 	Zone  string
+	After string
 }
 
 // ONE CONTAINER'S STRIP OF VIEWS, as a screen shows it — the dashboard's tabs,
 // the API's listing: read leniently.
-var opViews = define("tracker.views", opRead, trackerDomain, false, views)
+var opViews = define("tracker.views", opRead, trackerDomain, false, views).rowsTo(statelog.AnswerBytes)
 
 // THE STRIP A VIEW IS SAVED AGAIN FROM, ANSWERED WHOLE ([op.answeredWhole]):
 // save_work_view replaces a view whole, so a call changing one thing re-sends
@@ -78,20 +79,29 @@ var opViews = define("tracker.views", opRead, trackerDomain, false, views)
 // crosses exactly as one an older build never sent ([define]), so a merge
 // could not tell cleared from unknown ([worklet.Writer.WriteView]).
 var opViewsCarried = define("tracker.views_carried", opRead, trackerDomain, false,
-	views).answeredWhole()
+	views).rowsTo(statelog.AnswerBytes).answeredWhole()
 
-// views is one container's strip of views, read from this node's copy.
-func views(ctx context.Context, b Backend, _ *Actor, a viewsArgs) (worklet.ViewListing, error) {
+// viewsPage is a page of a container's strip and the cursor of the page
+// after it, empty on the last.
+type viewsPage struct {
+	Listing worklet.ViewListing
+	Next    string
+}
+
+// views is a page of one container's strip of views, read from this node's
+// copy.
+func views(ctx context.Context, b Backend, _ *Actor, a viewsArgs) (viewsPage, error) {
 	if b.Tracker == nil {
-		return worklet.ViewListing{}, errNoHalf
+		return viewsPage{}, errNoHalf
 	}
 	loc, err := zoneOf(a.Zone)
 	if err != nil {
-		return worklet.ViewListing{}, err
+		return viewsPage{}, err
 	}
 	q := a.Query
 	q.Units, q.Zone = b.Units, loc
-	return b.Tracker.Views(ctx, q)
+	listing, next, err := b.Tracker.ViewsPage(ctx, q, a.After)
+	return viewsPage{Listing: listing, Next: next}, err
 }
 
 // zoneArg is a location as it crosses: its NAME, because a *time.Location is a
@@ -144,10 +154,10 @@ var opExpandedQuery = define("tracker.expanded_query", opRead, trackerDomain, fa
 			return worklet.Query{}, err
 		}
 		return b.Tracker.ExpandedQuery(ctx, a.Params, a.Viewer, a.Now, loc)
-	}).answeredWhole()
+	}).oneAnswer().answeredWhole()
 
 // THE WORKSPACE CATALOGUE, as a screen shows it: read leniently.
-var opCatalogue = define("tracker.catalogue", opRead, trackerDomain, false, catalogue)
+var opCatalogue = define("tracker.catalogue", opRead, trackerDomain, false, catalogue).oneAnswer()
 
 // THE CATALOGUE A CALLER SENDS BACK, ANSWERED WHOLE ([op.answeredWhole]): its
 // writes replace every declaration whole, and write_work_catalogue tells a
@@ -156,7 +166,7 @@ var opCatalogue = define("tracker.catalogue", opRead, trackerDomain, false, cata
 // away. Its own operation, so a screen that only shows the catalogue is not
 // refused one ([opArtifactVersionCarried] says why).
 var opCatalogueCarried = define("tracker.catalogue_carried", opRead, trackerDomain, false,
-	catalogue).answeredWhole()
+	catalogue).oneAnswer().answeredWhole()
 
 // catalogue is the workspace catalogue, read from this node's copy.
 func catalogue(ctx context.Context, b Backend, _ *Actor, q worklet.CatalogueQuery) (worklet.CatalogueAnswer, error) {
@@ -177,7 +187,7 @@ var opPerson = define("tracker.person", opRead, trackerDomain, false,
 			return worklet.PersonState{}, errNoHalf
 		}
 		return b.Tracker.Person(ctx, a.Query, a.Now)
-	})
+	}).oneAnswer()
 
 type threadArgs struct {
 	Query worklet.ThreadQuery
@@ -190,7 +200,7 @@ var opThread = define("tracker.thread", opRead, trackerDomain, false,
 			return worklet.ResolvedThread{}, errNoHalf
 		}
 		return b.Tracker.Thread(ctx, a.Query, a.Fresh)
-	})
+	}).oneAnswer()
 
 var opWorkPatterns = define("tracker.work_patterns", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q worklet.PatternsQuery) (worklet.WorkPatterns, error) {
@@ -198,7 +208,7 @@ var opWorkPatterns = define("tracker.work_patterns", opRead, trackerDomain, fals
 			return worklet.WorkPatterns{}, errNoHalf
 		}
 		return b.Tracker.WorkPatterns(ctx, q)
-	})
+	}).oneAnswer()
 
 var opFlowHours = define("tracker.flow_hours", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q worklet.FlowHoursQuery) ([]worklet.FlowHours, error) {
@@ -206,7 +216,7 @@ var opFlowHours = define("tracker.flow_hours", opRead, trackerDomain, false,
 			return nil, errNoHalf
 		}
 		return b.Tracker.FlowHours(ctx, q)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 var opFlowPickups = define("tracker.flow_pickups", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q worklet.FlowHoursQuery) ([]time.Duration, error) {
@@ -214,7 +224,7 @@ var opFlowPickups = define("tracker.flow_pickups", opRead, trackerDomain, false,
 			return nil, errNoHalf
 		}
 		return b.Tracker.FlowPickups(ctx, q)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 var opFlowItems = define("tracker.flow_items", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q worklet.FlowHoursQuery) (map[string]int, error) {
@@ -222,7 +232,7 @@ var opFlowItems = define("tracker.flow_items", opRead, trackerDomain, false,
 			return nil, errNoHalf
 		}
 		return b.Tracker.FlowItems(ctx, q)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 var opTurnsMoved = define("tracker.turns_moved", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q worklet.TurnsMovedQuery) (map[string]bool, error) {
@@ -230,7 +240,7 @@ var opTurnsMoved = define("tracker.turns_moved", opRead, trackerDomain, false,
 			return nil, errNoHalf
 		}
 		return b.Tracker.TurnsMoved(ctx, q)
-	})
+	}).perAsked()
 
 type activityArgs struct {
 	Query worklet.ActivityQuery
@@ -243,7 +253,7 @@ var opActivity = define("tracker.activity", opRead, trackerDomain, false,
 			return worklet.ActivityAnswer{}, errNoHalf
 		}
 		return b.Tracker.Activity(ctx, a.Query, a.Now)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 type myWorkArgs struct {
 	Query worklet.MyWorkQuery
@@ -263,7 +273,7 @@ var opMyWork = define("tracker.my_work", opRead, trackerDomain, false,
 			return worklet.MyWork{}, err
 		}
 		return b.Tracker.MyWork(ctx, a.Query, a.Now, loc)
-	})
+	}).oneAnswer()
 
 type readyWorkArgs struct {
 	Query worklet.ReadyWorkQuery
@@ -276,7 +286,7 @@ var opReadyWork = define("tracker.ready_work", opRead, trackerDomain, false,
 			return worklet.ReadyWork{}, errNoHalf
 		}
 		return b.Tracker.ReadyWork(ctx, a.Query, a.Now)
-	})
+	}).oneAnswer()
 
 var opPickupAnswer = define("tracker.pickup_answer", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q worklet.PickupAnswerQuery) (types.PickupAnswer, error) {
@@ -284,7 +294,7 @@ var opPickupAnswer = define("tracker.pickup_answer", opRead, trackerDomain, fals
 			return "", errNoHalf
 		}
 		return b.Tracker.PickupAnswer(ctx, q)
-	})
+	}).oneAnswer()
 
 // ownAsksArgs is [opOwnAsks]' input.
 type ownAsksArgs struct {
@@ -298,7 +308,7 @@ var opOwnAsks = define("tracker.own_asks", opRead, trackerDomain, false,
 			return worklet.OwnAsks{}, errNoHalf
 		}
 		return b.Tracker.OwnAsks(ctx, a.Query, a.Now)
-	})
+	}).oneAnswer()
 
 var opEntryMarks = define("tracker.entry_marks", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, level statelog.ReadLevel) (worklet.EntryMarks, error) {
@@ -306,7 +316,7 @@ var opEntryMarks = define("tracker.entry_marks", opRead, trackerDomain, false,
 			return worklet.EntryMarks{}, errNoHalf
 		}
 		return b.Tracker.EntryMarks(ctx, level)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 // entryWorkArgs is [opEntryWork]'s input.
 type entryWorkArgs struct {
@@ -320,7 +330,7 @@ var opEntryWork = define("tracker.entry_work", opRead, trackerDomain, false,
 			return worklet.EntryWork{}, errNoHalf
 		}
 		return b.Tracker.EntryWork(ctx, a.Query, a.Now)
-	})
+	}).oneAnswer()
 
 var opProjects = define("tracker.projects", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q worklet.ProjectQuery) (worklet.ProjectListing, error) {
@@ -329,10 +339,10 @@ var opProjects = define("tracker.projects", opRead, trackerDomain, false,
 		}
 		q.Units = b.Units
 		return b.Tracker.Projects(ctx, q)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 // ONE PROJECT, as a screen shows it: read leniently.
-var opProject = define("tracker.project", opRead, trackerDomain, false, project)
+var opProject = define("tracker.project", opRead, trackerDomain, false, project).oneAnswer()
 
 // ONE PROJECT A CALLER SENDS BACK, ANSWERED WHOLE ([op.answeredWhole]):
 // write_project replaces the field declarations whole, sent as describe_project
@@ -341,7 +351,7 @@ var opProject = define("tracker.project", opRead, trackerDomain, false, project)
 // that only shows the project is not refused one ([opArtifactVersionCarried]
 // says why).
 var opProjectCarried = define("tracker.project_carried", opRead, trackerDomain, false,
-	project).answeredWhole()
+	project).oneAnswer().answeredWhole()
 
 // project is one project, read from this node's copy.
 func project(ctx context.Context, b Backend, _ *Actor, q worklet.ProjectDetailQuery) (worklet.ProjectDetail, error) {
@@ -371,7 +381,7 @@ var opWorkSearch = define("tracker.search", opRead, trackerDomain, false,
 			return worklet.SearchAnswer{}, errNoHalf
 		}
 		return b.WorkSearch.Search(ctx, worklet.SearchQuery{Text: a.Text, Limit: a.Limit, Mode: a.Mode})
-	}).floorless()
+	}).oneAnswer().floorless()
 
 type workloadArgs struct {
 	Query worklet.WorkloadQuery
@@ -392,7 +402,7 @@ var opWorkload = define("tracker.workload", opRead, trackerDomain, false,
 		}
 		a.Query.Units = b.Units
 		return b.Tracker.Workload(ctx, a.Query, a.Now, loc)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 type inboxArgs struct {
 	Query worklet.InboxQuery
@@ -409,7 +419,7 @@ var opInbox = define("tracker.read_inbox", opRead, trackerDomain, false,
 			return worklet.InboxAnswer{}, errNoHalf
 		}
 		return b.Tracker.Inbox(ctx, a.Query, a.Now)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 type routingArgs struct {
 	Query worklet.RoutingQuery
@@ -422,7 +432,7 @@ var opRouting = define("tracker.routing", opRead, trackerDomain, false,
 			return worklet.RoutingAnswer{}, errNoHalf
 		}
 		return b.Tracker.Routing(ctx, a.Query, a.Now)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 type turnsOfArgs struct {
 	IDOrKey string
@@ -439,27 +449,36 @@ var opTurnsOf = define("tracker.turns_of", opRead, trackerDomain, false,
 			return worklet.TaskTurns{}, errNoHalf
 		}
 		return b.Tracker.TurnsOf(ctx, a.IDOrKey, a.Cursor, a.Limit, a.Fresh)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 // everyViewArgs is [viewsArgs] for every saved view.
 type everyViewArgs struct {
 	Query worklet.EveryViewQuery
 	Zone  string
+	After string
+}
+
+// everyViewPage is a page of every view a person sees, in the containers'
+// order, and the cursor of the page after it, empty on the last.
+type everyViewPage struct {
+	Listing worklet.ViewListing
+	Next    string
 }
 
 var opEveryView = define("tracker.every_view", opRead, trackerDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, a everyViewArgs) (worklet.ViewListing, error) {
+	func(ctx context.Context, b Backend, _ *Actor, a everyViewArgs) (everyViewPage, error) {
 		if b.Tracker == nil {
-			return worklet.ViewListing{}, errNoHalf
+			return everyViewPage{}, errNoHalf
 		}
 		loc, err := zoneOf(a.Zone)
 		if err != nil {
-			return worklet.ViewListing{}, err
+			return everyViewPage{}, err
 		}
 		q := a.Query
 		q.Units, q.Zone = b.Units, loc
-		return b.Tracker.EveryView(ctx, q)
-	})
+		listing, next, err := b.Tracker.EveryViewPage(ctx, q, a.After)
+		return everyViewPage{Listing: listing, Next: next}, err
+	}).rowsTo(statelog.AnswerBytes)
 
 type flowArgs struct {
 	Query worklet.FlowQuery
@@ -479,7 +498,7 @@ var opFlow = define("tracker.flow", opRead, trackerDomain, false,
 			return worklet.FlowAnswer{}, err
 		}
 		return b.Tracker.Flow(ctx, a.Query, a.Now, loc)
-	})
+	}).oneAnswer()
 
 var opCompanyFeed = define("tracker.company_feed", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q worklet.FeedQuery) (worklet.FeedPage, error) {
@@ -487,7 +506,7 @@ var opCompanyFeed = define("tracker.company_feed", opRead, trackerDomain, false,
 			return worklet.FeedPage{}, errNoHalf
 		}
 		return b.Tracker.CompanyFeed(ctx, q)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 type decisionsArgs struct {
 	Query worklet.DecisionsQuery
@@ -507,7 +526,7 @@ var opDecisions = define("tracker.decisions", opRead, trackerDomain, false,
 			return worklet.DecisionsAnswer{}, err
 		}
 		return b.Tracker.Decisions(ctx, a.Query, a.Now, loc)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 // opAnsweredAsks takes [decisionsArgs]: the same person, freshness and clock,
 // asked for the asks closed rather than the ones still open.
@@ -521,7 +540,7 @@ var opAnsweredAsks = define("tracker.answered_asks", opRead, trackerDomain, fals
 			return worklet.AnsweredAnswer{}, err
 		}
 		return b.Tracker.AnsweredAsks(ctx, a.Query, a.Now, loc)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 type turnPlacesArgs struct {
 	Runs  []string
@@ -534,4 +553,4 @@ var opTurnPlaces = define("tracker.turn_places", opRead, trackerDomain, false,
 			return nil, errNoHalf
 		}
 		return b.Tracker.TurnPlaces(ctx, a.Runs, a.Fresh)
-	})
+	}).perAsked()
