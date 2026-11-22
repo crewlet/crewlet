@@ -14,13 +14,15 @@ import (
 // no release meets no floor, since the script refuses it.
 //
 // Mutation: compare the numbers as text, read the last run of digits and dots,
-// or take an unread version for a current one, and a case goes red.
+// accept three parts that are not all digits, or take an unread version for a
+// current one, and a case goes red.
 func TestAReleaseIsHeldToAFloorByItsNumbers(t *testing.T) {
 	t.Parallel()
 	for version, want := range map[string]bool{
 		"codex-cli 0.171.0": true, "codex-cli 0.172.3": true, "1.0.0": true, "codex-cli 0.170.99": false,
 		"0.99.0": false, "codex-cli dev": false, "": false, "codex-cli 0.150.0-alpha.1": false,
-		"codex-cli 0.172.0-rc.1": false, "codex-cli 0.172.0 (extra)": true,
+		"codex-cli 0.172.0-rc.1": false, "codex-cli 0.172.0 (extra)": true, "codex-cli 0.172.0-rc": false,
+		"codex-cli 0.172.0+build": false, "codex-cli 0.172.x": false,
 	} {
 		if got := releaseAtLeast(version, "0.171.0"); got != want {
 			t.Errorf("releaseAtLeast(%q, 0.171.0) = %v, want %v", version, got, want)

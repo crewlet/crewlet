@@ -188,10 +188,14 @@ func TestThePollsCarryTheRunsTokenAndAskAgainAfterA503(t *testing.T) {
 // A NOTES ROUTE THAT REFUSES THE HELPER ENDS ONLY ITS POLLS: a 401 is a token
 // that no longer resolves, and asking again would ask forever, but the cap
 // and the skill reports go on, since a helper that ended would leave the turn
-// unbounded and its run's guard would stop it.
+// unbounded and its run's guard would stop it. Across a live window after the
+// refusal, a turn in flight and a note waiting on the route, the cap and the
+// skill reports work and the route is asked nothing more: on the case's
+// millisecond pacing, a helper that backed off and asked again would ask many
+// times within the window's round trips, and steer the waiting note.
 //
-// Mutation: end the helper on the notes route's refusal, or poll again after
-// it, and this goes red.
+// Mutation: end the helper on the notes route's refusal, or log it, back off
+// and poll again, and this goes red.
 func TestANotesRouteThatRefusesTheHelperEndsOnlyItsPolls(t *testing.T) {
 	t.Parallel()
 	bridge := newFakeBridge(t, testToken, 401)
@@ -203,6 +207,7 @@ func TestANotesRouteThatRefusesTheHelperEndsOnlyItsPolls(t *testing.T) {
 	h := startHelperWith(t, bridge, app, threadFile, append([]string{"-notes-env", "NOTES_ROUTE", "-step-cap", "2",
 		"-skills-env", "SKILLS_ROUTE", "-skills-dir", dir}, digestFlags(alpha)...)...)
 	h.stderr.await(func(s string) bool { return strings.Contains(s, "refused the helper") })
+	bridge.add(note{Seq: 1, ID: "note-1", Message: "a note no poll should fetch"})
 	tokens(t, app, "thread-A", "turn-1", 100)
 	tokens(t, app, "thread-A", "turn-1", 200)
 	interrupted := make(chan struct{})
@@ -223,6 +228,12 @@ func TestANotesRouteThatRefusesTheHelperEndsOnlyItsPolls(t *testing.T) {
 	}
 	if p := bridge.polls.all(); len(p) != 1 {
 		t.Errorf("the route was polled %d times, want once: a refusal ends the polls", len(p))
+	}
+	if s := app.steers.all(); len(s) != 0 {
+		t.Errorf("the helper steered %d notes after the route refused it", len(s))
+	}
+	if n := strings.Count(h.stderr.String(), "refused the helper"); n != 1 {
+		t.Errorf("the refusal was logged %d times, want once", n)
 	}
 }
 
