@@ -231,11 +231,11 @@ func (c passCall) cut() bool { return c.err != nil && c.spent && !c.notHeld() }
 // ([publishHeldMemory]).
 //
 // The own pass first, so what the seat wrote goes before the backlog the
-// changelog mostly holds already: a cut
-// loses the backlog first (crewlet/crewlet#1039). The backlog runs after an own
-// pass that failed with time left, since a refused row of the seat's own
-// (crewlet/crewlet#349) is no reason to lose it; not after one that answered
-// memsync.ErrNotHeld, which the backlog would answer too, nor on a spent bound.
+// changelog mostly holds already: a cut loses the backlog first
+// (crewlet/crewlet#1039). The backlog runs after an own pass that failed with
+// time left, since a refused row of the seat's own (crewlet/crewlet#349) is no
+// reason to lose it; not after one that answered memsync.ErrNotHeld, which the
+// backlog would answer too, nor on a spent bound.
 func publishTurn(ctx context.Context, memory memoryFlusher, handle string) seatTurn {
 	var turn seatTurn
 	turn.own.carried, turn.own.err = memory.FlushOwn(ctx, handle)
@@ -392,9 +392,8 @@ type backlogsReport struct {
 	notReached []string
 
 	// marked is the rows every call of the turn carried, each of which moved a
-	// mark: a turn
-	// cut after any seat's backlog moved one is draining, whatever the cut
-	// call carried ([memorySync.resume]'s exception).
+	// mark: a turn cut after any seat's backlog moved one is draining, whatever
+	// the cut call carried ([memorySync.resume]'s exception).
 	marked int
 }
 
