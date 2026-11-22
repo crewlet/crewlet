@@ -74,6 +74,9 @@ func (f *Fleet) PutHold(_ context.Context, h coord.TrimHold) error {
 	// cannot, because the real one serialises.
 	hold := h
 	hold.Streams = maps.Clone(h.Streams)
+	// THE STORE'S REVISION, never the caller's, which the KV never stores.
+	f.version++
+	hold.Revision = f.version
 	f.holds[h.Owner] = hold
 	return nil
 }

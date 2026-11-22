@@ -44,6 +44,13 @@ type TrimHold struct {
 	// what an operator reads when the trim is not advancing, and the one
 	// thing the register cannot derive.
 	Reason string `json:"reason,omitempty"`
+
+	// Revision is the store's revision of the write this hold was read
+	// from: filled by every [HoldRegister.Holds], never written. A renewal
+	// is a new write with a new revision whichever member leads, which is
+	// how the trim tells a renewed hold from one left standing. Zero on a
+	// hold nothing read back.
+	Revision uint64 `json:"-"`
 }
 
 // HoldRegister is the fleet's record of what is pinning the log.
@@ -58,7 +65,8 @@ type HoldRegister interface {
 	PutHold(ctx context.Context, h TrimHold) error
 
 	// Holds reads every live pin, the whole set, because the only caller
-	// takes a minimum across it.
+	// takes a minimum across it: each as the store's leader holds it, with
+	// its revision.
 	Holds(ctx context.Context) ([]TrimHold, error)
 
 	// ReleaseHold removes one: the NORMAL path, when the work that took it
