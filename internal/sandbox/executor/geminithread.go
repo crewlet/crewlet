@@ -67,11 +67,18 @@ func (GeminiCLI) readMainThread(ctx context.Context, box sandbox.Sandbox, paths 
 		switch {
 		case json.Unmarshal(line, &t) != nil:
 		case t.From != nil && *t.From >= 0:
+			// A LATER RUN'S START ENDS THE EARLIER RUNS' LINES: their takes
+			// are confirmed only before it ([geminiAskedTake]).
+			for i := range asked {
+				if asked[i].until < 0 {
+					asked[i].until = *t.From
+				}
+			}
 			from = *t.From
 			started = true
 		case t.Take != "":
 			recorded = append(recorded, t)
-			asked = append(asked, geminiAskedTake{digest: t.Digest, from: from})
+			asked = append(asked, geminiAskedTake{digest: t.Digest, from: from, until: -1})
 		}
 	}
 	// A RECORD WITHOUT ITS START LINE was lost with its box (a box reads a

@@ -18,13 +18,15 @@ import (
 // it, so its plain entry confirms it, even once a later `$patch` drops it.
 
 // geminiAskedTake is one take [geminiConfirmed] is asked of: its rendered
-// text's digest ([ItemDigest]), and the first line of the session it can be
-// confirmed on, the count of the session's lines as its run started (the
-// record's `from`, [geminiScript]): a continued session already holds an
-// earlier job's deliveries, which a take of the same text was never handed.
+// text's digest ([ItemDigest]), and the lines of the session it can be
+// confirmed on: from the count of the session's lines as its run started (the
+// record's `from`, [geminiScript]) up to, not including, the next run's start
+// in the same record (until; -1 for the last run's takes). A continued
+// session holds an earlier job's deliveries, which a later take of the same
+// text was never handed, and a later job's, which an earlier take never was.
 type geminiAskedTake struct {
-	digest string
-	from   int
+	digest      string
+	from, until int
 }
 
 // geminiConfirmed is which of takes, in the order they were made, the main
@@ -64,7 +66,7 @@ func geminiConfirmed(r io.Reader, takes []geminiAskedTake, bound int) ([]bool, e
 			}
 			digest := ItemDigest(*part.Text)
 			for i := next; i < len(takes); i++ {
-				if takes[i].digest == digest && takes[i].from <= at {
+				if takes[i].digest == digest && takes[i].from <= at && (takes[i].until < 0 || at < takes[i].until) {
 					confirmed[i], next = true, i+1
 					break
 				}

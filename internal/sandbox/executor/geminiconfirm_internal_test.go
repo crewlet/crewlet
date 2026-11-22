@@ -62,7 +62,7 @@ func TestAGeminiTakeIsConfirmedByItsTextAsAUserMessage(t *testing.T) {
 			}
 			asked := make([]geminiAskedTake, len(tc.takes))
 			for i, take := range tc.takes {
-				asked[i] = geminiAskedTake{digest: ItemDigest(take)}
+				asked[i] = geminiAskedTake{digest: ItemDigest(take), until: -1}
 				if tc.froms != nil {
 					asked[i].from = tc.froms[i]
 				}
