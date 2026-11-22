@@ -1151,10 +1151,13 @@ func (c ClaudeCode) Continues(box, writer string) (bool, string) {
 }
 
 // ContinuesWriter reports whether a session Claude Code release writer wrote
-// can be continued at all ([carrier]): the writer at or after
-// [claudeCarriedWriterFloor]. A writer that does not read is taken for a
-// current one, as the notes gate takes it ([claudeNotesGate]).
+// can be continued at all ([carrier]): the writer read and at or after
+// [claudeCarriedWriterFloor]. A writer that does not read continues nowhere
+// ([writerNamedNoRelease]).
 func (ClaudeCode) ContinuesWriter(writer string) (bool, string) {
+	if !releaseReads(writer) {
+		return false, writerNamedNoRelease("Claude Code")
+	}
 	if !releaseAtLeast(writer, claudeCarriedWriterFloor) {
 		return false, fmt.Sprintf("the session was written by Claude Code %s, older than %s, the "+
 			"first whose compaction summaries survive a resume", writer, claudeCarriedWriterFloor)

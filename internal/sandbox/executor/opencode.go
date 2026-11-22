@@ -393,10 +393,13 @@ func (o OpenCode) Continues(box, writer string) (bool, string) {
 }
 
 // ContinuesWriter reports whether a session OpenCode release writer wrote can
-// be continued at all ([carrier]): the writer at or after
-// [openCodeCarryFloor]. A writer that does not read is taken for a current
-// one.
+// be continued at all ([carrier]): the writer read and at or after
+// [openCodeCarryFloor]. A writer that does not read continues nowhere
+// ([writerNamedNoRelease]).
 func (OpenCode) ContinuesWriter(writer string) (bool, string) {
+	if !releaseReads(writer) {
+		return false, writerNamedNoRelease("OpenCode")
+	}
 	if !releaseAtLeast(writer, openCodeCarryFloor) {
 		return false, fmt.Sprintf("the session was written by OpenCode %s, older than %s, the "+
 			"oldest whose session another box continues", writer, openCodeCarryFloor)

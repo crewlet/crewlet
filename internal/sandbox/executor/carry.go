@@ -400,6 +400,16 @@ func releaseReads(version string) bool {
 	return ok
 }
 
+// writerNamedNoRelease is why a session whose writer named no release this
+// build reads ([releaseOf]: a pre-release, a snapshot, none at all) continues
+// in no box, for every harness: a session no rule here was read for is never
+// taken for a current release's, which a box older than its writer would then
+// continue.
+func writerNamedNoRelease(harness string) string {
+	return fmt.Sprintf("the session was written by a %s that named no release this build reads, so no "+
+		"box continues it", harness)
+}
+
 // carriedOlder is the reason a box's release cannot continue a session a newer
 // one wrote, shared by both harnesses: a release reads what it and those before it
 // wrote, never what a later one adds to a session.
