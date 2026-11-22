@@ -56,8 +56,11 @@ func TestNoShippedProfileDeniesTheWeb(t *testing.T) {
 	}
 	copilot, _ := harnessprofile.Builtin("copilot")
 	joined := strings.Join(copilot.CompleteArgs, " ")
-	if !strings.Contains(joined, "--allow-tool web_fetch") || !strings.Contains(joined, "--allow-tool web_search") {
-		t.Errorf("copilot must allow its web tools explicitly: %q", copilot.CompleteArgs)
+	// 1.0.114 asks a URL permission for every fetch and denies it unattended,
+	// so the fetch is offered and its URLs allowed (measured; the profile).
+	if !strings.Contains(joined, "--available-tools web_fetch") || !strings.Contains(joined, "--allow-all-urls") ||
+		!strings.Contains(joined, "--available-tools web_search") {
+		t.Errorf("copilot must offer its web tools and allow their URLs: %q", copilot.CompleteArgs)
 	}
 	codex, _ := harnessprofile.Builtin("codex")
 	if !strings.Contains(strings.Join(codex.CompleteArgs, " "), `web_search="live"`) {
