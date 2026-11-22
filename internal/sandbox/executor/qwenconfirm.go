@@ -11,17 +11,17 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// A Qwen Code note is CONFIRMED BY ITS RECORD: Qwen Code writes a drained
-// message to the session's chat file as a `type: user`, subtype
-// `mid_turn_user_message` record, after the request that carried it has gone
-// out (measured on 0.28.3). THE RECORD REFRAMES the message: its first part is
-// the message as the helper handed it behind Qwen Code's framing
-// ("\n" + [qwenNoteFraming]), so the framing is cut, exactly, before the text
-// is held to a serve's digest ([ItemDigest]). The helper confirms on the notes
-// route from these records as the run goes (qwen_helper.mjs); a read of the
-// job's session confirms from them here ([recordConfirmer]). The model writes
-// no user record, and a tool's output sits in a tool_result record, which is
-// never read.
+// A Qwen Code note is CONFIRMED BY ITS RECORD AND THE REPLY AFTER IT. Qwen Code
+// records a drained message (`type: user`, subtype `mid_turn_user_message`)
+// BEFORE the request carrying it goes out (0.28.3: ahead of its
+// request_lifecycle start), so only the next assistant record shows the model
+// read it. Not a request's successful end: the first after a note can be a
+// compaction's own summary call (chat-compact.jsonl). THE RECORD REFRAMES the
+// message behind Qwen Code's framing ("\n" + [qwenNoteFraming]), cut exactly
+// before the text is held to a serve's digest ([ItemDigest]). The helper
+// confirms on the notes route as the run goes (qwen_helper.mjs), a read of the
+// job's session here ([recordConfirmer]). The model writes no user record, and a
+// tool's output sits in a tool_result record, never read.
 
 // notesHeld is the inbox ids of takes the session's chat file holds, matched
 // in serve order ([recordConfirmer]). No chat file holds none.
@@ -67,13 +67,14 @@ func qwenChatFile(ctx context.Context, box sandbox.Sandbox, session string) (str
 // qwenNotesHeld is the inbox ids of takes, in serve order, whose items the
 // session read from r holds as a current instruction: each record whose
 // handed text's digest is the next take's matches it, so two takes of
-// identical text need two records. A match is settled by the next assistant
-// record, a response to a request that carried the note plain; a compaction
-// before it keeps the match only where the note survives plain in the history
-// Qwen Code goes on with, past the summary (ADR-0177: a note read only inside
-// a compaction summary is not read); one neither follows is held, the
-// request that carried it already sent. A line that does not decode is passed
-// over, as a torn last line is.
+// identical text need two records. A match is settled only by the next
+// assistant record, the reply to a request that carried the note plain; a
+// compaction before it keeps the match only where the note survives plain in
+// the history Qwen Code goes on with, past the summary (ADR-0177: a note read
+// only inside a compaction summary is not read). A match no reply follows
+// (the request failed, was cancelled or the run was killed) is not held, so
+// the note is served again. A line that does not decode is passed over, as a
+// torn last line is.
 func qwenNotesHeld(r io.Reader, takes []ServedTake, bound int) ([]string, error) {
 	type match struct{ id, digest string }
 	var settled []string
@@ -120,21 +121,23 @@ func qwenNotesHeld(r io.Reader, takes []ServedTake, bound int) ([]string, error)
 		}
 		return nil
 	}, func(int64) error { return nil })
-	for _, m := range pending {
-		settled = append(settled, m.id)
-	}
 	return settled, err
 }
 
 // qwenPreserved counts, by digest, the handed texts a chat_compression record
-// keeps plain: each text part of the history Qwen Code goes on with, past its
-// summary prefix (summaryPrefixLength: the summary and the model's
-// acknowledgement, measured on 0.28.3), its framing cut. A record whose prefix
-// does not read keeps nothing, so no note it may have summarized is held.
+// keeps plain: each text part of a user entry of the history Qwen Code goes on
+// with, past its prefix, its framing cut (a model entry's words are never a
+// note). The prefix is the larger of summaryPrefixLength (the summary and the
+// model's acknowledgement, measured on 0.28.3) and contextPrefixLength, which
+// no capture tells apart from it: the larger keeps less, so a note the
+// compaction summarized is never held. A record whose summary prefix does not
+// read keeps nothing.
 func qwenPreserved(payload json.RawMessage) map[string]int {
 	var p struct {
 		SummaryPrefixLength *int `json:"summaryPrefixLength"`
+		ContextPrefixLength *int `json:"contextPrefixLength"`
 		CompressedHistory   []struct {
+			Role  string `json:"role"`
 			Parts []struct {
 				Text *string `json:"text"`
 			} `json:"parts"`
@@ -144,7 +147,14 @@ func qwenPreserved(payload json.RawMessage) map[string]int {
 	if json.Unmarshal(payload, &p) != nil || p.SummaryPrefixLength == nil || *p.SummaryPrefixLength < 0 {
 		return kept
 	}
-	for i := *p.SummaryPrefixLength; i < len(p.CompressedHistory); i++ {
+	prefix := *p.SummaryPrefixLength
+	if p.ContextPrefixLength != nil {
+		prefix = max(prefix, *p.ContextPrefixLength)
+	}
+	for i := prefix; i < len(p.CompressedHistory); i++ {
+		if p.CompressedHistory[i].Role != "user" {
+			continue
+		}
 		for _, part := range p.CompressedHistory[i].Parts {
 			if part.Text != nil {
 				text, _ := strings.CutPrefix(*part.Text, "\n"+qwenNoteFraming)

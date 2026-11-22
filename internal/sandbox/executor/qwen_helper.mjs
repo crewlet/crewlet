@@ -28,11 +28,12 @@
 // note it holds (drain). Qwen Code puts each before the next request as a
 // text framed `\n[User message received during tool execution]: `, and
 // records each in the session's chat file as its own `type:user`, subtype
-// `mid_turn_user_message`, after the fact (0.28.3 and 0.26.1 write it
-// asynchronously). A note is confirmed read on the notes route only once the
-// chat file holds that record with its exact text, matched in order, so two
-// identical notes need two records; one never recorded is never confirmed,
-// and the engine serves it again. What the helper fetched and never handed
+// `mid_turn_user_message`, before that request goes out (0.28.3). A note is
+// confirmed read on the notes route only once the chat file holds that record
+// with its exact text, matched in order (two identical notes need two
+// records), and an assistant record after it, the reply to the request that
+// carried it; one with no reply (its request failed, was cancelled or the run
+// was killed) is never confirmed, and the engine serves it again. What the helper fetched and never handed
 // dies with it: nothing of it is left in Qwen Code's session.
 import { spawn } from "node:child_process"
 import fs from "node:fs"
@@ -464,10 +465,11 @@ class Inbox {
     return notes.map((note) => note.message)
   }
 
-  // stop ends the polling and confirms what the chat file shows: every
-  // record of a note handed is on disk by the request after it, which came
-  // before the turn ended, so a match nothing followed was sent plain.
-  // Hurried where a signal stopped the run.
+  // stop ends the polling and confirms what the chat file shows. A match no
+  // reply followed is never confirmed: Qwen Code records a note before the
+  // request carrying it goes out, and that request may have failed, been
+  // cancelled or been cut off by the stop. Hurried where a signal stopped the
+  // run.
   async stop(hurried) {
     if (this.url === "") return
     this.done = true
@@ -475,7 +477,6 @@ class Inbox {
     await this.polling
     await this.confirming
     this.scan()
-    this.owed.push(...this.matched.splice(0).map((note) => note.id))
     await this.post(hurried ? hurriedPostMs : readAbortMs)
   }
 
@@ -608,14 +609,20 @@ class Inbox {
 }
 
 // preserved counts, by text, what a chat_compression record keeps plain: each
-// text part of its history past summaryPrefixLength, the framing cut. A
-// prefix that does not read keeps nothing.
+// text part of a user entry of its history past the prefix, the framing cut.
+// The prefix is the larger of summaryPrefixLength and contextPrefixLength,
+// which no capture tells apart, so a summarized note is never kept
+// (qwenconfirm.go's qwenPreserved, the same rule). A summary prefix that does
+// not read keeps nothing.
 function preserved(payload) {
   const kept = new Map()
-  const prefix = payload?.summaryPrefixLength
+  const summary = payload?.summaryPrefixLength
+  const context = payload?.contextPrefixLength
   const history = payload?.compressedHistory
-  if (!Number.isSafeInteger(prefix) || prefix < 0 || !Array.isArray(history)) return kept
+  if (!Number.isSafeInteger(summary) || summary < 0 || !Array.isArray(history)) return kept
+  const prefix = Number.isSafeInteger(context) ? Math.max(summary, context) : summary
   for (const entry of history.slice(prefix)) {
+    if (entry?.role !== "user") continue
     for (const part of Array.isArray(entry?.parts) ? entry.parts : []) {
       if (typeof part?.text !== "string") continue
       const text = part.text.startsWith(framing) ? part.text.slice(framing.length) : part.text

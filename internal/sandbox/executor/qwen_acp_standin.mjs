@@ -25,11 +25,15 @@
 //   QWEN_FAKE_COMPACT a file of one chat_compression record of Qwen Code's,
 //                     recorded between the notes' records and the response
 //                     after them
+//   QWEN_FAKE_FAIL_AFTER_NOTE fails the request that carries a note once it
+//                     is recorded: no reply is recorded, and the prompt is
+//                     answered with an error
 //
 // Like Qwen Code it records a drained note in the session's chat file as a
 // `mid_turn_user_message` record, the captured record's shape with the note's
-// text, after the fact, then the response to the request that carried it as
-// the captured assistant record, and exits once its stdin closes.
+// text, at once, BEFORE the request that carries it (as 0.28.3 does); the
+// reply to that request, the captured assistant record, only once the turn
+// goes on; and exits once its stdin closes.
 import fs from "node:fs"
 import path from "node:path"
 
@@ -99,18 +103,26 @@ function record(notes) {
     parts: [{ text: "\n[User message received during tool execution]: " + note }] },
   systemPayload: { displayText: note } }))
   if (env.QWEN_FAKE_COMPACT) lines.push(fs.readFileSync(env.QWEN_FAKE_COMPACT, "utf8").trim())
-  lines.push(JSON.stringify({ ...replyTemplate, sessionId: session }))
   fs.mkdirSync(path.dirname(chatFile()), { recursive: true })
   fs.appendFileSync(chatFile(), lines.join("\n") + "\n")
 }
+// reply records the response to the request that carried the notes recorded
+// last, as the turn goes on past it.
+function reply() {
+  fs.appendFileSync(chatFile(), JSON.stringify({ ...replyTemplate, sessionId: session }) + "\n")
+}
+let owedReply = false
 
 async function replay(promptID) {
   const from = sessionOf(turn)
   const opened = turn.findIndex((m) => m.dir === "out" && m.method === "session/prompt")
   const promptCaptured = turn[opened].id
   for (const m of turn.slice(opened + 1)) {
-    if (m.dir === "in-note") emit(m, from)
-    else if (m.dir === "in-req") {
+    if (m.dir === "in-note") {
+      if (owedReply) reply()
+      owedReply = false
+      emit(m, from)
+    } else if (m.dir === "in-req") {
       for (let tries = 0; ; tries++) {
         const { m: got, ms } = await ask(m.method, JSON.parse(replace(JSON.stringify(m.params), from)))
         const notes = got?.result?.messages ?? []
@@ -118,8 +130,12 @@ async function replay(promptID) {
         if (notes.length > 0) {
           handedAny = true
           if (env.QWEN_FAKE_DIE_AFTER_NOTE) process.exit(1)
-          // AFTER THE FACT, as 0.28.3 writes it.
-          setImmediate(() => record(notes))
+          record(notes)
+          if (env.QWEN_FAKE_FAIL_AFTER_NOTE) {
+            send({ jsonrpc: "2.0", id: promptID, error: { code: -32603, message: "Internal error" } })
+            return
+          }
+          owedReply = true
           break
         }
         if (!env.QWEN_FAKE_AWAIT_NOTES || handedAny || tries >= 200) break
@@ -133,6 +149,8 @@ async function replay(promptID) {
         fs.mkdirSync(path.dirname(chatFile()), { recursive: true })
         fs.appendFileSync(chatFile(), replace(fs.readFileSync(env.QWEN_FAKE_CHAT_SEED, "utf8"), from))
       }
+      if (owedReply) reply()
+      owedReply = false
       answer(promptID, m, from)
       return
     }
