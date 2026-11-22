@@ -223,8 +223,9 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 		{Name: toolABExperiment, Class: growth.ClassOperate,
 			Operations: []string{"admob.accounts.mediationGroups.mediationAbExperiments.create",
 				"admob.accounts.mediationGroups.mediationAbExperiments.stop"},
-			Description: "Start a mediation A/B experiment on a group, or stop the running one, keeping the " +
-				"control lines (VARIANT_CHOICE_A) or applying the treatment's (VARIANT_CHOICE_B).",
+			Description: "Start a mediation A/B experiment on a group, or stop the running one keeping the " +
+				"control lines (VARIANT_CHOICE_A). Keeping the treatment's (VARIANT_CHOICE_B) removes every control " +
+				"line it lacks, so it is asked through admob_admin.",
 			Parameters: object(map[string]any{
 				"account":            accountArg(),
 				"mediation_group_id": str("The mediation group."),
@@ -270,8 +271,8 @@ func genericDescription(class growth.Class) string {
 			"A/B experiments. Recorded in the access log; nobody is asked."
 	default:
 		return "Ask an administrator to approve an AdMob change that cannot be undone, by its method's ID: " +
-			"linking a new app to its store listing, or removing a mediation line. Held until they answer, " +
-			"at a fresh step-up."
+			"linking a new app to its store listing, removing a mediation line, or stopping an A/B experiment " +
+			"keeping the treatment's lines. Held until they answer, at a fresh step-up."
 	}
 }
 
