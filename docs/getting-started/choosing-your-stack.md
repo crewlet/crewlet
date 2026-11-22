@@ -2,7 +2,7 @@
 
 Crewlet is the engine; the LLM, tracker, knowledge base, code host, chat and code sandbox are services you pick and connect, hosted or self-hosted. Per choice: what it implies, what you create **yourself**, where setup lives.
 
-**Only the LLM, and a place for its runs, is required.** The tracker, knowledge base and chat ship with the engine and are on by default. Every seat's executor runs in a [code sandbox](#code-sandbox-where-every-executor-runs) cell; `local: {}` with `default_run_in: direct` is the engine host itself, so one signed-in Claude Code or OpenCode plus that cell runs a company. Use it only for a first run on your machine while seats take work from you alone; before a seat takes work from anyone else, move its runs into a container ([Code
+**Only the LLM, and a place for its runs, is required.** The tracker, knowledge base and chat ship with the engine and are on by default. Every seat's executor runs in a [code sandbox](#code-sandbox-where-every-executor-runs) cell; `local: {}` with `default_run_in: direct` is the engine host itself, so one signed-in Claude Code, OpenCode or Pi plus that cell runs a company. Use it only for a first run on your machine while seats take work from you alone; before a seat takes work from anyone else, move its runs into a container ([Code
 sandbox](#code-sandbox-where-every-executor-runs)).
 
 Each integration usually has:
@@ -20,7 +20,7 @@ Each integration usually has:
 | Models | Config | Pay with | Notes |
 |---|---|---|---|
 | **Anthropic's** (Claude) | `model: sonnet` — Claude Code is the default `harness` | a Claude Pro / Max plan, or an Anthropic API key (`auth.mode: api-key`) | Only harness that mints a headless token (`crewlet llm login -capture-token`), the best sign-in for a container. Runs a seat's executor as [its own run in a box](../concepts/llm-backends.md#the-executors-run-in-a-box). |
-| **OpenAI's** (GPT) | `harness: codex` | a ChatGPT Plus / Pro plan, or an OpenAI API key (`auth.mode: api-key`) | No executor: reviewer, workers and side passes only, in its own loop on this host, the seat's tools as its only working tools; the seat's `llm` points at a Claude Code or OpenCode entry for its executor. |
+| **OpenAI's** (GPT) | `harness: codex` | a ChatGPT Plus / Pro plan, or an OpenAI API key (`auth.mode: api-key`) | No executor: reviewer, workers and side passes only, in its own loop on this host, the seat's tools as its only working tools; the seat's `llm` points at a Claude Code, OpenCode or Pi entry for its executor. |
 | **Open models** — OpenRouter, a hosted provider, your own server | `harness: opencode`, `model: <provider>/<model>` | the provider's key in `env`, or an OpenCode login; nothing for a keyless server | OpenCode 2. Self-hostable: a vLLM, llama.cpp or Ollama server is a provider declared in OpenCode's own configuration ([how](../concepts/llm-backends.md#open-models-openrouter-and-local-servers-opencode)). Runs a seat's executor. |
 | **Gemini, Qwen, Cursor, Copilot, Grok, Muse, Kimi, Hermes, Pi** | `harness:` the profile's name | the vendor's login or key | No executor: reviewer, workers, side passes. [Supported harnesses](../concepts/llm-backends.md#supported-harnesses) pairs each profile with its binary (`gemini-cli` drives `gemini`, `kimi-code` drives `kimi`, …). |
 
@@ -252,7 +252,7 @@ Details (scopes, Events API, thread routing, the working-status indicator):
 
 ## Code sandbox (where every executor runs)
 
-Every seat's executor is its harness's own run (Claude Code or OpenCode), fully permissioned, with a shell, filesystem and git checkout, in a box from this catalogue, which a company with an agent seat and a model must configure. `direct` is the engine host itself; `container` and `e2b` keep the run off it. A `direct` or `container` box runs the harness as the engine's own user, and Claude Code refuses its executor's mode for root, so the engine must not run as root there ([the engine's user](../guides/deployment.md#the-engines-user-and-claude-code)). See the [Code Sandbox](../concepts/code-sandbox.md) concept page.
+Every seat's executor is its harness's own run (Claude Code, OpenCode or Pi), fully permissioned, with a shell, filesystem and git checkout, in a box from this catalogue, which a company with an agent seat and a model must configure. `direct` is the engine host itself; `container` and `e2b` keep the run off it. A `direct` or `container` box runs the harness as the engine's own user, and Claude Code refuses its executor's mode for root, so the engine must not run as root there ([the engine's user](../guides/deployment.md#the-engines-user-and-claude-code)). See the [Code Sandbox](../concepts/code-sandbox.md) concept page.
 | Option | How | Notes |
 |---|---|---|
 | **None** | omit `providers.sandbox` | Only for a company with no agent seat, or no `providers.llm` entry yet; any other is refused at `providers.sandbox`. |

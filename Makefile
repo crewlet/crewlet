@@ -827,7 +827,9 @@ lint: ## run golangci-lint (ci: golangci-lint)
 # internal/sandbox/executor's probes of the two OpenCode plugins the engine
 # embeds — the notes plugin (opencode_steer_test.go), run under node against a
 # stand-in of the bridge's notes route and a real bridge's, and the skill-load
-# plugin (opencode_skills_test.go), against a stand-in of its skill route — and
+# plugin (opencode_skills_test.go), against a stand-in of its skill route, and
+# Pi's extension (pi_extension_internal_test.go), against a stand-in of pi's
+# extension API — and
 # internal/browser/boxhelper, which installs the Playwright tree with the
 # machine's npm under its node. Without node those cases fail under REQUIRED
 # (internal/prereqtest's one rule), once the whole half has run; the
@@ -978,8 +980,8 @@ require-node: ## fail unless node is on PATH (the e2e client replay, the OpenCod
 	  echo "node is not on PATH, and three of the suite's gates need it."; \
 	  echo "  internal/e2e's client replay runs the dashboard's own protocol"; \
 	  echo "  module over the frames a real engine produced,"; \
-	  echo "  internal/sandbox/executor runs the two OpenCode plugins the"; \
-	  echo "  engine embeds, and internal/browser/boxhelper installs a box's"; \
+	  echo "  internal/sandbox/executor runs the OpenCode plugins and the Pi"; \
+	  echo "  extension the engine embeds, and internal/browser/boxhelper installs a box's"; \
 	  echo "  Playwright tree with the npm node runs. Each FAILS without node"; \
 	  echo "  under the targets that run the suite"; \
 	  echo "  (CREWLET_REQUIRE_PREREQUISITES=1), but only after the whole"; \

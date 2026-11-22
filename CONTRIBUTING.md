@@ -510,9 +510,13 @@ The prerequisites that legitimately vary by machine:
   a real box, through `opencode_steer_probe.mjs` against a stand-in of the
   bridge's notes route and a real bridge's; `opencode_skills_test.go` drives the
   skill-load plugin through `opencode_skills_probe.mjs` against a stand-in of
-  the bridge's skill route. That package is in the parallel half, so `make test`
-  requires node and CI's race shards install it; the probes find node by the
-  same rule as the replay. The plugins import nothing, so no npm.
+  the bridge's skill route. `pi_extension_internal_test.go` and
+  `pi_contract_test.go` drive Pi's extension (`pi_extension.mjs`) through
+  `pi_extension_probe.mjs`, a stand-in of pi's extension API, against stand-in
+  routes and a real bridge's. That package is in the parallel half, so `make
+  test` requires node and CI's race shards install it; the probes find node by
+  the same rule as the replay. The plugins and the extension import only Node's
+  own modules, so no npm.
 
   `node` also runs the npm with which `internal/browser/boxhelper`'s
   `TestTheLockInstallsWithEachNodesOwnNpm` installs the Playwright tree from

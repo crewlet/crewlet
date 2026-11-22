@@ -472,7 +472,7 @@ sign in a `kind: human` seat the same way, where they sit in the chart. See
 [Humans in the org chart](https://docs.crewlet.ai/engine/latest/concepts/humans-in-the-org/).
 
 **Every agent seat writes code in its own run.** Its executor is its coding
-harness's own run (`claude-code` or `opencode`) with a shell and git, in a box
+harness's own run (`claude-code`, `opencode` or `pi`) with a shell and git, in a box
 from `providers.sandbox`, which the company must configure once it has an
 agent seat and a model; reading and reviewing code on a code host is MCP.
 `role.sandbox` adds what one seat's box reads: `setup` steps, `env` (its
