@@ -232,13 +232,42 @@ func TestNotesWaitForATurnInFlight(t *testing.T) {
 	writeThread(t, threadFile, "thread-A")
 	bridge.add(note{Seq: 1, ID: "note-1", Message: "hello"})
 	startHelper(t, bridge, app, threadFile)
-	app.resumed.await(func(r []string) bool { return len(r) == 1 })
+	app.resumed.await(func(r []resume) bool { return len(r) == 1 })
 	if v := bridge.verbs.all(); len(v) > 0 {
 		t.Errorf("the helper polled %v with no turn in flight", v)
 	}
-	app.notify(t, "turn/started", map[string]any{"threadId": "thread-A", "turn": map[string]any{"id": "turn-9"}})
+	app.startTurn(t, "thread-A", "turn-9")
 	if s := app.steers.await(func(s []steer) bool { return len(s) == 1 }); s[0].ExpectedTurnID != "turn-9" {
 		t.Errorf("steered turn %q, want the one started, turn-9", s[0].ExpectedTurnID)
+	}
+}
+
+// A NOTE STEERED AS ITS TURN ENDED WAITS FOR THE NEXT TURN, never handed
+// over as taken: Codex answers "no active turn to steer", and the same note
+// is steered onto the turn that starts next.
+func TestANoteSteeredAsItsTurnEndedWaitsForTheNextTurn(t *testing.T) {
+	t.Parallel()
+	bridge := newFakeBridge(t, testToken)
+	app := newFakeAppServer(t, "turn-1", 0)
+	threadFile := filepath.Join(t.TempDir(), "thread.id")
+	writeThread(t, threadFile, "thread-A")
+	h := startHelper(t, bridge, app, threadFile)
+	bridge.verbs.await(func(v []string) bool { return len(v) > 0 })
+	// The turn ends with its notice not yet sent, and a note arrives.
+	app.setTurn("")
+	bridge.add(note{Seq: 1, ID: "note-1", Message: "late words"})
+	app.steers.await(func(s []steer) bool { return len(s) == 1 })
+	app.startTurn(t, "thread-A", "turn-2")
+	steers := app.steers.await(func(s []steer) bool { return len(s) == 2 })
+	if steers[1].ExpectedTurnID != "turn-2" || steers[1].Input[0].Text != "late words" {
+		t.Errorf("second steer %+v: want the same note on turn-2", steers[1])
+	}
+	polls := bridge.polls.await(func(p []poll) bool { return slices.ContainsFunc(p, func(p poll) bool { return p.after == 1 }) })
+	if n := len(slices.DeleteFunc(slices.Clone(polls), func(p poll) bool { return p.after != 1 })); n != 1 {
+		t.Errorf("polls %+v: the cursor passed the note %d times, want once, after turn-2 took it", polls, n)
+	}
+	if strings.Contains(h.stderr.String(), "refused") {
+		t.Errorf("a steer of an ended turn was logged as a refusal:\n%s", h.stderr.String())
 	}
 }
 

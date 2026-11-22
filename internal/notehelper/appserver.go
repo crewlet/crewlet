@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,7 +26,8 @@ import (
 // WebSocket text messages, over the socket.
 
 // openAppServer waits for the run's thread file, dials the app-server's socket
-// and joins the thread: initialize, initialized, thread/resume.
+// and joins the thread: initialize, initialized, thread/resume, then
+// thread/turns/list for the turn in flight.
 func openAppServer(ctx context.Context, f flags, p pacing) (harness, error) {
 	switch {
 	case f.socket == "":
@@ -157,16 +159,20 @@ func joinAppServer(ctx context.Context, conn net.Conn, thread string, p pacing) 
 		a.close()
 		return nil, fmt.Errorf("initializing with the app-server: %w", err)
 	}
-	// thread/resume REJOINS a thread another client is running, and answers
-	// its turns: the one in flight is the turn a steer names.
-	raw, err := a.call(ctx, "thread/resume", map[string]any{"threadId": thread})
-	if err != nil {
+	// thread/resume REJOINS a thread another client is running. Without its
+	// turns: the full history it would answer is deprecated, and only the
+	// newest turn matters, which thread/turns/list answers.
+	if _, err = a.call(ctx, "thread/resume", map[string]any{"threadId": thread, "excludeTurns": true}); err != nil {
 		a.close()
 		return nil, fmt.Errorf("joining the run's thread %s: %w", thread, err)
 	}
-	if err = a.resumed(raw); err != nil {
+	raw, err := a.call(ctx, "thread/turns/list", map[string]any{"threadId": thread})
+	if err == nil {
+		err = a.listed(raw)
+	}
+	if err != nil {
 		a.close()
-		return nil, fmt.Errorf("joining the run's thread %s: %w", thread, err)
+		return nil, fmt.Errorf("listing the turns of the run's thread %s: %w", thread, err)
 	}
 	return a, nil
 }
@@ -201,40 +207,37 @@ func (a *appServer) read() {
 	}
 }
 
-// THE TURN IN FLIGHT is learnt here and nowhere else: from the resume's
-// answer ([appServer.resumed]) and the thread's notifications
-// ([appServer.notice]), both through [appServer.start].
+// THE TURN IN FLIGHT is learnt here and nowhere else: from the thread's
+// newest turn as the helper joins ([appServer.listed]), the thread's
+// notifications ([appServer.notice]), and a steer's refusal naming the turn
+// Codex has ([appServer.deliver]); each through [appServer.start] and
+// [appServer.stop]. Measured on Codex 0.171.0.
 
-// resumed takes the turn in flight from thread/resume's answer: the turn whose
-// status is inProgress (measured on Codex 0.171.0).
-func (a *appServer) resumed(raw json.RawMessage) error {
+// listed takes the turn in flight from thread/turns/list's answer, newest
+// first: its first turn, while that one is in progress.
+func (a *appServer) listed(raw json.RawMessage) error {
 	var answer struct {
-		Thread struct {
-			Turns []struct {
-				ID     string `json:"id"`
-				Status string `json:"status"`
-			} `json:"turns"`
-		} `json:"thread"`
+		Data []struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		} `json:"data"`
 	}
 	if err := json.Unmarshal(raw, &answer); err != nil {
-		return fmt.Errorf("its answer is not a thread: %w", err)
+		return fmt.Errorf("its answer is not a list of turns: %w", err)
 	}
-	for _, t := range answer.Thread.Turns {
-		if t.Status == "inProgress" {
-			a.begin(t.ID)
-		}
+	if len(answer.Data) > 0 && answer.Data[0].Status == "inProgress" {
+		a.begin(answer.Data[0].ID)
 	}
 	return nil
 }
 
-// notice follows the thread's turns from the server's notifications: a turn
-// starts with turn/started and ends with turn/completed, and every other
-// notification of a turn names it, which starts a turn the helper joined too
-// late to see start.
+// notice follows the thread's turns from the server's notifications, a joined
+// client receiving them for every turn started after it joined: a turn starts
+// with turn/started and ends with turn/completed, each naming it as turn.id.
+// Another thread's (a subagent's) are not the run's.
 func (a *appServer) notice(method string, params json.RawMessage) {
 	var p struct {
 		ThreadID string `json:"threadId"`
-		TurnID   string `json:"turnId"`
 		Turn     struct {
 			ID string `json:"id"`
 		} `json:"turn"`
@@ -246,18 +249,17 @@ func (a *appServer) notice(method string, params json.RawMessage) {
 	case "turn/started":
 		a.begin(p.Turn.ID)
 	case "turn/completed":
-		a.mu.Lock()
-		a.finished[p.Turn.ID] = true
-		if a.active == p.Turn.ID {
-			a.set("")
-		}
-		a.mu.Unlock()
-	default:
-		a.mu.Lock()
-		if a.active == "" {
-			a.start(p.TurnID)
-		}
-		a.mu.Unlock()
+		a.stop(p.Turn.ID)
+	}
+}
+
+// stop marks turn over: never the turn in flight again.
+func (a *appServer) stop(turn string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.finished[turn] = true
+	if a.active == turn {
+		a.set("")
 	}
 }
 
@@ -318,13 +320,23 @@ func (a *appServer) deliver(ctx context.Context, text string) error {
 	if turn == "" {
 		return errNotNow
 	}
-	_, err := a.call(ctx, "turn/steer", map[string]any{
-		"threadId":       a.thread,
-		"expectedTurnId": turn,
-		"input":          []map[string]string{{"type": "text", "text": text}},
-	})
-	if err == nil {
+	err := a.steer(ctx, turn, text)
+	var other wrongTurn
+	if errors.As(err, &other) {
+		// THE TURN MOVED ON WITHOUT A NOTICE reaching the helper yet: Codex
+		// names the one it has, and the note is steered there, once.
+		a.stop(turn)
+		a.begin(string(other))
+		err = a.steer(ctx, string(other), text)
+		turn = string(other)
+	}
+	switch {
+	case err == nil:
 		return nil
+	case errors.Is(err, errNoTurn):
+		// The turn ended: the note waits for the next turn/started.
+		a.stop(turn)
+		return errNotNow
 	}
 	a.mu.Lock()
 	over := a.finished[turn]
@@ -334,6 +346,59 @@ func (a *appServer) deliver(ctx context.Context, text string) error {
 	}
 	return fmt.Errorf("turn/steer: %w", err)
 }
+
+// steer sends text to turn: nil once Codex took it; [errNoTurn] where no turn
+// is in flight; a [wrongTurn] naming the turn in flight where it is not turn.
+func (a *appServer) steer(ctx context.Context, turn, text string) error {
+	_, err := a.call(ctx, "turn/steer", map[string]any{
+		"threadId":       a.thread,
+		"expectedTurnId": turn,
+		"input":          []map[string]string{{"type": "text", "text": text}},
+	})
+	var refused *rpcError
+	if !errors.As(err, &refused) || refused.Code != codeInvalidRequest {
+		return err
+	}
+	if refused.Message == "no active turn to steer" {
+		return errNoTurn
+	}
+	if named, found, ok := foundTurn(refused.Message); ok && named == turn && found != "" && found != turn {
+		return wrongTurn(found)
+	}
+	return err
+}
+
+// codeInvalidRequest is JSON-RPC's invalid request, which turn/steer answers a
+// steer of no turn or of the wrong one with.
+const codeInvalidRequest = -32600
+
+// errNoTurn is turn/steer's "no active turn to steer".
+var errNoTurn = errors.New("no turn is in flight")
+
+// foundTurn reads turn/steer's refusal of a steer naming another turn than the
+// one in flight, "expected active turn id `X` but found `Y`": the turn named
+// (X) and the turn in flight (Y). Read by hand, as regexp would add more to
+// the box's binary than the helper's own code.
+func foundTurn(msg string) (named, found string, ok bool) {
+	rest, ok := strings.CutPrefix(msg, "expected active turn id `")
+	if !ok {
+		return "", "", false
+	}
+	named, rest, ok = strings.Cut(rest, "` but found `")
+	if !ok {
+		return "", "", false
+	}
+	found, ok = strings.CutSuffix(rest, "`")
+	if !ok || strings.Contains(named+found, "`") {
+		return "", "", false
+	}
+	return named, found, true
+}
+
+// wrongTurn is a steer refused for naming another turn: the turn in flight.
+type wrongTurn string
+
+func (w wrongTurn) Error() string { return "the turn in flight is " + string(w) }
 
 func (a *appServer) gone() <-chan struct{} { return a.done }
 

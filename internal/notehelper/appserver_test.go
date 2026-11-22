@@ -21,6 +21,13 @@ func joined(t *testing.T, app *fakeAppServer) *appServer {
 	return a
 }
 
+// turnNow is the adapter's turn in flight.
+func turnNow(a *appServer) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.active
+}
+
 // awaitTurn blocks until the adapter's turn in flight is want.
 func awaitTurn(a *appServer, want string) {
 	for {
@@ -43,10 +50,30 @@ func fence(t *testing.T, a *appServer) {
 	}
 }
 
+// JOINING TAKES THE TURN IN FLIGHT FROM THE NEWEST LISTED TURN: the resume
+// asks for no history (excludeTurns, the full one deprecated), and
+// thread/turns/list, newest first, names the turn while it is in progress;
+// a newest turn completed is no turn at all.
+func TestJoiningTakesTheTurnInFlightFromTheNewestListedTurn(t *testing.T) {
+	t.Parallel()
+	app := newFakeAppServer(t, "turn-7", 0)
+	a := joined(t, app)
+	if got := turnNow(a); got != "turn-7" {
+		t.Errorf("joined with turn %q in flight, want the newest listed, turn-7", got)
+	}
+	if r := app.resumed.all(); len(r) != 1 || r[0].ThreadID != "thread-A" || !r[0].ExcludeTurns {
+		t.Errorf("resumed %+v, want thread-A with excludeTurns", r)
+	}
+
+	idle := newFakeAppServer(t, "", 0)
+	if got := turnNow(joined(t, idle)); got != "" {
+		t.Errorf("joined with turn %q in flight where the newest listed turn completed, want none", got)
+	}
+}
+
 // A STEER NAMES THE TURN IN FLIGHT, AND NONE IS SENT BETWEEN TURNS: the turn
-// is the resumed thread's in-progress one, then each turn/started's;
-// turn/completed leaves none, and a note handed over then is not sent (Codex
-// would refuse a steer of a finished turn, and the note waits for the next).
+// is the one listed at the join, then each turn/started's; turn/completed
+// leaves none, and a note handed over then is not sent.
 func TestASteerNamesTheTurnInFlightAndNoneIsSentBetweenTurns(t *testing.T) {
 	t.Parallel()
 	app := newFakeAppServer(t, "turn-1", 0)
@@ -55,12 +82,12 @@ func TestASteerNamesTheTurnInFlightAndNoneIsSentBetweenTurns(t *testing.T) {
 	if err := a.deliver(ctx, "one"); err != nil {
 		t.Fatal(err)
 	}
-	app.notify(t, "turn/completed", map[string]any{"threadId": "thread-A", "turn": map[string]any{"id": "turn-1"}})
+	app.completeTurn(t, "thread-A", "turn-1")
 	awaitTurn(a, "")
 	if err := a.deliver(ctx, "between"); !errors.Is(err, errNotNow) {
 		t.Errorf("deliver between turns = %v, want errNotNow", err)
 	}
-	app.notify(t, "turn/started", map[string]any{"threadId": "thread-A", "turn": map[string]any{"id": "turn-2"}})
+	app.startTurn(t, "thread-A", "turn-2")
 	awaitTurn(a, "turn-2")
 	if err := a.deliver(ctx, "two"); err != nil {
 		t.Fatal(err)
@@ -73,23 +100,107 @@ func TestASteerNamesTheTurnInFlightAndNoneIsSentBetweenTurns(t *testing.T) {
 	}
 }
 
-// A TURN IS FOLLOWED FROM ANY NOTIFICATION NAMING IT, NEVER ANOTHER
-// THREAD'S, AND A FINISHED ONE NEVER REOPENS: a helper that joined after
-// turn/started learns the turn from the next item; a late notification of a
-// turn that completed, or one of a subagent's thread, opens nothing.
-func TestATurnIsFollowedFromItsOwnThreadsNotificationsOnly(t *testing.T) {
+// A STEER OF THE WRONG TURN IS STEERED ONCE MORE, ONTO THE TURN CODEX NAMES:
+// "expected active turn id `X` but found `Y`" makes Y the turn in flight and
+// the same note goes there; X never comes back.
+func TestASteerOfTheWrongTurnGoesOnceMoreToTheTurnCodexNames(t *testing.T) {
+	t.Parallel()
+	app := newFakeAppServer(t, "turn-1", 0)
+	a := joined(t, app)
+	app.setTurn("turn-2")
+	if err := a.deliver(context.Background(), "words"); err != nil {
+		t.Fatalf("deliver = %v, want the note taken on turn-2", err)
+	}
+	steers := app.steers.all()
+	if len(steers) != 2 || steers[0].ExpectedTurnID != "turn-1" || steers[1].ExpectedTurnID != "turn-2" ||
+		steers[1].Input[0].Text != "words" {
+		t.Errorf("steers %+v: want turn-1 refused, then the same note on turn-2", steers)
+	}
+	if got := turnNow(a); got != "turn-2" {
+		t.Errorf("turn in flight %q, want the one Codex named, turn-2", got)
+	}
+	a.begin("turn-1")
+	if got := turnNow(a); got != "turn-2" {
+		t.Errorf("turn in flight %q after a late word of turn-1, want turn-2 still", got)
+	}
+}
+
+// A STEER WITH NO TURN IN FLIGHT HOLDS THE NOTE: "no active turn to steer"
+// is the turn over, so the note waits for the next turn (errNotNow), never
+// counted as taken nor as refused.
+func TestASteerWithNoTurnInFlightHoldsTheNote(t *testing.T) {
+	t.Parallel()
+	app := newFakeAppServer(t, "turn-1", 0)
+	a := joined(t, app)
+	app.setTurn("")
+	if err := a.deliver(context.Background(), "words"); !errors.Is(err, errNotNow) {
+		t.Errorf("deliver with no turn in flight = %v, want errNotNow", err)
+	}
+	if got := turnNow(a); got != "" {
+		t.Errorf("turn in flight %q after Codex said there is none, want none", got)
+	}
+}
+
+// ANY OTHER REFUSAL IS THE NOTE REFUSED: an error the helper logs and a
+// later poll hands over again, the turn in flight unchanged.
+func TestAnyOtherRefusalIsTheNoteRefused(t *testing.T) {
+	t.Parallel()
+	app := newFakeAppServer(t, "turn-1", 1)
+	a := joined(t, app)
+	err := a.deliver(context.Background(), "words")
+	var refused *rpcError
+	if !errors.As(err, &refused) || errors.Is(err, errNotNow) {
+		t.Errorf("deliver = %v, want the app-server's refusal", err)
+	}
+	if got := turnNow(a); got != "turn-1" {
+		t.Errorf("turn in flight %q after a refusal, want turn-1 still", got)
+	}
+}
+
+// A TURN IS FOLLOWED FROM ITS OWN THREAD'S NOTICES ONLY, AND A FINISHED ONE
+// NEVER REOPENS: a subagent's thread's turn/completed ends nothing of the
+// run's, and a word of a completed turn arriving late (a turns list answered
+// after the turn's turn/completed) starts nothing.
+func TestATurnIsFollowedFromItsOwnThreadsNoticesOnly(t *testing.T) {
 	t.Parallel()
 	app := newFakeAppServer(t, "", 0)
 	a := joined(t, app)
-	app.notify(t, "item/started", map[string]any{"threadId": "thread-sub", "turnId": "turn-sub"})
-	app.notify(t, "item/started", map[string]any{"threadId": "thread-A", "turnId": "turn-1"})
+	app.startTurn(t, "thread-A", "turn-1")
 	awaitTurn(a, "turn-1")
-	app.notify(t, "turn/completed", map[string]any{"threadId": "thread-A", "turn": map[string]any{"id": "turn-1"}})
-	app.notify(t, "thread/tokenUsage/updated", map[string]any{"threadId": "thread-A", "turnId": "turn-1"})
-	app.notify(t, "item/started", map[string]any{"threadId": "thread-A", "turnId": "turn-2"})
-	// turn-2 opens only where neither the subagent's turn nor the finished
-	// turn-1 had: the notifications are read in order.
+	app.notify(t, "turn/completed", map[string]any{"threadId": "thread-sub", "turn": map[string]any{"id": "turn-1"}})
+	app.startTurn(t, "thread-A", "turn-2")
 	awaitTurn(a, "turn-2")
+	// Read in order, so the subagent's notice is behind: had it ended turn-1,
+	// turn-1 would never be the turn in flight again.
+	app.startTurn(t, "thread-A", "turn-1")
+	awaitTurn(a, "turn-1")
+
+	app.completeTurn(t, "thread-A", "turn-1")
+	awaitTurn(a, "")
+	a.begin("turn-1")
+	if got := turnNow(a); got != "" {
+		t.Errorf("turn in flight %q after a late word of the completed turn-1, want none", got)
+	}
+}
+
+// foundTurn reads exactly Codex's wording, and nothing else as a turn.
+func TestFoundTurnReadsCodexsRefusalOnly(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		msg, named, found string
+		ok                bool
+	}{
+		{"expected active turn id `a-1` but found `b-2`", "a-1", "b-2", true},
+		{"expected active turn id `a-1` but found `b-2` and more", "", "", false},
+		{"no active turn to steer", "", "", false},
+		{"expected active turn id `a`1` but found `b`", "", "", false},
+	}
+	for _, c := range cases {
+		named, found, ok := foundTurn(c.msg)
+		if named != c.named || found != c.found || ok != c.ok {
+			t.Errorf("foundTurn(%q) = %q, %q, %v; want %q, %q, %v", c.msg, named, found, ok, c.named, c.found, c.ok)
+		}
+	}
 }
 
 // THE HELPER'S CONNECTION ENDS WITH THE APP-SERVER'S: ready answers errGone,
