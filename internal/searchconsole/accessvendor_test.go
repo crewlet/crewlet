@@ -17,13 +17,13 @@ import (
 // offers sites the company never named.
 func TestASeatIsOfferedTheCompanysSites(t *testing.T) {
 	t.Parallel()
-	var vendor googlegrowth.SeatAccess
+	var vendor *googlegrowth.SeatAccess
 	for _, v := range seataccess.Registered() {
-		if sa, ok := v.(googlegrowth.SeatAccess); ok && v.Kind() == Kind {
+		if sa, ok := v.(*googlegrowth.SeatAccess); ok && v.Kind() == Kind {
 			vendor = sa
 		}
 	}
-	if vendor.Product != Kind {
+	if vendor == nil || vendor.Product != Kind {
 		t.Fatal("no access vendor registered for Search Console")
 	}
 	sites := []string{"https://www.example.com/", "sc-domain:example.org"}

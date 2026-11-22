@@ -90,7 +90,7 @@ func (p *Product) pauseRequest(call growth.Call) (googlegrowth.Request, error) {
 	for _, v := range list(call.Args["resources"]) {
 		name := str(v)
 		m := resourceName().FindStringSubmatch(name)
-		if m == nil || pausable[m[2]] == "" {
+		if m == nil || !slices.Contains(pausable, m[2]) {
 			return googlegrowth.Request{}, refusal(growth.RefusedInvalid, fmt.Sprintf("%q is not a resource "+
 				"google_ads_pause pauses. No vendor was reached.", name))
 		}
@@ -105,7 +105,7 @@ func (p *Product) pauseRequest(call growth.Call) (googlegrowth.Request, error) {
 	if customer == "" {
 		return googlegrowth.Request{}, refusal(growth.RefusedInvalid, "name what to pause. No vendor was reached.")
 	}
-	op, _ := p.Catalog().Operation(pausable[collection])
+	op, _ := p.Catalog().Operation(pauseOf(collection))
 	return p.newRequest(op, map[string]string{"customersId": customer}, nil, map[string]any{"operations": operations})
 }
 

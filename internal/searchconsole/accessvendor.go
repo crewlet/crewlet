@@ -7,19 +7,21 @@ import (
 	"github.com/crewlet/crewlet/internal/seataccess"
 )
 
-// Search Console's half of per-seat access is the shape every Google growth
-// product shares (googlegrowth.SeatAccess): its levels and its sites.
+// seatAccess is Search Console's half of per-seat access, the shape every
+// Google growth product shares (googlegrowth.SeatAccess): its levels and its
+// sites. A value the compiler lays out, so registering it at init allocates
+// nothing of its own.
+var seatAccess = googlegrowth.SeatAccess{Product: Kind, Lane: seataccess.LaneSearchConsole,
+	Name: "Search Console", Levels: levels, Scope: sitesOf}
 
-func init() {
-	seataccess.Register(googlegrowth.SeatAccess{
-		Product: Kind, Lane: seataccess.LaneSearchConsole, Name: "Search Console", Levels: levels(),
-		Scope: func(c *config.Company) []string {
-			if c.Integrations.SearchConsole == nil {
-				return nil
-			}
-			return c.Integrations.SearchConsole.Sites
-		},
-	})
+func init() { seataccess.Register(&seatAccess) }
+
+// sitesOf is the sites the company names, nil where it names none.
+func sitesOf(c *config.Company) []string {
+	if c.Integrations.SearchConsole == nil {
+		return nil
+	}
+	return c.Integrations.SearchConsole.Sites
 }
 
 // levels is the three levels, least first. Operate and administer each raise

@@ -1,6 +1,7 @@
 package googleads
 
 import (
+	"math/big"
 	"slices"
 	"strings"
 
@@ -27,30 +28,35 @@ var biddingSchemes = []string{"bidding_strategy", "commission", "manual_cpa", "m
 	"percent_cpc", "enhanced_cpc"}
 
 // biddingRules are a bidding scheme's own fields, within one scheme: a raised
-// target or ceiling, a cleared cap or a lowered target ROAS bids more.
+// target, floor or ceiling, a cleared cap or a lowered target ROAS bids more.
+// A ceiling, a maximize-conversions target CPA and a target ROAS set where
+// none was narrow; any other value set where none was is spend.
 func biddingRules(prefix string) []fieldRule {
-	out := raises(prefix+"target_cpa.target_cpa_micros", prefix+"maximize_conversions.target_cpa_micros",
-		prefix+"target_cpc.target_cpc_micros", prefix+"target_spend.target_spend_micros",
-		prefix+"target_spend.cpc_bid_ceiling_micros", prefix+"target_cpa.cpc_bid_ceiling_micros",
-		prefix+"target_cpa.cpc_bid_floor_micros", prefix+"target_roas.cpc_bid_ceiling_micros",
-		prefix+"target_roas.cpc_bid_floor_micros", prefix+"target_impression_share.cpc_bid_ceiling_micros",
-		prefix+"commission.commission_rate_micros", prefix+"target_impression_share.location_fraction_micros",
-		prefix+"target_roas_tolerance_percent_millis")
-	out = append(out, compared(lower, prefix+"target_roas.target_roas", prefix+"maximize_conversion_value.target_roas")...)
+	out := raises(prefix+"target_cpa.target_cpa_micros", prefix+"target_cpc.target_cpc_micros",
+		prefix+"target_spend.target_spend_micros", prefix+"target_cpa.cpc_bid_floor_micros",
+		prefix+"target_roas.cpc_bid_floor_micros", prefix+"commission.commission_rate_micros",
+		prefix+"target_impression_share.location_fraction_micros", prefix+"target_roas_tolerance_percent_millis")
+	out = append(out, limits(raise, prefix+"target_spend.cpc_bid_ceiling_micros",
+		prefix+"target_cpa.cpc_bid_ceiling_micros", prefix+"target_roas.cpc_bid_ceiling_micros",
+		prefix+"target_impression_share.cpc_bid_ceiling_micros", prefix+"maximize_conversions.target_cpa_micros")...)
+	out = append(out, limits(lower, prefix+"target_roas.target_roas", prefix+"maximize_conversion_value.target_roas")...)
 	out = append(out, fieldRule{path: prefix + "target_impression_share.location", how: toward, hi: spend, lo: operate,
-		values: []string{"TOP_OF_PAGE", "ABSOLUTE_TOP_OF_PAGE"}})
+		lows: []string{"ANYWHERE_ON_PAGE"}})
 	return append(out, turnsOn(prefix+"manual_cpc.enhanced_cpc_enabled")...)
 }
 
 // schemeSwitched is spend where an update sets a bidding scheme other than
-// the one the target runs: a new strategy bids by other rules.
+// the one the target runs, or where the engine read none running: a new
+// strategy bids by other rules. A campaign on a portfolio strategy (its
+// bidding_strategy set) runs no scheme of its own, whatever type it reads,
+// so any scheme its mask names is a switch.
 func schemeSwitched(typeField string) func(operation, live) growth.Class {
 	return func(o operation, l live) growth.Class {
 		running := strings.ToLower(str(l[o.name][typeField]))
+		portfolio := str(l[o.name]["bidding_strategy"]) != ""
 		for _, path := range o.mask {
 			scheme, _, _ := strings.Cut(path, ".")
-			if slices.Contains(biddingSchemes, scheme) && (running == "" || scheme != running) &&
-				(scheme != "bidding_strategy" || running != "") {
+			if slices.Contains(biddingSchemes, scheme) && (running == "" || scheme != running || portfolio) {
 				return spend
 			}
 		}
@@ -64,12 +70,14 @@ func campaignFamily() family {
 	f := family{create: createStatus(spend), remove: fixed(admin), other: admin,
 		update: func(o operation, l live) growth.Class { return higher(switched(o, l), budgetRepointed(o, l)) }}
 	f.fields = append(f.fields, statusRule(spend),
-		fieldRule{path: "campaign_budget", how: always, hi: read}, // decided by budgetRepointed
+		fieldRule{path: "campaign_budget", how: always, hi: read},  // decided by budgetRepointed
+		fieldRule{path: "bidding_strategy", how: always, hi: read}, // decided by schemeSwitched
 		fieldRule{path: "geo_target_type_setting.positive_geo_target_type", how: toward, hi: spend, lo: operate,
-			values: []string{"PRESENCE_OR_INTEREST"}},
+			lows: []string{"PRESENCE"}},
 		fieldRule{path: "geo_target_type_setting.negative_geo_target_type", how: toward, hi: spend, lo: operate,
-			values: []string{"PRESENCE"}},
-		fieldRule{path: "keyword_match_type", how: toward, hi: spend, lo: operate, values: []string{"BROAD"}},
+			lows: []string{"PRESENCE_OR_INTEREST"}},
+		// BROAD is the one value Google offers, so no value set lowers.
+		fieldRule{path: "keyword_match_type", how: always, hi: spend},
 		fieldRule{path: "start_date_time", how: earlier, hi: spend, lo: operate},
 		fieldRule{path: "end_date_time", how: later, hi: spend, lo: operate},
 		fieldRule{path: "frequency_caps", how: grows, hi: spend, lo: operate},
@@ -99,17 +107,35 @@ func campaignFamily() family {
 	return f
 }
 
-// budgetRepointed is a campaign moved to another budget: spend where the new
-// budget is larger than the one it leaves, or either was not read.
+// budgetRepointed is a campaign moved to another budget: operate only where
+// the most the budget it moves to adds a day (its daily amount, or a total
+// budget's whole remainder, which capacity spreads over its days) is no more
+// than the daily budget it leaves, which no other campaign keeps; spend where
+// either was not read, or the one it leaves is a total budget, whose remainder
+// a day moves with every click and so is no figure a binding holds.
 func budgetRepointed(o operation, l live) growth.Class {
 	if !slices.Contains(o.mask, "campaign_budget") {
 		return read
 	}
 	from, to := l[str(l[o.name]["campaign_budget"])], l[str(o.object["campaign_budget"])]
-	if from == nil || to == nil {
+	if from == nil || to == nil || !soleUse(from) || totalBudget(from) {
 		return spend
 	}
-	return fieldRule{how: raise, hi: spend, lo: operate}.classOf(from["amount_micros"], to["amount_micros"], false)
+	most := pick(totalBudget(to), to["total_amount_micros"], to["amount_micros"])
+	return fieldRule{how: raise, hi: spend, lo: operate}.classOf(from["amount_micros"], most, false)
+}
+
+// soleUse reports whether a budget as read is one campaign's alone.
+func soleUse(budget state) bool {
+	n, ok := number(budget["reference_count"])
+	return ok && n.Cmp(big.NewRat(1, 1)) == 0
+}
+
+// totalBudget reports whether a budget as read is a total, or may be one.
+func totalBudget(budget state) bool {
+	v, set := budget["total_amount_micros"]
+	n, ok := number(v)
+	return set && (!ok || n.Sign() != 0)
 }
 
 // adGroupFamily is FR-AD-GROUP.
@@ -130,11 +156,12 @@ func adGroupFamily() family {
 	return f
 }
 
-// negative reports whether a criterion excludes: what it sets, else what it
-// is live; ok is false where neither says.
+// negative reports whether a criterion excludes: what a create sets, else
+// what it is live, since Google keeps a criterion's negative as it was made
+// and ignores one an update sends; ok is false where the engine read none.
 func negative(o operation, l live) (neg, ok bool) {
-	if v, set := o.object["negative"]; set {
-		return truthy(v), true
+	if o.kind == opCreate {
+		return truthy(o.object["negative"]), true
 	}
 	if s := l[o.name]; s != nil {
 		return truthy(s["negative"]), true
@@ -143,21 +170,15 @@ func negative(o operation, l live) (neg, ok bool) {
 }
 
 // criterionStatus is a criterion's status set: an exclusion enabled narrows,
-// paused widens; a targeting criterion the other way round.
+// paused widens; a targeting criterion the other way round. Only the status
+// that narrows, by its name, lowers: a number may be either.
 func criterionStatus(o operation, l live) growth.Class {
 	if !slices.Contains(o.mask, "status") {
 		return read
 	}
 	neg, ok := negative(o, l)
-	status, named := o.object["status"].(string)
-	enabling := status == "ENABLED"
-	switch {
-	case !ok, !named:
-		return spend // a status by its number may enable a targeting criterion or pause an exclusion
-	case neg:
-		return pick(enabling, operate, spend)
-	}
-	return pick(enabling, spend, operate)
+	status := str(o.object["status"])
+	return pick(ok && status == pick(neg, "ENABLED", "PAUSED"), operate, spend)
 }
 
 // adGroupCriterionFamily is FR-AD-GROUP-CRITERION.
@@ -195,11 +216,10 @@ func campaignCriterionFamily() family {
 		if truthy(o.object["negative"]) {
 			return operate
 		}
-		if m, ok := o.object["bid_modifier"]; ok && len(o.object) <= 3 {
-			// A device or other criterion holding only a bid modifier.
-			return pick(above(m, 1), spend, operate)
+		if deviceModifier(o.object) {
+			return pick(above(o.object["bid_modifier"], 1), spend, operate)
 		}
-		return spend // a second criterion of a dimension widens it
+		return spend // anything it targets widens: a country, a second criterion of a dimension
 	}
 	f.remove = func(o operation, l live) growth.Class {
 		s := l[o.name]
@@ -214,6 +234,18 @@ func campaignCriterionFamily() family {
 	f.fields = append(f.fields, raises("bid_modifier")...)
 	f.fields = append(f.fields, fieldRule{path: "status", how: always, hi: read})
 	return f
+}
+
+// deviceModifier reports whether a campaign criterion made is a device's bid
+// modifier alone, which targets nothing every campaign does not: a device and
+// its modifier, and nothing else but its campaign.
+func deviceModifier(m map[string]any) bool {
+	for k := range m {
+		if !slices.Contains([]string{"campaign", "device", "bid_modifier", "resource_name"}, k) {
+			return false
+		}
+	}
+	return m["device"] != nil && m["bid_modifier"] != nil
 }
 
 // above reports whether a number is above x; unreadable is above, the
@@ -232,7 +264,7 @@ func budgetFamily() family {
 	f := family{create: fixed(operate), remove: fixed(admin), other: admin}
 	f.fields = append(f.fields, raises("amount_micros", "total_amount_micros")...)
 	f.fields = append(f.fields, fieldRule{path: "delivery_method", how: toward, hi: spend, lo: operate,
-		values: []string{"ACCELERATED"}})
+		lows: []string{"STANDARD"}})
 	f.fields = append(f.fields, classed(spend, "budget_network_settings")...)
 	f.fields = append(f.fields, operates("name", "explicitly_shared", "aligned_bidding_strategy_id")...)
 	return f
@@ -438,6 +470,29 @@ func goalFamily() family {
 	return f
 }
 
+// valueRuleFamily is FR-VALUE-RULE, conversion value rules and their sets:
+// as FR-GOAL, what makes a conversion worth more makes value bidding bid
+// more, so a rule made or enabled, or a value raised, is spend; one paused or
+// a value lowered operates, and one removed for good is admin.
+func valueRuleFamily() family {
+	f := family{create: createStatus(spend), remove: fixed(admin), other: spend}
+	f.fields = append(f.fields, statusRule(spend))
+	f.fields = append(f.fields, raises("action.value")...)
+	return f
+}
+
+// conversionActionFamily is FR-CONVERSION-ACTION: configuration, as
+// FR-ENTITY, but what a conversion is worth (value_settings) is FR-GOAL's
+// kind of change, so a default value raised, or any other value setting, is
+// spend.
+func conversionActionFamily() family {
+	f := family{remove: fixed(admin), other: operate}
+	f.create = func(o operation, _ live) growth.Class { return pick(o.object["value_settings"] != nil, spend, operate) }
+	f.fields = append(f.fields, classed(spend, "value_settings")...)
+	f.fields = append(f.fields, raises("value_settings.default_value")...)
+	return f
+}
+
 // containsKey reports whether key is set anywhere in m.
 func containsKey(m map[string]any, key string) bool {
 	for k, v := range m {
@@ -457,7 +512,7 @@ func customerFamily() family {
 	f.fields = append(f.fields, operates("descriptive_name", "tracking_url_template", "final_url_suffix",
 		"auto_tagging_enabled", "call_reporting_setting")...)
 	f.fields = append(f.fields, fieldRule{path: "video_brand_safety_suitability", how: toward, hi: spend, lo: operate,
-		values: []string{"EXPANDED_INVENTORY", "STANDARD_INVENTORY"}})
+		lows: []string{"LIMITED_INVENTORY"}})
 	f.fields = append(f.fields, classed(admin, "local_services_settings.redemption_provider_info",
 		"video_customer.third_party_integration_partners")...)
 	return f
@@ -494,19 +549,36 @@ func accountBudgetFamily() family {
 }
 
 // subscriptionFamily is FR-REC-SUBSCRIPTION: an enabled subscription lets
-// Google make its type's changes unasked, so it is that type's class.
+// Google make its type's changes unasked, so it is that type's class; only
+// PAUSED by its name lowers. An update's type is its name's last segment,
+// since Google keeps the type it was made with.
 func subscriptionFamily() family {
 	byStatus := func(o operation, _ live) growth.Class {
-		if status, named := o.object["status"].(string); named && status != "ENABLED" {
+		if str(o.object["status"]) == "PAUSED" {
 			return operate
 		}
-		return recommendationClass(str(o.object["type"]))
+		kind := str(o.object["type"])
+		if o.kind == opUpdate {
+			kind = o.name[strings.LastIndex(o.name, "/")+1:]
+		}
+		return subscribed(kind)
 	}
-	return family{create: byStatus, update: byStatus, remove: fixed(operate), other: spend}
+	return family{create: byStatus, update: byStatus, remove: fixed(operate), other: admin,
+		fields: []fieldRule{{path: "status", how: always, hi: read}}} // decided by byStatus
+}
+
+// subscribed is the class of letting Google apply a recommendation type's
+// changes unasked: the type's own, but admin for a spend type that may set a
+// budget, since Google picks the amount as it applies and no cap holds it
+// (ADR-0171).
+func subscribed(kind string) growth.Class {
+	c := recommendationClass(kind)
+	return pick(c == spend && !slices.Contains(unbudgetedRecommendations, kind), admin, c)
 }
 
 // recommendationClass is a recommendation type's class (FR-RECOMMENDATION); a
-// type the table does not name is spend, the highest it allows.
+// type the table does not name is spend, which applied or subscribed is held
+// to what it sets of a budget (applied, subscribed).
 func recommendationClass(kind string) growth.Class {
 	switch {
 	case slices.Contains(publicRecommendations, kind):
@@ -528,6 +600,12 @@ var (
 		"SHOPPING_ADD_GENDER", "SHOPPING_ADD_GTIN", "SHOPPING_ADD_MORE_IDENTIFIERS", "SHOPPING_ADD_SIZE",
 		"SHOPPING_FIX_DISAPPROVED_PRODUCTS", "SHOPPING_FIX_SUSPENDED_MERCHANT_CENTER_ACCOUNT",
 		"SHOPPING_FIX_MERCHANT_CENTER_ACCOUNT_SUSPENSION_WARNING"}
+	// unbudgetedRecommendations are the spend types that set no budget: they
+	// add keywords, raise bids or targets, or widen networks, which adds
+	// nothing to the day's capacity. Every other spend type may set one.
+	unbudgetedRecommendations = []string{"KEYWORD", "KEYWORD_MATCH_TYPE", "ENHANCED_CPC_OPT_IN",
+		"SEARCH_PARTNERS_OPT_IN", "DISPLAY_EXPANSION_OPT_IN", "RAISE_TARGET_CPA_BID_TOO_LOW", "RAISE_TARGET_CPA",
+		"LOWER_TARGET_ROAS"}
 )
 
 // families is every rule family by its matrix name.
@@ -545,6 +623,7 @@ func families() map[string]family {
 		"FR-SHARED-SET": restrictionFamily(), "FR-SHARED-SET-LINK": restrictionFamily(),
 		"FR-NEGATIVE": restrictionFamily(), "FR-NEGATIVE-LIST": negativeListFamily(),
 		"FR-ENTITY": entityFamily(), "FR-GOAL": goalFamily(), "FR-CUSTOMER": customerFamily(),
+		"FR-VALUE-RULE": valueRuleFamily(), "FR-CONVERSION-ACTION": conversionActionFamily(),
 		"FR-ACCOUNT-BUDGET": accountBudgetFamily(), "FR-REC-SUBSCRIPTION": subscriptionFamily(),
 		// Budget network settings compare with the account's effective
 		// defaults, which the engine does not read: spend.

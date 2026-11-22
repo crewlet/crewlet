@@ -43,20 +43,14 @@ func schemaObject(props map[string]any, required ...string) map[string]any {
 	return out
 }
 
-// pausable are the resources google_ads_pause pauses, by their collection in a
-// resource name, and the mutate each is paused through.
-var pausable = map[string]string{
-	"campaigns":        "googleads.customers.campaigns.mutate",
-	"adGroups":         "googleads.customers.adGroups.mutate",
-	"adGroupAds":       "googleads.customers.adGroupAds.mutate",
-	"adGroupCriteria":  "googleads.customers.adGroupCriteria.mutate",
-	"assetGroups":      "googleads.customers.assetGroups.mutate",
-	"campaignCriteria": "googleads.customers.campaignCriteria.mutate",
-	"adGroupAssets":    "googleads.customers.adGroupAssets.mutate",
-	"campaignAssets":   "googleads.customers.campaignAssets.mutate",
-	"customerAssets":   "googleads.customers.customerAssets.mutate",
-	"assetGroupAssets": "googleads.customers.assetGroupAssets.mutate",
-}
+// pausable are the collections google_ads_pause pauses resources of, as a
+// resource name writes them, each through its own service's mutate
+// (pauseOf).
+var pausable = []string{"campaigns", "adGroups", "adGroupAds", "adGroupCriteria", "assetGroups", "campaignCriteria",
+	"adGroupAssets", "campaignAssets", "customerAssets", "assetGroupAssets"}
+
+// pauseOf is the mutate a pausable collection's resources are paused through.
+func pauseOf(collection string) string { return "googleads.customers." + collection + ".mutate" }
 
 // toolDefs are every tool, each in one class.
 func toolDefs(ops []growth.Operation) []growth.Tool {
@@ -120,11 +114,9 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 
 // pauseOperations are the mutates google_ads_pause sends.
 func pauseOperations() []string {
-	var out []string
-	for _, id := range pausable {
-		if !slices.Contains(out, id) {
-			out = append(out, id)
-		}
+	out := make([]string, len(pausable))
+	for i, collection := range pausable {
+		out[i] = pauseOf(collection)
 	}
 	slices.Sort(out)
 	return out

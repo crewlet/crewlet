@@ -7,23 +7,25 @@ import (
 	"github.com/crewlet/crewlet/internal/seataccess"
 )
 
-// Google Ads' half of per-seat access is the shape every Google growth product
-// shares (googlegrowth.SeatAccess): its levels and its accounts.
+// seatAccess is Google Ads' half of per-seat access, the shape every Google
+// growth product shares (googlegrowth.SeatAccess): its levels and its
+// accounts. A value the compiler lays out, so registering it at init
+// allocates nothing of its own.
+var seatAccess = googlegrowth.SeatAccess{Product: Kind, Lane: seataccess.LaneGoogleAds, Name: "Google Ads",
+	Levels: levels, Scope: customersOf}
 
-func init() {
-	seataccess.Register(googlegrowth.SeatAccess{
-		Product: Kind, Lane: seataccess.LaneGoogleAds, Name: "Google Ads", Levels: levels(),
-		Scope: func(c *config.Company) []string {
-			if c.Integrations.GoogleAds == nil {
-				return nil
-			}
-			var out []string
-			for _, customer := range c.Integrations.GoogleAds.Customers {
-				out = append(out, customer.ID)
-			}
-			return out
-		},
-	})
+func init() { seataccess.Register(&seatAccess) }
+
+// customersOf is the accounts the company names, nil where it names none.
+func customersOf(c *config.Company) []string {
+	if c.Integrations.GoogleAds == nil {
+		return nil
+	}
+	var out []string
+	for _, customer := range c.Integrations.GoogleAds.Customers {
+		out = append(out, customer.ID)
+	}
+	return out
 }
 
 // levels is the three levels, least first. Operate and administer each raise
