@@ -683,6 +683,11 @@ type CoordinatorOptions struct {
 	// continues no kept session: a relaunch continues at most its own box's.
 	Restore SessionRestore
 
+	// Holders is whether a session id is any turn's in the executor log, which a
+	// minted session's bind asks of a fresh id (minted.go). Nil refuses every
+	// fresh id, so a minting harness's job binds only the session it continued.
+	Holders SessionHolders
+
 	// Saves is the fleet's ledger of each seat's saves, which a save of a running
 	// job is charged against before its stamp (saveledger.go): the engine's
 	// coordination store. Nil takes no save.
@@ -793,6 +798,7 @@ type Coordinator struct {
 	// ([relaunchCaptureWait]); holdingsWait bounds reading what a cut-off
 	// session holds ([holdingsReadWait]).
 	restore      SessionRestore
+	holders      SessionHolders // [CoordinatorOptions.Holders]
 	relaunchWait time.Duration
 	holdingsWait time.Duration
 	// endWait is how long a read waits for a job its script was asked to end
@@ -1089,6 +1095,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		sessions:           opts.Sessions,
 		keep:               opts.Keep,
 		restore:            opts.Restore,
+		holders:            opts.Holders,
 		saves: saveState{ledger: opts.Saves, slots: make(chan struct{}, maxConcurrentSaves),
 			memos: map[string]*saveMemo{}},
 		sharedPack:   make(chan struct{}, 1),
@@ -2154,6 +2161,10 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 	}
 	result, err := runner.Collect(ctx, box, run.Handle(), c.answerBudget)
 	if err != nil {
+		return Result{}, false, err
+	}
+	// A MINTING JOB'S SESSION IS BOUND AS IT IS COLLECTED (minted.go).
+	if run, result, err = c.bindCollected(ctx, run, runner, result); err != nil {
 		return Result{}, false, err
 	}
 	// THE JOB'S OWN RECORD THAT A REQUEST ENDED IT ([Result.JobEnd]) is the same
