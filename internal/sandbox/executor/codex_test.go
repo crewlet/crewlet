@@ -436,11 +436,13 @@ func TestACodexRunStartsFromItsOwnConfigurationEveryRun(t *testing.T) {
 // the path of every bridge URL: the run's script, the app-server's and exec's
 // argv, and the helper's command line name files and variables, never a
 // route's value; the notes and skill routes reach the helper's environment
-// alone, never Codex's, and the model's shell policy excludes them by name.
+// alone, never Codex's, and the model's shell policy excludes them by name,
+// beside the run's sign-in names.
 //
 // Mutation: put the MCP url or the notes route on a command line, export the
-// route to Codex, drop a route from the shell policy's exclude list, or record
-// no digest of the skill as written, and this goes red.
+// route to Codex, drop a route or a sign-in name from the shell policy's
+// exclude list, read the profile's names in place of the run's SignInEnv, or
+// record no digest of the skill as written, and this goes red.
 func TestNoCodexCommandLineCarriesTheBridgesToken(t *testing.T) {
 	t.Parallel()
 	const token = "run-token-placeholder"
@@ -448,7 +450,8 @@ func TestNoCodexCommandLineCarriesTheBridgesToken(t *testing.T) {
 		"crewlet": {Transport: sandbox.TransportHTTP, URL: codexBridgeURL, AlwaysLoaded: true}},
 		Steer:      sandbox.SteerWiring{Server: "crewlet", Tool: mcpbridge.SteerTool, URL: codexBridgeURL + "/steer"},
 		Skills:     []sandbox.Skill{{Name: "deploy", Description: "How we deploy.", Body: "Run make deploy.", Required: true}},
-		SkillLoads: sandbox.SkillWiring{Server: "crewlet", Tool: mcpbridge.SkillTool, URL: codexBridgeURL + "/skills"}}
+		SkillLoads: sandbox.SkillWiring{Server: "crewlet", Tool: mcpbridge.SkillTool, URL: codexBridgeURL + "/skills"},
+		SignInEnv:  []string{"CODEX_API_KEY", "AZURE_OPENAI_API_KEY"}}
 	if script := (executor.Codex{}).Command(req, executor.Session{}, executor.Paths{Home: "/home/box"}, ""); strings.Contains(script, token) {
 		t.Errorf("the run's script carries the token:\n%s", script)
 	}
@@ -468,17 +471,14 @@ func TestNoCodexCommandLineCarriesTheBridgesToken(t *testing.T) {
 		}
 	}
 	p := executor.PathsFor(box)
-	// AND THE MODEL'S SHELL IS HANDED NONE OF THEM: every credential name the
-	// codex profile signs in by, both routes and the telemetry exporter's
-	// variables are excluded from the environment Codex hands the commands it
-	// runs (its shell_environment_policy).
-	profile, _ := harnessprofile.Builtin(executor.CodexName)
+	// AND THE COMMANDS THE MODEL RUNS START WITHOUT THE RUN'S SIGN-IN: the
+	// names the run signs in by (SignInEnv, the engine's one answer), both
+	// routes and the telemetry exporter's variables are what Codex's
+	// shell_environment_policy excludes, and nothing else.
 	excluded := codexShellExcluded(t, recorded(t, record, "server-argv"))
-	for _, name := range append(profile.CredentialEnvNames(nil), "CREWLET_NOTES_URL", "CREWLET_SKILLS_URL",
-		"OTEL_EXPORTER_OTLP_*") {
-		if !slices.Contains(excluded, name) {
-			t.Errorf("the model's shell may be handed %s: the policy excludes %q", name, excluded)
-		}
+	if want := []string{"AZURE_OPENAI_API_KEY", "CODEX_API_KEY", "CREWLET_NOTES_URL", "CREWLET_SKILLS_URL",
+		"OTEL_EXPORTER_OTLP_*"}; !slices.Equal(excluded, want) {
+		t.Errorf("the commands the model runs start without %q, want %q", excluded, want)
 	}
 	if got := boxFile(t, box, p.CodexNotesURL()); got != codexBridgeURL+"/steer" {
 		t.Errorf("the helper's notes route file holds %q", got)

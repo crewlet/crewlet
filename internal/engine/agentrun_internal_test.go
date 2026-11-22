@@ -202,6 +202,7 @@ func launchRigRestoring(t *testing.T, c *Company, bridge *mcpbridge.Bridge,
 	t.Helper()
 	runners := map[string]*sandbox.FakeRunner{
 		"claude-code": sandbox.NewFakeRunner("claude-code"),
+		"codex":       sandbox.NewFakeRunner("codex"),
 		"opencode":    sandbox.NewFakeRunner("opencode"),
 	}
 	providers := map[sandbox.Placement]sandbox.Provider{}
@@ -219,7 +220,7 @@ func launchRigRestoring(t *testing.T, c *Company, bridge *mcpbridge.Bridge,
 	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
 		Providers: providers, DefaultPlacement: sandbox.Direct,
 		Runners: map[string]sandbox.Runner{
-			"claude-code": runners["claude-code"], "opencode": runners["opencode"],
+			"claude-code": runners["claude-code"], "codex": runners["codex"], "opencode": runners["opencode"],
 		},
 		DefaultSetup:     defaults,
 		AttributeCommits: c.Config.Providers.Sandbox.AttributesCommits(),

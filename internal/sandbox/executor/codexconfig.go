@@ -13,7 +13,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -94,12 +93,11 @@ func waitSeconds(d time.Duration) int {
 // sandbox needs, and nobody answers); no analytics, plugins or bundled skills
 // (with all three off a run dials only its model and servers, measured); no
 // request_user_input (a question parks through ask_and_wait); and the model's
-// shell inherits the run's environment with the harness's own sign-in, the
-// helper's routes ([codexNotesEnv]) and the telemetry exporter's endpoint and
-// headers ([codexTelemetryEnv]) excluded, keeping PATH, HOME, GIT_CONFIG_* and
-// the seat's tool credentials.
+// shell inherits the run's environment less [codexShellExcluded], keeping
+// PATH, HOME, GIT_CONFIG_* and the seat's tool credentials.
 func codexPosture(req sandbox.RunRequest) []string {
-	profile, _ := harnessprofile.Builtin(CodexName)
+	// WriteConfig refused a run whose names do not read, before any script.
+	excluded, _ := codexShellExcluded(req)
 	set := []string{
 		`sandbox_mode="danger-full-access"`,
 		`approval_policy="never"`,
@@ -109,7 +107,7 @@ func codexPosture(req sandbox.RunRequest) []string {
 		`skills.bundled.enabled=false`,
 		`tools.experimental_request_user_input.enabled=false`,
 		`shell_environment_policy.inherit="all"`,
-		`shell_environment_policy.exclude=` + tomlArray(append(profile.CredentialEnvNames(nil), codexNotesEnv, codexSkillsEnv, codexTelemetryEnv)),
+		`shell_environment_policy.exclude=` + tomlArray(excluded),
 	}
 	// THE ENTRY'S MODEL AND EFFORT AS WRITTEN, as its runs on the engine host
 	// hand them (the codex profile's model_args and effort).
@@ -124,6 +122,20 @@ func codexPosture(req sandbox.RunRequest) []string {
 		out = append(out, "-c", sandbox.ShellQuote(kv))
 	}
 	return out
+}
+
+// codexShellExcluded is what the commands a Codex run's model runs start
+// without (its shell_environment_policy.exclude): the names the run signs in
+// by ([sandbox.RunRequest.SignInEnv]) and the note helper's routes, through
+// the one rule every runner keeps ([toolEnvOmitted]), and the telemetry
+// exporter's endpoint and headers ([codexTelemetryEnv], a pattern, which
+// Codex keeps for its own export). A name no runner could keep out is refused.
+func codexShellExcluded(req sandbox.RunRequest) ([]string, error) {
+	names, err := toolEnvOmitted(req.SignInEnv, codexNotesEnv, codexSkillsEnv)
+	if err != nil {
+		return nil, err
+	}
+	return append(names, codexTelemetryEnv), nil
 }
 
 // tomlString is s as a TOML basic string: `"` and `\` escaped, every control
@@ -199,6 +211,9 @@ func codexBoxArch(machine string) (string, error) {
 // THE STANDING INSTRUCTIONS ARE TOLD OF NOTES on a run wired to them
 // ([withNoteInstruction]).
 func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error) {
+	if _, err := codexShellExcluded(req); err != nil {
+		return "", err
+	}
 	if n := len(paths.CodexSocket()); n > maxCodexSocketPath {
 		return "", fmt.Errorf("executor: a Codex run's socket, %s, is %d bytes, past the %d a unix socket's "+
 			"path holds; a local box's home is under providers.sandbox.local.state_dir, which needs a "+
