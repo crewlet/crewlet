@@ -628,7 +628,7 @@ codex:
     floor: "0.171.0"
     probe_args: ["app-server", "--help"]
   binary: codex
-  written_for: "Codex CLI 0.171.0 (`codex --version`); measured on 0.171.0: `exec --json` writes no rate-limit event (`rate_limits` is in the session rollout only, which a plain call's --ephemeral never writes), so a spent plan's reset is read from its sentence, written as `try again at` and a time of day (`%-I:%M %p`) or a date (`%b %-d<st|nd|rd|th>, %Y %-I:%M %p`) in the CLI's local zone; `login --device-auth` prints the address, a code such as `ABCD-EFGH1` and `(expires in 15 minutes)`; measured on 0.150.1: its 401 error event names no status field"
+  written_for: "Codex CLI 0.171.0 (`codex --version`); measured on 0.171.0: `exec --json` writes no rate-limit event (`rate_limits` is in the session rollout only, which a plain call's --ephemeral never writes), so a spent plan's reset is read from its sentence, written as `try again at` and a time of day (`%-I:%M %p`) or a date (`%b %-d<st|nd|rd|th>, %Y %-I:%M %p`) in the CLI's local zone; `login --device-auth` prints the address, a code such as `ABCD-EFGH1` and `(expires in 15 minutes)`; and a refused key is retried five times, then fails with an error and `turn.failed` naming no status field, the status only in the message (`unexpected status 401 Unauthorized: …`)"
   version_args: ["--version"]
   # MEASURED on 0.153.4 and 0.164.0 through this backend's own code path — the
   # built-in profile, harness.New and Complete — with the harness pointed at a

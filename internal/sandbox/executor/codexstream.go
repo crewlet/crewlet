@@ -28,6 +28,10 @@ const codexRolloutEvent = "crewlet.rollout"
 // (primary, secondary) and its use in percent.
 const codexLimitsEvent = "crewlet.codex_rate_limits"
 
+// codexRetryNotice opens the error event Codex writes as it retries a
+// request ("Reconnecting... 2/5 (…)", measured on 0.171.0).
+const codexRetryNotice = "Reconnecting..."
+
 // codexEvent is the part of one `exec --json` line this runner reads.
 type codexEvent struct {
 	Type     string          `json:"type"`
@@ -150,8 +154,12 @@ func (d *codexEvents) Line(line []byte) {
 		d.transcript.add(activityline.Words(activityline.TagError, d.failure))
 	case "error":
 		// A retry notice, or the fatal error turn.failed repeats: said, and
-		// read as the failure only where the turn says none.
-		d.lastError = ev.Message
+		// read as the failure only where the turn says none and never off a
+		// retry, which repeats the cause mid-way (a 401 is retried five times,
+		// measured on 0.171.0).
+		if !strings.HasPrefix(ev.Message, codexRetryNotice) {
+			d.lastError = ev.Message
+		}
 		d.transcript.add(activityline.Words(activityline.TagNote, ev.Message))
 	case codexRolloutEvent:
 		d.keepRollout(ev.Line)
