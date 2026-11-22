@@ -9,9 +9,15 @@ import (
 
 // KeepLogin is home, the credential file named name that a home's harness
 // left, with the keys the harness writes during a run ([Profile.RunKeys]) as
-// shared, the shared login's copy, holds them ([KeepLoginKeys]).
+// shared, the shared login's copy, holds them ([KeepLoginKeys]), and, for a
+// [CredentialStore]'s document, no login but the ones shared holds
+// ([KeepHandedCredentials]).
 func (p *Profile) KeepLogin(name string, home, shared []byte) []byte {
-	return KeepLoginKeys(home, shared, p.RunKeys[name])
+	kept := KeepLoginKeys(home, shared, p.RunKeys[name])
+	if p.CredentialStore != nil && name == CredentialStoreDocument {
+		kept = KeepHandedCredentials(kept, shared)
+	}
+	return kept
 }
 
 // KeepLoginKeys is home with each of keys (dotted, into a JSON object) as
