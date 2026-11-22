@@ -616,7 +616,7 @@ func TestARuleReplacesNothingAKeyIsReadAcross(t *testing.T) {
 func TestNoKeyIsReadBackAcrossALineHoldingAMarker(t *testing.T) {
 	t.Parallel()
 	text := keyLine + "\n" + redact.Marker + "api-key]\n"
-	if got := redact.Settled(text); got != len(text) {
+	if got := redact.SettledByBoth(t, text); got != len(text) {
 		t.Errorf("Settled(%q) = %d, want all %d bytes", text, got, len(text))
 	}
 	whole := text + "-----END RSA PRIVATE KEY-----\n"
@@ -641,7 +641,7 @@ func redactsWhole(t *testing.T, name string, c keyForm, pieces ...string) {
 		t.Errorf("%s:\n got %q\nwant %q", name, got, c.want)
 	}
 	for _, sizes := range [][]int{{1}, {9, 70}} {
-		if shown, _ := settle(c.text, sizes); shown != got {
+		if shown, _ := settle(t, c.text, sizes); shown != got {
 			t.Errorf("%s in pieces of %v: shown as it settled\n%q\nwant\n%q", name, sizes, shown, got)
 		}
 	}
@@ -1625,7 +1625,7 @@ func TestRedactingAKeyTwiceIsRedactingItOnce(t *testing.T) {
 // settle feeds text to a reader the way a live view receives it — in pieces of
 // the given sizes — and shows each piece's settled part as it lands, and the
 // rest once the text is finished. It returns everything shown, and what had
-// been shown after each piece.
+// been shown after each piece. Each answer is [redact.SettledByBoth]'s.
 //
 // A PIECE WITH NO LINE BREAK, landing on text none of which settled, is not
 // asked about again: Settled reads only up to the last line break, so its
@@ -1633,7 +1633,13 @@ func TestRedactingAKeyTwiceIsRedactingItOnce(t *testing.T) {
 // quadratic in a held key's length. Exact only for a Settled that ignores an
 // unfinished line, which [TestAnUnfinishedLineChangesNothingSettled] holds it
 // to over every fixture.
-func settle(text string, sizes []int) (string, []string) {
+func settle(t testing.TB, text string, sizes []int) (string, []string) {
+	t.Helper()
+	return settleBy(func(text string) int { return redact.SettledByBoth(t, text) }, text, sizes)
+}
+
+// settleBy is [settle], asking ask where it asks Settled.
+func settleBy(ask func(string) int, text string, sizes []int) (string, []string) {
 	var shown strings.Builder
 	var steps []string
 	pending := ""
@@ -1647,7 +1653,7 @@ func settle(text string, sizes []int) (string, []string) {
 		pending += piece
 		at += n
 		if !held || strings.Contains(piece, "\n") {
-			cut := redact.Settled(pending)
+			cut := ask(pending)
 			shown.WriteString(redact.Secrets(pending[:cut]))
 			pending = pending[cut:]
 			held = cut == 0
@@ -1678,9 +1684,9 @@ func TestAnUnfinishedLineChangesNothingSettled(t *testing.T) {
 				next = len(text) - at
 			}
 			line := text[at : at+next]
-			want := redact.Settled(text[:at])
+			want := redact.SettledByBoth(t, text[:at])
 			for _, partial := range []string{line[:min(1, len(line))], line[:len(line)/2], line} {
-				if got := redact.Settled(text[:at] + partial); got != want {
+				if got := redact.SettledByBoth(t, text[:at]+partial); got != want {
 					t.Errorf("%s: %d bytes of the line after byte %d moved Settled from %d to %d: %q",
 						name, len(partial), at, want, got, partial)
 				}
@@ -1704,8 +1710,11 @@ func TestTextShownAsItSettlesIsTheWholeTextRedacted(t *testing.T) {
 		if got := byByte[name].shown; got != want {
 			t.Errorf("%s a byte at a time:\n got %q\nwant %q", name, got, want)
 		}
+		for _, d := range byByte[name].differ {
+			t.Errorf("%s a byte at a time: %s", name, d)
+		}
 		for _, sizes := range [][]int{{7}, {64}, {3, 50, 1, 200}, {len(text)}} {
-			if got, _ := settle(text, sizes); got != want {
+			if got, _ := settle(t, text, sizes); got != want {
 				t.Errorf("%s in pieces of %v:\n got %q\nwant %q", name, sizes, got, want)
 			}
 		}
@@ -1718,17 +1727,26 @@ func TestTextShownAsItSettlesIsTheWholeTextRedacted(t *testing.T) {
 var byteAtATime = sync.OnceValue(func() map[string]settled {
 	out := map[string]settled{}
 	for name, text := range keyFixtures() {
-		shown, steps := settle(text, []int{1})
-		out[name] = settled{shown: shown, steps: steps}
+		var differ []string
+		shown, steps := settleBy(func(text string) int {
+			swept, looped := redact.SettledTwoWays(text)
+			if swept != looped {
+				differ = append(differ, fmt.Sprintf("Settled settled %q at %d, and a hold a pass at %d", text, swept, looped))
+			}
+			return swept
+		}, text, []int{1})
+		out[name] = settled{shown: shown, steps: steps, differ: differ}
 	}
 	return out
 })
 
 // settled is what [settle] returns: everything shown, and what had been shown
-// after each piece.
+// after each piece; and where the sweep and a loop resolving one hold a pass
+// answered otherwise ([redact.SettledByBoth]).
 type settled struct {
-	shown string
-	steps []string
+	shown  string
+	steps  []string
+	differ []string
 }
 
 // NOTHING SHOWN BEFORE THE END IS A SECRET, at any moment: a key's body shown
@@ -1789,7 +1807,7 @@ func TestAHeaderIsHeldOnlyWhileAKeyCouldFollowIt(t *testing.T) {
 			len(header + pemBody(2) + "-----END RSA PRIVATE KEY-----\nnext\n")},
 		"a grep's match and its next result": {grepOfTheBeginLine, len(grepOfTheBeginLine)},
 	} {
-		if got := redact.Settled(c.text); got != c.want {
+		if got := redact.SettledByBoth(t, c.text); got != c.want {
 			t.Errorf("%s: Settled = %d of %d; want %d", name, got, len(c.text), c.want)
 		}
 	}
@@ -1822,7 +1840,7 @@ func TestABeginOnALineLongerThanTheBoundHoldsNothingAfterIt(t *testing.T) {
 		},
 	} {
 		text := c.line + "\nnext line\nmore\n"
-		if got := redact.Settled(text); got != len(text) {
+		if got := redact.SettledByBoth(t, text); got != len(text) {
 			t.Errorf("%s: Settled = %d of %d; want all of it", name, got, len(text))
 		}
 		if got := redact.Secrets(text); got != c.want+"\nnext line\nmore\n" {
@@ -1837,12 +1855,12 @@ func TestABeginOnALineLongerThanTheBoundHoldsNothingAfterIt(t *testing.T) {
 // once lines that are not a key's follow.
 func TestAStreamOfKeyShapedLinesIsHeldOnlyAsFarAsAnEndCouldRead(t *testing.T) {
 	stream := "x:-----BEGIN RSA PRIVATE KEY-----\n" + strings.Repeat(keyLine+"\n", 2*redact.MaxKeyBlockBytes/len(keyLine)+4)
-	got := redact.Settled(stream)
+	got := redact.SettledByBoth(t, stream)
 	if got == 0 || len(stream)-got > redact.MaxKeyBlockBytes {
 		t.Errorf("Settled = %d of %d; want all but the last %d bytes settled", got, len(stream), redact.MaxKeyBlockBytes)
 	}
 	over := stream + "the run\nwent\non\nand on\nand on\n"
-	if got := redact.Settled(over); got != len(over) {
+	if got := redact.SettledByBoth(t, over); got != len(over) {
 		t.Errorf("Settled = %d of %d; want all of it once no key could still be read", got, len(over))
 	}
 }
@@ -1863,7 +1881,7 @@ func TestOnlyALineThatReadsLikeAKeysBodyWaitsForAnEnd(t *testing.T) {
 		"a commit's hash": "[tool] Bash: git show 9fceb02d0ae598e95dc970b74767f19372d61af8",
 		"prose":           "the build passed and the run went on",
 	} {
-		if got := redact.Settled(line + "\n"); got != len(line)+1 {
+		if got := redact.SettledByBoth(t, line+"\n"); got != len(line)+1 {
 			t.Errorf("%s: Settled = %d of %d; want it shown at once", name, got, len(line)+1)
 		}
 	}
@@ -1880,12 +1898,12 @@ func TestOnlyALineThatReadsLikeAKeysBodyWaitsForAnEnd(t *testing.T) {
 	} {
 		text := "start\n" + c.line + "\n"
 		for i := range c.wait {
-			if got := redact.Settled(text); got != len("start\n") {
+			if got := redact.SettledByBoth(t, text); got != len("start\n") {
 				t.Errorf("%s, after %d lines: Settled = %d; want it held", name, i, got)
 			}
 			text += fmt.Sprintf("line %d\n", i)
 		}
-		if got := redact.Settled(text); got != len(text) {
+		if got := redact.SettledByBoth(t, text); got != len(text) {
 			t.Errorf("%s: Settled = %d of %d; want it shown once %d lines no key's follow it", name, got, len(text), c.wait)
 		}
 	}
@@ -1920,7 +1938,7 @@ func TestOnlyALineThatReadsLikeAKeysBodyWaitsForAnEnd(t *testing.T) {
 		"a key redacted after": {[]string{marker}, false},
 	} {
 		text := "start\n" + keyLine + "\n" + strings.Join(c.after, "\n") + "\n"
-		if got := redact.Settled(text); (got == len("start\n")) != c.held {
+		if got := redact.SettledByBoth(t, text); (got == len("start\n")) != c.held {
 			t.Errorf("%s: Settled = %d; want the first key's line held: %v", name, got, c.held)
 		}
 	}
@@ -1929,10 +1947,10 @@ func TestOnlyALineThatReadsLikeAKeysBodyWaitsForAnEnd(t *testing.T) {
 // HALF A LINE IS NEVER SETTLED: a credential is matched by its whole shape, and
 // a token half written is a line that changes when its other half lands.
 func TestHalfALineIsNeverSettled(t *testing.T) {
-	if got := redact.Settled("done\nsk-" + strings.Repeat("q", 10)); got != len("done\n") {
+	if got := redact.SettledByBoth(t, "done\nsk-"+strings.Repeat("q", 10)); got != len("done\n") {
 		t.Fatalf("Settled = %d; want only the complete line", got)
 	}
-	if got := redact.Settled("no line break yet"); got != 0 {
+	if got := redact.SettledByBoth(t, "no line break yet"); got != 0 {
 		t.Fatalf("Settled = %d; want nothing settled before a line ends", got)
 	}
 }
@@ -1968,7 +1986,7 @@ func TestABlockNoEndClosesTakesAPasswordsKeyOnlyWithItsValue(t *testing.T) {
 			t.Errorf("a second pass changed %q to %q", got, again)
 		}
 		for _, sizes := range [][]int{{1}, {5, 400}} {
-			if shown, _ := settle(c.text, sizes); shown != c.want {
+			if shown, _ := settle(t, c.text, sizes); shown != c.want {
 				t.Errorf("in pieces of %v: shown as it settled\n%q\nwant\n%q", sizes, shown, c.want)
 			}
 		}
@@ -2036,7 +2054,7 @@ func TestAnEndReadsBackAcrossPasswordPrompts(t *testing.T) {
 			t.Errorf("%s: a second pass changed %q to %q", name, got, again)
 		}
 		for _, sizes := range [][]int{{1}, {5, 400}} {
-			if shown, _ := settle(c.text, sizes); shown != c.want {
+			if shown, _ := settle(t, c.text, sizes); shown != c.want {
 				t.Errorf("%s in pieces of %v: shown as it settled\n%q\nwant\n%q", name, sizes, shown, c.want)
 			}
 		}
@@ -2080,12 +2098,12 @@ func TestAValueDecidedOnALineAKeyHoldsWaitsWithIt(t *testing.T) {
 		"echo \"-----END RSA PRIVATE KEY-----\" >> key.pem",
 	}
 	text := strings.Join(lines, "\n") + "\n"
-	if got := redact.Settled(strings.Join(lines[:4], "\n") + "\n"); got != 0 {
+	if got := redact.SettledByBoth(t, strings.Join(lines[:4], "\n")+"\n"); got != 0 {
 		t.Errorf("before the END is written, Settled = %d; want the key's line held", got)
 	}
 	want := redact.Secrets(text)
 	for _, sizes := range [][]int{{1}, {3, 16, 3}, {5, 400}} {
-		if shown, _ := settle(text, sizes); shown != want {
+		if shown, _ := settle(t, text, sizes); shown != want {
 			t.Errorf("in pieces of %v: shown as it settled\n%q\nwant\n%q", sizes, shown, want)
 		}
 	}
@@ -2106,12 +2124,12 @@ func TestAKeyWaitsWithTheValueTheKeysWereReadBeside(t *testing.T) {
 	text := "const key = \"Password:\\n\" +\n\t\"u1SU1Lf= fAt0gun+\\n\" +\n" +
 		"\t\"-----END RSA PRIVATE KEY-----|passwd:\\n\" +\n\t\"u1SU1Lf= fAt0gun+\\n\"\n"
 	lines := strings.SplitAfter(text, "\n")
-	if got := redact.Settled(strings.Join(lines[:3], "")); got != 0 {
+	if got := redact.SettledByBoth(t, strings.Join(lines[:3], "")); got != 0 {
 		t.Errorf("before the value's key is decided, Settled = %d; want the key's line held", got)
 	}
 	want := redact.Secrets(text)
 	for _, sizes := range [][]int{{1}, {5, 400}} {
-		if shown, _ := settle(text, sizes); shown != want {
+		if shown, _ := settle(t, text, sizes); shown != want {
 			t.Errorf("in pieces of %v: shown as it settled\n%q\nwant\n%q", sizes, shown, want)
 		}
 	}
@@ -2187,7 +2205,7 @@ func TestAPasswordKeyIsHeldUntilItsValueIsWritten(t *testing.T) {
 			for n := 0; n < c.held[i]; n++ {
 				want = strings.LastIndexByte(text[:want-1], '\n') + 1
 			}
-			if got := redact.Settled(text); got != want {
+			if got := redact.SettledByBoth(t, text); got != want {
 				t.Errorf("%s, %d lines written: Settled = %d; want %d (%d lines held) of %q",
 					name, i+1, got, want, c.held[i], text)
 			}
