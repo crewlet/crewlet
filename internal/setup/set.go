@@ -22,15 +22,17 @@ type Set struct {
 	Label string `json:"label"`
 	// Item is what one entry is called in a sentence ("key").
 	Item string `json:"item"`
-	// Hint is the line under the label: what is needed, and which entry first.
+	// Hint is the line under the label, on the form and in what a person has
+	// ready before connecting: what an entry holds, how many, and which first.
 	Hint string `json:"hint"`
 	// Add is the control that adds an entry ("Add a key").
 	Add string `json:"add"`
 	// Pick labels the choice of which entry to add ("Role").
 	Pick string `json:"pick"`
-	// Missing is what a form says when fewer than Min entries are added, in
-	// the operator's words ("Add at least one API key.").
-	Missing string `json:"missing"`
+	// Missing is the refusal of fewer than Min entries, in the operator's words
+	// ("Add at least one API key."), for a caller with no form: a form says its
+	// Add control beside the Hint instead, so the listing does not send it.
+	Missing string `json:"-"`
 	// Min is how many entries the integration cannot work with fewer than.
 	Min int `json:"min"`
 	// Entry is the entry this requirement is a field of: its value, the

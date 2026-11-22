@@ -51,7 +51,7 @@ import {
 } from "./catalogue.tsx";
 import { useRecheck } from "~/routes/settings/recheck.ts";
 import { workspaceRow, type Workspace } from "~/app/nav.ts";
-import { splitFields } from "../SetupForm.tsx";
+import { asksIn, splitFields } from "../SetupForm.tsx";
 
 /**
  * What an agent can do once a tool is connected, and how it gets in.
@@ -394,8 +394,8 @@ export interface Tool {
   blocked?: string | undefined;
   /** Deliveries that reached a seat, counted only where the node read its event log. */
   delivered: number | null;
-  /** The values a connect asks for, by label, when the setup listing says. */
-  asks: SetupRequirement[];
+  /** What to have ready to connect, when the setup listing says: see [haveReadyOf]. */
+  haveReady: ReadyItem[];
   /** Every product the tool reaches, where a Crewlet service holds each: nothing is left to connect. */
   held: { name: string; heldBy: string }[];
 }
@@ -800,6 +800,26 @@ export interface ToolInputs {
   avatarOf: (handle: string) => AgentAvatar | null;
 }
 
+/** One thing to have ready before connecting: a field by its label, or a set by its heading and line. */
+export interface ReadyItem {
+  label: string;
+  hint?: string | undefined;
+}
+
+/**
+ * What a connect asks for, as the form draws it ([asksIn]): a set is one item
+ * in the words it heads the form with, and no item is said twice.
+ */
+export function haveReadyOf(reqs: SetupRequirement[]): ReadyItem[] {
+  const out: ReadyItem[] = [];
+  for (const ask of asksIn(reqs)) {
+    const item =
+      ask.kind === "set" ? { label: ask.set.label, hint: ask.set.hint } : { label: ask.r.label };
+    if (!out.some((o) => o.label === item.label && o.hint === item.hint)) out.push(item);
+  }
+  return out;
+}
+
 /** One tool, as a person reads it, from what the engine said about it. */
 export function deriveTool(entry: Entry, what: ToolInputs): Tool {
   const present = presentSurfaces(entry, what.rows);
@@ -813,10 +833,11 @@ export function deriveTool(entry: Entry, what: ToolInputs): Tool {
   const issues = configured ? issuesOf(entry, present, state, what.seatOf) : [];
   const roster = rosterOf(setupTools);
   const findings = seatFindingsOf(present.flatMap((p) => p.row.reconcile?.findings ?? []));
-  const asks = sections
-    .filter((s) => s.seat === undefined)
-    .flatMap((s) => splitFields(s.tool.requirements, () => "").connect)
-    .filter((r, i, all) => all.findIndex((o) => o.field === r.field) === i);
+  const haveReady = haveReadyOf(
+    sections
+      .filter((s) => s.seat === undefined)
+      .flatMap((s) => splitFields(s.tool.requirements, () => "").connect),
+  );
   return {
     entry,
     story: STORIES[entry.key] ?? { does: [], identity: "" },
@@ -836,7 +857,7 @@ export function deriveTool(entry: Entry, what: ToolInputs): Tool {
         : undefined),
     held,
     delivered: what.trafficKnown ? total(present, (r) => r.inbound) : null,
-    asks,
+    haveReady,
   };
 }
 

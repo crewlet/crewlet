@@ -41,4 +41,9 @@ func TestTheKeysAreOneListOfAtLeastOneKey(t *testing.T) {
 	if out := setup.Outstanding(reqs); len(out) == 0 {
 		t.Error("a team with no key has nothing outstanding")
 	}
+	// A CALLER WITH NO FORM is told what to add, in one sentence.
+	if short := setup.CheckSets(reqs, nil); short == nil || !strings.HasPrefix(short.Problem, "Add ") ||
+		strings.ContainsAny(short.Problem, "\n\u2014") || !strings.HasSuffix(short.Problem, ".") {
+		t.Errorf("a team with no key is refused with %+v, want one sentence saying what to add", short)
+	}
 }

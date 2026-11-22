@@ -149,19 +149,32 @@ test("a key is removed in one action, and a connection's last key is held", asyn
   expect(sent).toEqual(["DELETE /setup/integrations/app_store_connect/keys/main/admin"]);
 });
 
-test("the connected keys are the ones the form shows stored", () => {
-  const state = {
-    key: "app_store_connect",
-    configured: true,
-    enabled: true,
-    requirements: [
-      requirement("integrations.app_store_connect.connections.main.keys.admin.private_key", true),
-      requirement("integrations.app_store_connect.connections.main.keys.sales.private_key", false),
-      requirement("integrations.app_store_connect.connections.main.keys.admin.key_id", true),
-    ],
-  } as SetupToolState;
-  state.requirements[0]!.label = "Admin key (.p8)";
-  expect(connectedKeys([state])).toEqual([
-    { connection: "main", slot: "admin", label: "Admin key" },
-  ]);
+// A KEY IS NAMED BY ITS ROLE, never by its field's label, which every key in
+// the set shares. Mutation: name it from the label, and every key reads
+// "Private key".
+test("the connected keys are the stored ones, each named by its role", () => {
+  const keyOf = (slot: string, role: string, field: string, present: boolean) => ({
+    ...requirement(
+      `integrations.app_store_connect.connections.main.keys.${slot}.${field}`,
+      present,
+    ),
+    label: field === "key_id" ? "Key ID" : "Private key (.p8)",
+    set: {
+      id: "main_keys",
+      label: "API keys",
+      item: "key",
+      hint: "A key ID and .p8 file per Apple role: at least one, Marketing first.",
+      add: "Add a key",
+      pick: "Role",
+      min: 1,
+      entry: { value: slot, label: role },
+    },
+  });
+  expect(
+    connectedKeys([
+      keyOf("admin", "Admin", "key_id", true),
+      keyOf("admin", "Admin", "private_key", true),
+      keyOf("sales", "Sales", "private_key", false),
+    ]),
+  ).toEqual([{ connection: "main", slot: "admin", label: "Admin key" }]);
 });
