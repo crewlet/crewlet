@@ -28,6 +28,11 @@ func (f *fakeVerdicts) Verdict(_ context.Context, step growth.Step, r growth.Rec
 	return true, nil
 }
 
+func (f *fakeVerdicts) Made(context.Context, growth.Record) (bool, error)    { return true, nil }
+func (f *fakeVerdicts) Applied(context.Context, growth.Record) (bool, error) { return true, nil }
+func (f *fakeVerdicts) Void(context.Context, growth.Record) (bool, error)    { return true, nil }
+func (f *fakeVerdicts) Failed(context.Context, growth.Record) (bool, error)  { return true, nil }
+
 // A HELD CALL ACTS ONLY ON ITS ONE ANSWER, RECORDED FIRST: an allow that
 // lands is the call's, a second answer to it is refused, and a node that
 // records no answer acts on none.
@@ -37,7 +42,7 @@ func (f *fakeVerdicts) Verdict(_ context.Context, step growth.Step, r growth.Rec
 func TestAHeldCallActsOnlyOnItsOneAnswerRecordedFirst(t *testing.T) {
 	t.Parallel()
 	v := &fakeVerdicts{}
-	c := &googlegrowth.Client{Kind: "x", Verdicts: v}
+	c := &googlegrowth.Client{Kind: "x", Audit: v}
 	r := growth.Record{HeldCall: "h1", Tool: "x_publish"}
 	if err := c.Allow(t.Context(), r, "founder"); err != nil {
 		t.Fatalf("the first allow answered %v", err)
@@ -59,7 +64,7 @@ func TestAHeldCallActsOnlyOnItsOneAnswerRecordedFirst(t *testing.T) {
 func TestADenialNamesItsPersonAndALapseNobody(t *testing.T) {
 	t.Parallel()
 	v := &fakeVerdicts{}
-	c := &googlegrowth.Client{Kind: "x", Verdicts: v}
+	c := &googlegrowth.Client{Kind: "x", Audit: v}
 	c.Deny(t.Context(), growth.Call{HeldCall: "h1", Approver: "founder"}, growth.Record{HeldCall: "h1"})
 	c.Deny(t.Context(), growth.Call{HeldCall: "h2", Approver: "engine"}, growth.Record{HeldCall: "h2"})
 	c.Deny(t.Context(), growth.Call{HeldCall: "h3"}, growth.Record{HeldCall: "h3"})
