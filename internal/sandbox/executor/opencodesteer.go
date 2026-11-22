@@ -26,8 +26,8 @@ func (OpenCode) inboxID(launch, noteID string) string {
 
 // openCodePollCeiling is the most UTF-16 units one message OpenCode's plugin
 // admits can carry, as measured: every size up to 1,048,576 reached the model
-// byte for byte on 2.0.32, 2.1.4, 2.2.7 and 2.3.0, against a stub provider
-// recording each request. Whether it arrives PLAIN or folded into a
+// byte for byte on OpenCode 2.3.0, against a stub provider recording each
+// request. Whether it arrives PLAIN or folded into a
 // compaction's checkpoint depends on the session's room, not the note's size:
 // plain iff R + round(N/4) <= P, P the point [openCodePointAt] models and R the
 // last reported usage plus OpenCode's estimates since.

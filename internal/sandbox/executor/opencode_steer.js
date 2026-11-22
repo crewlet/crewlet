@@ -33,9 +33,9 @@
 // so a note that never folds spends nothing. A note the engine answers spent,
 // or one folded again, is given up: never confirmed, its id posted to the
 // route's `folded` so the engine says why it waits for the review. A failed
-// compaction confirms and posts nothing. Measured on 2.0.32, 2.1.4, 2.2.7 and
-// 2.3.0: the hook precedes the delivered event, which precedes the
-// compaction's start; a re-admitted note lands plain one step later.
+// compaction confirms and posts nothing. Measured on 2.3.0: the hook precedes
+// the delivered event, which precedes the compaction's start; a re-admitted
+// note lands plain one step later.
 
 // ONLY WHILE THE SESSION'S EXECUTION RUNS. Notes are polled and admitted
 // between the run's session's `session.execution.started` (or any step of it
@@ -84,8 +84,8 @@ const readAbortMs = 10_000
 
 // endWaitMs bounds how long the cleanup waits for the confirmations, asks and
 // folds in flight before it ends them. OpenCode awaits a plugin's cleanup when its
-// server is stopped, and exited within 0.2 s of one ending (measured on the
-// four releases); the run's script kills the server five seconds after asking
+// server is stopped, and exited within 0.2 s of one ending (measured on
+// 2.3.0); the run's script kills the server five seconds after asking
 // it to stop (internal/sandbox's JobStopGrace), so four leaves it that second.
 // A post the end cuts costs a duplicate, never a lost note: the note waits on
 // the record, served, for the review.
