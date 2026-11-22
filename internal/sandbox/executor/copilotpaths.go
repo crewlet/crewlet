@@ -3,9 +3,10 @@ package executor
 // CopilotHome is the directory a Copilot run keeps its state in, pinned as
 // COPILOT_HOME ([Copilot.Pins]): the box home's `.copilot`, where the harness
 // keeps it by default and where a local box is seeded with the entry's login
-// (`config.json`'s copilotTokens). Its sessions are under `session-state/`,
-// and the run's own settings, standing instructions and extension are written
-// there ([Copilot.WriteConfig]), the one place Copilot reads each from.
+// (`config.json`'s copilotTokens and authTokens). Its sessions are under
+// `session-state/`, and the run's own settings, standing instructions and
+// extension are written there ([Copilot.WriteConfig]), the one place Copilot
+// reads each from.
 func (p Paths) CopilotHome() string { return p.Home + "/.copilot" }
 
 // CopilotSettings is the run's own user-level settings file, written whole by

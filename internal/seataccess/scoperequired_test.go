@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/seataccess/seataccesstest"
 
 	_ "github.com/crewlet/crewlet/internal/admob"
+	_ "github.com/crewlet/crewlet/internal/adsense"
 	_ "github.com/crewlet/crewlet/internal/appleads"
 	_ "github.com/crewlet/crewlet/internal/appstoreconnect"
 	_ "github.com/crewlet/crewlet/internal/atlassian/agentaccess"
@@ -19,10 +20,13 @@ import (
 	_ "github.com/crewlet/crewlet/internal/expo"
 	_ "github.com/crewlet/crewlet/internal/github"
 	_ "github.com/crewlet/crewlet/internal/gitlab"
+	_ "github.com/crewlet/crewlet/internal/googleads"
 	_ "github.com/crewlet/crewlet/internal/googleanalytics"
 	_ "github.com/crewlet/crewlet/internal/googlecloud"
+	_ "github.com/crewlet/crewlet/internal/googleplay"
 	_ "github.com/crewlet/crewlet/internal/mattermost"
 	_ "github.com/crewlet/crewlet/internal/metaads"
+	_ "github.com/crewlet/crewlet/internal/searchconsole"
 	_ "github.com/crewlet/crewlet/internal/slack"
 	_ "github.com/crewlet/crewlet/internal/ssh"
 )

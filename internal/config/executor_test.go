@@ -482,25 +482,33 @@ func TestAnEntrysRunInIsACatalogueCell(t *testing.T) {
 }
 
 // A RUN_IN NO LAUNCH CAN READ IS REFUSED. Only the harnesses with an in-box
-// runner launch one; an entry on any other harness serves text phases, so every launch
-// passes over it and its placement is read by nothing — whether or not it is a
-// seat's executor-chain member, and whatever cell it names, configured or not.
-// Admitted, it read as a setting that placed the entry's runs while it did
-// nothing at all.
+// runner ([ExecutorHarnesses]) launch a run; an entry on any other serves text
+// phases, so every launch passes over it and its placement is read by nothing
+// — whether or not it is a seat's executor-chain member, and whatever cell it
+// names, configured or not. Admitted, it read as a setting that placed the
+// entry's runs while it did nothing at all. Every harness without a runner is
+// a row, so a harness gaining one leaves the table on its own.
+//
+// Mutation: drop the check, or name a fixed list of runners in the refusal,
+// and a row goes red.
 func TestARunInOnAHarnessThatLaunchesNoRunIsRefused(t *testing.T) {
 	t.Parallel()
-	for _, harness := range []string{"codex", "gemini-cli", "custom"} {
-		t.Run(harness, func(t *testing.T) {
+	runners := ExecutorHarnesses()
+	for _, harness := range Harnesses {
+		if slices.Contains(runners, harness) {
+			continue
+		}
+		t.Run(string(harness), func(t *testing.T) {
 			t.Parallel()
 			err := rejects(t, executorCompany(
 				"    sub:\n      model: sonnet\n"+
-					"    other:\n      harness: "+harness+"\n      model: m-1\n      run_in: e2b\n",
+					"    other:\n      harness: "+string(harness)+"\n      model: m-1\n      run_in: e2b\n",
 				"  - name: SWE\n    llm: [sub, other]\n    llm_review: other\n"),
 				"providers.llm.other.run_in")
 			if !errors.Is(err, ErrConflict) {
 				t.Fatalf("want ErrConflict, got %v", err)
 			}
-			for _, remedy := range []string{"Remove the field", "only " + words.And(ExecutorHarnesses()) + " launch"} {
+			for _, remedy := range []string{"Remove the field", "only " + words.And(runners) + " launch"} {
 				if !strings.Contains(err.Error(), remedy) {
 					t.Errorf("the refusal does not name %q:\n%v", remedy, err)
 				}

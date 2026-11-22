@@ -38,7 +38,7 @@ func (f *Fleet) SwapUploadLedger(_ context.Context, value []byte, revision uint6
 	if len(value) == 0 {
 		return 0, errors.New("coord/memory: an upload ledger needs a value")
 	}
-	if err := coord.HoldValue("the upload ledger", len(value)); err != nil {
+	if err := coord.HoldValue("the upload ledger", len(value), coord.MaxValueBytes); err != nil {
 		return 0, err
 	}
 	f.mu.Lock()
@@ -74,7 +74,7 @@ func (f *Fleet) SwapUploadRecord(_ context.Context, upload string, value []byte,
 	case len(value) == 0:
 		return 0, errors.New("coord/memory: an upload record needs a value")
 	}
-	if err := coord.HoldValue("the upload record "+upload, len(value)); err != nil {
+	if err := coord.HoldValue("the upload record "+upload, len(value), coord.MaxValueBytes); err != nil {
 		return 0, err
 	}
 	f.mu.Lock()
@@ -127,7 +127,7 @@ func (f *Fleet) SwapSaveLedger(_ context.Context, seat string, value []byte, rev
 	case len(value) == 0:
 		return 0, errors.New("coord/memory: a save ledger needs a value")
 	}
-	if err := coord.HoldValue("the save ledger of "+seat, len(value)); err != nil {
+	if err := coord.HoldValue("the save ledger of "+seat, len(value), coord.MaxValueBytes); err != nil {
 		return 0, err
 	}
 	f.mu.Lock()

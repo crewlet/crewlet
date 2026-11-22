@@ -413,7 +413,7 @@ func pluginAdmitsNotesAtTheRunsNextStep(t *testing.T) {
 	const configured = "http://127.0.0.1:9/mcp/run-token/steer"
 	cfgPath, err := executor.OpenCode{}.WriteConfig(t.Context(), box, sandbox.RunRequest{
 		Steer: sandbox.SteerWiring{Server: "crewlet", Tool: "steer_take", URL: configured},
-	}, p)
+	}, executor.Session{}, p)
 	if err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
@@ -822,7 +822,7 @@ func steerEntry(t *testing.T) string {
 	cfgPath, err := executor.OpenCode{}.WriteConfig(t.Context(), box, sandbox.RunRequest{
 		Steer: sandbox.SteerWiring{Server: "crewlet", Tool: mcpbridge.SteerTool,
 			URL: "http://127.0.0.1:9/mcp/run-token/steer"},
-	}, p)
+	}, executor.Session{}, p)
 	if err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}

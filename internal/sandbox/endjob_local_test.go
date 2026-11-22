@@ -20,21 +20,19 @@ import (
 
 	"github.com/crewlet/crewlet/internal/procgroup"
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // trapsUSR1 is a shell line that writes its pid into pid once its traps are
 // set, "heard" into heard on SIGUSR1, and heard's witness on SIGUSR2
 // ([unsignalled]): a run's script's end protocol in miniature.
 func trapsUSR1(heard, pid string) string {
-	return `trap 'echo heard > ` + shQuote(heard) + `' USR1; trap 'echo witnessed > ` +
-		shQuote(witnessOf(heard)) + `' USR2; echo $$ > ` + shQuote(pid) + `; while :; do sleep 0.05; done`
+	return `trap 'echo heard > ` + shellword.Quote(heard) + `' USR1; trap 'echo witnessed > ` +
+		shellword.Quote(witnessOf(heard)) + `' USR2; echo $$ > ` + shellword.Quote(pid) + `; while :; do sleep 0.05; done`
 }
 
 // witnessOf is the file a [trapsUSR1] shell writes when it is sent SIGUSR2.
 func witnessOf(heard string) string { return heard + ".witness" }
-
-// shQuote is s quoted for sh.
-func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
 // readPID waits for path to hold a pid, and returns it.
 func readPID(t *testing.T, path string) int {
@@ -104,7 +102,7 @@ func TestADirectBoxEndsOnlyAProcessOfItsJob(t *testing.T) {
 	box := mustCreate(t, local, Spec{})
 	work := filepath.Join(box.Home(), WorkspaceSubdir)
 	heard, scriptFile := filepath.Join(work, "heard"), filepath.Join(work, "script.pid")
-	handle, err := box.StartBackground(t.Context(), "sh -c "+shQuote(trapsUSR1(heard, scriptFile)), ExecOptions{})
+	handle, err := box.StartBackground(t.Context(), "sh -c "+shellword.Quote(trapsUSR1(heard, scriptFile)), ExecOptions{})
 	if err != nil {
 		t.Fatalf("StartBackground: %v", err)
 	}
@@ -152,7 +150,7 @@ func TestADirectBoxKillsEveryProcessOfItsJobAndKeepsTheBox(t *testing.T) {
 	work := filepath.Join(box.Home(), WorkspaceSubdir)
 	stubbornFile := filepath.Join(work, "stubborn.pid")
 	handle, err := box.StartBackground(t.Context(),
-		"sh -c "+shQuote(`trap '' TERM; echo $$ > `+shQuote(stubbornFile)+`; while :; do sleep 0.05; done`)+
+		"sh -c "+shellword.Quote(`trap '' TERM; echo $$ > `+shellword.Quote(stubbornFile)+`; while :; do sleep 0.05; done`)+
 			" & sleep 300", ExecOptions{})
 	if err != nil {
 		t.Fatalf("StartBackground: %v", err)
@@ -249,11 +247,11 @@ func newContainerRig(t *testing.T) containerRig {
 	name := ContainerPrefix + "box1"
 	// The exec becomes its command, so the shell leads the session runHost
 	// started the runtime in, as runc's first process of a `docker exec` does.
-	writeExecutable(t, runtime, "#!/bin/sh\necho \"$*\" >> "+shQuote(calls)+"\n"+
+	writeExecutable(t, runtime, "#!/bin/sh\necho \"$*\" >> "+shellword.Quote(calls)+"\n"+
 		"case \"$1\" in\n"+
 		"exec) shift; while [ $# -gt 0 ]; do case \"$1\" in -w|--env-file) shift 2;; *) break;; esac; done; "+
 		"shift; exec \"$@\";;\n"+
-		"ps) printf '%s\\trunning\\n' "+shQuote(name)+";;\n"+
+		"ps) printf '%s\\trunning\\n' "+shellword.Quote(name)+";;\n"+
 		"esac\n")
 	layout := boxLayout{id: "box1", root: filepath.Join(dir, "box")}
 	for _, d := range []string{layout.home(), layout.records()} {
@@ -321,7 +319,7 @@ func TestAContainerBoxEndsAndKillsItsJobInsideTheContainer(t *testing.T) {
 	main := startMain(t)
 	heard, scriptFile := filepath.Join(rig.dir, "heard"), filepath.Join(rig.dir, "script.pid")
 	handle, err := rig.box.StartBackground(t.Context(),
-		"sh -c "+shQuote("sleep 300 & "+trapsUSR1(heard, scriptFile))+" > /dev/null 2>&1", ExecOptions{})
+		"sh -c "+shellword.Quote("sleep 300 & "+trapsUSR1(heard, scriptFile))+" > /dev/null 2>&1", ExecOptions{})
 	if err != nil {
 		t.Fatalf("StartBackground: %v", err)
 	}
@@ -403,7 +401,7 @@ func startJobInOwnGroup(t *testing.T, rig containerRig, script string) (string, 
 		t.Fatal(err)
 	}
 	handle, err := rig.box.StartBackground(t.Context(),
-		ownGroupEnv+"="+shQuote(script)+" "+shQuote(self)+" > /dev/null 2>&1", ExecOptions{})
+		ownGroupEnv+"="+shellword.Quote(script)+" "+shellword.Quote(self)+" > /dev/null 2>&1", ExecOptions{})
 	if err != nil {
 		t.Fatalf("StartBackground: %v", err)
 	}
@@ -466,7 +464,7 @@ func TestAContainerJobThatRecordedNoGroupIsKilledByTheGroupItsExecLeads(t *testi
 	rig := newContainerRig(t)
 	main := startMain(t)
 	handle, group := startJobWithNoGroupRecorded(t, rig,
-		"sh -c "+shQuote("sleep 300 & while :; do sleep 0.05; done"))
+		"sh -c "+shellword.Quote("sleep 300 & while :; do sleep 0.05; done"))
 	awaitMembers(t, group, 2)
 
 	if err := rig.box.KillJob(t.Context(), handle); err != nil {
@@ -559,14 +557,14 @@ func TestAContainerJobWithNoGroupRecordedIsReadOverOnlyOnceItIs(t *testing.T) {
 			beat, done := filepath.Join(rig.dir, "beat"), filepath.Join(rig.dir, "done")
 			// The runner's wrapper: the script its child, the done marker
 			// written once the script exits.
-			wrapper := "sh -c " + shQuote("while :; do date +%s%N > "+shQuote(beat)+"; sleep 0.05; done") +
-				"; echo $? > " + shQuote(done)
+			wrapper := "sh -c " + shellword.Quote("while :; do date +%s%N > "+shellword.Quote(beat)+"; sleep 0.05; done") +
+				"; echo $? > " + shellword.Quote(done)
 			var handle string
 			group := 0
 			if ownGroup {
 				handle, _ = startJobInOwnGroup(t, rig, wrapper)
 			} else {
-				handle, group = startJobWithNoGroupRecorded(t, rig, "sh -c "+shQuote(wrapper))
+				handle, group = startJobWithNoGroupRecorded(t, rig, "sh -c "+shellword.Quote(wrapper))
 				// The group holds wrapper and script, so its being empty
 				// after the read is the job's end.
 				awaitMembers(t, group, 2)

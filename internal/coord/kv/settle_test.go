@@ -79,7 +79,7 @@ func TestAConditionalWriteIsAnsweredByWhatTheLeaderDecided(t *testing.T) {
 	decided := refusedAs(jetstream.JSErrCodeStreamWrongLastSequence)
 	bucket := func(answers ...error) (settledBucket, *scripted) {
 		s := &scripted{answers: answers}
-		return settledBucket{KeyValue: s, js: termed{term: time.Minute}}, s
+		return settledBucket{KeyValue: s, js: termed{term: time.Minute}, holding: undeclaredHolding}, s
 	}
 
 	t.Run("in flight, then landed", func(t *testing.T) {
@@ -182,11 +182,30 @@ func TestACreateWaitsOutTheLeadersInFlightAnswer(t *testing.T) {
 		KeyValue: underneath.KeyValue,
 		answers:  []error{refusedAs(jetstream.JSErrCodeStreamWrongLastSequenceConstant)},
 	}
-	if _, err := createKey(ctx, f.js, settledBucket{KeyValue: s, js: termed{term: time.Minute}},
+	if _, err := createKey(ctx, f.js, settledBucket{KeyValue: s, js: termed{term: time.Minute}, holding: undeclaredHolding},
 		"turn-1", []byte(`{"n":1}`)); err != nil {
 		t.Fatalf("createKey = %v, want it written once the write ahead settled", err)
 	}
 	if s.attempts != 2 {
 		t.Errorf("%d attempts, want 2: one waited out and the one that landed", s.attempts)
 	}
+}
+
+// A BUCKET IS SETTLED WITH ONE HOLDING. Settled again with its own it is
+// returned as it is; with another, the second would be silently ignored and
+// its reads timed by the first, so it is a wiring mistake that panics.
+//
+// Mutation: return an already settled handle whatever holding is passed.
+func TestABucketSettledAgainKeepsOneHolding(t *testing.T) {
+	t.Parallel()
+	once := settled(nil, named{bucket: "runs"}, InProcess, runsHolding)
+	if again := settled(nil, once, InProcess, runsHolding); again.(settledBucket).holding.rest != runValue {
+		t.Errorf("settled again with its own holding, the handle holds %+v", again.(settledBucket).holding)
+	}
+	defer func() {
+		if recover() == nil {
+			t.Error("a bucket settled again with another holding kept its first without a word")
+		}
+	}()
+	settled(nil, once, InProcess, undeclaredHolding)
 }

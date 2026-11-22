@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 func init() { Register(Copilot{}) }
@@ -83,7 +84,7 @@ func (Copilot) Session(req sandbox.RunRequest) Session {
 // Command is the run as ONE SCRIPT ([copilotScript]), so the wrapper's
 // redirections (the brief on stdin, the stream, the error file) reach each step.
 func (Copilot) Command(req sandbox.RunRequest, session Session, paths Paths, configPath string) string {
-	return "sh -c " + sandbox.ShellQuote(copilotScript(req, session, paths, configPath, sandbox.JobStopGrace))
+	return "sh -c " + shellword.Quote(copilotScript(req, session, paths, configPath, sandbox.JobStopGrace))
 }
 
 // copilotScript is a Copilot run's script, giving its harness stop to go once
@@ -100,7 +101,7 @@ func (Copilot) Command(req sandbox.RunRequest, session Session, paths Paths, con
 // which the wrapper points at the brief's file, as Claude Code's does.
 func copilotScript(req sandbox.RunRequest, session Session, paths Paths, configPath string,
 	stop time.Duration) string {
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	parts := []string{
 		"copilot",
 		"--output-format", "json",
@@ -293,7 +294,7 @@ func copilotSignIn() string {
 func copilotSessionGate(session Session, paths Paths, rewired bool) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	if !session.Continues {
 		line(`s=%s k=no w=`, q(session.ID))
 		line(`set -- "$@" --session-id %s`, q(session.ID))
@@ -445,7 +446,7 @@ func copilotCapture(paths Paths) string {
 func copilotPack(paths Paths, at packAt) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	home := paths.CopilotHome()
 	dir := copilotSessionState + `/"$s"`
 	line(`if [ -s %s/%s/events.jsonl ]; then`, q(home), dir)
@@ -485,8 +486,8 @@ func (Copilot) PackSave(paths Paths, rec sessionRecord, staged, dest string) (st
 // copilotOnDemand is a pack the engine makes of session outside the run's own
 // script, at at.
 func copilotOnDemand(paths Paths, session string, at packAt) string {
-	return "s=" + sandbox.ShellQuote(session) + " packed=\n" +
-		fmt.Sprintf("[ -s %s ] || exit %d\n", sandbox.ShellQuote(paths.CopilotSessionDir(session)+"/events.jsonl"), packNothing) +
+	return "s=" + shellword.Quote(session) + " packed=\n" +
+		fmt.Sprintf("[ -s %s ] || exit %d\n", shellword.Quote(paths.CopilotSessionDir(session)+"/events.jsonl"), packNothing) +
 		copilotPack(paths, at) +
 		fmt.Sprintf("[ -n \"$packed\" ] || exit %d\n", packFailed)
 }
@@ -566,7 +567,8 @@ type copilotSettings struct {
 // and its MCP servers, returning the file `--additional-mcp-config` names, with
 // a fresh session's copies beside them ([sandbox.RunRequest.FreshWiring]).
 // What an earlier run wrote there the clear removes first ([Copilot.artifacts]).
-func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error) {
+func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
+	paths Paths) (string, error) {
 	settings := copilotSettings{Experimental: true}
 	names, err := copilotToolEnvOmitted(req)
 	if err != nil {

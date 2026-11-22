@@ -171,10 +171,11 @@ func TestAPointerWithASummaryAtItsBoundFits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := coord.HoldPointer(size); err != nil {
+	if err = coord.HoldValue("the activation pointer", size, coord.MaxPointerBytes); err != nil {
 		t.Errorf("a pointer of %d bytes with its summary at the bound was refused: %v", size, err)
 	}
-	if err := coord.HoldPointer(coord.MaxPointerBytes + 1); !errors.Is(err, coord.ErrValueTooLarge) {
+	err = coord.HoldValue("the activation pointer", coord.MaxPointerBytes+1, coord.MaxPointerBytes)
+	if !errors.Is(err, coord.ErrValueTooLarge) {
 		t.Errorf("a pointer a byte past its bound = %v, want coord.ErrValueTooLarge", err)
 	}
 }

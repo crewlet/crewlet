@@ -427,3 +427,28 @@ func TestGitletsCeilingNamesACredentialAsACredential(t *testing.T) {
 		}
 	}
 }
+
+// A CALL'S CEILING IS READ AS THE GATE BOUND IT: nothing where no gate bound
+// one, nobody beyond the seat outside any turn, and the requester a turn's
+// call was bound to, composed by the gate's one composer.
+//
+// Mutation: answer CeilingNone where nothing is bound, and the first case
+// reads a call no gate decided as a turn nobody woke.
+func TestACallsCeilingIsReadAsTheGateBoundIt(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	if _, bound, err := CallCeiling(ctx); bound || err != nil {
+		t.Fatalf("an unbound call reads a ceiling (bound %v, %v)", bound, err)
+	}
+	if c, bound, err := CallCeiling(OutsideAnyTurn(ctx)); !bound || err != nil || c.Kind != authz.CeilingNone {
+		t.Fatalf("a call outside any turn reads %v (bound %v, %v)", c, bound, err)
+	}
+	requester := iam.Principal{Kind: iam.KindPerson, Seat: "jane", Stage: iam.StageActive}
+	r := countedRequesters{of: map[string]iam.Principal{"jane": requester}, asked: &atomic.Int64{}}
+	seat := iam.Principal{Kind: iam.KindSeat, Seat: "mobile-lead", Stage: iam.StageActive}
+	turn := &turnctx.Turn{Requester: "jane"}
+	c, bound, err := CallCeiling(bindCeiling(iam.WithPrincipal(ctx, seat), turn, r))
+	if !bound || err != nil || c.Kind != authz.CeilingRequester || c.Principal.Seat != "jane" {
+		t.Fatalf("a turn jane woke reads %v (bound %v, %v)", c, bound, err)
+	}
+}

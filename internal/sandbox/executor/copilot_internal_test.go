@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/prereqtest"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // copilotFixture is testdata/copilot/1.0.114/<name>: a real Copilot 1.0.114
@@ -45,7 +46,7 @@ func copilotScriptUsage(t *testing.T, events []byte, before int) []byte {
 		t.Fatal(err)
 	}
 	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
-	script := "ev=" + sandbox.ShellQuote(file) + " el=" + strconv.Itoa(before) + "\n" + copilotUsage()
+	script := "ev=" + shellword.Quote(file) + " el=" + strconv.Itoa(before) + "\n" + copilotUsage()
 	out, err := exec.Command(sh, "-c", script).Output()
 	if err != nil {
 		t.Fatalf("the usage part of the script failed: %v", err)
@@ -1089,7 +1090,7 @@ func TestACopilotRunKeepsItsSignInOutOfItsShell(t *testing.T) {
 	write := func(signIn ...string) (*sandbox.FakeSandbox, Paths, error) {
 		box := sandbox.NewFakeSandbox("b")
 		paths := PathsFor(box)
-		_, err := (Copilot{}).WriteConfig(t.Context(), box, sandbox.RunRequest{SignInEnv: signIn}, paths)
+		_, err := (Copilot{}).WriteConfig(t.Context(), box, sandbox.RunRequest{SignInEnv: signIn}, Session{}, paths)
 		return box, paths, err
 	}
 	bashEnv := func(box *sandbox.FakeSandbox, paths Paths) bool {
@@ -1132,7 +1133,7 @@ func TestACopilotRunKeepsItsSignInOutOfItsShell(t *testing.T) {
 		t.Errorf("the file unsets more than the names Copilot does not hide: %q", file)
 	}
 	script := copilotScript(sandbox.RunRequest{SignInEnv: []string{"GH_TOKEN"}}, Session{ID: "s-1"}, paths, "", time.Second)
-	at, launch := strings.Index(script, "BASH_ENV="+sandbox.ShellQuote(paths.CopilotToolEnv())+"; export BASH_ENV"),
+	at, launch := strings.Index(script, "BASH_ENV="+shellword.Quote(paths.CopilotToolEnv())+"; export BASH_ENV"),
 		strings.Index(script, "copilot --output-format")
 	if at < 0 || launch < at {
 		t.Errorf("the script does not name the file in BASH_ENV before the launch:\n%s", script)
@@ -1229,7 +1230,7 @@ func TestCopilotWriteConfigWritesItsHomeAndKeepsTheLogin(t *testing.T) {
 		MCPServers: map[string]sandbox.MCPServer{"crewlet": {Transport: sandbox.TransportHTTP,
 			URL: "http://engine/mcp/tok", Headers: map[string]string{"Authorization": "Bearer t"},
 			CallTimeout: 90 * time.Second}}}
-	cfg, err := (Copilot{}).WriteConfig(t.Context(), box, req, paths)
+	cfg, err := (Copilot{}).WriteConfig(t.Context(), box, req, Session{}, paths)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1280,7 +1281,7 @@ func TestCopilotWriteConfigWritesItsHomeAndKeepsTheLogin(t *testing.T) {
 func TestACopilotRunsArtifactsAreItsHomesOwnFiles(t *testing.T) {
 	box := sandbox.NewFakeSandbox("b")
 	paths := PathsFor(box)
-	if _, err := (Copilot{}).WriteConfig(t.Context(), box, sandbox.RunRequest{}, paths); err != nil {
+	if _, err := (Copilot{}).WriteConfig(t.Context(), box, sandbox.RunRequest{}, Session{}, paths); err != nil {
 		t.Fatal(err)
 	}
 	if ext, _ := box.ReadFile(t.Context(), paths.CopilotExtension()+"/extension.mjs"); ext != nil {

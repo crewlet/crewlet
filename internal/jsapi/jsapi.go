@@ -193,6 +193,23 @@ func (a API) Client(nc *nats.Conn) (jetstream.JetStream, error) {
 	return jetstream.NewWithDomain(nc, a.domain, jetstream.WithDefaultTimeout(RequestTerm))
 }
 
+// Push is the client's legacy JetStream context over nc in this API, the one
+// a push consumer is subscribed through (the jetstream package has none), its
+// every request held to [RequestTerm] where its caller set no deadline: what
+// the client's own KV watch builds (nats.go jetstream/kv.go legacyJetStream),
+// for a caller that subscribes its own (internal/coord/kv's bucket watch).
+func (a API) Push(nc *nats.Conn) (nats.JetStreamContext, error) {
+	switch {
+	case !a.named:
+		return nil, ErrUnnamed
+	case nc == nil:
+		return nil, errors.New("jsapi: a NATS connection is required")
+	case a.domain == "":
+		return nc.JetStream(nats.MaxWait(RequestTerm))
+	}
+	return nc.JetStream(nats.Domain(a.domain), nats.MaxWait(RequestTerm))
+}
+
 // accountPrefix is the prefix of every subject the account's own JetStream
 // answers.
 const accountPrefix = "$JS.API."
