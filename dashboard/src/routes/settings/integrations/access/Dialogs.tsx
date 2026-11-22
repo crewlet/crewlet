@@ -693,7 +693,9 @@ export function ScopeDialog({
     onChange([...held, typed]);
     setTerm("");
   };
-  const searchWords = lane.scope_open ? `Find or add a ${singular}` : `Find a ${singular}`;
+  // "AN APP", "AN AD ACCOUNT": the article follows the noun's own sound.
+  const one = `${/^[aeiou]/i.test(singular) ? "an" : "a"} ${singular}`;
+  const searchWords = lane.scope_open ? `Find or add ${one}` : `Find ${one}`;
   const alone = lane.scope_required || !words;
 
   const picker = (
@@ -747,7 +749,7 @@ export function ScopeDialog({
           </Stack>
         ) : (
           <Text as="p" variant="caption" tone="secondary">
-            {find ? `No ${singular} matches “${term.trim()}”.` : `Type a ${singular} to add it.`}
+            {find ? `No ${singular} matches “${term.trim()}”.` : `Type ${one} to add it.`}
           </Text>
         )}
       </FormField>
