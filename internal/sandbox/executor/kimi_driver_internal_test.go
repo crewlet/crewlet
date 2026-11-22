@@ -195,7 +195,7 @@ func kimiDriverRun(t *testing.T, probe *kimiProbe, notes string, args ...string)
 		notes = srv.URL + "/mcp/steer"
 	}
 	settings, _ := json.Marshal(map[string]any{"profile": "crewlet-probe", "notes": notes,
-		"report": probe.report, "serverPid": filepath.Join(dir, "kimi-server.pid"), "kimi": kimi})
+		"report": probe.report, "reportStaging": probe.report + ".next", "serverPid": filepath.Join(dir, "kimi-server.pid"), "kimi": kimi})
 	for name, body := range map[string][]byte{kimi: []byte(stub), driver: []byte(kimiDriverSource),
 		filepath.Join(dir, "settings.json"): settings} {
 		if err := os.WriteFile(name, body, 0o700); err != nil {

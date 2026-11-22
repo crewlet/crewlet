@@ -159,8 +159,8 @@ async function run() {
     if (!created.ok || typeof created.data?.id !== "string") return fail("Kimi refused the session: " + created.why)
     sid = created.data.id
     // THE ID REPORTED ONCE, BEFORE THE BRIEF: a reader finds the whole id or none.
-    fs.writeFileSync(settings.report + ".next", sid + "\n")
-    fs.renameSync(settings.report + ".next", settings.report)
+    fs.writeFileSync(settings.reportStaging, sid + "\n")
+    fs.renameSync(settings.reportStaging, settings.report)
   }
   if (asked) return 143
 

@@ -3,9 +3,9 @@ package executor
 import "github.com/crewlet/crewlet/internal/sandbox"
 
 // Minter is a harness that mints its own session id ([sessionMinter]) over
-// OpenCode's plumbing: no runner mints yet, so the minting contract is driven
-// through this one. A fresh run names no session; a resume names the one it
-// continues, as its harness spells it.
+// OpenCode's plumbing: the minting contract is driven through it, apart from
+// any minting harness's own script (Kimi's driver reports in JavaScript). A
+// fresh run names no session; a resume names the one it continues.
 type Minter struct{ OpenCode }
 
 func (Minter) mintsSession() bool { return true }

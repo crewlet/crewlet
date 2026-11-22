@@ -477,7 +477,8 @@ func TestKimiWriteConfigWritesTheRunsOwnProfileServersAndDriver(t *testing.T) {
 	var settings kimiSettings
 	readJSON(t, box, paths.KimiSettings(), &settings)
 	if !strings.HasPrefix(settings.Profile, "crewlet-") || settings.Model != req.Model || settings.Thinking != "high" ||
-		settings.Notes != req.Steer.URL || settings.Report != paths.SessionReport() {
+		settings.Notes != req.Steer.URL || settings.Report != paths.SessionReport() ||
+		settings.Staging != paths.sessionReportStaging() {
 		t.Errorf("settings = %+v", settings)
 	}
 	profile, err := box.ReadFile(t.Context(), paths.KimiAgents()+"/"+kimiProfileDir+"/"+settings.Profile+".md")

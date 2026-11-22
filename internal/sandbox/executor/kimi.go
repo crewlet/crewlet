@@ -287,6 +287,7 @@ type kimiSettings struct {
 	Thinking  string `json:"thinking,omitempty"`
 	Notes     string `json:"notes,omitempty"`
 	Report    string `json:"report"`
+	Staging   string `json:"reportStaging"`
 	ServerPid string `json:"serverPid"`
 }
 
@@ -333,7 +334,7 @@ func (k Kimi) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 		return "", fmt.Errorf("executor: writing the Kimi run's driver: %w", err)
 	}
 	settings := kimiSettings{Profile: name, Thinking: req.Effort, Report: paths.SessionReport(),
-		ServerPid: paths.KimiServerPid()}
+		Staging: paths.sessionReportStaging(), ServerPid: paths.KimiServerPid()}
 	if !kimiKeySignsIn(req) {
 		settings.Model = req.Model
 	}
@@ -458,13 +459,12 @@ func kimiMCP(s sandbox.MCPServer) map[string]any {
 
 // artifacts is what a Kimi run leaves in its box of its own: its agent profile,
 // which a later run must not find among its subagents, and its driver and its
-// settings and their fresh copies, which hold the notes route's token; and the
-// session its driver reported, which a later run in the box must not read as
-// its own ([Paths.SessionReport]). Its MCP servers are written
-// whole by every run, and its sessions are kept.
+// settings and their fresh copies, which hold the notes route's token. Its
+// MCP servers are written whole by every run, its sessions are kept, and the
+// session its driver reported goes with every run's ([Runner.ClearArtifacts]).
 func (Kimi) artifacts(p Paths) (files, dirs []string) {
 	files = []string{p.KimiDriver(), p.KimiSettings(), p.KimiServerPid(), p.KimiSettingsFresh(),
-		p.KimiMCPConfigFresh(), p.KimiLinesBefore(), p.SessionReport()}
+		p.KimiMCPConfigFresh(), p.KimiLinesBefore()}
 	return files, []string{p.KimiAgents() + "/" + kimiProfileDir}
 }
 

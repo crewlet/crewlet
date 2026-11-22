@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -280,6 +281,51 @@ func TestAKimiPackTakesTheSessionsOwnFilesAlone(t *testing.T) {
 	if !slices.Equal(members, want) {
 		t.Fatalf("members = %q, want %q", members, want)
 	}
+}
+
+// A PACK THE ENGINE MAKES TAKES ONLY THE SESSION IT NAMES: a save or a take
+// of a run whose report the engine read as none packs nothing, though the box
+// reports a session now, since only a report the bind held names the run's.
+//
+// Mutation: fall back to the box's report where no session is named — the
+// case fails.
+func TestAKimiPackOnDemandTakesOnlyTheSessionTheEngineNames(t *testing.T) {
+	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
+	paths, _ := kimiBox(t)
+	const session = "session_33333333-3333-4333-8333-333333333333"
+	for name, body := range kimiSessionFiles(session, "/w") {
+		kimiWrite(t, paths.KimiSessions()+"/wd_work_0123456789ab/"+session+"/"+name, body)
+	}
+	kimiWrite(t, paths.SessionReport(), session+"\n")
+	staged, dest := paths.Home+"/staged", paths.Home+"/save"
+	save, err := (Kimi{}).PackSave(paths, sessionRecord{}, staged, dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := exitOf(exec.Command(sh, "-c", save).Run()); code != packNothing {
+		t.Errorf("a save of no named session exited %d, want %d (nothing packed)", code, packNothing)
+	}
+	if _, err := os.Stat(dest); !os.IsNotExist(err) {
+		t.Fatalf("a save of no named session packed the reported one (%v)", err)
+	}
+	if out, err := exec.Command(sh, "-c", (Kimi{}).Pack(paths, session, staged, dest, false)).CombinedOutput(); err != nil {
+		t.Fatalf("the named session's pack failed: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(dest); err != nil {
+		t.Fatalf("the named session was not packed: %v", err)
+	}
+}
+
+// exitOf is err's exit status: 0 for nil, -1 for an error that is no exit.
+func exitOf(err error) int {
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+		return 0
+	case errors.As(err, &exit):
+		return exit.ExitCode()
+	}
+	return -1
 }
 
 // A CONTINUED RUN IS CHARGED ITS OWN RECORDS ALONE: the lines each agent's
