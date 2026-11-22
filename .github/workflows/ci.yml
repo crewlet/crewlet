@@ -118,7 +118,7 @@ jobs:
       # file's: setup-go exports GOTOOLCHAIN=local to every later step, so a
       # workflow-level `auto` was overridden and never reached a Go command.
       - &setup-go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@v7.1.0
         with:
           go-version-file: go.mod
           # The caches are the steps below; see THE GO CACHES above.
