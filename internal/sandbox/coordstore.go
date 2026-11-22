@@ -160,8 +160,9 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	if err != nil {
 		return PendingRun{}, err
 	}
+	standing := standingOf(created)
 	for range launchRounds {
-		made, err := s.runs.CreateSandboxRun(ctx, run.TurnID, raw)
+		made, err := s.runs.CreateSandboxRun(ctx, run.TurnID, raw, &standing)
 		if err != nil {
 			// A CREATE THE STORE DID NOT ANSWER may have landed, naming the job.
 			return PendingRun{}, unopened(run.LaunchID,
@@ -3104,43 +3105,103 @@ func (s *CoordStore) ListActive(ctx context.Context) ([]PendingRun, error) {
 // records carries, ended runs included: the floor the seat's fencing counter
 // must stay above so its next holder is never older than a row it must write
 // ([coord/kv.Epochs.Floor] raises it at boot). A row naming no seat or lease
-// carries none. An undecodable record is skipped ([CoordStore.list]).
+// carries none. Read off the runs' STANDING, never their records, but for a
+// record stating none (an older build's write), read whole; an undecodable
+// one is skipped ([CoordStore.list]).
 func (s *CoordStore) OwnerEpochs(ctx context.Context) (map[uuid.UUID]int64, error) {
-	runs, err := s.list(ctx, func(PendingRun) bool { return true })
+	stood, err := s.runs.SandboxRunStandings(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("sandbox: list the runs' standing: %w", err)
 	}
 	out := map[uuid.UUID]int64{}
-	for _, run := range runs {
-		seat := seatOf(run.AgentID)
-		if seat == uuid.Nil || run.OwnerEpoch <= 0 {
+	for _, r := range stood {
+		standing := r.Standing
+		if standing == nil {
+			run, ok, readErr := s.readStood(ctx, r.TurnID)
+			if readErr != nil {
+				return nil, readErr
+			}
+			if !ok {
+				continue
+			}
+			whole := standingOf(run)
+			standing = &whole
+		}
+		if standing.Seat == uuid.Nil || standing.OwnerEpoch <= 0 {
 			continue
 		}
-		out[seat] = max(out[seat], run.OwnerEpoch)
+		out[standing.Seat] = max(out[standing.Seat], standing.OwnerEpoch)
 	}
 	return out, nil
 }
 
+// standingOf is what run's record states of itself beside its value
+// ([coord.RunStanding]): every write of a record states it.
+func standingOf(run PendingRun) coord.RunStanding {
+	return coord.StandingOf(seatOf(run.AgentID), run.AgentHandle, run.OwnerEpoch)
+}
+
+// listStood returns the unfinished runs whose standing keep selects, and
+// every run stating none, read whole and held to match, oldest first: one
+// seat's runs, never every record ([CoordStore.list]'s rules otherwise).
+func (s *CoordStore) listStood(ctx context.Context, keep func(coord.RunStanding) bool,
+	match func(PendingRun) bool) ([]PendingRun, error) {
+
+	stood, err := s.runs.SandboxRunStandings(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("sandbox: list the runs' standing: %w", err)
+	}
+	var out []PendingRun
+	for _, r := range stood {
+		if r.Standing != nil && !keep(*r.Standing) {
+			continue
+		}
+		run, ok, readErr := s.readStood(ctx, r.TurnID)
+		if readErr != nil {
+			return nil, readErr
+		}
+		if ok && match(run) && slices.Contains(Active, run.Status) {
+			out = append(out, run)
+		}
+	}
+	sortRuns(out)
+	return out, nil
+}
+
+// readStood reads one run a standing listing named, false where it is gone
+// since or does not decode (said as [CoordStore.list] says it).
+func (s *CoordStore) readStood(ctx context.Context, turnID string) (PendingRun, bool, error) {
+	record, found, err := s.runs.SandboxRun(ctx, turnID)
+	if err != nil {
+		return PendingRun{}, false, fmt.Errorf("sandbox: read run %s: %w", turnID, err)
+	}
+	if !found {
+		return PendingRun{}, false, nil
+	}
+	run, ok := s.decodedOrSkipped(ctx, record)
+	return run, ok, nil
+}
+
 // ListActiveForSeat returns one seat's unfinished runs: the read a seat's new
-// owner makes inside on_acquire, and why this store is the fleet's.
+// owner makes inside on_acquire, and why this store is the fleet's. Selected
+// on the runs' standing, so only this seat's records are read whole.
 func (s *CoordStore) ListActiveForSeat(ctx context.Context, handle string) ([]PendingRun, error) {
-	return s.list(ctx, func(r PendingRun) bool {
-		return r.AgentHandle == handle && slices.Contains(Active, r.Status)
-	})
+	return s.listStood(ctx, func(st coord.RunStanding) bool { return st.Names(handle) },
+		func(r PendingRun) bool { return r.AgentHandle == handle })
 }
 
 // ListActiveForSeatID returns one seat's unfinished runs by the seat's id: the
 // read a mailbox retirement makes. See the contract on [PendingStore].
 //
 // Through [seatOf], the parse a run's control and inbox subjects use, so the
-// runs a retirement ends are exactly those on the subscriptions it deletes.
+// runs a retirement ends are exactly those on the subscriptions it deletes;
+// selected on the runs' standing, which states that parse.
 func (s *CoordStore) ListActiveForSeatID(ctx context.Context, seat uuid.UUID) ([]PendingRun, error) {
 	if seat == uuid.Nil {
 		return nil, errors.New("sandbox: a seat's runs are listed by its id, and none was given")
 	}
-	return s.list(ctx, func(r PendingRun) bool {
-		return seatOf(r.AgentID) == seat && slices.Contains(Active, r.Status)
-	})
+	return s.listStood(ctx, func(st coord.RunStanding) bool { return st.Seat == seat },
+		func(r PendingRun) bool { return seatOf(r.AgentID) == seat })
 }
 
 // Finish deletes the record of a run whose ending is decided, once it owes the
@@ -3312,7 +3373,8 @@ func (s *CoordStore) writeFound(ctx context.Context, turnID string, live bool, f
 			refused = err
 			return coord.SandboxRunChange{}, err
 		}
-		return coord.SandboxRunChange{Put: raw}, nil
+		standing := standingOf(next)
+		return coord.SandboxRunChange{Put: raw, Standing: &standing}, nil
 	})
 	found := last.Key != ""
 	switch {
@@ -3353,12 +3415,16 @@ func (s *CoordStore) list(ctx context.Context, match func(PendingRun) bool) ([]P
 			out = append(out, run)
 		}
 	}
-	// Oldest first, so recovery works runs in launch order; a listing reordering
-	// every boot would make one failure look like two.
-	slices.SortStableFunc(out, func(a, b PendingRun) int {
+	sortRuns(out)
+	return out, nil
+}
+
+// sortRuns orders runs oldest first, so recovery works runs in launch order; a
+// listing reordering every boot would make one failure look like two.
+func sortRuns(runs []PendingRun) {
+	slices.SortStableFunc(runs, func(a, b PendingRun) int {
 		return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), cmp.Compare(a.TurnID, b.TurnID))
 	})
-	return out, nil
 }
 
 // superseded reports whether a newer lease than the fence owns the run, the

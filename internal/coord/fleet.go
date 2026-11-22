@@ -1069,15 +1069,57 @@ type SandboxRunChange struct {
 
 	// Delete removes the record at the version the decision read.
 	Delete bool
+
+	// Standing is what the record written states of itself, written in the
+	// same message as Put ([RunStanding]); nil states none.
+	Standing *RunStanding
 }
 
-// Validate refuses a change that both writes and removes the record.
+// Validate refuses a change that both writes and removes the record, and a
+// standing beside anything but a value written.
 func (c SandboxRunChange) Validate() error {
-	if c.Delete && len(c.Put) > 0 {
+	switch {
+	case c.Delete && len(c.Put) > 0:
 		return errors.New("coord: a change to a sandbox run either writes it or deletes it, " +
 			"never both")
+	case c.Standing != nil && len(c.Put) == 0:
+		return errors.New("coord: a sandbox run's standing is stated with the value written, " +
+			"never beside a delete or no write")
 	}
 	return nil
+}
+
+// RunStanding is what a run's record states of itself beside its value: its
+// seat, its handle's digest and the lease epoch stamped on it, the fields the
+// boot's epoch floor and a seat's listings select on. Written in the SAME
+// message as the value, so the two never disagree, and listed without the
+// value ([SandboxRuns.SandboxRunStandings]): a record is up to [MaxValueBytes],
+// a standing a few hundred bytes. The handle is a digest because a handle has
+// no bound on its length, and a standing's every field has a widest form.
+type RunStanding struct {
+	// Seat is the seat the record names; [uuid.Nil] names none.
+	Seat uuid.UUID
+	// Handle is the SHA-256 of the handle the record names ([RunStanding.Names]).
+	Handle [sha256.Size]byte
+	// OwnerEpoch is the lease epoch stamped on the record; 0 is none.
+	OwnerEpoch int64
+}
+
+// StandingOf is the standing of a record naming seat and handle, stamped at epoch.
+func StandingOf(seat uuid.UUID, handle string, epoch int64) RunStanding {
+	return RunStanding{Seat: seat, Handle: sha256.Sum256([]byte(handle)), OwnerEpoch: epoch}
+}
+
+// Names reports whether the standing's record names handle.
+func (s RunStanding) Names(handle string) bool { return s.Handle == sha256.Sum256([]byte(handle)) }
+
+// StoodRun is one record's standing as its last write stated it.
+type StoodRun struct {
+	TurnID  string
+	Version uint64
+	// Standing is nil where the last write stated none: an older build's,
+	// or one stating nothing. Such a record is judged on its value, read whole.
+	Standing *RunStanding
 }
 
 // SandboxRunUpdate is one state of a run's record that
@@ -1113,17 +1155,26 @@ type SandboxRuns interface {
 	// SandboxRuns returns every record, by turn id — the records ALONE,
 	// never a part beside one.
 	//
-	// Every listing this serves — the seat's busy check, the boot recovery
-	// pass, the pause reaper, the clarification match — filters on fields
-	// coordination cannot see, so there is one read and the caller decodes.
-	// The set is bounded by the number of seats that can be mid-run at
-	// once, which is what makes that affordable.
+	// Every listing this serves (the boot recovery pass, the pause reaper,
+	// the clarification match) filters on fields coordination cannot see,
+	// so there is one read and the caller decodes. The set is bounded by the
+	// number of seats that can be mid-run at once, which is what makes that
+	// affordable. One seat's runs and the epoch floor select on the standing
+	// instead ([SandboxRuns.SandboxRunStandings]).
 	SandboxRuns(ctx context.Context) ([]Record, error)
 
-	// CreateSandboxRun writes a new record, reporting whether it was new.
-	// A turn id that already exists is left alone: the id is the kick-off
-	// turn's, so a second create is a retried launch, not a second run.
-	CreateSandboxRun(ctx context.Context, turnID string, value []byte) (bool, error)
+	// SandboxRunStandings returns every RECORD's standing as its last write
+	// stated it, by turn id, certified as [SandboxRuns.SandboxRuns] is and
+	// raising rather than answering short. No value is read but a record's the
+	// listing missed in its pass; a record stating none is listed with a nil
+	// [StoodRun.Standing], for its reader to read whole.
+	SandboxRunStandings(ctx context.Context) ([]StoodRun, error)
+
+	// CreateSandboxRun writes a new record, reporting whether it was new,
+	// stating standing in the same write (nil states none). A turn id that
+	// already exists is left alone: the id is the kick-off turn's, so a second
+	// create is a retried launch, not a second run.
+	CreateSandboxRun(ctx context.Context, turnID string, value []byte, standing *RunStanding) (bool, error)
 
 	// MutateSandboxRun changes one run's record by a decision taken on it as it
 	// stands, answering the record as left and whether a change landed.

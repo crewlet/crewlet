@@ -2094,11 +2094,13 @@ func TestAnUnwritableCredentialMapIsReported(t *testing.T) {
 func TestTheCredentialMapRoundTrips(t *testing.T) {
 	t.Parallel()
 	layout := boxLayout{id: "box-2", root: t.TempDir()}
-	want := seededCredential{Source: "/host/creds.json", Seed: "0a1b"}
+	want := seededCredential{Source: "/host/creds.json", Seed: "0a1b", RunKeys: []string{"providers.meta.api_key"}}
 	if err := recordCredentialMap(layout, map[string]seededCredential{".claude/.credentials.json": want}); err != nil {
 		t.Fatalf("recordCredentialMap: %v", err)
 	}
-	if got := readCredentialMap(layout); got[".claude/.credentials.json"] != want {
+	got := readCredentialMap(layout)
+	if rec := got[".claude/.credentials.json"]; rec.Source != want.Source || rec.Seed != want.Seed ||
+		!slices.Equal(rec.RunKeys, want.RunKeys) {
 		t.Errorf("the map did not round-trip, with the seed a write-back is judged against: %v", got)
 	}
 }

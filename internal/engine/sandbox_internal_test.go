@@ -862,7 +862,7 @@ func TestABareRetirementSkipsARecordNothingCanRead(t *testing.T) {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
 	garbled := []byte("{not json")
-	if _, err := fleet.CreateSandboxRun(t.Context(), "t-garbled", garbled); err != nil {
+	if _, err := fleet.CreateSandboxRun(t.Context(), "t-garbled", garbled, nil); err != nil {
 		t.Fatalf("CreateSandboxRun: %v", err)
 	}
 	bare := &Engine{backends: &Backends{Fleet: fleet}}

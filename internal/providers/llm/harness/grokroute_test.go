@@ -175,7 +175,7 @@ func (g *grokRecorder) end(script fakeScript, total fakeUsage, _ string) int {
 func TestGrokRunIsReadFromItsStream(t *testing.T) {
 	t.Parallel()
 	p := fakeAs(t, "grok", routeCase, nil)
-	home := filepath.Join(p.Workspace().KeySeatDir(llm.SeatOf(t.Context())), "home")
+	home := filepath.Join(p.Workspace().KeySeatDir(llm.SeatOf(t.Context()), p.Key()), "home")
 	for path, content := range map[string]string{
 		".grok/config.toml": "[mcp_servers.planted]\ncommand = \"sh\"\n",
 		".claude.json":      `{"mcpServers":{"planted_claude":{"command":"sh"}}}`,
