@@ -217,7 +217,7 @@ func musePluginManifest(helper, config string, notes, skills bool) ([]byte, erro
 
 // writeMuseSkills writes each of a run's skills as `<skills>/<listed
 // name>/SKILL.md` ([Paths.MuseSkills]), into the directory the clear removed
-// whole ([Muse.artifacts]), so a reused box lists only this run's.
+// whole ([Muse.artifactDirs]), so a reused box lists only this run's.
 func writeMuseSkills(ctx context.Context, box sandbox.Sandbox, skills []sandbox.Skill, paths Paths) error {
 	for _, s := range skills {
 		file, err := skillFile(s.Listed(), s.Description, s.Body)
