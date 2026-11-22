@@ -37,6 +37,12 @@ const (
 	consentSecretValue = "placeholder-client-secret"
 )
 
+// consentScope2 is the test product's second scope: a sign-in asks for a set.
+const consentScope2 = "https://www.googleapis.com/auth/consent-test.manage"
+
+// consentScopes is the test product's scopes, whatever the company.
+func consentScopes(*config.Company) []string { return []string{consentScope, consentScope2} }
+
 // consentRegistered keeps each test kind registered once per test binary.
 var consentRegistered sync.Map
 
@@ -48,7 +54,7 @@ func consentProduct(t *testing.T, kind, id string, on *atomic.Bool) integration.
 		t.Fatalf("consent kind %s registered twice", kind)
 	}
 	googleauth.RegisterConsent(googleauth.Consent{Kind: integration.Kind(kind), Name: "Consent " + kind,
-		Scope: consentScope, Client: func(*config.Company) (googleauth.ConsentClient, bool) {
+		Scopes: consentScopes, Client: func(*config.Company) (googleauth.ConsentClient, bool) {
 			return googleauth.ConsentClient{ID: id, Secret: "${" + consentSecretVar + "}"}, on == nil || on.Load()
 		}})
 	return integration.Kind(kind)
@@ -118,7 +124,7 @@ func (g *fakeGoogle) authorize(t *testing.T, address, clientID string) (code, st
 	}
 	q := u.Query()
 	for name, want := range map[string]string{"access_type": "offline", "prompt": "consent",
-		"include_granted_scopes": "false", "scope": consentScope, "code_challenge_method": "S256",
+		"include_granted_scopes": "false", "scope": consentScope + " " + consentScope2, "code_challenge_method": "S256",
 		"client_id": clientID, "response_type": "code",
 		"redirect_uri": "https://crewlet.example.com/webhooks/mcp-oauth"} {
 		if got := q[name]; len(got) != 1 || got[0] != want {
@@ -153,9 +159,10 @@ func (g *fakeGoogle) token(w http.ResponseWriter, r *http.Request) {
 		refuse("invalid_request", "Parameter not allowed for this message type: resource")
 		return
 	}
-	scope := consentScope
+	// GOOGLE NAMES WHAT IT GRANTED IN ITS OWN ORDER, which a set compares alike.
+	scope := consentScope2 + " " + consentScope
 	if g.otherScope {
-		scope = consentScope + " https://www.googleapis.com/auth/other.readonly"
+		scope += " https://www.googleapis.com/auth/other.readonly"
 	}
 	answer := map[string]any{"token_type": "Bearer", "expires_in": 3599, "scope": scope}
 	g.serial++
@@ -300,12 +307,12 @@ const clientOne = "123456789012-consentone.apps.googleusercontent.com"
 // parameters and no resource; the callback on another node exchanges the code
 // as the company's client, seals the refresh token at
 // `integration/<kind>/refresh` under the integration owner, records who signed
-// in on Crewlet and the scope granted, and its token reaches the API. The MCP
+// in on Crewlet and the scopes granted, and its token reaches the API. The MCP
 // family's records are untouched.
 //
 // Mutation: drop ConsentParams from the start, or record the grant under the
 // MCP family, and the case goes red.
-func TestAConsentSignInAsksForOneScopeOfflineAndSealsTheGrant(t *testing.T) {
+func TestAConsentSignInAsksForItsScopesOfflineAndSealsTheGrant(t *testing.T) {
 	t.Parallel()
 	g := newFakeGoogle(t)
 	a, b, _ := consentNodes(t, g)
@@ -317,7 +324,7 @@ func TestAConsentSignInAsksForOneScopeOfflineAndSealsTheGrant(t *testing.T) {
 	}
 	record, found, err := a.IntegrationGrant(t.Context(), kind)
 	if err != nil || !found || record.ClientID != clientOne || record.By != signingJane.Name ||
-		!slices.Equal(record.Scopes, []string{consentScope}) || record.Resource != "" {
+		!slices.Equal(record.Scopes, []string{consentScope2, consentScope}) || record.Resource != "" {
 		t.Fatalf("IntegrationGrant = %+v, %t, %v", record, found, err)
 	}
 	signIns, err := a.backends.Fleet.ListOAuthSignIns(t.Context(), coord.IntegrationGrantFamily)
@@ -670,7 +677,7 @@ func TestAConsentGrantGoesOnlyWithTheClientItWasMadeAs(t *testing.T) {
 	if _, again := consentRegistered.LoadOrStore(kind, true); again {
 		t.Fatal("registered twice")
 	}
-	googleauth.RegisterConsent(googleauth.Consent{Kind: kind, Name: "Moved", Scope: consentScope,
+	googleauth.RegisterConsent(googleauth.Consent{Kind: kind, Name: "Moved", Scopes: consentScopes,
 		Client: func(*config.Company) (googleauth.ConsentClient, bool) {
 			return googleauth.ConsentClient{ID: *id.Load(), Secret: "${" + consentSecretVar + "}"}, true
 		}})
