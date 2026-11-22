@@ -431,7 +431,6 @@ These are Google's, not Crewlet's.
 ## What is not supported yet
 
 - **Inbound alerts.** Cloud Monitoring alerts cannot wake an agent yet.
-- **Google Analytics and Search Console.** They will be optional lanes on the same agent account. Neither can be granted to an agent with the containment the rest of this integration keeps.
 - **Deploys.** Deploying a Cloud Run revision, or creating a VM or node pool that runs as a service account, needs Service Account User on that account, which Crewlet never grants. Grant it yourself on one runtime account if an agent should deploy as it.
 - **Billing.** No level reads costs or budgets.
 - **An engine running on Google Cloud** still uses federation with Crewlet's key, not the attached service account.

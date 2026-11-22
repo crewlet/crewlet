@@ -3137,6 +3137,10 @@
           "$ref": "#/$defs/Scaleway",
           "description": "Scaleway Organization and provisioner key, used to make one IAM application, policy and API key per agent. Absent = disabled."
         },
+        "search_console": {
+          "$ref": "#/$defs/SearchConsole",
+          "description": "Google Search Console, with Site Verification and the Indexing API: agents read and manage properties as their own Google growth identity, through the Google Cloud connection's identity. Absent = disabled."
+        },
         "slack": {
           "$ref": "#/$defs/Slack",
           "description": "Slack working-indicator settings. Each seat carries its own app under role.integrations.slack. Absent = disabled."
@@ -5669,6 +5673,10 @@
           "$ref": "#/$defs/RoleScaleway",
           "description": "This seat's own Scaleway IAM application: whether it is on, its level and its projects."
         },
+        "search_console": {
+          "$ref": "#/$defs/RoleSearchConsole",
+          "description": "This seat's Search Console access: whether it is on, its level and its sites."
+        },
         "slack": {
           "$ref": "#/$defs/RoleSlack",
           "description": "This seat's own Slack app: whether it is on."
@@ -6074,6 +6082,49 @@
         },
         "projects": {
           "description": "Scaleway project IDs this agent's policy grants its level on. Required when enabled: an agent in no project can reach nothing.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "RoleSearchConsole": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether this agent may reach Search Console. Off turns its Google growth identity off once no other Google growth product is on for it.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "level": {
+          "description": "read (the default): search performance, sitemaps, URL inspection and verification reads, nothing changed. operate: also submitting and removing sitemaps and Indexing API notifications. administer: also asks an administrator to approve adding or removing a property, verifying a site and changing its owners, one each.",
+          "enum": [
+            "read",
+            "operate",
+            "administer",
+            "",
+            null
+          ]
+        },
+        "sites": {
+          "description": "Search Console properties this agent may reach, within integrations.search_console.sites when that is set, each as Search Console writes it (https://www.example.com/ or sc-domain:example.com). Required when the agent is on.",
           "items": {
             "type": [
               "string",
@@ -6759,6 +6810,54 @@
         "work_pickup": {
           "$ref": "#/$defs/WorkPickup",
           "description": "Hands an idle agent seat its next ready work item (default on)."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "SearchConsole": {
+      "additionalProperties": false,
+      "properties": {
+        "approvers": {
+          "description": "Handles of human seats an agent's admin acts are routed to first. Only an administrator answers one, at a fresh step-up; without approvers every administrator is asked. Optional.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Turn the integration on. Needs integrations.google_cloud on with its provisioning block, whose identity agents sign in through.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "sites": {
+          "description": "Search Console properties agents may be given, at most 1000, each as Search Console writes it: a URL prefix with its scheme and trailing slash (https://www.example.com/) or a domain (sc-domain:example.com). Absent: every property an agent's identity is added to. Optional.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
       "type": [

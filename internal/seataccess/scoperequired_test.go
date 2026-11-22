@@ -25,6 +25,7 @@ import (
 	_ "github.com/crewlet/crewlet/internal/googlecloud"
 	_ "github.com/crewlet/crewlet/internal/mattermost"
 	_ "github.com/crewlet/crewlet/internal/metaads"
+	_ "github.com/crewlet/crewlet/internal/searchconsole"
 	_ "github.com/crewlet/crewlet/internal/slack"
 	_ "github.com/crewlet/crewlet/internal/ssh"
 )

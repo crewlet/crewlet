@@ -3,6 +3,7 @@ package googlegrowth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -23,22 +24,50 @@ func NewHeld(req Request, before []byte) Held {
 	return Held{Req: req, Before: before, Binding: req.Digest(before)}
 }
 
-// Read is req held to its target as Google answers for it now: the product's
-// read of a batch's targets ([Client.BeforeRead]), its resource, or none for a
-// write that acts on nothing one read returns ([Request.Resource]).
+// Read is req held to its target as Google answers for it now, made from
+// that state where req is shaped by it ([Request.Shape]).
 func (c *Client) Read(ctx context.Context, handle string, req Request) (Held, error) {
+	before, err := c.before(ctx, handle, req)
+	if err != nil {
+		return Held{Req: req}, err
+	}
+	return heldTo(req, before)
+}
+
+// heldTo is req held to before, made from that state where req is shaped by
+// it.
+func heldTo(req Request, before []byte) (Held, error) {
+	if req.Shape == nil {
+		return NewHeld(req, before), nil
+	}
+	sent, err := req.Shape(before)
+	if err != nil {
+		return Held{Req: req, Before: before}, &unshaped{err}
+	}
+	sent.Shape = nil
+	return NewHeld(sent, before), nil
+}
+
+// unshaped is a target's state the change a request says does not apply to:
+// at an apply, a state the approval did not hold.
+type unshaped struct{ err error }
+
+func (e *unshaped) Error() string { return e.err.Error() }
+func (e *unshaped) Unwrap() error { return e.err }
+
+// before is req's target's live state: the product's read of a batch's
+// targets ([Client.BeforeRead]), its resource, or none for a write that acts
+// on nothing one read returns ([Request.Resource]).
+func (c *Client) before(ctx context.Context, handle string, req Request) ([]byte, error) {
 	if c.BeforeRead != nil {
 		before, ok, err := c.BeforeRead(ctx, handle, req)
-		if err != nil {
-			return Held{Req: req}, err
-		}
-		if ok {
-			return NewHeld(req, before), nil
+		if err != nil || ok {
+			return before, err
 		}
 	}
 	address := req.Resource()
 	if address == "" {
-		return NewHeld(req, nil), nil
+		return nil, nil
 	}
 	scopes := req.Op.Permissions
 	if c.ReadScopes != nil {
@@ -46,11 +75,7 @@ func (c *Client) Read(ctx context.Context, handle string, req Request) (Held, er
 	}
 	get := growth.Operation{ID: req.Op.ID + ".before", Method: "GET", Path: address, Class: growth.ClassRead,
 		Permissions: scopes}
-	raw, err := c.Send(ctx, handle, Request{Op: get, Address: address})
-	if err != nil {
-		return Held{Req: req}, err
-	}
-	return NewHeld(req, raw), nil
+	return c.Send(ctx, handle, Request{Op: get, Address: address})
 }
 
 // Class is the class h comes to against its target as read now
@@ -162,6 +187,14 @@ func (c *Client) Apply(ctx context.Context, call growth.Call, w Write, binding s
 		}
 	}
 	h, err := c.readTarget(act, call.Handle, w)
+	if _, moved := errors.AsType[*unshaped](err); moved {
+		// THE TARGET MOVED: the state its approval bound took the change.
+		if held {
+			r.Before = digest(h.Before)
+			c.note(ctx, growth.StepVoid, r)
+		}
+		return nil, growth.ErrMoved
+	}
 	if err != nil {
 		return nil, c.failEarly(ctx, held, r, err)
 	}
@@ -191,8 +224,8 @@ func (c *Client) Apply(ctx context.Context, call growth.Call, w Write, binding s
 	return out, nil
 }
 
-// readTarget is w's target as read now: the product's own read where it has
-// one, else [Client.Read].
+// readTarget is w's target as read now, w shaped by it: the product's own
+// read where it has one, else [Client.Read].
 func (c *Client) readTarget(ctx context.Context, handle string, w Write) (Held, error) {
 	if w.Read == nil {
 		return c.Read(ctx, handle, w.Req)
@@ -201,7 +234,7 @@ func (c *Client) readTarget(ctx context.Context, handle string, w Write) (Held, 
 	if err != nil {
 		return Held{Req: w.Req}, err
 	}
-	return NewHeld(w.Req, raw), nil
+	return heldTo(w.Req, raw)
 }
 
 // hold takes resource's lease, or answers why it could not.

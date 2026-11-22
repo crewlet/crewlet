@@ -186,6 +186,7 @@ const SURFACE_NAMES: Record<string, string> = {
   admob: "AdMob",
   adsense: "AdSense",
   google_ads: "Google Ads",
+  search_console: "Search Console",
 };
 
 /** One tool's surfaces, in the engine's grouping, named for this screen. */
@@ -363,6 +364,15 @@ export const CATALOG: Entry[] = [
     vendor: "google-ads",
     surfaces: surfacesOf("google_ads"),
     doc: "google-ads",
+  },
+  {
+    key: "search_console",
+    name: "Search Console",
+    description:
+      "Search performance, sitemaps, URL inspection, verification and Indexing API notices.",
+    vendor: "google-search-console",
+    surfaces: surfacesOf("search_console"),
+    doc: "google-search-console",
   },
 ];
 

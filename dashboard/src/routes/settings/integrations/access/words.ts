@@ -550,6 +550,30 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     tool: "google_ads tools, built in",
     issued: "an hour",
   },
+  search_console: {
+    name: "Search Console",
+    access: "Level on its sites",
+    turnOn:
+      "Turning it on gives the agent its own Google identity, if it has none, and lets it reach the chosen sites at the chosen level. Add the identity's email to each property in Search Console at the permission its level needs.",
+    off: "Crewlet stops minting the agent's tokens at once, and turns its Google identity off once no other Google growth product is on for it. Its permissions in Search Console stay, so turning it back on restores them.",
+    remove:
+      "There is nothing to remove here: the agent's Google identity is kept off with its permissions.",
+    rotate:
+      "Crewlet mints the agent's tokens for an hour at a time, so there is nothing to rotate.",
+    scope: {
+      noun: "Sites",
+      singular: "site",
+      empty: "No site",
+      none: "No sites are listed yet",
+      noneLink: {
+        label: "Connecting Crewlet",
+        doc: "google-search-console",
+        anchor: "connecting-crewlet",
+      },
+    },
+    tool: "search_console tools, built in",
+    issued: "an hour",
+  },
 };
 
 /** The line a read-only Agents tab shows when the Kubernetes operator manages access. */
