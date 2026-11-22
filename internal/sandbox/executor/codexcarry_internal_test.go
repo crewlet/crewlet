@@ -302,8 +302,8 @@ func TestACodexRolloutCutOffMidLineIsCutBackBeforeItIsResumed(t *testing.T) {
 // A CODEX SESSION CONTINUES ONLY ON THE ONE SUPPORTED RELEASE: box and writer
 // both exactly 0.171.0. Any other, older or newer, or a writer that named no
 // release, starts fresh with a reason naming the release found; no ordering
-// of releases is read. An empty box release is the restorer's ask of the
-// writer alone. resumeRead answers for that one release alone.
+// of releases is read, and a box that named no release is refused.
+// resumeRead answers for that one release alone.
 //
 // Mutation: let a newer release continue, compare releases by order, or read
 // an unnamed writer as the supported one, and a row below fails.
@@ -315,7 +315,7 @@ func TestACodexSessionContinuesOnlyOnTheOneSupportedRelease(t *testing.T) {
 		names       string
 	}{
 		{"0.171.0", "0.171.0", true, ""},
-		{"", "0.171.0", true, ""},
+		{"", "0.171.0", false, "named no release"},
 		{"0.172.0", "0.171.0", false, "Codex 0.172.0"},
 		{"0.170.9", "0.171.0", false, "Codex 0.170.9"},
 		{"0.171.0", "0.170.0", false, "Codex 0.170.0"},

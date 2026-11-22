@@ -57,21 +57,31 @@ func (Codex) VersionCommand() string { return "codex --version" }
 func (Codex) layout() archiveLayout { return archiveTar }
 
 // Continues reports whether a session written by Codex release writer can be
-// continued in a box whose Codex is release box ([carrier]): only where both
-// are exactly [codexCarryRelease]; any other, older or newer or one the box
-// did not name, starts fresh, saying which it found. An empty box release is
-// [Runner.Restores]'s ask of the writer alone. The writer is the release that
-// LAST ran the session (the record's `--version`), never the rollout's
-// session_meta.cli_version, which names the release that began it: a resume
-// writes no new session_meta (measured on 0.171.0, CODEX-MEASURE §16.5).
-func (Codex) Continues(box, writer string) (bool, string) {
+// continued in a box whose Codex is release box ([carrier]): only where the
+// box's release is exactly [codexCarryRelease] and the writer is as
+// [Codex.ContinuesWriter] holds it. Any other box release, older or newer or
+// none that reads, starts fresh, saying which it found.
+func (c Codex) Continues(box, writer string) (bool, string) {
 	switch {
-	case writer != codexCarryRelease:
-		return false, fmt.Sprintf("the session was written by %s, and only a session Codex %s wrote is "+
-			"continued", codexReleaseFound(writer), codexCarryRelease)
-	case box != "" && box != codexCarryRelease:
+	case !releaseReads(box):
+		return false, boxNamedNoRelease("Codex")
+	case box != codexCarryRelease:
 		return false, fmt.Sprintf("this box runs %s, and only Codex %s continues a session carried "+
 			"from another box", codexReleaseFound(box), codexCarryRelease)
+	}
+	return c.ContinuesWriter(writer)
+}
+
+// ContinuesWriter reports whether a session Codex release writer wrote can be
+// continued at all ([carrier]): only where the writer is exactly
+// [codexCarryRelease]; one that names no release is refused. The writer is the
+// release that LAST ran the session (the record's `--version`), never the
+// rollout's session_meta.cli_version, which names the release that began it:
+// a resume writes no new session_meta (measured on 0.171.0, CODEX-MEASURE §16.5).
+func (Codex) ContinuesWriter(writer string) (bool, string) {
+	if writer != codexCarryRelease {
+		return false, fmt.Sprintf("the session was written by %s, and only a session Codex %s wrote is "+
+			"continued", codexReleaseFound(writer), codexCarryRelease)
 	}
 	return true, ""
 }

@@ -122,9 +122,10 @@ type CarriedSession struct {
 // is handed ([ExactTelling]).
 type CarryCheck struct {
 	// Version is the box harness's release as its `--version` gave it
-	// ("2.1.310"); "" where it printed nothing this build can read, which is
-	// taken for a current release, and which matches no release a reading
-	// was read for ([ExactTelling.Resumer]).
+	// ("2.1.310"); "" where it printed nothing this build can read, which
+	// continues no carried session (the box named no release any rule was
+	// read for) and matches no release a reading was read for
+	// ([ExactTelling.Resumer]).
 	Version string
 
 	// ResumeRead says Version is a release whose resume this build read

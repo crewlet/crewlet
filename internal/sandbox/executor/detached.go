@@ -204,9 +204,15 @@ type carrier interface {
 
 	// Continues reports whether a session written by release writer, carried
 	// from another box, can be continued by release box (each as `--version`
-	// gave it), and if not, why, in a person's words. An unreadable release is
-	// taken for a current one, as the notes gate takes it ([claudeNotesGate]).
+	// gave it), and if not, why, in a person's words: [carrier.ContinuesWriter]'s
+	// answer, and the box's release held to the harness's own. A box release
+	// that does not read refuses ([boxNamedNoRelease]): the box's harness is
+	// one no rule here was read for.
 	Continues(box, writer string) (bool, string)
+
+	// ContinuesWriter is [carrier.Continues] judged of the writer alone, for a
+	// reader with no box to ask ([Runner.Restores]).
+	ContinuesWriter(writer string) (bool, string)
 
 	// Pack is the script that packs session now, the same pack the run's
 	// script makes once its harness exits, for a job that never got to
