@@ -1628,8 +1628,8 @@ type Fleet interface {
 	SSHTests
 	IssueReports
 	InsightRecords
-	MCPGrants
-	MCPSignIns
+	OAuthGrants
+	OAuthSignIns
 	GoogleIdentities
 	MCPAccepted
 	PositionRegister

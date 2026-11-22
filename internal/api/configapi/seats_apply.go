@@ -301,6 +301,16 @@ type DisconnectRequest struct {
 type Disconnected struct {
 	Applied
 	SeatsOff []string
+	// Consent is what became of the integration's consent grant, nil where
+	// it held none.
+	Consent *ConsentRevocation
+}
+
+// ConsentRevocation is an integration's consent grant given up with its block:
+// what its vendor was asked, and the sentence a person reads about it.
+type ConsentRevocation struct {
+	Revocation string `json:"revocation"`
+	Said       string `json:"said"`
 }
 
 // Disconnect removes an integration's block and turns off every seat that was
@@ -325,6 +335,7 @@ func (s *Service) Disconnect(ctx context.Context, req DisconnectRequest) (Discon
 		return Disconnected{}, fmt.Errorf("configapi: encode the disconnect of %s: %w", kind, encodeErr)
 	}
 	var off []string
+	var prior *config.Company
 	access := entityKinds[EntityRoles]
 	d := draft{
 		expect: req.Expect, stated: statedPrecondition(req.Stated, req.Expect),
@@ -340,6 +351,7 @@ func (s *Service) Disconnect(ctx context.Context, req DisconnectRequest) (Discon
 				return nil, nil, fmt.Errorf("configapi: decode the disconnected config: %w", err)
 			}
 			next.RestoreRedacted(b.prior)
+			prior = b.prior
 			// THE SEATS ARE SPLICED INTO THE STORED BYTES one by one, as a
 			// save of several seats is, so everything this build cannot
 			// represent on a seat it turns off is carried.
@@ -364,5 +376,24 @@ func (s *Service) Disconnect(ctx context.Context, req DisconnectRequest) (Discon
 	if err != nil {
 		return Disconnected{}, err
 	}
-	return Disconnected{Applied: applied, SeatsOff: off}, nil
+	return Disconnected{Applied: applied, SeatsOff: off, Consent: s.giveUpConsent(ctx, prior, kind, req.By)}, nil
+}
+
+// giveUpConsent gives up kind's consent grant now that its block is gone,
+// with the client the document before named. Nil where it held none. One the
+// engine could not give up is `failed`, logged; the disconnect stands.
+func (s *Service) giveUpConsent(ctx context.Context, prior *config.Company, kind string, by iam.Actor) *ConsentRevocation {
+	revocation, said, held, err := s.grants.GiveUpIntegrationGrant(ctx, prior, kind)
+	switch {
+	case err != nil:
+		log.WarnContext(ctx, "integration_grant_remove_failed", "integration", kind, "error", err,
+			"by", by.Name, "operator", by.OperatorID,
+			"detail", "the integration is disconnected; its sign-in could not be given up here")
+		return &ConsentRevocation{Revocation: "failed", Said: "the engine could not give the sign-in up"}
+	case !held:
+		return nil
+	}
+	log.InfoContext(ctx, "integration_grant_removed", "integration", kind, "revocation", revocation,
+		"by", by.Name, "operator", by.OperatorID)
+	return &ConsentRevocation{Revocation: revocation, Said: said}
 }
