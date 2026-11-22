@@ -1053,8 +1053,8 @@ const (
 	// the shell links: everything a reader downloads before the first screen
 	// can draw. It began at 300 KiB, under two seconds on a 1.5 Mbit/s link
 	// (the slow end of a phone tether), and has moved up with each kit release
-	// and frame feature; the last measure was 433.3 KiB, about 2.37 seconds,
-	// after kit 0.168.0 and the account row's build line.
+	// and frame feature; the last measure was 433.4 KiB, about 2.37 seconds,
+	// after kit 0.168.2 and the account row's build line.
 	// The one sheet carries every design-system rule by rule (see
 	// TestNoLazyStylesheetCarriesTheDesignSystem), so kit releases grow it even
 	// when no screen joins the entry. A raise names the measured size and its
@@ -1079,10 +1079,11 @@ const (
 	// at 3 MiB over a 2.3 MB baseline and is set so a bundle that doubled the
 	// baseline is still refused; screens fetched only when opened (the rich
 	// editor, the brand and folder screens, the assistant's panel, Gitlet) and
-	// kit releases account for its growth, and the last measure was 7231.3 KiB,
-	// after Settings › Models' lede, first-run card and titled who-runs section.
+	// kit releases account for its growth, and the last measure was 7238.3 KiB,
+	// after kit 0.168.2, Home kept per person, the account row's build line and
+	// Settings › Models' first-run card.
 	// A raise names the measured size and its cause in its commit.
-	treeBudget = 5<<20 + 2112<<10
+	treeBudget = 5<<20 + 2119<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
