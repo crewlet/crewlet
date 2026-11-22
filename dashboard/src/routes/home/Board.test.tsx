@@ -20,6 +20,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { reloadForTest } from "~/lib/prefs.ts";
 import { noteReader } from "~/lib/reader.ts";
 import { STORAGE_KEYS } from "~/lib/storage.ts";
+import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { FrameReadings } from "~/app/Shell.tsx";
 import { SessionReading } from "~/lib/frameSession.ts";
@@ -494,6 +495,23 @@ describe("Edit Home", () => {
     expect(engine.revision).toBe(5);
     expect(JSON.stringify(engine.board)).toContain('"kind":"note"');
     expect(screen.getByRole("button", { name: "Edit Home" })).toBeTruthy();
+  });
+
+  // DONE IS PRESSED BY A READER WHO CANNOT SAVE: the write gate's reason is
+  // said, nothing is sent, and the arrangement stays open to keep.
+  test.each([
+    ["an anonymous reader", { ...JANE, login: "", acts: [], grants: [] }, WRITE_REASONS.anonymous],
+    ["a person the engine does not serve", { ...JANE, acts: [] }, WRITE_REASONS.not_served],
+  ])("Done for %s says why it cannot save", async (_, viewer, reason) => {
+    mount({ viewer });
+    await settle();
+    await editHome();
+    await addNote();
+    fireEvent.click(within(editBar()).getByRole("button", { name: "Done" }));
+    await settle();
+    expect(posted.filter((p) => p.tool === "save_home_board")).toHaveLength(0);
+    expect(screen.getAllByText(reason).length).toBeGreaterThan(0);
+    expect(editBar()).toBeTruthy();
   });
 
   test("a Done beaten by another browser can take the other board instead", async () => {
