@@ -358,6 +358,33 @@ func TestTheEntriesTheRunOwnsStateDisabledFalse(t *testing.T) {
 	}
 }
 
+// THE RUN SENDS NO BACKGROUND SUMMARY. Near its point, OpenCode 2.3.2 sends a
+// second request beside a step's for a summary it keeps aside, written
+// nowhere the export holds, so its tokens would go uncounted; the run's
+// configuration switches it off (`compaction.background: false`), whatever a
+// lower document says, and states nothing else of compaction.
+//
+// Mutation: drop the switch, or write it true, and this goes red.
+func TestTheRunSendsNoBackgroundSummary(t *testing.T) {
+	t.Parallel()
+	b := sandbox.NewFakeSandbox("box-1")
+	path, err := executor.OpenCode{}.WriteConfig(t.Context(), b, sandbox.RunRequest{MCPServers: seatServers()},
+		executor.PathsFor(b))
+	if err != nil {
+		t.Fatalf("WriteConfig: %v", err)
+	}
+	raw, _ := b.ReadFile(t.Context(), path)
+	var cfg struct {
+		Compaction map[string]json.RawMessage `json:"compaction"`
+	}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, raw)
+	}
+	if len(cfg.Compaction) != 1 || string(cfg.Compaction["background"]) != "false" {
+		t.Errorf("the configuration's compaction is %s, want background false alone:\n%s", cfg.Compaction, raw)
+	}
+}
+
 // THE NOTES PLUGIN IS WRITTEN FOR A RUN WIRED TO ITS NOTES, AND ITS ROUTE IS A
 // REFERENCE. The run's configuration names one plugin: the directory the
 // engine's plugin is written into as index.js, byte for byte the plugin this

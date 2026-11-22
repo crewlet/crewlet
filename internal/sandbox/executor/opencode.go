@@ -1126,6 +1126,12 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 		// agent, and an image whose own config named another default would
 		// run the brief on an agent the cap never reached.
 		"default_agent": openCodeAgent,
+		// NO BACKGROUND SUMMARY. Within half the room left of its point (at
+		// most 60,000 tokens), 2.3.2 sends a second model request beside the
+		// step's, a compaction summary it keeps for later and writes nowhere
+		// the export holds, so its tokens are spent and never counted. Off,
+		// none goes out (measured); a compaction runs as it always does.
+		"compaction": map[string]any{"background": false},
 	}
 	// THE RUN'S TURN CAP, as the agent's `steps` (Claude Code's --max-turns,
 	// [ClaudeCode.Command]): the one bound on an executor's work, already
