@@ -5,21 +5,16 @@ import (
 	"strings"
 )
 
-// Set is a list a form builds one entry at a time, of which at least Min
-// entries must be added: App Store Connect's API keys, one per Apple role,
-// each a key ID and a .p8 file.
+// Set is a list a form builds one entry at a time, at least Min entries:
+// App Store Connect's API keys, one per Apple role, each a key ID and a .p8.
 //
-// WHY A KIND OF REQUIREMENT AND NOT Required ON EACH FIELD: "at least one of
-// these eight keys" is true of the list and false of every key in it, so a
-// static flag either demands all eight or calls all of them optional. The
-// form folded sixteen "(optional)" boxes under More settings over a block
-// config refused without one, and the refusal named a config path. A set says
-// the rule once, every member carries it ([Requirement.Set]), and [Needed],
-// [Outstanding] and the submission ([CheckSets]) all read it.
-//
-// An entry is the requirements whose Entry.Value agree: adding one asks for
-// every field of it, and an entry any field of which is answered is started
-// and must be finished.
+// A KIND OF REQUIREMENT, NOT Required ON EACH FIELD: "at least one of these
+// eight keys" is true of the list and false of every key in it, so a static
+// flag demands all eight or calls each optional, and the form folded sixteen
+// "(optional)" boxes over a block config refused without one. Every member
+// carries the set ([Requirement.Set]); [Requirement.Needed], [Outstanding] and
+// [CheckSets] read it. An entry is the members whose Entry.Value agree, and an
+// entry with any field answered is started and must be finished.
 type Set struct {
 	// ID names the set within its requirement list.
 	ID string `json:"id"`
