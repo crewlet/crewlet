@@ -426,22 +426,54 @@ type leaderReader struct {
 	leader *jsapi.Leader
 	bucket string
 	pre    string // the subject prefix a key is written under
+
+	// holding and pace are the bucket's ([settledBucket]): each read waits
+	// as its key's class says ([leaderReader.leaderFor]). A bucket opened
+	// elsewhere declares none, and every read keeps the term.
+	holding holding
+	pace    time.Duration
+	// size is a value size the caller knows from a record naming it
+	// ([sizedReader]), in place of the class's bound; 0 reads by class.
+	size int
 }
 
 // newLeaderReader addresses the leader reads of kv's stream in the API js
-// speaks. For a bucket whose values are budgeted to what one key holds
-// ([holdingLarge]), a read waits as a writer's does (jsapi.Leader.Deciding) for
-// the largest message the stream holds, a value plus [kvHeaderBytes], to cross
-// at the bucket's pace: what [Reach.readCrossing] counts it at.
+// speaks, each given the time its key's class says ([leaderReader.leaderFor]).
 func newLeaderReader(js jetstream.JetStream, kv jetstream.KeyValue) (*leaderReader, error) {
 	leader, err := jsapi.NewLeader(js, bucketStream(kv))
 	if err != nil {
 		return nil, err
 	}
-	if b, ok := kv.(settledBucket); ok && b.carries > 0 {
-		leader = leader.Deciding(b.carries+kvHeaderBytes, b.pace)
+	r := &leaderReader{leader: leader, bucket: kv.Bucket(), pre: bucketSubjects(kv)}
+	if b, ok := kv.(settledBucket); ok {
+		r.holding, r.pace = b.holding, b.pace
 	}
-	return &leaderReader{leader: leader, bucket: kv.Bucket(), pre: bucketSubjects(kv)}, nil
+	return r, nil
+}
+
+// leaderFor is the leader a read of key asks: a reply as large as the value
+// the caller named ([sizedReader]) is given its arrival (jsapi's
+// Leader.Carrying); else key's class decides, at its bound plus
+// [kvHeaderBytes] and the bucket's pace: a deciding class its crossing alone
+// (Leader.Deciding, what [Reach.readCrossing] counts for a run's value), a
+// carrying class its arrival, a class read at the term nothing more.
+//
+// THE CROSSING ALONE for a deciding class, never the handling: a request a
+// member dropped across an election is asked again two seconds later, inside
+// the shortest caller budget (five seconds in process), which counting the
+// handling would push past (jsapi's Leader.Deciding).
+func (r *leaderReader) leaderFor(key string) *jsapi.Leader {
+	if r.size > 0 {
+		return r.leader.Carrying(r.size+kvHeaderBytes, r.pace)
+	}
+	c := r.holding.of(key)
+	switch c.reply {
+	case replyDeciding:
+		return r.leader.Deciding(c.bound+kvHeaderBytes, r.pace)
+	case replyCarrying:
+		return r.leader.Carrying(c.bound+kvHeaderBytes, r.pace)
+	}
+	return r.leader
 }
 
 // last answers the newest message on key's subject as the stream leader holds
@@ -449,7 +481,7 @@ func newLeaderReader(js jetstream.JetStream, kv jetstream.KeyValue) (*leaderRead
 // message at all is ErrKeyNotFound, and a delete or purge marker is an entry
 // whose Operation says so.
 func (r *leaderReader) last(ctx context.Context, key string) (jetstream.KeyValueEntry, error) {
-	msg, err := r.leader.Last(ctx, r.pre+key)
+	msg, err := r.leaderFor(key).Last(ctx, r.pre+key)
 	if errors.Is(err, jsapi.ErrNoMessage) {
 		return nil, jetstream.ErrKeyNotFound
 	}
@@ -465,7 +497,7 @@ func (r *leaderReader) last(ctx context.Context, key string) (jetstream.KeyValue
 // [jetstream.ErrKeyNotFound], as GetRevision says; a replica also says it of a
 // revision not applied YET, the answer this exists not to give.
 func (r *leaderReader) at(ctx context.Context, key string, revision uint64) (jetstream.KeyValueEntry, error) {
-	msg, err := r.leader.At(ctx, revision)
+	msg, err := r.leaderFor(key).At(ctx, revision)
 	switch {
 	case errors.Is(err, jsapi.ErrNoMessage):
 		return nil, jetstream.ErrKeyNotFound
@@ -526,8 +558,7 @@ func getLatest(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValu
 // the pointer): its read is given the time that reply takes to arrive, its
 // handling and its crossing at the bucket's pace (jsapi's Leader.Carrying),
 // beyond the read term, so a reply of megabytes across a link is asked for
-// once and waited for whole. Never [holdingLarge]'s bound for the bucket: the
-// small records beside it keep the read term.
+// once and waited for whole, and no longer than its own size takes.
 func getSized(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValue,
 	key string, valueBytes int) (jetstream.KeyValueEntry, error) {
 
@@ -538,17 +569,14 @@ func getSized(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValue
 	return read.live(ctx, key)
 }
 
-// sizedReader is the leader reader [getSized] reads through.
+// sizedReader is the leader reader [getSized] reads through: the bucket's,
+// each read sized by valueBytes in place of its class's bound.
 func sizedReader(js jetstream.JetStream, kv jetstream.KeyValue, valueBytes int) (*leaderReader, error) {
 	read, err := newLeaderReader(js, kv)
 	if err != nil {
 		return nil, err
 	}
-	var pace time.Duration
-	if b, ok := kv.(settledBucket); ok {
-		pace = b.pace
-	}
-	read.leader = read.leader.Carrying(valueBytes+kvHeaderBytes, pace)
+	read.size = valueBytes
 	return read, nil
 }
 

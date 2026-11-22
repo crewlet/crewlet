@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -141,8 +142,8 @@ func TestABodyAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk(t *testing.T) {
 // A BODY'S READ IS GIVEN THE ARRIVAL OF ITS RECORDED SIZE, AND THE POINTER'S
 // THE READ TERM. The size is the one the pointer records, so the read is asked
 // once and waited for whole however large the body; the pointer beside it is
-// small, so the bucket is not declared large ([holdingLarge]) and its reads
-// keep the read term. BodyCrossing is the crossing alone, none in process.
+// small, so its class keeps the read term ([configHolding]) while the bodies
+// beside it are read by theirs. BodyCrossing is the crossing alone, none in process.
 // Exact, from the store's own rules.
 //
 // Mutation: read the body without its size, or at the pointer's, and its row
@@ -156,7 +157,7 @@ func TestABodysReadIsGivenTheArrivalOfItsRecordedSize(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got, want := body.leader.Term(), jsprovision.ReadTerm+
+		if got, want := body.leaderFor(bodyKey(coord.BodyRef{SHA256: strings.Repeat("0", 64)})).Term(), jsprovision.ReadTerm+
 			jsapi.Arrival(coord.MaxValueBytes+kvHeaderBytes, reach.pace()); got != want {
 			t.Errorf("a body at its bound %s is read at a term of %v, want %v", reach, got, want)
 		}
@@ -164,7 +165,7 @@ func TestABodysReadIsGivenTheArrivalOfItsRecordedSize(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := pointer.leader.Term(); got != jsprovision.ReadTerm {
+		if got := pointer.leaderFor(activationKey).Term(); got != jsprovision.ReadTerm {
 			t.Errorf("the pointer %s is read at a term of %v, want the read term %v", reach, got,
 				jsprovision.ReadTerm)
 		}
