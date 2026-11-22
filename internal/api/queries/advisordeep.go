@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/advisor/modelpass"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // WHAT THE ADVISOR'S DEEP RUN MAY READ (ADR-0166): the engine's own read
@@ -37,7 +38,8 @@ var advisorReads = []modelpass.Question{
 	{Name: "schedule_runs", Params: "{scope_type, scope_id, name, limit}", About: "one schedule's runs and what each did"},
 	{Name: "work_workload", Params: "{unit}", About: "who holds how much open work, by status"},
 	{Name: "work_flow", Params: "{bucket, points, project}", About: "the company's work over time: created, started, done"},
-	{Name: "work_items", Params: "{status_group, assignee, type, limit, cursor}", About: "work items narrowed by status, assignee and type"},
+	{Name: "work_items", Params: "{status_group: " + worklet.StatusGroupWords() + ", assignee: a seat's handle, type, limit, cursor}",
+		About: "work items narrowed by status, assignee and type"},
 	{Name: "work_projects", Params: "{limit}", About: "the projects with their task counts"},
 }
 
