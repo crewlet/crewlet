@@ -41,7 +41,7 @@ func (h *fleetHarness) holdOwners() []string {
 func (h *fleetHarness) putHold(owner string) {
 	h.t.Helper()
 	err := h.f.PutHold(h.ctx, coord.TrimHold{
-		Owner: owner, At: h.now(),
+		Owner:   owner,
 		Streams: map[string]coord.Position{"LOG": {Stream: "LOG", Generation: 1, Seq: 5}},
 	})
 	if err != nil {

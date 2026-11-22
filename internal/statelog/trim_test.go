@@ -289,22 +289,61 @@ func TestASnapshotFromAnEarlierGenerationIsNotCounted(t *testing.T) {
 	}
 }
 
-// A STALE HOLD IS IGNORED, because a crashed adopter must not pin the log for
-// the life of the deployment.
+// A HOLD WATCHED UNRENEWED PAST ITS BOUND IS IGNORED, because a crashed
+// adopter must not pin the log for the life of the deployment.
 func TestACrashedAdoptersHoldDoesNotPinTheLogForEver(t *testing.T) {
 	t.Parallel()
 	in := baseInputs()
 	in.Holds = []statelog.Hold{
-		{Owner: "adopt-dead", Generation: 1, Seq: 10, At: in.Now.Add(-time.Hour)},
-		{Owner: "adopt-live", Generation: 1, Seq: 6_500, At: in.Now},
+		{Owner: "adopt-dead", Generation: 1, Seq: 10, Silent: time.Hour},
+		{Owner: "adopt-live", Generation: 1, Seq: 6_500},
 	}
 	d := statelog.Trim(in.Terms())
 	if d.Blocked() {
 		t.Fatalf("blocked by %s: %s", d.BlockedBy, d.Detail)
 	}
 	if d.To <= 10 {
-		t.Fatalf("the trim is held at %d by a hold last renewed an hour ago — a "+
+		t.Fatalf("the trim is held at %d by a hold watched unrenewed for an hour — a "+
 			"single failed join would stop the fleet trimming for ever", d.To)
+	}
+}
+
+// THE TRIM NAMES THE HOLDS IT READ PAST: an operator whose log was trimmed
+// past a pin reads which holder the trim judged crashed, and for how long it
+// watched it, beside a live hold or with none.
+func TestTheTrimNamesTheHoldsItReadPast(t *testing.T) {
+	t.Parallel()
+	dead := statelog.Hold{Owner: "n0/backup", Generation: 1, Seq: 10, Silent: 15 * time.Minute}
+	for name, tc := range map[string]struct {
+		holds []statelog.Hold
+		want  []string
+	}{
+		"with no live hold": {
+			holds: []statelog.Hold{dead},
+			want:  []string{"nothing else pins the log", "n0/backup", "15m0s"},
+		},
+		"beside a live hold": {
+			holds: []statelog.Hold{dead, {Owner: "n1/join", Generation: 1, Seq: 6_500}},
+			want:  []string{"n1/join pins the log at 6500", "n0/backup", "15m0s"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			in := baseInputs()
+			in.Holds = tc.holds
+			var term statelog.Term
+			for _, got := range in.Terms() {
+				if got.Name == statelog.TermMinHold {
+					term = got
+				}
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(term.Detail, want) {
+					t.Fatalf("the min_hold term says %q, which lacks %q: a pin the "+
+						"trim read past goes unnamed", term.Detail, want)
+				}
+			}
+		})
 	}
 }
 
@@ -355,9 +394,7 @@ func TestTrimRacesATransfer(t *testing.T) {
 		t.Parallel()
 		in := baseInputs()
 		in.AgeFloor = 9_000
-		in.Holds = []statelog.Hold{{
-			Owner: "joiner", Generation: 1, Seq: 4_000, At: in.Now,
-		}}
+		in.Holds = []statelog.Hold{{Owner: "joiner", Generation: 1, Seq: 4_000}}
 		d := statelog.Trim(in.Terms())
 		if d.Blocked() {
 			t.Fatalf("blocked by %s: %s", d.BlockedBy, d.Detail)
@@ -370,18 +407,31 @@ func TestTrimRacesATransfer(t *testing.T) {
 
 	// ARM 2 — THE HOLD IS RENEWED FOR THE WHOLE TRANSFER, which outlives many
 	// ticks. It renews through the engine's one holder ([statelog.HoldTail]),
-	// never by hand, so the case certifies the holder that runs. Its clock
-	// runs through five stale bounds, the trim asked after every renewal.
+	// never by hand, so the case certifies the holder that runs, and the trim
+	// reads it through its watch. The watch's clock runs through five stale
+	// bounds, the trim asked after every renewal.
 	t.Run("a renewed hold pins the tail for as long as the copy runs", func(t *testing.T) {
 		t.Parallel()
 		clock := &stepClock{now: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}
 		register := memory.NewFleet()
-		pinAt(t.Context(), t, register, clock, time.Millisecond, 4_000, nil)
+		pinAt(t.Context(), t, register, time.Millisecond, 4_000, nil)
+		watch := &statelog.HoldWatch{Now: clock.Now}
+		var last uint64
 		for tick := range 5 * 4 {
-			now := clock.advance(statelog.TrimHoldStale / 4)
+			last = renewedPast(t, register, last).Revision
+			clock.advance(statelog.TrimHoldStale / 4)
+			holds, silent, err := watch.Read(t.Context(), register)
+			if err != nil {
+				t.Fatalf("read the holds: %v", err)
+			}
 			in := baseInputs()
-			in.Now, in.BackupAt, in.AgeFloor = now, now, 9_000
-			in.Holds = renewedAt(t, register, now)
+			in.AgeFloor = 9_000
+			for _, h := range holds {
+				last = max(last, h.Revision)
+				pos := h.Streams[heldStream]
+				in.Holds = append(in.Holds, statelog.Hold{Owner: h.Owner,
+					Generation: pos.Generation, Seq: pos.Seq, Silent: silent[h.Owner]})
+			}
 			if d := statelog.Trim(in.Terms()); d.To != 4_000 {
 				t.Fatalf("tick %d, %s into the copy, would remove up to %d (%s), "+
 					"want 4000", tick, time.Duration(tick+1)*statelog.TrimHoldStale/4,
@@ -398,14 +448,14 @@ func TestTrimRacesATransfer(t *testing.T) {
 		in.AgeFloor = 9_000
 		in.Holds = []statelog.Hold{{
 			Owner: "joiner", Generation: 1, Seq: 4_000,
-			At: in.Now.Add(-statelog.TrimHoldStale - time.Second),
+			Silent: statelog.TrimHoldStale + time.Second,
 		}}
 		d := statelog.Trim(in.Terms())
 		if d.Blocked() {
 			t.Fatalf("blocked by %s: %s", d.BlockedBy, d.Detail)
 		}
 		if d.To == 4_000 {
-			t.Fatal("a hold nobody has renewed for longer than the stale bound " +
+			t.Fatal("a hold watched unrenewed for longer than the stale bound " +
 				"still pins the log, which is a crashed joiner holding a " +
 				"company's retention open indefinitely")
 		}
