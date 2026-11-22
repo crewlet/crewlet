@@ -46,7 +46,10 @@ func (GeminiCLI) readMainThread(ctx context.Context, box sandbox.Sandbox, paths 
 	undecided := func(why string) sandbox.MainThreadReading {
 		return sandbox.MainThreadReading{Receipts: sandbox.TakeReceipts{Why: why}}
 	}
-	raw, err := box.ReadFile(ctx, paths.GeminiTakes())
+	if !sandbox.ValidSessionID(ask.Session) {
+		return undecided(fmt.Sprintf("the run's Gemini CLI session %q is no session id its record is named by", ask.Session))
+	}
+	raw, err := box.ReadFile(ctx, paths.GeminiTakes(ask.Session))
 	if err != nil {
 		return undecided("the run's record of its takes could not be read: " + err.Error())
 	}

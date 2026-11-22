@@ -125,6 +125,9 @@ const (
 	// ActionArtifactMarkInbox is a person's gesture over their own COMMENT
 	// notices, the artifacts log's half, under no app: a comment is a relation.
 	ActionArtifactMarkInbox Action = "artifact_mark_inbox"
+	// ActionHomeBoardSave is the tool `save_home_board`: a person's Home board,
+	// the widgets they placed and how they arranged them.
+	ActionHomeBoardSave Action = "save_home_board"
 
 	// THE CODE WRITE TOOLS, decided as the git transport's push is: judged per
 	// repository where decided (an engine write by the grant's ref rule and the
@@ -1190,6 +1193,11 @@ var rules = map[Action]rule{
 		recency: iam.RecencyAny, assist: AssistApprove},
 	ActionArtifactMarkInbox: {class: ClassOwnRecord, humanOnly: true, recency: iam.RecencyAny,
 		assist: AssistApprove},
+	// A HOME BOARD IS ONE'S OWN RECORD, as a read cursor is: the tool takes no
+	// handle, and it is kept under their SEAT ([iam.RecordOwner]), whose next
+	// holder inherits it. No app: Home is everybody's.
+	ActionHomeBoardSave: {class: ClassOwnRecord, humanOnly: true, seated: true,
+		recency: iam.RecencyAny, assist: AssistApprove},
 
 	// --- reading the atlas ------------------------------------------- //
 	//

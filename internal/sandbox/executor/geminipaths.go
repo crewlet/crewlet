@@ -49,7 +49,13 @@ func (p Paths) GeminiDefaultSystem() string { return p.WorkDir() + "/gemini-defa
 func (p Paths) GeminiExportErr() string     { return p.WorkDir() + "/gemini-export.err" }
 func (p Paths) GeminiSystem() string        { return p.WorkDir() + "/gemini-system.md" }
 
-// GeminiTakes is where the take script records each take it handed Gemini CLI,
-// a line of its token and its text ([geminiRecordedTake]), which the run's
-// receipts are read against.
-func (p Paths) GeminiTakes() string { return p.WorkDir() + "/gemini-takes.jsonl" }
+// GeminiTakes is where the take script records each take it handed Gemini CLI
+// in session, a line of its token and its text ([geminiRecordedTake]), which
+// that session's receipts are read against. One file per session and no run's
+// artifact, so a later launch in the box leaves an earlier job's record whole.
+func (p Paths) GeminiTakes(session string) string {
+	return p.GeminiTakesDir() + "/" + session + ".jsonl"
+}
+
+// GeminiTakesDir holds every session's record of takes ([Paths.GeminiTakes]).
+func (p Paths) GeminiTakesDir() string { return p.WorkDir() + "/gemini-takes" }

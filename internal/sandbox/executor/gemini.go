@@ -57,6 +57,11 @@ func (GeminiCLI) Command(req sandbox.RunRequest, session Session, paths Paths, _
 	return "sh -c " + sandbox.ShellQuote(geminiScript(req, session, paths))
 }
 
+// geminiTakesEnv names the run's record of takes to its hook
+// ([Paths.GeminiTakes]); the hook's configuration is written before the run's
+// session is named, so the session's path rides the run's environment.
+const geminiTakesEnv = "CREWLET_GEMINI_TAKES"
+
 // geminiExportExit is what `gemini` exits with once GEMINI_WRITE_SYSTEM_MD
 // has written its default prompt: it writes the file and stops before any
 // model request (measured on 0.70.0 and 0.65.0, zero requests at the stub).
@@ -80,6 +85,15 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 		"node " + q(paths.GeminiHelper()) + " pin " + q(paths.GeminiProjects()) + " " + GeminiProjectSlug + " || exit 1",
 	}
 	run := "gemini " + flags + " --session-id " + q(session.ID) + "; code=$?"
+	// THE SESSION'S RECORD OF TAKES EXISTS, EMPTY, BEFORE THE RUN: an empty
+	// record settles a take never recorded (its hook killed first) as absent
+	// once the job ends, and only a missing one, lost with its box, waits. The
+	// hook finds it in the run's environment, which Gemini CLI hands it whole.
+	if req.Steer.Set() {
+		takes := paths.GeminiTakes(session.ID)
+		lines = append(lines, "mkdir -p "+q(paths.GeminiTakesDir())+" && : >> "+q(takes)+" || exit 1")
+		run = geminiTakesEnv + "=" + q(takes) + " " + run
+	}
 	// A RUN WITH NO STANDING INSTRUCTIONS keeps Gemini CLI's own prompt as it
 	// is, so nothing is exported or named.
 	if geminiSystemText(GeminiCLI{}, req) != "" {
@@ -151,7 +165,7 @@ func (g GeminiCLI) WriteConfig(ctx context.Context, box sandbox.Sandbox, req san
 	}
 	hooked := req.Steer.Set() || len(req.Skills) > 0
 	if hooked {
-		take, err := geminiTakeConfig(req, paths)
+		take, err := geminiTakeConfig(req)
 		if err != nil {
 			return "", err
 		}
@@ -185,20 +199,6 @@ func (g GeminiCLI) WriteConfig(ctx context.Context, box sandbox.Sandbox, req san
 	for path, content := range files {
 		if err := box.WriteFile(ctx, path, content); err != nil {
 			return "", fmt.Errorf("executor: writing %s for Gemini CLI: %w", path, err)
-		}
-	}
-	if req.Steer.Set() {
-		// THE TAKES FILE EXISTS BEFORE THE RUN, so an empty one says nothing was
-		// handed over (a take whose hook was killed before its record reads
-		// absent once the job ends) and only a missing one reads undecided.
-		// Appended to, never truncated: an earlier job's takes in a reused box
-		// are still read ([GeminiCLI.readMainThread]).
-		res, err := box.Exec(ctx, ": >> "+sandbox.ShellQuote(paths.GeminiTakes()), sandbox.ExecOptions{})
-		if err == nil && res.ExitCode != 0 {
-			err = fmt.Errorf("exited %d: %s", res.ExitCode, strings.TrimSpace(res.Stderr))
-		}
-		if err != nil {
-			return "", fmt.Errorf("executor: creating Gemini CLI's record of takes: %w", err)
 		}
 	}
 	return "", nil
@@ -320,6 +320,6 @@ var _ artifactHolder = GeminiCLI{}
 // policy and project registry are rewritten by every Gemini CLI run and left
 // alone by every other harness's, since the image may keep its own there.
 func (GeminiCLI) artifacts(p Paths) (files, dirs []string) {
-	return []string{p.GeminiHelper(), p.GeminiTake(), p.GeminiTakeConfig(), p.GeminiTakes(),
+	return []string{p.GeminiHelper(), p.GeminiTake(), p.GeminiTakeConfig(),
 		p.GeminiDefaultSystem(), p.GeminiExportErr(), p.GeminiSystem()}, nil
 }

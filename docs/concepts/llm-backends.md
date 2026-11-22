@@ -2963,11 +2963,14 @@ each recorded in the Audit log as a `model_acted` row (refused ones too). A devi
 (approved, failed, expired or cancelled) is one more row, attributed to whoever started it.
 
 **One page, and a page per model.** The list shows every model's condition, sign-in and use, under
-the model alarms. Under it one card shows who runs on which model: Ask Crewlet, the Advisor, then
-every seat, each row with a picker (one picker per seat, or one per kind of work once split by job
-from the row's menu). A model is named by key and model ("sub-4 · Claude Opus 5.5"). A model's page
-has its sign-in, sit-out, last test, seven-day usage and every place that runs on it. Every member
-opens it; every change is an admin's.
+the model alarms and three figures: the models, how many are ready (every other one named by its
+condition) and, for an admin, the week's tokens. Under it **Who runs on which model** shows Ask
+Crewlet, the Advisor, then every seat, each row with a picker (one picker per seat, or one per kind
+of work once split by job from the row's menu). With no model, under the lede and any alarm, one
+card names the harnesses a model can run on and who waits for one, with Add model for an admin. A
+model is named by key and model ("sub-4 · Claude Opus 5.5"). A model's page has its sign-in,
+sit-out, last test, seven-day usage and every place that runs on it. Every member opens it; every
+change is an admin's.
 
 **Adding and editing a model is one wizard**, which writes the model and its uses as one revision:
 name and harness (both fixed once the model exists), sign-in, model and reasoning effort, where it
