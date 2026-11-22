@@ -336,6 +336,3 @@ func ReadGeminiSession(ctx context.Context, raw []byte, bounds TranscriptBounds)
 	}
 	return Transcript{Entries: b.entries, Places: b.places, From: b.from, Next: b.next, Cut: b.cut}, nil
 }
-
-// GeminiTakesEnv names a Gemini CLI run's record of takes to its hook.
-const GeminiTakesEnv = geminiTakesEnv

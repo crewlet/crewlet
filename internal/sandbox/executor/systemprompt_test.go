@@ -114,7 +114,7 @@ func TestAHarnessGivenNoSystemTextWritesAndPassesNothing(t *testing.T) {
 			b := sandbox.NewFakeSandbox("box-1")
 			p := executor.PathsFor(b)
 			req := sandbox.RunRequest{Brief: "fix the flake"}
-			config, err := cli.WriteConfig(t.Context(), b, req, p)
+			config, err := cli.WriteConfig(t.Context(), b, req, executor.Session{}, p)
 			if err != nil {
 				t.Fatalf("WriteConfig: %v", err)
 			}
