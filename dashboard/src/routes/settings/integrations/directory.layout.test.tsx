@@ -146,10 +146,10 @@ describe.each(["light", "dark"] as const)("on a %s document", (theme) => {
     async (width) => {
       await mount(width, theme, CATALOG);
       expect(drawn().slice(-4)).toEqual([
-        ["Mobile apps", ["Expo", "App Store Connect"]],
-        ["Advertising", ["Meta Ads Manager", "Apple Ads"]],
-        ["Analytics", ["Google Analytics"]],
-        ["Ad revenue", ["AdMob"]],
+        ["Mobile apps", ["Expo", "App Store Connect", "Google Play"]],
+        ["Advertising", ["Google Ads", "Meta Ads Manager", "Apple Ads"]],
+        ["Analytics", ["Google Analytics", "Search Console"]],
+        ["Ad revenue", ["AdSense", "AdMob"]],
       ]);
       expect(overflowing(host!)).toEqual([]);
     },

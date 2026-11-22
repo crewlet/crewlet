@@ -184,6 +184,10 @@ const SURFACE_NAMES: Record<string, string> = {
   apple_ads: "Apple Ads",
   google_analytics: "Google Analytics",
   admob: "AdMob",
+  adsense: "AdSense",
+  google_ads: "Google Ads",
+  search_console: "Search Console",
+  google_play: "Google Play",
 };
 
 /** One tool's surfaces, in the engine's grouping, named for this screen. */
@@ -296,6 +300,14 @@ export const CATALOG: Entry[] = [
     doc: "apple-ads",
   },
   {
+    key: "google_play",
+    name: "Google Play",
+    description: "Store listings, reviews and replies, releases, products, prices and vitals.",
+    vendor: "google-play",
+    surfaces: surfacesOf("google_play"),
+    doc: "google-play",
+  },
+  {
     key: "digitalocean",
     name: "DigitalOcean",
     description: "Droplets, Kubernetes, databases and DNS.",
@@ -344,6 +356,32 @@ export const CATALOG: Entry[] = [
     vendor: "google-admob",
     surfaces: surfacesOf("admob"),
     doc: "admob",
+  },
+  {
+    key: "adsense",
+    name: "AdSense",
+    description:
+      "Website earnings, sites, ad units, channels and policy alerts, and every setting the API offers.",
+    vendor: "google-adsense",
+    surfaces: surfacesOf("adsense"),
+    doc: "adsense",
+  },
+  {
+    key: "google_ads",
+    name: "Google Ads",
+    description: "Campaigns, budgets, bids, ads and reports, spend held to your caps.",
+    vendor: "google-ads",
+    surfaces: surfacesOf("google_ads"),
+    doc: "google-ads",
+  },
+  {
+    key: "search_console",
+    name: "Search Console",
+    description:
+      "Search performance, sitemaps, URL inspection, verification and Indexing API notices.",
+    vendor: "google-search-console",
+    surfaces: surfacesOf("search_console"),
+    doc: "google-search-console",
   },
 ];
 

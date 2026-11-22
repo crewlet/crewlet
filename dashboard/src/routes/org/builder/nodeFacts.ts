@@ -220,7 +220,11 @@ export type Tool =
   | "google_cloud"
   | "ssh"
   | "google_analytics"
-  | "admob";
+  | "admob"
+  | "adsense"
+  | "google_ads"
+  | "search_console"
+  | "google_play";
 
 /** How each tool is named on screen. */
 export const TOOL_NAMES: Readonly<Record<Tool, string>> = {
@@ -241,6 +245,10 @@ export const TOOL_NAMES: Readonly<Record<Tool, string>> = {
   ssh: "SSH",
   google_analytics: "Google Analytics",
   admob: "AdMob",
+  adsense: "AdSense",
+  google_ads: "Google Ads",
+  search_console: "Search Console",
+  google_play: "Google Play",
 };
 
 /**
