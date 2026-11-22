@@ -509,6 +509,10 @@ type Sources struct {
 	// every room with its whole history.
 	ChatReads ChatReads
 
+	// HomeBoards is where each person's Home board is kept, in coordination.
+	// Nil leaves `home_board` unregistered: this node keeps none.
+	HomeBoards HomeBoards
+
 	// WebhookBase is where a THIRD-PARTY APP reaches this deployment
 	// (`config.API.WebhookBase`: `api.public.external_url` where `api.public`
 	// is set, `api.external_url` otherwise), or nil when it cannot say.
@@ -820,6 +824,11 @@ func Register(r *Registry, s Sources) {
 	// no seat" is the answer a screen needs in order to say what to bind.
 	// Everybody's, since the answer is about the asker and nobody else.
 	r.Register("viewer", Everybody(), s.viewer)
+	// THE ASKER'S OWN HOME BOARD, everybody's for the viewer's reason, where
+	// this node reaches the store that keeps it.
+	if s.HomeBoards != nil {
+		r.Register("home_board", Everybody(), s.homeBoard)
+	}
 	if s.Catalogue != nil {
 		r.Register("llm_models", Requires(iam.GrantAdmin), s.llmModels)
 	}
