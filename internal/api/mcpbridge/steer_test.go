@@ -42,6 +42,7 @@ type fakeInbox struct {
 	calls   []*sandbox.NoteCall
 	cancels []sandbox.NoteCall
 	reads   [][]string
+	folds   [][]string
 	answer  string
 	readErr error
 }
@@ -84,6 +85,12 @@ func (i *fakeInbox) Read(_ context.Context, ids []string) error {
 	}
 	i.reads = append(i.reads, ids)
 	return i.readErr
+}
+
+func (i *fakeInbox) Folded(_ context.Context, ids []string) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.folds = append(i.folds, ids)
 }
 
 func (i *fakeInbox) Close() {
@@ -738,6 +745,66 @@ func TestAReadBodyIsCapped(t *testing.T) {
 	if res, err := f.server.Client().Get(url); err == nil {
 		if res.StatusCode != http.StatusMethodNotAllowed {
 			t.Errorf("a GET of read answered %d, want 405", res.StatusCode)
+		}
+		_ = res.Body.Close()
+	}
+}
+
+// A FOLD IS GATED LIKE A READ AND CARRIES IDS ALONE: behind the run's own
+// token (a forged or finished one is the bridge's 401 and the inbox is never
+// asked), its body bounded as a read's, and only the ids reach the inbox, so
+// no note's text can ride it into the engine's log, whatever the box sends.
+//
+// Mutation: answer `folded` before serveSteer's token routing, or skip its
+// body's bounds, and this goes red.
+func TestAFoldIsGatedLikeAReadAndCarriesIDsAlone(t *testing.T) {
+	t.Parallel()
+	f := newSteerFixture(t, time.Minute)
+	finished := newSteerFixture(t, time.Minute)
+	finished.bridge.Close("run-1")
+	post := func(url, body string) int {
+		res, err := f.server.Client().Post(url, "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = res.Body.Close()
+		return res.StatusCode
+	}
+	const withText = `{"ids":["n-1"],"message":"the note's own words"}`
+	for name, url := range map[string]string{
+		"forged":   f.server.URL + mcpbridge.PathPrefix + "v1.run-1.99999999999.x/steer/folded",
+		"finished": mcpbridge.SteerURL(finished.url) + "/folded",
+	} {
+		if got := post(url, withText); got != http.StatusUnauthorized {
+			t.Errorf("a fold under a %s token answered %d, want 401", name, got)
+		}
+	}
+	url := mcpbridge.SteerURL(f.url) + "/folded"
+	if got := post(url, `{"ids":[]}`); got != http.StatusBadRequest {
+		t.Errorf("a fold naming nothing answered %d, want 400", got)
+	}
+	if got := post(url, `{"ids":["`+strings.Repeat("a", 70<<10)+`"]}`); got != http.StatusRequestEntityTooLarge {
+		t.Errorf("a 70 KiB fold answered %d, want 413", got)
+	}
+	if got := post(url, withText); got != http.StatusNoContent {
+		t.Errorf("a fold answered %d, want 204", got)
+	}
+	f.inbox.mu.Lock()
+	folds, reads := slices.Clone(f.inbox.folds), slices.Clone(f.inbox.reads)
+	f.inbox.mu.Unlock()
+	finished.inbox.mu.Lock()
+	finishedFolds := len(finished.inbox.folds)
+	finished.inbox.mu.Unlock()
+	if len(folds) != 1 || !slices.Equal(folds[0], []string{"n-1"}) || finishedFolds != 0 {
+		t.Errorf("the inboxes were handed the folds %v and %d, want the one well-formed fold's id alone",
+			folds, finishedFolds)
+	}
+	if len(reads) != 0 {
+		t.Errorf("a fold recorded the reads %v", reads)
+	}
+	if res, err := f.server.Client().Get(url); err == nil {
+		if res.StatusCode != http.StatusMethodNotAllowed {
+			t.Errorf("a GET of folded answered %d, want 405", res.StatusCode)
 		}
 		_ = res.Body.Close()
 	}

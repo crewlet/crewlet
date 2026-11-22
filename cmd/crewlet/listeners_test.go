@@ -801,6 +801,8 @@ func (i *quietInbox) Wait(context.Context, int) ([]mcpbridge.SteerNote, <-chan s
 
 func (*quietInbox) Read(context.Context, []string) error { return nil }
 
+func (*quietInbox) Folded(context.Context, []string) {}
+
 func (*quietInbox) Close() {}
 
 // A DIRECT BOX DIALS THE LISTENER ITS NODE BOUND, ON LOOPBACK, ON EVERY NODE

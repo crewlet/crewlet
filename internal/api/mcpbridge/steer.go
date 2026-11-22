@@ -77,6 +77,12 @@ type SteerInbox interface {
 	// under, once it has taken every other note named.
 	Read(ctx context.Context, ids []string) error
 
+	// Folded says the notes named, which the job's harness gave up after a
+	// second compaction folded each into its summary: never confirmed, each
+	// waits for the review. It records nothing, and takes only a note the
+	// job holds; never blocks on the store.
+	Folded(ctx context.Context, ids []string)
+
 	// Close ends the inbox: its watch stops, every channel [SteerInbox.Wait]
 	// handed out closes, every later Take and Wait answers nothing, and every
 	// later Read [ErrNoteUntaken].
@@ -108,6 +114,11 @@ type SteerNote struct {
 	// Inbox is the id the harness admits the note under, unique to the note and
 	// the job, so a poller that admits it twice admits it once.
 	Inbox string `json:"inbox"`
+
+	// Again is the second id the harness may admit the note under, once, where
+	// a compaction folded its first admission; empty for an item served once
+	// (a wake, a run's message), which is never admitted again.
+	Again string `json:"again,omitempty"`
 
 	// Message is the note as the model reads it.
 	Message string `json:"message"`
@@ -207,7 +218,9 @@ func (b *Bridge) serveSteer(w http.ResponseWriter, r *http.Request, opened *bind
 		b.pollNotes(w, r, opened, inbox)
 	case verb == "read" && r.Method == http.MethodPost:
 		readNotes(w, r, opened, inbox)
-	case verb == "notes" || verb == "read":
+	case verb == "folded" && r.Method == http.MethodPost:
+		foldedNotes(w, r, inbox)
+	case verb == "notes" || verb == "read" || verb == "folded":
 		httpjson.Fail(w, http.StatusMethodNotAllowed, httpjson.CodeMethodNotAllowed)
 	default:
 		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
@@ -364,19 +377,8 @@ func writeNotes(w http.ResponseWriter, notes []SteerNote) {
 // note's key says it took the read nowhere ([ErrNoteUntaken]). The package
 // doc's "A note inbox" has why each is turned away.
 func readNotes(w http.ResponseWriter, r *http.Request, opened *binding, inbox SteerInbox) {
-	var body steerRead
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, steerReadBody))
-	if err := dec.Decode(&body); err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			httpjson.Fail(w, http.StatusRequestEntityTooLarge, httpjson.CodeBodyTooLarge)
-			return
-		}
-		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeInvalidBody)
-		return
-	}
-	if len(body.IDs) == 0 || len(body.IDs) > steerReadIDs {
-		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeInvalidBody)
+	body, ok := noteIDs(w, r)
+	if !ok {
 		return
 	}
 	if fence(opened.session) != nil {
@@ -394,6 +396,40 @@ func readNotes(w http.ResponseWriter, r *http.Request, opened *binding, inbox St
 				"reads any it never does")
 		httpjson.Unavailable(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(time.Second))
 	}
+}
+
+// noteIDs is a read's or a fold's body, its ids 1 to [steerReadIDs]; false
+// where it answered the request a refusal.
+func noteIDs(w http.ResponseWriter, r *http.Request) (steerRead, bool) {
+	var body steerRead
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, steerReadBody))
+	if err := dec.Decode(&body); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			httpjson.Fail(w, http.StatusRequestEntityTooLarge, httpjson.CodeBodyTooLarge)
+			return steerRead{}, false
+		}
+		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeInvalidBody)
+		return steerRead{}, false
+	}
+	if len(body.IDs) == 0 || len(body.IDs) > steerReadIDs {
+		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeInvalidBody)
+		return steerRead{}, false
+	}
+	return body, true
+}
+
+// foldedNotes hands the inbox the notes a fold names ([SteerInbox.Folded]):
+// ids only, behind the same token as a read, and answered 204 whatever the
+// inbox makes of them, since it records nothing the plugin could post again
+// for.
+func foldedNotes(w http.ResponseWriter, r *http.Request, inbox SteerInbox) {
+	body, ok := noteIDs(w, r)
+	if !ok {
+		return
+	}
+	inbox.Folded(r.Context(), body.IDs)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // Shutdown releases every poll for notes this bridge holds — one it serves from

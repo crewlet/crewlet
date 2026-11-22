@@ -2007,6 +2007,8 @@ func (h *heldInbox) Wait(context.Context, int) ([]mcpbridge.SteerNote, <-chan st
 
 func (h *heldInbox) Read(context.Context, []string) error { return mcpbridge.ErrNoteUntaken }
 
+func (h *heldInbox) Folded(context.Context, []string) {}
+
 func (h *heldInbox) Close() {
 	h.enter.Do(func() { close(h.closing) })
 	<-h.release

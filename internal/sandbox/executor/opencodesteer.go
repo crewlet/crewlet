@@ -34,8 +34,8 @@ func (OpenCode) inboxID(launch, noteID string) string {
 const openCodePollCeiling = 1 << 20
 
 // pluginConfirms reports that OpenCode's plugin confirms each note itself: it
-// posts the note's id to the bridge's read route off OpenCode's own delivery
-// event (opencode_steer.js).
+// posts the note's id to the bridge's read route once OpenCode's context hook
+// shows a model request carrying it plain (opencode_steer.js).
 func (OpenCode) pluginConfirms() bool { return true }
 
 // pollCeiling is [openCodePollCeiling].

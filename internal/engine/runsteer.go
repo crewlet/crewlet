@@ -2253,12 +2253,61 @@ func (i *runInbox) Wait(ctx context.Context, after int) ([]mcpbridge.SteerNote, 
 		if o.held.Served != launch && !served[o.held.ID] {
 			break
 		}
-		out = append(out, mcpbridge.SteerNote{
+		note := mcpbridge.SteerNote{
 			Seq: o.held.Seq, ID: o.held.ID, Inbox: executor.InboxID(i.harness, launch, o.held.ID),
 			Message: messages[k],
-		})
+		}
+		if readmittable(o.held, launch) {
+			note.Again = executor.AgainID(i.harness, launch, o.held.ID)
+		}
+		out = append(out, note)
 	}
 	return out, changed
+}
+
+// pollAdmissions is how many times a poll's harness may admit one item to a
+// job: under its inbox id, and once more under its `again` id where a
+// compaction folded the first ([mcpbridge.SteerNote.Again]). OpenCode answers
+// a repeat admission under a held id with the first, so however often the item
+// is polled the two ids are every admission there can be.
+const pollAdmissions = 2
+
+// readmittable reports whether a poll serves n its `again` id: where its serve
+// budget for the job ([sandbox.RunNote.MaxServes]) holds both admissions beside
+// the serves the record already holds there, so the bound holds across both
+// ids. A person's note or a late call's item, unserved, has room; a wake item,
+// a run's message among them, is served once ([sandbox.MaxWakeServes]) and
+// never admitted again: folded, it runs as a turn after the run.
+func readmittable(n sandbox.RunNote, launch string) bool {
+	held := 0
+	for _, s := range n.Serves {
+		if s.Launch == launch {
+			held++
+		}
+	}
+	return held+pollAdmissions <= n.MaxServes()
+}
+
+// Folded says each note named that the job's harness gave up after a second
+// compaction folded it, once a note — see [mcpbridge.SteerInbox]. Only a note
+// the job holds, by its id: the log carries no word of the note's.
+func (i *runInbox) Folded(ctx context.Context, ids []string) {
+	launch, watch := i.bound()
+	if launch == "" {
+		return
+	}
+	_, opened, _ := watch.snapshot()
+	for _, o := range forJob(opened, launch) {
+		if !slices.Contains(ids, o.held.ID) {
+			continue
+		}
+		turn, id := i.ident.turn.TurnID, o.held.ID
+		i.steers.warnOnce(turn, "folded/"+id, func() {
+			log.WarnContext(ctx, "steer_note_folded", "turn_id", turn, "launch_id", launch, "note_id", id,
+				"detail", "the run's harness compacted twice over the note, so its model was never handed "+
+					"it as a current instruction; it waits for the review")
+		})
+	}
 }
 
 // Read records the notes named read at the run's next step, and publishes them
