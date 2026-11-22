@@ -799,8 +799,8 @@ type Requests struct {
 	// hands the server its own id for the call under — the id the record's
 	// call paths read — so the engine joins a call to the request that asked
 	// for it by id: `claudecode/toolUseId` for Claude Code, `callId` for
-	// Codex and Muse Code. Empty: the harness sends none, and a call is joined
-	// by its name and arguments.
+	// Codex and Muse Code, `com.github.copilot/toolCallId` for Copilot. Empty:
+	// the harness sends none, and a call is joined by its name and arguments.
 	CallIDMeta string `yaml:"call_id_meta,omitempty"`
 
 	// HostPrefix is how the harness spells one of the server's tools to its

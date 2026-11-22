@@ -19,7 +19,7 @@ import (
 
 // memoTake scrubs archive, of layout, as a take does under use (nil: no
 // memo), and is what it kept, read back ([unpacked]), and how many times it
-// reopened the archive: once for a take that read its first reading once.
+// read the archive: once for a take that read its first reading once.
 func memoTake(t *testing.T, layout archiveLayout, archive []byte, s scrubber, use *memoUse) (string, int) {
 	t.Helper()
 	kept, opened, err := scrubTake(layout, archive, s, use)
@@ -29,8 +29,8 @@ func memoTake(t *testing.T, layout archiveLayout, archive []byte, s scrubber, us
 	return unpacked(t, layout, kept), opened
 }
 
-// scrubTake is [memoTake]'s scrub: what it kept, how many times it reopened
-// the archive, and its error.
+// scrubTake is [memoTake]'s scrub: what it kept, how many times it read the
+// archive (its first reading, and each it read again), and its error.
 func scrubTake(layout archiveLayout, archive []byte, s scrubber, use *memoUse) ([]byte, int, error) {
 	opened := 0
 	reopen := func() (io.ReadCloser, error) {
@@ -39,7 +39,7 @@ func scrubTake(layout archiveLayout, archive []byte, s scrubber, use *memoUse) (
 	}
 	var out bytes.Buffer
 	err := scrubArchive(layout, bytes.NewReader(archive), reopen, &out, s, testBounds.remembering(use))
-	return out.Bytes(), opened, err
+	return out.Bytes(), opened + 1, err
 }
 
 // unpacked is a kept archive as text: an export's document, or each member of
@@ -101,11 +101,9 @@ func userLine(text string) string {
 // whole-PDF read, taken twice by one process, keeps the same bytes as a take
 // with no memo, and the second take's first reading has the memo answer for
 // both of the read's texts (each copy of its base64; the first take, for the
-// second copy), the line read as JSON alone, while its second reading
-// writes both copies a chunk at a time as planned, without the memo.
+// second copy), the line read as JSON alone.
 //
-// Mutation: never look the memo up, or have the second reading look it up
-// (a first reading's stage), and the hits or the checked texts go red.
+// Mutation: never look the memo up, and the hits go red.
 func TestATextATakeFoundUnchangedIsNotRedactedAgain(t *testing.T) {
 	t.Parallel()
 	archive := tarOf(t, map[string]string{"projects/p/s.jsonl": pdfLine(1, 400<<10) + "\n"})
@@ -120,8 +118,8 @@ func TestATextATakeFoundUnchangedIsNotRedactedAgain(t *testing.T) {
 			t.Errorf("take %d kept other bytes than a take with no memo", take+1)
 		case opened != 1:
 			t.Errorf("take %d read its first reading %d times, want once", take+1, opened)
-		case use.n.hits != hits || use.n.checked != 2 || use.n.diverged != 0:
-			t.Errorf("take %d: %+v; want %d hits, both copies checked and none diverged", take+1, use.n, hits)
+		case use.n.hits != hits || use.n.diverged != 0:
+			t.Errorf("take %d: %+v; want %d hits and none diverged", take+1, use.n, hits)
 		}
 	}
 }
@@ -155,8 +153,9 @@ func memoVariant(t *testing.T, seed uint64, v int) (tarArchive, export []byte) {
 // random order under one memo, each keep exactly what a take with no memo
 // keeps, and none keeps the key one of them holds past a shared chunk.
 //
-// Mutation: plan a text the redaction changed, or have the second reading drop
-// a text's last short chunk, and a take keeps a key or other bytes.
+// Mutation: keep a text the redaction changed in the memo, or check a text
+// the memo answered for by its length alone, and a take keeps a key or other
+// bytes.
 func TestTheMemoChangesNoByteOfAKeptSession(t *testing.T) {
 	t.Parallel()
 	s := newScrubber([]string{"cloudhost"})
@@ -181,27 +180,6 @@ func TestTheMemoChangesNoByteOfAKeptSession(t *testing.T) {
 				}
 			}
 		}
-	}
-}
-
-// A PLANNED TEXT OF A CUT DEFINITION COSTS NO LATER TEXT ITS CHECK: a loaded
-// tool definition whose large description the first reading planned is cut in
-// the second, which never reaches that text; the whole-PDF read after it still
-// has both copies of its base64 written as planned, and the take keeps what a
-// take with no memo keeps.
-//
-// Mutation: drop the second reading's passing over of a planned text it went
-// past, and neither copy is checked.
-func TestAPlannedTextOfACutDefinitionCostsNoLaterTextItsCheck(t *testing.T) {
-	t.Parallel()
-	tool := `{"type":"attachment","uuid":"u-2","attachment":{"type":"deferred_tools_record","entries":[` +
-		`{"name":"mcp__cloudhost__x","description":"` + randomBase64(13, 300<<10) + `"}]}}`
-	archive := tarOf(t, map[string]string{"projects/p/s.jsonl": tool + "\n" + pdfLine(13, 300<<10) + "\n"})
-	s := newScrubber([]string{"cloudhost"})
-	want, _ := memoTake(t, archiveTar, archive, s, nil)
-	use := &memoUse{memo: newScrubMemo(), scope: "agent-a"}
-	if got, _ := memoTake(t, archiveTar, archive, s, use); got != want || use.n.checked != 2 {
-		t.Errorf("%+v, kept as with no memo: %t; want both copies of the read checked", use.n, got == want)
 	}
 }
 
@@ -300,54 +278,6 @@ func TestATextThatDivergedCostsNoOtherTextItsAnswer(t *testing.T) {
 		use.n.diverged != 1 || use.n.hits != 2 {
 		t.Errorf("%+v, reopened %d times; want the output diverged, one reading again, the read's 2 answered",
 			use.n, opened)
-	}
-}
-
-// A TEXT THE SECOND READING FINDS CHANGED FAILS THE TAKE, AND NOTHING OF THE
-// CHUNK THAT DIFFERS IS WRITTEN: a planned text is written a chunk at a time,
-// each once it matches its digest, so a box that rewrote a text between the
-// readings has the take refused as a changed member, or export, and only the
-// chunks before the change were handed on.
-//
-// Mutation: check the digests only at the text's close, and the changed chunk
-// is written.
-func TestATextTheSecondReadingFindsChangedFailsTheTake(t *testing.T) {
-	t.Parallel()
-	text := []byte(randomBase64(10, 3*scrubPieceBaseBytes+100))
-	in := newPieceDigests(true)
-	_, _ = in.Write(text)
-	in.finish()
-	changed := bytes.Clone(text)
-	changed[2*scrubPieceBaseBytes+5] ^= 1
-	var out bytes.Buffer
-	var buf []byte
-	piece := &checkedPiece{digests: in.list, out: &textOut{w: &out}, buf: &buf}
-	_, err := piece.Write(changed)
-	if err == nil {
-		err = piece.Close()
-	}
-	if !errors.Is(err, errPieceChanged) || !bytes.Equal(out.Bytes(), text[:2*scrubPieceBaseBytes]) {
-		t.Errorf("a text changed in its third chunk answered %v and wrote %d bytes; want it refused after the "+
-			"first two chunks, %d bytes", err, out.Len(), 2*scrubPieceBaseBytes)
-	}
-
-	before, after := string(text[:len(text)-100]), string(changed[:len(changed)-100])
-	s := newScrubber(nil)
-	readings := [][2][]byte{
-		{tarOf(t, map[string]string{"projects/p/s.jsonl": userLine(before) + "\n"}),
-			tarOf(t, map[string]string{"projects/p/s.jsonl": userLine(after) + "\n"})},
-		{tarOf(t, map[string]string{"out.txt": before}), tarOf(t, map[string]string{"out.txt": after})},
-	}
-	for _, r := range readings {
-		err := scrubTar(bytes.NewReader(r[0]), reopenOf(r[1]), io.Discard, s, testBounds)
-		if err == nil || !strings.Contains(err.Error(), "changed its member") {
-			t.Errorf("a member rewritten between the readings: %v, want it refused as changed", err)
-		}
-	}
-	err = scrubDocument(bytes.NewReader(gzipOf(t, `{"t":"`+before+`"}`)), reopenOf(gzipOf(t, `{"t":"`+after+`"}`)),
-		io.Discard, s, testBounds)
-	if err == nil || !strings.Contains(err.Error(), "export changed") {
-		t.Errorf("an export rewritten between the readings: %v, want it refused as changed", err)
 	}
 }
 

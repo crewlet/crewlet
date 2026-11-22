@@ -111,21 +111,6 @@ func kimiLineType(line []byte) string {
 	return typed.Type
 }
 
-// lastByte is r, remembering the last byte it handed out.
-type lastByte struct {
-	r    io.Reader
-	last byte
-	read bool
-}
-
-func (l *lastByte) Read(p []byte) (int, error) {
-	n, err := l.r.Read(p)
-	if n > 0 {
-		l.last, l.read = p[n-1], true
-	}
-	return n, err
-}
-
 // notesHeld is the inbox ids of takes ([Kimi.inboxID]) whose note the box's
 // copy of session's main agent record shows reached the model
 // ([kimiNotesHeld]): its [recordConfirmer], as its driver confirms nothing.
