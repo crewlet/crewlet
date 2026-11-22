@@ -305,14 +305,21 @@ func writeCodexNoteHelper(ctx context.Context, box sandbox.Sandbox, paths Paths)
 
 // writeCodexSkills writes each of a run's skills as
 // `<skills>/<listed name>/SKILL.md` ([Paths.CodexSkills]), after removing
-// every skill an earlier run wrote there, so a reused box lists only this
-// run's. The note helper reports each load ([codexStartHelper]): Codex reads
+// every entry there but Codex's own `.system`, whatever wrote it, so a run
+// lists only its own. The note helper reports each load ([codexStartHelper]): Codex reads
 // a skill's file through its shell, which the helper sees off the app-server
 // and holds to the digest of the file as written ([codexSkillDigests]).
 func writeCodexSkills(ctx context.Context, box sandbox.Sandbox, skills []sandbox.Skill, paths Paths) error {
-	if _, err := box.Exec(ctx, "rm -rf "+shellword.Quote(paths.CodexSkills())+"/"+
-		shellword.Quote(sandbox.SkillNamespace+":")+"*", sandbox.ExecOptions{}); err != nil {
-		return fmt.Errorf("executor: removing an earlier run's Codex skills: %w", err)
+	// EVERY SKILL BUT THE RUN'S AND CODEX'S OWN `.system`: Codex lists each
+	// directory under its skills, so the run's skills are all a run lists.
+	skillsDir := shellword.Quote(paths.CodexSkills())
+	clear := "[ ! -d " + skillsDir + " ] || find " + skillsDir + " -mindepth 1 -maxdepth 1 ! -name .system -exec rm -rf {} +"
+	res, err := box.Exec(ctx, clear, sandbox.ExecOptions{})
+	if err == nil && res.ExitCode != 0 {
+		err = fmt.Errorf("exit %d: %s", res.ExitCode, firstLine(res.Stderr, transcriptDetailLimit))
+	}
+	if err != nil {
+		return fmt.Errorf("executor: clearing the skills an earlier run left in the Codex home: %w", err)
 	}
 	for _, s := range skills {
 		file, err := skillFile(s.Listed(), s.Description, s.Body)

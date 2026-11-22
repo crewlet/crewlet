@@ -143,6 +143,12 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 	b.WriteString(codexReleaseRefusal())
 	line(`mkdir -p %s %s && chmod 700 %s || exit 1`, q(paths.CodexHome()), q(paths.CodexSessions()),
 		q(paths.CodexHome()))
+	starts := paths.CodexStartsWithout()
+	for i, path := range starts {
+		starts[i] = q(path)
+	}
+	line(`rm -rf %s || { echo 'crewlet: the run could not clear its Codex home of what it starts without' >&2; exit 1; }`,
+		strings.Join(starts, " "))
 	line(`apid= hpid= tpid= gpid= tid= before=0 r=`)
 	// stop: the watcher, the helper, then the app-server, TERM again on each
 	// probe: on TERM it finishes the running turn first, and a second TERM
