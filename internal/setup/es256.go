@@ -12,6 +12,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/es256"
 )
 
 // An ES256 signing key the engine mints and holds, and the public half it
@@ -43,9 +45,10 @@ func mintES256() (string, error) {
 // errNotES256 is a value that is not one PKCS#8 PEM block holding a P-256 key.
 var errNotES256 = errors.New("not an ES256 private key: one PKCS#8 PEM block holding a P-256 key")
 
-// parseES256 reads value as [mintES256] writes it.
+// parseES256 reads value as [mintES256] writes it, its line breaks as
+// [es256.NormalisePEM] restores them.
 func parseES256(value string) (*ecdsa.PrivateKey, error) {
-	block, rest := pem.Decode([]byte(strings.TrimSpace(value)))
+	block, rest := pem.Decode([]byte(es256.NormalisePEM(value)))
 	if block == nil || block.Type != pemPrivateKey || len(strings.TrimSpace(string(rest))) > 0 {
 		return nil, errNotES256
 	}

@@ -582,3 +582,19 @@ func TestATaskKeyIsUpperCasedWhereverItIsTyped(t *testing.T) {
 			"nothing about why", q.References)
 	}
 }
+
+// A STATUS GROUP THE GRAMMAR REFUSES IS TOLD WITH THE FOUR IT TAKES, so a
+// caller guessing "open" (a model asking for the open work) can ask again
+// with one of them. Mutation: refuse without naming them, and this fails.
+func TestAnUnknownStatusGroupIsRefusedNamingTheFour(t *testing.T) {
+	t.Parallel()
+	_, err := worklet.ParseQuery(worklet.MapParams{"status_group": "open"}, time.Now(), time.UTC)
+	if err == nil {
+		t.Fatal("status_group=open was taken")
+	}
+	for _, g := range worklet.StatusGroups {
+		if !strings.Contains(err.Error(), string(g)) {
+			t.Errorf("refusal %q does not name %s", err, g)
+		}
+	}
+}
