@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -248,6 +249,37 @@ func endsAudited(q *queuememory.Queue) []types.ModelActed {
 		}
 	}
 	return out
+}
+
+// A DEVICE SIGN-IN'S DETAIL IS CUT TO FIT ITS RECORD: a harness whose login
+// fails with 64 KiB of output ends its session with the head of that line,
+// marked as cut, in a record within SmallValueBytes, which every node's watch
+// and status read carry inside the read term.
+//
+// Mutation: write the detail whole, and the session's end is refused.
+func TestADeviceSignInsDetailIsCutToFitItsRecord(t *testing.T) {
+	t.Parallel()
+	fleet, leases := coordmemory.NewFleet(), coordmemory.New()
+	login := &fakeDeviceLogin{finish: make(chan error, 1)}
+	one := signInNode(t, fleet, leases, "node-1", login)
+	started, err := one.StartDeviceSignIn(t.Context(), "codex-review", person)
+	if err != nil {
+		t.Fatalf("StartDeviceSignIn: %v", err)
+	}
+	said := "codex: login failed: " + strings.Repeat("<", 64<<10)
+	login.finish <- errors.New(said)
+	ended := statusOn(t, one, started.ID, coord.DeviceFailed)
+	stored, found, err := fleet.DeviceSignIn(t.Context(), "codex-review")
+	if err != nil || !found || stored.ID != ended.ID {
+		t.Fatalf("the session's record = %+v (found %v, %v)", stored, found, err)
+	}
+	raw, err := json.Marshal(stored)
+	if err != nil || len(raw) > coord.SmallValueBytes {
+		t.Fatalf("the session is stored as %d bytes (%v), past %d", len(raw), err, coord.SmallValueBytes)
+	}
+	if head, cut := strings.CutSuffix(stored.Detail, "…"); !cut || head == "" || !strings.HasPrefix(said, head) {
+		t.Errorf("the session's detail = %.80q…, want the head of the harness's line, marked as cut", stored.Detail)
+	}
 }
 
 // HOW A DEVICE SIGN-IN ENDED IS IN THE AUDIT TRAIL, as the person's who

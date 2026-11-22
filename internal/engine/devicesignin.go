@@ -469,7 +469,7 @@ func (e *Engine) updateDeviceSignIn(ctx context.Context, key string, id uuid.UUI
 		if !change(&next) {
 			return held, nil
 		}
-		stored, ok, err := fleet.UpdateDeviceSignIn(ctx, next)
+		stored, ok, err := fleet.UpdateDeviceSignIn(ctx, signInWithin(next))
 		if err != nil {
 			return coord.DeviceSignIn{}, err
 		}
@@ -478,6 +478,19 @@ func (e *Engine) updateDeviceSignIn(ctx context.Context, key string, id uuid.UUI
 		}
 	}
 	return coord.DeviceSignIn{}, fmt.Errorf("%w: the session record of %s kept moving", coord.ErrUnavailable, key)
+}
+
+// signInWithin is s with its Detail cut to half as many bytes again, marked,
+// until the record fits [coord.SmallValueBytes]: a harness's failure line is
+// useful at its head, and a record past the bound is refused. One whose
+// address or code alone is past it stays past it, and is refused.
+func signInWithin(s coord.DeviceSignIn) coord.DeviceSignIn {
+	out := s
+	for detail := len(s.Detail); out.EncodedSize() > coord.SmallValueBytes && detail > 0; {
+		detail /= 2
+		out.Detail = textcut.Within(s.Detail, detail)
+	}
+	return out
 }
 
 // endDeviceSignIn records how a session ended: approved (its login sealed and
