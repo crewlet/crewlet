@@ -18,6 +18,7 @@ import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
 import { relTime } from "~/lib/format.ts";
 import { repoRoot } from "~/test/engineFiles.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { FrameReadings } from "~/app/Shell.tsx";
@@ -27,7 +28,8 @@ import { ASSISTANT_PROTOCOL_VERSION } from "~/contract/assistant.ts";
 import { resetPageContextForTest, setFramePage } from "../context.ts";
 import { assistantActivity } from "../status.ts";
 import { on as onBus } from "../bus.ts";
-import { queueQuestion, takeQueuedQuestion } from "../control.ts";
+import { queueAbout, queueQuestion, takeQueuedQuestion } from "../control.ts";
+import { readTab, writeTab } from "../tab.ts";
 import {
   attachClosedFor,
   type AssistantModelProblem,
@@ -347,6 +349,243 @@ test("a question queued from elsewhere is asked once the panel draws", async () 
   const turn = sent.find((r) => new URL(r.url).pathname.endsWith("/turns"))!;
   expect(JSON.parse(String(turn.init.body)).input).toEqual({ text: "Who spent most this week?" });
   expect(takeQueuedQuestion()).toBeNull();
+});
+
+/** A conversation this tab was on before a reload, which the drawer reopens as it mounts. */
+const SAVED = "403212ed-5a4a-586d-8af6-0000000000aa";
+
+/**
+ * The engine for the cases that hold two conversations: each create answers
+ * a conversation of its own, and every turn is recorded under the one its
+ * address names.
+ */
+function engineOfMany() {
+  const created: string[] = [];
+  const turns: { conversation: string; body: Record<string, unknown> }[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init: RequestInit) => {
+      const path = new URL(url).pathname;
+      if (path === "/assistant/conversations" && init.method === "POST") {
+        const id = `403212ed-5a4a-586d-8af6-${String(created.length + 1).padStart(12, "0")}`;
+        created.push(id);
+        const at = "2026-10-24T09:41:00Z";
+        return json(
+          {
+            conversation: { id, title: "", created_at: at, updated_at: at, last_activity_at: at },
+          },
+          201,
+        );
+      }
+      const upload = /^\/assistant\/conversations\/([^/]+)\/files$/.exec(path);
+      if (upload) {
+        const file = `f-${upload[1]!.slice(-1)}`;
+        const download = `/assistant/conversations/${upload[1]!}/files/${file}`;
+        return json(
+          {
+            file: {
+              file_id: file,
+              name: "settings.png",
+              media_type: "image/png",
+              size: 4,
+              download,
+            },
+          },
+          201,
+        );
+      }
+      if (path === `/assistant/conversations/${SAVED}` && init.method !== "POST") {
+        const at = "2026-10-24T09:00:00Z";
+        return json({
+          conversation: {
+            id: SAVED,
+            title: "Earlier",
+            created_at: at,
+            updated_at: at,
+            last_activity_at: at,
+          },
+          messages: [
+            { id: "q0", turn_id: "t0", role: "user", text: "An earlier question", created_at: at },
+          ],
+          steps: [],
+          cards: [],
+          open_turn: null,
+          audit_reads: [],
+          turns: [{ turn_id: "t0", state: "completed" }],
+        });
+      }
+      const turn = /^\/assistant\/conversations\/([^/]+)\/turns$/.exec(path);
+      if (turn) {
+        turns.push({ conversation: turn[1]!, body: JSON.parse(String(init.body)) });
+        return json(
+          {
+            turn_id: TURN,
+            stream_url: `/assistant/conversations/${turn[1]!}/stream?turn=${TURN}`,
+            after_seq: 0,
+          },
+          202,
+        );
+      }
+      if (path.endsWith("/stream")) {
+        return new Response(FIRST, {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" },
+        });
+      }
+      return json({ error: "not_found" }, 404);
+    }),
+  );
+  return { created, turns };
+}
+
+const TASKS = {
+  screen: "worklet-tasks",
+  title: "Worklet › Tasks",
+  path: ["worklet", "tasks"],
+  params: {},
+  query: {},
+};
+
+/** Ask `text` in the panel's own box, and wait for its turn to be sent. */
+async function askInBox(text: string, turns: () => number) {
+  const box = screen.getByRole("textbox", { name: "Ask Crewlet" });
+  const before = turns();
+  fireEvent.change(box, { target: { value: text } });
+  await act(async () => {
+    fireEvent.keyDown(box, { key: "Enter" });
+  });
+  await waitFor(() => expect(turns()).toBe(before + 1));
+}
+
+// ASK CREWLET ABOUT THIS IS A NEW CONVERSATION, whatever the panel held: the
+// question about a message goes to a conversation of its own, with the page
+// it was asked on, and the one open before stays in history as it was. A
+// question typed elsewhere (the palette) stays in the conversation open.
+//
+// Mutation: drop the `fresh` branch in the panel, and the question about the
+// message is put in the first conversation's box instead.
+test("a question about something on screen starts a new conversation; the palette's stays", async () => {
+  const { created, turns } = engineOfMany();
+  setFramePage(TASKS);
+  mount();
+  await askInBox("Fix the flaky sign-in test", () => turns.length);
+  await waitFor(() => expect(conversation().turns[0]?.phase).toBe("awaiting_approval"));
+  const first = conversation().id;
+  expect(first).toBe(created[0]);
+
+  // The palette's question waits in the open conversation's box while its turn waits.
+  act(() => queueQuestion("Who spent most this week?"));
+  const box = () => screen.getByRole("textbox", { name: "Ask Crewlet" }) as HTMLTextAreaElement;
+  await waitFor(() => expect(box().value).toBe("Who spent most this week?"));
+  expect(conversation().id).toBe(first);
+  expect(created).toHaveLength(1);
+
+  setFramePage({
+    screen: "chatlet-room",
+    title: "Chat › general",
+    path: ["chat", "general"],
+    params: {},
+    query: {},
+  });
+  act(() => queueAbout("Help me with this message from Ada Lovelace: #/chat/general", true));
+  await waitFor(() => expect(turns).toHaveLength(2));
+  expect(created).toHaveLength(2);
+  expect(turns[1]!.conversation).toBe(created[1]);
+  expect(turns[1]!.body).toMatchObject({
+    input: { text: "Help me with this message from Ada Lovelace: #/chat/general" },
+    page_context: { screen: "chatlet-room", title: "Chat › general" },
+  });
+  await waitFor(() => expect(conversation().id).toBe(created[1]));
+  expect(conversation().turns.map((t) => t.question)).toEqual([
+    "Help me with this message from Ada Lovelace: #/chat/general",
+  ]);
+});
+
+// A QUESTION A SCREEN OFFERS waits in a NEW conversation's box, with the page
+// attached again even where the reader had taken it off the last question,
+// and nothing is sent for them.
+test("a question a screen offers waits in a new conversation's box, with its page", async () => {
+  const { created, turns } = engineOfMany();
+  setFramePage(TASKS);
+  mount();
+  await askInBox("Fix the flaky sign-in test", () => turns.length);
+  await waitFor(() => expect(conversation().id).toBe(created[0]));
+  fireEvent.click(
+    screen.getByRole("button", { name: "Remove Worklet › Tasks from this question" }),
+  );
+
+  act(() => queueAbout("What does this finding rest on?", false));
+  const box = () => screen.getByRole("textbox", { name: "Ask Crewlet" }) as HTMLTextAreaElement;
+  await waitFor(() => expect(box().value).toBe("What does this finding rest on?"));
+  expect(conversation().id).toBeNull();
+  expect(conversation().turns).toEqual([]);
+  expect(readTab().conversation).toBeNull();
+  expect(
+    screen.getByRole("button", { name: "Remove Worklet › Tasks from this question" }),
+  ).toBeDefined();
+  expect(turns).toHaveLength(1);
+  expect(created).toHaveLength(1);
+});
+
+// A QUESTION ABOUT A SCREEN TAKES NONE OF THE BOX'S IMAGES: they are files of
+// the conversation just left, which the engine refuses in another.
+// Mutation: let it take the composer's images, and its turn names the last
+// conversation's file.
+test("a question about something on screen carries none of the images waiting in the box", async () => {
+  const { created, turns } = engineOfMany();
+  vi.stubGlobal(
+    "URL",
+    Object.assign(URL, { createObjectURL: () => "blob:local/1", revokeObjectURL: () => {} }),
+  );
+  mount();
+  const box = screen.getByRole("textbox", { name: "Ask Crewlet" });
+  const shot = new File([new Uint8Array([137, 80, 78, 71])], "settings.png", { type: "image/png" });
+  await act(async () => {
+    fireEvent.paste(box, { clipboardData: { files: [shot], getData: () => "" } });
+  });
+  await waitFor(() =>
+    expect(document.querySelector(".crewlet-attachment-chip--ready")).not.toBeNull(),
+  );
+  expect(created).toHaveLength(1);
+
+  act(() => queueAbout("Help me with this message from Ada Lovelace: #/chat/general", true));
+  await waitFor(() => expect(turns).toHaveLength(1));
+  expect(turns[0]!.conversation).toBe(created[1]);
+  expect(turns[0]!.body.attachments).toBeUndefined();
+});
+
+// A QUESTION ABOUT A SCREEN ASKED AS THE PANEL FIRST OPENS wins over the
+// conversation the tab was on, which the panel reopens as it mounts: that
+// read, answered late, does not take the new conversation's place.
+test("a question about something on screen asked as the panel opens beats the tab's saved one", async () => {
+  engineOfMany();
+  writeTab({ conversation: SAVED });
+  act(() => queueAbout("What does this finding rest on?", false));
+  mount();
+  const box = () => screen.getByRole("textbox", { name: "Ask Crewlet" }) as HTMLTextAreaElement;
+  await waitFor(() => expect(box().value).toBe("What does this finding rest on?"));
+  // Every answer the mount's reads were given has been taken.
+  await afterMicrotasks();
+  expect(conversation().id).toBeNull();
+  expect(conversation().turns).toEqual([]);
+  expect(readTab().conversation).toBeNull();
+  expect(screen.queryByText("An earlier question")).toBeNull();
+});
+
+// THE PANEL OPENED AGAIN is the conversation it held: closing it is not
+// starting over, and nothing about a screen was asked.
+test("the panel opened again resumes the conversation it held", async () => {
+  const { created, turns } = engineOfMany();
+  const first = mount();
+  await askInBox("Fix the flaky sign-in test", () => turns.length);
+  await waitFor(() => expect(conversation().id).toBe(created[0]));
+  first.unmount();
+  mount();
+  await act(async () => {});
+  expect(conversation().id).toBe(created[0]);
+  expect(screen.getByRole("article", { name: "You said" }).textContent).toContain(
+    "Fix the flaky sign-in test",
+  );
 });
 
 // THE BODY IS FLUSH ONLY FOR THE THREAD, which scrolls itself. The offline

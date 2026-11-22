@@ -357,10 +357,11 @@ export function Composer({
   // which is a field of the room's draft it can propose text for. It never
   // sends; the words land in the box for the person to change and send.
   const draft = () =>
-    assistant.ask(
+    assistant.askAbout(
       threadRoot
         ? "Draft a reply for the thread I have open, in the reply box."
         : `Draft a message for me in ${label.replace(/^Message /, "")}, in the message box.`,
+      { send: true },
     );
 
   return (

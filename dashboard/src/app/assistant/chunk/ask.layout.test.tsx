@@ -1,7 +1,8 @@
 /**
  * ASK CREWLET, LAID OUT: an answer's words read at a measure while its table
- * takes the thread's width, and the page's list keeps its head and its titles
- * readable at a tablet's width.
+ * takes the thread's width, the page's conversation reads in one centred
+ * column that the question, the answer and the composer share, and the
+ * page's list keeps its head and its titles readable at a tablet's width.
  */
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { page } from "vitest/browser";
@@ -45,20 +46,31 @@ const WORDS =
   );
 const TABLE = `| Seat | Open | Held | Waiting on | Last moved |\n|---|---|---|---|---|\n| agent-cto | 2 | 2 | the architecture review of the storage engine | yesterday afternoon |\n| agent-swe | 3 | 0 | nothing | an hour ago |`;
 
-// A MEASURE ON WORDS, NOT ON A TABLE. Mutation: let the app's `.prose` rule
-// size the kit's Prose again, or bound the whole answer, and either the words
-// run 110 characters a line or the table is cut to a column of prose.
-test("an answer's words read at the narrow measure while its table takes the thread's width", async () => {
+/** The width `length` resolves to inside `el`, at its type: `var(--size-measure)` is in `ch`. */
+function widthOf(el: Element, length: string): number {
+  const probe = document.createElement("div");
+  probe.style.cssText = `width: ${length}; height: 0;`;
+  el.append(probe);
+  const width = probe.getBoundingClientRect().width;
+  probe.remove();
+  return width;
+}
+
+// A MEASURE ON WORDS, NOT ON A TABLE, and the kit's reading measure, as its
+// Prose and its reading pane read. Mutation: let the app's `.prose` rule size
+// the kit's Prose again, or bound the whole answer, and either the words run
+// the app's 78ch or the table is cut to a column of prose; put the narrow
+// measure back and the words stop at two thirds of it.
+test("an answer's words read at the reading measure while its table takes the thread's width", async () => {
   await page.viewport(1440, 900);
   host.style.width = "1100px";
   flushSync(() => root.render(<ReplyProse text={`${WORDS}\n\n${TABLE}`} />));
+  await document.fonts.ready;
   const words = host.querySelector("p")!;
   const table = host.querySelector("table")!;
-  const measure = parseFloat(getComputedStyle(words).getPropertyValue("max-width") || "0");
-  expect(measure).toBeGreaterThan(0);
+  const measure = widthOf(words.parentElement!, "var(--size-measure)");
   expect(words.getBoundingClientRect().width).toBeLessThanOrEqual(measure + 1);
-  // About seventy characters a line, never a hundred.
-  expect(words.getBoundingClientRect().width).toBeLessThan(480);
+  expect(words.getBoundingClientRect().width).toBeGreaterThan(measure * 0.95);
   expect(table.getBoundingClientRect().width).toBeGreaterThan(words.getBoundingClientRect().width);
 });
 
@@ -133,4 +145,203 @@ test("at 768px the list's head fits its column and its titles keep their words",
   const title = host.querySelector("[data-conversation] .crewlet-inbox-row__title")!;
   // About 25 characters of a title, where the 16rem column left about 15.
   expect(title.getBoundingClientRect().width).toBeGreaterThan(170);
+});
+
+const OPEN = "5b0c7a52-41a4-4e0e-9d0e-2b8a1c3e9f10";
+const QUESTION =
+  "Do I need to post any responses or anything to the advisor about the runs that ended on their round cap, or will the finding close on its own once the new cap is in place? The run was https://crewlet.example.com/live/turns/0f1e2d3c4b5a69788796a5b4c3d2e1f0aabbccddeeff00112233445566778899";
+const ANSWER = [
+  `**No, you do not need to do anything.** ${WORDS}`,
+  "Some notes:",
+  `- **Nothing to reply to.** ${WORDS}`,
+  `- **It can come back.** ${WORDS}`,
+  TABLE,
+  '```\ncrewlet seats set agent-cto --max-rounds 300 --reason "the review needs more than the old cap of 200 rounds"\n```',
+  WORDS,
+].join("\n\n");
+
+/** A conversation with every part a turn draws: the page it carried, its steps, a read it never named, a list, a table and code. */
+function longTranscript() {
+  const when = at(60_000);
+  return {
+    conversation: { ...ROWS[0]!, id: OPEN, title: "Runs that ended on their round cap" },
+    messages: [
+      {
+        id: "q1",
+        turn_id: "t1",
+        role: "user",
+        text: QUESTION,
+        created_at: when,
+        page: {
+          title: "Advisor › Agent runs ended on their round cap before they finished.",
+          screen: "advisor-finding",
+        },
+      },
+      { id: "a1", turn_id: "t1", role: "assistant", text: ANSWER, created_at: when },
+    ],
+    steps: [
+      {
+        step_id: "s1",
+        turn_id: "t1",
+        index: 0,
+        tool: "read_api",
+        label: "Read the finding",
+        state: "done",
+        started_at: when,
+        duration_ms: 400,
+      },
+      {
+        step_id: "s2",
+        turn_id: "t1",
+        index: 1,
+        tool: "read_api",
+        label: "Read the seat's runs",
+        state: "done",
+        started_at: when,
+        duration_ms: 600,
+      },
+    ],
+    cards: [
+      {
+        card_id: "c1",
+        message_id: "a1",
+        card: {
+          type: "entity",
+          entity: {
+            kind: "seat",
+            id: "qa",
+            title: "QA",
+            subtitle: "qa",
+            facts: [{ label: "State", value: "Idle" }],
+            open: { label: "QA", screen: "seat", href: "#/company/org/seats/qa" },
+          },
+        },
+      },
+    ],
+    open_turn: null,
+    audit_reads: [],
+    turns: [{ turn_id: "t1", state: "completed" }],
+  };
+}
+
+interface Edges {
+  left: number;
+  right: number;
+}
+
+function edges(el: Element): Edges {
+  const r = el.getBoundingClientRect();
+  return { left: r.left, right: r.right };
+}
+
+async function drawPage(width: number): Promise<HTMLElement> {
+  await page.viewport(width, 900);
+  host.style.cssText = `width: ${width}px; height: 900px; display: flex; flex-direction: column;`;
+  vi.mocked(useAskReading).mockReturnValue({
+    unavailable: null,
+    model: null,
+    attach: null,
+    admin: false,
+    name: "Jane Founder",
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      const path = new URL(url, location.href).pathname;
+      const body =
+        path === `/assistant/conversations/${OPEN}` ? longTranscript() : { conversations: ROWS };
+      return Response.json(body, { headers: { [ENGINE_HEADER]: ENGINE_HEADER_VALUE } });
+    }),
+  );
+  window.location.hash = `#/ask/${OPEN}`;
+  flushSync(() =>
+    root.render(
+      <LayoutClient answers={{}} org={ORG}>
+        <AskPage conversation={OPEN} />
+      </LayoutClient>,
+    ),
+  );
+  await eventually(() => expect(host.querySelector(".crewlet-message__bubble")).not.toBeNull());
+  await eventually(() => expect(host.querySelector(".ask-answer table")).not.toBeNull());
+  await document.fonts.ready;
+  return host;
+}
+
+// ONE COLUMN ON A WIDE PAGE. Mutation: drop `column` from the page's thread,
+// and the bubble stands at the pane's far edge while the answer hugs the
+// other; drop the foot's centring, and the composer spans the pane.
+for (const width of [1440, 2000]) {
+  test(`at ${width} wide the conversation reads in one centred column the composer shares`, async () => {
+    const at = await drawPage(width);
+    const pane = edges(at.querySelector(".ask-page__open")!);
+    const items = at.querySelector<HTMLElement>(".crewlet-chat-thread__items")!;
+    const style = getComputedStyle(items);
+    const box = items.getBoundingClientRect();
+    const column = {
+      left: box.left + parseFloat(style.paddingLeft),
+      right: box.right - parseFloat(style.paddingRight),
+    };
+    // Centred on the pane, at the wide measure.
+    expect(column.left - pane.left).toBeCloseTo(pane.right - column.right, 0);
+    expect(column.right - column.left).toBeCloseTo(widthOf(items, "var(--size-measure-wide)"), 0);
+
+    // The question ends on the column's end edge; the steps, the answer, the
+    // line of reads and the turn's foot start on its start edge.
+    expect(edges(at.querySelector(".crewlet-message__bubble")!).right).toBeCloseTo(column.right, 0);
+    const answer = at.querySelector(".ask-answer")!;
+    expect(edges(answer).left).toBeCloseTo(column.left, 0);
+    // The steps row's chevron, which the kit hangs its trigger's padding out to.
+    const steps = [...at.querySelectorAll("button")].find((b) => /Done/.test(b.textContent ?? ""))!;
+    expect(edges(steps.querySelector("svg")!).left).toBeCloseTo(column.left, 0);
+    const reads = at.querySelector(".crewlet-record-chip-list")!;
+    expect(edges(reads).left).toBeGreaterThanOrEqual(column.left - 1);
+    expect(edges(reads).right).toBeLessThanOrEqual(column.right + 1);
+    const copy = [...at.querySelectorAll("button")].find((b) => b.textContent === "Copy")!;
+    expect(edges(copy).left).toBeGreaterThan(column.left);
+    expect(edges(copy).right).toBeLessThan(column.right);
+
+    // Words at the reading measure; the table and the code at the column's width, no further.
+    const measure = widthOf(answer, "var(--size-measure)");
+    for (const p of answer.querySelectorAll<HTMLElement>(":scope > p, :scope > ul")) {
+      expect(p.getBoundingClientRect().width).toBeLessThanOrEqual(measure + 1);
+    }
+    const longest = Math.max(
+      ...[...answer.querySelectorAll<HTMLElement>(":scope > p")].map(
+        (p) => p.getBoundingClientRect().width,
+      ),
+    );
+    expect(longest).toBeGreaterThan(measure * 0.9);
+    for (const wide of answer.querySelectorAll(":scope > .md-table, :scope > pre, table")) {
+      expect(edges(wide).right).toBeLessThanOrEqual(column.right + 1);
+    }
+
+    // The composer shares both edges.
+    const composer = edges(at.querySelector(".ask-page__foot .crewlet-composer")!);
+    expect(composer.left).toBeCloseTo(column.left, 0);
+    expect(composer.right).toBeCloseTo(column.right, 0);
+
+    // Nothing scrolls sideways.
+    const scroller = at.querySelector<HTMLElement>(".crewlet-chat-thread__scroller")!;
+    expect(scroller.scrollWidth).toBeLessThanOrEqual(scroller.clientWidth);
+    expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(
+      document.documentElement.clientWidth,
+    );
+  });
+}
+
+// AT A PHONE'S WIDTH THE COLUMN IS THE PANE, on the thread's own inset, and
+// the long question wraps rather than push the page sideways.
+test("at 390 wide the conversation keeps its inset and nothing scrolls sideways", async () => {
+  const at = await drawPage(390);
+  const pane = edges(at.querySelector(".ask-page__open")!);
+  const bubble = edges(at.querySelector(".crewlet-message__bubble")!);
+  const composer = edges(at.querySelector(".ask-page__foot .crewlet-composer")!);
+  expect(composer.left - pane.left).toBeCloseTo(16, 0);
+  expect(pane.right - composer.right).toBeCloseTo(16, 0);
+  expect(bubble.right).toBeLessThanOrEqual(pane.right - 16 + 1);
+  const scroller = at.querySelector<HTMLElement>(".crewlet-chat-thread__scroller")!;
+  expect(scroller.scrollWidth).toBeLessThanOrEqual(scroller.clientWidth);
+  expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(
+    document.documentElement.clientWidth,
+  );
 });
