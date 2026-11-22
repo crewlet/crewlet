@@ -692,6 +692,11 @@ type FakeRunner struct {
 	// "" where it says nothing. Set it before the first collection.
 	NotesOff string
 
+	// Reports, where set, makes the fake a minting runner (minted.go): what
+	// [FakeRunner.ReportedSession] answers of a job's box. Set it before the
+	// launch whose job should mint.
+	Reports func(ctx context.Context, box Sandbox, handle RunHandle) (string, error)
+
 	// CallIDKey is what [FakeRunner.CallIDMeta] answers: the `_meta` key the
 	// harness this fake stands in for sends each call's id under, "" for
 	// none. Set it before the launch that should read it.
@@ -942,6 +947,18 @@ func (r *FakeRunner) Name() string { return r.name }
 // ReadsNotes answers [FakeRunner.TakesNotes]: the optional answer a runner
 // whose harness takes a person's notes between its steps gives the coordinator.
 func (r *FakeRunner) ReadsNotes() bool { return r.TakesNotes }
+
+// MintsSession answers whether [FakeRunner.Reports] is set: the fake stands in
+// for a harness that mints its session's id as it runs.
+func (r *FakeRunner) MintsSession() bool { return r.Reports != nil }
+
+// ReportedSession answers [FakeRunner.Reports], "" where it is unset.
+func (r *FakeRunner) ReportedSession(ctx context.Context, box Sandbox, handle RunHandle) (string, error) {
+	if r.Reports == nil {
+		return "", nil
+	}
+	return r.Reports(ctx, box, handle)
+}
 
 // NotesOffWhy answers [FakeRunner.NotesOff]: the optional answer a runner gives
 // the warning a run that never asked for its notes gets ([notesOffExplainer]).

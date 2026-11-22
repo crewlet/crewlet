@@ -34,6 +34,7 @@ var stagedLogCases = []struct {
 		testAnEndingReadsTheTurnsCallsPastAnOpeningThatFailed},
 	{"ABeginLaunchThatMayHaveWrittenNamesItsLaunch",
 		testABeginLaunchThatMayHaveWrittenNamesItsLaunch},
+	{"ABindCutBeforeItsRecordLeavesNoClaimPastIt", testABindCutBeforeItsRecordLeavesNoClaimPastIt},
 }
 
 // stagedRuns is a coordination store's run records with the next write of a

@@ -605,15 +605,15 @@
 // # A run's harness session, carried between boxes
 //
 // Every run names the harness session it works in before the harness starts
-// ([Harness.Session]), records which it took up ([Paths.SessionRecord]), and
-// packs it once the harness exits ([Paths.SessionCapture],
-// [Runner.OpenCapture]); a run handed a session packed in another box restores
-// it before its harness takes it up, never over a box whose own copy already
-// holds that archive ([Paths.SessionDigests]), and starts a session of its
-// own, saying why, where it can do neither. Whether a box can continue a
-// carried session at all is its harness's release, asked of the box
-// ([Runner.CheckCarry]). What each harness's archive holds, and never holds,
-// is the harness's own: see carry.go and each harness's carry.
+// ([Harness.Session]; a harness minting its id reports it, [sessionMinter]),
+// records which it took up ([Paths.SessionRecord]), and packs it once the
+// harness exits ([Paths.SessionCapture], [Runner.OpenCapture]); a run handed a
+// session packed in another box restores it before its harness takes it up,
+// never over a box whose copy holds that archive ([Paths.SessionDigests]), and
+// starts its own, saying why, where it can do neither. Whether a
+// box can continue a carried session is its harness's release, asked of the
+// box ([Runner.CheckCarry]). What each archive holds is its harness's: see
+// carry.go and each harness's carry.
 //
 // A SESSION ITS HARNESS IS STILL WORKING IN is packed by the engine, beside
 // it, by the pack the run's own end makes held to a stricter rule — every file
