@@ -138,6 +138,11 @@ type ModelEntriesAnswer struct {
 	Nodes   []ModelNode   `json:"nodes"`
 	Entries []ModelEntry  `json:"entries"`
 	Alarms  []ModelsAlarm `json:"alarms"`
+	// ExecutorHarnesses is every harness this node's build runs a seat's
+	// executor on, in the profiles' order ([config.ExecutorHarnesses]): the
+	// page reads it here rather than compiling a copy, so a runner a build
+	// adds reaches it with no dashboard rebuild.
+	ExecutorHarnesses []config.Harness `json:"executor_harnesses"`
 }
 
 // ModelNode is one live node, and whether a status record of its live presence
@@ -387,6 +392,9 @@ type MemberEntriesAnswer struct {
 	Nodes   []ModelNode   `json:"nodes"`
 	Entries []MemberEntry `json:"entries"`
 	Alarms  []ModelsAlarm `json:"alarms"`
+	// ExecutorHarnesses is the admin reading's: which harness runs a seat's
+	// executor is no secret.
+	ExecutorHarnesses []config.Harness `json:"executor_harnesses"`
 }
 
 // MemberEntry is one entry, a member's reading.
@@ -493,7 +501,7 @@ func (s Sources) llmEntries(ctx context.Context, _ Params) (any, error) {
 	}
 	if !admin {
 		out := MemberEntriesAnswer{Reading: ReadingMember, Node: s.NodeID, Nodes: nodes,
-			Entries: make([]MemberEntry, 0, len(entries))}
+			Entries: make([]MemberEntry, 0, len(entries)), ExecutorHarnesses: config.ExecutorHarnesses()}
 		for _, e := range entries {
 			out.Entries = append(out.Entries, memberEntry(e))
 		}
@@ -506,7 +514,7 @@ func (s Sources) llmEntries(ctx context.Context, _ Params) (any, error) {
 		}
 	}
 	return ModelEntriesAnswer{Reading: ReadingAdmin, Node: s.NodeID, Nodes: nodes,
-		Entries: entries, Alarms: alarms}, nil
+		Entries: entries, Alarms: alarms, ExecutorHarnesses: config.ExecutorHarnesses()}, nil
 }
 
 // memberEntry is an admin entry with everything a member does not read

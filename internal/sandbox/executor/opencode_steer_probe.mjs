@@ -1,15 +1,18 @@
 // The probe opencode_steer_test.go drives the OpenCode notes plugin with: the
 // plugin the engine embeds, imported from where a run's configuration names it
 // (argv[2]), and set up against a stand-in of the context OpenCode hands a
-// plugin — its options, its event subscription, its session's prompt. Nothing
-// here decides anything: the Go suite plays the bridge's notes route over HTTP
-// — or serves a real bridge's — and the server's events over this probe's
-// standard input, and judges what the plugin did from the route's requests and
-// this probe's reports.
+// plugin — its options, its event subscription, its session's prompt and
+// hooks. Nothing here decides anything: the Go suite plays the bridge's notes
+// route over HTTP — or serves a real bridge's — and the server's events and
+// requests over this probe's standard input, and judges what the plugin did
+// from the route's requests and this probe's reports.
 //
 // Commands, one JSON object a line on stdin:
 //   {"op":"setup","name":N,"url":U,"session":S}  set a plugin up as N
 //   {"op":"event","name":N,"event":E}             an event of the server's to N
+//   {"op":"hook","name":N,"hook":H,"input":I}     run N's session hooks H on I,
+//                                                 as OpenCode runs one before a
+//                                                 model request
 //   {"op":"fail-prompts","name":N,"count":C}      N's next C admissions throw
 //   {"op":"hold-prompts","name":N}                N's admissions wait for…
 //   {"op":"release-prompts","name":N}             …this
@@ -17,7 +20,8 @@
 //   {"op":"watch-fetches"}                        report every request as it starts
 //
 // Reports, one JSON object a line on stdout: `setup` (with `ms`, how long the
-// setup took, and `cleanup`, whether it returned one), `subscribed`,
+// setup took, and `cleanup`, whether it returned one), `subscribed`, `hooked`
+// (once every hook H returned, with `count`, how many ran),
 // `prompt-started` and `prompt` (with the `input` the plugin passed, and `ok`),
 // `cleaned`, `error`, and — once fetches are watched — `fetch` (with `method`,
 // `url` and `ms`, the instant the request began on this process's monotonic
@@ -78,7 +82,7 @@ function channel(signal) {
 
 // instance is the stand-in context one plugin is set up with.
 function instance(name, url) {
-  const self = { name, subscriptions: [], fail: 0, held: null, cleanup: undefined }
+  const self = { name, subscriptions: [], hooks: [], fail: 0, held: null, cleanup: undefined }
   self.ctx = {
     options: url === "" ? {} : { url },
     event: {
@@ -90,6 +94,10 @@ function instance(name, url) {
       },
     },
     session: {
+      // hook registers fn for the session hook named, as OpenCode's does.
+      async hook(hook, fn) {
+        self.hooks.push({ hook, fn })
+      },
       async prompt(input) {
         report({ op: "prompt-started", name, input })
         if (self.held !== null) await self.held.promise
@@ -125,6 +133,12 @@ const commands = {
   },
   event({ name, event }) {
     for (const ch of instances.get(name).subscriptions) ch.push(event)
+  },
+  // AWAITED, as OpenCode holds a model request until its hooks return.
+  async hook({ name, hook, input }) {
+    const fns = instances.get(name).hooks.filter((h) => h.hook === hook)
+    for (const h of fns) await h.fn(input)
+    report({ op: "hooked", name, count: fns.length })
   },
   "fail-prompts"({ name, count }) {
     instances.get(name).fail = count

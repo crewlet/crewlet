@@ -291,6 +291,13 @@ type SessionTake struct {
 	// texts. "" shares with every other take that names none.
 	Scope string
 
+	// Session is the session bound to a minting harness's job
+	// ([LaunchRecord.Minted]): the take names that one, and one whose box
+	// names another is refused, wrapping [ErrSessionBindRefused], so no
+	// capture is kept under an id never bound. Ignored for a harness that
+	// names its session as its run starts.
+	Session string
+
 	// Spool is where the take's scrub spools what its first reading of the
 	// archive wrote, for its second to copy, and the room it holds for that
 	// ([SessionSpool]). A take that names no directory is refused.

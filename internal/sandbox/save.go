@@ -31,7 +31,9 @@ type SessionSaver interface {
 	// PackSave packs a save of box's session for taker, at a path of its
 	// own; a zero archive where the box holds no session yet, and an error
 	// wrapping [ErrSaveNoRoom] where the box lacks the memory to pack it.
-	PackSave(ctx context.Context, box Sandbox, taker string) (SessionArchive, error)
+	// session is a minting harness's bound session ([SessionTake.Session]),
+	// and a save whose box names another is refused, as a take is.
+	PackSave(ctx context.Context, box Sandbox, taker, session string) (SessionArchive, error)
 	// ReleaseSave removes the save at path from box; a path that is no save
 	// is refused.
 	ReleaseSave(ctx context.Context, box Sandbox, path string) error
@@ -398,7 +400,7 @@ func (c *Coordinator) saveInHand(ctx, duty context.Context, job saveJob, out sav
 	if err != nil {
 		return end(saveStoodDown, err.Error())
 	}
-	archive, err := saver.PackSave(duty, box, hold.holder)
+	archive, err := saver.PackSave(duty, box, hold.holder, row.Launch.Minted)
 	give()
 	switch {
 	case errors.Is(err, ErrSaveNoRoom):
@@ -619,7 +621,8 @@ func (c *Coordinator) takeSave(ctx context.Context, job saveJob, point string, i
 		return end(saveFailed, err.Error())
 	}
 	taken, err := in.saver.TakeSession(take, in.box, SessionTake{Save: in.archive.Path, Scrub: scrub,
-		MaxBytes: executorkeep.SessionMaxBytes, Scope: row.AgentID, Spool: in.scrubbing.spooling(dir)})
+		MaxBytes: executorkeep.SessionMaxBytes, Scope: row.AgentID, Session: row.Launch.Minted,
+		Spool: in.scrubbing.spooling(dir)})
 	switch {
 	case err != nil:
 		out.unplaced = "take"
