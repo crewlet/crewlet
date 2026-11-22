@@ -138,6 +138,18 @@ func copilotScript(req sandbox.RunRequest, session Session, paths Paths, configP
 	if req.Effort != "" {
 		parts = append(parts, "--reasoning-effort", q(req.Effort))
 	}
+	// THE ENTRY'S WEB TOOLS OFF where it denies them ([sandbox.RunRequest.WebDenied]),
+	// and GitHub's code search, the one other tool that reached the network:
+	// excluded, they are offered to no agent of the run. Measured on 1.0.114
+	// under --yolo: a call was answered "does not exist" in the run, in its
+	// general-purpose and research subagents and in a repository's own agent
+	// listing them. --deny-tool would not do: --yolo allows every URL, and a
+	// denied web_fetch still fetched. Each value after a flag of its own.
+	if req.WebDenied {
+		for _, tool := range []string{"web_fetch", "web_search", "semantic_code_search"} {
+			parts = append(parts, "--excluded-tools", tool)
+		}
+	}
 	parts = append(parts, `"$@"`)
 
 	var b strings.Builder
