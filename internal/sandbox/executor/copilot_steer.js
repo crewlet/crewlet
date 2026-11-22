@@ -85,9 +85,10 @@ async function arm({ url, cap }) {
   const life = new AbortController()
   let gate = null
   let cursor = 0
-  // admitted holds every inbox id sent: two asks that overlap (the loop's and
-  // the stop's) never send one note twice.
-  const admitted = new Set()
+  // admitted holds every inbox id sent or being sent, by its send's outcome:
+  // two asks that overlap (the loop's and the stop's) send one note once, and
+  // the second moves past it only once the first's send has gone.
+  const admitted = new Map()
   let turns = 0
   let aborting = false
 
@@ -111,7 +112,7 @@ async function arm({ url, cap }) {
       close()
       return false
     }
-    return answer.ok && (await admit(answer.text))
+    return answer.ok && (await admit(answer.text, signal))
   }
 
   const poll = async (gated) => {
@@ -131,10 +132,12 @@ async function arm({ url, cap }) {
     }
   }
 
-  // admit sends each note of one answer, oldest first, advancing the cursor
-  // past each one sent: false for an answer that is no list of notes, or a
-  // send that failed, which leaves the cursor where it was.
-  const admit = async (text) => {
+  // admit sends each note of one answer, oldest first, moving the cursor past
+  // each once its send has gone: false for an answer that is no list of notes,
+  // or a send that failed, which leaves the cursor before that note, so the
+  // next ask answers it again. A gate closed meanwhile sends nothing more: what
+  // is left is asked for by the next turn's poll, or read by the review.
+  const admit = async (text, gated) => {
     let notes
     try {
       notes = JSON.parse(text)?.notes
@@ -145,16 +148,22 @@ async function arm({ url, cap }) {
     for (const note of notes) {
       if (!wellFormed(note)) return false
       if (note.seq <= cursor) continue
-      if (!admitted.has(note.inbox)) {
-        admitted.add(note.inbox)
-        try {
-          await session.send({ prompt: note.message, mode: "immediate", clientTurnId: turnPrefix + note.inbox })
-        } catch {
-          admitted.delete(note.inbox)
-          return false
-        }
+      if (gated.aborted || life.signal.aborted) return true
+      let sending = admitted.get(note.inbox)
+      if (sending === undefined) {
+        sending = session
+          .send({ prompt: note.message, mode: "immediate", clientTurnId: turnPrefix + note.inbox })
+          .then(
+            () => true,
+            () => false,
+          )
+        admitted.set(note.inbox, sending)
       }
-      cursor = note.seq
+      if (!(await sending)) {
+        if (admitted.get(note.inbox) === sending) admitted.delete(note.inbox)
+        return false
+      }
+      cursor = Math.max(cursor, note.seq)
     }
     return true
   }

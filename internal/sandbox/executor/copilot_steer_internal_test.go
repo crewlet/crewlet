@@ -306,6 +306,101 @@ func TestTheCopilotExtensionAsksOnceMoreAsTheAgentStops(t *testing.T) {
 	p.expect("hooked")
 }
 
+// A send that fails leaves the note to be asked for again: an ask moves past
+// a note only once its send has gone, and one that meets a note another ask is
+// sending waits for that send. Once the gate closes, nothing more is sent.
+//
+// Mutation: move the cursor past a note before its send has gone — the stop's
+// ask asks past it; skip a note another ask is sending — the stop returns at
+// once and the loop's next poll asks past the failed note; drop the gate check
+// — the second note of the closed loop's answer is sent.
+func TestTheCopilotExtensionAsksAgainForANoteWhoseSendFailed(t *testing.T) {
+	route := newCopilotRoute(t)
+	p := startCopilotProbe(t, copilotExtensionSettings{URL: route.url})
+	p.expect("joined")
+	p.expectArmed()
+	p.event("assistant.turn_start", "", nil)
+	p.send(map[string]any{"op": "hold-sends"})
+	route.next("GET notes", "poll as the main agent works").reply(http.StatusOK, copilotNote(1, "msg_c", "try this"))
+	p.expect("send")
+
+	// THE STOP'S ASK, the loop's send still out: it asks before the note, and
+	// waits on that send rather than moving past it.
+	p.hook("onAgentStop", map[string]any{"stopReason": "end_turn"})
+	stop := route.next("GET notes", "ask as the agent stops")
+	if stop.after != "0" {
+		t.Fatalf("the stop's ask asked after=%q while the note's send was out, want 0", stop.after)
+	}
+	stop.reply(http.StatusOK, copilotNote(1, "msg_c", "try this"))
+	select {
+	case r := <-p.reports:
+		t.Fatalf("the probe reported %s (%v) while the note's send was out, want the stop waiting on it", r.Op, r.Input)
+	case <-time.After(500 * time.Millisecond): //fixedwait:liveness
+	}
+	p.send(map[string]any{"op": "release-sends", "fail": true})
+	p.expect("hooked")
+	again := route.next("GET notes", "ask again for the note whose send failed")
+	if again.after != "0" {
+		t.Fatalf("the poll after the failed send asked after=%q, want 0: the note is never asked for again",
+			again.after)
+	}
+	again.reply(http.StatusOK, copilotNote(1, "msg_c", "try this"))
+	if sent := p.expect("send"); sent.Input["clientTurnId"] != CopilotClientTurnID("msg_c") {
+		t.Fatalf("sent %v", sent.Input)
+	}
+	closing := route.next("GET notes", "poll past the note sent")
+	p.event("assistant.idle", "", nil)
+	<-closing.gone
+
+	// TWO NOTES IN ONE ANSWER, the gate closing while the first is sent:
+	// the second waits for the next turn's poll.
+	p.event("assistant.turn_start", "", nil)
+	both := route.next("GET notes", "poll as the next turn works")
+	p.send(map[string]any{"op": "hold-sends"})
+	both.reply(http.StatusOK, `{"notes":[`+
+		`{"seq":2,"id":"note-d","inbox":"msg_d","message":"## A note from ada\n\nfirst"},`+
+		`{"seq":3,"id":"note-e","inbox":"msg_e","message":"## A note from ada\n\nsecond"}]}`)
+	if sent := p.expect("send"); sent.Input["clientTurnId"] != CopilotClientTurnID("msg_d") {
+		t.Fatalf("sent %v", sent.Input)
+	}
+	p.event("assistant.idle", "", nil)
+	p.send(map[string]any{"op": "release-sends"})
+	select {
+	case r := <-p.reports:
+		t.Fatalf("the probe reported %s (%v) after the gate closed, want nothing more sent", r.Op, r.Input)
+	case <-time.After(500 * time.Millisecond): //fixedwait:liveness
+	}
+	p.event("assistant.turn_start", "", nil)
+	if next := route.next("GET notes", "poll as a third turn works"); next.after != "2" {
+		t.Fatalf("the third turn's poll asked after=%q, want 2: past the note sent, before the one held back",
+			next.after)
+	}
+}
+
+// A failed poll waits before the next — a second, then twice that — and a
+// 404 ends the polling for the rest of the run, as a 401 does.
+//
+// Mutation: poll again at once after a failure, or keep the first wait —
+// a poll comes inside the wait; retry a 404 as a failure — the extension
+// polls again.
+func TestTheCopilotExtensionBacksOffAndStopsOnAMissingRoute(t *testing.T) {
+	route := newCopilotRoute(t)
+	p := startCopilotProbe(t, copilotExtensionSettings{URL: route.url})
+	p.expect("joined")
+	p.expectArmed()
+	p.event("assistant.turn_start", "", nil)
+	route.next("GET notes", "poll").reply(http.StatusServiceUnavailable, "")
+	route.none(800*time.Millisecond, "the route failed a moment ago")
+	route.next("GET notes", "poll again after a second").reply(http.StatusServiceUnavailable, "")
+	route.none(1800*time.Millisecond, "the route failed twice, and the wait doubled")
+	route.next("GET notes", "poll again after two seconds").reply(http.StatusNotFound, "")
+	route.none(1500*time.Millisecond, "the route is gone")
+	p.event("assistant.turn_start", "", nil)
+	p.hook("onAgentStop", map[string]any{})
+	p.expect("hooked")
+	route.none(300*time.Millisecond, "the route is gone")
+}
+
 // The turn cap: once the cap's last request is made, the run is stopped as
 // that turn's tools answer — its line first, then the abort — and no ask is
 // made at a stop past it.

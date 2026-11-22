@@ -10,7 +10,7 @@
 //   {"op":"event","event":E}            a session event to every handler
 //   {"op":"hook","name":N,"input":I}    call the extension's hook N
 //   {"op":"hold-sends"}                 sends wait, once reported, for…
-//   {"op":"release-sends"}              …this
+//   {"op":"release-sends","fail":F}     …this, failing where F is true
 //
 // Reports, one JSON object a line on stdout: `joined` (the hooks registered),
 // `send` (the options the extension passed), `abort`, `log` (message, level),
@@ -30,7 +30,7 @@ const session = {
   },
   async send(options) {
     report({ op: "send", input: options })
-    if (held !== null) await held.promise
+    if (held !== null && !(await held.promise)) throw new Error("the probe failed this send")
     return "message-" + handlers.length
   },
   async abort() {
@@ -69,12 +69,12 @@ function listen() {
         if (command.op === "event") for (const h of handlers) h(command.event)
         if (command.op === "hold-sends") {
           let open
-          held = { promise: new Promise((resolve) => (open = resolve)), open: () => open() }
+          held = { promise: new Promise((resolve) => (open = resolve)), open: (pass) => open(pass) }
         }
         if (command.op === "release-sends") {
           const h = held
           held = null
-          h?.open()
+          h?.open(command.fail !== true)
         }
         // NOT AWAITED HERE, so a hook waiting on a held send leaves the
         // probe reading the command that releases it.
