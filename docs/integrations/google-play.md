@@ -57,7 +57,7 @@ A write whose class depends on its target is classed per call from the target as
 
 **What a call may reach:**
 - An app outside the agent's list is refused before Google is asked.
-- Users and permissions of a developer account, and an account-wide report (sales, earnings, invoices, subscription statistics), need the account named in `developer_accounts` and an agent that reaches every app the company names.
+- Users and permissions of a developer account need the account named in `developer_accounts` and an agent that reaches every app the company names. An account-wide report (sales, earnings, invoices, subscription statistics) covers every app of the account, listed by the company or not, so it also needs an agent at `administer`.
 - The monthly reports are read as the company's reader, which needs access to all apps no agent should hold, and cut to the reports of the agent's apps.
 
 **What an agent reads:** every value Google answers with is fenced as somebody else's words: reviews and their authors, listings anyone with Play Console access wrote, error reports, buyer details and the reports' rows. A downloaded APK is never handed to an agent. A file to upload is named as `artifact:<artifact id>/<path>`, and the ask shows its digest, which binds the approval: a file changed since is not sent.
@@ -82,7 +82,7 @@ The block needs `integrations.google_cloud` on with its provisioning block. It h
 
 ## Every method, and its class
 
-Each row is one method the engine offers, with its class (and the class its target's state or a field gives it), the least Play Console permission it needs, and the scope minted for it. The table is held to the engine's catalog by a test, both ways. Google removed `purchases.subscriptions.get`, `.refund` and `.revoke` from its discovery document; `purchases.subscriptionsv2.get`, `orders.refund` and `purchases.subscriptionsv2.revoke` replace them here.
+Each row is one method the engine offers, with its class (and the class its target's state or a field gives it), the least Play Console permission it needs, and the scope minted for it. The table is held to the engine's catalog by a test, both ways. Google removed `purchases.subscriptions.get`, `.refund` and `.revoke` from its discovery document; `purchases.subscriptionsv2.get`, `orders.refund` and `purchases.subscriptionsv2.revoke` replace them here. Three rows are held stricter than the coverage matrix allows, since the engine does not read the state that would lower them: `purchases.subscriptionsv2.defer` with `validateOnly` is `admin`, `apprecovery.addTargeting` on a draft action is `public`, and an offers `batchUpdate` creating a draft offer is `public`. A state rule lowers a call only on its target as read: a target that cannot be read keeps the stricter class.
 
 | Method | Resource | Call | Class | Least permission | Scope |
 |---|---|---|---|---|---|

@@ -146,6 +146,15 @@ func (p *Product) Card(ctx context.Context, call growth.Call, approved string) (
 	return card, nil
 }
 
+// reread is an act's record from its targets as read under the lease, under
+// the operation the administrator approved, so every outcome names what was
+// asked and what it met.
+func (p *Product) reread(call growth.Call, a act, class growth.Class, approved string) growth.Record {
+	r := p.record(call, a)
+	r.Class, r.Operation = class, approved
+	return r
+}
+
 // orderTotal is what the order a refund step names was paid, in micros of its
 // currency, from the order as read now; false for any other step.
 func orderTotal(s step) (int64, string, bool) {
@@ -216,6 +225,7 @@ func (p *Product) Apply(ctx context.Context, call growth.Call, approved string) 
 		return nil, p.failEarly(ctx, held, rec, err)
 	}
 	a.class = p.classOfAct(a)
+	rec = p.reread(call, a, rec.Class, approved)
 	if !growth.BindingHolds(approved, binding(a)) {
 		if held {
 			p.client.Note(ctx, growth.StepVoid, rec)
@@ -268,6 +278,7 @@ func (p *Product) commitEdit(bound, records context.Context, call growth.Call, a
 		return nil, p.failEarly(records, held, rec, err)
 	}
 	a.class = p.classOfAct(a)
+	rec = p.reread(call, a, rec.Class, approved)
 	if !growth.BindingHolds(approved, binding(a)) {
 		if held {
 			p.client.Note(records, growth.StepVoid, rec)
