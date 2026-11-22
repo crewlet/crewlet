@@ -508,7 +508,7 @@ being applied is warned about.
 | `muse-code` | `minimal` `low` `medium` `high` `xhigh` `max` | `--reasoning-effort` | Per model. |
 | `hermes` | `none` `minimal` `low` `medium` `high` `xhigh` `max` | `--reasoning` | Lowered to the nearest level the route takes. |
 | `pi` | `off` `minimal` `low` `medium` `high` `xhigh` `max` | `--thinking` | Clamped to the model's levels. |
-| `kimi-code` | `low` `medium` `high` `xhigh` `max` | `KIMI_MODEL_THINKING_EFFORT` | Kimi's provider refuses a level the model lacks. |
+| `kimi-code` | `low` `medium` `high` `xhigh` `max` | `KIMI_MODEL_THINKING_EFFORT` | Sent as given on Kimi's own provider type, unchecked by the harness (whether Moonshot's service refuses a level its model lacks is not measured); an OpenAI-shaped provider is sent none. |
 | `gemini-cli` | none | | Read only from its settings file, per model family. |
 | `qwen-code` | none | | Read only from its settings file. |
 | `cursor-agent` | none | | Part of the model id: name a variant `cursor-agent --list-models` prints, such as `gpt-5.5-high`. |
@@ -1352,7 +1352,7 @@ from a file a *variable* names, a channel `--help` never shows.
 | `copilot` | 1.0.103 | — none in prompt mode | discovered file, read always: `AGENTS.md` in the call's directory | its environment block, naming the call's directory |
 | `grok` | 1.0.70 | flag, text on argv: `--system-prompt-override` | flag, text on argv: `--rules`, at the very end of the vendor's prompt | none |
 | `muse-code` | 1.0.3, 1.4.13, 1.4.25 | — none per call | variable, file: `TBH_EVAL_APPEND_SYSTEM_PROMPT_FILE`, undocumented | none |
-| `kimi-code` | 0.42.0, 2.3.1 | flag, agent file: `--agent-file`, body `{system}` | flag, agent file: `--agent-file`, body `{system}` then `${base_prompt}` | none — the vendor's per-call text follows the engine's |
+| `kimi-code` | 2.7.2 | flag, agent file: `--agent-file`, body `{system}` | flag, agent file: `--agent-file`, body `{system}` then `${base_prompt}` | none: the vendor's per-call text follows the engine's |
 | `hermes` | 0.21.5 | — | — | — |
 | `pi` | 0.85.1, 1.4.0 | flag, file: `--system-prompt` | flag, file: `--append-system-prompt` | none; the working directory follows the engine's text, in the same block |
 
@@ -2453,7 +2453,7 @@ would make its model calls with the agent's tool credential. A harness that read
 its key from one variable of its own declares it as `api_key_env` rather than
 `env_sign_in`, and the engine owns that variable: `kimi-code`'s key goes in
 `KIMI_MODEL_API_KEY` beside its model in `KIMI_MODEL_NAME` (a model of the
-harness's own, measured on 2.3.1 and 2.7.2), set from `auth.api_key` and `model`
+harness's own, measured on 2.7.2), set from `auth.api_key` and `model`
 under `auth.mode: api-key`, and refused in `env`.
 
 ### 7. A cloud provider or gateway (`auth.mode: env`)
@@ -2788,9 +2788,7 @@ model writes classifies anything, failed run or not:
 marker_scope: stderr        # or answer-and-stderr (the default), or events
 ```
 
-Two profiles narrow it, each on a measurement: `kimi-code` puts its
-classification on stderr with the answer stream carrying only `role: meta`
-lines, and `pi` leaves stdout **empty** and writes `<status>: <the provider's JSON>` to stderr. Narrow it only where the vendor makes the answer an
+One profile narrows it, on a measurement: `pi` leaves stdout **empty** and writes `<status>: <the provider's JSON>` to stderr. Narrow it only where the vendor makes the answer an
 impossible place for the report; a wrong narrowing silently stops recognising
 spent plans. `hermes` stays on the default: measured on 0.21.5, a refused key
 and a spent plan print on **stdout** with exit 2, and only a run that never
@@ -2904,7 +2902,7 @@ it runs on.
 | `logout_args` | The command revoking the login. |
 | `stdin_login` | `{args, stdin_template, password_env}`: a real credential login, where the harness has one. |
 | `credential_store` | `{export_args, import_args}`: a login the harness keeps in a database of its own, moved as the document its export prints (stdout) and its import reads (stdin). Both, and never `{file}`. |
-| `limit_events` | The harness's own structured limit report, matched before any sentinel: `match` (conditions on the event, naming the `event_type_path` discriminator and at least one field beside it), `said_path` (the vendor's sentence), `reset_separator`/`reset_unit` (the reset in that sentence) and `in`. On stdout by default, `jsonl` output only; `in: record` reads it from the file `requests` names instead, on every run, a text function's included, but only where the harness itself failed the run (a process of the run can write that file), its `match` naming the record's event type and a field beside it (Kimi Code 2.7 says how a run ended only on its wire log's `turn.ended`). |
+| `limit_events` | The harness's own structured limit report, matched before any sentinel: `match` (conditions on the event, naming the `event_type_path` discriminator and at least one field beside it), `said_path` (the vendor's sentence), `reset_separator`/`reset_unit` (the reset in that sentence) and `in`. On stdout by default, `jsonl` output only; `in: record` reads it from the file `requests` names instead, on every run, a text function's included, but only where the harness itself failed the run (a process of the run can write that file), its `match` naming the record's event type and a field beside it (Kimi Code 2.7.2 says how a run ended only on its wire log's `turn.ended`). |
 | `limit_markers` | Sentences recognising a spent plan; see above. Each may carry `reset_separator` and `reset_unit` (`epoch`, `seconds` or `clock`). |
 | `auth_markers` | Sentences recognising an expired login. Each may carry `meaning`: `refused` (the default, the vendor turned the credential down) or `unread` (the harness did not use the credential it was handed, as Claude Code says "Not logged in" of a token with a space inside). Only the words a person is shown depend on it; the first marker that matches, in order, names the meaning. |
 | `auth_events` | The harness's own structured report of a refused sign-in, read before every limit report and sentinel: `match` (conditions on the event, naming the `event_type_path` discriminator and at least one field beside it), `said_path` (the vendor's sentence) and `in`, as for `limit_events`. On stdout, `jsonl` output only. Claude Code's are its result event with `api_error_status: 401` or `403` and its `system` event of subtype `api_retry` with `error: authentication_failed`. |
