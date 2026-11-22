@@ -126,11 +126,11 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 		floorArgs(codexFloor()), codexFloor())
 	line(`mkdir -p %s %s && chmod 700 %s || exit 1`, q(paths.CodexHome()), q(paths.CodexSessions()),
 		q(paths.CodexHome()))
-	line(`apid= hpid= tpid= tid= before=0 r=`)
+	line(`apid= hpid= tpid= cpid= tid= before=0 r=`)
 	// stop: the watcher, the helper, then the app-server, TERM again on each
 	// probe: on TERM it finishes the running turn first, and a second TERM
 	// ends it at once (measured on 0.171.0), all within the job's grace.
-	line(`stop() { end "$tpid"; end "$hpid"; end "$apid" again; tpid= hpid= apid=; rm -f %s; }`, sock)
+	line(`stop() { end "$tpid"; end "$cpid"; end "$hpid"; end "$apid" again; tpid= cpid= hpid= apid=; rm -f %s; }`, sock)
 	// THE THREAD, off the stream's first line, the one `exec --json` prints as
 	// the server starts the thread, before its turn: written for the helper
 	// and reported for collection. Whole lines only: the pattern ends the line.
@@ -193,8 +193,16 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 		line(`set --`)
 	}
 	// THE BRIEF ON STDIN (`-`), as `exec --remote` reads it (measured on 0.171.0).
-	b.WriteString(launchHarness(fmt.Sprintf(`codex exec --json --remote %s "$@" -`,
-		q("unix://"+paths.CodexSocket())), paths))
+	harness := fmt.Sprintf(`codex exec --json --remote %s "$@" -`, q("unix://"+paths.CodexSocket()))
+	if limit := req.Limits.MaxTurns; limit > 0 {
+		harness = codexRoundCap(paths, harness)
+		b.WriteString(codexCapWatch(paths, limit))
+	}
+	b.WriteString(launchHarness(harness, paths))
+	if req.Limits.MaxTurns > 0 {
+		line(`if [ -e %s ]; then printf '{"type":"%s","rounds":%d}\n'; code=1; fi`,
+			q(paths.CodexCapped()), codexCappedEvent, req.Limits.MaxTurns)
+	}
 	// The watcher stopped before the last read, so no two writers race on the
 	// report's staging file.
 	line(`end "$tpid"; tpid=; thread || :`)
@@ -229,6 +237,39 @@ func codexFreshRoute(paths Paths) string {
 		fresh, url, fresh)
 }
 
+// codexCappedEvent is the line a run's script adds to its stream where it
+// ended its run at the round cap ([codexCapWatch]), read as
+// [sandbox.Result.RoundCapped].
+const codexCappedEvent = "crewlet.round_cap"
+
+// codexCapPoll is how often a capped run's watcher counts its rounds: half a
+// second, a few of a model's shortest responses, so a run overshoots its cap
+// by the round already in flight at most.
+const codexCapPoll = "0.5"
+
+// codexRoundCap is harness run so its pid is recorded ([Paths.CodexExecPID]),
+// the shell exec'ing Codex in its own place, so the recorded pid is Codex's,
+// and the one the end protocol holds too. The file is an argument, never
+// spliced into the quoted command.
+func codexRoundCap(paths Paths, harness string) string {
+	return `sh -c 'printf "%s\n" "$$" > "$1" && shift && exec "$@"' codex-exec ` +
+		sandbox.ShellQuote(paths.CodexExecPID()) + " " + harness
+}
+
+// codexCapWatch starts the watcher that holds a run to its round cap,
+// role.sandbox.max_turns: Codex has no setting for one (0.171.0), so the
+// watcher counts the rounds the run's rollout records past where it began
+// (one token_usage_record a model response), and at limit marks the run
+// capped and ends Codex with SIGTERM, as a run ended on request is ended.
+// The script reads the mark after Codex exits.
+func codexCapWatch(paths Paths, limit int) string {
+	q := sandbox.ShellQuote
+	return fmt.Sprintf(`( while kill -0 $$ 2> /dev/null; do t=$(cat %[1]s 2> /dev/null); f=; [ -z "$t" ] || f=$(find %[2]s -type f -name "rollout-*-$t.jsonl" 2> /dev/null | LC_ALL=C sort | head -n 1); if [ -n "$f" ] && [ "$(tail -n +$((before + 1)) "$f" | grep -c '"type": *"token_usage_record"')" -ge %[3]d ] && [ -s %[4]s ]; then : > %[5]s; kill -TERM "$(cat %[4]s)" 2> /dev/null; exit 0; fi; sleep %[6]s; done ) &
+cpid=$!
+`, q(paths.CodexThread()), q(paths.CodexSessions()), limit, q(paths.CodexExecPID()), q(paths.CodexCapped()),
+		codexCapPoll)
+}
+
 // codexFinish defines the script's `finish`, run once Codex and everything
 // beside it have stopped, on the run's own end and a teardown's alike: the
 // session is the thread Codex reported, else the one it continued, as
@@ -256,15 +297,8 @@ func (Codex) Output(paths Paths) Output {
 }
 
 // Pins is CODEX_HOME, the box's own [Paths.CodexHome], where the run's
-// configuration, login, sessions and skills are, whatever a profile sets. A
-// turn cap is logged, never silently dropped: Codex has no setting for one
-// (Claude Code's --max-turns, OpenCode's agent steps), so the run goes uncapped.
-func (Codex) Pins(ctx context.Context, req sandbox.RunRequest, paths Paths) []Pinned {
-	if req.Limits.MaxTurns > 0 {
-		log.WarnContext(ctx, "executor_turn_cap_unsupported", "harness", CodexName,
-			"max_turns", req.Limits.MaxTurns, "detail", "Codex has no setting that caps a run's rounds, "+
-				"so this run is not capped; role.sandbox.max_turns: 0 lifts the cap for a seat on codex")
-	}
+// configuration, login, sessions and skills are, whatever a profile sets.
+func (Codex) Pins(_ context.Context, _ sandbox.RunRequest, paths Paths) []Pinned {
 	return []Pinned{{Name: "CODEX_HOME", Value: paths.CodexHome()}}
 }
 
@@ -279,6 +313,7 @@ func (Codex) Parse(stdout []byte) sandbox.Result { return decodeAll(&codexEvents
 // helper and its routes, the server's output.
 func (Codex) artifacts(p Paths) (files, dirs []string) {
 	return []string{p.CodexLiveConfig(), p.CodexConfig(), p.CodexConfigFresh(), p.CodexSocket(),
+		p.CodexExecPID(), p.CodexCapped(),
 		p.CodexThread(), p.CodexThread() + ".next", p.CodexNoteHelper(), p.CodexNotesURL(),
 		p.CodexNotesURLFresh(), p.WorkDir() + "/codex-server.log"}, nil
 }

@@ -36,6 +36,7 @@ type codexEvent struct {
 	Error    *codexError     `json:"error"`
 	Item     *codexItem      `json:"item"`
 	Line     json.RawMessage `json:"line"`
+	Rounds   int             `json:"rounds"`
 }
 
 // codexError is a turn.failed event's error.
@@ -83,6 +84,9 @@ type codexEvents struct {
 	lastError     string
 	sawLine       bool
 	following     bool
+	// capped is the round cap the script ended the run at, 0 where none
+	// ([codexCappedEvent]).
+	capped int
 	// rollout is the rollout lines the script appended, each with its line
 	// break, held to [codexEvents.bound]; rolloutDropped counts what was not.
 	rollout        bytes.Buffer
@@ -147,6 +151,9 @@ func (d *codexEvents) Line(line []byte) {
 		d.transcript.add(activityline.Words(activityline.TagNote, ev.Message))
 	case codexRolloutEvent:
 		d.keepRollout(ev.Line)
+	case codexCappedEvent:
+		d.capped = max(ev.Rounds, 1)
+		d.transcript.add(activityline.Words(activityline.TagError, d.cappedWords()))
 	}
 }
 
@@ -383,10 +390,18 @@ func (d *codexEvents) Result() sandbox.Result {
 		res.Text = withNote(res.Text, fmt.Sprintf("(%s more of the answer not kept: past the %s a run's "+
 			"answer is read to)", humanSize(int64(d.answerDropped)), humanSize(int64(d.bound()))))
 	}
-	res.Success = d.completed && d.failure == "" && d.answer != ""
+	res.Success = d.completed && d.failure == "" && d.answer != "" && d.capped == 0
 	res.Transcript, res.TranscriptElidedLines, res.TranscriptElidedBytes = d.transcript.result()
 	if !res.Success {
 		res.Error = firstNonBlank(d.failure, d.lastError, "the harness produced no answer")
+		if d.capped > 0 {
+			res.Error, res.RoundCapped = d.cappedWords(), true
+		}
 	}
 	return res
+}
+
+// cappedWords is what a run ended at its round cap says of its end.
+func (d *codexEvents) cappedWords() string {
+	return fmt.Sprintf("the run reached its round cap of %d model responses before it finished", d.capped)
 }
