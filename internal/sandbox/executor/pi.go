@@ -424,30 +424,33 @@ func (p Pi) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.Ru
 		}
 		skills[at] = s.Listed()
 	}
-	if err := p.writeExtension(ctx, box, paths.PiExtension(), req.System, req.MCPServers, req.Steer,
-		req.SkillLoads, req.Limits.MaxTurns, skills); err != nil {
+	if err := p.writeExtension(ctx, box, paths.PiExtension(), req, req.MCPServers, req.Steer,
+		req.SkillLoads, skills); err != nil {
 		return "", err
 	}
 	if f := req.FreshWiring; f != nil {
-		if err := p.writeExtension(ctx, box, paths.PiExtensionFresh(), req.System, f.MCPServers, f.Steer,
-			f.SkillLoads, req.Limits.MaxTurns, skills); err != nil {
+		if err := p.writeExtension(ctx, box, paths.PiExtensionFresh(), req, f.MCPServers, f.Steer,
+			f.SkillLoads, skills); err != nil {
 			return "", err
 		}
 	}
 	return paths.PiExtension(), nil
 }
 
-// writeExtension writes the extension, wired to servers, steer's notes route,
-// loads' skill route and the cap, to file: the seat's system text told of
-// notes where the run is wired to them.
-func (p Pi) writeExtension(ctx context.Context, box sandbox.Sandbox, file, system string,
-	servers map[string]sandbox.MCPServer, steer sandbox.SteerWiring, loads sandbox.SkillWiring, turns int,
+// writeExtension writes the extension, wired to servers, steer's notes route
+// and loads' skill route, with req's cap and the names its sign-in is under,
+// to file: the seat's system text told of notes where the run is wired to
+// them.
+func (p Pi) writeExtension(ctx context.Context, box sandbox.Sandbox, file string, req sandbox.RunRequest,
+	servers map[string]sandbox.MCPServer, steer sandbox.SteerWiring, loads sandbox.SkillWiring,
 	skills map[string]string) error {
 
+	system := req.System
 	if steer.Set() {
 		system = withNoteInstruction(system, p.NoteInstruction())
 	}
-	settings := piExtensionSettings{System: system, Cap: max(turns, 0), Required: piRequired(servers)}
+	settings := piExtensionSettings{System: system, Cap: max(req.Limits.MaxTurns, 0),
+		Required: piRequired(servers), Withheld: piWithheld(req.SignInEnv)}
 	for _, name := range slices.Sorted(maps.Keys(servers)) {
 		settings.Servers = append(settings.Servers, piServer{Name: name, Config: piMCP(servers[name])})
 	}
@@ -465,6 +468,15 @@ func (p Pi) writeExtension(ctx context.Context, box sandbox.Sandbox, file, syste
 		return fmt.Errorf("executor: writing the Pi run's extension: %w", err)
 	}
 	return nil
+}
+
+// piWithheld is the names the model's shell runs without: every name that
+// signs pi in ([sandbox.RunRequest.SignInEnv]), sorted and once each. Pi reads
+// them from its own environment; its bash tool's children never see them.
+func piWithheld(names []string) []string {
+	out := slices.Clone(names)
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // piRequired is the servers a run fails without, the extension checking each

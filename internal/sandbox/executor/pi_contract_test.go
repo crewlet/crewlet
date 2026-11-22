@@ -49,6 +49,7 @@ func piReachesTheBridgesRoute(t *testing.T) {
 		t.Fatalf("the run was written no extension (%v)", err)
 	}
 	dir := t.TempDir()
+	executor.WritePiAPIStub(t, dir)
 	file := filepath.Join(dir, "extension.mjs")
 	if err := os.WriteFile(file, extension, 0o600); err != nil {
 		t.Fatal(err)
