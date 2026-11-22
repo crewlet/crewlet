@@ -76,7 +76,7 @@ func TestCodeHoldsReadsRowsAndEverySeatHolder(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if created, err := e.backends.Fleet.CreateSandboxRun(t.Context(), row.TurnID, raw); err != nil || !created {
+		if created, err := e.backends.Fleet.CreateSandboxRun(t.Context(), row.TurnID, raw, nil); err != nil || !created {
 			t.Fatalf("seed %s's row: %v %v", row.TurnID, created, err)
 		}
 	}

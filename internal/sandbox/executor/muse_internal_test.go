@@ -573,18 +573,26 @@ func TestAMuseArchiveReadsAsTheSessionsTranscript(t *testing.T) {
 	}
 }
 
-// A MUSE RUN'S ARTEFACTS ARE ITS OWN FILES, never its settings (written whole
-// every run, beside the login), its skills (rewritten by every run) or its
-// sessions.
+// A MUSE RUN'S ARTEFACTS ARE ITS OWN FILES and the home's skills, personal
+// instructions and installed plugins, never its settings (written whole every
+// run), its login or its sessions.
 //
-// Mutation: list the settings or the sessions directory.
+// Mutation: list the settings, the login or the sessions directory.
 func TestAMuseRunsArtifactsAreItsOwnFiles(t *testing.T) {
 	p := Paths{Home: "/h"}
 	files, dirs := (Muse{}).artifactFiles(p), (Muse{}).artifactDirs(p)
 	if !slices.Equal(files, []string{p.MuseChildLines(), p.MuseTakeConfig(), p.MuseTakeConfigFresh(), p.MuseNoteHelper(),
-		p.MuseNotesInstall()}) ||
-		!slices.Equal(dirs, []string{p.MuseServers(), p.MuseServersFresh(), p.MuseNotesPlugin()}) {
+		p.MuseNotesInstall(), p.MuseInstructions()}) ||
+		!slices.Equal(dirs, []string{p.MuseServers(), p.MuseServersFresh(), p.MuseNotesPlugin(), p.MuseSkills(),
+			p.MuseConfigSkills(), p.MusePlugins()}) {
 		t.Fatalf("artifacts = %v %v", files, dirs)
+	}
+	for _, kept := range []string{p.MuseSettings(), p.MuseConfig() + "/auth.json", p.MuseSessions()} {
+		if slices.ContainsFunc(append(files, dirs...), func(gone string) bool {
+			return kept == gone || strings.HasPrefix(kept, gone+"/")
+		}) {
+			t.Errorf("the clear removes %s", kept)
+		}
 	}
 }
 

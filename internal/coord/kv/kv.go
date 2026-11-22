@@ -794,7 +794,7 @@ func (s *Store) each(ctx context.Context, kv jetstream.KeyValue,
 // create writes a key that must not hold a live value through [createKey];
 // markers.go says why not the bucket handle's own.
 func (s *Store) create(ctx context.Context, kv jetstream.KeyValue, key string, value []byte) (uint64, error) {
-	return createKey(ctx, s.js, kv, key, value)
+	return createKey(ctx, s.js, kv, key, value, nil)
 }
 
 // eachUnder is [Store.each] over one resource class, narrowed at the broker —

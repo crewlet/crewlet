@@ -72,7 +72,7 @@ func TestARunsListingAcrossALeafsLinkDeliversItsRecordsInItsPass(t *testing.T) {
 		t.Fatal(err)
 	}
 	listed := map[string][]byte{}
-	err = listUnder(t.Context(), leaf.js, read, leaf.runs, runRecordKeys, "the sandbox runs",
+	err = listUnder(t.Context(), leaf.js, read, leaf.runs, runRecordKeys, "the sandbox runs", false,
 		func(kve jetstream.KeyValueEntry) error {
 			listed[kve.Key()] = bytes.Clone(kve.Value())
 			return nil
@@ -155,8 +155,8 @@ type headersSpy struct {
 	err  error
 }
 
-func (s *headersSpy) watchHeaders(ctx context.Context, keys string) (jetstream.KeyWatcher, error) {
-	w, err := s.settledBucket.watchHeaders(ctx, keys)
+func (s *headersSpy) watchHeaders(ctx context.Context, keys string, beat time.Duration) (jetstream.KeyWatcher, error) {
+	w, err := s.settledBucket.watchHeaders(ctx, keys, beat)
 	if err != nil {
 		return nil, err
 	}

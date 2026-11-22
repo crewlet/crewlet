@@ -662,8 +662,9 @@ func writeMuseNotes(ctx context.Context, box sandbox.Sandbox, req sandbox.RunReq
 }
 
 // museWiring is the part of a run's script that wires its settings before its
-// harness starts: the notes plugin of an earlier run removed, this run's
-// installed and approved where it has one; then each MCP server added
+// harness starts: the run's notes plugin installed and approved where it has
+// one, among no other, since the clear removed every installed plugin
+// ([Paths.MusePlugins]); then each MCP server added
 // whole. AN APPROVAL REWRITES THE SETTINGS, dropping every server's
 // `required` and `tool_timeout_sec`, while `muse mcp add-json` keeps both
 // (measured on 1.4.25), so the servers come after it. A plugin Muse would not
@@ -678,7 +679,6 @@ func museWiring(paths Paths) string {
 	installed := q(paths.MuseNotesInstall())
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	line(`muse plugins remove %s --json < /dev/null > /dev/null 2>&1; rm -f %s`, museNotesPlugin, installed)
 	line(`if [ -f %s ]; then`, q(plugin+"/.muse-plugin/plugin.json"))
 	line(`  chmod 0755 %s 2> /dev/null`, q(paths.MuseNoteHelper()))
 	line(`  if ! { muse plugins install %s --scope user --json < /dev/null > %s 2> %s && muse plugins approve %s --json < /dev/null > /dev/null 2>> %s; }; then`,
@@ -734,17 +734,23 @@ for o in $(env | sed -n 's/^\(` + museShellOff + `[A-Za-z0-9_]*\)=.*/\1/p'); do 
 // artifactFiles is the files a Muse Code run leaves in its box of its own
 // beside its sessions, which a later run must not find ([artifactHolder]):
 // the note helper, its take configs, its answer to the notes plugin's install
-// and the count of its subagents' lines its script kept. Its settings are
-// written whole by every run, and its sessions are kept.
+// and the count of its subagents' lines its script kept, and the personal
+// AGENTS.md Muse loads as the user's own instructions, whatever wrote it
+// (measured on 1.4.25). Its settings are written whole by every run, and its
+// sessions and login are kept.
 func (Muse) artifactFiles(p Paths) []string {
 	return []string{p.MuseChildLines(), p.MuseTakeConfig(), p.MuseTakeConfigFresh(), p.MuseNoteHelper(),
-		p.MuseNotesInstall()}
+		p.MuseNotesInstall(), p.MuseInstructions()}
 }
 
 // artifactDirs is the directories a Muse Code run leaves of its own
-// ([artifactDirHolder]): its MCP servers, a fresh session's, and its plugin.
+// ([artifactDirHolder]): its MCP servers, a fresh session's, and its plugin;
+// and the two skill directories and the installed plugins Muse loads as the
+// user's own, whatever wrote them (measured on 1.4.25), so a run loads only
+// the skills its launch writes.
 func (Muse) artifactDirs(p Paths) []string {
-	return []string{p.MuseServers(), p.MuseServersFresh(), p.MuseNotesPlugin()}
+	return []string{p.MuseServers(), p.MuseServersFresh(), p.MuseNotesPlugin(), p.MuseSkills(), p.MuseConfigSkills(),
+		p.MusePlugins()}
 }
 
 // museChargeBytes is the fewest bytes a Muse Code session's brief is counted

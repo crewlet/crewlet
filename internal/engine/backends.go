@@ -951,8 +951,8 @@ func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends,
 // recorded, its resume and reap refused. Raising the counter is the whole
 // repair: the next claim mints above the rows and recovery fences them.
 //
-// EVERY BOOT, on every topology: it costs one listing of the runs, and a floor
-// at or below the counter changes nothing, so concurrent nodes agree.
+// EVERY BOOT, on every topology: one headers-only pass of the runs' standing,
+// and a floor at or below the counter changes nothing, so concurrent nodes agree.
 func floorSeatEpochs(ctx context.Context, epochs *kv.Epochs, fleet coord.Fleet, home string) error {
 	floors, err := sandbox.NewCoordStore(fleet).OwnerEpochs(ctx)
 	if err != nil {
