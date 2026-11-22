@@ -199,8 +199,8 @@ func (s *unitSpool) remove() {
 // the unit's way is known ([candidate]): 64 KiB, the buffer a unit's JSON was
 // written through before, so its JSON way costs a take at its base nothing
 // more (takeBaseHeldBytes), and its text way, held only once a unit is read
-// both ways, 64 KiB of the 228 the base tier leaves each of [SessionTakesAtOnce]
-// (340.6 MiB over 29 takes of 11.52). A larger way would cost the JSON way
+// both ways, 64 KiB of the 110 the base tier leaves each of [SessionTakesAtOnce]
+// (340.6 MiB over 29 takes of 11.64). A larger way would cost the JSON way
 // more than the buffer it reuses.
 const wayRoomBytes = 64 << 10
 

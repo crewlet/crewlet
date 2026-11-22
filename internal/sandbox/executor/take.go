@@ -39,21 +39,24 @@ var _ sandbox.SessionTaker = (*Runner)(nil)
 // SessionTakesAtOnce is how many takes this process scrubs at once, each
 // holding a slot of [sessionTakes] from before it asks its box for anything
 // to its scrub's and its meter's end. 29: a take at its base holds at most
-// 11.52 MiB, its scrub's 8.00 (BenchmarkATakeAtItsBase, its spool's gzip
-// writer among it) and its meter's 3.53 (BenchmarkAMeterAtItsBase) at once,
-// the most of 30 runs each, one a process, on a two-core slot, live bytes
-// under a stop-the-world GC at every 1% of growth; 29 times over is 334.2
-// MiB, within the base tier's 340.6 MiB (64 reads at [baseTierReadBytes], the
-// package doc's "A collection's read of a thread"): so the takes at their
-// base hold no more than every read of the tier does.
+// 11.64 MiB ([takeBaseHeldBytes]); 29 times over is 337.5 MiB, within the
+// base tier's 340.6 MiB (64 reads at [baseTierReadBytes], the package doc's
+// "A collection's read of a thread"): so the takes at their base hold no
+// more than every read of the tier does.
 const SessionTakesAtOnce = 29
 
 // takeBaseHeldBytes is what a take at its base holds at most, its scrub's and
-// its meter's at once: 11.52 MiB ([SessionTakesAtOnce]), the scrub's 8.00 and
-// the meter's 3.53, each to the KiB.
+// its meter's at once, 11.64 MiB: each part's live high-water, the scrub's
+// 8.00 MiB (BenchmarkATakeAtItsBase, its spool's gzip writer among it) and the
+// meter's 3.53 (BenchmarkAMeterAtItsBase), the most of 30 runs each, one a
+// process, on a two-core slot, live bytes under a stop-the-world GC at every
+// 1% of growth, to the KiB; and 1% of each beside it, what that sampling can
+// miss: a buffer allocated and dropped within 1% of the heap's growth.
 const (
-	scrubBaseHeldBytes = 8189 << 10
-	meterBaseHeldBytes = 3610 << 10
+	scrubBaseLiveBytes = 8189 << 10
+	meterBaseLiveBytes = 3610 << 10
+	scrubBaseHeldBytes = scrubBaseLiveBytes + scrubBaseLiveBytes/100
+	meterBaseHeldBytes = meterBaseLiveBytes + meterBaseLiveBytes/100
 	takeBaseHeldBytes  = scrubBaseHeldBytes + meterBaseHeldBytes
 )
 
