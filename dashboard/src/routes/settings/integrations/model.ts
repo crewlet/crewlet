@@ -228,6 +228,17 @@ export const STORIES: Record<string, ToolStory> = {
     byHand:
       "Connect Google Cloud first and run its setup block again, which turns on the Google Ads API, then add each agent's email in Admin, Access and security, and set each account's spending caps.",
   },
+  google_play: {
+    does: [
+      "Read reviews, listings, releases, products, vitals and the monthly reports for the apps you choose",
+      "Draft releases, halt rollouts and manage testers and draft products where you allow operate",
+      "Ask you before any reply, listing, image, release, price or refund: building and uploading stays with Expo",
+    ],
+    identity:
+      "Each agent has its own Google identity in your Google identity project; you invite it in Play Console with the app permissions it may act with. Its tokens never leave Crewlet.",
+    byHand:
+      "Connect Google Cloud first and run its setup block again, which turns on the Play APIs, then invite each agent's email in Play Console, Users and permissions.",
+  },
 };
 
 /** Where a tool stands, in the four words a person sorts by. */

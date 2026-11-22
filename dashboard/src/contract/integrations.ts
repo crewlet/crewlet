@@ -217,6 +217,7 @@ export const INTEGRATION_TOOLS = {
   app_store_connect: ["app_store_connect"],
   google_analytics: ["google_analytics"],
   google_ads: ["google_ads"],
+  google_play: ["google_play"],
 } as const;
 
 /**

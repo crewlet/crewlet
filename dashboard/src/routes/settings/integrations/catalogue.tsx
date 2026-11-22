@@ -182,6 +182,7 @@ const SURFACE_NAMES: Record<string, string> = {
   app_store_connect: "App Store Connect",
   google_analytics: "Google Analytics",
   google_ads: "Google Ads",
+  google_play: "Google Play",
 };
 
 /** One tool's surfaces, in the engine's grouping, named for this screen. */
@@ -274,6 +275,14 @@ export const CATALOG: Entry[] = [
     vendor: "app-store-connect",
     surfaces: surfacesOf("app_store_connect"),
     doc: "app-store-connect",
+  },
+  {
+    key: "google_play",
+    name: "Google Play",
+    description: "Store listings, reviews and replies, releases, products, prices and vitals.",
+    vendor: "google-play",
+    surfaces: surfacesOf("google_play"),
+    doc: "google-play",
   },
   {
     key: "digitalocean",
