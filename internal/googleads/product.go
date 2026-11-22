@@ -1,11 +1,15 @@
 package googleads
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"maps"
 	"net/http"
+	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -83,15 +87,29 @@ func (p *Product) Level(handle string) growth.Level {
 	return b.LevelOrDefault()
 }
 
-// newRequest is op's request, acting in the customer its path names, sent
-// through that customer's manager where the company names one.
+// newRequest is op's request, acting in the customer its path names or,
+// where it names none, its body's customer_id, which Google reads in either
+// spelling (a reach forecast's user lists), sent through that customer's
+// manager where the company names one.
 func (p *Product) newRequest(op growth.Operation, path, query map[string]string, body map[string]any) (
 	googlegrowth.Request, error) {
 	req, err := googlegrowth.NewRequest(op, path, query, body)
 	if err != nil {
 		return req, err
 	}
-	if customer := path["customersId"]; customer != "" {
+	// THE PATH'S CUSTOMER IS THE TEMPLATE'S: NewRequest refuses a parameter
+	// the path does not name.
+	customer := path["customersId"]
+	if named := googlegrowth.Lookup(body, "customerId"); named != nil {
+		id, _ := named.(string)
+		if !customerID().MatchString(id) || (customer != "" && id != customer) {
+			return req, refusal(growth.RefusedInvalid, fmt.Sprintf("body.customer_id names %s, which is not the "+
+				"account the call acts in (%s): name one customer ID, once. No vendor was reached.",
+				googlegrowth.Words(named), cmp.Or(customer, "none")))
+		}
+		customer = id
+	}
+	if customer != "" {
 		req.Account = "customers/" + customer
 		if manager := p.block().ManagerOf(customer); manager != "" {
 			req.Header = http.Header{"Login-Customer-Id": {manager}}
@@ -99,6 +117,9 @@ func (p *Product) newRequest(op growth.Operation, path, query map[string]string,
 	}
 	return req, nil
 }
+
+// customerID is a Google Ads customer ID: digits alone.
+var customerID = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[0-9]{1,20}$`) })
 
 // customerOf is the customer req acts in, "" where none (a planning method
 // that names no account).
@@ -108,25 +129,23 @@ func customerOf(req googlegrowth.Request) string {
 }
 
 // inScope refuses req where it acts in a customer the seat may not reach, or
-// where an operation in it names another customer's resource.
+// where its body names a resource of another customer than the one it acts
+// in, at any depth: what an operation acts on and every resource its fields
+// point at.
 func (p *Product) inScope(handle string, req googlegrowth.Request) error {
 	b := p.seat(handle)
 	if b == nil {
 		return refusal(growth.RefusedForbidden, "this agent is off at Google Ads. No vendor was reached.")
 	}
 	customer := customerOf(req)
-	if customer == "" {
-		return nil
-	}
-	if !slices.Contains(b.Customers, customer) || !p.block().Reaches(customer) {
+	if customer != "" && (!slices.Contains(b.Customers, customer) || !p.block().Reaches(customer)) {
 		return refusal(growth.RefusedForbidden, "account "+customer+" is not one of this agent's accounts ("+
 			words.Or(b.Customers)+"). No vendor was reached.")
 	}
-	ops, _ := parse(req.Op, req.Body)
-	for _, name := range namesIn(ops) {
+	for _, name := range namesIn(req.Body) {
 		if owner, _, _ := kindOf(name); owner != customer {
-			return refusal(growth.RefusedForbidden, fmt.Sprintf("an operation names %s, which is not in account %s "+
-				"the call acts in. No vendor was reached.", name, customer))
+			return refusal(growth.RefusedForbidden, fmt.Sprintf("the body names %s, which is not in the account "+
+				"the call acts in (%s). No vendor was reached.", name, cmp.Or(customer, "none")))
 		}
 	}
 	return nil
@@ -178,30 +197,25 @@ func (p *Product) toolClass(name string) growth.Class {
 	return tool.Class
 }
 
-// namesIn is every resource name the operations hold, at any depth: what each
-// acts on and every resource its fields point at.
-func namesIn(ops []operation) []string {
-	var out []string
-	var walk func(v any)
-	walk = func(v any) {
-		switch t := v.(type) {
-		case string:
-			if _, _, ok := kindOf(t); ok {
-				out = append(out, t)
-			}
-		case map[string]any:
-			for _, inner := range t {
-				walk(inner)
-			}
-		case []any:
-			for _, inner := range t {
-				walk(inner)
-			}
+// namesIn is every resource name a body holds, at any depth.
+func namesIn(v any) []string {
+	switch t := v.(type) {
+	case string:
+		if _, _, ok := kindOf(t); ok {
+			return []string{t}
 		}
+	case map[string]any:
+		var out []string
+		for _, k := range slices.Sorted(maps.Keys(t)) {
+			out = append(out, namesIn(t[k])...)
+		}
+		return out
+	case []any:
+		var out []string
+		for _, inner := range t {
+			out = append(out, namesIn(inner)...)
+		}
+		return out
 	}
-	for _, o := range ops {
-		walk(o.name)
-		walk(o.object)
-	}
-	return out
+	return nil
 }

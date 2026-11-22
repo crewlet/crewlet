@@ -251,17 +251,16 @@ func TestRunningABatchJobIsWhatItStaged(t *testing.T) {
 	}
 }
 
-// AN OPERATION NAMING ANOTHER ACCOUNT'S RESOURCE IS SEEN AT ANY DEPTH, for the
-// scope check: what it acts on and what its fields point at.
-func TestEveryResourceAnOperationNamesIsSeen(t *testing.T) {
+// A RESOURCE ANOTHER ACCOUNT HOLDS IS SEEN AT ANY DEPTH OF A BODY, for the
+// scope check: what an operation acts on, what its fields point at, and what
+// a method that is no mutate names.
+func TestEveryResourceABodyNamesIsSeen(t *testing.T) {
 	t.Parallel()
-	o, ok := parse(opOf(t, "googleads.customers.adGroups.mutate"), ops(map[string]any{"create": map[string]any{
-		"campaign": "customers/9999999999/campaigns/7", "name": "x"}}))
-	if !ok {
-		t.Fatal("the create was not read")
-	}
-	names := namesIn(o)
-	if len(names) != 1 || names[0] != "customers/9999999999/campaigns/7" {
+	names := namesIn(ops(map[string]any{"create": map[string]any{
+		"campaign": "customers/9999999999/campaigns/7", "name": "customers/1"}},
+		map[string]any{"remove": "customers/1234567890/adGroups/2"}))
+	if len(names) != 2 || names[0] != "customers/9999999999/campaigns/7" ||
+		names[1] != "customers/1234567890/adGroups/2" {
 		t.Errorf("the names seen are %v", names)
 	}
 }

@@ -152,7 +152,7 @@ func (f *fakeAds) serve(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(v)
 	}
-	if !strings.Contains(r.URL.Path, "/customers/"+customer+"/") {
+	if strings.Contains(r.URL.Path, "/customers/") && !strings.Contains(r.URL.Path, "/customers/"+customer+"/") {
 		w.WriteHeader(http.StatusForbidden)
 		answer(map[string]any{"error": map[string]any{"code": 403, "status": "PERMISSION_DENIED", "message": "no access"}})
 		return
@@ -166,6 +166,8 @@ func (f *fakeAds) serve(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case strings.HasSuffix(r.URL.Path, "/googleAds:search"):
 		answer(map[string]any{"results": f.search(query)})
+	case strings.HasSuffix(r.URL.Path, ":listPlannableUserLists"):
+		answer(map[string]any{"plannableUserLists": []any{}})
 	case strings.HasSuffix(r.URL.Path, ":run"):
 		f.writes++
 		answer(map[string]any{"name": "customers/" + customer + "/operations/1"})
@@ -591,5 +593,53 @@ func TestAnApprovedBatchRunIsMadeOnlyOnItsStaging(t *testing.T) {
 	call.HeldCall = "held-2"
 	if _, err := w.p.Apply(t.Context(), call, hold.Binding); !errors.Is(err, growth.ErrMoved) || w.f.writes != 0 {
 		t.Fatalf("a run whose staging came to more answered %v (writes %d)", err, w.f.writes)
+	}
+}
+
+// A CALL ACTS ONLY IN THE ACCOUNT IT NAMES: a resource another account holds,
+// named in the body of a method that is no mutate, a customer_id naming
+// another account, alone or beside the path's, and a path parameter the
+// method does not name, are each refused before Google; a customer_id naming
+// the seat's account is called through its manager.
+//
+// Mutation: walk the mutate's operations alone, or read where a call acts
+// from its path alone, and another account is reached.
+func TestACallActsOnlyInTheAccountItNames(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	for name, args := range map[string]map[string]any{
+		"a recommendation of another account": {"operation": "googleads.customers.recommendations.apply",
+			"path": map[string]any{"customersId": customer},
+			"body": map[string]any{"operations": []any{map[string]any{
+				"resource_name": "customers/9999999999/recommendations/7"}}}},
+		"another account's user lists": {"operation": "googleads.listPlannableUserLists",
+			"body": map[string]any{"customer_id": "9999999999"}},
+		"two accounts": {"operation": "googleads.customers.generateReachForecast",
+			"path": map[string]any{"customersId": customer}, "body": map[string]any{"customerId": "9999999999"}},
+		"a resource with no account": {"operation": "googleads.geoTargetConstants.suggest",
+			"body": map[string]any{"campaign": "customers/9999999999/campaigns/7"}},
+		"a stray path parameter": {"operation": "googleads.customers.campaigns.mutate",
+			"path": map[string]any{"customersId": customer, "campaignsId": "1"},
+			"body": map[string]any{"operations": []any{}}},
+	} {
+		tool := "google_ads_read"
+		if strings.Contains(name, "recommendation") || strings.Contains(name, "stray") {
+			tool = "google_ads_spend"
+		}
+		if _, _, err := w.call(t, tool, args); !refused(err) {
+			t.Errorf("%s answered %v", name, err)
+		}
+	}
+	for _, c := range pathsCalled(w.f) {
+		t.Errorf("Google was asked %s", c)
+	}
+	if _, _, err := w.call(t, "google_ads_read", map[string]any{"operation": "googleads.listPlannableUserLists",
+		"body": map[string]any{"customerId": customer}}); err != nil {
+		t.Fatal(err)
+	}
+	w.f.mu.Lock()
+	defer w.f.mu.Unlock()
+	if len(w.f.managers) != 1 || w.f.managers[0] != manager {
+		t.Errorf("the seat's account was called with managers %v, want %s", w.f.managers, manager)
 	}
 }

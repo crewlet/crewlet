@@ -33,6 +33,12 @@
 // links, users and billing are admin. A rule that cannot read what it compares
 // classes the change as the highest it allows.
 //
+// # A call acts in one account
+//
+// A call acts in the customer its path names (the operation's template's) or,
+// where it names none, its body's customer_id; every resource name its body
+// holds, at any depth, is that customer's.
+//
 // # An approval binds what the rules read
 //
 // What an approval binds is the live state its rules read (googlegrowth's
