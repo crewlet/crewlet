@@ -56,6 +56,7 @@ func geminiTakeReachesTheBridgeTool(t *testing.T) {
 	endpoint := probeBridge(t, inbox, &probeLedger{})
 	record := t.TempDir()
 	runner, box := geminiBox(t, `cp "$HOME/.gemini/settings.json" '`+record+`/settings.json'
+printf %s "$`+executor.GeminiTakesEnv+`" > '`+record+`/takes'
 cat > '`+record+`/stdin'
 echo '{"type":"result","status":"success"}'`)
 	p := executor.PathsFor(box)
@@ -73,9 +74,14 @@ echo '{"type":"result","status":"success"}'`)
 		} `json:"hooks"`
 	}
 	readJSON(t, filepath.Join(record, "settings.json"), &settings)
-	// THE RUN'S RECORD OF TAKES EXISTS, EMPTY, BEFORE ANY HOOK FIRES, so a
+	// THE SESSION'S RECORD OF TAKES EXISTS, EMPTY, BEFORE ANY HOOK FIRES, so a
 	// take never recorded reads absent once the job ends rather than undecided.
-	if before, err := box.ReadFile(t.Context(), p.GeminiTakes()); err != nil || len(before) != 0 {
+	named, err := os.ReadFile(filepath.Join(record, "takes"))
+	takes := string(named)
+	if err != nil || !strings.HasPrefix(takes, p.GeminiTakesDir()+"/") || !strings.HasSuffix(takes, ".jsonl") {
+		t.Fatalf("the run named its record of takes %q (%v), want a session's under %s", takes, err, p.GeminiTakesDir())
+	}
+	if before, err := box.ReadFile(t.Context(), takes); err != nil || len(before) != 0 {
 		t.Errorf("before any hook the record of takes is %q (%v), want an empty file", before, err)
 	}
 	// EACH HOOK, PLAYED AS THE HARNESS PLAYS IT: its command, in sh, the
@@ -89,7 +95,8 @@ echo '{"type":"result","status":"success"}'`)
 				}
 				raw, _ := json.Marshal(input)
 				cmd := exec.CommandContext(t.Context(), "sh", "-c", hook.Command)
-				cmd.Env = append(os.Environ(), "PATH="+filepath.Dir(node)+":"+os.Getenv("PATH"))
+				cmd.Env = append(os.Environ(), "PATH="+filepath.Dir(node)+":"+os.Getenv("PATH"),
+					executor.GeminiTakesEnv+"="+takes)
 				cmd.Stdin = strings.NewReader(string(raw))
 				out, err := cmd.Output()
 				if err != nil {
@@ -117,7 +124,7 @@ echo '{"type":"result","status":"success"}'`)
 	if answer["decision"] != "block" || answer["reason"] != probeNote || len(answer) != 2 {
 		t.Errorf("the finish was answered %v, want a block with the note as its reason and nothing else", answer)
 	}
-	recorded, err := box.ReadFile(t.Context(), p.GeminiTakes())
+	recorded, err := box.ReadFile(t.Context(), takes)
 	if err != nil || !strings.Contains(string(recorded), `"take":"`+probeTake+`","digest":"`+
 		executor.ItemDigest(probeNote)+`"`) {
 		t.Errorf("the take script recorded %q (%v), want the take's token beside its text's digest", recorded, err)
@@ -128,5 +135,45 @@ echo '{"type":"result","status":"success"}'`)
 	}
 	if got := inbox.asked(); !slices.Equal(got, []string{mcpbridge.SteerEventFinish, mcpbridge.SteerEventFinish}) {
 		t.Errorf("the inbox was asked at %v, want both finishes", got)
+	}
+}
+
+// A JOB'S RECORD OF TAKES OUTLIVES THE NEXT LAUNCH IN ITS BOX. A job whose
+// session shows one of its two takes delivered has ended, and another job
+// launches in the same real box, clearing every run's artifacts; the first
+// job's receipts, asked after, still read its own record: the delivered take
+// held, the other absent (served again, never told twice).
+//
+// Mutations, each red: clear the records' directory with the run's artifacts;
+// read a job's receipts off the record of the box's latest run.
+func TestAJobsRecordOfTakesOutlivesTheNextLaunchInItsBox(t *testing.T) {
+	t.Parallel()
+	const session = "11111111-2222-4333-8444-555555555555"
+	const delivered = "## A note from Lead, sent while this turn was running: CAP-TWIN-END"
+	runner, box := geminiBox(t, `echo '{"type":"result","status":"success"}'`)
+	p := executor.PathsFor(box)
+	chat, err := os.ReadFile(filepath.Join("testdata", "gemini", "0.70.0", "session-twin-end.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for path, content := range map[string]string{
+		p.GeminiChats() + "/session-2026-11-21T22-24-11111111.jsonl": string(chat),
+		p.GeminiTakes(session): `{"take":"take-a","digest":"` + executor.ItemDigest(delivered) + `"}` + "\n" +
+			`{"take":"take-b","digest":"` + executor.ItemDigest("## A note never handed over") + `"}` + "\n",
+	} {
+		if err := box.WriteFile(t.Context(), path, []byte(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	endpoint := probeBridge(t, &geminiProbeInbox{}, &probeLedger{})
+	waitRun(t, runner, box, sandbox.RunRequest{Brief: "the next job",
+		MCPServers: map[string]sandbox.MCPServer{"crewlet": {Transport: sandbox.TransportHTTP, URL: endpoint}},
+		Steer: sandbox.SteerWiring{Server: "crewlet", Tool: mcpbridge.SteerTool,
+			URL: mcpbridge.SteerURL(endpoint)}})
+	got := runner.ReadMainThread(t.Context(), box, sandbox.MainThreadAsk{Session: session,
+		Takes: []sandbox.AskedTake{{Take: "take-a"}, {Take: "take-b"}}, Ended: true}).Receipts
+	if !slices.Equal(got.Held, []string{"take-a"}) || !slices.Equal(got.Absent, []string{"take-b"}) {
+		t.Errorf("after the next launch the first job's takes read held %q, absent %q (%s); "+
+			"want take-a held, take-b absent", got.Held, got.Absent, got.Why)
 	}
 }
