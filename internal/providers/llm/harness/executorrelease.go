@@ -47,7 +47,13 @@ func (p *Provider) executorRelease(ctx context.Context, opts DiagnoseOptions, ve
 				"release at or past %s", said, exit, p.profile.Binary, p.key, orNone(runner.Floor))
 		}
 	}
-	return fmt.Sprintf("release: %s, at or past the runner's %s", version, orNone(runner.Floor)), ""
+	if runner.Floor != "" && !releaseAtLeast(runner.Floor, version) {
+		// NEWER THAN MEASURED RUNS, its sessions fresh: only a release the
+		// runner was measured on continues a session another box packed.
+		return fmt.Sprintf("release: %s, newer than the runner's %s: it runs, each run in a fresh session",
+			version, runner.Floor), ""
+	}
+	return fmt.Sprintf("release: %s, the runner's %s", version, orNone(runner.Floor)), ""
 }
 
 // probeExit runs the harness with args as the version probe runs it

@@ -170,11 +170,11 @@ rec=%[1]s
 case "$1" in
 --version) echo 'codex-cli %[2]s'; exit 0;;
 app-server)
-  printf '%%s\n' "$@" > "$rec/server-argv"
+  printf '%%s\n' "$@" > "$rec/server-argv"; pwd > "$rec/server-cwd"
   for a; do case "$a" in unix://*) s=${a#unix://};; esac; done
   %[3]s="$s" %[4]s="$rec" exec %[5]s;;
 exec)
-  printf '%%s\n' "$@" > "$rec/exec-argv"; env > "$rec/env"; cat > "$rec/stdin"
+  printf '%%s\n' "$@" > "$rec/exec-argv"; pwd > "$rec/exec-cwd"; env > "$rec/env"; cat > "$rec/stdin"
   tid=%[6]s; [ "$5" != resume ] || tid=$6
   printf '{"type":"thread.started","thread_id":"%%s"}\n{"type":"turn.started"}\n' "$tid"
   if [ -e "$rec/wait-steer" ]; then i=0; until [ -s "$rec/steers" ] || [ "$i" -ge 200 ]; do sleep 0.05; i=$((i+1)); done; fi

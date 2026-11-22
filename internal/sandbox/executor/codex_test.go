@@ -90,6 +90,11 @@ func TestACodexRunReportsTheThreadItsHarnessMintedAndIsChargedItsRollout(t *test
 			t.Errorf("a command line carries the bridge's token: %q", argv)
 		}
 	}
+	// THE SERVER WORKS WHERE EXEC DOES: under --remote a relative path and an
+	// item's cwd resolve against the server's directory (CODEX-MEASURE §18).
+	if server, exec := recorded(t, record, "server-cwd"), recorded(t, record, "exec-cwd"); !slices.Equal(server, exec) {
+		t.Errorf("the app-server runs in %q and exec in %q", server, exec)
+	}
 	if stdin := strings.Join(recorded(t, record, "stdin"), "\n"); stdin != brief {
 		t.Errorf("exec read %q on stdin, want the brief", stdin)
 	}

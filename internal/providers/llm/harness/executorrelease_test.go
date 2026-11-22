@@ -63,6 +63,7 @@ func TestADirectBoxsCodexIsHeldToItsRunnersFloorAndProbe(t *testing.T) {
 		problem string
 	}{
 		"at the floor, with an app-server": {0, "codex-cli 0.171.0", direct, ""},
+		"newer, fresh sessions only":       {0, "codex-cli 0.172.0", direct, ""},
 		"below the floor":                  {0, "codex-cli 0.170.2", direct, "drives 0.171.0 or later"},
 		"no app-server":                    {1, "codex-cli 0.171.0", direct, "app-server --help` exited 1"},
 		"a remote cell": {1, "codex-cli 0.150.0", DiagnoseOptions{ExecutorSeats: []string{"swe"},
@@ -73,6 +74,9 @@ func TestADirectBoxsCodexIsHeldToItsRunnersFloorAndProbe(t *testing.T) {
 			line, problem := codexEntry(t, tc.probe).executorRelease(t.Context(), tc.opts, tc.version)
 			if line == "" {
 				t.Error("the executor check says nothing of the release")
+			}
+			if fresh := strings.Contains(line, "fresh session"); fresh != (name == "newer, fresh sessions only") {
+				t.Errorf("the line %q says fresh sessions: %v", line, fresh)
 			}
 			if (tc.problem == "" && problem != "") || (tc.problem != "" && !strings.Contains(problem, tc.problem)) {
 				t.Errorf("the problem is %q, want one saying %q", problem, tc.problem)
