@@ -28,6 +28,15 @@ import (
 // takeBound is the archive bound every take here is made within: a session's.
 const takeBound = executorkeep.SessionMaxBytes
 
+// testSpool is a take's spool in a directory of the test's own, in the room a
+// take holds for its scrub's spool.
+func testSpool(t testing.TB) sandbox.SessionSpool {
+	t.Helper()
+	return sandbox.SessionSpool{Dir: t.TempDir(),
+		Bytes: 2*executorkeep.GzipMostBytes(executorkeep.SealedMaxBytes) - executorkeep.SealedMaxBytes,
+		Held:  func(int64) {}}
+}
+
 // keptAndOpened is a taken session as a later launch opens it: sealed into a
 // spool, uploaded and read back through the session store, so a case greps what
 // a later launch carries into its box, never the stream before its seal.
@@ -130,7 +139,7 @@ func TestAKeptSessionCarriesNoSecretTheEnginePutInItsBox(t *testing.T) {
 		t.Fatalf("the run's session was not captured:\n%s", boxFile(t, b, paths(b).Err()))
 	}
 	for _, pack := range []bool{false, true} {
-		taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{
+		taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t),
 			Pack: pack, Scrub: []string{plantedSecret, plantedQuoted}, MaxBytes: takeBound})
 		if err != nil || taken.Body == nil {
 			t.Fatalf("pack %v: TakeSession = %+v, %v", pack, taken, err)
@@ -235,13 +244,13 @@ func TestATakeIsBoundedByTheArchiveItKeeps(t *testing.T) {
 	if res.Captured == nil {
 		t.Fatalf("the run's session was not captured:\n%s", boxFile(t, b, paths(b).Err()))
 	}
-	if _, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{MaxBytes: res.Captured.Size - 1}); err == nil {
+	if _, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), MaxBytes: res.Captured.Size - 1}); err == nil {
 		t.Error("an archive a byte past the take's bound was taken")
 	}
 	if _, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{}); err == nil {
 		t.Error("a take naming no bound was made")
 	}
-	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{MaxBytes: res.Captured.Size})
+	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), MaxBytes: res.Captured.Size})
 	if err != nil || taken.Body == nil {
 		t.Fatalf("an archive at the take's bound: %+v, %v", taken, err)
 	}
@@ -271,7 +280,7 @@ func TestAPackThatFailsIsAnErrorAndNoTranscriptIsNoSession(t *testing.T) {
 		if err == nil || body != nil || !strings.Contains(err.Error(), "the disk broke") {
 			t.Fatalf("PackCapture with a tar that breaks = %+v, %v, %v; want an error saying why", described, body, err)
 		}
-		if _, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Pack: true,
+		if _, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), Pack: true,
 			MaxBytes: takeBound}); err == nil {
 			t.Fatal("a take whose pack failed answered no error")
 		}
@@ -304,7 +313,7 @@ func TestAPackThatFailsIsAnErrorAndNoTranscriptIsNoSession(t *testing.T) {
 		if err != nil || body != nil {
 			t.Fatalf("PackCapture with no transcript = %+v, %v, %v; want nothing", described, body, err)
 		}
-		taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Pack: true, MaxBytes: takeBound})
+		taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), Pack: true, MaxBytes: takeBound})
 		if err != nil || taken.Body != nil {
 			t.Fatalf("a take with no transcript = %+v, %v; want nothing", taken, err)
 		}
@@ -402,8 +411,8 @@ func TestTwoReadsOfOneJobAtOnceNeverMoveAHalfMadeArchive(t *testing.T) {
 		name string
 		take sandbox.SessionTake
 	}{
-		{name: "a read of a job that left no archive", take: sandbox.SessionTake{MaxBytes: takeBound}},
-		{name: "a read that packs the job as it stands", take: sandbox.SessionTake{Pack: true, MaxBytes: takeBound}},
+		{name: "a read of a job that left no archive", take: sandbox.SessionTake{Spool: testSpool(t), MaxBytes: takeBound}},
+		{name: "a read that packs the job as it stands", take: sandbox.SessionTake{Spool: testSpool(t), Pack: true, MaxBytes: takeBound}},
 	}
 	for _, h := range harnesses {
 		t.Run(h.name, func(t *testing.T) {
@@ -711,8 +720,8 @@ type readBack struct {
 
 // takeWhole takes the session of b's job, which is over, as a read of it does
 // (packed now where the job left no archive), and reads it to its end.
-func takeWhole(ctx context.Context, runner *executor.Runner, b sandbox.Sandbox) readBack {
-	taken, err := runner.TakeSession(ctx, b, sandbox.SessionTake{MaxBytes: takeBound})
+func takeWhole(ctx context.Context, t testing.TB, runner *executor.Runner, b sandbox.Sandbox) readBack {
+	taken, err := runner.TakeSession(ctx, b, sandbox.SessionTake{Spool: testSpool(t), MaxBytes: takeBound})
 	switch {
 	case err != nil:
 		return readBack{err: err}
@@ -813,7 +822,7 @@ func overJobs() []overJob {
 func startTake(t *testing.T, runner *executor.Runner, held *heldTake) <-chan readBack {
 	t.Helper()
 	read := make(chan readBack, 1)
-	go func() { read <- takeWhole(t.Context(), runner, held) }()
+	go func() { read <- takeWhole(t.Context(), t, runner, held) }()
 	select {
 	case <-held.held:
 	case got := <-read:
@@ -1104,7 +1113,7 @@ func TestAPacksReleaseIsHeldToItsTakesOwnDeadline(t *testing.T) {
 			}
 			executor.Clocked(runner, func() time.Time { return made })
 			watched := &releaseWatch{Sandbox: b}
-			if got := takeWhole(ctx, runner, watched); got.err != nil {
+			if got := takeWhole(ctx, t, runner, watched); got.err != nil {
 				t.Fatalf("the take was refused: %v", got.err)
 			}
 			watched.mu.Lock()
