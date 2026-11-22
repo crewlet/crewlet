@@ -558,6 +558,7 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	line(`  if bounded login %d e opencode auth import --server "$url" %s > /dev/null 2>&1; then imported=1; elif [ -z "$endasked" ]; then echo 'crewlet: OpenCode refused the login this box was given — sign the engine in again with crewlet llm login' >&2; exit 1; fi`,
 		secs(times.call), doc)
 	line(`fi`)
+	b.WriteString(openCodeEndpointCheck(req.Model, ans, secs(openCodeModelListWait)))
 	line(`if [ -n "$imported" ]; then`)
 	line(`  %s &`, openCodeExporter(times.sync, loop))
 	line(`  xpid=$!`)
@@ -1158,6 +1159,19 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 		// agent, and an image whose own config named another default would
 		// run the brief on an agent the cap never reached.
 		"default_agent": openCodeAgent,
+	}
+	// THE ENTRY'S PROVIDER AT ITS OWN ENDPOINT, pinned where the run knows it
+	// ([openCodeEndpoints]), so no lower configuration points it elsewhere; a
+	// provider it does not know is checked by the script instead.
+	if provider, _, ok := openCodeModelRef(req.Model); ok {
+		if endpoint, pinned := openCodeEndpoints[provider]; pinned {
+			kind, err := openCodeSignInKind(ctx, box, paths, provider)
+			if err != nil {
+				return "", err
+			}
+			cfg["provider"] = map[string]any{provider: map[string]any{
+				"options": map[string]any{"baseURL": endpoint.of(kind)}}}
+		}
 	}
 	agent := map[string]any{}
 	// THE RUN'S TURN CAP, as the agent's `steps` (Claude Code's --max-turns,

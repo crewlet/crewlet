@@ -102,6 +102,9 @@ serve)
 api)
   if [ "$2" = --standalone ]; then shift 2; else authed; shift 3; hangs "$1"; fi
   case "$1" in
+  model.list)
+    if [ -n "${OPENCODE_CONFIG_PROJECT_DISABLE-}" ]; then which=clean m=${FAKE_MODELS_CLEAN-}; else which=loaded m=${FAKE_MODELS_LOADED-}; fi
+    echo "$which" >> "$d/model-lists"; [ -n "$m" ] || m='{"data":[]}'; printf '%s\n' "$m" ;;
   credential.list)
     [ -e "$d/creds" ] || for id in ${FAKE_CREDS-}; do echo "$id"; done > "$d/creds"
     printf '{"data":[' ; sep=
