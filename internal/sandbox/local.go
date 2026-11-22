@@ -553,13 +553,20 @@ func writeBackLogin(
 	}
 	// A KEY THE HARNESS WROTE DURING THE RUN IS NO LOGIN
 	// ([seededCredential.RunKeys]): it is written back as the shared login
-	// holds it, and a file that then is the shared one changed nothing.
+	// holds it, and a file that then is the shared one changed nothing. A
+	// credential store's document carries back the handed logins alone
+	// ([harnessprofile.KeepHandedCredentials]), whatever the box's database
+	// came to hold.
 	for name, content := range changed {
 		keys := seeded[byName[name]].RunKeys
-		if len(keys) == 0 {
+		store := name == harnessprofile.CredentialStoreDocument
+		if len(keys) == 0 && !store {
 			continue
 		}
 		kept := harnessprofile.KeepLoginKeys(content, current[name], keys)
+		if store {
+			kept = harnessprofile.KeepHandedCredentials(kept, current[name])
+		}
 		if bytes.Equal(kept, current[name]) {
 			delete(changed, name)
 			got[byName[name]] = writeBackIdle
