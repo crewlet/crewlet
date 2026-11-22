@@ -138,10 +138,9 @@ func (c *copilotRecorder) end(script fakeScript, total fakeUsage, last string) i
 // first event names, and its home's mcp-config.json — whose servers the harness
 // starts on every run — is the profile's own, empty, whatever was there.
 //
-// Mutation: drop the profile's owner, and the other run's FOREIGN turn is this
-// run's; drop the mcp-config.json seed, and the server planted in the home
-// starts (the fake fails the run); drop call_id_meta, and the route's options
-// differ.
+// Mutation: drop the profile's owner, and the other run's FOREIGN turn is
+// this run's; drop the seed, and the planted server starts; drop
+// call_id_meta, and the route's options differ.
 func TestCopilotsRunIsReadFromItsOwnSessionEvents(t *testing.T) {
 	t.Parallel()
 	script := routeCase
