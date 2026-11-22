@@ -20,8 +20,9 @@ import (
 // nodes that run the server, shown to every administrator), so it is one
 // coordination-store record per server, CURRENT VALUE ONLY: a later test
 // replaces it, and the apply that removes the server deletes it. The writer
-// bounds it to [MaxMCPCheckNodes] nodes and [MaxMCPErrorBytes] a sentence
-// ([MCPCheck.Validate] refuses one it did not); what a test listed is the
+// bounds it to [MaxMCPCheckNodes] nodes, [MaxMCPErrorBytes] a sentence and
+// [MaxMCPCheckBytes] whole ([MCPCheck.Validate] refuses one it did not); what
+// a test listed is the
 // asker's answer, never stored. Of two tests at once the LATER stamp wins
 // ([MCPChecks.PutMCPCheck]): the question is how the server is now.
 
@@ -99,6 +100,18 @@ const MaxMCPCheckNodes = 32
 // maxMCPCheckSteps bounds one node's stages: the most a transport walks.
 const maxMCPCheckSteps = 7
 
+// MaxMCPCheckBytes bounds one check's record as stored ([MCPCheck.EncodedSize]).
+// Every page and test answer decides on a read of it, so its reply crosses a
+// leaf's link at the slowest pace in 2.5 s. 64 KiB holds [MaxMCPCheckNodes]
+// nodes at 2 KiB each, a dozen at their whole 5 KiB of plain sentences; a
+// sentence escaped to six bytes a byte would otherwise take 34 KiB a node.
+// The writer halves its sentences, then its identities, to fit; it drops no
+// node or stage.
+const MaxMCPCheckBytes = 64 << 10
+
+// EncodedSize is how many bytes the check is stored as.
+func (c MCPCheck) EncodedSize() int { return encodedLen(c) }
+
 // Validate reports why a check cannot be written.
 func (c MCPCheck) Validate() error {
 	switch {
@@ -120,7 +133,7 @@ func (c MCPCheck) Validate() error {
 			return err
 		}
 	}
-	return nil
+	return HoldValue(MCPCheckKey(c.Server), c.EncodedSize(), MaxMCPCheckBytes)
 }
 
 func (n MCPCheckNode) validate() error {
