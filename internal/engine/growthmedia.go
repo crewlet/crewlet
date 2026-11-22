@@ -196,7 +196,8 @@ func (r mediaReader) entry(ctx context.Context, h artifactsdomain.Head, clean st
 		}
 	}
 	return artifacts.Entry{}, growth.Refuse(growth.RefusedNotFound, fmt.Sprintf("artifact %s holds no file %q in "+
-		"its live version or its assets; get_artifact lists its files. No vendor was reached.", h.ID, clean))
+		"its live version or its assets; %s lists its files. No vendor was reached.", h.ID, clean,
+		authz.ActionArtifactRead))
 }
 
 // artifactID reads an artifact's id or its 26-character host label.
@@ -211,7 +212,7 @@ func artifactID(raw string) (artifacts.ID, error) {
 // may not open.
 func noArtifact(ref string) error {
 	return growth.Refuse(growth.RefusedNotFound, fmt.Sprintf("there is no artifact file %q this agent can open. "+
-		"Check the id, or find it with list_artifacts. No vendor was reached.", ref))
+		"Check the id, or find it with %s. No vendor was reached.", ref, authz.ActionArtifactList))
 }
 
 // tooLarge refuses a file over the upload's limit.
