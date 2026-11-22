@@ -62,11 +62,14 @@ const (
 	AnswerSlice AnswerKind = "search_slice"
 	// AnswerMCPCheck is one node's test of an MCP server (internal/engine).
 	AnswerMCPCheck AnswerKind = "mcp_check"
+	// AnswerEstate is a data node's page or capped list of the estate
+	// (internal/estate).
+	AnswerEstate AnswerKind = "estate"
 )
 
 // AnswerKinds is every kind this build holds for.
 var AnswerKinds = []AnswerKind{AnswerBoxRead, AnswerHistory, AnswerMemory, AnswerReplay,
-	AnswerLiveRelay, AnswerBridge, AnswerTail, AnswerCodeSearch, AnswerSlice, AnswerMCPCheck}
+	AnswerLiveRelay, AnswerBridge, AnswerTail, AnswerCodeSearch, AnswerSlice, AnswerMCPCheck, AnswerEstate}
 
 // Valid reports whether this build knows the kind.
 func (k AnswerKind) Valid() bool { return slices.Contains(AnswerKinds, k) }

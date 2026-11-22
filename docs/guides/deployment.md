@@ -983,7 +983,8 @@ where it was read, what git holds and everything held outside the runtime.
 Inside the limit, the payload answers a node builds for its peers (a read of
 a box, a history or memory page, an assistant replay, a live relay's batches,
 a bridged call's frame, a run's tail, a code search's part, a knowledge
-search's slice, an MCP server's test) and every collection of a run's box share
+search's slice, an MCP server's test, a data node's page of the estate) and
+every collection of a run's box share
 one **answer budget** of 256 MiB, each holding its weight (its byte bound times
 what it was measured to hold encoding it; a box read five times the files it
 reads, up to 160 MiB) from before its read until its reply is written, in

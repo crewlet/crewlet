@@ -316,7 +316,7 @@ func serviceInstruments() []Instrument {
 				"arrival order), and every collection of a run's box, by " +
 				"`answer` (`box_read`, `history`, `memory`, `replay`, " +
 				"`live_relay`, `bridge`, `tail`, `code_search`, " +
-				"`search_slice`, `mcp_check`) and `outcome`: `admitted`, at " +
+				"`search_slice`, `mcp_check`, `estate`) and `outcome`: `admitted`, at " +
 				"once or after waiting; `ended`, its asker's wait or its own " +
 				"ran out first, so it answered that the budget was full (or " +
 				"nothing). A p95 climbing beside `held_bytes` near the budget " +

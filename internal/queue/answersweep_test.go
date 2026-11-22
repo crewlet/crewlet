@@ -15,16 +15,14 @@ import (
 )
 
 // answerDecl is what one Serve registration's answers are to the node's answer
-// budget, exactly one of three: a payload answer that acquires (kind, in the
+// budget, exactly one of two: a payload answer that acquires (kind, in the
 // package in, which may be below the registering one, as a box read's
-// collection is), a small answer the count alone bounds (small: its bound and
-// where it is decided), or one whose acquire lands with a named change
-// (pending).
+// collection is), or a small answer the count alone bounds (small: its bound
+// and where it is decided).
 type answerDecl struct {
-	kind    string
-	in      string
-	small   string
-	pending string
+	kind  string
+	in    string
+	small string
 }
 
 // answerDecls is every Serve registration outside this package, by its
@@ -60,8 +58,11 @@ var answerDecls = map[string]answerDecl{
 		"(codeHoldsAnswer), no more than the request named"},
 	"internal/presence|topics.PresenceAsk": {small: "the people of one room on this node, a name and a " +
 		"place each (presence's state frame)"},
-	"internal/estate|l.subject(opts.Self)": {pending: "#1822: the estate lanes' declared bounds, whose " +
-		"shared lane then acquires as AnswerEstate in internal/estate"},
+	// EVERY ESTATE LANE: a page or a capped list acquires by its declared
+	// shape; one value and an entry per key asked are small, the first held
+	// to its log's record cap where written, the second to the request
+	// (internal/estate's answerShape.weight).
+	"internal/estate|l.subject(opts.Self)": {kind: "AnswerEstate", in: "internal/estate"},
 }
 
 // answerKindNames is every kind by the name a declaration gives it.
@@ -69,7 +70,7 @@ var answerKindNames = map[string]AnswerKind{
 	"AnswerBoxRead": AnswerBoxRead, "AnswerHistory": AnswerHistory, "AnswerMemory": AnswerMemory,
 	"AnswerReplay": AnswerReplay, "AnswerLiveRelay": AnswerLiveRelay, "AnswerBridge": AnswerBridge,
 	"AnswerTail": AnswerTail, "AnswerCodeSearch": AnswerCodeSearch, "AnswerSlice": AnswerSlice,
-	"AnswerMCPCheck": AnswerMCPCheck,
+	"AnswerMCPCheck": AnswerMCPCheck, "AnswerEstate": AnswerEstate,
 }
 
 // EVERY SERVE REGISTRATION IS DECLARED AGAINST THE NODE'S ANSWER BUDGET: a
@@ -159,10 +160,9 @@ func TestEveryAnswerRegistrationIsDeclaredAgainstTheBudget(t *testing.T) {
 		if _, ok := found[key]; !ok {
 			t.Errorf("answerDecls declares %s, which no Serve registers any more: drop it", key)
 		}
-		if n := len(slices.DeleteFunc([]string{d.kind, d.small, d.pending},
+		if n := len(slices.DeleteFunc([]string{d.kind, d.small},
 			func(s string) bool { return s == "" })); n != 1 || (d.kind != "") != (d.in != "") {
-			t.Errorf("%s declares %+v: give it exactly one of a kind with its package, a small bound, or a "+
-				"pending change", key, d)
+			t.Errorf("%s declares %+v: give it exactly one of a kind with its package or a small bound", key, d)
 		}
 	}
 	for name, kind := range answerKindNames {
