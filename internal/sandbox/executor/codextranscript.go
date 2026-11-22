@@ -41,9 +41,10 @@ func (Codex) transcript(ctx context.Context, b *transcriptBuilder, archive io.Re
 }
 
 // codexIsMember reports whether name is a Codex archive's member: a rollout
-// under the name it is restored by, whatever thread it names.
+// under the name it is restored by ([codexCarriedName]), whatever thread it
+// names.
 func codexIsMember(name string) bool {
-	rest, ok := strings.CutPrefix(name, "rollout-carried-")
+	rest, ok := strings.CutPrefix(name, "rollout-"+codexCarriedStamp+"-")
 	return ok && strings.HasSuffix(rest, ".jsonl") && !strings.Contains(rest, "/")
 }
 
@@ -60,7 +61,7 @@ func (b *transcriptBuilder) codexRollout(ctx context.Context, r io.Reader) error
 		}
 		return nil
 	}
-	torn, err := codexLines(r, func(_ int, body []byte) error {
+	_, err := codexLines(r, func(_ int, body []byte) error {
 		if err := frame(); err != nil {
 			return err
 		}
@@ -72,15 +73,11 @@ func (b *transcriptBuilder) codexRollout(ctx context.Context, r io.Reader) error
 		return b.unread(fmt.Sprintf("a line of the Codex rollout past the %d bytes one line is read to",
 			codexRolloutLineMaxBytes))
 	})
-	switch {
-	case errors.Is(err, errReadLines):
+	// A TORN LAST LINE is passed over, as Codex itself passes one over.
+	if errors.Is(err, errReadLines) {
 		return b.linesPast("Codex rollout", "lines")
-	case err != nil:
-		return err
-	case torn:
-		return b.unread("the rollout's last line, which Codex had not finished writing")
 	}
-	return nil
+	return err
 }
 
 // codexTranscriptLine is a rollout line as the transcript reads it.
@@ -88,6 +85,9 @@ type codexTranscriptLine struct {
 	Timestamp string          `json:"timestamp"`
 	Type      string          `json:"type"`
 	Payload   json.RawMessage `json:"payload"`
+	Metadata  struct {
+		CompactionOutput bool `json:"compaction_output"`
+	} `json:"metadata"`
 }
 
 // codexPart is one part of a message's content or of a call's output.
@@ -109,25 +109,22 @@ type codexResponseItem struct {
 	CallID    string          `json:"call_id"`
 	Output    json.RawMessage `json:"output"`
 	Action    json.RawMessage `json:"action"`
-	Meta      struct {
-		Items []struct {
-			Provenance struct {
-				Type string `json:"type"`
-			} `json:"provenance"`
-		} `json:"content_item_metadata"`
-	} `json:"internal_chat_message_metadata_passthrough"`
+	Meta      codexItemMeta   `json:"internal_chat_message_metadata_passthrough"`
 }
 
 // codexLine adds the entries one rollout line makes: a user message's brief
 // (or the notes it carries), the model's words, a call and its answer, a
 // compaction's summary. Bookkeeping lines (session_meta, turn_context, the
 // event_msg lines that repeat each item, token counts) and reasoning make
-// none, as do kinds a later release adds; a line that is no record, or an
-// item of a kind this read does not know, is said.
+// none, as do kinds a later release adds, and a line that is no record; an
+// item of a kind this read does not know is said.
 func (b *transcriptBuilder) codexLine(body []byte) error {
 	var line codexTranscriptLine
 	if wireDecode(body, &line) != nil {
-		return b.unread("a line of the Codex rollout that is not a record")
+		// A FRAGMENT Codex left where it was cut off: it skips the line and
+		// writes the next record on a line of its own (measured on 0.171.0),
+		// so the fragment was never part of the session.
+		return nil
 	}
 	at := codexInstant(line.Timestamp)
 	switch line.Type {
@@ -149,7 +146,7 @@ func (b *transcriptBuilder) codexLine(body []byte) error {
 	}
 	switch item.Type {
 	case "message":
-		return b.codexMessage(item, at)
+		return b.codexMessage(item, line.Metadata.CompactionOutput, at)
 	case "reasoning", "ghost_snapshot":
 		return nil
 	case "function_call":
@@ -166,20 +163,19 @@ func (b *transcriptBuilder) codexLine(body []byte) error {
 	return b.unread(fmt.Sprintf("a Codex record of a kind this read does not know (%.64q)", item.Type))
 }
 
-// codexMessage adds a message's entries: a user's as a brief, split into the
-// notes, late calls and wakes it carries where it opens with one's heading;
-// the model's as its words. A user message Codex wrote itself (every part's
-// provenance `harness`: the environment context, a hook's prompt) is the
-// harness's bookkeeping, as are developer and system messages, and makes none.
-func (b *transcriptBuilder) codexMessage(item codexResponseItem, at time.Time) error {
+// codexMessage adds a message's entries: a person's ([codexPersonsMessage])
+// as a brief, split into the notes, late calls and wakes it carries where it
+// opens with one's heading; the model's as its words. Every other message is
+// Codex's bookkeeping and makes none: a user message of its own (the
+// environment context, a hook's prompt), a developer or system message, and
+// the model's answer to a compaction (compactionOutput), whose summary the
+// `compacted` line holds.
+func (b *transcriptBuilder) codexMessage(item codexResponseItem, compactionOutput bool, at time.Time) error {
 	var kind EntryKind
-	switch item.Role {
-	case "user":
-		if codexHarnessWritten(item) {
-			return nil
-		}
+	switch {
+	case codexPersonsMessage(item.Role, item.Meta):
 		kind = EntryBrief
-	case "assistant":
+	case item.Role == "assistant" && !compactionOutput:
 		kind = EntryModel
 	default:
 		return nil
@@ -194,21 +190,6 @@ func (b *transcriptBuilder) codexMessage(item codexResponseItem, at time.Time) e
 		}
 	}
 	return b.codexProse(kind, text.String(), at)
-}
-
-// codexHarnessWritten reports a message every part of which Codex marks as its
-// own writing.
-func codexHarnessWritten(item codexResponseItem) bool {
-	items := item.Meta.Items
-	if len(items) == 0 {
-		return false
-	}
-	for _, it := range items {
-		if it.Provenance.Type != "harness" {
-			return false
-		}
-	}
-	return true
 }
 
 // codexProse adds the entries a text of kind makes: none for a blank one; a

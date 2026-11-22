@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -37,12 +39,14 @@ func codexArchive(t *testing.T, rollout []byte) []byte {
 // A CODEX TRANSCRIPT IS THE SESSION AS A PERSON READS IT, off its archive: the
 // brief, the model's words, each call with the tool that answered it, a note
 // a person sent as its own entry, a compaction's summary; never Codex's own
-// context, a developer instruction, reasoning or the event lines that repeat
-// each item; and a record this read cannot read said where it was.
+// context, a developer instruction, reasoning, the event lines that repeat
+// each item or a fragment Codex left where it was cut off; and an item of a
+// kind this read does not know said where it was.
 //
 // Mutation: read event_msg items, read harness-written user messages as
 // briefs, drop the namespace from an MCP tool, read the note as a brief, drop
-// the summary, or skip an unknown item silently, and the kinds below differ.
+// the summary, say the fragment, or skip an unknown item silently, and the
+// kinds below differ.
 func TestACodexTranscriptIsTheSessionAsAPersonReadsIt(t *testing.T) {
 	t.Parallel()
 	more := strings.Join([]string{
@@ -68,7 +72,7 @@ func TestACodexTranscriptIsTheSessionAsAPersonReadsIt(t *testing.T) {
 	}
 	want := []EntryKind{
 		EntryBrief, EntryToolCall, EntryToolResult, EntryModel, EntryModel,
-		EntryNote, EntrySummary, EntryUnread, EntryUnread, EntryToolCall, EntryToolResult,
+		EntryNote, EntrySummary, EntryUnread, EntryToolCall, EntryToolResult,
 	}
 	if !slices.Equal(kinds, want) {
 		t.Fatalf("the entries are %v, want %v", kinds, want)
@@ -83,18 +87,19 @@ func TestACodexTranscriptIsTheSessionAsAPersonReadsIt(t *testing.T) {
 	if !strings.Contains(e[5].Text, "also add a test") || e[6].Text != "the turn so far" {
 		t.Errorf("the note reads %q and the summary %q", e[5].Text, e[6].Text)
 	}
-	if e[9].Tool != "apply_patch" || e[9].Text != "*** Begin Patch" || e[10].Tool != "apply_patch" || e[10].Text != "Done!" {
-		t.Errorf("the custom call reads %q %q, answered %q %q", e[9].Tool, e[9].Text, e[10].Tool, e[10].Text)
+	if e[8].Tool != "apply_patch" || e[8].Text != "*** Begin Patch" || e[9].Tool != "apply_patch" || e[9].Text != "Done!" {
+		t.Errorf("the custom call reads %q %q, answered %q %q", e[8].Tool, e[8].Text, e[9].Tool, e[9].Text)
 	}
 }
 
-// A CODEX TRANSCRIPT'S TORN OR OVER-BOUND LINE IS SAID, AND THE READ GOES ON:
-// one line the read cannot take is a gap a person is told of, never the end
-// of a transcript whose other lines read.
+// A CODEX TRANSCRIPT'S OVER-BOUND LINE IS SAID AND ITS TORN TAIL PASSED OVER:
+// a record past the line bound is a gap a person is told of, never the end of
+// a transcript whose other lines read; a tail Codex never finished is no
+// record, and Codex itself passes it over.
 //
-// Mutation: fail the read on an over-bound line, or drop the torn tail
-// silently, and the entries below differ.
-func TestACodexTranscriptsTornOrOverBoundLineIsSaid(t *testing.T) {
+// Mutation: fail the read on an over-bound line, or say the torn tail, and
+// the entries below differ.
+func TestACodexTranscriptsOverBoundLineIsSaidAndItsTornTailPassedOver(t *testing.T) {
 	t.Parallel()
 	long := `{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"` +
 		strings.Repeat("a", codexRolloutLineMaxBytes) + `"}]}}` + "\n"
@@ -109,7 +114,42 @@ func TestACodexTranscriptsTornOrOverBoundLineIsSaid(t *testing.T) {
 	for _, e := range got.Entries {
 		kinds = append(kinds, e.Kind)
 	}
-	if want := []EntryKind{EntryUnread, EntryModel, EntryUnread}; !slices.Equal(kinds, want) {
+	if want := []EntryKind{EntryUnread, EntryModel}; !slices.Equal(kinds, want) {
 		t.Errorf("the entries are %v, want %v", kinds, want)
+	}
+}
+
+// A COMPACTED CODEX SESSION'S TRANSCRIPT SAYS THE SUMMARY ONCE AND THE NOTE
+// ONCE: the model's answer to the compaction request and the compacted line
+// carry the same summary, which reads once, from the compacted line; the note
+// the history keeps reads once, from its own item.
+//
+// Mutation: read the compaction's answer as the model's words, or read the
+// compacted line's history, and the summary or the note reads twice.
+func TestACompactedCodexSessionsTranscriptSaysTheSummaryOnceAndTheNoteOnce(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile(filepath.Join("testdata", "codex", "0.171.0", "compaction-note-before.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := decodeTranscript(context.Background(), Codex{}, bytes.NewReader(codexArchive(t, raw)), 0,
+		TranscriptReadBounds(), TranscriptFilter{})
+	if err != nil {
+		t.Fatalf("read the transcript: %v", err)
+	}
+	notes, summaries := 0, 0
+	for _, e := range got.Entries {
+		switch {
+		case strings.HasPrefix(e.Text, "NOTE-CMPA:"):
+			notes++
+		case strings.Contains(e.Text, "SUMMARY-FROM-FAKE"):
+			if e.Kind != EntrySummary {
+				t.Errorf("the summary reads as %s", e.Kind)
+			}
+			summaries++
+		}
+	}
+	if notes != 1 || summaries != 1 {
+		t.Errorf("the note reads %d times and the summary %d, want each once", notes, summaries)
 	}
 }

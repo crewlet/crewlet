@@ -28,6 +28,11 @@ func codexBox(t *testing.T, rollout []byte) Paths {
 	if err := os.MkdirAll(p.WorkDir(), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	for path, config := range map[string]string{p.CodexConfig(): "continued\n", p.CodexConfigFresh(): "fresh\n"} {
+		if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if rollout != nil {
 		name := filepath.Join(dir, "rollout-2026-11-21T18-33-59-"+codexThread+".jsonl")
 		if err := os.WriteFile(name, rollout, 0o600); err != nil {
@@ -56,11 +61,11 @@ func codexShell(t *testing.T, dir, script string) (string, string, int) {
 	return stdout.String(), stderr.String(), 0
 }
 
-// codexGate runs the session gate for session in p's box, from dir, and
-// returns what it named: s, k and w.
-func codexGate(t *testing.T, p Paths, dir string, session Session) (s, k, w, stderr string) {
+// codexGate runs the session gate for session in p's box, from dir, wired
+// for a fresh session where rewired, and returns what it named: sid, k and w.
+func codexGate(t *testing.T, p Paths, dir string, session Session, rewired bool) (s, k, w, stderr string) {
 	t.Helper()
-	out, errText, code := codexShell(t, dir, codexSessionGate(session, p)+`printf '%s\n%s\n%s\n' "$s" "$k" "$w"`)
+	out, errText, code := codexShell(t, dir, codexSessionGate(session, p, rewired)+`printf '%s\n%s\n%s\n' "$sid" "$k" "$w"`)
 	if code != 0 {
 		t.Fatalf("the gate exited %d: %s", code, errText)
 	}
@@ -120,7 +125,7 @@ func TestACodexSessionPackedInOneBoxIsResumedFromAFreshCodexHome(t *testing.T) {
 	t.Parallel()
 	whole := codexRolloutFixture(t)
 	from := codexBox(t, append(append([]byte(nil), whole...), `{"type":"response_item","pay`...))
-	_, errText, code := codexShell(t, from.Home, "s="+codexThread+" packed=\n"+codexCapture(from)+
+	_, errText, code := codexShell(t, from.Home, "sid="+codexThread+" packed=\n"+codexCapture(from)+
 		`[ -n "$packed" ] || exit 9`)
 	if code != 0 {
 		t.Fatalf("the capture exited %d: %s", code, errText)
@@ -139,7 +144,7 @@ func TestACodexSessionPackedInOneBoxIsResumedFromAFreshCodexHome(t *testing.T) {
 	if err := os.WriteFile(to.SessionCarried(), archive, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	s, k, w, _ := codexGate(t, to, t.TempDir(), Session{ID: codexThread, Continues: true})
+	s, k, w, _ := codexGate(t, to, t.TempDir(), Session{ID: codexThread, Continues: true}, false)
 	if s != codexThread || k != "yes" || w != "" {
 		t.Fatalf("the gate named %q continued %q why %q, want the carried thread continued", s, k, w)
 	}
@@ -207,7 +212,7 @@ func TestABoxsOwnCodexCopyIsKeptOnlyWhereItHoldsTheCarriedArchive(t *testing.T) 
 	t.Parallel()
 	whole := codexRolloutFixture(t)
 	packed := codexBox(t, whole)
-	if _, errText, code := codexShell(t, packed.Home, "s="+codexThread+" packed=\n"+codexCapture(packed)); code != 0 {
+	if _, errText, code := codexShell(t, packed.Home, "sid="+codexThread+" packed=\n"+codexCapture(packed)); code != 0 {
 		t.Fatalf("the capture exited %d: %s", code, errText)
 	}
 	archive := codexFile(t, packed.SessionCapture())
@@ -236,7 +241,7 @@ func TestABoxsOwnCodexCopyIsKeptOnlyWhereItHoldsTheCarriedArchive(t *testing.T) 
 		if err := os.WriteFile(p.SessionCarried(), archive, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		s, k, w, _ := codexGate(t, p, p.Home, Session{ID: codexThread, Continues: true, Replaces: c.replaces})
+		s, k, w, _ := codexGate(t, p, p.Home, Session{ID: codexThread, Continues: true, Replaces: c.replaces}, false)
 		if s != codexThread || k != "yes" || w != "" {
 			t.Fatalf("%s: the gate named %q continued %q why %q", c.name, s, k, w)
 		}
@@ -266,12 +271,12 @@ func TestACarriedCodexSessionTheBoxCannotRestoreStartsANewOne(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		s, k, w, stderr := codexGate(t, p, p.Home, Session{ID: codexThread, Continues: true})
+		s, k, w, stderr := codexGate(t, p, p.Home, Session{ID: codexThread, Continues: true}, false)
 		if s != "" || k != "no" || w == "" || !strings.Contains(stderr, "starts a new session instead") {
 			t.Errorf("%s: the gate named %q continued %q why %q (%q)", name, s, k, w, stderr)
 		}
 	}
-	if s, k, w, _ := codexGate(t, codexBox(t, nil), t.TempDir(), Session{}); s != "" || k != "no" || w != "" {
+	if s, k, w, _ := codexGate(t, codexBox(t, nil), t.TempDir(), Session{}, false); s != "" || k != "no" || w != "" {
 		t.Errorf("a fresh run's gate named %q continued %q why %q", s, k, w)
 	}
 }
@@ -285,7 +290,7 @@ func TestACodexRolloutCutOffMidLineIsCutBackBeforeItIsResumed(t *testing.T) {
 	t.Parallel()
 	whole := codexRolloutFixture(t)
 	p := codexBox(t, append(append([]byte(nil), whole...), `{"type":"response_item"`...))
-	if s, k, _, _ := codexGate(t, p, p.Home, Session{ID: codexThread, Continues: true}); s != codexThread || k != "yes" {
+	if s, k, _, _ := codexGate(t, p, p.Home, Session{ID: codexThread, Continues: true}, false); s != codexThread || k != "yes" {
 		t.Fatalf("the gate named %q continued %q, want the box's own copy continued", s, k)
 	}
 	found, _, _ := codexShell(t, p.Home, codexRolloutPath(p, codexThread))
@@ -322,5 +327,62 @@ func TestACodexReleasePairContinuesOnlyAtOrPastTheFloor(t *testing.T) {
 	}
 	if !(Codex{}).resumeRead("0.171.0") || (Codex{}).resumeRead("0.172.0") || (Codex{}).resumeRead("") {
 		t.Error("resumeRead answers outside the one release whose resume was read")
+	}
+}
+
+// A CODEX RUN STARTS ON THE CONFIGURATION OF THE SESSION IT STARTS: a run that
+// continues its thread on the continued one's, the fresh wiring removed; one
+// that falls back on the fresh wiring, where it was handed one, and the brief
+// written for a new session; a fresh run on its one configuration. A run whose
+// configuration cannot be installed never starts.
+//
+// Mutation: install the continued configuration on a fall-back, leave the
+// other wiring beside it, skip the fresh brief, or go on past a failed move,
+// and a row below fails.
+func TestACodexRunStartsOnTheConfigurationOfTheSessionItStarts(t *testing.T) {
+	t.Parallel()
+	whole := codexRolloutFixture(t)
+	for _, c := range []struct {
+		name     string
+		rollout  []byte
+		session  Session
+		rewired  bool
+		live     string
+		k, stdin string
+	}{
+		{"continued", whole, Session{ID: codexThread, Continues: true}, true, "continued\n", "yes", ""},
+		{"fallen back, rewired", nil, Session{ID: codexThread, Continues: true}, true, "fresh\n", "no", "the fresh brief"},
+		{"fallen back", nil, Session{ID: codexThread, Continues: true}, false, "continued\n", "no", "the fresh brief"},
+		{"fresh", nil, Session{}, false, "continued\n", "no", ""},
+	} {
+		p := codexBox(t, c.rollout)
+		if err := os.WriteFile(p.FreshBrief(), []byte("the fresh brief"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		out, errText, code := codexShell(t, p.Home, codexSessionGate(c.session, p, c.rewired)+
+			`printf '%s\n' "$k"; if [ "$k" = no ]; then cat; fi`)
+		if code != 0 {
+			t.Fatalf("%s: the gate exited %d: %s", c.name, code, errText)
+		}
+		k, stdin, _ := strings.Cut(out, "\n")
+		if k != c.k || (c.session.Continues && stdin != c.stdin) {
+			t.Errorf("%s: continued %q reading %q, want %q reading %q", c.name, k, stdin, c.k, c.stdin)
+		}
+		if got := string(codexFile(t, p.CodexLiveConfig())); got != c.live {
+			t.Errorf("%s: Codex reads %q, want %q", c.name, got, c.live)
+		}
+		for _, left := range []string{p.CodexConfig(), p.CodexConfigFresh()} {
+			if _, err := os.Stat(left); c.rewired && !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("%s: %s is left beside the installed configuration", c.name, filepath.Base(left))
+			}
+		}
+	}
+	p := codexBox(t, nil)
+	if err := os.Remove(p.CodexConfig()); err != nil {
+		t.Fatal(err)
+	}
+	if _, errText, code := codexShell(t, p.Home, codexSessionGate(Session{}, p, false)+"echo started"); code != 1 ||
+		!strings.Contains(errText, "does not start") {
+		t.Errorf("a run with no configuration exited %d (%s), want 1 and why", code, errText)
 	}
 }

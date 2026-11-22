@@ -62,15 +62,27 @@ func codexRolloutPath(p Paths, threadID string) string {
 		sandbox.ShellQuote("rollout-*-"+threadID+".jsonl") + ` 2>/dev/null | LC_ALL=C sort | head -n 1`
 }
 
+// codexCarriedStamp is the timestamp a carried rollout is named with. A resume
+// takes only `rollout-YYYY-MM-DDThh-mm-ss-<thread>.jsonl` at any depth under
+// sessions/, with any valid time, and refuses another name (measured on
+// 0.171.0: `rollout-carried-<id>.jsonl` was refused as no canonical rollout
+// filename). This one was measured to resume; the thread id alone tells
+// rollouts apart, and a restore removes the thread's others ([codexRestore]).
+const codexCarriedStamp = "2020-01-01T00-00-00"
+
+// codexCarriedName is the name a carried rollout of thread is restored under.
+func codexCarriedName(threadID string) string {
+	return "rollout-" + codexCarriedStamp + "-" + threadID + ".jsonl"
+}
+
 // codexRestoredRollout is where a carried rollout is restored in a box: the
-// sessions root, under a name of the shape a resume looks for. The date part
-// is ours (any `rollout-<x>-<id>.jsonl` resumes, measured), so a restored file
-// never collides with one Codex dated. "" for an id [codexRolloutPath] refuses.
+// sessions root, under [codexCarriedName]. "" for an id [codexRolloutPath]
+// refuses.
 func codexRestoredRollout(p Paths, threadID string) string {
 	if !sandbox.ValidSessionID(threadID) {
 		return ""
 	}
-	return p.CodexSessions() + "/rollout-carried-" + threadID + ".jsonl"
+	return p.CodexSessions() + "/" + codexCarriedName(threadID)
 }
 
 // codexRollout is what [readCodexRollout] read of one rollout.
@@ -176,11 +188,11 @@ func (r codexRollout) Usage() codexTokens {
 	return sum
 }
 
-// UserMessages is the text of every user message item the session recorded,
-// in order: each top-level response_item message whose role is `user`, its
-// input_text parts joined. A compaction's summary and the history it keeps are
-// written inside its own `compacted` line, never as such an item, so none of
-// it is here (ADR-0177: a note found only in a summary is never held).
+// UserMessages is the text of every message a person's words went in as, in
+// order: each top-level response_item that [codexPersonsMessage] reads as
+// one, its input_text parts joined. Never anything inside a `compacted` line
+// (ADR-0177: a note found only in a summary is never held), and never the
+// summary, which Codex writes as a user message of its own kind.
 func (r codexRollout) UserMessages() []string { return r.userMessages }
 
 // Torn reports that the rollout's last line had no newline: a line Codex was
@@ -209,6 +221,7 @@ type (
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"content"`
+		Meta codexItemMeta `json:"internal_chat_message_metadata_passthrough"`
 	}
 	codexUsageRecordWire struct {
 		TurnID string       `json:"turn_id"`
@@ -233,6 +246,44 @@ type (
 		ResetsAt      int64   `json:"resets_at"`
 	}
 )
+
+// codexItemMeta is what Codex records beside a message of who wrote it: each
+// content part's kind (`user.text`, `compaction.summary`,
+// `environments.environment_context`) and provenance (`user`, `harness`).
+type codexItemMeta struct {
+	Kinds []string `json:"content_item_kinds"`
+	Parts []struct {
+		Provenance struct {
+			Type string `json:"type"`
+		} `json:"provenance"`
+	} `json:"content_item_metadata"`
+}
+
+// codexPersonsMessage is THE ONE RULE for a message whose words are a
+// person's (a brief or a steered note), as both [codexRollout.UserMessages]
+// and the transcript read it: role `user`, and every part's kind `user.text`;
+// where Codex records no kinds, no part's provenance `harness`. Codex writes
+// its compaction summary, its environment context and a hook's prompt as
+// user messages too, each marked as its own (measured on 0.171.0).
+func codexPersonsMessage(role string, meta codexItemMeta) bool {
+	if role != "user" {
+		return false
+	}
+	if len(meta.Kinds) > 0 {
+		for _, kind := range meta.Kinds {
+			if kind != "user.text" {
+				return false
+			}
+		}
+		return true
+	}
+	for _, part := range meta.Parts {
+		if part.Provenance.Type == "harness" {
+			return false
+		}
+	}
+	return true
+}
 
 // window is w as a [codexLimitWindow], nil for none.
 func (w *codexWindowWire) window() *codexLimitWindow {
@@ -343,7 +394,7 @@ func (r *codexRollout) take(line codexLine, turnAt map[string]int) {
 		}
 	case "response_item":
 		var item codexItemWire
-		if wireDecode(line.Payload, &item) == nil && item.Type == "message" && item.Role == "user" {
+		if wireDecode(line.Payload, &item) == nil && item.Type == "message" && codexPersonsMessage(item.Role, item.Meta) {
 			r.userMessages = append(r.userMessages, item.text())
 		}
 	case "token_usage_record":

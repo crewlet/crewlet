@@ -39,7 +39,7 @@ const codexArchiveFormat = 1
 
 // codexArchiveMember is the one member of a Codex archive: the rollout under
 // the name it is restored by, which a resume finds ([codexRestoredRollout]).
-func codexArchiveMember(threadID string) string { return "rollout-carried-" + threadID + ".jsonl" }
+func codexArchiveMember(threadID string) string { return codexCarriedName(threadID) }
 
 // Resumes says Codex continues a session it reported: `exec resume <id>`
 // continues the rollout of that thread, under the same id.
@@ -106,13 +106,14 @@ func (Codex) PackSave(paths Paths, rec sessionRecord, staged, dest string) (stri
 // script: [packNothing] where the box holds nothing of it to pack,
 // [packFailed] where no archive was made.
 func codexOnDemand(paths Paths, session, staged, dest string) string {
-	return "s=" + sandbox.ShellQuote(session) + " packed=\n" +
+	return "sid=" + sandbox.ShellQuote(session) + " packed=\n" +
 		codexPack(paths, staged, dest, fmt.Sprintf("exit %d", packNothing)) +
 		fmt.Sprintf("[ -n \"$packed\" ] || exit %d\n", packFailed)
 }
 
 // codexCapture is the part of a run's script that packs the session its Codex
-// ran in, the id in s, once Codex has exited: over [Paths.SessionCapture],
+// ran in, the id in sid (on a fresh run, the one Codex minted and the script
+// reported), once `exec` has exited and before the app-server stops: over [Paths.SessionCapture],
 // made in [Paths.SessionStaging]. Nothing to pack is said nowhere, as Claude
 // Code's capture says nothing ([claudeCapture]); a failed pack is said on the
 // error stream, and the run's status is never the pack's.
@@ -121,26 +122,26 @@ func codexCapture(paths Paths) string {
 }
 
 // codexPack is ONE PACK, the run's script's at its end, a pack on demand and a
-// save alike: the rollout of the thread whose id is in s copied to its whole
+// save alike: the rollout of the thread whose id is in sid copied to its whole
 // lines (wc counts the newlines, head copies that many lines of a file that
 // only grows) under [codexArchiveMember], tarred and gzipped in staged, its
 // digest recorded ([packDigest]) and moved over dest; packed=1 where it was.
-// nothing is the shell run where the box holds no rollout of s with a whole
+// nothing is the shell run where the box holds no rollout of sid with a whole
 // line. An id with a character a pattern could misread finds no rollout.
 func codexPack(paths Paths, staged, dest, nothing string) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	q := sandbox.ShellQuote
-	member := `rollout-carried-"$s".jsonl`
+	member := `rollout-` + codexCarriedStamp + `-"$sid".jsonl`
 	line(`pf= pn=0`)
-	line(`case "$s" in ''|*[!A-Za-z0-9_-]*) ;; *) if command -v find > /dev/null 2>&1; then pf=$(find %s -type f -name "rollout-*-$s.jsonl" 2> /dev/null | LC_ALL=C sort | head -n 1); else echo 'crewlet: this box has no find, so the session was not packed to be continued in another box' >&2; fi;; esac`,
+	line(`case "$sid" in ''|*[!A-Za-z0-9_-]*) ;; *) if command -v find > /dev/null 2>&1; then pf=$(find %s -type f -name "rollout-*-$sid.jsonl" 2> /dev/null | LC_ALL=C sort | head -n 1); else echo 'crewlet: this box has no find, so the session was not packed to be continued in another box' >&2; fi;; esac`,
 		q(paths.CodexSessions()))
 	line(`if [ -n "$pf" ] && [ -f "$pf" ] && [ ! -L "$pf" ]; then pn=$(wc -l < "$pf" 2> /dev/null) || pn=0; fi`)
 	line(`if [ "$pn" -gt 0 ] 2> /dev/null; then`)
 	line(`  if command -v tar > /dev/null 2>&1 && command -v gzip > /dev/null 2>&1; then`)
-	line(`    rm -rf %[1]s; if mkdir -p %[2]s && head -n "$pn" "$pf" > %[2]s/%[3]s 2> %[4]s && tar -czf %[5]s -C %[2]s %[3]s < /dev/null > /dev/null 2>> %[4]s && %[6]s && mv -f %[5]s %[7]s; then packed=1; else echo "crewlet: the session $s was not packed to be continued in another box: $(cat %[4]s 2> /dev/null)" >&2; fi`,
+	line(`    rm -rf %[1]s; if mkdir -p %[2]s && head -n "$pn" "$pf" > %[2]s/%[3]s 2> %[4]s && tar -czf %[5]s -C %[2]s %[3]s < /dev/null > /dev/null 2>> %[4]s && %[6]s && mv -f %[5]s %[7]s; then packed=1; else echo "crewlet: the session $sid was not packed to be continued in another box: $(cat %[4]s 2> /dev/null)" >&2; fi`,
 		q(staged), q(staged+"/in"), member, q(staged+"/error"), q(staged+"/capture"),
-		packDigest(paths, "s", staged), q(dest))
+		packDigest(paths, "sid", staged), q(dest))
 	line(`    rm -rf %s`, q(staged))
 	line(`  else`)
 	line(`    echo 'crewlet: this box has no tar and gzip, so the session was not packed to be continued in another box' >&2`)
@@ -151,27 +152,43 @@ func codexPack(paths Paths, staged, dest, nothing string) string {
 	return b.String()
 }
 
+// CodexConfig is where the runner writes a Codex run's configuration, and
+// CodexConfigFresh the same configuration wired to the fresh session a
+// continued run may start instead ([sandbox.RunRequest.FreshWiring]); the
+// session gate moves the one the run starts with to [Paths.CodexLiveConfig]
+// ([codexSessionGate]). Under WorkDir, so a `git clean` cannot take them.
+func (p Paths) CodexConfig() string { return p.WorkDir() + "/codex-config.toml" }
+
+// CodexConfigFresh is [Paths.CodexConfig] wired to the fresh session.
+func (p Paths) CodexConfigFresh() string { return p.WorkDir() + "/codex-config-fresh.toml" }
+
+// CodexLiveConfig is the configuration Codex reads, `config.toml` in
+// [Paths.CodexHome].
+func (p Paths) CodexLiveConfig() string { return p.CodexHome() + "/config.toml" }
+
 // codexSessionGate is the part of a run's script that names the session its
-// Codex runs in, as s ("" for one Codex mints as it starts), whether it is
+// Codex runs in, as sid ("" for one Codex mints as it starts), whether it is
 // the one asked to continue, as k, and where it was asked and could not, why,
-// as w. The runner's script resumes s where k is yes and starts a new thread
-// otherwise, reporting the id Codex mints ([reportSession]).
+// as w; and installs the configuration the run starts with. The runner's
+// script writes the record after it, resumes sid where k is yes, and
+// otherwise starts a new thread whose minted id it reports ([reportSession]).
 //
 // A run that continues one continues the rollout its box HOLDS unless a
 // carried archive ([Paths.SessionCarried]) holds what the copy does not (a
 // digest not among the box's, [Paths.SessionDigests]) or the copy is one Codex
 // was cut off in ([Session.Replaces]); then the archive is RESTORED
 // ([codexRestore]) and its digest recorded before the run goes on.
-func codexSessionGate(session Session, paths Paths) string {
+func codexSessionGate(session Session, paths Paths, rewired bool) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	q := sandbox.ShellQuote
 	if !session.Continues {
-		line(`s= k=no w=`)
+		line(`sid= k=no w=`)
+		b.WriteString(codexInstallConfig(paths, paths.CodexConfig()))
 		return b.String()
 	}
 	carried := q(paths.SessionCarried())
-	line(`s=%s k=yes w= h= d=`, q(session.ID))
+	line(`sid=%s k=yes w= h= d=`, q(session.ID))
 	line(`rf=$(%s)`, codexRolloutPath(paths, session.ID))
 	line(`if [ -n "$rf" ] && [ -s "$rf" ]; then h=1; fi`)
 	line(`if [ -s %s ]; then d=$(cksum < %s 2> /dev/null) || d=; fi`, carried, carried)
@@ -180,7 +197,7 @@ func codexSessionGate(session Session, paths Paths) string {
 		// holds, as Claude Code's is ([claudeSessionGate]).
 		line(`if [ -n "$h" ] && [ -s %s ]; then h=; fi`, carried)
 	} else {
-		line(`if [ -n "$h" ] && [ -n "$d" ] && ! grep -qxF "$s $d" %s 2> /dev/null; then h=; fi`,
+		line(`if [ -n "$h" ] && [ -n "$d" ] && ! grep -qxF "$sid $d" %s 2> /dev/null; then h=; fi`,
 			q(paths.SessionDigests()))
 	}
 	line(`if [ -z "$h" ]; then`)
@@ -189,25 +206,55 @@ func codexSessionGate(session Session, paths Paths) string {
 	line(`  elif ! { %s; }; then w='its archive could not be restored'`, codexRestore(paths, session.ID))
 	// CONTINUED ONLY ONCE ITS DIGEST IS RECORDED and read back, for the reason
 	// Claude Code's restore is ([claudeSessionGate]).
-	line(`  elif ! { %s; }; then w=%s`, recordDigest(paths, "s", "d"), q(restoreDigestUnrecorded))
+	line(`  elif ! { %s; }; then w=%s`, recordDigest(paths, "sid", "d"), q(restoreDigestUnrecorded))
 	line(`  fi`)
 	line(`  rm -rf %s`, q(paths.SessionStaging()))
 	line(`fi`)
 	line(`rm -f %s`, carried)
 	line(`if [ -z "$w" ]; then`)
-	// A ROLLOUT CUT OFF MID-LINE is cut back to its last whole line: Codex
-	// appends to the file in place, so a torn line would swallow the first
-	// record the resume writes. Torn is where the last byte is no newline, as
-	// wc counts it ([claudeSessionGate]'s torn). A file with no whole line is
-	// left as it is.
+	// A ROLLOUT CUT OFF MID-LINE is cut back to its last whole line. Codex
+	// passes a fragment over and writes on past it (measured), but the
+	// fragment stays in the file, and a pack copies whole lines alone: cut
+	// here, the box's copy and every archive of it agree. Torn is where the
+	// last byte is no newline, as wc counts it ([claudeSessionGate]'s torn).
 	line(`  rf=$(%s)`, codexRolloutPath(paths, session.ID))
 	line(`  if [ -n "$rf" ] && [ -s "$rf" ] && [ "$(tail -c 1 "$rf" | wc -l)" -eq 0 ]; then cl=$(wc -l < "$rf"); if [ "$cl" -gt 0 ] 2> /dev/null; then head -n "$cl" "$rf" > "$rf.cut" && mv -f "$rf.cut" "$rf"; fi; fi`)
+	if rewired {
+		line(`  rm -f %s`, q(paths.CodexConfigFresh()))
+	}
+	b.WriteString(codexIndented(codexInstallConfig(paths, paths.CodexConfig())))
 	line(`else`)
-	line(`  s= k=no`)
+	line(`  sid= k=no`)
 	line(`  printf '%%s%%s\n' %s "$w" >&2`, q("crewlet: this run was asked to continue the Codex session "+
 		session.ID+", and starts a new session instead: "))
+	// A NEW SESSION IS HANDED THE BRIEF WRITTEN FOR ONE where the run was
+	// given it ([sandbox.RunRequest.FreshBrief]), and, where it was wired for
+	// one ([sandbox.RunRequest.FreshWiring]), the configuration whose bridge
+	// token tells the bridge it started its own: never the continued
+	// session's token, whose skill guard it would be held to.
+	line(`  [ ! -s %s ] || exec < %s`, q(paths.FreshBrief()), q(paths.FreshBrief()))
+	config := paths.CodexConfig()
+	if rewired {
+		line(`  rm -f %s`, q(paths.CodexConfig()))
+		config = paths.CodexConfigFresh()
+	}
+	b.WriteString(codexIndented(codexInstallConfig(paths, config)))
 	line(`fi`)
 	return b.String()
+}
+
+// codexInstallConfig moves config over [Paths.CodexLiveConfig], ending the
+// run before Codex starts where it cannot: a run on no configuration, or on
+// another session's, is one the bridge cannot tell apart.
+func codexInstallConfig(paths Paths, config string) string {
+	q := sandbox.ShellQuote
+	return fmt.Sprintf("mkdir -p %s && mv -f %s %s || { echo 'crewlet: the Codex configuration of the run could not be installed, so the run does not start' >&2; exit 1; }\n",
+		q(paths.CodexHome()), q(config), q(paths.CodexLiveConfig()))
+}
+
+// codexIndented is lines, each indented by two spaces, as a branch of an if.
+func codexIndented(lines string) string {
+	return "  " + strings.ReplaceAll(strings.TrimSuffix(lines, "\n"), "\n", "\n  ") + "\n"
 }
 
 // codexRestore is the restore of a carried archive of thread: unpacked in

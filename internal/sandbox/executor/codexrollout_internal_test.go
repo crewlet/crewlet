@@ -7,6 +7,8 @@ import (
 	"path"
 	"path/filepath"
 	"reflect"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -99,35 +101,98 @@ func codexUsageLine(turn string, in, out int) string {
 		strconv.Itoa(in) + `,"output_tokens":` + strconv.Itoa(out) + `}}}`
 }
 
-// A CODEX ROLLOUT'S USER MESSAGES ARE ITS USER ITEMS ALONE, in order: a
-// developer item (a hook's note) is not one, nor the item_completed event that
-// repeats each, nor anything a compaction wrote. Codex writes a compaction as
-// its own `compacted` line, the summary and the history it keeps inside it, so
-// a note that survives only there is never read as delivered (ADR-0177).
+// codexFixture is a trimmed Codex 0.171.0 rollout of testdata/codex/0.171.0:
+// compaction-note-before.jsonl, a note steered before a forced compaction
+// (written plain, then kept in the compacted line's history, whose summary
+// names it); compaction-note-after.jsonl, a note steered after it (written
+// after the compacted line); torn-mid-file.jsonl, a run killed, a fragment
+// left mid-file, and two resumes after it. The compacted lines' history is
+// cut to the shape CODEX-MEASURE §15.2 records.
+func codexFixture(t *testing.T, name string) []byte {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", "codex", "0.171.0", name))
+	if err != nil {
+		t.Fatalf("read the fixture: %v", err)
+	}
+	return raw
+}
+
+// A CODEX ROLLOUT'S USER MESSAGES ARE A PERSON'S WORDS ALONE, in order, each
+// once: Codex writes its environment context, a hook's prompt and a
+// compaction's summary as user messages too, marked as its own, and keeps a
+// compaction's history inside its `compacted` line. A note steered before a
+// compaction reads once, from its own item; one steered after reads from the
+// item written after the compacted line; one only named by the summary never
+// reads (ADR-0177).
 //
-// Mutation: read developer items, read item_completed UserMessage events, or
-// read the user items inside a compacted line's replacement_history, and a
-// message appears here that the model was never handed as a user item.
-func TestACodexRolloutsUserMessagesAreItsUserItemsAlone(t *testing.T) {
+// Mutation: read every role:user item, read the compacted line's history or
+// its summary, or read item_completed events, and a message appears here the
+// model was never handed as a person's.
+func TestACodexRolloutsUserMessagesAreAPersonsWordsAlone(t *testing.T) {
 	t.Parallel()
-	compaction := `{"type":"compacted","payload":{"message":"SUMMARY of the turn",` +
-		`"replacement_history":[{"type":"message","role":"user","content":[{"type":"input_text","text":"NOTE kept in a summary"}]},` +
-		`{"type":"message","role":"user","content":[{"type":"input_text","text":"SUMMARY of the turn"}]}]}}` + "\n" +
-		`{"type":"event_msg","payload":{"type":"context_compacted"}}` + "\n"
-	raw := append(codexRolloutFixture(t), compaction...)
-	r, err := readCodexRollout(bytes.NewReader(raw))
+	for name, want := range map[string][]string{
+		"rollout.jsonl": {"SCENARIO:slowmcp:1 go"},
+		"compaction-note-before.jsonl": {"SCENARIO:slow:4 cmp-A",
+			"NOTE-CMPA: a person says also create NOTE-A.txt"},
+		"compaction-note-after.jsonl": {"SCENARIO:slow:4 cmp-B",
+			"NOTE-CMPB: a person says also create NOTE-B.txt"},
+	} {
+		r, err := readCodexRollout(bytes.NewReader(codexFixture(t, name)))
+		if err != nil {
+			t.Fatalf("%s: read the rollout: %v", name, err)
+		}
+		if got := r.UserMessages(); !slices.Equal(got, want) {
+			t.Errorf("%s: the user messages read as %q, want %q", name, got, want)
+		}
+	}
+}
+
+// CODEX'S ONE RULE FOR A PERSON'S MESSAGE reads the part kinds where Codex
+// records them and the provenance where it records only that: a `user.text`
+// message is a person's, a `compaction.summary` or harness-written one never
+// is, and a user message with no metadata at all is taken as a person's.
+//
+// Mutation: read the provenance before the kinds, or refuse a message with
+// no metadata, and a row below fails.
+func TestCodexsOneRuleForAPersonsMessage(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name, role, meta string
+		want             bool
+	}{
+		{"a note", "user", `{"content_item_kinds":["user.text"],"content_item_metadata":[{"provenance":{"type":"user"}}]}`, true},
+		{"a summary", "user", `{"content_item_kinds":["compaction.summary"],"content_item_metadata":[{"provenance":{"type":"harness","hook":false}}]}`, false},
+		{"a hook's prompt", "user", `{"content_item_kinds":["unknown"],"content_item_metadata":[{"provenance":{"type":"harness","hook":true}}]}`, false},
+		{"provenance alone", "user", `{"content_item_metadata":[{"provenance":{"type":"user"}}]}`, true},
+		{"harness provenance alone", "user", `{"content_item_metadata":[{"provenance":{"type":"harness"}}]}`, false},
+		{"no metadata", "user", `{}`, true},
+		{"the model", "assistant", `{"content_item_kinds":["user.text"]}`, false},
+	} {
+		var meta codexItemMeta
+		if err := wireDecode([]byte(c.meta), &meta); err != nil {
+			t.Fatal(err)
+		}
+		if got := codexPersonsMessage(c.role, meta); got != c.want {
+			t.Errorf("%s: read as a person's %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// A FRAGMENT MID-ROLLOUT IS PASSED OVER: Codex cut off mid-line leaves the
+// fragment in place and writes the next record on a line of its own, so the
+// lines after it read and the rollout is not torn.
+//
+// Mutation: end the read at an unparsable line, or call the rollout torn for
+// one that is not its last, and the resumed turns are lost.
+func TestAFragmentMidRolloutIsPassedOver(t *testing.T) {
+	t.Parallel()
+	r, err := readCodexRollout(bytes.NewReader(codexFixture(t, "torn-mid-file.jsonl")))
 	if err != nil {
 		t.Fatalf("read the rollout: %v", err)
 	}
-	got := r.UserMessages()
-	if len(got) != 3 || !strings.HasPrefix(got[0], "<environment_context>") ||
-		got[1] != "SCENARIO:slowmcp:1 go" || !strings.HasPrefix(got[2], "<hook_prompt ") {
-		t.Fatalf("the user messages read as %q, want the context, the prompt and the Stop prompt", got)
-	}
-	for _, text := range got {
-		if strings.Contains(text, "NOTE-HOOK") || strings.Contains(text, "SUMMARY") || strings.Contains(text, "NOTE kept") {
-			t.Errorf("%q reads as a user message", text)
-		}
+	want := []string{"SCENARIO:loop kill-k9-6_1", "SCENARIO:plain after-kill-k9-6_1", "SCENARIO:plain after-kill-torn3"}
+	if got := r.UserMessages(); !slices.Equal(got, want) || r.Torn() || r.ThreadID() == "" {
+		t.Errorf("read %q, torn %v, thread %q; want %q, whole", got, r.Torn(), r.ThreadID(), want)
 	}
 }
 
@@ -150,8 +215,8 @@ func TestATornLastCodexLineIsNeverReadAsWhole(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: read the rollout: %v", name, err)
 		}
-		if !r.Torn() || len(r.UserMessages()) != 3 {
-			t.Errorf("%s: torn %v with %d user messages, want torn and the 3 before it", name, r.Torn(), len(r.UserMessages()))
+		if !r.Torn() || len(r.UserMessages()) != 1 {
+			t.Errorf("%s: torn %v with %d user messages, want torn and the 1 before it", name, r.Torn(), len(r.UserMessages()))
 		}
 	}
 }
@@ -166,7 +231,7 @@ func TestAnUnknownOrUnreadableCodexLineIsSkipped(t *testing.T) {
 	raw := append([]byte("not json\n{\"type\":\"a_kind_from_later\",\"payload\":{\"x\":1}}\n[1,2]\n\n"),
 		codexRolloutFixture(t)...)
 	r, err := readCodexRollout(bytes.NewReader(raw))
-	if err != nil || r.ThreadID() == "" || len(r.UserMessages()) != 3 {
+	if err != nil || r.ThreadID() == "" || len(r.UserMessages()) != 1 {
 		t.Errorf("read %q with %d user messages (%v), want the fixture whole", r.ThreadID(), len(r.UserMessages()), err)
 	}
 }
@@ -221,9 +286,8 @@ func TestAChatGPTPlansCodexLimitsHaveOneWindow(t *testing.T) {
 }
 
 // A RESTORED CODEX ROLLOUT IS NAMED AS A RESUME FINDS IT: Codex resumes a
-// thread only from a file named `rollout-*-<id>.jsonl` under sessions/
-// (renamed otherwise, the resume failed: measured), and the locator looks for
-// that name. Neither names a path for an id a pattern could misread.
+// thread only from `rollout-YYYY-MM-DDThh-mm-ss-<id>.jsonl` under sessions/
+// (any other name refused: measured), and the locator looks for that name. Neither names a path for an id a pattern could misread.
 //
 // Mutation: restore under another name, look under another directory or
 // pattern, or pass an id with a glob character, and a carried session is not
@@ -233,10 +297,13 @@ func TestARestoredCodexRolloutIsNamedAsAResumeFindsIt(t *testing.T) {
 	p := Paths{Home: "/home/user"}
 	id := "01a1ff62-fbda-7aa2-af57-6c0abeb8e50b"
 	restored := codexRestoredRollout(p, id)
+	canonical := regexp.MustCompile(`^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-` + id + `\.jsonl$`)
 	if dir, name := path.Split(restored); dir != "/home/user/.codex/sessions/" {
 		t.Errorf("restored into %q, not the sessions root", dir)
+	} else if !canonical.MatchString(name) {
+		t.Errorf("restored as %q, a name a resume refuses", name)
 	} else if ok, _ := path.Match("rollout-*-"+id+".jsonl", name); !ok {
-		t.Errorf("restored as %q, a name a resume does not find", name)
+		t.Errorf("restored as %q, a name the locator does not find", name)
 	}
 	want := `find '/home/user/.codex/sessions' -type f -name 'rollout-*-` + id + `.jsonl'`
 	if got := codexRolloutPath(p, id); !strings.HasPrefix(got, want) {
