@@ -13,8 +13,8 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
-// The invariants the built-in opencode profile keeps, each measured against
-// earlier OpenCode 2 releases (see the profile's comments): a seat's phases keep
+// The invariants the built-in opencode profile keeps, each measured on 2.3.2
+// (see the profile's comments): a seat's phases keep
 // OpenCode's own system prompt and a side pass replaces it, both through files
 // in the directory OPENCODE_CONFIG_DIR names inside the call's own working
 // directory, and a call is offered the two web tools and nothing else.
@@ -88,8 +88,8 @@ func TestOpenCodesPromptFilesLieWhereItLooks(t *testing.T) {
 // call is handed and the file the call's channel writes: a seat runs OpenCode's
 // default agent, whose prompt stays in force, with the engine's text (behind the
 // harness note) in AGENTS.md; a side pass selects the agent file, whose body is
-// the whole system prompt. Never both: on earlier OpenCode 2 releases an AGENTS.md beside
-// the selected agent is appended to that agent's prompt too.
+// the whole system prompt. Never both: on 2.3.2 an AGENTS.md beside the
+// selected agent is appended to that agent's prompt too (measured).
 func TestOpenCodeSeatAppendsAndASidePassReplaces(t *testing.T) {
 	t.Parallel()
 	const identity = "You are Agent PM at Nimbus."
@@ -189,7 +189,7 @@ func TestOpenCodeSeatAppendsAndASidePassReplaces(t *testing.T) {
 
 // NO SYSTEM PROMPT, NO AGENTS.md. OpenCode reads that file on every run, and
 // an empty one still reaches the model as an "Instructions from: <path>" line
-// with nothing under it (measured on earlier OpenCode 2 releases (not on 2.3.0)). A seat's call with no
+// with nothing under it (measured on 2.3.2). A seat's call with no
 // system prompt runs on OpenCode's own prompt and nothing else, which is what
 // no system prompt means on every other channel. Asked from inside the child,
 // because the call's directory is removed on release.
@@ -218,8 +218,8 @@ func TestOpenCodeWritesNoAGENTSmdForARequestWithNoSystemPrompt(t *testing.T) {
 // is allowed, so the policy is an allowlist only while it opens by denying
 // every action and then allows exactly webfetch and websearch: an allow for
 // anything else reopens a tool, and a deny-list in place of the first rule
-// lets through every tool a release adds. Measured on earlier OpenCode 2 releases (not on 2.3.0), this
-// seed offers exactly those two. The seed also turns off the built-in
+// lets through every tool a release adds. Measured on 2.3.2, this seed
+// offers those two and `skill`, whose every call it refuses. The seed also turns off the built-in
 // `opencode.tools` plugin, which adds OpenCode's own session tools and a
 // system-prompt sentence telling the model to call one through `execute`, a
 // tool no call is offered.

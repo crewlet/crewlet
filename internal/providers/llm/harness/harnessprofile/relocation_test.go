@@ -623,7 +623,7 @@ func TestTheOpenCodeProfileWritesWhatItReadsIntoTheCallsOwnConfigDir(t *testing.
 // project switch, written in env, was turned back off by
 // `env: {OPENCODE_CONFIG_PROJECT_DISABLE: "0"}` — or by an empty value,
 // which OpenCode reads as off — and every ancestor's configuration reached
-// every seat again (measured on an earlier OpenCode 2 release (not on 2.3.0)). So the switch is an isolation
+// every seat again (measured on 2.3.2). So the switch is an isolation
 // variable: refused in env and passthrough_env here, and in an entry's env by config
 // through the same list. An empty value is refused because a vendor that reads
 // `1` as on reads it as off; a name the engine already points at a directory

@@ -1689,18 +1689,19 @@ opencode:
   # with its usage text, refuses the permissions format below ("V2
   # permissions are not supported by OpenCode V1"), cannot open a database
   # 2.0 created, and keeps its login in a file 2.0 ignores.
-  written_for: "OpenCode 2.3.0, the @opencode/cli package, the one release supported (`opencode --version` prints `opencode v2.3.0`); each guarantee below names the release it was measured on, and one measured only on an earlier OpenCode 2 release says it was not measured on 2.3.0"
+  written_for: "OpenCode 2.3.2, the @opencode/cli package, the one release supported (`opencode --version` prints `opencode v2.3.2`); each guarantee below says whether it was measured on 2.3.2 or is untested on it"
   version_args: ["--version"]
   # `--standalone` IS THE ISOLATION. Without it every `opencode` command
   # starts — or reuses — a background service, detached from the call, on a
   # port compiled into the binary (49374) and shared by every user and every
-  # HOME on the machine. Measured on an earlier OpenCode 2 release (not on 2.3.0): the second seat's call failed
-  # after ~20s on the occupied port, a call reusing a running service sent
-  # the key that service was started with rather than the one the call was
-  # given (which defeats auth.mode and every rotation through the entry's env), and
-  # the service outlived the call's timeout and process-group kill for as
-  # long as it was watched (29 minutes). With it, each call runs a private
-  # server inside its own process tree, and nothing survives the call.
+  # HOME on the machine. On 2.3.2 a call without it started no service
+  # (nothing listened on 49374 after two seats' calls), but a service one
+  # home starts holds that port, and a second home's start failed after
+  # 20.6 s on it (measured); a call reusing a running service sending the
+  # key that service was started with, which defeats auth.mode and every
+  # rotation through the entry's env, is untested on 2.3.2. With it, each
+  # call runs a private server inside its own process tree, and nothing
+  # survives the call or its process-group kill (measured on 2.3.2).
   #
   # `--format json` makes failures STRUCTURED: a refused key or a spent plan
   # is an `error` event naming its class (marker_scope, below), where the
@@ -1708,7 +1709,7 @@ opencode:
   # match across providers. `--title` names the session, which stops OpenCode
   # making a SECOND billed model call per run to generate a title for a
   # transcript nobody will ever list: with it, every call made exactly one
-  # model request on earlier OpenCode 2 releases.
+  # model request on 2.3.2, without it two (measured).
   complete_args: ["run", "--standalone", "--print-logs=false", "--format", "json", "--title", "crewlet"]
   # THE ONLY CONFIGURATION A CALL READS IS ITS OWN. OpenCode also reads
   # PROJECT configuration — `opencode.json`, `.opencode/` agents, skills and
@@ -1717,12 +1718,12 @@ opencode:
   # global ones. The per-call directory is
   # <state_dir>/<harness>/seats/<seat>/work/<call>, and state_dir defaults to a
   # directory under the engine user's home, so whatever sits above it was
-  # configuration for every seat. Measured on an earlier OpenCode 2 release (not on 2.3.0) with this profile's
+  # configuration for every seat. Measured on 2.3.2 with this profile's
   # global seed in place: an ancestor `opencode.json` or
   # `.opencode/opencode.json` allowing everything — in 2.0's `permissions`
   # shape or 1.x's `permission` map, which 2.0 translates — widened the
-  # model's tools from webfetch and websearch to shell, read, write, edit and
-  # execute, and an ancestor plugin was loaded and ran its code.
+  # model's tools from skill, webfetch and websearch to thirteen, shell, read,
+  # write, edit and execute among them, and an ancestor plugin was loaded.
   #
   # So the walk is off (OPENCODE_CONFIG_PROJECT_DISABLE, in isolation_env
   # below), and OPENCODE_CONFIG_DIR points at `.crewlet-config` INSIDE THE
@@ -1733,7 +1734,7 @@ opencode:
   # call. Per call rather than per seat because the prompt file is the call's
   # own system prompt, and a seat runs calls concurrently in one home.
   #
-  # Measured on earlier OpenCode 2 releases (not on 2.3.0) through the engine's own code path, a seat's
+  # Measured on 2.3.2 with this profile's arguments and environment, a seat's
   # call and a side pass each, with the state directory inside a git checkout
   # (a commit and an origin) and both the checkout and a directory between it
   # and the state directory holding an AGENTS.md, CLAUDE.md, CONTEXT.md,
@@ -1742,9 +1743,9 @@ opencode:
   # and `.opencode/` agents (one named crewlet-seat), AGENTS.md, skills and a
   # plugin, with skills under `.claude/` and `.agents/` as well: none of them
   # reached a request, no plugin or MCP server ran, and the model was offered
-  # exactly webfetch and websearch. The same tree with the switch overridden
-  # to "0" loaded both plugins, started the MCP server, listed a skill and
-  # widened the tools to twelve, so it is the switch that keeps them out.
+  # skill, webfetch and websearch alone. The same tree with the switch
+  # overridden to "0" (or empty, or unset) widened the tools to thirteen, so it
+  # is the switch that keeps them out.
   #
   # The `.git` file the engine writes into every call's directory keeps out
   # what the switch does not. OpenCode asks git where its project is, and
@@ -1758,9 +1759,8 @@ opencode:
   # and the only git command either build runs is `rev-parse`, there.
   #
   # No `.env` is loaded: the ones above the call reached no request on either
-  # build, and on an earlier OpenCode 2 release even one in the working
-  # directory itself, setting
-  # OPENCODE_CONFIG_CONTENT, changed nothing, where the same variable in the
+  # build, and on 2.3.2 even one in the working directory itself, setting
+  # OPENCODE_CONFIG_CONTENT, changed nothing (measured), where the same variable in the
   # environment took effect. The one configuration outside the call
   # OpenCode still reads is the machine's managed one, /etc/opencode on Linux,
   # which only an administrator of the host can write and which no variable
@@ -1769,7 +1769,7 @@ opencode:
   # A command that runs outside a call — the credential store's import and
   # export, `auth login` and `auth list`, the version probe — gets the walk
   # switched off and no OPENCODE_CONFIG_DIR, so it reads no configuration at
-  # all. Measured so on an earlier OpenCode 2 release (not on 2.3.0), under an ancestor holding a plugin and an
+  # all. Measured so on 2.3.2, under an ancestor holding a plugin and an
   # allow-all opencode.json: import, export and list work and load no plugin,
   # and `api session.get` (usage_args) runs as a call and reads the call's
   # directory. `auth login` is the vendor's interactive picker and gets the
@@ -1782,15 +1782,16 @@ opencode:
   # newer tools (`execute`, Code Mode's JavaScript runtime with `fetch`, and
   # the session and worktree tools it exposes) passed a v1-style list of
   # denials. Never `ask`, which a headless run cannot answer. Measured on
-  # earlier OpenCode 2 releases: every call is offered webfetch and websearch and nothing
-  # else, `question` included.
+  # 2.3.2: every call is offered webfetch, websearch and `skill`, whose every
+  # call the policy refuses ("Permission denied: skill"), and nothing else,
+  # `question` included.
   #
   # `plugins: ["-opencode.tools"]` turns off the built-in plugin that adds
   # OpenCode's own session tools, which the policy withholds anyway, and a
   # sentence at the end of the system prompt telling the model to call one of
-  # them through `execute`, a tool no call is offered. Measured on
-  # earlier OpenCode 2 releases: that sentence is gone from both channels' requests and nothing else
-  # in them changes.
+  # them through `execute`, a tool no call is offered. Measured on 2.3.2:
+  # that sentence is gone from both channels' requests and nothing else in
+  # them changes.
   #
   # `update: disable` keeps a seat's call from checking for, and fetching, a
   # new release; `share: disabled` keeps it from publishing a transcript;
@@ -1799,7 +1800,7 @@ opencode:
   #
   # NO tools_off, so no helper runs on this harness. The seats'
   # policy was measured to decide what a call is offered (the web tools and
-  # nothing else, above), but the denial's deny-all has not been measured to
+  # `skill`, above), but the denial's deny-all has not been measured to
   # leave a call offered nothing, and the construction lives in a seeded file
   # rather than on the argv tools_off is checked against, so a release that
   # read the policy format differently (as 2.0 read v1's) would go unseen.
@@ -1855,8 +1856,8 @@ opencode:
   # OpenCode has no system-prompt flag and no variable naming a file. Neither
   # file is interpolated — `{env:…}`, `{file:…}` and `@path` reach the model
   # as written — so nothing a seat's prompt quotes can make the harness read a file
-  # or a variable into it. Measured on earlier OpenCode 2 releases (not on 2.3.0) through the engine's
-  # own code path, on the OpenAI-compatible and the Anthropic provider routes:
+  # or a variable into it. Measured on 2.3.2 with this profile's arguments, on
+  # the OpenAI-compatible route (the Anthropic route untested on 2.3.2):
   #
   #   system_prompt         `agents/crewlet-seat.md`, selected with --agent.
   #                         Its body REPLACES OpenCode's prompt and opens the
@@ -1927,14 +1928,14 @@ opencode:
   text_events: ["text"]
   text_paths: [["part", "text"]]
   # USAGE FROM THE SESSION, NOT THE STREAM: `run --format json` drops step
-  # events on earlier OpenCode 2 releases — the final step's step_finish in
-  # most runs measured with tools; 2.3.0 printed every one (measured; see
-  # usage_args in docs/concepts/llm-backends.md) — and the session the call
-  # ran in holds the whole total. `output` is the visible text alone, beside `reasoning` —
+  # events where a release drops them; 2.3.2 printed every one over 20 runs
+  # of four steps, standalone and through a server (measured; see usage_args
+  # in docs/concepts/llm-backends.md) — and the session the call ran in holds
+  # the whole total. `output` is the visible text alone, beside `reasoning` —
   # 2.0 subtracts the one from the other — so reasoning is declared and
-  # added back, as every provider bills it. Through the engine on earlier
-  # OpenCode 2 releases, on both channels, the answer came from the `text` event and the
-  # counts the provider reported came back from the session.
+  # added back, as every provider bills it. On 2.3.2 the answer came from the
+  # `text` event and the counts the provider reported came back from the
+  # session (measured).
   usage_args: ["api", "--standalone", "session.get", "--param", "sessionID=ses_{session}"]
   usage:
     input: [["data", "tokens", "input"]]
@@ -1944,7 +1945,7 @@ opencode:
     reasoning: [["data", "tokens", "reasoning"]]
   # THE SEAT'S TOOLS RUN IN A SERVER OF OPENCODE'S OWN. Its one-shot run does
   # not wait for a configured MCP server to start before it asks its model,
-  # so the model was offered none of the seat's tools (measured on an earlier OpenCode 2 release (not on 2.3.0)). So
+  # so the model was offered none of the seat's tools (untested on 2.3.2). So
   # a run with tools starts `opencode serve` in the call's directory, waits
   # for it to print its address and its password, asks it (`api mcp.list`)
   # until it lists the crewlet server as connected, and only then runs
@@ -1957,7 +1958,7 @@ opencode:
   # server (`codemode: false`, so its tools are the model's tools rather than
   # functions inside Code Mode's runtime) and the permissions again, the
   # seat's tools allowed (`crewlet_*`) beside the web tools, above the
-  # deny-all. Measured on an earlier OpenCode 2 release (not on 2.3.0) through the engine's own code path against a
+  # deny-all. Untested on 2.3.2: through the engine's own code path against a
   # local stand-in, the state directory inside a checkout holding an
   # opencode.json and .opencode/opencode.json with servers of their own, an
   # .mcp.json and every other harness's MCP configuration at each level above the
@@ -2006,9 +2007,8 @@ opencode:
   # step_finish with its stop reason and counts, which closes it. A call is
   # printed only once it has COMPLETED, so the record shows a step's calls
   # only after they ran (late_calls): a step is told once it closes or the
-  # next begins. Earlier OpenCode 2 releases printed a step's step_start and
-  # step_finish only sometimes — the final step's step_finish was missing in
-  # most runs measured — and 2.3.0 always.
+  # next begins. 2.3.2 printed every step's step_start and step_finish over
+  # 20 runs of four steps (measured).
   # A step whose step_finish was dropped is told when the run ends, with no
   # counts; where it is the run's only request without counts, it is told
   # again with the remainder of the session's total, asked of the server
@@ -2021,7 +2021,7 @@ opencode:
   # maximum agent steps"), a string a tool's own failure could carry as well.
   # A run it ends is read as an answer.
   #
-  # Measured on an earlier OpenCode 2 release (not on 2.3.0): each step's counts but the last as it closed, the
+  # Untested on 2.3.2: each step's counts but the last as it closed, the
   # session's total settling the rest, and each call in the record once it
   # had run.
   requests:
@@ -2064,7 +2064,7 @@ opencode:
   volatile_paths: [".local/share/opencode", ".local/state/opencode"]
   # THE LOGIN IS 2.0's EXPORT, because there is no file to copy: the
   # database is the transcript as well, and a v1 `auth.json` copied into a
-  # fresh home is ignored. Measured on an earlier OpenCode 2 release (not on 2.3.0): an import into an empty
+  # fresh home is ignored. Measured on 2.3.2: an import into an empty
   # database followed by an export reproduces the document byte for byte; an
   # empty database exports `[]`; and an import skips a credential id the
   # database already holds — which is why a seat's home is pruned before
@@ -2124,14 +2124,14 @@ opencode:
   # printed it verbatim on a healthy call (measured), and text injected into
   # a page a seat fetched can ask a model to. Not stderr either: 2.0 writes
   # none of these there — zero bytes, measured with --print-logs=false.
-  # Measured on an earlier OpenCode 2 release (not on 2.3.0) against a provider answering 429 with a quota body,
+  # Measured on 2.3.2 against a provider answering 429 with a quota body,
   # 429 with a rate-limit body, and 401: `provider.quota`,
   # `provider.rate-limit`, `provider.auth`, every one exiting 1 with stdout
   # holding the event. 1.x's sentinels ("usage limit", "not authenticated",
   # "no credentials") were never printed by either major, so a spent plan or
   # a dead key went unrecognised — and while a failed run was still fatal,
   # the fallback chain never moved. 2.0 retries a rate limit itself, with no
-  # setting to bound it — ~86s, measured — so a transient one holds the seat
+  # setting to bound it — ~84 s on 2.3.2, measured — so a transient one holds the seat
   # up to timeout_seconds before this sentinel can hand it on.
   marker_scope: events
   marker_events: ["error"]
