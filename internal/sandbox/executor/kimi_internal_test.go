@@ -296,6 +296,29 @@ func TestAKimiRecordAnswersInServeOrderAndNotOffATornLine(t *testing.T) {
 	}
 }
 
+// A LINE READ ONLY IN PART COUNTS BY ITS TYPE: a compaction whose other fields
+// do not decode still stands between a note and the request after it, and a
+// usage record whose fields do not decode confirms nothing.
+//
+// Mutation: skip a line that does not decode whole — the compaction row fails.
+func TestAKimiLineReadOnlyInPartCountsByItsType(t *testing.T) {
+	note := `{"type":"context.append_message","message":{"role":"user","id":"` + KimiNoteID("one") + `"}}` + "\n"
+	for name, between := range map[string]string{
+		"a compaction":   `{"type":"context.apply_compaction","message":7}` + "\n",
+		"a usage record": `{"type":"usage.record","usageScope":["turn"]}` + "\n",
+	} {
+		usage := `{"type":"usage.record","usageScope":"turn"}` + "\n"
+		wire := note + between
+		if name == "a compaction" {
+			wire += usage
+		}
+		held, err := kimiNotesHeld(t.Context(), strings.NewReader(wire), kimiServed("one"))
+		if err != nil || len(held) != 0 {
+			t.Errorf("%s that does not decode whole: held = %v (%v), want none", name, held, err)
+		}
+	}
+}
+
 // THE BOX'S RECORD IS FOUND UNDER WHICHEVER WORKSPACE DIRECTORY HOLDS THE
 // SESSION, and a session the box holds none or two of decides nothing.
 //

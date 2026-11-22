@@ -55,8 +55,11 @@ func kimiNotesHeld(ctx context.Context, wire io.Reader, takes []ServedTake) ([]s
 		}
 		moved = moved[:0]
 		var l kimiWireLine
-		if json.Unmarshal(line, &l) != nil {
-			return nil
+		if err := json.Unmarshal(line, &l); err != nil {
+			// A LINE READ ONLY IN PART STILL COUNTS BY ITS TYPE: a compaction
+			// whose other fields do not decode still clears, and nothing
+			// else is read off it, so no such line confirms a note.
+			l = kimiWireLine{Type: kimiLineType(line)}
 		}
 		switch l.Type {
 		case "context.append_message":
@@ -94,6 +97,18 @@ func kimiNotesHeld(ctx context.Context, wire io.Reader, takes []ServedTake) ([]s
 		}
 	}
 	return out, nil
+}
+
+// kimiLineType is the type a wire.jsonl line names, "" for a line that names
+// none.
+func kimiLineType(line []byte) string {
+	var typed struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(line, &typed) != nil {
+		return ""
+	}
+	return typed.Type
 }
 
 // lastByte is r, remembering the last byte it handed out.
