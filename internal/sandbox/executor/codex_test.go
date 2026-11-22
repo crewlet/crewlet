@@ -200,6 +200,12 @@ func TestACodexBoxTakesUpItsOwnCopyOnlyOnTheOneSupportedRelease(t *testing.T) {
 		"0.171.0-alpha.1": "named no release",
 	} {
 		runner, box, _ := codexBox(t, release)
+		// THE COPY 0.171.0 WROTE, as its last run's record names it, so only
+		// the box's own release decides here.
+		if err := box.WriteFile(t.Context(), executor.PathsFor(box).SessionRecord(),
+			[]byte("id s-1\ncontinued yes\nwhy \nrelease codex-cli 0.171.0\n")); err != nil {
+			t.Fatal(err)
+		}
 		check, err := runner.CheckInPlace(t.Context(), box)
 		if err != nil {
 			t.Fatalf("%s: CheckInPlace: %v", release, err)

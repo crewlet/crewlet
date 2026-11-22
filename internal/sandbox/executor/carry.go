@@ -318,7 +318,9 @@ type inPlaceGate interface {
 // in the box chooses the brief that continues it: yes without asking for a
 // harness that holds no release to it, else its release read as
 // [Runner.CheckCarry] reads it and held to its harness's rule
-// ([inPlaceGate]). Three answers, as CheckCarry's.
+// ([inPlaceGate]), and then the release that wrote the copy held to the
+// writer's ([carrier.ContinuesWriter]), so a copy a newer release wrote is
+// not continued by a box downgraded since. Three answers, as CheckCarry's.
 func (r *Runner) CheckInPlace(ctx context.Context, box sandbox.Sandbox) (sandbox.CarryCheck, error) {
 	gate, ok := r.harness.(inPlaceGate)
 	if !ok {
@@ -329,9 +331,44 @@ func (r *Runner) CheckInPlace(ctx context.Context, box sandbox.Sandbox) (sandbox
 		return sandbox.CarryCheck{Why: silent}, err
 	}
 	check := sandbox.CarryCheck{Version: release, ResumeRead: r.resumeRead(release)}
-	check.Continues, check.Why = gate.continuesInPlace(release)
+	if check.Continues, check.Why = gate.continuesInPlace(release); !check.Continues {
+		return check, nil
+	}
+	writer, unknown, err := copyWriter(ctx, box)
+	switch {
+	case err != nil:
+		return sandbox.CarryCheck{}, err
+	case unknown != "":
+		check.Continues, check.Why = false, unknown
+		return check, nil
+	}
+	check.Continues, check.Why = gate.ContinuesWriter(writer)
 	return check, nil
 }
+
+// copyWriter is the release that wrote the copy of a session box holds, as
+// [releaseOf] reads it: the release the record of the box's last run names
+// ([Paths.SessionRecord]), the run whose session a relaunch in the box is
+// offered, written before its harness ran. Why it is not known where the box
+// holds no record (a box reads a missing file as empty) or one it refuses;
+// an error where the box could not be asked.
+func copyWriter(ctx context.Context, box sandbox.Sandbox) (writer, unknown string, err error) {
+	recorded, refusal, err := readWhole(ctx, box, PathsFor(box).SessionRecord(),
+		"the record of the session its harness ran in")
+	switch {
+	case err != nil:
+		return "", "", fmt.Errorf("executor: reading the record of the box's last run: %w", err)
+	case refusal != "":
+		return "", copyWriterUnknown + refusal, nil
+	case strings.TrimSpace(recorded) == "":
+		return "", copyWriterUnknown + "its last run left no record", nil
+	}
+	return releaseOf(parseSessionRecord(recorded).release), "", nil
+}
+
+// copyWriterUnknown opens why a box continues no copy whose writer it cannot
+// name ([copyWriter]).
+const copyWriterUnknown = "the box cannot say which release wrote its copy of the session: "
 
 // boxRelease is the release box's harness says, read by one login-shell exec
 // of its `--version` with the box's bin directory first on PATH as the
