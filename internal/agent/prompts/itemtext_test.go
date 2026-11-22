@@ -11,12 +11,12 @@ import (
 	"github.com/crewlet/crewlet/internal/provenance"
 )
 
-// itemControls is every character an item draws as U+FFFD ([carried]): each C0
-// and C1 control but tab and newline, U+2028 and U+2029.
+// itemControls is every character an item draws as U+FFFD ([carried]): each
+// control character but tab and newline (DEL included), U+2028 and U+2029.
 func itemControls() []rune {
 	var out []rune
 	for r := rune(0); r <= 0x9f; r++ {
-		if (r < 0x20 && r != '\t' && r != '\n') || r >= 0x80 {
+		if (r < 0x20 && r != '\t' && r != '\n') || r >= 0x7f {
 			out = append(out, r)
 		}
 	}
@@ -49,11 +49,11 @@ func writtenAndDrawn() (written, drawn string) {
 
 // EVERY ITEM KEEPS TO CHARACTERS EVERY HARNESS CARRIES: a person's note (and
 // its sender), a late call's account and its error line, a wake and another
-// run's message each come out with every C0 and C1 control but tab and
+// run's message each come out with every control character but tab and
 // newline, U+2028 and U+2029 drawn as U+FFFD, and every other character as
 // written, tab and newline included.
 //
-// Mutation: leave carriage return, a C1 control or U+2028 as it is, or draw
+// Mutation: leave carriage return, DEL, a C1 control or U+2028 as it is, or draw
 // tab or newline as U+FFFD.
 func TestEveryItemKeepsToCharactersEveryHarnessCarries(t *testing.T) {
 	t.Parallel()
