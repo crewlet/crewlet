@@ -21,7 +21,6 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
-	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/recordseal"
@@ -97,6 +96,7 @@ func (f *fleetOf) join(t *testing.T, m *member, holderWait time.Duration) {
 	leave, err := m.bridge.Join(t.Context(), mcpbridge.FleetOptions{
 		Fabric: q, Leases: f.leases, Node: m.node, Owner: m.owner,
 		Keyring: recordseal.OneKey("k", "fleet-key"), HolderWait: holderWait,
+		Answers: queue.NewAnswerBudget(nil),
 	})
 	if err != nil {
 		t.Fatalf("Join: %v", err)
@@ -168,9 +168,9 @@ func dialWith(t *testing.T, url string, relisted *atomic.Int32) *mcp.ClientSessi
 // fleet's address — one node — while the run's session lives on another, so
 // every gate, every activation's re-list and every cut box crosses the relay,
 // event stream included, and is held to exactly what a box dialling its
-// holder directly is. The session names its caller, as the suite's surface is
-// one that parks ([parking]), so it is relayed to the process that opened it;
-// a seat's route to its holder is held by the cases below.
+// holder directly is. The suite's surface is the seat's own wrapped to park
+// ([parking]), so its call is relayed to the seat's holder; the cases below
+// hold how a seat's holder is found.
 func TestTheRelayedBridgeKeepsTheToolSessionContract(t *testing.T) {
 	t.Parallel()
 	toolsessiontest.Run(t, func(t *testing.T, spec toolsessiontest.Spec) *toolsessiontest.Served {
@@ -180,8 +180,7 @@ func TestTheRelayedBridgeKeepsTheToolSessionContract(t *testing.T) {
 		surface := contractSurface(t, spec)
 		session := &mcpbridge.Session{
 			RunID: "run-1", Launch: "job-1", Handle: "dev", Role: "Engineer",
-			Surface: surface, Caller: actingSeat{surface.Surface},
-			Ledger: calls, Fence: spec.Fence,
+			Surface: surface, Ledger: calls, Fence: spec.Fence,
 		}
 		f.hold(t, holder)
 		url := holder.bridge.Open(spec.Context, session)
@@ -593,101 +592,5 @@ func TestAFencedOpeningDefersToTheSeatsHolder(t *testing.T) {
 	}
 	if rows := recovered.rows(); len(rows) != 1 {
 		t.Errorf("the seat's holder recorded %d calls, want the box's one", len(rows))
-	}
-}
-
-// --- a caller's own session ------------------------------------------------
-
-// openDeep opens a deep-work-shaped session on m: a caller of its own, and so
-// no seat whose lease could name its holder.
-func openDeep(t *testing.T, m *member, probe *probeSurface, loopback bool) string {
-	t.Helper()
-	url := m.bridge.Open(t.Context(), &mcpbridge.Session{RunID: "deep-1", Launch: "job-1",
-		Surface: probe, Caller: nobody{bound: true}, Loopback: loopback})
-	if url == "" {
-		t.Fatal("the session was not opened")
-	}
-	return url
-}
-
-// postPing sends a box's JSON-RPC ping to url and answers its status.
-func postPing(t *testing.T, url string) int {
-	t.Helper()
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, url,
-		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/event-stream")
-	res, err := httpxtest.Pool(t).Do(req)
-	if err != nil {
-		t.Fatalf("POST: %v", err)
-	}
-	_ = res.Body.Close()
-	return res.StatusCode
-}
-
-// A CALLER'S OWN SESSION IS SERVED BY THE PROCESS THAT OPENED IT, wherever its
-// box's call lands: it has no seat whose lease could name a holder, so its
-// token names its opener and the node the call lands on relays it straight
-// there — decided as the session's caller, never as the request. Once the
-// opener ends it, the run is over through every node.
-func TestACallersOwnSessionIsServedByItsOpenerThroughAnyNode(t *testing.T) {
-	t.Parallel()
-	f := newFleet(t, 2, 10*time.Second)
-	probe := &probeSurface{}
-	opener := f.members[1]
-	url := openDeep(t, opener, probe, false)
-	if !strings.HasPrefix(url, f.members[0].server.URL) {
-		t.Fatalf("the session's address %s is not the fleet's", url)
-	}
-	if got := text(callTool(t, dialWith(t, url, nil), "probe", nil)); got != string(iam.Unknown) {
-		t.Errorf("the relayed call was decided as %q, want its caller's %q", got, iam.Unknown)
-	}
-	if n := probe.calls.Load(); n != 1 {
-		t.Errorf("the opener's surface took %d calls, want the box's one", n)
-	}
-	opener.bridge.Close("deep-1")
-	if got := postPing(t, url); got != http.StatusUnauthorized {
-		t.Errorf("a call for a closed session answered %d through another node, want 401", got)
-	}
-}
-
-// A CALLER'S OWN SESSION ENDS WITH THE PROCESS THAT OPENED IT: nothing takes it
-// over, so once its node runs a later incarnation, a call for it is refused at
-// once rather than waiting for a holder that will never come.
-func TestACallersOwnSessionEndsWithItsOpener(t *testing.T) {
-	t.Parallel()
-	const wait = 10 * time.Second
-	f := newFleet(t, 2, wait)
-	opener := f.members[1]
-	url := openDeep(t, opener, &probeSurface{}, false)
-	if err := opener.leave(t.Context()); err != nil {
-		t.Fatalf("leave: %v", err)
-	}
-	f.join(t, &member{bridge: bridgeFor(t, mcpbridge.Options{
-		Material: runtoken.OneKey("k", "test-key"), BaseURL: f.members[0].server.URL,
-	}), node: opener.node}, wait)
-
-	began := time.Now()
-	if got := postPing(t, url); got != http.StatusUnauthorized {
-		t.Errorf("a call for a session whose opener restarted answered %d, want 401", got)
-	}
-	if took := time.Since(began); took >= wait {
-		t.Errorf("the refusal took %s, the whole wait for a holder", took)
-	}
-}
-
-// A LOOPBACK SESSION IS NEVER RELAYED: its token is worth something from its
-// opener's own loopback alone, and a call that lands on another node is
-// refused there rather than carried to it — though it arrived from that
-// node's loopback, which is what the address the entry carries would say.
-func TestALoopbackSessionIsNeverRelayed(t *testing.T) {
-	t.Parallel()
-	f := newFleet(t, 2, 10*time.Second)
-	url := openDeep(t, f.members[1], &probeSurface{}, true)
-	if got := postPing(t, url); got != http.StatusUnauthorized {
-		t.Errorf("a loopback session's call through another node answered %d, want 401", got)
 	}
 }

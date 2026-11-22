@@ -49,8 +49,14 @@ func steersOver(t *testing.T, ring recordseal.Keyring, store sandbox.PendingStor
 // the swe seat; it answers the job.
 func workingRun(t *testing.T, store sandbox.PendingStore, runs *runSteers, turnID string) string {
 	t.Helper()
+	return workingRunOn(t, store, runs, turnID, executor.ClaudeCodeName)
+}
+
+// workingRunOn is [workingRun] for a job of the harness named.
+func workingRunOn(t *testing.T, store sandbox.PendingStore, runs *runSteers, turnID, harness string) string {
+	t.Helper()
 	opened, err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
-		TurnID: turnID, AgentID: sweAgent, AgentHandle: "swe", Role: "SWE", Harness: "claude-code",
+		TurnID: turnID, AgentID: sweAgent, AgentHandle: "swe", Role: "SWE", Harness: harness,
 		TraceID: "tr-1", CreatedAt: time.Now().UTC(),
 		Steer: sandbox.RunSteer{Seat: runs.anchor(turnID, sweAgent, "swe")},
 	}, sandbox.Fence{})
@@ -94,7 +100,7 @@ func boundInbox(t *testing.T, runs *runSteers, store sandbox.PendingStore, turnI
 	if err != nil || !found {
 		t.Fatalf("Get %s = %v, %v", turnID, found, err)
 	}
-	inbox := runs.inbox(identityOfRun(run), 1)
+	inbox := runs.inbox(identityOfRun(run), 1, run.Harness)
 	inbox.Bind(t.Context(), launch, provenance.NewBoundary())
 	t.Cleanup(inbox.Close)
 	return inbox
@@ -817,7 +823,7 @@ func TestANotesInboxIDIsItsJobs(t *testing.T) {
 	t.Parallel()
 	store := sandbox.NewCoordStore(coordmem.NewFleet())
 	runs, _ := steersOver(t, steerRing, store)
-	first := workingRun(t, store, runs, "run-1")
+	first := workingRunOn(t, store, runs, "run-1", executor.OpenCodeName)
 	fileSealed(t, runs, "run-1", steer.Note{ID: "req-1", Text: "use staging", By: "founder",
 		ByKind: iam.ActorHuman})
 	waitFor := func(inbox *runInbox) []mcpbridge.SteerNote {
@@ -833,18 +839,18 @@ func TestANotesInboxIDIsItsJobs(t *testing.T) {
 	if again := waitFor(boundInbox(t, runs, store, "run-1", first)); again[0].Inbox != firstNotes[0].Inbox {
 		t.Errorf("two polls of one job answered ids %q and %q, want one", firstNotes[0].Inbox, again[0].Inbox)
 	}
-	if want := executor.OpenCodeInboxID(first, "req-1"); firstNotes[0].Inbox != want {
+	if want := executor.InboxID(executor.OpenCodeName, first, "req-1"); firstNotes[0].Inbox != want {
 		t.Errorf("the note's inbox id is %q, want %q, the job's", firstNotes[0].Inbox, want)
 	}
 	relaunched, err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
-		TurnID: "run-1", AgentID: sweAgent, AgentHandle: "swe", Role: "SWE", Harness: "opencode",
+		TurnID: "run-1", AgentID: sweAgent, AgentHandle: "swe", Role: "SWE", Harness: executor.OpenCodeName,
 	}, sandbox.Fence{})
 	if err != nil {
 		t.Fatalf("relaunch: %v", err)
 	}
 	second := waitFor(boundInbox(t, runs, store, "run-1", relaunched.LaunchID))
 	if second[0].Inbox == firstNotes[0].Inbox ||
-		second[0].Inbox != executor.OpenCodeInboxID(relaunched.LaunchID, "req-1") {
+		second[0].Inbox != executor.InboxID(executor.OpenCodeName, relaunched.LaunchID, "req-1") {
 		t.Errorf("the relaunch's poll answered id %q, want its own job's, not %q", second[0].Inbox,
 			firstNotes[0].Inbox)
 	}

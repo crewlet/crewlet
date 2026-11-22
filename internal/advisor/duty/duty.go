@@ -10,7 +10,7 @@
 // reads changes: a new revision of the company, a seat paused or resumed, an
 // integration's reconcile. The model pass runs once a day at [ModelPassHour]
 // on the company clock where the company assigns the Advisor a model. A
-// person's Run now is a request on the log, which the holder takes on its next
+// person's Run is a request on the log, which the holder takes on its next
 // tick, so a press on any node runs on the one that holds the duty.
 //
 // # What it never does
@@ -21,12 +21,14 @@ package duty
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/advisor"
+	"github.com/crewlet/crewlet/internal/advisordomain"
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
@@ -66,9 +68,19 @@ type Reader interface {
 	// Signature is a cheap read of everything the setup group reads, which
 	// changes when any of it does.
 	Signature(ctx context.Context) (string, error)
+	// Holds asks a finding's premise again: whether it holds now.
+	Holds(ctx context.Context, p advisor.Premise) (bool, error)
 	// Week reads the week [from, to) a report is written for: its numbers,
-	// and the sources it could not read.
+	// and the sources it could not read; [advisor.ErrWeekUnmeasured] for a
+	// week the company's records do not reach back over all of.
 	Week(ctx context.Context, from, to time.Time) ([]advisor.Metric, []string, error)
+}
+
+// DayReader is a [Reader] that reads a week day by day as well: each company
+// day's turns, those that committed nothing and their tokens, which a report
+// draws across its week. A reader without it writes reports with no days.
+type DayReader interface {
+	Days(ctx context.Context, from, to time.Time) ([]advisor.Day, error)
 }
 
 // Observed is one reading of the company.
@@ -76,6 +88,9 @@ type Observed struct {
 	Observations []advisor.Observation
 	Unread       []string
 	Held         func(advisor.Subject) bool
+	// Silent is each class that read its sources and could not judge all of
+	// the company, with why.
+	Silent []advisor.Silence
 }
 
 // ModelPass is the Advisor's model pass, nil where none runs on this node.
@@ -101,6 +116,9 @@ type ModelRun struct {
 	// Explained are the explanations the engine checked, each for the
 	// verdict it was written for.
 	Explained []advisor.Explained
+	// Partial reports a pass its bound cut short that listed what it had:
+	// its findings open or refresh, and nothing it did not list closes.
+	Partial bool
 }
 
 // Log is the advisor log as the duty reads and writes it.
@@ -111,7 +129,7 @@ type Log interface {
 	Dismissed(ctx context.Context) ([]advisor.Stored, error)
 	// LastDone is when a run last concluded about each scope, and each group.
 	LastDone(ctx context.Context) (map[string]time.Time, error)
-	// Requested is every Run now nobody has run yet.
+	// Requested is every Run nobody has run yet.
 	Requested(ctx context.Context) ([]Request, error)
 	// Record publishes one transition decided at now.
 	Record(ctx context.Context, t advisor.Transition, now time.Time) error
@@ -125,15 +143,24 @@ type Log interface {
 	Tally(ctx context.Context, from, to time.Time) (advisor.Tally, error)
 	// WriteReport writes a week's report, once.
 	WriteReport(ctx context.Context, r advisor.Report) error
+	// Progress writes one line of a deep run's progress.
+	Progress(ctx context.Context, run string, at time.Time, text string) error
+	// Checkpoint writes where a deep run stands, which a holder taking it
+	// over resumes from.
+	Checkpoint(ctx context.Context, run string, at time.Time, body json.RawMessage) error
+	// Resume is the newest checkpoint run wrote, nil where it wrote none.
+	Resume(ctx context.Context, run string) (json.RawMessage, error)
 	// Explain writes the model's explanation of a finding's verdict; one
 	// whose verdict moved since is left for the next pass.
 	Explain(ctx context.Context, e advisor.Explained) error
 }
 
-// Request is a person's Run now.
+// Request is a person's Run.
 type Request struct {
 	Run string
 	By  string
+	// Kind is what the person asked to run: the rules, or a deep run.
+	Kind advisordomain.RunKind
 }
 
 // Run is how one run ended, as the log keeps it.
@@ -147,8 +174,13 @@ type Run struct {
 	// Scopes is each scope the run concluded about, or could not read, with
 	// how many findings each step took in it.
 	Scopes []ScopeRun
+	// Classes is what the rule pass concluded about each class, nil where
+	// none ran (ADR-0166).
+	Classes []advisor.ClassOutcome
 	// Model is the model pass's summary, nil where none ran.
 	Model any
+	// Kind is what the run did: the rules (the empty kind), or a deep run.
+	Kind advisordomain.RunKind
 }
 
 // Count is how many findings of the run took step, every scope together.
@@ -191,6 +223,8 @@ type Duty struct {
 	Log   Log
 	Read  Reader
 	Model ModelPass
+	// Deep is the Advisor's investigation, nil where none runs (ADR-0166).
+	Deep DeepPass
 	// Claim claims or renews the lease, nil on a node with no fleet.
 	Claim func(ctx context.Context) (bool, error)
 	// NewID mints a run's id.
@@ -201,6 +235,8 @@ type Duty struct {
 	signature string
 	// reported is the week whose report this holder saw written.
 	reported string
+	// deep is the deep run in flight on this holder.
+	deep deepState
 }
 
 // Serve runs the duty until ctx ends.
@@ -228,27 +264,24 @@ func (d *Duty) Step(ctx context.Context) error {
 		}
 		if !held {
 			// A peer runs it, and this node's setup signature would be
-			// stale when it next takes over: forget it.
+			// stale when it next takes over: forget it. A deep run in
+			// flight here is the new holder's to run again.
 			d.signature = ""
+			d.cancelDeep()
 			return nil
 		}
 	}
+	if d.deepFlying() {
+		// THE LEASE IS RENEWED, and nothing else runs beside the deep run.
+		return nil
+	}
 	now := d.Now().UTC()
-	requests, err := d.Log.Requested(ctx)
+	all, err := d.Log.Requested(ctx)
 	if err != nil {
 		return fmt.Errorf("read the requested runs: %w", err)
 	}
-	if len(requests) > 0 {
-		// EVERY PRESS WAITING IS ANSWERED BY ONE RUN of everything, recorded
-		// under each press's own id, so a press during a run joins the next.
-		model := d.Model != nil && d.Model.Assigned()
-		run := d.run(ctx, now, true, model, TriggerPerson, requests[0].By, requests[0].Run)
-		var errs []error
-		for _, r := range requests {
-			run.ID, run.By = r.Run, r.By
-			errs = append(errs, d.Log.RecordRun(ctx, run))
-		}
-		return errors.Join(append(errs, d.Log.Expire(ctx, now))...)
+	if len(all) > 0 {
+		return d.pressed(ctx, now, all)
 	}
 	last, err := d.Log.LastDone(ctx)
 	if err != nil {
@@ -264,6 +297,10 @@ func (d *Duty) Step(ctx context.Context) error {
 	if !rules && err == nil && signature != d.signature {
 		rules, trigger = true, TriggerEvent
 	}
+	if d.deepDue(now, last) {
+		d.startDeep(ctx, now, TriggerSchedule, "", []string{d.NewID()}, nil)
+		return nil
+	}
 	model := d.Model != nil && d.Model.Assigned() && last[string(advisor.GroupModel)].Before(d.slot(now))
 	if !rules && !model {
 		return d.report(ctx, now)
@@ -272,7 +309,7 @@ func (d *Duty) Step(ctx context.Context) error {
 		d.signature = signature
 	}
 	run := d.run(ctx, now, rules, model, trigger, "", d.NewID())
-	return errors.Join(d.Log.RecordRun(ctx, run), d.Log.Expire(ctx, now), d.report(ctx, now))
+	return errors.Join(d.conclude(ctx, run), d.Log.Expire(ctx, now), d.report(ctx, now))
 }
 
 // report writes the last whole week's report once it is due: on the Monday
@@ -292,7 +329,14 @@ func (d *Duty) report(ctx context.Context, now time.Time) error {
 		return nil
 	}
 	metrics, unread, err := d.Read.Week(ctx, from, to)
-	if err != nil {
+	switch {
+	case errors.Is(err, advisor.ErrWeekUnmeasured):
+		// A WEEK BEFORE THE COMPANY, or one it began within: its numbers
+		// would read as a measured week, so it has no report.
+		log.InfoContext(ctx, "advisor_report_week_unmeasured", "week", week)
+		d.reported = week
+		return nil
+	case err != nil:
 		return fmt.Errorf("read the week %s: %w", week, err)
 	}
 	tally, err := d.Log.Tally(ctx, from, to)
@@ -309,7 +353,7 @@ func (d *Duty) report(ctx context.Context, now time.Time) error {
 		return fmt.Errorf("read the report of %s: %w", before, err)
 	}
 	r := advisor.Report{Week: week, From: from, To: to, Metrics: advisor.Against(metrics, last),
-		Unread: unread, Tally: tally, Top: advisor.TopOf(live)}
+		Unread: unread, Tally: tally, Top: advisor.TopOf(live, to), Days: d.days(ctx, week, from, to)}
 	// THE MODEL'S SUMMARY, where the company assigns one, from the report
 	// alone: a report is written without it rather than not at all.
 	if d.Model != nil && d.Model.Assigned() {
@@ -324,6 +368,22 @@ func (d *Duty) report(ctx context.Context, now time.Time) error {
 	}
 	d.reported = week
 	return nil
+}
+
+// days is the week [from, to) day by day, where the reader reads days: a
+// picture of the week's totals, so a report is written without it rather than
+// not at all.
+func (d *Duty) days(ctx context.Context, week string, from, to time.Time) []advisor.Day {
+	reader, ok := d.Read.(DayReader)
+	if !ok {
+		return nil
+	}
+	days, err := reader.Days(ctx, from, to)
+	if err != nil {
+		log.WarnContext(ctx, "advisor_report_days_unread", "week", week, "error", err.Error())
+		return nil
+	}
+	return days
 }
 
 // slot is the latest model pass start at or before now, on the company clock.
@@ -359,6 +419,11 @@ func (d *Duty) run(ctx context.Context, now time.Time, rules, model bool, trigge
 			reading.Groups = append(reading.Groups, advisor.GroupSetup, advisor.GroupEvidence)
 			reading.Unread, reading.Held = o.Unread, o.Held
 			observed = append(observed, o.Observations...)
+			found := make([]advisor.Finding, len(o.Observations))
+			for i, ob := range o.Observations {
+				found[i] = ob.Finding
+			}
+			run.Classes = advisor.Outcomes(found, o.Unread, o.Silent)
 		}
 	}
 	if model {
@@ -377,10 +442,14 @@ func (d *Duty) run(ctx context.Context, now time.Time, rules, model bool, trigge
 		return run
 	}
 	run.Scopes = scopesOf(reading)
+	moved := map[string]bool{}
 	for _, t := range advisor.Reconcile(live, observed, reading) {
 		if err := d.Log.Record(ctx, t, now); err != nil {
 			log.WarnContext(ctx, "advisor_finding_not_recorded", "step", string(t.Step), "error", err.Error())
 			continue
+		}
+		if t.Stored != nil {
+			moved[t.Stored.ID] = true
 		}
 		f := t.Observed
 		if f == nil {
@@ -393,7 +462,81 @@ func (d *Duty) run(ctx context.Context, now time.Time, rules, model bool, trigge
 			}
 		}
 	}
+	if rules {
+		d.closeDuplicates(ctx, now, live, observed, moved)
+		run.Scopes = append(run.Scopes, d.recheckPremises(ctx, now, live, observed, moved))
+	}
 	return run
+}
+
+// closeDuplicates closes every open model finding a rule's finding of this
+// run already says with its numbers ([advisor.Restates]), as a duplicate.
+func (d *Duty) closeDuplicates(ctx context.Context, now time.Time, live []advisor.Stored,
+	observed []advisor.Observation, moved map[string]bool) {
+	for i := range live {
+		s := &live[i]
+		if moved[s.ID] || s.State != advisor.StateOpen || s.Observation.Finding.Source != advisor.SourceModel {
+			continue
+		}
+		if !slices.ContainsFunc(observed, func(o advisor.Observation) bool {
+			return advisor.Restates(s.Observation.Finding, o.Finding)
+		}) {
+			continue
+		}
+		t := advisor.Transition{Step: advisor.StepClose, Stored: s, State: advisor.StateRetired,
+			Reason: advisor.ReasonDuplicate}
+		if err := d.Log.Record(ctx, t, now); err != nil {
+			log.WarnContext(ctx, "advisor_finding_not_recorded", "step", string(t.Step), "error", err.Error())
+			continue
+		}
+		moved[s.ID] = true
+	}
+}
+
+// PremiseScope is the scope a rules run records once it asked every open
+// finding's premise again, which a finding's premise_checked_at reads.
+const PremiseScope = "premise"
+
+// recheckPremises asks again the premise of every open finding that states
+// one and this run did not move, and closes each whose premise no longer
+// holds (ADR-0166). A premise that could not be asked is left as it stands.
+//
+// A MOVED PREMISE IS NOT A SOLVED PROBLEM: the number a finding rested on
+// can move while what it was about still stands (the blockers changed hands,
+// the items are still blocked). Where a rule's finding of this run is about
+// the same work, the finding is replaced by it rather than resolved.
+func (d *Duty) recheckPremises(ctx context.Context, now time.Time, live []advisor.Stored,
+	observed []advisor.Observation, moved map[string]bool) ScopeRun {
+	scope := ScopeRun{Scope: PremiseScope, Status: ScopeDone, Steps: map[advisor.Step]int{}}
+	for i := range live {
+		s := &live[i]
+		p := s.Observation.Finding.Premise
+		if p == nil || moved[s.ID] || s.State != advisor.StateOpen {
+			continue
+		}
+		holds, err := d.Read.Holds(ctx, *p)
+		if err != nil {
+			log.WarnContext(ctx, "advisor_premise_unread", "finding", s.ID, "error", err.Error())
+			scope.Status = ScopeUnread
+			continue
+		}
+		if holds {
+			continue
+		}
+		t := advisor.Transition{Step: advisor.StepClose, Stored: s, State: advisor.StateResolved,
+			Reason: advisor.ReasonConditionCleared}
+		if slices.ContainsFunc(observed, func(o advisor.Observation) bool {
+			return advisor.AboutTheSameWork(s.Observation.Finding, o.Finding)
+		}) {
+			t.State, t.Reason = advisor.StateRetired, advisor.ReasonReplaced
+		}
+		if err := d.Log.Record(ctx, t, now); err != nil {
+			log.WarnContext(ctx, "advisor_finding_not_recorded", "step", string(t.Step), "error", err.Error())
+			continue
+		}
+		scope.Steps[advisor.StepClose]++
+	}
+	return scope
 }
 
 // modelPass runs the model, adding its group to reading where it concluded.

@@ -250,7 +250,7 @@ func TestTheSlowestListingBeginningMeasuredFitsItsBudget(t *testing.T) {
 // base64-encoded, takes five seconds to cross a leaf link at
 // [objstore.MiBPace]. Presumed lost at the read term, a piece read was asked
 // again while its reply was still crossing, another whole piece on the link
-// a node's lease renewals cross. A member's reply crosses a cluster route in
+// the node's requests cross. A member's reply crosses a cluster route in
 // milliseconds, so there a piece read keeps the read term, and a metadata
 // read's few hundred bytes keep it everywhere.
 func TestAPieceReadIsGivenAPiecesCrossingAcrossALink(t *testing.T) {

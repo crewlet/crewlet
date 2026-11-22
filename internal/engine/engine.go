@@ -56,6 +56,9 @@ type Company struct {
 	// each built again as a helper's run ([buildHelpers]), by key. Nil where
 	// no helper runs on any.
 	Helpers map[string]llm.Provider
+	// Searcher is Ask Crewlet's search run of its model ([buildSearcher]),
+	// nil where its harness has none.
+	Searcher *harness.Provider
 
 	// contacts resolves the `${VAR}` contact ids in the prompts' roster
 	// through the chain this epoch was built with (the secret store, then the
@@ -88,6 +91,13 @@ type Company struct {
 	// running job's row. Built with the builtins where the epoch's code tools
 	// serve ([Engine.equip]); nil on an epoch whose company hosts no code.
 	CheckoutTool tools.Callable
+
+	// RunsAround is what an executor's run sees the runs in flight around it
+	// with (ADR-0176): the read its launch's brief lists, and `list_runs`,
+	// `message_run` and `wait_for_run` on its surface ([runner.Config.Runs]).
+	// Built with the builtins ([Engine.equip]); nil on an epoch built without
+	// an engine.
+	RunsAround runner.RunsAround
 	// HoldTool records an executor's run's call to a tool at Needs approval
 	// as the question it parks on (ADR-0077), on that run's surface alone
 	// ([runner.Config.Hold]). Nil without an engine or the fleet keyring's
@@ -193,6 +203,10 @@ func newCompany(c *config.Company, env *config.Resolver, plans *harness.Plans) (
 	if err != nil {
 		return nil, err
 	}
+	searcher, err := buildSearcher(c, env, plans)
+	if err != nil {
+		return nil, err
+	}
 	// Described before anything is filed, so every MCP tool here and in each
 	// seat's clone carries its server's description into the prompt.
 	registry := tools.NewRegistry()
@@ -202,6 +216,7 @@ func newCompany(c *config.Company, env *config.Resolver, plans *harness.Plans) (
 		Org:      organization,
 		Models:   models,
 		Helpers:  helpers,
+		Searcher: searcher,
 		Tools:    registry,
 		contacts: env.LookupOK,
 	}, nil
@@ -366,6 +381,7 @@ func (c *Company) RunnerFor(ctx context.Context, handle string, reg *tools.Regis
 		Ask:      c.AskTool,
 		Checkout: c.CheckoutTool,
 		Hold:     c.HoldTool,
+		Runs:     c.RunsAround,
 		// Opened by the caller, which files it where a person's note finds it.
 		Steer: in.Steer,
 	})

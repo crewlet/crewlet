@@ -35,3 +35,17 @@ func (s Sources) AsRead(ctx context.Context, f advisor.Finding, now time.Time) (
 	}
 	return v.finding(row)
 }
+
+// WeekOf is the week [from, to) as the duty reads it for a report.
+func (s Sources) WeekOf(ctx context.Context, from, to time.Time) ([]advisor.Metric, []string, error) {
+	return advisorObserver{s: s}.Week(ctx, from, to)
+}
+
+// AdvisorReadNames is every question the deep run may ask, by name.
+func AdvisorReadNames() []string {
+	out := make([]string, len(advisorReads))
+	for i, q := range advisorReads {
+		out[i] = q.Name
+	}
+	return out
+}

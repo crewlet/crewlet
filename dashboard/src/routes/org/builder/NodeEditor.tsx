@@ -93,6 +93,7 @@ import {
   unitForm,
   unitParts,
   placementLabelsError,
+  runCapError,
   wholeNumberError,
   type PhaseModelField,
   type BudgetForm,
@@ -1223,7 +1224,8 @@ function SeatEditor({
 
   const budgetErrors = human ? {} : tokenBudgetErrors(form.tokenBudget);
   const labelsError = placementLabelsError(form.placementLabels);
-  const boxError = wholeNumberError(form.pauseTTL) ?? wholeNumberError(form.maxTurns);
+  const boxError =
+    wholeNumberError(form.pauseTTL) ?? wholeNumberError(form.maxTurns) ?? runCapError(form.maxRuns);
   const blocked =
     form.name.trim() === ""
       ? "A seat needs a name."
@@ -1908,6 +1910,10 @@ const PHASE_WORDS: Readonly<Record<PhaseModelField, { label: string; runs: strin
     label: "Round-cap judge",
     runs: "Decides whether a phase that ran out of tool rounds is still making progress.",
   },
+  llm_triage: {
+    label: "Wake triage",
+    runs: "Sorts a message to this seat from someone else while its run works. A fast model keeps it cheap.",
+  },
 };
 
 function ModelSection({
@@ -2372,11 +2378,11 @@ const LEARNING_CHOICES: FieldChoice[] = [
 ];
 
 /** The executor box's own keys this section edits; the rest stay the document's. */
-const BOX_KEYS = new Set(["pause_ttl_seconds", "max_turns"]);
+const BOX_KEYS = new Set(["pause_ttl_seconds", "max_turns", "max_concurrent_runs"]);
 
 /**
  * How an agent seat runs, beyond its model: whether it learns, which delegate
- * templates it may hand work to, which nodes may run it, and the two numbers
+ * templates it may hand work to, which nodes may run it, and the three numbers
  * of its executor box. Each is the seat's own key, written through Apply like
  * every other field.
  */
@@ -2491,6 +2497,16 @@ function RuntimeSection({
             help="The most agentic rounds one run may take. Empty is the default, 0 is uncapped."
             error={wholeNumberError(form.maxTurns) ?? errorFor(["sandbox", "max_turns"])}
           />
+          <ConfigField
+            label="Runs at once"
+            kind="id"
+            value={form.maxRuns}
+            onChange={(maxRuns) => set({ maxRuns })}
+            required={false}
+            disabled={disabled}
+            help="How many runs the seat works side by side, never two in one conversation. Empty is 2."
+            error={runCapError(form.maxRuns) ?? errorFor(["sandbox", "max_concurrent_runs"])}
+          />
         </div>
       </EditorSection>
     </>
@@ -2508,7 +2524,7 @@ function DocumentFacts({ data, handle }: { data: ConfigRole; handle: string }) {
 
   if (isRecord(data.sandbox) && Object.keys(data.sandbox).some((key) => !BOX_KEYS.has(key))) {
     // THE SEAT PAGE'S WORDS: what the seat's own block sets for the box its
-    // executor runs in beyond the two numbers above. Where that box is
+    // executor runs in beyond the three numbers above. Where that box is
     // belongs to the model entry that launches the run, not to this block.
     facts.push({
       key: "sandbox",

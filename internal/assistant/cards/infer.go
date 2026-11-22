@@ -12,17 +12,17 @@ import (
 )
 
 // INFERRED CARDS: the card drawn from an answer no spec was written for (a
-// generic read of any route, catalog's api_request), shaped by its own JSON:
+// generic read of any route, catalog's read_api), shaped by its own JSON:
 //   - a LIST is a table, a column per plain field the first rows carry, known
 //     fields first; a list of plain values is a list card;
-//   - a record that WRAPS ONE LIST (beside plain values such as a cursor or
-//     count) is the table of that list;
+//   - a record that WRAPS ONE LIST is the table of that list;
 //   - ANY OTHER RECORD IS ONE THING, an entity card: plain values are its facts,
-//     a nested record's beneath its name, every list of records its list.
+//     a nested record's beneath its name, every list of records its list, and
+//     a route's KNOWN record (known) carries its kind, id, title and page.
 //
-// Every text value is prose (anybody may have written it; the reading tool is
-// fenced). Nothing here decides what the person may see: the route answered as
-// them, redacted before a card is drawn.
+// Every text value is prose (the reading tool is fenced). Nothing here decides
+// what the person may see: the route answered as them, redacted before a card
+// is drawn.
 
 // The bounds an inferred card is drawn to.
 const (
@@ -43,16 +43,19 @@ const (
 // knownBy are the fields a record is known by, drawn first.
 var knownBy = []string{"name", "title", "label", "handle", "key", "id", "status", "kind"}
 
-// Infer is the spec a card is drawn from answer by, and the document to draw
-// it from (an answer reshaped where it is a record), titled title. False for
+// Infer is the spec and document a card of answer is drawn from, titled title;
+// known, where set, is the identity of the one record the answer is. False for
 // an answer no card can show: a plain value, or nothing.
-func Infer(answer any, title string) (Spec, any, bool) {
+func Infer(answer any, title string, known *Entity) (Spec, any, bool) {
 	switch t := answer.(type) {
 	case []any:
 		return list(t, "", title, answer)
 	case map[string]any:
 		if path, ok := wrappedList(t); ok {
 			return list(t[path].([]any), path, title, answer)
+		}
+		if spec, doc, ok := knownRecord(t, title, known); ok {
+			return spec, doc, true
 		}
 		return entityOf(t, title)
 	}
@@ -180,6 +183,45 @@ func entityOf(record map[string]any, title string) (Spec, any, bool) {
 	}
 	return Spec{Entity: e}, doc, true
 }
+
+// knownRecord is the card of an answer that is the record known names: the
+// inferred record's facts and lists, with known's identity read from the
+// answer. False where known is nil or the answer holds no id where it says.
+func knownRecord(answer map[string]any, title string, known *Entity) (Spec, any, bool) {
+	if known == nil || known.Kind == "" {
+		return Spec{}, nil, false
+	}
+	record := lookup(answer, known.Root)
+	if id := field(record, known.ID); id == nil || !plain(id) || text(id) == "" {
+		return Spec{}, nil, false
+	}
+	spec, doc, ok := entityOf(answer, title)
+	if !ok {
+		spec, doc = Spec{Entity: &Entity{Name: title, Prose: true}}, map[string]any{}
+	}
+	at := func(path string) string {
+		if path == "" {
+			return ""
+		}
+		return joinPath(knownAt, path)
+	}
+	e := spec.Entity
+	e.Kind, e.ID, e.Title, e.Subtitle, e.Key = known.Kind, at(known.ID), at(known.Title),
+		at(known.Subtitle), at(known.Key)
+	e.KeyPrefix, e.TitlePrefix, e.Room = known.KeyPrefix, known.TitlePrefix, at(known.Room)
+	if o := known.Open; o != nil {
+		params := make(map[string]string, len(o.Params))
+		for param, path := range o.Params {
+			params[param] = at(path)
+		}
+		e.Open = &Open{Screen: o.Screen, Params: params, Label: o.Label, LabelFrom: at(o.LabelFrom)}
+	}
+	doc.(map[string]any)[knownAt] = record
+	return spec, doc, true
+}
+
+// knownAt is where an inferred card's document holds the known record.
+const knownAt = "record"
 
 // inferred is what a walk of one record found: its plain values, in the order
 // a person reads them, and its lists of records.

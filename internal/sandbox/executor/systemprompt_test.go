@@ -224,9 +224,9 @@ func TestClaudeCodeIsPointedAtAPrivateFileInsideTheBox(t *testing.T) {
 
 // THE STANDING INSTRUCTION ABOUT NOTES IS GIVEN EXACTLY WHEN A RUN READS THEM,
 // in its own harness's words, after the report instruction, and to no other:
-// told to a run with no notes wired (the assistant's deep work) or a harness
-// that takes none, it describes a channel that never opens; another harness's
-// names the wrong carrier. The harness adds it, never the runner. A Claude Code
+// told to a run with no notes wired or a harness that takes none, it
+// describes a channel that never opens; another harness's names the wrong
+// carrier. The harness adds it, never the runner. A Claude Code
 // run wired to notes keeps its plain text for a release whose box starts without
 // the hooks, and a copy told of notes for one that starts with them
 // ([executor.Paths.ClaudeNotesSystem]); an OpenCode run's one file is told.
@@ -246,10 +246,10 @@ func TestTheStandingInstructionIsGivenExactlyWhenARunReadsNotes(t *testing.T) {
 		want string
 	}{
 		"claude code, wired to its notes": {executor.NewClaudeCode(), steerWiring, claudeTold,
-			executor.ClaudeCodeSteerInstruction},
+			executor.ClaudeCode{}.NoteInstruction()},
 		"claude code, wired to none":    {executor.NewClaudeCode(), sandbox.SteerWiring{}, plain, ""},
 		"a harness that reads no notes": {executor.New(unreading{executor.ClaudeCode{}}), steerWiring, plain, ""},
-		"opencode, wired to its notes":  {executor.NewOpenCode(), steerWiring, plain, executor.OpenCodeSteerInstruction},
+		"opencode, wired to its notes":  {executor.NewOpenCode(), steerWiring, plain, executor.OpenCode{}.NoteInstruction()},
 		"opencode, wired to none":       {executor.NewOpenCode(), sandbox.SteerWiring{}, plain, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -270,15 +270,13 @@ func TestTheStandingInstructionIsGivenExactlyWhenARunReadsNotes(t *testing.T) {
 					t.Errorf("the text told of notes is not the standing instructions and the note "+
 						"instruction after them:\n%s", told)
 				}
-				for _, instruction := range []string{executor.ClaudeCodeSteerInstruction,
-					executor.OpenCodeSteerInstruction} {
+				for _, instruction := range noteInstructions() {
 					if strings.Contains(system, instruction) {
 						t.Errorf("the text a run started without its hooks reads is told of notes:\n%s", system)
 					}
 				}
 			}
-			for _, instruction := range []string{executor.ClaudeCodeSteerInstruction,
-				executor.OpenCodeSteerInstruction} {
+			for _, instruction := range noteInstructions() {
 				at := strings.Index(told, instruction)
 				if got, want := at >= 0, instruction == tc.want; got != want {
 					t.Fatalf("the instruction %.60q… is given: %v, want %v:\n%s", instruction, got, want, told)
@@ -306,8 +304,7 @@ func TestTheStandingInstructionQuotesTheHeadingANoteOpensWith(t *testing.T) {
 	t.Parallel()
 	rendered := prompts.SteerMessage("<name>", "x")
 	heading, _, _ := strings.Cut(rendered, "\n")
-	for _, instruction := range []string{executor.ClaudeCodeSteerInstruction,
-		executor.OpenCodeSteerInstruction} {
+	for _, instruction := range noteInstructions() {
 		if !strings.Contains(instruction, `"`+heading+`"`) {
 			t.Errorf("the instruction does not quote the heading a note opens with (%q):\n%s",
 				heading, instruction)
@@ -329,7 +326,7 @@ func TestTheStandingInstructionQuotesTheHeadingANoteOpensWith(t *testing.T) {
 // harness does not write (leaving the model nothing to tell a note by).
 func TestClaudeCodesInstructionNamesWhereItsHarnessPutsANote(t *testing.T) {
 	t.Parallel()
-	instruction := executor.ClaudeCodeSteerInstruction
+	instruction := executor.ClaudeCode{}.NoteInstruction()
 	for _, event := range executor.ClaudeNoteEvents {
 		if !strings.Contains(instruction, `"`+event+executor.ClaudeHookContext+`"`) {
 			t.Errorf("the instruction does not name the heading %q its harness puts a note under at %s",

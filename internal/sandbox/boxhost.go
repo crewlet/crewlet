@@ -110,7 +110,7 @@ func storeSilent(ctx context.Context, err error) error {
 
 // boxAnsweredError is a read's failure at a step made once its box answered:
 // the verdict on its job's served notes the store did not answer
-// ([Coordinator.settleHookReceipts]). It carries how the job's harness ended,
+// ([Coordinator.settleReceipts]). It carries how the job's harness ended,
 // so the hand-back that follows ends the run of failed collections and records
 // that end in its own write ([Coordinator.collectFailedAt]).
 type boxAnsweredError struct {
@@ -147,7 +147,7 @@ var ErrBoxNotHosted = errors.New("sandbox: the node asked does not hold this run
 // ([BoxReadRequest.AnswerBudget]). A host that is only slow must not be taken
 // for one that stopped. Only a node asking another node's host waits on it. See
 // the package doc, "Box read budget".
-func BoxReadBudget(run PendingRun, read BoxRead) time.Duration {
+func BoxReadBudget(run PendingRun, read BoxRead, traits ThreadTraits) time.Duration {
 	held := SessionTakeBudget + sessionRecordBudget + 3*discardGrace + boxReadChanges*coord.MaxValueCrossing
 	if read.mayEnd(run) {
 		held += JobEndBudget
@@ -155,10 +155,10 @@ func BoxReadBudget(run PendingRun, read BoxRead) time.Duration {
 	if read.recordsTheCap(run) {
 		held += discardGrace + coord.MaxValueCrossing
 	}
-	if asksMainThread(run, read) {
+	if asksMainThread(run, read, traits) {
 		held += MainThreadReadWait
 	}
-	if asksHookReceipts(run) {
+	if asksTakeReceipts(run, traits) {
 		held += hookVerdictWait + coord.MaxValueCrossing
 	}
 	return pollBound + time.Duration(float64(held)/BoxReadAnswerShare)
@@ -206,8 +206,8 @@ func (r BoxRead) mayEnd(run PendingRun) bool {
 // THE QUARTER LEFT HOLDS THE CROSSINGS ALONE: clock distance and waits for the
 // host's own reads need none of it. The request's two hops at the slowest pace
 // ([objstore.PaceFor]: thirty seconds a hop) and the reply's two at the broker's
-// ceiling (four minutes a hop) are nine minutes, against over nineteen in the
-// quarter of the shortest budget (an uncapped collection's, about 79). An absolute
+// ceiling (four minutes a hop) are nine minutes, against about twenty-one in the
+// quarter of the shortest budget (an uncapped collection's, about 84). An absolute
 // margin would cut a dead host's wait by ten minutes for a second rule beside the
 // tail's. A wait its asker's context cuts far below budget is that cut's defect (#1405).
 const BoxReadAnswerShare = answerShare
@@ -502,11 +502,18 @@ func (c *Coordinator) hosts(run PendingRun) bool {
 }
 
 // boxResult is the part of a read that touches the box, made where the box
-// is: by this node where it hosts the box, and asked of the node that does
-// otherwise ([BoxReader]). A collection's answer from another node's host
-// keeps the clock on a host whose store alone is silent ([hostUnsettled]).
+// is: by this node where it hosts the box, holding one of its collections for
+// the read alone ([Coordinator.collectionSlot]), and asked of the node that
+// does otherwise ([BoxReader]), whose own slots bound it. A collection's
+// answer from another node's host keeps the clock on a host whose store alone
+// is silent ([hostUnsettled]).
 func (c *Coordinator) boxResult(ctx context.Context, run PendingRun, read BoxRead) (Result, bool, error) {
 	if c.hosts(run) {
+		collecting, err := c.collectionSlot(ctx, run.TurnID)
+		if err != nil {
+			return Result{}, false, err
+		}
+		defer collecting()
 		return c.readBox(ctx, run, read)
 	}
 	if c.boxes == nil {

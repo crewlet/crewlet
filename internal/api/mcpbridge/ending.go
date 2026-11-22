@@ -222,12 +222,10 @@ func (r *bridgedCalls) running() []*bridgedCall {
 // (internal/engine's Engine.Drain), which ended every seat's openings, so a
 // call those ends answered as still running makes its record before the node
 // tears down what it writes through. NOTHING ELSE IS WAITED FOR, by this or by
-// anything: a call on an opening still serving when this is asked — the
-// Dashboard Assistant's deep work, whose opening ends with its own run and
-// answers its calls as any end does — runs on to its own bound, and a process
-// stopped first ends it, and so does a call admitted after this is asked. No
-// bound of its own: ctx's is the caller's, and a call's own bound ends it
-// (wait.go). Nil-safe.
+// anything: a call on an opening still serving when this is asked runs on to
+// its own bound, and a process stopped first ends it, and so does a call
+// admitted after this is asked. No bound of its own: ctx's is the caller's, and
+// a call's own bound ends it (wait.go). Nil-safe.
 func (b *Bridge) AwaitCalls(ctx context.Context) {
 	if b == nil {
 		return

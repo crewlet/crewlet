@@ -14,6 +14,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/period"
 )
@@ -246,8 +247,8 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 //	status     a minute: a node that stops reporting leaves the fleet view
 //	nodeStatus the same minute: rewritten every reconcile interval, so only a
 //	           dead node's ages out, with no sweep (coord's nodestatusrecord.go)
-//	config     none: the activation pointer is the fencing sequence, and an
-//	           expired one would restart the epoch
+//	config     none: the pointer is the fencing sequence (an expired one would
+//	           restart the epoch); an unnamed body goes by the sweep (markers.go)
 //	budgets    thirty-two days, the longest calendar window and a day; the age
 //	           is not the reset, which the charge's roll makes (ADR-0019)
 //	channels   none: an age cannot tell an open channel from a closed one, and
@@ -322,8 +323,8 @@ const (
 	custodySuffix      = "_custody"
 	uploadsSuffix      = "_uploads"
 	nodeStatusSuffix   = "_node_status"
-	// activationKey holds the pointer AND the current revision's sealed
-	// body, in one record — see [coord.ActivationRecord].
+	// activationKey holds the pointer, which names the current revision's
+	// sealed body under [bodyPrefix] — see [coord.ActivationRecord].
 	activationKey = "activation"
 )
 
@@ -487,6 +488,10 @@ type FleetStore struct {
 	// budget for a run's value ([FleetStore.ValueCrossing]).
 	reach Reach
 
+	// now is the clock an activation's flip is bounded by ([flipBy]): the
+	// wall clock, which a case replaces to name the instant exactly.
+	now func() time.Time
+
 	// ageless is every bucket the broker never ages, whose removal markers
 	// stay until [FleetStore.SweepMarkers]. DERIVED from each bucket's
 	// retention, so a new ageless bucket is swept without being listed.
@@ -555,7 +560,7 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 	}
 
 	store := &FleetStore{
-		js: js, reach: cfg.Reach,
+		js: js, reach: cfg.Reach, now: time.Now,
 		maxRateWindow: cfg.MaxRateWindow, freshness: cfg.StatusFreshness,
 	}
 	store.tallies.codec = codec[coord.Tally]{
@@ -598,7 +603,7 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 			"Crewlet per-node status records (MCP, models, runners, infra); a node that stops writing ages out",
 			cfg.StatusFreshness},
 		{&store.config, configSuffix,
-			"Crewlet activation pointer; NO TTL — its revision IS the epoch", 0},
+			"Crewlet activation pointer and the bodies it names; NO TTL — the pointer's revision IS the epoch", 0},
 		{&store.budgets, budgetSuffix,
 			"Crewlet token counters, a slot per calendar window; the bucket TTL outlasts the longest window",
 			cfg.BudgetRetention},
@@ -944,6 +949,29 @@ func (f *FleetStore) WorkedAt(ctx context.Context, scope string, keys []string) 
 			var record ledgerRecord
 			_ = json.Unmarshal(entry.Value(), &record)
 			out[key] = record.At
+		case errors.Is(err, jetstream.ErrKeyNotFound):
+		default:
+			return nil, unavailable("read the completion ledger", err)
+		}
+	}
+	return out, nil
+}
+
+// WorkedBy returns the keys already recorded under scope, each with the detail
+// its first record stated.
+func (f *FleetStore) WorkedBy(ctx context.Context, scope string, keys []string) (map[string]string, error) {
+	out := make(map[string]string, len(keys))
+	for _, key := range keys {
+		if key == "" {
+			continue
+		}
+		entry, err := f.get(ctx, f.ledger, ledgerKey(scope, key))
+		switch {
+		case err == nil:
+			// A RECORD THAT DOES NOT DECODE IS STILL WORKED, by nobody it names.
+			var record ledgerRecord
+			_ = json.Unmarshal(entry.Value(), &record)
+			out[key] = record.Detail
 		case errors.Is(err, jetstream.ErrKeyNotFound):
 		default:
 			return nil, unavailable("read the completion ledger", err)
@@ -1340,7 +1368,8 @@ func (f *FleetStore) Usage(ctx context.Context, windows coord.Windows) ([]coord.
 
 // ---- the config plane -------------------------------------------------- //
 
-// Activate publishes a new target revision.
+// Activate publishes a new target revision: its body under its digest, then
+// the pointer naming it ([coord.Plane.Activate]).
 func (f *FleetStore) Activate(ctx context.Context, req coord.ActivationRequest) (coord.Activation, error) {
 	if req.RevisionID == "" {
 		return coord.Activation{}, errors.New("coord/kv: an activation needs a revision id")
@@ -1360,18 +1389,41 @@ func (f *FleetStore) Activate(ctx context.Context, req coord.ActivationRequest) 
 	if err != nil {
 		return coord.Activation{}, fmt.Errorf("coord/kv: %w", err)
 	}
+	if err = coord.HoldValue("the activation's body", len(payload)); err != nil {
+		return coord.Activation{}, err
+	}
+	size, err := coord.ActivationBytes(req)
+	if err != nil {
+		return coord.Activation{}, fmt.Errorf("coord/kv: %w", err)
+	}
+	if err = coord.HoldPointer(size); err != nil {
+		return coord.Activation{}, err
+	}
 	seq, previous, err := f.expectedSeq(ctx, req)
 	if err != nil {
 		return coord.Activation{}, err
 	}
-	// ONE WRITE, the body inside the flip: the revision the store assigns IS
-	// the epoch, so append and flip cannot come apart and concurrent
-	// activations get two epochs ([coord.Plane.Activate]). An Update carrying
-	// the sequence read above when the caller named what it replaces, so a
-	// concurrent edit fails rather than being lost behind a 201. Even the
-	// unconditional write compares-and-sets, since its instant is decided
-	// against the pointer it replaces ([coord.ActivationAt]).
-	revision, at, err := f.flip(ctx, req, payload, seq, previous)
+	// THE BODY FIRST, ALWAYS WRITTEN even where its key exists: its new
+	// revision is what fences the sweep ([FleetStore.sweepBodies]), and the
+	// flip below must land within half of coord.BodyRetention of it. The
+	// instant is taken BEFORE the write, so the broker's stamp is no earlier.
+	body := coord.BodyOf(payload)
+	wrote := f.now()
+	if _, err = f.config.Put(ctx, bodyKey(body), payload); err != nil {
+		if errors.Is(err, coord.ErrValueTooLarge) {
+			return coord.Activation{}, err
+		}
+		return coord.Activation{}, unavailable("publish the activation's body", err)
+	}
+	flipCtx, cancel := context.WithDeadline(ctx, wrote.Add(flipBy))
+	defer cancel()
+	// THE REVISION THE STORE ASSIGNS IS THE EPOCH, so concurrent activations
+	// get two epochs. An Update carrying the sequence read above when the
+	// caller named what it replaces, so a concurrent edit fails rather than
+	// being lost behind a 201. Even the unconditional write compares-and-sets,
+	// since its instant is decided against the pointer it replaces
+	// ([coord.ActivationAt]).
+	revision, at, err := f.flip(flipCtx, req, body, seq, previous)
 	if err != nil {
 		return coord.Activation{}, err
 	}
@@ -1382,14 +1434,29 @@ func (f *FleetStore) Activate(ctx context.Context, req coord.ActivationRequest) 
 		Summary:    req.Summary,
 		Origin:     req.Origin.UTC(),
 		Restored:   req.Restore,
+		Body:       body,
 	}, nil
 }
+
+// flipBy is how long after its body's write begins a flip may still land: half
+// of [coord.BodyRetention], so the sweep, which removes only a body written
+// longer ago than that and read before the pointer, never removes one a flip
+// in flight names, with the other half left for the clock skew between this
+// node and the broker that stamps the body.
+const flipBy = coord.BodyRetention / 2
+
+// bodyPrefix is the key class of the activation's bodies in the config bucket,
+// beside [activationKey]: `body.<sha256>`, one key one set of bytes.
+const bodyPrefix = "body."
+
+// bodyKey is the key body is stored under.
+func bodyKey(body coord.BodyRef) string { return bodyPrefix + body.SHA256 }
 
 // pointerBytes is the pointer's stored form for req ([coord.ActivationValue])
 // at the instant at, which is decided against the pointer the write replaces
 // ([coord.ActivationAt]) and so is known only inside the write.
-func pointerBytes(req coord.ActivationRequest, payload json.RawMessage, at time.Time) ([]byte, error) {
-	raw, err := coord.ActivationValue(req, payload, at)
+func pointerBytes(req coord.ActivationRequest, body coord.BodyRef, at time.Time) ([]byte, error) {
+	raw, err := coord.ActivationValue(req, body, at)
 	if err != nil {
 		return nil, fmt.Errorf("coord/kv: %w", err)
 	}
@@ -1457,12 +1524,12 @@ func (f *FleetStore) pointer(ctx context.Context) (coord.ActivationRecord, uint6
 // company resolve to one winner. previous is the instant of the pointer seq
 // names ([FleetStore.expectedSeq]).
 func (f *FleetStore) flip(ctx context.Context, req coord.ActivationRequest,
-	payload json.RawMessage, seq uint64, previous time.Time) (uint64, time.Time, error) {
+	body coord.BodyRef, seq uint64, previous time.Time) (uint64, time.Time, error) {
 
 	switch {
 	case req.ExpectAbsent:
 		at := coord.ActivationAt(req.At, time.Time{})
-		raw, err := pointerBytes(req, payload, at)
+		raw, err := pointerBytes(req, body, at)
 		if err != nil {
 			return 0, time.Time{}, err
 		}
@@ -1476,10 +1543,10 @@ func (f *FleetStore) flip(ctx context.Context, req coord.ActivationRequest,
 		}
 		return revision, at, nil
 	case req.Expect == "":
-		return f.assert(ctx, req, payload)
+		return f.assert(ctx, req, body)
 	}
 	at := coord.ActivationAt(req.At, previous)
-	raw, err := pointerBytes(req, payload, at)
+	raw, err := pointerBytes(req, body, at)
 	if err != nil {
 		return 0, time.Time{}, err
 	}
@@ -1505,7 +1572,7 @@ func (f *FleetStore) flip(ctx context.Context, req coord.ActivationRequest,
 // writer's landed write, and its one caller (`crewlet run -import-company`)
 // and every other writer write once per read, so it always progresses.
 func (f *FleetStore) assert(ctx context.Context, req coord.ActivationRequest,
-	payload json.RawMessage) (uint64, time.Time, error) {
+	body coord.BodyRef) (uint64, time.Time, error) {
 	for {
 		record, seq, held, err := f.pointer(ctx)
 		if err != nil {
@@ -1516,7 +1583,7 @@ func (f *FleetStore) assert(ctx context.Context, req coord.ActivationRequest,
 			previous = record.At
 		}
 		at := coord.ActivationAt(req.At, previous)
-		raw, err := pointerBytes(req, payload, at)
+		raw, err := pointerBytes(req, body, at)
 		if err != nil {
 			return 0, time.Time{}, err
 		}
@@ -1553,37 +1620,46 @@ func isWrongLastSequence(err error) bool {
 	return errors.As(err, &api) && api.ErrorCode == jetstream.JSErrCodeStreamWrongLastSequence
 }
 
-// Payload returns the current revision's sealed payload.
-//
-// A DIFFERENT REVISION'S is absent, never the wrong body: the pointer moved
-// since this node's Target, and applying it would converge on a revision the
-// fleet is not pointed at and report success.
-func (f *FleetStore) Payload(ctx context.Context, revisionID string) (json.RawMessage, bool, error) {
-	if revisionID == "" {
-		return nil, false, errors.New("coord/kv: a payload read needs a revision id")
+// Body reads the body a names, given the time its recorded size takes to
+// arrive ([getSized]), and holds it to the length and digest a names.
+func (f *FleetStore) Body(ctx context.Context, a coord.Activation) (json.RawMessage, bool, error) {
+	if !a.Body.Named() {
+		return nil, false, fmt.Errorf("coord/kv: read the body of %s: %w", a.RevisionID, coord.ErrBodyless)
 	}
-	entry, err := f.get(ctx, f.config, activationKey)
+	if err := a.Body.Check(); err != nil {
+		return nil, false, fmt.Errorf("coord/kv: read the body of %s: %w", a.RevisionID, err)
+	}
+	key := bodyKey(a.Body)
+	entry, err := getSized(ctx, f.js, f.config, key, a.Body.Bytes)
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
+		// SWEPT: the pointer moved on, and the caller reads it again.
 		return nil, false, nil
 	}
 	if err != nil {
-		return nil, false, unavailable("read the activation pointer", err)
+		return nil, false, unavailable("read the activation's body", err)
 	}
-	var record coord.ActivationRecord
-	if err := json.Unmarshal(entry.Value(), &record); err != nil {
-		return nil, false, unavailable("decode the activation pointer", err)
+	if !a.Body.Describes(entry.Value()) {
+		return nil, false, fmt.Errorf("coord/kv: %s/%s holds %d bytes that are not the %d the "+
+			"activation of %s names: %w", f.config.Bucket(), key, len(entry.Value()), a.Body.Bytes,
+			a.RevisionID, coord.ErrBodyCorrupt)
 	}
-	if record.RevisionID != revisionID {
-		return nil, false, nil
-	}
-	if len(record.Payload) == 0 {
-		return nil, false, unavailable("read the activation pointer",
-			fmt.Errorf("the pointer to %s carries no body", revisionID))
-	}
-	return record.Payload, true, nil
+	return entry.Value(), true, nil
 }
 
-// Target reads the pointer.
+// BodyCrossing is how long a's body takes to cross this node's connection at
+// the slowest pace its reach allows: a read's reply of the body and the most
+// header a write carries, none in process. The recorded size is held to what
+// a key holds, so a pointer naming another size stretches no grace past it
+// and shortens none below nothing ([coord.BodyRef.Check]).
+func (f *FleetStore) BodyCrossing(a coord.Activation) time.Duration {
+	size := min(max(a.Body.Bytes, 0), coord.MaxValueBytes)
+	return jsapi.Crossing(size+kvHeaderBytes, f.reach.pace())
+}
+
+// Target reads the pointer: a small record ([coord.MaxPointerBytes]), read at
+// the read term. A pointer written before bodies had keys answers with no
+// body named, which [FleetStore.Body] refuses: a node holding the revision
+// keeps running it.
 func (f *FleetStore) Target(ctx context.Context) (coord.Activation, bool, error) {
 	entry, err := f.get(ctx, f.config, activationKey)
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
@@ -1603,6 +1679,7 @@ func (f *FleetStore) Target(ctx context.Context) (coord.Activation, bool, error)
 		Summary:    record.Summary,
 		Origin:     record.Origin(),
 		Restored:   record.Restored,
+		Body:       record.Body,
 	}, true, nil
 }
 

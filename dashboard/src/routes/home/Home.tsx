@@ -18,8 +18,8 @@
  * dragging, sized from their corner, grouped under coloured headings, and
  * added from a tray that offers Home's own cards, the reader's notes,
  * headings, dividers and links, and the widgets every section of the
- * dashboard offers (`board/registry.tsx`). The board is kept per reader in
- * this browser (`board/model.ts`), as stars are.
+ * dashboard offers (`board/registry.tsx`). The board is kept on the engine
+ * under the reader's seat, so it follows them to every browser (`board/kept.ts`).
  *
  * A DRAFT, KEPT ON DONE. Arranging takes many moves and the page in between
  * is one nobody chose, so nothing is stored until Done. Every move is undoable
@@ -50,7 +50,7 @@ import {
   useReorderLists,
   useToast,
 } from "@crewlethq/ui";
-import { ConfirmModal } from "~/components/Modal.tsx";
+import { ConfirmModal, Modal } from "~/components/Modal.tsx";
 import {
   CopyGlyph,
   FoldVerticalGlyph,
@@ -70,7 +70,6 @@ import {
   PAGE,
   ROW,
   addWidget,
-  boardStore,
   drawnWidths,
   duplicate,
   findWidget,
@@ -88,6 +87,7 @@ import {
   type Widget,
 } from "./board/model.ts";
 import { LeafView } from "./board/widgets.tsx";
+import { keptBoard } from "./board/kept.ts";
 import { widgetShown } from "./board/kit.tsx";
 import { widgetDef } from "./board/registry.tsx";
 import { useServicesRun } from "~/lib/services.ts";
@@ -99,7 +99,7 @@ import { useAssistantDraft, useDraftState } from "~/app/assistant/draft.ts";
 import { EditBar, editMenu } from "./board/EditBar.tsx";
 import { usePageMenu } from "~/app/Shell.tsx";
 
-const store = boardStore(shippedBoard());
+const kept = keptBoard(shippedBoard());
 
 /**
  * Below this width the page is one column: Home's figures fold and every block
@@ -116,7 +116,8 @@ const COALESCE_MS = 1000;
 export function Home() {
   const data = useHomeData();
   const runs = useServicesRun();
-  const saved = store.use();
+  const home = kept.use();
+  const saved = home.board;
   const toast = useToast();
   const [draft, setDraft] = useDraftState<Board | null>(null);
   const [past, setPast] = useState<Board[]>([]);
@@ -132,6 +133,10 @@ export function Home() {
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [fresh, setFresh] = useState<string | null>(null);
   const [leaving, setLeaving] = useState<{ leave: () => void } | null>(null);
+  // THE REVISION EDITING STARTED FROM, which Done names: a board saved from
+  // another browser meanwhile is a conflict to settle, never overwritten.
+  const base = useRef(0);
+  const [conflict, setConflict] = useState<{ at: number } | null>(null);
   const last = useRef<{ key: string; at: number } | null>(null);
   const editing = draft !== null;
   const root = useRef<HTMLDivElement>(null);
@@ -229,23 +234,29 @@ export function Home() {
   }, [fresh]);
 
   const start = () => {
+    // A save still in flight would leave editing on a revision its own save moves.
+    if (home.saving) return;
+    base.current = home.revision;
     setDraft(saved);
     setPast([]);
     setFuture([]);
   };
-  const finish = () => {
-    if (draft) store.write(draft);
+  const close = () => {
     setDraft(null);
     setSettingsId(null);
     setPending(null);
     setTrayOpen(false);
-    if (changed) toast.ok("Home saved");
+    setConflict(null);
+  };
+  const finish = async (ifMatch: number = base.current) => {
+    if (home.saving) return;
+    if (!draft || !changed) return close();
+    const outcome = await home.save(draft, { ifMatch });
+    if (outcome === "saved") close();
+    else if (outcome === "conflict") setConflict({ at: ifMatch });
   };
   const discard = () => {
-    setDraft(null);
-    setSettingsId(null);
-    setPending(null);
-    setTrayOpen(false);
+    close();
     setConfirmCancel(false);
   };
 
@@ -287,7 +298,7 @@ export function Home() {
   const fold = (group: GroupWidget, collapsed: boolean) => {
     const edit = (b: Board) => updateWidget(b, group.id, (w) => ({ ...w, collapsed }) as Widget);
     if (editing) apply(edit(board));
-    else store.update(edit);
+    else void home.update(edit);
   };
 
   const settingsWidget = settingsId && editing ? findWidget(board, settingsId) : undefined;
@@ -489,7 +500,7 @@ export function Home() {
                 onRedo={redo}
                 onAdd={() => setTrayOpen(true)}
                 onCancel={() => (changed ? setConfirmCancel(true) : discard())}
-                onDone={finish}
+                onDone={() => void finish()}
               />
             ) : (
               <Button
@@ -612,6 +623,33 @@ export function Home() {
           cancelLabel="Keep editing"
           destructive
         />
+        <Modal
+          open={conflict !== null}
+          onClose={() => setConflict(null)}
+          title="Home was changed somewhere else"
+          footer={
+            <>
+              <Button variant="secondary" onClick={() => setConflict(null)}>
+                Keep editing
+              </Button>
+              <Button variant="secondary" onClick={discard}>
+                Use the other one
+              </Button>
+              <Button
+                variant="primary"
+                disabled={conflict === null || home.revision === conflict.at || home.saving}
+                onClick={() => void finish(home.revision)}
+              >
+                Replace it with mine
+              </Button>
+            </>
+          }
+        >
+          <p className="t-body">
+            Your Home was saved from another browser or device while you were editing it here. Keep
+            your arrangement and replace that one, or drop your changes and use it.
+          </p>
+        </Modal>
         <ConfirmModal
           open={confirmCancel}
           onClose={() => setConfirmCancel(false)}

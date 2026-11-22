@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
@@ -38,9 +39,10 @@ import (
 // lost is settled by its name; a poll answers a note only once the record says
 // it was served; a confirmation the inbox cannot take is turned away to ask
 // again; the run's ending reports what no step did; and an item for one job is
-// that job's alone. The package doc's sections from "A note to a turn whose
-// executor is out" to "A late call is handed to the job working as it lands"
-// hold the decisions and why.
+// that job's alone, a wake's sealed in a domain of its own (wakeitem.go). The
+// package doc's sections from "A note to a turn whose executor is out" to "A
+// late call is handed to the job working as it lands" hold the decisions and
+// why.
 
 // SteerNoteDomain is the key domain a note on a run's record is sealed in: its
 // own, so no frame of another channel or a state log opens as a note, and no
@@ -49,6 +51,15 @@ const SteerNoteDomain = "seat.steer.note"
 
 // SteerSeatDomain is the key domain a run record's seat anchor is sealed in.
 const SteerSeatDomain = "seat.steer.seat"
+
+// SteerWakeDomain is the key domain a wake on a run's record is sealed in: its
+// own, so no note opens as a wake nor a wake as a person's note.
+const SteerWakeDomain = "seat.wake.item"
+
+// SteerRunDomain is the key domain a message one run sends another with
+// `message_run` is sealed in on the receiving run's record (ADR-0176): its own,
+// so no wake opens as a run's message nor a run's message as a wake.
+const SteerRunDomain = "seat.run.message"
 
 // steerTakeStatuses are the statuses a run's own harness takes notes in: from the
 // launch that opens its job — the job may be working before its turn has
@@ -126,10 +137,25 @@ const steerSettleStopBudget = 5 * time.Second
 type runSteers struct {
 	note *sealPair
 	seat *sealPair
+	wake *sealPair
+	run  *sealPair
 
 	store sandbox.PendingStore
 	pub   queue.Publisher
 	now   func() time.Time
+
+	// completions is the completion ledger a wake a step of a run read is
+	// recorded worked in ([runSteers.claim]); nil records nothing.
+	completions ledgerstore.Completions
+
+	// seen is the seen-through marks a wake a step read moves ([runSteers.seeThrough]);
+	// nil moves none.
+	seen *ledgerstore.SeenThrough
+
+	// handedOver is told, for a seat, the deliveries a step of one of its runs
+	// read as wakes once they are claimed ([Engine.settleWaiting]): a person's
+	// message queued behind the busy seat is queued no longer. Nil tells nobody.
+	handedOver func(ctx context.Context, handle string, triggers []string)
 
 	// warned is every note whose seal this node has logged it cannot open, so
 	// a view that follows a busy record does not say so on every write.
@@ -197,9 +223,10 @@ func newSealPair(domain string, ring recordseal.Keyring) (*sealPair, error) {
 	return &sealPair{signer: signer, verifier: verifier}, nil
 }
 
-// steerSeals is the two seals a run's record carries notes under, built over the
-// fleet keyring before anything is opened, as every channel's are.
-type steerSeals struct{ note, seat *sealPair }
+// steerSeals is the four seals a run's record carries notes, wakes and other
+// runs' messages under, built over the fleet keyring before anything is
+// opened, as every channel's are.
+type steerSeals struct{ note, seat, wake, run *sealPair }
 
 func newSteerSeals(ring recordseal.Keyring) (steerSeals, error) {
 	note, err := newSealPair(SteerNoteDomain, ring)
@@ -210,16 +237,48 @@ func newSteerSeals(ring recordseal.Keyring) (steerSeals, error) {
 	if err != nil {
 		return steerSeals{}, err
 	}
-	return steerSeals{note: note, seat: seat}, nil
+	wake, err := newSealPair(SteerWakeDomain, ring)
+	if err != nil {
+		return steerSeals{}, err
+	}
+	run, err := newSealPair(SteerRunDomain, ring)
+	if err != nil {
+		return steerSeals{}, err
+	}
+	return steerSeals{note: note, seat: seat, wake: wake, run: run}, nil
 }
 
 // Domains is the key domains the seals sign in, for the gate that holds every
 // channel's domains apart.
-func (s steerSeals) Domains() (string, string) { return SteerNoteDomain, SteerSeatDomain }
+func (s steerSeals) Domains() (string, string, string, string) {
+	return SteerNoteDomain, SteerSeatDomain, SteerWakeDomain, SteerRunDomain
+}
 
 // newRunSteers is a node's run steers over its run store and its queue.
 func newRunSteers(seals steerSeals, store sandbox.PendingStore, pub queue.Publisher) *runSteers {
-	return &runSteers{note: seals.note, seat: seals.seat, store: store, pub: pub, now: time.Now}
+	return &runSteers{note: seals.note, seat: seals.seat, wake: seals.wake, run: seals.run, store: store, pub: pub,
+		now: time.Now}
+}
+
+// claimingIn is s recording the wakes its runs read in completions, the
+// dispatcher's own ledger, which drops such a wake's delivery as worked
+// ([runSteers.claim]).
+func (s *runSteers) claimingIn(completions ledgerstore.Completions) *runSteers {
+	s.completions = completions
+	return s
+}
+
+// seeingThrough is s moving the seat's seen-through marks in seen for every
+// wake its runs read ([runSteers.seeThrough]).
+func (s *runSteers) seeingThrough(seen *ledgerstore.SeenThrough) *runSteers {
+	s.seen = seen
+	return s
+}
+
+// telling has s tell handedOver every delivery a run read as a wake, once
+// claimed ([runSteers.handedOver]).
+func (s *runSteers) telling(handedOver func(ctx context.Context, handle string, triggers []string)) {
+	s.handedOver = handedOver
 }
 
 // RunSteers is where a person's note to a turn whose executor is out is filed
@@ -241,6 +300,7 @@ type noteSealBody struct {
 	ByKind     string    `json:"by_kind"`
 	OperatorID string    `json:"operator_id"`
 	At         time.Time `json:"at"`
+	Owes       string    `json:"owes"`
 }
 
 // seatSealBody is the body a record's seat anchor covers.
@@ -258,7 +318,7 @@ func (s *runSteers) seal(turnID string, note steer.Note) (_ sandbox.RunNote, err
 	}
 	body, err := json.Marshal(noteSealBody{
 		TurnID: turnID, ID: note.ID, Text: note.Text, By: note.By, ByKind: string(note.ByKind),
-		OperatorID: note.OperatorID, At: note.At.UTC(),
+		OperatorID: note.OperatorID, At: note.At.UTC(), Owes: note.Owes,
 	})
 	if err != nil {
 		return sandbox.RunNote{}, fmt.Errorf("engine: sealing a note to turn %s: %w", turnID, err)
@@ -297,7 +357,8 @@ func (s *runSteers) open(turnID string, n sandbox.RunNote) (steer.Note, bool) {
 		return steer.Note{}, false
 	}
 	return steer.Note{ID: sealed.ID, Text: sealed.Text, By: sealed.By,
-		ByKind: iam.ActorKind(sealed.ByKind), OperatorID: sealed.OperatorID, At: sealed.At}, true
+		ByKind: iam.ActorKind(sealed.ByKind), OperatorID: sealed.OperatorID, At: sealed.At,
+		Owes: sealed.Owes}, true
 }
 
 func (s *runSteers) unverified(turnID, noteID, why string) {
@@ -941,11 +1002,13 @@ func servedNotes(run sandbox.PendingRun) []string {
 }
 
 // openedNote is a waiting note on a record, and the note it opens as; or, for
-// a late-call item, which opens no seal, the call it hands its job.
+// a late-call item, which opens no seal, the call it hands its job; or, for a
+// wake item, the wakes of it that open, oldest first.
 type openedNote struct {
-	held sandbox.RunNote
-	note steer.Note
-	call *sandbox.LateCall
+	held  sandbox.RunNote
+	note  steer.Note
+	call  *sandbox.LateCall
+	wakes []steer.Wake
 }
 
 // waiting is the record's waiting notes that open, oldest first, that a reader
@@ -959,19 +1022,27 @@ func (s *runSteers) waiting(turnID string, notes []sandbox.RunNote, job string) 
 // first, whatever job an item is for: what a view of the record keeps
 // ([noteWatch]), each reader of it taking what its own job is handed
 // ([forJob]). ROUTED BY KIND BEFORE ANY SEAL IS OPENED: a late-call item, for
-// one job and unsealed, is kept with its call, and one claiming a call any
-// other way is said once and handed to nobody (package doc, "A late call is
-// handed to the job working as it lands").
+// one job and unsealed, is kept with its call, a wake item, for one job, with
+// the wakes its own seals open as, and one claiming either any other way is
+// said once and handed to nobody (package doc, "A late call is handed to the
+// job working as it lands"; wakeitem.go).
 func (s *runSteers) waitingItems(turnID string, notes []sandbox.RunNote) []openedNote {
 	var out []openedNote
 	for _, n := range notes {
 		switch {
 		case !n.Waiting():
-		case n.LateCall != nil && n.For != "" && len(n.Sealed) == 0:
+		case n.LateCall != nil && n.Wake == nil && n.For != "" && len(n.Sealed) == 0:
 			out = append(out, openedNote{held: n, call: n.LateCall})
+		case n.Wake != nil && n.LateCall == nil && n.For != "" && len(n.Sealed) == 0:
+			if wakes := s.openWakes(turnID, n); len(wakes) > 0 {
+				out = append(out, openedNote{held: n, wakes: wakes})
+			}
 		case n.LateCall != nil:
 			s.unverified(turnID, n.ID, "it claims a call of the run's log, which only the store files for one "+
 				"job and never seals")
+		case n.Wake != nil:
+			s.unverified(turnID, n.ID, "it claims to hand a job somebody's message, which only the store files "+
+				"for one job, under the message's own seal")
 		default:
 			if note, ok := s.open(turnID, n); ok {
 				out = append(out, openedNote{held: n, note: note})
@@ -981,20 +1052,22 @@ func (s *runSteers) waitingItems(turnID string, notes []sandbox.RunNote) []opene
 	return out
 }
 
-// lateCallsLast is candidates with a person's notes first and late-call items
-// after them, each kind in the order it held: so an answer that fits only some
-// never leaves a person's note waiting behind the store's items.
-func lateCallsLast(candidates []openedNote) []openedNote {
+// inAnswerOrder is candidates with a person's notes first, then wake items,
+// then late-call items, each kind in the order it held: so an answer that fits
+// only some never leaves a person's note waiting behind the store's items, nor
+// a message somebody wrote behind the log's account of a call.
+func inAnswerOrder(candidates []openedNote) []openedNote {
 	out := slices.Clone(candidates)
-	slices.SortStableFunc(out, func(a, b openedNote) int {
-		return cmp.Compare(boolRank(a.call != nil), boolRank(b.call != nil))
-	})
+	slices.SortStableFunc(out, func(a, b openedNote) int { return cmp.Compare(answerRank(a), answerRank(b)) })
 	return out
 }
 
-// boolRank orders false before true.
-func boolRank(b bool) int {
-	if b {
+// answerRank is where o's kind goes in one answer ([inAnswerOrder]).
+func answerRank(o openedNote) int {
+	switch {
+	case o.call != nil:
+		return 2
+	case o.wakes != nil:
 		return 1
 	}
 	return 0
@@ -1007,18 +1080,21 @@ func forJob(opened []openedNote, job string) []openedNote {
 	return slices.DeleteFunc(slices.Clone(opened), func(o openedNote) bool { return !o.held.IsFor(job) })
 }
 
-// runIdentity is the turn a record of a note names, and the trace it is
-// published under.
+// runIdentity is the turn a record of a note names, the trace it is published
+// under, and the conversation the turn works in, which a wake says whether it
+// was written in ([prompts.WakeMessage]).
 type runIdentity struct {
-	turn  steer.Turn
-	trace events.TraceContext
+	turn         steer.Turn
+	trace        events.TraceContext
+	conversation string
 }
 
 func identityOfRef(ref sandbox.TurnRef) runIdentity {
 	return runIdentity{
 		turn: steer.Turn{Agent: ref.AgentID, AgentHandle: ref.AgentHandle, Role: ref.Role,
 			TurnID: ref.TurnID, WorkKey: ref.WorkKey},
-		trace: events.TraceContext{TraceID: ref.TraceID, ParentSpanID: ref.SpanID},
+		trace:        events.TraceContext{TraceID: ref.TraceID, ParentSpanID: ref.SpanID},
+		conversation: ref.ConversationKey,
 	}
 }
 
@@ -1026,7 +1102,8 @@ func identityOfRun(run sandbox.PendingRun) runIdentity {
 	return runIdentity{
 		turn: steer.Turn{Agent: run.AgentID, AgentHandle: run.AgentHandle, Role: run.Role,
 			TurnID: run.TurnID, WorkKey: run.WorkKey},
-		trace: events.TraceContext{TraceID: run.TraceID, ParentSpanID: run.SpanID},
+		trace:        events.TraceContext{TraceID: run.TraceID, ParentSpanID: run.SpanID},
+		conversation: run.ConversationKey,
 	}
 }
 
@@ -1059,6 +1136,7 @@ func (s *runSteers) publish(ctx context.Context, ident runIdentity, note steer.N
 // the ending and the note, at the ending's own instant, so a repeat publishes
 // the same records. THE ONE PUBLISHER of these for a note that reached a
 // record, so none is reported twice. A note that does not open gets no record.
+// And every wake on the record, as its ending knows it ([runSteers.endWakes]).
 func (s *runSteers) ended(ctx context.Context, run sandbox.PendingRun) error {
 	if run.Ending == nil {
 		return nil
@@ -1079,7 +1157,7 @@ func (s *runSteers) ended(ctx context.Context, run sandbox.PendingRun) error {
 				run.TurnID, err)
 		}
 	}
-	return nil
+	return s.endWakes(ctx, run, wakeItems(run.Steer.Notes), run.Ending.At)
 }
 
 // noteEnd is what an ending reports of n, at the step its record names
@@ -1587,6 +1665,8 @@ type runInbox struct {
 	steers *runSteers
 	ident  runIdentity
 	round  int
+	// harness is the run's harness, whose delivery the inbox answers in.
+	harness string
 
 	mu     sync.Mutex
 	launch string
@@ -1610,8 +1690,9 @@ var _ mcpbridge.SteerInbox = (*runInbox)(nil)
 // record within a round of the run's settle loop (eight seconds at most once
 // its store answers), and a job's hooks answer one take a boundary, so a run
 // of losses a store answering at all leaves unsettled is far shorter; and a
-// row holds at most sixty serves to its job (twenty notes and items, three
-// serves each), of which a box that POSTs in a loop can only ever name these.
+// row holds at most sixty-four serves to its job (twenty notes and items three
+// times each, four wake items once), of which a box that POSTs in a loop can
+// only ever name these.
 const steerLossesKept = 32
 
 // hookMemory is what a run inbox knows of its hooks' serves that the record
@@ -1714,18 +1795,19 @@ func kept[T any](list []T) []T {
 	return list
 }
 
-// inbox is the inbox of a run identified by ident, for the turn iteration round;
-// it serves nothing until it is bound to the run's job.
+// inbox is the inbox of a run identified by ident, on harness, for the turn
+// iteration round; it serves nothing until it is bound to the run's job.
 //
-// ONE INBOX WHATEVER THE RUN'S HARNESS: Claude Code's hooks take notes through
-// [runInbox.Take] and OpenCode's plugin through [runInbox.Wait] and
-// [runInbox.Read], and each reaches only the half its own harness calls, so the
-// inbox has nothing to tell apart.
-func (s *runSteers) inbox(ident runIdentity, round int) *runInbox {
+// ONE INBOX WHATEVER THE RUN'S HARNESS: a harness answered by hooks takes notes
+// through [runInbox.Take] and one whose plugin polls through [runInbox.Wait]
+// and [runInbox.Read], each reaching only the half its own harness calls; the
+// answer's shape and an admitted note's id are the harness's own
+// ([executor.HookAnswer], [executor.InboxID]).
+func (s *runSteers) inbox(ident runIdentity, round int, harness string) *runInbox {
 	if s == nil {
 		return nil
 	}
-	return &runInbox{steers: s, ident: ident, round: round}
+	return &runInbox{steers: s, ident: ident, round: round, harness: harness}
 }
 
 // Bind starts serving the inbox for the job launch, whose session fences its
@@ -1748,17 +1830,25 @@ func (i *runInbox) Bind(ctx context.Context, launch string, boundary provenance.
 	i.watch = i.steers.watch(context.WithoutCancel(ctx), i.ident.turn.TurnID)
 }
 
-// message is o as the inbox hands it over at a poll, one message an item: a
-// person's note in their words, a late call in the engine's
-// ([lateItemMessage]).
+// message is o as the inbox hands it over, one message an item: a person's
+// note in their words, a late call in the engine's ([lateItemMessage]), and a
+// wake item's messages each in their writer's fence ([wakeItemMessage]).
 func (i *runInbox) message(ctx context.Context, o openedNote) string {
-	if o.call == nil {
-		return prompts.SteerMessage(o.note.By, o.note.Text)
+	switch {
+	case o.call != nil:
+		return lateItemMessage(ctx, *o.call, i.fence())
+	case o.wakes != nil:
+		return wakeItemMessage(o.wakes, i.fence(), i.ident.conversation)
 	}
+	return prompts.SteerMessage(o.note.By, o.note.Text)
+}
+
+// fence is the token the job's session fences its tools' answers under, which
+// the inbox's items are drawn under ([runInbox.Bind]).
+func (i *runInbox) fence() provenance.Boundary {
 	i.mu.Lock()
-	boundary := i.boundary
-	i.mu.Unlock()
-	return lateItemMessage(ctx, *o.call, boundary)
+	defer i.mu.Unlock()
+	return i.boundary
 }
 
 // bound is the job the inbox serves and its view, or empty where it serves none.
@@ -1809,16 +1899,16 @@ func (i *runInbox) Take(ctx context.Context, event string, call *sandbox.NoteCal
 		i.hooks.end(call, "", false)
 		return ""
 	}
-	candidates = lateCallsLast(candidates)
+	candidates = inAnswerOrder(candidates)
 	messages := make([]string, 0, len(candidates))
 	for _, c := range candidates {
-		if c.call != nil {
+		if c.call != nil || c.wakes != nil {
 			messages = append(messages, i.message(ctx, c))
 			continue
 		}
 		messages = append(messages, hookMessage(c, notes, launch, unanswered, candidates))
 	}
-	fit := executor.ClaudeNotesThatFit(messages)
+	fit := executor.HookNotesThatFit(i.harness, messages)
 	candidates, messages = candidates[:fit], messages[:fit]
 	ids := make([]string, 0, len(candidates))
 	for _, c := range candidates {
@@ -1829,7 +1919,7 @@ func (i *runInbox) Take(ctx context.Context, event string, call *sandbox.NoteCal
 	served, err := i.steers.store.ServeHook(ctx, i.ident.turn.TurnID, sandbox.HookServe{
 		IDs: ids, Launch: launch, Statuses: steerTakeStatuses,
 		Serve:     sandbox.HookServed{Take: take, Boundary: string(boundary), Iteration: i.round, Call: call},
-		Cancelled: cancelled, Unanswered: unanswered,
+		Cancelled: cancelled, Unanswered: unanswered, Wakes: wakesHanded(candidates),
 	})
 	if err != nil {
 		i.hooks.end(call, take, true)
@@ -1851,15 +1941,17 @@ func (i *runInbox) Take(ctx context.Context, event string, call *sandbox.NoteCal
 		return ""
 	}
 	hook := make([]executor.HookNote, 0, len(served))
+	token := i.fence()
 	for k, c := range candidates {
 		if slices.ContainsFunc(served, func(n sandbox.RunNote) bool { return n.ID == c.held.ID }) {
-			hook = append(hook, executor.HookNote{By: c.note.By, Message: messages[k], Call: c.call != nil})
+			hook = append(hook, executor.HookNote{By: c.note.By, Message: messages[k], Call: c.call != nil,
+				Writers: wakeWriters(c.wakes, token)})
 		}
 	}
 	if len(hook) == 0 {
 		return ""
 	}
-	return executor.ClaudeHookAnswer(event, take, hook)
+	return executor.HookAnswer(i.harness, event, take, hook)
 }
 
 // candidates is the boundary a hook at event answers, the record it chose on
@@ -1894,11 +1986,11 @@ func (i *runInbox) candidates(ctx context.Context, event, launch string, watch *
 // servable is the candidates a hook of launch may still be served: none
 // whose live serve to launch its harness may hold (one whose call is named in
 // cancelled, or whose take is named in unanswered, is settled by the serve's
-// own write), and none at
-// [sandbox.MaxNoteServes] serves to launch, said once a note
-// (steer_serve_bound): a person's note waits for the review or the next
-// launch's brief, and a late call's item for the next launch, which removes it
-// and whose continuation tells the call.
+// own write), and none at its bound of serves to launch
+// ([sandbox.RunNote.MaxServes]), said once a note (steer_serve_bound): a
+// person's note waits for the review or the next launch's brief, a late call's
+// item for the next launch, which removes it and whose continuation tells the
+// call, and a wake item's deliveries run as turns of their own.
 func (i *runInbox) servable(ctx context.Context, launch string, candidates []openedNote,
 	cancelled []sandbox.NoteCall, unanswered []string) []openedNote {
 	return slices.DeleteFunc(slices.Clone(candidates), func(c openedNote) bool {
@@ -1912,15 +2004,19 @@ func (i *runInbox) servable(ctx context.Context, launch string, candidates []ope
 				serves++
 			}
 		}
-		if serves < sandbox.MaxNoteServes {
+		if serves < c.held.MaxServes() {
 			return false
 		}
 		if i.hooks.atBound(c.held.ID) {
 			detail := "the note was served to the run's job as often as it may be, and never shown taken: " +
 				"it waits for the run's review or the next launch's brief"
-			if c.held.LateCall != nil {
+			switch {
+			case c.held.LateCall != nil:
 				detail = "the late call's item was served to the run's job as often as it may be, and never " +
 					"shown taken: the next launch removes it, and its continuation tells the call"
+			case c.held.IsWake():
+				detail = "the wake item was served to the run's job once, as a wake is, and never shown " +
+					"taken: its deliveries run as turns of their own once the run is over"
 			}
 			log.WarnContext(ctx, "steer_serve_bound", "turn_id", i.ident.turn.TurnID, "note_id", c.held.ID,
 				"serves", serves, "detail", detail)
@@ -2021,24 +2117,33 @@ func (s *runSteers) delivered(ctx context.Context, ident runIdentity, taken []sa
 // confirmed publishes as delivered every note of notes that opens: the notes a
 // hook's serve to run's job handed over that the job's session showed it took
 // ([sandbox.CoordinatorOptions.SteersConfirmed]), each at its read, through the
-// one publish ([runSteers.delivered]). Made on every read of the job's box, so
-// a read made again publishes the same records.
+// one publish ([runSteers.delivered]); and claims every wake such a serve
+// handed over ([runSteers.joined]). Made on every read of the job's box, so a
+// read made again publishes the same records.
 func (s *runSteers) confirmed(ctx context.Context, run sandbox.PendingRun, notes []sandbox.RunNote) {
 	if s == nil {
 		return
 	}
 	var taken []sandbox.RunNote
 	var opened []steer.Note
+	var wakes []openedNote
 	for _, n := range notes {
-		if n.For != "" || n.Read == nil {
-			continue
-		}
-		if note, ok := s.open(run.TurnID, n); ok {
-			taken = append(taken, n)
-			opened = append(opened, note)
+		switch {
+		case n.Read == nil:
+		case n.IsWake():
+			if read := s.openWakes(run.TurnID, n); len(read) > 0 {
+				wakes = append(wakes, openedNote{held: n, wakes: read})
+			}
+		case n.For != "":
+		default:
+			if note, ok := s.open(run.TurnID, n); ok {
+				taken = append(taken, n)
+				opened = append(opened, note)
+			}
 		}
 	}
 	s.delivered(ctx, identityOfRun(run), taken, opened)
+	s.joined(ctx, identityOfRun(run), wakes)
 }
 
 // markPulled records, once per job, that the job's harness has asked for notes —
@@ -2071,6 +2176,26 @@ func (i *runInbox) recordPulled(base context.Context, launch string) {
 	}
 }
 
+// inboxItems is how the run's harness admits each note of due not yet served
+// to launch, by note id, where its session record confirms a take
+// ([executor.ConfirmsByRecord]): the id it admits the note under and the
+// digest of messages' text for it, the very text the poll hands over, so the
+// serve recorded under them is one the job's receipts settle. Nil for a
+// harness confirmed otherwise.
+func (i *runInbox) inboxItems(launch string, due []openedNote, messages []string) map[string]sandbox.InboxItem {
+	if !executor.ConfirmsByRecord(i.harness) {
+		return nil
+	}
+	out := make(map[string]sandbox.InboxItem, len(due))
+	for k, o := range due {
+		if o.held.Served != launch {
+			out[o.held.ID] = sandbox.InboxItem{ID: executor.InboxID(i.harness, launch, o.held.ID),
+				Digest: executor.ItemDigest(messages[k])}
+		}
+	}
+	return out
+}
+
 // Wait is the waiting notes past the cursor after, each served to the job on
 // the record first — see [mcpbridge.SteerInbox].
 //
@@ -2092,14 +2217,18 @@ func (i *runInbox) Wait(ctx context.Context, after int) ([]mcpbridge.SteerNote, 
 		return nil, changed
 	}
 	var due []openedNote
+	var messages []string
 	var unserved []string
 	// THE JOB'S OWN ITEMS AND A PERSON'S NOTES ALONE: one for another job is
 	// never served to this one, so the cursor below would stop at it for good.
 	for _, o := range forJob(opened, launch) {
-		if o.held.Seq <= after {
+		// A NOTE AT ITS POLL BUDGET is no new job's ([sandbox.RunNote.PollServes]):
+		// passed over, never stopped at, so the notes after it are served.
+		if o.held.Seq <= after || (o.held.Served != launch && o.held.PollServes >= o.held.MaxServes()) {
 			continue
 		}
 		due = append(due, o)
+		messages = append(messages, i.message(ctx, o))
 		if o.held.Served != launch {
 			unserved = append(unserved, o.held.ID)
 		}
@@ -2107,7 +2236,8 @@ func (i *runInbox) Wait(ctx context.Context, after int) ([]mcpbridge.SteerNote, 
 	served := map[string]bool{}
 	if len(unserved) > 0 {
 		marked, err := i.steers.store.ServeNotes(ctx, i.ident.turn.TurnID, sandbox.NoteServe{
-			IDs: unserved, Launch: launch, Statuses: steerTakeStatuses})
+			IDs: unserved, Launch: launch, Statuses: steerTakeStatuses, Wakes: wakesHanded(due),
+			Inbox: i.inboxItems(launch, due, messages)})
 		if err != nil {
 			log.WarnContext(ctx, "steer_notes_unserved", "turn_id", i.ident.turn.TurnID, "error", err.Error(),
 				"detail", "the poll is answered without the notes the record could not mark served; they "+
@@ -2118,7 +2248,7 @@ func (i *runInbox) Wait(ctx context.Context, after int) ([]mcpbridge.SteerNote, 
 		}
 	}
 	var out []mcpbridge.SteerNote
-	for _, o := range due {
+	for k, o := range due {
 		// UP TO THE FIRST NOTE NOT MARKED, never past it: the poller's cursor
 		// moves past every note it is answered, and one past an unmarked note
 		// would never ask for that note again.
@@ -2126,11 +2256,55 @@ func (i *runInbox) Wait(ctx context.Context, after int) ([]mcpbridge.SteerNote, 
 			break
 		}
 		out = append(out, mcpbridge.SteerNote{
-			Seq: o.held.Seq, ID: o.held.ID, Inbox: executor.OpenCodeInboxID(launch, o.held.ID),
-			Message: i.message(ctx, o),
+			Seq: o.held.Seq, ID: o.held.ID, Inbox: executor.InboxID(i.harness, launch, o.held.ID),
+			Message: messages[k],
 		})
 	}
 	return out, changed
+}
+
+// Again grants the job's harness its second admission of the notes named that
+// a compaction folded, each under its own id ([executor.AgainID]), and names
+// those at their poll budget — see [mcpbridge.SteerInbox]. COUNTED WHEN SERVED,
+// never offered: a note that never folds spends nothing.
+func (i *runInbox) Again(ctx context.Context, ids []string) (map[string]string, []string, error) {
+	launch, _ := i.bound()
+	if launch == "" {
+		return nil, nil, mcpbridge.ErrNoteUntaken
+	}
+	granted, spent, err := i.steers.store.AgainNotes(ctx, i.ident.turn.TurnID, sandbox.NoteAgain{IDs: ids,
+		Launch: launch, Statuses: steerTakeStatuses})
+	if err != nil {
+		return nil, nil, err
+	}
+	out := make(map[string]string, len(granted))
+	for _, id := range granted {
+		out[id] = executor.AgainID(i.harness, launch, id)
+	}
+	return out, spent, nil
+}
+
+// Folded says each note named that the job's harness gave up once a compaction
+// folded it and it could not be admitted again, once a note — see [mcpbridge.SteerInbox]. Only a note
+// the job holds, by its id: the log carries no word of the note's.
+func (i *runInbox) Folded(ctx context.Context, ids []string) {
+	launch, watch := i.bound()
+	if launch == "" {
+		return
+	}
+	_, opened, _ := watch.snapshot()
+	for _, o := range forJob(opened, launch) {
+		if !slices.Contains(ids, o.held.ID) {
+			continue
+		}
+		turn, id := i.ident.turn.TurnID, o.held.ID
+		i.steers.warnOnce(turn, "folded/"+id, func() {
+			log.WarnContext(ctx, "steer_note_folded", "turn_id", turn, "launch_id", launch, "note_id", id,
+				"detail", "the run's harness compacted over the note and could not admit it again (compacted "+
+					"twice, or its poll serves spent), so its model was never handed it as a current instruction; "+
+					"it waits for the review")
+		})
+	}
 }
 
 // Read records the notes named read at the run's next step, and publishes them
@@ -2216,7 +2390,7 @@ func (s *runSteers) waitsForItsKey(ctx context.Context, run sandbox.PendingRun, 
 		if !n.Waiting() || !n.IsFor(launch) || n.LateCall != nil || !slices.Contains(ids, n.ID) {
 			continue
 		}
-		if _, verdict := s.note.verifier.Open(n.Sealed); verdict != recordseal.KeyUnknown {
+		if !s.keyUnknown(n) {
 			continue
 		}
 		found = true
@@ -2230,6 +2404,16 @@ func (s *runSteers) waitsForItsKey(ctx context.Context, run sandbox.PendingRun, 
 		}
 	}
 	return found
+}
+
+// keyUnknown reports whether n waits for a key this node does not hold: a
+// note's seal, or the seal of a wake its item carries ([runSteers.wakeKeyUnknown]).
+func (s *runSteers) keyUnknown(n sandbox.RunNote) bool {
+	if n.IsWake() {
+		return s.wakeKeyUnknown(n)
+	}
+	_, verdict := s.note.verifier.Open(n.Sealed)
+	return verdict == recordseal.KeyUnknown
 }
 
 // waitsUntaken reports whether run's record, read after a confirmation's take
@@ -2288,7 +2472,23 @@ func (i *runInbox) confirm(ctx context.Context, launch string, candidates []open
 		taken = settled
 	}
 	i.steers.delivered(ctx, i.ident, taken, notesTaken(candidates, taken))
+	i.steers.joined(ctx, i.ident, wakesTaken(candidates, taken))
 	return taken, nil
+}
+
+// wakesTaken is the wake items of candidates a take recorded read, each with
+// the read it recorded and the wakes it opened as, in the take's order.
+func wakesTaken(candidates []openedNote, taken []sandbox.RunNote) []openedNote {
+	var out []openedNote
+	for _, t := range taken {
+		for _, c := range candidates {
+			if c.held.ID == t.ID && c.wakes != nil && t.Read != nil {
+				out = append(out, openedNote{held: t, wakes: c.wakes})
+				break
+			}
+		}
+	}
+	return out
 }
 
 // confirmedBefore publishes delivered every note of ids that run's record holds
@@ -2296,26 +2496,36 @@ func (i *runInbox) confirm(ctx context.Context, launch string, candidates []open
 // earlier confirmation's, whose answer never reached the plugin, which
 // confirms the note again ([runInbox.Read]). Under the id that confirmation's
 // report took, from the turn and the note, and at the instant of its read, so
-// a note both reported is one record. Only a step's read of this job is one: a
-// read by its brief, a review or another job is reported by whatever read it,
-// and a note no longer on the record by nobody here.
+// a note both reported is one record; a wake item so is claimed again too.
+// Only a step's read of this job is one: a read by its brief, a review or
+// another job is reported by whatever read it, and a note gone by nobody here.
 func (i *runInbox) confirmedBefore(ctx context.Context, run sandbox.PendingRun, launch string, ids []string,
 	taken []sandbox.RunNote) {
 	var held []sandbox.RunNote
 	var notes []steer.Note
+	var wakes []openedNote
 	for _, n := range run.Steer.Notes {
 		read := n.Read
 		if read == nil || read.Launch != launch || read.Boundary != string(types.SteerBoundaryStep) ||
-			read.Unanswered || n.For != "" || !slices.Contains(ids, n.ID) ||
+			read.Unanswered || !slices.Contains(ids, n.ID) ||
 			slices.ContainsFunc(taken, func(t sandbox.RunNote) bool { return t.ID == n.ID }) {
 			continue
 		}
-		if note, ok := i.steers.open(run.TurnID, n); ok {
-			held = append(held, n)
-			notes = append(notes, note)
+		switch {
+		case n.IsWake():
+			if opened := i.steers.openWakes(run.TurnID, n); len(opened) > 0 {
+				wakes = append(wakes, openedNote{held: n, wakes: opened})
+			}
+		case n.For != "":
+		default:
+			if note, ok := i.steers.open(run.TurnID, n); ok {
+				held = append(held, n)
+				notes = append(notes, note)
+			}
 		}
 	}
 	i.steers.delivered(ctx, i.ident, held, notes)
+	i.steers.joined(ctx, i.ident, wakes)
 }
 
 // Close ends the inbox — see [mcpbridge.SteerInbox].

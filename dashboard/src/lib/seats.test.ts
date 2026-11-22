@@ -24,7 +24,7 @@ import {
   labelOf,
   nameOfIn,
   leadsInLine,
-  liveOnItems,
+  liveOnRows,
   roundLabel,
   roundOf,
   stoppedLine,
@@ -60,6 +60,7 @@ import type {
   DerivedSeat,
   LiveCall,
   OrgProjection,
+  WorkSummary,
 } from "~/protocol/index.ts";
 import {
   type Lang,
@@ -722,7 +723,7 @@ describe("what a seat is doing", () => {
           role: "Dev A",
           activity: "working",
           current_phase: "execute",
-          turn: { stage: "running", work_item: { id: "t", key: "ENG-412" } } as never,
+          turns: [{ stage: "running", work_item: { id: "t", key: "ENG-412" } } as never],
         },
         { now },
       ),
@@ -768,7 +769,7 @@ describe("what a seat is doing", () => {
           role: "Dev A",
           activity: "working",
           current_phase: "execute",
-          turn: { stage: "parked", work_item: { id: "t", key: "ENG-9" } } as never,
+          turns: [{ stage: "parked", work_item: { id: "t", key: "ENG-9" } } as never],
         },
         { now },
       ),
@@ -780,7 +781,7 @@ describe("what a seat is doing", () => {
           agent_id: "a",
           role: "Dev A",
           activity: "needs",
-          turn: { stage: "parked" } as never,
+          turns: [{ stage: "parked" } as never],
         },
         now,
       ),
@@ -806,7 +807,7 @@ describe("what a seat is doing", () => {
  */
 describe("no screen derives a seat's state", () => {
   const WORDS = new Set(["working", "idle", "needs", "stopped", "offline"]);
-  const SOURCES = /^(in_progress|live_call|executors|runs|running_calls|stage)$/;
+  const SOURCES = /^(in_progress|live_calls|turns|executors|runs|running_calls|stage)$/;
 
   /** Whether an expression reads one of the fields a state could be folded from. */
   const reads = (node: Node | null | undefined): boolean => {
@@ -935,19 +936,19 @@ describe("no screen derives a seat's state", () => {
   // quiet on a spelling is one that certifies less than it says.
   test("the rule can tell, in every spelling a decision is written in", () => {
     const caught = (text: string) => offences(text, "ts").length > 0;
-    expect(caught('const s = agent.live_call?.in_progress ? "working" : "idle";')).toBe(true);
+    expect(caught('const s = agent.live_calls?.[0]?.in_progress ? "working" : "idle";')).toBe(true);
     expect(caught('function f(c) { if (c.in_progress) return "working"; return "x"; }')).toBe(true);
     expect(
-      caught('function f(c) { let s = "x"; if (c.live_call) { s = "working"; } return s; }'),
+      caught('function f(c) { let s = "x"; if (c.live_calls) { s = "working"; } return s; }'),
     ).toBe(true);
     expect(caught('function f(t) { switch (t.stage) { case "parked": return "needs"; } }')).toBe(
       true,
     );
-    expect(caught('const s = agent.live_call && "working";')).toBe(true);
+    expect(caught('const s = agent.live_calls && "working";')).toBe(true);
     expect(caught('const s = { parked: "needs", phase: "working" }[turn.stage];')).toBe(true);
-    expect(caught('const BY = { parked: "needs" } as const; const s = BY[agent.turn.stage];')).toBe(
-      true,
-    );
+    expect(
+      caught('const BY = { parked: "needs" } as const; const s = BY[agent.turns[0].stage];'),
+    ).toBe(true);
     // …and the reads that are not a state at all.
     expect(caught('const s = agent.activity === "working" ? "Working" : "";')).toBe(false);
     expect(caught('const n = call.in_progress ? "running" : "done";')).toBe(false);
@@ -994,7 +995,11 @@ describe("llmChain", () => {
   test("reads all three shapes the engine marshals", () => {
     expect(llmChain("fast")).toEqual(["fast"]);
     expect(llmChain(["fast", "backup"])).toEqual(["fast", "backup"]);
-    expect(llmChain({ default: "big", judge: "tiny" })).toEqual(["big", "tiny"]);
+    expect(llmChain({ default: "big", judge: "tiny", triage: "fast" })).toEqual([
+      "big",
+      "tiny",
+      "fast",
+    ]);
   });
 
   // A SEAT THAT SAYS NOTHING takes the default provider, and that is not the
@@ -1100,40 +1105,53 @@ test("a working seat's strip on a task counts its round from one", () => {
       role: "SWE",
       handle: "swe",
       activity: "working",
-      live_call: {
-        phase: "execute",
-        round_num,
-        rounds_used,
-        max_rounds: 25,
-        work_item: { backend: "native", id: "i", key: "ENG-412", project: "ENG" },
-      },
+      live_calls: [{ phase: "execute", round_num, rounds_used, max_rounds: 25 }],
     }) as unknown as AgentRow;
-  expect(liveOnItems([working(6, 6)]).get("i")?.doing).toMatch(/round 7 of 25$/);
-  expect(liveOnItems([working(0, 0)]).get("i")?.doing).toMatch(/round 1 of 25$/);
+  const rows = [workedRow("i")];
+  expect(liveOnRows(rows, [working(6, 6)]).get("i")?.doing).toMatch(/round 7 of 25$/);
+  expect(liveOnRows(rows, [working(0, 0)]).get("i")?.doing).toMatch(/round 1 of 25$/);
 });
 
-// A TURN IS ON ONE TASK, AND A KEY CAN BE TWO. A key another task claimed
-// first is flagged `key_collision` and stays on the task that did not claim
-// it, so two cards can carry one key — and a map keyed on it drew the working
-// seat's strip on both of them. Keyed on the task's id, only the task the turn
-// is charged to finds one.
-test("of two tasks sharing a key, only the one being worked on draws the strip", () => {
-  const row = {
+/** A task the engine reads `working` under swe (ADR-0162). */
+function workedRow(id: string, cause = "turn"): WorkSummary {
+  return {
+    id,
+    key: "ENG-7",
+    title: "",
+    status: "in_progress",
+    assignee: "swe",
+    flow: { state: "working", cause, since: "2031-04-16T11:57:00Z", until: null, reason: "" },
+  } as WorkSummary;
+}
+
+// WHICH TASK A TURN IS ON IS THE TASK'S OWN FLOW (ADR-0162), never a join of
+// the push's turns to the cards: a turn the push charges to a task whose flow
+// does not read working draws no strip, and of two tasks sharing a key only
+// the one the engine reads working draws one.
+test("a strip is drawn where the engine reads the task working, and nowhere else", () => {
+  const seat = {
     role: "SWE",
     handle: "swe",
     activity: "working",
-    live_call: {
-      phase: "execute",
-      round_num: 2,
-      rounds_used: 2,
-      max_rounds: 25,
-      work_item: { backend: "native", id: "t-duplicate", key: "ENG-7", project: "ENG" },
-    },
+    live_calls: [
+      {
+        phase: "execute",
+        round_num: 2,
+        rounds_used: 2,
+        max_rounds: 25,
+        work_item: { backend: "native", id: "t-claimant", key: "ENG-7", project: "ENG" },
+      },
+    ],
   } as unknown as AgentRow;
-  const live = liveOnItems([row]);
+  const claimant = { ...workedRow("t-claimant"), flow: null };
+  const live = liveOnRows([workedRow("t-duplicate"), claimant], [seat]);
   expect(live.get("t-duplicate")?.handle).toBe("swe");
+  expect(live.get("t-duplicate")?.since).toBe("2031-04-16T11:57:00Z");
   expect(live.has("t-claimant")).toBe(false);
-  expect(live.has("ENG-7")).toBe(false);
+  // A RUN IS EXECUTING whatever the seat's own turn is doing.
+  expect(liveOnRows([workedRow("r", "run")], [seat]).get("r")?.doing).toBe("executing");
+  // A WORKING FLOW WHOSE SEAT THE PUSH HAS NOT SEEN WORK still draws, in plain words.
+  expect(liveOnRows([workedRow("q")], []).get("q")?.doing).toBe("working");
 });
 
 // ONE READING OF THE ROUND, on the roster's card and in the attention queue
@@ -1176,8 +1194,8 @@ test("a turn's item key is its call's, then its turn's, else none", () => {
     ({
       id: "a",
       role: "SWE",
-      live_call: call ? { turn_id: "t", work_item: item(call), work_key: "slack:x" } : null,
-      turn: turn ? { turn_id: "t", work_item: item(turn) } : null,
+      live_calls: call ? [{ turn_id: "t", work_item: item(call), work_key: "slack:x" }] : [],
+      turns: turn ? [{ turn_id: "t", work_item: item(turn) }] : [],
     }) as unknown as AgentRow;
   expect(turnItemKey(row("ENG-2", "ENG-1"))).toBe("ENG-2");
   expect(turnItemKey(row("", "ENG-1"))).toBe("ENG-1");
@@ -1196,9 +1214,9 @@ test("working seats run oldest first, and one with no readable start sorts after
       id,
       role: id,
       activity,
-      turn:
-        startedAt === null ? null : { turn_id: `t-${id}`, stage: "phase", started_at: startedAt },
-      live_call: null,
+      turns:
+        startedAt === null ? [] : [{ turn_id: `t-${id}`, stage: "phase", started_at: startedAt }],
+      live_calls: [],
     }) as unknown as AgentRow;
   const order = workingLongestFirst([
     seat("none", null),

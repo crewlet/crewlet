@@ -97,7 +97,7 @@ func (t *codeRevertChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if err != nil {
 		return t.deps.failedWrite(ctx, turn, tool, cv.g.c, repo, op, err), nil
 	}
-	commit(turn, res.Outcome, types.CommittedCode)
+	commit(turn, res.Outcome, types.CommittedCode, revertWritten(res))
 	branch := strings.TrimPrefix(w.Ref, branchRoot)
 	out := codeRevertAnswer{Repo: repo.Name, RenamedTo: repo.Redirect, RedirectUntil: repo.RedirectUntil,
 		Reverts: cv.g.ref(), Branch: branch, OpID: cv.g.c.actor.Operation}
@@ -135,6 +135,16 @@ func (t *codeRevertChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		t.mergeStep(ctx, turn, cv, op, res, opened, &out)
 	}
 	return newForeignRead(turn, cv.g.c.asker.Seat).page(ctx, tool, out, "")
+}
+
+// revertWritten is the record a revert's push wrote: the change it opened
+// ([gitlet.EngineWriteResult.Change]), never the change it reverts, on which it
+// writes nothing.
+func revertWritten(res gitlet.EngineWriteResult) types.WrittenRecord {
+	if res.Change == nil {
+		return types.WrittenRecord{}
+	}
+	return changeRecord(res.Change.ChangeID)
 }
 
 // revertNamed is the change already reverting cv's, as a refusal names it:
@@ -210,7 +220,7 @@ func (t *codeRevertChange) mergeStep(ctx context.Context, turn *turnctx.Turn, cv
 	}
 	got, err := t.deps.Writer.GitWrite(ctx, w)
 	if err == nil {
-		commit(turn, got.Outcome, types.CommittedCode)
+		commit(turn, got.Outcome, types.CommittedCode, revertWritten(res))
 	}
 	m := got.Merge
 	switch {

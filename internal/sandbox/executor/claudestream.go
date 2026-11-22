@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/activityline"
@@ -27,11 +28,12 @@ import (
 
 // claudeEventWire is the part of one stream line this decoder reads: the
 // result's keys ([claudeResultWire]), a system line's text and a message, each
-// by its exact name and raw ([wireDecode]), read loosely by type only where the
-// line's type asks ([claudeEvents.Line]). Exact names, as Claude Code's own
-// JSON.parse reads them ([threadDecoding]) and as a message's blocks are
-// ([eachClaudeBlock]): encoding/json would take a key differing only in case for
-// this one, and merge a message written twice, where a transcript reads the last.
+// by its exact name and raw, in the line's own bytes ([wireAlias]), read loosely
+// by type only where the line's type asks ([claudeEvents.Line]). Exact names, as
+// Claude Code's own JSON.parse reads them ([threadDecoding]) and as a message's
+// blocks are ([eachClaudeBlock]): encoding/json would take a key differing only
+// in case for this one, and merge a message written twice, where a transcript
+// reads the last.
 type claudeEventWire struct {
 	claudeResultWire
 	// Content is a system line's text, read only on an informational line
@@ -58,11 +60,11 @@ type claudeMessageWire struct {
 	Usage   json.RawMessage `json:"usage"`
 }
 
-// claudeMessageOf is the message raw holds, its keys raw; the zero message
-// where raw is no object.
+// claudeMessageOf is the message raw holds, its keys raw's own bytes
+// ([wireAlias]); the zero message where raw is no object.
 func claudeMessageOf(raw json.RawMessage) claudeMessageWire {
 	var m claudeMessageWire
-	if !wireObject(raw) || wireDecode(raw, &m) != nil {
+	if !wireObject(raw) || wireAlias(raw, &m) != nil {
 		return claudeMessageWire{}
 	}
 	return m
@@ -125,8 +127,9 @@ type claudeBlock struct {
 	Content   json.RawMessage `json:"content"`
 }
 
-// claudeBlockWire is each key a [claudeBlock] holds, by its exact name and raw
-// ([wireDecode]), read into the block by [claudeBlockWire.block].
+// claudeBlockWire is each key a [claudeBlock] holds, by its exact name and raw,
+// in the element's own bytes ([wireAlias]), read into the block by
+// [claudeBlockWire.block].
 type claudeBlockWire struct {
 	Type      json.RawMessage `json:"type"`
 	Text      json.RawMessage `json:"text"`
@@ -148,10 +151,10 @@ func (w claudeBlockWire) block() claudeBlock {
 	}
 }
 
-// eachClaudeBlock hands each block of content to each, in order, and returns
-// the first error each returns, reading no block after it. Content that is no
-// list (a prompt's string) has no blocks, and one that stops decoding part way
-// none after the fault, which a line both readers hold to JSON first never has.
+// eachClaudeBlock hands each block of content to each, in order, valid only
+// while each runs ([wireAlias]), and returns the first error each returns,
+// reading no block after it. Content that is no list (a prompt's string) has no
+// blocks, and one that stops decoding part way none after the fault.
 //
 // A BLOCK AT A TIME ([eachElement]), by exact key names ([threadDecoding]: as
 // Claude Code's JSON.parse, invalid UTF-8 or a lone surrogate as U+FFFD) and
@@ -168,7 +171,7 @@ func eachClaudeBlock(content json.RawMessage, each func(claudeBlock) error) erro
 	// The walk's own error is no reader's: the blocks before it were read.
 	_ = eachElement(content, func(element json.RawMessage, _ int) error {
 		wire = claudeBlockWire{}
-		if wireObject(element) && wireDecode(element, &wire) != nil {
+		if wireObject(element) && wireAlias(element, &wire) != nil {
 			wire = claudeBlockWire{}
 		}
 		stopped = each(wire.block())
@@ -391,7 +394,7 @@ func (d *claudeEvents) Line(line []byte) {
 		return
 	}
 	var ev claudeEventWire
-	if wireDecode(line, &ev) != nil {
+	if wireAlias(line, &ev) != nil {
 		// A partial object: read mid-write (the next read has it whole) or
 		// cut short where the harness was killed. Either may be a later
 		// request's line.
@@ -448,10 +451,14 @@ func (d *claudeEvents) Line(line []byte) {
 		})
 	case "result":
 		// A run that succeeded ends on its final text, already carried as the
-		// assistant's last message; one that did not says how, as
-		// [ClaudeCode.Parse] reads the same line.
-		result := ev.result()
+		// assistant's last message, so its text is decoded only where it did
+		// not, to say how, as [ClaudeCode.Parse] reads the same line.
+		wire := ev.claudeResultWire
+		text := wire.Result
+		wire.Result = nil
+		result := wire.result()
 		if !result.succeeded() {
+			result.Result = looseString(text)
 			d.transcript.add(activityline.Words(activityline.TagError,
 				"the run ended: "+firstLine(result.failure(), transcriptDetailLimit)))
 		}
@@ -502,18 +509,22 @@ func (d *claudeEvents) lost(line string) {
 
 // Entries implements [Decoder]. Nothing else here grows with the stream: the
 // pending calls are forgotten as their results arrive.
-func (d *claudeEvents) Entries() []string { return d.transcript.take() }
+func (d *claudeEvents) Entries(end bool) []string { return d.transcript.take(end) }
 
 func (d *claudeEvents) Result() sandbox.Result {
-	return sandbox.Result{Transcript: d.transcript.String()}
+	var r sandbox.Result
+	r.Transcript, r.TranscriptElidedLines, r.TranscriptElidedBytes = d.transcript.result()
+	return r
 }
 
 // claudeSteerPrefix opens the `system/informational` line a hook of the run's
-// own prints as it hands the model a note or a late call ([ClaudeHookAnswer]):
+// own prints as it hands the model a note or a late call ([ClaudeCode.hookAnswer]):
 // the event that fired it, then the line's own opening (measured on 2.1.263
 // and 2.1.310).
-var claudeSteerPrefix = regexp.MustCompile(`^(?:` + claudeEventToolBatch + `|` +
-	claudeEventFinish + `) says: crewlet: `)
+var claudeSteerPrefix = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^(?:` + claudeEventToolBatch + `|` +
+		claudeEventFinish + `) says: crewlet: `)
+})
 
 // claudeSteerLine is a [activityline.TagSteer] line: the first line of what the run's own hook
 // said ([claudeSteerSaid]), redacted and bounded as a live line is
@@ -547,7 +558,13 @@ func claudeSteerSaid(subtype string, raw json.RawMessage) (string, bool) {
 	if wireDecode(raw, &content) != nil {
 		return "", false
 	}
-	loc := claudeSteerPrefix.FindStringIndex(content)
+	return claudeSteerContent(content)
+}
+
+// claudeSteerContent is [claudeSteerSaid] of an informational record's content,
+// decoded.
+func claudeSteerContent(content string) (string, bool) {
+	loc := claudeSteerPrefix().FindStringIndex(content)
 	if loc == nil {
 		return "", false
 	}
@@ -624,9 +641,9 @@ const claudeImagePlaceholder = "[an image]"
 // toolAnswer is a tool's answer as text, from list, its parts: what said makes
 // of each part by its `type`, `text` and `mime` (each its string, or "" where of
 // another kind or the part is no object), a line apart, in order, skipping a
-// part said passes over. "" for a list that does not decode to its end. ONE
-// READING for both harnesses: Claude Code's result blocks ([claudeResultText])
-// and OpenCode's tool content ([openCodeAnswer]).
+// part said passes over. "" for a list that does not decode to its end:
+// Claude Code's result blocks ([claudeResultText]), which an OpenCode call's
+// answer is joined as, a part at a time ([callResult]).
 //
 // A PART AT A TIME ([eachElement]), by exact key names ([threadDecoding]) and
 // loosely by type, each read in place ([eachKeyInPlace]), never the whole list

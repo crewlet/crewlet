@@ -11,10 +11,18 @@
  */
 
 import { ChoiceCards, FormField, Input, Text } from "@crewlethq/ui";
-import { EXECUTOR_HARNESSES } from "~/contract/models.ts";
 import { HarnessMark, MARK_SIZE } from "../../HarnessMark.tsx";
-import { product } from "../../words.ts";
-import { HARNESSES, KEY_MAX, canExecute, factsOf, type Harness, type Draft } from "../draft.ts";
+import { either, product } from "../../words.ts";
+import {
+  HARNESSES,
+  KEY_MAX,
+  KEY_RULE,
+  canExecute,
+  factsOf,
+  type Harness,
+  type Draft,
+} from "../draft.ts";
+import { NAME_EXAMPLE } from "../examples.ts";
 
 /** Each harness in a line, and how it signs in, in the words the Method step uses. */
 const HARNESS_WORDS: Readonly<Record<string, { description: string; methods: string }>> = {
@@ -41,14 +49,10 @@ const HARNESS_WORDS: Readonly<Record<string, { description: string; methods: str
   },
 };
 
-/** "A or B", "A, B or C". */
-const either = (parts: readonly string[]) =>
-  parts.length < 3 ? parts.join(" or ") : `${parts.slice(0, -1).join(", ")} or ${parts.at(-1)}`;
-
 /** What a harness with no box runner does: its turns on the host, and Ask Crewlet where the engine allows it. */
-export function hostOnly(harness: string): string {
+export function hostOnly(harness: string, executors: readonly string[]): string {
   const name = product(harness);
-  const coding = either(EXECUTOR_HARNESSES.map(product));
+  const coding = either(executors.map(product));
   if (factsOf(harness).assistant)
     return `${name} runs a seat's turns on the engine host and Ask Crewlet. A seat's coding runs in a box on ${coding}.`;
   const assistant = either(HARNESSES.filter((h) => factsOf(h).assistant).map(product));
@@ -71,17 +75,21 @@ export function HarnessStep({
   onName: (key: string) => void;
   onHarness: (harness: Harness) => void;
 }) {
-  const harnesses: readonly string[] = HARNESSES.includes(draft.harness)
-    ? [...HARNESSES, CUSTOM]
-    : [...HARNESSES, draft.harness];
+  // AN EDIT SHOWS ITS ONE HARNESS, the rule said once in the name's line, not
+  // a refusal on every other harness's card.
+  const harnesses: readonly string[] = editing
+    ? [draft.harness]
+    : HARNESSES.includes(draft.harness)
+      ? [...HARNESSES, CUSTOM]
+      : [...HARNESSES, draft.harness];
   return (
     <>
       <FormField
         label="Name"
         helper={
           editing
-            ? "The name is this model's identity: seats name it. To use another name, add a new model."
-            : "Lowercase letters, digits and hyphens. Seats and Ask Crewlet name the model by it."
+            ? "A model keeps its name and its harness. To change either, add a new model."
+            : KEY_RULE
         }
         error={error}
         {...(editing ? {} : { limit: { length: draft.key.length, max: KEY_MAX } })}
@@ -95,8 +103,10 @@ export function HarnessStep({
             error={field.invalid}
             appearance="reference"
             value={draft.key}
-            placeholder="sonnet-key"
+            placeholder={NAME_EXAMPLE}
             readOnly={editing}
+            // A NEW NAME STOPS AT ITS LIMIT, rather than counting past it in red.
+            {...(editing ? {} : { maxLength: KEY_MAX })}
             autoComplete="off"
             spellCheck={false}
             onChange={(e) => onName(e.target.value)}
@@ -111,7 +121,6 @@ export function HarnessStep({
         onChange={(v) => onHarness(v as Harness)}
         options={harnesses.map((a) => {
           const words = HARNESS_WORDS[a];
-          const other = editing && a !== draft.harness;
           if (a === CUSTOM && !editing) {
             return {
               value: a,
@@ -130,21 +139,20 @@ export function HarnessStep({
             media: <HarnessMark harness={a} size={MARK_SIZE} />,
             ...(words ? { description: words.description } : {}),
             facts: [
-              { label: "Jobs", value: canExecute({ harness: a }) ? "All jobs" : "All but coding" },
+              {
+                label: "Jobs",
+                value: canExecute({ harness: a, executors: draft.executors })
+                  ? "All jobs"
+                  : "All but coding",
+              },
               ...(words ? [{ label: "Method", value: words.methods }] : []),
             ],
-            ...(other
-              ? {
-                  disabled: true,
-                  disabledReason: `A model keeps its harness. To run ${product(a)}, add a model on it, then remove this one with its jobs moved.`,
-                }
-              : {}),
           };
         })}
       />
       {canExecute(draft) ? null : (
         <Text as="p" variant="caption" tone="secondary">
-          {hostOnly(draft.harness)}
+          {hostOnly(draft.harness, draft.executors)}
         </Text>
       )}
     </>

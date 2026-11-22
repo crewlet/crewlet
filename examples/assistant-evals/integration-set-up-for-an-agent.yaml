@@ -69,13 +69,14 @@ answers:
           steps:
             - {op: create, verb: create, text: "Create the QA Engineer's GitHub App", by: you}
 script:
-  - call: list_integrations
-  - call: get_seat_access
-    args: {handle: QA Engineer, integration: github}
+  - call: read_api
+    args: {route: GET /integrations}
+  - call: read_api
+    args: {route: "GET /setup/integrations/{kind}/access/seats/{handle}/{lane}", path: {kind: github, handle: qa, lane: github}}
   - call: set_seat_access
     args: {handle: qa, integration: github, enabled: true, permissions: {pull_requests: write, contents: read}}
 expect:
-  calls: [get_seat_access, set_seat_access]
+  calls: [read_api, set_seat_access]
   proposals: 1
   state: waiting_for_approval
   shows: [QA Engineer]

@@ -14,8 +14,9 @@ import (
 )
 
 // The invariants the built-in copilot profile keeps, each measured against
-// GitHub Copilot CLI 1.0.103 (see the profile's comments): a call offers the
-// web tools and nothing else, the transcript reaches the harness on stdin, every
+// GitHub Copilot CLI 1.0.114 (see the profile's comments): a call offers the
+// web tools and nothing else, a call with the web denied none, the transcript
+// reaches the harness on stdin, every
 // call's system prompt is an AGENTS.md in its own directory under the
 // vendor's prompt, the usage report is charged once, and nothing a call
 // leaves in the seat's home outlives the calls that share it.
@@ -43,20 +44,24 @@ func eachValueOf(argv []string, flag string) []string {
 
 // A CALL OFFERS THE WEB TOOLS AND NOTHING ELSE, and prints only the answer.
 // `--available-tools` names the tools that exist for the call; with only the
-// deny list, 21 tools were offered and refused only once called. Each of these
-// flags takes a LIST, so every value stands right after a flag of its own: a
-// second value after one flag would be read into its list, and a stray one
-// into whichever list came last.
+// deny list, 21 tools were offered and refused only once called. A fetch asks
+// a URL permission prompt mode cannot answer, so `--allow-all-urls` is what
+// lets web_fetch run. Each of these flags takes a LIST, so every value stands
+// right after a flag of its own: a second value after one flag would be read
+// into its list, and a stray one into whichever list came last.
 func TestCopilotOffersTheWebToolsAndNothingElse(t *testing.T) {
 	t.Parallel()
 	p := copilot(t)
-	web := []string{"web_fetch", "web_search"}
-	for _, flag := range []string{"--available-tools", "--allow-tool"} {
-		got := eachValueOf(p.CompleteArgs, flag)
-		slices.Sort(got)
-		if !slices.Equal(got, web) {
-			t.Errorf("%s names %q, want exactly %q", flag, got, web)
-		}
+	got := eachValueOf(p.CompleteArgs, "--available-tools")
+	slices.Sort(got)
+	if web := []string{"web_fetch", "web_search"}; !slices.Equal(got, web) {
+		t.Errorf("--available-tools names %q, want exactly %q", got, web)
+	}
+	if got := eachValueOf(p.CompleteArgs, "--allow-tool"); !slices.Equal(got, []string{"web_search"}) {
+		t.Errorf("--allow-tool names %q, want web_search alone", got)
+	}
+	if !slices.Contains(p.CompleteArgs, "--allow-all-urls") {
+		t.Errorf("complete_args = %q: without --allow-all-urls every fetch is denied", p.CompleteArgs)
 	}
 	denied := eachValueOf(p.CompleteArgs, "--deny-tool")
 	for _, kind := range []string{"shell", "write", "read"} {
@@ -84,6 +89,43 @@ func TestCopilotOffersTheWebToolsAndNothingElse(t *testing.T) {
 	for _, never := range []string{"--no-custom-instructions", "-p", "--prompt"} {
 		if slices.Contains(p.CompleteArgs, never) {
 			t.Errorf("complete_args = %q carries %s", p.CompleteArgs, never)
+		}
+	}
+}
+
+// A CALL WITH THE WEB DENIED CANNOT FETCH AT ALL: web_fetch is not among the
+// tools that exist for it, so no URL allowance anywhere reaches it (measured
+// on 1.0.114: "Tool 'web_fetch' does not exist" with every URL allowed). The
+// allowlist names `crewlet` and nothing of the harness's own: without one, or
+// with an empty one, all 21 tools are offered. Nothing rests on --deny-tool,
+// which does not stop a fetch.
+//
+// Mutation: keep web_fetch in the denied --available-tools, or drop the
+// allowlist from it, and this fails.
+func TestCopilotWithTheWebDeniedCannotFetch(t *testing.T) {
+	t.Parallel()
+	p, err := harnessprofile.Load("copilot", map[string]any{"web_tools": "denied"})
+	if err != nil {
+		t.Fatalf("Load with web_tools denied: %v", err)
+	}
+	argvs := [][]string{p.CompleteArgs}
+	if p.MCP != nil {
+		argvs = append(argvs, slices.Concat(p.CompleteArgs, p.MCP.Args, p.MCP.AllowArgs))
+	}
+	for _, argv := range argvs {
+		available := eachValueOf(argv, "--available-tools")
+		if len(available) == 0 || slices.Contains(available, "") {
+			t.Errorf("argv %q has no allowlist, so every tool the harness has is offered", argv)
+		}
+		for _, tool := range available {
+			if tool != "crewlet" {
+				t.Errorf("argv %q makes %q available beside the engine's tools", argv, tool)
+			}
+		}
+		for _, flag := range []string{"--allow-all-urls", "--allow-url", "--yolo", "--allow-all"} {
+			if slices.Contains(argv, flag) {
+				t.Errorf("argv %q carries %s", argv, flag)
+			}
 		}
 	}
 }
@@ -184,29 +226,38 @@ func TestCopilotTakesTheTranscriptOnStdin(t *testing.T) {
 // count already holds the cached tokens (measured: 1,000 prompt tokens of which
 // 600 cached were recorded as inputTokens 1000 and cacheReadTokens 600), so the
 // 600 are reported as cache reads and not added to the input a second time.
-// The report is the harness's own --usage-output-file, verbatim in the shape
-// 1.0.103 wrote it.
+// Its cache writes are inside the input as well, and reported apart. The
+// report is the harness's own --usage-output-file, verbatim as 1.0.114 wrote
+// it for one request to a stand-in model reporting 11 tokens written.
 func TestCopilotChargesItsUsageReportOnce(t *testing.T) {
 	t.Parallel()
-	const report = `{"totalPremiumRequestCost":0,"totalUserRequests":1,` +
-		`"modelMetrics":{"claude-sonnet-4.5":{"requests":{"count":1,"cost":0},` +
-		`"usage":{"inputTokens":1000,"outputTokens":10,"cacheReadTokens":600,"cacheWriteTokens":0}}},` +
-		`"providerModelMetrics":[{"provider":null,"modelId":"claude-sonnet-4.5",` +
-		`"metrics":{"requests":{"count":1,"cost":0},` +
-		`"usage":{"inputTokens":1000,"outputTokens":10,"cacheReadTokens":600,"cacheWriteTokens":0}}}],` +
-		`"currentModel":"claude-sonnet-4.5","lastCallInputTokens":1000,"lastCallOutputTokens":10}`
+	const report = `{"totalPremiumRequestCost":0,"totalUserRequests":1,"totalNanoAiu":0,` +
+		`"aiCreditsStatus":"unavailable","totalApiDurationMs":20,"sessionStartTime":"2026-11-22T09:18:07.319Z",` +
+		`"codeChanges":{"linesAdded":0,"linesRemoved":0,"filesModifiedCount":0,"filesModified":[]},` +
+		`"modelMetrics":{"stub-1":{"requests":{"count":1,"cost":0},` +
+		`"usage":{"inputTokens":1000,"outputTokens":10,"cacheReadTokens":600,"cacheWriteTokens":11},` +
+		`"totalNanoAiu":0,"aiCreditsStatus":"unavailable"}},` +
+		`"agentMetrics":{"main":{"totalApiDurationMs":20,"totalNanoAiu":0,"modelMetrics":{"stub-1":` +
+		`{"requests":{"count":1,"cost":0},` +
+		`"usage":{"inputTokens":1000,"outputTokens":10,"cacheReadTokens":600,"cacheWriteTokens":11},` +
+		`"totalNanoAiu":0}}}},` +
+		`"providerModelMetrics":[{"provider":null,"modelId":"stub-1","metrics":{"requests":{"count":1,"cost":0},` +
+		`"usage":{"inputTokens":1000,"outputTokens":10,"cacheReadTokens":600,"cacheWriteTokens":11},` +
+		`"totalNanoAiu":0,"aiCreditsStatus":"unavailable"},"modelDisplayName":"stub-1"}],` +
+		`"currentModel":"stub-1","lastCallInputTokens":1000,"lastCallOutputTokens":10}`
 	p := copilot(t)
 	if !p.ReadsUsageReport() {
 		t.Fatal("the copilot profile reads no usage report, so every call is charged an estimate")
 	}
-	prov := &Provider{profile: p, model: "claude-sonnet-4.5", now: time.Now}
+	prov := &Provider{profile: p, model: "stub-1", now: time.Now}
 	comp, err := prov.completion(t.Context(), "prompt", &rawResult{stdout: "ok\n"}, report)
 	if err != nil {
 		t.Fatalf("completion: %v", err)
 	}
-	if comp.InputTokens != 1000 || comp.OutputTokens != 10 || comp.CacheRead != 600 {
-		t.Errorf("charged in %d out %d cache read %d, want in 1000 out 10 cache read 600 — the "+
-			"cached 600 are inside the 1000", comp.InputTokens, comp.OutputTokens, comp.CacheRead)
+	if comp.InputTokens != 1000 || comp.OutputTokens != 10 || comp.CacheRead != 600 || comp.CacheWrite != 11 {
+		t.Errorf("charged in %d out %d cache read %d write %d, want in 1000 out 10 cache read 600 write 11: "+
+			"the cached 600 and the 11 written are inside the 1000",
+			comp.InputTokens, comp.OutputTokens, comp.CacheRead, comp.CacheWrite)
 	}
 	if comp.Content != "ok" {
 		t.Errorf("content = %q, want the answer stdout carried", comp.Content)
@@ -214,9 +265,13 @@ func TestCopilotChargesItsUsageReportOnce(t *testing.T) {
 }
 
 // NOTHING A CALL LEAVES IN THE SEAT'S HOME OUTLIVES ITS GENERATION: the
-// session directory holding the call's events, and the session index every
-// session is written to, with its journal, write-ahead log and shared memory —
-// all measured on 1.0.103 — go with the prune.
+// session directory holding the call's events, the session index every
+// session is written to with its write-ahead log and shared memory, the
+// empty installed-plugins directory and settings.json.lock, all measured on
+// 1.0.114, go with the prune.
+//
+// Mutation: drop installed-plugins or settings.json.lock from volatile_paths,
+// and it outlives the prune.
 func TestCopilotPrunesWhatACallLeaves(t *testing.T) {
 	t.Parallel()
 	p := copilot(t)
@@ -230,10 +285,13 @@ func TestCopilotPrunesWhatACallLeaves(t *testing.T) {
 	left := []string{
 		".copilot/session-state/7200a8e5-4ad7-4c15-8f7a-d3217211d1b2/events.jsonl",
 		".copilot/session-store.db",
-		".copilot/session-store.db-journal",
 		".copilot/session-store.db-wal",
 		".copilot/session-store.db-shm",
 		".copilot/logs/process-1792894077341-21027.log",
+		".copilot/settings.json.lock",
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".copilot", "installed-plugins"), 0o700); err != nil {
+		t.Fatal(err)
 	}
 	for _, rel := range left {
 		path := filepath.Join(home, rel)
@@ -247,7 +305,7 @@ func TestCopilotPrunesWhatACallLeaves(t *testing.T) {
 	if err := ws.prune(home); err != nil {
 		t.Fatalf("prune: %v", err)
 	}
-	for _, rel := range left {
+	for _, rel := range append(left, ".copilot/installed-plugins") {
 		if _, err := os.Stat(filepath.Join(home, rel)); !os.IsNotExist(err) {
 			t.Errorf("%s outlived the prune (%v): the next call of the seat would find it", rel, err)
 		}
@@ -266,7 +324,7 @@ func TestCopilotCallsDoNotUpdateTheHarness(t *testing.T) {
 }
 
 // A HARNESS THAT CANNOT USE ITS LOGIN NAMES THE LOGIN AS WHAT FAILED, in its own
-// words — what 1.0.103 printed signed out, and the refusal its bundle carries
+// words — what 1.0.114 printed signed out, and the refusals its bundle carries
 // for a credential the service will not take — so the seat says its login is
 // what failed rather than reporting a server error.
 func TestCopilotNamesALoginItCannotUse(t *testing.T) {
@@ -279,7 +337,8 @@ func TestCopilotNamesALoginItCannotUse(t *testing.T) {
 			"  • Start 'copilot' and run the '/login' command\n" +
 			"  • Set the COPILOT_GITHUB_TOKEN, GH_TOKEN, or GITHUB_TOKEN environment variable\n" +
 			"  • Run 'gh auth login' to authenticate with the GitHub CLI\n",
-		"a refused credential": "Error: Authentication failed due to invalid credentials\n",
+		"a refused credential":    "Authentication failed for this account. Sign in again with /login, then retry.\n",
+		"a refusal with a reason": "Error: Authentication failed: the token was rejected\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

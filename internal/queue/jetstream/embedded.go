@@ -22,6 +22,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/flock"
 	"github.com/crewlet/crewlet/internal/jsapi"
@@ -29,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -143,6 +145,35 @@ type embeddedServer struct {
 	// reads ([tunnel], [LinkMeter]); nil on a member. Started before the
 	// server and closed after it.
 	tunnel *tunnel
+	// pings is how long the leaf's own link may go without answering its
+	// pings before the leaf closes it ([leafPingTolerance]); zero on a
+	// member.
+	pings time.Duration
+}
+
+// LeaseAccount is the local account a leaf's LEASE LINK binds: the second leaf
+// link, isolated from every other leaf's interest, that the lease connection
+// rides and nothing else ([Queue.DialLeases]; package doc, "A node's leases
+// ride a link of their own"). The data link binds the global account.
+const LeaseAccount = "CREWLET_LEASES"
+
+// leafPingTolerance is how long a leaf's link may go without a pong before the
+// leaf closes it as stale, read from opts as nats-server built them: the
+// leaf-node ping settings where set, else the server's, defaults filled in
+// (client.go setPingTimer, processPingTimer, v2.15.3). A PING whose round trip
+// exceeds MaxPingsOut intervals closes the link. Zero on a member.
+func leafPingTolerance(opts *server.Options) time.Duration {
+	if len(opts.LeafNode.Remotes) == 0 {
+		return 0
+	}
+	every, out := opts.PingInterval, opts.MaxPingsOut
+	if opts.LeafNode.PingInterval > 0 {
+		every = opts.LeafNode.PingInterval
+	}
+	if opts.LeafNode.MaxPingsOut > 0 {
+		out = opts.LeafNode.MaxPingsOut
+	}
+	return time.Duration(out) * every
 }
 
 // linkMeter is the meter of this broker's link to the members: a leaf's
@@ -207,7 +238,19 @@ func (s *Server) Conn() (*nats.Conn, error) {
 	if s.embedded == nil {
 		return nil, errors.New("jetstream: server is shut down")
 	}
-	return s.embedded.connect(watched{})
+	return s.embedded.connect(watched{}, s.embedded.auth.engine)
+}
+
+// LeaseConn returns an in-process connection to this server as the lease
+// connection: on a leaf bound to [LeaseAccount], whose link nothing else
+// rides, and to the global account elsewhere. For a caller without a queue
+// client that opens the lease store as the engine does; unwatched and not
+// waited for, as [Server.Conn] is. The caller must close it.
+func (s *Server) LeaseConn() (*nats.Conn, error) {
+	if s.embedded == nil {
+		return nil, errors.New("jetstream: server is shut down")
+	}
+	return s.embedded.connect(watched{}, s.embedded.auth.leases)
 }
 
 // Death is this broker's own declaration that it cannot go on: closed when
@@ -240,7 +283,7 @@ func (s *Server) AwaitClusterReady(ctx context.Context, replicas int) error {
 	if s.embedded == nil {
 		return errors.New("jetstream: server is shut down")
 	}
-	nc, err := s.embedded.connect(watched{})
+	nc, err := s.embedded.connect(watched{}, s.embedded.auth.engine)
 	if err != nil {
 		return fmt.Errorf("jetstream: connect to wait for the cluster: %w", err)
 	}
@@ -497,13 +540,16 @@ func embeddedOptions(cfg Config, auth *brokerAuth) (*server.Options, string, err
 		opts.JetStreamDomain = jsapi.Domain
 	}
 	if leaf {
-		remotes, err := leafRemotes(cfg.LeafURLs, cfg.FleetAuth.leafSeed())
+		remotes, err := leafRemotes(cfg.LeafURLs, cfg.FleetAuth.leafSeed(), cfg.LeafURLsInOrder)
 		if err != nil {
 			return nil, "", err
 		}
 		opts.LeafNode.Remotes = remotes
-		// The leaf's clients are this process alone, and its one link is
-		// the one it dials, so nothing here listens at all.
+		// The lease link's local account, which only the lease connection
+		// is bound to ([brokerAuth.bind]).
+		opts.Accounts = append(opts.Accounts, server.NewAccount(LeaseAccount))
+		// The leaf's clients are this process alone, and its links are the
+		// ones it dials, so nothing here listens at all.
 		opts.DontListen = true
 		return opts, "", nil
 	}
@@ -594,9 +640,8 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	if err := storeOutsideTempDir(cfg); err != nil {
 		return nil, err
 	}
-	// The authenticator, with this start's keys: the engine's, and the system
-	// account's on a clustered member, by the rule [embeddedOptions] reads for
-	// `clustered`.
+	// The authenticator, with this start's keys ([newBrokerAuth]), the system
+	// account's by the rule [embeddedOptions] reads for `clustered`.
 	auth, err := newBrokerAuth(cfg)
 	if err != nil {
 		return nil, err
@@ -694,7 +739,16 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	routing, servesLeaves := opts.Cluster.Port != 0, opts.LeafNode.Port != 0
 	// Set before Start; read only by connections Start lets in, which the go
 	// statement below orders after it.
-	auth.ns = ns
+	if err = auth.bind(ns); err != nil {
+		ns.Shutdown()
+		tun.close()
+		dirLock.Release()
+		removeScratch(scratch)
+		return nil, err
+	}
+	// Read before Start, as the listeners are: the defaults NewServer filled
+	// in are the leaf's link's own ([dataPath]).
+	pings := leafPingTolerance(opts)
 	// Start is joined, and every shutdown waits for it ([shutdownAndClean]).
 	started := make(chan struct{})
 	go func() {
@@ -741,7 +795,7 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	return &embeddedServer{
 		ns: ns, started: started, death: death,
 		scratch: scratch, dirLock: dirLock, clustered: clustered, leaf: leaf,
-		auth: auth, tunnel: tun,
+		auth: auth, tunnel: tun, pings: pings,
 	}, nil
 }
 
@@ -1010,22 +1064,39 @@ func (e *embeddedServer) awaitClusterReady(ctx context.Context, js jetstream.Jet
 var errNotAsked = errors.New("not asked: the member was never current with " +
 	"enough routed peers")
 
-// awaitLeafReady waits until a leaf's link is up and the fleet's JetStream
-// answers across it.
-//
-// Both: a link counts as up once accepted while the member may still be
-// recovering, and only a JetStream answer proves the link. Bounded as a
-// clustered member's wait ([clusterReadyTimeout]), since the far side is a
-// cluster ([Config.Clustered]). A no-op for anything but a leaf.
+// awaitLeafReady waits until a leaf's DATA LINK is up and the fleet's
+// JetStream answers across it: the link in the global account, which the
+// queue's connection rides ([awaitLinked]). A no-op for anything but a leaf.
 func (e *embeddedServer) awaitLeafReady(ctx context.Context, js jetstream.JetStream) error {
 	if e == nil || !e.leaf {
 		return nil
 	}
+	return e.awaitLinked(ctx, js, server.DEFAULT_GLOBAL_ACCOUNT, "")
+}
+
+// awaitLeaseLink is [embeddedServer.awaitLeafReady] for the LEASE LINK, asked
+// on js, a client over the lease connection ([Queue.DialLeases]).
+func (e *embeddedServer) awaitLeaseLink(ctx context.Context, js jetstream.JetStream) error {
+	if e == nil || !e.leaf {
+		return nil
+	}
+	return e.awaitLinked(ctx, js, LeaseAccount, "lease ")
+}
+
+// awaitLinked waits until the leaf's link in account is up and the fleet's
+// JetStream answers js across it; which names the link in what it says.
+//
+// Both: a link counts as up once accepted while the member may still be
+// recovering, and only a JetStream answer proves the link. BY ACCOUNT, since a
+// leaf holds two links ([leafRemotes]) and either up says nothing of the
+// other. Bounded as a clustered member's wait ([clusterReadyTimeout]), since
+// the far side is a cluster ([Config.Clustered]).
+func (e *embeddedServer) awaitLinked(ctx context.Context, js jetstream.JetStream, account, which string) error {
 	r := e.readiness()
 	deadline := time.Now().Add(r.timeout)
 	var last error
 	for time.Now().Before(deadline) {
-		if e.ns.NumLeafNodes() > 0 {
+		if e.linked(account) {
 			askCtx, cancel := context.WithTimeout(ctx, r.ask)
 			_, last = js.AccountInfo(askCtx)
 			cancel()
@@ -1037,23 +1108,51 @@ func (e *embeddedServer) awaitLeafReady(ctx context.Context, js jetstream.JetStr
 		case <-ctx.Done():
 			// The caller's deadline says nothing about the link (absent or
 			// not formed YET), so no setting is named.
-			return fmt.Errorf("waiting for leaf %q to reach the fleet: %w",
-				e.ns.Name(), ctx.Err())
+			return fmt.Errorf("waiting for leaf %q's %slink (account %s) to reach the "+
+				"fleet: %w", e.ns.Name(), which, account, ctx.Err())
 		case <-time.After(r.poll):
 		}
 	}
-	if e.ns.NumLeafNodes() == 0 {
+	if !e.linked(account) {
 		// The key is named: a refusing member looks like an absent one from
 		// here, and only the members' broker_peer_refused lines say which.
-		return fmt.Errorf("leaf %q made no link to any member within %s — "+
+		return fmt.Errorf("leaf %q made no %slink to any member (account %s) within %s — "+
 			"stream.leaf.urls names no member that is up and listening on its "+
 			"stream.leaf.port, a firewall is between them, or every member "+
 			"refused this node's key (it presents secrets.keys id %q; see "+
 			"broker_peer_refused on the members)",
-			e.ns.Name(), r.timeout, e.presentedKey())
+			e.ns.Name(), which, account, r.timeout, e.presentedKey())
 	}
-	return fmt.Errorf("leaf %q is linked to the fleet but its JetStream did not "+
-		"answer within %s: %w", e.ns.Name(), r.timeout, last)
+	return fmt.Errorf("leaf %q's %slink (account %s) is up but the fleet's JetStream did "+
+		"not answer across it within %s: %w", e.ns.Name(), which, account, r.timeout, last)
+}
+
+// linked reports whether this leaf's link in account is up: the leaf holds a
+// leaf connection bound to it. Asked by account, never by count
+// ([leafRemotes]); no round trip.
+func (e *embeddedServer) linked(account string) bool {
+	leafz, err := e.ns.Leafz(&server.LeafzOptions{Account: account})
+	return err == nil && leafz.NumLeafs > 0
+}
+
+// relink drops this leaf's link in account, so its remote dials the next of
+// its URLs once the leaf's reconnect interval has passed (leafnode.go
+// pickNextURL, v2.15.3): how the lease link leaves a member that answers
+// nothing ([Queue.DialLeases]).
+func (e *embeddedServer) relink(account string) error {
+	leafz, err := e.ns.Leafz(&server.LeafzOptions{Account: account})
+	if err != nil {
+		return fmt.Errorf("jetstream: find the leaf's link in account %s: %w", account, err)
+	}
+	if len(leafz.Leafs) == 0 {
+		return fmt.Errorf("jetstream: the leaf has no link in account %s to move", account)
+	}
+	for _, l := range leafz.Leafs {
+		if err := e.ns.DisconnectClientByID(l.ID); err != nil {
+			return fmt.Errorf("jetstream: drop the leaf's link in account %s: %w", account, err)
+		}
+	}
+	return nil
 }
 
 // embeddedReconnectWait is how long a connection to this process's own broker
@@ -1081,11 +1180,11 @@ const embeddedReconnects = int(listenTimeout / embeddedReconnectWait)
 // advertised to nobody ([embeddedOptions]). Its handshake timeout and
 // reconnect span are [listenTimeout] ([embeddedReconnects]).
 //
-// Every connection is held to the contract ([carriesTheContract]) with the
-// reconnect watch beside it; this and [dial] are the only places this package
-// opens one. at says where a close NATS makes for good is recorded; zero when
-// the owner is the one to notice ([watched]).
-func (e *embeddedServer) connect(at watched) (*nats.Conn, error) {
+// Held to the contract ([carriesTheContract]) with the reconnect watch beside
+// it; this and [dialWith] alone open one. at says where a close NATS makes for
+// good is recorded, zero when the owner notices ([watched]); as is the identity
+// it presents, the engine's or the lease connection's ([brokerAuth.bind]).
+func (e *embeddedServer) connect(at watched, as processUser) (*nats.Conn, error) {
 	opts := []nats.Option{
 		nats.Timeout(listenTimeout),
 		nats.MaxReconnects(embeddedReconnects),
@@ -1102,9 +1201,9 @@ func (e *embeddedServer) connect(at watched) (*nats.Conn, error) {
 		nats.ErrorHandler(clientErrors{log: logging.Get("queue.jetstream")}.reported),
 	}
 	opts = append(opts, watchClose(at, true, "")...)
-	// With the key minted at this start: the authenticator admits nothing
+	// With a key minted at this start: the authenticator admits nothing
 	// that presents none, in process or not.
-	opts = append(opts, nats.InProcessServer(e.ns), e.auth.engine.option())
+	opts = append(opts, nats.InProcessServer(e.ns), as.option())
 	nc, err := nats.Connect("", opts...)
 	if err != nil {
 		return nil, err
@@ -1176,27 +1275,48 @@ func (e *embeddedServer) presentedKey() string {
 	return e.auth.fleet.activeID
 }
 
-// leafRemotes parses a leaf's URLs into the one remote it dials, presenting
-// seed — the active key's leaf nkey ([FleetAuth]) — on every link it makes.
+// leafRemotes parses a leaf's URLs into its two remotes, the DATA LINK in the
+// global account and the isolated LEASE LINK in [LeaseAccount] (package doc),
+// each presenting seed ([FleetAuth]) and dialled in order where inOrder.
 //
-// One remote with every URL: the fleet is one account on one hub, so a remote
-// per member would bring interest in by every link; the server rotates through
-// one remote's URLs, "any member that answers". An nkey, never a credential in
-// the URL (Tier A refuses one): CONNECT signs the member's nonce (leafnode.go,
-// v2.15.1), where a userinfo would cross in clear. The member's first INFO is
-// waited for [leafHandshakeTerm].
-func leafRemotes(urls []string, seed string) ([]*server.RemoteLeafOpts, error) {
-	parsed := make([]*url.URL, 0, len(urls))
-	for i, raw := range urls {
-		u, err := url.Parse(strings.TrimSpace(raw))
-		if err != nil || u.Host == "" {
-			return nil, fmt.Errorf("jetstream: leaf URL %d is not host:port "+
-				"behind a nats-leaf:// or nats:// scheme", i)
+// ONE REMOTE WITH EVERY URL FOR EACH ACCOUNT: a remote per member would bring
+// interest in by every link; a remote rotates through its own shuffled copy,
+// so the links land on members independently. A second remote in the global
+// account would evict the first on every connect (leafnode.go
+// addLeafNodeConnection, v2.15.3: same leaf, cluster and remote account). An
+// nkey, never a credential in the URL (Tier A refuses one): CONNECT signs the
+// member's nonce, where a userinfo would cross in clear. The member's first
+// INFO is waited for [leafHandshakeTerm].
+func leafRemotes(urls []string, seed string, inOrder bool) ([]*server.RemoteLeafOpts, error) {
+	parsed := func() ([]*url.URL, error) {
+		out := make([]*url.URL, 0, len(urls))
+		for i, raw := range urls {
+			u, err := url.Parse(strings.TrimSpace(raw))
+			if err != nil || u.Host == "" {
+				return nil, fmt.Errorf("jetstream: leaf URL %d is not host:port "+
+					"behind a nats-leaf:// or nats:// scheme", i)
+			}
+			u.User = nil
+			out = append(out, u)
 		}
-		u.User = nil
-		parsed = append(parsed, u)
+		return out, nil
 	}
-	return []*server.RemoteLeafOpts{{URLs: parsed, Nkey: seed, FirstInfoTimeout: leafHandshakeTerm}}, nil
+	data, err := parsed()
+	if err != nil {
+		return nil, err
+	}
+	leases, err := parsed()
+	if err != nil {
+		return nil, err
+	}
+	return []*server.RemoteLeafOpts{
+		{URLs: data, Nkey: seed, FirstInfoTimeout: leafHandshakeTerm, NoRandomize: inOrder},
+		// PAST THE TUNNEL, so it dials for itself: given the tunnel's term
+		// ([tunnelDial]), since nats-server's one second leaves a lease link
+		// that dropped unable to dial again behind a deep queue.
+		{URLs: leases, Nkey: seed, FirstInfoTimeout: leafHandshakeTerm, DialTimeout: tunnelDial,
+			LocalAccount: LeaseAccount, RequestIsolation: true, NoRandomize: inOrder},
+	}, nil
 }
 
 // leafHandshakeTerm bounds a leaf link's handshake at both ends: the leaf's
@@ -1227,6 +1347,24 @@ func dial(cfg Config, at watched, meter *LinkMeter) (*nats.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
+	return dialWith(cfg, at, opts, recorded)
+}
+
+// dialLeases opens the LEASE CONNECTION to an external server: [dial] with
+// [dialLeaseOptions], unmetered, since it is not the data link the meter
+// reads ([LinkMeter]).
+func dialLeases(cfg Config, at watched) (*nats.Conn, error) {
+	opts, recorded, err := dialLeaseOptions(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return dialWith(cfg, at, opts, recorded)
+}
+
+// dialWith opens a connection to an external server with opts, which dial
+// through recorded, held to the transport's contract and to a server that
+// authenticates; the one dial [dial] and [dialLeases] share.
+func dialWith(cfg Config, at watched, opts []nats.Option, recorded *infoDialer) (*nats.Conn, error) {
 	opts = append(opts, watchClose(at, false, cfg.URL)...)
 	nc, err := nats.Connect(cfg.URL, opts...)
 	if err != nil {
@@ -1271,8 +1409,8 @@ const externalHandshake = jsapi.RequestTerm
 // So: one message at queue.MaxPayloadBytes behind the larger buffer, at the
 // floor (jsapi.Sending). The cost: a dead connection under a large Write is
 // given up only at this deadline, holding the connection's lock, so every
-// caller (a lease renewal too) waits behind each large Write ahead of it;
-// bounding that needs the write windowed (crewlet/crewlet#1035).
+// caller on the queue's connection waits behind each large Write ahead of it;
+// a renewal rides the lease connection, whose lock no bulk takes (ADR-0174).
 var externalWriteDeadline = jsapi.Sending(
 	max(nats.DefaultWriteBufSize, nats.DefaultReconnectBufSize)+queue.MaxPayloadBytes, objstore.MiBPace)
 
@@ -1333,6 +1471,48 @@ func dialOptions(cfg Config, meter *LinkMeter) ([]nats.Option, *infoDialer, erro
 		opts = append(opts, nats.ClientCert(cfg.TLS.Cert, cfg.TLS.Key))
 	}
 	return opts, recorded, nil
+}
+
+// leaseDeadAfter is how long the LEASE CONNECTION to an external server may
+// stay silent before its client gives it up: one heartbeat at the shortest
+// lease config allows, the heartbeat a renewal behind it has to make. The TTL
+// in force is not known at the dial, and this bound holds at every TTL.
+const leaseDeadAfter = config.MinLeaseTTL / seat.HeartbeatRatio
+
+// leasePingsOut is how many pings the lease connection's client leaves
+// unanswered before it calls the connection stale: the client's own default,
+// set so [leasePingEvery] is derived from the number in force. nats.go checks
+// at each ping tick (nats.go processPingTimer, v1.55.0), so a connection dies
+// within (leasePingsOut + 1) intervals of its last pong.
+const leasePingsOut = nats.DefaultMaxPingOut
+
+// leasePingEvery is the lease connection's ping interval: so that
+// (leasePingsOut + 1) of them are [leaseDeadAfter], 1.667 s.
+const leasePingEvery = leaseDeadAfter / (leasePingsOut + 1)
+
+// leaseConnName is the name the lease connection gives the server, so an
+// operator reading its connz tells it from the queue's "crewlet".
+const leaseConnName = "crewlet-leases"
+
+// dialLeaseOptions is [dialOptions] for the LEASE CONNECTION to an external
+// server ([Queue.DialLeases]): the same server, credentials, TLS, handshake
+// and reconnects, unmetered, with four options of its own. Pings every
+// [leasePingEvery], [leasePingsOut] of them out, so a socket that dies
+// silently is given up within [leaseDeadAfter]; and the flusher held to that
+// too, since this connection writes no large message (a pass's renewals at 46
+// seats are 26 KB, 0.75 s at the floor) and a write stuck on a dead socket
+// holds the lock the ping timer needs (the [externalWriteDeadline] doc).
+func dialLeaseOptions(cfg Config) ([]nats.Option, *infoDialer, error) {
+	opts, recorded, err := dialOptions(cfg, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	return append(opts,
+		nats.Name(leaseConnName),
+		nats.PingInterval(leasePingEvery),
+		nats.MaxPingsOutstanding(leasePingsOut),
+		nats.FlusherTimeout(leaseDeadAfter),
+	), recorded, nil
 }
 
 // ephemeralInactive is how long the broker keeps an ephemeral consumer whose

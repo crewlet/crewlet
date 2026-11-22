@@ -164,8 +164,10 @@ type sessionKeep struct {
 	// keep at its first step, before its upload.
 	gate     chan struct{}
 	mintGate chan struct{}
-	// uploaded is what every upload read.
+	// uploaded is what every upload read, and wrote the bytes each seal's
+	// spool took, a seal refused part way included.
 	uploaded [][]byte
+	wrote    []int64
 }
 
 func (k *sessionKeep) Policy(context.Context) (SessionPolicy, error) {
@@ -215,6 +217,9 @@ func (k *sessionKeep) MintedAt(ctx context.Context, _, _ string, _ time.Time) (t
 func (k *sessionKeep) Seal(_, _ string, archive io.Reader, dst io.Writer) (executorkeep.SealedSpool, error) {
 	var read bytes.Buffer
 	n, err := io.Copy(dst, io.TeeReader(archive, &read))
+	k.mu.Lock()
+	k.wrote = append(k.wrote, n)
+	k.mu.Unlock()
 	if err != nil {
 		return executorkeep.SealedSpool{}, err
 	}
@@ -398,10 +403,10 @@ func (r *coordRig) launchKept(t *testing.T, turnID string) PendingRun {
 // awaitKeeps waits for every keep under way ([Coordinator.keepLater]).
 func (r *coordRig) awaitKeeps() { r.coordinator.keeping.Wait() }
 
-// spools are the spools left in the rig's spool directory.
+// spools are the spools left in the rig's coordinator's own spool directory.
 func (r *coordRig) spools(t *testing.T) []string {
 	t.Helper()
-	left, err := filepath.Glob(filepath.Join(r.coordinator.spoolDirectory(), spoolPrefix+"*"))
+	left, err := filepath.Glob(filepath.Join(r.coordinator.ownSpoolDir(), spoolPrefix+"*"))
 	if err != nil {
 		t.Fatalf("listing the spools: %v", err)
 	}
@@ -583,8 +588,8 @@ func TestACapturesPlaceOnlyGrowsOnTheRow(t *testing.T) {
 // after the take is [TestACollectionsKeepStartsOnceItsTakeIsSpooled]'s.
 //
 // Mutation: take after the pause (the fake reads no paused box), pack on
-// demand for a job that packed its own, drop the handed secrets from the
-// scrub, stamp before the record lands, leave its fields off
+// demand for a job that packed its own, drop the handed secrets or the agent's
+// scope from the scrub, stamp before the record lands, leave its fields off
 // `executor_collected`, or leave the spool behind, and a check goes red.
 func TestACollectionTakesTheSessionBeforeThePauseAndKeepsItOffTheRead(t *testing.T) {
 	t.Parallel()
@@ -603,6 +608,9 @@ func TestACollectionTakesTheSessionBeforeThePauseAndKeepsItOffTheRead(t *testing
 		if !slices.Contains(takes[0].Scrub, handedToken) || takes[0].MaxBytes != executorkeep.SessionMaxBytes {
 			t.Errorf("the take scrubs %v within %d bytes, want what the launch handed the box within the "+
 				"session's bound", takes[0].Scrub, takes[0].MaxBytes)
+		}
+		if agent := rig.get("t1").AgentID; agent == "" || takes[0].Scope != agent {
+			t.Errorf("the take's scrub is scoped %q, want the run's agent %q", takes[0].Scope, agent)
 		}
 		if !rig.provider.Box(rig.get("t1").SandboxID).Paused() {
 			t.Error("the collection did not pause the box after taking its session")
@@ -1494,4 +1502,18 @@ func TestEveryCollectionTakesWhatItsJobLeft(t *testing.T) {
 			})
 		})
 	}
+}
+
+// ownSpoolDir is c's own spool directory, "" before its first spool.
+func (c *Coordinator) ownSpoolDir() string {
+	c.spools.mu.Lock()
+	defer c.spools.mu.Unlock()
+	return c.spools.dir
+}
+
+// seals is the bytes each seal's spool took, in order.
+func (k *sessionKeep) seals() []int64 {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return slices.Clone(k.wrote)
 }

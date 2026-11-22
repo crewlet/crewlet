@@ -38,6 +38,14 @@ var log = logging.Get("agent.prefetch")
 // freeze is structural: blocks are rendered before the turn and handed to the
 // runner as fixed strings, so there is nowhere for a second fetch.
 
+// # Every block neutralises what a store hands it
+//
+// Memories, traits, skills and a past turn's account are what a model wrote
+// after reading other people's words, so each is neutralised under the turn's
+// token before it enters the prompt, not only the thread and the ask. A gate
+// reads every string of [Blocks] by reflection (blockfence_test.go), so a new
+// block cannot skip it by being left off a list.
+
 // # Every block degrades, and most of them to nothing
 //
 // No block fails the turn: an unreachable store, an unconfigured model or a

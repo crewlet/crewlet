@@ -387,7 +387,7 @@ func TestAHookStoppedRunFailsWithItsReason(t *testing.T) {
 	for _, version := range []string{"2.1.263", "2.1.310"} {
 		t.Run(version, func(t *testing.T) {
 			t.Parallel()
-			stopped := claude().Parse(fixture(t, version, "result-hook-stopped.json"))
+			stopped := claude().Parse([]byte(fixture(t, version, "result-hook-stopped.json")))
 			if stopped.Success {
 				t.Fatal("a run a hook stopped read as a success")
 			}
@@ -396,14 +396,14 @@ func TestAHookStoppedRunFailsWithItsReason(t *testing.T) {
 					t.Errorf("the failure does not say %q: %s", want, stopped.Error)
 				}
 			}
-			completed := claude().Parse(fixture(t, version, "result-completed.json"))
+			completed := claude().Parse([]byte(fixture(t, version, "result-completed.json")))
 			if !completed.Success || completed.Text != "final after stop note" {
 				t.Errorf("a completed run = success %v, text %q, error %q; want the answer after "+
 					"its finish's note", completed.Success, completed.Text, completed.Error)
 			}
 		})
 	}
-	if absent := claude().Parse(`{"type":"result","subtype":"success","is_error":false,"result":"done"}`); !absent.Success {
+	if absent := claude().Parse([]byte(`{"type":"result","subtype":"success","is_error":false,"result":"done"}`)); !absent.Success {
 		t.Errorf("a result with no terminal reason read as failed: %+v", absent)
 	}
 	// The transcript says it too, from the stream's own last line.
@@ -411,23 +411,6 @@ func TestAHookStoppedRunFailsWithItsReason(t *testing.T) {
 	dec.Line([]byte(fixture(t, "2.1.310", "result-hook-stopped.json")))
 	if got := dec.Result().Transcript; !strings.Contains(got, "[error] the run ended: a hook in the run stopped its loop") {
 		t.Errorf("the transcript does not say the hook stopped the run: %q", got)
-	}
-}
-
-// ClaudeCode READS NOTES, and says so to the runner it is driven by.
-func TestClaudeCodeReadsNotes(t *testing.T) {
-	t.Parallel()
-	if !executor.NewClaudeCode().ReadsNotes() {
-		t.Fatal("the Claude Code runner says its harness reads no notes, so no run is told notes arrive")
-	}
-}
-
-// OpenCode READS NOTES, through its plugin, and says so to its runner, so its
-// runs are told notes arrive and one that never asked is said at collection.
-func TestOpenCodeReadsNotes(t *testing.T) {
-	t.Parallel()
-	if !executor.NewOpenCode().ReadsNotes() {
-		t.Fatal("the OpenCode runner says its harness reads no notes, so no run is told notes arrive")
 	}
 }
 
@@ -936,7 +919,7 @@ func TestEverySettingsFileHasAPinnedCopyHoldingTheEnginesCompactionPoint(t *test
 		t.Fatalf("WriteConfig: %v", err)
 	}
 	pin := map[string]any{
-		"CLAUDE_CODE_AUTO_COMPACT_WINDOW":     strconv.Itoa(sandbox.ClaudeCodeWindow(model).Tokens),
+		"CLAUDE_CODE_AUTO_COMPACT_WINDOW":     strconv.Itoa(executor.NewClaudeCode().PinnedWindow(model)),
 		"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":     "",
 		"CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE": "",
 		"CLAUDE_CODE_RESUME_INTERRUPTED_TURN": "",
@@ -1095,7 +1078,7 @@ func TestAContextExhaustedRunIsToldByTheHarnesssField(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			if got := claude().Parse(c.line); got.ContextExhausted != c.want {
+			if got := claude().Parse([]byte(c.line)); got.ContextExhausted != c.want {
 				t.Errorf("ContextExhausted = %v, want %v, on %s", got.ContextExhausted, c.want, c.line)
 			}
 		})
@@ -1204,7 +1187,7 @@ func TestARequestItsProviderRefusedIsToldByItsStatus(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			got := claude().Parse(c.line)
+			got := claude().Parse([]byte(c.line))
 			if got.RequestRefused != c.want {
 				t.Errorf("RequestRefused = %v, want %v, on %s", got.RequestRefused, c.want, c.line)
 			}

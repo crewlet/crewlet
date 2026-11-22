@@ -293,6 +293,13 @@ type subscription struct {
 	// mailbox. A partition leaves it when its handler starts, and a
 	// partition handed back leaves it for the mailbox.
 	drained map[*events.Event]struct{}
+
+	// arrived is when this subscription received each event it holds, by
+	// lastArrival's count, forgotten as the event leaves: the order a
+	// readmitted aside delivery goes back in ([Queue.Readmit]), the stream
+	// sequence's twin.
+	arrived     map[*events.Event]uint64
+	lastArrival uint64
 }
 
 func (s *subscription) membersOf(client *Queue) []*consumer {
@@ -345,6 +352,11 @@ type consumer struct {
 	//
 	// Never cleared: attaching again mints a NEW consumer.
 	detached bool
+
+	// aside is what this consumer holds aside ([queue.OutcomeAside]), and
+	// readmits the keys readmitted since its running handler began (aside.go).
+	aside    []asideEntry
+	readmits map[string]struct{}
 }
 
 type streamSub struct {
@@ -506,8 +518,15 @@ func (q *Queue) Stop(ctx context.Context) error {
 		return nil
 	}
 	q.running, q.paused = false, false
+	type retired struct {
+		sub  *subscription
+		dead []deadLetter
+	}
+	var handedBack []retired
 	for _, sub := range q.broker.subs {
-		q.dropMembersLocked(sub)
+		if _, dead := q.dropMembersLocked(sub, "stopping"); len(dead) > 0 {
+			handedBack = append(handedBack, retired{sub, dead})
+		}
 	}
 	clear(q.pauses)
 	clear(q.current)
@@ -527,6 +546,9 @@ func (q *Queue) Stop(ctx context.Context) error {
 		return false
 	})
 	q.broker.mu.Unlock()
+	for _, r := range handedBack {
+		q.broker.logDeadLetters(ctx, r.sub, r.dead)
+	}
 
 	var unfinished error
 	for _, l := range listening {
@@ -542,25 +564,29 @@ func (q *Queue) Stop(ctx context.Context) error {
 }
 
 // dropMembersLocked removes this client's consumers from a subscription,
-// marks them detached and closes any linger window they were holding open.
+// marks them detached, closes any linger window they were holding open and
+// hands back what they held aside, for reason; it returns how many it dropped
+// and what the hand-back retired, to log once unlocked.
 //
 // THE MARK AND THE REMOVAL ARE BOTH REQUIRED, for the reason [consumer.detached]
 // gives: the removal stops a FUTURE delivery being routed here, and the mark
 // stops a drain that is already holding this consumer from finishing on it.
-func (q *Queue) dropMembersLocked(sub *subscription) int {
+func (q *Queue) dropMembersLocked(sub *subscription, reason string) (int, []deadLetter) {
 	mine := sub.membersOf(q)
 	if len(mine) == 0 {
-		return 0
+		return 0, nil
 	}
+	var dead []deadLetter
 	for _, m := range mine {
 		m.detached = true
 		q.broker.closeWindowLocked(m)
+		dead = append(dead, q.broker.handBackAsideLocked(sub, m, reason)...)
 	}
 	sub.members = slices.DeleteFunc(sub.members, func(m *consumer) bool { return m.client == q })
 	if len(sub.members) == 0 {
 		sub.cursor = 0
 	}
-	return len(mine)
+	return len(mine), dead
 }
 
 // --- publishing -----------------------------------------------------------
@@ -633,7 +659,10 @@ func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) err
 	var targets []*subscription
 	for _, sub := range q.broker.subs {
 		if sub.topic == topic {
-			sub.mail = append(sub.mail, decodeWire(wire, &received))
+			copied := decodeWire(wire, &received)
+			sub.lastArrival++
+			sub.arrived[copied] = sub.lastArrival
+			sub.mail = append(sub.mail, copied)
 			targets = append(targets, sub)
 		}
 	}
@@ -790,7 +819,7 @@ func (b *Broker) ensureLocked(topic, group string) *subscription {
 		return sub
 	}
 	sub := &subscription{topic: topic, group: group, redeliveries: map[uuid.UUID]int{},
-		failed: map[uuid.UUID]struct{}{}}
+		failed: map[uuid.UUID]struct{}{}, arrived: map[*events.Event]uint64{}}
 	b.subs[key] = sub
 	return sub
 }
@@ -860,7 +889,7 @@ func (q *Queue) Unquiesce(ctx context.Context, topic, group string) (bool, error
 // handoff. A peer's consumer on the same subscription is untouched, which is
 // the whole point of the distinction: detaching is a node saying "I have
 // stopped serving this seat", never "nobody is serving it".
-func (q *Queue) Detach(_ context.Context, topic, group string) (bool, error) {
+func (q *Queue) Detach(ctx context.Context, topic, group string) (bool, error) {
 	key := subKey{topic, group}
 	q.broker.mu.Lock()
 	if q.notStartedLocked() {
@@ -881,8 +910,9 @@ func (q *Queue) Detach(_ context.Context, topic, group string) (bool, error) {
 		q.broker.mu.Unlock()
 		return false, nil
 	}
-	dropped := q.dropMembersLocked(sub)
+	dropped, dead := q.dropMembersLocked(sub, "detached")
 	q.broker.mu.Unlock()
+	q.broker.logDeadLetters(ctx, sub, dead)
 	if dropped == 0 {
 		return false, nil
 	}
@@ -1263,24 +1293,51 @@ func (q *Queue) WaitForHandlers(ctx context.Context, timeout time.Duration) (int
 func (q *Queue) enterHandlerLocked() { q.inFlight.Begin() }
 func (q *Queue) exitHandlerLocked()  { q.inFlight.End() }
 
+// Backlog reads the mail a subscription holds without consuming it
+// ([queue.EventQueue.Backlog]): its mailbox, a laned topic's marked events
+// first as the broker's lane holds them ([Queue.Waiting]), at most limit. Mail
+// a drain took and has not dispatched is not in the mailbox, and not read.
+func (q *Queue) Backlog(_ context.Context, topic, group string, limit int) ([]*events.Event, error) {
+	if err := queue.CheckBacklogLimit(limit); err != nil {
+		return nil, err
+	}
+	q.broker.mu.Lock()
+	defer q.broker.mu.Unlock()
+	if q.notStartedLocked() {
+		return nil, ErrNotStarted
+	}
+	if q.broker.down {
+		return nil, ErrBrokerDown
+	}
+	sub, ok := q.broker.subs[subKey{topic, group}]
+	if !ok {
+		return nil, nil
+	}
+	out := slices.Clone(sub.mail)
+	if queue.HasLane(topic) {
+		slices.SortStableFunc(out, func(a, b *events.Event) int {
+			return cmp.Compare(laneRank(a), laneRank(b))
+		})
+	}
+	return out[:min(len(out), limit)], nil
+}
+
+// laneRank orders a laned topic's mail as its two mailboxes hold it: the
+// lane's first.
+func laneRank(ev *events.Event) int {
+	if queue.Prioritized(ev) {
+		return 0
+	}
+	return 1
+}
+
 // --- inspection -----------------------------------------------------------
 //
 // These answer questions the EventQueue contract deliberately does not, and
 // that the properties seat ownership rests on cannot be asserted without:
-// what mail is a subscription holding, which subsystem is gating a seat, which
+// which subsystem is gating a seat, which
 // seats is this node serving. They are exported so that a test never has to
 // read the backend's own registry to ask an operationally central question.
-
-// Backlog reports the events a subscription retains and has not delivered.
-func (q *Queue) Backlog(topic, group string) []*events.Event {
-	q.broker.mu.Lock()
-	defer q.broker.mu.Unlock()
-	sub, ok := q.broker.subs[subKey{topic, group}]
-	if !ok {
-		return nil
-	}
-	return slices.Clone(sub.mail)
-}
 
 // Waiting reports what a subscription holds that no handler is running on
 // ([queue.EventQueue.Waiting]): its mailbox, and what a drain took and has not
@@ -1313,6 +1370,11 @@ func (q *Queue) Waiting(_ context.Context, topic, group string) (queue.Waiting, 
 	}
 	for ev := range sub.drained {
 		count(ev)
+	}
+	for _, m := range sub.members {
+		for _, e := range m.aside {
+			count(e.ev)
+		}
 	}
 	return w, nil
 }

@@ -15,6 +15,13 @@
 // another, or size a sub-agent's budget from a fraction the parent never saw,
 // and then needs a context-local "pin" to paper over it. Passing the snapshot
 // makes the bug unrepresentable, so there is nothing to pin.
+//
+// DID THE TURN REACH ANYBODY is judged from the trigger's type and the tool
+// loop's own record (verify.go), never from a prediction of tools. The record
+// includes a round's elided middle by name and outcome, so a reply posted
+// mid-run is never refuted and posted again. [Acted] decides both whether a
+// `no_action` may end the turn skipped and whether a broken one is run again
+// ([Abandon]), so every correction that turns on an act names its tools.
 package turn
 
 import (

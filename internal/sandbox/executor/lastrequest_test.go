@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
@@ -249,7 +250,7 @@ func openCodeRunStep(message string) string {
 // OPENCODE'S FIGURE IS ITS SESSION'S NEWEST SETTLED MESSAGE THAT MEASURED A PROMPT,
 // read off the message-list pages the run's script printed, newest first, one
 // message a page. Interrupted, refused, in-flight and unmeasured steps are
-// passed over, as an export's are (measure.go's measuredPrompt); the figure is
+// passed over, as an export's are (opencodemeasure.go's measuredPrompt); the figure is
 // the run's own where its stream named that step, else an earlier job's.
 //
 // Mutation: take the newest message whatever it holds, or one in flight, and a
@@ -434,7 +435,7 @@ func TestTheMeasureRidesOutOfTheCollection(t *testing.T) {
 		b.Put(p.Stream(), claudeAssistant("msg_1", "null", claudeUsageOf(20, 4000, 300))+"\n"+result+"\n")
 		b.Put(p.Result(), result)
 		b.Put(p.ExitCode(), "0")
-		res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+		res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 		if err != nil {
 			t.Fatalf("Collect: %v", err)
 		}
@@ -450,7 +451,7 @@ func TestTheMeasureRidesOutOfTheCollection(t *testing.T) {
 		b.Put(p.Result(), openCodeRunStep("msg_1")+"\n"+
 			openCodeContextLine(openCodePage(openCodeSettled("msg_1", 1015, 200, 0)))+"\n")
 		b.Put(p.ExitCode(), "0")
-		res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+		res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 		if err != nil {
 			t.Fatalf("Collect: %v", err)
 		}
@@ -489,7 +490,7 @@ func TestAReadingThatFailedIsSaidAtWarning(t *testing.T) {
 		b.Put(p.Stream(), c.stream+"\n"+result+"\n")
 		b.Put(p.Result(), result)
 		b.Put(p.ExitCode(), "0")
-		if _, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}); err != nil {
+		if _, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil)); err != nil {
 			t.Fatalf("%s: Collect: %v", c.name, err)
 		}
 		var said []string
@@ -532,8 +533,8 @@ func openCodeContextFixture(t *testing.T, version, name string) string {
 // openCodeContextVersions are the releases a real run's message list is kept of.
 var openCodeContextVersions = []string{"2.0.32", "2.2.7"}
 
-// streamLines is a run's stream, its lines.
-func streamLines(stream string) []string {
+// linesOf is a run's stream, its lines.
+func linesOf(stream string) []string {
 	return strings.Split(strings.TrimRight(stream, "\n"), "\n")
 }
 
@@ -552,12 +553,12 @@ func TestARealRunsStreamNamesTheStepsItsSessionsListHolds(t *testing.T) {
 		t.Run(version, func(t *testing.T) {
 			t.Parallel()
 			fixture := func(name string) string { return openCodeContextFixture(t, version, name) }
-			answered, why, _ := executor.StreamRequest(executor.OpenCode{}, append(streamLines(fixture("run1.jsonl")),
+			answered, why, _ := executor.StreamRequest(executor.OpenCode{}, append(linesOf(fixture("run1.jsonl")),
 				openCodeContextLine(strings.TrimSpace(fixture("page-a1.json"))))...)
 			if want := (sandbox.RequestMeasure{Tokens: 1002 + 200, Own: true}); answered != want {
 				t.Errorf("the run that answered reads %+v (%s), want %+v, its own step", answered, why, want)
 			}
-			refused, why, _ := executor.StreamRequest(executor.OpenCode{}, append(streamLines(fixture("run2.jsonl")),
+			refused, why, _ := executor.StreamRequest(executor.OpenCode{}, append(linesOf(fixture("run2.jsonl")),
 				openCodeContextLine(strings.TrimSpace(fixture("page-b1.json"))),
 				openCodeContextLine(strings.TrimSpace(fixture("page-b2.json"))))...)
 			if want := (sandbox.RequestMeasure{Tokens: 1002 + 200}); refused != want {
@@ -605,7 +606,7 @@ func TestTheScriptAsksTheSessionsNewestAssistantMessagesAPageAtATime(t *testing.
 					t.Errorf("the list was asked at %d and the session exported at %d, want after the export:\n%s",
 						asked, exported, strings.Join(run.calls, "\n"))
 				}
-				got, why, _ := executor.StreamRequest(executor.OpenCode{}, streamLines(run.stdout)...)
+				got, why, _ := executor.StreamRequest(executor.OpenCode{}, linesOf(run.stdout)...)
 				if want := (sandbox.RequestMeasure{Tokens: 1002 + 200}); got != want {
 					t.Errorf("the run's stream reads %+v (%s), want %+v:\n%s", got, why, want, run.stdout)
 				}
@@ -682,7 +683,7 @@ func TestTheScriptStopsAtAPageWithNoError(t *testing.T) {
 				if got := listed(t, run); len(got) != 1 {
 					t.Errorf("the list was asked %d times, want once:\n%s", len(got), strings.Join(got, "\n"))
 				}
-				got, why, _ := executor.StreamRequest(executor.OpenCode{}, streamLines(run.stdout)...)
+				got, why, _ := executor.StreamRequest(executor.OpenCode{}, linesOf(run.stdout)...)
 				if want := (sandbox.RequestMeasure{Tokens: 1002 + 200, Own: true}); got != want {
 					t.Errorf("the run's stream reads %+v (%s), want %+v", got, why, want)
 				}
@@ -707,13 +708,13 @@ func TestAPagePastTheBudgetIsSaidAndEndsTheReading(t *testing.T) {
 	forEachShell(t, func(t *testing.T, sh boxShell) {
 		run := runScript(t, scriptOpts{shell: sh, pages: map[string]string{"first": big + "\n"}})
 		marker := fmt.Sprintf(`{"type":"%s","skipped":%d}`, executor.OpenCodeContextEvent, len(big)+1)
-		if !slices.Contains(streamLines(run.stdout), marker) {
+		if !slices.Contains(linesOf(run.stdout), marker) {
 			t.Errorf("the stream does not say the page by its size (%s)", marker)
 		}
 		if strings.Contains(run.stdout, strings.Repeat("a", 1024)) {
 			t.Error("the page past the budget was printed")
 		}
-		got, why, _ := executor.StreamRequest(executor.OpenCode{}, streamLines(run.stdout)...)
+		got, why, _ := executor.StreamRequest(executor.OpenCode{}, linesOf(run.stdout)...)
 		if got != (sandbox.RequestMeasure{}) || !strings.Contains(why, "past the") {
 			t.Errorf("the run's stream reads %+v (%s), want no figure, the page said past the budget", got, why)
 		}
@@ -737,10 +738,10 @@ func TestAPagePastWhatAPipeHoldsIsReadWhole(t *testing.T) {
 		if run.code != 0 {
 			t.Fatalf("exit %d:\n%s", run.code, run.stderr)
 		}
-		if !slices.Contains(streamLines(run.stdout), openCodeContextLine(page)) {
+		if !slices.Contains(linesOf(run.stdout), openCodeContextLine(page)) {
 			t.Errorf("the stream does not hold the %d-byte page whole", len(page))
 		}
-		got, why, _ := executor.StreamRequest(executor.OpenCode{}, streamLines(run.stdout)...)
+		got, why, _ := executor.StreamRequest(executor.OpenCode{}, linesOf(run.stdout)...)
 		if want := (sandbox.RequestMeasure{Tokens: 1015 + 200, Own: true}); got != want {
 			t.Errorf("the run's stream reads %+v (%s), want %+v, the page's own step", got, why, want)
 		}
@@ -772,16 +773,16 @@ func TestThePagesBudgetIsTheirsInAll(t *testing.T) {
 				len(got))
 		}
 		printed, marker := 0, fmt.Sprintf(`{"type":"%s","skipped":%d}`, executor.OpenCodeContextEvent, len(third))
-		for _, line := range streamLines(run.stdout) {
+		for _, line := range linesOf(run.stdout) {
 			if strings.HasPrefix(line, `{"type":"`+executor.OpenCodeContextEvent+`","page":`) {
 				printed++
 			}
 		}
-		if printed != 2 || !slices.Contains(streamLines(run.stdout), marker) {
+		if printed != 2 || !slices.Contains(linesOf(run.stdout), marker) {
 			t.Errorf("the stream holds %d pages and the third said by its size: %v, want two and %s", printed,
-				slices.Contains(streamLines(run.stdout), marker), marker)
+				slices.Contains(linesOf(run.stdout), marker), marker)
 		}
-		got, why, _ := executor.StreamRequest(executor.OpenCode{}, streamLines(run.stdout)...)
+		got, why, _ := executor.StreamRequest(executor.OpenCode{}, linesOf(run.stdout)...)
 		if got != (sandbox.RequestMeasure{}) || !strings.Contains(why, "past the") {
 			t.Errorf("the run's stream reads %+v (%s), want no figure, the third page said past the budget", got,
 				why)
@@ -810,7 +811,7 @@ func TestTheScriptAsksNoMorePagesThanItsBound(t *testing.T) {
 		if got := listed(t, run); len(got) != executor.OpenCodeContextPages {
 			t.Errorf("the list was asked %d times, want %d, the bound", len(got), executor.OpenCodeContextPages)
 		}
-		got, why, _ := executor.StreamRequest(executor.OpenCode{}, streamLines(run.stdout)...)
+		got, why, _ := executor.StreamRequest(executor.OpenCode{}, linesOf(run.stdout)...)
 		if got != (sandbox.RequestMeasure{}) {
 			t.Errorf("the run's stream reads %+v (%s), want no figure past the bound", got, why)
 		}
@@ -892,7 +893,7 @@ func TestTheCursorIsTheAnswersOwn(t *testing.T) {
 			"b3du":    openCodePage(openCodeSettled("msg_2", 1015, 200, 0)),
 			"Ym9ndXM": openCodePage(openCodeSettled("msg_9", 9000, 0, 0)),
 		}})
-		got, why, _ := executor.StreamRequest(executor.OpenCode{}, streamLines(run.stdout)...)
+		got, why, _ := executor.StreamRequest(executor.OpenCode{}, linesOf(run.stdout)...)
 		if want := (sandbox.RequestMeasure{Tokens: 1215}); got != want {
 			t.Errorf("the run's stream reads %+v (%s), want %+v, the page the answer's own cursor names:\n%s", got,
 				why, want, strings.Join(listed(t, run), "\n"))

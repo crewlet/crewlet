@@ -37,6 +37,8 @@ type ExecutorReader interface {
 	Expired(ctx context.Context, cutoff time.Time, limit int) ([]executordomain.Expiry, error)
 	Unended(ctx context.Context, before time.Time, limit int) ([]executordomain.Expiry, error)
 	Handles(ctx context.Context, fresh statelog.Freshness) ([]string, error)
+	SessionHeld(ctx context.Context, sessionID string, fresh statelog.Freshness) (bool, error)
+	HandlesPage(ctx context.Context, after string, fresh statelog.Freshness) (executordomain.HandlesPage, error)
 	SealedKeys(ctx context.Context) (executordomain.SealedCount, error)
 }
 
@@ -105,7 +107,7 @@ var opExecutorHead = define("executor.head", opRead, executorDomain, false,
 			return executordomain.Head{}, err
 		}
 		return r.Head(ctx, a.Handle, a.ConversationKey, a.Fresh)
-	})
+	}).oneAnswer()
 
 type executorSessionArgs struct {
 	Handle string
@@ -122,7 +124,7 @@ var opExecutorSession = define("executor.session", opRead, executorDomain, false
 			return executordomain.SessionRead{}, err
 		}
 		return r.Session(ctx, a.Handle, a.Turn, a.Fresh)
-	})
+	}).oneAnswer()
 
 type executorPageArgs struct {
 	Handle string
@@ -138,7 +140,7 @@ var opExecutorSessions = define("executor.sessions", opRead, executorDomain, fal
 			return executordomain.Page{}, err
 		}
 		return r.Sessions(ctx, a.Handle, a.Cursor, a.Limit, a.Fresh)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 type executorSearchArgs struct {
 	Handle string
@@ -157,7 +159,7 @@ var opExecutorSearch = define("executor.search", opRead, executorDomain, false,
 			return executordomain.SearchPage{}, err
 		}
 		return r.Search(ctx, a.Handle, a.Search, a.Fresh)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 // executorListingArgs is one of the retention duty's listings: the instant it
 // is cut at, and the most it nominates.
@@ -173,7 +175,7 @@ var opExecutorExpired = define("executor.expired", opRead, executorDomain, false
 			return nil, err
 		}
 		return r.Expired(ctx, a.At, a.Limit)
-	})
+	}).perAsked()
 
 var opExecutorUnended = define("executor.unended", opRead, executorDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a executorListingArgs) ([]executordomain.Expiry, error) {
@@ -182,23 +184,41 @@ var opExecutorUnended = define("executor.unended", opRead, executorDomain, false
 			return nil, err
 		}
 		return r.Unended(ctx, a.At, a.Limit)
-	})
+	}).perAsked()
 
 type executorHandlesArgs struct {
+	After string
 	Fresh statelog.Freshness
 }
 
-// Every seat holding a row, or [executordomain.ErrIncomplete] where the node
-// may be missing one: never a shorter list, against which a retirement would
-// find nothing to remove for a departed seat.
+// One page of every seat holding a row, or [executordomain.ErrIncomplete] where
+// the node may be missing one: never a shorter list, against which a
+// retirement would find nothing to remove for a departed seat.
 var opExecutorHandles = define("executor.handles", opRead, executorDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, a executorHandlesArgs) ([]string, error) {
+	func(ctx context.Context, b Backend, _ *Actor, a executorHandlesArgs) (executordomain.HandlesPage, error) {
 		r, err := b.executorReader()
 		if err != nil {
-			return nil, err
+			return executordomain.HandlesPage{}, err
 		}
-		return r.Handles(ctx, a.Fresh)
-	})
+		return r.HandlesPage(ctx, a.After, a.Fresh)
+	}).rowsTo(statelog.AnswerBytes)
+
+type executorSessionHeldArgs struct {
+	SessionID string
+	Fresh     statelog.Freshness
+}
+
+// Whether any turn's row names a session id, one seek over the whole log: what
+// a minted session's bind asks before it binds an id as fresh. An older data
+// node answers it unknown, unserved, and the router asks the next.
+var opExecutorSessionHeld = define("executor.session_held", opRead, executorDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a executorSessionHeldArgs) (bool, error) {
+		r, err := b.executorReader()
+		if err != nil {
+			return false, err
+		}
+		return r.SessionHeld(ctx, a.SessionID, a.Fresh)
+	}).oneAnswer()
 
 // executorSealedArgs carries nothing: the count is the whole log's.
 type executorSealedArgs struct{}
@@ -210,7 +230,7 @@ var opExecutorSealedKeys = define("executor.sealed_keys", opRead, executorDomain
 			return executordomain.SealedCount{}, err
 		}
 		return r.SealedKeys(ctx)
-	})
+	}).oneAnswer()
 
 // ---- the writes: the engine's, each under the operation it carries ---------- //
 
@@ -378,10 +398,33 @@ func (x ExecutorReads) Unended(ctx context.Context, before time.Time, limit int)
 	return call(ctx, x.r, opExecutorUnended, nil, executorListingArgs{At: before, Limit: limit})
 }
 
+// HandlesPage answers one page of the seats holding a row, after after.
+func (x ExecutorReads) HandlesPage(ctx context.Context, after string,
+	fresh statelog.Freshness) (executordomain.HandlesPage, error) {
+	return call(ctx, x.r, opExecutorHandles, nil, executorHandlesArgs{After: after, Fresh: fresh})
+}
+
 // Handles answers every seat holding a row, in order, at the level fresh asks
-// for.
+// for, a page at a time: each page is one answer of its own.
 func (x ExecutorReads) Handles(ctx context.Context, fresh statelog.Freshness) ([]string, error) {
-	return call(ctx, x.r, opExecutorHandles, nil, executorHandlesArgs{Fresh: fresh})
+	var out []string
+	for after := ""; ; {
+		page, err := x.HandlesPage(ctx, after, fresh)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, page.Handles...)
+		if after = page.Next; after == "" {
+			return out, nil
+		}
+	}
+}
+
+// SessionHeld answers whether any turn's row names the session id, at the
+// level fresh asks for.
+func (x ExecutorReads) SessionHeld(ctx context.Context, sessionID string, fresh statelog.Freshness) (bool,
+	error) {
+	return call(ctx, x.r, opExecutorSessionHeld, nil, executorSessionHeldArgs{SessionID: sessionID, Fresh: fresh})
 }
 
 // SealedKeys answers how many sessions sit sealed under each keyring key.

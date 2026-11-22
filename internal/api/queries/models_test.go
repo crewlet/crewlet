@@ -43,6 +43,8 @@ roles:
     handle: qa
     llm: default
     llm_review: codex-review
+advisor:
+  model: default
 `
 
 // fakeModels is the engine's half: what this node resolved.
@@ -248,7 +250,7 @@ func TestAModelsUsersAreTheEnginesResolution(t *testing.T) {
 	}
 	def := uses("default")
 	for _, want := range []string{"pm/executor@0:default-entry", "pm/review@0:default-entry",
-		"qa/executor@0:seat", "qa/subagent@0:executor"} {
+		"qa/executor@0:seat", "qa/subagent@0:executor", "pm/triage@0:default-entry", "qa/triage@0:executor"} {
 		if !slices.Contains(def, want) {
 			t.Errorf("default's users %v lack %s", def, want)
 		}
@@ -257,6 +259,17 @@ func TestAModelsUsersAreTheEnginesResolution(t *testing.T) {
 		if u.Seat == "pm" && (u.Written == nil || *u.Written) {
 			t.Errorf("pm's %s reads as written: %+v", u.Job, u)
 		}
+	}
+	// THE ADVISOR'S MODEL IS A USE like Ask Crewlet's: the entry `advisor.model`
+	// names says so, and no other does.
+	advisorOn := func(key string) bool {
+		return slices.ContainsFunc(entryOf(t, got, key).UsedBy, func(u queries.ModelUse) bool {
+			return u.Advisor == "findings" && u.Position == 0 && u.Seat == ""
+		})
+	}
+	if !advisorOn("default") || advisorOn("codex-review") {
+		t.Errorf("the Advisor's use: default %v, codex-review %v; want default alone",
+			advisorOn("default"), advisorOn("codex-review"))
 	}
 }
 
@@ -323,6 +336,39 @@ func TestAMemberReadsNoCredentialAccountOrSentence(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("a member's reading lacks %s: %s", want, body)
 		}
+	}
+}
+
+// BOTH READINGS NAME THE HARNESSES THIS BUILD RUNS AN EXECUTOR ON, in the
+// profiles' order: the Models screen reads which models can run a seat's
+// coding here, so a runner a build adds reaches it with no dashboard rebuild.
+//
+// Mutation: drop the list from either reading, or serve another order, and
+// this is red.
+func TestBothReadingsNameTheHarnessesThisBuildRunsAnExecutorOn(t *testing.T) {
+	t.Parallel()
+	backend := coordmemory.New()
+	presentNode(t, backend, "node-a", nil)
+	s := modelSources(t, backend)
+	want := config.ExecutorHarnesses()
+	if len(want) == 0 {
+		t.Fatal("this build runs no executor on any harness")
+	}
+	admin := answer(t, s, "llm_entries", nil).(queries.ModelEntriesAnswer)
+	if !slices.Equal(admin.ExecutorHarnesses, want) {
+		t.Errorf("admin reading names %v, want %v", admin.ExecutorHarnesses, want)
+	}
+	s.Now = func() time.Time { return pinned }
+	r := queries.NewRegistry()
+	queries.Register(r, s)
+	member := iam.WithPrincipal(t.Context(), iam.Principal{ID: uuid.New(), Login: "jane",
+		Kind: iam.KindPerson, Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantWorklet}})
+	data, err := r.Answer(member, "llm_entries", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := data.(queries.MemberEntriesAnswer); !ok || !slices.Equal(got.ExecutorHarnesses, want) {
+		t.Errorf("member reading %+v, want executor_harnesses %v", data, want)
 	}
 }
 

@@ -249,9 +249,16 @@ type retention struct {
 
 	// now is the clock every evaluation, every report, every trim tick, the
 	// backup gauge and the alarm tracker's ages read ([retention.clock]) —
-	// the duty's one clock. Nil reads the wall clock; a case sets it to put a
-	// log's first days, or an eviction's fence window, behind it.
+	// the duty's one clock, but for [retention.watch]'s. Nil reads the wall
+	// clock; a case sets it to put a log's first days, or an eviction's fence
+	// window, behind it.
 	now func() time.Time
+
+	// watch is what the trim has watched of each hold, judged on its own
+	// monotonic clock and never on now ([statelog.HoldWatch]). Only read(),
+	// on the run goroutine, uses it. Kept across a lost tenure: a sighting
+	// from an earlier one still bounds the holder's silence from below.
+	watch statelog.HoldWatch
 
 	// beating serialises one alarm evaluation against another: the
 	// heartbeat and the trim tick both evaluate, and two interleaved would
@@ -690,6 +697,7 @@ type fleetInputs struct {
 	positions []coord.NodePositions
 	readable  bool
 	holds     []coord.TrimHold
+	silent    map[string]time.Duration
 	backups   []coord.BackupPoint
 	previous  map[string]coord.TrimFloor
 
@@ -725,7 +733,7 @@ func (r *retention) read(ctx context.Context) (fleetInputs, error) {
 	// row and released its pin between the reads is in neither, and the tick
 	// could purge the tail it just installed itself in front of.
 	var err error
-	if in.holds, err = r.fleet.Holds(ctx); err != nil {
+	if in.holds, in.silent, err = r.watch.Read(ctx, r.fleet); err != nil {
 		return in, fmt.Errorf("read the trim holds: %w", err)
 	}
 
@@ -822,7 +830,7 @@ func (r *retention) domain(ctx context.Context, running *runningLog, shared flee
 	// counted. The report is the one reader that has to say so as well.
 	tombs, _ := r.tombstones(ctx, running, generation)
 	in.Counted = shared.counted(running, tombs)
-	in.Holds = holdsFor(shared.holds, running.spec.Name)
+	in.Holds = holdsFor(shared.holds, shared.silent, running.spec.Name)
 	in.BackupFloor, in.BackupAt, in.BackupFloorGen, in.HasBackupFloor =
 		r.backupTerm(shared.backups, running.spec.Name)
 	in.FeedAckFloor, in.HasFeed, in.FeedReadable = r.feedTerm(ctx, running)
@@ -1181,12 +1189,13 @@ func reportedPositions(rows []coord.NodePositions, domain string) []statelog.Nod
 	return out
 }
 
-// holdsFor is every live pin on one domain's log.
+// holdsFor is every live pin on one domain's log, each with how long the trim
+// has watched it stand unrenewed (silent, by owner).
 //
 // BY STREAM NAME, because that is [coord.TrimHold.Streams]' key space — a hold
 // is a pin on a log, and both the backup and a joining node state theirs from
 // `statelog_cursor`, which is keyed on the stream.
-func holdsFor(holds []coord.TrimHold, stream string) []statelog.Hold {
+func holdsFor(holds []coord.TrimHold, silent map[string]time.Duration, stream string) []statelog.Hold {
 	out := make([]statelog.Hold, 0, len(holds))
 	for _, hold := range holds {
 		at, pins := hold.Streams[stream]
@@ -1194,7 +1203,8 @@ func holdsFor(holds []coord.TrimHold, stream string) []statelog.Hold {
 			continue
 		}
 		out = append(out, statelog.Hold{
-			Owner: hold.Owner, Generation: at.Generation, Seq: at.Seq, At: hold.At,
+			Owner: hold.Owner, Generation: at.Generation, Seq: at.Seq,
+			Silent: silent[hold.Owner],
 		})
 	}
 	return out

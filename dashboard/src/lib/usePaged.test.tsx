@@ -14,6 +14,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { useLayoutEffect, useState } from "react";
 import { expect, test, vi } from "vitest";
 
+import { settled } from "~/test/settle.ts";
 import { usePaged } from "./usePaged.ts";
 import type { QueryResult } from "./useQuery.ts";
 
@@ -150,7 +151,7 @@ test("a refreshed page is read again under its own cursor and replaced in place"
       [12, 11, 10, 9, 8, 7, 6, 4, 3, 2].map((n) => `e-${n}`),
     ),
   );
-  expect(page).toHaveBeenLastCalledWith("8");
+  expect(page).toHaveBeenLastCalledWith("8", null, expect.any(AbortSignal));
   // AND THE PAGER NOW BEGINS WHERE THE PAGE ENDS.
   expect(result.current.more).toBe(true);
 });
@@ -264,7 +265,7 @@ test("a re-read page is never drawn short of the next before the gap is read", a
   );
   act(() => result.current.refresh());
   await waitFor(() => expect(page).toHaveBeenCalledTimes(5));
-  expect(page).toHaveBeenLastCalledWith("11");
+  expect(page).toHaveBeenLastCalledWith("11", null, expect.any(AbortSignal));
   // AS IT WAS LAST DRAWN until the gap has been read — never the re-read
   // page, 15..11, beside the held one under it, 5..1.
   expect(ids(result.current.items)).toEqual(before);
@@ -562,7 +563,7 @@ test("a page that fails keeps the pages held, and next asks it again", async () 
 
   act(() => result.current.next());
   await waitFor(() => expect(result.current.items).toHaveLength(3 * PAGE));
-  expect(page).toHaveBeenLastCalledWith("6");
+  expect(page).toHaveBeenLastCalledWith("6", null, expect.any(AbortSignal));
   expect(ids(result.current.items)).toEqual(down(15, 1).map((n) => `e-${n}`));
   expect(result.current.pageError).toBeNull();
 });
@@ -598,7 +599,7 @@ test("a later page whose cursor is refused starts the list again", async () => {
   // AND THE NEXT PRESS PAGES ON FROM THE FIRST PAGE, saying nothing more.
   act(() => result.current.next());
   await waitFor(() => expect(result.current.items).toHaveLength(2 * PAGE));
-  expect(page).toHaveBeenLastCalledWith("11");
+  expect(page).toHaveBeenLastCalledWith("11", null, expect.any(AbortSignal));
   expect(result.current.restarted).toBe(false);
 });
 
@@ -626,4 +627,104 @@ test("a refused cursor is a page error for a caller that does not restart", asyn
   await waitFor(() => expect(result.current.pageError).toBe("bad_params"));
   expect(result.current.restarted).toBe(false);
   expect(ids(result.current.items)).toEqual(down(15, 6).map((n) => `e-${n}`));
+});
+
+// ---- a window the clock moved ---------------------------------------------------------------
+
+/** An entry, and the window's edge it was read at: a day's count drawn under its day. */
+interface AtAnswer {
+  entries: { id: string; at: string }[];
+  next: string;
+}
+
+/** [pageOf] read at `edge`, each entry carrying it. */
+function pageAt(history: readonly number[], edge: string, cursor = ""): AtAnswer {
+  const answer = pageOf(history, cursor);
+  return { ...answer, entries: answer.entries.map((e) => ({ ...e, at: edge })) };
+}
+
+const atOf = (items: readonly { at: string }[]) => [...new Set(items.map((entry) => entry.at))];
+
+type Edges = { day: string };
+
+function answeredAt(data: AtAnswer, edges: Edges): QueryResult<AtAnswer> & { edges: Edges } {
+  return { data, edges, loading: false, error: null, refusal: null, refetch: () => undefined };
+}
+
+/** The hook over a windowed history, paged back once at the window's first edge. */
+async function windowedBack(history: readonly number[]) {
+  const page = vi.fn(async (cursor: string, edges: Edges | null) =>
+    pageAt(history, edges?.day ?? "none", cursor),
+  );
+  const view = renderHook(
+    ({ first }: { first: QueryResult<AtAnswer> & { edges: Edges } }) =>
+      usePaged(first, { ...PARAMS, window: "7d" }, page, pickAt, idOf, cursorAt),
+    { initialProps: { first: answeredAt(pageAt(history, "d1"), { day: "d1" }) } },
+  );
+  act(() => view.result.current.next());
+  await waitFor(() => expect(view.result.current.items).toHaveLength(2 * PAGE));
+  return { ...view, page };
+}
+
+const pickAt = (answer: AtAnswer) => answer.entries;
+const cursorAt = (answer: AtAnswer) => answer.next;
+
+// A MOVED WINDOW MOVES THE WHOLE LIST AT ONCE: every held page is read again at the edges the
+// first page now carries, and until each is, the list is drawn as it was, at the old edges, never
+// a first page of one day beside held pages of another. Mutation: draw the moved first page as
+// soon as it lands, or keep the held pages read at the old edges, and the days mix.
+test("a window that moved reads every held page again at its edges, and moves in one step", async () => {
+  const history = down(12, 1);
+  const { result, rerender, page } = await windowedBack(history);
+  expect(page).toHaveBeenLastCalledWith("8", { day: "d1" }, expect.any(AbortSignal));
+  expect(result.current.edges).toEqual({ day: "d1" });
+  let release: () => void = () => undefined;
+  page.mockImplementationOnce(
+    (cursor: string, edges: Edges | null) =>
+      new Promise<AtAnswer>((resolve) => {
+        release = () => resolve(pageAt(history, edges?.day ?? "none", cursor));
+      }),
+  );
+  rerender({ first: answeredAt(pageAt(history, "d2"), { day: "d2" }) });
+  await waitFor(() =>
+    expect(page).toHaveBeenLastCalledWith("8", { day: "d2" }, expect.any(AbortSignal)),
+  );
+  expect(atOf(result.current.items)).toEqual(["d1"]);
+  expect(result.current.items).toHaveLength(2 * PAGE);
+  expect(result.current.edges).toEqual({ day: "d1" });
+  act(() => release());
+  await waitFor(() => expect(atOf(result.current.items)).toEqual(["d2"]));
+  expect(result.current.items).toHaveLength(2 * PAGE);
+  expect(result.current.edges).toEqual({ day: "d2" });
+  // AND THE NEXT PAGE IS ASKED AT THE EDGES DRAWN.
+  act(() => result.current.next());
+  await waitFor(() => expect(result.current.items).toHaveLength(12));
+  expect(page).toHaveBeenLastCalledWith("3", { day: "d2" }, expect.any(AbortSignal));
+});
+
+// A HELD PAGE THAT CANNOT BE READ AT THE MOVED WINDOW ends the list there, and says why: what it
+// held was read at the old edges. Mutation: keep it, and an old day's rows stay under the new.
+test("a held page not read again at the moved window ends the list there", async () => {
+  const history = down(12, 1);
+  const { result, rerender, page } = await windowedBack(history);
+  page.mockImplementationOnce(async () => {
+    throw new Error("unavailable");
+  });
+  rerender({ first: answeredAt(pageAt(history, "d2"), { day: "d2" }) });
+  await waitFor(() => expect(result.current.pageError).toBe("unavailable"));
+  expect(atOf(result.current.items)).toEqual(["d2"]);
+  expect(ids(result.current.items)).toEqual(down(12, 8).map((n) => `e-${n}`));
+  expect(result.current.edges).toEqual({ day: "d2" });
+});
+
+// THE SAME EDGES ASK NOTHING AGAIN: a poll that answers at the window it was at is joined as any
+// newest page is. Mutation: compare the edges by identity, and every poll re-reads every page.
+test("a first page at the same edges joins without reading the held pages again", async () => {
+  const history = down(12, 1);
+  const { result, rerender, page } = await windowedBack(history);
+  const asked = page.mock.calls.length;
+  rerender({ first: answeredAt(pageAt(history, "d1"), { day: "d1" }) });
+  await settled(() => page.mock.calls.length);
+  expect(page).toHaveBeenCalledTimes(asked);
+  expect(atOf(result.current.items)).toEqual(["d1"]);
 });

@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,12 +12,14 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/crewlet/crewlet/internal/executorkeep"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
+func init() { Register(ClaudeCode{}) }
+
 // ClaudeCodeName is this runner's config name.
-const ClaudeCodeName = sandbox.ClaudeCodeHarness
+const ClaudeCodeName = "claude-code"
 
 // ClaudeCode drives Claude Code headless.
 //
@@ -45,10 +48,6 @@ func (ClaudeCode) Name() string { return ClaudeCodeName }
 
 // Resumes says Claude Code continues a session it reported (`--resume`).
 func (ClaudeCode) Resumes() bool { return true }
-
-// HoldsToItsMCPServers says a Claude Code run can be held to the MCP servers
-// it is handed (`--strict-mcp-config`), which the assistant's deep work asks.
-func (ClaudeCode) HoldsToItsMCPServers() bool { return true }
 
 // NoteInstruction is the standing instruction about notes: a run takes a
 // person's notes between its steps through two hooks ([Paths.ClaudeNotesSettings],
@@ -109,6 +108,17 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 		// reach is its box's cell's to bound (`container` and `e2b` keep it off the
 		// engine host, `direct` does not) beside the run env's credentials.
 		"--permission-mode", "bypassPermissions",
+	}
+	// THE ENTRY'S WEB TOOLS OFF where it denies them, as its runs on the engine
+	// host have none: on 2.1.330, under bypassPermissions, both are refused as
+	// "disabled for this session, in subagents as well as here", and a
+	// repository's settings allowing them, or an agent of its own listing them,
+	// do not bring them back. Before "$@", whose first value is a flag, so the
+	// list takes these two alone.
+	if req.WebDenied {
+		parts = append(parts, "--disallowedTools", "WebFetch", "WebSearch")
+	}
+	parts = append(parts,
 		// WHAT THE SCRIPT DECIDED BY THE HARNESS'S RELEASE: the run's settings, and
 		// the session, NAMED ON EVERY RUN ([claudeSessionGate]): a new one under the
 		// minted id (`--session-id`), a continued one with `--resume` and never
@@ -117,7 +127,7 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 		// reuses the prompt its first request recorded, so a later launch's
 		// standing instructions would never be read.
 		`"$@"`,
-	}
+	)
 	// THE SYSTEM TEXT IS APPENDED, NOT SUBSTITUTED (never argv, [Paths.System]):
 	// Claude Code's own prompt stays whole, being how to drive its tools. Passed
 	// only for a run that has system text.
@@ -137,18 +147,9 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	if configPath != "" {
 		parts = append(parts, "--mcp-config", sandbox.ShellQuote(configPath))
 	}
-	// THE SERVERS IT IS HANDED ALONE only for a run held to them
-	// ([sandbox.RunRequest.OnlyMCPServers]): the assistant's deep work, with
-	// or without a file of servers. A seat's executor starts what Claude Code
-	// starts for a person beside the engine's servers: the box's own user- and
-	// local-scope servers, the repository's .mcp.json — which a print-mode run
-	// connects without the approval it has nobody to ask for (the vendor's MCP
-	// page, "Project scope") — a plugin's, and the signed-in account's claude.ai
-	// connectors. It used to run strict everywhere, which kept a repository's
-	// own tool servers and the box's from every seat.
-	if req.OnlyMCPServers {
-		parts = append(parts, "--strict-mcp-config")
-	}
+	// NO --strict-mcp-config: beside the engine's servers the run starts what
+	// Claude Code starts for a person, the box's, the repository's .mcp.json, a
+	// plugin's and the signed-in account's connectors.
 
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
@@ -208,6 +209,12 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	// ([parseSessionRecord]).
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$s" "$k" "$w" "$v" > %s`,
 		sandbox.ShellQuote(paths.SessionRecord()))
+	// THE SIGN-IN STAYS THE HARNESS'S: its own environment keeps it, and the
+	// file it runs ahead of every command its model runs takes it out of that
+	// command's ([claudeToolEnv]).
+	if len(req.SignInEnv) > 0 {
+		line(`export CLAUDE_ENV_FILE=%s`, sandbox.ShellQuote(paths.ClaudeToolEnv()))
+	}
 	b.WriteString(launchHarness(strings.Join(parts, " "), paths))
 	b.WriteString(claudeCapture(paths))
 	line(`exit "$code"`)
@@ -422,7 +429,7 @@ func claudeSessionGate(session Session, paths Paths, rewired bool) string {
 	// own instead, and the copy restored is never gone on past. Recorded
 	// before the restore, a restore that failed after the box's own copy
 	// went would leave the line naming a copy that does not hold it.
-	line(`  elif ! { %s; }; then w=%s`, recordDigest(paths, "s", "d"), q(restoreDigestUnrecorded))
+	line(`  elif ! { %s; }; then w=%s`, recordDigest(paths, "s"), q(restoreDigestUnrecorded))
 	line(`  fi`)
 	line(`  rm -rf %s`, q(staged))
 	line(`fi`)
@@ -714,15 +721,14 @@ const heldClockWaits = 50
 // heldPlainMax is the most plaintext a pack beside a working harness packs
 // ([claudeHeldTar]), and the most an OpenCode pack on demand exports
 // ([openCodePack]): the most one reading of an archive yields to a kept
-// session's scrub, [scrubExpansion] times the bound a kept session's archive is
-// held to (executorkeep.SessionMaxBytes), a quarter of a gibibyte. A session
+// session's scrub ([scrubPlainMax]). A session
 // whose files add up past it is refused by the take once packed, so it is not
 // packed at all: its tar beside a working harness would cost that harness's box
 // some seconds of a core — a pack runs at about 43 MiB/s on one, measured — and
 // a moment of as much disk, for an archive nothing would keep. A file's size
 // is its plaintext and not quite the tar's, which adds a header to each, so
 // the bound refuses what the scrub would and never more.
-const heldPlainMax = scrubExpansion * executorkeep.SessionMaxBytes
+const heldPlainMax = scrubPlainMax
 
 // floorParts is a MAJOR.MINOR.PATCH version's three numbers, as text.
 func floorParts(version string) (major, minor, patch string) {
@@ -756,7 +762,10 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 			return "", fmt.Errorf("executor: writing the system prompt: %w", err)
 		}
 	}
-	pin := claudeSettingsPin(sandbox.ClaudeCodeWindow(req.Model))
+	if err := writeClaudeToolEnv(ctx, box, req, paths); err != nil {
+		return "", err
+	}
+	pin := claudeSettingsPin(claudeCodeWindow(req.Model))
 	if err := writeClaudeSettingsPair(ctx, box, paths.ClaudeSettings(), paths.ClaudeSettingsPinned(),
 		newClaudeSettings(nil), newClaudeSettings(pin)); err != nil {
 		return "", err
@@ -798,6 +807,32 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 		}
 	}
 	return paths.MCPConfig(), nil
+}
+
+// writeClaudeToolEnv writes, for a run handed sign-in variables
+// ([sandbox.RunRequest.SignInEnv]), the file [Paths.ClaudeToolEnv] holding
+// [claudeToolEnv] of them.
+func writeClaudeToolEnv(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) error {
+	if len(req.SignInEnv) == 0 {
+		return nil
+	}
+	names, err := toolEnvOmitted(req.SignInEnv)
+	if err != nil {
+		return err
+	}
+	if err = box.WriteFile(ctx, paths.ClaudeToolEnv(), claudeToolEnv(names)); err != nil {
+		return fmt.Errorf("executor: writing the run's tool environment file: %w", err)
+	}
+	return nil
+}
+
+// claudeToolEnv is the file CLAUDE_ENV_FILE names for a run whose sign-in is
+// names: one `unset` of them. Claude Code runs that file in the shell of each
+// command its model runs, ahead of the command, and reads its own sign-in from
+// its process environment, which the file never reaches (measured on 2.1.330:
+// the commands lacked every name, and every request carried the sign-in).
+func claudeToolEnv(names []string) []byte {
+	return []byte("unset " + strings.Join(names, " ") + "\n")
 }
 
 // writeClaudeSettingsPair writes one of a run's settings files twice: settings
@@ -895,7 +930,7 @@ func (ClaudeCode) Output(paths Paths) Output {
 // Pins is the session's layout ([claudeSessionLayout]) under the window of the
 // model req's run works under, logging a model whose window this build does not know.
 func (ClaudeCode) Pins(ctx context.Context, req sandbox.RunRequest, paths Paths) []Pinned {
-	window := sandbox.ClaudeCodeWindow(req.Model)
+	window := claudeCodeWindow(req.Model)
 	if !window.Known {
 		log.WarnContext(ctx, "executor_context_window_unknown", "model", req.Model,
 			"window_tokens", window.Tokens, "detail", "this build does not know the model's context "+
@@ -937,7 +972,7 @@ func claudeSessionLayout(paths Paths, window sandbox.ExecutorWindow) []Pinned {
 		// second memory the engine's calls are kept from (docs/concepts/llm-backends.md,
 		// "Between turns").
 		{Name: "CLAUDE_CODE_DISABLE_AUTO_MEMORY", Value: "1"},
-		// The model's window ([sandbox.ClaudeCodeWindow]), compacted at less the
+		// The model's window ([claudeCodeWindow]), compacted at less the
 		// harness's headroom; a subagent's `autoCompactWindow` can only LOWER it
 		// (2.1.312+), so no request carries more. The switches that move it are
 		// unset ([claudeCompactionOff]) and pinned in the settings.
@@ -1173,7 +1208,8 @@ var claudeResumeSwitches = []string{"CLAUDE_CODE_RESUME_INTERRUPTED_TURN", "CLAU
 // Events is a new decoder for one stream, read whole or followed ([Decoder]).
 func (ClaudeCode) Events() Decoder { return &claudeEvents{} }
 
-// Parse maps the harness's result, the stream's last line, onto a result.
+// Parse maps the harness's result, the stream's last line, onto a result,
+// decoded from the bytes as read ([wireAlias]), never a copy of them.
 //
 // TOLERANT BY DESIGN: non-JSON or partial output yields a FAILED result
 // carrying an account of it, never an error, so a crashed harness surfaces as
@@ -1183,14 +1219,14 @@ func (ClaudeCode) Events() Decoder { return &claudeEvents{} }
 // holds the stream's LAST LINE, whatever it was: a run that died part-way leaves
 // an assistant message or tool result there, which has no subtype and no
 // is_error and, read as a result, was a run that SUCCEEDED and said nothing.
-func (ClaudeCode) Parse(stdout string) sandbox.Result {
-	text := strings.TrimSpace(stdout)
-	if text == "" {
+func (ClaudeCode) Parse(result []byte) sandbox.Result {
+	text := bytes.TrimSpace(result)
+	if len(text) == 0 {
 		return sandbox.Result{Error: "the harness produced no output"}
 	}
 	msg, ok := decodeClaudeResult(text)
 	if !ok {
-		if last := lastLine(text); strings.HasPrefix(last, "{") {
+		if last := lastLine(text); len(last) > 0 && last[0] == '{' {
 			// A LINE THAT STARTS AN OBJECT AND IS NOT ONE is a message the
 			// process stopped writing part-way, not an account of anything:
 			// its fragment — of a file it read, as like as not — is no use to
@@ -1199,17 +1235,9 @@ func (ClaudeCode) Parse(stdout string) sandbox.Result {
 				"that is not a whole JSON object (%s), so it never reported how its run ended",
 				humanSize(int64(len(last))))}
 		}
-		// THE OUTPUT IS THE FAILURE'S DETAIL, WHOLE. Unparseable output is
-		// the case where the text IS the account — there is no structured
-		// field to fall back to — and the useful part of it (the actual
-		// error, after the banner and the warnings) is at the END, which a
-		// head cut discarded and a tail cut kept only by luck of size. It
-		// is carried as the Error rather than as a report, because it is
-		// not one: the coordinator condenses a failure past the record's
-		// bound keeping its cause, where a report keeps its findings.
-		return sandbox.Result{
-			Error: "the harness's output could not be parsed:\n" + text,
-		}
+		// Carried as the Error rather than as a report, because it is not
+		// one: the coordinator condenses a failure keeping its cause.
+		return sandbox.Result{Error: unparsedFailure(text)}
 	}
 	if msg.Type != "result" {
 		what := "an object with no type"
@@ -1220,12 +1248,15 @@ func (ClaudeCode) Parse(stdout string) sandbox.Result {
 			"the last thing it printed was " + what + ", not its result"}
 	}
 
+	// TRIMMED, as a report is, and so the very string a failure's why is
+	// ([claudeResult.why]), which a collection redacts once for both.
+	said := strings.TrimSpace(msg.Result)
 	res := sandbox.Result{
-		Text:          msg.Result,
+		Text:          said,
 		Success:       msg.succeeded(),
 		SessionID:     msg.SessionID,
 		CostUSD:       msg.TotalCostUSD,
-		DeliveredRefs: deliveredRefs(msg.Result),
+		DeliveredRefs: deliveredRefs(said),
 		// The run's own model turns, as its loop counted them: the
 		// provider calls the run made, which the engine never saw.
 		Turns: msg.NumTurns,
@@ -1248,10 +1279,40 @@ func (ClaudeCode) Parse(stdout string) sandbox.Result {
 		// THE LINE ITSELF, for the reader that classifies how the run
 		// ended by the vendor's status rather than its words: a spent plan
 		// is `is_error` with `api_error_status` 429, whatever the sentence
-		// in `result` says this release ([sandbox.Result.Event]).
-		res.Event = text
+		// in `result` says this release ([sandbox.Result.Event]). Only one
+		// the record carries: a longer one is dropped where the box is read
+		// ([sandbox.MaxRunEventBytes]), and copied here it would hold the line again.
+		if len(text) <= sandbox.MaxRunEventBytes {
+			res.Event = string(text)
+		}
 	}
 	return res
+}
+
+// unparsedShownBytes is the most of an unparseable output a failure quotes:
+// half of what a runner's failure may be ([sandbox.MaxFailureBytes]), the
+// error stream's end, which says the cause as the output's end does, given the
+// rest ([failureDetail]).
+const unparsedShownBytes = sandbox.MaxFailureBytes / 2
+
+// unparsedFailure is the failure of output that is no result: the output whole
+// within [unparsedShownBytes], since the useful part (the error after the banner
+// and the warnings) is at its END; past it, that end as [streamEnd] shows the
+// error stream's, redacted before it is cut, and the output's size. Never more:
+// a failure's head is never cut ([failureDetail]), so a whole output past the
+// bound would ride the failure at up to [sandbox.MaxFileBytes].
+func unparsedFailure(text []byte) string {
+	const opening = "the harness's output could not be parsed"
+	if len(text) <= unparsedShownBytes {
+		return opening + ":\n" + string(text)
+	}
+	size := humanSize(int64(len(text)))
+	window := string(text[len(text)-unparsedShownBytes-redact.LookBack:])
+	if shown, _ := settledEnd(window, redact.LookBack, unparsedShownBytes); shown != "" {
+		return opening + " (" + size + "; its end shown):\n" + shown
+	}
+	return fmt.Sprintf("%s: it is %s, and its last %s are one line begun before them, so none of it is shown",
+		opening, size, humanSize(unparsedShownBytes))
 }
 
 // claudeMaxTurns is the result subtype of a run that reached its --max-turns.
@@ -1307,7 +1368,7 @@ type claudeResult struct {
 }
 
 // claudeResultWire is the result message as its one decode leaves it
-// ([wireDecode]): each key a [claudeResult] holds, by its exact name and raw,
+// ([wireAlias]): each key a [claudeResult] holds, by its exact name and raw,
 // read into the result by [claudeResultWire.result].
 type claudeResultWire struct {
 	Type            json.RawMessage `json:"type"`
@@ -1671,24 +1732,59 @@ func (r claudeResult) errorsSaid() string {
 
 // decodeClaudeResult reads the result message: the one line the result file
 // holds, which the wrapper copied from the end of the stream.
-func decodeClaudeResult(text string) (claudeResult, bool) {
-	if !strings.HasPrefix(text, "{") {
+func decodeClaudeResult(text []byte) (claudeResult, bool) {
+	if len(text) == 0 || text[0] != '{' {
 		return claudeResult{}, false
 	}
 	// A WHOLE OBJECT IS A RESULT'S ACCOUNT, whatever its keys hold: its decode
 	// fails only where the line is no whole JSON object, and a key of another
 	// kind than its field's is read loosely ([claudeResultWire.result]).
 	var w claudeResultWire
-	if wireDecode([]byte(text), &w) != nil {
+	if wireAlias(text, &w) != nil {
 		return claudeResult{}, false
 	}
 	return w.result(), true
 }
 
 // lastLine is the text's last line, trimmed.
-func lastLine(text string) string {
-	if i := strings.LastIndexByte(text, '\n'); i >= 0 {
+func lastLine(text []byte) []byte {
+	if i := bytes.LastIndexByte(text, '\n'); i >= 0 {
 		text = text[i+1:]
 	}
-	return strings.TrimSpace(text)
+	return bytes.TrimSpace(text)
+}
+
+// threadTraits is what Claude Code's main-thread read settles: a cut-off copy
+// is counted (its thread is the copy itself), its hooks' serves show in the
+// thread, and a capture is raised only where its release's resume was read.
+func (ClaudeCode) threadTraits() sandbox.ThreadTraits {
+	return sandbox.ThreadTraits{CountsCutOff: true, Receipts: true, PlacesWithResumeRead: true}
+}
+
+// sessionTraits is how a relaunch judges a Claude Code session: by the run's
+// window, its calls keyed by their own ids, a brief at
+// [claudeChargeBytes].
+func (ClaudeCode) sessionTraits() sandbox.SessionTraits {
+	return sandbox.SessionTraits{FirstRequest: sandbox.FirstRequestWindow, CallKeying: sandbox.CallKeyingByCallID,
+		Charge: claudeChargeBytes}
+}
+
+// resumeRead reports whether release is one whose resume this build read
+// ([claudeResumeRead]).
+func (ClaudeCode) resumeRead(release string) bool { return claudeResumeRead(release) }
+
+// notesOffWhy is what switches Claude Code's reading of notes off.
+func (ClaudeCode) notesOffWhy() string {
+	return "a managed policy that allows only managed hooks (allowManagedHooksOnly, " +
+		"strictPluginOnlyCustomization) or disables every hook (disableAllHooks), or a release older than " +
+		"2.1.163, the oldest whose Stop hook's answer reaches the model, which the run starts without its " +
+		"hooks and whose error stream says so"
+}
+
+// artifacts is what a Claude Code run leaves in its box of its own.
+func (ClaudeCode) artifacts(p Paths) (files, dirs []string) {
+	return []string{p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(), p.ClaudeSkillsSettings(),
+			p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.ClaudeSkillsSettingsPinned(),
+			p.ClaudeToolEnv()},
+		[]string{p.ClaudeSkillsPlugin()}
 }

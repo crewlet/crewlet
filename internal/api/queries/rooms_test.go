@@ -95,6 +95,12 @@ func (emptyAdvisor) Finding(context.Context, string, statelog.Freshness) (adviso
 func (emptyAdvisor) Episodes(context.Context, string, statelog.Freshness) ([]advisordomain.FindingRow, error) {
 	return nil, nil
 }
+func (emptyAdvisor) LiveProgress(context.Context, statelog.Freshness) (string, []advisordomain.ProgressLine, bool, error) {
+	return "", nil, false, nil
+}
+func (emptyAdvisor) RunProgress(context.Context, string, statelog.Freshness) ([]advisordomain.ProgressLine, error) {
+	return nil, nil
+}
 func (emptyAdvisor) LatestRun(context.Context, statelog.Freshness) (advisordomain.RunRow, bool, error) {
 	return advisordomain.RunRow{}, false, nil
 }
@@ -169,6 +175,8 @@ func everySeam(t *testing.T) queries.Sources {
 		Delegated: emptyVerdicts{},
 		// AND WHAT A RULE CAN NAME FROM THE COMPANY'S GITHUB.
 		DelegatedGitHub: ruleGitHub{},
+		// WHAT AGENTS CHANGED ON THE GROWTH ACCOUNTS, off the same empty log.
+		Growth: emptyGrowth{},
 		// THE ATLAS, read off a node that runs no company yet.
 		Atlas:    builtin.AtlasDeps{},
 		Insights: coordmemory.NewFleet(),
@@ -195,6 +203,8 @@ func everySeam(t *testing.T) queries.Sources {
 		ChatSearch: emptyChat{},
 		ChatDraft:  emptyChat{},
 		ChatReads:  coordmemory.NewFleet(),
+		// A PERSON'S HOME BOARD, the coordination twin's.
+		HomeBoards: coordmemory.NewFleet(),
 		// THE MODEL QUESTIONS, each its own seam: what this node resolved
 		// for each model, the fleet's device sign-ins, and the catalogue a
 		// model step suggests from. Every engine that serves the API wires
@@ -279,6 +289,18 @@ func (emptyChat) Reach(_ context.Context, _ chatlet.Actor, channelID, _ string,
 // emptyWork and emptyPages are the native readers with nothing in them, on
 // fakeChannels' terms: this sweep is about which NAMES exist.
 type emptyWork struct{}
+
+func (emptyWork) FlowHours(context.Context, worklet.FlowHoursQuery) ([]worklet.FlowHours, error) {
+	return nil, nil
+}
+
+func (emptyWork) FlowItems(context.Context, worklet.FlowHoursQuery) (map[string]int, error) {
+	return map[string]int{}, nil
+}
+
+func (emptyWork) FlowPickups(context.Context, worklet.FlowHoursQuery) ([]time.Duration, error) {
+	return []time.Duration{}, nil
+}
 
 func (emptyWork) Tasks(context.Context, worklet.Query, time.Time) (worklet.Answer, error) {
 	return worklet.Answer{}, nil
@@ -513,15 +535,7 @@ var readOutsideTheDashboard = map[string]string{
 	"research_page":     "Ask Crewlet's fetch_web_page, over GET /research/page (ADR-0151)",
 	"research_search":   "Ask Crewlet's search_web, over GET /research/search (ADR-0151)",
 	"code_repo_readers": "an admin's script: GET /gitlet/repos/{name}/readers, as docs/guides/gitlet.md prints it",
-	// THE TRACKER'S OWN INBOX: the dashboard reads it composed with Gitlet's
-	// through `inbox`; this stays the tracker's question and its tool's
-	// (`work_inbox`), read by a script on the path the reference prints.
-	"work_inbox": "a script: GET /worklet/inbox, as docs/reference/api-endpoints.md prints it, and Worklet's " +
-		"own tool work_inbox",
-	// THE ADVISOR'S WEEKLY REPORTS, read by a script until the Advisor page's
-	// Reports tab reads them; that tab makes these lines red, and they go.
-	"advisor_reports": "an admin's script: GET /advisor/reports, as docs/guides/advisor.md prints it",
-	"advisor_report":  "an admin's script: GET /advisor/reports/{week}, as docs/guides/advisor.md prints it",
+	"advisor_capacity":  "the Advisor's deep run and an admin's script: GET /advisor/capacity (docs/guides/advisor.md)",
 }
 
 // AND THE SWEEP ITSELF CANNOT GO QUIET.
@@ -776,10 +790,16 @@ func (emptyVerdicts) OpenVerdict(accessdomain.VerdictRow) (string, string, []str
 	return "", "", nil, nil
 }
 
+type emptyGrowth struct{}
+
+func (emptyGrowth) Changes(context.Context, accessdomain.GrowthQuery, statelog.Freshness) (accessdomain.GrowthPage, error) {
+	return accessdomain.GrowthPage{Complete: true}, nil
+}
+
 // noResearch reads no page, for the sweep that only needs the seat filled.
 type noResearch struct{}
 
-func (noResearch) Read(context.Context, []string, string, int) (research.Page, error) {
+func (noResearch) Read(context.Context, string, int) (research.Page, error) {
 	return research.Page{}, nil
 }
 

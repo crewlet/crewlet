@@ -8,7 +8,8 @@ import { Histogram, VisuallyHidden } from "@crewlethq/ui";
 import { useClock } from "~/lib/clock.ts";
 import { civilAt, civilKey, fmtDateCompact, plural, readerDay } from "~/lib/format.ts";
 import { zone } from "~/lib/prefs.ts";
-import { dayStartIn } from "~/lib/range.ts";
+import { dayStartIn, type ClockEdge } from "~/lib/range.ts";
+import type { CodeEdges } from "~/lib/useCodeQuery.ts";
 import "~/styles/gitlet.css";
 
 /** Who pushes here counts the reader's last 30 days, today included. */
@@ -24,20 +25,31 @@ const DAY_MS = 86_400_000;
  * The first instant of each of the reader's `days` days ending with `today` (a `YYYY-MM-DD` in
  * `inZone`), then tomorrow's: `days + 1` RFC 3339 instants, each a midnight found in the zone.
  */
-export function pushDayBounds(today: string, days: number, inZone: string = zone()): string[] {
+export function pushDayBounds(today: string, days: number, inZone: string = zone()): ClockEdge[] {
   const at = civilAt(today);
   if (at === null) return [];
-  const bounds: string[] = [];
+  const bounds: ClockEdge[] = [];
   for (let i = 1 - days; i <= 1; i++) {
     const start = dayStartIn(civilKey(at + i * DAY_MS), inZone);
     if (start === null) return [];
-    bounds.push(new Date(start).toISOString().replace(".000Z", "Z"));
+    bounds.push(new Date(start).toISOString().replace(".000Z", "Z") as ClockEdge);
   }
   return bounds;
 }
 
+/**
+ * The window a read counted on the reader's days is named by (`lib/useCodeQuery.ts`): its days
+ * are its edges (`day_bounds`), so the reader's midnight is no new question.
+ */
+export const SPARK_WINDOW = "reader-days";
+
+/** The day bounds a read was asked at, from the edges its answer carries; none before one. */
+export function boundsOf(edges: CodeEdges | null): readonly string[] {
+  return edges?.day_bounds?.split(",") ?? [];
+}
+
 /** [pushDayBounds] for the reader's today, moving once a day rather than every tick. */
-export function useDayBounds(days: number): readonly string[] {
+export function useDayBounds(days: number): readonly ClockEdge[] {
   const today = useClock((now) => readerDay(now));
   const inZone = zone();
   return useMemo(() => pushDayBounds(today, days, inZone), [today, days, inZone]);

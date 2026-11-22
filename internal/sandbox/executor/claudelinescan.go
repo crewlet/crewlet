@@ -80,9 +80,11 @@ type threadReader struct {
 	// an error of r. Every Next answers it from then on.
 	end error
 	// src is the line being read, and scan the scanner that reads it, reset
-	// to each line and kept across lines and members.
-	src  lineSource
-	scan *jsonscan.Scanner
+	// to each line and kept across lines and members; bytes the line's byte
+	// facts, src's tee.
+	src   lineSource
+	scan  *jsonscan.Scanner
+	bytes lineBytes
 	// dec is the pass's own scratch, kept across lines and members.
 	dec lineDecoder
 	// valueMax is [threadValueMax] and meterMax [threadLineMax]; the
@@ -127,6 +129,7 @@ func newThreadReaderSize(r io.Reader, maxBytes int64, chunk int) *threadReader {
 	// back r itself where r is a *bufio.Reader of the size, and a later Reset
 	// would then reset the caller's reader.
 	t := &threadReader{r: bufio.NewReaderSize(nil, chunk), valueMax: threadValueMax, meterMax: threadLineMax}
+	t.src.tee = &t.bytes
 	t.scan = jsonscan.New(&t.src)
 	t.Reset(r, maxBytes, threadLinesMax)
 	return t
@@ -203,6 +206,7 @@ func (t *threadReader) Next(ctx context.Context) (threadLine, error) {
 		return threadLine{}, t.end
 	}
 	t.src.reset(ctx, t.r, t.left)
+	t.bytes.reset()
 	facts := new(lineFacts)
 	t.scan.Reset(&t.src)
 	t.dec.reset(t.valueMax, t.meterMax)
@@ -260,7 +264,7 @@ func (t *threadReader) Torn() bool { return t.torn }
 // ([lineDecoder.passedOver]), errThreadBound, ending the reading; else the
 // record, each frame settled to its type ([settle]).
 func (t *threadReader) commit(scanned error, facts *lineFacts) (threadLine, error) {
-	size, read := int(t.src.n+1), t.src.bytes.facts()
+	size, read := int(t.src.n+1), t.bytes.facts()
 	refused := func(err error, fault lineFault, kind recordKind) (threadLine, error) {
 		return threadLine{}, &threadLineError{N: t.n, Err: err, Fault: fault, Type: kind, Size: size, Bytes: read}
 	}
@@ -362,9 +366,10 @@ func scanFault(e *jsonscan.Error) lineFault {
 
 // lineSource is one line of the member, its break kept back: the reader the
 // scanner reads the line through. Every byte it takes of the member it
-// counts against what is left of the member's bound and writes to the line's
-// byte facts ONCE, as it takes it, and then hands it over, or passes it over
-// ([lineSource.drain]).
+// counts against what is left of the member's bound and writes to its tee
+// ONCE, as it takes it, and then hands it over, or passes it over
+// ([lineSource.drain]). The tee is the thread layer's byte facts
+// ([lineBytes]), and none for a reader that keeps none.
 type lineSource struct {
 	// ctx is the Next in progress's; nil between calls.
 	ctx context.Context
@@ -383,8 +388,9 @@ type lineSource struct {
 	// cause is what ended the line otherwise: io.EOF (the member's end),
 	// errLineMember, ctx's error, or the member's reader's own error.
 	cause error
-	// bytes is the line's byte facts, read as its bytes are taken.
-	bytes lineBytes
+	// tee is what each byte taken is written to, nil for nothing; its
+	// writes never fail.
+	tee io.Writer
 }
 
 // reset makes s the next line of the member r reads, which may take left
@@ -392,7 +398,6 @@ type lineSource struct {
 func (s *lineSource) reset(ctx context.Context, r *bufio.Reader, left int64) {
 	s.ctx, s.r, s.left = ctx, r, left
 	s.pending, s.n, s.broke, s.cause = nil, 0, false, nil
-	s.bytes.reset()
 }
 
 // Read reads the line's next bytes into p, up to its break: io.EOF once the
@@ -426,7 +431,7 @@ func (s *lineSource) drain() {
 // differential's whole reader meters a line (claudelinewhole_internal_test.go),
 // so a member past its bound in the same piece as its reader's failure ends
 // with the bound, and the bound holds even right after a break; then the
-// piece, but its break, counted and written to the byte facts.
+// piece, but its break, counted and written to the tee.
 func (s *lineSource) take() {
 	if err := s.ctx.Err(); err != nil {
 		s.cause = err
@@ -441,7 +446,9 @@ func (s *lineSource) take() {
 		// ReadSlice answers no error only for a piece its break ends.
 		chunk, s.broke = chunk[:len(chunk)-1], true
 	}
-	s.bytes.write(chunk)
+	if s.tee != nil {
+		_, _ = s.tee.Write(chunk)
+	}
 	s.n += int64(len(chunk))
 	s.pending = chunk
 	switch {

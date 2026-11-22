@@ -50,10 +50,26 @@ func (p Prompt) PartitionKey(metadata map[string]string, subject string) string 
 // thread. Empty for a wake naming no change, which no parser writes.
 func (Prompt) ConversationIdentity(metadata map[string]string, _ string) string {
 	if id := metadata[MetaChangeID]; id != "" {
-		return string(KindChange) + ":" + id
+		return changeIdentity(id)
 	}
 	return ""
 }
+
+// ChangeConversation is the conversation a change IS, as every wake about it
+// is stamped: its identity ([Prompt.ConversationIdentity]) namespaced by this
+// source ([notify.Prompts.Conversation]). A turn's write to the change records
+// it so (internal/agent/builtin), and a running run's router finds a wake
+// about the change by it, exactly (ADR-0167).
+func ChangeConversation(id string) string {
+	if id == "" {
+		return ""
+	}
+	return notify.Namespaced(Source, changeIdentity(id))
+}
+
+// changeIdentity is a change's conversation as this source names it,
+// `change:<id>`.
+func changeIdentity(id string) string { return string(KindChange) + ":" + id }
 
 // WorkItem is the work item a code wake is about — the one the change
 // implements (ADR-0097) — which is the item the turn it wakes is charged to

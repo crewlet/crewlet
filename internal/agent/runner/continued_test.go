@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -38,7 +39,22 @@ func (l *probingLauncher) ProbeSession(context.Context) runner.SessionBasis {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.probes++
-	return l.basis
+	basis := l.basis
+	if basis.Traits == nil {
+		// AS AN ENGINE'S LAUNCHER SETS THEM on every basis it answers.
+		basis.Traits = runnerTraits()
+	}
+	return basis
+}
+
+// runnerTraits is what the relaunch reads of each harness this build drives, as
+// its runner states it ([runner.SessionBasis.Traits]).
+func runnerTraits() map[string]sandbox.SessionTraits {
+	traits := map[string]sandbox.SessionTraits{}
+	for _, name := range executor.Names() {
+		traits[name] = executor.SessionTraits(name)
+	}
+	return traits
 }
 
 // asked is how many times the launcher was asked which session a relaunch

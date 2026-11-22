@@ -170,6 +170,9 @@ func TestTheSaveLedgerHoldOutlastsTheCollectorAndFitsTheUploadsBucket(t *testing
 func TestASeatsSavesStayWithinItsAllowance(t *testing.T) {
 	t.Parallel()
 	counted := countedFor(14)
+	// LONG PAST ITS PACE, so the charge alone decides: a room of half a save
+	// paces one two holds out of its last attempt.
+	longPast := func(j *saveJob) { j.last = j.last.Add(-3 * saveLedgerHold) }
 	t.Run("two runs of one seat on two nodes share its room", func(t *testing.T) {
 		t.Parallel()
 		inBubble(t, func(t *testing.T) {
@@ -179,10 +182,10 @@ func TestASeatsSavesStayWithinItsAllowance(t *testing.T) {
 			firstKeep.policy.SeatBudget, secondKeep.policy.SeatBudget = counted*3/2, counted*3/2
 			first.launchKept(t, "t1")
 			second.launchKept(t, "t1")
-			if out := saveOf(first, "t1", nil); out.class != saveLanded || out.counted != counted {
+			if out := saveOf(first, "t1", longPast); out.class != saveLanded || out.counted != counted {
 				t.Fatalf("the first node's save came to %+v, want it landed and counted at %d", out, counted)
 			}
-			out := saveOf(second, "t1", nil)
+			out := saveOf(second, "t1", longPast)
 			if out.class != savePaced {
 				t.Errorf("the second node's save came to %+v, want it paced: the seat's room is spent", out)
 			}
@@ -205,12 +208,12 @@ func TestASeatsSavesStayWithinItsAllowance(t *testing.T) {
 			keep.policy.SeatBudget = counted * 3 / 2
 			rig.launchKept(t, "t1")
 			writeLedger(t, ledger, "swe", ledgerEntries(t, 1, counted, rig.coordinator.now().Add(time.Minute)))
-			if out := saveOf(rig, "t1", nil); out.class != savePaced {
+			if out := saveOf(rig, "t1", longPast); out.class != savePaced {
 				t.Errorf("beside an entry another node's clock ends a minute ahead, the save came to %+v, want "+
 					"it paced", out)
 			}
 			writeLedger(t, ledger, "swe", ledgerEntries(t, 1, counted, rig.coordinator.now().Add(-time.Minute)))
-			if out := saveOf(rig, "t1", nil); out.class != saveLanded {
+			if out := saveOf(rig, "t1", longPast); out.class != saveLanded {
 				t.Fatalf("beside an entry ended a minute ago, the save came to %+v, want it landed", out)
 			}
 			if got := ledgerOf(t, ledger, "swe"); len(got.Entries) != 1 ||
@@ -322,8 +325,8 @@ func TestASeatsSavesStayWithinItsAllowance(t *testing.T) {
 // is due once the seat's room, spent at the session's expected size once per
 // hold, lasts the interval, at last + hold * expected / room, or within an
 // hour, when the room is read again. The expected size is this launch's
-// newest landed save's, else its last counted save's, never another launch's.
-// A drain save is never paced.
+// newest landed save's, else its last counted save's, else the kept capture
+// the launch continued, never another launch's. A drain save is never paced.
 //
 // Mutation: ignore the pacing, read the expected size off any launch's kept
 // capture, or pace a drain save.
@@ -336,7 +339,11 @@ func TestASeatsSavesArePacedBySizeAsItsAllowanceRunsShort(t *testing.T) {
 		ObjectSize: 1 << 20}
 	other := own
 	other.Kept = &SessionCapture{Launch: "job-1", LaunchSeq: 1, CaptureSeq: 4, State: CaptureLanded,
-		ObjectSize: 32 << 20}
+		Through: new(7), ObjectSize: 32 << 20}
+	continued := other
+	continued.Launch.Continued = &ContinuedPoint{LaunchSeq: 1, Through: 7}
+	pastIt := other
+	pastIt.Launch.Continued = &ContinuedPoint{LaunchSeq: 1, Through: 5}
 	at := saveJob{interval: 10 * time.Minute, last: now.Add(-10 * time.Minute)}
 	counted := at
 	counted.counted = 1 << 20
@@ -352,13 +359,18 @@ func TestASeatsSavesArePacedBySizeAsItsAllowanceRunsShort(t *testing.T) {
 		{name: "this launch's last counted save", row: own, job: counted, room: 64 << 20,
 			until: at.last.Add(saveLedgerHold / 64)},
 		{name: "only another launch's capture", row: other, job: at, room: 1 << 20},
+		{name: "the kept capture this launch continued", row: continued, job: at, room: 64 << 20,
+			until: now.Add(saveRetryCeiling)},
+		{name: "a kept capture past the one this launch continued", row: pastIt, job: at, room: 1 << 20},
+		{name: "this launch's counted save over the one it continued", row: continued, job: counted,
+			room: 64 << 20, until: at.last.Add(saveLedgerHold / 64)},
 		{name: "a stretch past the hour", row: landed, job: at, room: 8 << 20, until: now.Add(saveRetryCeiling)},
 		{name: "a stretch already waited", row: landed, job: saveJob{interval: at.interval,
 			last: now.Add(-time.Hour)}, room: 64 << 20},
 		{name: "a stretch inside the interval", row: landed, job: at, room: 1 << 30},
 		{name: "no room", row: own, job: at, room: 0, until: now.Add(saveRetryCeiling)},
 	} {
-		until, paced := paceSave(c.row, c.job, c.room, now)
+		until, paced := paceAt(expectedSave(c.row, c.job), c.job, c.room, now)
 		switch {
 		case c.until.IsZero() && paced:
 			t.Errorf("%s: paced until %v, want the save due", c.name, until)
@@ -383,6 +395,166 @@ func TestASeatsSavesArePacedBySizeAsItsAllowanceRunsShort(t *testing.T) {
 		}
 		if out := saveOf(rig, "t1", drain); out.class != saveLanded {
 			t.Errorf("the drain save came to %+v, want it landed: a drain save is not paced", out)
+		}
+	})
+}
+
+// memoIn is a copy of this node's memory of turnID's saves, nil for none.
+func memoIn(rig *coordRig, turnID string) *saveMemo {
+	rig.coordinator.saves.mu.Lock()
+	defer rig.coordinator.saves.mu.Unlock()
+	memo := rig.coordinator.saves.memos[turnID]
+	if memo == nil {
+		return nil
+	}
+	held := *memo
+	return &held
+}
+
+// A LAUNCH'S FIRST SAVE IS PACED BY THE SESSION IT CONTINUED: before any save
+// of its own, a launch whose row says it continued the turn's kept capture
+// expects that capture's size, so its first save is held, unpacked, to its
+// start plus the hold times that size over the seat's room, not packed and
+// charged at its interval.
+//
+// Mutation: drop the continued capture from the expected size, and the save
+// is packed and lands at its interval.
+func TestALaunchsFirstSaveIsPacedByTheSessionItContinued(t *testing.T) {
+	t.Parallel()
+	inBubble(t, func(t *testing.T) {
+		ledger := memory.NewFleet()
+		rig, _, keep := savingRig(t, ledger, newTakerStore())
+		const size = 2 << 20
+		continuingJob(t, rig, func(run *PendingRun) {
+			run.Kept = &SessionCapture{Launch: "job-1", LaunchSeq: 1, CaptureSeq: 3, State: CaptureLanded,
+				Interrupted: true, Through: new(7), ObjectSize: size}
+		})
+		packs := 0
+		rig.runner.Packing = func(context.Context, Sandbox) { packs++ }
+		launched := rig.now
+		if offerOf(t, rig, "t1") {
+			t.Fatal("the premise: a save was started at the launch, before its interval")
+		}
+		rig.now = launched.Add(rigSaveInterval)
+		if !offerOf(t, rig, "t1") {
+			t.Fatal("the premise: no save was started at the launch's interval")
+		}
+		want := launched.Add(saveLedgerHold / time.Duration(keep.policy.SeatBudget/size))
+		if memo := memoIn(rig, "t1"); memo == nil || !memo.pacedUntil.Equal(want) {
+			t.Errorf("the first save's memory is %+v, want it paced until %v", memo, want)
+		}
+		if packs != 0 {
+			t.Errorf("the first save packed %d times, want none: the session it continued paces it", packs)
+		}
+		if got := ledgerOf(t, ledger, "swe"); len(got.Entries) != 0 {
+			t.Errorf("the seat's ledger holds %+v, want nothing charged", got.Entries)
+		}
+	})
+}
+
+// A FIRST SAVE THAT PACKS PAST ITS PACE IS RELEASED UNCHARGED: a launch whose
+// row sizes no session it continued packs its first save at its interval, and
+// a pack too large for the seat's room to last the interval at is released
+// from its box, charged nothing, spooled nothing, and paced at the size it
+// measured, from the save's last attempt.
+//
+// Mutation: drop the pace after the pack, and the save is charged and lands.
+func TestAFirstSaveThatPacksPastItsPaceIsReleasedUncharged(t *testing.T) {
+	t.Parallel()
+	inBubble(t, func(t *testing.T) {
+		ledger := memory.NewFleet()
+		rig, _, _ := savingRig(t, ledger, newTakerStore())
+		run := rig.launchKept(t, "t1")
+		const size = 24 << 20
+		rig.runner.Session.Archive.Size = size
+		out := saveOf(rig, "t1", nil)
+		if out.class != savePaced || !out.pacedUntil.Equal(rig.now.Add(saveRetryCeiling)) ||
+			out.counted != countedFor(size) {
+			t.Errorf("the save came to %+v, want it paced an hour out and counted at %d", out, countedFor(size))
+		}
+		released, left := rig.runner.Released(), rig.runner.SavesLeft(rig.provider.Box(run.SandboxID))
+		if len(released) != 1 || len(left) != 0 {
+			t.Errorf("released %v and left %v in the box, want the one pack released", released, left)
+		}
+		if takes := rig.runner.Takes(); len(takes) != 0 {
+			t.Errorf("the paced save took %d sessions, want none", len(takes))
+		}
+		if got := ledgerOf(t, ledger, "swe"); len(got.Entries) != 0 {
+			t.Errorf("the seat's ledger holds %+v, want nothing charged", got.Entries)
+		}
+		if used := roomInUse(rig.coordinator); used != 0 {
+			t.Errorf("%d bytes of the spool room are still held", used)
+		}
+		if row := rig.get("t1"); row.Capture != nil {
+			t.Errorf("the run's newest capture is %+v, want none placed", row.Capture)
+		}
+	})
+}
+
+// A PACED FIRST SAVE REMEMBERS WHAT IT MEASURED: once a first save's pack is
+// paced, each hour that caps its wait brings no second pack, since the next
+// save is paced before its pack at the size the first measured.
+//
+// Mutation: drop the measured size from the paced outcome, and the session is
+// packed again every hour.
+func TestAPacedFirstSaveRemembersWhatItMeasured(t *testing.T) {
+	t.Parallel()
+	inBubble(t, func(t *testing.T) {
+		rig, _, _ := savingRig(t, memory.NewFleet(), newTakerStore())
+		rig.launchKept(t, "t1")
+		const size = 24 << 20
+		rig.runner.Session.Archive.Size = size
+		packs := 0
+		rig.runner.Packing = func(context.Context, Sandbox) { packs++ }
+		launched := rig.now
+		offerOf(t, rig, "t1")
+		rig.now = launched.Add(rigSaveInterval)
+		if !offerOf(t, rig, "t1") || packs != 1 {
+			t.Fatalf("the premise: at its interval the first save packed %d times, want once", packs)
+		}
+		if memo := memoIn(rig, "t1"); memo == nil || memo.counted != countedFor(size) {
+			t.Errorf("the paced save's memory is %+v, want it counted at %d", memo, countedFor(size))
+		}
+		// THE POLL'S CADENCE, which keeps the memory: an offer every interval.
+		started, end := 0, rig.now.Add(3*time.Hour)
+		for rig.now.Before(end) {
+			rig.now = rig.now.Add(rigSaveInterval)
+			if offerOf(t, rig, "t1") {
+				started++
+			}
+		}
+		if started < 3 {
+			t.Fatalf("the premise: %d saves were started in three hours, want one an hour", started)
+		}
+		if packs != 1 {
+			t.Errorf("the session was packed %d times in three hours past its paced first save, want once", packs)
+		}
+		if memo := memoIn(rig, "t1"); !memo.pacedUntil.After(rig.now) {
+			t.Errorf("the save's memory is %+v, want it still paced past %v", memo, rig.now)
+		}
+	})
+}
+
+// A DRAIN SAVE IS NEVER PACED AFTER ITS PACK: a draining node saves what its
+// box holds, so a first save whose pack a periodic save would pace is charged
+// at its size and lands.
+//
+// Mutation: pace a drain save after its pack, and it is released uncharged.
+func TestADrainSaveIsNeverPacedAfterItsPack(t *testing.T) {
+	t.Parallel()
+	inBubble(t, func(t *testing.T) {
+		ledger := memory.NewFleet()
+		rig, _, _ := savingRig(t, ledger, newTakerStore())
+		rig.launchKept(t, "t1")
+		const size = 24 << 20
+		rig.runner.Session.Archive.Size = size
+		drain := func(j *saveJob) { j.drainEnd = time.Now().Add(time.Minute) }
+		if out := saveOf(rig, "t1", drain); out.class != saveLanded || out.counted != countedFor(size) {
+			t.Errorf("the drain save came to %+v, want it landed and counted at %d", out, countedFor(size))
+		}
+		if got := ledgerOf(t, ledger, "swe"); len(got.Entries) != 1 || got.Entries[0].Bytes != countedFor(size) {
+			t.Errorf("the seat's ledger holds %+v, want the drain save charged at %d", got.Entries,
+				countedFor(size))
 		}
 	})
 }

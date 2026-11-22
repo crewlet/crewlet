@@ -1,6 +1,7 @@
 package redact
 
 import (
+	"errors"
 	"math/rand/v2"
 	"slices"
 	"strings"
@@ -222,7 +223,7 @@ func TestAKeyLinesOpeningIsShownAsItSettlesAsTheWholeTextHasIt(t *testing.T) {
 					n = min(n, len(c.text)-at)
 					pending += c.text[at : at+n]
 					at += n
-					cut := Settled(pending)
+					cut := SettledByBoth(t, pending)
 					shown.WriteString(Secrets(pending[:cut]))
 					pending = pending[cut:]
 				}
@@ -349,18 +350,18 @@ func TestAClaimReadsInAWindowAsNamingWhatItNames(t *testing.T) {
 	text := strings.Repeat("x", 100)
 	for _, c := range []struct {
 		name  string
-		w     [7]int
+		w     [9]int
 		value bool
 	}{
-		{"no value, its separator's end past the window", [7]int{90, 150, 150, 150, 0, 0, 0}, false},
-		{"no value, its separator's end to come", [7]int{90, -1, -1, -1, 0, 0, 0}, false},
-		{"no value, its separator's end set past the window since", [7]int{90, 150, -1, 150, 0, 0, 0}, false},
-		{"no value, its separator's end set in the window since", [7]int{90, 95, -1, 95, 0, 0, 0}, false},
-		{"a value past the window", [7]int{90, 95, 150, 160, 0, 0, 0}, true},
-		{"a value read open past the window", [7]int{90, 95, 150, -1, 0, 0, 0}, true},
+		{"no value, its separator's end past the window", [9]int{90, 150, 150, 150, 0, 0, 0, 0, 0}, false},
+		{"no value, its separator's end to come", [9]int{90, -1, -1, -1, 0, 0, 0, 0, 0}, false},
+		{"no value, its separator's end set past the window since", [9]int{90, 150, -1, 150, 0, 0, 0, 0, 0}, false},
+		{"no value, its separator's end set in the window since", [9]int{90, 95, -1, 95, 0, 0, 0, 0, 0}, false},
+		{"a value past the window", [9]int{90, 95, 150, 160, 0, 0, 0, 0, 0}, true},
+		{"a value read open past the window", [9]int{90, 95, 150, -1, 0, 0, 0, 0, 0}, true},
 	} {
 		k := &keyStage{}
-		k.sources = []*claimSource{{keys: k, words: [][7]int{c.w}}}
+		k.sources = []*claimSource{{keys: k, words: [][9]int{c.w}}}
 		p := k.claimsIn(text, 0).passwords[0]
 		if got := p[3] > p[2]; got != c.value {
 			t.Errorf("%s: the window reads %v as naming a value: %v, want %v", c.name, p, got, c.value)
@@ -383,7 +384,7 @@ func TestAKeyABlockHoldsCutsNoOtherBlock(t *testing.T) {
 	key := strings.Index(text, "passwd:")
 	value := strings.LastIndex(text, g+testKeyLine) + len(g)
 	spans := [][2]int{{0, line + len(g+testEnd)}, {strings.LastIndex(text, testBegin), len(text) - 1}}
-	c := &claims{text: text, read: true, passwords: [][7]int{{key, key + len("passwd:"), value, value + len(testKeyLine), line + len(g), 0, 0}}}
+	c := &claims{text: text, read: true, passwords: [][9]int{{key, key + len("passwd:"), value, value + len(testKeyLine), line + len(g), 0, 0, 0, 0}}}
 	c.build()
 	if got := c.apartIn(slices.Clone(spans), spans); !slices.Equal(got, spans) {
 		t.Errorf("the blocks %v were written as %v", spans, got)
@@ -439,7 +440,7 @@ func TestAClaimEndedNamesWhatItNamedOpen(t *testing.T) {
 	k := &keyStage{}
 	src := &claimSource{keys: k}
 	k.sources = []*claimSource{src}
-	src.valued([3]int{10, 15, -1}, 16, [3]int{})
+	src.valued([3]int{10, 15, -1}, 16, [3]int{}, [2]int{})
 	src.endWord(-1, 30)
 	src.word([3]int{40, -1, -1})
 	src.endWord(45, 45)
@@ -497,8 +498,7 @@ func seamShapes() []gutterShape {
 //
 // Mutation: write a block whole across a value's line's ending, or cut one
 // that holds the value's line ([claims.endingApart]), stop a label at a key's
-// marker ([labelStart]) or read across one before an escaped break
-// ([pastMarkup]), or write a block whole across a row's opening
+// marker ([labelStart]), or write a block whole across a row's opening
 // ([claims.openingApart]), and a shape publishes its value.
 func TestNoValueIsPublishedWhereABlockRunsOnFromItsLineOrStandsInItsKeysRow(t *testing.T) {
 	t.Parallel()
@@ -582,5 +582,123 @@ func TestABlockWhoseFirstLineOpensAsTheKeysRowStaysOneMarker(t *testing.T) {
 	once := Secrets(text)
 	if strings.Count(once, keyMarker) != 1 || strings.Contains(once, gutterValue) {
 		t.Errorf("want one key's marker and the value redacted:\n text %q\n once %q", text, once)
+	}
+}
+
+// A KEY WHOSE BLANKS RUN TO THE TEXT'S END NAMES NO VALUE, as the whole text
+// reads it: under a BEGIN no END closes, a password's key on the base64's
+// line, then blanks to the end, at the byte that takes the text through the
+// stages and past a window. The keys' stage places such a word one past its
+// window ([keyStage.claimsIn]), however the text is cut: the stream writes
+// Secrets of it or refuses, and never panics.
+//
+// Mutation: read the line where such a value starts ([claims.readsAValue]),
+// and Close slices past the window's end.
+func TestAKeyWhoseBlanksRunToTheEndNamesNoValue(t *testing.T) {
+	t.Parallel()
+	head := testBegin + "\n" + testKeyLine + testKeyLine + testKeyLine[:32] + "\tPassword:\n"
+	for _, size := range []int{wholeBytes + 1, 1 << 20} {
+		text := head + strings.Repeat(" ", size-len(head))
+		want := Secrets(text)
+		for _, cut := range []int{7 << 10, 64 << 10, size} {
+			got, panicked, err := streamedOrPanic(text, cut)
+			switch {
+			case panicked != nil:
+				t.Errorf("%d bytes in writes of %d: the stream panicked: %v", size, cut, panicked)
+			case err != nil && !errors.Is(err, ErrDecidedEarly):
+				t.Errorf("%d bytes in writes of %d: Close answered %v", size, cut, err)
+			case err == nil && got != want:
+				t.Errorf("%d bytes in writes of %d: the stream wrote other than Secrets %s", size, cut, parted(got, want))
+			}
+		}
+	}
+}
+
+// streamedOrPanic is what a [Stream] writes for text in writes of cut bytes,
+// what it panicked with, if it did, and what Close answered.
+func streamedOrPanic(text string, cut int) (out string, panicked any, err error) {
+	var b strings.Builder
+	defer func() {
+		if panicked = recover(); panicked == nil {
+			out = b.String()
+		}
+	}()
+	s := NewStream(&b)
+	for at := 0; at < len(text); at += cut {
+		_, _ = s.Write([]byte(text[at:min(len(text), at+cut)]))
+	}
+	return "", nil, s.Close()
+}
+
+// A STRING'S LINES ARE READ AS THE LINES THEY STAND FOR: each text below,
+// written with real line breaks and then as a JSON log's string, its breaks
+// escaped, shows gutterValue in neither ([gutterValues]'s values neither),
+// and Secrets of each answer is its answer: rows a markup closes, a blank row
+// among them, and a key's text in a row's label; a quote before the key,
+// escaped or on a later piece; and a key's piece no markup closes, which a
+// key's block joins to the string's first.
+//
+// Mutation: read no markup-only suffix before an escaped break ([readValue]),
+// or read a string's first piece from its real line's start, past an escaped
+// quote, a later piece past a quote on it, or a piece no markup closes
+// ([stringOpening]), and a string here publishes the value.
+func TestAStringsLinesAreReadAsTheLinesTheyStandFor(t *testing.T) {
+	t.Parallel()
+	pc := testKeyLine[:56]
+	v := gutterValue
+	var texts []string
+	for _, lines := range []string{
+		"| Password: |\n| " + v + " |\n",
+		"| x pwd= |\n|  |\n| " + v + " |\n",
+		"| **Password:** |\n|  |\n| " + v + " |\n",
+		"| " + testKeyLine + " " + testEnd + " pwd= |\n     7→" + v + "\ndone\n",
+		"| u1SU1Lf=" + testEnd + "\tPassword: |\n|  |\n| " + v + " |\n",
+		"| " + testKeyLine + " " + testEnd + "\tpwd= |\n|  |\n| " + pc + " " + testEnd + " |\n| Retype password: " + v + " |\n",
+	} {
+		texts = append(texts, lines, `{"log": "`+strings.ReplaceAll(lines, "\n", `\n`)+`"}`+"\n")
+	}
+	texts = append(texts, `{"log": "> \"| Password: |\n> `+v+` |\n"}`+"\n", `{"log": "a\necho "| Password: |\necho "`+v+` |\n"}`+"\n",
+		`{"log": "3f9a7c0e1b2d u1SU1Lf=\n`+testKeyLine+testEnd+`\" ; pwd:\n3f9a7c0e1b2d u1SU1Lf=\n3f9a7c0e1b2d Retype password:\n3f9a7c0e1b2d `+v+`\n"}`+"\n")
+	for _, text := range texts {
+		once := Secrets(text)
+		for _, value := range append(gutterValues(text), v) {
+			if strings.Count(text, value) == 1 && strings.Contains(once, value) {
+				t.Errorf("the value %q is published:\n text %q\n once %q", value, text, once)
+			}
+		}
+		if twice := Secrets(once); twice != once {
+			t.Errorf("a second pass changed\n%q\nto\n%q", once, twice)
+		}
+	}
+}
+
+// A VALUE ON THE NEXT LINE OF A STRING THE KEY OPENS IS READ PAST THE STRING'S
+// WRAPPING: a key on a string's first piece after its quote, under no markup
+// closing it, and the value on the string's next piece behind the same gutter,
+// redacted by Secrets and by a stream fed the text a line at a time, every
+// stage past its first window, whatever the gutter.
+//
+// Mutation: read the rest of the key's line past an escaped break as its
+// suffix even where it spells the key line's gutter
+// ([valueRead.restOfLine]), and the value is shown.
+func TestAValueOnAStringsNextLineIsReadPastItsWrapping(t *testing.T) {
+	t.Parallel()
+	filler := strings.Repeat("the build passed ok\n", (stageStep+2*MaxReach)/20+2)
+	for _, gutter := range []string{"> ", "- ", "# ", "// ", "| ", "* ", "1. "} {
+		text := `{"text": "` + gutter + `Password:\n` + gutter + `hunter2x9"}` + "\n"
+		if got := Secrets(text); strings.Contains(got, "hunter2x9") {
+			t.Errorf("gutter %q: Secrets shows the value: %q", gutter, got)
+		}
+		whole := filler + text
+		var lines []int
+		for i := range len(whole) {
+			if whole[i] == '\n' {
+				lines = append(lines, i+1)
+			}
+		}
+		if got := streamed(whole, lines); strings.Contains(got, "hunter2x9") || got != Secrets(whole) {
+			t.Errorf("gutter %q: a stream a line at a time shows the value or parts from Secrets: %q", gutter,
+				got[len(got)-min(len(got), 120):])
+		}
 	}
 }

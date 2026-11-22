@@ -25,6 +25,9 @@ func (observing) Week(context.Context, time.Time, time.Time) ([]advisor.Metric, 
 	return []advisor.Metric{{Key: "turns", Label: "Turns", Value: 12, Unit: advisor.UnitTurns}}, []string{}, nil
 }
 
+// Holds holds every premise: no finding here states one.
+func (observing) Holds(context.Context, advisor.Premise) (bool, error) { return true, nil }
+
 // THE DUTY'S RECORDS ARE ONES THE LOG KEEPS: one tick of the duty, written
 // through the domain's own writer, stores a finding about the whole company
 // (whose subject is the only one of its kind, so it has no id) beside a seat's,
@@ -69,5 +72,40 @@ func TestTheDutysRecordsAreOnesTheLogKeeps(t *testing.T) {
 	week, _, _, _ := advisor.ReportWeek(writerClock, time.UTC)
 	if _, written, err := r.Report(t.Context(), week, stale); err != nil || !written {
 		t.Errorf("the report of %s: written %v (%v), want it kept", week, written, err)
+	}
+}
+
+// A DISMISSAL REOPENED RETURNS ON THE NEXT RUN: a person's reopen lifts the
+// dismissal's hold, so the duty's next run opens the condition that still
+// holds as a new episode.
+func TestADismissalReopenedReturnsOnTheNextRun(t *testing.T) {
+	t.Parallel()
+	n := newWriteNode(t, openAdvisorLog(t), "data-1")
+	window := advisor.Span{From: writerClock.Add(-advisor.Window), To: writerClock}
+	f := advisor.Finding{Class: advisor.ClassNoopShare, Severity: advisor.SeverityNote, Actor: advisor.ActorEngine,
+		Source: advisor.SourceEvidence, Area: advisor.AreaWork, Subject: advisor.Subject{Kind: advisor.SubjectSeat, Seat: "dev"},
+		Item: "8 of 20 turns", Fix: advisor.Fix{Kind: advisor.FixNone, Options: []advisor.Option{}}}
+	d := &duty.Duty{Log: duty.LogOf(n.reader(), n.writer, n.now),
+		Read:  observing{observed: []advisor.Observation{advisor.Observe(f, window, "r1")}},
+		NewID: uuid.NewString, Now: n.now, Zone: func() *time.Location { return time.UTC }}
+	if err := d.Step(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	live, err := n.reader().NonClosed(t.Context(), stale)
+	if err != nil || len(live) != 1 {
+		t.Fatalf("live %+v (%v), want the finding open", live, err)
+	}
+	first := live[0]
+	n.move(personCall("ada"), first.Key, dismissal(first.ID, first.Severity, time.Time{}))
+	if _, err := n.writer.Release(t.Context(), personCall("ada"), first.Key, n.key(first.Key).Version); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	n.advance(duty.RulePassEvery)
+	if err := d.Step(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	live, err = n.reader().NonClosed(t.Context(), stale)
+	if err != nil || len(live) != 1 || live[0].ID == first.ID || live[0].SeenBefore != 1 {
+		t.Fatalf("live after the reopen %+v (%v), want a new episode that was seen before", live, err)
 	}
 }

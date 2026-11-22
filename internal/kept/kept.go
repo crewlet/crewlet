@@ -302,26 +302,43 @@ const sizeWidth = 10
 // internal/textcut.Within keeps its own: something was cut, and an empty
 // value would read as one that was empty.
 func (r Record) Text(s string, budget int) (kept string, whole int) {
-	if Quoted(s) <= budget {
-		return s, 0
+	return r.TextOf(s, len(s), budget)
+}
+
+// TextOf is [Record.Text] of a text known by its opening alone: its first
+// bytes, and how long all of it is (whole), for a caller that never holds the
+// rest. Within budget once it holds the whole, it is that; otherwise it keeps
+// as much of opening as fits and says how much of whole it left out. An
+// opening of at least budget bytes keeps what Text keeps of the whole text;
+// a shorter one is all kept, so a caller moves a cut back by handing less.
+func (r Record) TextOf(opening string, whole, budget int) (kept string, cut int) {
+	whole = max(whole, len(opening))
+	if len(opening) == whole && Quoted(opening) <= budget {
+		return opening, 0
 	}
-	whole = len(s)
 	// THE MARKER'S ROOM AT ITS WIDEST, since the figure it states (what is
 	// left out) is known only once the opening is: the opening is measured
 	// against this, and the marker then written is never longer.
 	room := budget - 2 - Len(textMarker(r, strings.Repeat("0", sizeWidth), Size(whole)))
-	cut := 0
+	at := 0
 	used := 0
-	for cut < len(s) {
-		step, cost := runeCost(s, cut)
+	for at < len(opening) {
+		step, cost := runeCost(opening, at)
 		if used+cost > room {
 			break
 		}
 		used += cost
-		cut += step
+		at += step
 	}
-	opening := s[:cut]
-	return opening + textMarker(r, Size(whole-cut), Size(whole)), whole
+	return opening[:at] + textMarker(r, Size(whole-at), Size(whole)), whole
+}
+
+// Cut is opening, all of it, ended by the marker [Record.TextOf] writes for a
+// text of whole bytes cut there: a cut its caller made by a rule of its own,
+// said as r says one, which [Record.Opening] reads back. whole is more than
+// opening's length.
+func (r Record) Cut(opening string, whole int) string {
+	return opening + textMarker(r, Size(whole-len(opening)), Size(whole))
 }
 
 // Opening is the opening [Record.Text] kept of a text of whole bytes that it

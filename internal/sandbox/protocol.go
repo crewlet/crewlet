@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -132,6 +133,12 @@ type Spec struct {
 	// what the box is made with and every setup step runs with, the run's
 	// telemetry added at the job's start.
 	Env map[string]string
+
+	// SignInEnv is the names in Env that sign the run's harness in: its
+	// profile's token, key and sign-in variables, and the entry's credentials
+	// ([RunRequest.SignInEnv]). The harness reads them; the commands its model
+	// runs are started without them.
+	SignInEnv []string
 
 	// CredentialFiles is a subscription-harness login: a path relative to the
 	// box home mapped to an absolute path on the ENGINE HOST.
@@ -629,15 +636,17 @@ type Result struct {
 	// called and the first line of what it ran — rebuilt from its own
 	// output, or its stderr where the harness streams nothing better. It is the
 	// observability surface for an agent that emits no telemetry of its
-	// own. A runner returns it WHOLE and redacted; the coordinator holds it
-	// to the record's bound ([Coordinator.fitResult]) and redacts it again
-	// at publish.
+	// own. A runner returns it redacted, whole up to the most the engine
+	// reads one text whole and past it as the record keeps it; the
+	// coordinator holds it to the record's bound ([Coordinator.fitResult])
+	// and redacts it again at publish.
 	Transcript string
 
 	// TranscriptElidedLines and TranscriptElidedBytes are how much of the
 	// transcript's middle the record's bound left out: whole lines, and
-	// every byte not kept. Zero for a transcript kept whole. Set by the
-	// coordinator, never by a runner.
+	// every byte not kept. Zero for a transcript kept whole. Set by a runner
+	// that bounded the transcript as it read it, and added to by the
+	// coordinator ([boundBox]).
 	TranscriptElidedLines int
 	TranscriptElidedBytes int
 
@@ -770,10 +779,20 @@ type Sandbox interface {
 	// Empty on missing: polling for an unwritten marker is not an error.
 	//
 	// NEVER FOR A MACHINE STREAM: a harness's event log and stderr grow with
-	// the run, so they use [Sandbox.OpenFile] or [Sandbox.ReadTail]. A
-	// non-regular file is refused with [ErrNotRegularFile] by a backend reading
-	// from the engine host, for all three reads: opening one could block.
+	// the run, so they use [Sandbox.OpenFile], [Sandbox.ReadTail],
+	// [Sandbox.OpenTail] or [Sandbox.OpenRange]. A non-regular file is refused
+	// with [ErrNotRegularFile] by a backend reading from the engine host, for
+	// every read: opening one could block.
 	ReadFile(ctx context.Context, path string) ([]byte, error)
+
+	// OpenWhole opens a file [Sandbox.ReadFile] would read whole, for a
+	// reader that weighs it before reading (a collection holding the node's
+	// answer budget): at most the bytes it held when opened, with that size,
+	// read from the one open, so a file renamed over it after cannot swap in.
+	// Past the whole-read cap it is refused as ReadFile refuses it, its
+	// [*FileTooLargeError] naming the size, and nothing stays open; missing is
+	// nothing and 0. The caller closes it.
+	OpenWhole(ctx context.Context, path string) (io.ReadCloser, int64, error)
 
 	// OpenFile streams a file front to back, for a MACHINE STREAM decoded
 	// once in bounded memory: a harness's event log, read at
@@ -802,6 +821,18 @@ type Sandbox interface {
 	// file is a reader that yields nothing and a size of 0, as the others
 	// answer; the caller closes it.
 	OpenTail(ctx context.Context, path string, n int64) (io.ReadCloser, int64, error)
+
+	// OpenRange streams at most n bytes of a file from byte off, as the file stood
+	// when it was opened, with the file's whole size then: a MACHINE STREAM read on
+	// from where an earlier read of it stopped (a run's event stream, followed live
+	// from its start). Its cost is the bytes read, never the file before off: a
+	// remote box sends only the range, a box on the engine host seeks. An offset at
+	// or past the end streams nothing and answers the size, so a file that shrank
+	// says so; a missing file is nothing and a size of 0, as the others answer. It
+	// may stream fewer than n bytes where its server cannot serve a range; the
+	// caller reads on from where it ended. A negative off or n is refused
+	// ([ErrRangeNegative]). The caller closes it.
+	OpenRange(ctx context.Context, path string, off, n int64) (io.ReadCloser, int64, error)
 
 	// SetTimeout resets the box's wall-clock TTL to seconds from now.
 	//
@@ -872,6 +903,19 @@ func tailOf(content []byte, n int) FileTail {
 		return FileTail{Data: content, Size: int64(len(content))}
 	}
 	return FileTail{Data: content[len(content)-n:], Size: int64(len(content))}
+}
+
+// ErrRangeNegative is [Sandbox.OpenRange]'s refusal of a negative offset or
+// length, which names no bytes of any file.
+var ErrRangeNegative = errors.New("sandbox: a range's offset and length are never negative")
+
+// rangeRefused is [ErrRangeNegative] for a range of path that names no bytes,
+// and nil for one every backend reads.
+func rangeRefused(path string, off, n int64) error {
+	if off < 0 || n < 0 {
+		return fmt.Errorf("%w: %s from byte %d for %d bytes", ErrRangeNegative, path, off, n)
+	}
+	return nil
 }
 
 // ExecOptions are the per-command knobs both exec shapes take.
@@ -1005,8 +1049,10 @@ type Runner interface {
 	// running ([JobState]).
 	Poll(ctx context.Context, box Sandbox, handle RunHandle) (JobState, error)
 
-	// Collect reads the finished job's result out of the box.
-	Collect(ctx context.Context, box Sandbox, handle RunHandle) (Result, error)
+	// Collect reads the finished job's result out of the box, holding its
+	// weight of answers, the node's answer budget, while it reads (in a
+	// peer's box read, until the reply is written: [queue.Replying]).
+	Collect(ctx context.Context, box Sandbox, handle RunHandle, answers *queue.AnswerBudget) (Result, error)
 
 	// Follow begins a LIVE READING of what a job says about itself, for a
 	// person watching the run ([LiveReading]): advanced a read at a time,
@@ -1083,7 +1129,14 @@ type RunRequest struct {
 	// where Resume is: a run that starts a session is handed Brief.
 	FreshBrief string
 
-	Env    map[string]string
+	Env map[string]string
+
+	// SignInEnv is the names in Env its harness signs in by ([Spec.SignInEnv]).
+	// The runner hands them to the harness and keeps them, with its own wiring's
+	// variables, out of the environment of the commands the model runs, through
+	// the harness's own mechanism for that environment.
+	SignInEnv []string
+
 	Limits Limits
 
 	// Model is the model the run works under, written in the grammar of the
@@ -1101,6 +1154,12 @@ type RunRequest struct {
 	// the runner passes its harness its own way. Empty: the harness's default.
 	Effort string
 
+	// WebDenied is the entry's `web_tools: denied`: the runner hands its
+	// harness none of the harness's own web tools, as the entry's runs on the
+	// engine host have none. The run's shell, and any code it runs, reach
+	// only what the box cell's egress policy allows.
+	WebDenied bool
+
 	// MCPServers are the MCP servers the engine hands the run, keyed by
 	// server name: its tool bridge, and the seat's servers that run in its
 	// box. SERVER-LEVEL ONLY — there is no per-tool allowlist, because the
@@ -1109,26 +1168,11 @@ type RunRequest struct {
 	// a control.
 	MCPServers map[string]MCPServer
 
-	// OnlyMCPServers holds the run to MCPServers alone: no server its
-	// harness's own configuration, a repository's or a plugin's declares,
-	// and no connector of the account it signs in with, starts beside them
-	// (Claude Code's --strict-mcp-config).
-	//
-	// The assistant's deep work sets it: it acts for a person, confined on the
-	// engine host, and reaches exactly the tools it is handed. A seat's
-	// executor leaves it false, and its harness starts what it would for a
-	// person running it (the box's, repository's, plugin's and account's
-	// servers) beside the engine's: what those reach is the run's cell's to
-	// bound, not the engine's. A runner whose harness cannot be held to the
-	// servers it is handed refuses a run that sets it.
-	OnlyMCPServers bool
-
 	// Steer is how the run's harness reaches a person's notes to its turn while
 	// it works — see [SteerWiring]. The zero value takes no note inside the
 	// run: its notes wait for whatever reads the turn next, which is what a
-	// run with no tool bridge — the assistant's deep work — has. NEVER
-	// PERSISTED: it names the job's own endpoint, and a resumed turn's next
-	// launch is handed its own.
+	// run with no tool bridge has. NEVER PERSISTED: it names the job's own
+	// endpoint, and a resumed turn's next launch is handed its own.
 	Steer SteerWiring
 
 	// ReportedRepos are the repositories on Gitlet this
@@ -1161,8 +1205,8 @@ type RunRequest struct {
 	// harness starts, so the token the harness dials IS the box's word on which
 	// session it started, one the run's model can neither forge nor take back.
 	// Nil where Resume is empty (a runner refuses a run that sets it) and where
-	// the run has no bridge to tell (the assistant's deep work). NEVER
-	// PERSISTED, for the reason Steer is not.
+	// the run has no bridge to tell. NEVER PERSISTED, for the reason Steer is
+	// not.
 	FreshWiring *Wiring
 
 	// Attribution is the credit every commit the run authors as itself
@@ -1287,9 +1331,8 @@ type CommitAttribution struct {
 	// WorkItem the item its turn is charged to (nil for none, which the
 	// commit says as "none" rather than leaving out, since a rewritten
 	// commit's trailer is replaced, never kept). Empty for a run that is no
-	// seat's — deep work for a person — which names neither; a WorkItem
-	// without a Seat, or one with no backend, is the engine's own bug and is
-	// refused.
+	// seat's, which names neither; a WorkItem without a Seat, or one with no
+	// backend, is the engine's own bug and is refused.
 	Seat     string
 	WorkItem *types.WorkItem
 }
@@ -1330,7 +1373,8 @@ func (w SteerWiring) Set() bool { return w.Server != "" && w.Tool != "" && w.URL
 // A helper rather than an interface method, so a Runner implements three
 // primitives instead of four and the two shapes cannot drift apart — the
 // blocking one IS the detached one with a wait in the middle.
-func Run(ctx context.Context, r Runner, box Sandbox, req RunRequest, wait WaitFunc) (Result, error) {
+func Run(ctx context.Context, r Runner, box Sandbox, req RunRequest, wait WaitFunc,
+	answers *queue.AnswerBudget) (Result, error) {
 	handle, err := r.Start(ctx, box, req)
 	if err != nil {
 		return Result{}, err
@@ -1341,7 +1385,7 @@ func Run(ctx context.Context, r Runner, box Sandbox, req RunRequest, wait WaitFu
 	}); err != nil {
 		return Result{}, err
 	}
-	return r.Collect(ctx, box, handle)
+	return r.Collect(ctx, box, handle, answers)
 }
 
 // WaitFunc blocks until a predicate holds or the context ends. Injected so the

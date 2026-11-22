@@ -318,7 +318,7 @@ func TestAnOperateCallIsHeldInEveryCase(t *testing.T) {
 	if strings.Contains(h.Arguments, "apply the server setup") {
 		t.Error("the held call carries its arguments in the clear")
 	}
-	if opened, err := seal.OpenArguments("run-1", *h); err != nil || opened["stdin"] != stdin {
+	if opened, err := seal.OpenRawArguments("run-1", *h); err != nil || opened["stdin"] != stdin {
 		t.Fatalf("the sealed arguments open to %v, %v", opened, err)
 	}
 }

@@ -62,6 +62,10 @@ var LIVE_CALL_DETAIL = {
 * far beyond the slowest query's normal latency and still short enough that a
 * screen shows an error rather than an eternal skeleton.
 *
+* THE QUERY FRAME CARRIES IT (`wait_ms`), and the engine stops answering a
+* question once it has passed, so a read this tab gave up on frees the slots it
+* holds rather than running on for nobody.
+*
 * AND LONGER THAN THE ENGINE'S OWN READ OF THE BROKER GROUP
 * (`engine.BrokerReadWait`), held there by `internal/api`'s
 * `TestTheDashboardWaitsPastAReadOfTheGroup`: the `fleet_broker` query asks a
@@ -248,6 +252,13 @@ function isLater(next, held) {
 	return next.seq > held.seq;
 }
 /**
+* What a revision this node applied moved: every read that asks again on a
+* reconnect (`refetchOnReconnect`), since a config write answers before the
+* node applies it and many answers are read from what it applied. A read that
+* opted out of reconnects (a transcript, a code search) is not moved by one.
+*/
+var APPLIED_REVISION = "*applied";
+/**
 * Two positions on ONE log in log order: negative when `a` is earlier, zero
 * when they are the same point, positive when `a` is later.
 *
@@ -427,6 +438,25 @@ function mergeLiveCall(held, next) {
 		stale
 	};
 }
+/**
+* A seat's live calls as a push states them — one per turn it runs, paired by
+* `turn_id` — each merged onto the copy a tab holds for the same turn
+* (`mergeLiveCall`), in the push's order; `stale` when any of them is. A call
+* the push no longer lists is gone: the push states the whole list.
+*/
+function mergeLiveCalls(held, next) {
+	let stale = false;
+	const calls = [];
+	for (const call of next ?? []) {
+		const merged = mergeLiveCall(held?.find((h) => h.turn_id === call.turn_id), call);
+		stale ||= merged.stale;
+		if (merged.call) calls.push(merged.call);
+	}
+	return {
+		calls,
+		stale
+	};
+}
 /** Whether two copies are of one call: one turn, one phase, one iteration. */
 function sameCall(a, b) {
 	return a.turn_id === b.turn_id && a.phase === b.phase && a.iteration === b.iteration;
@@ -498,6 +528,13 @@ function emptyState() {
 		chatRead: null
 	};
 }
+/**
+* A revision this node applied, said to every read that asks again on one
+* (`APPLIED_REVISION`), whether a push or a snapshot carried it.
+*/
+function announceApplied(was, health) {
+	if (health && was !== void 0 && health.applied_epoch > was) session.written(null, null, [APPLIED_REVISION]);
+}
 var Store = class {
 	state = emptyState();
 	/**
@@ -561,8 +598,10 @@ var Store = class {
 		if (snap.tokens && snap.tokens.totals) this.state.tokens = snap.tokens;
 		this.state.budget = snap.budget ?? null;
 		if (snap.schedules) this.state.schedules = snap.schedules;
+		const was = this.state.lastHealth?.applied_epoch;
 		if (snap.health) this.state.health = this.state.lastHealth = snap.health;
 		this.emit(...ALL_DATA_SLICES);
+		announceApplied(was, snap.health);
 	}
 	/**
 	* Changed seat overlays, merged onto the roster rows by AGENT ID — and the
@@ -589,19 +628,19 @@ var Store = class {
 		if (byID.size === 0) return [];
 		const stale = [];
 		const merge = (held, patch) => {
-			if (!("live_call" in patch)) return patch;
+			if (!("live_calls" in patch)) return patch;
 			const heldSeq = held.live_call_seq ?? 0;
 			const patchSeq = patch.live_call_seq;
 			if (patchSeq !== void 0 && patchSeq < heldSeq) return {
 				...patch,
-				live_call: held.live_call ?? null,
+				live_calls: held.live_calls ?? [],
 				live_call_seq: heldSeq
 			};
-			const { call, stale: behind } = mergeLiveCall(held.live_call, patch.live_call);
+			const { calls, stale: behind } = mergeLiveCalls(held.live_calls, patch.live_calls);
 			if (behind) stale.push(patch.agent_id);
 			return {
 				...patch,
-				live_call: call,
+				live_calls: calls,
 				live_call_seq: patchSeq ?? heldSeq
 			};
 		};
@@ -624,8 +663,8 @@ var Store = class {
 		return stale;
 	}
 	/**
-	* One seat's live call, fetched WHOLE because a push said this tab had
-	* missed a change to it — and whether the answer was CURRENT: at or past the
+	* One seat's live calls, fetched WHOLE because a push said this tab had
+	* missed a change to one — and whether the answer was CURRENT: at or past the
 	* sequence the seat has applied, so that nothing a push has said since is
 	* missing from it.
 	*
@@ -635,12 +674,13 @@ var Store = class {
 	* the applied sequence describes the slot as it was before those pushes, and
 	* the sequence decides only what it can order:
 	*
-	* - when they cleared the call or began another, the answer is DROPPED, so a
-	*   cleared seat or a newer call is never overwritten by a running call read
-	*   a moment before it — a per-field version cannot say this, since a cleared
-	*   null carries none and two calls' fields are never compared;
-	* - when they are the same call, the answer still brings every heavy field
-	*   whose version is newer than the copy held (`newerDetail`), because those
+	* - for a turn whose call they cleared or replaced, the answer's call is
+	*   DROPPED, so a cleared slot or a newer call is never overwritten by a
+	*   running call read a moment before it — a per-field version cannot say
+	*   this, since a cleared slot carries none and two calls' fields are never
+	*   compared;
+	* - for a turn still on the same call, the answer still brings every heavy
+	*   field whose version is newer than the copy held (`newerDetail`), because those
 	*   are exactly what the tab asked for — the pushes since left them out —
 	*   while the light fields stay the newer pushes'. Dropping it whole lost
 	*   that repair, and nothing asked again until the seat's next push.
@@ -660,17 +700,24 @@ var Store = class {
 				moved = true;
 				return {
 					...a,
-					live_call: mergeLiveCall(a.live_call, answer.live_call).call,
+					live_calls: mergeLiveCalls(a.live_calls, answer.live_calls).calls,
 					live_call_seq: seq
 				};
 			}
 			current = false;
-			const fresher = a.live_call && answer.live_call && newerDetail(a.live_call, answer.live_call);
+			let fresher = false;
+			const calls = (a.live_calls ?? []).map((held) => {
+				const older = answer.live_calls?.find((c) => c.turn_id === held.turn_id);
+				const repaired = older && newerDetail(held, older);
+				if (!repaired) return held;
+				fresher = true;
+				return repaired;
+			});
 			if (!fresher) return a;
 			moved = true;
 			return {
 				...a,
-				live_call: fresher
+				live_calls: calls
 			};
 		});
 		if (moved) this.emit("agents");
@@ -722,10 +769,12 @@ var Store = class {
 		this.emit("tools");
 	}
 	applyHealth(health) {
+		const was = this.state.lastHealth?.applied_epoch;
 		this.state.health = health ?? null;
 		if (health) this.state.lastHealth = health;
 		this.link(!!health);
 		this.emit("health");
+		announceApplied(was, health);
 	}
 	setConnected(value) {
 		this.link(value);
@@ -2825,22 +2874,50 @@ var LiveSocket = class {
 	*
 	* Rejects with a [QueryError] carrying the server's machine-readable code
 	* (`not_found`, `unauthorized`, `unavailable`, …), `timeout` if a sent
-	* query goes unanswered, or `closed` if the client shuts down.
+	* query goes unanswered for `waitMs`, or `closed` if the client shuts down;
+	* and with `signal`'s reason once it aborts, the question then given up on
+	* here and at the engine (`query_cancel`), which stops reading for it.
 	*/
-	query(what, params) {
+	query(what, params, waitMs = QUERY_TIMEOUT_MS, signal) {
 		const id = this.nextQueryId++;
 		return new Promise((resolve, reject) => {
+			if (signal?.aborted) {
+				reject(signal.reason);
+				return;
+			}
 			const entry = {
 				id,
 				what,
 				params: params ?? {},
+				waitMs,
 				resolve,
 				reject,
-				timer: 0
+				timer: 0,
+				sentOn: null
 			};
 			this.inflight.set(id, entry);
+			signal?.addEventListener("abort", () => this.cancel(entry, signal.reason), { once: true });
 			this.sendQuery(entry);
 		});
+	}
+	/**
+	* GIVE UP ON A QUESTION NOBODY WAITS FOR ANY MORE, here and at the engine: a
+	* screen left behind a transcript page's read held one of the socket's four
+	* slots and one of the node's two transcript reads for minutes, for nobody.
+	* An answer that comes anyway finds nothing in flight and is dropped.
+	*/
+	cancel(entry, reason) {
+		if (this.inflight.get(entry.id) !== entry) return;
+		this.inflight.delete(entry.id);
+		clearTimeout(entry.timer);
+		entry.reject(reason instanceof Error ? reason : new Error(String(reason)));
+		if (!this.connected || !this.sock || entry.sentOn !== this.sock) return;
+		try {
+			this.sock.send(JSON.stringify({
+				kind: "query_cancel",
+				id: entry.id
+			}));
+		} catch {}
 	}
 	sendQuery(entry) {
 		if (!this.connected || !this.sock) return;
@@ -2848,18 +2925,20 @@ var LiveSocket = class {
 			kind: "query",
 			id: entry.id,
 			what: entry.what,
-			params: entry.params
+			params: entry.params,
+			wait_ms: entry.waitMs
 		};
 		try {
 			this.sock.send(JSON.stringify(frame));
 		} catch {
 			return;
 		}
+		entry.sentOn = this.sock;
 		clearTimeout(entry.timer);
 		entry.timer = setTimeout(() => {
 			this.inflight.delete(entry.id);
 			entry.reject(new QueryError("timeout"));
-		}, QUERY_TIMEOUT_MS);
+		}, entry.waitMs);
 	}
 	flushQueries() {
 		for (const entry of this.inflight.values()) this.sendQuery(entry);
@@ -3456,7 +3535,7 @@ var LiveSocket = class {
 		}
 	}
 	/**
-	* Fetch, whole, each seat's live call this tab holds behind what a push
+	* Fetch, whole, the live calls of each seat whose call this tab holds behind what a push
 	* described — asked by the seat's AGENT ID, the key the push named it by — the push that moved one of its heavy fields was dropped by the
 	* server's queue (`mergeLiveCall`).
 	*
@@ -4109,6 +4188,7 @@ var ACTIONS = {
 			"target_date",
 			"default_assignee",
 			"archived",
+			"stuck_after_hours",
 			"fields",
 			"tags_add",
 			"tags_rename",
@@ -4124,6 +4204,13 @@ var ACTIONS = {
 		domain: "tracker",
 		apps: ["worklet"],
 		refreshes: [],
+		scope: "person"
+	},
+	save_home_board: {
+		args: ["board", "if_match"],
+		domain: null,
+		apps: [],
+		refreshes: ["home_board"],
 		scope: "person"
 	},
 	set_priorities: {
@@ -4156,6 +4243,7 @@ var ACTIONS = {
 		args: [
 			"turn_id",
 			"launch_id",
+			"fold_in",
 			"choice",
 			"answer"
 		],

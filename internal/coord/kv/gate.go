@@ -165,7 +165,7 @@ func (v *gateView) settle(ctx context.Context) (*gateRun, gateClock, error) {
 	}
 	if _, bounded := ctx.Deadline(); !bounded {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, v.s.js.Options().DefaultTimeout)
+		ctx, cancel = context.WithTimeout(ctx, v.s.view.Options().DefaultTimeout)
 		defer cancel()
 	}
 	for {
@@ -204,7 +204,7 @@ func (v *gateView) ensure(ctx context.Context) (*gateRun, error) {
 	v.halt()
 	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	l := v.s.leases
-	w, err := l.kv.WatchAll(ctx)
+	w, err := l.list.WatchAll(ctx)
 	if err != nil {
 		cancel()
 		return nil, unavailable("watch "+l.kv.Bucket()+" for the protocol gate", err)
@@ -359,7 +359,7 @@ func (v *gateView) halt() {
 // a barrier short of the quorum's last write would let a gate pass a record
 // the quorum holds. An empty bucket has nothing to wait for.
 func (s *Store) streamPoint(ctx context.Context, l *lane) (uint64, time.Time, error) {
-	info, err := leaderInfo(ctx, s.js, l.stream)
+	info, err := leaderInfo(ctx, s.view, l.stream)
 	if err != nil {
 		return 0, time.Time{}, unavailable("read "+l.kv.Bucket()+"'s last write", err)
 	}

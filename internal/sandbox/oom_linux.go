@@ -52,12 +52,11 @@ func readOOMScoreAdj(path string) (int, error) {
 // WRITTEN BY THE PROCESS ITSELF, BEFORE IT EXECS: a value set on a running
 // process reaches only what it starts afterwards, so an engine write to the
 // child's /proc entry would race its first fork; the exec keeps the pid and
-// start time a direct job's record names it by. AHEAD OF ANY CONFINEMENT,
-// since Landlock leaves a box nothing writable but its home, and running
-// nothing of the box's: a fixed script exec'ing argv's absolute first word
-// ([directBox.argv]), so no box PATH is searched. A failed write is said on the
-// command's stderr and it runs at the engine's value; raising is never
-// refused, so only a host that took /proc away since the engine started fails.
+// start time a direct job's record names it by. RUNNING NOTHING OF THE BOX'S:
+// a fixed script exec'ing argv's absolute first word ([directBox.argv]), so no
+// box PATH is searched. A failed write is said on the command's stderr and it
+// runs at the engine's value; raising is never refused, so only a host that
+// took /proc away since the engine started fails.
 func oomFirst(argv []string) []string {
 	score, ok := boxOOMScore()
 	if !ok {

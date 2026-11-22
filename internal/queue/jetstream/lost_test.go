@@ -649,18 +649,17 @@ func TestACloseThisNodeMadeIsNotALoss(t *testing.T) {
 	})
 }
 
-// EVERY CONNECTION A NODE DEPENDS ON IS WATCHED, ON BOTH DIALS — and the one
-// whose loss is its owner's is not.
+// EVERY CONNECTION A NODE DEPENDS ON IS WATCHED, ON BOTH DIALS — the lease
+// connection's too — and the one whose loss is its owner's is not.
 //
 // The structural half: what each connection was dialled with, since an
 // embedded broker's connection cannot be closed for good without stopping the
-// broker under the case. The external rows above are the behavioural half; on
-// the embedded topology only [embeddedServer.connect]'s handler makes the
-// coordination store's connection, holding every lease, a loss the node hears
-// of. This is the gate ADR-0001 names.
+// broker under the case. The external rows above are the behavioural half.
+// This is the gate ADR-0001 names.
 //
 // Mutation: drop watchClose from connect and the embedded rows go red; hand
-// DialOwned the queue's loss and the owned rows do.
+// DialOwned the queue's loss and the owned rows do; dial the lease connection
+// unwatched and its rows do.
 func TestEveryConnectionANodeDependsOnIsWatched(t *testing.T) {
 	t.Parallel()
 	embedded, err := StartServer(t.Context(), Config{StoreDir: brokertest.TempDir(t), StoreMaxBytes: brokertest.StoreMaxBytes})
@@ -691,10 +690,16 @@ func TestEveryConnectionANodeDependsOnIsWatched(t *testing.T) {
 			t.Fatalf("%s: DialOwned: %v", q.topology, err)
 		}
 		t.Cleanup(owned.Close)
+		leases, err := q.queue.DialLeases(t.Context())
+		if err != nil {
+			t.Fatalf("%s: DialLeases: %v", q.topology, err)
+		}
+		t.Cleanup(leases.Close)
 
 		for name, nc := range map[string]*nats.Conn{
 			"the queue's own":          q.queue.Conn(),
 			"a second DialWatched one": watched,
+			"the lease connection":     leases,
 		} {
 			opts := nc.Opts
 			if opts.ClosedCB == nil || reflect.ValueOf(opts.ClosedCB).Pointer() != want {

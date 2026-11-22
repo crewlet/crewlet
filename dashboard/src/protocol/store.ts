@@ -41,14 +41,14 @@ import type {
 import { type InboxChange, LIVE_CALL_DETAIL, MAX_EVENTS } from "../contract/wire.ts";
 import type { EngineHealth } from "../contract/health.ts";
 import type { ToolRow } from "../contract/tools.ts";
-import { comparePositions, type LogPosition } from "./session.ts";
+import { APPLIED_REVISION, comparePositions, session, type LogPosition } from "./session.ts";
 
 /**
  * How many completed-phase envelopes a tab keeps, PAYLOAD AND ALL.
  *
  * This is the one slice retained for its payload rather than for its row, and
  * it exists because a live phase has no durable half until one arrives: the
- * projection clears `live_call` the instant a phase completes, and the query
+ * projection clears a turn's live call the instant its phase completes, and the query
  * that answers a seat's history was answered ONCE, at mount. Without this the
  * turn a reader is watching vanishes the moment its last phase lands — most
  * visibly on a seat's FIRST turn, where the mount-time history is empty and the
@@ -319,6 +319,29 @@ export function mergeLiveCall(
   return { call: merged as unknown as LiveCall, stale };
 }
 
+/**
+ * A seat's live calls as a push states them — one per turn it runs, paired by
+ * `turn_id` — each merged onto the copy a tab holds for the same turn
+ * (`mergeLiveCall`), in the push's order; `stale` when any of them is. A call
+ * the push no longer lists is gone: the push states the whole list.
+ */
+export function mergeLiveCalls(
+  held: readonly LiveCall[] | null | undefined,
+  next: readonly LiveCall[] | null | undefined,
+): { calls: LiveCall[]; stale: boolean } {
+  let stale = false;
+  const calls: LiveCall[] = [];
+  for (const call of next ?? []) {
+    const merged = mergeLiveCall(
+      held?.find((h) => h.turn_id === call.turn_id),
+      call,
+    );
+    stale ||= merged.stale;
+    if (merged.call) calls.push(merged.call);
+  }
+  return { calls, stale };
+}
+
 /** Whether two copies are of one call: one turn, one phase, one iteration. */
 function sameCall(a: LiveCall, b: LiveCall): boolean {
   return a.turn_id === b.turn_id && a.phase === b.phase && a.iteration === b.iteration;
@@ -389,13 +412,13 @@ export interface StoreState {
   /**
    * The last health frame this TAB received, and null only until the first:
    * `health` without the clearing. For a reader asking what this node last
-   * said about a configuration write (`lib/useLastHealth.ts`), never whether
-   * it is up — a node gone quiet has taken back neither an apply nor a
-   * refusal. The tab keeps it rather than each reader, because the org
-   * chart's note and the Builder's strip follow a save that outlives their
-   * mount: kept per mount, one mounted while the socket was down had nothing
-   * to read, and said the save was still applying. Moves with `health`, and
-   * is read under that slice.
+   * said about a configuration write (`lib/useLastHealth.ts`), or which build
+   * it runs (the sidebar's build line), never whether it is up — a node gone
+   * quiet has taken back neither an apply nor a refusal. The tab keeps it
+   * rather than each reader, because the org chart's note and the Builder's
+   * strip follow a save that outlives their mount: kept per mount, one
+   * mounted while the socket was down had nothing to read, and said the save
+   * was still applying. Moves with `health`, and is read under that slice.
    */
   lastHealth: EngineHealth | null;
   tokens: Rollup | null;
@@ -533,6 +556,15 @@ function emptyState(): StoreState {
   };
 }
 
+/**
+ * A revision this node applied, said to every read that asks again on one
+ * (`APPLIED_REVISION`), whether a push or a snapshot carried it.
+ */
+function announceApplied(was: number | undefined, health: EngineHealth | null | undefined): void {
+  if (health && was !== undefined && health.applied_epoch > was)
+    session.written(null, null, [APPLIED_REVISION]);
+}
+
 export class Store {
   state: StoreState = emptyState();
 
@@ -612,8 +644,10 @@ export class Store {
     // socket is open; deriving it from a payload's contents meant a snapshot
     // arriving over the degraded REST fallback announced a live connection
     // that did not exist.
+    const was = this.state.lastHealth?.applied_epoch;
     if (snap.health) this.state.health = this.state.lastHealth = snap.health;
     this.emit(...ALL_DATA_SLICES);
+    announceApplied(was, snap.health);
   }
 
   /**
@@ -649,20 +683,20 @@ export class Store {
     if (byID.size === 0) return [];
     const stale: string[] = [];
     const merge = (held: AgentRow, patch: OverlayRow): OverlayRow => {
-      if (!("live_call" in patch)) return patch;
+      if (!("live_calls" in patch)) return patch;
       const heldSeq = held.live_call_seq ?? 0;
       const patchSeq = patch.live_call_seq;
       if (patchSeq !== undefined && patchSeq < heldSeq) {
-        // This push's live_call is BEHIND one a `live_call` answer already
+        // This push's live_calls are BEHIND ones a `live_call` answer already
         // applied for the seat (the answer jumped the sequence ahead of a
-        // push generated earlier). Keep the held call and its sequence; the
-        // push's other fields — status, turn — are ordered on the wire and
-        // still apply.
-        return { ...patch, live_call: held.live_call ?? null, live_call_seq: heldSeq };
+        // push generated earlier). Keep the held calls and their sequence;
+        // the push's other fields — status, turns — are ordered on the wire
+        // and still apply.
+        return { ...patch, live_calls: held.live_calls ?? [], live_call_seq: heldSeq };
       }
-      const { call, stale: behind } = mergeLiveCall(held.live_call, patch.live_call);
+      const { calls, stale: behind } = mergeLiveCalls(held.live_calls, patch.live_calls);
       if (behind) stale.push(patch.agent_id);
-      return { ...patch, live_call: call, live_call_seq: patchSeq ?? heldSeq };
+      return { ...patch, live_calls: calls, live_call_seq: patchSeq ?? heldSeq };
     };
     // A ROW THE PUSH LEAVES AS IT WAS KEEPS ITS IDENTITY, and a push that
     // moves no row tells nobody: every screen keyed on the row would
@@ -684,8 +718,8 @@ export class Store {
   }
 
   /**
-   * One seat's live call, fetched WHOLE because a push said this tab had
-   * missed a change to it — and whether the answer was CURRENT: at or past the
+   * One seat's live calls, fetched WHOLE because a push said this tab had
+   * missed a change to one — and whether the answer was CURRENT: at or past the
    * sequence the seat has applied, so that nothing a push has said since is
    * missing from it.
    *
@@ -695,12 +729,13 @@ export class Store {
    * the applied sequence describes the slot as it was before those pushes, and
    * the sequence decides only what it can order:
    *
-   * - when they cleared the call or began another, the answer is DROPPED, so a
-   *   cleared seat or a newer call is never overwritten by a running call read
-   *   a moment before it — a per-field version cannot say this, since a cleared
-   *   null carries none and two calls' fields are never compared;
-   * - when they are the same call, the answer still brings every heavy field
-   *   whose version is newer than the copy held (`newerDetail`), because those
+   * - for a turn whose call they cleared or replaced, the answer's call is
+   *   DROPPED, so a cleared slot or a newer call is never overwritten by a
+   *   running call read a moment before it — a per-field version cannot say
+   *   this, since a cleared slot carries none and two calls' fields are never
+   *   compared;
+   * - for a turn still on the same call, the answer still brings every heavy
+   *   field whose version is newer than the copy held (`newerDetail`), because those
    *   are exactly what the tab asked for — the pushes since left them out —
    *   while the light fields stay the newer pushes'. Dropping it whole lost
    *   that repair, and nothing asked again until the seat's next push.
@@ -720,15 +755,22 @@ export class Store {
         moved = true;
         return {
           ...a,
-          live_call: mergeLiveCall(a.live_call, answer.live_call).call,
+          live_calls: mergeLiveCalls(a.live_calls, answer.live_calls).calls,
           live_call_seq: seq,
         };
       }
       current = false;
-      const fresher = a.live_call && answer.live_call && newerDetail(a.live_call, answer.live_call);
+      let fresher = false;
+      const calls = (a.live_calls ?? []).map((held) => {
+        const older = answer.live_calls?.find((c) => c.turn_id === held.turn_id);
+        const repaired = older && newerDetail(held, older);
+        if (!repaired) return held;
+        fresher = true;
+        return repaired;
+      });
       if (!fresher) return a;
       moved = true;
-      return { ...a, live_call: fresher };
+      return { ...a, live_calls: calls };
     });
     if (moved) this.emit("agents");
     return current;
@@ -791,10 +833,12 @@ export class Store {
   }
 
   applyHealth(health: EngineHealth | null | undefined): void {
+    const was = this.state.lastHealth?.applied_epoch;
     this.state.health = health ?? null;
     if (health) this.state.lastHealth = health;
     this.link(!!health);
     this.emit("health");
+    announceApplied(was, health);
   }
 
   setConnected(value: boolean): void {
@@ -1116,7 +1160,7 @@ export class Store {
     //
     // It is the durable half of a phase the reader is watching live, and the
     // wire has always carried it — `Ingest` broadcasts the whole envelope, the
-    // payload included, before it pushes the overlay that clears `live_call`.
+    // payload included, before it pushes the overlay that clears its call.
     // Nothing read it, so the finished record never arrived and the turn simply
     // went away. Assignment, not derivation: the phase record itself is built
     // by `fromPhaseEvent`, where the screens that render one already build it

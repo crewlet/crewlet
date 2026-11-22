@@ -6,6 +6,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/redact"
 )
 
 // WHAT A FAILED RUN'S REPORTS NAME: the failures in the check's own report
@@ -13,9 +14,10 @@ import (
 // paths its definition names, read once its command ends, each at most
 // sandbox.MaxFileBytes, and held to what an ending carries: at most
 // gitlet.MaxCheckFailures failures within gitlet.MaxCheckFailureBytes
-// encoded, each message at most gitlet.CheckFailureMessageBytes, the rest
-// counted (FailuresOmitted). FIRST COME FIRST KEPT, in the report's order:
-// that is the order a person reads, and a cascade's first failure says why.
+// encoded, each message redacted, then cut to gitlet.CheckFailureMessageBytes,
+// the rest counted (FailuresOmitted). FIRST COME FIRST KEPT, in the report's
+// order: that is the order a person reads, and a cascade's first failure says
+// why.
 
 // failures is what a run's reports named, held to an ending's bounds.
 type failures struct {
@@ -49,16 +51,27 @@ var failureOverhead = func() int {
 }()
 
 // add keeps f where both bounds hold it, its fields valid UTF-8 and its
-// message cut to CheckFailureMessageBytes, and counts it omitted otherwise.
+// message REDACTED, THEN CUT to CheckFailureMessageBytes (summaryOf's rule),
+// and counts it omitted otherwise. Its test id is redacted too, as a
+// parametrised test's id spells its parameters' values (redaction is
+// deterministic, so an id still names the same test); its path, a file of the
+// change's, is kept as written.
 func (fs *failures) add(f gitlet.CheckFailure) {
+	// FULL, a failure is only counted: redacting the hundreds of thousands
+	// a report can name past what an ending keeps costs their time and heap.
+	if len(fs.kept) >= gitlet.MaxCheckFailures || fs.bytes >= gitlet.MaxCheckFailureBytes {
+		fs.omitted++
+		return
+	}
 	f.Path = strings.ToValidUTF8(f.Path, "")
-	f.TestID = strings.ToValidUTF8(f.TestID, "")
-	f.Message = cut(strings.ToValidUTF8(f.Message, ""), gitlet.CheckFailureMessageBytes)
+	f.TestID = redact.Secrets(strings.ToValidUTF8(f.TestID, ""))
+	message, _ := redact.Prefix(strings.ToValidUTF8(f.Message, ""), gitlet.CheckFailureMessageBytes+1)
+	f.Message = cut(message, gitlet.CheckFailureMessageBytes)
 	if f.Line < 0 {
 		f.Line = 0
 	}
 	weight := failureOverhead + jsonBytes(f.Path) + jsonBytes(f.TestID) + jsonBytes(f.Message) + 20
-	if len(fs.kept) >= gitlet.MaxCheckFailures || fs.bytes+weight > gitlet.MaxCheckFailureBytes {
+	if fs.bytes+weight > gitlet.MaxCheckFailureBytes {
 		fs.omitted++
 		return
 	}

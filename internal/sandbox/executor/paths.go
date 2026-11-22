@@ -9,11 +9,10 @@
 // plumbing so each runner supplies only what is its own: its invocation, its
 // config, where its output lands, and how its stream and result are read —
 // and how a person's notes to its run's turn reach it between its own steps
-// (steer.go: Claude Code's hooks, [ClaudeCode]; OpenCode's plugin,
-// opencode_steer.js, [OpenCode]), and how the skills a run is handed as its
-// own reach its harness and its loads reach the run's bridge (skills.go: a
-// plugin of the run's own on Claude Code; a skills directory and a second
-// plugin, opencode_skills.js, on OpenCode).
+// (ADR-0177; claudesteer.go's hooks, opencode_steer.js's plugin), and how the
+// skills a run is handed as its own reach its harness and its loads reach the
+// run's bridge (claudeskills.go's plugin; opencodeskills.go's skills directory
+// and opencode_skills.js).
 //
 // # A run's commits credit Crewlet, through git
 //
@@ -35,7 +34,7 @@
 //
 // # A Claude Code thread is read a line at a time, holding what its readers read
 //
-// A person's transcript (transcript.go) shows a session as well as it can,
+// A person's transcript (claudetranscript.go) shows a session as it can,
 // and a line it cannot read is an entry saying so. A reader that DECIDES
 // something from what a session recorded (that a hook's note reached the
 // model, that a call's result is held) cannot: one record it misreads is a
@@ -170,17 +169,14 @@
 // call the log cannot state may be of it. Which of two identical calls a part
 // is is never decided: a class is held whole or told whole.
 //
-// ONE WALK, TWO VISITORS. The person reader's export walk
-// ([walkOpenCodeExport]) reads the document one value at a time through a
-// jsontext decoder behind [heldValue], every value in place in the decoder's
-// buffer, and hands each to a visitor ([openCodeVisitor]): a person's
-// transcript, or the reading. Each message is decoded once
-// ([decodeOpenCodeMessage]), each item once ([decodeOpenCodeItem]), each by
-// [eachKeyInPlace], which keeps every member as the sub-slice it is and
-// records the key facts ([openCodeKeys]): the names met, one met twice, one
-// outside the decode's set. The person reader reads none of them, and its
-// pages are pinned byte for byte to the walk before it read in place
-// (TestLiftingTheExportWalkChangesNoPersonsTranscript).
+// ONE WALK, THREE VISITORS. The reading is a visitor of the one export walk
+// ([scanExport]), as the take's meter and a person's transcript are, on the
+// scanner, holding no value whole: it asks each member by a means
+// ([openCodeHoldingsWalk] lists them), an answer's text and a failure's
+// message by their digest ([textDigest]). A VALUE PAST ITS CAPTURE OR ITS WORD
+// IS THERE, of its kind, and equal to no word: an `executed` past the bound
+// passes its part, and a `type` past the word is a shape not read. The decode
+// walk the reading and a person read by before is their oracle.
 //
 // WHAT IS READ, as the measured releases write it, the reading ending at
 // anything else: `info` once, an object, its id the session's; `messages`
@@ -197,7 +193,7 @@
 // A PART COUNTS only where it is `crewlet_` and a name the bridge files a tool
 // by, `executed` absent or false, its names within OpenCode's six and its
 // `time`'s within `created`, `ran` and `completed`, each once; its `state`,
-// read in one pass whatever its key order ([openCodePartState]), exactly
+// read whatever its key order ([openCodeHoldingsWalk.stateEnd]), exactly
 // `status`, `input`, `content`, `metadata` for a completed call, with
 // `metadata` exactly `{"truncated": false}` and one text item, or exactly
 // `status`, `input`, `error` for a failed one, `error` a `tool.execution` and
@@ -205,9 +201,9 @@
 // [sandbox.MaxSubmissionArgsBytes]. Anything else passes the part, which only
 // lowers its class's parts, and so can only tell a call.
 //
-// THE OUTCOME: the text (a failure's message) is decoded only where its span
-// could hold a candidate class's size, a third to six times it
-// ([textMayBe]), and once. A whole output is matched every byte; a cut one by
+// THE OUTCOME: the text (a failure's message) is matched by its digest
+// ([matchedClass]): its size first, never a class's of size zero. A whole
+// output is matched every byte; a cut one by
 // its size and all the opening the log kept, never where the text holds the
 // scrub's marker, since the scrub may have rewritten what the log did not
 // keep. A completed part's empty or blank text never counts (an empty answer
@@ -242,23 +238,16 @@
 // it can make of a reading, among them two messages given one id, of which the
 // import keeps one, since no message's id is read but the start's.
 //
-// THE BOUNDS: the plaintext at the scrub's meter ([boundedPlain]), a value at
-// [maxLineBytes] (a message past it is no reading, every call told), the ask at
-// [sandbox.MaxBridgeCalls], its unlisted calls at the log's own bounds. What
-// it keeps: whether `info` matched, the start, the step, and per class at most
-// Calls+1 step numbers; never a message, an item or a text past its visit.
-// MEASURED (BenchmarkAnOpenCodeReadingAtItsBounds, two cores, GOGC=10): a
-// message at the bound holding one answer the reading decodes holds 97 MiB
-// live in 0.3 s, a person's read of it 97 MiB, the two at once (two readings
-// never running at once) 161 to 193 MiB; a step of minimal items at the bound
-// 96 MiB in 1.9 s; 255 MiB of ordinary steps 2 MiB in 7.9 s. Each read is
-// within the about 133 MiB a transcript slot is held to, as a Claude Code
-// thread's line is (above), the reading's in the seats' slot
-// ([SeatTranscriptReadsAtOnce]), and the two at once within the two slots'
-// 266 MiB. What one read holds is the walk's buffer, which grows by doubling
-// to about twice the message it holds, and one decoded text: no member of a
-// message is copied out of it, and an answer of one part is its text, never
-// built again ([toolAnswer]).
+// THE BOUNDS: the plaintext at the scrub's meter ([boundedPlain]), no message
+// or value held whole (a step's `completed` past the capture is no reading,
+// toward telling), the ask at [sandbox.MaxBridgeCalls], its unlisted calls at
+// the log's own bounds. What it keeps: whether `info` matched, the start, the
+// step, per class at most Calls+1 step numbers and the parts the message it is
+// in counts. It reads in a slot of its own ([HoldingsReadsAtOnce]). MEASURED
+// (BenchmarkAnOpenCodeReadingAtItsBounds): at most 2 MiB live, its heap at
+// most 5 MiB, whatever a message's length; the slowest, one step of 255 MiB of
+// `0` items, 10.7 to 11.0 s; beside a person's read of the 64 MiB export the
+// two hold 18 to 19 MiB, the read's.
 //
 // TO ADD A RELEASE to [openCodeHoldingsReleases], it must first be one the
 // count reads ([openCodeCountReleases]); then drive the engine's own bridge
@@ -362,52 +351,56 @@
 // 5 to 8 MiB at the default, within the arithmetic, and taking no slot.
 //
 // THE BASE TIER'S COUNT: no token of this pool holds it, so it is every read in
-// flight at once: one per seat collecting on this node and up to the box
-// host's boxReadsHeld (64) reads for its peers, each about 5.3 MiB at its
-// worst, 341 MiB, and one per take. A take at its base holds at most 13 MiB,
-// its scrub's base and its meter's at once, each measured apart (one case a
-// process on a dedicated two-core slot, read as above, the most of nine runs)
-// and summed, each with its benchmark's own heap, so the sum over-counts. The
-// scrub, streaming each text through redact's stages, each holding its window,
-// 9 to 10 MiB (BenchmarkATakeAtItsBase: a main-thread line, a `.json` string
-// and a text file each at [scrubPieceBaseBytes], the line's and the string's
-// of bytes the decode triples, both readings, its meter beside it; 0.23 s,
-// its heap peaking at 21 to 22 MiB at the default GOGC). The meter, 3 MiB
-// (BenchmarkAMeterAtItsBase: alone, on a line the scrub keeps as text,
-// verbatim, so a string decodes to three bytes a byte, its facts at the base
-// and the strings a charge covers decoded beside them; 2 MiB on a record line,
-// whose bytes no UTF-8 holds the scrub writes as U+FFFD). That line is past
-// the scrub's base, so the two never meet on one line, but the scrub may read
-// on at its base while the meter is still on it. So every take holds one of
-// [SessionTakesAtOnce] (26), a pool of its own sized so the takes at their
-// base hold 338 MiB at most, within those 341.
+// flight at once: the node's own, at most its turns (internal/sandbox's
+// collections), up to the box host's boxReadsHeld (64) reads for its peers,
+// each about 5.3 MiB at its worst,
+// 341 MiB, and one per take. A take at its base holds at most 11.6 MiB, its
+// scrub's 8.2 (BenchmarkATakeAtItsBase) and its meter's 3.3
+// (BenchmarkAMeterAtItsBase), measured apart, each with its own heap, so the
+// sum over-counts: the meter's worst line is past the scrub's base, but the
+// scrub may read on at its base while the meter is still on it. So every take
+// holds one of [SessionTakesAtOnce] (29), a pool of its own sized so the takes
+// at their base hold at most those 341 MiB.
 //
 // THE LARGE TIER, ONE SLOT IN A POOL APART: a collection's pass past its base
 // holds 43 MiB at most, the chain at both bounds; a take, its meter beside it
-// under the same slot, 31 to 48 MiB over twelve runs, the most as the build
-// machine's load rose (BenchmarkATakeAtItsLargeTier: as at its base, each piece
-// of [threadLineMax] bytes, 6.4 to 6.6 s on two cores,
-// 7.1 to 7.5 s loaded, its heap peaking at 65 to 87 MiB at the default GOGC,
-// 146 MiB loaded, against the pass's 62 MiB). Shared with
+// under the same slot, 32 to 34 MiB over five runs
+// (BenchmarkATakeAtItsLargeTier: as at its base, each piece of [threadLineMax]
+// bytes, 3.8 to 4.2 s on two cores). Shared with
 // [TranscriptReadsAtOnce]'s two, a collection's large pass waits behind two
-// transcript reads of up to about 22 s each and spends internal/sandbox's
-// MainThreadReadWait (27 s), so a person paging a transcript would decide how a
-// turn's relaunch is told; apart, it never does. One slot, not two: the
-// process's thread readers then hold at worst 2 x 133 + 48 = 314 MiB beside the
-// base tier. One waiter behind a pass over ordinary lines at the bound (2.6 to
-// 2.8 s with the count and the next request's estimate, 5.7 s loaded) is
-// through in 11.4 s, within the 27 s. Behind the slot's slowest holder, loaded,
-// it is not: a pass keeping more than [collectionBaseRecords] records holds the
-// slot to its end whatever its lines, so a collection whose chain keeps the
-// records of 2^20 short lines of blocks of an empty kind, at the bound (18.3 to
-// 19.7 s with the count alone, 20.7 to 21.6 s with the next request's estimate,
+// transcript reads of up to 58 s each and spends internal/sandbox's
+// MainThreadReadWait (27 s), so a person paging a transcript would decide how
+// a relaunch is told; apart, never. One slot, not two: the process's thread
+// readers hold at most 2 x 29 + 43 + 43 = 144 MiB (the reads peak at 2 x 58)
+// beside the base tier, a reading's 43 apart ([HoldingsReadsAtOnce]).
+// One waiter behind a pass over ordinary lines at the bound (2.6 to 2.8 s with
+// the count and the next request's estimate, 5.7 s loaded) is through in
+// 11.4 s, within the 27 s. Behind the slot's slowest holder, loaded, it is not:
+// a pass keeping more than [collectionBaseRecords] records holds the slot to
+// its end whatever its lines, so a collection whose chain keeps the records of
+// 2^20 short lines of blocks of an empty kind, at the bound (18.3 to 19.7 s
+// with the count alone, 20.7 to 21.6 s with the next request's estimate,
 // BenchmarkTheMainThreadReadAtItsBound, twice that loaded), holds it until its
 // own MainThreadReadWait cuts it. One such line to the bound, 18.6 to 18.8 s
 // (20.8 to 21.7 s estimating), one record of few facts, holds none. That
-// waiter, a later one, or one behind a take's piece streaming from a slow box
-// ends with [errLargeWait] and reads as no reading (count unread), the safe
-// side, as a read past MainThreadReadWait already is. The wait is spent inside
-// that wait, never added to it.
+// waiter, a later one, or one behind a take's piece (which holds the slot as
+// its first reading redacts it, 183 s at the bound) ends with [errLargeWait]
+// and reads as no reading (count unread), the safe side, as a read past
+// MainThreadReadWait is, the wait spent inside it. The longest piece the
+// archive's bound admits, a 46 MiB OpenCode image (a 64.3 MB data URI), held
+// it 8.7 s (4.8 from the memo) and 19 MiB in a real take.
+//
+// # The memory a node keeps for these pools
+//
+// [NodeWork.MemoryPools] adds up the pools a node runs, each at its worst by
+// the constant beside its measurement, half again, the heap's room under the
+// memory limit: where it hosts boxes, the base tier at its turns
+// (node.max_concurrent, bounding every read of its runs' boxes) and its peers'
+// reads, the takes, the large slot at its larger holder ([largeReadHeldBytes]),
+// and the readings' at a chain; and the transcript reads its API or its seats
+// make. A Gitlet node keeps them first (gitproc's Options.Reserve), from the
+// engine, which alone reads the roles: a registry filled at run time would size
+// them by whichever pools had started first.
 //
 // # A hook's note, confirmed off its job's main thread
 //
@@ -582,8 +575,8 @@
 // ([threadChain]) alone, 43 MiB held, peaking at 62 MiB: that line as the
 // record that fills both, read while End decides, holds 41 MiB at most, its
 // heap peaking at 55 MiB, since its results replace calls of longer ids
-// (BenchmarkAThreadChainAtItsBounds); within the about 133 MiB a seat's read
-// for words holds in the same transcript slot ([SeatTranscriptReadsAtOnce]).
+// (BenchmarkAThreadChainAtItsBounds); the most a reading holds, in its own
+// slot ([HoldingsReadsAtOnce]).
 // Lines cost a reading time, not memory, about 2.5 µs a line at the least: tiny
 // lines to [threadLinesMax] read in 2.5 to 2.8 s, a line of blocks of an empty
 // kind to [threadPlainMax] in 17.7 to 18.0 s, and the slowest measured, a
@@ -606,21 +599,21 @@
 // which never estimates, in 23.5 to 25.3 s against the 21.4 to 22.6 above, so
 // it ran about a tenth slower than when those were taken. The take's meter,
 // which estimates, stays under the scrub (BenchmarkTheMeterAtItsBounds,
-// likewise): 1.64 to 1.70 s against 10.4 to 10.7 s on ordinary lines, 2.02 to
-// 2.16 s against 26.7 to 28.1 s on results of text blocks.
+// likewise): 1.61 to 1.75 s against 10.7 to 10.8 s on ordinary lines, 2.19 to
+// 2.22 s against 26.1 to 27.0 s on results of text blocks.
 //
 // # A run's harness session, carried between boxes
 //
 // Every run names the harness session it works in before the harness starts
-// ([Harness.Session]), records which it took up ([Paths.SessionRecord]), and
-// packs it once the harness exits ([Paths.SessionCapture],
-// [Runner.OpenCapture]); a run handed a session packed in another box restores
-// it before its harness takes it up, never over a box whose own copy already
-// holds that archive ([Paths.SessionDigests]), and starts a session of its
-// own, saying why, where it can do neither. Whether a box can continue a
-// carried session at all is its harness's release, asked of the box
-// ([Runner.CheckCarry]). What each harness's archive holds, and never holds,
-// is the harness's own: see carry.go, [ClaudeCode] and [OpenCode].
+// ([Harness.Session]; a harness minting its id reports it, [sessionMinter]),
+// records which it took up ([Paths.SessionRecord]), and packs it once the
+// harness exits ([Paths.SessionCapture], [Runner.OpenCapture]); a run handed a
+// session packed in another box restores it before its harness takes it up,
+// never over a box whose copy holds that archive ([Paths.SessionDigests]), and
+// starts its own, saying why, where it can do neither. Whether a
+// box can continue a carried session is its harness's release, asked of the
+// box ([Runner.CheckCarry]). What each archive holds is its harness's: see
+// carry.go, [ClaudeCode] and [OpenCode].
 //
 // A SESSION ITS HARNESS IS STILL WORKING IN is packed by the engine, beside
 // it, by the pack the run's own end makes held to a stricter rule — every file
@@ -630,8 +623,8 @@
 // that packs it alone ([Runner.PackCapture], [Paths.SessionPackHeld]), and a
 // SAVE, packed to a place of that save's own, named after its taker
 // ([Runner.PackSave], [Paths.SessionSave]), for the take that names it alone —
-// neither ever where the job's final archive is read. Both runners make a
-// save ([saver], [Runner.Saves]), OpenCode's by its own export (below);
+// neither ever where the job's final archive is read. Every runner saves
+// ([saver], [Runner.Saves]), OpenCode by its own export (below);
 // whether a job moved since its last save is how far its harness's event
 // stream ran ([Runner.Streamed]); and a save no take will read is removed
 // from its box ([Runner.ReleaseSave]). And a job that is over and left no archive is
@@ -759,13 +752,8 @@
 // `oauth_provider`); an ID token's `id` is read only as a word of its own,
 // since `paid_tokens` spells it. The rule has ONE implementation,
 // [keyReading], handed a key's decoded text a piece at a time, cut anywhere,
-// a rune's bytes included; [credentialKey] is a keyReading handed the whole
-// key. Its state does not grow with the key, since a box's code can write a key
-// a gibibyte long: a rune's cut bytes, the key lowered while it is no longer
-// than the longest whole key, and windows over its last runes twice the most
-// a password's key spans and twice the longest name, each cut back to one
-// fewer than its span when it fills, so a key the window has not yet seen
-// whole is still in it.
+// its state never growing with the key; [credentialKey] is a keyReading handed
+// the whole key.
 //
 // # The scrub holds no value whole
 //
@@ -780,107 +768,113 @@
 // its stages' windows ([textScrub]); and a transcript's line is never held to
 // learn what it is ([measureLines]).
 //
-// A [valueStream] writes, put together, what strings.Replacer writes of the
-// whole text ([scrubber.apply]), however the text is cut: a place at a time
-// from the text's start, the longest value that begins at a place taken out
-// and the reading going on after it, else the place's byte kept, so a value
-// is taken out leftmost, and longest where values begin at the same place, as
-// the replacer takes the first of its pairs, which [newScrubber] orders
-// longest first. It HOLDS FEWER BYTES THAN THE LONGEST VALUE from one piece
-// to the next: a place is decided once the longest value's length of text
-// from it is read, or the text has ended, and a value taken out lies whole
-// within the bytes its place is decided on, so nothing else is carried.
+// A [valueStream] writes what strings.Replacer writes of the whole text
+// ([scrubber.apply]), however it is cut: a value taken out leftmost, and
+// longest first at one place, as [newScrubber] orders the replacer's pairs.
+// It HOLDS FEWER BYTES THAN THE LONGEST VALUE between pieces: a place is
+// decided once that many bytes past it are read, or the text has ended, and a
+// value taken out lies within them.
 //
-// TWO READINGS. What a line, or a `.json` file, is, JSON or text, is known only
-// at its end, and what a transcript's line loses of its loaded tool
-// definitions only once its last key is read; and a tar names each file's size
-// before its bytes. So a tar is read TWICE: the first reading reads each line
-// and each `.json` file both ways at once, counting what each would write, and
-// keeps a PLAN; the second writes what the first counted. Every rewrite here
-// is a pure function of what it reads, so the second reading writes what the
-// first counted, and a member that comes out another length is a member that
-// changed between the two, which fails the take. A `.json` file's two ways
-// are read ON THE SCRUB'S OWN GOROUTINE ([measureFile]): the document's
-// rewrite reads through a reader that hands every byte to the text's scrub as
-// well ([teeRead]), as a transcript's line is read ([lineReader]), so every
-// byte is rewritten and redacted where the take's containment of a panic sees
-// it. A goroutine for each way, fed through pipes, would put the rewrite and
-// the redaction of every `.json` file a box wrote outside that containment, so
-// a panic there would end the engine, and a panic in the copy beside them
-// would leave both blocked on their pipes for good.
+// TWO READINGS, THE SECOND A COPY. What a line, or a `.json` file, is, JSON or
+// text, is known only at its end, and what a transcript's line loses of its
+// loaded tool definitions only once its last key is read; and a tar names each
+// file's size before its bytes. So the first reading rewrites the archive into
+// the take's SPOOL ([unitSpool]: gzip at the kept archive's level, in its
+// process's spool directory), counting each file's size as kept, and the
+// second writes the tar from it, never the box ([spoolCopy]): a header names
+// the size of what follows it, whatever the box's archive does meanwhile.
+// Members before a reading's resume point are kept as the first reading read
+// them; the member it resumes in is checked by name, kind and length
+// ([tarPlan.memberAt]). The first reads each line and `.json` file as JSON
+// alone; the first that is no JSON ends it, and the next goes on from it,
+// reading it as text and every later one both ways ([tarPlan.unitAhead]), each
+// way held to [wayRoomBytes] until the unit's is known ([candidate]): a JSON
+// way past it goes into a gzip member of its own, cut back out of the spool
+// where the text is kept, and a unit whose text was let go before its JSON
+// failed is read once more, as text, all within the first reading. Both ways
+// run on the scrub's own goroutine, where the take contains a panic
+// ([measureFile]). The spool is removed on every way out, before the take's
+// body ends, and held to the room the take holds for it (internal/sandbox's
+// takeRoomBytes): a spool that would pass it refuses the take.
 //
-// THE PLAN ([tarPlan]) is three streams of bits, each written by the first
+// THE PLAN ([tarPlan]) is two streams of bits, each written by the first
 // reading in the order it decides them and read back by the second in that
-// order, and nothing else, whatever the tar holds: for each member its kind,
-// and for a regular file its size as rewritten, whether it is kept as text,
-// and how many line bits its transcript took; for each line of two bytes or
-// more, whether it is kept as text (a shorter line is one byte or none, which
-// no pass changes, so both readings write it as text); and for each line that
-// loses a definition, how far it lies from the cut before it, which list it
-// loses them from, how many elements that list holds and a bit each, set for
-// one cut. So the plan is AT MOST A SIXTEENTH OF THE PLAINTEXT, a bit for
-// every two of its bytes, beside a block of each stream being filled: a
-// member's header is 512 bytes against a few dozen bits, a line with a bit is
-// two bytes or more, and a list's element, a byte and its comma, takes one bit,
-// its cut a few dozen more, which the record it is cut out of, some seventy
-// bytes, pays for. A list or a record of its own for each member, line or cut
-// would cost a block or some dozen bytes a line, and let a box's archive of a
-// mebibyte, a transcript of short lines each losing a definition, hold the
-// engine host to gibibytes between the two readings.
+// order: for each member its kind, and for a regular file its size as kept;
+// and each line that loses a definition: where the spool holds it, which list,
+// how many elements it holds, the bytes the cut takes and a bit each, set for
+// one cut. So it is AT MOST A SIXTEENTH OF THE PLAINTEXT: a member's header is
+// 512 bytes against a few dozen bits, a list's element, a byte and its comma,
+// one bit, and its cut a few dozen more, which the record it is cut out of
+// pays for. A record of its own for each member, line or cut would let a box's
+// archive of a mebibyte hold the engine host to gibibytes between the two
+// readings.
 //
-// AN EXPORT IS READ TWICE TOO, THE FIRST READING DRY ([scrubDocument]),
-// because a reading refuses a document only once it has read it: one that is
-// no one JSON value, one past the plaintext a reading reads, or text the
-// redaction could not redact. Read once, the bytes rewritten before the
-// refusal would reach the take's pipe, its uploader, its checksum and its
-// context meter before the pipe ended in the error, a published key among
-// them where the redaction is what refused. The second reading writes what the
-// first read; one that comes out another length, or that the scanner refuses
-// where the first read one value whole, is an export that changed between the
-// two, and one refused for another reason says that reason.
+// AN EXPORT IS SPOOLED TOO ([scrubDocument]): a reading refuses a document
+// only once it has read it, and what it rewrote before a refusal would else
+// reach the take's pipe, uploader, checksum and meter.
+//
+// A TEXT A TAKE FOUND UNCHANGED IS NOT REDACTED AGAIN. The redaction is the
+// scrub's cost, and every turn's take scrubs the whole session: a whole-PDF
+// read, its base64 twice, cost 6.1 s a take. So the process remembers what its
+// own full scrubs found unchanged ([scrubMemo]): of a text of
+// [scrubPieceBaseBytes] or more (a line read as text, a name or string, a
+// file), its length and the digest of its chunks' SHA-256 digests, under its
+// first chunk's digest and the take's agent, never the text. A first reading
+// writes a text whose first chunk the memo knows as it is, and checks the
+// whole at its end; one the memo does not know whole reads the archive again,
+// its spool emptied, without that chunk's answer ([firstReadings]). Every
+// digest is of the by-value pass's output under the take's own values. SOUND
+// because the redaction's answer for a text is the text's alone
+// (redact.Stream; its rules are the build's): each text has a redaction of its
+// own, a key's credential is judged on its raw name, and a credential's value
+// never reaches it. In memory alone: a restart, a deploy or a seat's move to
+// another node costs one take at most what it costs without. On two cores of
+// the build machine, two runs each (BenchmarkASecondTakeOfAPDFSession), that
+// read's take came to 6.1 s with no memo, 5.2 s as a process's first and 3.4 s
+// as its second.
 //
 // # The scrub's bounds, and what it holds
 //
 // The archive is the box's own: its code can write a gzip that expands a
-// thousandfold, a value nested a million deep, or a session of nothing but
-// text the redaction has to read. So the scrub reads at most [scrubExpansion]
-// times the archive's bound of plaintext in one reading ([scrubBounds]) and
-// rewrites no value nested deeper than jsonscan.MaxDepth as JSON (a
-// transcript's line or a `.json` file so nested is text, and an export is
-// refused). A session past the plaintext, or one whose text the redaction
-// refuses ([errRedaction], what the redaction said read off its error, and
-// redact.ErrDecidedEarly whether its stream decided a window before what it
-// read there was known, at a write or at its close), is refused, stamped with
-// why, rather than costing the engine host its memory; and the whole scrub is
-// held to the take's time (internal/sandbox's SessionScrubWait). A panic in
-// the scrub is CONTAINED on the take's own goroutine (scrubContained, take.go),
-// which reads every byte of the archive, a `.json` file's two readings
-// included, and refuses the take with the panic's message; one in the meter
-// beside it measures nothing (meterContained, measure.go); each is told under
-// panics.ScopeSessionTake.
+// thousandfold, a value nested a million deep, or a session of nothing but text
+// the redaction has to read. So the scrub reads at most [scrubPlainMax] of
+// plaintext in one reading ([scrubBounds]) and rewrites no value nested deeper
+// than jsonscan.MaxDepth as JSON (a transcript's line or a `.json` file so
+// nested is text, and an export is refused). A session past the plaintext, or
+// one whose text the redaction refuses ([errRedaction], what the redaction said
+// read off its error, and redact.ErrDecidedEarly whether its stream decided a
+// window before what it read there was known, at a write or at its close), is
+// refused, stamped with why, rather than costing the engine host its memory;
+// and the whole scrub is held to the take's time (internal/sandbox's
+// SessionScrubWait). A panic in the scrub is CONTAINED on the take's own
+// goroutine (scrubContained, take.go), which reads every byte of the archive, a
+// `.json` file's two readings included, and refuses the take with the panic's
+// message; one in the meter beside it measures nothing (meterContained,
+// measure.go); each is told under panics.ScopeSessionTake.
 //
-// AT MOST [scrubHeldBytes] IS HELD, derived from the code's own figures: two
-// text scrubs at once (a line's or a `.json` file's two readings side by side,
-// each redacting one text), each its redaction's stages (redact.Stream's own
-// figure) beside a [valueStream] and a string's encoder; two JSON rewrites,
-// each its scanner, its read buffer and a frame a container open; the readers
-// and writers of the archive's gzip and tar; and the plan, a sixteenth of the
-// plaintext at most. About 115 MiB at the archive's bound, 16 MiB of it the
-// plan, which a real session leaves nearly empty. A test holds the figure at a
-// smaller bound, and BenchmarkTheScrubAtThePlaintextBound measures it at the
-// real one, 256 MiB of plaintext, both readings of the tar from a file on disk.
-// On two efficiency cores of a laptop shared with other work:
+// AT MOST [scrubHeldBytes] IS HELD: two text scrubs at once (a line or a
+// `.json` file read both ways), each its redaction's stages (redact.Stream's
+// figure) beside its stage's chunk, a [valueStream] and a string's encoder; two
+// JSON rewrites, each its scanner, its read buffer and a frame a container
+// open; the readers and writers of the archive's gzip and tar, and of the
+// spool; a unit's two ways; and the plan, a sixteenth of the plaintext. About
+// 132 MiB at the bound and [scrubLongestMax], 16 MiB of it the plan and 12 MiB
+// that value, near nothing in a real session. A test holds it at a smaller
+// bound, and BenchmarkTheScrubAtThePlaintextBound measures it at the real one,
+// both readings from a file on disk.
+// On two cores of the build machine:
 //
-//	one string to the bound:   40.6 s a scrub, held 18.6 MiB (256 MiB from 28 MiB)
-//	a million short lines:     19.9 s a scrub, held 1.6 MiB (160 MiB from 19 MiB)
-//	tiny definitions:          21.7 s a scrub, held 25.5 MiB (256 MiB from 0.5 MiB)
+//	one string to the bound:   16.2 s a scrub, held 17.8 MiB (256 MiB from 28 MiB)
+//	a million short lines:     22.1 s a scrub, held 1.4 MiB (160 MiB from 19 MiB)
+//	tiny definitions:          21.2 to 21.9 s a scrub, held 17.4 MiB (256 MiB from 0.5 MiB)
+//	a string of `pwd=x `:      136 s a scrub
+//	a file of `pwd=x` lines:   123 s a scrub
+//	`pwd=` lines, torn:        183 s a scrub
 //
-// Against SessionScrubWait, two minutes for the whole take's scrub with the
-// archive's two readings out of a box at its floor pace of a mebibyte a second
-// among it (64 s for an archive at its 32 MiB bound read twice, so 56 s left
-// for the scrub's own work where the two do not overlap), each arm fits, the
-// string the closest, since its first reading redacts it twice (as JSON and as
-// text, side by side) and its second once.
+// The last three, a harness's tool results, set SessionScrubWait (its sum and
+// why a take past it fails closed are in code-sandbox.md); the torn string,
+// read on from its last line, the slowest. A string is redacted once, as JSON
+// in its first reading.
 //
 // # A definition the scrub renamed is cut out of its line
 //
@@ -926,19 +920,19 @@
 //
 // DECIDED IN THE FIRST READING, APPLIED IN THE SECOND: whether a line loses a
 // definition is known only at its end (the attachment's last `type`, its last
-// `entries`, a marker anywhere), and the second reading writes the list before
-// it reads that end. The first reading's half ([definitionsReading]) keeps a
-// bit for each element of the list being read and of the last one read before
-// it, which a later `entries` or `attachment` replaces, so at most a bit for
-// each two bytes of the line; the second's ([definitionCut]) reads the plan's
-// cut back as it writes.
+// `entries`, a marker anywhere), and the first reading spools the list before
+// it reads that end. Its half ([definitionsReading]) keeps a bit for each
+// element of the list being read and of the last one read before it, which a
+// later `entries` or `attachment` replaces, so at most a bit for each two bytes
+// of the line; the second's ([cutFilter]) copies the line less the elements
+// cut and their commas.
 //
 // # An OpenCode continuation's first request, judged in its box
 //
 // OpenCode compacts a session before a request where its count of it reaches
 // the point its box sets for the run's model: the model's limit, read off the
 // box's catalog and documents, less a buffer. Only the box the run is handed
-// can say that point, so the launch asks it there ([Runner.ReadOpenCodePoint],
+// can say that point, so the launch asks it there ([Runner.ReadBoxPoint],
 // opencodepoint.go), in ONE exec under the run's own environment, the
 // engine's own document set aside as the run's script sets it aside
 // (OPENCODE_CONFIG_CONTENT), in the run's working directory: the box's login
@@ -1078,7 +1072,7 @@
 // after it, and past a compaction no request has followed it is the
 // compacted-away conversation's. So the floor reads the harness's OWN ESTIMATE
 // of the next request, by the rule Claude Code decides whether to compact by
-// (resumed.go's file comment), run forward over the thread:
+// (claudecount.go's preamble), run forward over the thread:
 //
 //   - THE ANCHOR, by the count's own rule ([countedReplyOf]): the last
 //     main-thread reply whose usage counts, at its input, cache writes, cache
@@ -1088,7 +1082,7 @@
 //     ([threadLine.Estimate]), an attachment's stored rendering or a PDF
 //     read's pages ([threadLine.AttachmentEstimate]), and an attachment the
 //     harness renders again by its type at two bytes a token of its line
-//     ([sandbox.ClaudeCharge]), which bounds any rendering of what the line
+//     ([claudeChargeBytes]), which bounds any rendering of what the line
 //     holds; a system record and every other record nothing, as the harness
 //     charges them;
 //   - A MAIN COMPACT BOUNDARY restarts it: no anchor, and the estimate of the
@@ -1162,12 +1156,20 @@
 // what that provider reported, and a continuation on another provider's
 // model is not held to it.
 //
-// ONE WALK of the export, on the scanner (internal/jsonscan), which never
-// holds a string: each message's small values are captured at
-// [exportValueMaxBytes], its content is walked for the spans of its tool
-// results and the files it names, and every other value is passed over, its
-// bytes checked and none held. The floor's last-request figure
-// ([measuredPrompt]) is read in the same walk.
+// ONE WALK of the export ([scanExport]), on the scanner (internal/jsonscan),
+// which never holds a string. It owns the export's grammar, names and frames
+// and hands each member to its visitor by the means the visitor asks
+// ([exportAsks]): passed, read as a word, captured within
+// [exportValueMaxBytes], or walked as a frame; a value past its word or
+// capture is there, of its kind. The meter ([exportMeter]) asks what the walk
+// it read by before read, its oracle (TestTheMeterReadsAnExportAsItsWalkDid):
+// each message's small values captured, its content walked for the spans of
+// its tool results and the files it names, the rest passed unheld. The
+// floor's last-request figure ([measuredPrompt]) is read in the same walk. The
+// take's pipe waits on the meter, so the walk keeps up with its oracle
+// (BenchmarkTheMeterAtItsBounds, 255 MiB of plaintext a case): within 10% on
+// every case, `{}` messages in 7.8 to 8.2 s against 27.9 to 31.3, holding at
+// most 2 MiB live.
 //
 // # The OpenCode releases the count reads
 //
@@ -1468,14 +1470,6 @@ const saveTagBytes = 16
 // box's.
 func (p Paths) SessionDigests() string { return p.WorkDir() + "/session-digests" }
 
-// ClaudeConfigDir is the directory a Claude Code run keeps its state in, which
-// the run pins as CLAUDE_CONFIG_DIR ([claudeSessionLayout]): the box home's
-// `.claude`, where the harness keeps it by default and where a local box is
-// seeded with the entry's login (`.claude/.credentials.json`). Named by the
-// box's own home, as every path the runner hands the box is, so no profile the
-// login shell sources can move it.
-func (p Paths) ClaudeConfigDir() string { return p.Home + "/.claude" }
-
 // Brief is where the brief is written for a harness that reads it on stdin
 // ([Output.BriefOnStdin]) rather than on its argv.
 func (p Paths) Brief() string { return p.WorkDir() + "/brief.md" }
@@ -1498,14 +1492,6 @@ func (p Paths) FreshBrief() string { return p.WorkDir() + "/brief-fresh.md" }
 // ARG_MAX. Under WorkDir, out of the checkout, so a `git clean` cannot remove
 // it from under a run and a commit cannot carry it into a repository.
 func (p Paths) System() string { return p.WorkDir() + "/system.md" }
-
-// ClaudeNotesSystem is where a Claude Code run wired to its turn's notes has
-// its standing instructions written a second time, with its harness's instruction
-// about notes after them ([ClaudeCodeSteerInstruction]): the text the run's
-// script names in place of [Paths.System] on a release whose note hooks it
-// starts ([claudeNotesGate]), so the instruction reaches a run its notes can
-// reach and no other. Beside it, and a file for the reason it is.
-func (p Paths) ClaudeNotesSystem() string { return p.WorkDir() + "/system-notes.md" }
 
 // CredentialDocument is where a box keeps the login a harness holds in a database
 // of its own: the harness's own export of it, which the engine seeds a local box
@@ -1584,123 +1570,6 @@ func (p Paths) MCPConfig() string { return p.WorkDir() + "/mcp.json" }
 // the harness starts, so the box holds one token when its model can first read
 // a file. Beside mcp.json for the reason mcp.json is where it is.
 func (p Paths) MCPConfigFresh() string { return p.WorkDir() + "/mcp-fresh.json" }
-
-// ClaudeSettings is where every Claude Code run's own settings file is written
-// — the setting that holds the harness's own retention sweep off
-// ([claudeSettings]) — named on its command line with `--settings`, unless the
-// run is started with [Paths.ClaudeNotesSettings] in its place.
-//
-// BESIDE mcp.json, never in the checkout's `.claude/`: the checkout is the
-// repository's, which the run edits and a commit carries, and a file there would
-// replace the repository's own project settings rather than sit above them.
-// `--settings` adds a layer the harness ranks above the repository's settings and
-// below a managed policy, so the repository keeps its own and the run's settings
-// are there whatever it holds. Under WorkDir, so a `git clean` in the brief
-// cannot remove it from under the run.
-func (p Paths) ClaudeSettings() string { return p.WorkDir() + "/claude-settings.json" }
-
-// ClaudeNotesSettings is where a Claude Code run wired to its turn's notes has
-// its settings written a second time, with the hooks that hand its main agent a
-// person's notes between its steps ([claudeNotesSettings]): the file the run's
-// script names in place of [Paths.ClaudeSettings] on a release whose note hooks
-// it starts ([claudeNotesGate]). Beside it, and in the work directory for the
-// reason it is.
-func (p Paths) ClaudeNotesSettings() string { return p.WorkDir() + "/claude-settings-notes.json" }
-
-// ClaudeSkillsSettings is where a Claude Code run handed skills of its own has
-// its settings written with hooks switched on ([claudeHooksOnSettings]), so
-// the plugin's hook that reports each load runs whatever the repository's own
-// settings say: the file the run's script names in place of
-// [Paths.ClaudeSettings] on a release that runs that hook ([claudeSkillsGate]),
-// unless it starts the notes' hooks, whose own settings switch hooks on too
-// ([Paths.ClaudeNotesSettings]). Beside the others, for their reason.
-func (p Paths) ClaudeSkillsSettings() string { return p.WorkDir() + "/claude-settings-skills.json" }
-
-// ClaudeSettingsPinned is [Paths.ClaudeSettings]'s pinned copy: the same
-// settings with the compaction point and a resume's load pinned besides
-// ([claudeSettingsPin]), which the run's script names in that file's place on
-// a release that takes the pin ([claudePinGate]). Beside it, for its reason.
-func (p Paths) ClaudeSettingsPinned() string { return p.WorkDir() + "/claude-settings-pinned.json" }
-
-// ClaudeNotesSettingsPinned is [Paths.ClaudeNotesSettings]'s pinned copy
-// ([Paths.ClaudeSettingsPinned]).
-func (p Paths) ClaudeNotesSettingsPinned() string {
-	return p.WorkDir() + "/claude-settings-notes-pinned.json"
-}
-
-// ClaudeSkillsSettingsPinned is [Paths.ClaudeSkillsSettings]'s pinned copy
-// ([Paths.ClaudeSettingsPinned]).
-func (p Paths) ClaudeSkillsSettingsPinned() string {
-	return p.WorkDir() + "/claude-settings-skills-pinned.json"
-}
-
-// OpenCodeConfig is where an OpenCode run's own configuration is written
-// ([OpenCode.WriteConfig]), and read from by the run's script, which hands its
-// content to the run's server alone as OPENCODE_CONFIG_CONTENT
-// ([OpenCode.Command]).
-//
-// BESIDE the run's other artefacts, never in the checkout: the checkout is the
-// repository's, and an opencode.json written there would replace the
-// repository's own file, where content handed to the server ranks above it and
-// leaves it in place. Under WorkDir, so a `git clean` in the brief cannot
-// remove it from under the run.
-func (p Paths) OpenCodeConfig() string { return p.WorkDir() + "/opencode.json" }
-
-// OpenCodeValues is the directory holding the values an OpenCode run's MCP
-// servers are configured with — each server's url, each header value, each
-// environment value — one file apiece, which [Paths.OpenCodeConfig] names by a
-// `{file:<path>}` reference rather than carrying the value
-// ([openCodeValueFiles]). A directory of the run's own, removed whole before
-// every run ([Runner.ClearArtifacts]), so a run configured with fewer values
-// than the last keeps none of the last one's.
-func (p Paths) OpenCodeValues() string { return p.WorkDir() + "/opencode-values" }
-
-// OpenCodeValuesFresh is the directory holding an OpenCode run's values as they
-// are under the job's other bridge token, for a session its script starts of
-// its own in place of the one it continues ([sandbox.RunRequest.FreshWiring]):
-// the same files by the same names, so the configuration's references name
-// either set, which the script moves over [Paths.OpenCodeValues] where it
-// starts one and removes where it continues — before the run's server starts,
-// which is what reads them.
-func (p Paths) OpenCodeValuesFresh() string { return p.WorkDir() + "/opencode-values-fresh" }
-
-// OpenCodeSteerPlugin is the DIRECTORY an OpenCode run's notes plugin is written
-// into, as index.js ([OpenCode.WriteConfig]), and named by the run's
-// configuration — the plugin that admits a person's notes to the run's turn into
-// its session at its next step (opencode_steer.js).
-//
-// A DIRECTORY, because OpenCode 2 loads a configured local plugin only from one
-// — a file named there is skipped with a warning — trying its `server` module
-// and then its `index`. Under WorkDir, beside the configuration that names it,
-// never in the checkout or a `.opencode/plugins/` OpenCode would discover on its
-// own; and its own, removed whole before every run ([Runner.ClearArtifacts]):
-// OpenCode watches a configured plugin's directory and reloads the plugin on any
-// change inside it, so nothing is written there once the run's server starts —
-// the plugin itself writes nothing at all.
-func (p Paths) OpenCodeSteerPlugin() string { return p.WorkDir() + "/opencode-steer" }
-
-// ClaudeSkillsPlugin is the DIRECTORY of the plugin a Claude Code run is handed
-// its own skills in ([sandbox.RunRequest.Skills], [ClaudeCode.WriteConfig]):
-// its manifest, a directory per skill, and the hook that reports each load to
-// the run's bridge — named on the run's command line with `--plugin-dir`, so
-// the skills are the run's alone, under the plugin's name. Under WorkDir, never
-// in the checkout or the box's `.claude/skills/`, where a commit could carry
-// them or the next run in the box would find them; and its own, removed whole
-// before every run ([Runner.ClearArtifacts]).
-func (p Paths) ClaudeSkillsPlugin() string { return p.WorkDir() + "/claude-skills" }
-
-// OpenCodeSkills is the DIRECTORY an OpenCode run's own skills are written into
-// ([sandbox.RunRequest.Skills], [OpenCode.WriteConfig]), a directory per skill,
-// and named in the run's configuration's `skills`. Its own, under WorkDir, for
-// the reasons [Paths.ClaudeSkillsPlugin] gives; and written before the run's
-// server starts, which watches it.
-func (p Paths) OpenCodeSkills() string { return p.WorkDir() + "/opencode-skills" }
-
-// OpenCodeSkillsPlugin is the DIRECTORY of the plugin that reports each skill an
-// OpenCode run's model loads to the run's bridge (opencode_skills.js), written
-// and named as the notes plugin is ([Paths.OpenCodeSteerPlugin]), and for the
-// same reasons a directory of its own.
-func (p Paths) OpenCodeSkillsPlugin() string { return p.WorkDir() + "/opencode-skill-loads" }
 
 // CommitAttribution is the DIRECTORY holding a run's commit attribution
 // (attribution.go): the hook ([Paths.AttributionHook]) and the directory the

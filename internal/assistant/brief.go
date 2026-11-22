@@ -96,8 +96,11 @@ func (t *turn) readForBrief(model string) {
 func (t *turn) cited(id string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	// A ROOM IS CITED as people write it (#release) or as the chat routes
+	// answer it, by its bare name.
+	bare, room := strings.CutPrefix(id, "#")
 	for _, answer := range t.brief.reads {
-		if containsName(answer, id) {
+		if containsName(answer, id) || (room && containsName(answer, bare)) {
 			return true
 		}
 	}
@@ -129,12 +132,13 @@ func nameByte(b byte) bool {
 		(b >= 'A' && b <= 'Z')
 }
 
-// briefTools are what a brief turn is offered: the person's reads, and the
-// brief's answer. Never a write, a page action or a navigation.
+// briefTools are what a brief turn is offered: the person's reads, the route
+// lookup they are found by, and the brief's answer. Never a write, a page
+// action or a navigation.
 func briefTools(offered []catalog.Tool) []catalog.Tool {
 	out := make([]catalog.Tool, 0, len(offered)+1)
 	for _, t := range offered {
-		if t.Kind == catalog.KindRead {
+		if t.Kind == catalog.KindRead || t.Name == catalog.DescribeAPITool {
 			out = append(out, t)
 		}
 	}

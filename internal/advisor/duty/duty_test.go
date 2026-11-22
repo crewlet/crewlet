@@ -3,8 +3,10 @@ package duty_test
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,6 +30,11 @@ type fakeLog struct {
 	order   []string
 	// explained is every explanation written.
 	explained []advisor.Explained
+	// progress is every deep run's progress line, as "run: text".
+	mu       sync.Mutex
+	progress []string
+	// checkpoints is the newest checkpoint each run wrote.
+	checkpoints map[string]json.RawMessage
 }
 
 func (l *fakeLog) Live(context.Context) ([]advisor.Stored, error)      { return l.live, nil }
@@ -45,6 +52,29 @@ func (l *fakeLog) LastDone(context.Context) (map[string]time.Time, error) {
 		}
 	}
 	return out, nil
+}
+
+func (l *fakeLog) Progress(_ context.Context, run string, _ time.Time, text string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.progress = append(l.progress, run+": "+text)
+	return nil
+}
+
+func (l *fakeLog) Checkpoint(_ context.Context, run string, _ time.Time, body json.RawMessage) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.checkpoints == nil {
+		l.checkpoints = map[string]json.RawMessage{}
+	}
+	l.checkpoints[run] = body
+	return nil
+}
+
+func (l *fakeLog) Resume(_ context.Context, run string) (json.RawMessage, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.checkpoints[run], nil
 }
 
 func (l *fakeLog) Record(_ context.Context, t advisor.Transition, _ time.Time) error {
@@ -92,19 +122,33 @@ type fakeReader struct {
 	reads     int
 	metrics   []advisor.Metric
 	weeks     []advisor.Span
+	// weekErr is what reading a week answers beside its metrics.
+	weekErr error
+	// silent is what the rule pass could not judge.
+	silent []advisor.Silence
+	// premises is whether each premise holds, by its read.
+	premises map[string]bool
 }
 
 func (r *fakeReader) Observe(context.Context, time.Time) (duty.Observed, error) {
 	r.reads++
-	return duty.Observed{Observations: r.observed}, nil
+	return duty.Observed{Observations: r.observed, Silent: r.silent}, nil
 }
 
 func (r *fakeReader) Signature(context.Context) (string, error) { return r.signature, nil }
 
+// Holds answers whether a premise holds by its read's name, holding where unnamed.
+func (r *fakeReader) Holds(_ context.Context, p advisor.Premise) (bool, error) {
+	if held, named := r.premises[p.Read]; named {
+		return held, nil
+	}
+	return true, nil
+}
+
 // Week answers the metrics it holds, and records the period it was asked for.
 func (r *fakeReader) Week(_ context.Context, from, to time.Time) ([]advisor.Metric, []string, error) {
 	r.weeks = append(r.weeks, advisor.Span{From: from, To: to})
-	return r.metrics, []string{}, nil
+	return r.metrics, []string{}, r.weekErr
 }
 
 // fakeModel counts its passes, explains what it is told to, and summarises a
@@ -205,6 +249,28 @@ func TestARunNowIsRunByTheHolderUnderItsId(t *testing.T) {
 	}
 }
 
+// A RUN RECORDS WHAT IT CONCLUDED ABOUT EVERY CLASS: found, clear, or silent
+// with why, so the run's summary names a class that could not judge rather
+// than reading it as one that found nothing. Mutation: record the scopes
+// alone, and a silent class is lost.
+func TestARunRecordsWhatItConcludedAboutEveryClass(t *testing.T) {
+	t.Parallel()
+	l := &fakeLog{}
+	r := &fakeReader{signature: "r1", silent: []advisor.Silence{{Class: advisor.ClassAddSeat, Reason: "Not measured."}}}
+	step(t, newDuty(l, r, nil, &clock{now: start}))
+	if len(l.runs) != 1 {
+		t.Fatalf("recorded %d runs, want the first tick's", len(l.runs))
+	}
+	at := slices.IndexFunc(l.runs[0].Classes, func(c advisor.ClassOutcome) bool { return c.Class == advisor.ClassAddSeat })
+	if at < 0 || l.runs[0].Classes[at].Outcome != advisor.OutcomeSilent || l.runs[0].Classes[at].Reason != "Not measured." {
+		t.Errorf("the run's classes = %+v, want add_seat silent with its reason", l.runs[0].Classes)
+	}
+	if len(l.runs[0].Classes) < len(advisor.EvidenceClasses()) {
+		t.Errorf("the run names %d classes, fewer than the %d evidence classes", len(l.runs[0].Classes),
+			len(advisor.EvidenceClasses()))
+	}
+}
+
 // THE MODEL PASS RUNS ONCE A DAY AT ITS HOUR on the company clock.
 func TestTheModelPassRunsOnceADayAtItsHour(t *testing.T) {
 	t.Parallel()
@@ -276,6 +342,10 @@ func TestTheWeeklyReportCountsWhatTheWeekOpenedResolvedAndApplied(t *testing.T) 
 			monday.Add(-time.Duration(6-i)*time.Hour)))
 	}
 	l.live = append(l.live, openFinding(t, "blocks", advisor.SeverityBlocks, "qa", monday.Add(-time.Hour)))
+	// NOT THE WEEK'S: a note, which costs nothing, and a finding opened
+	// after the week ended.
+	l.live = append(l.live, openFinding(t, "note", advisor.SeverityNote, "qa", monday.AddDate(0, 0, -3)),
+		openFinding(t, "late", advisor.SeverityBlocks, "qa", monday.Add(5*time.Hour)))
 	r := &fakeReader{signature: "r1", metrics: []advisor.Metric{{Key: "turns_nothing", Label: "Turns that committed nothing",
 		Value: 40, Unit: advisor.UnitTurns}}}
 	c := &clock{now: monday.Add(5*time.Hour + 59*time.Minute)}
@@ -317,6 +387,26 @@ func TestTheWeeklyReportCountsWhatTheWeekOpenedResolvedAndApplied(t *testing.T) 
 	step(t, again)
 	if n := strings.Count(strings.Join(l.order[writes:], " "), "report:"); n != 0 {
 		t.Errorf("the week's report was written %d more times", n)
+	}
+}
+
+// A WEEK BEFORE THE COMPANY HAS NO REPORT: a company first started after the
+// week began has no records of all of it, so a report would read its zeros as
+// a measured week; none is written, and the week is not read again. Mutation:
+// write the report with what the week read, and the first report reads as
+// measured.
+func TestAWeekBeforeTheCompanyHasNoReport(t *testing.T) {
+	t.Parallel()
+	monday := time.Date(2030, 1, 14, 0, 0, 0, 0, time.UTC)
+	l := &fakeLog{}
+	r := &fakeReader{signature: "r1", weekErr: advisor.ErrWeekUnmeasured}
+	c := &clock{now: monday.Add(6*time.Hour + time.Minute)}
+	d := newDuty(l, r, nil, c)
+	step(t, d)
+	c.now = c.now.Add(time.Hour)
+	step(t, d)
+	if _, written := l.reports["2030-W02"]; written || len(r.weeks) != 1 {
+		t.Errorf("a week the company's records do not cover: written %v, read %d times", written, len(r.weeks))
 	}
 }
 

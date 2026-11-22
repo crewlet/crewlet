@@ -87,11 +87,14 @@ const (
 	DispositionAbsorbed WakeDisposition = "absorbed"
 	// DispositionBreakerHeld is a wake settled unrun because its conversation is held (ADR-0117).
 	DispositionBreakerHeld WakeDisposition = "breaker_held"
+	// DispositionJoined is a wake a running turn's run read as a message about
+	// its work, so it started no turn of its own (ADR-0167).
+	DispositionJoined WakeDisposition = "joined"
 )
 
 // WakeDispositions is the closed set.
 var WakeDispositions = []WakeDisposition{DispositionStarted, DispositionHeld,
-	DispositionAbsorbed, DispositionBreakerHeld}
+	DispositionAbsorbed, DispositionBreakerHeld, DispositionJoined}
 
 // Valid reports whether d is one of [WakeDispositions].
 func (d WakeDisposition) Valid() bool { return slices.Contains(WakeDispositions, d) }

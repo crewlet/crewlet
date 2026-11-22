@@ -41,6 +41,16 @@ type brokerAuth struct {
 	// engine is this process's own clients' identity, bound to the global
 	// account and admitted in process only.
 	engine processUser
+	// leases is the lease connection's identity ([Queue.DialLeases]),
+	// admitted in process only and bound to leaseAccount.
+	leases processUser
+	// leaseAccount is the account the lease connection is bound to: a
+	// leaf's [LeaseAccount], whose isolated link nothing else rides, and the
+	// global account elsewhere, where there is no link to keep apart. Set
+	// with ns ([brokerAuth.bind]).
+	leaseAccount *server.Account
+	// leaf is whether this broker joins the members as a leaf.
+	leaf bool
 	// system is the membership code's identity, bound to the system account
 	// and admitted in process only; zero unless this is a clustered member,
 	// which alone declares a system account.
@@ -50,13 +60,18 @@ type brokerAuth struct {
 }
 
 // newBrokerAuth builds the authenticator for one broker start: this process's
-// own key, minted fresh — and the system account's, on a clustered member —
-// beside the fleet's credentials cfg carries.
+// own keys, minted fresh — the engine's, the lease connection's and, on a
+// clustered member, the system account's — beside the fleet's credentials cfg
+// carries.
 //
 // A KEY PER START, whose private half never leaves this process, so no file,
 // log line or peer can authenticate as the engine or the membership code.
 func newBrokerAuth(cfg Config) (*brokerAuth, error) {
 	engine, err := newProcessUser("engine")
+	if err != nil {
+		return nil, err
+	}
+	leases, err := newProcessUser("lease connection")
 	if err != nil {
 		return nil, err
 	}
@@ -67,10 +82,29 @@ func newBrokerAuth(cfg Config) (*brokerAuth, error) {
 		}
 	}
 	return &brokerAuth{
-		name: cfg.ServerName, fleet: cfg.FleetAuth, engine: engine, system: system,
+		name: cfg.ServerName, fleet: cfg.FleetAuth, engine: engine, leases: leases,
+		system: system, leaf: len(cfg.LeafURLs) > 0,
 		tally: newRefusalTally(time.Now),
 		log:   logging.Get("queue.jetstream").With("server", cfg.ServerName),
 	}, nil
+}
+
+// bind sets the server this decides for, and the account the lease connection
+// is bound to on it: on a leaf the [LeaseAccount] its options declare
+// ([embeddedOptions]), which nats-server registers when the server is built.
+// Called once the server is built and before it starts.
+func (a *brokerAuth) bind(ns *server.Server) error {
+	a.ns, a.leaseAccount = ns, ns.GlobalAccount()
+	if !a.leaf {
+		return nil
+	}
+	acc, err := ns.LookupAccount(LeaseAccount)
+	if err != nil {
+		return fmt.Errorf("jetstream: the leaf's lease account %s was not built with the "+
+			"server: %w", LeaseAccount, err)
+	}
+	a.leaseAccount = acc
+	return nil
 }
 
 // Listener is the listener a refused connection reached: a member's route
@@ -233,9 +267,11 @@ func (a *brokerAuth) judgeLeaf(opts *server.ClientOpts, nonce []byte) verdict {
 }
 
 // judgeInProcess admits a client of this process: the engine's key, on the
-// global account, and — on a member that declared one — the membership code's,
-// on the system account. Nothing else is in process, so nothing else is let
-// in this way: not an operator's key, and not another start's engine key.
+// global account; the lease connection's, on its own account on a leaf
+// ([LeaseAccount]) and the global one elsewhere; and — on a member that
+// declared one — the membership code's, on the system account. Nothing else is
+// in process, so nothing else is let in this way: not an operator's key, and
+// not another start's engine key.
 func (a *brokerAuth) judgeInProcess(opts *server.ClientOpts, nonce []byte) verdict {
 	refused := func(p Presented, key string) verdict {
 		return verdict{refused: PeerRefusal{ListenerClient, p}, key: key}
@@ -247,6 +283,8 @@ func (a *brokerAuth) judgeInProcess(opts *server.ClientOpts, nonce []byte) verdi
 		return refused(nothingOrUnknown(opts), "")
 	case opts.Nkey == a.engine.public:
 		account, user = a.ns.GlobalAccount(), "engine"
+	case opts.Nkey == a.leases.public:
+		account, user = a.leaseAccount, "leases"
 	case a.system.declared() && opts.Nkey == a.system.public:
 		account, user = a.ns.SystemAccount(), "system"
 	default:

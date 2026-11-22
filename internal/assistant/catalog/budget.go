@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
+	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 )
@@ -55,14 +56,14 @@ func budgetWrite() Tool {
 		Description: "Propose setting or removing one token ceiling: a seat's or the " +
 			"company's, for one window (day, week or month). Name the seat by its handle or name, or " +
 			"leave seat out for the company's own ceiling; give tokens as a whole number, or " +
-			"clear: true to remove that window's ceiling. Read the current ceilings with " +
-			"list_budgets first. The person sees the ceiling now and the new one, and approves " +
+			"clear: true to remove that window's ceiling. Read the current ceilings first " +
+			"(GET /budgets). The person sees the ceiling now and the new one, and approves " +
 			"it before anything is saved, exactly as their own Save on Budgets. Use this for " +
 			"any request to change a budget or a ceiling; the Budgets page's " +
 			"budgets.ceiling.prefill only fills the editor in for the person to save " +
 			"themselves, when they ask for that.",
 		schema: object([]string{"window"}, map[string]*schema{
-			"seat": text("The seat's handle or name, as list_budgets or list_agents names it. "+
+			"seat": text("The seat's handle or name, as GET /budgets or GET /agents names it. "+
 				"Leave it out for the company's own ceiling.", nameBytes),
 			"window": oneOf("The window the ceiling is for.", budgetWindows...),
 			"tokens": {kind: "integer", description: "The new ceiling, a whole number of " +
@@ -167,12 +168,14 @@ func budgetPreview(ctx context.Context, read proposal.Read, _ time.Time,
 
 	whose := "the company's"
 	target := "The company"
+	var who wire.Phrase
 	if seat != "" {
 		name := strings.TrimSpace(cards.Text(doc["name"]))
 		if name == "" {
 			name = seat
 		}
 		whose, target = name+"'s", name
+		who = naming(wire.ResourceSeat, seat, name)
 	}
 	summary := ceilingSummary(whose, window, held, ceiling)
 
@@ -200,16 +203,22 @@ func budgetPreview(ctx context.Context, read proposal.Read, _ time.Time,
 		return proposal.Preview{}, err
 	}
 
+	// A SEAT IS ITS OWN ROW, a ref a label (words) cannot hold; the company is words.
 	label := strings.ToUpper(whose[:1]) + whose[1:] + " " + windowAdjective[window] + " token budget"
 	var c changes
+	if who != nil {
+		c.factOf("seat", "Seat", who)
+		adjective := windowAdjective[window]
+		label = strings.ToUpper(adjective[:1]) + adjective[1:] + " token budget"
+	}
 	switch {
 	case held == nil:
-		c = append(c, proposal.Added("token_budget."+window, label, tokensWords(*ceiling), false))
+		c = append(c, proposal.Added("token_budget."+window, label, wire.Plain(tokensWords(*ceiling)), false))
 	case ceiling == nil:
-		c = append(c, proposal.Removed("token_budget."+window, label, tokensWords(*held)))
+		c = append(c, proposal.Removed("token_budget."+window, label, wire.Plain(tokensWords(*held))))
 	default:
-		c = append(c, proposal.Changed("token_budget."+window, label, tokensWords(*held),
-			tokensWords(*ceiling)))
+		c = append(c, proposal.Changed("token_budget."+window, label, wire.Plain(tokensWords(*held)),
+			wire.Plain(tokensWords(*ceiling))))
 	}
 	for i, warning := range warnings {
 		c.fact("check.warning."+strconv.Itoa(i+1), "Warning", warning)
@@ -222,8 +231,8 @@ func budgetPreview(ctx context.Context, read proposal.Read, _ time.Time,
 		title = "Remove a token budget"
 	}
 	return proposal.Preview{Title: title, Target: target,
-		Note: "Turns are counted against the new ceiling once this node applies it; " +
-			"nothing already spent is reset.",
+		Note: wire.Plain("Turns are counted against the new ceiling once this node applies it; " +
+			"nothing already spent is reset."),
 		ApproveLabel: "Approve and save", Changes: c.rows(), Request: req,
 		StepUp:         recency == iam.RecencyStepUp,
 		SourceRevision: rep.revision}, nil

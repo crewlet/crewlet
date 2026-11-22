@@ -26,7 +26,8 @@ answers:
     body:
       task: {id: 5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f, key: ENG-42, title: Pick the store build, priority: normal}
 script:
-  - call: list_decisions
+  - call: read_api
+    args: {route: GET /worklet/decisions}
   - call: answer_brief
     args:
       about: "1 decision waits on you: the QA Engineer asked at 09:00 on ENG-42 which store build to test, and nothing else on the Inbox is blocked on you today, so answering it is the one thing that moves QA forward before the release candidate is cut this afternoon and the store review window opens tomorrow."
@@ -38,7 +39,7 @@ script:
       needs:
         - {ref_kind: task, ref_id: ENG-42, do: "Answer ENG-42: which build QA tests", tone: warning, action: open}
 expect:
-  calls: [list_decisions, answer_brief, answer_brief]
+  calls: [read_api, answer_brief, answer_brief]
   proposals: 0
   state: completed
   brief:

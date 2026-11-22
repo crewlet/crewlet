@@ -3,6 +3,8 @@
 #   .github/workflows/*.yml   the actions CI and releases run on
 #   go.mod                    the engine's own Go dependencies
 #   dashboard/package.json    the dashboard's build and runtime dependencies
+#   internal/browser/boxhelper/tree/package.json
+#                             the Playwright MCP a seat's box installs
 #   Dockerfile                the base image a release ships
 #   docker-compose.yml        the images the local dev stack runs
 #
@@ -10,29 +12,31 @@
 # omission: a manifest with no entry never produces a pull request, which
 # looks exactly like a manifest with nothing to update.
 #
-# Two surfaces have no entry because no ecosystem reads them:
+# Three surfaces have no entry because no ecosystem reads them:
 # scripts/git-pin.env, the gits the engine image builds and the suite runs,
-# each a source tarball named by version and SHA-256, and
+# each a source tarball named by version and SHA-256;
 # scripts/chromium-pin.env, the Chromiums the suite drives, each a Chrome for
-# Testing build named by version and a SHA-256 per platform.
-# .github/workflows/pins.yml watches both instead, every week, and keeps one
-# issue per pin file rather than opening a pull request when a pin is behind
-# (CONTRIBUTING.md, "The git pin is checked every week" and "The Chromium pin
-# is checked every week").
+# Testing build named by version and a SHA-256 per platform; and
+# scripts/node-pin.env, the oldest Node the box helper supports, a Node
+# release named the same way. .github/workflows/pins.yml watches all three
+# instead, every week, and keeps one issue per pin file rather than opening a
+# pull request when a pin is behind (CONTRIBUTING.md, "The git pin is checked
+# every week", "The Chromium pin is checked every week" and "The floor Node is
+# checked every week").
 #
 # Security updates are separate — they come from published advisories, are
 # switched on in the repository settings rather than here, and are not held
 # back by this schedule.
 #
 # Beyond the schedule there are two knobs here, and each is written down where
-# it is set. Every entry pins its own `commit-message.prefix`; one entry — npm —
-# also carries three `groups:` rules, because three families there are broken
-# unless their packages move in one pull request. A group raises the members that have
-# an update TOGETHER, in one pull request titled for the group rather than for
-# any package in it — so it costs a less precise subject on every bump, and it
-# puts one member's bad release in front of the rest. Pay that only where the
-# split is genuinely broken; everything matching no group still gets its own
-# pull request, so grouping narrows nothing.
+# it is set. Every entry pins its own `commit-message.prefix`; one entry — the
+# dashboard's npm — also carries three `groups:` rules, because three families
+# there are broken unless their packages move in one pull request. A group
+# raises the members that have an update TOGETHER, in one pull request titled
+# for the group rather than for any package in it — so it costs a less precise
+# subject on every bump, and it puts one member's bad release in front of the
+# rest. Pay that only where the split is genuinely broken; everything matching
+# no group still gets its own pull request, so grouping narrows nothing.
 #
 # The prefix earns its place because these pull requests
 # auto-merge (.github/workflows/dependabot-merge.yml): the title Dependabot
@@ -59,6 +63,10 @@ updates:
     commit-message:
       prefix: "build(deps)"
 
+  # A bump of a module internal/notehelper links (golang.org/x/net) changes
+  # the note helper builds the engine embeds, since a Go build carries its
+  # modules' versions; .github/workflows/dependabot-notehelper.yml rebuilds
+  # and pushes them onto the bump's branch, as the dashboard's workflow does.
   - package-ecosystem: gomod
     directory: "/"
     schedule:
@@ -87,8 +95,10 @@ updates:
   # cannot install is a bump that never opens, and nothing reports it — this
   # entry just keeps looking like a surface with nothing to update.
   # dependabot-core#13722 is the devEngines case, #12535 / #13741 the
-  # engine-strict one. ci.yml installs `latest`; no node version is pinned
-  # anywhere in the tree, so there is nothing here to keep in step.
+  # engine-strict one. ci.yml installs `latest`, and no node version is
+  # pinned for the dashboard, so there is nothing here to keep in step: the
+  # one Node the tree pins, scripts/node-pin.env, is the box helper's floor
+  # for the suite, which no job installs and pins.yml moves.
   #
   # THE REACT FAMILY MOVES AS ONE PULL REQUEST, and it is the reason there is
   # a `groups:` key here at all: it is the one family where a split bump is
@@ -129,28 +139,34 @@ updates:
   # vite group below and not to this one. Its name is the only React-shaped
   # thing about it.
   #
-  # THE VITE FAMILY IS GROUPED FOR THE SAME REASON, one major out. `vite` is
-  # peered REQUIRED by two direct dependencies — `@vitejs/plugin-react@6.1.1`
-  # at `^8.0.0` and `vitest@5.0.0` at `^6.4.0 || ^7.0.0 || ^8.0.0` — so a lone
+  # THE VITE FAMILY IS GROUPED FOR THE SAME REASON, twice over. `vite` is
+  # peered REQUIRED by two direct dependencies — `@vitejs/plugin-react@6.3.0`
+  # at `^8.0.0` and `vitest@5.1.0` at `^6.4.0 || ^7.0.0 || ^8.0.0` — so a lone
   # `vite` 9 bump violates both ceilings at once and ERESOLVEs exactly as the
-  # react-dom half did. Minors are fine and always were (8.2.2 -> 8.3.0 landed
-  # on its own), so this buys nothing until the major, and then it buys the
-  # whole thing. The cost is paid in the meantime and is worth stating: a
-  # `vitest`-only bump now arrives titled for the group rather than for
-  # `vitest`, and the packages it moved are in the body instead of the subject.
+  # react-dom half did; minors are fine and always were (8.2.2 -> 8.3.0 landed
+  # on its own). And `vitest` and `@vitest/browser-playwright`, the layout
+  # suites' browser provider, peer each other at the EXACT version (each 5.1.0
+  # asks for the other at `5.1.0`), so every vitest release needs both in one
+  # pull request, which `@vitest/*` gives it. The cost is worth stating: a
+  # bump of `vite` or `@vitejs/plugin-react` alone arrives titled for the
+  # group rather than for the package, and the packages it moved are in the
+  # body instead of the subject.
   #
   # THE DESIGN SYSTEM IS GROUPED, for a reason that is not a peer at all.
   # `@crewlethq/ui` pins `@crewlethq/tokens` and `@crewlethq/icons` as
-  # DEPENDENCIES at an EXACT version (0.5.0 depends on both at `0.5.0`), and
-  # the three are released together from one repository. So a lone bump of
-  # any one of them installs cleanly and wrongly: `ui` 0.5.1 beside a direct
-  # `tokens` 0.5.0 nests a second copy of the tokens under `ui`, and the
+  # DEPENDENCIES at an EXACT version (0.163.1 depends on both at `0.163.1`),
+  # and the scope's four packages, `@crewlethq/artifact-kit` with them, are
+  # released together from one repository. So a lone bump of `ui`, `tokens`
+  # or `icons` installs cleanly and wrongly: `ui` 0.163.2 beside a direct
+  # `tokens` 0.163.1 nests a second copy of the tokens under `ui`, and the
   # components paint from one palette while the dashboard's own stylesheets
   # read the other — a split no install error reports and no test that reads
   # the INSTALLED package (palette.test.ts, tokens.test.ts) can see, because
   # each reads the top-level copy. `@crewlethq/*` is a pattern rather than
-  # three names because the pinning is the whole scope's convention, and a
-  # fourth package from it would be pinned the same way.
+  # names because the pinning is the whole scope's convention, so a package
+  # `ui` comes to pin is grouped with no edit here. It also takes the kit,
+  # which nothing pins, so a design-system release arrives as one pull
+  # request.
   #
   # NOTHING ELSE IS GROUPED, and the peer graph is why rather than taste. The
   # only other REQUIRED edges a bump here could split are
@@ -166,9 +182,10 @@ updates:
   # security advisory must not wait for the rest of a family to have a
   # release.
   #
-  # Of fifteen direct dependencies, ten are grouped (react 4, vite 3,
-  # crewlethq 3); the remaining five — @testing-library/react, @types/node,
-  # jsdom, prettier, typescript — arrive one pull request each.
+  # Of twenty direct dependencies, twelve are grouped (react 4, vite 4,
+  # crewlethq 4); the remaining eight — @testing-library/react, @types/node,
+  # jsdom, jsqr, playwright, prettier, typescript, uqr — arrive one pull
+  # request each.
   - package-ecosystem: npm
     directory: "/dashboard"
     schedule:
@@ -194,6 +211,21 @@ updates:
       crewlethq:
         patterns:
           - "@crewlethq/*"
+
+  # The Playwright MCP a seat's box installs: npm in the box runs `npm ci` on
+  # this manifest and its lock (internal/browser/boxhelper's package doc). A
+  # bump is code every seat's browser runs, so its pull request stays red, and
+  # dependabot-merge.yml never queues it, until a person has read the release
+  # and lands it from a branch of their own (CONTRIBUTING.md, "A Playwright MCP
+  # bump is read before it lands"). No `engines`, for the dashboard entry's
+  # reason, and no group: the manifest names one package, which pins the other
+  # two exactly.
+  - package-ecosystem: npm
+    directory: "/internal/browser/boxhelper/tree"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "build(deps)"
 
   # The base image a release ships. Distinct from docker-compose below: that
   # entry reads compose files and this one reads Dockerfiles, and neither

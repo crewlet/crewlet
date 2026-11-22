@@ -11,6 +11,10 @@ import (
 	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/advisor/duty"
 	"github.com/crewlet/crewlet/internal/advisordomain"
+	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/usage"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE ADVISOR'S WEEKLY REPORTS, as the duty wrote them on the Monday after
@@ -32,6 +36,9 @@ type AdvisorReportSummary struct {
 	Resolved  int           `json:"resolved"`
 	Applied   int           `json:"applied"`
 	Dismissed int           `json:"dismissed"`
+	// Headline is the week's headline numbers ([advisor.Headline]), each
+	// beside the week before's where the report has it.
+	Headline []advisor.Metric `json:"headline"`
 }
 
 // AdvisorReportList is a page of reports, the newest week first.
@@ -47,6 +54,9 @@ type AdvisorReport struct {
 	Unread  []string                `json:"unread"`
 	Top     []advisor.ReportFinding `json:"top"`
 	Summary *string                 `json:"summary"`
+	// Days is the week day by day, Monday first; none for a report kept
+	// before its days were.
+	Days []advisor.Day `json:"days"`
 }
 
 // The bounds of a page of reports.
@@ -111,18 +121,34 @@ func reportOf(row advisordomain.ReportRow) (AdvisorReport, error) {
 	}
 	return AdvisorReport{
 		AdvisorReportSummary: AdvisorReportSummary{Week: row.Week, Period: AdvisorPeriod{From: row.From, To: row.To},
-			WrittenAt: row.WrittenAt, Opened: r.Opened, Resolved: r.Resolved, Applied: r.Applied, Dismissed: r.Dismissed},
+			WrittenAt: row.WrittenAt, Opened: r.Opened, Resolved: r.Resolved, Applied: r.Applied, Dismissed: r.Dismissed,
+			Headline: advisor.Headline(r.Metrics)},
 		Metrics: nonNil(r.Metrics), Unread: nonNil(r.Unread), Top: nonNil(r.Top), Summary: r.Summary,
+		Days: nonNil(r.Days),
 	}, nil
 }
 
 // Week reads the week [from, to) a report is written for, from the records the
-// detectors read over it: the turn ledger, the runs and the budget refusals.
-// A source that fails is named, never counted as nothing.
-func (o advisorObserver) Week(ctx context.Context, _, to time.Time) ([]advisor.Metric, []string, error) {
+// detectors read over it: the flow record, the turn ledger, the runs and the
+// budget refusals. A source that fails is named, never counted as nothing. A
+// week the company's documents do not reach back over the start of is
+// [advisor.ErrWeekUnmeasured]: the company began within it or after it.
+func (o advisorObserver) Week(ctx context.Context, from, to time.Time) ([]advisor.Metric, []string, error) {
+	if o.s.Config != nil {
+		switch _, err := o.s.Config.CompaniesActiveSince(ctx, from); {
+		case errors.Is(err, configapi.ErrHistoryShort):
+			return nil, nil, advisor.ErrWeekUnmeasured
+		case err != nil:
+			return nil, nil, fmt.Errorf("queries: the documents active since %s: %w", from, err)
+		}
+	}
 	until := to.Add(-time.Nanosecond)
 	ev := advisor.Evidence{Until: until}
-	var err error
+	flow, err := o.s.weekFlow(ctx, from, to)
+	if err != nil {
+		log.WarnContext(ctx, "advisor_report_flow_unreadable", "error", err.Error())
+		ev.FlowUnread = true
+	}
 	if ev.Ledger, err = o.s.advisorLedger(ctx, until); err != nil {
 		log.WarnContext(ctx, "advisor_report_ledger_unreadable", "error", err.Error())
 		ev.LedgerUnread = true
@@ -135,6 +161,46 @@ func (o advisorObserver) Week(ctx context.Context, _, to time.Time) ([]advisor.M
 		log.WarnContext(ctx, "advisor_report_budget_stops_unreadable", "error", err.Error())
 		ev.StopsUnread = true
 	}
-	metrics, unread := advisor.WeekMetrics(ev)
+	metrics, unread := advisor.WeekMetrics(ev, flow)
 	return metrics, unread, nil
+}
+
+// Days reads the week [from, to) day by day from the turn ledger, one company
+// day a read, Monday first, each counted as the week's totals are
+// ([advisor.DayOf]); a day that cannot be read fails them all, since a
+// picture of the week with a day missing reads as a quiet day.
+func (o advisorObserver) Days(ctx context.Context, from, to time.Time) ([]advisor.Day, error) {
+	if o.s.Usage == nil {
+		return nil, errors.New("queries: no usage half to read the turn ledger from")
+	}
+	days := []advisor.Day{}
+	for _, label := range advisor.WeekDays(from, to, o.s.zone()) {
+		rows, err := o.s.Usage.TurnLedger(ctx, usage.SpendQuery{From: label, To: label})
+		if err != nil {
+			return nil, fmt.Errorf("queries: the turn ledger of %s: %w", label, err)
+		}
+		days = append(days, advisor.DayOf(label, rows))
+	}
+	return days, nil
+}
+
+// weekFlow is the flow record's numbers of [from, to), nil for a company whose
+// tracker keeps no flow record.
+func (s Sources) weekFlow(ctx context.Context, from, to time.Time) (*advisor.WeekFlow, error) {
+	switch kept, err := keptHere(s.Work); {
+	case err != nil:
+		return nil, err
+	case !kept:
+		return nil, nil
+	}
+	q := worklet.FlowHoursQuery{Since: from, Until: to, Level: statelog.ReadStale}
+	hours, err := s.Work.FlowHours(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	pickups, err := s.Work.FlowPickups(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	return &advisor.WeekFlow{Hours: hours, Pickups: pickups}, nil
 }

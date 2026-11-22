@@ -55,15 +55,6 @@ export const HARNESS_PRODUCTS: Readonly<Record<string, string>> = {
 /** The harness an entry that names no `harness` drives. */
 export const DEFAULT_HARNESS = "claude-code";
 
-/**
- * The harnesses that can run a seat's executor: the ones with an in-box
- * runner. Every agent seat's executor is its harness's own run, placed by the
- * launching entry's `run_in`, and a member of an executor chain on any other
- * harness is skipped at launch, and that entry serves the text phases alone (the
- * reviewer, workers, onboarding and side passes).
- */
-export const EXECUTOR_HARNESSES = ["claude-code", "opencode"] as const;
-
 /** An entry's `auth.mode` when it names none. */
 export const DEFAULT_HARNESS_AUTH_MODE: HarnessAuthMode = "subscription";
 
@@ -83,7 +74,7 @@ export const MODEL_KEY_PATTERN = "^[a-z0-9][a-z0-9._-]{0,62}$";
 
 /**
  * ONE reading of a model's condition, decided by the engine
- * (`queries.ModelHealth`) so the list, the model's page and the By job view
+ * (`queries.ModelHealth`) so the list, the model's page and the seats' grid
  * cannot each decide it differently. Held against `queries.ModelHealths` by
  * `internal/api/queries.TestTheModelsScreenReadsTheEnginesHealthAndAlarms`.
  */
@@ -157,7 +148,8 @@ export type ModelCheckName =
  * against `config.ProviderJobs` by
  * `internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes`.
  */
-export type ModelJob = "executor" | "review" | "subagent" | "auxiliary" | "judge" | "assistant";
+export type ModelJob =
+  "executor" | "review" | "subagent" | "auxiliary" | "judge" | "triage" | "assistant" | "advisor";
 
 /**
  * The seat field each seat job is written in, as the page writes it: the
@@ -171,6 +163,7 @@ export const SEAT_JOB_FIELDS = {
   subagent: "llm_subagent",
   auxiliary: "llm_auxiliary",
   judge: "llm_judge",
+  triage: "llm_triage",
 } as const;
 
 /**

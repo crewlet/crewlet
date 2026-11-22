@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"sync"
@@ -11,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/delegated"
+	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -31,11 +33,16 @@ func (r sweepRules) Rule(delegated.Kind) ([]string, int, int, bool) {
 type sweepAudit struct {
 	mu       sync.Mutex
 	verdicts []builtin.DelegatedVerdict
+	// err is every record's failure, none for nil.
+	err error
 }
 
 func (a *sweepAudit) RecordVerdict(_ context.Context, v builtin.DelegatedVerdict) (bool, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.err != nil {
+		return false, a.err
+	}
 	a.verdicts = append(a.verdicts, v)
 	return true, nil
 }
@@ -49,7 +56,7 @@ func openHeld(t *testing.T) func(sandbox.PendingRun) (map[string]any, error) {
 	}
 	seal := sandbox.NewCallSeal(cipher)
 	return func(run sandbox.PendingRun) (map[string]any, error) {
-		return seal.OpenArguments(run.TurnID, *run.HeldCall)
+		return seal.OpenRawArguments(run.TurnID, *run.HeldCall)
 	}
 }
 
@@ -174,5 +181,112 @@ func TestADelegatesOwnRequestReachesPeopleAtOnce(t *testing.T) {
 		audit.verdicts[0].Subject == "" {
 		t.Fatalf("a delegate's own request reads %+v with records %+v, want it put to people for self at once",
 			e, audit.verdicts)
+	}
+}
+
+// A MERGE WHOSE PULL REQUEST MERGED BEFORE ANYBODY DECIDED IT is answered by
+// the engine, never put to its delegate: recorded first as the engine's final
+// denial for already_merged, naming the change, then answered not carried
+// out with the reason. A second request of a merge, held while the first was
+// carried out, reached its delegate after the merge and cost a delegate turn
+// and a flagged denial. A pull request still open, a read or a record that
+// fails, or another kind, leave the request to its delegates.
+//
+// Mutation: skip the record or answer before it, and the engine carries out a
+// verdict the access log never held; answer on a failed read, and a merge
+// nobody read is denied.
+func TestAMergeAlreadyMadeIsAnsweredWithoutWakingItsDelegate(t *testing.T) {
+	t.Parallel()
+	heldAt := time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC)
+	request := func(act delegated.Kind) sandbox.PendingRun {
+		return sandbox.PendingRun{TurnID: "t-merge", LaunchID: "launch-1", AgentHandle: "pm",
+			Status: sandbox.StatusAwaiting, HeldCall: &sandbox.HeldCall{ID: "0190f3a8-0000-7000-8000-0000000000e1",
+				LaunchID: "launch-1", Act: string(act), HeldAt: heldAt, Fixed: true,
+				Delegation: &sandbox.HeldDelegation{Rule: 2, Delegates: []string{"release"},
+					Digest: strings.Repeat("ab", 32)}}}
+	}
+	args := map[string]any{"change": "https://github.com/acme/web/pull/42", "head": strings.Repeat("a1", 20),
+		"method": "merge", "reason": "QA approved it"}
+	open := func(sandbox.PendingRun) (map[string]any, error) { return args, nil }
+	const said = "acme/web#42 has already merged, so there is nothing left to merge; nobody was asked."
+	for name, c := range map[string]struct {
+		act      delegated.Kind
+		merged   func(context.Context, string, map[string]any) (string, error)
+		auditErr error
+		answered bool
+	}{
+		"merged": {act: delegated.KindPRMerge, answered: true,
+			merged: func(context.Context, string, map[string]any) (string, error) { return said, nil }},
+		"still open": {act: delegated.KindPRMerge,
+			merged: func(context.Context, string, map[string]any) (string, error) { return "", nil }},
+		"unread": {act: delegated.KindPRMerge,
+			merged: func(context.Context, string, map[string]any) (string, error) {
+				return "", errors.New("GitHub did not answer")
+			}},
+		"unrecorded": {act: delegated.KindPRMerge, auditErr: errors.New("the log is down"),
+			merged: func(context.Context, string, map[string]any) (string, error) { return said, nil }},
+		"a command": {act: delegated.KindSSHOperate,
+			merged: func(context.Context, string, map[string]any) (string, error) { return said, nil }},
+	} {
+		audit := &sweepAudit{err: c.auditErr}
+		var answers []string
+		answer := func(_ context.Context, run sandbox.PendingRun, words string) error {
+			if len(audit.verdicts) == 0 {
+				t.Errorf("%s: answered before the access log held the verdict", name)
+			}
+			answers = append(answers, words)
+			return nil
+		}
+		got := mergedAlready(t.Context(), request(c.act), open, c.merged, audit, answer)
+		if got != c.answered || (len(answers) == 1) != c.answered {
+			t.Fatalf("%s: answered %v with %q, want answered %v", name, got, answers, c.answered)
+		}
+		if !c.answered {
+			continue
+		}
+		if answers[0] != said {
+			t.Errorf("%s: the run is told %q, want the reason", name, answers[0])
+		}
+		v := audit.verdicts[0]
+		if v.ByKind != builtin.VerdictByEngine || v.Verdict != string(delegated.Deny) || !v.Final ||
+			!slices.Equal(v.Overruled, []string{delegated.OverruledAlreadyMerged}) || !v.At.Equal(heldAt) ||
+			v.Rule != 2 || v.Handle != "pm" || v.Subject == "" {
+			t.Errorf("%s: recorded %+v, want the engine's final denial for already_merged, naming the change", name, v)
+		}
+	}
+}
+
+// A growth act nobody answered lapses a day after it was held, not before:
+// the engine answers it Deny, once, with the reason, as the actor a growth
+// product records as a lapse, and an act already being answered is left alone.
+//
+// Mutation: compare the lapse the wrong way round, sweep acts that wait on no
+// lapse, or answer as another actor, and a raise runs days after the agent
+// reasoned about it, an SSH command a person has not read yet is denied, or a
+// lapse is logged as an administrator's denial.
+func TestAGrowthActLapsesADayAfterItWasHeld(t *testing.T) {
+	t.Parallel()
+	if step, _ := (growth.Call{Approver: engineActor}).Denial(); step != growth.StepLapsed {
+		t.Errorf("the engine answers as %q, which a growth product records as %s", engineActor, step)
+	}
+	heldAt := time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC)
+	store := sandbox.NewCoordStore(memory.NewFleet())
+	sandboxtest.GrowthParked(t, store, "t-spend", heldAt)
+	sandboxtest.DelegatedParked(t, store, "t-ssh", []string{"security-a"}, heldAt)
+	var answered []string
+	answer := func(_ context.Context, run sandbox.PendingRun, said string) error {
+		if !strings.Contains(said, "lapsed") {
+			t.Errorf("the lapse said %q", said)
+		}
+		answered = append(answered, run.TurnID)
+		return nil
+	}
+	sweepLapsed(t.Context(), store, answer, heldAt.Add(sandbox.HeldLapse-time.Second))
+	if len(answered) != 0 {
+		t.Fatalf("answered %v before the lapse", answered)
+	}
+	sweepLapsed(t.Context(), store, answer, heldAt.Add(sandbox.HeldLapse))
+	if len(answered) != 1 || answered[0] != "t-spend" {
+		t.Fatalf("answered %v at the lapse, want the growth act alone", answered)
 	}
 }

@@ -208,6 +208,7 @@ var humanSeatKeys = []humanSeatKey{
 	{"llm_subagent", "main", agentOnlyOnHuman},
 	{"llm_auxiliary", "main", agentOnlyOnHuman},
 	{"llm_judge", "main", agentOnlyOnHuman},
+	{"llm_triage", "main", agentOnlyOnHuman},
 	{"sandbox", "{max_turns: 5}", agentOnlyOnHuman},
 	{"token_budget", "{day: 5}", agentOnlyOnHuman},
 	{"workers", "[researcher]", agentOnlyOnHuman},
@@ -235,6 +236,11 @@ var humanSeatKeys = []humanSeatKey{
 	{"integrations.aws", "{enabled: false}", seatAccessOnHumanSeat},
 	{"integrations.google_cloud", "{enabled: false}", seatAccessOnHumanSeat},
 	{"integrations.ssh", "{enabled: false}", seatAccessOnHumanSeat},
+	{"integrations.meta_ads", "{enabled: false}", seatAccessOnHumanSeat},
+	{"integrations.google_analytics", "{enabled: false}", seatAccessOnHumanSeat},
+	{"integrations.admob", "{enabled: false}", seatAccessOnHumanSeat},
+	{"integrations.app_store_connect", "{enabled: false}", seatAccessOnHumanSeat},
+	{"integrations.apple_ads", "{enabled: false}", seatAccessOnHumanSeat},
 	{"avatar", "{character: hexlet, color: cyan}", avatarOnHuman},
 }
 

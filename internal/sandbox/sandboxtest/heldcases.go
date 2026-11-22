@@ -3,10 +3,13 @@ package sandboxtest
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/redact/redacttest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
@@ -29,6 +32,7 @@ var heldCases = []struct {
 	{"AHeldCallIsMarkedOnceAndTheMarkOutlivesAClaimGivenBack", testAHeldCallIsMarkedOnceAndTheMarkOutlivesAClaimGivenBack},
 	{"AHeldCallIsMarkedOnlyByTheClaimOfItsAnswer", testAHeldCallIsMarkedOnlyByTheClaimOfItsAnswer},
 	{"TheCallAPersonApprovedIsACallOfItsRound", testTheCallAPersonApprovedIsACallOfItsRound},
+	{"TheDecisionAHeldCallCarriesOutIsRecordedRedacted", testTheDecisionAHeldCallCarriesOutIsRecordedRedacted},
 }
 
 // heldSeal seals a held call's arguments for the cases, under a keyring of
@@ -297,4 +301,47 @@ func heldMade(result string) sandbox.HeldMade {
 	return sandbox.HeldMade{Result: result, Call: sandbox.BridgeCall{
 		Name: "tr_close_issue", Origin: "mcp:tracker", Server: "tracker", Source: "mcp:tracker",
 	}}
+}
+
+// THE DECISION A HELD CALL CARRIES OUT IS RECORDED REDACTED: its question and
+// the chosen option's label are words its seat wrote, which the approval
+// views and a delegate's brief show, so a credential in them reaches the row
+// as its marker; the ids and the answerer a call is matched by stay, and so do
+// the arguments' seal and the caller's copy.
+func testTheDecisionAHeldCallCarriesOutIsRecordedRedacted(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	var secret string
+	for _, shape := range redacttest.Shapes() {
+		if shape.Name == "github-token" {
+			secret = shape.Sample
+		}
+	}
+	launch := mustLaunched(t, s, run("t-acting"))
+	ask := heldAsk(t, "t-acting", launch)
+	ask.Held.Acting = &sandbox.HeldAct{Item: "item-1", Key: "OPS-7", Ask: "c-1",
+		Question: "Rotate " + secret + " today?", Choice: "Rotate " + secret, ChoiceID: "rotate",
+		AnsweredBy: "founder", AnsweredAt: base}
+	sealed := ask.Held.Arguments
+	if got, err := s.RecordAsk(ctx, "t-acting", launch, ask); err != nil || got != sandbox.AskRecorded {
+		t.Fatalf("RecordAsk of a held call carrying out a decision = %v, %v", got, err)
+	}
+	row := mustGet(t, s, "t-acting")
+	if row.HeldCall == nil || row.HeldCall.Acting == nil {
+		t.Fatalf("the row holds %+v; want the held call and its decision", row.HeldCall)
+	}
+	act := row.HeldCall.Acting
+	for where, text := range map[string]string{"question": act.Question, "choice": act.Choice} {
+		if strings.Contains(text, secret) || !strings.HasPrefix(text, "Rotate "+redact.Marker) {
+			t.Errorf("the decision's %s is recorded as %q; want the credential replaced by its marker",
+				where, text)
+		}
+	}
+	if act.ChoiceID != "rotate" || act.Ask != "c-1" || act.Key != "OPS-7" || act.AnsweredBy != "founder" ||
+		row.HeldCall.Arguments != sealed {
+		t.Errorf("the held call is recorded as %+v, %+v; want its ids, answerer and seal as handed", act,
+			row.HeldCall)
+	}
+	if !strings.Contains(ask.Held.Acting.Question, secret) {
+		t.Error("recording the ask rewrote the caller's held call in place")
+	}
 }

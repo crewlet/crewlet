@@ -23,7 +23,9 @@
 // What is decoded reaches a claim only through the vocabulary's grammars
 // ([collect.Builder]), which refuse a credential-shaped key or value and
 // count it. A name is matched against closed tables ([vendorOf], engines,
-// operators, providers); one off a table says nothing.
+// operators, providers); one off a table says nothing. [Parse] is pure and
+// never fails, and a parser's panic is an unparsed file, never the node's:
+// the bytes are anybody's with a push.
 //
 // # Read when the default branch moves, and only what changed
 //
@@ -44,6 +46,9 @@
 // record in the coordination store ([CoordStore]). The reading of each blob:
 // this node alone, and only while it runs, so it is memory ([readings]): a
 // node that lost it reads a repository's files once more at its next move.
+// [Rules] versions what the parsers read: a build that reads more or
+// differently raises it, and every repository is read again though its tip
+// has not moved.
 //
 // # A forge's repositories are read by the same reader
 //

@@ -24,7 +24,9 @@ import (
 // copy, so every read it makes goes to a picked replica. FIVE MEMBERS AND
 // THREE-REPLICA BUCKETS put two members, with the handles on them, on no copy
 // of the lease bucket, so no read is local and the case asks which copy
-// answers: every read a caller acts on must be the stream LEADER's.
+// answers: every read a caller acts on must be the stream LEADER's. Each
+// store's hold and read clients are on different members, so a write
+// acknowledged on one is read through the other (package doc, "Two clients").
 func TestSharedContractOnACluster(t *testing.T) {
 	t.Parallel()
 	c := jetstreamtest.StartCluster(t, 5, js.Config{})
@@ -46,7 +48,7 @@ func TestSharedContractOnACluster(t *testing.T) {
 			TTL: coordtest.LongTTL, BucketPrefix: fmt.Sprintf("s%d", bucketSeq.Add(1)),
 			Clustered: true, Replicas: 3, Reach: InProcess,
 		}
-		first, err := Open(t.Context(), client(t, 0), cfg)
+		first, err := Open(t.Context(), client(t, 0), client(t, 0), cfg)
 		if err != nil {
 			t.Fatalf("Open: %v", err)
 		}
@@ -55,14 +57,18 @@ func TestSharedContractOnACluster(t *testing.T) {
 		for _, peer := range info.Cluster.Replicas {
 			holders = append(holders, peer.Name)
 		}
-		var out []coord.Backend
+		var free []int
 		for i, member := range c.Configs {
-			if slices.Contains(holders, member.ServerName) {
-				continue
+			if !slices.Contains(holders, member.ServerName) {
+				free = append(free, i)
 			}
-			s, err := Open(t.Context(), client(t, i), cfg)
+		}
+		var out []coord.Backend
+		for k, i := range free {
+			reads := free[(k+1)%len(free)]
+			s, err := Open(t.Context(), client(t, i), client(t, reads), cfg)
 			if err != nil {
-				t.Fatalf("member %d: Open: %v", i, err)
+				t.Fatalf("holds on member %d, reads on member %d: Open: %v", i, reads, err)
 			}
 			out = append(out, s)
 		}
@@ -72,6 +78,62 @@ func TestSharedContractOnACluster(t *testing.T) {
 		if len(out) != len(c.Configs)-cfg.Replicas {
 			t.Fatalf("the lease bucket is held by %v, leaving %d member(s) with "+
 				"no copy, want %d", holders, len(out), len(c.Configs)-cfg.Replicas)
+		}
+		return out
+	})
+}
+
+// THE BROWSER CONTROL SUITE WITH ITS HANDLES ON NO COPY OF THE DUTY BUCKET,
+// where the class lives, for TestSharedContractOnACluster's reason: every
+// answer a take, a renewal, an end or a read gives must be the leader's. The
+// members are chosen by the duty bucket's holders, which say nothing of where
+// the lease bucket's are.
+func TestBrowserControlContractOnACluster(t *testing.T) {
+	t.Parallel()
+	c := jetstreamtest.StartCluster(t, 5, js.Config{})
+	client := func(t *testing.T, i int) jetstream.JetStream {
+		t.Helper()
+		nc, err := c.Servers[i].Conn()
+		if err != nil {
+			t.Fatalf("member %d: connect: %v", i, err)
+		}
+		t.Cleanup(nc.Close)
+		client, err := jsapi.Embedded().Client(nc)
+		if err != nil {
+			t.Fatalf("member %d: client: %v", i, err)
+		}
+		return client
+	}
+	coordtest.RunBrowserControls(t, func(t *testing.T) []coordtest.BrowserControlStore {
+		cfg := Config{
+			TTL: coordtest.LongTTL, BucketPrefix: fmt.Sprintf("s%d", bucketSeq.Add(1)),
+			Clustered: true, Replicas: 3, Reach: InProcess,
+		}
+		first, err := Open(t.Context(), client(t, 0), client(t, 0), cfg)
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		info := streamOf(t.Context(), t, first.js, first.duties.stream)
+		holders := []string{info.Cluster.Leader}
+		for _, peer := range info.Cluster.Replicas {
+			holders = append(holders, peer.Name)
+		}
+		var out []coordtest.BrowserControlStore
+		for i, member := range c.Configs {
+			if slices.Contains(holders, member.ServerName) {
+				continue
+			}
+			s, err := Open(t.Context(), client(t, i), client(t, i), cfg)
+			if err != nil {
+				t.Fatalf("member %d: Open: %v", i, err)
+			}
+			out = append(out, s)
+		}
+		// THE PREMISE, as the shared case's: a handle on a member holding a
+		// copy reads locally, and this certifies the easy position.
+		if len(out) != len(c.Configs)-cfg.Replicas {
+			t.Fatalf("the duty bucket is held by %v, leaving %d member(s) with no copy, want %d",
+				holders, len(out), len(c.Configs)-cfg.Replicas)
 		}
 		return out
 	})
@@ -119,7 +181,7 @@ func TestAReadIsNeverAnsweredByACopyThatIsBehind(t *testing.T) {
 	// The lease bucket's leader, and a member that leads neither the lease
 	// bucket nor the mailbox bucket — the one about to be cut, with a handle
 	// on it. Three members and two streams always leave one.
-	first, err := Open(ctx, client(0), cfg)
+	first, err := Open(ctx, client(0), client(0), cfg)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -150,11 +212,11 @@ func TestAReadIsNeverAnsweredByACopyThatIsBehind(t *testing.T) {
 		t.Fatalf("the lease bucket is led by %q and the mailbox bucket by %q, which leaves "+
 			"no member leading neither", leaseLeader, mailboxLeader)
 	}
-	onLeader, err := Open(ctx, client(leader), cfg)
+	onLeader, err := Open(ctx, client(leader), client(leader), cfg)
 	if err != nil {
 		t.Fatalf("Open on the leader: %v", err)
 	}
-	onCut, err := Open(ctx, client(cut), cfg)
+	onCut, err := Open(ctx, client(cut), client(cut), cfg)
 	if err != nil {
 		t.Fatalf("Open on the member about to be cut: %v", err)
 	}

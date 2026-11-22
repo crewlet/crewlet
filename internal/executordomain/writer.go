@@ -689,15 +689,23 @@ type NewEnd struct {
 	Ask string
 
 	Ending executorkeep.Ending
+
+	// Served is every other conversation the turn served, the turn's run
+	// having read a wake of it ([End.Served]).
+	Served []string
 }
 
 // End records how a turn ended, and tombstones it: no capture lands for it
 // after this, and a second end is [ErrTurnEnded]. With no row it writes an
 // ended row naming no object; with one it absorbs and dedupes the
-// conversation's ended rows (see the package doc). An end naming another
-// conversation or another unit of work than the turn's row is [ErrInvalid]:
-// the end is authoritative for the turn's work key where its captures carried
-// none, and contradicts nothing they carried.
+// conversation's ended rows (see the package doc), and each other conversation
+// it served reads the row from then on. An end naming another conversation or
+// another unit of work than the turn's row, or other conversations it could
+// not have served ([checkServed]), is [ErrInvalid]: the end is authoritative
+// for the turn's work key where its captures carried none, and contradicts
+// nothing they carried. ITS SCOPE IS THE SEAT: its apply reads and writes
+// other conversations' rows (package doc, "A turn serves every conversation
+// its run read").
 func (w *Writer) End(ctx context.Context, c Call, n NewEnd) (statelog.Result, error) {
 	if err := c.validate(); err != nil {
 		return statelog.Result{}, err
@@ -711,13 +719,17 @@ func (w *Writer) End(ctx context.Context, c Call, n NewEnd) (statelog.Result, er
 	if !utf8.ValidString(n.Ask) {
 		return statelog.Result{}, invalid("the ask is not valid UTF-8")
 	}
+	if err := checkServed(n.Served, n.ConversationKey); err != nil {
+		return statelog.Result{}, err
+	}
 	p := End{
 		V: baseRecordVersion, Handle: n.Handle, Turn: n.Turn,
 		ConversationKey: n.ConversationKey, WorkKey: n.WorkKey,
 		AskExcerpt: executorkeep.Excerpt(n.Ask, AskExcerptMaxBytes), Ending: n.Ending.Fit(),
+		Served: slices.Clone(n.Served),
 	}
 	subject := ConversationSubject(n.Handle, n.ConversationKey, n.Turn)
-	scope := ScopeSet{Subject: true}
+	scope := seatScope(n.Handle)
 	return publish(ctx, w.publisher, request(subject, scope, c.OpID,
 		func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			removal, decideErr := decideEnd(ctx, tx, n)
@@ -785,7 +797,7 @@ func (w *Writer) EndLost(ctx context.Context, c Call, handle, conversationKey, t
 	p := End{V: baseRecordVersion, Handle: handle, Turn: turn,
 		ConversationKey: conversationKey, Ending: n.Ending.Fit()}
 	subject := ConversationSubject(handle, conversationKey, turn)
-	scope := ScopeSet{Subject: true}
+	scope := seatScope(handle) // an end's ([Writer.End])
 	limit := store.EncodeTime(before)
 	return publish(ctx, w.publisher, request(subject, scope, c.OpID,
 		func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
@@ -816,7 +828,8 @@ func (w *Writer) EndLost(ctx context.Context, c Call, handle, conversationKey, t
 // or before cutoff, as the retention duty, under the operation the duty
 // derived. It is decided again in the conversation's snapshot and once more at
 // the apply, so a turn captured since it was listed, or held since as a live
-// turn's base ([held]), is refused [ErrNotDue] or left in place.
+// turn's base ([held]), is refused [ErrNotDue] or left in place. Its scope is
+// the seat: the turn goes from every conversation it served too.
 func (w *Writer) DeleteExpired(ctx context.Context, c Call, handle, conversationKey,
 	turn string, cutoff time.Time) (statelog.Result, error) {
 
@@ -829,7 +842,7 @@ func (w *Writer) DeleteExpired(ctx context.Context, c Call, handle, conversation
 	p := Delete{V: baseRecordVersion, Handle: handle, Turn: turn,
 		ConversationKey: conversationKey, Cutoff: cutoff.UTC()}
 	subject := ConversationSubject(handle, conversationKey, turn)
-	scope := ScopeSet{Subject: true}
+	scope := seatScope(handle)
 	res, err := publish(ctx, w.publisher, request(subject, scope, c.OpID,
 		func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			due, dueErr := expiredIn(ctx, tx, handle, conversationKey, turn,

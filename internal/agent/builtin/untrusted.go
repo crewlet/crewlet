@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/provenance"
 )
 
@@ -28,6 +29,8 @@ import (
 type declaredField struct {
 	path fieldPath
 	kind string
+	// value is the field as the answer holds it.
+	value reflect.Value
 }
 
 // declaredDepth bounds the walk: an answer is a tree a few levels deep, and a
@@ -56,6 +59,18 @@ func walkDeclared(v reflect.Value, path fieldPath, out *[]declaredField, depth i
 	case reflect.Struct:
 		if encodesItself(v.Type()) {
 			return nil
+		}
+		if v.Type() == reflect.TypeFor[growth.Report]() {
+			// A REPORT DECLARES ITS COLUMNS, not its fields: each cell of an
+			// untrusted column is somebody's words at length.
+			if !v.CanInterface() {
+				return fmt.Errorf("builtin: a report at %q is unexported, so its cells cannot be read",
+					readablePath(path.id()))
+			}
+			for _, cell := range v.Interface().(growth.Report).UntrustedCells() {
+				*out = append(*out, declaredField{path: path.key("rows").index(cell.Row).index(cell.Column),
+					kind: provenance.FieldFence, value: reflect.ValueOf(cell.Text)})
+			}
 		}
 		return walkStruct(v, path, out, depth)
 	case reflect.Map:
@@ -113,7 +128,7 @@ func walkStruct(v reflect.Value, path fieldPath, out *[]declaredField, depth int
 		}
 		if kind, tagged := f.Tag.Lookup(provenance.FieldTag); tagged {
 			if holdsSomething(fv) {
-				*out = append(*out, declaredField{path: path.key(name), kind: kind})
+				*out = append(*out, declaredField{path: path.key(name), kind: kind, value: fv})
 			}
 			continue
 		}

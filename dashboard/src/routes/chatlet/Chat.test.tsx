@@ -632,7 +632,13 @@ describe("the top bar", () => {
       hash: `#/chatlet/${GENERAL}`,
       answer: chatAnswers([room(GENERAL, "general", { unread: 4 })]),
       // A READER WHO MAY ASK: where they may not, the entry is held (`CatchUp.test.tsx`).
-      assistant: { open: false, unavailable: null, toggle: () => undefined, ask: () => undefined },
+      assistant: {
+        open: false,
+        unavailable: null,
+        toggle: () => undefined,
+        ask: () => undefined,
+        askAbout: () => undefined,
+      },
     });
     fireEvent.click(await screen.findByRole("button", { name: "More" }));
     const items = await screen.findAllByRole("menuitem");

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -1319,5 +1320,187 @@ func testAServeTheRunsEndingOvertookServesNothing(t *testing.T, runs *overtaking
 	}
 	if n := notesByID(t, s, turn)["n-1"]; len(n.Serves) != 0 || n.Served != "" || n.Place != 0 || !n.Waiting() {
 		t.Errorf("the serve the run's ending overtook left the note %+v, want it waiting, served to no hook", n)
+	}
+}
+
+// A POLL SERVE IS RECORDED UNDER ITS INBOX ID AND SETTLED BY IT, for a harness
+// whose session record confirms a take: the serve is the job's, kept with its
+// item's digest beside the id (a record holding text matches by it), once
+// however often the poll serves the note again, a verdict holding the id
+// reads the note off it, and a verdict for another job settles nothing of it.
+// A poll naming no inbox id records no serve, as a plugin's that confirms
+// itself. A wake served once waits through a read that decided nothing (a
+// record not yet flushed) and is read off the verdict the run's end gives.
+// Mutation: record the serve under the note's id or without its digest, again
+// on a second poll, let another job's verdict read it, or let a verdict that
+// held nothing lose the wake's one serve, and a check goes red.
+func testAPollServeIsRecordedUnderItsInboxIDAndSettledByIt(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	const turn = "t-poll-record"
+	pollDigest := strings.Repeat("d", 64)
+	launch := mustLaunched(t, s, run(turn))
+	mustFile(t, s, turn, "n-1")
+	mustFile(t, s, turn, "n-2")
+	poll := sandbox.NoteServe{IDs: []string{"n-1"}, Launch: launch,
+		Statuses: []string{sandbox.StatusLaunching, sandbox.StatusRunning},
+		Inbox:    map[string]sandbox.InboxItem{"n-1": {ID: "msg_1", Digest: pollDigest}}}
+	for range 2 {
+		if served, err := s.ServeNotes(ctx, turn, poll); err != nil || !slices.Equal(idsOf(served), []string{"n-1"}) {
+			t.Fatalf("the poll served %v, %v, want n-1", idsOf(served), err)
+		}
+	}
+	plain := sandbox.NoteServe{IDs: []string{"n-2"}, Launch: launch, Statuses: poll.Statuses}
+	if _, err := s.ServeNotes(ctx, turn, plain); err != nil {
+		t.Fatalf("a poll naming no inbox id: %v", err)
+	}
+	notes := notesByID(t, s, turn)
+	if n := notes["n-1"]; !slices.Equal(servesOf(n), []string{"msg_1"}) || n.Served != launch ||
+		n.Serves[0].Launch != launch || n.Serves[0].Boundary != string(types.SteerBoundaryStep) ||
+		n.Serves[0].Digest != pollDigest {
+		t.Errorf("the polled note is %+v, want one serve to the job under its inbox id and digest, at a step", n)
+	}
+	if n := notes["n-2"]; len(n.Serves) != 0 || n.Served != launch {
+		t.Errorf("a poll naming no inbox id recorded %+v, want the note served and no serve", n)
+	}
+	if settled := mustSettle(t, s, turn, sandbox.HookSettle{Launch: "job-other", Held: []string{"msg_1"}}); len(settled) != 0 {
+		t.Errorf("another job's verdict settled %v", idsOf(settled))
+	}
+	settled := mustSettle(t, s, turn, sandbox.HookSettle{Launch: launch, Held: []string{"msg_1"}})
+	if n := notesByID(t, s, turn)["n-1"]; !slices.Equal(idsOf(settled), []string{"n-1"}) || n.Read == nil ||
+		n.Read.Take != "msg_1" || n.Read.Launch != launch {
+		t.Errorf("the job's verdict holding msg_1 answered %v and left %+v, want n-1 read off its serve",
+			idsOf(settled), n)
+	}
+
+	// A WAKE, SERVED ONCE: an early read's verdict holds nothing, and the end's
+	// holds its inbox id. A verdict that holds a take answers every note read
+	// off a serve to the job, so n-1 again beside the wake.
+	wake := fileWake(t, s, turn, launch, sealedWake("w-1", 64))
+	once := sandbox.NoteServe{IDs: []string{wake.ID}, Launch: launch, Statuses: poll.Statuses,
+		Wakes: map[string]int{wake.ID: 1}, Inbox: map[string]sandbox.InboxItem{wake.ID: {ID: "msg_w"}}}
+	if served, err := s.ServeNotes(ctx, turn, once); err != nil || !slices.Equal(idsOf(served), []string{wake.ID}) {
+		t.Fatalf("the poll served %v, %v, want the wake", idsOf(served), err)
+	}
+	mustSettle(t, s, turn, sandbox.HookSettle{Launch: launch})
+	if n := notesByID(t, s, turn)[wake.ID]; !n.Waiting() || !slices.Equal(servesOf(n), []string{"msg_w"}) {
+		t.Errorf("a verdict that held nothing left the wake %+v, want it waiting on its one serve", n)
+	}
+	settled = mustSettle(t, s, turn, sandbox.HookSettle{Launch: launch, Held: []string{"msg_w"}})
+	if n := notesByID(t, s, turn)[wake.ID]; !slices.Equal(idsOf(settled), []string{"n-1", wake.ID}) ||
+		n.Read == nil || n.Read.Take != "msg_w" {
+		t.Errorf("the end's verdict holding msg_w answered %v and left %+v, want n-1 again and the wake read "+
+			"off msg_w", idsOf(settled), n)
+	}
+}
+
+// A POLL SERVES A NOTE TO NO NEW JOB PAST ITS BUDGET. Each job a poll first
+// serves a note to spends one of its [sandbox.RunNote.MaxServes] poll serves,
+// a poll of the same job again none, so however often the run is relaunched
+// the note is served to that many jobs, and the next job's poll serves it
+// nothing: it waits for the review, served to the last job it reached.
+//
+// Mutation: count every poll, or serve past the budget, and this goes red.
+func testAPollServesANoteToNoNewJobPastItsBudget(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	const turn = "t-poll-budget"
+	statuses := []string{sandbox.StatusLaunching, sandbox.StatusRunning}
+	poll := func(job string) []string {
+		t.Helper()
+		served, err := s.ServeNotes(ctx, turn, sandbox.NoteServe{IDs: []string{"n-1"}, Launch: job,
+			Statuses: statuses})
+		if err != nil {
+			t.Fatalf("the poll of job %s: %v", job, err)
+		}
+		return idsOf(served)
+	}
+	job := mustLaunched(t, s, run(turn))
+	mustFile(t, s, turn, "n-1")
+	for k := 1; k <= sandbox.MaxNoteServes; k++ {
+		if k > 1 {
+			mustClaim(t, s, turn)
+			job = mustLaunched(t, s, run(turn))
+		}
+		for range 2 {
+			if got := poll(job); !slices.Equal(got, []string{"n-1"}) {
+				t.Fatalf("job %d's poll served %v, want n-1", k, got)
+			}
+		}
+		if n := notesByID(t, s, turn)["n-1"]; n.PollServes != k || n.Served != job {
+			t.Fatalf("job %d's polls left the note at %d poll serves, served to %q, want %d, to the job", k,
+				n.PollServes, n.Served, k)
+		}
+	}
+	last := job
+	mustClaim(t, s, turn)
+	next := mustBeginLaunch(t, s, run(turn))
+	if got := poll(next); len(got) != 0 {
+		t.Errorf("a job past the note's budget was served %v", got)
+	}
+	if n := notesByID(t, s, turn)["n-1"]; !n.Waiting() || n.Served != last || n.PollServes != sandbox.MaxNoteServes {
+		t.Errorf("the note past its budget is %+v, want it waiting for the review, served to the last job", n)
+	}
+}
+
+// A SECOND ADMISSION IS GRANTED ONCE A JOB, WITHIN THE POLL BUDGET: a note a
+// poll served the job is granted, spending one of its poll serves, and the
+// same job's ask made again is granted at no cost; a note the job was never
+// served, a wake item and a note no record holds are neither granted nor
+// spent; and at its budget a note is answered spent, nothing written. A job the
+// record moved on from is granted nothing.
+//
+// Mutation: spend at every ask, grant past the budget or a wake, or grant a
+// note the job was never served, and this goes red.
+func testASecondAdmissionIsGrantedOnceAJobWithinThePollBudget(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	const turn = "t-again"
+	statuses := []string{sandbox.StatusLaunching, sandbox.StatusRunning}
+	job := mustLaunched(t, s, run(turn))
+	mustFile(t, s, turn, "n-1")
+	mustFile(t, s, turn, "n-2")
+	wake := fileWake(t, s, turn, job, sealedWake("w-1", 64))
+	serve := func(job string, ids ...string) {
+		t.Helper()
+		if _, err := s.ServeNotes(ctx, turn, sandbox.NoteServe{IDs: ids, Launch: job, Statuses: statuses,
+			Wakes: map[string]int{wake.ID: 1}}); err != nil {
+			t.Fatalf("the poll: %v", err)
+		}
+	}
+	again := func(job string, ids ...string) (granted, spent []string) {
+		t.Helper()
+		granted, spent, err := s.AgainNotes(ctx, turn, sandbox.NoteAgain{IDs: ids, Launch: job, Statuses: statuses})
+		if err != nil {
+			t.Fatalf("the ask: %v", err)
+		}
+		return granted, spent
+	}
+	serve(job, "n-1", wake.ID)
+	for range 2 {
+		if granted, spent := again(job, "n-1", "n-2", wake.ID, "planted"); !slices.Equal(granted, []string{"n-1"}) ||
+			len(spent) != 0 {
+			t.Fatalf("the ask answered %v granted and %v spent, want n-1 granted alone", granted, spent)
+		}
+	}
+	notes := notesByID(t, s, turn)
+	if n := notes["n-1"]; n.PollServes != 2 || n.Readmitted != job {
+		t.Errorf("the ask, made twice, left n-1 at %d poll serves, readmitted by %q, want two, by the job",
+			n.PollServes, n.Readmitted)
+	}
+	if n2, w := notes["n-2"], notes[wake.ID]; n2.PollServes != 0 || w.PollServes != 1 || w.Readmitted != "" {
+		t.Errorf("the ask spent n-2's serves (%d) or the wake's (%d, readmitted %q)", n2.PollServes,
+			w.PollServes, w.Readmitted)
+	}
+	mustClaim(t, s, turn)
+	next := mustBeginLaunch(t, s, run(turn))
+	if granted, _ := again(job, "n-1"); len(granted) != 0 {
+		t.Errorf("a job the record moved on from was granted %v", granted)
+	}
+	serve(next, "n-1")
+	if granted, spent := again(next, "n-1"); len(granted) != 0 || !slices.Equal(spent, []string{"n-1"}) {
+		t.Errorf("the ask at the budget answered %v granted and %v spent, want n-1 spent", granted, spent)
+	}
+	if n := notesByID(t, s, turn)["n-1"]; n.PollServes != sandbox.MaxNoteServes || n.Readmitted != job ||
+		!n.Waiting() {
+		t.Errorf("the note at its budget is %+v, want it waiting at %d poll serves, readmitted by the first job",
+			n, sandbox.MaxNoteServes)
 	}
 }

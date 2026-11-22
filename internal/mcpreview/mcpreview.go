@@ -31,7 +31,10 @@
 // The operator who added a server chose it with its first listing in front of
 // them (the add flow tests it and shows each tool's starting level), so that
 // listing is accepted by the node that lists the server first. A server is
-// BASELINED once any record names it; before that, nothing it lists waits.
+// BASELINED once any record names it; before that, nothing it lists waits. An
+// accepted removal keeps its record, so a server whose tools all went stays
+// baselined and its return reads as added. A removal is judged only while some
+// live listing exists: none says nothing about what the server lists.
 package mcpreview
 
 import (

@@ -21,8 +21,7 @@ const (
 	//
 	// THIS ISOLATES STATE, NOT THE HOST: the agent runs as the engine user and
 	// reaches whatever that user can. Right for a workstation or a dedicated VM,
-	// wrong for a shared host. A CONFINED backend (confine.go) is the exception,
-	// for the Dashboard Assistant's deep work alone (ADR-0054).
+	// wrong for a shared host.
 	Direct Placement = "direct"
 
 	// Container runs a long-lived Docker or Podman container per box, its home

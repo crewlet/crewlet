@@ -64,6 +64,9 @@ type Fleet struct {
 	// counter its revisions are drawn from.
 	accessReviews        map[string]accessReview
 	accessReviewRevision uint64
+	// homeBoards is each seat's Home board, by handle, its revisions drawn
+	// from version.
+	homeBoards map[string]homeBoard
 	// atlasWakes is each owning seat's atlas wake record, by its key, and the
 	// counter its revisions are drawn from.
 	atlasWakes        map[string]coord.AtlasWake
@@ -73,6 +76,10 @@ type Fleet struct {
 	conversationHoldRevision uint64
 	seen                     map[string]seenMark
 	seenRevision             uint64
+	// sessionClaims is each minted session's claim, by session id, and the
+	// counter its revisions are drawn from.
+	sessionClaims        map[string]coord.SessionClaim
+	sessionClaimRevision uint64
 	// boxReadings is each seat's box readings, by seat and cell.
 	boxReadings map[boxReadingKey]coord.BoxReading
 	mailboxes   map[uuid.UUID]coord.MailboxRecord
@@ -150,13 +157,15 @@ type Fleet struct {
 	// their whole key.
 	accepted entryRecords[coord.MCPAcceptedTool, coord.MCPAcceptedUpdate]
 
-	// grants and mcpSignIns are each MCP server's OAuth grant and its
-	// sign-in in progress, by the server's name.
-	grants     entryRecords[coord.MCPGrant, coord.MCPGrantUpdate]
-	mcpSignIns entryRecords[coord.MCPSignIn, coord.MCPSignIn]
+	// oauth are each family's OAuth grants and sign-ins in progress, by
+	// the grant's name.
+	oauth map[coord.GrantFamily]*grantFamilyRecords
+
+	// googleIdentities are each seat's Google growth identity, by handle.
+	googleIdentities entryRecords[coord.GoogleIdentity, coord.GoogleIdentity]
 
 	// version is the one counter every versioned write draws from, sandbox
-	// runs, mailbox records and chat read records alike. Store-wide rather
+	// runs, mailbox records, chat read records, trim holds and Home boards alike. Store-wide rather
 	// than per record, as a KV revision is, so a record deleted and created
 	// again never hands back a version an older incarnation of it already
 	// used: a caller still holding that version must lose, not win against a
@@ -164,10 +173,20 @@ type Fleet struct {
 	// that bug.
 	version uint64
 
-	epoch   int64
-	target  coord.Activation
-	set     bool
+	epoch  int64
+	target coord.Activation
+	set    bool
+
+	// bodies is every activation body written, by digest, with the instant
+	// of its last write, until [Fleet.SweepBodies] removes one no pointer
+	// names: the KV's content-addressed keys.
+	bodies map[string]storedBody
+}
+
+// storedBody is one activation body and when it was last written.
+type storedBody struct {
 	payload json.RawMessage
+	at      time.Time
 }
 
 // windowKey is one window's count: the counter's name, the window's width and
@@ -216,8 +235,10 @@ func NewFleet() *Fleet {
 		seatAccess:        map[string]map[string][]byte{},
 		grantRequests:     map[string][]byte{},
 		accessReviews:     map[string]accessReview{},
+		homeBoards:        map[string]homeBoard{},
 		atlasWakes:        map[string]coord.AtlasWake{},
 		conversationHolds: map[uuid.UUID]map[string]coord.ConversationHold{},
+		sessionClaims:     map[string]coord.SessionClaim{},
 		seen:              map[string]seenMark{},
 		boxReadings:       map[boxReadingKey]coord.BoxReading{},
 		mailboxes:         map[uuid.UUID]coord.MailboxRecord{},
@@ -234,9 +255,10 @@ func NewFleet() *Fleet {
 		sshTests:          newSSHTestRecords(),
 		issueReports:      newIssueReportRecords(),
 		insightRecords:    newInsightRecords(),
-		grants:            newGrantRecords(),
-		mcpSignIns:        newMCPSignInRecords(),
+		oauth:             newGrantFamilies(),
+		googleIdentities:  newGoogleIdentityRecords(),
 		accepted:          newAcceptedRecords(),
+		bodies:            map[string]storedBody{},
 	}
 }
 
@@ -344,6 +366,21 @@ func (f *Fleet) WorkedAt(_ context.Context, scope string, keys []string) (map[st
 	return out, nil
 }
 
+// WorkedBy returns the keys already recorded under scope, each with the detail
+// its first record stated.
+func (f *Fleet) WorkedBy(_ context.Context, scope string, keys []string) (map[string]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	out := make(map[string]string, len(keys))
+	for _, key := range keys {
+		if entry, done := f.worked[scope+"\x00"+key]; done {
+			out[key] = entry.detail
+		}
+	}
+	return out, nil
+}
+
 // Record marks one key worked.
 func (f *Fleet) Record(_ context.Context, scope, key, detail string, at time.Time) error {
 	if scope == "" || key == "" {
@@ -421,43 +458,64 @@ func (f *Fleet) Activate(_ context.Context, req coord.ActivationRequest) (coord.
 			coord.ErrActivationRaced, f.target.RevisionID)
 	}
 
-	// The payload and the pointer in one step, as the KV writes them in
-	// one record (see [coord.Plane.Activate]). THE INSTANT IS DECIDED UNDER
-	// THE SAME MUTEX as the compare, against the pointer being replaced —
-	// see [coord.ActivationAt].
+	// HELD TO THE KV's BOUNDS, the body to what one key holds and the
+	// pointer, at its widest, to its own, refused before anything changes.
+	if err = coord.HoldValue("the activation's body", len(payload)); err != nil {
+		return coord.Activation{}, err
+	}
+	size, err := coord.ActivationBytes(req)
+	if err != nil {
+		return coord.Activation{}, fmt.Errorf("coord/memory: %w", err)
+	}
+	if err = coord.HoldPointer(size); err != nil {
+		return coord.Activation{}, err
+	}
+	// The body, then the pointer, as the KV writes them (see
+	// [coord.Plane.Activate]), here in one step under the mutex, so no body
+	// is left by a write that lost, as the KV's may be until its sweep. THE INSTANT
+	// IS DECIDED UNDER THE SAME MUTEX as the compare, against the pointer
+	// being replaced — see [coord.ActivationAt].
 	var previous time.Time
 	if f.set {
 		previous = f.target.At
 	}
 	at := coord.ActivationAt(req.At, previous)
-	// HELD TO WHAT ONE KEY HOLDS by the very record the KV writes for it,
-	// refused before anything here changes.
-	value, err := coord.ActivationValue(req, payload, at)
-	if err != nil {
-		return coord.Activation{}, fmt.Errorf("coord/memory: %w", err)
-	}
-	if err := coord.HoldValue("the activation pointer", len(value)); err != nil {
-		return coord.Activation{}, err
-	}
-	f.payload = payload
-	f.epoch++
+	body := coord.BodyOf(payload)
+	f.bodies[body.SHA256] = storedBody{payload: payload, at: time.Now()}
+	// TWO REVISIONS, as the KV spends: the body's write, then the pointer's.
+	// Consecutive here, a case could count on epochs the store never gives.
+	f.epoch += 2
 	f.target = coord.Activation{
 		Epoch: f.epoch, RevisionID: req.RevisionID, At: at, Summary: req.Summary,
-		Origin: req.Origin.UTC(), Restored: req.Restore,
+		Origin: req.Origin.UTC(), Restored: req.Restore, Body: body,
 	}
 	f.set = true
 	return f.target, nil
 }
 
-// Payload returns the current revision's sealed payload.
-func (f *Fleet) Payload(_ context.Context, revisionID string) (json.RawMessage, bool, error) {
+// Body returns the body a names, false once the sweep removed it.
+func (f *Fleet) Body(_ context.Context, a coord.Activation) (json.RawMessage, bool, error) {
+	if !a.Body.Named() {
+		return nil, false, fmt.Errorf("coord/memory: read the body of %s: %w", a.RevisionID, coord.ErrBodyless)
+	}
+	if err := a.Body.Check(); err != nil {
+		return nil, false, fmt.Errorf("coord/memory: read the body of %s: %w", a.RevisionID, err)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if !f.set || f.target.RevisionID != revisionID || f.payload == nil {
+	stored, found := f.bodies[a.Body.SHA256]
+	if !found {
 		return nil, false, nil
 	}
-	return slices.Clone(f.payload), true, nil
+	if !a.Body.Describes(stored.payload) {
+		return nil, false, fmt.Errorf("coord/memory: the body %s is not the %d bytes the "+
+			"activation of %s names: %w", a.Body.SHA256, a.Body.Bytes, a.RevisionID, coord.ErrBodyCorrupt)
+	}
+	return slices.Clone(stored.payload), true, nil
 }
+
+// BodyCrossing is none: the twin is in the node's own process.
+func (f *Fleet) BodyCrossing(coord.Activation) time.Duration { return 0 }
 
 // Target reads the pointer.
 func (f *Fleet) Target(context.Context) (coord.Activation, bool, error) {
@@ -1368,3 +1426,19 @@ func cloneChatRead(state coord.ChatReadState) coord.ChatReadState {
 // promise read from the other side — sweeping changes no answer — and the
 // suite holds both backends to it.
 func (f *Fleet) SweepMarkers(context.Context, time.Time) (int64, error) { return 0, nil }
+
+// SweepBodies removes the activation bodies written before cutoff that the
+// pointer does not name, as the KV's sweep does.
+func (f *Fleet) SweepBodies(_ context.Context, cutoff time.Time) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var swept int64
+	for digest, body := range f.bodies {
+		if (f.set && digest == f.target.Body.SHA256) || !body.at.Before(cutoff) {
+			continue
+		}
+		delete(f.bodies, digest)
+		swept++
+	}
+	return swept, nil
+}

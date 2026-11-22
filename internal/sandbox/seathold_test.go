@@ -129,6 +129,8 @@ func (h *flakyHold) Release(context.Context, string, queue.Attachment) error {
 	return nil
 }
 
+func (h *flakyHold) Readmit(context.Context, string, string, string) (int, error) { return 0, nil }
+
 // A LAUNCH HOLDS ITS SEAT FROM THE ROW IT WRITES, before the box exists and with
 // no started event processed at all.
 //
@@ -441,4 +443,48 @@ func (h *inboxHold) Hold(ctx context.Context, _ string, inbox queue.Attachment) 
 
 func (h *inboxHold) Release(ctx context.Context, _ string, inbox queue.Attachment) error {
 	return h.q.ResumeTopic(ctx, seatInbox, seatInboxGroup, inbox, "sandbox")
+}
+
+func (h *inboxHold) Readmit(ctx context.Context, _, key, _ string) (int, error) {
+	return h.q.Readmit(ctx, seatInbox, seatInboxGroup, key)
+}
+
+// A SEAT'S ROUTER IS TOLD EACH TIME ITS RUNS START OR STOP HOLDING IT, and when
+// this node lets the seat go ([CoordinatorOptions.Busy]): it follows the
+// seat's runs, never an owed answer, which leaves no run to hand a wake to.
+// Each call reads the state it follows, so it is told with the state in place.
+//
+// Mutation: tell Busy only on a hold's transition (which an owed answer keeps),
+// or not at a release, and this goes red.
+func TestTheSeatsRouterIsToldWhenItsRunsHoldItAndWhenTheSeatGoes(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	rig.withHold()
+	var told []bool
+	rig.coordinator.busy = func(handle string) {
+		held, _ := rig.coordinator.SeatRuns(handle)
+		told = append(told, held)
+	}
+	run := rig.launch("t1")
+	if err := rig.coordinator.OnStarted(t.Context(), types.ExecutorLaunched{
+		AgentHandle: "swe", TurnID: run.TurnID, LaunchID: run.LaunchID,
+	}); err != nil {
+		t.Fatalf("OnStarted: %v", err)
+	}
+	if !slices.Equal(told, []bool{true}) {
+		t.Fatalf("told %v as the run began holding the seat, want one busy call", told)
+	}
+	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Decision: choosing("which branch?")})
+	rig.runner.Finish(Result{})
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	if !slices.Equal(told, []bool{true, false}) {
+		t.Fatalf("told %v once the run parked, want it told the seat is free", told)
+	}
+	rig.coordinator.ReleaseSeat("swe")
+	if !slices.Equal(told, []bool{true, false, false}) {
+		t.Fatalf("told %v at the release, want it told again", told)
+	}
 }

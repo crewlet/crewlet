@@ -245,6 +245,7 @@ export const KIT = {
   spacing2: "8px",
   spacing3: "12px",
   spacing6: "24px",
+  breakpointPhone: "640px",
 } as const;
 
 const STYLE = `
@@ -286,6 +287,13 @@ button:hover { border-color: ${KIT.borderStrongHover}; }
 button:focus-visible { outline: 2px solid ${KIT.focus}; outline-offset: 2px; }
 button[hidden] { display: none; }
 button svg { width: 20px; height: 20px; pointer-events: none; }
+@media (max-width: ${KIT.breakpointPhone}) {
+  /* ON A PHONE the steps go under the file, which takes the frame's whole width. */
+  .stage { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: minmax(0, 1fr) auto; }
+  figure { grid-column: 1 / -1; grid-row: 1; }
+  .previous { grid-row: 2; justify-self: end; }
+  .next { grid-row: 2; justify-self: start; }
+}
 .said { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 `;
 
@@ -356,7 +364,12 @@ export class FileViewer {
     this.opener = opener;
     parts.previous.hidden = parts.next.hidden = items.length < 2;
     this.show(at);
-    if (!parts.dialog.open) parts.dialog.showModal();
+    if (parts.dialog.open) return;
+    parts.dialog.showModal();
+    // FOCUS BY HAND, never by `autofocus`: a browser refuses autofocus in a
+    // frame from another origin, which an artifact's always is, and says so
+    // in the page's console.
+    parts.close.focus();
   }
 
   close(): void {
@@ -480,10 +493,11 @@ export class FileViewer {
     const bar = el("div", "bar");
     const count = el("span", "count");
     const close = button("Close", closeGlyph);
-    close.autofocus = true;
     const stage = el("div", "stage");
     const previous = button("Previous file", previousGlyph);
+    previous.className = "previous";
     const next = button("Next file", nextGlyph);
+    next.className = "next";
     const figure = el("figure", "");
     const said = el("p", "said");
     said.setAttribute("role", "status");

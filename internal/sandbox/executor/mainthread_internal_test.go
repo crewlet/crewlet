@@ -11,10 +11,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
+	"runtime/metrics"
 	"slices"
 	"strings"
 	"sync"
@@ -888,13 +891,13 @@ func (w *readAtWait) Done() <-chan struct{} {
 }
 
 // A TAKE'S PIECE PAST THE BASE WAITS FOR THE LARGE SLOT BEFORE IT IS HELD:
-// a transcript's line twice [scrubPieceBaseBytes], in each reading, an
-// export's string, a `.json` file and a text of short lines as long, each a
-// text the scrub redacts as one, wait for the slot held elsewhere having read
-// at most the base and two fills (the source's, and the scanner's or the
-// text's read ahead) past where the piece began; freed, the rewrite
-// reads to its end and holds nothing once done; with its context ended while
-// it waits, it ends with [errLargeWait].
+// a transcript's line twice [scrubPieceBaseBytes], an export's string, a
+// `.json` file and a text of short lines as long, each a text the first
+// reading redacts as one (the second copies it), wait for the slot held
+// elsewhere having read at most the base and two fills (the source's, and the
+// scanner's or the text's read ahead) past where the piece began; freed, the
+// rewrite reads to its end and holds nothing once done; with its context
+// ended while it waits, it ends with [errLargeWait].
 //
 // Mutation: gate no piece, a line only once it is read whole, or a text by its
 // lines, drop a piece's gate, or keep a hold past the rewrite, and a case goes
@@ -910,25 +913,20 @@ func TestATakesPiecePastTheBaseWaitsForTheLargeSlot(t *testing.T) {
 		body    string
 		rewrite rewrite
 	}{
-		{"a transcript's line, first reading", line, func(_ io.Writer, src io.Reader, s scrubber, b scrubBounds) error {
-			_, err := measureLines(src, s, &tarPlan{gate: b.gate})
-			return err
-		}},
-		{"a transcript's line, second reading", line, func(dst io.Writer, src io.Reader, s scrubber,
-			b scrubBounds) error {
-			plan := &tarPlan{}
-			if _, err := measureLines(strings.NewReader(line), s, plan); err != nil {
-				return err
-			}
+		{"a transcript's line", line, func(_ io.Writer, src io.Reader, s scrubber, b scrubBounds) error {
+			plan := spooledPlan(t)
 			plan.gate = b.gate
-			return writeLines(dst, src, s, plan, plan.lines.count())
+			_, err := measureLines(src, s, plan)
+			return err
 		}},
 		{"an export's string", prefix + long + `"}`, func(dst io.Writer, src io.Reader, s scrubber,
 			b scrubBounds) error {
 			return rewriteDocument(dst, src, s, b.gate)
 		}},
 		{"a `.json` file", prefix + long + `"}`, func(_ io.Writer, src io.Reader, s scrubber, b scrubBounds) error {
-			_, _, err := measureFile("tasks/s/1.json", src, s, &tarPlan{gate: b.gate})
+			plan := spooledPlan(t)
+			plan.gate = b.gate
+			_, err := measureFile("tasks/s/1.json", src, s, plan)
 			return err
 		}},
 		{"a text of short lines", lines, func(dst io.Writer, src io.Reader, s scrubber, b scrubBounds) error {
@@ -986,28 +984,39 @@ func TestATakesPiecePastTheBaseWaitsForTheLargeSlot(t *testing.T) {
 }
 
 // THE PLAN PAST THE BASE HOLDS THE SLOT TO THE TAKE'S END: a tar's plan one
-// line short of a byte past [scrubPieceBaseBytes] of bits takes no slot
-// as the first reading plans a transcript's lines; one line further it takes
-// it, and holds it once the lines are read, until the take lets it go.
+// bit short of a byte past [scrubPieceBaseBytes] of bits takes no slot as the
+// first reading plans a transcript's line that loses a loaded tool
+// definition; one bit further it takes it, and holds it once the lines are
+// read, until the take lets it go.
 //
 // Mutation: hold the plan at the base (`>=` for `>`), plan no hold in a
 // transcript's lines, or drop it with the lines, and a case goes red.
 func TestThePlanPastTheBaseHoldsTheSlotToTheTakesEnd(t *testing.T) {
+	s := newScrubber([]string{ltServer})
+	line := ltRecord("2.1.310", "", ltEcho, ltRenamed) + "\n"
+	measured := spooledPlan(t)
+	if _, err := measureLines(strings.NewReader(line), s, measured); err != nil {
+		t.Fatal(err)
+	}
+	cut := measured.edits.count()
+	if cut == 0 {
+		t.Fatal("the line planned no cut")
+	}
 	for _, tc := range []struct {
 		name  string
 		bits  int
 		holds bool
 	}{
-		{"a plan a bit short of past the base", (scrubPieceBaseBytes+1)*8 - 3, false},
-		{"a plan past the base", (scrubPieceBaseBytes+1)*8 - 2, true},
+		{"a plan a bit short of past the base", (scrubPieceBaseBytes+1)*8 - 1 - cut, false},
+		{"a plan past the base", (scrubPieceBaseBytes+1)*8 - cut, true},
 	} {
 		large := testPass(t)
-		plan := &tarPlan{gate: large.gate(t.Context())}
+		plan := spooledPlan(t)
+		plan.gate = large.gate(t.Context())
 		for range tc.bits {
-			plan.lines.put(false)
+			plan.members.put(false)
 		}
-		// TWO LINES, a bit each.
-		if _, err := measureLines(strings.NewReader("ab\ncd\n"), newScrubber(nil), plan); err != nil {
+		if _, err := measureLines(strings.NewReader(line), s, plan); err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
 		if held := len(collectionLargeReads) == 1; held != tc.holds {
@@ -1215,7 +1224,8 @@ func takeWithin(ctx context.Context, archive []byte) (sandbox.TakenSession, erro
 	p := PathsFor(box)
 	box.Put(p.SessionRecord(), "id "+ctSession+"\ncontinued no\nrelease 2.1.322 (Claude Code)\n")
 	box.Put(p.SessionCapture(), string(archive))
-	return NewClaudeCode().TakeSession(ctx, box, sandbox.SessionTake{MaxBytes: 32 << 20})
+	return NewClaudeCode().TakeSession(ctx, box, sandbox.SessionTake{MaxBytes: 32 << 20,
+		Spool: sandbox.SessionSpool{Dir: os.TempDir(), Bytes: math.MaxInt64, Held: func(int64) {}}})
 }
 
 // countedWriter counts what is written to it.
@@ -1411,20 +1421,23 @@ func BenchmarkATakeAtItsLargeTier(b *testing.B) {
 // The base tier counts a take at this and [BenchmarkAMeterAtItsBase] summed:
 // the meter's worst line is past the scrub's base, so the two never meet on
 // one line, but the scrub may read on at its base while the meter is still on
-// that line. Read off the GC trace as that is:
+// that line. Read off its held-MiB, in live bytes ([atLiveBytes]), which the
+// pool is sized by:
 //
-//	GOGC=10 GODEBUG=gctrace=1 go test -run '^$' -bench '^BenchmarkATakeAtItsBase$' -benchtime 1x -benchmem
+//	GODEBUG=gcstoptheworld=1 go test -run '^$' -bench '^BenchmarkATakeAtItsBase$' -benchtime 1x -benchmem
 func BenchmarkATakeAtItsBase(b *testing.B) {
+	atLiveBytes(b)
 	benchmarkATake(b, takeOfPieces(b, scrubPieceBaseBytes))
 }
 
 // WHAT A TAKE'S METER HOLDS AT ITS BASE: the meter alone, fed what the scrub
 // keeps of a take whose main thread holds [meterAtItsBase]'s line, so the
 // figure is the meter's, not the scrub's hold of that line past its own base,
-// which the large tier counts. Read off the GC trace as that is:
+// which the large tier counts. Read off its held-MiB, as that is:
 //
-//	GOGC=10 GODEBUG=gctrace=1 go test -run '^$' -bench '^BenchmarkAMeterAtItsBase$' -benchtime 1x -benchmem
+//	GODEBUG=gcstoptheworld=1 go test -run '^$' -bench '^BenchmarkAMeterAtItsBase$' -benchtime 1x -benchmem
 func BenchmarkAMeterAtItsBase(b *testing.B) {
+	atLiveBytes(b)
 	archive := takeOfPieces(b, 1<<10, meterAtItsBase(b))
 	var kept bytes.Buffer
 	if err := scrubArchive(archiveTar, bytes.NewReader(archive), reopenOf(archive), &kept, newScrubber(nil),
@@ -1491,19 +1504,38 @@ func benchmarkATake(b *testing.B, archive []byte) {
 	b.ReportMetric(float64(kept.n.Load())/float64(b.N)/(1<<20), "kept-MiB")
 }
 
+// atLiveBytes has b read what a take holds in live bytes: each GC stops the
+// world to mark, so nothing allocated meanwhile is counted live, and runs at
+// every 1% the heap grows (GOGC=1), so a buffer a call allocates and drops
+// inside one read is caught within 1% of the heap. A concurrent mark counts
+// what is allocated during it as live: on a slot where a mark ran long, main's
+// take read 13.85 MiB in 6 runs of 30, against at most 8.02 here. GODEBUG is
+// read as the process starts, so b refuses to run without gcstoptheworld=1.
+func atLiveBytes(b *testing.B) {
+	b.Helper()
+	if !strings.Contains(os.Getenv("GODEBUG"), "gcstoptheworld=1") {
+		b.Fatal("a take's base is read in live bytes: run it with GODEBUG=gcstoptheworld=1")
+	}
+	gogc := debug.SetGCPercent(1)
+	b.Cleanup(func() { debug.SetGCPercent(gogc) })
+}
+
 // takeWindow runs op b.N times between the markers a take's GC trace is read
-// between, reporting what it left live; b fails where it left a large slot
+// between, reporting what it left live and, as held-MiB, the most live heap a
+// GC marked meanwhile ([liveHeapMost]); b fails where it left a large slot
 // held.
 func takeWindow(b *testing.B, op func()) {
 	var before, after runtime.MemStats
 	runtime.GC()
 	runtime.ReadMemStats(&before)
+	held := watchLiveHeap()
 	fmt.Fprintf(os.Stderr, "take-bench: the take starts\n")
 	b.ResetTimer()
 	for range b.N {
 		op()
 	}
 	b.StopTimer()
+	b.ReportMetric(float64(held.stop())/(1<<20), "held-MiB")
 	runtime.GC()
 	runtime.ReadMemStats(&after)
 	fmt.Fprintf(os.Stderr, "take-bench: the take ends\n")
@@ -1513,17 +1545,66 @@ func takeWindow(b *testing.B, op func()) {
 	}
 }
 
+// liveHeapMost is the most live heap a GC marked while it is watched, read in
+// bytes as each cycle ends. The GC trace prints the same figure in whole MiB,
+// cut down, which leaves a pool sized by it ([SessionTakesAtOnce]) up to a MiB
+// a take short.
+type liveHeapMost struct {
+	most    atomic.Uint64
+	stopped atomic.Bool
+}
+
+// watchLiveHeap watches the live heap from now until [liveHeapMost.stop].
+func watchLiveHeap() *liveHeapMost {
+	l := new(liveHeapMost)
+	l.arm()
+	return l
+}
+
+// arm reads the live heap once the next GC has found a fresh object dead, and
+// arms again until stopped: one read a cycle, after the cycle's mark.
+func (l *liveHeapMost) arm() {
+	runtime.AddCleanup(new([64]byte), func(w *liveHeapMost) {
+		w.read()
+		if !w.stopped.Load() {
+			w.arm()
+		}
+	}, l)
+}
+
+func (l *liveHeapMost) read() {
+	s := []metrics.Sample{{Name: "/gc/heap/live:bytes"}}
+	metrics.Read(s)
+	v := s[0].Value.Uint64()
+	for {
+		old := l.most.Load()
+		if v <= old || l.most.CompareAndSwap(old, v) {
+			return
+		}
+	}
+}
+
+// stop ends the watch and is the most it read.
+func (l *liveHeapMost) stop() uint64 {
+	l.stopped.Store(true)
+	l.read()
+	return l.most.Load()
+}
+
 // takeOfPieces is a take's archive whose main thread holds a line of n bytes,
 // then lines, and whose `.json` member a string within n, each of bytes no
 // UTF-8 holds, and a text file of n bytes, built where nothing the read is
-// measured by keeps its pieces.
+// measured by keeps its pieces. Each piece ends in a key, so both readings
+// redact it, as the take of a session it has not seen unchanged does.
 func takeOfPieces(b *testing.B, n int, lines ...string) []byte {
 	thread, _ := claudeMainThread(ctSession)
 	bare := cntUser("", "u1", `""`)
+	key := " " + shapedKey
 	members := []struct{ name, body string }{
-		{thread, cntUser("", "u1", `"`+benchInvalid(n-len(bare)-1)+`"`) + "\n" + strings.Join(append(lines, ""), "\n")},
-		{"tasks/s/1.json", `{"text":"` + benchInvalid(n-64) + `"}`},
-		{"projects/p/s/tool-results/out.txt", strings.Repeat(keyLine+"\n", n/(len(keyLine)+1))},
+		{thread, cntUser("", "u1", `"`+benchInvalid(n-len(bare)-1-len(key))+key+`"`) + "\n" +
+			strings.Join(append(lines, ""), "\n")},
+		{"tasks/s/1.json", `{"text":"` + benchInvalid(n-64-len(key)) + key + `"}`},
+		{"projects/p/s/tool-results/out.txt", strings.Repeat(keyLine+"\n", n/(len(keyLine)+1)-1) + key[1:] + "\n"},
 	}
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)

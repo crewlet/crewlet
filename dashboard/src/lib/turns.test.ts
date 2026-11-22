@@ -54,12 +54,14 @@ const seat = (over: Partial<AgentRow> = {}) =>
   ({
     id: "a-swe",
     role: "SWE",
-    turn: {
-      turn_id: "t-7",
-      stage: "phase",
-      work_item: { backend: "native", id: ID, key: "ENG-32", project: "ENG" },
-    },
-    live_call: { turn_id: "t-7", phase: "execute", round_num: 1, max_rounds: 24 },
+    turns: [
+      {
+        turn_id: "t-7",
+        stage: "phase",
+        work_item: { backend: "native", id: ID, key: "ENG-32", project: "ENG" },
+      },
+    ],
+    live_calls: [{ turn_id: "t-7", phase: "execute", round_num: 1, max_rounds: 24 }],
     ...over,
   }) as unknown as AgentRow;
 
@@ -78,7 +80,7 @@ test("a turn that ended, or that no seat is running, is not running now", () => 
 });
 
 test("a turn parked while its executor runs in its box says so", () => {
-  const parked = seat({ turn: { turn_id: "t-7", stage: "parked" } } as Partial<AgentRow>);
+  const parked = seat({ turns: [{ turn_id: "t-7", stage: "parked" }] } as Partial<AgentRow>);
   expect(runningNow(row({ parked: true }), [parked])?.words).toBe("parked · executing");
 });
 
@@ -100,13 +102,16 @@ test("a watch link is the turn's page on its transcript, as a path and as an hre
 // to `#/live/turns/` — while the overlay names no turn yet.
 test("the turn a seat is on is its turn record's, then its call's, else none", () => {
   expect(turnIdOf(seat())).toBe("t-7");
-  expect(turnIdOf(seat({ turn: null }))).toBe("t-7");
+  expect(turnIdOf(seat({ turns: [] }))).toBe("t-7");
   expect(
     turnIdOf(
-      seat({ turn: { turn_id: "t-8", stage: "phase" } as AgentRow["turn"], live_call: null }),
+      seat({
+        turns: [{ turn_id: "t-8", stage: "phase" } as NonNullable<AgentRow["turns"]>[number]],
+        live_calls: [],
+      }),
     ),
   ).toBe("t-8");
-  expect(turnIdOf(seat({ turn: null, live_call: null }))).toBe("");
+  expect(turnIdOf(seat({ turns: [], live_calls: [] }))).toBe("");
   expect(turnIdOf(undefined)).toBe("");
 });
 
@@ -123,7 +128,7 @@ test("the running target is the one turn's watch link, else Now running", () => 
   const live = { path: ["live"], query: {} };
   expect(runningTarget([])).toEqual(live);
   expect(runningTarget([working(), working({ id: "b" })])).toEqual(live);
-  expect(runningTarget([working({ turn: null, live_call: null })])).toEqual(live);
+  expect(runningTarget([working({ turns: [], live_calls: [] })])).toEqual(live);
 });
 
 // THE SHORT LIST — Home's Live now and the sidebar's Running group — FILTERS
@@ -134,14 +139,16 @@ test("the short list of running turns skips a seat with no turn id, then takes f
     seat({
       id,
       activity: "working",
-      turn: {
-        turn_id: turn,
-        stage: "phase",
-        started_at: `2026-09-21T10:0${minute}:00Z`,
-      } as AgentRow["turn"],
-      live_call: null,
+      turns: [
+        {
+          turn_id: turn,
+          stage: "phase",
+          started_at: `2026-09-21T10:0${minute}:00Z`,
+        } as NonNullable<AgentRow["turns"]>[number],
+      ],
+      live_calls: [],
     });
-  const fresh = seat({ id: "fresh", activity: "working", turn: null, live_call: null });
+  const fresh = seat({ id: "fresh", activity: "working", turns: [], live_calls: [] });
   const roster = [at("e", "t-e", 5), fresh, at("a", "t-a", 1), at("c", "t-c", 3)];
   roster.push(at("b", "t-b", 2), at("d", "t-d", 4), seat({ id: "idle", activity: "idle" }));
   const { working, shown, more } = runningShortList(roster);

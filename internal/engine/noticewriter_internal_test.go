@@ -238,7 +238,10 @@ func noticeAt(t *testing.T, reg *notify.Registry, parser notify.Parser, prompt n
 	delivery := events.New(types.RawWebhook{Body: body, Trigger: trigger}, events.NewTrace())
 	delivery.Source = parser.Source()
 	svc.Handle(t.Context(), delivery)
-	mail := q.Backlog(topic, group)
+	mail, err := q.Backlog(t.Context(), topic, group, 1<<12)
+	if err != nil {
+		t.Fatalf("read %s's mail: %v", recipient, err)
+	}
 	if len(mail) != 1 {
 		t.Fatalf("the record woke %s %d times, want once", recipient, len(mail))
 	}

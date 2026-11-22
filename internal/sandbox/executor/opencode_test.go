@@ -5,7 +5,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/redact/redacttest"
 )
 
 // A transcript line stays within its bound in BYTES, marker included, and is
@@ -56,22 +56,50 @@ func TestATranscriptLineHonoursItsOwnBound(t *testing.T) {
 	}
 }
 
-// Unparseable output is carried WHOLE, as the failure's detail rather than a
-// report: its actual error comes at the END, after the banner, and the
-// coordinator condenses an oversized failure keeping its cause, so a head or
-// tail cut here would decide by size what survives.
-func TestUnparseableCodingOutputIsCarriedWholeAsTheFailure(t *testing.T) {
+// UNPARSEABLE OUTPUT IS ITS FAILURE'S DETAIL, AT MOST ITS END: whole within
+// [unparsedShownBytes], since its actual error comes at the END, after the
+// banner; past it, that end redacted and the output's size, never the whole,
+// which would ride the failure uncut ([failureDetail]); and an end that is one
+// line begun before it is none of it shown, never a cut of that line.
+//
+// Mutations, each red: quote the whole output past the bound; keep its start
+// rather than its end; leave the end unredacted; leave the size unsaid; show a
+// cut of one long line.
+func TestUnparseableOutputIsItsFailuresDetailAtMostItsEnd(t *testing.T) {
 	t.Parallel()
-	out := strings.Repeat("banner\n", sandbox.MaxRunTextBytes) + "Error: token expired"
-	res := ClaudeCode{}.Parse(out)
-	if !strings.HasPrefix(res.Error, "the harness's output could not be parsed") {
-		t.Errorf("unparseable output did not report itself as unparseable: %.80q", res.Error)
+	const opening = "the harness's output could not be parsed"
+	short := strings.Repeat("banner\n", 1000) + "Error: token expired"
+	if got := (ClaudeCode{}).Parse([]byte(short)).Error; got != opening+":\n"+short {
+		t.Errorf("output within the bound reads %.80q..., want it whole", got)
 	}
-	if !strings.HasSuffix(res.Error, "\n"+out) {
-		t.Error("the output was not carried whole")
+
+	var key string
+	for _, s := range redacttest.Shapes() {
+		if s.Name == "anthropic-key" {
+			key = s.Sample
+		}
+	}
+	long := strings.Repeat("banner\n", 2*unparsedShownBytes/len("banner\n")) + "the key was " + key +
+		"\nError: token expired"
+	res := (ClaudeCode{}).Parse([]byte(long))
+	switch got := res.Error; {
+	case len(got) > unparsedShownBytes+len(opening)+64:
+		t.Errorf("output of %d bytes left a failure of %d, past the %d its end is shown within",
+			len(long), len(got), unparsedShownBytes)
+	case !strings.HasPrefix(got, opening+" ("+humanSize(int64(len(long)))+"; its end shown):\n"):
+		t.Errorf("the failure opens %.120q, want the output's size said", got)
+	case !strings.HasSuffix(got, "\nError: token expired"):
+		t.Errorf("the failure ends %q, want the output's end", got[max(0, len(got)-80):])
+	case strings.Contains(got, key):
+		t.Error("the failure shows a credential the output's end held")
 	}
 	if res.Text != "" || res.Success {
 		t.Errorf("unparseable output read as a report (text %d bytes, success %v)", len(res.Text), res.Success)
+	}
+
+	line := strings.Repeat("x", 2*unparsedShownBytes)
+	if got := (ClaudeCode{}).Parse([]byte(line)).Error; len(got) > 256 || strings.Contains(got, "xxx") {
+		t.Errorf("one long line left the failure %.120q (%d bytes), want only its size said", got, len(got))
 	}
 }
 
@@ -93,7 +121,7 @@ func TestAContextOverflowIsToldByTheErrorsName(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			if got := (OpenCode{}).Parse(c.stream); got.ContextExhausted != c.want {
+			if got := (OpenCode{}).Parse([]byte(c.stream)); got.ContextExhausted != c.want {
 				t.Errorf("ContextExhausted = %v, want %v, on %s", got.ContextExhausted, c.want, c.stream)
 			}
 		})

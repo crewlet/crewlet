@@ -120,6 +120,7 @@ import { groupLock, lockReason } from "~/lib/access.ts";
 import { glyphFor } from "@crewlethq/icons/glyphs/registry";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useHeldGrants, useViewer } from "~/lib/viewer.ts";
+import { useAdvisorFigure } from "~/lib/advisorFigure.ts";
 import { useAgents, useConnection, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { activityOf, indexOrg, statusOf, turnItemKey } from "~/lib/seats.ts";
@@ -210,6 +211,9 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   // THE FIGURE THE QUEUE TAB CARRIES on the reader's own day, read once by
   // the frame for both: see `lib/useQueueCount.ts`.
   const queue = useOwnQueueCount();
+  // WHAT BLOCKS OR COSTS THE COMPANY, asked only of an administrator, whose
+  // row it is: see `lib/advisorFigure.ts`.
+  const advisor = useAdvisorFigure(viewer.admin && !unserved);
 
   const index = useMemo(() => indexOrg(org), [org]);
   const seatName = index.byHandle.get(viewer.handle)?.name ?? "";
@@ -258,6 +262,19 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
             badge: {
               value: pageCount(queue.total, queue.capped === true),
               label: "open, assigned to you",
+              tone: "quiet",
+            },
+          }
+        : {},
+    // THE ADVISOR'S OPEN FINDINGS THAT BLOCK OR COST THE COMPANY, in the
+    // quiet tone: they wait on an administrator, but nobody asked them.
+    // Nothing open is no figure, as nothing on the reader is none.
+    advisor:
+      advisor !== null && advisor > 0
+        ? {
+            badge: {
+              value: advisor,
+              label: "findings that block or cost the company",
               tone: "quiet",
             },
           }
@@ -668,7 +685,7 @@ function RunningSection({
         const item = turnItemKey(row);
         return (
           <SidebarNav.Item
-            key={row.id}
+            key={`${row.id}:${watch.path.join("/")}`}
             label={name}
             icon={
               <SeatAvatar

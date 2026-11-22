@@ -905,6 +905,8 @@ func taskCensuses() map[string]plannedRead {
 	out["every open wait"] = plannedRead{statement, append(args, MaxOpenRows+1)}
 	statement, args = openQuestionsStatement()
 	out["every open question on open work"] = plannedRead{statement, append(args, MaxOpenRows+1)}
+	statement, args = openWaitsStatement()
+	out["every open wait by item"] = plannedRead{statement, append(args, MaxOpenRows+1)}
 	// AND THE FLOW DUTY'S PAGE of the items in progress, through the partial
 	// index over them, each item's flow and its recorded flow read inside it
 	// (ADR-0162).
@@ -939,6 +941,13 @@ func taskPasses() map[string]plannedRead {
 	return map[string]plannedRead{
 		"every reopen count cleared":     {clearReopensStatement, nil},
 		"every project's active recount": {activeCountsStatement, []any{string(GroupActive), string(GroupActive)}},
+		// THE ADVISOR'S READ OF HOW LONG WORK STOOD IN EACH FLOW STATE: every
+		// change of the items in progress over the window, in the flow
+		// index's own order.
+		"the flow hours of a window": func() plannedRead {
+			statement, args := flowHoursStatement(planNow.Add(-7 * 24 * time.Hour))
+			return plannedRead{statement, args}
+		}(),
 	}
 }
 

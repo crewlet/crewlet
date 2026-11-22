@@ -27,7 +27,7 @@ export interface AssistantTab {
 const NOTHING: AssistantTab = { conversation: null, open: false };
 
 /** A conversation id as the engine mints one: a UUID, and nothing that is not. */
-const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+export const CONVERSATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /** What this tab kept, or nothing where it kept nothing this build can read. */
 export function readTab(): AssistantTab {
@@ -37,7 +37,7 @@ export function readTab(): AssistantTab {
     const value = JSON.parse(raw) as Partial<AssistantTab>;
     return {
       conversation:
-        typeof value.conversation === "string" && ID.test(value.conversation)
+        typeof value.conversation === "string" && CONVERSATION_ID.test(value.conversation)
           ? value.conversation
           : null,
       open: value.open === true,

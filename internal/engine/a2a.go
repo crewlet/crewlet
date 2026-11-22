@@ -46,12 +46,13 @@ func colleagueAskOf(ask *events.Event) *sandbox.ColleagueAsk {
 	if ask == nil {
 		return nil
 	}
-	return &sandbox.ColleagueAsk{
-		ChannelID: askChannel(ask), Question: askedQuestion(ask),
-		Chain:   slices.Clone(ask.DelegationChain),
-		TraceID: ask.TraceID, SpanID: ask.SpanID, ParentSpanID: ask.ParentSpanID,
+	asked := sandbox.ColleagueAsk{
+		ChannelID: askChannel(ask),
+		Chain:     slices.Clone(ask.DelegationChain),
+		TraceID:   ask.TraceID, SpanID: ask.SpanID, ParentSpanID: ask.ParentSpanID,
 		WorkingFor: answeredFor(ask),
-	}
+	}.WithQuestion(askedQuestion(ask))
+	return &asked
 }
 
 // answeredFor is who the answer is worked for back on the asker
@@ -161,7 +162,8 @@ func (e *Engine) answerColleague(ctx context.Context, c *Company, by answeringTu
 	sent := colleagueAnswer{owed: true, kind: kind, sent: content}
 	answer := a2a.Answer{
 		ChannelID: ask.ChannelID, Sender: by.handle, Content: content,
-		Question: ask.Question,
+		// Raw, back to the model that asked it ([sandbox.ColleagueAsk.RawQuestion]).
+		Question: ask.RawQuestion(),
 		AskTrace: events.TraceContext{
 			TraceID: ask.TraceID, SpanID: ask.SpanID, ParentSpanID: ask.ParentSpanID,
 		},

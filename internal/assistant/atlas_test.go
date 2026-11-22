@@ -1,6 +1,7 @@
 package assistant_test
 
 import (
+	"net/http"
 	"strings"
 	"testing"
 
@@ -87,10 +88,22 @@ func atlasRoutes() func(exec.Request) exec.Response {
 	}
 }
 
-// atlasTools are the three reads, as the catalogue declares them.
+// atlasTools are the generic read over the atlas's three routes.
 func atlasTools(t *testing.T) []catalog.Tool {
-	return []catalog.Tool{assistanttest.Tool(t, "search_atlas"), assistanttest.Tool(t, "get_atlas_entry"),
-		assistanttest.Tool(t, "trace_atlas_entry")}
+	return []catalog.Tool{assistanttest.ReadAPI(t, "GET /atlas", "GET /atlas/{id}",
+		"GET /atlas/{id}/trace")}
+}
+
+// atlasRead is a read_api call on one of the atlas's routes.
+func atlasRead(id, route string, path, query map[string]any) evals.Round {
+	args := map[string]any{"route": route}
+	if path != nil {
+		args["path"] = path
+	}
+	if query != nil {
+		args["query"] = query
+	}
+	return evals.Call(id, catalog.ReadAPITool, args)
 }
 
 // cardsOf are the turn's cards, in order.
@@ -115,79 +128,64 @@ func toolResults(f *assistanttest.Rig) []string {
 	return out
 }
 
-// "WHAT DO WE USE FOR MONITORING?" IS ANSWERED FROM THE ATLAS: the accounts
-// are searched, the one that monitors is read, and the answer names it. The
-// account is a chip (an entity card of the frame's atlas object) whose link
-// opens the map on it; the model was handed its capabilities. Mutation: card
-// the entry under no kind, or read its facts from the wrong key, and this
-// fails.
+// "WHAT DO WE USE FOR MONITORING?" IS ANSWERED FROM THE ATLAS: the accounts are
+// searched, the one that monitors is read by its id with only the fields asked,
+// and the model is handed its capabilities. The search is fenced as outside
+// text, since an integration's users name its rows. Mutation: read the atlas
+// list at the company's own trust, or ignore select, and this fails.
 func TestWhatWeUseForMonitoringIsAnsweredFromTheAtlas(t *testing.T) {
 	t.Parallel()
 	person := evals.Person("grace", "grace", iam.GrantAtlas)
 	f := assistanttest.NewRig(t, evals.RigOptions{Tools: atlasTools(t), Handler: atlasRoutes(),
 		Person: &person, Rounds: []evals.Round{
-			evals.Call("c1", "search_atlas", map[string]any{"kind": "vendor_account"}),
-			evals.Call("c2", "get_atlas_entry", map[string]any{"entry": "Datadog"}),
+			atlasRead("c1", "GET /atlas", nil, map[string]any{"kind": "vendor_account"}),
+			evals.Call("c2", catalog.ReadAPITool, map[string]any{"route": "GET /atlas/{id}",
+				"path":   map[string]any{"id": atlasDatadogID},
+				"select": []any{"entry.name", "entry.facts.*.value.text"}}),
 			evals.Say("Datadog: its account carries monitoring and alerting."),
 		}})
 	accepted, err := f.Ask("monitoring", "What do we use for monitoring?", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	frames := f.Follow(accepted.TurnID, 0)
-	var paths []string
-	for _, s := range f.Dispatcher.Sent() {
-		paths = append(paths, s.Request.Path+"?"+s.Request.Query.Encode())
-	}
-	// THE NAME IS RESOLVED THROUGH THE ATLAS'S OWN SEARCH, then the entry
-	// read by its id.
-	want := "/atlas?kind=vendor_account&limit=50 /atlas?limit=500&q=Datadog /atlas/" + atlasDatadogID + "?"
-	if strings.Join(paths, " ") != want {
-		t.Errorf("sent %v, want %q", paths, want)
-	}
-	var entry *wire.EntityCard
-	for _, c := range cardsOf(frames) {
-		if c.Type == wire.CardEntity {
-			entry = c.Entity
-		}
-	}
-	if entry == nil || entry.Kind != wire.ResourceAtlasEntry || entry.ID != atlasDatadogID ||
-		entry.Title != "Datadog" {
-		t.Fatalf("the account is carded as %+v, want the frame's atlas object", entry)
-	}
-	if entry.Open == nil || entry.Open.Label != "Show on the map" ||
-		entry.Open.Href != "#/company/atlas?peek=atlas%3A"+atlasDatadogID {
-		t.Errorf("the account opens %+v, want the map with its peek open", entry.Open)
+	f.Follow(accepted.TurnID, 0)
+	sent := f.Dispatcher.Sent()
+	if len(sent) != 2 || sent[0].Request.Path != "/atlas" ||
+		sent[0].Request.Query.Get("kind") != "vendor_account" ||
+		sent[1].Request.Path != "/atlas/"+atlasDatadogID {
+		t.Fatalf("sent %+v, want the search then the entry by its id", sent)
 	}
 	results := toolResults(f)
-	if len(results) != 2 || !strings.Contains(results[1], "monitoring") || !strings.Contains(results[1], "alerting") {
-		t.Errorf("the model was handed %q, want the account's capabilities", results)
+	if len(results) != 2 {
+		t.Fatalf("the model was handed %d results, want 2", len(results))
+	}
+	if !strings.Contains(results[0], "trust=external") {
+		t.Errorf("the atlas search reached the model as %q, want it fenced as outside text",
+			results[0])
+	}
+	if !strings.Contains(results[1], "monitoring") || !strings.Contains(results[1], "alerting") ||
+		strings.Contains(results[1], "last_seen") {
+		t.Errorf("the model was handed %q, want the selected capabilities alone", results[1])
 	}
 }
 
-// "WHERE DOES OUR CODE LIVE?" IS THE REPOSITORIES OF THE ATLAS, as one table
-// titled by what narrowed it, with the atlas to open. Mutation: drop the
-// scope from the title and this fails.
+// "WHERE DOES OUR CODE LIVE?" IS THE REPOSITORIES OF THE ATLAS, drawn as one
+// card of the row the search answered. Mutation: answer the search with no row
+// and no card is drawn.
 func TestWhereOurCodeLivesIsAnsweredFromTheAtlas(t *testing.T) {
 	t.Parallel()
 	person := evals.Person("grace", "grace", iam.GrantAtlas)
 	f := assistanttest.NewRig(t, evals.RigOptions{Tools: atlasTools(t), Handler: atlasRoutes(),
 		Person: &person, Rounds: []evals.Round{
-			evals.Call("c1", "search_atlas", map[string]any{"kind": "repository"}),
+			atlasRead("c1", "GET /atlas", nil, map[string]any{"kind": "repository"}),
 			evals.Say("The code lives in acme/api on GitHub."),
 		}})
 	accepted, err := f.Ask("code", "Where does our code live?", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cards := cardsOf(f.Follow(accepted.TurnID, 0))
-	if len(cards) != 1 || cards[0].Type != wire.CardTable {
-		t.Fatalf("the search drew %+v, want one table", cards)
-	}
-	table := cards[0].Table
-	if table.Title != "Atlas entries, repository" || table.RowCount != 1 ||
-		table.Open == nil || table.Open.Href != "#/company/atlas" {
-		t.Errorf("the repositories are carded as %+v", table)
+	if cards := cardsOf(f.Follow(accepted.TurnID, 0)); len(cards) != 1 {
+		t.Fatalf("the search drew %+v, want one card of the repository", cards)
 	}
 	if results := toolResults(f); len(results) != 1 || !strings.Contains(results[0], "acme/api") {
 		t.Errorf("the model was handed %q, want the repository", results)
@@ -195,53 +193,51 @@ func TestWhereOurCodeLivesIsAnsweredFromTheAtlas(t *testing.T) {
 }
 
 // "WHAT DEPENDS ON THE DATABASE?" IS A TRACE UP FROM IT: the databases are
-// searched, the one found is traced by its name, and the answer lists what
-// relies on it under the database's own chip, with the map to show the same.
-// Mutation: link the trace without its direction and this fails.
+// searched and the one found is traced up by its id, and the model is handed
+// what relies on it, fenced as outside text. Mutation: drop the direction from
+// the trace's query and the dependent is never read.
 func TestWhatDependsOnTheDatabaseIsAnsweredFromTheAtlas(t *testing.T) {
 	t.Parallel()
 	person := evals.Person("grace", "grace", iam.GrantAtlas)
 	f := assistanttest.NewRig(t, evals.RigOptions{Tools: atlasTools(t), Handler: atlasRoutes(),
 		Person: &person, Rounds: []evals.Round{
-			evals.Call("c1", "search_atlas", map[string]any{"kind": "datastore"}),
-			evals.Call("c2", "trace_atlas_entry", map[string]any{"entry": "orders-db", "direction": "up"}),
+			atlasRead("c1", "GET /atlas", nil, map[string]any{"kind": "datastore"}),
+			atlasRead("c2", "GET /atlas/{id}/trace", map[string]any{"id": atlasDBID},
+				map[string]any{"direction": "up"}),
 			evals.Say("checkout-api depends on orders-db."),
 		}})
 	accepted, err := f.Ask("database", "What depends on the database?", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	frames := f.Follow(accepted.TurnID, 0)
-	var trace *wire.EntityCard
-	for _, c := range cardsOf(frames) {
-		if c.Type == wire.CardEntity {
-			trace = c.Entity
-		}
+	f.Follow(accepted.TurnID, 0)
+	sent := f.Dispatcher.Sent()
+	if len(sent) != 2 || sent[1].Request.Path != "/atlas/"+atlasDBID+"/trace" ||
+		sent[1].Request.Query.Get("direction") != "up" {
+		t.Fatalf("sent %+v, want the trace up from the database", sent)
 	}
-	if trace == nil || trace.Kind != wire.ResourceAtlasEntry || trace.ID != atlasDBID ||
-		trace.Title != "orders-db" || len(trace.Items) != 1 || trace.Items[0].Label != "checkout-api" ||
-		trace.Items[0].Depth != 1 {
-		t.Fatalf("the trace is carded as %+v, want the database with its dependent beneath", trace)
-	}
-	if trace.Open == nil || trace.Open.Label != "Show on the map" ||
-		trace.Open.Href != "#/company/atlas?peek=atlas%3A"+atlasDBID+"&trace=up" {
-		t.Errorf("the trace opens %+v, want the map lit along it", trace.Open)
-	}
-	if results := toolResults(f); len(results) != 2 || !strings.Contains(results[1], "checkout-api") {
-		t.Errorf("the model was handed %q, want the dependent", results)
+	results := toolResults(f)
+	if len(results) != 2 || !strings.Contains(results[1], "checkout-api") ||
+		!strings.Contains(results[1], "trust=external") {
+		t.Errorf("the model was handed %q, want the dependent, fenced as outside text", results)
 	}
 }
 
-// A PERSON WITHOUT THE ATLAS GETS THE LOCKED ANSWER, NEVER THE DATA: the
-// reads are not offered to them, a model that asks for one anyway is told it
-// was not run, no request reaches the atlas and no card is drawn. Mutation:
-// offer the reads on no app and the search is sent as the person.
+// A PERSON WITHOUT THE ATLAS GETS THE LOCKED ANSWER, NEVER THE DATA: the route
+// refuses their read, so the step is refused, no card is drawn and the model
+// reads the refusal and no row. Mutation: draw a refused read's body and the
+// row reaches the person.
 func TestAPersonWithoutTheAtlasIsNeverHandedIt(t *testing.T) {
 	t.Parallel()
 	person := evals.Person("grace", "grace", iam.GrantWorklet)
-	f := assistanttest.NewRig(t, evals.RigOptions{Catalogue: catalog.Curated{}, Handler: atlasRoutes(),
+	locked := func(exec.Request) exec.Response {
+		return exec.Response{Status: http.StatusForbidden, Body: []byte(
+			`{"error":"forbidden","message":"Reading the atlas needs the atlas permission.",` +
+				`"rows":[{"name":"orders-db"}]}`)}
+	}
+	f := assistanttest.NewRig(t, evals.RigOptions{Tools: atlasTools(t), Handler: locked,
 		Person: &person, Rounds: []evals.Round{
-			evals.Call("c1", "search_atlas", map[string]any{"kind": "datastore"}),
+			atlasRead("c1", "GET /atlas", nil, map[string]any{"kind": "datastore"}),
 			evals.Say("I cannot read the atlas for you."),
 		}})
 	accepted, err := f.Ask("locked", "What depends on the database?", nil)
@@ -249,15 +245,15 @@ func TestAPersonWithoutTheAtlasIsNeverHandedIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	frames := f.Follow(accepted.TurnID, 0)
-	for _, s := range f.Dispatcher.Sent() {
-		if strings.HasPrefix(s.Request.Path, "/atlas") {
-			t.Errorf("the atlas was read as a person without it: %s", s.Request.Path)
+	for _, c := range cardsOf(frames) {
+		if c.Type != wire.CardError {
+			t.Errorf("a person without the atlas was drawn %+v", c)
 		}
 	}
-	if cards := cardsOf(frames); len(cards) != 0 {
-		t.Errorf("a person without the atlas was drawn %+v", cards)
+	if step := evals.Last(frames, wire.EventStep); step == nil || step.Step.Refusal == nil {
+		t.Errorf("step = %+v, want the route's refusal", step)
 	}
-	if results := toolResults(f); len(results) != 1 || !strings.Contains(results[0], "No such tool") {
-		t.Errorf("the model was handed %q, want that there is no such tool for them", results)
+	if results := toolResults(f); len(results) != 1 || strings.Contains(results[0], "orders-db") {
+		t.Errorf("the model was handed %q, want the refusal and no row", results)
 	}
 }

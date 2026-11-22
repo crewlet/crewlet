@@ -349,27 +349,35 @@ type Overlay struct {
 	Activity Activity `json:"activity"`
 
 	// StoppedReason is why a stopped seat cannot take work, and null on a
-	// seat that is not stopped. ALWAYS PRESENT for the reason Turn is: a
+	// seat that is not stopped. ALWAYS PRESENT for the reason Turns is: a
 	// merged overlay with the key omitted would leave a seat that started
 	// again wearing the reason it had stopped for.
 	StoppedReason *StoppedReason `json:"stopped_reason"`
 
-	CurrentPhase     *string   `json:"current_phase"`
-	CurrentIteration int       `json:"current_iteration"`
-	LiveCall         *LiveCall `json:"live_call"`
+	// CurrentPhase and CurrentIteration are the phase a turn of the seat
+	// last started, cleared when THAT turn ends: another turn's end leaves
+	// them. A screen reads a turn's own phase off its call in LiveCalls.
+	CurrentPhase     *string `json:"current_phase"`
+	CurrentIteration int     `json:"current_iteration"`
 
-	// LiveCallSeq orders the live_call slot ACROSS calls and across a
+	// LiveCalls are the seat's calls in flight, ONE PER TURN — a turn runs
+	// one phase at a time, and a seat up to its sandbox.max_concurrent_runs
+	// turns at once — oldest first, each paired with its turn by turn id. A
+	// call its phase's failure froze stays after its turn ends, so a call
+	// may name a turn Turns no longer holds. ALWAYS a list, `[]` for none.
+	LiveCalls []*LiveCall `json:"live_calls"`
+
+	// LiveCallSeq orders the live_calls slot ACROSS calls and across a
 	// clear: this projection's own monotonic sequence ([CallVersions])
-	// read at the instant the seat's call last changed — set, folded,
-	// frozen or cleared to null. Every surface that carries the call
-	// carries it, null calls included, so a tab can drop a `live_call`
+	// read at the instant any of the seat's calls last changed — set,
+	// folded, frozen or cleared. Every surface that carries the calls
+	// carries it, an empty list included, so a tab can drop a `live_call`
 	// answer that a clearing or newer-call push overtook on the wire
 	// (the answer runs on its own goroutine and can be delivered after a
 	// push that was generated later), and take from one the pushes of the
-	// same call overtook only the heavy fields it holds at a newer
-	// version. A tab resets it from each snapshot.
-	// Comparable only within one node's projection, which is the only one
-	// a tab's socket reads between snapshots — [CallVersions] says why.
+	// same calls overtook only the heavy fields it holds at a newer
+	// version. A tab resets it from each snapshot. Comparable only within
+	// one node's projection, the one a tab's socket reads ([CallVersions]).
 	LiveCallSeq int `json:"live_call_seq"`
 
 	// LastError is nil once the seat does real work again. It says WHY a
@@ -383,12 +391,13 @@ type Overlay struct {
 	// would be a claim nobody measured.
 	Budget *BudgetMeter `json:"budget"`
 
-	// Turn is the turn the seat is on — running, or parked on a detached
-	// executor — and null when it is on none. ALWAYS PRESENT: the
-	// overlay is merged into a client's row rather than replacing it, so an
-	// omitted key reads as "unchanged" and would leave a finished turn on
-	// the client's row.
-	Turn *LiveTurn `json:"turn"`
+	// Turns are the turns the seat is on — running, or parked on a detached
+	// executor — oldest first by start, and `[]` when it is on none: up to
+	// its sandbox.max_concurrent_runs at once, two by default.
+	// ALWAYS PRESENT: the overlay is merged into a client's row rather than
+	// replacing it, so an omitted key reads as "unchanged" and would leave a
+	// finished turn on the client's row.
+	Turns []LiveTurn `json:"turns"`
 
 	// LastTurn is the newest turn the seat ENDED, and null while it has
 	// ended none this projection knows of. Seeded at boot from the fleet's
@@ -396,7 +405,7 @@ type Overlay struct {
 	LastTurn *LastTurn `json:"last_turn"`
 
 	// Paused is who paused the seat, when and why, and null while nobody
-	// has. ALWAYS PRESENT for the reason Turn is: a merged overlay with the
+	// has. ALWAYS PRESENT for the reason Turns is: a merged overlay with the
 	// key omitted would leave a resumed seat wearing its old pause. Seeded
 	// at boot from the coordination record, so a pause taken before this
 	// process started is still on the seat.
@@ -443,7 +452,7 @@ var Stages = []Stage{StageContext, StagePhase, StageParked}
 // Valid reports whether s is a stage this build knows.
 func (s Stage) Valid() bool { return slices.Contains(Stages, s) }
 
-// LiveTurn is the turn a seat is on.
+// LiveTurn is one turn a seat is on.
 type LiveTurn struct {
 	// TurnID is the RUN (ADR-0017), the id every phase and progress frame
 	// of it carries.

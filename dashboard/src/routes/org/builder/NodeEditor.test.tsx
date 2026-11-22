@@ -940,7 +940,7 @@ describe("seat fields", () => {
   });
 
   // THE ADVANCED FACTS ARE FIELDS NOW: the per-phase models on Model, and
-  // learning, workers, placement and the executor box's two numbers on
+  // learning, workers, placement and the executor box's three numbers on
   // Advanced. What the builder still does not edit (the box's setup and
   // environment, the tool credentials, the Datadog fallback) is shown with
   // where it is edited instead.
@@ -950,6 +950,7 @@ describe("seat fields", () => {
     Object.assign(doc.units![0]!.roles![1]!, {
       llm_review: ["smart", "fast"],
       llm_judge: "fast",
+      llm_triage: "smart",
       sandbox: { env: { KEY: "__redacted__" }, max_turns: 40 },
       workers: ["researcher", "writer"],
       learning_enabled: false,
@@ -963,6 +964,9 @@ describe("seat fields", () => {
     expect(
       screen.getByRole("list", { name: "Chosen: Round-cap judge model providers" }).textContent,
     ).toContain("fast");
+    expect(
+      screen.getByRole("list", { name: "Chosen: Wake triage model providers" }).textContent,
+    ).toContain("smart");
     tab("Advanced");
     expect(field("Learning").textContent).toContain("Off");
     expect(screen.getByRole("list", { name: "Chosen: Delegate templates" }).textContent).toContain(
@@ -997,13 +1001,19 @@ describe("seat fields", () => {
     type("Pinned to node", "node-a");
     type("Rounds per run", "25");
     type("Paused for, in seconds", "0");
+    type("Runs at once", "2");
     apply();
     expect(view.state().log.ops).toHaveLength(1);
     const data = seatData(view.state(), "seat:dev");
     expect(data.learning_enabled).toBe(true);
     expect(data.placement).toEqual({ node: "node-a", labels: { region: "eu" } });
     // THE BOX KEEPS WHAT IT DOES NOT EDIT, and 0 is a setting, never "unset".
-    expect(data.sandbox).toEqual({ env: { KEY: "v" }, max_turns: 25, pause_ttl_seconds: 0 });
+    expect(data.sandbox).toEqual({
+      env: { KEY: "v" },
+      max_turns: 25,
+      pause_ttl_seconds: 0,
+      max_concurrent_runs: 2,
+    });
   });
 
   test("a number the executor box cannot take holds Apply, with why", () => {
@@ -1012,6 +1022,16 @@ describe("seat fields", () => {
     type("Rounds per run", "lots");
     expect(applyRefuses()).toBe(true);
     expect(errorOf(field("Rounds per run"))?.textContent).toContain("Write a whole number");
+  });
+
+  // A run cap counts runs: 0 would be a seat that never works, refused here as
+  // the engine refuses it, where 0 rounds or seconds is a setting.
+  test("a run cap below one holds Apply, with why", () => {
+    edit(keyedState(fixtureCompany()), "seat:dev");
+    tab("Advanced");
+    type("Runs at once", "0");
+    expect(applyRefuses()).toBe(true);
+    expect(errorOf(field("Runs at once"))?.textContent).toContain("at least 1");
   });
 
   test("a human seat shows contact and availability, and no agent-only field", () => {

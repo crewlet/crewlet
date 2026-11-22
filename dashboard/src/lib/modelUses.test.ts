@@ -53,12 +53,13 @@ const role = (doc: CompanyDocument, handle: string) =>
   agentRoles(doc as unknown as Record<string, unknown>).get(handle)!;
 
 describe("the categories", () => {
-  // PAIRED BY THE MODEL EACH JOB WANTS: the review with the delegated work (a
-  // strong model), the routines with the onboarding judge (a fast one, each
-  // under a fixed deadline), so one model chosen serves both jobs it writes.
-  it("pair the jobs that want the same kind of model", () => {
+  // GROUPED BY THE MODEL EACH JOB WANTS: the review with the delegated work (a
+  // strong model), the routines with the onboarding judge and a busy seat's
+  // wake triage (a fast one, each a bounded call under a fixed deadline), so
+  // one model chosen serves every job it writes.
+  it("group the jobs that want the same kind of model", () => {
     expect(CATEGORY_JOBS.reviews).toEqual(["review", "subagent"]);
-    expect(CATEGORY_JOBS.routines).toEqual(["auxiliary", "judge"]);
+    expect(CATEGORY_JOBS.routines).toEqual(["auxiliary", "judge", "triage"]);
   });
 
   it("cover every seat job exactly once", () => {
@@ -69,7 +70,7 @@ describe("the categories", () => {
   it("name the fields they write", () => {
     expect(categoryFields("coding")).toEqual(["llm"]);
     expect(categoryFields("reviews")).toEqual(["llm_review", "llm_subagent"]);
-    expect(categoryFields("routines")).toEqual(["llm_auxiliary", "llm_judge"]);
+    expect(categoryFields("routines")).toEqual(["llm_auxiliary", "llm_judge", "llm_triage"]);
   });
 });
 
@@ -84,6 +85,8 @@ describe("usesOf", () => {
     expect(uses.jobs.executor).toEqual(["lead"]);
     expect(uses.jobs.review).toEqual([]);
     expect(uses.assistant).toBe(true);
+    expect(uses.advisor).toBe(false);
+    expect(usesOf([{ advisor: "findings", position: 0 }]).advisor).toBe(true);
   });
 });
 
@@ -95,6 +98,10 @@ describe("intentOf", () => {
     expect(intentOf(usesForIntent("reviews", ["a"], false))).toBe("reviews");
     // THE ASSISTANT BESIDE SEAT WORK keeps the seat choice.
     expect(intentOf(usesForIntent("routines", ["a"], true))).toBe("routines");
+    // THE ADVISOR ALONE is a choice of its own; beside seat work it keeps the seat choice.
+    expect(intentOf(usesForIntent("advisor", [], false))).toBe("advisor");
+    expect(usesForIntent("advisor", ["a", "b"], false).jobs.executor).toEqual([]);
+    expect(intentOf(usesForIntent("coding", ["a"], false, true))).toBe("coding");
   });
 
   it("reads a category split by hand as custom", () => {
@@ -156,7 +163,13 @@ describe("applyUses", () => {
     for (const handle of ["flat", "mapped"]) {
       const r = role(doc, handle);
       expect(r.llm).toBe("big");
-      for (const field of ["llm_review", "llm_subagent", "llm_auxiliary", "llm_judge"])
+      for (const field of [
+        "llm_review",
+        "llm_subagent",
+        "llm_auxiliary",
+        "llm_judge",
+        "llm_triage",
+      ])
         expect(r[field]).toBeUndefined();
     }
     expect(role(doc, "lead").llm).toBe("old");
@@ -179,6 +192,26 @@ describe("applyUses", () => {
     );
     expect(role(doc, "lead").llm_auxiliary).toBeUndefined();
     expect(role(doc, "lead").llm_judge).toBeUndefined();
+  });
+
+  it("writes the Advisor's one model, and clears it only where it is taken off the model it runs on", () => {
+    const before = company();
+    const advisorOf = (doc: unknown) => (doc as { advisor?: { model?: string } }).advisor;
+    const { doc, dropped } = applyUses(
+      before,
+      "big",
+      noUses(),
+      usesForIntent("advisor", [], false, true),
+    );
+    expect(advisorOf(doc)).toEqual({ model: "big" });
+    expect(role(doc, "lead")).toEqual(role(before, "lead"));
+    expect(dropped).toEqual([]);
+    // TAKEN OFF the model it runs on, its checks run with no model.
+    const off = applyUses(doc, "big", { ...noUses(), advisor: true }, noUses()).doc;
+    expect(advisorOf(off)?.model).toBeUndefined();
+    // ANOTHER MODEL'S edit leaves the Advisor where it is.
+    const kept = applyUses(doc, "other", noUses(), noUses()).doc;
+    expect(advisorOf(kept)).toEqual({ model: "big" });
   });
 
   it("writes Ask Crewlet's one model, company-wide, and leaves seats alone", () => {

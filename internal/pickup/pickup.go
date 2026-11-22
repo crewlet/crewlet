@@ -65,6 +65,21 @@
 //
 // A fleet claim on the seat ([CooldownKey]) spaces a pickup that passes over
 // an item the seat was already handed and left unchanged: declines, not work.
+// A pass takes, in order, that cooldown, a claim on the key held for the
+// fleet's longest claim, and a claim on the item without the seat's own
+// progress ([Key.ProgressKey]) that hands started work back once per
+// cooldown, so a turn answering every pickup with a write cannot loop. A
+// failed publish gives all of them back, since a copy that landed anyway
+// carries the same id.
+//
+// # What a pass walks
+//
+// Ready work is read page by page and the ledger asked key by key; the walk
+// stops at the first key the ledger does not hold. A ready set whose
+// fingerprint was all handed is remembered and skipped until its first
+// recheck falls due. A requester the organisation no longer holds is carried
+// as a stranger (ADR-0109), and a dead wait's turn starts under its own
+// origin reason ([types.DeadWaitReason]) so the turn ledger counts it apart.
 package pickup
 
 import (

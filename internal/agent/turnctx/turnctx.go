@@ -240,14 +240,15 @@ type Turn struct {
 	Reply string
 
 	// Title is what a person reads this turn's work by: what the turn was
-	// asked, in its trigger's own words and with no fence (the turn's
-	// record of it, [types.TurnCompleted.Ask]), or where the trigger stated
-	// no ask, the line a feed shows the trigger by ([types.Trigger.Summary]).
-	// The executor the turn launches is listed under it (the run's
-	// description and its label), on the dashboard and in its announcement
-	// alike, where [Turn.Task], the model's brief, would show a person the
-	// fence lines and the escapes that are written for a model alone. A
-	// resumed segment carries the line its run is already listed under.
+	// asked, in its trigger's own words, redacted and with no fence (the
+	// turn's record of it, [types.TurnCompleted.Ask]), or where the trigger
+	// stated no ask, the line a feed shows the trigger by
+	// ([types.Trigger.Summary]). No model reads it. The executor the turn
+	// launches is listed under it (the run's description and its label), on
+	// the dashboard and in its announcement alike, where [Turn.Task], the
+	// model's brief, would show a person the fence lines and the escapes
+	// that are written for a model alone. A resumed segment carries the line
+	// its run is already listed under.
 	Title string
 
 	// Requester is the handle of the seat whose message, notice or ask woke
@@ -597,6 +598,9 @@ type Written struct {
 
 	// changes are the kinds of change the writes committed ([Written.Commit]).
 	changes []types.CommittedChange
+
+	// records are the records the writes created or wrote ([Written.Wrote]).
+	records []types.WrittenRecord
 }
 
 // WrittenFrom rebuilds a set a suspended turn carried across its park: the
@@ -629,6 +633,9 @@ func (w *Written) Add(item types.WorkItem) {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	// A RECORD OF ITS OWN, past [MaxWritten] too: the run's router asks whether
+	// a wake is about this item, not how many items the turn wrote.
+	w.records, _ = types.FoldWritten(w.records, types.ItemWritten(item))
 	ref := item.Ref()
 	if _, seen := w.refs[ref]; seen {
 		return

@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
@@ -155,7 +157,7 @@ func TestACollectionReadsAStreamPastTheCap(t *testing.T) {
 	b.Put(p.Findings(), "Outcome: succeeded\nOpened https://github.com/acme/api/pull/12")
 	b.Put(p.ExitCode(), "0")
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -189,7 +191,7 @@ func TestALinePastTheBoundIsSkippedAndSaid(t *testing.T) {
 		`{"type":"text","part":{"text":"Built it."}}`,
 	}, "\n"))
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -230,7 +232,7 @@ func TestTheErrorStreamIsReadFromItsEndAndItsStartIsSaid(t *testing.T) {
 	b.Put(p.ExitCode(), "1")
 
 	reads := &tailReads{Sandbox: b}
-	res, err := runner.Collect(t.Context(), reads, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), reads, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -295,7 +297,7 @@ func TestTheWholeFailureIsWhatOneCondensationCanTake(t *testing.T) {
 			b.Put(p.Err(), stderr)
 			b.Put(p.ExitCode(), "1")
 
-			res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+			res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 			if err != nil {
 				t.Fatalf("Collect: %v", err)
 			}
@@ -341,13 +343,55 @@ func TestAFailureWhoseSentencesFillTheBoundSaysItsStreamWasNotShown(t *testing.T
 	b.Put(p.Err(), "a warning\nthe last line")
 	b.Put(p.ExitCode(), "1")
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
 	if !strings.HasSuffix(res.Error, "(the error stream, 23 bytes, is not shown: the engine's own "+
 		"account of the run fills what one condensation can take)") {
 		t.Errorf("the failure ends …%q; want the error stream said, not shown", tailOf(res.Error, 160))
+	}
+}
+
+// AN ERROR STREAM OF WHOSE END NOTHING IS SHOWN IS SAID, NOT SHOWN: the end a
+// failure reads is one line begun before the read, of which nothing is shown,
+// or blank lines after it or alone, so the transcript and the failure say the
+// stream by its size and why none of it is there.
+//
+// Mutation: leave the note out, or decide it on the end before it is trimmed,
+// and the run says nothing of its error stream.
+func TestAnErrorStreamOfWhoseEndNothingIsShownIsSaid(t *testing.T) {
+	t.Parallel()
+	long := "starting\n" + strings.Repeat("e", testFailureBound+2*executor.RedactContext)
+	const continues = "continues what was written before it)"
+	const blank = "opens only blank lines)"
+	for _, c := range []struct{ name, stderr, why string }{
+		{"one line begun before the read", long + "FATAL: the last line", continues},
+		{"that line, ended", long + "\n", continues},
+		{"that line, then a blank line", long + "\n\n", blank},
+		{"that line, then a line of spaces", long + "\n \n", blank},
+		{"blank lines alone", "starting\n" + strings.Repeat("\n", testFailureBound+2*executor.RedactContext), blank},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			runner := executor.Bounded(executor.NewClaudeCode(), testFailureBound, executor.MaxLineBytes)
+			b := box(t, runner)
+			p := paths(b)
+			b.Put(p.Err(), c.stderr)
+			b.Put(p.ExitCode(), "1")
+
+			res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
+			if err != nil {
+				t.Fatalf("Collect: %v", err)
+			}
+			said := fmt.Sprintf("(the error stream, %s, is not shown: the end a run's failure reads of it %s",
+				executor.HumanSize(int64(len(c.stderr))), c.why)
+			for name, got := range map[string]string{"transcript": res.Transcript, "failure": res.Error} {
+				if !strings.HasSuffix(got, said) || strings.Contains(got, "eeee") || strings.Contains(got, "FATAL") {
+					t.Errorf("the %s ends …%q; want %q, none of the stream shown", name, tailOf(got, 160), said)
+				}
+			}
+		})
 	}
 }
 
@@ -365,7 +409,7 @@ func TestAReportPastTheCapDegradesOnlyItself(t *testing.T) {
 	b.Put(p.Err(), "a warning")
 	b.Put(p.ExitCode(), "0")
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v; want the refusal to stay inside its piece", err)
 	}
@@ -401,7 +445,7 @@ func TestAnUnreadableBoxIsAnErrorNotAPiece(t *testing.T) {
 			}
 			return nil
 		}
-		if _, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}); !errors.Is(err, errBoxUnreadable) {
+		if _, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil)); !errors.Is(err, errBoxUnreadable) {
 			t.Errorf("an unreadable %s collected with %v; want the read's error", path, err)
 		}
 	}
@@ -428,7 +472,19 @@ func (b *tailReads) ReadTail(ctx context.Context, path string, n int) (sandbox.F
 	return b.Sandbox.ReadTail(ctx, path, n)
 }
 
-// asked is every n a ReadTail of path asked for, in order.
+// OpenTail counts what it asks for as ReadTail does: a collection opens the
+// error stream's end before it weighs its pieces.
+func (b *tailReads) OpenTail(ctx context.Context, path string, n int64) (io.ReadCloser, int64, error) {
+	b.mu.Lock()
+	if b.asks == nil {
+		b.asks = map[string][]int{}
+	}
+	b.asks[path] = append(b.asks[path], int(n))
+	b.mu.Unlock()
+	return b.Sandbox.OpenTail(ctx, path, n)
+}
+
+// asked is every n a ReadTail or OpenTail of path asked for, in order.
 func (b *tailReads) asked(path string) []int {
 	b.mu.Lock()
 	defer b.mu.Unlock()

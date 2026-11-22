@@ -26,7 +26,7 @@ describe("the bounds of a reader's days", () => {
 
   // A CLOCK CHANGE INSIDE THE WINDOW keeps each bound on the reader's midnight: a 25-hour day.
   test("keep the reader's midnight across a clock change", () => {
-    const bounds = pushDayBounds("2026-11-16", PUSHER_DAYS, "Europe/London");
+    const bounds: readonly string[] = pushDayBounds("2026-11-16", PUSHER_DAYS, "Europe/London");
     expect(bounds.indexOf("2026-10-25T23:00:00Z")).toBe(-1);
     expect(bounds).toContain("2026-10-24T23:00:00Z");
     expect(bounds).toContain("2026-10-26T00:00:00Z");

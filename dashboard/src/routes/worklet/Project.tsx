@@ -88,7 +88,7 @@ import { projectEditHold, useWriteAccess } from "~/lib/useWriteAccess.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatResolvers } from "~/lib/seats.ts";
-import { fmtDateTime, relTime, fmtCount } from "~/lib/format.ts";
+import { fmtDateTime, relTime, fmtCount, plural } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { useCompanyZone } from "~/lib/companyDay.ts";
 import {
@@ -249,6 +249,7 @@ export function Project({ projectKey }: { projectKey: string }) {
               target={detail.target_date}
               assignee={detail.default_assignee}
               archived={detail.archived}
+              stuck={detail.stuck_after_hours_set ? detail.stuck_after_hours : undefined}
               lead={detail.lead.handle}
               open={editing}
               onOpenChange={setEditing}
@@ -747,6 +748,17 @@ function projectFacts(detail: WorkProjectDetail, chrome?: RowChrome): HeaderFact
         <span className="t-num">{targetLabel(detail.target_date)}</span>
       ) : (
         <span className="muted">none set</span>
+      ),
+    },
+    // HOW LONG AN ITEM IN PROGRESS MAY GO UNCHANGED before it reads stuck
+    // (ADR-0162), and whether that is the lead's setting or the default.
+    {
+      label: "Stuck after",
+      value: (
+        <span className="t-num">
+          {plural(detail.stuck_after_hours, "hour")}
+          {!detail.stuck_after_hours_set && <span className="muted"> (default)</span>}
+        </span>
       ),
     },
     // THE FOUR COUNTS ARE CELLS, not bare numbers: a project with nothing

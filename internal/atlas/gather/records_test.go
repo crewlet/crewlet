@@ -51,13 +51,15 @@ func (f fakeLedger) Records(_ context.Context, k integration.Kind) (map[string]s
 
 type fakeTools struct {
 	listings []coord.MCPListing
-	grants   []coord.MCPGrant
+	grants   []coord.OAuthGrant
 }
 
 func (f fakeTools) ListMCPListings(context.Context) ([]coord.MCPListing, error) {
 	return f.listings, nil
 }
-func (f fakeTools) ListMCPGrants(context.Context) ([]coord.MCPGrant, error) { return f.grants, nil }
+func (f fakeTools) ListOAuthGrants(context.Context, coord.GrantFamily) ([]coord.OAuthGrant, error) {
+	return f.grants, nil
+}
 
 // fakeNodes is live nodes n0, n1, … at presence epoch 1, each with the status
 // record given at that epoch.
@@ -177,7 +179,7 @@ func records(t *testing.T, c *config.Company) gather.Sources {
 					Tools: []coord.MCPListedTool{{Name: "search", Description: "atlas-description-canary"}, {Name: "create"}}},
 				{Server: "tickets", Node: "n0", Epoch: 0, At: now, Info: &coord.MCPServerInfo{Name: "Tickets", Version: "1.0.0"}},
 			},
-			grants: []coord.MCPGrant{{Server: "tickets", Issuer: "https://auth.tickets.example", Expiry: &expiry,
+			grants: []coord.OAuthGrant{{Name: "tickets", Issuer: "https://auth.tickets.example", Expiry: &expiry,
 				By: "ops@acme.example"}},
 		},
 		Nodes: nodes, NodeStatuses: nodes,

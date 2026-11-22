@@ -99,21 +99,27 @@ const (
 	ReasonDismissedWontFix CloseReason = "dismissed_wont_fix"
 	ReasonDismissedWrong   CloseReason = "dismissed_wrong"
 	ReasonDismissedKnown   CloseReason = "dismissed_known"
+	// ReasonDuplicate is a model finding a rule's finding says too, with
+	// its numbers (ADR-0166).
+	ReasonDuplicate CloseReason = "duplicate"
+	// ReasonReplaced is a model finding whose premise moved while what it
+	// was about still stands, now said by a rule's truer finding (ADR-0166).
+	ReasonReplaced CloseReason = "replaced"
 )
 
 // closeReasons is each closed state's reasons.
 var closeReasons = map[State][]CloseReason{
 	StateResolved:  {ReasonConditionCleared, ReasonFixedByThis, ReasonFixedElsewhere},
-	StateRetired:   {ReasonSubjectGone, ReasonFixUnbuildable},
+	StateRetired:   {ReasonSubjectGone, ReasonFixUnbuildable, ReasonDuplicate, ReasonReplaced},
 	StateExpired:   {ReasonNotConfirmed},
 	StateDismissed: {ReasonDismissedWontFix, ReasonDismissedWrong, ReasonDismissedKnown},
 }
 
-// CloseReasons are the nine, by the state they close into.
+// CloseReasons are every reason, by the state they close into.
 var CloseReasons = []CloseReason{
 	ReasonConditionCleared, ReasonFixedByThis, ReasonFixedElsewhere, ReasonSubjectGone,
 	ReasonFixUnbuildable, ReasonNotConfirmed, ReasonDismissedWontFix, ReasonDismissedWrong,
-	ReasonDismissedKnown,
+	ReasonDismissedKnown, ReasonDuplicate, ReasonReplaced,
 }
 
 // Valid reports whether a reason is one this build knows.
@@ -202,3 +208,27 @@ var ClassStatuses = []ClassStatus{ClassDone, ClassUnread, ClassFailed}
 
 // Valid reports whether a status is one this build knows.
 func (s ClassStatus) Valid() bool { return slices.Contains(ClassStatuses, s) }
+
+// RunKind is what a run does: its rules (with the daily model pass where one
+// runs), or an investigation on the Advisor's model (ADR-0166).
+type RunKind string
+
+// The kinds; the empty kind is a run of the rules, as every run before kinds was.
+const (
+	RunKindRules RunKind = "rules"
+	RunKindDeep  RunKind = "deep"
+)
+
+// RunKinds is every kind.
+var RunKinds = []RunKind{RunKindRules, RunKindDeep}
+
+// Valid reports whether k is a kind, the empty one included.
+func (k RunKind) Valid() bool { return k == "" || slices.Contains(RunKinds, k) }
+
+// OrRules is k, or the rules where it names none.
+func (k RunKind) OrRules() RunKind {
+	if k == "" {
+		return RunKindRules
+	}
+	return k
+}

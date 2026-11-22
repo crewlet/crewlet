@@ -138,6 +138,11 @@ type ModelEntriesAnswer struct {
 	Nodes   []ModelNode   `json:"nodes"`
 	Entries []ModelEntry  `json:"entries"`
 	Alarms  []ModelsAlarm `json:"alarms"`
+	// ExecutorHarnesses is every harness this node's build runs a seat's
+	// executor on, in the profiles' order ([config.ExecutorHarnesses]): the
+	// page reads it here rather than compiling a copy, so a runner a build
+	// adds reaches it with no dashboard rebuild.
+	ExecutorHarnesses []config.Harness `json:"executor_harnesses"`
 }
 
 // ModelNode is one live node, and whether a status record of its live presence
@@ -274,13 +279,16 @@ type ModelUsage struct {
 }
 
 // ModelUse is one job the entry runs, or is a fallback for: a seat's, by
-// handle and job, or the assistant's chat. Position is the
+// handle and job, Ask Crewlet's chat, or the Advisor's findings. Position is the
 // entry's place in the resolved chain, 0 for the model that runs it.
 type ModelUse struct {
 	Seat      string `json:"seat,omitempty"`
 	Job       string `json:"job,omitempty"`
 	Assistant string `json:"assistant,omitempty"`
-	Position  int    `json:"position"`
+	// Advisor is "findings" where the Advisor explains its findings with the
+	// entry (`advisor.model`).
+	Advisor  string `json:"advisor,omitempty"`
+	Position int    `json:"position"`
 	// Written is whether the seat wrote the field that resolved the job;
 	// Source is the level that decided it (phase.Source). Absent for the
 	// assistant, whose fields are always written.
@@ -384,6 +392,9 @@ type MemberEntriesAnswer struct {
 	Nodes   []ModelNode   `json:"nodes"`
 	Entries []MemberEntry `json:"entries"`
 	Alarms  []ModelsAlarm `json:"alarms"`
+	// ExecutorHarnesses is the admin reading's: which harness runs a seat's
+	// executor is no secret.
+	ExecutorHarnesses []config.Harness `json:"executor_harnesses"`
 }
 
 // MemberEntry is one entry, a member's reading.
@@ -490,7 +501,7 @@ func (s Sources) llmEntries(ctx context.Context, _ Params) (any, error) {
 	}
 	if !admin {
 		out := MemberEntriesAnswer{Reading: ReadingMember, Node: s.NodeID, Nodes: nodes,
-			Entries: make([]MemberEntry, 0, len(entries))}
+			Entries: make([]MemberEntry, 0, len(entries)), ExecutorHarnesses: config.ExecutorHarnesses()}
 		for _, e := range entries {
 			out.Entries = append(out.Entries, memberEntry(e))
 		}
@@ -503,7 +514,7 @@ func (s Sources) llmEntries(ctx context.Context, _ Params) (any, error) {
 		}
 	}
 	return ModelEntriesAnswer{Reading: ReadingAdmin, Node: s.NodeID, Nodes: nodes,
-		Entries: entries, Alarms: alarms}, nil
+		Entries: entries, Alarms: alarms, ExecutorHarnesses: config.ExecutorHarnesses()}, nil
 }
 
 // memberEntry is an admin entry with everything a member does not read
@@ -795,6 +806,7 @@ var usedByPhases = []struct {
 	{phase.Subagent, config.JobSubagent},
 	{phase.Auxiliary, config.JobAuxiliary},
 	{phase.Judge, config.JobJudge},
+	{phase.Triage, config.JobTriage},
 }
 
 // usedBy is every job the entry key runs, or is a fallback in the chain of:
@@ -820,6 +832,9 @@ func usedBy(company *config.Company, key string) []ModelUse {
 	}
 	if company.Assistant.Model == key {
 		out = append(out, ModelUse{Assistant: "chat", Position: 0})
+	}
+	if company.Advisor.Model == key {
+		out = append(out, ModelUse{Advisor: "findings", Position: 0})
 	}
 	return out
 }

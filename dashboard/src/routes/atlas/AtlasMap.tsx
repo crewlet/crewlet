@@ -1,9 +1,10 @@
 /**
  * The atlas as a map: the kit's GraphCanvas, read the way a request travels.
- * What the world reaches, the services and the data stand in the first row,
- * what those run on in the second, and what stands around them (code,
- * monitoring, tools and models) in the third. Every lane is drawn; an empty
- * one says what in this build would fill it.
+ * What the world reaches, the services and the data come first, what those run
+ * on next, and what stands around them (code, monitoring, tools and models)
+ * last, arranged into rows and columns for the canvas the map has
+ * (`arrange.ts`). Every lane is drawn; an empty one says what in this build
+ * would fill it.
  *
  * The map draws every relation in its family: calls at rest, what things run
  * on as trunks, and the rest for the entry a reader stands on. A selection
@@ -11,7 +12,14 @@
  * selection, the pointed-at entry and the search with it.
  */
 
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type RefObject,
+} from "react";
 import { XGlyph } from "@crewlethq/icons/glyphs";
 import {
   Button,
@@ -35,6 +43,7 @@ import { holds } from "~/lib/access.ts";
 import { useNow } from "~/lib/clock.ts";
 import { leaveFullscreen } from "~/lib/fullscreen.ts";
 import { useNarrowerThan } from "~/lib/useNarrowerThan.ts";
+import { arrangeMap, mapMetrics, mapRoom, type LaneLoad, type MapPlan } from "./arrange.ts";
 import type { TraceChoice } from "./filters.ts";
 import { HEALTH_TONES, MAP_LABELS, MAP_TONES, cardOf, carrying, lineOf } from "./graph.tsx";
 import { EntryDisc, HealthWord, VendorLead } from "./parts.tsx";
@@ -61,6 +70,12 @@ export const ATLAS_OPEN_MAX = 150;
 /** What a group of entries no vendor names is called. */
 const NO_VENDOR = "No vendor";
 
+/** The letters of a lane's name that say which it is, where its title is cut. */
+const TITLE_LETTERS = 5;
+
+/** What an empty lane says on a narrowed map. */
+const NOTHING_MATCHES = "Nothing in this lane matches the filters.";
+
 /** The group an entry stands in: its vendor's in its lane, or the lane's entries no vendor names (the engine's key). */
 function groupOf(summary: Pick<AtlasSummary, "lane" | "vendor">): string {
   return summary.vendor ? `${summary.lane}/${summary.vendor}` : summary.lane;
@@ -68,8 +83,9 @@ function groupOf(summary: Pick<AtlasSummary, "lane" | "vendor">): string {
 
 /**
  * The column each service on a call chain stands in: one right of the deepest
- * service that calls it, so a request reads left to right inside the lane. A
- * cycle stops at the entry it started from.
+ * service that calls it, so a request reads left to right inside the lane, and
+ * a chain deeper than the lane is wide ends in its last column. A cycle stops
+ * at the entry it started from.
  *
  * A SERVICE ON NO CHAIN NAMES NO COLUMN: it neither calls nor is called by
  * another service, so no column means anything for it, and the map flows it
@@ -103,49 +119,145 @@ export function serviceColumns(answer: AtlasMapAnswer): Map<string, number> {
     depths.set(id, depth);
     return depth;
   };
-  const last = LANES.services.columns - 1;
-  return new Map([...chained].map((id) => [id, Math.min(last, depthOf(id, new Set()))]));
+  return new Map([...chained].map((id) => [id, depthOf(id, new Set())]));
 }
 
 /**
- * The lanes as the map draws them, row by row, each saying what would fill it
- * when it is empty.
+ * The lanes the map draws, in reading order, each with its row of `MAP_ROWS`.
  *
  * A NARROWED MAP DRAWS THE LANES THAT HOLD SOMETHING (`onlyFilled`): every
- * lane drawn at its full width, empty ones included, set the fit, so the four
- * entries a filter left opened on a phone as four marks with no name. Each is
- * as wide as the columns its matches fill. While nothing at all matches, every
- * lane is drawn, each saying so.
+ * lane drawn, empty ones included, set the fit, so the four entries a filter
+ * left opened on a phone as four marks with no name. While nothing at all
+ * matches, every lane is drawn, each saying so.
  */
-function bandsOf(
+function lanesOf(
   lanes: AtlasMapAnswer["lanes"],
-  emptyOf: (lane: AtlasLane) => ReactNode,
-  onlyFilled = false,
-): GraphBand[] {
+  onlyFilled: boolean,
+): { id: AtlasLane; row: number }[] {
   const filled = lanes.filter((one) => one.count > 0);
-  const drawn = onlyFilled && filled.length > 0 ? filled : lanes;
-  const answered = new Set(drawn.map((one) => one.lane));
-  const counts = new Map(drawn.map((one) => [one.lane, one.count]));
+  const answered = new Set(
+    (onlyFilled && filled.length > 0 ? filled : lanes).map((one) => one.lane),
+  );
   const placed = new Set(MAP_ROWS.flatMap((row) => row.lanes));
-  const lane = (id: AtlasLane) => ({
-    id,
-    label: LANES[id].label,
-    // A NARROWED LANE IS AS WIDE AS WHAT MATCHED: two matches in a lane three
-    // columns wide stood beside an empty column the fit still had to hold.
-    columns: onlyFilled
-      ? Math.max(1, Math.min(LANES[id].columns, counts.get(id) ?? 0))
-      : LANES[id].columns,
-    empty: emptyOf(id),
-  });
-  return MAP_ROWS.map((row, i) => ({
-    id: row.id,
-    lanes: [
+  return MAP_ROWS.flatMap((row, i) =>
+    [
       ...row.lanes.filter((id) => answered.has(id)),
       // A LANE THE ENGINE ANSWERS AND NO ROW NAMES joins the last one, drawn rather than dropped.
       ...(i === MAP_ROWS.length - 1 ? [...answered].filter((id) => !placed.has(id)) : []),
-    ].map(lane),
-  })).filter((band) => band.lanes.length > 0);
+    ].map((id) => ({ id, row: i })),
+  );
 }
+
+/**
+ * What each drawn lane holds, as the arrangement weighs it: the words on each
+ * card (an entry's name, or a closed group's label and count), the services'
+ * call depths, and an empty lane's message.
+ */
+function loadsOf(
+  lanes: readonly { id: AtlasLane; row: number }[],
+  answer: AtlasMapAnswer,
+  grouped: boolean,
+  depths: ReadonlyMap<string, number> | null,
+  work: ReadonlyMap<string, number> | null,
+  emptyWords: (lane: AtlasLane) => number,
+): LaneLoad[] {
+  return lanes.map(({ id, row }) => {
+    const inLane = answer.nodes.filter((node) => node.lane === id);
+    const named: number[] = [];
+    for (const node of inLane) {
+      const depth = depths?.get(node.id);
+      if (depth !== undefined) named[depth] = (named[depth] ?? 0) + 1;
+    }
+    const groups = new Map<string, number>();
+    for (const node of inLane) groups.set(groupOf(node), (groups.get(groupOf(node)) ?? 0) + 1);
+    const label = (key: string) => {
+      const vendor = inLane.find((node) => groupOf(node) === key)?.vendor;
+      return vendor ? VENDORS[vendor].name : NO_VENDOR;
+    };
+    return {
+      id,
+      row,
+      cards: grouped
+        ? [...groups].map(([key, count]) => `${label(key)} ${entries(count)}`.length)
+        : inLane.map((node) => node.name.length),
+      named: named.length > 0 ? Array.from(named, (count) => count ?? 0) : undefined,
+      empty: inLane.length === 0 ? emptyWords(id) : 0,
+      title: titleWords(LANES[id].label, inLane, work),
+    };
+  });
+}
+
+/**
+ * How many characters of a lane's title must show for it to read: its name's
+ * first letters (the kit cuts a long name, never its figures), its count, and a
+ * figure for each tone it tallies.
+ */
+function titleWords(
+  label: string,
+  inLane: readonly AtlasSummary[],
+  work: ReadonlyMap<string, number> | null,
+): number {
+  const tallies = [
+    inLane.filter((node) => node.health === "alerting").length,
+    inLane.filter((node) => node.health === "needs_look").length,
+    work
+      ? inLane.filter((node) => node.health === "quiet" && (work.get(node.id) ?? 0) > 0).length
+      : 0,
+  ].filter((count) => count > 0);
+  const figures = (count: number) => String(count).length;
+  const name = label.length > TITLE_LETTERS ? TITLE_LETTERS + 1 : label.length;
+  return name + 2 + figures(inLane.length) + tallies.reduce((sum, n) => sum + figures(n) + 3, 0);
+}
+
+/**
+ * The box the map is drawn in, or the screen while the map holds it, with the
+ * reader's root font size and density; null until it is laid out.
+ */
+function useMapBox(box: RefObject<HTMLDivElement | null>) {
+  const [size, setSize] = useState<{
+    width: number;
+    height: number;
+    rem: number;
+    density: number;
+  } | null>(null);
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const measure = () => {
+      const holding = document.fullscreenElement;
+      const shown = holding && el.contains(holding) ? holding : el;
+      const next = {
+        width: shown.clientWidth,
+        height: shown.clientHeight,
+        rem: Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16,
+        density: Number.parseFloat(getComputedStyle(el).getPropertyValue("--density")) || 1,
+      };
+      setSize((was) =>
+        was &&
+        was.width === next.width &&
+        was.height === next.height &&
+        was.rem === next.rem &&
+        was.density === next.density
+          ? was
+          : next,
+      );
+    };
+    measure();
+    const watch = new ResizeObserver(measure);
+    watch.observe(el);
+    document.addEventListener("fullscreenchange", measure);
+    window.addEventListener("resize", measure);
+    return () => {
+      watch.disconnect();
+      document.removeEventListener("fullscreenchange", measure);
+      window.removeEventListener("resize", measure);
+    };
+  }, [box]);
+  return size;
+}
+
+/** A box this much larger or smaller is arranged again; less is a scrollbar or a rounding. */
+const REARRANGE = 0.03;
 
 /**
  * The path a selection lights, counted over every hop: how many entries rely
@@ -201,15 +313,56 @@ export function AtlasMap({
   const grouped = answer.nodes.length > ATLAS_OPEN_MAX;
 
   const byId = useMemo(() => new Map(answer.nodes.map((node) => [node.id, node])), [answer]);
+  const depths = useMemo(() => (grouped ? null : serviceColumns(answer)), [answer, grouped]);
+  const lanes = useMemo(() => lanesOf(answer.lanes, narrowed), [answer, narrowed]);
+
+  // THE ARRANGEMENT FOLLOWS THE BOX, held while an entry is selected: a sheet
+  // opening beside the page for it never moves the entries under the reader.
+  const measured = useMapBox(box);
+  const [basis, setBasis] = useState(measured);
+  if (
+    measured &&
+    measured !== basis &&
+    (basis === null ||
+      (selectedId === null &&
+        (Math.abs(measured.width - basis.width) > REARRANGE * basis.width ||
+          Math.abs(measured.height - basis.height) > REARRANGE * basis.height ||
+          measured.rem !== basis.rem ||
+          measured.density !== basis.density)))
+  ) {
+    setBasis(measured);
+  }
+  const plan = useMemo<MapPlan | null>(() => {
+    if (!basis) return null;
+    const loads = loadsOf(lanes, answer, grouped, depths, work, (lane) =>
+      narrowed
+        ? NOTHING_MATCHES.length
+        : LANES[lane].empty.length + (LANES[lane].link?.label.length ?? 0),
+    );
+    return arrangeMap(
+      loads,
+      mapRoom(basis.width, basis.height, basis.rem),
+      mapMetrics(basis.rem, basis.density),
+    );
+  }, [basis, lanes, answer, grouped, depths, work, narrowed]);
+
+  const spans = useMemo(
+    () => new Map(plan?.rows.flatMap((row) => row.lanes.map((lane) => [lane.id, lane.columns]))),
+    [plan],
+  );
   const nodes = useMemo<GraphNode[]>(() => {
-    const columns = grouped ? null : serviceColumns(answer);
-    return answer.nodes.map((summary) => ({
-      ...cardOf(summary, now, work?.get(summary.id)),
-      lane: summary.lane,
-      group: grouped ? groupOf(summary) : undefined,
-      column: columns?.get(summary.id),
-    }));
-  }, [answer, now, grouped, work]);
+    // A CHAIN DEEPER THAN THE LANE IS WIDE ends in its last column.
+    const last = (spans.get("services") ?? 1) - 1;
+    return answer.nodes.map((summary) => {
+      const depth = depths?.get(summary.id);
+      return {
+        ...cardOf(summary, now, work?.get(summary.id)),
+        lane: summary.lane,
+        group: grouped ? groupOf(summary) : undefined,
+        column: depth === undefined ? undefined : Math.min(depth, last),
+      };
+    });
+  }, [answer, now, grouped, work, depths, spans]);
   const edges = useMemo<GraphEdge[]>(() => answer.edges.map(lineOf), [answer]);
   const groups = useMemo<GraphGroup[]>(
     () =>
@@ -229,21 +382,19 @@ export function AtlasMap({
         : [],
     [answer, grouped],
   );
-  const bands = useMemo(
+  const bands = useMemo<GraphBand[]>(
     () =>
-      bandsOf(
-        answer.lanes,
-        (lane) =>
-          narrowed ? (
-            "Nothing in this lane matches the filters."
-          ) : (
-            <EmptyLane lane={lane} held={held} />
-          ),
-        narrowed,
-      ),
-    [answer, narrowed, held],
+      (plan?.rows ?? []).map((row) => ({
+        id: row.lanes.map((lane) => lane.id).join("+"),
+        lanes: row.lanes.map((lane) => ({
+          id: lane.id,
+          label: LANES[lane.id as AtlasLane].label,
+          columns: lane.columns,
+          empty: narrowed ? NOTHING_MATCHES : <EmptyLane lane={lane.id as AtlasLane} held={held} />,
+        })),
+      })),
+    [plan, narrowed, held],
   );
-
   // THE MAP OPENS ON THE SELECTION THE ADDRESS ARRIVED WITH, in the middle at
   // a size its card reads, where it otherwise opens fitted: a link to an entry
   // (its sheet, or "Show it on the map") lands on it. Read once, when the map
@@ -265,66 +416,84 @@ export function AtlasMap({
   return (
     <>
       {answer.collapsed.length > 0 && <Collapsed answer={answer} />}
-      <div className="atlas-map" ref={box} onPointerMove={engage} onKeyDown={engage}>
-        <GraphCanvas
-          label="Atlas map: everything the company runs on and how it relates"
-          bands={bands}
-          nodes={nodes}
-          edges={edges}
-          groups={groups}
-          labels={MAP_LABELS}
-          tones={work ? MAP_TONES : HEALTH_TONES}
-          collapseAbove={grouped ? ATLAS_OPEN_MAX : undefined}
-          selectedId={selectedId}
-          onSelect={onSelect}
-          trace={trace === "" ? undefined : { direction: trace, depth: Number.POSITIVE_INFINITY }}
-          hoveredId={pointedId}
-          onHover={onPoint}
-          cardDimmed={matched === null ? undefined : (id) => !matched.has(id)}
-          controlsPlacement="top-right"
-          renderCard={
-            engaged && !narrow
-              ? (id) => {
-                  const one = byId.get(id);
-                  return one ? <HoverCard entry={one} open={work?.get(id) ?? 0} /> : null;
-                }
-              : undefined
-          }
-          dock={
-            selected ? (
-              <div className="atlas-dock">
-                <EntryDisc entry={selected} size="sm" />
-                <div className="atlas-dock__words">
-                  <Text variant="body" truncate>
-                    {selected.name}
-                  </Text>
-                  <Text variant="caption" tone="secondary">
-                    {[KINDS[selected.kind].word, HEALTH[selected.health].label, impact].join(" · ")}
-                  </Text>
+      <div
+        className="atlas-map"
+        ref={box}
+        onPointerMove={engage}
+        onKeyDown={engage}
+        style={
+          plan
+            ? ({ "--crewlet-graph-canvas-card-width": `${plan.card}px` } as CSSProperties)
+            : undefined
+        }
+      >
+        {plan && (
+          <GraphCanvas
+            className="atlas-map__graph"
+            label="Atlas map: everything the company runs on and how it relates"
+            bands={bands}
+            nodes={nodes}
+            edges={edges}
+            groups={groups}
+            collapseAbove={grouped ? ATLAS_OPEN_MAX : undefined}
+            labels={MAP_LABELS}
+            tones={work ? MAP_TONES : HEALTH_TONES}
+            selectedId={selectedId}
+            onSelect={onSelect}
+            trace={trace === "" ? undefined : { direction: trace, depth: Number.POSITIVE_INFINITY }}
+            hoveredId={pointedId}
+            onHover={onPoint}
+            cardDimmed={matched === null ? undefined : (id) => !matched.has(id)}
+            controlsPlacement="top-right"
+            renderCard={
+              engaged && !narrow
+                ? (id) => {
+                    const one = byId.get(id);
+                    return one ? <HoverCard entry={one} open={work?.get(id) ?? 0} /> : null;
+                  }
+                : undefined
+            }
+            dock={
+              selected ? (
+                <div className="atlas-dock">
+                  <EntryDisc entry={selected} size="sm" />
+                  <div className="atlas-dock__words">
+                    <Text variant="body" truncate>
+                      {selected.name}
+                    </Text>
+                    <Text variant="caption" tone="secondary">
+                      {[KINDS[selected.kind].word, HEALTH[selected.health].label, impact].join(
+                        " · ",
+                      )}
+                    </Text>
+                  </div>
+                  <Button
+                    variant="primary"
+                    size="small"
+                    onClick={() => {
+                      // THE SHEET IS THE SHELL'S, outside a fullscreen map.
+                      leaveFullscreen();
+                      onDetails(selected.id);
+                    }}
+                  >
+                    Details
+                  </Button>
+                  <IconButton
+                    label="Clear the selection"
+                    icon={<XGlyph />}
+                    size="sm"
+                    onClick={() => onSelect(null)}
+                  />
                 </div>
-                <Button
-                  variant="primary"
-                  size="small"
-                  onClick={() => {
-                    // THE SHEET IS THE SHELL'S, outside a fullscreen map.
-                    leaveFullscreen();
-                    onDetails(selected.id);
-                  }}
-                >
-                  Details
-                </Button>
-                <IconButton
-                  label="Clear the selection"
-                  icon={<XGlyph />}
-                  size="sm"
-                  onClick={() => onSelect(null)}
-                />
-              </div>
-            ) : undefined
-          }
-          fitKey={fitKey}
-          initialNode={arrived}
-        />
+              ) : undefined
+            }
+            // A NEW ARRANGEMENT IS FITTED ON THE SAME CANVAS, never a new one, which
+            // would drop the screen a fullscreen map holds; the kit fits it again
+            // once its cards are measured at the new width.
+            fitKey={`${fitKey}|${plan.key}`}
+            initialNode={arrived}
+          />
+        )}
       </div>
     </>
   );

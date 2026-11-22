@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/period"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -123,6 +124,12 @@ type SeatDay struct {
 	// day finished; zero when none did.
 	LastEndedAt time.Time
 
+	// Busy is the sum of the day's turn durations on this node, exact; and
+	// BusyMeasured false where the day was published by a build that did
+	// not measure it, so its busy time is unknown rather than none.
+	Busy         time.Duration
+	BusyMeasured bool
+
 	// Tokens is the day's `total` over every spend cell of the seat on this
 	// node — input plus output, the cache counts being a breakdown of input.
 	Tokens int64
@@ -152,12 +159,14 @@ func scanSeatDay(rows *sql.Rows, day string) (SeatDay, error) {
 	r := SeatDay{Day: day}
 	var hist string
 	var lastEnded int64
+	var busy sql.NullInt64
 	if err := rows.Scan(&r.Node, &r.AgentID, &r.Handle, &r.Role,
 		&r.Turns, &r.Failed, &r.Reviewed, &r.FirstPass, &r.SentBack,
 		&hist, &lastEnded, &r.Code.ChangesOpened, &r.Code.ReviewsGiven, &r.Code.FindingsReceived,
-		&r.Code.ChecksFailed, &r.Code.Ejections); err != nil {
+		&r.Code.ChecksFailed, &r.Code.Ejections, &busy); err != nil {
 		return r, err
 	}
+	r.Busy, r.BusyMeasured = time.Duration(busy.Int64)*time.Millisecond, busy.Valid
 	if err := r.Durations.UnmarshalJSON([]byte(hist)); err != nil {
 		return r, fmt.Errorf("the histogram of %s/%s/%s: %w", r.Day, r.Node, r.AgentID, err)
 	}
@@ -254,6 +263,14 @@ func fireOutcomeArgs() []any {
 	return []any{scheduleOutcomeFired, scheduleOutcomeFiredManually, types.ScheduleOutcomeSuperseded}
 }
 
+// pastAnswer refuses a sum over a range whose rows pass the bytes one read
+// answers ([statelog.RowsOf]): refused rather than cut, since its readers sum
+// or rank the whole range, which a cut would skew without a word.
+func pastAnswer(what string) error {
+	return fmt.Errorf("usage: %s over this range pass the %d bytes one read answers: narrow the range",
+		what, statelog.AnswerBytes)
+}
+
 // ScheduleRuns reads one page of the schedule fires every data node recorded,
 // newest first: the company's through `usage_schedule_runs_newest_idx` and one
 // schedule's through `usage_schedule_runs_schedule_idx` (replicated 0076),
@@ -274,12 +291,15 @@ func ScheduleRuns(ctx context.Context, estate Estate, q ScheduleRunsQuery) (
 		return nil, false, invalid
 	}
 	var out []ScheduleRun
+	var cut bool
 	err := estate.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, query, args...)
 		if err != nil {
 			return err
 		}
 		defer func() { _ = rows.Close() }()
+		out, cut = nil, false
+		held := statelog.RowsOf(ctx)
 		for rows.Next() {
 			var r ScheduleRun
 			var fired, due int64
@@ -289,6 +309,10 @@ func ScheduleRuns(ctx context.Context, estate Estate, q ScheduleRunsQuery) (
 				return err
 			}
 			r.FiredAt, r.ScheduledAt = store.DecodeTime(fired), store.DecodeTime(due)
+			if !held.TakeEncoded(r) {
+				cut = true
+				break
+			}
 			out = append(out, r)
 		}
 		return rows.Err()
@@ -296,8 +320,8 @@ func ScheduleRuns(ctx context.Context, estate Estate, q ScheduleRunsQuery) (
 	if err != nil {
 		return nil, false, fmt.Errorf("usage: read the schedule runs: %w", err)
 	}
-	more := len(out) > q.Limit
-	if more {
+	more := cut || len(out) > q.Limit
+	if len(out) > q.Limit {
 		out = out[:q.Limit]
 	}
 	return out, more, nil

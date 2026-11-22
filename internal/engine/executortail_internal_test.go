@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -73,7 +74,7 @@ func TestAPeersTailClassesItsOwnBlipAsAWait(t *testing.T) {
 				return q
 			}
 			_, stop, err := serveExecutorTails(ctx, "n2:owner", "n2", failingRuns{err: c.read},
-				nil, client())
+				nil, client(), queue.NewAnswerBudget(nil))
 			if err != nil {
 				t.Fatal(err)
 			}

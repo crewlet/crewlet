@@ -201,7 +201,7 @@ export const ACTIONS = {
   },
   write_project: {
     // A PROJECT'S OWN SETTINGS, on its page and nowhere else: "Edit project"
-    // (the lead's target date and default assignee), About's labels (declare,
+    // (the lead's target date, default assignee and stuck window), About's labels (declare,
     // rename, archive) and fields (the project's own declarations, sent whole),
     // and the page's Archive project. A project's settings are what every
     // seat's tracker reads, so this is a COMPANY write. The engine decides
@@ -212,6 +212,7 @@ export const ACTIONS = {
       "target_date",
       "default_assignee",
       "archived",
+      "stuck_after_hours",
       "fields",
       "tags_add",
       "tags_rename",
@@ -227,6 +228,16 @@ export const ACTIONS = {
     domain: "tracker",
     apps: ["worklet"],
     refreshes: [],
+    scope: "person",
+  },
+  save_home_board: {
+    // HOME'S DONE and a group folded outside editing: the reader's whole board,
+    // kept under their seat, conditional on the revision `home_board` answered
+    // (a newer save from another browser is refused `stale_version`). On no log.
+    args: ["board", "if_match"],
+    domain: null,
+    apps: [],
+    refreshes: ["home_board"],
     scope: "person",
   },
   set_priorities: {
@@ -274,7 +285,11 @@ export const ACTIONS = {
     // screen drew) rides every answer: a run that moved on to another
     // question refuses it `conflict` rather than taking an answer to a
     // question nobody showed.
-    args: ["turn_id", "launch_id", "choice", "answer"],
+    //
+    // AND A FOLD-IN (`fold_in`): whether another person's request joins a
+    // running executor's work, `choice` approve or refuse, `launch_id` the
+    // running job's.
+    args: ["turn_id", "launch_id", "fold_in", "choice", "answer"],
     domain: null,
     apps: [],
     refreshes: ["executors", "decisions"],

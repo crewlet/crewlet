@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/learning"
+	"github.com/crewlet/crewlet/internal/queue"
 )
 
 // PageLimit bounds each collection of a memory answer, and is the page a
@@ -21,6 +22,29 @@ import (
 // exactly the seats whose memory had grown past the page.
 const PageLimit = 50
 
+// pageBytes bounds the rows of one memory answer by the text they hold.
+//
+// HALF OF [queue.MaxPayloadBytes], as a chat page and eventfan's AnswerBytes
+// are: the answer is one reply, and the other half is for the envelope, the
+// counts and the encoding. Fifty rows bound nothing here, since an episode's
+// lists, a skill's description and a profile's traits are unbounded.
+const pageBytes = queue.MaxPayloadBytes / 2
+
+// answerWeight is what a memory answer holds of the node's answer budget
+// ([queue.AnswerBudget]) from its read until its reply is written: [pageBytes]
+// five times. Its encode is a history answer's (the rows, their encoding, the
+// reply's around it), measured at 4.7 times its rows' bound
+// (internal/eventfan's answerWeight).
+const answerWeight = 5 * pageBytes
+
+// collectionBytes is the share of [pageBytes] each of the episodes, the skills
+// and the profiles is read to, in the store ([learning.Episodes.Listing],
+// [learning.Skills.Listing], [learning.Counterparties.List]). A FIXED quarter,
+// not what the others left: each read stands alone. The diary takes no bound:
+// a note is bounded where it is written (learning.MaxContentChars bytes), so
+// fifty are about a hundred kilobytes, inside the fourth quarter.
+const collectionBytes = pageBytes / 4
+
 // Page clamps a memory page size a caller asked for: an absent or nonsensical
 // one takes [PageLimit], and one past it is served [PageLimit].
 func Page(asked int) int {
@@ -33,7 +57,7 @@ func Page(asked int) int {
 // Profiles is what a seat learned about the people it works with — the half
 // of [learning.Counterparties] a read needs.
 type Profiles interface {
-	List(ctx context.Context, observer string, limit int) ([]learning.Profile, error)
+	List(ctx context.Context, observer string, limit, maxBytes int) ([]learning.Profile, error)
 	Count(ctx context.Context, observer string) (int, error)
 }
 
@@ -76,6 +100,9 @@ func agentID(seat Seat) string {
 // one: a client cannot tell "this seat has learned nothing" from "this answer
 // does not carry that half" if the key is simply not there, and both are
 // ordinary states.
+//
+// A PAGE MAY END SHORT of the size asked for, at its collection's share of the
+// reply ([collectionBytes]), and its total still counts every row.
 type Memory struct {
 	// ID is the seat's handle.
 	ID string `json:"id"`
@@ -202,8 +229,6 @@ type EpisodeCompaction struct {
 // whole here is one a seat was shown whole. (Not the converse: the prompt
 // measures a text with whitespace runs collapsed.) Written twice, a change to
 // one would cut what seats read whole, or show whole what they never saw.
-// It also bounds the page: fifty rows of two openings is sixty kilobytes,
-// far inside the transport's bound (queue.MaxPayloadBytes).
 const ListedTextBytes = learning.EpisodeAccountBytes
 
 // EpisodeDetail is one episode read whole, as the `agent_episode` answer sends
@@ -315,7 +340,7 @@ func (s *Stores) Memory(ctx context.Context, seat Seat, q MemoryQuery) (Memory, 
 	}
 	if s.Episodes != nil {
 		// THE OPENINGS, never the whole texts: see [EpisodeRow].
-		episodes, err := s.Episodes.Listing(ctx, seat.Handle, limit, ListedTextBytes)
+		episodes, err := s.Episodes.Listing(ctx, seat.Handle, limit, ListedTextBytes, collectionBytes)
 		if err != nil {
 			return Memory{}, err
 		}
@@ -336,7 +361,8 @@ func (s *Stores) Memory(ctx context.Context, seat Seat, q MemoryQuery) (Memory, 
 			return Memory{}, err
 		}
 		opts.Limit, opts.Order = limit, q.Skills
-		skills, err := s.Skills.List(ctx, seat.Handle, opts)
+		// LISTED, never read whole: a row of the page draws no body.
+		skills, err := s.Skills.Listing(ctx, seat.Handle, opts, collectionBytes)
 		if err != nil {
 			return Memory{}, err
 		}
@@ -346,7 +372,7 @@ func (s *Stores) Memory(ctx context.Context, seat Seat, q MemoryQuery) (Memory, 
 		}
 	}
 	if s.Profiles != nil {
-		profiles, err := s.Profiles.List(ctx, seat.Handle, limit)
+		profiles, err := s.Profiles.List(ctx, seat.Handle, limit, collectionBytes)
 		if err != nil {
 			return Memory{}, fmt.Errorf("memread: read what %s learned about its "+
 				"colleagues: %w", seat.Handle, err)
@@ -436,7 +462,7 @@ func episodeRow(listed learning.ListedEpisode) EpisodeRow {
 	return row
 }
 
-func skillRow(sk learning.Skill) SkillRow {
+func skillRow(sk learning.ListedSkill) SkillRow {
 	return SkillRow{
 		ID: sk.ID, Key: sk.Name, Title: sk.Name, Summary: sk.Description,
 		Version: sk.Version, UpdatedAt: iso(sk.UpdatedAt), Uses: sk.UseCount, Loads: sk.LoadCount,

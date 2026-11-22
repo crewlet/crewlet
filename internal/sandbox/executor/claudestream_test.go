@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
@@ -181,7 +182,7 @@ func TestAClaudeRunThatDidNotSucceedSaysHowItEnded(t *testing.T) {
 	if got := decodeClaude(end); got != "[error] the run ended: error_max_turns: Reached maximum number of turns (30)" {
 		t.Errorf("transcript = %q", got)
 	}
-	res := claude().Parse(end)
+	res := claude().Parse([]byte(end))
 	if res.Success || res.Error != "error_max_turns: Reached maximum number of turns (30)" || res.CostUSD != 0.92 {
 		t.Errorf("Parse = success %v, error %q, cost %v; want the failure said and its spend kept",
 			res.Success, res.Error, res.CostUSD)
@@ -195,7 +196,7 @@ func TestAClaudeRunThatDidNotSucceedSaysHowItEnded(t *testing.T) {
 // `--output-format json` prints: its text, session, cost and whole prompt.
 func TestTheClaudeResultIsTheStreamsLastLine(t *testing.T) {
 	t.Parallel()
-	res := claude().Parse(claudeRunStream[len(claudeRunStream)-1] + "\n")
+	res := claude().Parse([]byte(claudeRunStream[len(claudeRunStream)-1] + "\n"))
 	if !res.Success || res.Text != "Fixed the race and opened https://github.com/acme/api/pull/9" {
 		t.Fatalf("Parse = %+v; want the successful result", res)
 	}
@@ -218,7 +219,7 @@ func TestTheClaudeResultIsTheStreamsLastLine(t *testing.T) {
 // as a result it was a run that succeeded and said nothing.
 func TestAClaudeStreamThatEndsBeforeItsResultIsNotASuccess(t *testing.T) {
 	t.Parallel()
-	res := claude().Parse(claudeRunStream[len(claudeRunStream)-2])
+	res := claude().Parse([]byte(claudeRunStream[len(claudeRunStream)-2]))
 	if res.Success {
 		t.Fatal("a stream that ended on an assistant message read as a successful run")
 	}
@@ -232,7 +233,7 @@ func TestAClaudeStreamThatEndsBeforeItsResultIsNotASuccess(t *testing.T) {
 	// one line.)
 	cut := `{"type":"user","message":{"content":[{"type":"tool_result","content":"` +
 		strings.ReplaceAll(fileBody, "\n", `\n`)
-	res = claude().Parse(cut)
+	res = claude().Parse([]byte(cut))
 	if res.Success || strings.Contains(res.Error, "THE-FILE-SAID-THIS") ||
 		!strings.Contains(res.Error, "not a whole JSON object") {
 		t.Errorf("Parse(cut) = success %v, error %q; want it described by size", res.Success, res.Error)
@@ -291,7 +292,7 @@ func TestARunWhoseWrapperDiedIsReadFromItsStream(t *testing.T) {
 			}
 			// No result file, no exit status, no done marker: the poll
 			// ended the run on the wrapper's liveness alone.
-			res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+			res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 			if err != nil {
 				t.Fatalf("Collect: %v", err)
 			}
@@ -395,7 +396,7 @@ func TestAClaudeRunInARealBoxIsCollectedFromItsStream(t *testing.T) {
 		t.Errorf("exit status %q; want the harness's own 3, not the copy's", code)
 	}
 
-	res, err := runner.Collect(t.Context(), box, handle)
+	res, err := runner.Collect(t.Context(), box, handle, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -438,7 +439,7 @@ func TestARunsLastLimitReportRidesItsResult(t *testing.T) {
 	stream := append([]string{first}, claudeRunStream...)
 	stream = append(stream[:len(stream)-1], last, stream[len(stream)-1])
 	b.Put(paths(b).Stream(), strings.Join(stream, "\n")+"\n")
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}

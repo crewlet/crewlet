@@ -382,8 +382,8 @@ export interface RenderOptions {
    * `lib/inlineTokens.ts`). For words written by an agent or a model that may
    * have read anything: the Dashboard Assistant's answers, the Inbox and a
    * an executor's question. Any other address is drawn inert, its label and
-   * then the host it names, in the quiet link ink, readable and copyable and
-   * never a control.
+   * then the address it names with that address's mark, in the text's own
+   * ink as a bare address is, readable and copyable and never a control.
    */
   links?: LinkMode;
   /**
@@ -885,15 +885,20 @@ function renderBlock(
       // tables of the same columns (a runbook's two "Element, Text" tables)
       // drew two landmarks of the same name, which a landmark list cannot
       // tell apart; nor is a table a section of the page anybody jumps to.
+      //
+      // INSIDE A CONTROL (`links: "text"`) IT IS NO STOP: the control is, and
+      // a stop inside it is as unreachable as itself as a link there would be.
       return createElement(
         "div",
-        {
-          key,
-          className: "md-table",
-          tabIndex: 0,
-          role: "group",
-          "aria-label": `Table: ${block.head.map((cell) => plainText(cell)).join(", ")}`,
-        },
+        options.links === "text"
+          ? { key, className: "md-table" }
+          : {
+              key,
+              className: "md-table",
+              tabIndex: 0,
+              role: "group",
+              "aria-label": `Table: ${block.head.map((cell) => plainText(cell)).join(", ")}`,
+            },
         createElement(
           "table",
           null,
@@ -960,6 +965,31 @@ export function renderMarkdown(source: string, given: RenderOptions = {}): React
   // it are one computation and cannot disagree.
   const ids = anchorIds(blocks);
   return blocks.map((block, i) => renderBlock(block, `b${i}`, options, ids.get(i)));
+}
+
+/** Somebody's words, drawn for the sentence that quotes them ([renderQuoted]). */
+export type Quoted =
+  /** The one paragraph's inline runs, quoted in place in the sentence. */
+  | { inline: ReactNode }
+  /** Every block, drawn as [renderMarkdown] draws it, under the sentence. */
+  | { blocks: ReactNode[] };
+
+/**
+ * Somebody's words as a sentence about them quotes them: "You replied “Hold
+ * it a **week**.”". Words that are ONE paragraph are its inline runs, quoted
+ * in place; anything more (a list, a second paragraph) is its blocks, set
+ * under the sentence, since a list quoted inline reads as one line of dashes.
+ * One walk either way, so a paragraph reads the same in the sentence as in
+ * the thread that holds it. No anchors and no heading shift ([renderBlocks]).
+ */
+export function renderQuoted(source: string, given: RenderOptions = {}): Quoted {
+  const blocks = parseMarkdown(source ?? "");
+  const options: RenderOptions = { message: source ?? "", ...given };
+  const [first] = blocks;
+  if (blocks.length === 1 && first?.kind === "paragraph") {
+    return { inline: inlineOf(options)(first.text, "q0", opening(options)) };
+  }
+  return { blocks: renderBlocks(blocks, options, "q") };
 }
 
 /**

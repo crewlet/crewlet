@@ -16,16 +16,16 @@ const (
 	// SessionMaxBytes bounds one captured session's ARCHIVE, before it is
 	// sealed: a harness's transcript and its sidecars, packed.
 	//
-	// THIRTY-TWO MEBIBYTES. A Claude Code or OpenCode session of a day's
-	// work compresses to one or two mebibytes, and the long ones that read
-	// whole files into their context reach the low tens; past thirty-two a
-	// transcript is a context the harness could not resume within its own
-	// window anyway. The bound is also what one capture or restore costs a
-	// node while it streams (one chunk, [secrets.StreamChunkBytes]) and the
-	// object store at rest ([SealedMaxBytes]), and it is pinned against
-	// objstore.RecordWithin at the objstore.MiBPace floor in
+	// FORTY-EIGHT MEBIBYTES: one whole-file read at a harness's limit beside
+	// about 8 MiB of ordinary work. Claude Code keeps a whole 20 MiB PDF read
+	// as 40.13 MiB (gzip level 7), OpenCode the same file as an image as
+	// 20.1 MiB; a session holding more media than that is still not kept
+	// (crewlet/crewlet#1626), since compaction keeps every line before its
+	// boundary. A capture or restore streams it a chunk at a time
+	// ([secrets.StreamChunkBytes]), the store keeps [SealedMaxBytes], and it is
+	// pinned against objstore.RecordWithin at objstore.MiBPace in
 	// internal/objstore/references.
-	SessionMaxBytes = 32 << 20
+	SessionMaxBytes = 48 << 20
 
 	// CompletedWorkMaxBytes and BlockedOnMaxBytes bound the reviewer's
 	// account of what landed and the executor's evidence of what stopped a
@@ -95,6 +95,31 @@ const (
 // the object store's pacing is held to.
 var SealedMaxBytes = secrets.SealedStreamSize(SessionMaxBytes,
 	strings.Repeat("k", secrets.MaxStreamKeyIDBytes))
+
+// GzipMostBytes is the most Go's gzip writes of n bytes it cannot shrink, at
+// any level, in one member: flate stores such input as it came, five bytes of
+// header to a block, and its levels end a block of literals at 32 KiB (seven
+// to nine) or 64 KiB (one to six); counted here at 16 KiB, twice as often as
+// any does, beside the member's own [GzipMemberBytes]. On 48 MiB of random
+// bytes level seven writes 7,700 bytes more than it was given and one 3,865;
+// internal/sandbox/executor's spool test holds it at the spool's level.
+func GzipMostBytes(n int64) int64 {
+	const block = 16 << 10
+	return n + (n+block-1)/block*5 + GzipMemberBytes
+}
+
+// GzipMemberBytes is what one gzip member adds to its data: its 10-byte header,
+// its 8-byte trailer and flate's last empty block, five.
+const GzipMemberBytes = 10 + 8 + 5
+
+// SpoolMembersMostBytes is the most a take's scrub spool adds in gzip members
+// past its first: one for each unit that outgrows the 64 KiB a way of it is
+// held in, and so at most one for each 64 KiB of the 256 MiB of plaintext a
+// reading reads, each [GzipMemberBytes]: 92 KiB. A unit that writes more than
+// it reads opens more, which the take's room then counts, closed.
+// internal/sandbox/executor's wayRoomBytes and scrubPlainMax are those bounds,
+// which its test holds together with these.
+const SpoolMembersMostBytes = (256<<20/(64<<10) + 1) * GzipMemberBytes
 
 // ErrSessionTooLarge reports an archive past [SessionMaxBytes]: nothing is
 // recorded, and the turn's next launch starts from the session the row already

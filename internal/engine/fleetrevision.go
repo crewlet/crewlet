@@ -108,7 +108,7 @@ func (e *Engine) servedFleetRevision(ctx context.Context) (*Company, error) {
 	// ONE SNAPSHOT for the applied epoch and the lag, so the lag judged is
 	// the lag of the epoch read.
 	progress := r.snapshot()
-	self := progress.selfView(target.Epoch, r.now())
+	self := progress.selfView(target.Epoch, e.backends.Fleet.BodyCrossing(target), r.now())
 	if self.AppliedEpoch < target.Epoch {
 		return nil, &errBehindFleet{applied: self.AppliedEpoch, target: target.Epoch,
 			reconciler: true, read: progress.target != 0, confirmed: self.LagConfirmed(),

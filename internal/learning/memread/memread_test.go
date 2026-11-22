@@ -124,7 +124,7 @@ func (f *fleet) reader(t *testing.T, n *node, attached ...string) *memread.Reade
 		ids = append(ids, seatID(h))
 	}
 	seats := func() []uuid.UUID { return ids }
-	stop, err := memread.Serve(t.Context(), q, n.owner, seats, n.stores)
+	stop, err := memread.Serve(t.Context(), q, n.owner, seats, n.stores, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Serve: %v", err)
 	}
@@ -512,7 +512,7 @@ func TestTheProfilesAreAskedForThePageAndNoMore(t *testing.T) {
 // askedProfiles records the page it was asked for.
 type askedProfiles struct{ limit int }
 
-func (a *askedProfiles) List(_ context.Context, _ string, limit int) ([]learning.Profile, error) {
+func (a *askedProfiles) List(_ context.Context, _ string, limit, _ int) ([]learning.Profile, error) {
 	a.limit = limit
 	return nil, nil
 }
@@ -525,7 +525,7 @@ type stubProfiles struct {
 	err      error
 }
 
-func (s stubProfiles) List(_ context.Context, _ string, limit int) ([]learning.Profile, error) {
+func (s stubProfiles) List(_ context.Context, _ string, limit, _ int) ([]learning.Profile, error) {
 	return s.profiles[:min(limit, len(s.profiles))], s.err
 }
 
@@ -616,12 +616,11 @@ func TestThePagesAreBoundedInBothDirections(t *testing.T) {
 
 // THE SKILL PAGE IS TAKEN IN THE STORE rather than out of a fully read library.
 //
-// A skill row carries its content and frontmatter, so reading the seat's whole
-// catalogue to show a page of it is real I/O. The bound is
-// [learning.ListOptions.Limit], which the SQL honours — and its zero value is
-// the unbounded setting every non-paging caller (the prefetch's offer, the
-// refiner) relies on, so a bound that leaked into the default would silently
-// truncate all of them. Both are asserted.
+// The page's bound is [learning.ListOptions.Limit], which the listing's SQL
+// honours — and its zero value is the unbounded setting every non-paging
+// caller of a whole read (the prefetch's offer, the refiner) relies on, so a
+// bound that leaked into the default would silently truncate all of them. Both
+// are asserted.
 func TestTheSkillPageIsBoundedInTheStore(t *testing.T) {
 	t.Parallel()
 	n := newNode(t, "solo:1")
@@ -636,7 +635,8 @@ func TestTheSkillPageIsBoundedInTheStore(t *testing.T) {
 			t.Fatalf("insert %s: %v", name, err)
 		}
 	}
-	page, err := n.stores.Skills.List(t.Context(), "swe", learning.ListOptions{Limit: memread.PageLimit})
+	page, err := n.stores.Skills.Listing(t.Context(), "swe",
+		learning.ListOptions{Limit: memread.PageLimit}, memread.CollectionBytes)
 	if err != nil {
 		t.Fatalf("bounded listing: %v", err)
 	}
@@ -838,5 +838,114 @@ func TestAPageOfLongAsksIsAnsweredByItsHolder(t *testing.T) {
 	if len(got.Episodes) != memread.PageLimit || got.Episodes[0].AskBytes != len(ask) {
 		t.Fatalf("the page carried %d episodes, the first naming a %d-byte ask; want all %d "+
 			"and the whole size", len(got.Episodes), got.Episodes[0].AskBytes, memread.PageLimit)
+	}
+}
+
+// A MEMORY PAGE IS HELD TO ITS BYTES, EACH COLLECTION TO ITS SHARE. The answer
+// is one reply, and fifty rows bound nothing when an episode's label, a skill's
+// description and a profile's traits are unbounded: so each is read to a fixed
+// share of the reply, ending before the row that would pass it. A cut page
+// still says how many there are, a seat whose one row alone is past its share
+// is still shown it, and a skill's body, which a page never draws, is never
+// read, so a library of large bodies still lists. The diary takes no share: a
+// note is bounded where it is written.
+//
+// Mutations, each red: read the collections to the whole of pageBytes; ignore
+// any one collection's bound; drop the first-row rule; list skills through the
+// whole read, body counted.
+func TestAMemoryPageIsHeldToItsBytesEachCollectionToItsShare(t *testing.T) {
+	t.Parallel()
+	n := newNode(t, "solo:1")
+	third := strings.Repeat("x", memread.CollectionBytes/3)
+	whole := strings.Repeat("y", memread.CollectionBytes+1)
+	seed := func(handle, text string, count int) {
+		t.Helper()
+		for i := range count {
+			at := pinned.Add(time.Duration(i) * time.Minute)
+			name := handle + "-" + strconv.Itoa(i)
+			if _, err := n.stores.Episodes.Append(t.Context(), learning.Episode{
+				ID: name, Handle: handle, TurnID: "turn-" + name, WorkKey: "wk-" + name,
+				TaskSummary: text, StartedAt: at, EndedAt: at.Add(time.Second),
+			}); err != nil {
+				t.Fatalf("episode: %v", err)
+			}
+			if err := n.stores.Skills.Insert(t.Context(), learning.Skill{
+				ID: name, AgentHandle: handle, Name: name, Description: text,
+				Content: whole, CreatedAt: at, UpdatedAt: at,
+			}); err != nil {
+				t.Fatalf("skill: %v", err)
+			}
+			if _, err := n.stores.Profiles.(*learning.Counterparties).Record(t.Context(),
+				learning.Observation{
+					Observer: handle, Subject: learning.Subject{Handle: "colleague-" + strconv.Itoa(i)},
+					Traits: map[string]any{"notes": text}, At: at,
+				}); err != nil {
+				t.Fatalf("profile: %v", err)
+			}
+		}
+	}
+	seed("swe", third, 4)
+	seed("big", whole, 1)
+	for i := range 5 {
+		if err := n.stores.Diary.Write(t.Context(), learning.DiaryEntry{
+			ID: "note-" + strconv.Itoa(i), AgentID: seatID("swe").String(),
+			Kind: learning.DiaryLong, Content: strings.Repeat("n", learning.MaxContentChars),
+			Source: learning.PersistSource, CreatedAt: pinned.Add(time.Duration(i) * time.Second),
+		}); err != nil {
+			t.Fatalf("diary: %v", err)
+		}
+	}
+	read := &memread.Reader{Owner: n.owner, Local: n.stores}
+
+	got, err := read.Memory(t.Context(), seatOf("swe"), memread.MemoryQuery{})
+	if err != nil {
+		t.Fatalf("Memory: %v", err)
+	}
+	for _, c := range []struct {
+		name          string
+		listed, total int
+	}{
+		{"episodes", len(got.Episodes), got.EpisodesTotal},
+		{"skills", len(got.Skills), got.SkillsTotal},
+		{"counterparties", len(got.Counterparties), got.CounterpartiesTotal},
+	} {
+		if c.listed != 2 || c.total != 4 {
+			t.Errorf("%s: %d listed of %d, want the 2 rows of a third each that a share "+
+				"of %d bytes holds, of 4", c.name, c.listed, c.total, memread.CollectionBytes)
+		}
+	}
+	if len(got.Diary) != 5 || got.DiaryTotal != 5 {
+		t.Errorf("the diary listed %d of %d, want all 5: it takes no share", len(got.Diary), got.DiaryTotal)
+	}
+
+	big, err := read.Memory(t.Context(), seatOf("big"), memread.MemoryQuery{})
+	if err != nil {
+		t.Fatalf("Memory: %v", err)
+	}
+	if len(big.Episodes) != 1 || len(big.Skills) != 1 || len(big.Counterparties) != 1 {
+		t.Errorf("a seat whose one row of each is past its share listed %d episodes, %d "+
+			"skills, %d profiles; want each row shown", len(big.Episodes), len(big.Skills),
+			len(big.Counterparties))
+	}
+}
+
+// THE SHARES FIT THE REPLY. The memory answer is one reply, so the most its
+// rows can hold — three collections at their shares and a page of diary notes
+// at the length a note is written to — is held inside pageBytes, and pageBytes
+// inside half the reply, the other half the envelope's and the encoding's.
+// A share read as a figure of its own grows the page past the transport.
+//
+// Mutations, each red: read each collection to the whole of pageBytes; take
+// the whole reply as pageBytes.
+func TestTheCollectionsSharesFitTheReply(t *testing.T) {
+	t.Parallel()
+	rows := 3*memread.CollectionBytes + memread.PageLimit*learning.MaxContentChars
+	if rows > memread.PageBytes {
+		t.Errorf("three shares of %d and a page of diary notes are %d bytes, past the page's %d",
+			memread.CollectionBytes, rows, memread.PageBytes)
+	}
+	if 2*memread.PageBytes > queue.MaxPayloadBytes {
+		t.Errorf("a page of %d bytes leaves the reply of %d less than half for its envelope",
+			memread.PageBytes, queue.MaxPayloadBytes)
 	}
 }

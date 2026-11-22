@@ -411,8 +411,9 @@ func TestSeedReadsEverySeatsNewestTurns(t *testing.T) {
 	var seats []string
 	for i, q := range history.turns {
 		seats = append(seats, q.AgentID)
-		if q.Limit != observe.SeedTurnsPerSeat || q.Sort != store.TurnSortStarted {
-			t.Errorf("turn read %+v, want the newest %d by start", q, observe.SeedTurnsPerSeat)
+		if q.Limit != observe.SeedTurnsFor(org.DefaultMaxConcurrentRuns) || q.Sort != store.TurnSortStarted {
+			t.Errorf("turn read %+v, want the newest %d by start", q,
+				observe.SeedTurnsFor(org.DefaultMaxConcurrentRuns))
 		}
 		// ONE READING OF THE CLOCK for every windowed read of the seed.
 		if !history.turnsAt[i].Equal(history.spendAt) {
@@ -425,6 +426,37 @@ func TestSeedReadsEverySeatsNewestTurns(t *testing.T) {
 	slices.Sort(want)
 	if !slices.Equal(seats, want) {
 		t.Errorf("turn reads for %v, want one per agent seat by its id %v", seats, want)
+	}
+}
+
+// A SEAT RUNNING SEVERAL TURNS AT ONCE IS READ DEEP ENOUGH FOR ALL OF THEM: up
+// to its sandbox.max_concurrent_runs turns may be parked, so its read holds
+// that many, one that died mid-flight, and its newest ended turn — a seat at
+// the default of two for four.
+//
+// Mutation: read every seat for a fixed three, and the seat of three loses a
+// parked turn or its last ended one.
+func TestSeedReadsEachSeatDeepEnoughForItsCap(t *testing.T) {
+	t.Parallel()
+	runs := 3
+	o := &org.Organization{Name: "Acme", Roles: []*org.Role{
+		{Name: "Engineer", DeclaredHandle: "ada", Sandbox: &org.RoleSandbox{MaxConcurrentRuns: &runs}},
+		{Name: "Engineer", DeclaredHandle: "bob"},
+	}}
+	o.Normalize()
+	history := &recordingHistory{}
+	if _, err := observe.Seed(t.Context(), history, o, livestate.New()); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+	limits := map[string]int{}
+	for _, q := range history.turns {
+		limits[q.AgentID] = q.Limit
+	}
+	if got := limits[seatID(t, o, "ada")]; got != 5 {
+		t.Errorf("ada, three turns at once, is read for %d turns, want 5", got)
+	}
+	if got := limits[seatID(t, o, "bob")]; got != 4 {
+		t.Errorf("bob, at the default of two turns at once, is read for %d turns, want 4", got)
 	}
 }
 
@@ -548,7 +580,7 @@ func fanQueue(t *testing.T, broker *memory.Broker, log *store.EventLog, id strin
 		t.Fatalf("start %s: %v", id, err)
 	}
 	t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(t.Context())) })
-	stop, err := eventfan.Serve(t.Context(), q, id, log)
+	stop, err := eventfan.Serve(t.Context(), q, id, log, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("serve %s: %v", id, err)
 	}

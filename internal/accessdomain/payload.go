@@ -393,6 +393,8 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 		return decodePayload[Verdict](rec)
 	case k == KindVerdict && op == OpResealed:
 		return decodePayload[VerdictResealed](rec)
+	case k == KindGrowth && op == OpGrowth:
+		return decodePayload[Growth](rec)
 	case k == KindSeat && op == OpForget:
 		return decodePayload[Forget](rec)
 	case k == KindExpiry && op == OpExpire:

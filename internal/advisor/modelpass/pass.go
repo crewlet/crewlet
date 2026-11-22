@@ -106,13 +106,17 @@ func Run(ctx context.Context, deps Deps, d Data, ceiling int) advisor.Pass {
 	if deps.Now != nil {
 		now = deps.Now
 	}
-	findings, dropped := advisor.Ground(submitted, surf.served, advisor.Grounding{
+	grounded := advisor.Ground(submitted, surf.served, advisor.Grounding{
 		Company: d.Company, Rules: d.Rules, DryRun: deps.DryRun, Answered: d.Answers.Holding(now())})
 	// THE EXPLANATIONS' DROPS STAY COUNTED beside the findings'.
 	for drop, n := range out.Dropped {
-		dropped[drop] += n
+		grounded.Dropped[drop] += n
 	}
-	out.Findings, out.Dropped = findings, dropped
+	findings := grounded.Findings
+	for i := range findings {
+		findings[i] = advisor.SayNumbers(findings[i])
+	}
+	out.Findings, out.Dropped, out.Repaired = findings, grounded.Dropped, grounded.Repaired
 	out.Listed = len(out.Findings)
 	return out
 }
@@ -178,7 +182,7 @@ func explained(submitted []submittedExplanation, asked []advisor.Explainable, dr
 		e := asked[at]
 		done[x.ID] = true
 		out = append(out, advisor.Explained{ID: e.ID, Key: e.Key, VerdictDigest: e.VerdictDigest,
-			Text: strings.TrimSpace(x.Text)})
+			Text: advisor.NumbersSaid(strings.TrimSpace(x.Text), advisor.TokenValues(e.Facts))})
 	}
 	return out
 }

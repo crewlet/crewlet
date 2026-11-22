@@ -19,6 +19,7 @@
 package kvtest
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -38,6 +39,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/linktest"
 	"github.com/crewlet/crewlet/internal/runtoken"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // Across is one company's coordination buckets as two nodes reach them.
@@ -56,6 +58,11 @@ type Across struct {
 	// subsystem's traffic on the same link as the store's, as everything a
 	// node without `data` sends shares its one leaf link.
 	LeafBroker *js.Server
+
+	// Link is the relay between the two ([linktest.SlowEachWay]): a case
+	// reads what it has taken and carried of the leaf's bytes, or holds them
+	// back through [linktest.Link.Watch].
+	Link *linktest.Link
 
 	// MemberBroker is the member's own broker, the far end of the link: a
 	// case dials a connection of it to see, in the order they arrive, what the
@@ -94,6 +101,7 @@ func SlowLeaf(t testing.TB, rate int64) Across {
 		Leaf:         open(t, client(t, "leaf", leaf), kv.AcrossLink),
 		LeafBroker:   leaf,
 		MemberBroker: member,
+		Link:         link,
 	}
 }
 
@@ -225,4 +233,28 @@ func AtTheBound(t testing.TB, object []byte, room int) []byte {
 		t.Fatalf("the padded value is %d bytes, want %d", len(padded), want)
 	}
 	return padded
+}
+
+// SealedAtTheBound is document sealed under cipher, padded with trailing
+// whitespace inside the seal so that the sealed body is within room bytes short
+// of what one key of the store holds ([coord.MaxValueBytes]): an activation's
+// body at its bound. The padding is sealed, so the bytes on the link are
+// ciphertext no link compresses.
+func SealedAtTheBound(t testing.TB, cipher secrets.Cipher, document []byte, room int) []byte {
+	t.Helper()
+	pad := 0
+	for range 8 {
+		padded := append(bytes.Clone(document), bytes.Repeat([]byte(" "), pad)...)
+		sealed, err := secrets.Seal(cipher, padded)
+		if err != nil {
+			t.Fatalf("seal: %v", err)
+		}
+		short := coord.MaxValueBytes - room - len(sealed)
+		if short >= 0 && short < room {
+			return sealed
+		}
+		pad = max(pad+short*3/4, 0)
+	}
+	t.Fatalf("no padding of the document seals within %d bytes of %d", room, coord.MaxValueBytes)
+	return nil
 }

@@ -27,7 +27,8 @@
 // The third is the ADMISSION every turn on this node passes, whatever road it
 // arrives by: [Node.AdmitTurn], which the mailbox's handler and the sandbox
 // coordinator's resume both ask before they start one (ADR-0063): the seat
-// owned fresh, a slot under node.max_concurrent, no drain.
+// owned fresh, a slot under node.max_concurrent, room under the seat's cap
+// with no other turn of its conversation, no drain.
 // TestEveryTurnStartIsAdmitted fails on a road to turn.Run that skips it.
 //
 // # Wakes
@@ -166,8 +167,14 @@ type Config struct {
 	// company view that may have moved would be wrong.
 	SeatAdmitted func(ctx context.Context, seat placement.Seat)
 
+	// SeatTurns is how many turns a seat runs at once on this node, at most
+	// one per conversation ([Node.AdmitTurn]): the engine's, from the seat's
+	// sandbox.max_concurrent_runs. Nil, or an answer below one, is one.
+	SeatTurns func(handle string) int
+
 	// SeatTurnEnded runs when a turn admitted on a seat ([Node.AdmitTurn])
-	// is released after another turn was refused behind it ([ErrSeatBusy]),
+	// is released after another turn was refused behind it ([ErrSeatFull],
+	// [ErrConversationBusy]),
 	// so what was refused learns at that moment that it may try again. Not
 	// for a release nobody waited behind. Nil does nothing. It never fails
 	// anything: the turn is already over.
@@ -181,6 +188,14 @@ type Config struct {
 	// release: the seat is already gone from this node, and its durable
 	// state belongs to the store rather than to this process.
 	SeatDone func(ctx context.Context, seat placement.Seat)
+
+	// SeatPlaced runs once an acquired seat is established here, with the
+	// lease of its tenure, and SeatReleased once a release's teardown is
+	// proven, with the lease that ended and why: together, which node held
+	// the seat when, so the time no node held it can be read back. Nil does
+	// nothing; neither fails the claim or the release.
+	SeatPlaced   func(ctx context.Context, seat placement.Seat, lease coord.Lease)
+	SeatReleased func(ctx context.Context, seat placement.Seat, lease coord.Lease, reason seat.ReleaseReason)
 
 	// BatchOptions tunes inbox coalescing. Nil uses the defaults.
 	BatchOptions *queue.BatchOptions
@@ -241,10 +256,10 @@ type Node struct {
 	// turns is the per-node concurrency gate every turn passes through.
 	turns *gate
 
-	// running is the one turn each seat has admitted and not yet released,
-	// by handle: a seat runs one turn at a time ([ErrSeatBusy]). Guarded by
-	// mu.
-	running map[string]*admission
+	// running is the turns each seat has admitted and not yet released, by
+	// handle: up to its cap, one per conversation ([Node.AdmitTurn]).
+	// Guarded by mu.
+	running map[string]*seatTurns
 	// admissions numbers the admissions that hold a seat's inbox, so each
 	// holds it under a reason of its own ([HoldSeatTurn]).
 	admissions atomic.Uint64
@@ -305,7 +320,7 @@ func New(cfg Config) (*Node, error) {
 		log:      logging.Get("node").With("node_id", cfg.NodeID),
 		attached: map[uuid.UUID]string{},
 		inboxes:  map[uuid.UUID]queue.Attachment{},
-		running:  map[string]*admission{},
+		running:  map[string]*seatTurns{},
 		mail:     newMailboxes(),
 		turns:    newGate(cfg.MaxConcurrent),
 		cut:      make(chan struct{}),
@@ -635,7 +650,10 @@ func (n *Node) OnAcquire(ctx context.Context, s placement.Seat, lease coord.Leas
 
 // OnEstablished passes on that an acquired seat now admits turns — see
 // [Config.SeatAdmitted].
-func (n *Node) OnEstablished(ctx context.Context, s placement.Seat, _ coord.Lease) {
+func (n *Node) OnEstablished(ctx context.Context, s placement.Seat, lease coord.Lease) {
+	if n.cfg.SeatPlaced != nil {
+		n.cfg.SeatPlaced(ctx, s, lease)
+	}
 	if n.cfg.SeatAdmitted != nil {
 		n.cfg.SeatAdmitted(ctx, s)
 	}
@@ -644,13 +662,13 @@ func (n *Node) OnEstablished(ctx context.Context, s placement.Seat, _ coord.Leas
 // runTurn is a mailbox delivery's turn, admitted as every turn on this node is
 // ([Node.AdmitTurn]).
 //
-// A seat mid-turn is WAITED FOR, never refused, so its mail spends no delivery
-// on it (see [Node.admit]). Any other refusal DEFERS the delivery rather than
-// failing it: the events are healthy and nothing has been done with them, so
+// A seat at its cap, or busy with the partition's conversation, is WAITED FOR,
+// never refused, so its mail spends no delivery on it (see [Node.AdmitTurn]).
+// Any other refusal DEFERS the delivery rather than failing it: the events are healthy and nothing has been done with them, so
 // leaving them unacked hands them straight on, to the seat's successor, rather
 // than waiting out a redelivery timer.
 func (n *Node) runTurn(ctx context.Context, handle string, evs []*events.Event) queue.Result {
-	ctx, release, err := n.AdmitTurn(mailboxTurn(ctx), handle)
+	ctx, release, err := n.AdmitTurn(mailboxTurn(ctx), handle, notify.ConversationIdentityOfAll(evs))
 	if err != nil {
 		n.host.NoteDeliveryDeferred(handle)
 		cause := queue.DeferDraining
@@ -668,7 +686,7 @@ func (n *Node) runTurn(ctx context.Context, handle string, evs []*events.Event) 
 // Reporting an error means the teardown could NOT be proven, and the seat
 // host keeps the lease in response: a seat this process may still be
 // consuming must not be handed to a peer.
-func (n *Node) OnRelease(ctx context.Context, s placement.Seat, _ coord.Lease, reason seat.ReleaseReason) error {
+func (n *Node) OnRelease(ctx context.Context, s placement.Seat, lease coord.Lease, reason seat.ReleaseReason) error {
 	handle := s.Handle
 	inbox, group := topics.AgentInbox(s.ID), topics.AgentInboxGroup(s.ID)
 	if inbox == "" {
@@ -690,6 +708,9 @@ func (n *Node) OnRelease(ctx context.Context, s placement.Seat, _ coord.Lease, r
 	n.mu.Unlock()
 	if n.cfg.SeatDone != nil {
 		n.cfg.SeatDone(ctx, s)
+	}
+	if n.cfg.SeatReleased != nil {
+		n.cfg.SeatReleased(ctx, s, lease, reason)
 	}
 	n.log.Info("seat_detached", "handle", handle, "reason", reason.String())
 	return nil

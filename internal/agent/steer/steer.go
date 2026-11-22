@@ -120,6 +120,14 @@
 // later take read, a correction of it among them. A note of the brief's it
 // places none of is read at the launch's own place, after every read; a
 // source that keeps no record places nothing.
+//
+// # A wake handed to a running run is no note
+//
+// The engine may hand a running run somebody's message about its work, a
+// [Wake], as an item of the run's job (internal/sandbox's RunNote.Wake): read
+// between its steps as a note is, in its writer's fence and never as a
+// person's correction, and reported as [types.AgentTurnJoined] ([Joined]).
+// The review reads none, and nothing here holds one.
 package steer
 
 import (
@@ -133,6 +141,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/redact"
 )
 
 // MaxPendingNotes bounds the notes a turn holds unread.
@@ -244,6 +254,12 @@ type Note struct {
 
 	// At is when the box took it, in UTC.
 	At time.Time
+
+	// Owes is the delivery obligation (turn.Reply's wire value) of the chat
+	// messages a lead's steer note was filed from by the engine (ADR-0168),
+	// which the turn is held to answering; "" for every note a person sent
+	// through Crewlet, which asks the turn for no answer of its own.
+	Owes string
 
 	// SentBefore says the source handed the note over after a note filed
 	// later that its reader already holds, so its reader is told it was sent
@@ -381,13 +397,14 @@ func Expired() End { return End{outcome: types.SteerExpired} }
 //
 // THE ONE CONSTRUCTOR of the record, which every publisher calls — the runner,
 // the bridge's run inbox and an ending — so no two of them build it differently:
-// every outcome but an expiry says where, an expiry never names a step, and the
-// send time is always UTC.
+// every outcome but an expiry says where, an expiry never names a step, the
+// send time is always UTC, and the note is redacted ([redact.Secrets]): the
+// run's record holds it sealed, and this record is read in the clear.
 func Record(turn Turn, note Note, end End) types.AgentTurnSteered {
 	ev := types.AgentTurnSteered{
 		Agent: turn.Agent, AgentHandle: turn.AgentHandle, RoleName: turn.Role,
 		TurnID: turn.TurnID, WorkKey: turn.WorkKey,
-		NoteID: note.ID, Outcome: types.SteerExpired, Note: note.Text,
+		NoteID: note.ID, Outcome: types.SteerExpired, Note: redact.Secrets(note.Text),
 		SteeredBy: note.By, SteeredByKind: string(note.ByKind), OperatorID: note.OperatorID,
 		SentAt: note.At,
 	}
@@ -399,6 +416,95 @@ func Record(turn Turn, note Note, end End) types.AgentTurnSteered {
 		ev.Phase, ev.Iteration, ev.Round = end.at.Phase, end.at.Iteration, end.at.Round
 		ev.Boundary, ev.LaunchID = end.at.Boundary, end.at.Launch
 		ev.Retold = end.retold
+	}
+	return ev
+}
+
+// MaxWakeRunes bounds the words a [Wake] carries. ONE THOUSAND: a wake is
+// rendered whole beside a person's widest note in one Claude Code hook answer,
+// in its writer's fence, and its conversation keeps whatever is past it, which
+// the rendering names ([Wake.Cut]).
+const MaxWakeRunes = 1000
+
+// Wake is somebody's message about a running turn's work, handed to the turn's
+// run as an item of its job and opened from the engine's seal: who wrote it,
+// where and for whom, whether it asks for an answer, its words, and the
+// completion-ledger keys that mark its delivery on the seat's inbox worked once
+// a step of the run reads it ([Joined]).
+type Wake struct {
+	// ID is the wake's identity as it was filed, and Triggers the ids of the
+	// deliveries on the seat's inbox it stands for.
+	ID       string
+	Triggers []string
+
+	// Keys are the completion-ledger keys that mark the deliveries worked: each
+	// one's own, and a chat message's identity on its backend where it has one.
+	Keys []string
+
+	// By and ByKind are who wrote it, by seat handle or else login, and what
+	// sort of writer that is; WorkingFor is whom it was written for, as its
+	// delivery names that one (notify.WorkingForKey), "" for nobody.
+	By         string
+	ByKind     iam.ActorKind
+	WorkingFor string
+
+	// Conversation and Partition are where it was written: its conversation's
+	// identity and its thread's stamped partition key, never split by writer.
+	Conversation, Partition string
+
+	// Label is the fence its words are handed over in, decided as the turn's
+	// own wake would decide it: the surface, the trust and the writers.
+	Label provenance.Label
+
+	// OwesAnswer says it asks for an answer, and At is when it was written.
+	OwesAnswer bool
+	At         time.Time
+
+	// Owes is the delivery obligation its delivery would have put on a turn
+	// of its own (turn.Reply's wire value), "" for none: what the turn whose
+	// run reads it is held to as well. Seen is the log position of the record
+	// it was derived from (notify.TriggerField), "" for a vendor's wake: how
+	// far its conversation is read once the run reads it (ADR-0120).
+	Owes, Seen string
+
+	// Text is its words, at most [MaxWakeRunes] of them, and Cut how many
+	// characters past those its message holds, which its conversation keeps.
+	Text string `untrusted:"fence"`
+	Cut  int
+
+	// Informs says its writer is not whom the turn works for: the engine's
+	// triage found it information about the work (ADR-0168), which the run
+	// may read and answer, never a request it acts on (ADR-0109).
+	Informs bool
+
+	// FromRun and FromSeat are the run that sent it with `message_run` and
+	// that run's seat, "" for a wake from the seat's inbox (ADR-0176): a
+	// message from a run working for the same requester, read as information
+	// and never a request. By names that requester, Label is the sending
+	// executor's ([provenance.Executor]), and it carries no keys, owes nothing
+	// and names no conversation.
+	FromRun, FromSeat string
+}
+
+// FromARun reports whether w is a message another run sent ([Wake.FromRun]).
+func (w Wake) FromARun() bool { return w.FromRun != "" }
+
+// Joined is the agent_turn_joined record of what became of w, handed to job:
+// outcome, at the step at names, nil where no step is known. THE ONE
+// CONSTRUCTOR of the record, which every publisher calls, so the send time is
+// always UTC and no record names a step its outcome came to none at.
+func Joined(turn Turn, w Wake, job string, outcome types.JoinOutcome, at *Reading) types.AgentTurnJoined {
+	ev := types.AgentTurnJoined{
+		Agent: turn.Agent, AgentHandle: turn.AgentHandle, RoleName: turn.Role, TurnID: turn.TurnID,
+		WorkKey: turn.WorkKey, WakeID: w.ID, TriggerIDs: slices.Clone(w.Triggers), Outcome: outcome,
+		LaunchID: job, WrittenBy: w.By, WrittenByKind: string(w.ByKind), WrittenOn: string(w.Label.Source),
+		OwesAnswer: w.OwesAnswer, SentAt: w.At,
+	}
+	if !ev.SentAt.IsZero() {
+		ev.SentAt = ev.SentAt.UTC()
+	}
+	if at != nil && outcome != types.JoinUnread {
+		ev.Boundary, ev.Iteration = at.Boundary, at.Iteration
 	}
 	return ev
 }

@@ -22,7 +22,8 @@ answers:
   - route: GET /artifacts/{id}
     body: {id: 0f8fad5b-d9cb-469f-a165-70867728950e, title: Acme brand kit (draft), kind: document, owner: morgan, role: owner, status: draft, head_number: 4, share_count: 0}
 script:
-  - call: list_artifacts
+  - call: read_api
+    args: {route: GET /artifacts}
   - say: >-
       Your brand is still a draft kit that has not been adopted. Friendlier could
       mean warmer colours, a rounder typeface or a softer tone of voice. Which of

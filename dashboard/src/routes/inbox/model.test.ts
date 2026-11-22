@@ -37,6 +37,7 @@ import {
   noticeFloor,
   noticeNote,
   noticeRows,
+  noticeText,
   noticeTitle,
   pairAnswered,
   readThrough,
@@ -217,6 +218,23 @@ describe("the rows", () => {
     expect(
       rows.needs[0]!.kind === "decision" && rows.needs[0]!.notices.map((n) => n.record_id),
     ).toEqual(["r-1"]);
+    expect(rows.updates.map((r) => r.key)).toEqual(["notice:r-2"]);
+  });
+
+  // AN ITEM OF THE READER'S NOBODY IS MOVING WAITS ON THEM (ADR-0162): its
+  // notice is listed in Needs you after the decisions, never in the closed
+  // Updates group, until it is read.
+  test("a notice that an item is not moving is in Needs you, not Updates", () => {
+    const rows = inboxRows({
+      subjects: [ASK],
+      conditions: [],
+      notices: [
+        composed(notice("r-flow", { reason: "flow", kind: "flow", primary: true })),
+        composed(notice("r-2")),
+      ],
+    });
+    expect(rows.needs.map((r) => r.key)).toEqual([rows.needs[0]!.key, "notice:r-flow"]);
+    expect(rows.needs[0]!.kind).toBe("decision");
     expect(rows.updates.map((r) => r.key)).toEqual(["notice:r-2"]);
   });
 
@@ -969,7 +987,12 @@ describe("what was answered", () => {
   const answered = (extra: Partial<AnsweredWorkAsk> = {}): AnsweredWorkAsk => ({
     at: "2026-09-30T11:00:00Z",
     ask: ask as AnsweredWorkAsk["ask"],
-    answer: { by: "jane", at: "2026-09-30T11:00:00Z", choice: "hold", body: "Hold release" },
+    answer: {
+      by: "jane",
+      at: "2026-09-30T11:00:00Z",
+      choice: "hold",
+      body: "Chose \u201cHold release\u201d",
+    },
     ...extra,
   });
   const index = indexOrg(
@@ -1039,19 +1062,20 @@ describe("what was answered", () => {
     });
   });
 
-  // A CHOICE WITH WORDS OF ITS OWN KEEPS THEM: the record's body is the
-  // person's words where they wrote any beside the option, and the option's
-  // label only where they did not. Read as the label alone, the words were
-  // dropped from the row and the pane.
+  // A CHOICE WITH WORDS OF ITS OWN KEEPS THEM: the record's body states the
+  // choice and then the person's words (`worklet.ChoiceWords`), and the note
+  // is those words alone. Read as the label alone, the words were dropped from
+  // the row and the pane; read whole, the choice was said twice.
   //
-  // Mutation: drop `note`, or fill it with the label, and this fails.
+  // Mutation: drop `note`, fill it with the label, or keep the stated choice
+  // in it, and this fails.
   test("a choice keeps the words written beside it", () => {
     const withWords = answered({
       answer: {
         by: "jane",
         at: "2026-09-30T11:00:00Z",
         choice: "hold",
-        body: "Tell support before Thursday.",
+        body: "Chose \u201cHold release\u201d: Tell support before Thursday.",
       },
     });
     expect(answerWords(withWords, "jane", index)).toMatchObject({
@@ -1076,7 +1100,9 @@ describe("what was answered", () => {
         answered(),
         seat({
           activity: "working",
-          turn: { work_item: { id: "t-20", key: "LEAD-20" }, started_at: "2026-09-30T11:05:00Z" },
+          turns: [
+            { work_item: { id: "t-20", key: "LEAD-20" }, started_at: "2026-09-30T11:05:00Z" },
+          ],
         }),
       ),
     ).toEqual({ state: "acting", at: "2026-09-30T11:05:00Z" });
@@ -1084,7 +1110,7 @@ describe("what was answered", () => {
     expect(
       followThrough(
         answered(),
-        seat({ activity: "working", turn: { work_item: { id: "t-9", key: "LEAD-9" } } }),
+        seat({ activity: "working", turns: [{ work_item: { id: "t-9", key: "LEAD-9" } }] }),
       ),
     ).toEqual({ state: "waiting" });
     expect(followThrough(answered(), seat({ paused: { at: "x" } }))).toEqual({
@@ -1305,4 +1331,24 @@ describe("the row an address names", () => {
     expect(legacyRowKey("run:turn-7")).toBe("run:turn-7");
     expect(legacyRowKey("change:c-5")).toBe("change:c-5");
   });
+});
+
+// A FLOW NOTICE NAMES THE ITEM'S SEAT AS THE COMPANY NAMES IT. The engine
+// writes the handle, which a woken lead can ask; a screen names a person.
+test("a notice that an item is not moving names its seat, not its handle", () => {
+  const index = indexOrg(
+    withDerived({
+      name: "Acme",
+      roles: [{ handle: "riley-ops", name: "Riley Ops", kind: "human" }],
+    }) as never,
+  );
+  const said = noticeText(
+    notice("r-1", {
+      kind: "flow",
+      reason: "flow",
+      excerpt: "Its start passed and riley-ops has not picked it up since.",
+    }),
+    index,
+  );
+  expect(said).toBe("Its start passed and Riley Ops has not picked it up since.");
 });

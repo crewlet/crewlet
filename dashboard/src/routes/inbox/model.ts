@@ -97,6 +97,7 @@ import type {
   WorkInboxNotice,
   WorkWithdrawn,
 } from "~/protocol/index.ts";
+import { callOf, turnOf, turnsOf } from "~/lib/seatturn.ts";
 
 export type InboxRow =
   | {
@@ -181,6 +182,7 @@ export function inboxSelection(row: InboxRow | null): InboxSelection | null {
       const s = row.subject;
       if (s.kind === "ask") return of("task", taskId(s.ask), "decision");
       if (s.kind === "run") return of("run", s.run.turn_id, "decision");
+      if (s.kind === "fold_in") return of("run", s.foldIn.turn_id, "decision");
       return of("seat", s.seat.row.handle ? String(s.seat.row.handle) : undefined, "agent");
     }
     case "condition":
@@ -227,6 +229,7 @@ export function inboxResources(needs: readonly InboxRow[]): InboxResource[] {
       const s = row.subject;
       if (s.kind === "ask") add("task", s.ask.key_collision ? s.ask.id : s.ask.key);
       else if (s.kind === "run") add("run", s.run.turn_id);
+      else if (s.kind === "fold_in") add("run", s.foldIn.turn_id);
       else add("seat", s.seat.row.handle ? String(s.seat.row.handle) : undefined);
     } else if (row.kind === "condition" && row.item.subject === "seat") {
       add("seat", row.item.who);
@@ -255,7 +258,8 @@ export interface InboxRows {
  * NEEDS YOU IS NEWEST FIRST with the conditions after the decisions, the order
  * `decisionSubjects` hands the decisions in: a condition is the engine's own
  * reading of the company and stays until it clears, while a decision is
- * somebody waiting on an answer.
+ * somebody waiting on an answer. Between them, the unread notices that an item
+ * of the reader's is not moving (reason `flow`).
  *
  * WAITING ON OTHERS is what the engine says the reader may answer though it
  * is put to somebody else (`lib/decisions.ts`' `splitDecisions`): a group of
@@ -284,13 +288,17 @@ export function inboxRows(input: {
   };
   const { yours, others } = splitDecisions(subjects);
   const needs: InboxRow[] = yours.map(row);
+  // AN ITEM OF THEIRS NOBODY IS MOVING waits on them (ADR-0162): its notice
+  // is listed with what they decide, until they read it.
+  const unmoved = (n: InboxNotice) => n.source === "tracker" && n.extra.reason === "flow";
+  needs.push(...noticeRows(notices.filter((n) => !attached.has(n.record_id) && unmoved(n))));
   for (const item of conditions) {
     needs.push({ kind: "condition", key: conditionKey(item.id), at: item.at, item });
   }
   return {
     needs,
     others: others.map(row),
-    updates: noticeRows(notices.filter((n) => !attached.has(n.record_id))),
+    updates: noticeRows(notices.filter((n) => !attached.has(n.record_id) && !unmoved(n))),
   };
 }
 
@@ -512,6 +520,8 @@ export function rowWho(row: InboxRow, index: OrgIndex): Who | null {
           return whoOf(index, row.subject.ask.asked_by);
         case "run":
           return whoOf(index, row.subject.run.agent_handle);
+        case "fold_in":
+          return whoOf(index, row.subject.foldIn.asker);
         case "seat":
           return whoOf(index, row.subject.seat.row.handle ?? row.subject.seat.row.role);
       }
@@ -571,9 +581,13 @@ export function rowItem(row: InboxRow): ItemRef | null {
           const ref = row.subject.run.work_item;
           return ref ? turnItem(ref) : null;
         }
+        case "fold_in": {
+          const ref = row.subject.foldIn.work_item;
+          return ref ? turnItem(ref) : null;
+        }
         case "seat": {
           const r = row.subject.seat.row;
-          const ref = r.turn?.work_item ?? r.live_call?.work_item;
+          const ref = turnOf(r)?.work_item ?? callOf(r)?.work_item;
           return ref ? turnItem(ref) : null;
         }
       }
@@ -615,9 +629,11 @@ export function rowKey(row: InboxRow): string {
           return row.subject.ask.key;
         case "run":
           return row.subject.run.work_item?.key ?? "";
+        case "fold_in":
+          return row.subject.foldIn.work_item?.key ?? "";
         case "seat": {
           const r = row.subject.seat.row;
-          return r.turn?.work_item?.key ?? r.live_call?.work_item?.key ?? "";
+          return turnOf(r)?.work_item?.key ?? callOf(r)?.work_item?.key ?? "";
         }
       }
       break;
@@ -865,6 +881,11 @@ function findingCounts(counts: Readonly<Record<string, number>> | undefined): Fi
  */
 export function noticeText(notice: WorkInboxNotice, index: OrgIndex): string {
   const said = plainText(notice.excerpt ?? "");
+  // A FLOW NOTICE NAMES THE ITEM'S SEAT, never its author (ADR-0162).
+  if (notice.kind === "flow") {
+    const names = nameOfIn(index);
+    return index.seats.reduce((text, seat) => nameAuthor(text, seat.handle, names), said);
+  }
   if (!ENGINE_SENTENCES.has(notice.kind)) return said;
   return nameAuthor(said, authorOf(notice), nameOfIn(index));
 }
@@ -1262,6 +1283,8 @@ export function questionOf(row: InboxRow): string | null {
       return row.key;
     case "run":
       return runQuestionKey(row.subject.run.turn_id, row.subject.run.launch_id);
+    case "fold_in":
+      return row.key;
     case "seat":
       return null;
   }
@@ -1333,10 +1356,9 @@ export function holdingLead(h: WorkHoldingAgents | undefined): string | null {
  * colleague may answer a question put to you.
  *
  * A CHOICE CAN CARRY WORDS of its own (a choice with a note), on a work
- * item's answer and a run's alike, and those words are the answer's `body`:
- * the record holds the option's label there only where nothing else was
- * written. Read as the label alone, they were dropped, and the person read
- * back an answer shorter than the one they gave.
+ * item's answer and a run's alike, and those words are in the answer's
+ * `body` ([noteBeside]). Read as the label alone, they were dropped, and the
+ * person read back an answer shorter than the one they gave.
  */
 export interface AnswerWords {
   who: string;
@@ -1352,6 +1374,20 @@ export interface AnswerWords {
   recommended: boolean;
   /** What now covers a withdrawn question, where its asker named it. */
   replaced?: WorkWithdrawn["replaced_by"];
+}
+
+/**
+ * What an answer that chose wrote beside its option. An ask's answer opens with
+ * the line stating its choice, which the engine writes on every such answer so
+ * every reader sees what was chosen (`worklet.ChoiceWords`: "Chose “Hold
+ * release”: tell support first"), and the note is what follows it; an
+ * executor's answer carries its words alone, or the label where it wrote none.
+ */
+export function noteBeside(body: string, label: string): string {
+  const words = body.trim();
+  const stated = `Chose \u201c${label}\u201d`;
+  const note = words.startsWith(stated) ? words.slice(stated.length).replace(/^:\s*/, "") : words;
+  return note === label.trim() ? "" : note;
 }
 
 export function answerWords(
@@ -1376,12 +1412,11 @@ export function answerWords(
   const decision = "run" in answered ? answered.run.decision : answered.ask.decision;
   const option = a.choice ? decision?.options.find((o) => o.id === a.choice) : undefined;
   if (option) {
-    const body = a.body.trim();
     return {
       who,
       verb: "chose",
       said: option.label,
-      note: body === option.label.trim() ? "" : body,
+      note: noteBeside(a.body, option.label),
       kind: "choice",
       recommended: decision?.recommended === option.id,
     };
@@ -1422,15 +1457,16 @@ export function followThrough(
   const f = answered.followed_up;
   if (f) return { state: "acted", at: f.at };
   if (!seat) return null;
-  const on = seat.turn?.work_item;
-  if (
-    seat.activity === "working" &&
-    on &&
-    (on.id === answered.ask.id || (!answered.ask.key_collision && on.key === answered.ask.key))
-  ) {
-    return seat.turn?.started_at
-      ? { state: "acting", at: seat.turn.started_at }
-      : { state: "acting" };
+  // ANY OF ITS TURNS ON THE ASKED ITEM: a seat may run several at once.
+  const acting = turnsOf(seat).find((t) => {
+    const on = t.work_item;
+    return (
+      !!on &&
+      (on.id === answered.ask.id || (!answered.ask.key_collision && on.key === answered.ask.key))
+    );
+  });
+  if (seat.activity === "working" && acting) {
+    return acting.started_at ? { state: "acting", at: acting.started_at } : { state: "acting" };
   }
   if (seat.paused) return { state: "held", reason: "paused" };
   if (seat.activity === "stopped") return { state: "held", reason: "stopped" };

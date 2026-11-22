@@ -26,167 +26,61 @@ import (
 	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
-// A RELAUNCH THAT CONTINUES ITS TURN'S SESSION, and what its run is told.
-//
-// Every relaunch of a turn — a reviewer's send-back, a round a person's answer,
-// a loss or a replaced sign-in carries on — continues the session of the job it
-// follows where its launcher says it can ([SessionProber]): that job's kept
-// capture, in whatever box the relaunch gets (internal/sandbox, restore.go).
-// So its brief is the session's NEXT MESSAGE, built from what the session
-// lacks:
-//
-//   - what carries it on: the review and the engine's correction with the task
-//     restated and the rules its earlier rounds' calls are read by
-//     ([prompts.BuildContinuedRound]), the answer to its question — and, of a
-//     held call, what became of it, which tells the call a person approved
-//     once: no list below tells it again ([carried.tellsHeld]) — or what cut it
-//     off;
-//   - that it may end mid-call where cut off when saved ([prompts.SavedSession]);
-//   - where it may lack its job's brief ([SessionBasis.MayLackBrief]), what
-//     that brief opened with: the leads it told, told again in words of their
-//     own ([Runner.leadsAgain]), as messages it may already show;
-//   - that a successful submission of the round the session holds, which no
-//     list below tells, is none of the round's, whether or not a call is
-//     listed ([prompts.AfterSave.HeldSubmission]): it was made before the
-//     relaunch whose brief continues the session, as every call a brief tells
-//     was;
-//   - every call its run made through the seat's tools that the session may not
-//     have been answered when it was saved — every call the round's log took
-//     after the read its save point is ([SessionBasis.Through]), so after the
-//     point it was saved at or in flight then, whatever the log dropped below
-//     it, but, of a session cut off whose archive a reading read
-//     ([HoldingsAsker]), those it finds the session holding — with the call's
-//     outcome, held to the prior-work ledger's budgets;
-//     and how many more the log took after it and dropped from its middle,
-//     which it keeps only as a tally, with that tally ([prompts.CalledAfter]) —
-//     of a session cut off, whose save point is the newest its launch was known
-//     to hold rather than where it ends, as calls it may already show, each
-//     shown both there and in the session one call; and a successful
-//     submission among them told as none of the round's, every call a brief
-//     tells having been made before the relaunch it opens;
-//   - every call the log took after its job was replaced, whatever its number
-//     ([ledger.Call.Late]), which no brief of the round had told when the log
-//     took it and the session of the job that made it may not hold ([heldAt]),
-//     and every call nobody waited for by the time it returned
-//     ([BridgedCall.Abandoned]) — given up on by its harness, or outliving its
-//     job's session — whose outcome that session holds none of, told to every
-//     continuation built after it landed but one of a session that took it
-//     ([heldByTelling]): apart, under words of their own whatever the
-//     session's end — one may be shown with no outcome, or told by an earlier
-//     message, and it is one call — and a submission
-//     among them told as none of the round's; and among them every call still
-//     in flight as the round was read ([Resume.Unfinished]), whose outcome is
-//     unknown, which those words say may have taken effect;
-//   - every note a person sent the turn that the session has not read — read
-//     after it was saved, by the run that went on in it or by a review, which
-//     is never the session's — or, of a session cut off, every note the turn
-//     has read, as notes it may already show ([prompts.NotesReadAgain]): it is
-//     not known to hold its job's brief, which told the notes the session it
-//     continued lacked; or, of one whose notes stop before a read no
-//     session of its job holds — an unanswered take's, or one before its last
-//     restart — every note past that, as notes it may already show
-//     ([Runner.firstUnheld]); and then the ones this brief is the first to
-//     read — under the same header, up to the last of them the run's bridge
-//     served a harness, which may have delivered it unconfirmed, and any read
-//     one so served likewise ([Runner.toldNotes]).
-//
-// AND IN TWO FORMS, because which box the launch gets is the launch's to learn:
-// one for the box the session was last worked in, and one for any other, which
-// adds what a new box changes — a fresh checkout, and a repository of
-// Gitlet to check out again ([prompts.BoxReplaced]). The fresh
-// brief, for a run whose box cannot take the session up after all, rides
-// beside them.
-//
-// A ROUND CARRIED ON IN THE JOB'S OWN BOX — a person's answer, a replaced
-// sign-in, where the launch takes up no kept capture of the job
-// ([AgentRunRequest.Continue]) — continues the copy of the session that box
-// holds, which no capture describes: its brief is what carries it on and then
-// the notes it has not read. Where the job's harness is not known to have ended
-// its own run ([Resume.HarnessEnd]), that copy may lack calls the harness made
-// and had answered without writing them, and is not known to hold the job's
-// brief ([Runner.copyMayLackBrief]): so between the two it is told that it was
-// cut off, or may have been, the leads its job's brief told
-// ([Runner.leadsAgain]), every call of the round, as a session cut off is told
-// its calls ([Runner.inPlaceAfter]), and every note the turn has read, as it is
-// told its notes ([Runner.inPlaceNotes]).
-// Where it did, the copy holds every call its job made and every call its job's
-// brief told — every call of the round but the ones the log took late, a fresh
-// run's brief carrying the round on telling every one of them
-// ([prompts.CalledBefore]) — but a read that brief counted without listing it
-// ([Resume.Owed]), and is not known to hold a late one, nor the outcome of one
-// its harness gave up on ([heldAt]), which it shows with no outcome or a failed
-// one, nor that of one still in flight as the round was read
-// ([Resume.Unfinished]), which no record holds: it is told those and the reads
-// it holds only as a count, as a continuation of the round built after they
-// landed is told them, and before them that a successful submission among
-// the calls it holds is none of the round's
-// ([prompts.AfterSave.HeldSubmission]) — and every note from the first read no
-// session of its job holds on ([Runner.firstUnheld]), as notes it may already
-// show.
-//
-// A SESSION HOLDS WHAT ITS BRIEFS TOLD, NEVER WHAT THEIR BUDGETS LEFT OUT. A
-// brief tells a round's calls within the prior-work ledger's budgets, and the
-// reads past the ledger's cap it counts rather than lists
-// ([ledger.ShownCallGroups]): a session handed it holds those reads only as a
-// count. So each brief that tells the round's calls answers the reads it left
-// out ([Runner.calledAfter]), its launch records them on the job it opens
-// (sandbox.LaunchRecord.BriefOmitted), and the next brief to that job's copy,
-// or to a capture of it placed by its own read
-// (sandbox.SessionCapture.Omitted), tells them first, up to what the cap
-// leaves it, recording in turn what it left out: so a copy owes exactly the
-// reads its newest brief left out, each told by the next brief with room for
-// it. A brief that tells the round from its start, a fresh run's or a copy cut
-// off's, starts the account afresh. It ends with the round: a send-back opens a
-// new round, whose log restarts but for the calls its collection did not read,
-// carried late, and a closed round's reads past the cap are counted under the
-// ledger's rule for them, as every fresh brief's prior work counts them.
-//
-// AND A SESSION ITS HARNESS MAY HAND ITS MODEL AS A SUMMARY IS TOLD AS A CUT-OFF
-// ONE (firstrequest.go). Claude Code compacts a session before a request, a
-// resumed run's first among them, where its own count of it with the brief
-// reaches its threshold, and a session whose job restarted it after its brief
-// holds nothing before that restart but what it left: what any telling above
-// counts as held can then be gone. So each path decides one value, after its
-// tellings and its lead exist ([sessionHolds]), which every telling of the path
-// and its guard read: where it may be a summary, every call of the round from its
-// start, every lead its record keeps and every note the turn has read are told,
-// as messages it may already show, under words that never say it was cut off
-// where its record does not ([prompts.MayCompactSession]), and its guard arms no
-// skill.
-//
+// A RELAUNCH THAT CONTINUES ITS TURN'S SESSION (a send-back, a person's answer,
+// a loss, a replaced sign-in) continues the session of the job it follows where
+// its launcher says it can ([SessionProber]), from that job's kept capture in
+// whatever box the relaunch gets (internal/sandbox, restore.go). Its brief is
+// the session's NEXT MESSAGE, built from what it lacks: what carries it on
+// ([prompts.BuildContinuedRound], [carried.tellsHeld], [prompts.SavedSession]);
+// its job's leads where it may lack that brief ([Runner.leadsAgain]); every call
+// after the save point or in flight, within the ledger's budgets
+// ([prompts.CalledAfter]); late, abandoned and unfinished calls apart
+// ([ledger.Call.Late], [BridgedCall.Abandoned], [Resume.Unfinished]); that a held
+// submission is none of the round's ([prompts.AfterSave.HeldSubmission]); the
+// notes it has not read ([Runner.toldNotes]).
+
+// IN TWO FORMS, because the box is the launch's to learn: for the box the
+// session was last worked in, and for any other, adding what a new box changes
+// ([prompts.BoxReplaced]). The fresh brief rides beside them for a run whose
+// box cannot take the session up. A round carried on in the JOB'S OWN BOX
+// (no kept capture, [AgentRunRequest.Continue]) continues the copy that box
+// holds: where its harness is not known to have ended its run
+// ([Resume.HarnessEnd]) it may lack calls and its job's brief
+// ([Runner.copyMayLackBrief]) and is told it was cut off with the leads, calls
+// and notes ([Runner.inPlaceAfter], [Runner.inPlaceNotes]); where it did, it is
+// told only what it cannot hold (late, abandoned, unfinished, owed reads).
+
+// A SESSION HOLDS WHAT ITS BRIEFS TOLD, NEVER WHAT THEIR BUDGETS LEFT OUT:
+// reads past the ledger's cap are counted, not listed ([ledger.ShownCallGroups]),
+// so each brief answers the reads it left out ([Runner.calledAfter]), its launch
+// records them (sandbox.LaunchRecord.BriefOmitted), and the next brief to that
+// copy or capture (sandbox.SessionCapture.Omitted) tells them first, up to the
+// cap. A brief telling the round from its start starts the account afresh; a
+// send-back's new round ends it.
+
+// A SESSION ITS HARNESS MAY HAND ITS MODEL AS A SUMMARY IS TOLD AS A CUT-OFF
+// ONE (firstrequest.go): Claude Code compacts before a request at a threshold,
+// so anything counted as held can be gone. Each path decides one value
+// ([sessionHolds]), once its tellings and lead exist, which every telling and
+// its guard read: where it may be a summary, every call, lead and note is told
+// as one it may show, under words that never say it was cut off where its
+// record does not ([prompts.MayCompactSession]), and its guard arms no skill.
+
 // THE RUN'S GUARD IS THE SESSION'S IT RUNS IN ([Runner.sessionDecided]): the
-// skills the launch state of the job it follows held and that job's own loads —
-// those the log took through the point its capture was saved at, by the same
-// test the calls after it are told by ([ownCalls], [heldAt]), where the launch
-// restores it, and all of them for the job's own copy in its box only where its
-// harness ended its own run, and never a late one nor one nobody waited for —
-// because the continued model has those bodies in front of it, and a skill a
-// call its harness gave up on loaded never reached it; none for a run that
-// starts a session of its
-// own. A session cut off is saved at the newest point its launch was known to
-// hold, so a skill it loaded after that point is not armed, nor is one its job
-// loaded where its own copy in its box is continued after its harness was cut
-// off: each is loaded again before a call it covers, the safe direction, since
-// its body may never have reached the session. Armed once the launch has
-// decided, before the run starts, and put right where the run's box finds as it
-// starts that it cannot take the session up after all and starts one of its
-// own: its box says so before the run's first call ([Runner.sessionStarted]),
-// and its job's record keeps what it said for every later rebuild of the guard
-// ([Resume.Continued]).
-//
-// A CONVERSATION'S NEXT TURN continues the session its last turn left: its first
-// launch the head its dispatch read, and a relaunch of a turn that has kept no
-// session of its own yet the one its first launch froze (internal/sandbox,
-// restore.go). That session is another turn's, in a box of its own, so its run
-// is told where this turn begins and what the new box changes — and, of a
-// session that turn went on past, that it was kept while the turn still worked
-// and what the turn did after is not in it, or of a lost turn's, that it may not
-// hold the last of what the turn did ([prompts.BuildNextTurn]) — then handed
-// the launch's own fresh brief whole —
-// the task, the turn's earlier rounds, notes and answers, and how the
-// conversation's earlier turns ended — none of which it read
-// ([Runner.baseSession]). ITS GUARD IS EMPTY: the skills that session loaded
-// were another turn's, set up anew for this one, which the lead says.
+// skills the job's launch state held and its own loads through the capture's
+// save point ([ownCalls], [heldAt]); for the job's own copy only where its
+// harness ended its run; never a late or abandoned call's (a skill loaded by a
+// call its harness gave up on never reached the model); none for a fresh
+// session. A cut-off session arms nothing loaded after its save point (loaded
+// again before a call it covers, the safe direction). The guard is put right if
+// the box cannot take the session up ([Runner.sessionStarted]); the job's
+// record keeps that ([Resume.Continued]).
+
+// A CONVERSATION'S NEXT TURN continues the session its last turn left (internal/sandbox,
+// restore.go): another turn's session in a box of its own, so its run is told
+// where this turn begins and what the new box changes ([prompts.BuildNextTurn]),
+// then handed the fresh brief whole ([Runner.baseSession]). ITS GUARD IS EMPTY:
+// its skills were another turn's.
 
 // sessionBasis asks the turn's launcher which kept session this relaunch
 // continues ([SessionProber]). A launcher that cannot say continues none.
@@ -199,61 +93,30 @@ func (r *Runner) sessionBasis(ctx context.Context) SessionBasis {
 }
 
 // keptSession is how a relaunch continues basis, nil where basis names no kept
-// session — all of it but what carries the session on, which the caller leads
-// it with ([keptBrief.led]): what came after the session was saved of round,
-// the calls of the round its job worked in, as surface reads them
-// ([Runner.calledAfter]) — but the call a person approved for each of
-// leadHeld, the held calls that lead tells what became of ([leadsHeld]), empty
-// for none — and the reads its job's brief counted without listing them
-// ([SessionBasis.Owed]); then every note it has not read — of a session cut
-// off, every note the turn has read, as notes it may already show, and the
-// ones fresh holds, the served among them told as notes it may already show
-// too ([Runner.toldNotes]), in the box it was last worked in, and in another
-// with what that changes. The engine's own words and the seat's, every foreign
-// word in them fenced or defused under the relaunching segment's token; branch
-// and the basis's home are the engine's record of the session, defused too.
-//
-// AND THE CALLS OF THE TURN'S CLOSED ROUNDS, history, that a told call could be
-// taken for, listed again where the brief tells them nowhere else
-// ([Runner.closedShown]): the session may show them as well as the round's.
-// And where holds says it may hold those rounds only in a summary's words
-// ([sessionHolds.closedSummarized]), that it may show calls of theirs no list
-// names, by the tools its told calls name ([Runner.otherCalls]).
-//
-// AND WHAT CARRIED ITS JOB ON, of a session that may lack its job's brief
-// ([SessionBasis.MayLackBrief]): a session cut off is no more known to hold its
-// job's brief than the copy a job's own box holds ([Runner.inPlaceAfter]), and
-// one that lacks it lacks the leads it opened with too (the turn's task where
-// the job continued the session its conversation's last turn left, a review
-// that sent the round back, an earlier answer), so it is told again the leads
-// that brief told ([Runner.leadsAgain]), to a run working in round current,
-// after the section that says it was cut off and before its calls, never ahead
-// of the lead of its own brief; and the call a person approved that a held lead
-// among them tells is in no list of the round's calls, as the lead's own is
-// not.
-//
-// AS HOLDS SAYS ([sessionHolds]): the record's cut-off word, a restart in the
-// capture's job, and whether its harness may compact it at its first request,
-// which tells every call of the round from its start, every lead the record
-// keeps and every note, never the cursor.
-//
-// AND AS READ SAYS, where it is not nil ([heldReading]): a reading of what the
-// cut-off session holds, asked of the calls holds tells, so the brief tells
-// none the reading finds the session holding, and tells under a subagent's
-// name each call the reading finds in that unreported subagent's thread
-// ([Runner.calledAfter]). Every other word is the one holds decides, the
-// cut-off section, the leads, the notes, a summary's words among them: a
-// reading thins only the calls.
-//
+// session: everything but the lead that carries it on (the caller leads it,
+// [keptBrief.led]). In the box it was last worked in and, in another, with what
+// that changes. The engine's and the seat's words, every foreign word fenced or
+// defused under the relaunching segment's token; branch and the basis's home
+// are the engine's record of the session, defused too.
+
+// It tells: the calls of round after the save ([Runner.calledAfter]), except the
+// call approved for each of leadHeld ([leadsHeld]), with the reads its job's
+// brief counted unlisted ([SessionBasis.Owed]); the closed rounds' calls a told
+// call could be taken for ([Runner.closedShown]) and, where holds says they may
+// sit in a summary ([sessionHolds.closedSummarized]), that it may show calls no
+// list names ([Runner.otherCalls]); where the session may lack its job's brief
+// ([SessionBasis.MayLackBrief]) the leads again ([Runner.leadsAgain]); then the
+// notes ([Runner.toldNotes]). holds ([sessionHolds]) decides the cut-off word,
+// a restart, and whether the harness may compact the session. A reading
+// ([heldReading]) only thins the calls.
+
 // BUILT BEFORE ITS LEAD, so before the relaunch asks the seat's budget for the
-// last time: telling the calls after the save rewrites a payload past its
-// budget with the seat's auxiliary model, charged to the same counters, and
-// that rewrite can be what fills the window, and so can telling the turn's
-// task again, with the prior-work ledger of the rounds its brief rendered;
-// while the lead of a round a person's answer carries on says what the call
-// they approved returned, and that call is made only once every check that
-// could refuse the relaunch has passed ([Runner.continueAgentRun]). Led after
-// the check, the brief costs nothing the check did not count.
+// last time: telling calls rewrites an over-budget payload with the seat's
+// auxiliary model, charged to the same counters, and can fill the window; the
+// lead of a round a person's answer carries on says what the approved call
+// returned, made only once every check that could refuse the relaunch has
+// passed ([Runner.continueAgentRun]). Led after the check, the brief costs
+// nothing the check did not count.
 func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roundCalls, current int,
 	leadHeld []toldHeld, history []ledger.Iteration, surface *tools.Surface, fresh []steer.Note,
 	branch string, holds sessionHolds, read *heldReading) *keptBrief {
@@ -265,24 +128,20 @@ func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roun
 	var after []string
 	switch {
 	case basis.WentOn:
-		// A SESSION SAVED WHILE ITS RUN STILL WORKED, told so, when, and that
-		// the run went on after it, in words that say too that it may end
-		// mid-call: always cut off, its calls, leads and notes are told as a
-		// cut-off session's are, and only its own words differ. Told only the
-		// cut-off words, its run took the session's end for where its work
-		// stopped.
+		// Saved while its run still worked: told so, when, and that the run
+		// went on after it and may end mid-call. Always cut off, so calls, leads
+		// and notes are told as a cut-off session's; told only the cut-off
+		// words, its run took the session's end for where its work stopped.
 		after = append(after, prompts.SavedSession(basis.CapturedAt))
 	case holds.cutOff:
 		after = append(after, prompts.InterruptedSession)
 	case holds.summarized():
-		// A SESSION ITS HARNESS MAY HAND ITS MODEL AS A SUMMARY, told why in
-		// words of its own, which never say it was cut off.
+		// May be a summary: told why, in words that never say it was cut off.
 		after = append(after, prompts.MayCompactSession)
 	}
-	// AND THE LEADS ITS JOB'S BRIEF TOLD, where the session may lack that
-	// brief, which a later brief to this one's session tells in turn; EVERY
-	// LEAD THE RECORD KEEPS where it may be a summary, which can have dropped
-	// every lead the session held.
+	// The leads its job's brief told, where the session may lack that brief;
+	// EVERY LEAD THE RECORD KEEPS where it may be a summary, which can have
+	// dropped every lead.
 	var again toldAgain
 	if holds.lacks() {
 		again = r.leadsAgain(ctx, history, current, b, holds.summarized())
@@ -290,29 +149,24 @@ func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roun
 			after = append(after, again.section)
 		}
 	}
-	// OF A SESSION CUT OFF, AS CALLS IT MAY ALREADY SHOW: its save point is the
-	// newest its launch is known to hold rather than where it ends
-	// (internal/sandbox's savepoint.go), so the calls after it may be in it;
-	// and of one that may be a summary, EVERY CALL OF THE ROUND FROM ITS START,
-	// a summary holding the calls at or below its save point in its own words
-	// alone. AND NEVER THE CALL A PERSON APPROVED THAT A LEAD OF ITS BRIEF
-	// TELLS (leadHeld, and every held lead told again). AND THE READS ITS JOB'S
-	// BRIEF COUNTED WITHOUT LISTING THEM (basis.Owed), which the session holds
-	// only as that count, but where it tells the round from its start.
-	//
-	// THE ONE PLACE THIS PATH'S CALLS ARE TOLD AS THOSE OF A SESSION THAT MAY
-	// LACK THEM, by one expression ([sessionHolds.keptCalls]), AND THE READING
-	// OF WHAT THE SESSION HOLDS HANDED BESIDE IT (read, asked of the calls that
-	// expression tells, [Runner.heldReading]): the telling tells none the
-	// reading holds. AND NEVER A CLOSED ROUND A TASK TOLD AGAIN RENDERS AS WORK
-	// ALREADY DONE, among the closed calls listed again: it tells them there.
+	// A cut-off session's calls are told as calls it may already show: its save
+	// point is the newest its launch is known to hold, not where it ends
+	// (internal/sandbox's savepoint.go). One that may be a summary is told EVERY
+	// CALL FROM THE ROUND'S START (a summary holds earlier calls in its own words
+	// alone). Never the call a person approved that a lead tells (leadHeld, and
+	// held leads told again), nor a closed round a re-told task renders as work
+	// done. The reads its job's brief counted without listing (basis.Owed) are
+	// held only as a count. This is the one place these calls are told as a
+	// possibly-lacking session's ([sessionHolds.keptCalls]), beside the reading
+	// of what it holds (read, [Runner.heldReading]): the telling tells none the
+	// reading holds.
 	from, owed, mayShow := holds.keptCalls(basis)
 	as := toldAs{mayShow: mayShow, leads: withHeld(leadHeld, again), rendered: history[:again.rendered],
 		summed: holds.closedSummarized(), read: read}
-	// AND A LATE CALL ITS SESSION TOOK, by the capture's cursor as stamped
-	// ([heldByTelling]), where the session lacks nothing it was told; and
-	// apart, the calls told to a box whose release the resume was not read
-	// in, which credit no telling a hook's step recorded ([UnheldTelling]).
+	// A late call its session took, by the capture's cursor ([heldByTelling]),
+	// where the session lacks nothing it was told; and apart, the calls told to a
+	// box whose release the resume was not read in, which credit no telling a
+	// hook's step recorded ([UnheldTelling]).
 	if !holds.lacks() {
 		as.point, as.lateOwed = &basis.NoteCursor, basis.LateOwed
 	}
@@ -326,29 +180,32 @@ func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roun
 	}
 	before := slices.Clone(after)
 	after = append(after, calls)
-	// THEN THE NOTES IT HAS NOT READ, past its cursor, and the ones fresh holds,
-	// a note the run's bridge served a harness among either told as one it may
-	// already show ([Runner.toldNotes]); of a session cut off,
-	// EVERY NOTE THE TURN HAS READ, as notes it may already show, as the copy a
-	// job's own box holds is told them ([Runner.inPlaceNotes]): it is not known
-	// to hold its job's brief, which told the notes the session it continued
-	// lacked, and no record says which those were (internal/sandbox's
-	// notesHeld states none it holds). AND OF ONE WHOSE NOTES STOP BEFORE A READ
-	// MARKED UNANSWERED OR RESTARTED, every note past that, as notes it may
-	// already show ([Runner.notesHeldBy]): the session lacks that note, and
-	// holds the answered ones after it.
+	// Then the notes it has not read past its cursor and the ones fresh holds,
+	// any a harness was served by the run's bridge told as one it may already
+	// show ([Runner.toldNotes]). A cut-off session is told EVERY NOTE THE TURN
+	// HAS READ (it may not hold its job's brief, which told notes no record says
+	// it holds; internal/sandbox's notesHeld), as [Runner.inPlaceNotes] does. One
+	// whose notes stop before a read marked unanswered or restarted is told every
+	// note past that ([Runner.notesHeldBy]).
+	// And the wakes it may not show past the same cursor ([Runner.toldWakes]).
 	var unheld []string
 	if holds.lacks() {
 		after = append(after, r.toldNotes(r.readsSince(0), true, fresh)...)
+		after = append(after, r.toldWakes(0, false)...)
 	} else {
 		held, unsure := r.notesHeldBy(basis.NoteCursor, false)
-		// AND, WHERE THE CURSOR COUNTS A READ AT A HOOK'S STEP OR A HOOK'S
-		// TELLING IS CREDITED, THE TELLING FOR A BOX WHOSE RELEASE THE RESUME
-		// WAS NOT READ IN, which holds no such read ([UnheldTelling]).
-		if strict, strictUnsure := r.notesHeldBy(basis.NoteCursor, true); strict < held || unheldCalls != calls {
+		wakes := r.toldWakes(held, false)
+		// And where the cursor counts a read at a hook's step or a hook's telling
+		// is credited, the telling for a box whose release the resume was not
+		// read in, which holds no such read ([UnheldTelling]).
+		strict, strictUnsure := r.notesHeldBy(basis.NoteCursor, true)
+		if strictWakes := r.toldWakes(strict, true); strict < held || unheldCalls != calls ||
+			!slices.Equal(strictWakes, wakes) {
 			unheld = append(append(before, unheldCalls), r.toldNotes(r.readsSince(strict), strictUnsure, fresh)...)
+			unheld = append(unheld, strictWakes...)
 		}
 		after = append(after, r.toldNotes(r.readsSince(held), unsure, fresh)...)
+		after = append(after, wakes...)
 	}
 	return &keptBrief{basis: basis, after: after, unheld: unheld, omitted: omitted, unheldOmitted: unheldOmitted,
 		told: again.refs, toldUnread: again.unread, readHeld: readHeld,
@@ -357,92 +214,56 @@ func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roun
 }
 
 // inPlaceAfter is what a relaunch carrying the round on in its job's own box
-// tells the session there between what carries it on and the notes the brief
-// is the first to read ([Continuation.Brief]), where the job's harness is not
-// known to have ended its own run ([Resume.HarnessEnd]): that the session was
-// cut off ([prompts.InterruptedCopy]) — that it may have been, where the job's
-// record says nothing of how its harness ended ([prompts.MayBeInterruptedCopy])
-// — said whether or not a call is listed; every call of the round
-// ([Runner.calledInPlace]), the ones the log took late apart under words of
-// their own — but the call a person approved that the answer carrying the
-// round on tells what became of ([carried.tellsHeld]), which that lead alone
-// tells. The notes follow it ([Runner.inPlaceNotes]).
+// tells the session there, between what carries it on and the notes
+// ([Continuation.Brief]). Where the harness is not known to have ended its own
+// run ([Resume.HarnessEnd]): that the session was cut off
+// ([prompts.InterruptedCopy]) or may have been ([prompts.MayBeInterruptedCopy]),
+// said whether or not a call is listed; every call of the round
+// ([Runner.calledInPlace]), the late ones apart under words of their own; but
+// not the call a person approved that the answer's lead tells
+// ([carried.tellsHeld]). The notes follow ([Runner.inPlaceNotes]).
+
+// WHERE THE HARNESS ENDED ITS OWN RUN, ONLY the late calls ([ledger.Call.Late]),
+// nobody-waited-for ones ([BridgedCall.Abandoned]: shown with no outcome or
+// failed though their effect happened) and in-flight ones ([Resume.Unfinished]),
+// none of whose outcomes the copy is known to hold ([heldAt] at a nil save
+// point), and the reads its brief counted unlisted ([Resume.Owed]), held only as
+// a count. Every other call was held ([prompts.CalledBefore]). Late calls are
+// told under their own words, a submission among them as none of the round's,
+// with how many the log dropped ([Runner.calledAfter]). Owed reads come first,
+// up to what the read cap leaves after the late calls, and the reads this brief
+// counts unlisted (omitted) are recorded, so the copy owes exactly what its
+// newest brief left out.
+
+// FIRST, THAT A SUCCESSFUL SUBMISSION AMONG THE CALLS IT HOLDS DOES NOT STAND
+// ([prompts.AfterSave.HeldSubmission]): a job may submit then ask, its harness
+// ending its own run, and the cut its answer's opening takes falls past every
+// call ([sinceAnswer]). Told nothing, the copy, handed only the answer's lead,
+// read its transcript's submission as done and ended without its own.
 //
-// WHERE THE HARNESS ENDED ITS OWN RUN, ONLY THE CALLS THE LOG TOOK LATE
-// ([ledger.Call.Late]), THE ONES NOBODY WAITED FOR ([BridgedCall.Abandoned])
-// AND THE ONES STILL IN FLIGHT AS THE ROUND WAS READ ([Resume.Unfinished]),
-// whose outcomes that copy is not known to hold ([heldAt] at a nil save point,
-// and no point holds a call in flight), AND THE READS ITS JOB'S BRIEF COUNTED
-// WITHOUT LISTING THEM ([Resume.Owed]), which it holds only as that count: it
-// holds every other call its job made and every call its job's brief told,
-// every other call of the round, the brief of a fresh run carrying the round on
-// telling them all ([prompts.CalledBefore]). A call nobody waited for is one
-// the job made whose harness gave up on it — a
-// harness ends its own run once every call it made is answered or given up on —
-// or whose session ended under it: the copy shows it with no outcome or a
-// failed one, its harness having been told it timed out, though it ran on and
-// its effect happened, and it is told under the late calls' words, which hold
-// of it. A late call is one the log took after
-// the job that made it was replaced — after this job's opening, or after the
-// read this job's brief was built from, which its opening marks — so no brief
-// had told it when the log took it, and that job's session may not hold its
-// outcome. This copy may show one with no outcome or as interrupted, where
-// it continued that job's session; it may hold one as told, where its job's
-// own brief told it, or as made, where it is its job's own call, carried only
-// once the job was replaced after its append failed. Told under their own
-// words all the same, a submission among them as none of the round's, with how
-// many the log dropped from its middle ([Runner.calledAfter]), so a copy whose
-// harness ended its own run is told a late call as every other continuation of
-// the round is, rather than holding it at no save point and never being told
-// it. An owed read is told first, under words of its own, up to what the read
-// cap leaves after the late calls, and the reads this brief counts without
-// listing in turn are answered (omitted), so the copy owes exactly the reads
-// its newest brief left out, each told by the next brief with room for it.
+// holds ([sessionHolds]) overrides this for a copy that may be cut off, whose
+// job restarted it after its brief, or whose harness may compact it: it is told
+// as above, under the record's cut-off words or [prompts.MayCompactSession],
+// with every lead its record keeps.
+
+// Nil where nothing is left to tell or carry continues no copy in that box (a
+// lost job's, a round lost twice, or a gone box, [carried.boxKept]), so its calls
+// are not rewritten or charged for a brief nothing sends.
 //
-// AND, FIRST, THAT A SUCCESSFUL SUBMISSION AMONG THE CALLS IT HOLDS DOES NOT
-// STAND ([prompts.AfterSave.HeldSubmission]), whether or not a call follows. A
-// job may submit and then ask, its harness ending its own run as the ask tells
-// it to, and the cut its answer's opening takes falls past every call it made
-// ([sinceAnswer]), so the submission its copy shows answered "submitted" is
-// none of the round's. Told nothing of it, that copy was handed the answer's
-// lead alone, which says to finish the task as it asks, and a run that read its
-// transcript's submission as done ended without its own.
+// Where the copy may lack the job's brief ([Runner.copyMayLackBrief]) it lacks
+// the leads too, so it is told them again ([Runner.leadsAgain]) after the
+// cut-off section and before the calls, as in [Runner.keptSession]; told is
+// which, for the job's record to mark.
+
+// BUILT BEFORE ITS LEAD, as [Runner.keptSession] is: call rewrites by the
+// seat's auxiliary model are charged to counters the relaunch checks once every
+// brief's rewrites are spent. A launch continuing the copy sends all of it, so
+// its floor grows with it: beside the copy's context where its newest capture or
+// record measured it ([Continuation.ContextTokens]), else the static floor
+// (internal/engine's continuedFloor).
 //
-// AS HOLDS SAYS ([sessionHolds]): a copy whose record says it may be cut off,
-// whose job restarted it after its brief, or whose harness may compact it at its
-// first request is told as above, under the record's cut-off words where it says
-// so and the words of a session that may be a summary where it does not
-// ([prompts.MayCompactSession]), every lead its record keeps where it may be one.
-//
-// Nil where nothing is left to tell — and where carry continues no copy in
-// that box at all: a lost job's, never continued in place; a round lost a
-// second time, which continues nothing; and one whose box is gone
-// ([carried.boxKept]), which no launch continues in, so its calls are neither
-// rewritten nor charged for a brief nothing would send.
-//
-// AND WHAT CARRIED THE JOB ON, where the copy may lack the job's brief
-// ([Runner.copyMayLackBrief]): a copy that lacks it lacks the leads it opened
-// with too (the turn's task where the job continued the session its
-// conversation's last turn left, a review that sent the round back, an earlier
-// answer), so it is told again the leads that brief told ([Runner.leadsAgain]),
-// to a run working in round current, after the section that says it was cut off
-// and before every call of the round, as a kept session cut off is
-// ([Runner.keptSession]); and the call a person approved that a held lead among
-// them tells is in no list, as the answer's own is not. told is which they
-// were, for the job's record to mark told by this brief in turn.
-//
-// BUILT BEFORE ITS LEAD, as the kept session's brief is ([Runner.keptSession]):
-// telling the calls rewrites a payload past its budget with the seat's
-// auxiliary model, charged to the same counters, which the relaunch asks the
-// seat's budget for once every brief's rewrites are spent. A launch that
-// continues the copy sends all of it, so the floor its launch is held to grows
-// with it: beside the copy's context where its job's newest capture or its
-// job's record measured it ([Continuation.ContextTokens]), and beside the
-// static floor where neither did (internal/engine's continuedFloor).
-//
-// omitted is the reads of the round the brief counts without listing them
-// ([Runner.calledAfter]), which the launch records on the job it opens, for
-// the next brief to that copy to tell.
+// omitted is the reads the brief counts without listing ([Runner.calledAfter]),
+// recorded on the job it opens for the next brief to that copy.
 func (r *Runner) inPlaceAfter(ctx context.Context, carry carried, round roundCalls, current int,
 	history []ledger.Iteration, surface *tools.Surface, holds sessionHolds) (after []string, omitted omittedReads,
 	told toldAgain) {
@@ -454,8 +275,7 @@ func (r *Runner) inPlaceAfter(ctx context.Context, carry carried, round roundCal
 	end, leadHeld := r.cfg.Resume.HarnessEnd, leadsHeld(carry, current)
 	var called prompts.AfterSave
 	if !holds.lacks() {
-		// AND EVERY TELLING ON THE ROW, which the copy of the job whose
-		// harness ended its own run holds ([heldByTelling]).
+		// And every telling on the row, which the copy holds ([heldByTelling]).
 		called, omitted, _ = r.calledAfter(ctx, round, nil, r.cfg.Resume.Owed, history, toldAs{leads: leadHeld,
 			summed: holds.closedSummarized(), point: new(math.MaxInt), lateOwed: r.cfg.Resume.LateOwed}, surface, b)
 		if calls := prompts.CalledAfter(called); calls != "" {
@@ -469,8 +289,7 @@ func (r *Runner) inPlaceAfter(ctx context.Context, carry carried, round roundCal
 	case holds.cutOff:
 		after = []string{prompts.MayBeInterruptedCopy}
 	default:
-		// A COPY WHOSE HARNESS ENDED ITS OWN RUN, which its harness may hand
-		// its model as a summary: told why in words of its own.
+		// Harness ended its run; the copy may be a summary: told why.
 		after = []string{prompts.MayCompactSession}
 	}
 	again := r.leadsAgain(ctx, history, current, b, holds.summarized())
@@ -485,16 +304,14 @@ func (r *Runner) inPlaceAfter(ctx context.Context, carry carried, round roundCal
 }
 
 // leadsHeld is every held call carry's lead tells what became of
-// ([carried.tellsHeld]), which no list of the round's calls in a brief it leads
-// tells ([Runner.calledAfter]): none for a carry whose lead tells none. Held in
-// round, the round the carry carries on, which is the round its lead's call
-// was held in.
+// ([carried.tellsHeld]), which no list in a brief it leads tells
+// ([Runner.calledAfter]); round is the round the carry carries on, where its
+// call was held.
 //
-// BY ITS TOOL, WHATEVER ITS ID: a lead whose held call names no id (a record
-// that kept none) still tells a call of its tool, which a told call of that
-// tool could be taken for ([partners.couldBeTakenFor]); and an empty id picks
-// out no call to leave out of the lists, since only a call approved for a held
-// one carries an id ([BridgedCall.HeldID]).
+// BY ITS TOOL, WHATEVER ITS ID: a lead whose held call names no id still tells
+// a call of its tool, which a told call of that tool could be taken for
+// ([partners.couldBeTakenFor]); an empty id picks out no call to leave out of
+// the lists, since only an approved call carries one ([BridgedCall.HeldID]).
 func leadsHeld(carry carried, round int) []toldHeld {
 	if id, tool := carry.tellsHeld(); tool != "" {
 		return []toldHeld{{id: id, tool: tool, round: round}}
@@ -503,41 +320,76 @@ func leadsHeld(carry carried, round int) []toldHeld {
 }
 
 // inPlaceNotes is what a relaunch carrying the round on in its job's own box
-// tells the session there of the notes a person sent the turn, after
-// [Runner.inPlaceAfter] ([Continuation.Brief]): where the job's harness is not
-// known to have ended its own run, every note the turn has read, as notes it
-// may already show — a copy not known to hold its job's brief lacks the notes
-// that brief told, and no record says which those were; where it did, every
-// note from the first read no session of its job holds on, the same way — an
-// unanswered take's or one before its last restart, which the copy lacks, and
-// it holds the reads after it and every one before ([Runner.firstUnheld]);
-// and then the notes fresh holds, the ones the brief is the first to read, the
-// served among them told as notes it may already show ([Runner.toldNotes]).
+// tells the session there of the notes a person sent, after
+// [Runner.inPlaceAfter] ([Continuation.Brief]): where the harness is not known
+// to have ended its run, every note read as ones it may already show (no record
+// says which its brief's notes were); where it did, every note from the first
+// read no session of its job holds ([Runner.firstUnheld]); then the notes fresh
+// holds, those served by the bridge as ones it may show ([Runner.toldNotes]).
 //
 // THE NOTES FRESH HOLDS ALONE where carry continues no copy in that box, as
-// [Runner.inPlaceAfter] tells nothing there; and every note the turn has read
-// wherever holds says the copy may lack them ([sessionHolds.lacks]).
+// [Runner.inPlaceAfter] tells nothing there; every note read wherever holds says
+// the copy may lack them ([sessionHolds.lacks]).
 func (r *Runner) inPlaceNotes(carry carried, fresh []steer.Note, holds sessionHolds) []string {
 	switch {
 	case carry.session() == "" || !carry.boxKept() || !carry.keeps():
 		return renderedNotes(fresh)
 	case holds.lacks():
-		return r.toldNotes(r.readsSince(0), true, fresh)
+		return append(r.toldNotes(r.readsSince(0), true, fresh), r.toldWakes(0, false)...)
 	}
+	// And the wakes the copy may not show: each served and never shown read,
+	// and each read past the first read no session of its job holds.
 	if first := r.firstUnheld(false); first > 0 {
-		return r.toldNotes(r.readsSince(first-1), true, fresh)
+		return append(r.toldNotes(r.readsSince(first-1), true, fresh), r.toldWakes(first-1, false)...)
 	}
-	return r.toldNotes(nil, false, fresh)
+	return append(r.toldNotes(nil, false, fresh), r.toldWakes(math.MaxInt, false)...)
+}
+
+// toldWakes is the section telling a continued session again the wakes it may
+// not show ([Resume.Wakes], [prompts.WakesReadAgain]): each served and never
+// shown read, each read past cursor or at no known place, and each read where
+// no session of its job is known to hold it, before its last restart or,
+// where hooks, at a hook's step. Nil where none is.
+func (r *Runner) toldWakes(cursor int, hooks bool) []string {
+	if r.cfg.Resume == nil {
+		return nil
+	}
+	b := r.cfg.Turn.Context.FenceBoundary()
+	var told []string
+	for _, w := range r.cfg.Resume.Wakes {
+		if !w.Read || w.Place == 0 || w.Place > cursor || w.Restarted || (hooks && w.Hook) {
+			told = append(told, prompts.WakeMessage(w.Wake, b, r.cfg.Turn.ConversationKey))
+		}
+	}
+	if section := prompts.WakesReadAgain(told); section != "" {
+		return []string{section}
+	}
+	return nil
+}
+
+// wakesRead is every wake a step of the turn's run read ([Resume.Wakes]),
+// rendered, for a run that starts a session of its own: the turn worked each,
+// so its delivery starts no turn of its own, and a session lacking it would
+// lose it. One served and never read is left to a turn of its own, untold.
+func (r *Runner) wakesRead() []string {
+	if r.cfg.Resume == nil {
+		return nil
+	}
+	b := r.cfg.Turn.Context.FenceBoundary()
+	var out []string
+	for _, w := range r.cfg.Resume.Wakes {
+		if w.Read {
+			out = append(out, prompts.WakeMessage(w.Wake, b, r.cfg.Turn.ConversationKey))
+		}
+	}
+	return out
 }
 
 // keptBrief is a relaunch's continuation of a kept session but for its lead
-// ([Runner.keptSession]): the session it continues, what the brief tells it
-// after the lead, the reads of the round it counted without listing them
-// ([Runner.calledAfter]), the leads of its job's brief it told again, or was
-// to and could not read ([Runner.leadsAgain]), the calls a reading of what the
-// session holds found it holding, which it tells nowhere (readHeld, nil where
-// it was told by no reading), and what a box other than the one it was last
-// worked in changes.
+// ([Runner.keptSession]): the session, what the brief tells after the lead, the
+// reads counted without listing ([Runner.calledAfter]), the leads told again or
+// that could not be read ([Runner.leadsAgain]), the calls a reading found the
+// session holding (readHeld, told nowhere), and what another box changes.
 type keptBrief struct {
 	basis SessionBasis
 	after []string
@@ -552,11 +404,10 @@ type keptBrief struct {
 	newBox        string
 }
 
-// led is k's continuation led by lead, what carries the session on, which the
-// launch keeps as own, the leads it opens with of its own ([ownLeads]): the
-// brief for the box the session was last worked in, and the one for any other,
-// which tell the same calls and the same leads, and so leave out the same
-// reads. Nil for a nil k, a basis that names no kept session.
+// led is k's continuation led by lead (what carries the session on), with own,
+// the leads the launch opens with ([ownLeads]): the brief for the box last
+// worked in and for any other tell the same calls and leads, so leave out the
+// same reads. Nil for a nil k.
 func (k *keptBrief) led(lead string, own []sandbox.Lead) *SessionContinuation {
 	if k == nil {
 		return nil
@@ -580,27 +431,25 @@ func (k *keptBrief) led(lead string, own []sandbox.Lead) *SessionContinuation {
 
 // heldReading is a reading of what a cut-off kept session holds
 // ([HoldingsAsker]), as a telling is told by it ([Runner.calledAfter]): the
-// harness that wrote the session, whose key a call is named by ([callKey]),
-// the reading, and the outcome of each call it was asked about as the ask
-// carried it, by that key.
+// key the session's harness names a call by ([callKey]), the reading, and each
+// asked call's outcome as the ask carried it, by that key.
 type heldReading struct {
-	harness  string
+	keying   sandbox.CallKeying
 	holdings sandbox.SessionHoldings
 	asked    map[string]sandbox.LoggedCall
 }
 
 // holds is what read says of call ([sandbox.SessionHoldings.Holds]): whether
-// the session holds its logged result, and where it does not, the subagent
-// whose heading tells it, "" for the main list. Neither for a nil read, nor
-// for a call it was not asked about, which is told as the telling tells it
-// with no reading: BY THE ONE KEY THE ASK WAS MADE BY ([callKey]), which the
-// ask held to one call of the round alone, so a call another call's key names
-// is never answered for it.
+// the session holds its logged result, else the subagent whose heading tells it
+// ("" for the main list). Neither for a nil read or a call it was not asked
+// about, told as with no reading: BY THE ONE KEY THE ASK WAS MADE BY
+// ([callKey]), held to one call of the round, so no call is answered by
+// another's key.
 func (read *heldReading) holds(call BridgedCall) (held bool, under string) {
 	if read == nil {
 		return false, ""
 	}
-	key, ok := callKey(read.harness, call)
+	key, ok := callKey(read.keying, call)
 	logged, asked := read.asked[key]
 	if !ok || !asked {
 		return false, ""
@@ -620,22 +469,20 @@ func (read *heldReading) thins() bool {
 	return false
 }
 
-// callKey is the key a reading of a session harness wrote names call by, and
-// whether call carries one this build asks a reading by: THE ONE PLACE a
-// call's key and its validity are decided, per harness, which the ask's rules
-// and the telling's lookup both read ([Runner.holdingsAsk], [heldReading]).
-// Claude Code's is the id its harness gave the call ([BridgedCall.CallID]),
-// valid where the log keeps it (sandbox.ValidCallID). OpenCode's, whose calls
-// carry no id, is the call's place in its round's log ([BridgedCall.Appended])
-// in decimal, valid beside an admission place ([BridgedCall.Seq]) and never
-// for a call a person's approval held, which the reader refuses to be asked
-// and whose part answers with the held answer (the executor's
-// openCodeHoldingsRead names the releases read). Every other harness's: none.
-func callKey(harness string, call BridgedCall) (string, bool) {
-	switch harness {
-	case sandbox.ClaudeCodeHarness:
+// callKey is the key a reading of a session harness names call by, and whether
+// call carries one this build asks by: THE ONE PLACE a call's key and validity
+// are decided per keying ([sandbox.CallKeying]), read by the ask and the
+// telling's lookup ([Runner.holdingsAsk], [heldReading]). By call id: the
+// call's id ([BridgedCall.CallID]), valid where the log keeps it
+// (sandbox.ValidCallID). By log place: the call's place in its round's log
+// ([BridgedCall.Appended]) in decimal, valid beside an admission place
+// ([BridgedCall.Seq]) and never for a call a person's approval held, which the
+// reader refuses and whose part answers with the held answer. Any other: none.
+func callKey(keying sandbox.CallKeying, call BridgedCall) (string, bool) {
+	switch keying {
+	case sandbox.CallKeyingByCallID:
 		return call.CallID, sandbox.ValidCallID(call.CallID)
-	case sandbox.OpenCodeHarness:
+	case sandbox.CallKeyingByLogPlace:
 		return strconv.Itoa(call.Appended), call.Appended > 0 && call.Seq > 0 && !call.Held
 	}
 	return "", false
@@ -643,23 +490,22 @@ func callKey(harness string, call BridgedCall) (string, bool) {
 
 // holdingsAsk is what a relaunch asks a reading of what the session harness
 // wrote holds of round ([sandbox.HoldingsAsk]), told as from and owed say
-// ([sessionHolds.keptCalls]), for release, the session's writer; and each
-// asked call by its key ([callKey]), which the telling looks the reading up
-// by. Its calls are every listed call but those a person approved (made on
-// the engine host, held by no session), by key, outcome, place, tool, digest,
-// a held call marked, and, for OpenCode alone, the arguments' key
-// ([openCodeArgsKey]); its Unlisted the calls in flight and the log's dropped
-// tally, never the late dropped count, which that tally holds already. A call
-// is asked where its telling would list it and the reader can name it: none
-// a skipped meta-tool's, held at the point ([heldAt]), or late or abandoned,
-// which a telling decides ([heldByTelling]), and its key valid and carried by
-// no other call of round.
-func (r *Runner) holdingsAsk(harness string, round roundCalls, from *int, owed []int,
+// ([sessionHolds.keptCalls]), for release, the session's writer; and each asked
+// call by its key ([callKey]). Its calls are every listed call but those a
+// person approved (made on the engine host, held by no session), by key,
+// outcome, place, tool, digest, a held call marked, and for OpenCode alone the
+// arguments' key where calls are keyed by log place ([argsKey]); its Unlisted the in-flight calls and the
+// log's dropped tally, never the late dropped count, which that tally holds. A
+// call is asked where its telling would list it and the reader can name it:
+// none a skipped meta-tool's, held at the point ([heldAt]), or late or
+// abandoned ([heldByTelling]); its key valid and carried by no other call of
+// round.
+func (r *Runner) holdingsAsk(keying sandbox.CallKeying, round roundCalls, from *int, owed []int,
 	release string) (sandbox.HoldingsAsk, map[string]sandbox.LoggedCall) {
 
 	carried := map[string]int{}
 	for _, call := range slices.Concat(round.bridged, round.unfinished) {
-		if key, ok := callKey(harness, call); ok {
+		if key, ok := callKey(keying, call); ok {
 			carried[key]++
 		}
 	}
@@ -668,12 +514,12 @@ func (r *Runner) holdingsAsk(harness string, round roundCalls, from *int, owed [
 		if call.Approved {
 			continue
 		}
-		key, valid := callKey(harness, call)
+		key, valid := callKey(keying, call)
 		logged := sandbox.LoggedCall{ID: key, Failed: call.Failed, Output: call.Result,
 			OutputBytes: call.OutputBytes, Appended: call.Appended, Seq: call.Seq, Name: call.Name,
 			Digest: call.Digest, Held: call.Held}
-		if harness == sandbox.OpenCodeHarness {
-			logged.Args = openCodeArgsKey(call)
+		if keying == sandbox.CallKeyingByLogPlace {
+			logged.Args = argsKey(call)
 		}
 		logged.Asked = !slices.Contains(r.cfg.SkipNames, call.Name) && !heldAt(call, from, owed) &&
 			!call.Late && !call.Abandoned && valid && carried[key] == 1
@@ -693,12 +539,12 @@ func (r *Runner) holdingsAsk(harness string, round roundCalls, from *int, owed [
 	return ask, asked
 }
 
-// openCodeArgsKey is call's arguments' key as its log keeps their text
-// ([BridgedCall.ArgsText]), Whole only where that text states them: kept
-// whole, not withheld, read by the bridge, decoding as toolargs.Key decodes
-// it, and not "" unless the call carries a digest, since "" is the empty
-// object only for an admitted call.
-func openCodeArgsKey(call BridgedCall) sandbox.ArgsKey {
+// argsKey is call's arguments' key from its logged text
+// ([BridgedCall.ArgsText]), Whole only where that text states them: kept whole,
+// not withheld, read by the bridge, decoding as toolargs.Key does, and not ""
+// unless the call carries a digest ("" is the empty object only for an admitted
+// call).
+func argsKey(call BridgedCall) sandbox.ArgsKey {
 	if call.ArgsBytes != 0 || call.Withheld || call.ArgsUnread || call.ArgsText == "" && call.Digest == "" {
 		return sandbox.ArgsKey{}
 	}
@@ -711,13 +557,12 @@ func openCodeArgsKey(call BridgedCall) sandbox.ArgsKey {
 
 // heldReading asks the turn's launcher which of round's calls the cut-off kept
 // session basis names holds ([HoldingsAsker]), told as holds says
-// ([sessionHolds.keptCalls]): the reading a telling by it is told by, nil
-// where the launcher reads none, no call is asked ([Runner.holdingsAsk]: the
-// reader refuses an ask of none), or the reading holds and moves no asked call
-// ([heldReading.thins]). The launcher logs what it read, and why it read
-// nothing, never an error: every failure is no reading, and the relaunch is
-// handed the tellings with none, which tell every call after the save point.
-// Its caller asks it once per path ([Runner.keptTellings]).
+// ([sessionHolds.keptCalls]). Nil where the launcher reads none, no call is
+// asked (the reader refuses an empty ask, [Runner.holdingsAsk]), or the reading
+// moves no asked call ([heldReading.thins]). The launcher logs what it read and
+// why it read nothing, never an error: every failure is no reading, and the
+// tellings with none tell every call after the save point. Asked once per path
+// ([Runner.keptTellings]).
 func (r *Runner) heldReading(ctx context.Context, basis SessionBasis, round roundCalls,
 	holds sessionHolds) *heldReading {
 
@@ -726,11 +571,11 @@ func (r *Runner) heldReading(ctx context.Context, basis SessionBasis, round roun
 		return nil
 	}
 	from, owed, _ := holds.keptCalls(basis)
-	ask, asked := r.holdingsAsk(basis.Harness, round, from, owed, basis.Release)
+	ask, asked := r.holdingsAsk(basis.Traits[basis.Harness].CallKeying, round, from, owed, basis.Release)
 	if len(asked) == 0 {
 		return nil
 	}
-	read := &heldReading{harness: basis.Harness, holdings: asker.SessionHoldings(ctx, basis, ask), asked: asked}
+	read := &heldReading{keying: basis.Traits[basis.Harness].CallKeying, holdings: asker.SessionHoldings(ctx, basis, ask), asked: asked}
 	if !read.thins() {
 		return nil
 	}
@@ -738,21 +583,16 @@ func (r *Runner) heldReading(ctx context.Context, basis SessionBasis, round roun
 }
 
 // baseSession is how a launch continues the session its conversation's last
-// turn left, nil where basis names none: the lead that says where this turn
-// begins and what the new box changes ([prompts.BuildNextTurn]) — in a
-// schedule's words where the turn's conversation is a schedule's, the session
-// its last fire's ([notify.Scheduled]) — and, where that turn went on past the
-// session or was lost, that the session ends where it was kept rather than
-// where the turn did; then fresh, the launch's own fresh brief or reseed,
-// whole (of a round carried on, the reseed, which tells every call of the round
-// so far, [prompts.CalledBefore]); and told, what that brief left out of them,
-// which the base's brief leaves out too, being it whole, and the leads the
-// base's brief opens with of its own: the turn's task, which the session lacks
-// until it reads this brief, and what carries a round on beside it (leads.go).
-// Only in a box of
-// its own, so its same-box brief is empty. The base's turn and home are the
-// engine's record of that session, defused under the launching segment's
-// token.
+// turn left, nil where basis names none: the lead saying where this turn begins
+// and what the new box changes ([prompts.BuildNextTurn]; a schedule's words
+// where the conversation is one's, [notify.Scheduled]), and where that turn went
+// on past the session or was lost, that it ends where it was kept; then fresh,
+// the launch's own brief or reseed, whole ([prompts.CalledBefore]); and told,
+// what that brief left out, with the leads it opens with of its own: the task,
+// which the session lacks until it reads this brief, and what carries a round on
+// (leads.go). Only in a box of its own, so the same-box brief is empty. The
+// base's turn and home are the engine's record, defused under the launching
+// segment's token.
 func (r *Runner) baseSession(basis SessionBasis, fresh string, told sandbox.BriefTold) *SessionContinuation {
 	if !basis.ContinuesBase() {
 		return nil
@@ -769,14 +609,12 @@ func (r *Runner) baseSession(basis SessionBasis, fresh string, told sandbox.Brie
 	return &SessionContinuation{Basis: basis, Replaced: lead + "\n\n" + strings.TrimSpace(fresh), Told: told}
 }
 
-// namingKeptSession is brief, a run's fresh brief, naming the kept session
-// basis read that the run does not continue where it starts a session of its
-// own ([prompts.KeptSession]): where the probe read one (KeptTurn) and the
-// run's surface carries the tool that reads it — a sentence sending a run to a
-// tool its surface lacks is one it cannot follow — and brief itself elsewhere.
-// The turn is the engine's record, defused under the launching segment's
-// token; why the launch continues none is the log's, never the brief's
-// ([prompts.KeptSession] says why).
+// namingKeptSession is a run's fresh brief naming the kept session the probe
+// read (KeptTurn) that the run does not continue ([prompts.KeptSession]), only
+// where the surface carries the tool that reads it (a sentence sending a run to
+// a missing tool cannot be followed); else brief itself. The turn is the
+// engine's record, defused under the launching segment's token; why the launch
+// continues none is the log's, never the brief's.
 func (r *Runner) namingKeptSession(brief prompts.Prompt, basis SessionBasis,
 	surface *tools.Surface) prompts.Prompt {
 
@@ -788,11 +626,9 @@ func (r *Runner) namingKeptSession(brief prompts.Prompt, basis SessionBasis,
 		basis.KeptTurn == r.cfg.Turn.RunID, notify.Scheduled(r.cfg.Turn.ConversationKey)))
 }
 
-// checkoutName is the checkout the executor's surface offers, the tool that
-// checks a repository of Gitlet out, "" where it offers
-// none: a run continuing its session in a new box that can check those
-// repositories out is told it must again, since the box holds none of them
-// ([prompts.BoxReplaced], [prompts.BuildNextTurn]).
+// checkoutName is the tool the executor's surface offers to check a Gitlet
+// repository out, "" if none: a run continuing in a new box is told it must
+// again, since the box holds none ([prompts.BoxReplaced], [prompts.BuildNextTurn]).
 func (r *Runner) checkoutName() string {
 	if r.cfg.Checkout == nil {
 		return ""
@@ -800,249 +636,171 @@ func (r *Runner) checkoutName() string {
 	return r.cfg.Checkout.Name()
 }
 
-// calledAfter is what a session saved at through — its save point, how many of
-// round's calls its run's log had taken at the read the capture was placed by
-// ([SessionBasis.Through]) — is not known to have been answered of round:
-// every call the log still lists that the session does not hold ([heldAt]),
-// in the order the bridge admitted them — the ones it took after that read,
-// with how many more it took after the read and dropped from its middle and
-// the round's tally of every call it dropped ([droppedAfterSave]); and, apart,
-// the ones it took late ([ledger.Call.Late]), the ones nobody waited for
-// ([BridgedCall.Abandoned]) and the ones it still held in flight as the round
-// was read (round.unfinished, [Resume.Unfinished]), with how many such it
-// dropped from its middle ([prompts.AfterSave.LateDropped]), never one in
-// flight.
+// calledAfter is what a session saved at through (how many of round's calls the
+// log had taken at the read the capture was placed by, [SessionBasis.Through])
+// is not known to have been answered: every call the log still lists that the
+// session does not hold ([heldAt]), in bridge admission order, with how many
+// more the log took after that read and dropped from its middle and the round's
+// tally of every dropped call ([droppedAfterSave]); and, apart, the late
+// ([ledger.Call.Late]), abandoned ([BridgedCall.Abandoned]) and still
+// in-flight calls (round.unfinished, [Resume.Unfinished]), with how many late
+// ones were dropped ([prompts.AfterSave.LateDropped]), never one in flight.
+
+// A NIL through is the job's own copy in its box whose harness ended its own
+// run, as [heldAt] reads it: it holds every call its job made or its brief told
+// but the late ones and the reads that brief counted without listing (owed) and
+// the outcome of each but an abandoned one, so it is told the late ones no
+// telling credits ([heldByTelling]), the in-flight ones and the owed reads,
+// with the round's tally, and first that a successful submission among the
+// rest does not stand. A through of zero tells every call: a fresh run's
+// ([prompts.CalledBefore]) and a cut-off copy's ([Runner.calledInPlace]).
+
+// as is how the brief tells them ([toldAs]). as.mayShow says calls after the
+// point are told as ones the session may already show
+// ([prompts.AfterSave.Interrupted], set only here): the record says it was or
+// may have been cut off, or it may be a summary ([sessionHolds.keptCalls]).
+// history is the turn's closed rounds, whose calls the session may show too.
 //
-// A NIL through is the job's own copy of its session in its box whose harness
-// ended its own run, as [heldAt] reads it: it holds every call its job made and
-// every one its job's brief told — every call of the round but the late ones,
-// listed or dropped, and the reads that brief counted without listing them
-// (owed, below) — and the outcome of each but one nobody waited for, so it is
-// told the late ones no telling credits ([heldByTelling]), the ones still in
-// flight, whose outcome no record holds, and the owed reads, and no others,
-// listed and dropped, with the round's tally, and first that a
-// successful submission among the rest, which it holds, does not stand
-// (below). A through of zero tells every call of the round: a fresh run's
-// ([prompts.CalledBefore]), and a copy cut off ([Runner.calledInPlace]).
-//
-// as is how the brief tells them ([toldAs]). as.mayShow says the calls after
-// the point are told as calls the session may already show
-// ([prompts.AfterSave.Interrupted], set here and nowhere else): a session whose
-// record says it was, or may have been, cut off, or one that may be a summary,
-// as its path's telling decides ([sessionHolds.keptCalls]). history is the
-// turn's closed rounds, whose calls the session may show beside the round's
-// (below).
-//
-// A DROPPED LATE CALL IS COUNTED UNDER THE LATE CALLS' WORDS, WHATEVER THE
-// POINT: it keeps no mark and no number, so no save point can be read against
-// it, and counted under the words of calls after a save it would read as one
-// the session's own run made after it was saved, which no late call is. One
-// past the point is counted among the calls dropped after it as well, by its
-// number ([droppedAfterSave]): an over-count, never an under-count.
-//
-// A LATE CALL IS TOLD APART, under words of its own whatever the session's end
-// ([prompts.AfterSave.Late]): it finished only after the run that made it was
-// replaced, so the session may show it with no outcome or an interrupted one,
-// and an earlier message may have told it, a brief or the item that handed it
-// to the job working as it landed — so neither the words for calls the session
-// lacks nor those for a session cut off are true of it. SO IS A CALL NOBODY
-// WAITED FOR, under the same words, which hold of it: it finished only after
-// its harness gave up on it or its session ended, so the session shows it with
-// no outcome or a failed one, or as its item told it. And a successful
-// `submit_work` among them is told as no submission of the round
-// ([prompts.AfterSave.LateSubmission]): the round's is the one a run carrying
-// it on makes — a late one the collection never takes ([sinceAnswer]), and
-// one nobody waited for its own run was told failed, which the run's own,
-// replayed after it, stands over.
-//
+// A DROPPED LATE CALL IS COUNTED UNDER THE LATE CALLS' WORDS WHATEVER THE
+// POINT: it keeps no mark or number to read a save point against, and counted
+// as a call after a save it would read as the session's own run's. One past the
+// point is also counted in the calls dropped after it ([droppedAfterSave]): an
+// over-count, never an under-count.
+
+// A LATE CALL OR ONE NOBODY WAITED FOR IS TOLD APART under words of its own
+// whatever the session's end ([prompts.AfterSave.Late]): it finished only after
+// its run was replaced, gave up on or ended, so the session may show it with no
+// outcome, interrupted or failed, or an earlier message may have told it, and
+// neither the words for calls the session lacks nor for a cut-off session are
+// true of it. A successful `submit_work` among them is told as no submission of
+// the round ([prompts.AfterSave.LateSubmission]): the round's is the one a run
+// carrying it on makes (a late one the collection never takes, [sinceAnswer]).
+
 // A SUCCESSFUL `submit_work` AMONG THE OTHER CALLS IS TOLD AS NONE OF THE
-// ROUND'S TOO ([prompts.AfterSave.EarlierSubmission]), in words of its own: a
-// brief tells only calls made before the relaunch it opens, and none of those
-// is the round's submission. The collection takes one only from the calls
-// after the round's last answer ([sinceAnswer]), and an asking job's own
-// calls, one it made before its question among them, fall below the cut its
-// answer's opening takes (internal/sandbox's BridgeLog.opened); a lost round,
-// or one refused on a replaced sign-in or by its provider in a session it
-// continued, whose calls since that answer hold one is collected on it, never
-// carried on ([Resume.carriedRound]), so one told here was made before an
-// answer; and a send-back's continuation can tell the submission its review
-// sent back. Listed as `→ success` and nothing more, it read as the round's: a
-// run carrying the round on could take it for done, end without its own and be
-// rescued as incomplete.
-//
-// AND ONE THE SESSION HOLDS IS SAID NOT TO STAND, FIRST AND WHETHER OR NOT A
+// ROUND'S TOO ([prompts.AfterSave.EarlierSubmission]): a brief tells only calls
+// made before the relaunch it opens. The collection takes a submission only
+// from calls after the round's last answer ([sinceAnswer]); an asking job's own
+// calls fall below the cut its answer's opening takes (internal/sandbox's
+// BridgeLog.opened), a lost or refused-sign-in round collects on one rather
+// than carrying on ([Resume.carriedRound]), and a send-back's continuation can
+// tell the submission its review sent back. Listed as `→ success`, a run
+// carrying the round on could take it for done and be rescued as incomplete.
+
+// ONE THE SESSION HOLDS IS SAID NOT TO STAND TOO, FIRST AND WHETHER OR NOT A
 // CALL IS LISTED ([prompts.AfterSave.HeldSubmission]): a successful
-// `submit_work` the point holds ([heldAt]) is in no list, yet it was made before
-// the relaunch as surely as a listed one, and stands no more. A session saved
-// past its job's submission showed it answered "submitted" and nothing more,
-// and so did the copy in the job's own box whose harness ended its own run, at
-// a nil point: the copy of a job that submitted and then asked was handed the
-// answer's lead alone, and a run that took its transcript's submission for
-// done ended without its own. Only the round's calls set it, as only they are
-// read here, so a session that also holds an earlier turn's submission, the
-// session its conversation's last turn left having been continued, is told
-// nothing of that one. A late call and one nobody waited for are never held,
-// and a submission among them is told as above.
-//
+// `submit_work` the point holds ([heldAt]) is in no list yet was made before the
+// relaunch, so a session saved past it, or the copy at a nil point, shows it
+// answered "submitted" and a run taking that for done would end without its
+// own. Only the round's calls set it: an earlier turn's submission, held by
+// the session its conversation's last turn left, is told nothing of. A late or
+// abandoned call is never held.
+
 // NEVER THE CALL A PERSON APPROVED THAT THE BRIEF'S LEAD TELLS. as.leads is
-// every held call the brief's leads tell what became of ([carried.tellsHeld],
-// [leadsHeld], [withHeld]), empty where they tell none, and the call made for each
-// ([BridgedCall.HeldID]) is in no list. A later attempt at an answer, the
-// first's relaunch refused after it made the call, reads that call in the
-// round's log, placed after every call the log had taken (internal/sandbox's
-// withApproved), so past the save point of every capture taken before it was
-// made — one placed after it holds it, and lists it nowhere: listed beside the
-// lead that tells what it returned, it was told twice, the second time as a
-// call of its own. A call an earlier answer of the round approved is told as
-// any call is, since no lead of this relaunch tells it.
-//
-// THE LISTS AS THE PRIOR-WORK LEDGER RENDERS A ROUND, AND HELD TO ITS BUDGETS
-// ([ledger.Format]), fitted together: the meta-tools it skips left out, an
-// argument value or a failed call's error past its budget rewritten by the
-// seat's auxiliary model first, as [Runner.priorWork] fits the ledger, and the
-// reads past the ledger's cap counted rather than listed — read as the
-// surface's positively read-only tools, the delivery gate's reading. Verbatim,
-// a session saved early in a long round was handed every call after it whole,
-// each up to the 16 KiB a call's record keeps. And defused under b: its
-// arguments are a model's, and a failed call's error is whatever the tool
-// said.
-//
-// AND THE READS AN EARLIER BRIEF TO THE SESSION COUNTED WITHOUT LISTING THEM
-// (owed: their places in the round's log, [Resume.Owed], [SessionBasis.Owed]),
-// apart, in a section of their own ([prompts.AfterSave.Owed]). The session
-// holds such a read only as that brief's count, so it is held at no point
-// ([heldAt]) and told here, by the next brief with room for it. A session holds
-// what its briefs TOLD, never what their budgets left out: a copy whose harness
-// ended its own run, and a capture placed by its own read, would otherwise be
-// read as holding every read its job's brief counted past the ledger's cap, and
-// never be told one. How many of them the round's log has since dropped from
-// its middle is counted ([prompts.AfterSave.OwedDropped]): an owed place the
-// log no longer lists keeps nothing to tell it by.
-//
-// ONE READ CAP FOR EVERY LIST ([ledger.FormatCallGroups]), never one each: they
-// are one round's calls, told in one brief, and capped apart they would be
-// told several times the reads the cap allows a round. It is SPENT LATE FIRST,
-// THEN EACH SUBAGENT'S CALLS A READING TELLS UNDER ITS NAME (below), THEN THE
-// CALLS AFTER THE POINT, THEN OWED, THEN THE CALLS LISTED AGAIN (below),
-// whatever order the brief tells them in. A subagent's calls follow the late
-// ones because the session surely lacks them too: the reading found them in
-// the thread of a subagent whose report the session does not hold, so a read
-// among them left out is an outcome it surely lacks, where a call after the
-// save may be one it shows. No telling credits the session a late call told
-// here: it shows the call with no outcome, as still running, as interrupted,
-// as failed, not at all, or as an item no verdict confirmed, so a late read
-// left out leaves an outcome it likely lacks, where a call after the save may
-// be one it shows. And the late calls are few, only those that outlived their
-// run or were in flight at the read, so told first they leave the calls after
-// the save most of the cap, where a long round's calls after the save, told
-// first, could leave out every late read. The owed reads are the session's
-// already as a count, so they take what the cap leaves, and what they cannot
-// take is owed again. The calls listed again take what is left after that:
-// the session may show each of them, the closed rounds' as much as the
-// round's, so a read among them left out is one it may show already. A read's
-// line carries nothing the read returned, so a read listed and a read counted
-// are alike one the session may run again. The fit is over the lists
-// together, which names exactly what the one cap shows.
-//
-// AND IT ANSWERS WHICH READS IT LEFT OUT (omitted), by their places in the
-// round's log: the reads of the calls after the point, of each subagent's and
-// of the owed ones that the one cap counted without listing, read off the
-// render's own walk
-// ([ledger.ShownCallGroups], [leftOut]) and never off a rule of this package's,
-// so what the launch records its brief left out ([sandbox.BriefTold]) is what
-// the brief counted. Never one listed again, nor one with no place, which no
-// record can name; and a late call apart ([omittedReads], [heldByTelling]).
-//
-// AND A CALL THE SESSION MAY SHOW THAT A TOLD CALL COULD BE TAKEN FOR IS
-// LISTED AGAIN ([prompts.AfterSave.Shown]), under words that say the session
-// may show it and that the told one could be taken for it and is a call of its
-// own, made as well. The words over the calls after a point the session may
-// already show, and over the late calls, say a call shown both in the session
-// and in the list is ONE call, made once: so where a call the session may show
-// and a told call name one tool with arguments neither call's line tells apart
-// ([readAlike]: value by value as each line shows it, a value either line
-// shows as a piece, or a record left out, alike whatever it was), a model that
-// saw the one could take the told one for it and lose it, re-issuing nothing
-// or reading it as a call that never ran. That is reachable wherever a point
-// holds calls beside a late one (a capture whose harness ended its own run,
-// placed by its own read; a capture cut off that another build stamped; the
-// copy whose harness ended its own run, which holds every call but the late
-// ones), and wherever the turn has closed rounds, which a session that
-// continued through them holds, on every harness.
-//
-// The held side, in the order it is listed: first the calls of the turn's
-// closed rounds that the brief tells nowhere else ([Runner.closedShown]), each
-// line ending with the note that it was made in an earlier round
-// ([prompts.EarlierRoundNote]), which says where in the session it may be;
-// then every call of the round held at the point ([heldAt]) or by the
-// reading (as.read), never a skipped meta-tool's, the call a person approved
-// that a lead tells, which no list holds, nor a call the log dropped, which
-// keeps no arguments to compare. A call of the round carries no note: on a
-// send-back it is a call of the round just sent back, of which "an earlier
-// round" is not true. The told side is every late call, every call a reading
-// tells under a subagent's name, and the calls after the point where
-// as.mayShow; never the owed reads, whose words say an earlier message counted them, and never a
-// list under words that say its calls are not in the session, where no call
-// is shown twice. Fitted, capped and defused with the other lists, each
-// rendered only where it is not empty, since an empty list renders as
-// "(none)"; the calls listed again only where the cap leaves them a call to
-// list, never as a count of reads alone.
-//
-// AND A TOLD CALL ANOTHER CALL OF THE BRIEF COULD BE TAKEN FOR IS MARKED AS A
-// CALL OF ITS OWN ([Runner.notes], [prompts.ToldApartNote]), its line ending
-// with a note that says so. Listing again answers a call the session may
-// show; a call the same message tells is in front of the model already, and
-// listed again it would be told twice. Its partners: a shown call of another
-// told list (the late calls, each subagent's, the calls after the point) that
-// reads alike it (both are marked); a held call a lead of the
-// brief tells what became of, of its tool, since that call and the one a
-// person approved for it read alike every call of their tool, but never a
-// held call of the lead's own round and tool, whose fate the lead tells
-// ([partners.couldBeTakenFor]); and the work already done the brief renders
-// (as.rendered: a fresh brief's prior work, a task told again's rounds), each
-// shown line that reads alike it and each tally that names its tool or no
-// tool ([Runner.partnersOf]). The marks are computed on every path, the run of
-// its own included, whose late calls' words say each is ONE call and whose
-// brief renders every closed round as work already done. Never on two calls of
-// one list, never on or against the owed reads, never against a call the cap
-// leaves out, and never on a call listed again.
-//
-// AND A READING OF WHAT A SESSION CUT OFF HOLDS (as.read, [heldReading]),
-// asked of the calls this telling would tell ([Runner.heldReading]), WHICH
-// TELLS NONE THE READING FINDS THE SESSION HOLDING: such a call is held, as
-// one at the point is, so a successful `submit_work` among them is said not
-// to stand ([prompts.AfterSave.HeldSubmission]) and it joins the held side of
-// the calls listed again; and answered (readHeld), for the guard of a launch
-// that hands this telling ([Runner.sessionDecided]). A call the reading finds
-// in the thread of a subagent the session holds no report of is told under
-// that subagent's heading ([prompts.AfterSave.Subagents]), one group per
-// subagent in the order of its first told call, a successful `submit_work`
-// among them said not to stand under it, in words of their own that claim
-// nothing of the session; its name is the reading's, the box's words, every
-// run of whitespace one space, cut to [ledger.ValueLimit] runes and defused,
-// and its agent id defused too. NO CAP OF THEIR OWN, deliberately: their calls
-// are the round's listed calls, each told once wherever it lands, their reads
-// under the one read cap, a heading per subagent the reader names (at most
-// 1,024, each description at most 1 KiB, cut here), and a brief told by the
-// reading that its first request or the launch's floor cannot carry is
-// dropped alone, the telling without it handed instead. The calls after the
-// point are headed by words true of a list a reading thinned
-// ([prompts.AfterSave.Read]). A late call, an abandoned one, one in flight, a
-// skipped meta-tool's and the call a person approved are decided before any
-// reading, as ever.
-//
-// AND, BESIDE WORDS THAT SAY A TOLD CALL MAY BE SHOWN TWICE, WHAT THE SESSION
-// MAY SHOW THAT NO LIST NAMES ([Runner.otherCalls], [prompts.AfterSave.Other]):
-// calls of the conversation's earlier turns, of the turn's earlier rounds where
-// the session may hold them only in a summary's words (as.summed), of this
-// turn that the record no longer lists one by one, and of workers under a
-// delegation, each by the tools the told calls name, in a section before every
-// list that says none of them is a listed call. The engine holds none of them
-// as a line to list again, so it says they may be shown and that a told call
-// alike one of them is a call of its own. Told only where the late section
-// prints, or the calls after the point are told as calls the session may
-// already show, and never on a run of its own: no other words say a call may
-// be shown twice, and a run of its own has no session above.
+// every held call the leads tell what became of ([carried.tellsHeld],
+// [leadsHeld], [withHeld]), and the call made for each ([BridgedCall.HeldID])
+// is in no list. A later attempt at an answer, the first's relaunch refused
+// after it made the call, reads it placed after every call the log had taken
+// (internal/sandbox's withApproved), so past the save point of every capture
+// before it: one placed after holds it, and listed beside the lead it would be
+// told twice. A call an earlier answer approved is told as any call is.
+
+// THE LISTS ARE RENDERED AS THE PRIOR-WORK LEDGER RENDERS A ROUND, HELD TO ITS
+// BUDGETS ([ledger.Format]), fitted together: skipped meta-tools left out, an
+// over-budget argument value or failed call's error rewritten first by the
+// seat's auxiliary model ([Runner.priorWork]), reads past the cap counted, not
+// listed (the surface's positively read-only tools, the delivery gate's
+// reading). Verbatim, a session saved early in a long round was handed every
+// later call whole, up to the 16 KiB each record keeps. Defused under b:
+// arguments are a model's, and a failed call's error is whatever the tool said.
+
+// OWED reads (their places in the round's log, [Resume.Owed],
+// [SessionBasis.Owed]) are told apart ([prompts.AfterSave.Owed]): an earlier
+// brief counted them without listing, so the session holds them only as a
+// count, at no point ([heldAt]); without this a copy or a capture placed by its
+// own read would be read as holding every read past the ledger's cap and never
+// be told one. How many the log has dropped is counted
+// ([prompts.AfterSave.OwedDropped]): an owed place no longer listed keeps
+// nothing to tell it by.
+
+// ONE READ CAP FOR EVERY LIST ([ledger.FormatCallGroups]): they are one round's
+// calls in one brief, and capped apart would tell several times the reads the
+// cap allows. SPENT IN THIS ORDER whatever order they are told in: late, each
+// subagent's, after the point, owed, listed again. The session surely lacks the
+// outcome of a late or subagent's call, so a read left out there loses an
+// outcome where one after the save may be shown; late calls are few, so told
+// first they leave most of the cap to the calls after the save. Owed reads are
+// held already as a count, so they take what is left (what they cannot take is
+// owed again), and listed-again calls the remainder. A read's line carries
+// nothing it returned, so a listed and a counted read are alike one the session
+// may run again. The fit is over all lists together.
+
+// IT ANSWERS WHICH READS IT LEFT OUT (omitted), by their places in the round's
+// log: the reads of the calls after the point, of each subagent and of the owed
+// ones that the cap counted without listing, read off the render's own walk
+// ([ledger.ShownCallGroups], [leftOut]) never a rule of this package's, so what
+// the launch records ([sandbox.BriefTold]) is what the brief counted. Never one
+// listed again, nor one with no place; a late call apart ([omittedReads],
+// [heldByTelling]).
+
+// A CALL THE SESSION MAY SHOW THAT A TOLD CALL COULD BE TAKEN FOR IS LISTED
+// AGAIN ([prompts.AfterSave.Shown]), under words saying the told one is a call
+// of its own, made as well (the words over the calls after a point the session
+// may show, and over late calls, say a call shown in both is ONE call). Where a
+// held call and a told call name one tool with arguments neither line tells
+// apart ([readAlike]), a model seeing the one could take the told one for it and
+// lose it, or read it as a call that never ran. Reachable wherever a point holds
+// calls beside a late one (a capture whose harness ended its own run, placed by
+// its own read; a cut-off capture another build stamped; the copy whose harness
+// ended its own run), and wherever the turn has closed rounds, on every harness.
+
+// Held side, in order: the closed rounds' calls the brief tells nowhere else
+// ([Runner.closedShown]), each ending with [prompts.EarlierRoundNote]; then
+// every round call held at the point ([heldAt]) or by the reading (as.read),
+// never a skipped meta-tool's, a person-approved call a lead tells, or a call
+// the log dropped (no arguments to compare). A round call carries no note: on a
+// send-back "an earlier round" is untrue. Told side: every late call, every
+// call a reading tells under a subagent, and the calls after the point where
+// as.mayShow; never the owed reads (their words say an earlier message counted
+// them) nor a list whose words say its calls are not in the session. Each list
+// renders only where not empty ("(none)" otherwise), and the calls listed again
+// only where the cap leaves them a call, never as a count alone.
+
+// A TOLD CALL ANOTHER CALL OF THE BRIEF COULD BE TAKEN FOR IS MARKED AS A CALL
+// OF ITS OWN ([Runner.notes], [prompts.ToldApartNote]): a call the same message
+// tells is already in front of the model, so listing it again would tell it
+// twice. Partners: a shown call of another told list reading alike it (both
+// marked); a held call a lead tells what became of, of its tool, never a held
+// call of the lead's own round and tool ([partners.couldBeTakenFor]); and the
+// work already done the brief renders (as.rendered), each shown line reading
+// alike it and each tally naming its tool or none ([Runner.partnersOf]). Marks
+// are computed on every path, a run of its own included. Never on two calls of
+// one list, on or against the owed reads, against a call the cap leaves out, or
+// on a call listed again.
+
+// A READING OF WHAT A CUT-OFF SESSION HOLDS (as.read, [heldReading]), asked of
+// the calls this telling would tell ([Runner.heldReading]), TELLS NONE THE
+// READING FINDS HELD: such a call is held as one at the point is (a successful
+// `submit_work` among them is said not to stand, it joins the held side of the
+// calls listed again) and is answered (readHeld) for the guard
+// ([Runner.sessionDecided]). A call in the thread of a subagent whose report the
+// session lacks is told under that subagent's heading ([prompts.AfterSave.Subagents]),
+// one group per subagent in order of first told call, in words claiming nothing
+// of the session. NO CAP OF THEIR OWN, deliberately: their calls are the round's
+// listed calls under the one read cap, a heading per subagent (at most 1,024,
+// descriptions at most 1 KiB). Late, abandoned, in-flight, skipped and approved
+// calls are decided before any reading.
+
+// BESIDE WORDS THAT SAY A TOLD CALL MAY BE SHOWN TWICE, WHAT THE SESSION MAY SHOW
+// THAT NO LIST NAMES ([Runner.otherCalls], [prompts.AfterSave.Other]): calls of
+// the conversation's earlier turns, of earlier rounds where the session may hold
+// them only in a summary's words (as.summed), of this turn that the record no
+// longer lists one by one, and of workers under a delegation, each by the tools
+// the told calls name, in a section before every list saying none is a listed
+// call. The engine holds none as a line to list again, so it says they may be
+// shown and that a told call alike one is a call of its own. Told only where the
+// late section prints or the calls after the point are told as ones the session
+// may show, never on a run of its own: no other words say a call may be shown
+// twice, and it has no session above.
 func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int, owed []int,
 	history []ledger.Iteration, as toldAs, surface *tools.Surface, b provenance.Boundary) (prompts.AfterSave,
 	omittedReads, []BridgedCall) {
@@ -1060,14 +818,12 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 		if slices.Contains(r.cfg.SkipNames, call.Name) {
 			continue
 		}
-		// THE CALL A PERSON APPROVED THAT THE LEAD TELLS is told once, by the
-		// lead, wherever the point places it: never in a list, and never on
-		// the held side either. Held at the point, it is still no call the
-		// session shows (the engine made it on the host once its job's
-		// harness had ended its run on the ask), and withheld, so it reads
-		// alike every told call of its tool: on the held side it would be
-		// listed again, told a second time under words that say the session
-		// shows it.
+		// The approved call a lead tells is told once, by the lead, wherever
+		// the point places it: never in a list nor on the held side. The engine
+		// made it on the host after the harness ended its run, so the session
+		// never shows it, and it reads alike every told call of its tool: on the
+		// held side it would be told twice, the second under words saying the
+		// session shows it.
 		toldByLead := call.Approved && call.HeldID != "" &&
 			slices.ContainsFunc(as.leads, func(l toldHeld) bool { return l.id == call.HeldID })
 		if heldAt(call, through, owed) {
@@ -1080,8 +836,7 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 		if toldByLead {
 			continue
 		}
-		// A LATE CALL THE SESSION TOOK, by a telling it is credited
-		// ([heldByTelling]): held, as a call at the point is.
+		// A late call the session took by a credited telling ([heldByTelling]).
 		if heldByTelling(call, as.point, as.lateOwed, as.credited(r.tellings())) {
 			held = append(held, call)
 			out.HeldSubmission = out.HeldSubmission || (call.Name == SubmitWorkTool && !call.Failed)
@@ -1092,9 +847,8 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 			out.LateSubmission = out.LateSubmission || (call.Name == SubmitWorkTool && !call.Failed)
 			continue
 		}
-		// HELD BY THE READING, as a call at the point is; or TOLD UNDER THE
-		// SUBAGENT whose thread holds its records, where the session holds no
-		// report of that subagent.
+		// Held by the reading, or told under the subagent whose thread holds
+		// its records where the session holds no report of it.
 		if in, under := as.read.holds(call); in {
 			held, readHeld = append(held, call), append(readHeld, call)
 			out.HeldSubmission = out.HeldSubmission || (call.Name == SubmitWorkTool && !call.Failed)
@@ -1104,24 +858,21 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 			continue
 		}
 		if heldAt(call, through, nil) {
-			// HELD AT THE POINT, AND OWED: a read an earlier brief to the
-			// session counted without listing it.
+			// Held at the point and owed: counted by an earlier brief unlisted.
 			owe = append(owe, call)
 			continue
 		}
 		after = append(after, call)
 		out.EarlierSubmission = out.EarlierSubmission || (call.Name == SubmitWorkTool && !call.Failed)
 	}
-	// AND EVERY CALL WHOSE OUTCOME IS UNKNOWN ([Resume.Unfinished]), under the
-	// late calls' words, whatever the point: the log held it in flight when the
-	// round was read, so no save point holds what it did, and the session that
-	// made it may show it with no outcome or as still running, which those
-	// words say, or with the answer its harness was handed where the store
-	// refused its update. Its line says its outcome is unknown and that what it
-	// did may have taken effect ([UnfinishedNote]), and those words say no less:
-	// never that it finished, nor that a failed call did not take effect where
-	// its line says its outcome is unknown, so a run checks whether it did
-	// before making it again. Never a submission: it is failed.
+	// Every call whose outcome is unknown ([Resume.Unfinished]) goes under the
+	// late calls' words whatever the point: in flight when the round was read, so
+	// no save point holds what it did, and the session may show it with no
+	// outcome, as running, or with the answer its harness got where the store
+	// refused its update. Its line says the outcome is unknown and it may have
+	// taken effect ([UnfinishedNote]), never that it finished or that a failed
+	// call did not take effect, so a run checks before repeating it. Never a
+	// submission: it is failed.
 	for _, call := range inAdmissionOrder(round.unfinished) {
 		if !slices.Contains(r.cfg.SkipNames, call.Name) {
 			late = append(late, call)
@@ -1130,10 +881,9 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 	out.OwedDropped = owedGone(round, owed)
 	var (
 		omitted omittedReads
-		// told is the names of the told calls the render shows, and listed
-		// the closed rounds' calls the section of calls listed again shows:
-		// what the other calls the session may show are named by and kept
-		// apart from ([Runner.otherCalls]).
+		// told names the told calls the render shows, listed the closed
+		// rounds' calls listed again: what [Runner.otherCalls] names and keeps
+		// apart from.
 		told   []string
 		listed []ledger.Call
 	)
@@ -1143,9 +893,8 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 	}
 	if len(late)+underCalls+len(after)+len(owe) > 0 {
 		opts := ledger.Format(r.cfg.SkipNames, surface.Universe().KnownReads())
-		// LATE FIRST, THEN EACH SUBAGENT'S, THE CALLS AFTER THE POINT, OWED, AND
-		// THE CALLS LISTED AGAIN LAST: the order the one cap is spent in. The
-		// told groups (toldGroups) are the first of them, late through after.
+		// The order the one cap is spent in: late, each subagent's, after the
+		// point, owed, listed again. toldGroups are the first of them.
 		toldGroups := [][]BridgedCall{late}
 		for _, s := range subs {
 			toldGroups = append(toldGroups, s.calls)
@@ -1153,12 +902,10 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 		toldGroups = append(toldGroups, after)
 		afterAt := len(toldGroups) - 1
 		oweAt, againAt := afterAt+1, afterAt+2
-		// THE CALLS THE SESSION MAY SHOW THAT A TOLD CALL COULD BE TAKEN FOR,
-		// listed again: the told calls whose words leave open that the session
-		// shows them or a call like them are every late one, every one told
-		// under a subagent's name, and the calls after the point only where
-		// they are told as calls it may already show. The closed rounds'
-		// first, each line saying it was made in an earlier round.
+		// Listed again: calls the session may show that a told call could be
+		// taken for. Told calls whose words leave that open are every late one,
+		// every subagent's, and the calls after the point only where told as
+		// ones it may show. The closed rounds' first.
 		toldCalls := slices.Concat(toldGroups[:afterAt]...)
 		if as.mayShow {
 			toldCalls = slices.Concat(toldCalls, after)
@@ -1170,16 +917,13 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 		}
 		groups = append(groups, bridgedLedger(owe), again)
 		opts.Fitted = ledgerfit.Fit(ctx, r.cfg.Compact, ledger.CallPieces(slices.Concat(groups...), opts))
-		// THE NOTES AFTER THE FIT AND THE WALK, BEFORE THE RENDER: by the
-		// places the render shows ([ledger.ShownIndices]), so a note lands on
-		// the line of the call it names, and no call the cap leaves out is
-		// marked, or marks another.
+		// Notes come after the fit and walk, before the render, by the places
+		// shown ([ledger.ShownIndices]): a note lands on its call's line, and no
+		// call the cap leaves out is marked or marks another.
 		at := ledger.ShownIndices(groups, opts)
 		opts.Notes = r.notes(toldGroups, at, againAt, closedN, r.partnersOf(round.of, as), opts)
-		// NEVER A SUBAGENT'S: its section's words claim nothing of a call
-		// the session may show, saying only that the session holds no report
-		// of that subagent, so no call it tells could be lost to one the
-		// session shows, and its tools name no part of the other calls.
+		// Never a subagent's: its words claim nothing of a call the session may
+		// show, so none it tells could be lost to one the session shows.
 		told = shownNames(told, late, at[0])
 		if as.mayShow {
 			told = shownNames(told, after, at[afterAt])
@@ -1208,19 +952,16 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 			out.Owed = provenance.Neutralise(b, rendered[oweAt])
 		}
 		shown := ledger.ShownCallGroups(groups, opts)
-		// RENDERED ONLY WHERE THE CAP LEFT IT A CALL TO LIST: a section of
-		// calls listed again that lists none, its reads all counted as
-		// omitted, names no call a told one could be taken for, and the words
-		// over it would head a count. Nothing is lost by it: each is a read
-		// the session may show.
+		// Rendered only where the cap left it a call to list: a section listing
+		// none would head a count, and nothing is lost (each is a read the
+		// session may show).
 		if len(shown[againAt]) > 0 {
 			out.Shown = provenance.Neutralise(b, rendered[againAt])
 		}
-		// OWED BY THE NEXT BRIEF: the reads each subagent's group, the calls
-		// after the point and the owed ones left out, the session lacking
-		// every one of them; never one listed again, which the session may
-		// show. AND, APART, THE LATE CALLS LEFT OUT, which the next brief tells
-		// again and no telling is credited for ([omittedReads.late]).
+		// Owed by the next brief: reads left out of each subagent's group, the
+		// calls after the point and the owed ones, which the session lacks; never
+		// one listed again. Apart, the late calls left out, which the next brief
+		// tells again with no telling credited ([omittedReads.late]).
 		for g := 0; g <= oweAt; g++ {
 			group := owe
 			if g < oweAt {
@@ -1240,13 +981,11 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 	if out.Dropped > 0 || out.LateDropped > 0 || out.OwedDropped > 0 {
 		out.Tally = provenance.Neutralise(b, ledger.FormatElided(round.elided, r.cfg.SkipNames))
 	}
-	// THE CALLS THE SESSION MAY SHOW THAT NO LIST NAMES, only beside a section
-	// whose words say a told call may be shown twice (claims): the late
-	// section, listed or holding only a count of dropped calls, whose words
-	// say so whatever it lists, and the calls after the point where they are
-	// told as calls the session may already show. Never on a run of its own,
-	// which has no session above. Outside the lists' guard, so a late section
-	// of dropped calls alone carries it too.
+	// Calls the session may show that no list names go only beside a section
+	// whose words say a told call may be shown twice (claims): the late section,
+	// even one holding only a count of dropped calls, and the calls after the
+	// point told as ones it may show. Never on a run of its own (no session
+	// above). Outside the lists' guard, so a dropped-only late section carries it.
 	claims := len(late) > 0 || out.LateDropped > 0 || (as.mayShow && (len(after) > 0 || out.Dropped > 0))
 	if claims && !as.fresh {
 		out.Other = r.otherCalls(round, history, as, out, told, listed, b)
@@ -1255,16 +994,14 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 }
 
 // subagentCalls is the calls a reading tells under one subagent's name
-// ([Runner.calledAfter]): the subagent's agent id, as the reading names it,
-// and its calls in the order the bridge admitted them.
+// ([Runner.calledAfter]): its agent id and its calls in bridge admission order.
 type subagentCalls struct {
 	agent string
 	calls []BridgedCall
 }
 
-// underSubagent is subs with call told under agent: appended to that
-// subagent's group, or to a new one after every other where agent has none,
-// so the groups come in the order of each one's first told call.
+// underSubagent is subs with call told under agent, in a new group after the
+// others if it has none, so groups follow each one's first told call.
 func underSubagent(subs []subagentCalls, agent string, call BridgedCall) []subagentCalls {
 	if i := slices.IndexFunc(subs, func(s subagentCalls) bool { return s.agent == agent }); i >= 0 {
 		subs[i].calls = append(subs[i].calls, call)
@@ -1273,12 +1010,10 @@ func underSubagent(subs []subagentCalls, agent string, call BridgedCall) []subag
 	return append(subs, subagentCalls{agent: agent, calls: []BridgedCall{call}})
 }
 
-// subagentName is description, a subagent's as the reading read it off its
-// harness's record ([sandbox.SubagentThread.Description]), as a brief names
-// it: the box's words, so every run of whitespace one space, cut to
-// [ledger.ValueLimit] runes on a rune boundary as a call's value is, and
-// defused under b, so neither a newline nor a fence token of the turn's ever
-// reaches the brief from it.
+// subagentName is a subagent's description ([sandbox.SubagentThread.Description])
+// as a brief names it: the box's words, whitespace runs collapsed, cut to
+// [ledger.ValueLimit] runes as a call's value is, and defused under b so no
+// newline or fence token of the turn's reaches the brief.
 func subagentName(b provenance.Boundary, description string) string {
 	name := strings.Join(strings.Fields(description), " ")
 	if runes := []rune(name); len(runes) > ledger.ValueLimit {
@@ -1287,9 +1022,8 @@ func subagentName(b provenance.Boundary, description string) string {
 	return provenance.Neutralise(b, name)
 }
 
-// shownNames is names with the tool of each call of group at places at, the
-// calls of it a render shows ([ledger.ShownIndices]), that names does not yet
-// hold: the told calls' tools in the order they are first told.
+// shownNames is names plus the tool of each shown call of group (places at,
+// [ledger.ShownIndices]) not yet held, in order first told.
 func shownNames(names []string, group []BridgedCall, at []int) []string {
 	for _, i := range at {
 		if !slices.Contains(names, group[i].Name) {
@@ -1299,43 +1033,29 @@ func shownNames(names []string, group []BridgedCall, at []int) []string {
 	return names
 }
 
-// otherCalls is what the session above may show that no list of a brief
-// names ([prompts.OtherCalls]), as [Runner.calledAfter] tells round's calls as
-// as says, beside a section whose words say a told call may be shown twice.
-// told is the tools of the told calls the render shows, in the order first
-// told, and listed the closed rounds' calls listed again that it shows. A
-// part names only told tools, defused under b, and speaks of a count that
-// names no tool only where told is not empty: a call of a tool no told call
-// names is no call a told one could be taken for.
-//
-//   - THE CONVERSATION'S EARLIER TURNS, where the turn continued the session
-//     its conversation's last turn left ([Resume.Base]), written by the turn's
-//     first launch and kept by every relaunch: the session may hold those
-//     turns' calls, and the engine keeps none of them, an earlier turn's end
-//     carrying its outcome, never its calls. Nil Base means no session of the
-//     turn descends from an earlier turn's. By words alone, so whatever the
-//     told calls' tools.
-//   - THE TURN'S EARLIER ROUNDS, IN A SUMMARY'S WORDS, where the session may
-//     hold them only so (as.summed, [sessionHolds.closedSummarized]): the told
-//     tools of every closed round's calls that the section of calls listed
-//     again does not show, the rounds a task told again renders included,
-//     whose lines are above this section, and of every closed tally. A value
-//     of a line cannot be compared with a summary's words, so a call listed
-//     again where alike is no reason to leave the rest unsaid.
-//   - THE CALLS THE RECORD NO LONGER LISTS ONE BY ONE: the told tools of the
-//     round's dropped calls where some of them may be in the session
-//     ([droppedMayShow]), and, where the closed rounds are not said to be held
-//     only in a summary's words, of every closed tally; a tally keeps a tool
-//     and a count and no arguments, so any of its calls reads alike a told call
-//     of its tool.
-//   - THE CALLS WORKERS MADE UNDER A DELEGATION, the round's and every closed
-//     round's (roundCalls.absorbed, [ledger.Iteration.Absorbed]): the session
-//     holds them only in a worker's report, which is prose as a summary is,
-//     and none is ever in a told list.
-//
-// The entry of history standing for round.of is the round's own, its calls
-// and tallies the round's (a send-back's closed rounds hold it last), so it
-// is read nowhere here.
+// otherCalls is what the session above may show that no list of a brief names
+// ([prompts.OtherCalls]), beside a section whose words say a told call may be
+// shown twice ([Runner.calledAfter]). told is the tools of the told calls the
+// render shows, in order first told, and listed the closed rounds' calls listed
+// again that it shows. A part names only told tools, defused under b, and
+// speaks of a count naming no tool only where told is not empty: a call of a
+// tool no told call names is none a told one could be taken for.
+
+//   - THE CONVERSATION'S EARLIER TURNS ([Resume.Base]): the session may hold
+//     their calls, which the engine keeps none of. By words alone.
+//   - THE TURN'S EARLIER ROUNDS, IN A SUMMARY'S WORDS (as.summed,
+//     [sessionHolds.closedSummarized]): the told tools of every closed call the
+//     listed-again section does not show and of every closed tally. A line's
+//     value cannot be compared with a summary's words, so a call listed again
+//     is no reason to leave the rest unsaid.
+//   - THE CALLS THE RECORD NO LONGER LISTS: the told tools of the round's
+//     dropped calls where some may be shown ([droppedMayShow]) and, where closed
+//     rounds are not summary-only, of every closed tally (no arguments, so any
+//     of its calls reads alike a told call of its tool).
+//   - WORKERS' CALLS UNDER A DELEGATION (roundCalls.absorbed): a prose report.
+
+// The history entry standing for round.of is the round's own, so it is read
+// nowhere here.
 func (r *Runner) otherCalls(round roundCalls, history []ledger.Iteration, as toldAs,
 	out prompts.AfterSave, told []string, listed []ledger.Call, b provenance.Boundary) prompts.OtherCalls {
 
@@ -1351,10 +1071,9 @@ func (r *Runner) otherCalls(round roundCalls, history []ledger.Iteration, as tol
 	}
 	var closed, tallied, absorbed, dropped []string
 	var tallyUnnamed, absorbedUnnamed, droppedUnnamed bool
-	// A CLOSED CALL LISTED AGAIN IS NAMED BY NOTHING ELSE: by tool, a closed
-	// call stands for one listed where it is matched to one, so a tool is
-	// named exactly where more of its closed calls are listed nowhere than
-	// listed again.
+	// A closed call listed again is named by nothing else: by tool, it stands
+	// for one listed, so a tool is named exactly where more of its closed calls
+	// are listed nowhere than listed again.
 	listedOf := map[string]int{}
 	for _, call := range listed {
 		listedOf[call.Name]++
@@ -1403,52 +1122,45 @@ func talliedNames(names []string, unnamed bool, elided []ledger.Elided) ([]strin
 	return names, unnamed
 }
 
-// droppedMayShow reports whether the session may show some of the calls
-// round's log dropped from its middle, as [Runner.calledAfter] tells round's
-// calls as as says, out being what it told: never where it dropped none; and
-// else wherever the point is not known to hold them apart. Calls told as ones
-// the session may already show (as.mayShow) are past a point it may have
-// passed; a dropped late call (out.LateDropped) may be shown as any late call
-// may; and where the log dropped more than it dropped past the point
-// (out.Dropped), or lists a call with no number (an older build's append,
-// which [droppedAfterSave] cannot place and so may over-count by), some
-// dropped call may be at or below it. A NIL point, the copy that holds every
-// call of the round but the late ones, dropped or not, is the first of those
-// last: calledAfter counts nothing past it, so out.Dropped is zero. ONLY WHERE
-// NONE OF THAT HOLDS are they all past a point the session ends at: the log
-// this build numbers puts every dropped call past it ([droppedAfterSave]
-// exact), and the list's words say its calls are not in the session, so the
-// dropped ones are not either.
+// droppedMayShow reports whether the session may show some of the calls the
+// round's log dropped from its middle ([Runner.calledAfter], out being what it
+// told): never where it dropped none, else wherever the point is not known to
+// hold them apart. True when calls are told as ones the session may already
+// show (as.mayShow, past a point it may have passed), a late call was dropped
+// (out.LateDropped), or the log dropped more than it dropped past the point
+// (out.Dropped) or lists a call with no number (an older build's append, which
+// [droppedAfterSave] cannot place and may over-count by): some dropped call may
+// be at or below it. A NIL point (the copy holding every call but the late
+// ones) is the second kind: calledAfter counts nothing past it, so out.Dropped
+// is zero. ONLY WHERE NONE HOLDS are they all past a point the session ends at
+// ([droppedAfterSave] exact), and the list's words say its calls are not in it.
 func droppedMayShow(round roundCalls, as toldAs, out prompts.AfterSave) bool {
 	dropped := ledger.Count(round.elided)
 	return dropped > 0 && (as.mayShow || out.LateDropped > 0 || dropped > out.Dropped ||
 		slices.ContainsFunc(round.bridged, func(call BridgedCall) bool { return call.Appended == 0 }))
 }
 
-// standsFor reports whether entry, one of the turn's closed rounds, stands for
-// round of: is that round, or a span holding it ([doneFor]'s reading).
+// standsFor reports whether closed round entry is round of or a span holding it
+// ([doneFor]'s reading).
 func standsFor(entry ledger.Iteration, of int) bool {
 	return entry.Iteration <= of && of <= max(entry.Iteration, entry.Through)
 }
 
 // notes is the words each line of [Runner.calledAfter]'s groups ends with
-// ([ledger.FormatOptions.Notes]), at, the places of each group its render
-// shows ([ledger.ShownIndices]), in the order late, each subagent's, after,
-// owe, listed again, the last at againAt:
-//
-//   - A SHOWN CALL OF A TOLD GROUP (told, the groups' first: the late calls,
-//     each subagent's, then the calls after the point) ANOTHER CALL OF THE
-//     BRIEF COULD BE TAKEN FOR ends with [prompts.ToldApartNote]: where a
-//     shown call of another told group reads alike it ([readAlike];
-//     symmetric, so both are marked), or a partner could be taken for it
-//     ([partners.couldBeTakenFor]). Never two calls of one group, which are
-//     two lines of one list and so two calls; never the owed reads, on either
-//     side, which are reads a run may run again; never against a call the cap
-//     left out, whose line no reader sees; and never a call listed again,
-//     whose section says it already.
-//   - THE FIRST closedN CALLS OF THE CALLS LISTED AGAIN, the closed rounds'
-//     ([listedAgain]), each end with [prompts.EarlierRoundNote], which says
-//     where in the session above it may be: by place, so a closed read the
+// ([ledger.FormatOptions.Notes]), at being the places each group's render shows
+// ([ledger.ShownIndices]), in the order late, each subagent's, after, owe,
+// listed again (the last at againAt):
+
+//   - A SHOWN CALL OF A TOLD GROUP (the first groups: late, each subagent's,
+//     after the point) THAT ANOTHER CALL OF THE BRIEF COULD BE TAKEN FOR ends
+//     with [prompts.ToldApartNote]: where a shown call of another told group
+//     reads alike it ([readAlike], symmetric, so both are marked) or a partner
+//     could be taken for it ([partners.couldBeTakenFor]). Never two calls of one
+//     group (two lines of one list are two calls), the owed reads (a run may
+//     run them again), a call the cap left out, or a call listed again (its
+//     section says it already).
+//   - THE FIRST closedN LISTED-AGAIN CALLS, the closed rounds' ([listedAgain]),
+//     each end with [prompts.EarlierRoundNote]: by place, so a closed read the
 //     cap leaves out carries its note nowhere.
 func (r *Runner) notes(told [][]BridgedCall, at [][]int, againAt, closedN int, p partners,
 	opts ledger.FormatOptions) [][]string {
@@ -1502,13 +1214,11 @@ type partners struct {
 	of    int
 }
 
-// partnersOf is the partners of a brief that tells round of's calls as as
-// says: the closed rounds as.rendered holds, but never the entry standing for
-// of, whose calls are the round's, told by their own rules and rendered
-// nowhere else; each round's shown calls by the walk [ledger.RenderIterations]
-// draws them by, under its own reads, and none of a span's, which it draws as a
-// tally alone; every tally's tools, by name, or as no tool it names where a
-// count names none; and as.leads.
+// partnersOf is the partners of a brief telling round of's calls as as says:
+// the closed rounds as.rendered holds, never the entry standing for of; each
+// round's shown calls by the walk [ledger.RenderIterations] draws them under
+// its own reads (none of a span's, drawn as a tally alone); every tally's tools
+// by name, or as no tool where a count names none; and as.leads.
 func (r *Runner) partnersOf(of int, as toldAs) partners {
 	p := partners{leads: as.leads, of: of}
 	for _, entry := range as.rendered {
@@ -1533,22 +1243,19 @@ func (r *Runner) partnersOf(of int, as toldAs) partners {
 }
 
 // couldBeTakenFor reports whether a partner of the brief could be taken for t,
-// a told call: rules in the order they are cheapest to ask.
-//
-//   - A HELD CALL A LEAD TELLS, OF t's TOOL: the lead tells what became of it,
-//     or of the call a person approved for it, and either is a call of the
-//     tool whose arguments no line shows (withheld, or in no list), so it reads
-//     alike every call of that tool. Never where t is itself a held call of
-//     the lead's round (BridgedCall.Held, of the round the brief tells): a
-//     lead of that round tells t's own fate, and a held call carries no id to
-//     tell it from another held call of its tool (sandbox's BridgeCall.HeldID
-//     names only the call approved for one), so every held call of that round
-//     and tool is spared. Marked, the note would say another call could be
-//     taken for it, false where nothing was approved: a denial, a withdrawal,
-//     a call not made. Another rule can still mark it.
-//   - A TALLY OF THE RENDERED ROUNDS that names t's tool, or that counts calls
-//     of no tool it names: the tally's line shows no arguments, so any of
-//     those calls reads alike t.
+// a told call: rules in the order cheapest to ask.
+
+//   - A HELD CALL A LEAD TELLS, OF t's TOOL: the lead tells what became of it or
+//     of the call a person approved for it, either a call of the tool whose
+//     arguments no line shows, so it reads alike every call of that tool. Never
+//     where t is itself a held call of the lead's round (BridgedCall.Held): the
+//     lead tells t's own fate, and a held call carries no id to tell it from
+//     another held call of its tool (sandbox's BridgeCall.HeldID names only the
+//     approved one), so every held call of that round and tool is spared. Marked,
+//     the note would be false where nothing was approved (a denial, a
+//     withdrawal, a call not made). Another rule can still mark it.
+//   - A TALLY OF THE RENDERED ROUNDS naming t's tool or counting calls of no
+//     tool it names: its line shows no arguments, so any such call reads alike t.
 //   - A SHOWN CALL OF THE RENDERED ROUNDS that reads alike t ([readAlike]).
 func (p partners) couldBeTakenFor(t BridgedCall, opts ledger.FormatOptions) bool {
 	if slices.ContainsFunc(p.leads, func(l toldHeld) bool {
@@ -1562,18 +1269,17 @@ func (p partners) couldBeTakenFor(t BridgedCall, opts ledger.FormatOptions) bool
 	return slices.ContainsFunc(p.calls, func(c ledger.Call) bool { return readAlike(c, t.Call, opts) })
 }
 
-// listedAgain is the calls a brief lists again: every call of closed, the
-// closed rounds' calls the session may show ([Runner.closedShown]), then every
-// call of held, the calls of the round a brief tells no session it lacks, that
-// a call of told could be taken for ([readAlike]), each in its own order; and
-// how many of them, from the first, are closed's: the calls
-// [Runner.calledAfter] lists again, under words that say the session may show
-// them ([prompts.AfterSave.Shown]), the closed ones each with a note of its own.
+// listedAgain is the calls a brief lists again ([Runner.calledAfter], under
+// words saying the session may show them, [prompts.AfterSave.Shown]): the
+// closed rounds' calls the session may show ([Runner.closedShown]), then the
+// round's held calls, each that a told call could be taken for ([readAlike]),
+// each in its own order; and how many from the first are closed's, each with a
+// note of its own.
 //
-// ONE PASS IS THE WHOLE ANSWER. A call listed again is told as one the session
-// may show, never as one it may lack, so it is no told call another could be
-// taken for: matching against told alone, and never against what it lists, is
-// a fixed point.
+// ONE PASS IS THE WHOLE ANSWER: a call listed again is told as one the session
+// may show, never one it may lack, so it is no told call another could be taken
+// for; matching against told alone, never against what it lists, is a fixed
+// point.
 func listedAgain(closed []ledger.Call, held, told []BridgedCall, opts ledger.FormatOptions) ([]ledger.Call,
 	int) {
 
@@ -1596,34 +1302,23 @@ func listedAgain(closed []ledger.Call, held, told []BridgedCall, opts ledger.For
 }
 
 // closedShown is the calls of history, the turn's closed rounds, that a brief
-// told as as says may set beside a told call to list again ([listedAgain]):
-// calls the session above may show, as it continued through their rounds, as a
-// fresh brief's line of them or a summary's words of them, which the brief
-// tells nowhere else. Every call of every entry, in entry order and list order,
-// but:
-//
-//   - NONE ON A RUN OF ITS OWN (as.fresh): no session above shows anything;
-//   - none of the entry standing for of, the round whose calls the brief tells
-//     ([roundCalls.of]; [doneFor]'s reading, a span among them): a send-back's
-//     closed rounds hold the round it collected last, whose calls are the
-//     round's, told by their own rules, and listed here as well they would be
-//     listed twice;
-//   - none of the entries the brief renders as work already done (as.rendered,
-//     a prefix of history): told there, a call listed again too would be told
-//     twice in one message, which a task told again never does ([taskAgain]),
-//     and the words over it would point at an identical line as a call of its
-//     own;
-//   - never a skipped meta-tool's, as no list of a brief tells one;
-//   - never a submission ([SubmitWorkTool]): a closed round's was sent back,
-//     and a told one is already said not to stand, so taking one for the other
-//     loses nothing, while listed under words that say nothing of submissions
-//     it could read as standing;
-//   - never a withheld call of a round and tool a held call a lead of the
-//     brief tells is of ([toldHeld]): the lead's answer tells what became of
-//     it, and a closed list keeps no held call's id to pick it out by
-//     ([heldIn]), so the list defers, as an answer pointing to the round's
-//     list does there. Every withheld call of that round and tool is left out
-//     for it, the one a person held and the one they approved alike.
+// may set beside a told call to list again ([listedAgain]): calls the session
+// may show, having continued through their rounds, as a fresh brief's line or a
+// summary's words, which the brief tells nowhere else. Every call of every
+// entry in order, but:
+
+//   - NONE ON A RUN OF ITS OWN (as.fresh): no session above;
+//   - none of the entry standing for of ([roundCalls.of]; [doneFor]'s reading):
+//     a send-back's closed rounds hold the round last collected, listed twice;
+//   - none of the entries rendered as work done (as.rendered, a prefix of
+//     history): told twice in one message, which a re-told task never does
+//     ([taskAgain]);
+//   - never a skipped meta-tool's, as no list tells one;
+//   - never a submission ([SubmitWorkTool]): a closed round's was sent back, and
+//     under words silent on submissions it could read as standing;
+//   - never a withheld call of a round and tool a held call a lead tells is of
+//     ([toldHeld]): a closed list keeps no held call's id ([heldIn]), so every
+//     withheld call of that round and tool is left out.
 func (r *Runner) closedShown(history []ledger.Iteration, of int, as toldAs) []ledger.Call {
 	if as.fresh {
 		return nil
@@ -1648,11 +1343,11 @@ func (r *Runner) closedShown(history []ledger.Iteration, of int, as toldAs) []le
 	return out
 }
 
-// toldHeld is a held call a lead of a brief tells what became of: the id the
-// call a person approved for it carries ([BridgedCall.HeldID]), its tool, and
-// the round it was held in. By id the round's lists leave out the call made
-// for it; by round and tool the closed rounds' calls listed again leave out
-// its withheld calls ([Runner.closedShown]), since a closed list keeps no id.
+// toldHeld is a held call a lead tells what became of: the approved call's id
+// ([BridgedCall.HeldID]), its tool and its round. By id the round's lists leave
+// out the call made for it; by round and tool the closed rounds' listed-again
+// calls leave out its withheld calls ([Runner.closedShown]), a closed list
+// keeping no id.
 type toldHeld struct {
 	id, tool string
 	round    int
@@ -1705,16 +1400,15 @@ func (as toldAs) credited(tellings []Telling) []Telling {
 	return slices.DeleteFunc(slices.Clone(tellings), func(t Telling) bool { return t.Hook })
 }
 
-// leftOut is the calls of group a render left out, shown being the calls of it
-// that render shows ([ledger.ShownCallGroups]): a call is shown where it is the
-// next shown call, walking both in order, and left out where it is not.
+// leftOut is the calls of group a render left out, shown being those it shows
+// ([ledger.ShownCallGroups]): a call is shown where it is the next shown call,
+// walking both in order.
 //
-// EXACT BY THE WALK'S CONTRACT, never a guess at what the cap counted: a group's
-// shown calls are a subsequence of it, each the very value given, in its order;
-// a write is never left out, and only the group's LAST reads are, so two equal
-// reads either side of the cap are told apart by their places, the earlier
-// shown and the later left out. No skipped name is walked: [Runner.calledAfter]
-// drops them before it groups the calls.
+// EXACT BY THE WALK'S CONTRACT, never a guess at what the cap counted: shown
+// calls are a subsequence of the group, each the very value given; a write is
+// never left out and only the group's LAST reads are, so two equal reads either
+// side of the cap are told apart by place. No skipped name is walked:
+// [Runner.calledAfter] drops them first.
 func leftOut(group []BridgedCall, shown []ledger.Call) []BridgedCall {
 	var out []BridgedCall
 	next := 0
@@ -1728,12 +1422,11 @@ func leftOut(group []BridgedCall, shown []ledger.Call) []BridgedCall {
 	return out
 }
 
-// owedGone is how many of owed, the places in round's log of reads an earlier
-// brief counted without listing them, the log no longer lists: dropped from its
-// middle since, which the log keeps only in its tally
-// ([prompts.AfterSave.OwedDropped]). EXACT, never a late call too: a brief
-// records the late calls it left out apart ([omittedReads]), and one the log
-// drops is counted in its late tally alone ([prompts.AfterSave.LateDropped]).
+// owedGone is how many of owed (places in round's log of reads an earlier brief
+// counted unlisted) the log no longer lists, dropped from its middle since and
+// kept only in its tally ([prompts.AfterSave.OwedDropped]). EXACT, never a late
+// call too: those are recorded apart ([omittedReads]) and counted in the late
+// tally alone ([prompts.AfterSave.LateDropped]).
 func owedGone(round roundCalls, owed []int) int {
 	gone := 0
 	for _, place := range owed {
@@ -1746,36 +1439,31 @@ func owedGone(round roundCalls, owed []int) int {
 
 // calledInPlace is what the job's own copy of its session, in its box, may lack
 // of round where its harness is not known to have ended its own run
-// ([Resume.HarnessEnd]): EVERY CALL OF THE ROUND, and every call its log
-// dropped from its middle counted, told as calls the session may already show
-// ([prompts.AfterSave.Interrupted]) — what a capture cut off and never raised
-// past the round's start is told (internal/sandbox's savepoint.go), for a
-// copy no capture describes.
+// ([Resume.HarnessEnd]): EVERY CALL OF THE ROUND, and every dropped call
+// counted, told as ones the session may already show
+// ([prompts.AfterSave.Interrupted]), as a cut-off capture never raised past the
+// round's start is (internal/sandbox's savepoint.go), for a copy no capture
+// describes.
+
+// NEVER ONLY THE JOB'S OWN CALLS: the copy is not known to hold the job's brief,
+// which told the round's earlier calls (an earlier job's, or the call an earlier
+// answer approved). No probe has measured whether Claude Code 2.1.310 writes the
+// message a continued session is handed before it answers a call, so a copy
+// whose job continued a session and lacks it lacks those calls. (2.1.310 was
+// measured answering a fresh session's first two calls before its transcript
+// existed, but a fresh session cut off then leaves the box nothing to continue.)
+
+// BUT NOT the call a person approved for each of leadHeld (the answer's lead
+// alone tells it, and the held leads told again, [Runner.calledAfter]). The
+// closed rounds' calls a told call could be taken for are listed again, except
+// those of rounds a re-told task renders as work done ([Runner.closedShown]);
+// where holds says they may sit in a summary's words
+// ([sessionHolds.closedSummarized]), it may show calls no list names
+// ([Runner.otherCalls]).
 //
-// NEVER ONLY THE JOB'S OWN CALLS. The copy is not known to hold the job's
-// brief, which told the round's calls before the job's own — an earlier job's,
-// or the call an earlier answer approved, made before the job opened: no
-// probe has measured whether Claude Code 2.1.310 writes the message a
-// continued session is handed before it answers a call, and a copy whose job
-// continued a session and lacks it lacks those calls whatever the job made
-// itself. (2.1.310 was measured answering a fresh session's first two calls
-// before its transcript file existed, but a fresh session cut off then leaves
-// its box nothing to continue: the relaunch starts a session of its own.)
-//
-// BUT THE CALL A PERSON APPROVED FOR EACH OF leadHeld, the held calls the
-// answer carrying the round on tells what became of, which that lead alone
-// tells, and for each held lead again tells, the leads told again
-// ([Runner.calledAfter]). AND THE CALLS OF THE TURN'S CLOSED ROUNDS, history,
-// that a told call could be taken for, listed again, but those of the rounds a
-// task told again renders as work already done ([Runner.closedShown]); and,
-// where holds says the copy may hold those rounds only in a summary's words
-// ([sessionHolds.closedSummarized]), that it may show calls of theirs no list
-// names ([Runner.otherCalls]).
-//
-// IT TELLS THE ROUND FROM ITS START, so it starts the account of what its brief
-// left out afresh: it owes no read an earlier brief counted, since it tells
-// every read of the round itself, and answers the reads it leaves out
-// ([Runner.calledAfter]).
+// IT TELLS THE ROUND FROM ITS START, so the account of what its brief left out
+// starts afresh: it owes no earlier-counted read, tells every read itself, and
+// answers the reads it leaves out ([Runner.calledAfter]).
 func (r *Runner) calledInPlace(ctx context.Context, round roundCalls, leadHeld []toldHeld,
 	history []ledger.Iteration, again toldAgain, holds sessionHolds, surface *tools.Surface,
 	b provenance.Boundary) (prompts.AfterSave, omittedReads) {
@@ -1786,15 +1474,14 @@ func (r *Runner) calledInPlace(ctx context.Context, round roundCalls, leadHeld [
 	return called, omitted
 }
 
-// omittedReads is the calls a brief counted without listing them
-// ([Runner.calledAfter]), by their places in the round's log, as the launch
-// records them on the job it opens (sandbox.BriefTold): the reads it owes, and
-// APART the late calls and ones nobody waited for. Every continuation tells
-// such a call again, so none is owed; but the session holds only a count of
-// it, so it is credited no telling of it ([heldByTelling]). Apart, because a
-// call the log drops from its middle keeps no mark: counted among the owed
-// reads, a late one was counted twice, as an owed read dropped
-// ([prompts.AfterSave.OwedDropped]) and as a late call dropped.
+// omittedReads is the calls a brief counted without listing
+// ([Runner.calledAfter]), by place in the round's log, as the launch records
+// them (sandbox.BriefTold): the reads it owes, and APART the late and
+// nobody-waited-for calls. Every continuation tells such a call again, so none
+// is owed, but the session holds only a count, so it is credited no telling
+// ([heldByTelling]). Apart because a call the log drops keeps no mark: counted
+// among the owed reads, a late one would be counted twice
+// ([prompts.AfterSave.OwedDropped] and the late tally).
 type omittedReads struct {
 	reads, late []int
 }
@@ -1809,16 +1496,15 @@ func (r *Runner) tellings() []Telling {
 }
 
 // heldByTelling reports whether a session whose note cursor is point holds a
-// late call or one nobody waited for by a telling of it: the row records that a
-// job's own session took the call, at a place at or below point
-// ([Resume.Tellings]), and its brief did not count the call without listing it
-// (owed). Nil point credits none: a session that may be cut off or a summary,
-// one told the round from its start, a fresh run. THE ONE TEST BY A TELLING,
-// beside [heldAt]'s by the save point, sound by the place: a capture's cursor
-// is read off the row before any later write, so it is past a telling only
-// where it was read after the write that recorded it, of the session that
-// took the call or of a later one whose brief credited or told it
-// (internal/sandbox's package doc; ADR-0073).
+// late or nobody-waited-for call by a telling of it: the row records that a
+// job's own session took the call at a place at or below point
+// ([Resume.Tellings]) and its brief did not count it unlisted (owed). Nil point
+// credits none: a possibly cut-off or summary session, one told the round from
+// its start, a fresh run. THE ONE TEST BY A TELLING, beside [heldAt]'s by the
+// save point, sound by the place: a capture's cursor is read before any later
+// write, so it is past a telling only where read after the write that recorded
+// it, by the session that took the call or a later one whose brief credited or
+// told it (internal/sandbox's package doc; ADR-0073).
 func heldByTelling(call BridgedCall, point *int, owed []int, tellings []Telling) bool {
 	if !call.Late && !call.Abandoned || call.Appended == 0 || point == nil || slices.Contains(owed, call.Appended) {
 		return false
@@ -1830,64 +1516,49 @@ func heldByTelling(call BridgedCall, point *int, owed []int, tellings []Telling)
 
 // heldAt reports whether a session saved at through holds call: one the round's
 // log took at or before the read that placed the save ([BridgedCall.Appended]
-// at most through), whatever its place in the order the bridge admitted the
-// calls — a call in flight at the read is taken once its tool answers, after
-// it. A NIL through is a job's own copy of its session in its box whose harness
-// ended its own run, which holds every call its job made and every call its
-// job's brief told: every call of the round but a late one or one nobody waited
-// for, a fresh run's brief carrying the round on telling every one of them —
-// what the copy's telling reads a nil point as ([Runner.calledAfter]) — of
-// which its guard counts the job's own, past [execstate.State.BridgeFrom]
-// ([ownCalls]). THE ONE TEST of what a session holds but [heldByTelling]: a
-// continuation is told every call it does not ([Runner.calledAfter]), a
-// successful submission among the calls it does none of the round's
-// ([prompts.AfterSave.HeldSubmission]), and its guard counts the loads of the
-// calls it does ([ownCalls]). THE ONE TEST BY THE SAVE POINT: a reading of
-// what a cut-off session holds finds it holding more, by each call's own key
-// ([heldReading]), and the telling and the guard of a launch that hands the
-// brief told by it read both ([Runner.calledAfter], [Runner.sessionDecided]).
+// at most through), whatever its admission place (a call in flight at the read
+// is taken once its tool answers, after it). A NIL through is a job's own copy
+// in its box whose harness ended its own run, holding every call but a late or
+// abandoned one ([Runner.calledAfter] reads a nil point so), of which its guard
+// counts the job's own, past [execstate.State.BridgeFrom] ([ownCalls]). THE ONE
+// TEST BY THE SAVE POINT, beside [heldByTelling]'s: a continuation is told every
+// call it does not hold, a held successful submission is none of the round's
+// ([prompts.AfterSave.HeldSubmission]), and the guard counts held calls' loads.
+// A reading of a cut-off session finds it holding more, by call key
+// ([heldReading], [Runner.sessionDecided]).
+
+// NOR A READ ITS BRIEF COUNTED WITHOUT LISTING IT (owed), whatever the point: a
+// brief past the prior-work ledger's read cap counts the reads rather than
+// listing them, so its session holds that the read was made, not what it
+// returned. Held, it would be told to no continuation. Never one of the job's
+// own: it came before the job's session opened, so its guard's count is
+// unchanged.
 //
-// NOR A READ ITS BRIEF COUNTED WITHOUT LISTING IT (owed, by its place in the
-// round's log), whatever the point: a brief that tells the round's calls past
-// the prior-work ledger's read cap counts the reads past it rather than listing
-// them, so the session it was handed holds that the read was made and none of
-// what it returned. Held, it would be told to no continuation, its job's copy
-// and every capture placed by its read alike. Never one of the job's own,
-// which came after its brief's read, so its guard's count is not changed by
-// it.
-//
-// A call the log took with no number, an older build's append in a fleet
-// mid-upgrade, is held at no save point a capture states: told again, never not
-// at all. The job's own copy in its box, where its harness ended its own run,
-// holds it as it holds every call but a late one, and is not told it. NOR IS A
-// LATE ONE HELD, whatever its number ([ledger.Call.Late]): the log took it
-// after its job was replaced, so after the brief of the job carrying the round
-// on was built, which never told it; and the session of the job that made it
-// may not hold its outcome, its harness having died, given up on the call or
-// been replaced before the call returned. Yet a save point is a prefix of the
-// log, so a later capture placed by its own read counts it among the calls its
-// session holds, and every continuation after would never be told it. Told
-// whatever the point instead, but to a session a telling credits it to
-// ([heldByTelling]), under words that say it may be shown or told already and
-// is one call ([Runner.calledAfter]) — and a skill it loaded is loaded again
-// before a call the skill covers, the safe direction. One its session owed
-// after a failed append and carried only once its job was replaced is told
-// again although that job's session holds its answer, and its load is not
-// counted although that session holds the skill: the same safe direction. So
-// no session a guard is rebuilt for is taken to hold a late call, a job's own
-// copy in its box among them.
-//
+// A call with no number (an older build's append in a mid-upgrade fleet) is
+// held at no capture's save point: told again, never not at all. The job's own
+// copy whose harness ended its run holds it as every call but a late one.
+
+// NOR IS A LATE ONE HELD, whatever its number ([ledger.Call.Late]): the log
+// took it after its job was replaced, after the brief of the job carrying the
+// round on was built, which never told it; and the session of the job that made
+// it may not hold its outcome (harness died, gave up, or replaced before the
+// call returned). Yet a save point is a prefix of the log, so a later capture
+// placed by its own read would count it held and no continuation would ever tell
+// it. Told whatever the point, but to a session a telling credits it to
+// ([heldByTelling]), under words saying it may be shown or told already and is
+// one call ([Runner.calledAfter]); a skill it loaded is loaded again before a
+// call the skill covers, the safe direction, as for one its session owed after
+// a failed append and carried only once its job was replaced. So no session a
+// guard is rebuilt for is taken to hold a late call, the job's own copy included.
+
 // NOR ONE NOBODY WAITED FOR ([BridgedCall.Abandoned]), whatever its number: its
-// harness gave up on it, or its session ended, before it returned, so the
-// session of the job that made it shows it with no outcome or a failed one —
-// its harness told it timed out — while it ran on and its effect happened. A
-// harness that gave up on a call can still end its own run, since it waits for
-// no answer it gave up on, so the call can land before the read a capture of
-// that session is placed by, and before the read of a relaunch whose briefs
-// count it among the calls the job's own copy in its box holds: held there, it
-// was told to no continuation, and a run could make it again. Told whatever the
-// point instead, as a late call is, and a skill it loaded is loaded again,
-// since its body never reached the session.
+// harness gave up on it or its session ended before it returned, so the session
+// shows it with no outcome or failed (told it timed out) while it ran on and
+// took effect. A harness that gave up can still end its own run, so the call can
+// land before a capture's read and before a relaunch's read whose briefs count
+// it among the copy's calls: held there, no continuation would be told it and a
+// run could make it again. Told whatever the point, as a late call is, and its
+// skill load is loaded again since its body never reached the session.
 func heldAt(call BridgedCall, through *int, owed []int) bool {
 	switch {
 	case call.Late || call.Abandoned:
@@ -1903,20 +1574,18 @@ func heldAt(call BridgedCall, through *int, owed []int) bool {
 // droppedAfterSave is how many of the calls round's log took after the save
 // point through it dropped from its middle, which no list can tell a session
 // one by one: the log's appends past the point, less the calls it still lists
-// numbered past it. NOT THE LATE ONES APART: a dropped late call keeps no mark
-// to be told by, so every continuation is told how many the log dropped
-// ([roundCalls.lateElided]) under the late calls' own words, whatever its point
-// ([Runner.calledAfter]) — and one past the point is counted here as well.
-//
+// numbered past it. NOT THE LATE ONES APART: a dropped late call keeps no mark,
+// so every continuation is told how many the log dropped
+// ([roundCalls.lateElided]) under the late calls' words, whatever the point
+// ([Runner.calledAfter]); one past the point is counted here too.
+
 // EXACT, because every append is numbered one past the last
-// ([BridgedCall.Appended]) and each call the log took is listed or counted
-// without listing, never both — so the round's appends are the two together,
-// and the numbers past the point the log does not list are the dropped ones.
-// A listed call with no number is not subtracted, its place unknown, so a log
-// an older build appended to may over-count, held to the dropped calls the
-// round counts at all; it never under-counts. So may a dropped late call past
-// the point, counted here and again under the late calls' words: the same
-// over-count, under the same hold.
+// ([BridgedCall.Appended]) and each call is listed or counted, never both, so
+// the numbers past the point the log does not list are the dropped ones. A
+// listed call with no number is not subtracted (place unknown), so a log an
+// older build appended to may over-count, capped at the dropped calls the round
+// counts; it never under-counts. A dropped late call past the point, counted
+// here and under the late words, over-counts the same way.
 func droppedAfterSave(round roundCalls, through int) int {
 	dropped := ledger.Count(round.elided)
 	pastPoint := len(round.bridged) + dropped - through
@@ -1929,11 +1598,10 @@ func droppedAfterSave(round roundCalls, through int) int {
 }
 
 // readsSince is every note the turn has read that a session saved with cursor
-// as its last read has not, in the order read: a read the record placed after
-// cursor, and every read of this segment — a review's, the one that sent the
-// round back among them — which the record has placed after any session its
-// launch continues was saved, and which reaches here before the record numbers
-// it (Order zero). Zero is every note the turn has read.
+// as its last read has not, in order read: a read the record placed after
+// cursor, and every read of this segment (a review's, the send-back's among
+// them) placed after any continued session was saved, which reaches here before
+// the record numbers it (Order zero). Zero is every note read.
 func (r *Runner) readsSince(cursor int) []steer.Read {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1946,28 +1614,25 @@ func (r *Runner) readsSince(cursor int) []steer.Read {
 	return out
 }
 
-// toldNotes is what a continuation tells a session of the notes a person sent
-// the turn: reads, the notes the turn has read that the session may lack, in
-// the order read, then fresh, the ones the brief is the first to read — under
-// the header of notes it may already show ([prompts.NotesReadAgain]) wherever
-// the session may hold one of them, and the rest after it, plainly.
-//
-// WHICH IT MAY HOLD: every one of reads, where unsure says so — a session cut
-// off, or one whose notes stop before a read no session of its job holds — and
-// every note the run's bridge served a harness ([Resume.Served]), read since or
-// waiting still: a note is recorded served before its harness can deliver it,
-// and read only once the harness confirms it did, so a harness cut off between
-// the two, or whose confirmation the store never took, leaves a session that
-// may show a note the record says it had not read. A fresh run holds none, and
-// is told every note as it always is.
-//
-// IN THE ORDER READ, WHATEVER THE HEADER: a later note is the one that wins, so
-// the header takes every read and every fresh note up to the last served one,
-// and only the fresh notes after that follow it plainly — each one the turn had
-// not read before this brief, which is what the header says of them. A note of
-// fresh whose place its record holds already, a lost take's, which this brief
-// hands over, or one a hook's serve placed, is one of reads, at that place
-// ([Runner.inReadOrder]).
+// toldNotes is what a continuation tells a session of the notes a person sent:
+// reads, those the turn has read that the session may lack, in order read, then
+// fresh, those the brief is the first to read, under the header of notes it may
+// already show ([prompts.NotesReadAgain]) wherever the session may hold one,
+// the rest after it plainly.
+
+// WHICH IT MAY HOLD: every read where unsure says so (a cut-off session or one
+// whose notes stop before a read no session of its job holds) and every note
+// the run's bridge served a harness ([Resume.Served]), read since or waiting: a
+// note is recorded served before delivery and read only once the harness
+// confirms, so a harness cut off between, or whose confirmation the store never
+// took, leaves a session that may show a note the record says was unread. A
+// fresh run holds none and is told every note.
+
+// IN THE ORDER READ, WHATEVER THE HEADER: a later note wins, so the header takes
+// every read and every fresh note up to the last served one, and only fresh
+// notes after that follow plainly. A fresh note whose place its record holds
+// already (a lost take's, or one a hook's serve placed) is one of reads, at that
+// place ([Runner.inReadOrder]).
 func (r *Runner) toldNotes(reads []steer.Read, unsure bool, fresh []steer.Note) []string {
 	reads, fresh = r.inReadOrder(reads, fresh)
 	var served []string
@@ -1998,17 +1663,16 @@ func (r *Runner) toldNotes(reads []steer.Read, unsure bool, fresh []steer.Note) 
 	return append(out, renderedNotes(fresh[upTo:])...)
 }
 
-// inReadOrder is reads together with every note of fresh whose place the run's
-// record holds already ([steer.Briefing.Orders]: a lost take's, or one a hook's
-// serve placed), in the order of the record's places, then the rest of fresh,
-// the notes the launch's write reads after every one of them, in their own
-// order.
+// inReadOrder is reads with every fresh note whose place the run's record holds
+// ([steer.Briefing.Orders]: a lost take's, or a hook's serve's), in the
+// record's order, then the rest of fresh, which the launch's write reads after
+// all of them, in their own order.
 //
-// BY THE RECORD'S PLACES, never by when the runner came to hold a note, which
-// told a person's later note, correcting it, ahead of the note it corrects. A
-// read the source has not placed (the first segment's box keeps no record)
-// keeps its turn, after every placed one. Why the two orders differ is the
-// package doc's "The order a continuation tells a person's notes in".
+// BY THE RECORD'S PLACES, never when the runner came to hold a note, which told
+// a person's correcting note ahead of the note it corrects. A read the source
+// has not placed (the first segment's box keeps no record) goes after every
+// placed one. See the package doc's "The order a continuation tells a person's
+// notes in".
 func (r *Runner) inReadOrder(reads []steer.Read, fresh []steer.Note) ([]steer.Read, []steer.Note) {
 	r.mu.Lock()
 	placed := r.placed
@@ -2039,14 +1703,13 @@ func (r *Runner) inReadOrder(reads []steer.Read, fresh []steer.Note) ([]steer.Re
 }
 
 // notesHeldBy is the last read a session saved holding the notes read through
-// cursor (sandbox.SessionCapture.NoteCursor) holds as far as the turn's carried
-// reads say, and whether it may hold a read after that one too: stopped before
-// the first read the cursor reaches that no session of its job holds
-// ([Runner.firstUnheld]), every note past the stop told, as notes it may
-// already show. Read again here although the capture's cursor already stops
-// there (internal/sandbox's notesHeld), because a mark is made off the take's
-// frame and can land after the stamp. Read only where the path holds its brief
-// ([sessionHolds.lacks]): a path that lacks it is told every note.
+// cursor (sandbox.SessionCapture.NoteCursor) holds, as far as the carried reads
+// say, and whether it may hold a read after it: stopped before the first read
+// no session of its job holds ([Runner.firstUnheld]), every note past told as
+// one it may already show. Re-read although the capture's cursor already stops
+// there (internal/sandbox's notesHeld): a mark is made off the take's frame and
+// can land after the stamp. Only where the path holds its brief
+// ([sessionHolds.lacks]); one that lacks it is told every note.
 func (r *Runner) notesHeldBy(cursor int, hooks bool) (held int, unsure bool) {
 	first := r.firstUnheld(hooks)
 	if first == 0 || first > cursor+1 {
@@ -2055,12 +1718,12 @@ func (r *Runner) notesHeldBy(cursor int, hooks bool) (held int, unsure bool) {
 	return first - 1, true
 }
 
-// firstUnheld is the place among the record's reads of the earliest read the
-// turn carries that no session of its job holds: one the record marks
-// unanswered (steer.Reading.Unanswered), its take's answer lost, or taken
-// before the session's last restart (steer.Reading.Restarted); and, where
-// hooks, any read at a hook's step, which a box whose release the resume was
-// not read in holds none of ([UnheldTelling]). Zero for none.
+// firstUnheld is the place of the earliest read the turn carries that no
+// session of its job holds: marked unanswered (steer.Reading.Unanswered, its
+// take's answer lost) or taken before the session's last restart
+// (steer.Reading.Restarted); and, where hooks, any read at a hook's step, which
+// a box whose release the resume was not read in holds none of
+// ([UnheldTelling]). Zero for none.
 func (r *Runner) firstUnheld(hooks bool) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -2081,9 +1744,9 @@ func hookStep(boundary types.SteerBoundary) bool {
 }
 
 // sendBackLead is what carries a send-back's session on: the review's notes and
-// the engine's correction, with the task restated and the rules the earlier
-// rounds' calls are read by ([prompts.BuildContinuedRound]). A later brief
-// that tells the review again builds it anew, in words true of any session
+// the engine's correction, with the task restated and the rules earlier rounds'
+// calls are read by ([prompts.BuildContinuedRound]). A later brief telling the
+// review again builds it anew, in words true of any session
 // ([prompts.ContinuedRound.Again], [Runner.leadAgain]): these say the session
 // above is the one the review sent back, true only of this brief's.
 func (r *Runner) sendBackLead(notes string) prompts.Prompt {
@@ -2099,83 +1762,72 @@ type launchBriefs struct {
 	freshReported bool
 
 	// kept is the turn's kept session the launch may continue
-	// ([AgentRunRequest.Session]), and inPlace the brief the job before's own
-	// session is handed in its box ([Continuation.Brief]), "" where the
-	// launch may not continue that.
+	// ([AgentRunRequest.Session]), inPlace the brief the previous job's own
+	// session gets in its box ([Continuation.Brief]), "" where the launch may
+	// not continue that.
 	kept    *SessionContinuation
 	inPlace string
-	// inPlaceSummarized is the job before's own session's brief told as one
-	// that may be a summary ([Continuation.Summarized]), "" where the launch
-	// is handed none.
+	// inPlaceSummarized is that brief told as one that may be a summary
+	// ([Continuation.Summarized]), "" for none.
 	inPlaceSummarized string
 
-	// state is the parked state of the job the relaunch follows and bridged
-	// the round's calls: what the guard of the session it continues is
-	// rebuilt from. Zero for a launch that follows no job.
+	// state is the parked state of the job the relaunch follows and bridged the
+	// round's calls: what the continued session's guard is rebuilt from. Zero
+	// for a launch that follows no job.
 	state   execstate.State
 	bridged []BridgedCall
 
-	// inPlaceHolds and keptHolds are what each path's telling counts its
-	// session as holding ([sessionHolds]), the one value its guard reads too:
-	// a copy that may lack its job's brief holds none of the job's own loads,
-	// and one its harness may hand its model as a summary none at all. owed
-	// is the reads the copy in the box holds only as its job's brief's count
-	// ([Resume.Owed]), read as [heldAt] reads them.
+	// inPlaceHolds and keptHolds are what each path's telling counts its session
+	// as holding ([sessionHolds]), the one value its guard reads too: a copy that
+	// may lack its job's brief holds none of the job's own loads, a possible
+	// summary none at all. owed is the reads the copy holds only as its brief's
+	// count ([Resume.Owed]), read as [heldAt] reads them.
 	inPlaceHolds, keptHolds sessionHolds
 	owed                    []int
 
-	// exact is the value the kept continuation's telling by a reading was
-	// decided by ([exactHolds], [SessionContinuation.Exact]): its own, and the
-	// calls its reading found the session holding, read in place of keptHolds
-	// where the launch hands that telling's brief. Zero where none rides.
+	// exact is the value the kept continuation's telling by a reading was decided
+	// by ([exactHolds], [SessionContinuation.Exact]), with the calls the reading
+	// found held, read in place of keptHolds where that brief is handed. Zero
+	// where none rides.
 	exact exactHolds
 
-	// unheldHolds is the value the kept continuation's telling for a box
-	// whose release the resume was not read in was decided by
-	// ([keptTellings.led]), read in place of keptHolds where the launch hands
-	// that telling's brief ([SessionDecision.Unheld]).
+	// unheldHolds is the value the kept continuation's telling for a box whose
+	// release the resume was not read in was decided by ([keptTellings.led]),
+	// read in place of keptHolds where that brief is handed
+	// ([SessionDecision.Unheld]).
 	unheldHolds sessionHolds
 }
 
 // sessionDecided is what a launch tells the runner once it has decided how its
 // run takes up a session ([AgentRunRequest.Decided]), before the run starts.
-//
-// IT ARMS THE RUN'S GUARD with the skills that session holds, and nothing else
+
+// IT ARMS THE RUN'S GUARD with the skills that session holds
 // ([Runner.armSession]), NOTHING AT ALL where the path's value says it may be a
-// summary ([sessionHolds.summarized]): the launch state of the job the relaunch follows and
-// that job's own loads — through the point the turn's kept capture of it was
-// saved at, where the launch restores that, and all of them where the job's own
-// copy in its box is continued and its harness ended its own run, none where it
-// may have been cut off ([Resume.HarnessEnd]) — because the continued model
-// has those bodies in front of it; none for a session of the run's own, whose
-// model has read no skill. Never the turn's other jobs' loads: a session
-// another job worked in is not this one. AND NONE FOR THE SESSION THE
-// CONVERSATION'S LAST TURN LEFT, whatever the parked state holds: the skills
-// that session loaded were another turn's, which this turn's guard never armed
-// and its lead says were set up anew — the safe direction, a skill-covered call
-// refused until it is loaded again rather than admitted on a body nobody read
-// this turn. Armed before the run starts, so no call of the run is admitted
-// against a guard that holds what its model never read.
-//
+// summary ([sessionHolds.summarized]): the launch state of the followed job and
+// its own loads (through the kept capture's save point; all of them where its own
+// copy is continued and its harness ended its run; none where cut off,
+// [Resume.HarnessEnd]), because the continued model has those bodies; none for a
+// fresh session. Never the turn's other jobs' loads. NONE FOR THE SESSION THE
+// CONVERSATION'S LAST TURN LEFT: its skills were another turn's, set up anew, so
+// a skill-covered call is refused until loaded again rather than admitted on a
+// body nobody read this turn. Armed before the run starts.
+
 // WHERE THE LAUNCH HANDED THE BRIEF TOLD BY A READING ([SessionDecision.Exact]),
-// THE VALUE THAT TELLING WAS DECIDED BY ([exactHolds]): beside the loads the
-// save point holds, the job's own loads among the calls its reading found the
-// session holding (past the job's BridgeFrom, as [ownCalls] judges a job's
-// own), whole in the session as one below the save point is, a subagent's
-// among them; none where the session may be a summary, its job having
-// restarted it. Where it handed the one for a box whose release the resume
-// was not read in ([SessionDecision.Unheld]), that telling's value.
+// THE VALUE THAT TELLING WAS DECIDED BY ([exactHolds]): beside the save point's
+// loads, the job's own loads among the calls its reading found held (past
+// BridgeFrom, as [ownCalls] judges), a subagent's included; none where the
+// session may be a summary. For a box whose release the resume was not read in
+// ([SessionDecision.Unheld]), that telling's value.
 //
-// AND IT PUBLISHES THE PROMPT THE RUN WAS HANDED, the one of whichever telling
-// the launch handed in the form its box takes, or the fresh brief, as the
-// phase's opening frame ([emitter.prompted]) where the phase's record does not
-// carry it already: the started record carries the fresh brief, which a run
-// that continues its session never reads.
-//
+// IT PUBLISHES THE PROMPT HANDED, of whichever telling in the form the box
+// takes, or the fresh brief, as the phase's opening frame ([emitter.prompted])
+// where the record does not carry it already (the started record carries the
+// fresh brief, which a continuing run never reads).
+
 // What it decided is kept in decided, which the box's word on the session it
 // started is read against ([Runner.sessionStarted]), BESIDE THE SKILLS IT ARMED,
-// read off the guard as it armed them: the skills the job's parked state records
-// as its launch's ([Runner.recordAgentSuspension]).
+// read off the guard: the skills the parked state records as its launch's
+// ([Runner.recordAgentSuspension]).
 func (r *Runner) sessionDecided(ctx context.Context, emit emitter, round int, system prompts.Prompt,
 	surface *tools.Surface, caps roundCaps, b launchBriefs, decided *launchDecided) func(SessionDecision) {
 
@@ -2195,7 +1847,7 @@ func (r *Runner) sessionDecided(ctx context.Context, emit emitter, round int, sy
 				holds, readHeld = b.exact.holds, b.exact.held
 				brief, replaced = b.kept.Exact.Brief, b.kept.Exact.Replaced
 			case d.Summarized && b.kept.Summarized != nil:
-				// THE BOX'S POINT DID NOT PROVE THE HELD BRIEF WHOLE: the
+				// The box's point did not prove the held brief whole: the
 				// summarized telling's, which arms nothing.
 				holds.compacts = true
 				brief, replaced = b.kept.Summarized.Brief, b.kept.Summarized.Replaced
@@ -2203,9 +1855,8 @@ func (r *Runner) sessionDecided(ctx context.Context, emit emitter, round int, sy
 				holds = b.unheldHolds
 				brief, replaced = b.kept.Unheld.Brief, b.kept.Unheld.Replaced
 			}
-			// NONE WHERE THE SESSION MAY BE A SUMMARY: a summary holds a skill's
-			// body in its own words alone, and a skill loaded again before a call
-			// it covers is the safe direction.
+			// None where it may be a summary, which holds a skill's body in its
+			// own words alone: loading again is the safe direction.
 			if !holds.summarized() {
 				loaded = b.state.LoadedSkills
 				calls = slices.Concat(ownCalls(b.bridged, b.state.BridgeFrom, &b.kept.Basis.Through,
@@ -2216,12 +1867,10 @@ func (r *Runner) sessionDecided(ctx context.Context, emit emitter, round int, sy
 				handed = prompts.Prompt{Text: replaced}
 			}
 		case d.Continues && !d.Kept && b.inPlace != "":
-			// THE JOB'S OWN COPY IN ITS BOX holds the skills its launch armed,
-			// and its own loads only where it is known to hold its job's brief:
-			// one cut off may never have written a load it made, which is told
-			// as a call it may lack, and is loaded again before a call it
-			// covers. And none at all where it may be a summary, the box's
-			// point having failed to prove the held brief whole among them.
+			// The job's own copy in its box holds the skills its launch armed, its
+			// own loads only where known to hold its job's brief (a cut-off copy
+			// may never have written a load; loaded again before a call it
+			// covers), none where it may be a summary.
 			holds, brief := b.inPlaceHolds, b.inPlace
 			if d.Summarized && b.inPlaceSummarized != "" {
 				holds.compacts, brief = true, b.inPlaceSummarized
@@ -2244,13 +1893,12 @@ func (r *Runner) sessionDecided(ctx context.Context, emit emitter, round int, sy
 	}
 }
 
-// launchDecided is how a launch decided its run takes up a session, as the
-// runner keeps it between the launch's word ([AgentRunRequest.Decided]) and the
-// word of the run's box on the session it started ([AgentRunRequest.Started]):
-// the first is told before the run starts and the second as its harness first
-// reaches the seat's tools, on another goroutine. And the skills the launch
-// armed the run's guard with as it decided, which the launch's parked state
-// records ([launchDecided.skills]).
+// launchDecided is how a launch decided its run takes up a session, kept
+// between the launch's word ([AgentRunRequest.Decided], before the run starts)
+// and the box's on the session it started ([AgentRunRequest.Started], as its
+// harness first reaches the seat's tools, on another goroutine); and the skills
+// the guard was armed with, which the parked state records
+// ([launchDecided.skills]).
 type launchDecided struct {
 	mu    sync.Mutex
 	d     SessionDecision
@@ -2264,12 +1912,11 @@ func (l *launchDecided) set(d SessionDecision, armed []string) {
 	l.d, l.armed = d, armed
 }
 
-// skills is the skills the launch armed the run's guard with as it decided
-// ([Runner.sessionDecided]), nil where it has not decided: the guard is empty
-// from the relaunch's last step before its launch until the launch decides.
-// NEVER THE GUARD AS IT STANDS ONCE THE LAUNCH RETURNS: the run starts inside the
-// launch, and a load its harness reported before the launch returned is a call
-// of the job's own, made on the same guard.
+// skills is the skills the guard was armed with as the launch decided
+// ([Runner.sessionDecided]), nil before it decides (the guard is empty until
+// then). NEVER THE GUARD AS IT STANDS ONCE THE LAUNCH RETURNS: the run starts
+// inside the launch, and a load its harness reported before it returned is a
+// call of the job's own.
 func (l *launchDecided) skills() []string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -2284,46 +1931,39 @@ func (l *launchDecided) get() SessionDecision {
 
 // sessionStarted is what a launch tells the runner once the run's box has said
 // which session it started ([AgentRunRequest.Started]): before any call of the
-// run is made, by the token its harness dials, which its model cannot forge.
+// run, by the token its harness dials, which its model cannot forge.
 //
-// A BOX THAT STARTED THE SESSION ITS LAUNCH CHOSE changes nothing: the guard was
-// armed for that session as the launch decided ([Runner.sessionDecided]). One
-// that started a session of its own in place of the one the launch continued —
-// an archive that did not unpack, an import OpenCode refused — runs a model that
-// has read no skill, so its guard is put right before that first call: EMPTY,
-// as a fresh launch's is, and never the continued session's, which would let a
-// call through on a skill the model never read. And the prompt the run was
-// handed was the fresh brief, in the continuation's place, which the phase's
-// record then states ([emitter.prompted]).
+// A BOX THAT STARTED THE SESSION ITS LAUNCH CHOSE changes nothing. One that
+// started a session of its own instead (an archive that did not unpack, an
+// import OpenCode refused) runs a model that has read no skill, so its guard is
+// put right before the first call: EMPTY, never the continued session's, which
+// would admit a call on a skill the model never read. The prompt handed was the
+// fresh brief, which the phase's record then states ([emitter.prompted]).
+
+// The parked state the launch records keeps the chosen session's skills; later
+// rebuilds of the guard also read what the box said ([Resume.Continued]) and
+// take the skills only where it says the session was continued.
 //
-// The parked state the launch records keeps the chosen session's skills, as the
-// launch armed them; every later rebuild of the guard reads, beside it, what the
-// box said on the job's record ([Resume.Continued]), and takes the skills only
-// where it says the session was continued.
-//
-// THE GUARD ON THE PATH OF THE REQUEST THAT SAID IT, AND THE FRAME OFF IT. The
-// guard is put right before that request is served, as every request of the
-// run waits on, so no call is admitted against the guard of a session the run
-// is not in. The frame is a publish the broker answers — its acknowledgement
-// waited for, its listeners run inline — and that request is the run's first to
-// its bridge, its harness's MCP handshake as likely as not, which a harness
-// holds to a short connect timeout: a broker having a slow moment would drop
-// the run's tools from its harness for the sake of a record. So it goes out on
-// its own, within [startedFrameBudget], as the job's record of the same word
-// is written by the engine's bridge ledger.
+// THE GUARD ON THE PATH OF THE REQUEST THAT SAID IT, THE FRAME OFF IT. The guard
+// is put right before that request is served, so no call is admitted against a
+// session the run is not in. The frame is a publish the broker answers
+// (acknowledgement waited for, listeners inline), and that request is the run's
+// first to its bridge, likely its harness's MCP handshake, held to a short
+// connect timeout: a slow broker would drop the run's tools for the sake of a
+// record. So it goes out on its own, within [startedFrameBudget], as the job's
+// record of the same word is written by the engine's bridge ledger.
 func (r *Runner) sessionStarted(ctx context.Context, emit emitter, round int, system prompts.Prompt,
 	surface *tools.Surface, caps roundCaps, b launchBriefs, decided *launchDecided) func(bool) {
 
-	// THE TURN'S VALUES AND NEVER ITS CANCELLATION: the box speaks once the
-	// launching segment has parked, whose context ends with it, and the frame
-	// is owed to the round's record all the same.
+	// The turn's values, never its cancellation: the box speaks after the
+	// launching segment parked, and the frame is owed to the record anyway.
 	base := context.WithoutCancel(ctx)
 	return func(continued bool) {
 		if d := decided.get(); !d.Continues || continued {
 			return
 		}
 		r.armSession(surface, nil, nil)
-		// THE RUNNER'S OWN GOROUTINE ([Runner.Sent]), which its budget ends.
+		// The runner's own goroutine ([Runner.Sent]), ended by its budget.
 		r.sent.Go(func() {
 			ctx, cancel := context.WithTimeout(base, startedFrameBudget)
 			defer cancel()
@@ -2335,16 +1975,16 @@ func (r *Runner) sessionStarted(ctx context.Context, emit emitter, round int, sy
 // startedFrameBudget bounds the publish of the frame stating the fresh brief a
 // run was handed where its box started a session of its own
 // ([Runner.sessionStarted]): FIVE SECONDS, the publisher's own wait for a
-// broker's acknowledgement, which a healthy broker gives in milliseconds — a
-// publish not answered in that is one an outage holds, which this record does
-// not wait out. A frame that missed it leaves the continuation as the round's
-// opening frame; the run's collection still says it started a session of its
-// own (`harness_session_continued`, `harness_session_fell_back`).
+// broker's acknowledgement (milliseconds when healthy); one not answered then is
+// an outage, which this record does not wait out. A missed frame leaves the
+// continuation as the round's opening frame; the collection still says the run
+// started its own session (`harness_session_continued`,
+// `harness_session_fell_back`).
 const startedFrameBudget = 5 * time.Second
 
 // armSession re-arms the run's guard with exactly the skills in loaded and those
-// calls loaded ([skills.Guard.Replace], [Runner.observeLoads]): the skills the
-// session its run takes up holds the bodies of.
+// calls loaded ([skills.Guard.Replace], [Runner.observeLoads]): the bodies the
+// session holds.
 func (r *Runner) armSession(surface *tools.Surface, loaded []string, calls []ledger.Call) {
 	r.mu.Lock()
 	guard := r.guard
@@ -2354,24 +1994,16 @@ func (r *Runner) armSession(surface *tools.Surface, loaded []string, calls []led
 }
 
 // ownCalls is the calls of bridged one job made itself that the session it is
-// rebuilt for holds, in the order the bridge admitted them: past from, the last
-// call the round held when the job's session opened
-// ([execstate.State.BridgeFrom]) — a place in that order, which is the right
-// one for which job made a call — and held at through ([heldAt]): where it is
-// set, the save point of a capture of the job's session
-// ([SessionBasis.Through]), none the log took after it, so the calls the
-// capture had been answered, whose loads the restored session holds, whatever
-// their place; and nil, for the job's own copy of its session in its box where
-// its harness ended its own run, every call it made but a late one or one
-// nobody waited for. NEVER A LATE CALL, whose place can fall past from — an
-// earlier job's call still running when this one opened, numbered by that
-// job's session — and whose answer no brief of the round had told when the log
-// took it, and the session of the job that made it may not hold; NOR ONE NOBODY
-// WAITED FOR, whose answer never reached its session. A call with no place is
-// no job's. owed is the reads the session holds only as an earlier brief's
-// count ([heldAt]), which the one test reads as it reads them everywhere: none
-// is ever the job's own, since each came before the read its brief was built
-// from, and so before the job's session opened.
+// rebuilt for holds, in bridge admission order: past from, the last call the
+// round held when the job's session opened ([execstate.State.BridgeFrom]; a
+// place in that order is the right one for which job made a call), and held at
+// through ([heldAt]): where set, a capture's save point ([SessionBasis.Through]);
+// nil, for the job's own copy whose harness ended its run, every call it made but
+// a late or abandoned one. NEVER A LATE CALL, whose place can fall past from (an
+// earlier job's call still running when this one opened) and which no brief had
+// told; NOR ONE NOBODY WAITED FOR, whose answer never reached its session. A call
+// with no place is no job's. owed is the reads held only as an earlier brief's
+// count ([heldAt]): none is the job's own, each preceding its brief's read.
 func ownCalls(bridged []BridgedCall, from int, through *int, owed []int) []ledger.Call {
 	var out []ledger.Call
 	for _, call := range inAdmissionOrder(bridged) {
@@ -2383,10 +2015,10 @@ func ownCalls(bridged []BridgedCall, from int, through *int, owed []int) []ledge
 	return out
 }
 
-// ownHeld is the calls of held, the ones a reading found the session holding
-// ([exactHolds]), that one job made itself: past from, as [ownCalls] judges a
-// job's own. None of them is one ownCalls counts: a reading is asked only of
-// calls the save point does not hold ([Runner.holdingsAsk]).
+// ownHeld is the calls a reading found the session holding ([exactHolds]) that
+// one job made itself, past from as [ownCalls] judges. None is one ownCalls
+// counts: a reading is asked only of calls the save point does not hold
+// ([Runner.holdingsAsk]).
 func ownHeld(held []BridgedCall, from int) []ledger.Call {
 	var out []ledger.Call
 	for _, call := range held {

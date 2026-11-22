@@ -146,6 +146,8 @@ const (
 	TrackerFeedDeferred              = "crewlet.tracker.feed.deferred"
 	TrackerFeedUnreadable            = "crewlet.tracker.feed.unreadable"
 	WorkPickups                      = "crewlet.work.pickups"
+	SeatWakesRouted                  = "crewlet.seat.wakes.routed"
+	SeatRunCalls                     = "crewlet.seat.runs.calls"
 	TrackerSearchAnswers             = "crewlet.tracker.search.answers"
 	TrackerSearchConcurrency         = "crewlet.tracker.search.concurrency"
 	TrackerSearchScanDuration        = "crewlet.tracker.search.scan.duration"
@@ -207,4 +209,22 @@ const (
 	ToolArgsOutsideSchema       = "crewlet.tools.args_outside_schema"
 	AssistantBriefRowsDropped   = "crewlet.assistant.brief.rows_dropped"
 	AssistantCardsShownAsNotice = "crewlet.assistant.cards.shown_as_notice"
+)
+
+// THE CODE SANDBOX'S INSTRUMENTS: the room an engine process's
+// executor-session spools share, which internal/sandbox measures and
+// internal/engine records (the sandbox links no state log). Named under
+// crewlet.executor, the sessions they spool, because crewlet.sandbox. is
+// the sandbox's subject head (topics.SandboxPrefix).
+const (
+	ExecutorSpoolHeldBytes = "crewlet.executor.spool.held_bytes"
+	ExecutorSpoolWait      = "crewlet.executor.spool.wait"
+)
+
+// THE NODE'S ANSWER BUDGET'S INSTRUMENTS, which internal/queue measures and
+// internal/engine records: every payload answer's wait for its weight, and the
+// bytes the budget holds.
+const (
+	QueueAnswerHeldBytes = "crewlet.queue.answers.held_bytes"
+	QueueAnswerWait      = "crewlet.queue.answers.wait"
 )

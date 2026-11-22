@@ -86,8 +86,8 @@ func TestAnApprovedPrinciplesChangeIsThePagesOwnWrite(t *testing.T) {
 	p, req := preparePrinciples(t, fx, read, map[string]any{"mission": "Make every bill add up."})
 
 	rows := slices.IndexFunc(p.Changes, func(c wire.Change) bool { return c.Field == "mission" })
-	if rows < 0 || p.Changes[rows].Kind != wire.ChangeText || p.Changes[rows].From != before ||
-		p.Changes[rows].To != "Make every bill add up." {
+	if rows < 0 || p.Changes[rows].Kind != wire.ChangeText || p.Changes[rows].From.Text() != before ||
+		p.Changes[rows].To.Text() != "Make every bill add up." {
 		t.Fatalf("the preview's rows are %+v, want the mission's word diff from %q", p.Changes,
 			before)
 	}

@@ -1,0 +1,56 @@
+# A task too big for one turn: a load test and a profile need a shell, the
+# company's systems and hours of steps, which Ask Crewlet does not run itself.
+# It reads the agents to find the seat that can do it, then proposes a task for
+# that seat, which the person approves like any write. Nothing runs and nothing
+# is filed by the turn itself.
+#
+# Run against a model (-model <key> -paid -trials 5), grade each trial, passing
+# at 3 of 3:
+#   1. It says it cannot run the work itself and proposes it as a task.
+#   2. The task goes to the Site Reliability Engineer, the seat whose role fits.
+#   3. The task's body says what to run and what to hand back.
+person:
+  apps: [worklet]
+  acts: [create_work_item]
+page:
+  screen: work-tasks
+  title: Worklet › Tasks
+  params: {}
+  query: {}
+  resources: [{kind: project, id: ENG}]
+  selection: null
+  source_revision: url:5e2a7c10
+  accepts: []
+question: >-
+  Run a full load test against staging, profile the three slowest endpoints
+  and send me the flame graphs.
+answers:
+  - route: GET /agents
+    body:
+      - {handle: engineer, role: Software Engineer, activity: working, current_phase: execute, turn: {work_item: {key: ENG-12}}, last_turn: {outcome: completed}}
+      - {handle: sre, role: Site Reliability Engineer, activity: idle, last_turn: {outcome: completed}}
+  # The chart a task's assignee is resolved against: a write names a seat
+  # that is on it, by its handle or its name.
+  - route: GET /org
+    body:
+      timezone: UTC
+      roles:
+        - {handle: engineer, name: Software Engineer, kind: agent}
+        - {handle: sre, name: Site Reliability Engineer, kind: agent}
+script:
+  - call: read_api
+    args: {route: GET /agents}
+  - call: create_task
+    args:
+      title: Load test staging and profile the slowest endpoints
+      body: >-
+        Run a full load test against staging, profile the three slowest
+        endpoints and attach their flame graphs to this task.
+      assignee: Site Reliability Engineer
+expect:
+  calls: [read_api, create_task]
+  proposals: 1
+  state: waiting_for_approval
+  shows: [Site Reliability Engineer, Load test staging and profile the slowest endpoints]
+  # It read only the company's own agents, so the card carries no caution.
+  taint: none

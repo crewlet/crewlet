@@ -14,6 +14,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/redact/redacttest"
 )
 
 // catalogue is every payload this package registers, one prototype each. It is
@@ -41,6 +43,8 @@ func catalogue() []events.Payload {
 		BudgetExhausted{}, BudgetMeters{},
 		// waiting.go
 		SeatInboxWaiting{},
+		// seat.go, placement
+		SeatPlaced{}, SeatReleased{},
 		// auxiliary.go
 		AuxiliarySpend{},
 		// provider.go
@@ -91,7 +95,7 @@ func catalogue() []events.Payload {
 		// assistant.go
 		AssistantTurnCompleted{},
 		// seat.go
-		SeatPaused{}, SeatResumed{}, AgentTurnStopped{}, AgentTurnSteered{},
+		SeatPaused{}, SeatResumed{}, AgentTurnStopped{}, AgentTurnSteered{}, AgentTurnJoined{},
 		// seataccess.go
 		SeatAccessDriftRestored{},
 		SeatGrantChanged{},
@@ -113,6 +117,7 @@ var wireTypes = []string{
 	"agent_spawned",
 	"agent_terminated",
 	"agent_turn_completed",
+	"agent_turn_joined",
 	"agent_turn_progress",
 	"agent_turn_started",
 	"agent_turn_steered",
@@ -193,6 +198,8 @@ var wireTypes = []string{
 	"seat_paused",
 	"seat_provider_parked",
 	"seat_provider_released",
+	"seat_placed",
+	"seat_released",
 	"seat_resumed",
 	"skill_archived",
 	"skill_promoted",
@@ -399,6 +406,8 @@ var wireTags = map[string][]string{
 	"provider_fallback":             {"agent_id", "error_kind", "from_harness", "from_provider_key", "from_subscription", "iteration", "phase", "resets_at", "role", "to_provider_key", "turn_id", "work_key"},
 	"seat_provider_parked":          {"agent_handle", "agent_id", "harness", "provider_keys", "resets_at", "retry_at", "role", "said", "subscription"},
 	"seat_provider_released":        {"agent_handle", "agent_id", "reason", "role"},
+	"seat_placed":                   {"agent_handle", "agent_id", "epoch", "on_node", "role", "since"},
+	"seat_released":                 {"agent_handle", "agent_id", "epoch", "on_node", "reason", "role"},
 	"agent_turn_started":            {"agent_handle", "agent_id", "conversation_key", "resumed", "role", "started_at", "trigger", "turn_id", "work_item", "work_item_basis", "work_key"},
 	"agent_turn_completed":          {"agent_id", "cache_read_tokens", "cache_write_tokens", "calls_elided", "conversation_key", "decision", "elided_calls", "error", "error_file", "error_function", "error_kind", "execute_model", "failed", "input_tokens", "iterations", "model", "output_tokens", "prompt", "prompt_messages", "response", "review_model", "role", "stopped", "subagent_count", "subagent_input_tokens", "subagent_output_tokens", "subagent_tokens", "suspended", "tool_executions", "total_tokens", "trigger", "turn_id", "work_item", "work_item_basis", "work_key"},
 	"turn_completed":                {"acted", "agent_handle", "agent_id", "all_tool_names", "ask", "ask_provenance", "conversation_key", "duration_ms", "ended_at", "interactions", "iterations", "outcome", "pickup_answer", "plan_summary", "review_outcome", "role", "skills_used", "started_at", "suspended", "task_summary", "tool_sequence", "turn", "turn_id", "work_item", "work_item_basis", "work_key"},
@@ -445,7 +454,8 @@ var wireTags = map[string][]string{
 	"agent_capability_told":         {"agent_handle", "baseline", "changes", "digest", "lines", "revision_from", "revision_to", "told_at"},
 	"agent_turn_stopped":            {"agent_handle", "agent_id", "operator_id", "reason", "role", "stopped_by", "stopped_by_kind", "turn_id", "work_key"},
 	"agent_turn_steered":            {"agent_handle", "agent_id", "boundary", "iteration", "launch_id", "note", "note_id", "operator_id", "outcome", "phase", "retold", "role", "round", "sent_at", "steered_by", "steered_by_kind", "turn_id", "work_key"},
-	"executor_answer_given":         {"agent_handle", "agent_id", "answer", "answered_by", "answered_by_kind", "approval", "choice", "delegated_rule", "launch_id", "operator_id", "turn_id"},
+	"agent_turn_joined":             {"agent_handle", "agent_id", "boundary", "iteration", "launch_id", "outcome", "owes_answer", "role", "sent_at", "trigger_ids", "turn_id", "wake_id", "work_key", "written_by", "written_by_kind", "written_on"},
+	"executor_answer_given":         {"agent_handle", "agent_id", "answer", "answered_by", "answered_by_kind", "approval", "choice", "delegated_rule", "fold_in", "launch_id", "operator_id", "turn_id", "waited"},
 	"executor_answered":             {"agent_handle", "agent_id", "answer", "answer_bytes", "answer_max_bytes", "answered_by", "answered_by_kind", "asked_at", "audience_handles", "choice", "decision", "delegated_rule", "launch_id", "operator_id", "outcome", "question", "question_context", "role", "turn_id", "via", "work_item", "work_key"},
 	"phase.tool_skill_blocked":      {"agent_id", "iteration", "phase", "role", "skill_keys", "tool_name", "turn_id", "work_key"},
 	"prompt.size":                   {"agent_id", "approximate_tokens", "iteration", "phase", "role", "system_bytes", "tool_bytes", "tool_count", "turn_id", "user_bytes", "work_key"},
@@ -757,6 +767,60 @@ func TestATriggersSummaryIsOneLineWithinItsBound(t *testing.T) {
 		Subject: "Need a hand"}, events.TraceContext{})).Summary
 	if short != "Message from alice: Need a hand" {
 		t.Errorf("a short subject is summarised as %q, want it whole", short)
+	}
+}
+
+// A TRIGGER'S SUMMARY HOLDS NO SECRET HOWEVER ITS CUT FALLS. The summary rides
+// every record of the turn it woke, and a subject is somebody's words: a key in
+// the kept opening, and a bearer token with the bound falling at every offset
+// of it and of its marker, reach the summary as markers, never in part.
+//
+// Mutation: cut before redacting, and the cut keeps the head of the credential
+// it ran across; drop the move back off a marker, and a cut inside one keeps
+// it in part.
+func TestATriggersSummaryHoldsNoSecretHoweverItsCutFalls(t *testing.T) {
+	t.Parallel()
+	sample := map[string]string{}
+	for _, s := range redacttest.Shapes() {
+		sample[s.Name] = s.Sample
+	}
+	opening, value := sample["anthropic-key"], sample["jwt"]
+	straddling := "Authorization: Bearer " + value
+	summarise := func(subject string) string {
+		return DescribeTrigger(events.New(ExternalNotification{NotificationSource: "mail", Sender: "alice",
+			Subject: subject}, events.TraceContext{})).Summary
+	}
+	// THE CUT AT EVERY OFFSET of the token and of its marker, placed in the
+	// redaction's bytes, which the opening's own marker shortens.
+	head := "deploy key " + opening + " "
+	lead := len("Message from alice: ") + len(redact.Secrets(head))
+	for at := 1; at < len(redact.Secrets(straddling))+2*redact.LongestMarker(); at++ {
+		subject := head + strings.Repeat("x", MaxTriggerSummaryBytes-lead-at) + " " + straddling + " " +
+			strings.Repeat("y", 256)
+		got := summarise(subject)
+		if len(got) > MaxTriggerSummaryBytes || !strings.HasSuffix(got, "…") {
+			t.Fatalf("a %d-byte subject is summarised in %d bytes, want it cut within %d and marked",
+				len(subject), len(got), MaxTriggerSummaryBytes)
+		}
+		for _, secret := range []string{opening, value} {
+			for i := 0; i+6 <= len(secret); i++ {
+				if strings.Contains(got, secret[i:i+6]) {
+					t.Errorf("the bound %d bytes into the token's line: the summary holds %q of a credential", at,
+						secret[i:i+6])
+					break
+				}
+			}
+		}
+		for _, words := range redact.OwnWords(got) {
+			if strings.Contains(words, "REDACTED") {
+				t.Errorf("the bound %d bytes into the token's line: the summary holds a marker in part", at)
+				break
+			}
+		}
+	}
+	if got := summarise("deploy key " + opening); strings.Contains(got, opening[:12]) ||
+		!strings.HasPrefix(got, "Message from alice: deploy key ") {
+		t.Errorf("a short subject is summarised as %q, want its credential redacted and the rest kept", got)
 	}
 }
 

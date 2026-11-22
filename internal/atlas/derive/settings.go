@@ -119,21 +119,26 @@ func (s Settings) derive(at time.Time) *builder {
 // integration kind has a row: an integration the engine connects is an
 // account the company holds, or for SSH the servers it declares.
 var integrationRows = map[integration.Kind]func(b *builder, c *config.Company, zones map[string]atlas.Ref){
-	integration.KindSlack:        slack,
-	integration.KindMattermost:   mattermost,
-	integration.KindJira:         jira,
-	integration.KindConfluence:   confluence,
-	integration.KindGitHub:       github,
-	integration.KindGitLab:       gitlab,
-	integration.KindDatadog:      datadog,
-	integration.KindCloudflare:   cloudflare,
-	integration.KindScaleway:     scaleway,
-	integration.KindExpo:         expo,
-	integration.KindDigitalOcean: digitalocean,
-	integration.KindAWS:          aws,
-	integration.KindGoogleCloud:  googleCloud,
-	integration.KindSSH:          sshHosts,
-	integration.KindAtlassian:    atlassian,
+	integration.KindSlack:           slack,
+	integration.KindMattermost:      mattermost,
+	integration.KindJira:            jira,
+	integration.KindConfluence:      confluence,
+	integration.KindGitHub:          github,
+	integration.KindGitLab:          gitlab,
+	integration.KindDatadog:         datadog,
+	integration.KindCloudflare:      cloudflare,
+	integration.KindScaleway:        scaleway,
+	integration.KindExpo:            expo,
+	integration.KindDigitalOcean:    digitalocean,
+	integration.KindAWS:             aws,
+	integration.KindGoogleCloud:     googleCloud,
+	integration.KindSSH:             sshHosts,
+	integration.KindMetaAds:         metaAds,
+	integration.KindAppStoreConnect: appStoreConnect,
+	integration.KindAppleAds:        appleAds,
+	integration.KindGoogleAnalytics: googleAnalytics,
+	integration.KindAdMob:           adMob,
+	integration.KindAtlassian:       atlassian,
 }
 
 var (
@@ -356,6 +361,88 @@ func expo(b *builder, c *config.Company, _ map[string]atlas.Ref) {
 	}
 	b.account("integrations.expo.provisioning.account_name", atlas.VendorExpo, name, name, "Expo", e.Enabled,
 		atlas.CapabilityAppDelivery)
+}
+
+// metaAds records the connected Meta business portfolio, keyed by its ID
+// where the document names it, else by its app's ID; neither is a secret.
+func metaAds(b *builder, c *config.Company, _ map[string]atlas.Ref) {
+	m := c.Integrations.MetaAds
+	if m == nil {
+		return
+	}
+	where, key := "integrations.meta_ads.business_id", strings.TrimSpace(m.BusinessID)
+	if key == "" {
+		where, key = "integrations.meta_ads.app_id", strings.TrimSpace(m.AppID)
+	}
+	b.account(where, atlas.VendorMeta, key, key, "Meta Ads Manager", m.Enabled)
+}
+
+// appStoreConnect records each connected App Store Connect team, keyed by its
+// issuer ID, which is not a secret.
+func appStoreConnect(b *builder, c *config.Company, _ map[string]atlas.Ref) {
+	a := c.Integrations.AppStoreConnect
+	if a == nil {
+		return
+	}
+	for _, id := range a.ConnectionIDs() {
+		issuer := strings.ToLower(a.Connections[id].IssuerID)
+		b.account("integrations.app_store_connect.connections."+id+".issuer_id", atlas.VendorApple, issuer, issuer,
+			"App Store Connect", a.Enabled, atlas.CapabilityAppDelivery)
+	}
+}
+
+// appleAds records each connected Apple Ads organization, keyed by its ID
+// where the document names it, else by its API user's client ID; neither is a
+// secret.
+func appleAds(b *builder, c *config.Company, _ map[string]atlas.Ref) {
+	a := c.Integrations.AppleAds
+	if a == nil {
+		return
+	}
+	for _, id := range a.ConnectionIDs() {
+		conn := a.Connections[id]
+		where, key := "integrations.apple_ads.connections."+id+".org_id", strings.TrimSpace(conn.OrgID)
+		if key == "" {
+			where, key = "integrations.apple_ads.connections."+id+".client_id", strings.ToLower(conn.ClientID)
+		}
+		b.account(where, atlas.VendorApple, key, key, "Apple Ads", a.Enabled)
+	}
+}
+
+// googleAnalytics records each Google Analytics property the company narrows
+// agents to, keyed by its ID, or the vendor alone where it names none.
+func googleAnalytics(b *builder, c *config.Company, _ map[string]atlas.Ref) {
+	g := c.Integrations.GoogleAnalytics
+	if g == nil {
+		return
+	}
+	if len(g.Properties) == 0 {
+		b.account("integrations.google_analytics", atlas.VendorGoogle, "analytics", "", "Google Analytics",
+			g.Enabled, atlas.CapabilityAnalytics)
+		return
+	}
+	for i, id := range g.Properties {
+		b.account("integrations.google_analytics.properties["+strconv.Itoa(i)+"]", atlas.VendorGoogle,
+			"analytics/"+id, id, "Google Analytics", g.Enabled, atlas.CapabilityAnalytics)
+	}
+}
+
+// adMob records each AdMob publisher account the company narrows agents to,
+// keyed by its ID, or the vendor alone where it names none.
+func adMob(b *builder, c *config.Company, _ map[string]atlas.Ref) {
+	a := c.Integrations.AdMob
+	if a == nil {
+		return
+	}
+	if len(a.Accounts) == 0 {
+		b.account("integrations.admob", atlas.VendorGoogle, "admob", "", "AdMob", a.Enabled,
+			atlas.CapabilityMonetization)
+		return
+	}
+	for i, id := range a.Accounts {
+		b.account("integrations.admob.accounts["+strconv.Itoa(i)+"]", atlas.VendorGoogle, "admob/"+id, id,
+			"AdMob", a.Enabled, atlas.CapabilityMonetization)
+	}
 }
 
 func digitalocean(b *builder, c *config.Company, _ map[string]atlas.Ref) {

@@ -46,7 +46,6 @@ const JANE = {
   assistant: "no_model",
   assistantModel: null,
   assistantReadsImages: false,
-  assistantAssigned: null,
   assistantCanAssign: false,
   chatVendors: [],
 } as unknown as ViewerState;

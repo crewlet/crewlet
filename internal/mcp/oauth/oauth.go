@@ -1,9 +1,12 @@
-// Package oauth is the engine's OAuth client for a remote MCP server: the
-// protocol of signing the company in at the server's vendor, and of renewing
-// and revoking what that sign-in granted. It holds nothing and stores nothing:
-// the grant, the session a sign-in is between and the access token a server is
-// sent are the engine's (internal/engine's mcpoauth.go), and this package is
-// the requests they are made with (ADR-0075 decides what the engine keeps).
+// Package oauth is the engine's OAuth client for the company's grants: a remote
+// MCP server's, and an integration's consent grant at its vendor (ADR-0178):
+// the protocol of signing the company in, and of renewing and revoking what
+// that sign-in granted. It holds nothing and stores nothing: the grant, the
+// session a sign-in is between and the access token a vendor is sent are the
+// engine's (internal/engine's oauthgrant.go), and this package is the requests
+// they are made with (ADR-0075 decides what the engine keeps). A vendor that
+// names no resource (Google) is sent none, and a vendor's own authorization
+// parameters ride beside the protocol's (AuthorizeURL).
 //
 // # What a sign-in is
 //
@@ -249,13 +252,15 @@ func Scopes(configured []string, ep *mcp.OAuthEndpoints) []string {
 
 // AuthorizeURL is where a person's browser is sent to consent: ep's
 // authorization endpoint, with the client, the callback, the signed state, the
-// PKCE challenge, the scopes and the resource.
+// PKCE challenge, the scopes, the resource where ep names one, and the
+// vendor's own parameters in extra (Google's offline access), which never
+// replace one of those.
 //
 // HTTPS, OR THE SERVER'S OWN ORIGIN: the browser of a signed-in person is sent
 // to it, so an address in some other scheme (javascript:, data:, plain http
 // to a third party) is refused rather than handed to a page.
 func AuthorizeURL(ep *mcp.OAuthEndpoints, client Client, redirect, state, challenge string,
-	scopes []string) (string, error) {
+	scopes []string, extra url.Values) (string, error) {
 
 	u, err := url.Parse(ep.Authorization)
 	if err != nil || u.Host == "" {
@@ -263,21 +268,41 @@ func AuthorizeURL(ep *mcp.OAuthEndpoints, client Client, redirect, state, challe
 	}
 	if !strings.EqualFold(u.Scheme, "https") && !mcp.SameOrigin(ep.Authorization, ep.Server) {
 		return "", fmt.Errorf("the authorization endpoint %s is not an https address",
-			redact.URL(textcut.Bytes(ep.Authorization, maxVendorWords)))
+			textcut.Bytes(redact.URL(ep.Authorization), maxVendorWords))
 	}
 	q := u.Query()
+	for name, values := range extra {
+		if !slices.Contains(protocolParams, name) {
+			q[name] = slices.Clone(values)
+		}
+	}
 	q.Set("response_type", "code")
 	q.Set("client_id", client.ID)
 	q.Set("redirect_uri", redirect)
 	q.Set("state", state)
 	q.Set("code_challenge", challenge)
 	q.Set("code_challenge_method", MethodS256)
-	q.Set("resource", ep.Resource)
+	setResource(q, ep)
 	if len(scopes) > 0 {
 		q.Set("scope", strings.Join(scopes, " "))
 	}
 	u.RawQuery = q.Encode()
 	return u.String(), nil
+}
+
+// protocolParams are the authorization request's own parameters, which a
+// vendor's extra parameters never set: a scope or resource left unset stays
+// unset rather than taken from them.
+var protocolParams = []string{"response_type", "client_id", "redirect_uri", "state", "code_challenge",
+	"code_challenge_method", "resource", "scope"}
+
+// setResource names ep's resource on a request (RFC 8707), and none where ep
+// names none: an authorization server with no resource indicators (Google)
+// refuses a request carrying an empty one.
+func setResource(v url.Values, ep *mcp.OAuthEndpoints) {
+	if ep.Resource != "" {
+		v.Set("resource", ep.Resource)
+	}
 }
 
 // Exchange trades an authorization code for the grant (RFC 6749, 4.1.3), with
@@ -291,8 +316,8 @@ func Exchange(ctx context.Context, ep *mcp.OAuthEndpoints, client Client, code, 
 		"code":          {code},
 		"redirect_uri":  {redirect},
 		"code_verifier": {verifier},
-		"resource":      {ep.Resource},
 	}
+	setResource(form, ep)
 	tokens, err := tokenRequest(ctx, ep, client, form, now)
 	if err != nil {
 		return Tokens{}, err
@@ -342,10 +367,8 @@ func ClientCredentials(ctx context.Context, ep *mcp.OAuthEndpoints, client Clien
 	if client.Secret == "" {
 		return Tokens{}, errors.New("a service identity signs in with its client's secret, and none was given")
 	}
-	form := url.Values{
-		"grant_type": {GrantClientCredentials},
-		"resource":   {ep.Resource},
-	}
+	form := url.Values{"grant_type": {GrantClientCredentials}}
+	setResource(form, ep)
 	if len(scopes) > 0 {
 		form.Set("scope", strings.Join(scopes[:min(len(scopes), maxScopes)], " "))
 	}
@@ -365,8 +388,8 @@ func Refresh(ctx context.Context, ep *mcp.OAuthEndpoints, client Client, refresh
 	form := url.Values{
 		"grant_type":    {"refresh_token"},
 		"refresh_token": {refresh},
-		"resource":      {ep.Resource},
 	}
+	setResource(form, ep)
 	return tokenRequest(ctx, ep, client, form, now)
 }
 
@@ -624,11 +647,13 @@ func withheld(s string, sent []string) string {
 }
 
 // vendorWords is a string an authorization server sent, as anything here
-// holds it: one line, cut to [maxVendorWords], every credential-shaped run
-// withheld.
+// holds it: one line, every credential-shaped run withheld, cut to
+// [maxVendorWords]. Redacted whole first and cut after, reading one byte past
+// the bound ([redact.Prefix]), so what is kept is the opening of the whole
+// redaction.
 func vendorWords(s string) string {
-	s = strings.Join(strings.Fields(s), " ")
-	return redact.Secrets(textcut.Bytes(s, maxVendorWords))
+	opening, _ := redact.Prefix(strings.Join(strings.Fields(s), " "), maxVendorWords+1)
+	return textcut.Bytes(opening, maxVendorWords)
 }
 
 // unwrap is a client's error without the url.Error around it, whose sentence

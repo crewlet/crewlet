@@ -208,6 +208,15 @@ func (r engineRuntime) AtlasReads() builtin.AtlasDeps { return engine.AtlasToolD
 // takes it.
 func (r engineRuntime) DelegatedReads() queries.DelegatedReads { return r.engine.SSHAccess() }
 
+// growthRuntime is a runtime whose access log the growth changes read answers
+// from: the engine's, and no test runtime that keeps none.
+type growthRuntime interface {
+	GrowthReads() queries.GrowthReads
+}
+
+// GrowthReads is the engine's access log, as the growth changes read takes it.
+func (r engineRuntime) GrowthReads() queries.GrowthReads { return r.engine.GrowthAudit() }
+
 // DelegatedGitHub is the company's GitHub as a rule's form reads it, through
 // the agents' apps of the wiring the engine holds now.
 func (r engineRuntime) DelegatedGitHub() queries.DelegatedGitHub { return r.engine }
@@ -234,6 +243,9 @@ func (r engineRuntime) IssueReports() queries.IssueReportReader {
 	}
 	return nil
 }
+
+// GrowthCards is the engine's growth products, which word each held act's card.
+func (r engineRuntime) GrowthCards() mcpapi.GrowthCards { return r.engine.GrowthCards() }
 
 // MCPApprovals is the answer desk over the fleet's runs and this node's
 // queue, the one `answer_executor` answers a run through; untyped nil without
@@ -274,9 +286,9 @@ func (r engineRuntime) MCPSignIns() mcpapi.SignIns { return mcpSignIns{e: r.engi
 // MCPGrants is the engine's read of each MCP server's OAuth grant.
 func (r engineRuntime) MCPGrants() queries.MCPGrantReader { return r.engine }
 
-// MCPLanding is the engine finishing a sign-in where the vendor sends the
-// person back, its refusals mapped onto the page's ([mcpLanding]).
-func (r engineRuntime) MCPLanding() webhooks.MCPSignIns { return mcpLanding{e: r.engine} }
+// OAuthLanding is the engine finishing a sign-in where the vendor sends the
+// person back, its refusals mapped onto the page's ([oauthLanding]).
+func (r engineRuntime) OAuthLanding() webhooks.OAuthSignIns { return oauthLanding{e: r.engine} }
 
 // Builtins is the engine's own tools as this node's seats are offered them, off
 // the registry of the revision this node runs ([builtinOffer]).

@@ -159,6 +159,9 @@ type Options struct {
 	// is then never approved here.
 	HeldCalls *sandbox.CallSeal
 
+	// Cards reads a held growth act's decision card; nil shows none.
+	Cards GrowthCards
+
 	// Reviews reads a server's tool changes and writes a decision about
 	// one (changes.go); nil leaves the review route answered unavailable.
 	Reviews Reviews
@@ -197,6 +200,7 @@ type Service struct {
 	tools     ToolDocuments
 	approvals Approvals
 	heldCalls *sandbox.CallSeal
+	cards     GrowthCards
 	reviews   Reviews
 	values    ValueStore
 	now       func() time.Time
@@ -248,7 +252,7 @@ func New(opts Options) (*Service, error) {
 	}
 	return &Service{company: opts.Company, registry: registry, detail: opts.Detail,
 		restarter: opts.Restarter, checker: opts.Checker, drafts: opts.Drafts, documents: opts.Documents,
-		tools: opts.Tools, approvals: opts.Approvals, heldCalls: opts.HeldCalls, reviews: opts.Reviews, values: opts.Values, now: now,
+		tools: opts.Tools, approvals: opts.Approvals, heldCalls: opts.HeldCalls, cards: opts.Cards, reviews: opts.Reviews, values: opts.Values, now: now,
 		signIns: opts.SignIns, audit: opts.Audit, guard: guard}, nil
 }
 

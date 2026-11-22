@@ -16,7 +16,6 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/delegated"
-	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/kept"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/textcut"
@@ -226,12 +225,19 @@ func (h *CallHold) holdFixed(ctx context.Context, turn *turnctx.Turn, runID, lau
 			return res, false
 		}
 	}
+	prep, refusal := prepared(ctx, tool, turn, call.Args)
+	if refusal != nil {
+		return *refusal, false
+	}
 	held := sandbox.HeldCall{
 		ID: uuid.Must(uuid.NewV7()).String(), LaunchID: launch,
 		Server: config.ToolServerName, Tool: call.Name, Raw: call.Name, Digest: tool.Digest(),
-		HeldAt: h.now().UTC(), Fixed: true, Approvers: tool.Approvers(), Binding: tool.Binding(turn, call.Args),
+		HeldAt: h.now().UTC(), Fixed: true, Approvers: tool.Approvers(), Binding: prep.Binding,
 		Acting: acting, Act: string(tool.Act()), Delegation: h.delegation(tool.Act(), call.Args),
-		Subject: tool.Subject(turn, call.Args),
+		Subject: prep.Subject,
+	}
+	if held.Approvers == sandbox.HeldApproversAdmin {
+		held.LapsesAt = held.HeldAt.Add(sandbox.HeldLapse)
 	}
 	if res, ok := h.sealArgs(ctx, runID, &held, call); !ok {
 		return res, false
@@ -243,18 +249,29 @@ func (h *CallHold) holdFixed(ctx context.Context, turn *turnctx.Turn, runID, lau
 	if res, joined := h.joined(ctx, turn.Handle(), runID, held); joined {
 		return res, false
 	}
-	question, context := tool.HeldWords(turn, call.Args)
-	return h.record(ctx, runID, launch, call.Name, sandbox.Ask{
-		Question: question, Context: context + actingWords(held.Acting),
-		Decision: sandbox.HeldFixedDecision(question, heldEvidence(turn)),
+	res, recorded := h.record(ctx, runID, launch, call.Name, sandbox.Ask{
+		Question: prep.Question, Context: prep.Context + actingWords(held.Acting),
+		Decision: sandbox.HeldFixedDecision(prep.Question, heldEvidence(turn)),
 		To:       sandbox.AskToManager,
 		Held:     &held,
 	})
+	// RECORDED ONCE IT IS HELD, never before: a call refused or joined above
+	// asked nobody. The ask stands if its record fails; the answer and the
+	// outcome are recorded before they act.
+	if recorded && prep.Held != nil {
+		if err := prep.Held(ctx, held.ID); err != nil {
+			log.ErrorContext(ctx, "held_call_ask_unrecorded", "tool", call.Name, "held_call", held.ID,
+				"error", err.Error())
+		}
+	}
+	return res, recorded
 }
 
-// joined answers a call whose seat already holds an open request of the same
-// act and subject on another run (ADR-0125), so nothing new is held. A read
-// that fails refuses the call: holding it unread is how a second one is made.
+// joined answers a call whose seat already holds a request of the same act and
+// subject on another run that has not come to an end ([sandbox.PendingRun.HeldInFlight]):
+// still waiting on its answer, or answered and being carried out (ADR-0125), so
+// nothing new is held. A read that fails refuses the call: holding it unread is
+// how a second one is made.
 func (h *CallHold) joined(ctx context.Context, seat, runID string, held sandbox.HeldCall) (tools.Result, bool) {
 	if held.Subject == "" {
 		return tools.Result{}, false
@@ -266,12 +283,15 @@ func (h *CallHold) joined(ctx context.Context, seat, runID string, held sandbox.
 	}
 	for _, run := range runs {
 		open := run.HeldCall
-		if run.TurnID == runID || !run.HeldOpen() || open.Act != held.Act || open.Subject != held.Subject {
+		if run.TurnID == runID || !run.HeldInFlight() || open.Act != held.Act || open.Subject != held.Subject {
 			continue
 		}
-		who := "a person who may approve it"
-		if open.Delegated() {
-			who = "the company's delegate for it (" + words.And(open.Delegation.Delegates) + ")"
+		where := "still waits on a person who may approve it"
+		switch {
+		case run.Answer != nil || open.Calling():
+			where = "was answered, and the turn that asked it is acting on the answer now"
+		case open.Delegated():
+			where = "still waits on the company's delegate for it (" + words.And(open.Delegation.Delegates) + ")"
 		}
 		on := ""
 		if item := workItemOf(run); item != "" {
@@ -280,13 +300,13 @@ func (h *CallHold) joined(ctx context.Context, seat, runID string, held sandbox.
 		log.InfoContext(ctx, "held_call_joined", "seat", seat, "tool", held.Tool, "request", open.ID,
 			"run", runID, "asked_by_run", run.TurnID)
 		// A CONFLICT, not a fault: the surface records every call it did not
-		// make as refused, and this one for what already waits.
+		// make as refused, and this one for what is already under way.
 		return refused(tools.RefusalConflict, fmt.Sprintf("%s did not ask again: you already asked exactly "+
-			"this in another turn%s, and that request (%s, asked %s) still waits on %s. Nothing new was put "+
-			"to anybody, and this run is not parked. One answer decides it, and the turn that asked carries "+
-			"the work on when it comes: do not call %s for it again, and leave that step to that turn. "+
-			"Finish what else this turn has, or end it.", held.Tool, on, open.ID,
-			open.HeldAt.UTC().Format("15:04 UTC"), who, held.Tool)), true
+			"this in another turn%s, and that request (%s, asked %s) %s. Nothing new was put to anybody, "+
+			"and this run is not parked. One answer decides it, and the turn that asked carries the work on "+
+			"with it: do not call %s for it again, and leave that step to that turn. Finish what else this "+
+			"turn has, or end it.", held.Tool, on, open.ID, open.HeldAt.UTC().Format("15:04 UTC"), where,
+			held.Tool)), true
 	}
 	return tools.Result{}, false
 }
@@ -375,6 +395,34 @@ type fixedTool interface {
 	Subject(turn *turnctx.Turn, args map[string]any) string
 }
 
+// preparedTool is a fixed tool whose question, binding and subject are read
+// live, once, before the call is held: a growth act's target, its before-state
+// and the spend guard's figures, which separate reads could see change between
+// them. A refusal is answered and nothing is held.
+type preparedTool interface {
+	PrepareHold(ctx context.Context, turn *turnctx.Turn, args map[string]any) (HeldPrep, *tools.Result)
+}
+
+// HeldPrep is what a held call is recorded with: its binding and subject
+// ([fixedTool.Binding], [fixedTool.Subject]) and the words a person reads.
+// Held, where set, is told the call's id once it is held, and records what the
+// access log keeps of the ask (a growth act's, ADR-0171).
+type HeldPrep struct {
+	Binding, Subject, Question, Context string
+	Held                                func(ctx context.Context, heldID string) error
+}
+
+// prepared is tool's prepared hold: read live by a [preparedTool], or from
+// the fixed tool's own methods.
+func prepared(ctx context.Context, tool fixedTool, turn *turnctx.Turn, args map[string]any) (HeldPrep, *tools.Result) {
+	if p, ok := tool.(preparedTool); ok {
+		return p.PrepareHold(ctx, turn, args)
+	}
+	question, context := tool.HeldWords(turn, args)
+	return HeldPrep{Binding: tool.Binding(turn, args), Subject: tool.Subject(turn, args), Question: question,
+		Context: context}, nil
+}
+
 // decidedTool is a fixed tool whose call a person may approve before it is
 // made, through a decision the engine composed: it makes the call now where
 // the decision the turn carries out approved exactly it (ADR-0125).
@@ -390,16 +438,10 @@ type heldTool interface {
 	Digest() string
 }
 
-// heldEvidence is what a held call cites: the work item the run is on, where it
-// is a Crewlet Works task (the one kind of item a task reference names).
+// heldEvidence is what a held call cites ([sandbox.TaskEvidence]).
 func heldEvidence(turn *turnctx.Turn) []decision.Evidence {
-	if turn == nil || turn.WorkItem == nil || turn.WorkItem.Backend != types.WorkWorklet ||
-		turn.WorkItem.ID == "" {
+	if turn == nil {
 		return nil
 	}
-	label := turn.WorkItem.Key
-	if len(label) > decision.MaxEvidenceLabel {
-		label = ""
-	}
-	return []decision.Evidence{{Kind: decision.EvidenceTask, Ref: turn.WorkItem.ID, Label: label}}
+	return sandbox.TaskEvidence(turn.WorkItem)
 }

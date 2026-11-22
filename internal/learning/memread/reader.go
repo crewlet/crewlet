@@ -287,8 +287,11 @@ var errNotAddressed = errors.New("memread: the read is addressed to another inca
 // addressed and has not attached the seat says so rather than answering from a
 // copy that is still arriving — or that is left over from a tenure that ended.
 func Serve(ctx context.Context, q Server, owner string, attached func() []uuid.UUID,
-	local *Stores,
+	local *Stores, answers *queue.AnswerBudget,
 ) (queue.Unsubscribe, error) {
+	if answers == nil {
+		return nil, errors.New("memread: serving needs the node's answer budget")
+	}
 	return q.Serve(ctx, topics.HeldRead, queue.ConcurrentAnswers, func(ctx context.Context, raw []byte) ([]byte, error) {
 		var req request
 		if err := json.Unmarshal(raw, &req); err != nil {
@@ -320,6 +323,14 @@ func Serve(ctx context.Context, q Server, owner string, attached func() []uuid.U
 		)
 		switch req.Question {
 		case QuestionMemory:
+			// WAITED FOR NO LONGER THAN ITS ASKER WAITS ([DefaultBudget]).
+			wait, cancel := context.WithTimeout(ctx, DefaultBudget)
+			release, holdErr := answers.Acquire(wait, queue.AnswerMemory, answerWeight)
+			cancel()
+			if holdErr != nil {
+				return refuse(holdErr.Error())
+			}
+			defer release()
 			answer, err = local.Memory(ctx, req.Seat,
 				MemoryQuery{Limit: req.Limit, Skills: req.SkillsOrder})
 		case QuestionEpisode:
@@ -374,15 +385,12 @@ func answerWith(owner string, answer any, refuse func(string) ([]byte, error)) (
 	}
 	// A REPLY THE TRANSPORT CANNOT CARRY IS NOT SENT AT ALL, and the asker
 	// would read the broker's refusal as a holder that never answered — so
-	// this refuses it, saying how large it was. Every collection of a memory
-	// answer is paged, a diary note is bounded where it is written
-	// (learning.MaxContentChars), and the two texts nothing bounds — an
-	// episode's ask and its account — are listed as their openings
-	// ([ListedTextBytes]); an overview row is three counts and one bounded
-	// note. So neither answer comes near the ceiling. ONE EPISODE READ WHOLE
-	// carries the two texts one completed turn's event carried, which this
-	// same ceiling held, so it is bounded by that event and not by anything
-	// here — and should one ever not fit, it is refused, by its size, rather
+	// this refuses it, saying how large it was. A memory answer is bounded
+	// where it is read ([pageBytes]; a diary note where it is written), and
+	// an overview row is three counts and one bounded note, so neither
+	// reaches this. It is the last guard for ONE EPISODE READ WHOLE, which
+	// carries the two texts one completed turn's event carried, held to this
+	// same ceiling: should one ever not fit, it is refused by its size rather
 	// than cut.
 	out, err := json.Marshal(reply{Version: WireVersion, Owner: owner, Answer: body})
 	if err != nil {

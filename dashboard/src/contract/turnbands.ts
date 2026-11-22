@@ -125,16 +125,18 @@ export const TURN_STOP: ReadonlySet<string> = new Set([
  * `agent_turn_started`, published before its context is gathered, carrying the
  * trigger that woke it and the item it is charged to, which the Context tab's
  * brief and the trail read and the Timeline starts its clock from — what its
- * prompt was assembled from before the first phase ran, and a person's note it
+ * prompt was assembled from before the first phase ran, a person's note it
  * was handed mid-turn — `agent_turn_steered`, which says whether the turn read
  * the note or ended first, drawn at the round or on the launch that read
- * it.
+ * it — and a message about its work it was handed mid-turn — `agent_turn_joined`,
+ * which says whether its run read the message or left it to a turn of its own.
  */
 export const GIVEN: ReadonlySet<string> = new Set([
   "agent_turn_started",
   "prefetch_summary",
   "prompt.size",
   "agent_turn_steered",
+  "agent_turn_joined",
 ]);
 
 /**

@@ -41,7 +41,7 @@ import (
 // [versionedFields]), so a field a later build adds holds back only the records
 // that carry it. It moves only with the table, and exactly to the table's
 // highest version.
-const RecordVersion = 7
+const RecordVersion = 9
 
 // baseRecordVersion is version 1, the base format: what a record carrying no
 // versioned field is stamped at.
@@ -88,6 +88,9 @@ var versionedFields = statelog.RecordFields{
 	{Name: "Record.LedgerUntallied", Since: 7, Path: []string{"ledger_untallied"}},
 	{Name: "Record.Refusals", Since: 7, Path: []string{"refusals"}},
 	{Name: "Record.RefusalsElided", Since: 7, Path: []string{"refusals_elided"}},
+	{Name: "Turns.BusyMS", Since: 8, Path: []string{"turns", "busy_ms"}},
+	{Name: "LedgerRow.Disposition joined", Since: 9, Path: []string{"ledger", "disposition"},
+		Equals: string(types.DispositionJoined)},
 }
 
 // VersionedFields is the table, for the conformance suite.
@@ -558,6 +561,12 @@ type Turns struct {
 
 	// Durations is every ended turn's duration, as a histogram.
 	Durations Hist `json:"duration_hist"`
+
+	// BusyMS is the sum of every ended turn's duration, in milliseconds:
+	// the seat's busy time that day on its node, exact rather than read off
+	// the histogram's bins. Nil on a record a build before it published,
+	// which said nothing of it, so a reader tells "not measured" from none.
+	BusyMS *int64 `json:"busy_ms,omitempty"`
 
 	LastEndedAt time.Time `json:"last_ended_at,omitzero"`
 }

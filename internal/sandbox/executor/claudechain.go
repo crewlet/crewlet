@@ -15,14 +15,12 @@ import (
 // models: 2.1.310 and 2.1.322, the two whose shipped code it was read from. A
 // SET, NEVER A RANGE: a model read off two releases says nothing of a third.
 // release is a `--version` reading as sandbox.ValidRelease holds one, compared
-// whole. Exact telling asks it of the release that wrote the session, since
-// its brief goes only to a box whose harness answers that release; the note
-// check asks it of the job's own and the relaunch box's. Where it answers
-// false, [threadChain]'s answer is no answer for that resume. TO ADD A
-// RELEASE, read its binary as data, never run, against every step of the
-// model at the offsets each step's doc gives, restate each step it does
-// otherwise with its offset, and run the facility's census over archives it
-// wrote and resumed; only then add it here.
+// whole. Exact telling asks it of the release that wrote the session, the note
+// check of the job's own and the relaunch box's. Where it answers false,
+// [threadChain]'s answer is no answer for that resume. TO ADD A RELEASE, read its binary as data, never run, against every
+// step of the model at the offsets each step's doc gives, restate each step it
+// does otherwise, and run the facility's census over archives it wrote and
+// resumed; only then add it here.
 func claudeResumeRead(release string) bool {
 	switch release {
 	case "2.1.310", "2.1.322":
@@ -48,13 +46,12 @@ const (
 type handedness string
 
 const (
-	// handedYes is a record the resume hands its model under every variant
-	// the reading cannot see.
+	// handedYes is a record handed under every variant the reading cannot see.
 	handedYes handedness = "handed"
-	// handedNo is a record it hands under none.
+	// handedNo is a record handed under none.
 	handedNo handedness = "not_handed"
-	// handedUnknown is a record a variant the reading cannot see decides, or
-	// one of a thread holding a shape no model holds.
+	// handedUnknown is a record such a variant decides, or one of a thread
+	// holding a shape no model holds.
 	handedUnknown handedness = "cannot_tell"
 )
 
@@ -73,69 +70,51 @@ type chainWhy string
 
 // Handed: why the resume hands a record under every variant.
 const (
-	// whyChain is a record on the walk from the leaf.
-	whyChain chainWhy = "chain"
-	// whyRecoveredReply is another record of a reply on the walk, found by its
-	// reply id and recovered beside it.
-	whyRecoveredReply chainWhy = "recovered_reply"
-	// whyRecoveredResult is a result whose parent is a record of a reply on
-	// the walk, recovered beside it.
-	whyRecoveredResult chainWhy = "recovered_result"
-	// whyHookChain is a record the recovery hangs off a reply on the walk that
-	// made a call ([threadChain.hang]), as a batch's hooks write their records
-	// under its results.
+	whyChain           chainWhy = "chain"            // on the walk from the leaf
+	whyRecoveredReply  chainWhy = "recovered_reply"  // another record of a walked reply, by reply id
+	whyRecoveredResult chainWhy = "recovered_result" // a result whose parent is a record of a walked reply
+	// whyHookChain is a record the recovery hangs off a walked reply that made
+	// a call ([threadChain.hang]), as a batch's hooks write theirs.
 	whyHookChain chainWhy = "hook_chain"
 	// whyLeafTail is a record the tails hang under the leaf
-	// ([threadChain.tails]), as a Stop hook writes its records under the
-	// turn's last reply.
+	// ([threadChain.tails]), as a Stop hook writes its records.
 	whyLeafTail chainWhy = "leaf_tail"
 )
 
 // Not handed: why the resume hands a record under no variant.
 const (
-	// whyOffConversation is a record no walk, recovery or tail reaches.
-	whyOffConversation chainWhy = "off_conversation"
-	// whyRetracted is a record the retraction filter drops.
-	whyRetracted chainWhy = "retracted"
-	// whyRelinkDeleted is a record the resume's relink deletes
-	// ([threadChain.relink]).
-	whyRelinkDeleted chainWhy = "relink_deleted"
+	whyOffConversation chainWhy = "off_conversation" // no walk, recovery or tail reaches it
+	whyRetracted       chainWhy = "retracted"        // the retraction filter drops it
+	whyRelinkDeleted   chainWhy = "relink_deleted"   // the relink deletes it ([threadChain.relink])
 	// whyMalformedAttachment is an attachment whose payload is not of its
-	// type's shape ([threadLine.AttachmentWellFormed]), which the main
-	// thread's drop takes after the retraction filter ([threadChain.judge]).
+	// type's shape ([threadLine.AttachmentWellFormed]), dropped in the main
+	// thread after the retraction filter ([threadChain.judge]).
 	whyMalformedAttachment chainWhy = "malformed_attachment"
 	// whyAnotherAgent is a record a subagent's own load reaches whose agentId,
-	// or none, is not that subagent's: it hands on its own id's alone
-	// ([threadChain.ownLeaf]).
+	// or none, is not that subagent's ([threadChain.ownLeaf]).
 	whyAnotherAgent chainWhy = "another_agent"
 	// whyNoConversation is every record, but one the relink deleted, of a
-	// thread the resume or a subagent's own load finds no conversation in.
+	// thread the resume or a subagent's load finds no conversation in.
 	whyNoConversation chainWhy = "no_conversation"
-	// whyNoRecord is the answer for a handle that names no record of the
-	// thread: noChainRecord, or one past the handles the chain gave out.
+	// whyNoRecord answers a handle naming no record: noChainRecord, or one
+	// past the handles given out.
 	whyNoRecord chainWhy = "no_record"
 )
 
 // Cannot tell, one record: a variant the reading cannot see decides it.
 const (
-	// whyLeafFlag is a record one leaf hands and another does not, where q1t
-	// moves the leaf ([chainVariants]).
-	whyLeafFlag chainWhy = "leaf_flag"
-	// whyRelease is a record one release's retraction filter drops and the
-	// other's does not.
-	whyRelease chainWhy = "release"
+	whyLeafFlag chainWhy = "leaf_flag" // one leaf hands it, another not, where q1t moves the leaf ([chainVariants])
+	whyRelease  chainWhy = "release"   // only one release's retraction filter drops it
 )
 
 // Cannot tell, the whole thread: a shape no model holds. Every record answers
 // handedUnknown with the thread's reason, and the chain hands no order.
 const (
-	// whyBound is a thread of more records, retraction prefixes or call ids
-	// than the chain files ([threadChainMaxRecords], [threadChainMaxCalls]).
-	whyBound chainWhy = "bound"
+	whyBound chainWhy = "bound" // more records, prefixes or call ids than filed ([threadChainMaxRecords], [threadChainMaxCalls])
 	// whyLine is a line the layer refuses that may yield the load a value
 	// ([threadChain.Unread]).
 	whyLine chainWhy = "line"
-	// whyLineGap is a line handed out of turn, so the chain is not reading the
+	// whyLineGap is a line handed out of turn: the chain is not reading the
 	// file the resume reads.
 	whyLineGap chainWhy = "line_gap"
 	// whyProgress is a progress record (2.1.322's L_e @293638221, 2.1.310's
@@ -143,12 +122,10 @@ const (
 	whyProgress chainWhy = "progress"
 	// whyUUID is a record whose uuid is absent, no string, or no lowercase
 	// canonical uuid: the load keys its map by the string as written, and
-	// that is the one form a uuid's 16 bytes map to one to one.
-	whyUUID chainWhy = "uuid"
-	// whyDuplicateUUID is a uuid two records carry.
-	whyDuplicateUUID chainWhy = "duplicate_uuid"
-	// whySidechain is a sidechain's record in a session's main thread.
-	whySidechain chainWhy = "sidechain"
+	// only that form maps one to one to a uuid's 16 bytes.
+	whyUUID          chainWhy = "uuid"
+	whyDuplicateUUID chainWhy = "duplicate_uuid" // a uuid two records carry
+	whySidechain     chainWhy = "sidechain"      // a sidechain's record in the main thread
 	// whyFileSnapshot is a file's snapshot, which 2.1.322 keeps out of the
 	// rows and the walk's fallback (ZI @293589374) and 2.1.310 out of neither.
 	whyFileSnapshot chainWhy = "file_snapshot"
@@ -156,11 +133,9 @@ const (
 	// @293848295, 2.1.310's Ypo @247219197), which is no row.
 	whyForkBriefing chainWhy = "fork_briefing"
 	// whyMarkedCheckpoint is a checkpoint a rewind, a withdrawal or a fork
-	// marked, which starts the resume where it names whatever came after.
+	// marked, which starts the resume where it names.
 	whyMarkedCheckpoint chainWhy = "marked_checkpoint"
-	// whyCheckpointShape is a checkpoint whose leafUuid is neither a string
-	// nor null.
-	whyCheckpointShape chainWhy = "checkpoint_shape"
+	whyCheckpointShape  chainWhy = "checkpoint_shape" // leafUuid is neither a string nor null
 	// whyAdmission is a record the load drops or rewrites, a reply whose mark
 	// of an API error or model is in no shape, or, in the main thread, an
 	// attachment the layer cannot say the malformed-attachment drop keeps.
@@ -169,43 +144,32 @@ const (
 	// string, or holding U+FFFD ([threadLine.MessageID]); or, where 2.1.322's
 	// q1t reads it, one that may be absent or empty.
 	whyReplyID chainWhy = "reply_id"
-	// whyCallID is a call's id holding U+FFFD, which the layer may read
+	// whyCallID is a call id holding U+FFFD, which the layer may read
 	// otherwise than the resume ([threadChain.file]).
 	whyCallID chainWhy = "call_id"
-	// whyTimestamp is a timestamp present and not the form Claude Code writes
-	// of a real time: the resume compares times as strings in one place and
-	// as dates in another, one order only on that form.
-	whyTimestamp chainWhy = "timestamp"
-	// whyRetractionShape is a retraction list in no shape.
-	whyRetractionShape chainWhy = "retraction_shape"
-	// whyPreservedShape is a compaction's metadata in no shape.
-	whyPreservedShape chainWhy = "preserved_shape"
-	// whyRelinkShape is a relink that would chain the records a compaction
-	// kept into a loop, or under a record it does not keep
-	// ([threadChain.relink]).
+	// whyTimestamp is a timestamp not in the form Claude Code writes of a real
+	// time: the resume compares times as strings in one place and as dates in
+	// another, one order only on that form.
+	whyTimestamp       chainWhy = "timestamp"
+	whyRetractionShape chainWhy = "retraction_shape" // a retraction list in no shape
+	whyPreservedShape  chainWhy = "preserved_shape"  // a compaction's metadata in no shape
+	// whyRelinkShape is a relink that would chain the kept records into a loop,
+	// or under a record it does not keep ([threadChain.relink]).
 	whyRelinkShape chainWhy = "relink_shape"
 	// whyReplacementShape is a content-replacement record whose list 2.1.310's
 	// load fails at ([threadLine.ReplacementCount]).
 	whyReplacementShape chainWhy = "replacement_shape"
-	// whySpread is a list the resume passes into one call's arguments whole
-	// longer than [threadChainMaxSpread].
-	whySpread chainWhy = "spread"
-	// whyLargeFile is a thread past [claudeResumeLargeFile] that is not
-	// path-free ([threadChain.AnySize]).
-	whyLargeFile chainWhy = "large_file"
-	// whyResultByCall is a result tengu_foamy_spring may hang elsewhere than
-	// under its parent ([threadChain.resultByCall]).
-	whyResultByCall chainWhy = "result_by_call"
+	whySpread           chainWhy = "spread"         // a list past [threadChainMaxSpread] passed whole into one call
+	whyLargeFile        chainWhy = "large_file"     // past [claudeResumeLargeFile] and not path-free ([threadChain.AnySize])
+	whyResultByCall     chainWhy = "result_by_call" // tengu_foamy_spring may hang the result elsewhere ([threadChain.resultByCall])
 	// whyTailTime is a tails sort the resume's comparison cannot order, so its
 	// engine's sort algorithm does ([threadChain.byTime]).
 	whyTailTime chainWhy = "tail_time"
-	// whyForkContext is a fork's reference in a subagent's thread, any
-	// agent's: one naming the subagent prefixes the parent's conversation to
-	// its own load's ([threadChain.ownLeaf]).
+	// whyForkContext is a fork's reference in a subagent's thread: one naming
+	// the subagent prefixes the parent's conversation to its load's
+	// ([threadChain.ownLeaf]).
 	whyForkContext chainWhy = "fork_context"
-	// whyAgent is the thread of a subagent id no member is named by
-	// ([validClaudeAgent]).
-	whyAgent chainWhy = "agent"
+	whyAgent       chainWhy = "agent" // a subagent id no member is named by ([validClaudeAgent])
 )
 
 // whyUndecided answers a question asked before End decided, or after an End
@@ -231,11 +195,11 @@ func (w chainWhy) Valid() bool { return w != "" && slices.Contains(chainWhys[:],
 // tengu_foamy_spring (2.1.322's hu(), 2.1.310's Ef(), on), tengu_warm_mochi
 // (ota() @287013832, Fri() @240966974, on, and off wherever foamy_spring is)
 // and, in 2.1.322 alone, tengu_sorted_metcalfe (@293811649, off). They part
-// in three places: the leaf, where q1t moves it ([threadChain.q1t]); the
-// retraction filter's names ([threadChain.readsRetractions]); and the tails'
-// order ([threadChain.tails]). A record handed under some and not others is
-// handedUnknown (whyLeafFlag, whyRelease); foamy_spring's hanging of a result
-// by its call is refused (whyResultByCall).
+// in the leaf ([threadChain.q1t]), the retraction filter's names
+// ([threadChain.readsRetractions]) and the tails' order ([threadChain.tails]).
+// A record handed under some and not others is handedUnknown (whyLeafFlag,
+// whyRelease); foamy_spring's hanging of a result by its call is refused
+// (whyResultByCall).
 type chainVariants uint8
 
 // The variants; warm_mochi reads as off where foamy_spring is off.
@@ -249,91 +213,91 @@ const (
 	variant322SpringMetcalfe
 	variant322SpringMochiMetcalfe
 
-	// allVariants is every variant.
 	allVariants = variant310Off | variant310Spring | variant310SpringMochi | variant322Off | variant322Spring |
 		variant322SpringMochi | variant322SpringMetcalfe | variant322SpringMochiMetcalfe
 	// variants310 is 2.1.310's, whose retraction filter reads a refusal's
 	// fallback alone.
 	variants310 = variant310Off | variant310Spring | variant310SpringMochi
 	// variantsMetcalfe is 2.1.322's with foamy_spring and sorted_metcalfe on,
-	// the variants q1t moves the leaf in.
+	// where q1t moves the leaf.
 	variantsMetcalfe = variant322SpringMetcalfe | variant322SpringMochiMetcalfe
-	// variantsMochi is those with warm_mochi on, whose tails are a walk by
-	// depth; every other sorts a walk by breadth ([threadChain.tails]).
+	// variantsMochi has warm_mochi on: tails are a walk by depth, else by
+	// breadth ([threadChain.tails]).
 	variantsMochi = variant310SpringMochi | variant322SpringMochi | variant322SpringMochiMetcalfe
 	// variantDefault is 2.1.322 as no flag server answers it, the variant a
 	// definite answer's reason is given for.
 	variantDefault = variant322SpringMochi
 )
 
-// chainReplyID is a reply a threadChain interned, counted from 1; 0 is none.
+// chainReplyID is a reply a threadChain interned, from 1; 0 is none.
 type chainReplyID int32
 
-// chainCallID is a call's id a threadChain interned, counted from 1, a key
-// comparable across the thread and never the id itself; 0 is none.
+// chainCallID is a call id a threadChain interned, from 1: a key comparable
+// across the thread, never the id; 0 is none.
 type chainCallID int32
 
 // THE BOUNDS. A thread at the plaintext's bound, 256 MiB at the 2,053 bytes a
 // line probe P6 measured, is 130,754 lines, so 2^17 files a record a line, and
 // a call, two records of a block each, about as many ids; two bounds, not one
 // sum, since a thread of ordinary calls fills each about halfway. Past either,
-// See files nothing more (whyBound). HELD AT MOST (GOGC=10, two dedicated
-// cores, BenchmarkAThreadChainAtItsBounds): 43 MiB at both, End 33 to 34 ms of
-// a 2.0 to 2.2 s read, 41 MiB with a line at [threadLineMax] filling both;
+// See files nothing more (whyBound). HELD AT MOST (BenchmarkAThreadChainAtItsBounds,
+// GOGC=10, two cores): 43 MiB at both, End 33 to 34 ms of a 2.0 to 2.2 s read;
 // End's worst, windows merging at the spread's bound, 1.8 to 1.9 s. THE
 // COLLECTION'S PASS reads the chain, the count and the next request's estimate
-// in one walk ([walkThread]) in 2.6 to 2.9 s, within MainThreadReadWait,
-// holding 43 MiB at worst (a_collections_pass: 33 to 35 MiB), in its own large
-// slot ([CollectionLargeReadsAtOnce]; the package doc says why).
+// in one walk ([walkThread]) in 2.6 to 2.9 s, within MainThreadReadWait, in its
+// own large slot ([CollectionLargeReadsAtOnce]; the package doc says why).
 const (
 	// threadChainMaxRecords is the most items the chain files of one thread:
-	// its records, the retraction prefixes they carry, and the uuids its
-	// newest compaction's boundary that names what it kept lists.
+	// its records, their retraction prefixes, and the uuids its newest
+	// compaction boundary lists.
 	threadChainMaxRecords = 1 << 17
-	// threadChainMaxCalls is the most call-id occurrences the chain files of
-	// one thread: each tool_use and tool_result block's id, and each
-	// attachment's string toolUseID.
+	// threadChainMaxCalls is the most call-id occurrences filed of one thread:
+	// each tool_use and tool_result block's id, and each attachment's string
+	// toolUseID.
 	threadChainMaxCalls = 1 << 17
-	// threadChainMaxSpread is the longest list the chain reads the resume as
-	// passing whole into one call's arguments (whySpread): the load's spread
-	// of a content-replacement list (2.1.322 @293820306, 2.1.310 @247196171),
-	// the recovery's of the walk's stretches and of a walked record's hung
-	// records (@293753056, @293753212; @247138003, @247138159), and the tails'
-	// walk by breadth (@293747616, @247132204). JavaScriptCore refuses a call
-	// of more than 65,536 arguments (its maxArguments) with the RangeError
-	// "Maximum call stack size exceeded." (2.1.322 @14459602, 2.1.310
-	// @3746582). Half that keeps every modelled spread clear of it, and is the
-	// most either binary's helpers pass to String.fromCharCode.apply at once
-	// (2.1.322 @306148813, 2.1.310 @259142857).
+	// threadChainMaxSpread is the longest list the resume passes whole into one
+	// call's arguments (whySpread): the load's spread of a content-replacement
+	// list (2.1.322 @293820306, 2.1.310 @247196171), the recovery's of the
+	// walk's stretches and a walked record's hung records (@293753056,
+	// @293753212; @247138003, @247138159), and the tails' walk by breadth
+	// (@293747616, @247132204). JavaScriptCore refuses a call of more than
+	// 65,536 arguments with the RangeError "Maximum call stack size exceeded."
+	// (2.1.322 @14459602, 2.1.310 @3746582). Half that keeps every modelled
+	// spread clear of it, and is the most either binary's helpers pass to
+	// String.fromCharCode.apply at once (2.1.322 @306148813, 2.1.310 @259142857).
 	threadChainMaxSpread = 1 << 15
 )
+
+// threadChainHeldBytes is what the chain holds live at both bounds (HELD AT
+// MOST above): a collection's pass past its base, or a Claude Code reading of
+// a kept session ([HoldingsReadsAtOnce]), at its worst.
+const threadChainHeldBytes = 43 << 20
 
 // claudeResumeLargeFile is the most bytes of a thread Claude Code's load
 // reads with its small path (2.1.322's Jne @284268664 in oee @293824518,
 // 2.1.310's Use @238504623 in Cne @247199785). THE LARGE FILE: past it a
 // large-file reader chooses by their bytes the lines it hands the load: the
 // DISPATCH (2.1.322's ike @293792132, 2.1.310's HMt @247175414), or, where
-// CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP is set, which a settings file can do
-// whatever the launcher unsets, the PRUNE (F1t @293788207, FPt @247171899).
-// The chain models both, a subagent's own load too, and answers a thread past
-// it only where it is path-free ([threadChain.AnySize]), else whyLargeFile.
+// CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP is set (a settings file can set it
+// whatever the launcher unsets), the PRUNE (F1t @293788207, FPt @247171899).
+// The chain models both and answers a thread past it only where it is
+// path-free ([threadChain.AnySize]), else whyLargeFile.
 const claudeResumeLargeFile = 5 << 20
 
 // The bytes the large-file readers read a line by ([claudeResumeLargeFile]),
 // as 2.1.322's ike and F1t and 2.1.310's HMt and FPt hold them.
 var (
-	// slotPrefix is how a line begins that every reader takes for a SLOT, a
-	// record it reads by its bytes, and slotParentKey the key the dispatch
-	// takes one by wherever its line carries it at its object's depth one.
+	// slotPrefix begins a line every reader takes for a SLOT, a record read by
+	// its bytes; slotParentKey is the key the dispatch takes one by where its
+	// line carries it at its object's depth one.
 	slotPrefix    = []byte(`{"parentUuid":`)
 	slotParentKey = []byte(`"parentUuid":`)
-	// slotUUIDKey is what a slot's uuid follows, and slotTimeAfter what
-	// follows the uuid a reader keys the slot by first.
+	// slotUUIDKey precedes a slot's uuid, slotTimeAfter follows the uuid a
+	// reader keys the slot by first.
 	slotUUIDKey   = []byte(`"uuid":"`)
 	slotTimeAfter = []byte(`","timestamp":"`)
-	// slotSidechain is what makes a slot a sidechain's to each reader, and
-	// slotSidechainHead how a subagent's record says so right after its
-	// parent.
+	// slotSidechain makes a slot a sidechain's to each reader; slotSidechainHead
+	// is how a subagent's record says so right after its parent.
 	slotSidechain     = []byte(`"isSidechain":true`)
 	slotSidechainHead = []byte(`,"isSidechain":true`)
 )
@@ -352,30 +316,28 @@ const chainPrefixBytes = 10
 // what order, for one thread read once a line at a time: main mode
 // (newThreadChain("")) is `claude --resume <session>` through the retraction
 // filter and malformed-attachment drop it applies to the loader's output;
-// subagent mode a subagent's own load; later passes are the reader's. Each
-// rule restates, with offsets, the shipped code of the releases
-// [claudeResumeRead] names, on the code that runs it: THE LOAD on file, THE
-// LINES THAT ARE NO RECORD on Unread, THE LARGE FILE on claudeResumeLargeFile,
-// THE RELINK on relink, THE LEAF on pick, THE LEAF SET on leafSet, THE WALK,
-// THE RECOVERY, THE TAILS on walk, recover, tails, A SUBAGENT'S OWN LOAD on
-// ownLeaf, THE RETRACTION FILTER and THE MALFORMED-ATTACHMENT DROP on judge,
-// THE VARIANTS on chainVariants. One reader, no lock.
+// subagent mode a subagent's own load. Each rule restates, with offsets, the
+// shipped code of the releases [claudeResumeRead] names, on the code that runs
+// it: THE LOAD on file, THE LINES THAT ARE NO RECORD on Unread, THE LARGE FILE
+// on claudeResumeLargeFile, THE RELINK on relink, THE LEAF on pick, THE LEAF
+// SET on leafSet, THE WALK, THE RECOVERY, THE TAILS on walk, recover, tails, A
+// SUBAGENT'S OWN LOAD on ownLeaf, THE RETRACTION FILTER and THE
+// MALFORMED-ATTACHMENT DROP on judge, THE VARIANTS on chainVariants. One
+// reader, no lock.
 type threadChain struct {
 	// agent is the subagent whose thread this is, "" for the main thread.
 	agent string
-	// state is where the chain is in its pass.
 	state chainState
 	// next is the line number See or Unread must be handed next, from 1.
 	next int
 	// bytes is the lines handed so far, breaks included: the file's size where
-	// the caller holds to See's precondition. A torn last piece is no line,
-	// and the box cuts it from a main thread before its resume
-	// ([claudeSessionGate]).
+	// See's precondition holds. A torn last piece is no line; the box cuts it
+	// from a main thread before its resume ([claudeSessionGate]).
 	bytes int64
 	// smallOnly is whether a line was met that a large-file reader may read
-	// otherwise than the small path, and lastMarked whether the last record
-	// filed holds a sidechain's bytes, which in the main thread move where
-	// every reader starts; anySize is End's path-free ([threadChain.AnySize]).
+	// otherwise than the small path, lastMarked whether the last record filed
+	// holds a sidechain's bytes (in the main thread they move where every reader
+	// starts); anySize is End's path-free ([threadChain.AnySize]).
 	smallOnly, lastMarked, anySize bool
 	// why is the thread's own cannot tell, the first shape met; "" while the
 	// thread is modelled.
@@ -385,55 +347,45 @@ type threadChain struct {
 	// handles is how many handles See gave out, past the bound none.
 	handles int
 
-	// recs is every record filed, by handle - 1.
-	recs []chainRecord
-	// index is each record's uuid's handle, and written each record's parent
-	// as written, until End resolves them.
+	recs []chainRecord // every record filed, by handle - 1
+	// index is each record's uuid's handle, written each record's parent as
+	// written, until End resolves them.
 	index   map[[16]byte]chainHandle
 	written []chainWritten
-	// replies interns reply ids by their digests.
-	replies map[[32]byte]chainReplyID
-	// callIDs interns call ids by their digests; carried says, by id - 1,
-	// whether a block carries the id, rather than an attachment alone.
+	replies map[[32]byte]chainReplyID // reply ids by digest
+	// callIDs interns call ids by digest; carried says, by id - 1, whether a
+	// block carries the id, rather than an attachment alone.
 	callIDs map[[32]byte]chainCallID
 	carried []bool
-	// occurs is every call-id occurrence filed, each record's from its calls.
-	occurs []chainCallID
-	// prefixes is every retraction prefix filed, each record's from its
-	// prefix.
+	occurs  []chainCallID // every call-id occurrence filed, from each record's calls
+	// prefixes is every retraction prefix filed, from each record's prefix.
 	prefixes [][chainPrefixBytes]byte
-	// filed is how many items count against threadChainMaxRecords.
-	filed int
+	filed    int // items counted against threadChainMaxRecords
 	// sources is each result's sourceToolAssistantUUID, where canonical.
 	sources map[chainHandle][16]byte
 	// checkpoint is the leaf the last checkpoint since the last boundary
-	// names, and anyLeafKey whether any checkpoint carries leafUuid.
+	// names, anyLeafKey whether any checkpoint carries leafUuid.
 	checkpoint chainCheckpoint
 	anyLeafKey bool
 	// lastRow and newest are the session's last and newest rows; newestMS is
-	// the newest's time. Every record of a main thread the chain models is a
-	// row, so a thread of any record has a last row, which no relink deletes:
-	// it is written at or after the last boundary, a row itself.
+	// the newest's time. Every modelled main-thread record is a row, and the
+	// last row, written at or after the last boundary, is never relink-deleted.
 	lastRow, newest chainHandle
 	newestMS        int64
-	// lastBoundary is the last compaction's boundary, and kept what the
-	// newest one that names what it kept says, for the relink, its list in an
-	// array of its own ([threadChain.keptOf]).
+	// lastBoundary is the last compaction's boundary, kept what the newest
+	// naming one says for the relink ([threadChain.keptOf]).
 	lastBoundary chainHandle
 	kept         chainKept
-	// scratch collects one record's retraction prefixes.
-	scratch [][chainPrefixBytes]byte
+	scratch      [][chainPrefixBytes]byte // one record's retraction prefixes
 
-	// What End decided: each record's verdict, by handle - 1, the distinct
-	// orders, the leaf every variant walks from, and, in a subagent's thread,
-	// its own leaves.
+	// What End decided: each record's verdict (by handle - 1), the distinct
+	// orders, the leaf every variant walks from, a subagent's own leaves.
 	verdicts  []chainVerdict
 	orders    []chainOrder
 	leaf      chainHandle
 	ownLeaves []chainHandle
 }
 
-// chainState is where a threadChain is in its one pass.
 type chainState uint8
 
 const (
@@ -454,8 +406,7 @@ const (
 	// neither is absent.
 	kindSideFalse
 	kindSideTrue
-	// kindMeta is a user record's `isMeta` the JSON true.
-	kindMeta
+	kindMeta // a user record's `isMeta` the JSON true
 	// kindResult is a user record holding a tool_result block, kindUse an
 	// assistant record holding a tool_use block.
 	kindResult
@@ -463,22 +414,17 @@ const (
 	// kindSynthetic is a reply its harness wrote: marked an API error's, or
 	// of the model "<synthetic>".
 	kindSynthetic
-	// kindSays is a message whose text says something (SUo).
-	kindSays
+	kindSays // a message whose text says something (SUo)
 	// kindBoundary is a compaction's boundary, kindFallback a refusal's
 	// fallback.
 	kindBoundary
 	kindFallback
-	// kindTimed is a record with a timestamp.
-	kindTimed
+	kindTimed // has a timestamp
 	// kindIllFormed is, in the main thread alone, an attachment the
-	// malformed-attachment drop takes: no such drop follows a subagent's own
-	// load, so the chain neither marks nor judges one there.
+	// malformed-attachment drop takes.
 	kindIllFormed
-	// kindNowhere is a record whose parent names no record.
-	kindNowhere
-	// kindDeleted is a record the relink deleted, in no step after it.
-	kindDeleted
+	kindNowhere // parent names no record
+	kindDeleted // deleted by the relink, in no step after it
 	// kindAgent is, in a subagent's thread, a record of that subagent's
 	// agentId; with kindSideTrue, one of its own.
 	kindAgent
@@ -491,26 +437,24 @@ type chainRecord struct {
 	// written, so two strings uuid.Parse reads as one are two records to it.
 	uuid [16]byte
 	// ms is its timestamp's Unix milliseconds, where kindTimed
-	// ([threadLine.Timestamp]). Not time.Time: on the one form the chain
-	// admits, the resume's string and Date.parse orders are this one, so a
-	// time.Time holds nothing more, in three times the bytes.
+	// ([threadLine.Timestamp]). Not time.Time: on the one admitted form the
+	// resume's string and Date.parse orders agree, and it costs three times the
+	// bytes.
 	ms int64
 	// parent is the record its parent names, as End resolves it:
 	// noChainRecord for a root and for a parent naming no record (kindNowhere).
 	parent chainHandle
 	reply  chainReplyID
-	// calls and prefix are where its call-id occurrences and its retraction
+	// calls and prefix are where its call-id occurrences and retraction
 	// prefixes start.
 	calls, prefix int32
-	// line is its line's number.
-	line int32
-	kind chainKind
+	line          int32 // its line's number
+	kind          chainKind
 }
 
-// chainWritten is a uuid as a record writes it, a record's parent or one a
-// boundary names, until End resolves it: its 16 bytes, named where it is a
-// lowercase canonical uuid, the one form a record's own uuid takes, so
-// another string names no record.
+// chainWritten is a uuid as a record writes it (a parent, or one a boundary
+// names) until End resolves it: named where it is a lowercase canonical uuid,
+// the one form a record's own uuid takes; another string names no record.
 type chainWritten struct {
 	uuid  [16]byte
 	named bool
@@ -522,31 +466,30 @@ func writtenUUID(s string) chainWritten {
 	return chainWritten{uuid: u, named: named}
 }
 
-// chainKept is what a compaction's boundary that names what it kept says
-// ([threadLine.Preserved]), as See files it for End's relink.
+// chainKept is what a boundary that names what it kept says
+// ([threadLine.Preserved]), filed for End's relink.
 type chainKept struct {
-	// boundary is the boundary, noChainRecord where none named what it kept.
+	// boundary is the boundary, noChainRecord where none names what it kept.
 	boundary chainHandle
 	// anchor is the record the kept records hang from. segment is whether the
 	// boundary names them by a segment, from tail up by parent to head; else
-	// it lists them: list is the canonical uuids it lists, in order, listed
-	// how many entries it lists, and nowhere whether one of them is no
-	// canonical uuid, which names no record.
+	// list holds the canonical uuids it lists, listed how many entries, and
+	// nowhere whether one is no canonical uuid.
 	anchor, head, tail chainWritten
 	segment, nowhere   bool
 	list               [][16]byte
 	listed             int
 }
 
-// chainCheckpoint is the leaf a checkpoint names: set where one names a leaf
-// since the last boundary, named where that is a canonical uuid.
+// chainCheckpoint is the leaf a checkpoint names: set where one does since the
+// last boundary, named where that is a canonical uuid.
 type chainCheckpoint struct {
 	uuid       [16]byte
 	set, named bool
 }
 
-// chainVerdict is a record's answer, as End stores it: its handedness and
-// its reason's place in chainWhys.
+// chainVerdict is a record's answer as End stores it: handedness and the
+// reason's place in chainWhys.
 type chainVerdict struct {
 	handed uint8
 	why    uint8
@@ -559,10 +502,9 @@ const (
 	verdictUnknown
 )
 
-// newThreadChain is the model of a thread not read yet: agent "" the
-// session's main thread as `claude --resume <session>` loads it; else the
-// thread of subagent agent as its own load builds it. An agent outside
-// [validClaudeAgent]'s rule is cannot tell for every record (whyAgent).
+// newThreadChain is the model of a thread not read yet: agent "" the main
+// thread as `claude --resume <session>` loads it; else subagent agent's own
+// load. An agent outside [validClaudeAgent]'s rule is whyAgent.
 func newThreadChain(agent string) *threadChain {
 	c := &threadChain{agent: agent, next: 1, index: map[[16]byte]chainHandle{},
 		replies: map[[32]byte]chainReplyID{}, callIDs: map[[32]byte]chainCallID{},
@@ -580,17 +522,16 @@ func (c *threadChain) cannotTell(w chainWhy) {
 	}
 }
 
-// filing panics where End has run: a reader's own misuse, which its tests
-// find, since its code does it always or never.
+// filing panics where End has run: a reader's own misuse, which its tests find.
 func (c *threadChain) filing(what string) {
 	if c.state != chainFiling {
 		panic("executor: threadChain." + what + " after End")
 	}
 }
 
-// inTurn holds n, a line's number, to the next one the chain must be handed:
-// a line skipped or repeated is the thread's cannot tell (whyLineGap), never
-// a panic, since a reader runs inside a node's collection.
+// inTurn holds n, a line's number, to the next one expected: a line skipped or
+// repeated is whyLineGap, never a panic, since a reader runs inside a node's
+// collection.
 func (c *threadChain) inTurn(n int) {
 	if n != c.next {
 		c.cannotTell(whyLineGap)
@@ -601,8 +542,7 @@ func (c *threadChain) inTurn(n int) {
 // See files line, the thread's next whole line, and answers its handle
 // (noChainRecord for a line the load keeps no record of) and, for a user or
 // assistant record, its message ([threadLine.Message]) and that message's
-// error, already taken as whyAdmission: handed back together, so the caller
-// reads what the chain judged. Past the bound it files nothing more
+// error, already taken as whyAdmission. Past the bound it files nothing more
 // (whyBound) and still hands back each message, with pastChainBound. THE
 // BYTES ARE THE RESUME'S: the lines must be the file the resume reads, every
 // whole line in turn; the chain checks only their numbers (whyLineGap). The
@@ -631,9 +571,8 @@ func (c *threadChain) See(line threadLine) (chainHandle, threadMessage, error) {
 	return c.file(line, m, mErr), m, mErr
 }
 
-// another files line, one the load keeps no record of in its map: what a
-// progress record, a checkpoint, a fork's reference and a content
-// replacement say, and whether a large-file reader may take it for a slot.
+// another files line, one the load keeps no record of: a progress record, a
+// checkpoint, a fork's reference or a content replacement.
 func (c *threadChain) another(line threadLine) {
 	if c.binds(&line.Bytes) {
 		c.smallOnly = true
@@ -661,8 +600,8 @@ func (c *threadChain) another(line threadLine) {
 // break, so a line failing before any whole value, a whole value no object
 // (iVe @293635513, oMt @247031904), and an object whose refused head is of a
 // type no resume reads yield it nothing and are skipped; any other refused
-// line may yield it a value (whyLine). A skipped line still binds the thread
-// to the small path where a large-file reader may take it for a slot
+// line may yield a value (whyLine). A skipped line still binds the thread to
+// the small path where a large-file reader may take it for a slot
 // ([threadChain.binds]), as does one whose byte facts cover fewer bytes than
 // its Size. Unread panics after End.
 func (c *threadChain) Unread(fault *threadLineError) {
@@ -689,8 +628,7 @@ func (c *threadChain) Unread(fault *threadLineError) {
 // of, binds the thread to the small path: where a large-file reader may take
 // it for a slot ([threadBytes.SlotKeyed]) to start from or walk; but not, in a
 // subagent's thread, where it says it is a sidechain's right after its parent
-// ([sidechainHeaded]), as every record there must, since no reader starts
-// from such a slot, and where none starts from any each hands every line.
+// ([sidechainHeaded]), since no reader starts from such a slot.
 func (c *threadChain) binds(b *threadBytes) bool {
 	return b.SlotKeyed() && (c.agent == "" || !sidechainHeaded(b.Head()))
 }
@@ -699,9 +637,8 @@ func (c *threadChain) binds(b *threadBytes) bool {
 // ([threadBytes.Head]), says the line is a sidechain's right after its
 // parent: `{"parentUuid":`, null or a quoted lowercase canonical uuid, then
 // `,"isSidechain":true`. Every large-file reader marks such a line a
-// sidechain's: both dispatches by those bytes within its first 256 (kl
-// @293794950, @247178300), both prunes anywhere in it (@293788960,
-// @247172642).
+// sidechain's: the dispatches within its first 256 bytes (kl @293794950,
+// @247178300), the prunes anywhere in it (@293788960, @247172642).
 func sidechainHeaded(head []byte) bool {
 	rest, ok := bytes.CutPrefix(head, slotPrefix)
 	switch {
@@ -719,9 +656,9 @@ func sidechainHeaded(head []byte) bool {
 }
 
 // checkpointOf files what a last-prompt record says of the leaf (2.1.322's
-// Mr, 2.1.310's Oo): it names the leaf where its leafUuid says something, the
-// uuid as written, and any that carries the key, null among it, turns off the
-// newest-row start ([threadChain.singlePath], `leafUuid!==void 0`).
+// Mr, 2.1.310's Oo): it names the leaf where its leafUuid says something, and
+// any that carries the key, null among it, turns off the newest-row start
+// ([threadChain.singlePath], `leafUuid!==void 0`).
 func (c *threadChain) checkpointOf(line threadLine) {
 	leaf, marked, err := line.Checkpoint()
 	keyed, keyErr := line.LeafKeyed()
@@ -759,10 +696,10 @@ func (c *threadChain) replacementsOf(line threadLine) {
 // written, in the order first written: a handle is a place in that order. Its
 // admission (DWt @293626797, sPt @247023276) drops or rewrites a user or
 // assistant record whose message the layer refuses, or an assistant one of
-// string content, re-parenting its children, and it makes every string
-// well-formed, a lone surrogate U+FFFD (tIe @282906774, hYe @237222449). The
-// chain refuses each such record, and every shape a whole-thread reason
-// names. A compaction's boundary (Kr @291612448) forgets the checkpoint.
+// string content, re-parenting its children, and turns a lone surrogate into
+// U+FFFD (tIe @282906774, hYe @237222449). The chain refuses each such record
+// and every shape a whole-thread reason names. A compaction's boundary (Kr
+// @291612448) forgets the checkpoint.
 func (c *threadChain) file(line threadLine, m threadMessage, mErr error) chainHandle {
 	head := line.Head
 	r := chainRecord{line: int32(line.N)}
@@ -868,9 +805,8 @@ func (c *threadChain) file(line threadLine, m threadMessage, mErr error) chainHa
 		named, fits bool
 	)
 	if r.kind&kindBoundary != 0 {
-		// A boundary carries no retraction list ([threadLine.Retracted]): its
-		// own room is held to the bound beside the list it names, which
-		// replaces the one before it.
+		// A boundary carries no retraction list ([threadLine.Retracted]); its
+		// room is held to the bound beside the list it names.
 		c.scratch = c.scratch[:0]
 		preserved, named, fits = c.keptOf(line)
 	} else {
@@ -898,9 +834,8 @@ func (c *threadChain) file(line threadLine, m threadMessage, mErr error) chainHa
 		c.lastBoundary = h
 	}
 	if named {
-		// The newest boundary that names what it kept replaces the one before
-		// it, whose list leaves the chain's count with it (2.1.322's iWo reads
-		// the last such boundary alone, `r=Ce`).
+		// The newest naming boundary replaces the one before it, whose list
+		// leaves the count (2.1.322's iWo reads the last alone, `r=Ce`).
 		c.filed += preserved.listed - c.kept.listed
 		preserved.boundary = h
 		c.kept = preserved
@@ -919,9 +854,8 @@ func (c *threadChain) file(line threadLine, m threadMessage, mErr error) chainHa
 	return h
 }
 
-// row files record h, r, as a row of the session: its last, and its newest
-// where its timestamp is later, as a string (`timestamp>co`), than every
-// row's before it.
+// row files record h, r, as a row: the session's last, and its newest where its
+// timestamp is later, as a string (`timestamp>co`), than every row's before it.
 func (c *threadChain) row(h chainHandle, r chainRecord) {
 	c.lastRow = h
 	if r.kind&kindTimed != 0 && (c.newest == noChainRecord || r.ms > c.newestMS) {
@@ -932,13 +866,12 @@ func (c *threadChain) row(h chainHandle, r chainRecord) {
 // slotFacts files what the large-file readers make of line by its byte facts
 // ([threadBytes]), the record whose own uuid is id, parent written and kind
 // kind: a reader may read it otherwise than its decode where it is a
-// compaction's boundary (where the dispatch forgets the slots before it),
-// where it does not begin `{"parentUuid":` and the parent its decode names
-// ([slotHead]), where the readers key it by another uuid
-// ([threadBytes.KeyedBy]), and in a subagent's thread where it does not say it
-// is a sidechain's right after its parent. In the main thread it files whether
-// the record holds a sidechain's bytes, which move every reader's start where
-// it is the last record.
+// compaction's boundary (the dispatch forgets the slots before it), where it
+// does not begin `{"parentUuid":` and the parent its decode names ([slotHead]),
+// where the readers key it by another uuid ([threadBytes.KeyedBy]), and in a
+// subagent's thread where it does not say it is a sidechain's right after its
+// parent. In the main thread it files whether the record holds a sidechain's
+// bytes, which move every reader's start where it is the last record.
 func (c *threadChain) slotFacts(line threadLine, id string, written chainWritten, kind chainKind) {
 	head := line.Bytes.Head()
 	end := slotHead(head, line.Head.Parent, written.named)
@@ -956,9 +889,9 @@ func (c *threadChain) slotFacts(line threadLine, id string, written chainWritten
 // slotHead is where, in head ([threadBytes.Head]), the parent every
 // large-file reader reads ends, where that is the parent its decode reads:
 // head begins `{"parentUuid":` and then parent as written, null or, named, a
-// lowercase canonical uuid quoted with no escape, the two forms every reader
-// reads alike, as the 36 bytes after the key's opening quote or as null (kl
-// @293794950, Eo @247177994, and F1t's and FPt's keying). -1 otherwise.
+// lowercase canonical uuid quoted with no escape: the two forms every reader
+// reads alike (kl @293794950, Eo @247177994, F1t's and FPt's keying). -1
+// otherwise.
 func slotHead(head, parent []byte, named bool) int {
 	if !bytes.Equal(parent, jsonNull) && (!named || len(parent) != 36+2) {
 		return -1
@@ -1028,9 +961,8 @@ func (c *threadChain) retractionsOf(line threadLine) bool {
 	}
 	// THE ROOM BEFORE THE SHAPE: a list is read in order, so one whose
 	// prefixes pass the room before an entry in no shape is past the bound,
-	// and only one whose shape fails within it is in no shape. The list holds
-	// its prefixes up to an entry in no shape ([threadLine.Retracted]), and
-	// past threadChainMaxRecords of them says so, which is past every room.
+	// and only one whose shape fails within it is in no shape
+	// ([threadLine.Retracted]).
 	r, err := line.Retracted()
 	held, all := r.Prefixes()
 	switch {
@@ -1046,19 +978,16 @@ func (c *threadChain) retractionsOf(line threadLine) bool {
 
 // keptOf reads what line, a compaction's boundary, says it kept
 // ([threadLine.Preserved]), the canonical uuids it lists in an array of their
-// own, never one a replaced list held, which would keep room for entries no
-// longer counted ([threadChain.items]); and reports whether it names what it
-// kept at all, and whether the boundary fits threadChainMaxRecords beside what
-// the chain filed: with its list in place of the list of the boundary it
-// replaces, where it names what it kept, else alone. Every entry counts, a
-// canonical uuid or not; metadata in no shape is whyPreservedShape.
+// own; and reports whether it names what it kept at all, and whether the
+// boundary fits threadChainMaxRecords beside what the chain filed: with its
+// list in place of the replaced boundary's, where it names what it kept, else
+// alone. Every entry counts, a canonical uuid or not; metadata in no shape is
+// whyPreservedShape.
 func (c *threadChain) keptOf(line threadLine) (k chainKept, named, fits bool) {
 	// room is how many entries the list may hold beside the boundary itself.
 	room := threadChainMaxRecords - c.filed + c.kept.listed - 1
-	// THE ROOM BEFORE THE SHAPE, as a retraction list's ([threadChain.retractionsOf]):
-	// every entry before one in no shape counts, so a list that passes the
-	// room before it is past the bound. A list of no entry passes no room,
-	// whatever the room left: the boundary's own room is judged below.
+	// THE ROOM BEFORE THE SHAPE, as [threadChain.retractionsOf]'s. A list of
+	// no entry passes no room; the boundary's own room is judged below.
 	p, err := line.Preserved()
 	switch {
 	case p.More || p.Listed > max(room, 0):
@@ -1079,10 +1008,9 @@ func (c *threadChain) keptOf(line threadLine) (k chainKept, named, fits bool) {
 // chainPrefix is the first 24 characters of entry, a retraction list's, as
 // the 10 bytes of a canonical uuid's first 24, and true where they are such:
 // 8, 4, 4 and 4 lowercase hex digits, each run followed by a hyphen. An entry
-// that begins otherwise retracts nothing, since every record the chain models
-// carries a lowercase canonical uuid, and the filter compares their first 24
-// characters as strings. Entry is a string or its bytes, for [uuidBytes]'s
-// reason.
+// that begins otherwise retracts nothing, since every modelled record carries
+// a lowercase canonical uuid. Entry is a string or its bytes, for
+// [uuidBytes]'s reason.
 func chainPrefix[T ~string | ~[]byte](entry T) ([chainPrefixBytes]byte, bool) {
 	var p [chainPrefixBytes]byte
 	if len(entry) < 24 {
@@ -1141,8 +1069,7 @@ func (c *threadChain) passBound() chainHandle {
 // it. It checks ctx between its steps and inside its walks; ctx's error means
 // no model, the error returned, and every question then answers
 // handedUnknown (whyUndecided). End panics where it already ran, as See and
-// Unread after it: a reader's code does each always or never, so its tests
-// find it; misuse a collection could reach is answered instead.
+// Unread after it.
 func (c *threadChain) End(ctx context.Context) error {
 	if c.state != chainFiling {
 		panic("executor: threadChain.End twice")
@@ -1162,9 +1089,8 @@ func (c *threadChain) End(ctx context.Context) error {
 // Unknown is the thread's own cannot tell: the first shape no model holds
 // that it met, and true; "" and false where the thread is modelled. Asked
 // while the chain files, it answers the first shape met so far, so a reader
-// can stop reading a thread the model already cannot place. After an End its
-// context cut short, it answers that shape where the thread met one before
-// End stopped, and whyUndecided where it met none.
+// can stop reading a thread the model cannot place. After an End its context
+// cut short, it answers that shape if one was met, else whyUndecided.
 func (c *threadChain) Unknown() (chainWhy, bool) {
 	switch {
 	case c.why != "":
@@ -1176,13 +1102,11 @@ func (c *threadChain) Unknown() (chainWhy, bool) {
 }
 
 // Handed is what the resume makes of record h; Why says why. It answers in
-// the order it checks: noChainRecord, whenever it is asked, handedNo
-// (whyNoRecord); every other handle, asked before End decided or after an End
-// its context cut short, handedUnknown (whyUndecided); then pastChainBound
-// handedUnknown (whyBound), a handle the chain never gave out handedNo
-// (whyNoRecord), every record of a thread the model cannot place
-// handedUnknown, with the thread's reason, and every other record what End
-// decided of it.
+// the order it checks: noChainRecord handedNo (whyNoRecord); any other handle
+// before End decided or after an End its context cut short, handedUnknown
+// (whyUndecided); pastChainBound handedUnknown (whyBound); a handle never given
+// out handedNo (whyNoRecord); every record of a thread the model cannot place
+// handedUnknown with the thread's reason; else what End decided.
 func (c *threadChain) Handed(h chainHandle) handedness {
 	handed, _ := c.verdict(h)
 	return handed
@@ -1219,10 +1143,9 @@ func (c *threadChain) verdict(h chainHandle) (handedness, chainWhy) {
 }
 
 // EachOrder hands each distinct order in which the variants hand the thread's
-// records, first to last, until each returns false: the order the default
-// variant hands first. Each holds the records the variants that hand it hand
-// for certain, a record any of them may or may not hand left out of it. None
-// where the thread is cannot tell, or End has not decided.
+// records, until each returns false: the default variant's first. An order
+// holds the records its variants hand for certain, a record any may or may not
+// hand left out. None where the thread is cannot tell, or End has not decided.
 func (c *threadChain) EachOrder(each func(o chainOrder) bool) {
 	if c.state != chainDecided || c.why != "" {
 		return
@@ -1278,12 +1201,11 @@ func (c *threadChain) Reply(h chainHandle) (chainReplyID, bool) {
 }
 
 // Uses and Results are the call ids record h's tool_use and tool_result
-// blocks carry, as keys comparable across the thread (never the ids
-// themselves): Uses an assistant record's, Results a user record's, nil for
-// every other. The chain's own: a reader reads them and never writes them.
-// An attachment's toolUseID is no block's: it is interned beside them for
-// the walk up from the last row alone, and CallKey answers false for an id
-// only an attachment carries.
+// blocks carry, as keys comparable across the thread: Uses an assistant
+// record's, Results a user record's, nil for every other. A reader never
+// writes them. An attachment's toolUseID is no block's: it is interned beside
+// them for the walk up from the last row alone, and CallKey answers false for
+// an id only an attachment carries.
 func (c *threadChain) Uses(h chainHandle) []chainCallID {
 	r, ok := c.record(h)
 	if !ok || r.kind&kindAssistant == 0 {
@@ -1321,10 +1243,9 @@ func (c *threadChain) Leaf() (chainHandle, bool) {
 }
 
 // OwnLeaves is, in a subagent's thread, its own leaves in the file's order,
-// those its own load chose its leaf among ([threadChain.ownLeaf]). The
-// chain's own: a reader never writes it. Nil in the main thread, before End
-// decided, after an End its context cut short, and where the thread is cannot
-// tell.
+// those its load chose its leaf among ([threadChain.ownLeaf]); a reader never
+// writes it. Nil in the main thread, before End decided, after an End its
+// context cut short, and where the thread is cannot tell.
 func (c *threadChain) OwnLeaves() []chainHandle {
 	if c.state != chainDecided || c.why != "" {
 		return nil
@@ -1335,10 +1256,9 @@ func (c *threadChain) OwnLeaves() []chainHandle {
 // AnySize reports whether the thread is PATH-FREE: every large-file reader
 // ([claudeResumeLargeFile]) hands the load what its small path does, so the
 // answers hold on either side of the size and for a copy differing only
-// inside string values, never one with its keys reordered; a reader of
-// another copy than the resume's (the box's own, where a relaunch restores
-// the take's archive) relies on them only where this is true. It holds where
-// no record is a boundary, no line of no record may be a slot
+// inside string values, never one with its keys reordered; a reader of another
+// copy than the resume's relies on them only where this is true. It holds
+// where no record is a boundary, no line of no record may be a slot
 // ([threadChain.binds]), every record's line leads with its parent and is
 // keyed by its uuid ([threadChain.slotFacts]), and in the main thread the last
 // record has no `"isSidechain":true` and reaches every record
@@ -1436,24 +1356,22 @@ func (c *threadChain) readsRetractions(h chainHandle, variants chainVariants) bo
 type chainWork struct {
 	// childAt and kids are each record's children by parent, in the file's
 	// order: record h's are kids[childAt[h]:childAt[h+1]]. groupAt and group
-	// are each reply's records, in the file's order: reply r's are
-	// group[groupAt[r]:groupAt[r+1]]. Each of the records the relink left, by
-	// the parent it left each.
+	// are each reply's records likewise: reply r's are
+	// group[groupAt[r]:groupAt[r+1]]. Both hold the records the relink left,
+	// by the parent it left each.
 	childAt []int32
 	kids    []chainHandle
 	groupAt []int32
 	group   []chainHandle
-	// cp is the record the checkpoint names, where it names one the relink
-	// left.
+	// cp is the record the checkpoint names, where the relink left it.
 	cp chainHandle
 	// a and b are sets of records each step clears and fills, run y1t's run
 	// of a batch's reply and the leaf set's members; met is the walk's and the
 	// recovery's; replied the replies the recovery met.
 	a, b, run, met, replied chainMarks
 	// calls and taken are sets of call ids each step clears and fills: a
-	// reply's calls, and those y1t's descent took, so a list of ids is held
-	// to another an id at a time, never one list walked for each of the
-	// other's.
+	// reply's calls, and those y1t's descent took, so two lists of ids compare
+	// an id at a time, never one list walked per entry of the other.
 	calls, taken chainMarks
 	// pos is each record's place on the walk, -1 off it, by handle - 1.
 	pos []int32
@@ -1490,8 +1408,8 @@ func (m *chainMarks) has(i int) bool { return m.at[i] == m.gen }
 
 // chainSide is the timed records of one isSidechain value, by time and then
 // the later in the file first, as 2.1.322's vjt orders them (`reverse()`, then
-// a stable sort by time), and prev, its pointer to the next candidate down
-// that a walk has not met yet, which the walk compresses as it goes.
+// a stable sort by time); prev points to the next candidate down a walk has
+// not met, compressed as the walk goes.
 type chainSide struct {
 	recs []chainHandle
 	prev []int32
@@ -1499,11 +1417,10 @@ type chainSide struct {
 
 // chainCheckEvery is how many steps End takes between looks at its ctx, a
 // power of two so the count is cheap. A step is a few array reads, so 4,096
-// take well under a millisecond after the caller gives End up, and a look,
-// a call through every context the caller wrapped, once in 4,096 steps costs
-// nothing measurable. At the bounds (BenchmarkAThreadChainAtItsBounds) End's
-// longest stretch without a look was 11 to 15 ms, each a pass that counts no
-// step, and through its 1.4 s worst case it looked at least every 11 ms.
+// take well under a millisecond after the caller gives End up, and a look once
+// in 4,096 steps costs nothing measurable. At the bounds
+// (BenchmarkAThreadChainAtItsBounds) End's longest stretch without a look was
+// 11 to 15 ms, each a pass that counts no step.
 const chainCheckEvery = 1 << 12
 
 // tick counts a step, and answers ctx's error every chainCheckEvery steps.
@@ -1555,9 +1472,9 @@ func (c *threadChain) work() *chainWork {
 // part of that parent's group (a reply's own id, else the parent's), and not
 // where the parent is UF. Parents are as written: a path-free thread holds no
 // boundary, so no relink moves one. Only the dispatch's group is read: the
-// prune's, the nearest reply's up by parent, is the dispatch's wherever that
-// is a reply's. Beyond this the readers differ only in lines no step reads
-// (attribution snapshots, reaction ledgers) and surrogate escapes.
+// prune's is the dispatch's wherever that is a reply's. Beyond this the
+// readers differ only in lines no step reads (attribution snapshots, reaction
+// ledgers) and surrogate escapes.
 func (c *threadChain) covered(ctx context.Context, w *chainWork) (bool, error) {
 	n := len(c.recs)
 	// w.a holds the walk.
@@ -1568,8 +1485,8 @@ func (c *threadChain) covered(ctx context.Context, w *chainWork) (bool, error) {
 		}
 		w.a.set(int(at))
 	}
-	// w.b holds the records reached that hand their children on, by now only
-	// those before the record at hand, and groups each one's group.
+	// w.b holds the reached records that hand their children on; groups each
+	// one's group.
 	w.b.clear()
 	groups := make([]chainReplyID, n+1)
 	for i, r := range c.recs {
@@ -1652,11 +1569,10 @@ func (c *threadChain) relink(ctx context.Context, w *chainWork) (bool, error) {
 	if len(kept) > 0 {
 		anchor, tail = c.handleOf(c.kept.anchor), kept[len(kept)-1]
 		// An anchor written before the last boundary that the relink does not
-		// keep is one it deletes, and one naming no record (noChainRecord) is
-		// written before any: either leaves the first kept record under none,
-		// or under the last of them once the deletion hangs it there. And the
-		// last boundary among the kept records is chained under its own
-		// anchor.
+		// keep is deleted, and one naming no record (noChainRecord) counts as
+		// written before any: either leaves the first kept record under none, or
+		// under the last kept once the deletion hangs it there. The last boundary
+		// among the kept records is chained under its own anchor.
 		if anchor < last || w.a.has(int(last)) {
 			c.cannotTell(whyRelinkShape)
 			return false, nil
@@ -1699,11 +1615,9 @@ func (c *threadChain) relink(ctx context.Context, w *chainWork) (bool, error) {
 	if len(kept) == 0 {
 		return false, nil
 	}
-	// An anchor among the kept records, or below one of them by parent as the
-	// relink left each, hangs the chain under itself: the walk up from the
-	// anchor meets a kept record. The walk stops at a record it met, a loop
-	// above the anchor, and counts its steps against ctx, so a walk that
-	// failed to stop would still end where End's caller gives it up.
+	// An anchor among the kept records, or below one of them by parent, hangs
+	// the chain under itself: the walk up from the anchor meets a kept record.
+	// The walk stops at a record it met, and counts its steps against ctx.
 	w.b.clear()
 	for at := anchor; at != noChainRecord && !w.b.has(int(at)); at = c.recs[at-1].parent {
 		if err := w.tick(ctx); err != nil {
@@ -1724,8 +1638,7 @@ func (c *threadChain) relink(ctx context.Context, w *chainWork) (bool, error) {
 // to its head (2.1.322's aWo, 2.1.310's _po); and false where nothing happens:
 // a listed uuid naming no record of the thread, or a walk that meets a root, a
 // parent naming no record or a record it walked. The walk counts its steps
-// against ctx, so one that failed to stop at a loop would still end where
-// End's caller gives it up.
+// against ctx.
 func (c *threadChain) keptRecords(ctx context.Context, w *chainWork) ([]chainHandle, bool, error) {
 	k := c.kept
 	if !k.segment {
@@ -1813,7 +1726,7 @@ func (c *threadChain) decide(ctx context.Context) error {
 		return nil
 	}
 	// Path-free ([threadChain.AnySize]); lastMarked is the main thread's
-	// alone, and in a subagent's no reader has a slot to start from.
+	// alone.
 	main := c.agent == ""
 	free := !c.smallOnly && !c.lastMarked
 	var w *chainWork
@@ -1832,9 +1745,8 @@ func (c *threadChain) decide(ctx context.Context) error {
 	}
 	c.anySize = free
 	if len(c.recs) == 0 {
-		// No record: the resume, or a subagent's own load, finds no
-		// conversation, and hands nothing under every variant (2.1.322's Yya,
-		// `if(s.size===0)return null`; Rye, `no_agent_messages`).
+		// No record: no conversation, nothing handed under every variant
+		// (2.1.322's Yya, `if(s.size===0)return null`; Rye, `no_agent_messages`).
 		c.orders = []chainOrder{{variants: allVariants}}
 		return nil
 	}
@@ -1900,9 +1812,8 @@ func (c *threadChain) decide(ctx context.Context) error {
 }
 
 // chainGroup is the variants that walk from one leaf under one release's
-// retraction filter, what they hand, and why. The tails' order parts the
-// group's variants once more, warm_mochi's from the rest, but never what they
-// hand: the two orders hold the same records.
+// retraction filter, what they hand, and why. The tails' order parts them once
+// more (warm_mochi's from the rest), never in what they hand.
 type chainGroup struct {
 	leaf     chainHandle
 	variants chainVariants
@@ -1925,10 +1836,9 @@ func whyAt(w chainWhy) uint8 { return uint8(slices.Index(chainWhys[:], w)) }
 // sourceToolAssistantUUID names another record, or another reply made one of
 // its calls. The second test widens fWo's (per call, the last reply holding
 // it where all holding it share an id) to any reply but the parent, so the
-// chain refuses no less than the resume hangs. Read off parents as the relink
-// left them, as fWo reads its map. ONE PASS, linear: a reply's calls are
-// marked once, each result under it held to the marks an id at a time, never
-// its ids walked per call (2^16 by 2^16 would be 2^32 steps).
+// chain refuses no less than the resume hangs. ONE PASS, linear: a reply's
+// calls are marked once, each result under it held to the marks an id at a
+// time (walking ids per call would be 2^32 steps at 2^16).
 func (c *threadChain) resultByCall(ctx context.Context, w *chainWork) (bool, error) {
 	var holders [][2]chainHandle
 	// odd reports whether result r, whose ids are not all of calls its parent
@@ -1958,8 +1868,7 @@ func (c *threadChain) resultByCall(ctx context.Context, w *chainWork) (bool, err
 		switch {
 		case c.is(h, kindDeleted):
 		case c.is(h, kindUser|kindResult):
-			// A result whose parent is no reply answers no call of its
-			// parent's.
+			// A result whose parent is no reply answers no call of it.
 			if p := c.recs[i].parent; (p == noChainRecord || !c.is(p, kindAssistant)) && odd(h) {
 				return true, nil
 			}
@@ -2023,14 +1932,14 @@ func (c *threadChain) holders() [][2]chainHandle {
 // no conversation. Not relinked, the single path's turn record
 // ([threadChain.singlePath]); relinked, or where that finds none, the leaf set
 // ([threadChain.leafSet]), narrowed where it holds more than one; then
-// [threadChain.leafOf]. 2.1.322 first takes the last row on a clause of the
-// hosted environment's alone (NWo behind WA()), which never answers here.
-// Where q1t cannot read a reply's id, the thread is whyReplyID.
+// [threadChain.leafOf]. 2.1.322's hosted-environment clause (NWo behind WA())
+// never answers here. Where q1t cannot read a reply's id, the thread is
+// whyReplyID.
 func (c *threadChain) pick(ctx context.Context, w *chainWork, relinked bool) (leaf0, leaf1 chainHandle,
 	err error) {
 	last := c.lastRow
-	// set0 and set1 are the set each setting of q1t takes its leaf from: the
-	// single path's turn record, where it finds one, else the leaf set.
+	// set0 and set1 are each q1t setting's leaf source: the single path's turn
+	// record where found, else the leaf set.
 	var set0, set1 []chainHandle
 	if !relinked {
 		var turn0, turn1 chainHandle
@@ -2051,11 +1960,11 @@ func (c *threadChain) pick(ctx context.Context, w *chainWork, relinked bool) (le
 		}
 		pick0, pick1 := hr, hr
 		if len(hr) > 1 {
-			// The leaf set narrowed to one: up from the checkpoint, where it is
-			// in the set and the last row descends through none of its batches
-			// (Y1t, never directly) nor, in the metcalfe variants, holds q1t;
-			// else up from the last row (2.1.322's Gr @293822608, 2.1.310's kr
-			// @247198349, `uo&&Hr.has(uo)&&...?uo:Eo`).
+			// Narrowed to one: up from the checkpoint, where it is in the set and
+			// the last row descends through none of its batches (Y1t, never
+			// directly) nor, in the metcalfe variants, holds q1t; else up from
+			// the last row (2.1.322's Gr @293822608, 2.1.310's kr @247198349,
+			// `uo&&Hr.has(uo)&&...?uo:Eo`).
 			from0, from1 := last, last
 			if _, in := slices.BinarySearch(hr, w.cp); in && w.cp != last && !c.y1t(w, last, w.cp, false) {
 				from0, from1 = w.cp, w.cp
@@ -2131,11 +2040,11 @@ func (c *threadChain) singlePath(ctx context.Context, w *chainWork) (turn0, turn
 // @247197836), in the file's order: from each record the relink left that
 // none names as its parent, the first user or assistant record up by parent
 // through records that are neither, where no user or assistant record names
-// that one as its parent. Each record's answer up is kept once walked, as Cjt
-// keeps it, so the set takes one walk of the thread.
+// that one as its parent. Each answer is kept once walked, as Cjt keeps it:
+// one walk of the thread.
 func (c *threadChain) leafSet(ctx context.Context, w *chainWork) ([]chainHandle, error) {
-	// w.a holds the records some record names as its parent, w.b those a user
-	// or assistant record names.
+	// w.a holds the records any record names as parent, w.b those a user or
+	// assistant record names.
 	w.a.clear()
 	w.b.clear()
 	for i, r := range c.recs {
@@ -2147,9 +2056,9 @@ func (c *threadChain) leafSet(ctx context.Context, w *chainWork) ([]chainHandle,
 			w.b.set(int(r.parent))
 		}
 	}
-	// up is each record's answer, by handle: 0 not walked yet, upNone no turn
-	// record (a root, a parent naming no record, or a loop), upWalking on the
-	// walk under way, else the turn record's handle.
+	// up is each record's answer, by handle: 0 not walked, upNone no turn
+	// record (a root, a parent naming no record, or a loop), upWalking under
+	// way, else the turn record's handle.
 	const upNone, upWalking = -1, -2
 	up := make([]int32, len(c.recs)+1)
 	var set, path []chainHandle
@@ -2229,14 +2138,13 @@ func (c *threadChain) leafOf(set []chainHandle) chainHandle {
 // loader, relink included, and reads none of its pick: of its OWN LEAVES, the
 // records of its own ([threadChain.own]) no record of its own names as parent,
 // a boundary aside, the one of the latest time, the first in the file on a tie
-// (cj, p0); none, no conversation, where none has a time (`no_leaf`) or it has
-// no record (`no_agent_messages`). From it the load walks, recovers and tails
-// over every record the relink left and hands on its agentId's alone
-// ([threadChain.judge]); there a fork's briefing is an attachment like any,
-// and a fork's reference naming it prefixes the parent's conversation, so
-// the chain refuses any (whyForkContext). It files the own leaves in order.
+// (cj, p0); none where none has a time (`no_leaf`) or it has no record
+// (`no_agent_messages`). From it the load walks, recovers and tails over every
+// record the relink left and hands on its agentId's alone
+// ([threadChain.judge]); a fork's reference prefixes the parent's conversation,
+// so the chain refuses any (whyForkContext). It files the own leaves in order.
 func (c *threadChain) ownLeaf(w *chainWork) chainHandle {
-	// w.a holds the records a record of the subagent's own names as its parent.
+	// w.a holds the records an own record names as parent.
 	w.a.clear()
 	for i, r := range c.recs {
 		if r.kind&kindDeleted == 0 && c.own(chainHandle(i+1)) && r.parent != noChainRecord {
@@ -2281,8 +2189,7 @@ func (c *threadChain) nearestTurn(w *chainWork, from chainHandle) chainHandle {
 // newestUnder is the record of the latest timestamp whose walk by parent
 // reaches last, the later in the file on a tie, not a sidechain's; last
 // where none is (2.1.322's Gr and 2.1.310's kr, `Ks`, compared as strings,
-// `>=`). Its walks are one: last's descendants marked over the children
-// index.
+// `>=`). One pass: last's descendants marked over the children index.
 func (c *threadChain) newestUnder(ctx context.Context, w *chainWork, last chainHandle) (chainHandle, error) {
 	w.a.clear()
 	w.a.set(int(last))
@@ -2316,13 +2223,13 @@ func (c *threadChain) newestUnder(ctx context.Context, w *chainWork, last chainH
 
 // y1t reports whether the last row stays the start though the checkpoint
 // names another record (2.1.322's Y1t @293812412 with X1t, 2.1.310's WPt
-// @247189354 with GPt; throughBatch always, since no checkpoint the chain
-// models was marked): the last row descends through the checkpoint's batch,
-// the descent up from the checkpoint through UF records to a batch's results,
-// or to the call its hook's attachment names, met by the walk up from the last
-// row through another result or record of that batch's reply; or, where
-// direct, as the single path asks and the leaf set's pick does not
-// (`direct:!1`), from the checkpoint itself.
+// @247189354 with GPt; throughBatch always, since no marked checkpoint is
+// modelled): the last row descends through the checkpoint's batch, the descent
+// up from the checkpoint through UF records to a batch's results, or to the
+// call its hook's attachment names, met by the walk up from the last row
+// through another result or record of that batch's reply; or, where direct, as
+// the single path asks and the leaf set's pick does not (`direct:!1`), from the
+// checkpoint itself.
 func (c *threadChain) y1t(w *chainWork, last, cp chainHandle, direct bool) bool {
 	var (
 		y      chainHandle
@@ -2342,9 +2249,8 @@ func (c *threadChain) y1t(w *chainWork, last, cp chainHandle, direct bool) bool 
 	case at != noChainRecord && c.is(at, kindUser|kindResult):
 		taken, y = c.callsOf(at), c.recs[at-1].parent
 	case hung != noChainRecord:
-		// The batch's call, by the toolUseID the last of its hook's records
-		// names, where that is an attachment's string: the first of the reply
-		// above and its run up whose calls include it.
+		// The batch's call, by the attachment toolUseID string the hook's last
+		// record names: the first reply above, or in its run, whose calls include it.
 		var call chainCallID
 		if calls := c.callsOf(hung); c.is(hung, kindAttachment) && len(calls) == 1 {
 			call = calls[0]
@@ -2368,8 +2274,7 @@ func (c *threadChain) y1t(w *chainWork, last, cp chainHandle, direct bool) bool 
 	if len(uses) > 0 {
 		id = c.recs[y-1].reply
 	}
-	// The batch's reply's calls and those the descent took, as sets: the walk
-	// up holds a results record to them an id at a time.
+	// The batch reply's calls and those the descent took, as sets.
 	w.calls.clear()
 	for _, x := range uses {
 		w.calls.set(int(x))
@@ -2417,11 +2322,11 @@ func (c *threadChain) y1t(w *chainWork, last, cp chainHandle, direct bool) bool 
 	return false
 }
 
-// answersAnother reports whether below, the record under the batch's reply
-// on the walk up, is one of its results answering a call of it other than
-// the checkpoint's (`aj(ne).some(...)`): any of its calls (w.calls) but those
-// taken (w.taken), or, where the batch was found by its hook, any where the
-// reply made more than one, uses being how many it made.
+// answersAnother reports whether below, the record under the batch's reply on
+// the walk up, is one of its results answering a call other than the
+// checkpoint's (`aj(ne).some(...)`): any of its calls (w.calls) but those taken
+// (w.taken), or, where found by its hook, any where the reply made more than
+// one (uses).
 func (c *threadChain) answersAnother(w *chainWork, below chainHandle, uses int, byHook bool) bool {
 	for _, x := range c.resultsOf(below) {
 		if w.calls.has(int(x)) && (byHook && uses > 1 || !byHook && !w.taken.has(int(x))) {
@@ -2448,12 +2353,12 @@ func (c *threadChain) x1t(w *chainWork, from chainHandle, id chainReplyID) []cha
 // the checkpoint, as the metcalfe variants read it: the checkpoint is a reply
 // that made a call; above its run (it and the records of its own id it hangs
 // from) lies a record; the walk up from the last row reaches that record, and
-// of the records it passes outside the run, the last, the topmost (`K`), was
-// written later than the checkpoint, and one is a reply saying something or
-// making a call (LE @293601245, `H`); no record hangs off the checkpoint, and
-// none off the last row but one that hangs off a reply. read is false where
-// the run turns on a reply's id the layer reads as none, which may be absent,
-// where the run stops, or empty, where it goes on (`message?.id!==void 0`).
+// of the records it passes outside the run, the topmost (`K`) was written
+// later than the checkpoint, and one is a reply saying something or making a
+// call (LE @293601245, `H`); no record hangs off the checkpoint, and none off
+// the last row but one that hangs off a reply. read is false where the run
+// turns on a reply's id the layer reads as none, which may be absent (the run
+// stops) or empty (it goes on): `message?.id!==void 0`.
 func (c *threadChain) q1t(w *chainWork, last, cp chainHandle) (fires, read bool) {
 	if !c.is(cp, kindAssistant|kindUse) {
 		return false, true
@@ -2537,17 +2442,16 @@ func (c *threadChain) resultsOf(h chainHandle) []chainCallID {
 }
 
 // chainList is what the resume's walk, recovery and tails hand from one leaf,
-// before the retraction filter: base, the walk with what the recovery reached
+// before the retraction filter: base, the walk with the recovery's records
 // placed in it; tails, what the tails hang under the leaf in warm_mochi's
-// order, and bfs the same records in the order without it, nil where the two
-// are one; and how each record of them was reached, by handle.
+// order, bfs the same in the other order (nil where they are one); and how
+// each was reached, by handle.
 type chainList struct {
 	base, tails, bfs []chainHandle
 	how              []uint8
 }
 
-// listFrom is what the resume's walk, recovery and tails hand from leaf: none
-// where leaf is none.
+// listFrom is what the resume's walk, recovery and tails hand from leaf.
 func (c *threadChain) listFrom(ctx context.Context, w *chainWork, leaf chainHandle) (chainList, error) {
 	if leaf == noChainRecord {
 		return chainList{}, nil
@@ -2577,12 +2481,12 @@ func (c *threadChain) listFrom(ctx context.Context, w *chainWork, leaf chainHand
 // handed after all the walk and the recovery hand. dfs is warm_mochi's order,
 // a walk by depth with each record's children sorted by time; bfs the order
 // without it, a walk by breadth sorted by time together, nil where the two are
-// one. Each record has one parent, so both find the same records. Where a sort
-// holds no order ([threadChain.byTime]) the thread is whyTailTime; where the
-// walk by breadth finds more than threadChainMaxSpread, whySpread.
+// one. Each record has one parent, so both find the same records. Where a sort holds no order
+// ([threadChain.byTime]) the thread is whyTailTime; where the walk by breadth
+// finds more than threadChainMaxSpread, whySpread.
 func (c *threadChain) tails(ctx context.Context, w *chainWork, leaf chainHandle) ([]chainHandle, []chainHandle, error) {
-	// The walk by breadth first, w.a holding what it found, so w.met is still
-	// what the walk and the recovery left for the walk by depth.
+	// Breadth first, in w.a, so w.met is still what the walk and the recovery
+	// left for the walk by depth.
 	w.a.clear()
 	var dfs, bfs []chainHandle
 	queue := []chainHandle{leaf}
@@ -2607,9 +2511,9 @@ func (c *threadChain) tails(ctx context.Context, w *chainWork, leaf chainHandle)
 		c.cannotTell(whySpread)
 		return nil, nil, nil
 	}
-	// The walk by depth, as the resume makes it: a record popped and met
-	// already is passed over with what lies under it, and each record's
-	// children are pushed latest first, so the earliest pops first.
+	// The walk by depth, as the resume makes it: a record popped and already
+	// met is passed over with what lies under it; children are pushed latest
+	// first, so the earliest pops first.
 	stack := []chainHandle{leaf}
 	var kids []chainHandle
 	for len(stack) > 0 {
@@ -2652,8 +2556,8 @@ func (c *threadChain) tails(ctx context.Context, w *chainWork, leaf chainHandle)
 // whether that orders them at all: it reads a record of no time as equal to
 // every record, so beside two of different times such a record leaves their
 // order to the engine's sort algorithm, and beside records of one time leaves
-// all as they came. On the one form the chain admits, the string's order is
-// its milliseconds'.
+// all as they came. On the one admitted form the string's order is its
+// milliseconds'.
 func (c *threadChain) byTime(records []chainHandle) bool {
 	untimed, times := false, 0
 	var first int64
@@ -2693,9 +2597,8 @@ func (c *threadChain) walk(ctx context.Context, w *chainWork, leaf chainHandle) 
 		if err := w.tick(ctx); err != nil {
 			return nil, err
 		}
-		// A record met already ends the walk, as A7t's own guard ends it
-		// (`if(h.has(S.uuid))...break`): the walk reaches a record only
-		// through a parent or a fallback that never hands it one walked.
+		// A record met already ends the walk, as A7t's guard does
+		// (`if(h.has(S.uuid))...break`).
 		if w.met.has(int(at)) {
 			break
 		}
@@ -2750,8 +2653,8 @@ func (c *threadChain) fallback(w *chainWork, at chainHandle) chainHandle {
 	return side.recs[i]
 }
 
-// side is the fallback's candidates of a record of kind k's isSidechain,
-// built once, of the records the relink left.
+// side is the fallback's candidates for a record of kind k's isSidechain,
+// built once from the records the relink left.
 func (c *threadChain) side(w *chainWork, k chainKind) *chainSide {
 	if !w.built {
 		w.built = true
@@ -2791,17 +2694,16 @@ func sideOf(k chainKind) int {
 }
 
 // chainWindow is a reply's window of the walk, chain[start:end], and the
-// records the recovery places among its walked ones by their place in the
-// file: those it recovered beside the reply, and those it hung under a record
-// of the reply or a result beside it ([threadChain.hang]).
+// records the recovery places among its walked ones by file place: those
+// recovered beside the reply, and those hung under a record of the reply or a
+// result beside it ([threadChain.hang]).
 type chainWindow struct {
 	start, end int
 	recovered  []chainHandle
 }
 
-// chainAnchored is a record the recovery hung under the walked record at
-// chain[at], which the resume places right after that record
-// (`Ot.push(...an.get(so.uuid))`).
+// chainAnchored is a record hung under the walked record at chain[at], which
+// the resume places right after it (`Ot.push(...an.get(so.uuid))`).
 type chainAnchored struct {
 	at     int32
 	record chainHandle
@@ -2814,11 +2716,11 @@ type chainAnchored struct {
 // its window runs past the last record of its id on the walk and on over what
 // [threadChain.partOf] reads as part of it, and opens where it recovered or
 // [threadChain.hang] hung a record. Overlapping windows merge (@293752828),
-// one walked record's hung records joining into one list, the earlier
-// window's first. A merged window's recovered records are sorted by file place
-// once: no two share a place, so that is the resume's order without its square
-// cost (BenchmarkAThreadChainAtItsBounds: End 3.3 s so, 1.4 s once). A walk,
-// or a walked record's hung list, past [threadChainMaxSpread] is whySpread.
+// one walked record's hung lists joining, the earlier window's first. A merged
+// window's recovered records are sorted by file place once: no two share one,
+// so that is the resume's order without its quadratic cost
+// (BenchmarkAThreadChainAtItsBounds: End 3.3 s vs 1.4 s). A walk, or a walked
+// record's hung list, past [threadChainMaxSpread] is whySpread.
 func (c *threadChain) recover(ctx context.Context, w *chainWork, chain []chainHandle, how []uint8) ([]chainHandle, error) {
 	for i := range w.pos {
 		w.pos[i] = -1
@@ -2881,8 +2783,8 @@ func (c *threadChain) recover(ctx context.Context, w *chainWork, chain []chainHa
 	if len(windows) == 0 {
 		return chain, nil
 	}
-	// Each walked record's hung records together, in the order hung, one list
-	// a thread: every window holding that record merges, so its lists join.
+	// Each walked record's hung records join into one list, in the order
+	// hung: every window holding that record merges.
 	slices.SortStableFunc(anchored, func(x, y chainAnchored) int { return cmp.Compare(x.at, y.at) })
 	longest := 0
 	for i := 0; i < len(anchored); {
@@ -2943,8 +2845,7 @@ func (c *threadChain) recover(ctx context.Context, w *chainWork, chain []chainHa
 // joins recovered, placed by file order before the first walked record
 // written after it; what hangs under a walked record goes to anchored, right
 // after it. Each window takes children afresh, as the resume does: a record
-// with two children not met can hang in a later window once a recovery
-// between met one.
+// with two children not met can hang in a later window once a recovery met one.
 func (c *threadChain) hang(ctx context.Context, w *chainWork, chain []chainHandle, id chainReplyID, start, end int,
 	recovered []chainHandle, anchored []chainAnchored, how []uint8) ([]chainHandle, []chainAnchored, error) {
 	group := w.records(id)
@@ -2952,8 +2853,7 @@ func (c *threadChain) hang(ctx context.Context, w *chainWork, chain []chainHandl
 		return recovered, anchored, nil
 	}
 	hook := whyAt(whyHookChain)
-	// under appends to into what pye hands from each of u's children, every
-	// record of it met at once.
+	// under appends to into what pye hands from each of u's children, met at once.
 	under := func(u chainHandle, into []chainHandle) ([]chainHandle, error) {
 		for _, y := range w.children(u) {
 			from := len(into)
@@ -3008,8 +2908,8 @@ func (c *threadChain) hang(ctx context.Context, w *chainWork, chain []chainHandl
 // and, after each record, its one child not met, while each is a UF record of
 // u's isSidechain as written and not met; none at all where one is not, or
 // where one has two or more children not met. A record has one parent, so the
-// chain runs down u's subtree and meets no record twice: a cycle through y
-// would run through u, which is met, and so never the child taken next.
+// chain runs down u's subtree and meets no record twice: a cycle through y would run through u, which is
+// met.
 func (c *threadChain) pye(ctx context.Context, w *chainWork, y, u chainHandle,
 	into []chainHandle) ([]chainHandle, error) {
 	side, from := sideOf(c.recs[u-1].kind), len(into)
@@ -3043,10 +2943,11 @@ func (c *threadChain) pye(ctx context.Context, w *chainWork, y, u chainHandle,
 // first 24 characters a record of the list names
 // ([threadChain.readsRetractions], [chainPrefix]); THE MALFORMED-ATTACHMENT
 // DROP (Fce @295256716, dne @248487226, the same code) then drops each
-// attachment [threadChain.file] marked kindIllFormed, that record alone. Both releases'
-// deserializers rerun the two (e_n @295266070, TJt @248494866), taking nothing
-// more. In a subagent's thread neither runs, and another agentId's records
-// are whyAnotherAgent. Its orders are what it hands for certain, per tails order.
+// attachment [threadChain.file] marked kindIllFormed, that record alone. Both
+// releases' deserializers rerun the two (e_n @295266070, TJt @248494866),
+// taking nothing more. In a subagent's thread neither runs, and another
+// agentId's records are whyAnotherAgent. Its orders are what it hands for
+// certain, per tails order.
 func (c *threadChain) judge(ctx context.Context, w *chainWork, g *chainGroup) error {
 	g.verdicts = make([]chainVerdict, len(c.recs))
 	off, deleted := chainVerdict{handed: verdictNo, why: whyAt(whyOffConversation)},
@@ -3063,8 +2964,7 @@ func (c *threadChain) judge(ctx context.Context, w *chainWork, g *chainGroup) er
 	if g.leaf == noChainRecord {
 		return nil
 	}
-	// handed is the list, the tails in warm_mochi's order: the same records in
-	// either.
+	// handed is the list, the tails in warm_mochi's order (the same records).
 	handed := slices.Concat(g.list.base, g.list.tails)
 	for _, h := range handed {
 		g.verdicts[h-1] = chainVerdict{handed: verdictYes, why: g.list.how[h]}
@@ -3097,17 +2997,15 @@ func (c *threadChain) judge(ctx context.Context, w *chainWork, g *chainGroup) er
 			}
 		}
 	}
-	// The drop of malformed attachments, after the filter, so a record the
-	// filter took keeps the filter's reason. It tests no mode itself: file
-	// marks a main thread's attachments alone.
+	// Malformed attachments drop after the filter, so a record the filter took
+	// keeps its reason; file marks a main thread's alone.
 	for _, h := range handed {
 		if v := &g.verdicts[h-1]; v.handed == verdictYes && c.is(h, kindAttachment|kindIllFormed) {
 			*v = chainVerdict{handed: verdictNo, why: whyAt(whyMalformedAttachment)}
 		}
 	}
 	if !main {
-		// The hand-off: a subagent's own load hands on what the walk, the
-		// recovery and the tails reach of its agentId alone, whatever its side.
+		// A subagent's load hands on only what is of its agentId, whatever its side.
 		another := chainVerdict{handed: verdictNo, why: whyAt(whyAnotherAgent)}
 		for i := range g.verdicts {
 			if v := &g.verdicts[i]; v.handed != verdictNo && c.recs[i].kind&kindAgent == 0 {
@@ -3126,12 +3024,11 @@ func (c *threadChain) judge(ctx context.Context, w *chainWork, g *chainGroup) er
 // merge folds each group's answers into the thread's: handedYes where every
 // group hands a record, handedNo where none does, each with the default
 // variant's reason; and handedUnknown where the groups part, whyLeafFlag where
-// q1t's leaf parts them and else whyRelease. A group's answers are definite,
-// since judge answers handed or not handed alone, so a record's cannot tell
-// comes only from that parting. Each distinct order is kept once, with the
-// variants that hand it, the default variant's first: a group's warm_mochi
-// variants hand its order, the rest its order with the tails sorted after a
-// walk by breadth.
+// q1t's leaf parts them and else whyRelease. A group's answers are definite
+// (judge answers handed or not handed alone), so cannot tell comes only from
+// that parting. Each distinct order is kept once, with the variants that hand
+// it, the default variant's first: a group's warm_mochi variants hand its
+// order, the rest its order with the tails sorted after a walk by breadth.
 func (c *threadChain) merge(groups []chainGroup) {
 	def := slices.IndexFunc(groups, func(g chainGroup) bool { return g.variants&variantDefault != 0 })
 	metcalfe := slices.IndexFunc(groups, func(g chainGroup) bool { return g.variants == variantsMetcalfe })
@@ -3165,9 +3062,8 @@ func (c *threadChain) merge(groups []chainGroup) {
 	}
 }
 
-// order files records as the order variants hand, where any does: added to
-// the variants of an order of the same records in the same order, else a
-// distinct order of its own.
+// order files records as the order variants hand, where any does: added to an
+// existing order of the same records, else a distinct order.
 func (c *threadChain) order(records []chainHandle, variants chainVariants) {
 	if variants == 0 {
 		return

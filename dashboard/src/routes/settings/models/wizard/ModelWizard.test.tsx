@@ -26,6 +26,8 @@ import {
 import type { ModelsData } from "../data.ts";
 import type { WizardAt } from "../parts.tsx";
 import { ModelWizard } from "./ModelWizard.tsx";
+import { seatChangesOf } from "./steps/UseItFor.tsx";
+import { noUses } from "~/lib/modelUses.ts";
 
 const calls: string[] = [];
 
@@ -56,6 +58,8 @@ const { getConfig } = await import("~/protocol/configWrite.ts");
 const DOC = {
   name: "Acme",
   providers: {
+    // A COMPANY WITH MODELS has a place to run coding; M-002's case takes it away.
+    sandbox: { local: {}, default_run_in: "direct" },
     llm: {
       default: { harness: "claude-code", model: "opus", auth: { mode: "api-key" } },
       sonnet: {
@@ -212,49 +216,92 @@ afterEach(() => {
   location.hash = "";
 });
 
-/** Walks a new Claude Code model on an API key to Review, checking the footer on every step. */
-async function walkToTest(key = "sonnet-key") {
-  // READ AS EACH STEP STANDS: the wizard keeps one button in the slot and changes its words.
-  const primaries: { footer: boolean; text: string }[] = [];
-  const primary = () => {
-    const button = primaryButton();
-    return {
-      footer: !!button?.closest(".crewlet-setup-wizard__footer"),
-      text: button?.textContent ?? "",
-    };
-  };
+/**
+ * Walks a new Claude Code model on an API key to Review, reading the footer on
+ * every step: the primary's words, and whether Finish and save is offered.
+ */
+async function walkToReview(key = "sonnet-key", { accepted = true } = {}) {
+  const footers: { primary: string; finish: boolean }[] = [];
+  const footer = () => ({
+    primary: primaryButton()?.textContent ?? "",
+    finish: screen.queryAllByRole("button", { name: "Finish and save" }).length > 0,
+  });
   fireEvent.change(screen.getByRole("textbox", { name: /Name/ }), { target: { value: key } });
-  primaries.push(primary());
+  footers.push(footer());
   press("Continue");
   fireEvent.change(keyField(), { target: { value: "sk-ant-api03-new" } });
-  primaries.push(primary());
+  footers.push(footer());
   press("Continue");
   fireEvent.click(screen.getByRole("radio", { name: /Sonnet/ }));
-  primaries.push(primary());
-  for (const step of ["Where it runs", "Use it for", "Limits", "Test call"]) {
+  footers.push(footer());
+  for (const step of ["Where it runs", "Use it for", "Limits", "Review"]) {
     press("Continue");
     expect(heading()).toBe(step);
-    primaries.push(primary());
+    footers.push(footer());
   }
-  return primaries;
+  if (accepted) await screen.findByText("The configuration is valid");
+  return footers;
 }
 
-test("adding a model ends on Test call with Finish and save, and has no Review step", async () => {
+/**
+ * NO TEST CALL STEP: adding a model ends on Review, which runs the test call
+ * and says it in one line, with Finish and save as its one primary. Finish and
+ * save is offered beside Continue from the first step where nothing is missing.
+ */
+test("adding a model ends on Review with the test call on it, and Finish and save once nothing is missing", async () => {
   show();
-  const primaries = await walkToTest();
-  expect(primaries).toHaveLength(7);
-  expect(primaries.every((p) => p.footer)).toBe(true);
-  expect(primaries.map((p) => p.text)).toEqual([...Array(6).fill("Continue"), "Finish and save"]);
+  const footers = await walkToReview();
+  expect(footers.map((f) => f.primary)).toEqual([...Array(6).fill("Continue"), "Finish and save"]);
+  // NAME ALONE, then a key but no model: something is missing. From Model on, nothing is.
+  expect(footers.map((f) => f.finish)).toEqual([false, false, true, true, true, true, true]);
   const steps = screen.getByRole("list", { name: /^Steps to/ });
-  expect(within(steps).queryByRole("button", { name: /Review/ })).toBeNull();
+  expect(within(steps).queryByRole("button", { name: /Test call/ })).toBeNull();
+  expect(within(steps).getByRole("button", { name: /Review/ })).toBeTruthy();
+  // THE TEST CALL RAN ON REVIEW, its result one line.
+  expect(screen.getByText("Passed in 3.4 s")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Run test call" })).toBeNull();
+});
+
+/**
+ * FINISH AND SAVE FROM AN EARLY STEP: the steps left keep their defaults (no
+ * seat, the harness's limits, web tools as they are), and the save still tests
+ * the key, checks the change and stores it before the document.
+ */
+test("Finish and save from the Model step saves with the defaults of the steps left", async () => {
+  show();
+  fireEvent.change(screen.getByRole("textbox", { name: /Name/ }), {
+    target: { value: "sonnet-key" },
+  });
+  press("Continue");
+  fireEvent.change(keyField(), { target: { value: "sk-ant-api03-new" } });
+  press("Continue");
+  fireEvent.click(screen.getByRole("radio", { name: /Sonnet/ }));
+  expect(heading()).toBe("Model");
+  press("Finish and save");
+  await waitFor(() => expect(calls.at(-1)).toMatch(/^write:/));
+  expect(calls).toEqual([
+    "test",
+    "read",
+    "dry-run",
+    "dry-run",
+    "store",
+    "write:Add model sonnet-key",
+  ]);
+  const written = vi.mocked(api.writeDocument).mock.calls.at(-1)![0] as Record<string, any>;
+  const entry = written.providers.llm["sonnet-key"];
+  expect(entry.model).toBe("sonnet");
+  expect(entry.max_concurrent).toBeUndefined();
+  expect(entry.timeout_seconds).toBeUndefined();
+  expect(location.hash).toContain("settings/models/sonnet-key");
 });
 
 test("Finish and save tests the credential, then stores it with its draft before the document that names it", async () => {
   show();
-  await walkToTest();
+  await walkToReview();
+  // REVIEW TESTED THE KEY AND CHECKED THE CHANGE as it opened; the save stores it.
+  expect(calls).toEqual(["test", "read", "dry-run", "dry-run"]);
   press("Finish and save");
   await waitFor(() => expect(calls.at(-1)).toMatch(/^write:/));
-  expect(calls.slice(0, 4)).toEqual(["test", "read", "dry-run", "dry-run"]);
   const tested = vi.mocked(api.testCredential).mock.calls[0]!;
   expect(tested[1]).toMatchObject({
     values: { ANTHROPIC_API_KEY_SONNET_KEY: "sk-ant-api03-new" },
@@ -277,23 +324,24 @@ test("Finish and save tests the credential, then stores it with its draft before
 
 /**
  * AN EDIT SAVED RETURNS TO WHERE IT WAS OPENED, as Cancel does. Renew token
- * or Replace API key from a row's menu on the list is opened over the list
- * (here on its By job lens), and the save hands the page back to it through
+ * or Replace API key from a row's menu on the list is opened over the list,
+ * and the save hands the page back to it through
  * the wizard's own close; it does not travel to the model's page, which took
  * a person working down the list away from it. Mutation: send every save to
  * the model's page, and both readings are red.
  */
 test("an edit saved returns to where it was opened, never to the model's page", async () => {
-  location.hash = "#/settings/models?view=jobs&flow=edit&entry=sonnet&step=signin&focus=credential";
+  location.hash =
+    "#/settings/models?sort=status&flow=edit&entry=sonnet&step=signin&focus=credential";
   const { onClose } = show({ editing: "sonnet", target: { step: "signin", focus: "credential" } });
   fireEvent.change(keyField(), { target: { value: "sk-ant-api03-rotated" } });
   toReview();
-  await screen.findByText("The engine accepts this change");
-  press("Save changes");
+  await screen.findByText("The configuration is valid");
+  press("Finish and save");
   await waitFor(() => expect(calls.at(-1)).toMatch(/^write:/));
   await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   expect(location.hash).not.toContain("settings/models/sonnet");
-  expect(location.hash).toContain("view=jobs");
+  expect(location.hash).toContain("sort=status");
 });
 
 /**
@@ -306,7 +354,7 @@ test("the review says once that saving makes one revision", async () => {
   show({ editing: "sonnet", target: { step: "signin", focus: "credential" } });
   fireEvent.change(keyField(), { target: { value: "sk-ant-api03-rotated" } });
   toReview();
-  await screen.findByText("The engine accepts this change");
+  await screen.findByText("The configuration is valid");
   expect(document.body.textContent?.match(/one revision/g)).toHaveLength(1);
 });
 
@@ -320,7 +368,7 @@ test("a save names the write it is waiting on while it runs", async () => {
   show({ editing: "sonnet", target: { step: "signin", focus: "credential" } });
   fireEvent.change(keyField(), { target: { value: "sk-ant-api03-rotated" } });
   toReview();
-  await screen.findByText("The engine accepts this change");
+  await screen.findByText("The configuration is valid");
   let stored!: (value: unknown) => void;
   vi.mocked(api.storeCredential).mockImplementationOnce(() => {
     calls.push("store");
@@ -331,7 +379,7 @@ test("a save names the write it is waiting on while it runs", async () => {
     calls.push("write");
     return new Promise((resolve) => (written = resolve)) as never;
   });
-  press("Save changes");
+  press("Finish and save");
   const storing = await screen.findByRole("status");
   expect(storing.textContent).toMatch(/^Storing the key and re-activating the company/);
   expect(document.querySelector(".models-waiting__elapsed")?.textContent).toMatch(/^\d+ s$/);
@@ -369,7 +417,7 @@ test("a save names the write it is waiting on while it runs", async () => {
  */
 test("a save left between its two writes still makes both, and moves nothing on screen", async () => {
   show();
-  await walkToTest();
+  await walkToReview();
   let stored!: (value: unknown) => void;
   vi.mocked(api.storeCredential).mockImplementationOnce(() => {
     calls.push("store");
@@ -486,18 +534,17 @@ test.each([
     expect(heading()).toBe(step);
   }
   if (chooseCoding) fireEvent.click(screen.getByRole("radio", { name: /^Coding/ }));
-  for (const step of ["Limits", "Test call"]) {
+  for (const step of ["Limits", "Review"]) {
     press("Continue");
     expect(heading()).toBe(step);
   }
-  toReview();
-  await screen.findByText("The engine accepts this change");
+  await screen.findByText("The configuration is valid");
   // NO SEAT MOVES ONTO default: the PM and the designer stay where they are.
   const moves = screen.queryByRole("list", { name: "Seats that change model" });
   const listed = moves ? (moves.textContent ?? "") : "";
   expect(listed).not.toMatch(/Product Manager|Designer/);
-  if (!chooseCoding) expect(screen.getByText("No seat changes model.")).toBeTruthy();
-  press("Save changes");
+  if (!chooseCoding) expect(screen.getByText("No seat changes model")).toBeTruthy();
+  press("Finish and save");
   await waitFor(() => expect(calls.at(-1)).toMatch(/^write:/));
   const written = vi.mocked(api.writeDocument).mock.calls.at(-1)![0] as unknown as {
     roles: { handle: string; llm: unknown }[];
@@ -579,8 +626,8 @@ describe.each([
         : unsettled,
     );
     await openReview();
-    await screen.findByText("The engine accepts this change");
-    press("Save changes");
+    await screen.findByText("The configuration is valid");
+    press("Finish and save");
     expect(await blocked()).toBe(
       `${said} The change may or may not have been stored. Reopen the model before trying again.`,
     );
@@ -591,9 +638,13 @@ test("a place the company never set up says so in plain words, never the configu
   show({ editing: "default", target: { step: "runs" } });
   expect(heading()).toBe("Where it runs");
   expect(document.body.textContent).toContain(
-    "E2B isn't set up for this company. Add it under providers.sandbox to use it.",
+    "E2B isn't set up for this company. Set it up in Configuration.",
   );
-  expect(document.body.textContent).not.toMatch(/declares no|E2B key not set/);
+  expect(document.body.textContent).not.toMatch(/declares no|E2B key not set|providers\.sandbox/);
+  // M-017: THE FACT IS A STATUS, not "Ready" over a reason it is not.
+  expect(
+    screen.queryAllByText("Ready", { selector: "dt, .crewlet-choice-card__fact-label" }),
+  ).toEqual([]);
 });
 
 test("a refused key is said at the key, and the Method step is where it is fixed", async () => {
@@ -616,9 +667,10 @@ test("a refused key is said at the key, and the Method step is where it is fixed
     },
   });
   show();
-  await walkToTest();
-  press("Finish and save");
-  await screen.findByText("Not saved: the test call below failed");
+  await walkToReview("sonnet-key", { accepted: false });
+  // REVIEW'S TEST CALL SAYS IT IN ONE LINE, and nothing is checked or written.
+  expect(await screen.findByText("Failed: invalid x-api-key. Nothing was stored.")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Test again" })).toBeTruthy();
   expect(calls.some((c) => c === "dry-run" || c.startsWith("write:"))).toBe(false);
   expect(document.body.textContent).not.toMatch(/values\./);
   fireEvent.click(
@@ -639,7 +691,7 @@ test("a secret name already stored is said at Stored as, in words", async () => 
     body: { names: ["ANTHROPIC_API_KEY_SONNET_KEY"] },
   });
   show();
-  await walkToTest();
+  await walkToReview();
   press("Finish and save");
   await screen.findByText(/ANTHROPIC_API_KEY_SONNET_KEY is already stored/);
   expect(calls.some((c) => c.startsWith("write:"))).toBe(false);
@@ -706,7 +758,10 @@ test("a Codex model on a ChatGPT sign-in is created, then handed to the device s
   expect(heading()).toBe("Use it for");
   press("Continue");
   press("Continue");
-  expect(heading()).toBe("Test call");
+  expect(heading()).toBe("Review");
+  await screen.findByText("The configuration is valid");
+  // NOTHING TO TEST BEFORE THE SAVE: the row says when it is.
+  expect(screen.getByText("After it is saved")).toBeTruthy();
   press("Finish and save");
   await waitFor(() => expect(onDevice).toHaveBeenCalledWith("codex-review"));
   // A new device sign-in is made after the save, so nothing is tested before it.
@@ -724,7 +779,7 @@ test("a Codex model on a ChatGPT sign-in is created, then handed to the device s
 test("Review lists a job's first model as the change, never as a fallback, and says the test call has not run", async () => {
   show({ editing: "sonnet", target: { step: "assign", add: [{ job: "reviews", seat: "qa" }] } });
   toReview();
-  await screen.findByText("The engine accepts this change");
+  await screen.findByText("The configuration is valid");
   const moves = screen.getByRole("list", { name: "Seats that change model" });
   expect(moves.textContent).toContain("Quality Lead, reviewing and delegations: default → sonnet");
   expect(screen.queryByText(/as a fallback/)).toBeNull();
@@ -887,6 +942,57 @@ test("a secret name the reader types is kept, whatever the name of the model bec
   expect((screen.getByLabelText(/Stored as/) as HTMLInputElement).value).toBe("MY_OWN_KEY");
 });
 
+/**
+ * THE MODEL STEP FOLLOWS THE PROVIDER: a model typed for Anthropic is cleared
+ * when the provider becomes OpenAI, with its key, and the step's example, hint
+ * and secret name are OpenAI's. Kept, an Anthropic id was saved as `openai/...`.
+ */
+test("a changed provider clears the model and key typed for the last one, and the step shows the new one's example", () => {
+  answers.llm_models = { source: "none", aliases: [], models: [], reason: "" };
+  show();
+  fireEvent.change(screen.getByRole("textbox", { name: /Name/ }), { target: { value: "oc" } });
+  fireEvent.click(screen.getByRole("radio", { name: /OpenCode/ }));
+  press("Continue");
+  fireEvent.change(keyField(), { target: { value: "sk-ant-api03-fake" } });
+  press("Continue");
+  const model = () => screen.getByRole("combobox", { name: /^Model/ }) as HTMLInputElement;
+  expect(model().placeholder).toBe("claude-sonnet-5-5");
+  fireEvent.change(model(), { target: { value: "claude-sonnet-5-5" } });
+  expect(screen.getByText(/Sent as anthropic\/claude-sonnet-5-5\./)).toBeTruthy();
+
+  press("Back");
+  fireEvent.click(screen.getByRole("combobox", { name: /Provider/ }));
+  fireEvent.mouseDown(screen.getByRole("option", { name: "OpenAI" }));
+  expect((keyField() as HTMLInputElement).value).toBe("");
+  expect(keyField().getAttribute("placeholder")).toBe("sk-…");
+  expect((screen.getByLabelText(/Stored as/) as HTMLInputElement).value).toBe("OPENAI_API_KEY");
+  fireEvent.change(keyField(), { target: { value: "sk-fake-openai" } });
+  press("Continue");
+  expect(heading()).toBe("Model");
+  expect(model().value).toBe("");
+  expect(model().placeholder).toBe("gpt-5.5");
+  expect(screen.getByText(/Sent as openai\/<model>\./)).toBeTruthy();
+});
+
+/**
+ * THE STORED KEY IS ITS OWN SCOPE'S: replacing it ends when the method moves,
+ * so "Keep the stored key" never names the old secret for another sign-in.
+ */
+test("a replaced key's Keep is offered only on its own method, and the secret follows the method", () => {
+  show({ editing: "sonnet", target: { step: "signin", focus: "credential" } });
+  expect(screen.getByRole("button", { name: /Keep the stored key/ })).toBeTruthy();
+  const method = (value: string) =>
+    fireEvent.click(document.querySelector(`input[type="radio"][value="${value}"]`)!);
+  method("token");
+  expect(screen.queryByRole("button", { name: /Keep the stored/ })).toBeNull();
+  expect((screen.getByLabelText(/Stored as/) as HTMLInputElement).value).toBe(
+    "CLAUDE_CODE_OAUTH_TOKEN",
+  );
+  method("api-key");
+  expect(screen.getByText("ANTHROPIC_API_KEY_SONNET")).toBeTruthy();
+  expect(screen.getByRole("button", { name: /Replace the key/ })).toBeTruthy();
+});
+
 /** A model check whose lines are `lines`, as the engine answers one. */
 const checked = (
   lines: { check: string; ok: boolean; detail: string; kind?: string; remedy?: string }[],
@@ -948,11 +1054,11 @@ test("a failed test call saves nothing, stays, and says what failed and how to f
   expect(calls.some((c) => c.startsWith("write:") || c === "dry-run")).toBe(false);
   expect(onClose).not.toHaveBeenCalled();
   expect(heading()).toBe("Limits");
-  press("See the test call");
-  expect(heading()).toBe("Test call");
-  // On the Test call step its own result says what failed, so the note does not repeat it.
-  expect(screen.getByText("Not saved: the test call below failed")).toBeTruthy();
-  expect(screen.queryByText("Not saved: the test call failed")).toBeNull();
+  press("See it on Review");
+  expect(heading()).toBe("Review");
+  // REVIEW'S TEST CALL ROW says what failed, in one line, with its button to run it again.
+  expect(screen.getByText(/^Failed: .*Replace the key on the Method step\.$/)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Test again" })).toBeTruthy();
 });
 
 test("a save the engine refuses stays in the wizard and says nothing may be lost", async () => {
@@ -988,4 +1094,188 @@ test("Finish and save is busy while it runs and is never sent twice", async () =
   fireEvent.click(button);
   expect(checkModel).toHaveBeenCalledTimes(1);
   await act(async () => answer(checked([{ check: "smoke", ok: true, detail: "It answers." }])));
+});
+
+// THE ADVISOR IS A CHOICE LIKE ASK CREWLET: right under it, company-wide with
+// no seats to pick, tagged In use on the model it explains with, and every
+// move it makes said on Review before anything is written.
+test("the Advisor is a choice right under Ask Crewlet, in use on its model, with no seats to pick", () => {
+  const d: ModelsData = { ...data(), advisor: { key: "sonnet" } };
+  render(
+    <Router>
+      <ModelWizard
+        data={d}
+        editing={d.models.find((m) => m.key === "sonnet")!}
+        target={{ step: "assign" }}
+        onClose={() => {}}
+        onDevice={() => {}}
+      />
+    </Router>,
+  );
+  expect(heading()).toBe("Use it for");
+  const radios = screen.getAllByRole("radio");
+  const at = (name: RegExp) =>
+    radios.findIndex((r) =>
+      name.test(r.getAttribute("aria-label") ?? r.closest("label")?.textContent ?? ""),
+    );
+  const ask = at(/^Ask Crewlet/);
+  expect(ask).toBeGreaterThan(-1);
+  expect(at(/^Advisor/)).toBe(ask + 1);
+  expect(at(/^Not yet/)).toBe(ask + 2);
+  const advisor = screen.getByRole("radio", { name: /^Advisor/ }) as HTMLInputElement;
+  expect(advisor.closest("label")?.textContent).toContain("In use");
+  fireEvent.click(advisor);
+  expect(advisor.checked).toBe(true);
+  expect(screen.queryByText("For which seats?")).toBeNull();
+
+  expect(seatChangesOf(d, "fast", noUses(), { ...noUses(), advisor: true })).toEqual([
+    "Advisor: sonnet → fast",
+  ]);
+  expect(seatChangesOf(d, "sonnet", { ...noUses(), advisor: true }, noUses())).toEqual([
+    "Advisor: no longer on sonnet, its checks run with no model",
+  ]);
+});
+
+// M-015: AN EDIT SHOWS ITS ONE HARNESS, the rule said once, not a refusal on
+// every other harness's card.
+test("an edit's first step shows its one harness and says the rule once", () => {
+  show({ editing: "sonnet", target: { step: "harness" } });
+  const harness = screen.getByRole("radiogroup", { name: "Harness" });
+  expect(within(harness).getAllByRole("radio")).toHaveLength(1);
+  expect(document.body.textContent?.match(/keeps its/g)).toHaveLength(1);
+});
+
+// M-014: A NEW NAME STOPS AT ITS LIMIT, and its one rule is the field's line.
+test("a new name's field stops at 40 characters and says the rule it is held to", () => {
+  show();
+  const name = screen.getByRole("textbox", { name: /Name/ }) as HTMLInputElement;
+  expect(name.maxLength).toBe(40);
+  expect(
+    screen.getByText(
+      "Lowercase letters, digits, dots, hyphens and underscores, up to 40 characters.",
+    ),
+  ).toBeTruthy();
+});
+
+// M-016: A FAILED TEST SAYS ITS FIRST SENTENCE, the engine's chain on hover,
+// and the valid-change callout is not worded as the test passing.
+test("a failed test call says its first sentence, with the engine's chain on hover", async () => {
+  checkModel.mockImplementation(async () =>
+    checked([
+      {
+        check: "sign-in",
+        ok: false,
+        detail: "401",
+        kind: "auth",
+        remedy: "failed: llm harness/claude-code/haiku: auth: Invalid API key",
+      },
+    ]),
+  );
+  show({ editing: "sonnet", target: { step: "limits" } });
+  toReview();
+  await screen.findByText("The configuration is valid");
+  fireEvent.click(screen.getByRole("button", { name: "Run test call" }));
+  const line = await screen.findByText(/^Failed: /);
+  expect(line.textContent).not.toMatch(/llm harness|failed:/);
+  expect(line.getAttribute("title")).toMatch(/llm harness\/claude-code\/haiku/);
+});
+
+// M-019: A RELOAD ASKS FIRST while something is typed, and not before.
+test("a reload asks before it throws a typed draft away, and not before anything is typed", () => {
+  show();
+  const reload = () => {
+    const event = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(event);
+    return event.defaultPrevented;
+  };
+  expect(reload()).toBe(false);
+  fireEvent.change(screen.getByRole("textbox", { name: /Name/ }), { target: { value: "draft" } });
+  expect(reload()).toBe(true);
+});
+
+// M-002: A FIRST CODING MODEL ON A COMPANY WITH NO PLACE TO RUN CODING. The
+// engine checks a draft's test against the company as it stands, which refuses
+// it, so Finish and save sets this host up first, then tests and saves; opening
+// Review writes nothing.
+test("with no sandbox, Finish and save sets up this host, then tests and saves the first coding model", async () => {
+  const doc = structuredClone(DOC) as Record<string, any>;
+  delete doc.providers.sandbox;
+  vi.mocked(getConfig).mockImplementation(async () => {
+    calls.push("read");
+    return { kind: "document", document: structuredClone(doc), etag: '"rev-1"' };
+  });
+  const written: Record<string, any>[] = [];
+  vi.mocked(api.writeDocument).mockImplementation(async (next, options) => {
+    calls.push(options.dryRun ? "dry-run" : `write:${options.summary}`);
+    if (!options.dryRun) {
+      written.push(next as Record<string, any>);
+      Object.assign(doc, structuredClone(next));
+    }
+    return options.dryRun
+      ? { kind: "valid", baseRevisionId: "rev-1", warnings: [], derived: null }
+      : { kind: "saved", revisionId: "rev-2", epoch: 2, warnings: [], derived: null };
+  });
+  const d = data();
+  render(
+    <Router>
+      <ModelWizard
+        data={{ ...d, doc: structuredClone(doc) as never }}
+        onClose={() => {}}
+        onDevice={() => {}}
+      />
+    </Router>,
+  );
+  await walkToReview("sonnet-key", { accepted: true });
+  // OPENING REVIEW TESTED NOTHING AND WROTE NOTHING: the test waits for the save.
+  expect(calls).toEqual(["read", "dry-run", "dry-run"]);
+  expect(screen.getByText("Runs when you save")).toBeTruthy();
+  expect(screen.getByText("On this engine's host, set up by this save")).toBeTruthy();
+  calls.length = 0;
+  press("Finish and save");
+  await waitFor(() => expect(calls.at(-1)).toMatch(/^write:Add model/));
+  expect(calls.slice(0, 4)).toEqual([
+    "read",
+    "dry-run",
+    "write:Set up running coding on this engine's host",
+    "test",
+  ]);
+  expect(written[0]!.providers.sandbox).toEqual({ local: {}, default_run_in: "direct" });
+});
+
+// M-004: A PROGRAM MISSING ON THE ENGINE HOST flags no step and offers none to
+// fix it in, and Finish and save is held while Review lists it.
+test("a harness missing on the host is said plainly, flags no step, and holds Finish and save", async () => {
+  vi.mocked(api.testCredential).mockResolvedValue({
+    kind: "refused",
+    status: 422,
+    code: "validation_error",
+    sentence: "The configuration this change would produce is not valid, so nothing was stored.",
+    detail: "",
+    hint: "",
+    body: {
+      problems: [
+        {
+          path: "providers.llm.sonnet-key.harness",
+          segments: ["providers", "llm", "sonnet-key", "harness"],
+          kind: "invalid",
+          message:
+            'not on PATH "claude" is not on this host\'s PATH \u2014 the harness runs on the ENGINE host, so it must be installed here',
+        },
+      ],
+    },
+  } as never);
+  show();
+  await walkToReview("sonnet-key", { accepted: false });
+  await screen.findByText(/^Failed: /);
+  expect(document.body.textContent).toContain(
+    "Install claude on the engine host: the harness runs there.",
+  );
+  expect(document.body.textContent).not.toMatch(/PATH|ENGINE host/);
+  expect(screen.queryByRole("button", { name: /^Fix in/ })).toBeNull();
+  const steps = screen.getByRole("list", { name: /^Steps to/ });
+  expect(within(steps).queryByText("Needs attention")).toBeNull();
+  const finish = screen.getByRole("button", { name: "Finish and save" });
+  expect(finish.hasAttribute("disabled") || finish.getAttribute("aria-disabled") === "true").toBe(
+    true,
+  );
 });

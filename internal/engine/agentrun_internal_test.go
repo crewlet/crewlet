@@ -36,10 +36,12 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	seatpkg "github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // chainMember is one entry of a fixture's executor chain: its key, its harness, the
@@ -55,6 +57,8 @@ type chainMember struct {
 	spent bool
 	// env is the entry's env, as resolved.
 	env map[string]string
+	// webDenied is the entry's `overrides: {web_tools: denied}`.
+	webDenied bool
 }
 
 // harnessProvider is a REAL harness provider for m: the question every case here
@@ -87,6 +91,9 @@ func harnessProvider(t *testing.T, m chainMember) *harness.Provider {
 			"limit_reports": nil, "auth_events": nil,
 			"mcp": map[string]any{"failure_events": []any{}},
 		}
+	}
+	if m.webDenied {
+		overrides["web_tools"] = "denied"
 	}
 	provider, err := harness.New(harness.Config{
 		Key: m.key, Harness: m.agent, Model: m.model, StateDir: t.TempDir(),
@@ -245,6 +252,8 @@ func launchRigRestoring(t *testing.T, c *Company, bridge *mcpbridge.Bridge,
 		Audience: noAudience{},
 		Queue:    q, Pending: pending, Manager: manager, Resume: &resumer{engine: e},
 		Restore: restore,
+		// THE SEAT'S CAP, as coordinatorOptions hands it over (ADR-0169).
+		SeatCap: e.seatRunCap,
 	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
@@ -338,6 +347,38 @@ func TestALaunchPlacesTheRunInItsMembersCell(t *testing.T) {
 				t.Fatalf("the run is placed in %q (err %v), want %q", row.Placement, err, tc.want)
 			}
 		})
+	}
+}
+
+// AN ENTRY'S WEB DENIAL REACHES ITS EXECUTOR: a run launched on an entry with
+// `web_tools: denied` is handed to its runner as one whose harness gets no web
+// tool of its own, as the entry's runs on the engine host get none, and a run
+// on an entry that keeps the web is not.
+//
+// Mutation: leave webDenied unset in newExecutorRun, or off the launch request,
+// and the denied entry's run goes out with its web tools.
+func TestAnEntrysWebDenialReachesItsExecutor(t *testing.T) {
+	t.Parallel()
+	for _, agent := range []string{"claude-code", "opencode"} {
+		for _, denied := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s denied %v", agent, denied), func(t *testing.T) {
+				t.Parallel()
+				c, seat := chainCompany(t, chainMember{key: "api", agent: agent,
+					model: "anthropic/claude-golden", webDenied: denied})
+				e, runners := launchRigRunners(t, c, bridgeFor(t, mcpbridge.Options{
+					Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+				}))
+				l := launcherOn(e, c, seat, "t1")
+				if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err != nil {
+					t.Fatalf("LaunchExecutor: %v", err)
+				}
+				started := runners[agent].Started()
+				if len(started) != 1 || started[0].WebDenied != denied {
+					t.Fatalf("started %d runs, the first web denied %v; want one, web denied %v",
+						len(started), len(started) > 0 && started[0].WebDenied, denied)
+				}
+			})
+		}
 	}
 }
 
@@ -501,7 +542,7 @@ func TestAChainWithNoRunnerMemberIsRefusedNamingIt(t *testing.T) {
 	l := launcherOn(e, c, seat, "t1")
 	_, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
 	if err == nil || !strings.Contains(err.Error(), `("codex" and "gemini")`) ||
-		!strings.Contains(err.Error(), `"claude-code" or "opencode"`) {
+		!strings.Contains(err.Error(), words.Or(executor.Names())) {
 		t.Fatalf("LaunchExecutor = %v, want a refusal naming the chain and the runners", err)
 	}
 	// CLASSED AS THE CONFIGURATION IT IS, which whoever is told the run did
@@ -834,6 +875,16 @@ func TestTheExecutorFloorIsThreeValued(t *testing.T) {
 }
 
 // staticRemaining is a headroom reader that answers what the case says.
+// roomForRuns gives seat a cap of n runs at once (ADR-0169), for a case that
+// launches several of its runs and settles none: past the seat's cap a launch
+// is refused, which is not what such a case is about.
+func roomForRuns(seat *org.Role, n int) {
+	if seat.Sandbox == nil {
+		seat.Sandbox = &org.RoleSandbox{}
+	}
+	seat.Sandbox.MaxConcurrentRuns = &n
+}
+
 type staticRemaining struct {
 	left int
 	err  error
@@ -1085,6 +1136,7 @@ func TestEachRunsBoxIsGivenItsOwnJobsEndpoint(t *testing.T) {
 	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	}))
+	roomForRuns(seat, 2)
 	for _, runID := range []string{"t1", "t2"} {
 		l := launcherOn(e, c, seat, runID)
 		if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err != nil {

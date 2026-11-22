@@ -296,6 +296,13 @@ type Transcript struct {
 	SummaryThrough int
 }
 
+// TurnTranscript is what one turn wrote, in a [Transcript]'s order.
+type TurnTranscript struct {
+	Messages []Message
+	Steps    []wire.StepEvent
+	Cards    []Card
+}
+
 // ---- listings ----------------------------------------------------------- //
 
 // Conversations is one page of the owner's conversations, the most recently
@@ -558,40 +565,17 @@ func (r *Reader) transcriptIn(ctx context.Context, tx *sql.Tx, id uuid.UUID,
 		ColumnSummary)); err != nil {
 		return Transcript{}, fmt.Errorf("conversation %s's summary: %w", id, err)
 	}
+	written, err := r.recordsIn(ctx, tx, id, uuid.Nil)
+	if err != nil {
+		return Transcript{}, err
+	}
+	t.Messages, t.Steps, t.Cards = written.Messages, written.Steps, written.Cards
 	if err := eachRow(ctx, tx, `SELECT `+turnColumns+` FROM assistant_turns
 		WHERE conversation_id = ? ORDER BY seq`, []any{conversation}, func(row rowScanner) error {
 		turn, err := r.scanTurn(row)
 		t.Turns = append(t.Turns, turn)
 		return err
 	}); err != nil {
-		return Transcript{}, err
-	}
-	if err := eachRow(ctx, tx, `SELECT id, turn_id, role, text_sealed, created_at,
-		page_title_sealed, page_screen, apps, attachments_sealed FROM assistant_messages
-		WHERE conversation_id = ? ORDER BY version, id`, []any{conversation},
-		func(row rowScanner) error {
-			m, err := r.scanMessage(row, id)
-			t.Messages = append(t.Messages, m)
-			return err
-		}); err != nil {
-		return Transcript{}, err
-	}
-	if err := eachRow(ctx, tx, `SELECT id, body_sealed FROM assistant_steps
-		WHERE conversation_id = ? ORDER BY turn_id, idx, id`, []any{conversation},
-		func(row rowScanner) error {
-			s, err := r.scanStep(row, id)
-			t.Steps = append(t.Steps, s)
-			return err
-		}); err != nil {
-		return Transcript{}, err
-	}
-	if err := eachRow(ctx, tx, `SELECT `+cardColumns+` FROM assistant_cards k
-		WHERE k.conversation_id = ? ORDER BY k.version, k.id`, []any{conversation},
-		func(row rowScanner) error {
-			card, err := r.scanCard(row)
-			t.Cards = append(t.Cards, card)
-			return err
-		}); err != nil {
 		return Transcript{}, err
 	}
 	if err := eachRow(ctx, tx, `SELECT `+proposalColumns+` FROM assistant_proposals
@@ -613,6 +597,89 @@ func (r *Reader) transcriptIn(ctx context.Context, tx *sql.Tx, id uuid.UUID,
 		return Transcript{}, err
 	}
 	return t, nil
+}
+
+// TurnTranscript is what one of the owner's turns wrote, read by the turn's
+// own index entries: a stream's snapshot is of one turn, and a read of its
+// whole conversation grows with every turn before it.
+func (r *Reader) TurnTranscript(ctx context.Context, owner, turn uuid.UUID) (TurnTranscript, error) {
+	var out TurnTranscript
+	err := r.readChild(ctx, "assistant_turns", turn, func(tx *sql.Tx) error {
+		var conversation string
+		err := tx.QueryRowContext(ctx, `SELECT conversation_id FROM assistant_turns
+			WHERE id = ? AND owner_id = ?`, turn.String(), owner.String()).Scan(&conversation)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("%w: turn %s", ErrNotFound, turn)
+		}
+		if err != nil {
+			return err
+		}
+		id, err := uuid.Parse(conversation)
+		if err != nil {
+			return fmt.Errorf("assistantdomain: turn %s's conversation %q: %w", turn, conversation, err)
+		}
+		out, err = r.recordsIn(ctx, tx, id, turn)
+		return err
+	})
+	return out, err
+}
+
+// recordsIn reads the messages, steps and cards of conversation in tx, those
+// of turn alone unless turn is uuid.Nil, in a [Transcript]'s order.
+func (r *Reader) recordsIn(ctx context.Context, tx *sql.Tx, conversation,
+	turn uuid.UUID) (TurnTranscript, error) {
+
+	out := TurnTranscript{Messages: []Message{}, Steps: []wire.StepEvent{}, Cards: []Card{}}
+	q, args := recordQueries(turn != uuid.Nil), []any{conversation.String()}
+	if turn != uuid.Nil {
+		args = append(args, turn.String())
+	}
+	if err := eachRow(ctx, tx, q.messages, args, func(row rowScanner) error {
+		m, err := r.scanMessage(row, conversation)
+		out.Messages = append(out.Messages, m)
+		return err
+	}); err != nil {
+		return TurnTranscript{}, err
+	}
+	if err := eachRow(ctx, tx, q.steps, args, func(row rowScanner) error {
+		s, err := r.scanStep(row, conversation)
+		out.Steps = append(out.Steps, s)
+		return err
+	}); err != nil {
+		return TurnTranscript{}, err
+	}
+	if err := eachRow(ctx, tx, q.cards, args, func(row rowScanner) error {
+		card, err := r.scanCard(row)
+		out.Cards = append(out.Cards, card)
+		return err
+	}); err != nil {
+		return TurnTranscript{}, err
+	}
+	return out, nil
+}
+
+// recordStatements are the reads of what a conversation's turns wrote.
+type recordStatements struct{ messages, steps, cards string }
+
+// recordQueries is a conversation's record reads, bound to its id, and to a
+// turn's id after it where oneTurn: then each seeks the table's turn index
+// (replicated/0202), never the conversation's rows of every turn.
+func recordQueries(oneTurn bool) recordStatements {
+	of := func(alias string) string {
+		if !oneTurn {
+			return alias + `conversation_id = ?`
+		}
+		return alias + `conversation_id = ? AND ` + alias + `turn_id = ?`
+	}
+	return recordStatements{
+		messages: `SELECT id, turn_id, role, text_sealed, created_at, page_title_sealed,
+			page_screen, apps, attachments_sealed FROM assistant_messages
+			WHERE ` + of("") + ` ORDER BY version, id`,
+		steps: `SELECT id, body_sealed FROM assistant_steps
+			WHERE ` + of("") + ` ORDER BY turn_id, idx, id`,
+		cards: `SELECT ` + cardColumns + ` FROM assistant_cards k
+			WHERE ` + of("k.") + ` ORDER BY k.version, k.id`,
+	}
 }
 
 // Turn is one of the owner's turns.
@@ -918,23 +985,30 @@ func (r *Reader) scanCard(row rowScanner) (Card, error) {
 	if err != nil {
 		return Card{}, fmt.Errorf("card %s: %w", id, err)
 	}
+	// A BODY THIS CONTRACT CANNOT DECODE was written to another one, as is a
+	// body it refuses: both are the notice.
 	if err := json.Unmarshal(body, &c.Card); err != nil {
-		return Card{}, fmt.Errorf("assistantdomain: card %s: %w", id, err)
+		c.Type, c.Card = wire.CardNotice, r.unshown(c.ID, wire.CardKind(kind), err)
+		return c, nil
 	}
 	if c.Card.Type.Valid() {
 		if err := c.Card.Validate(); err != nil {
-			// WHICH CARD AND WHY, NEVER ITS BODY: the body is what a person
-			// was shown, sealed for them alone.
-			r.logger.Warn("assistant_card_shown_as_notice", "card", c.ID.String(),
-				"type", string(c.Card.Type), "error", err.Error())
-			if r.metrics != nil {
-				r.metrics.Add(metrics.AssistantCardsShownAsNotice, 1,
-					metrics.Attrs{"type": string(c.Card.Type)})
-			}
-			c.Type, c.Card = wire.CardNotice, UnshownCardNotice()
+			c.Type, c.Card = wire.CardNotice, r.unshown(c.ID, c.Card.Type, err)
 		}
 	}
 	return c, nil
+}
+
+// unshown logs and counts a stored card of another contract, which is read as
+// [UnshownCardNotice]: which card and why, never its body, which is what a
+// person was shown, sealed for them alone.
+func (r *Reader) unshown(id uuid.UUID, kind wire.CardKind, err error) wire.Card {
+	r.logger.Warn("assistant_card_shown_as_notice", "card", id.String(),
+		"type", string(kind), "error", err.Error())
+	if r.metrics != nil {
+		r.metrics.Add(metrics.AssistantCardsShownAsNotice, 1, metrics.Attrs{"type": string(kind)})
+	}
+	return UnshownCardNotice()
 }
 
 // UnshownCardNotice is what a stored card of a kind this build draws, but in
@@ -942,8 +1016,9 @@ func (r *Reader) scanCard(row rowScanner) (Card, error) {
 // never the body.
 //
 // A CARD IS VALIDATED BEFORE IT IS RECORDED and never rewritten, so a stored
-// card [wire.Card.Validate] refuses was written to another contract (an
-// earlier one, or a newer node's mid-upgrade). It is not migrated or tolerated
+// card [wire.Card.Validate] refuses, or one that does not decode into today's
+// shapes, was written to another contract (an earlier one, or a newer node's
+// mid-upgrade). It is not migrated or tolerated
 // field by field: the transcript, the dashboard and the model's re-read all
 // see this notice, and asking again writes the card in this node's shape. A
 // kind this build does not know passes through, as the dashboard draws one it
@@ -1003,8 +1078,10 @@ func (r *Reader) scanProposal(row rowScanner) (Proposal, error) {
 	if err != nil {
 		return Proposal{}, err
 	}
+	// A CARD OR A RECEIPT OF ANOTHER CONTRACT is read as its card is
+	// ([Reader.scanCard]): the notice, and no receipt.
 	if err = json.Unmarshal(rawCard, &p.Card); err != nil {
-		return Proposal{}, fmt.Errorf("assistantdomain: proposal %s's card: %w", id, err)
+		p.Card = r.unshown(p.ID, wire.CardProposal, err)
 	}
 	rawReceipt, err := open(receipt, ColumnReceipt)
 	if err != nil {
@@ -1013,9 +1090,10 @@ func (r *Reader) scanProposal(row rowScanner) (Proposal, error) {
 	if len(rawReceipt) > 0 {
 		var s settlement
 		if err := json.Unmarshal(rawReceipt, &s); err != nil {
-			return Proposal{}, fmt.Errorf("assistantdomain: proposal %s's receipt: %w", id, err)
+			p.Card = r.unshown(p.ID, wire.CardProposal, err)
+		} else {
+			p.Receipt, p.Failure = s.Receipt, s.Failure
 		}
-		p.Receipt, p.Failure = s.Receipt, s.Failure
 	}
 	p.Scope, p.State, p.StepUp = wire.ProposalScope(scope), wire.ProposalState(state), stepUp != 0
 	p.ExpiresAt, p.CreatedAt = store.DecodeTime(expires), store.DecodeTime(created)

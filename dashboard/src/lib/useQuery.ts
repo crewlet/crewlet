@@ -26,7 +26,7 @@ import {
   type QueryRefusal,
 } from "~/protocol/index.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
-import { session, SessionFloors } from "~/protocol/session.ts";
+import { APPLIED_REVISION, session, SessionFloors } from "~/protocol/session.ts";
 import { useAskedAgainOnFailure } from "./failedReads.ts";
 
 export interface QueryResult<T> {
@@ -79,8 +79,14 @@ export interface QueryOptions {
    * projection pushes must not be polled on top of it.
    */
   pollMs?: number;
-  /** Ask again when the socket reconnects. Default true. */
+  /** Ask again when the socket reconnects, and when this node applies a revision. Default true. */
   refetchOnReconnect?: boolean;
+  /**
+   * How long each ask waits for its answer once sent, where the question's
+   * read may take longer than an ordinary query's (`QUERY_TIMEOUT_MS`): a
+   * transcript's (`TRANSCRIPT_QUERY_TIMEOUT_MS`).
+   */
+  waitMs?: number;
   /**
    * Ask again when the tab becomes visible after being hidden.
    *
@@ -155,6 +161,7 @@ export function useQuery<K extends QueryName>(
     refetchOnReconnect = true,
     refetchOnFocus = false,
     refetchOnInboxOf = "",
+    waitMs,
   } = options;
 
   const [state, setState] = useState<{
@@ -208,11 +215,17 @@ export function useQuery<K extends QueryName>(
     }
     const mine = ++generation.current;
     let timer: ReturnType<typeof setTimeout> | 0 = 0;
+    // A QUESTION THIS EFFECT STOPS WAITING FOR IS GIVEN UP ON at the engine
+    // too, which stops reading for it: a screen left behind a transcript page
+    // held the socket's slot and the node's for minutes, for nobody.
+    const asking = new AbortController();
 
     const run = async (): Promise<void> => {
       let retryMs: number | null = null;
       try {
-        const data = await socket.query(what, withFloor(what, key));
+        // A WAIT OF ITS OWN ONLY WHERE THE SCREEN NAMED ONE: every other
+        // question waits the socket's (`waitMs` undefined).
+        const data = await socket.query(what, withFloor(what, key), waitMs, asking.signal);
         if (generation.current !== mine) return;
         setState({ data, loading: false, error: null, refusal: null, sent: true });
       } catch (err) {
@@ -258,8 +271,9 @@ export function useQuery<K extends QueryName>(
     return () => {
       generation.current++;
       clearTimeout(timer);
+      asking.abort();
     };
-  }, [socket, what, key, enabled, pollMs, asked, reconnects]);
+  }, [socket, what, key, enabled, pollMs, asked, reconnects, waitMs]);
 
   // A WRITE FROM THIS TAB ASKS AGAIN — at the floor it raised, which
   // `withFloor` reads on the very next ask. The screen that pressed a button
@@ -268,9 +282,10 @@ export function useQuery<K extends QueryName>(
   useEffect(() => {
     if (!enabled) return;
     return session.onWritten((domain, refreshes) => {
-      if (SessionFloors.moves(what, domain, refreshes)) refetch();
+      const applied = refetchOnReconnect && refreshes.includes(APPLIED_REVISION);
+      if (applied || SessionFloors.moves(what, domain, refreshes)) refetch();
     });
-  }, [enabled, what, refetch]);
+  }, [enabled, what, refetch, refetchOnReconnect]);
 
   // A FAILED READ IS ASKED AGAIN BY "Try again" ([retryFailedReads]), and by
   // nothing else new: its poll and its reconnect still ask as they did.

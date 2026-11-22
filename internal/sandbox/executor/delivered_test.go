@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
@@ -20,7 +21,7 @@ func refsThroughEveryPath(t *testing.T, text string) map[string][]string {
 	b := box(t, runner)
 	b.Put(paths(b).Findings(), "Outcome: succeeded\n"+text)
 	b.Put(paths(b).ExitCode(), "0")
-	collected, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	collected, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -35,9 +36,9 @@ func refsThroughEveryPath(t *testing.T, text string) map[string][]string {
 	}
 	return map[string][]string{
 		"the report":              collected.DeliveredRefs,
-		"claude-code's result":    executor.ClaudeCode{}.Parse(string(result)).DeliveredRefs,
-		"opencode's event stream": executor.OpenCode{}.Parse(string(event)).DeliveredRefs,
-		"opencode's plain output": executor.OpenCode{}.Parse(text).DeliveredRefs,
+		"claude-code's result":    executor.ClaudeCode{}.Parse(result).DeliveredRefs,
+		"opencode's event stream": executor.OpenCode{}.Parse(event).DeliveredRefs,
+		"opencode's plain output": executor.OpenCode{}.Parse([]byte(text)).DeliveredRefs,
 	}
 }
 
@@ -122,8 +123,8 @@ func TestADeliveredLineIsReadWhateverItsMarkup(t *testing.T) {
 		if want != "" {
 			expected = []string{want}
 		}
-		if got := (executor.ClaudeCode{}).Parse(`{"type":"result","subtype":"success","result":` +
-			quote(t, line) + `}`).DeliveredRefs; !slices.Equal(got, expected) {
+		if got := (executor.ClaudeCode{}).Parse([]byte(`{"type":"result","subtype":"success","result":` +
+			quote(t, line) + `}`)).DeliveredRefs; !slices.Equal(got, expected) {
 			t.Errorf("%q: refs = %q, want %q", line, got, expected)
 		}
 	}
@@ -147,13 +148,13 @@ func TestADeliveredRefIsHandedOnAsTheAccountWroteIt(t *testing.T) {
 		b := box(t, runner)
 		b.Put(paths(b).Findings(), "Outcome: succeeded\n"+text)
 		b.Put(paths(b).ExitCode(), "0")
-		collected, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+		collected, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 		if err != nil {
 			t.Fatalf("Collect: %v", err)
 		}
 		for path, got := range map[string][]string{
 			"the report":              collected.DeliveredRefs,
-			"opencode's plain output": executor.OpenCode{}.Parse(text).DeliveredRefs,
+			"opencode's plain output": executor.OpenCode{}.Parse([]byte(text)).DeliveredRefs,
 		} {
 			if !slices.Equal(got, []string{want}) {
 				t.Errorf("%s: %q: refs = %q, want %q", path, text, got, []string{want})
@@ -201,7 +202,7 @@ func TestACollectionPrefersANamedRefWhereverItIs(t *testing.T) {
 			b.Put(p.Result(), `{"type":"result","subtype":"success","result":`+quote(t, tc.message)+`}`)
 			b.Put(p.Findings(), tc.report)
 			b.Put(p.ExitCode(), "0")
-			res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+			res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 			if err != nil {
 				t.Fatalf("Collect: %v", err)
 			}

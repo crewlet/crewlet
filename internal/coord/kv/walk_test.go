@@ -774,7 +774,7 @@ func TestAListingNeverMissesALeaseBeingRenewed(t *testing.T) {
 	nc := embeddedNATS(t)
 	prefix := fmt.Sprintf("r%d", bucketSeq.Add(1))
 	open := func() *Store {
-		s, err := Open(ctx, jsOf(nc), Config{TTL: time.Minute, BucketPrefix: prefix, Reach: InProcess})
+		s, err := Open(ctx, jsOf(nc), jsOf(nc), Config{TTL: time.Minute, BucketPrefix: prefix, Reach: InProcess})
 		if err != nil {
 			t.Fatalf("Open: %v", err)
 		}

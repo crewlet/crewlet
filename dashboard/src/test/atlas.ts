@@ -130,6 +130,8 @@ export function read(over: Partial<AtlasRead> = {}): AtlasRead {
 export interface AtlasFixture {
   nodes: AtlasSummary[];
   edges: AtlasMapEdge[];
+  /** The activity answers as a count the engine cut at its bytes. */
+  activityCut?: boolean;
 }
 
 /** The map answer for a fixture, every group open unless named closed. */
@@ -279,7 +281,13 @@ export function activityAnswer(fixture: AtlasFixture): AtlasActivityAnswer {
     }
     out.push({ id: node.id, ...(own.some((n) => n > 0) ? { days: own } : {}), last: lines[0]! });
   });
-  return { ...read(), from: new Date(from).toISOString(), days, entries: out };
+  return {
+    ...read(),
+    from: new Date(from).toISOString(),
+    days,
+    entries: out,
+    truncated: fixture.activityCut ?? false,
+  };
 }
 
 /** Each entry's relation counts, read off the fixture's lines the map draws at rest. */
@@ -715,6 +723,49 @@ export function generatedCompany(count: number): AtlasFixture {
     if (b.length === 0) continue;
     a.forEach((node, i) => edges.push(edge(node, relation, b[(i * 5) % b.length]!)));
   }
+  return counted({ nodes, edges });
+}
+
+/** The lanes of a grown company's map: eighty-one entries, most of them in Entry and Code and delivery. */
+export const GROWN_LANES: Readonly<Record<AtlasLane, number>> = {
+  entry: 19,
+  services: 11,
+  data: 3,
+  runtime: 3,
+  platforms: 9,
+  code: 17,
+  observability: 11,
+  tools: 8,
+};
+
+const NAME_PARTS = ["checkout", "billing", "search", "reports", "uploads", "accounts", "inventory"];
+const NAME_ENDS = ["api-production", "worker-staging", "gateway", "sync-job-eu-west", "service"];
+
+/**
+ * A company of `counts` entries a lane, named as a grown company names them:
+ * from a dozen to thirty characters, each its own, a chain of calls through
+ * its first services, and a few entries that need a look.
+ */
+export function shapedCompany(counts: Readonly<Partial<Record<AtlasLane, number>>>): AtlasFixture {
+  const nodes: AtlasSummary[] = [];
+  for (const lane of LANES) {
+    for (let i = 0; i < (counts[lane] ?? 0); i++) {
+      const kinds = KINDS_BY_LANE[lane];
+      const vendors = VENDORS_BY_LANE[lane];
+      const name = `${NAME_PARTS[i % NAME_PARTS.length]}-${NAME_ENDS[(i * 3 + lane.length) % NAME_ENDS.length]}-${String(i + 1).padStart(2, "0")}`;
+      nodes.push(
+        summary(kinds[i % kinds.length]!, `${lane}/${name}`, {
+          name,
+          ...(vendors.length > 0 ? { vendor: vendors[i % vendors.length]! } : {}),
+          health: i % 9 === 4 ? "needs_look" : i % 13 === 7 ? "alerting" : "quiet",
+        }),
+      );
+    }
+  }
+  const services = nodes.filter((node) => node.lane === "services");
+  const edges = services
+    .slice(0, 4)
+    .flatMap((node, i) => (services[i + 1] ? [edge(node, "depends_on", services[i + 1]!)] : []));
   return counted({ nodes, edges });
 }
 

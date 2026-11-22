@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -18,10 +19,6 @@ import (
 func lagBytes() int {
 	return len(rules()) * (stageStep + pieceBytes + longestMarker())
 }
-
-// keysBytes is what the keys' stage holds besides what it waits on: a piece,
-// four blocks' reach behind where it reads and a step past it ([streamBound]).
-const keysBytes = pieceBytes + 4*keyReach + stageAdvance + keyAhead
 
 // holdShape is a text built to hold a stream, built when asked for: a key's
 // armour beside a run, a collapsed text, or blanks that a reader decides a
@@ -209,13 +206,15 @@ func earlyText(r *rand.Rand, size, runMax int) string {
 
 // reading is what a stream that holds h did with a text: what it wrote and
 // answered, the blocks its keys' stage wrote, the windows it decided early,
-// and the most its stages held between two writes.
+// and the most its stages held between two writes; of its keys' stage, both
+// the bytes and the buffer, whose capacity is its bound once it jumps there
+// ([keysBytes]), so that only the bytes show a hold growing with a run.
 type reading struct {
-	out             string
-	err             error
-	blocks          [][2]int
-	early, keysMost int
-	most            streamHeld
+	out                      string
+	err                      error
+	blocks                   [][2]int
+	early, keysMost, keysCap int
+	most                     streamHeld
 	// decidedAt is how much of the text the stages had been handed when
 	// each window was decided early.
 	decidedAt []int
@@ -224,6 +223,27 @@ type reading struct {
 // readHolding is text written to a stream that holds h, in pieces of 1 to
 // most bytes drawn from r, or of 64 KiB where r is nil.
 func readHolding(text string, h int, r *rand.Rand, most int) reading {
+	return readCut(text, h, cuts(r, len(text), most))
+}
+
+// cuts is the pieces [readHolding] writes n bytes in, drawn before the
+// reading so that it can run apart from what else draws from r.
+func cuts(r *rand.Rand, n, most int) []int {
+	var pieces []int
+	for at := 0; at < n; {
+		k := 64 << 10
+		if r != nil {
+			k = 1 + r.IntN(most)
+		}
+		k = min(k, n-at)
+		pieces = append(pieces, k)
+		at += k
+	}
+	return pieces
+}
+
+// readCut is text written to a stream that holds h, in the pieces cut.
+func readCut(text string, h int, cut []int) reading {
 	var got reading
 	var out bytes.Buffer
 	s := newStreamHolding(&out, h)
@@ -234,18 +254,15 @@ func readHolding(text string, h int, r *rand.Rand, most int) reading {
 			got.decidedAt = append(got.decidedAt, s.p.keys.arrived)
 		},
 	}
-	for at := 0; at < len(text); {
-		n := 64 << 10
-		if r != nil {
-			n = 1 + r.IntN(most)
-		}
-		n = min(n, len(text)-at)
+	at := 0
+	for _, n := range cut {
 		_, _ = s.Write([]byte(text[at : at+n]))
 		at += n
 		if s.p != nil {
 			h := s.p.held()
-			got.most = streamHeld{max(got.most.text, h.text), max(got.most.entries, h.entries), max(got.most.stageText, h.stageText), max(got.most.stageEdits, h.stageEdits)}
+			got.most = got.most.atLeast(h)
 			got.keysMost = max(got.keysMost, s.p.keys.in.held())
+			got.keysCap = max(got.keysCap, cap(s.p.keys.in.buf))
 		}
 	}
 	got.err = s.Close()
@@ -308,8 +325,8 @@ func TestNoTextHoldsAStreamPastItsWindowsAndItsHold(t *testing.T) {
 		t.Helper()
 		text := boundText - lagBytes() + hold
 		switch {
-		case got.keysMost > keysBytes+hold:
-			t.Errorf("%s at a hold of %d KiB: the keys' stage held %d KiB, past the %d KiB it holds besides its hold and the hold", name, hold>>10, got.keysMost>>10, (keysBytes+hold)>>10)
+		case got.keysCap > keysBytes+hold:
+			t.Errorf("%s at a hold of %d KiB: the keys' stage held a buffer of %d KiB (%d KiB of text), past the %d KiB it holds besides its hold and the hold", name, hold>>10, got.keysCap>>10, got.keysMost>>10, (keysBytes+hold)>>10)
 		case got.most.stageText > streamWindow:
 			t.Errorf("%s at a hold of %d KiB: a stage held %d bytes of its input, past the %d of its window", name, hold>>10, got.most.stageText, streamWindow)
 		case got.most.text > text || got.most.entries > boundEntries:
@@ -346,27 +363,81 @@ func TestNoTextHoldsAStreamPastItsWindowsAndItsHold(t *testing.T) {
 	}
 }
 
+// pastTheLag is a token's run longer than the claims' lag, on a line of its
+// own, and lines enough after it for every stage to step past it.
+func pastTheLag(r *rand.Rand) string {
+	return "sk-" + testRun(r, testB64url, lagBytes()+256<<10) + "\n" + strings.Repeat("ok\n", stageStep/3+1)
+}
+
+// refusingLayout is a text in a layout the package doc names as one a stream
+// refuses, or a neighbour of one that it does not, with a run past the lag.
+type refusingLayout struct {
+	name, text string
+	refuses    bool
+}
+
+// refusingLayouts is each layout a key's BEGIN or a gutter makes beside a
+// password's key, with a run past the lag after it, and neighbours that read
+// the run in time: the same lines less the password's key, or less its
+// BEGIN, or with the key's value on its own line, or the block closed.
+func refusingLayouts(r *rand.Rand) []refusingLayout {
+	run := pastTheLag(r)
+	begin, end := "-----BEGIN PRIVATE KEY-----", "-----END PRIVATE KEY-----"
+	layouts := []refusingLayout{
+		{"a password's key across an escaped break after a BEGIN", begin + `\n` + "password: \n", true},
+		{"a password's key on the line after a BEGIN", begin + "\npassword: \n", true},
+		{"a password's key on the line after a BEGIN, the run three lines below", begin + "\npassword: \n\n\n\n", true},
+		{"a password's key across an escaped break before a BEGIN on its line", "password:\\n\t\"hunter2x9 " + begin + "\\n\t\"" + testKeyLine + "\\n\n", true},
+		{"a password's key, its value's line and an END under a gutter", "7\u2192pwd=\n7\u2192" + testKeyLine + "\n7\u2192" + end + "\n", true},
+		{"a password's key between a BEGIN, its key's line and the run", begin + "\n" + testKeyLine + "\n\npassword: \n", true},
+		{"a BEGIN, then the run", begin + "\n", false},
+		{"a BEGIN and its key's lines, then the run", begin + "\n" + testKeyLine + "\n" + testKeyLine + "\n", false},
+		{"a password's key, then a BEGIN", "password: \n" + begin + "\n", false},
+		{"a BEGIN, then a password's key and its value", begin + "\npassword: hunter2x9\n", false},
+		{"a closed armour, then a password's key", begin + "\n" + testKeyLine + "\n" + testKeyLine + "\n" + end + "\npassword: \n", false},
+		{"a password's key, its value and an END under no gutter", "password: hunter2x9\n" + end + "\n", false},
+	}
+	for i := range layouts {
+		layouts[i].text += run
+	}
+	return layouts
+}
+
 // A STREAM THAT DECIDES EARLY SAYS SO: Close answers nil, and the stream wrote
 // [Secrets] of the text; or Close answers [ErrDecidedEarly], naming the first
 // byte from which what it wrote may differ, with no earlier block of the keys'
 // stage differing from the whole text's. Over random texts at a low hold, a
 // shape of every hold at 256 KiB (exactly those named refuse), and at the
 // stream's own hold, where a key with a Google token whose dots run past the
-// hold still writes Secrets. Mutation: step no claims stage at a marker
+// hold still writes Secrets, and each layout the package doc names refuses
+// beside neighbours that do not. Mutation: step no claims stage at a marker
 // ([ruleStage.markerToStepAt]); check an end set late ([keyStage.ended]); read
 // a late end in an early window as no change; or write a span moved before its
 // start ([keyStage.readArmours]).
 func TestAStreamThatDecidesEarlySaysSo(t *testing.T) {
 	t.Parallel()
 	r := rand.New(rand.NewPCG(1170, 41))
-	refused := 0
+	// Each reading is its own subtest, run beside the others: a layout's
+	// run past the lag is read and redacted whole, which one goroutine
+	// would do twelve times over in turn.
+	type earlyCase struct {
+		name  string
+		text  func() string
+		hold  int
+		cut   []int
+		check func(t *testing.T, text string, got reading)
+	}
+	var cases []earlyCase
+	var refused atomic.Int32
 	for i := range 3 {
-		text := earlyText(r, 1<<20, 512<<10)
-		got := readHolding(text, 256<<10, r, 96<<10)
-		if got.err != nil {
-			refused++
-		}
-		checkReading(t, fmt.Sprintf("text %d at a hold of 256 KiB", i), text, got)
+		text, name := earlyText(r, 1<<20, 512<<10), fmt.Sprintf("text %d at a hold of 256 KiB", i)
+		cases = append(cases, earlyCase{name: name, text: func() string { return text }, hold: 256 << 10, cut: cuts(r, len(text), 96<<10),
+			check: func(t *testing.T, text string, got reading) {
+				if got.err != nil {
+					refused.Add(1)
+				}
+				checkReading(t, name, text, got)
+			}})
 	}
 	// A shape of every hold, and those that read a claim otherwise: at
 	// this hold a token's claim too can come past it, and these refuse.
@@ -376,26 +447,49 @@ func TestAStreamThatDecidesEarlySaysSo(t *testing.T) {
 		if !slices.Contains(each, s.name[:strings.IndexByte(s.name, ' ')]) {
 			continue
 		}
-		text := s.text()
-		got := readHolding(text, 256<<10, nil, 0)
-		checkReading(t, s.name, text, got)
-		if (got.err != nil) != slices.Contains(refuse, s.name[:strings.IndexByte(s.name, ' ')]) {
-			t.Errorf("%s at a hold of 256 KiB: Close answered %v, %d windows decided early", s.name, got.err, got.early)
-		}
+		cases = append(cases, earlyCase{name: s.name, text: s.text, hold: 256 << 10, check: func(t *testing.T, text string, got reading) {
+			checkReading(t, s.name, text, got)
+			if (got.err != nil) != slices.Contains(refuse, s.name[:strings.IndexByte(s.name, ' ')]) {
+				t.Errorf("%s at a hold of 256 KiB: Close answered %v, %d windows decided early", s.name, got.err, got.early)
+			}
+		}})
 	}
 	for _, s := range holdShapes(lagBytes() + 256<<10) {
 		name := s.name[:strings.IndexByte(s.name, ' ')]
 		if name != "pb1" && name != "gd1" {
 			continue
 		}
-		text := s.text()
-		got := readHolding(text, holdBytes(), nil, 0)
-		if got.err != nil || got.early == 0 {
-			t.Errorf("%s at the stream's own hold: Close answered %v, %d windows decided early", s.name, got.err, got.early)
-		}
-		checkReading(t, s.name+" at the stream's own hold", text, got)
+		cases = append(cases, earlyCase{name: s.name + " at the stream's own hold", text: s.text, hold: holdBytes(), check: func(t *testing.T, text string, got reading) {
+			if got.err != nil || got.early == 0 {
+				t.Errorf("%s at the stream's own hold: Close answered %v, %d windows decided early", s.name, got.err, got.early)
+			}
+			checkReading(t, s.name+" at the stream's own hold", text, got)
+		}})
 	}
-	t.Logf("%d of 3 random texts refused", refused)
+	// The layouts a key's BEGIN or a gutter makes, each with a run past
+	// the lag after it, and their neighbours that read the run in time.
+	for _, c := range refusingLayouts(r) {
+		cases = append(cases, earlyCase{name: c.name, text: func() string { return c.text }, hold: holdBytes(), check: func(t *testing.T, text string, got reading) {
+			if (got.err != nil) != c.refuses {
+				t.Errorf("%s, a run past the lag after it: Close answered %v, %d windows decided early", c.name, got.err, got.early)
+			}
+			checkReading(t, c.name, text, got)
+		}})
+	}
+	t.Run("readings", func(t *testing.T) {
+		for _, c := range cases {
+			t.Run(c.name, func(t *testing.T) {
+				t.Parallel()
+				text := c.text()
+				cut := c.cut
+				if cut == nil {
+					cut = cuts(nil, len(text), 0)
+				}
+				c.check(t, text, readCut(text, c.hold, cut))
+			})
+		}
+	})
+	t.Logf("%d of 3 random texts refused", refused.Load())
 }
 
 // AN EARLY WINDOW'S FOOTPRINT HOLDS EVERY CLAIM ITS ANSWERS READ ([claims.asked]):
@@ -510,7 +604,7 @@ func TestALateChangeToWhatAnEarlyWindowReadIsAMiss(t *testing.T) {
 		}, 100 << 10},
 		{"a late word behind a block let go, the window before it let go once its claims are known", func(k *keyStage, src *claimSource) {
 			src.frontier = 301 << 10
-			k.take("")
+			k.take(nil)
 			k.arrived = 4 * h
 			src.word([3]int{110 << 10, 111 << 10, -1})
 		}, 110 << 10},

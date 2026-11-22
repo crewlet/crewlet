@@ -1,0 +1,55 @@
+// Package appstoreconnect is the App Store Connect integration: every
+// operation of Apple's App Store Connect API, reached by the engine for the
+// agents through the company's team keys, one per Apple role (ADR-0170).
+//
+// # Keys and tokens
+//
+// A team key is pasted once per role and sealed; the engine signs a token per
+// request ([Client]), ES256, living ten minutes from a minute back, scoped to
+// that one request, so a token that reaches a log repeats only the call it was
+// made for. Each call goes through the least-privileged connected key whose
+// role may make it, and a refused key is never retried with another.
+//
+// # Rate budget
+//
+// Apple limits each key per rolling hour and says what is left on every
+// answer. Agents' reads stop at a tenth of a key's limit, which is kept for
+// approved acts and the pass. A read waits out a 429 within httpx's cap; a
+// write is never sent twice.
+//
+// # Scope
+//
+// A seat names its apps. The resource types that belong to exactly one app
+// are generated from Apple's document (specgen topology): a type with a
+// to-one relationship to an app or to an owned container, or one an owned
+// parent reads below it that the team cannot list and that lists no such
+// parents back. Types reached many-to-many (beta testers, users, devices) or
+// listed team-wide (territories, categories, repositories) are not owned.
+//
+// Every owned resource a call names, in its path, its query's ID filters and
+// its write body's data and relationships, is placed in one of the seat's
+// apps before anything is sent; any other resource it names needs the seat's
+// team_resources. Placement reads up the resource's to-one links to its app
+// where its instance read can include one, which is exact; it searches down
+// from the seat's apps through owned types alone only where none exists. An
+// owned resource whose links are all empty is in no app, and the team's. No
+// placement read goes through the Admin key.
+//
+// The cache of placements is filled only from placements and from answers
+// rooted at the seat's app through owned hops, never from an answer rooted at
+// a resource no app owns, which may hold another app's. Every answer loses
+// the apps outside the seat's apps and the links to them. A read not rooted at
+// the seat's app whose answer holds an owned resource is refused whole for a
+// seat whose apps are not all its team's: placing each resource would read
+// Apple once per resource, and a partial answer would misstate the list.
+//
+// # Every step on the access log
+//
+// Every record the product writes is one the access log accepts: a published
+// word, free text and a value the log refuses in the clear go as their digest
+// and length, and a field the log may not name is left out and counted. A
+// held call records its allow before it acts, and acts only when that allow
+// landed as its one answer; every way an allowed call ends records one
+// outcome. Everything done under an act's lease is cut at growth.ApplyBound,
+// which the lease outlives; a write cut there is an unknown outcome.
+package appstoreconnect

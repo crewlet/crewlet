@@ -1,13 +1,12 @@
 package executor
 
 import (
-	"encoding/json"
+	"bytes"
 	"math"
 	"runtime"
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 )
 
 // The lists a harness's record holds, as the readers outside the thread layer
@@ -22,9 +21,9 @@ import (
 const listBytes = 1 << 20
 
 // listCopies is how many copies of the list a reader may make: three at most,
-// measured (a line's decode keeps the message raw, the message's decode its
-// content, a call's block its result), plus one for headroom. A reader may
-// never spend anything per element.
+// measured over every reader held to it (the stream's and the result's make
+// none, [wireAlias]), plus one for headroom. A reader may never spend anything
+// per element.
 const listCopies = 4
 
 // listSlack is how many more allocations a list read to its end may cost than a
@@ -38,8 +37,7 @@ const listSlack = 64
 // listBuilder is a transcript read's builder, as a read from the archive's
 // first entry starts one.
 func listBuilder() *transcriptBuilder {
-	return &transcriptBuilder{bounds: TranscriptReadBounds(), entries: []TranscriptEntry{},
-		places: []EntryPlace{}, calls: map[string]string{}}
+	return newTranscriptBuilder(0, TranscriptReadBounds(), TranscriptFilter{})
 }
 
 // allocationsOf is what read allocates, heap objects and bytes, the fewest of
@@ -103,15 +101,16 @@ func TestAListInAHarnesssRecordCostsItsReaderOneElementAtATime(t *testing.T) {
 		return func() { (&claudeEvents{}).Line(raw) }
 	}
 	parse := func(line string) func() {
-		return func() { _ = ClaudeCode{}.Parse(line) }
+		raw := []byte(line)
+		return func() { _ = ClaudeCode{}.Parse(raw) }
 	}
 	transcript := func(line string) func() {
 		raw := []byte(line)
 		return func() { _ = listBuilder().claudeLine(t.Context(), raw) }
 	}
 	step := func(content string) func() {
-		raw := json.RawMessage(content)
-		return func() { _ = listBuilder().openCodeStep(t.Context(), raw, time.Time{}) }
+		raw := []byte(`{"messages":[{"type":"assistant","content":` + content + `}]}`)
+		return func() { _ = listBuilder().openCodeExport(t.Context(), bytes.NewReader(raw)) }
 	}
 	const (
 		reply  = `{"type":"assistant","message":{"role":"assistant","content":[`
@@ -192,7 +191,8 @@ func TestAListIsReadAnElementAtATimeAsItsHarnessReadsIt(t *testing.T) {
 	}
 	step := func(content string) string {
 		b := listBuilder()
-		return entries(b, b.openCodeStep(t.Context(), json.RawMessage(content), time.Time{}))
+		return entries(b, b.openCodeExport(t.Context(),
+			strings.NewReader(`{"messages":[{"type":"assistant","content":`+content+`}]}`)))
 	}
 	reply := `{"type":"assistant","message":{"role":"assistant","content":` + blocks + `}}`
 	result := `{"type":"user","message":{"role":"user","content":[{"type":"tool_result",` +
@@ -207,7 +207,7 @@ func TestAListIsReadAnElementAtATimeAsItsHarnessReadsIt(t *testing.T) {
 		"a run's event stream, its result's errors": {stream(ending),
 			"[error] the run ended: error_during_execution: cut \ufffd (+4 more line(s))"},
 		"a run's result, its errors": {func() string {
-			res := ClaudeCode{}.Parse(ending)
+			res := ClaudeCode{}.Parse([]byte(ending))
 			return res.Error + " | " + strconv.FormatBool(res.ContextExhausted)
 		}(), "error_during_execution: cut \ufffd\n\nbad \ufffd\n\nPrompt is too long | true"},
 		"a Claude Code transcript, a message's blocks": {transcript(reply),

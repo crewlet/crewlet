@@ -88,8 +88,6 @@ export const LANES: Readonly<
     AtlasLane,
     {
       label: string;
-      /** How many columns of cards the lane is wide on the map. */
-      columns: number;
       empty: string;
       link?: { label: string; path: string[]; grant: Grant };
     }
@@ -97,7 +95,6 @@ export const LANES: Readonly<
 > = {
   entry: {
     label: "Entry",
-    columns: 2,
     empty:
       "Domains, host names and certificates appear from the zones, DNS records and certificate packs the Cloudflare integration reads, and host names from the addresses this engine answers at.",
     link: {
@@ -108,49 +105,43 @@ export const LANES: Readonly<
   },
   services: {
     label: "Services",
-    columns: 3,
     empty:
       "Services appear when a person adds one, with Add entry, and containers from the servers the SSH integration reads for Atlas.",
   },
   runtime: {
     label: "Runtime",
-    columns: 4,
     empty: "Servers appear from the SSH servers the SSH integration declares.",
     link: { label: "Open SSH", path: ["company", "integrations", "ssh"], grant: "admin" },
   },
   data: {
     label: "Data",
-    columns: 2,
     empty: "Databases, queues and buckets appear when a person adds one, with Add entry.",
   },
   platforms: {
     label: "Platforms",
-    columns: 2,
     empty: "Each integration the company connects appears here as its account.",
     link: { label: "Open Integrations", path: ["company", "integrations"], grant: "admin" },
   },
   code: {
     label: "Code and delivery",
-    columns: 3,
     empty:
       "Repositories appear from Gitlet and from the repositories the GitHub and GitLab integrations name, with the checks Gitlet runs.",
   },
   observability: {
     label: "Observability",
-    columns: 2,
     empty: "Monitors appear when a person adds one, with Add entry.",
   },
   tools: {
     label: "Tools and models",
-    columns: 2,
     empty: "Tool servers and models appear from Settings › MCP & tools and Settings › Models.",
     link: { label: "Open Models", path: ["settings", "models"], grant: "admin" },
   },
 };
 
 /**
- * The map's rows, top to bottom: what a request travels, what that stands on,
- * and what stands around it. A lane the engine adds joins the last row.
+ * The map's reading, top to bottom: what a request travels, what that stands
+ * on, and what stands around it. A lane the engine adds joins the last row. The
+ * map splits a row or stands rows side by side to fit its canvas (`arrange.ts`).
  */
 export const MAP_ROWS: readonly { id: string; lanes: readonly AtlasLane[] }[] = [
   { id: "request", lanes: ["entry", "services", "data"] },
@@ -169,6 +160,7 @@ export const FAMILIES: Readonly<Record<AtlasFamily, GraphEdgeFamily>> = {
 export const VENDORS: Readonly<Record<AtlasVendor, { name: string; mark?: MarkVendor }>> = {
   aws: { name: "AWS", mark: "aws" },
   anthropic: { name: "Anthropic" },
+  apple: { name: "Apple" },
   atlassian: { name: "Atlassian", mark: "atlassian" },
   cloudflare: { name: "Cloudflare", mark: "cloudflare" },
   cursor: { name: "Cursor" },
@@ -182,6 +174,7 @@ export const VENDORS: Readonly<Record<AtlasVendor, { name: string; mark?: MarkVe
   google: { name: "Google" },
   google_cloud: { name: "Google Cloud", mark: "google-cloud" },
   mattermost: { name: "Mattermost", mark: "mattermost" },
+  meta: { name: "Meta" },
   openai: { name: "OpenAI" },
   scaleway: { name: "Scaleway", mark: "scaleway" },
   slack: { name: "Slack", mark: "slack" },
@@ -411,3 +404,6 @@ export const COVERAGE: Readonly<Record<AtlasCoverageSource, string>> = {
 export function valueWord(text: string): string {
   return text.replaceAll("_", " ");
 }
+
+/** What a count of the atlas log the engine cut at its bytes says beside it. */
+export const ACTIVITY_CUT = "The count stopped at its limit: some days and entries are not in it.";

@@ -695,6 +695,31 @@ describe("the decisions", () => {
     );
   });
 
+  // A REPLY IS MARKDOWN, quoted as the conversation draws it: its bold as
+  // bold and its list as a list, under the line. Mutation: quote the words
+  // as text, and the line reads `**Hold**` and its dashes.
+  test("a reply in markdown is quoted with its marks drawn", async () => {
+    mount({ answers: { decisions: { handle: "jane", items: [ask()], total: 1, capped: false } } });
+    await settle();
+    const card = screen.getByText("Needs your decision").closest(".crewlet-card") as HTMLElement;
+    fireEvent.click(within(card).getByRole("button", { name: "Change" }));
+    fireEvent.click(within(card).getByRole("radio", { name: /Something else/ }));
+    fireEvent.change(within(card).getByRole("textbox", { name: "Something else" }), {
+      target: { value: "**Hold**, and:\n- ship the hotfix alone\n- skip the rest" },
+    });
+    await act(async () => {
+      fireEvent.click(within(card).getByRole("button", { name: "Send" }));
+    });
+    await settle();
+    const line = card.querySelector(".decision-answered")!;
+    expect(line.querySelector("strong")?.textContent).toBe("Hold");
+    expect([...line.querySelectorAll("li")].map((li) => li.textContent)).toEqual([
+      "ship the hotfix alone",
+      "skip the rest",
+    ]);
+    expect(line.textContent).not.toMatch(/\*\*|- /);
+  });
+
   test("one ask's options are open at a time", async () => {
     mount({
       answers: {
@@ -1096,34 +1121,38 @@ describe("live now", () => {
           role: "SWE",
           handle: "swe",
           activity: "working",
-          turn: {
-            turn_id: "run-7",
-            started_at: "2026-09-22T09:00:00Z",
-            stage: "phase",
-            work_item: { backend: "native", id: "t", key: "ENG-412", project: "ENG" },
-          },
-          live_call: {
-            versions: ZERO_VERSIONS,
-            turn_id: "run-7",
-            work_key: "wk-notakey",
-            phase: "execute",
-            iteration: 0,
-            round_num: 6,
-            rounds_used: 7,
-            max_rounds: 25,
-            in_progress: true,
-            updated_at: "2026-09-22T09:05:00Z",
-            work_item: { backend: "native", id: "t", key: "ENG-412", project: "ENG" },
-            running_calls: [
-              {
-                id: "call-7",
-                round: 7,
-                name: "sandbox.run",
-                arguments: '{"cmd":"go test ./..."}',
-                started_at: "",
-              },
-            ],
-          },
+          turns: [
+            {
+              turn_id: "run-7",
+              started_at: "2026-09-22T09:00:00Z",
+              stage: "phase",
+              work_item: { backend: "native", id: "t", key: "ENG-412", project: "ENG" },
+            },
+          ],
+          live_calls: [
+            {
+              versions: ZERO_VERSIONS,
+              turn_id: "run-7",
+              work_key: "wk-notakey",
+              phase: "execute",
+              iteration: 0,
+              round_num: 6,
+              rounds_used: 7,
+              max_rounds: 25,
+              in_progress: true,
+              updated_at: "2026-09-22T09:05:00Z",
+              work_item: { backend: "native", id: "t", key: "ENG-412", project: "ENG" },
+              running_calls: [
+                {
+                  id: "call-7",
+                  round: 7,
+                  name: "sandbox.run",
+                  arguments: '{"cmd":"go test ./..."}',
+                  started_at: "",
+                },
+              ],
+            },
+          ],
         },
       ],
     });

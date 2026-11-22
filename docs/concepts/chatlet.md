@@ -1,8 +1,6 @@
 # Chatlet
 
-A company running Crewlet talks to itself, and until now that talking had to
-happen in somebody else's workspace. Chatlet gives you a third answer, chosen with
-one field:
+Chat has three homes, chosen with one field:
 
 ```yaml
 chat:
@@ -11,713 +9,254 @@ chat:
 # backend: none      # no chat at all
 ```
 
-The `vendor` value is what you already had: a seat reads and writes in your
-Slack or Mattermost workspace, and the engine stores no conversation of its
-own. `chatlet` is Chatlet, the engine's own chat — channels, threads, direct messages,
-mentions, reactions, search and a screen in the dashboard — on the same terms
-[Worklet](task-engine.md) and [Doclet](knowledge-system.md) are
-the engine's own.
+`vendor`: a seat reads and writes in your Slack or Mattermost workspace; the engine stores no conversation. `chatlet` is Chatlet, the engine's own chat (channels, threads, direct messages, mentions, reactions, search, a dashboard screen), on the same terms [Worklet](task-engine.md) and [Doclet](knowledge-system.md) are the engine's own.
 
-The axis is exclusive, and that is the point of having one. Two live chat homes
-would mean a seat answering the same person twice, a unit's channel naming two
-different rooms, and no rule anywhere that could say which conversation was the
-real one.
+The axis is exclusive: two live chat homes would mean a seat answering one person twice, a unit's channel naming two rooms, and no rule saying which conversation is real.
 
 ## Why it exists
 
-Some companies will not connect a third-party workspace — because of where the
-data would sit, because of what a workspace costs per seat, or because the
-company is a handful of people and eleven agents and a chat product priced for
-humans is the wrong shape. Those companies had no way for a person to say
-anything to a seat at all.
+Some companies will not connect a third-party workspace (data location, per-seat cost, or a handful of people and agents). Without Chatlet a person could not talk to a seat at all.
 
 ## The log and the copies
 
-Every change is **one record on an ordered log the whole fleet shares**,
-`CREWLET_CHAT_LOG`, and every data node derives the same SQL tables from that
-log. It is the same framework Worklet, Doclet and the identity
-directory ride, and the guarantees are the same ones: a node's tables can be
-behind the log, every answer says how far this node has applied, and a read
-that cannot be served refuses rather than answering "there is nothing here".
-Every record is signed under the fleet keyring like every other state-log
-record ([ADR-0031](../../adr/0031-every-state-log-record-is-signed.md)), so
-nothing that merely reaches the broker's port can say something in a room.
+Every change is **one record on an ordered log the whole fleet shares**, `CREWLET_CHAT_LOG`; every data node derives the same SQL tables from it. It is the framework Worklet, Doclet and the identity directory ride, with the same guarantees: a node's tables can be behind the log, every answer says how far this node has applied, and a read that cannot be served refuses rather than answering "there is nothing here". Every record is signed under the fleet keyring ([ADR-0031](../../adr/0031-every-state-log-record-is-signed.md)), so nothing that merely reaches the broker's port can speak in a room.
 
-What is particular to a conversation is how the log is used, and there are two
-disciplines on one stream.
+Two disciplines share the stream.
 
-**Channel state arbitrates.** A topic, a purpose, an archive, a membership set,
-a retention horizon — each is published on the room's own subject and
-conditioned on that room's last change, so two people renaming one channel
-contend and exactly one wins.
+**Channel state arbitrates.** A topic, purpose, archive, membership set or retention horizon is published on the room's own subject, conditioned on that room's last change: two people renaming one channel contend and exactly one wins.
 
-**Messages are sequenced.** A post carries no expectation at all. Two people
-talking in the same room are not racing for anything, so paying for arbitration
-would serialise the busiest subject in the company behind itself — and its
-failure mode is the one a chat system may not have: a refusal on a message
-somebody typed. The log orders the messages instead, and every node DECIDES
-each one where it applies it, from the room as it is at that record's position
-— because a message can depend on something that landed just ahead of it,
-which the node it was written on could not yet see:
+**Messages are sequenced.** A post carries no expectation: people talking in one room are not racing, arbitration would serialise the company's busiest subject, and a refusal on a message somebody typed is a failure a chat system may not have. The log orders messages; every node DECIDES each one where it applies it, from the room as it is at that record's position, because a message can depend on a change that landed just ahead of it:
 
-- a post into a room somebody archived a moment before, or — in a private room
-  or a direct conversation — by somebody taken out of it a moment before;
+- a post into a room archived a moment before, or (private room or direct conversation) by somebody taken out a moment before;
 - an edit of a message its author or a moderator took back a moment before;
 - a reaction that would be the message's thirty-third distinct emoji;
-- an edit, a delete or a reaction of a message an erase or a retention prune
-  removed.
+- an edit, delete or reaction of a message an erase or retention prune removed.
 
-Each is refused exactly as it would have been had the earlier change already
-reached whoever wrote it, in the same class: a seat's tool answer says which it
-was (the room is archived, they are not in it, the message is gone, the message
-carries all the emoji it can), and a person is answered that class in its
-code's own words until the refusal catalog words it for them
-([ADR-0060](../../adr/0060-a-caveat-or-a-refusal-is-worded-for-each-reader-and-a-person-is-never-shown-a-models.md)). An archived room and a full message are each the STATE of what
-the gesture is about, so they are refused as a conflict — the same request
-lands once somebody reopens the room or takes an emoji off — exactly as an
-artifact in the trash and a project archived before a task is filed into it
-are; see [which class a refusal is](../reference/api-endpoints.md#which-class-a-refusal-is). Every node reaches the same decision and records it, so a retry
-of a refused message is refused again rather than reported as said, and a
-refused message wakes nobody. Each decision is kept for thirty days, the
-operation ledger's own horizon, and every node records how far back it has let
-them go: asked about a message whose decision is past that, a node answers that
-it cannot tell — never that the message was not said. A gesture answered `pending` — durable, and not
-yet applied on the node that answered — may still be refused this way when it
-applies, so asking again under the same `Idempotency-Key` is how a caller hears
-the decision: the operation ledger answers the repeat with it and writes
-nothing twice. The dashboard does exactly that for a message it sent. This is recorded as
-[ADR-0046](../../adr/0046-a-message-is-sequenced-on-its-channels-subject.md).
+Each is refused as it would have been had the earlier change already reached the writer, in the same class. A seat's tool answer says which (the room is archived, they are not in it, the message is gone, the message carries all the emoji it can); a person is answered the class in its code's own words until the refusal catalog words it ([ADR-0060](../../adr/0060-a-caveat-or-a-refusal-is-worded-for-each-reader-and-a-person-is-never-shown-a-models.md)). An archived room and a full message are the STATE of what the gesture is about, so they are refused as a conflict (the same request lands once somebody reopens the room or takes an emoji off), like an artifact in the trash or a task filed into an archived project; see [which class a refusal is](../reference/api-endpoints.md#which-class-a-refusal-is). Every node reaches and records the same decision, so a retry of a refused message is refused again, not reported as said, and a refused message wakes nobody.
 
-A message's subject carries its **channel's** id — one message subject per
-room, apart from the room's own state subject — and its declared scope is that
-channel's. There is no per-message scope at all, which is a correctness
-property rather than an economy: the applier numbers messages within a channel
-from log order, and a post scoped to itself would let a node that had deferred
-one message hand the next the number the deferred one should have had —
-diverging that node's rows from every other node's for good.
+Decisions are kept thirty days, the operation ledger's horizon, and each node records how far back it has let them go: asked about a message whose decision is past that, a node answers that it cannot tell, never that the message was not said. A gesture answered `pending` (durable, not yet applied on the answering node) may still be refused when it applies, so asking again under the same `Idempotency-Key` is how a caller hears the decision: the ledger answers the repeat and writes nothing twice. The dashboard does this for a message it sent. Recorded as [ADR-0046](../../adr/0046-a-message-is-sequenced-on-its-channels-subject.md).
+
+A message's subject carries its **channel's** id and its scope is the channel's; there is no per-message scope, because the applier numbers messages within a channel from log order and a self-scoped post could let a node that deferred one message give the next its number, diverging rows for good.
 
 ## What a company gets
 
-**Channels** are public, private, or a **unit's own room**. A create that names
-no visibility takes the company's default: `chat.chatlet.default_channel_private`
-makes those rooms private, and the engine resolves it in one place, so the
-answer is the same whether the room was made from the dashboard or by a
-person's own assistant — both make it with the operator catalogue's
-`create_channel`, and no seat is given one. A create that *does* name a
-visibility is never overridden — the setting is a default and not a lock, so a
-company that turns it on can still make a public room deliberately.
+**Channels** are public, private, or a **unit's own room**. A create naming no visibility takes `chat.chatlet.default_channel_private` (true makes them private), resolved in one place, so the dashboard and a person's assistant (both use the operator catalogue's `create_channel`; no seat is given it) get the same answer. A create that names a visibility is never overridden: the setting is a default, not a lock.
 
-A unit that names a `channel` in the org chart gets that room, created and
-maintained by the engine at boot and on every apply. The room is the unit's that
-*declares* the channel: a child unit that names none inherits its parent's
-channel and gets no room of its own, because its seats are already in the
-parent's. **A room belongs to exactly one unit** — it records the unit it was
-opened for, and that unit's lead is who answers a person nobody else did — so
-two units declaring one channel is
-[refused](configuration.md#what-a-stored-revision-is-held-to) on Chatlet,
-beside each of them: give each its own channel, or leave a child's empty so it
-inherits. Its members are every seat in the unit's **subtree** plus the lead
-that answers for it — a division's room is where its teams are reachable, and
-the alternative leaves a lead talking to an empty room while the people doing
-the work sit one level down. Every message in it wakes the unit's **own agent
-seats** and nobody else. A descendant's agents are members rather than
-followers — a child that inherits the channel included, though its prompt names
-the room as its team's — and are reached by a mention, a thread they are in,
-`@channel` or the lead; a person is addressable but runs no turn. So a message
-in a division's room is not a turn for every agent beneath it, which a channel
-cascading down a whole branch would otherwise make it.
+A unit that names a `channel` in the org chart gets that room, created and maintained by the engine at boot and on every apply. The room belongs to the unit that *declares* the channel; a child naming none inherits its parent's channel and gets no room, its seats already being in the parent's. **A room belongs to exactly one unit**: it records the unit it was opened for, and that unit's lead answers a person nobody else did. Two units declaring one channel is [refused](configuration.md#what-a-stored-revision-is-held-to) on Chatlet, beside each of them: give each its own channel, or leave a child's empty.
 
-**The chart is the only writer.** Creating a unit room by hand, and joining,
-leaving or setting the membership of one, are all refused: a room made by hand
-under the unit kind would have a membership nothing could ever change, and any
-of the rest would be undone by the next apply with nothing to say so — declare
-the channel, or move the seat, in the company document instead. The membership
-carries the activation of the configuration it came from, as a unit's project
-and knowledge space do, so a node applying an older revision — booting on one
-the fleet has since replaced — leaves the current team in the room rather than
-putting last week's back. The engine never *deletes* a room: a unit that drops
-its channel, or leaves the chart, keeps what was said in it, because a
-transcript is the only copy of what people said and an org chart edit is not a
-request to destroy one. What it does change is who is in it. A room no unit
-declares any more — and the room of a unit whose last seat has left — is
-staffed by nobody: its members are taken out at the next apply, nobody leads
-it (a person posting there wakes no lead, by the same rule), every word of it
-stays readable, and declaring the channel again, on any unit, staffs it again.
-A unit that never had anybody in it gets no room created, since an empty room
-of this kind is one nothing could join.
+Members are every seat in the unit's **subtree** plus the lead that answers for it, so a division's room reaches its teams. Every message in it wakes the unit's **own agent seats** only. A descendant's agents (a child inheriting the channel included, though its prompt names the room as its team's) are members, not followers, reached by a mention, a thread they are in, `@channel` or the lead; a person is addressable but runs no turn. A division's room is thus not a turn for every agent beneath it.
 
-**A room follows its channel.** The chart gives a unit a channel, so when it
-gives that channel to another unit — moved to the team that replaces its own in
-a reorg — the room moves with it at the next apply: it answers to the new unit,
-its people are that unit's, its answerer is that unit's lead, and what was
-said in it stays. That move rides the same activation stamp as the membership,
-so a node applying an older revision does not move it back. Nothing is
-disclosed by it, since a unit's room is readable by every seat of the company.
-A room never moves while the unit it belongs to still declares it.
+**The chart is the only writer.** Creating a unit room by hand, and joining, leaving or setting the membership of one, are refused: a hand-made unit-kind room would have a membership nothing could change, and the rest would be undone by the next apply silently. Declare the channel, or move the seat, in the company document. Membership carries the activation of the configuration it came from, so a node applying an older revision (booting on one the fleet has replaced) leaves the current team in the room.
 
-And it will not take over a room it does not own, and says which case it is
-in. A room's name never changes, and an archived room keeps its name, so
-renaming the room is never the remedy: for a room somebody made by hand under
-that name — which it will not hand to a membership the chart decides — give
-the unit a channel nobody holds; for a room another unit declares too, which
-a written document is refused for, give one of them a channel of its own.
+The engine never *deletes* a room: a unit dropping its channel or leaving the chart keeps what was said, since a transcript is the only copy and an org chart edit is no request to destroy one. It changes who is in it. A room no unit declares, or whose unit's last seat has left, is staffed by nobody: members are taken out at the next apply, nobody leads it (a person posting there wakes no lead), every word stays readable, and declaring the channel again, on any unit, staffs it again. A unit that never had anybody gets no room.
 
-**Direct messages and small groups** have no name. Their identity is derived
-from the sorted handles of the seats in them, so two seats opening the same
-conversation from two nodes converge on one room with no race — and adding
-somebody is not an edit but a different conversation, which the write path
-refuses to pretend otherwise about.
+**A room follows its channel.** When the chart gives a channel to another unit (a reorg), the room moves at the next apply: it answers to the new unit, its people and answerer are that unit's, and what was said stays. The move rides the membership's activation stamp, so an older revision does not move it back. Nothing is disclosed, since a unit's room is readable by every seat. A room never moves while its unit still declares it.
 
-**Threads** are one level deep. A reply to a reply carries the same root, which
-is what makes "this thread" a range rather than a recursive walk. A reply is
-said in its thread and read there: a room's transcript holds the room's own
-posts, so a reply never reads as said in the room. A room post
-somebody answered shows its thread's summary in the transcript: how many
-replies it has (a deleted one included, since its tombstone still sits in the
-thread), when the newest arrived, and the first three people or agents to
-reply with how many replied in all. It is counted from the thread's own rows
-when the page is read, so a delete, an erase or a prune changes it with no
-counter to keep in step.
+The engine will not take over a room it does not own, and says which case applies. A room's name never changes (an archived room keeps it), so renaming is never the remedy: for a room made by hand under that name, give the unit a channel nobody holds; for a room another unit declares too, give one of them a channel of its own.
 
-**Messages** carry up to 32 KiB of text and up to eight links, and no file:
-a message links to one — see [what is not here](#what-is-not-here).
-A link is an absolute `http`, `https` or `mailto` address, kept exactly as it
-was sent, so a page or a work item is linked by the whole address a browser
-shows for it. A seat reading the thread and `crewlet chatlet read` take a link
-as it stands, and a relative reference, a dashboard route on its own (`#/...`)
-or any other scheme would mean a different place to each reader, or none, so a
-message carrying one is refused `invalid`, and the refusal a model reads names
-every entry that is not one (`links[1]`). The dashboard draws a message's
-links by the rule it draws an address in an agent's words by, whoever wrote
-the message ([Dashboard Design](../reference/dashboard-design.md#what-prose-names-is-drawn-as-what-it-is)):
-an address on a host the company configured opens as the dashboard rebuilds
-it, in a new tab, a GitHub or GitLab address only under an organization or
-group that host's configuration names, and any other, a link to the
-company's own dashboard among them, is drawn whole and inert, with the host
-it names.
-A page of a room's messages holds up to the limit asked for (500 at most), and
-ends sooner where the messages would not fit the one reply a node that holds no
-data is answered in — half of a broker message — so a client pages on the
-cursor it is handed rather than on how many rows came back.
+**Direct messages and small groups** have no name. Identity is derived from the sorted handles of the seats, so two seats opening the same conversation from two nodes converge on one room. Adding somebody is a different conversation, not an edit.
 
-**Edits, deletes and reactions.** A person makes the first two — a seat
-corrects what it said by replying, which the room sees arrive, rather than
-rewriting a remark colleagues already acted on — through the [operator
-surface](../reference/api-endpoints.md#the-chat-gestures-only-a-person-makes),
-which is also where rooms are made, their settings and membership changed, and
-read state recorded. An edit is the author's alone, an administrator's not
-included. A delete is a **tombstone**: the row survives with its body blanked,
-so a reply still resolves to the message it answered and a thread does not
-lose its first line. A reaction never wakes anybody and never counts as an
-answer — if it did, a seat could discharge every obligation with a thumb.
+**Threads** are one level deep: a reply to a reply carries the same root, so "this thread" is a range. A reply is said and read in its thread; a room's transcript holds the room's own posts. A room post that was answered shows its thread's summary: reply count (a deleted reply included, its tombstone still sits there), when the newest arrived, and the first three repliers with the total. It is counted from the thread's rows when the page is read, so a delete, erase or prune changes it with no counter.
 
-**A message is said once.** A turn that runs again after a crash, and a
-person whose post came back `unknown` and who sends it again, post the same
-message rather than a second one: its id is derived from the unit of work the
-call belongs to — the turn's trigger, or the operation key the dashboard sends
-in `Idempotency-Key` — and from what it asked to say, and it carries the
-instant that work began, so a node whose operation ledger has since swept its
-first attempt — the ledger keeps thirty days,
-[the one horizon](../guides/retention.md#old-data-is-not-cold-data) every
-domain's is kept to — answers `unknown` rather than saying it twice. Within one
-turn a seat may say several things: the same call made again with no different
-call to that tool in between is one message, while the same words posted again
-*after* a different post are another, and so are the same words sent through a
-different tool (`send_dm` rather than `post_message`). Every other gesture — an
-edit, a reaction, a join, a room's settings — is made once the same way, and
-joining, leaving and stating a room's whole membership count as one family of
-tools: a seat that joins a room, leaves it and joins it again is in it, because
-the leave is a different call to the same membership and makes the second join
-a join of its own rather than the first one's retry. A write whose outcome the
-node cannot establish is answered `unknown`, never with a receipt: the seat is
-told it may or may not have been said, and how to repeat it as the same
-gesture. A direct message whose conversation could not be opened says that
-nothing was sent.
+**Messages** carry up to 32 KiB of text and up to eight links, and no file: a message links to one, see [what is not here](#what-is-not-here). A link is an absolute `http`, `https` or `mailto` address kept exactly as sent, so a page or work item is linked by the whole address a browser shows. A seat and `crewlet chatlet read` take a link as it stands; a relative reference, a dashboard route alone (`#/...`) or any other scheme would mean a different place to each reader, so a message carrying one is refused `invalid`, and the refusal a model reads names every offending entry (`links[1]`). The dashboard draws links by the rule it draws an address in an agent's words by, whoever wrote the message ([Dashboard Design](../reference/dashboard-design.md#what-prose-names-is-drawn-as-what-it-is)): an address on a host the company configured opens as the dashboard rebuilds it, in a new tab; a GitHub or GitLab address only under an organization or group that host's configuration names; any other, the company's own dashboard included, is drawn whole and inert, with the host it names.
 
-**A private room refuses every write from outside it except moderation.**
-Posting, joining, changing the topic and reacting all take the room's own
-membership rule, a reaction included, so nothing can be attached to a
-conversation you cannot open. Somebody outside the room is told there's no
-such room, the same answer a read gives them and the same as for an id
-nothing holds, so a refusal never says what a private room is called or, for
-a direct conversation whose id anybody can work out from two names, that
-those two talk. A member joining a room they're already in changes nothing. An edit is narrower: it is the message's author's
-alone. A delete is the author's, or an administrator's as a moderator. The
-author's half is narrower too, and it is what lets somebody take their own
-words back out of a room they have since left. The administrator's half is
-moderation, and like erasing or pruning a room's history it is not bounded by
-membership: it reaches a message in a private room or a direct conversation the
-administrator is not in, and it is decided before the message is read, so
-taking it down shows them nothing of the room.
+A page holds up to the limit asked for (500 at most) and ends sooner where messages would not fit half a broker message, so a client pages on the cursor it is handed, not the row count.
 
-**An archived room takes no new messages, and nothing else changes.** A post
-and a reply are refused; what was already said stays its authors' and stays
-moderated. An author may still edit or take back their own words, an
-administrator may still take a message down, a reaction is still taken, and the
-room's topic and purpose can still be set for whoever reads it after. Each of
-those shows as what it is — an edit says so, a delete leaves a tombstone naming
-who did it — so the archive keeps an honest record rather than a frozen one,
-and a key pasted into a room before it closed can be taken out without
-reopening the room to every post the archive was there to stop. Archiving a
-room, and opening it again, is not any member's: it is the room's creator's,
-the lead's of the unit whose room it is (or of a unit above it), or an
-administrator's, and never an agent's.
+**Edits, deletes and reactions.** A person makes edits and deletes; a seat corrects itself by replying, which the room sees, rather than rewriting a remark colleagues acted on. They go through the [operator surface](../reference/api-endpoints.md#the-chat-gestures-only-a-person-makes), which also makes rooms, changes settings and membership, and records read state. An edit is the author's alone, an administrator's not included. A delete is a **tombstone**: the row survives with its body blanked, so a reply still resolves to its message. A reaction never wakes anybody and never counts as an answer (else a seat could discharge every obligation with a thumb).
 
-**A room a newer build created takes nothing on this one.** During a rolling
-upgrade a node can hold a room of a kind it does not know; it serves nothing
-in that room and accepts nothing either — not a post, an edit, a delete, a
-reaction, a join or a settings change, an author's and a moderator's alike —
-because whether that room's transcript is reachable is exactly what it cannot
-say. Upgrade the node and the same gesture lands.
+**A message is said once.** A turn re-run after a crash, and a person re-sending a post that came back `unknown`, post the same message, not a second: its id is derived from the unit of work (the turn's trigger, or the operation key the dashboard sends in `Idempotency-Key`), from what it asked to say, and it carries the instant that work began. A node whose operation ledger has swept the first attempt (thirty days, [the one horizon](../guides/retention.md#old-data-is-not-cold-data) every domain's is kept to) answers `unknown` rather than saying it twice.
+
+Within one turn a seat may say several things: the same call repeated with no different call to that tool in between is one message; the same words posted *after* a different post are another, and so are the same words through a different tool (`send_dm` rather than `post_message`). Every other gesture (edit, reaction, join, room settings) is made once the same way. Joining, leaving and stating a room's whole membership are one family of tools: join, leave, join again leaves the seat in the room, because the leave makes the second join its own rather than the first one's retry. A write whose outcome the node cannot establish is answered `unknown`, never a receipt: the seat is told it may or may not have been said, and how to repeat it as the same gesture. A direct message whose conversation could not be opened says nothing was sent.
+
+**A private room refuses every write from outside it except moderation.** Posting, joining, changing the topic and reacting all take the room's membership rule, so nothing attaches to a conversation you cannot open. An outsider is told there is no such room, the same answer a read gives and the same as for an id nothing holds, so a refusal never reveals a private room's name or that two people talk (a direct conversation's id can be worked out from two names). A member joining a room they are already in changes nothing.
+
+An edit is the author's alone. A delete is the author's, or an administrator's as moderator. The author's half lets somebody take their words out of a room they have left. The administrator's half is not bounded by membership, like erasing or pruning history: it reaches a message in a private room or direct conversation the administrator is not in, and is decided before the message is read, showing them nothing of the room.
+
+**An archived room takes no new messages, and nothing else changes.** A post and a reply are refused; what was said stays its authors' and stays moderated. An author may still edit or take back their words, an administrator may still take a message down, a reaction is still taken, and topic and purpose can still be set. Each shows as what it is (an edit says so, a delete leaves a tombstone naming who did it), so the archive is an honest record, and a key pasted before closing can be removed without reopening the room. Archiving and reopening a room belongs to the room's creator, the lead of the unit whose room it is (or of a unit above it), or an administrator, never an agent.
+
+**A room a newer build created takes nothing on this one.** In a rolling upgrade a node may hold a room of an unknown kind; it serves and accepts nothing in it (post, edit, delete, reaction, join, settings; author's and moderator's alike). Upgrade the node and the gesture lands.
 
 ## A room says what changed in it
 
-A room's own changes are lines in its transcript, where they happened: who
-joined it, who put somebody in it or took them out, who left, and what its
-topic and description were set to. They are **room events**, written by the
-engine from the record that made the change, in that record's own
-transaction, so a description never changes without its line and a line never
-claims a change that did not land. Each takes the room's next number like a
-message, so a page, a cursor and a live update carry it in order, and the
-retention prune and an erase reach it like any other row.
+A room's own changes are lines in its transcript: who joined, who put somebody in or took them out, who left, and what its topic and description were set to. These **room events** are written by the engine from the record that made the change, in that record's transaction, so a description never changes without its line and a line never claims a change that did not land. Each takes the room's next number like a message, so a page, cursor and live update carry it in order, and the retention prune and an erase reach it like any row.
 
 | Event | Written when |
 |---|---|
-| `joined` | A named room is made (its founding members), somebody joins it themselves, or the engine puts a seat in: the org chart staffing a unit's room, or an auto-join room taking in a newcomer |
+| `joined` | A named room is made (founding members), somebody joins themselves, or the engine puts a seat in: the org chart staffing a unit's room, or an auto-join room taking in a newcomer |
 | `added` | Somebody puts other people or agents in the room |
-| `left` | Somebody leaves the room themselves, or the org chart takes a seat out of its unit's room |
-| `removed` | Somebody takes other people or agents out of the room |
-| `topic`, `description` | Somebody sets the room's topic or its description (its `purpose`); an empty value is the old one cleared |
-| `template` | Somebody sets the topic and description from a template, which is one line naming the template rather than two |
+| `left` | Somebody leaves themselves, or the org chart takes a seat out of its unit's room |
+| `removed` | Somebody takes other people or agents out |
+| `topic`, `description` | Somebody sets the topic or description (its `purpose`); an empty value is the old one cleared |
+| `template` | Somebody sets topic and description from a template: one line naming the template, not two |
 
-A direct conversation has none: its people are what it is, so nobody joins or
-leaves one, and it has no topic. Archiving a room writes none either.
+A direct conversation has none (nobody joins or leaves one, and it has no topic). Archiving writes none.
 
-**A room event is not conversation.** It is never an unread message or a
-mention, never the last message a room is previewed by, never a search hit,
-and it takes no reply, reaction, edit or delete: it is the room's record of a
-change, not anybody's words. Its author is whoever made the change, or the
-engine for the org chart's and auto-join's own changes. A seat reading the
-room sees it as a message carrying an `event`, and the words it records (a
-topic, a description, a template's name) are fenced as their author's, as a
-topic is.
+**A room event is not conversation.** It is never an unread message or mention, a room's preview message, or a search hit, and takes no reply, reaction, edit or delete. Its author is whoever made the change, or the engine for the org chart's and auto-join's changes. A seat reading the room sees it as a message carrying an `event`, and the words it records (topic, description, template name) are fenced as their author's, as a topic is.
 
-**A room's topic and description are 250 characters each**, counted as a
-person sees them (an emoji is one), because a person edits both under a
-counter. A longer description is describing a project, which has a page.
+**A room's topic and description are 250 characters each**, counted as a person sees them (an emoji is one), because a person edits both under a counter. A longer description is describing a project, which has a page.
 
-**Adding people to a room** names who to add and nobody else. It is decided
-against the room as it stands when the write lands, so two people adding
-colleagues at once both land, where stating the whole membership would let
-the second write the first one's people back out. The rules are the
-membership's own: a private room is changed only by somebody in it, a unit's
-room is the org chart's, and a direct conversation is its people.
+**Adding people to a room** names who to add and nobody else, decided against the room as it stands when the write lands, so two people adding colleagues at once both land (stating the whole membership would let the second write the first's people out). The membership's rules apply: a private room is changed only by somebody in it, a unit's room is the org chart's, a direct conversation is its people.
 
-**A public room can take in everybody the company takes on.** An
-administrator turns on a room's auto-join, and from then every seat that joins
-the company, agent or person, is put in the room by the engine at the
-activation that brings it in, with a `joined` line. Turning it on adds nobody
-already in the company: the room accounts for the company as it stood, and
-for every newcomer it puts in, so a newcomer who leaves the room is not put
-back by the next activation. Turning it off and on again starts from the
-company as it is then. A private room cannot take it, because who may read a
-private room is no setting's to decide for people nobody has met yet; nor can
-a unit's room or a direct conversation, for the reasons above. An archived
-room takes nobody in, and accounts for the newcomers it missed when it is
-opened again.
+**A public room can take in everybody the company takes on.** An administrator turns on a room's auto-join; from then every seat that joins the company, agent or person, is put in the room by the engine at the activation that brings it in, with a `joined` line. Turning it on adds nobody already in the company; the room accounts for the company as it stood and for every newcomer it puts in, so a newcomer who leaves is not put back by the next activation. Turning it off and on again starts from the company as it is then. A private room cannot take it (who may read one is no setting's to decide for people nobody has met), nor can a unit's room or a direct conversation. An archived room takes nobody in, and accounts for the newcomers it missed when reopened.
 
 ## Who gets woken
 
-This is the axis where an agent company differs most from a human one, and it
-is worth stating plainly: **a person in a busy room reads passively, and an
-agent has no passive read**. Every delivery is the seat's own executor in a
-[box](code-sandbox.md), which pays the harness's whole harness even to decide the
-message was not for it, so "everyone sees everything" — which is free in a
-human chat product — is a company that does nothing but read chat.
+**An agent has no passive read**: every delivery is the seat's own executor in a [box](code-sandbox.md), paying the harness's whole cost even to decide a message was not for it, so "everyone sees everything" would make a company that only reads chat.
 
-So a message wakes:
+A message wakes:
 
 - every seat it **names**, and every participant of a **direct conversation**;
-- anybody in the **thread** it is part of: the seat that started it, the seats
-  that have spoken in it and the seats that follow it;
+- anybody in the **thread** it is part of: the seat that started it, the seats that have spoken in it and the seats that follow it;
 - every agent in the room on a **`@channel`**;
-- members who have **followed the whole channel**, which the engine sets for a
-  unit's own agent seats in that unit's room and for nobody else;
-- the room's **answerer**, when a person posts in a public, private or unit
-  room, names nobody and wakes no other agent, because silence there looks
-  exactly like a message that was lost.
+- members who have **followed the whole channel**, which the engine sets for a unit's own agent seats in that unit's room and nobody else;
+- the room's **answerer**, when a person posts in a public, private or unit room, names nobody and wakes no other agent (silence there looks like a lost message).
 
-**Words wake only the seats they address**
-([ADR-0113](../../adr/0113-an-agents-words-wake-only-the-seats-they-address.md)).
-Everything above is a standing arrangement except a name, and a standing
-arrangement wakes a seat only for a message that asks something and names
-nobody in particular:
+**Words wake only the seats they address** ([ADR-0113](../../adr/0113-an-agents-words-wake-only-the-seats-they-address.md)). All of the above except a name is a standing arrangement, and one wakes a seat only for a message that asks something and names nobody in particular:
 
-- **A message that names somebody is addressed to them.** A person's message
-  wakes the seats it @-mentions, an agent's only when it asks; either wakes
-  the seat whose question it answers and, when it asks, the other side of a
-  direct conversation; nobody else in the room or the thread is woken for it. A status note for a person (`@sara, the deploy
-  is done`) wakes no agent at all, and Sara reads it as she reads everything.
-- **An agent's message asks something only where the agent says so.** The
-  posting tools (`post_message`, `reply_in_thread`, `send_dm`) require an
-  agent to state `asks`: true when the message asks someone for an answer or
-  an action, which obliges the named seat, or the other side of a
-  direct conversation, to answer. In a message with `asks: false` an
-  @-mention is a reference: the named agent sees it in the room and is not
-  woken. Such a message wakes only the agent whose open question it answers,
-  under `answer`, and the seats with a stake in its thread. It wakes no direct conversation's other side, no thread author, no
-  speaker, no follower and no `@channel`: an acknowledgement, a thank-you or a
-  status note is read where it was said. The receipt says so to the agent that
-  posted it.
-- **A stake in a thread is woken by any reply in it** by somebody else,
-  whatever the reply names: the seat that asked something there with no answer
-  yet, under `awaiting`, and the seat asked that still owes the answer, under
-  `owing`. The one exception is a co-asker: a reply by a seat whose only stake
-  is awaiting the same addressee does not wake another seat awaiting it, and a
-  person whose open message reached that addressee is a co-asker too. A
-  top-level message in a named room answers the newest open top-level ask each
-  agent holds of its author there, and wakes the agent that asked under
-  `answer`; an older ask stays open for a later message.
-- **An asking message gives each seat it asks a receipt**, a person's post as
-  it always has, and an agent's for the seats it woke for anything but their
-  own stake or an answer, the people it named and the other side of a direct
-  conversation. The seat's reply in the thread, or
-  anywhere later in a direct conversation, closes the receipt and wakes the
-  asker under `answer`. So a question and its answer each wake once, and the
-  thanks after them wake nobody.
+- **A message that names somebody is addressed to them.** A person's message wakes the seats it @-mentions, an agent's only when it asks; either wakes the seat whose question it answers and, when it asks, the other side of a direct conversation; nobody else in the room or thread. A status note for a person (`@sara, the deploy is done`) wakes no agent.
+- **An agent's message asks something only where the agent says so.** The posting tools (`post_message`, `reply_in_thread`, `send_dm`) require an agent to state `asks`: true when the message asks someone for an answer or action, obliging the named seat, or the other side of a direct conversation, to answer. With `asks: false` an @-mention is a reference: the named agent sees it and is not woken. Such a message wakes only the agent whose open question it answers, under `answer`, and the seats with a stake in its thread; no direct conversation's other side, thread author, speaker, follower or `@channel`. An acknowledgement, thank-you or status note is read where it was said. The receipt tells the posting agent so.
+- **A stake in a thread is woken by any reply in it** by somebody else, whatever it names: the seat that asked something there with no answer yet, under `awaiting`, and the seat asked that still owes the answer, under `owing`. Exception, the co-asker: a reply by a seat whose only stake is awaiting the same addressee does not wake another seat awaiting it, and a person whose open message reached that addressee is a co-asker too. A top-level message in a named room answers the newest open top-level ask each agent holds of its author there, and wakes the agent that asked under `answer`; an older ask stays open for a later message.
+- **An asking message gives each seat it asks a receipt**: a person's post always; an agent's for the seats it woke for anything but their own stake or an answer, the people it named and the other side of a direct conversation. The seat's reply in the thread, or anywhere later in a direct conversation, closes the receipt and wakes the asker under `answer`. A question and its answer each wake once; the thanks wake nobody.
 
-What the rule held back rides the message's record (`held`), and the node that
-routes it logs `chat_wakes_held` with the count.
+What the rule held back rides the message's record (`held`), and the node that routes it logs `chat_wakes_held` with the count.
 
-**A person is never answered by silence.** The answerer is one seat, woken only
-when the message woke no other agent, and obliged to reply. A message that
-names a colleague has been addressed, so it has no answerer even when the
-colleague is a person, who is never woken: "@sara, can you review?" is for
-Sara, and an agent obliged to answer it as well would be noise. A handle
-nobody in the company holds names nobody, and neither does a member-only room
-naming somebody outside it, so those still reach the answerer. A unit's room is
-answered by the lead of the unit that still declares it: a room the chart
-staffs with nobody, because its unit dropped the channel or left the chart, has
-no answerer. Any other room, one somebody made by hand, is answered by its most
-senior agent member: the one with the fewest managers above it in the org
-chart, a tie going to the seat the chart lists first. A private room's answerer
-is therefore always a member who can read it, and a room with no agent member
-has none. Both are resolved when the message is written and carried on its
-record, so a wake delivered later still goes to whoever answered for the room
-when the person spoke. An agent's post that reaches nobody wakes nobody: a
-company must not talk to itself.
+**A person is never answered by silence.** The answerer is one seat, woken only when the message woke no other agent, and obliged to reply. A message naming a colleague has been addressed, so it has no answerer even when the colleague is a person (never woken): "@sara, can you review?" is for Sara. A handle nobody holds names nobody, and neither does a member-only room naming somebody outside it, so those still reach the answerer.
 
-**A person's `@channel` is a request; an agent's is news.** When a person
-addresses the whole room, every agent it reaches answers in the thread under
-the message, for its own role: what it knows, what it will do, or that it has
-nothing to add. Each is told how many seats were asked, so that thirty agents
-do not each answer for the room. When an agent writes `@channel`, the room is
-told something and nobody owes a reply. Either way it wakes at most 32 agents,
-as many as one message may name, and the channel says so when it truncated,
-rather than quietly waking fewer than the gesture implied. That cap and the
-seats it reaches, each running its executor on one turn at a time, are what
-bound a broadcast's boxes: `node.max_concurrent` holds a wake only while it
-launches and while its run is collected and reviewed
-([Scaling](scaling.md#where-the-constants-come-from)).
+A unit's room is answered by the lead of the unit that still declares it; a room the chart staffs with nobody has no answerer. Any other room (made by hand) is answered by its most senior agent member: fewest managers above it in the org chart, a tie going to the seat the chart lists first. A private room's answerer is therefore always a member who can read it, and a room with no agent member has none. Both are resolved when the message is written and carried on its record, so a later-delivered wake goes to whoever answered when the person spoke. An agent's post that reaches nobody wakes nobody: a company must not talk to itself.
 
-**Nobody reads an unwoken message later.** An agent hears a message only when
-the routing wakes it: there is no catch-up on its next turn, and no pass over
-the rooms it is in. A message that woke nobody is read by people, and by an
-agent only if it opens the room for some other reason. To reach a particular
-agent, name it.
+**A person's `@channel` is a request; an agent's is news.** When a person addresses the whole room, every agent reached answers in the thread under the message, for its own role: what it knows, will do, or that it has nothing to add. Each is told how many seats were asked, so thirty agents do not each answer for the room. An agent's `@channel` tells the room something and nobody owes a reply. Either way it wakes at most 32 agents (as many as one message may name), and the channel says so when it truncated. That cap, with each seat's executors bounded by its `sandbox.max_concurrent_runs` (two by default), bounds a broadcast's boxes: `node.max_concurrent` holds a wake only while it launches and while its run is collected and reviewed ([Scaling](scaling.md#where-the-constants-come-from)).
 
-**Being named in a thread follows it.** A seat a message names — when it is
-posted, or by an edit that adds the name — is woken by every later reply in
-that thread that asks something and names nobody else, so somebody asked a
-question hears its answer. The follow lasts as
-long as the thread still names them: an edit that drops the name, a delete or
-an erase of the message that named them takes it back, unless another message
-in the thread names them too. A colleague named by mistake and corrected away
-costs one wake, not one for every reply the thread ever gets.
+**Nobody reads an unwoken message later.** An agent hears a message only when routing wakes it: no catch-up on its next turn, no pass over its rooms. A message that woke nobody is read by people, and by an agent only if it opens the room for another reason. To reach a particular agent, name it.
 
-**Which of those obliges a reply** is narrower still: a direct message, a
-mention, a reply in a thread you started, a person's `@channel`, and the
-room's answerer. An agent's broadcast does not, an agent's name that asks
-nothing wakes no agent at all (an earlier build woke it as `named`), an
-answer to your question does not, a follow-up in
-a thread where you owe an answer adds to an obligation you already have, a
-reply in a thread you follow does not, and neither does a reply in a thread you
-merely once spoke in: that last one is how a tracker fills with "noted,
-thanks".
+**Being named in a thread follows it.** A seat a message names (when posted, or by an edit adding the name) is woken by every later reply in that thread that asks something and names nobody else, so somebody asked a question hears its answer. The follow lasts while the thread still names them: an edit dropping the name, or a delete or erase of the naming message, takes it back unless another message in the thread names them. A colleague named by mistake costs one wake, not one per reply.
 
-**People are never woken.** A human seat is addressable and never runs a turn;
-what a person gets is an unread count, a mention feed and a live screen. A
-mention is not a notice in Worklet's inbox either: the inbox is
-Worklet's, and Chatlet keeps its own.
+**Which of those obliges a reply** is narrower: a direct message, a mention, a reply in a thread you started, a person's `@channel`, and the room's answerer. Not an agent's broadcast, not an agent's name that asks nothing (wakes no agent; not `named`), not an answer to your question, not a reply in a thread you follow, not a reply in a thread you merely once spoke in (that is how a tracker fills with "noted, thanks"). A follow-up in a thread where you owe an answer adds to an obligation you already have.
 
-**Activity's mentions list the moments you were named** (`chat_activity` with
-`kind: mention`), newest first, each once. An edit that still names you leaves
-the mention where it was, with the new words, because fixing a typo is not
-naming you again, and a feed that lifted it to the top would show you as news
-something you had already read. An edit that names you where the words before it did not *is* naming you:
-it arrives at the top, dated by the edit, and wakes a seat it names the same
-way. A delete takes the mention away, as an erase and a prune do: the room keeps
-a tombstone because a thread hangs off it, but a message taken back asks you
-nothing and has no words left to read.
+**People are never woken.** A human seat is addressable and never runs a turn; a person gets an unread count, a mention feed and a live screen. A mention is not a notice in Worklet's inbox: Chatlet keeps its own.
 
-**A seat woken in a thread is handed the thread.** The message that woke it
-arrives whole, and the conversation around it is read at the start of the turn,
-as that seat — so a private room answers only for its members — and put in
-front of it as [the thread so
-far](agent-runtime.md#the-thread-a-turn-was-woken-in): the root and the
-newest replies verbatim, the middle of a long thread condensed, under the one
-byte bound every chat surface shares. That read is the only copy of the
-thread a turn gets; the message's own record carries none, so one thread is
-never in a prompt twice. A seat on a node that holds no data reads it from a
-data node, like every other read it makes.
+**Activity's mentions list the moments you were named** (`chat_activity` with `kind: mention`), newest first, each once. An edit that still names you leaves the mention where it was, with the new words (a typo fix is not naming you again). An edit that names you where the words before did not *is* naming you: it arrives at the top, dated by the edit, and wakes a seat it names the same way. A delete takes the mention away, as an erase and a prune do: the room keeps a tombstone because a thread hangs off it, but a message taken back asks you nothing.
 
-**A seat that is working shows it.** While a woken seat's turn runs, the room
-shows it working — "is thinking…", then the phase it is in — and the line goes
-when the turn ends. `chat.chatlet.typing_status` decides when: `always` (the
-default) for every turn a message woke, `addressed` only where the message
-obliged an answer, the same two values and meaning as the vendor surfaces'
-setting. It is [presence](#presence-typing-and-the-working-indicator) rather
-than a record: raised on the node running the turn, because it is true for
-minutes and worthless the moment the turn is over. Every node raises the
-indicators its own seats hold, whether or not it serves the HTTP API, so a turn
-run on a `seats`-only member or on a node with `api.port: 0` shows in the room
-like any other.
+**A seat woken in a thread is handed the thread.** The waking message arrives whole, and the conversation around it is read at the start of the turn, as that seat (a private room answers only for its members) and put in front of it as [the thread so far](agent-runtime.md#the-thread-a-turn-was-woken-in): root and newest replies verbatim, the middle of a long thread condensed, under the one byte bound every chat surface shares. That read is the turn's only copy; the message's record carries none, so a thread is never in a prompt twice. A seat on a node holding no data reads it from a data node, like every other read.
 
-**A room stays live on a node whose own copy is out of service.** Every node
-that serves sockets hands each committed message to the screens watching its
-room. A node whose copy has gone out of service — an applier stopped on a
-record it cannot read — keeps doing so from a sound peer's batches, as it does
-for the inbox
-([Humans in the org chart](humans-in-the-org.md#how-a-person-learns-they-have-work)),
-and every switch between its own applier and a peer's asks every chat screen on
-it to read its rooms again, so a gap in what it heard is a re-read rather than
-a hole in the transcript. What the peer relays is signed under the fleet
-keyring and bound to the ask it answers, because it is shown as what somebody
-said: a relayed answer the fleet did not sign is passed over, and no screen
-sees it.
+**A seat that is working shows it.** While a woken seat's turn runs, the room shows it working ("is thinking…", then the phase) and the line goes when the turn ends. `chat.chatlet.typing_status` decides when: `always` (the default) for every turn a message woke, `addressed` only where the message obliged an answer (same values and meaning as the vendor surfaces' setting). It is [presence](#presence-typing-and-the-working-indicator), not a record: raised on the node running the turn, because it is true for minutes and worthless after. Every node raises the indicators its own seats hold, whether or not it serves the HTTP API, so a turn on a `seats`-only member or a node with `api.port: 0` shows in the room.
+
+**A room stays live on a node whose own copy is out of service.** Every node that serves sockets hands each committed message to the screens watching its room. A node whose copy is out of service (an applier stopped on a record it cannot read) keeps doing so from a sound peer's batches, as for the inbox ([Humans in the org chart](humans-in-the-org.md#how-a-person-learns-they-have-work)), and every switch between its own applier and a peer's asks every chat screen on it to re-read its rooms, so a gap is a re-read, not a hole. What the peer relays is signed under the fleet keyring and bound to the ask it answers; a relayed answer the fleet did not sign is passed over and no screen sees it.
 
 ## Presence, typing and the working indicator
 
-Who has a room open, who is typing in it and which seat is working on an answer
-there is the room's **presence**, and it is never a record: none of it is on
-the chat log, none of it is applied, and no backup carries it. A keystroke on
-the log would be a row every data node applies and keeps for as long as the
-room does, to say something nobody will ask about a minute later. A chat room's
-presence rides the one presence hub every kind of room shares
-([ADR-0038](../../adr/0038-presence-is-told-never-stored.md)), as an
-artifact's room does:
+Who has a room open, who is typing and which seat is working on an answer is the room's **presence**, never a record: none of it is on the chat log, applied, or in a backup (a keystroke on the log would be a row every data node keeps as long as the room). A chat room's presence rides the one presence hub every kind of room shares ([ADR-0038](../../adr/0038-presence-is-told-never-stored.md)), as an artifact's room does:
 
-- **A tab looks at one room at a time.** The room's screen sends a `presence`
-  frame naming the room (`room: "chat"`, `channel_id`), viewing, and that frame
-  is the join: the engine puts the socket in the room's presence once the
-  room's own visibility admits its reader — the rule every message is filtered
-  by — and takes it out of the room it was in. A room the reader may not see
-  puts them in nobody's presence and shows them nobody's, in the words a room
-  that does not exist gets. Leaving the screen sends an empty `channel_id`.
-- **Typing is editing.** While a person types, the screen re-asserts the frame
-  as editing at most every three seconds, and the engine puts a member nobody
-  re-asserted back to viewing after six, which is what clears the line under a
-  lid closed mid-word.
-- **A seat at work is a member too.** The working indicator is the seat's member
-  of the room's presence: an agent, editing, under the thread its answer will
-  land in, with the phrase the room shows beside its name and the run of the
-  turn, raised and withdrawn by the node running the turn.
-- **Who is told is decided per room and per reader.** A socket hears a room's
-  presence only while it is in the room, so a private room's presence reaches
-  its members and nobody else, and a record that narrows a room (a member
-  removed, a room made private) takes out of it every socket whose reader may
-  no longer see it, with a roster naming nobody so the screen empties rather
-  than standing. A gap in what a node heard — the same one that asks its
-  screens to read their rooms again — decides every socket in a room again,
-  since it may have held such a record.
-- **Between nodes, every frame is sealed.** The node holding a seat's turn and
-  the node holding a reader's socket are rarely the same one. Each node tells
-  its peers its own members' moves, in frames sealed under the fleet keyring in
-  a key domain of their own, and a node shows nobody a frame the fleet did not
-  seal — a frame forged by anybody who can reach the cluster port shows nobody
-  typing. A node that gains a room's first socket asks its peers once who is
-  there, and every node rebroadcasts its members every fifteen seconds, so a
-  member whose node went away is gone within forty-five.
+- **A tab looks at one room at a time.** The room's screen sends a `presence` frame naming the room (`room: "chat"`, `channel_id`), viewing; that frame is the join. The engine puts the socket in the room's presence once the room's visibility admits its reader (the rule every message is filtered by) and takes it out of the room it was in. A room the reader may not see puts them in nobody's presence and shows them nobody's, in the words a nonexistent room gets. Leaving the screen sends an empty `channel_id`.
+- **Typing is editing.** While a person types, the screen re-asserts the frame as editing at most every three seconds, and the engine puts a member nobody re-asserted back to viewing after six (clearing the line under a lid closed mid-word).
+- **A seat at work is a member too.** The working indicator is the seat's member of the room's presence: an agent, editing, under the thread its answer will land in, with the phrase shown beside its name and the turn's run, raised and withdrawn by the node running the turn.
+- **Who is told is decided per room and per reader.** A socket hears a room's presence only while in the room, so a private room's presence reaches its members only. A record that narrows a room (member removed, room made private) takes out every socket whose reader may no longer see it, with a roster naming nobody so the screen empties. A gap in what a node heard (the one that asks screens to re-read) decides every socket in a room again.
+- **Between nodes, every frame is sealed.** Each node tells its peers its own members' moves in frames sealed under the fleet keyring in a key domain of their own, and shows nobody a frame the fleet did not seal, so a forged frame shows nobody typing. A node gaining a room's first socket asks its peers once who is there, and every node rebroadcasts its members every fifteen seconds, so a member whose node went away is gone within forty-five.
 
-The socket's [`chat_presence`](../reference/api-endpoints.md#pushes) push
-is the room whole as the socket joins it and every change after.
+The socket's [`chat_presence`](../reference/api-endpoints.md#pushes) push is the room whole as the socket joins it and every change after.
 
 ## People
 
-A person in chat is somebody in the identity directory acting as their human
-seat ([Identity and Access](identity-and-access.md#a-person-holds-a-human-seat-and-acts-as-it)),
-holding the **`chatlet`** app
-([permissions](identity-and-access.md#access-admin-and-one-permission-per-app)).
-The session a password sign-in mints is how the dashboard reaches chat, and a
-person's own machine token
-([machine tokens](identity-and-access.md#machine-tokens-a-persons-own-and-a-service-accounts))
-is how their assistant or a shell does. Either way the room is read, and every
-message written, **as the seat**: a room shows each speaker by seat, its
-members are seats, and a private room's contents are its members'. So a
-message from the dashboard and the same person's assistant read identically —
-the seat's handle, author kind `human` — with the credential that made it
-(`session:…` or `pat:…`) recorded beside it, so an audit can still tell the two
-apart. **A caller can never name a seat to post as**, and a dashboard socket's
-seat is fixed for its life: a person moved to another seat, or whose `chatlet` is
-taken away, has their sockets closed, to reconnect as who they are now.
+A person in chat is somebody in the identity directory acting as their human seat ([Identity and Access](identity-and-access.md#a-person-holds-a-human-seat-and-acts-as-it)), holding the **`chatlet`** app ([permissions](identity-and-access.md#access-admin-and-one-permission-per-app)). A password sign-in's session is how the dashboard reaches chat; a person's own machine token ([machine tokens](identity-and-access.md#machine-tokens-a-persons-own-and-a-service-accounts)) is how their assistant or a shell does. Either way rooms are read and messages written **as the seat**: a room shows each speaker by seat, members are seats, a private room's contents are its members'. A dashboard message and the same person's assistant's read identically (the seat's handle, author kind `human`), with the credential (`session:…` or `pat:…`) recorded beside it for audit. **A caller can never name a seat to post as**, and a dashboard socket's seat is fixed for its life: a person moved to another seat, or whose `chatlet` is taken away, has their sockets closed, to reconnect as who they are now.
 
-**A credential acting as itself has no voice here.** The deployment's own Tier
-A token, or a service account bound to no seat, has no seat to speak as and no
-membership to read a room by, so every chat verb refuses it — reads included, a
-public room's too — `403 unauthorized` with reason `unseated`. That is the
-authority table's own row for each chat verb deciding, not a rule beside it:
-the act route refuses nobody for being unbound
-([ADR-0024](../../adr/0024-the-dashboard-acts-as-the-principal-its-session-resolves-to.md)),
-and chat's verbs are simply made as a seat. A pipeline that should post gets a
-human seat nobody holds, and its service account is bound to it
-(`crewlet iam bind`). The three gestures that [destroy](#retention) are the
-exception: they are said in nobody's voice, so an administrator's own
-credential may make them, with a recent proof, and each is recorded under
-whoever made it — a person's seat, or a credential's own login.
+**A credential acting as itself has no voice here.** The deployment's Tier A token, or a service account bound to no seat, has no seat to speak as or read by, so every chat verb refuses it, reads and a public room's included: `403 unauthorized` with reason `unseated`. That is the authority table's row for each chat verb, not a rule beside it: the act route refuses nobody for being unbound ([ADR-0024](../../adr/0024-the-dashboard-acts-as-the-principal-its-session-resolves-to.md)), and chat's verbs are made as a seat. A pipeline that should post gets a human seat nobody holds, and its service account is bound to it (`crewlet iam bind`). The three gestures that [destroy](#retention) are the exception: said in nobody's voice, an administrator's own credential may make them, with a recent proof, each recorded under whoever made it (a person's seat, or a credential's own login).
 
-**A seat's chat is the seat's, not the person's.** Everything a person has in
-chat is kept under the seat they hold: the rooms they are in, the direct
-conversations they are part of — whose identity is derived from the seats'
-handles — and their read state. So when a person moves to another seat, or
-leaves and somebody else is put on theirs, the seat's **next holder inherits
-its chat**: its memberships, its direct conversations, its read cursors, its
-mutes and its do-not-disturb, exactly as the seat's inbox, pins and personal
-views already follow it — whoever holds a seat next reads what accumulated on
-it ([ADR-0032](../../adr/0032-every-person-holds-a-human-seat.md)). The person
-who moved starts their new seat with that seat's chat. Moderation follows
-nobody's seat: a delete of somebody else's words is the administrator's,
-whichever seat they hold.
+**A seat's chat is the seat's, not the person's.** Rooms, direct conversations (identity derived from seat handles) and read state are kept under the seat. When a person moves seat, or leaves and somebody else takes theirs, the seat's **next holder inherits its chat**: memberships, direct conversations, read cursors, mutes and do-not-disturb, as the seat's inbox, pins and personal views follow it ([ADR-0032](../../adr/0032-every-person-holds-a-human-seat.md)). The person who moved starts their new seat with that seat's chat. Moderation follows nobody's seat: a delete of somebody else's words is the administrator's, whichever seat they hold.
 
-**Read state** — how far each seat has read in each room, what it has muted,
-and whether its person is in do-not-disturb — lives in
-[coordination](coordination.md) rather than on the log. A cursor is a fact
-about one reader's attention that nobody replays, and at a realistic flush
-rate it would otherwise be the highest-volume thing the company writes. It has
-no expiry, because an expired cursor would mark a room its reader had finished
-as unread; a seat's read state is forgotten instead
-[24 hours after the seat leaves the org chart](seat-ownership.md#the-removed-seat),
-the same grace a removed seat's mailbox gets, and kept if the seat is restored
-before then. It is written through the operator surface's `mark_chat_read`,
-like every other gesture the dashboard makes, and every node that serves
-sockets **watches** those records, so a flush that lands is pushed to that
-seat's open screens wherever they are attached — derived from the record
-itself, so there is no message for a peer to forge, and a second tab on
-another ingress node clears its badge with the first. Each pushed state carries
-the revision the record stands at, and a screen keeps the highest, so two
-flushes whose pushes arrive out of order cannot put an older state back. A
-flush whose answer was lost may have landed: it answers `unknown`, which is
-safe to repeat because a cursor only moves forward, and the watch pushes the
-record as it stands, so the other screens show it whichever way the write
-went. A mute is a room at a time rather than a list: a flush mutes or unmutes
-the rooms it names and every other keeps its state, so a screen mutes the room
-it is on without first reading what else is muted, and two tabs muting two
-different rooms at once both land. The same surface's `list_channels` counts
-each room's unread room posts against it (a reply is read in its thread, so it
-does not badge the room), and how many of those name the person or the whole
-room (`@channel`), and marks the rooms the seat muted and
-a do-not-disturb its person is in, so their own assistant sees what the
-dashboard's badges show; a read state that cannot be read is said rather than
-counted from zero, which would call every room unread.
+**Read state** (how far each seat has read in each room, what it muted, whether its person is in do-not-disturb) lives in [coordination](coordination.md), not on the log: a cursor is one reader's attention that nobody replays, and at a realistic flush rate it would be the highest-volume thing the company writes. It has no expiry (an expired cursor would mark a finished room unread); a seat's read state is forgotten [24 hours after the seat leaves the org chart](seat-ownership.md#the-removed-seat), the grace a removed seat's mailbox gets, and kept if the seat is restored before then.
 
+It is written through the operator surface's `mark_chat_read`, like every dashboard gesture, and every node that serves sockets **watches** those records, so a flush that lands is pushed to the seat's open screens wherever attached. It is derived from the record itself (no message for a peer to forge), and a second tab on another ingress node clears its badge with the first. Each pushed state carries the revision the record stands at and a screen keeps the highest, so out-of-order pushes cannot restore an older state. A flush whose answer was lost may have landed: it answers `unknown`, safe to repeat because a cursor only moves forward, and the watch pushes the record as it stands. A mute is per room, not a list: a flush mutes or unmutes the rooms it names and every other keeps its state, so a screen mutes its room without reading what else is muted, and two tabs muting two rooms both land.
+
+The same surface's `list_channels` counts each room's unread room posts (a reply is read in its thread, so does not badge the room), how many name the person or the whole room (`@channel`), and marks the seat's muted rooms and a do-not-disturb its person is in, so their assistant sees what the dashboard's badges show. A read state that cannot be read is said, not counted from zero, which would call every room unread.
 ## What a reader keeps
 
-Beside how far they have read, a person keeps a few marks of their own in
-chat, and each is kept exactly where their read state is: in
-[coordination](coordination.md), under the seat they hold, so it passes to
-whoever holds the seat next and reaches every tab of theirs through the same
-push a read cursor does. None of it is on the chat log and none of it changes
-anything for anybody else.
+A person keeps a few marks of their own in chat, stored with their read state: in
+[coordination](coordination.md), under the seat they hold. They pass to the next
+holder of the seat and reach every tab through the same push as a read cursor.
+None is on the chat log or affects anybody else.
 
 - **How a room reaches them.** Every message, mentions only (the default) or
-  muted. A person is never woken, so the level decides what their own screens
-  raise for the room and nothing else; it is not the membership's
-  `follow_all`, which is the wake policy for a seat and is the org chart's in a
-  unit's room.
-- **Starred rooms**, which their screens list first.
-- **Saved messages**, kept for later. A save names its room and its message,
-  and the message is shown only in that room and only while they may read it:
-  one taken back, erased, pruned by the room's horizon or in a room they have
-  left is listed as gone, and the save stays until they let it go.
+  muted. A person is never woken, so the level only decides what their own
+  screens raise; it is not the membership's `follow_all`, the wake policy for a
+  seat (the org chart's in a unit's room).
+- **Starred rooms**, listed first on their screens.
+- **Saved messages.** A save names its room and message. The message shows only
+  in that room and only while they may read it: one taken back, erased, pruned by
+  the room's horizon or in a room they left is listed as gone, and the save stays
+  until they let it go.
 - **Threads followed or unfollowed by hand.** A thread they started, replied in
   or were named in is followed without a mark. A mark decides either way: an
-  unfollow keeps a thread they spoke in quiet, and a follow takes in one they
-  never spoke in. Replying again does not undo an unfollow by itself; the
-  dashboard follows the thread again when they reply in it.
-- **A place per thread.** Reading a room does not open its threads, so a reply
-  is new to them while it is above both the room's place and the thread's own.
-- **Mark unread.** A place only moves forward, so two tabs flushing at once can
-  never move it back; setting a room's place back before a message is the one
-  deliberate exception, made exactly where it is asked.
+  unfollow quiets a thread they spoke in, a follow takes in one they never spoke
+  in. Replying again does not undo an unfollow; the dashboard follows the thread
+  again when they reply in it.
+- **A place per thread.** Reading a room does not open its threads, so a reply is
+  new to them while it is above both the room's place and the thread's own.
+- **Mark unread.** A place only moves forward, so two tabs flushing at once never
+  move it back; setting a room's place back before a message is the one
+  exception, made where asked.
 
-Each mark is named on its own, never as the whole list, so two tabs marking
-two things at once both land. A person may star 256 rooms, set 256 rooms to
-every message and save 256 messages; one more is refused rather than dropping
-an older one silently. Thread marks are bounded at 256 too, and past that the
-mark made longest ago goes, because every unfollow leaves one and a cap that
-refused would keep somebody in a thread they asked to leave. Every mark is
+Each mark is named on its own, never as the whole list, so two tabs marking two
+things at once both land. A person may star 256 rooms, set 256 rooms to every
+message and save 256 messages; one more is refused. Thread marks are bounded at
+256 too, but past that the oldest mark goes: every unfollow leaves one, and a cap
+that refused would keep somebody in a thread they asked to leave. Every mark is
 written through `mark_chat_read`, as a read cursor is.
 
-From those marks and the conversation, each reader has views of their own,
-each over the rooms they may read and nothing else:
+From those marks and the conversation, each reader has views of their own, each
+over the rooms they may read only:
 
-- **Activity**: the moments they were named (or the whole of a room they are
-  in was), the replies in the threads they follow, and the reactions to their
-  messages, newest first. A mention or a reply is unread above their places
-  for it, the same measure the room's own badge counts, and each row carries
-  the position that marks it read. A reaction asks nothing of anybody and is
-  never unread.
-- **Threads**: the threads they follow, the one with the newest reply first,
-  each with its root and its newest replies.
-- **Saved** and **Sent**: what they kept for later, and what they said in
-  every room they may still read.
+- **Activity**: the moments they were named (or the whole of a room they are in
+  was), replies in threads they follow, and reactions to their messages, newest
+  first. A mention or reply is unread above their places for it, the measure the
+  room's badge counts; each row carries the position that marks it read. A
+  reaction is never unread.
+- **Threads**: threads they follow, newest reply first, each with its root and
+  newest replies.
+- **Saved** and **Sent**: what they saved, and what they said in every room they
+  may still read.
 - **Shared in a room**: every link the room's messages carried, newest first,
   with who shared it and when.
 - **Link previews**: a link to one of this dashboard's own tasks, pages or
-  artifacts is drawn as that record, read as the reader so that one they may
-  not open is a plain link, and a link to a pull request in the company's own
-  code on GitHub is drawn with its title and state
+  artifacts is drawn as that record, read as the reader (one they may not open is
+  a plain link); a link to a pull request in the company's own code on GitHub is
+  drawn with its title and state
   ([what that discloses](../integrations/github.md#pull-request-previews-in-chat)).
-- **One message in place**: a message by its id, with its thread's root and
-  the replies just before it, which is how Activity and Saved open one where
-  it was said.
+- **One message in place**: a message by id, with its thread's root and the
+  replies just before it; how Activity and Saved open one where it was said.
 
 ## Search
 
-Chatlet has its own keyword index, separate from Doclet's, and **no
-semantic search at all**
+Chatlet has its own keyword index, separate from Doclet's, and **no semantic
+search at all**
 ([ADR-0071](../../adr/0071-chat-is-a-keyword-corpus-and-takes-no-vectors.md)).
 
-Both halves of that are deliberate. A message is a remark about work rather
-than a statement of it — the same argument that keeps a work item's comment
-thread out of the knowledge index — so mixing the corpora would let one busy
-conversation outrank every page written on purpose. And embedding a year of
-chat needs several times the entire supported vector corpus, against a budget
-shared with every other corpus a company has.
+Why: a message is a remark about work, not a statement of it (the argument that
+keeps a work item's comments out of the knowledge index), so mixing corpora would
+let one busy conversation outrank every page written on purpose. And embedding a
+year of chat needs several times the entire supported vector corpus, against a
+budget shared with every other corpus.
 
-The index is tuned for the corpus it serves: a chat corpus is bimodal,
-one-line acknowledgements beside pasted blocks, and Doclet's length
-normalisation would hand every query to whoever typed the shortest reply.
+The index is tuned for a bimodal corpus, one-line acknowledgements beside pasted
+blocks; Doclet's length normalisation would hand every query to whoever typed the
+shortest reply.
 
-**A search is answered for its asker.** The rooms it ranks over are the rooms
-that seat may read, worked out by the node that ranks it in the same step, and
-a hit is scored by those rooms' own statistics — so how often a word is said in
-a room you cannot read never moves your ranking. An answer says how many rooms
-it searched, and one from an index still being built says so rather than
-reading as nothing said.
+**A search is answered for its asker.** It ranks over the rooms that seat may
+read, worked out by the ranking node in the same step, and a hit is scored by
+those rooms' own statistics, so how often a word is said in a room you cannot
+read never moves your ranking. An answer says how many rooms it searched, and one
+from an index still being built says so rather than reading as nothing said.
 
-Every data node keeps the index beside its copy of the rooms. A node that holds
-no data keeps neither, and a seat's `search_messages` there is answered by a
-data node — as is any search on a data node whose own copy is out of service.
-A query is at most 400 bytes, the bound every ranked search in the engine
-shares, and a longer one is refused rather than cut.
+Every data node keeps the index beside its copy of the rooms. A node with no data
+keeps neither: a seat's `search_messages` there is answered by a data node, as is
+any search on a data node whose own copy is out of service. A query is at most
+400 bytes, the bound every ranked search shares; a longer one is refused, not
+cut.
 
 ## Retention
 
-Chat is the highest-volume thing the engine stores, and its rows sit in the
-replicated estate that every snapshot copies and every rejoining node
-transfers. So, like each data node's usage days, it keeps its rows to a
-**content horizon** — and unlike theirs, which is fixed, this one is the
-company's to set:
+Chat is the highest-volume thing the engine stores, in the replicated estate
+every snapshot copies and every rejoining node transfers. So, like each data
+node's usage days, it keeps its rows to a **content horizon**, which unlike
+theirs is the company's to set:
 
 ```yaml
 chat:
@@ -725,65 +264,64 @@ chat:
     message_retention_days: 365   # the default; 0 keeps everything for ever
 ```
 
-A room may carry a horizon of its own, which beats the company's, and setting
-one is an administrator's, because a shorter horizon is a prune on a delay. The
-sweep is a **record**, not a local delete: a fleet-singleton duty
-(`chat-prune`) publishes a cutoff and every data node deletes exactly the same
-rows, because the instant on a message is the broker's rather than a clock each
-node reads for itself.
+A room may carry a horizon of its own, which beats the company's; setting one is
+an administrator's, because a shorter horizon is a prune on a delay. The sweep is
+a **record**, not a local delete: a fleet-singleton duty (`chat-prune`) publishes
+a cutoff and every data node deletes exactly the same rows, because a message's
+instant is the broker's, not a clock each node reads.
 
 The duty prunes only by the horizon of the revision the fleet's
 [activation pointer](control-plane.md#the-company-and-what-each-node-keeps-of-it)
-names, and only on a node that runs that very revision. A node still serving
-another one, because it refused the fleet's revision or booted on an offline
-import the fleet has not taken, publishes no cutoff and does not claim the
-duty, so a node that runs the fleet's revision takes it over. A horizon is
-enforced late rather than early: an hour missed is pruned on the next tick,
-and a message pruned by a horizon the company has since raised, or set to `0`,
-is gone from every data node for good.
+names, and only on a node running that revision. A node serving another one
+(it refused the fleet's revision, or booted on an offline import the fleet has
+not taken) publishes no cutoff and does not claim the duty, so a node running the
+fleet's revision takes it over. A horizon is enforced late, never early: an hour
+missed is pruned on the next tick, and a message pruned by a horizon the company
+has since raised, or set to `0`, is gone from every data node for good.
 
-The number is an operational decision as much as a compliance one. Keeping
-everything is supported and costs disk on every data node, in every backup, and
-in the time it takes a new node to join.
+Keeping everything is supported and costs disk on every data node, in every
+backup, and in the time a new node takes to join.
 
-When waiting out the horizon is not an answer, two gestures act now, and
-neither has an inverse. A **credential pasted into a message** is
-[`crewlet chatlet erase`](../reference/cli.md#crewlet-chatlet-erase)'s: it destroys
-exactly the messages named, on every data node, and leaves the conversation
-around them standing. An **erasure request** covering a room's history is
-[`crewlet chatlet prune`](../reference/cli.md#crewlet-chatlet-prune)'s: it publishes
-the duty's own cutoff now, for one room, and everything the room said before
-that instant goes. Both, and a room's own horizon, are routes of the
+When waiting out the horizon is no answer, two gestures act now, and neither has
+an inverse:
+
+- A **credential pasted into a message**:
+  [`crewlet chatlet erase`](../reference/cli.md#crewlet-chatlet-erase) destroys
+  exactly the messages named, on every data node, and leaves the conversation
+  around them standing.
+- An **erasure request** covering a room's history:
+  [`crewlet chatlet prune`](../reference/cli.md#crewlet-chatlet-prune) publishes
+  the duty's own cutoff now, for one room, and everything the room said before
+  that instant goes.
+
+Both, and a room's own horizon, are routes of the
 [human write surface](../reference/api-endpoints.md#a-chat-erase-prune-or-horizon):
 `admin`, with
 [a recent proof](identity-and-access.md#some-gestures-ask-how-recently-you-proved-who-you-are),
-and never a seat. None of them reads the room first, so an administrator takes
-a credential out of a private room they are not in without being shown the
-rest of it. Listing the rooms, reading one, posting as yourself and searching
-are the rest of `crewlet chatlet`, and all of it is in the
-[CLI reference](../reference/cli.md#crewlet-chatlet).
+never a seat. None reads the room first, so an administrator can take a
+credential out of a private room they are not in without seeing the rest. Listing
+rooms, reading one, posting as yourself and searching are the rest of
+`crewlet chatlet`, all in the [CLI reference](../reference/cli.md#crewlet-chatlet).
 
 In the dashboard an administrator finds the same three on a room they can open:
 the room's horizon and **Delete older messages** in its details (About), and
-**Erase for good** in a message's More. Each asks in the page before it is
-sent, the horizon and the prune with what they destroy typed back and the erase
-with its reason, and the request carries the confirmation the route checks.
-Archiving a room, or opening it again, sits beside them for the room's creator,
-its team's lead and an administrator, and is held with that sentence for
-anybody else.
+**Erase for good** in a message's More. Each asks in the page first (horizon and
+prune with what they destroy typed back, erase with its reason), and the request
+carries the confirmation the route checks. Archiving or reopening a room sits
+beside them for the room's creator, its team's lead and an administrator, and is
+held with that sentence for anybody else.
 
 ## Who may do what
 
-One table decides every chat gesture, for a seat's own tools, the dashboard
-and a person's assistant alike. Chatlet is one **app**, and the permission that
-uses it is `chatlet`: every agent seat holds it, and a person holds it when an
-administrator ticks it. **Every chat verb is made as a seat** — the reads
-included — so beside the app each asks that the caller acts as one. *Which
-room* is the chat domain's own rule rather than a permission: a public room
-and a unit's room are every seat's to read, a private room and a direct
-conversation their members', and a room you may not read answers exactly as a
-room that does not exist. No permission widens that: `admin` reads no room it
-is not in.
+One table decides every chat gesture, for a seat's own tools, the dashboard and a
+person's assistant alike. Chatlet is one **app**, and its permission is
+`chatlet`: every agent seat holds it, and a person holds it when an administrator
+ticks it. **Every chat verb is made as a seat**, reads included, so each asks that
+the caller acts as one. *Which room* is the chat domain's own rule, not a
+permission: a public room and a unit's room are every seat's to read, a private
+room and a direct conversation their members'; a room you may not read answers
+exactly as one that does not exist. No permission widens that: `admin` reads no
+room it is not in.
 
 | Gesture | Who may |
 |---|---|
@@ -802,27 +340,24 @@ is not in.
 
 Two gaps, stated rather than discovered:
 
-**No file attachments.** A message carries links, and the file a link points
-at lives somewhere built for files. Bytes on the chat log would be copied to
-every data node, kept for the log's whole replay window and replayed by every
-data node that joins — a file every member stores for good. The company's own
-files have a home made for them instead, the [object store](object-store.md),
-where a file has a path somebody can find it by and a collector that frees its
-bytes once nothing names them; a message links to one of those, or to a page, a
-work item or anything else with an address. A message that named a stored object
-itself would be a second owner of that file's lifetime, which every prune and
-every erase would then have to release on every data node, in step — and this
-build has none of that, so a message names no object.
+**No file attachments.** A message carries links, and the file lives somewhere
+built for files. Bytes on the chat log would be copied to every data node, kept
+for the log's whole replay window and replayed by every joining node. Company
+files have a home, the [object store](object-store.md), where a file has a path
+and a collector frees its bytes once nothing names them; a message links to one
+of those, or to a page, a work item or anything else with an address. A message
+naming a stored object would be a second owner of its lifetime, which every prune
+and erase would have to release on every data node in step; this build has none
+of that, so a message names no object.
 
-**No notification when you are away.** There is no email, no push and no SMS —
-the engine has never sent anything as itself. A person learns they were
-mentioned when they next open the dashboard. This is the largest difference
-from a commercial chat product and it is the one most worth knowing before you
-choose the axis.
+**No notification when you are away.** No email, push or SMS; the engine has
+never sent anything as itself. A person learns they were mentioned when they next
+open the dashboard. This is the largest difference from a commercial chat product
+and the one most worth knowing before you choose the axis.
 
 ## Migrating
 
-Because the axis is exclusive, the cutover is a flip rather than an overlap.
-The old workspace stays readable in its own product for as long as you keep it.
-There is no importer: the engine does not replay another product's archive into
-Chatlet rooms.
+Because the axis is exclusive, the cutover is a flip, not an overlap. The old
+workspace stays readable in its own product for as long as you keep it. There is
+no importer: the engine does not replay another product's archive into Chatlet
+rooms.

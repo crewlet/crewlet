@@ -258,6 +258,8 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"agent": "everybody", "live_call": "everybody", "tokens": "everybody",
 		"token_series": "everybody", "seat_activity": "everybody", "turn_outcomes": "everybody",
 		"viewer": "everybody", "schedule_runs": "everybody",
+		// THE ASKER'S OWN HOME BOARD, read under their seat and nobody else's.
+		"home_board": "everybody",
 		// WHAT A PAGE'S LINES NAME: each reference is decided by the
 		// question its own page asks, so the ask itself grants nothing.
 		"references": "everybody",
@@ -281,7 +283,7 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 
 		"events": "admin", "event_series": "admin", "event": "admin",
 		"trace": "admin", "turn": "admin", "fleet": "admin",
-		"backups": "admin", "fleet_broker": "admin", "issue_reports": "admin", "advisor_findings": "admin", "advisor_finding": "admin", "advisor_run": "admin", "advisor_notices": "admin", "advisor_reports": "admin", "advisor_report": "admin", "advisor_access": "admin", "go_live_review": "admin",
+		"backups": "admin", "fleet_broker": "admin", "issue_reports": "admin", "advisor_findings": "admin", "advisor_finding": "admin", "advisor_run": "admin", "advisor_notices": "admin", "advisor_reports": "admin", "advisor_report": "admin", "advisor_snapshot": "admin", "advisor_capacity": "admin", "advisor_access": "admin", "go_live_review": "admin",
 		"diagnostics_insights": "admin",
 		"integrations":         "admin", "retention": "admin", "a2a_channels": "admin",
 		"config": "admin", "config_audit": "admin", "config_diff": "admin",
@@ -331,6 +333,9 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		// AND WHAT A RULE CAN NAME FROM THE COMPANY'S GITHUB: the
 		// administrator's, who writes the rule into the document.
 		"delegated_repositories": "admin", "delegated_branches": "admin", "delegated_checks": "admin",
+		// WHAT AGENTS CHANGED ON THE GROWTH ACCOUNTS, the company-wide
+		// trail's (ADR-0171).
+		"growth_changes": "decided_by:" + string(authz.ActionAuditRead),
 
 		// THE ARTIFACTS: the listing and the folder tree are everybody's and
 		// filtered row by row and folder by folder;

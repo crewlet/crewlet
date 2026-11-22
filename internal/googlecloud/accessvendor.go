@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/words"
@@ -156,7 +157,7 @@ func (v accessVendor) Open(_ context.Context, in seataccess.OpenInput) (seatacce
 
 // open is [accessVendor.Open] with the transport and clock a test supplies;
 // nil takes the defaults.
-func (accessVendor) open(in seataccess.OpenInput, hc *http.Client, clk *clock) (seataccess.Session, error) {
+func (accessVendor) open(in seataccess.OpenInput, hc *http.Client, clk *googleauth.Clock) (seataccess.Session, error) {
 	if in.Config == nil {
 		return nil, fmt.Errorf("googlecloud: %w: no company document", integration.ErrNotConfigured)
 	}
@@ -166,46 +167,26 @@ func (accessVendor) open(in seataccess.OpenInput, hc *http.Client, clk *clock) (
 		return nil, err
 	case err != nil:
 		return nil, &seataccess.Refusal{
-			Said: "Google Cloud: " + err.Error(), Actor: seataccess.ByYou, ActionURL: ProvidersURL,
+			Said: "Google Cloud: " + googleauth.Sentence(err), Actor: seataccess.ByYou, ActionURL: ProvidersURL,
 			Remedy: "Correct the value it names on the Google Cloud connection",
 		}
 	}
 	if clk != nil {
-		client.clock = *clk
+		client.setClock(*clk)
 	}
 	return &accessSession{client: client, company: in.Config.Name}, nil
 }
 
-// ClientFor is the provisioner's client for company, from its document as env
-// resolves it. An error wrapping [integration.ErrNotConfigured] is a company
-// that does not provision Google Cloud yet: the block absent or off, or its
-// provider or key not set or not resolving. Any other error names the value
-// that is wrong. hc is nil in production.
+// ClientFor is the provisioner's client for company, from its document as
+// env resolves it ([googleauth.For]). An error wrapping
+// [integration.ErrNotConfigured] is a company without the Google identity, or
+// one whose values do not resolve.
 func ClientFor(c *config.Company, env *config.Resolver, hc *http.Client) (*Client, error) {
-	if c == nil || c.Integrations.GoogleCloud == nil || !c.Integrations.GoogleCloud.Enabled ||
-		c.Integrations.GoogleCloud.Provisioning == nil {
-		return nil, fmt.Errorf("googlecloud: %w: integrations.google_cloud is off or has no provisioning block",
-			integration.ErrNotConfigured)
+	auth, err := googleauth.For(c, env, hc)
+	if err != nil {
+		return nil, err
 	}
-	if env == nil {
-		return nil, fmt.Errorf("googlecloud: %w: nothing resolves the federation key", integration.ErrNotConfigured)
-	}
-	prov := c.Integrations.GoogleCloud.Provisioning
-	values := map[string]string{
-		"provisioner":    strings.TrimSpace(env.Value(prov.Provisioner)),
-		"provider":       strings.TrimSpace(env.Value(prov.Provider)),
-		"federation_key": strings.TrimSpace(env.Value(prov.FederationKey)),
-	}
-	for _, field := range []string{"provisioner", "provider", "federation_key"} {
-		if values[field] == "" {
-			return nil, fmt.Errorf("googlecloud: %w: integrations.google_cloud.provisioning.%s is not set or "+
-				"did not resolve", integration.ErrNotConfigured, field)
-		}
-	}
-	return NewClient(ClientOptions{
-		Company: c.Name, Provisioner: values["provisioner"], Provider: values["provider"],
-		FederationKey: values["federation_key"], HTTP: hc,
-	})
+	return &Client{auth: auth}, nil
 }
 
 // accessSession is one pass's connection to Google as the provisioner.
@@ -295,9 +276,9 @@ func (s *accessSession) Observe(ctx context.Context, in seataccess.ObserveInput)
 		switch {
 		case err != nil && ctx.Err() != nil:
 			return nil, ctx.Err()
-		case err != nil && isStage(err):
+		case err != nil && googleauth.IsStage(err):
 			// THE PROVISIONER IS UNREACHABLE, which is every seat's read alike.
-			return nil, fmt.Errorf("googlecloud: read %s's service account: %w", handle, reject(err))
+			return nil, fmt.Errorf("googlecloud: read %s's service account: %w", handle, googleauth.Reject(err))
 		case err != nil:
 			faults[handle] = err
 			continue
@@ -319,12 +300,12 @@ func (s *accessSession) Observe(ctx context.Context, in seataccess.ObserveInput)
 func (s *accessSession) observe(ctx context.Context, rec seataccess.Record) (seataccess.Observed, error) {
 	settled := lastWrite(rec).Add(observeBudget)
 	var got seataccess.Observed
-	_, err := s.client.clock.awaitObserved(ctx, readLastWrites, func() (bool, error) {
+	_, err := awaitObserved(ctx, s.client.clock(), readLastWrites, func() (bool, error) {
 		var err error
 		if got, err = s.read(ctx, rec); err != nil {
 			return true, err
 		}
-		return !s.client.clock.now().Before(settled) || agrees(rec, got), nil
+		return !s.client.clock().Now().Before(settled) || agrees(rec, got), nil
 	})
 	if _, settling := SettlingReason(err); settling {
 		return got, nil
@@ -454,7 +435,7 @@ func (s *accessSession) bound(ctx context.Context, email string, recorded []stri
 	for _, project := range slices.Compact(projects) {
 		pol, err := s.client.ProjectPolicy(ctx, project)
 		switch {
-		case err != nil && (isStage(err) || slices.Contains(recorded, project)):
+		case err != nil && (googleauth.IsStage(err) || slices.Contains(recorded, project)):
 			return nil, fmt.Errorf("googlecloud: read the policy of %s: %w", project, err)
 		case err != nil:
 			continue
@@ -550,16 +531,16 @@ func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (se
 // until it reads back. Its token grant and its roles are the op's next steps.
 func (s *accessSession) create(ctx context.Context, in seataccess.ApplyInput) (seataccess.StepResult, error) {
 	id := AccountID(s.company, in.Seat.Handle)
-	email := AccountEmail(id, s.client.IdentityProject())
+	email := googleauth.AccountEmail(id, s.client.IdentityProject())
 	sa, err := s.client.CreateServiceAccount(ctx, id, displayName(s.company, in.Seat.Handle),
 		description(s.company, in.Seat.Handle))
-	made := s.client.clock.now()
+	made := s.client.clock().Now()
 	switch {
-	case Status(err) == http.StatusConflict && recordedAs(in.Record, email):
+	case googleauth.Status(err) == http.StatusConflict && recordedAs(in.Record, email):
 		// THE ACCOUNT THIS SEAT HAD, still being deleted at Google: the
 		// next pass makes the new one once the old has gone.
 		return seataccess.StepResult{}, &Settling{What: string(readDeleted), Reason: ReasonCreating, Last: err}
-	case Status(err) == http.StatusConflict:
+	case googleauth.Status(err) == http.StatusConflict:
 		return seataccess.StepResult{}, &seataccess.Refusal{
 			Said: "Google Cloud: a service account " + email + " already exists, and Crewlet has no record of making it",
 			Remedy: "Nothing is adopted by its name. Delete it in the identity project if nobody uses it, " +
@@ -569,7 +550,7 @@ func (s *accessSession) create(ctx context.Context, in seataccess.ApplyInput) (s
 	case err != nil:
 		return seataccess.StepResult{}, s.refused(err, "")
 	}
-	if _, err := s.client.clock.awaitObserved(ctx, readCreated, func() (bool, error) {
+	if _, err := awaitObserved(ctx, s.client.clock(), readCreated, func() (bool, error) {
 		_, found, err := s.client.ServiceAccount(ctx, sa.UniqueID)
 		return found || (err != nil && !gone(err)), err
 	}); err != nil {
@@ -590,24 +571,24 @@ func recordedAs(rec *seataccess.Record, email string) bool {
 // waits on it.
 func (s *accessSession) delegate(ctx context.Context, sa ServiceAccount, w *writes) error {
 	prov := member(s.client.Provisioner())
-	if _, err := s.client.clock.awaitObserved(ctx, readDelegated, func() (bool, error) {
+	if _, err := awaitObserved(ctx, s.client.clock(), readDelegated, func() (bool, error) {
 		wrote := false
 		err := s.client.EditAccountPolicy(ctx, sa.Email, func(p *Policy) bool {
 			wrote = grant(p, prov, []string{tokenCreator})
 			return wrote
 		})
-		switch Status(err) {
+		switch googleauth.Status(err) {
 		case http.StatusNotFound, http.StatusBadRequest, http.StatusConflict:
 			return false, err
 		}
 		if err == nil && wrote {
-			w.note(true, s.client.clock.now())
+			w.note(true, s.client.clock().Now())
 		}
 		return true, err
 	}); err != nil {
 		return s.refused(err, "")
 	}
-	_, err := s.client.clock.awaitObserved(ctx, readDelegated, func() (bool, error) {
+	_, err := awaitObserved(ctx, s.client.clock(), readDelegated, func() (bool, error) {
 		ok, err := s.delegated(ctx, sa.Email)
 		return ok || err != nil, err
 	})
@@ -745,7 +726,7 @@ func (s *accessSession) converge(
 		target = append(target, granted...)
 		slices.Sort(target)
 		target = slices.Compact(target)
-		if _, err := s.client.clock.awaitObserved(ctx, readBindings, func() (bool, error) {
+		if _, err := awaitObserved(ctx, s.client.clock(), readBindings, func() (bool, error) {
 			pol, err := s.client.ProjectPolicy(ctx, project)
 			if err != nil {
 				return true, err
@@ -794,14 +775,14 @@ func (s *accessSession) writeList(
 	write := func() error {
 		err := s.client.EditProjectPolicy(ctx, project, edit)
 		if err == nil && wrote {
-			w.note(on, s.client.clock.now())
+			w.note(on, s.client.clock().Now())
 		}
 		return err
 	}
 	if !on {
 		return s.refused(write(), project)
 	}
-	_, err := s.client.clock.awaitObserved(ctx, readGrantable, func() (bool, error) {
+	_, err := awaitObserved(ctx, s.client.clock(), readGrantable, func() (bool, error) {
 		err := write()
 		return !accountNotYet(err, email), err
 	})
@@ -821,7 +802,7 @@ func (s *accessSession) enable(ctx context.Context, in seataccess.ApplyInput) (s
 			if err := s.client.EnableServiceAccount(ctx, sa.Email); err != nil {
 				return seataccess.StepResult{}, s.refused(err, "")
 			}
-			w.note(false, s.client.clock.now())
+			w.note(false, s.client.clock().Now())
 			if err := s.awaitDisabled(ctx, sa.UniqueID, false); err != nil {
 				return seataccess.StepResult{}, err
 			}
@@ -852,15 +833,20 @@ func (s *accessSession) disable(ctx context.Context, in seataccess.ApplyInput) (
 
 // awaitDisabled waits until the account reads back disabled, or enabled.
 func (s *accessSession) awaitDisabled(ctx context.Context, uid string, disabled bool) error {
+	return s.refused(awaitDisabled(ctx, s.client, uid, disabled), "")
+}
+
+// awaitDisabled waits until c reads the account back disabled, or enabled.
+func awaitDisabled(ctx context.Context, c *Client, uid string, disabled bool) error {
 	what := readEnabled
 	if disabled {
 		what = readDisabled
 	}
-	_, err := s.client.clock.awaitObserved(ctx, what, func() (bool, error) {
-		sa, found, err := s.client.ServiceAccount(ctx, uid)
+	_, err := awaitObserved(ctx, c.clock(), what, func() (bool, error) {
+		sa, found, err := c.ServiceAccount(ctx, uid)
 		return err != nil || (found && sa.Disabled == disabled), err
 	})
-	return s.refused(err, "")
+	return err
 }
 
 // remove takes any role the account still holds, deletes it, and waits until
@@ -884,7 +870,7 @@ func (s *accessSession) remove(ctx context.Context, in seataccess.ApplyInput) (s
 	if err := s.client.DeleteServiceAccount(ctx, sa.Email); err != nil {
 		return seataccess.StepResult{}, s.refused(err, "")
 	}
-	if _, err := s.client.clock.awaitObserved(ctx, readDeleted, func() (bool, error) {
+	if _, err := awaitObserved(ctx, s.client.clock(), readDeleted, func() (bool, error) {
 		_, found, err := s.client.ServiceAccount(ctx, uid)
 		return err != nil || !found, err
 	}); err != nil {
@@ -920,7 +906,7 @@ func (s *accessSession) withAccount(
 	var sa ServiceAccount
 	var found bool
 	fresh := in.Step.Op == seataccess.OpCreate
-	_, err := s.client.clock.awaitObserved(ctx, readCreated, func() (bool, error) {
+	_, err := awaitObserved(ctx, s.client.clock(), readCreated, func() (bool, error) {
 		var err error
 		sa, found, err = s.client.ServiceAccount(ctx, uid)
 		return found || err != nil || !fresh, err
@@ -966,15 +952,15 @@ func (s *accessSession) refused(err error, project string) error {
 	if _, ok := errors.AsType[*Settling](err); ok {
 		return err
 	}
-	if st, ok := errors.AsType[*stageError](err); ok && errors.Is(reject(err), integration.ErrCredentialRejected) {
+	if st, ok := errors.AsType[*googleauth.StageError](err); ok && errors.Is(googleauth.Reject(err), integration.ErrCredentialRejected) {
 		return &seataccess.Refusal{
-			Said: "Google Cloud: Crewlet's provisioner was refused at " + string(st.stage) + ": " + st.err.Error(),
+			Said: "Google Cloud: Crewlet's provisioner was refused at " + string(st.Stage) + ": " + st.Err.Error(),
 			Remedy: "Run the Cloud Shell block on the Google Cloud connection again, so the provider holds the " +
 				"engine's key and the provisioner trusts the company's subject, then press Test",
 			Actor: seataccess.ByYou, ActionURL: ProvidersURL,
 		}
 	}
-	api, ok := errors.AsType[*APIError](err)
+	api, ok := errors.AsType[*googleauth.APIError](err)
 	if !ok || api.Status == http.StatusTooManyRequests && !accountQuota(err) || api.Status >= http.StatusInternalServerError {
 		return err
 	}
@@ -985,7 +971,7 @@ func (s *accessSession) refused(err error, project string) error {
 // remedyFor is what a person does about a refusal, and where.
 func (s *accessSession) remedyFor(err error, project string) (string, string) {
 	identity := s.client.IdentityProject()
-	switch status := Status(err); {
+	switch status := googleauth.Status(err); {
 	case accountQuota(err):
 		return "The identity project " + identity + " holds as many service accounts as its quota allows. " +
 			"Delete the ones nobody uses, or ask Google to raise its Service Account Count, then retry", QuotasURL

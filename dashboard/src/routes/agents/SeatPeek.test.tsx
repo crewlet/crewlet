@@ -113,26 +113,30 @@ const SWE: AgentRow = {
   role: "SWE",
   handle: "swe",
   activity: "working",
-  turn: {
-    turn_id: "turn-2",
-    started_at: "2031-05-01T08:00:00Z",
-    stage: "running",
-    work_item: { backend: "native", id: "t-412", key: "ENG-412", project: "ENG" },
-  },
-  live_call: {
-    versions: ZERO_VERSIONS,
-    turn_id: "turn-2",
-    phase: "execute",
-    model: "claude-sonnet-5",
-    // THE ENGINE'S TWO COUNTERS: the round in flight, zero-based, and the
-    // rounds that have come back, one-based — the seventh round is running.
-    round_num: 6,
-    rounds_used: 6,
-    max_rounds: 25,
-    work_item: { backend: "native", id: "t-412", key: "ENG-412", project: "ENG" },
-    in_progress: true,
-    updated_at: "2031-05-01T08:06:00Z",
-  },
+  turns: [
+    {
+      turn_id: "turn-2",
+      started_at: "2031-05-01T08:00:00Z",
+      stage: "running",
+      work_item: { backend: "native", id: "t-412", key: "ENG-412", project: "ENG" },
+    },
+  ],
+  live_calls: [
+    {
+      versions: ZERO_VERSIONS,
+      turn_id: "turn-2",
+      phase: "execute",
+      model: "claude-sonnet-5",
+      // THE ENGINE'S TWO COUNTERS: the round in flight, zero-based, and the
+      // rounds that have come back, one-based — the seventh round is running.
+      round_num: 6,
+      rounds_used: 6,
+      max_rounds: 25,
+      work_item: { backend: "native", id: "t-412", key: "ENG-412", project: "ENG" },
+      in_progress: true,
+      updated_at: "2031-05-01T08:06:00Z",
+    },
+  ],
   budget: { windows: [window_("day", 630_000, 1_000_000), window_("month", 2_000_000, 9_000_000)] },
 } as unknown as AgentRow;
 
@@ -178,7 +182,19 @@ async function mount(
       });
     }
     if (what === "work_workload") {
-      return Promise.resolve({ rows: [{ handle: "swe", open: 4, blocked: 1, overdue: 0 }] });
+      return Promise.resolve({
+        rows: [
+          {
+            handle: "swe",
+            open: 4,
+            blocked: 1,
+            overdue: 0,
+            flow: { working: 1, blocked: 0, waiting: 1, held: 0, due: 0, stuck: 1, moving: 0 },
+            load: 2,
+          },
+        ],
+        flow_live: true,
+      });
     }
     if (what === "executors") return Promise.resolve({ runs: durable });
     if (what === "work_item_turns") {
@@ -242,6 +258,15 @@ test("an operator sees the node that holds the seat and since when", async () =>
   const { asked } = await mount(OPERATOR);
   expect(asked).toContain("fleet");
   expect(screen.getByText(/node-2/)).toBeTruthy();
+});
+
+// A SEAT'S OPEN WORK SAYS WHAT WANTS IT NOW (ADR-0162): its load, then what
+// waits or sticks, so a desk of parked work does not read as a busy one.
+test("a seat's open work names its load and what keeps the rest from moving", async () => {
+  await mount(OPERATOR);
+  expect(
+    screen.getByText("4 tasks · 2 to move now · 1 waiting · 1 stuck · 1 blocked"),
+  ).toBeTruthy();
 });
 
 // AT MOST THREE READS PER OPEN, in the heaviest case: an operator, a seat
@@ -353,11 +378,11 @@ test("the state card watches the running turn, and only a running one", async ()
   );
   cleanup();
   await mount(OPERATOR, {
-    agents: [{ ...SWE, activity: "idle", turn: null, live_call: null } as AgentRow],
+    agents: [{ ...SWE, activity: "idle", turns: [], live_calls: [] } as AgentRow],
   });
   expect(screen.queryByRole("link", { name: "Watch live" })).toBeNull();
   cleanup();
-  await mount(OPERATOR, { agents: [{ ...SWE, turn: null, live_call: null } as AgentRow] });
+  await mount(OPERATOR, { agents: [{ ...SWE, turns: [], live_calls: [] } as AgentRow] });
   expect(screen.queryByRole("link", { name: "Watch live" })).toBeNull();
 });
 
@@ -509,7 +534,7 @@ test("a seat with no manager says so in the Table's words", async () => {
 // drop the word, or say the parked phase in the facts.
 test("a working seat's panel leads with the row's word and says its phase once", async () => {
   await mount(ANONYMOUS, {
-    agents: [{ ...SWE, turn: { ...SWE.turn!, stage: "parked" } }],
+    agents: [{ ...SWE, turns: [{ ...SWE.turns![0]!, stage: "parked" }] }],
   });
   const line = document.querySelector(".seat-peek-line")!.textContent ?? "";
   expect(line.startsWith("Working · ")).toBe(true);
@@ -522,7 +547,7 @@ test("a working seat's panel leads with the row's word and says its phase once",
 // Working on ENG-412". Mutation: prefix the word whatever the line begins with.
 test("a working seat's panel says its word once where the line already begins with it", async () => {
   await mount(ANONYMOUS, {
-    agents: [{ ...SWE, live_call: undefined, current_phase: "" } as unknown as AgentRow],
+    agents: [{ ...SWE, live_calls: [], current_phase: "" } as unknown as AgentRow],
   });
   const line = document.querySelector(".seat-peek-line")!.textContent ?? "";
   expect(line.startsWith("Working on ENG-412")).toBe(true);

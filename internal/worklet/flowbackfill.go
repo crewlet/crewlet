@@ -81,7 +81,7 @@ func within(at, from, to time.Time) bool {
 
 // posture is the seat's live facts at an instant, as the expression binds
 // them: its stop, ranked as the live projection ranks stops, and its parked
-// run.
+// runs.
 func (h SeatHistory) posture(at time.Time) SeatPosture {
 	var out SeatPosture
 	if !h.covers(at) {
@@ -99,11 +99,15 @@ func (h SeatHistory) posture(at time.Time) SeatPosture {
 		}
 	}
 	for _, park := range h.Parks {
-		if park.Item != "" && within(at, park.From, park.To) &&
-			(out.Parked == "" || park.From.Before(out.ParkedSince)) {
-			out.Parked, out.ParkedSince = park.Item, park.From
+		if park.Item != "" && within(at, park.From, park.To) {
+			out.Parked = append(out.Parked, PostureItem{Item: park.Item, Cause: FlowCauseParked, Since: park.From})
 		}
 	}
+	slices.SortFunc(out.Parked, func(a, b PostureItem) int { return a.Since.Compare(b.Since) })
+	// FULL WHEREVER A RUN WAS PARKED: the retained events say nothing of the
+	// seat's other runs or its cap at the instant, so a park reads as filling
+	// the seat, which is exact for a seat of one.
+	out.Full = len(out.Parked) > 0
 	return out
 }
 
@@ -277,10 +281,10 @@ const (
 		(SELECT a.created_at FROM tracker_comments a WHERE a.id = c.answered_by),
 		CASE WHEN c.removed = 1 THEN c.updated_at END
 		FROM tracker_comments c WHERE c.task_id = ? AND c.ask <> ''`
-	// pastRecordedStatement is every key recorded of the item, and the
-	// instant of the first change the duty read of it.
-	pastRecordedStatement = `SELECT id, backfilled, notice, recorded_at FROM tracker_flow
-		WHERE task_id = ? ORDER BY log_seq`
+	// pastRecordedStatement is every key recorded of the item, and the first
+	// change the duty read of it.
+	pastRecordedStatement = `SELECT id, backfilled, notice, recorded_at, state, cause, since
+		FROM tracker_flow WHERE task_id = ? ORDER BY log_seq`
 	// pastNowStatement is the item's row as it stands, for what its history
 	// spells less exactly than its columns.
 	pastNowStatement = `SELECT project_key, start_at FROM tracker_tasks WHERE id = ?`
@@ -369,9 +373,10 @@ type itemPast struct {
 
 	// recorded is every key already recorded of the item; until is the
 	// instant the backfill reads it to (the duty's first change of it, or
-	// now), and horizon the duty's first change of any item.
+	// now), first that change, and horizon the duty's first change of any item.
 	recorded map[string]bool
 	until    time.Time
+	first    *flowChange
 	horizon  time.Time
 }
 
@@ -497,19 +502,20 @@ func (p *itemPast) readRecorded(ctx context.Context, tx *sql.Tx) error {
 		return fmt.Errorf("worklet: read item %s's recorded flow: %w", p.id, err)
 	}
 	defer func() { _ = rows.Close() }()
-	read := false
 	for rows.Next() {
-		var id, notice string
+		var id, notice, state, cause string
 		var backfilled int
 		var at int64
-		if err := rows.Scan(&id, &backfilled, &notice, &at); err != nil {
+		var since sql.NullInt64
+		if err := rows.Scan(&id, &backfilled, &notice, &at, &state, &cause, &since); err != nil {
 			return err
 		}
 		p.recorded[id] = true
-		if !read && backfilled == 0 && notice == "" {
-			read = true
-			if first := store.DecodeTime(at); first.Before(p.until) {
-				p.until = first
+		if p.first == nil && backfilled == 0 && notice == "" {
+			p.first = &flowChange{id: id, state: FlowState(state), cause: FlowCause(cause),
+				since: nullInstantOf(since), recorded: store.DecodeTime(at)}
+			if p.first.recorded.Before(p.until) {
+				p.until = p.first.recorded
 			}
 		}
 	}
@@ -784,6 +790,15 @@ func (r *Reader) pastFlow(ctx context.Context, past *itemPast, seats SeatPast,
 			last = &flowChange{id: id, state: flow.State, cause: flow.Cause,
 				since: flow.Since, recorded: at.UTC()}
 		}
+		// THE STATE THE DUTY FIRST READ is the duty's record, entered before it
+		// was read: its past is the changes before it, never a second copy.
+		if n := len(out); n > 0 && past.first != nil {
+			held := flowItem{flow: &Flow{State: out[n-1].State, Cause: out[n-1].Cause,
+				Since: out[n-1].Since}, last: past.first}
+			if !held.changed() {
+				out = out[:n-1]
+			}
+		}
 		return nil
 	})
 	return out, err
@@ -855,8 +870,8 @@ func pastFlowStatement(at flowAt, p *itemPast, row pastRowAt, last *flowChange) 
 		tracker_turns(task_id, seat, effective_at) AS (
 			SELECT task_id, seat, effective_at FROM main.tracker_turns
 			WHERE task_id = ? AND effective_at <= ?),
-		tracker_history(subject_id, actor, effective_at) AS (
-			SELECT subject_id, actor, effective_at FROM main.tracker_history
+		tracker_history(subject_id, actor, effective_at, kind, log_seq) AS (
+			SELECT subject_id, actor, effective_at, kind, log_seq FROM main.tracker_history
 			WHERE subject_id = ? AND effective_at <= ?),
 		tracker_rosters(name) AS (SELECT NULL WHERE 0),
 		tracker_seat_places(handle) AS (SELECT NULL WHERE 0),
@@ -869,15 +884,16 @@ func pastFlowStatement(at flowAt, p *itemPast, row pastRowAt, last *flowChange) 
 		args = append(args, p.id, string(last.state), store.EncodeTime(last.recorded))
 	}
 	b.WriteString(`),
-		flow_past(id, status, start_at, assignee, updated_at, document, project_key) AS (
-			VALUES (?, ?, ?, ?, ?, json_object('wait_reason', ?), ?))
+		flow_past(id, status, start_at, assignee, updated_at, document, project_key,
+			status_entered_at) AS (
+			VALUES (?, ?, ?, ?, ?, json_object('wait_reason', ?), ?, ?))
 		SELECT `)
 	var start any
 	if row.start != nil {
 		start = store.EncodeTime(*row.start)
 	}
 	args = append(args, p.id, row.status, start, row.assignee, store.EncodeTime(row.updated),
-		row.reason, row.project)
+		row.reason, row.project, store.EncodeTime(row.entered))
 	expr, exprArgs := flowExpr(at, flowWhole)
 	b.WriteString(expr)
 	b.WriteString(" FROM flow_past t")

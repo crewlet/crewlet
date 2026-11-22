@@ -206,11 +206,10 @@ func (s *suite) runCore(t *testing.T) {
 		for _, label := range []string{"e0", "e1", "e2"} {
 			publish(ctx, t, q, topic, newEvent(label))
 		}
-		if backlog := s.optionalBacklog(t); backlog != nil {
-			awaitState(t, "three retained events", func() bool {
-				return len(backlog(q, topic, group)) == 3
-			})
-		}
+		backlog := s.backlog(ctx, t)
+		awaitState(t, "three retained events", func() bool {
+			return len(backlog(q, topic, group)) == 3
+		})
 
 		j := newJournal()
 		subscribe(ctx, t, q, topic, group, recordingHandler(j))
@@ -220,7 +219,7 @@ func (s *suite) runCore(t *testing.T) {
 	t.Run("publishing_to_no_subscription_retains_nothing", func(t *testing.T) {
 		t.Parallel()
 		// Which is exactly why EnsureSubscription exists.
-		backlog := s.needBacklog(t)
+		backlog := s.backlog(ctx, t)
 		q := s.start(ctx, t)
 		publish(ctx, t, q, "nobody.listening", newEvent("lost"))
 		if got := backlog(q, "nobody.listening", "grp"); len(got) != 0 {
@@ -249,7 +248,7 @@ func (s *suite) runCore(t *testing.T) {
 		// accumulate undeliverable events forever, and deleting must not
 		// require a local consumer — role removal cannot depend on which
 		// node happened to run the seat.
-		backlog := s.needBacklog(t)
+		backlog := s.backlog(ctx, t)
 		q := s.start(ctx, t)
 		if _, err := q.EnsureSubscription(ctx, "topic.gone", "grp"); err != nil {
 			t.Fatalf("EnsureSubscription: %v", err)
@@ -337,8 +336,8 @@ func (s *suite) runCore(t *testing.T) {
 	// certify a retry before the conversation's newer message, an order
 	// production never gives.
 	//
-	// The mail is HELD while published: both events wait before anything is
-	// fetched, so nothing races the backoff.
+	// The mail is published under a hold the consumer took in (holdTakenIn,
+	// on Parked), so both events wait unfetched and nothing races the backoff.
 	t.Run("a_failure_returns_behind_waiting_mail_and_a_deferral_at_the_head", func(t *testing.T) {
 		t.Parallel()
 		quiescing := s.needQuiescing(t)
@@ -356,9 +355,7 @@ func (s *suite) runCore(t *testing.T) {
 				}
 				return res
 			})
-			if err := q.PauseTopic(ctx, topic, "grp", attachmentOf(ctx, t, q, topic, "grp"), "test"); err != nil {
-				t.Fatalf("PauseTopic: %v", err)
-			}
+			s.holdTakenIn(ctx, t, q, topic, "grp", "test")
 			publish(ctx, t, q, topic, newEvent("e1"))
 			publish(ctx, t, q, topic, newEvent("e2"))
 			if err := q.ResumeTopic(ctx, topic, "grp", attachmentOf(ctx, t, q, topic, "grp"), "test"); err != nil {
@@ -388,9 +385,7 @@ func (s *suite) runCore(t *testing.T) {
 				}
 				return res
 			})
-			if err := q.PauseTopic(ctx, topic, "grp", attachmentOf(ctx, t, q, topic, "grp"), "test"); err != nil {
-				t.Fatalf("PauseTopic: %v", err)
-			}
+			s.holdTakenIn(ctx, t, q, topic, "grp", "test")
 			publish(ctx, t, q, topic, newEvent("e1"))
 			publish(ctx, t, q, topic, newEvent("e2"))
 			if err := q.ResumeTopic(ctx, topic, "grp", attachmentOf(ctx, t, q, topic, "grp"), "test"); err != nil {
@@ -445,7 +440,7 @@ func (s *suite) runCore(t *testing.T) {
 		// claim false.
 		newQueueWithAttempts := s.needAttempts(t)
 		deadLetters := s.needDeadLetters(t)
-		backlog := s.needBacklog(t)
+		backlog := s.backlog(ctx, t)
 		// Three attempts total, however this backend's broker counts them.
 		q := s.startQueue(ctx, t, newQueueWithAttempts(t, 3))
 
@@ -548,7 +543,7 @@ func (s *suite) runCore(t *testing.T) {
 		// a_deferral_spends_one_delivery_like_every_other_hand_back.
 		// The budget is sized for handoffs, which is why one deferral
 		// here is nowhere near the dead-letter boundary.
-		backlog := s.needBacklog(t)
+		backlog := s.backlog(ctx, t)
 		deadLetters := s.needDeadLetters(t)
 		q := s.start(ctx, t)
 
@@ -584,7 +579,7 @@ func (s *suite) runCore(t *testing.T) {
 	//   - that dead letter is kept WITH THE GROUP'S UNHANDLED DELIVERIES
 	//     (queue.RetiredTo), not a failure's poison
 	//     (a_subscriptions_retired_event_is_one_more_dead_letter).
-	// The mail is HELD while published, as in the return-order case.
+	// Published under a hold the consumer took in (holdTakenIn), as above.
 	t.Run("a_pass_returns_behind_waiting_mail_keeps_consuming_and_dead_letters_once_spent", func(t *testing.T) {
 		t.Parallel()
 		newQueueWithAttempts := s.needAttempts(t)
@@ -602,9 +597,7 @@ func (s *suite) runCore(t *testing.T) {
 			}
 			return queue.Ack()
 		})
-		if err := q.PauseTopic(ctx, topic, group, attachmentOf(ctx, t, q, topic, group), "test"); err != nil {
-			t.Fatalf("PauseTopic: %v", err)
-		}
+		s.holdTakenIn(ctx, t, q, topic, group, "test")
 		publish(ctx, t, q, topic, newEvent("e1"))
 		publish(ctx, t, q, topic, newEvent("e2"))
 		if err := q.ResumeTopic(ctx, topic, group, attachmentOf(ctx, t, q, topic, group), "test"); err != nil {
@@ -1073,7 +1066,7 @@ func (s *suite) runCore(t *testing.T) {
 	// The two points get different rules, and the asymmetry is deliberate;
 	// see queue.EventQueue's Start and Stop.
 
-	// BEFORE START a backend picks its answer and applies it to all twenty-two.
+	// BEFORE START a backend picks its answer and applies it to all twenty-three.
 	t.Run("an_unstarted_queue_answers_the_same_way_for_every_verb", func(t *testing.T) {
 		t.Parallel()
 		q := s.newQueue(t)
@@ -1100,7 +1093,7 @@ func (s *suite) runCore(t *testing.T) {
 	// seat is silently deaf while reporting itself running: the incident
 	// Stop's own doc exists to prevent. A restart-only case would be gated
 	// per backend and could run nowhere; this one is ungated and requires
-	// all twenty-two verbs to refuse with queue.ErrNotLive: a hold that
+	// all twenty-three verbs to refuse with queue.ErrNotLive: a hold that
 	// cannot be TAKEN cannot survive anything.
 	t.Run("a_stopped_queue_refuses_every_verb", func(t *testing.T) {
 		t.Parallel()
@@ -1228,6 +1221,9 @@ type verbResult struct {
 // table can hold every shape of the contract's methods in one list.
 func second(_ bool, err error) error { return err }
 
+// countErr is second for a count's shape.
+func countErr(_ int, err error) error { return err }
+
 // listErr is second for the listing's shape.
 func listErr(_ []queue.Subscription, err error) error { return err }
 
@@ -1296,6 +1292,7 @@ func lifecycleVerbs(ctx context.Context, q queue.EventQueue, ns string) []verbRe
 		{"Attachment", atErr},
 		{"PauseTopic", pauseErr},
 		{"ResumeTopic", resumeErr},
+		{"Readmit", countErr(q.Readmit(ctx, topic, "g", "probe"))},
 		{"Serve", serveErr},
 		{"Ask", askErr},
 		{"Broadcast", q.Broadcast(ctx, topic, []byte("probe"))},

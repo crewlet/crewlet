@@ -150,21 +150,17 @@ var tristateCases = []testCase{
 
 	{"a_claim_its_caller_abandons_part_way_leaves_its_owner_an_answer", func(h *harness) {
 		// Unknown is a claim's honest answer when its caller gives up
-		// mid-flight, and it says nothing about ownership — so what the
-		// owner does next is claim again, and that claim must get a
-		// DEFINITE answer. A backend that writes a claim in steps must not
-		// leave a half-made one behind: one that did left its record
-		// claiming for the lease's whole TTL, which every peer read as
-		// held and the owner's own retries read as a sibling about to
-		// commit, so the owner answered unknown for five minutes here and a
-		// seat or a duty stayed dark for as long.
+		// mid-flight, and says nothing about ownership, so the owner claims
+		// again and that claim must get a DEFINITE answer. A backend that
+		// writes a claim in steps must not leave a half-made one behind: its
+		// record would claim for the lease's whole TTL, read as held by every
+		// peer and as a sibling about to commit by the owner's retries, and a
+		// seat or duty stays dark that long.
 		//
-		// The caller gives up at instants spread across a claim's own
-		// duration, measured first, so some land between whatever steps a
-		// backend takes. Each abandoned claim is on a fresh resource, and
-		// the owner's next claim of it must be GRANTED — nothing else
-		// claims it — at the epoch the abandoned claim returned, if it did
-		// return one.
+		// The caller gives up at instants spread across a claim's measured
+		// duration, so some land between a backend's steps. Each abandoned
+		// claim is on a fresh resource; the owner's next claim must be GRANTED
+		// at the epoch the abandoned one returned, if it returned one.
 		opts := coord.AcquireOptions{Owner: "node-a", TTL: LongTTL, Ungated: true}
 		const warm = 8
 		var took time.Duration

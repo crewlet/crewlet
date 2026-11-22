@@ -1080,17 +1080,18 @@ const usageSkippedSQL = `
 	       COUNT(DISTINCT json_extract(e.payload, '$.trigger_id'))
 	  FROM crewlet_events AS e
 	 WHERE e.event_type = ? AND e.event_time >= ? AND e.event_time < ?
-	   AND e.agent_id != '' AND json_extract(e.payload, '$.disposition') IN (?, ?)
+	   AND e.agent_id != '' AND json_extract(e.payload, '$.disposition') IN (?, ?, ?)
 	   AND ` + keptRowSQL + `
 	 GROUP BY e.agent_id, 3, 4`
 
-// usageSkipped counts each seat's absorbed and breaker-held wakes into its ledger.
+// usageSkipped counts each seat's absorbed, breaker-held and joined wakes into
+// its ledger.
 func (d *DB) usageSkipped(ctx context.Context, w UsageWindow,
 	seat func(string) *UsageSeat, name func(*UsageSeat, string, string)) error {
 
 	rows, err := d.sql.QueryContext(ctx, usageSkippedSQL, types.TurnTriggerSkipped{}.EventType(),
 		EncodeTime(w.Start), EncodeTime(w.End), string(types.DispositionAbsorbed),
-		string(types.DispositionBreakerHeld))
+		string(types.DispositionBreakerHeld), string(types.DispositionJoined))
 	if err != nil {
 		return fmt.Errorf("store: read the usage day's skipped wakes: %w", err)
 	}

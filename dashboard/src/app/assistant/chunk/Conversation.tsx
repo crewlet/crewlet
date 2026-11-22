@@ -28,7 +28,12 @@
  *   stays off with that reason: the reader is told before they ask, never
  *   after a wait. An administrator's notice also opens the models' settings;
  * - [AskDeleteConfirm], the confirmation Delete asks for, of the open
- *   conversation or of any other the holder lists.
+ *   conversation or of any other the holder lists, and [AskRename], the
+ *   dialog Rename opens, either way.
+ *
+ * A CONVERSATION BEING OPENED is a skeleton with the composer held, never the
+ * home; one not opened says whether it is missing (404) or unread, with Try
+ * again; one deleted while open says so and takes no more questions.
  *
  * Ask Crewlet's own page attaches no page: it is the conversation, not a
  * screen the conversation is about.
@@ -61,26 +66,37 @@ import {
   EmptyState,
   FileDrop,
   FilePickButton,
+  FormField,
+  Inline,
+  Input,
   RefusalStrip,
   SendButton,
+  Skeleton,
   Tag,
   Text,
   announce,
   useToast,
   type ChatThreadHandle,
 } from "@crewlethq/ui";
-import { ConfirmModal } from "~/components/Modal.tsx";
+import { ConfirmModal, Modal } from "~/components/Modal.tsx";
 import {
+  CircleAlertGlyph,
   LayoutDashboardGlyph,
   LockGlyph,
+  MessageSquareGlyph,
   PaperclipGlyph,
   PlusGlyph,
 } from "@crewlethq/icons/glyphs";
-import { ASSISTANT_INPUT_MAX_RUNES, type AssistantFileRef } from "~/contract/assistant.ts";
+import {
+  ASSISTANT_INPUT_MAX_RUNES,
+  ASSISTANT_TITLE_MAX_RUNES,
+  type AssistantFileRef,
+} from "~/contract/assistant.ts";
+import { RestError } from "~/protocol/rest.ts";
 import { questionFits } from "~/protocol/assistantWire.ts";
 import { fmtWait } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import { rereadViewer } from "~/lib/viewer.ts";
+import { rereadViewer, useViewer } from "~/lib/viewer.ts";
 import { keyRow, matchesRow, pressText } from "../../keymap.ts";
 import { useKeyHints } from "../../layout.ts";
 import { on as onBus, emit } from "../bus.ts";
@@ -92,6 +108,7 @@ import {
   takeQueuedQuestion,
   useQueuedConversation,
   useQueuedQuestion,
+  type QueuedQuestion,
 } from "../control.ts";
 import type { AssistantModelProblem, AssistantUnavailable, AttachClosed } from "../availability.ts";
 import type { InAppTarget } from "./openInApp.ts";
@@ -100,9 +117,11 @@ import {
   decline,
   deleteConversation,
   deleteRefusal,
+  newConversation,
   openConversation,
   pageMoved,
   reconnect,
+  renameConversation,
   recordRestore,
   restoreOf,
   send,
@@ -116,7 +135,7 @@ import { prepareAgainQuestion } from "./blocks.tsx";
 import { Home } from "./Home.tsx";
 import { Thread } from "./Thread.tsx";
 import { bouncedOf, locksTheBox, waitLeft } from "./bounce.ts";
-import { openTurn, type ConversationView } from "./turn.ts";
+import { openTurn, type ConversationView, type Opening } from "./turn.ts";
 
 /** Send's words, with Stop named for what it ends: the answer, not the conversation. */
 const SEND_LABELS = { send: "Send", stop: "Stop answering" } as const;
@@ -173,6 +192,8 @@ interface Ask {
   deleteFailed: string | null;
   /** The conversation Delete is asking about, or null. */
   deleting: string | null;
+  /** The conversation Rename is open on, with the title it opened with, or null. */
+  renaming: { id: string; title: string } | null;
   ask: (text: string, again?: readonly AssistantFileRef[]) => void;
   brief: () => void;
   fill: (text: string) => void;
@@ -185,6 +206,9 @@ interface Ask {
   askDelete: (id?: string) => void;
   setDeleting: (id: string | null) => void;
   setDeleteFailed: (words: string | null) => void;
+  /** Open Rename on a conversation: the open one, where none is named. */
+  askRename: (id?: string, title?: string) => void;
+  setRenaming: (renaming: { id: string; title: string } | null) => void;
   /** Forget a page the reader removed: the next one goes with questions again. */
   resetPage: () => void;
 }
@@ -199,19 +223,23 @@ function useAsk(): Ask {
 }
 
 /** The gestures a holder of the conversation calls from its own controls. */
-export function useAskGestures(): Pick<Ask, "askDelete" | "resetPage" | "view" | "composer"> & {
+export function useAskGestures(): Pick<
+  Ask,
+  "askDelete" | "askRename" | "resetPage" | "view" | "composer"
+> & {
   deletable: boolean;
 } {
-  const { askDelete, resetPage, view, composer } = useAsk();
-  // DELETE IS OFFERED ONLY FOR A CONVERSATION WITH SOMETHING IN IT: an empty
-  // one has nothing to delete, and a disabled entry was an action that looked
-  // available and did nothing.
+  const { askDelete, askRename, resetPage, view, composer } = useAsk();
+  // DELETE AND RENAME ARE OFFERED ONLY FOR A CONVERSATION WITH SOMETHING IN
+  // IT: an empty one has nothing to delete or name, and a disabled entry was
+  // an action that looked available and did nothing.
   return {
     askDelete,
+    askRename,
     resetPage,
     view,
     composer,
-    deletable: view.id !== null && view.turns.length > 0,
+    deletable: view.id !== null && view.turns.length > 0 && !view.deleted,
   };
 }
 
@@ -226,6 +254,7 @@ export function AskProvider({ place, children }: { place: AskPlace; children: Re
   const draft = useDraftBox();
   const [removed, setRemoved] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
   const [deleteFailed, setDeleteFailed] = useState<string | null>(null);
   const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
   const running = openTurn(view);
@@ -286,12 +315,18 @@ export function AskProvider({ place, children }: { place: AskPlace; children: Re
 
   const { model } = place;
   const disabledReason = useMemo(() => {
+    if (view.opening !== null) {
+      return view.opening.state === "reading"
+        ? "Opening the conversation"
+        : "The conversation is not open";
+    }
+    if (view.deleted) return "This conversation was deleted";
     if (view.fault === "protocol_mismatch") return "Reload to keep asking";
     if (model !== null) return model.short;
     if (view.stream === "reconnecting") return "Reconnecting to the answer";
     if (waitSeconds > 0) return `You can ask again ${fmtWait(waitSeconds)}`;
     return undefined;
-  }, [view.fault, model, view.stream, waitSeconds]);
+  }, [view.opening, view.deleted, view.fault, model, view.stream, waitSeconds]);
 
   // THE PERSON'S OWN QUESTION IS ALWAYS SHOWN: the thread follows only while
   // it is read at its end, so a question sent while scrolled up would land out
@@ -361,18 +396,34 @@ export function AskProvider({ place, children }: { place: AskPlace; children: Re
 
   // A QUESTION TYPED ELSEWHERE (the palette's row) is asked at once where
   // this conversation could ask it now, and otherwise waits in the box for
-  // the person to send when the running answer ends.
+  // the person to send when the running answer ends. One a screen offered
+  // (a draft) always waits in the box: it is the person's to send. ONE ABOUT
+  // SOMETHING A SCREEN SHOWS starts a new conversation with the page attached
+  // first, and is decided on the next draw, against that conversation.
   const queued = useQueuedQuestion();
+  const [taken, setTaken] = useState<QueuedQuestion | null>(null);
   useEffect(() => {
     if (queued === null) return;
     const question = takeQueuedQuestion();
     if (question === null) return;
-    if (running === null && disabledReason === undefined && questionFits(question.trim())) {
-      ask(question);
-    } else {
-      fill(question);
+    if (question.fresh) {
+      newConversation();
+      setRemoved(null);
+      announce("New conversation");
     }
-  }, [queued, running, disabledReason, ask, fill]);
+    setTaken(question);
+  }, [queued]);
+  useEffect(() => {
+    if (taken === null) return;
+    setTaken(null);
+    const { text, send, fresh } = taken;
+    if (send && running === null && disabledReason === undefined && questionFits(text.trim())) {
+      // The composer's images are files of the conversation just left.
+      ask(text, fresh ? [] : undefined);
+    } else {
+      fill(text);
+    }
+  }, [taken, running, disabledReason, ask, fill]);
 
   const { onComposerKey } = place;
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -413,6 +464,7 @@ export function AskProvider({ place, children }: { place: AskPlace; children: Re
     opened,
     deleteFailed,
     deleting,
+    renaming,
     ask,
     brief,
     fill,
@@ -434,34 +486,80 @@ export function AskProvider({ place, children }: { place: AskPlace; children: Re
     },
     setDeleting,
     setDeleteFailed,
+    askRename: (id, title) => {
+      const target = id ?? view.id;
+      if (target !== null) setRenaming({ id: target, title: title ?? view.title });
+    },
+    setRenaming,
     resetPage: () => setRemoved(null),
   };
   return <AskContext.Provider value={value}>{children}</AskContext.Provider>;
 }
 
+/**
+ * Ask Crewlet with no model: it needs one, chosen in Settings › Models alone,
+ * where a reader who may choose it (the engine's `can_assign`) is sent. Anybody
+ * else reads why, with no way there. Neither is shown a model or a picker.
+ */
+function NoModel({ unavailable }: { unavailable: AssistantUnavailable }) {
+  const mayChoose = useViewer().assistantCanAssign;
+  return (
+    <EmptyState
+      icon={<LockGlyph size="lg" />}
+      title={unavailable.title}
+      description={
+        mayChoose
+          ? "Ask Crewlet needs a model to answer. Choose one in Settings › Models; any of the company's models a helper can run on will do."
+          : unavailable.body
+      }
+      action={
+        mayChoose ? (
+          <Button
+            size="small"
+            variant="secondary"
+            onClick={() =>
+              emit("assistant.navigation.open", {
+                path: ["settings", "models"],
+                query: {},
+                mode: "here",
+              })
+            }
+          >
+            Model settings
+          </Button>
+        ) : undefined
+      }
+    />
+  );
+}
+
 /** The conversation: the home until a question is asked, then its turns; or why the reader may not ask. */
 export function AskThread({
   label = "Conversation",
-  offlineAction,
+  column = false,
+  onNew,
 }: {
   label?: string;
-  /** The one step offered beside why the reader may not ask, where there is one they can take. */
-  offlineAction?: ReactNode;
+  /** Hold the turns to one centred column: a page of its own, much wider than a line of an answer. */
+  column?: boolean;
+  /** Leave for a new conversation, as the holder's own New conversation does. */
+  onNew: () => void;
 }) {
   const a = useAsk();
   const { unavailable, admin, name } = a.place;
   if (unavailable !== null) {
+    if (unavailable.reason === "no_model") return <NoModel unavailable={unavailable} />;
     return (
       <EmptyState
         icon={<LockGlyph size="lg" />}
         title={unavailable.title}
         description={unavailable.body}
-        action={offlineAction}
       />
     );
   }
+  if (a.view.opening !== null) return <AskOpening opening={a.view.opening} onNew={onNew} />;
   return (
-    <ChatThread ref={a.thread} label={label} busy={openTurn(a.view) !== null}>
+    <ChatThread ref={a.thread} label={label} busy={openTurn(a.view) !== null} column={column}>
       {a.deleteFailed !== null ? (
         <Callout variant="warning" role="alert">
           {a.deleteFailed}
@@ -496,15 +594,82 @@ export function AskThread({
           onReconnect={reconnect}
         />
       )}
+      {a.view.deleted ? (
+        <Callout
+          variant="warning"
+          role="status"
+          title="This conversation was deleted"
+          action={
+            <Button size="small" variant="secondary" onClick={onNew}>
+              New conversation
+            </Button>
+          }
+        >
+          It is no longer in your history, so it takes no more questions. What you typed stays in
+          the box for a new conversation.
+        </Callout>
+      ) : null}
     </ChatThread>
   );
+}
+
+/** A conversation on its way, or one that could not be opened, in place of the conversation. */
+function AskOpening({ opening, onNew }: { opening: Opening; onNew: () => void }) {
+  const fresh = (
+    <Button size="small" variant="secondary" onClick={onNew}>
+      New conversation
+    </Button>
+  );
+  switch (opening.state) {
+    case "reading":
+      return (
+        <div className="ask-opening ask-opening--reading">
+          <Skeleton variant="text" rows={5} label="Reading this conversation" />
+        </div>
+      );
+    case "missing":
+      return (
+        <div className="ask-opening">
+          <EmptyState
+            icon={<MessageSquareGlyph size="lg" />}
+            title="This conversation isn't in your history"
+            description="It may have been deleted, or it is somebody else's. Conversations are kept for 30 days."
+            action={fresh}
+          />
+        </div>
+      );
+    case "failed":
+      return (
+        <div className="ask-opening">
+          <EmptyState
+            icon={<CircleAlertGlyph size="lg" />}
+            title="This conversation could not be read"
+            description={`${opening.sentence ?? "The engine did not send it."} Nothing in it was changed.`}
+            action={
+              <Inline gap={2} wrap>
+                <Button
+                  size="small"
+                  variant="primary"
+                  onClick={() => void openConversation(opening.id).catch(() => {})}
+                >
+                  Try again
+                </Button>
+                {fresh}
+              </Inline>
+            }
+          />
+        </div>
+      );
+  }
 }
 
 /** The composer and what stands above it; nothing where the reader may not ask. */
 export function AskFoot() {
   const a = useAsk();
   const { model, admin, attach, unavailable } = a.place;
-  if (unavailable !== null) return null;
+  // NO COMPOSER WHERE NO CONVERSATION CAN BE: the reader may not ask, or the
+  // one asked for is not theirs to open.
+  if (unavailable !== null || a.view.opening?.state === "missing") return null;
   const { attachments, disabledReason, page, attached } = a;
   const crumb = page?.title ?? "";
   // WHY NO IMAGE IS TAKEN NOW, as the Attach button and the drop overlay say it.
@@ -689,4 +854,126 @@ export function AskDeleteConfirm() {
       }}
     />
   );
+}
+
+/** What a title the engine would refuse is told, before Save; undefined for one it takes. */
+export function titleProblem(title: string): string | undefined {
+  const words = title.trim();
+  if (words === "") return "Give it a title.";
+  const length = [...words].length;
+  if (length > ASSISTANT_TITLE_MAX_RUNES) {
+    return `At most ${ASSISTANT_TITLE_MAX_RUNES} characters; this is ${length}.`;
+  }
+  return undefined;
+}
+
+/**
+ * Rename's dialog on [Ask.renaming]: one line of 1 to 60 characters, Enter
+ * saves, Escape cancels, and the engine's refusal is said under the field.
+ */
+export function AskRename() {
+  const a = useAsk();
+  const target = a.renaming;
+  if (target === null) return null;
+  return <RenameDialog key={target.id} target={target} onClose={() => a.setRenaming(null)} />;
+}
+
+function RenameDialog({
+  target,
+  onClose,
+}: {
+  target: { id: string; title: string };
+  onClose: () => void;
+}) {
+  const [value, setValue] = useState(target.title);
+  const [busy, setBusy] = useState(false);
+  const [refused, setRefused] = useState<string | null>(null);
+  const toast = useToast();
+  const wrong = titleProblem(value);
+  const save = async () => {
+    if (busy || wrong !== undefined) return;
+    if (value.trim() === target.title.trim()) {
+      onClose();
+      return;
+    }
+    setBusy(true);
+    setRefused(null);
+    try {
+      await renameConversation(target.id, value);
+      onClose();
+      toast.show({ variant: "success", title: "Conversation renamed" });
+    } catch (err) {
+      setRefused(renameRefusal(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Rename conversation"
+      size="sm"
+      placement="top"
+      closeDisabledReason={busy ? "Renaming" : undefined}
+      footer={
+        <>
+          <Button
+            size="small"
+            variant="ghost"
+            disabledReason={busy ? "Renaming" : undefined}
+            onClick={onClose}
+          >
+            Cancel
+          </Button>
+          <Button
+            size="small"
+            variant="primary"
+            loading={busy}
+            disabledReason={wrong}
+            onClick={() => void save()}
+          >
+            Save
+          </Button>
+        </>
+      }
+    >
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          void save();
+        }}
+      >
+        <FormField
+          label="Title"
+          error={value === target.title ? undefined : (wrong ?? refused ?? undefined)}
+        >
+          {(field) => (
+            <Input
+              id={field.id}
+              aria-describedby={field.describedBy}
+              aria-invalid={field.invalid}
+              width="full"
+              autoFocus
+              value={value}
+              onChange={(event) => {
+                setValue(event.target.value);
+                setRefused(null);
+              }}
+            />
+          )}
+        </FormField>
+      </form>
+    </Modal>
+  );
+}
+
+/** What a rename the engine did not take says: its own words where it gave them. */
+export function renameRefusal(err: unknown): string {
+  if (err instanceof RestError) {
+    if (err.unanswered) return "Crewlet could not be reached. Check your connection and try again.";
+    const words = err.detail || err.sentence;
+    if (words) return words;
+  }
+  return "The conversation could not be renamed. Try again.";
 }

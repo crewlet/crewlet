@@ -55,8 +55,20 @@ func TestASeatsCodeDayIsStampedByWhatItCounts(t *testing.T) {
 	if v, err := stamp(ledgered); err != nil || v != 7 {
 		t.Errorf("a seat's day carrying its turn ledger is stamped %d (%v), want 7", v, err)
 	}
-	if usage.RecordVersion != 7 {
-		t.Errorf("this build reads version %d, want 7", usage.RecordVersion)
+	busy := seatRecord("node-a", "2026-09-23", "seat-1", "m")
+	busyMS := int64(90_000)
+	busy.Turns.BusyMS = &busyMS
+	if v, err := stamp(busy); err != nil || v != 8 {
+		t.Errorf("a seat's day carrying its busy time is stamped %d (%v), want 8", v, err)
+	}
+	joined := seatRecord("node-a", "2026-09-23", "seat-1", "m")
+	joined.Ledger = []usage.LedgerRow{{Wake: "chat:mention", Disposition: "joined", Turns: 1}}
+	if v, err := stamp(joined); err != nil || v != 9 {
+		t.Errorf("a seat's day counting a wake that joined a running turn is stamped %d (%v), want 9: a "+
+			"build before it has no such disposition and would refuse the record", v, err)
+	}
+	if usage.RecordVersion != 9 {
+		t.Errorf("this build reads version %d, want 9", usage.RecordVersion)
 	}
 
 	person := usage.Record{RecordEnvelope: usage.RecordEnvelope{Writer: "node-a",

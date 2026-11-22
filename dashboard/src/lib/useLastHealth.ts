@@ -1,7 +1,7 @@
 /**
  * This node's LAST health push, kept through a dropped socket: for a reader
- * whose question is what this node last said about a configuration write,
- * never whether it is up.
+ * whose question is what this node last said about a configuration write, or
+ * which build it runs, never whether it is up.
  *
  * The store CLEARS the health slice when the socket drops
  * (`Store.setConnected`), because a stale "healthy" is a lie with a timestamp

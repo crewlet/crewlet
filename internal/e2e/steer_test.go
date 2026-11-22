@@ -72,7 +72,7 @@ func TestAPersonSteersALiveExecutor(t *testing.T) {
 	}
 	system := valueOf(args, "--append-system-prompt-file")
 	if text, err := os.ReadFile(system); err != nil || //nolint:gosec // the run's own box, under the case's state dir
-		!strings.Contains(string(text), executor.ClaudeCodeSteerInstruction) {
+		!strings.Contains(string(text), executor.ClaudeCode{}.NoteInstruction()) {
 		t.Errorf("the run's standing instructions are not told of notes (%v):\n%s", err, text)
 	}
 
@@ -94,7 +94,7 @@ func TestAPersonSteersALiveExecutor(t *testing.T) {
 
 	// AND THE LAUNCH'S OWN RECORD SAYS IT ARRIVED, in the harness's own words.
 	waitFor(t, "the run's transcript to show the note arrive", func() bool {
-		rows, _, err := n.engine.Backends().Store.Events().Phases(t.Context(), "", 60, nil, time.Now())
+		rows, _, err := n.engine.Backends().Store.Events().Phases(t.Context(), "", 60, 0, nil, time.Now())
 		if err != nil {
 			t.Fatalf("phases: %v", err)
 		}
@@ -218,7 +218,7 @@ func TestAClaudeCodeOlderThanItsNoteFloorLeavesANoteToTheReview(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read the run's system text: %v", err)
 	}
-	if strings.Contains(string(text), executor.ClaudeCodeSteerInstruction) {
+	if strings.Contains(string(text), executor.ClaudeCode{}.NoteInstruction()) {
 		t.Errorf("a run started without its hooks was told of notes:\n%s", text)
 	}
 	said, err := os.ReadFile(filepath.Join(filepath.Dir(system), "err.log")) //nolint:gosec // as above
@@ -293,7 +293,7 @@ func deliveredRecord(t *testing.T, n *codingNode, turnID, noteID string) map[str
 	t.Helper()
 	var delivered map[string]any
 	waitFor(t, "the note's delivery on the record", func() bool {
-		evs, err := n.engine.Backends().Store.Events().Turn(t.Context(), turnID, time.Now())
+		evs, _, err := n.engine.Backends().Store.Events().Turn(t.Context(), turnID, 0, time.Now())
 		if err != nil {
 			t.Fatalf("the turn's events: %v", err)
 		}
