@@ -1143,11 +1143,13 @@ func TestATornTranscriptAPackPaddedWithNULsIsCutBackWhenItIsRestored(t *testing.
 // own copy (Codex, Gemini CLI, Qwen Code, Copilot, Kimi Code, Muse Code): the
 // box on that release still refuses a copy its last run's record says a newer
 // release wrote, as a box downgraded since would hold, and one with no record
-// at all, naming why; the copy that release wrote is continued.
+// at all, naming why; the copy that release wrote is continued. A Gemini CLI
+// or Qwen Code box whose release does not read says it continues no session,
+// its own copy named.
 //
 // Mutation: check the box's release alone in CheckInPlace, read the writer
-// from anywhere but the box's record, or take a missing record for a
-// current writer, and a row goes red.
+// from anywhere but the box's record, take a missing record for a current
+// writer, or name only a carried one for an unread release: a row goes red.
 func TestABoxContinuesOnlyACopyItsOneReleaseWrote(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -1179,6 +1181,19 @@ func TestABoxContinuesOnlyACopyItsOneReleaseWrote(t *testing.T) {
 				t.Errorf("%s, a copy written by %q: %+v, want continued %v naming %q", c.runner.Name(), writer,
 					check, want == "", want)
 			}
+		}
+	}
+	for _, runner := range []*executor.Runner{executor.NewGeminiCLI(), executor.NewQwenCode()} {
+		var asked []string
+		b := versionBox("nightly build\n", 0, "", &asked)
+		record := "id s-1\ncontinued yes\nwhy \nrelease nightly build\n"
+		if err := b.WriteFile(t.Context(), paths(b).SessionRecord(), []byte(record)); err != nil {
+			t.Fatal(err)
+		}
+		check, err := runner.CheckInPlace(t.Context(), b)
+		if err != nil || check.Continues || !strings.Contains(check.Why, "its own copy") || check.Version != "" {
+			t.Errorf("%s, a box whose release does not read: %+v, %v; want its own copy not continued, "+
+				"saying so", runner.Name(), check, err)
 		}
 	}
 }
