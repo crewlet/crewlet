@@ -28,7 +28,7 @@ type piRouteReport struct {
 // pi's record confirms it ([executor.PiConfirmsATake]).
 //
 // Mutation: rename `inbox`, `message` or `seq` on mcpbridge.SteerNote, or hand
-// the note over under another id, or post the route's /read — this goes red.
+// the note over under another id, or post the route's /read: this goes red.
 func piReachesTheBridgesRoute(t *testing.T) {
 	t.Parallel()
 	node := nodeForNotes(t)
