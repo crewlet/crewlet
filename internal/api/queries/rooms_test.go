@@ -203,6 +203,8 @@ func everySeam(t *testing.T) queries.Sources {
 		ChatSearch: emptyChat{},
 		ChatDraft:  emptyChat{},
 		ChatReads:  coordmemory.NewFleet(),
+		// A PERSON'S HOME BOARD, the coordination twin's.
+		HomeBoards: coordmemory.NewFleet(),
 		// THE MODEL QUESTIONS, each its own seam: what this node resolved
 		// for each model, the fleet's device sign-ins, and the catalogue a
 		// model step suggests from. Every engine that serves the API wires

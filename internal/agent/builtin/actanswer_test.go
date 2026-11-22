@@ -80,6 +80,8 @@ var everyWriteCall = map[string]map[string]any{
 	chatlet.AddChannelMembersTool: {"channel": chatRoomID, "members": []any{"agent-ceo"}},
 	chatlet.MarkChatReadTool: {"cursors": map[string]any{chatRoomID: 12.0},
 		"mute": []any{chatRoomID}},
+	// AND A PERSON'S HOME BOARD, which appends nothing either.
+	builtin.SaveHomeBoardTool: {"board": map[string]any{"widgets": []any{}}, "if_match": 0},
 }
 
 // appendsNoRecord are the operator writes that append nothing to any log, each
@@ -91,8 +93,11 @@ var everyWriteCall = map[string]map[string]any{
 // it answers: nothing pending, no position, and nothing to derive, since a
 // cursor only advances and a mute states one room's. Its one `unknown` is a
 // put whose answer was lost (TestAFlushWhoseAnswerWasLostIsUnknown).
+// `save_home_board` is one too, at the revision its caller read.
 var appendsNoRecord = map[string]string{
 	chatlet.MarkChatReadTool: "a read-state flush is a compare-and-set in the " +
+		"coordination store, on no log",
+	builtin.SaveHomeBoardTool: "a Home board is a compare-and-set in the " +
 		"coordination store, on no log",
 }
 
@@ -428,6 +433,9 @@ func writeSurface(w *ledgerFake) map[string]tools.Callable {
 					OperatorID: "ops", OpKey: requestKeyOf(ctx)}, nil
 			},
 		},
+		// AND A HOME BOARD STORE whose every save lands, since a call here
+		// repeats under one request.
+		HomeBoard: builtin.HomeBoardDeps{Boards: landingBoards{}, Actor: builtin.PrincipalActor},
 		Authorize: builtin.Decide(chartLeads),
 	}) {
 		if !mcp.ReadOnlyProven(builtin.AnnotationsFor(tool.Name())) {

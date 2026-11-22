@@ -1,10 +1,11 @@
 /**
- * Who runs on which model, under the list of models: one card, one row
- * anatomy for everything that runs on a model ([WhoRuns]). Two quiet groups,
- * Helpers (Ask Crewlet and the Advisor) and Seats; each row its identity on
- * the left (a helper's product mark and name, a seat's avatar and name linking
- * to the seat) and its model's picker on the right, in one column of one width.
- * No header row: the rows say what they are.
+ * Who runs on which model, under the list of models: a titled section, one
+ * card, one row anatomy for everything that runs on a model ([WhoRuns]). Two
+ * quiet groups, Helpers (Ask Crewlet and the Advisor) and Seats, their rows
+ * divided by hairlines; each row its identity on the left (a helper's product
+ * mark and name, a seat's avatar and name linking to the seat) and its model's
+ * quiet picker on the right, in one column of one width. No header row: the
+ * rows say what they are.
  *
  * WHAT A SEAT RUNS IS THE ENGINE'S ANSWER: each model's `uses` (the engine's
  * `used_by`), never resolved here.
@@ -28,7 +29,15 @@
  */
 
 import { useId, useMemo, useState, type ReactNode } from "react";
-import { Card, Menu, Select, TableEntityCell, Text, type SelectOption } from "@crewlethq/ui";
+import {
+  Card,
+  Menu,
+  Section,
+  Select,
+  TableEntityCell,
+  Text,
+  type SelectOption,
+} from "@crewlethq/ui";
 import { EllipsisGlyph, GaugeGlyph } from "@crewlethq/icons/glyphs";
 import { linkedSeat } from "~/app/frame/cells.tsx";
 import {
@@ -95,16 +104,26 @@ function Row({
   );
 }
 
-/** A model as a member reads it: its mark, its key and its name, or "Not set". */
+/**
+ * A model as a member reads it: its mark, its key and its name, or the fallback,
+ * in the quiet ink where it says nothing runs ("Not set") and not for a hand split's models.
+ */
 function Value({
   model,
   fallback = "Not set",
+  absent = true,
 }: {
   model: ModelView | undefined;
   fallback?: string;
+  absent?: boolean;
 }) {
   return (
-    <Text as="span" variant="body" className="models-run__value">
+    <Text
+      as="span"
+      variant="body"
+      {...(!model && absent ? { tone: "tertiary" as const } : {})}
+      className="models-run__value"
+    >
       {model ? (
         <>
           {modelMark(model)}
@@ -121,7 +140,7 @@ function Value({
 export function WhoRuns({ data }: { data: ModelsData }) {
   /** A seat's pick, waiting for its one confirm. */
   const [moving, setMoving] = useState<SeatMoveAsk | null>(null);
-  // WITH NO MODEL THERE IS NOTHING TO PICK: every row reads Not set.
+  // WITH NO MODEL THERE IS NOTHING TO PICK (the page then draws its first-run card instead).
   const picks = data.admin && data.models.length > 0;
   const helpersId = useId();
   const seatsId = useId();
@@ -181,74 +200,85 @@ export function WhoRuns({ data }: { data: ModelsData }) {
   );
 
   return (
-    <Card padding="none" className="models-runs">
-      <section className="models-runs__group" aria-labelledby={helpersId}>
-        <Text as="h3" variant="label" tone="secondary" id={helpersId}>
-          Helpers
-        </Text>
-        <ul className="models-runs__list" aria-labelledby={helpersId}>
-          {(["assistant", "advisor"] as const).map((helper) => {
-            const key = data[helper].key ?? "";
-            return (
-              <Row
-                key={helper}
-                who={
-                  <span className="models-run__name">
-                    <JobGlyph job={helper} size="sm" />
-                    <span>{helper === "assistant" ? ASSISTANT_USE.label : ADVISOR_USE.label}</span>
-                  </span>
-                }
-                model={
-                  picks ? (
-                    <HelperModel
-                      helper={helper}
-                      current={key || null}
-                      choices={choices}
-                      canAssign
-                      width="full"
-                      onApplied={data.reload}
-                    />
-                  ) : (
-                    <Value model={byKey.get(key)} />
-                  )
-                }
-              />
-            );
-          })}
-        </ul>
-      </section>
-      <section className="models-runs__group" aria-labelledby={seatsId}>
-        <Text as="h3" variant="label" tone="secondary" id={seatsId}>
-          Seats
-        </Text>
-        {data.seats.length === 0 ? (
-          <Text as="p" variant="caption" tone="tertiary">
-            No agent seat yet.
+    <Section
+      spacing="tight"
+      title="Who runs on which model"
+      description={
+        picks
+          ? "Choose the model each helper and seat runs on."
+          : "The model each helper and seat runs on."
+      }
+    >
+      <Card padding="none" className="models-runs">
+        <section className="models-runs__group" aria-labelledby={helpersId}>
+          <Text as="h3" variant="label" tone="secondary" id={helpersId}>
+            Helpers
           </Text>
-        ) : (
-          <ul className="models-runs__list" aria-labelledby={seatsId}>
-            {data.seats.map((s) => (
-              <SeatRow
-                key={s.handle}
-                seat={s}
-                one={oneOf(s.handle)}
-                cells={
-                  Object.fromEntries(CATEGORY_ORDER.map((c) => [c, cellOf(s.handle, c)])) as Record<
-                    JobCategory,
-                    CellState
-                  >
-                }
-                admin={picks}
-                options={options}
-                byKey={byKey}
-                onPick={(key, categories) => setMoving({ key, seat: s.handle, categories })}
-              />
-            ))}
+          <ul className="models-runs__list" aria-labelledby={helpersId}>
+            {(["assistant", "advisor"] as const).map((helper) => {
+              const key = data[helper].key ?? "";
+              return (
+                <Row
+                  key={helper}
+                  who={
+                    <span className="models-run__name">
+                      <JobGlyph job={helper} size="sm" />
+                      <span>
+                        {helper === "assistant" ? ASSISTANT_USE.label : ADVISOR_USE.label}
+                      </span>
+                    </span>
+                  }
+                  model={
+                    picks ? (
+                      <HelperModel
+                        helper={helper}
+                        current={key || null}
+                        choices={choices}
+                        canAssign
+                        appearance="quiet"
+                        onApplied={data.reload}
+                      />
+                    ) : (
+                      <Value model={byKey.get(key)} />
+                    )
+                  }
+                />
+              );
+            })}
           </ul>
-        )}
-      </section>
-      <SeatMoveDialog ask={moving} data={data} onClose={() => setMoving(null)} />
-    </Card>
+        </section>
+        <section className="models-runs__group" aria-labelledby={seatsId}>
+          <Text as="h3" variant="label" tone="secondary" id={seatsId}>
+            Seats
+          </Text>
+          {data.seats.length === 0 ? (
+            <Text as="p" variant="caption" tone="tertiary">
+              No agent seat yet.
+            </Text>
+          ) : (
+            <ul className="models-runs__list" aria-labelledby={seatsId}>
+              {data.seats.map((s) => (
+                <SeatRow
+                  key={s.handle}
+                  seat={s}
+                  one={oneOf(s.handle)}
+                  cells={
+                    Object.fromEntries(
+                      CATEGORY_ORDER.map((c) => [c, cellOf(s.handle, c)]),
+                    ) as Record<JobCategory, CellState>
+                  }
+                  admin={picks}
+                  options={options}
+                  byKey={byKey}
+                  onPick={(key, categories) => setMoving({ key, seat: s.handle, categories })}
+                />
+              ))}
+            </ul>
+          )}
+        </section>
+        <SeatMoveDialog ask={moving} data={data} onClose={() => setMoving(null)} />
+      </Card>
+    </Section>
   );
 }
 
@@ -298,8 +328,9 @@ function SeatRow({
       label: CATEGORY_WORDS[c].short,
       model: admin ? (
         <Select
-          width="full"
+          width="auto"
           size="sm"
+          appearance="quiet"
           ariaLabel={`${CATEGORY_WORDS[c].short} for ${name}`}
           value={key || undefined}
           placeholder={placeholder}
@@ -307,7 +338,7 @@ function SeatRow({
           onChange={(v) => String(v) !== key && onPick(String(v), [c])}
         />
       ) : (
-        <Value model={byKey.get(key)} fallback={placeholder} />
+        <Value model={byKey.get(key)} fallback={placeholder} absent={cell.kind === "none"} />
       ),
     };
   };
@@ -339,8 +370,9 @@ function SeatRow({
       menu={menu}
       model={
         <Select
-          width="full"
+          width="auto"
           size="sm"
+          appearance="quiet"
           ariaLabel={`${name}'s model`}
           value={one || undefined}
           // A SEAT WHOSE JOBS DIFFER, folded to one picker: the next pick sets all three.

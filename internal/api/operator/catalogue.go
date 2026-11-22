@@ -236,6 +236,11 @@ type Halves struct {
 	// through, or the zero value on a node with no coordination store.
 	AtlasRefresh builtin.AtlasRefreshDeps
 
+	// HomeBoard is the half a person saves their Home board through, or the
+	// zero value on a node with no coordination store. Who saves is set per
+	// call.
+	HomeBoard builtin.HomeBoardDeps
+
 	// ScheduleRuns is the half a person runs one schedule now through, or
 	// the zero value on a node that wakes no seats. Who asks and the chart
 	// the schedule is named in are set per call.
@@ -451,6 +456,8 @@ func (s *Server) catalogueFor() (catalogue, bool) {
 	atlasWrite.Actor, atlasWrite.Org = workActor, s.org
 	atlasRefresh := halves.AtlasRefresh
 	atlasRefresh.Actor = workActor
+	homeBoard := halves.HomeBoard
+	homeBoard.Actor = workActor
 	scheduleRuns := halves.ScheduleRuns
 	scheduleRuns.Actor, scheduleRuns.Org = workActor, s.org
 	runs, pauses, steer, answer := s.runs, s.pauses, s.steer, s.answer
@@ -460,7 +467,7 @@ func (s *Server) catalogueFor() (catalogue, bool) {
 		Work: work, Pages: kb, Chat: talk, Knowledge: halves.Knowledge,
 		Artifacts: arts, ArtifactData: halves.ArtifactData, Code: repos,
 		Readers: halves.Readers, Health: health, Atlas: halves.Atlas, AtlasWrite: atlasWrite,
-		AtlasRefresh: atlasRefresh, ScheduleRuns: scheduleRuns, Org: s.org,
+		AtlasRefresh: atlasRefresh, HomeBoard: homeBoard, ScheduleRuns: scheduleRuns, Org: s.org,
 		Authorize: s.authorize, Runs: runs, Pauses: pauses,
 		Steer: steer, Answer: answer,
 	})
