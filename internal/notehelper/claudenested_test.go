@@ -173,7 +173,7 @@ func TestImportsAreReadAsClaudeCodeReadsThem(t *testing.T) {
 	t.Parallel()
 	b := newNestedBox(t, map[string]string{
 		"workspace/app/d/CLAUDE.md": "---\nowner: FRONT-KEY\n---\n<!-- HIDDEN-COMMENT @hidden.md -->\n" +
-			"Read @one.md#part and @two\\ words.md and mail me@three.md.\n`@span.md`\n```\n@fenced.md\n```\n" +
+			"Read @one.md#part and @two\\ words.md and mail me@three.md.\n`see @span.md here`\n```\n@fenced.md\n```\n" +
 			"@image.png\n@./four\n",
 		"workspace/app/d/one.md":       "IMP-ONE\n",
 		"workspace/app/d/two words.md": "IMP-TWO\n",
