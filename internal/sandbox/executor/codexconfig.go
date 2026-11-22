@@ -16,8 +16,8 @@ import (
 )
 
 // codexTelemetryEnv is the OTLP exporter's variables, the endpoint and its
-// headers, which carry the run's telemetry credential: Codex keeps them for its
-// own export, and the model's shell commands are handed none.
+// headers, which carry the run's telemetry credential: excluded from the
+// model's shell commands, kept for Codex's own export.
 const codexTelemetryEnv = "OTEL_EXPORTER_OTLP_*"
 
 // codexMCPStartupWait is how long Codex waits for a required MCP server to
@@ -92,10 +92,10 @@ func waitSeconds(d time.Duration) int {
 // sandbox needs, and nobody answers); no analytics, plugins or bundled skills
 // (with all three off a run dials only its model and servers, measured); no
 // request_user_input (a question parks through ask_and_wait); and the model's
-// shell inherits the run's environment less the harness's own sign-in, the
+// shell inherits the run's environment with the harness's own sign-in, the
 // helper's routes ([codexNotesEnv]) and the telemetry exporter's endpoint and
-// headers ([codexTelemetryEnv]), which Codex otherwise hands every command
-// (measured), keeping PATH, HOME, GIT_CONFIG_* and the seat's tool credentials.
+// headers ([codexTelemetryEnv]) excluded, keeping PATH, HOME, GIT_CONFIG_* and
+// the seat's tool credentials.
 func codexPosture(req sandbox.RunRequest) []string {
 	profile, _ := harnessprofile.Builtin(CodexName)
 	set := []string{
