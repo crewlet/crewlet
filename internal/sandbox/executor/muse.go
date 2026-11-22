@@ -494,13 +494,14 @@ func museMCP(s sandbox.MCPServer) museMCPServer {
 	return out
 }
 
-// museNonce is a run's own suffix to its servers' names: twelve hex digits
-// from the system's random source, new every run, so the run's servers are
-// under names no file of the repository's can declare beforehand (a trusted
-// run loads the repository's `.mcp.json` beside them). A variable so a case
-// can name the files it reads.
+// museNonce is a run's own suffix to its servers' names: six hex digits (24
+// bits) from the system's random source, new every run, so the run's servers
+// are under names no file of the repository's can declare beforehand (a
+// trusted run loads the repository's `.mcp.json` beside them), and a name of
+// up to 19 characters stays whole ([museServerNameShown]). A variable so a
+// case can name the files it reads.
 var museNonce = func() string {
-	var b [6]byte
+	var b [3]byte
 	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
 }
@@ -515,10 +516,8 @@ func writeMuseServers(ctx context.Context, box sandbox.Sandbox, dir string, serv
 	for name, s := range servers {
 		full := name + "-" + nonce
 		if !museServerName(full) {
-			return fmt.Errorf("executor: the MCP server %q is not named as Muse Code shows a server's name: "+
-				"letters, digits, '-' and '_', at most %d once the run's own %d are added, so at most %d "+
-				"(rename it in the seat's MCP servers)", name, museServerNameMax, len(full)-len(name),
-				museServerNameMax-(len(full)-len(name)))
+			return fmt.Errorf("executor: the MCP server %q is not named as Muse Code reads a server's name: "+
+				"letters, digits, '-' and '_' (rename it in the seat's MCP servers)", name)
 		}
 		if err := writeJSON(ctx, box, dir+"/"+full+".json", museMCP(s)); err != nil {
 			return fmt.Errorf("executor: writing the MCP server %q for Muse Code: %w", name, err)
@@ -527,17 +526,17 @@ func writeMuseServers(ctx context.Context, box sandbox.Sandbox, dir string, serv
 	return nil
 }
 
-// museServerNameMax is the longest server name Muse Code shows the model as
-// it is: a server's tools come under one entry, `mcp__<name>`, of at most 31
-// characters, and a longer name is shown as a hash of it (measured on 1.4.25;
-// any length is taken and runs), which leaves the model no way to tell the
-// server's tools for its own.
-const museServerNameMax = 26
+// museServerNameShown is the longest server name Muse Code shows the model
+// as it is: a server's tools come under one entry, `mcp__<name>`, of at most
+// 31 characters, and a longer name is shown as a hash of it, which runs all
+// the same (measured on 1.4.25, names of up to 70 characters).
+const museServerNameShown = 26
 
 // museServerName reports whether name, a server's name with the run's suffix,
-// is one a file and a shell word carry as it is and Muse Code shows whole.
+// is one a file and a shell word carry as it is: its file, `<name>.json`,
+// within the 255 bytes a file's name takes.
 func museServerName(name string) bool {
-	if name == "" || len(name) > museServerNameMax {
+	if name == "" || len(name)+len(".json") > 255 {
 		return false
 	}
 	for _, r := range name {

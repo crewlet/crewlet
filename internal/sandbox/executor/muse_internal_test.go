@@ -595,7 +595,7 @@ func fixedMuseNonce(t *testing.T) {
 	t.Cleanup(func() { museNonce = was })
 }
 
-// EVERY RUN NAMES ITS SERVERS AFRESH, twelve hex digits no repository file
+// EVERY RUN NAMES ITS SERVERS AFRESH, six hex digits no repository file
 // can know beforehand: a trusted run loads the repository's `.mcp.json`
 // beside the run's own servers, so the run's bridge is never under a name a
 // checkout can hold.
@@ -605,31 +605,35 @@ func TestEveryMuseRunNamesItsServersAfresh(t *testing.T) {
 	seen := map[string]bool{}
 	for range 64 {
 		n := museNonce()
-		if len(n) != 12 || strings.Trim(n, "0123456789abcdef") != "" || seen[n] {
-			t.Fatalf("suffix %q: want twelve hex digits, new each run", n)
+		if len(n) != 6 || strings.Trim(n, "0123456789abcdef") != "" || seen[n] {
+			t.Fatalf("suffix %q: want six hex digits, new each run", n)
 		}
 		seen[n] = true
 	}
 }
 
-// A SERVER'S NAME IS HELD, THE RUN'S SUFFIX INCLUDED, TO WHAT MUSE CODE SHOWS
-// WHOLE: a name that fits once `-<12 hex>` is added is written under the
-// longer name; one a character longer is refused, naming the room left.
+// A SERVER NAMED IN UP TO 19 CHARACTERS IS SHOWN WHOLE, AND A LONGER ONE STILL
+// RUNS: with the run's `-<6 hex>`, a 19-character name is within the 26 Muse
+// Code shows the model as written, and a 40-character one, which Muse shows
+// as a hash, is written all the same; nothing is refused for its length.
 //
-// Mutation: hold the name without its suffix, and the longer one is written.
-func TestAMuseServerNameIsHeldWithItsSuffix(t *testing.T) {
-	const nonce = "0123456789ab"
+// Mutation: lengthen the suffix, or refuse a name for its length.
+func TestAMuseServerNameStaysWholeUpTo19Characters(t *testing.T) {
+	nonce := museNonce()
+	readable := strings.Repeat("a", 19)
+	if full := readable + "-" + nonce; len(full) > museServerNameShown {
+		t.Fatalf("a 19-character name runs as %q, past the %d Muse shows whole", full, museServerNameShown)
+	}
 	box := sandbox.NewFakeSandbox("b")
-	fits := strings.Repeat("a", museServerNameMax-len(nonce)-1)
+	long := strings.Repeat("b", 40)
 	server := sandbox.MCPServer{URL: "http://e/mcp"}
-	if err := writeMuseServers(t.Context(), box, "/s", map[string]sandbox.MCPServer{fits: server}, nonce); err != nil {
-		t.Fatalf("a %d-character name: %v", len(fits), err)
+	err := writeMuseServers(t.Context(), box, "/s", map[string]sandbox.MCPServer{readable: server, long: server}, nonce)
+	if err != nil {
+		t.Fatalf("names of 19 and 40 characters: %v", err)
 	}
-	if _, err := box.ReadFile(t.Context(), "/s/"+fits+"-"+nonce+".json"); err != nil {
-		t.Fatalf("the server is not written under its name and the run's suffix: %v", err)
-	}
-	err := writeMuseServers(t.Context(), box, "/s", map[string]sandbox.MCPServer{fits + "b": server}, nonce)
-	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("at most %d (", len(fits))) {
-		t.Fatalf("a %d-character name: %v, want it refused naming %d", len(fits)+1, err, len(fits))
+	for _, name := range []string{readable, long} {
+		if _, err := box.ReadFile(t.Context(), "/s/"+name+"-"+nonce+".json"); err != nil {
+			t.Errorf("the server %s is not written under its name and the run's suffix: %v", name, err)
+		}
 	}
 }

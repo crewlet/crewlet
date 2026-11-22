@@ -328,7 +328,8 @@ func TestARepositoryCannotDisplaceOrImpersonateTheMuseChannels(t *testing.T) {
 		}
 		name, _ := strings.CutPrefix(p.Facts.ToolName, "mcp__crewlet_")
 		suffix, tool, _ := strings.Cut(name, "__")
-		if len(suffix) == 12 && tool == "echo" && p.Facts.Outcome == "success" {
+		if suffix != "" && strings.Trim(suffix, "0123456789abcdef") == "" && tool == "echo" &&
+			p.Facts.Outcome == "success" {
 			reached = true
 		}
 	}
