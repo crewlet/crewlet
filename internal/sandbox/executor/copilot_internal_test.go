@@ -969,6 +969,72 @@ func TestACopilotRunKeepsOnlyItsEntrysProvider(t *testing.T) {
 	}
 }
 
+// Copilot is started with its GitHub sign-in under COPILOT_GITHUB_TOKEN alone,
+// the token its own order takes, every other sign-in name and its own names for
+// the token it holds unset, and every sign-in name and its export's endpoint
+// and headers in `--secret-env-vars`, so the run's tools are handed only the
+// variables they need. The rest of the run's environment is kept, its export's
+// endpoint among them, which Copilot's own export reads.
+//
+// Mutation: drop the flag or its export names, leave GITHUB_TOKEN set, take
+// GITHUB_TOKEN over GH_TOKEN, or unset the endpoint: the case fails.
+func TestACopilotRunHandsItsSignInUnderOneName(t *testing.T) {
+	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
+	for _, tc := range []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{"none", map[string]string{}, ""},
+		{"GITHUB_TOKEN alone", map[string]string{"GITHUB_TOKEN": "ghs-g"}, "ghs-g"},
+		{"GH_TOKEN over GITHUB_TOKEN", map[string]string{"GH_TOKEN": "gh-h", "GITHUB_TOKEN": "ghs-g"}, "gh-h"},
+		{"Copilot's own first", map[string]string{"COPILOT_GITHUB_TOKEN": "pat-c", "GH_TOKEN": "gh-h",
+			"GITHUB_TOKEN": "ghs-g", "GITHUB_COPILOT_GITHUB_TOKEN": "held-1",
+			"GITHUB_COPILOT_AGENT_GITHUB_TOKEN": "held-2"}, "pat-c"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.Command(sh, "-c", copilotSignIn()+"env")
+			cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "RUN_OWN=kept",
+				"OTEL_EXPORTER_OTLP_ENDPOINT=http://engine.example.com/otlp/t-1"}
+			for k, v := range tc.env {
+				cmd.Env = append(cmd.Env, k+"="+v)
+			}
+			out, err := cmd.Output()
+			if err != nil {
+				t.Fatalf("the sign-in part of the script failed: %v", err)
+			}
+			got := map[string]string{}
+			for l := range strings.Lines(string(out)) {
+				if k, v, ok := strings.Cut(strings.TrimSuffix(l, "\n"), "="); ok {
+					got[k] = v
+				}
+			}
+			if v, set := got["COPILOT_GITHUB_TOKEN"]; v != tc.want || set != (tc.want != "") {
+				t.Errorf("COPILOT_GITHUB_TOKEN = %q (set %v), want %q", v, set, tc.want)
+			}
+			for _, name := range slices.Concat(copilotSignInNames[1:], copilotHeldToken) {
+				if v, set := got[name]; set {
+					t.Errorf("%s is still set, to %q", name, v)
+				}
+			}
+			if got["RUN_OWN"] != "kept" || got["OTEL_EXPORTER_OTLP_ENDPOINT"] != "http://engine.example.com/otlp/t-1" {
+				t.Errorf("the run's own variables were lost, its export's among them: %v", got)
+			}
+		})
+	}
+	script := copilotScript(sandbox.RunRequest{}, Session{ID: "s-1"}, Paths{Home: "/box"}, "", time.Second)
+	signIn, launch := strings.Index(script, copilotSignIn()), strings.Index(script, "copilot --output-format")
+	if signIn < 0 || launch < signIn {
+		t.Errorf("the sign-in part does not come before the launch:\n%s", script)
+	}
+	want := " --secret-env-vars=COPILOT_GITHUB_TOKEN,GH_TOKEN,GITHUB_TOKEN,OTEL_EXPORTER_OTLP_ENDPOINT," +
+		"OTEL_EXPORTER_OTLP_HEADERS,OTEL_EXPORTER_OTLP_TRACES_ENDPOINT,OTEL_EXPORTER_OTLP_TRACES_HEADERS," +
+		"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT,OTEL_EXPORTER_OTLP_METRICS_HEADERS "
+	if !strings.Contains(script, want) {
+		t.Errorf("the invocation does not name every sign-in and export variable in --secret-env-vars:\n%s", script)
+	}
+}
+
 // The run is pinned to its own home and trusted by COPILOT_ALLOW_ALL=true
 // (route (a), measured to widen nothing beyond --yolo); the switches that open
 // what a repository loads in prompt mode are unset.
