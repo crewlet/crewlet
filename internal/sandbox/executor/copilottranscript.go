@@ -177,8 +177,8 @@ func (b *transcriptBuilder) copilotCalls(raw json.RawMessage, at time.Time) erro
 // compaction between that may have left it only in the summary (ADR-0177): one
 // not stated failed, unless the note stands among the trailing messages its
 // start counts (`retainedInputMessages`; measured on 1.0.114,
-// compacted-queued), every main line the model reads counted as one
-// ([copilotMessage]). The line alone is no proof (ruling 1 of #1818's design):
+// compacted-queued), every line the model may read counted as one
+// ([copilotWindow]). The line alone is no proof (ruling 1 of #1818's design):
 // a kill or a refusal can follow it. A last line with no newline is a write
 // cut off; a line past the bound or of no kind read is no note, though it
 // counts as a message.
@@ -187,11 +187,11 @@ func copilotNotesHeld(ctx context.Context, events io.Reader, takes []ServedTake)
 	for _, take := range takes {
 		asked[CopilotClientTurnID(take.InboxID)] = take.InboxID
 	}
-	// pending is each note sent and not yet held, by its line; messages the
-	// number of every line that may be a message the main agent's model reads,
-	// and retained the notes the compaction started last carries over whole.
+	// pending is each note sent and not yet held, by its line; window the
+	// lines that may be messages the main agent's model reads, and retained
+	// the notes the compaction started last carries over whole.
 	pending := map[string]copilotPending{}
-	var messages []int
+	var window copilotWindow
 	var retained map[string]bool
 	held := map[string]bool{}
 	n := 0
@@ -206,14 +206,12 @@ func copilotNotesHeld(ctx context.Context, events io.Reader, takes []ServedTake)
 		n++
 		moved = moved[:0]
 		ev, ok := decodeCopilotNoteLine(line)
+		window.read(n, ev, ok)
 		if !ok {
-			// A line of no kind this read knows may be a message.
-			messages = append(messages, n)
 			return nil
 		}
-		if ev.AgentID == "" && copilotMessage(ev.Type) {
-			messages = append(messages, n)
-		}
+		// A note and a request are the main agent's only where the line names
+		// no agent at all: the window counts more lines than this holds.
 		switch ev.Type {
 		case "user.message":
 			if ev.AgentID != "" {
@@ -245,7 +243,7 @@ func copilotNotesHeld(ctx context.Context, events io.Reader, takes []ServedTake)
 				}
 			}
 		case "session.compaction_start":
-			retained = copilotRetained(pending, messages, looseInt(ev.Data.RetainedInputMessages))
+			retained = copilotRetained(pending, window.messages, looseInt(ev.Data.RetainedInputMessages))
 		case "session.compaction_complete":
 			// Past a compaction, a request may carry the note only inside
 			// its summary: only one that says it failed keeps every note, and
@@ -261,10 +259,9 @@ func copilotNotesHeld(ctx context.Context, events io.Reader, takes []ServedTake)
 		}
 		return nil
 	}, func(int64) error {
-		// A line past the bound may be a message (a tool's long result).
 		n++
 		moved = moved[:0]
-		messages = append(messages, n)
+		window.read(n, copilotNoteLine{}, false)
 		return nil
 	})
 	if err != nil {
@@ -304,18 +301,42 @@ func copilotRetained(pending map[string]copilotPending, messages []int, count in
 	return kept
 }
 
-// copilotMessage reports whether a main line of kind may be a message the
-// model reads: every kind but the session's own bookkeeping (measured on
-// 1.0.114's records), so a kind this read does not know counts as one, which
-// can only narrow the window [copilotRetained] reads.
-func copilotMessage(kind string) bool {
-	switch kind {
-	case "hook.start", "hook.end", "assistant.turn_start", "assistant.turn_end", "tool.execution_start", "abort",
-		"session.start", "session.resume", "session.shutdown", "session.info", "session.warning", "session.error",
-		"session.permissions_changed", "session.model_change", "session.usage_record", "session.usage_checkpoint",
-		"session.compaction_start", "session.compaction_complete",
-		"subagent.started", "subagent.configured", "subagent.completed":
+// copilotWindow is the lines of a session's events.jsonl that may be
+// messages the main agent's model reads, by number, as Copilot counts them
+// toward a compaction's `retainedInputMessages`. Only what the compaction
+// captures prove is no message is left out: the count before each start is
+// its `preCompactionMessagesLength` (1.0.114; a test holds them equal);
+// any other kind, a line of no kind read, one past the bound, and one naming
+// an agent no `subagent.started` announced count, which only narrows the
+// window. The compaction's own start is where the count is read.
+type copilotWindow struct {
+	messages  []int
+	announced map[string]bool
+}
+
+func (w *copilotWindow) read(n int, ev copilotNoteLine, ok bool) {
+	if ok && ev.Type == "subagent.started" && ev.AgentID != "" {
+		if w.announced == nil {
+			w.announced = map[string]bool{}
+		}
+		w.announced[ev.AgentID] = true
+	}
+	if ok && (w.announced[ev.AgentID] || ev.Type == "session.compaction_start" || !copilotMessage(ev)) {
+		return
+	}
+	w.messages = append(w.messages, n)
+}
+
+// copilotMessage reports whether a line may be a message the model reads:
+// every kind but those the compaction captures prove are not ([copilotWindow]),
+// a hook's end only where it returned nothing.
+func copilotMessage(ev copilotNoteLine) bool {
+	switch ev.Type {
+	case "hook.start", "assistant.turn_start", "assistant.turn_end", "tool.execution_start",
+		"session.start", "session.permissions_changed", "session.usage_record", "session.info":
 		return false
+	case "hook.end":
+		return !ev.bareHook
 	}
 	return true
 }
@@ -375,6 +396,9 @@ type copilotNoteLine struct {
 			Duration        json.RawMessage `json:"duration"`
 		} `json:"usage"`
 	} `json:"data"`
+	// bareHook is a `hook.end` whose data holds only its id, its kind and its
+	// success: a hook that handed the model nothing.
+	bareHook bool
 }
 
 // copilotMainRequest is the `interactionType` of a main agent's own model
@@ -399,6 +423,17 @@ func decodeCopilotNoteLine(line []byte) (copilotNoteLine, bool) {
 			return copilotNoteLine{}, false
 		}
 		return copilotNoteLine{Type: typed.Type}, true
+	}
+	if ev.Type == "hook.end" {
+		var hook struct {
+			Data map[string]json.RawMessage `json:"data"`
+		}
+		ev.bareHook = json.Unmarshal(line, &hook) == nil
+		for field := range hook.Data {
+			if field != "hookInvocationId" && field != "hookType" && field != "success" {
+				ev.bareHook = false
+			}
+		}
 	}
 	return ev, ev.Type != ""
 }
