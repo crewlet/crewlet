@@ -475,8 +475,8 @@ harness's own run (`claude-code`, `codex`, `gemini-cli`, `qwen-code`, `opencode`
 from `providers.sandbox`, which the company must configure once it has an
 agent seat and a model; reading and reviewing code on a code host is MCP.
 `role.sandbox` adds what one seat's box reads: `setup` steps, `env` (its
-code-host token), `optional_keys`, `mcp`, `pause_ttl_seconds` and
-`max_turns`. See
+code-host token), `optional_keys`, `mcp`, `pause_ttl_seconds`,
+`max_turns` and `max_concurrent_runs`. See
 [Code sandbox](https://docs.crewlet.ai/engine/latest/concepts/code-sandbox/).
 Where the company hosts its code on Gitlet, the engine's own git host (`code.backend: gitlet`),
 a seat's executors clone and push the company's repositories themselves:
