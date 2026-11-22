@@ -3723,7 +3723,7 @@ kimi-code:
   credential_paths:
     - ".kimi-code/credentials/oauth/kimi-code.json"
     - ".kimi-code/config.toml"
-  # Sessions, their index, the logs, the workspace registry and the telemetry
+  # Sessions, their index, the logs, the project registry and the telemetry
   # queue: what a call writes about itself.
   #
   # Each session directory holds `agents/*/wire.jsonl`, which the vendor
@@ -3731,13 +3731,15 @@ kimi-code:
   # tool return values, or traces of credentials" — one seat's turn is not
   # allowed to reach the next one through it.
   #
-  # `workspaces.json` gains one entry per call, naming that call's working
-  # directory, and the harness never removes one: two calls left two, on both
-  # builds. The harness makes it again on its next start. Like every volatile
-  # path it is pruned only with none of the seat's calls in flight — when the
-  # seat's last call releases it and when its next generation opens — so no
-  # running call loses the entry it registered. Measured through the engine:
-  # after each of six calls in one seat, none was left.
+  # `projects.json` gains one entry per call, keyed `wd_<directory>_<digest>`
+  # as its sessions are and naming its working directory as the root; the harness
+  # never removes one: six calls left six (measured on 2.7.2), with
+  # `.projects-write-lock`, the empty file it locks the registry by, beside it.
+  # The harness makes both again on its next start. Like every volatile path
+  # they are pruned only with none of the seat's calls in flight (when the
+  # seat's last call releases it and when its next generation opens), so no
+  # running call loses the entry it registered. `sessions/.index-dirty`, a
+  # marker per session, goes with `sessions`.
   #
   # `telemetry` is where the harness queues the events it could not send; with
   # KIMI_DISABLE_TELEMETRY it is never made, and pruned it reaches no later
@@ -3749,7 +3751,8 @@ kimi-code:
     - ".kimi-code/sessions"
     - ".kimi-code/session_index.jsonl"
     - ".kimi-code/logs"
-    - ".kimi-code/workspaces.json"
+    - ".kimi-code/projects.json"
+    - ".kimi-code/.projects-write-lock"
     - ".kimi-code/telemetry"
   host_credential_paths:
     - ".kimi-code/credentials/oauth/kimi-code.json"
