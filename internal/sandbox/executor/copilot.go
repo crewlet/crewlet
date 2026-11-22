@@ -673,13 +673,16 @@ func copilotMCP(s sandbox.MCPServer) map[string]any {
 	return out
 }
 
-// artifacts is what a Copilot run leaves in its box of its own: its standing
-// instructions and its extension in its home, which a later run with neither
-// must not find, and a fresh session's extension beside the work directory.
-// Its settings are written whole by every run, and its sessions are kept.
+// artifacts is what a Copilot run leaves in its box of its own (its standing
+// instructions, its extension, a fresh session's extension beside the work
+// directory) and everything else in its home a run would load that its launch
+// does not write ([Paths.CopilotLoaded]), an earlier run's or the image's: a
+// Copilot run loads only the configuration its launch writes. Its settings
+// are written whole by every run; its login and sessions are kept.
 func (Copilot) artifacts(p Paths) (files, dirs []string) {
-	return []string{p.CopilotInstructions(), p.CopilotExtensionFresh(), p.CopilotToolEnv()},
-		[]string{p.CopilotExtension()}
+	loadedFiles, loadedDirs := p.CopilotLoaded()
+	return append([]string{p.CopilotInstructions(), p.CopilotExtensionFresh(), p.CopilotToolEnv()}, loadedFiles...),
+		loadedDirs
 }
 
 // notesOffWhy is what switches Copilot's reading of notes off: a managed policy
