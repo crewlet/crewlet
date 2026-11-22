@@ -26,6 +26,7 @@ func TestEveryCarrierRefusesABoxThatNamedNoReleaseAndJudgesAWriterAlone(t *testi
 		{"claude-code", ClaudeCode{}, "2.1.322", []string{"2.1.310", "2.1.300", "2.1.299", ""}},
 		{"opencode", OpenCode{}, "2.2.7", []string{"2.2.7", "2.0.32", "2.0.31", ""}},
 		{"codex", Codex{}, codexCarryRelease, []string{codexCarryRelease, "0.170.0", "0.172.0", ""}},
+		{"pi", Pi{}, piSupported, []string{piSupported, "1.5.9", "1.6.1", ""}},
 	} {
 		for _, box := range []string{"", "nightly", "1.2"} {
 			if ok, why := c.carrier.Continues(box, c.writers[0]); ok || !strings.Contains(why, "named no release") {
