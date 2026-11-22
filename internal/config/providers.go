@@ -344,9 +344,8 @@ var Harnesses = []Harness{
 func (n Harness) Valid() bool { return slices.Contains(Harnesses, n) }
 
 // ExecutorHarnesses is the closed set of harnesses that can run a seat's
-// EXECUTOR: those with an in-box runner (internal/sandbox/executor).
-//
-// Every other harness drives text phases only. A launch walks the seat's
+// EXECUTOR: those with an in-box runner (internal/sandbox/executor). Every
+// other harness drives text phases only. A launch walks the seat's
 // executor chain for its first member here that is not sitting out, so a chain
 // with none can never run the turn, and config refuses it
 // ([Company.validateExecutors]).

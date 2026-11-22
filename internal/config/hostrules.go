@@ -7,9 +7,8 @@ import (
 )
 
 // ValidateHost reports the rules that depend on the process judging the
-// document rather than on the document alone: today, that a harness whose
-// runner's flag it refuses for root cannot run an executor as root
-// ([harnessprofile.Executor.RefusesRoot]).
+// document, not the document alone: today, that a harness whose runner refuses
+// root cannot run an executor as root ([harnessprofile.Executor.RefusesRoot]).
 //
 // SEPARATE FROM [Company.Validate] ON PURPOSE: that is a pure function of the
 // document, valid or not on every machine. A launch also depends on who the
