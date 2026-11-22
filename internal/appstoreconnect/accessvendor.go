@@ -48,9 +48,10 @@ func (accessVendor) Steps(seataccess.SeatRef, seataccess.Lane, seataccess.Op, se
 // for a step-up to give.
 func (accessVendor) FixedLevels(seataccess.Lane) []seataccess.Level {
 	return []seataccess.Level{
-		{ID: string(growth.LevelRead), Name: "Read", Note: readNote},
-		{ID: string(growth.LevelOperate), Name: "Operate", Note: operateNote, Administers: true},
-		{ID: string(growth.LevelAdminister), Name: "Administer", Note: administerNote, Administers: true},
+		{ID: string(growth.LevelRead), Name: growth.LevelRead.Label(), Note: readNote},
+		{ID: string(growth.LevelOperate), Name: growth.LevelOperate.Label(), Note: operateNote, Administers: true},
+		{ID: string(growth.LevelAdminister), Name: growth.LevelAdminister.Label(), Note: administerNote,
+			Administers: true},
 	}
 }
 

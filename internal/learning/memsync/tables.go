@@ -10,6 +10,20 @@ import "slices"
 // every one of which would have to remember the hook. A new memory table is
 // one entry here; TestEveryAgentKeyedTableTravels fails for one without it.
 
+// watermark is the column every table's incremental export pages over, per
+// seat, table and range ([Syncer.PublishOwn], [Syncer.PublishBacklog]), past
+// the last row the stream acknowledged.
+//
+// NEVER REUSED (a rowid is, once its newest row is deleted, and a reuse at or
+// below a passed mark is never published) AND UNIQUE ABOVE 0 within a table
+// (0, the default, no read returns; the mark moves per row, so a cut between
+// two rows of one value skips the second): stamped by trigger from an
+// only-increasing counter (node migrations 0041 and 0070). Held by
+// TestNoAppendOnlyTableReusesItsWatermark,
+// TestRowsWrittenTogetherCarryDistinctWatermarks and
+// TestEveryCarriedColumnOfAMutableTableStampsItsUpdate.
+const watermark = "change_seq"
+
 // table describes how one memory table is selected, keyed and carried.
 type table struct {
 	// name is the table.
@@ -39,32 +53,14 @@ type table struct {
 	// text and recall silently breaks for that row.
 	blobs []string
 
-	// wholeEachCycle republishes every row rather than only what is new.
-	// THE SPLIT IS BY MUTABILITY: a watermark misses in-place updates, which
-	// is right for the append-only tables (a retrieval counter is bookkeeping,
-	// a compaction flag the lifecycle re-derives) and wrong where an update IS
-	// the content: a profile rewritten, a skill's state and use count, an
-	// onboarding marker flipping.
-	//
-	// It costs each table whole, every publish: profiles return after a sweep
-	// since deletes do not travel, and archived skills are never deleted (the
-	// learning.DefaultMaxSkillsPerAgent cap counts only live ones). A cut
-	// inside one keeps nothing of it, hence [ownPassOrder].
-	wholeEachCycle bool
-
-	// watermark is the column an append-only table's incremental export
-	// pages over, per seat, table and range ([Syncer.PublishOwn],
-	// [Syncer.PublishBacklog]), past the last row the stream acknowledged;
-	// empty for a wholeEachCycle table.
-	//
-	// NEVER REUSED (a rowid is, once its newest row is deleted, and a reuse at
-	// or below a passed mark is never published) AND UNIQUE ABOVE 0 within a
-	// table (0, the default, no read returns; the mark moves per row, so a
-	// cut between two rows of one value skips the second): `change_seq`,
-	// stamped by trigger from an only-increasing counter on insert and vector
-	// set (node migration 0041). Held by TestNoAppendOnlyTableReusesItsWatermark
-	// and TestRowsWrittenTogetherCarryDistinctWatermarks.
-	watermark string
+	// mutable says an update of a row IS its content: a profile rewritten, a
+	// skill's state and use count, an onboarding marker flipping. Node
+	// migration 0070 stamps every update of a carried column, so the watermark
+	// carries it as it carries an insert, and an import replaces a stored row
+	// ([table.onConflict]). An append-only row's in-place changes (a retrieval
+	// counter, a compaction flag) are bookkeeping no stamp follows, but for
+	// its vector ([table.fillsVector]).
+	mutable bool
 
 	// fillsVector says the holder FILLS this append-only table's vector (its
 	// `embedding` and `embedding_model`) after the insert, for rows written
@@ -84,11 +80,11 @@ type table struct {
 	//
 	// A hydration replays the parent's table first ([tables]) and LEAVES OUT
 	// a row whose parent is still not in the store ([table.parentHeld]),
-	// counted as an orphan: written, its foreign key refused the seat on every node
-	// lacking the parent, over a row nothing reads alone. The parent is
-	// missing after a publish cut between version and skill ([ownPassOrder]),
-	// or when this store skipped it for another skill of that name on the
-	// (agent_handle, name) index ([table.onConflict]).
+	// counted as an orphan: written, its foreign key refused the seat on every
+	// node lacking the parent, over a row nothing reads alone. It is missing
+	// when a crash or a cut flush came after a pass carried the version of a
+	// skill made and refined since that pass read the skills, or when this
+	// store skipped it for another skill of that name ([table.onConflict]).
 	// TestEveryReferenceBetweenCarriedTablesNamesAParentReplayedFirst holds
 	// every schema reference between carried tables to a parent listed first.
 	parent *reference
@@ -116,8 +112,7 @@ var retiredTables = []string{
 }
 
 // tables is every table a seat's memory lives in, in the order a hydration
-// replays them; a publish's own pass reorders them ([ownPassOrder]) and its
-// backlog carries only the watermark tables ([backlogPassOrder]).
+// replays them and each range of a publish carries them.
 //
 // PARENTS BEFORE CHILDREN: synthesized_skill_versions references
 // synthesized_skills with foreign keys ON, and the changelog keeps no order
@@ -136,7 +131,6 @@ var tables = []table{
 			"embedding", "embedding_model", "created_at", "provenance", "engine_build",
 		},
 		blobs:       []string{"embedding"},
-		watermark:   "change_seq",
 		fillsVector: true,
 	},
 	{
@@ -153,7 +147,6 @@ var tables = []table{
 			"notable_patterns", "work_key", "conversation_key", "ask_provenance",
 		},
 		blobs:       []string{"embedding"},
-		watermark:   "change_seq",
 		fillsVector: true,
 	},
 	{
@@ -169,7 +162,7 @@ var tables = []table{
 			"last_updated_at", "last_corroborated_at", "interaction_count",
 			"last_work_key",
 		},
-		wholeEachCycle: true,
+		mutable: true,
 	},
 	{
 		name:    "synthesized_skills",
@@ -181,7 +174,7 @@ var tables = []table{
 			"created_at", "updated_at", "use_count", "last_used_at", "state",
 			"pinned", "stale_at", "archived_at", "load_count",
 		},
-		wholeEachCycle: true,
+		mutable: true,
 	},
 	{
 		name:    "synthesized_skill_versions",
@@ -192,8 +185,7 @@ var tables = []table{
 			"frontmatter", "tool_sequence", "source_episode_ids", "version",
 			"refinement_kind", "refinement_note", "archived_at",
 		},
-		watermark: "change_seq",
-		parent:    &reference{column: "skill_id", table: "synthesized_skills", key: "id"},
+		parent: &reference{column: "skill_id", table: "synthesized_skills", key: "id"},
 	},
 	{
 		name:      "agent_onboarding_markers",
@@ -204,30 +196,9 @@ var tables = []table{
 			"agent_id", "chain_hash", "agent_handle", "role", "summary",
 			"created_at", "updated_at", "in_progress_until",
 		},
-		wholeEachCycle: true,
+		mutable: true,
 	},
 }
-
-// ownPassOrder is the order a publish's own pass carries the tables in
-// ([Syncer.PublishOwn]): the watermark tables (diary, episodes, skill
-// versions), then the tables sent whole (profiles, skills, onboarding
-// marker), each half in the registry's order.
-//
-// WHAT THE HOLDING WROTE GOES FIRST, because a cut should lose it last: a
-// watermark table carries a few rows a cycle while the whole tables are
-// unbounded, so a pass is far likelier cut inside those, and a seat whose
-// profiles and skills outlast a cycle would never carry what sat behind them.
-// A version thus goes ahead of its skill; a cut between them leaves the
-// version with the skill's older copy or none, which a hydration tolerates
-// by leaving it out until the skill arrives ([table.parent]).
-var ownPassOrder = slices.Concat(
-	slices.DeleteFunc(slices.Clone(tables), func(t table) bool { return t.wholeEachCycle }),
-	slices.DeleteFunc(slices.Clone(tables), func(t table) bool { return !t.wholeEachCycle }))
-
-// backlogPassOrder is the order a publish's backlog carries the tables in
-// ([Syncer.PublishBacklog]): the tables with a watermark, in the registry's
-// order. The tables sent whole are not in it: the own pass sends them.
-var backlogPassOrder = slices.DeleteFunc(slices.Clone(tables), func(t table) bool { return t.wholeEachCycle })
 
 // isBlob reports whether a column carries bytes.
 func (t table) isBlob(column string) bool {

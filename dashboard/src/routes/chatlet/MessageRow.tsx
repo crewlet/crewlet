@@ -304,8 +304,9 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
       // them. The assistant reads the message itself, fenced as words
       // somebody else wrote.
       onSelect: () =>
-        assistant.ask(
+        assistant.askAbout(
           `Help me with this message from ${author.name}: ${location.origin}${location.pathname}${link}`,
+          { send: true },
         ),
     },
     ...(mine || scope.moderates

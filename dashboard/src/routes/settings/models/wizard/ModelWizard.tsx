@@ -27,15 +27,7 @@
  * a deep link into a step opens it quiet, with its field focused.
  */
 
-import {
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type KeyboardEvent,
-} from "react";
+import { useContext, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Button, SetupWizard, useToast, type StepperStep } from "@crewlethq/ui";
 import { ConfirmModal } from "~/components/Modal.tsx";
 import { readOnlyFrom, useAssistantDraft, useDraftState } from "~/app/assistant/draft.ts";
@@ -75,6 +67,7 @@ import {
   STEP_LABELS,
   baseOf,
   canExecute,
+  credentialScope,
   credentialValues,
   distinctProblems,
   draftOf,
@@ -88,12 +81,12 @@ import {
   stepOf,
   stepsFor,
   hasSandbox,
+  keptOf,
   withHostSandbox,
-  storedCloudSecrets,
   suggestedVariable,
+  withChoices,
   type Harness,
   type Draft,
-  type Kept,
   type NextDocument,
 } from "./draft.ts";
 import { MODEL_DRAFT_HELP, modelDraftFields } from "./assistantDraft.ts";
@@ -324,7 +317,8 @@ export function ModelWizard({
   const [replacing, setReplacing] = useState(
     !!original && target?.focus === "credential" && pastesCredential(original),
   );
-  const [variableTouched, setVariableTouched] = useState(!!editing);
+  /** Whether the secret's name is the reader's or the edited model's, rather than suggested. */
+  const [variableNamed, setVariableNamed] = useState(!!editing);
   const [test, setTest] = useState<TestState>({ kind: "idle" });
   const [engineProblems, setEngineProblems] = useState<ConfigProblem[]>([]);
   const [check, setCheck] = useState<ReviewCheck>({ kind: "idle" });
@@ -349,19 +343,7 @@ export function ModelWizard({
         .filter(Boolean),
     [data.models, editing?.key],
   );
-  const kept: Kept = {
-    credential:
-      !!original &&
-      !replacing &&
-      pastesCredential(draft) &&
-      draft.method === original.method &&
-      draft.variable === original.variable &&
-      !!original.variable,
-    cloud:
-      draft.method === "cloud" && original?.method === "cloud" && draft.cloud === original.cloud
-        ? storedCloudSecrets(base)
-        : {},
-  };
+  const kept = keptOf(draft, original, base, replacing);
   const values = credentialValues(draft);
   const names = Object.keys(values);
   const entity = entityOf(draft, base);
@@ -388,47 +370,34 @@ export function ModelWizard({
   const field = (name: string) => (s: (string | number)[]) =>
     s[0] === "providers" && s[1] === "llm" && s[2] === draft.key && s[3] === name;
 
-  const set = useCallback(
-    (patch: Partial<Draft>) => {
-      setDraft((d) => {
-        const next = { ...d, ...patch };
-        // THE SECRET'S NAME FOLLOWS the name and the method until the reader names one;
-        // an edit on its own method keeps the secret it reads.
-        const own = original && next.method === original.method && original.variable;
-        if (!("variable" in patch) && !variableTouched && pastesCredential(next) && !own)
-          next.variable = suggestedVariable(next, taken);
-        return next;
-      });
-      setEngineProblems([]);
-      setCheck({ kind: "idle" });
-      setPrepared(null);
-      // A change mid-check abandons the check, so the save never stores the draft as it was.
-      if (finishing.current) inflight.current?.abort();
-      setFinish({ kind: "idle" });
-    },
-    [original, variableTouched, taken],
-  );
+  const set = (patch: Partial<Draft>) => {
+    // A CHANGED CHOICE CLEARS WHAT BELONGS TO THE OLD ONE (`withChoices`): the
+    // model, its effort, the pasted credential and the secret's name.
+    const next = withChoices(draft, patch, { original, taken, named: variableNamed });
+    setDraft(next.draft);
+    setVariableNamed(next.named);
+    // THE STORED CREDENTIAL IS ONLY ITS OWN SCOPE'S, so replacing it ends where the scope moved.
+    if (original && credentialScope(next.draft) !== credentialScope(original)) setReplacing(false);
+    setEngineProblems([]);
+    setCheck({ kind: "idle" });
+    setPrepared(null);
+    // A change mid-check abandons the check, so the save never stores the draft as it was.
+    if (finishing.current) inflight.current?.abort();
+    setFinish({ kind: "idle" });
+  };
 
   const changeHarness = (harness: Harness) => {
-    const executor = canExecute({ harness });
-    const dropsCoding = !executor && (draft.intent === "all" || draft.intent === "coding");
+    // BACK ON THE EDITED MODEL'S HARNESS, its own sign-in comes back with it.
+    if (original && harness === original.harness) {
+      set({ harness, method: original.method, provider: original.provider, cloud: original.cloud });
+      return;
+    }
     const providers = providersFor(harness);
     set({
       harness,
       method: methodsOf(harness)[0] ?? "unchanged",
-      credential: "",
-      model: "",
-      effort: "",
-      endpoint: "",
       ...(providers.length > 0 && !providers.some((p) => p.value === draft.provider)
         ? { provider: providers[0]!.value }
-        : {}),
-      ...(executor ? {} : { runIn: "" }),
-      ...(dropsCoding
-        ? {
-            intent: "none",
-            uses: { ...noUses(), assistant: draft.uses.assistant, advisor: draft.uses.advisor },
-          }
         : {}),
     });
   };
@@ -960,10 +929,7 @@ export function ModelWizard({
                 ),
               }}
               onChange={(patch) => set(patch)}
-              onVariable={(variable) => {
-                setVariableTouched(true);
-                set({ variable });
-              }}
+              onVariable={(variable) => set({ variable })}
               onReplace={(on) => {
                 setReplacing(on);
                 set({
