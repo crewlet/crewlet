@@ -1,0 +1,11 @@
+-- An executor session is found by its id: whether any turn's row names it.
+--
+-- A harness that mints its session's id as it runs (internal/sandbox/executor's
+-- sessionMinter) has its box report the id, and the box's word is untrusted:
+-- the engine binds only a FRESH id, never one a turn's row already names
+-- (executordomain.Reader.SessionHeld). Every other index on executor_sessions
+-- leads with the seat's handle, so without this one the question read every
+-- row of the table.
+--
+-- WHO HAS TO AGREE ON IT: nobody. An index moves no row.
+CREATE INDEX executor_sessions_session_idx ON executor_sessions (session_id); -- read by Reader.SessionHeld (read.go): whether any turn's row names a session
