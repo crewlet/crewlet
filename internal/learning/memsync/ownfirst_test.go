@@ -19,12 +19,13 @@ import (
 
 // WHAT A HOLDING WRITES GOES BEFORE THE BACKLOG IT TOOK.
 //
-// A hydration records the seat's boundary as it completes, and a publish is
-// two calls, each range with its own mark: the own pass (rows stamped above
-// the boundary) and the backlog (rows at or below it). Otherwise what the seat writes waits behind everything its store
-// already held, and a handoff or crash before that drains loses it. Cases
-// about a bound run on a bubble's clock; those hydrating from a real broker
-// do so outside it, then publish to a roundTripJS.
+// A hydration records the seat's boundary as it completes, and a publish is two
+// calls, each range with its own mark: the own pass (rows stamped above the
+// boundary) and the backlog (rows at or below it). Otherwise what the seat
+// writes waits behind everything its store already held, and a handoff or crash
+// before that drains loses it. Cases about a bound run on a bubble's clock;
+// those hydrating from a real broker do so outside it, then publish to a
+// roundTripJS.
 
 // turned is what one turn of the seat did, as the memory sync and a release's
 // flush run one: its own pass and, while the bound has time, its backlog, each

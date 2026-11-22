@@ -92,22 +92,21 @@
 // acquisition and every restart leaves this node a backlog: everything its
 // store holds for the seat, the rows the hydration inserted and those it found
 // already present, which keep their stamps. Everything the seat writes next is
-// stamped above all of it, so in stamp order it waited behind that backlog,
-// and a handoff or a crash before the backlog had drained lost it
+// stamped above all of it, so in stamp order it waited behind that backlog, and
+// a handoff or a crash before the backlog had drained lost it
 // (crewlet/crewlet#1039). So a hydration records the seat's BOUNDARY as it
 // completes, where this node's change sequence stood ([Syncer.Hydrate]), and
-// each table has two marks per seat: one over the rows
-// stamped above the boundary, what the holding writes or changes, its OWN, and
-// one over those at or below it, its BACKLOG. A publish is two calls:
-// [Syncer.PublishOwn] carries the seat's own rows, and
-// [Syncer.PublishBacklog] the backlog, after it, in the engine's memory sync
-// cycle's turn the held seats' backlogs share, after their own passes, so
-// while those leave that turn the time to move a mark what a seat writes waits
-// for no seat's backlog; a release's flush makes the same two calls as
-// [Syncer.FlushOwn] and [Syncer.FlushBacklog], the backlog while its bound has
-// time. The backlog is the republish node migration 0041 keeps: it puts this
-// node's rows back on a changelog restored or recreated while the node ran,
-// and carries what an earlier holding's flush did not reach.
+// each table has two marks per seat: one over the rows stamped above the
+// boundary, what the holding writes or changes, its OWN, and one over those at
+// or below it, its BACKLOG. A publish is two calls: [Syncer.PublishOwn] carries
+// the seat's own rows, and [Syncer.PublishBacklog] the backlog, after it, in
+// the engine's memory sync cycle's turn the held seats' backlogs share, after
+// their own passes, so while those leave that turn the time to move a mark what
+// a seat writes waits for no seat's backlog; a release's flush makes the same
+// two calls as [Syncer.FlushOwn] and [Syncer.FlushBacklog], the backlog while
+// its bound has time. The backlog is the republish node migration 0041 keeps:
+// it puts this node's rows back on a changelog restored or recreated while the
+// node ran, and carries what an earlier holding's flush did not reach.
 //
 // ONE PUBLISHER OF A SEAT AT A TIME, ON THIS NODE. The changelog keeps the
 // last message on each row's subject, so a node that publishes a seat it does
