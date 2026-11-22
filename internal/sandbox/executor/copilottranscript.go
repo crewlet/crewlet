@@ -186,10 +186,12 @@ func copilotNotesHeld(ctx context.Context, events io.Reader, takes []ServedTake)
 		asked[CopilotClientTurnID(take.InboxID)] = take.InboxID
 	}
 	// pending is each note sent and not yet held, by its line; inputs the
-	// number of every line of the main agent's user messages, and retained
-	// the notes the compaction started last carries over whole.
+	// number of every line of the main agent's user messages, answered the
+	// last of its answers (a message or a tool's result), and retained the
+	// notes the compaction started last carries over whole.
 	pending := map[string]copilotPending{}
 	var inputs []int
+	answered := 0
 	var retained map[string]bool
 	held := map[string]bool{}
 	n := 0
@@ -238,8 +240,12 @@ func copilotNotesHeld(ctx context.Context, events io.Reader, takes []ServedTake)
 					moved = append(moved, inbox)
 				}
 			}
+		case "assistant.message", "tool.execution_complete":
+			if ev.AgentID == "" {
+				answered = n
+			}
 		case "session.compaction_start":
-			retained = copilotRetained(pending, inputs, looseInt(ev.Data.RetainedInputMessages))
+			retained = copilotRetained(pending, inputs, answered, looseInt(ev.Data.RetainedInputMessages))
 		case "session.compaction_complete":
 			// Past a compaction, a request may carry the note only inside
 			// its summary: only one that says it failed keeps every note, and
@@ -272,14 +278,17 @@ func copilotNotesHeld(ctx context.Context, events io.Reader, takes []ServedTake)
 	return out, nil
 }
 
-// copilotRetained is the pending notes among the last count of the main
-// agent's user messages, inputs by line, which a compaction starting now
-// carries over whole.
-func copilotRetained(pending map[string]copilotPending, inputs []int, count int64) map[string]bool {
+// copilotRetained is the pending notes a compaction starting now carries over
+// whole: among the last count of the main agent's user messages, inputs by
+// line, and after its last answer, the line answered, since what it keeps is
+// the conversation's TRAILING messages ([copilotNoteLine]). Under either
+// reading of that count, user messages or messages of any role, a note an
+// answer followed is no trailing one.
+func copilotRetained(pending map[string]copilotPending, inputs []int, answered int, count int64) map[string]bool {
 	if count <= 0 || len(inputs) == 0 {
 		return nil
 	}
-	from := inputs[len(inputs)-int(min(count, int64(len(inputs))))]
+	from := max(inputs[len(inputs)-int(min(count, int64(len(inputs))))], answered+1)
 	kept := map[string]bool{}
 	for inbox, note := range pending {
 		if note.line >= from {
@@ -333,8 +342,11 @@ type copilotNoteLine struct {
 		ClientTurnID string          `json:"clientTurnId"`
 		Delivery     string          `json:"delivery"`
 		Success      json.RawMessage `json:"success"`
-		// RetainedInputMessages is how many of the newest inputs a
-		// compaction's start carries over whole.
+		// RetainedInputMessages, on a compaction's start: "Number of
+		// trailing conversation messages (the turn's not-yet-answered input)
+		// kept verbatim after the summary instead of being compacted.
+		// Omitted when every message at compaction start is summarized."
+		// (schemas/session-events.schema.json, 1.0.114's bundle.)
 		RetainedInputMessages json.RawMessage `json:"retainedInputMessages"`
 		Usage                 struct {
 			InteractionType string          `json:"interactionType"`

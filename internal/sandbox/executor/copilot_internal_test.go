@@ -582,6 +582,56 @@ func TestACopilotNoteTheCompactionCarriedOverIsHeld(t *testing.T) {
 	}
 }
 
+// A note an answer followed is no trailing message, so no compaction carries it
+// over whole, whatever count its start states: the count is of "trailing
+// conversation messages (the turn's not-yet-answered input)". In
+// compacted-after-tools (1.0.114) the note lands steering as line 194, its
+// request's record 195 holds it, two tool rounds follow, then a turn_blocking
+// compaction (219) retaining nothing, after which the request carried the note
+// only inside the summary (captured request body). Cut of its records 195 and
+// 207, so the note is still pending, and with its start set to retain 1, the
+// note is never held.
+//
+// Mutation: drop the answered bound from copilotRetained — the cut run holds
+// the note past the compaction.
+func TestACopilotNoteAnAnswerFollowedIsNotCarriedOver(t *testing.T) {
+	lines := copilotLines(t, "compacted-after-tools.events.jsonl")
+	if !bytes.Contains(lines[194], []byte(`"clientTurnId":"crewlet-note:msg_inbox1"`)) ||
+		!bytes.HasPrefix(lines[195], []byte(`{"type":"session.usage_record"`)) ||
+		!bytes.HasPrefix(lines[207], []byte(`{"type":"session.usage_record"`)) ||
+		!bytes.HasPrefix(lines[219], []byte(`{"type":"session.compaction_start"`)) ||
+		bytes.Contains(lines[219], []byte("retainedInputMessages")) {
+		t.Fatal("compacted-after-tools' lines 194, 195, 207 and 219 are not the note, its records and the compaction")
+	}
+	var cut []byte
+	for i, l := range lines[1:] {
+		switch i + 1 {
+		case 195, 207:
+			continue
+		case 219:
+			l = bytes.Replace(l, []byte(`"execution":"turn_blocking"`),
+				[]byte(`"execution":"turn_blocking","retainedInputMessages":1`), 1)
+		}
+		cut = append(cut, l...)
+	}
+	cases := []struct {
+		name   string
+		events []byte
+		held   bool
+	}{
+		{"as captured", copilotFixture(t, "compacted-after-tools.events.jsonl"), true},
+		{"pending at a compaction retaining 1", cut, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			held, err := copilotNotesHeld(t.Context(), bytes.NewReader(c.events), served("msg_inbox1"))
+			if err != nil || slices.Contains(held, "msg_inbox1") != c.held {
+				t.Fatalf("held = %v (%v), want the note held %v", held, err, c.held)
+			}
+		})
+	}
+}
+
 // copilotCompactedUnretained is compacted-queued with its compaction keeping
 // no input of its own (`retainedInputMessages` 0) and its completion's line
 // rewritten by edit: note 1's line then stands before a compaction that may
