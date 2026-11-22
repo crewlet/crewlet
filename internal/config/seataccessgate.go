@@ -84,6 +84,8 @@ func (c *Company) SeatAccessConnected(kind string) bool {
 		return in.SSH != nil
 	case "app_store_connect":
 		return in.AppStoreConnect != nil
+	case "apple_ads":
+		return in.AppleAds != nil
 	}
 	return false
 }

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/appleads"
 	"github.com/crewlet/crewlet/internal/appstoreconnect"
 
 	"github.com/crewlet/crewlet/internal/authz"
@@ -406,6 +407,17 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		}
 		add("app_store_connect", a.Enabled, nil, map[string]any{"connections": teams,
 			"roles": appstoreconnect.Catalog().RoleOffers()})
+	}
+	if a := in.AppleAds; a != nil {
+		// THE API USERS AND THE ROLES, never a key: each connection's client ID
+		// and organization, and what each Apple Ads role allows.
+		var users []map[string]any
+		for _, id := range a.ConnectionIDs() {
+			c := a.Connections[id]
+			users = append(users, map[string]any{"id": id, "identity": c.ClientID, "org_id": c.OrgID})
+		}
+		add("apple_ads", a.Enabled, nil, map[string]any{"connections": users, "ad_accounts": len(a.AdAccounts),
+			"roles": appleads.Catalog().RoleOffers()})
 	}
 	if in.Atlassian != nil {
 		// THE ORGANIZATION, not a third product: where the account itself is

@@ -41,6 +41,7 @@ type Integrations struct {
 	SSH          *SSH          `yaml:"ssh,omitempty" json:"ssh,omitempty" desc:"The engine's SSH certificate authority and the servers agents may reach with short-lived certificates it signs. Absent = disabled."`
 
 	AppStoreConnect *AppStoreConnect `yaml:"app_store_connect,omitempty" json:"app_store_connect,omitempty" desc:"App Store Connect teams and their API keys, one per Apple role, through which the engine makes every call for the agents. Absent = disabled."`
+	AppleAds        *AppleAds        `yaml:"apple_ads,omitempty" json:"apple_ads,omitempty" desc:"Apple Ads API users, each one organization's client credentials and private key, through which the engine makes every Apple Ads Platform API call for the agents. Absent = disabled."`
 
 	// ForgeAppID verifies the Forge app's invocation tokens: the JWT's
 	// audience claim must match it. Required when the Forge app is used —
@@ -156,6 +157,9 @@ func (i *Integrations) validate(path Path) error {
 	}
 	if i.AppStoreConnect != nil {
 		p.wrap(i.AppStoreConnect.validate(at(path, "app_store_connect")))
+	}
+	if i.AppleAds != nil {
+		p.wrap(i.AppleAds.validate(at(path, "apple_ads")))
 	}
 	if i.Confluence != nil {
 		p.wrap(i.Confluence.validate(at(path, "confluence"), i.DiscoversAtlassianSite(), i.Atlassian.Declared()))

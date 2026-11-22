@@ -180,6 +180,7 @@ const SURFACE_NAMES: Record<string, string> = {
   google_cloud: "Google Cloud",
   ssh: "SSH",
   app_store_connect: "App Store Connect",
+  apple_ads: "Apple Ads",
 };
 
 /** One tool's surfaces, in the engine's grouping, named for this screen. */
@@ -272,6 +273,15 @@ export const CATALOG: Entry[] = [
     vendor: "app-store-connect",
     surfaces: surfacesOf("app_store_connect"),
     doc: "app-store-connect",
+  },
+  {
+    key: "apple_ads",
+    name: "Apple Ads",
+    description:
+      "Campaigns, ad groups, keywords, budgets and reports for App Store and Apple Maps ads.",
+    vendor: "apple-ads",
+    surfaces: surfacesOf("apple_ads"),
+    doc: "apple-ads",
   },
   {
     key: "digitalocean",

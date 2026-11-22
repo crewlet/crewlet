@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"github.com/crewlet/crewlet/internal/appleads"
 	"github.com/crewlet/crewlet/internal/appstoreconnect"
 	"github.com/crewlet/crewlet/internal/atlassian"
 	awsint "github.com/crewlet/crewlet/internal/aws"
@@ -34,6 +35,7 @@ func SetupProbes() map[integration.Kind]setup.Probe {
 	return map[integration.Kind]setup.Probe{
 		integration.KindAtlassian:       atlassian.Probe(atlassian.ClientOptions{}),
 		integration.KindAppStoreConnect: appstoreconnect.Probe(),
+		integration.KindAppleAds:        appleads.Probe(),
 		integration.KindCloudflare:      cloudflare.Probe(nil),
 		integration.KindConfluence:      confluence.Probe(nil),
 		integration.KindDatadog:         datadog.Probe(nil),
