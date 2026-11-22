@@ -682,7 +682,8 @@ codex:
   # host where none can be created every call failed ("bwrap: Creating new
   # namespace failed"), where under --sandbox read-only every call answered.
   #
-  # web_search="live" because the default answers from an offline index.
+  # web_search="live" because the default, `cached`, answers from an offline
+  # index (measured on 0.171.0).
   #
   # project_doc_max_bytes is the largest value the setting takes, because
   # AGENTS.md is the append channel (below) and codex cuts the file at this many
@@ -745,12 +746,12 @@ codex:
   # which is a read of the engine host no request of the person's made.
   local_tools: denied
   # WEB OFF is the same override with the search mode `disabled`, one of the
-  # four the config accepts (disabled, cached, indexed, live). The read-only
-  # sandbox already cuts the shell's network, so the search tool is the only
-  # way out. MEASURED against 0.150.1 with the doctor's web probe: with
-  # `disabled` the stream carried no web_search item and the answer was
-  # NO-WEB; with `live` it ran two searches and returned the clock.
-  web_tools_note: 'web_search="disabled"; measured refused on Codex CLI 0.150.1'
+  # four the config accepts (disabled, cached, indexed, live). The provider
+  # runs a search, never Codex, so the denial is the tool not offered:
+  # measured on 0.171.0, with `disabled` the request offers no web_search
+  # tool, and a mode it does not know exits 1 before any request. The
+  # read-only sandbox already cuts the shell's network.
+  web_tools_note: 'web_search="disabled": the request offers no web_search tool (measured on Codex CLI 0.171.0)'
   web_denial:
     complete_args:
       - "exec"
