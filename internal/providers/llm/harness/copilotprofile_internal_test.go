@@ -184,22 +184,29 @@ func TestCopilotTakesTheTranscriptOnStdin(t *testing.T) {
 // count already holds the cached tokens (measured: 1,000 prompt tokens of which
 // 600 cached were recorded as inputTokens 1000 and cacheReadTokens 600), so the
 // 600 are reported as cache reads and not added to the input a second time.
-// The report is the harness's own --usage-output-file, verbatim in the shape
-// 1.0.103 wrote it.
+// The report is the harness's own --usage-output-file, verbatim as 1.0.114
+// wrote it for one request to a stand-in model.
 func TestCopilotChargesItsUsageReportOnce(t *testing.T) {
 	t.Parallel()
-	const report = `{"totalPremiumRequestCost":0,"totalUserRequests":1,` +
-		`"modelMetrics":{"claude-sonnet-4.5":{"requests":{"count":1,"cost":0},` +
-		`"usage":{"inputTokens":1000,"outputTokens":10,"cacheReadTokens":600,"cacheWriteTokens":0}}},` +
-		`"providerModelMetrics":[{"provider":null,"modelId":"claude-sonnet-4.5",` +
-		`"metrics":{"requests":{"count":1,"cost":0},` +
-		`"usage":{"inputTokens":1000,"outputTokens":10,"cacheReadTokens":600,"cacheWriteTokens":0}}}],` +
-		`"currentModel":"claude-sonnet-4.5","lastCallInputTokens":1000,"lastCallOutputTokens":10}`
+	const report = `{"totalPremiumRequestCost":0,"totalUserRequests":1,"totalNanoAiu":0,` +
+		`"aiCreditsStatus":"unavailable","totalApiDurationMs":12,"sessionStartTime":"2026-11-22T09:13:54.722Z",` +
+		`"codeChanges":{"linesAdded":0,"linesRemoved":0,"filesModifiedCount":0,"filesModified":[]},` +
+		`"modelMetrics":{"stub-1":{"requests":{"count":1,"cost":0},` +
+		`"usage":{"inputTokens":1000,"outputTokens":10,"cacheReadTokens":600,"cacheWriteTokens":0},` +
+		`"totalNanoAiu":0,"aiCreditsStatus":"unavailable"}},` +
+		`"agentMetrics":{"main":{"totalApiDurationMs":12,"totalNanoAiu":0,"modelMetrics":{"stub-1":` +
+		`{"requests":{"count":1,"cost":0},` +
+		`"usage":{"inputTokens":1000,"outputTokens":10,"cacheReadTokens":600,"cacheWriteTokens":0},` +
+		`"totalNanoAiu":0}}}},` +
+		`"providerModelMetrics":[{"provider":null,"modelId":"stub-1","metrics":{"requests":{"count":1,"cost":0},` +
+		`"usage":{"inputTokens":1000,"outputTokens":10,"cacheReadTokens":600,"cacheWriteTokens":0},` +
+		`"totalNanoAiu":0,"aiCreditsStatus":"unavailable"},"modelDisplayName":"stub-1"}],` +
+		`"currentModel":"stub-1","lastCallInputTokens":1000,"lastCallOutputTokens":10}`
 	p := copilot(t)
 	if !p.ReadsUsageReport() {
 		t.Fatal("the copilot profile reads no usage report, so every call is charged an estimate")
 	}
-	prov := &Provider{profile: p, model: "claude-sonnet-4.5", now: time.Now}
+	prov := &Provider{profile: p, model: "stub-1", now: time.Now}
 	comp, err := prov.completion(t.Context(), "prompt", &rawResult{stdout: "ok\n"}, report)
 	if err != nil {
 		t.Fatalf("completion: %v", err)
@@ -266,9 +273,9 @@ func TestCopilotCallsDoNotUpdateTheHarness(t *testing.T) {
 }
 
 // A HARNESS THAT CANNOT USE ITS LOGIN NAMES THE LOGIN AS WHAT FAILED, in its own
-// words — what 1.0.103 printed signed out, and the refusal its bundle carries
-// for a credential the service will not take — so the seat says its login is
-// what failed rather than reporting a server error.
+// words — what 1.0.114 printed signed out, and the refusal the 1.0.103 bundle
+// carries for a credential the service will not take — so the seat says its
+// login is what failed rather than reporting a server error.
 func TestCopilotNamesALoginItCannotUse(t *testing.T) {
 	t.Parallel()
 	p := copilot(t)

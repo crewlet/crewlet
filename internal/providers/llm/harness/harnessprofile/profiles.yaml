@@ -2367,7 +2367,7 @@ copilot:
   binary: copilot
   written_for: "GitHub Copilot CLI 1.0.114 (`copilot --version`)"
   version_args: ["--version"]
-  # EVERY FLAG BELOW KEEPS THE HARNESS TO ITS CALL. Measured on 1.0.103 through
+  # EVERY FLAG BELOW KEEPS THE HARNESS TO ITS CALL. Measured on 1.0.114 through
   # the engine's own code path, on a custom provider (COPILOT_PROVIDER_BASE_URL
   # at a local stand-in), with the state directory inside a git checkout and
   # every level above the call holding an AGENTS.md, CLAUDE.md, GEMINI.md,
@@ -2381,8 +2381,8 @@ copilot:
   #                               tools" line, a line per tool call and a
   #                               usage footer around the answer.
   #   --disable-client-telemetry  no connection but the call's own: without
-  #                               it every call looked up three hosts that
-  #                               are not the provider; with it, none, and
+  #                               it a call looked up api.github.com, which
+  #                               is not the provider; with it, none, and
   #                               the request is unchanged.
   #   --available-tools           the tools that EXIST for the call: the web
   #                               tools. The deny list alone does not get
@@ -2391,18 +2391,18 @@ copilot:
   #                               glob, task, sql among them), refused only
   #                               once called — and the allowlist also takes
   #                               the skill and custom-agent listings out of
-  #                               the system prompt (8.4k characters of
-  #                               vendor prompt instead of 22.5k). It fails
+  #                               the system prompt (7.7k characters of
+  #                               vendor prompt instead of 21.6k). It fails
   #                               closed: a name that matches no tool adds
   #                               nothing. web_fetch is the harness's own fetch;
   #                               web_search does not exist on a custom
-  #                               provider, and the 1.0.103 bundle lists it
+  #                               provider, and the 1.0.114 bundle lists it
   #                               among the tools of the built-in GitHub MCP
   #                               server on a GitHub sign-in, which is why
   #                               that server is left on (not measured: no
   #                               GitHub sign-in).
-  #   --allow-tool                the web tools have to be ALLOWED as well as
-  #                               present: prompt mode never asks.
+  #   --allow-tool                on 1.0.103, the web tools had to be ALLOWED
+  #                               as well as present: prompt mode never asks.
   #   --deny-tool                 beside the allowlist, the shell, write and
   #                               read permission kinds; a denial wins over
   #                               an allow.
@@ -2440,8 +2440,9 @@ copilot:
   local_tools: denied
   web_tools_note: "no web denial: --deny-tool web_fetch and web_search would be one, but it has not been measured against a copilot harness, so this profile cannot serve the assistant"
   model_args: ["--model", "{model}"]
-  # Read from 1.0.103: clap refuses any other value; a level the model lacks is
-  # logged and the run continues on the model's default.
+  # Measured on 1.0.114: clap refuses any other value. Read from 1.0.103: a
+  # level the model lacks is logged and the run continues on the model's
+  # default.
   effort:
     args: ["--reasoning-effort", "{effort}"]
     levels: [none, minimal, low, medium, high, xhigh, max]
@@ -2452,12 +2453,12 @@ copilot:
   #
   # The append channel is an AGENTS.md in the call's own directory, which the
   # harness reads on every run with nothing on argv asking for it. Measured on
-  # 1.0.103: its text lands inside the system prompt as a
+  # 1.0.114: its text lands inside the system prompt as a
   # <custom_instruction> block, after the vendor's identity ("You are the
   # GitHub Copilot CLI, a terminal assistant built by GitHub. You are running
   # in non-interactive mode…"), its tool guidance and its environment block,
-  # and before a session block; about 8,400 characters of vendor prompt with
-  # the tools above, 6,200 of them before the engine's text. A 128 KB text
+  # and before a session block; about 7,800 characters of vendor prompt with
+  # the tools above, 5,850 of them before the engine's text. A 128 KB text
   # arrived whole. The environment block names the call's directory, so
   # per-call bytes precede the engine's text and nothing about this channel
   # is a cacheable prefix.
@@ -2489,7 +2490,7 @@ copilot:
     input_includes_cache: true
   # NO SERVER OF THE HOME'S OWN: the harness starts every server its home's
   # mcp-config.json names on every run, beside any --additional-mcp-config —
-  # measured on 1.0.103, a server planted there started — and nothing in its
+  # measured on 1.0.114, a server planted there started — and nothing in its
   # help or settings keeps that file out, so the profile writes it, empty,
   # every generation.
   seed_files:
@@ -2499,21 +2500,21 @@ copilot:
   # own directory, added with --additional-mcp-config, made available beside
   # the web tools (--available-tools) and allowed (--allow-tool) by the
   # server's name, which covers every tool it lists — one activated mid-run
-  # included. Measured on 1.0.103 through the engine's own code path on a
+  # included. Measured on 1.0.114 through the engine's own code path on a
   # custom provider against a local stand-in, the state directory inside a
   # checkout holding an .mcp.json, .github/mcp.json, .vscode/mcp.json,
   # .copilot/mcp-config.json and every other harness's MCP configuration at each
   # level above the call, and a server in the home's mcp-config.json: the
   # model was offered the seat's tools, and no other server started. (Offline,
-  # as the stand-in needs, the harness offers no web tool and starts no built-in
+  # under COPILOT_OFFLINE, the harness offers no web tool and starts no built-in
   # GitHub server; signed in to GitHub it starts that server, whose tools the
   # available-tools list holds to web_search.)
   #
   # The server's `timeout` is the harness's per-call timeout, in milliseconds
   # (4,000 gave a slow call up at 4.0s). The harness re-reads the server's list
-  # when told it changed — a tool activated mid-run was offered from the
-  # request after the one the activation's result went back in — and makes
-  # one response's calls at once. A failed run says why on stderr.
+  # when told it changed — on 1.0.103 a tool activated mid-run was offered
+  # from the request after the one the activation's result went back in —
+  # and makes one response's calls at once. A failed run says why on stderr.
   mcp:
     seed:
       - path: crewlet-mcp.json
@@ -2537,7 +2538,7 @@ copilot:
   # told by its first line, whose session.start names the call's working
   # directory (owner).
   #
-  # Measured on 1.0.103: each request's counts in the file before its calls
+  # Measured on 1.0.114: each request's counts in the file before its calls
   # had returned, their sum equal to the usage report's.
   requests:
     source: file
@@ -2566,14 +2567,14 @@ copilot:
   env:
     # Auto-update is on by default for a standalone install, and it would
     # download a newer harness into each seat's own cache and run that instead
-    # of the one installed. Read from `copilot help environment` on 1.0.103;
+    # of the one installed. Read from `copilot help environment` on 1.0.114;
     # no measured call attempted an update.
     COPILOT_AUTO_UPDATE: "false"
   # THE LOGIN IS THE SYSTEM KEYCHAIN'S, or this file's. `copilot login` keeps
   # its token in the keychain — the Secret Service on Linux — and where none
   # answers, as on a headless engine host, asks "Store token in plaintext
   # config file? (y/N)" and, told yes, writes it under `copilotTokens` in
-  # .copilot/config.json (read from the 1.0.103 bundle and its runtime
+  # .copilot/config.json (read from the 1.0.114 bundle and its runtime
   # addon; `.copilot/hosts.json`, which this list named before, appears in
   # neither). A login kept in a keychain is out of a seat's reach: sign the
   # entry in with `crewlet llm login`, answering yes, or give it a token
@@ -2653,7 +2654,7 @@ copilot:
       match:
         - {path: ["type"], equals: "session.error"}
         - {path: ["data", "errorType"], equals: "quota"}
-  # The harness's own words. Signed out, 1.0.103 exits 1 on "Error: No
+  # The harness's own words. Signed out, 1.0.114 exits 1 on "Error: No
   # authentication information found." (measured); a credential the service
   # refuses is "Authentication failed due to invalid credentials" (read from
   # the 1.0.103 bundle).
