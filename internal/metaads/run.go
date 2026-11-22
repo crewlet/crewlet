@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"slices"
 	"strconv"
@@ -234,7 +235,15 @@ func fieldWords(f growth.FieldRule) string {
 		s += "; lowered: " + string(f.Lower)
 	}
 	if len(f.Pausing) > 0 {
-		s += "; " + words.Or(f.Pausing) + ": operate"
+		// A pause is a JSON value: a state quoted, a switch's flag bare.
+		pauses := make([]words.Said, len(f.Pausing))
+		for i, p := range f.Pausing {
+			pauses[i] = words.Said(fmt.Sprint(p))
+			if state, ok := p.(string); ok {
+				pauses[i] = words.Said(strconv.Quote(state))
+			}
+		}
+		s += "; " + words.Or(pauses) + ": operate"
 	}
 	for _, v := range f.Values {
 		// A cleared field is no value, so it is said as a word, not quoted.
