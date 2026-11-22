@@ -122,14 +122,23 @@ func (QwenCode) readsCommands() {}
 // ([Paths.QwenSkills]); extensions stay on disk, unloaded (the helper's
 // `--extensions none`); agents are denied in the settings.
 var qwenHome = runHome{State: ".qwen", Owned: []string{"skills", "commands", "rules", "QWEN.md", "AGENTS.md", ".env"},
-	Memory: []string{"QWEN.md", "AGENTS.md"}}
+	Memory: []string{"QWEN.md", "AGENTS.md"}, WalksEnv: true}
 
-// artifacts is what a Qwen Code run leaves in a box beside the shared
-// artefacts ([artifactHolder]): its settings, which hold its key, the helper
-// and its configuration, and its skills.
-func (QwenCode) artifacts(p Paths) (files, dirs []string) {
-	return []string{p.QwenSettings(), p.QwenHelper(), p.QwenHelperConfig()}, []string{p.QwenSkills()}
+var (
+	_ artifactHolder    = QwenCode{}
+	_ artifactDirHolder = QwenCode{}
+)
+
+// artifactFiles is what a Qwen Code run leaves in a box beside the shared
+// artefacts ([artifactHolder]): its settings, which hold its key, and the
+// helper and its configuration.
+func (QwenCode) artifactFiles(p Paths) []string {
+	return []string{p.QwenSettings(), p.QwenHelper(), p.QwenHelperConfig()}
 }
+
+// artifactDirs is the directory a Qwen Code run leaves of its own
+// ([artifactDirHolder]): its skills, removed whole.
+func (QwenCode) artifactDirs(p Paths) []string { return []string{p.QwenSkills()} }
 
 // WriteConfig removes what an earlier run or the image left for Qwen Code
 // ([qwenHome]) and writes what a run's helper and harness read: the run's
