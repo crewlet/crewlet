@@ -137,3 +137,36 @@ func TestSingleReleaseArchivesAreMeteredAsNoFigure(t *testing.T) {
 		}
 	}
 }
+
+// A RELEASE NAMES ITS THREE NUMBERS AND NO MORE, read as
+// harnessprofile.Release reads it, so a writer or box check and the run's
+// script read one release: a fourth number, a pre-release or a build suffix
+// names none, and what a carrier is asked of it is refused, never taken for
+// the release its first three numbers spell.
+//
+// Mutation: read the first three numbers up to the first other character, as
+// releaseNumbers did, and a row naming a fourth number or a suffix reads.
+func TestAReleaseNamesItsThreeNumbersAndNoMore(t *testing.T) {
+	t.Parallel()
+	for printed, want := range map[string]bool{
+		"1.4.25": true, "v2.1.4": true, "2.1.310 (Claude Code)": true, "GitHub Copilot CLI 1.0.114.": true,
+		"Muse Code 1.4.25 (1.4.25-R9361.1)": true, "1.4.25.1": false, "1.4.25-rc.1": false, "1.4.25+b": false,
+		"1.4.x": false, "1.4": false, "": false,
+	} {
+		if _, got := releaseNumbers(printed); got != want {
+			t.Errorf("releaseNumbers(%q) reads %v, want %v", printed, got, want)
+		}
+	}
+	for name, c := range map[string]struct {
+		carrier carrier
+		writer  string
+	}{
+		"claude-code": {ClaudeCode{}, "2.1.310.1"},
+		"opencode":    {OpenCode{}, "2.2.7.1"},
+		"copilot":     {Copilot{}, copilotFloor() + ".1"},
+	} {
+		if ok, why := c.carrier.ContinuesWriter(c.writer); ok || why == "" {
+			t.Errorf("%s: a writer of %s continues %v (%q), want refused", name, c.writer, ok, why)
+		}
+	}
+}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -1580,23 +1581,20 @@ func releaseAtLeast(version, floor string) bool {
 	return true
 }
 
-// releaseNumbers is the three numbers of version, as a harness's `--version`
-// printed it, read once its spaces are trimmed, up to the first character
-// that is neither a digit nor a dot. False for a version this code cannot
-// read: one with fewer than three numbers, or one of a number past what an
-// int holds.
+// releaseNumbers is the three numbers of the bare release version names, as
+// a harness's `--version` printed it, read as [harnessprofile.Release] reads
+// it, the one reading the runners, the sandbox and the doctor share: a
+// pre-release, a fourth number (`1.4.25.1`) or anything but three runs of
+// digits names none. False for a version that names none, or one of a number
+// past what an int holds.
 func releaseNumbers(version string) ([3]int, bool) {
-	v := strings.TrimSpace(version)
-	if cut := strings.IndexFunc(v, func(r rune) bool { return (r < '0' || r > '9') && r != '.' }); cut >= 0 {
-		v = v[:cut]
-	}
-	fields := strings.Split(v, ".")
 	var out [3]int
-	if len(fields) < 3 {
+	release := harnessprofile.Release(version)
+	if release == "" {
 		return out, false
 	}
-	for i := range 3 {
-		n, err := strconv.Atoi(fields[i])
+	for i, field := range strings.SplitN(release, ".", 3) {
+		n, err := strconv.Atoi(field)
 		if err != nil {
 			return out, false
 		}
