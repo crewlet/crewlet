@@ -42,15 +42,6 @@ func TestTheModelsScreenReadsAnEntryAsTheEngineDoes(t *testing.T) {
 		}
 	}
 	seatJobFields(t, tree)
-	body, err := clientsource.Literal(tree, "EXECUTOR_HARNESSES")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := clientsource.Strings(body), strs(config.ExecutorHarnesses()); !slices.Equal(
-		slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(want))) {
-		t.Errorf("contract/models.ts EXECUTOR_HARNESSES is %v, want exactly the engine's "+
-			"executor harnesses %v", got, want)
-	}
 	var unset config.LLMProvider
 	for _, tc := range []struct{ name, want string }{
 		{"DEFAULT_HARNESS", unset.HarnessName()},
@@ -152,8 +143,9 @@ roles:
 }
 
 // THE MODELS SCREEN KNOWS EVERY HARNESS AS ITS PROFILE READS: the sign-ins, key
-// variable, login, web and Ask Crewlet rules, and effort levels HARNESS_FACTS
-// gives each built-in harness are its profile's, so the wizard offers nothing the engine refuses.
+// variable, login, web and Ask Crewlet rules, effort levels and whether it runs a
+// seat's executor HARNESS_FACTS gives each built-in harness are its profile's,
+// so the wizard offers nothing the engine refuses.
 func TestTheModelsScreenKnowsEveryHarnessAsItsProfileReads(t *testing.T) {
 	t.Parallel()
 	body, err := clientsource.Literal(clientsource.Tree(t), "HARNESS_FACTS")
@@ -225,6 +217,7 @@ func TestTheModelsScreenKnowsEveryHarnessAsItsProfileReads(t *testing.T) {
 			{"effortNote", one(facts, "effortNote"), p.EffortNote},
 			{"webDeniable", one(facts, "webDeniable"), map[bool]string{true: "true"}[slices.Contains(harnessprofile.WebDeniable(), name)]},
 			{"assistant", one(facts, "assistant"), map[bool]string{true: "true"}[slices.Contains(harnessprofile.HelperEligible(), name)]},
+			{"executor", one(facts, "executor"), map[bool]string{true: "true"}[slices.Contains(harnessprofile.ExecutorRunners(), name)]},
 		} {
 			if tc.got != tc.want {
 				t.Errorf("%s: %s %q, want the profile's %q", name, tc.field, tc.got, tc.want)

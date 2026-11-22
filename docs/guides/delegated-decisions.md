@@ -17,6 +17,7 @@ agent's words.
 | `ssh_operate` | An agent's command on a server as its operate user ([SSH](../integrations/ssh.md#the-agents-tools)), or a decision `ask_to_operate` composed for one exact command |
 | `pr_merge` | Merging one change at exactly the head the agent read, asked with [`ask_to_merge`](#asking-to-merge-and-to-deploy): a Gitlet change or a GitHub pull request |
 | `deploy` | Deploying one commit that holds merged changes to an environment, asked with [`ask_to_deploy`](#asking-to-merge-and-to-deploy) |
+| `ad_spend`, `public_post`, `account_admin` | A growth integration's call that starts or raises ad spend, publishes to customers, or manages the vendor account (its users, access, keys, billing setup and policies, or an irreversible change). Never delegated: an administrator answers each, present, at a fresh sign-in, and an unanswered one lapses after a day (ADR-0171) |
 | `other` | Every other request. Never delegated |
 
 ## Turning it on

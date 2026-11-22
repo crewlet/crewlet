@@ -30,6 +30,8 @@ A served item is read only once confirmed (ADR-0067). Confirmation is a runner c
 - **Poll, by its session record.** A poll runner whose harness records the notes it admitted (`recordConfirmer`: Copilot's events.jsonl, Gemini's session file, Qwen's user record, Codex's rollout) answers the same `TakeReceipts` from that record, each take keyed by its inbox id, under which the poll recorded its serve beside the digest of the item's rendered text (`sandbox.NoteServe.Inbox`, `executor.ItemDigest`, never the text: ADR-0067); a runner matches a take by its inbox id or by that digest, whichever its record holds, through the one receipts path (`settleReceipts`): held only where the record holds it whole, a torn line never; a record that cannot be read undecided, with why, never not held.
 - **Poll, by its plugin.** The harness's own delivery event (`pluginConfirms`, OpenCode's): its plugin posts the ids to `<URL>/read` (1 to 24), again on 503, and after the run withdraws what was admitted and never delivered (`opencode.go:openCodeLeftoverSteers`).
 
+**Confirmed means the model received the item as a current instruction**, never only inside a compaction summary: every harness compacts, and one that folds an admitted item into a summary framed as history (OpenCode's checkpoint) has not delivered it. Each case counts only a plain delivery: a record confirm holds no item found only in a summary, and a plugin confirms no item a compaction folded.
+
 A record read before the harness flushed its record decides nothing, never not held, and the settle at the run's end re-reads the record, so a wake or a run's message, served once (`MaxWakeServes`), is settled off what the run's end leaves rather than run as a turn of its own. A poll runner with none of the three never confirms: its notes wait for the review and its wakes run as turns of their own.
 
 ### 4. Rendering
@@ -44,7 +46,7 @@ What a continued session is told again is the engine's (`engine/runsteer.go:reto
 Notes waiting at launch reach the run in its brief (`LaunchRequest.BriefNotes`). The runner adds nothing, and takes nothing before the brief is read.
 
 ### 7. Tests
-Each test in Enforced-by becomes a table over `Registered()`. A new runner adds its case and fixture, measured on its harness's real release, to each: the instruction is given exactly when the run can read and quotes every heading; its placement; its real config against a real bridge answers the main boundaries, not a subagent's; it confirms; its ceiling holds the shared bounds; its transcript files each item by its heading.
+Each test in Enforced-by becomes a table over `Registered()`. A new runner adds its case and fixture, measured on its harness's real release, to each: the instruction is given exactly when the run can read and quotes every heading; its placement; its real config against a real bridge answers the main boundaries, not a subagent's; it confirms, and confirms nothing a compaction left only in its summary; its ceiling holds the shared bounds; its transcript files each item by its heading.
 
 ## Why the obvious alternative is wrong
 

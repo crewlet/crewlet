@@ -124,19 +124,39 @@ func (c *Cache) initMemory(pool *gitproc.Pool) {
 
 // warnShort is Open's: a node whose memory is short of what it keeps
 // (memoryReserve: the engine's lines, its transfers and its serving share)
-// says so once, at boot, with the shortfall and the memory that holds it
-// (memoryNeeded). It is not refused: a small or development node runs seats
-// beside Gitlet on 2 GiB, and serves while it is not at every worst case at
-// once (docs/concepts/gitlet.md, "The budget").
+// says so once, at boot, with the shortfall, the memory that holds it
+// (memoryNeeded) and what follows. It is not refused: a small or development
+// node runs seats beside Gitlet on 2 GiB, and serves while it is not at every
+// worst case at once (docs/concepts/gitlet.md, "The budget"). Where the memory
+// less its transfers is short of the engine's lines, the Go limit (nine tenths
+// of that, nodebudget.Limit) is below what the runtime's lines keep.
 func (c *Cache) warnShort(pool *gitproc.Pool) {
 	if short := c.memReserve - c.memory.Bytes; short > 0 {
 		transfers := pool.Slots(gitproc.ClassTransfer)
+		remedy := shortRemedy
+		if c.memory.Bytes-int64(transfers)*gitproc.TransferMemory < pool.Reserved() {
+			remedy = shortPoolsRemedy
+		}
 		c.log.Warn("code_cache_memory_short", "memory", c.memory.Bytes, "memory_from", c.memory.From,
 			"kept", pool.Reserved(), "transfer_slots", transfers, "memory_reserved", c.memReserve,
 			"shortfall", short,
-			"memory_needed", memoryNeeded(transfers, pool.Slots(gitproc.ClassRead), pool.ReservedAt))
+			"memory_needed", memoryNeeded(transfers, pool.Slots(gitproc.ClassRead), pool.ReservedAt),
+			"remedy", remedy)
 	}
 }
+
+// What code_cache_memory_short says follows, and the fix: the engine's pools
+// past what the node leaves the runtime, or its git lanes past the rest.
+const (
+	shortPoolsRemedy = "under concurrent load at its bounds the engine's pools exceed this node, and the " +
+		"Go memory limit sits below them: expect GC pressure, then the out-of-memory killer. Give it " +
+		"memory_needed or more, 4 GiB or more in all where it runs seats beside Gitlet at the default " +
+		"node.max_concurrent, or run Gitlet on a node of its own"
+	shortRemedy = "under concurrent load at its bounds its git transfers and serving share beside the " +
+		"engine's pools exceed this node: expect the out-of-memory killer. Give it memory_needed or more; " +
+		"or, where gitlet.max_transfers is set, fewer transfers; or, on a node running seats, a lower " +
+		"node.max_concurrent"
+)
 
 // rereadMemory is each maintainer pass's first step: a container's limit can
 // change in place (Kubernetes resizes a pod's memory without a restart), and a

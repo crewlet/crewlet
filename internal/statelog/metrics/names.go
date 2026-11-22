@@ -220,3 +220,11 @@ const (
 	ExecutorSpoolHeldBytes = "crewlet.executor.spool.held_bytes"
 	ExecutorSpoolWait      = "crewlet.executor.spool.wait"
 )
+
+// THE NODE'S ANSWER BUDGET'S INSTRUMENTS, which internal/queue measures and
+// internal/engine records: every payload answer's wait for its weight, and the
+// bytes the budget holds.
+const (
+	QueueAnswerHeldBytes = "crewlet.queue.answers.held_bytes"
+	QueueAnswerWait      = "crewlet.queue.answers.wait"
+)

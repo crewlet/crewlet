@@ -1333,9 +1333,8 @@ func testAServeTheRunsEndingOvertookServesNothing(t *testing.T, runs *overtaking
 // record not yet flushed) and is read off the verdict the run's end gives.
 //
 // Mutation: record the serve under the note's id or without its digest, again
-// on a second poll, let
-// another job's verdict read it, or let a verdict that held nothing lose the
-// wake's one serve, and a check goes red.
+// on a second poll, let another job's verdict read it, or let a verdict that
+// held nothing lose the wake's one serve, and a check goes red.
 func testAPollServeIsRecordedUnderItsInboxIDAndSettledByIt(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	const turn = "t-poll-record"
@@ -1375,7 +1374,8 @@ func testAPollServeIsRecordedUnderItsInboxIDAndSettledByIt(t *testing.T, s sandb
 	}
 
 	// A WAKE, SERVED ONCE: an early read's verdict holds nothing, and the end's
-	// holds its inbox id.
+	// holds its inbox id. A verdict that holds a take answers every note read
+	// off a serve to the job, so n-1 again beside the wake.
 	wake := fileWake(t, s, turn, launch, sealedWake("w-1", 64))
 	once := sandbox.NoteServe{IDs: []string{wake.ID}, Launch: launch, Statuses: poll.Statuses,
 		Wakes: map[string]int{wake.ID: 1}, Inbox: map[string]sandbox.InboxItem{wake.ID: {ID: "msg_w"}}}
@@ -1387,8 +1387,9 @@ func testAPollServeIsRecordedUnderItsInboxIDAndSettledByIt(t *testing.T, s sandb
 		t.Errorf("a verdict that held nothing left the wake %+v, want it waiting on its one serve", n)
 	}
 	settled = mustSettle(t, s, turn, sandbox.HookSettle{Launch: launch, Held: []string{"msg_w"}})
-	if n := notesByID(t, s, turn)[wake.ID]; !slices.Equal(idsOf(settled), []string{wake.ID}) || n.Read == nil ||
-		n.Waiting() {
-		t.Errorf("the end's verdict holding msg_w answered %v and left %+v, want the wake read", idsOf(settled), n)
+	if n := notesByID(t, s, turn)[wake.ID]; !slices.Equal(idsOf(settled), []string{"n-1", wake.ID}) ||
+		n.Read == nil || n.Read.Take != "msg_w" {
+		t.Errorf("the end's verdict holding msg_w answered %v and left %+v, want n-1 again and the wake read "+
+			"off msg_w", idsOf(settled), n)
 	}
 }

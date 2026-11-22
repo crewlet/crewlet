@@ -353,6 +353,13 @@ func (s *E2BSandbox) ReadFile(ctx context.Context, path string) ([]byte, error) 
 	return s.envd.readFile(ctx, path)
 }
 
+// OpenWhole implements [Sandbox]: one ranged download of the file's first
+// [MaxFileBytes] and one more byte, its size the whole size envd answered for
+// that open, its body read no further ([envdClient.openWhole]).
+func (s *E2BSandbox) OpenWhole(ctx context.Context, path string) (io.ReadCloser, int64, error) {
+	return s.envd.openWhole(ctx, path)
+}
+
 // OpenFile implements [Sandbox]: envd's download body, read as it arrives.
 func (s *E2BSandbox) OpenFile(ctx context.Context, path string) (io.ReadCloser, error) {
 	return s.envd.openFile(ctx, path)

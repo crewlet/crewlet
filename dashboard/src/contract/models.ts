@@ -55,15 +55,6 @@ export const HARNESS_PRODUCTS: Readonly<Record<string, string>> = {
 /** The harness an entry that names no `harness` drives. */
 export const DEFAULT_HARNESS = "claude-code";
 
-/**
- * The harnesses that can run a seat's executor: the ones with an in-box
- * runner. Every agent seat's executor is its harness's own run, placed by the
- * launching entry's `run_in`, and a member of an executor chain on any other
- * harness is skipped at launch, and that entry serves the text phases alone (the
- * reviewer, workers, onboarding and side passes).
- */
-export const EXECUTOR_HARNESSES = ["claude-code", "opencode", "copilot"] as const;
-
 /** An entry's `auth.mode` when it names none. */
 export const DEFAULT_HARNESS_AUTH_MODE: HarnessAuthMode = "subscription";
 

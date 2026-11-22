@@ -79,19 +79,20 @@ var primaryField = map[integration.Kind]string{
 // which the migration replaces and nothing else. Every lane has an entry:
 // [writeSeatIntegrations] refuses one that has none.
 var desiredKeys = map[seataccess.Lane][]string{
-	seataccess.LaneDatadog:      {"enabled", "role"},
-	seataccess.LaneGitLab:       {"enabled", "access_level", "member_role_id", "projects"},
-	seataccess.LaneJira:         {"enabled", "project_role", "projects"},
-	seataccess.LaneConfluence:   {"enabled", "space_role", "spaces"},
-	seataccess.LaneMattermost:   {"enabled", "roles", "channels"},
-	seataccess.LaneGitHub:       {"enabled", "permissions", "repos"},
-	seataccess.LaneSlack:        {"enabled"},
-	seataccess.LaneCloudflare:   {"enabled", "level"},
-	seataccess.LaneExpo:         {"enabled", "level"},
-	seataccess.LaneDigitalOcean: {"enabled", "level"},
-	seataccess.LaneScaleway:     {"enabled", "level", "projects"},
-	seataccess.LaneGoogleCloud:  {"enabled", "level", "projects"},
-	seataccess.LaneSSH:          {"enabled", "level", "hosts"},
+	seataccess.LaneDatadog:         {"enabled", "role"},
+	seataccess.LaneGitLab:          {"enabled", "access_level", "member_role_id", "projects"},
+	seataccess.LaneJira:            {"enabled", "project_role", "projects"},
+	seataccess.LaneConfluence:      {"enabled", "space_role", "spaces"},
+	seataccess.LaneMattermost:      {"enabled", "roles", "channels"},
+	seataccess.LaneGitHub:          {"enabled", "permissions", "repos"},
+	seataccess.LaneSlack:           {"enabled"},
+	seataccess.LaneCloudflare:      {"enabled", "level"},
+	seataccess.LaneExpo:            {"enabled", "level"},
+	seataccess.LaneDigitalOcean:    {"enabled", "level"},
+	seataccess.LaneScaleway:        {"enabled", "level", "projects"},
+	seataccess.LaneGoogleCloud:     {"enabled", "level", "projects"},
+	seataccess.LaneSSH:             {"enabled", "level", "hosts"},
+	seataccess.LaneAppStoreConnect: {"enabled", "level", "apps"},
 }
 
 // position is one place a seat named its credential.

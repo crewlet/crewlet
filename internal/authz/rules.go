@@ -449,6 +449,18 @@ const (
 	// person `integrations.ssh.approvers` names, at the step-up window; never
 	// a lead's, an agent's or the assistant's.
 	ActionSSHOperateApprove Action = "ssh.operate.approve"
+	// ActionGrowthSpendApprove, ActionGrowthPublicApprove and
+	// ActionGrowthAdminApprove answer a growth integration's held spend,
+	// public or admin act (`POST /mcp-approvals/{id}`, ADR-0171): an
+	// administrator alone, present, at the step-up window; never a lead, a
+	// named person, a delegate, a machine token or the assistant.
+	ActionGrowthSpendApprove  Action = "growth.spend.approve"
+	ActionGrowthPublicApprove Action = "growth.public.approve"
+	ActionGrowthAdminApprove  Action = "growth.admin.approve"
+	// ActionAppStoreAnalyticsEnable turns App Store analytics on with an Admin
+	// key a person pastes once (`POST /setup/integrations/app_store_connect/
+	// analytics`): an administrator alone, present, at the step-up window.
+	ActionAppStoreAnalyticsEnable Action = "app_store_connect.analytics.enable"
 	// ActionSSHRead runs an allowlisted read command on one of the agent's SSH
 	// hosts (the server's gate holds the allowlist); an agent's alone by its
 	// SSH grant, in its own run.
@@ -487,6 +499,10 @@ const (
 	// agent holding an SSH grant: anybody of the company who may act, a
 	// colleague seat among them, and nobody outside it.
 	ActionSSHRequester Action = "ssh.requester.read"
+	// ActionGrowthRequester is a growth vendor reached FOR whoever woke the
+	// turn of an agent holding a growth lane: anybody of the company who may
+	// act, a colleague seat among them, and nobody outside it.
+	ActionGrowthRequester Action = "growth.requester.read"
 	// ActionToolsRead is reading Settings › MCP & tools: one server whole
 	// (`GET /mcp-servers/{name}`) and the curated catalogue. EVERYBODY'S, IN
 	// TWO READINGS: whoever [ActionConfigRead] admits also reads launch lines,
@@ -736,11 +752,15 @@ const (
 	// arm: about the caller's own record a token acts as its owner, about
 	// anybody else it does not.
 	PresenceRequiredForOthers Presence = "required_for_others"
+	// PresencePerson needs a person on every arm, and refuses a credential
+	// acting as itself as well as a token: a deployment's or a pipeline's
+	// admin credential is nobody at a keyboard either.
+	PresencePerson Presence = "person"
 )
 
-// Presences are the three, in declaration order.
+// Presences are the four, in declaration order.
 var Presences = []Presence{
-	PresenceOptional, PresenceRequired, PresenceRequiredForOthers,
+	PresenceOptional, PresenceRequired, PresenceRequiredForOthers, PresencePerson,
 }
 
 // Valid reports whether a presence is one this build knows.
@@ -778,8 +798,15 @@ const (
 // SeatGrants are every grant, in declaration order.
 var SeatGrants = []SeatGrant{SeatGrantHealth, SeatGrantSSHRead, SeatGrantSSHOperate, SeatGrantDelegate}
 
-// Valid reports whether a grant is one this build knows.
-func (g SeatGrant) Valid() bool { return slices.Contains(SeatGrants, g) }
+// Valid reports whether a grant is one this build knows: one of
+// [SeatGrants], or a registered growth product's ([GrowthSeatGrantOf]).
+func (g SeatGrant) Valid() bool {
+	if slices.Contains(SeatGrants, g) {
+		return true
+	}
+	_, _, ok := GrowthSeatGrantOf(g)
+	return ok
+}
 
 // AssistClass is what the Dashboard Assistant may do with a verb: take it
 // under a read grant, carry it only as the one approved request an exec grant
@@ -1623,6 +1650,17 @@ var rules = map[Action]rule{
 	// administrator, never a lead by position in the chart.
 	ActionSSHOperateApprove: {class: ClassNamed, humanOnly: true, recency: iam.RecencyStepUp,
 		assist: AssistApprove},
+	// MONEY, WHAT CUSTOMERS SEE AND A VENDOR ACCOUNT'S OWN ACCESS are decided
+	// by an administrator in person at a step-up, and never by a delegate: a
+	// list the document names only routes the question (ADR-0171).
+	ActionGrowthSpendApprove: {class: ClassAdmin, humanOnly: true, presence: PresencePerson,
+		recency: iam.RecencyStepUp, assist: AssistApprove},
+	ActionGrowthPublicApprove: {class: ClassAdmin, humanOnly: true, presence: PresencePerson,
+		recency: iam.RecencyStepUp, assist: AssistApprove},
+	ActionGrowthAdminApprove: {class: ClassAdmin, humanOnly: true, presence: PresencePerson,
+		recency: iam.RecencyStepUp, assist: AssistApprove},
+	ActionAppStoreAnalyticsEnable: {class: ClassAdmin, humanOnly: true, presence: PresencePerson,
+		recency: iam.RecencyStepUp, assist: AssistApprove},
 	// A SERVER IS REACHED BY AN AGENT ITS ROLE GRANTS IT TO (SSH on with a host
 	// for a read, at operate for a command a person approves). The tools answer
 	// only an agent's own run; a person reaches a server with their own key.
@@ -1652,7 +1690,8 @@ var rules = map[Action]rule{
 	ActionDelegatedRead: {class: ClassNamed, humanOnly: true, recency: iam.RecencyAny, assist: AssistRead},
 	// AND REACHED FOR ANYBODY OF THE COMPANY WHO MAY ACT, as the health tools
 	// read ([ActionFleetHealthRead]): the grant decides what, this row for whom.
-	ActionSSHRequester: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
+	ActionSSHRequester:    {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
+	ActionGrowthRequester: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
 	// THE COMPANY-WIDE TRAIL (events, turns, phases, agent-to-agent channels,
 	// the identity estate's audit) is admin's; one seat's trail is its lead's
 	// too ([ActionSeatTrailRead]).
@@ -1867,7 +1906,7 @@ var rules = map[Action]rule{
 // (internal/api/queries' postures). A caller deciding for itself would be a
 // second implementation. Use [Decide].
 func RecencyOf(a Action) (iam.Recency, bool) {
-	r, ok := rules[a]
+	r, ok := ruleOf(a)
 	return r.recency, ok
 }
 
@@ -1877,7 +1916,7 @@ func RecencyOf(a Action) (iam.Recency, bool) {
 // EXPORTED FOR WHAT SHOWS A GESTURE TO A PERSON first (the assistant's card),
 // on [RecencyOf]'s terms; decides nothing.
 func IrreversibleOf(a Action) (bool, bool) {
-	r, ok := rules[a]
+	r, ok := ruleOf(a)
 	return r.irreversible, ok
 }
 
@@ -1887,7 +1926,7 @@ func IrreversibleOf(a Action) (bool, bool) {
 //
 // EXPORTED on [RecencyOf]'s terms. Use [Decide].
 func SelfRecencyOf(a Action) (iam.Recency, bool) {
-	r, ok := rules[a]
+	r, ok := ruleOf(a)
 	return r.selfRecency, ok
 }
 
@@ -1896,7 +1935,7 @@ func SelfRecencyOf(a Action) (iam.Recency, bool) {
 //
 // EXPORTED on [RecencyOf]'s terms. Use [Decide].
 func PresenceOf(a Action) (Presence, bool) {
-	r, ok := rules[a]
+	r, ok := ruleOf(a)
 	return r.presence, ok
 }
 
@@ -1910,7 +1949,7 @@ func PresenceOf(a Action) (Presence, bool) {
 //
 // EXPORTED FOR THE WALKS, on [RecencyOf]'s terms. Use [Decide].
 func AppOf(a Action) (iam.Grant, bool) {
-	r, ok := rules[a]
+	r, ok := ruleOf(a)
 	return r.app, ok
 }
 
@@ -1922,7 +1961,7 @@ func AppOf(a Action) (iam.Grant, bool) {
 // did not make would have named. A copy, so no caller edits the row. Use
 // [Decide].
 func AnyOf(a Action) ([]iam.Grant, bool) {
-	r, ok := rules[a]
+	r, ok := ruleOf(a)
 	return slices.Clone(r.anyOf), ok
 }
 
@@ -1931,7 +1970,7 @@ func AnyOf(a Action) ([]iam.Grant, bool) {
 //
 // EXPORTED FOR THE WALKS, on [RecencyOf]'s terms. Use [Decide].
 func HumanOnlyOf(a Action) (bool, bool) {
-	r, ok := rules[a]
+	r, ok := ruleOf(a)
 	return r.humanOnly, ok
 }
 
@@ -1940,7 +1979,7 @@ func HumanOnlyOf(a Action) (bool, bool) {
 //
 // EXPORTED FOR THE WALKS, on [RecencyOf]'s terms. Use [Decide].
 func SeatOnlyOf(a Action) (bool, bool) {
-	r, ok := rules[a]
+	r, ok := ruleOf(a)
 	return r.seatOnly, ok
 }
 
@@ -1950,7 +1989,7 @@ func SeatOnlyOf(a Action) (bool, bool) {
 //
 // EXPORTED FOR THE WALKS, on [RecencyOf]'s terms. Use [Decide].
 func SeatGrantOf(a Action) (SeatGrant, bool) {
-	r, ok := rules[a]
+	r, ok := ruleOf(a)
 	return r.seatGrant, ok
 }
 
@@ -1960,7 +1999,7 @@ func SeatGrantOf(a Action) (SeatGrant, bool) {
 //
 // EXPORTED FOR THE WALKS, on [RecencyOf]'s terms. Use [Decide].
 func MinRoleOf(a Action) (artifacts.Role, bool) {
-	r, ok := rules[a]
+	r, ok := ruleOf(a)
 	return r.minRole, ok
 }
 
@@ -1972,7 +2011,7 @@ func MinRoleOf(a Action) (artifacts.Role, bool) {
 // with the tools' annotations: a steerable verb must be a write. Use
 // [DecideWithin].
 func SteerableOf(a Action) (bool, bool) {
-	r, ok := rules[a]
+	r, ok := ruleOf(a)
 	return r.steerable, ok
 }
 
@@ -1982,7 +2021,7 @@ func SteerableOf(a Action) (bool, bool) {
 // EXPORTED FOR THE WALKS, here and wherever what the assistant is offered is
 // held against what the table lets it take. Use [Decide].
 func AssistOf(a Action) (AssistClass, bool) {
-	r, ok := rules[a]
+	r, ok := ruleOf(a)
 	if !ok {
 		return "", false
 	}
@@ -2105,11 +2144,20 @@ var assistantNever = sync.OnceValue(func() map[Action]neverEntry {
 			"and the assistant deciding it would be a model approving a model's call", tellApproval},
 		ActionSSHOperateApprove: {"an agent's command on a production server runs only as a person " +
 			"approved it, and the assistant approving it would be a model approving a model's command", tellApproval},
+		ActionGrowthSpendApprove: {"ad spend an agent asked for starts only as an administrator approved " +
+			"it, and the assistant approving it would be a model approving a model's spend", tellApproval},
+		ActionGrowthPublicApprove: {"what an agent asked to publish goes out only as an administrator " +
+			"approved it, and the assistant approving it would be a model approving a model's words", tellApproval},
+		ActionGrowthAdminApprove: {"an agent's change to a vendor account's users, keys, billing or policies " +
+			"happens only as an administrator approved it, and the assistant approving it would be a model " +
+			"approving a model's change", tellApproval},
 		ActionReleaseApprove: {"a merge or a deploy an agent asked for goes ahead only as a person or a " +
 			"delegate approved it, and the assistant approving it would be a model approving a model's request",
 			tellApproval},
 		ActionSSHAuditRead: {"the SSH audit answers each command's text in clear, which can carry a " +
 			"credential typed into it", tellSSHAudit},
+		ActionAppStoreAnalyticsEnable: {"an Admin key is pasted by the person holding it, and the assistant " +
+			"relaying one would carry a key that manages the team's users and keys through a model", tellSetup},
 	}
 })
 
@@ -2118,19 +2166,23 @@ var assistantNever = sync.OnceValue(func() map[Action]neverEntry {
 //
 // EXPORTED FOR THE WALKS, on [RecencyOf]'s terms. Use [Decide].
 func SeatedOf(a Action) (bool, bool) {
-	r, ok := rules[a]
+	r, ok := ruleOf(a)
 	return r.seated, ok
 }
 
 // Actions is every verb this build authorizes, sorted, for the walks that ask
-// whether a surface covered all of them.
-func Actions() []Action { return slices.Sorted(maps.Keys(rules)) }
+// whether a surface covered all of them: the table's and every registered
+// growth catalog's tools ([ruleOf]).
+func Actions() []Action {
+	return slices.Compact(slices.Sorted(slices.Values(append(slices.Collect(maps.Keys(rules)),
+		growthVerbs()...))))
+}
 
 // ClassOf reports which rule governs a verb.
 //
 // EXPORTED FOR THE WALKS, not for a caller to branch on: a surface deciding
 // for itself would be a second implementation. Use [Decide].
 func ClassOf(a Action) (Class, bool) {
-	r, ok := rules[a]
+	r, ok := ruleOf(a)
 	return r.class, ok
 }

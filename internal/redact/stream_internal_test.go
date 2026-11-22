@@ -375,6 +375,7 @@ func ruleSample(t *testing.T, rule rule) string {
 		"crewlet_rt1.Tq0d_8-x.subj.1792927401." + strings.Repeat("S", 43),
 		"ya29." + strings.Repeat("a", 100),
 		"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0." + strings.Repeat("a", 100),
+		"1//0g" + strings.Repeat("a", 100), "GOCSPX-" + strings.Repeat("a", 100),
 		"sk-proj-" + strings.Repeat("a", 100), "sk-ant-" + strings.Repeat("a", 100), "sk-" + strings.Repeat("a", 100),
 		"xoxb-" + strings.Repeat("a", 100), "AKIAABCDEFGHIJKLMNOP", "ASIAABCDEFGHIJKLMNOP",
 		"ghp_" + strings.Repeat("a", 100), "github_pat_" + strings.Repeat("a", 100),

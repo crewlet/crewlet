@@ -30,7 +30,9 @@ func TestASeatGrantDecidesAnAgentAndTheClassEverybodyElse(t *testing.T) {
 		walked++
 		object := authz.Object{Kind: authz.KindCompany}
 
-		granted := authz.Decide(t.Context(), seat("sre"), a, object, nimbus(), decidedAt)
+		carries := nimbus()
+		carries.granted[[2]string{"sre", string(grant)}] = true
+		granted := authz.Decide(t.Context(), seat("sre"), a, object, carries, decidedAt)
 		if !granted.Allowed || granted.Reason != authz.ReasonSeatGrant ||
 			granted.SeatGrant != grant || len(granted.Grants) != 0 {
 			t.Errorf("%s: the seat whose role carries %s decided %+v, want admitted "+

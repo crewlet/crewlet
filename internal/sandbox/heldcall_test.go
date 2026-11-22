@@ -84,6 +84,53 @@ func TestAChatReplyNeverAnswersAHeldCall(t *testing.T) {
 	}
 }
 
+// A GROWTH ACT PAST ITS LAPSE TAKES DENY ALONE, whichever node's route let an
+// allow through: the seat spends it unrecorded, so nothing is made on figures
+// a day old, and records a deny.
+//
+// Mutation: drop the lapse check from AnswerByTurn, and the late allow is
+// recorded.
+func TestALapsedGrowthActIsNeverAllowed(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.coordinator.countRun("swe", StatusRunning)
+	cipher, err := secrets.NewCipher(secrets.Keyring{ActiveID: "k1", Keys: map[string][]byte{"k1": make([]byte, 32)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := rig.get("t1")
+	heldAt := rig.now.Add(-HeldLapse - time.Minute)
+	held := HeldCall{ID: "0190f3a8-0000-7000-8000-0000000000e1", LaunchID: run.LaunchID, Server: "crewlet",
+		Tool: "ads_raise_budget", Raw: "ads_raise_budget", Digest: "sha256:ads", HeldAt: heldAt,
+		LapsesAt: heldAt.Add(HeldLapse), Fixed: true, Approvers: HeldApproversAdmin, Act: "ad_spend",
+		Binding: strings.Repeat("cd", 32)}
+	if held.Arguments, err = NewCallSeal(cipher).SealArguments("t1", held, map[string]any{"daily_budget": "60"}); err != nil {
+		t.Fatal(err)
+	}
+	const question = "May swe raise a campaign's daily budget?"
+	rig.ask("t1", Ask{Question: question, Decision: HeldFixedDecision(question, nil), To: AskToManager, Held: &held})
+	rig.runner.Finish(Result{})
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	given, _ := givenAgainst(t, rig, "t1")
+	given.Choice, given.Approval = HeldOnce, held.ID
+	if d, err := rig.coordinator.AnswerByTurn(t.Context(), given, events.New(given, events.TraceContext{})); err != nil ||
+		d != AnswerNotMine {
+		t.Fatalf("a late allow = %q, %v, want not mine", d, err)
+	}
+	if got := rig.get("t1"); got.Answer != nil {
+		t.Fatalf("a late allow was recorded: %+v", got.Answer)
+	}
+	given.Choice = HeldDeny
+	if d, err := rig.coordinator.AnswerByTurn(t.Context(), given, events.New(given, events.TraceContext{})); err != nil ||
+		d != AnswerConsumed {
+		t.Fatalf("a late deny = %q, %v, want consumed", d, err)
+	}
+}
+
 // AN APPROVAL NAMES A HELD CALL, so one naming a held call answers no question
 // that is not one: spent unrecorded on a run parked on its own question.
 func TestAnApprovalAnswersNoQuestionThatIsNotAHeldCall(t *testing.T) {

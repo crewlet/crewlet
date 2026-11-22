@@ -1630,6 +1630,7 @@ type Fleet interface {
 	InsightRecords
 	MCPGrants
 	MCPSignIns
+	GoogleIdentities
 	MCPAccepted
 	PositionRegister
 	HoldRegister

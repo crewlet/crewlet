@@ -3,6 +3,8 @@ package estate
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"maps"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/advisordomain"
@@ -25,6 +27,8 @@ type AdvisorReader interface {
 	Finding(ctx context.Context, id string,
 		fresh statelog.Freshness) (advisordomain.FindingRow, []advisordomain.HistoryRow, error)
 	Episodes(ctx context.Context, key string, fresh statelog.Freshness) ([]advisordomain.FindingRow, error)
+	EpisodesPage(ctx context.Context, key, cursor string,
+		fresh statelog.Freshness) ([]advisordomain.FindingRow, string, error)
 	Key(ctx context.Context, key string, fresh statelog.Freshness) (advisordomain.KeyRow, bool, error)
 	Counts(ctx context.Context, fresh statelog.Freshness) (map[advisordomain.Severity]int, error)
 	LatestRun(ctx context.Context, fresh statelog.Freshness) (advisordomain.RunRow, bool, error)
@@ -34,12 +38,15 @@ type AdvisorReader interface {
 	Run(ctx context.Context, id string, fresh statelog.Freshness) (advisordomain.RunRow, bool, error)
 	PendingRequests(ctx context.Context, fresh statelog.Freshness) ([]advisordomain.RunRow, error)
 	LastRunOfClasses(ctx context.Context, fresh statelog.Freshness) (map[string]time.Time, error)
+	ClassRunsPage(ctx context.Context, after string, fresh statelog.Freshness) (map[string]time.Time, string, error)
 	Reports(ctx context.Context, cursor string, limit int,
 		fresh statelog.Freshness) ([]advisordomain.ReportRow, string, error)
 	Report(ctx context.Context, week string, fresh statelog.Freshness) (advisordomain.ReportRow, bool, error)
 	Tally(ctx context.Context, from, to time.Time, fresh statelog.Freshness) (advisordomain.Tally, error)
 	AlarmEpisodes(ctx context.Context, since time.Time,
 		fresh statelog.Freshness) ([]advisordomain.AlarmEpisodeRow, error)
+	AlarmEpisodesPage(ctx context.Context, since time.Time, cursor string,
+		fresh statelog.Freshness) ([]advisordomain.AlarmEpisodeRow, string, error)
 }
 
 // AdvisorWriter is the advisor log's write side: the duty's records and a
@@ -139,7 +146,7 @@ var opAdvisorFindings = advisorRead("advisor.findings",
 	func(ctx context.Context, r AdvisorReader, a advisorFindingsArgs) (advisorPage, error) {
 		rows, next, err := r.Findings(ctx, a.Filter, a.Fresh)
 		return advisorPage{Rows: rows, Next: next}, err
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 type advisorFreshArgs struct {
 	Fresh statelog.Freshness
@@ -149,7 +156,7 @@ type advisorFreshArgs struct {
 var opAdvisorNonClosed = advisorRead("advisor.non_closed",
 	func(ctx context.Context, r AdvisorReader, a advisorFreshArgs) ([]advisordomain.FindingRow, error) {
 		return r.NonClosed(ctx, a.Fresh)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 type advisorIDArgs struct {
 	ID    string
@@ -166,12 +173,19 @@ var opAdvisorFinding = advisorRead("advisor.finding",
 	func(ctx context.Context, r AdvisorReader, a advisorIDArgs) (advisorFinding, error) {
 		row, history, err := r.Finding(ctx, a.ID, a.Fresh)
 		return advisorFinding{Row: row, History: history}, err
-	})
+	}).oneAnswer()
+
+type advisorEpisodesArgs struct {
+	ID     string
+	Cursor string
+	Fresh  statelog.Freshness
+}
 
 var opAdvisorEpisodes = advisorRead("advisor.episodes",
-	func(ctx context.Context, r AdvisorReader, a advisorIDArgs) ([]advisordomain.FindingRow, error) {
-		return r.Episodes(ctx, a.ID, a.Fresh)
-	})
+	func(ctx context.Context, r AdvisorReader, a advisorEpisodesArgs) (advisorPage, error) {
+		rows, next, err := r.EpisodesPage(ctx, a.ID, a.Cursor, a.Fresh)
+		return advisorPage{Rows: rows, Next: next}, err
+	}).rowsTo(statelog.AnswerBytes)
 
 // advisorKey is one key and whether the log holds it.
 type advisorKey struct {
@@ -183,12 +197,12 @@ var opAdvisorKey = advisorRead("advisor.key",
 	func(ctx context.Context, r AdvisorReader, a advisorIDArgs) (advisorKey, error) {
 		row, found, err := r.Key(ctx, a.ID, a.Fresh)
 		return advisorKey{Key: row, Found: found}, err
-	})
+	}).oneAnswer()
 
 var opAdvisorCounts = advisorRead("advisor.counts",
 	func(ctx context.Context, r AdvisorReader, a advisorFreshArgs) (map[advisordomain.Severity]int, error) {
 		return r.Counts(ctx, a.Fresh)
-	})
+	}).cappedAt(len(advisordomain.Severities), advisordomain.MaxWordBytes+countBytes)
 
 // advisorRun is one run and whether the log holds it.
 type advisorRun struct {
@@ -200,7 +214,7 @@ var opAdvisorLatestRun = advisorRead("advisor.latest_run",
 	func(ctx context.Context, r AdvisorReader, a advisorFreshArgs) (advisorRun, error) {
 		run, found, err := r.LatestRun(ctx, a.Fresh)
 		return advisorRun{Run: run, Found: found}, err
-	})
+	}).oneAnswer()
 
 type advisorLive struct {
 	Run   string
@@ -212,7 +226,7 @@ var opAdvisorLiveProgress = advisorRead("advisor.live_progress",
 	func(ctx context.Context, r AdvisorReader, a advisorFreshArgs) (advisorLive, error) {
 		run, lines, found, err := r.LiveProgress(ctx, a.Fresh)
 		return advisorLive{Run: run, Lines: lines, Found: found}, err
-	})
+	}).oneAnswer()
 
 type advisorCheckpoint struct {
 	Body  json.RawMessage
@@ -223,28 +237,41 @@ var opAdvisorCheckpoint = advisorRead("advisor.checkpoint",
 	func(ctx context.Context, r AdvisorReader, a advisorIDArgs) (advisorCheckpoint, error) {
 		body, found, err := r.Checkpoint(ctx, a.ID, a.Fresh)
 		return advisorCheckpoint{Body: body, Found: found}, err
-	})
+	}).oneAnswer()
 
 var opAdvisorRunProgress = advisorRead("advisor.run_progress",
 	func(ctx context.Context, r AdvisorReader, a advisorIDArgs) ([]advisordomain.ProgressLine, error) {
 		return r.RunProgress(ctx, a.ID, a.Fresh)
-	})
+	}).cappedAt(advisordomain.MaxProgressLines, 2*advisordomain.MaxProgressBytes+timeBytes)
 
 var opAdvisorRun = advisorRead("advisor.run",
 	func(ctx context.Context, r AdvisorReader, a advisorIDArgs) (advisorRun, error) {
 		run, found, err := r.Run(ctx, a.ID, a.Fresh)
 		return advisorRun{Run: run, Found: found}, err
-	})
+	}).oneAnswer()
 
 var opAdvisorPending = advisorRead("advisor.pending_requests",
 	func(ctx context.Context, r AdvisorReader, a advisorFreshArgs) ([]advisordomain.RunRow, error) {
 		return r.PendingRequests(ctx, a.Fresh)
-	})
+	}).cappedAt(advisordomain.MaxPending, advisordomain.MaxRunRowBytes)
+
+type advisorClassRunsArgs struct {
+	After string
+	Fresh statelog.Freshness
+}
+
+// advisorClassRuns is a page of each class's last run and the class the next
+// page starts after.
+type advisorClassRuns struct {
+	Runs map[string]time.Time
+	Next string
+}
 
 var opAdvisorClassRuns = advisorRead("advisor.class_runs",
-	func(ctx context.Context, r AdvisorReader, a advisorFreshArgs) (map[string]time.Time, error) {
-		return r.LastRunOfClasses(ctx, a.Fresh)
-	})
+	func(ctx context.Context, r AdvisorReader, a advisorClassRunsArgs) (advisorClassRuns, error) {
+		runs, next, err := r.ClassRunsPage(ctx, a.After, a.Fresh)
+		return advisorClassRuns{Runs: runs, Next: next}, err
+	}).rowsTo(statelog.AnswerBytes)
 
 type advisorReportsArgs struct {
 	Cursor string
@@ -262,7 +289,7 @@ var opAdvisorReports = advisorRead("advisor.reports",
 	func(ctx context.Context, r AdvisorReader, a advisorReportsArgs) (advisorReports, error) {
 		rows, next, err := r.Reports(ctx, a.Cursor, a.Limit, a.Fresh)
 		return advisorReports{Rows: rows, Next: next}, err
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 // advisorReport is one week's report and whether it was written.
 type advisorReport struct {
@@ -274,7 +301,7 @@ var opAdvisorReport = advisorRead("advisor.report",
 	func(ctx context.Context, r AdvisorReader, a advisorIDArgs) (advisorReport, error) {
 		report, found, err := r.Report(ctx, a.ID, a.Fresh)
 		return advisorReport{Report: report, Found: found}, err
-	})
+	}).oneAnswer()
 
 type advisorPeriodArgs struct {
 	From, To time.Time
@@ -284,17 +311,25 @@ type advisorPeriodArgs struct {
 var opAdvisorTally = advisorRead("advisor.tally",
 	func(ctx context.Context, r AdvisorReader, a advisorPeriodArgs) (advisordomain.Tally, error) {
 		return r.Tally(ctx, a.From, a.To, a.Fresh)
-	})
+	}).oneAnswer()
 
-type advisorSinceArgs struct {
-	Since time.Time
-	Fresh statelog.Freshness
+type advisorAlarmArgs struct {
+	Since  time.Time
+	Cursor string
+	Fresh  statelog.Freshness
+}
+
+// advisorAlarms is a page of alarm episodes and where the next one starts.
+type advisorAlarms struct {
+	Rows []advisordomain.AlarmEpisodeRow
+	Next string
 }
 
 var opAdvisorAlarmEpisodes = advisorRead("advisor.alarm_episodes",
-	func(ctx context.Context, r AdvisorReader, a advisorSinceArgs) ([]advisordomain.AlarmEpisodeRow, error) {
-		return r.AlarmEpisodes(ctx, a.Since, a.Fresh)
-	})
+	func(ctx context.Context, r AdvisorReader, a advisorAlarmArgs) (advisorAlarms, error) {
+		rows, next, err := r.AlarmEpisodesPage(ctx, a.Since, a.Cursor, a.Fresh)
+		return advisorAlarms{Rows: rows, Next: next}, err
+	}).rowsTo(statelog.AnswerBytes)
 
 // ---- the writes, each under the operation it carries -------------------- //
 
@@ -474,7 +509,26 @@ func (x AdvisorReads) Finding(ctx context.Context, id string,
 // Episodes answers every kept episode of a key.
 func (x AdvisorReads) Episodes(ctx context.Context, key string,
 	fresh statelog.Freshness) ([]advisordomain.FindingRow, error) {
-	return call(ctx, x.r, opAdvisorEpisodes, nil, advisorIDArgs{ID: key, Fresh: fresh})
+	var out []advisordomain.FindingRow
+	for cursor := ""; len(out) < advisordomain.MaxEpisodes; {
+		rows, next, err := x.EpisodesPage(ctx, key, cursor, fresh)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, rows...)
+		if cursor = next; cursor == "" {
+			break
+		}
+	}
+	return out[:min(len(out), advisordomain.MaxEpisodes)], nil
+}
+
+// EpisodesPage answers one page of a key's kept episodes and where the next
+// starts: each page is one answer of its own.
+func (x AdvisorReads) EpisodesPage(ctx context.Context, key, cursor string,
+	fresh statelog.Freshness) ([]advisordomain.FindingRow, string, error) {
+	out, err := call(ctx, x.r, opAdvisorEpisodes, nil, advisorEpisodesArgs{ID: key, Cursor: cursor, Fresh: fresh})
+	return out.Rows, out.Next, err
 }
 
 // Key answers one key, and whether the log holds it.
@@ -529,9 +583,28 @@ func (x AdvisorReads) PendingRequests(ctx context.Context, fresh statelog.Freshn
 	return call(ctx, x.r, opAdvisorPending, nil, advisorFreshArgs{Fresh: fresh})
 }
 
-// LastRunOfClasses answers each class's last run that ran to done.
+// LastRunOfClasses answers each class's last run that ran to done, a page at
+// a time.
 func (x AdvisorReads) LastRunOfClasses(ctx context.Context, fresh statelog.Freshness) (map[string]time.Time, error) {
-	return call(ctx, x.r, opAdvisorClassRuns, nil, advisorFreshArgs{Fresh: fresh})
+	out := map[string]time.Time{}
+	for after := ""; ; {
+		runs, next, err := x.ClassRunsPage(ctx, after, fresh)
+		if err != nil {
+			return nil, err
+		}
+		maps.Copy(out, runs)
+		if after = next; after == "" {
+			return out, nil
+		}
+	}
+}
+
+// ClassRunsPage answers one page of each class's last run, by class, after
+// after.
+func (x AdvisorReads) ClassRunsPage(ctx context.Context, after string,
+	fresh statelog.Freshness) (map[string]time.Time, string, error) {
+	out, err := call(ctx, x.r, opAdvisorClassRuns, nil, advisorClassRunsArgs{After: after, Fresh: fresh})
+	return out.Runs, out.Next, err
 }
 
 // Reports answers one page of reports and where the next starts.
@@ -557,7 +630,28 @@ func (x AdvisorReads) Tally(ctx context.Context, from, to time.Time,
 // AlarmEpisodes answers the alarm episodes open at any instant since since.
 func (x AdvisorReads) AlarmEpisodes(ctx context.Context, since time.Time,
 	fresh statelog.Freshness) ([]advisordomain.AlarmEpisodeRow, error) {
-	return call(ctx, x.r, opAdvisorAlarmEpisodes, nil, advisorSinceArgs{Since: since, Fresh: fresh})
+	var out []advisordomain.AlarmEpisodeRow
+	for cursor := ""; ; {
+		rows, next, err := x.AlarmEpisodesPage(ctx, since, cursor, fresh)
+		if err != nil {
+			return nil, err
+		}
+		if out = append(out, rows...); len(out) > advisordomain.MaxAlarmEpisodes {
+			return nil, fmt.Errorf("advisordomain: more than %d alarm episodes since %s, past what one "+
+				"read answers", advisordomain.MaxAlarmEpisodes, since.UTC())
+		}
+		if cursor = next; cursor == "" {
+			return out, nil
+		}
+	}
+}
+
+// AlarmEpisodesPage answers one page of alarm episodes and where the next
+// starts.
+func (x AdvisorReads) AlarmEpisodesPage(ctx context.Context, since time.Time, cursor string,
+	fresh statelog.Freshness) ([]advisordomain.AlarmEpisodeRow, string, error) {
+	out, err := call(ctx, x.r, opAdvisorAlarmEpisodes, nil, advisorAlarmArgs{Since: since, Cursor: cursor, Fresh: fresh})
+	return out.Rows, out.Next, err
 }
 
 // AdvisorWrites is the advisor log's writes, made by a data node whose copy

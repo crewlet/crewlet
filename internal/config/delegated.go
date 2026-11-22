@@ -97,8 +97,9 @@ func (DelegatedRule) fieldDescriptions() map[string]string {
 			" (an agent's command on a server as its operate user), " + string(delegated.KindPRMerge) +
 			" (merging a change at the head it was asked about, " + toolname.AskToMerge + ") and " +
 			string(delegated.KindDeploy) + " (deploying a commit that holds merged changes, " +
-			toolname.AskToDeploy + "). " +
-			string(delegated.KindOther) + " is never delegated.",
+			toolname.AskToDeploy + "). " + string(delegated.KindAdSpend) + ", " +
+			string(delegated.KindPublicPost) + ", " + string(delegated.KindAccountAdmin) + " and " +
+			string(delegated.KindOther) + " are never delegated.",
 	}
 }
 
@@ -234,6 +235,12 @@ func (c *Company) validateDelegatedDecisions(o *org.Organization) error {
 		}
 		for j, k := range r.Kinds {
 			switch prior, taken := claimed[k]; {
+			case k != delegated.KindOther && slices.Contains(delegated.NeverDelegated(), k):
+				p.addSaying(idx(at(here, "kinds"), j), ErrConflict,
+					fmt.Sprintf("An administrator decides %s at a fresh sign-in, never a delegate.",
+						kindSaid(k)),
+					"%q is never delegated: an administrator answers each at a fresh step-up; give %s", k,
+					words.Or(delegated.DelegableKinds()))
 			case !k.Delegable():
 				p.addSaying(idx(at(here, "kinds"), j), ErrUnknownValue,
 					fmt.Sprintf("%q is not a kind of request a rule can decide.", k),
@@ -395,6 +402,12 @@ func kindSaid(k delegated.Kind) string {
 		return "merges"
 	case delegated.KindDeploy:
 		return "deploys"
+	case delegated.KindAdSpend:
+		return "ad spend changes"
+	case delegated.KindPublicPost:
+		return "public posts"
+	case delegated.KindAccountAdmin:
+		return "account administration changes"
 	}
 	return string(k)
 }

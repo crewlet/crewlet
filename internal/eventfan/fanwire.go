@@ -419,9 +419,10 @@ type keptPart struct {
 // company for exactly the window somebody was investigating. A node without
 // `data` does not serve: its store is scratch and custody keeps its events in
 // a data node's, so it is on no roster that asks.
-func Serve(ctx context.Context, q queue.EventQueue, self string, local *store.EventLog) (queue.Unsubscribe, error) {
-	if q == nil || local == nil || self == "" {
-		return nil, errors.New("eventfan: serve needs a queue, a store and this node's id")
+func Serve(ctx context.Context, q queue.EventQueue, self string, local *store.EventLog,
+	answers *queue.AnswerBudget) (queue.Unsubscribe, error) {
+	if q == nil || local == nil || self == "" || answers == nil {
+		return nil, errors.New("eventfan: serve needs a queue, a store, this node's id and its answer budget")
 	}
 	return q.Serve(ctx, Subject, queue.ConcurrentAnswers, func(ctx context.Context, raw []byte) ([]byte, error) {
 		var req request
@@ -440,6 +441,17 @@ func Serve(ctx context.Context, q queue.EventQueue, self string, local *store.Ev
 		if req.Version != Protocol {
 			return encodeError(self, fmt.Sprintf("this node speaks history protocol "+
 				"v%d and was asked in v%d; it is running a different build", Protocol, req.Version))
+		}
+		if payloadQuestion(req.Question) {
+			// WAITED FOR NO LONGER THAN AN ASKER WAITS ([FleetReadBudget]):
+			// an answer admitted after is one nobody reads.
+			wait, cancel := context.WithTimeout(ctx, FleetReadBudget)
+			release, err := answers.Acquire(wait, queue.AnswerHistory, answerWeight)
+			cancel()
+			if err != nil {
+				return encodeError(self, err.Error())
+			}
+			defer release()
 		}
 		part, err := answer(ctx, local, req.Question, req.Params, req.TurnIDs)
 		if err != nil {
@@ -612,6 +624,20 @@ func phaseLimit(limit int) int {
 // record carries its prompts and response verbatim, so a page of
 // [store.MaxPhasePage] could read hundreds of MiB for one 8 MiB reply.
 const AnswerBytes = queue.MaxPayloadBytes / 2
+
+// answerWeight is what a turn or phases answer holds of the node's answer
+// budget ([queue.AnswerBudget]) from its read until its reply is written:
+// [AnswerBytes] five times. Measured, 64 turn answers at the transport's limit
+// raised a node's RSS by up to 1.18 GiB, 18.9 MiB an answer (crewlet/crewlet#1782):
+// the rows, their encoding and the reply's, 4.7 times the rows' bound.
+const answerWeight = 5 * AnswerBytes
+
+// payloadQuestion reports whether q's answer is read to [AnswerBytes], and so
+// holds [answerWeight]; the other questions' answers are a few KiB, which the
+// registration's count bounds ([queue.ConcurrentAnswers]).
+func payloadQuestion(q Question) bool {
+	return q == QuestionTurn || q == QuestionPhases || q == QuestionSeatPhases
+}
 
 // cuttable is a part that can give up rows to fit the transport, keeping the
 // ones that matter most and saying that it did.

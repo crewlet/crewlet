@@ -17,12 +17,12 @@ import type { ConfigProblem, CompanyDocument } from "~/protocol/types.ts";
 import {
   DEFAULT_HARNESS,
   DEFAULT_HARNESS_AUTH_MODE,
-  EXECUTOR_HARNESSES,
   MODEL_KEY_PATTERN,
   type HarnessAuthMode,
   type RunnerCellName,
 } from "~/contract/models.ts";
 import { HARNESS_FACTS } from "~/contract/harnesses.ts";
+import { EXECUTOR_HARNESSES } from "../executors.ts";
 import { isReferenceName } from "~/lib/references.ts";
 import {
   applyUses,
@@ -102,8 +102,7 @@ const NO_FACTS: HarnessFacts = { binary: "", signIns: [], efforts: [] };
 export const factsOf = (harness: string): HarnessFacts => HARNESS_FACTS[harness] ?? NO_FACTS;
 
 /** Whether the draft's harness can run a seat's coding (`EXECUTOR_HARNESSES`, held to the engine). */
-export const canExecute = (d: Pick<Draft, "harness">) =>
-  (EXECUTOR_HARNESSES as readonly string[]).includes(d.harness);
+export const canExecute = (d: Pick<Draft, "harness">) => EXECUTOR_HARNESSES.includes(d.harness);
 
 /** The sign-in methods a harness offers, in its facts' order: the one allowed on any engine first. */
 export const methodsOf = (harness: string): readonly Method[] => factsOf(harness).signIns;

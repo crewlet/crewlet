@@ -45,7 +45,9 @@ func toldLead(lead sandbox.Lead) runner.ResumeLead { return runner.ResumeLead{Le
 // relaunchedInBox is the request a relaunch carrying the round on with carry
 // in its job's own box hands its launcher, the job's harness having ended as
 // end says, over the turn's closed rounds history; with tells the resume what
-// else the job's record says.
+// else the job's record says. The launcher answers the relaunch's basis as an
+// engine's does, naming no kept session but every harness's traits, so the
+// harness with names is judged as its runner states.
 func relaunchedInBox(t *testing.T, carry inBoxCarry, end sandbox.HarnessEnd, history []ledger.Iteration,
 	with func(*runner.Resume)) runner.AgentRunRequest {
 
@@ -59,7 +61,7 @@ func relaunchedInBox(t *testing.T, carry inBoxCarry, end sandbox.HarnessEnd, his
 	if with != nil {
 		with(resume)
 	}
-	relauncher := &playLauncher{}
+	relauncher := &probingLauncher{}
 	collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
 		resume: resume})
 	if _, _, err := collector.Resume(t.Context(), history); err != nil {

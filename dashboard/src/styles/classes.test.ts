@@ -1036,6 +1036,10 @@ const LAZY_SHEETS: Readonly<Record<string, { importer: string; owns: RegExp }>> 
     importer: "routes/settings/integrations/access/AgentsAccess.tsx",
     owns: /\.agent-access(?:-[a-z-]+)?\b/,
   },
+  "growth.css": {
+    importer: "components/growth/GrowthDecisionCard.tsx",
+    owns: /\.growth-[a-z_-]+\b/,
+  },
   "chatlet-frame.css": {
     importer: "routes/chatlet/Chat.tsx",
     owns: /\.chat-[a-z_-]+\b/,

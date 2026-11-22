@@ -14,6 +14,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/queue"
 )
 
 // The in-process test doubles live in the package, not a _test.go file: the
@@ -246,6 +248,20 @@ func (s *FakeSandbox) ReadFile(ctx context.Context, p string) ([]byte, error) {
 		return nil, err
 	}
 	return readCapped(s.delivering(bytes.NewReader(content)), p, s.ReadCap())
+}
+
+// OpenWhole opens the file as it stands now, refused past the box's whole-read
+// cap as [FakeSandbox.ReadFile] refuses it.
+func (s *FakeSandbox) OpenWhole(ctx context.Context, p string) (io.ReadCloser, int64, error) {
+	content, err := s.content(p)
+	if err != nil {
+		return nil, 0, err
+	}
+	size := int64(len(content))
+	if limit := s.ReadCap(); size > int64(limit) {
+		return nil, 0, &FileTooLargeError{Path: p, Limit: limit, Size: size}
+	}
+	return io.NopCloser(s.streaming(p, content)), size, nil
 }
 
 // OpenFile streams the file whole, as every real backend does: a machine
@@ -666,6 +682,11 @@ type FakeRunner struct {
 	// steps. Set it before the first collection.
 	TakesNotes bool
 
+	// NotesOff is what [FakeRunner.NotesOffWhy] answers: what in a box can
+	// switch the reading of notes of the harness this fake stands in for off,
+	// "" where it says nothing. Set it before the first collection.
+	NotesOff string
+
 	// CallIDKey is what [FakeRunner.CallIDMeta] answers: the `_meta` key the
 	// harness this fake stands in for sends each call's id under, "" for
 	// none. Set it before the launch that should read it.
@@ -917,6 +938,10 @@ func (r *FakeRunner) Name() string { return r.name }
 // whose harness takes a person's notes between its steps gives the coordinator.
 func (r *FakeRunner) ReadsNotes() bool { return r.TakesNotes }
 
+// NotesOffWhy answers [FakeRunner.NotesOff]: the optional answer a runner gives
+// the warning a run that never asked for its notes gets ([notesOffExplainer]).
+func (r *FakeRunner) NotesOffWhy() string { return r.NotesOff }
+
 // CallIDMeta answers [FakeRunner.CallIDKey]: the optional answer a runner whose
 // harness names each of its calls gives the launch ([CallIdentifier]).
 func (r *FakeRunner) CallIDMeta() string { return r.CallIDKey }
@@ -1003,7 +1028,7 @@ func (r *FakeRunner) Poll(ctx context.Context, box Sandbox, handle RunHandle) (J
 
 // Collect returns the result a test queued with [FakeRunner.Finish], or the
 // one the job's play answered.
-func (r *FakeRunner) Collect(ctx context.Context, box Sandbox, handle RunHandle) (Result, error) {
+func (r *FakeRunner) Collect(ctx context.Context, box Sandbox, handle RunHandle, _ *queue.AnswerBudget) (Result, error) {
 	r.mu.Lock()
 	if r.CollectErr != nil {
 		r.mu.Unlock()

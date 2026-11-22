@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/search"
 )
@@ -565,7 +566,7 @@ func TestTheAskedRankersTravelToAPeer(t *testing.T) {
 	broker := memory.NewBroker()
 	coordinator := startClient(t, broker)
 	peer := &recordingScan{}
-	stop, err := search.ServeSlices(t.Context(), startClient(t, broker), "n2", peer)
+	stop, err := search.ServeSlices(t.Context(), startClient(t, broker), "n2", peer, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("serve slices: %v", err)
 	}

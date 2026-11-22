@@ -75,8 +75,11 @@ func (q *Queue) Serve(ctx context.Context, subject string, answers int,
 			defer gate.Leave()
 			// NO REQUEST CONTEXT: the deadline is the ASKER's, enforced
 			// there. Its walking away frees the reply mailbox and makes the
-			// respond below a no-op.
-			reply, err := answer(serving, subject, h, msg.Data)
+			// respond below a no-op. What the answer holds of the node's
+			// answer budget is given back once the respond below returns.
+			answering, replied := queue.Replying(serving)
+			defer replied()
+			reply, err := answer(answering, subject, h, msg.Data)
 			if err != nil {
 				// AN ERROR ANSWERS NOTHING ([queue.AnswerFunc]): the
 				// asker counts this server as one not running.
