@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/crewlet/crewlet/internal/growth"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The curated tools build the requests the generic tools would send, so
@@ -134,7 +135,7 @@ func (p *Product) bid(ctx context.Context, m *made, args map[string]any) error {
 	if s, _ := args["bid_strategy"].(string); s != "" {
 		if level != levelAdSet || !slices.Contains(bidStrategies, s) || m.tool == ToolLowerBid {
 			return invalid("`bid_strategy` is an ad set's, one of %s, and only %s changes it.",
-				strings.Join(bidStrategies, ", "), ToolRaiseBid)
+				words.Or(bidStrategies), ToolRaiseBid)
 		}
 		params["bid_strategy"] = s
 	}
@@ -210,7 +211,7 @@ func (p *Product) targeting(ctx context.Context, m *made, args map[string]any) e
 		for _, x := range raw {
 			s, _ := x.(string)
 			if !slices.Contains(platforms, s) {
-				return invalid("%q is not one of %s.", s, strings.Join(platforms, ", "))
+				return invalid("%q is not one of %s.", s, words.Or(platforms))
 			}
 			list = append(list, s)
 		}

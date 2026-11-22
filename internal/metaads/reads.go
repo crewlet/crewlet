@@ -14,6 +14,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // AccountRow is one of the seat's ad accounts as the accounts tool answers it.
@@ -339,7 +340,7 @@ func (p *Product) insights(ctx context.Context, call growth.Call) (any, error) {
 	}
 	breakdown, _ := call.Args["breakdown"].(string)
 	if breakdown != "" && !slices.Contains(insightBreakdowns, breakdown) {
-		return nil, invalid("`breakdown` is one of %s.", strings.Join(insightBreakdowns, ", "))
+		return nil, invalid("`breakdown` is one of %s.", words.Or(insightBreakdowns))
 	}
 	limit := growth.ReportDefaultRows
 	if n, lerr := limitOf(call.Args["limit"]); lerr == nil {
@@ -429,7 +430,7 @@ func daysOf(args map[string]any, now time.Time, zone *time.Location) (growth.Day
 	}
 	days, err := growth.Range(r).Resolve(now, zone)
 	if err != nil {
-		return growth.Days{}, invalid("`range` is one of %s.", strings.Join(rangeNames(), ", "))
+		return growth.Days{}, invalid("`range` is one of %s.", words.Or(rangeNames()))
 	}
 	return days, nil
 }

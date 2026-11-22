@@ -6,10 +6,12 @@ import (
 	"errors"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/growth"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Answer is a generic read's answer: Meta's document, fenced, since it holds
@@ -232,16 +234,18 @@ func fieldWords(f growth.FieldRule) string {
 		s += "; lowered: " + string(f.Lower)
 	}
 	if len(f.Pausing) > 0 {
-		s += "; " + strings.Join(f.Pausing, " or ") + ": operate"
+		s += "; " + words.Or(f.Pausing) + ": operate"
 	}
 	for _, v := range f.Values {
-		vals := slices.Clone(v.Values)
-		for i, x := range vals {
+		// A cleared field is no value, so it is said as a word, not quoted.
+		vals := make([]words.Said, len(v.Values))
+		for i, x := range v.Values {
+			vals[i] = words.Said(strconv.Quote(x))
 			if x == "" {
 				vals[i] = "cleared"
 			}
 		}
-		s += "; " + strings.Join(vals, " or ") + ": " + string(v.Class)
+		s += "; " + words.Or(vals) + ": " + string(v.Class)
 	}
 	for _, w := range f.While {
 		s += "; while " + w.When + ": " + string(w.Class)
