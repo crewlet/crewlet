@@ -528,15 +528,15 @@ func SetupTimeout(declared float64) float64 {
 
 // RoleSandbox is what this seat's EXECUTOR BOX reads beyond the engine-wide
 // catalogue: its own provisioning, environment and tool servers, how long a
-// box blocked on a person stays paused, and how many agentic rounds one run
-// may take. Absent means the seat's box reads only the engine-wide settings.
+// box blocked on a person stays paused, how many agentic rounds one run may
+// take and how many of its runs hold it at once. Absent means the seat's box
+// reads only the engine-wide settings.
 //
 // NOT A GATE, and nothing here places the box: every agent seat's executor
-// runs as its harness's own run, in the cell the launching
-// providers.llm entry names (its `run_in`, else
-// providers.sandbox.default_run_in), on that entry's own harness. What is left
-// is what differs from one seat's work to another's, which is why it stays
-// on the seat.
+// runs as its harness's own run, in the cell the launching providers.llm entry
+// names (its `run_in`, else providers.sandbox.default_run_in), on that entry's
+// own harness. What is left is what differs from one seat's work to another's,
+// which is why it stays on the seat.
 type RoleSandbox struct {
 	// PauseTTLSeconds bounds how long this seat's box, blocked on a
 	// person's answer, stays paused before it is reaped and re-seeded.
