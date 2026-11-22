@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 func init() { Register(Kimi{}) }
@@ -82,7 +83,7 @@ func (Kimi) Session(req sandbox.RunRequest) Session {
 
 // Command is the run as ONE SCRIPT ([kimiScript]).
 func (Kimi) Command(req sandbox.RunRequest, session Session, paths Paths, configPath string) string {
-	return "sh -c " + sandbox.ShellQuote(kimiScript(req, session, paths, configPath, sandbox.JobStopGrace))
+	return "sh -c " + shellword.Quote(kimiScript(req, session, paths, configPath, sandbox.JobStopGrace))
 }
 
 // kimiScript is a Kimi run's script, giving its driver stop to go once asked to
@@ -96,7 +97,7 @@ func (Kimi) Command(req sandbox.RunRequest, session Session, paths Paths, config
 // ([kimiUsage]); and its session packed ([kimiCapture]), exiting with the
 // driver's status.
 func kimiScript(req sandbox.RunRequest, session Session, paths Paths, settings string, stop time.Duration) string {
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	b.WriteString(endPrologue(paths, stop))
@@ -148,7 +149,7 @@ const kimiUsageMark = "crewlet.usage"
 // which KAP's turns leave out (measured on 2.7.2). A box with no awk adds no
 // mark, and says so.
 func kimiUsage(paths Paths) string {
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	return `if command -v awk > /dev/null 2>&1; then
   printf '%s\n' '{"type":"` + kimiUsageMark + `"}'
   if [ -n "$s" ]; then
@@ -281,7 +282,8 @@ func (Kimi) Output(paths Paths) Output {
 
 // Pins is the run's home and posture, over whatever the seat's env, the image
 // or a profile set: KIMI_CODE_HOME ([Paths.KimiHome]); updates and telemetry
-// off; the attempts a request gets ([kimiAttemptsPerStep]); the turn cap
+// off, its telemetry bearing the login's token (measured on 2.7.2); the
+// attempts a request gets ([kimiAttemptsPerStep]); the turn cap
 // (KIMI_LOOP_MAX_STEPS_PER_TURN, a model request a step); and the env model's
 // name where a key signs the run in ([kimiModelPins]).
 //

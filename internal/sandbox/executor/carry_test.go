@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // sessionHarness is a stand-in `claude` of release for a run's session cases in a
@@ -1009,7 +1010,7 @@ func TestABoxWithoutFindResumesItsSessionAndSaysItCutNoThread(t *testing.T) {
 	argv := filepath.Join(dir, "argv")
 	writeStandIn(t, filepath.Join(bin, "claude"), `#!/bin/sh
 if [ "$1" = --version ]; then echo '2.1.310 (Claude Code)'; exit 0; fi
-for a; do printf '%s\n' "$a"; done > `+shQuote(argv)+"\n")
+for a; do printf '%s\n' "$a"; done > `+shellword.Quote(argv)+"\n")
 	script := scriptOf(t, commandOf(claude(), sandbox.RunRequest{Brief: "x", Resume: session}, p, ""))
 	cmd := exec.CommandContext(t.Context(), "sh", "-c", script) //nolint:gosec // the script under test
 	cmd.Env = []string{"PATH=" + bin, "CLAUDE_CONFIG_DIR=" + p.ClaudeConfigDir(),
@@ -1051,7 +1052,7 @@ func TestATornTranscriptAPackPaddedWithNULsIsCutBackWhenItIsRestored(t *testing.
 	// THE FIRST BOX'S HARNESS leaves its transcript as such a pack holds it,
 	// which its run's script then packs byte for byte.
 	harness := strings.Replace(sessionHarness("2.1.310"), `printf '{"type":"result"`,
-		`printf '%s' `+shQuote(cutOff)+` >> "$p/$s.jsonl" && head -c 64 /dev/zero >> "$p/$s.jsonl"`+"\n"+
+		`printf '%s' `+shellword.Quote(cutOff)+` >> "$p/$s.jsonl" && head -c 64 /dev/zero >> "$p/$s.jsonl"`+"\n"+
 			`printf '{"type":"result"`, 1)
 	forEachShell(t, func(t *testing.T, sh boxShell) {
 		first, a := realBox(t)
