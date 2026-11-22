@@ -190,8 +190,9 @@ func TestAnOpenCodeSessionCarriedIntoABoxIsImportedBeforeTheRun(t *testing.T) {
 // records that it did not continue.
 //
 // Mutation: take the import's success as the session's, run the asked session
-// after a failed one, import into a box whose release does not read, or record
-// no reason, and a row goes red.
+// after a failed one, import into a box whose release does not read (a
+// pre-release, as releaseOf reads one), or record no reason, and a row goes
+// red.
 func TestAnOpenCodeImportThatDidNotHappenIsNoContinuation(t *testing.T) {
 	t.Parallel()
 	forEachShell(t, func(t *testing.T, sh boxShell) {
@@ -210,6 +211,8 @@ func TestAnOpenCodeImportThatDidNotHappenIsNoContinuation(t *testing.T) {
 				said: "OpenCode did not delete the box's own copy"},
 			"nothing carried": {said: "it is not in this box"},
 			"a box whose release does not read": {env: []string{"FAKE_VERSION=opencode dev"},
+				carried: openCodeExport(carriedOpenCode), said: "named no release this build reads"},
+			"a box on a pre-release": {env: []string{"FAKE_VERSION=opencode v2.0.40-beta.1"},
 				carried: openCodeExport(carriedOpenCode), said: "named no release this build reads"},
 		} {
 			t.Run(name, func(t *testing.T) {
