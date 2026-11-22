@@ -96,6 +96,7 @@ func (f *fleetOf) join(t *testing.T, m *member, holderWait time.Duration) {
 	leave, err := m.bridge.Join(t.Context(), mcpbridge.FleetOptions{
 		Fabric: q, Leases: f.leases, Node: m.node, Owner: m.owner,
 		Keyring: recordseal.OneKey("k", "fleet-key"), HolderWait: holderWait,
+		Answers: queue.NewAnswerBudget(nil),
 	})
 	if err != nil {
 		t.Fatalf("Join: %v", err)

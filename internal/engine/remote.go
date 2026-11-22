@@ -210,6 +210,7 @@ func (e *Engine) serveEstate(ctx context.Context) error {
 	}
 	opts := estate.ServerOptions{
 		Self: e.id, Local: e.local, Seams: e.serverSeams(), Envelopes: e.envelopes,
+		Answers: e.answerBudget,
 	}
 	if e.profile.Roles.Has(placement.RoleGitlet) {
 		opts.Git = e.localGit()

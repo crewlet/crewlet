@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
 // WHETHER A CONTINUED SESSION REACHES ITS FIRST REQUEST WHOLE. Claude Code compacts
@@ -22,7 +23,8 @@ import (
 // its brief, is told as a cut-off one.
 
 // standard200k is the window a claude-sonnet-4-5 member holds a run to.
-var standard200k = sandbox.ClaudeCodeWindow("claude-sonnet-4-5")
+var standard200k, _ = executor.Window(executor.ClaudeCodeName,
+	executor.WindowAsk{Model: "claude-sonnet-4-5", SignIn: executor.SignInFirstParty})
 
 // countOf is a count of tokens read whole, its thread restarting nowhere.
 func countOf(tokens int64) *sandbox.ResumedCount {
@@ -40,7 +42,7 @@ var inBoxBasis = runner.SessionBasis{Why: "the newest capture of the job was not
 // keptClaude is the turn's kept session of a Claude Code job, saved at the
 // round's first call, counted as count.
 func keptClaude(count *sandbox.ResumedCount, interrupted bool) runner.SessionBasis {
-	return runner.SessionBasis{LaunchSeq: 1, CaptureSeq: 1, SessionID: "s-1", Harness: sandbox.ClaudeCodeHarness,
+	return runner.SessionBasis{LaunchSeq: 1, CaptureSeq: 1, SessionID: "s-1", Harness: "claude-code",
 		Through: 1, NoteCursor: 1, Home: "/boxes/4f2a/home", Interrupted: interrupted, Window: standard200k,
 		Count: count}
 }
@@ -50,7 +52,7 @@ func keptClaude(count *sandbox.ResumedCount, interrupted bool) runner.SessionBas
 // the newest restart that count read.
 func copyOf(end sandbox.HarnessEnd, count *sandbox.ResumedCount) func(*runner.Resume) {
 	return func(r *runner.Resume) {
-		r.HarnessEnd, r.Count, r.Run.Harness = end, count, sandbox.ClaudeCodeHarness
+		r.HarnessEnd, r.Count, r.Run.Harness = end, count, "claude-code"
 		if newest, read := count.Restarted(); read {
 			r.BasisRestart = &newest
 		}
@@ -492,7 +494,7 @@ func TestAKeptCaptureCutOffSaysWhetherItsJobRestarted(t *testing.T) {
 		req := guarded{basis: keptClaude(tc.count, true), bridged: []runner.BridgedCall{earlierCall, laterCall},
 			carry: func(r *runner.Resume) {
 				answered("use main")(r)
-				r.HarnessEnd, r.Count, r.Run.Harness = sandbox.HarnessEndCutOff, far, sandbox.ClaudeCodeHarness
+				r.HarnessEnd, r.Count, r.Run.Harness = sandbox.HarnessEndCutOff, far, "claude-code"
 				r.BasisRestart = new("b-1")
 			}}.relaunch(t)
 		if req.Session == nil {

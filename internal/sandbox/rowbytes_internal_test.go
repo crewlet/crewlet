@@ -821,7 +821,7 @@ func worstRow(t *testing.T) PendingRun {
 	launch := LaunchRecord{StartedAt: worstAt, Started: true, Model: markup(256), ProviderKey: plain(64),
 		SignInID: uuid.NewString(), FollowUp: FollowUpReason(plain(32)), Brief: BriefKind(plain(32)),
 		BriefOmitted: omitted, FreshOmitted: omitted, BriefLateOmitted: lateOmitted, FreshLateOmitted: lateOmitted,
-		LeadMarks: marks, FreshSessionID: plain(128), SessionStart: SessionStart(plain(32)),
+		LeadMarks: marks, FreshSessionID: plain(128), SessionStart: SessionStart(plain(32)), Minted: plain(128),
 		ResumeCarry: ResumeCarry(plain(32)), Iteration: math.MaxInt, Published: true, CollectFailures: math.MaxInt,
 		CollectFailingSince: worstAt,
 		ResumeFailures:      math.MaxInt, ResumeFailingSince: worstAt, Collected: true, CollectedAt: worstAt,
@@ -968,6 +968,12 @@ func worstRow(t *testing.T) PendingRun {
 		f.Words = plain(MaxFoldInBytes - size)
 		foldIns[i] = f
 	}
+	// WHAT THE TURN'S CALLS WROTE, as many keys as the row keeps, each at the
+	// one width a key has ([writtenKey]).
+	wroteKeys := make([]string, types.MaxWrittenRecords)
+	for i := range wroteKeys {
+		wroteKeys[i] = writtenKey(types.ConversationWritten(fmt.Sprintf("chatlet:room:%d", i)))
+	}
 	run := PendingRun{
 		TurnID: plain(64), WorkKey: plain(64), WorkSince: worstAt,
 		AgentHandle: plain(64), AgentID: uuid.NewString(), Role: markup(128),
@@ -1007,6 +1013,7 @@ func worstRow(t *testing.T) PendingRun {
 		// THE LONGEST TRACKER A WORK ITEM LIVES IN, `github` and `gitlab`.
 		WorkItem: &types.WorkItem{Backend: types.WorkGitHub, ID: plain(64), Key: plain(64),
 			Project: plain(64)},
+		WroteKeys:       wroteKeys,
 		Answered:        handles(100),
 		AudienceHandles: handles(MaxAudienceHandles), AudienceFallback: true, Requester: plain(64),
 		RequesterLogin: plain(iam.MaxLogin), RequesterApps: slices.Clone(iam.Apps), WorkingFor: workingFor(),
@@ -1107,7 +1114,8 @@ func TestARunsValuesAreBudgetedToWhatOneKeyOfTheStoreHolds(t *testing.T) {
 // the conversation, repos, cone paths, holds, leads, incarnations at 700,000),
 // or grow a seal or result, and the rest overruns; change a seal or the
 // conversation read by a byte, and a measured figure is off; hold a served call
-// to its length alone, and the worst row refuses to be built.
+// to its length alone, and the worst row refuses to be built; keep a written
+// record whole as its key, and the keys overrun their figure.
 func TestTheWholeRowFitsItsBudget(t *testing.T) {
 	t.Parallel()
 	run := worstRow(t)
@@ -1148,6 +1156,11 @@ func TestTheWholeRowFitsItsBudget(t *testing.T) {
 	if ExecuteStateBytes+RestBytes != RowBytes {
 		t.Error("the row's two shares do not add up to its budget")
 	}
+	withoutKeys := run
+	withoutKeys.WroteKeys = nil
+	if keys := whole - encoded(t, withoutKeys); keys > wroteRowBytes {
+		t.Errorf("the keys of what the turn wrote weigh %d, past their figure %d", keys, wroteRowBytes)
+	}
 
 	// THE HANDED SET, the third value: the most secrets a launch keeps
 	// ([MaxHandedBytes]), sealed and written as one string — a third more,
@@ -1181,6 +1194,9 @@ var zeroInTheWorstRow = func() map[string]string {
 			"theirs",
 		"Steer.Notes[0].LateCall": "the walk reads the first note, a person's, which hands no job a call " +
 			"(RunNote.LateCall); the worst row's job items each carry theirs at its widest (worstItemCall)",
+		"Steer.Notes[0].Serves[0].Digest": "a poll's serve records its item's digest and no call, a hook's a " +
+			"call and no digest (PendingStore.ServeNotes, ServeHook), and the call, which the worst row's serves " +
+			"keep at its widest, weighs more",
 		"Steer.Notes[0].Wake": "the walk reads the first note, a person's, which hands no job a wake " +
 			"(RunNote.Wake); the worst row's wake items, as many as it holds (MaxTurnWakes), each carry theirs " +
 			"at their bound",

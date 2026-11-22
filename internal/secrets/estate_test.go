@@ -29,6 +29,11 @@ func TestTheEnginesNamespaceAndTheOperatorsNeverOverlap(t *testing.T) {
 		// AN MCP SERVER'S GRANT, under the engine's own owner.
 		{"mcp/linear/refresh", true, true},
 		{"mcp/", true, false},
+		// AN INTEGRATION'S CONSENT GRANT, under its own owner.
+		{"integration/adsense/refresh", true, true},
+		{"integration/", true, false},
+		{"INTEGRATION_ADSENSE_TOKEN", false, false},
+		{"integrations/adsense/refresh", false, false},
 		{"MCP_LINEAR_TOKEN", false, false},
 		// NEITHER: an operator's name, and a slash under nobody's owner.
 		{"GITLAB_TOKEN", false, false},

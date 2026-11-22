@@ -110,6 +110,20 @@ func LevelNames() []string {
 // Valid reports whether l is a level this build knows.
 func (l Level) Valid() bool { return slices.Contains(Levels(), l) }
 
+// Label is the level as a person reads it, by what it lets an agent do: one
+// set of names for every growth product, whatever the vendor calls its roles.
+func (l Level) Label() string {
+	switch l {
+	case LevelRead:
+		return "View"
+	case LevelOperate:
+		return "Manage"
+	case LevelAdminister:
+		return "Administer"
+	}
+	return string(l)
+}
+
 // Allows reports whether a seat at l may call, or ask for, a call of class c.
 func (l Level) Allows(c Class) bool {
 	need := c.Level()

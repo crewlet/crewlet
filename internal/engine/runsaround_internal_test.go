@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/executorkeep"
@@ -26,6 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // runsRig is a node holding seat swe's runs on one store, under a coordinator
@@ -223,7 +226,7 @@ func TestAnotherRunsMessageIsReadFencedAtTheNextStepAsInformation(t *testing.T) 
 		t.Fatalf("the message is held as %+v, want an item naming its sender", held)
 	}
 	token := provenance.NewBoundary()
-	box := r.steers.inbox(identityOfRun(row), 1)
+	box := r.steers.inbox(identityOfRun(row), 1, row.Harness)
 	box.Bind(ctx, launch, token)
 	t.Cleanup(box.Close)
 	viewHolds(t, box, 1)
@@ -563,6 +566,84 @@ func TestOtherSeatsRunsOnTheSameWorkAreListedByHowTheyRelate(t *testing.T) {
 	if brief := prompts.RunsAround(around, provenance.NewBoundary()); !strings.Contains(brief,
 		"turn `run-item` (seat qa), running, on the same work item as yours") {
 		t.Errorf("the brief does not relate another seat's run:\n%s", brief)
+	}
+}
+
+// recordWrote records a call of turn's job that created or wrote records, as
+// the bridge records a call's update.
+func (r *runsRig) recordWrote(t *testing.T, turn, job string, records ...types.WrittenRecord) {
+	t.Helper()
+	row := mustRow(t, r.store, turn)
+	if _, err := r.store.AppendBridgeCall(t.Context(), turn, sandbox.BridgeAppend{Launch: job, Round: row.Round,
+		Call:  sandbox.BridgeCall{Name: "create_work_item", Seq: 1, StartedAt: time.Now().UTC()},
+		Wrote: records}); err != nil {
+		t.Fatalf("AppendBridgeCall %s: %v", turn, err)
+	}
+}
+
+// A RUN AND THE RUN ON THE TICKET IT FILED SEE EACH OTHER. A run answering a
+// chat thread files a ticket and posts in a second thread through its tools;
+// the ticket wakes another seat and a reply in the second thread a third. Each
+// woken run is shown the thread's as the run that filed or wrote what it is
+// on, and the thread's run, in its brief and `list_runs`, each of them as a run
+// on what it filed or wrote, though none shares another's item or
+// conversation. The keys are the real ones: a thread's as Chatlet records a
+// post and stamps a reply in it, an item's conversation as the tracker names
+// it. A run whose calls wrote other work is shown to none.
+//
+// Mutation: relate the runs by item and conversation alone (written-unmatched),
+// or name both ways alike (one-way), and this goes red.
+func TestARunAndTheRunOnTheTicketItFiledSeeEachOther(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	r := newRunsRig(t)
+	threadOf := func(room, message string) string {
+		return chatlet.MessageConversation(chatlet.Channel{ID: room, Kind: chatlet.KindPublic},
+			chatlet.Message{ID: message})
+	}
+	ticket := types.WorkItem{Backend: types.WorkWorklet, ID: "ENG-7"}
+	thread := r.launchOn(t, "run-thread", "swe", "ana", "", threadOf("room-1", "msg-0"))
+	r.recordWrote(t, "run-thread", thread, types.ItemWritten(ticket),
+		types.ConversationWritten(threadOf("room-2", "msg-4")))
+	r.launchOn(t, "run-ticket", "qa", "ana", "ENG-7", worklet.ItemConversation("ENG-7"))
+	r.launchOn(t, "run-reply", "pm", "ana", "", threadOf("room-2", "msg-4"))
+	other := r.launchOn(t, "run-other", "ops", "ana", "ENG-9", threadOf("room-9", "msg-0"))
+	r.recordWrote(t, "run-other", other, types.ItemWritten(types.WorkItem{Backend: types.WorkWorklet, ID: "ENG-8"}),
+		types.ConversationWritten(threadOf("room-7", "msg-0")))
+	for caller, want := range map[string]map[string]prompts.RunRelation{
+		"run-ticket": {"run-thread": prompts.RelationWroteWhatYouAreOn},
+		"run-reply":  {"run-thread": prompts.RelationWroteWhatYouAreOn},
+		"run-thread": {"run-ticket": prompts.RelationOnWhatYouWrote, "run-reply": prompts.RelationOnWhatYouWrote},
+		"run-other":  {},
+	} {
+		around, err := r.desk.Around(ctx, caller)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := map[string]prompts.RunRelation{}
+		for _, run := range around {
+			got[run.Turn] = run.Relation
+		}
+		if !maps.Equal(got, want) {
+			t.Errorf("%s is shown %v, want %v", caller, got, want)
+		}
+	}
+	b := provenance.NewBoundary()
+	list := builtin.NewRunTools(r.desk)[0]
+	got, err := list.CallForTurn(turnctx.WithJob(ctx, thread), &turnctx.Turn{RunID: "run-thread", Boundary: b}, nil)
+	if err != nil || got.Failed {
+		t.Fatalf("list_runs = %+v, %v", got, err)
+	}
+	if !strings.Contains(got.Output, `"`+string(prompts.RelationOnWhatYouWrote)+`"`) {
+		t.Errorf("list_runs does not relate the woken runs to the thread's:\n%s", got.Output)
+	}
+	around, err := r.desk.Around(ctx, "run-ticket")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if brief := prompts.RunsAround(around, b); !strings.Contains(brief,
+		"turn `run-thread` (seat swe), running, it filed or wrote the work item or conversation you are on") {
+		t.Errorf("the ticket's run's brief does not say the thread's run filed its work:\n%s", brief)
 	}
 }
 

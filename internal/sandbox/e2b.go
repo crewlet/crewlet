@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
 // e2bLog names the remote backend, so its lines are not attributed to local.go's
@@ -29,18 +30,10 @@ var e2bLog = logging.Get("sandbox.e2b")
 // environment exports; a harness that mints none needs the local backend.
 //
 // A template is how a box is SIZED: vCPU and RAM are fixed when it is built,
-// and the create API takes no resource arguments ([e2bAgentTemplates]).
+// and the create API takes no resource arguments ([E2BProvider.templateFor]).
 
 // E2BKind is the backend's name on the operator surface.
 const E2BKind = "e2b"
-
-// e2bAgentTemplates are E2B's prebuilt images, by harness: a company naming no
-// template gets its agent's, since a bare box has no harness and fails at the
-// first command with "command not found", which reads as a broken runner.
-var e2bAgentTemplates = map[string]string{
-	"claude-code": "claude",
-	"opencode":    "opencode",
-}
 
 // e2bFallbackTemplate is what an unrecognised harness gets: E2B's minimal
 // "base", with no harness, so the run fails. That is deliberate: an agent this
@@ -99,14 +92,17 @@ func NewE2B(opts E2BOptions) (*E2BProvider, error) {
 // Kind implements [Provider].
 func (p *E2BProvider) Kind() string { return E2BKind }
 
-// templateFor is the image one run gets: the company's, then the harness's own.
-// It also decides the box's vCPU, RAM and disk (providers.sandbox.e2b.template).
+// templateFor is the image one run gets: the company's, then E2B's prebuilt
+// one holding the run's harness (its built-in profile's executor.e2b_template),
+// since a bare box has no harness and fails at the first command with "command
+// not found", which reads as a broken runner. It also decides the box's vCPU,
+// RAM and disk (providers.sandbox.e2b.template).
 func (p *E2BProvider) templateFor(spec Spec) string {
 	if p.template != "" {
 		return p.template
 	}
-	if t, ok := e2bAgentTemplates[spec.Harness]; ok {
-		return t
+	if runner, ok := harnessprofile.ExecutorOf(spec.Harness); ok {
+		return runner.E2BTemplate
 	}
 	return e2bFallbackTemplate
 }
@@ -355,6 +351,13 @@ func (s *E2BSandbox) WriteStream(ctx context.Context, path string, content io.Re
 // ReadFile implements [Sandbox].
 func (s *E2BSandbox) ReadFile(ctx context.Context, path string) ([]byte, error) {
 	return s.envd.readFile(ctx, path)
+}
+
+// OpenWhole implements [Sandbox]: one ranged download of the file's first
+// [MaxFileBytes] and one more byte, its size the whole size envd answered for
+// that open, its body read no further ([envdClient.openWhole]).
+func (s *E2BSandbox) OpenWhole(ctx context.Context, path string) (io.ReadCloser, int64, error) {
+	return s.envd.openWhole(ctx, path)
 }
 
 // OpenFile implements [Sandbox]: envd's download body, read as it arrives.

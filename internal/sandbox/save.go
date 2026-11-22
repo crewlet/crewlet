@@ -347,6 +347,12 @@ func (c *Coordinator) saveInHand(ctx, duty context.Context, job saveJob, out sav
 	if class != "" {
 		return end(class, why)
 	}
+	// A MINTING JOB'S SESSION IS BOUND BEFORE IT IS PACKED (minted.go).
+	if row, err = c.bindMinted(ctx, row, box, runner); errors.Is(err, errNoSessionReported) {
+		return end(saveNothing, err.Error())
+	} else if err != nil {
+		return end(saveFailed, fmt.Sprintf("the job's session was not bound: %v", err))
+	}
 	policy, why := c.savePolicy(ctx)
 	if why != "" {
 		return end(saveNotYet, why)
@@ -635,7 +641,8 @@ func (c *Coordinator) takeSave(ctx context.Context, job saveJob, point string, i
 	}
 	// NEVER PAST WHAT ITS SEAT'S LEDGER COUNTED: its room was shrunk to it, and
 	// the seal is refused before a byte past it lands.
-	spooled, err := c.spool(take, row, stamp, taken, &savePlaces{run: row, resumeRead: taken.ResumeRead}, in.room)
+	spooled, err := c.spool(take, row, stamp, taken, &savePlaces{run: row, resumeRead: taken.ResumeRead,
+		needsResumeRead: placesWithResumeRead(in.saver)}, in.room)
 	if err != nil {
 		why := takeRefusal(take, err)
 		if errors.Is(err, errSpoolPastHold) {

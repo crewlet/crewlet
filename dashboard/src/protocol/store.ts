@@ -41,7 +41,7 @@ import type {
 import { type InboxChange, LIVE_CALL_DETAIL, MAX_EVENTS } from "../contract/wire.ts";
 import type { EngineHealth } from "../contract/health.ts";
 import type { ToolRow } from "../contract/tools.ts";
-import { comparePositions, type LogPosition } from "./session.ts";
+import { APPLIED_REVISION, comparePositions, session, type LogPosition } from "./session.ts";
 
 /**
  * How many completed-phase envelopes a tab keeps, PAYLOAD AND ALL.
@@ -412,13 +412,13 @@ export interface StoreState {
   /**
    * The last health frame this TAB received, and null only until the first:
    * `health` without the clearing. For a reader asking what this node last
-   * said about a configuration write (`lib/useLastHealth.ts`), never whether
-   * it is up — a node gone quiet has taken back neither an apply nor a
-   * refusal. The tab keeps it rather than each reader, because the org
-   * chart's note and the Builder's strip follow a save that outlives their
-   * mount: kept per mount, one mounted while the socket was down had nothing
-   * to read, and said the save was still applying. Moves with `health`, and
-   * is read under that slice.
+   * said about a configuration write (`lib/useLastHealth.ts`), or which build
+   * it runs (the sidebar's build line), never whether it is up — a node gone
+   * quiet has taken back neither an apply nor a refusal. The tab keeps it
+   * rather than each reader, because the org chart's note and the Builder's
+   * strip follow a save that outlives their mount: kept per mount, one
+   * mounted while the socket was down had nothing to read, and said the save
+   * was still applying. Moves with `health`, and is read under that slice.
    */
   lastHealth: EngineHealth | null;
   tokens: Rollup | null;
@@ -556,6 +556,15 @@ function emptyState(): StoreState {
   };
 }
 
+/**
+ * A revision this node applied, said to every read that asks again on one
+ * (`APPLIED_REVISION`), whether a push or a snapshot carried it.
+ */
+function announceApplied(was: number | undefined, health: EngineHealth | null | undefined): void {
+  if (health && was !== undefined && health.applied_epoch > was)
+    session.written(null, null, [APPLIED_REVISION]);
+}
+
 export class Store {
   state: StoreState = emptyState();
 
@@ -635,8 +644,10 @@ export class Store {
     // socket is open; deriving it from a payload's contents meant a snapshot
     // arriving over the degraded REST fallback announced a live connection
     // that did not exist.
+    const was = this.state.lastHealth?.applied_epoch;
     if (snap.health) this.state.health = this.state.lastHealth = snap.health;
     this.emit(...ALL_DATA_SLICES);
+    announceApplied(was, snap.health);
   }
 
   /**
@@ -822,10 +833,12 @@ export class Store {
   }
 
   applyHealth(health: EngineHealth | null | undefined): void {
+    const was = this.state.lastHealth?.applied_epoch;
     this.state.health = health ?? null;
     if (health) this.state.lastHealth = health;
     this.link(!!health);
     this.emit("health");
+    announceApplied(was, health);
   }
 
   setConnected(value: boolean): void {

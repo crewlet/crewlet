@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -153,7 +154,7 @@ func TestACollectedRunCarriesItsTranscriptsCounts(t *testing.T) {
 	b.Put(p.Result(), result)
 	b.Put(p.ExitCode(), "0")
 	b.Put(p.SessionRecord(), "id 9a8b7c6d-0000-4000-8000-000000000003\ncontinued no\n")
-	got, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	got, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}

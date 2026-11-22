@@ -88,6 +88,14 @@ const (
 	// none, and a gap's snapshot is cut to [wire.FrameMaxBytes].
 	ReplayPageBytes = FrameLogBytes
 
+	// replayWeight is what a replay holds of the node's answer budget
+	// ([queue.AnswerBudget]) from its read until its reply is written:
+	// [ReplayPageBytes] eight times, from the code, at its worst: the frames
+	// (1), their page's encoding (1, beside pageOf's frame-at-a-time
+	// encodes), its copy as a string and the AEAD's base64 (2.4), the
+	// reply's encoding and its seal's base64 (3.2).
+	replayWeight = 8 * ReplayPageBytes
+
 	// PublishBacklog is how many frames this node holds for the broker
 	// before it drops one: a thousand and twenty-four, a few seconds of
 	// every turn a busy node runs at the 200 ms delta interval. A dropped
@@ -226,7 +234,10 @@ type FleetOptions struct {
 	Stops   *signedask.Channel[StopRequest, StopReply]
 	// AskBudget bounds one ask; zero is [DefaultAskBudget].
 	AskBudget time.Duration
-	Now       func() time.Time
+	// Answers is the node's answer budget a replay holds its weight of
+	// ([replayWeight]).
+	Answers *queue.AnswerBudget
+	Now     func() time.Time
 }
 
 // Fleet is one node's half of the assistant's fleet stream: it tells the fleet
@@ -241,6 +252,7 @@ type Fleet struct {
 	replays   *signedask.Channel[ReplayRequest, ReplayReply]
 	stops     *signedask.Channel[StopRequest, StopReply]
 	askBudget time.Duration
+	answers   *queue.AnswerBudget
 	now       func() time.Time
 	log       *slog.Logger
 
@@ -262,7 +274,7 @@ func NewFleet(o FleetOptions) (*Fleet, error) {
 	for name, absent := range map[string]bool{
 		"Node": strings.TrimSpace(o.Node) == "", "Broker": o.Broker == nil,
 		"Roster": o.Roster == nil, "Cipher": o.Cipher == nil, "Frames": o.Frames == nil,
-		"Replays": o.Replays == nil, "Stops": o.Stops == nil,
+		"Replays": o.Replays == nil, "Stops": o.Stops == nil, "Answers": o.Answers == nil,
 	} {
 		if absent {
 			missing = append(missing, name)
@@ -286,7 +298,7 @@ func NewFleet(o FleetOptions) (*Fleet, error) {
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	return &Fleet{node: o.Node, broker: o.Broker, roster: o.Roster, cipher: o.Cipher,
-		frames: o.Frames, replays: o.Replays, stops: o.Stops, askBudget: budget, now: now,
+		frames: o.Frames, replays: o.Replays, stops: o.Stops, askBudget: budget, answers: o.Answers, now: now,
 		log: logging.Get("assistant.live"), out: make(chan wire.Frame, PublishBacklog),
 		replayTaken: signedask.NewGuard(), stopTaken: signedask.NewGuard()}, nil
 }

@@ -464,7 +464,7 @@ func TestAHeldCallLikeALateCallIsListedAgainForEveryHarness(t *testing.T) {
 			r.HarnessEnd, r.Run.Harness, r.BasisRestart = sandbox.HarnessEndOwnRun, "opencode", new("")
 			r.Count, r.CountProvider = far, "stub"
 		},
-		sandbox.ClaudeCodeHarness: copyOf(sandbox.HarnessEndOwnRun, far),
+		"claude-code": copyOf(sandbox.HarnessEndOwnRun, far),
 	} {
 		briefOf := func(held runner.BridgedCall) string {
 			late := post("hi", 2)

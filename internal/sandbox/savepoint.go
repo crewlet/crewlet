@@ -25,9 +25,17 @@ type savePlaces struct {
 	run PendingRun
 
 	// resumeRead says the take's archive was written by a release whose
-	// resume this build read ([TakenSession.ResumeRead]): only such a Claude
-	// Code capture is raised.
-	resumeRead bool
+	// resume this build read ([TakenSession.ResumeRead]), and needsResumeRead
+	// that the taker's harness raises only such a capture
+	// ([ThreadTraits.PlacesWithResumeRead]).
+	resumeRead, needsResumeRead bool
+}
+
+// placesWithResumeRead reports whether taker, the runner taking a capture,
+// raises it only where its release's resume was read.
+func placesWithResumeRead(taker any) bool {
+	reader, ok := taker.(mainThreadReader)
+	return ok && reader.ThreadTraits().PlacesWithResumeRead
 }
 
 // placeAtZero reserves c, a capture no read places, at a stated zero, with no
@@ -56,7 +64,7 @@ func (c *SessionCapture) placeAtZero(launch LaunchRecord) {
 // states that take's.
 func (c *SessionCapture) placeAtNewest(from savePlaces) {
 	newest, read := c.ResumedCount.Restarted()
-	if !read || (c.Harness == ClaudeCodeHarness && !from.resumeRead) {
+	if !read || (from.needsResumeRead && !from.resumeRead) {
 		return
 	}
 	run, point := from.run, 0

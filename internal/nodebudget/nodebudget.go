@@ -1,7 +1,7 @@
 // Package nodebudget computes the lines of a node's memory budget that the
 // engine keeps beside Gitlet's transfers, serving share and background work:
-// the Go runtime's share for the executor's pools, the store's page cache and
-// Gitlet's read lane. Gitlet's reserve (internal/gitlet/gitproc's
+// the Go runtime's share for the executor's pools and for the payload answers
+// in flight, the store's page cache and Gitlet's read lane. Gitlet's reserve (internal/gitlet/gitproc's
 // Options.Reserve) and the Go runtime's memory limit (internal/engine's
 // limitMemory) read the same [Lines], so the two cannot disagree on a node's
 // memory, and a short node is told so once (internal/gitlet/cache's
@@ -19,10 +19,21 @@
 // holds what it keeps. The serving share (internal/gitlet/cache) is the rest of
 // the runtime's limit: the broker, the engine's own heap and the store beyond
 // its page cache.
+//
+// # The answers in flight
+//
+// Every payload answer the node builds for a peer, and every collection of a
+// run's box, holds its weight of the node's answer budget
+// (queue.AnswerBudgetBytes) from before its read until its reply is written,
+// each weight the bytes it was measured to hold. So the budget is a line of
+// its own, inside the runtime like the pools and over nine tenths for the
+// same reason; the weights are already what each answer measured at its
+// worst, so no heap room is added to them.
 package nodebudget
 
 import (
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -33,6 +44,9 @@ type Lines struct {
 	// Runtime is the Go runtime's share for the executor's pools: the pools
 	// over nine tenths, the tenth the limit leaves.
 	Runtime int64
+	// Answers is the Go runtime's share for the payload answers in flight:
+	// the node's answer budget (queue.AnswerBudgetBytes) over nine tenths.
+	Answers int64
 	// PageCache is the store's page cache across every connection of its
 	// files (store.PageCacheShare), outside the runtime.
 	PageCache int64
@@ -64,14 +78,18 @@ func (n Node) Of(memory int64, readSlots int) Lines {
 	}
 	return Lines{
 		Runtime:   n.Work.MemoryPools(memory) * 10 / 9,
+		Answers:   AnswersLine,
 		PageCache: store.PageCacheShare(sizedBy, n.Conns),
 		ReadLane:  int64(readSlots) * gitproc.ReadMemory,
 	}
 }
 
+// AnswersLine is every node's [Lines.Answers]: 284.4 MiB.
+const AnswersLine = queue.AnswerBudgetBytes * 10 / 9
+
 // Kept is what the node keeps beside Gitlet before sizing its lanes and its
 // background budget: every line.
-func (l Lines) Kept() int64 { return l.Runtime + l.PageCache + l.ReadLane }
+func (l Lines) Kept() int64 { return l.Runtime + l.Answers + l.PageCache + l.ReadLane }
 
 // Outside is what of the lines the node holds outside the Go runtime: the
 // page cache and the read lane, which the limit takes out beside git's

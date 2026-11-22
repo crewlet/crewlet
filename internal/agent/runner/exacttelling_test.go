@@ -472,7 +472,7 @@ func TestOnlyAFirstRequestThisBuildJudgesCarriesABriefToldByAReading(t *testing.
 		count        *sandbox.ResumedCount
 		asked, exact bool
 	}{
-		"Claude Code":         {harness: sandbox.ClaudeCodeHarness, count: far, asked: true, exact: true},
+		"Claude Code":         {harness: "claude-code", count: far, asked: true, exact: true},
 		"OpenCode":            {harness: "opencode", count: far, asked: true},
 		"OpenCode, near full": {harness: "opencode", count: near, asked: true},
 	} {

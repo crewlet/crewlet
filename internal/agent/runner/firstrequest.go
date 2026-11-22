@@ -28,11 +28,11 @@ import (
 // Claude Code may compact it there, leaving the model a summary
 // (internal/sandbox's SendsWhole).
 type firstRequest struct {
-	// harness is the harness that wrote the session, the only one that
-	// continues it.
-	harness string
+	// traits is what the relaunch reads of the harness that wrote the
+	// session, the only one that continues it ([SessionBasis.Traits]).
+	traits sandbox.SessionTraits
 	// window is what the session's harness may hold the run to: the least
-	// standard window of the chain's Claude Code members
+	// standard window of the chain's members that compact by their window
 	// ([SessionBasis.Window]).
 	window sandbox.ExecutorWindow
 	// count is what the session's harness counts it at, nil where nothing
@@ -59,18 +59,18 @@ const (
 	compactsWhatever
 	// byBox: the brief and the box decide ([firstRequest.byBox]): both
 	// tellings are built and handed, and the launch hands the held one only
-	// where the box's point proves it whole (sandbox.OpenCodePoint.SendsWhole).
+	// where the box's point proves it whole (sandbox.BoxPoint.SendsWhole).
 	byBox
 )
 
 // judges reports whether this build models the first request of the harness
-// continuing the session: Claude Code's here, by its window (internal/sandbox's
-// SendsWhole), and OpenCode's in the box the launch gets ([firstRequest.byBox]).
-// THE ONE PREDICATE the verdicts and a reading's telling read: a session of a
-// harness it does not judge is held whatever its brief and never handed a
-// telling by a reading (ADR-0073, a reading's caller judges the first request).
+// continuing the session: by its window here (internal/sandbox's SendsWhole),
+// or in the box the launch gets ([firstRequest.byBox]). THE ONE PREDICATE the
+// verdicts and a reading's telling read: a session of a harness it does not
+// judge is held whatever its brief and never handed a telling by a reading
+// (ADR-0073, a reading's caller judges the first request).
 func (f firstRequest) judges() bool {
-	return f.harness == sandbox.ClaudeCodeHarness || f.harness == sandbox.OpenCodeHarness
+	return f.traits.FirstRequest == sandbox.FirstRequestWindow || f.byBox()
 }
 
 // bounded reports whether the path's count has a bound
@@ -81,9 +81,9 @@ func (f firstRequest) bounded() bool {
 }
 
 // byBox reports whether the path's first request is the launch's to judge, in
-// the box it gets: OpenCode compacts at a point its box's catalog and
-// documents set for the run's model, which only that box can say.
-func (f firstRequest) byBox() bool { return f.harness == sandbox.OpenCodeHarness }
+// the box it gets: the harness compacts at a point its box sets for the run's
+// model, which only that box can say ([sandbox.FirstRequestBox]).
+func (f firstRequest) byBox() bool { return f.traits.FirstRequest == sandbox.FirstRequestBox }
 
 // settled is the verdict before any brief is built: held for a harness this
 // build does not judge, and compacts for a session that does not send whole
@@ -208,7 +208,7 @@ func keptCount(basis SessionBasis, resume *Resume) *sandbox.ResumedCount {
 // keptCountProvider is the provider of the reply keptCount's count is
 // anchored on: the capture's where its count is the one taken, else the
 // capture's where the copy's own record names the same, and "" where the two
-// differ, which bounds nothing (sandbox.OpenCodePoint.SendsWhole).
+// differ, which bounds nothing (sandbox.BoxPoint.SendsWhole).
 func keptCountProvider(basis SessionBasis, resume *Resume) string {
 	if basis.Interrupted || resume == nil || basis.CountProvider == resume.CountProvider {
 		return basis.CountProvider
@@ -254,7 +254,7 @@ func (r *Runner) judged(ctx context.Context, f firstRequest, path, brief string,
 		}
 		log.InfoContext(ctx, "executor_session_may_compact", "agent_id", r.cfg.Turn.AgentID,
 			"turn_id", r.cfg.Turn.RunID, "path", path, "bound", bound, "mark", string(mark),
-			"provider", f.provider, "brief_tokens", sandbox.OpenCodeCharge(int64(len(brief))),
+			"provider", f.provider, "brief_tokens", f.traits.Charge.Tokens(int64(len(brief))),
 			"outcome", "the count has no bound, so no box's point can prove the session whole: the "+
 				"continuation is told as a cut-off one, and its guard arms no skill")
 		return true
@@ -276,7 +276,7 @@ func (r *Runner) judged(ctx context.Context, f firstRequest, path, brief string,
 	log.InfoContext(ctx, "executor_session_may_compact", "agent_id", r.cfg.Turn.AgentID,
 		"turn_id", r.cfg.Turn.RunID, "path", path, "bound", bound, "mark", string(mark),
 		"reported_window", reported, "standard_window", f.window.Standard, "known", f.window.Known,
-		"brief_tokens", sandbox.ClaudeCharge(len(brief)), "point", sandbox.CompactionPoint(window),
+		"brief_tokens", f.window.Charge.Tokens(int64(len(brief))), "point", f.window.Point(window),
 		"outcome", outcome)
 	return true
 }
@@ -315,7 +315,7 @@ func (r *Runner) keptTellings(ctx context.Context, basis SessionBasis, round rou
 	leadHeld []toldHeld, history []ledger.Iteration, surface *tools.Surface, fresh []steer.Note,
 	branch string) keptTellings {
 
-	t := keptTellings{f: firstRequest{harness: basis.Harness, window: basis.Window, count: keptCount(basis, r.cfg.Resume),
+	t := keptTellings{f: firstRequest{traits: basis.Traits[basis.Harness], window: basis.Window, count: keptCount(basis, r.cfg.Resume),
 		provider: keptCountProvider(basis, r.cfg.Resume)}, holds: sessionHolds{cutOff: basis.MayLackBrief()}}
 	t.holds.restartedInJob = t.f.judges() && keptRestarted(basis, r.cfg.Resume)
 	t.holds.restarted = t.f.judges() && restartedAnywhere(basis.Count)
@@ -451,7 +451,7 @@ func (r *Runner) inPlaceTellings(ctx context.Context, carry carried, basis Sessi
 
 	t := inPlaceTellings{holds: sessionHolds{cutOff: r.copyMayLackBrief()}}
 	if r.cfg.Resume != nil {
-		t.f = firstRequest{harness: r.cfg.Resume.Run.Harness, window: basis.Window, count: r.cfg.Resume.Count,
+		t.f = firstRequest{traits: basis.Traits[r.cfg.Resume.Run.Harness], window: basis.Window, count: r.cfg.Resume.Count,
 			provider: r.cfg.Resume.CountProvider}
 		t.holds.restartedInJob = t.f.judges() && inPlaceRestarted(r.cfg.Resume)
 		t.holds.restarted = t.f.judges() && restartedAnywhere(r.cfg.Resume.Count)

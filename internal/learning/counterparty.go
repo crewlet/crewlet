@@ -261,9 +261,9 @@ func (c *Counterparties) Record(ctx context.Context, o Observation) (bool, error
 // Purge drops profiles nobody has interacted with since cutoff, reporting how
 // many went.
 //
-// The table needs a retention: a row per human or seat ever messaged,
-// republished to every peer each memory-sync cycle (`wholeEachCycle`), would
-// grow for the life of the deployment.
+// The table needs a retention: a row per human or seat ever messaged, kept on
+// the memory changelog and hydrated into every store that takes the seat
+// (memsync), would grow for the life of the deployment.
 //
 // Keyed on last_updated_at, not last_corroborated_at: it moves on every upsert
 // including no-ops, so it is the true last-contact stamp, while corroboration

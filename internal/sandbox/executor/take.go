@@ -48,8 +48,24 @@ var _ sandbox.SessionTaker = (*Runner)(nil)
 const SessionTakesAtOnce = 29
 
 // takeBaseHeldBytes is what a take at its base holds at most, its scrub's and
-// its meter's at once: 11.56 MiB ([SessionTakesAtOnce]).
-const takeBaseHeldBytes = 11838 << 10
+// its meter's at once: 11.56 MiB ([SessionTakesAtOnce]), the scrub's 8.22 and
+// the meter's 3.34, each to the KiB.
+const (
+	scrubBaseHeldBytes = 8418 << 10
+	meterBaseHeldBytes = 3420 << 10
+	takeBaseHeldBytes  = scrubBaseHeldBytes + meterBaseHeldBytes
+)
+
+// takeLargeHeldBytes is what the large slot adds for a take, past what
+// [takeBaseHeldBytes] counts: its scrub at the plaintext's bound and the
+// longest value it can hold, less the scrub's base, beside its meter's line
+// past the base's charge, at 1.25 bytes a charged byte (the package doc's THE
+// COEFFICIENTS); the meter's reader and the strings a charge covers are its
+// base whatever the line.
+func takeLargeHeldBytes() int64 {
+	return scrubHeldBytes(scrubPlainMax, scrubLongestMax) - scrubBaseHeldBytes +
+		(threadLineMax-collectionBaseLineCharge)*5/4
+}
 
 // The takes at their base hold no more than the box host's reads for its peers
 // at [baseTierReadBytes] each: a negative constant does not compile.
@@ -697,8 +713,19 @@ func (r *Runner) packNow(ctx context.Context, box sandbox.Sandbox,
 // readSessionRecord is the box's record of the session its run worked in
 // ([Paths.SessionRecord]), read and parsed — or why it could not be read, a
 // refusal of a path that holds no file the engine reads, which names no
-// session.
+// session. A minting harness's session is the one its script reported
+// ([Runner.mintedRecord]).
 func (r *Runner) readSessionRecord(ctx context.Context, box sandbox.Sandbox, paths Paths) (sessionRecord, string, error) {
+	rec, refusal, err := readRecordedSession(ctx, box, paths)
+	if err != nil || refusal != "" || !r.MintsSession() {
+		return rec, refusal, err
+	}
+	return r.mintedRecord(ctx, box, paths, rec)
+}
+
+// readRecordedSession is [Runner.readSessionRecord] as the box records it,
+// whoever's harness minted the id it names.
+func readRecordedSession(ctx context.Context, box sandbox.Sandbox, paths Paths) (sessionRecord, string, error) {
 	recorded, refusal, err := readWhole(ctx, box, paths.SessionRecord(), "the record of the session its harness ran in")
 	if err != nil || refusal != "" {
 		return sessionRecord{}, refusal, err

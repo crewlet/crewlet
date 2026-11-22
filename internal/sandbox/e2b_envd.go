@@ -759,6 +759,22 @@ func (c *envdClient) openRange(ctx context.Context, path string, off, n int64) (
 	return io.NopCloser(bytes.NewReader(data)), total, nil
 }
 
+// openWhole opens a file to be read whole ([Sandbox.OpenWhole]): a range of
+// its first [MaxFileBytes] and one more byte, whose answer names the whole
+// size, refused past the cap as [envdClient.readFile] refuses it, the body
+// closed unread.
+func (c *envdClient) openWhole(ctx context.Context, path string) (io.ReadCloser, int64, error) {
+	body, size, err := c.openRange(ctx, path, 0, MaxFileBytes+1)
+	if err != nil {
+		return nil, 0, err
+	}
+	if size > MaxFileBytes {
+		_ = body.Close()
+		return nil, 0, &FileTooLargeError{Path: path, Limit: MaxFileBytes, Size: size}
+	}
+	return body, size, nil
+}
+
 // keepFirst reads r to its end keeping at most n bytes from off, and how many
 // it read in all, in memory bounded by n whatever the stream's length.
 func keepFirst(r io.Reader, off, n int64) ([]byte, int64, error) {

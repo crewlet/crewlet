@@ -30,11 +30,18 @@ var writtenFleetCases = []struct {
 
 // wroteOf is the records turnID's run wrote, as its router reads them: the
 // turn's log as the row's job stands to hold it ([sandbox.PendingStore.TurnLog]).
+// And it fails t unless the row keeps one key for each of them
+// ([sandbox.PendingRun.WroteKeys]), what a listing of the fleet's runs reads.
 func wroteOf(t *testing.T, s sandbox.PendingStore, turnID string) []types.WrittenRecord {
 	t.Helper()
-	log, err := s.TurnLog(t.Context(), mustGet(t, s, turnID))
+	row := mustGet(t, s, turnID)
+	log, err := s.TurnLog(t.Context(), row)
 	if err != nil {
 		t.Fatalf("read the turn log of %s: %v", turnID, err)
+	}
+	if len(row.WroteKeys) != len(log.Wrote) {
+		t.Fatalf("the row of %s keeps %d keys of what its calls wrote, and its log %d records", turnID,
+			len(row.WroteKeys), len(log.Wrote))
 	}
 	return log.Wrote
 }
@@ -101,10 +108,11 @@ func testWhatARunWroteIsKeptOnceThroughEveryOpeningOfItsLog(t *testing.T, s sand
 
 // A RUN'S WRITTEN SET TAKES NO MORE PAST ITS BOUND AND DROPS NOTHING IT HOLDS.
 // Held to types.MaxWrittenRecords, it is marked once a record is refused for
-// room ([sandbox.BridgeLog.WroteMore]), and every record it held is still held.
+// room ([sandbox.BridgeLog.WroteMore]), and every record it held is still held,
+// a key for each on the row.
 //
-// Mutation: drop the oldest record for a newer one, or leave the set unmarked,
-// and this goes red.
+// Mutation: drop the oldest record for a newer one, leave the set unmarked, or
+// let the row's keys grow past the set's, and this goes red.
 func testARunsWrittenSetTakesNoMorePastItsBoundAndDropsNothing(t *testing.T, s sandbox.PendingStore) {
 	const turn = "t-wrote-full"
 	job := mustLaunched(t, s, run(turn))
@@ -131,6 +139,9 @@ func testARunsWrittenSetTakesNoMorePastItsBoundAndDropsNothing(t *testing.T, s s
 	if !log.WroteMore || !slices.Equal(log.Wrote, all[:types.MaxWrittenRecords]) {
 		t.Errorf("a set past its bound holds %d records, the first %v (full %v): want the first %d kept and "+
 			"the set marked", len(log.Wrote), log.Wrote[0], log.WroteMore, types.MaxWrittenRecords)
+	}
+	if keys := mustGet(t, s, turn).WroteKeys; len(keys) != types.MaxWrittenRecords {
+		t.Errorf("the row keeps %d keys of a set past its bound, want %d", len(keys), types.MaxWrittenRecords)
 	}
 }
 
