@@ -461,6 +461,29 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     tool: "admob tools, built in",
     issued: "never: Crewlet makes every call",
   },
+  adsense: {
+    name: "AdSense",
+    access: "Level on its publisher accounts",
+    turnOn:
+      "Turning it on lets the agent reach the chosen publisher accounts at the chosen level, through the company's Google sign-in. Nothing is made at Google.",
+    off: "Crewlet refuses the agent's AdSense calls at once. The company's sign-in stays for the other agents.",
+    remove: "There is nothing to remove here: the agent holds no account or token at Google.",
+    rotate:
+      "The agent holds no credential: Crewlet renews the company's sign-in, so there is nothing to rotate.",
+    scope: {
+      noun: "Accounts",
+      singular: "account",
+      empty: "No account",
+      none: "No publisher accounts are listed yet",
+      noneLink: {
+        label: "Connecting Crewlet",
+        doc: "adsense",
+        anchor: "connecting-crewlet",
+      },
+    },
+    tool: "adsense tools, built in",
+    issued: "never: Crewlet makes every call",
+  },
 };
 
 /** The line a read-only Agents tab shows when the Kubernetes operator manages access. */

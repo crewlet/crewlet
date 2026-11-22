@@ -171,6 +171,58 @@
         "null"
       ]
     },
+    "AdSense": {
+      "additionalProperties": false,
+      "properties": {
+        "accounts": {
+          "description": "Publisher IDs agents may be given (pub- and 16 digits), at most 50. Absent: every AdSense account the person who signs in reaches. Optional.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "approvers": {
+          "description": "Handles of human seats an agent's public and admin acts are routed to first. Only an administrator answers one, at a fresh step-up; without approvers every administrator is asked. Optional.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Turn the integration on. Needs oauth, the company's own OAuth client, and a person's Google sign-in on the integration's page.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "oauth": {
+          "$ref": "#/$defs/GoogleOAuthClient",
+          "description": "The company's own OAuth client (a Web application, in a Google Cloud project it controls), which the sign-in is made as; AdMob may share it. Required when enabled."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "Advisor": {
       "additionalProperties": false,
       "properties": {
@@ -2816,6 +2868,10 @@
           "$ref": "#/$defs/AdMob",
           "description": "AdMob: agents read and change app monetization through one Google sign-in by a person who manages the account, made as the company's own OAuth client. Absent = disabled."
         },
+        "adsense": {
+          "$ref": "#/$defs/AdSense",
+          "description": "AdSense: agents read and change website monetization through one Google sign-in by a person who manages the account, made as the company's own OAuth client. Absent = disabled."
+        },
         "app_store_connect": {
           "$ref": "#/$defs/AppStoreConnect",
           "description": "App Store Connect teams and their API keys, one per Apple role, through which the engine makes every call for the agents. Absent = disabled."
@@ -4609,6 +4665,49 @@
         "null"
       ]
     },
+    "RoleAdSense": {
+      "additionalProperties": false,
+      "properties": {
+        "accounts": {
+          "description": "Publisher IDs this agent may reach, within integrations.adsense.accounts when that is set. Required when the agent is on.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Whether this agent may reach AdSense.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "level": {
+          "description": "read (the default): accounts, sites, ad clients, ad units, channels, alerts, policy issues, payments, ad code and reports. operate: also creates ad units and custom channels and renames, archives or turns them on at once, and asks an administrator to approve a live ad unit's size or type, or a site's review. administer: also asks an administrator to approve what cannot be undone: deleting a custom channel, a platform's sub-accounts, their sites and events, and moving a site to another revenue group.",
+          "enum": [
+            "read",
+            "operate",
+            "administer",
+            "",
+            null
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "RoleAppStoreConnect": {
       "additionalProperties": false,
       "properties": {
@@ -5159,6 +5258,10 @@
         "admob": {
           "$ref": "#/$defs/RoleAdMob",
           "description": "This seat's AdMob access: whether it is on, its level and its publisher accounts."
+        },
+        "adsense": {
+          "$ref": "#/$defs/RoleAdSense",
+          "description": "This seat's AdSense access: whether it is on, its level and its publisher accounts."
         },
         "app_store_connect": {
           "$ref": "#/$defs/RoleAppStoreConnect",

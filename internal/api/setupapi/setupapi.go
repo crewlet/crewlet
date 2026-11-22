@@ -131,6 +131,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/admob"
+	"github.com/crewlet/crewlet/internal/adsense"
 	"github.com/crewlet/crewlet/internal/appstoreconnect"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
@@ -1036,6 +1037,14 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		block := company.Integrations.AdMob
 		guide = admob.Guide()
 		reqs = admob.Requirements(company, s.resolve)
+		configured = block != nil
+		enabled = block.GrowthEnabled()
+	case integration.KindAdSense:
+		// AdMob's shape: every agent reaches AdSense through the company's
+		// consent grant, and no seat holds a token (ADR-0170).
+		block := company.Integrations.AdSense
+		guide = adsense.Guide()
+		reqs = adsense.Requirements(company, s.resolve)
 		configured = block != nil
 		enabled = block.GrowthEnabled()
 	case integration.KindGoogleAnalytics:

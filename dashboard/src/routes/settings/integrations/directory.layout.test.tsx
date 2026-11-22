@@ -150,7 +150,7 @@ describe.each(["light", "dark"] as const)("on a %s document", (theme) => {
       expect(drawn().slice(-3)).toEqual([
         ["Mobile apps", ["Expo", "App Store Connect"]],
         ["Analytics", ["Google Analytics"]],
-        ["Ad revenue", ["AdMob"]],
+        ["Ad revenue", ["AdSense", "AdMob"]],
       ]);
       expect(overflowing(host!)).toEqual([]);
     },

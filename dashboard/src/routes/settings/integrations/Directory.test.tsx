@@ -327,7 +327,7 @@ test("the directory groups by need, with Crewlet's own service first in each", a
     ],
     ["Mobile apps", ["Expo", "App Store Connect"]],
     ["Analytics", ["Google Analytics"]],
-    ["Ad revenue", ["AdMob"]],
+    ["Ad revenue", ["AdSense", "AdMob"]],
   ]);
 });
 

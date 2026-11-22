@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/admob"
+	"github.com/crewlet/crewlet/internal/adsense"
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/appstoreconnect"
 	"github.com/crewlet/crewlet/internal/config"
@@ -42,6 +43,7 @@ const (
 var (
 	_ builtin.GrowthProduct = (*googleanalytics.Product)(nil)
 	_ builtin.GrowthProduct = (*admob.Product)(nil)
+	_ builtin.GrowthProduct = (*adsense.Product)(nil)
 )
 
 // GrowthToolDeps are the growth tools' dependencies on this node, or the zero
@@ -62,6 +64,7 @@ func (e *Engine) growthProducts() []builtin.GrowthProduct {
 				Audit: e.GrowthAudit(), Leases: growthLeases{engine: e}, Signals: e.GrowthSignals()}),
 			googleanalytics.New(e.runningConfig, e.resolver, e, e.GrowthAudit(), nil),
 			e.adMob(),
+			e.adSense(),
 		}
 	})
 	return e.growth
