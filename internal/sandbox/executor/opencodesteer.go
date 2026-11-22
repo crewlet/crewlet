@@ -25,18 +25,17 @@ func (OpenCode) inboxID(launch, noteID string) string {
 }
 
 // openCodePollCeiling is the most UTF-16 units one message OpenCode's plugin
-// admits can carry: AT LEAST 4,505, the engine's item bound
-// (internal/engine's maxLateItemUnits) the note contract requires, pending a
-// measurement. The plugin admits each note whole as a user message
-// (opencode_steer.js), and its probe admits one of 100,000 units
-// (TestANoteServedIsConfirmedOffItsJobsOwnRecord's OpenCode case); the figure
-// a real OpenCode release delivers to its model whole, with that release,
-// replaces this one.
-const openCodePollCeiling = 4505
+// admits can carry, as measured: every size up to 1,048,576 reached the model
+// byte for byte on OpenCode 2.3.0, against a stub provider recording each
+// request. Whether it arrives PLAIN or folded into a
+// compaction's checkpoint depends on the session's room, not the note's size:
+// plain iff R + round(N/4) <= P, P the point [openCodePointAt] models and R the
+// last reported usage plus OpenCode's estimates since.
+const openCodePollCeiling = 1 << 20
 
 // pluginConfirms reports that OpenCode's plugin confirms each note itself: it
-// posts the note's id to the bridge's read route off OpenCode's own delivery
-// event (opencode_steer.js).
+// posts the note's id to the bridge's read route once OpenCode's context hook
+// shows a model request carrying it plain (opencode_steer.js).
 func (OpenCode) pluginConfirms() bool { return true }
 
 // pollCeiling is [openCodePollCeiling].
