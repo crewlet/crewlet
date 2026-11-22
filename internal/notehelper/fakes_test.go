@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"net"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -83,6 +85,10 @@ type fakeBridge struct {
 	script []int
 	polls  record[poll]
 	verbs  record[string]
+	// skills records each report to the skill route, answered with
+	// skillStatus (0: 204).
+	skills      record[skillReport]
+	skillStatus atomic.Int32
 
 	mu      sync.Mutex
 	notes   []note
@@ -95,10 +101,32 @@ func newFakeBridge(t *testing.T, token string, script ...int) *fakeBridge {
 	b := &fakeBridge{token: token, script: script, changed: make(chan struct{})}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/mcp/{token}/steer/{verb}", b.serve)
+	mux.HandleFunc("/mcp/{token}/skill", b.serveSkill)
 	b.srv = httptest.NewServer(mux)
 	t.Cleanup(b.srv.Close)
 	return b
 }
+
+// skillReport is one report the fake skill route was sent.
+type skillReport struct {
+	token, method, skill string
+}
+
+func (b *fakeBridge) serveSkill(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Skill string `json:"skill"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	b.skills.add(skillReport{token: r.PathValue("token"), method: r.Method, skill: body.Skill})
+	if status := int(b.skillStatus.Load()); status != 0 {
+		w.WriteHeader(status)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// skillRoute is the job's skill route, token and all.
+func (b *fakeBridge) skillRoute() string { return b.srv.URL + "/mcp/" + b.token + "/skill" }
 
 // route is the job's notes route, token and all.
 func (b *fakeBridge) route() string { return b.srv.URL + "/mcp/" + b.token + "/steer" }
@@ -176,15 +204,36 @@ type resume struct {
 // none) first while there is one; and turn/steer, refused for no turn in
 // flight or another turn than the one named, and while refusals remain.
 type fakeAppServer struct {
-	path    string
-	steers  record[steer]
-	resumed record[resume]
-	fences  record[int]
-	conns   record[*websocket.Conn]
+	path       string
+	steers     record[steer]
+	resumed    record[resume]
+	fences     record[int]
+	conns      record[*websocket.Conn]
+	interrupts record[interruptCall]
 
 	mu       sync.Mutex
 	turn     string
 	refusals int
+	// listed, when set, is the turn thread/turns/list says is in progress,
+	// whatever runs: a list answered just before its turn ended.
+	listed string
+	// marker is the cap marker each interrupt looks for as it arrives.
+	marker string
+}
+
+// set sets the fake's listed turn and the marker it looks for.
+func (s *fakeAppServer) set(listed, marker string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.listed, s.marker = listed, marker
+}
+
+// interruptCall is one turn/interrupt the fake app-server was sent.
+type interruptCall struct {
+	ThreadID string `json:"threadId"`
+	TurnID   string `json:"turnId"`
+	// marked is whether the cap marker was on disk as it arrived.
+	marked bool
 }
 
 func newFakeAppServer(t *testing.T, turn string, refusals int) *fakeAppServer {
@@ -228,8 +277,8 @@ func (s *fakeAppServer) serve(ws *websocket.Conn) {
 		case "thread/turns/list":
 			s.mu.Lock()
 			turns := []map[string]string{{"id": "turn-before", "status": "completed"}}
-			if s.turn != "" {
-				turns = append([]map[string]string{{"id": s.turn, "status": "inProgress"}}, turns...)
+			if newest := cmp.Or(s.listed, s.turn); newest != "" {
+				turns = append([]map[string]string{{"id": newest, "status": "inProgress"}}, turns...)
 			}
 			s.mu.Unlock()
 			answer["result"] = map[string]any{"data": turns}
@@ -256,6 +305,34 @@ func (s *fakeAppServer) serve(ws *websocket.Conn) {
 				answer["error"] = refusal
 			} else {
 				answer["result"] = map[string]string{"turnId": turn}
+			}
+		case "turn/interrupt":
+			var p interruptCall
+			_ = json.Unmarshal(m.Params, &p)
+			s.mu.Lock()
+			marker := s.marker
+			s.mu.Unlock()
+			if marker != "" {
+				_, err := os.Stat(marker)
+				p.marked = err == nil
+			}
+			s.interrupts.add(p)
+			s.mu.Lock()
+			turn := s.turn
+			if turn != "" && p.TurnID == turn {
+				s.turn = ""
+			}
+			s.mu.Unlock()
+			switch {
+			case p.TurnID == "":
+				delete(answer, "result")
+				answer["error"] = map[string]any{"code": -32600, "message": "Invalid request: missing field `turnId`"}
+			case turn == "":
+				delete(answer, "result")
+				answer["error"] = map[string]any{"code": -32600, "message": "no active turn to interrupt"}
+			case p.TurnID != turn:
+				delete(answer, "result")
+				answer["error"] = map[string]any{"code": -32600, "message": "not the active turn"}
 			}
 		case "fence":
 			s.fences.add(len(s.fences.all()))
@@ -346,16 +423,26 @@ type helperRun struct {
 }
 
 // startHelper runs the helper on the codex-app-server adapter against
-// bridge and app, the route in NOTES_ROUTE, until stop.
+// bridge and app, the notes route in NOTES_ROUTE, until stop.
 func startHelper(t *testing.T, bridge *fakeBridge, app *fakeAppServer, threadFile string) *helperRun {
+	t.Helper()
+	return startHelperWith(t, bridge, app, threadFile, "-notes-env", "NOTES_ROUTE")
+}
+
+// startHelperWith is startHelper with flags of its own beside the adapter's,
+// the notes route in NOTES_ROUTE and the skill route in SKILLS_ROUTE.
+func startHelperWith(t *testing.T, bridge *fakeBridge, app *fakeAppServer, threadFile string, flags ...string) *helperRun {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	h := &helperRun{cancel: cancel, code: make(chan int, 1)}
-	args := []string{"-adapter", "codex-app-server", "-socket", app.path,
-		"-thread-file", threadFile, "-notes-env", "NOTES_ROUTE"}
+	args := append([]string{"-adapter", "codex-app-server", "-socket", app.path,
+		"-thread-file", threadFile}, flags...)
 	env := func(name string) string {
-		if name == "NOTES_ROUTE" {
+		switch name {
+		case "NOTES_ROUTE":
 			return bridge.route()
+		case "SKILLS_ROUTE":
+			return bridge.skillRoute()
 		}
 		return ""
 	}

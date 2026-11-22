@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -319,7 +320,11 @@ func TestTheHelperRefusesACommandLineItCannotRunWith(t *testing.T) {
 		env  string
 	}{
 		"the route on the command line": {append(slices.Clone(full), "-notes", route), route},
-		"no -notes-env":                 {full[:6], route},
+		"nothing to do":                 {full[:6], route},
+		"-cap-marker with no cap":       {append(slices.Clone(full), "-cap-marker", "/nowhere/m"), route},
+		"a cap below 0":                 {append(slices.Clone(full), "-step-cap", "-1"), route},
+		"-skills-env with no dir":       {append(slices.Clone(full), "-skills-env", "NOTES_ROUTE"), route},
+		"-skills-dir with no route":     {append(slices.Clone(full), "-skills-dir", "/nowhere/skills"), route},
 		"an empty route":                {full, ""},
 		"a route that is no address":    {full, "mcp/" + testToken},
 		"an adapter it does not have":   {append([]string{"-adapter", "other"}, full[2:]...), route},
@@ -338,5 +343,113 @@ func TestTheHelperRefusesACommandLineItCannotRunWith(t *testing.T) {
 				t.Errorf("stderr carries the route's token:\n%s", stderr.String())
 			}
 		})
+	}
+}
+
+// THE STEP CAP INTERRUPTS THE TURN AT ITS NTH RESPONSE, MARKED FIRST: with
+// -step-cap 2 the second response of the turn in flight sends turn/interrupt
+// naming the thread and the turn, with -cap-marker already on disk holding
+// the turn, and no notes route is needed for it.
+func TestTheStepCapInterruptsTheTurnAtItsNthResponse(t *testing.T) {
+	t.Parallel()
+	bridge := newFakeBridge(t, testToken)
+	app := newFakeAppServer(t, "turn-1", 0)
+	marker := filepath.Join(t.TempDir(), "capped")
+	app.set("", marker)
+	threadFile := filepath.Join(t.TempDir(), "thread.id")
+	writeThread(t, threadFile, "thread-A")
+	h := startHelperWith(t, bridge, app, threadFile, "-step-cap", "2", "-cap-marker", marker)
+	app.resumed.await(func(r []resume) bool { return len(r) == 1 })
+	tokens(t, app, "thread-A", "turn-1", 100)
+	tokens(t, app, "thread-A", "turn-1", 200)
+	calls := app.interrupts.await(func(c []interruptCall) bool { return len(c) == 1 })
+	if c := calls[0]; c.ThreadID != "thread-A" || c.TurnID != "turn-1" || !c.marked {
+		t.Errorf("interrupt %+v: want thread-A and turn-1, the marker written first", c)
+	}
+	if data, err := os.ReadFile(marker); err != nil || string(data) != "turn-1\n" {
+		t.Errorf("marker %q (%v), want turn-1", data, err)
+	}
+	if code := h.stop(); code != exitDone {
+		t.Errorf("exit status %d, want %d; stderr:\n%s", code, exitDone, h.stderr.String())
+	}
+}
+
+// -INTERRUPT-ONCE INTERRUPTS THE TURN IN FLIGHT AND EXITS 0, AND EXITS 0
+// WITH NO TURN TO INTERRUPT: none listed (no interrupt sent), or one listed
+// that ended before the interrupt reached it. With no thread file it cannot
+// tell, and exits 1.
+func TestInterruptOnceLeavesNoTurnRunning(t *testing.T) {
+	t.Parallel()
+	cases := map[string]struct {
+		turn, listed string
+		noThread     bool
+		code         int
+		interrupts   []string
+	}{
+		"a turn in flight":            {turn: "turn-5", code: exitDone, interrupts: []string{"turn-5"}},
+		"no turn":                     {code: exitDone},
+		"a turn that ended meanwhile": {listed: "turn-5", code: exitDone, interrupts: []string{"turn-5"}},
+		"no thread file":              {turn: "turn-5", noThread: true, code: exitError},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			app := newFakeAppServer(t, c.turn, 0)
+			app.set(c.listed, "")
+			threadFile := filepath.Join(t.TempDir(), "thread.id")
+			if !c.noThread {
+				writeThread(t, threadFile, "thread-A")
+			}
+			var stderr lockedBuffer
+			args := []string{"-adapter", "codex-app-server", "-socket", app.path, "-thread-file", threadFile, "-interrupt-once"}
+			if code := run(context.Background(), args, func(string) string { return "" }, &stderr, quickPacing); code != c.code {
+				t.Errorf("exit status %d, want %d; stderr:\n%s", code, c.code, stderr.String())
+			}
+			var got []string
+			for _, i := range app.interrupts.all() {
+				if i.ThreadID != "thread-A" {
+					t.Errorf("an interrupt named thread %q, want thread-A", i.ThreadID)
+				}
+				got = append(got, i.TurnID)
+			}
+			if !slices.Equal(got, c.interrupts) {
+				t.Errorf("interrupted %v, want %v", got, c.interrupts)
+			}
+		})
+	}
+}
+
+// A SKILL LOAD IS REPORTED TO THE SKILL ROUTE, WHICH IS NEVER PRINTED: a
+// whole read of a skill's SKILL.md posts {"skill": name} under the run's
+// token, and a report the route turns away is logged naming "the skill
+// route" alone.
+func TestASkillLoadIsReportedAndTheSkillRouteNeverPrinted(t *testing.T) {
+	t.Parallel()
+	bridge := newFakeBridge(t, testToken)
+	bridge.skillStatus.Store(http.StatusInternalServerError)
+	app := newFakeAppServer(t, "turn-1", 0)
+	dir := filepath.Join(t.TempDir(), "skills")
+	alpha := writeSkill(t, dir, "alpha", "# Alpha\n")
+	beta := writeSkill(t, dir, "beta", "# Beta\n")
+	threadFile := filepath.Join(t.TempDir(), "thread.id")
+	writeThread(t, threadFile, "thread-A")
+	h := startHelperWith(t, bridge, app, threadFile, "-skills-env", "SKILLS_ROUTE", "-skills-dir", dir)
+	app.resumed.await(func(r []resume) bool { return len(r) == 1 })
+	commandDone(t, app, "thread-A", 0, alpha.body, "/", action("read", alpha.path))
+	commandDone(t, app, "thread-A", 0, beta.body, "/", action("read", beta.path))
+	// One report at a time: beta's arrival is behind alpha's log line.
+	reports := bridge.skills.await(func(r []skillReport) bool { return len(r) == 2 })
+	for i, want := range []string{"alpha", "beta"} {
+		if r := reports[i]; r.token != testToken || r.method != http.MethodPost || r.skill != want {
+			t.Errorf("report %d %+v: want a POST of %s under the run's token", i, r, want)
+		}
+	}
+	h.stop()
+	stderr := h.stderr.String()
+	if !strings.Contains(stderr, "reporting skill alpha to the skill route: it answered 500") {
+		t.Errorf("stderr does not log alpha's refused report:\n%s", stderr)
+	}
+	if strings.Contains(stderr, testToken) || strings.Contains(stderr, bridge.srv.URL) {
+		t.Errorf("stderr carries the skill route or its token:\n%s", stderr)
 	}
 }
