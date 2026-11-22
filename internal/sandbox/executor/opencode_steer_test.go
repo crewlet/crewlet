@@ -691,11 +691,11 @@ func pluginAdmitsNotesAtTheRunsNextStep(t *testing.T) {
 // notes it holds, answered past each poll's cursor, and every read the route
 // handed it.
 type routeInbox struct {
-	mu     sync.Mutex
-	notes  []mcpbridge.SteerNote
-	reads  chan []string
-	folds  chan []string
-	agains chan []string
+	mu    sync.Mutex
+	notes []mcpbridge.SteerNote
+	reads chan []string
+	folds chan []string
+	asks  chan []string
 }
 
 func (i *routeInbox) Take(context.Context, string, *sandbox.NoteCall) string { return "" }
@@ -725,7 +725,7 @@ func (i *routeInbox) Folded(_ context.Context, ids []string) { i.folds <- ids }
 
 // Again grants every note asked its second id in job-1.
 func (i *routeInbox) Again(_ context.Context, ids []string) (map[string]string, []string, error) {
-	i.agains <- ids
+	i.asks <- ids
 	granted := map[string]string{}
 	for _, id := range ids {
 		granted[id] = executor.AgainID(executor.OpenCodeName, "job-1", id)
@@ -756,7 +756,7 @@ func pluginReadsTheBridgesOwnNotesRoute(t *testing.T) {
 	folded := mcpbridge.SteerNote{Seq: 4, ID: "req-8", Inbox: executor.InboxID(executor.OpenCodeName, "job-1", "req-8"),
 		Message: "## A note from ada, sent while this turn was running\n\nAnd tag it."}
 	inbox := &routeInbox{notes: []mcpbridge.SteerNote{note, folded}, reads: make(chan []string, 4),
-		folds: make(chan []string, 4), agains: make(chan []string, 4)}
+		folds: make(chan []string, 4), asks: make(chan []string, 4)}
 	endpoint := probeBridge(t, inbox, &probeLedger{})
 
 	pr := startProbe(t, node, entry)
@@ -787,7 +787,7 @@ func pluginReadsTheBridgesOwnNotesRoute(t *testing.T) {
 	pr.event("a", "session.compaction.ended", steerSession, nil)
 	wantReadmitted(t, pr.expect("prompt-started").Input, steerSession, folded)
 	pr.expect("prompt")
-	if asked := <-inbox.agains; len(asked) != 1 || asked[0] != folded.ID {
+	if asked := <-inbox.asks; len(asked) != 1 || asked[0] != folded.ID {
 		t.Errorf("the route handed the inbox the ask %v, want the folded note's id %q", asked, folded.ID)
 	}
 	pr.event("a", "session.inbox.delivered", steerSession, map[string]any{"inboxID": againOf(folded)})
