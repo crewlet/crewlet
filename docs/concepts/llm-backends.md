@@ -92,7 +92,7 @@ Pick the harness by whose models you want, then the sign-in by how you pay:
 | Anthropic's (Claude) | `claude-code` — the default | a Claude Pro / Max login, a headless `CLAUDE_CODE_OAUTH_TOKEN` minted from it, or an Anthropic API key (`auth.mode: api-key`) | yes |
 | OpenAI's (GPT) | `codex` | a ChatGPT Plus / Pro login, or an OpenAI API key (`auth.mode: api-key`) | no — the other phases only |
 | Open models: OpenRouter, a hosted provider, a local server | `opencode` | the model provider's key in `env`, under that provider's own variable, or a login of OpenCode's own | yes |
-| Meta's (Muse) | `muse-code` | a Muse Code login, or a metered `META_API_KEY` (`auth.mode: api-key`) | yes — Muse Code 1.4.25 or later ([its runner](code-sandbox.md#muse-code)) |
+| Meta's (Muse) | `muse-code` | a Muse Code login, or a metered `META_API_KEY` (`auth.mode: api-key`) | yes — Muse Code 1.4.25 ([its runner](code-sandbox.md#muse-code)) |
 | Gemini, Qwen, Cursor, Copilot, Grok, Kimi, Hermes, Pi | see [Supported harnesses](#supported-harnesses) | the vendor's own login, or a key (Qwen Code: a key only) | no — the other phases only |
 
 Every agent seat's executor is its harness's own run in a [sandbox](code-sandbox.md),
@@ -239,7 +239,7 @@ and 2.1.4 — see [The executor's run in a box](#the-executors-run-in-a-box).
 
 ### The other harnesses
 
-Muse Code runs a seat's executor too, on 1.4.25 or later ([its
+Muse Code runs a seat's executor too, on 1.4.25 ([its
 runner](code-sandbox.md#muse-code)), and serves the phases on this host through
 the same profile. Gemini CLI, Qwen Code, Cursor, Copilot, Grok, Kimi Code, Hermes
 and Pi each have a built-in profile and serve the phases on this host only: own login
