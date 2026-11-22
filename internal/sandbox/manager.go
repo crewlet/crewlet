@@ -502,6 +502,11 @@ func (m *Manager) provision(ctx context.Context, spec Spec, setup []SetupStep, r
 	if err != nil {
 		return nil, err
 	}
+	// A RUN'S SIGN-IN ITS HARNESS READS FROM ITS OWN CREDENTIAL STORE is no
+	// variable of the box's: its runner writes it into the store for the run,
+	// so nothing the box runs, the harness included, holds it in its
+	// environment ([storeSignIn]).
+	spec.Env = withoutStoreSignIn(spec.Env, spec.SignInEnv, runner)
 	box, err := provider.Create(ctx, spec)
 	if err != nil {
 		return nil, err
@@ -639,4 +644,28 @@ func (m *Manager) Attach(ctx context.Context, placement Placement, sandboxID, ha
 		return nil, nil, err
 	}
 	return box, runner, nil
+}
+
+// storeSignIn is a runner whose harness signs a run in by some of its sign-in
+// variables from its own credential store (executor.Runner.StoreSignIn).
+type storeSignIn interface {
+	StoreSignIn(names []string) []string
+}
+
+// withoutStoreSignIn is env without the variables of signIn runner's harness
+// reads from its own store ([storeSignIn]), env itself where there are none.
+func withoutStoreSignIn(env map[string]string, signIn []string, runner Runner) map[string]string {
+	s, ok := runner.(storeSignIn)
+	if !ok {
+		return env
+	}
+	moved := s.StoreSignIn(signIn)
+	if len(moved) == 0 {
+		return env
+	}
+	out := maps.Clone(env)
+	for _, name := range moved {
+		delete(out, name)
+	}
+	return out
 }
