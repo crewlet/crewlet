@@ -57,6 +57,9 @@ type AdvisorRunSummary struct {
 	Budget *AdvisorRunBudget `json:"budget"`
 	// StoppedBy is the bound a deep run stopped at, or "done"; nil otherwise.
 	StoppedBy *string `json:"stopped_by"`
+	// Agenda is how far a deep run is through the questions it has to
+	// answer, in flight or ended; nil for a rules run, or one that kept none.
+	Agenda *AdvisorAgenda `json:"agenda"`
 	// Classes is what the run concluded about each class: found, clear,
 	// silent (with why) or unread; [] for a run that ran no rules.
 	Classes []AdvisorClassOutcome `json:"classes"`
@@ -71,6 +74,27 @@ type AdvisorRunSummary struct {
 type AdvisorProgress struct {
 	At   time.Time `json:"at"`
 	Text string    `json:"text"`
+}
+
+// AdvisorAgenda is a deep run's questions, and how many it has answered.
+type AdvisorAgenda struct {
+	Items    int `json:"items"`
+	Answered int `json:"answered"`
+}
+
+// agendaOf is items as a run's summary counts them.
+func agendaOf(items []modelpass.AgendaItem) *AdvisorAgenda {
+	if len(items) == 0 {
+		return nil
+	}
+	out := &AdvisorAgenda{Items: len(items)}
+	for _, it := range items {
+		switch it.Verdict {
+		case modelpass.VerdictConfirmed, modelpass.VerdictRefuted, modelpass.VerdictUnreadable:
+			out.Answered++
+		}
+	}
+	return out
 }
 
 // AdvisorRunBudget is what a deep run spent of its bounds.
@@ -113,9 +137,22 @@ func (s Sources) latestRun(ctx context.Context) (*AdvisorRunSummary, error) {
 	if err != nil {
 		return nil, advisorUnreadable(err)
 	}
+	// HOW FAR IT IS, from the checkpoint it keeps as it answers its agenda.
+	var agenda *AdvisorAgenda
+	if flying {
+		body, found, err := s.Advisor.Checkpoint(ctx, live, advisorFresh)
+		if err != nil {
+			return nil, advisorUnreadable(err)
+		}
+		var kept modelpass.Checkpoint
+		if found && json.Unmarshal(body, &kept) == nil {
+			agenda = agendaOf(kept.Agenda)
+		}
+	}
 	progress := func(out *AdvisorRunSummary) *AdvisorRunSummary {
 		if flying && out.RunID == live {
 			out.Kind = string(advisordomain.RunKindDeep)
+			out.Agenda = agenda
 			for _, l := range lines {
 				out.Progress = append(out.Progress, AdvisorProgress{At: l.At, Text: l.Text})
 			}
@@ -219,6 +256,9 @@ func runSummary(row advisordomain.RunRow) (*AdvisorRunSummary, error) {
 			}
 			if pass.StoppedBy != "" {
 				out.StoppedBy = &pass.StoppedBy
+			}
+			if t := pass.Tally; t != nil && t.Items > 0 {
+				out.Agenda = &AdvisorAgenda{Items: t.Items, Answered: t.Items - t.Open}
 			}
 		}
 	}
