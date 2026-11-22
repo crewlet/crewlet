@@ -1210,7 +1210,7 @@ names in `with:`, which Dependabot never bumps, each for the reason at its line
 The configuration is [`.github/dependabot.yml`](.github/dependabot.yml): one
 entry per surface on a weekly schedule, with the commit prefix its bumps carry,
 plus three grouping rules on the dashboard's npm entry. CI runs on each pull
-request and decides whether it lands. Eleven things to know:
+request and decides whether it lands. Twelve things to know:
 
 - **The React family is grouped.** `react`, `react-dom`, `@types/react` and
   `@types/react-dom` arrive in one pull request, because **react-dom checks at
