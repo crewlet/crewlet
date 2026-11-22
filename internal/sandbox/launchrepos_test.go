@@ -191,8 +191,9 @@ func (r LaunchRequest) withFloor(floor string) LaunchRequest {
 // variables reach the operator's setup and the harness over an operator's
 // value; its Gitlet credential is written into the box, named to the run by
 // its path there and in no variable. Telemetry reaches the run alone. The
-// caller's spec keeps its own map. A launch runs only the operator's steps
-// (the run clones a grant) and its environment block names no checkout.
+// spec's sign-in names reach the run. The caller's spec keeps its own map. A
+// launch runs only the operator's steps (the run clones a grant) and its
+// environment block names no checkout.
 //
 // Mutations, each red: provision with req.Spec rather than the launch's (the
 // setup commands lack the launch's variable); put the credential in the
@@ -212,6 +213,7 @@ func TestTheLaunchEnvironmentReachesSetupAndTheRun(t *testing.T) {
 	req := withRepos(t, launchReq("t1"), granted("web", webRepoID))
 	req.Spec.TimeoutSec = 900
 	req.Spec.Env = map[string]string{"OPERATOR": "op", GitURLVar: "the operator's"}
+	req.Spec.SignInEnv = []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"}
 	specEnv := maps.Clone(req.Spec.Env)
 	req.Setup = []SetupStep{{Name: "operator", Commands: []string{"echo provisioned"}, Brief: "Provisioned."}}
 	var asked []string
@@ -285,6 +287,9 @@ func TestTheLaunchEnvironmentReachesSetupAndTheRun(t *testing.T) {
 
 	if !strings.HasPrefix(run.Env["OTEL_EXPORTER_OTLP_ENDPOINT"], "https://engine.internal/otlp/") {
 		t.Errorf("the run was not handed its telemetry endpoint: %v", run.Env)
+	}
+	if !slices.Equal(run.SignInEnv, req.Spec.SignInEnv) {
+		t.Errorf("the run's sign-in names are %v, want the spec's %v", run.SignInEnv, req.Spec.SignInEnv)
 	}
 	if !maps.Equal(req.Spec.Env, specEnv) {
 		t.Errorf("the caller's spec environment became %v, want %v untouched", req.Spec.Env, specEnv)
