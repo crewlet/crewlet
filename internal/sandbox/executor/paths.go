@@ -613,9 +613,7 @@
 // starts its own, saying why, where it can do neither. Whether a
 // box can continue a carried session is its harness's release, asked of the
 // box ([Runner.CheckCarry]). What each archive holds is its harness's: see
-// carry.go and each runner; [Codex]'s is the rollout, not its sqlite, restored
-// as `rollout-2020-01-01T00-00-00-<id>.jsonl` in sessions/, release pairs
-// judged by the recorded `--version`.
+// carry.go and each runner's own carry.
 //
 // A SESSION ITS HARNESS IS STILL WORKING IN is packed by the engine, beside
 // it, by the pack the run's own end makes held to a stricter rule — every file
