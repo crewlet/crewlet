@@ -17,7 +17,6 @@ import (
 	"github.com/crewlet/crewlet/internal/coord/kv"
 	"github.com/crewlet/crewlet/internal/coord/kv/kvtest"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
@@ -46,17 +45,16 @@ func widest[T any](t *testing.T, most, bound int, build func(n int) T, size func
 	return build(n)
 }
 
-// leaderReads counts the leader reads of the positions register a leaf's
-// connections ask from here on, as the leaf's own broker sees them leave.
+// leaderReads counts the leader reads of the positions register asked from
+// here on, as the member's broker hears them: on the account's own API, which
+// the fleet's domain maps the leaf's requests onto. Never on the leaf, where a
+// subscription on the domain's API is taken for a responder to it.
 func leaderReads(t *testing.T, across kvtest.Across) func() int {
 	t.Helper()
-	subject, err := jsapi.Embedded().Subject(fmt.Sprintf(server.JSApiMsgGetT, positionsStream))
+	subject := fmt.Sprintf(server.JSApiMsgGetT, positionsStream)
+	nc, err := across.MemberBroker.Conn()
 	if err != nil {
-		t.Fatal(err)
-	}
-	nc, err := across.LeafBroker.Conn()
-	if err != nil {
-		t.Fatalf("connect to the leaf: %v", err)
+		t.Fatalf("connect to the member: %v", err)
 	}
 	t.Cleanup(nc.Close)
 	sub, err := nc.SubscribeSync(subject)
@@ -85,7 +83,7 @@ func leaderReads(t *testing.T, across kvtest.Across) func() int {
 // ASK. A value at its class's bound, on a link at or above the slowest pace
 // allowed, crosses past the read term or a pass's idle: a read given its
 // class's crossing asks the leader once, and a pass given its quiet delivers
-// the value, asking none. Requests are counted as they leave the leaf.
+// the value, asking none. Requests are counted as they reach the member.
 //
 // Mutation: read a class at the term (replyTerm), and its row asks again or
 // fails.
