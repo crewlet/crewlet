@@ -24,7 +24,7 @@ import { Button, Callout, Tabs } from "@crewlethq/ui";
 import { RotateCwGlyph } from "@crewlethq/icons/glyphs";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { SetupForm, heldReason } from "../SetupForm.tsx";
+import { SetupForm, heldReason, setsIn } from "../SetupForm.tsx";
 import { listed } from "~/lib/format.ts";
 import { href } from "~/app/router.tsx";
 import { WATCH_MS } from "../recheck.ts";
@@ -391,7 +391,10 @@ export function AppPane({
               drawSet={
                 tool.entry.key === "app_store_connect"
                   ? (_set, held) => (
-                      <AppStoreKeys keys={connectedKeys(held.flatMap((e) => e.fields))} />
+                      <AppStoreKeys
+                        keys={connectedKeys(held.flatMap((e) => e.fields))}
+                        named={setsIn(tool.sections.flatMap((s) => s.tool.requirements)).length > 1}
+                      />
                     )
                   : undefined
               }

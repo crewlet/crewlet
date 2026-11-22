@@ -74,7 +74,7 @@ const ROLES: [string, string][] = [
 
 const HINT = "A key ID and .p8 file per Apple role: at least one, Marketing first.";
 
-/** App Store Connect as the engine lists it: per connection an issuer, a vendor number and a key set by role. */
+/** App Store Connect as listed: per connection an issuer, a vendor number, keys by role. */
 function appStore(connections: string[], held: string[] = []): SetupToolState {
   const requirements = connections.flatMap((id) => {
     const base = `integrations.app_store_connect.connections.${id}`;

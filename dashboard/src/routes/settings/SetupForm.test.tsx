@@ -2571,6 +2571,50 @@ test("a revealed field is marked required and follows its question", () => {
   expect(labels[token]).not.toContain("(optional)");
 });
 
+// AN ANSWER GATED AWAY IS OFF THE BANNER'S COUNT: the banner counts what is
+// still on the form. Mutation: count every marked field, and "One answer is
+// not filled in yet." stays over a form with no field left to fill in.
+test("a marked field gated away takes its count off the banner", async () => {
+  stubFetch(() => new Response("{}", { status: 200 }));
+  const coverage: SetupToolState = {
+    ...tool,
+    key: "github",
+    configured: true,
+    requirements: [
+      {
+        field: "provisioning.org_webhook",
+        label: "Which GitHub activity should reach your agents",
+        kind: "choice",
+        config_path: "x",
+        required: false,
+        present: true,
+        value: "false",
+        choices: [
+          { value: "false", label: "Apps" },
+          { value: "true", label: "Every repository" },
+        ],
+      },
+      { ...gated },
+    ],
+  };
+  const { baseElement } = render(
+    <SetupForm
+      sections={[{ name: "GitHub", tool: coverage }]}
+      title="GitHub"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  const trigger = () => baseElement.querySelector(".crewlet-select__trigger") as HTMLElement;
+  choose(trigger(), /Every repository/);
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await eventually(() =>
+    expect(screen.getByText("One answer is not filled in yet.")).toBeDefined(),
+  );
+  choose(trigger(), /Apps/);
+  expect(baseElement.textContent).not.toContain("not filled in yet");
+});
+
 /*
  * A WRITE IN FLIGHT CANNOT BE CANCELLED.
  *
@@ -4038,6 +4082,23 @@ test("answering a marked field clears its error and the banner counts what is le
   choose(screen.getByLabelText("Role"), "Marketing");
   expect(baseElement.textContent).not.toContain("not filled in yet");
   expect(baseElement.textContent).not.toContain("Add a key to continue.");
+});
+
+// A REMOVED ENTRY TAKES ITS ERRORS WITH IT: the banner counts only what is
+// still on the form. Mutation: count every marked key, and removing the
+// empty key leaves "3 answers" over one marked field.
+test("removing a marked key takes its errors off the banner's count", async () => {
+  stubFetch(() => new Response("{}", { status: 200 }));
+  renderAppStore();
+  fireEvent.click(screen.getByRole("button", { name: "Add a key" }));
+  choose(screen.getByLabelText("Role"), "Admin");
+  fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+  await eventually(() =>
+    expect(screen.getByText("3 answers are not filled in yet.")).toBeDefined(),
+  );
+  const entry = screen.getByRole("region", { name: "Admin key" });
+  fireEvent.click(within(entry).getByRole("button", { name: "Remove" }));
+  expect(screen.getByText("One answer is not filled in yet.")).toBeDefined();
 });
 
 // ADD A KEY PICKS THE ROLE, THEN ASKS FOR THE KEY ID AND THE .P8, both needed,

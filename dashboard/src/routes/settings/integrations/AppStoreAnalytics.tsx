@@ -183,7 +183,14 @@ function TurnOn({
  * Crewlet stops using it on the next call and deletes its sealed copy. A
  * connection's last key stays until another is added.
  */
-export function AppStoreKeys({ keys }: { keys: readonly ConnectedKey[] }) {
+export function AppStoreKeys({
+  keys,
+  named = false,
+}: {
+  keys: readonly ConnectedKey[];
+  /** Name each key's connection: the company has more than one. */
+  named?: boolean;
+}) {
   const access = useConfigWriteAccess();
   const [removing, setRemoving] = useState<ConnectedKey | null>(null);
   const [busy, setBusy] = useState(false);
@@ -217,7 +224,7 @@ export function AppStoreKeys({ keys }: { keys: readonly ConnectedKey[] }) {
           <span key={`${k.connection}:${k.slot}`} className="row gap-3">
             <span>
               {k.label}
-              {keys.some((o) => o.connection !== k.connection) ? ` (${k.connection})` : ""}
+              {named || keys.some((o) => o.connection !== k.connection) ? ` (${k.connection})` : ""}
             </span>
             <Button
               size="small"

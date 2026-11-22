@@ -149,6 +149,28 @@ test("a key is removed in one action, and a connection's last key is held", asyn
   expect(sent).toEqual(["DELETE /setup/integrations/app_store_connect/keys/main/admin"]);
 });
 
+// A COMPANY WITH SEVERAL TEAMS SEES WHICH TEAM EACH KEY IS: each set's row
+// holds one team's keys, so the row says it. Mutation: name the team only
+// where the keys given span teams, and two rows read "Marketing key" alike.
+test("with several teams each key names its team", async () => {
+  const store = new Store();
+  store.setConnected(true);
+  const socket = new LiveSocket(store);
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
+    what === "viewer" ? Promise.resolve(ADMIN_VIEWER) : new Promise(() => {});
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <ViewerProvider>
+        <AppStoreKeys
+          keys={[{ connection: "eu", slot: "marketing", label: "Marketing key" }]}
+          named
+        />
+      </ViewerProvider>
+    </ClientContext.Provider>,
+  );
+  expect(await screen.findByText("Marketing key (eu)")).toBeDefined();
+});
+
 // A KEY IS NAMED BY ITS ROLE, never by its field's label, which every key in
 // the set shares. Mutation: name it from the label, and every key reads
 // "Private key".

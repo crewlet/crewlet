@@ -46,7 +46,7 @@ export interface ConnectedKey {
   label: string;
 }
 
-/** The keys among a set's fields that the document holds, each once, named by its entry ("Marketing key"). */
+/** The keys among a set's fields the document holds, each once, named by role ("Marketing key"). */
 export function connectedKeys(fields: readonly SetupRequirement[]): ConnectedKey[] {
   const out: ConnectedKey[] = [];
   for (const r of fields) {

@@ -332,7 +332,7 @@ export function asksIn(reqs: SetupRequirement[]): Ask[] {
 }
 
 /** What a set below its minimum says on the form, as an empty field says [NEEDED]. */
-export function setShort(set: SetupSet): string {
+function setShort(set: SetupSet): string {
   return `${set.add} to continue.`;
 }
 
@@ -914,16 +914,8 @@ export function SetupForm({
   // WHAT THE APP SAID about the value in each credential box, by value key.
   const [verdicts, setVerdicts] = useState<Record<string, SetupVerdict | "checking">>({});
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-  // THE BANNER COUNTS what is still unanswered, so answering a marked field takes it off.
+  // Whether the banner counts the unanswered fields a submit marked. See [bannerText].
   const [counting, setCounting] = useState(false);
-  const unfilled = counting ? Object.keys(fieldErrors).length : 0;
-  const banner =
-    error ||
-    (unfilled === 0
-      ? ""
-      : unfilled === 1
-        ? "One answer is not filled in yet."
-        : `${unfilled} answers are not filled in yet.`);
 
   /**
    * Open whatever a refusal NAMES, so an error is never hidden behind a fold.
@@ -1013,6 +1005,22 @@ export function SetupForm({
         .filter((r) => editable(section, r))
         .map((r) => ({ section, r, key: valueKey(section, r) })),
     );
+  }
+
+  /**
+   * The banner: a refusal, or the count of marked answers still on the form.
+   * Answered, removed with its entry or gated away, an answer is off it.
+   */
+  function bannerText(): string {
+    if (error || !counting) return error;
+    const drawn = new Set(onForm().map(({ key }) => key));
+    for (const section of sections) {
+      for (const { set } of setsIn(shownBy.get(sectionKey(section)) ?? []))
+        drawn.add(setKey(section, set));
+    }
+    const n = Object.keys(fieldErrors).filter((k) => drawn.has(k)).length;
+    if (n === 0) return "";
+    return n === 1 ? "One answer is not filled in yet." : `${n} answers are not filled in yet.`;
   }
 
   /**
@@ -1258,7 +1266,7 @@ export function SetupForm({
           // field that is not rendered, the refusal was invisible.
           // A FIELD OF AN ENTRY NOBODY ADDED is answered at its set.
           if (target.set && !entryOn(found.section, target)) {
-            setFieldErrors({ [setKey(found.section, target.set)]: said });
+            setFieldErrors({ [setKey(found.section, target.set)]: setShort(target.set) });
             return;
           }
           if (!editable(found.section, target)) {
@@ -1299,6 +1307,7 @@ export function SetupForm({
     }
   }
 
+  const banner = bannerText();
   return (
     // IN PLACE, in the tool's own pane: the directory stays beside it, and the
     // header above it already names the tool, so the form's heading names
@@ -1690,6 +1699,11 @@ export function SetupForm({
     const remove = (entry: SetEntry) => {
       setAdded((was) => ({ ...was, [key]: (was[key] ?? []).filter((v) => v !== entry.value) }));
       setValues((was) => {
+        const next = { ...was };
+        for (const r of entry.fields) delete next[valueKey(section, r)];
+        return next;
+      });
+      setFieldErrors((was) => {
         const next = { ...was };
         for (const r of entry.fields) delete next[valueKey(section, r)];
         return next;

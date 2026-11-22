@@ -800,7 +800,7 @@ export interface ToolInputs {
   avatarOf: (handle: string) => AgentAvatar | null;
 }
 
-/** One thing to have ready before connecting: a field by its label, or a set by its heading and line. */
+/** One thing to have ready: a field by its label, a set by its heading and line. */
 export interface ReadyItem {
   label: string;
   hint?: string | undefined;
