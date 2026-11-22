@@ -726,7 +726,7 @@ func TestAPassTakesTheLargeSlotOnceAndGivesItBack(t *testing.T) {
 			leave()
 		}
 		took := new(passBudget)
-		meter := newContextMeter(leaving, archiveTar, ctSession, "2.1.322", took)
+		meter := newContextMeter(leaving, ClaudeCode{}, ctSession, "2.1.322", took)
 		_, _ = meter.Write(tc.written)
 		meter.finish(tc.failed)
 		meter.count()
@@ -1433,7 +1433,7 @@ func BenchmarkAMeterAtItsBase(b *testing.B) {
 		b.Fatalf("the take: %v", err)
 	}
 	takeWindow(b, func() {
-		meter := newContextMeter(b.Context(), archiveTar, ctSession, "2.1.322", new(passBudget))
+		meter := newContextMeter(b.Context(), ClaudeCode{}, ctSession, "2.1.322", new(passBudget))
 		_, _ = meter.Write(kept.Bytes())
 		meter.finish(nil)
 		meter.count()
@@ -1480,7 +1480,7 @@ func benchmarkATake(b *testing.B, archive []byte) {
 	var kept countedWriter
 	takeWindow(b, func() {
 		large := new(passBudget)
-		meter := newContextMeter(b.Context(), archiveTar, ctSession, "2.1.322", large)
+		meter := newContextMeter(b.Context(), ClaudeCode{}, ctSession, "2.1.322", large)
 		err := scrubArchive(archiveTar, bytes.NewReader(archive), reopenOf(archive), io.MultiWriter(&kept, meter),
 			newScrubber(nil), testBounds.gatedBy(b.Context(), large))
 		meter.finish(err)
