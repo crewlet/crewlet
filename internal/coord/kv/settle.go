@@ -341,19 +341,21 @@ func (b settledBucket) PutString(ctx context.Context, key string, value string) 
 
 // Update writes a value only while the key is still at revision, SETTLED, held
 // to what its leader's read carries back ([settledBucket.carriedBack]):
-// [settledBucket.update] carrying no header of its own.
+// [settledBucket.update] stating no standing.
 func (b settledBucket) Update(ctx context.Context, key string, value []byte, revision uint64) (uint64, error) {
 	return b.update(ctx, key, value, revision, nil)
 }
 
 // update is every conditional write of a value: ONE publish of the value and
-// header together, conditioned on revision, as the client's own Update
-// publishes (nats.go jetstream/kv.go updateRevision), so what the header
-// states lands at the value's revision or not at all. The client's Update
-// takes no header, and a second path beside it would part the two rules. Its
-// refusal is mapped as the client maps it (kv.go mapRevisionMismatch).
+// the standing it states (nil: none) together, conditioned on revision, as the
+// client's own Update publishes (nats.go jetstream/kv.go updateRevision), so
+// the standing lands at the value's revision or not at all. A STANDING, never
+// any header: [kvHeaderBytes] counts its widest, so no message outgrows what a
+// leaf's read carries back. The client's Update takes no header, and a second
+// path beside it would part the two rules. Its refusal is mapped as the
+// client maps it (kv.go mapRevisionMismatch).
 func (b settledBucket) update(ctx context.Context, key string, value []byte, revision uint64,
-	header nats.Header) (uint64, error) {
+	standing *coord.RunStanding) (uint64, error) {
 
 	if err := b.carriedBack(key, value); err != nil {
 		return 0, err
@@ -370,9 +372,7 @@ func (b settledBucket) update(ctx context.Context, key string, value []byte, rev
 		// A HEADER OF ITS OWN each attempt: the publish stamps its
 		// expectation into the header it is handed.
 		sent := nats.Header{}
-		for k, v := range header {
-			sent[k] = slices.Clone(v)
-		}
+		maps.Copy(sent, standingHeader(standing))
 		ack, sendErr := b.js.PublishMsg(ctx, &nats.Msg{Subject: subject, Header: sent, Data: value},
 			jetstream.WithExpectLastSequencePerSubject(revision))
 		if sendErr != nil {

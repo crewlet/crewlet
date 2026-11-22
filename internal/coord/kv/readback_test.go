@@ -43,8 +43,7 @@ func TestACoordinationValueIsHeldToWhatItsLeadersReadCarriesBackAcrossALink(t *t
 	if _, err := rand.Read(value); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := b.(settledBucket).update(ctx, "at-the-bound", value, 0,
-		standingHeader(&widestStanding)); err != nil {
+	if _, err := b.(settledBucket).update(ctx, "at-the-bound", value, 0, &widestStanding); err != nil {
 		t.Fatalf("a value at the bound, %d bytes, with the widest standing was refused: %v", room, err)
 	}
 	reader, err := newLeaderReader(client, raw)

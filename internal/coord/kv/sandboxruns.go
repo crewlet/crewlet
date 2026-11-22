@@ -177,7 +177,7 @@ func (f *FleetStore) CreateSandboxRun(ctx context.Context, turnID string, value 
 	if turnID == "" {
 		return false, errors.New("coord/kv: a sandbox run needs a turn id")
 	}
-	_, err := createKey(ctx, f.js, f.runs, encodeKey(turnID), value, standingHeader(standing))
+	_, err := createKey(ctx, f.js, f.runs, encodeKey(turnID), value, standing)
 	switch {
 	case err == nil:
 		return true, nil
@@ -280,7 +280,7 @@ func (f *FleetStore) updateRun(ctx context.Context, key string, value []byte, re
 		return 0, fmt.Errorf("coord/kv: %s is not a bucket settled where it was opened, so "+
 			"nothing writes a run's standing with its record", f.runs.Bucket())
 	}
-	return h.update(ctx, key, value, revision, standingHeader(standing))
+	return h.update(ctx, key, value, revision, standing)
 }
 
 // ValueCrossing is how long a write of a run's largest value takes to cross
