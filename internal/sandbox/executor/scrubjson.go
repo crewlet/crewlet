@@ -1,7 +1,6 @@
 package executor
 
 import (
-	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
@@ -72,22 +71,14 @@ func (o *textOut) Write(p []byte) (int, error) {
 	return n, err
 }
 
-// text is s's scrub of a text a piece at a time, writing onto w: one its unit
-// holds whole, at offset 0 ([scrubber.textAt]).
-func (s scrubber) text(w io.Writer) *textScrub { return s.textAt(w, 0) }
-
-// textAt is s's scrub of a text that begins at offset in its unit
-// ([piecePos]), staged where s's reading stages it.
-func (s scrubber) textAt(w io.Writer, offset int64) *textScrub {
+// text is s's scrub of a text a piece at a time, writing onto w, staged where
+// s's reading stages it.
+func (s scrubber) text(w io.Writer) *textScrub {
 	out := &textOut{w: w}
 	var piece pieceSink
-	switch {
-	case s.first != nil:
-		piece = s.first.open(out, offset)
-	case s.second != nil:
-		piece = s.second.open(out, offset)
-	}
-	if piece == nil {
+	if s.first != nil {
+		piece = s.first.open(out)
+	} else {
 		piece = redact.NewStream(out)
 	}
 	return &textScrub{values: s.stream(piece), piece: piece, out: out}
@@ -115,14 +106,14 @@ func (t *textScrub) Close() error {
 // redactionRefusal is what a text's scrub answers for err, what its redaction's
 // stream answered at its close, wrote the first error its writer gave:
 // nothing for nothing, the writer's own error as it came, a stage's own
-// ([errMemoDiverged], [errPieceChanged]) as it came, and anything else the
-// redaction's own refusal, [errRedaction] wrapping it.
+// ([errMemoDiverged]) as it came, and anything else the redaction's own
+// refusal, [errRedaction] wrapping it.
 func redactionRefusal(err, wrote error) error {
 	switch {
 	case err == nil:
 		return nil
 	case wrote != nil && errors.Is(err, wrote),
-		errors.Is(err, errMemoDiverged) || errors.Is(err, errPieceChanged):
+		errors.Is(err, errMemoDiverged):
 		return err
 	}
 	return fmt.Errorf("%w: %w", errRedaction, err)
@@ -133,12 +124,20 @@ func keptText(s scrubber, text string) string {
 	return redact.Secrets(s.apply(text))
 }
 
+// textSink is what a rewrite writes onto: a buffered writer, or a unit's way
+// ([candidate]).
+type textSink interface {
+	io.Writer
+	io.StringWriter
+	io.ByteWriter
+}
+
 // rewriteOut is where a rewrite writes: it counts every byte, hands them to w
 // unless the rewrite only counts (w nil), and, where watch is set, says whether
 // [redact.Marker] is among them, which a rewritten transcript line's cut reads
 // ([definitionsReading]).
 type rewriteOut struct {
-	w *bufio.Writer
+	w textSink
 	n int64
 	// watch says the marker is looked for; tail is the last bytes written,
 	// one fewer than the marker, and marked says the marker was met.
@@ -148,7 +147,7 @@ type rewriteOut struct {
 }
 
 // reset readies o for another text, onto w.
-func (o *rewriteOut) reset(w *bufio.Writer, watch bool) {
+func (o *rewriteOut) reset(w textSink, watch bool) {
 	o.w, o.n, o.watch, o.tail, o.marked = w, 0, watch, o.tail[:0], false
 }
 
@@ -383,9 +382,9 @@ func escapedASCII(c byte) string {
 // A text the scanner refuses ends the rewrite on its *jsonscan.Error, what the
 // rewrite wrote of it before counted and not taken back.
 //
-// For a transcript's line it also reads, or applies, the cut of a loaded tool
-// definition the scrub renamed ([definitionsReading], [definitionCut]): read
-// in a tar's first reading and applied in its second.
+// For a transcript's line it also reads the cut of a loaded tool definition
+// the scrub renamed ([definitionsReading]), which a tar's second reading
+// applies as it copies the line ([cutFilter]).
 type jsonRewrite struct {
 	sc    *jsonscan.Scanner
 	out   *rewriteOut
@@ -400,10 +399,9 @@ type jsonRewrite struct {
 	// containers is how many containers the text has opened so far, which
 	// names the list a cut applies to.
 	containers int
-	// defs reads, and cut applies, the cut of a transcript line's loaded tool
-	// definitions; both nil for a document.
+	// defs reads the cut of a transcript line's loaded tool definitions, nil
+	// for a document.
 	defs *definitionsReading
-	cut  *definitionCut
 	// gate is held while a name or a string past [scrubPieceBaseBytes] is
 	// scrubbed: an export's, whose text is never one piece of its own.
 	gate pieceGate
@@ -421,8 +419,6 @@ type rewriteFrame struct {
 	// of the names the role reads the member being read is under.
 	role   frameRole
 	member readName
-	// cut is the cut where the frame is the list it applies to.
-	cut *definitionCut
 }
 
 // frameRole is what a container is to the cut of a transcript line's loaded
@@ -469,9 +465,9 @@ func newJSONRewrite(s scrubber) *jsonRewrite {
 }
 
 // reset readies j to rewrite the text sc reads onto out, reading a cut where
-// defs is set and applying one where cut is.
-func (j *jsonRewrite) reset(sc *jsonscan.Scanner, out *rewriteOut, defs *definitionsReading, cut *definitionCut) {
-	j.sc, j.out, j.frames, j.containers, j.defs, j.cut = sc, out, j.frames[:0], 0, defs, cut
+// defs is set.
+func (j *jsonRewrite) reset(sc *jsonscan.Scanner, out *rewriteOut, defs *definitionsReading) {
+	j.sc, j.out, j.frames, j.containers, j.defs = sc, out, j.frames[:0], 0, defs
 	if defs != nil {
 		defs.reset()
 	}
@@ -509,9 +505,6 @@ func (j *jsonRewrite) token(k jsonscan.Kind) error {
 	case jsonscan.Name:
 		return j.name()
 	}
-	if cut, err := j.cutElement(); cut || err != nil {
-		return err
-	}
 	if err := j.beginValue(); err != nil {
 		return err
 	}
@@ -543,22 +536,6 @@ func (j *jsonRewrite) token(k jsonscan.Kind) error {
 	}
 	j.endValue(k)
 	return nil
-}
-
-// cutElement passes over the value the current token begins where it is an
-// element of the list a cut applies to and its bit says it is cut: nothing of
-// it is written, and the list's next element is written as though it were not
-// there.
-func (j *jsonRewrite) cutElement() (bool, error) {
-	f := j.frame()
-	if f == nil || f.cut == nil {
-		return false, nil
-	}
-	cut, err := f.cut.next()
-	if err != nil || !cut {
-		return false, err
-	}
-	return true, j.sc.Skip()
 }
 
 // beginValue writes what comes before a value: a comma between an array's
@@ -602,11 +579,8 @@ func (j *jsonRewrite) open(k jsonscan.Kind) error {
 	}
 	j.containers++
 	f := rewriteFrame{object: object}
-	if j.defs != nil || j.cut != nil {
+	if j.defs != nil {
 		f.role = roleFor(j.frame(), object)
-	}
-	if j.cut != nil && j.containers == j.cut.list {
-		f.cut = j.cut
 	}
 	j.frames = append(j.frames, f)
 	if j.defs != nil {
@@ -759,7 +733,6 @@ func (j *jsonRewrite) number() error {
 // in one call, and a longer one through the streams, its first piece and every
 // one after it.
 func (j *jsonRewrite) text(key *keyReading, capMax int) error {
-	at := j.sc.Offset()
 	if err := j.str.begin(j.out, capMax); err != nil {
 		return err
 	}
@@ -783,7 +756,7 @@ func (j *jsonRewrite) text(key *keyReading, capMax int) error {
 			break
 		}
 	}
-	t := j.scrub.textAt(&j.str, at)
+	t := j.scrub.text(&j.str)
 	total, held := 0, false
 	defer func() {
 		if held {
@@ -1008,8 +981,8 @@ func (d *definitionsReading) decide(marked bool) (list *listRead, taken int64, o
 // definitionCut is the second reading's half of the cut of one line: the list
 // it applies to, as the line's containers count it, how many elements the
 // first reading read in it, and the plan's bits for them, one an element, set
-// for one cut, read an element at a time as the list is written
-// ([tarPlan.cutAt]).
+// for one cut, read an element at a time as the copy reads the list
+// ([cutFilter]).
 type definitionCut struct {
 	list    int
 	n, read int
@@ -1017,22 +990,18 @@ type definitionCut struct {
 }
 
 // next says whether the list's next element is cut. A list of more elements
-// than the first reading read is a transcript that changed between the two.
+// than the first reading read is a spool read otherwise than it was written.
 func (c *definitionCut) next() (bool, error) {
 	if c.read == c.n {
-		return false, errLinesChanged
+		return false, errSpoolRead
 	}
 	cut, ok := c.bits.take()
 	if !ok {
-		return false, errLinesChanged
+		return false, errSpoolRead
 	}
 	c.read++
 	return cut, nil
 }
-
-// whole says the list was read to the last element the first reading read in
-// it: one of fewer, or a line that never reached it, changed between the two.
-func (c *definitionCut) whole() bool { return c.read == c.n }
 
 // bitList is a list of bits that grows a block at a time: a plan's, or a
 // list's of definitions, which can hold a bit for every few bytes of a

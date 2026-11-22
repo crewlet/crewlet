@@ -147,40 +147,65 @@ func rewriteLine(t testing.TB, line string, s scrubber) string {
 
 // keptLines is a transcript's text as both readings of a tar keep it, each
 // staging its texts as a take's do, the first read again where a take's is
-// ([firstReadings]): what the second writes, held to the size the first
-// counted.
+// ([firstReadings]): what the second copies of the spool, held to the size
+// the first counted.
 func keptLines(t testing.TB, text string, s scrubber) string {
 	t.Helper()
 	var size int64
+	spool, err := newUnitSpool(spoolPlace{dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer spool.remove()
 	plan, err := firstReadings(strings.NewReader(text), func() (io.ReadCloser, error) {
 		return io.NopCloser(strings.NewReader(text)), nil
-	}, s, scrubBounds{}, func(src io.Reader, s scrubber, plan *tarPlan) error {
-		from, _, err := plan.memberAt(0, src)
-		if err != nil {
+	}, s, scrubBounds{}, spool, func(src io.Reader, s scrubber, plan *tarPlan) error {
+		h := &tar.Header{Name: "projects/p/s.jsonl", Typeflag: tar.TypeReg}
+		if _, err := plan.memberAt(0, h, src); err != nil {
 			return err
 		}
-		if plan.carry == nil {
-			s.unitBegins()
-		}
-		plan.markMember(0, 0, from, s)
+		plan.markMember(0, 0, h.Name)
+		var err error
 		size, err = measureLines(src, s, plan)
 		return err
 	})
 	if err != nil {
 		t.Fatalf("the first reading of the transcript: %v", err)
 	}
-	var out bytes.Buffer
-	if err = writeLines(&out, strings.NewReader(text), s.secondReading(plan, nil), plan,
-		plan.lines.count()); err != nil {
-		t.Fatalf("the second reading of the transcript: %v", err)
+	return copiedSpool(t, plan, size)
+}
+
+// copiedSpool is what the second reading copies of plan's spool, all of it,
+// held to the size the first reading counted.
+func copiedSpool(t testing.TB, plan *tarPlan, size int64) string {
+	t.Helper()
+	kept, err := plan.spool.reader()
+	if err != nil {
+		t.Fatalf("reading the spool back: %v", err)
 	}
-	if !plan.lines.done() || !plan.cuts.done() || plan.pending {
-		t.Fatal("the second reading of the transcript left some of the plan unread")
+	from := newSpoolCopy(kept, plan)
+	var out bytes.Buffer
+	if _, err = io.Copy(&out, from); err != nil {
+		t.Fatalf("the second reading of the spool: %v", err)
+	}
+	if !plan.edits.done() {
+		t.Fatal("the second reading of the spool left some of the plan unread")
 	}
 	if int64(out.Len()) != size {
 		t.Fatalf("the first reading counted %d bytes and the second wrote %d", size, out.Len())
 	}
 	return out.String()
+}
+
+// spooledPlan is a plan writing into a spool of the test's own.
+func spooledPlan(t testing.TB) *tarPlan {
+	t.Helper()
+	spool, err := newUnitSpool(spoolPlace{dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(spool.remove)
+	return &tarPlan{spool: spool}
 }
 
 // A VALUE TOO SHORT TO BE A CREDENTIAL IS NEVER TAKEN OUT BY VALUE, and a long
@@ -303,13 +328,12 @@ func jsonString(t *testing.T, s string) string {
 	return string(out)
 }
 
-// A TAR IS WRITTEN WITH EVERY MEMBER'S SIZE AS REWRITTEN, read twice: the second
-// reading writes exactly what the first counted, and an archive that changed
-// between them is refused rather than written with headers that lie.
+// A TAR IS WRITTEN WITH EVERY MEMBER'S SIZE AS REWRITTEN: the second reading
+// copies exactly what the first counted as it spooled it, under a header that
+// says so.
 //
-// Mutation: write the first reading's header sizes from the members' own, or
-// skip the check that the second reading wrote what the first counted, and the
-// tar is unreadable or the changed archive passes.
+// Mutation: write the header sizes from the members' own, and the tar is
+// unreadable.
 func TestATarIsWrittenWithEachMembersSizeAsRewritten(t *testing.T) {
 	t.Parallel()
 	archive := tarOf(t, map[string]string{
@@ -340,14 +364,6 @@ func TestATarIsWrittenWithEachMembersSizeAsRewritten(t *testing.T) {
 			t.Errorf("%s: %q (header says %d bytes), %v", h.Name, body, h.Size, err)
 		}
 	}
-	changed := tarOf(t, map[string]string{
-		"projects/p/s.jsonl":        `{"text":"a different and longer transcript"}` + "\n",
-		"projects/p/s/tool/out.txt": "out opaque-engine-value\n",
-	})
-	err = scrubTar(bytes.NewReader(archive), reopenOf(changed), io.Discard, s, testBounds)
-	if err == nil {
-		t.Error("an archive that changed between its two readings was written")
-	}
 }
 
 // AN ARCHIVE THAT CHANGED NAMES ITS MEMBER SHORT, whichever way it changed.
@@ -356,32 +372,29 @@ func TestATarIsWrittenWithEachMembersSizeAsRewritten(t *testing.T) {
 // run's row, the launch's record and a box host's reply to the node that asked
 // for the read carry: so it quotes the name as a transcript line quotes a path
 // — its first line, redacted and held to [transcriptDetailLimit]
-// ([memberNamed]). The two changes the second reading can meet are each named
-// where they are met, a member's size and its kind, and each is a case.
+// ([memberNamed]). A reading that goes on from a transcript's line that is no
+// JSON meets the changes it can meet in that member ([tarPlan.memberAt]), its
+// size and its kind, and each is a case.
 //
 // Mutation: quote the member's name whole where either change is met, or hold
 // it to more than a transcript line quotes of a path, and a case goes red.
 func TestAChangedArchiveNamesItsMemberShort(t *testing.T) {
 	t.Parallel()
-	name := "projects/p/" + strings.Repeat("n", 64<<10) + ".txt"
+	name := "projects/p/" + strings.Repeat("n", 64<<10) + ".jsonl"
 	s := newScrubber([]string{"opaque-engine-value"})
-	for change, readings := range map[string][2][]byte{
-		// SHORTER the second time, so the rewrite ends before the size the
-		// first reading counted.
-		"its size": {
-			tarOf(t, map[string]string{name: "out opaque-engine-value and the rest of it\n"}),
-			tarOf(t, map[string]string{name: "out\n"}),
-		},
+	torn := `{"a":"opaque-engine-value"}` + "\n" + `{"b":` + "\n"
+	for change, again := range map[string][]byte{
+		// SHORTER the second time, so the reading cannot go on from where
+		// the first ended.
+		"its size": tarOf(t, map[string]string{name: "{}\n"}),
 		// A FILE the first time and a directory under the same name the
 		// second.
-		"its kind": {
-			tarOfMembers(t, []tarMember{{h: tar.Header{Name: name, Mode: 0o600, Typeflag: tar.TypeReg}, body: "out\n"}}),
-			tarOfMembers(t, []tarMember{{h: tar.Header{Name: name, Mode: 0o700, Typeflag: tar.TypeDir}}}),
-		},
+		"its kind": tarOfMembers(t, []tarMember{{h: tar.Header{Name: name, Mode: 0o700, Typeflag: tar.TypeDir}}}),
 	} {
-		err := scrubTar(bytes.NewReader(readings[0]), reopenOf(readings[1]), io.Discard, s, testBounds)
+		first := tarOf(t, map[string]string{name: torn})
+		err := scrubTar(bytes.NewReader(first), reopenOf(again), io.Discard, s, testBounds)
 		if err == nil {
-			t.Errorf("%s: an archive that changed between its two readings was written", change)
+			t.Errorf("%s: an archive that changed between its readings was written", change)
 			continue
 		}
 		_, quoted, _ := strings.Cut(err.Error(), "changed its member ")

@@ -158,15 +158,19 @@ func TestABatchsTargetsAreReadThroughTheProductsRead(t *testing.T) {
 		Path: "https://x.googleapis.com/v1/accounts/{accountsId}/items:batchDelete"}
 	get := growth.Operation{ID: "x.items.batchGet", Method: "GET", Class: growth.ClassRead,
 		Path: "https://x.googleapis.com/v1/accounts/{accountsId}/items:batchGet"}
-	w.client.BeforeRead = func(req googlegrowth.Request) (googlegrowth.Request, bool, error) {
+	w.client.BeforeRead = func(ctx context.Context, handle string, req googlegrowth.Request) ([]byte, bool, error) {
 		if req.Op.ID != batch.ID {
-			return googlegrowth.Request{}, false, nil
+			return nil, false, nil
 		}
 		if req.Field("refuse") != nil {
-			return googlegrowth.Request{}, false, errors.New("refused")
+			return nil, false, errors.New("refused")
 		}
 		read, err := googlegrowth.NewRequest(get, req.Params, map[string]string{"names": "accounts/1/items/2"}, nil)
-		return read, true, err
+		if err != nil {
+			return nil, false, err
+		}
+		raw, err := w.client.Send(ctx, handle, read)
+		return raw, err == nil, err
 	}
 	req, _ := googlegrowth.NewRequest(batch, map[string]string{"accountsId": "1"}, nil, map[string]any{"names": []any{"accounts/1/items/2"}})
 	h, err := w.client.Read(t.Context(), "seat-a", req)
@@ -718,6 +722,51 @@ func TestAHeldCallsAnswerIsRecordedBeforeItActs(t *testing.T) {
 	}
 }
 
+// A PRODUCT'S LAST CHECK RUNS UNDER THE LEASE AND SENDS NOTHING IT REFUSES:
+// once the target read again holds the binding, a refusal (a spend over the
+// caps read now) ends the allowed act failed with the check's reason.
+//
+// Mutation: skip the check, or run it before the lease, and the write is sent
+// or the check reads what another apply is about to change.
+func TestAProductsLastCheckRunsUnderTheLease(t *testing.T) {
+	t.Parallel()
+	it := &item{name: "old", reads: make(chan struct{}, 8), release: make(chan struct{}), writing: make(chan struct{}, 1)}
+	close(it.release)
+	srv := httptest.NewServer(http.HandlerFunc(it.serve))
+	t.Cleanup(srv.Close)
+	w := newWorld(t, httpxtest.Rewrite(t, srv))
+	req, _ := googlegrowth.NewRequest(patch, map[string]string{"accountsId": "1", "itemsId": "2"},
+		map[string]string{"updateMask": "name"}, map[string]any{"name": "new"})
+	req.Account = "accounts/1"
+	h, _ := w.client.Read(t.Context(), "seat-a", req)
+	call := growth.Call{Handle: "seat-a", Tool: "x_ads_spend", HeldCall: "held-1", Approver: "founder"}
+	leased := false
+	_, err := w.client.Apply(t.Context(), call, googlegrowth.Write{Req: req, Class: growth.ClassSpend,
+		Check: func(ctx context.Context, read googlegrowth.Held) error {
+			w.leases.mu.Lock()
+			_, held := w.leases.held["write/x_ads/accounts/1"]
+			w.leases.mu.Unlock()
+			_, bounded := ctx.Deadline()
+			leased = held && bounded && read.Binding == h.Binding
+			return &googlegrowth.CallError{Failure: growth.FailureCapExceeded, Err: errors.New("over the daily cap")}
+		}}, h.Binding)
+	if err == nil || !leased {
+		t.Fatalf("a refused check answered %v (checked under the lease: %v)", err, leased)
+	}
+	got := w.audit.taken()
+	w.audit.mu.Lock()
+	last := w.audit.recs[len(w.audit.recs)-1]
+	w.audit.mu.Unlock()
+	if strings.Join(steps(got), ",") != "allowed,failed" || last.Failure != growth.FailureCapExceeded {
+		t.Errorf("recorded %v with %q, want allowed then failed over the caps", got, last.Failure)
+	}
+	it.mu.Lock()
+	defer it.mu.Unlock()
+	if it.writes != 0 {
+		t.Errorf("Google was written %d times", it.writes)
+	}
+}
+
 func steps(s []growth.Step) []string {
 	out := make([]string, len(s))
 	for i, x := range s {
@@ -742,5 +791,96 @@ func TestAProductsParameterRuleNeverAdmitsADotSegment(t *testing.T) {
 		if _, err := googlegrowth.NewRequestWith(site, map[string]string{"siteUrl": v}, nil, nil, anyValue); err == nil {
 			t.Errorf("%q was accepted as a path parameter", v)
 		}
+	}
+}
+
+// TWO ASKS ARE ONE ONLY WHERE THEY DECIDE THE SAME THING: one operation on one
+// address in two accounts (a site its body names) are two subjects, so the
+// second is never joined to the first's waiting ask; the same request twice is
+// one.
+//
+// Mutation: leave the account out of the subject, and verifying a second site
+// reads as a repeat of the first.
+func TestTwoAsksAreOneOnlyWhereTheyDecideTheSameThing(t *testing.T) {
+	t.Parallel()
+	insert := growth.Operation{ID: "x.resources.insert", Method: "POST", Resource: "resources",
+		Class: growth.ClassAdmin, Path: "https://x.googleapis.com/v1/resources"}
+	a, err := googlegrowth.NewRequest(insert, nil, nil, map[string]any{"site": "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := a
+	a.Account, b.Account = "sc-domain:example.com", "sc-domain:example.org"
+	if a.Subject("x") == b.Subject("x") {
+		t.Error("one operation in two accounts is one subject")
+	}
+	if again := a; again.Subject("x") != a.Subject("x") {
+		t.Error("the same request is two subjects")
+	}
+}
+
+// A REQUEST SHAPED BY ITS TARGET IS MADE FROM THE STATE ITS APPROVAL BINDS:
+// what it sends is built from the target as read under the lease, and a state
+// the change no longer applies to is a target that moved, void and unsent.
+//
+// Mutation: send the request as built, or fail a change the target no longer
+// takes, and the body overwrites what was read or the log says the engine
+// erred.
+func TestARequestShapedByItsTargetIsMadeFromTheStateItBinds(t *testing.T) {
+	t.Parallel()
+	it := &item{name: "old", reads: make(chan struct{}, 8), release: make(chan struct{}), writing: make(chan struct{}, 1)}
+	close(it.release)
+	srv := httptest.NewServer(http.HandlerFunc(it.serve))
+	t.Cleanup(srv.Close)
+	w := newWorld(t, httpxtest.Rewrite(t, srv))
+	build := func() googlegrowth.Request {
+		req, err := googlegrowth.NewRequest(patch, map[string]string{"accountsId": "1", "itemsId": "2"},
+			map[string]string{"updateMask": "name"}, map[string]any{"suffix": "!"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Shape = func(before []byte) (googlegrowth.Request, error) {
+			var current map[string]any
+			_ = json.Unmarshal(before, &current)
+			name, _ := current["name"].(string)
+			if strings.HasSuffix(name, "!") {
+				return googlegrowth.Request{}, growth.Refuse(growth.RefusedInvalid, "the name is marked already")
+			}
+			shaped := req
+			shaped.Body = map[string]any{"name": name + "!"}
+			return shaped, nil
+		}
+		return req
+	}
+	h, err := w.client.Read(t.Context(), "seat-a", build())
+	if err != nil || googlegrowth.Words(h.Req.Body["name"]) != "old!" {
+		t.Fatalf("the shaped request is %v, %v", h.Req.Body, err)
+	}
+	call := growth.Call{Handle: "seat-a", Tool: "x_ads_admin", HeldCall: "held-1", Approver: "founder"}
+	if _, err := w.client.Apply(t.Context(), call, googlegrowth.Write{Req: build(), Class: growth.ClassAdmin},
+		h.Binding); err != nil {
+		t.Fatal(err)
+	}
+	it.mu.Lock()
+	name := it.name
+	it.mu.Unlock()
+	if name != "old!" {
+		t.Fatalf("Google holds %q, want the name made from the state read", name)
+	}
+	again, err := w.client.Read(t.Context(), "seat-a", build())
+	if err == nil || again.Req.Body["suffix"] == nil {
+		t.Fatalf("a state the change does not apply to was shaped into %v", again.Req.Body)
+	}
+	call.HeldCall = "held-2"
+	if _, err := w.client.Apply(t.Context(), call, googlegrowth.Write{Req: build(), Class: growth.ClassAdmin},
+		h.Binding); !errors.Is(err, growth.ErrMoved) {
+		t.Errorf("an approval on a state the change does not apply to answered %v", err)
+	}
+	got := strings.Join(steps(w.audit.taken()), ",")
+	it.mu.Lock()
+	writes := it.writes
+	it.mu.Unlock()
+	if got != "allowed,applied,allowed,void" || writes != 1 {
+		t.Errorf("recorded %s after %d writes, want the second approval void and unsent", got, writes)
 	}
 }

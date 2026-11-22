@@ -321,7 +321,7 @@ func TestTheTakeSpellsTheRunsStartAsItsScrubSpellsTheExport(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(dir, "export-messages"), []byte(messages), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Pack: true, Scrub: tc.scrub,
+			taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), Pack: true, Scrub: tc.scrub,
 				MaxBytes: takeBound})
 			if err != nil || taken.Body == nil {
 				t.Fatalf("TakeSession = %+v, %v; want the session taken whatever its start", taken, err)

@@ -26,11 +26,11 @@ import (
 // to the bound (a PDF's base64), a million short lines of about 160 bytes, a
 // loaded-tools record whose tiny definitions all lose their line, and the
 // shapes a harness writes that set SessionScrubWait: a tool result's string of
-// `pwd=x `, one of `pwd=` lines torn by a take mid-write, and a tool result's
-// file of `pwd=x` lines. Each reports s/scrub, the plaintext and archive in
-// MiB, and held-MiB, the heap in use after a collection at every sixty-fourth
-// read less the heap before ([heapSampler]); the package doc's "The scrub's
-// bounds, and what it holds" has the figures.
+// `pwd=x `, one of `pwd=` lines torn by a take mid-write, a tool result's file
+// of `pwd=x` lines, and a string of `password: x `. Each reports s/scrub, the
+// plaintext and archive in MiB, and held-MiB, the heap in use after a
+// collection at every sixty-fourth read less the heap before ([heapSampler]);
+// the package doc's "The scrub's bounds, and what it holds" has the figures.
 //
 //	go test -run '^$' -bench '^BenchmarkTheScrubAtThePlaintextBound$' -benchtime 1x -timeout 60m
 func BenchmarkTheScrubAtThePlaintextBound(b *testing.B) {
@@ -85,7 +85,8 @@ func BenchmarkTheScrubAtThePlaintextBound(b *testing.B) {
 		}},
 		// THE SHAPES THAT SET THE WAIT: short assignments the redaction weighs
 		// at every `=`, in a tool result's string, in one torn at its last line
-		// as a take mid-write finds it, and in a tool result's file.
+		// as a take mid-write finds it, and in a tool result's file; and a
+		// password's key and value repeated in a string.
 		{"pwd_spaced_string", benchTranscript, func(w io.Writer, _ *rand.Rand) error {
 			return benchOneString(w, body, "pwd=x ")
 		}},
@@ -98,6 +99,9 @@ func BenchmarkTheScrubAtThePlaintextBound(b *testing.B) {
 		}},
 		{"pwd_lines_file", "projects/p/s/tool-results/out.txt", func(w io.Writer, _ *rand.Rand) error {
 			return benchRepeatTo(w, body, "pwd=x\n")
+		}},
+		{"password_spaced_string", benchTranscript, func(w io.Writer, _ *rand.Rand) error {
+			return benchOneString(w, body, "password: x ")
 		}},
 	} {
 		b.Run(bc.name, func(b *testing.B) {

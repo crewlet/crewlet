@@ -220,7 +220,8 @@ func TestAMintingJobsTakeAndSaveNameOnlyItsBoundSession(t *testing.T) {
 			runner := executor.New(executor.Minter{})
 			b := box(t, runner)
 			mintingStart(t, b, runner, sandbox.RunRequest{Brief: "begin"}, c.record, c.report)
-			_, takeErr := runner.TakeSession(t.Context(), b, sandbox.SessionTake{MaxBytes: 1 << 20, Session: minted})
+			_, takeErr := runner.TakeSession(t.Context(), b, sandbox.SessionTake{MaxBytes: 1 << 20, Session: minted,
+				Spool: testSpool(t)})
 			_, saveErr := runner.PackSave(t.Context(), b, "node-a:0b9c1d3e-5f70-4a8b-9c1d-2e3f4a5b6c7d", minted)
 			for what, err := range map[string]error{"take": takeErr, "save": saveErr} {
 				if refused := errors.Is(err, sandbox.ErrSessionBindRefused); refused != c.refused {

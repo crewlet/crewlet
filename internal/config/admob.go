@@ -54,8 +54,8 @@ const AdMobKind = "admob"
 // agency, which connects each client's company.
 const adMobMaxAccounts = 50
 
-// adMobPublisher is a publisher ID as Google writes it.
-var adMobPublisher = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^pub-[0-9]{16}$`) })
+// googlePublisher is a publisher ID as AdMob and AdSense write it.
+var googlePublisher = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^pub-[0-9]{16}$`) })
 
 // googleOAuthClientID is an OAuth client ID: the project number, a hyphen and
 // the client's own part.
@@ -126,7 +126,7 @@ func (a *AdMob) validate(path Path) error {
 	if n := len(a.Accounts); n > adMobMaxAccounts {
 		p.add(at(path, "accounts"), ErrOutOfRange, "%d accounts is more than %d", n, adMobMaxAccounts)
 	}
-	checkAdMobAccounts(&p, at(path, "accounts"), a.Accounts)
+	checkPublisherIDs(&p, at(path, "accounts"), a.Accounts, adMobAccountPage)
 	return p.err()
 }
 
@@ -150,15 +150,18 @@ func (o *GoogleOAuthClient) validate(p *problems, here Path, required bool) {
 	}
 }
 
-// checkAdMobAccounts holds publisher IDs to Google's shape, each once.
-func checkAdMobAccounts(p *problems, here Path, ids []string) {
+// adMobAccountPage is where AdMob shows a publisher ID.
+const adMobAccountPage = "AdMob's Settings, Account information"
+
+// checkPublisherIDs holds publisher IDs to Google's shape, each once; page is
+// where the product shows one.
+func checkPublisherIDs(p *problems, here Path, ids []string, page string) {
 	seen := map[string]bool{}
 	for i, id := range ids {
 		at := idx(here, i)
 		switch {
-		case !adMobPublisher().MatchString(id):
-			p.add(at, ErrUnknownValue, "%q is not a publisher ID: pub- and 16 digits, as AdMob's Settings, "+
-				"Account information shows it", id)
+		case !googlePublisher().MatchString(id):
+			p.add(at, ErrUnknownValue, "%q is not a publisher ID: pub- and 16 digits, as %s shows it", id, page)
 		case seen[id]:
 			p.add(at, ErrConflict, "%q is listed twice", id)
 		}
@@ -172,10 +175,10 @@ func (r *RoleAdMob) check(c *Company, p *problems, path Path) {
 		p.add(at(path, "level"), ErrUnknownValue, "%q is not an AdMob level; give %s", r.Level,
 			words.Or(growth.LevelNames()))
 	}
-	checkAdMobAccounts(p, at(path, "accounts"), r.Accounts)
+	checkPublisherIDs(p, at(path, "accounts"), r.Accounts, adMobAccountPage)
 	company := c.Integrations.AdMob
 	for i, id := range r.Accounts {
-		if company != nil && adMobPublisher().MatchString(id) && !company.Reaches(id) {
+		if company != nil && googlePublisher().MatchString(id) && !company.Reaches(id) {
 			p.add(idx(at(path, "accounts"), i), ErrUnknownValue, "account %q is not in "+
 				"integrations.admob.accounts; add it there, or take it off this agent", id)
 		}

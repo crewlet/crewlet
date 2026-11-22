@@ -9,6 +9,7 @@ import (
 	"io"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -169,7 +170,9 @@ func runStartOf(cursor string) string {
 // releasePattern is a release's MAJOR.MINOR.PATCH, wherever a harness's
 // `--version` prints it: first for Claude Code (`2.1.310 (Claude Code)`),
 // after a name for OpenCode (`opencode v2.0.32`).
-var releasePattern = regexp.MustCompile(`[0-9]+\.[0-9]+\.[0-9]+`)
+var releasePattern = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`[0-9]+\.[0-9]+\.[0-9]+`)
+})
 
 // releaseOf is the release a harness's `--version` printed, "2.1.310", or ""
 // where it printed none this code can read.
@@ -181,7 +184,7 @@ var releasePattern = regexp.MustCompile(`[0-9]+\.[0-9]+\.[0-9]+`)
 // executor log's bound it is refused, never cut, since a shortened release
 // names another; read as none, every reader takes it for a current one.
 func releaseOf(printed string) string {
-	if release := releasePattern.FindString(printed); sandbox.ValidRelease(release) {
+	if release := releasePattern().FindString(printed); sandbox.ValidRelease(release) {
 		return release
 	}
 	return ""
