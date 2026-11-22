@@ -50,10 +50,11 @@ func (p Paths) MuseTakeConfigFresh() string { return p.WorkDir() + "/muse-take-f
 // the run's script installs and approves.
 func (p Paths) MuseNotesPlugin() string { return p.WorkDir() + "/muse-notes-plugin" }
 
-// MuseNotesDigest is the digest Muse Code gave the notes plugin's package as
-// the script installed it (`package_sha256`), which every run of its hooks
-// records as its `source_digest`: the confirm counts no other hook's.
-func (p Paths) MuseNotesDigest() string { return p.WorkDir() + "/muse-notes-digest" }
+// MuseNotesInstall is Muse Code's answer to the script's install of the notes
+// plugin (`muse plugins install --json`), whose `installed.package_sha256`
+// every run of the plugin's hooks records as its `source_digest`: the confirm
+// counts no other hook's ([museInstalledDigest]).
+func (p Paths) MuseNotesInstall() string { return p.WorkDir() + "/muse-notes-install.json" }
 
 // MuseNoteHelper is the note helper's build for the box (internal/notehelper),
 // written at each launch of a run wired to its notes or skills.
