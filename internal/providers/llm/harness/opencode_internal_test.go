@@ -213,6 +213,44 @@ func TestOpenCodeWritesNoAGENTSmdForARequestWithNoSystemPrompt(t *testing.T) {
 	}
 }
 
+// EVERY SEED SENDS NO BACKGROUND SUMMARY. Near its point, OpenCode 2.3.2 sends
+// a step a second request for a summary it keeps aside, written nowhere the
+// session's usage holds, so the call's usage read would miss its tokens; the
+// policy's seed and the web denial's switch it off.
+//
+// Mutation: drop `compaction.background: false` from either seed, and this
+// goes red.
+func TestEveryOpenCodeSeedSendsNoBackgroundSummary(t *testing.T) {
+	t.Parallel()
+	p := openCode(t)
+	seeds := slices.Clone(p.SeedFiles)
+	if p.WebDenial == nil {
+		t.Fatal("the opencode profile has no web denial")
+	}
+	seeds = append(seeds, p.WebDenial.SeedFiles...)
+	found := 0
+	for _, seed := range seeds {
+		if filepath.Base(seed.Path) != "opencode.json" {
+			continue
+		}
+		found++
+		var doc struct {
+			Compaction struct {
+				Background *bool `json:"background"`
+			} `json:"compaction"`
+		}
+		if err := json.Unmarshal([]byte(seed.Content), &doc); err != nil {
+			t.Fatalf("%s is not JSON: %v", seed.Path, err)
+		}
+		if doc.Compaction.Background == nil || *doc.Compaction.Background {
+			t.Errorf("a seeded %s leaves the background summary on: %s", seed.Path, seed.Content)
+		}
+	}
+	if found != 2 {
+		t.Errorf("found %d seeded opencode.json documents, want the policy's and the web denial's", found)
+	}
+}
+
 // THE SEED OFFERS THE WEB TOOLS AND NOTHING ELSE. OpenCode's permissions are an
 // ordered list in which the last matching rule wins and whatever no rule denies
 // is allowed, so the policy is an allowlist only while it opens by denying
