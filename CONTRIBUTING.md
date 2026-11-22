@@ -538,10 +538,14 @@ The prerequisites that legitimately vary by machine:
   skill-load plugin through `opencode_skills_probe.mjs` against a stand-in of
   the bridge's skill route; `toolenv_test.go` drives the tool-environment plugin
   through `opencode_toolenv_probe.mjs`; and `kimi_driver_internal_test.go` runs
-  the driver against a stand-in of Kimi Code's server. That package is in the
-  parallel half, so `make test` requires node and CI's race shards install it;
-  the probes find node by the same rule as the replay. The plugins and the
-  driver import nothing outside Node itself, so no npm.
+  the driver against a stand-in of Kimi Code's server; and
+  `pi_extension_internal_test.go` and `pi_contract_test.go` drive Pi's extension
+  (`pi_extension.mjs`) through `pi_extension_probe.mjs`, a stand-in of pi's
+  extension API, beside a stand-in of the one module of pi's it imports. That
+  package is in the parallel half, so `make test` requires node and CI's race
+  shards install it; the probes find node by the same rule as the replay. The
+  plugins, the driver and the extension import nothing a box installs, so no
+  npm.
 
   `node` also runs the **box helper** the engine writes into a seat's box
   (`internal/browser/boxhelper`'s `js/` modules): its Go suite lays a box out

@@ -612,7 +612,8 @@ type copilotSettings struct {
 // extension where it reads notes or has a turn cap ([Paths.CopilotExtension]);
 // and its MCP servers, returning the file `--additional-mcp-config` names, with
 // a fresh session's copies beside them ([sandbox.RunRequest.FreshWiring]).
-// What an earlier run wrote there the clear removes first ([Copilot.artifacts]).
+// What an earlier run wrote there the clear removes first
+// ([Copilot.artifactFiles], [Copilot.artifactDirs]).
 func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
 	paths Paths) (string, error) {
 	settings := copilotSettings{Experimental: true}
