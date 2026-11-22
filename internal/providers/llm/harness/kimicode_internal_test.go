@@ -1,6 +1,8 @@
 package harness
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -128,5 +130,55 @@ func TestKimiCodeKeepsNothingOfACallInItsHome(t *testing.T) {
 	if got := env["KIMI_DISABLE_TELEMETRY"]; got != "1" {
 		t.Errorf("KIMI_DISABLE_TELEMETRY = %q, want 1: the vendor's telemetry is a "+
 			"connection that is not the call's own", got)
+	}
+}
+
+// A KIMI CODE CALL IS TOLD NOTHING FROM ITS HOME'S OWN CONFIG: 2.7.2 reads the
+// skills under `.kimi-code/skills` and `.agents/skills`, the personal AGENTS.md
+// in the home and under `.agents`, an installed plugin and a saved workspace
+// trust with this profile's flags (measured), so every one goes with the
+// prune; the login stays.
+//
+// Mutation: drop any of them from volatile_paths, and it outlives the prune.
+func TestAKimiCodeCallIsToldNothingFromItsHomesConfig(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	t.Cleanup(func() { forgetWorkspace(dir) })
+	ws, err := Shared(dir, "kimi-code", kimiCode(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	left := []string{
+		".kimi-code/skills/planted/SKILL.md",
+		".kimi-code/AGENTS.md",
+		".kimi-code/plugins/planted/kimi.plugin.json",
+		".kimi-code/workspace-trust/wd_ws_0123456789ab",
+		".agents/skills/planted/SKILL.md",
+		".agents/AGENTS.md",
+		".agents/agents.md",
+	}
+	kept := []string{".kimi-code/credentials/kimi-code.json", ".kimi-code/config.toml"}
+	for _, rel := range append(slices.Clone(left), kept...) {
+		path := filepath.Join(home, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := ws.prune(home); err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	for _, rel := range left {
+		if _, err := os.Stat(filepath.Join(home, rel)); !os.IsNotExist(err) {
+			t.Errorf("%s outlived the prune (%v): the seat's next call would be told it", rel, err)
+		}
+	}
+	for _, rel := range kept {
+		if _, err := os.Stat(filepath.Join(home, rel)); err != nil {
+			t.Errorf("%s went with the prune: %v", rel, err)
+		}
 	}
 }
