@@ -283,10 +283,15 @@ install() {
 
 # whole <case> <tree>: prints why <tree> is not the case's lock installed as the recipe installs it — the two files,
 # node_modules holding exactly the three packages, npm-cache holding npm's cache alone, .complete, and no link, log or
-# trace of a script — or nothing.
+# trace of a script — or nothing. A <tree> that names no directory is said so before any walk: an installer that
+# failed prints no path, and an empty one would walk the file system from its root.
 whole() {
 	local dir top modules
 	dir="$(lockdir "$1")"
+	if [ -z "$2" ] || [ ! -d "$2" ]; then
+		echo "there is no tree at \"$2\""
+		return
+	fi
 	top="$( (cd "$2/" && ls -A | LC_ALL=C sort | tr '\n' ' ') 2>/dev/null || true)"
 	[ "$top" = ".complete node_modules npm-cache package-lock.json package.json " ] || echo "the tree holds $top"
 	modules="$( (cd "$2/node_modules/" && find . -mindepth 1 -maxdepth 2 | LC_ALL=C sort | tr '\n' ' ') 2>/dev/null || true)"
