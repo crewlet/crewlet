@@ -9,6 +9,7 @@ import (
 	"io"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -26,10 +27,10 @@ import (
 
 // harnessVersionWait bounds [Runner.CheckCarry]'s one read of the box
 // harness's release: a login shell and `--version`, about a second, mostly
-// the runtime starting, as for [openCodeListenWait]. Sixty seconds is room
-// for a contended disk or CPU; a box silent past it is not answering, and the
-// caller starts the run fresh rather than wait.
-const harnessVersionWait = openCodeListenWait
+// the runtime starting. Sixty seconds is room for a contended disk or CPU; a
+// box silent past it is not answering, and the caller starts the run fresh
+// rather than wait.
+const harnessVersionWait = 60 * time.Second
 
 // sessionRecord is what a run's script recorded of its session before its harness
 // started ([Paths.SessionRecord]).
@@ -295,13 +296,17 @@ func (r *Runner) CheckCarry(ctx context.Context, box sandbox.Sandbox, archive sa
 	return check, nil
 }
 
+// resumeReader is a [carrier] whose releases' resumes this build read.
+type resumeReader interface{ resumeRead(release string) bool }
+
 // resumeRead reports whether release, of this runner's harness, is one whose
-// resume this build read ([claudeResumeRead]): what a box's carry check
+// resume this build read: what a box's carry check
 // ([sandbox.CarryCheck.ResumeRead]) and a take's archive
-// ([sandbox.TakenSession.ResumeRead]) each report. False for every harness
-// but Claude Code.
+// ([sandbox.TakenSession.ResumeRead]) each report. False for a harness that
+// is no [resumeReader].
 func (r *Runner) resumeRead(release string) bool {
-	return r.harness.Name() == sandbox.ClaudeCodeHarness && claudeResumeRead(release)
+	h, ok := r.harness.(resumeReader)
+	return ok && h.resumeRead(release)
 }
 
 // Restores reports whether this runner restores archive at all

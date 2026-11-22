@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -1319,5 +1320,75 @@ func testAServeTheRunsEndingOvertookServesNothing(t *testing.T, runs *overtaking
 	}
 	if n := notesByID(t, s, turn)["n-1"]; len(n.Serves) != 0 || n.Served != "" || n.Place != 0 || !n.Waiting() {
 		t.Errorf("the serve the run's ending overtook left the note %+v, want it waiting, served to no hook", n)
+	}
+}
+
+// A POLL SERVE IS RECORDED UNDER ITS INBOX ID AND SETTLED BY IT, for a harness
+// whose session record confirms a take: the serve is the job's, kept with its
+// item's digest beside the id (a record holding text matches by it), once
+// however often the poll serves the note again, a verdict holding the id
+// reads the note off it, and a verdict for another job settles nothing of it.
+// A poll naming no inbox id records no serve, as a plugin's that confirms
+// itself. A wake served once waits through a read that decided nothing (a
+// record not yet flushed) and is read off the verdict the run's end gives.
+// Mutation: record the serve under the note's id or without its digest, again
+// on a second poll, let another job's verdict read it, or let a verdict that
+// held nothing lose the wake's one serve, and a check goes red.
+func testAPollServeIsRecordedUnderItsInboxIDAndSettledByIt(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	const turn = "t-poll-record"
+	pollDigest := strings.Repeat("d", 64)
+	launch := mustLaunched(t, s, run(turn))
+	mustFile(t, s, turn, "n-1")
+	mustFile(t, s, turn, "n-2")
+	poll := sandbox.NoteServe{IDs: []string{"n-1"}, Launch: launch,
+		Statuses: []string{sandbox.StatusLaunching, sandbox.StatusRunning},
+		Inbox:    map[string]sandbox.InboxItem{"n-1": {ID: "msg_1", Digest: pollDigest}}}
+	for range 2 {
+		if served, err := s.ServeNotes(ctx, turn, poll); err != nil || !slices.Equal(idsOf(served), []string{"n-1"}) {
+			t.Fatalf("the poll served %v, %v, want n-1", idsOf(served), err)
+		}
+	}
+	plain := sandbox.NoteServe{IDs: []string{"n-2"}, Launch: launch, Statuses: poll.Statuses}
+	if _, err := s.ServeNotes(ctx, turn, plain); err != nil {
+		t.Fatalf("a poll naming no inbox id: %v", err)
+	}
+	notes := notesByID(t, s, turn)
+	if n := notes["n-1"]; !slices.Equal(servesOf(n), []string{"msg_1"}) || n.Served != launch ||
+		n.Serves[0].Launch != launch || n.Serves[0].Boundary != string(types.SteerBoundaryStep) ||
+		n.Serves[0].Digest != pollDigest {
+		t.Errorf("the polled note is %+v, want one serve to the job under its inbox id and digest, at a step", n)
+	}
+	if n := notes["n-2"]; len(n.Serves) != 0 || n.Served != launch {
+		t.Errorf("a poll naming no inbox id recorded %+v, want the note served and no serve", n)
+	}
+	if settled := mustSettle(t, s, turn, sandbox.HookSettle{Launch: "job-other", Held: []string{"msg_1"}}); len(settled) != 0 {
+		t.Errorf("another job's verdict settled %v", idsOf(settled))
+	}
+	settled := mustSettle(t, s, turn, sandbox.HookSettle{Launch: launch, Held: []string{"msg_1"}})
+	if n := notesByID(t, s, turn)["n-1"]; !slices.Equal(idsOf(settled), []string{"n-1"}) || n.Read == nil ||
+		n.Read.Take != "msg_1" || n.Read.Launch != launch {
+		t.Errorf("the job's verdict holding msg_1 answered %v and left %+v, want n-1 read off its serve",
+			idsOf(settled), n)
+	}
+
+	// A WAKE, SERVED ONCE: an early read's verdict holds nothing, and the end's
+	// holds its inbox id. A verdict that holds a take answers every note read
+	// off a serve to the job, so n-1 again beside the wake.
+	wake := fileWake(t, s, turn, launch, sealedWake("w-1", 64))
+	once := sandbox.NoteServe{IDs: []string{wake.ID}, Launch: launch, Statuses: poll.Statuses,
+		Wakes: map[string]int{wake.ID: 1}, Inbox: map[string]sandbox.InboxItem{wake.ID: {ID: "msg_w"}}}
+	if served, err := s.ServeNotes(ctx, turn, once); err != nil || !slices.Equal(idsOf(served), []string{wake.ID}) {
+		t.Fatalf("the poll served %v, %v, want the wake", idsOf(served), err)
+	}
+	mustSettle(t, s, turn, sandbox.HookSettle{Launch: launch})
+	if n := notesByID(t, s, turn)[wake.ID]; !n.Waiting() || !slices.Equal(servesOf(n), []string{"msg_w"}) {
+		t.Errorf("a verdict that held nothing left the wake %+v, want it waiting on its one serve", n)
+	}
+	settled = mustSettle(t, s, turn, sandbox.HookSettle{Launch: launch, Held: []string{"msg_w"}})
+	if n := notesByID(t, s, turn)[wake.ID]; !slices.Equal(idsOf(settled), []string{"n-1", wake.ID}) ||
+		n.Read == nil || n.Read.Take != "msg_w" {
+		t.Errorf("the end's verdict holding msg_w answered %v and left %+v, want n-1 again and the wake read "+
+			"off msg_w", idsOf(settled), n)
 	}
 }

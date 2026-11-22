@@ -1441,7 +1441,8 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		stamp.placeAt(*calls, current.Launch)
 	} else {
 		stamp.placeAtZero(current.Launch)
-		places = &savePlaces{run: current, resumeRead: taken.ResumeRead}
+		places = &savePlaces{run: current, resumeRead: taken.ResumeRead,
+			needsResumeRead: placesWithResumeRead(runner)}
 	}
 	stamp.At = c.now().UTC()
 	// THE PLACE IS RESERVED WITHIN THE TAKE'S OWN TIME — the room its context
@@ -2276,14 +2277,14 @@ func (c *Coordinator) readLost(ctx context.Context, run PendingRun) (*spooledCap
 	over := c.endJob(ctx, run, box, runner, nil)
 	// THE RELEASE ALONE: a failed Collect leaves it "", which confirms nothing.
 	var result Result
-	if asksMainThread(run, BoxReadLoss) {
+	if asksMainThread(run, BoxReadLoss, ThreadTraitsOf(runner)) {
 		if collected, err := runner.Collect(ctx, box, run.Handle(), c.answerBudget); err == nil {
 			result.HarnessVersion = collected.HarnessVersion
 		}
 	}
 	at := readCapture(BoxReadLoss, result, over)
 	reading := c.readMainThread(ctx, run, box, runner, BoxReadLoss, at, result)
-	if err := c.settleHookReceipts(ctx, run, reading.Receipts, BoxReadLoss); err != nil {
+	if err := c.settleReceipts(ctx, run, reading.Receipts, BoxReadLoss); err != nil {
 		return nil, nil, err
 	}
 	if !c.capturing() {

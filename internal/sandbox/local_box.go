@@ -11,12 +11,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/procgroup"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/redact"
 )
 
@@ -174,11 +177,20 @@ func (b *directBox) Home() string { return b.layout.home() }
 // directory from, each pointed at the box's own .tmp.
 //
 // ONE LIST, so no process in the box writes a temporary file outside it.
-// TMPDIR alone is not enough: Claude Code
-// roots its per-uid temp directory at CLAUDE_CODE_TMPDIR or else a literal
-// /tmp, and Python's tempfile reads TMP and TEMP. A container or an E2B VM
-// needs none of this: its /tmp is inside the boundary.
-var TempRootEnv = []string{"TMPDIR", "TMP", "TEMP", "CLAUDE_CODE_TMPDIR"}
+// TMPDIR alone is not enough: Python's tempfile reads TMP and TEMP, and a
+// harness may root its own temporary directory at a variable of its own or
+// else a literal /tmp (its built-in profile's executor.temp_env), each set for
+// every box since a reconnected box knows no harness. A container or an E2B
+// VM needs none of this: its /tmp is inside the boundary.
+var TempRootEnv = sync.OnceValue(func() []string {
+	env := []string{"TMPDIR", "TMP", "TEMP"}
+	for _, name := range harnessprofile.ExecutorRunners() {
+		if runner, _ := harnessprofile.ExecutorOf(name); runner.TempEnv != "" && !slices.Contains(env, runner.TempEnv) {
+			env = append(env, runner.TempEnv)
+		}
+	}
+	return env
+})
 
 // childEnv is the allowlisted host environment ([hostbox.Inherit]) plus the
 // box's home, its temporary directory and the run env. Allowlisted because the
@@ -192,7 +204,7 @@ func (b *directBox) childEnv(extra map[string]string) map[string]string {
 	env["XDG_DATA_HOME"] = filepath.Join(home, ".local", "share")
 	env["XDG_STATE_HOME"] = filepath.Join(home, ".local", "state")
 	env["XDG_CACHE_HOME"] = filepath.Join(home, ".cache")
-	for _, name := range TempRootEnv {
+	for _, name := range TempRootEnv() {
 		env[name] = b.layout.tmp()
 	}
 	for key, value := range b.env {
