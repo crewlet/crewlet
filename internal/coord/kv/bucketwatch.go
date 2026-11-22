@@ -26,7 +26,8 @@ import (
 )
 
 // headerWatcher is a bucket that watches its keys' headers alone, never
-// their values: what the marker sweep walks ([watchWalk]).
+// their values: what the marker sweep walks ([watchWalk]), and a pass of what
+// writers stated ([listHeadersUnder]).
 type headerWatcher interface {
 	watchHeaders(ctx context.Context, keys string) (jetstream.KeyWatcher, error)
 }
@@ -175,8 +176,8 @@ func (w *bucketWatcher) deliver(m *nats.Msg) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.updates <- watchedEntry{leaderEntry: leaderEntry{bucket: w.bucket, key: key, value: m.Data,
-		revision: meta.Sequence.Stream, created: meta.Timestamp, op: operationOfHeader(m.Header)},
-		delta: meta.NumPending}
+		revision: meta.Sequence.Stream, created: meta.Timestamp, op: operationOfHeader(m.Header),
+		header: m.Header}, delta: meta.NumPending}
 	if !w.initDone {
 		w.received++
 		if w.received >= w.initPending || meta.NumPending == 0 {

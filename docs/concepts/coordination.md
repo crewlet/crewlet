@@ -432,7 +432,7 @@ that window.
 
 ### What one key holds
 
-**A value is at most 6,290,542 bytes** (`coord.MaxValueBytes`), on every
+**A value is at most 6,290,346 bytes** (`coord.MaxValueBytes`), on every
 backend, and at most what its key's class declares: each bucket names its
 classes where it is opened. A write past either is refused before anything
 is sent, as too large

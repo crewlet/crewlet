@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"slices"
 	"strconv"
@@ -253,18 +254,23 @@ func checkReach(config string, r Reach) error {
 	return nil
 }
 
-// kvHeaderBytes is the most header a write of the client's KV handle carries
-// beside key and value: a removal's operation, a purge's rollup, a conditional
-// write's revision and a purge marker's age, each at its longest. The client
-// sets them from options this package cannot read back, so every write is
-// counted at the most (under 200 bytes, milliseconds at the floor).
-// "KV-Operation" and "PURGE" are the client's words, which it does not export.
-var kvHeaderBytes = (&nats.Msg{Header: nats.Header{
-	"KV-Operation":                      {"PURGE"},
-	jetstream.MsgRollup:                 {jetstream.MsgRollupSubject},
-	jetstream.ExpectedLastSubjSeqHeader: {strconv.FormatUint(math.MaxUint64, 10)},
-	jetstream.MsgTTLHeader:              {time.Duration(math.MaxInt64).String()},
-}}).Size()
+// kvHeaderBytes is the most header a write carries beside key and value: a
+// removal's operation, a purge's rollup, a conditional write's revision and a
+// purge marker's age, each at its longest, and a run's standing at its widest
+// ([standingHeader]). The client sets the first four from options this package
+// cannot read back, so every write is counted at the most (342 bytes,
+// milliseconds at the floor). "KV-Operation" and "PURGE" are the client's
+// words, which it does not export.
+var kvHeaderBytes = func() int {
+	h := nats.Header{
+		"KV-Operation":                      {"PURGE"},
+		jetstream.MsgRollup:                 {jetstream.MsgRollupSubject},
+		jetstream.ExpectedLastSubjSeqHeader: {strconv.FormatUint(math.MaxUint64, 10)},
+		jetstream.MsgTTLHeader:              {time.Duration(math.MaxInt64).String()},
+	}
+	maps.Copy(h, standingHeader(&widestStanding))
+	return (&nats.Msg{Header: h}).Size()
+}()
 
 // settled wraps a bucket this node has opened, its writes held to the pace
 // its connection reaches it at and to the classes h declares. A handle
@@ -334,18 +340,60 @@ func (b settledBucket) PutString(ctx context.Context, key string, value string) 
 }
 
 // Update writes a value only while the key is still at revision, SETTLED, held
-// to what its leader's read carries back ([settledBucket.carriedBack]).
+// to what its leader's read carries back ([settledBucket.carriedBack]):
+// [settledBucket.update] carrying no header of its own.
 func (b settledBucket) Update(ctx context.Context, key string, value []byte, revision uint64) (uint64, error) {
+	return b.update(ctx, key, value, revision, nil)
+}
+
+// update is every conditional write of a value: ONE publish of the value and
+// header together, conditioned on revision, as the client's own Update
+// publishes (nats.go jetstream/kv.go updateRevision), so what the header
+// states lands at the value's revision or not at all. The client's Update
+// takes no header, and a second path beside it would part the two rules. Its
+// refusal is mapped as the client maps it (kv.go mapRevisionMismatch).
+func (b settledBucket) update(ctx context.Context, key string, value []byte, revision uint64,
+	header nats.Header) (uint64, error) {
+
 	if err := b.carriedBack(key, value); err != nil {
 		return 0, err
 	}
+	if !validKey(key) {
+		return 0, fmt.Errorf("coord/kv: update %q in %s: %w", key, b.Bucket(), jetstream.ErrInvalidKey)
+	}
+	subject, err := putSubject(b, key)
+	if err != nil {
+		return 0, err
+	}
 	var rev uint64
-	err := b.settle(ctx, "update", key, value, func(ctx context.Context) error {
-		var err error
-		rev, err = b.KeyValue.Update(ctx, key, value, revision)
-		return err
+	err = b.settle(ctx, "update", key, value, func(ctx context.Context) error {
+		// A HEADER OF ITS OWN each attempt: the publish stamps its
+		// expectation into the header it is handed.
+		sent := nats.Header{}
+		for k, v := range header {
+			sent[k] = slices.Clone(v)
+		}
+		ack, sendErr := b.js.PublishMsg(ctx, &nats.Msg{Subject: subject, Header: sent, Data: value},
+			jetstream.WithExpectLastSequencePerSubject(revision))
+		if sendErr != nil {
+			return revisionMismatch(sendErr)
+		}
+		rev = ack.Sequence
+		return nil
 	})
 	return rev, err
+}
+
+// revisionMismatch marks a leader's "wrong last sequence" refusal, decided or
+// in flight, as [jetstream.ErrKeyRevisionMismatch], the client's own mapping
+// of its Update's refusal, keeping the API error for [isWrongLastSequence].
+func revisionMismatch(err error) error {
+	var api *jetstream.APIError
+	if errors.As(err, &api) && (api.ErrorCode == jetstream.JSErrCodeStreamWrongLastSequence ||
+		api.ErrorCode == jetstream.JSErrCodeStreamWrongLastSequenceConstant) {
+		return fmt.Errorf("%w: %w", err, jetstream.ErrKeyRevisionMismatch)
+	}
+	return err
 }
 
 // Delete leaves a delete marker; one conditioned on a revision is SETTLED.

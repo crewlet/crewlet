@@ -50,7 +50,7 @@ func TestOwnerEpochsSkipsARecordItCannotDecode(t *testing.T) {
 		AgentHandle: "h", Harness: "claude-code"}, Fence{Owner: "n1", Epoch: 4}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
-	if _, err := fleet.CreateSandboxRun(t.Context(), "t-garbled", []byte("{not json")); err != nil {
+	if _, err := fleet.CreateSandboxRun(t.Context(), "t-garbled", []byte("{not json"), nil); err != nil {
 		t.Fatalf("CreateSandboxRun: %v", err)
 	}
 	got, err := store.OwnerEpochs(t.Context())

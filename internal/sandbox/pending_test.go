@@ -128,7 +128,7 @@ func TestAPendingRunKeepsKeysThisBuildDoesNotKnow(t *testing.T) {
 	const future = `{"engine":"v9","weights":[1,2,12345678901234567890]}`
 	seed := `{"turn_id":"t1","agent_handle":"swe","status":"launching",` +
 		`"launch_id":"l1","a_later_builds_field":` + future + `}`
-	if created, err := runs.CreateSandboxRun(ctx, "t1", []byte(seed)); err != nil || !created {
+	if created, err := runs.CreateSandboxRun(ctx, "t1", []byte(seed), nil); err != nil || !created {
 		t.Fatalf("seed: created=%v err=%v", created, err)
 	}
 
@@ -219,12 +219,13 @@ type vanishingRuns struct {
 // runStore names the embedded store, whose own name is one of its methods.
 type runStore = coord.SandboxRuns
 
-func (v *vanishingRuns) CreateSandboxRun(ctx context.Context, turnID string, value []byte) (bool, error) {
+func (v *vanishingRuns) CreateSandboxRun(ctx context.Context, turnID string, value []byte,
+	standing *coord.RunStanding) (bool, error) {
 	v.creates++
 	if v.creates == 1 {
 		return false, nil
 	}
-	return v.runStore.CreateSandboxRun(ctx, turnID, value)
+	return v.runStore.CreateSandboxRun(ctx, turnID, value, standing)
 }
 
 // A ROW THAT VANISHES UNDER A LAUNCH IS CREATED AGAIN, not reported open:

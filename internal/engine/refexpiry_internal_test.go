@@ -69,7 +69,7 @@ func TestTheRetentionDutyExpiresAnIdleSeatBranchNoRunHolds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created, err := e.backends.Fleet.CreateSandboxRun(t.Context(), row.TurnID, raw); err != nil || !created {
+	if created, err := e.backends.Fleet.CreateSandboxRun(t.Context(), row.TurnID, raw, nil); err != nil || !created {
 		t.Fatalf("seed the parked run's row: %v %v", created, err)
 	}
 

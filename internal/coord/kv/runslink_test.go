@@ -72,7 +72,7 @@ func TestARunsListingAcrossALeafsLinkDeliversItsRecordsInItsPass(t *testing.T) {
 		t.Fatal(err)
 	}
 	listed := map[string][]byte{}
-	err = listUnder(t.Context(), leaf.js, read, leaf.runs, runRecordKeys, "the sandbox runs",
+	err = listUnder(t.Context(), leaf.js, read, leaf.runs, runRecordKeys, "the sandbox runs", false,
 		func(kve jetstream.KeyValueEntry) error {
 			listed[kve.Key()] = bytes.Clone(kve.Value())
 			return nil
