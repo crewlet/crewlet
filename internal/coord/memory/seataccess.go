@@ -45,7 +45,7 @@ func (f *Fleet) PutSeatAccessRecord(_ context.Context, kind, handle string, valu
 	if kind == "" || handle == "" {
 		return errors.New("coord/memory: a seat access record needs its integration and its seat")
 	}
-	if err := coord.HoldValue("the "+kind+" access record of "+handle, len(value), coord.MaxValueBytes); err != nil {
+	if err := coord.HoldValue("the "+kind+" access record of "+handle, len(value), coord.MaxSeatAccessBytes); err != nil {
 		return err
 	}
 	f.mu.Lock()

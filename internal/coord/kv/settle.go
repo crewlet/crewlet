@@ -160,8 +160,35 @@ var (
 		{keys: activationKey, class: pointerClass},
 		{keys: bodyPrefix + "*", class: bodyClass},
 	}, rest: undeclared}
-	// undeclaredHolding is every other bucket's.
+	// undeclaredHolding is every bucket's but the runs, the config and the
+	// positions register.
 	undeclaredHolding = holding{rest: undeclared}
+
+	// The positions register's classes, each at the bound its writer holds
+	// a record to (ADR-0175, "The positions register declares its classes"):
+	// deciding where a read decides a write somebody waits on, carrying where
+	// none does, and a small value read at the term.
+	mcpListingValue    = class{bound: coord.MaxMCPListingBytes, reply: replyCarrying}
+	mcpDefinitionValue = class{bound: coord.MaxMCPDefinitionBytes, reply: replyCarrying}
+	mcpCheckValue      = class{bound: coord.MaxMCPCheckBytes, reply: replyDeciding}
+	accessReviewValue  = class{bound: coord.MaxAccessReviewBytes, reply: replyDeciding}
+	seatAccessValue    = class{bound: coord.MaxSeatAccessBytes, reply: replyDeciding}
+	homeBoardValue     = class{bound: coord.MaxHomeBoardRecordBytes, reply: replyDeciding}
+	smallValue         = class{bound: coord.SmallValueBytes, reply: replyTerm}
+
+	// positionsHolding is the positions register's: every class above, and
+	// the rest undeclared, every class a boot lists among them, so no boot
+	// window moves.
+	positionsHolding = holding{classes: []keyClass{
+		{keys: coord.DocumentFilter(coord.MCPListingClass), class: mcpListingValue},
+		{keys: coord.DocumentFilter(coord.MCPDefinitionClass), class: mcpDefinitionValue},
+		{keys: coord.DocumentFilter(coord.MCPCheckClass), class: mcpCheckValue},
+		{keys: coord.DocumentFilter(coord.AccessReviewClass), class: accessReviewValue},
+		{keys: coord.DocumentFilter(coord.SeatAccessClass), class: seatAccessValue},
+		{keys: coord.DocumentFilter(coord.HomeBoardClass), class: homeBoardValue},
+		{keys: coord.DocumentFilter(coord.AtlasWakeClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.DeviceSignInClass), class: smallValue},
+	}, rest: undeclared}
 )
 
 // quiet is how long a pass or a watch over keys may go without a delivery
