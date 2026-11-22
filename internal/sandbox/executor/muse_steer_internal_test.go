@@ -13,11 +13,20 @@ import (
 // museToken is the fixture's take n's token.
 func museToken(n string) string { return claudeTakeToken("00000000-0000-4000-8000-00000000000" + n) }
 
-// museHeldOf is the tokens record shows held, the case failing on a read
-// error.
-func museHeldOf(t *testing.T, record []byte) map[string]bool {
+// The digests Muse Code gave the notes plugin's package in each fixture's
+// box, which its hooks' runs record ([Paths.MuseNotesDigest]).
+const (
+	museHooksDigest      = "sha256:b0a00512373d797fa5b05952efbd9042c9ad3db342cb8b263b6cbcde239a9d9c"
+	museLaunchedDigest   = "sha256:c84f032f91b068e193ec2f11ed87d845d3972d0a83cd0dcd83f4ed85336aea13"
+	museRepositoryDigest = "sha256:50bb3cd3349b897a8b1b1c5f894dee7222fa24b66cad50bdbc767e01e1cdd12d"
+	museFailedDigest     = "sha256:6b4afe21018a7cffb2a2fb25976e2bb2087f78619e713759b2a10e09ba1d1931"
+)
+
+// museHeldOf is the tokens record shows held of the plugin package digest
+// names, the case failing on a read error.
+func museHeldOf(t *testing.T, record []byte, digest string) map[string]bool {
 	t.Helper()
-	held, err := museHeld(bytes.NewReader(record))
+	held, err := museHeld(bytes.NewReader(record), digest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +76,7 @@ func insertAfter(t *testing.T, lines [][]byte, marker string, extra []byte) []by
 // Mutation: read a hook's stderr whatever its status, or hold a take with no
 // model request after it.
 func TestTwoMuseHooksFiringInOneStepAreEachConfirmed(t *testing.T) {
-	held := museHeldOf(t, museFixture(t, "hooks.session.jsonl"))
+	held := museHeldOf(t, museFixture(t, "hooks.session.jsonl"), museHooksDigest)
 	for _, n := range []string{"1", "3", "9"} {
 		if !held[museToken(n)] {
 			t.Errorf("take %s is not held: %v", n, held)
@@ -89,7 +98,7 @@ func TestAMuseHookKilledMidTakeLeavesItsTakeUnconfirmed(t *testing.T) {
 	if !strings.Contains(record, museToken("2")) {
 		t.Fatal("the fixture's timed-out run was not found")
 	}
-	if held := museHeldOf(t, []byte(record)); held[museToken("2")] {
+	if held := museHeldOf(t, []byte(record), museHooksDigest); held[museToken("2")] {
 		t.Fatalf("a take on a timed-out hook's stderr is held: %v", held)
 	}
 }
@@ -103,7 +112,7 @@ func TestOnlyTheMusePluginsHooksGiveAReceipt(t *testing.T) {
 		"hook_key": "/work/repo/.muse/hooks.json:post_tool_use:def-1", "status": "completed",
 		"effects": []string{"context"}, "stderr": museToken("7") + "\n"})
 	record := insertAfter(t, museLines(t, "hooks.session.jsonl"), "posttooluse-3", forged)
-	if held := museHeldOf(t, record); held[museToken("7")] {
+	if held := museHeldOf(t, record, museHooksDigest); held[museToken("7")] {
 		t.Fatalf("a repository hook's token is held: %v", held)
 	}
 }
@@ -116,7 +125,7 @@ func TestOnlyTheMusePluginsHooksGiveAReceipt(t *testing.T) {
 func TestACompactionBeforeTheNextMuseRequestLeavesTheTakeUnconfirmed(t *testing.T) {
 	compaction := museRecordLine(t, "runtime.session", map[string]any{"kind": "context_compaction_installed"})
 	record := insertAfter(t, museLines(t, "hooks.session.jsonl"), `"kind":"tool_result_batch_committed"`, compaction)
-	held := museHeldOf(t, record)
+	held := museHeldOf(t, record, museHooksDigest)
 	if held[museToken("1")] || held[museToken("3")] || !held[museToken("9")] {
 		t.Fatalf("held %v: want the batch's takes unconfirmed past the compaction, the finish's held", held)
 	}
@@ -131,7 +140,7 @@ func TestAMuseFinishTakeIsNotConfirmedAcrossARestart(t *testing.T) {
 	// After the Stop hook's end, which alone records it `blocked`: its take
 	// is pending there, and the restart comes before the next request.
 	record := insertAfter(t, museLines(t, "hooks.session.jsonl"), `"status":"blocked"`, restart)
-	if held := museHeldOf(t, record); held[museToken("9")] || !held[museToken("1")] {
+	if held := museHeldOf(t, record, museHooksDigest); held[museToken("9")] || !held[museToken("1")] {
 		t.Fatalf("held %v: want the finish's take unconfirmed, the batch's held", held)
 	}
 }
@@ -146,6 +155,7 @@ func TestAMuseMainThreadReadAnswersItsTakes(t *testing.T) {
 	p := PathsFor(box)
 	path := p.MuseSessions() + "/2026/11/22/" + session + "/session.jsonl"
 	box.Put(path, string(museFixture(t, "hooks.session.jsonl")))
+	box.Put(p.MuseNotesDigest(), museHooksDigest+"\n")
 	box.ExecFunc = func(_ context.Context, cmd string, _ sandbox.ExecOptions) (sandbox.ExecResult, error) {
 		return sandbox.ExecResult{Stdout: path + "\n"}, nil
 	}
@@ -237,7 +247,7 @@ func TestAMuseHookAnswersTextReadsBackWhole(t *testing.T) {
 //
 // Mutation: hold no finish's take, or read another hook key.
 func TestALaunchedMuseRunsNotesAreEachHeld(t *testing.T) {
-	held := museHeldOf(t, museFixture(t, "launched-notes.session.jsonl"))
+	held := museHeldOf(t, museFixture(t, "launched-notes.session.jsonl"), museLaunchedDigest)
 	for _, n := range []string{"1", "2", "9"} {
 		if token := claudeTakeToken("aaaaaaaa-0000-4000-8000-00000000000" + n); !held[token] {
 			t.Errorf("take %s is not held: %v", n, held)
@@ -316,7 +326,7 @@ func TestTheMuseScriptHandsTheKeyOnStdinAlone(t *testing.T) {
 //
 // Mutation: name the bridge `crewlet`, or hold a token off any hook's run.
 func TestARepositoryCannotDisplaceOrImpersonateTheMuseChannels(t *testing.T) {
-	held := museHeldOf(t, museFixture(t, "launched-repository.session.jsonl"))
+	held := museHeldOf(t, museFixture(t, "launched-repository.session.jsonl"), museRepositoryDigest)
 	if !held[claudeTakeToken("aaaaaaaa-0000-4000-8000-000000000011")] ||
 		held[claudeTakeToken("ffffffff-0000-4000-8000-000000000001")] ||
 		held[claudeTakeToken("ffffffff-0000-4000-8000-000000000002")] {
@@ -389,13 +399,14 @@ func TestAnUnreadableMuseRecordConfirmsNothing(t *testing.T) {
 		"event no object": []byte(`{"payload_type":"runtime.session","payload":{"event":"compacted"}}` + "\n"),
 	} {
 		record := insertAfter(t, museLines(t, "hooks.session.jsonl"), "plugin:crewlet-notes:posttooluse-1", bad)
-		if held, err := museHeld(bytes.NewReader(record)); err == nil || len(held) != 0 {
+		if held, err := museHeld(bytes.NewReader(record), museHooksDigest); err == nil || len(held) != 0 {
 			t.Errorf("%s: held %v, err %v; want none held and the line named", name, held, err)
 		}
 		box := sandbox.NewFakeSandbox("b")
 		p := PathsFor(box)
 		path := p.MuseSessions() + "/2026/11/22/" + session + "/session.jsonl"
 		box.Put(path, string(record))
+		box.Put(p.MuseNotesDigest(), museHooksDigest+"\n")
 		box.ExecFunc = func(_ context.Context, _ string, _ sandbox.ExecOptions) (sandbox.ExecResult, error) {
 			return sandbox.ExecResult{Stdout: path + "\n"}, nil
 		}
@@ -406,7 +417,89 @@ func TestAnUnreadableMuseRecordConfirmsNothing(t *testing.T) {
 		}
 	}
 	tail := append(museFixture(t, "hooks.session.jsonl"), torn[:len(torn)-1]...)
-	if held := museHeldOf(t, tail); !held[museToken("1")] || !held[museToken("9")] {
+	if held := museHeldOf(t, tail, museHooksDigest); !held[museToken("1")] || !held[museToken("9")] {
 		t.Errorf("held %v with a torn last line: want the takes before it", held)
+	}
+}
+
+// A TAKE IS HELD ONLY ONCE ITS OWN CONTEXT BLOCK IS COMMITTED: a hook run whose
+// answer Muse took, a request after it, but no block of that call and firing
+// (`hook:post_tool_use:<call>:<n>`) in the record, confirms nothing; the takes
+// whose blocks it shows still hold.
+//
+// Mutation: hold a take off its hook's run and the next request alone.
+func TestAMuseTakeWithoutItsContextBlockIsNotHeld(t *testing.T) {
+	var record []byte
+	dropped := 0
+	for _, l := range museLines(t, "hooks.session.jsonl") {
+		if bytes.Contains(l, []byte(`"id":"hook:post_tool_use:call_0032_0:0"`)) ||
+			bytes.Contains(l, []byte(`"id":"hook:post_tool_use:call_0032_1:0"`)) {
+			dropped++
+			continue
+		}
+		record = append(record, l...)
+	}
+	if dropped != 2 {
+		t.Fatalf("dropped %d blocks, want slot 1's two", dropped)
+	}
+	held := museHeldOf(t, record, museHooksDigest)
+	if held[museToken("1")] || !held[museToken("3")] || !held[museToken("9")] {
+		t.Fatalf("held %v: want slot 1's take unconfirmed, slot 3's and the finish's held", held)
+	}
+}
+
+// A HOOK RUN OF ANOTHER PACKAGE CONFIRMS NOTHING: only a run whose
+// `source_digest` is the package the script installed counts, so a plugin of
+// the notes plugin's id and other content gives no receipt, whatever Muse
+// approved.
+//
+// Mutation: drop the digest check, or compare it to the plugin's id alone.
+func TestAMuseHookOfAnotherPackageConfirmsNothing(t *testing.T) {
+	if held := museHeldOf(t, museFixture(t, "hooks.session.jsonl"), "sha256:"+strings.Repeat("0", 64)); len(held) != 0 {
+		t.Errorf("held %v under another package's digest, want none", held)
+	}
+	record := strings.ReplaceAll(string(museFixture(t, "hooks.session.jsonl")),
+		`"capability_id":"posttooluse-3","plugin_id":"crewlet-notes","source_digest":"`+museHooksDigest,
+		`"capability_id":"posttooluse-3","plugin_id":"crewlet-notes","source_digest":"sha256:`+strings.Repeat("f", 64))
+	if !strings.Contains(record, strings.Repeat("f", 64)) {
+		t.Fatal("the fixture's slot 3 runs were not found")
+	}
+	if held := museHeldOf(t, []byte(record), museHooksDigest); held[museToken("3")] || !held[museToken("1")] {
+		t.Errorf("held %v: want slot 3's take, from another package, unconfirmed", held)
+	}
+}
+
+// TWO IDENTICAL NOTES IN ONE CALL ARE EACH CONFIRMED ON THEIR OWN: two hooks
+// answering one call with the same text get a block each (`:0`, `:1`,
+// measured on 1.4.25), each answering its own run's take.
+//
+// Mutation: key a take's block by its text, and the second take is never held.
+func TestTwoIdenticalMuseNotesInOneCallAreEachConfirmed(t *testing.T) {
+	record := museFixture(t, "failed-request.session.jsonl")
+	if bytes.Count(record, []byte(`"text":"SAME-NOTE"`)) != 2 {
+		t.Fatal("the fixture holds no two blocks of one text")
+	}
+	held := museHeldOf(t, record, museFailedDigest)
+	if !held[museToken("1")] || !held[museToken("2")] {
+		t.Fatalf("held %v: want both takes", held)
+	}
+}
+
+// A FAILED REQUEST AFTER THE BLOCK CONFIRMS NOTHING: the run whose next
+// request failed (`model_failure_terminal_intent`, no `model_completed`)
+// holds no take; the session continued and completed a request carrying both
+// blocks (measured on 1.4.25), which holds them.
+//
+// Mutation: hold a take at any request, failed or not.
+func TestAFailedMuseRequestAfterTheBlockConfirmsNothing(t *testing.T) {
+	lines := museLines(t, "failed-request.session.jsonl")
+	if !bytes.Contains(lines[77], []byte(`"payload_type":"session.started"`)) {
+		t.Fatal("the fixture's continued run does not start at its line 78")
+	}
+	if held := museHeldOf(t, bytes.Join(lines[:77], nil), museFailedDigest); len(held) != 0 {
+		t.Errorf("held %v off a failed request, want none", held)
+	}
+	if held := museHeldOf(t, bytes.Join(lines, nil), museFailedDigest); len(held) != 2 {
+		t.Errorf("held %v once the continued run's request completed, want both takes", held)
 	}
 }

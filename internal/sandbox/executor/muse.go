@@ -633,20 +633,26 @@ func writeMuseNotes(ctx context.Context, box sandbox.Sandbox, req sandbox.RunReq
 // `required` and `tool_timeout_sec`, while `muse mcp add-json` keeps both
 // (measured on 1.4.25), so the servers come after it. A plugin Muse would not
 // take leaves the run without its notes, as its error stream says; a server
-// it would not take fails the run, which would have no tools.
+// it would not take fails the run, which would have no tools. The install's
+// `package_sha256` is kept ([Paths.MuseNotesDigest]) for the confirm.
 func museWiring(paths Paths) string {
 	q := sandbox.ShellQuote
 	plugin := paths.MuseNotesPlugin()
 	errs := q(paths.WorkDir() + "/muse-wiring-error")
+	installed := q(paths.WorkDir() + "/muse-notes-install.json")
+	digest := q(paths.MuseNotesDigest())
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	line(`muse plugins remove %s --json < /dev/null > /dev/null 2>&1`, museNotesPlugin)
+	line(`muse plugins remove %s --json < /dev/null > /dev/null 2>&1; rm -f %s`, museNotesPlugin, digest)
 	line(`if [ -f %s ]; then`, q(plugin+"/.muse-plugin/plugin.json"))
 	line(`  chmod 0755 %s 2> /dev/null`, q(paths.MuseNoteHelper()))
-	line(`  if ! { muse plugins install %s --scope user --json < /dev/null > /dev/null 2> %s && muse plugins approve %s --json < /dev/null > /dev/null 2>> %s; }; then`,
-		q(plugin), errs, museNotesPlugin, errs)
+	line(`  if ! { muse plugins install %s --scope user --json < /dev/null > %s 2> %s && muse plugins approve %s --json < /dev/null > /dev/null 2>> %s; }; then`,
+		q(plugin), installed, errs, museNotesPlugin, errs)
 	line(`    echo "crewlet: the run's notes plugin could not be installed, so the run takes no notes between its steps: $(head -c 400 %s 2> /dev/null)" >&2`, errs)
+	line(`  else`)
+	line(`    sed -n 's/^ *"package_sha256": *"\(sha256:[0-9a-f]*\)".*/\1/p' %s | head -n 1 > %s`, installed, digest)
 	line(`  fi`)
+	line(`  rm -f %s`, installed)
 	line(`fi`)
 	line(`for f in %s/*.json; do`, q(paths.MuseServers()))
 	line(`  [ -f "$f" ] || continue`)
@@ -698,7 +704,8 @@ for o in $(env | sed -n 's/^\(` + museShellOff + `[A-Za-z0-9_]*\)=.*/\1/p'); do 
 // subagents' lines its script kept. Its settings are written whole by every
 // run, and its sessions are kept.
 func (Muse) artifacts(p Paths) (files, dirs []string) {
-	return []string{p.MuseChildLines(), p.MuseTakeConfig(), p.MuseTakeConfigFresh(), p.MuseNoteHelper()},
+	return []string{p.MuseChildLines(), p.MuseTakeConfig(), p.MuseTakeConfigFresh(), p.MuseNoteHelper(),
+			p.MuseNotesDigest()},
 		[]string{p.MuseServers(), p.MuseServersFresh(), p.MuseNotesPlugin()}
 }
 
