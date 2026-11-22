@@ -34,7 +34,7 @@ func atTheBound(t *testing.T, name, text, want string) {
 	// it; small ones would cost a 64 KiB text its length squared to put
 	// back together.
 	for _, sizes := range [][]int{{4093}, {len(text)}} {
-		if shown, _ := settle(text, sizes); shown != want {
+		if shown, _ := settle(t, text, sizes); shown != want {
 			t.Errorf("%s in pieces of %v: shown as it settled, %s", name, sizes, parted(shown, want))
 		}
 	}
@@ -235,11 +235,11 @@ func TestAPasswordKeysSeparatorIsReadToMaxReach(t *testing.T) {
 	// 2; the text is 9 bytes and n spaces past the key.
 	awaited := func(n int) string { return "x\nEnter password" + spaces(n) + "\n" }
 	for n, want := range map[int]int{reach - 10: 2, reach - 9: len(awaited(reach - 9))} {
-		if got := redact.Settled(awaited(n)); got != want {
+		if got := redact.SettledByBoth(t, awaited(n)); got != want {
 			t.Errorf("a key %d bytes before the text's end: Settled = %d, want %d", 9+n, got, want)
 		}
 		text := awaited(n) + "= hunter2x9\n"
-		if shown, _ := settle(text, []int{4093}); shown != redact.Secrets(text) {
+		if shown, _ := settle(t, text, []int{4093}); shown != redact.Secrets(text) {
 			t.Errorf("a key %d bytes before its separator: shown as it settled, %s", 9+n,
 				parted(shown, redact.Secrets(text)))
 		}
