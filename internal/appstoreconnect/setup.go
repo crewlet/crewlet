@@ -36,9 +36,8 @@ func keySet(connection, slot string) *setup.Set {
 	words := slotWords[slot]
 	return &setup.Set{
 		ID: connection + "_keys", Label: "API keys", Item: "key", Add: "Add a key", Pick: "Role", Min: 1,
-		Hint:    "Add at least one. Start with " + slotWords[firstSlot][0] + "; one key per role keeps access least-privileged.",
-		Missing: "Add at least one API key: its role, key ID and .p8 file.",
-		Entry:   setup.Choice{Value: slot, Label: words[0], Hint: words[1]},
+		Hint:  "A key ID and .p8 file per Apple role: at least one, " + slotWords[firstSlot][0] + " first.",
+		Entry: setup.Choice{Value: slot, Label: words[0], Hint: words[1]},
 	}
 }
 
@@ -92,7 +91,7 @@ func Requirements(in *config.AppStoreConnect, resolve func(string) (string, bool
 			keyID := setup.Requirement{Field: id + "_" + slot + "_key_id", Label: "Key ID", Kind: setup.KindID,
 				ConfigPath: base + ".keys." + slot + ".key_id", Shape: setup.ShapeAppleKeyID, Set: set, Connect: true,
 				Format: "ten capital letters or digits", Hint: "Shown beside the key on {link}.",
-				LinkText: "Team Keys", VendorURL: "https://appstoreconnect.apple.com/access/integrations/api"}
+				LinkText: "Users and Access, Integrations", VendorURL: "https://appstoreconnect.apple.com/access/integrations/api"}
 			keyID.Present, keyID.Resolved, keyID.Stored = setup.Held(key.KeyID, resolve)
 			private := setup.Requirement{Field: id + "_" + slot + "_private_key", Label: "Private key (.p8)",
 				Kind: setup.KindSecret, ConfigPath: base + ".keys." + slot + ".private_key",
@@ -114,7 +113,7 @@ func secretName(connection, slot string) string {
 // Guide is what the connect form says around its fields.
 func Guide() setup.Guide {
 	return setup.Guide{
-		Summary: "Crewlet keeps your team's API keys, one per Apple role, and calls through the key with the " +
-			"least access. No agent holds a key.",
+		Summary: "Crewlet keeps your team's API keys and makes each call through the least-privileged key " +
+			"that can make it. No agent holds a key.",
 	}
 }
