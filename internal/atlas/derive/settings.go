@@ -135,6 +135,7 @@ var integrationRows = map[integration.Kind]func(b *builder, c *config.Company, z
 	integration.KindSSH:             sshHosts,
 	integration.KindAppStoreConnect: appStoreConnect,
 	integration.KindGoogleAnalytics: googleAnalytics,
+	integration.KindGooglePlay:      googlePlay,
 	integration.KindAtlassian:       atlassian,
 }
 
@@ -389,6 +390,24 @@ func googleAnalytics(b *builder, c *config.Company, _ map[string]atlas.Ref) {
 	for i, id := range g.Properties {
 		b.account("integrations.google_analytics.properties["+strconv.Itoa(i)+"]", atlas.VendorGoogle,
 			"analytics/"+id, id, "Google Analytics", g.Enabled, atlas.CapabilityAnalytics)
+	}
+}
+
+// googlePlay records each Google Play app the company narrows agents to,
+// keyed by its package name, or the vendor alone where it names none.
+func googlePlay(b *builder, c *config.Company, _ map[string]atlas.Ref) {
+	g := c.Integrations.GooglePlay
+	if g == nil {
+		return
+	}
+	if len(g.Apps) == 0 {
+		b.account("integrations.google_play", atlas.VendorGoogle, "play", "", "Google Play", g.Enabled,
+			atlas.CapabilityAppDelivery)
+		return
+	}
+	for i, app := range g.Apps {
+		b.account("integrations.google_play.apps["+strconv.Itoa(i)+"]", atlas.VendorGoogle, "play/"+app, app,
+			"Google Play", g.Enabled, atlas.CapabilityAppDelivery)
 	}
 }
 

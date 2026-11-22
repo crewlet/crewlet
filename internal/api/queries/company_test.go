@@ -2528,6 +2528,7 @@ func TestEveryIntegrationKindCanBeReported(t *testing.T) {
 	cfg.Integrations.GoogleCloud = &config.GoogleCloud{Enabled: true}
 	cfg.Integrations.GoogleAnalytics = &config.GoogleAnalytics{Enabled: true}
 	cfg.Integrations.GoogleAds = &config.GoogleAds{Enabled: true}
+	cfg.Integrations.GooglePlay = &config.GooglePlay{Enabled: true}
 	cfg.Integrations.SSH = &config.SSH{Enabled: true}
 	cfg.Integrations.AppStoreConnect = &config.AppStoreConnect{Enabled: true}
 

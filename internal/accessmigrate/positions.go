@@ -95,6 +95,7 @@ var desiredKeys = map[seataccess.Lane][]string{
 	seataccess.LaneAppStoreConnect: {"enabled", "level", "apps"},
 	seataccess.LaneGoogleAnalytics: {"enabled", "level", "properties"},
 	seataccess.LaneGoogleAds:       {"enabled", "level", "customers"},
+	seataccess.LaneGooglePlay:      {"enabled", "level", "apps"},
 }
 
 // position is one place a seat named its credential.

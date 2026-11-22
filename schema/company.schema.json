@@ -2645,6 +2645,84 @@
         "null"
       ]
     },
+    "GooglePlay": {
+      "additionalProperties": false,
+      "properties": {
+        "approvers": {
+          "description": "Handles of human seats an agent's publish, spend and admin acts are routed to first. Only an administrator answers one, at a fresh step-up; without approvers every administrator is asked. Optional.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "apps": {
+          "description": "Package names of the apps agents may be given, at most 200. Absent: every app an agent's identity is invited to. Optional.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "developer_accounts": {
+          "description": "Google Play developer account IDs (the digits after /developers/ in a Play Console address), at most 20, whose users and permissions an administer agent may ask to change. Optional.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Turn the integration on. Needs integrations.google_cloud on with its provisioning block, whose identity agents sign in through.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "reports_buckets": {
+          "description": "Each developer account's monthly reports bucket, as Play Console's Download reports page copies it (pubsite_prod_rev_ followed by digits), at most 20. The company reader reads them. Optional.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "GrowthCap": {
       "additionalProperties": false,
       "properties": {
@@ -2937,6 +3015,10 @@
         "google_cloud": {
           "$ref": "#/$defs/GoogleCloud",
           "description": "Google Cloud provisioner service account and federation key, used to create one service account per agent and grant it on the projects prepared for Crewlet. Absent = disabled."
+        },
+        "google_play": {
+          "$ref": "#/$defs/GooglePlay",
+          "description": "Google Play: agents read and manage apps as their own Google growth identity, through the Google Cloud connection's identity, publishing held for an administrator. Absent = disabled."
         },
         "jira": {
           "$ref": "#/$defs/Jira",
@@ -5211,6 +5293,49 @@
         "null"
       ]
     },
+    "RoleGooglePlay": {
+      "additionalProperties": false,
+      "properties": {
+        "apps": {
+          "description": "Package names of the apps this agent may reach, within integrations.google_play.apps when that is set. Required when the agent is on.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Whether this agent may reach Google Play. Off turns its Google growth identity off once no other Google growth product is on for it.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "level": {
+          "description": "read (the default): reviews, listings, releases, products, vitals and reports, nothing changed. operate: also draft releases, halted rollouts, tester groups and draft products made at once, and asks an administrator to approve each reply, listing change, release, price and refund. administer: also asks for user, access, key, deletion and other irreversible changes.",
+          "enum": [
+            "read",
+            "operate",
+            "administer",
+            "",
+            null
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "RoleIntegrations": {
       "additionalProperties": false,
       "properties": {
@@ -5261,6 +5386,10 @@
         "google_cloud": {
           "$ref": "#/$defs/RoleGoogleCloud",
           "description": "This seat's own Google Cloud service account: whether it is on, its level and its projects."
+        },
+        "google_play": {
+          "$ref": "#/$defs/RoleGooglePlay",
+          "description": "This seat's Google Play access: whether it is on, its level and its apps."
         },
         "jira": {
           "$ref": "#/$defs/RoleJira",

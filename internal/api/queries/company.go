@@ -430,6 +430,13 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		add("google_ads", in.GoogleAds.Enabled, nil, map[string]any{
 			"customers": customers, "capped": capped, "roles": growthRoles("google_ads")})
 	}
+	if in.GooglePlay != nil {
+		// NO SECRET: the apps, developer accounts and reports buckets the
+		// company names, and its catalog's permissions with what each allows.
+		add("google_play", in.GooglePlay.Enabled, nil, map[string]any{
+			"apps": nonNil(in.GooglePlay.Apps), "developer_accounts": nonNil(in.GooglePlay.DeveloperAccounts),
+			"reports_buckets": nonNil(in.GooglePlay.ReportsBuckets), "roles": growthRoles("google_play")})
+	}
 	if in.Atlassian != nil {
 		// THE ORGANIZATION, not a third product: where the account itself is
 		// created, which no site API can do. It reconciles identities,
