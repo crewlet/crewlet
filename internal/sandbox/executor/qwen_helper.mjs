@@ -13,7 +13,7 @@
 //     stdout as it came, a line each, with the helper's own lines
 //     (`crewlet_qwen_*`) between them: the stream the runner reads
 //     (qwenstream.go). Stops with session/cancel, never a signal: SIGTERM
-//     tears the chat file Qwen Code is writing (measured on 0.28.3).
+//     tears the chat file Qwen Code is writing (measured on 0.28.4).
 //
 //   node qwen-helper.mjs skill <config>
 //     The PostToolUse hook on the `skill` tool: reports the skill loaded to
@@ -28,7 +28,7 @@
 // note it holds (drain). Qwen Code puts each before the next request as a
 // text framed `\n[User message received during tool execution]: `, and
 // records each in the session's chat file as its own `type:user`, subtype
-// `mid_turn_user_message`, before that request goes out (0.28.3). A note is
+// `mid_turn_user_message`, before that request goes out (0.28.4). A note is
 // confirmed read on the notes route only once the chat file holds that record
 // with its exact text, matched in order (two identical notes need two
 // records), and an assistant record after it, the reply to the request that
@@ -40,7 +40,7 @@ import fs from "node:fs"
 import path from "node:path"
 
 // framing is what Qwen Code puts before a drained message, in the request and
-// in its record (measured on 0.28.3).
+// in its record (measured on 0.28.4).
 const framing = "\n[User message received during tool execution]: "
 
 // limitExit is what the helper exits with where Qwen Code failed the turn on
@@ -296,7 +296,7 @@ class Host {
 
   // chatFile is where Qwen Code records session: its home's projects
   // directory, keyed by the working directory's real path with every
-  // character but a letter or digit made a dash (0.28.3).
+  // character but a letter or digit made a dash (0.28.4).
   chatFile(session) {
     const key = process.cwd().replace(/[^a-zA-Z0-9]/g, "-")
     return path.join(this.config.qwenHome, "projects", key, "chats", session + ".jsonl")
@@ -454,7 +454,7 @@ class Inbox {
 
   // drain is the answer to one ask: every note held, oldest first. Each
   // message of one answer becomes a record of its own holding its exact text,
-  // in order (two in one answer measured on 0.28.3), which is what confirms
+  // in order (two in one answer measured on 0.28.4), which is what confirms
   // it.
   drain() {
     const notes = this.held.splice(0)
