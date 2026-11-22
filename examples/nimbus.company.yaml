@@ -330,7 +330,7 @@ providers:
       #                      on a host others share.
       #
       #   run_in: container  real host isolation. Needs an image carrying
-      #                      the harness harness, and is where a local box
+      #                      the harness, and is where a local box
       #                      is SIZED (run_args takes --cpus/--memory,
       #                      mirroring how a remote box is sized by its
       #                      template):
