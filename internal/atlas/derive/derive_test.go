@@ -1,6 +1,8 @@
 package derive_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"go/build"
 	"slices"
@@ -217,6 +219,97 @@ func TestAnAdMobPublisherAccountIsAnAccount(t *testing.T) {
 	}
 	c.Integrations.AdMob.Accounts = nil
 	find(t, read(c), atlas.KindAccount, "google/admob")
+}
+
+// AN ADSENSE PUBLISHER ACCOUNT IS AN ACCOUNT, keyed by its ID, with the
+// monetization capability; a company that names none holds the vendor alone.
+func TestAnAdSensePublisherAccountIsAnAccount(t *testing.T) {
+	t.Parallel()
+	c := derive.AcmeCompany()
+	c.Integrations.AdSense = &config.AdSense{Enabled: true, Accounts: []string{"pub-1234567890123456"}}
+	account := find(t, read(c), atlas.KindAccount, "google/adsense/pub-1234567890123456")
+	if account.Name != "AdSense" || !slices.Contains(factOf(account, atlas.FactCapability), "monetization") {
+		t.Errorf("the publisher account is %+v", account)
+	}
+	c.Integrations.AdSense.Accounts = nil
+	find(t, read(c), atlas.KindAccount, "google/adsense")
+}
+
+// A GOOGLE ADS ACCOUNT IS AN ACCOUNT, keyed by its customer ID, with the
+// advertising capability; a company that names none holds the vendor alone.
+func TestAGoogleAdsAccountIsAnAccount(t *testing.T) {
+	t.Parallel()
+	c := derive.AcmeCompany()
+	c.Integrations.GoogleAds = &config.GoogleAds{Enabled: true, Customers: []config.GoogleAdsCustomer{{ID: "1234567890"}}}
+	account := find(t, read(c), atlas.KindAccount, "google/ads/1234567890")
+	if account.Name != "Google Ads" || !slices.Contains(factOf(account, atlas.FactCapability), "advertising") {
+		t.Errorf("the customer's account is %+v", account)
+	}
+	c.Integrations.GoogleAds.Customers = nil
+	find(t, read(c), atlas.KindAccount, "google/ads")
+}
+
+// A SEARCH CONSOLE SITE IS AN ACCOUNT, with the analytics capability: a
+// domain property keyed as Search Console writes it, and each URL prefix its
+// own account by its host and a digest of the site, which it carries as its
+// site, so three properties on one host are three accounts whose references
+// join no other Google account the host names; nothing is withheld, and a
+// company that names no site holds the vendor alone.
+//
+// Mutation: key a URL prefix by its host alone, and the three properties are
+// one account whose reference is the bare host.
+func TestASearchConsoleSiteIsAnAccount(t *testing.T) {
+	t.Parallel()
+	c := derive.AcmeCompany()
+	prefixes := []string{"https://www.example.com/", "https://www.example.com/blog/", "http://www.example.com/"}
+	c.Integrations.SearchConsole = &config.SearchConsole{Enabled: true,
+		Sites: append([]string{"sc-domain:example.com"}, prefixes...)}
+	d := derive.FromSettings(c, "r1", derive.AcmeDeployment).Claims(now)
+	for _, w := range d.Withheld {
+		if strings.HasPrefix(w.Where, "integrations.search_console") {
+			t.Errorf("%s was withheld: %s", w.Where, w.Reason)
+		}
+	}
+	v := read(c)
+	domain := find(t, v, atlas.KindAccount, "google/search-console/sc-domain:example.com")
+	if !slices.Equal(factOf(domain, atlas.FactAccountRef), []string{"sc-domain:example.com"}) ||
+		!slices.Contains(factOf(domain, atlas.FactCapability), "analytics") {
+		t.Errorf("the domain property is %+v", domain)
+	}
+	refs := map[string]bool{}
+	for _, site := range prefixes {
+		sum := sha256.Sum256([]byte(site))
+		ref := "www.example.com/" + hex.EncodeToString(sum[:6])
+		account := find(t, v, atlas.KindAccount, "google/search-console/"+ref)
+		said, err := atlas.Parse(atlas.TypeURL, site, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if account.Name != "Search Console" || !slices.Equal(factOf(account, atlas.FactSite), []string{said.Text}) ||
+			!slices.Equal(factOf(account, atlas.FactAccountRef), []string{ref}) {
+			t.Errorf("%s is %+v", site, account)
+		}
+		refs[ref] = true
+	}
+	if len(refs) != len(prefixes) {
+		t.Errorf("three properties on one host are %d accounts", len(refs))
+	}
+	c.Integrations.SearchConsole.Sites = nil
+	find(t, read(c), atlas.KindAccount, "google/search-console")
+}
+
+// A GOOGLE PLAY APP IS AN ACCOUNT, keyed by its package name, with the
+// app_delivery capability; a company that names none holds the vendor alone.
+func TestAGooglePlayAppIsAnAccount(t *testing.T) {
+	t.Parallel()
+	c := derive.AcmeCompany()
+	c.Integrations.GooglePlay = &config.GooglePlay{Enabled: true, Apps: []string{"com.acme.app"}}
+	account := find(t, read(c), atlas.KindAccount, "google/play/com.acme.app")
+	if account.Name != "Google Play" || !slices.Contains(factOf(account, atlas.FactCapability), "app_delivery") {
+		t.Errorf("the app's account is %+v", account)
+	}
+	c.Integrations.GooglePlay.Apps = nil
+	find(t, read(c), atlas.KindAccount, "google/play")
 }
 
 // A TOOL SERVER IS KNOWN BY ITS COMMAND, NEVER ITS ARGUMENTS: an argument is

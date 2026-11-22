@@ -252,6 +252,10 @@ func TestEveryPassThatMintsASeatsCredentialDeclaresItsPlan(t *testing.T) {
 		integration.KindAppleAds:        "no seat holds an Apple Ads key",
 		integration.KindGoogleAnalytics: "no pass mints a seat's Google Analytics credential: its tokens are minted at use",
 		integration.KindAdMob:           "no seat holds an AdMob credential: every call goes as the company's grant",
+		integration.KindAdSense:         "no seat holds an AdSense credential: every call goes as the company's grant",
+		integration.KindGoogleAds:       "no pass mints a seat's Google Ads credential: its tokens are minted at use",
+		integration.KindSearchConsole:   "no pass mints a seat's Search Console credential: its tokens are minted at use",
+		integration.KindGooglePlay:      "no pass mints a seat's Google Play credential: its tokens are minted at use",
 	}
 	e := &Engine{}
 	for _, pass := range e.setupPasses() {
