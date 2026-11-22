@@ -187,17 +187,13 @@ func TestThePollsCarryTheRunsTokenAndAskAgainAfterA503(t *testing.T) {
 }
 
 // A NOTES ROUTE THAT REFUSES THE HELPER ENDS ONLY ITS POLLS: a 401 is a token
-// that no longer resolves, and asking again would ask forever, but the cap
-// and the skill reports go on, since a helper that ended would leave the turn
-// unbounded and its run's guard would stop it. Across a live window after the
-// refusal, a turn in flight and a note waiting on the route, the cap and the
-// skill reports work and the route is asked nothing more: on the case's
-// millisecond pacing, a helper that backed off and asked again would ask many
-// times within the window's round trips, and steer the waiting note.
-//
-// The refusal's one line says note polling has ended, which only the path that
-// ends the polls writes: a loop that logs the refusal and polls on writes the
-// refusal alone, so the case reads the line it awaits rather than a window.
+// that no longer resolves, so asking again would ask forever, but the cap and
+// the skill reports go on, since a helper that ended would leave the turn
+// unbounded. After the refusal, with a turn in flight and a note waiting, the
+// cap and the skill reports work and the route is asked nothing more. The
+// refusal's one line says note polling has ended, which only the path that
+// ends the polls writes (a loop that polls on logs the refusal alone), so the
+// case reads that line rather than a window.
 //
 // Mutation: end the helper on the notes route's refusal, or log it, back off
 // and poll again, and this goes red.
