@@ -54,7 +54,7 @@ func TestAJoinPinsTheTailInTheArtefactsGeneration(t *testing.T) {
 		in := statelog.TrimInputs{
 			Generation: 3, Now: time.Now().UTC(),
 			HoldsReadable: true, HoldStale: statelog.TrimHoldStale,
-			Holds: holdsFor(holds, domain.Stream().Name),
+			Holds: holdsFor(holds, nil, domain.Stream().Name),
 		}
 		var held statelog.Term
 		for _, term := range in.Terms() {
@@ -91,12 +91,12 @@ func joinHolds(t *testing.T, register interface {
 
 // THE JOIN'S PIN RENEWS ITSELF FOR AS LONG AS IT IS HELD, AND NOT AFTER.
 //
-// The trim ignores a hold older than its stale bound (so a crashed holder
-// cannot pin the log for ever), so a pin put once pins nothing a minute into a
-// transfer, and a boot's join, which nothing else counts, could lose the tail
-// it is fetching. The trim is asked at an instant that leaves the first put
-// past the stale bound and the latest renewal inside it: only a renewed pin
-// holds there.
+// The trim ignores a hold whose one write it has watched stand unrenewed past
+// its bound (so a crashed holder cannot pin the log for ever), so a pin put
+// once pins nothing a tick or two into a transfer, and a boot's join, which
+// nothing else counts, could lose the tail it is fetching. A watch lists the
+// first put, then lists again past the bound: the first put alone is read
+// past, and only a renewal, a write of its own, still holds.
 func TestAJoinsPinRenewsItselfUntilReleased(t *testing.T) {
 	t.Parallel()
 	fleet := memory.NewFleet()
@@ -117,36 +117,25 @@ func TestAJoinsPinRenewsItselfUntilReleased(t *testing.T) {
 		t.Fatalf("%d join pin(s) in the register once taken, want one", len(taken))
 	}
 
-	// A RENEWAL A WHOLE STALE BOUND AFTER THE FIRST PUT: 50ms stands in for
-	// the minute, at a millisecond's cadence.
-	const stale = 50 * time.Millisecond
 	var renewed coord.TrimHold
 	waitUntil(t, 10*time.Second, "a renewal of the join's pin", func() bool {
 		holds := joinHolds(t, fleet, "node-join")
-		if len(holds) != 1 || holds[0].At.Sub(taken[0].At) <= stale {
+		if len(holds) != 1 || holds[0].Revision <= taken[0].Revision {
 			return false
 		}
 		renewed = holds[0]
 		return true
 	})
-	// Half the renewal's own age past it: the first put is half as old
-	// again as the bound, and the renewal half as old as it.
-	age := renewed.At.Sub(taken[0].At)
 	for _, domain := range registeredDomains() {
-		in := statelog.TrimInputs{
-			Generation: 1, Now: renewed.At.Add(age / 2),
-			HoldsReadable: true, HoldStale: age,
-			Holds: holdsFor([]coord.TrimHold{renewed}, domain.Stream().Name),
-		}
-		var held statelog.Term
-		for _, term := range in.Terms() {
-			if term.Name == statelog.TermMinHold {
-				held = term
-			}
-		}
-		if !held.Known || held.Seq != 2 {
+		stream := domain.Stream().Name
+		if held := watchedPastTheBound(t, taken[0], renewed, stream); !held.Known || held.Seq != 2 {
 			t.Fatalf("on %s the trim reads the renewed join pin as %+v, want it "+
 				"known at 2", domain.Name(), held)
+		}
+		if held := watchedPastTheBound(t, taken[0], taken[0], stream); held.Seq != statelog.SeqUnbounded {
+			t.Fatalf("on %s the trim reads the first put, watched alone past the "+
+				"bound, as %+v: the premise that an unrenewed pin is read past "+
+				"does not hold, so this case shows nothing", domain.Name(), held)
 		}
 	}
 
@@ -156,6 +145,39 @@ func TestAJoinsPinRenewsItselfUntilReleased(t *testing.T) {
 		t.Fatalf("%d join pin(s) in the register after the release — a renewal "+
 			"that outlives its release puts the pin back for a whole stale window", n)
 	}
+}
+
+// fixedHolds is a register whose listing is fixed.
+type fixedHolds []coord.TrimHold
+
+func (f fixedHolds) Holds(context.Context) ([]coord.TrimHold, error) { return f, nil }
+
+// watchedPastTheBound is the min_hold term on stream of a trim whose watch
+// listed first, then, past [statelog.TrimHoldStale] on its own clock, second.
+func watchedPastTheBound(t *testing.T, first, second coord.TrimHold, stream string) statelog.Term {
+	t.Helper()
+	clock := time.Now()
+	watch := &statelog.HoldWatch{Now: func() time.Time { return clock }}
+	if _, _, err := watch.Read(t.Context(), fixedHolds{first}); err != nil {
+		t.Fatalf("list the first put: %v", err)
+	}
+	clock = clock.Add(statelog.TrimHoldStale + time.Nanosecond)
+	holds, silent, err := watch.Read(t.Context(), fixedHolds{second})
+	if err != nil {
+		t.Fatalf("list again: %v", err)
+	}
+	in := statelog.TrimInputs{
+		Generation: 1, Now: time.Now().UTC(),
+		HoldsReadable: true, HoldStale: statelog.TrimHoldStale,
+		Holds: holdsFor(holds, silent, stream),
+	}
+	for _, term := range in.Terms() {
+		if term.Name == statelog.TermMinHold {
+			return term
+		}
+	}
+	t.Fatal("the trim evaluated no min_hold term")
+	return statelog.Term{}
 }
 
 // AN INSTALLED ARTEFACT'S PIN IS KEPT UNTIL A ROW OF THIS NODE'S OWN COUNTS IT.
@@ -358,7 +380,7 @@ func TestATrimTickSeesAJoinsPinOrTheRowThatReplacedIt(t *testing.T) {
 		Generation: 1, Now: in.at,
 		Counted:         statelog.CountedSet(in.at, reportedPositions(in.positions, name), nil, nil),
 		CountedReadable: in.readable,
-		Holds:           holdsFor(in.holds, stream), HoldsReadable: true,
+		Holds:           holdsFor(in.holds, in.silent, stream), HoldsReadable: true,
 		HoldStale: statelog.TrimHoldStale,
 	}
 	kept := statelog.SeqUnbounded

@@ -60,9 +60,9 @@ type TailPin struct {
 // HoldTail writes a pin on the replay tail and renews it every spec.Every
 // until [TailPin.Release].
 //
-// The trim ignores a hold older than [TrimHoldStale] so a crashed holder
-// cannot pin the log forever, and so reads an unrenewed pin as crashed: a
-// transfer running for hours would lose its tail. Every holder (a backup, a
+// The trim ignores a hold it has watched go unrenewed past [TrimHoldStale], so
+// a crashed holder cannot pin the log forever, and so reads an unrenewed pin as
+// crashed: a transfer running for hours would lose its tail. Every holder (a backup, a
 // join) shares this one renewal. It belongs to the pin, not to ctx, since a
 // join's pin outlives the call that took it ([AdoptDeps.Hold]); the release
 // joins its goroutine. A refused renewal is logged and carried (the stale
@@ -75,8 +75,8 @@ func HoldTail(ctx context.Context, spec TailHold) (*TailPin, error) {
 			"register to be written to")
 	case spec.Every <= 0:
 		return nil, fmt.Errorf("statelog: a pin on the replay tail renewed every "+
-			"%s is never renewed, and the trim ignores it once it is older than "+
-			"%s — pass statelog.TrimHoldHeartbeat", spec.Every, TrimHoldStale)
+			"%s is never renewed, and the trim ignores it once it has watched it "+
+			"go unrenewed past %s — pass statelog.TrimHoldHeartbeat", spec.Every, TrimHoldStale)
 	}
 	now := spec.Now
 	if now == nil {
@@ -108,7 +108,7 @@ func HoldTail(ctx context.Context, spec TailHold) (*TailPin, error) {
 				if err := put(beat); err != nil && beat.Err() == nil {
 					pin.log.WarnContext(beat, "statelog_hold_not_renewed",
 						"owner", spec.Owner, "error", err.Error(),
-						"detail", "the trim ignores a pin older than "+
+						"detail", "the trim ignores a pin it has watched go unrenewed past "+
 							TrimHoldStale.String()+", so a pin that misses three "+
 							"renewals in a row stops protecting the tail its "+
 							"holder needs; the next beat tries again")
@@ -134,7 +134,7 @@ func (p *TailPin) Release() {
 		if err := p.register.ReleaseHold(p.base, p.owner); err != nil {
 			p.log.WarnContext(p.base, "statelog_hold_not_released",
 				"owner", p.owner, "error", err.Error(),
-				"detail", "the trim ignores it once it is older than "+
+				"detail", "the trim ignores it once it has watched it go unrenewed past "+
 					TrimHoldStale.String()+", so this delays trimming rather "+
 					"than stopping it")
 		}
