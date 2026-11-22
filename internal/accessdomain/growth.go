@@ -321,6 +321,31 @@ func GrowthOf(step growth.Step, r growth.Record) NewGrowth {
 	return n
 }
 
+// GrowthUnrecordedField is the change that counts the fields a record leaves
+// out ([RecordableGrowthChanges]).
+const GrowthUnrecordedField = "unrecordedFields"
+
+// RecordableGrowthChanges is changes as the log takes them: a field it may not
+// name (a person's data, a credential), or one past [MaxGrowthChanges], is
+// left out and counted in one last change, so a product's record of an act
+// lands whatever the vendor's fields are called.
+func RecordableGrowthChanges(changes []growth.RecordChange) []growth.RecordChange {
+	out := make([]growth.RecordChange, 0, len(changes))
+	left := 0
+	for _, c := range changes {
+		if !GrowthFieldRecordable(c.Field) || len(out) == MaxGrowthChanges-1 {
+			left++
+			continue
+		}
+		out = append(out, c)
+	}
+	if left > 0 {
+		out = append(out, growth.RecordChange{Field: GrowthUnrecordedField, Label: "Fields left out",
+			After: strconv.Itoa(left)})
+	}
+	return out
+}
+
 // GrowthFieldRecordable reports whether a growth record may name field: a
 // vendor field's path that names neither a person's data nor a credential.
 func GrowthFieldRecordable(field string) bool { return checkGrowthField(field) == nil }
