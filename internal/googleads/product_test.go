@@ -100,7 +100,8 @@ type fakeAds struct {
 	// the access log says they came to.
 	batchOps int
 	staged   growth.Class
-	// brokenCustomer answers the customer's own search with what is no JSON.
+	// brokenCustomer answers the customer's own search in a shape no search
+	// answer has.
 	brokenCustomer bool
 }
 
@@ -167,7 +168,7 @@ func (f *fakeAds) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case strings.HasSuffix(r.URL.Path, "/googleAds:search") && f.brokenCustomer && strings.Contains(query, "FROM customer"):
-		_, _ = w.Write([]byte("not json"))
+		_, _ = w.Write([]byte(`{"results": "no rows"}`))
 	case strings.HasSuffix(r.URL.Path, "/googleAds:search"):
 		answer(map[string]any{"results": f.search(query)})
 	case strings.HasSuffix(r.URL.Path, ":listPlannableUserLists"):
@@ -252,10 +253,11 @@ func (f *fakeAds) search(q string) []any {
 // one account, reached through its manager, capped at 50.00 a change and
 // 200.00 a day.
 type world struct {
-	p     *googleads.Product
-	f     *fakeAds
-	audit *fakeAudit
-	held  int
+	p       *googleads.Product
+	f       *fakeAds
+	audit   *fakeAudit
+	held    int
+	company *config.Company
 }
 
 func newWorld(t *testing.T) *world {
@@ -301,7 +303,7 @@ roles:
 	audit := &fakeAudit{}
 	p := googleads.New(func() *config.Company { return company }, func() *config.Resolver { return env },
 		fakeTokens{}, audit, &leases{f: f}, f, &http.Client{Transport: httpxtest.Rewrite(t, srv)})
-	return &world{p: p, f: f, audit: audit}
+	return &world{p: p, f: f, audit: audit, company: company}
 }
 
 // aboveTool is the framework's refusal of a change above its tool's class.
@@ -717,6 +719,36 @@ func TestAnUnreadableSearchIsNoUnknownOutcome(t *testing.T) {
 	defer w.audit.mu.Unlock()
 	last := w.audit.recs[len(w.audit.recs)-1]
 	if w.audit.steps[len(w.audit.steps)-1] != growth.StepFailed || last.Failure != growth.FailureVendorUnavailable ||
+		w.f.writes != 0 {
+		t.Errorf("the apply is recorded %s %q after %d writes", w.audit.steps[len(w.audit.steps)-1], last.Failure,
+			w.f.writes)
+	}
+}
+
+// A SEAT'S ACCOUNTS ARE HELD AGAIN UNDER THE LEASE: an approved raise on an
+// account taken off the seat since it was asked sends nothing, and fails as
+// the seat's access lowered.
+//
+// Mutation: hold the call to the seat's accounts only when it is asked, and
+// the approval is made on an account the seat no longer reaches.
+func TestASeatsAccountsAreHeldAgainWhenAnApprovalIsMade(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	call := growth.Call{Handle: "growth-lead", Tool: "google_ads_set_budget",
+		Args: map[string]any{"budget": budget1, "amount": "120.00"}}
+	hold, err := w.p.Prepare(t.Context(), call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.company.Roles[0].Integrations.GoogleAds.Customers = []string{"9999999999"}
+	call.HeldCall, call.Approver = "held-1", "founder"
+	if _, err := w.p.Apply(t.Context(), call, hold.Binding); !refused(err) {
+		t.Fatalf("an approval on an account the seat lost answered %v", err)
+	}
+	w.audit.mu.Lock()
+	defer w.audit.mu.Unlock()
+	last := w.audit.recs[len(w.audit.recs)-1]
+	if w.audit.steps[len(w.audit.steps)-1] != growth.StepFailed || last.Failure != growth.FailureAccessLowered ||
 		w.f.writes != 0 {
 		t.Errorf("the apply is recorded %s %q after %d writes", w.audit.steps[len(w.audit.steps)-1], last.Failure,
 			w.f.writes)
