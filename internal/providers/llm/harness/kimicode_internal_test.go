@@ -99,13 +99,16 @@ func TestKimiCodeNeverHandsItsHarnessAnAgentFileWithNoBody(t *testing.T) {
 	}
 }
 
-// NOTHING A CALL WRITES ABOUT ITSELF OUTLIVES IT. Measured on both builds,
-// every call left in the seat's home its session (whose wire log carries the
-// prompts and tool results), an entry in the session index, its logs, an entry
-// in `workspaces.json` naming its directory — never removed by the harness, so the
-// registry grew by one per call — and, with the vendor's telemetry on, a
-// `telemetry` queue of events kept for the next start to send. Telemetry is
-// off, so the queue is never made, and every one of them is pruned.
+// NOTHING A CALL WRITES ABOUT ITSELF OUTLIVES IT. Measured on 2.7.2, every
+// call left in the seat's home its session (whose wire log carries the prompts
+// and tool results), an entry in the session index, its logs, an entry in
+// `projects.json` naming its directory (never removed by the harness, so the
+// registry grew by one per call) and the registry's lock file, and, with the
+// vendor's telemetry on, a `telemetry` directory for the events kept for the
+// next start. Telemetry is off, so it is never made, and every one is pruned.
+//
+// Mutation: drop projects.json from volatile_paths, and every call's
+// directory stays named in the seat's home.
 func TestKimiCodeKeepsNothingOfACallInItsHome(t *testing.T) {
 	t.Parallel()
 	p := kimiCode(t)
@@ -113,7 +116,8 @@ func TestKimiCodeKeepsNothingOfACallInItsHome(t *testing.T) {
 		".kimi-code/sessions",
 		".kimi-code/session_index.jsonl",
 		".kimi-code/logs",
-		".kimi-code/workspaces.json",
+		".kimi-code/projects.json",
+		".kimi-code/.projects-write-lock",
 		".kimi-code/telemetry",
 	} {
 		if !slices.Contains(p.VolatilePaths, want) {
