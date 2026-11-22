@@ -126,24 +126,25 @@ func catalog() growth.Catalog {
 	}
 }
 
-// Scopes per seat level, for the growth identity's registration: the
-// narrowest each level calls with. Each call mints the scopes its operation
-// names, within these.
-func levelScopes() map[string][]string {
-	return map[string][]string{
-		string(growth.LevelRead):       {scopeReadonly, scopeEdit, scopeUsersRead, scopeChatbot},
-		string(growth.LevelOperate):    {scopeReadonly, scopeEdit, scopeUsersRead, scopeChatbot},
-		string(growth.LevelAdminister): {scopeReadonly, scopeEdit, scopeUsersRead, scopeUsers, scopeChatbot},
-	}
-}
+// The registration's lists, laid out by the compiler rather than made at
+// init, which every push's hook pays for: the APIs, the narrowest scopes each
+// seat level calls with (each call mints the scopes its operation names,
+// within these), and the company reader's.
+var (
+	analyticsAPIs = []string{"analyticsdata.googleapis.com", "analyticsadmin.googleapis.com"}
+	operateScopes = []string{scopeReadonly, scopeEdit, scopeUsersRead, scopeChatbot}
+	adminScopes   = []string{scopeReadonly, scopeEdit, scopeUsersRead, scopeUsers, scopeChatbot}
+	readerScopes  = []string{scopeReadonly}
+)
 
 func init() {
 	growth.RegisterFunc(string(Kind), catalog)
 	googleauth.Register(googleauth.Product{
-		Kind: Kind, Name: "Google Analytics",
-		APIs:         []string{"analyticsdata.googleapis.com", "analyticsadmin.googleapis.com"},
-		Scopes:       levelScopes(),
-		ReaderScopes: []string{scopeReadonly},
-		On:           func(c *config.Company) bool { return c.Integrations.GrowthEnabled(string(Kind)) },
+		Kind: Kind, Name: "Google Analytics", APIs: analyticsAPIs, ReaderScopes: readerScopes, On: enabled,
+		Scopes: map[string][]string{string(growth.LevelRead): operateScopes,
+			string(growth.LevelOperate): operateScopes, string(growth.LevelAdminister): adminScopes},
 	})
 }
+
+// enabled reports whether c turns Google Analytics on.
+func enabled(c *config.Company) bool { return c.Integrations.GrowthEnabled(string(Kind)) }

@@ -17,6 +17,7 @@
       "qwen-code",
       "opencode",
       "copilot",
+      "muse-code",
       "kimi-code"
     ],
     "topology.coordination": [

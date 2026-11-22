@@ -38,9 +38,16 @@
 // before-state. [Client.Apply] records the administrator's answer first and
 // acts only on the act's one answer; then, under the account's apply lease
 // and within growth.ApplyBound, it reads the target again and sends nothing
-// where the digest moved, recording the outcome: applied, void, or failed
-// with a closed reason. A write that went unanswered may have reached Google,
-// so its outcome is unknown, never "unavailable" ([FailureOf]).
+// where the digest moved or the product's last check refuses it (a spend's
+// caps), recording the outcome: applied, void, or failed with a closed
+// reason. A write that went unanswered may have reached Google, so its
+// outcome is unknown, never "unavailable" ([FailureOf]).
+//
+// A call that says a change to its target rather than the whole of it (an
+// owner added to a list Google takes whole) is made from the before-state the
+// binding holds ([Request.Shape]): read once, under the lease, so no other
+// change is overwritten, and a state the change no longer applies to is a
+// target that moved, void rather than failed.
 //
 // # Every act on the access log
 //
@@ -69,6 +76,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"net/http"
 	"net/url"
 	"reflect"
 	"regexp"
@@ -91,6 +99,9 @@ type Request struct {
 	Query   url.Values
 	// Params are the path parameters the call gave, by name.
 	Params map[string]string
+	// Header is what the API asks beyond the engine's own headers: Google
+	// Ads' login-customer-id, naming the manager an account is reached through.
+	Header http.Header
 	// Account is set by the product: "properties/123", a site, a customer;
 	// "" where the call acts in none, and the log then names its target.
 	Account string
@@ -101,6 +112,15 @@ type Request struct {
 	// on its target: for an update mask that is not the body's field names
 	// (a map entry's key, a snake_case path). Nil reads the mask ([Request.Changes]).
 	Diff func(before map[string]any) []growth.Change
+	// Raw marks a method answering google.api.HttpBody (a CSV report): its
+	// answer is {"contentType", "data"}, data the bytes Google sent as text.
+	Raw bool
+	// Shape makes the request sent from its target's before-state, where the
+	// call says a change to the target rather than the whole of it (owners
+	// added and removed, sent as the whole list), so the change is built on
+	// the state its approval binds; nil sends the request as built. A refusal
+	// is a state the change does not apply to.
+	Shape func(before []byte) (Request, error)
 }
 
 // pathParam is one `{name}` of an operation's path.
@@ -326,9 +346,11 @@ func (r Request) Digest(before []byte) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// Subject names what the request decides, for joining one seat's repeats.
+// Subject names what the request decides, for joining one seat's repeats:
+// its operation, its address and the account it acts in, which an address
+// alone does not always name (a site given in the body).
 func (r Request) Subject(kind string) string {
-	sum := sha256.Sum256([]byte(kind + "\x00" + r.Op.ID + "\x00" + r.Address))
+	sum := sha256.Sum256([]byte(kind + "\x00" + r.Op.ID + "\x00" + r.Address + "\x00" + r.AccountOrTarget()))
 	return hex.EncodeToString(sum[:])
 }
 
