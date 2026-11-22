@@ -4315,8 +4315,8 @@ qualifying where those three prompt parts are above zero and it ended on no
 error) and its estimate of every message after it, the reply's own tool
 results among them, at a rounded quarter of each one's UTF-16 length,
 restarted at its newest completed compaction. Read in the shipped code of
-2.3.2 and measured at its default limit's boundary; the other boundaries are
-untested on 2.3.2.
+2.3.2, and measured on it: every boundary its point predicts split there, one
+token apart.
 
 **The count.** The engine bounds that count from above off the session's
 export, at both places one is read whole: the take's meter, over the archive
@@ -4630,10 +4630,10 @@ stated and not bridged.
 the on-demand pack's own export, made by a private OpenCode process
 (`--standalone`) beside the run's server and never through it, since that
 server's address and password are the run's script's alone. Every release
-measured opens its database in WAL mode with a five-second busy timeout, and a
-standalone probe and export complete beside a server live, stopped mid-step or
-killed, and beside one writing small session rows, 17 to 22 saves in 30 s
-with none failed on either side (untested on 2.3.2). A save
+measured opens its database in WAL mode with a five-second busy timeout, and on
+2.3.2 a standalone probe and export complete beside a server writing small
+session rows, 7 to 8 saves in 30 s on a loaded 2-core slot with none failed on
+either side (beside one stopped mid-step or killed, untested on 2.3.2). A save
 holds the session's settled messages: the step in flight is absent, and its
 calls lie past any point the save states. Every standalone call runs with the
 models fetch and the updater off and loopback first in `NO_PROXY`, which

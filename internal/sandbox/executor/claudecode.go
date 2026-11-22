@@ -1106,6 +1106,12 @@ func (ClaudeCode) Continues(box, writer string) (bool, string) {
 	return true, ""
 }
 
+// Writes reports whether a session Claude Code release writer wrote is one a
+// box continues: the writer at or after [claudeCarriedWriterFloor] ([carrier]).
+func (ClaudeCode) Writes(writer string) (bool, string) {
+	return ClaudeCode{}.Continues("", writer)
+}
+
 // claudeSwitchesOff is every variable that starts Claude Code without the hooks
 // and the bridge its run is given: bare mode (CLAUDE_CODE_SIMPLE) drops every
 // hook, CLAUDE.md, subagents and a plan's login; safe mode (CLAUDE_CODE_SAFE_MODE)

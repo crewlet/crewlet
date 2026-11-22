@@ -192,8 +192,7 @@ func TestTheHighestDocumentsBufferMovesThePoint(t *testing.T) {
 
 // THE SHARE. With no buffer, OpenCode holds back the larger of fifteen
 // hundredths of the limit and 16,000 tokens once the limit is twice that
-// (read in 2.3.2's bundle, measured at its default limit's boundary); a
-// limit under 32,000 holds back the
+// (measured at its boundaries on 2.3.2); a limit under 32,000 holds back the
 // share alone.
 //
 // Mutation: take a tenth, or hold back 16,000 under 32,000, and a case goes
@@ -398,14 +397,16 @@ func TestTheBoxsSourcesAreSizedOnlyInItsOwnBox(t *testing.T) {
 }
 
 // EACH SOURCE IS CHARGED AT LEAST ITS RENDER. In the box that holds the copy,
-// OpenCode hands a changed skill list (untested on 2.3.2) an entry per skill whose id and
-// name are both its listed name ([sandbox.Skill.Listed]), and a changed day
-// and environment their lines, the working directory twice and the box's
-// temporary folder once ([openCodeRendered]); the charge of each is at least
-// that render.
+// OpenCode 2.3.2 hands a changed skill list an entry per skill whose id and
+// name are both its listed name ([sandbox.Skill.Listed]), a server's
+// instructions an entry, and a changed day and environment their lines, the
+// working directory twice and the box's temporary folder once, the text
+// inside each entry XML-escaped ([openCodeRendered]); the charge of each is
+// at least that render.
 //
-// Mutation: charge a skill entry by its name or its description alone, or
-// drop the date's and the environment's charge, and a case goes red.
+// Mutation: charge a skill entry by its name or its description alone, charge
+// a description or a server's instructions unescaped, or drop the date's and
+// the environment's charge, and a case goes red.
 func TestEachSourceIsChargedAtLeastItsRender(t *testing.T) {
 	t.Parallel()
 	models := modelsAnswer(pointModel{provider: "stub", model: "m", context: 200000})
@@ -420,11 +421,20 @@ func TestEachSourceIsChargedAtLeastItsRender(t *testing.T) {
 		return got.BoxBytes
 	}
 	first := sandbox.Skill{Name: "deploy", Description: "how to deploy"}
-	second := sandbox.Skill{Name: "release-the-nightly-build", Description: "cut it"}
-	entry := fmt.Sprintf(openCodeRendered.skill, second.Listed(), second.Listed(), second.Description)
+	second := sandbox.Skill{Name: "release-the-nightly-build", Description: "cut " + strings.Repeat("<it> & ", 8)}
+	escape := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace
+	entry := fmt.Sprintf(openCodeRendered.skill, escape(second.Listed()), escape(second.Listed()),
+		escape(second.Description))
 	if got := charge(sandbox.RunSources{Skills: []sandbox.Skill{first, second}}) -
 		charge(sandbox.RunSources{Skills: []sandbox.Skill{first}}); got < int64(len(entry)) {
 		t.Errorf("a skill whose entry renders %d bytes is charged %d", len(entry), got)
+	}
+	said := "Use acme for " + strings.Repeat("<deploys> & ", 8) + "\nSecond line."
+	server := fmt.Sprintf(openCodeRendered.server, "acme", "acme",
+		strings.ReplaceAll(escape(said), "\n", "\n    "))
+	if got := charge(sandbox.RunSources{Guidance: map[string]string{"base": "b", "acme": said}}) -
+		charge(sandbox.RunSources{Guidance: map[string]string{"base": "b"}}); got < int64(len(server)) {
+		t.Errorf("a server whose entry renders %d bytes is charged %d", len(server), got)
 	}
 	system := "The instructions changed:\nInstructions from: " + paths.System() + "\n" +
 		finalSystem("", paths, nil) + "\n"
@@ -436,20 +446,20 @@ func TestEachSourceIsChargedAtLeastItsRender(t *testing.T) {
 	}
 }
 
-// openCodeRendered is how OpenCode renders a skill entry (untested on 2.3.2), the day and
-// the environment, as a probe's request carries them in its system message,
-// the day at its longest, each change after the line its code opens one with
-// (`Today's date is now:`, `The environment you are running in is now:`).
-var openCodeRendered = struct{ skill, date, environment string }{
-	skill: "  <skill>\n    <id>%s</id>\n    <name>%s</name>\n    <description>%s</description>\n" +
-		"  </skill>\n",
-	date: "Today's date is now:\nToday's date: Wed Sep 30 2026\n",
-	environment: "The environment you are running in is now:\n<env>\n  Working directory: %s\n" +
+// openCodeRendered is how OpenCode 2.3.2 renders a skill entry, a server's
+// entry, the day and the environment in a continued session's update, as a
+// probe's request carried them, the day at its longest. The catalog of a
+// server's Code Mode tools, which 2.3.2 renders beside its entry, is not here.
+var openCodeRendered = struct{ skill, server, date, environment string }{
+	skill: "  &lt;skill&gt;\n    &lt;id&gt;%s&lt;/id&gt;\n    &lt;name&gt;%s&lt;/name&gt;\n" +
+		"    &lt;description&gt;%s&lt;/description&gt;\n  &lt;/skill&gt;\n",
+	server: "  &lt;server name=\"%s\"&gt;\n    Use tools from this server through `execute` under " +
+		"`tools[\"%s\"]`.\n    %s\n  &lt;/server&gt;\n",
+	date: "Today's date is now: Wed Sep 30 2026\n",
+	environment: "The environment you are running in is now:\n&lt;env&gt;\n  Working directory: %s\n" +
 		"  Workspace root folder: %s\n  Is directory a git repo: yes\n  Platform: linux\n  Prefer %s over " +
 		"generic system temporary directories such as /tmp; it is pre-created and approved for external " +
-		"access.\n</env>\nWhen you create a worktree outside the current working directory and intend to use " +
-		"it as your primary working directory, consider using `execute` to call `tools.opencode.session_move` " +
-		"and make the worktree the session's working directory.\n",
+		"access.\n&lt;/env&gt;\n",
 }
 
 // THE READ KEEPS NO VALUE IT WAS HANDED. config.get answers a document's

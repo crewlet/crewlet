@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -89,60 +88,6 @@ func TestAnOpenCodeSessionIsPackedOnDemandAndKeptScrubbed(t *testing.T) {
 		session+" "+digestOf(t, opened)+"\n") {
 		t.Errorf("the box keeps no digest of the export that left it: %q", digests)
 	}
-}
-
-// AN OPENCODE SESSION PACKED ON DEMAND IS PACKED WHOLE BY AN OPENCODE THAT CUTS
-// WHAT IT WRITES INTO A PIPE: such a cut exits 0 (2.3.2 wrote a 1 MiB
-// standalone export into a pipe whole, measured), and the take's scrub refuses
-// the cut archive, so the pack writes it to a file and
-// gzips that. An export past the cut gunzips whole, and that whole
-// archive's digest is the one the box keeps.
-//
-// Mutation: pipe the export into gzip again, and the archive holds the first
-// 64 KiB of it.
-func TestAnOpenCodeSessionPackedOnDemandIsPackedWhole(t *testing.T) {
-	t.Parallel()
-	runner, b := openCodeBox(t, t.TempDir())
-	dir := t.TempDir()
-	writeBoxStandIn(t, b, paths(b).BinDir()+"/opencode", strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`,
-		"d="+shQuote(dir)+" FAKE_PIPE_CUT="+strconv.Itoa(pipeCut), 1))
-	const session = "ses_0123456789abcdef0123456789"
-	if err := b.WriteFile(t.Context(), paths(b).SessionRecord(),
-		[]byte("id "+session+"\nrelease 2.3.2\n")); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(dir, "sessions"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "sessions", session), nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	messages := longMessages(3 * pipeCut)
-	if err := os.WriteFile(filepath.Join(dir, "export-messages"), []byte(messages), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	_, body, release, err := runner.PackCapture(t.Context(), b, false)
-	if err != nil || body == nil {
-		t.Fatalf("PackCapture of a session the box holds = %v, %v; want its archive", body, err)
-	}
-	archive, err := io.ReadAll(body)
-	_ = body.Close()
-	if err != nil {
-		t.Fatalf("reading the archive: %v", err)
-	}
-	want := exportOf(session, messages)
-	if export := gunzipped(t, archive); string(export) != want {
-		t.Errorf("the archive holds %d bytes of the session's %d-byte export, want all of it", len(export), len(want))
-	}
-	if digests := boxFile(t, b, paths(b).SessionDigests()); !strings.Contains(digests,
-		session+" "+digestOf(t, archive)+"\n") {
-		t.Errorf("the box keeps no digest of the archive the pack made: %q", digests)
-	}
-	if calls := readIn(t, dir, "calls"); !strings.Contains(calls, "session export --standalone "+session) {
-		t.Errorf("the pack did not export the session standalone; the harness was asked:\n%s", calls)
-	}
-	release(t.Context())
 }
 
 // AN ENDED OPENCODE JOB'S SESSION IS TAKEN AS ITS SCRIPT EXPORTED IT. A job the

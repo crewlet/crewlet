@@ -636,10 +636,10 @@
 // An OpenCode save is the pack on demand's own export ([openCodePackNow])
 // through a private server (`--standalone`), beside the run's own, which only
 // the run's script reaches. Every release opens its database in WAL mode with
-// a five-second busy timeout, and a standalone probe and export complete
-// beside a server live, stopped mid-step or killed, and beside one answering
-// its own small writes, 17 to 22 saves in 30 s with none failed and the
-// slowest at 2.6 s (untested on 2.3.2). A save holds the
+// a five-second busy timeout. On 2.3.2 a standalone probe and export complete
+// beside a server answering its own small writes, 7 to 8 saves in 30 s with
+// none failed and the slowest at 5.8 s on a loaded 2-core slot (measured;
+// beside one stopped mid-step or killed, untested). A save holds the
 // session to its last settled message: the step in flight is absent, and its
 // calls are the job's own, told past any point the save states. Every
 // standalone call runs with the models fetch and the updater off and loopback
@@ -654,19 +654,19 @@
 // ONE AT A TIME IN A NODE'S OWN MEMORY, AND WAITING FOR ROOM. An export peaks
 // at up to about ten times its session. Measured as the process's own VmHWM
 // beside a live server, less 90 MiB, over the database's bytes and its WAL's
-// (untested on 2.3.2):
+// (2.3.2):
 //
-//	ASCII only: 3.9 to 4.8; 64 MiB peaks at 347 to 404 MiB,
-//	  200 MiB at 881 to 890 MiB
-//	mixed non-ASCII text in every text part: 6.6 to 7.3; 79 MiB at
-//	  616 MiB
+//	ASCII only: 3.4 to 4.7; 64 MiB peaks at 331 to 391 MiB,
+//	  200 MiB at 881 MiB
+//	mixed non-ASCII text in every text part: 6.5 to 6.6; 75 MiB at
+//	  579 MiB
 //	a character past Latin-1 in every string, or a dash past ASCII in every
-//	  text part: 8.5 to 10.9, and between 16 and 64 MiB a
-//	  slope of 7.5 to 9.7 with intercepts of 93 to 138 MiB; 64 MiB at 701 to
-//	  731 MiB
+//	  text part: 8.4 to 9.8, and between 16 and 64 MiB a
+//	  slope of 7.6 to 8.6 with intercepts of 105 to 125 MiB; 66 MiB at 645 to
+//	  693 MiB
 //
-// The export takes 0.4 to 5.2 s at 16 to 64 MiB, and 2.7 to 3.0 s at 200 MiB
-// of ASCII. So a save in a box that shares the node's memory takes the node's
+// The export takes 0.8 to 14.8 s at 16 to 64 MiB (most for 70,000 small
+// messages), and 3.8 s at 200 MiB of ASCII. So a save in a box that shares the node's memory takes the node's
 // one pack slot (internal/sandbox's Coordinator), and every save first reads
 // its box's room ([openCodeSaveRoom]): its memory domain's limit less what its
 // kernel cannot reclaim, capped by MemAvailable. A save whose need, twelve
@@ -940,14 +940,14 @@
 // imported first, as the run's script imports it before its server reads a
 // provider's credential; `opencode --version` where the launch has no
 // release; `api model.list` and `api config.get` each answered into a file,
-// since a pipe can cut OpenCode's output at a 64 KiB multiple; and a
+// read back apart from the exec's own lines; and a
 // listing of every plugin folder a release of the set reads. Each answer is
 // held to 4 MiB and removed from the box once read: config.get answers a
 // document's references resolved, so nothing it answered is logged or kept
 // but the values the point is decided by and the plugins' names.
 //
-// THE POINT ([openCodePointAt]), read in 2.3.2's code, measured at its default
-// limit's boundary: the model's limit (the smaller of its input and context
+// THE POINT ([openCodePointAt]), read in 2.3.2's code and measured at its
+// boundaries: the model's limit (the smaller of its input and context
 // limits, else its input limit, else its context limit), less a buffer the
 // highest document sets below it (tokens, or a `"N%"` share), else less the
 // larger of fifteen hundredths of it and 16,000 tokens once the limit is

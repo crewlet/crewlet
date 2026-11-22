@@ -310,8 +310,8 @@ func TestAReleaseOutsideTheSetIsNoCount(t *testing.T) {
 	}
 }
 
-// THE OPENCODE SET IS THE RELEASE PROBED: exactly 2.3.2, whose point was read
-// in its shipped code and measured at its default limit's boundary, read as the box names
+// THE OPENCODE SET IS THE RELEASE PROBED: exactly 2.3.2, whose rules were read
+// in its shipped code and measured at their boundaries, read as the box names
 // it, blanks trimmed, and no release beside it.
 //
 // Mutation: add a second release, and this goes red.

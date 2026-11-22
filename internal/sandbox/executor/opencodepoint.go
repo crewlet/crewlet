@@ -39,23 +39,24 @@ const openCodePointCleanupWait = 10 * time.Second
 
 // The share of a model's limit OpenCode holds back below its point where no
 // buffer is set, and the floor it holds back at least once the limit is twice
-// it (read in 2.3.2's bundle, measured at its default limit's boundary).
+// it (read in 2.3.2's bundle, measured at its boundaries on 2.3.2).
 const (
 	openCodeShare      = 0.15
 	openCodeShareFloor = 16000
 )
 
 // The bytes of OpenCode's renders the read charges beside what each renders
-// whole (untested on 2.3.2: the headers of a changed, added or removed
-// instruction, a list's preamble and its replacement sentence, a skill's entry
-// tags beside its listed name twice, a server's entry beside its name twice in
-// its Code Mode line, the date's line, the environment block beside its
-// working directory twice and the box's home), each rounded up past the
-// longest. What no constant bounds is the package doc's to say.
+// whole, measured on 2.3.2 in a continued session's update: the headers of a
+// changed instruction, a list's preamble, a skill's escaped entry tags (133)
+// beside its listed name twice, a server's entry beside its name twice, the
+// date's line, the environment block beside its working directory twice and
+// the box's home, each rounded up past the longest. Text inside an entry is
+// XML-escaped ([openCodeEscapedLen]). What no constant bounds is the package
+// doc's to say.
 const (
 	openCodeInstructionHeader = 64
 	openCodeListHeader        = 1024
-	openCodeSkillEntry        = 96
+	openCodeSkillEntry        = 160
 	openCodeServerEntry       = 128
 	openCodeDateBytes         = 64
 	openCodeEnvironmentBytes  = 1024
@@ -115,8 +116,9 @@ func (OpenCode) readBoxPoint(ctx context.Context, box sandbox.Sandbox,
 
 // openCodePointScript is the one exec the read runs ([Runner.ReadBoxPoint]):
 // the login imported where the box holds one, the release asked where the
-// launch has none, model.list and config.get each answered into a file (a
-// pipe can cut OpenCode's output at a 64 KiB multiple), the plugin
+// launch has none, model.list and config.get each answered into a file (the
+// exec's stdout carries the read's own lines, and each answer is read back
+// apart, held to its bound), the plugin
 // folders listed, and in the box that holds the session's copy the sizes of
 // the instruction files OpenCode may hand it. Every line it prints is the
 // read's: `status`, `cwd`, `dir`, `plugin`, `walk`, `instr`.
@@ -379,17 +381,25 @@ func openCodeBoxBytes(sources sandbox.RunSources, listing pointListing, paths Pa
 	if len(sources.Skills) > 0 {
 		total += openCodeListHeader
 		for _, skill := range sources.Skills {
-			total += openCodeSkillEntry + int64(2*len(skill.Listed())+len(skill.Description))
+			total += openCodeSkillEntry + 2*openCodeEscapedLen(skill.Listed()) + openCodeEscapedLen(skill.Description)
 		}
 	}
 	if len(sources.Guidance) > 0 {
 		total += openCodeListHeader
 		for server, said := range sources.Guidance {
-			total += openCodeServerEntry + int64(2*len(server)+len(said)+4*(strings.Count(said, "\n")+1))
+			total += openCodeServerEntry + int64(2*len(server)+4*(strings.Count(said, "\n")+1)) +
+				openCodeEscapedLen(said)
 		}
 	}
 	return total + openCodeDateBytes + openCodeEnvironmentBytes + 2*int64(len(listing.cwd)) +
 		int64(len(paths.Home))
+}
+
+// openCodeEscapedLen is the bytes text renders to inside an entry of a
+// session's update: OpenCode 2.3.2 escapes `<` and `>` (four bytes each) and
+// `&` (five), and leaves quotes as they are (measured).
+func openCodeEscapedLen(text string) int64 {
+	return int64(len(text) + 3*strings.Count(text, "<") + 3*strings.Count(text, ">") + 4*strings.Count(text, "&"))
 }
 
 // pointListing is the lines the read's script printed ([openCodePointScript]).

@@ -326,9 +326,8 @@ func (r *Runner) Restores(archive sandbox.SessionArchive) (bool, string) {
 		return false, fmt.Sprintf("the session's archive is format %d, and this build restores %s's "+
 			"format %d alone", archive.Format, r.harness.Name(), carries.ArchiveFormat())
 	}
-	// THE WRITER'S FLOOR ALONE: a box release that cannot be read is taken
-	// for a current one, so an empty one asks nothing of the box.
-	return carries.Continues("", archive.Version)
+	// THE WRITER'S FLOOR ALONE: no box has been asked yet.
+	return carries.Writes(archive.Version)
 }
 
 var _ sandbox.SessionRestorer = (*Runner)(nil)

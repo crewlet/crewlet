@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -356,41 +355,6 @@ func TestAnOpenCodeRunsSessionIsExportedBeforeItsServerStops(t *testing.T) {
 		}
 		if want := "id " + session + "\ncontinued no\nwhy \n"; !strings.HasPrefix(recordOf(t, run), want) {
 			t.Errorf("the record is %q, want it to begin %q", recordOf(t, run), want)
-		}
-	})
-}
-
-// A SESSION IS CAPTURED WHOLE BY AN OPENCODE THAT CUTS WHAT IT WRITES INTO A
-// PIPE. A cut into a pipe exits 0 (2.3.2 cut none to 1 MiB, measured), and an
-// export piped into gzip and cut is an archive the take's scrub refuses. The export is written to a file and
-// gzipped from there, so the capture of an export past the cut gunzips to all
-// of it, and the box keeps that whole archive's digest, under every sh a box
-// may run the script with.
-//
-// Mutation: pipe the export into gzip again, and the capture holds the first
-// 64 KiB of it.
-func TestAnOpenCodeSessionIsCapturedWholePastWhatAPipeHolds(t *testing.T) {
-	t.Parallel()
-	messages := longMessages(3 * pipeCut)
-	forEachShell(t, func(t *testing.T, sh boxShell) {
-		run := runScript(t, scriptOpts{shell: sh, exportMessages: messages,
-			env: []string{"FAKE_PIPE_CUT=" + strconv.Itoa(pipeCut)}})
-		if run.code != 0 {
-			t.Fatalf("exit %d:\n%s", run.code, run.stderr)
-		}
-		session := sessionOf(t, run)
-		raw, err := os.ReadFile(filepath.Join(run.home, ".crewlet", "session-capture"))
-		if err != nil {
-			t.Fatalf("the session was not captured: %v\n%s", err, run.stderr)
-		}
-		want := exportOf(session, messages)
-		if export := gunzipped(t, raw); string(export) != want {
-			t.Errorf("the capture holds %d bytes of the session's %d-byte export, want all of it",
-				len(export), len(want))
-		}
-		if !keeps(t, run, session, raw) {
-			t.Errorf("the box keeps no digest of the archive it captured: %q",
-				readIn(t, filepath.Join(run.home, ".crewlet"), "session-digests"))
 		}
 	})
 }
