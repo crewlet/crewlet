@@ -627,6 +627,11 @@ type Options struct {
 	// from its id, for the pickers; nil where the entry is its own name.
 	ScopeNames map[string]string `json:"scope_names,omitempty"`
 
+	// ScopeDetails is each Scope entry's second identifier where the vendor
+	// gives one beside its id (an app's bundle ID), which a picker shows
+	// quietly under its name; nil where it gives none.
+	ScopeDetails map[string]string `json:"scope_details,omitempty"`
+
 	// ScopeLive is whether Scope and ScopeOpen were answered by the vendor's
 	// session just now; false where it could not be read, so an empty Scope
 	// then says nothing about the company's reach.
