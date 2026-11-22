@@ -58,9 +58,12 @@ export function growthDetailsOf(row: IntegrationRow | undefined): {
           ...(typeof a.connection === "string" ? { connection: a.connection } : {}),
           ...(typeof a.currency === "string" ? { currency: a.currency } : {}),
           ...(typeof a.time_zone === "string" ? { time_zone: a.time_zone } : {}),
-          state: (text(a.state) || "unknown") as GrowthAccountState,
+          ...(typeof a.detail === "string" ? { detail: a.detail } : {}),
+          ...(text(a.state) ? { state: text(a.state) as GrowthAccountState } : {}),
           roles: strings(a.roles),
         })),
+      open: c.open === true,
+      ...(text(c.unread) ? { unread: text(c.unread) } : {}),
     }));
   const roles = (Array.isArray(row?.roles) ? row.roles : [])
     .filter(isRecord)
@@ -111,7 +114,7 @@ export function GrowthProductSection({
         <Text as="h3" variant="label" id={`${kind}-connections`}>
           Connections
         </Text>
-        <GrowthConnections product={product} connections={connections} roles={roles} />
+        <GrowthConnections kind={kind} product={product} connections={connections} roles={roles} />
         {/* THE GOOGLE ANALYTICS LOGO BESIDE ITS DATA, as Google's policy asks, once there is some. */}
         {kind === "google_analytics" && connections.length > 0 ? <AnalyticsAttribution /> : null}
       </section>

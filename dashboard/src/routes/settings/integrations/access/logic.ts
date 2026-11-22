@@ -593,7 +593,11 @@ export function scopeWords(lane: Lane, scope: string[] | undefined): string {
   return andList(scope.map((id) => scopeLabel(lane, id)));
 }
 
-/** One entry a scope picker offers: the vendor's name, with the identifier beneath where they differ. */
+/**
+ * One entry a scope picker offers: the vendor's name, with a quiet line beneath
+ * holding the identifier where they differ and the vendor's second identifier
+ * where it gives one (an app's bundle ID).
+ */
 export interface ScopeChoice {
   value: string;
   label: string;
@@ -610,7 +614,10 @@ export function scopeChoices(lane: Lane, held: string[] | undefined): ScopeChoic
   for (const id of held ?? []) if (!ids.includes(id)) ids.push(id);
   return ids.map((id) => {
     const label = scopeLabel(lane, id);
-    return label === id ? { value: id, label } : { value: id, label, description: id };
+    const quiet = [label === id ? "" : id, lane.scope_details?.[id] ?? ""]
+      .filter(Boolean)
+      .join(" · ");
+    return quiet ? { value: id, label, description: quiet } : { value: id, label };
   });
 }
 
