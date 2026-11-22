@@ -77,11 +77,11 @@ func (c *Coordinator) bindMinted(ctx context.Context, run PendingRun, box Sandbo
 // ([LaunchRecord.SessionStart]): a launch that continued a session reads as
 // continuing it unless its box said it started its own, as [PendingRun.SessionRan]
 // reads it, and binds that session alone. A fresh id is asked of the executor
-// log ([Coordinator.freshSession]) once the store has claimed it.
+// log ([Coordinator.freshSession]) once the store has claimed it. AN ID THE
+// RECORD BINDS ALREADY still goes to the store, which makes its claim again
+// where none stands ([CoordStore.BindSession]): a claim a failed write or a
+// sweep lost is back by the job's next save, take or collection.
 func (c *Coordinator) bindReported(ctx context.Context, run PendingRun, id string) (PendingRun, error) {
-	if run.Launch.Minted == id {
-		return run, nil
-	}
 	continued := run.SessionID != "" && run.Launch.SessionStart != SessionStartFresh
 	bind := SessionBind{Launch: run.LaunchID, ID: id, Continued: continued}
 	if !continued {
