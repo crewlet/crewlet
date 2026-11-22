@@ -85,6 +85,12 @@ func (peerBoard) Inbox(context.Context, worklet.InboxQuery, time.Time) (worklet.
 // peerPages is the peer's knowledge-base reads.
 type peerPages struct{ estate.PageReader }
 
+func (p peerPages) ContainersPage(ctx context.Context, _ string,
+	fresh statelog.Freshness) ([]doclet.ContainerListing, string, error) {
+	list, err := p.Containers(ctx, fresh)
+	return list, "", err
+}
+
 func (peerPages) Containers(context.Context, statelog.Freshness) ([]doclet.ContainerListing, error) {
 	return []doclet.ContainerListing{{Key: "ENG"}}, nil
 }

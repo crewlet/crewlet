@@ -130,7 +130,8 @@ const noSuccessor = `NOT EXISTS (SELECT 1 FROM atlas_claims n INDEXED BY atlas_c
 		AND n.source_kind = c.source_kind AND n.source_name = c.source_name)`
 
 // Log pages the log, newest first: the whole company's, or the lines of the
-// entries the query names.
+// entries the query names. A page holds its lines to the bytes the read
+// carries ([statelog.RowsOf]), so it may end short of its limit with a cursor.
 func (r *Reader) Log(ctx context.Context, q LogQuery) (LogPage, error) {
 	for _, id := range q.Entries {
 		if !IsEntryID(id) {
@@ -180,6 +181,18 @@ func (r *Reader) Log(ctx context.Context, q LogQuery) (LogPage, error) {
 		out.Lines = out.Lines[:size]
 		out.Next = out.Lines[size-1].Cursor()
 	}
+	// HELD TO ITS BYTES IN THE PAGE'S ORDER, once the streams are merged: a
+	// stream's own rows are no prefix of the page, so only here does a cut
+	// leave a page the next one's cursor resumes after. Each stream read is
+	// at most a page of lines of a few hundred bytes ([MaxPageSize]).
+	held := statelog.RowsOf(ctx)
+	for i, l := range out.Lines {
+		if !held.TakeEncoded(l) {
+			out.Lines = out.Lines[:i]
+			out.Next = out.Lines[i-1].Cursor()
+			break
+		}
+	}
 	out.Position, out.Complete = answer.Position, answer.Complete
 	return out, nil
 }
@@ -209,12 +222,13 @@ func logStream(ctx context.Context, tx *sql.Tx, entry string, withdrawn bool, bo
 	if err != nil {
 		return nil, err
 	}
-	return scanLines(rows, withdrawn)
+	return scanLines(rows, withdrawn, nil)
 }
 
 // scanLines reads log lines off rows of (claim id, entry id, claim, observed,
-// position, instant), and closes them.
-func scanLines(rows *sql.Rows, withdrawn bool) ([]LogLine, error) {
+// position, instant), up to the bytes held keeps (every row for nil), and
+// closes them.
+func scanLines(rows *sql.Rows, withdrawn bool, held *statelog.RowBytes) ([]LogLine, error) {
 	var out []LogLine
 	for rows.Next() {
 		var (
@@ -232,6 +246,9 @@ func scanLines(rows *sql.Rows, withdrawn bool) ([]LogLine, error) {
 			return nil, fmt.Errorf("claim %s does not decode: %w", l.ID, err)
 		}
 		l.Claim, l.At = wire.vocabulary(store.DecodeTime(observed), uint64(position)), store.DecodeTime(at)
+		if held != nil && !held.TakeEncoded(l) {
+			break
+		}
 		out = append(out, l)
 	}
 	return out, errors.Join(rows.Err(), rows.Close())
@@ -263,6 +280,11 @@ type Activity struct {
 	// one or more an entry, in no order.
 	Last []LogLine
 
+	// Truncated says the answer stopped at the bytes the read carries
+	// ([statelog.RowsOf]): some days' counts or entries' newest lines are not
+	// in it, and a reader says so rather than draws them as none.
+	Truncated bool
+
 	Position statelog.Position
 	Complete bool
 }
@@ -277,18 +299,23 @@ func (r *Reader) Activity(ctx context.Context, since time.Time, fresh statelog.F
 	from := store.EncodeTime(since)
 	answer, err := r.log.Read(ctx, fresh.Query(DomainScope(), true), func(tx *sql.Tx) error {
 		out = Activity{}
+		// ONE SNAPSHOT, HELD TO ITS BYTES across both streams' counts and
+		// lines, and said to be cut rather than paged: a count read across two
+		// snapshots would add up to a log that never was.
+		held := statelog.RowsOf(ctx)
 		for _, withdrawn := range []bool{false, true} {
-			days, err := activityDays(ctx, tx, withdrawn, from)
+			days, err := activityDays(ctx, tx, withdrawn, from, held)
 			if err != nil {
 				return err
 			}
 			out.Days = append(out.Days, days...)
-			last, err := lastLines(ctx, tx, withdrawn)
+			last, err := lastLines(ctx, tx, withdrawn, held)
 			if err != nil {
 				return err
 			}
 			out.Last = append(out.Last, last...)
 		}
+		out.Truncated = held.Cut()
 		if len(out.Days) > MaxLiveClaims {
 			return fmt.Errorf("atlasdomain: the log took more than %d lines since %s, past what one "+
 				"read counts", MaxLiveClaims, since.UTC().Format(time.RFC3339))
@@ -303,7 +330,8 @@ func (r *Reader) Activity(ctx context.Context, since time.Time, fresh statelog.F
 }
 
 // activityDays counts one stream's lines at or after from.
-func activityDays(ctx context.Context, tx *sql.Tx, withdrawn bool, from int64) ([]ActivityDay, error) {
+func activityDays(ctx context.Context, tx *sql.Tx, withdrawn bool, from int64,
+	held *statelog.RowBytes) ([]ActivityDay, error) {
 	column, index, where := "c.at", "atlas_claims_at_idx", "1 = 1"
 	if withdrawn {
 		column, index, where = "c.superseded_at", "atlas_claims_expiry_idx", "c.replaced = 1 AND "+noSuccessor
@@ -327,6 +355,9 @@ func activityDays(ctx context.Context, tx *sql.Tx, withdrawn bool, from int64) (
 			return nil, err
 		}
 		d.Day = store.DecodeTime(day * dayMicros)
+		if !held.TakeEncoded(d) {
+			break
+		}
 		out = append(out, d)
 	}
 	return out, errors.Join(rows.Err(), rows.Close())
@@ -334,7 +365,7 @@ func activityDays(ctx context.Context, tx *sql.Tx, withdrawn bool, from int64) (
 
 // lastLines reads one stream's lines of the newest record on every entry: the
 // rows written at the entry's `last_at`, found by that instant.
-func lastLines(ctx context.Context, tx *sql.Tx, withdrawn bool) ([]LogLine, error) {
+func lastLines(ctx context.Context, tx *sql.Tx, withdrawn bool, held *statelog.RowBytes) ([]LogLine, error) {
 	column, index, where := "c.at", "atlas_claims_at_idx", "1 = 1"
 	if withdrawn {
 		column, index, where = "c.superseded_at", "atlas_claims_expiry_idx", "c.replaced = 1 AND "+noSuccessor
@@ -347,5 +378,5 @@ func lastLines(ctx context.Context, tx *sql.Tx, withdrawn bool) ([]LogLine, erro
 	if err != nil {
 		return nil, err
 	}
-	return scanLines(rows, withdrawn)
+	return scanLines(rows, withdrawn, held)
 }

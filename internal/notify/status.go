@@ -680,6 +680,39 @@ func (d *StatusDriver) Explain(ctx context.Context, handle, wake string, metadat
 	return why != "" && d.queue(ctx, handle, wake, metadata, why)
 }
 
+// ExplainTurn is [StatusDriver.Explain] for the work of a turn that holds its
+// own indicator and is about to stop for something other than a person: a
+// wait for wake, saying why, joins the conversation's indicator the turn holds,
+// so the line stays up and says why once the turn's hold is released. It
+// reports whether this driver holds the turn. Taken away by
+// [StatusDriver.Dequeue] of wake, or at [maxWaitAge].
+func (d *StatusDriver) ExplainTurn(handle, turnID, wake, why string) bool {
+	if why == "" || wake == "" {
+		return false
+	}
+	d.mu.Lock()
+	for key, s := range d.sessions {
+		if key.handle != handle || !slices.Contains(s.holds, turnID) {
+			continue
+		}
+		if _, done := d.settled[handle+"\x00"+wake]; done {
+			d.mu.Unlock()
+			return true
+		}
+		switch at := slices.IndexFunc(s.waits, func(w wait) bool { return w.wake == wake }); {
+		case at < 0:
+			d.queuedSeq++
+			s.waits = append(s.waits, wait{wake: wake, seq: d.queuedSeq, at: d.now(), why: why})
+		default:
+			s.waits[at].why = why
+		}
+		d.mu.Unlock()
+		return true
+	}
+	d.mu.Unlock()
+	return false
+}
+
 // queue raises or explains the wait of wake ([StatusDriver.Queue],
 // [StatusDriver.Explain]); why "" leaves a wait's reason as it is.
 func (d *StatusDriver) queue(ctx context.Context, handle, wake string, metadata map[string]string,

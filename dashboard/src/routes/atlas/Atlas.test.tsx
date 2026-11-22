@@ -31,7 +31,7 @@ import { Signals } from "./entry.tsx";
 import { cardOf, lineOf } from "./graph.tsx";
 import { neighbourhood, relatedOf, touching } from "./Neighbourhood.tsx";
 import { coverageLine, coverageNotes } from "./parts.tsx";
-import { factLabel } from "./words.ts";
+import { ACTIVITY_CUT, factLabel } from "./words.ts";
 
 afterEach(() => {
   cleanup();
@@ -427,6 +427,17 @@ describe("the page", () => {
     expect(show.textContent).toContain(reason.textContent ?? "");
     expect(await screen.findByText("Recorded this week")).toBeTruthy();
     expect(screen.getByText("Where it comes from")).toBeTruthy();
+  });
+
+  // A COUNT THE ENGINE CUT SAYS SO beside the week, never drawn as a quiet
+  // week. MUTATION: drop the band's `truncated` line and nothing says it.
+  test("a week the engine cut says the count stopped at its limit", async () => {
+    mount("#/company/atlas", <Atlas />, { ...grownCompany(), activityCut: true });
+    expect(await screen.findByText(ACTIVITY_CUT)).toBeTruthy();
+    cleanup();
+    mount("#/company/atlas", <Atlas />, grownCompany());
+    expect(await screen.findByText("Recorded this week")).toBeTruthy();
+    expect(screen.queryByText(ACTIVITY_CUT)).toBeNull();
   });
 
   // MUTATION: draw the count as plain words again and the entries past the

@@ -178,6 +178,12 @@ func (k *kimiRecorder) answered(i int, r fakeResponse, ids []string, results []s
 }
 
 func (k *kimiRecorder) end(script fakeScript, _ fakeUsage, _ string) int {
+	if script.RecordEnd != "" {
+		var line map[string]any
+		if err := json.Unmarshal([]byte(script.RecordEnd), &line); err == nil {
+			_ = k.wire.Encode(line)
+		}
+	}
 	return script.Exit
 }
 
@@ -223,5 +229,24 @@ func TestAFailedKimiCodeRunSaysWhyOnStderr(t *testing.T) {
 	_, err := p.Complete(t.Context(), phase(host))
 	if kind := llm.KindOf(err); kind != llm.KindRateLimit {
 		t.Fatalf("err = %v (%v), want the spent plan the harness reported on stderr", err, kind)
+	}
+}
+
+// A FAILED KIMI CODE 2.7 RUN SAYS WHY ONLY IN ITS RECORD: stderr says the turn
+// failed and no more, and the wire log the run is read from ends on turn.ended
+// with the harness's class, which judges it.
+//
+// Mutation: stop feeding the record's lines to its reports in serveTools, and
+// the spent plan is a server failure.
+func TestAFailedKimiCode27RunSaysWhyOnlyInItsRecord(t *testing.T) {
+	t.Parallel()
+	p := fakeAs(t, "kimi-code", fakeScript{Exit: 1, Stderr: kimi27Stderr, RecordEnd: kimi27Spent,
+		Responses: []fakeResponse{{Calls: []fakeCall{{Name: "search"}}, Usage: fakeUsage{Input: 5, Output: 5}}}},
+		func(c *Config) { c.Auth = Auth{Mode: AuthSubscription} })
+	host := newTestHost(t, "search")
+	host.handle("search", func(context.Context, map[string]any) (string, bool) { return "3 results", false })
+	_, err := p.Complete(t.Context(), phase(host))
+	if kind := llm.KindOf(err); kind != llm.KindRateLimit || !strings.Contains(err.Error(), "5-hour usage limit") {
+		t.Fatalf("err = %v (%v), want the spent plan the harness's record ended on", err, kind)
 	}
 }

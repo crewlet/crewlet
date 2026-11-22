@@ -243,7 +243,9 @@ func TestEveryPassThatMintsASeatsCredentialDeclaresItsPlan(t *testing.T) {
 		// Issued at use through the broker.
 		integration.KindAWS: "no pass mints a seat's AWS credential",
 		// Signed at use.
-		integration.KindSSH:             "no pass mints a seat's SSH credential",
+		integration.KindSSH: "no pass mints a seat's SSH credential",
+		// The team's keys stay in the engine, which makes every call (ADR-0170).
+		integration.KindAppStoreConnect: "no seat holds an App Store Connect key",
 		integration.KindGoogleAnalytics: "no pass mints a seat's Google Analytics credential: its tokens are minted at use",
 		integration.KindGoogleAds:       "no pass mints a seat's Google Ads credential: its tokens are minted at use",
 	}

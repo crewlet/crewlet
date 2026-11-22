@@ -223,6 +223,33 @@ func TestACatalogIsHeldToItsRules(t *testing.T) {
 	}
 }
 
+// A TOOL NAME IS ONE PRODUCT'S: a catalog listing a tool another already
+// lists is refused at registration, though each name starts with its own
+// kind's, since one kind may begin another's.
+//
+// Mutation: drop RegisterFunc's walk over the other catalogs, and the second
+// registers.
+func TestACatalogListingAnothersToolIsRefused(t *testing.T) {
+	t.Parallel()
+	object := map[string]any{"type": "object"}
+	catalog := func(kind string) growth.Catalog {
+		return growth.Catalog{Kind: kind, API: "Shared API", Version: "v1",
+			Operations: []growth.Operation{{ID: "list", Method: "GET", Path: "/list", Class: growth.ClassRead}},
+			Tools: []growth.Tool{{Name: "shared_ads_list", Class: growth.ClassRead, Operations: []string{"list"},
+				Description: "List.", Parameters: object}}}
+	}
+	growth.Register(catalog("shared"))
+	defer func() {
+		if recover() == nil {
+			t.Error("a second catalog listing shared_ads_list registered")
+		}
+		if _, ok := growth.CatalogOf("shared_ads"); ok {
+			t.Error("the refused catalog is registered")
+		}
+	}()
+	growth.Register(catalog("shared_ads"))
+}
+
 // An operation naming roles is permitted to an identity holding one of them,
 // and one naming none to every identity.
 func TestARoleIsPermittedWhatItsOperationNames(t *testing.T) {
@@ -364,5 +391,37 @@ func TestARoleOffersTheClassesOfWhatItMayCall(t *testing.T) {
 	if slices.Contains(read.Classes, growth.ClassAdmin) || !slices.Contains(read.Classes, growth.ClassRead) ||
 		!slices.Contains(read.Classes, growth.ClassSpend) {
 		t.Errorf("Read offers %v", read.Classes)
+	}
+}
+
+// A CATALOG REGISTERED AS A FUNCTION IS BUILT AT FIRST USE, once: a large
+// catalog costs nothing at init, beside a catalog whose kind neither begins
+// its own nor is begun by it, which can share none of its tool names.
+//
+// Mutation: build at registration, or rebuild on each read, and the counter
+// reads one before any read, or two after the second.
+func TestALazyCatalogIsBuiltOnceAtFirstUseAndValidated(t *testing.T) {
+	renamed := func(kind string) growth.Catalog {
+		c := validCatalog()
+		c.Kind = kind
+		for i := range c.Tools {
+			c.Tools[i].Name = kind + strings.TrimPrefix(c.Tools[i].Name, "test_ads")
+		}
+		return c
+	}
+	growth.Register(renamed("lazy_beside"))
+	builds := 0
+	growth.RegisterFunc("lazy_ads", func() growth.Catalog {
+		builds++
+		return renamed("lazy_ads")
+	})
+	if builds != 0 {
+		t.Fatalf("the catalog was built %d times at registration", builds)
+	}
+	if _, ok := growth.CatalogOf("lazy_ads"); !ok || builds != 1 {
+		t.Fatalf("the first read built it %d times (found %v)", builds, ok)
+	}
+	if growth.CatalogOf("lazy_ads"); builds != 1 {
+		t.Errorf("a second read built it again: %d", builds)
 	}
 }

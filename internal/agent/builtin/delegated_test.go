@@ -77,7 +77,7 @@ func (d *fakeDesk) Held(_ context.Context, id string) (sandbox.PendingRun, bool,
 	return d.run, true, nil
 }
 
-func (d *fakeDesk) Arguments(sandbox.PendingRun) (map[string]any, error) { return d.args, nil }
+func (d *fakeDesk) RawArguments(sandbox.PendingRun) (map[string]any, error) { return d.args, nil }
 
 func (d *fakeDesk) Leads(_ context.Context, lead, seat string) (bool, error) {
 	return d.leads[[2]string{lead, seat}], d.leadsErr

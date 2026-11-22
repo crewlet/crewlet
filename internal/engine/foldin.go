@@ -265,10 +265,7 @@ func (e *Engine) routerEnded(ctx context.Context, handle string, memo *routeMemo
 		log.DebugContext(read, "seat_router_runs_unread", "seat", handle, "error", err.Error())
 		return
 	}
-	runs = slices.DeleteFunc(runs, func(run sandbox.PendingRun) bool {
-		return run.LaunchID == "" || !slices.Contains(sandbox.ItemStatuses, run.Status)
-	})
-	e.expireFoldIns(read, handle, runs, memo)
+	e.expireFoldIns(read, handle, routableRuns(runs), memo)
 }
 
 // foldedKey is the completion-ledger mark of a delivery an approved fold-in
@@ -339,17 +336,39 @@ func (t *waitsTold) forgetSeat(handle string) {
 	}
 }
 
+// first reports whether wake of handle was told no reason yet, and remembers
+// why where it was not: a reason already told stands.
+func (t *waitsTold) first(handle, wake, why string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	key := handle + "\x00" + wake
+	if _, told := t.told[key]; told {
+		return false
+	}
+	if t.told == nil {
+		t.told = map[string]string{}
+	}
+	t.told[key] = why
+	return true
+}
+
 // tellWaiting tells the person who wrote ev, wake waiting behind handle's
 // running work, why it waits, once per wake and reason, on the conversation's
 // queued indicator ([notify.Statuses.Explain]). Only a person's message, the
 // one a queued line is drawn for.
 func (e *Engine) tellWaiting(ctx context.Context, handle string, ev *events.Event, wake string, person bool,
 	why string) {
+	e.explainWait(ctx, handle, ev, wake, person, why, e.waitsTold.tell)
+}
+
+// explainWait is [Engine.tellWaiting] where news says why is news for wake.
+func (e *Engine) explainWait(ctx context.Context, handle string, ev *events.Event, wake string, person bool,
+	why string, news func(handle, wake, why string) bool) {
 	if ev == nil || !person {
 		return
 	}
 	n, ok := events.DataAs[*types.ExternalNotification](ev)
-	if !ok || n == nil || !e.waitsTold.tell(handle, wake, why) {
+	if !ok || n == nil || !news(handle, wake, why) {
 		return
 	}
 	e.Status().Explain(context.WithoutCancel(ctx), handle, wake, n.Metadata, why)

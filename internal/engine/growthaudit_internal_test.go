@@ -119,3 +119,14 @@ func TestAGrowthStepRecordedAlreadyIsNotTheFirst(t *testing.T) {
 		t.Errorf("an allow after another answer says %v, %v; want not the first and no error", first, err)
 	}
 }
+
+// An act's lease outlives everything its apply does under it, which a product
+// cuts at growth.ApplyBound, so no apply acts after its lease lapsed.
+//
+// Mutation: set growthActLeaseTTL at or below growth.ApplyBound, and this fails.
+func TestAGrowthActsLeaseOutlivesItsApply(t *testing.T) {
+	t.Parallel()
+	if growthActLeaseTTL <= growth.ApplyBound {
+		t.Errorf("the lease lives %s and an apply runs up to %s", growthActLeaseTTL, growth.ApplyBound)
+	}
+}

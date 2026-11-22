@@ -88,6 +88,11 @@ func (v *vault) HeldObjects(_ context.Context, _ artifacts.ID, hashes []objstore
 	return out, nil
 }
 
+func (v *vault) SeenByPage(ctx context.Context, id artifacts.ID, _ string) ([]artifactsdomain.Read, string, error) {
+	reads, err := v.SeenBy(ctx, id)
+	return reads, "", err
+}
+
 func (v *vault) SeenBy(context.Context, artifacts.ID) ([]artifactsdomain.Read, error) {
 	return []artifactsdomain.Read{{Seat: "bob", OpenedAt: time.Unix(1_700_000_000, 0).UTC()}}, nil
 }
@@ -269,6 +274,12 @@ func (v *vault) ClearBrand(_ context.Context, c artifactsdomain.Call) (artifacts
 // theThread is the thread every comment read answers, and a write naming it the
 // refusal a comment write has.
 var theThread = uuid.NewSHA1(uuid.NameSpaceOID, []byte("the thread"))
+
+func (v *vault) ThreadsPage(ctx context.Context, id artifacts.ID, _ string) (
+	[]artifactsdomain.CommentThread, string, error) {
+	threads, err := v.Threads(ctx, id)
+	return threads, "", err
+}
 
 func (v *vault) Threads(_ context.Context, id artifacts.ID) ([]artifactsdomain.CommentThread, error) {
 	if id == refused {

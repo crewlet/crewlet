@@ -153,6 +153,9 @@ type Member struct {
 	// every value MAY omit it, where a required one says every value carries
 	// it.
 	Optional bool
+	// Nullable is a member whose type admits `null` at its top level
+	// (`card: GrowthCard | null`): a value may carry it as null.
+	Nullable bool
 }
 
 // Literal returns the array or object literal the ONE `const <name>` under
@@ -529,7 +532,7 @@ func typeMembers(toks []token, found decl, name string) ([]Member, error) {
 			i++
 			continue
 		}
-		start := i
+		start, named := i, false
 		// `readonly name: T`, `get name(): T`, `set name(v: T)` — but
 		// `readonly: boolean` is a member named readonly.
 		if (t.word("readonly") || t.word("get") || t.word("set")) &&
@@ -557,17 +560,44 @@ func typeMembers(toks []token, found decl, name string) ([]Member, error) {
 				m.Optional = true
 				i++
 			}
-			members = append(members, m)
+			members, named = append(members, m), true
 		default:
 			return nil, found.errorfAt(t, "interface %s has %q where a member "+
 				"was expected", name, t.text())
 		}
+		typed := i
 		var err error
 		if i, err = memberEnd(toks, i, start, found); err != nil {
 			return nil, err
 		}
+		if named {
+			members[len(members)-1].Nullable = admitsNull(toks[typed:i])
+		}
 	}
 	return members, nil
+}
+
+// admitsNull reports whether a property's type names `null` outside any
+// bracket: `T | null` does; `Array<T | null>`, a method and a function type
+// (`() => T | null`) do not, since the member itself is never null.
+func admitsNull(toks []token) bool {
+	if len(toks) == 0 || !toks[0].is(":") {
+		return false
+	}
+	depth, null := 0, false
+	for _, t := range toks {
+		switch {
+		case t.is("(", "[", "{", "<"):
+			depth++
+		case t.is(")", "]", "}", ">"):
+			depth--
+		case depth == 0 && t.is("=>"):
+			return false
+		case depth == 0 && t.word("null"):
+			null = true
+		}
+	}
+	return null
 }
 
 // memberEnd is the index just past the member that began at `start` and

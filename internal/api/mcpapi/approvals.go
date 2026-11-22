@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/runanswer"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -257,8 +258,7 @@ func (s *Service) allowAlways(w http.ResponseWriter, r *http.Request, run sandbo
 		return nil, false
 	}
 	if summary = strings.TrimSpace(summary); summary == "" {
-		summary = fmt.Sprintf("Always allow %s on MCP server %s, answering a call %s held for approval",
-			held.Raw, held.Server, run.AgentHandle)
+		summary = AllowedSummary(held.Raw, held.Server, run.AgentHandle)
 	}
 	allow := config.MCPToolAllow
 	write := configapi.MCPToolsWrite{
@@ -287,37 +287,27 @@ func readWhole(held sandbox.HeldCall) bool {
 	return held.Fixed && (held.Approvers == sandbox.HeldApproversSSH || held.Approvers == sandbox.HeldApproversAdmin)
 }
 
-// openHeld is the arguments run's held call would send and their digest,
-// answering a refusal itself where they do not open here.
-func (s *Service) openHeld(w http.ResponseWriter, run sandbox.PendingRun) (map[string]any, string, bool) {
-	var args map[string]any
-	err := errNoSeal
-	if s.heldCalls != nil {
-		args, err = s.heldCalls.OpenArguments(run.TurnID, *run.HeldCall)
-	}
-	digest := ""
-	if err == nil {
-		digest, err = sandbox.HeldArgumentsDigest(args)
-	}
-	if err != nil {
-		log.Warn("mcp_approval_arguments_unopened", "approval", run.HeldCall.ID, "error", err.Error())
-		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, detailRetrySeconds,
-			httpjson.Detail{"detail": "the held call's arguments do not open on this node, so they can be " +
-				"neither shown nor approved here; ask through a node that serves the dashboard"})
-		return nil, "", false
-	}
-	return args, digest, true
+// refuseUnopened answers a held call whose arguments do not open on this
+// node: they can be neither shown nor approved here.
+func refuseUnopened(w http.ResponseWriter, run sandbox.PendingRun, err error) {
+	log.Warn("mcp_approval_arguments_unopened", "approval", run.HeldCall.ID, "error", err.Error())
+	httpjson.UnavailableWith(w, httpjson.CodeUnavailable, detailRetrySeconds,
+		httpjson.Detail{"detail": "the held call's arguments do not open on this node, so they can be " +
+			"neither shown nor approved here; ask through a node that serves the dashboard"})
 }
-
-// errNoSeal is a node holding no seal for held calls' arguments.
-var errNoSeal = errors.New("mcpapi: this node holds no seal for held calls' arguments")
 
 // readAll is whether digest names the whole of run's held call as GET
 // /mcp-approvals/{id} answered it, answering the refusal itself where not:
 // Allow once is never given from a surface that did not show all of it.
 func (s *Service) readAll(w http.ResponseWriter, run sandbox.PendingRun, digest string) bool {
-	_, want, ok := s.openHeld(w, run)
-	if !ok {
+	// THE APPROVER ANSWERING, whose digest is compared and never served.
+	args, err := s.heldCalls.OpenRawArguments(run.TurnID, *run.HeldCall)
+	var want string
+	if err == nil {
+		want, err = sandbox.HeldArgumentsDigest(args)
+	}
+	if err != nil {
+		refuseUnopened(w, run, err)
 		return false
 	}
 	if subtle.ConstantTimeCompare([]byte(digest), []byte(want)) != 1 {
@@ -331,7 +321,8 @@ func (s *Service) readAll(w http.ResponseWriter, run sandbox.PendingRun, digest 
 }
 
 // HeldAnswer is GET /mcp-approvals/{id}: the held call, its question, and the
-// whole of what it would send, for whoever may approve it.
+// whole of what it would send, for whoever may approve it while it waits;
+// redacted, with no digest, once it is answered or its run has moved on.
 type HeldAnswer struct {
 	ID              string         `json:"id"`
 	Server          string         `json:"server"`
@@ -343,10 +334,19 @@ type HeldAnswer struct {
 	Context         string         `json:"context"`
 	Arguments       map[string]any `json:"arguments"`
 	ArgumentsSHA256 string         `json:"arguments_sha256"`
+	// Card is a growth act's decision card as its target reads now, null for
+	// every other call or one whose target could not be read (ADR-0171).
+	Card *growth.Card `json:"card"`
 }
 
-// serveHeld answers the held call its path names, whole, to whoever may answer
-// it: an SSH operate command's approvers read every byte of its stdin here,
+// GrowthCards reads a held growth act's decision card from its product.
+type GrowthCards interface {
+	Card(ctx context.Context, run sandbox.PendingRun, args map[string]any) (*growth.Card, error)
+}
+
+// serveHeld answers the held call its path names to whoever may answer it, by
+// [sandbox.CallSeal.OpenArgumentsFor]'s rule ([HeldAnswer]): an SSH operate
+// command's approvers read every byte of its stdin here while it waits,
 // whether or not they read the seat's runs.
 func (s *Service) serveHeld(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
@@ -367,15 +367,30 @@ func (s *Service) serveHeld(w http.ResponseWriter, r *http.Request) {
 				"or the id names none"})
 		return
 	}
-	if !authz.Admit(w, r, s.guard, s.approverPolicy(run)) {
+	// WHO READS HERE MAY ANSWER: the route admits only a reader the answer's
+	// own authority allows ([runanswer.HeldCall], which [runanswer.May]
+	// decides for the lists), at the answer's own proof.
+	mayAnswer := authz.Admit(w, r, s.guard, s.approverPolicy(run))
+	if !mayAnswer {
 		return
 	}
-	args, digest, ok := s.openHeld(w, run)
-	if !ok {
+	args, digest, err := s.heldCalls.OpenArgumentsFor(run, mayAnswer)
+	if err != nil {
+		refuseUnopened(w, run, err)
 		return
 	}
 	held := *run.HeldCall
-	httpjson.Write(w, http.StatusOK, HeldAnswer{ID: id, Server: held.Server, Tool: held.Tool,
+	answer := HeldAnswer{ID: id, Server: held.Server, Tool: held.Tool,
 		Seat: run.AgentHandle, TurnID: run.TurnID, LaunchID: run.LaunchID, Question: run.Question,
-		Context: run.QuestionContext, Arguments: args, ArgumentsSHA256: digest})
+		Context: run.QuestionContext, Arguments: args, ArgumentsSHA256: digest}
+	if held.Approvers == sandbox.HeldApproversAdmin && s.cards != nil {
+		// A CARD THAT CANNOT BE READ leaves the question, its context and
+		// the whole arguments, which are what the answer is given on.
+		card, err := s.cards.Card(r.Context(), run, args)
+		if err != nil {
+			log.WarnContext(r.Context(), "growth_card_unread", "approval", id, "error", err.Error())
+		}
+		answer.Card = card
+	}
+	httpjson.Write(w, http.StatusOK, answer)
 }

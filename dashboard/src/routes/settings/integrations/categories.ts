@@ -63,7 +63,14 @@ export const DIRECTORY: { key: string; label: string; lines: Line[] }[] = [
       { kind: "app", key: "ssh" },
     ],
   },
-  { key: "mobile", label: "Mobile apps", lines: [{ kind: "app", key: "expo" }] },
+  {
+    key: "mobile",
+    label: "Mobile apps",
+    lines: [
+      { kind: "app", key: "expo" },
+      { kind: "app", key: "app_store_connect" },
+    ],
+  },
   {
     key: "growth",
     label: "Marketing and growth",
