@@ -707,7 +707,7 @@ func openCodeSessionGate(session Session, paths Paths, rewired bool) string {
 	// over it. Recorded before the import, a failed import would leave the
 	// line naming a copy that does not hold it.
 	line(`      case "$out" in *%s*) %s || w=%s;; *) w="OpenCode did not import it: $(printf '%%s' "$out" | tr '\n' ' ')";; esac`,
-		q("Imported session: "+session.ID), recordDigest(paths, "sid", "d"), q(restoreDigestUnrecorded))
+		q("Imported session: "+session.ID), recordDigest(paths, "sid"), q(restoreDigestUnrecorded))
 	line(`    fi`)
 	line(`    rm -rf %s %s`, q(staged), ans)
 	line(`  fi`)

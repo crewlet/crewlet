@@ -772,21 +772,21 @@ const (
 func packDigest(paths Paths, session, staged string) string {
 	q := sandbox.ShellQuote
 	return fmt.Sprintf(`{ d=$(cksum < %[1]s 2> /dev/null) && %[2]s || { printf '%%s\n' %[3]s > %[4]s 2> /dev/null; false; }; }`,
-		q(staged+"/capture"), recordDigest(paths, session, "d"), q(digestUnrecorded), q(staged+"/error"))
+		q(staged+"/capture"), recordDigest(paths, session), q(digestUnrecorded), q(staged+"/error"))
 }
 
 // recordDigest is the part of a box's script that records the line `<session>
-// <digest>` — the values of the shell variables session and digest name — in
-// the box's list of the archives its copy holds ([Paths.SessionDigests]) and
-// reads it back: true only where the digest is not empty and the line is
-// there after. READ BACK, never taken on the append's word: a write a full
+// <digest>` — the values of the shell variable session names and of d, which
+// every caller's cksum fills — in the box's list of the archives its copy
+// holds ([Paths.SessionDigests]) and reads it back: true only where the digest
+// is not empty and the line is there after. READ BACK, never taken on the append's word: a write a full
 // disk lost can be one its writer was told landed. What every pack records
 // before it moves its archive into place ([packDigest]), and every restore
 // before its run continues what it restored ([claudeSessionGate],
 // [openCodeSessionGate]).
-func recordDigest(paths Paths, session, digest string) string {
-	return fmt.Sprintf(`[ -n "$%[2]s" ] && { printf '%%s %%s\n' "$%[1]s" "$%[2]s" >> %[3]s; } 2> /dev/null && grep -qxF "$%[1]s $%[2]s" %[3]s 2> /dev/null`,
-		session, digest, sandbox.ShellQuote(paths.SessionDigests()))
+func recordDigest(paths Paths, session string) string {
+	return fmt.Sprintf(`[ -n "$d" ] && { printf '%%s %%s\n' "$%[1]s" "$d" >> %[2]s; } 2> /dev/null && grep -qxF "$%[1]s $d" %[2]s 2> /dev/null`,
+		session, sandbox.ShellQuote(paths.SessionDigests()))
 }
 
 // digestUnrecorded is why a pack whose digest the box did not record failed
