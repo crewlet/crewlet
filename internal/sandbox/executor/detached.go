@@ -150,7 +150,9 @@ type Harness interface {
 	// the path the harness is pointed at, or "" when there is nothing to write.
 	// It also writes the system text where the harness reads it from
 	// ([Paths.System]) when there is any, and nothing when there is none.
-	WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error)
+	// session is the run's, named before it ([Harness.Session]).
+	WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, session Session,
+		paths Paths) (string, error)
 }
 
 // Session is the harness session one run works in, as [Runner.Start] settles it
@@ -656,7 +658,7 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 		}
 		req.FreshWiring = &wired
 	}
-	configPath, err := r.harness.WriteConfig(ctx, box, req, paths)
+	configPath, err := r.harness.WriteConfig(ctx, box, req, session, paths)
 	if err != nil {
 		return sandbox.RunHandle{}, err
 	}

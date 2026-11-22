@@ -327,7 +327,7 @@ func writeOpenCodeConfig(t *testing.T, req sandbox.RunRequest) (openCodeConfig, 
 func writeOpenCodeConfigIn(t *testing.T, req sandbox.RunRequest) (openCodeConfig, string, *sandbox.FakeSandbox) {
 	t.Helper()
 	b := sandbox.NewFakeSandbox("box-1")
-	path, err := opencode().WriteConfig(t.Context(), b, req, executor.PathsFor(b))
+	path, err := opencode().WriteConfig(t.Context(), b, req, executor.Session{}, executor.PathsFor(b))
 	if err != nil || path == "" {
 		t.Fatalf("WriteConfig = %q, %v", path, err)
 	}
@@ -465,7 +465,7 @@ func TestTheClaudeCodeConfigTranslatesBothMcpTransports(t *testing.T) {
 				URL: "https://engine.example.com/mcp/tok", AlwaysLoaded: true,
 			},
 		},
-	}, executor.PathsFor(b))
+	}, executor.Session{}, executor.PathsFor(b))
 	if err != nil || path == "" {
 		t.Fatalf("WriteConfig = %q, %v", path, err)
 	}

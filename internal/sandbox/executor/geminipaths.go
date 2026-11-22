@@ -57,5 +57,7 @@ func (p Paths) GeminiTakes(session string) string {
 	return p.GeminiTakesDir() + "/" + session + ".jsonl"
 }
 
-// GeminiTakesDir holds every session's record of takes ([Paths.GeminiTakes]).
+// GeminiTakesDir holds every session's record of takes ([Paths.GeminiTakes]),
+// never pruned: a box serves one turn's launches and is reclaimed as its run
+// settles (code-sandbox.md, "Reuse across launches"), so it holds a few.
 func (p Paths) GeminiTakesDir() string { return p.WorkDir() + "/gemini-takes" }

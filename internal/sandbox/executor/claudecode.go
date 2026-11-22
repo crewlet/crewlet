@@ -739,7 +739,8 @@ func floorArgs(version string) string {
 // ([Paths.ClaudeSkillsSettings]). EVERY SETTINGS FILE HAS A PINNED COPY BESIDE IT
 // ([claudeSettingsPin]), handed in its place to a release that takes it
 // ([claudePinGate]).
-func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error) {
+func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
+	paths Paths) (string, error) {
 	if req.System != "" {
 		if err := box.WriteFile(ctx, paths.System(), []byte(req.System)); err != nil {
 			return "", fmt.Errorf("executor: writing the system prompt: %w", err)

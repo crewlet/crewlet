@@ -106,14 +106,13 @@ func TestTheTakeScriptTakesAtTheFinishAlone(t *testing.T) {
 			dir := t.TempDir()
 			record := filepath.Join(dir, "takes.jsonl")
 			config, _ := json.Marshal(map[string]any{"endpoint": server.URL + "/mcp", "tool": "steer_take",
-				"skills": server.URL + "/skills", "namespace": "crewlet"})
+				"skills": server.URL + "/skills", "takes": record, "namespace": "crewlet"})
 			path := filepath.Join(dir, "take.json")
 			if err := os.WriteFile(path, config, 0o600); err != nil {
 				t.Fatal(err)
 			}
 			input, _ := json.Marshal(tc.input)
 			cmd := exec.CommandContext(t.Context(), node, "gemini_take.mjs", path)
-			cmd.Env = append(os.Environ(), executor.GeminiTakesEnv+"="+record)
 			cmd.Stdin = strings.NewReader(string(input))
 			out, err := cmd.Output()
 			if err != nil {
@@ -171,13 +170,12 @@ func TestTheTakeScriptDigestsATakesTextAsTheEngineDoes(t *testing.T) {
 			dir := t.TempDir()
 			record := filepath.Join(dir, "takes.jsonl")
 			config, _ := json.Marshal(map[string]any{"endpoint": server.URL + "/mcp", "tool": "steer_take",
-				"namespace": "crewlet"})
+				"takes": record, "namespace": "crewlet"})
 			path := filepath.Join(dir, "take.json")
 			if err := os.WriteFile(path, config, 0o600); err != nil {
 				t.Fatal(err)
 			}
 			cmd := exec.CommandContext(t.Context(), node, "gemini_take.mjs", path)
-			cmd.Env = append(os.Environ(), executor.GeminiTakesEnv+"="+record)
 			cmd.Stdin = strings.NewReader(`{"hook_event_name":"AfterAgent","stop_hook_active":false}`)
 			if out, err := cmd.Output(); err != nil {
 				t.Fatalf("the take script: %v (%s)", err, out)

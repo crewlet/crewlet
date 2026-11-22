@@ -110,7 +110,8 @@ func (QwenCode) artifacts(p Paths) (files, dirs []string) {
 // text, the helper and its configuration, the settings in the box home, and
 // the run's skills. It returns "": Qwen Code reads its settings from its
 // home, and the helper hands it no MCP servers of its own.
-func (q QwenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error) {
+func (q QwenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
+	paths Paths) (string, error) {
 	system := req.System
 	if req.Steer.Set() {
 		system = withNoteInstruction(system, q.NoteInstruction())

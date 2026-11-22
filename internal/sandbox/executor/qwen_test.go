@@ -32,7 +32,7 @@ func writtenQwen(t *testing.T, req sandbox.RunRequest) (settings, helper map[str
 	t.Helper()
 	b = sandbox.NewFakeSandbox("box-1")
 	p = executor.PathsFor(b)
-	if _, err := (executor.QwenCode{}).WriteConfig(t.Context(), b, req, p); err != nil {
+	if _, err := (executor.QwenCode{}).WriteConfig(t.Context(), b, req, executor.Session{}, p); err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
 	for path, into := range map[string]*map[string]any{p.QwenSettings(): &settings, p.QwenHelperConfig(): &helper} {
