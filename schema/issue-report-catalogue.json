@@ -13,6 +13,7 @@
     ],
     "harness.name": [
       "claude-code",
+      "codex",
       "gemini-cli",
       "qwen-code",
       "opencode",
