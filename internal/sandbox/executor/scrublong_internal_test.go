@@ -888,14 +888,14 @@ var (
 // THE PLAN HOLDS AT MOST A SIXTEENTH OF THE PLAINTEXT, HOWEVER THE BOX SHAPES
 // ITS SESSION: a bit for every two bytes beside the blocks its streams are
 // filling ([planBlockBytes]), never a block or a record for each cut line or
-// transcript, over a transcript of short lines each losing its one definition
-// and a tar of many small transcripts. Read off the plan's own blocks as its
-// first readings hand it on, which a reading of the heap varied by a spool's
-// buffers across runs.
+// transcript, over a transcript of short lines each losing its one definition,
+// one of a few, and a tar of many small transcripts. Read off the plan's own
+// blocks as its first readings hand it on, which a reading of the heap varied
+// by a spool's buffers across runs.
 //
 // Mutation: keep a block of bits for each cut line, or a plan of its own for
-// each transcript, or count the "plan" term at half, and the plan holds past
-// the figure.
+// each transcript, or count the "plan" term at a quarter or its blocks at
+// none, and the plan holds past the figure.
 func TestThePlanHoldsAtMostASixteenthOfThePlaintext(t *testing.T) {
 	t.Parallel()
 	s := newScrubber([]string{longValue})
@@ -903,6 +903,8 @@ func TestThePlanHoldsAtMostASixteenthOfThePlaintext(t *testing.T) {
 	for name, members := range map[string][]tarMember{
 		"a transcript of 20,000 lines that each lose a definition": {{h: tar.Header{
 			Name: "projects/p/s.jsonl", Typeflag: tar.TypeReg, Mode: 0o600}, body: strings.Repeat(cut, 20_000)}},
+		"one transcript of a few lines, its blocks past a sixteenth": {{h: tar.Header{
+			Name: "projects/p/s.jsonl", Typeflag: tar.TypeReg, Mode: 0o600}, body: strings.Repeat(cut, 3)}},
 		"20,000 transcripts of one short line": func() []tarMember {
 			var m []tarMember
 			for i := range 20_000 {
