@@ -13,6 +13,15 @@ Every agent seat's **executor** is its harness's own agentic run (Claude Code, O
 
 This is how an agent answers a message, works a ticket, implements a feature, makes tests pass or reproduces a bug. **The run is fully permissioned in every cell**: Claude Code under `--permission-mode bypassPermissions`; OpenCode with a `permissions` rule list allowing every action (`{"action": "*", "resource": "*", "effect": "allow"}`) and denying only `question`, since `ask_and_wait` asks the seat's people instead. A headless run has nobody to answer a prompt, so a gate left to ask would stall it or refuse the step. The **cell** decides what the run can reach: `container` and `e2b` keep it off the engine host; `direct` runs it there as the engine's own user (see [Where a run happens](#where-a-run-happens)).
 
+**An entry that denies the web denies it to its executor too.** On an entry with `overrides: {web_tools: denied}` the run's harness gets none of its own web tools, as the entry's runs on the engine host get none ([The web can be turned off](llm-backends.md#the-harnesss-own-tools-denied)):
+
+| Runner | How | Measured |
+|---|---|---|
+| Claude Code | `--disallowedTools WebFetch WebSearch` | 2.1.330: both refused, in subagents too, with a repository's settings allowing them and an agent of its own listing them |
+| OpenCode | the `opencode.tool.webfetch` and `opencode.tool.websearch` plugins removed, and both actions denied in the run's rules and its agent's | 2.3.2: neither registered for the run or a subagent, a repository's agent allowing them and its `plugins` naming them again included; Code Mode's `fetch` refused |
+
+The run's shell, and any code it runs (OpenCode's Code Mode in an agent the repository allows the web), reach whatever network the box's cell allows: no harness flag bounds them, so a run that must not reach the web needs a cell whose egress is closed.
+
 Code lives in `internal/sandbox/`: the provider, the manager, the harness runners under `executor/`, the waiters, the coordinator, the pending store, `launch.go` (plumbing between an executor's launch in `internal/engine/agentrun.go` and its detached run), `boxhost.go` (keeps a `direct` or `container` box with the node that launched it, [ADR-0065](../../adr/0065-a-local-box-is-driven-by-the-node-that-launched-it.md)) and `answerseal.go` (seals a person's answer onto the run's row).
 
 ---
@@ -591,7 +600,7 @@ The runner **writes OpenCode 2's own configuration to `<home>/.crewlet/opencode.
 
 It declares **no provider**: the model names one of OpenCode's own, which reads its key from the run environment under that provider's own variable, so a credential is never written where the agent could read it back, and a provider declared beside the named one would shadow it. The same file sets:
 
-- `permissions`: allow every action and deny only `question`. Headless runs have no human to approve a prompt (a gate at `ask` is auto-rejected), and the one tool that asks a person is replaced by `ask_and_wait` on the run's bridge. Rules of every document are added together in order, so these come last and, the last match winning, decide.
+- `permissions`: allow every action and deny only `question`. Headless runs have no human to approve a prompt (a gate at `ask` is auto-rejected), and the one tool that asks a person is replaced by `ask_and_wait` on the run's bridge. Rules of every document are added together in order, so these come last and, the last match winning, decide among them; an agent's own rules, a repository's included, are read after them (measured on 2.3.2). On an entry that denies the web, `webfetch` and `websearch` are denied here and in the run's agent's rules, and their plugins removed ([above](#code-sandbox)).
 - `share: disabled`.
 - `update: disable`: a self-updating harness would swap the tool under the brief while the seat's turn is suspended.
 - `snapshots: false`: a per-step git snapshot is an undo a headless run never offers.
