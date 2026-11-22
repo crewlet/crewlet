@@ -108,6 +108,10 @@ const (
 	LaneAppStoreConnect Lane = "app_store_connect"
 
 	LaneGoogleAnalytics Lane = "google_analytics"
+
+	// LaneAdMob is a seat's level and publisher accounts at AdMob, which the
+	// engine reaches for it as the company's consent grant.
+	LaneAdMob Lane = "admob"
 )
 
 // Lanes is every lane, in the order an operator reads integrations
@@ -117,7 +121,7 @@ func Lanes() []Lane {
 	return []Lane{
 		LaneSlack, LaneMattermost, LaneJira, LaneConfluence,
 		LaneGitHub, LaneGitLab, LaneDatadog, LaneCloudflare, LaneExpo, LaneDigitalOcean, LaneScaleway, LaneAWS, LaneGoogleCloud,
-		LaneSSH, LaneAppStoreConnect, LaneGoogleAnalytics,
+		LaneSSH, LaneAppStoreConnect, LaneGoogleAnalytics, LaneAdMob,
 	}
 }
 

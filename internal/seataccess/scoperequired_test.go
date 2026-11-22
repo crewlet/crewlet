@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/seataccess/seataccesstest"
 
+	_ "github.com/crewlet/crewlet/internal/admob"
 	_ "github.com/crewlet/crewlet/internal/appstoreconnect"
 	_ "github.com/crewlet/crewlet/internal/atlassian/agentaccess"
 	_ "github.com/crewlet/crewlet/internal/aws"

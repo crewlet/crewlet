@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"github.com/crewlet/crewlet/internal/admob"
 	"github.com/crewlet/crewlet/internal/appstoreconnect"
 	"github.com/crewlet/crewlet/internal/atlassian"
 	awsint "github.com/crewlet/crewlet/internal/aws"
@@ -50,5 +51,6 @@ func SetupProbes() map[integration.Kind]setup.Probe {
 		integration.KindSlack:           slack.Probe(nil),
 		integration.KindSSH:             sshint.Probe(nil),
 		integration.KindGoogleAnalytics: googleanalytics.Probe(nil),
+		integration.KindAdMob:           admob.Probe(nil),
 	}
 }

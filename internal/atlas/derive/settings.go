@@ -135,6 +135,7 @@ var integrationRows = map[integration.Kind]func(b *builder, c *config.Company, z
 	integration.KindSSH:             sshHosts,
 	integration.KindAppStoreConnect: appStoreConnect,
 	integration.KindGoogleAnalytics: googleAnalytics,
+	integration.KindAdMob:           adMob,
 	integration.KindAtlassian:       atlassian,
 }
 
@@ -389,6 +390,24 @@ func googleAnalytics(b *builder, c *config.Company, _ map[string]atlas.Ref) {
 	for i, id := range g.Properties {
 		b.account("integrations.google_analytics.properties["+strconv.Itoa(i)+"]", atlas.VendorGoogle,
 			"analytics/"+id, id, "Google Analytics", g.Enabled, atlas.CapabilityAnalytics)
+	}
+}
+
+// adMob records each AdMob publisher account the company narrows agents to,
+// keyed by its ID, or the vendor alone where it names none.
+func adMob(b *builder, c *config.Company, _ map[string]atlas.Ref) {
+	a := c.Integrations.AdMob
+	if a == nil {
+		return
+	}
+	if len(a.Accounts) == 0 {
+		b.account("integrations.admob", atlas.VendorGoogle, "admob", "", "AdMob", a.Enabled,
+			atlas.CapabilityMonetization)
+		return
+	}
+	for i, id := range a.Accounts {
+		b.account("integrations.admob.accounts["+strconv.Itoa(i)+"]", atlas.VendorGoogle, "admob/"+id, id,
+			"AdMob", a.Enabled, atlas.CapabilityMonetization)
 	}
 }
 

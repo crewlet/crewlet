@@ -247,6 +247,7 @@ func TestEveryPassThatMintsASeatsCredentialDeclaresItsPlan(t *testing.T) {
 		// The team's keys stay in the engine, which makes every call (ADR-0170).
 		integration.KindAppStoreConnect: "no seat holds an App Store Connect key",
 		integration.KindGoogleAnalytics: "no pass mints a seat's Google Analytics credential: its tokens are minted at use",
+		integration.KindAdMob:           "no seat holds an AdMob credential: every call goes as the company's grant",
 	}
 	e := &Engine{}
 	for _, pass := range e.setupPasses() {
