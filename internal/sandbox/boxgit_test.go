@@ -45,8 +45,13 @@ func TestACheckBoxGitNamesNobody(t *testing.T) {
 	if got := cfg["protocol.version"]; len(got) != 1 || got[0] != "2" {
 		t.Errorf("protocol.version = %v, want Gitlet's 2", got)
 	}
-	if check[GitTokenVar] != "chk-token" || check[GitURLVar] != base {
-		t.Errorf("the credential and base are %q and %q", check[GitTokenVar], check[GitURLVar])
+	if check[GitURLVar] != base {
+		t.Errorf("the base is %q, want %q", check[GitURLVar], base)
+	}
+	for name, value := range check {
+		if strings.Contains(value, "chk-token") {
+			t.Errorf("the box's variable %s holds its credential, which only its file holds", name)
+		}
 	}
 	seat, err := BoxGit{Base: base, User: "run", Token: "t", Name: "Alice", Email: "alice@example.com"}.Env(nil)
 	if err != nil {
@@ -66,10 +71,11 @@ func TestACheckBoxGitNamesNobody(t *testing.T) {
 }
 
 // A BOX'S GITLET CREDENTIAL RIDES GIT_CONFIG_PARAMETERS, AFTER THE RUN'S OWN:
-// the helper's reset and the helper are its last two items, quoted as git
-// reads them, the run environment's items ahead of them; no count entry names
-// a credential helper; and a base holding '=', which an item cannot name, is
-// refused naming CREWLET_BOX_GIT_URL.
+// the helper's reset and the helper, which reads the file the box's
+// environment names, are its last two items, quoted as git reads them, the
+// run environment's items ahead of them; no count entry names a credential
+// helper; and a base holding '=', which an item cannot name, is refused
+// naming CREWLET_BOX_GIT_URL.
 //
 // Mutations, each red: keep the helper in GIT_CONFIG_COUNT; replace the run's
 // items; drop the '=' refusal.
@@ -83,7 +89,8 @@ func TestABoxsGitletCredentialRidesGitConfigParameters(t *testing.T) {
 	}
 	scope := "credential." + base + "/.helper"
 	want := "'http.lowSpeedLimit=1' '" + scope + "=' '" + scope +
-		`='\!'f() { test "$1" = get || return 0; printf '\''username=run\npassword=%s\n'\'' "$CREWLET_GIT_TOKEN"; }; f'`
+		`='\!'f() { test "$1" = get || return 0; t=$(cat "$CREWLET_GIT_ACCESS_FILE") || return 1; ` +
+		`printf '\''username=run\npassword=%s\n'\'' "$t"; }; f'`
 	if got := env[GitConfigParametersVar]; got != want {
 		t.Errorf("%s=%q\nwant %q", GitConfigParametersVar, got, want)
 	}

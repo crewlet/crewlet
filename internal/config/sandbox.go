@@ -718,7 +718,7 @@ func (s *SandboxSetupStep) validate(path Path) error {
 // whatever its run checks out (internal/engine,
 // TestABoxIsConfiguredByEnvironment).
 func ReservedSandboxEnv() []string {
-	return append([]string{"CREWLET_GIT_TOKEN", "CREWLET_GIT_URL"}, ReservedCheckEnv()...)
+	return append([]string{"CREWLET_GIT_ACCESS_FILE", "CREWLET_GIT_URL"}, ReservedCheckEnv()...)
 }
 
 // ReservedCheckEnv is every variable the engine sets in a CHECK'S box alone:
@@ -750,8 +750,9 @@ var reservedSandboxEnvReasons = map[string]string{
 		"its own credential, and a value here would send those reads, and that credential, elsewhere",
 	"CREWLET_CHECK_SUMMARY": "it is the file a check's command writes its summary to, read back when the " +
 		"check ends, and a value here would have the summary written where it is never read",
-	"CREWLET_GIT_TOKEN": "it is the run's own credential on Gitlet, minted for each " +
-		"of its launches on a node that serves it, and a value here would break its clones and pushes",
+	"CREWLET_GIT_ACCESS_FILE": "it is the file in the box holding the run's own credential on Gitlet, " +
+		"minted for each of its launches on a node that serves it, and a value here would break its clones " +
+		"and pushes",
 	"CREWLET_GIT_URL": "it is the base a run clones Gitlet's repositories from and " +
 		"pushes them to (CREWLET_BOX_GIT_URL on the launching node), and a value here would send its git " +
 		"elsewhere",

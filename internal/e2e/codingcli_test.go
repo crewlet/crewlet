@@ -772,7 +772,17 @@ func pushThrough(ctx context.Context, answer string, stderr io.Writer) error {
 		return fmt.Errorf("the checkout's answer gives no commands to run:\n%s", answer)
 	}
 	if path := os.Getenv(codingTokenEnv); path != "" {
-		if err := os.WriteFile(path, []byte(os.Getenv(sandbox.GitTokenVar)), 0o600); err != nil {
+		token, err := os.ReadFile(os.Getenv(sandbox.GitAccessFileVar))
+		if err != nil || len(token) == 0 {
+			return fmt.Errorf("reading the run's git token from the file its environment names: %q, %w", token, err)
+		}
+		// THE TOKEN IS IN NO VARIABLE of the run: its file alone holds it.
+		for _, kv := range os.Environ() {
+			if name, value, _ := strings.Cut(kv, "="); strings.Contains(value, string(token)) {
+				return fmt.Errorf("the run's variable %s holds its git token, which only its file holds", name)
+			}
+		}
+		if err := os.WriteFile(path, token, 0o600); err != nil {
 			return fmt.Errorf("keeping the run's git token: %w", err)
 		}
 	}
