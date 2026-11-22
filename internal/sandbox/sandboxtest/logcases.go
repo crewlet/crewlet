@@ -34,7 +34,10 @@ var stagedLogCases = []struct {
 		testAnEndingReadsTheTurnsCallsPastAnOpeningThatFailed},
 	{"ABeginLaunchThatMayHaveWrittenNamesItsLaunch",
 		testABeginLaunchThatMayHaveWrittenNamesItsLaunch},
-	{"ABindCutBeforeItsRecordLeavesNoClaimPastIt", testABindCutBeforeItsRecordLeavesNoClaimPastIt},
+	{"ABindWhoseRecordFailsReleasesItsClaim", testABindWhoseRecordFailsReleasesItsClaim},
+	{"ABindWhoseWriteLandedKeepsItsClaim", testABindWhoseWriteLandedKeepsItsClaim},
+	{"AFailedRelaunchBindLeavesTheContinuedClaim", testAFailedRelaunchBindLeavesTheContinuedClaim},
+	{"AFailedBindReleasesOnACancelledCaller", testAFailedBindReleasesOnACancelledCaller},
 }
 
 // stagedRuns is a coordination store's run records with the next write of a
@@ -50,8 +53,12 @@ type stagedRuns struct {
 	fail   error
 
 	// createFail and rowFail are what the next create of a run's record, and
-	// the next read-decide-write of one, answer instead of landing.
-	createFail, rowFail error
+	// the next read-decide-write of one, answer instead of landing; rowThen
+	// runs as that failure is answered, and rowLanded is what the next
+	// read-decide-write answers once it HAS landed, a write whose answer was
+	// lost.
+	createFail, rowFail, rowLanded error
+	rowThen                        func()
 
 	rowAsks atomic.Int64
 }
@@ -79,20 +86,68 @@ func (r *stagedRuns) CreateSandboxRun(ctx context.Context, turnID string, value 
 }
 
 // MutateSandboxRun counts each read-decide-write of a run's record
-// ([stagedRuns.rowAsks]), answers an armed failure ([stagedRuns.failNext]),
-// and makes it as the records would otherwise.
+// ([stagedRuns.rowAsks]), answers an armed failure ([stagedRuns.failNext],
+// [stagedRuns.failRowThen], [stagedRuns.landRowThenFail]), and makes it as the
+// records would otherwise.
 func (r *stagedRuns) MutateSandboxRun(ctx context.Context, turnID string,
 	decide func(coord.Record) (coord.SandboxRunChange, error)) (coord.Record, bool, error) {
 
 	r.rowAsks.Add(1)
 	r.mu.Lock()
-	fail := r.rowFail
-	r.rowFail = nil
+	fail, then, landed := r.rowFail, r.rowThen, r.rowLanded
+	r.rowFail, r.rowThen, r.rowLanded = nil, nil, nil
 	r.mu.Unlock()
 	if fail != nil {
+		if then != nil {
+			then()
+		}
 		return coord.Record{}, false, fail
 	}
-	return r.records.MutateSandboxRun(ctx, turnID, decide)
+	record, changed, err := r.records.MutateSandboxRun(ctx, turnID, decide)
+	if landed != nil && err == nil {
+		return record, changed, landed
+	}
+	return record, changed, err
+}
+
+// failRowThen arms the next read-decide-write of a run's record to answer row
+// without landing, running then as it does.
+func (r *stagedRuns) failRowThen(row error, then func()) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.rowFail, r.rowThen = row, then
+}
+
+// landRowThenFail arms the next read-decide-write of a run's record to land
+// and still answer row.
+func (r *stagedRuns) landRowThenFail(row error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.rowLanded = row
+}
+
+// SessionClaim, MoveSessionClaim and DeleteSessionClaim refuse an ended
+// context, as a store across a link does, so a case holds a cleanup to a
+// context of its own.
+func (r *stagedRuns) SessionClaim(ctx context.Context, id string) (coord.SessionClaim, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return coord.SessionClaim{}, false, err
+	}
+	return r.records.SessionClaim(ctx, id)
+}
+
+func (r *stagedRuns) MoveSessionClaim(ctx context.Context, c coord.SessionClaim, revision uint64) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	return r.records.MoveSessionClaim(ctx, c, revision)
+}
+
+func (r *stagedRuns) DeleteSessionClaim(ctx context.Context, id string, revision uint64) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	return r.records.DeleteSessionClaim(ctx, id, revision)
 }
 
 // records is the store's run records, embedded under a name of their own:

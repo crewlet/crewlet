@@ -290,6 +290,13 @@ type SessionTake struct {
 	// writes, so a box timing its takes learns nothing of another agent's
 	// texts. "" shares with every other take that names none.
 	Scope string
+
+	// Session is the session bound to a minting harness's job
+	// ([LaunchRecord.Minted]): the take names that one, and one whose box
+	// names another is refused, wrapping [ErrSessionBindRefused], so no
+	// capture is kept under an id never bound. Ignored for a harness that
+	// names its session as its run starts.
+	Session string
 }
 
 // TakenSession is a session archive on its way out of its box: described, and

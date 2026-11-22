@@ -255,6 +255,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"ARunRowCarriesItsRepositoriesAndFloor", testARunRowCarriesItsRepositoriesAndFloor},
 		{"AnEarlierRunsLeadsAreNoneOfTheTurnsNextRuns", testAnEarlierRunsLeadsAreNoneOfTheTurnsNextRuns},
 		{"AClaimWhoseRunHasNoRecordBindsNothing", testAClaimWhoseRunHasNoRecordBindsNothing},
+		{"AClaimACrashLeftNeverBlocksItsOwnJob", testAClaimACrashLeftNeverBlocksItsOwnJob},
 	}
 	raw = append(raw, noteRawCases...)
 	raw = append(raw, bytesRawCases...)
