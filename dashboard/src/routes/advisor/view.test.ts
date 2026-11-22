@@ -19,6 +19,7 @@ import {
   explainer,
   findingView,
   firstSentence,
+  rowActions,
   snapshotView,
   stripOf,
   withoutSubject,
@@ -355,6 +356,31 @@ test("a primary this page does not route gives its place to the first secondary 
     primary: { kind: "open", label: "Open the seat", href: "#/company/org/seats/dev" },
     secondary: [{ kind: "ask", label: "Ask Crewlet", question: "Why?" }],
   });
+});
+
+// A LIST ROW'S BUTTON ACTS: a press that only opens a page ("Open the seat")
+// or Ask Crewlet leads the row's menu instead, beside the title's own link; an
+// Apply, a move, an atlas fix and Take a backup stay the row's one button.
+// Mutation: keep every primary a button, and the list is a column of
+// buttons that only navigate.
+test("a list row keeps a button only for a press that acts, and moves the rest into its menu", () => {
+  const seat = action({ label: "Open the seat", page: "seat", target: "dev" });
+  const apply = action({ kind: "apply", label: "Learn on haiku", option: 0 });
+  const row = (primary: ReturnType<typeof action>, secondary: ReturnType<typeof action>[] = []) =>
+    rowActions(findingView(finding({ actions: { primary, secondary } })).actions);
+  expect(row(seat, [apply])).toEqual({
+    primary: null,
+    secondary: [
+      { kind: "open", label: "Open the seat", href: "#/company/org/seats/dev" },
+      { kind: "apply", label: "Learn on haiku", option: 0 },
+    ],
+  });
+  expect(row(apply, [seat]).primary).toEqual({ kind: "apply", label: "Learn on haiku", option: 0 });
+  expect(row(action({ label: "Take a backup", page: "backups" })).primary).toMatchObject({
+    label: "Take a backup",
+    acts: true,
+  });
+  expect(row(action({ kind: "ask", label: "Ask", question: "Why?" })).primary).toBeNull();
 });
 
 // A ROW SAYS ITS SEAT ONCE, in its prefix: a label, the why or the headline

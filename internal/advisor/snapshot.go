@@ -315,7 +315,7 @@ func flowBySeatChart(hours []worklet.FlowHours, name func(string) string) (Chart
 			by[seat][worklet.FlowStuck]
 	}
 	seats := keysBy(by, func(a, b string) int { return cmp.Or(cmp.Compare(stalled(b), stalled(a)), cmp.Compare(a, b)) })
-	c := Chart{ID: "flow_by_seat", Title: "Where each seat's work stood", Unit: UnitHours, Kind: ChartStackedColumns,
+	c := Chart{ID: "flow_by_seat", Title: "Work state by seat", Unit: UnitHours, Kind: ChartStackedColumns,
 		X: seatAxis(seats, name)}
 	for _, s := range flowStates {
 		series := ChartSeries{ID: string(s.state), Label: s.label}
@@ -350,7 +350,7 @@ func openWorkChart(open []worklet.HeldOpen, name func(string) string) (Chart, bo
 		pressing.Values = append(pressing.Values, ptr(float64(h.Pressing)))
 		other.Values = append(other.Values, ptr(float64(h.Open-h.Pressing)))
 	}
-	return Chart{ID: "open_work", Title: "Open items by who holds them", Unit: UnitItems, Kind: ChartStackedColumns,
+	return Chart{ID: "open_work", Title: "Open items by holder", Unit: UnitItems, Kind: ChartStackedColumns,
 		X: seatAxis(seats, name), Series: []ChartSeries{pressing, other}}, true
 }
 
@@ -381,7 +381,7 @@ func wastedWakesChart(rows []usage.TurnLedgerRow) (Chart, bool) {
 	reasons := keysBy(by, func(a, b string) int {
 		return cmp.Or(cmp.Compare(by[b][types.OutcomeNothing], by[a][types.OutcomeNothing]), cmp.Compare(a, b))
 	})
-	c := Chart{ID: "wasted_wakes", Title: "What each kind of wake led to", Unit: UnitTurns, Kind: ChartBars,
+	c := Chart{ID: "wasted_wakes", Title: "Wake outcomes", Unit: UnitTurns, Kind: ChartBars,
 		X: ChartAxis{Kind: AxisReason, Keys: reasons, Labels: make([]string, len(reasons))}}
 	for i, w := range reasons {
 		c.X.Labels[i] = WakeLabel(w)
@@ -452,7 +452,7 @@ func tokensPerTurnChart(rows []usage.TurnLedgerRow, name func(string) string) (C
 	}
 	return Chart{ID: "tokens_per_turn", Title: "Tokens per turn by seat", Unit: UnitTokens, Kind: ChartColumns,
 		X: seatAxis(seats, name), Series: []ChartSeries{series},
-		Note: ptr(fmt.Sprintf("The company's median is %s tokens per turn.", groupedInt(int64(median))))}, true
+		Note: ptr(fmt.Sprintf("Company median: %s tokens.", tokensSaid(int64(median))))}, true
 }
 
 // seatAxis is an axis of seats by handle, labelled by name.
@@ -517,7 +517,7 @@ func capacityChart(c Capacity) (Chart, bool) {
 	for i, d := range c.Days {
 		axis.Keys[i], axis.Labels[i] = d.Format(time.DateOnly), d.Format("Mon 2 Jan")
 	}
-	out := Chart{ID: "capacity_lost", Title: "Hours each model entry was out on its usage limit", Unit: UnitHours,
+	out := Chart{ID: "capacity_lost", Title: "Hours out on usage limits", Unit: UnitHours,
 		Kind: ChartStackedColumns, X: axis}
 	worst, worstOut := -1, time.Duration(0)
 	for d := range c.Days {

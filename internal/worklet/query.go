@@ -692,8 +692,8 @@ func (q *Query) parseStatus(p Params) error {
 	for _, value := range csv(p.String("status_group")) {
 		group := StatusGroup(value)
 		if !group.Valid() {
-			return fmt.Errorf("worklet: %q is not one of the four status groups",
-				value)
+			return fmt.Errorf("worklet: %q is not one of the four status groups: %s",
+				value, StatusGroupWords())
 		}
 		q.StatusGroups = append(q.StatusGroups, group)
 	}

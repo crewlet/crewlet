@@ -96,3 +96,46 @@ func TestASEC1KeyReadsAsItsP256Key(t *testing.T) {
 		}
 	}
 }
+
+// flatten is pemText as a one-line box or a copy leaves it: every line break
+// replaced with sep.
+func flatten(pemText, sep string) string {
+	return strings.Join(strings.Fields(pemText), sep)
+}
+
+// A key whose line breaks a one-line box dropped, or a copy turned into
+// spaces or CRLF, is the same key; flattening never makes a non-key one.
+//
+// Mutation: parse without NormalisePEM, and every flattened case is refused;
+// let it drop text around a block, and a key with a note beside it is taken.
+func TestAKeyWhoseLineBreaksWereFlattenedIsTheSameKey(t *testing.T) {
+	t.Parallel()
+	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	whole := pemOf(t, priv)
+	for name, value := range map[string]string{
+		"no breaks": strings.ReplaceAll(whole, "\n", ""),
+		"spaces":    flatten(whole, " "),
+		"CRLF":      strings.ReplaceAll(whole, "\n", "\r\n"),
+		"as issued": whole,
+	} {
+		key, err := es256.ParseKey(value)
+		if err != nil || !key.Equal(priv) {
+			t.Errorf("%s: %v", name, err)
+		}
+		if got := es256.NormalisePEM(value); got != strings.TrimSpace(whole) {
+			t.Errorf("%s: normalised to %q, want %q", name, got, whole)
+		}
+	}
+	p384, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	for name, bad := range map[string]string{
+		"P-384":      strings.ReplaceAll(pemOf(t, p384), "\n", ""),
+		"two keys":   strings.ReplaceAll(whole+whole, "\n", ""),
+		"note first": "my key " + strings.ReplaceAll(whole, "\n", ""),
+		"cut short":  strings.ReplaceAll(whole[:len(whole)-40], "\n", ""),
+		"mismatched": strings.Replace(strings.ReplaceAll(whole, "\n", ""), "END PRIVATE", "END EC PRIVATE", 1),
+	} {
+		if _, err := es256.ParseKey(bad); err == nil {
+			t.Errorf("%s: a flattened non-key was taken for a P-256 key", name)
+		}
+	}
+}

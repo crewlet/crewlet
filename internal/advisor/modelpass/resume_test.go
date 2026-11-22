@@ -95,7 +95,7 @@ func TestADeepRunTakenOverMidAgendaResumesWhereItStood(t *testing.T) {
 	}) {
 		t.Errorf("results %+v, want the resumed run's first read cited as read_2", second.Results())
 	}
-	if !slices.Contains(told, "resumed after a takeover: 2 of 4 agenda items already answered") {
+	if !slices.Contains(told, "Picked up where it stopped: 2 of 4 questions already answered") {
 		t.Errorf("progress = %q, want the takeover said", told)
 	}
 }
