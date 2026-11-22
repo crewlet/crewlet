@@ -4,10 +4,12 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
 // A CODEX RUN LOADS ONLY WHAT ITS LAUNCH WRITES. A real box whose home holds
@@ -54,5 +56,62 @@ func TestACodexRunLoadsOnlyWhatItsLaunchWrites(t *testing.T) {
 	}
 	if !slices.Equal(skills, []string{".system", "crewlet:deploy"}) {
 		t.Errorf("the run's Codex home holds the skills %q, want the run's own beside .system", skills)
+	}
+}
+
+// A CODEX RUN IS HANDED ITS CHECKOUT'S INSTRUCTIONS AND SKILLS, AND THE HOOK
+// FOR A LATER ONE. A real box whose working directory holds a checkout with
+// an AGENTS.md, a skill and a planted .codex/config.toml: as its run ends,
+// CODEX_HOME/AGENTS.md holds the checkout's file under its root, its skill
+// is the run's as `repo:check`, its config reached neither the Codex home nor
+// the app-server's command line, and that command line declares the nested
+// hook and its trust, the note helper it runs written beside it.
+//
+// Mutation: drop the gate from the script, or the hook's flags from the
+// app-server, and a check goes red.
+func TestACodexRunIsHandedItsCheckoutAndTheHookForALaterOne(t *testing.T) {
+	t.Parallel()
+	runner, box, record := codexBox(t, "0.171.0")
+	p := executor.PathsFor(box)
+	for rel, body := range map[string]string{
+		"workspace/repo/.git/HEAD":                    "ref: refs/heads/main\n",
+		"workspace/repo/AGENTS.md":                    "REPO-INSTRUCTIONS\n",
+		"workspace/repo/.codex/config.toml":           "developer_instructions = \"PLANT-PROJECT-CONFIG\"\n",
+		"workspace/repo/.codex/skills/check/SKILL.md": "---\nname: check\ndescription: Checks.\nmodel: gpt-planted\n---\nCheck.\n",
+	} {
+		path := filepath.Join(box.Home(), rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go"}); !res.Success {
+		t.Fatalf("the run failed: %s", res.Error)
+	}
+	work, err := filepath.EvalSymlinks(filepath.Join(box.Home(), "workspace"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := boxFile(t, box, p.CodexHome()+"/AGENTS.md"); got != "for `repo` with root "+work+"/repo\n\nREPO-INSTRUCTIONS\n" {
+		t.Errorf("CODEX_HOME/AGENTS.md is %q", got)
+	}
+	skill := boxFile(t, box, p.CodexSkills()+"/repo:check/SKILL.md")
+	if !strings.Contains(skill, `name: "repo:check"`) || strings.Contains(skill, "gpt-planted") {
+		t.Errorf("the repository's skill reads\n%s", skill)
+	}
+	server := strings.Join(recorded(t, record, "server-argv"), "\n")
+	if !strings.Contains(server, "hooks.PostToolUse=") || !strings.Contains(server, "-adapter codex-nested") ||
+		!strings.Contains(server, "/<session-flags>/config.toml:post_tool_use:0:0") {
+		t.Errorf("the app-server declares no nested hook:\n%s", server)
+	}
+	for _, where := range []string{server, boxFile(t, box, p.CodexLiveConfig())} {
+		if strings.Contains(where, "PLANT-PROJECT-CONFIG") {
+			t.Error("the repository's .codex/config.toml reached the run's configuration")
+		}
+	}
+	if _, err := os.Stat(p.CodexNoteHelper()); err != nil {
+		t.Errorf("the note helper the hook runs is not in the box: %v", err)
 	}
 }

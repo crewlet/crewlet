@@ -215,8 +215,13 @@ func codexBoxArch(machine string) (string, error) {
 		return "arm64", nil
 	}
 	return "", fmt.Errorf("executor: this box's machine is %s, and the engine carries Codex's note "+
-		"helper for x86_64 and aarch64 alone", strconv.Quote(strings.TrimSpace(machine)))
+		"helper for x86_64 and aarch64 alone: %w", strconv.Quote(strings.TrimSpace(machine)), errNoHelperBuild)
 }
+
+// errNoHelperBuild is a box whose machine the engine carries no note helper
+// build for ([codexBoxArch]): a run that needs the helper is refused, any other
+// starts without the nested hook.
+var errNoHelperBuild = errors.New("no note helper build for this machine")
 
 // WriteConfig removes what the box holds for Codex that its launch did not
 // write ([codexRunHome]) and writes what a Codex run starts from: its
@@ -262,10 +267,13 @@ func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox
 			return "", err
 		}
 	}
+	// THE HELPER IN EVERY BOX ITS MACHINE HAS A BUILD FOR: the nested hook
+	// runs it ([codexNestedHookFlags]). A run that needs it for its notes,
+	// cap or skills is refused without one; any other starts without the hook.
+	if err := writeCodexNoteHelper(ctx, box, paths); err != nil && (codexHelped(req) || !errors.Is(err, errNoHelperBuild)) {
+		return "", err
+	}
 	if codexHelped(req) {
-		if err := writeCodexNoteHelper(ctx, box, paths); err != nil {
-			return "", err
-		}
 		wired := sandbox.Wiring{Steer: req.Steer, SkillLoads: req.SkillLoads}
 		if err := writeCodexRoutes(ctx, box, req, wired, paths.CodexNotesURL(), paths.CodexSkillsURL()); err != nil {
 			return "", err
