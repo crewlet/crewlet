@@ -217,7 +217,8 @@ func codexBoxArch(machine string) (string, error) {
 //
 // THE STANDING INSTRUCTIONS ARE TOLD OF NOTES on a run wired to them
 // ([withNoteInstruction]).
-func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error) {
+func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
+	paths Paths) (string, error) {
 	if _, err := codexShellExcluded(req); err != nil {
 		return "", err
 	}

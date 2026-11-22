@@ -325,11 +325,11 @@ func TestACodexSocketPastAUnixPathIsRefusedNamingTheStateDir(t *testing.T) {
 		return p
 	}
 	box := sandbox.NewFakeSandbox("box-1")
-	_, err := Codex{}.WriteConfig(t.Context(), box, sandbox.RunRequest{Brief: "go"}, at(maxCodexSocketPath+1))
+	_, err := Codex{}.WriteConfig(t.Context(), box, sandbox.RunRequest{Brief: "go"}, Session{}, at(maxCodexSocketPath+1))
 	if err == nil || !strings.Contains(err.Error(), "providers.sandbox.local.state_dir") {
 		t.Errorf("a socket of %d bytes is refused with %v, want the setting named", maxCodexSocketPath+1, err)
 	}
-	if _, err := (Codex{}).WriteConfig(t.Context(), box, sandbox.RunRequest{Brief: "go"}, at(maxCodexSocketPath)); err != nil &&
+	if _, err := (Codex{}).WriteConfig(t.Context(), box, sandbox.RunRequest{Brief: "go"}, Session{}, at(maxCodexSocketPath)); err != nil &&
 		strings.Contains(err.Error(), "unix socket") {
 		t.Errorf("a socket at the %d-byte bound is refused: %v", maxCodexSocketPath, err)
 	}

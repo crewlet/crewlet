@@ -301,7 +301,7 @@ func TestAnOpenCodeRunThatContinuesASessionIsConfiguredForEither(t *testing.T) {
 	p := executor.PathsFor(box)
 	req := sandbox.RunRequest{Resume: carriedOpenCode, MCPServers: bridgeAt("continued-token"),
 		FreshWiring: &sandbox.Wiring{MCPServers: bridgeAt("fresh-token")}}
-	path, err := executor.OpenCode{}.WriteConfig(t.Context(), box, req, p)
+	path, err := executor.OpenCode{}.WriteConfig(t.Context(), box, req, executor.Session{}, p)
 	if err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
@@ -324,7 +324,7 @@ func TestAnOpenCodeRunThatContinuesASessionIsConfiguredForEither(t *testing.T) {
 	} {
 		mismatched := req
 		mismatched.FreshWiring = other
-		if _, err := (executor.OpenCode{}).WriteConfig(t.Context(), box, mismatched, p); err == nil ||
+		if _, err := (executor.OpenCode{}).WriteConfig(t.Context(), box, mismatched, executor.Session{}, p); err == nil ||
 			!strings.Contains(err.Error(), "not the same configuration") {
 			t.Errorf("%s: WriteConfig = %v, want the two wirings refused", name, err)
 		}
@@ -922,7 +922,7 @@ func TestAContinuedOpenCodeRunIsConfiguredWithItsOwnInstructions(t *testing.T) {
 	p := executor.PathsFor(box)
 	configure := func(req sandbox.RunRequest) string {
 		t.Helper()
-		path, err := executor.OpenCode{}.WriteConfig(t.Context(), box, req, p)
+		path, err := executor.OpenCode{}.WriteConfig(t.Context(), box, req, executor.Session{}, p)
 		if err != nil {
 			t.Fatalf("WriteConfig: %v", err)
 		}

@@ -85,6 +85,14 @@ func TestAnEnvSignInIsTheEntrysOnlySignIn(t *testing.T) {
 			says: "set auth.mode: env",
 		},
 		{
+			// Gemini CLI's Vertex switch outranks the key the mode hands it.
+			name: "gemini's vertex switch under api-key",
+			lines: []string{"harness: gemini-cli", `auth: {mode: api-key, api_key: "${KEY}"}`,
+				`env: {GOOGLE_GENAI_USE_VERTEXAI: "true"}`},
+			path: "providers.llm.sub.env.GOOGLE_GENAI_USE_VERTEXAI", kind: ErrConflict,
+			says: "auth.mode api-key hands it a credential of its own beside it",
+		},
+		{
 			name: "a gateway's token under api-key",
 			lines: []string{"harness: claude-code", "auth: {mode: api-key}",
 				`env: {ANTHROPIC_AUTH_TOKEN: "${GATEWAY_TOKEN}"}`},
@@ -118,6 +126,8 @@ func TestEveryEnvSignInRouteIsAccepted(t *testing.T) {
 			`env: {CLAUDE_CODE_USE_VERTEX: "1", CLOUD_ML_REGION: us-east5, ANTHROPIC_VERTEX_PROJECT_ID: "${GCP_PROJECT}"}`},
 		"a gateway": {"harness: claude-code", "auth: {mode: env}",
 			`env: {ANTHROPIC_BASE_URL: https://gateway.example.com, ANTHROPIC_AUTH_TOKEN: "${GATEWAY_TOKEN}"}`},
+		"gemini on vertex": {"harness: gemini-cli", "auth: {mode: env}",
+			`env: {GOOGLE_GENAI_USE_VERTEXAI: "true", GOOGLE_CLOUD_PROJECT: "${GCP_PROJECT}", GOOGLE_API_KEY: "${GOOGLE_API_KEY}"}`},
 		"a provider key on an env_sign_in harness": {"harness: hermes", "auth: {mode: env}",
 			`env: {OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"}`},
 	} {

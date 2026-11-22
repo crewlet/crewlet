@@ -341,7 +341,8 @@ func kimiProfileName() (string, error) {
 // whose path it returns for [Kimi.Command]; with a fresh session's copies of
 // the servers and settings beside them ([sandbox.RunRequest.FreshWiring]). What an earlier run wrote there the
 // clear removes first ([Kimi.artifacts]).
-func (k Kimi) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error) {
+func (k Kimi) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
+	paths Paths) (string, error) {
 	name, err := kimiProfileName()
 	if err != nil {
 		return "", err

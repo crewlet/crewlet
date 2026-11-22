@@ -388,6 +388,30 @@ func TestASeatsOwnClaudeCodeSignInPassesTheRemoteGuard(t *testing.T) {
 	}
 }
 
+// A GEMINI CLI RUN ON VERTEX AI IS SIGNED IN IN A REMOTE BOX: its switch,
+// GOOGLE_GENAI_USE_VERTEXAI, signs it in from the run's environment (the
+// profile's sign_in_env), as Claude Code's cloud switches sign Claude Code in.
+// Only Gemini CLI's switch counts for it, and only for it: Claude Code's
+// Vertex switch signs no Gemini run in, and Gemini's no Claude Code run.
+//
+// Mutation, red: drop sign_in_env from the gemini-cli profile.
+func TestAGeminiRunOnVertexPassesTheRemoteGuard(t *testing.T) {
+	t.Parallel()
+	gc, seat := creditedCompany(t, "gemini-cli")
+	if err := guardOn(t, gc, seat, sandbox.E2B, map[string]string{
+		"GOOGLE_GENAI_USE_VERTEXAI": "true", "GOOGLE_CLOUD_PROJECT": "acme",
+	}); err != nil {
+		t.Errorf("a Gemini run on Vertex AI was refused: %v", err)
+	}
+	if err := guardOn(t, gc, seat, sandbox.E2B, map[string]string{"CLAUDE_CODE_USE_VERTEX": "1"}); err == nil {
+		t.Error("a Gemini run was let through on Claude Code's Vertex switch")
+	}
+	cc, ccSeat := creditedCompany(t, "claude-code")
+	if err := guardOn(t, cc, ccSeat, sandbox.E2B, map[string]string{"GOOGLE_GENAI_USE_VERTEXAI": "true"}); err == nil {
+		t.Error("a Claude Code run was let through on Gemini CLI's Vertex switch")
+	}
+}
+
 // A LOCAL CELL SEEDS THE FILES AND WRITES A REFRESHED ONE BACK, so files alone
 // are a complete answer there — which is the entire reason the check turns on
 // the placement rather than on the provider.
