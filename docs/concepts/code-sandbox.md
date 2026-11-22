@@ -686,7 +686,7 @@ with the run's [standing instructions](#what-a-harness-is-told) in place of Qwen
 
 **The key is in a file the model's shell can read**: the box has one user, so `~/.qwen/settings.json` is as readable as the box's credential files are to every other runner's shell. Out of the environment it is out of every process's listing and of what a tool prints of its environment, nothing more.
 
-**A run signs in with the entry's key, anywhere, or with its Qwen subscription login in a local box** ([Qwen Code's sign-ins](llm-backends.md#the-other-harnesses)): a run handed no key runs `--auth-type qwen-subscription` on the login the box was seeded with, `~/.qwen/subscription_credentials.json` (`baseUrl`, `clientId`, `tokens` with `access_token`, `refresh_token` and `expiresAt`, `models`), `QWEN_SUBSCRIPTION_BASE_URL` moving its endpoint. The login is **not measured against Qwen's service**.
+**A run signs in with the entry's key, anywhere, or with its Qwen subscription login in a local box** ([Qwen Code's sign-ins](llm-backends.md#the-other-harnesses)): a run handed no key runs `--auth-type qwen-subscription` on the login the box was seeded with, `~/.qwen/subscription_credentials.json` (`baseUrl`, `clientId`, `tokens` with `access_token`, `refresh_token` and `expiresAt`, `models`). Its endpoint is fixed in Qwen Code (`api.qwen.ai`), and no variable moves it (read from the 0.28.3 bundle). The login is **not measured against Qwen's service**.
 
 **Commit attribution** is the run's [git hook](#commit-attribution) alone: Qwen Code's own trailer is off, and its shell runs under the wrapper's `GIT_CONFIG_PARAMETERS`.
 
