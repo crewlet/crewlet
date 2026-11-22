@@ -26,6 +26,12 @@ import (
 // and it sits inside the act route's body bound (operator.MaxActBody).
 const MaxHomeBoardBytes = 512 << 10
 
+// MaxHomeBoardRecordBytes bounds one board's record as stored: the board, kept
+// in its own bytes, and 256 for its two instants and field names, which take
+// 104. A save decides on a read of it, which crosses a leaf's link at the
+// slowest pace in 20 s.
+const MaxHomeBoardRecordBytes = MaxHomeBoardBytes + 256
+
 // ErrInvalidHomeBoard marks a board refused for what it is (not a JSON object,
 // no widget list, past [MaxHomeBoardBytes]), refused the same way every time.
 var ErrInvalidHomeBoard = errors.New("coord: a Home board was refused")

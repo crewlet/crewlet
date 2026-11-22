@@ -134,6 +134,11 @@ const (
 	// rather than shown.
 	MaxMCPToolWordsBytes = 64 << 10
 
+	// MaxMCPDefinitionBytes bounds one definition's record as stored: its
+	// schemas and its words at their bounds ([MCPToolDefinition.Fits]), and
+	// 512 bytes for its digest, instant and field names, which take 179.
+	MaxMCPDefinitionBytes = MaxMCPToolSchemaBytes + MaxMCPToolWordsBytes + 512
+
 	// MaxMCPListingDefinitionBytes bounds the records one listing keeps, as
 	// stored: a tool whose definition waits for a review first, so its change
 	// can be shown, then the rest in name order while they fit; a tool past
