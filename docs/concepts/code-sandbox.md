@@ -2221,8 +2221,8 @@ the server the id of the session the run works in, as `CREWLET_STEER_SESSION` on
 - **It writes nothing**: OpenCode reloads a configured plugin whose directory
   changes, and a note never touches the box's disk.
 
-Measured against a stub model API recording every request, on OpenCode
-2.0.32, 2.1.4, 2.2.7 and 2.3.0: a note of up to 1,048,576 UTF-16 units reached
+Measured against a stub model API recording every request, on OpenCode 2.3.0:
+a note of up to 1,048,576 UTF-16 units reached
 the model byte for byte; it arrives plain while the session has room for it
 (round(N/4) tokens more than its last reported usage stays within its
 compaction point), and otherwise inside the checkpoint, so the plugin's check
