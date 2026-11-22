@@ -34,6 +34,7 @@ import type {
   AdvisorReport,
   AdvisorReportList,
   AdvisorRunSummary,
+  AdvisorSnapshot,
 } from "./advisorFindings.ts";
 import type {
   ModelCheck,
@@ -50,6 +51,7 @@ import type { LogPosition } from "./session.ts";
 // `protocol.js`, where the `~` alias does not exist.
 import type { BUDGET_WINDOWS } from "../contract/config.ts";
 import type { SettingRange } from "../contract/limits.ts";
+import type { GrowthChangesAnswer } from "../contract/growth.ts";
 import type { OBJECT_FINDINGS, OBJECTS_STATES } from "../contract/fleet.ts";
 import type { BudgetState, GROUPS } from "../contract/spend.ts";
 import type { EXECUTOR_TAIL_OUTCOMES } from "../contract/executor.ts";
@@ -524,7 +526,7 @@ export interface WorkItemRef {
 /** Where in a turn a seat is (`livestate.Stage`). */
 export type TurnStage = "context" | "phase" | "parked";
 
-/** The turn a seat is on — running, or parked while its executor runs in its box. */
+/** One turn a seat is on — running, or parked while its executor runs in its box. */
 export interface LiveTurn {
   turn_id: string;
   work_item?: WorkItemRef | null;
@@ -734,21 +736,22 @@ export interface LiveCall {
 /** A live call's heavy-field versions, keyed as `LIVE_CALL_DETAIL` is. */
 export type CallVersions = Record<keyof typeof LIVE_CALL_DETAIL, number>;
 
-/** The `live_call{agent_id}` answer: one seat's call in flight, whole, or
- *  null — asked and answered by the seat's AGENT ID, the key every overlay is
- *  merged by, never by its name, which two seats may share. */
+/** The `live_call{agent_id}` answer: one seat's calls in flight, whole, one
+ *  per turn it runs, `[]` for none — asked and answered by the seat's AGENT
+ *  ID, the key every overlay is merged by, never by its name, which two seats
+ *  may share. */
 export interface LiveCallAnswer {
   agent_id: string;
   /** The handle the seat answers to — a label, never what the answer is
    *  paired by. */
   handle: string;
-  live_call: LiveCall | null;
-  /** The overlay sequence this call is at — see `Overlay.live_call_seq`, and
-   *  present beside a null call too. The answer can reach the tab after a push
-   *  that was generated later, so one behind what the store has applied is
-   *  dropped when the slot has since been cleared or taken by another call,
-   *  and otherwise brings only the heavy fields it holds at a newer version
-   *  (`Store.applyLiveCall`). */
+  live_calls: LiveCall[];
+  /** The overlay sequence these calls are at — see `Overlay.live_call_seq`,
+   *  and present beside an empty list too. The answer can reach the tab after a
+   *  push that was generated later, so one behind what the store has applied
+   *  is dropped for a turn whose slot has since been cleared or taken by
+   *  another call, and otherwise brings only the heavy fields it holds at a
+   *  newer version (`Store.applyLiveCall`). */
   live_call_seq: number;
 }
 
@@ -797,25 +800,32 @@ export interface Overlay {
   /** Why a `stopped` seat cannot take work; null on a seat that is not
    *  stopped. Always present, so a seat that started again sheds its reason. */
   stopped_reason?: StoppedReason | null;
+  /** The phase a turn of the seat last started, cleared when that turn ends. A
+   *  screen reads a turn's own phase off its call (`lib/seatturn.ts`). */
   current_phase?: string | null;
   current_iteration?: number;
-  live_call?: LiveCall | null;
-  /** Orders the `live_call` slot across calls and across a clear: the engine's
-   *  own monotonic sequence read when the seat's call last changed — set,
-   *  folded, frozen or cleared to null — carried on every surface the call is,
-   *  a null call included. A tab records the newest it has applied per seat,
-   *  and a push or an answer whose sequence is behind it changes the slot only
-   *  where the slot is still that same call — and then only by a heavy field
-   *  at a newer version — so a `live_call` answer that a clearing or newer-call
+  /** The seat's calls in flight, ONE PER TURN it runs, oldest first, each
+   *  paired with its turn by `turn_id`. A call its phase's failure froze stays
+   *  after its turn ends, so a call may name a turn `turns` no longer lists.
+   *  Always a list, `[]` for none. */
+  live_calls?: LiveCall[];
+  /** Orders the `live_calls` slot across calls and across a clear: the engine's
+   *  own monotonic sequence read when any of the seat's calls last changed —
+   *  set, folded, frozen or cleared — carried on every surface the calls are,
+   *  an empty list included. A tab records the newest it has applied per seat,
+   *  and a push or an answer whose sequence is behind it changes a turn's call
+   *  only where it is still that same call — and then only by a heavy field at
+   *  a newer version — so a `live_call` answer that a clearing or newer-call
    *  push overtook on the wire cannot put an older call back on screen. Reset
    *  from each snapshot; comparable only within one node's projection, the
    *  only one a socket reads between snapshots. */
   live_call_seq?: number;
   last_error?: ErrorInfo | null;
   budget?: BudgetMeter | null;
-  /** The turn the seat is on, or null when it is on none. Always present, for
-   *  `stopped_reason`'s reason. */
-  turn?: LiveTurn | null;
+  /** The turns the seat is on, oldest first by start, `[]` when it is on none:
+   *  up to its `sandbox.max_concurrent_runs` at once, two by default. Always
+   *  present, for `stopped_reason`'s reason. */
+  turns?: LiveTurn[];
   /** The newest turn the seat ended, or null while none is known. */
   last_turn?: LastTurn | null;
   /** Who paused the seat, or null while nobody has. Always present, for
@@ -1042,9 +1052,10 @@ export interface ExecutorRow {
   held_call?: McpHeldCall;
   /**
    * What that call would send, opened from its seal: the seat's trail, sent
-   * to an administrator and the seat's lead, who are who may approve it; null
-   * where its seal does not open on the answering node. Absent for every
-   * other reader, and on a run that holds no call.
+   * to an administrator and the seat's lead, as sent to one who may answer
+   * the call while it waits and redacted to every other; null where its seal
+   * does not open on the answering node. Absent for every other reader, and
+   * on a run that holds no call.
    */
   held_arguments?: Record<string, unknown> | null;
 
@@ -1594,6 +1605,7 @@ export interface ConfigRole {
   llm_subagent?: ProviderKeys;
   llm_auxiliary?: ProviderKeys;
   llm_judge?: ProviderKeys;
+  llm_triage?: ProviderKeys;
   /** Unset means the company default, so this is three-valued. */
   learning_enabled?: boolean | null;
   /** A human seat's identities: one per surface, keyed by [HumanContactKey]. */
@@ -1844,6 +1856,7 @@ export type PhaseLLM =
       subagent?: ProviderKeys;
       auxiliary?: ProviderKeys;
       judge?: ProviderKeys;
+      triage?: ProviderKeys;
     };
 
 /**
@@ -3669,6 +3682,19 @@ export interface WorkInboxEntry {
  *  `held` is false for somebody nobody has written yet, which is an EMPTY
  *  state rather than a missing one: every human starts with no inbox, no pins
  *  and no priorities, and the first write is what creates the record. */
+/**
+ * The reader's Home board, kept under the seat they hold
+ * (`internal/api/queries`, `home_board`).
+ */
+export interface HomeBoardAnswer {
+  /** The seat the board is kept under, or "" for a sign-in that holds none. */
+  seat: string;
+  /** The board as last saved, untrusted until validated; null when none is stored. */
+  board: unknown;
+  /** The stored record's revision, which a save names as `if_match`; 0 when none. */
+  revision: number;
+}
+
 export interface WorkPersonState {
   handle: string;
   /** EXCEPTIONS to `seen_through`: `unread` holds notices at or below it
@@ -6747,12 +6773,40 @@ export interface CompanyFeedAnswer {
   complete: boolean;
 }
 
+/**
+ * A fold-in waiting on a person's decision: whether another person's request,
+ * waiting behind a running executor, joins that executor's work on the apps of
+ * whom the work is for. Answered with `answer_executor{turn_id, launch_id,
+ * fold_in, choice}`, `choice` one of the decision's options.
+ */
+export interface FoldInItem {
+  id: string;
+  turn_id: string;
+  launch_id: string;
+  /** The busy seat, and whom its running work is for. */
+  seat: string;
+  requester: string;
+  /** Who asked, where, and their words as the row keeps them; `cut` more
+   *  characters are where they were written. */
+  asker: string;
+  asker_kind: string;
+  conversation: string;
+  words: string;
+  cut: number;
+  /** Whom it was put to, the requester first. */
+  put_to: string[];
+  asked_at: string;
+  decision: WorkDecision;
+  work_item?: WorkItemRef | null;
+}
+
 /** One thing waiting on a person's decision. */
 export interface DecisionItem {
-  kind: "ask" | "run";
+  kind: "ask" | "run" | "fold_in";
   at: string;
   ask?: WorkAskRow;
   run?: ExecutorRow;
+  fold_in?: FoldInItem;
   /**
    * The agent that asked was asked under access it no longer holds: what
    * changed in its access since, as the lines it is told. Empty where the
@@ -7567,10 +7621,15 @@ export interface ArtifactCommentThread {
   created_at: string;
   updated_at: string;
   remarks: ArtifactCommentRemark[];
+  /** The thread began on the page before: these are the rest of its remarks. */
+  continued: boolean;
+  /** The next page carries more of this thread's remarks. */
+  remarks_cut: boolean;
 }
 
-/** `artifact_comments{id, version}`: every thread, placed on the version asked. `open` counts open
- *  threads still placed, `outdated` open ones whose part is gone, `resolved` every resolved one. */
+/** `artifact_comments{id, version, cursor}`: a page of the threads, placed on the version asked;
+ *  `next` asks for the page after. `open` counts open threads still placed, `outdated` open ones
+ *  whose part is gone, `resolved` every resolved one, each thread on the page it begins on. */
 export interface ArtifactCommentsAnswer {
   artifact: string;
   version: number;
@@ -7580,6 +7639,7 @@ export interface ArtifactCommentsAnswer {
   can_comment: boolean;
   role: ArtifactRole;
   threads: ArtifactCommentThread[];
+  next?: string;
 }
 
 /** One share and the seats a unit share reaches today (`artifactsapi.ShareAccess`). */
@@ -8440,6 +8500,7 @@ export interface QueryMap {
   advisor_notices: AdvisorNoticesAnswer;
   advisor_reports: AdvisorReportList;
   advisor_report: AdvisorReport;
+  advisor_snapshot: AdvisorSnapshot;
   advisor_access: AccessFixAnswer;
   /** The administrator's reading, or a member's: narrow on `reading`. */
   mcp_servers_status: McpServersStatusAnswer | McpMemberServersStatusAnswer;
@@ -8509,6 +8570,10 @@ export interface QueryMap {
   work_flow: WorkFlowAnswer;
   company_feed: CompanyFeedAnswer;
   decisions: DecisionsAnswer;
+  /** The reader's Home board as the engine keeps it under their seat. */
+  home_board: HomeBoardAnswer;
+  /** The agents' growth acts, newest first (`internal/accessdomain`), an administrator's read. */
+  growth_changes: GrowthChangesAnswer;
   answered_decisions: AnsweredDecisionsAnswer;
   /* THE CHAT FAMILY IS THE CHATLET APP'S, ALL OF IT, and asked for the seat the
      caller acts as and nobody else: none of these takes a handle — there is

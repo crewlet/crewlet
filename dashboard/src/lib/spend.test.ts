@@ -131,7 +131,14 @@ describe("the legend", () => {
     expect(phaseColor("Execute")).toBe(dataColor(0));
     expect(phaseColor("review")).toBe(dataColor(1));
     expect(phaseColor("subagent")).toBe(dataColor(2));
-    for (const aux of ["auxiliary", "judge", "onboarding", "", "a-phase-from-a-newer-peer"]) {
+    for (const aux of [
+      "auxiliary",
+      "judge",
+      "onboarding",
+      "triage",
+      "",
+      "a-phase-from-a-newer-peer",
+    ]) {
       expect(phaseColor(aux)).toBe(dataColor(3));
     }
     // Never a key of the object's prototype read as a band.

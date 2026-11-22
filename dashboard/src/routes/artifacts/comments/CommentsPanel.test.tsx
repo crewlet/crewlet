@@ -71,6 +71,8 @@ function thread(over: Partial<ArtifactCommentThread> = {}): ArtifactCommentThrea
       remark("r1", "avery", "The annual price is buried."),
       remark("r2", "pm", "Moved up."),
     ],
+    continued: false,
+    remarks_cut: false,
     ...over,
   };
 }

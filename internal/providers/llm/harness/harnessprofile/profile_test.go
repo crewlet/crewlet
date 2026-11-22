@@ -436,7 +436,7 @@ func TestEachProfileNamesTheVariablesItsHarnessReads(t *testing.T) {
 		"copilot":      {"COPILOT_GITHUB_TOKEN", ""},
 		"grok":         {"XAI_API_KEY", ""},
 		"muse-code":    {"META_API_KEY", ""},
-		"kimi-code":    {"", ""},
+		"kimi-code":    {"KIMI_MODEL_API_KEY", ""},
 		"hermes":       {"", ""},
 		"pi":           {"", ""},
 		"custom":       {"", ""},

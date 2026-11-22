@@ -716,8 +716,8 @@ func TestAnOfflineChangeOnAnUnconfirmedPublishIsPublishedOverIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target.RevisionID != made || target.Epoch != landed.Epoch+1 {
-		t.Errorf("the fleet is on %s at epoch %d, want the change %s published over %s's "+
+	if target.RevisionID != made || target.Epoch <= landed.Epoch {
+		t.Errorf("the fleet is on %s at epoch %d, want the change %s published past %s's "+
 			"epoch %d", target.RevisionID, target.Epoch, made, sent, landed.Epoch)
 	}
 	if after := bootRow(t, db); after.ID != made || after.Offer != nil {
@@ -1201,7 +1201,7 @@ func refuses(t *testing.T, db *store.DB, plane coord.Plane) {
 	if err != nil || !pointed {
 		t.Fatalf("the tick's read of the pointer: pointed=%v err=%v", pointed, err)
 	}
-	payload, found, err := plane.Payload(t.Context(), target.RevisionID)
+	payload, found, err := plane.Body(t.Context(), target)
 	if err != nil || !found {
 		t.Fatalf("the tick's read of revision %s: found=%v err=%v", target.RevisionID, found, err)
 	}

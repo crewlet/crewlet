@@ -530,3 +530,40 @@ func TestAGitletMergeIsHeldToItsTargetsGate(t *testing.T) {
 			desk.escalated)
 	}
 }
+
+// A HELD MERGE WHOSE PULL REQUEST ALREADY MERGED needs nobody's answer: the
+// engine says so, naming the merge, in place of waking its delegate. One still
+// open, a Gitlet change (read only for a turn) and a read that fails say
+// nothing, and the request goes to its delegates as before.
+//
+// Mutation: read open where merged is meant, and a pull request still waiting
+// on its merge is answered as merged.
+func TestAMergeWhosePullRequestAlreadyMergedIsSaidToBeDone(t *testing.T) {
+	t.Parallel()
+	merged := readyPull()
+	merged.Open, merged.Merged, merged.MergeCommit = false, true, mergeOf42
+	pulls := &fakePulls{facts: map[int]builtin.PullFacts{42: merged}}
+	deps := builtin.ReleaseDeps{Pulls: pulls}
+	said, err := deps.MergedAlready(t.Context(), "sre", pullMergeArgs(pullHead))
+	if err != nil || !strings.Contains(said, "acme/web#42 has already merged") ||
+		!strings.Contains(said, mergeOf42[:12]) {
+		t.Fatalf("a merged pull request reads %q, %v, want it said to be merged, with its merge", said, err)
+	}
+	for name, c := range map[string]struct {
+		deps builtin.ReleaseDeps
+		args map[string]any
+	}{
+		"still open":      {builtin.ReleaseDeps{Pulls: &fakePulls{facts: map[int]builtin.PullFacts{42: readyPull()}}}, pullMergeArgs(pullHead)},
+		"a Gitlet change": {deps, map[string]any{"change": "web!42", "head": pullHead, "reason": "ship it"}},
+		"no GitHub":       {builtin.ReleaseDeps{}, pullMergeArgs(pullHead)},
+	} {
+		if said, err := c.deps.MergedAlready(t.Context(), "sre", c.args); err != nil || said != "" {
+			t.Errorf("%s: answered %q, %v, want nothing said", name, said, err)
+		}
+	}
+	unread := &fakePulls{factsErr: errors.New("GitHub did not answer")}
+	if said, err := (builtin.ReleaseDeps{Pulls: unread}).MergedAlready(t.Context(), "sre",
+		pullMergeArgs(pullHead)); err == nil || said != "" {
+		t.Errorf("an unread pull request answered %q, %v, want the error", said, err)
+	}
+}

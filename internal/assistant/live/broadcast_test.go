@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/assistant/wire"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/recordseal"
@@ -171,7 +172,8 @@ func node(t *testing.T, b *memory.Broker, id string, keys fleetKeys, s Server) (
 	}
 	sp := &spy{Broker: q}
 	f, err := NewFleet(FleetOptions{Node: id, Broker: sp, Roster: roster{"node-a": true,
-		"node-b": true}, Cipher: keys.cipher, Frames: frames, Replays: replays, Stops: stops})
+		"node-b": true}, Cipher: keys.cipher, Frames: frames, Replays: replays, Stops: stops,
+		Answers: queue.NewAnswerBudget(nil)})
 	if err != nil {
 		t.Fatal(err)
 	}

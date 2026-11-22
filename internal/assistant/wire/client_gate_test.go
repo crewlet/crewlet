@@ -50,7 +50,7 @@ func closedSets() map[string][]string {
 		"AssistantTitleSource":     strs(wire.TitleSources),
 		// A proposal's taint is the surface its outside text came from.
 		"AssistantTaintSource": strs(provenance.Sources),
-		// --- deep work (im-deep) ---
+		// --- a question's attachments ---
 		"AssistantAttachmentMediaType": wire.AttachmentMediaTypes,
 	}
 }
@@ -117,6 +117,7 @@ func TestTheDashboardBoundsTheAssistantAtTheEnginesLimits(t *testing.T) {
 		"ASSISTANT_PAGE_SCREEN_PATTERN":            wire.PageScreenPattern,
 		"ASSISTANT_PAGE_KEY_PATTERN":               wire.PageKeyPattern,
 		"ASSISTANT_PAGE_TITLE_MAX_RUNES":           strconv.Itoa(wire.PageTitleMaxRunes),
+		"ASSISTANT_TITLE_MAX_RUNES":                strconv.Itoa(wire.TitleMaxRunes),
 		"ASSISTANT_PAGE_VALUE_MAX_BYTES":           strconv.Itoa(wire.PageValueMaxBytes),
 		"ASSISTANT_PAGE_ID_MAX_BYTES":              strconv.Itoa(wire.PageIDMaxBytes),
 		"ASSISTANT_PAGE_MAP_MAX_KEYS":              strconv.Itoa(wire.PageMapMaxKeys),
@@ -171,6 +172,8 @@ func shapes() map[string]reflect.Type {
 		"AssistantChange":              reflect.TypeFor[wire.Change](),
 		"AssistantWord":                reflect.TypeFor[wire.Word](),
 		"AssistantReceipt":             reflect.TypeFor[wire.Receipt](),
+		"AssistantRef":                 reflect.TypeFor[wire.Ref](),
+		"AssistantPart":                reflect.TypeFor[wire.Part](),
 		"AssistantPageActionRef":       reflect.TypeFor[wire.PageActionRef](),
 		"AssistantTechnicalRequest":    reflect.TypeFor[wire.TechnicalRequest](),
 		"AssistantFailure":             reflect.TypeFor[wire.Failure](),
@@ -215,7 +218,7 @@ func shapes() map[string]reflect.Type {
 		"AssistantViewerModel":         reflect.TypeFor[wire.ViewerModel](),
 		"AssistantConversationRename":  reflect.TypeFor[wire.ConversationRename](),
 		"AssistantModelNotice":         reflect.TypeFor[wire.ModelNotice](),
-		// --- deep work (im-deep) ---
+		// --- a question's attachments ---
 		"AssistantFileRef":    reflect.TypeFor[wire.FileRef](),
 		"AssistantFileStored": reflect.TypeFor[wire.FileStored](),
 	}

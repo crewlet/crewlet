@@ -1,9 +1,12 @@
 package livestate
 
-// The in-flight call: seeded when a phase opens, folded on every progress
-// round, frozen on failure, cleared on a clean completion.
+// The in-flight calls, one per turn: seeded when a phase opens, folded on every
+// progress round, frozen on failure, cleared on a clean completion. A turn runs
+// one phase at a time, so a call is held under its turn id, and the seat's
+// other turns' calls are never read against it.
 
 import (
+	"cmp"
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -131,12 +134,12 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 	// LOOKED UP, not created: a round the guards below discard moves nothing,
 	// and an entry made for it would claim the projection knows the seat.
 	agent := s.agents[id]
+	turnID := str(payload, "turn_id")
 	var cur *LiveCall
 	if agent != nil {
-		cur = agent.liveCall
+		cur = agent.calls[turnID]
 	}
 
-	turnID := str(payload, "turn_id")
 	phase := str(payload, "phase")
 	iteration := num(payload, "iteration")
 	roundNum := num(payload, "round_num")
@@ -186,7 +189,7 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 			return ""
 		}
 	case cur != nil && !at.empty() && newStamp(cur.UpdatedAt).after(at):
-		// A different call, and the one held is newer.
+		// A different call of the same turn, and the one held is newer.
 		return ""
 	}
 
@@ -202,6 +205,7 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 	s.touchTurn(agent, env, payload, StagePhase)
 	if phase != "" {
 		agent.currentPhase = phase
+		agent.phaseTurn = turnID
 	}
 	agent.currentIteration = iteration
 
@@ -241,7 +245,7 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 		startedAt = cur.StartedAt
 	}
 
-	agent.liveCall = &LiveCall{
+	next := &LiveCall{
 		TurnID:         turnID,
 		WorkKey:        str(payload, "work_key"),
 		Phase:          phase,
@@ -300,9 +304,42 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 	if cur.sameCall(turnID, phase, iteration) {
 		held = cur
 	}
-	agent.liveCall.Versions = s.restamp(held, agent.liveCall)
-	agent.liveCallSeq = s.versions
+	next.Versions = s.restamp(held, next)
+	s.holdCall(agent, next)
 	return id
+}
+
+// holdCall puts a call in its turn's slot and advances the seat's overlay
+// sequence to the version just handed out — see [Overlay.LiveCallSeq].
+//
+// A FROZEN CALL OF A TURN THE SEAT NO LONGER HOLDS GOES with it: a failure's
+// call stays on screen until the seat's next call opens, as it did when one
+// slot held both, rather than for as long as the seat runs other turns.
+func (s *LiveState) holdCall(agent *agentLive, call *LiveCall) {
+	if agent.calls == nil {
+		agent.calls = map[string]*LiveCall{}
+	}
+	for id, held := range agent.calls {
+		if id != call.TurnID && held.Failed && agent.turns[id] == nil {
+			delete(agent.calls, id)
+		}
+	}
+	agent.calls[call.TurnID] = call
+	agent.liveCallSeq = s.versions
+}
+
+// callList is the seat's calls for a reader, oldest first by start, `[]` for
+// none: copies, so none handed out can change under it.
+func (a *agentLive) callList() []*LiveCall {
+	out := make([]*LiveCall, 0, len(a.calls))
+	for _, call := range a.calls {
+		out = append(out, call.clone())
+	}
+	slices.SortFunc(out, func(x, y *LiveCall) int {
+		return cmp.Or(newStamp(x.StartedAt).chronological(newStamp(y.StartedAt)),
+			cmp.Compare(x.TurnID, y.TurnID))
+	})
+	return out
 }
 
 // recordPhaseFailure remembers a failed phase and FREEZES its call rather than
@@ -316,7 +353,7 @@ func (s *LiveState) recordPhaseFailure(agent *agentLive, env Envelope, payload m
 	failure := failureOf(env, payload, str(payload, "phase"))
 	agent.lastError = failure
 
-	call := agent.liveCall
+	call := agent.calls[str(payload, "turn_id")]
 	if !call.sameCall(str(payload, "turn_id"), str(payload, "phase"), num(payload, "iteration")) {
 		return
 	}
@@ -383,15 +420,26 @@ func failureOf(env Envelope, payload map[string]any, phase string) *ErrorInfo {
 	}
 }
 
-// clearCall drops a seat's live call and advances its overlay sequence, so the
-// clear is ordered against a call a push carries or a tab fetches whole that
-// the clear overtook on the wire — see [Overlay.LiveCallSeq]. A no-op when
-// there is nothing to clear, so a tab holding nothing has no sequence to move.
-func (s *LiveState) clearCall(a *agentLive) {
-	if a.liveCall == nil {
+// clearCall drops turn `turnID`'s live call and advances the seat's overlay
+// sequence, so the clear is ordered against a call a push carries or a tab
+// fetches whole that the clear overtook on the wire — see
+// [Overlay.LiveCallSeq]. A no-op when there is nothing to clear, so a tab
+// holding nothing has no sequence to move.
+func (s *LiveState) clearCall(a *agentLive, turnID string) {
+	if a.calls[turnID] == nil {
 		return
 	}
-	a.liveCall = nil
+	delete(a.calls, turnID)
+	s.versions++
+	a.liveCallSeq = s.versions
+}
+
+// clearCalls drops every call the seat holds, as one move of its sequence.
+func (s *LiveState) clearCalls(a *agentLive) {
+	if len(a.calls) == 0 {
+		return
+	}
+	clear(a.calls)
 	s.versions++
 	a.liveCallSeq = s.versions
 }
@@ -399,8 +447,9 @@ func (s *LiveState) clearCall(a *agentLive) {
 // finishLiveCall closes out the in-flight call when its phase completes.
 //
 // It records the call as finished — so no later progress round can resurrect it
-// — and clears the live row. Only when the completed phase MATCHES the live
-// call: a late completion for a prior phase must not wipe a newer phase's row.
+// — and clears the live row. Only when the completed phase MATCHES its turn's
+// live call: a late completion for a prior phase must not wipe a newer phase's
+// row.
 func (s *LiveState) finishLiveCall(agent *agentLive, env Envelope, payload map[string]any) {
 	turnID := str(payload, "turn_id")
 	phase := str(payload, "phase")
@@ -413,16 +462,13 @@ func (s *LiveState) finishLiveCall(agent *agentLive, env Envelope, payload map[s
 	if turnID != "" {
 		s.finishedCalls.put(callKey(turnID, phase, iteration), newStamp(env.Timestamp))
 	}
-	if agent.liveCall == nil {
-		return
-	}
 	// A failed phase deliberately keeps its frozen call on screen. Only a
 	// clean completion clears.
 	if flag(payload, "failed") {
 		return
 	}
-	if agent.liveCall.sameCall(turnID, phase, iteration) {
-		s.clearCall(agent)
+	if agent.calls[turnID].sameCall(turnID, phase, iteration) {
+		s.clearCall(agent, turnID)
 	}
 }
 

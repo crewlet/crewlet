@@ -188,7 +188,8 @@ const (
 	// the engine host, beside the profile's stance.
 	CheckShell CheckName = "shell"
 	// CheckWeb is whether the harness fetched from the web with its own tool,
-	// beside the entry's stance.
+	// beside the entry's stance, and, where the profile declares web_search,
+	// whether its search-only run searched and refused a fetch and a shell.
 	CheckWeb CheckName = "web"
 	// CheckExecutor is what a seat's executor launch on the entry needs
 	// beyond a login, for an entry an executor chain holds.
@@ -650,10 +651,20 @@ func (p *Provider) diagnose(ctx context.Context, opts DiagnoseOptions, refused [
 			c.fail(CheckShell, CheckKindConfig, problem)
 		}
 		verdict, problem, kind := p.webProbe(ctx)
-		c.set(CheckWeb, web+"; "+verdict)
 		if problem != "" {
 			c.fail(CheckWeb, kind, problem)
 		}
+		if p.profile.CanSearchWeb() {
+			// ASK CREWLET'S SEARCH RUN is the harness's web too, measured on
+			// the same line, and not a check of its own: the dashboard
+			// mirrors the check names.
+			searched, problem, kind := p.searchProbe(ctx)
+			verdict += "; " + searched
+			if problem != "" {
+				c.fail(CheckWeb, kind, problem)
+			}
+		}
+		c.set(CheckWeb, web+"; "+verdict)
 	}
 
 	// NOTHING THE ENGINE HANDS THE HARNESS SIGNS IT IN — which is a problem
@@ -848,14 +859,13 @@ func (p *Provider) executor(opts DiagnoseOptions) (lines, problems []string) {
 				"its work. Set it to a URL that box reaches the node at",
 			orNone(opts.Cell), bridgeURLVar, p.key))
 	}
-	if opts.RunsAsRoot && p.harness == string(config.HarnessClaudeCode) &&
+	if root := config.RootProblem(p.harness, p.key, config.Placement(opts.Cell)); opts.RunsAsRoot && root != "" &&
 		config.RunsAsEngineUser(config.Placement(opts.Cell)) {
 		// ALONGSIDE THE BRIDGE'S VERDICT, not instead of it: both are launches
 		// that fail at a seat's first work. The smoke run cannot show it,
-		// because it runs the deny-local-tools profile, not the executor's
-		// bypassPermissions mode.
-		lines = append(lines, "user: root — Claude Code refuses its executor's permission mode")
-		problems = append(problems, config.RootClaudeCodeProblem(p.key, config.Placement(opts.Cell)))
+		// because it runs the deny-local-tools profile, not the executor's mode.
+		lines = append(lines, "user: root — "+p.harness+" refuses its executor's permission mode")
+		problems = append(problems, root)
 	}
 	return lines, problems
 }

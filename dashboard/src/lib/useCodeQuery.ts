@@ -32,6 +32,21 @@
  * with every write would read as a new question, and a new question shows
  * nothing of the old one until it answers.
  *
+ * NOR IS A MOVING WINDOW'S START ([CodeWindow]). "The last 24 hours",
+ * aligned to the hour, has a new `since` every hour, and "the last 7 days" a
+ * new one at the reader's midnight; in the key, each would be a new question,
+ * and the screen's rows would give way to its loading placeholder as the clock
+ * turned and come back as new elements. The window's NAME is part of the
+ * question and its EDGES ([ClockEdge], which [CodeParams] refuses by type) are
+ * read at every ask (Settings › Audit's identity trail keys its read the same
+ * way), and the answer carries the edges it was asked at, so a screen that
+ * draws from them (a day's count under its day) draws from the answer's.
+ *
+ * THE MOVED WINDOW IS READ WITHIN ONE CADENCE, never on the instant it moves,
+ * because its edges are aligned and every open tab's move at once: a screen
+ * that polls reads it on its next poll, and one that does not asks again,
+ * quietly, at a random moment within [WINDOW_SPREAD_MS].
+ *
  * AND THE SHAPE A SCREEN READS: `data`, `loading`, the refusal's code and what
  * it said, and `refetch` — `useQuery`'s result, so `QueryState` and `usePaged`
  * read a code question as they read any other.
@@ -65,6 +80,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { restErrorCode, useRest } from "./useRest.ts";
 import { withFloor, type QueryResult } from "./useQuery.ts";
+import type { ClockEdge } from "./range.ts";
 import {
   QueryError,
   pathSegment,
@@ -83,18 +99,31 @@ import { session, SessionFloors } from "~/protocol/session.ts";
  * repeated.
  */
 export type CodeParams = Readonly<
-  Record<string, string | number | boolean | undefined | readonly string[]>
+  Record<string, Unmoving | number | boolean | undefined | readonly Unmoving[]>
 >;
 
-export interface CodeQueryOptions {
+/**
+ * A string that is no [ClockEdge]. `length` keeps the type from being a weak
+ * one, to which TypeScript would refuse a string for sharing no property with
+ * it; the brand, optional and `never`, is what an edge cannot meet.
+ */
+type Unmoving = string & { readonly length: number } & { readonly [K in EdgeBrand]?: never };
+
+/** The brand's key, read off [ClockEdge] rather than exported from `lib/range.ts`. */
+type EdgeBrand = Exclude<keyof ClockEdge, keyof string>;
+
+/**
+ * A window's edges ([CodeWindow]): each an instant the clock moves, or several
+ * as one parameter ([joinEdges]).
+ */
+export type CodeEdges = Readonly<Record<string, ClockEdge | undefined>>;
+
+/** What one ask sends: the question, and the window's edges beside it. */
+type Sent = Readonly<Record<string, string | number | boolean | undefined | readonly string[]>>;
+
+interface CodeAskOptions {
   /** Skip the question entirely — for a screen whose parameter is not chosen yet. */
   enabled?: boolean;
-  /**
-   * Re-ask every N ms, quietly. Only for an answer something else moves while
-   * the screen is open: the code log has no push to the dashboard, so another
-   * person's push reaches a screen by this or not at all.
-   */
-  pollMs?: number;
   /** Ask again when the tab comes back. See `useQuery`'s option of the same name. */
   refetchOnFocus?: boolean;
   /**
@@ -104,6 +133,44 @@ export interface CodeQueryOptions {
    */
   refetchOnReconnect?: boolean | "unreached";
 }
+
+/**
+ * A window the clock moves (the file's doc): `name` is what the reader chose
+ * ("1d", "7d", a view) and part of the question; `edges` are the instants it
+ * stands for now (`since`, `day_bounds`), sent with every ask and never part
+ * of the question. The name must tell apart every two questions whose
+ * parameters differ only by their edges.
+ */
+export interface CodeWindow {
+  name: string;
+  edges: CodeEdges;
+}
+
+export interface CodeQueryOptions extends CodeAskOptions {
+  /**
+   * Re-ask every N ms, quietly. Only for an answer something else moves while
+   * the screen is open: the code log has no push to the dashboard, so another
+   * person's push reaches a screen by this or not at all.
+   */
+  pollMs?: number;
+  /** A window the clock moves ([CodeWindow]). */
+  window?: CodeWindow;
+}
+
+/**
+ * The span a moved window is read again within on a screen that does not
+ * poll: a MINUTE, the cadence Gitlet's day-windowed listings (Repositories,
+ * Pushes) already poll at. A day's edge read up to a minute after the reader's
+ * midnight changes nothing a reader can act on, and a minute spreads every
+ * open tab's ask over sixty seconds rather than one instant.
+ */
+export const WINDOW_SPREAD_MS = 60_000;
+
+/** A code question's result: `useQuery`'s, and the edges its answer was asked at. */
+export type CodeQueryResult<T> = QueryResult<T> & {
+  /** The window's edges the answer on screen was asked at; null before one, or with no window. */
+  edges: CodeEdges | null;
+};
 
 /**
  * The most pages one filled reading of a listing of changes asks, its first
@@ -163,7 +230,7 @@ export interface CodeChangesOptions extends CodeQueryOptions {
  * call, and the segment gate (`protocol/rest.test.ts`) reads the `?` that ends
  * the path before this value.
  */
-export function codeSearch(what: CodeQueryName, params: CodeParams = {}): string {
+export function codeSearch(what: CodeQueryName, params: Sent = {}): string {
   const asked = withFloor(what, JSON.stringify(params));
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(asked)) {
@@ -215,7 +282,7 @@ export const IMMUTABLE_KEPT = 64;
 const kept = new Map<string, unknown>();
 
 /** The question's key: its kind and its parameters, never the floor (see the file's doc). */
-const keyOf = (what: CodeQueryName, params: CodeParams = {}): string =>
+const keyOf = (what: CodeQueryName, params: Sent = {}): string =>
   `${what}?${JSON.stringify(params)}`;
 
 /** The immutable answer the tab keeps for a question, read as the most recent. */
@@ -252,14 +319,17 @@ export const codeRest = {
     what: K,
     params: CodeParams = {},
     signal?: AbortSignal,
+    /** A window's edges, for a later page of a windowed question ([CodeWindow]). */
+    edges?: CodeEdges | null,
   ): Promise<CodeQueryMap[K]> {
-    const key = keyOf(what, params);
+    const sent: Sent = edges ? { ...params, ...edges } : params;
+    const key = keyOf(what, sent);
     const held = keptAnswer(key);
     if (held !== undefined) return held as CodeQueryMap[K];
     try {
       const answer = await rest.request(
         "GET",
-        `/query/${pathSegment(what)}?${codeSearch(what, params)}`,
+        `/query/${pathSegment(what)}?${codeSearch(what, sent)}`,
         { signal },
       );
       if (answer.immutable) keep(key, answer.body);
@@ -278,7 +348,7 @@ export const codeRest = {
  * a refused page as it reads a refused question.
  */
 async function filledChanges(
-  params: CodeParams,
+  params: Sent,
   rows: number,
   signal: AbortSignal,
 ): Promise<CodeChangesAnswer> {
@@ -287,7 +357,7 @@ async function filledChanges(
   let read = 0;
   let last: CodeChangesAnswer;
   do {
-    const asked: CodeParams = cursor ? { ...params, cursor } : params;
+    const asked: Sent = cursor ? { ...params, cursor } : params;
     const answer = await rest.request(
       "GET",
       `/query/code_changes?${codeSearch("code_changes", asked)}`,
@@ -321,54 +391,67 @@ export function useCodeQuery(
   what: "code_changes",
   params?: CodeParams,
   options?: CodeChangesOptions,
-): QueryResult<CodeChangesAnswer>;
+): CodeQueryResult<CodeChangesAnswer>;
 export function useCodeQuery<K extends CodeQueryName>(
   what: K,
   params?: CodeParams,
   options?: CodeQueryOptions,
-): QueryResult<CodeQueryMap[K]>;
+): CodeQueryResult<CodeQueryMap[K]>;
 export function useCodeQuery<K extends CodeQueryName>(
   what: K,
   params?: CodeParams,
   options: CodeChangesOptions = {},
-): QueryResult<CodeQueryMap[K]> {
+): CodeQueryResult<CodeQueryMap[K]> {
   // A FILL IS ONLY EVER A LISTING OF CHANGES': the overloads offer it on
   // `code_changes` alone, the listing a screen draws a few kept rows of.
   const { enabled = true, pollMs, refetchOnFocus, refetchOnReconnect, fill } = options;
+  const windowed = options.window;
   // THE QUESTION IS THE KEY — its kind and its parameters, never the floor
   // (see the file's doc). The parameters are a fresh literal on every render,
   // so their serialisation is what is compared; a fill is part of the
-  // question, since it changes what the answer holds.
-  const key = enabled ? keyOf(what, params) + (fill ? `#fill=${String(fill)}` : "") : null;
-  const paramsRef = useRef(params);
-  paramsRef.current = params;
+  // question, since it changes what the answer holds, and so is a window's
+  // name, but never its edges (the file's doc).
+  const key = enabled
+    ? keyOf(what, params) +
+      (fill ? `#fill=${String(fill)}` : "") +
+      (windowed ? `#window=${windowed.name}` : "")
+    : null;
+  // WHAT AN ASK SENDS: the question, and the window's edges as they stand at the ask.
+  const edges = windowed ? windowed.edges : null;
+  const sent: Sent = { ...params, ...edges };
+  const asking = useRef({ sent, edges });
+  asking.current = { sent, edges };
   const tagged = useRef<Tagged<CodeQueryMap[K]> | null>(null);
 
-  const result = useRest<CodeQueryMap[K]>(
+  const result = useRest<Asked<CodeQueryMap[K]>>(
     key,
     async (signal) => {
+      // THE EDGES THIS ASK SENT, carried with its answer (the file's doc).
+      const { sent: now, edges: at } = asking.current;
       if (fill) {
         // `code_changes`'s own answer, which the overloads make K's.
-        const filled: unknown = await filledChanges(paramsRef.current ?? {}, fill, signal);
-        return filled as CodeQueryMap[K];
+        const filled: unknown = await filledChanges(now, fill, signal);
+        return { body: filled as CodeQueryMap[K], edges: at };
       }
-      const asking = key ?? "";
+      // KEPT AND TAGGED BY WHAT WAS SENT, edges included: an answer belongs to the instants it was
+      // asked at, whatever the question's key.
+      const sentKey = keyOf(what, now);
       // AN ANSWER THE ENGINE MARKED IMMUTABLE is the tab's, and never asked
       // again while it is kept (the file's doc).
-      const keptBody = keptAnswer(asking);
-      if (keptBody !== undefined) return keptBody as CodeQueryMap[K];
-      const held = tagged.current?.key === asking ? tagged.current : null;
+      const keptBody = keptAnswer(sentKey);
+      if (keptBody !== undefined) return { body: keptBody as CodeQueryMap[K], edges: at };
+      const held = tagged.current?.key === sentKey ? tagged.current : null;
       const answer = await rest.request(
         "GET",
-        `/query/${pathSegment(what)}?${codeSearch(what, paramsRef.current)}`,
+        `/query/${pathSegment(what)}?${codeSearch(what, now)}`,
         { signal, ...(held ? { headers: { "If-None-Match": held.etag } } : {}) },
       );
       if (answer.status === 304) {
         // ONLY EVER THE ANSWER THIS READ NAMED: a 304 to a request that named
         // no tag is no answer to anything this hook holds.
         if (held) {
-          if (answer.immutable) keep(asking, held.body);
-          return held.body;
+          if (answer.immutable) keep(sentKey, held.body);
+          return { body: held.body, edges: at };
         }
         throw new RestError(502, {
           error: "unreadable_body",
@@ -376,13 +459,26 @@ export function useCodeQuery<K extends CodeQueryName>(
         });
       }
       const body = answer.body as CodeQueryMap[K];
-      if (answer.immutable) keep(asking, body);
-      tagged.current = answer.etag ? { key: asking, etag: answer.etag, body } : null;
-      return body;
+      if (answer.immutable) keep(sentKey, body);
+      tagged.current = answer.etag ? { key: sentKey, etag: answer.etag, body } : null;
+      return { body, edges: at };
     },
     { pollMs, refetchOnFocus, refetchOnReconnect },
   );
   const { reload } = result;
+
+  // A MOVED WINDOW ON A SCREEN THAT DOES NOT POLL is asked again, quietly, at
+  // a random moment within [WINDOW_SPREAD_MS] (the file's doc): a later move
+  // starts the wait again, and a new question or an unmount ends it.
+  const edgesKey = JSON.stringify(edges);
+  const moved = useRef({ key, edgesKey });
+  useEffect(() => {
+    const was = moved.current;
+    moved.current = { key, edgesKey };
+    if (pollMs || key === null || was.key !== key || was.edgesKey === edgesKey) return;
+    const timer = setTimeout(() => void reload({ quiet: true }), Math.random() * WINDOW_SPREAD_MS);
+    return () => clearTimeout(timer);
+  }, [key, edgesKey, pollMs, reload]);
 
   // A WRITE FROM THIS TAB ASKS AGAIN, quietly, at the floor it raised — which
   // the very next ask reads. Never blanking the screen: what changed is drawn
@@ -397,11 +493,18 @@ export function useCodeQuery<K extends CodeQueryName>(
   const refetch = useCallback(() => void reload({ quiet: true }), [reload]);
   const detail = sentenceOf(result.error);
   return {
-    data: result.data,
+    data: result.data?.body ?? null,
+    edges: result.data?.edges ?? null,
     loading: result.loading,
     error: result.code,
     refusal: result.refusal,
     ...(detail ? { detail } : {}),
     refetch,
   };
+}
+
+/** An answer, and the window's edges the ask that read it sent. */
+interface Asked<T> {
+  body: T;
+  edges: CodeEdges | null;
 }

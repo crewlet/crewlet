@@ -46,13 +46,17 @@ units:
               subagent: big
               auxiliary: big
               judge: big
+              triage: big
           - name: Flat
             handle: flat
             llm_review: big
             llm_subagent: [other, big]
             llm_auxiliary: big
             llm_judge: big
+            llm_triage: big
 assistant:
+  model: big
+advisor:
   model: big
 `
 
@@ -83,11 +87,14 @@ func TestProviderReferencesCoverEveryWrittenShape(t *testing.T) {
 		{"mapped", config.JobSubagent, "units[0].children[0].roles[0].llm.subagent", []string{"big"}},
 		{"mapped", config.JobAuxiliary, "units[0].children[0].roles[0].llm.auxiliary", []string{"big"}},
 		{"mapped", config.JobJudge, "units[0].children[0].roles[0].llm.judge", []string{"big"}},
+		{"mapped", config.JobTriage, "units[0].children[0].roles[0].llm.triage", []string{"big"}},
 		{"flat", config.JobReview, "units[0].children[0].roles[1].llm_review", []string{"big"}},
 		{"flat", config.JobSubagent, "units[0].children[0].roles[1].llm_subagent", []string{"other", "big"}},
 		{"flat", config.JobAuxiliary, "units[0].children[0].roles[1].llm_auxiliary", []string{"big"}},
 		{"flat", config.JobJudge, "units[0].children[0].roles[1].llm_judge", []string{"big"}},
+		{"flat", config.JobTriage, "units[0].children[0].roles[1].llm_triage", []string{"big"}},
 		{"", config.JobAssistant, "assistant.model", []string{"big"}},
+		{"", config.JobAdvisor, "advisor.model", []string{"big"}},
 	}
 	var got []ref
 	for _, r := range cfg.ProviderReferences("big") {

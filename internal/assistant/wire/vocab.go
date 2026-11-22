@@ -4,7 +4,7 @@ import "slices"
 
 // ProtocolVersion is the version of this vocabulary every frame and every
 // request carries. See the package doc for how it moves.
-const ProtocolVersion = 2
+const ProtocolVersion = 3
 
 // The bounds the dashboard holds a person to before anything is sent, so a
 // limit is met where somebody is typing rather than as a refusal after the
@@ -69,9 +69,10 @@ const (
 )
 
 // FrameMaxBytes is the largest frame the encoder writes and the decoder
-// reads: the per-turn frame log's whole byte budget, because a snapshot frame
-// carries a turn's messages, steps and cards at once. A frame past it is a
-// turn the orchestrator failed to bound, refused rather than cut.
+// reads: the per-turn frame log's whole byte budget. A snapshot frame, which
+// carries a turn's messages, steps and cards at once, is cut to it
+// ([SnapshotEvent.Cut]); any other frame past it is a turn the orchestrator
+// failed to bound, refused rather than cut.
 const FrameMaxBytes = 4 << 20
 
 // ActionContextInvalidate is the reserved [ActionEvent] name the server sends

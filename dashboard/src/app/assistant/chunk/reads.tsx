@@ -15,7 +15,6 @@
 
 import { useMemo, useState, type MouseEvent, type ReactNode } from "react";
 import {
-  ArtifactKindGlyph,
   Button,
   ButtonLink,
   DataGrid,
@@ -29,24 +28,7 @@ import {
   Stack,
   type DataGridColumn,
 } from "@crewlethq/ui";
-import {
-  ActivityGlyph,
-  ArrowUpRightGlyph,
-  BotGlyph,
-  CircleAlertGlyph,
-  CalendarClockGlyph,
-  FileTextGlyph,
-  FolderGlyph,
-  FolderKanbanGlyph,
-  GlobeGlyph,
-  LayersGlyph,
-  ListFilterGlyph,
-  MapGlyph,
-  MessageSquareGlyph,
-  SquareKanbanGlyph,
-  TableGlyph,
-  UsersGlyph,
-} from "@crewlethq/icons/glyphs";
+import { ArrowUpRightGlyph, CircleAlertGlyph, TableGlyph } from "@crewlethq/icons/glyphs";
 import type {
   AssistantCardEvent,
   AssistantEntityCard,
@@ -58,57 +40,17 @@ import { ASSISTANT_WORDS, renderMarkdown } from "~/lib/markdown.ts";
 import { fmtExact } from "~/lib/format.ts";
 import { useLatestHandlers } from "~/lib/useLatestHandlers.ts";
 import { href as hrefOf } from "../../router.tsx";
-import { isArtifactKind } from "~/lib/artifacts/words.ts";
 import { recordWord } from "../brief.ts";
 import { cellText, factText, ProseBlock, ReplyProse, type CardHandlers } from "./blocks.tsx";
 import { mentionsOf, readsOf, type Mention, type Read } from "./mentions.ts";
 import { Sources, sourcesOf } from "./sources.tsx";
 import { openInApp } from "./openInApp.ts";
-import { seatLookup, useOrgIndex } from "~/lib/seats.ts";
-import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
+import { RecordMark } from "./refs.tsx";
 
-type EntityKind = NonNullable<AssistantEntityCard["kind"]>;
-
-/** A record's glyph; an artifact's is its kind's, which its card's subtitle names, and a seat's its face. */
+/** A record's glyph, as its references are drawn (`refs.tsx`): an artifact's kind's, which its card's subtitle names, a seat's face. */
 function entityGlyph(entity: AssistantEntityCard): ReactNode {
-  const kind = entity.subtitle ?? "";
-  if (entity.kind === "artifact" && isArtifactKind(kind))
-    return <ArtifactKindGlyph kind={kind} size="xs" />;
-  if (entity.kind === "seat") return <SeatGlyph handle={entity.id} />;
-  return entity.kind ? KIND_GLYPH[entity.kind]() : <FileTextGlyph size="xs" />;
+  return <RecordMark kind={entity.kind} id={entity.id} artifactKind={entity.subtitle} size="xs" />;
 }
-
-/** A seat record's face, off the chart: an agent its character, a person their initials. */
-function SeatGlyph({ handle }: { handle: string }) {
-  const seat = seatLookup(useOrgIndex())(handle);
-  return (
-    <SeatAvatar
-      name={seat.name}
-      kind={seat.kind === "human" ? "human" : "agent"}
-      avatar={seat.avatar}
-      size="text"
-      decorative
-    />
-  );
-}
-
-/** Each kind of record as the glyph its chip carries: decoration, the words are read. */
-const KIND_GLYPH: Record<EntityKind, () => ReactNode> = {
-  task: () => <SquareKanbanGlyph size="xs" />,
-  project: () => <FolderKanbanGlyph size="xs" />,
-  seat: () => <BotGlyph size="xs" />,
-  unit: () => <UsersGlyph size="xs" />,
-  page: () => <FileTextGlyph size="xs" />,
-  container: () => <FolderGlyph size="xs" />,
-  artifact: () => <LayersGlyph size="xs" />,
-  turn: () => <ActivityGlyph size="xs" />,
-  run: () => <ActivityGlyph size="xs" />,
-  schedule: () => <CalendarClockGlyph size="xs" />,
-  view: () => <ListFilterGlyph size="xs" />,
-  room: () => <MessageSquareGlyph size="xs" />,
-  atlas_entry: () => <MapGlyph size="xs" />,
-  web_page: () => <GlobeGlyph size="xs" />,
-};
 
 /** What a record's kind is called, at the head of its peek: "Task", "Agent". */
 function kindWord(entity: AssistantEntityCard): string | undefined {

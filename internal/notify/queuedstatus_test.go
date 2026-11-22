@@ -73,6 +73,49 @@ func TestASecondQueuedMessageCountsWhatIsAheadOfIt(t *testing.T) {
 	}
 }
 
+// A WAITING MESSAGE IS TOLD WHY IT WAITS, IN PLACE OF THE COUNT, AND A LATER
+// QUEUE OF IT KEEPS THE REASON. The node running a busy seat says why a
+// person's message is not joining the running work ("waiting for ana to
+// approve ..."), on the wait the announcement raised or on one of its own; an
+// announcement arriving after says nothing new, and a changed reason replaces
+// the old one.
+//
+// Mutation: show the count over a reason, or let Queue clear it, and this goes
+// red.
+func TestAWaitingMessageIsToldWhyItWaits(t *testing.T) {
+	p := quiet()
+	d := driver(t, p, notify.StatusAddressed)
+
+	const approval = "is waiting for ana to approve adding this to its running work"
+	if !d.Explain(t.Context(), "pm", "wake-1", chatMeta(nil), approval) {
+		t.Fatal("a reason for a waiting message raised no line")
+	}
+	if shown := p.shownAtLeast(t, 1); shown[0] != approval || !p.queuedPosted()[0] {
+		t.Fatalf("the line said %q (queued %v), want the reason", shown[0], p.queuedPosted()[0])
+	}
+	d.Queue(t.Context(), "pm", "wake-1", chatMeta(nil))
+	const after = "is working on other work; this runs after it"
+	d.Explain(t.Context(), "pm", "wake-1", chatMeta(nil), after)
+	// THE ANNOUNCEMENT'S REPOST AND THE NEW REASON'S MAY COALESCE INTO ONE.
+	var shown []string
+	for n := 2; ; n++ {
+		if shown = p.shownAtLeast(t, n); shown[n-1] == after {
+			break
+		}
+		if n == 3 {
+			t.Fatalf("after a later announcement and a new reason the lines are %q, want %q last", shown, after)
+		}
+	}
+	for _, line := range shown {
+		if line == "is queued behind its current task" {
+			t.Errorf("a message told why it waits was shown the count %q", line)
+		}
+	}
+	if d.Explain(t.Context(), "pm", "wake-2", chatMeta(nil), "") {
+		t.Error("an empty reason raised a line")
+	}
+}
+
 // A TURN THAT ENDS WHILE A MESSAGE IN ITS THREAD STILL WAITS LEAVES THE LINE
 // UP, NOW QUEUED: the turn was not the one the message waits for.
 func TestATurnEndingBeforeAWaitingMessageLeavesItQueued(t *testing.T) {
@@ -181,5 +224,33 @@ func TestAQueuedLineNothingEndsComesDownAtItsMaximumAge(t *testing.T) {
 	}
 	if got := len(d.Live()); got != 0 {
 		t.Fatalf("the driver still holds %d indicators after the line expired", got)
+	}
+}
+
+// A TURN'S WORK WAITING ON ANOTHER RUN KEEPS ITS LINE UP, SAYING WHY. A turn
+// holding its conversation's indicator that stops to wait on another run
+// (ADR-0176) leaves the line up past its own hold's end, saying why, until the
+// wait is taken away; a turn this driver holds no line for is not told.
+func TestATurnsWaitKeepsItsLineUpSayingWhy(t *testing.T) {
+	p := quiet()
+	d := driver(t, p, notify.StatusAddressed)
+
+	const why = "is waiting for its other run on ENG-1 to finish"
+	if d.ExplainTurn("pm", "turn-1", "run-wait:turn-1:job-1", why) {
+		t.Fatal("a turn holding no line was told why it waits")
+	}
+	s := d.Begin(t.Context(), "pm", "turn-1", "execute", chatMeta(nil))
+	p.shownAtLeast(t, 1)
+	if !d.ExplainTurn("pm", "turn-1", "run-wait:turn-1:job-1", why) {
+		t.Fatal("the turn holding its line was not told why it waits")
+	}
+	s.End(t.Context(), false)
+	shown := p.shownAtLeast(t, 2)
+	if last := shown[len(shown)-1]; last != why || p.clears() != 0 {
+		t.Fatalf("after the turn's hold ended the line says %q (%d cleared), want why it waits", last, p.clears())
+	}
+	d.Dequeue(t.Context(), "pm", []string{"run-wait:turn-1:job-1"})
+	if p.clears() != 1 {
+		t.Fatalf("the answered wait cleared %d line(s), want one", p.clears())
 	}
 }

@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
@@ -110,7 +111,8 @@ type sweepPass struct {
 	purge *leaderPurge
 }
 
-// walkForSweep walks kv whole, values included, for the sweeps of its keys.
+// walkForSweep walks kv whole, each key's metadata and never its value
+// ([watchWalk]), for the sweeps of its keys.
 //
 // UNCERTIFIED, with NO INDEX: a key it misses is swept next tick, so its pass
 // ends on the quiet rather than waiting on removals ([passOver]). A marker
@@ -273,6 +275,66 @@ func (f *FleetStore) SweepMarkers(ctx context.Context, cutoff time.Time) (int64,
 		if err != nil {
 			errs = append(errs, err)
 		}
+		// AND A MINTED SESSION'S CLAIM, which carries its run's record's
+		// lifetime as a part does.
+		n, err = f.sweepSessionClaims(ctx, pass, cutoff)
+		swept += n
+		if err != nil {
+			errs = append(errs, err)
+		}
 	}
 	return swept, errors.Join(errs...)
+}
+
+// SweepBodies removes the activation's bodies no pointer names, written before
+// cutoff — see [coord.ActivationBodies]. Its own walk of the config bucket,
+// metadata only, at its own horizon ([coord.BodyRetention]).
+func (f *FleetStore) SweepBodies(ctx context.Context, cutoff time.Time) (int64, error) {
+	pass, err := walkForSweep(ctx, f.js, f.config)
+	if err != nil {
+		return 0, err
+	}
+	return f.sweepBodies(ctx, pass, cutoff)
+}
+
+// sweepBodies removes, from the config bucket's pass, every activation body
+// written before cutoff that the pointer, read AFTER the pass, does not name,
+// each purged through the revision the pass saw ([leaderPurge.through]).
+//
+// SAFE AGAINST EVERY FLIP: one that already landed is in the pointer read
+// here; one still coming names a body written within [flipBy] of it, and that
+// write either moved the body's revision past the pass (the purge removes
+// nothing newer) or came before it, so the body is younger than a cutoff
+// [coord.BodyRetention] back. The other half of the retention is for clock
+// skew. A pointer that cannot be read keeps every body this tick.
+func (f *FleetStore) sweepBodies(ctx context.Context, walked sweepPass, cutoff time.Time) (int64, error) {
+	what := "the activation's bodies"
+	record, _, held, unread := f.pointer(ctx)
+	if unread != nil {
+		return 0, fmt.Errorf("coord/kv: sweep %s: %w", what, unread)
+	}
+	named := ""
+	if held {
+		named = record.Body.SHA256
+	}
+	keys := make([]string, 0)
+	for key, kve := range walked.keys {
+		digest, body := strings.CutPrefix(key, bodyPrefix)
+		if !body || digest == named || kve.Operation() != jetstream.KeyValuePut ||
+			!kve.Created().Before(cutoff) {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	// KEY ORDER, so a failure part-way names the same key on every retry.
+	slices.Sort(keys)
+	var swept int64
+	for _, key := range keys {
+		n, err := walked.purge.through(ctx, key, walked.keys[key].Revision())
+		if err != nil {
+			return swept, unavailable("sweep "+what, fmt.Errorf("remove %q: %w", key, err))
+		}
+		swept += int64(n)
+	}
+	return swept, nil
 }

@@ -215,17 +215,17 @@ type e2bBox struct {
 	// TrafficToken is whether the answer carried the box's traffic access
 	// token, which E2B mints only for a box made private ([e2bAPI.createBox]).
 	// Never the token: nothing here sends it, so nothing holds it.
-	TrafficToken answered `json:"trafficAccessToken"`
+	TrafficToken tokenAnswered `json:"trafficAccessToken"`
 }
 
-// answered is whether E2B answered a credential, holding nothing of it.
-type answered bool
+// tokenAnswered is whether E2B answered a token, holding nothing of it.
+type tokenAnswered bool
 
 // UnmarshalJSON records whether a JSON string longer than its two quotes
 // arrived; JSON null reaches it too. Any other value is no answer rather than
 // an error, which would fail the decode and lose the id of a box just created.
-func (a *answered) UnmarshalJSON(raw []byte) error {
-	*a = len(raw) > 2 && raw[0] == '"'
+func (t *tokenAnswered) UnmarshalJSON(raw []byte) error {
+	*t = len(raw) > 2 && raw[0] == '"'
 	return nil
 }
 

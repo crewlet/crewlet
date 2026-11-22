@@ -16,10 +16,22 @@
 // and subject, so the dashboard attaches the finding's fix to it: the backup
 // alarm is the advisor's no-verified-backup finding, never a second notice
 // beside it.
+//
+// # What the growth products meet
+//
+// Two notices are about the vendors the growth products call, each worded in
+// Title and Person: an API version this build calls that its vendor retires
+// within [RetiringWithin] (read off the build's own catalogs) or says is
+// deprecated, and a vendor refusing the tokens a node signs because the node's
+// clock is off. The vendor's word and the clock are met by one node's process,
+// so each node publishes them on its status record (internal/growth's
+// Signals) and every node reads the fleet's: a skew closes once a later signed
+// request is accepted, and a deprecation a day after the vendor last said it.
 package notice
 
 import (
 	"cmp"
+	"fmt"
 	"slices"
 	"time"
 
@@ -27,6 +39,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -185,10 +198,133 @@ func FromConversationHolds(holds []coord.ConversationHold, handleOf func(uuid.UU
 	return Merge(out)
 }
 
-// Read is every notice the advisor's findings, the fleet's alarms and the
-// engine's held conversations raise at now.
-func Read(findings []advisor.Finding, fleet []NodeAlarms, held []Notice, now time.Time) []Notice {
-	return Merge(FromFindings(findings), FromAlarms(fleet, now), held)
+// ClassAPIVersionRetiring is a vendor API version this build calls that its
+// vendor retires within [RetiringWithin], or says is deprecated; its subject is
+// the integration, Name its kind and the version ("metaads/v23.0").
+const ClassAPIVersionRetiring = "api_version_retiring"
+
+// ClassClockSkew is a vendor refusing the tokens a node signs because the
+// node's clock is more than [growth.ClockSkewTolerance] from the vendor's; its
+// subject is the integration, Name its kind, and Nodes the nodes it stands on.
+const ClassClockSkew = "clock_skew"
+
+// RetiringWithin is how far ahead of a vendor's retirement of an API version
+// its notice opens: 90 days, the span vendors announce a retirement over
+// (Meta's version deprecations, Apple's API versions) and room for an upgrade.
+const RetiringWithin = 90 * 24 * time.Hour
+
+// NodeGrowth is one live node's growth signals, as its status record carries
+// them.
+type NodeGrowth struct {
+	Node    string
+	Signals coord.GrowthSignals
+}
+
+// FromCatalogs is one notice per API version this build calls whose vendor
+// retires it within [RetiringWithin] of now, or a node heard the vendor call
+// deprecated, keyed by the catalog's kind and version.
+func FromCatalogs(catalogs []growth.Catalog, nodes []NodeGrowth, now time.Time) []Notice {
+	api := map[string]string{}
+	var out []Notice
+	for _, c := range catalogs {
+		api[c.Kind] = c.API
+		if c.Retires.IsZero() || c.Retires.Sub(now) > RetiringWithin {
+			continue
+		}
+		out = append(out, retiring(c.Kind, c.API, c.Version, c.Retires, c.Retires.Add(-RetiringWithin), "", now))
+	}
+	for _, n := range nodes {
+		for _, d := range n.Signals.Deprecations {
+			name := cmp.Or(api[d.Product], d.Product)
+			out = append(out, retiring(d.Product, name, d.Version, d.Retires, d.Since, n.Node, now))
+		}
+	}
+	return Merge(out)
+}
+
+// retiring is one retirement's notice, in the words a company owner reads.
+func retiring(kind, api, version string, retires, since time.Time, node string, now time.Time) Notice {
+	n := Notice{Class: ClassAPIVersionRetiring, Since: since,
+		Subject: advisor.Subject{Kind: advisor.SubjectIntegration, Name: kind + "/" + version},
+		Title:   fmt.Sprintf("%s %s is retiring", api, version)}
+	if node != "" {
+		n.Nodes = []string{node}
+	}
+	switch {
+	case retires.IsZero():
+		n.Person = fmt.Sprintf("This Crewlet build calls %s %s, which the vendor has deprecated. Update "+
+			"Crewlet before the vendor retires it.", api, version)
+	case !retires.After(now):
+		n.Person = fmt.Sprintf("This Crewlet build calls %s %s, which the vendor retired on %s. Update "+
+			"Crewlet now.", api, version, retires.UTC().Format("2 January 2006"))
+	default:
+		n.Person = fmt.Sprintf("This Crewlet build calls %s %s, which the vendor retires on %s. Update "+
+			"Crewlet before then.", api, version, retires.UTC().Format("2 January 2006"))
+	}
+	return n
+}
+
+// FromClockSkews is one notice per product whose vendor refuses the tokens a
+// node signs for the node's clock, naming every such node and worded for the
+// one furthest off.
+func FromClockSkews(nodes []NodeGrowth) []Notice {
+	type worst struct {
+		notice Notice
+		skew   coord.GrowthClockSkew
+	}
+	by := map[string]*worst{}
+	var order []string
+	for _, n := range nodes {
+		for _, c := range n.Signals.ClockSkews {
+			w, seen := by[c.Product]
+			if !seen {
+				w = &worst{notice: Notice{Class: ClassClockSkew, Since: c.Since,
+					Subject: advisor.Subject{Kind: advisor.SubjectIntegration, Name: c.Product}}, skew: c}
+				by[c.Product] = w
+				order = append(order, c.Product)
+			}
+			w.notice.Nodes = append(w.notice.Nodes, n.Node)
+			if abs(c.OffsetSeconds) > abs(w.skew.OffsetSeconds) {
+				w.skew = c
+			}
+			if !c.Since.IsZero() && (w.notice.Since.IsZero() || c.Since.Before(w.notice.Since)) {
+				w.notice.Since = c.Since
+			}
+		}
+	}
+	out := make([]Notice, 0, len(order))
+	for _, product := range order {
+		w := by[product]
+		vendor := cmp.Or(w.skew.Vendor, product)
+		way := "ahead of"
+		if w.skew.OffsetSeconds < 0 {
+			way = "behind"
+		}
+		who, fix := "This node's clock is", "Fix the node's time synchronisation."
+		if len(w.notice.Nodes) > 1 {
+			who = fmt.Sprintf("The clocks of %d nodes are up to", len(w.notice.Nodes))
+			fix = "Fix their time synchronisation."
+		}
+		w.notice.Title = fmt.Sprintf("%s refuses the tokens Crewlet signs", vendor)
+		w.notice.Person = fmt.Sprintf("%s %s %s %s's, so %s refuses the tokens Crewlet signs. %s",
+			who, statelog.Spoken(time.Duration(abs(w.skew.OffsetSeconds))*time.Second), way, vendor, vendor, fix)
+		out = append(out, w.notice)
+	}
+	return Merge(out)
+}
+
+func abs(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
+}
+
+// Read is every notice the advisor's findings, the fleet's alarms, the
+// engine's held conversations and what the growth products meet
+// ([FromCatalogs], [FromClockSkews]) raise at now.
+func Read(findings []advisor.Finding, fleet []NodeAlarms, held, vendors []Notice, now time.Time) []Notice {
+	return Merge(FromFindings(findings), FromAlarms(fleet, now), held, vendors)
 }
 
 // Merge is lists as one notice per class and subject: the earliest instant any

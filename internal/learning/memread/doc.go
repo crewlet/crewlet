@@ -42,6 +42,14 @@
 // A row whose holder did not answer carries the reason rather than zeros, and
 // the answer's coverage names that holder. See overview.go.
 //
+// # One answer is one reply, bounded where it is read
+//
+// A peer's answer is one broker reply ([queue.MaxPayloadBytes]), and fifty rows
+// bound nothing when a row's texts are unbounded. So each collection is read in
+// its store to a fixed share of half the reply, ending before the row that would
+// pass it and always keeping the first, and its total is counted whole. A reply
+// still too large is refused by its size, never cut (local.go, reader.go).
+//
 // # Not the queries package's, because every node answers
 //
 // The API is served on ingress nodes only, and a seat may be held by a node

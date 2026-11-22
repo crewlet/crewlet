@@ -133,17 +133,18 @@ func TestEveryPhaseReadsItsOwnField(t *testing.T) {
 	// A switch that returns the wrong field for one phase is invisible: the
 	// seat still runs, on the wrong model. Each phase gets a uniquely-named
 	// provider so a crossed wire has somewhere to show up.
-	r := reg(t, "default", "r", "s", "a", "j")
+	r := reg(t, "default", "r", "s", "a", "j", "t")
 	role := &org.Role{
 		Name: "CTO", LLM: org.ProviderKeys{"default"},
 		LLMReview: org.ProviderKeys{"r"}, LLMSubagent: org.ProviderKeys{"s"},
 		LLMAuxiliary: org.ProviderKeys{"a"}, LLMJudge: org.ProviderKeys{"j"},
+		LLMTriage: org.ProviderKeys{"t"},
 	}
 	// The executor has no field of its own: `llm` IS its chain, so it must
 	// resolve to the role default here rather than to any satellite's key.
 	want := map[phase.Phase]string{
 		phase.Execute: "default", phase.Review: "r",
-		phase.Subagent: "s", phase.Auxiliary: "a", phase.Judge: "j",
+		phase.Subagent: "s", phase.Auxiliary: "a", phase.Judge: "j", phase.Triage: "t",
 		// ONBOARDING HAS NO FIELD OF ITS OWN and resolves to the role
 		// default — asserted rather than omitted, so adding an
 		// `llm_onboarding:` without wiring it here fails loudly.
@@ -277,7 +278,8 @@ func TestResolveIsTheChainATurnRunsOn(t *testing.T) {
 	t.Parallel()
 	roles := []*org.Role{
 		{Name: "per-phase", LLM: org.ProviderKeys{"alpha"}, LLMReview: org.ProviderKeys{"beta", "alpha"},
-			LLMJudge: org.ProviderKeys{"typo", "beta", "beta"}, LLMAuxiliary: org.ProviderKeys{"typo"}},
+			LLMJudge: org.ProviderKeys{"typo", "beta", "beta"}, LLMAuxiliary: org.ProviderKeys{"typo"},
+			LLMTriage: org.ProviderKeys{"beta"}},
 		{Name: "names nothing"},
 		{Name: "only unknown", LLM: org.ProviderKeys{"typo"}},
 	}
@@ -334,6 +336,12 @@ func TestResolveWithSourceNamesTheLevelThatDecided(t *testing.T) {
 			[]string{"alpha"}, phase.SourceExecutor},
 		{"onboarding, which has no field, runs on llm", seat, phase.Onboarding, []string{"alpha"},
 			[]string{"alpha"}, phase.SourceExecutor},
+		// THE TRIAGE OF A BUSY SEAT'S WAKE falls to the seat's llm, then
+		// the default entry, as llm_review does (ADR-0168).
+		{"a triage that names nothing falls to llm", seat, phase.Triage, []string{"default", "alpha"},
+			[]string{"alpha"}, phase.SourceExecutor},
+		{"a triage on a seat naming nothing takes the default entry", &org.Role{Name: "none"}, phase.Triage,
+			[]string{"alpha", "default"}, []string{"default"}, phase.SourceDefaultEntry},
 		// A per-phase field that misses does NOT fall to llm: it lands
 		// on the company's fallback, as Chain does.
 		{"a satellite naming only a missing key", seat, phase.Judge, []string{"alpha", "default"},

@@ -72,6 +72,11 @@ type Dispatcher struct {
 	// settles nothing.
 	Settled func(ctx context.Context, handle string, wakes []string)
 
+	// Idle is told a seat whose last dispatch running on this node has
+	// returned, its delivery settled: the router of its held inbox reads
+	// nothing while one runs (wakerouter.go). Nil tells nobody.
+	Idle func(handle string)
+
 	// DeadLettered is told of a delivery whose hand-back retires a message:
 	// the one place that holds both the message's headroom and why it failed.
 	DeadLettered func(ctx context.Context, handle string, result queue.Result)
@@ -113,6 +118,17 @@ type Dispatcher struct {
 	// deferral alone stands — a node with no coordinator has no run holding
 	// any seat.
 	HoldSandbox func(ctx context.Context, handle string)
+
+	// Beside decides, below the seat's cap, whether a delivery waits on one of
+	// the seat's running executor runs (ADR-0169): the key it waits aside
+	// under, empty where it starts a turn of its own beside them; an error is a
+	// store that could not say, which defers it rather than run beside a run
+	// that may be doing its work. SetAside is told one set aside, and
+	// HoldAside asks the coordinator to hold the inbox for one that would pass
+	// what the inbox keeps aside ([queue.AsideRoom]). Nil starts every one.
+	Beside    func(ctx context.Context, handle string, evs []*events.Event) (besideAnswer, error)
+	SetAside  func(ctx context.Context, handle string, at besideAnswer, evs []*events.Event)
+	HoldAside func(ctx context.Context, handle string)
 
 	// Budget parks the seat when one of its capped token windows is
 	// refusing, or leaves less room than the delivery's launch needs, and
@@ -381,9 +397,14 @@ func (d *Dispatcher) enter(handle string) {
 
 func (d *Dispatcher) leave(handle string) {
 	d.runningMu.Lock()
-	defer d.runningMu.Unlock()
-	if d.running[handle]--; d.running[handle] <= 0 {
+	d.running[handle]--
+	idle := d.running[handle] <= 0
+	if idle {
 		delete(d.running, handle)
+	}
+	d.runningMu.Unlock()
+	if idle && d.Idle != nil {
+		d.Idle(handle)
 	}
 }
 
@@ -396,10 +417,14 @@ func (d *Dispatcher) leave(handle string) {
 // backend retires a message whose deliveries are spent rather than return it,
 // so nothing would ever pick it up and end its line. Which ones those are is
 // each message's own headroom as the queue states it
-// ([queue.DeliveriesLeftFor]); an unstated one is not taken as spent.
+// ([queue.DeliveriesLeftFor]); an unstated one is not taken as spent. A wake
+// set aside spends nothing and waits on: none.
 func settledBy(ctx context.Context, result queue.Result, evs []*events.Event) []string {
-	if result.Outcome == queue.OutcomeAck {
+	switch result.Outcome {
+	case queue.OutcomeAck:
 		return wakeIDsOf(evs)
+	case queue.OutcomeAside:
+		return nil
 	}
 	var out []string
 	for _, ev := range evs {
@@ -439,7 +464,7 @@ func goneBy(ctx context.Context, result queue.Result, evs, requeued []*events.Ev
 // messages: the backend dead-letters a message whose deliveries are spent. An
 // unstated headroom is not taken as spent, as [settledBy]'s is not.
 func deadLetters(ctx context.Context, result queue.Result, evs []*events.Event) bool {
-	if result.Outcome == queue.OutcomeAck {
+	if result.Outcome == queue.OutcomeAck || result.Outcome == queue.OutcomeAside {
 		return false
 	}
 	return slices.ContainsFunc(evs, func(ev *events.Event) bool {
@@ -497,7 +522,8 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	if len(evs) == 0 {
 		return queue.Ack()
 	}
-	screening := inbox.Screen(d.conditions(handle), evs)
+	conditions := d.conditions(handle)
+	screening := inbox.Screen(conditions, evs)
 	if screening.NoteDeferred && d.NoteDeferred != nil {
 		d.NoteDeferred(handle)
 	}
@@ -651,6 +677,14 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 			}
 			return queue.Defer(queue.DeferAnswerOwed, refusedReplyReason(handle))
 		}
+	}
+
+	// BESIDE THE SEAT'S RUNNING RUNS, below its cap (ADR-0169): a delivery
+	// of a conversation one of them works, or related to one, is routed to it
+	// and waits aside until it leaves; any other starts a turn beside them.
+	// After the answer offer, which a parked run is owed first.
+	if result, waits := d.waitBeside(ctx, handle, surviving, held); waits {
+		return result
 	}
 
 	// A HELD CONVERSATION starts no turn: its wakes are settled unrun and
@@ -1102,7 +1136,7 @@ func panicBreach(role, agentID, runID, workKey string, trace events.TraceContext
 		Agent:    agentID,
 		RoleName: role,
 		Kind:     types.GuardUnhandledException,
-		Detail:   events.ClipDiagnostic(panicked.Error()),
+		Detail:   events.Diagnostic(panicked.Error()),
 		TurnID:   runID,
 		WorkKey:  workKey,
 	}, trace)
@@ -1134,7 +1168,7 @@ func (d *Dispatcher) noteAbandoned(ctx context.Context, handle string, evs []*ev
 		// it was cut at 200 bytes, which a wrapped error spends on
 		// its outer operations before it reaches what failed.
 		rec := d.skippedRecord(handle, ev, disposition,
-			events.ClipDiagnostic(reason+", so it was not redelivered: "+cause.Error()))
+			events.Diagnostic(reason+", so it was not redelivered: "+cause.Error()))
 		rec.Source = "engine.dispatch"
 		d.Observe(ctx, rec)
 	}
@@ -1406,12 +1440,8 @@ func (d *Dispatcher) dropWorked(ctx context.Context, handle string, evs []*event
 	if d.Completions != nil {
 		keys := make([]string, 0, len(evs))
 		for _, ev := range evs {
-			if !d.ledgered(ev.Type) {
-				continue
-			}
-			keys = append(keys, workkey.Derive([]string{ev.ID.String()}))
-			if chat, _, ok := chatKeyOf(ev); ok {
-				keys = append(keys, chat)
+			if d.ledgered(ev.Type) {
+				keys = append(keys, deliveryKeys(ev)...)
 			}
 		}
 		if len(keys) > 0 {
@@ -1421,6 +1451,7 @@ func (d *Dispatcher) dropWorked(ctx context.Context, handle string, evs []*event
 	if len(worked) == 0 && d.SeenThrough == nil {
 		return evs, nil
 	}
+	marked := d.markedOf(ctx, handle, evs, worked)
 	out := make([]*events.Event, 0, len(evs))
 	var skipped map[uuid.UUID]skipCause
 	skip := func(id uuid.UUID, cause skipCause) {
@@ -1437,6 +1468,14 @@ func (d *Dispatcher) dropWorked(ctx context.Context, handle string, evs []*event
 		}
 		chat, edit, isChat := chatKeyOf(ev)
 		switch {
+		case marked[joinedKey(ev.ID.String())]:
+			skip(ev.ID, skipJoined)
+		case marked[steeredKey(ev.ID.String())]:
+			skip(ev.ID, skipSteered)
+		case marked[foldedKey(ev.ID.String())]:
+			skip(ev.ID, skipFolded)
+		case marked[absorbedKey(ev.ID.String())]:
+			skip(ev.ID, skipTriaged)
 		case worked[workkey.Derive([]string{ev.ID.String()})]:
 			skip(ev.ID, skipWorked)
 		case isChat && edit && worked[chat]:
@@ -1450,6 +1489,38 @@ func (d *Dispatcher) dropWorked(ctx context.Context, handle string, evs []*event
 		}
 	}
 	return out, skipped
+}
+
+// deliveryKeys is every completion-ledger key that drops ev's delivery
+// ([Dispatcher.dropWorked]): its own, and a chat message's identity on its
+// backend. ONE FUNCTION, so a wake the router hands a running run is claimed by
+// exactly the keys its delivery is dropped by (wakerouter.go).
+func deliveryKeys(ev *events.Event) []string {
+	keys := []string{workkey.Derive([]string{ev.ID.String()})}
+	if chat, _, ok := chatKeyOf(ev); ok {
+		keys = append(keys, chat)
+	}
+	return keys
+}
+
+// markedOf is which of evs a running turn took while its run held the seat, by
+// the mark it recorded: read as a wake ([joinedKey]), filed as its lead's steer
+// note ([steeredKey]) or as an approved fold-in's ([foldedKey]), or absorbed by
+// its triage ([absorbedKey]). Asked only of
+// those whose own key is worked, so a dispatch no turn worked any trigger of
+// reads the ledger no more than it did.
+func (d *Dispatcher) markedOf(ctx context.Context, handle string, evs []*events.Event,
+	worked map[string]bool) map[string]bool {
+	var keys []string
+	for _, ev := range evs {
+		if id := ev.ID.String(); d.ledgered(ev.Type) && worked[workkey.Derive([]string{id})] {
+			keys = append(keys, joinedKey(id), steeredKey(id), foldedKey(id), absorbedKey(id))
+		}
+	}
+	if len(keys) == 0 || d.Completions == nil {
+		return nil
+	}
+	return d.Completions.Worked(ctx, handle, keys)
 }
 
 // recordWorked writes the completion ledger after a turn.
@@ -1743,6 +1814,7 @@ func (d *Dispatcher) noteSkipped(ctx context.Context, handle string, all, surviv
 			kept[ev.ID] = true
 		}
 	}
+	markedBy := d.markedBy(ctx, handle, all, skipped)
 	for _, ev := range all {
 		if ev == nil || kept[ev.ID] {
 			continue
@@ -1759,6 +1831,14 @@ func (d *Dispatcher) noteSkipped(ctx context.Context, handle string, all, surviv
 			reason = "a later turn was shown this edit waiting in its thread and answered it there"
 		case skipAbsorbed:
 			reason, disposition = "a completed turn already read its conversation past it, and it asks nothing", types.DispositionAbsorbed
+		case skipJoined:
+			reason, disposition = joinedReason(markedBy[joinedKey(ev.ID.String())]), types.DispositionJoined
+		case skipSteered:
+			reason, disposition = steeredReason(markedBy[steeredKey(ev.ID.String())]), types.DispositionJoined
+		case skipFolded:
+			reason, disposition = foldedReason(markedBy[foldedKey(ev.ID.String())]), types.DispositionJoined
+		case skipTriaged:
+			reason, disposition = triagedReason(markedBy[absorbedKey(ev.ID.String())]), types.DispositionAbsorbed
 		}
 		// THE SKIPPED TRIGGER'S OWN TRACE, not the dispatch's: the
 		// question this record answers is "what happened to my webhook",
@@ -1768,6 +1848,45 @@ func (d *Dispatcher) noteSkipped(ctx context.Context, handle string, all, surviv
 		rec.Source = "engine.dispatch"
 		d.Observe(ctx, rec)
 	}
+}
+
+// markedBy is the running turn each of all's skips by a mark went to, by that
+// mark ([Dispatcher.markedOf]): one ledger read for them all, none where no
+// running turn took any.
+func (d *Dispatcher) markedBy(ctx context.Context, handle string, all []*events.Event,
+	skipped map[uuid.UUID]skipCause) map[string]string {
+
+	var keys []string
+	for _, ev := range all {
+		if ev == nil {
+			continue
+		}
+		switch id := ev.ID.String(); skipped[ev.ID] {
+		case skipJoined:
+			keys = append(keys, joinedKey(id))
+		case skipSteered:
+			keys = append(keys, steeredKey(id))
+		case skipFolded:
+			keys = append(keys, foldedKey(id))
+		case skipTriaged:
+			keys = append(keys, absorbedKey(id))
+		}
+	}
+	if len(keys) == 0 || d.Completions == nil {
+		return nil
+	}
+	return d.Completions.WorkedBy(ctx, handle, keys)
+}
+
+// joinedReason is a joined skip's reason, naming the turn it joined where the
+// ledger's record does.
+func joinedReason(turnID string) string {
+	turn := "a running turn"
+	if turnID != "" {
+		turn = "running turn " + turnID
+	}
+	return "it joined " + turn + " as a message about its work, which that turn's run read: the turn's " +
+		"agent_turn_joined record names it"
 }
 
 // notificationSourceOf is the third-party app a partition came from.
@@ -1888,12 +2007,19 @@ func ReplyFor(evs []*events.Event) turn.Reply {
 			// is already closed. Nobody is waiting on what this turn does
 			// with it.
 		}
-		// A PICKUP'S ITEM SURVIVES A MERGE with another tool obligation: the
-		// typed answer it owes is the stricter of the two.
-		if replyRank[owed.Kind] > replyRank[out.Kind] ||
-			owed.Kind == out.Kind && out.Item == "" && owed.Item != "" {
-			out = owed
-		}
+		out = strongerReply(out, owed)
+	}
+	return out
+}
+
+// strongerReply is out with owed merged in as [ReplyFor] merges a partition's:
+// a stronger kind wins, and A PICKUP'S ITEM SURVIVES A MERGE with another tool
+// obligation, the typed answer it owes being the stricter; otherwise out
+// stands. Also how a wake a run read joins its turn's (ADR-0167).
+func strongerReply(out, owed turn.Reply) turn.Reply {
+	if replyRank[owed.Kind] > replyRank[out.Kind] ||
+		owed.Kind == out.Kind && out.Item == "" && owed.Item != "" {
+		return owed
 	}
 	return out
 }

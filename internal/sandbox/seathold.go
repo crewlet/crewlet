@@ -7,14 +7,15 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 )
 
-// The seat's inbox is held while a run holds the seat, or an answer is owed: a
-// pause hold under one reason ([SeatHold]) for as long as the seat has a run in
-// [Holding] or owes a resume or an ending's finish, lifted the moment it has
-// neither, at the transition itself. Held, the mail waits on the broker in
-// order at no cost; a delivery that reaches a held seat anyway is deferred. A
-// seat busy coding takes no other work, a person's answer to another run
-// included; an answer by turn travels on the control topic and its resume waits
-// ([SeatCoding]). This node's alone; each hold names its inbox attachment
+// The seat's inbox is held while its runs hold every slot of its cap, its mail
+// set aside fills what the inbox keeps, or an answer is owed: a pause hold under
+// one reason ([SeatHold]), lifted the moment none holds, at the transition
+// itself. Held, the mail waits on the broker in order at no cost, read by the
+// engine's router of the seat without being consumed (ADR-0167); a delivery
+// that reaches a held seat anyway is deferred. Below the cap a delivery waiting
+// on one of the runs waits aside, readmitted as the run leaves (seatcap.go). An
+// answer by turn travels on the control topic and its resume waits ([SeatFull],
+// [ConversationBusy]). This node's alone; each hold names its inbox attachment
 // ([queue.Attachment]). See the package doc, "The seat's inbox hold".
 
 // SeatHold takes and lifts the hold on a seat's inbox (see the package doc,
@@ -24,17 +25,21 @@ import (
 // by reason. Called with the seat's handle and implemented on its id, a pure
 // function of the handle (ADR-0013). Each names the attachment the hold is for:
 // Hold refuses an ended one with [queue.ErrAttachmentGone], and Release under
-// one lifts nothing.
+// one lifts nothing. Readmit hands back the inbox's mail set aside under key,
+// freed by turn's run leaving [Holding], and answers how many
+// ([Coordinator.readmitFreed]).
 type SeatHold interface {
 	Hold(ctx context.Context, handle string, inbox queue.Attachment) error
 	Release(ctx context.Context, handle string, inbox queue.Attachment) error
+	Readmit(ctx context.Context, handle, key, turn string) (int, error)
 }
 
-// wantsHoldLocked reports whether a seat's inbox must be held: a run holds the
-// seat, or the seat owes one of its runs an answer's resume. The caller holds
-// c.mu.
+// wantsHoldLocked reports whether a seat's inbox must be held: its runs hold
+// every slot of its cap, its mail set aside fills what the inbox keeps
+// ([Coordinator.HoldForAside]), or the seat owes one of its runs an answer's
+// resume. The caller holds c.mu.
 func (c *Coordinator) wantsHoldLocked(handle string) bool {
-	return c.runs[handle].holding > 0 || len(c.owed[handle]) > 0
+	return c.runs[handle].holding >= c.capOf(handle) || c.asideFull[handle] || len(c.owed[handle]) > 0
 }
 
 // HoldSeat brings a seat's inbox hold into line with what the seat needs, for

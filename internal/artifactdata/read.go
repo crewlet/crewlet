@@ -289,13 +289,16 @@ func (r *Reader) Docs(ctx context.Context, id artifacts.ID, rd Reading, collecti
 			q += ` ORDER BY doc_id LIMIT ?`
 		}
 		args = append(args, limit+1)
-		docs, err := scanDocs(ctx, tx, c, q, args...)
+		held := statelog.RowsOf(ctx)
+		docs, err := scanDocs(ctx, tx, c, held, q, args...)
 		if err != nil {
 			return err
 		}
-		if len(docs) > limit {
-			docs = docs[:limit]
-			last := docs[limit-1]
+		if len(docs) > limit || held.Cut() {
+			// A PAGE CUT AT ITS BYTES RESUMES AT THE REFUSED DOCUMENT, as
+			// one cut at its limit resumes at the one past it.
+			docs = docs[:min(len(docs), limit)]
+			last := docs[len(docs)-1]
 			next := docCursor{Version: last.Version, Doc: last.ID}
 			if since > 0 {
 				// A CATCH-UP READS IN VERSION ORDER, so every change
@@ -329,7 +332,7 @@ func (r *Reader) Doc(ctx context.Context, id artifacts.ID, rd Reading, collectio
 		if !c.stored {
 			return fmt.Errorf("%w: %s/%s", ErrNotFound, collection, doc)
 		}
-		docs, err := scanDocs(ctx, tx, c, `
+		docs, err := scanDocs(ctx, tx, c, nil, `
 			SELECT doc_id, body, created_by, created_by_kind, created_at, updated_by,
 			updated_by_kind, updated_at, version FROM artifact_data_docs
 			WHERE store_no = ? AND collection_no = ? AND doc_id = ? AND body IS NOT NULL`,
@@ -381,6 +384,7 @@ func (r *Reader) Query(ctx context.Context, id artifacts.ID, rd Reading, collect
 			kind, txt, doc string
 			num            float64
 		}
+		held := statelog.RowsOf(ctx)
 		for rows.Next() {
 			var (
 				d       docRow
@@ -396,21 +400,26 @@ func (r *Reader) Query(ctx context.Context, id artifacts.ID, rd Reading, collect
 			if fetched > compiled.Limit-1 {
 				break
 			}
-			last.kind, last.num, last.txt, last.doc = sk, sn, st, d.id
 			d.body = bodyStr
 			keep, err := compiled.Keep([]byte(bodyStr.String))
-			if err != nil || !keep {
-				if err != nil {
-					return err
-				}
-				continue
+			if err != nil {
+				return err
 			}
-			page.Docs = append(page.Docs, renderDoc(c, d))
+			if keep {
+				// THE CURSOR STAYS ON THE ROW BEFORE A REFUSED ONE, so
+				// the next page starts at it.
+				doc := renderDoc(c, d)
+				if !held.TakeEncoded(doc) {
+					break
+				}
+				page.Docs = append(page.Docs, doc)
+			}
+			last.kind, last.num, last.txt, last.doc = sk, sn, st, d.id
 		}
 		if err := rows.Err(); err != nil {
 			return fmt.Errorf("artifactdata: run a query on %s: %w", collection, err)
 		}
-		if fetched >= compiled.Limit {
+		if fetched >= compiled.Limit || held.Cut() {
 			page.After = compiled.Cursor(last.kind, last.num, last.txt, last.doc)
 		}
 		return nil
@@ -465,8 +474,12 @@ type docRow struct {
 
 // scanDocs runs a document query selecting doc_id, body, created_by,
 // created_by_kind, created_at, updated_by, updated_by_kind, updated_at and
-// version, and renders each row.
-func scanDocs(ctx context.Context, tx *sql.Tx, c *collState, q string, args ...any) ([]Doc, error) {
+// version, and renders each row, stopping at the first rendered row held
+// refuses ([statelog.RowBytes]). A nil held keeps every row: a read of one
+// document, a write's, or a read whose answer has no page to cut.
+func scanDocs(ctx context.Context, tx *sql.Tx, c *collState, held *statelog.RowBytes,
+	q string, args ...any) ([]Doc, error) {
+
 	rows, err := tx.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("artifactdata: read %s: %w", c.spec.Name, err)
@@ -482,7 +495,11 @@ func scanDocs(ctx context.Context, tx *sql.Tx, c *collState, q string, args ...a
 			&d.updatedBy, &d.updatedKind, &d.updatedAt, &d.version); err != nil {
 			return nil, fmt.Errorf("artifactdata: read %s: %w", c.spec.Name, err)
 		}
-		out = append(out, renderDoc(c, d))
+		doc := renderDoc(c, d)
+		if held != nil && !held.TakeEncoded(doc) {
+			break
+		}
+		out = append(out, doc)
 	}
 	return out, rows.Err()
 }
@@ -698,6 +715,7 @@ func (r *Reader) History(ctx context.Context, id artifacts.ID, rd Reading, filte
 		if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 			return fmt.Errorf("artifactdata: read %s's history: %w", id, err)
 		}
+		held := statelog.RowsOf(ctx)
 		for _, x := range scanned {
 			var changes []Change
 			if err := json.Unmarshal([]byte(x.changes), &changes); err != nil {
@@ -763,6 +781,11 @@ func (r *Reader) History(ctx context.Context, id artifacts.ID, rd Reading, filte
 			x.e.At = store.DecodeTime(x.at)
 			if d, err := canon.DigestFrom(x.digest); err == nil {
 				x.e.Digest = d.String()
+			}
+			if !held.TakeEncoded(x.e) {
+				// The next page reads below the last entry kept.
+				page.After = strconv.FormatInt(page.Entries[len(page.Entries)-1].Seq, 10)
+				break
 			}
 			page.Entries = append(page.Entries, x.e)
 			if len(page.Entries) > limit {
@@ -900,7 +923,7 @@ func (r *Reader) State(ctx context.Context, id artifacts.ID, rd Reading) ([]Stat
 		if err != nil || !c.stored {
 			return err
 		}
-		docs, err := scanDocs(ctx, tx, c, `
+		docs, err := scanDocs(ctx, tx, c, nil, `
 			SELECT doc_id, body, created_by, created_by_kind, created_at, updated_by,
 			updated_by_kind, updated_at, version FROM artifact_data_docs
 			WHERE store_no = ? AND collection_no = ? AND created_by = ? AND body IS NOT NULL
@@ -922,6 +945,53 @@ func (r *Reader) State(ctx context.Context, id artifacts.ID, rd Reading) ([]Stat
 		return nil
 	})
 	return out, err
+}
+
+// StatePage is [Reader.State] a page at a time, by key, after the document
+// `after` (empty for the first), as a node holding no data reads it: held to
+// the bytes the read carries ([statelog.RowsOf]), and the document the next
+// page starts after, empty on the last.
+func (r *Reader) StatePage(ctx context.Context, id artifacts.ID, rd Reading,
+	after string) ([]StateEntry, string, error) {
+
+	out := []StateEntry{}
+	var next string
+	if rd.Record == "" {
+		return out, "", nil
+	}
+	_, err := r.read(ctx, id, rd, func(tx *sql.Tx, s storeRow, present bool) error {
+		out, next = []StateEntry{}, ""
+		c, err := (&txView{ctx: ctx, tx: tx, store: s, present: present}).collection(StateCollection)
+		if err != nil || !c.stored {
+			return err
+		}
+		held := statelog.RowsOf(ctx)
+		docs, err := scanDocs(ctx, tx, c, held, `
+			SELECT doc_id, body, created_by, created_by_kind, created_at, updated_by,
+			updated_by_kind, updated_at, version FROM artifact_data_docs
+			WHERE store_no = ? AND collection_no = ? AND created_by = ? AND body IS NOT NULL
+			  AND doc_id > ?
+			ORDER BY doc_id`, s.no, c.no, rd.Record, after)
+		if err != nil {
+			return err
+		}
+		if held.Cut() && len(docs) > 0 {
+			next = docs[len(docs)-1].ID
+		}
+		token := StateToken(rd.Record) + "_"
+		for _, d := range docs {
+			if !strings.HasPrefix(d.ID, token) {
+				continue
+			}
+			value, err := stateValue(d.Fields)
+			if err != nil {
+				return err
+			}
+			out = append(out, StateEntry{Key: StateKey(d.ID), Value: value, Version: d.Version})
+		}
+		return nil
+	})
+	return out, next, err
 }
 
 // StateField is the one field a per-viewer state document keeps its value in.

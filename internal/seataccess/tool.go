@@ -56,16 +56,33 @@ func ToolServerOf(c *config.Company, lane Lane) string {
 // tool is a CLI in the seat's box with engine-set credentials ([LaneSpec.BoxEnv],
 // [BoxDefaults]), waiting until sealed; server_off where every such server is
 // off; else builtin for Jira and Confluence and no_server for the rest. SSH is
-// builtin whatever the servers (`ssh_read`, `ssh_operate`).
+// builtin whatever the servers (`ssh_read`, `ssh_operate`), and so is a lane
+// whose credential the engine alone holds ([LaneSpec.EngineHeld]).
 //
 // A SERVER TURNED OFF READS NO CREDENTIAL ([config.MCPServer.IsEnabled]): a lane
 // whose only server is off is not live however well sealed; Jira and Confluence
 // stay builtin, their credential being read by the engine's own tools.
 func ToolStateOf(c *config.Company, handle string, lane Lane, want Desired, have Observed) ToolState {
+	return toolState(c, handle, lane, laneSpecOf(lane), want, have)
+}
+
+// laneSpecOf is lane's spec as its registered vendor offers it, the zero spec
+// for a kind no vendor registered.
+func laneSpecOf(lane Lane) LaneSpec {
+	v, ok := Lookup(lane.Kind())
+	if !ok {
+		return LaneSpec{}
+	}
+	spec, _ := v.Catalog().Lane(lane)
+	return spec
+}
+
+// toolState is [ToolStateOf] for lane's spec.
+func toolState(c *config.Company, handle string, lane Lane, spec LaneSpec, want Desired, have Observed) ToolState {
 	if !want.Enabled || !have.Exists || !have.Enabled {
 		return ToolOff
 	}
-	if lane == LaneSSH {
+	if lane == LaneSSH || spec.EngineHeld {
 		return ToolBuiltin
 	}
 	var servers []*config.MCPServer

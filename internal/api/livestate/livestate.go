@@ -2,10 +2,13 @@
 // is doing right now.
 //
 // It consumes the engine event stream — the same feed the WebSocket fan-out
-// reads — and maintains, per seat: the seat's live state, the TURN it is on and
-// the stage of it (context, a phase, or parked on its executor), the last turn
-// it ended, its current phase and iteration, its live token meter, and the
-// IN-FLIGHT LLM call. Beside the seats it keeps the executors in flight,
+// reads — and maintains, per seat: the seat's live state, the TURNS it is on
+// and the stage of each (context, a phase, or parked on its executor), the
+// last turn it ended, its current phase and iteration, its live token meter,
+// and each turn's IN-FLIGHT LLM call. A seat runs up to its
+// sandbox.max_concurrent_runs turns at once, so nothing here reads one turn's
+// events against another's: each turn, and each turn's call, has its own
+// reorder guard. Beside the seats it keeps the executors in flight,
 // reconciled against their durable record (sandbox.go). What a seat has SPENT
 // is not held per seat: it is the per-agent row of the spend rollup, folded
 // from the same records by internal/tokens, so the projection holds no second
@@ -51,7 +54,9 @@
 package livestate
 
 import (
+	"cmp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -171,24 +176,30 @@ type agentLive struct {
 	terminated bool
 
 	lastError *ErrorInfo
-	liveCall  *LiveCall
-	// liveCallSeq is the projection sequence at which liveCall last
-	// changed — set, folded, frozen or cleared — carried on the overlay so
-	// a tab can order a live_call slot across keys and across a clear. See
-	// [Overlay.LiveCallSeq].
+
+	// calls are the seat's calls in flight keyed by turn id, one per turn
+	// since a turn runs one phase at a time. liveCallSeq is the projection
+	// sequence at which any of them last changed — set, folded, frozen or
+	// cleared — carried on the overlay so a tab can order the live_calls
+	// slot across keys and across a clear. See [Overlay.LiveCallSeq].
+	calls       map[string]*LiveCall
 	liveCallSeq int
 	budget      *BudgetMeter
+
+	// phaseTurn is the turn currentPhase was set by, so another turn's end
+	// leaves it.
+	phaseTurn string
 
 	// stateTS is the instant of the last state-affecting event applied —
 	// the reorder guard. Internal bookkeeping, never re-emitted.
 	stateTS stamp
 
-	// turn is the turn the seat is on, and turnAt the instant of the
-	// event that last moved it — the turn's own reorder guard, apart from
-	// stateTS because a turn's events are ordered against each other and
-	// not against a meter report or a failure hold. See turn.go.
-	turn   *LiveTurn
-	turnAt stamp
+	// turns are the turns the seat is on, keyed by turn id, each with the
+	// instant of the event that last moved it — that turn's own reorder
+	// guard, apart from stateTS because a turn's events are ordered against
+	// each other and not against a meter report, a failure hold or another
+	// turn's events. See turn.go.
+	turns map[string]*heldTurn
 
 	// lastTurn is the newest turn the seat ended, and lastTurnAt when.
 	lastTurn   *LastTurn
@@ -220,11 +231,11 @@ func (a *agentLive) overlay() Overlay {
 	return Overlay{
 		CurrentPhase:     optional(a.currentPhase),
 		CurrentIteration: a.currentIteration,
-		LiveCall:         a.liveCall.clone(),
+		LiveCalls:        a.callList(),
 		LiveCallSeq:      a.liveCallSeq,
 		LastError:        a.lastError.clone(),
 		Budget:           a.budget.clone(),
-		Turn:             a.turn.clone(),
+		Turns:            a.turnList(),
 		LastTurn:         a.lastTurn.clone(),
 		Paused:           a.paused.clone(),
 		ProviderLimit:    a.providerLimit.clone(),
@@ -741,17 +752,19 @@ func (s *LiveState) applyTurnEvent(agent *agentLive, env Envelope, payload map[s
 		// A NEW INSTANCE, or none: a turn the old one was running died
 		// with it. A PARKED turn outlives both — it is a record in the
 		// coordination store and a box, not a goroutine — and a spawn
-		// older than the turn's newest event is the spawn that turn ran
-		// under.
+		// older than a turn's newest event is the spawn that turn ran
+		// under. Each turn is judged against its own newest event.
 		at := newStamp(env.Timestamp)
-		if agent.turn != nil && agent.turn.Stage != StageParked &&
-			(env.Type == "agent_terminated" || agent.turnAt.empty() || at.empty() ||
-				!at.before(agent.turnAt)) {
-			agent.turn = nil
+		for id, held := range agent.turns {
+			if held.turn.Stage != StageParked &&
+				(env.Type == "agent_terminated" || held.at.empty() || at.empty() ||
+					!at.before(held.at)) {
+				delete(agent.turns, id)
+			}
 		}
 	default:
-		if ownFailure(env, payload) && agent.turn != nil && turnID != "" && agent.turn.TurnID == turnID {
-			agent.turn.failed = true
+		if held := agent.turns[turnID]; ownFailure(env, payload) && held != nil && turnID != "" {
+			held.turn.failed = true
 		}
 	}
 	return !sameTurnOverlay(before, agent.overlay())
@@ -786,16 +799,18 @@ func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[strin
 			agent.terminated = false
 			agent.failure = ""
 			agent.lastError = nil
-			s.clearCall(agent)
+			s.clearCalls(agent)
 		}
-		// AND THE CALL OF A TURN THE SPAWN ENDED. The turn itself was
-		// taken off the seat above (applyTurnEvent) when the spawn is
-		// newer than it — the turn died with the instance that ran it —
-		// and a call left behind is a round nothing will ever finish,
-		// drawn on a seat that is idle. A spawn OLDER than the turn is one
-		// that lost a race to it, and the turn and its call stand.
-		if agent.turn == nil {
-			s.clearCall(agent)
+		// AND THE CALL OF EVERY TURN THE SPAWN ENDED. A turn was taken off
+		// the seat above (applyTurnEvent) when the spawn is newer than it —
+		// the turn died with the instance that ran it — and a call left
+		// behind is a round nothing will ever finish. A spawn OLDER than a
+		// turn is one that lost a race to it, and that turn and its call
+		// stand.
+		for id := range agent.calls {
+			if agent.turns[id] == nil {
+				s.clearCall(agent, id)
+			}
 		}
 
 	case env.Type == "agent_phase_started":
@@ -805,6 +820,7 @@ func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[strin
 		agent.lastError = nil
 		agent.currentPhase = str(payload, "phase")
 		agent.currentIteration = num(payload, "iteration")
+		agent.phaseTurn = str(payload, "turn_id")
 		// Only if a round of this same call has not already arrived.
 		// phase_started and agent_turn_progress travel on DIFFERENT
 		// subjects, so the opening round can land first; this assignment
@@ -817,11 +833,12 @@ func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[strin
 		// reorder guard above let through is no older than the failure, so
 		// it is the phase running again and seeds a call of its own — see
 		// [LiveCall.runningAs].
-		if !agent.liveCall.runningAs(str(payload, "turn_id"),
+		turnID := str(payload, "turn_id")
+		if !agent.calls[turnID].runningAs(turnID,
 			str(payload, "phase"), num(payload, "iteration")) {
-			agent.liveCall = beginCall(env, payload)
-			agent.liveCall.Versions = s.restamp(nil, agent.liveCall)
-			agent.liveCallSeq = s.versions
+			call := beginCall(env, payload)
+			call.Versions = s.restamp(nil, call)
+			s.holdCall(agent, call)
 		}
 
 	case env.Type == "agent_phase_completed":
@@ -847,7 +864,7 @@ func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[strin
 
 	case env.Type == "agent_terminated":
 		agent.terminated = true
-		s.clearCall(agent)
+		s.clearCalls(agent)
 
 	default:
 		if _, ok := failureEvents[env.Type]; !ok {
@@ -857,9 +874,14 @@ func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[strin
 		// A call already frozen as failed is the most informative thing
 		// on the seat's page — the prompt it died on, the tools that had
 		// run, the error. The failure event that follows a failed phase would
-		// otherwise wipe it a moment later.
-		if agent.liveCall == nil || !agent.liveCall.Failed {
-			s.clearCall(agent)
+		// otherwise wipe it a moment later. ONLY THE FAILED TURN'S CALL: a
+		// seat's other turns are running still. One naming no turn fails
+		// every call the seat holds.
+		failed := str(payload, "turn_id")
+		for id, call := range agent.calls {
+			if !call.Failed && (failed == "" || failed == id) {
+				s.clearCall(agent, id)
+			}
 		}
 		kind := str(payload, "last_error_kind", "kind")
 		if kind == "" {
@@ -869,7 +891,7 @@ func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[strin
 			Kind:    kind,
 			Detail:  str(payload, "last_error", "detail", "error"),
 			Phase:   agent.currentPhase,
-			TurnID:  str(payload, "turn_id"),
+			TurnID:  failed,
 			At:      env.Timestamp,
 			EventID: env.ID,
 		}
@@ -880,22 +902,35 @@ func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[strin
 // endTurn clears what a seat holds for the turn `turnID` when that turn ends.
 //
 // SCOPED TO THAT TURN, because both events that end one arrive asynchronously
-// and unordered against the next turn's work: reflection_completed comes from a
-// separate consumer seconds after the turn returned, and one wildcard
-// subscription gives no cross-topic order. An unconditional clear wiped the live
-// row and reported a working seat as idle.
+// and unordered against the seat's other work: reflection_completed comes from
+// a separate consumer seconds after the turn returned, the seat may be running
+// other turns beside it, and one wildcard subscription gives no cross-topic
+// order. An unconditional clear wiped the live row and reported a working seat
+// as idle. An end naming no turn is the whole seat's.
 //
 // The timestamp reorder guard does not cover this alone: applyProgress never
 // advances stateTS, so a seat with only progress rounds since the last phase
 // boundary still carries the older stamp and lets a late completion through.
 func (s *LiveState) endTurn(agent *agentLive, turnID string) {
-	// A live call for ANOTHER turn is the seat having moved on. Neither the
-	// row nor the state belongs to the turn ending here.
-	if agent.liveCall != nil && turnID != "" && agent.liveCall.TurnID != turnID {
-		return
+	// The current phase is the turn's that set it: another turn's is the
+	// seat's other work, which this end leaves. Ending the turn that set it
+	// hands it to the newest call still running on another turn, if any.
+	if turnID == "" || agent.phaseTurn == "" || agent.phaseTurn == turnID {
+		agent.currentPhase, agent.currentIteration, agent.phaseTurn = "", 0, ""
+		var next *LiveCall
+		for id, call := range agent.calls {
+			if id == turnID || turnID == "" || !call.InProgress {
+				continue
+			}
+			if next == nil || cmp.Or(newStamp(call.UpdatedAt).compare(newStamp(next.UpdatedAt)),
+				strings.Compare(next.TurnID, call.TurnID)) > 0 {
+				next = call
+			}
+		}
+		if next != nil {
+			agent.currentPhase, agent.currentIteration, agent.phaseTurn = next.Phase, next.Iteration, next.TurnID
+		}
 	}
-	agent.currentPhase = ""
-	agent.currentIteration = 0
 	// A HELD FAILURE STAYS HELD, and this is the one path that reaches it.
 	// An engine-detected failure publishes its event and then the turn's
 	// own completion, microseconds apart and in that order — so clearing
@@ -911,7 +946,11 @@ func (s *LiveState) endTurn(agent *agentLive, turnID string) {
 		return
 	}
 	agent.terminated = false
-	s.clearCall(agent)
+	if turnID == "" {
+		s.clearCalls(agent)
+		return
+	}
+	s.clearCall(agent, turnID)
 }
 
 // ensureAgent returns the live entry for the seat with this agent id, creating

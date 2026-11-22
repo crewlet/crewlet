@@ -31,7 +31,8 @@ func TestTheExecutorStatementsArePlanned(t *testing.T) {
 			t.Errorf("close the store: %v", err)
 		}
 	})
-	covered := []string{"executor_sessions", "executor_session_tombs", "executor_seat_removals"}
+	covered := []string{"executor_sessions", "executor_session_tombs", "executor_seat_removals",
+		"executor_session_serves"}
 
 	used := map[string]bool{}
 	var planned []string
@@ -124,9 +125,9 @@ type executorIndexed struct {
 	ordered bool
 }
 
-// The indexes the reads are held to, beside the six the statements name
+// The indexes the reads are held to, beside the seven the statements name
 // themselves (sessionKey, conversationIdx, lineIdx, endedIdx, seatIdx,
-// heldIdx).
+// heldIdx, sessionIdx).
 const (
 	tombKey       = "sqlite_autoindex_executor_session_tombs_1"
 	removalKey    = "sqlite_autoindex_executor_seat_removals_1"
@@ -200,6 +201,23 @@ func executorReads(t *testing.T) map[string]executorIndexed {
 		"a conversation's head":    inOrder(lineIdx, headStatement, seat, key),
 		"a conversation's endings": inOrder(conversationIdx, endingsStatement, seat, key, turn, MaxEndings),
 
+		// THE TURNS A CONVERSATION READS AS SERVED, each joined to its row by
+		// the row's key: the newest that names a session, the newest ends.
+		"a conversation's served head": inOrder(servesLineIdx, servedHeadStatement, seat, key),
+		"a conversation's served endings": inOrder(servesLineIdx, servedEndingsStatement, seat, key, turn,
+			MaxEndings),
+		"the served turns naming a session": seek(servesLineIdx, servedSessionStatement, seat, key, "s-1"),
+
+		// WHAT ONE TURN SERVES, by its key: whether any or one, and each drop.
+		"whether a turn serves another": seek(servesKey, servesAnyStatement, seat, turn),
+		"whether a turn serves one":     seek(servesKey, servesStatement, seat, turn, key),
+		"a served turn absorbed":        seek(servesKey, absorbServedStatement, seat, turn, key, 1),
+		"a served turn dropped":         seek(servesKey, dropServedStatement, seat, turn, key),
+		"a turn's served rows deleted":  seek(servesKey, turnServedStatement, seat, turn),
+
+		// WHETHER A MINTED SESSION IS FRESH: any row naming its id.
+		"whether a session is held": seek(sessionIdx, sessionHeldStatement, "s-1"),
+
 		// A SEAT'S PAGE, the latest begun first.
 		"a seat's page": inOrder(seatIdx, pageStatement, seat, 1<<62, DefaultPageSize+1),
 
@@ -243,13 +261,18 @@ func endRowArgs() []any {
 
 // executorCensuses is every statement whose question names a set of rows it
 // reads whole — a seat's held bytes, a conversation's counts, a seat's rows
-// deleted at its removal — held to no heap scan of a covered table.
+// and served rows deleted at its removal — held to no heap scan of a covered
+// table.
 func executorCensuses() map[string]executorPlanned {
 	return map[string]executorPlanned{
-		"a seat's named bytes":          {seatBytesStatement, []any{"ana", "turn"}},
-		"a conversation's endings":      {endingsCountStatement, []any{"ana", "chat:room", "turn"}},
-		"a conversation's sessions":     {siblingsCountStatement, []any{"ana", "chat:room", "turn"}},
-		"a removed seat's rows deleted": {seatRowsStatement, []any{"ana"}},
+		"a seat's named bytes":            {seatBytesStatement, []any{"ana", "turn"}},
+		"a conversation's endings":        {endingsCountStatement, []any{"ana", "chat:room", "turn"}},
+		"a conversation's sessions":       {siblingsCountStatement, []any{"ana", "chat:room", "turn"}},
+		"a removed seat's rows deleted":   {seatRowsStatement, []any{"ana"}},
+		"a conversation's served endings": {servedEndingsCountStatement, []any{"ana", "chat:room", "turn"}},
+		"a conversation's served sessions": {servedSiblingsCountStatement,
+			[]any{"ana", "chat:room", "turn"}},
+		"a removed seat's served rows deleted": {seatServedStatement, []any{"ana"}},
 	}
 }
 
@@ -259,6 +282,7 @@ func executorCensuses() map[string]executorPlanned {
 func executorPasses() map[string]executorPlanned {
 	return map[string]executorPlanned{
 		"the seats holding sessions":      {handlesStatement, nil},
+		"a page of them":                  {handlesPageStatement, []any{"ana"}},
 		"the sessions by sealing key":     {sealedKeysStatement, nil},
 		"the bases every live turn holds": {heldEverywhereStatement, nil},
 	}

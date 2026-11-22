@@ -16,11 +16,14 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/activityline"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
+func init() { Register(OpenCode{}) }
+
 // OpenCodeName is this runner's config name.
-const OpenCodeName = sandbox.OpenCodeHarness
+const OpenCodeName = "opencode"
 
 // transcriptDetailLimit caps one transcript line's echoed text: the grammar's
 // own preview bound.
@@ -107,8 +110,8 @@ const openCodeCallWait = 10 * time.Second
 // data URI.
 //
 // THIRTY SECONDS, about five times the slowest measured: 6.4 s to export a 256
-// MiB session (the most a kept session's export holds unpacked, sandbox's
-// SessionMaxBytes at the scrub's eightfold) on a busy 2-core box, OpenCode
+// MiB session (the most a kept session's export holds unpacked, the scrub's
+// plaintext bound, [scrubPlainMax]) on a busy 2-core box, OpenCode
 // 2.1.4. Past it only the wait is lost: an export it ended is packed on demand
 // once the job is over ([OpenCode.Pack]), and a page it ended leaves the
 // figure carried along the copy's lineage.
@@ -704,7 +707,7 @@ func openCodeSessionGate(session Session, paths Paths, rewired bool) string {
 	// over it. Recorded before the import, a failed import would leave the
 	// line naming a copy that does not hold it.
 	line(`      case "$out" in *%s*) %s || w=%s;; *) w="OpenCode did not import it: $(printf '%%s' "$out" | tr '\n' ' ')";; esac`,
-		q("Imported session: "+session.ID), recordDigest(paths, "sid", "d"), q(restoreDigestUnrecorded))
+		q("Imported session: "+session.ID), recordDigest(paths, "sid"), q(restoreDigestUnrecorded))
 	line(`    fi`)
 	line(`    rm -rf %s %s`, q(staged), ans)
 	line(`  fi`)
@@ -939,7 +942,7 @@ func openCodeExporter(sync time.Duration, file string) string {
 // a note already waits on the run's record for the review or the next brief,
 // but the session's inbox is durable: left pending, OpenCode put it before a
 // continued run's next prompt too, and the model read it twice (2.1.4). Only
-// the plugin's own ids ([OpenCodeInboxID]) are read out of the listing, as
+// the plugin's own ids ([OpenCode.inboxID]) are read out of the listing, as
 // text (a note's quotes are escaped there), from the answer file, never a pipe
 // ([openCodeScript]). Each call is bounded ([openCodeCallWait]) and the
 // cancels share one bound more, so the tail spends two bounds at most
@@ -1057,12 +1060,18 @@ func jsonStringify(s string) string {
 // dir ([openCodeReferable]). Written every run: the script refuses to run
 // without it.
 func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error) {
-	if req.System != "" || len(req.MCPServers) > 0 || req.Steer.Set() || len(req.Skills) > 0 {
-		if err := openCodeReferable(paths.WorkDir()); err != nil {
-			return "", fmt.Errorf("executor: this box's home %q cannot be named in an OpenCode "+
-				"run's configuration: %w; a local box's home is under providers.sandbox.local.state_dir, "+
-				"which needs a path without such characters", paths.Home, err)
-		}
+	// THE COMMANDS ITS MODEL RUNS START WITHOUT WHAT THE HARNESS ALONE READS:
+	// the names it signs in by and its own variables, on every run
+	// (opencode_toolenv.js).
+	omitted, refused := toolEnvOmitted(req.SignInEnv, openCodeHarnessEnv...)
+	if refused != nil {
+		return "", refused
+	}
+	// So every run's configuration names a path under the work dir.
+	if err := openCodeReferable(paths.WorkDir()); err != nil {
+		return "", fmt.Errorf("executor: this box's home %q cannot be named in an OpenCode "+
+			"run's configuration: %w; a local box's home is under providers.sandbox.local.state_dir, "+
+			"which needs a path without such characters", paths.Home, err)
 	}
 	cfg := map[string]any{
 		"$schema": "https://opencode.ai/config.json",
@@ -1078,7 +1087,8 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 		// is denied: it asks a PERSON through a form a headless run cancels,
 		// where the bridge's `ask_and_wait` parks the run on an answer. Every
 		// document's rules are added in OpenCode's order, so these, last,
-		// decide.
+		// decide among them; an agent's own rules, a repository's included,
+		// are read after them (2.3.2).
 		"permissions": []map[string]string{
 			{"action": "*", "resource": "*", "effect": "allow"},
 			{"action": "question", "resource": "*", "effect": "deny"},
@@ -1097,14 +1107,30 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 		// run the brief on an agent the cap never reached.
 		"default_agent": openCodeAgent,
 	}
+	agent := map[string]any{}
 	// THE RUN'S TURN CAP, as the agent's `steps` (Claude Code's --max-turns,
 	// [ClaudeCode.Command]): the one bound on an executor's work, already
 	// reconciled into Limits. Absent at zero, which is uncapped: OpenCode
 	// refuses a step count below one.
 	if req.Limits.MaxTurns > 0 {
-		cfg["agents"] = map[string]any{
-			openCodeAgent: map[string]any{"steps": req.Limits.MaxTurns, "disabled": false},
+		agent["steps"] = req.Limits.MaxTurns
+		agent["disabled"] = false
+	}
+	// THE ENTRY'S WEB DENIED IN THE PERMISSIONS TOO, the run's and its agent's,
+	// beside the web tools' plugins taken out below: Code Mode's `execute`
+	// fetches under the webfetch permission, and on 2.3.2 a repository's agent
+	// rule allowing it outranked the run's own rules until the agent's denied
+	// it as well.
+	if req.WebDenied {
+		denied := []map[string]string{
+			{"action": "webfetch", "resource": "*", "effect": "deny"},
+			{"action": "websearch", "resource": "*", "effect": "deny"},
 		}
+		cfg["permissions"] = append(cfg["permissions"].([]map[string]string), denied...)
+		agent["permissions"] = denied
+	}
+	if len(agent) > 0 {
+		cfg["agents"] = map[string]any{openCodeAgent: agent}
 	}
 	values := &openCodeValueFiles{dir: paths.OpenCodeValues()}
 	wired := openCodeWiring(sandbox.Wiring{MCPServers: req.MCPServers, Steer: req.Steer,
@@ -1129,7 +1155,7 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 	if wired.servers != nil {
 		cfg["mcp"] = map[string]any{"servers": wired.servers}
 	}
-	var plugins []map[string]any
+	var plugins []any
 	if req.Steer.Set() {
 		if err := box.WriteFile(ctx, paths.OpenCodeSteerPlugin()+"/"+openCodeSteerEntry, openCodeSteerPlugin); err != nil {
 			return "", fmt.Errorf("executor: writing OpenCode's notes plugin: %w", err)
@@ -1156,9 +1182,23 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 			"options": map[string]string{"url": wired.skills},
 		})
 	}
-	if len(plugins) > 0 {
-		cfg["plugins"] = plugins
+	// THE ENTRY'S WEB TOOLS OFF where it denies them, as its runs on the engine
+	// host have none: their plugins taken out, which on 2.3.2 left webfetch
+	// and websearch unregistered for the run and every subagent, an agent of
+	// the repository's own allowing them included. A repository's `plugins`
+	// naming them again does not bring them back.
+	if req.WebDenied {
+		plugins = append(plugins, "-opencode.tool.webfetch", "-opencode.tool.websearch")
 	}
+	// AND ON EVERY RUN THE PLUGIN THAT KEEPS omitted OUT OF THE COMMANDS ITS
+	// MODEL RUNS (opencode_toolenv.js), last.
+	if err := box.WriteFile(ctx, paths.OpenCodeToolEnvPlugin()+"/"+openCodeSteerEntry, openCodeToolEnvPlugin); err != nil {
+		return "", fmt.Errorf("executor: writing OpenCode's tool-environment plugin: %w", err)
+	}
+	cfg["plugins"] = append(plugins, map[string]any{
+		"package": paths.OpenCodeToolEnvPlugin(),
+		"options": map[string]any{"names": omitted},
+	})
 	for _, v := range values.files {
 		if err := box.WriteFile(ctx, v.path, []byte(v.value)); err != nil {
 			return "", fmt.Errorf("executor: writing a value of OpenCode's configuration: %w", err)
@@ -1388,7 +1428,7 @@ func (OpenCode) Events() Decoder { return &openCodeEvents{} }
 // The run's tokens and price come from the session's usage report the script
 // appends ([openCodeUsageEvent]), and stay ZERO where there is none, never
 // estimated: a reader cannot tell an invented number in the spend rollup.
-func (OpenCode) Parse(stdout string) sandbox.Result {
+func (OpenCode) Parse(stdout []byte) sandbox.Result {
 	return decodeAll(&openCodeEvents{}, stdout)
 }
 
@@ -1497,8 +1537,16 @@ type openCodeEvents struct {
 	// order, and message that message's id. A text event that names no
 	// message belongs to the latest one: only a message that names itself
 	// and differs ends it, so a stream that names none is read whole.
-	answers    []string
-	message    string
+	// answerBytes is what answers hold joined, and answerDropped what the
+	// message wrote past [openCodeEvents.bound], counted rather than kept.
+	answers       []string
+	message       string
+	answerBytes   int
+	answerDropped int
+	// readBound is the most of the answer, or of the plain output, kept:
+	// [sandbox.MaxFileBytes], what a run's report is read to whatever the
+	// harness wrote it as, where zero; a test lowers it.
+	readBound  int
 	transcript transcriptLines
 	// seq numbers the run's tool calls ([activityline]).
 	seq     int
@@ -1517,7 +1565,7 @@ type openCodeEvents struct {
 	// plain is the output while no event has been seen: a run that printed its
 	// answer as text, not the event stream, whose whole output is then the
 	// answer (its exit status, not this decoder, says whether it failed). Held
-	// to [sandbox.MaxFileBytes], what lies past it counted rather than kept.
+	// to [openCodeEvents.bound], what lies past it counted rather than kept.
 	plain        strings.Builder
 	plainDropped int64
 
@@ -1543,12 +1591,12 @@ type openCodeEvents struct {
 }
 
 // Entries implements [Decoder].
-func (d *openCodeEvents) Entries() []string {
+func (d *openCodeEvents) Entries(end bool) []string {
 	d.following = true
 	d.answers = nil
 	d.named = nil
 	d.plain.Reset()
-	return d.transcript.take()
+	return d.transcript.take(end)
 }
 
 func (d *openCodeEvents) Line(line []byte) {
@@ -1719,21 +1767,53 @@ func (d *openCodeEvents) request() contextRead {
 // answer adds one text event's chunk to the answer: after the latest message's
 // text where the event is that message's, or names none; in its place where it
 // names a later one.
+// A later message lets the earlier one's chunks go. A chunk that would take
+// the message past the bound, its line break counted, is counted rather than
+// kept, and so is every later chunk of the message.
 func (d *openCodeEvents) answer(message, chunk string) {
 	if message != "" {
 		if d.message != "" && message != d.message {
-			d.answers = d.answers[:0]
+			d.answers, d.answerBytes, d.answerDropped = nil, 0, 0
 		}
 		d.message = message
 	}
+	if d.answerDropped > 0 || d.answerBytes+len(chunk)+1 > d.bound() {
+		d.answerDropped += len(chunk) + 1
+		return
+	}
 	d.answers = append(d.answers, chunk)
+	d.answerBytes += len(chunk) + 1
+}
+
+// bound is [openCodeEvents.readBound], or [sandbox.MaxFileBytes] where unset.
+func (d *openCodeEvents) bound() int {
+	if d.readBound > 0 {
+		return d.readBound
+	}
+	return sandbox.MaxFileBytes
+}
+
+// settledHead is text, whole lines that a bound cut after, held to what its
+// redaction settles ([redact.Settled]), so a reader that redacts it reads an
+// opening of what the whole text redacts to; and the bytes it held back.
+func settledHead(text string) (string, int) {
+	kept := text[:redact.Settled(text)]
+	return kept, len(text) - len(kept)
+}
+
+// withNote is text with note on a line after it, or note alone.
+func withNote(text, note string) string {
+	if text == "" {
+		return note
+	}
+	return text + "\n" + note
 }
 
 func (d *openCodeEvents) keepPlain(line []byte) {
 	if d.following {
 		return
 	}
-	if d.plainDropped > 0 || d.plain.Len()+len(line)+1 > sandbox.MaxFileBytes {
+	if d.plainDropped > 0 || d.plain.Len()+len(line)+1 > d.bound() {
 		d.plainDropped += int64(len(line) + 1)
 		return
 	}
@@ -1765,21 +1845,34 @@ func (d *openCodeEvents) Result() sandbox.Result {
 	if !d.sawEvent {
 		// Output that is not the event stream: the whole of it is the
 		// answer.
-		text := strings.TrimSpace(d.plain.String())
+		text := d.plain.String()
 		if d.plainDropped > 0 {
-			text += fmt.Sprintf("\n(%s more of the output not read: past the %s a run's plain "+
-				"output is read to)", humanSize(d.plainDropped), humanSize(sandbox.MaxFileBytes))
+			kept, held := settledHead(text)
+			text = withNote(strings.TrimSpace(kept), fmt.Sprintf("(%s more of the output not kept: past the %s "+
+				"a run's plain output is read to)", humanSize(d.plainDropped+int64(held)), humanSize(int64(d.bound()))))
 		}
+		text = strings.TrimSpace(text)
 		return sandbox.Result{Text: text, Success: true, DeliveredRefs: deliveredRefs(text)}
 	}
 	body := strings.TrimSpace(strings.Join(d.answers, "\n"))
 	success := body != "" && d.errText == ""
+	if d.answerDropped > 0 {
+		var lines strings.Builder
+		for _, chunk := range d.answers {
+			lines.WriteString(chunk)
+			lines.WriteByte('\n')
+		}
+		kept, held := settledHead(lines.String())
+		body = withNote(strings.TrimSpace(kept), fmt.Sprintf("(%s more of the answer not kept: past the %s "+
+			"a run's answer is read to)", humanSize(int64(d.answerDropped+held)), humanSize(int64(d.bound()))))
+		success = d.errText == ""
+	}
 	res := sandbox.Result{
 		Text:          body,
 		Success:       success,
-		Transcript:    d.transcript.String(),
 		DeliveredRefs: deliveredRefs(body),
 	}
+	res.Transcript, res.TranscriptElidedLines, res.TranscriptElidedBytes = d.transcript.result()
 	if u := d.usage; u != nil {
 		tokens := u.Data.Tokens
 		res.InputTokens = tokens.Input + tokens.Cache.Read + tokens.Cache.Write
@@ -1917,3 +2010,34 @@ func firstNonBlank(values ...string) string {
 // firstLine is s's first line as a preview, redacted whole before it is cut
 // ([activityline.Preview]).
 func firstLine(s string, limit int) string { return activityline.Preview(s, limit) }
+
+// openCodeChargeBytes is the fewest bytes OpenCode's own estimate counts as a
+// token: round(UTF-16 length / 4) of any text, and a string's UTF-8 bytes are
+// never fewer than its UTF-16 units.
+const openCodeChargeBytes sandbox.Charge = 4
+
+// threadTraits is what OpenCode's main-thread read settles: its export, taken
+// as its script ends, may lack what a cut-off copy holds, so such a copy is
+// not counted; its plugin's serves confirm themselves, so it asks no receipts.
+func (OpenCode) threadTraits() sandbox.ThreadTraits { return sandbox.ThreadTraits{} }
+
+// sessionTraits is how a relaunch judges an OpenCode session: at the point its
+// box says, its calls keyed by their place in the round's log, a brief at
+// [openCodeChargeBytes].
+func (OpenCode) sessionTraits() sandbox.SessionTraits {
+	return sandbox.SessionTraits{FirstRequest: sandbox.FirstRequestBox, CallKeying: sandbox.CallKeyingByLogPlace,
+		Charge: openCodeChargeBytes}
+}
+
+// notesOffWhy is what switches OpenCode's reading of notes off.
+func (OpenCode) notesOffWhy() string {
+	return "a managed policy that denies the run's notes plugin (integration.use), or a plugin OpenCode " +
+		"failed to load, which its own log names"
+}
+
+// artifacts is what an OpenCode run leaves in its box of its own.
+func (OpenCode) artifacts(p Paths) (files, dirs []string) {
+	return []string{p.OpenCodeConfig()},
+		[]string{p.OpenCodeValues(), p.OpenCodeValuesFresh(), p.OpenCodeSteerPlugin(), p.OpenCodeSkills(),
+			p.OpenCodeSkillsPlugin(), p.OpenCodeToolEnvPlugin()}
+}

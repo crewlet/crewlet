@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/queue"
 	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -46,6 +47,15 @@ func (p present) Nodes(context.Context) ([]string, error) {
 // fleetOf is a fleet of two rigs, node-a and node-b, on one in-memory broker
 // and one replicated store, each with its fleet half started over its service.
 func fleetOf(t *testing.T, a, b evals.RigOptions) (*assistanttest.Rig, *assistanttest.Rig) {
+	t.Helper()
+	return fleetAsking(t, 0, a, b)
+}
+
+// fleetAsking is [fleetOf] whose fleet halves wait budget for an answer, zero
+// for live.DefaultAskBudget.
+func fleetAsking(t *testing.T, budget time.Duration, a, b evals.RigOptions) (*assistanttest.Rig,
+	*assistanttest.Rig) {
+
 	t.Helper()
 	broker := queuememory.NewBroker()
 	roster := present{"node-a": true, "node-b": true}
@@ -74,7 +84,8 @@ func fleetOf(t *testing.T, a, b evals.RigOptions) (*assistanttest.Rig, *assistan
 			t.Fatal(err)
 		}
 		f, err := live.NewFleet(live.FleetOptions{Node: node, Broker: q, Roster: roster,
-			Cipher: cipher, Frames: frames, Replays: replays, Stops: stops})
+			Cipher: cipher, Frames: frames, Replays: replays, Stops: stops, AskBudget: budget,
+			Answers: queue.NewAnswerBudget(nil)})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -412,7 +423,7 @@ func TestAResumedTurnContinuesItsNumberingOnAnotherNode(t *testing.T) {
 	resumed, err := b.Svc.Resume(ctx, approval.Resumption{Owner: b.Person.ID,
 		Conversation: b.Conversation, Turn: accepted.TurnID, Proposal: proposals[0].ID,
 		Read: b.Grant("approve"), State: wire.ProposalApplied,
-		Receipt: &wire.Receipt{Summary: "Created ENG-7."},
+		Receipt: &wire.Receipt{Summary: wire.Plain("Created ENG-7.")},
 		Card:    cardAt(proposals[0], wire.ProposalApplied)})
 	if err != nil {
 		t.Fatal(err)

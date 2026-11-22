@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -152,6 +153,9 @@ func (d runCheckouts) Checkout(ctx context.Context, turn *turnctx.Turn, launch s
 		}
 		return floor.String(), true
 	}
+	if err = branchWorkedBeside(ctx, rt.pending, run, resolved.repos[0]); err != nil {
+		return builtin.Checkout{}, err
+	}
 	granted, outcome, err := rt.pending.GrantRepo(ctx, turn.RunID, launch, sandbox.RepoGrant{
 		Repo: resolved.repos[0], Floor: floor.String(), Ceiling: resolved.ceiling, WorkingFor: resolved.workingFor,
 		Raise: raise,
@@ -189,6 +193,40 @@ func (d runCheckouts) Checkout(ctx context.Context, turn *turnctx.Turn, launch s
 		}
 	}
 	return out, nil
+}
+
+// errBranchWorked is a checkout refused because another of the seat's runs
+// holding it pushes to the same branch of the repository (ADR-0169).
+var errBranchWorked = errors.New("engine: another of this seat's running executor runs works that branch")
+
+// branchWorkedBeside refuses run a branch of repo to push that another of its
+// seat's runs holding the seat was given to push: two runs of one seat at
+// once, each defaulting to seats/<handle>/<item>, would push over each other
+// where no protection rule refuses a force. Read off the store, not this
+// node's counts, since the bridge serves a checkout on any node; two
+// checkouts of one branch inside one listing's round trip are not told apart.
+func branchWorkedBeside(ctx context.Context, store seatRunLister, run sandbox.PendingRun,
+	repo sandbox.RunRepo) error {
+	if repo.Access != sandbox.RepoWrite || repo.Branch == "" {
+		return nil
+	}
+	runs, err := store.ListActiveForSeat(ctx, run.AgentHandle)
+	if err != nil {
+		return fmt.Errorf("engine: reading which branches %s's other runs push: %w", run.AgentHandle, err)
+	}
+	for _, other := range runs {
+		if other.TurnID == run.TurnID || !slices.Contains(sandbox.Holding, other.Status) {
+			continue
+		}
+		if slices.ContainsFunc(other.Repos, func(r sandbox.RunRepo) bool {
+			return r.Repo == repo.Repo && r.Branch == repo.Branch && r.Access == sandbox.RepoWrite
+		}) {
+			return fmt.Errorf("%w: %s's branch %s is pushed by turn %s's run; name another `branch`, "+
+				"or work on that run's conversation once it is done", errBranchWorked, repo.Repo, repo.Branch,
+				other.TurnID)
+		}
+	}
+	return nil
 }
 
 // runGrants are the checkouts a launch carries onto its job's row: the

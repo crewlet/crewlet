@@ -1,265 +1,178 @@
 /**
- * The Advisor's page (`#/advisor`): what its checks found that is worth an
- * operator's attention, each with the change that fixes it, its weekly
- * what was found before.
+ * The Advisor's page (`#/advisor`): the company's numbers, what is worth
+ * changing with the change that fixes each, its weekly reports, and what was
+ * found before.
  *
  * # Anatomy
  *
- * The HEAD says when the checks last ran ("Checked 4 minutes ago"), offers
- * Run now, and names the model its explanations run on (an
- * administrator's is the picker, `components/HelperModel.tsx`).
+ * THE HEAD says when every check last ran, and while a run is going how long
+ * it has run and what it is doing (`Run.tsx`), with Run and the range the
+ * numbers cover.
  *
- * FINDINGS, the first tab: the go-live check while anything blocks the
- * company, then what the owner can change, most costly first (Blocks, Costs,
- * Worth knowing; within each, the largest measured cost, then the newest),
- * then what the engine is handling. Each row says how fresh it is and offers
- * its fix; Apply re-checks the finding before anything is sent (`apply.ts`).
+ * FINDINGS, the first tab, opens on the NUMBERS: a strip of figures, each
+ * against the previous range and linked to the finding that explains it, and
+ * charts of the same range (`Numbers.tsx`, `view.ts`). Then WHAT TO CHANGE,
+ * most costly first (Blocks, Costs, Worth knowing; within each, the largest
+ * measured cost, then the newest): each row one line of what is wrong, one of
+ * why, its numbers, and ONE press that says what it does (`rows.tsx`). Apply
+ * re-checks the finding and confirms in place, under its row
+ * (`ApplyPanel.tsx`). Then what the engine is handling, what a person
+ * snoozed, and, while anything blocks, the review of what each agent can do,
+ * folded.
  *
- * HISTORY, the second tab: what was found and closed, and why it closed.
+ * REPORTS, the second tab: each week's report, newest first, a page at a
+ * time. HISTORY, the third: what was found and closed, and why it closed.
  */
 
-import { useCallback, useEffect, useState } from "react";
-import {
-  AttentionList,
-  Button,
-  Callout,
-  EmptyState,
-  Link,
-  StepList,
-  Text,
-  useToast,
-  type StepListStep,
-} from "@crewlethq/ui";
+import { useCallback, useState } from "react";
+import { AttentionList, Button, Callout, EmptyState, Link, Text } from "@crewlethq/ui";
 import { QueryState } from "~/components/common.tsx";
-import { useAssistantControl } from "~/app/assistant/control.ts";
 import { href } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { ago } from "~/lib/ago.ts";
-import { plural, relTime } from "~/lib/format.ts";
+import { relTime } from "~/lib/format.ts";
 import { GoLiveReview } from "./GoLiveReview.tsx";
-import { ApplyDialog } from "./ApplyDialog.tsx";
-import { decide, runNow, useFindings, useLatestRun } from "./api.ts";
-import { AtlasFix, findingItem, type RowActions } from "./rows.tsx";
-import type { AdvisorKeptFinding, AdvisorRunSummary } from "~/protocol/advisorFindings.ts";
-import type { AdvisorSeverity } from "~/protocol/advisor.ts";
+import { ApplyPanel } from "./ApplyPanel.tsx";
+import { useFindings } from "./api.ts";
+import { useAskAbout, useDecisions } from "./decisions.tsx";
+import { Charts, RangePicker, StatsStrip, useSnapshot } from "./Numbers.tsx";
+import { RunHead } from "./Run.tsx";
+import { pagedOn } from "./paged.ts";
+
+export { pagedOn };
+import { Reports } from "./Reports.tsx";
+import { AtlasFix, listItems, snoozed, type OpenApply, type RowActions } from "./rows.tsx";
+import type { AdvisorKeptFinding } from "~/protocol/advisorFindings.ts";
 import { CLOSE_REASONS, SEVERITIES, STATE_WORDS, ranked } from "./words.ts";
-import { AdvisorModel } from "./AdvisorModel.tsx";
+import type { RangeDays } from "./view.ts";
 
 /** The Advisor page's tabs, as its address names them. */
-export type AdvisorSection = "findings" | "history";
+export type AdvisorSection = "findings" | "reports" | "history";
 
 export function AdvisorPage({ section }: { section: AdvisorSection }) {
   // A RUN THAT ENDED is read by the list under it: its key moves, so it reads again.
   const [runs, setRuns] = useState(0);
   const ended = useCallback(() => setRuns((n) => n + 1), []);
+  const [days, setDays] = useState<RangeDays>(7);
   return (
     <div className="col gap-4">
-      <RunHead onEnded={ended} />
-      {section === "findings" ? <Findings key={runs} /> : null}
+      <RunHead onEnded={ended}>
+        {section === "findings" ? <RangePicker days={days} onChange={setDays} /> : null}
+      </RunHead>
+      {section === "findings" ? <Findings key={runs} days={days} /> : null}
+      {section === "reports" ? <Reports /> : null}
       {section === "history" ? <History /> : null}
     </div>
   );
 }
 
-/** When the checks last ran, Run now, and the model. */
-function RunHead({ onEnded }: { onEnded: () => void }) {
-  const [started, setStarted] = useState(false);
-  const latest = useLatestRun(started);
-  const run = latest.data ?? null;
-  const running = run?.status === "running";
-  const now = useNow();
-  const toast = useToast();
-  // A RUN THIS PAGE STARTED is followed until it ends, then the findings are
-  // read again for what it found.
-  const ended = started && run !== null && !running && run.ended_at !== null;
-  useEffect(() => {
-    if (!ended) return;
-    setStarted(false);
-    onEnded();
-  }, [ended, onEnded]);
-  return (
-    <div className="advisor-head">
-      <Text as="p" tone="secondary" className="advisor-head__run">
-        {runWords(run, now)}
-      </Text>
-      <Button
-        size="small"
-        variant="secondary"
-        disabledReason={running ? "The checks are running" : undefined}
-        onClick={() => {
-          setStarted(true);
-          void runNow().then(
-            () => latest.refetch(),
-            () =>
-              toast.show({
-                variant: "danger",
-                title: "The checks could not be started",
-                message: "Try again in a moment.",
-              }),
-          );
-        }}
-      >
-        {running ? "Running" : "Run now"}
-      </Button>
-      <AdvisorModel />
-    </div>
-  );
-}
-
-/** The last run, in words. */
-export function runWords(run: AdvisorRunSummary | null, now: number): string {
-  if (run === null) return "The checks have not run yet.";
-  if (run.status === "running") return `Checking now, started ${ago(run.started_at, now)}.`;
-  if (run.status === "failed")
-    return `The last run did not finish. It started ${ago(run.started_at, now)}.`;
-  const found =
-    run.opened + run.resolved > 0
-      ? ` It found ${plural(run.opened, "new finding")} and closed ${run.resolved}.`
-      : "";
-  return `Checked ${ago(run.ended_at ?? run.started_at, now)}.${found}`;
-}
-
-/** The go-live check's own words for a step's state. */
-const GO_LIVE_LABELS = { done: "Done", waiting: "To do", pending: "Can't say yet" };
-
-/**
- * THE GO-LIVE CHECK: the owner's open findings counted by what ignoring them
- * costs, as three things to do before the agents start, each done when none
- * is left. Read off the same list as the rows under it, so the two cannot
- * differ.
- */
-export function goLiveSteps(owner: readonly AdvisorKeptFinding[]): StepListStep[] {
-  const count = (severity: AdvisorSeverity) => owner.filter((f) => f.severity === severity).length;
-  const blocks = count("blocks");
-  const costs = count("costs");
-  const notes = count("note");
-  return [
-    {
-      id: "blocks",
-      label: blocks ? `Fix what blocks the company (${blocks})` : "Nothing blocks the company",
-      state: blocks ? "waiting" : "done",
-    },
-    {
-      id: "costs",
-      label: costs ? `Look at what costs it (${costs})` : "Nothing costs it",
-      state: costs ? "waiting" : "done",
-    },
-    {
-      id: "notes",
-      label: notes ? `Read what is worth knowing (${notes})` : "Nothing else to read",
-      state: notes ? "waiting" : "done",
-    },
-  ];
-}
-
-/** The row actions every list on the page shares, and the dialog Apply opens. */
+/** The row actions every list on the page shares, the Apply open in place, and the atlas dialog. */
 function useRowActions(reload: () => void) {
-  const assistant = useAssistantControl();
-  const toast = useToast();
-  const [applying, setApplying] = useState<AdvisorKeptFinding | null>(null);
+  const askAbout = useAskAbout();
+  const decisions = useDecisions(reload);
+  const [open, setOpen] = useState<OpenApply | null>(null);
   const [reviewing, setReviewing] = useState<AdvisorKeptFinding | null>(null);
-  const answer = useCallback(
-    (f: AdvisorKeptFinding, press: () => Promise<unknown>, done: string) => {
-      void press().then(
-        () => {
-          toast.show({ variant: "success", title: done, message: f.title });
-          reload();
-        },
-        () =>
-          toast.show({
-            variant: "danger",
-            title: "Nothing was changed",
-            message: "The engine did not take that. Try again in a moment.",
-          }),
-      );
-    },
-    [toast, reload],
-  );
   const actions: RowActions = {
-    apply: setApplying,
+    apply: (f, option) => setOpen({ id: f.id, option }),
     review: setReviewing,
-    ask: assistant.unavailable ? null : (question) => assistant.ask(question),
-    snooze: (f) => answer(f, () => decide(f.id, { decision: "snooze" }), "Snoozed for 7 days"),
-    dismiss: (f, reason) =>
-      answer(f, () => decide(f.id, { decision: "dismiss", reason }), "Dismissed"),
+    ask: askAbout,
+    snooze: decisions.snooze,
+    wake: decisions.wake,
+    dismiss: decisions.dismiss,
   };
-  const dialog = (
-    <>
-      {applying ? (
-        <ApplyDialog finding={applying} onClose={() => setApplying(null)} onSettled={reload} />
-      ) : null}
-      <AtlasFix
-        finding={reviewing}
-        onClose={() => {
-          setReviewing(null);
-          reload();
-        }}
-      />
-    </>
+  const applyFor = (f: AdvisorKeptFinding, option: number) => (
+    <ApplyPanel
+      key={`${f.id}:${option}`}
+      finding={f}
+      option={option}
+      onClose={() => setOpen(null)}
+      onSettled={reload}
+    />
   );
-  return { actions, dialog };
+  const dialog = (
+    <AtlasFix
+      finding={reviewing}
+      onClose={() => {
+        setReviewing(null);
+        reload();
+      }}
+    />
+  );
+  return { actions, open, applyFor, dialog };
 }
 
-function Findings() {
+function Findings({ days }: { days: RangeDays }) {
   const open = useFindings("open");
   const now = useNow();
   const { refetch } = open;
   const reload = useCallback(() => refetch(), [refetch]);
-  const { actions, dialog } = useRowActions(reload);
+  const row = useRowActions(reload);
   const all = ranked(open.data?.findings ?? []);
-  const owner = all.filter((f) => f.actor === "owner");
-  const engine = all.filter((f) => f.actor === "engine");
-  const steps = goLiveSteps(owner);
-  const blocked = owner.some((f) => f.severity === "blocks");
+  const { snapshot, loading } = useSnapshot(days);
+  // A SNOOZED FINDING LEAVES THE LISTS it would stand in, for one of its own
+  // that says until when.
+  const shown = all.filter((f) => !snoozed(f, now));
+  const asleep = all.filter((f) => snoozed(f, now));
+  const engine = shown.filter((f) => f.actor === "engine");
+  const change = shown.filter((f) => f.actor === "owner");
+  const blocked = all.some((f) => f.actor === "owner" && f.severity === "blocks");
+  const items = (list: readonly AdvisorKeptFinding[]) =>
+    listItems(list, now, row.actions, row.open, row.applyFor);
   return (
-    <QueryState
-      error={open.error}
-      detail={open.detail}
-      refusal={open.refusal}
-      loading={open.loading && open.data === null}
-    >
-      {open.data ? (
-        <>
-          {/* UNTIL NOTHING BLOCKS, the go-live check and the agents' access lead. */}
-          {blocked ? (
-            <>
-              <StepList
-                label="Go-live check"
-                steps={steps}
-                labels={GO_LIVE_LABELS}
-                summary={`Go-live check: ${steps.filter((s) => s.state === "done").length} of ${steps.length} done`}
+    <>
+      <StatsStrip snapshot={snapshot} findings={all} loading={loading} />
+      <Charts snapshot={snapshot} findings={all} now={now} />
+      <QueryState
+        error={open.error}
+        detail={open.detail}
+        refusal={open.refusal}
+        loading={open.loading && open.data === null}
+      >
+        {open.data ? (
+          <>
+            {change.length === 0 ? (
+              <EmptyState
+                size="compact"
+                title="Nothing to change"
+                description={
+                  asleep.length > 0
+                    ? "Nothing to change right now beyond what you snoozed."
+                    : "The Advisor's checks found nothing worth changing right now."
+                }
               />
-              <GoLiveReview />
-            </>
-          ) : null}
-          {owner.length === 0 ? (
-            <EmptyState
-              size="compact"
-              title="Nothing to change"
-              description="The Advisor's checks found nothing worth changing right now."
-            />
-          ) : (
-            <AttentionList
-              items={owner.map((f) => findingItem(f, now, actions))}
-              labels={{
-                title: "What to change",
-                tones: Object.fromEntries(SEVERITIES.map((s) => [s.tone, s.label])),
-              }}
-            />
-          )}
-          {engine.length > 0 ? (
-            <AttentionList
-              items={engine.map((f) => findingItem(f, now, actions))}
-              labels={{
-                title: "What the engine is handling",
-                tones: { danger: "Engine", warning: "Engine", info: "Engine" },
-              }}
-            />
-          ) : null}
-        </>
-      ) : null}
-      {dialog}
-    </QueryState>
+            ) : (
+              <AttentionList
+                items={items(change)}
+                collapseAfter={6}
+                labels={{
+                  title: "What to change",
+                  tones: Object.fromEntries(SEVERITIES.map((s) => [s.tone, s.label])),
+                }}
+              />
+            )}
+            {engine.length > 0 ? (
+              <AttentionList
+                items={items(engine)}
+                labels={{
+                  title: "What the engine is handling",
+                  tones: { danger: "Engine", warning: "Engine", info: "Engine" },
+                }}
+              />
+            ) : null}
+            {asleep.length > 0 ? (
+              <AttentionList
+                items={items(asleep)}
+                labels={{
+                  title: "Snoozed",
+                  tones: Object.fromEntries(SEVERITIES.map((s) => [s.tone, s.label])),
+                }}
+              />
+            ) : null}
+            {blocked ? <GoLiveReview /> : null}
+          </>
+        ) : null}
+        {row.dialog}
+      </QueryState>
+    </>
   );
 }
 
@@ -268,7 +181,7 @@ function History() {
   const [held, setHeld] = useState<AdvisorKeptFinding[]>([]);
   const closed = useFindings("closed", cursor);
   const now = useNow();
-  const rows = [...held, ...(closed.data?.findings ?? [])];
+  const rows = pagedOn(held, closed.data?.findings, (f) => f.id);
   return (
     <QueryState
       error={closed.error}

@@ -26,12 +26,10 @@ import (
 // HoldingsReader is a runner that reads, off a kept capture's archive, which of
 // a round's calls its harness's session holds ([Coordinator.HoldingsOf]). It
 // restores what it reads ([ArchiveRestorer]), since whether the session is
-// continued at all is asked of the same runner first. It reads the archive a
-// second time, streamed and never spooled ([SessionRestore.Open]): a spool of
-// its own would sit on the node's scratch disk beside the launch's, which is
-// not what crewlet-operator sizes an engine pod's scratch volume by, and one
-// handed to the launch would change the fetch crewlet-operator copies
-// ([Coordinator.fetchSession]).
+// continued at all is asked of the same runner first. It streams the archive
+// and never spools it ([SessionRestore.Open]), as a restore does
+// ([Coordinator.fetchSession]), so the spool room ([spoolRoomBytes]) is all
+// the sessions a node holds on its scratch disk.
 type HoldingsReader interface {
 	ArchiveRestorer
 
@@ -262,7 +260,7 @@ func TextKeyOf(output string, outputBytes int) (TextKey, bool) {
 	case outputBytes == 0:
 		return TextKey{Bytes: len(output), Whole: true, Sum: sha256.Sum256([]byte(output))}, true
 	}
-	opening, ok := rowRecord.Opening(output, outputBytes)
+	opening, ok := OutputOpening(output, outputBytes)
 	if !ok {
 		return TextKey{}, false
 	}
@@ -403,14 +401,14 @@ func (h SessionHoldings) heldByID(c LoggedCall) (bool, string) {
 }
 
 // holdingsReadWait bounds a reading ([Coordinator.HoldingsOf]) from before the
-// run's record is read: the record, the row, the reader's slots, open and read.
+// run's record is read: the record, the row, the reading's slot, open and read.
 //
-// THIRTY SECONDS, so a reading at its bounds is one: the slowest measured, a
-// subagent's lines of blocks of an empty kind to the plaintext's and the
-// lines' bounds, reads in 21.4 to 22.6 s on two dedicated cores
-// (BenchmarkAReadingAtItsBounds), about 25 s behind a burst of 32 ordinary ones
-// in the seats' one slot; an OpenCode export at its bound in 7.9 s on two cores
-// (BenchmarkAnOpenCodeReadingAtItsBounds). With the keep's
+// THIRTY SECONDS, so a reading at its bounds is one: the slowest, a subagent's
+// lines of blocks of an empty kind to the plaintext's and the lines' bounds,
+// reads in 21.4 to 22.6 s on two dedicated cores
+// (BenchmarkAReadingAtItsBounds), an OpenCode export's, a step of 255 MiB of
+// `0` items, in 10.7 to 11.0 s. A second reading waits in the slot behind the
+// first, up to 22.6 s of it; no seat's read does. With the keep's
 // ([relaunchCaptureWait]) a kept session costs the relaunch's frame 45 s, plus
 // a reader's overrun step ([HoldingsReader]), an unread member's discard and
 // the keep's settle writes ([Coordinator.ContinuedCapture]). Past it is none.

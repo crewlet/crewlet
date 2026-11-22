@@ -32,10 +32,27 @@
 // # One open request per subject
 //
 // A request is identified by who asks, its act and what it decides
-// ([Subject]), never by its wording. A seat's repeat of a request still
-// waiting on a delegate or a person joins that request: nothing new is held,
-// put to a delegate or shown to people. A request already answered is no
-// longer open, so the same ask after it is a new request.
+// ([Subject]), never by its wording. A seat's repeat of a request that has not
+// come to its end joins that request: nothing new is held, put to a delegate or
+// shown to people. That is while it waits on a delegate or a person, and while
+// its answer is on its way to the turn that asked and, allowed, is being made
+// (a second request raised then reached its delegate after the first was
+// carried out). A request whose denial its turn read, or whose call was made,
+// is over, so the same ask after it is a new request. And a request whose act
+// already happened before anybody decided it (a merge of a pull request that
+// merged meanwhile) is answered by the engine, never put to a delegate
+// ([OverruledAlreadyMerged]).
+//
+// # Values only
+//
+// The package holds the vocabulary and no behavior that reads a server: it is
+// a leaf over gitref and words. Config, the run record, the tracker, the access
+// log, the delegate's verdict tool (agent/builtin) and the engine's sweep all
+// read these values, so none can mean something different by a panel, a low
+// confidence or an unmet condition. [EscalatingPaths] is matched by
+// [gitref.PathGlob] beside a rule's own globs, and [DeclaredFor] picks the
+// checks a repository's branch requires, which the GitHub reads judge as check
+// runs that succeeded on the commit decided.
 //
 // # What a person still sees
 //
@@ -68,19 +85,39 @@ const (
 	// KindDeploy is deploying one commit that holds a set of merged changes
 	// to an environment.
 	KindDeploy Kind = "deploy"
+	// KindAdSpend is a growth integration's call that starts or raises ad
+	// spend (internal/growth's spend class): never delegated.
+	KindAdSpend Kind = "ad_spend"
+	// KindPublicPost is a growth integration's call that publishes to
+	// customers, or retracts what it published: never delegated.
+	KindPublicPost Kind = "public_post"
+	// KindAccountAdmin is a growth integration's call that manages a vendor
+	// account's users, access, keys, billing or policies, or changes it
+	// irreversibly: never delegated.
+	KindAccountAdmin Kind = "account_admin"
 	// KindOther is every request whose act the engine did not set: never
 	// delegated.
 	KindOther Kind = "other"
 )
 
 // Kinds is every act, the delegable first.
-func Kinds() []Kind { return []Kind{KindSSHOperate, KindPRMerge, KindDeploy, KindOther} }
+func Kinds() []Kind {
+	return []Kind{KindSSHOperate, KindPRMerge, KindDeploy, KindAdSpend, KindPublicPost, KindAccountAdmin, KindOther}
+}
 
 // Valid reports whether k is an act this build knows.
 func (k Kind) Valid() bool { return slices.Contains(Kinds(), k) }
 
-// Delegable reports whether a rule may delegate k: every act but other.
-func (k Kind) Delegable() bool { return k.Valid() && k != KindOther }
+// NeverDelegated is every act a person alone decides: the growth acts, which
+// an admin answers at a fresh step-up (ADR-0171), and other.
+func NeverDelegated() []Kind { return []Kind{KindAdSpend, KindPublicPost, KindAccountAdmin, KindOther} }
+
+// Delegable reports whether a rule may delegate k: a known act outside
+// [NeverDelegated], a closed set so an act added later is never delegable by
+// omission.
+func (k Kind) Delegable() bool {
+	return slices.Contains([]Kind{KindSSHOperate, KindPRMerge, KindDeploy}, k)
+}
 
 // DelegableKinds is every act a rule may name.
 func DelegableKinds() []Kind {
@@ -125,8 +162,8 @@ func Confidences() []Confidence { return []Confidence{High, Low} }
 func (c Confidence) Valid() bool { return slices.Contains(Confidences(), c) }
 
 // The engine's closed words for why a request reached people over its
-// delegates, or how its answers combined; each kind adds its own (an SSH
-// always-escalate class's name).
+// delegates, how its answers combined, or why the engine answered it itself;
+// each kind adds its own (an SSH always-escalate class's name).
 const (
 	OverruledSelf            = "self"
 	OverruledLeads           = "leads"
@@ -137,6 +174,10 @@ const (
 	OverruledDeadline        = "deadline"
 	OverruledOff             = "delegation_off"
 	OverruledLabel           = "sensitive_label"
+	// OverruledAlreadyMerged is the engine's own answer to a merge whose pull
+	// request merged before anybody decided it: not carried out, and no
+	// delegate woken for it.
+	OverruledAlreadyMerged = "already_merged"
 )
 
 // Given is one delegate's answer.

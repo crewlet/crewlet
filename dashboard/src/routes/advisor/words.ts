@@ -11,6 +11,7 @@
 
 import type { AttentionTone } from "@crewlethq/ui";
 import { fmtBytes, fmtCount, plural } from "~/lib/format.ts";
+import { dateTimeFormat } from "~/lib/formatters.ts";
 import type {
   AdvisorCloseReason,
   AdvisorFact,
@@ -51,6 +52,8 @@ export const CLOSE_REASONS: Readonly<Record<AdvisorCloseReason, string>> = {
   dismissed_wont_fix: "Dismissed: won't fix",
   dismissed_wrong: "Dismissed as wrong",
   dismissed_known: "Dismissed: already known",
+  duplicate: "Said by another finding, with its numbers",
+  replaced: "Replaced by a truer finding about the same work",
 };
 
 /** Where a finding stands, in one word. */
@@ -82,6 +85,9 @@ export function factValue(value: number | string | null, unit: AdvisorFactUnit):
       return plural(value, "turn");
     case "bytes":
       return fmtBytes(value);
+    // A COUNT IS THE NUMBER ALONE: its label says what is counted.
+    case "count":
+      return fmtCount(value);
     default:
       // A UNIT THIS BUILD DOES NOT KNOW is the number with its word.
       return `${fmtCount(value)} ${unit}`;
@@ -117,4 +123,65 @@ export function ranked(findings: readonly AdvisorKeptFinding[]): AdvisorKeptFind
       weight(b) - weight(a) ||
       Date.parse(b.opened_at) - Date.parse(a.opened_at),
   );
+}
+
+/**
+ * Who a report's finding is about, as the report names it: a seat's or a
+ * unit's name as it is, and a subject that is the only one of its kind (the
+ * company, the atlas), which the engine names by its kind, in words.
+ */
+export function reportSubject(subject: string): string {
+  return SINGLETON_SUBJECTS[subject] ?? subject;
+}
+
+const SINGLETON_SUBJECTS: Readonly<Record<string, string>> = {
+  company: "The company",
+  atlas: "The atlas",
+};
+
+/** A report's week in words: `2026-W47` is "Week 47 of 2026"; anything else as it is. */
+export function weekWords(week: string): string {
+  const match = /^(\d{4})-W(\d{2})$/.exec(week);
+  return match ? `Week ${Number(match[2])} of ${match[1]}` : week;
+}
+
+/**
+ * A report's week as the days it covers, "Monday, Nov 9 to Sunday, Nov 15,
+ * 2026", or null for a week not in ISO form. An ISO week names its calendar
+ * days outright, Monday to Sunday on the company's clock, so they are worked
+ * out from the week and never from the instants that bound it, which a
+ * reader in another zone would read as the Sunday before.
+ */
+export function weekSpan(week: string): string | null {
+  const match = /^(\d{4})-W(\d{2})$/.exec(week);
+  if (!match) return null;
+  // WEEK 1 is the one holding January 4th, and every ISO week starts on a Monday.
+  const jan4 = Date.UTC(Number(match[1]), 0, 4);
+  const fromMonday = (new Date(jan4).getUTCDay() + 6) % 7;
+  const monday = jan4 - fromMonday * DAY_MS + (Number(match[2]) - 1) * 7 * DAY_MS;
+  const day = dateTimeFormat(undefined, "UTC", { weekday: "long", month: "short", day: "numeric" });
+  const last = dateTimeFormat(undefined, "UTC", {
+    weekday: "long",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+  return `${day.format(monday)} to ${last.format(monday + 6 * DAY_MS)}`;
+}
+
+const DAY_MS = 86_400_000;
+
+/** What a week moved, in one line: "3 opened · 1 resolved · 0 applied · 0 dismissed". */
+export function weekMoved(r: {
+  opened: number;
+  resolved: number;
+  applied: number;
+  dismissed: number;
+}): string {
+  return [
+    `${fmtCount(r.opened)} opened`,
+    `${fmtCount(r.resolved)} resolved`,
+    `${fmtCount(r.applied)} applied`,
+    `${fmtCount(r.dismissed)} dismissed`,
+  ].join(" · ");
 }

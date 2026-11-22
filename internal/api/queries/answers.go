@@ -114,6 +114,10 @@ type Sources struct {
 	// reads (ADR-0125); nil serves no such question.
 	Delegated DelegatedReads
 
+	// Growth is the access log's growth records, which `growth_changes`
+	// reads (ADR-0171); nil serves no such question.
+	Growth GrowthReads
+
 	// DelegatedGitHub is the company's GitHub a rule's form offers
 	// (delegatedgithub.go); nil serves none of its three questions.
 	DelegatedGitHub DelegatedGitHub
@@ -353,9 +357,10 @@ type Sources struct {
 	RunAnswers *sandbox.AnswerSeal
 
 	// HeldCalls opens the arguments of a call a run holds for a person's
-	// approval (ADR-0077), for a reader who may approve it: an executor
-	// row's `held_arguments` and the MCP answer's `approvals`. Nil, or a
-	// seal that does not open here, answers them null.
+	// approval (ADR-0077): an executor row's `held_arguments` and the MCP
+	// answer's `approvals`, as sent to who may answer the call while it
+	// waits and redacted to every other reader. Nil, or a seal that does
+	// not open here, answers them null.
 	HeldCalls *sandbox.CallSeal
 
 	// ExecutorTail is a running executor's live output, ANSWERED BY THE
@@ -503,6 +508,10 @@ type Sources struct {
 	// process cannot say", which the rail reports rather than badging
 	// every room with its whole history.
 	ChatReads ChatReads
+
+	// HomeBoards is where each person's Home board is kept, in coordination.
+	// Nil leaves `home_board` unregistered: this node keeps none.
+	HomeBoards HomeBoards
 
 	// WebhookBase is where a THIRD-PARTY APP reaches this deployment
 	// (`config.API.WebhookBase`: `api.public.external_url` where `api.public`
@@ -815,6 +824,11 @@ func Register(r *Registry, s Sources) {
 	// no seat" is the answer a screen needs in order to say what to bind.
 	// Everybody's, since the answer is about the asker and nobody else.
 	r.Register("viewer", Everybody(), s.viewer)
+	// THE ASKER'S OWN HOME BOARD, everybody's for the viewer's reason, where
+	// this node reaches the store that keeps it.
+	if s.HomeBoards != nil {
+		r.Register("home_board", Everybody(), s.homeBoard)
+	}
 	if s.Catalogue != nil {
 		r.Register("llm_models", Requires(iam.GrantAdmin), s.llmModels)
 	}
@@ -1013,7 +1027,7 @@ func Register(r *Registry, s Sources) {
 	if s.Work != nil || s.Pages != nil || s.Usage != nil {
 		r.Register("company_feed", Everybody(), s.companyFeed)
 	}
-	if s.Research != nil && s.Company != nil {
+	if s.Research != nil {
 		r.Register("research_page", Everybody(), s.researchPage)
 	}
 	if s.Searcher != nil {
@@ -1145,6 +1159,8 @@ func Register(r *Registry, s Sources) {
 		r.Register("advisor_notices", Requires(iam.GrantAdmin), s.advisorNotices)
 		r.Register("advisor_reports", Requires(iam.GrantAdmin), s.advisorReports)
 		r.Register("advisor_report", Requires(iam.GrantAdmin), s.advisorReport)
+		r.Register("advisor_snapshot", Requires(iam.GrantAdmin), s.advisorSnapshot)
+		r.Register("advisor_capacity", Requires(iam.GrantAdmin), s.advisorCapacity)
 	}
 	if s.Config != nil {
 		// ADMIN'S, all four. Reading the config document exposes the
@@ -1167,6 +1183,11 @@ func Register(r *Registry, s Sources) {
 		// WHAT DELEGATES DECIDED, for the people they answer to: decided
 		// per caller against the rules' escalate_to (ADR-0125).
 		r.Register("delegated_decisions", DecidedBy(authz.ActionDelegatedRead), s.delegatedDecisions)
+	}
+	if s.Growth != nil {
+		// THE RECENT AGENT CHANGES TO THE COMPANY'S GROWTH ACCOUNTS, the
+		// company-wide trail's question (ADR-0171).
+		r.Register("growth_changes", DecidedBy(authz.ActionAuditRead), s.growthChanges)
 	}
 	if s.DelegatedGitHub != nil {
 		// WHAT A RULE CAN NAME FROM THE COMPANY'S GITHUB, for the
@@ -1407,17 +1428,17 @@ func (s Sources) agentSeat(handle string) (*org.Role, string) {
 	return seat, id.String()
 }
 
-// liveCall answers `live_call{agent_id}`: the seat's in-flight call with every
-// field, and the version of each, or null while it has none.
+// liveCall answers `live_call{agent_id}`: the seat's in-flight calls, one per
+// turn, each with every field and its versions; `[]` while it has none.
 //
 // The repair for an `agents` push the socket dropped. A push leaves out a heavy
 // field its tabs already hold at the version it names (internal/api/stream's
-// pushAgents), so a tab that missed one asks for the call whole here.
+// pushAgents), so a tab that missed one asks for the calls whole here.
 //
 // BY AGENT ID, the key every `agents` push uses; a role name may be shared. The
 // handle is a label, empty for an id the company no longer holds.
 //
-// MASKED AS THE `agents` PUSH IS ([livestate.MaskCall]): the call whole to a
+// MASKED AS THE `agents` PUSH IS ([livestate.MaskCalls]): each call whole to a
 // reader the seat's trail is open to, its status alone to anybody else.
 func (s Sources) liveCall(ctx context.Context, p Params) (any, error) {
 	agentID := strings.TrimSpace(p.String("agent_id"))
@@ -1436,14 +1457,12 @@ func (s Sources) liveCall(ctx context.Context, p Params) (any, error) {
 	// same seat: the answer runs on its own goroutine and can be delivered
 	// after a push generated later (a clear, a new call), so the tab drops
 	// an answer whose sequence is behind what it has applied. Always carried,
-	// a null call included — see [livestate.Overlay.LiveCallSeq].
+	// an empty list included — see [livestate.Overlay.LiveCallSeq].
 	answer := map[string]any{"agent_id": agentID, "handle": handle,
-		"live_call": nil, "live_call_seq": 0}
+		"live_calls": []any{}, "live_call_seq": 0}
 	if overlay := s.State.AgentOverlay(agentID); overlay != nil {
 		answer["live_call_seq"] = overlay.LiveCallSeq
-		if overlay.LiveCall != nil {
-			answer["live_call"] = overlay.LiveCall.For(s.reach(ctx, handle))
-		}
+		answer["live_calls"] = livestate.MaskCalls(overlay.LiveCalls, s.reach(ctx, handle))
 	}
 	return answer, nil
 }

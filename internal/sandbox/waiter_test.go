@@ -116,6 +116,7 @@ func newWaiterRigIn(t *testing.T, cell Placement) *waiterRig {
 		runner:   NewFakeRunner("claude-code"),
 		now:      time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC),
 	}
+	rig.runner.Thread = testThreadTraits["claude-code"]
 	// ONE CLOCK FOR THE WHOLE WORLD, the store's included. The row's own
 	// last write dates a pause nothing stamped ([PendingRun.HeldSince]), so
 	// a store left on the wall clock would date it years after the instant
@@ -213,8 +214,14 @@ func (r *waiterRig) launchingAs(turnID string, lease Fence, shape func(*PendingR
 	// THE SESSION THE LAUNCH NAMED, as a runner names it before its harness
 	// starts: what a run carried on in its box continues
 	// ([PendingRun.SessionRan]).
+	// A minting harness names at its launch only the session it continues
+	// (minted.go), which a case shapes onto the run.
+	session := "sess-" + turnID
+	if r.runner.MintsSession() {
+		session = run.SessionID
+	}
 	if err := r.pending.AttachSandbox(ctx, turnID, BoxRef{
-		SandboxID: box.ID(), CommandID: "cmd-1", SessionID: "sess-" + turnID,
+		SandboxID: box.ID(), CommandID: "cmd-1", SessionID: session,
 		Harness: "claude-code", PauseTTLSec: DefaultPauseTTL.Seconds(),
 	}, lease); err != nil {
 		r.t.Fatalf("AttachSandbox: %v", err)

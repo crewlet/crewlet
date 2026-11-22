@@ -53,7 +53,7 @@ import { useFrameSession } from "./frameSession.ts";
 import { ADMIN, CHATLET, DOCLET, GITLET, WORKLET, holds } from "./access.ts";
 import type { LogRefusal, QueryRefusal, SessionAnswer, Viewer } from "~/protocol/index.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
-import type { AssistantModelNotice, AssistantViewerModel } from "~/contract/assistant.ts";
+import type { AssistantModelNotice } from "~/contract/assistant.ts";
 import {
   assistantModelNotice,
   assistantUnavailable,
@@ -175,8 +175,6 @@ export interface ViewerState {
    * the engine says of the model assigned; false and the composer takes none.
    */
   assistantReadsImages: boolean;
-  /** The model Ask Crewlet runs on, or null where none is assigned. */
-  assistantAssigned: AssistantViewerModel | null;
   /** The reader may assign Ask Crewlet's model: they hold the company document's write. */
   assistantCanAssign: boolean;
   /**
@@ -276,7 +274,6 @@ function viewerState(
     assistant: assistantUnavailable(data?.assistant),
     assistantModel: assistantModelNotice(data?.assistant),
     assistantReadsImages: data?.assistant?.reads_images === true,
-    assistantAssigned: data?.assistant?.model ?? null,
     assistantCanAssign: data?.assistant?.can_assign === true,
     chatVendors: data?.chat_vendors ?? [],
     artifactPages: data?.artifact_pages,

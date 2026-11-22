@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -121,13 +122,17 @@ func (r *Reader) EntryMarks(ctx context.Context, level statelog.ReadLevel) (Entr
 			return err
 		}
 		defer func() { _ = rows.Close() }()
+		// Held to the answer's bytes too, as `"<entry>":<n>,` encodes:
+		// past them the answer is capped as it is past the count.
+		held := statelog.RowsOf(ctx)
 		for rows.Next() {
 			var entry string
 			var open int
 			if err = rows.Scan(&entry, &open); err != nil {
 				return fmt.Errorf("scan a count: %w", err)
 			}
-			if len(out.Open) == MaxEntryMarks {
+			if len(out.Open) == MaxEntryMarks ||
+				!held.Take(len(entry)+len(strconv.Itoa(open))+len(`"":,`)) {
 				out.Capped = true
 				break
 			}

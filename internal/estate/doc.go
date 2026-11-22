@@ -60,8 +60,9 @@
 // which derived ids come, so no retry repeats the effect): `code.compact`, which
 // waits in the repository's one queue so everything that moves its packs meets on
 // one node; `code.expunge`; `code.change`; `code.queue`; `code.merge`, one record
-// the merge gate decides from one snapshot (ADR-0096); and `code.conversation`,
-// whose change writer publishes on the change's own subject ([op.keyedBy]). A
+// the merge gate decides from one snapshot (ADR-0096); `code.conversation`,
+// whose change writer publishes on the change's own subject; and `code.checks`,
+// whose checks writer decides one write per repository at a time ([op.keyedBy]). A
 // committer that refuses before appending anything ran nothing, so the runner-up
 // is asked with the same push id and the refuser is asked LAST for the next
 // [suspectFor]. A committer answers INSIDE THE ATTEMPT that asked it, busy and
@@ -279,6 +280,13 @@
 // caller carries into another request ([op.answeredWhole]) crosses under the same
 // rule the other way ([opArtifactVersionCarried]); a value a caller hands back as
 // it took it ([gitlet.CheckKey], [statelog.Position]) stays outside it. A write's answer is never refused once the write ran, and a member a later build adds to an input needs its own plan for two builds.
+//
+// # An answer is one message
+//
+// A reply past the transport's message is refused whole ([server.encodeReply]),
+// so every read declares how large its answer grows ([answerKind]): one that
+// answers rows reads them to its bound through statelog.RowsOf and says where
+// it stopped the way it says any page is short.
 //
 // # Errors keep their identity
 //

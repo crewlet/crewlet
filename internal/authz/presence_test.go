@@ -74,7 +74,7 @@ func TestARowThatNeedsAPersonRefusesATokenOnExactlyTheArmsItNames(t *testing.T) 
 						"%+v at a keyboard — a row that needs nobody present "+
 						"there decides the two alike", a, presence, name, got, want)
 				}
-			case presence == authz.PresenceRequired || want.Allowed:
+			case presence == authz.PresenceRequired || presence == authz.PresencePerson || want.Allowed:
 				if got.Allowed || got.Reason != authz.ReasonTokenRefused {
 					t.Errorf("%s (%q) about %s decided %+v through a token, "+
 						"want refused as a token", a, presence, name, got)
@@ -91,7 +91,7 @@ func TestARowThatNeedsAPersonRefusesATokenOnExactlyTheArmsItNames(t *testing.T) 
 		}
 	}
 	for _, p := range []authz.Presence{authz.PresenceRequired,
-		authz.PresenceRequiredForOthers} {
+		authz.PresenceRequiredForOthers, authz.PresencePerson} {
 		if stated[p] == 0 {
 			t.Errorf("no row states %q, so this walk certifies nothing about it", p)
 		}

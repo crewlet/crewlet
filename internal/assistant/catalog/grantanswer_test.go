@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
+	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/seataccess"
 )
@@ -71,7 +72,7 @@ func grantRoutes(grantable bool) proposal.Read {
 func rowsSaid(p proposal.Preview) string {
 	var b strings.Builder
 	for _, c := range p.Changes {
-		b.WriteString(c.Label + ": " + c.From + " -> " + c.To + "\n")
+		b.WriteString(c.Label + ": " + c.From.Text() + " -> " + c.To.Text() + "\n")
 	}
 	return b.String()
 }
@@ -121,6 +122,23 @@ func TestAGrantRequestsAnswerIsDrawnInTheEnginesWords(t *testing.T) {
 			}
 			if args, _ := sent["args"].(map[string]any); args["choice"] != c.choice {
 				t.Errorf("the approval sends %s, want the answer choosing %s", p.Request.Body, c.choice)
+			}
+			// THE TASK AND THE AGENT ARE RECORDS, the agent by its name and never its handle.
+			got := rows(p)
+			if r := soleRef(t, got["task"].To); r.Kind != wire.ResourceTask || r.ID != "ENG-58" ||
+				r.Open == nil || got["task"].To.Text() != "ENG-58 Route the deck library" {
+				t.Errorf("the task row names %+v as %q", r, got["task"].To.Text())
+			}
+			if !c.stepUp {
+				return
+			}
+			agent := soleRef(t, got["agent"].To)
+			if agent.Kind != wire.ResourceSeat || agent.ID != "sre" ||
+				agent.Name != "Site Reliability Engineer" || agent.Open == nil {
+				t.Errorf("the agent row names %+v, want the seat sre by its name", agent)
+			}
+			if r := soleRef(t, p.Note); r.Kind != agent.Kind || r.ID != agent.ID || r.Name != agent.Name {
+				t.Errorf("the note names %+v, want the agent it tells yes", r)
 			}
 		})
 	}

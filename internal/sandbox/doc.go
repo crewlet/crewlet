@@ -14,8 +14,7 @@
 // before anything is done with it ("Owed answers"), and reaches the seat once:
 // TAKEN by a resumed turn ([RecordedAnswer.TakenAt]) or LET GO back through the
 // row's outbox ([PendingRun.HandBack]). An ending is DECIDED ONCE, on the row,
-// before any of it is done ([RecordedEnding]), and no ending deletes a row that
-// still owes a reply ([ErrAnswerOwed]); it is announced once, before the
+// before any of it is done ([RecordedEnding]), and announced once, before the
 // delete ([Coordinator.announceEnding]). Every claim stamps its claimant's lease
 // on the row, and a take under an older lease or none is refused
 // ([PendingStore.ClaimForResume]). A reply's delivery is recorded worked as the
@@ -27,10 +26,9 @@
 // Every subject a run is reached on is named by its row's seat ID, derived from
 // the immutable handle (ADR-0013); the handle is this node's bookkeeping key,
 // never an address. A `direct` or `container` box is touched only on its
-// launching node's host (ADR-0065, boxhost.go). A job lost with its host is
-// carried on, never collected (lost.go). What a run pushed to Gitlet is the
-// push record's account ([RunPushes]); an unreadable record is said unknown,
-// never left out, since silence reads as "nothing pushed".
+// launching node's host (ADR-0065, boxhost.go). What a run pushed to Gitlet is
+// the push record's account ([RunPushes]); an unreadable record is said
+// unknown, never left out, since silence reads as "nothing pushed".
 //
 // AND A HOOK'S NOTE IS READ ONLY ONCE ITS JOB'S SESSION SHOWS IT: a hook only
 // SERVES it ([PendingStore.ServeHook]). Every read of a job's box at its end
@@ -46,17 +44,10 @@
 // a lineage nor put on the executor log: a copy grown by its brief would be
 // understated.
 //
-// AND AN E2B BOX IS PRIVATE ([e2bAPI.createBox]): its create turns public
-// traffic off, since a field left out is the project's default, public on a
-// project that predates E2B's private default. E2B's proxy then passes a
-// request to any port but envd's only with the box's traffic token, which the
-// engine never keeps or sends, and envd checks its own access token. E2B
-// mints the traffic token only for a private box, so a create answered without
-// one came from an API that ignored the field: a cluster below
-// [e2bPrivateFloor], or E2B's cloud no longer answering it. The box is public,
-// so it is killed and the launch refused as configuration
-// ([e2bAPI.refusePublic]): no wait clears it, and a class that waits would
-// mint and kill a billed box on every retry.
+// AND AN E2B BOX IS PRIVATE ([e2bAPI.createBox]): one E2B made without a
+// traffic token is public, so it is killed and its launch refused as
+// configuration ([e2bAPI.refusePublic]): no wait clears it, and a class that
+// waits would mint and kill a billed box on every retry.
 //
 // # A launch's harness session is kept, and a turn's end recorded
 //
@@ -147,6 +138,22 @@
 // and an OpenCode save checks its room first ([ErrSaveNoRoom]); a final pack
 // does not, since refusing it loses the job's newest state.
 //
+// # Each process's own spool directory
+//
+// A spool's age is no proof its process is gone, and a container restart keeps
+// /tmp, so each process spools into a directory of its own, held by an flock
+// the kernel drops however the process ends (spooldir.go). A sweep removes only
+// a directory whose lock it takes; made under a staging name and renamed once
+// locked, a live one is never found unlocked.
+//
+// # Every spool on a node in one room
+//
+// The disk holds what the spools hold, so one room bounds them all
+// (spoolroom.go): saves take room at the sealed bound before their pack slot
+// and never wait, leaving a final take its room; a take waits a minute for
+// room at the bound before its pack slot and its scrub's slots, a save's
+// order, then keeps nothing; a seal is refused before it writes past its room.
+//
 // # A turn's session is continued in whichever box its next launch gets
 //
 // restore.go. A relaunch continues the job before's newest kept capture, the
@@ -169,9 +176,11 @@
 //
 // An unreadable object, a silent log or a box that cannot take the session up
 // starts one of its own (`executor_session_not_continued`). The session is
-// fetched sealed and opened whole before a byte reaches the box. A cut-off
-// session's calls are read by id (Claude Code) or by content (OpenCode): a held
-// class is never a false hold ([HoldingsByContent]).
+// read whole before a byte reaches the box, then streamed in held to that
+// read, never spooled ([Coordinator.fetchSession]); one that differs the second
+// time fails the run's start. A cut-off session's calls are read by id (Claude
+// Code) or by content (OpenCode): a held class is never a false hold
+// ([HoldingsByContent]).
 //
 // # Resume routing
 //
@@ -185,6 +194,10 @@
 //
 // Both counts move in one step under the lock (a park is a decrement and an
 // increment), clamped at zero, and the inbox hold follows at the transition.
+// A seat holds up to its cap of runs in [Holding], one per conversation
+// (ADR-0169): a launch or an answer's resume reserves its slot with its write,
+// under the lock, or waits ([SeatFull], [ConversationBusy]). Mail waiting on a
+// run waits aside, readmitted as the run leaves ([Coordinator.readmitFreed]).
 //
 // # Recounting a seat
 //
@@ -197,27 +210,22 @@
 // turn; a recount counts a run with a write out where the moves so far leave
 // it ([Coordinator.countedLocked]); the answer moves it once, under the lock,
 // in recorded order; a write that did not land, a panic included, or one for a
-// seat this node let go, moves nothing (countwrite.go).
-//
-// # Where each write puts the run
-//
-// In the set its own status names, never by its recorded from and to: an
-// earlier write whose answer was lost may have landed.
+// seat this node let go, moves nothing (countwrite.go). It puts the run in the
+// set its own status names, never by its recorded from and to: an earlier
+// write whose answer was lost may have landed.
 //
 // # The seat's inbox hold
 //
-// Held while a run is in [Holding] or an answer or ending is owed ([SeatHold]):
-// parked mail would loop through the consumer. A seat busy coding takes no
-// other work, an answer to another run included; an answer by turn travels on
-// the control topic and is recorded on arrival. This node alone agrees on the
-// hold, taken for one [queue.Attachment] so a late one is refused, never
-// carried onto the next.
+// At the cap, with its aside mail full, or with an answer or ending owed
+// ([SeatHold]); parked mail would loop. An answer by turn travels on the
+// control topic and is recorded on arrival. This node's alone, taken for one
+// [queue.Attachment], so a late one is refused.
 //
 // # Routing a control-topic delivery
 //
 // A refusal for a seat not held names [SeatLost]. While a clock runs on the
 // store of its box's host, a completion is acknowledged only where its run
-// settled ([ErrUnannounced]); an acknowledged refusal is recorded first.
+// settled ([ErrUnannounced]).
 //
 // # Launching a run
 //
@@ -228,8 +236,8 @@
 //
 // # The seat is held from the row, not from the announcement
 //
-// Counted when the row's write is answered; counted off ExecutorLaunched, the
-// seat's next mail would run beside the job. A turn id names one execution
+// Counted when the row's write is answered: counted off ExecutorLaunched, the
+// seat's next mail could outrun the count. A turn id names one execution
 // (ADR-0017). A reset the row refuses is never a launch that went ahead.
 //
 // # Keys a later build adds
@@ -239,15 +247,20 @@
 //
 // # A run's byte budget
 //
-// Each value is held to [RowBytes] ([coord.MaxValueBytes]), as the encoder
-// writes it: [ExecuteStateBytes] and [RestBytes] for the row, [BridgeLogBytes],
-// [InFlightBytes] and [LogRestBytes] for the log. [ExtraRowBytes] is a later
-// build's room; TestTheWholeRowFitsItsBudget holds the split.
+// Each value is held to [RowBytes] as the encoder writes it: the row in
+// [ExecuteStateBytes] and [RestBytes], the log in [BridgeLogBytes],
+// [InFlightBytes] and [LogRestBytes]; [ExtraRowBytes] is a later build's room.
 //
 // # Collecting a box
 //
 // A collection PAUSES the box, for a relaunch, a park or a retry to reuse. A job
 // its turn's cap ended is ended first, its bridge session closed before.
+//
+// # A node's collections
+//
+// A read of a run's box made on this node holds one of its turns for the read
+// alone ([Coordinator.collectionSlot]), since the gate does not admit them all:
+// a completion ended at its deadline and an ending start no turn.
 //
 // # Box host failures
 //
@@ -257,8 +270,7 @@
 //
 // # Box read budget
 //
-// [BoxReadBudget] is [pollBound] plus the take, its rooms, a job's end where it
-// may end one, and each row change at coord.MaxValueCrossing: a slow host must
+// [BoxReadBudget] allows for all the read may do on the host: a slow host must
 // not be taken for a stopped one.
 //
 // # Collection failures
@@ -266,9 +278,9 @@
 // A retry is safe: nothing is written before a collection succeeds. Given up
 // after [MinConnectFailures] attempts across [ConnectGiveUp], counted on the
 // job's record; a box gone, at once. A cancellation of this node's own and a
-// store's silence are uncounted; a hand-back the store did not answer is kept.
-// Each failure gets one verdict ([collectVerdict]). [reannounceCeilingPolls] is
-// 20 polls, inside the broker's delivery budget.
+// store's silence are uncounted. Each failure gets one verdict
+// ([collectVerdict]). [reannounceCeilingPolls] is 20 polls, inside the broker's
+// delivery budget.
 //
 // # The clock on a box host's store
 //
@@ -383,6 +395,14 @@
 // item ([RunNote.LateCall]), only by the write that finds it late, unsealed
 // since it is the log's account (ADR-0067, ADR-0073). A call outliving its
 // round's collection is a late call of the round after, with no place.
+//
+// # A wake joins a running run
+//
+// The engine files somebody's message about a job's work as that job's wake
+// item ([PendingStore.FileWake], ADR-0167), sealed in a domain of its own.
+// Wakes between two steps join one unserved item; a hook serves an item once.
+// A read item is the turn's and outlives its job; an unread one goes with it,
+// its delivery left to a turn of its own.
 //
 // # Stopping a seat's running work
 //

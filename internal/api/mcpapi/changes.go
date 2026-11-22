@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcpreview"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -276,8 +277,7 @@ func (s *Service) blockReviewed(w http.ResponseWriter, r *http.Request, server s
 		summary = header
 	}
 	if summary = strings.TrimSpace(summary); summary == "" {
-		summary = fmt.Sprintf("Keep %s blocked on MCP server %s after reviewing their changes",
-			words.And(tools), server)
+		summary = ReviewedSummary(server, tools)
 	}
 	blocked := config.MCPToolBlocked
 	levels := make(map[string]*config.MCPToolLevel, len(tools))
@@ -296,6 +296,33 @@ func (s *Service) blockReviewed(w http.ResponseWriter, r *http.Request, server s
 	}
 	return maps.Clone(written.Answer), true
 }
+
+// ReviewedSummary is the summary [Service.blockReviewed] writes when its caller
+// sent none, its caller's parts CUT TO FIT the activation pointer's summary
+// bound ([coord.MaxSummaryBytes]) even if every byte escapes to six: a review
+// of many tools would otherwise be refused for words this wrote.
+func ReviewedSummary(server string, tools []string) string {
+	return fmt.Sprintf("Keep %s blocked on MCP server %s after reviewing their changes",
+		textcut.Within(words.And(tools), generatedToolsBytes), textcut.Within(server, generatedServerBytes))
+}
+
+// AllowedSummary is the summary an Always allow writes when its caller sent
+// none, cut as [ReviewedSummary]'s is: the tool's name and the server's are
+// what an MCP server and an operator chose, of any length.
+func AllowedSummary(tool, server, handle string) string {
+	return fmt.Sprintf("Always allow %s on MCP server %s, answering a call %s held for approval",
+		textcut.Within(tool, generatedToolBytes), textcut.Within(server, generatedServerBytes),
+		textcut.Within(handle, generatedServerBytes))
+}
+
+// generatedToolsBytes, generatedToolBytes and generatedServerBytes bound the
+// caller's parts of [ReviewedSummary] and [AllowedSummary]: at six bytes each
+// when escaped, with the sentence's own words, inside coord.MaxSummaryBytes.
+const (
+	generatedToolsBytes  = 512
+	generatedToolBytes   = 256
+	generatedServerBytes = 128
+)
 
 // acceptHeld accepts the definition a held call was made under, by the held
 // call's own digest, where a live listing names the tool under it and nobody

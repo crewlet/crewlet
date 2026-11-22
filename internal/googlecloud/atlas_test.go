@@ -13,7 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/atlas"
 	"github.com/crewlet/crewlet/internal/atlas/collect"
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/googlecloud"
+	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/redact/redacttest"
 )
@@ -379,7 +379,7 @@ func TestAListingThatFailsOrIsRateLimitedFailsTheGoogleCloudRead(t *testing.T) {
 		if errors.Is(err, integration.ErrCredentialRejected) != rejected {
 			t.Errorf("%s: a rejected credential is %v, want %v: %v", name, !rejected, rejected, err)
 		}
-		if name == "the rate limit" && (googlecloud.Status(err) != http.StatusTooManyRequests ||
+		if name == "the rate limit" && (googleauth.Status(err) != http.StatusTooManyRequests ||
 			!strings.Contains(err.Error(), "asked to wait 1m0s")) {
 			t.Errorf("the limit handed back does not say what Google asked: %v", err)
 		}

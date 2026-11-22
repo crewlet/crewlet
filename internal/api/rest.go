@@ -97,6 +97,8 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/advisor/runs/latest", what: "advisor_run"},
 	{method: "GET", pattern: "/advisor/reports", what: "advisor_reports"},
 	{method: "GET", pattern: "/advisor/reports/{week}", what: "advisor_report", path: map[string]string{"week": "week"}},
+	{method: "GET", pattern: "/advisor/snapshot", what: "advisor_snapshot"},
+	{method: "GET", pattern: "/advisor/capacity", what: "advisor_capacity"},
 	{method: "GET", pattern: "/advisor/notices", what: "advisor_notices"},
 	// THE CHANGE AN ACCESS REQUEST WOULD MAKE, `seat=` and `access=`.
 	{method: "GET", pattern: "/advisor/access", what: "advisor_access"},
@@ -109,6 +111,9 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/delegated-decisions/repositories", what: "delegated_repositories"},
 	{method: "GET", pattern: "/delegated-decisions/branches", what: "delegated_branches"},
 	{method: "GET", pattern: "/delegated-decisions/checks", what: "delegated_checks"},
+	// WHAT AGENTS CHANGED ON THE COMPANY'S GROWTH ACCOUNTS, every step of a
+	// call that was not a read, off the access log (ADR-0171).
+	{method: "GET", pattern: "/growth/changes", what: "growth_changes"},
 	{method: "GET", pattern: "/executors", what: "executors"},
 	// ONE RUNNING RUN'S LIVE OUTPUT, with the job as `launch_id=`: a run is
 	// one execution of a turn and may launch more than one job.
@@ -259,6 +264,9 @@ var namedRoutes = []struct {
 	// identity rather than anything the tracker holds, and a node with no
 	// Worklet still has a viewer.
 	{method: "GET", pattern: "/viewer", what: "viewer"},
+	// THE CALLER'S OWN HOME BOARD, beside the viewer for its reason. The
+	// WRITE half is the `save_home_board` tool, called through /operator/act.
+	{method: "GET", pattern: "/home/board", what: "home_board"},
 	// THE ARTIFACTS. The literals `/artifacts/usage` and `/artifacts/trail`
 	// beat the `{id}` wildcard, so neither is read as an artifact of that id; every other
 	// read names the artifact, and a version by its number. The writes, the

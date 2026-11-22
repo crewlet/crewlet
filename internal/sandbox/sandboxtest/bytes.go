@@ -467,13 +467,14 @@ func testARunsTitleIsHeldToItsShare(t *testing.T, s sandbox.PendingStore) {
 	words := "please look at this log: " + strings.Repeat("<line>", 1<<20/6)
 	r := run("t-bytes-title")
 	r.TaskDescription, r.Label = words, words
-	r.ColleagueAsk = &sandbox.ColleagueAsk{ChannelID: "a2a-1", Question: words}
+	asked := sandbox.ColleagueAsk{ChannelID: "a2a-1"}.WithQuestion(words)
+	r.ColleagueAsk = &asked
 	mustLaunched(t, s, r)
 	check := func(step string) {
 		t.Helper()
 		got := mustGet(t, s, r.TurnID)
 		for field, text := range map[string]string{"task description": got.TaskDescription,
-			"label": got.Label, "colleague's question": got.ColleagueAsk.Question} {
+			"label": got.Label, "colleague's question": got.ColleagueAsk.RawQuestion()} {
 			if kept.Quoted(text) > sandbox.MaxRunTitleBytes || !strings.HasPrefix(text, "please look at this log: ") ||
 				!strings.Contains(text, "not kept on the run's record") {
 				t.Errorf("%s: the %s is %d bytes as the row holds it, its share %d, opening %.40q",

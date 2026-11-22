@@ -98,13 +98,47 @@ func TestAnEntrysEffortReachesTheBoxsHarness(t *testing.T) {
 	}
 }
 
+// A WEB-DENIED ENTRY'S CLAUDE CODE RUN HAS NO WEB TOOL: both of Claude Code's
+// own web tools on --disallowedTools, which on 2.1.330 refused them under
+// bypassPermissions, in subagents too, whatever the repository's settings
+// allowed. The list takes values until the next flag, so a flag follows it.
+// A run on an entry that keeps the web names no such list.
+//
+// Mutation: drop the list, or leave a web tool off it, and this fails.
+func TestAWebDeniedClaudeRunHasNoWebTool(t *testing.T) {
+	t.Parallel()
+	argv := func(cmd string) []string {
+		i := strings.Index(cmd, "claude -p ")
+		if i < 0 {
+			t.Fatalf("no claude invocation in:\n%s", cmd)
+		}
+		return strings.Fields(cmd[i:])
+	}
+	denied := argv(scriptOf(t, commandOf(claude(), sandbox.RunRequest{Brief: "x", WebDenied: true},
+		executor.Paths{}, "")))
+	at := slices.Index(denied, "--disallowedTools")
+	if at < 0 || at+3 >= len(denied) {
+		t.Fatalf("the web-denied run names no --disallowedTools list: %q", denied)
+	}
+	if got := denied[at+1 : at+3]; !slices.Equal(got, []string{"WebFetch", "WebSearch"}) {
+		t.Errorf("--disallowedTools lists %q, want WebFetch and WebSearch", got)
+	}
+	if next := denied[at+3]; !strings.HasPrefix(next, "-") && next != `"$@"` {
+		t.Errorf("--disallowedTools is followed by %q, which its list would take", next)
+	}
+	allowed := argv(scriptOf(t, commandOf(claude(), sandbox.RunRequest{Brief: "x"}, executor.Paths{}, "")))
+	if slices.Contains(allowed, "--disallowedTools") {
+		t.Errorf("a run that keeps the web denies tools: %q", allowed)
+	}
+}
+
 // ---------------------------------------------------------------------
 // claude-code: the parser
 // ---------------------------------------------------------------------
 
 func TestTheClaudeParserReadsTheEnvelope(t *testing.T) {
 	t.Parallel()
-	res := claude().Parse(`{
+	res := claude().Parse([]byte(`{
 		"type": "result",
 		"result": "Fixed it. Opened https://github.com/acme/api/pull/7",
 		"subtype": "success",
@@ -113,7 +147,7 @@ func TestTheClaudeParserReadsTheEnvelope(t *testing.T) {
 		"total_cost_usd": 0.42,
 		"num_turns": 23,
 		"usage": {"input_tokens": 1200, "output_tokens": 300}
-	}`)
+	}`))
 	if !res.Success {
 		t.Fatalf("a clean run read as failed: %+v", res)
 	}
@@ -142,11 +176,11 @@ func TestTheClaudeParserReadsTheEnvelope(t *testing.T) {
 // engine provider reports in.
 func TestTheClaudeParserCountsTheCachedPrompt(t *testing.T) {
 	t.Parallel()
-	res := claude().Parse(`{
+	res := claude().Parse([]byte(`{
 		"type": "result", "result": "done", "subtype": "success",
 		"usage": {"input_tokens": 40, "cache_read_input_tokens": 9000,
 			"cache_creation_input_tokens": 1500, "output_tokens": 300}
-	}`)
+	}`))
 	if res.InputTokens != 10540 {
 		t.Errorf("input = %d, want the whole prompt: 40 uncached + 9000 read + 1500 written", res.InputTokens)
 	}
@@ -162,7 +196,7 @@ func TestTheClaudeParserCountsTheCachedPrompt(t *testing.T) {
 // error result carries no `result` text, so what it says is how it ended.
 func TestARunThatHitItsCapIsNotASuccess(t *testing.T) {
 	t.Parallel()
-	res := claude().Parse(`{"type":"result","subtype":"error_max_turns","is_error":false,"num_turns":30}`)
+	res := claude().Parse([]byte(`{"type":"result","subtype":"error_max_turns","is_error":false,"num_turns":30}`))
 	if res.Success {
 		t.Fatal("a run that exhausted its turns read as success")
 	}
@@ -182,7 +216,7 @@ func TestOnlyTheCapsSubtypeMarksARunRoundCapped(t *testing.T) {
 		`{"type":"result","subtype":"error_during_execution","is_error":true}`,
 		`{"type":"result","subtype":"success","is_error":false,"result":"done","num_turns":30}`,
 	} {
-		if res := claude().Parse(line); res.RoundCapped {
+		if res := claude().Parse([]byte(line)); res.RoundCapped {
 			t.Errorf("%s read as ended on its round cap", line)
 		}
 	}
@@ -192,8 +226,8 @@ func TestOnlyTheCapsSubtypeMarksARunRoundCapped(t *testing.T) {
 // its result text is the failure.
 func TestARunThatReportsAnErrorIsNotASuccess(t *testing.T) {
 	t.Parallel()
-	res := claude().Parse(`{"type":"result","subtype":"success","is_error":true,` +
-		`"result":"API Error: 529 overloaded"}`)
+	res := claude().Parse([]byte(`{"type":"result","subtype":"success","is_error":true,` +
+		`"result":"API Error: 529 overloaded"}`))
 	if res.Success || res.Error != "API Error: 529 overloaded" {
 		t.Fatalf("Parse = success %v, error %q; want the failure it reported", res.Success, res.Error)
 	}
@@ -203,7 +237,7 @@ func TestARunThatReportsAnErrorIsNotASuccess(t *testing.T) {
 // turn continue, not blow the turn up.
 func TestUnparseableOutputIsAFailedResultNotAnError(t *testing.T) {
 	t.Parallel()
-	res := claude().Parse("Segmentation fault (core dumped)")
+	res := claude().Parse([]byte("Segmentation fault (core dumped)"))
 	if res.Success {
 		t.Fatal("a crash read as success")
 	}
@@ -214,7 +248,7 @@ func TestUnparseableOutputIsAFailedResultNotAnError(t *testing.T) {
 
 func TestEmptyClaudeOutputIsAFailure(t *testing.T) {
 	t.Parallel()
-	if res := claude().Parse("   "); res.Success || res.Error == "" {
+	if res := claude().Parse([]byte("   ")); res.Success || res.Error == "" {
 		t.Fatalf("empty output = %+v", res)
 	}
 }
@@ -629,7 +663,7 @@ func TestAPartialLineIsSkippedRatherThanFailingTheRead(t *testing.T) {
 	t.Parallel()
 	stream := `{"type":"text","part":{"text":"working"}}
 {"type":"step_fin`
-	res := opencode().Parse(stream)
+	res := opencode().Parse([]byte(stream))
 	if !strings.Contains(res.Text, "working") {
 		t.Fatalf("the complete events were lost with the partial one: %+v", res)
 	}
@@ -643,7 +677,7 @@ func TestTheOpenCodeParserRebuildsTheAnswerAndTheTranscript(t *testing.T) {
 		`{"type":"text","part":{"text":"Opened https://github.com/acme/api/pull/9"}}`,
 		`{"type":"step_finish","part":{"reason":"stop"}}`,
 	}, "\n")
-	res := opencode().Parse(stream)
+	res := opencode().Parse([]byte(stream))
 	if !res.Success {
 		t.Fatalf("a clean stream read as failed: %+v", res)
 	}
@@ -682,7 +716,7 @@ func TestTheAnswerIsTheLastMessagesText(t *testing.T) {
 		`{"type":"text","part":{"messageID":"msg_3","type":"text","text":"answer-2: it targets release,"}}`,
 		`{"type":"text","part":{"messageID":"msg_3","type":"text","text":"as the note asked. Opened https://github.com/acme/api/pull/9"}}`,
 	}, "\n")
-	res := opencode().Parse(stream)
+	res := opencode().Parse([]byte(stream))
 	if want := "answer-2: it targets release,\nas the note asked. Opened https://github.com/acme/api/pull/9"; res.Text != want {
 		t.Errorf("the answer is %q, want the last message's text %q", res.Text, want)
 	}
@@ -704,7 +738,7 @@ func TestAFailedToolIsMarkedInTheTranscript(t *testing.T) {
 		`"error":"2 failed","time":{"start":1794632160734,"end":1794632161984}}}}
 {"type":"tool_use","part":{"tool":"read","state":{"input":{"filePath":"/repo/a.go"},"status":"completed"}}}
 {"type":"text","part":{"text":"could not fix it"}}`
-	res := opencode().Parse(stream)
+	res := opencode().Parse([]byte(stream))
 	want := "[tool 1] shell: pytest\n[failed 1 1250ms] 2 failed\n[tool 2] read: /repo/a.go\n[ok 2]\ncould not fix it"
 	if res.Transcript != want {
 		t.Fatalf("transcript =\n%s\nwant\n%s", res.Transcript, want)
@@ -722,7 +756,7 @@ func TestOpenCodeReadsTheSessionsUsageReport(t *testing.T) {
 		`{"type":"crewlet.usage","report":{"data":{"id":"ses_abc","cost":0.42,` +
 			`"tokens":{"input":100,"output":20,"reasoning":5,"cache":{"read":300,"write":7}}}}}`,
 	}, "\n")
-	res := opencode().Parse(stream)
+	res := opencode().Parse([]byte(stream))
 	if res.InputTokens != 407 || res.OutputTokens != 25 {
 		t.Errorf("tokens = in %d out %d, want in 407 (100+300+7) out 25 (20+5)",
 			res.InputTokens, res.OutputTokens)
@@ -743,7 +777,7 @@ func TestOpenCodeReadsTheSessionsUsageReport(t *testing.T) {
 // reports none.
 func TestOpenCodeReportsNoTokensRatherThanEstimatingThem(t *testing.T) {
 	t.Parallel()
-	res := opencode().Parse(`{"type":"text","part":{"text":"done"}}`)
+	res := opencode().Parse([]byte(`{"type":"text","part":{"text":"done"}}`))
 	if res.InputTokens != 0 || res.OutputTokens != 0 || res.CostUSD != 0 {
 		t.Fatalf("tokens were invented: %+v", res)
 	}
@@ -757,8 +791,8 @@ func TestOpenCodeReportsNoTokensRatherThanEstimatingThem(t *testing.T) {
 // Mutation: keep the price only when it is above zero, and the result reads 0.
 func TestOpenCodeHandsANegativePriceOnForTheCoordinatorToFloor(t *testing.T) {
 	t.Parallel()
-	res := opencode().Parse(`{"type":"text","part":{"text":"done"}}` + "\n" +
-		`{"type":"crewlet.usage","report":{"data":{"cost":-0.25,"tokens":{"input":-3,"output":1}}}}`)
+	res := opencode().Parse([]byte(`{"type":"text","part":{"text":"done"}}` + "\n" +
+		`{"type":"crewlet.usage","report":{"data":{"cost":-0.25,"tokens":{"input":-3,"output":1}}}}`))
 	if res.CostUSD != -0.25 || res.InputTokens != -3 {
 		t.Errorf("cost %v input %d, want both as reported (-0.25, -3) for the coordinator's floor",
 			res.CostUSD, res.InputTokens)
@@ -767,7 +801,7 @@ func TestOpenCodeHandsANegativePriceOnForTheCoordinatorToFloor(t *testing.T) {
 
 func TestAnErrorEventIsAFailure(t *testing.T) {
 	t.Parallel()
-	res := opencode().Parse(`{"type":"error","error":{"type":"provider.quota","message":"quota exceeded"}}`)
+	res := opencode().Parse([]byte(`{"type":"error","error":{"type":"provider.quota","message":"quota exceeded"}}`))
 	if res.Success {
 		t.Fatal("an error event read as success")
 	}
@@ -779,7 +813,7 @@ func TestAnErrorEventIsAFailure(t *testing.T) {
 // Output that is not the event stream is still an answer.
 func TestNonJsonOpenCodeOutputIsTakenAsTheAnswer(t *testing.T) {
 	t.Parallel()
-	res := opencode().Parse("I fixed it and opened https://github.com/acme/api/pull/3")
+	res := opencode().Parse([]byte("I fixed it and opened https://github.com/acme/api/pull/3"))
 	if !res.Success || !strings.Contains(res.Text, "fixed it") {
 		t.Fatalf("plain output = %+v", res)
 	}
@@ -792,7 +826,7 @@ func TestNonJsonOpenCodeOutputIsTakenAsTheAnswer(t *testing.T) {
 // findings file exists for — but the parser must still report it honestly.
 func TestAToolOnlyStreamReportsNoAnswer(t *testing.T) {
 	t.Parallel()
-	res := opencode().Parse(`{"type":"tool_use","part":{"tool":"shell","state":{"input":{"command":"ls"}}}}`)
+	res := opencode().Parse([]byte(`{"type":"tool_use","part":{"tool":"shell","state":{"input":{"command":"ls"}}}}`))
 	if res.Success {
 		t.Fatal("a run that said nothing read as success")
 	}

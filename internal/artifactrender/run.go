@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/artifactrender/internal/cdp"
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
-	"github.com/crewlet/crewlet/internal/browser/cdp"
 )
 
 // run is one render in progress: its tab, the requests it is answering, and

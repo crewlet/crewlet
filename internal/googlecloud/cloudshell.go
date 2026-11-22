@@ -2,9 +2,11 @@ package googlecloud
 
 import (
 	"errors"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/setup"
 )
@@ -29,16 +31,15 @@ const jwksEnd = "CREWLET_JWKS"
 // CloudShellBlock is the block the connect form shows once the federation key
 // is held: pasted whole into Cloud Shell, it readies the identity project for
 // company, provisioner and the key's public half, and prints the provider's
-// full name as its last line.
-// THE ISSUER, SUBJECT AND PRINCIPAL ARE THE CLIENT'S OWN ([Issuer], [Subject],
-// [Principal]), so the provider trusts exactly the token the engine signs; only the
-// public half is written, the private refused by the caller ([setup.PublicOf]).
-// SAFE TO RUN AGAIN: each make is a describe first, and an existing provider
-// is updated; a subshell stops a failed block, not Cloud Shell.
-// WITH ATLAS, it also makes the atlas's service account, lets Crewlet's
-// subject act as it, and grants it [AtlasRoleID] on the provisioner's projects;
-// a project the person running it may not change is named and skipped.
-func CloudShellBlock(company, provisioner, key string, atlas bool) (string, error) {
+// full name as its last line. Its issuer, subject and principal are the
+// engine's own ([googleauth.Issuer]), and only the public half is written
+// ([setup.PublicOf]). SAFE TO RUN AGAIN: each make is a describe first, and a
+// subshell stops a failed block, not Cloud Shell. WITH ATLAS it makes the
+// atlas's account and grants it [AtlasRoleID] on the provisioner's projects,
+// naming and skipping one the person may not change ([atlasLines]); WITH
+// GROWTH PRODUCTS it enables their APIs and makes the company's reader
+// ([growthLines]).
+func CloudShellBlock(company, provisioner, key string, atlas bool, growth []googleauth.Product) (string, error) {
 	identity, ok := config.GoogleCloudServiceAccount(provisioner)
 	if !ok {
 		return "", errors.New("googlecloud: the provisioner is not a service account's email")
@@ -52,9 +53,9 @@ func CloudShellBlock(company, provisioner, key string, atlas bool) (string, erro
 	}
 	provider := `--project="$IDENTITY" --location=global --workload-identity-pool=` + PoolID
 	oidc := ` \
-    --issuer-uri="` + Issuer(company) + `" \
+    --issuer-uri="` + googleauth.Issuer(company) + `" \
     --attribute-mapping="google.subject=assertion.sub" \
-    --attribute-condition="assertion.sub == '` + Subject(company) + `'" \
+    --attribute-condition="assertion.sub == '` + googleauth.Subject(company) + `'" \
     --jwk-json-path="$JWKS" --format=none`
 	lines := []string{
 		"(",
@@ -115,12 +116,15 @@ func CloudShellBlock(company, provisioner, key string, atlas bool) (string, erro
 		`  [ -n "$NUMBER" ] || fail "read the identity project's number"`,
 		`grant gcloud iam service-accounts add-iam-policy-binding "$PROV" --project="$IDENTITY" \`,
 		`  --role=roles/iam.workloadIdentityUser --format=none \`,
-		`  --member="` + Principal(ProviderName("${NUMBER}"), company) + `" ||`,
+		`  --member="` + googleauth.Principal(ProviderName("${NUMBER}"), company) + `" ||`,
 		`  fail "let Crewlet act as the provisioner"`,
 		"",
 	}
 	if atlas {
-		lines = append(lines, atlasLines(Principal(ProviderName("${NUMBER}"), company))...)
+		lines = append(lines, atlasLines(googleauth.Principal(ProviderName("${NUMBER}"), company))...)
+	}
+	if len(growth) > 0 {
+		lines = append(lines, growthLines(company, googleauth.Principal(ProviderName("${NUMBER}"), company), growth)...)
 	}
 	lines = append(lines,
 		`gcloud iam workload-identity-pools providers describe `+ProviderID+` `+provider+` \`,
@@ -172,11 +176,46 @@ func atlasLines(principal string) []string {
 	}
 }
 
+// growthLines enable the growth products' APIs in the identity project and
+// make the company's reader, for the Crewlet subject principal alone. The
+// reader holds no role here: a person adds it to each product at its read
+// role, as the connect form of each product says.
+func growthLines(company, principal string, growth []googleauth.Product) []string {
+	var names, apis []string
+	for _, p := range growth {
+		names = append(names, p.Name)
+		for _, api := range p.APIs {
+			if !slices.Contains(apis, api) {
+				apis = append(apis, api)
+			}
+		}
+	}
+	reader := googleauth.ReaderAccountID(company)
+	return []string{
+		"# Google growth products (" + strings.Join(names, ", ") + "): their APIs in the identity project, and",
+		"# the company's reader, which reads their figures for the whole company.",
+		`gcloud services enable ` + strings.Join(apis, " ") + ` --project="$IDENTITY" --format=none ||`,
+		`  fail "enable the growth products' APIs in the identity project"`,
+		"READER=" + reader + `@"$IDENTITY".iam.gserviceaccount.com`,
+		`if ! gcloud iam service-accounts describe "$READER" --project="$IDENTITY" --format='value(email)' >/dev/null 2>&1; then`,
+		`  gcloud iam service-accounts create ` + reader + ` --project="$IDENTITY" \`,
+		`    --display-name="Crewlet growth reader" \`,
+		`    --description="Reads growth figures for the whole company, for Crewlet" --format=none ||`,
+		`    fail "create the growth reader"`,
+		`fi`,
+		`grant gcloud iam service-accounts add-iam-policy-binding "$READER" --project="$IDENTITY" \`,
+		`  --role=roles/iam.workloadIdentityUser --format=none --member="` + principal + `" ||`,
+		`  fail "let Crewlet act as the growth reader"`,
+		`echo "Add $READER to each growth product at its read role" >&2`,
+		"",
+	}
+}
+
 // cloudShellView is the block as the federation key's row shows it, nil where
 // it cannot be drawn yet: the provisioner or the key not held, or a key that
 // is not one the engine mints, which the Test reports.
-func cloudShellView(company, provisioner, key string, atlas bool) *setup.PublicView {
-	block, err := CloudShellBlock(company, provisioner, key, atlas)
+func cloudShellView(company, provisioner, key string, atlas bool, growth []googleauth.Product) *setup.PublicView {
+	block, err := CloudShellBlock(company, provisioner, key, atlas, growth)
 	if err != nil {
 		return nil
 	}

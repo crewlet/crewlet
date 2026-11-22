@@ -55,6 +55,9 @@ type builtinEntry struct {
 	// ~/.cursor/auth.json on macOS and at $XDG_CONFIG_HOME/cursor/auth.json
 	// on Linux (read from its bundle, and measured on Linux).
 	Platforms map[string]map[string]any `yaml:"platforms,omitempty"`
+	// Executor is the harness's runner facts, read apart from the profile
+	// ([ExecutorRunners]) and never merged with it.
+	Executor *Executor `yaml:"executor,omitempty"`
 }
 
 // decodeTable decodes a profile table as it reads on goos.
@@ -175,7 +178,7 @@ func (p Profile) Clone() Profile {
 		out.LimitEvents = make([]LimitEvent, len(p.LimitEvents))
 		for i, e := range p.LimitEvents {
 			out.LimitEvents[i] = LimitEvent{Match: cloneMatches(e.Match),
-				SaidPath: slices.Clone(e.SaidPath), Reset: e.Reset}
+				SaidPath: slices.Clone(e.SaidPath), Reset: e.Reset, In: e.In}
 		}
 	}
 	out.LimitMarkers = append([]LimitMarker(nil), p.LimitMarkers...)
@@ -206,6 +209,16 @@ func (p Profile) Clone() Profile {
 			out.WebDenial.MCP = &WebDenialMCP{CompleteArgs: slices.Clone(dm.CompleteArgs),
 				Seed: slices.Clone(dm.Seed)}
 		}
+	}
+	if p.WebSearch != nil {
+		search := *p.WebSearch
+		search.CompleteArgs = slices.Clone(search.CompleteArgs)
+		search.Args = make([][]string, len(p.WebSearch.Args))
+		for i, run := range p.WebSearch.Args {
+			search.Args[i] = slices.Clone(run)
+		}
+		search.Refuses = slices.Clone(search.Refuses)
+		out.WebSearch = &search
 	}
 	if p.ImageInput != nil {
 		image := *p.ImageInput
@@ -278,6 +291,9 @@ func Load(name string, overrides map[string]any) (Profile, error) {
 		return Profile{}, fmt.Errorf("harness: unknown agent %q (want %s)",
 			name, words.Or(BuiltinNames()))
 	}
+	if _, set := overrides["executor"]; set {
+		return Profile{}, fmt.Errorf("harness %q: %w", name, ErrExecutorOverride)
+	}
 	if len(overrides) == 0 {
 		if err := builtin.Validate(name); err != nil {
 			return Profile{}, err
@@ -302,6 +318,9 @@ func Load(name string, overrides map[string]any) (Profile, error) {
 				"works: set web_denial.mcp to what that run uses with web denied")
 		}
 		merged = merged.withWebDenied()
+	}
+	if merged.EffectiveWebTools() == WebToolsSearch && merged.CanSearchWeb() {
+		merged = merged.withWebSearch()
 	}
 	bad = append(bad, merged.problems()...)
 	if err := profileError(name, append(bad, merged.strandedBy(&builtin)...)); err != nil {

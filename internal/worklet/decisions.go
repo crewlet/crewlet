@@ -95,6 +95,16 @@ func (r *Reader) Decisions(ctx context.Context, q DecisionsQuery, now time.Time,
 			rowsAt{dayStart: anchor.At, flow: flow}, MaxDecisions, 0); err != nil {
 			return err
 		}
+		// Held to the answer's bytes ([statelog.RowsOf]), here and not in
+		// [readAsks], which my_work shares under its own ceiling: a cut page
+		// says so as the count cap does, `total` above the asks carried.
+		held := statelog.RowsOf(ctx)
+		for i := range out.Asks {
+			if !held.TakeEncoded(out.Asks[i]) {
+				out.Asks = out.Asks[:i]
+				break
+			}
+		}
 		if out.OldestAt, err = oldestAsk(ctx, tx, q.Handle); err != nil {
 			return err
 		}

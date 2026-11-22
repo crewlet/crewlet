@@ -13,7 +13,8 @@ import (
 // fact in each live tier, so a plan is of the whole expression.
 var planFlow = flowAt{now: planNow, posture: Posture{Live: true, Seats: map[string]SeatPosture{
 	"ada": {On: []PostureItem{{Item: "t-00001", Cause: FlowCauseTurn, Since: planNow.Add(-time.Minute)}},
-		Parked: "t-00002", ParkedSince: planNow.Add(-time.Hour)},
+		Parked: []PostureItem{{Item: "t-00002", Cause: FlowCauseParked, Since: planNow.Add(-time.Hour)}},
+		Full:   true},
 	"bo": {Stop: FlowCauseLimit, StopSince: planNow.Add(-time.Hour), StopUntil: planNow.Add(time.Hour)},
 }}}
 

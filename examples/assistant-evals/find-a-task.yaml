@@ -9,11 +9,11 @@ answers:
       hits:
         - {key: ENG-42, title: Release checklist for 2.4, status: in_progress, assignee: ada, project: ENG}
 script:
-  - call: search_work
-    args: {q: release checklist}
+  - call: read_api
+    args: {route: GET /worklet/search, query: {q: release checklist}}
   - say: Yes. Ada is working on ENG-42, the release checklist for 2.4.
 expect:
-  calls: [search_work]
+  calls: [read_api]
   never: [create_task, update_task]
   proposals: 0
   state: completed

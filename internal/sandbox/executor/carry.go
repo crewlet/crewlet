@@ -9,6 +9,8 @@ import (
 	"io"
 	"regexp"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -26,10 +28,10 @@ import (
 
 // harnessVersionWait bounds [Runner.CheckCarry]'s one read of the box
 // harness's release: a login shell and `--version`, about a second, mostly
-// the runtime starting, as for [openCodeListenWait]. Sixty seconds is room
-// for a contended disk or CPU; a box silent past it is not answering, and the
-// caller starts the run fresh rather than wait.
-const harnessVersionWait = openCodeListenWait
+// the runtime starting. Sixty seconds is room for a contended disk or CPU; a
+// box silent past it is not answering, and the caller starts the run fresh
+// rather than wait.
+const harnessVersionWait = 60 * time.Second
 
 // sessionRecord is what a run's script recorded of its session before its harness
 // started ([Paths.SessionRecord]).
@@ -167,7 +169,9 @@ func runStartOf(cursor string) string {
 // releasePattern is a release's MAJOR.MINOR.PATCH, wherever a harness's
 // `--version` prints it: first for Claude Code (`2.1.310 (Claude Code)`),
 // after a name for OpenCode (`opencode v2.0.32`).
-var releasePattern = regexp.MustCompile(`[0-9]+\.[0-9]+\.[0-9]+`)
+var releasePattern = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`[0-9]+\.[0-9]+\.[0-9]+`)
+})
 
 // releaseOf is the release a harness's `--version` printed, "2.1.310", or ""
 // where it printed none this code can read.
@@ -179,7 +183,7 @@ var releasePattern = regexp.MustCompile(`[0-9]+\.[0-9]+\.[0-9]+`)
 // executor log's bound it is refused, never cut, since a shortened release
 // names another; read as none, every reader takes it for a current one.
 func releaseOf(printed string) string {
-	if release := releasePattern.FindString(printed); sandbox.ValidRelease(release) {
+	if release := releasePattern().FindString(printed); sandbox.ValidRelease(release) {
 		return release
 	}
 	return ""
@@ -238,8 +242,16 @@ func (r *Runner) archiveAt(ctx context.Context, box sandbox.Sandbox, path string
 // ([scrubTar]) reads what its first read; an agent rewriting it since is the
 // box's doing, which the restorer's checks meet.
 func (r *Runner) OpenCapture(ctx context.Context, box sandbox.Sandbox) (sandbox.SessionArchive, io.ReadCloser, error) {
+	return r.openCapture(ctx, box, "")
+}
+
+// openCapture is [Runner.OpenCapture] of a minting harness's job bound to
+// bound ([sandbox.SessionTake.Session]), which OpenCapture names none of.
+func (r *Runner) openCapture(ctx context.Context, box sandbox.Sandbox, bound string) (sandbox.SessionArchive,
+	io.ReadCloser, error) {
+
 	paths := PathsFor(box)
-	rec, refusal, err := r.readSessionRecord(ctx, box, paths)
+	rec, refusal, err := r.readSessionRecord(ctx, box, paths, bound)
 	if err != nil {
 		return sandbox.SessionArchive{}, nil, fmt.Errorf("executor: reading which session the run packed: %w", err)
 	}
@@ -295,13 +307,17 @@ func (r *Runner) CheckCarry(ctx context.Context, box sandbox.Sandbox, archive sa
 	return check, nil
 }
 
+// resumeReader is a [carrier] whose releases' resumes this build read.
+type resumeReader interface{ resumeRead(release string) bool }
+
 // resumeRead reports whether release, of this runner's harness, is one whose
-// resume this build read ([claudeResumeRead]): what a box's carry check
+// resume this build read: what a box's carry check
 // ([sandbox.CarryCheck.ResumeRead]) and a take's archive
-// ([sandbox.TakenSession.ResumeRead]) each report. False for every harness
-// but Claude Code.
+// ([sandbox.TakenSession.ResumeRead]) each report. False for a harness that
+// is no [resumeReader].
 func (r *Runner) resumeRead(release string) bool {
-	return r.harness.Name() == sandbox.ClaudeCodeHarness && claudeResumeRead(release)
+	h, ok := r.harness.(resumeReader)
+	return ok && h.resumeRead(release)
 }
 
 // Restores reports whether this runner restores archive at all

@@ -258,6 +258,11 @@ func (d *timelineDriver) comment(i int, st scenario.Step, kind worklet.AuthorKin
 		c.Decision = scenarioDecision(st.Recommend)
 	}
 	c.Choice = st.Choose
+	if asked := thread.AnswersDecision; c.Choice != "" && asked != nil {
+		if option, ok := asked.Option(c.Choice); ok {
+			c.Body = worklet.ChoiceWords(option.Label, c.Body)
+		}
+	}
 	d.comments[i] = c.ID
 	patch := worklet.TaskPatch{Comment: c,
 		Watch: &worklet.WatchIntent{Handle: st.Actor, Watch: true, Auto: true}}

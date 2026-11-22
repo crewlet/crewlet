@@ -5,7 +5,16 @@
 
 /** What sort of value a requirement holds (`setup.Kinds`); a toggle is a JSON boolean. */
 export type SetupRequirementKind =
-  "secret" | "url" | "id" | "choice" | "text" | "handle" | "email" | "toggle";
+  | "secret"
+  | "url"
+  | "id"
+  | "choice"
+  | "text"
+  | "handle"
+  | "email"
+  | "toggle"
+  | "add_identity"
+  | "consent";
 
 /** One step at the app: `{link}` in `text` is the vendor link of the field `link` names. */
 export interface SetupStep {
@@ -21,6 +30,17 @@ export interface SetupStep {
 export interface SetupCaution {
   title: string;
   body: string;
+}
+
+/** An identity a person adds at the vendor; `seat` names the agent when `level` is "seat". */
+interface SetupIdentityStep {
+  email: string;
+  role: { id: string; name: string };
+  where: { url: string; words: string };
+  level: "company" | "seat";
+  seat?: string;
+  /** Whether the engine saw the identity hold the role. */
+  state: "present" | "missing" | "unknown";
 }
 
 /** One input an integration needs; every word the form draws comes from here. */
@@ -52,6 +72,8 @@ export interface SetupRequirement {
   mintable?: boolean;
   /** The engine's rendering of a minted value's public half, to copy to the app. */
   public?: { text: string; language: string };
+  /** An `add_identity` step: the email to add at the vendor, at which role and where. */
+  identity?: SetupIdentityStep;
   /** Written from its default without being asked. */
   hidden?: boolean;
   /** The one line under the field, under fifteen words. */
@@ -227,4 +249,44 @@ export interface SetupVerdict {
   summary: string;
   facts?: SetupVerdictFact[];
   warnings?: SetupVerdictWarning[];
+}
+
+/** One app's outcome of turning App Store analytics on. */
+type SetupAppStoreAnalyticsState = "on" | "already_on" | "failed";
+
+/** One app's line of the turn-on's answer: `detail` is why it failed, in Apple's redacted words. */
+export interface SetupAppStoreAnalyticsApp {
+  app: string;
+  state: SetupAppStoreAnalyticsState;
+  detail?: string;
+}
+
+/**
+ * What `POST /setup/integrations/app_store_connect/analytics` answers: each
+ * app's outcome, and what to do with the pasted Admin key, which no answer
+ * repeats.
+ */
+export interface SetupAppStoreAnalyticsAnswer {
+  connection: string;
+  apps: SetupAppStoreAnalyticsApp[];
+  revoke: string;
+}
+
+/** A consent sign-in (`POST /setup/integrations/{kind}/consent`, `GET /setup/consent-sign-ins/{id}`). */
+export interface SetupConsentSignIn {
+  id: string;
+  kind: string;
+  status: "pending" | "completing" | "approved" | "failed";
+  detail?: string;
+  started_at: string;
+  expires_at: string;
+  /** Where the browser goes to consent: on the start's answer alone. */
+  authorize_url?: string;
+}
+
+/** A consent grant given up with its integration's block, on a forced disconnect's answer (`oauth`). */
+export interface SetupConsentRevocation {
+  /** What Google was asked: `shared` where revoking would have ended another product's sign-in. */
+  revocation: "revoked" | "not_offered" | "failed" | "shared";
+  said: string;
 }

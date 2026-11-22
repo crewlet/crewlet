@@ -21,7 +21,7 @@
 import type { Remedy } from "./remedies.ts";
 
 /** The protocol version every frame and every request carries. */
-export const ASSISTANT_PROTOCOL_VERSION = 2;
+export const ASSISTANT_PROTOCOL_VERSION = 3;
 /** The longest question a turn takes, in characters (Unicode code points). */
 export const ASSISTANT_INPUT_MAX_RUNES = 4000;
 /** The most a turn's page context may encode to, in bytes. */
@@ -39,6 +39,8 @@ export const ASSISTANT_PAGE_SCREEN_PATTERN = "^[a-z][a-z0-9-]{0,63}$";
 export const ASSISTANT_PAGE_KEY_PATTERN = "^[a-z][a-z0-9_.]{0,63}$";
 /** The longest page title, in characters. */
 export const ASSISTANT_PAGE_TITLE_MAX_RUNES = 120;
+/** The longest title a person may give a conversation, in characters. */
+export const ASSISTANT_TITLE_MAX_RUNES = 60;
 /** The longest route parameter or query value, in bytes, and an action's enumerated or constant value. */
 export const ASSISTANT_PAGE_VALUE_MAX_BYTES = 512;
 /** The longest id the page context names (a resource, its version, a revision, a draft's id), in bytes. */
@@ -414,6 +416,8 @@ export interface AssistantSnapshotEvent {
   messages: AssistantMessage[];
   steps: AssistantStepEvent[];
   cards: AssistantCardEvent[];
+  /** The turn's records passed one frame and some are left out; the transcript holds them all. */
+  cut?: boolean;
 }
 
 /** One engine-built card: its kind and exactly that kind's body. */
@@ -555,13 +559,14 @@ export interface AssistantProposalCard {
   target?: string;
   changes: AssistantChange[];
   /** What the change does, above the rows, where the title does not say it: what a destructive change takes away. */
-  summary?: string;
-  /** The consequence, under the rows: whether and how the change can be reverted. */
-  note?: string;
+  summary?: AssistantPhrase;
+  /** The consequence, under the rows: whether and how the change can be reverted, and who it reaches. */
+  note?: AssistantPhrase;
   risk?: AssistantProposalRisk;
   /** The exact request, for an approver who administers the company; absent for everybody else. */
   technical?: AssistantTechnicalRequest;
-  audience?: string[];
+  /** Who will see the result where visibility changes, one phrase each. */
+  audience?: AssistantPhrase[];
   /** The surface of the outside text the turn read before proposing; absent for none. */
   taint?: AssistantTaintSource;
   /** Approving asks the person to confirm it is them first. */
@@ -594,12 +599,12 @@ interface AssistantChange {
   kind: AssistantChangeKind;
   field: string;
   label: string;
-  from?: string;
-  to?: string;
-  /** `to` as a list, one entry per item, where the value is a list of plain values. */
-  items?: string[];
+  from?: AssistantPhrase;
+  to?: AssistantPhrase;
+  /** `to` as a list, one entry per item, where the value is a list. */
+  items?: AssistantPhrase[];
   /** `from` as a list, likewise. */
-  from_items?: string[];
+  from_items?: AssistantPhrase[];
   words?: AssistantWord[];
   new?: boolean;
   note?: string;
@@ -611,9 +616,27 @@ interface AssistantWord {
   text: string;
 }
 
+/** A record a proposal or its receipt names: kind, id, shown name, an artifact's kind, its page. */
+export interface AssistantRef {
+  kind: AssistantResourceKind;
+  id: string;
+  name: string;
+  artifact_kind?: string;
+  open?: AssistantLink;
+}
+
+/** One run of a phrase: words, or exactly one record they name. */
+export interface AssistantPart {
+  text?: string;
+  ref?: AssistantRef;
+}
+
+/** Words that name records, run by run (`wire.Phrase`). */
+type AssistantPhrase = AssistantPart[];
+
 /** What an applied proposal did. */
 interface AssistantReceipt {
-  summary: string;
+  summary: AssistantPhrase;
   position?: string;
   open?: AssistantLink;
 }
@@ -948,7 +971,7 @@ export interface AssistantViewerAssistant {
 }
 
 /** A helper's model as anybody is shown it: its `providers.llm` key and the model it names. */
-export interface AssistantViewerModel {
+interface AssistantViewerModel {
   key: string;
   label: string;
 }

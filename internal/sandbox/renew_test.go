@@ -161,7 +161,11 @@ func newRenewRig(t *testing.T) *renewRig {
 	if err := broker.Subscribe(t.Context(), control, group, func(ctx context.Context, ev *events.Event) queue.Result {
 		left, _ := queue.DeliveriesLeftFor(ctx, ev.ID)
 		r.mu.Lock()
-		r.seen = append(r.seen, delivered{id: ev.ID, left: left, waiting: len(broker.Backlog(control, group))})
+		waiting, err := broker.Backlog(ctx, control, group, 1<<12)
+		if err != nil {
+			t.Errorf("read the control topic's mail: %v", err)
+		}
+		r.seen = append(r.seen, delivered{id: ev.ID, left: left, waiting: len(waiting)})
 		n, before := len(r.seen), r.before
 		r.mu.Unlock()
 		if before != nil {
@@ -695,7 +699,7 @@ type refusingGate struct {
 	asked int
 }
 
-func (g *refusingGate) gate(ctx context.Context, _ string, _ ResumeRoute) (context.Context, func(), error) {
+func (g *refusingGate) gate(ctx context.Context, _, _ string, _ ResumeRoute) (context.Context, func(), error) {
 	g.mu.Lock()
 	g.asked++
 	n := g.asked
@@ -883,7 +887,7 @@ type racingGate struct {
 	asked int
 }
 
-func (g *racingGate) gate(ctx context.Context, _ string, _ ResumeRoute) (context.Context, func(), error) {
+func (g *racingGate) gate(ctx context.Context, _, _ string, _ ResumeRoute) (context.Context, func(), error) {
 	g.mu.Lock()
 	g.asked++
 	n := g.asked
@@ -1486,7 +1490,7 @@ func TestAnAnnouncementFromAReadBeforeTheClockEndsNothing(t *testing.T) {
 	}
 	// atTheLimit refuses every resume on a condition that clears by waiting,
 	// whose refusal is acknowledged wherever a waiter stands behind it.
-	atTheLimit := func(context.Context, string, ResumeRoute) (context.Context, func(), error) {
+	atTheLimit := func(context.Context, string, string, ResumeRoute) (context.Context, func(), error) {
 		return nil, nil, &TurnRefused{Refusal: Refusal{Condition: conditionLimit,
 			Reason: "every model of the seat's chain is at its usage limit"}}
 	}

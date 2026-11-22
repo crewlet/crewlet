@@ -9,6 +9,15 @@
 // that fails is reported as unread and the rest of the atlas still answers:
 // one slow store does not blank the map.
 //
+// Gitlet is read as the asker, never as the engine: a repository only its unit
+// may read reaches only that unit. Only repositories the settings do not
+// declare are read in detail, for their other hosts. The atlas's own log is one
+// more source ([SourceLog]): what people recorded folds beside what is
+// computed. A record source is the engine's own read as it stands, held by a
+// compile-time assertion, so it cannot drift from the engine's answer. A
+// connection test counts only against the server's current settings. An alarm
+// joins its tool server or model entry by its kind, never its sentence.
+//
 // The decision is ADR-0126.
 package gather
 

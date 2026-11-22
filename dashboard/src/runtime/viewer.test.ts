@@ -4,7 +4,7 @@
  * page itself already handles.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
-import { color, font, radius, size, spacing } from "@crewlethq/tokens";
+import { breakpoint, color, font, radius, size, spacing } from "@crewlethq/tokens";
 import closeGlyph from "@crewlethq/icons/glyphs/x.svg?raw";
 import previousGlyph from "@crewlethq/icons/glyphs/chevron-left.svg?raw";
 import nextGlyph from "@crewlethq/icons/glyphs/chevron-right.svg?raw";
@@ -272,6 +272,7 @@ test("the viewer is drawn with the design kit's own values", () => {
     spacing2: spacing[2],
     spacing3: spacing[3],
     spacing6: spacing[6],
+    breakpointPhone: breakpoint.phone,
   });
 });
 

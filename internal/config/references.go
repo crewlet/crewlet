@@ -21,13 +21,18 @@ const (
 	JobAuxiliary ProviderJob = "auxiliary"
 	// JobJudge is a seat's onboarding judge's chain.
 	JobJudge ProviderJob = "judge"
+	// JobTriage is a seat's busy-seat wake triage's chain (ADR-0168).
+	JobTriage ProviderJob = "triage"
 	// JobAssistant is `assistant.model`, the model Ask Crewlet runs on.
 	JobAssistant ProviderJob = "assistant"
+	// JobAdvisor is `advisor.model`, the model the Advisor explains its
+	// findings with.
+	JobAdvisor ProviderJob = "advisor"
 )
 
 // ProviderJobs is the closed set.
 var ProviderJobs = []ProviderJob{
-	JobExecutor, JobReview, JobSubagent, JobAuxiliary, JobJudge, JobAssistant,
+	JobExecutor, JobReview, JobSubagent, JobAuxiliary, JobJudge, JobTriage, JobAssistant, JobAdvisor,
 }
 
 // Valid reports whether j is one of [ProviderJobs].
@@ -94,13 +99,18 @@ func (c *Company) providerReferences() []ProviderReference {
 		add(seat, JobSubagent, at(llm, "subagent"), role.LLM.Subagent)
 		add(seat, JobAuxiliary, at(llm, "auxiliary"), role.LLM.Auxiliary)
 		add(seat, JobJudge, at(llm, "judge"), role.LLM.Judge)
+		add(seat, JobTriage, at(llm, "triage"), role.LLM.Triage)
 		add(seat, JobReview, at(path, "llm_review"), role.LLMReview)
 		add(seat, JobSubagent, at(path, "llm_subagent"), role.LLMSubagent)
 		add(seat, JobAuxiliary, at(path, "llm_auxiliary"), role.LLMAuxiliary)
 		add(seat, JobJudge, at(path, "llm_judge"), role.LLMJudge)
+		add(seat, JobTriage, at(path, "llm_triage"), role.LLMTriage)
 	}
 	if c.Assistant.Model != "" {
 		add("", JobAssistant, field("assistant.model"), []string{c.Assistant.Model})
+	}
+	if c.Advisor.Model != "" {
+		add("", JobAdvisor, field("advisor.model"), []string{c.Advisor.Model})
 	}
 	return out
 }

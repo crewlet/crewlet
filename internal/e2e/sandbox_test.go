@@ -125,6 +125,19 @@ func sandboxCompany(t *testing.T, model *scriptedModel, stateDir string) string 
 		model.entry("scripted"), model.coder("coder"))
 }
 
+// oneRunAtATime holds doc's coding seat to one run, for a case that reads
+// [engine.Engine.SeatHeldBySandbox] (every slot held) as "the seat's run holds
+// it": at the default of two one run never fills the seat, and the read could
+// not fail. A seat's runs beside each other are internal/engine's (ADR-0169).
+func oneRunAtATime(t *testing.T, doc string) string {
+	t.Helper()
+	const turns = "      max_turns: 7\n"
+	if !strings.Contains(doc, turns) {
+		t.Fatal("the coding company's seat names no max_turns to set its run cap beside")
+	}
+	return strings.Replace(doc, turns, turns+"      max_concurrent_runs: 1\n", 1)
+}
+
 // codingNode is a running node whose seat can run code.
 type codingNode struct {
 	*node
@@ -159,8 +172,9 @@ func (n *codingNode) invocation(t *testing.T) codingInvocation {
 	return out
 }
 
-// startCoding stands up a node with a local sandbox whose runs are in mode.
-func startCoding(t *testing.T, mode string) *codingNode {
+// startCoding stands up a node with a local sandbox whose runs are in mode, its
+// company document passed through edits in order.
+func startCoding(t *testing.T, mode string, edits ...func(*testing.T, string) string) *codingNode {
 	t.Helper()
 	stateDir := t.TempDir()
 	// Outside the box directory, so it survives the teardown that ends the
@@ -174,6 +188,9 @@ func startCoding(t *testing.T, mode string) *codingNode {
 
 	model := newScriptedModel(t)
 	doc := sandboxCompany(t, model, stateDir)
+	for _, edit := range edits {
+		doc = edit(t, doc)
+	}
 	n := bootCompany(t, doc, model, env)
 	return &codingNode{node: n, stateDir: stateDir, argvPath: argv}
 }
@@ -314,7 +331,7 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 	// row and the record are written by different processes' worth of code.
 	var launch string
 	waitFor(t, "the resumed phase's record to name its launch", func() bool {
-		rows, _, err := n.engine.Backends().Store.Events().Phases(t.Context(), "", 60, nil, time.Now())
+		rows, _, err := n.engine.Backends().Store.Events().Phases(t.Context(), "", 60, 0, nil, time.Now())
 		if err != nil {
 			t.Fatalf("phases: %v", err)
 		}
@@ -344,7 +361,7 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 	// beside the phase records of the round that launched it.
 	var record map[string]any
 	waitFor(t, "the launch's own record", func() bool {
-		rows, _, err := n.engine.Backends().Store.Events().Phases(t.Context(), "", 60, nil, time.Now())
+		rows, _, err := n.engine.Backends().Store.Events().Phases(t.Context(), "", 60, 0, nil, time.Now())
 		if err != nil {
 			t.Fatalf("phases: %v", err)
 		}
@@ -443,7 +460,9 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 // the parked run's calls are on its log with no id.
 func TestAnExecutorThatAsksAQuestionParksAndResumesOnTheAnswer(t *testing.T) {
 	t.Parallel()
-	n := startCoding(t, codingModeAsk)
+	// ONE RUN AT A TIME, so the run holding the seat fills it, and its park is
+	// seen to free it.
+	n := startCoding(t, codingModeAsk, oneRunAtATime)
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(n.engine.Node().Host().Held(), "swe")
 	})
@@ -628,7 +647,7 @@ func (n *codingNode) settledOutcome(t *testing.T, turnID string) string {
 	t.Helper()
 	var outcome string
 	waitFor(t, "the settled turn to state its outcome", func() bool {
-		evs, err := n.engine.Backends().Store.Events().Turn(t.Context(), turnID, time.Now())
+		evs, _, err := n.engine.Backends().Store.Events().Turn(t.Context(), turnID, 0, time.Now())
 		if err != nil {
 			t.Fatalf("the turn's events: %v", err)
 		}
@@ -1039,7 +1058,9 @@ func TestAnEngineRestartMidRunStillFinishesTheSameTurn(t *testing.T) {
 	streamDir := filepath.Join(dir, "stream")
 
 	model := newScriptedModel(t)
-	doc := sandboxCompany(t, model, stateDir)
+	// ONE RUN AT A TIME, so the recovered run alone fills the seat and its
+	// recount is read off the hold.
+	doc := oneRunAtATime(t, sandboxCompany(t, model, stateDir))
 
 	host := &sameHost{ring: fleetRing(t)}
 	first := bootCompanyIn(t, doc, model, dbPath, streamDir, env, host)
@@ -1107,7 +1128,7 @@ func TestAnEngineRestartMidRunStillFinishesTheSameTurn(t *testing.T) {
 	}
 	var collected string
 	waitFor(t, "the resumed phase's record to name the launch it collected", func() bool {
-		rows, _, err := second.engine.Backends().Store.Events().Phases(t.Context(), "", 60, nil, time.Now())
+		rows, _, err := second.engine.Backends().Store.Events().Phases(t.Context(), "", 60, 0, nil, time.Now())
 		if err != nil {
 			t.Fatalf("phases: %v", err)
 		}

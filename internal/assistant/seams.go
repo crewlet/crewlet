@@ -43,6 +43,9 @@ type Models interface {
 	// ReadsImages is whether the model's run takes images beside its
 	// prompt, false where no model resolves.
 	ReadsImages() bool
+	// Searches is whether the model's harness has a search-only run, which
+	// search_web is answered through.
+	Searches() bool
 }
 
 // Budget is the meter a turn charges its rounds through: the company's
@@ -69,6 +72,9 @@ type Transcripts interface {
 	Conversations(ctx context.Context, owner uuid.UUID, cursor string, limit int, q string) (wire.ConversationList, error)
 	Conversation(ctx context.Context, owner, id uuid.UUID) (assistantdomain.Conversation, error)
 	Transcript(ctx context.Context, owner, id uuid.UUID) (assistantdomain.Transcript, error)
+	// TurnTranscript is what one turn wrote, read without the rest of its
+	// conversation: a stream's snapshot is of one turn.
+	TurnTranscript(ctx context.Context, owner, turn uuid.UUID) (assistantdomain.TurnTranscript, error)
 	Turn(ctx context.Context, owner, id uuid.UUID) (assistantdomain.Turn, error)
 	Parked(ctx context.Context, owner, turn uuid.UUID) ([]byte, error)
 	Card(ctx context.Context, owner, id uuid.UUID) (assistantdomain.Card, error)

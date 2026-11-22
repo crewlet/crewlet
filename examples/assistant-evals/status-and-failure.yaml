@@ -40,18 +40,19 @@ answers:
           error_kind: server
           work_item: {key: FAIR-2}
 script:
-  - call: list_agents
-  - call: list_turns
-    args: {handle: QA Engineer, failed: true, limit: 1}
+  - call: read_api
+    args: {route: GET /agents}
+  - call: read_api
+    args: {route: GET /turns, query: {seat: qa, failed: "true", limit: "1"}}
   - say: >-
       The Software Engineer is working on FAIR-3, and the Product Manager and the
       QA Engineer are idle. The QA Engineer's last turn, on FAIR-2, failed because
       its harness never reached the seat's tools, so it could not act.
 expect:
-  calls: [list_agents, list_turns]
+  calls: [read_api, read_api]
   never: [open_in_app]
   proposals: 0
   state: completed
   says: [never reached the seat's tools, idle]
   never_says: [link above]
-  shows: ["never reached the seat's tools", Why it failed]
+  shows: ["never reached the seat's tools", Turns, Error kind]

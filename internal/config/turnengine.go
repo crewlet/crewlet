@@ -254,7 +254,7 @@ type ConversationSession struct {
 	// ([DefaultSessionBytesPerSeat]), which says why. The engine reads it
 	// off the revision the fleet runs, and every node applies the one
 	// number a capture carries.
-	MaxBytesPerSeat int64 `yaml:"max_bytes_per_seat,omitempty" json:"max_bytes_per_seat,omitempty" js:"min=34603008;max=68719476736" desc:"Object-store bytes one seat's captured executor sessions may hold; past it the oldest ended turns' sessions are released. It is also the allowance of the seat's saves of running sessions, which the object store keeps for about a day once a newer one replaces them, so a seat holds up to twice it (default 64 MiB, 33 MiB..64 GiB)."`
+	MaxBytesPerSeat int64 `yaml:"max_bytes_per_seat,omitempty" json:"max_bytes_per_seat,omitempty" js:"min=51380224;max=68719476736" desc:"Object-store bytes one seat's captured executor sessions may hold; past it the oldest ended turns' sessions are released. It is also the allowance of the seat's saves of running sessions, which the object store keeps for about a day once a newer one replaces them, so a seat holds up to twice it (default 64 MiB, 49 MiB..64 GiB)."`
 
 	// SaveIntervalSeconds is the shortest time between saves of a running
 	// executor's session: the node driving its box keeps what
@@ -275,8 +275,8 @@ type ConversationSession struct {
 const (
 	// DefaultSessionBytesPerSeat is what an unset max_bytes_per_seat takes:
 	// SIXTY-FOUR MEBIBYTES. A captured session compresses to one or two MiB for
-	// a day's work and is bounded at thirty-two (executorkeep.SessionMaxBytes),
-	// so 64 MiB holds a live turn's session at that bound beside about twenty
+	// a day's work and is bounded at forty-eight (executorkeep.SessionMaxBytes),
+	// so 64 MiB holds a live turn's session at that bound beside about ten
 	// ordinary ones, or thirty to forty ordinary sessions alone. (A live turn's
 	// capped session never needs the head it continued beside it: its own
 	// capture holds that transcript.) It is shared with every other object: on
@@ -289,11 +289,11 @@ const (
 
 	// SessionBytesPerSeatFloor is the least a seat may be given: ONE
 	// SESSION AT ITS BOUND, sealed (executorkeep.SealedMaxBytes, a little
-	// over 32 MiB), rounded up to a whole mebibyte, so a capture the
+	// over 48 MiB), rounded up to a whole mebibyte, so a capture the
 	// session bound admits is never one the budget refuses outright. A test
 	// in internal/executordomain holds the two together, since this package
 	// cannot import that one.
-	SessionBytesPerSeatFloor int64 = 33 << 20
+	SessionBytesPerSeatFloor int64 = 49 << 20
 
 	// SessionBytesPerSeatCeiling is a typo guard: a thousand times the
 	// default is past any bucket a seat could be given.

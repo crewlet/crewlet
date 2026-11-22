@@ -1,6 +1,20 @@
 // Package scenario holds synthetic timelines that reproduce the shape of a
 // measured operating pattern in a closed vocabulary ([CheckTree]), for the
 // seams they exercise to drive through their real writers. Only tests import it.
+//
+// A timeline records who files, comments, asks, answers, assigns and moves
+// which item, and which agent seats each step must wake. It reproduces the
+// shape of a pattern measured on a running company and nothing else: every
+// handle, key and word comes from the closed vocabulary [CheckTree] holds each
+// declared fixture directory to, so a measurement reaches this repository as a
+// shape, never as a company's data. [DocumentVocabulary] holds the advisor's
+// company document fixtures to a closed word list the same way.
+//
+// The package decides nothing and imports no engine package: the seam a
+// timeline exercises drives it through its own real writers, in that seam's
+// tests (internal/worklet's scenario_test.go runs the healthy-company control,
+// the hand-offs a routing change must keep waking, and holds each advisor
+// detector to firing on its own pattern's timeline and on no other).
 package scenario
 
 import (

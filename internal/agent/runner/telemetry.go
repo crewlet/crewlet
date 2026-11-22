@@ -30,7 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
-	"github.com/crewlet/crewlet/internal/textcut"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
@@ -226,8 +226,9 @@ type Spend struct {
 	Refusals []types.RefusalTally
 
 	// Review is the notes of the NEWEST review that sent the work back (a
-	// turn sent back twice was answered on the second), empty if none did.
-	// A task's turn card quotes it beside the send-back count.
+	// turn sent back twice was answered on the second), empty if none did,
+	// REDACTED as the phase's record holds them: a task's turn card quotes it
+	// beside the send-back count, on a record of its own.
 	Review string
 
 	// Phases are the phases that completed, in the order each first ran.
@@ -313,7 +314,7 @@ func (s *Spend) record(rec phaseRecord, calls RecordCalls) {
 		}
 		if rec.Decision == string(phase.SelfIterate) {
 			s.SentBack++
-			s.Review = rec.Notes
+			s.Review = redact.Secrets(rec.Notes)
 		}
 	}
 	if rec.Result.Text != "" {
@@ -444,9 +445,10 @@ func (e emitter) prompted(ctx context.Context, ph phase.Phase, iteration int,
 	if !e.on() {
 		return
 	}
-	// HELD TO A RECORD'S SHARE OF EACH PROMPT, part by part (keptPrompt); the
-	// prompt the model was sent is not changed.
-	system, user = keptPrompt(system), keptPrompt(user)
+	// REDACTED AND HELD TO A RECORD'S SHARE OF EACH PROMPT, part by part, as
+	// the record holds them (recordedPrompt); the prompt the model was sent is
+	// not changed.
+	system, user = recordedPrompt(system), recordedPrompt(user)
 	e.publish(ctx, events.New(types.AgentTurnProgress{
 		Agent:     e.turn.AgentID,
 		RoleName:  e.role,
@@ -701,8 +703,11 @@ func (e emitter) fallback(ctx context.Context, ph phase.Phase, iteration int, f 
 	}, e.traceFor(ctx)))
 }
 
-// progress publishes one in-flight round.
-func (e emitter) progress(ctx context.Context, ph phase.Phase, iteration int, res toolloop.Result, caps roundCaps) {
+// progress publishes one in-flight round, its words redacted (liveredact.go);
+// words is what the phase's earlier frames redacted of its calls and prose.
+func (e emitter) progress(ctx context.Context, ph phase.Phase, iteration int, words *liveWords,
+	res toolloop.Result, caps roundCaps,
+) {
 	if !e.on() {
 		return
 	}
@@ -713,11 +718,11 @@ func (e emitter) progress(ctx context.Context, ph phase.Phase, iteration int, re
 		Rounds:      phaseRounds(res.Rounds),
 		Invocations: phaseInvocations(res.Invocations),
 		Steers:      phaseSteers(res.Steers),
-		Narration:   roundNarration(res.Narration),
-		Calls:       liveExecutions(res.Executions),
+		Narration:   words.narration(res.Narration),
+		Calls:       words.executions(res.Executions),
 	})
 	calls := keptList(rounds.Calls, liveList, rounds.Dropped)
-	running, runningElided := keptRunning(runningCalls(res.Running))
+	running, runningElided := keptRunning(words.runningCalls(res.Running))
 	e.publish(ctx, events.New(types.AgentTurnProgress{
 		Agent:     e.turn.AgentID,
 		RoleName:  e.role,
@@ -732,7 +737,7 @@ func (e emitter) progress(ctx context.Context, ph phase.Phase, iteration int, re
 		// second it is the largest thing here, and past
 		// [queue.MaxPayloadBytes] the publish is refused and the live row
 		// silently stops for the rest of the phase.
-		Response:         tail(res.Text),
+		Response:         words.response(res.Text),
 		InputTokens:      res.InputTokens,
 		OutputTokens:     res.OutputTokens,
 		TotalTokens:      res.InputTokens + res.OutputTokens,
@@ -756,7 +761,7 @@ func (e emitter) progress(ctx context.Context, ph phase.Phase, iteration int, re
 		CallsElided:    calls.Elided,
 		ElidedCalls:    calls.ByTool,
 		RoundNarration: keptNarration(rounds.Narration, liveNarrationBytes),
-		PartialRound:   partialRound(res.Partial),
+		PartialRound:   words.partialRound(res.Partial),
 	}, e.traceFor(ctx)))
 }
 
@@ -873,7 +878,7 @@ func (e emitter) judged(ctx context.Context, host phase.Phase, iteration, hostRo
 		// `Notes` is the judge's reason: what makes a rescue readable, and on
 		// failure the only thing naming what went wrong.
 		Decision: verdict,
-		Notes:    keptText(d.Reason, notesBytes),
+		Notes:    recordedText(d.Reason, notesBytes),
 		// ITS OWN DURATION: a slow judge is a stall its host phase's duration
 		// absorbs unnamed, and a nested phase publishes no
 		// agent_phase_started to subtract from.
@@ -901,11 +906,11 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 	// as many rounds as its cap lets it.
 	rounds := keptRounds(recordRounds{
 		Rounds:    phaseRounds(res.RoundRecords),
-		Narration: roundNarration(res.Narration),
-		Calls:     toolExecutions(res.Executions),
+		Narration: recordedNarration(res.Narration),
+		Calls:     recordedExecutions(res.Executions),
 	})
 	calls := keptExecutions(rounds.Calls, rounds.Dropped)
-	system, user := keptPrompt(res.SystemPrompt), keptPrompt(res.UserPrompt)
+	system, user := recordedPrompt(res.SystemPrompt), recordedPrompt(res.UserPrompt)
 	available, availableElided := keptNames(res.ToolsAvailable)
 	ev := types.AgentPhaseCompleted{
 		Agent:    e.turn.AgentID,
@@ -938,7 +943,7 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 		UserPrompt:     user.Text,
 		SystemSections: promptSections(ctx, phase.Subagent, system),
 		UserSections:   promptSections(ctx, phase.Subagent, user),
-		Response:       keptText(res.Text, responseBytes),
+		Response:       recordedText(res.Text, responseBytes),
 		ToolExecutions: calls.Rows,
 		CallsElided:    calls.Elided,
 		ElidedCalls:    calls.ByTool,
@@ -968,16 +973,17 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 		ToolsAvailableElided: availableElided,
 		// The grant's refusals, Notes' documented content for this phase:
 		// the first thing to check when a child's answer is thin.
-		Notes: keptText(rejectedNote(res.Rejected), notesBytes),
+		Notes: recordedText(rejectedNote(res.Rejected), notesBytes),
 		// The task's status (ok / no_result / timed_out / skipped) is its
 		// structured verdict, so it rides Decision like the executor's outcome.
 		Decision:        string(res.Status),
 		ConversationKey: e.turn.ConversationKey,
 		Failed:          res.Failed(),
 		// A child's failure text, sized by nothing the parent controls:
-		// clipped so the event stays publishable, since one over the queue's
-		// ceiling is refused and the whole record lost (events.MaxDiagnosticBytes).
-		Error:     events.ClipDiagnostic(res.Error),
+		// redacted, and clipped so the event stays publishable, since one
+		// over the queue's ceiling is refused and the whole record lost
+		// (events.MaxDiagnosticBytes).
+		Error:     events.Diagnostic(res.Error),
 		ErrorKind: string(res.Status),
 	}
 	e.publish(ctx, events.New(ev, e.traceFor(ctx)))
@@ -1001,7 +1007,7 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 	if !e.on() {
 		return
 	}
-	system, user := keptPrompt(rec.System), keptPrompt(rec.User)
+	system, user := recordedPrompt(rec.System), recordedPrompt(rec.User)
 	available, availableElided := keptNames(rec.Available)
 	catalogue, catalogueElided := keptNames(rec.Catalogue)
 	ev := types.AgentPhaseCompleted{
@@ -1018,7 +1024,7 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		UserPrompt:       user.Text,
 		SystemSections:   promptSections(ctx, rec.Phase, system),
 		UserSections:     promptSections(ctx, rec.Phase, user),
-		Response:         keptText(rec.Result.Text, responseBytes),
+		Response:         recordedText(rec.Result.Text, responseBytes),
 		ToolExecutions:   k.calls.Rows,
 		CallsElided:      k.calls.Elided,
 		ElidedCalls:      k.calls.ByTool,
@@ -1046,7 +1052,7 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		EmptyAnswerRounds:    rec.Result.EmptyAnswers,
 		Decision:             rec.Decision,
 		RescueFired:          rec.Rescued,
-		Notes:                keptText(rec.Notes, notesBytes),
+		Notes:                recordedText(rec.Notes, notesBytes),
 		ToolsAvailable:       available,
 		ToolsAvailableElided: availableElided,
 		ToolCatalogue:        catalogue,
@@ -1068,11 +1074,11 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		ev.LaunchID = rec.Run.LaunchID
 	}
 	if rec.Err != nil {
-		// Clipped as a DELIVERY GUARANTEE, not a content budget: an event over
-		// the queue's ceiling is refused and the error ABSENT; a tighter cut
-		// would cost the errors worth reading (a wrapped chain's cause is at
-		// its end). See events.MaxDiagnosticBytes.
-		ev.Error = events.ClipDiagnostic(rec.Err.Error())
+		// Redacted, and clipped as a DELIVERY GUARANTEE, not a content
+		// budget: an event over the queue's ceiling is refused and the error
+		// ABSENT; a tighter cut would cost the errors worth reading (a
+		// wrapped chain's cause is at its end). See events.MaxDiagnosticBytes.
+		ev.Error = events.Diagnostic(rec.Err.Error())
 		ev.ErrorKind = ErrorKind(rec.Err)
 	}
 	e.publish(ctx, events.New(ev, e.traceFor(ctx)))
@@ -1096,8 +1102,8 @@ func (rec phaseRecord) kept() keptPhase {
 		Rounds:      phaseRounds(rec.Result.Rounds),
 		Invocations: phaseInvocations(rec.Result.Invocations),
 		Steers:      append(phaseSteers(rec.Result.Steers), rec.RunSteers...),
-		Narration:   roundNarration(rec.Result.Narration),
-		Calls:       toolExecutions(rec.Result.Executions),
+		Narration:   recordedNarration(rec.Result.Narration),
+		Calls:       recordedExecutions(rec.Result.Executions),
 	})
 	return keptPhase{rounds: rounds,
 		calls: keptExecutions(rounds.Calls, slices.Concat(runTally(rec.RunElided), rounds.Dropped))}
@@ -1311,22 +1317,6 @@ func (e emitter) steerTurn() steer.Turn {
 		TurnID: e.turn.RunID, WorkKey: e.turn.WorkKey}
 }
 
-// runningCalls renders the calls in flight, or nil when none is — so the key
-// is absent on every frame but those published while a call runs.
-func runningCalls(calls []toolloop.RunningCall) []types.RunningCall {
-	if len(calls) == 0 {
-		return nil
-	}
-	out := make([]types.RunningCall, len(calls))
-	for i, c := range calls {
-		out[i] = types.RunningCall{
-			ID: c.ID, Round: c.Round, Name: c.Name, Arguments: encodeArgs(c.Args),
-			StartedAt: c.StartedAt.UTC(),
-		}
-	}
-	return out
-}
-
 // phaseInvocations renders a phase's harness runs in their wire shape.
 func phaseInvocations(runs []toolloop.Invocation) []types.PhaseInvocation {
 	if len(runs) == 0 {
@@ -1405,49 +1395,6 @@ func roundNarration(narr []toolloop.Narration) []types.RoundNarration {
 	return out
 }
 
-// partialRound renders the round currently being written, or nil rather than
-// an empty object, so `omitempty` drops the key: absent reads as "no round is
-// open", empty as "open and silent".
-func partialRound(p *toolloop.Partial) map[string]any {
-	if p == nil {
-		return nil
-	}
-	out := map[string]any{
-		"round":   p.Round,
-		"content": tail(p.Content),
-	}
-	if len(p.Abandoned) > 0 {
-		// THE NEWEST ATTEMPTS, EACH ITS END within its even part of their
-		// share (liveTail): a reader saw each one arrive and die, and the
-		// round's own text replaces them all once it completes.
-		attempts := slices.Clone(p.Abandoned[max(len(p.Abandoned)-liveAbandonedAttempts, 0):])
-		each := liveAbandonedBytes/len(attempts) - narrationRowRoom
-		for i := range attempts {
-			attempts[i].Content = liveTail(attempts[i].Content, each)
-		}
-		out["abandoned"] = roundNarration(attempts)
-	}
-	return out
-}
-
-// liveExecutions is the round's tool calls with their OUTPUT held to its tail,
-// on the live event only: it is republished five times a second, a result is
-// often the frame's largest thing, and the record keeps each result's
-// opening. Arguments, names and the list are held where the frame keeps its
-// share ([liveList]), never as JSON cut mid-way.
-func liveExecutions(execs []toolloop.Execution) []types.ToolExecution {
-	out := toolExecutions(execs)
-	for _, row := range out {
-		if result, ok := row["result"].(string); ok {
-			row["result"] = tail(result)
-		}
-		if failure, ok := row["error"].(string); ok {
-			row["error"] = tail(failure)
-		}
-	}
-	return out
-}
-
 // partialTail bounds, in BYTES (the wire's unit), how much of a round in
 // flight goes on the wire. The whole accumulation is republished five times a
 // second, not deltas, because the socket hub drops the OLDEST frame and spliced
@@ -1456,12 +1403,6 @@ func liveExecutions(execs []toolloop.Execution) []types.ToolExecution {
 // text moments later. 4000 bytes is about two screens of English, so nothing
 // a reader is mid-way through is cut.
 const partialTail = 4000
-
-// tail is the last partialTail bytes of text, marked when it elides — the
-// engine's one rule for keeping a string's end ([textcut.Tail]): on a
-// character, so the cut never shows a replacement glyph, with the marker not
-// counted against the bound.
-func tail(text string) string { return textcut.Tail(text, partialTail) }
 
 // encodeArgs renders a call's arguments as JSON text ([tools.RecordArgs], one
 // rule with the bridged-run log), `{}` when empty or unmarshalable: a call

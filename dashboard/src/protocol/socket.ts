@@ -308,9 +308,13 @@ interface Inflight {
   id: number;
   what: string;
   params: Record<string, unknown>;
+  /** How long the query waits for its answer once sent. */
+  waitMs: number;
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
   timer: ReturnType<typeof setTimeout> | 0;
+  /** The socket the frame was last sent on, which a cancel is sent on. */
+  sentOn: WebSocket | null;
 }
 
 /** What the app hands the socket that the protocol alone cannot know. */
@@ -529,39 +533,80 @@ export class LiveSocket {
    *
    * Rejects with a [QueryError] carrying the server's machine-readable code
    * (`not_found`, `unauthorized`, `unavailable`, …), `timeout` if a sent
-   * query goes unanswered, or `closed` if the client shuts down.
+   * query goes unanswered for `waitMs`, or `closed` if the client shuts down;
+   * and with `signal`'s reason once it aborts, the question then given up on
+   * here and at the engine (`query_cancel`), which stops reading for it.
    */
-  query<K extends QueryName>(what: K, params?: Record<string, unknown>): Promise<QueryMap[K]> {
+  query<K extends QueryName>(
+    what: K,
+    params?: Record<string, unknown>,
+    waitMs: number = QUERY_TIMEOUT_MS,
+    signal?: AbortSignal,
+  ): Promise<QueryMap[K]> {
     const id = this.nextQueryId++;
     return new Promise<QueryMap[K]>((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(signal.reason);
+        return;
+      }
       const entry: Inflight = {
         id,
         what,
         params: params ?? {},
+        waitMs,
         resolve: resolve as (value: unknown) => void,
         reject,
         timer: 0,
+        sentOn: null,
       };
       this.inflight.set(id, entry);
+      signal?.addEventListener("abort", () => this.cancel(entry, signal.reason), { once: true });
       this.sendQuery(entry);
     });
+  }
+
+  /**
+   * GIVE UP ON A QUESTION NOBODY WAITS FOR ANY MORE, here and at the engine: a
+   * screen left behind a transcript page's read held one of the socket's four
+   * slots and one of the node's two transcript reads for minutes, for nobody.
+   * An answer that comes anyway finds nothing in flight and is dropped.
+   */
+  private cancel(entry: Inflight, reason: unknown): void {
+    if (this.inflight.get(entry.id) !== entry) return; // answered, timed out or closed already
+    this.inflight.delete(entry.id);
+    clearTimeout(entry.timer);
+    entry.reject(reason instanceof Error ? reason : new Error(String(reason)));
+    if (!this.connected || !this.sock || entry.sentOn !== this.sock) return; // its socket ended it
+    try {
+      this.sock.send(JSON.stringify({ kind: "query_cancel", id: entry.id }));
+    } catch {
+      // The close handler owns recovery, and a closed socket ends its questions.
+    }
   }
 
   private sendQuery(entry: Inflight): void {
     if (!this.connected || !this.sock) return; // `onopen` flushes it
     // NO CREDENTIAL IN THE FRAME. The engine asks every question as the
-    // principal the handshake resolved.
-    const frame = { kind: "query", id: entry.id, what: entry.what, params: entry.params };
+    // principal the handshake resolved. THE WAIT IS IN IT, so the engine stops
+    // a question this tab has given up on, and frees what its read holds.
+    const frame = {
+      kind: "query",
+      id: entry.id,
+      what: entry.what,
+      params: entry.params,
+      wait_ms: entry.waitMs,
+    };
     try {
       this.sock.send(JSON.stringify(frame));
     } catch {
       return; // the close handler will re-send it
     }
+    entry.sentOn = this.sock;
     clearTimeout(entry.timer);
     entry.timer = setTimeout(() => {
       this.inflight.delete(entry.id);
       entry.reject(new QueryError("timeout"));
-    }, QUERY_TIMEOUT_MS);
+    }, entry.waitMs);
   }
 
   private flushQueries(): void {
@@ -1320,7 +1365,7 @@ export class LiveSocket {
   }
 
   /**
-   * Fetch, whole, each seat's live call this tab holds behind what a push
+   * Fetch, whole, the live calls of each seat whose call this tab holds behind what a push
    * described — asked by the seat's AGENT ID, the key the push named it by — the push that moved one of its heavy fields was dropped by the
    * server's queue (`mergeLiveCall`).
    *

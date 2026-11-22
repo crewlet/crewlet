@@ -181,16 +181,21 @@ func frames(t *testing.T, body []byte) []wire.Frame {
 	return out
 }
 
-// readTurn is a turn that reads ENG-7 through the catalogue's own get_task.
+// readTurn is a turn that reads ENG-7 through read_api.
 func readTurn(t *testing.T) evals.RigOptions {
-	return evals.RigOptions{Tools: []catalog.Tool{assistanttest.Tool(t, "get_task")},
+	return evals.RigOptions{Tools: []catalog.Tool{assistanttest.ReadAPI(t, "GET /worklet/{id}")},
 		Handler: assistanttest.Routes(map[string]exec.Response{
 			"GET /worklet/ENG-7": assistanttest.Task("ENG-7", "Rotate keys",
 				"Rotate the signing keys before Friday."),
 		}),
 		Rounds: []evals.Round{
-			evals.Call("c1", "get_task", map[string]any{"item": "ENG-7"}),
+			evals.Call("c1", catalog.ReadAPITool, taskRead("ENG-7")),
 			evals.Say("ENG-7 is to rotate the signing keys before Friday.")}}
+}
+
+// taskRead are a read_api call's arguments for one task.
+func taskRead(key string) map[string]any {
+	return map[string]any{"route": "GET /worklet/{id}", "path": map[string]any{"id": key}}
 }
 
 // THE READ TURN FIXTURE IS THE ROUTES' OWN: a question asked over the route
@@ -367,9 +372,9 @@ func TestTheViewerSaysWhyTheAssistantIsUnavailable(t *testing.T) {
 			if got.CanAssign {
 				t.Errorf("viewer = %+v, which lets a person without the document's write assign a model", got)
 			}
-			// NO DEEP WORK HERE, so nothing reads a question's images.
+			// THE RIG'S MODEL TAKES NO IMAGES, so nothing reads a question's images.
 			if got.ReadsImages {
-				t.Errorf("viewer = %+v, which says images are read without deep work", got)
+				t.Errorf("viewer = %+v, which says images are read by a model that takes none", got)
 			}
 		})
 	}
@@ -462,7 +467,7 @@ func TestTheWriteTurnFixtureIsTheRoutesOwn(t *testing.T) {
 	applied := p.Card
 	card := *applied.Proposal
 	card.State = wire.ProposalApplied
-	card.Receipt = &wire.Receipt{Summary: "Created ENG-8.",
+	card.Receipt = &wire.Receipt{Summary: wire.Plain("Created ENG-8."),
 		Position: "CREWLET_TRACKER_LOG@1:42"}
 	applied.Proposal = &card
 	resumed, err := s.rig.Svc.Resume(iam.WithPrincipal(context.Background(), s.rig.Person),

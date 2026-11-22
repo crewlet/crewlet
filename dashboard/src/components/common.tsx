@@ -60,6 +60,7 @@ import {
   type SeatKind,
 } from "~/lib/seats.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
+import { callOf } from "~/lib/seatturn.ts";
 import { InboxWaitingTags } from "~/components/InboxWaitingTags.tsx";
 import { EngineLine } from "~/components/InlineToken.tsx";
 import type { AgentRow, FeedRow, LogRefusal, QueryRefusal } from "~/protocol/index.ts";
@@ -175,7 +176,7 @@ export function SeatCard({
   // THE STATUS, OR NONE: a person is not run by the engine, and an idle seat
   // draws none, for the reason `statusOf` gives.
   const status = seat.kind === "human" ? undefined : statusOf(activityOf(agent));
-  const call = agent?.live_call;
+  const call = callOf(agent);
   // Decoded ONCE, by the helper the attention queue also reads: the number on
   // this card and the sentence in that row are the same reading of one field.
   const round = call ? roundLabel(call) : null;
@@ -273,20 +274,23 @@ export function EventRow({ event, onOpen }: { event: FeedRow; onOpen?: () => voi
   const rest = opens ? what.slice(actor.length) : ` ${what}`;
   // THE HOVER TEXT IS THE DRAWN LINE, built from the same two pieces.
   const said = `${actor}${rest}`;
+  // THE LINK SHOWS THE TIME, so its name starts with it (WCAG 2.5.3): a
+  // reader who says what they see reaches the row, and hears what happened.
+  const at = fmtTime(event.timestamp);
   return (
     <div className={cx("feed-row", event.failed && "failed")}>
       <a
         className="feed-row__open"
         href={href(["live", "events", event.id])}
         onClick={onOpen}
-        aria-label={said}
+        aria-label={`${at} ${said}`}
       >
         <time
           className="feed-time"
           dateTime={event.timestamp}
           title={`${fmtDateTime(event.timestamp)} · ${relTime(event.timestamp, now)}`}
         >
-          {fmtTime(event.timestamp)}
+          {at}
         </time>
       </a>
       <span className="feed-what truncate" title={said}>

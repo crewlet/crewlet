@@ -551,7 +551,7 @@ func boxHas(t *testing.T, box sandbox.Sandbox, path string) bool {
 }
 
 // A CONTINUED CLAUDE CODE SESSION RUNS UNDER THE ENGINE'S WINDOW: it compacts
-// at sandbox.ClaudeCodeWindow less the harness's headroom whatever the seat
+// at the Claude Code runner's PinnedWindow less the harness's headroom whatever the seat
 // set (its own window, DISABLE_AUTO_COMPACT, DISABLE_COMPACT,
 // CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE), so no
 // request carries more or compacts where the engine does not reckon. Its
@@ -576,7 +576,7 @@ func TestAContinuedClaudeSessionRunsUnderTheEnginesWindow(t *testing.T) {
 		t.Fatalf("the run did not continue its session:\n%s", boxFile(t, box, paths(box).Err()))
 	}
 	env := strings.Split(boxFile(t, box, box.Home()+"/env"), "\n")
-	if want := "CLAUDE_CODE_AUTO_COMPACT_WINDOW=" + strconv.Itoa(sandbox.ClaudeCodeWindow(model).Tokens); !slices.Contains(env, want) {
+	if want := "CLAUDE_CODE_AUTO_COMPACT_WINDOW=" + strconv.Itoa(executor.NewClaudeCode().PinnedWindow(model)); !slices.Contains(env, want) {
 		t.Errorf("the harness's environment lacks %s, the seat's own value replaced", want)
 	}
 	for _, off := range []string{"DISABLE_AUTO_COMPACT=", "DISABLE_COMPACT=", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=",
@@ -593,7 +593,7 @@ func TestAContinuedClaudeSessionRunsUnderTheEnginesWindow(t *testing.T) {
 		t.Fatalf("the settings the harness was handed, %q, do not read: %v", named, err)
 	}
 	if want := map[string]string{
-		"CLAUDE_CODE_AUTO_COMPACT_WINDOW":     strconv.Itoa(sandbox.ClaudeCodeWindow(model).Tokens),
+		"CLAUDE_CODE_AUTO_COMPACT_WINDOW":     strconv.Itoa(executor.NewClaudeCode().PinnedWindow(model)),
 		"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":     "",
 		"CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE": "",
 		"CLAUDE_CODE_RESUME_INTERRUPTED_TURN": "",
@@ -780,7 +780,7 @@ func openCodeTaken(t *testing.T, messages string) int64 {
 	if err := os.WriteFile(filepath.Join(dir, "export-messages"), []byte(messages), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Pack: true, MaxBytes: takeBound})
+	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), Pack: true, MaxBytes: takeBound})
 	if err != nil || taken.Body == nil || taken.Context == nil {
 		t.Fatalf("TakeSession = %+v, %v", taken, err)
 	}
@@ -812,7 +812,7 @@ func TestTheContextASessionCarriesIsReadOffItsArchive(t *testing.T) {
 		if _, res := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"}); res.Captured == nil {
 			t.Fatalf("the run's session was not captured:\n%s", boxFile(t, b, paths(b).Err()))
 		}
-		taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{MaxBytes: takeBound})
+		taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), MaxBytes: takeBound})
 		if err != nil || taken.Body == nil || taken.Context == nil {
 			t.Fatalf("TakeSession = %+v, %v", taken, err)
 		}

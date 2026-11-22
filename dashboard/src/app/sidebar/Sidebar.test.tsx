@@ -166,3 +166,45 @@ describe("the row the sidebar marks", () => {
     expect(await current()).toEqual(["Budgets"]);
   });
 });
+
+// THE ADVISOR'S ROW CARRIES WHAT BLOCKS OR COSTS THE COMPANY, read off one row
+// of the engine's list (its counts ride every page), and asks nothing of a
+// reader for whom the row is locked. Mutation: drop the advisor figure, or ask
+// it of everybody, and a case goes red.
+describe("the Advisor's row", () => {
+  const advisorRow = async () => {
+    const nav = await screen.findByRole("navigation", { name: "Navigation" });
+    return within(nav).findByRole("link", { name: /^Advisor/ });
+  };
+
+  test("counts the open findings that block or cost the company, for an administrator", async () => {
+    const asked: Record<string, unknown>[] = [];
+    await mount((what, params) => {
+      if (what === "viewer") return viewer(["admin"]);
+      if (what === "advisor_findings") {
+        asked.push(params);
+        return {
+          findings: [],
+          next_cursor: null,
+          counts: { blocks: 1, costs: 2, note: 9 },
+          last_run: null,
+        };
+      }
+      return undefined;
+    });
+    const row = await advisorRow();
+    await within(row).findByText("3");
+    expect(row.textContent).not.toContain("12");
+    expect(asked[0]).toEqual({ state: "open", limit: 1 });
+  });
+
+  test("asks nothing of a reader the row is locked to", async () => {
+    const asked: string[] = [];
+    await mount((what) => {
+      asked.push(what);
+      return what === "viewer" ? viewer([]) : undefined;
+    });
+    await advisorRow();
+    expect(asked).not.toContain("advisor_findings");
+  });
+});

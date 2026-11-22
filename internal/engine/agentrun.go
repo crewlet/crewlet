@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -269,6 +268,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 	// starting a session of its own on its fresh brief
 	// ([agentLauncher.continuedFloor]).
 	req, floor := l.continuedFloor(ctx, req, agent, inBox)
+	floor.beside = e.besideFloor(company, handle, l.turn.RunID)
 	if err = executorHeadroom(ctx, e.remainingFor(company, handle), floor); err != nil {
 		return runner.Launched{}, err
 	}
@@ -375,6 +375,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		PauseTTL:        pauseTTL(settings),
 		MaxTurns:        maxTurnsFor(settings),
 		Env:             run.env,
+		SignInEnv:       run.signInNames,
 		CredentialFiles: run.files,
 	})
 	// THE PICKED MEMBER'S LOGIN, the one the box will actually run under:
@@ -396,7 +397,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 	// AND THE RUN'S NOTE INBOX, which its session serves to its harness between
 	// steps, bound to the job with the ledger once the job has a name, and
 	// before the bridge files the session ([Engine.openBridge]).
-	inbox := e.runSteers.inbox(identityOfRef(ref), req.Round)
+	inbox := e.runSteers.inbox(identityOfRef(ref), req.Round, agent.Harness())
 	if inbox != nil {
 		session.Steer = inbox
 	}
@@ -463,6 +464,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		Skills:      req.Skills.Box(),
 		Model:       run.model,
 		Effort:      run.effort,
+		WebDenied:   run.webDenied,
 		ProviderKey: member.Key,
 		// THE SIGN-IN THE JOB'S HARNESS IS HANDED, on the job's record: what
 		// its collection compares the entry's against ([Engine.signInReplaced]).
@@ -474,9 +476,10 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		// holds `ask_and_wait` and nothing tells it when to park on it.
 		Ask: askBrief(company.Org, l.seat),
 		// THE RUN AS A PERSON READS IT ([turnctx.Turn.Title]): what the
-		// turn was asked, in its trigger's own words. Never the brief's
-		// task, whose fence lines and escapes are a model's, and which a
-		// resume reads off the park ([resumeTask]) and never off the row.
+		// turn was asked, in its trigger's own words, redacted. Never the
+		// brief's task, whose fence lines and escapes are a model's, and
+		// which a resume reads off the park ([resumeTask]) and never off
+		// the row.
 		Task:  l.turn.Title,
 		Label: l.turn.Title,
 		// A RUN CARRIED ON WITH A PERSON'S ANSWER, continued in its own
@@ -674,14 +677,15 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 		return stillShort(f)
 	}
 	var keptWhy, inPlaceWhy string
-	// THE MODEL THE NEXT REQUEST GOES TO, whose rate the harness's estimate of
-	// a continued session's next request is read at ([continuedContext]).
-	var model string
+	// THE RATE THE NEXT REQUEST'S MODEL IS COUNTED AT, which the harness's
+	// estimate of a continued session's next request is read at
+	// ([continuedContext]).
+	var older bool
 	if member != nil {
-		model = member.ModelArgument()
+		older = memberWindow(member, false).OlderText
 	}
 	if s := req.Session; s != nil {
-		kept := keptFloor(static, s, model)
+		kept := keptFloor(static, s, older)
 		keptWhy = carried(kept)
 		// THE BRIEFS TOLD BY A READING, AND THE UNHELD ONES, EACH DROPPED
 		// ALONE where theirs beside the session's own is a floor that cannot
@@ -691,11 +695,11 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 		if keptWhy != "" && (s.Exact != nil || s.Unheld != nil) {
 			own := *s
 			own.Exact, own.Unheld = nil, nil
-			if whyOwn := carried(keptFloor(static, &own, model)); whyOwn != "" {
+			if whyOwn := carried(keptFloor(static, &own, older)); whyOwn != "" {
 				keptWhy = whyOwn
 			} else {
-				without := l.droppedAlone(ctx, s, own, static, model, carried)
-				req.Session, kept, keptWhy = &without, keptFloor(static, &without, model), ""
+				without := l.droppedAlone(ctx, s, own, static, older, carried)
+				req.Session, kept, keptWhy = &without, keptFloor(static, &without, older), ""
 			}
 		}
 		if keptWhy == "" {
@@ -706,7 +710,7 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 		// THE LONGER OF ITS TWO BRIEFS, never the summarized one dropped
 		// alone: it is what the launch hands where the box's point does not
 		// prove the held one whole ([runner.Continuation.Summarized]).
-		inPlace := static.continuing(continuedContext(c.NextRequest, c.ContextTokens, model),
+		inPlace := static.continuing(continuedContext(c.NextRequest, c.ContextTokens, older),
 			max(harness.EstimateTokens(c.Brief), harness.EstimateTokens(c.Summarized)))
 		if inPlaceWhy = carried(inPlace); inPlaceWhy == "" {
 			floor = floor.atLeast(inPlace)
@@ -769,14 +773,14 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 // by a reading, logged, and the unheld briefs, marked dropped, so the launch
 // continues the session only in a box whose release the resume was read in.
 func (l *agentLauncher) droppedAlone(ctx context.Context, s *runner.SessionContinuation,
-	own runner.SessionContinuation, static launchFloor, model string,
+	own runner.SessionContinuation, static launchFloor, older bool,
 	carried func(launchFloor) string) runner.SessionContinuation {
 
 	without := *s
 	if s.Exact != nil {
 		with := own
 		with.Exact = s.Exact
-		if why := carried(keptFloor(static, &with, model)); why != "" {
+		if why := carried(keptFloor(static, &with, older)); why != "" {
 			log.InfoContext(ctx, "executor_session_holdings_unused", "seat", l.seat.Handle(),
 				"turn_id", l.turn.RunID, "detail", why, "outcome", floorUnusedOutcome)
 			without.Exact = nil
@@ -785,7 +789,7 @@ func (l *agentLauncher) droppedAlone(ctx context.Context, s *runner.SessionConti
 	if s.Unheld != nil {
 		with := own
 		with.Unheld = s.Unheld
-		if carried(keptFloor(static, &with, model)) != "" {
+		if carried(keptFloor(static, &with, older)) != "" {
 			without.Unheld, without.UnheldDropped = nil, true
 		}
 	}
@@ -827,9 +831,9 @@ func (l *agentLauncher) refusedIn() []sandbox.BudgetWindow {
 // neither. And the two told as a session that may be a summary, which the
 // launch hands where its box's point does not prove the others whole
 // ([runner.SessionContinuation.Summarized]), never dropped alone. The kept
-// capture's context is its harness's estimate of its next request at model's
-// rate where the capture holds one ([continuedContext]).
-func keptFloor(static launchFloor, s *runner.SessionContinuation, model string) launchFloor {
+// capture's context is its harness's estimate of its next request at the rate
+// older says where the capture holds one ([continuedContext]).
+func keptFloor(static launchFloor, s *runner.SessionContinuation, older bool) launchFloor {
 	switch {
 	case s.Basis.Continues():
 		// THE KEPT CAPTURE'S OWN CONTEXT, as it measured it, never its job's
@@ -845,7 +849,7 @@ func keptFloor(static launchFloor, s *runner.SessionContinuation, model string) 
 		if u := s.Unheld; u != nil {
 			brief = max(brief, harness.EstimateTokens(u.Brief), harness.EstimateTokens(u.Replaced))
 		}
-		return static.continuing(continuedContext(s.Basis.NextRequest, s.Basis.ContextTokens, model), brief)
+		return static.continuing(continuedContext(s.Basis.NextRequest, s.Basis.ContextTokens, older), brief)
 	case s.Basis.ContinuesBase():
 		// THE BASE'S OWN CONTEXT, never the job before's: that one sizes the
 		// in-place floor, and a base is continued only in a box of its own,
@@ -857,8 +861,8 @@ func keptFloor(static launchFloor, s *runner.SessionContinuation, model string) 
 
 // continuedContext is the context a continued session sends again before a
 // word of its brief, which its launch's floor is made of: next, its harness's
-// own estimate of its next request, at the rate of model, the model the
-// launch's member hands its harness ([sandbox.NextRequest.At]), where it holds
+// own estimate of its next request, at the rate its harness counts the model the
+// launch's member hands it at ([sandbox.NextRequest.At]), where it holds
 // a figure; else last, its last request's input, which under-counts the next
 // request by its reply and all after it, the figure of every record holding no
 // estimate (an older build's, a capture settled off the executor log, a thread
@@ -867,92 +871,75 @@ func keptFloor(static launchFloor, s *runner.SessionContinuation, model string) 
 // conversation's and the estimate the nearer, though short of the request by
 // its system prompt and tools until a reply anchors it (the residual
 // internal/sandbox/executor's package doc states).
-func continuedContext(next sandbox.NextRequest, last int64, model string) int64 {
-	if n := next.At(model); n > 0 {
+func continuedContext(next sandbox.NextRequest, last int64, older bool) int64 {
+	if n := next.At(older); n > 0 {
 		return n
 	}
 	return last
 }
 
 // uncarried is why no launch on member can carry f, "" where one can: one
-// request of a Claude Code member's model, under the window Claude Code holds it
-// to on the member's platform ([floorWindow], [launchFloor.carriedBy]), and
-// room, the most room a window of the seat's budget can leave the launch as it
-// turns over ([launchFloor.fits]), none to judge where nothing is capped.
+// request of the member's model, under the window its harness holds it to on
+// the member's platform where it compacts by its window ([floorWindow],
+// [launchFloor.carriedBy]), and room, the most room a window of the seat's
+// budget can leave the launch as it turns over ([launchFloor.fits]), none to
+// judge where nothing is capped.
 func uncarried(member *harness.Provider, room windowRoom, f launchFloor) string {
-	if member != nil && member.Harness() == executor.ClaudeCodeName {
-		if why := f.carriedBy(floorWindow(member)); why != "" {
-			return why
+	if member != nil {
+		if w, ok := floorWindow(member); ok {
+			if why := f.carriedBy(w); why != "" {
+				return why
+			}
 		}
 	}
 	return f.fits(room)
 }
 
-// floorWindow is the window one request of a Claude Code member's model can
-// carry: the pin, held to the least window Claude Code holds the model to on the
-// member's own platform where that is less ([sandbox.ExecutorWindow.Standard],
-// [claudePlatform]). So a session kept under a larger window and continued on a
-// member Claude Code holds to 200,000 tokens (claude-opus-4-6 and
-// claude-sonnet-4-6 by default, an alias that names an older model on the
-// member's platform, the account's default model) is judged under 200,000, which
-// one request of that model can carry, and not under the 1,000,000 its pin
-// names. AN ENTRY OPTS IN WITH `[1m]` where its account is served the long window
-// of one of those models, and is then judged under it.
-func floorWindow(member *harness.Provider) sandbox.ExecutorWindow {
-	w := sandbox.ClaudeCodeWindowOn(member.ModelArgument(), claudePlatform(member))
+// floorWindow is the window one request of member's model can carry, false
+// where its harness compacts by no window: the pin, held to the least window
+// the harness holds the model to on the member's own platform, read exactly
+// off its entry, where that is less ([sandbox.ExecutorWindow.Standard]). So a
+// session kept under a larger window and continued on a member held to
+// 200,000 tokens is judged under 200,000, which one request of that model can
+// carry, and not under the 1,000,000 its pin names.
+func floorWindow(member *harness.Provider) (sandbox.ExecutorWindow, bool) {
+	w, ok := executor.Window(member.Harness(), windowAsk(member, true))
 	if w.Standard > 0 && w.Standard < w.Tokens {
 		w.Tokens = w.Standard
 	}
+	return w, ok
+}
+
+// memberWindow is the window member's harness holds a run of it to, zero where
+// it compacts by no window; exact reads the member's platform off its env
+// ([executor.WindowAsk.Exact]).
+func memberWindow(member *harness.Provider, exact bool) sandbox.ExecutorWindow {
+	w, _ := executor.Window(member.Harness(), windowAsk(member, exact))
 	return w
 }
 
-// claudePlatform is the platform a Claude Code member reaches its model by,
-// read exactly off its entry, for the launch floor: Anthropic's API for a
-// login, key or host-environment entry ([claudeRoute]); for an env-signed one,
-// the platform its env switches to, in Claude Code's own order (2.1.322:
-// Bedrock, Foundry, unnamed platforms, Vertex, else Anthropic's API), a switch
-// being on where Claude Code reads it as true (`1`, `true`, `yes`, `on`, any
-// case). An unnamed platform, a gateway, or a switch neither true nor false is
-// [sandbox.ClaudeRouteElsewhere], the least window.
-//
-// Exact, unlike the telling's coarse route: a too-small window costs the floor
-// a session. The launch's later run environment is not read; a platform
-// switched there is the floor's stated residual.
-func claudePlatform(member *harness.Provider) sandbox.ClaudeRoute {
-	mode := member.AuthMode()
-	if route := claudeRoute(mode); route == sandbox.ClaudeRouteAnthropic || mode != harness.AuthEnv {
-		return route
+// windowAsk is what a window of member is asked by.
+func windowAsk(member *harness.Provider, exact bool) executor.WindowAsk {
+	ask := executor.WindowAsk{Model: member.ModelArgument(), SignIn: signInOf(config.HarnessAuthMode(member.AuthMode())),
+		Exact: exact}
+	if exact {
+		ask.Env = member.SandboxEnv()
 	}
-	env := member.SandboxEnv()
-	unsure := false
-	on := func(name string) bool {
-		switch strings.ToLower(strings.TrimSpace(env[name])) {
-		case "1", "true", "yes", "on":
-			return true
-		case "", "0", "false", "no", "off":
-			return false
-		}
-		unsure = true
-		return false
+	return ask
+}
+
+// signInOf is how an entry signed in by mode hands its harness credentials, as
+// the executor judges a window's route: first-party alone for a login, a key or
+// the host's own environment (config refuses a sign-in switch in such an
+// entry's env), its own env for `env`, and none this build knows otherwise.
+func signInOf(mode config.HarnessAuthMode) executor.SignIn {
+	switch mode {
+	case config.AuthSubscription, config.AuthAPIKey, config.AuthInheritEnv:
+		return executor.SignInFirstParty
+	case config.AuthEnv:
+		return executor.SignInOwnEnv
 	}
-	gateway, bedrock, foundry := on("CLAUDE_CODE_USE_GATEWAY"), on("CLAUDE_CODE_USE_BEDROCK"),
-		on("CLAUDE_CODE_USE_FOUNDRY")
-	unnamed := on("CLAUDE_CODE_USE_ANTHROPIC_AWS") || on("CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD") ||
-		on("CLAUDE_CODE_USE_MANTLE")
-	vertex := on("CLAUDE_CODE_USE_VERTEX")
-	switch {
-	case gateway || unsure:
-		return sandbox.ClaudeRouteElsewhere
-	case bedrock:
-		return sandbox.ClaudeRouteBedrock
-	case foundry:
-		return sandbox.ClaudeRouteFoundry
-	case unnamed:
-		return sandbox.ClaudeRouteElsewhere
-	case vertex:
-		return sandbox.ClaudeRouteVertex
-	}
-	return sandbox.ClaudeRouteAnthropic
+	return ""
 }
 
 // turnCharged is what t's turn has charged in each window of w, by period, read
@@ -1151,8 +1138,8 @@ func (l *agentLauncher) member(ctx context.Context, manager *sandbox.Manager,
 // manager — the members [agentLauncher.member] picks among, and so every
 // member whose cell a run of the seat can land in.
 //
-// Refused when there is none. Config refuses this chain on every write ("needs
-// a claude-code or opencode member"), so reaching it is a company built by hand
+// Refused when there is none. Config refuses this chain on every write (it
+// needs a member on a harness with a runner), so reaching it is a company built by hand
 // or a catalogue built without the runners: either way the operator's to fix,
 // and a retry changes nothing, which is the class it carries
 // ([sandbox.WhyConfiguration]). So does a company with no providers.llm entry
@@ -1204,7 +1191,7 @@ func executorRunners(c *Company, seat *org.Role, manager *sandbox.Manager) (_ []
 // [sandbox.ErrResumeHeld]). An unreadable counter is retried by backoff.
 func executorHeadroom(ctx context.Context, remaining runner.Remaining, floor launchFloor) (err error) {
 	defer origin.Stamp(&err)
-	if floor.tokens() <= 0 || remaining == nil {
+	if floor.needs() <= 0 || remaining == nil {
 		// No floor, or no counter anywhere in the epoch — a company with
 		// no token budget rather than a read that could not be made.
 		return nil
@@ -1214,7 +1201,7 @@ func executorHeadroom(ctx context.Context, remaining runner.Remaining, floor lau
 		return fmt.Errorf("this seat's remaining token budget could not be read, and an "+
 			"executor run costs a box before it produces anything: %w", err)
 	}
-	if left < floor.tokens() {
+	if left < floor.needs() {
 		// THE FLOOR RIDES THE REFUSAL, so the hold that waits on it waits
 		// for room for this launch ([floorRefusal]).
 		return &floorRefusal{floor: floor, left: left}

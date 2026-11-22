@@ -96,13 +96,71 @@ type action struct {
 
 // FixDigest is the SHA-256 of what fix does, in lowercase hex.
 func FixDigest(fix Fix) string {
-	return digestOf(action{Kind: fix.Kind, Options: fix.Options, Setting: fix.Setting, URL: fix.URL,
+	options := make([]Option, len(fix.Options))
+	for i, o := range fix.Options {
+		options[i] = Option{Label: o.Label, Change: asStored(o.Change), Also: storedAll(o.Also)}
+	}
+	if fix.Options == nil {
+		options = nil
+	}
+	return digestOf(action{Kind: fix.Kind, Options: options, Setting: fix.Setting, URL: fix.URL,
 		Page: fix.Page, Target: fix.Target, Act: fix.Act})
 }
 
+// ReassignDigest is the SHA-256 of a reassignment, in lowercase hex: what a
+// reassignment's Apply moves, and what it is marked applied by.
+func ReassignDigest(r Reassign) string { return digestOf(r) }
+
 // OptionDigest is the SHA-256 of one option's change, in lowercase hex: what an
 // Apply sends, and what an ineffective fix is never offered again by.
-func OptionDigest(o Option) string { return digestOf(o.Change) }
+func OptionDigest(o Option) string {
+	// AN OPTION OF ONE CHANGE digests as it always has, so a finding kept
+	// before options made several changes reads as unmoved.
+	if len(o.Also) == 0 {
+		return digestOf(asStored(o.Change))
+	}
+	return digestOf(storedAll(o.Changes()))
+}
+
+// storedAll is each change as a stored finding reads it back, nil for none.
+func storedAll(chs []Change) []Change {
+	if len(chs) == 0 {
+		return nil
+	}
+	out := make([]Change, len(chs))
+	for i, ch := range chs {
+		out[i] = asStored(ch)
+	}
+	return out
+}
+
+// asStored is ch as a stored finding reads it back: its Set and Merge decoded
+// from their own JSON. A DIGEST HASHES WHAT THE LOG KEEPS, not the values as a
+// builder typed them: a typed value there (a schedule, which a struct encodes
+// in its own field order) comes back from the log as a map, which encodes its
+// keys sorted, so hashed as built the same change read back is another digest,
+// and a finding observed again would read as moved every pass.
+func asStored(ch Change) Change {
+	ch.Set, ch.Merge = decodedFields(ch.Set), decodedFields(ch.Merge)
+	return ch
+}
+
+// decodedFields is m as its JSON decodes into a map; m itself where it does
+// not encode, which no change a builder makes does.
+func decodedFields(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		return m
+	}
+	out := map[string]any{}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return m
+	}
+	return out
+}
 
 // digestOf is the SHA-256 of v's JSON. encoding/json writes a struct's fields
 // in order and a map's keys sorted, so equal values give equal digests.

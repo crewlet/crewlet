@@ -1,6 +1,7 @@
 // Package origin records where a failure left the engine's own code: one line,
 // `defer origin.Stamp(&err)`, at a function a failure passes through on its way
-// out, and the failure carries that function's name from then on.
+// out, and the failure carries that function's name from then on. A failed
+// turn's record carries it as `error_function` and `error_file`.
 //
 // # Why a function name, and why stamped on the way out
 //

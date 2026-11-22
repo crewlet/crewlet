@@ -223,11 +223,20 @@ export type TranscriptState =
   "read" | "none" | "missing" | "unreadable" | "malformed" | "unsupported";
 
 /** Who an entry of a transcript is from (`executor.EntryKinds`): a note is
- *  one a person sent the run while it worked, and a late call one of the
- *  work's calls that finished after the run that made it stopped waiting for
- *  it, as the engine handed it to the run while it worked. */
+ *  one a person sent the run while it worked, a late call one of the work's
+ *  calls that finished after the run that made it stopped waiting for it, and
+ *  a wake a message somebody wrote about the work while it ran, each as the
+ *  engine handed it to the run while it worked. */
 export type TranscriptEntryKind =
-  "brief" | "note" | "late_call" | "model" | "tool_call" | "tool_result" | "summary" | "unread";
+  | "brief"
+  | "note"
+  | "late_call"
+  | "wake"
+  | "model"
+  | "tool_call"
+  | "tool_result"
+  | "summary"
+  | "unread";
 
 /**
  * Why a page of a transcript ends before the transcript does
@@ -250,10 +259,9 @@ export interface TranscriptEntry {
   failed?: boolean;
   /** Redacted, and cut to the entry's bound where `cut` says so. */
   text: string;
-  /** The size of what the whole text redacts to, where the read redacted all
-   *  of it; of a longer text, the size the harness recorded, rounded up to a
-   *  whole KiB. Never the recorded size to the byte, which beside a text shown
-   *  whole told how long each value its redaction took out was. */
+  /** The size of what the whole text redacts to, at any length. Never the
+   *  recorded size, which beside a text shown whole told how long each value
+   *  its redaction took out was. */
   bytes: number;
   cut?: boolean;
 }
@@ -263,7 +271,7 @@ interface TranscriptBounds {
   entries: number;
   bytes: number;
   entry_bytes: number;
-  line_bytes: number;
+  read_lines: number;
   read_bytes: number;
 }
 

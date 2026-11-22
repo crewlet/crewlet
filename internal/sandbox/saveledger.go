@@ -35,7 +35,7 @@ type SaveLedgers interface {
 const saveLedgerVersion = 1
 
 // saveLedgerCap bounds a seat's ledger: at the 300 s floor a seat running one
-// job at a time saves at most 346 times in [saveLedgerHold], plus its drain
+// job at a time saves at most 349 times in [saveLedgerHold], plus its drain
 // saves, and 512 entries are about 56 KiB, so even a clock gone wrong never
 // lets a seat's saves past its allowance by count.
 const saveLedgerCap = 512
@@ -61,7 +61,7 @@ const (
 // take's life before its object is stored, the collector's grace and two of
 // its passes, and twice the engine's assumed skew for an end written on one
 // node's clock and read on another's (the package doc's "A save taken as its
-// job works"). Twenty-eight hours and forty-nine and a half minutes at today's
+// job works"). Twenty-nine hours and one and a half minutes at today's
 // bounds, under the uploads bucket's age, which a test holds.
 var saveLedgerHold = takeLife + collectPendingGrace + 2*collectInterval + 2*objstore.AssumedClockSkew
 
@@ -71,9 +71,12 @@ const saveMarginFloor = 64 << 10
 
 // countedFor is what a save packed at size bytes is charged against its seat:
 // sealed, with a margin of an eighth or 64 KiB for what the scrub changes, and
-// never past the largest object a session is stored as. The margin is a
-// judgment no measurement has checked yet; a spool sealing past it is refused
-// before its keep, and the saved line's counted and bytes measure it.
+// never past the largest object a session is stored as. The scrub's rewrite
+// measured within 1% of the box's pack for media and 2% under it for text
+// (internal/sandbox/executor's keptGzipLevel), so the margin is the markers'
+// and the re-tar's room; a spool
+// sealing past it is refused before its keep, and the saved line's counted and
+// bytes measure it.
 func countedFor(size int64) int64 {
 	return min(secrets.SealedStreamSize(size+max(size/8, saveMarginFloor),
 		strings.Repeat("k", secrets.MaxStreamKeyIDBytes)), executorkeep.SealedMaxBytes)

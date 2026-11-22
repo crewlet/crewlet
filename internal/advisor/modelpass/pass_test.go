@@ -81,8 +81,9 @@ func TestTheModelPassListsOnlyWhatItsOwnReadsShow(t *testing.T) {
 	d := planted(t)
 	turn := []map[string]any{{"kind": "turn", "id": "turn-9"}}
 	facts := []map[string]any{
-		{"key": "tokens", "value": 900_000, "from": "executor_runs.runs[0].tokens"},
-		{"key": "daily_budget", "value": 1_000_000, "from": "company_outline.seats[2].token_budget.day"},
+		{"key": "tokens", "label": "Tokens one run spent", "value": 900_000, "from": "executor_runs.runs[0].tokens"},
+		{"key": "daily_budget", "label": "Tokens a day the seat may spend", "value": 1_000_000,
+			"from": "company_outline.seats[2].token_budget.day"},
 	}
 	raise := map[string]any{"builder": "token_budget", "seat": "qa", "period": "day", "value": 2_000_000}
 	prov := &llmtest.Script{Runs: []llmtest.Run{{Responses: []llmtest.Response{
@@ -93,6 +94,9 @@ func TestTheModelPassListsOnlyWhatItsOwnReadsShow(t *testing.T) {
 			finding([]map[string]any{{"kind": "item", "id": "ENG-404"}}, facts, raise),
 			finding(turn, []map[string]any{{"key": "tokens", "value": 5, "from": "executor_runs.runs[0].tokens"}}, raise),
 			finding([]map[string]any{}, facts, raise),
+			// A NUMBER WITH NO WORDS FOR WHAT IT COUNTS: its key would be its label.
+			finding(turn, []map[string]any{{"key": "tokens", "value": 900_000, "from": "executor_runs.runs[0].tokens"}},
+				raise),
 		)}}},
 	}}}}
 	host, err := toolsession.NewHost()
@@ -118,7 +122,13 @@ func TestTheModelPassListsOnlyWhatItsOwnReadsShow(t *testing.T) {
 		f.Fix.Options[0].Change.Merge["token_budget"].(map[string]any)["day"] != 2_000_000 || len(checked) == 0 {
 		t.Errorf("fix = %+v, want QA's daily budget at 2M, checked", f.Fix)
 	}
-	want := map[advisor.Drop]int{advisor.DropUnread: 1, advisor.DropWrongFact: 1, advisor.DropNoEvidence: 1}
+	if f.Evidence[0].Said() != "Tokens one run spent" || f.Evidence[1].Said() != "Tokens a day the seat may spend" {
+		t.Errorf("facts = %+v, want each said in the words the model labelled it with", f.Evidence)
+	}
+	// THE NUMBER WITH NO WORDS is labelled from its key and listed no more
+	// than once: it says what the finding already listed does.
+	want := map[advisor.Drop]int{advisor.DropUnread: 1, advisor.DropWrongFact: 1, advisor.DropNoEvidence: 1,
+		advisor.DropRepeat: 1}
 	for drop, n := range want {
 		if got.Dropped[drop] != n {
 			t.Errorf("dropped %v, want %v", got.Dropped, want)

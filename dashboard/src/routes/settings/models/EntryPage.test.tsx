@@ -221,7 +221,7 @@ test("a member reads the condition with no action, no credential's name and no v
 // listed where it runs.
 test("a seat running every job on the model is named once, under Everything", () => {
   const every: ModelUse[] = [
-    ...(["executor", "review", "subagent", "auxiliary", "judge"] as const).map((job) => ({
+    ...(["executor", "review", "subagent", "auxiliary", "judge", "triage"] as const).map((job) => ({
       seat: "qa",
       job,
       position: 0,

@@ -5,7 +5,9 @@ import "github.com/crewlet/crewlet/internal/seataccess"
 // VendorNeed is the vendor permission a built-in needs to do its work:
 // the grant the engine minted for the seat, which explains a vendor's refusal
 // from the engine's own knowledge, never from the vendor's words. Every filed
-// built-in declares one, the engine's own estates' tools as reaching none.
+// built-in declares one, the engine's own estates' tools and those calling a
+// vendor on a credential the engine alone holds (a growth tool) as reaching
+// none: no seat grant holds what they need.
 type VendorNeed struct {
 	// Vendor names the vendor, empty for a tool that reaches none.
 	Vendor string

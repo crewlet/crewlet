@@ -76,7 +76,7 @@ import { itemAddress } from "~/lib/work.ts";
 
 /** What the board knows about the seats and executors on its cards, keyed by task id or handle. */
 export interface BoardFacts {
-  /** The turn running on a task, by task id — see `liveOnItems`. */
+  /** The turn or run on a task its flow reads working, by task id (`liveOnRows`). */
   live: ReadonlyMap<string, CardLive>;
   /** An executor on a task parked waiting on the reader, by task id. */
   waiting: ReadonlyMap<string, CardWaiting>;

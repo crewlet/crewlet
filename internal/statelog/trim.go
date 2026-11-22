@@ -5,6 +5,7 @@ import (
 
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -31,8 +32,8 @@ const (
 	// TermMinHold is the lowest live hold. A joining node holds the tail it
 	// is about to replay, for the whole transfer and until its own position
 	// is published, since a boot's join runs before anything counts the
-	// node ([AdoptDeps.Hold]). A hold is live when renewed within
-	// [TrimHoldStale] ([HoldTail]).
+	// node ([AdoptDeps.Hold]). A hold pins until the trim has watched it
+	// go unrenewed past [TrimHoldStale] ([HoldWatch], [HoldTail]).
 	TermMinHold TermName = "min_hold"
 
 	// TermBackupFloor is what has left the host. A company that never backs
@@ -205,7 +206,10 @@ type Hold struct {
 	Owner      string
 	Generation uint32
 	Seq        uint64
-	At         time.Time
+
+	// Silent is how long the trim has watched the hold's newest write
+	// stand unrenewed ([HoldWatch]); zero at first sight.
+	Silent time.Duration
 }
 
 // TrimInputs is everything a tick reads, already fetched, kept apart from the
@@ -233,8 +237,8 @@ type TrimInputs struct {
 	// was unknown (the live data nodes it could not list).
 	CountedUnknown string
 
-	// Holds are the live pins. One older than HoldStale is ignored
-	// ([TrimHoldStale]).
+	// Holds are the live pins. One watched unrenewed for longer than
+	// HoldStale is ignored ([TrimHoldStale]).
 	Holds []Hold
 
 	// HoldsReadable reports whether they could be listed.
@@ -260,7 +264,8 @@ type TrimInputs struct {
 	// is computed locally and therefore never unknown.
 	AgeFloor uint64
 
-	// HoldStale is how old a hold may be before it is ignored.
+	// HoldStale is how long the trim may watch a hold stand unrenewed
+	// before it is ignored.
 	HoldStale time.Duration
 }
 
@@ -326,7 +331,8 @@ func (in TrimInputs) countedUnknown(unknown string) string {
 	return why + ", so " + unknown
 }
 
-// minHold is the lowest live pin.
+// minHold is the lowest live pin. A hold watched unrenewed past HoldStale is
+// read past, and the detail names it, as the one sign of a crashed holder.
 func (in TrimInputs) minHold() Term {
 	if !in.HoldsReadable {
 		return Term{Name: TermMinHold, Detail: "the holds could not be listed"}
@@ -334,9 +340,11 @@ func (in TrimInputs) minHold() Term {
 	lowest := SeqUnbounded
 	var who string
 	var live int
+	var past []string
 	for _, h := range in.Holds {
-		// A STALE HOLD IS IGNORED ([TrimHoldStale]).
-		if in.HoldStale > 0 && in.Now.Sub(h.At) > in.HoldStale {
+		// A HOLD WATCHED UNRENEWED PAST THE BOUND IS IGNORED ([TrimHoldStale]).
+		if in.HoldStale > 0 && h.Silent > in.HoldStale {
+			past = append(past, h.Owner+", unrenewed for "+h.Silent.Round(time.Second).String())
 			continue
 		}
 		if h.Generation < in.Generation {
@@ -349,14 +357,22 @@ func (in TrimInputs) minHold() Term {
 			lowest, who = h.Seq, h.Owner
 		}
 	}
+	readPast := ""
+	if len(past) > 0 {
+		readPast = "; the trim read past " + strings.Join(past, "; ")
+	}
 	if live == 0 {
 		// Nothing pinned is not a refusal: it permits what the other
 		// terms do.
+		if readPast != "" {
+			return Term{Name: TermMinHold, Seq: SeqUnbounded, Known: true,
+				Detail: "nothing else pins the log" + readPast}
+		}
 		return Term{Name: TermMinHold, Seq: SeqUnbounded, Known: true,
 			Detail: "nothing is pinning the log"}
 	}
 	return Term{Name: TermMinHold, Seq: lowest, Known: true, Detail: fmt.Sprintf(
-		"%s pins the log at %d", who, lowest)}
+		"%s pins the log at %d%s", who, lowest, readPast)}
 }
 
 // backup is what has left the host.
@@ -463,17 +479,18 @@ func (in TrimInputs) feed() Term {
 // it to its window from this constant, never a copy (ADR-0015).
 const TrimInterval = 15 * time.Minute
 
-// TrimHoldStale is how old a hold may be before the trim ignores it.
+// TrimHoldStale is how long the trim must watch one write of a hold stand
+// unrenewed before it ignores the hold ([HoldWatch]).
 //
 // FOUR HEARTBEATS, as for every cached coordination fact: a holder may miss
-// three beats and be alive, so an older hold is a crashed holder, and pinning
-// the log for ever on it would let one failed join stop the fleet trimming. A
-// live holder renews on [TrimHoldHeartbeat] ([HoldTail]).
+// three beats and be alive, so a longer silence is a crashed holder, and
+// pinning the log for ever on it would let one failed join stop the fleet
+// trimming. A live holder renews on [TrimHoldHeartbeat] ([HoldTail]). At the
+// trim's cadence a crashed holder's last write is ignored at its second listing.
 //
 // IGNORED, NOT DELETED: an owner's key has one writer (its release, or its
 // next pin replacing it), and a trim deleting what it judged stale would race
-// the renewal and drop a live pin. A crashed holder leaves one row per owner
-// ([coord.HoldOwner]), which the arithmetic reads past.
+// the renewal and drop a live pin.
 const TrimHoldStale = 4 * coord.ReconcileInterval
 
 // TrimHoldHeartbeat is how often a holder renews its pin on the replay tail

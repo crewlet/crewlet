@@ -42,6 +42,7 @@ import {
 } from "~/lib/code.ts";
 import { fmtBytes, fmtCount, fmtDate, fmtDateTime, plural, readerDay } from "~/lib/format.ts";
 import { zone } from "~/lib/prefs.ts";
+import { joinEdges } from "~/lib/range.ts";
 import { useOrgIndex, useSeatBadgeOf } from "~/lib/seats.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { usePaged } from "~/lib/usePaged.ts";
@@ -68,7 +69,7 @@ import {
   pushWords,
   type PushPart,
 } from "./pushWords.ts";
-import { PUSHER_DAYS } from "./activity.tsx";
+import { PUSHER_DAYS, boundsOf } from "./activity.tsx";
 import { PushesRail } from "./PushesRail.tsx";
 import { usePushActivity } from "./railParts.tsx";
 import { REFUSED_CODES, refusalSentence } from "./repo/marks.ts";
@@ -187,37 +188,50 @@ export function PushHistory({
   const seats = usePusherChoices(activity.read.data?.repo?.pushers, by);
   const kind = by === "" ? "" : (pusherParams(by, seats.kindOf).pusher_kind ?? "");
   const since = sinceOf(when, today);
-  const base = useMemo(
+  const params = useMemo(
     () => ({
       name: repo,
       brief: true,
       ...(kind ? { pusher_kind: kind } : {}),
       ...(kind && kind !== "gitlet" ? { pusher: by } : {}),
-      ...(since ? { since } : {}),
     }),
-    [repo, kind, by, since],
+    [repo, kind, by],
   );
-  // THE DAY COUNTS RIDE THE FIRST PAGE, one snapshot with its rows; never beside a pusher.
+  // THE DAY COUNTS RIDE THE FIRST PAGE, one snapshot with its rows; never beside a pusher. The
+  // window's start and its days are its edges, by its name, so the reader's midnight is no new
+  // question (`lib/useCodeQuery.ts`); the name says whether the days ride it, which no
+  // parameter does for a pusher not yet resolved to a kind.
   const bounds = useMemo(
     () => (by === "" ? dayBoundsFor(when, today, inZone) : []),
     [by, when, today, inZone],
   );
-  const params = useMemo(
-    () => (bounds.length > 0 ? { ...base, day_bounds: bounds.join(",") } : base),
-    [base, bounds],
-  );
-  const first = useCodeQuery("code_pushes", params, { pollMs: PUSHES_POLL_MS });
+  const first = useCodeQuery("code_pushes", params, {
+    pollMs: PUSHES_POLL_MS,
+    window: {
+      name: `${when}/${by === "" ? "counted" : "uncounted"}`,
+      edges: { since, ...(bounds.length > 0 ? { day_bounds: joinEdges(bounds) } : {}) },
+    },
+  });
   const paged = usePaged(
     first,
-    params,
-    (cursor) => codeRest.query("code_pushes", { ...base, cursor }),
+    { ...params, when, counted: by === "" },
+    (cursor, edges) =>
+      codeRest.query(
+        "code_pushes",
+        { ...params, cursor },
+        undefined,
+        edges && { since: edges.since },
+      ),
     pushesOf,
     pushIdOf,
     pushesAfter,
   );
   const rows = paged.items;
-  const pushDays = first.data?.push_days;
-  const counted = useMemo(() => dayCounts(bounds, pushDays), [bounds, pushDays]);
+  // THE DAYS AND THE COUNTS THE LIST DRAWN WAS READ AT, which lag the reader's day until the moved
+  // window lands.
+  const pushDays = paged.answers[0]?.push_days;
+  const drawnBounds = useMemo(() => boundsOf(paged.edges), [paged.edges]);
+  const counted = useMemo(() => dayCounts(drawnBounds, pushDays), [drawnBounds, pushDays]);
   const runs = useDayGroups(rows, landedAt, dayHeading);
   const groups = useMemo(() => {
     const loaded = new Map<string, number>();

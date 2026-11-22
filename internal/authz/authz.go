@@ -2,9 +2,11 @@
 //
 // ONE FUNCTION AND ONE TABLE. [Decide] is the whole surface, and every
 // authority rule this engine has is a row in [rules] beside the verb it
-// governs. What that buys is the thing five hand-written gates could not: a
-// seat's own tool, the operator MCP and an HTTP route asking about one verb
-// get one answer, because there is one answer to get.
+// governs, or the row a registered growth catalog derives for each tool it
+// lists (growth.go), which no table row may share a name with. What that buys
+// is the thing five hand-written gates could not: a seat's own tool, the
+// operator MCP and an HTTP route asking about one verb get one answer, because
+// there is one answer to get.
 //
 // A ROW NAMES A CLASS ([Class]) rather than restating its rule: there are
 // dozens of verbs and a few ways to decide one, and a table keyed on the verb

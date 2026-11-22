@@ -169,14 +169,14 @@ hearing silence.
   unblocked, which moves every registration's backlog into unbounded
   goroutines rather than one registration's into a bounded wait.
 - AN ABSOLUTE CROSSING MARGIN in place of the share would shorten a dead
-  host's wait by about ten minutes of seventy-nine, at the cost of a second
+  host's wait by about ten minutes of eighty-six, at the cost of a second
   rule beside the tail's for the same question.
 - A SHARE OF WHAT THE ASKER STILL WAITS for a read that waited `d` (main's
   rule, `0.75 × (wait − d)`) ends the read later the longer it waited: at the
   waiting bound's end, three quarters of the way through the asker's wait, it
   reads on for three quarters of the last quarter and leaves a sixteenth of
-  the wait for the crossings, under five minutes for an uncapped collection,
-  below the nine the slowest pace needs, and the host takes a session for an
+  the wait for the crossings, under five and a half minutes for an uncapped
+  collection, below the nine the slowest pace needs, and the host takes a session for an
   asker that has gone. What the one deadline costs instead is read time: a
   read that waited reads a quarter of its wait less, so one that waited long
   can be cut by its own deadline and answer that it could not read the box,
@@ -187,9 +187,9 @@ did: the older build drops `budget_ms`, reads by the time to the deadline with
 no allowance, and never answers busy — today's behaviour for that pair until
 the host rolls. An OLDER asker's request reaches a newer host as version 1 with
 no wait and is refused (`wire`): its asker hears silence after its whole wait,
-so a collection hands its claim back only after that wait (seventy-nine to
-a hundred minutes) and asks again from the host's next poll, a stop's read is
-written off once the older asker's own rule reads the stop past the box
+so a collection hands its claim back only after that wait (eighty-six to a
+hundred and seven minutes) and asks again from the host's next poll, a stop's
+read is written off once the older asker's own rule reads the stop past the box
 timeout, after one whole silent ask, and a lost run's session is not kept.
 Rolling every node within one read's wait avoids each. Reading the older
 request instead would be compatibility with an unreleased build. A later build
@@ -271,7 +271,7 @@ its own silence on one clock, which is the evidence the rule asks for.
 
 - AN ATTEMPT COUNT AT A STATED PACE, on the row, states a time it does not
   measure: one attempt lasts from nothing (an ask this node could not make) to
-  the whole stop's read, about eighty-one minutes, and each count is a fenced
+  the whole stop's read, about eighty-eight minutes, and each count is a fenced
   write.
 - SILENT TIME ACCUMULATED ON THE ROW needs a new field of the recorded ending,
   its mixed-build story and a write per attempt, for a sum the bound it
@@ -281,8 +281,8 @@ its own silence on one clock, which is the evidence the rule asks for.
   that is PRESENT and silent: a key it lacks, a clock past the box read's
   allowance, an older build refusing the newer read.
 - THE SILENCE FROM THE END OF THE FIRST SILENT ASK waits a second whole ask —
-  about one hundred and sixty-two minutes in all — for a host already silent
-  for eighty-one, since one stop's ask outlasts the box timeout alone.
+  about one hundred and seventy-six minutes in all — for a host already silent
+  for eighty-eight, since one stop's ask outlasts the box timeout alone.
 - THE SILENCE FROM THE SERIES' FIRST ATTEMPT counts an ask this node could not
   make as the host's silence.
 - ONE MAP PER NODE KEYED BY THE ENDING, shared by the retry and a retirement's
@@ -305,3 +305,7 @@ its own silence on one clock, which is the evidence the rule asks for.
   of real time after the decision and, on clocks within the bound, no later
   than the box timeout and four times `objstore.AssumedClockSkew` after it,
   plus one ask's wait. On the deciding node nothing changes.
+
+## Amendment: a seat runs up to its cap of runs
+
+A seat no longer takes no other work while its run works: it holds up to its cap of runs, one per conversation (ADR-0169).

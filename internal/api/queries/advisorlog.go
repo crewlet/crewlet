@@ -13,8 +13,10 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/advisor"
+	"github.com/crewlet/crewlet/internal/advisor/duty"
 	"github.com/crewlet/crewlet/internal/advisordomain"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -30,6 +32,10 @@ type AdvisorLog interface {
 	Finding(ctx context.Context, id string, fresh statelog.Freshness) (advisordomain.FindingRow, []advisordomain.HistoryRow, error)
 	Episodes(ctx context.Context, key string, fresh statelog.Freshness) ([]advisordomain.FindingRow, error)
 	LatestRun(ctx context.Context, fresh statelog.Freshness) (advisordomain.RunRow, bool, error)
+	// LiveProgress is the deep run in flight and its progress lines.
+	LiveProgress(ctx context.Context, fresh statelog.Freshness) (string, []advisordomain.ProgressLine, bool, error)
+	// RunProgress is every progress line one run wrote, oldest first.
+	RunProgress(ctx context.Context, run string, fresh statelog.Freshness) ([]advisordomain.ProgressLine, error)
 	PendingRequests(ctx context.Context, fresh statelog.Freshness) ([]advisordomain.RunRow, error)
 	LastRunOfClasses(ctx context.Context, fresh statelog.Freshness) (map[string]time.Time, error)
 	Reports(ctx context.Context, cursor string, limit int, fresh statelog.Freshness) ([]advisordomain.ReportRow, string, error)
@@ -126,6 +132,7 @@ type AdvisorFinding struct {
 	Impact          *AdvisorImpact       `json:"impact"`
 	Evidence        AdvisorEvidence      `json:"evidence"`
 	Fix             advisor.Fix          `json:"fix"`
+	AdvisorFindingInsight
 }
 
 // findingView is how one read shows findings: at now, against when each scope
@@ -187,11 +194,19 @@ func (v findingView) finding(row advisordomain.FindingRow) (AdvisorFinding, erro
 		out.Entries = nonNil(v.entries()[row.Key])
 	}
 	for _, fact := range f.Evidence {
-		out.Evidence.Facts = append(out.Evidence.Facts, AdvisorFact{Key: fact.Key, Label: advisor.FactLabel(fact.Key),
-			Value: fact.Value, Unit: advisor.FactUnit(fact.Key)})
+		out.Evidence.Facts = append(out.Evidence.Facts, AdvisorFact{Key: fact.Key, Label: fact.Said(),
+			Value: fact.Value, Unit: fact.Counts()})
 	}
 	for _, r := range f.Records {
 		out.Evidence.Records = append(out.Evidence.Records, AdvisorRecordRef{Kind: r.Kind, ID: r.ID})
+	}
+	out.AdvisorFindingInsight = insightOf(f, out.Evidence.Facts)
+	// A PREMISE'S LAST CHECK is the last rules run that asked every open
+	// finding's premise again (ADR-0166).
+	if f.Premise != nil {
+		if at := v.lastDone[duty.PremiseScope]; !at.IsZero() {
+			out.PremiseCheckedAt = &at
+		}
 	}
 	if row.Explanation != "" && row.ExplainedDigest == row.VerdictDigest {
 		out.Explanation = &row.Explanation
@@ -333,12 +348,15 @@ func (s Sources) advisorFindings(ctx context.Context, p Params) (any, error) {
 	return out, nil
 }
 
-// countsOf is the live findings a person is to look at, by severity: neither
-// snoozed at now nor applied and waiting on its effect.
+// countsOf is the live findings a person is to look at, by severity: the
+// owner's, neither snoozed at now nor applied and waiting on its effect. An
+// engine finding is the engine's own work, never a person's to-do
+// (advisor.ActorEngine), so the sidebar's figure over these counts leaves it out.
 func countsOf(rows []advisordomain.FindingRow, now time.Time) map[advisor.Severity]int {
 	out := map[advisor.Severity]int{advisor.SeverityBlocks: 0, advisor.SeverityCosts: 0, advisor.SeverityNote: 0}
 	for _, r := range rows {
-		if advisor.State(r.State) == advisor.StateOpen && !r.SnoozedUntil.After(now) {
+		if r.Actor == advisordomain.ActorOwner && advisor.State(r.State) == advisor.StateOpen &&
+			!r.SnoozedUntil.After(now) {
 			out[advisor.Severity(r.Severity)]++
 		}
 	}
@@ -399,10 +417,13 @@ type AdvisorHistoryEntry struct {
 	Moved []advisor.Moved `json:"moved"`
 }
 
-// AdvisorActor is who moved a finding: the engine, or a person by handle.
+// AdvisorActor is who moved a finding: the engine, or a person by handle and
+// by the name the company gives their seat, which is what a person reads (the
+// handle where the chart no longer holds the seat).
 type AdvisorActor struct {
 	Kind   string `json:"kind"`
 	Handle string `json:"handle"`
+	Name   string `json:"name"`
 }
 
 // AdvisorEpisode is an earlier episode of the same key.
@@ -440,11 +461,12 @@ func (s Sources) advisorFinding(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	out := AdvisorFindingDetail{AdvisorFinding: f, History: []AdvisorHistoryEntry{}, Episodes: []AdvisorEpisode{}}
+	organization := s.organization()
 	for _, h := range history {
 		entry := AdvisorHistoryEntry{At: h.At, Event: string(h.Event), By: AdvisorActor{Kind: "engine"},
 			Moved: []advisor.Moved{}}
 		if h.ByKind == iam.ActorHuman {
-			entry.By = AdvisorActor{Kind: "person", Handle: h.ByName}
+			entry.By = AdvisorActor{Kind: "person", Handle: h.ByName, Name: personName(organization, h.ByName)}
 		}
 		if len(h.Moved) > 0 {
 			if err = json.Unmarshal(h.Moved, &entry.Moved); err != nil {
@@ -478,4 +500,15 @@ func (s Sources) AdvisorFindingOf(ctx context.Context, id string) (AdvisorFindin
 		return AdvisorFinding{}, err
 	}
 	return v.finding(row)
+}
+
+// personName is the name the company gives the seat handle names, or the
+// handle where no seat of the chart answers to it.
+func personName(organization *org.Organization, handle string) string {
+	if organization != nil {
+		if role := organization.Role(handle); role != nil && role.Name != "" {
+			return role.Name
+		}
+	}
+	return handle
 }

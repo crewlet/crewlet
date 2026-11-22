@@ -191,6 +191,18 @@
 // decides again), or already purged (its floor came first, so (ii) fails), or younger than the
 // trim's minimum age (the broker refuses the zero).
 //
+// # A trim hold is ignored only once the trim watched it go unrenewed
+//
+// No clock judges a hold: the holder's stamp flips past the bound, two stored instants may be two
+// leaders' up to twice the skew apart, and a stamp read within its window plus twice the skew is
+// charged every tick, as renewals outpace listings. The duty's [HoldWatch] ignores a hold once one
+// write of it, named by the store's revision, stood unrenewed past [TrimHoldStale] on its monotonic
+// clock, from that write's first listing to a later listing's start. Each hold is read from the
+// leader, so a write listed twice was the newest inside the second: the watched silence never
+// exceeds the holder's. A crashed holder is read past at its last write's second listing, a tick
+// later after the duty moves or restarts, never under a duty restarting faster than a tick
+// (`log_headroom` speaks).
+//
 // # An anchor below the floor is removed by a record
 //
 // An anchor below the floor names a record the log no longer holds; kept, the table grows by every

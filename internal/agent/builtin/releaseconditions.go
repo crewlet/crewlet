@@ -144,6 +144,32 @@ func (d ReleaseDeps) pullMergeUnmet(ctx context.Context, requester string, a mer
 	return append(out, pathsUnmet(a.ref, f.Paths, f.PathsComplete, rule.EscalatePaths)...)
 }
 
+// MergedAlready is what the engine tells a held merge whose pull request merged
+// before anybody decided it, "" for one still to decide: read as the
+// requesting seat's app, as every read of its merge is. A Gitlet change is read
+// only for a turn, so it is never answered here; its delegate's conditions read
+// it when it is decided ([ReleaseDeps.unmet]).
+func (d ReleaseDeps) MergedAlready(ctx context.Context, requester string, args map[string]any) (string, error) {
+	if d.Pulls == nil {
+		return "", nil
+	}
+	a, refusal := d.mergeAskOf(ReviewDelegatedTool, args)
+	if refusal != nil || !a.github {
+		return "", nil
+	}
+	f, err := d.Pulls.Facts(ctx, requester, a.pull, nil)
+	switch {
+	case err != nil:
+		return "", err
+	case !f.Merged:
+		return "", nil
+	case f.MergeCommit != "":
+		return fmt.Sprintf("%s has already merged (as %s), so there is nothing left to merge; nobody was "+
+			"asked.", a.ref, abbrevOID(f.MergeCommit)), nil
+	}
+	return a.ref + " has already merged, so there is nothing left to merge; nobody was asked.", nil
+}
+
 // pullDeployUnmet is a deploy's conditions on GitHub, as the requester reads
 // them.
 func (d ReleaseDeps) pullDeployUnmet(ctx context.Context, requester string, a deployAsk,

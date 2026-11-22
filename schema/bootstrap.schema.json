@@ -593,7 +593,7 @@
               "type": "string"
             }
           ],
-          "description": "Clones, fetches and pushes this node serves at once; 0 is four for each of max_processes, and no more than one for every 512 MiB of the node's memory. Each holds a few hundred MiB while it runs, so size it to memory rather than cores."
+          "description": "Clones, fetches and pushes this node serves at once; 0 is four for each of max_processes, and no more than one for every 512 MiB of the memory the executor's pools leave. Each holds a few hundred MiB while it runs, so size it to memory rather than cores."
         }
       },
       "type": [

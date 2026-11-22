@@ -1546,6 +1546,40 @@ describe("the pane", () => {
     expect(title.querySelector("[data-vendor]")?.getAttribute("data-vendor")).toBe("github");
   });
 
+  // AN ANSWER THAT CHOSE IS READ IN ITS OWN WORDS, which the engine opens with
+  // the option's label, so the thread says the choice once: a caption naming
+  // it again beside those words said it twice.
+  test("an answer that chose reads in its own words, its choice said once", async () => {
+    location.hash = "#/inbox/ask/c-12";
+    mount({
+      answers: {
+        decisions: decisionsOf(askItem()),
+        work_comments: {
+          item: "t-12",
+          key: "LEAD-12",
+          title: "Q4 release plan",
+          comments: [
+            {
+              id: "c-20",
+              task: "t-12",
+              author: "maya",
+              author_kind: "human",
+              body: "Chose \u201cHold release\u201d: tell **support** first.",
+              answers: "c-12",
+              choice: "hold",
+              created_at: new Date().toISOString(),
+            },
+          ],
+        },
+      },
+    });
+    await settle();
+    const thread = screen.getByRole("region", { name: "Replies to this question" });
+    expect(thread.textContent).toContain("Chose \u201cHold release\u201d: tell support first.");
+    expect(thread.textContent?.split("Hold release")).toHaveLength(2);
+    expect(within(thread).getByText("support").closest("strong")).not.toBeNull();
+  });
+
   test("an option answers with one press, through the one write, and marks its notice read", async () => {
     location.hash = "#/inbox/ask/c-12";
     mount({
@@ -2582,6 +2616,7 @@ describe("the pane", () => {
       question: "May cto run a command on api-1 as crewlet-ops?",
       arguments: { host: "api-1", command: "sudo systemctl restart api", reason: "stuck" },
       arguments_sha256: "ab".repeat(32),
+      card: null,
     };
     function heldRun(held: Record<string, unknown>) {
       return {
@@ -2606,7 +2641,7 @@ describe("the pane", () => {
       };
     }
     /** The approvals route's traffic, the first POST refused for a step-up where `stepUp`. */
-    function approvals(stepUp: boolean) {
+    function approvals(stepUp: boolean, whole: unknown = WHOLE) {
       const sent: { method: string; body: unknown }[] = [];
       const base = globalThis.fetch;
       vi.stubGlobal(
@@ -2620,7 +2655,7 @@ describe("the pane", () => {
               status,
               headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
             });
-          if (method === "GET") return json(200, WHOLE);
+          if (method === "GET") return json(200, whole);
           if (stepUp && sent.filter((s) => s.method === "POST").length === 1) {
             return json(403, {
               error: "step_up_required",
@@ -2674,6 +2709,83 @@ describe("the pane", () => {
       expect(confirmed).toBe(1);
       for (const post of sent.filter((s) => s.method === "POST")) {
         expect(post.body).toEqual({ answer: "once", arguments_sha256: WHOLE.arguments_sha256 });
+      }
+      expect(posted.some((p) => p.tool === "answer_executor")).toBe(false);
+    });
+
+    // A GROWTH ASK IS DECIDED ON ITS CARD, in the pane: the budget before and
+    // after in the account's currency, Allow once at a step-up with the digest
+    // of what was shown, and the person's note carried back to the agent.
+    // Mutation: draw a growth ask through the held-call buttons, and this is red.
+    test("a growth ask is decided on its card in the pane, after a step-up, with its note", async () => {
+      const sent = approvals(true, {
+        ...WHOLE,
+        question: "Raise the daily budget of Spring sale?",
+        card: {
+          act: "ad_spend",
+          product: "google_ads",
+          tool: "google_ads_raise_budget",
+          account: {
+            product: "google_ads",
+            account: "123-456-7890",
+            account_name: "Nimbus Ads",
+            currency: "EUR",
+            time_zone: "Europe/Berlin",
+            state: "serving",
+          },
+          acts: [
+            {
+              target: "Spring sale",
+              summary: "Raise the daily budget",
+              changes: [
+                {
+                  field: "amount_micros",
+                  label: "Daily budget",
+                  before: "40000000",
+                  after: "60000000",
+                  money: true,
+                },
+              ],
+            },
+          ],
+          money: null,
+          findings: [],
+          reason: "Spent out by noon.",
+          lapses_at: new Date(Date.now() + 3_600_000).toISOString(),
+          moved: false,
+          other_open_asks: 0,
+        },
+      });
+      uninstall = setStepUpConfirmer(async () => true);
+      location.hash = "#/inbox/run/turn-9";
+      const run = heldRun({
+        server: "crewlet",
+        tool: "google_ads_raise_budget",
+        fixed: true,
+        approvers: "admin",
+        act: "ad_spend",
+      });
+      mount({
+        answers: {
+          decisions: decisionsOf({ kind: "run", at: run.updated_at, run }),
+          executors: { runs: [run] },
+        },
+      });
+      await settle();
+      expect(await screen.findByText("€60.00")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Always allow" })).toBeNull();
+      fireEvent.change(screen.getByRole("textbox", { name: /Note to the agent/ }), {
+        target: { value: "Once." },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
+      await waitFor(() => expect(sent.filter((s) => s.method === "POST")).toHaveLength(2));
+      for (const post of sent.filter((s) => s.method === "POST")) {
+        expect(post.body).toEqual({
+          answer: "once",
+          arguments_sha256: WHOLE.arguments_sha256,
+          note: "Once.",
+        });
       }
       expect(posted.some((p) => p.tool === "answer_executor")).toBe(false);
     });
@@ -3752,7 +3864,7 @@ function answeredItem(extra: Record<string, unknown> = {}) {
       at: new Date(Date.now() - 60 * 60_000).toISOString(),
       comment: "c-21",
       choice: "ship",
-      body: "Ship anyway",
+      body: "Chose \u201cShip anyway\u201d",
     },
     ...extra,
   };
@@ -3787,6 +3899,97 @@ describe("what was answered", () => {
     const order = list.getAllByRole("region").map((g) => g.textContent ?? "");
     expect(order[1]).toMatch(/^Updates/);
     expect(order[2]).toMatch(/^Answered/);
+  });
+
+  /** An ask answered in words, by the reader. */
+  function answeredInWords(body: string) {
+    return answeredItem({
+      answer: {
+        by: "jane",
+        by_kind: "human",
+        at: new Date(Date.now() - 60 * 60_000).toISOString(),
+        comment: "c-21",
+        body,
+      },
+    });
+  }
+
+  async function answeredRow() {
+    fireEvent.click(screen.getByRole("button", { name: "Answered, 1" }));
+    await settle();
+    return within(screen.getByRole("region", { name: "Answered, 1" })).getByRole("link", {
+      name: /Answered$/,
+    });
+  }
+
+  /** The marks drawn in an answer's words: its bold, its list and its paragraphs. */
+  const marks = (root: Element) => ({
+    strong: [...root.querySelectorAll("strong")].map((s) => s.textContent),
+    items: [...root.querySelectorAll("ul > li")].map((li) => li.textContent),
+    paragraphs: [...root.querySelectorAll("p")]
+      .filter((p) => p.parentElement?.tagName !== "LI")
+      .map((p) => p.textContent),
+  });
+
+  // AN ANSWER IN WORDS IS MARKDOWN, a comment like any other, and the row and
+  // the pane draw it as the conversation does: its bold as bold, its list as
+  // a list, its paragraphs apart. They printed `**Pass**` and `- ` and ran
+  // the lines together. The row stops the words at the kit's three lines,
+  // where they are drawn; the pane quotes them whole under its outcome line.
+  //
+  // Mutation: print the words as text in the row or the pane, or drop the
+  // row's clamp, and this fails.
+  test("an answer in words is drawn as markdown, clamped in its row and whole in its pane", async () => {
+    const reply =
+      "**Pass**, with two notes:\n- Ship the Linux build\n- Hold the Windows build\n\nRevisit the rest on Friday.";
+    const drawn = {
+      strong: ["Pass"],
+      items: ["Ship the Linux build", "Hold the Windows build"],
+      paragraphs: ["Pass, with two notes:", "Revisit the rest on Friday."],
+    };
+    mount({
+      answers: { answered_decisions: { handle: "jane", items: [answeredInWords(reply)] } },
+    });
+    await settle();
+    const row = await answeredRow();
+    const line = row.querySelector(".crewlet-inbox-row__outcome")!;
+    expect(line.textContent).toMatch(/^You replied/);
+    expect(marks(line)).toEqual(drawn);
+    expect(line.textContent).not.toMatch(/\*\*|- /);
+    // THE WHOLE LINE IS CLAMPED, the list in it.
+    expect(line.querySelector(".crewlet-text--clamp-3 ul")).not.toBeNull();
+    fireEvent.click(row);
+    await settle();
+    expect(document.querySelector(".crewlet-reading-pane__outcome")?.textContent).toBe(
+      "You replied",
+    );
+    const quote = document.querySelector(".crewlet-reading-pane__quote")!;
+    expect(marks(quote)).toEqual(drawn);
+    expect(quote.textContent).not.toMatch(/\*\*|- /);
+  });
+
+  // ONE PARAGRAPH IS QUOTED IN ITS SENTENCE, its marks drawn, so the line
+  // reads as it did. Mutation: set every answer under its line, and this fails.
+  test("an answer of one paragraph is quoted in its line, with its marks", async () => {
+    mount({
+      answers: {
+        answered_decisions: {
+          handle: "jane",
+          items: [answeredInWords("Hold it **a week**, then ship.")],
+        },
+      },
+    });
+    await settle();
+    const row = await answeredRow();
+    const line = row.querySelector(".crewlet-inbox-row__outcome")!;
+    expect(line.textContent).toBe("You replied “Hold it a week, then ship.”");
+    expect(marks(line)).toEqual({ strong: ["a week"], items: [], paragraphs: [] });
+    fireEvent.click(row);
+    await settle();
+    const outcome = document.querySelector(".crewlet-reading-pane__outcome")!;
+    expect(outcome.textContent).toBe("You replied “Hold it a week, then ship.”");
+    expect(marks(outcome).strong).toEqual(["a week"]);
+    expect(document.querySelector(".crewlet-reading-pane__quote")).toBeNull();
   });
 
   test("a link to an answered ask opens its group and its pane, with what happened next", async () => {
@@ -3828,7 +4031,12 @@ describe("what was answered", () => {
   test("a row answered here moves under Answered, never in Needs you as well", async () => {
     const mine = answeredItem({
       ask: { ...askItem().ask, open: false },
-      answer: { by: "jane", at: new Date().toISOString(), choice: "hold", body: "Hold release" },
+      answer: {
+        by: "jane",
+        at: new Date().toISOString(),
+        choice: "hold",
+        body: "Chose \u201cHold release\u201d",
+      },
     });
     let answeredYet = false;
     location.hash = "#/inbox/ask/c-12";
@@ -3898,7 +4106,12 @@ describe("what was answered", () => {
     };
     const mine = answeredItem({
       ask: { ...askItem().ask, open: false },
-      answer: { by: "jane", at: new Date().toISOString(), choice: "hold", body: "Hold release" },
+      answer: {
+        by: "jane",
+        at: new Date().toISOString(),
+        choice: "hold",
+        body: "Chose \u201cHold release\u201d",
+      },
     });
     let answeredYet = false;
     location.hash = "#/inbox/ask/c-12";

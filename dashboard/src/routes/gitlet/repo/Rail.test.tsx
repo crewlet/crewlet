@@ -16,6 +16,7 @@ import { LiveSocket, Store, type OrgProjection } from "~/protocol/index.ts";
 import { engineJson } from "~/test/engineAnswer.ts";
 import { withDerived } from "~/test/org.ts";
 import { ADMIN_VIEWER } from "~/test/viewer.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 import { RepositoryPage } from "./RepositoryPage.tsx";
 
 afterEach(() => {
@@ -462,10 +463,13 @@ test("Open changes asks the drafts when the count is refused, and says a refused
 const SPARK = [...Array<number>(16).fill(2), 9, 14, 6, 1, 3, 12, 17, 11, 8, 15, 19, 7, 13, 8];
 
 // THE PUSHES ARE COUNTED ON THE READER'S OWN DAYS: a +5:45 reader's bounds are their midnights,
-// a quarter-hour off UTC's, and the read moves once their day turns. Mutation: build the bounds
-// from UTC midnights, or from the machine's zone, and this fails.
+// a quarter-hour off UTC's. As their day turns the spark stays on screen, drawn on the days its
+// answer was counted on, and the next poll reads the moved days (`lib/useCodeQuery.ts`).
+// Mutations: build the bounds from UTC midnights, or from the machine's zone; put `day_bounds`
+// back in the question's key, and the spark gives way to its placeholder at midnight; or draw
+// the reader's new days under the old counts.
 test("the pushes are counted on a +5:45 reader's own days, and the spark draws the last 14", async () => {
-  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
   vi.setSystemTime(new Date("2026-11-16T10:00:00Z"));
   pinZoneForTest("Asia/Kathmandu");
   const asked = stubEngine({
@@ -499,12 +503,22 @@ test("the pushes are counted on a +5:45 reader's own days, and the spark draws t
     within(figure).getByRole("group", { name: "Pushes a day over the last 14 days" }),
   ).toBeTruthy();
 
-  // WITHIN THE DAY NOTHING NEW IS ASKED; PAST THE READER'S MIDNIGHT, ONCE, A DAY ON.
+  // WITHIN THE DAY NOTHING NEW IS ASKED; PAST THE READER'S MIDNIGHT, NOTHING UNTIL THE NEXT POLL.
+  const title = (bar: Element) => bar.getAttribute("title") ?? bar.getAttribute("aria-label");
   clockAt("2026-11-16T18:10:00Z");
   expect(facts()).toHaveLength(1);
   clockAt("2026-11-16T18:20:00Z");
+  await afterMicrotasks();
+  expect(facts()).toHaveLength(1);
+  expect(figure.isConnected).toBe(true);
+  expect(title(figure.querySelectorAll(".crewlet-histogram__bar")[0]!)).toBe("Nov 03 · 9 pushes");
+  await act(async () => void vi.advanceTimersByTime(60_000));
   await waitFor(() => expect(facts()).toHaveLength(2));
   expect(facts()[1]!.searchParams.get("day_bounds")!.split(",")[0]).toBe("2026-10-18T18:15:00Z");
+  await waitFor(() =>
+    expect(title(figure.querySelectorAll(".crewlet-histogram__bar")[0]!)).toBe("Nov 04 · 9 pushes"),
+  );
+  expect(figure.isConnected).toBe(true);
 });
 
 // WHO PUSHES HERE NAMES EACH PUSHER BY THEIR SEAT AND GITLET BY ITS MARK, folding the rest into one

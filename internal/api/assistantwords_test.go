@@ -26,7 +26,7 @@ var apiWords = regexp.MustCompile(`\b(GET|PUT|POST|PATCH|DELETE)\b|/|\{|_summary
 // title, its approve label, what it says above and under the rows, and every
 // row's label.
 func cardWords(p proposal.Preview) []string {
-	out := []string{p.Title, p.ApproveLabel, p.Summary, p.Note}
+	out := []string{p.Title, p.ApproveLabel, p.Summary.Text(), p.Note.Text()}
 	for _, c := range p.Changes {
 		out = append(out, c.Label)
 	}
@@ -130,7 +130,7 @@ func TestEveryGenericCardSpeaksThePersonsWords(t *testing.T) {
 			words := cardWords(p)
 			for _, c := range p.Changes {
 				if slices.Contains(computedRows, c.Field) {
-					words = append(words, c.To)
+					words = append(words, c.To.Text())
 				}
 			}
 			for _, w := range words {
@@ -198,9 +198,9 @@ func TestASeatIsAddedAndRemovedInThePersonsWords(t *testing.T) {
 		"body": map[string]any{"id": "engineering", "name": "Engineering",
 			"roles": []any{cto}}})
 	if p.Title != "Remove seat Senior Software Engineer" || p.Risk != wire.RiskDestructive ||
-		p.Summary != "This removes seat Senior Software Engineer from unit Engineering." ||
-		!strings.Contains(p.Note, "configuration history") {
-		t.Errorf("the seat's removal reads %q: %q, %q at risk %q", p.Title, p.Summary, p.Note,
-			p.Risk)
+		p.Summary.Text() != "This removes seat Senior Software Engineer from unit Engineering." ||
+		!strings.Contains(p.Note.Text(), "configuration history") {
+		t.Errorf("the seat's removal reads %q: %q, %q at risk %q", p.Title, p.Summary.Text(),
+			p.Note.Text(), p.Risk)
 	}
 }

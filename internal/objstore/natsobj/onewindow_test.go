@@ -226,6 +226,13 @@ func TestAWalkAcrossALinkEndsAtItsConsumersEnd(t *testing.T) {
 		t.Fatalf("a listing across a link named %d objects, %v; want the one put", listed, err)
 	}
 
+	// THE WATCHER IS ANOTHER CONNECTION: a pull's 404 reaches the reader first
+	// and the watcher later, so count once every walk's pull has ended on the
+	// watcher (a 404 each, or any 408) rather than when the get returns.
+	seen.await(t, func(*nats.Msg) bool {
+		walks, ends, expired := walkEnds(seen.all())
+		return (walks >= 2 && ends >= walks) || expired > 0
+	})
 	walks, ends := 0, 0
 	for _, m := range seen.all() {
 		switch {
@@ -458,6 +465,25 @@ func watchInOrder(t *testing.T, nc *nats.Conn, subjects ...string) *ordered {
 		}
 	}()
 	return w
+}
+
+// walkEnds counts, in msgs, the pulls of more than one message (walks) and
+// the statuses that end a pull at its consumer's end (404) or its expiry (408).
+func walkEnds(msgs []*nats.Msg) (walks, ends, expired int) {
+	for _, m := range msgs {
+		switch {
+		case strings.Contains(m.Subject, "CONSUMER.MSG.NEXT"):
+			var req server.JSApiConsumerGetNextRequest
+			if json.Unmarshal(m.Data, &req) == nil && req.Batch > 1 {
+				walks++
+			}
+		case m.Header.Get("Status") == "404":
+			ends++
+		case m.Header.Get("Status") == "408":
+			expired++
+		}
+	}
+	return walks, ends, expired
 }
 
 // all is every message w saw so far, in order.

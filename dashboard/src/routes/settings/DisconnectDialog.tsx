@@ -33,6 +33,7 @@ import { PlugGlyph, ExternalLinkGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { marked } from "~/ui/Problems.tsx";
 import { pathSegment, rest, RestError } from "~/protocol/index.ts";
+import type { SetupConsentRevocation } from "~/contract/setup.ts";
 
 /**
  * How long one surface is waited out while something else is writing at it.
@@ -208,7 +209,8 @@ export function DisconnectDialog({
       let stillOwed = false;
       for (const kind of kinds) {
         const answer = (await disconnectOne(kind, removeSeats, force, setWaitingOn)) as
-          { orphaned_secrets?: string[]; disconnecting?: boolean } | undefined;
+          | { orphaned_secrets?: string[]; disconnecting?: boolean; oauth?: SetupConsentRevocation }
+          | undefined;
         if (answer?.disconnecting) stillOwed = true;
         for (const name of answer?.orphaned_secrets ?? []) left.add(name);
       }

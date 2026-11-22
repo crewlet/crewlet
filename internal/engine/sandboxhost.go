@@ -72,11 +72,28 @@ func newBoxReads(ring recordseal.Keyring, node string, q queue.EventQueue,
 		return nil, fmt.Errorf("engine: the box-read channel's envelopes: %w", err)
 	}
 	return &boxReads{node: node, queue: q, wire: wire, taken: signedask.NewGuard(), host: host,
-		budget: sandbox.BoxReadBudget, now: time.Now, answerRead: sandbox.AnswerBoxRead,
+		budget: boxReadBudget, now: time.Now, answerRead: sandbox.AnswerBoxRead,
 		slots: newBoxReadSlots(boxReadsHeld, boxReadsWaiting)}, nil
 }
 
 var _ sandbox.BoxReader = (*boxReads)(nil)
+
+// boxReadBudget is [sandbox.BoxReadBudget] of run's read, by what the runner of
+// its harness settles reading its main thread: every node runs this build's
+// runners, so the asker's say what the host's do.
+func boxReadBudget(run sandbox.PendingRun, read sandbox.BoxRead) time.Duration {
+	return sandbox.BoxReadBudget(run, read, runnerThreadTraits()[run.Harness])
+}
+
+// runnerThreadTraits is what each harness's runner settles reading its main
+// thread, by name.
+var runnerThreadTraits = sync.OnceValue(func() map[string]sandbox.ThreadTraits {
+	traits := map[string]sandbox.ThreadTraits{}
+	for name, runner := range sandboxRunners() {
+		traits[name] = sandbox.ThreadTraitsOf(runner)
+	}
+	return traits
+})
 
 // ReadBox asks the node whose host run's box is on to read it back — see
 // [sandbox.BoxReader].
@@ -271,9 +288,9 @@ func (b *boxReads) seal(reply sandbox.BoxReadReply) ([]byte, error) {
 // boxReadsHeld is how many reads of the boxes on this node's host it makes at
 // once for its peers: as many as its registration answered at once while the
 // registration's own slots bounded them (queue.ConcurrentAnswers), so a host
-// below that reads exactly as it did, and the replies it holds at once stay
-// inside what queue.ConcurrentAnswers's doc counts for a box read's —
-// sixty-four at the transport's ceiling, 512 MiB.
+// below that reads exactly as it did. What they hold in bytes is the node's
+// answer budget's to bound: each collection holds its weight of it until its
+// reply is written (internal/sandbox/executor's collectionWeight).
 const boxReadsHeld = queue.ConcurrentAnswers
 
 // boxReadsWaiting is how many reads wait for one of those at once, each

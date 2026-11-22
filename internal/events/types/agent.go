@@ -504,7 +504,7 @@ type TurnCompleted struct {
 	// payload for nothing.
 	//
 	// No larger than the trigger it was read from, which crossed the queue
-	// in one message already.
+	// in one message already. REDACTED, as every record of the turn is.
 	Ask string `json:"ask,omitempty"`
 	// AskProvenance is who wrote Ask, as ONE label over the whole of it
 	// ([provenance.Label], ADR-0040): the labels of every part of the ask
@@ -554,6 +554,7 @@ type TurnCompleted struct {
 	// Interactions carries each trigger message's sender and body when
 	// identifiable. Usually one entry; a coalesced trigger carries one per
 	// constituent, possibly from several senders. Empty for internal triggers.
+	// Each body REDACTED, as Ask is.
 	Interactions []InboundInteraction `json:"interactions,omitempty"`
 	// ConversationKey is empty when the trigger has no conversation a later
 	// message could reproduce.

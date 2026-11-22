@@ -34,6 +34,7 @@ import {
   type AssistantProposalAnswer,
   type AssistantProposalCard,
   type AssistantProposalDecision,
+  type AssistantTranscript,
   type AssistantTurnMode,
 } from "~/contract/assistant.ts";
 import { SESSION_QUERIES } from "~/contract/domains.ts";
@@ -51,7 +52,7 @@ import { rereadViewer } from "~/lib/viewer.ts";
 import { EVERY_QUESTION, session as floors, type SessionDomain } from "~/protocol/session.ts";
 import { writeFailed } from "~/protocol/writeOutcome.ts";
 import { setAssistantActivity } from "../status.ts";
-import { writeTab } from "../tab.ts";
+import { CONVERSATION_ID, writeTab } from "../tab.ts";
 import { pageSnapshot, undoPageAction, type PageSnapshot } from "../context.ts";
 import { takeAction } from "./pageActions.ts";
 import {
@@ -95,10 +96,112 @@ function dispatch(event: TurnEvent): void {
 }
 
 function subscribe(listener: () => void): () => void {
+  // A TAB SHOWING A CONVERSATION hears what the others tell of it.
+  tabs();
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
   };
+}
+
+/**
+ * WHAT ONE TAB TELLS THE OTHERS: a conversation moved or was deleted, as an id
+ * and a word, never content; what was said is read under the reader's session.
+ */
+type Told =
+  | { kind: "moved"; conversation: string; turn?: string }
+  | { kind: "deleted"; conversation: string };
+
+const CHANNEL = "crewlet-assistant-conversations";
+let channel: BroadcastChannel | null = null;
+/** Bumped by every move another tab tells of, and by a rename here: a list reads again on it. */
+let movedElsewhere = 0;
+const movedListeners = new Set<() => void>();
+
+function listMoved(): void {
+  movedElsewhere += 1;
+  for (const listener of movedListeners) listener();
+}
+
+/** This tab's channel to the others, opened on first use where the browser has one. */
+function tabs(): BroadcastChannel | null {
+  if (channel === null && typeof BroadcastChannel !== "undefined") {
+    channel = new BroadcastChannel(CHANNEL);
+    channel.onmessage = (event: MessageEvent<unknown>) => heard(event.data);
+  }
+  return channel;
+}
+
+/** Tell every other tab of this browser that a conversation moved or was deleted. */
+function tell(told: Told): void {
+  tabs()?.postMessage(told);
+}
+
+/** What another tab told, read as a [Told] or dropped. */
+function toldOf(data: unknown): Told | null {
+  if (typeof data !== "object" || data === null) return null;
+  const { kind, conversation: id, turn } = data as Record<string, unknown>;
+  if (typeof id !== "string" || !CONVERSATION_ID.test(id)) return null;
+  if (kind === "deleted") return { kind, conversation: id };
+  if (kind !== "moved") return null;
+  return typeof turn === "string" ? { kind, conversation: id, turn } : { kind, conversation: id };
+}
+
+function heard(data: unknown): void {
+  const told = toldOf(data);
+  if (told === null) return;
+  listMoved();
+  if (told.kind === "deleted") {
+    if (view.id !== told.conversation && view.opening?.id !== told.conversation) return;
+    generation += 1;
+    closeStreams();
+    dispatch({ type: "deleted", id: told.conversation });
+    return;
+  }
+  if (view.id !== told.conversation || !behind(told.turn)) return;
+  void reread(told.conversation);
+}
+
+/**
+ * Whether this tab missed what another says moved: a turn it does not hold, or
+ * holds open with no stream reading it. Its own question on its way is kept.
+ */
+function behind(turn: string | undefined): boolean {
+  if (view.turns.at(-1)?.phase === "sending") return false;
+  if (turn === undefined) return true;
+  const held = view.turns.find((t) => t.id === turn);
+  if (held === undefined) return true;
+  return isOpen(held.phase) && view.stream === "closed";
+}
+
+/** Read the open conversation again from the engine, as another tab moved it. */
+async function reread(id: string): Promise<void> {
+  generation += 1;
+  const mine = generation;
+  closeStreams();
+  try {
+    const transcript = await call("GET /assistant/conversations/{id}", null, { id });
+    if (mine === generation) shown(transcript);
+  } catch (err) {
+    if (mine === generation && err instanceof RestError && err.status === 404) {
+      dispatch({ type: "deleted", id });
+    }
+  }
+}
+
+/** How many moves other tabs told of, and renames here: a value a list of conversations reads again on. */
+export function useMovedElsewhere(): number {
+  return useSyncExternalStore(
+    (listener) => {
+      tabs();
+      movedListeners.add(listener);
+      return () => {
+        movedListeners.delete(listener);
+      };
+    },
+    () => movedElsewhere,
+    () => 0,
+  );
 }
 
 /** The conversation now. */
@@ -280,6 +383,9 @@ function read(
         dispatch({ type: "frame", frame });
         pageAction(frame);
         modelFailed(frame);
+        if (own && (frame.kind === "done" || frame.kind === "error")) {
+          tell({ kind: "moved", conversation: frame.conversation_id, turn: frame.turn_id });
+        }
       },
       state: (state, since) => {
         if (own) live({ type: "stream", state, since });
@@ -314,6 +420,7 @@ async function ensureConversation(): Promise<string> {
         title: created.conversation.title ?? "",
       });
       writeTab({ conversation: created.conversation.id });
+      tell({ kind: "moved", conversation: created.conversation.id });
     }
     return created.conversation.id;
   })();
@@ -394,12 +501,21 @@ export async function send(
     if (mine !== generation) return;
     asked.add(accepted.turn_id);
     dispatch({ type: "accepted", key, turnId: accepted.turn_id, afterSeq: accepted.after_seq });
+    tell({ kind: "moved", conversation: id, turn: accepted.turn_id });
     follow(
       accepted.stream_url,
       accepted.after_seq > 0 ? assistantEventId(accepted.turn_id, accepted.after_seq) : undefined,
     );
   } catch (err) {
     if (mine !== generation || isAbort(err)) return;
+    // THE CONVERSATION IS GONE (deleted in another tab or on another device):
+    // said as that, and the conversation takes no more questions.
+    if (err instanceof RestError && err.status === 404 && view.id !== null) {
+      const id = view.id;
+      dispatch({ type: "refused", key, refusal: DELETED_REFUSAL });
+      dispatch({ type: "deleted", id });
+      return;
+    }
     const refusal =
       err instanceof RestError
         ? sendRefusalOf(err)
@@ -438,13 +554,30 @@ export function newConversation(): void {
   writeTab({ conversation: null });
 }
 
-/** Open a conversation from the engine's transcript, and rejoin a turn still running in it. */
+/**
+ * Open a conversation from the engine's transcript, and rejoin a turn still
+ * running in it. The view says it is opening, then why it failed; the promise rejects.
+ */
 export async function openConversation(id: string): Promise<void> {
   generation += 1;
   const mine = generation;
   closeStreams();
-  const transcript = await call("GET /assistant/conversations/{id}", null, { id });
+  dispatch({ type: "opening", id });
+  let transcript: AssistantTranscript;
+  try {
+    transcript = await call("GET /assistant/conversations/{id}", null, { id });
+  } catch (err) {
+    if (mine === generation && !isAbort(err)) {
+      dispatch({ type: "open_failed", id, ...openFailure(err) });
+    }
+    throw err;
+  }
   if (mine !== generation) return;
+  shown(transcript);
+}
+
+/** A transcript read from the engine, drawn as the conversation, its running turn followed. */
+function shown(transcript: AssistantTranscript): void {
   dispatch({ type: "transcript", transcript });
   writeTab({ conversation: transcript.conversation.id });
   const open = transcript.open_turn;
@@ -454,6 +587,42 @@ export async function openConversation(id: string): Promise<void> {
       open.after_seq > 0 ? assistantEventId(open.turn_id, open.after_seq) : undefined,
     );
   }
+}
+
+/** Why a conversation could not be opened: missing on a 404, else the engine's words or that it was unreached. */
+export function openFailure(err: unknown): { missing: boolean; sentence: string | null } {
+  if (!(err instanceof RestError)) return { missing: false, sentence: null };
+  if (err.status === 404) return { missing: true, sentence: null };
+  if (err.unanswered) {
+    return { missing: false, sentence: "Crewlet could not be reached. Check your connection." };
+  }
+  return { missing: false, sentence: conditionWords(err) ?? (err.sentence || null) };
+}
+
+/** What a question sent into a conversation deleted elsewhere is told. */
+export const DELETED_REFUSAL: SendRefusal = {
+  code: "conversation_deleted",
+  sentence: "Your question was not sent: this conversation was deleted.",
+  hint: null,
+  retryAfterSeconds: null,
+  remedy: null,
+};
+
+/**
+ * Rename a conversation of the person's to the trimmed title; a title the
+ * engine does not take rejects with its `RestError`, in its own words.
+ */
+export async function renameConversation(id: string, title: string): Promise<string> {
+  const named = await call(
+    "PATCH /assistant/conversations/{id}",
+    { ...versioned, title: title.trim() },
+    { id, opKey: newActOpID() },
+  );
+  const now = named.title ?? title.trim();
+  dispatch({ type: "renamed", id, title: now });
+  listMoved();
+  tell({ kind: "moved", conversation: id });
+  return now;
 }
 
 /**
@@ -474,6 +643,7 @@ export async function clearConversation(): Promise<void> {
   if (id === null) return;
   await call("DELETE /assistant/conversations/{id}", null, { id });
   newConversation();
+  tell({ kind: "deleted", conversation: id });
 }
 
 /** Dial the running turn's stream again, after the drawer's Try again. */
@@ -502,6 +672,7 @@ export async function deleteConversation(id: string): Promise<void> {
     return;
   }
   await call("DELETE /assistant/conversations/{id}", null, { id });
+  tell({ kind: "deleted", conversation: id });
 }
 
 /** The person's recent conversations, newest first. */
@@ -530,6 +701,7 @@ function decisionKey(keys: Map<string, string>, id: string): string {
 
 /** A decision's answer: the proposal at its state now, and the resumed turn's stream. */
 function decided(proposal: AssistantProposalCard, answer: AssistantProposalAnswer): void {
+  if (view.id !== null) tell({ kind: "moved", conversation: view.id, turn: answer.turn_id });
   dispatch({
     type: "approval_settled",
     proposalId: proposal.proposal_id,
@@ -701,6 +873,9 @@ export function recordRestore(turnKey: string, inBox: boolean): void {
 
 export function resetSessionForTest(): void {
   generation += 1;
+  channel?.close();
+  channel = null;
+  movedElsewhere = 0;
   creating = null;
   restores.clear();
   asked.clear();

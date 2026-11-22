@@ -212,6 +212,65 @@ func (c *LateCall) UnmarshalJSON(raw []byte) error {
 	return nil
 }
 
+// MarshalJSON writes the wake item with the keys a later build added to it.
+func (w WakeItem) MarshalJSON() ([]byte, error) {
+	type plain WakeItem
+	return marshalCarrying(plain(w), wireKeys(reflect.TypeFor[WakeItem]()), w.Extra)
+}
+
+// UnmarshalJSON reads the wake item and keeps the keys this build does not
+// know.
+func (w *WakeItem) UnmarshalJSON(raw []byte) error {
+	type plain WakeItem
+	p := plain(*w)
+	extra, err := unmarshalCarrying(raw, &p, wireKeys(reflect.TypeFor[WakeItem]()))
+	if err != nil {
+		return err
+	}
+	*w = WakeItem(p)
+	w.Extra = extra
+	return nil
+}
+
+// MarshalJSON writes the fold-in with every key this build carried but does
+// not read.
+func (f FoldIn) MarshalJSON() ([]byte, error) {
+	type plain FoldIn
+	return marshalCarrying(plain(f), wireKeys(reflect.TypeFor[FoldIn]()), f.Extra)
+}
+
+// UnmarshalJSON reads the fold-in, keeping every key this build does not read.
+func (f *FoldIn) UnmarshalJSON(raw []byte) error {
+	type plain FoldIn
+	var p plain
+	extra, err := unmarshalCarrying(raw, &p, wireKeys(reflect.TypeFor[FoldIn]()))
+	if err != nil {
+		return err
+	}
+	p.Extra = extra
+	*f = FoldIn(p)
+	return nil
+}
+
+// MarshalJSON writes the wake with the keys a later build added to it.
+func (w SealedWake) MarshalJSON() ([]byte, error) {
+	type plain SealedWake
+	return marshalCarrying(plain(w), wireKeys(reflect.TypeFor[SealedWake]()), w.Extra)
+}
+
+// UnmarshalJSON reads the wake and keeps the keys this build does not know.
+func (w *SealedWake) UnmarshalJSON(raw []byte) error {
+	type plain SealedWake
+	p := plain(*w)
+	extra, err := unmarshalCarrying(raw, &p, wireKeys(reflect.TypeFor[SealedWake]()))
+	if err != nil {
+		return err
+	}
+	*w = SealedWake(p)
+	w.Extra = extra
+	return nil
+}
+
 // MarshalJSON writes the telling with the keys a later build added to it.
 func (c CallTelling) MarshalJSON() ([]byte, error) {
 	type plain CallTelling

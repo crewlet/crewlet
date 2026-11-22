@@ -8,7 +8,7 @@
 // kind of thing the lease is for. That is not decoration: the key a resource
 // becomes carries its class as a subject token of its own, so a whole class
 // is a wildcard the broker can match and a listing asks for one kind rather
-// than reading every lease in the fleet. Four classes name four kinds:
+// than reading every lease in the fleet. Five classes name five kinds:
 //
 //   - seat:{id} — one agent seat this node runs, named by the agent id
 //     derived from its handle (ADR-0013), as its mailbox is.
@@ -30,6 +30,8 @@
 //     that has given presence up, and claimed afresh by every process, so a
 //     restart never waits on its predecessor's. Its tokens come from ONE
 //     counter for the whole class ([CounterResource]).
+//   - browser_control:{launch} — a person's control of one executor launch's
+//     browser ([BrowserControls]), its tokens from ONE counter, as a taker's.
 //
 // A caller may lease under a class of its own as well — the tracker's walk
 // claims are `move:` and `merge:` — and every such class is held to
@@ -99,17 +101,20 @@
 // error means unknown — there is no error worth special-casing into a
 // definite answer about who holds what.
 //
-// ONE CLAIM'S ERROR IS A DEFINITE FACT ABOUT WHAT THE STORE HOLDS, and it is
-// still not a fourth answer: [Custody.ClaimCustody] wrapping
-// [ErrCustodyUndecidable], for a batch whose keeper record the store holds and
-// nothing can read as a keeper. It decides nothing about ownership — not
-// "mine", not "another node's" — so the caller keeps and deletes nothing,
-// exactly as on unknown. What it is NOT is an outage: the store answered,
-// about that one record, and will answer the same until the record is removed
-// or ages out, so a caller that waited on it as on a store it could not reach
-// would wait out the record's month — and one working through many batches
-// would stop at this one, holding every batch behind it on a record no wait
-// clears. So it is told apart, and the caller goes on to the next batch.
+// ONE CLAIM'S ERROR IS A DEFINITE FACT ABOUT WHAT THE STORE HOLDS, and still
+// not a fourth answer: [ErrCustodyUndecidable], a keeper record nothing can
+// read. It decides no ownership, so the caller keeps and deletes nothing, as
+// on unknown; but the store answered, and answers the same until the record
+// goes, so waiting on it as on an outage would stall every batch behind it.
+// So it is told apart, and the caller goes on to the next batch.
+//
+// # A read is given the time its bytes take to cross
+//
+// A read across a leaf's link is given the time the bytes it may carry take to
+// cross at the slowest pace allowed. A reader that cannot wait that long (a
+// probe, a boot) reads a small record naming the large bytes by size and
+// digest; only the reader that needs them pays their crossing (ADR-0175). So
+// the activation pointer ([MaxPointerBytes]) names its body ([BodyRef]).
 //
 // # A definite answer is a CURRENT one
 //
@@ -211,16 +216,17 @@
 //
 // # A person's own record here is their SEAT's
 //
-// One record in this store is a PERSON'S rather than the company's or a
-// node's: their chat read state — the cursors, mutes and do-not-disturb of
-// [ChatReads]. It is keyed by the name iam.RecordOwner gives a principal's own
-// record, which for everybody chat admits is the human seat they act as, so
-// it follows the rule every personal record follows (ADR-0032): it belongs to
-// the SEAT, and the seat's next holder inherits it — the person themselves
-// once reinstated, or a successor once they are moved to another seat or
-// removed — exactly as the seat's tracker inbox, pins and personal views pass.
-// It ends when the seat leaves the company, never when its holder does; see
-// chatread.go for why neither a person id nor an agent id is the key.
+// Two records in this store are a PERSON'S rather than the company's or a
+// node's: their chat read state ([ChatReads]) and their Home board
+// ([HomeBoards]). Each is keyed by the name iam.RecordOwner gives a
+// principal's own record, which for everybody they admit is the human seat
+// they act as, so each follows the rule every personal record follows
+// (ADR-0032): it belongs to the SEAT, and the seat's next holder inherits it
+// (the person themselves once reinstated, or a successor once they are moved to
+// another seat or removed), exactly as the seat's tracker inbox, pins and
+// personal views pass. Each ends when the seat leaves the company, never when
+// its holder does; see chatread.go for why neither a person id nor an agent id
+// is the key.
 //
 // # A seat's save ledger lives in the uploads bucket
 //
@@ -521,11 +527,12 @@ type Lease struct {
 	// absent, and each reader states what absent means (placement reads
 	// absent roles as every role).
 	//
-	// A CALLER MAY NOT DEPEND ON A META VALUE'S GO TYPE: the twin hands
-	// back what was written while the KV store round-trips JSON (an int
-	// reads back as float64, a []string as []any), and both conform. Read
-	// it as placement.rolesFromMeta does: accept either shape, and treat
-	// anything else as absent.
+	// A CALLER MAY NOT DEPEND ON A META VALUE'S GO TYPE: both stores hand
+	// back what a JSON round trip leaves, not what was written (an int
+	// reads back as float64, a []string as []any), the twin putting every
+	// meta through one at the door (coord/memory's wireCopy). Read it as
+	// placement.rolesFromMeta does: accept either shape, and treat anything
+	// else as absent.
 	Meta map[string]any
 }
 
@@ -546,7 +553,10 @@ func (o AcquireOptions) EffectiveProtocol() int {
 // the caller says so. Every field whose zero value would be dangerous says
 // what its zero means.
 type AcquireOptions struct {
-	// Owner is the process incarnation claiming the resource.
+	// Owner is who claims the resource, the name every renewal and release of
+	// it must give: a node's process incarnation, or a node id and a uuid for
+	// one hold of its work, and for a browser control a person's take
+	// ([BrowserControlOwner.Key]).
 	Owner string
 	// TTL is how long the claim survives without a renew.
 	TTL time.Duration
@@ -568,8 +578,8 @@ type AcquireOptions struct {
 	// presence: a newer node unable to register is missing from the roster,
 	// so its peers over-take shares. Non-seat work: a fleet duty and a hold
 	// on one (internal/schedule), a server's OAuth renewal lease
-	// (internal/engine), a check run's remote slot (internal/gitlet/checkrun)
-	// and the taker lease ([ClassTaker]).
+	// (internal/engine), a check run's remote slot (internal/gitlet/checkrun),
+	// the taker lease ([ClassTaker]) and a person's control of a run's browser.
 	//
 	// It skips the check, never the stamp: on presence the stamp is what the
 	// gate reads; on a duty it holds nothing back ([ProtocolGateCounts]).
@@ -725,7 +735,7 @@ const ResourceSeparator = ":"
 // no members; [Class.Valid] refuses one.
 //
 // Not enumerated, or every caller's vocabulary would land here: this package
-// owns the four the fleet leases, the tracker leases under classes of its own,
+// owns the five the fleet leases, the tracker leases under classes of its own,
 // and only [Class.HeldToSeatTTL] says which classes the seat lease TTL holds.
 type Class string
 
@@ -748,6 +758,16 @@ const (
 	// renewed [KeptRenewals] times a TTL, and ungated and uncounted by the
 	// gate ([ProtocolGateCounts]): it says nothing about holding a seat.
 	ClassTaker Class = "taker"
+
+	// ClassBrowserControl is a person's control of one executor launch's
+	// browser ([BrowserControls], [BrowserControlResource]): taken and renewed
+	// by the node serving the person, ended by it or by the node holding the
+	// seat. Its tokens come from one counter for the class ([CounterResource]),
+	// since a launch is a resource nobody leases again once its job ends;
+	// ungated and uncounted by the gate. Coord's own class rather than a
+	// caller's, because [CounterResource] must know its counter and its record
+	// is a typed contract both stores implement.
+	ClassBrowserControl Class = "browser_control"
 )
 
 // TakerResource names the taker lease of one process incarnation
@@ -758,18 +778,24 @@ func TakerResource(incarnation string) string { return ClassTaker.Resource(incar
 // tokens; every backend asks this one function so the twin and the store
 // agree.
 //
-// The resource itself, except a taker lease, which counts on its class's one
-// counter keyed by the class name: a counter is never removed (a removed one
-// restarts at 1), so one per process start would grow forever. A class
-// counter keeps the guarantee — every token above every earlier one, so a
-// re-claiming taker is fenced against its past self — at the cost of
-// contention its compare-and-set absorbs. It keeps no placement hint.
+// The resource itself, except a taker lease or a browser control, which counts
+// on its class's one counter keyed by the class name: a counter is never
+// removed (a removed one restarts at 1), so one per process start or per
+// launch would grow forever. A class counter keeps the guarantee — every
+// token above every earlier one, so a re-claim is fenced against its past
+// self — at the cost of contention its compare-and-set absorbs. It keeps no
+// placement hint.
 func CounterResource(resource string) string {
-	if ClassTaker.Holds(resource) {
-		return string(ClassTaker)
+	for _, class := range classCounted {
+		if class.Holds(resource) {
+			return string(class)
+		}
 	}
 	return resource
 }
+
+// classCounted is every class whose tokens one counter of the class mints.
+var classCounted = []Class{ClassTaker, ClassBrowserControl}
 
 // Valid reports whether this class can address a key: SHAPE, not membership.
 // It must be non-empty and survive the key grammar's escaping UNCHANGED, or

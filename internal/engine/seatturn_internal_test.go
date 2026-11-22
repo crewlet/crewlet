@@ -14,7 +14,7 @@ import (
 
 // A PERSON'S ANSWER ARRIVING MID-TURN IS RECORDED AT ONCE AND RESUMED AS THE
 // SEAT'S NEXT TURN. It arrives on the seat's control topic, which no mailbox
-// turn waits for; a seat runs one turn at a time ([node.ErrSeatBusy]), so the
+// turn waits for; the rig's seat runs one turn at a time ([node.ErrSeatFull]), so the
 // resume waits for the running turn and runs once it is released
 // ([node.Config.SeatTurnEnded]), not at the five-minute backstop. Drives the
 // engine's own coordinator, gate, control-topic subscription and node hook.
@@ -46,19 +46,19 @@ func TestAnAnswerArrivingMidTurnIsResumedWhenTheTurnEnds(t *testing.T) {
 	// THE SEAT'S NEXT TURN, once the park's own has let go of it.
 	var release func()
 	eventually(t, "a turn to be admitted on the seat", func() bool {
-		_, admitted, err := e.node.AdmitTurn(t.Context(), "swe")
+		_, admitted, err := e.node.AdmitTurn(t.Context(), "swe", "")
 		release = admitted
 		return err == nil
 	})
 	t.Cleanup(release)
-	_, next, err := e.admitResume(t.Context(), "swe", sandbox.ResumeAnswer)
+	_, next, err := e.admitResume(t.Context(), "swe", "", sandbox.ResumeAnswer)
 	var refused *sandbox.TurnRefused
 	if err == nil {
 		next()
 	}
-	if !errors.As(err, &refused) || refused.Condition != waitSeatBusy || !errors.Is(err, node.ErrSeatBusy) {
+	if !errors.As(err, &refused) || refused.Condition != waitSeatTurns || !errors.Is(err, node.ErrSeatFull) {
 		t.Fatalf("a resume on a seat mid-turn = %v, want it waiting on %q with the node's "+
-			"busy refusal as its cause", err, waitSeatBusy)
+			"busy refusal as its cause", err, waitSeatTurns)
 	}
 
 	desk := sandbox.AnswerDesk{Pending: sandbox.NewCoordStore(e.backends.Fleet), Queue: e.backends.Queue}

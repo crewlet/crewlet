@@ -103,13 +103,16 @@ export interface ModelUsage {
 }
 
 /**
- * One place that runs on a model: a seat's job, or the assistant. `position`
- * 0 is the place that runs on it; a later position is a fallback.
+ * One place that runs on a model: a seat's job, Ask Crewlet's chat, or the
+ * Advisor's findings. `position` 0 is the place that runs on it; a later
+ * position is a fallback.
  */
 export interface ModelUse {
   seat?: string;
   job?: ModelJob;
   assistant?: "chat";
+  /** The Advisor explains its findings with the model (`advisor.model`). */
+  advisor?: "findings";
   position: number;
   written?: boolean;
   source?: "seat" | "executor" | "default-entry" | "first-entry";
@@ -187,6 +190,8 @@ export type ModelEntriesAnswer =
       nodes: ModelNode[];
       entries: ModelEntry[];
       alarms: ModelAlarm[] | null;
+      /** The harnesses this node's build runs a seat's executor on, in the profiles' order. */
+      executor_harnesses: string[];
     }
   | {
       reading: "member";
@@ -194,6 +199,8 @@ export type ModelEntriesAnswer =
       nodes: ModelNode[];
       entries: MemberModelEntry[];
       alarms: null;
+      /** The harnesses this node's build runs a seat's executor on, in the profiles' order. */
+      executor_harnesses: string[];
     };
 
 /** One runner cell's probe on one node. */
@@ -348,11 +355,12 @@ export interface HostLoginAnswer {
   shares_login_with: string[];
 }
 
-/** One written reference to a model, by identity: a seat's job, or the assistant's chat or deep work (`configapi.RemovalAt`). */
+/** One written reference to a model, by identity: a seat's job, Ask Crewlet's chat, or the Advisor's findings (`configapi.RemovalAt`). */
 export interface ModelReferenceAt {
   seat?: string;
   job?: ModelJob;
   assistant?: "chat";
+  advisor?: "findings";
 }
 
 /** A dependant the remove refusal names: where it is, the field, and the whole chain written there. */

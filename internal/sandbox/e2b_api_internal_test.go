@@ -13,8 +13,8 @@ import (
 // id of the box the create just made and leave it running. The field is read
 // by reflection, so an edit that keeps the string builds, and fails here.
 //
-// Mutation: keep the string in [answered], and the kind check fails; read the
-// key's presence alone, and the empty and null rows fail.
+// Mutation: keep the string in [tokenAnswered], and the kind check fails;
+// read the key's presence alone, and the empty and null rows fail.
 func TestATrafficTokenIsReadAsPresentAndNeverKept(t *testing.T) {
 	t.Parallel()
 	for answer, want := range map[string]bool{

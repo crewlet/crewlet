@@ -8,24 +8,32 @@ name: pins
 #     (RELEASING.md): every git node runs the image's git, and Debian's
 #     updates to its own git never reach it.
 #   - Chromiums: scripts/chromium-pin.env names the two Chrome for Testing
-#     builds the suite drives, the newest and the floor of the engine's CDP
-#     client, each by version and the SHA-256 of its zip on every released
-#     platform. No release carries them, so a bump is the suite's alone.
-# No Dependabot ecosystem watches a source tarball or a Chrome for Testing
-# build, so without this each pin would be watched by nothing, which looks
-# exactly like a pin with nothing to update.
+#     builds the suite drives, the newest and the floor
+#     (internal/browser.MinChromiumMajor), each by version and the SHA-256 of
+#     its zip on every released platform. No release carries them, so a bump
+#     is the suite's alone.
+#   - floor Node: scripts/node-pin.env names the oldest Node the box helper
+#     supports, with the npm it bundles, for the helper's cases to run on
+#     beside the machine's own node, an official release by version and the
+#     SHA-256 of its tarball on every released platform. No release carries
+#     it, so a bump is the suite's alone.
+# No Dependabot ecosystem watches a source tarball, a Chrome for Testing build
+# or a Node release, so without this each pin would be watched by nothing,
+# which looks exactly like a pin with nothing to update.
 #
 # Each leg's script does the work and its own suite holds it
-# (scripts/git-pin_test.sh and scripts/chromium-pin_test.sh, in ci.yml's `build
-# + vet`); this file decides only what a person sees. Exit 1, a pin behind: ONE
-# issue per leg, titled `git pin behind upstream` or `chromium pin behind
+# (scripts/git-pin_test.sh, scripts/chromium-pin_test.sh and
+# scripts/node-pin_test.sh, in ci.yml's `build + vet`); this file decides only
+# what a person sees. Exit 1, a pin behind: ONE issue per leg, titled `git pin
+# behind upstream`, `chromium pin behind upstream` or `node pin behind
 # upstream` — found by that exact title among the open issues, opened with the
 # `dependencies` label Dependabot's pull requests carry, and rewritten in place
 # (with a comment, so its watchers hear it) only when what it says changes —
 # whose body is the script's report: each stale pin's new lines, every SHA-256
 # that of a tarball whose signature verified against the git maintainer's pinned
-# key or of a zip the check downloaded and hashed itself, and the pull request
-# that bumps it. Then the leg fails, every week, until the pin moves. Exit 2,
+# key, of a Node tarball the SHASUMS256.txt a pinned releaser signed names, or
+# of a zip the check downloaded and hashed itself, and the pull request that
+# bumps it. Then the leg fails, every week, until the pin moves. Exit 2,
 # the check could not tell (a listing or download refused, a signature that
 # does not verify, a listing answering something that is no version): the leg
 # fails and its issue is left as it was, since nothing new is known. Exit 0: an
@@ -46,12 +54,14 @@ name: pins
 # new credential, which is not this file's to add. So this holds no secret and
 # writes nothing but issues.
 #
-# The git maintainer's release signing key is checked in band, by the git
-# leg's last step, whether or not a pin is behind: its signing subkeys expire,
-# and once they do the check above fails on every run. `git-pin-check.sh key`
-# fails that leg from 60 days before that, eight weekly runs to refresh
-# scripts/git-signing-key.asc. A Chrome for Testing build is signed by nothing,
-# so its leg has no key to hold.
+# The keys that sign git's and Node's releases are checked in band, by those
+# legs' last step, whether or not a pin is behind: the git maintainer's
+# signing subkeys expire, and so do some of Node's releasers' keys, and once
+# one has, the check above fails on every run a release it signs comes into.
+# `<check> key` fails the leg from 60 days before any such key stops signing,
+# eight weekly runs to refresh scripts/git-signing-key.asc or
+# scripts/node-release-keys.asc. A Chrome for Testing build is signed by
+# nothing, so its leg has no key to hold.
 
 on:
   schedule:
@@ -76,8 +86,8 @@ jobs:
     name: the pinned ${{ matrix.what }} against upstream
     # A fixed LTS image, never `ubuntu-latest`: ci.yml's `build` job says why.
     runs-on: ubuntu-24.04
-    # Each leg runs whatever the other's outcome: a stale git pin is no reason
-    # to stop asking about Chromium, nor the reverse.
+    # Each leg runs whatever the others' outcomes: a stale git pin is no
+    # reason to stop asking about Chromium or Node, nor the reverse.
     strategy:
       fail-fast: false
       matrix:
@@ -87,25 +97,37 @@ jobs:
             pins: scripts/git-pin.env
             title: git pin behind upstream
             current: Every pin in scripts/git-pin.env is the newest release of its series again
+            keys: true
           - what: Chromiums
             check: scripts/chromium-pin-check.sh
             pins: scripts/chromium-pin.env
             title: chromium pin behind upstream
             current: Every pin in scripts/chromium-pin.env is the release its rule names again
+          - what: floor Node
+            check: scripts/node-pin-check.sh
+            pins: scripts/node-pin.env
+            title: node pin behind upstream
+            current: The floor in scripts/node-pin.env is the newest patch of its major again
+            keys: true
     # The git leg reads kernel.org's listing and, for each pin that is behind,
     # one tarball of about 8 MB and its signature: measured from a development
     # machine, 0.6 s with every pin current and 2.8 s with one release to
     # download and verify. The Chromium leg reads two files of Chrome for
     # Testing's listing and, for each pin that is behind, a zip of about 200 MB
     # for each of four platforms: at most eight, measured on a development
-    # machine's link at 18 to 24 s each, 159 s for all eight. Each download
-    # gives up once it has received nothing for a minute or connected nowhere
-    # in 30 seconds, and is asked again three times (each script's fetch), so
-    # an upstream that stops answering fails the leg rather than holding a
-    # runner for GitHub's six hours. Ten minutes is over three times the
-    # slowest leg that works and room for a few stalled attempts; a leg that
-    # meets more is ended here, which fails it as a leg that could not tell
-    # does — its issue untouched, the next week's run asking again.
+    # machine's link at 18 to 24 s each, 159 s for all eight. The floor Node
+    # leg reads nodejs.org's index and nodejs/Release's schedule and, for each
+    # release it proposes (a patch, and from 60 days before the floor's end of
+    # life the major to raise it to), a SHASUMS256.txt, its signature and four
+    # tarballs of 26 to 31 MB: measured from a development machine, 0.2 s
+    # current and 11 to 12 s for one release, so at most about 25 s. Each
+    # download gives up once it has received nothing for a minute or connected
+    # nowhere in 30 seconds, and is asked again three times (each script's
+    # fetch), so an upstream that stops answering fails the leg rather than
+    # holding a runner for GitHub's six hours. Ten minutes is over three times
+    # the slowest leg that works and room for a few stalled attempts; a leg
+    # that meets more is ended here, which fails it as a leg that could not
+    # tell does — its issue untouched, the next week's run asking again.
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
@@ -258,8 +280,11 @@ jobs:
 
       # Whether or not a pin is behind, and whether or not the check could
       # tell: a key about to expire is the one thing that would stop every
-      # later run from telling at all. The git leg's alone: no key signs a
-      # Chrome for Testing build.
-      - name: the release signing key stays valid for more than 60 days
-        if: always() && matrix.what == 'gits'
-        run: scripts/git-pin-check.sh key
+      # later run from telling at all. The legs whose upstream signs with keys
+      # that expire, `keys: true` above: no key signs a Chrome for Testing
+      # build.
+      - name: the release signing keys stay valid for more than 60 days
+        if: always() && matrix.keys
+        env:
+          CHECK: ${{ matrix.check }}
+        run: '"$CHECK" key'

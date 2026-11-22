@@ -843,7 +843,7 @@ func (d CodeDeps) proposeChange(ctx context.Context, turn *turnctx.Turn, tool st
 		r := d.failedWrite(ctx, turn, tool, c, repo, p.OpID, err)
 		return gitlet.ChangeResult{}, &r
 	}
-	commit(turn, res.Outcome, types.CommittedCode)
+	commit(turn, res.Outcome, types.CommittedCode, changeRecord(res.ChangeID))
 	if res.Refusal != "" {
 		r := changeRefused(tool, res)
 		return gitlet.ChangeResult{}, &r

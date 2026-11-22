@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"slices"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -366,7 +366,7 @@ func TestAResumedTurnRunsOnTheScreenTheDecisionWasMadeFrom(t *testing.T) {
 		resumed, err := f.Svc.Resume(ctx, approval.Resumption{Owner: f.Person.ID,
 			Conversation: f.Conversation, Turn: accepted.TurnID, Proposal: first.ID,
 			Read: f.Grant("report"), State: wire.ProposalApplied, ClientReported: true,
-			Receipt: &wire.Receipt{Summary: "Applied to Brand › Set up"},
+			Receipt: &wire.Receipt{Summary: wire.Plain("Applied to Brand › Set up")},
 			Card:    cardAt(first, wire.ProposalApplied), Page: now})
 		if err != nil {
 			t.Fatal(err)
@@ -430,7 +430,7 @@ func TestADecisionNeverAttachesAPageTheQuestionLeftOut(t *testing.T) {
 	resumed, err := f.Svc.Resume(ctx, approval.Resumption{Owner: f.Person.ID,
 		Conversation: f.Conversation, Turn: accepted.TurnID, Proposal: p.ID,
 		Read: f.Grant("approve"), State: wire.ProposalApplied,
-		Receipt: &wire.Receipt{Summary: "Created ENG-8."}, Card: cardAt(p, wire.ProposalApplied),
+		Receipt: &wire.Receipt{Summary: wire.Plain("Created ENG-8.")}, Card: cardAt(p, wire.ProposalApplied),
 		Page: draftPage()})
 	if err != nil {
 		t.Fatal(err)
@@ -466,11 +466,12 @@ func TestADraftChangeIsNamedByTheScreensLabels(t *testing.T) {
 		}
 		rows[c.Label] = c
 	}
-	if rows["Voice"].To != "Plain and warm." {
+	if rows["Voice"].To.Text() != "Plain and warm." {
 		t.Errorf("the voice row reads %+v, want the screen's label and the value", rows["Voice"])
 	}
-	if got := rows["Avoid"].Items; !slices.Equal(got, []string{"Jargon", "Exclamation marks"}) {
-		t.Errorf("the list field's items are %q, want each line its own item", got)
+	if got := rows["Avoid"].Items; !reflect.DeepEqual(got, []wire.Phrase{wire.Plain("Jargon"),
+		wire.Plain("Exclamation marks")}) {
+		t.Errorf("the list field's items are %+v, want each line its own item", got)
 	}
 }
 

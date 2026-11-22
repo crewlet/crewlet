@@ -34,6 +34,8 @@ func TestAnExecutorIsListedUnderWhatItsTurnWasAskedWithNoFence(t *testing.T) {
 	o := firstPartyChart(t)
 	swe := o.AgentSeatByHandle("swe")
 	swe.LLM = seat.LLM
+	// EVERY SUBTEST'S RUNS STAY UP on the one seat, so it has room for them.
+	roomForRuns(swe, 256)
 	c.Org = o
 	e := launchReadyEngine(t, c)
 	reg := partyRegistry(o, nil)

@@ -383,7 +383,7 @@ func TestASeatFilterDoesNotMatchASeatlessRow(t *testing.T) {
 	// AND THE SAME TRAP ONE FUNCTION OVER, where `AgentPhases` bound both
 	// identifiers the same way, so a handle that resolved to no role was
 	// answered every seatless phase in the window.
-	phases, _, err := log.AgentPhases(t.Context(), "id-PM", nil, time.Now())
+	phases, _, err := log.AgentPhases(t.Context(), "id-PM", 0, nil, time.Now())
 	if err != nil {
 		t.Fatalf("AgentPhases: %v", err)
 	}

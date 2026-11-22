@@ -17,8 +17,9 @@
 #
 # The second thing this file is for is the parts that need something the
 # machine may not have. The dashboard is a React + TypeScript application built
-# by Vite, so its suites and its build need node AND npm; the targets that need
-# them FAIL saying what to install, which is the same posture CI takes
+# by Vite, so its suites and its build need node AND npm, and so does the suite,
+# which installs a box's Playwright tree with npm; the targets that need them
+# FAIL saying what to install, which is the same posture CI takes
 # (CONTRIBUTING.md, "A skip is not a pass"). Every queue backend certifies
 # itself with no external service: the JetStream suite starts an embedded
 # broker per test. The suite's git is the same posture's: every target that
@@ -29,7 +30,15 @@
 # Chrome for Testing builds scripts/chromium-pin.env pins, which `make
 # chromium` fetches once a machine, and a machine without curl, unzip or a
 # SHA-256 tool is told so by name rather than handed its own Chrome (`##@ The
-# pinned Chromiums`).
+# pinned Chromiums`). So is its floor Node: every target that runs the whole
+# suite names the build of the oldest Node the box helper supports, with the
+# npm it bundles, which scripts/node-pin.env pins and `make node` fetches once
+# a machine, and a machine without curl, xz or a SHA-256 tool is told so by
+# name (`##@ The floor Node`). So is its Playwright tree: every target that
+# runs the whole suite names the tree internal/browser/boxhelper/tree locks,
+# which `make playwright-tree` installs with npm once per lock, and a machine
+# without node, an npm of boxhelper's MinNPMMajor or newer, or a SHA-256 tool
+# is told so by name (`##@ The locked Playwright tree`).
 #
 # THE BUILT DASHBOARD IS COMMITTED, and that is deliberate rather than lazy:
 # `go build ./...` and `go install …@latest` must work on a clean checkout with
@@ -99,22 +108,23 @@ BIN := crewlet
 # does not merely flap — it cannot pass on a machine that speed, and the
 # failure reads as a hung test rather than as a budget nobody set.
 #
-# Thirty minutes is a hang detector sized against the worst LEGITIMATE run,
-# not against the worst run ever seen. On CI's own four-vCPU runners
-# internal/e2e completed green in 426.6s on main and 561.9s on a pull request
-# (both 2026-10-07); the pathological 1684.497s that once came within 115s of
-# this wall was a run that lost nine cluster-start attempts to unanswered
-# broker metadata requests, which is a defect that has been fixed rather than
-# a duration to budget for (see internal/jsprovision's Ask). Against the slower
-# green figure this is 3.2x, which is room for a runner a third that speed.
+# Forty-five minutes is a hang detector sized against the worst LEGITIMATE
+# run, not against the worst run ever seen: internal/sandbox/executor, whose
+# scrub-bound check reads live bytes under a stop-the-world GC at every 1% of
+# growth, measured 1,918 s under -race on a two-core slot (1,164 s on CI's
+# four-vCPU runners). 45 minutes is 1.4 times that. internal/e2e completed
+# green in 426.6s on main and 561.9s on a pull request (both 2026-10-07); its
+# pathological 1684.497s lost nine cluster-start attempts to unanswered broker
+# metadata requests, a defect that has been fixed rather than a duration to
+# budget for (see internal/jsprovision's Ask).
 #
 # It applies to every package because the flag is per test BINARY: a unit
-# package that hangs dies in thirty minutes rather than go's default ten,
+# package that hangs dies in forty-five minutes rather than go's default ten,
 # which is the cost of having a gate that can pass at all.
 #
 # AND IT IS THE ONLY DEADLINE A HUNG TEST MEETS. ci.yml sets no
 # `timeout-minutes`, so the outer bound is GitHub's own per-job default of six
-# hours — this fires twelve times sooner, and it is the one that fires
+# hours — this fires eight times sooner, and it is the one that fires
 # usefully: `go test` hitting its own deadline prints a full goroutine dump
 # naming what is stuck, where a job killed by the runner prints nothing at all.
 # A ceiling in the workflow would have to sit ABOVE this one to keep that true,
@@ -125,7 +135,7 @@ BIN := crewlet
 # the flag was handed an EMPTY value and `go test` parsed the package list as
 # its argument — `invalid value "./..." for flag -timeout`. `make test` and
 # therefore `make check` could not run at all.
-TEST_TIMEOUT := 30m
+TEST_TIMEOUT := 45m
 
 # -vet=off, because the vet `go test` runs by default is a DUPLICATE here and
 # not a gate of its own. It is twelve analyzers (cmd/go's defaultVetFlags), and
@@ -256,9 +266,9 @@ COMPANY ?=
 .DEFAULT_GOAL := help
 
 .PHONY: help build crewlet install fmt tidy image-context schema metrics-doc alarms-doc derived gate-answer ssh-held-words objects-answer broker-answer assistant-fixtures retention-alarms \
-        dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint \
-        check fmt-check tidy-check signoff-check signoff-test git-test chromium-test vet lint test test-norace test-cross test-solo \
-        require-npm bench git test-gitproc test-capture chromium \
+        dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint notehelper notehelper-check \
+        check fmt-check tidy-check signoff-check signoff-test git-test chromium-test node-test playwright-tree-test vet lint test test-norace test-cross test-solo \
+        require-npm bench git test-gitproc test-capture chromium node playwright-tree \
         mattermost-up mattermost-down \
         gitlab-up gitlab-down \
         snapshot clean require-node
@@ -413,6 +423,49 @@ dashboard-check: $(UI)/node_modules ## fail if static/dashboard, static/artifact
 	  exit 1; \
 	fi
 
+##@ The note helper
+
+# internal/notehelper runs IN a box, so the engine embeds a build per box arch,
+# committed as static/dashboard is (`go build ./...` stays one command on a
+# clean checkout) and held to its source by `notehelper-check` and ci.yml's
+# build job, the same commands. Byte for byte reproducible, so the bytes
+# depend on the source and go.mod alone: go.mod's own toolchain (never a newer
+# one `auto` would keep), -trimpath, no VCS stamp (it would change with every
+# commit), an empty build id, and gzipbuild's compress/gzip in place of the
+# gzip program, whose output is its version's. x/net/websocket is its one
+# module beyond std, as only it saves hand-rolling RFC 6455, which #1818's
+# ruling forbids; its version is in the build info, so its bumps rebuild
+# (.github/workflows/dependabot-notehelper.yml). `go doc ./internal/notehelper`.
+NOTEHELPER_OUT := internal/sandbox/executor/notehelper
+NOTEHELPER_GO := go$(shell sed -n 's/^go //p' go.mod)
+
+notehelper: ## rebuild the note helper's embedded builds into internal/sandbox/executor/notehelper (commit the result)
+	@set -e; tmp="$$(mktemp -d)"; mkdir -p $(NOTEHELPER_OUT); \
+	GOTOOLCHAIN=$(NOTEHELPER_GO) $(GO) build -o "$$tmp/gzipbuild" ./internal/notehelper/gzipbuild; \
+	for arch in amd64 arm64; do \
+	  GOTOOLCHAIN=$(NOTEHELPER_GO) CGO_ENABLED=0 GOOS=linux GOARCH=$$arch GOAMD64=v1 GOARM64=v8.0 \
+	    $(GO) build -trimpath -buildvcs=false -ldflags="-s -w -buildid=" \
+	    -o "$$tmp/notehelper" ./internal/notehelper; \
+	  "$$tmp/gzipbuild" "$$tmp/notehelper" "$(NOTEHELPER_OUT)/notehelper-linux-$$arch.gz"; \
+	  rm -f "$$tmp/notehelper"; \
+	done; \
+	rm -f "$$tmp/gzipbuild"; rmdir "$$tmp"
+
+# Rebuild, then judge against the index, as dashboard-check does and for its
+# reasons: a changed build and one no commit carries both fail. A pull request
+# moving go.mod's toolchain or x/net without the rebuild fails here too.
+notehelper-check: notehelper ## fail if internal/sandbox/executor/notehelper is not what internal/notehelper builds (ci: build + vet)
+	@untracked="$$(git ls-files --others -- $(NOTEHELPER_OUT))" || exit 1; \
+	if ! git diff --exit-code --stat -- $(NOTEHELPER_OUT) || [ -n "$$untracked" ]; then \
+	  { echo; \
+	    echo "$(NOTEHELPER_OUT) is not what internal/notehelper builds at go.mod's toolchain and modules."; \
+	    git status --porcelain --untracked-files=all --ignored=matching \
+	      -- $(NOTEHELPER_OUT) | grep -v '^. '; \
+	    echo "Fix: run 'make notehelper', then commit both builds:"; \
+	    echo "  git add $(NOTEHELPER_OUT)/notehelper-linux-amd64.gz $(NOTEHELPER_OUT)/notehelper-linux-arm64.gz"; } >&2; \
+	  exit 1; \
+	fi
+
 ##@ The pinned gits
 
 # THE GITS THE SUITE RUNS, built from the release tarballs scripts/git-pin.env
@@ -494,10 +547,9 @@ test-capture: ## run flock's pin cases, the harness capture's cases and the sock
 # (CREWLET_CHROMIUM_CACHE, by default ~/.cache/crewlet/chromium; a pin bump,
 # or a change to how the recipe lays a build out, is a new build beside the
 # old). Two of them: the newest, Chrome for Testing's Stable, and the floor,
-# the newest patch of the oldest major the engine's CDP client drives
-# (internal/browser/cdp.MinMajor), so what a protocol case asserts is held at
-# both ends of what the engine promises to drive, never on whichever Chrome
-# the machine has.
+# the newest patch of internal/browser.MinChromiumMajor's major, so what a case
+# that drives Chromium asserts is held at both ends of what the engine accepts,
+# never on whichever Chrome the machine has.
 #
 # BOTH ARE FETCHED, so a pin whose version or digest is wrong fails here — at
 # the download its SHA-256 refuses — rather than in whichever later run first
@@ -523,24 +575,75 @@ CHROMIUM_ENV = chromium_newest="$$(scripts/chromium.sh newest)" || exit 1; \
 	chromium_floor="$$(scripts/chromium.sh floor)" || exit 1; \
 	export CREWLET_TEST_CHROMIUM="$$chromium_newest" CREWLET_TEST_CHROMIUM_FLOOR="$$chromium_floor";
 
+##@ The floor Node
+
+# THE OLDEST NODE THE BOX HELPER SUPPORTS, with the npm it bundles: the newest
+# release of Node internal/browser/boxhelper.MinNodeMajor, fetched from the
+# official tarball scripts/node-pin.env pins by version and per-platform
+# SHA-256, by scripts/node.sh, once a machine, into a per-user cache
+# (CREWLET_NODE_CACHE, by default ~/.cache/crewlet/node; a pin bump, or a
+# change to how the recipe lays a build out, is a new build beside the old).
+# boxhelpertest hands it, node and npm, to a case of the helper beside the
+# machine's own, so what the case asserts holds on the oldest Node and npm a
+# box may carry (boxhelper's package doc). About 31 MB of download and 136 MB
+# kept, once; after that node.sh finds the build and answers at once. Named
+# for what it fetches, as `git` and `chromium` are, never `node-floor`, which
+# names git's floor for a Gitlet node (GIT_PINS).
+node: ## fetch the pinned floor Node with its npm, the oldest the box helper supports (scripts/node-pin.env; needs curl and xz)
+	@scripts/node.sh floor >/dev/null
+
+# THE FLOOR NODE EVERY TARGET THAT RUNS THE WHOLE SUITE NAMES, in
+# CREWLET_TEST_NODE_FLOOR, which internal/browser/boxhelper/boxhelpertest
+# reads, from scripts/node.sh, which a target's `node` prerequisite has
+# already fetched. A STATEMENT, as CHROMIUM_ENV's are and for its reason, held
+# in floor_node, since GIT_ENV's node_floor, earlier on the same recipe line,
+# is git's. Not NODE_ENV, the name the Node ecosystem reads: make exports a
+# variable that came from the environment to every recipe, so a developer's
+# exported NODE_ENV would reach npm and Vite holding this recipe text.
+NODE_FLOOR_ENV = floor_node="$$(scripts/node.sh floor)" || exit 1; \
+	export CREWLET_TEST_NODE_FLOOR="$$floor_node";
+
+##@ The locked Playwright tree
+
+# THE PLAYWRIGHT TREE A SEAT'S BOX INSTALLS, as the suite installs it: `npm
+# ci` of internal/browser/boxhelper/tree's package.json and package-lock.json,
+# by scripts/playwright-tree.sh, once per lock, into a per-user cache
+# (CREWLET_PLAYWRIGHT_TREE_CACHE, by default ~/.cache/crewlet/playwright-tree; a
+# bump of the lock, or a change to how the recipe lays a tree out, is a new
+# tree beside the old). boxhelper's cases read the Chromium build it expects
+# from it, and install it again from its npm cache with each Node's own npm,
+# offline (boxhelper's package doc). About 4 MB of download and 23 MB kept,
+# once; after that playwright-tree.sh finds the tree and answers at once.
+playwright-tree: require-npm ## install the Playwright tree internal/browser/boxhelper/tree locks, for the suite (needs npm)
+	@scripts/playwright-tree.sh >/dev/null
+
+# THE PLAYWRIGHT TREE EVERY TARGET THAT RUNS THE WHOLE SUITE NAMES, in
+# CREWLET_TEST_PLAYWRIGHT_TREE, which internal/browser/boxhelper/boxhelpertest
+# reads, from scripts/playwright-tree.sh, which a target's `playwright-tree`
+# prerequisite has already installed. A STATEMENT, as CHROMIUM_ENV's are and
+# for its reason.
+PLAYWRIGHT_TREE_ENV = playwright_tree="$$(scripts/playwright-tree.sh)" || exit 1; \
+	export CREWLET_TEST_PLAYWRIGHT_TREE="$$playwright_tree";
+
 ##@ Gates — `make check` is all of them
 
 # REQUIRED makes every prerequisite of the suite a requirement: a case whose
-# program is missing FAILS rather than skips (internal/prereqtest, the one
-# rule, and the only reader of CREWLET_REQUIRE_PREREQUISITES). Every target that
-# runs the suite starts its recipe with it (the five the next paragraph names),
-# so a gate never passes having skipped what a machine lacked, and only a bare
-# `go test` outside make skips such a case, which is the loop and not a gate. A
-# statement, as GIT_ENV's are, so what follows it on the recipe line runs with
-# it exported.
+# program or tree is missing FAILS rather than skips (internal/prereqtest, the
+# one rule, and the only reader of CREWLET_REQUIRE_PREREQUISITES). Every target
+# that runs the suite starts its recipe with it (the five the next paragraph
+# names), so a gate never passes having skipped what a machine lacked, and only
+# a bare `go test` outside make skips such a case, which is the loop and not a
+# gate. A statement, as GIT_ENV's are, so what follows it on the recipe line
+# runs with it exported.
 #
 # SUITE_ENV is what the whole suite runs under: the requirement, the pinned
-# gits and the pinned Chromiums. `test`, `test-solo` and `test-norace` start
-# with it, and depend on `git` and `chromium` to have built and fetched what it
+# gits, the pinned Chromiums, the floor Node and the Playwright tree. `test`,
+# `test-solo` and `test-norace` start with it, and depend on `git`, `chromium`,
+# `node` and `playwright-tree` to have built, fetched and installed what it
 # names; `test-gitproc` and `bench`, which run gitproc's own suite and the
 # benchmarks, start with REQUIRED and GIT_ENV.
 REQUIRED = export CREWLET_REQUIRE_PREREQUISITES=1;
-SUITE_ENV = $(REQUIRED) $(GIT_ENV) $(CHROMIUM_ENV)
+SUITE_ENV = $(REQUIRED) $(GIT_ENV) $(CHROMIUM_ENV) $(NODE_FLOOR_ENV) $(PLAYWRIGHT_TREE_ENV)
 
 # THE TWO TEST HALVES RUN IN THE RECIPE, one after the other, and everything
 # else stays a prerequisite — which is about correctness rather than tidiness.
@@ -589,7 +692,7 @@ SUITE_ENV = $(REQUIRED) $(GIT_ENV) $(CHROMIUM_ENV)
 # environment and a sub-make inherits the parent's command line, so a value
 # exported in the shell or given to `make check` would run one shard of each
 # half and print that every gate passed.
-check: fmt-check tidy-check signoff-check signoff-test git-test chromium-test vet lint build test-cross dashboard-lint dashboard-check dashboard-test ## every gate CI runs on a PR
+check: fmt-check tidy-check signoff-check signoff-test git-test chromium-test node-test playwright-tree-test vet lint build test-cross dashboard-lint dashboard-check dashboard-test notehelper-check ## every gate CI runs on a PR
 	@status=0; \
 	$(MAKE) test TEST_SHARD= || status=1; \
 	$(MAKE) test-solo TEST_SHARD= || status=1; \
@@ -680,6 +783,37 @@ git-test: ## run the git recipe's and the pin check's own suite (ci: build + vet
 chromium-test: ## run the Chromium recipe's and the pin check's own suite (ci: build + vet)
 	@scripts/chromium-pin_test.sh
 
+# The OWN SUITE of the floor Node's recipe (scripts/node.sh) and of its weekly
+# pin check (scripts/node-pin-check.sh), for git-test's reasons: shell no Go
+# test reaches, each failing silently where it matters — a recipe that unpacks
+# over a Node another checkout's suite is running, hands back a build without
+# its npm, or prints something above the path a make target exports as the
+# suite's floor; a check that calls the pin current because it read nothing,
+# proposes a release no releaser signed, raises the floor to a major Node does
+# not support for long, or carries an index's words into the issue it reports
+# to. It runs the real scripts against a stand-in nodejs.org tree, release
+# schedule and releasers' keys of its own, so it fetches no Node and reads no
+# network, then runs itself once more, by a relative path, under a developer's
+# most hostile environment: about fifty seconds, half of them that second run.
+# It needs curl, xz, tar, GnuPG and sha256sum (or shasum).
+node-test: ## run the floor Node's recipe's and the pin check's own suite (ci: build + vet)
+	@scripts/node-pin_test.sh
+
+# The OWN SUITE of the Playwright tree's recipe (scripts/playwright-tree.sh),
+# for git-test's reasons: shell no Go test reaches, failing silently where it
+# matters — a recipe that installs over a tree another checkout's suite is
+# reading, hands back a tree npm installed nothing into, lets a developer's npm
+# setting change what is installed, waits on an npm that never ends, leaves one
+# running once interrupted, or prints something above the path a make target
+# exports as the suite's tree. It runs the real recipe against a stand-in
+# registry on 127.0.0.1, every other address sent to a refused proxy, so it
+# reads no network, then runs itself once more, by a relative path, under a
+# developer's most hostile environment: about a minute, half of it that second
+# run. It needs node, an npm of boxhelper's MinNPMMajor or newer, tar and
+# sha256sum (or shasum).
+playwright-tree-test: ## run the Playwright tree's recipe's own suite (ci: build + vet)
+	@scripts/playwright-tree_test.sh
+
 vet: ## run go vet (ci: build + vet)
 	$(GO) vet ./...
 
@@ -733,15 +867,17 @@ lint: ## run golangci-lint (ci: golangci-lint)
 	fi
 	golangci-lint run
 
-# require-node, because this half runs a package that drives `node`:
+# require-node, because this half runs packages that drive `node`:
 # internal/sandbox/executor's probes of the two OpenCode plugins the engine
 # embeds — the notes plugin (opencode_steer_test.go), run under node against a
 # stand-in of the bridge's notes route and a real bridge's, and the skill-load
-# plugin (opencode_skills_test.go), against a stand-in of its skill route. Without
-# node those cases fail under REQUIRED (internal/prereqtest's one rule), once
-# the whole half has run; the prerequisite says it before anything runs. ci.yml's
-# `test (race)` installs node for the same reason. (internal/e2e's dashboard
-# replay is node's other consumer, in the solo half below.)
+# plugin (opencode_skills_test.go), against a stand-in of its skill route — and
+# internal/browser/boxhelper, which installs the Playwright tree with the
+# machine's npm under its node. Without node those cases fail under REQUIRED
+# (internal/prereqtest's one rule), once the whole half has run; the
+# prerequisite says it before anything runs. ci.yml's `test (race)` installs
+# node for the same reason. (internal/e2e's dashboard replay is node's other
+# consumer, in the solo half below.)
 #
 # FOUR PACKAGES AT A TIME, whatever the machine. `go test pkgA pkgB …` runs
 # package binaries at -p=GOMAXPROCS, and each binary runs its parallel tests at
@@ -759,7 +895,7 @@ lint: ## run golangci-lint (ci: golangci-lint)
 # prebuilt at the default -p first, as the solo half is (PREBUILD, below).
 PARALLEL_HALF_PACKAGES := 4
 
-test: require-node git chromium ## the suite, minus the packages that run alone (ci: test (race))
+test: require-node git chromium node playwright-tree ## the suite, minus the packages that run alone (ci: test (race))
 	@test -n "$(PARALLEL_PKGS)" || { echo "the parallel partition printed no packages; internal/solo/partition said why above (a TEST_WEIGHTS file it refused, a TEST_SHARD it could not deal, or go list failing)" >&2; exit 1; }
 	$(call PREBUILD,$(GOTESTBUILD),$(PARALLEL_PKGS))
 	$(SUITE_ENV) $(TIMED_SKIPGATE) -- $(GOTEST) -json -p $(PARALLEL_HALF_PACKAGES) $(PARALLEL_PKGS)
@@ -806,7 +942,7 @@ test: require-node git chromium ## the suite, minus the packages that run alone 
 # share action IDs — and $(2) the packages.
 PREBUILD = $(GO) list -e -export -test -deps $(1) -f '{{.ImportPath}}' $(2) > /dev/null
 
-test-solo: require-node git chromium ## the packages that need a runner to themselves (ci: end-to-end gates)
+test-solo: require-node git chromium node playwright-tree ## the packages that need a runner to themselves (ci: end-to-end gates)
 	@test -n "$(SOLO_PKGS)" || { echo "the solo partition printed no packages; internal/solo/partition said why above (a TEST_WEIGHTS file it refused, a TEST_SHARD it could not deal, go list failing, or no package importing internal/solo)" >&2; exit 1; }
 	$(call PREBUILD,$(GOTESTBUILD),$(SOLO_PKGS))
 	$(SUITE_ENV) $(TIMED_SKIPGATE) -- $(GOTEST) -json -p 1 $(SOLO_PKGS)
@@ -836,7 +972,7 @@ test-solo: require-node git chromium ## the packages that need a runner to thems
 # runs them: `override` beats a TEST_SHARD from the command line or the
 # environment.
 test-norace: override TEST_SHARD =
-test-norace: require-node git chromium ## the full suite without -race (faster; not a gate)
+test-norace: require-node git chromium node playwright-tree ## the full suite without -race (faster; not a gate)
 	@$(SUITE_ENV) status=0; \
 	echo "==> parallel partition"; \
 	{ $(call PREBUILD,,$(PARALLEL_PKGS)) && $(GO) test $(GOTESTRUN) -p $(PARALLEL_HALF_PACKAGES) $(PARALLEL_PKGS); } || status=1; \
@@ -865,28 +1001,33 @@ test-cross: ## cross-compile every release target (ci: cross-compile the release
 	done; \
 	exit $$status
 
-# Every dashboard target builds or tests the dashboard with npm, so each fails
-# here, naming what to install, rather than part way through. node alone is
-# require-node's, below: internal/e2e's client replay and the OpenCode plugin
-# probes run under plain `node` and need no npm.
-require-npm: ## fail unless npm is on PATH (every dashboard target needs it)
+# Every dashboard target builds or tests the dashboard with npm, and the
+# targets that run the whole suite install the box helper's Playwright tree
+# with it (`playwright-tree`), so each fails here, naming what to install,
+# rather than part way through. node alone is require-node's, below:
+# internal/e2e's client replay and the OpenCode plugin probes run under plain
+# `node` and need no npm.
+require-npm: ## fail unless npm is on PATH (every dashboard target and the suite's Playwright tree need it)
 	@command -v npm >/dev/null 2>&1 || { \
-	  echo "npm is not on PATH, and the dashboard is built with it."; \
-	  echo "  static/dashboard is COMMITTED, so building the engine needs"; \
-	  echo "  neither node nor npm — but changing dashboard/ does. Install a"; \
+	  echo "npm is not on PATH, and the dashboard is built with it and the"; \
+	  echo "  suite's Playwright tree installed with it. static/dashboard is"; \
+	  echo "  COMMITTED, so building the engine needs neither node nor npm,"; \
+	  echo "  but changing dashboard/ or running the suite does. Install a"; \
 	  echo "  current node (npm ships with it) and re-run."; \
 	  exit 1; \
 	} >&2
 
-require-node: ## fail unless node is on PATH (the e2e client replay and the OpenCode plugin probes need it)
+require-node: ## fail unless node is on PATH (the e2e client replay, the OpenCode plugin probes and the box helper's cases need it)
 	@command -v node >/dev/null 2>&1 || { \
-	  echo "node is not on PATH, and two of the suite's gates need it."; \
+	  echo "node is not on PATH, and three of the suite's gates need it."; \
 	  echo "  internal/e2e's client replay runs the dashboard's own protocol"; \
-	  echo "  module over the frames a real engine produced, and"; \
+	  echo "  module over the frames a real engine produced,"; \
 	  echo "  internal/sandbox/executor runs the two OpenCode plugins the"; \
-	  echo "  engine embeds. Each FAILS without node under the targets that run"; \
-	  echo "  the suite (CREWLET_REQUIRE_PREREQUISITES=1), but only after the"; \
-	  echo "  whole suite has run, so this says so first."; \
+	  echo "  engine embeds, and internal/browser/boxhelper installs a box's"; \
+	  echo "  Playwright tree with the npm node runs. Each FAILS without node"; \
+	  echo "  under the targets that run the suite"; \
+	  echo "  (CREWLET_REQUIRE_PREREQUISITES=1), but only after the whole"; \
+	  echo "  suite has run, so this says so first."; \
 	  echo "  Install any current node, as ci.yml does, and re-run."; \
 	  exit 1; \
 	} >&2

@@ -104,12 +104,18 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 		// unless a decision removes it, and every listing that meets one
 		// pays a leader read. See [maintenance.MarkerJobs].
 		jobs = append(jobs, maintenance.MarkerJobs(fleet)...)
+		// AND THE ACTIVATION'S BODIES no pointer names, at their own
+		// horizon. See [maintenance.BodyJobs].
+		jobs = append(jobs, maintenance.BodyJobs(fleet)...)
 		// AND EACH HUMAN SEAT'S CHAT READ STATE, for the mailboxes' reason:
 		// its bucket has no age, so a removed seat's record is forgotten
 		// only by a decision against the fleet's revision. Registered
 		// whatever the chat backend, because the records outlive a move off
 		// Chatlet. See [maintenance.ChatReadJobs].
 		jobs = append(jobs, maintenance.ChatReadJobs(fleet, e.humanSeatHandles)...)
+		// AND EACH HUMAN SEAT'S HOME BOARD, for the same reason, judged by
+		// the same reconcile. See [maintenance.HomeBoardJobs].
+		jobs = append(jobs, maintenance.HomeBoardJobs(fleet, e.humanSeatHandles)...)
 		// The NATIVE backends' records: only some of their classes age out,
 		// so no bucket age expresses the retention. Contributed only where
 		// THIS node runs the backend; the duty is a singleton, so one node's

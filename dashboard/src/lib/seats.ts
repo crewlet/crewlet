@@ -75,7 +75,9 @@ import type {
   ProviderKeys,
   QueryRefusal,
   ScheduleSpec,
+  WorkSummary,
 } from "~/protocol/index.ts";
+import { callOf, eachTurn, turnOf, turnsOf } from "./seatturn.ts";
 
 /** One unit, as the projection wrote it and as the engine resolved it. */
 export interface Unit {
@@ -1043,7 +1045,7 @@ export function schedulesOf(settings: SeatSettings): ScheduleSpec[] {
  */
 export function llmChain(
   llm: PhaseLLM | undefined,
-  phase?: "default" | "review" | "subagent" | "auxiliary" | "judge",
+  phase?: "default" | "review" | "subagent" | "auxiliary" | "judge" | "triage",
 ): string[] {
   const keys = (value: ProviderKeys | undefined): string[] =>
     typeof value === "string"
@@ -1066,6 +1068,7 @@ export function llmChain(
     ...keys(mapping["subagent"]),
     ...keys(mapping["auxiliary"]),
     ...keys(mapping["judge"]),
+    ...keys(mapping["triage"]),
   ]);
 }
 
@@ -1283,11 +1286,12 @@ export function activityOf(row: AgentRow | null | undefined): SeatState {
  */
 export function workingLongestFirst(agents: readonly AgentRow[]): AgentRow[] {
   const started = (a: AgentRow) => {
-    const at = Date.parse(a.turn?.started_at ?? "");
+    const at = Date.parse(turnOf(a)?.started_at ?? "");
     return Number.isFinite(at) ? at : Infinity;
   };
   return agents
     .filter((a) => activityOf(a) === "working")
+    .flatMap(eachTurn)
     .map((row) => ({ row, at: started(row) }))
     .sort((a, b) => (a.at === b.at ? 0 : a.at < b.at ? -1 : 1))
     .map(({ row }) => row);
@@ -1314,12 +1318,11 @@ export const RUNNING_ROWS = 4;
  * turn's — or "" for a turn on none. The item the engine charges the turn to,
  * never a `work_key` a trigger happened to name (see [stateLine]).
  *
- * A LABEL, never a join: two tasks can hold one key (`key_collision`), so
- * anything that pairs a turn with a task joins on the item's id
- * ([liveOnItems]) and only draws this.
+ * A LABEL, never a join: two tasks can hold one key (`key_collision`), and
+ * which item a turn is on is that item's own flow ([liveOnRows]).
  */
 export function turnItemKey(row: AgentRow | null | undefined): string {
-  return row?.live_call?.work_item?.key || row?.turn?.work_item?.key || "";
+  return callOf(row)?.work_item?.key || turnOf(row)?.work_item?.key || "";
 }
 
 /**
@@ -1605,7 +1608,7 @@ export function labelOf(
   const word = stateWord(state);
   switch (state) {
     case "needs":
-      return row?.turn?.stage === "parked" ? `${word} · executor parked` : word;
+      return turnsOf(row).some((t) => t.stage === "parked") ? `${word} · executor parked` : word;
     case "offline":
       return "No state from the engine yet";
     case "paused": {
@@ -1637,7 +1640,7 @@ const PHASE_DOING: Record<string, { alone: string; on: string }> = {
  * What a seat is doing, in one line under its name: "Executing ENG-412",
  * "Reviewing ENG-9", "Idle · last turn 24m ago".
  *
- * THE WORK ITEM IS THE TURN'S OWN, `live_call.work_item` — the one item the
+ * THE WORK ITEM IS THE TURN'S OWN, its call's `work_item` — the one item the
  * engine charges the turn to — and never a `work_key` a prompt happened to
  * mention. A human seat is not run by the engine and says so.
  *
@@ -1662,15 +1665,18 @@ export function stateLine(
       // A PARKED TURN IS ITS EXECUTOR, running in its box: the seat is
       // working and no model call is in flight, so the phase the call would
       // name says nothing, and the line is Execute's own.
-      if (row?.turn?.stage === "parked") {
+      // A SEAT ON SEVERAL TURNS (`sandbox.max_concurrent_runs`) says so: the
+      // line reads its first, and a list of running turns draws each.
+      const more = turnsOf(row).length > 1 ? ` · ${turnsOf(row).length} turns` : "";
+      if (turnOf(row)?.stage === "parked") {
         const execute = PHASE_DOING.execute!;
-        return item ? `${execute.on} ${item}` : execute.alone;
+        return (item ? `${execute.on} ${item}` : execute.alone) + more;
       }
-      const doing = PHASE_DOING[row?.live_call?.phase ?? row?.current_phase ?? ""] ?? {
+      const doing = PHASE_DOING[callOf(row)?.phase ?? row?.current_phase ?? ""] ?? {
         alone: "Working",
         on: "Working on",
       };
-      return item ? `${doing.on} ${item}` : doing.alone;
+      return (item ? `${doing.on} ${item}` : doing.alone) + more;
     }
     case "idle": {
       // THE LINE SAYS WHAT THE STATE DOES NOT. Beside a pill reading Idle, a
@@ -1687,18 +1693,8 @@ export function stateLine(
 }
 
 /**
- * What a task's card says about the turn running on it: "SWE · reviewing ·
+ * What a task's card says about the turn or run on it: "SWE · reviewing ·
  * round 2 of 4", "SWE · executing".
- *
- * JOINED ON THE ITEM THE ENGINE CHARGES THE TURN TO — `live_call.work_item`,
- * then the turn's own — and never on a `work_key`, which is the unit of work a
- * TRIGGER named and says nothing about which task the turn is spending on. A
- * card that joined on it drew a strip on whichever task the webhook happened
- * to mention.
- *
- * ONLY A WORKING SEAT, by the engine's own word (`activity`): a seat that
- * stopped mid-turn is not running anything on the task, and the ring round its
- * avatar already says which state it is in.
  */
 export interface CardLive {
   /** The seat running the turn. */
@@ -1710,24 +1706,41 @@ export interface CardLive {
 }
 
 /**
- * Every working seat's turn, keyed on the ID of the task the turn is charged
- * to — never its key, which two tasks can hold (`key_collision`): keyed on it,
- * the working seat's strip was drawn on both.
+ * The strip of every drawn item whose flow the engine reads `working`
+ * (ADR-0162), by the item's id: the engine decides which items are worked on,
+ * and the assignee's own row only lends a turn its words.
  */
-export function liveOnItems(rows: readonly AgentRow[]): Map<string, CardLive> {
+export function liveOnRows(
+  rows: readonly WorkSummary[],
+  agents: readonly AgentRow[],
+): Map<string, CardLive> {
+  const seats = new Map(agents.map((row) => [row.handle ?? "", row]));
   const out = new Map<string, CardLive>();
   for (const row of rows) {
-    if (row.activity !== "working") continue;
-    const id = row.live_call?.work_item?.id || row.turn?.work_item?.id || "";
-    const handle = row.handle ?? "";
-    if (!id || !handle) continue;
-    out.set(id, {
-      handle,
-      doing: doingWords(row),
-      since: row.turn?.started_at ?? row.live_call?.started_at,
+    const flow = row.flow;
+    if (flow?.state !== "working" || !row.assignee) continue;
+    const seat = seats.get(row.assignee);
+    const words =
+      flow.cause === "run"
+        ? "executing"
+        : seat?.activity === "working"
+          ? doingWords(seat)
+          : "working";
+    out.set(row.id, {
+      handle: row.assignee,
+      doing: words,
+      ...(flow.since ? { since: flow.since } : {}),
     });
   }
   return out;
+}
+
+/** The turns a seat is running now, their ids joined by `+`, or "" while it runs none. */
+export function seatTurn(agents: readonly AgentRow[], handle: string | undefined): string {
+  const seat = handle ? agents.find((row) => row.handle === handle) : undefined;
+  if (seat?.activity !== "working") return "";
+  const ids = turnsOf(seat).flatMap((t) => (t.turn_id ? [t.turn_id] : []));
+  return ids.length ? ids.join("+") : (callOf(seat)?.turn_id ?? "");
 }
 
 /**
@@ -1740,11 +1753,12 @@ export function liveOnItems(rows: readonly AgentRow[]): Map<string, CardLive> {
  * no call of the engine's own is in flight.
  */
 export function doingWords(row: AgentRow): string {
-  if (row.turn?.stage === "parked") return PHASE_DOING.execute!.alone.toLowerCase();
-  const phase = row.live_call?.phase ?? row.current_phase ?? "";
+  if (turnOf(row)?.stage === "parked") return PHASE_DOING.execute!.alone.toLowerCase();
+  const call = callOf(row);
+  const phase = call?.phase ?? row.current_phase ?? "";
   const verb = (PHASE_DOING[phase]?.alone ?? "working").toLowerCase();
-  const round = roundOf(row.live_call);
-  const max = row.live_call?.max_rounds;
+  const round = roundOf(call);
+  const max = call?.max_rounds;
   if (round <= 0) return verb;
   return max ? `${verb} · round ${round} of ${max}` : `${verb} · round ${round}`;
 }

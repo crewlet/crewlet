@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/kept"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
@@ -38,9 +39,9 @@ const (
 	// BridgeLogBytes is the bridged call log's share of its value: `calls`,
 	// `elided`, `elided_calls` and `absorbed_calls` together. The rest of the
 	// value — the turn's earlier rounds' tool names, the log's own fields (its
-	// identifiers, the kinds of change its calls committed and its count of
-	// the dropped calls no save point holds) and the room for a later build's
-	// keys — is what [RowBytes] leaves.
+	// identifiers, the kinds of change its calls committed, the records they
+	// wrote and its count of the dropped calls no save point holds) and the
+	// room for a later build's keys — is what [RowBytes] leaves.
 	BridgeLogBytes = 3<<20 + 1<<18 + 1<<16
 
 	// ExecuteStateBytes is the parked turn's share of the row: the
@@ -57,36 +58,43 @@ const (
 	// ([LaunchRecord.Extra], [HeldCall.Extra], [OwedCall.Extra],
 	// [SessionCapture.Extra] in each capture section, [ConversationBase.Extra] and
 	// its session's and siblings', [RunSteer.Extra] and its notes', their hooks'
-	// serves', the calls those answered, an item's late call and the notes'
-	// tellings), and that this build carries without reading: STATED HERE, so the
-	// next field a build adds is added inside it, and the build that adds it moves
-	// its own figure out of this one rather than out of a share somebody else's
-	// arithmetic needs. The turn's read of its conversation ([PendingRun.Base])
-	// has its own place, at [ConversationBaseMaxBytes], and takes none of this
-	// room: all of it is still a later build's.
-	ExtraRowBytes = 256 << 10
+	// serves', the calls those answered, an item's late call or wakes and the
+	// notes' tellings), and that this build carries without reading: STATED HERE,
+	// so the next field a build adds is added inside it, and the build that adds
+	// it moves its own figure out of this one, as the turn's wake items, the
+	// job's fold-ins and what the turn wrote took theirs ([wakeRowBytes],
+	// [foldInRowBytes], [wroteRowBytes]). The turn's read of its conversation
+	// ([PendingRun.Base]) has its own place, at [ConversationBaseMaxBytes].
+	ExtraRowBytes = 256<<10 - wakeRowBytes - foldInRowBytes - wroteRowBytes
 
-	// MaxAnswerBytes bounds a recorded answer as the row holds it — its seal
-	// and the deliveries it was made of ([RecordedAnswer]) — and, apart, the
-	// copies letting go of it owes the seat ([PendingRun.HandBack]): the two
-	// can be on the row at once, a new answer recorded while an earlier
-	// decline's copies are still being published.
-	//
-	// HALF A MEBIBYTE is a person's reply many times over: a batch of chat
-	// messages at a few KiB each, sealed and carried as the deliveries they
-	// are, weighs tens of KiB. What it does not hold is a batch of pages,
-	// which a reply that will be the run's next prompt — read again by its
-	// harness at every step after — has no business being. A reply past it
-	// is not recorded as the answer ([ErrAnswerTooLarge]): its REFUSAL is,
-	// in the answer's place — the figures and the deliveries' ids, none of
-	// its words, a few KiB at most ([PendingStore.RecordRefusal]) — and the
-	// run is resumed told that the reply did not reach it, so it asks again
-	// for less or carries on (ADR-0114); nothing of the reply is lost, since
-	// its delivery stays on the seat's inbox until the refusal leaves the
-	// run. NOT LOWERED for that: a log or a configuration pasted whole, the
-	// answer a coding run's question typically gets, is taken whole. An
-	// answer by turn is held far under it, at its source and where it is
-	// recorded ([MaxAnswerTextBytes]).
+	// wakeRowBytes is the turn's wake items' figure, moved out of the room a
+	// later build adds keys in: [MaxTurnWakes] items at their bound, a hundred
+	// KiB, which the 102,064 bytes TestTheWholeRowFitsItsBudget weighs them at
+	// leave a little over.
+	wakeRowBytes = 100 << 10
+
+	// foldInRowBytes is the job's fold-ins' figure, moved out of the room a
+	// later build adds keys in: [MaxJobFoldIns] at [MaxFoldInBytes] each.
+	foldInRowBytes = MaxJobFoldIns * MaxFoldInBytes
+
+	// wroteRowBytes is the figure of the keys of what the turn's calls wrote
+	// ([PendingRun.WroteKeys]), moved out of the room a later build adds keys
+	// in: [types.MaxWrittenRecords] keys of [writtenKeyBytes] in hex, written
+	// as themselves, 4,495 bytes with the field's name, which 4.5 KiB leaves a
+	// little over (TestTheWholeRowFitsItsBudget weighs them).
+	wroteRowBytes = 4<<10 + 512
+
+	// MaxAnswerBytes bounds a recorded answer as the row holds it (its seal
+	// and deliveries, [RecordedAnswer]) and, apart, the copies letting go of
+	// it owes the seat ([PendingRun.HandBack]): both can be on the row at
+	// once. HALF A MEBIBYTE is a person's reply many times over, not a batch
+	// of pages, which a reply that becomes the run's next prompt has no
+	// business being. A reply past it is not recorded ([ErrAnswerTooLarge]):
+	// its REFUSAL is, ids and figures only ([PendingStore.RecordRefusal]),
+	// and the run is told the reply did not reach it (ADR-0114); the delivery
+	// stays on the inbox until then. NOT LOWERED: a pasted log or
+	// configuration is taken whole. An answer by turn is held far under it
+	// ([MaxAnswerTextBytes]).
 	MaxAnswerBytes = 512 << 10
 
 	// MaxRefusalAddressBytes bounds where a refused reply was posted, as the
@@ -124,7 +132,7 @@ const (
 	// (steer.MaxTurnNotes), each kept on the row once read.
 	MaxNoteSealedBytes = 16 << 10
 
-	// MaxNoteServes bounds the serves of one note, or one job's item, to one
+	// MaxNoteServes bounds the serves of one note, or a late call's item, to one
 	// job's hooks ([RunNote.Serves]), held by [PendingStore.ServeHook]: a first
 	// serve and two after losses. Three is a judgment value no run of losses
 	// has measured. A serve is lost when its harness gives the hook's call up,
@@ -172,27 +180,78 @@ const (
 	// TestTheWholeRowFitsItsBudget holds.
 	MaxCallTellings = 2 * MaxJobItems
 
+	// MaxJobWakes bounds the wake items one job holds ([RunNote.Wake]), apart
+	// from a person's notes and late calls, held by [PendingStore.FileWake].
+	// FOUR, the most beside the notes' and items' serves that one read of a
+	// job's session can ask about: its hook record's masks are sixty-four takes
+	// wide (internal/sandbox/executor's maxAskedTakes, a compile-time check),
+	// and twenty notes and items at [MaxNoteServes] ask sixty. Wakes between
+	// two steps join one item ([MaxItemWakes]), so four items carry a burst.
+	MaxJobWakes = 4
+
+	// MaxTurnWakes bounds the wake items the row holds for the whole turn: a
+	// wake item read is the turn's, kept by every relaunch since its delivery
+	// is worked ([openNotes]). EIGHT, two jobs' worth: past it a wake runs as a
+	// turn of its own, the safe default.
+	MaxTurnWakes = 2 * MaxJobWakes
+
+	// MaxWakeServes bounds the serves of one wake item to one job's hooks: ONE.
+	// A serve its harness lost leaves the wake unread, and an unread wake runs
+	// as a turn of its own once the run is over, so a second serve would buy a
+	// ten-second stall for what is never lost.
+	MaxWakeServes = 1
+
+	// MaxItemWakes bounds the wakes one item carries ([WakeItem.Wakes]): FOUR,
+	// a burst between two steps, which one hook answer can show beside a
+	// person's widest note only as the newest few anyway (internal/engine's
+	// wakeItemMessage names how many it leaves out).
+	MaxItemWakes = 4
+
+	// MaxWakeItemBytes bounds one wake item's seals together, and so each
+	// wake's ([SealedWake.Sealed], raw: the row writes base64, a third more).
+	// EIGHT KIB: a wake's words are at most a thousand characters
+	// (internal/agent/steer's MaxWakeRunes), six bytes each at their most
+	// escaped, sealed with who wrote them, where and the ledger keys of their
+	// delivery. [MaxTurnWakes] items at it fit [wakeRowBytes] of the row.
+	MaxWakeItemBytes = 8 << 10
+
+	// MaxJobFoldIns bounds the fold-ins one job asks ([PendingRun.FoldIns]),
+	// answered or not: FOUR, [MaxJobWakes]. Each puts a request in front of a
+	// person who decides it by hand while the run works, so four other
+	// requests behind one job is already a queue that belongs in turns of its
+	// own, which is where a fifth waits; and four at [MaxFoldInBytes] is
+	// sixteen KiB of a row read and written whole on every flip.
+	MaxJobFoldIns = MaxJobWakes
+
+	// MaxFoldInBytes bounds one fold-in as the row writes it ([FoldIn]): FOUR
+	// KIB, an excerpt of the asker's words an approver reads beside who asked,
+	// where and whom it is put to. The words are display alone (the delivery
+	// on the inbox is what joins), so the engine cuts them to fit and says how
+	// much more is where they were written ([FoldIn.Cut]).
+	MaxFoldInBytes = 4 << 10
+
+	// MaxFoldInPutTo bounds the seats a fold-in is put to ([FoldIn.PutTo]):
+	// EIGHT, the run's requester and the seven nearest of the seat's leads. A
+	// lead further up still answers it; a question put to the whole top of a
+	// deep chart is put to nobody in particular.
+	MaxFoldInPutTo = 8
+
+	// MaxWakeIDBytes bounds a wake's id ([SealedWake.ID]), of the id charset
+	// so it is written as itself: SIXTY-FOUR BYTES, past the delivery's UUID
+	// its filer names it by.
+	MaxWakeIDBytes = 64
+
 	// MaxAudienceHandles bounds the seats a parked question is put to
 	// ([PendingRun.AudienceHandles]). TWO HUNDRED AND FIFTY-SIX: a `team`
 	// audience is every person in the asking seat's unit, which nothing else
 	// bounds, and a question put to more people than that is put to nobody in
-	// particular. The requester, the manager and a colleague named by the run
-	// are one seat each; the FALLBACK, for a label that names nobody the chart
-	// has, is the seat's lead chain — its managers up to the top of the chart,
-	// or for a seat nobody manages the leads of the units that hold it — as
-	// long as the chart is deep, which is far under it. A `team` audience is
-	// resolved as the unit's lead first and then its people in the chart's
-	// order, and the chain nearest first, so past the bound a unit keeps its
-	// lead and its first members, and a chain its nearest leads.
-	//
-	// WHAT A SEAT PAST IT LOSES is being the question's audience: the list is
-	// what the board shows a question's body to, and what puts it in a
-	// person's own "waiting on me". A member past the bound with no reach of
-	// their own into the asking seat — its lead's, or an admin's, who are
-	// shown every question of it — sees the run with its question, its
-	// context and its decision withheld, and is not asked. Who may ANSWER is
-	// unchanged: an answer is authorized on the seat and its requester, never
-	// on this list.
+	// particular. A `team` is resolved lead first, then its people in the
+	// chart's order, so past the bound a unit keeps its lead and first
+	// members. WHAT A SEAT PAST IT LOSES is being the audience: the list is
+	// who the board shows the question's body to and whose "waiting on me"
+	// it enters; a member past it with no reach of their own (the seat's
+	// lead, an admin) sees the question withheld. Who may ANSWER is unchanged:
+	// authorized on the seat and its requester, never on this list.
 	MaxAudienceHandles = 256
 )
 
@@ -207,8 +266,8 @@ const (
 // stated before them was read by nothing, and stayed what it was while the row
 // grew.
 const (
-	measuredOtherFields = 2_219_372
-	measuredSpare       = 376_536
+	measuredOtherFields = 2_344_079
+	measuredSpare       = 375_221
 )
 
 // The per-call bounds of the bridged call log. See [MaxBridgeCallBytes].
@@ -223,17 +282,13 @@ const (
 
 	// MaxBridgeCallIDBytes bounds the id a call's harness gave it, as the log
 	// keeps it ([BridgeCall.CallID], [ValidCallID]): SIXTY-FOUR BYTES of
-	// letters, digits, `-` and `_`, which the encoder writes each as itself,
-	// so what the id costs a call and an entry is its length, measured at the
-	// bound by the shares' own tests (below). A JUDGMENT CALL, and a cheap one
-	// to get wrong: no id a model minted is in this tree — the e2e's stand-in
-	// names its calls as Claude Code's record does, `toolu_` and a random
-	// tail, thirty bytes in all (internal/e2e's claudeID) — and an id past the
-	// bound costs its call no more than having none: it is kept as none, never
-	// cut, and read by its place as every call an older build recorded is,
-	// never matched wrongly. More than twice the stand-in's, and small enough
-	// that the id fits inside the share every call and every entry already
-	// had.
+	// letters, digits, `-` and `_`, each written as itself, so the cost is
+	// its length, measured at the bound by the shares' own tests. A JUDGMENT
+	// CALL, cheap to get wrong: Claude Code's ids are `toolu_` and a random
+	// tail, thirty bytes (internal/e2e's claudeID), and an id past the bound
+	// costs its call no more than having none: it is kept as none, never cut,
+	// and read by its place, never matched wrongly. Over twice the stand-in's,
+	// and within the share every call and entry already had.
 	MaxBridgeCallIDBytes = 64
 
 	// MaxBridgeArgsBytes bounds what the log keeps of a call's arguments,
@@ -254,40 +309,27 @@ const (
 
 	// MaxBridgeCallBytes bounds one call as the log holds it, every field at
 	// its bound: the name at its worst (256 bytes escaped six-fold, 1,538),
-	// the arguments (8,192) and the output (4,096), the digest and every
-	// other field (at most 800, measured by TestABridgedCallIsHeldToItsShare
-	// with both its places at their widest — the place it was admitted at and
-	// the one its round's log took it at, [BridgeCall.Appended], whose 31
-	// bytes at their widest the 600 this figure was held room for — its late
-	// mark set, [BridgeCall.Late], whose 12 bytes it held room for too, the
-	// mark that nobody waited for it, [BridgeCall.Abandoned], whose 17 it held
-	// room for as well, every kind of change a call can commit to its turn,
-	// [BridgeCall.Committed], each once, whose 61 it held no room for — 654
-	// measured with every one of them, 593 before those kinds, and 700 that
-	// worst rounded up to the next hundred — and the id its harness gave it
-	// at its widest, [BridgeCall.CallID], whose 77 bytes, its key with it,
-	// the 700 held no room for either: 731 measured with it; 800 is that
-	// worst rounded up to the next hundred, as 600 and 700 were, which leaves
-	// the next small mark room), and what is left — 1,758 bytes — the room
-	// for keys a LATER BUILD ADDS TO A CALL ([BridgeCall.Extra]), which this
-	// build carries unread.
+	// the arguments (8,192), the output (4,096), the digest and every other
+	// field (at most 800, as TestABridgedCallIsHeldToItsShare measures with
+	// every field at its widest: both places, [BridgeCall.Appended], the late
+	// and abandoned marks, every kind of change in [BridgeCall.Committed],
+	// and the harness's id, [BridgeCall.CallID]; 731 measured, rounded up to
+	// the next hundred so the next small mark has room), and what is left,
+	// 1,758 bytes, for keys a LATER BUILD ADDS TO A CALL ([BridgeCall.Extra]),
+	// which this build carries unread.
 	MaxBridgeCallBytes = 16 << 10
 
 	// MaxSubmissionArgsBytes is what the log keeps of the arguments of the
-	// run's NEWEST SUCCESSFUL SUBMISSION — the `submit_work` the collection
+	// run's NEWEST SUCCESSFUL SUBMISSION, the `submit_work` the collection
 	// replays as the round's outcome (internal/agent/runner's
-	// replaySubmission), which therefore has to be in the log whole — and
-	// NEVER A LATE ONE ([BridgeCall.Late]), which the collection never
-	// replays: a job a relaunch replaced made it, and the round's submission is
-	// the one the job carrying the round on makes. Every other call's
-	// arguments, an earlier submission's and a late one's included, are held
-	// to [MaxBridgeArgsBytes].
+	// replaySubmission), so it must be in the log whole, and NEVER A LATE ONE
+	// ([BridgeCall.Late]), which is never replayed. Every other call's
+	// arguments are held to [MaxBridgeArgsBytes].
 	//
 	// TWICE [MaxSubmissionBytes], what the live tool accepts: the tool weighs
-	// the submission as it reads it, its arguments in their canonical form,
-	// and the log keeps them as the harness sent them — a null the model
-	// passed, the whitespace round a choice it spelt — so a submission the
-	// tool took is never one the log cannot keep whole.
+	// canonical arguments while the log keeps them as the harness sent them
+	// (a passed null, whitespace), so a submission the tool took is never one
+	// the log cannot keep whole.
 	MaxSubmissionArgsBytes = 64 << 10
 
 	// MaxSubmissionBytes is the most a live `submit_work` may weigh, its
@@ -357,7 +399,9 @@ const (
 
 	// LogRestBytes is the rest of the log's value beside its calls and its
 	// calls in flight: the turn's earlier rounds' tool names, the log's own
-	// fields, and the room a later build adds keys to the log in. STATED, NOT
+	// fields (the records the turn's calls wrote among them, [BridgeLog.Wrote]:
+	// at most 128 ids of at most 256 bytes, about 200 KiB at their most
+	// escaped), and the room a later build adds keys to the log in. STATED, NOT
 	// DERIVED, as the table above states it, so the log's split closes only
 	// while every line of it is the table's: a change of [BridgeLogBytes] or of
 	// [InFlightBytes] — [MaxCallsInFlight] raised, say — fails
@@ -378,44 +422,18 @@ const (
 // kept on.
 const rowRecord kept.Record = "the run's record"
 
-// RowBudget is the bound of a change of a run's row, or of a part beside it,
-// whose caller bounds it for a reason of its own: that reason — a store's slow
-// moment, a leader's election outlasted, a teardown's grace — and the time a
-// change of a value at its bound ([RowBytes]) takes to cross this node's
-// connection to the coordination store — the read its decision is taken on,
-// and the write, for every time the store may send it — as the store says
-// ([PendingStore.RowCrossing]). In the store's own process that is none, and
-// the bound is the reason alone.
+// RowBudget is the bound of a change of a run's row whose caller bounds it for
+// a reason of its own (a slow store, an election, a teardown's grace): that
+// reason plus the time a value at its bound ([RowBytes]) takes to cross this
+// node's connection to the store ([PendingStore.RowCrossing]).
 //
-// # A row's bytes are the change's, not the reason's
-//
-// Every change of a row reads it whole and writes it whole — up to six
-// megabytes — and a node without the `data` role, or any node of an external
-// cluster, reads and sends it across a link the engine allows to carry as
-// little as a mebibyte in thirty seconds both ways: the read's reply, a third
-// larger than the row, is heard only once its last byte is in, and the
-// store's acknowledgement of the write waits on its last byte too. The store
-// gives the read the time its reply takes to arrive, and a write whose caller
-// set no deadline the crossing of what it carries; a caller's own deadline it
-// keeps. Held to a reason alone — five seconds, thirty — a row of megabytes
-// was cut while its bytes were still crossing, and read as a store that did
-// not answer: a resumed turn's carry went unrecorded, a capture's stamp was
-// asked again sending the whole row from its first byte until its budget
-// ended, and a teardown's write was abandoned (crewlet/crewlet#1076); and
-// given the write's sends alone, the read before it — four minutes for a row
-// at its bound at the floor — was left nothing (crewlet/crewlet#1149).
-// Counted at the row's bound, never at the row being changed: the store
-// decides what it writes inside its own read-decide-write, after the caller's
-// deadline is set, and a row grows between two changes of it.
-//
-// So a store that does not answer is waited on for the reason's length beyond
-// the crossing, and a healthy one answers as soon as the row is in. A budget
-// whose reader is ANOTHER node — how long a capture a node elsewhere keeps is
-// in flight, and a read stands by for it ([SessionCaptureBudget],
-// [standbyBudget]), how long a box's host may take over a read of it
-// ([BoxReadBudget]) — counts the slowest node's crossing instead,
-// coord.MaxValueCrossing, since it cannot know which node's it is. And a
-// stopping node gives no change its crossing ([Coordinator.rowContext]).
+// Every change reads and writes the row whole, up to six megabytes, over a
+// link allowed as little as a mebibyte in thirty seconds, so held to the
+// reason alone a row was cut mid-crossing and read as a store that did not
+// answer. Counted at the row's bound, not the row being changed: the store
+// decides after the deadline is set, and a row grows. A budget read by
+// ANOTHER node ([SessionCaptureBudget], [BoxReadBudget]) counts
+// coord.MaxValueCrossing; a stopping node gets no crossing.
 func RowBudget(store PendingStore, reason time.Duration) time.Duration {
 	return reason + store.RowCrossing()
 }
@@ -474,40 +492,18 @@ var ErrNoteTooLarge = errors.New("sandbox: a note's seal is past its bound on th
 // shortens the call.
 var ErrHeldCallTooLarge = errors.New("sandbox: a held call's sealed arguments are past their share of the run's row")
 
-// keptCall is call as the log keeps it, its arguments held to argsBudget and
-// every other field to its bound ([MaxBridgeCallBytes]): a name past
-// [MaxBridgeCallNameBytes] cut, arguments past their budget kept with their
-// largest values left out, an output past [MaxBridgeOutputBytes] kept as its
-// opening — each said in the text, and the whole's size recorded beside it
-// ([BridgeCall.ArgsBytes], [BridgeCall.OutputBytes]).
-//
-// AND A CALL HELD FOR A PERSON'S APPROVAL, OR THE ONE THEY APPROVED, KEEPS
-// NEITHER ITS ARGUMENTS NOR THEIR DIGEST: the arguments ride the run's row
-// sealed on the held call (ADR-0077), and a digest of them in the clear beside
-// the tool's name would let anybody who reads the log — or a backup of the
-// store — confirm a guess at what the seal hides ([BridgeCall.Withheld]).
-// Whoever hands such a call to the log leaves both out; the log holds every
-// writer to it, and so does the row, where the call a person approved rides
-// its held call and is owed to the log ([approvedCall]).
-//
-// AND THE ID ITS HARNESS GAVE IT WHOLE OR NOT AT ALL ([keptCallID]): the bridge
-// takes none other, and the log holds every writer to the same rule, so a
-// call's share holds by construction whatever bridge, or build, handed it.
-//
-// AND NOTHING THAT WAITS FOR IT: a finished call is nobody's to wait for, so it
-// keeps neither the process that ran it nor the bound a collection would wait
-// for it until ([BridgeCall.Runner], [BridgeCall.Until]), which only its entry
-// in flight carries ([keptEntry]). Held here, whoever handed the call: the
-// bridge's update, the store's append of the call a person approved, which no
-// append over the bridge takes ([BridgeLog.withApproved]), the row's copy of
-// that call ([approvedCall]), or a later build. Left to each caller, a runner
-// on a finished call would be bounded by nothing, since only an entry's is
-// held to an incarnation's bound.
-//
-// IDEMPOTENT, so a call kept once is kept again unchanged, and a call an older
-// build recorded whole is kept within its bounds the next time this build
-// writes the log. A size already recorded is the whole's and is never replaced
-// by the size of what was already kept.
+// keptCall is call as the log keeps it, arguments held to argsBudget and every
+// other field to its bound ([MaxBridgeCallBytes]): a name, arguments and an
+// output past theirs are cut with the cut said and the whole's size recorded
+// ([BridgeCall.ArgsBytes], [BridgeCall.OutputBytes]). A CALL HELD FOR
+// APPROVAL, OR THE ONE APPROVED, KEEPS NEITHER ITS ARGUMENTS NOR THEIR
+// DIGEST: the arguments ride the row sealed (ADR-0077), and a digest
+// in the clear would let a log reader confirm a guess at what the seal hides
+// ([BridgeCall.Withheld], [approvedCall]). The harness's id is kept WHOLE OR
+// NOT AT ALL ([keptCallID]); a finished call keeps NOTHING THAT WAITS FOR IT
+// ([BridgeCall.Runner], [BridgeCall.Until]), held here whatever handed it,
+// since only an entry's runner is bounded ([keptEntry]). IDEMPOTENT: a size
+// already recorded is the whole's, never replaced.
 func keptCall(call BridgeCall, argsBudget int) BridgeCall {
 	call.Name = textcut.Within(call.Name, MaxBridgeCallNameBytes)
 	call.CallID = keptCallID(call.CallID)
@@ -528,6 +524,47 @@ func keptCall(call BridgeCall, argsBudget int) BridgeCall {
 		}
 	}
 	return call
+}
+
+// OutputOpening is the opening the log kept of a call's output it cut, read
+// back off output, the text it keeps ([BridgeCall.Output]), and outputBytes,
+// the whole's size beside it ([BridgeCall.OutputBytes]); false where output is
+// no such cut. RAW, as the call's harness was handed it, which a holdings
+// reading compares with its session's copy ([TextKeyOf]): a reader that
+// redacts it reads only as far as its redaction settles.
+func OutputOpening(output string, outputBytes int) (opening string, ok bool) {
+	return rowRecord.Opening(output, outputBytes)
+}
+
+// RedactedOpening is what a reader may show of a call's output the log cut
+// (output and outputBytes, as [OutputOpening] reads them): the redaction of
+// the opening's SETTLED lines alone ([redact.Settled]), which is the opening
+// of the whole's redaction, since a credential the log's cut ran across left
+// a head no rule knows. whole is the size it is the opening of: its own bytes
+// and the bytes the log measured past those lines, unread and so unredacted,
+// at least one. A text the log's marker does not read back off is settled as
+// it stands.
+func RedactedOpening(output string, outputBytes int) (shown string, whole int) {
+	opening, ok := OutputOpening(output, outputBytes)
+	if !ok {
+		opening = output
+	}
+	settled := opening[:redact.Settled(opening)]
+	shown = redact.Secrets(settled)
+	return shown, len(shown) + max(outputBytes-len(settled), 1)
+}
+
+// ShownOutput is a call's output as the log keeps it (output, outputBytes
+// as [BridgeCall] holds them) as a person reading the log is shown it, and the
+// size beside it: whole, redacted; cut, its [RedactedOpening] marked as the
+// log marks a cut, the size that opening is of beside it, so [OutputOpening]
+// reads it back. The log itself stays as the harness was handed it.
+func ShownOutput(output string, outputBytes int) (shown string, shownBytes int) {
+	if outputBytes == 0 {
+		return redact.Secrets(output), 0
+	}
+	opening, whole := RedactedOpening(output, outputBytes)
+	return rowRecord.Cut(opening, whole), whole
 }
 
 // ValidCallID reports whether id is one the log keeps as the id a call's
@@ -574,44 +611,18 @@ func submitted(call BridgeCall) bool {
 	return call.Name == SubmitWorkTool && !call.Failed && !call.Late
 }
 
-// appendCall adds one finished call to the log, with absorbed — the calls the
-// run's call log took in from the call's own work — and holds the log to its
-// bounds: the count ([MaxBridgeCalls], the middle dropped and its identities
-// kept), and the bytes, every call at its own share and each tally at its own —
-// which is the whole of the calls' arithmetic ([BridgeLogBytes]).
-//
-// THE TALLIES ARE TAKEN AS THEY READ before anything is added to them
-// ([BridgeLog.Unlisted], [BridgeLog.Absorbed]): calls a build without them
-// dropped with no identity are counted as calls whose tool is not known. So
-// the log this write leaves always holds tallies that account for every call
-// its count says it does not list.
-//
-// EVERY CALL IS KEPT AGAIN ON EVERY APPEND, not only the one appended: the
-// newest successful submission's larger share passes to a newer one, and the
-// one before it is held to the ordinary share; and a call an older build
-// recorded whole, in a fleet mid-upgrade, is held to its share here rather
-// than carried at whatever size it came. Keeping a call already kept changes
-// nothing ([keptCall]).
-//
-// THE NEWEST AS THE COLLECTION READS IT, which replays it: of the submissions
-// it could replay ([submitted], never a late one), the one placed last in the
-// order the bridge admitted them ([BridgeCall.Seq]), and of two at one place —
-// a session opened again on the job while a call of the closed one was still
-// in flight reuses its place — the one the log took last, as the collection's
-// stable sort by place leaves it. A share kept on any other leaves the one the
-// collection replays cut, which it refuses, and the round reads as one that
-// submitted nothing.
-//
-// AND THE CALL IS NUMBERED AS THE ROUND'S NEXT APPEND ([BridgeCall.Appended]),
-// here and nowhere else, before the bound drops anything: this is the one
-// writer of what the log lists and of what it counts without listing, so the
-// count the number is taken from ([BridgeLog.Appends]) rises by exactly one an
-// append, whichever of them the call or the one the bound drops for it lands
-// in. Whatever number a caller handed in is the caller's guess, and is
-// replaced.
-//
-// IN PLACE ON l's OWN CALLS: a caller holding a log it shares with another —
-// a copy whose list is another's too — clones the list first.
+// appendCall adds one finished call, with absorbed (the calls its own work
+// took in), and holds the log to its bounds: the count ([MaxBridgeCalls]) and
+// the bytes ([BridgeLogBytes]). THE TALLIES ARE TAKEN AS THEY READ before
+// anything is added ([BridgeLog.Unlisted], [BridgeLog.Absorbed]). EVERY CALL
+// IS KEPT AGAIN ON EVERY APPEND ([keptCall]): the newest submission's larger
+// share passes to a newer one, an older build's whole call is cut. THE NEWEST
+// AS THE COLLECTION READS IT: of the replayable ([submitted]) the one placed
+// last ([BridgeCall.Seq]), of two at one place the one the log took last; a
+// share on any other cuts the one replayed, which the collection refuses.
+// THE CALL IS NUMBERED HERE ([BridgeCall.Appended]), before the bound drops
+// anything, so [BridgeLog.Appends] rises by one; a caller's number is
+// replaced. IN PLACE on l's calls: a caller sharing the list clones it.
 func (l *BridgeLog) appendCall(next BridgeCall, absorbed []ElidedCall) {
 	l.Committed = committedOnce(l.Committed, next.Committed)
 	dropped, taken := l.Unlisted(), l.Absorbed()
@@ -688,15 +699,12 @@ func itemCall(call BridgeCall) BridgeCall {
 // ([BridgeCall.Seq]), the same instant the bridge handed it to the surface,
 // and the same name and identity, all as the log keeps them ([keptCall]).
 //
-// ALL FOUR, because each alone is some other call's. A place alone could be a
-// call numbered by a session opened again on the job while one of the closed
-// session's calls was still in flight, which reuses it; an instant alone is
-// not set on a call nothing ran; and the same tool called with other arguments
-// at the same place and instant is another call, as is another tool. A call
-// with no place is never one this matches: [BridgeLog.listsEarlier] finds a
-// late call of an earlier round. AND NEVER BY THE ID ITS HARNESS GAVE IT
-// ([BridgeCall.CallID]), the box's word: a harness that makes a call again may
-// send the id it sent before, and two calls under one id are two calls.
+// ALL FOUR, because each alone is some other call's: a session opened again
+// on the job reuses a place, an instant is not set on a call nothing ran, and
+// other arguments or another tool at the same place and instant are another
+// call. A call with no place never matches ([BridgeLog.listsEarlier] finds a
+// late call of an earlier round). NEVER BY THE ID ITS HARNESS GAVE IT
+// ([BridgeCall.CallID]), the box's word: a repeated call may resend an id.
 func (l BridgeLog) lists(call BridgeCall) bool {
 	_, listed := l.listedAs(call)
 	return listed
@@ -781,39 +789,17 @@ func identity(call BridgeCall) ElidedCall {
 	return e
 }
 
-// ElidedCall is one identity in a tally of calls a run's log does not list as
-// calls: how many of them called Name with the arguments whose digest is
-// Digest ([BridgeCall.Digest]), and how many of those failed. Two tallies are
-// kept of them, each the round's, as the log they are kept in is:
-//
-//   - [BridgeLog.ElidedCalls], calls of the round the log does not list —
-//     its dropped middle — which every reader of the round reads as calls it
-//     made;
-//   - [BridgeLog.AbsorbedCalls], calls the run's call log took in from a
-//     bridged call's own work — a delegated worker's — which a resumed call
-//     log counts and no reader of the round's deliveries reads, since the
-//     round did not make them. Failed is never set on one.
-//
-// THE COUNT BOUND COSTS EVIDENCE, NEVER AN OPERATION ID. A resumed call log
-// seeds a call for every one counted here, so a later call counts its repeats
-// (internal/agent/turnctx's CallLog) exactly as the run's own process would
-// have, and a delivery reader counts a dropped reply as the reply it was.
-//
-// HELD TO ITS TALLY'S BOUND ([MaxElidedIdentityBytes],
-// [MaxAbsorbedIdentityBytes]), and past it an identity is FOLDED, in two steps
-// that each keep the count and give up a detail: into its tool's entry with no
-// digest — calls to Name whose arguments are not known, which a seed counts
-// against every later call to Name — and past that into the one entry with no
-// name — calls whose tool is not known either, which a seed counts against
-// every later call and a delivery reader cannot attribute. Both are
-// over-counts; neither is ever an under-count. An entry with a name and no
-// digest is also how a call whose arguments are withheld is counted
-// ([BridgeCall.Withheld]).
-//
-// A SECTION WITH AN EXTRA OF ITS OWN (wirekeys.go), so a key a later build adds
-// to an identity survives this build's writes. An identity this build folds
-// away takes its keys with it: they described an identity the log no longer
-// keeps.
+// ElidedCall is one identity in a tally of calls the log does not list: how
+// many called Name with the arguments whose digest is Digest
+// ([BridgeCall.Digest]), how many failed. Two tallies, each the round's:
+// [BridgeLog.ElidedCalls] (the dropped middle, read as the round's calls) and
+// [BridgeLog.AbsorbedCalls] (a delegated worker's, never read as the round's;
+// Failed never set). THE COUNT BOUND COSTS EVIDENCE, NEVER AN OPERATION ID: a
+// resumed call log seeds a call per one counted (turnctx's CallLog). Past the
+// bound ([MaxElidedIdentityBytes], [MaxAbsorbedIdentityBytes]) an identity is
+// FOLDED, keeping the count: into its tool's entry with no digest (also a
+// withheld call, [BridgeCall.Withheld]), then the one entry with no name;
+// over-counts, never under. A SECTION WITH AN EXTRA OF ITS OWN (wirekeys.go).
 type ElidedCall struct {
 	Name   string `json:"name,omitempty"`
 	Digest string `json:"digest,omitempty"`
@@ -983,10 +969,45 @@ func (l BridgeLog) ElisionKnown() bool {
 var widestInstant = time.Date(9999, 12, 31, 23, 59, 59, 999_999_999, time.FixedZone("", 14*3600))
 
 // keptTitle is a run's title as its row keeps it: within [MaxRunTitleBytes]
-// as the row holds it, the cut said.
+// as the row holds it, the cut said, and NEVER INSIDE A MARKER the redaction
+// wrote, which the launching turn's title holds ([LaunchRequest.Task]): one
+// cut in part reads as the title's own words, so the cut moves back to where
+// the markers begin ([redact.MarkersAround]).
 func keptTitle(s string) string {
-	title, _ := rowRecord.Text(s, MaxRunTitleBytes)
+	title, cut := rowRecord.Text(s, MaxRunTitleBytes)
+	if cut == 0 {
+		return title
+	}
+	if opening, ok := rowRecord.Opening(title, cut); ok {
+		if begin, _, inside := redact.MarkersAround(s, len(opening)); inside {
+			title, _ = rowRecord.TextOf(s[:begin], len(s), MaxRunTitleBytes)
+		}
+	}
 	return title
+}
+
+// keptQuestion is a colleague's question as the row keeps it, raw: within
+// [keptTitle]'s bound, and CUT WHERE ITS REDACTION ([ColleagueAsk.Question]) IS
+// AN OPENING OF THE WHOLE QUESTION'S. A cut inside a credential leaves a part
+// the redaction no longer knows as one, so such a cut moves back to where the
+// redaction settles ([redact.Settled]): the last line break before it. That
+// gives up as much as a line of the opening (all of it, for a question on one
+// line), which a question past 16 KiB can spare: the turn's own record keeps
+// the whole, and no shorter cut is known to settle. The second check holds what
+// is served, the redaction of the opening WITH the cut's note, to the opening's
+// own, so the guarantee never rests on how a rule reads the note's words.
+func keptQuestion(q string) string {
+	held := keptTitle(q)
+	opening, cut := rowRecord.Opening(held, len(q))
+	if !cut || held == q {
+		return held
+	}
+	shown := redact.Secrets(opening)
+	if strings.HasPrefix(redact.Secrets(q), shown) && strings.HasPrefix(redact.Secrets(held), shown) {
+		return held
+	}
+	held, _ = rowRecord.TextOf(opening[:redact.Settled(opening)], len(q), MaxRunTitleBytes)
+	return held
 }
 
 // answerFits reports why answer is past its share of the row

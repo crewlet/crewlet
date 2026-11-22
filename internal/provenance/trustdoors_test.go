@@ -103,25 +103,6 @@ var trustDoors = map[string]trustDoor{
 	"internal/agent/builtin/artifacts_brand.go:CallForTurn": {adopted, []string{
 		"internal/agent/builtin.TestTheBrandVoiceArrivesFencedAsTheCompanys",
 	}},
-	// THE DASHBOARD ASSISTANT reads as the person it acts for and is nobody
-	// of its own (ADR-0050), so no text is its own, and a route's answer names
-	// none of its writers: the engine's own records are a colleague's by the
-	// hosted rule, whichever of its doors they come through.
-	"internal/assistant/catalog/tools.go:all": {hosted, []string{
-		"internal/assistant/catalog.TestEveryAssistantToolResultIsFenced",
-		"internal/assistant/catalog.TestAnAnswerIsFencedAtTheTrustItsTextEarns",
-	}},
-	// One agent's access at an integration, as the vendor shows it: its
-	// refusals, level, account and scope names are the vendor's words.
-	"internal/assistant/catalog/seataccess.go:seatAccessRead": {vendor, []string{
-		"internal/assistant/catalog.TestAnAnswerIsFencedAtTheTrustItsTextEarns",
-		"internal/assistant/catalog.TestEveryAssistantToolResultIsFenced",
-	}},
-	// A permission looked up in a catalogue: its name and reasons are the vendor's.
-	"internal/assistant/catalog/seataccess.go:grantCatalogueSearch": {vendor, []string{
-		"internal/assistant/catalog.TestAnAnswerIsFencedAtTheTrustItsTextEarns",
-		"internal/assistant/catalog.TestEveryAssistantToolResultIsFenced",
-	}},
 	"internal/assistant/catalog/api.go:read": {hosted, []string{
 		"internal/assistant/catalog.TestAGenericReadIsFencedAtTheTrustItsRouteEarns",
 	}},
@@ -132,14 +113,6 @@ var trustDoors = map[string]trustDoor{
 		"internal/assistant/catalog.TestAGenericReadIsFencedAtTheTrustItsRouteEarns",
 		"internal/agent/builtin.TestAnExecutorsAskIsReadAtOneTrustThroughEveryDoor",
 	}},
-	// The atlas's entries by name: a search's and a trace's rows do not say
-	// which source named them, so the whole table takes the least any
-	// writer earns (a vendor's integration names what it reports); one
-	// entry says its sources, and is a vendor's where an integration is
-	// among them and the company's own words otherwise.
-	"internal/assistant/catalog/audit.go:auditRead": {either, []string{
-		"internal/assistant/catalog.TestTheAuditLogIsReadAsTheTrailItIs",
-	}},
 	"internal/assistant/catalog/research.go:fetchWebPage": {vendor, []string{
 		"internal/assistant.TestATurnReadsAFewPagesFencedAsTheSites",
 		"internal/assistant.TestAProposalAfterOutsideTextIsTainted",
@@ -148,25 +121,15 @@ var trustDoors = map[string]trustDoor{
 		"internal/assistant.TestATurnSearchesAFewTimesFencedAsTheSites",
 		"internal/assistant.TestAProposalAfterOutsideTextIsTainted",
 	}},
-	"internal/assistant/catalog/atlasread.go:atlasReads": {vendor, []string{
-		"internal/assistant/catalog.TestAnAtlasSearchIsATableOfEntriesWithTheMapToOpen",
-		"internal/assistant/catalog.TestEveryAssistantToolResultIsFenced",
-	}},
-	"internal/assistant/catalog/atlasread.go:atlasEntryTrust": {either, []string{
+	// One atlas entry says its sources: a vendor's where an integration or a
+	// repository's files are among them, the company's own words otherwise.
+	"internal/assistant/catalog/atlas.go:atlasEntryTrust": {either, []string{
 		"internal/assistant/catalog.TestAnAnswerIsFencedAtTheTrustItsTextEarns",
-		"internal/assistant/catalog.TestAnAtlasEntryIsAChipThatOpensTheMapOnIt",
 	}},
-	"internal/assistant/catalog/reads.go:knowledgeTrust": {either, []string{
+	"internal/assistant/catalog/cardwords.go:knowledgeTrust": {either, []string{
 		// Doclet's pages by the hosted rule and a connected knowledge base's
 		// as a vendor's, as each backend labels its own hits.
 		"internal/assistant/catalog.TestAnAnswerIsFencedAtTheTrustItsTextEarns",
-	}},
-	"internal/assistant/catalog/reads.go:outsideWhere": {either, []string{
-		// The engine's own rows, unless one carries an executor's question,
-		// read by the one rule for a harness's words (Executor).
-		"internal/assistant/catalog.TestAnAnswerIsFencedAtTheTrustItsTextEarns",
-		"internal/assistant.TestAProposalAfterOutsideTextIsTainted",
-		"internal/agent/builtin.TestAnExecutorsAskIsReadAtOneTrustThroughEveryDoor",
 	}},
 	// A repository's bytes, which the engine hosts and nobody a read can
 	// name wrote: read by provenance.Repository through every door, and
@@ -230,6 +193,27 @@ var trustDoors = map[string]trustDoor{
 	// from whoever wrote it, as an executor's words are (Executor).
 	"internal/agent/prompts/endings.go:endingAccounts": {vendor, []string{
 		"internal/agent/prompts.TestAConversationsEndingsAreFencedUnderTheTurnsToken",
+	}},
+	// THE TASK A BUSY SEAT'S RUN WAS ASKED, as a wake's triage reads it
+	// beside the wake (ADR-0168): the turn's ask as its record keeps it, a
+	// harness-side record whose writer the row does not keep, so the rule for
+	// a kept session (ExecutorSession), read at the least trust.
+	"internal/agent/prompts/triage.go:BuildWakeTriage": {vendor, []string{
+		"internal/agent/prompts.TestATriageReadsTheWakeAndTheTaskInTheirFences",
+	}},
+	// THE RUNS AROUND AN EXECUTOR'S RUN (ADR-0176): another run's task, as
+	// its record keeps what its turn was asked (ExecutorSession), and the
+	// message one run sends another, a harness's words whoever's seat sends
+	// them (Executor), each read at the least trust; and how a run waited for
+	// ended, its reviewer's account as the executor log keeps it.
+	"internal/engine/runsaround.go:aroundOf": {vendor, []string{
+		"internal/engine.TestListRunsShowsATitleOnlyForTheSameRequester",
+	}},
+	"internal/engine/runsaround.go:file": {vendor, []string{
+		"internal/engine.TestAnotherRunsMessageIsReadFencedAtTheNextStepAsInformation",
+	}},
+	"internal/agent/runner/asked.go:waited": {vendor, []string{
+		"internal/agent/runner.TestAWaitedRunsAccountIsToldInItsFence",
 	}},
 	// The cards an assistant conversation's earlier messages showed, as its
 	// summary call reads them: the record keeps no writer, so the least trust.

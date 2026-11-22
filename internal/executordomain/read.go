@@ -1,6 +1,7 @@
 package executordomain
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/executorkeep"
@@ -301,6 +303,11 @@ func (h Head) RetiredWhy() string {
 // not have applied yet.
 func RelaunchRead() statelog.Freshness { return statelog.Freshness{Level: statelog.ReadLinearizable} }
 
+// BindRead is the level a minted session's bind asks whether its id is any
+// turn's at ([Reader.SessionHeld]): the row naming it may be another node's
+// capture, which this node's copy may not have applied yet.
+func BindRead() statelog.Freshness { return statelog.Freshness{Level: statelog.ReadLinearizable} }
+
 // NotKept is why the row names no session's object, in a reader's words, ""
 // where it names one. Told apart off the row alone, it is one of four: a launch
 // ran the session out of context ([Session.RetiredBy]); nothing was captured
@@ -473,8 +480,9 @@ func (h Head) Absorbs() []string {
 
 // The statements a launch's reads run.
 const (
-	// headStatement is a conversation's HEAD ([Head.Session]); a turn that
-	// read none sorts after every turn that did. An end's position is unique
+	// headStatement is a conversation's HEAD ([Head.Session]) among its own
+	// rows, which [headOf] weighs beside the turns it reads as served; a turn
+	// that read none sorts after every turn that did. An end's position is unique
 	// among the rows holding one, so the pair is a total order, which the
 	// line index serves without a sort.
 	headStatement = `SELECT ` + sessionColumns + `
@@ -483,8 +491,8 @@ const (
 		  AND object IS NOT NULL
 		ORDER BY read_through DESC, end_seq DESC LIMIT 1`
 
-	// endingsStatement is a conversation's other ended turns, the newest
-	// first, and endingsCountStatement how many there are. An end's position
+	// endingsStatement is a conversation's other ended turns of its own, the
+	// newest first, and endingsCountStatement how many there are. An end's position
 	// is unique, so it alone orders them, served by the conversation's index.
 	endingsStatement = `SELECT ` + sessionColumns + `
 		FROM executor_sessions INDEXED BY ` + conversationIdx + `
@@ -514,6 +522,94 @@ const (
 		FROM executor_sessions INDEXED BY ` + sessionKey + ` WHERE agent_handle = ? AND turn_id = ?`
 )
 
+// THE TURNS A CONVERSATION READS AS SERVED (package doc, "A turn serves every
+// conversation its run read"): each a turn's one row, reached from the served
+// rows in the order their ends applied, which the line index serves without a
+// sort. A served row is placed at its end, so that one position orders it both
+// as a head and as an ending.
+var (
+	servedSelect = `SELECT ` + servedColumns() + `
+		FROM executor_session_serves AS v INDEXED BY ` + servesLineIdx + `
+		CROSS JOIN executor_sessions AS s INDEXED BY ` + sessionKey + `
+		WHERE v.agent_handle = ? AND v.conversation_key = ?
+		  AND s.agent_handle = v.agent_handle AND s.turn_id = v.turn_id AND s.end_seq IS NOT NULL`
+	servedCount = `SELECT COUNT(*)
+		FROM executor_session_serves AS v INDEXED BY ` + servesLineIdx + `
+		CROSS JOIN executor_sessions AS s INDEXED BY ` + sessionKey + `
+		WHERE v.agent_handle = ? AND v.conversation_key = ?
+		  AND s.agent_handle = v.agent_handle AND s.turn_id = v.turn_id AND s.end_seq IS NOT NULL`
+
+	// servedHeadStatement is the newest of them that names a session.
+	servedHeadStatement = servedSelect + ` AND s.object IS NOT NULL
+		ORDER BY v.end_seq DESC LIMIT 1`
+
+	// servedEndingsStatement is the others but the head, the newest first,
+	// and servedEndingsCountStatement how many; servedSiblingsCountStatement
+	// how many of those name a session.
+	servedEndingsStatement = servedSelect + ` AND v.turn_id <> ?
+		ORDER BY v.end_seq DESC LIMIT ?`
+	servedEndingsCountStatement  = servedCount + ` AND v.turn_id <> ?`
+	servedSiblingsCountStatement = servedCount + ` AND s.object IS NOT NULL AND v.turn_id <> ?`
+)
+
+// servedColumns is [sessionColumns] named under the served reads' alias for
+// the turn's row, `s`.
+func servedColumns() string {
+	fields := strings.Split(sessionColumns, ",")
+	for i, f := range fields {
+		fields[i] = "s." + strings.TrimSpace(f)
+	}
+	return strings.Join(fields, ", ")
+}
+
+// headOf is a conversation's head: of its own ended turns and those it reads
+// as served that name a session, the one that read it last. THE ONE RULE OF
+// THE LINE, as [headStatement] orders a conversation's own rows: the newest
+// read, then the newest end. A served turn read the conversation where its end
+// applied, so it outranks every turn of the conversation that read before that,
+// and one that read at or after it outranks it by its later end.
+func headOf(ctx context.Context, tx *sql.Tx, handle, conversationKey string) (*Session, error) {
+	own, err := oneSession(ctx, tx, headStatement, handle, conversationKey)
+	if err != nil {
+		return nil, err
+	}
+	srv, err := oneSession(ctx, tx, servedHeadStatement, handle, conversationKey)
+	switch {
+	case err != nil:
+		return nil, err
+	case srv == nil:
+		return own, nil
+	case own == nil:
+		return srv, nil
+	}
+	at := srv.EndedAtPosition.Packed()
+	if read := own.ReadThrough.Packed(); read > at || (read == at && own.EndedAtPosition.Packed() > at) {
+		return own, nil
+	}
+	return srv, nil
+}
+
+// endingsOf is a conversation's ended turns but the head, its own and those it
+// reads as served, the newest end first, at most [MaxEndings], and how many
+// there are.
+func endingsOf(ctx context.Context, tx *sql.Tx, handle, conversationKey, head string) ([]Session, int, error) {
+	own, ownTotal, err := boundedSessions(ctx, tx, endingsStatement, endingsCountStatement, MaxEndings,
+		handle, conversationKey, head)
+	if err != nil {
+		return nil, 0, err
+	}
+	srv, srvTotal, err := boundedSessions(ctx, tx, servedEndingsStatement, servedEndingsCountStatement,
+		MaxEndings, handle, conversationKey, head)
+	if err != nil {
+		return nil, 0, err
+	}
+	all := slices.Concat(own, srv)
+	slices.SortFunc(all, func(a, b Session) int {
+		return cmp.Compare(b.EndedAtPosition.Packed(), a.EndedAtPosition.Packed())
+	})
+	return all[:min(len(all), MaxEndings)], ownTotal + srvTotal, nil
+}
+
 // Head reads a conversation's head, its other ended turns and its siblings, in
 // one transaction, at the level fresh asks for.
 //
@@ -532,7 +628,7 @@ func (r *Reader) Head(ctx context.Context, handle, conversationKey string,
 	answer, err := r.log.Read(ctx, fresh.Query(ConversationScope(handle, conversationKey, ""), false),
 		func(tx *sql.Tx) error {
 			out = Head{}
-			head, headErr := oneSession(ctx, tx, headStatement, handle, conversationKey)
+			head, headErr := headOf(ctx, tx, handle, conversationKey)
 			if headErr != nil {
 				return headErr
 			}
@@ -541,8 +637,7 @@ func (r *Reader) Head(ctx context.Context, handle, conversationKey string,
 			if head != nil {
 				out.Session, headTurn = head, head.Turn
 			}
-			endings, total, endingsErr := boundedSessions(ctx, tx, endingsStatement,
-				endingsCountStatement, MaxEndings, handle, conversationKey, headTurn)
+			endings, total, endingsErr := endingsOf(ctx, tx, handle, conversationKey, headTurn)
 			if endingsErr != nil {
 				return endingsErr
 			}
@@ -550,11 +645,16 @@ func (r *Reader) Head(ctx context.Context, handle, conversationKey string,
 			// them: the query takes the newest, and they read oldest first.
 			slices.Reverse(endings)
 			out.Endings, out.EndingsOmitted = endings, total-len(endings)
-			var withSessions int
+			var withSessions, servedSessions int
 			if countErr := tx.QueryRowContext(ctx, siblingsCountStatement,
 				handle, conversationKey, headTurn).Scan(&withSessions); countErr != nil {
 				return countErr
 			}
+			if countErr := tx.QueryRowContext(ctx, servedSiblingsCountStatement,
+				handle, conversationKey, headTurn).Scan(&servedSessions); countErr != nil {
+				return countErr
+			}
+			withSessions += servedSessions
 			for i := len(endings) - 1; i >= 0 && len(out.Siblings) < MaxSiblings; i-- {
 				if endings[i].HasObject() {
 					out.Siblings = append(out.Siblings, endings[i])
@@ -692,8 +792,8 @@ func (r *Reader) Session(ctx context.Context, handle, turn string,
 }
 
 // headsOf is the head of every distinct conversation sessions name, keyed by
-// the conversation's key: the turn the conversation's head statement answers
-// ([Reader.Head]'s own), or "" where the conversation has none. A row with no
+// the conversation's key: the turn [headOf] answers ([Reader.Head]'s own), or
+// "" where the conversation has none. A row with no
 // conversation names none, and is not keyed.
 //
 // One seek per conversation, in the caller's transaction: never a head chosen
@@ -707,7 +807,7 @@ func headsOf(ctx context.Context, tx *sql.Tx, handle string, sessions []Session)
 		if _, read := out[s.ConversationKey]; read {
 			continue
 		}
-		head, err := oneSession(ctx, tx, headStatement, handle, s.ConversationKey)
+		head, err := headOf(ctx, tx, handle, s.ConversationKey)
 		if err != nil {
 			return nil, err
 		}
@@ -748,7 +848,9 @@ const pageStatement = `SELECT ` + sessionColumns + `, first_seq
 
 // Sessions is one page of a seat's rows, the latest begun first, after cursor
 // (empty for the first page), at the level fresh asks for: the seat's sessions
-// as a read surface and a seat's own search list them.
+// as a read surface and a seat's own search list them. A page holds its rows to
+// the bytes the read carries ([statelog.RowsOf]), so it may end short of limit
+// with a cursor: a caller pages on Next, never on a page's length.
 //
 // Paged by where each row began, which nothing moves: every other position on a
 // row moves with a capture, its end or a release, and a cursor over one would
@@ -777,6 +879,7 @@ func (r *Reader) Sessions(ctx context.Context, handle, cursor string, limit int,
 			return queryErr
 		}
 		var begun []int64
+		held := statelog.RowsOf(ctx)
 		for rows.Next() {
 			var first int64
 			s, scanErr := scanSession(trailing{rows, &first})
@@ -784,14 +887,23 @@ func (r *Reader) Sessions(ctx context.Context, handle, cursor string, limit int,
 				_ = rows.Close()
 				return scanErr
 			}
+			if !held.TakeEncoded(s) {
+				break
+			}
 			out.Sessions, begun = append(out.Sessions, s), append(begun, first)
 		}
 		if closeErr := errors.Join(rows.Err(), rows.Close()); closeErr != nil {
 			return closeErr
 		}
-		if len(out.Sessions) > limit {
+		// A PAGE CUT SHORT BY ITS BYTES goes on from its last kept row, as a
+		// full one does. Heads beside them are one entry per conversation of
+		// at most MaxPageSize rows, each key a row already carries: small.
+		switch {
+		case len(out.Sessions) > limit:
 			out.Sessions = out.Sessions[:limit]
 			out.Next = strconv.FormatInt(begun[limit-1], 10)
+		case held.Cut():
+			out.Next = strconv.FormatInt(begun[len(begun)-1], 10)
 		}
 		var headErr error
 		out.Heads, headErr = headsOf(ctx, tx, handle, out.Sessions)
@@ -998,6 +1110,45 @@ func (r *Reader) Unended(ctx context.Context, before time.Time, limit int) ([]Ex
 	return out, nil
 }
 
+// sessionHeldStatement is whether any turn's row names a session id, by the
+// index over the id ([sessionIdx]).
+const sessionHeldStatement = `
+	SELECT 1 FROM executor_sessions INDEXED BY ` + sessionIdx + ` WHERE session_id = ? LIMIT 1`
+
+// SessionHeld reports whether any turn's row, of any seat, names the session
+// id, at the level fresh asks for: a session a harness mints is bound only
+// while it is fresh, and one a row names is another turn's, whose capture and
+// carry it would take over. One seek, whatever the table holds.
+//
+// An answer that may be missing a row is [ErrIncomplete], never false: an
+// undecodable record may be exactly the row naming the id.
+func (r *Reader) SessionHeld(ctx context.Context, sessionID string, fresh statelog.Freshness) (bool, error) {
+	if sessionID == "" {
+		return false, invalid("a session id is needed to ask whether a turn holds it")
+	}
+	held := false
+	answer, err := r.log.Read(ctx, fresh.Query(DomainScope(), true), func(tx *sql.Tx) error {
+		held = false
+		var one int
+		err := tx.QueryRowContext(ctx, sessionHeldStatement, sessionID).Scan(&one)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return nil
+		case err != nil:
+			return err
+		}
+		held = true
+		return nil
+	})
+	switch {
+	case err != nil:
+		return false, fmt.Errorf("executordomain: whether a turn holds session %q: %w", sessionID, err)
+	case !held && !answer.Complete:
+		return false, fmt.Errorf("%w: whether a turn holds session %q", ErrIncomplete, sessionID)
+	}
+	return held, nil
+}
+
 // handlesStatement is every seat holding a row, in order.
 const handlesStatement = `
 	SELECT DISTINCT agent_handle FROM executor_sessions ORDER BY agent_handle`
@@ -1032,6 +1183,52 @@ func (r *Reader) Handles(ctx context.Context, fresh statelog.Freshness) ([]strin
 		return nil, fmt.Errorf("executordomain: list the seats holding sessions: %w", err)
 	case !answer.Complete:
 		return nil, fmt.Errorf("%w: list the seats holding sessions", ErrIncomplete)
+	}
+	return out, nil
+}
+
+// handlesPageStatement is every seat holding a row after a handle, in order.
+const handlesPageStatement = `
+	SELECT DISTINCT agent_handle FROM executor_sessions WHERE agent_handle > ? ORDER BY agent_handle`
+
+// HandlesPage is one page of the seats holding a row: the handles after the
+// page before's Next, in order, and Next where more follow.
+type HandlesPage struct {
+	Handles []string
+	Next    string
+}
+
+// HandlesPage is [Reader.Handles] a page at a time, after `after` (empty for
+// the first), as a node holding no data reads it: one answer each, held to the
+// bytes the read carries ([statelog.RowsOf]); its caller pages on Next.
+func (r *Reader) HandlesPage(ctx context.Context, after string, fresh statelog.Freshness) (HandlesPage, error) {
+	var out HandlesPage
+	answer, err := r.log.Read(ctx, fresh.Query(DomainScope(), true), func(tx *sql.Tx) error {
+		out = HandlesPage{}
+		rows, queryErr := tx.QueryContext(ctx, handlesPageStatement, after)
+		if queryErr != nil {
+			return queryErr
+		}
+		held := statelog.RowsOf(ctx)
+		for rows.Next() {
+			var handle string
+			if scanErr := rows.Scan(&handle); scanErr != nil {
+				_ = rows.Close()
+				return scanErr
+			}
+			if !held.TakeEncoded(handle) {
+				out.Next = out.Handles[len(out.Handles)-1]
+				break
+			}
+			out.Handles = append(out.Handles, handle)
+		}
+		return errors.Join(rows.Err(), rows.Close())
+	})
+	switch {
+	case err != nil:
+		return HandlesPage{}, fmt.Errorf("executordomain: list the seats holding sessions: %w", err)
+	case !answer.Complete:
+		return HandlesPage{}, fmt.Errorf("%w: list the seats holding sessions", ErrIncomplete)
 	}
 	return out, nil
 }

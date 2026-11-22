@@ -92,6 +92,12 @@ func (nowhere) Deliver(context.Context, types.ExecutorAnswerGiven) (uuid.UUID, e
 
 func (nowhere) Answerer(sandbox.PendingRun) string { return "" }
 
+// AnswerFoldIn finds no fold-in: no run here holds one.
+func (nowhere) AnswerFoldIn(context.Context, sandbox.PendingRun, string, sandbox.FoldInAnswered) (sandbox.FoldIn,
+	error) {
+	return sandbox.FoldIn{}, sandbox.ErrFoldInClosed
+}
+
 func (nowhere) SeatPause(context.Context, uuid.UUID) (coord.SeatPause, bool, error) {
 	return coord.SeatPause{}, false, nil
 }

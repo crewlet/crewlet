@@ -43,10 +43,15 @@ type RemovalAt struct {
 	Seat      string `json:"seat,omitempty"`
 	Job       string `json:"job,omitempty"`
 	Assistant string `json:"assistant,omitempty"`
+	Advisor   string `json:"advisor,omitempty"`
 }
 
 // AssistantChat is the one assistant target a [RemovalAt] can name.
 const AssistantChat = "chat"
+
+// AdvisorFindings is the one Advisor target a [RemovalAt] can name: the model
+// it explains its findings with.
+const AdvisorFindings = "findings"
 
 // Repoint is what one reference to the removed entry becomes: To replaces the
 // entry in the field's chain where it stood, and nil removes it, a chain left
@@ -94,7 +99,9 @@ var jobWords = map[config.ProviderJob]string{
 	config.JobSubagent:  "delegated tasks",
 	config.JobAuxiliary: "memory and summaries",
 	config.JobJudge:     "onboarding checks",
+	config.JobTriage:    "sorting messages to a busy seat",
 	config.JobAssistant: "Ask Crewlet's chat",
+	config.JobAdvisor:   "the Advisor's findings",
 }
 
 // phaseJobs is the job each phase's chain is resolved for, the phases a
@@ -109,12 +116,16 @@ var phaseJobs = []struct {
 	{phase.Subagent, config.JobSubagent},
 	{phase.Auxiliary, config.JobAuxiliary},
 	{phase.Judge, config.JobJudge},
+	{phase.Triage, config.JobTriage},
 }
 
 // addressOf is where a reference is answered.
 func addressOf(ref config.ProviderReference) RemovalAt {
-	if ref.Job == config.JobAssistant {
+	switch ref.Job {
+	case config.JobAssistant:
 		return RemovalAt{Assistant: AssistantChat}
+	case config.JobAdvisor:
+		return RemovalAt{Advisor: AdvisorFindings}
 	}
 	return RemovalAt{Seat: ref.Seat, Job: string(ref.Job)}
 }
@@ -152,17 +163,25 @@ func readRemoval(text []byte) (RemovalRequest, string, error) {
 	}
 	for i, r := range req.Repoint {
 		seat := r.At.Seat != "" || r.At.Job != ""
+		helpers := 0
+		if r.At.Assistant != "" {
+			helpers++
+		}
+		if r.At.Advisor != "" {
+			helpers++
+		}
+		job := config.ProviderJob(r.At.Job)
 		switch {
-		case seat && r.At.Assistant != "":
-			return RemovalRequest{}, "", fmt.Errorf("repoint[%d].at names a seat and "+
-				"Ask Crewlet: address one", i)
-		case seat && (r.At.Seat == "" || !config.ProviderJob(r.At.Job).Valid() ||
-			config.ProviderJob(r.At.Job) == config.JobAssistant):
+		case (seat && helpers > 0) || helpers > 1:
+			return RemovalRequest{}, "", fmt.Errorf("repoint[%d].at names more than one of "+
+				"a seat, Ask Crewlet and the Advisor: address one", i)
+		case seat && (r.At.Seat == "" || !job.Valid() ||
+			job == config.JobAssistant || job == config.JobAdvisor):
 			return RemovalRequest{}, "", fmt.Errorf("repoint[%d].at needs a seat and its job, "+
 				"one of executor, review, subagent, auxiliary or judge", i)
-		case !seat && r.At.Assistant != AssistantChat:
-			return RemovalRequest{}, "", fmt.Errorf("repoint[%d].at needs {seat, job} or "+
-				"{assistant: chat}", i)
+		case !seat && r.At.Assistant != AssistantChat && r.At.Advisor != AdvisorFindings:
+			return RemovalRequest{}, "", fmt.Errorf("repoint[%d].at needs {seat, job}, "+
+				"{assistant: chat} or {advisor: findings}", i)
 		}
 	}
 	return req, summary, nil
@@ -201,6 +220,42 @@ func removalDraft(id string, req RemovalRequest, expect string) draft {
 		},
 		warnings: resolutionMoves(id),
 	}
+}
+
+// referencesOf is every written reference to the model id in c, as a
+// removal's refusal lists them and its repoint answers them.
+func referencesOf(c *config.Company, id string) []RemovalReference {
+	references := []RemovalReference{}
+	for _, ref := range c.ProviderReferences(id) {
+		references = append(references, RemovalReference{At: addressOf(ref),
+			Segments: ref.Segments, Chain: slices.Clone(ref.Chain)})
+	}
+	return references
+}
+
+// modelReferences serves `GET /config/llm-providers/{id}/references`: every
+// written reference to the model, read with no write asked. A removal's page
+// draws its list from it; asked as a dry run with no repoint, the same list
+// came back as a 422, which every browser logs as a failed request.
+func (s *Service) modelReferences(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	company, revision, err := s.activeCompany(r.Context())
+	switch {
+	case errors.Is(err, ErrNoActiveRevision):
+		refuseNoCompany(w)
+		return
+	case err != nil:
+		s.fail(w, r, "read the active revision", err)
+		return
+	}
+	if _, held := company.Providers.LLM[id]; !held {
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoSuchEntity,
+			map[string]string{"hint": NotFound(EntityLLMProviders, id)})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"revision": revision.ID, "references": referencesOf(company, id),
+	})
 }
 
 // repoint answers every written reference to id in c with the request's
@@ -269,6 +324,9 @@ func describeAt(at RemovalAt) string {
 	if at.Assistant != "" {
 		return "Ask Crewlet's " + strings.ReplaceAll(at.Assistant, "_", " ")
 	}
+	if at.Advisor != "" {
+		return "the Advisor's " + at.Advisor
+	}
 	return at.Seat + "'s " + jobWords[config.ProviderJob(at.Job)]
 }
 
@@ -297,6 +355,15 @@ func rewrite(c *config.Company, ref config.ProviderReference, id string, to *str
 		}
 		return
 	}
+	// THE ADVISOR'S MODEL moves with the removal, or is cleared: its checks
+	// run with no model.
+	if ref.Job == config.JobAdvisor {
+		c.Advisor.Model = ""
+		if to != nil {
+			c.Advisor.Model = *to
+		}
+		return
+	}
 	// THE FIELD THE SEGMENTS END IN, since a seat can write one job in two
 	// places (`llm_review` and `llm.review`) and each is its own reference.
 	last := ""
@@ -318,6 +385,8 @@ func rewrite(c *config.Company, ref config.ProviderReference, id string, to *str
 			role.LLMAuxiliary = edit(role.LLMAuxiliary)
 		case last == "llm_judge":
 			role.LLMJudge = edit(role.LLMJudge)
+		case last == "llm_triage":
+			role.LLMTriage = edit(role.LLMTriage)
 		case ref.Job == config.JobReview:
 			role.LLM.Review = edit(role.LLM.Review)
 		case ref.Job == config.JobSubagent:
@@ -326,6 +395,8 @@ func rewrite(c *config.Company, ref config.ProviderReference, id string, to *str
 			role.LLM.Auxiliary = edit(role.LLM.Auxiliary)
 		case ref.Job == config.JobJudge:
 			role.LLM.Judge = edit(role.LLM.Judge)
+		case ref.Job == config.JobTriage:
+			role.LLM.Triage = edit(role.LLM.Triage)
 		}
 		return
 	}

@@ -1,65 +1,17 @@
 package executor
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
+	"math/rand/v2"
 	"strings"
 	"testing"
 	"time"
 	"unsafe"
 
 	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
-
-// AN OPENCODE MESSAGE READS WHAT ITS STEP MEASURED AND THE FAILURE IT ENDED
-// ON, off each driven release's export (testdata/opencode, described by
-// openCodeExportFixture): a step that ended without a failure carries its
-// prompt's uncached input and its cache reads; the step its provider refused
-// and each step the session was interrupted in carry their failure.
-//
-// Mutation: spell `type`, `tokens`, `input`, `cache`, `read` or `error`
-// otherwise than OpenCode 2 writes it, and a step reads as one that measured
-// nothing, or as one that ended without its failure.
-func TestAnOpenCodeMessageReadsWhatItsStepMeasuredAndTheFailureItEndedOn(t *testing.T) {
-	t.Parallel()
-	for _, version := range []string{"2.0.32", "2.2.5"} {
-		raw, err := os.ReadFile(filepath.Join("testdata", "opencode", version, "export.json"))
-		if err != nil {
-			t.Fatalf("read the fixture: %v", err)
-		}
-		var export struct {
-			Messages []openCodeMessage `json:"messages"`
-		}
-		if err = json.Unmarshal(raw, &export); err != nil {
-			t.Fatalf("%s: the export does not decode: %v", version, err)
-		}
-		measured := 0
-		failures := map[string]int{}
-		for _, m := range export.Messages {
-			switch {
-			case m.Type != openCodeAssistant:
-			case !absent(m.Error):
-				var failure struct {
-					Type string `json:"type"`
-				}
-				if err = json.Unmarshal(m.Error, &failure); err != nil {
-					t.Errorf("%s: a step's failure does not decode: %v", version, err)
-				}
-				failures[failure.Type]++
-			case m.Tokens == nil || m.Tokens.Input <= 0 || m.Tokens.Cache.Read <= 0:
-				t.Errorf("%s: a step that ended without a failure reads as measuring %+v", version, m.Tokens)
-			default:
-				measured++
-			}
-		}
-		if measured == 0 || failures["provider.invalid-request"] != 1 || failures["aborted"] != 2 {
-			t.Errorf("%s: %d steps read as measured and the failures %v, want some measured, the one "+
-				"the provider refused and the two the session was interrupted in", version, measured, failures)
-		}
-	}
-}
 
 // A LINE OF MANY NOTE OPENINGS COSTS WHAT ITS BYTES COST: a quarter mebibyte
 // of openings on one line reads as fast as on lines of 4 KiB, whether or not
@@ -164,17 +116,15 @@ func logLines(text string, n int) string {
 }
 
 // AN ENTRY'S TEXT IS AN OPENING OF WHAT ITS WHOLE TEXT REDACTS TO, wherever
-// the bound falls: never a byte the whole text's redaction would not hand out,
-// and cut, marked, within the bound. The cases:
+// the bound falls: exactly the whole redaction cut to the bound, marked, and
+// stating the whole redaction's size. The cases: key blocks that redact to
+// markers ahead of a GitHub token near the bound; a token across the bound at
+// every offset; a key, prose after its BEGIN, its body read back by an END
+// past the bound; and the redact package's hold shapes, at bounds of 160 B to
+// 16 KiB.
 //
-//   - key blocks that redact to markers, shrinking the window, ahead of a
-//     GitHub token it cuts, whose first twenty characters match no rule;
-//   - a token across the bound at every offset, redacted whole, never cut first;
-//   - a key, prose after its BEGIN, its body read back by an END past the bound.
-//
-// Mutation: cut the window's redaction by bytes alone, and the token's opening
-// is handed out; cut before redacting, and the token across the bound is; read
-// a window short of a key block past the bound, and the END's body is.
+// Mutation: cut before redacting, or open an entry from the redaction of a
+// window about its bound, and an entry is not the whole redaction's opening.
 func TestAnEntryIsAnOpeningOfWhatItsWholeTextRedactsTo(t *testing.T) {
 	t.Parallel()
 	key := "-----BEGIN RSA PRIVATE KEY-----\n" + strings.Repeat(keyLine+"\n", 50) +
@@ -187,7 +137,7 @@ func TestAnEntryIsAnOpeningOfWhatItsWholeTextRedactsTo(t *testing.T) {
 	cases := map[string]entry{}
 
 	keys := strings.Repeat(key, 21)
-	at := TranscriptEntryMaxBytes + redactContext - 20
+	at := TranscriptEntryMaxBytes + redact.LookBack - 20
 	before := logLines(keys, at-len("a line of the build's log\n"))
 	before += strings.Repeat(" ", at-len(before))
 	cases["key blocks ahead of a token the window cuts"] = entry{
@@ -202,16 +152,28 @@ func TestAnEntryIsAnOpeningOfWhatItsWholeTextRedactsTo(t *testing.T) {
 		logLines("-----BEGIN RSA PRIVATE KEY-----\nsee below\n"+strings.Repeat(keyLine+"\n", 200)+
 			"-----END RSA PRIVATE KEY-----\n", 200<<10), 1 << 10}
 
-	for name, c := range cases {
-		got, cut, _ := redactedWithin(c.text, c.bound)
-		kept := strings.TrimSuffix(got, "…")
-		if whole := redact.Secrets(c.text); !strings.HasPrefix(whole, kept) {
-			t.Errorf("%s: the entry hands out %q, which the whole text does not redact to", name,
-				kept[max(0, len(kept)-80):])
+	for name, text := range holdShapes(200 << 10) {
+		for _, bound := range []int{160, 1 << 10, 8 << 10, 16 << 10} {
+			cases[fmt.Sprintf("hold shape %s at %d", name, bound)] = entry{text, bound}
 		}
-		if !cut || len(got) > c.bound || !strings.HasSuffix(got, "…") {
-			t.Errorf("%s: the entry is %d bytes, cut %v, ending %q; want it cut, marked, within %d",
-				name, len(got), cut, got[max(0, len(got)-8):], c.bound)
+	}
+
+	wholes := map[string]string{} // each text's redaction, once: a shape is read at four bounds
+	for name, c := range cases {
+		got, cut, size := entryOpening(c.text, c.bound)
+		whole, ok := wholes[c.text]
+		if !ok {
+			whole = redact.Secrets(c.text)
+			wholes[c.text] = whole
+		}
+		if want := textcut.Within(whole, c.bound); got != want || size != len(whole) {
+			t.Errorf("%s: the entry is …%q stating %d bytes; the whole redaction opens …%q and is %d", name,
+				got[max(0, len(got)-80):], size, want[max(0, len(want)-80):], len(whole))
+		}
+		if cut != (len(whole) > c.bound) || cut && (len(got) > c.bound || !strings.HasSuffix(got, "…")) {
+			t.Errorf("%s: the entry is %d bytes, cut %v, ending %q; want it cut, marked, within %d where "+
+				"the whole redaction's %d bytes run past it", name, len(got), cut, got[max(0, len(got)-8):],
+				c.bound, len(whole))
 		}
 		if strings.Contains(got, "ghp_") || strings.Contains(got, keyLine[:16]) {
 			t.Errorf("%s: the entry hands out a credential's material: …%q", name, got[max(0, len(got)-80):])
@@ -244,10 +206,8 @@ func TestAnEntryHoldsOnlyItsOwnBytes(t *testing.T) {
 	t.Parallel()
 	opening := "## A note from ada, sent while this turn was running\nTarget main."
 	decoded := opening + "\n" + strings.Repeat("x", 4<<20)
-	b := &transcriptBuilder{bounds: TranscriptReadBounds(), entries: []TranscriptEntry{},
-		calls: map[string]string{}}
-	matched := &transcriptBuilder{bounds: SeatTranscriptBounds(), entries: []TranscriptEntry{},
-		calls: map[string]string{}, filter: TranscriptFilter{Terms: []string{"target"}}}
+	b := newTranscriptBuilder(0, TranscriptReadBounds(), TranscriptFilter{})
+	matched := newTranscriptBuilder(0, SeatTranscriptBounds(), TranscriptFilter{Terms: []string{"target"}})
 	for shaping, by := range map[string]*transcriptBuilder{"an opening": b, "a match's window": matched} {
 		if err := by.add(TranscriptEntry{Kind: EntryNote, Thread: decoded[3:9], Tool: decoded[10:14]},
 			decoded[:len(opening)]); err != nil || len(by.entries) != 1 {
@@ -279,5 +239,79 @@ func TestAnEntryHoldsOnlyItsOwnBytes(t *testing.T) {
 	b.called("toolu_2", "Bash")
 	if got := b.answered("toolu_2"); got != "Bash" {
 		t.Errorf("a harness's call is answered as %q, want its tool", got)
+	}
+}
+
+// holdShapes are texts built to hold the redact package's stream (its
+// early_internal_test.go), n bytes of run each: an armour beside a run, a
+// password's key a key's block reads beside runs, and keys among password's
+// keys.
+func holdShapes(n int) map[string]string {
+	r := rand.New(rand.NewPCG(1170, 40))
+	run := func(alphabet string, n int) string {
+		b := make([]byte, n)
+		for i := range b {
+			b[i] = alphabet[r.IntN(len(alphabet))]
+		}
+		return string(b)
+	}
+	const (
+		begin = "-----BEGIN RSA PRIVATE KEY-----"
+		end   = "-----END RSA PRIVATE KEY-----"
+		b64   = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+	)
+	long, longB64 := run(b64[:62]+"-_", n), run(b64, n)
+	tail := strings.Repeat("ok\n", 4000)
+	armour := "a key: " + begin + "\n" + keyLine + "\n\n"
+	head := "k: " + begin + "\n" + keyLine + "\n\n"
+	return map[string]string{
+		"a1": armour + "data: " + long[:1000] + "sk-" + long + "\n" + tail,
+		"a5": armour + "pwd=" + long + "\n" + tail,
+		"a6": armour + "password:" + strings.Repeat(" ", n) + "x\n" + tail,
+		"a7": "a key: " + begin + "\n" + keyLine + "\n" + end + "\nPassword: hunter2x9\nsk-" + long + "\n" + tail,
+		"b1": armour + "SessionToken\"" + strings.Repeat(" ", n) + "= x\n" + tail,
+		"b2": armour + "\"aws_secret_access_key\"" + strings.Repeat("\t", n) + ": " + longB64[:60] + "\n" + tail,
+		"b3": armour + "SessionToken" + strings.Repeat(" ", n) + "= x\n" + tail,
+		"c6": armour + `{"pwd": "hunter2x9\n` + "sk-" + long + `"}` + "\n" + tail,
+		"d1": begin + "\n" + keyLine + "\n" + keyLine + "\nx Password: |\nu1SU1Lf9x sk-" + long + " |\n" + tail,
+		"d2": begin + "\n" + keyLine + "\n" + keyLine + "\nx Password: |\nu1SU1Lf9x sk-" + long + "\n" + tail,
+		"d3": begin + "\n" + keyLine + "\n" + keyLine + "\nx Password: |\nu1SU1Lf9x sk-" + long[:n/2] + " sk-" +
+			long[:n/2] + " |\n" + end + "\n" + tail,
+		"d4": begin + "\n" + keyLine + "\nx Password: |\nu1SU1Lf9x sk-" + long + "\n" + keyLine + "\n" + end + "\n" + tail,
+		"e1": head + strings.Repeat("pwd:\n", 12000) + "sk-" + long + "\n" + tail,
+	}
+}
+
+// A STREAM'S END, AND ITS LIVE VIEW, ARE THE END OF ITS WHOLE REDACTION over
+// the hold shapes too: what each shows of a stream read from inside, with
+// [redact.LookBack] before it, is how the whole stream's redaction ends. The
+// live view's shapes hold runs shorter than that context, as every
+// credential but a key's block is; the error stream's run past it.
+func TestAStreamsEndAndItsLiveViewAreTheEndOfItsWholeRedaction(t *testing.T) {
+	t.Parallel()
+	for name, text := range holdShapes(512 << 10) {
+		whole := redact.Secrets(text)
+		for _, keep := range []int{16 << 10, 64 << 10} {
+			data := text[len(text)-(keep+redact.LookBack):]
+			end, _ := streamEnd(sandbox.FileTail{Data: []byte(data), Size: int64(len(text))}, keep)
+			if end = strings.TrimPrefix(end, sandbox.KeepEndMark); !strings.HasSuffix(whole, end) {
+				t.Errorf("%s at %d: the stream's end shows %.120q, which the whole redaction does not end on",
+					name, keep, end)
+			}
+		}
+	}
+	filler := strings.Repeat("compiling a package of the build\n", 8<<10)
+	for name, shape := range holdShapes(redact.LookBack / 2) {
+		text := filler + shape
+		whole := redact.Secrets(text)
+		for _, keep := range []int{16 << 10, 48 << 10} {
+			var live pendingText
+			live.lead(text[:len(text)-keep])
+			live.add(text[len(text)-keep:])
+			if shown := live.settle(true); !strings.HasSuffix(whole, shown) {
+				t.Errorf("%s at %d: the live view shows %.120q, which the whole redaction does not end on",
+					name, keep, shown)
+			}
+		}
 	}
 }

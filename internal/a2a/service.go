@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
 
@@ -410,13 +411,16 @@ func (s *Service) Close(ctx context.Context, c Closure) error {
 	return s.announceClose(ctx, ch, c, now)
 }
 
-// publishSent records one message on a channel.
+// publishSent records one message on a channel, its content redacted
+// ([redact.Secrets]): the record is what people read afterwards, while the
+// wake carries the words as written to the seat they are for.
 //
 // It takes the PAYLOAD rather than the six strings it used to, because that is
 // what the two call sites are assembling either way and six adjacent strings
 // in a positional call is a transposition nothing catches — the compiler least
 // of all.
 func (s *Service) publishSent(ctx context.Context, sent types.A2AMessageSent) error {
+	sent.Content = redact.Secrets(sent.Content)
 	ev := events.New(sent, tracing.TraceOf(ctx))
 	ev.Source = sent.Sender
 	if err := s.queue.Publish(ctx, topics.Event(ev.Type), ev); err != nil {

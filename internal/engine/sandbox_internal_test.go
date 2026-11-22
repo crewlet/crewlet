@@ -41,6 +41,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/version"
 )
 
@@ -1084,6 +1085,52 @@ func TestTheEnginesCoordinatorCountsOnlyTheRunsOwnFailures(t *testing.T) {
 	}
 }
 
+// THE ENGINE'S COORDINATOR RECORDS ITS SPOOL ROOM INTO THE NODE'S RECORDER, the
+// one every other subsystem records into: each final take's wait under its
+// outcome, in milliseconds, and the room held. Unwired, a final take refused
+// for room is a log line alone, and no panel shows the refusals rising.
+//
+// Mutation: leave Spools off the coordinator's options, or record a wait
+// without its outcome or the room held under another instrument.
+func TestTheEnginesCoordinatorRecordsItsSpoolRoom(t *testing.T) {
+	t.Parallel()
+	rec, err := metrics.New()
+	if err != nil {
+		t.Fatalf("metrics.New: %v", err)
+	}
+	e := &Engine{backends: &Backends{Queue: queuememory.New()}, answers: testAnswers(), metrics: rec}
+	meter := e.coordinatorOptions(nil, nil).Spools
+	if meter == nil {
+		t.Fatal("the coordinator is built with nothing to tell its spool room's measures")
+	}
+	for _, outcome := range sandbox.SpoolOutcomes {
+		meter.SpoolWaited(outcome, time.Minute)
+	}
+	meter.SpoolHeld(1 << 20)
+	seen := map[string]bool{}
+	for _, s := range rec.Read() {
+		switch {
+		case s.Name == metrics.ExecutorSpoolWait:
+			if s.Count != 1 || s.Sum != 60_000 {
+				t.Errorf("%s%v holds %d waits of %v ms, want one of 60000", s.Name, s.Attrs, s.Count, s.Sum)
+			}
+			seen[s.Attrs["outcome"]] = true
+		case s.Name == metrics.ExecutorSpoolHeldBytes && s.Value != 1<<20:
+			t.Errorf("%s reads %v, want 1 MiB", s.Name, s.Value)
+		case s.Name == metrics.ExecutorSpoolHeldBytes:
+			seen["held"] = true
+		}
+	}
+	for _, outcome := range sandbox.SpoolOutcomes {
+		if !outcome.Valid() || !seen[string(outcome)] {
+			t.Errorf("no %s series for outcome %q", metrics.ExecutorSpoolWait, outcome)
+		}
+	}
+	if !seen["held"] {
+		t.Errorf("no %s series", metrics.ExecutorSpoolHeldBytes)
+	}
+}
+
 // THE ENGINE'S COORDINATOR IS TOLD WHICH RESUME FAILURES ONLY AN OPERATOR
 // CLEARS, by the one classification of conditions every failure is told by: a
 // disk full, read-only or failing and a process at its limit of open files are
@@ -1449,4 +1496,35 @@ func (q *deliveredOnAttach) outcome() (queue.Result, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return q.got, q.delivered
+}
+
+// A FAKE RUN STATES WHAT ITS HARNESS'S RUNNER STATES: the double stands in for
+// the box, never for the harness, so its reading of the main thread, the
+// window it pins and what it says can switch its notes off are the real
+// runner's, and a fake run is collected and warned about as its harness's is.
+//
+// Mutation: drop any one copy in fakeRunners, and a harness goes red.
+func TestAFakeRunStatesWhatItsHarnesssRunnerStates(t *testing.T) {
+	t.Parallel()
+	real, stated := sandboxRunners(), false
+	for name, runner := range fakeRunners(nil) {
+		fake, want := runner.(*sandbox.FakeRunner), real[name].(*executor.Runner)
+		if fake.Thread != sandbox.ThreadTraitsOf(want) {
+			t.Errorf("%s: the fake reads its thread as %+v, its runner as %+v", name, fake.Thread,
+				sandbox.ThreadTraitsOf(want))
+		}
+		if fake.NotesOff != want.NotesOffWhy() {
+			t.Errorf("%s: the fake says %q switches its notes off, its runner %q", name, fake.NotesOff,
+				want.NotesOffWhy())
+		}
+		stated = stated || want.NotesOffWhy() != ""
+		for _, model := range []string{"sonnet", "opus", "anthropic/claude-sonnet-4-5"} {
+			if got, pinned := fake.PinnedWindow(model), want.PinnedWindow(model); got != pinned {
+				t.Errorf("%s: the fake pins %s to %d, its runner to %d", name, model, got, pinned)
+			}
+		}
+	}
+	if !stated {
+		t.Error("no harness's runner says what switches its notes off, so the copy above proves nothing")
+	}
 }

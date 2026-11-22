@@ -7,6 +7,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
@@ -422,7 +423,7 @@ func TestTheFindingsFileIsTheResultCarrierOfRecord(t *testing.T) {
 	b.Put(p.Findings(), "Outcome: succeeded\nOpened https://github.com/acme/api/pull/42")
 	b.Put(p.ExitCode(), "0")
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -446,7 +447,7 @@ func TestACrashOverridesTheReportsSuccessSignal(t *testing.T) {
 	b.Put(p.Findings(), "Outcome: partial")
 	b.Put(p.ExitCode(), "137")
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -464,7 +465,7 @@ func TestARunThatProducedNothingReportsWhyRatherThanStallingSilently(t *testing.
 	b.Put(p.Err(), "claude: command not found")
 	b.Put(p.ExitCode(), "127")
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -487,7 +488,7 @@ func TestTheTranscriptFallsBackToStderrWhereTheStreamSaysNothing(t *testing.T) {
 	b.Put(p.Err(), "error: unknown option '--output-formt'")
 	b.Put(p.ExitCode(), "1")
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -507,7 +508,7 @@ func TestEverythingCollectedIsRedacted(t *testing.T) {
 	b.Put(p.Findings(), "cloned with "+secret+"\nDelivered: "+secret)
 	b.Put(p.Err(), "git clone https://"+secret+"@example.com/acme/api")
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -540,7 +541,7 @@ func TestTheTranscriptLeavesTheRunnerWholeAndRedacted(t *testing.T) {
 	b.Put(p.Findings(), "Outcome: succeeded")
 	b.Put(p.Err(), stderr)
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -571,7 +572,7 @@ func TestACrashDetailIsCarriedWholeBehindItsStatus(t *testing.T) {
 	b.Put(p.Err(), stderr)
 	b.Put(p.ExitCode(), "1")
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -596,7 +597,7 @@ func TestTheHarnessErrorIsNotReplacedByItsStderr(t *testing.T) {
 	b.Put(p.Err(), "warning: a deprecated flag")
 	b.Put(p.ExitCode(), "0")
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -619,7 +620,7 @@ func TestTheReportLeavesTheRunnerWhole(t *testing.T) {
 	b.Put(p.Findings(), report)
 	b.Put(p.ExitCode(), "0")
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -682,8 +683,8 @@ func (containerLike) EngineHost() string { return "host.docker.internal" }
 
 // THE HARNESS DIALS ITS SERVERS FROM INSIDE THE BOX, so its config names the
 // engine host as the box reaches it: a container's 127.0.0.1 is its own
-// loopback. Every run's config comes through Start (a seat's executor run and
-// the assistant's deep work alike), so the translation is there and only there.
+// loopback. Every run's config comes through Start, so the translation is
+// there and only there.
 func TestTheBoxsConfigNamesTheEngineHostAsTheBoxReachesIt(t *testing.T) {
 	t.Parallel()
 	runner := executor.NewClaudeCode()
@@ -737,12 +738,13 @@ func TestTheBoxsNotesRouteNamesTheEngineHostAsTheBoxReachesIt(t *testing.T) {
 	var cfg struct {
 		Plugins []openCodePlugin `json:"plugins"`
 	}
-	if err = json.Unmarshal(raw, &cfg); err != nil || len(cfg.Plugins) != 1 {
+	if err = json.Unmarshal(raw, &cfg); err != nil || len(runPlugins(cfg.Plugins)) != 1 {
 		t.Fatalf("the configuration names no notes plugin (%v):\n%s", err, raw)
 	}
-	file, ok := referencedPath(cfg.Plugins[0].Options.URL)
+	steer := runPlugins(cfg.Plugins)[0]
+	file, ok := referencedPath(steer.Options.URL)
 	if !ok {
-		t.Fatalf("the plugin's route is %q, want a reference to a file", cfg.Plugins[0].Options.URL)
+		t.Fatalf("the plugin's route is %q, want a reference to a file", steer.Options.URL)
 	}
 	value, err := b.ReadFile(t.Context(), file)
 	if err != nil {

@@ -18,6 +18,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/googlecloud"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -39,6 +40,8 @@ type seatGoogle struct {
 	mu     sync.Mutex
 	status int
 	mints  int
+	// scopes is the scopes of each agent's mint, in order.
+	scopes [][]string
 	client *http.Client
 }
 
@@ -71,6 +74,11 @@ func newSeatGoogle(t *testing.T) *seatGoogle {
 				"message": "Permission 'iam.serviceAccounts.getAccessToken' denied on " + account}})
 		default:
 			g.mints++
+			var body struct {
+				Scope []string `json:"scope"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			g.scopes = append(g.scopes, body.Scope)
 			answer(w, http.StatusOK, map[string]string{
 				"accessToken": "ya29.seat-" + account + "-" + strconv.Itoa(g.mints), "expireTime": expires})
 		}
@@ -168,7 +176,7 @@ func googleCloudEngine(t *testing.T, c *Company, g *seatGoogle, made time.Time) 
 	}); err != nil {
 		t.Fatal(err)
 	}
-	e.issuers = []seatIssuer{googleCloudSeatIssuer{engine: e, tokens: &googlecloud.SeatIssuer{}, http: g.client}}
+	e.issuers = []seatIssuer{googleCloudSeatIssuer{engine: e, tokens: &googleauth.SeatIssuer{}, http: g.client}}
 	return e
 }
 
@@ -255,7 +263,7 @@ func TestTheBuildIssuesGoogleCloudsToken(t *testing.T) {
 	e := &Engine{}
 	for _, issuer := range e.seatIssuers() {
 		if g, ok := issuer.(googleCloudSeatIssuer); ok {
-			if g.engine != e || g.tokens != &e.googleCloudIssuer || g.http != nil {
+			if g.engine != e || g.tokens != &e.googleIssuer || g.http != nil {
 				t.Errorf("the build's Google Cloud issuer is %+v, want the engine's own cache over Google", g)
 			}
 			return

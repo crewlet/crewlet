@@ -30,8 +30,8 @@ const (
 // named systems write (`api.auth.company_writers`).
 //
 // Engine mode: an enabled `provisioning` block for datadog, gitlab, mattermost,
-// cloudflare, expo, scaleway, aws, google_cloud and ssh; atlassian's
-// organization block on a Cloud site (Data Center has none); github with
+// cloudflare, expo, scaleway, aws, google_cloud and ssh, an enabled growth
+// block; atlassian's organization block on a Cloud site; github with
 // `provisioning` on a document the engine writes (the manifest flow records its
 // result there); slack's sealed `integrations.slack.app_config_token` (D11).
 // Any other kind, an unconnected one, and a block with `enabled: false` is
@@ -41,7 +41,7 @@ func (c *Company) SeatCredentialMode(kind string, managed bool) SeatCredentialMo
 		return SeatCredentialExternal
 	}
 	in := c.Integrations
-	engine := false
+	var engine bool
 	switch kind {
 	case "datadog":
 		engine = in.Datadog != nil && in.Datadog.Enabled && in.Datadog.Provisioning != nil
@@ -69,6 +69,10 @@ func (c *Company) SeatCredentialMode(kind string, managed bool) SeatCredentialMo
 		engine = in.GoogleCloud != nil && in.GoogleCloud.Enabled && in.GoogleCloud.Provisioning != nil
 	case "ssh":
 		engine = in.SSH != nil && in.SSH.Enabled && in.SSH.Provisioning != nil
+	default:
+		// A GROWTH LANE is SSH's shape: the engine holds the company's
+		// connection and every call, and no seat holds a credential to bind.
+		engine = in.GrowthEnabled(kind)
 	}
 	if engine {
 		return SeatCredentialEngine

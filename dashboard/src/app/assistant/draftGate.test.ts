@@ -225,6 +225,8 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
   "components/people.tsx": "modal: an invitation or a person's details, in their dialogs",
   "components/writes.tsx": "modal: each write control's own dialog",
   "components/seatControls.tsx": "modal: a pause's reason, in the dialog a seat's Pause opens",
+  "components/growth/SpendCaps.tsx":
+    "modal: a product's spending caps, per account, in its Spending caps dialog",
   "routes/account/Account.tsx": "modal: a password, a second factor or a token, in its dialog",
   "routes/artifacts/FolderDialogs.tsx": "modal: naming a folder",
   "routes/doclet/page/Tidy.tsx":
@@ -271,6 +273,8 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
     "modal: a sign-in's consent at the vendor; its one field is the callback address, read-only",
   "routes/settings/mcp-tools/flows/RemoveDialog.tsx":
     "modal: which stored values go with a server being removed, in its dialog",
+  "routes/settings/models/flows/RemoveDialog.tsx":
+    "modal: where the seats, Ask Crewlet and the Advisor move when a model is removed, in its dialog",
   "routes/settings/mcp-tools/flows/TestDialog.tsx":
     "modal: which agent a per-agent server is tested as, in its dialog",
   "routes/settings/mcp-tools/flows/ValueDialog.tsx":
@@ -293,6 +297,8 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
   "routes/gitlet/repo/TagWrites.tsx": "modal: a new tag's name, target and message, in its dialog",
   "routes/gitlet/repo/RepoWrites.tsx":
     "modal: a repository's details, its new name and its mirrors, in their dialogs",
+  "routes/settings/integrations/AppStoreAnalytics.tsx":
+    "modal: a pasted Admin key, a credential and never a draft, and a key removal's confirmation, in their dialogs",
   "routes/settings/integrations/SshServers.tsx":
     "modal: an SSH server's fields and host keys, in its Add a server and Edit dialog",
   "components/SettingEditor.tsx":

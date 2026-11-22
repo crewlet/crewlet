@@ -1,9 +1,9 @@
 // Package accessdomain is the state log's record of each seat's ACCESS
 // (ADR-0103): what every turn of a seat was told about its own access, every
 // SSH certificate the engine signed and SSH command it ran or a person denied,
-// and every verdict on a request delegated to an agent seat (ADR-0125), on the
-// `CREWLET_ACCESS_LOG` stream and applied into every data node's replicated
-// estate.
+// every verdict on a request delegated to an agent seat (ADR-0125), and every
+// step of a growth act (ADR-0171), on the `CREWLET_ACCESS_LOG` stream and
+// applied into every data node's replicated estate.
 //
 // # Who has to agree on it
 //
@@ -18,7 +18,8 @@
 //
 // A told record is keyed by its seat and turn, a certificate by its seat and
 // serial, a command by its seat and its own id, a verdict by the requesting
-// seat, the request and its giver, each on a subject of its own and published
+// seat, the request and its giver, a growth step by its seat, its act and the
+// step's phase, each on a subject of its own and published
 // first-writer-wins, so a retried write lands once and a second write for the
 // same turn is [ErrRecorded], not an error of the caller's. No record is
 // updated after it lands, but for two: a seat's newest told record is its
@@ -46,18 +47,29 @@
 //     giver's reason and findings are SEALED like a command's text: a
 //     model's words may quote the request. One per request and giver, so a
 //     panel's two delegates record two and a giver answering twice one.
+//   - `growth` records one step of a growth act ([GrowthID]): a read or
+//     operate call `made` at once, or a held call's ask (`asked`), its answer
+//     (`allowed`, `denied`, or the engine's `lapsed` after a day; the first
+//     written stands) and its outcome (`applied`, `void` where the target moved
+//     and nothing was sent, or `failed` with a closed word). It names the
+//     product, connection, vendor account, target, tool, class and seat, the
+//     digests of the exact operation and the before-state, the changed fields
+//     with bounded values and the spend's money in micros. The writer refuses
+//     what reads as a credential, a person's email or a field naming personal
+//     data, and published text in the clear: a text is its SHA-256 and length.
 //   - `resealed` writes one command's text, or one verdict's texts, sealed
 //     afresh under the keyring's active key, on the record's own subject
 //     ([Writer.Reseal]).
 //   - `forget` removes what a seat the company removed was told, and records the
 //     removal: a told record decided before a removal it did not see lands as
 //     nothing, so a turn racing its seat's removal is not told into a seat that
-//     is gone, while the seat's next tenure is. Its certificates, commands and
-//     verdicts stay to their retention.
+//     is gone, while the seat's next tenure is. Its certificates, commands,
+//     verdicts and growth records stay to their retention.
 //   - `expire` removes one hour of records, and everything older, past the
 //     company's `access_history.retention_days`: every told record but each
-//     seat's baseline, every removal, certificate, command and verdict. The
-//     trash reaper nominates the hours and publishes one record each.
+//     seat's baseline, every removal, certificate, command, verdict and growth
+//     record. The trash reaper nominates the hours and publishes one record
+//     each.
 //
 // The eviction, the generation, the barrier and the trimmed record are the
 // framework's.
@@ -74,7 +86,18 @@
 // A turn's dispatch reads its seat's baseline and recent told records at
 // `linearizable` ([DispatchRead], [Reader.Recent]): the seat's previous turn
 // may have been told on another node, and a copy that has not applied it would
-// tell the same change twice. The dashboard pages a seat's told records, and an
-// administrator's audit pages certificates, commands and verdicts, at the
-// caller's level.
+// tell the same change twice. The dashboard pages a seat's told records, an
+// administrator's audit pages certificates, commands and verdicts, and the
+// Growth page pages every growth step but a read's ([Reader.GrowthChanges]), at
+// the caller's level. A product counts the changes to one target that took
+// effect ([Reader.GrowthChanged]) before it calls, for a vendor's rate rule.
+//
+// A sealed text OPENS REDACTED ([CommandRow.Open], [VerdictRow.Open]), so a
+// credential a command or a giver's words carried reads as a marker in every
+// view, the audit's included; the digests of what ran stay to check it by.
+// The seal keeps the words whole and a reseal moves them unchanged. Redacting
+// before the seal is wrong: [Writer.VerdictSealed] opens the words again and
+// holds them to the writer's bounds ([VerdictReasonMaxRunes],
+// [VerdictFindingMaxRunes]), which a marker longer than what it replaced
+// would break for words the giver kept within them.
 package accessdomain

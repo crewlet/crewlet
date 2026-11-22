@@ -11,8 +11,10 @@ import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { useQuery } from "./useQuery.ts";
+import { TRANSCRIPT_QUERY_TIMEOUT_MS } from "~/contract/wire.ts";
 import { useClient, useConnection } from "./store-hooks.ts";
 import { eventually, settled } from "~/test/settle.ts";
+import { APPLIED_REVISION, session } from "~/protocol/session.ts";
 
 vi.mock("./store-hooks.ts", () => ({
   useClient: vi.fn(),
@@ -129,7 +131,7 @@ test("a write from this tab asks the questions it moved again, and no others", a
   act(() => session.written("tracker", "CREWLET_TRACKER_LOG@1:5", []));
   await settled(() => query.mock.calls.length);
   expect(query).toHaveBeenCalledTimes(3);
-  expect(query.mock.calls[2]).toEqual([
+  expect(query.mock.calls[2]?.slice(0, 2)).toEqual([
     "work_items",
     { read_level: "session", min_position: ["CREWLET_TRACKER_LOG@1:5"] },
   ]);
@@ -171,4 +173,46 @@ test("a question answered null is not loading", async () => {
   expect(result.current.loading).toBe(true);
   await eventually(() => expect(result.current.loading).toBe(false));
   expect(result.current.data).toBeNull();
+});
+
+// A QUESTION'S WAIT AND ITS END GO TO THE SOCKET: the wait a screen names is
+// the one the socket sends (`wait_ms`), a question naming none waits the
+// socket's own, and a question the hook stops waiting for (unmounted, or asked
+// again) is given up on through its signal, which the socket sends on as
+// `query_cancel`, so the engine stops reading for nobody.
+// Mutation: drop the wait, or the signal, and a transcript page waits ten
+// seconds, or its abandoned read runs on for minutes.
+test("a question's wait reaches the socket, and its signal ends with the question", async () => {
+  const query = vi.fn((..._: unknown[]) => new Promise(() => undefined));
+  vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
+  const named = renderHook(() =>
+    useQuery("executor_session", { turn_id: "t" }, { waitMs: TRANSCRIPT_QUERY_TIMEOUT_MS }),
+  );
+  renderHook(() => useQuery("fleet"));
+  await eventually(() => expect(query).toHaveBeenCalledTimes(2));
+  const call = (what: string) => query.mock.calls.find((args) => args[0] === what) ?? [];
+  expect(call("executor_session")[2]).toBe(TRANSCRIPT_QUERY_TIMEOUT_MS);
+  expect(call("fleet")[2]).toBeUndefined();
+  const signal = call("executor_session")[3] as AbortSignal;
+  expect(signal.aborted).toBe(false);
+  named.unmount();
+  expect(signal.aborted).toBe(true);
+  expect((call("fleet")[3] as AbortSignal).aborted).toBe(false);
+});
+
+// A REVISION THIS NODE APPLIED asks again what a reconnect asks again: a read
+// that opted out of reconnects (a transcript, a code search) is not moved by one.
+test("a revision this node applied asks again every read that a reconnect would, and no other", async () => {
+  const query = asked();
+  renderHook(() => useQuery("limits"));
+  renderHook(() => useQuery("settings", undefined, { refetchOnReconnect: false }));
+  await settled();
+  const count = (what: string) => query.mock.calls.filter((c) => c[0] === what).length;
+  expect([count("limits"), count("settings")]).toEqual([1, 1]);
+  act(() => {
+    session.written(null, null, [APPLIED_REVISION]);
+  });
+  await eventually(() => expect(count("limits")).toBe(2));
+  expect(count("settings")).toBe(1);
 });

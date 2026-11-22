@@ -199,7 +199,7 @@ func (s Sources) executorRows(ctx context.Context, p Params) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, serialiseRun(run, calls, r, s.opened(run), waiting))
+		out = append(out, serialiseRun(run, calls, r, s.opened(run, waiting.MayAnswer), waiting))
 	}
 	return map[string]any{"runs": out}, nil
 }
@@ -493,26 +493,27 @@ func serialiseRun(run sandbox.PendingRun, calls sandbox.BridgeLog, r livestate.R
 
 // runOpened is what a row reads out of a run's seals ([Sources.opened]): who
 // gave its recorded answer, and the arguments of a call it holds for a
-// person's approval.
+// person's approval, as its reader is shown them.
 type runOpened struct {
 	answeredBy string
-	heldArgs   map[string]any
+	held       map[string]any
 }
 
-// opened is what run's seals open to on this node: empty where a seal does not
-// open here, as each reader of one answers it.
-func (s Sources) opened(run sandbox.PendingRun) runOpened {
-	return runOpened{answeredBy: s.answeredBy(run), heldArgs: s.heldArguments(run)}
+// opened is what run's seals open to on this node for a reader who may, or may
+// not, answer it ([runanswer.May]): empty where a seal does not open here, as
+// each reader of one answers it.
+func (s Sources) opened(run sandbox.PendingRun, mayAnswer bool) runOpened {
+	return runOpened{answeredBy: s.answeredBy(run), held: s.heldArguments(run, mayAnswer)}
 }
 
-// heldArguments is what the call run holds for a person's approval would
-// send, opened from its seal, nil for a run that holds none or whose seal does
-// not open here.
-func (s Sources) heldArguments(run sandbox.PendingRun) map[string]any {
+// heldArguments is the arguments of the call run holds for a person's
+// approval, opened from its seal by [sandbox.CallSeal.OpenArgumentsFor]'s
+// rule; nil where the run holds no call or its seal does not open here.
+func (s Sources) heldArguments(run sandbox.PendingRun, mayAnswer bool) map[string]any {
 	if run.HeldCall == nil || s.HeldCalls == nil {
 		return nil
 	}
-	args, err := s.HeldCalls.OpenArguments(run.TurnID, *run.HeldCall)
+	args, _, err := s.HeldCalls.OpenArgumentsFor(run, mayAnswer)
 	if err != nil {
 		log.Warn("held_call_arguments_unopened", "turn_id", run.TurnID, "held_call", run.HeldCall.ID,
 			"error", err.Error())
@@ -648,7 +649,7 @@ func runRow(run sandbox.PendingRun, calls sandbox.BridgeLog, opened runOpened) m
 		// bridged, so an empty log is a run that has called nothing — a
 		// fact the run's page states — and never "not known", which a
 		// reader is told only by the key being absent (a withheld body).
-		"bridge_calls":        nonNil(calls.Calls),
+		"bridge_calls":        nonNil(shownCalls(calls.Calls)),
 		"bridge_calls_elided": calls.Elided,
 		// AND WHAT THOSE WERE, by tool and argument digest with how many
 		// calls had each and how many failed: the count bound costs the board
@@ -715,8 +716,9 @@ func withDecision(run sandbox.PendingRun, row map[string]any) map[string]any {
 // (ADR-0077): `held_call`, the call its question is about, which the audience
 // reads with the question, and `held_arguments`, what the call would send,
 // opened from their seal (null where it does not open here), which only a
-// reader of the seat's trail reads: an administrator or the seat's lead, who
-// are who may approve it. Both ABSENT on a run that holds none.
+// reader of the seat's trail reads: an administrator or the seat's lead. Both
+// ABSENT on a run that holds none. The arguments are shown as sent only to who
+// may answer the call while it waits ([sandbox.CallSeal.OpenArgumentsFor]).
 func withHeld(run sandbox.PendingRun, opened runOpened, row map[string]any) map[string]any {
 	if held := run.HeldCall; held != nil {
 		row["held_call"] = map[string]any{
@@ -729,8 +731,11 @@ func withHeld(run sandbox.PendingRun, opened runOpened, row map[string]any) map[
 			// answers and why it reached people, which an escalation's
 			// card shows before the call itself (ADR-0125).
 			"act": held.Act, "delegation": delegationOf(held.Delegation),
+			// WHEN A GROWTH ACT LAPSES unanswered, "" for a call that waits
+			// until answered (ADR-0171).
+			"lapses_at": isoOrEmpty(held.LapsesAt),
 		}
-		row["held_arguments"] = opened.heldArgs
+		row["held_arguments"] = opened.held
 	}
 	return row
 }

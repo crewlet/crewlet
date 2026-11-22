@@ -1,9 +1,9 @@
-// Package prereqtest is the one rule for a program the suite needs that a
-// machine may lack — a runtime a case drives a script under, found on PATH, or
-// a build a make target fetches and names by a variable. Under the make
-// targets that run the suite (`test`, `test-solo`, `test-norace`,
-// `test-gitproc`, `bench`) a missing one FAILS the case; in a bare `go test`
-// outside make it SKIPS, in the same words.
+// Package prereqtest is the one rule for a program or a directory the suite
+// needs that a machine may lack — a runtime a case drives a script under,
+// found on PATH, or a build or a tree a make target fetches and names by a
+// variable. Under the make targets that run the suite (`test`, `test-solo`,
+// `test-norace`, `test-gitproc`, `bench`) a missing one FAILS the case; in a
+// bare `go test` outside make it SKIPS, in the same words.
 //
 // # Why both, and why the make targets decide
 //
@@ -11,12 +11,12 @@
 // skip is not a pass"): a run that skipped a case for want of one has checked
 // nothing that case holds, and reported a pass. So wherever a run is a gate it
 // fails. But a one-package loop is how a contributor works on a package, and
-// failing that loop for a program its own change never touches would make it
-// unusable for no gain: nothing gates on that run. The line between the two is
-// the one the tree already draws between a gate and a loop — the make targets
-// — so each of those five sets [RequireEnv] to 1 (the Makefile's REQUIRED) and
-// nothing else does. ci.yml runs Go tests only through those targets, so CI is
-// held by the same variable.
+// failing that loop for a prerequisite its own change never touches would make
+// it unusable for no gain: nothing gates on that run. The line between the two
+// is the one the tree already draws between a gate and a loop — the make
+// targets — so each of those five sets [RequireEnv] to 1 (the Makefile's
+// REQUIRED) and nothing else does. ci.yml runs Go tests only through those
+// targets, so CI is held by the same variable.
 //
 // Never the CI variable: no make target sets it, so `make check` on a
 // workstation would skip what CI fails, and a contributor's shell may set it
@@ -106,6 +106,32 @@ func OnPath(t testing.TB, name, needs, remedy string) string {
 // never a reason to skip.
 func Named(t testing.TB, env, what, remedy string) string {
 	t.Helper()
+	path, info := named(t, env, what, remedy)
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		t.Fatalf("%s=%s is not an executable file: %s", env, path, remedy)
+	}
+	return path
+}
+
+// NamedDir is the directory env names, for a prerequisite a case reads rather
+// than runs, such as a tree a make target installs and names by a variable: an
+// absolute path to a directory, handed back. A link to a directory is one, as
+// the recipes publish each build by `ln -s`. Unset, or named but not such a
+// path, it ends t as [Named] does.
+func NamedDir(t testing.TB, env, what, remedy string) string {
+	t.Helper()
+	path, info := named(t, env, what, remedy)
+	if !info.IsDir() {
+		t.Fatalf("%s=%s is not a directory: %s", env, path, remedy)
+	}
+	return path
+}
+
+// named is the path env names and what is there, for [Named] and [NamedDir]
+// to judge: unset, it is [Missing]; relative, or naming nothing, it fails t
+// naming env.
+func named(t testing.TB, env, what, remedy string) (string, os.FileInfo) {
+	t.Helper()
 	path := os.Getenv(env)
 	if path == "" {
 		Missing(t, fmt.Sprintf("%s is unset, and it names %s", env, what), remedy)
@@ -115,12 +141,9 @@ func Named(t testing.TB, env, what, remedy string) string {
 	}
 	info, err := os.Stat(path)
 	if err != nil {
-		t.Fatalf("%s=%s names nothing this case can run (%v): %s", env, path, err, remedy)
+		t.Fatalf("%s=%s names nothing this case can reach (%v): %s", env, path, err, remedy)
 	}
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
-		t.Fatalf("%s=%s is not an executable file: %s", env, path, remedy)
-	}
-	return path
+	return path, info
 }
 
 // Ended is how a helper handed to [Run] ended: Fatal is the failure it
@@ -178,14 +201,15 @@ func (r *recorder) stop(field *string, message string) {
 }
 
 // ReadPins is the NAME=value lines of the pin file at path (scripts/git-pin.env,
-// scripts/chromium-pin.env), its comments and blank lines skipped. A file it
-// cannot read, a line that is neither, a name set twice, or an assignment with
-// space or a carriage return around it fails t. The recipes that read the same
-// file (scripts/git.sh, scripts/chromium.sh) take a value from a line that
-// begins NAME= and runs to its newline, and refuse a name set twice: an
-// indented assignment is no assignment to them, and a trailing blank or a
-// carriage return is part of the value they read, which their checks then
-// refuse. So a case never reads a value they would not.
+// scripts/chromium-pin.env, scripts/node-pin.env), its comments and blank lines
+// skipped. A file it cannot read, a line that is neither, a name set twice, or
+// an assignment with space or a carriage return around it fails t. The recipes
+// that read the same file (scripts/git.sh, scripts/chromium.sh,
+// scripts/node.sh) take a value from a line that begins NAME= and runs to its
+// newline, and refuse a name set twice: an indented assignment is no
+// assignment to them, and a trailing blank or a carriage return is part of the
+// value they read, which their checks then refuse. So a case never reads a
+// value they would not.
 func ReadPins(t testing.TB, path string) map[string]string {
 	t.Helper()
 	body, err := os.ReadFile(path)

@@ -2,22 +2,34 @@ package advisor
 
 import (
 	"cmp"
+	"errors"
 	"fmt"
+	"math"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/usage"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A WEEK'S REPORT is written once, on the Monday after the week, from the
-// same records the detectors read: what the week cost in turns that changed
+// same records the detectors read: how long work waited to be picked up, for
+// a seat, held and blocked, and what the week cost in turns that changed
 // nothing, stops and capped runs, each beside the week before; how many
 // findings it opened, resolved, applied and dismissed; and the open findings
-// that cost the most when it was written. It is kept as written, so a report
-// says what was true of its week however the list moves since.
+// that cost the most, of those the week had opened. It is kept as written, so
+// a report says what was true of its week however the list moves since. A
+// week the company did not exist through all of is not reported: its numbers
+// would read as a measured week ([ErrWeekUnmeasured]).
 
 // ReportTop is how many open findings a report names.
 const ReportTop = 5
+
+// ErrWeekUnmeasured is a week the company's records do not reach back over
+// all of: it began within the week or after it, so the week has no report.
+var ErrWeekUnmeasured = errors.New("advisor: the company's records do not reach back over the whole week")
 
 // Report is one week's report as the log keeps it.
 type Report struct {
@@ -34,6 +46,20 @@ type Report struct {
 	Top []ReportFinding `json:"top"`
 	// Summary is the model's summary of the report, nil where none was written.
 	Summary *string `json:"summary"`
+	// Days is the week day by day, Monday first: what a report draws across
+	// the week. A report written before it was kept, or whose ledger could
+	// not be read day by day, has none.
+	Days []Day `json:"days,omitempty"`
+}
+
+// Day is one company day of a week: the turns its seats started, those that
+// committed nothing, and their tokens, counted as the week's totals are.
+type Day struct {
+	// Day is the company day's label, such as 2026-11-09.
+	Day          string `json:"day"`
+	Turns        int64  `json:"turns"`
+	TurnsNothing int64  `json:"turns_nothing"`
+	Tokens       int64  `json:"tokens"`
 }
 
 // Tally is how many findings a week opened, resolved, had a fix applied to,
@@ -71,6 +97,11 @@ var metricWords = []struct {
 	unit       Unit
 	source     source
 }{
+	{"pickup_p50", "Pickup wait, median", UnitMinutes, sourceFlow},
+	{"pickup_p90", "Pickup wait, 90th percentile", UnitMinutes, sourceFlow},
+	{"wait_h", "Hours work waited for a seat", UnitHours, sourceFlow},
+	{"held_h", "Hours work was held", UnitHours, sourceFlow},
+	{"blocked_h", "Hours work stood blocked", UnitHours, sourceFlow},
 	{"turns", "Turns", UnitTurns, sourceLedger},
 	{"turns_nothing", "Turns that committed nothing", UnitTurns, sourceLedger},
 	{"tokens", "Tokens", UnitTokens, sourceLedger},
@@ -96,17 +127,71 @@ func ReportWeek(now time.Time, zone *time.Location) (week string, from, to, due 
 // model pass's, so the report follows it.
 const ReportHour = 6
 
-// WeekMetrics is the numbers of the week ev was read for, each source's
-// numbers left out where it could not be read and its word named instead.
-func WeekMetrics(ev Evidence) ([]Metric, []string) {
+// WeekFlow is the flow record's numbers of a week: how long the items in
+// progress stood in each state, and how long each item picked up had stood
+// due first ([worklet.Reader.FlowPickups]).
+type WeekFlow struct {
+	Hours   []worklet.FlowHours
+	Pickups []time.Duration
+}
+
+// heldWords is why work was held, as each held cause's metric says it: a
+// switch, not a table, so the engine allocates nothing for it at init.
+func heldWords(cause worklet.FlowCause) string {
+	switch cause {
+	case worklet.FlowCausePaused:
+		return "its seat was paused"
+	case worklet.FlowCauseUnplaced:
+		return "no server ran its seat"
+	case worklet.FlowCauseBudget:
+		return "its seat was out of budget"
+	case worklet.FlowCauseLimit:
+		return "its seat's model was at its limit"
+	case worklet.FlowCauseParkedElsewhere:
+		return "its seat waited on a person for other work"
+	case worklet.FlowCauseDeparted:
+		return "its assignee left the company"
+	case worklet.FlowCauseNobody:
+		return "it had no assignee"
+	}
+	return string(cause)
+}
+
+// WeekMetrics is the numbers of the week ev and flow were read for, each
+// source's numbers left out where it could not be read and its word named
+// instead. flow is nil for a company whose tracker keeps no flow record,
+// whose flow numbers are left out with nothing unread; the pickup wait is
+// left out of a week nothing was picked up in, which has none to measure.
+func WeekMetrics(ev Evidence, flow *WeekFlow) ([]Metric, []string) {
 	values := map[string]int64{}
+	held := map[worklet.FlowCause]time.Duration{}
+	if flow != nil {
+		var wait, blocked, total time.Duration
+		for _, h := range flow.Hours {
+			switch h.State {
+			case worklet.FlowDue:
+				wait += h.Stood
+			case worklet.FlowBlocked:
+				blocked += h.Stood
+			case worklet.FlowHeld:
+				held[h.Cause] += h.Stood
+				total += h.Stood
+			}
+		}
+		values["wait_h"], values["blocked_h"], values["held_h"] = hours(wait), hours(blocked), hours(total)
+		if n := len(flow.Pickups); n > 0 {
+			values["pickup_p50"] = minutes(percentile(flow.Pickups, 50))
+			values["pickup_p90"] = minutes(percentile(flow.Pickups, 90))
+		}
+	}
 	for _, r := range ev.Ledger {
-		if types.WakeDisposition(r.Disposition) != types.DispositionStarted {
+		ran, nothing := turnOf(r)
+		if !ran {
 			continue
 		}
 		values["turns"] += r.Turns
 		values["tokens"] += r.Tokens()
-		if types.TurnOutcome(r.Outcome) != types.OutcomeNothing {
+		if !nothing {
 			continue
 		}
 		values["turns_nothing"] += r.Turns
@@ -124,16 +209,101 @@ func WeekMetrics(ev Evidence) ([]Metric, []string) {
 	metrics := []Metric{}
 	unread := []string{}
 	for _, m := range metricWords {
-		if ev.unread(m.source) {
+		switch {
+		case ev.unread(m.source):
 			if word := sourceWords[m.source]; !slices.Contains(unread, word) {
 				unread = append(unread, word)
 			}
 			continue
+		case m.source == sourceFlow && flow == nil,
+			strings.HasPrefix(m.key, "pickup_") && len(flow.Pickups) == 0:
+			continue
 		}
 		metrics = append(metrics, Metric{Key: m.key, Label: m.label, Value: values[m.key], Unit: m.unit})
+		if m.key == "held_h" {
+			metrics = append(metrics, heldByCause(held)...)
+		}
 	}
 	return metrics, unread
 }
+
+// turnOf is whether a ledger row is turns its seat started, and whether they
+// committed nothing: the one test a week's totals and its days both count by.
+func turnOf(r usage.TurnLedgerRow) (ran, nothing bool) {
+	if types.WakeDisposition(r.Disposition) != types.DispositionStarted {
+		return false, false
+	}
+	return true, types.TurnOutcome(r.Outcome) == types.OutcomeNothing
+}
+
+// DayOf is the company day labelled day, from its turn ledger rows: counted
+// as [WeekMetrics] counts the week, so the days sum to its totals.
+func DayOf(day string, rows []usage.TurnLedgerRow) Day {
+	out := Day{Day: day}
+	for _, r := range rows {
+		ran, nothing := turnOf(r)
+		if !ran {
+			continue
+		}
+		out.Turns += r.Turns
+		out.Tokens += r.Tokens()
+		if nothing {
+			out.TurnsNothing += r.Turns
+		}
+	}
+	return out
+}
+
+// WeekDays is the company days of [from, to) by their labels, Monday first,
+// as the company's clock in zone names them.
+func WeekDays(from, to time.Time, zone *time.Location) []string {
+	start := from.In(zone)
+	out := []string{}
+	for day := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, zone); day.Before(to); {
+		out = append(out, day.Format(time.DateOnly))
+		day = day.AddDate(0, 0, 1)
+	}
+	return out
+}
+
+// headlineKeys is the numbers a list of reports says of each week, in order.
+var headlineKeys = []string{"turns", "turns_nothing", "tokens", "wait_h"}
+
+// Headline is a week's headline numbers of metrics, each beside the week
+// before where the report has it: its turns, those that committed nothing,
+// its tokens and the hours work waited for a seat, those it measured, in that
+// order. Never nil.
+func Headline(metrics []Metric) []Metric {
+	out := []Metric{}
+	for _, key := range headlineKeys {
+		if at := slices.IndexFunc(metrics, func(m Metric) bool { return m.Key == key }); at >= 0 {
+			out = append(out, metrics[at])
+		}
+	}
+	return out
+}
+
+// heldByCause is each cause work was held for over the week, an hour or more,
+// in [worklet.FlowCauses]' order.
+func heldByCause(held map[worklet.FlowCause]time.Duration) []Metric {
+	var out []Metric
+	for _, cause := range worklet.FlowCauses {
+		if h := hours(held[cause]); h > 0 {
+			out = append(out, Metric{Key: "held_h." + string(cause), Label: "Hours held because " + heldWords(cause),
+				Value: h, Unit: UnitHours})
+		}
+	}
+	return out
+}
+
+// percentile is the p-th percentile of sorted by nearest rank.
+func percentile(sorted []time.Duration, p int) time.Duration {
+	rank := (p*len(sorted) + 99) / 100
+	return sorted[max(rank, 1)-1]
+}
+
+func hours(d time.Duration) int64   { return int64(math.Round(d.Hours())) }
+func minutes(d time.Duration) int64 { return int64(math.Round(d.Minutes())) }
 
 // Against is metrics with the week before's value of each beside it, from
 // last, the week before's report (nil where none was written).
@@ -152,10 +322,14 @@ func Against(metrics []Metric, last *Report) []Metric {
 	return out
 }
 
-// TopOf is the [ReportTop] open findings of stored that cost the most: the
-// list's order, the most severe first, then the longest open.
-func TopOf(stored []Stored) []ReportFinding {
-	open := slices.DeleteFunc(slices.Clone(stored), func(s Stored) bool { return s.State != StateOpen })
+// TopOf is the [ReportTop] open findings of stored opened before the week's
+// end that cost the most: the list's order, the most severe first, then the
+// longest open. A note costs nothing and is not one, and a finding opened
+// after the week, which a report written late would see, is not the week's.
+func TopOf(stored []Stored, end time.Time) []ReportFinding {
+	open := slices.DeleteFunc(slices.Clone(stored), func(s Stored) bool {
+		return s.State != StateOpen || s.Observation.Finding.Severity == SeverityNote || !s.OpenedAt.Before(end)
+	})
 	slices.SortStableFunc(open, func(a, b Stored) int {
 		fa, fb := a.Observation.Finding, b.Observation.Finding
 		return cmp.Or(cmp.Compare(fa.Severity.rank(), fb.Severity.rank()), a.OpenedAt.Compare(b.OpenedAt),

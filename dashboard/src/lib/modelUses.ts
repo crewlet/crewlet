@@ -3,16 +3,18 @@
  * three categories of seat work and the Assistant, mapped onto the engine's
  * fields, and the next company document a change of uses becomes.
  *
- * THREE CATEGORIES, FIVE FIELDS. The engine resolves a seat's five jobs from
- * five fields (`SEAT_JOB_FIELDS`, held to the engine by a Go gate). A person
+ * THREE CATEGORIES, SIX FIELDS. The engine resolves a seat's six jobs from
+ * six fields (`SEAT_JOB_FIELDS`, held to the engine by a Go gate). A person
  * tells three kinds of work apart, so the page offers those, and a category
  * writes every field it holds in the same revision: Coding is `llm`;
  * Reviewing and delegations is `llm_review` and `llm_subagent`; Routines and
- * evaluations is `llm_auxiliary` and `llm_judge`. The pairs are paired by the
- * model each wants: the review and the delegated work take a strong model, and
- * the routines and the onboarding judge, each under a fixed deadline, a fast
- * one, so one choice of model serves both jobs it writes. Ask Crewlet is
- * the company's, not a seat's: `assistant.model`, with no seats.
+ * evaluations is `llm_auxiliary`, `llm_judge` and `llm_triage`. The groups are
+ * grouped by the model each wants: the review and the delegated work take a
+ * strong model, and the routines, the onboarding judge and a busy seat's wake
+ * triage, each a bounded call under a fixed deadline, a fast one, so one
+ * choice of model serves every job it writes. Ask Crewlet and
+ * the Advisor are the company's, not a seat's: `assistant.model` and
+ * `advisor.model`, with no seats.
  *
  * ONE MODEL PER SEAT FIELD. The page writes a seat's field as one scalar key
  * and never a chain (decision D3): a chain the document held there is
@@ -23,6 +25,10 @@
  *
  * ASK CREWLET RUNS ON ONE MODEL. `assistant.model` is one key, and choosing
  * Ask Crewlet's model writes it, which also turns Ask Crewlet on.
+ *
+ * THE ADVISOR EXPLAINS WITH ONE MODEL, or with none: its checks run either
+ * way. `advisor.model` is one key; choosing the Advisor for a model writes
+ * it, and taking the Advisor off the model it runs on clears it.
  *
  * WHAT A JOB RUNS ON NOW is the engine's answer (`llm_entries`' `used_by`),
  * never resolved here: this module only writes.
@@ -51,7 +57,7 @@ export const CATEGORY_ORDER: readonly JobCategory[] = ["coding", "reviews", "rou
 export const CATEGORY_JOBS: Readonly<Record<JobCategory, readonly SeatJob[]>> = {
   coding: ["executor"],
   reviews: ["review", "subagent"],
-  routines: ["auxiliary", "judge"],
+  routines: ["auxiliary", "judge", "triage"],
 };
 
 /** The category each seat job belongs to. */
@@ -61,6 +67,7 @@ export const CATEGORY_OF: Readonly<Record<SeatJob, JobCategory>> = {
   subagent: "reviews",
   auxiliary: "routines",
   judge: "routines",
+  triage: "routines",
 };
 
 /** The fields a category writes, as its tooltip names them: "llm_review and llm_subagent". */
@@ -74,13 +81,15 @@ export function categoryOfJob(job: ModelJob): JobCategory | null {
 }
 
 /**
- * A model's uses: the seats that run each seat job on it, and whether the
- * Dashboard Assistant does. The page edits it a category at a time; it holds
+ * A model's uses: the seats that run each seat job on it, and whether Ask
+ * Crewlet and the Advisor do. The page edits it a category at a time; it holds
  * jobs, so a document that split a category by hand reads back exactly.
  */
 export interface Uses {
   jobs: Record<SeatJob, string[]>;
   assistant: boolean;
+  /** Whether the Advisor explains its findings with this model (`advisor.model`). */
+  advisor: boolean;
 }
 
 /** No use at all. */
@@ -91,12 +100,13 @@ export function noUses(): Uses {
       string[]
     >,
     assistant: false,
+    advisor: false,
   };
 }
 
 /**
  * A model's uses as the engine reports them: each seat job a seat RUNS on it
- * (position 0), and the assistant's chat. A fallback position is not a use the
+ * (position 0), Ask Crewlet's chat and the Advisor's findings. A fallback position is not a use the
  * page edits; deep work stays in Configuration.
  */
 export function usesOf(usedBy: readonly ModelUse[]): Uses {
@@ -104,6 +114,7 @@ export function usesOf(usedBy: readonly ModelUse[]): Uses {
   for (const use of usedBy) {
     if (use.position !== 0) continue;
     if (use.assistant === "chat") out.assistant = true;
+    if (use.advisor === "findings") out.advisor = true;
     if (use.seat && use.job && use.job in SEAT_JOB_FIELDS) {
       const job = use.job as SeatJob;
       if (!out.jobs[job].includes(use.seat)) out.jobs[job].push(use.seat);
@@ -146,11 +157,11 @@ export function everythingSeats(uses: Pick<Uses, "jobs">): string[] {
  * The Assistant beside seat work does not change the choice: the page says it
  * on a line of its own.
  */
-export type Intent = "all" | JobCategory | "assistant" | "none" | "custom";
+export type Intent = "all" | JobCategory | "assistant" | "advisor" | "none" | "custom";
 
 export function intentOf(uses: Uses): Intent {
   const used = SEAT_JOBS.filter((j) => uses.jobs[j].length > 0);
-  if (used.length === 0) return uses.assistant ? "assistant" : "none";
+  if (used.length === 0) return uses.assistant ? "assistant" : uses.advisor ? "advisor" : "none";
   const same = (jobs: readonly SeatJob[]) =>
     jobs.every((j) => uses.jobs[j].join(",") === uses.jobs[jobs[0]!].join(","));
   if (used.length === SEAT_JOBS.length && same(SEAT_JOBS)) return "all";
@@ -161,21 +172,23 @@ export function intentOf(uses: Uses): Intent {
   return whole ?? "custom";
 }
 
-/** The uses an intent sets for `seats`, every other seat job off; the assistant as given. */
+/** The uses an intent sets for `seats`, every other seat job off; Ask Crewlet and the Advisor as given. */
 export function usesForIntent(
   intent: Exclude<Intent, "custom">,
   seats: readonly string[],
   assistant: boolean,
+  advisor = false,
 ): Uses {
   const out = noUses();
   const jobs: readonly SeatJob[] =
     intent === "all"
       ? SEAT_JOBS
-      : intent === "none" || intent === "assistant"
+      : intent === "none" || intent === "assistant" || intent === "advisor"
         ? []
         : CATEGORY_JOBS[intent];
   for (const job of jobs) out.jobs[job] = [...seats].sort();
   out.assistant = intent === "assistant" || assistant;
+  out.advisor = intent === "advisor" || advisor;
   return out;
 }
 
@@ -334,6 +347,9 @@ export interface UsesWrite {
  * - Ask Crewlet writes `key` as `assistant.model`. Leaving it is not a write:
  *   Ask Crewlet runs on something, so it moves when another model is chosen,
  *   and is turned off only by removing its model on its own page.
+ * - The Advisor writes `key` as `advisor.model`, and taking it off the model
+ *   it runs on clears `advisor.model`: its checks run with no model, so no
+ *   model has to take it over, and this page is the one place it is chosen.
  */
 export function applyUses(doc: CompanyDocument, key: string, was: Uses, next: Uses): UsesWrite {
   const out = structuredClone(doc) as unknown as Doc;
@@ -382,6 +398,12 @@ export function applyUses(doc: CompanyDocument, key: string, was: Uses, next: Us
   if (next.assistant && !was.assistant) {
     const assistant = (isRecord(out.assistant) ? out.assistant : (out.assistant = {})) as Doc;
     assistant.model = key;
+  }
+  if (next.advisor && !was.advisor) {
+    const advisor = (isRecord(out.advisor) ? out.advisor : (out.advisor = {})) as Doc;
+    advisor.model = key;
+  } else if (!next.advisor && was.advisor && isRecord(out.advisor) && out.advisor.model === key) {
+    delete out.advisor.model;
   }
   return { doc: out as unknown as CompanyDocument, dropped };
 }

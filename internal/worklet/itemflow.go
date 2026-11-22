@@ -87,7 +87,8 @@ const (
 	// FlowCauseLimit is a seat out of its model limit.
 	FlowCauseLimit FlowCause = "limit"
 	// FlowCauseParkedElsewhere is the assignee's run parked on another item,
-	// waiting on a person's answer: a seat whose run works takes no other
+	// waiting on a person's answer, while its runs fill its
+	// sandbox.max_concurrent_runs: a seat whose runs fill it takes no other
 	// work.
 	FlowCauseParkedElsewhere FlowCause = "parked_elsewhere"
 	// FlowCauseDeparted is an assignee the chart no longer holds.
@@ -157,10 +158,15 @@ type SeatPosture struct {
 	// On is the items a turn or an executor run of the seat is on now.
 	On []PostureItem
 
-	// Parked is the id of the item a run of the seat is parked on waiting
-	// on a person's answer, empty for none, and ParkedSince when it parked.
-	Parked      string
-	ParkedSince time.Time
+	// Parked is the items runs of the seat are parked on waiting on a
+	// person's answer, oldest first, each [FlowCauseParked] since it parked.
+	Parked []PostureItem
+
+	// Full says the seat's runs in flight fill its sandbox.max_concurrent_runs:
+	// with one of them parked, its other items are held until a person
+	// answers ([FlowCauseParkedElsewhere]). A seat with a run's slot free
+	// takes other work beside a parked run.
+	Full bool
 
 	// Stop is why the seat cannot take a turn, the projection's first by
 	// its ranking ([FlowCause.stops]); empty when it can. StopSince and
@@ -175,7 +181,8 @@ type PostureItem struct {
 	// Item is the item's id.
 	Item string
 
-	// Cause is [FlowCauseTurn] or [FlowCauseRun], and Since its start.
+	// Cause is [FlowCauseTurn], [FlowCauseRun] or [FlowCauseParked], and
+	// Since its start.
 	Cause FlowCause
 	Since time.Time
 }
@@ -241,6 +248,11 @@ const (
 	// A blocker gives no instant of its own, so a blocked item is blocked
 	// since the flow duty recorded it so: its latest change the duty
 	// recorded, where that change is to blocked.
+	// Since an item in progress had nobody: it entered progress unassigned, or
+	// lost its assignee there, whichever came last.
+	flowNobodySince = "MAX(t.status_entered_at, COALESCE((SELECT fa.effective_at " +
+		"FROM tracker_history fa WHERE fa.subject_id = t.id AND fa.kind = '" +
+		string(ChangeAssignee) + "' ORDER BY fa.log_seq DESC LIMIT 1), 0))"
 	flowBlockedSince = "(SELECT CASE WHEN fb.state = '" + string(FlowBlocked) +
 		"' THEN fb.recorded_at END FROM tracker_flow fb WHERE fb.task_id = t.id " +
 		"AND fb.notice = '' AND fb.backfilled = 0 ORDER BY fb.log_seq DESC LIMIT 1)"
@@ -346,7 +358,8 @@ func flowExpr(at flowAt, how flowRendering) (string, []any) {
 		flowBranch{when: flowOwnAsk, state: FlowWaiting, cause: FlowCauseQuestion})
 	live(itemSeat, parked)
 	branches(
-		flowBranch{when: "t.assignee = ''", state: FlowHeld, cause: FlowCauseNobody},
+		flowBranch{when: "t.assignee = ''", state: FlowHeld, cause: FlowCauseNobody,
+			since: flowNobodySince},
 		flowBranch{when: flowDeparted, args: []any{RosterSubject().ID}, state: FlowHeld,
 			cause: FlowCauseDeparted})
 	live(seat, stops)
@@ -380,12 +393,16 @@ func (p Posture) facts() (working, parked, stops, elsewhere []flowLive) {
 			working = append(working, flowLive{key: on.Item + " " + handle, flow: Flow{
 				State: FlowWorking, Cause: on.Cause, Since: instantOf(on.Since)}})
 		}
-		if seat.Parked != "" {
-			since := instantOf(seat.ParkedSince)
-			parked = append(parked, flowLive{key: seat.Parked + " " + handle, flow: Flow{
-				State: FlowWaiting, Cause: FlowCauseParked, Since: since}})
+		for _, p := range seat.Parked {
+			if p.Item == "" {
+				continue
+			}
+			parked = append(parked, flowLive{key: p.Item + " " + handle, flow: Flow{
+				State: FlowWaiting, Cause: FlowCauseParked, Since: instantOf(p.Since)}})
+		}
+		if seat.Full && len(seat.Parked) > 0 {
 			elsewhere = append(elsewhere, flowLive{key: handle, flow: Flow{
-				State: FlowHeld, Cause: FlowCauseParkedElsewhere, Since: since}})
+				State: FlowHeld, Cause: FlowCauseParkedElsewhere, Since: instantOf(seat.Parked[0].Since)}})
 		}
 		if seat.Stop.stops() {
 			stops = append(stops, flowLive{key: handle, flow: Flow{State: FlowHeld,

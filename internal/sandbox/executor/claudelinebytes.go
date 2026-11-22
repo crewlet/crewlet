@@ -200,8 +200,9 @@ func (l *lineBytes) reset() {
 	*l = lineBytes{cmps: l.cmps[:0], keys: l.keys[:0]}
 }
 
-// write reads p, the line's next bytes, its break never among them.
-func (l *lineBytes) write(p []byte) {
+// Write reads p, the line's next bytes, its break never among them; it never
+// fails.
+func (l *lineBytes) Write(p []byte) (int, error) {
 	base := l.out.n
 	if base < int64(lineHeadBytes) {
 		l.out.headLen = uint8(base) + uint8(copy(l.out.head[base:], p))
@@ -243,7 +244,7 @@ func (l *lineBytes) write(p []byte) {
 				backslash = indexFrom(p, i, '\\')
 			}
 			if i = min(quote, backslash); i == len(p) {
-				return
+				return len(p), nil
 			}
 		}
 		if p[i] == '"' {
@@ -251,6 +252,7 @@ func (l *lineBytes) write(p []byte) {
 		}
 		l.depth.step(p[i])
 	}
+	return len(p), nil
 }
 
 // indexFrom is where the first c of p at or past from lies, len(p) where none

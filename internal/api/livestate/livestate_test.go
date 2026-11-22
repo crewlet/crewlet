@@ -109,10 +109,10 @@ func TestTwoSeatsSharingANameKeepSeparateLiveState(t *testing.T) {
 	if _, moved := change.Agents["id-ada"]; !moved || len(change.Agents) != 1 {
 		t.Errorf("moved = %v, want exactly the seat the event named", change.Agents)
 	}
-	if got := overlayOf(t, s, "id-ada"); got.Activity != livestate.ActivityWorking || got.LiveCall == nil {
+	if got := overlayOf(t, s, "id-ada"); got.Activity != livestate.ActivityWorking || soleCall(t, got.LiveCalls) == nil {
 		t.Errorf("the working seat = %+v, want working with a live call", got)
 	}
-	if got := overlayOf(t, s, "id-bob"); got.Activity != livestate.ActivityIdle || got.LiveCall != nil {
+	if got := overlayOf(t, s, "id-bob"); got.Activity != livestate.ActivityIdle || soleCall(t, got.LiveCalls) != nil {
 		t.Errorf("its namesake = %+v, want idle with no call: one seat's turn moved the other", got)
 	}
 	if s.AgentOverlay("Engineer") != nil {
@@ -233,7 +233,7 @@ func TestReflectionClearsThePhaseItFollows(t *testing.T) {
 	if got.CurrentPhase != nil {
 		t.Errorf("current phase = %v, want null", *got.CurrentPhase)
 	}
-	if got.LiveCall != nil {
+	if soleCall(t, got.LiveCalls) != nil {
 		t.Error("a reflected turn left a live call on screen")
 	}
 }
@@ -250,7 +250,7 @@ func TestTerminationLeavesTheSeatToItsPlacement(t *testing.T) {
 	s.Apply(env("agent_terminated", map[string]any{"agent_id": "Lead"},
 		at("2026-06-14T12:00:01+00:00")))
 	got := overlayOf(t, s, "Lead")
-	if got.LiveCall != nil {
+	if soleCall(t, got.LiveCalls) != nil {
 		t.Error("a terminated instance left its call on screen")
 	}
 
@@ -363,7 +363,7 @@ func TestATurnCompletingReturnsTheSeatToIdle(t *testing.T) {
 	if got.CurrentPhase != nil {
 		t.Errorf("current phase = %v, want null", *got.CurrentPhase)
 	}
-	if got.LiveCall != nil {
+	if soleCall(t, got.LiveCalls) != nil {
 		t.Error("a completed turn left a live call on screen")
 	}
 }
@@ -398,15 +398,44 @@ func TestTheEndOfONETurnDoesNotClearTheNEXTOne(t *testing.T) {
 				at("2026-06-14T12:00:12+00:00")))
 
 			got := overlayOf(t, s, "Lead")
-			if got.LiveCall == nil {
+			if soleCall(t, got.LiveCalls) == nil {
 				t.Fatal("the next turn's live call was wiped by the previous turn's ending")
 			}
-			if got.LiveCall.TurnID != "tn-2" {
-				t.Errorf("live call turn = %q, want tn-2", got.LiveCall.TurnID)
+			if soleCall(t, got.LiveCalls).TurnID != "tn-2" {
+				t.Errorf("live call turn = %q, want tn-2", soleCall(t, got.LiveCalls).TurnID)
 			}
 			if got.Activity != livestate.ActivityWorking {
 				t.Errorf("activity = %q, want working — the seat is mid-turn", got.Activity)
 			}
 		})
 	}
+}
+
+// soleTurn is the one turn a seat is on, nil for none. Every case that reads it
+// runs one turn on its seat at a time, so a second is a failure of its own:
+// the projection opened a turn the case never started.
+func soleTurn(t *testing.T, turns []livestate.LiveTurn) *livestate.LiveTurn {
+	t.Helper()
+	switch len(turns) {
+	case 0:
+		return nil
+	case 1:
+		return &turns[0]
+	}
+	t.Fatalf("turns = %+v, want one at most", turns)
+	return nil
+}
+
+// soleCall is the one call in flight on a seat running one turn, nil for none,
+// on soleTurn's terms.
+func soleCall(t *testing.T, calls []*livestate.LiveCall) *livestate.LiveCall {
+	t.Helper()
+	switch len(calls) {
+	case 0:
+		return nil
+	case 1:
+		return calls[0]
+	}
+	t.Fatalf("live calls = %+v, want one at most", calls)
+	return nil
 }

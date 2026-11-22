@@ -56,8 +56,11 @@ func TestNoShippedProfileDeniesTheWeb(t *testing.T) {
 	}
 	copilot, _ := harnessprofile.Builtin("copilot")
 	joined := strings.Join(copilot.CompleteArgs, " ")
-	if !strings.Contains(joined, "--allow-tool web_fetch") || !strings.Contains(joined, "--allow-tool web_search") {
-		t.Errorf("copilot must allow its web tools explicitly: %q", copilot.CompleteArgs)
+	// 1.0.114 asks a URL permission for every fetch and denies it unattended,
+	// so the fetch is offered and its URLs allowed (measured; the profile).
+	if !strings.Contains(joined, "--available-tools web_fetch") || !strings.Contains(joined, "--allow-all-urls") ||
+		!strings.Contains(joined, "--available-tools web_search") {
+		t.Errorf("copilot must offer its web tools and allow their URLs: %q", copilot.CompleteArgs)
 	}
 	codex, _ := harnessprofile.Builtin("codex")
 	if !strings.Contains(strings.Join(codex.CompleteArgs, " "), `web_search="live"`) {
@@ -182,6 +185,25 @@ func TestThePiProfileArgvParsesAgainstTheRealHarness(t *testing.T) {
 
 // allowsAfterFlag reports whether every want follows flag before the next
 // flag begins.
+// valuesAfterEvery is every value after every occurrence of flag, up to the
+// next flag: a list flag a harness takes once per value (Copilot's) is read
+// whole, not only at its first occurrence.
+func valuesAfterEvery(args []string, flag string) []string {
+	var out []string
+	for i, arg := range args {
+		if arg != flag {
+			continue
+		}
+		for _, v := range args[i+1:] {
+			if strings.HasPrefix(v, "--") {
+				break
+			}
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 func allowsAfterFlag(args []string, flag string, want ...string) bool {
 	for i, arg := range args {
 		if arg != flag {
@@ -617,11 +639,12 @@ func TestTheDoctorProvesAWebFetchIsRefused(t *testing.T) {
 //
 // The set itself is pinned: it is the S2 measurement (Claude Code and Codex
 // measured refused, OpenCode derived from its policy format, pi shipping no
-// web tool), and a profile gaining a web_denial is a decision that lands here
-// with its measurement.
+// web tool) and Copilot's (web_fetch measured absent on 1.0.114), and a
+// profile gaining a web_denial is a decision that lands here with its
+// measurement.
 func TestEveryAssistantProfileTurnsTheWebOff(t *testing.T) {
 	t.Parallel()
-	want := []string{"claude-code", "codex", "opencode", "pi"}
+	want := []string{"claude-code", "codex", "copilot", "opencode", "pi"}
 	if got := harnessprofile.WebDeniable(); !slices.Equal(got, want) {
 		t.Errorf("profiles with a web denial = %v, want %v", got, want)
 	}
@@ -645,6 +668,9 @@ func TestEveryAssistantProfileTurnsTheWebOff(t *testing.T) {
 			if p.MCP != nil && len(p.MCP.CompleteArgs) > 0 {
 				argvs = append(argvs, p.MCP.CompleteArgs)
 			}
+			if p.MCP != nil && len(p.MCP.Args) > 0 {
+				argvs = append(argvs, slices.Concat(p.CompleteArgs, p.MCP.Args, p.MCP.AllowArgs))
+			}
 			for _, argv := range argvs {
 				for _, arg := range argv {
 					if strings.Contains(arg, `web_search="live"`) || strings.Contains(arg, `web_search="cached"`) ||
@@ -652,11 +678,16 @@ func TestEveryAssistantProfileTurnsTheWebOff(t *testing.T) {
 						t.Errorf("argv still turns a web search on: %q", arg)
 					}
 				}
-				for _, flag := range []string{"--allowedTools", "--allowed-tools", "--allow-tool"} {
+				for _, flag := range []string{"--allowedTools", "--allowed-tools", "--allow-tool", "--available-tools"} {
 					for _, tool := range []string{"WebFetch", "WebSearch", "web_fetch", "web_search"} {
-						if allowsAfterFlag(argv, flag, tool) {
+						if slices.Contains(valuesAfterEvery(argv, flag), tool) {
 							t.Errorf("argv allows %s through %s: %q", tool, flag, argv)
 						}
+					}
+				}
+				for _, flag := range []string{"--allow-all-urls", "--allow-url"} {
+					if slices.Contains(argv, flag) {
+						t.Errorf("argv allows URLs through %s: %q", flag, argv)
 					}
 				}
 			}
@@ -743,12 +774,10 @@ func TestDoctorReportsAFileReadAfterTheShellWasRefused(t *testing.T) {
 	}
 }
 
-// QUICK MODE'S ARGV IS PINNED WHOLE, beside deep work (ADR-0054): the
-// assistant's own model runs Claude Code with no tool of its own and no
-// session, and one tool server, the engine's `crewlet`, whose tools are the
-// person's own requests (ADR-0049); deep work, which runs the same harness with
-// its harness in a box, never reaches this argv. A flag added to it, a tool
-// given back or another server allowed is a change to what a quick answer can
+// THE ASSISTANT'S ARGV IS PINNED WHOLE: its model runs Claude Code with no
+// tool of its own and no session, and one tool server, the engine's `crewlet`,
+// whose tools are the person's own requests (ADR-0049). A flag added to it, a
+// tool given back or another server allowed is a change to what an answer can
 // reach, made on purpose here or not at all. Mutation: drop "--tools" "", or
 // widen the allow list, and this fails beside the test above.
 func TestTheAssistantsQuickModeArgvIsUnchanged(t *testing.T) {

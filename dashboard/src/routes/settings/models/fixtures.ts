@@ -21,7 +21,12 @@ import type {
   ModelUse,
 } from "~/protocol/models.ts";
 import type { CompanyDocument, OrgProjection } from "~/protocol/types.ts";
-import { assistantOf, modelViews, type ModelsData } from "~/routes/settings/models/data.ts";
+import {
+  advisorOf,
+  assistantOf,
+  modelViews,
+  type ModelsData,
+} from "~/routes/settings/models/data.ts";
 import { withDerived } from "~/test/org.ts";
 import { SERVED_LOOK } from "~/test/org.ts";
 
@@ -45,7 +50,14 @@ export const MODELS_ORG = withDerived({
 export const MODELS_SEATS: Seat[] = indexOrg(MODELS_ORG).seats.filter((s) => s.kind !== "human");
 
 /** Every seat job, in the engine's order. */
-export const EVERY_JOB: ModelJob[] = ["executor", "review", "subagent", "auxiliary", "judge"];
+export const EVERY_JOB: ModelJob[] = [
+  "executor",
+  "review",
+  "subagent",
+  "auxiliary",
+  "judge",
+  "triage",
+];
 
 /** `seat` runs `jobs` on the model: position 0, written by the seat. */
 export function runs(seat: string, ...jobs: ModelJob[]): ModelUse[] {
@@ -54,6 +66,9 @@ export function runs(seat: string, ...jobs: ModelJob[]): ModelUse[] {
 
 /** The Dashboard Assistant chats on the model. */
 export const ASSISTANT_CHAT: ModelUse = { assistant: "chat", position: 0 };
+
+/** The harnesses the engine runs a seat's executor on, as `llm_entries` serves them today. */
+export const EXECUTORS: readonly string[] = ["claude-code", "opencode"];
 
 /** A sign-in on a stored subscription token, unless the case says otherwise. */
 export function signIn(over: Partial<ModelSignIn> = {}): ModelSignIn {
@@ -166,6 +181,7 @@ export function modelsData({
   doc = null,
   assistant,
   seats = MODELS_SEATS,
+  names,
   reload = () => {},
 }: {
   entries: ModelEntry[];
@@ -174,6 +190,8 @@ export function modelsData({
   doc?: CompanyDocument | null;
   assistant?: ModelsData["assistant"];
   seats?: Seat[];
+  /** The models' names by `nameKey`, as `llm_models` gives them; left out, each is said by its id. */
+  names?: ReadonlyMap<string, string>;
   reload?: () => void;
 }): ModelsData {
   const answer: ModelEntriesAnswer = admin
@@ -183,6 +201,7 @@ export function modelsData({
         nodes: [{ id: "node-1", reported: true }],
         entries,
         alarms,
+        executor_harnesses: [...EXECUTORS],
       }
     : {
         reading: "member",
@@ -190,8 +209,9 @@ export function modelsData({
         nodes: [{ id: "node-1", reported: true }],
         entries: entries.map(memberEntry),
         alarms: null,
+        executor_harnesses: [...EXECUTORS],
       };
-  const models = modelViews(answer, admin ? doc : null);
+  const models = modelViews(answer, admin ? doc : null, names);
   return {
     admin,
     doc: admin ? doc : null,
@@ -201,6 +221,8 @@ export function modelsData({
     nodes: answer.nodes,
     node: answer.node,
     assistant: assistant ?? assistantOf(admin ? doc : null, models),
+    advisor: advisorOf(admin ? doc : null, models),
+    executors: answer.executor_harnesses,
     loading: false,
     error: null,
     failed: null,

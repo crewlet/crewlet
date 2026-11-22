@@ -201,7 +201,8 @@ func (a *Actor) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 
 // actorWrites is why an actor named who, of kind, whose writes are for
 // writtenFor, may write nothing ([types.WrittenFor.For]): an agent's actor
-// that states nobody, or a carrier on any other kind's. Nil where it may write.
+// that states nobody, or a carrier on any other kind's (ADR-0109). Nil where it
+// may write.
 //
 // EVERY WRITE'S ACTOR IS HELD TO IT BEFORE IT IS ASKED ANYWHERE, this node's
 // own copy included, so every node answers alike: a tracker write's by
@@ -522,6 +523,10 @@ type opSpec struct {
 	// refusing a key this build does not declare ([ErrUnknownKeys]).
 	whole bool
 
+	// answer is how large the operation's answer can grow ([answerShape]):
+	// declared on every read, and one value on every write.
+	answer answerShape
+
 	// decode is the server half's first step: the request's arguments,
 	// decoded under the wire's rule ([decodeInput]) into the operation's own
 	// type — boxed — or every member they hold that the type does not
@@ -663,6 +668,9 @@ func define[A, R any](name string, class opClass, domain string, actor bool,
 		name: name, class: class, actor: actor, domain: domain, copies: domain,
 		args: reflect.TypeFor[A](), result: reflect.TypeFor[R](),
 	}
+	if class != opRead {
+		spec.answer = answerShape{kind: answerOne}
+	}
 	if domain != SeatCopy && domain != GitCopy {
 		stream, known := floorStreams[domain]
 		if !known {
@@ -698,7 +706,7 @@ func define[A, R any](name string, class opClass, domain string, actor bool,
 		if spec.judges != nil && b.Current != nil && !b.Current() && spec.judges(args) {
 			return zero, errDecidesNoGrant
 		}
-		return serve(ctx, b, who, args)
+		return serve(spec.answer.reading(ctx), b, who, args)
 	}
 	spec.run = func(ctx context.Context, b Backend, who *Actor, args any) (any, error) {
 		return checked(ctx, b, who, args.(A))

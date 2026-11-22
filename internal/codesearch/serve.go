@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -13,6 +14,7 @@ import (
 	"golang.org/x/sync/semaphore"
 
 	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/signedask"
 )
 
@@ -59,18 +61,37 @@ type Server struct {
 	// holds its unit around its search alone, never its sync of the copy.
 	units   int
 	scatter *semaphore.Weighted
+	// answers is the node's answer budget each answer holds [answerWeight] of.
+	answers *queue.AnswerBudget
 }
+
+// ReplyHitBytes bounds the lines one node's reply carries, by their JSON: a
+// quarter of [queue.MaxPayloadBytes], so the lines, every assigned
+// repository's outcome and the seal's base64 (4/3) fit one message. The Limit
+// alone bounds the count, never the bytes: a hit is up to one repository's
+// 56 KiB git answer (gitlet.MaxGitAnswerBytes), so 500 of them passed the
+// broker's ceiling and the reply was lost. Past it the reply is Cut after its
+// last line kept, which the asker honours as the end of what it may trust.
+const ReplyHitBytes = queue.MaxPayloadBytes / 4
+
+// answerWeight is what an answer holds of the node's answer budget
+// ([queue.AnswerBudget]) from before its reads until its reply is written:
+// [ReplyHitBytes] four times, from the code: the lines held (1), their
+// encoding in the reply (1), the seal's base64 (4/3) and the encoder's buffer
+// beside them, with the reads in flight (at most [ScatterReads] git answers
+// of 56 KiB) and the repositories' outcomes inside the slack.
+const answerWeight = 4 * ReplyHitBytes
 
 // NewServer is node's answerer over its reads, verifying requests with wire,
 // its reads bounded by a seat git-work share of units units
 // (gitlet.GitShare.Units).
-func NewServer(wire *Wire, node string, reads Reads, units int) (*Server, error) {
-	if wire == nil || reads == nil || node == "" || units < 1 {
-		return nil, errors.New("codesearch: a server needs the scatter's envelopes, its node's id, its reads " +
-			"and its node's seat git-work share")
+func NewServer(wire *Wire, node string, reads Reads, units int, answers *queue.AnswerBudget) (*Server, error) {
+	if wire == nil || reads == nil || node == "" || units < 1 || answers == nil {
+		return nil, errors.New("codesearch: a server needs the scatter's envelopes, its node's id, its reads, " +
+			"its node's seat git-work share and its node's answer budget")
 	}
 	return &Server{wire: wire, taken: signedask.NewGuard(), reads: reads, node: node, now: time.Now,
-		units: units, scatter: semaphore.NewWeighted(int64(ScatterReads(units)))}, nil
+		units: units, scatter: semaphore.NewWeighted(int64(ScatterReads(units))), answers: answers}, nil
 }
 
 // Answer answers one sealed request: queue.AnswerFunc's shape, the function
@@ -112,6 +133,14 @@ func (s *Server) Answer(ctx context.Context, sealed []byte) ([]byte, error) {
 	}
 	rctx, cancel := gitlet.AnswerBy(ctx, req.Deadline)
 	defer cancel()
+	// HELD FROM BEFORE THE READS until the reply is written, waited for no
+	// longer than the answer is due: one the budget cannot admit by then
+	// answers nothing, and the asker asks the repositories' runners-up.
+	release, err := s.answers.Acquire(rctx, queue.AnswerCodeSearch, answerWeight)
+	if err != nil {
+		return nil, fmt.Errorf("codesearch: %w", err)
+	}
+	defer release()
 	return s.wire.SealReply(s.search(rctx, req, asked))
 }
 
@@ -175,7 +204,35 @@ func (s *Server) search(ctx context.Context, req Request, asked []Assigned) Repl
 			results[i], out.Cut = RepoResult{RepoID: a.RepoID, Outcome: OutcomePastLimit}, true
 		}
 	}
+	var cut bool
+	if out.Hits, cut = hitsWithin(out.Hits, ReplyHitBytes); cut && len(out.Hits) > 0 {
+		// CUT BY BYTES, as the limit cuts: a repository named after the last
+		// line kept is past it, whatever it answered.
+		out.Cut = true
+		last := out.Hits[len(out.Hits)-1].Repo
+		for i, a := range asked {
+			if cmp.Less(last, a.Name) && results[i].Outcome == OutcomeSearched {
+				results[i] = RepoResult{RepoID: a.RepoID, Outcome: OutcomePastLimit}
+			}
+		}
+	}
 	return out
+}
+
+// hitsWithin is the first of hits whose JSON, a comma between each, fits room
+// bytes, the first always kept, and whether it left any out.
+func hitsWithin(hits []Hit, room int) ([]Hit, bool) {
+	used := 0
+	for i, h := range hits {
+		raw, err := json.Marshal(h)
+		if err != nil {
+			return hits[:i], true
+		}
+		if used += len(raw) + 1; used > room && i > 0 {
+			return hits[:i], true
+		}
+	}
+	return hits, false
 }
 
 // one reads one repository as the request's asker.

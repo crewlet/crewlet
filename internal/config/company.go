@@ -335,7 +335,7 @@ func (c *Company) validateAdmission(o *org.Organization) error {
 		c.validateFileRules(), c.validateMCPNames(), c.validateAssistant(), c.validateAdvisor(), c.validateSeatAccess(),
 		c.validateMCPRegistry(), c.validateMCPAccess(o), c.validateBoxToolLevels(),
 		c.validateMCPLimits(o), c.Code.validateAdmission(field("code")), c.validateSSHApprovers(),
-		c.validateDelegatedDecisions(o))
+		c.validateDelegatedDecisions(o), c.validateGrowth())
 }
 
 // validateUnitIDs requires an id on every authored unit, at any depth. See
@@ -1163,7 +1163,7 @@ func (c *Company) VectorsEnabled() bool {
 // Applied to EVERY seat at any depth and every field each writes
 // ([Company.ProviderReferences]'s), reported where typed; the RESOLVED chain
 // would hide a typo in `llm.review` under a role also setting `llm_review`,
-// which wins. NOT THE ASSISTANT'S ([Company.validateAssistant]). Skipped when
+// which wins. Not the helpers', each held to its own rule. Skipped when
 // providers.llm is empty, a documented authoring state that runs.
 func (c *Company) validateProviderKeys() error {
 	var p problems
@@ -1172,7 +1172,7 @@ func (c *Company) validateProviderKeys() error {
 	}
 	known := slices.Sorted(maps.Keys(c.Providers.LLM))
 	for _, ref := range c.providerReferences() {
-		if ref.Job == JobAssistant {
+		if ref.Job == JobAssistant || ref.Job == JobAdvisor {
 			continue
 		}
 		for _, key := range ref.Chain {
@@ -1212,6 +1212,9 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 		return vendor.declaredAt(c) != ""
 	}
 	in := c.Integrations
+	if slices.Contains(growthBlockKeys(), surface) {
+		return in.growthBlock(surface) != nil
+	}
 	switch surface {
 	case "jira":
 		return in.Jira != nil
@@ -1586,11 +1589,12 @@ func (c *Company) validateExecutors() error {
 			p.add(at(seat.path, "llm"), ErrConflict,
 				"this seat's executor chain is %s, and no member of it can run the "+
 					"executor: a seat's executor is its harness's own run, which "+
-					"only %s have. Point `llm` at an entry with harness: claude-code or "+
-					"opencode (and keep these entries for the reviewer, workers and "+
-					"side passes with llm_review, llm_subagent, llm_auxiliary or "+
-					"llm_judge), or move one of them to claude-code or opencode",
-				c.describeChain(seat.chain), words.And(ExecutorHarnesses))
+					"only %s have. Point `llm` at an entry with harness: %s "+
+					"(and keep these entries for the reviewer, workers and "+
+					"side passes with llm_review, llm_subagent, llm_auxiliary, "+
+					"llm_judge or llm_triage), or move one of them to %s",
+				c.describeChain(seat.chain), words.And(ExecutorHarnesses()), words.Or(ExecutorHarnesses()),
+				words.Or(ExecutorHarnesses()))
 			continue
 		}
 		if seat.named {
@@ -1629,9 +1633,8 @@ func (c *Company) validateExecutors() error {
 			"a seat that names no `llm` runs its executor on this entry, %s, and it "+
 				"drives %s, which cannot run an executor: a seat's executor is its "+
 				"harness's own run, which only %s have. %s. Move this entry to "+
-				"claude-code or opencode, or point those seats' `llm` at an entry "+
-				"that drives one",
-			which, entry.HarnessName(), words.And(ExecutorHarnesses), seats)
+				"%s, or point those seats' `llm` at an entry that drives one",
+			which, entry.HarnessName(), words.And(ExecutorHarnesses()), seats, words.Or(ExecutorHarnesses()))
 	}
 	return p.err()
 }
@@ -1665,7 +1668,7 @@ func (c *Company) executorWarnings() []Warning {
 			"so a launch skips it and runs on %s alone. That is fine if it is there "+
 			"for the reviewer, workers and side passes, which fall back to `llm`; "+
 			"otherwise take it out",
-			handle, c.describeChain(skipped), words.And(ExecutorHarnesses), c.describeChain(runners)))
+			handle, c.describeChain(skipped), words.And(ExecutorHarnesses()), c.describeChain(runners)))
 		models := make([]words.Said, len(skipped))
 		for i, key := range skipped {
 			models[i] = words.Said(c.ModelName(key))

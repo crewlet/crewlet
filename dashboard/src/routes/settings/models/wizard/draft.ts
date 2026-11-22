@@ -17,7 +17,6 @@ import type { ConfigProblem, CompanyDocument } from "~/protocol/types.ts";
 import {
   DEFAULT_HARNESS,
   DEFAULT_HARNESS_AUTH_MODE,
-  EXECUTOR_HARNESSES,
   MODEL_KEY_PATTERN,
   type HarnessAuthMode,
   type RunnerCellName,
@@ -73,6 +72,11 @@ export interface Draft {
   uses: Uses;
   /** What the model is for, as Use it for offers it; `custom` once uses are set seat by seat. */
   intent: Intent;
+  /**
+   * The harnesses the engine runs a seat's executor on (`ModelsData.executors`),
+   * which decide whether the draft's harness can run coding. Not written.
+   */
+  executors: readonly string[];
 }
 
 /** The harnesses a model can be added on, in the order offered: the three that run coding or most work, then by name. */
@@ -101,9 +105,9 @@ const NO_FACTS: HarnessFacts = { binary: "", signIns: [], efforts: [] };
 /** What the engine's profile says about adding a model on the harness; empty for one it does not ship. */
 export const factsOf = (harness: string): HarnessFacts => HARNESS_FACTS[harness] ?? NO_FACTS;
 
-/** Whether the draft's harness can run a seat's coding (`EXECUTOR_HARNESSES`, held to the engine). */
-export const canExecute = (d: Pick<Draft, "harness">) =>
-  (EXECUTOR_HARNESSES as readonly string[]).includes(d.harness);
+/** Whether the draft's harness can run a seat's coding: one the engine runs an executor on. */
+export const canExecute = (d: Pick<Draft, "harness" | "executors">) =>
+  d.executors.includes(d.harness);
 
 /** The sign-in methods a harness offers, in its facts' order: the one allowed on any engine first. */
 export const methodsOf = (harness: string): readonly Method[] => factsOf(harness).signIns;
@@ -265,13 +269,14 @@ const MANAGED_FIELDS = new Set([
  * it to one line wherever it is printed beside a model id.
  */
 export const KEY_MAX = 40;
+/** The one rule a new name keeps, said by its field and by its problem alike. */
+export const KEY_RULE = `Lowercase letters, digits, dots, hyphens and underscores, up to ${KEY_MAX} characters.`;
 /** The engine's grammar for a model's name (`config.ProviderKeyPattern`, held as `MODEL_KEY_PATTERN`). */
 const KEY_PATTERN = new RegExp(MODEL_KEY_PATTERN);
 
-/** The steps a draft walks; Where it runs only for a harness that runs coding. */
-/** The steps for the draft: Where it runs only for a harness that codes, Review only for an edit. */
-export function stepsFor(d: Pick<Draft, "harness">, editing: boolean): WizardStep[] {
-  return WIZARD_STEPS.filter((s) => (s !== "runs" || canExecute(d)) && (editing || s !== "review"));
+/** The steps a draft walks, ending on Review: Where it runs only for a harness that runs coding. */
+export function stepsFor(d: Pick<Draft, "harness" | "executors">): WizardStep[] {
+  return WIZARD_STEPS.filter((s) => s !== "runs" || canExecute(d));
 }
 
 export const STEP_LABELS: Readonly<Record<WizardStep, string>> = {
@@ -281,7 +286,6 @@ export const STEP_LABELS: Readonly<Record<WizardStep, string>> = {
   runs: "Where it runs",
   assign: "Use it for",
   limits: "Limits",
-  test: "Test call",
   review: "Review",
 };
 
@@ -297,7 +301,7 @@ function referenced(value: unknown): string | null {
 const ref = (variable: string) => `\${${variable}}`;
 
 /** A blank draft for a new model: Claude Code on an API key, used for nothing yet. */
-export function emptyDraft(): Draft {
+export function emptyDraft(executors: readonly string[]): Draft {
   return {
     key: "",
     harness: DEFAULT_HARNESS,
@@ -316,6 +320,7 @@ export function emptyDraft(): Draft {
     webDenied: false,
     uses: noUses(),
     intent: "none",
+    executors,
   };
 }
 
@@ -398,12 +403,93 @@ export function credentialValues(d: Draft): Record<string, string> {
   return out;
 }
 
-/** The model's id as its harness takes it: OpenCode's and Pi's name their provider first. */
+/**
+ * The model's id as its harness takes it: OpenCode's and Pi's name the chosen
+ * provider before the provider's own id, always, since that id may itself hold
+ * a slash or the provider's name (OpenRouter's `qwen/qwen3-coder`, `openrouter/auto`).
+ */
 export function modelId(d: Pick<Draft, "harness" | "provider" | "model">): string {
   const model = d.model.trim();
-  return namesProvider(d.harness) && model && !model.includes("/")
-    ? `${d.provider}/${model}`
-    : model;
+  return namesProvider(d.harness) && model ? `${d.provider}/${model}` : model;
+}
+
+/** A catalogue id offered for the draft's harness as the draft holds it: the provider's own id. */
+export function catalogueModel(d: Pick<Draft, "harness" | "provider">, id: string): string {
+  return namesProvider(d.harness) && id.startsWith(`${d.provider}/`)
+    ? id.slice(d.provider.length + 1)
+    : id;
+}
+
+/** The choices a model id is named under: the harness, and the provider or cloud it is sent to. */
+export const modelScope = (d: Pick<Draft, "harness" | "method" | "provider" | "cloud">) =>
+  [
+    d.harness,
+    providersFor(d.harness).length > 0 ? d.provider : "",
+    d.method === "cloud" ? d.cloud : "",
+  ].join("|");
+
+/** The choices a credential is for: the harness, the method, and the provider or cloud it signs in to. */
+export const credentialScope = (d: Pick<Draft, "harness" | "method" | "provider" | "cloud">) =>
+  `${d.method}|${modelScope(d)}`;
+
+/** What a change to the draft is weighed against. */
+export interface Choices {
+  /** The model as it stood when an edit opened; null while adding. */
+  original: Draft | null;
+  /** The secrets other models read, which a suggested name avoids. */
+  taken: readonly string[];
+  /** Whether the reader named the secret for the credential scope the draft is in. */
+  named: boolean;
+}
+
+/**
+ * The draft after `patch`, with every value that belongs to a choice the patch
+ * moved cleared, or put back as the edited model had it when the choice is
+ * back to its own: the model and its effort are their vendor's, the pasted
+ * credential and its secret's name are the provider's they sign in to, and a
+ * use or a place to run is the harness's. Returns whether the secret stays named.
+ */
+export function withChoices(
+  d: Draft,
+  patch: Partial<Draft>,
+  { original, taken, named }: Choices,
+): { draft: Draft; named: boolean } {
+  const next: Draft = { ...d, ...patch };
+  const keep = <K extends keyof Draft>(field: K, scope: (x: Draft) => string, blank: Draft[K]) => {
+    if (field in patch || scope(next) === scope(d)) return;
+    next[field] = original && scope(next) === scope(original) ? original[field] : blank;
+  };
+  keep("model", modelScope, "");
+  keep("effort", modelScope, "");
+  keep("credential", credentialScope, "");
+  keep("endpoint", (x) => x.harness, "");
+  const moved = credentialScope(next) !== credentialScope(d);
+  let stays = "variable" in patch || (named && !moved);
+  if (moved && original && credentialScope(next) === credentialScope(original))
+    stays = !!original.variable;
+  if (!("variable" in patch) && pastesCredential(next)) {
+    if (moved && stays && original) next.variable = original.variable;
+    else if (!stays) next.variable = suggestedVariable(next, taken);
+  }
+  if (next.harness !== d.harness) {
+    const coding = canExecute(next);
+    const helpers = !!factsOf(next.harness).assistant;
+    if (!coding) next.runIn = "";
+    const dropsCoding = !coding && (next.intent === "all" || next.intent === "coding");
+    const dropsHelper = !helpers && (next.intent === "assistant" || next.intent === "advisor");
+    next.uses = {
+      ...(dropsCoding ? noUses() : next.uses),
+      assistant: helpers && next.uses.assistant,
+      advisor: helpers && next.uses.advisor,
+    };
+    if (dropsCoding || dropsHelper) next.intent = intentOf(next.uses);
+    if (original && next.harness === original.harness) {
+      next.uses = original.uses;
+      next.intent = original.intent;
+      next.runIn = original.runIn;
+    }
+  }
+  return { draft: next, named: stays };
 }
 
 /** The effort levels the draft's harness takes on its model, lowest first (its profile may narrow
@@ -584,8 +670,8 @@ function variableOf(model: ModelView, method: Method): string {
  * back from the entry, and the uses the engine reports for it. The credential
  * is never read back; a stored one is kept unless replaced.
  */
-export function draftOf(model: ModelView): Draft {
-  const d = emptyDraft();
+export function draftOf(model: ModelView, executors: readonly string[]): Draft {
+  const d = emptyDraft(executors);
   const raw = model.raw ?? {};
   const env = isRecord(raw.env) ? raw.env : {};
   const method = methodOf(model);
@@ -663,6 +749,12 @@ export function nextDocument(
     unknown
   >;
   llm[d.key] = entityOf(d, editing?.base);
+  // A COMPANY WITH NO PLACE TO RUN CODING gets this host, as the engine's own
+  // remedy says: every agent seat's executor runs in a box `providers.sandbox`
+  // configures, so a first coding model was refused, with nothing on the page
+  // to set one up. `local: {}` with `default_run_in: direct` runs it on this
+  // host as the engine's user; Where it runs and Review say so before a save.
+  if (canExecute(d) && !hasSandbox(doc)) providers.sandbox = { ...HOST_SANDBOX };
   // A NEW MODEL GOES LAST in the company's order, written out whole, rather
   // than wherever its name sorts among the keys `llm_order` leaves out: the
   // first in order is the fallback for seats that name none, and a new model
@@ -673,6 +765,25 @@ export function nextDocument(
       d.key,
     ];
   return applyUses(next as CompanyDocument, d.key, editing?.was ?? noUses(), d.uses);
+}
+
+/** The place to run coding a save sets up where the company has none: this engine's host. */
+const HOST_SANDBOX = { local: {}, default_run_in: "direct" } as const;
+
+/** The document with this engine's host set up to run coding, as the engine's own remedy says. */
+export function withHostSandbox(doc: CompanyDocument): CompanyDocument {
+  const next = structuredClone(doc) as Record<string, unknown>;
+  const providers = (isRecord(next.providers) ? next.providers : (next.providers = {})) as Record<
+    string,
+    unknown
+  >;
+  providers.sandbox = { ...HOST_SANDBOX };
+  return next as CompanyDocument;
+}
+
+/** Whether the company document configures a place to run a seat's executor (`providers.sandbox`). */
+export function hasSandbox(doc: CompanyDocument | null): boolean {
+  return !!doc && isRecord(doc.providers) && isRecord(doc.providers.sandbox);
 }
 
 /** A problem the form finds itself, in the engine's shape so both are drawn the same way. */
@@ -686,6 +797,20 @@ function problem(segments: (string | number)[], message: string, kind = "invalid
 }
 
 /**
+ * The harness program a problem says is missing from the engine host, or "":
+ * the doctor's "not on this host's PATH". No step of the wizard installs a
+ * program, so such a problem is said plainly and offers no step to fix it in.
+ */
+export function notInstalled(p: Pick<ConfigProblem, "message">): string {
+  return /"([^"]+)" is not on this host's PATH/.exec(p.message)?.[1] ?? "";
+}
+
+/** Whether a step of the wizard can fix a problem: not a program missing from the host. */
+export function fixable(p: Pick<ConfigProblem, "message">): boolean {
+  return !notInstalled(p);
+}
+
+/**
  * The step a problem belongs to, by its field: a value the credential route
  * tested is the Method's, a field of the entry is the step that sets it, and
  * anything in the seats or the assistant is Use it for.
@@ -693,8 +818,11 @@ function problem(segments: (string | number)[], message: string, kind = "invalid
 export function stepOf(p: Pick<ConfigProblem, "segments">, key: string): WizardStep {
   const s = p.segments ?? [];
   if (s[0] === "key") return "harness";
-  if (s[0] === "test") return "test";
+  // THE TEST CALL IS RUN ON REVIEW, where its result is said.
+  if (s[0] === "test") return "review";
   if (s[0] === "values" || s[0] === "variable") return "signin";
+  // WHERE CODING RUNS is the company's sandbox block: Where it runs says it.
+  if (s[0] === "providers" && s[1] === "sandbox") return "runs";
   if (s[0] === "providers" && s[1] === "llm" && s[2] === key) {
     switch (s[3]) {
       case "model":
@@ -738,6 +866,7 @@ export function fieldOf(p: Pick<ConfigProblem, "segments">, key: string): string
     return words[String(s[3])] ?? STEP_LABELS[stepOf(p, key)];
   }
   if (s[0] === "assistant") return "Ask Crewlet";
+  if (s[0] === "advisor") return "Advisor";
   return STEP_LABELS[stepOf(p, key)];
 }
 
@@ -747,9 +876,11 @@ export function fieldOf(p: Pick<ConfigProblem, "segments">, key: string): string
  * person reads the sentence and the field it belongs to is said beside it.
  */
 export function messageOf(p: Pick<ConfigProblem, "path" | "message">): string {
+  const missing = notInstalled(p);
+  if (missing) return `Install ${missing} on the engine host: the harness runs there.`;
   let message = p.message.trim();
   if (p.path && message.startsWith(`${p.path}: `)) message = message.slice(p.path.length + 2);
-  else message = message.replace(/^(providers|roles|units|assistant)\.[^\s:]*: /, "");
+  else message = message.replace(/^(providers|roles|units|assistant|advisor)\.[^\s:]*: /, "");
   return message.charAt(0).toUpperCase() + message.slice(1);
 }
 
@@ -784,26 +915,55 @@ export interface Kept {
   cloud: Readonly<Record<string, string>>;
 }
 
+/**
+ * What an edit keeps of the model as it opened: its stored key or token only
+ * while the draft signs in to the same provider the same way under the same
+ * secret, and its cloud secrets only for the same cloud.
+ */
+export function keptOf(
+  d: Draft,
+  original: Draft | null,
+  base: Base | undefined,
+  replacing: boolean,
+): Kept {
+  return {
+    credential:
+      !!original &&
+      !replacing &&
+      pastesCredential(d) &&
+      credentialScope(d) === credentialScope(original) &&
+      d.variable === original.variable &&
+      !!original.variable,
+    cloud:
+      d.method === "cloud" && original?.method === "cloud" && d.cloud === original.cloud
+        ? storedCloudSecrets(base)
+        : {},
+  };
+}
+
 /** The problems the form can see before asking the engine. */
 export function draftProblems(
   d: Draft,
   existing: readonly string[],
   kept: Kept = { credential: false, cloud: {} },
+  /**
+   * Whether the draft edits a model that exists. ITS NAME IS NOT ASKED AGAIN:
+   * the engine accepted it (up to 63 characters), the edit shows it read-only,
+   * and the wizard's own cap of 40 refused every edit of a longer one.
+   */
+  editing = false,
 ): ConfigProblem[] {
   const out: ConfigProblem[] = [];
   const at = (field: string, message: string, kind?: string) =>
     problem(["providers", "llm", d.key, ...field.split(".")], message, kind);
-  if (!d.key) {
+  if (editing) {
+    // The name is the model's identity, read-only here.
+  } else if (!d.key) {
     out.push(problem(["key"], "Name the model. Seats and Ask Crewlet name it.", "missing"));
   } else if (d.key.length > KEY_MAX) {
     out.push(problem(["key"], `Keep the name to ${KEY_MAX} characters or fewer.`, "out_of_range"));
   } else if (!KEY_PATTERN.test(d.key)) {
-    out.push(
-      problem(
-        ["key"],
-        "Use lowercase letters, digits, dots, hyphens and underscores, starting with a letter or a digit, such as sonnet-key.",
-      ),
-    );
+    out.push(problem(["key"], `${KEY_RULE} It starts with a letter or a digit.`));
   } else if (existing.includes(d.key)) {
     out.push(problem(["key"], `There is already a model called ${d.key}.`, "conflict"));
   }

@@ -388,6 +388,27 @@ describe.each([
     ]);
   });
 
+  // ONE TREATMENT FOR AN ADDRESS THAT OPENS NOTHING, bare or under a label.
+  // Mutation: draw the labelled one's host in the link ink again and the two
+  // disagree, one of them half-looking like a link.
+  test("an inert address is drawn the same way bare and under a label, and neither is a link", async () => {
+    const el = await draw(
+      md("See https://evil.example/bare and [the notes](https://evil.example/notes).", options),
+      { hosts: COMPANY },
+    );
+    expect(hrefs(el)).toEqual([]);
+    // EACH ADDRESS WITH ITS MARK: the bare one as written, the labelled one's after its words.
+    const addresses = [...el.querySelectorAll("[title^='https://evil.example/']")].filter(
+      (node) => node.querySelector("svg") !== null,
+    );
+    expect(addresses.map((node) => node.textContent)).toEqual([
+      "https://evil.example/bare",
+      "evil.example/notes",
+    ]);
+    expect(new Set(addresses.map((node) => node.className)).size).toBe(1);
+    expect(el.textContent).toContain("the notes (evil.example/notes)");
+  });
+
   test("an address on a host the company configured opens as rebuilt, with nothing it carried", async () => {
     const el = await draw(
       md(

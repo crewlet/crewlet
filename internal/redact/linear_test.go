@@ -187,6 +187,34 @@ func runsOf(key, piece string, runBytes int) string {
 	return b.String()
 }
 
+// A STAGE DENSE IN PASSWORD VALUES COSTS WHAT ITS VALUES COST: the values a
+// password's stage keeps for later reads ([priorWith]) cost the same each
+// whether its reach holds fifty or five thousand. Counted from the first at
+// every value, each cost the values the reach held, so a stream of
+// `password: x` lines, 12 bytes apart, spent half its time there.
+//
+// COUNTED, NOT TIMED ([priorVisits]): 64 Ki values 12 and 1200 bytes apart
+// visit about three values each, at most four and at least one, so a count
+// that stopped counting fails too. Mutation: count from the first at every
+// value, and they visit some 5,000 and 60 each.
+func TestAStageDenseInPasswordValuesCostsWhatItsValuesCost(t *testing.T) {
+	t.Parallel()
+	const values = 64 << 10
+	for _, apart := range []int{12, 1200} {
+		var prior [][2]int
+		visited := 0
+		for at := 0; at < values*apart; at += apart {
+			var n int
+			prior, n = priorVisits(prior, [2]int{at + 10, at + 11})
+			visited += n
+		}
+		if visited < values || visited > 4*values {
+			t.Errorf("64 Ki values %d bytes apart visited %d values to keep, %.1f each, not between "+
+				"one and four — each counts the values its reach holds", apart, visited, float64(visited)/values)
+		}
+	}
+}
+
 // A LIVE VIEW OF MANY PASSWORD KEYS COSTS ONE READ OF THEM: [Settled] over
 // lines of password keys, each line's last decided by the next, costs what its
 // bytes cost. Read again in each prefix a hold cut the text at, the hold moved
@@ -341,7 +369,7 @@ func judge(timed timer, short, long string, factor int) (bool, time.Duration, ti
 // A spin of the CPU per read would not do: its noise is a preemption's
 // overshoot, milliseconds on a sample of two, which let a square cost pass
 // against a factor it should have failed by 2.7 times. The comparison over the
-// wall clock is held by the four tests above.
+// wall clock is held by the five tests above.
 //
 // Mutation: drop the calibration, the floor, the re-measure, its failing only
 // when every round does, or a round's stop at a long sample past the factor,

@@ -179,7 +179,9 @@ func limitOf(limit int) (int, error) {
 }
 
 // Findings reads one page of episodes, newest first by when they opened, and
-// the cursor of the page after it, empty on the last.
+// the cursor of the page after it, empty on the last. A page holds its rows to
+// the bytes the read carries ([statelog.RowsOf]), so it may end short of its
+// limit with a cursor.
 func (r *Reader) Findings(ctx context.Context, f Filter, fresh statelog.Freshness) ([]FindingRow, string, error) {
 	limit, err := limitOf(f.Limit)
 	if err != nil {
@@ -210,28 +212,47 @@ func (r *Reader) Findings(ctx context.Context, f Filter, fresh statelog.Freshnes
 		where = append(where, "(f.opened_at < ? OR (f.opened_at = ? AND f.id < ?))")
 		args = append(args, opened, opened, id)
 	}
-	var out []FindingRow
+	var (
+		out []FindingRow
+		cut bool
+	)
 	_, err = r.log.Read(ctx, fresh.Query(DomainScope(), true), func(tx *sql.Tx) error {
+		out, cut = nil, false
 		rows, queryErr := tx.QueryContext(ctx, `SELECT `+findingColumns+` WHERE `+strings.Join(where, " AND ")+`
 			ORDER BY f.opened_at DESC, f.id DESC LIMIT ?`, append(args, limit+1)...)
 		if queryErr != nil {
 			return queryErr
 		}
-		var scanErr error
-		out, scanErr = scanFindings(rows)
-		return scanErr
+		held := statelog.RowsOf(ctx)
+		for rows.Next() {
+			row, scanErr := scanFinding(rows)
+			if scanErr != nil {
+				_ = rows.Close()
+				return scanErr
+			}
+			if !held.TakeEncoded(row) {
+				break
+			}
+			out = append(out, row)
+		}
+		cut = held.Cut()
+		return errors.Join(rows.Err(), rows.Close())
 	})
 	if err != nil {
 		return nil, "", fmt.Errorf("advisordomain: read a page of findings: %w", err)
 	}
-	if len(out) <= limit {
-		return out, "", nil
+	switch {
+	case len(out) > limit:
+		return out[:limit], findingCursor(out[limit-1]), nil
+	case cut:
+		return out, findingCursor(out[len(out)-1]), nil
 	}
-	return out[:limit], findingCursor(out[limit-1]), nil
+	return out, "", nil
 }
 
 // NonClosed reads every open and applied episode, for the duty, refusing past
-// [MaxNonClosed] rather than answering a slice of them.
+// [MaxNonClosed] or the bytes the read carries ([statelog.RowsOf]) rather
+// than answering a slice of them: the duty reconciles them from one snapshot.
 func (r *Reader) NonClosed(ctx context.Context, fresh statelog.Freshness) ([]FindingRow, error) {
 	var out []FindingRow
 	_, err := r.log.Read(ctx, fresh.Query(DomainScope(), true), func(tx *sql.Tx) error {
@@ -240,7 +261,22 @@ func (r *Reader) NonClosed(ctx context.Context, fresh statelog.Freshness) ([]Fin
 		if err != nil {
 			return err
 		}
-		if out, err = scanFindings(rows); err != nil {
+		out = nil
+		held := statelog.RowsOf(ctx)
+		for rows.Next() {
+			row, scanErr := scanFinding(rows)
+			if scanErr != nil {
+				_ = rows.Close()
+				return scanErr
+			}
+			if !held.TakeEncoded(row) {
+				_ = rows.Close()
+				return fmt.Errorf("advisordomain: the open and applied findings pass the %d bytes one "+
+					"read answers", statelog.AnswerBytes)
+			}
+			out = append(out, row)
+		}
+		if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 			return err
 		}
 		if len(out) > MaxNonClosed {
@@ -356,6 +392,56 @@ func (r *Reader) Episodes(ctx context.Context, key string, fresh statelog.Freshn
 	return out, nil
 }
 
+// EpisodesPage is one page of a key's kept episodes, newest first, after
+// cursor (empty for the first), held to the bytes the read carries
+// ([statelog.RowsOf]), and the cursor of the page after it, empty on the last.
+func (r *Reader) EpisodesPage(ctx context.Context, key, cursor string,
+	fresh statelog.Freshness) ([]FindingRow, string, error) {
+
+	if err := validKey(key); err != nil {
+		return nil, "", err
+	}
+	where, args := "f.key_id = ?", []any{KeyID(key)}
+	if cursor != "" {
+		opened, id, err := parseFindingCursor(cursor)
+		if err != nil {
+			return nil, "", err
+		}
+		where += " AND (f.opened_at < ? OR (f.opened_at = ? AND f.id < ?))"
+		args = append(args, opened, opened, id)
+	}
+	var (
+		out  []FindingRow
+		next string
+	)
+	_, err := r.log.Read(ctx, fresh.Query(KeyScope(key), true), func(tx *sql.Tx) error {
+		out, next = nil, ""
+		rows, err := tx.QueryContext(ctx, `SELECT `+findingColumns+` WHERE `+where+`
+			ORDER BY f.opened_at DESC, f.id DESC LIMIT ?`, append(args, MaxEpisodes)...)
+		if err != nil {
+			return err
+		}
+		held := statelog.RowsOf(ctx)
+		for rows.Next() {
+			row, scanErr := scanFinding(rows)
+			if scanErr != nil {
+				_ = rows.Close()
+				return scanErr
+			}
+			if !held.TakeEncoded(row) {
+				next = findingCursor(out[len(out)-1])
+				break
+			}
+			out = append(out, row)
+		}
+		return errors.Join(rows.Err(), rows.Close())
+	})
+	if err != nil {
+		return nil, "", fmt.Errorf("advisordomain: read the episodes of %s: %w", key, err)
+	}
+	return out, next, nil
+}
+
 // KeyRow is one finding key: its version (a write's ifMatch), how many
 // episodes it opened, its non-closed one, its hold and the fixes that did not
 // take.
@@ -464,27 +550,29 @@ type RunRow struct {
 
 	Classes json.RawMessage
 	Model   json.RawMessage
+	// Kind is what the run does, [RunKindRules] for every run before kinds.
+	Kind RunKind
 }
 
 // runColumns are a [RunRow]'s columns, in [scanRun]'s order.
-const runColumns = `run_id, trigger_kind, by_name, requested_at, started_at, ended_at, status, classes, model
-	FROM advisor_runs`
+const runColumns = `run_id, trigger_kind, by_name, requested_at, started_at, ended_at, status, classes, model,
+	kind FROM advisor_runs`
 
 // scanRun reads one row of [runColumns].
 func scanRun(rows interface{ Scan(...any) error }) (RunRow, error) {
 	var (
-		r                               RunRow
-		trigger, status, classes, model string
-		requested, started, ended       int64
+		r                                     RunRow
+		trigger, status, classes, model, kind string
+		requested, started, ended             int64
 	)
 	if err := rows.Scan(&r.ID, &trigger, &r.By, &requested, &started, &ended, &status, &classes,
-		&model); err != nil {
+		&model, &kind); err != nil {
 		return RunRow{}, err
 	}
 	r.Trigger, r.Status = Trigger(trigger), RunStatus(status)
 	r.RequestedAt, r.StartedAt, r.EndedAt = decodeOptional(requested), decodeOptional(started),
 		decodeOptional(ended)
-	r.Classes, r.Model = json.RawMessage(classes), json.RawMessage(model)
+	r.Classes, r.Model, r.Kind = json.RawMessage(classes), json.RawMessage(model), RunKind(kind).OrRules()
 	return r, nil
 }
 
@@ -587,6 +675,46 @@ func (r *Reader) LastRunOfClasses(ctx context.Context, fresh statelog.Freshness)
 	return out, nil
 }
 
+// ClassRunsPage is [Reader.LastRunOfClasses] a page at a time, by class,
+// after `after` (empty for the first), held to the bytes the read carries
+// ([statelog.RowsOf]), and the last class kept where more follow.
+func (r *Reader) ClassRunsPage(ctx context.Context, after string,
+	fresh statelog.Freshness) (map[string]time.Time, string, error) {
+
+	out := map[string]time.Time{}
+	var next string
+	_, err := r.log.Read(ctx, fresh.Query(RunsScope(), true), func(tx *sql.Tx) error {
+		clear(out)
+		next = ""
+		rows, err := tx.QueryContext(ctx, `SELECT class, ended_at FROM advisor_class_runs
+			WHERE class > ? ORDER BY class`, after)
+		if err != nil {
+			return err
+		}
+		held, last := statelog.RowsOf(ctx), ""
+		for rows.Next() {
+			var (
+				class string
+				ended int64
+			)
+			if err := rows.Scan(&class, &ended); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			if !held.TakeEncoded(map[string]time.Time{class: store.DecodeTime(ended)}) {
+				next = last
+				break
+			}
+			out[class], last = store.DecodeTime(ended), class
+		}
+		return errors.Join(rows.Err(), rows.Close())
+	})
+	if err != nil {
+		return nil, "", fmt.Errorf("advisordomain: read each class's last run: %w", err)
+	}
+	return out, next, nil
+}
+
 // ---- reports ------------------------------------------------------------ //
 
 // ReportRow is one week's report.
@@ -614,7 +742,8 @@ func scanReport(rows interface{ Scan(...any) error }) (ReportRow, error) {
 
 // Reports reads one page of reports, newest week first, and the cursor of the
 // page after it, empty on the last. limit is 1 to [MaxPageSize],
-// DefaultPageSize where zero.
+// DefaultPageSize where zero; a page holds its rows to the bytes the read
+// carries ([statelog.RowsOf]), so it may end short of limit with a cursor.
 func (r *Reader) Reports(ctx context.Context, cursor string, limit int,
 	fresh statelog.Freshness) ([]ReportRow, string, error) {
 
@@ -629,32 +758,43 @@ func (r *Reader) Reports(ctx context.Context, cursor string, limit int,
 		}
 		below = cursor
 	}
-	var out []ReportRow
+	var (
+		out []ReportRow
+		cut bool
+	)
 	_, err := r.log.Read(ctx, fresh.Query(DomainScope(), true), func(tx *sql.Tx) error {
-		out = nil
+		out, cut = nil, false
 		rows, err := tx.QueryContext(ctx, `
 			SELECT week, period_from, period_to, written_at, body FROM advisor_reports
 			WHERE week < ? ORDER BY week DESC LIMIT ?`, below, limit+1)
 		if err != nil {
 			return err
 		}
+		held := statelog.RowsOf(ctx)
 		for rows.Next() {
 			report, err := scanReport(rows)
 			if err != nil {
 				_ = rows.Close()
 				return err
 			}
+			if !held.TakeEncoded(report) {
+				break
+			}
 			out = append(out, report)
 		}
+		cut = held.Cut()
 		return errors.Join(rows.Err(), rows.Close())
 	})
 	if err != nil {
 		return nil, "", fmt.Errorf("advisordomain: read a page of reports: %w", err)
 	}
-	if len(out) <= limit {
-		return out, "", nil
+	switch {
+	case len(out) > limit:
+		return out[:limit], out[limit-1].Week, nil
+	case cut:
+		return out, out[len(out)-1].Week, nil
 	}
-	return out[:limit], out[limit-1].Week, nil
+	return out, "", nil
 }
 
 // Report reads one week's report, and whether it was written.
@@ -775,3 +915,180 @@ func (r *Reader) AlarmEpisodes(ctx context.Context, since time.Time,
 	}
 	return out, nil
 }
+
+// AlarmEpisodesPage is [Reader.AlarmEpisodes] a page at a time, after cursor
+// (empty for the first), held to the bytes the read carries
+// ([statelog.RowsOf]), and the cursor of the page after it, empty on the last.
+func (r *Reader) AlarmEpisodesPage(ctx context.Context, since time.Time, cursor string,
+	fresh statelog.Freshness) ([]AlarmEpisodeRow, string, error) {
+
+	var (
+		raisedAfter, posAfter int64
+		seriesAfter           string
+	)
+	if cursor != "" {
+		raised, rest, ok := strings.Cut(cursor, "|")
+		cut := strings.LastIndex(rest, "|")
+		var err1, err2 error
+		if ok && cut >= 0 {
+			raisedAfter, err1 = strconv.ParseInt(raised, 10, 64)
+			posAfter, err2 = strconv.ParseInt(rest[cut+1:], 10, 64)
+			seriesAfter = rest[:cut]
+		}
+		if !ok || cut < 0 || err1 != nil || err2 != nil {
+			return nil, "", invalid("the cursor %q is not one a page answered", cursor)
+		}
+	}
+	var (
+		out  []AlarmEpisodeRow
+		next string
+	)
+	_, err := r.log.Read(ctx, fresh.Query(DomainScope(), true), func(tx *sql.Tx) error {
+		out, next = nil, ""
+		rows, err := tx.QueryContext(ctx, `
+			SELECT series_id, node, kind, instance, raised_at, cleared_at, raised_position
+			FROM advisor_alarm_episodes
+			WHERE (cleared_at IS NULL OR cleared_at >= ?) AND (? = '' OR
+				(raised_at, series_id, raised_position) > (?, ?, ?))
+			ORDER BY raised_at, series_id, raised_position LIMIT ?`,
+			store.EncodeTime(since), cursor, raisedAfter, seriesAfter, posAfter, MaxAlarmEpisodes)
+		if err != nil {
+			return err
+		}
+		held, last := statelog.RowsOf(ctx), ""
+		for rows.Next() {
+			var (
+				e               AlarmEpisodeRow
+				raised, raisedP int64
+				cleared         sql.NullInt64
+			)
+			if err := rows.Scan(&e.SeriesID, &e.Node, &e.Kind, &e.Instance, &raised, &cleared,
+				&raisedP); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			e.RaisedAt = store.DecodeTime(raised)
+			if cleared.Valid {
+				e.ClearedAt = store.DecodeTime(cleared.Int64)
+			}
+			if !held.TakeEncoded(e) {
+				next = last
+				break
+			}
+			out = append(out, e)
+			last = strconv.FormatInt(raised, 10) + "|" + e.SeriesID + "|" + strconv.FormatInt(raisedP, 10)
+		}
+		return errors.Join(rows.Err(), rows.Close())
+	})
+	if err != nil {
+		return nil, "", fmt.Errorf("advisordomain: read the alarm episodes: %w", err)
+	}
+	return out, next, nil
+}
+
+// ProgressLine is one line of a deep run's progress as the log keeps it.
+type ProgressLine struct {
+	At   time.Time
+	Text string
+}
+
+// LiveProgress is the newest run with progress lines and no record yet, and
+// its lines oldest first: a deep run in flight. false where none is.
+func (r *Reader) LiveProgress(ctx context.Context, fresh statelog.Freshness) (string, []ProgressLine, bool, error) {
+	var (
+		run   string
+		lines []ProgressLine
+	)
+	_, err := r.log.Read(ctx, fresh.Query(RunsScope(), true), func(tx *sql.Tx) error {
+		run, lines = "", nil
+		err := tx.QueryRowContext(ctx, `SELECT p.run_id FROM advisor_run_progress p
+			LEFT JOIN advisor_runs r ON r.run_id = p.run_id
+			WHERE r.run_id IS NULL OR r.status = ''
+			ORDER BY p.at DESC, p.position DESC LIMIT 1`).Scan(&run)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		rows, err := tx.QueryContext(ctx, `SELECT at, text FROM advisor_run_progress WHERE run_id = ?
+			ORDER BY at, position LIMIT ?`, run, MaxProgressLines)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var (
+				at   int64
+				text string
+			)
+			if err := rows.Scan(&at, &text); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			lines = append(lines, ProgressLine{At: store.DecodeTime(at), Text: text})
+		}
+		return errors.Join(rows.Err(), rows.Close())
+	})
+	if err != nil {
+		return "", nil, false, fmt.Errorf("advisordomain: read the live run's progress: %w", err)
+	}
+	return run, lines, run != "", nil
+}
+
+// Checkpoint is the newest checkpoint run wrote, as the deep run keeps it,
+// and whether it wrote one: what a holder taking the run over resumes from.
+func (r *Reader) Checkpoint(ctx context.Context, run string, fresh statelog.Freshness) (json.RawMessage, bool, error) {
+	var body string
+	found := false
+	_, err := r.log.Read(ctx, fresh.Query(RunsScope(), true), func(tx *sql.Tx) error {
+		err := tx.QueryRowContext(ctx, `SELECT body FROM advisor_run_checkpoint WHERE run_id = ?`, run).Scan(&body)
+		if errors.Is(err, sql.ErrNoRows) {
+			found = false
+			return nil
+		}
+		found = err == nil
+		return err
+	})
+	if err != nil {
+		return nil, false, fmt.Errorf("advisordomain: read run %s's checkpoint: %w", run, err)
+	}
+	if !found {
+		return nil, false, nil
+	}
+	return json.RawMessage(body), true, nil
+}
+
+// RunProgress is every progress line run wrote, oldest first, at most
+// [MaxProgressLines]: a finished deep run's whole trail (the reads it asked,
+// the verdict on each agenda item), kept with the run until its retention.
+func (r *Reader) RunProgress(ctx context.Context, run string, fresh statelog.Freshness) ([]ProgressLine, error) {
+	var lines []ProgressLine
+	_, err := r.log.Read(ctx, fresh.Query(RunsScope(), true), func(tx *sql.Tx) error {
+		lines = nil
+		rows, err := tx.QueryContext(ctx, `SELECT at, text FROM advisor_run_progress WHERE run_id = ?
+			ORDER BY at, position LIMIT ?`, run, MaxProgressLines)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var (
+				at   int64
+				text string
+			)
+			if err := rows.Scan(&at, &text); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			lines = append(lines, ProgressLine{At: store.DecodeTime(at), Text: text})
+		}
+		return errors.Join(rows.Err(), rows.Close())
+	})
+	if err != nil {
+		return nil, fmt.Errorf("advisordomain: read run %s's progress: %w", run, err)
+	}
+	return lines, nil
+}
+
+// MaxProgressLines bounds the lines one read of a run's progress answers: as
+// many as a deep run writes, so its whole trail is read.
+const MaxProgressLines = 400

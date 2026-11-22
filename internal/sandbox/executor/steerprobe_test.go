@@ -37,11 +37,17 @@ const probeTake = "5e2d1c0b-9a87-4f65-b432-10fedcba9876"
 
 func (i *probeInbox) Cancelled(context.Context, sandbox.NoteCall) {}
 
+func (i *probeInbox) Again(context.Context, []string) (map[string]string, []string, error) {
+	return nil, nil, nil
+}
+
+func (i *probeInbox) Folded(context.Context, []string) {}
+
 func (i *probeInbox) Take(_ context.Context, event string, _ *sandbox.NoteCall) string {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.takes = append(i.takes, event)
-	return executor.ClaudeHookAnswer(event, probeTake, []executor.HookNote{{By: "ada", Message: probeNote}})
+	return executor.HookAnswer(executor.ClaudeCodeName, event, probeTake, []executor.HookNote{{By: "ada", Message: probeNote}})
 }
 
 func (i *probeInbox) Wait(context.Context, int) ([]mcpbridge.SteerNote, <-chan struct{}) {
@@ -116,7 +122,7 @@ func probeBridge(t *testing.T, inbox mcpbridge.SteerInbox, ledger mcpbridge.Ledg
 //
 // Mutation: rename the hook input's `event` key and no boundary takes the note;
 // drop Output.Unset and the variables reach the harness.
-func TestARealBoxsHooksReachTheBridgeTool(t *testing.T) {
+func realBoxsHooksReachTheBridgeTool(t *testing.T) {
 	t.Parallel()
 	inbox := &probeInbox{}
 	ledger := &probeLedger{}

@@ -1,18 +1,18 @@
-// Package catalog is the Dashboard Assistant's tool catalogue: the curated
-// tools, the generic API tools beside them, and the descriptor each tool the
-// model is offered is built from.
+// Package catalog is the Dashboard Assistant's tool catalogue: the generic API
+// tools, the curated writes, and the descriptor each tool the model is offered
+// is built from.
 //
-// # The person's whole API, and better-shaped shortcuts onto it
+// # The person's whole API, read through one tool
 //
 // The assistant may do with the API whatever its person may (ADR-0052's
 // parity, the human-only list aside): the generic tools ([DescribeAPITool],
-// [APIRequestTool], [ProposeAPIChangeTool]) name any route of the table the API
-// binds ([API.Bind]) and are decided by that route, as the person. The curated
-// tools are shortcuts onto the surfaces a question most often needs, each with
-// a schema, a card and a preview of its own; the [Exposure] rows say which
-// surface each is built on, and the walks beside the engine metadata (the
-// registry, the operator catalogue, the API's route table) hold every row to a
-// surface this build serves.
+// [ReadAPITool], [ProposeAPIChangeTool]) name any route of the table the API
+// binds ([API.Bind]) and are decided by that route, as the person. Every read
+// is [ReadAPITool]'s. The curated writes are shortcuts onto the changes a
+// question most often needs, each with a schema and a preview of its own; the
+// [Exposure] rows say which surface each is built on, and the walks beside the
+// engine metadata (the registry, the operator catalogue, the API's route
+// table) hold every row to a surface this build serves.
 //
 // # Only what the person can take now is offered
 //
@@ -125,7 +125,6 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
-	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/words"
@@ -255,11 +254,6 @@ type Tool struct {
 	// Apps are the apps a card built from this tool's answer needs, so a
 	// stored card is withheld from a person who no longer holds one.
 	Apps []iam.Grant
-	// Shows, for a read whose answer is decided by what the authority table
-	// lets the reader see rather than by one app, is the kinds of which the
-	// reader must see at least one (authz.Shows), the same test the route's
-	// answer applies. A read declaring it is offered by it, not by Apps.
-	Shows []authz.ObjectKind
 	// Fence marks an answer that carries text somebody else wrote, fenced
 	// under the turn's boundary before the model reads it (ADR-0040), with
 	// Source and Trust as its label.
@@ -281,18 +275,13 @@ type Tool struct {
 	// it (the route a generic read named), in place of Trust, and names the
 	// surface such text came from where it can tell ([Trusted]).
 	TrustOf func(args Args, answer any) Trusted
-	// Narrow are the arguments that narrow a read to less of what it reads
-	// (a search's words, a filter, a shorter window), named where a read is
-	// too large to show so the model and the person know how to ask for
-	// less ([narrowing]). EXPLICIT, never derived from the schema: an
-	// argument that widens (finished work included, a longer page) or
-	// merely pages or picks a view is not one. Each entry sends only query
-	// parameters [narrowingQuery] holds (TestEveryNarrowingArgumentNarrows).
-	Narrow []string
+	// AppsOf, where set, are the apps one call's answer drew on, in place of
+	// Apps: a generic read's, by the route it names.
+	AppsOf func(args Args) []iam.Grant
 	// Infer marks a read whose card is drawn from the answer's own shape
 	// ([cards.Infer]) rather than a declared spec, and whose model text is
 	// the answer itself, redacted, fenced and cut: a generic read, whose
-	// route the catalogue holds no spec for ([APIRequestTool]).
+	// route the catalogue holds no spec for ([ReadAPITool]).
 	Infer bool
 	// Title is an inferred read's card title where its call names no route
 	// (a curated read of an answer with no fixed shape).
@@ -328,13 +317,8 @@ type Tool struct {
 	// after.
 	Build func(args map[string]any) (exec.Request, error)
 
-	// Cards are how a read's answer becomes a card, by variant: the one
-	// spec under "" for a tool with one shape of answer, else one per value
-	// [Tool.Variant] answers (a section, a grouping).
+	// Cards are how a read's answer becomes a card: the one spec under "".
 	Cards map[string]cards.Spec
-	// Variant names which of Cards a call's answer is carded by; nil is
-	// always "".
-	Variant func(args Args) string
 	// Destructive is the act tool's own MCP hint (internal/agent/builtin's
 	// annotations), stated here because this package may not import the
 	// builtins; the catalogue walk holds it to the hint, and it is one of
@@ -379,7 +363,11 @@ type Tool struct {
 func (t Tool) StepLabel(args map[string]any, o cards.Options) string {
 	if t.Label != nil {
 		if l := strings.TrimSpace(t.Label(args)); l != "" {
-			return withScope(l, t.ScopeOf(Args(args), o))
+			// A LABEL THAT ALREADY SAYS ITS SCOPE is not told it twice.
+			if scope := t.ScopeOf(Args(args), o); !strings.Contains(l, scope) {
+				return withScope(l, scope)
+			}
+			return l
 		}
 	}
 	switch t.Kind {
@@ -495,12 +483,8 @@ func (t Tool) StepRequest(req exec.Request) (*wire.StepRequest, bool) {
 }
 
 // CardFor is the spec a call's answer is carded by.
-func (t Tool) CardFor(args Args) (cards.Spec, bool) {
-	variant := ""
-	if t.Variant != nil {
-		variant = t.Variant(args)
-	}
-	spec, ok := t.Cards[variant]
+func (t Tool) CardFor(Args) (cards.Spec, bool) {
+	spec, ok := t.Cards[""]
 	return spec, ok
 }
 
@@ -531,4 +515,13 @@ func matches(route, method, path string) bool {
 		}
 	}
 	return len(got) == len(want)
+}
+
+// AppsFor are the apps one call's answer drew on: [Tool.AppsOf]'s where the
+// tool has it, else the tool's own Apps.
+func (t Tool) AppsFor(args Args) []iam.Grant {
+	if t.AppsOf != nil {
+		return t.AppsOf(args)
+	}
+	return t.Apps
 }

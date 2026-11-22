@@ -50,6 +50,7 @@ import {
   type Pressed,
 } from "~/test/chat.tsx";
 import { LinkHostsProvider } from "~/lib/linkHosts.ts";
+import { AssistantControlContext, type AssistantControl } from "~/app/assistant/control.ts";
 import { holdOf } from "~/test/chatAccess.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { session } from "~/protocol/session.ts";
@@ -286,6 +287,55 @@ async function findItem(name: RegExp): Promise<HTMLElement> {
   });
   return found!;
 }
+
+// ASK CREWLET ABOUT A MESSAGE, AND DRAFT WITH IT, ARE QUESTIONS ABOUT WHAT
+// THE ROOM SHOWS: each goes to a new conversation (`askAbout`), never into
+// whatever conversation the panel holds (`ask`), and is sent at once.
+// Mutation: put either back on `ask`, or send neither, and its case goes red.
+describe("asking Ask Crewlet about the room", () => {
+  function recording() {
+    const about: { question: string; send: boolean }[] = [];
+    const asked: string[] = [];
+    const control: AssistantControl = {
+      open: true,
+      unavailable: null,
+      toggle: () => undefined,
+      ask: (question) => asked.push(question),
+      askAbout: (question, { send }) => about.push({ question, send }),
+    };
+    return { control, about, asked };
+  }
+
+  function mountAsking(control: AssistantControl) {
+    const cursors = new ReadCursors({ flush: async () => undefined });
+    return mountChat(
+      <AssistantControlContext.Provider value={control}>
+        <LoneRoom channelID="room-1" viewer="ada" nameOf={(handle) => handle} cursors={cursors} />
+      </AssistantControlContext.Provider>,
+      { answers, viewer: ADA },
+    );
+  }
+
+  test("a message's Ask Crewlet about this asks about it in a new conversation", async () => {
+    const { control, about, asked } = recording();
+    mountAsking(control);
+    fireEvent.click(await findItem(/^Ask Crewlet about this/));
+    expect(asked).toEqual([]);
+    expect(about).toHaveLength(1);
+    expect(about[0]!.send).toBe(true);
+    expect(about[0]!.question).toMatch(/^Help me with this message from bo: /);
+  });
+
+  test("Draft with Ask Crewlet asks for the room's draft in a new conversation", async () => {
+    const { control, about, asked } = recording();
+    mountAsking(control);
+    fireEvent.click(await screen.findByRole("button", { name: "Draft" }));
+    expect(asked).toEqual([]);
+    expect(about).toEqual([
+      { question: "Draft a message for me in #general, in the message box.", send: true },
+    ]);
+  });
+});
 
 /** The presses of one tool, in order. */
 const pressesOf = (tool: string) => presses.filter((press) => press.tool === tool);
@@ -595,10 +645,11 @@ describe("a message's links", () => {
     expect(link.getAttribute("href")).toBe("https://github.com/acme/backend/pull/14");
     expect(link.getAttribute("target")).toBe("_blank");
     expect(link.getAttribute("rel")).toBe("noopener noreferrer");
-    // UNFURLED: the app's name, the reference it is, and that it opens apart.
-    expect(link.textContent).toContain("GitHub");
+    // UNFURLED: the app's name, the reference it is, and that it opens apart;
+    // the link is named by the reference, and its card shows the app.
     expect(link.textContent).toContain("acme/backend#14");
     expect(link.textContent).toContain("opens in a new tab");
+    expect(link.closest(".crewlet-link-card")?.textContent).toContain("GitHub");
   });
 
   // Mutation: draw a link as written and each address here is a control.

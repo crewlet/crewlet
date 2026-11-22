@@ -59,8 +59,10 @@ type Pass struct {
 	Explained []Explained  `json:"-"`
 	Listed    int          `json:"listed"`
 	Dropped   map[Drop]int `json:"dropped"`
-	Unread    []string     `json:"unread"`
-	Reason    string       `json:"reason,omitempty"`
+	// Repaired counts the findings listed after a repair, by the repair.
+	Repaired map[Repair]int `json:"repaired,omitempty"`
+	Unread   []string       `json:"unread"`
+	Reason   string         `json:"reason,omitempty"`
 }
 
 // Drop is why a submitted finding was not listed.
@@ -75,10 +77,19 @@ const (
 	DropFix        Drop = "fix_not_built"
 	DropWords      Drop = "words"
 	DropAnswered   Drop = "answered"
+	// DropTooMany is a finding past the most one run lists.
+	DropTooMany Drop = "too_many"
+	// DropTokensUnsplit is an investigation's finding about a token total
+	// that does not say how much of it was cache reads: a jump in tokens is
+	// most often the cache, so the split is read before a seat is blamed.
+	DropTokensUnsplit Drop = "tokens_unsplit"
 )
 
 // Submitted is one finding as the model submits it.
 type Submitted struct {
+	// Headline is one line leading with the finding's number; every number
+	// it says must be one of its facts.
+	Headline string       `json:"headline,omitempty"`
 	Title    string       `json:"title"`
 	Why      string       `json:"why"`
 	Severity Severity     `json:"severity"`
@@ -87,14 +98,23 @@ type Submitted struct {
 	Facts    []CitedFact  `json:"facts"`
 	Records  []Record     `json:"records"`
 	Fix      SubmittedFix `json:"fix"`
+	// Premise is the fact an investigation's finding rests on, re-checked
+	// every hour; nil states none.
+	Premise *SubmittedPremise `json:"premise,omitempty"`
 }
 
-// CitedFact is one number and where in the run's own tool answers it was read:
-// a tool's name, then the path into its answer (open_work.blockers[0].blocks).
+// CitedFact is one number, what it counts in a few plain words, and where in
+// the run's own tool answers it was read: a tool's name, then the path into
+// its answer (open_work.blockers[0].blocks).
 type CitedFact struct {
 	Key   string `json:"key"`
+	Label string `json:"label"`
 	Value int64  `json:"value"`
 	From  string `json:"from"`
+	// Unit is what the number counts (tokens, turns, hours), one of [Units].
+	Unit Unit `json:"unit,omitempty"`
+	// WasFrom cites the same number over the range before, where it was read.
+	WasFrom string `json:"was_from,omitempty"`
 }
 
 // FixBuilder names a change the engine builds for an analyst finding.
@@ -130,6 +150,8 @@ type SubmittedFix struct {
 type Served struct {
 	answers map[string]any
 	records map[Record]bool
+	// sources is the read each investigation's answer came from, by name.
+	sources map[string]ReadSource
 }
 
 // NewServed is an empty record of what a run's tools answered.
@@ -152,6 +174,27 @@ func (s *Served) Serve(tool string, answer any, records []Record) error {
 		s.records[r] = true
 	}
 	return nil
+}
+
+// Number is the whole number at from in the answers (read_3.entries[0].hits),
+// false where none is.
+func (s *Served) Number(from string) (int64, bool) { return s.read(from) }
+
+// Part is the part of an answer at from (read_3.entries[0], snapshot.stats),
+// a whole answer where from names no path, false where there is none.
+func (s *Served) Part(from string) (any, bool) {
+	tool, path, _ := strings.Cut(from, ".")
+	v, ok := s.answers[tool]
+	if !ok {
+		return nil, false
+	}
+	return partAt(v, path)
+}
+
+// Has reports whether name was served.
+func (s *Served) Has(name string) bool {
+	_, ok := s.answers[name]
+	return ok
 }
 
 // read is the number at from in the answers, false where none is.
@@ -200,49 +243,79 @@ type Grounding struct {
 	DryRun func(Change) error
 	// Answered are the fingerprints people answered wrong or already known, still in force.
 	Answered map[string]bool
+	// RecordsOptional lets a finding rest on cited numbers alone, for an
+	// investigation whose reads name no item or turn (a model entry's hours).
+	RecordsOptional bool
+	// Units holds every cited number to saying what it counts, and
+	// Headlines every number a headline says to one of its facts: an
+	// investigation's rules. One that breaks them is mended (the unit read
+	// off its path and label, the headline said from its first fact).
+	Units, Headlines bool
+}
+
+// Grounded is what [Ground] listed, and how many of the rest it mended to list
+// them, or dropped, and why.
+type Grounded struct {
+	Findings []Finding
+	Dropped  map[Drop]int
+	Repaired map[Repair]int
 }
 
 // Bounds of an analyst finding's words.
 const (
 	MaxAnalystTitle = 120
 	MaxAnalystWhy   = 600
+	// MaxAnalystFactLabel bounds what a cited number is said to count: a
+	// label beside its number, as a rule's ("Hours work waited for a seat").
+	MaxAnalystFactLabel = 60
 	// MaxAnalystFindings is the most findings one run lists.
 	MaxAnalystFindings = 10
 )
 
 // Ground is the submitted findings the served answers and g support, as
 // findings, and how many of the rest were dropped and why.
-func Ground(submitted []Submitted, served *Served, g Grounding) ([]Finding, map[Drop]int) {
-	out := []Finding{}
-	dropped := map[Drop]int{}
+func Ground(submitted []Submitted, served *Served, g Grounding) Grounded {
+	out := Grounded{Findings: []Finding{}, Dropped: map[Drop]int{}, Repaired: map[Repair]int{}}
 	listed := map[string]bool{}
 	for _, s := range submitted {
-		f, drop := ground(s, served, g)
+		f, drop, repaired := ground(s, served, g)
 		if drop == "" && listed[Fingerprint(f)] {
 			drop = DropRepeat
 		}
 		switch {
 		case drop != "":
-			dropped[drop]++
-		case len(out) == MaxAnalystFindings:
-			dropped[DropWords]++
+			out.Dropped[drop]++
+		case len(out.Findings) == MaxAnalystFindings:
+			out.Dropped[DropTooMany]++
 		default:
 			listed[Fingerprint(f)] = true
-			out = append(out, f)
+			out.Findings = append(out.Findings, f)
+			for _, r := range repaired {
+				out.Repaired[r]++
+			}
 		}
 	}
-	sortFindings(out)
-	return out, dropped
+	sortFindings(out.Findings)
+	return out
 }
 
-func ground(s Submitted, served *Served, g Grounding) (Finding, Drop) {
-	if len(s.Records) == 0 || len(s.Facts) == 0 {
-		return Finding{}, DropNoEvidence
+// ground is s as a finding, how it was mended to be listed, or why it was
+// dropped. A NUMBER IS NEVER MENDED: one not in what was read, or a record not
+// read, drops the finding; its words, its subject and its fix are.
+func ground(s Submitted, served *Served, g Grounding) (Finding, Drop, []Repair) {
+	var repaired []Repair
+	mend := func(r Repair) {
+		if !slices.Contains(repaired, r) {
+			repaired = append(repaired, r)
+		}
+	}
+	if (len(s.Records) == 0 && !g.RecordsOptional) || len(s.Facts) == 0 {
+		return Finding{}, DropNoEvidence, nil
 	}
 	records := []Record{}
 	for _, r := range s.Records {
 		if !served.records[r] {
-			return Finding{}, DropUnread
+			return Finding{}, DropUnread, nil
 		}
 		if len(records) < MaxAnalystRecords && !slices.Contains(records, r) {
 			records = append(records, r)
@@ -251,33 +324,93 @@ func ground(s Submitted, served *Served, g Grounding) (Finding, Drop) {
 	facts := []Fact{}
 	for _, c := range s.Facts {
 		if got, ok := served.read(c.From); !ok || got != c.Value || c.Key == "" {
-			return Finding{}, DropWrongFact
+			return Finding{}, DropWrongFact, nil
 		}
-		facts = append(facts, Fact{Key: c.Key, Value: c.Value})
+		// A NUMBER IS SAID WHAT IT COUNTS: a model's key is its own, and
+		// drawn as the label it read as "blocks 1" on the finding's page. A
+		// label the rule refuses, or none, is said by the engine; a unit
+		// missing or unknown is read off where the number was cited.
+		label := strings.TrimSpace(c.Label)
+		if label == "" || !plainWords(label, MaxAnalystFactLabel) {
+			if label = plainSaid(label, MaxAnalystFactLabel); label == "" {
+				label = plainSaid(labelOf(c.Key), MaxAnalystFactLabel)
+			}
+			mend(RepairEngineWords)
+		}
+		unit := c.Unit
+		if (g.Units && unit == "") || (unit != "" && !unit.Valid()) {
+			unit = unitOf(c)
+			mend(RepairEngineWords)
+		}
+		fact := Fact{Key: c.Key, Value: c.Value, Label: label, Unit: unit}
+		if c.WasFrom != "" {
+			was, ok := served.read(c.WasFrom)
+			if !ok {
+				return Finding{}, DropWrongFact, nil
+			}
+			fact.Was = &was
+		}
+		facts = append(facts, fact)
 	}
-	if !plainWords(s.Title, MaxAnalystTitle) || !plainWords(s.Why, MaxAnalystWhy) ||
-		!plainWords(s.Item, MaxAnalystTitle) || (s.Severity != SeverityCosts && s.Severity != SeverityNote) {
-		return Finding{}, DropWords
+	said := func(text string, limit int) string {
+		if plainWords(text, limit) {
+			return text
+		}
+		mend(RepairEngineWords)
+		return plainSaid(text, limit)
+	}
+	headline, title, why, item := said(s.Headline, MaxAnalystTitle), said(s.Title, MaxAnalystTitle),
+		said(s.Why, MaxAnalystWhy), said(s.Item, MaxAnalystTitle)
+	if strings.TrimSpace(title) == "" {
+		title = headlineFrom(facts)
+		mend(RepairEngineWords)
+	}
+	if g.Headlines && headline != "" {
+		values := make([]int64, 0, len(facts))
+		for _, fact := range facts {
+			values = append(values, fact.Value)
+		}
+		if !HeadlineGrounded(headline, values) {
+			headline = headlineFrom(facts)
+			mend(RepairEngineWords)
+		}
+	}
+	severity := s.Severity
+	if severity != SeverityCosts && severity != SeverityNote {
+		severity = SeverityNote
+		mend(RepairEngineWords)
 	}
 	subject, ok := subjectIn(g.Company, s.Subject)
 	if !ok {
-		return Finding{}, DropWords
+		subject = Subject{Kind: SubjectCompany}
+		mend(RepairSubject)
 	}
+	// A FIX NOT BUILT LEAVES THE FINDING STANDING, with no change to send and a
+	// plain line saying what a person would do.
 	fix, ok := buildFix(s.Fix, served, g)
 	if !ok {
-		return Finding{}, DropFix
+		fix = Fix{Kind: FixNone, Options: []Option{}, Sentence: fixWords(g.Company, s.Fix)}
+		mend(RepairNoFix)
 	}
-	f := Finding{Class: ClassModel, Severity: s.Severity, Actor: ActorOwner, Source: SourceModel,
-		Area: AreaWork, Subject: subject, Title: s.Title, Why: s.Why, Item: s.Item,
+	fix = costGate(g.Company, s, facts, fix)
+	f := Finding{Class: ClassModel, Severity: severity, Actor: ActorOwner, Source: SourceModel,
+		Area: AreaWork, Subject: subject, Title: title, Why: why, Item: item, Headline: headline,
 		Evidence: facts, Records: records, Fix: fix}
+	if s.Premise != nil {
+		premise, ok := premiseOf(*s.Premise, served)
+		if !ok {
+			return Finding{}, DropWrongFact, nil
+		}
+		f.Premise = &premise
+	}
 	f.Focus = Fingerprint(f)
-	if repeats(f, g.Rules) {
-		return Finding{}, DropRepeat
+	if repeats(f, g.Rules) || slices.ContainsFunc(g.Rules, func(r Finding) bool { return Restates(f, r) }) {
+		return Finding{}, DropRepeat, nil
 	}
 	if g.Answered[Fingerprint(f)] {
-		return Finding{}, DropAnswered
+		return Finding{}, DropAnswered, nil
 	}
-	return f, ""
+	return f, "", repaired
 }
 
 // MaxAnalystRecords bounds the records one analyst finding names.
@@ -403,6 +536,14 @@ func Fingerprint(f Finding) string {
 	ids := make([]string, 0, len(f.Records))
 	for _, r := range f.Records {
 		ids = append(ids, string(r.Kind)+":"+r.ID)
+	}
+	// A FINDING RESTING ON NUMBERS ALONE (an investigation's, about a model
+	// entry's hours) is told apart by what it counts: the keys of its facts,
+	// which stay the same however its numbers move.
+	if len(ids) == 0 {
+		for _, fact := range f.Evidence {
+			ids = append(ids, "fact:"+fact.Key)
+		}
 	}
 	slices.Sort(ids)
 	sum := sha256.Sum256([]byte(strings.Join(append([]string{string(f.Subject.Kind), f.Subject.Seat,

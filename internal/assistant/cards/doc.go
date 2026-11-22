@@ -32,7 +32,9 @@
 // record wrapping one list beside plain values (a page of a collection), is a
 // table; any other record is ONE THING, an entity of its facts and every list
 // of records it holds, because a table of its largest list misdrew it. Such an
-// entity names no dashboard kind. Bookkeeping (an epoch, a digest, a cursor,
+// entity names no dashboard kind, unless the route serving it says where the
+// record's identity is (a known record): then it is that record, its kind,
+// id, title and page read from the answer. Bookkeeping (an epoch, a digest, a cursor,
 // the state log's envelope on every read it serves) stays for the model and
 // the downloads and is left out of the drawer.
 //

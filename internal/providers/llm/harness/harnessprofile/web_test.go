@@ -122,7 +122,7 @@ func TestTheWebStanceIsHeldToItsShape(t *testing.T) {
 		overrides map[string]any
 		want      string
 	}{
-		"unknown stance": {map[string]any{"web_tools": "off"}, `web_tools "off" (want allowed or denied)`},
+		"unknown stance": {map[string]any{"web_tools": "off"}, `web_tools "off" (want allowed, denied or search)`},
 		"empty denial":   {map[string]any{"web_tools": "denied", "web_denial": map[string]any{}}, "web_denial sets neither"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -186,6 +186,27 @@ func TestAWebDenialKeepsEverySeatArgumentButTheWeb(t *testing.T) {
 			return append(out, "WebFetch", "WebSearch")
 		},
 		"pi": slices.Clone[[]string],
+		// Copilot's web tools leave the allowlist, which then names the
+		// engine's server alone (an empty one is none), and no URL is allowed.
+		"copilot": func(seat []string) []string {
+			var out []string
+			listed := false
+			for i := 0; i < len(seat); i++ {
+				switch {
+				case seat[i] == "--allow-all-urls":
+				case (seat[i] == "--available-tools" || seat[i] == "--allow-tool") && i+1 < len(seat) &&
+					(seat[i+1] == "web_fetch" || seat[i+1] == "web_search"):
+					if seat[i] == "--available-tools" && !listed {
+						out = append(out, "--available-tools", "crewlet")
+						listed = true
+					}
+					i++
+				default:
+					out = append(out, seat[i])
+				}
+			}
+			return out
+		},
 	}
 	for _, name := range BuiltinNames() {
 		p, _ := Builtin(name)

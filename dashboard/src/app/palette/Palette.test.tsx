@@ -73,7 +73,6 @@ const JANE: ViewerState = {
   assistant: "no_model",
   assistantModel: null,
   assistantReadsImages: false,
-  assistantAssigned: null,
   assistantCanAssign: false,
   chatVendors: [],
 };
@@ -476,26 +475,30 @@ describe("running now", () => {
     role,
     handle,
     activity: "working",
-    turn: {
-      turn_id: turn,
-      started_at: `2026-09-21T10:0${minute}:00Z`,
-      stage: "phase",
-      ...(item ? { work_item: { backend: "native", id: item, key: item, project: "ENG" } } : {}),
-    },
-    live_call: {
-      turn_id: turn,
-      phase: "execute",
-      round_num: 0,
-      rounds_used: 1,
-      max_rounds: 25,
-      versions: ZERO_VERSIONS,
-    },
+    turns: [
+      {
+        turn_id: turn,
+        started_at: `2026-09-21T10:0${minute}:00Z`,
+        stage: "phase",
+        ...(item ? { work_item: { backend: "native", id: item, key: item, project: "ENG" } } : {}),
+      },
+    ],
+    live_calls: [
+      {
+        turn_id: turn,
+        phase: "execute",
+        round_num: 0,
+        rounds_used: 1,
+        max_rounds: 25,
+        versions: ZERO_VERSIONS,
+      },
+    ],
   });
   const agents = [
     working("SRE", "sre", "t-late", 9),
     working("SWE", "swe", "t-early", 1, "ENG-412"),
     { id: "jane", agent_id: "a-jane", role: "Jane Founder", handle: "jane", activity: "needs" },
-    { ...working("SWE 2", "swe-2", "", 3), turn: null, live_call: null },
+    { ...working("SWE 2", "swe-2", "", 3), turns: [], live_calls: [] },
   ];
 
   /** The group a heading names, by its rendered label. */
@@ -543,7 +546,7 @@ describe("running now", () => {
     expect(before, "the highlight is on a row under the group").not.toContain("SRE");
     act(() =>
       p.store.applyAgents([
-        { agent_id: "a-swe", activity: "idle", turn: null, live_call: null },
+        { agent_id: "a-swe", activity: "idle", turns: [], live_calls: [] },
         agents[0]!,
       ] as never),
     );
@@ -1962,7 +1965,9 @@ describe("artifacts", () => {
 // ask, and handed to the frame's own control, which opens the panel with it.
 test("a typed question can be asked of the assistant, where the reader may ask", async () => {
   const ask = vi.fn();
-  const p = mount({ assistant: { open: false, unavailable: null, toggle: () => {}, ask } });
+  const p = mount({
+    assistant: { open: false, unavailable: null, toggle: () => {}, ask, askAbout: () => {} },
+  });
   await p.type("why did spend go up");
   const row = p.row("Ask Crewlet: “why did spend go up”");
   await act(async () => {
@@ -1982,7 +1987,9 @@ test("a typed question can be asked of the assistant, where the reader may ask",
 // scope.
 test("the assistant's row is last, and the artifacts scope is not what Enter takes", async () => {
   const ask = vi.fn();
-  mount({ assistant: { open: false, unavailable: null, toggle: () => {}, ask } });
+  mount({
+    assistant: { open: false, unavailable: null, toggle: () => {}, ask, askAbout: () => {} },
+  });
   const box = screen.getByRole("combobox");
   await act(async () => {
     fireEvent.change(box, { target: { value: "why did spend go up" } });

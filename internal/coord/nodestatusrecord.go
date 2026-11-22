@@ -20,9 +20,9 @@ import (
 // infra, read by the whole fleet (company-wide, current value only: a model's
 // sit-out on one node decides another node's retry).
 //
-// Not on the presence lease, which is rewritten every beat and must stay a few
-// hundred bytes (crewlet#1035); these rows grow with the configuration. A loop
-// of its own writes them on change and at least every [ReconcileInterval].
+// Not on the presence lease, which is rewritten every beat and held to
+// [MaxLeaseMetaBytes]; these rows grow with the configuration. A loop of its
+// own writes them on change and at least every [ReconcileInterval].
 //
 // The bucket's age is [StatusFreshness], four reconciles, so a dead node's
 // record ages out with no sweep (ADR-0142). It counts only while its writer
@@ -81,7 +81,43 @@ type NodeStatusRecord struct {
 	// no alarm; the count and the longest-waiting run, never how long it has
 	// waited (the package doc's "A node's runs waiting for an operator").
 	ResumesBlocked *ResumesBlocked
+
+	// Growth is what this node's growth products met at their vendors that an
+	// administrator must act on (internal/growth's Signals), read by every
+	// node's platform notices (internal/notice). Nil is a node that met
+	// nothing, or one that does not say. ON THE RECORD because only the node
+	// whose process met the vendor knows, and its clock is its own.
+	Growth *GrowthSignals
 }
+
+// GrowthSignals is a node's growth signals as its record carries them, each
+// list at most [MaxGrowthSignals] rows.
+type GrowthSignals struct {
+	ClockSkews   []GrowthClockSkew
+	Deprecations []GrowthDeprecation
+}
+
+// GrowthClockSkew is a vendor refusing this node's freshly signed token while
+// its clock is OffsetSeconds behind the node's (negative where it is ahead).
+type GrowthClockSkew struct {
+	Product, Vendor string
+	OffsetSeconds   int
+	Since           time.Time
+}
+
+// GrowthDeprecation is a vendor saying the API version a product calls is
+// deprecated, retiring on Retires (zero where it gave no date).
+type GrowthDeprecation struct {
+	Product, Version string
+	Retires, Since   time.Time
+}
+
+// MaxGrowthSignals bounds each list of [GrowthSignals] on the wire, and
+// MaxGrowthSignalBytes each name in it: internal/growth's own bounds.
+const (
+	MaxGrowthSignals     = 32
+	MaxGrowthSignalBytes = 64
+)
 
 // ResumesBlocked is what a node says of the runs of seats it holds whose
 // executor's job finished and whose last resume there failed on a condition
@@ -185,6 +221,9 @@ func (r NodeStatusRecord) Encode() ([]byte, error) {
 			"since": stamp(b.Since),
 		}
 	}
+	if g := r.Growth.meta(); g != nil {
+		out["growth"] = g
+	}
 	raw, err := json.Marshal(out)
 	if err != nil {
 		return nil, fmt.Errorf("coord: encode %s's status record: %w", r.Node, err)
@@ -231,7 +270,67 @@ func DecodeNodeStatusRecord(node string, raw []byte) (NodeStatusRecord, error) {
 		r.Infra = infraFromMeta(infra)
 	}
 	r.ResumesBlocked = resumesBlockedFromMeta(meta["resumes_blocked"])
+	r.Growth = growthFromMeta(meta["growth"])
 	return r, nil
+}
+
+// meta is the signals as the record carries them, each list bounded, nil
+// where they say nothing: absent reads as none.
+func (g *GrowthSignals) meta() map[string]any {
+	if g == nil || (len(g.ClockSkews) == 0 && len(g.Deprecations) == 0) {
+		return nil
+	}
+	skews := make([]map[string]any, 0, min(len(g.ClockSkews), MaxGrowthSignals))
+	for _, c := range g.ClockSkews[:min(len(g.ClockSkews), MaxGrowthSignals)] {
+		skews = append(skews, map[string]any{"product": textcut.Within(c.Product, MaxGrowthSignalBytes),
+			"vendor": textcut.Within(c.Vendor, MaxGrowthSignalBytes), "offset_seconds": c.OffsetSeconds,
+			"since": stamp(c.Since)})
+	}
+	deprecations := make([]map[string]any, 0, min(len(g.Deprecations), MaxGrowthSignals))
+	for _, d := range g.Deprecations[:min(len(g.Deprecations), MaxGrowthSignals)] {
+		row := map[string]any{"product": textcut.Within(d.Product, MaxGrowthSignalBytes),
+			"version": textcut.Within(d.Version, MaxGrowthSignalBytes), "since": stamp(d.Since)}
+		if !d.Retires.IsZero() {
+			row["retires"] = stamp(d.Retires)
+		}
+		deprecations = append(deprecations, row)
+	}
+	return map[string]any{"clock_skews": skews, "deprecations": deprecations}
+}
+
+// growthFromMeta reads a record's growth signals, nil where it carries none: a
+// row naming no product, or a deprecation naming no version, is dropped, and
+// each list is read to its bound.
+func growthFromMeta(v any) *GrowthSignals {
+	row, ok := v.(map[string]any)
+	if !ok {
+		return nil
+	}
+	g := &GrowthSignals{}
+	for _, item := range listFromMeta(row["clock_skews"]) {
+		m, ok := item.(map[string]any)
+		product := textcut.Within(stringFromMeta(m["product"]), MaxGrowthSignalBytes)
+		if !ok || product == "" || len(g.ClockSkews) == MaxGrowthSignals {
+			continue
+		}
+		g.ClockSkews = append(g.ClockSkews, GrowthClockSkew{Product: product,
+			Vendor:        textcut.Within(stringFromMeta(m["vendor"]), MaxGrowthSignalBytes),
+			OffsetSeconds: intFromMeta(m["offset_seconds"]), Since: instant(m["since"])})
+	}
+	for _, item := range listFromMeta(row["deprecations"]) {
+		m, ok := item.(map[string]any)
+		product := textcut.Within(stringFromMeta(m["product"]), MaxGrowthSignalBytes)
+		version := textcut.Within(stringFromMeta(m["version"]), MaxGrowthSignalBytes)
+		if !ok || product == "" || version == "" || len(g.Deprecations) == MaxGrowthSignals {
+			continue
+		}
+		g.Deprecations = append(g.Deprecations, GrowthDeprecation{Product: product, Version: version,
+			Retires: instant(m["retires"]), Since: instant(m["since"])})
+	}
+	if len(g.ClockSkews) == 0 && len(g.Deprecations) == 0 {
+		return nil
+	}
+	return g
 }
 
 // resumesBlockedFromMeta reads a record's runs waiting for an operator, nil

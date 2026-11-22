@@ -15,6 +15,8 @@ import (
 	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/delegated"
 	"github.com/crewlet/crewlet/internal/recordseal"
+	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/redact/redacttest"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -129,6 +131,60 @@ func TestAVerdictIsSealedAtRestAndOpenedByTheReader(t *testing.T) {
 	}
 	if _, _, _, err := row.Open(nil); err == nil {
 		t.Error("a verdict opened with no keyring")
+	}
+}
+
+// AN AUDIT'S TEXTS OPEN WITH NO SECRET THEY CARRIED: a verdict's subject (the
+// command decided) and its giver's reason and findings, and a command's text,
+// holding a provider's key, a password's value and a bearer token, open as
+// markers in their place, the words around them as written.
+//
+// Mutation: return any opened text as it is (the subject, the reason, a
+// finding or the command), and its credential reads back.
+func TestAnAuditsTextsOpenWithNoSecretTheyCarried(t *testing.T) {
+	t.Parallel()
+	log := openAccessLog(t)
+	node := newWriteNode(t, log, "data-1")
+	sample := map[string]string{}
+	for _, shape := range redacttest.Shapes() {
+		sample[shape.Name] = shape.Sample
+	}
+	text := "curl -H 'x-api-key: " + sample["anthropic-key"] + "' https://example.com/health"
+	v := delegateVerdict("sre", uuid.NewString(), "reviewer", text)
+	v.Reason = "it echoes " + sample["anthropic-key"] + " to the log"
+	v.Findings = []string{"the unit sets " + sample["password"], "it sends Authorization: Bearer " + sample["jwt"]}
+	if _, err := node.writer.Verdict(t.Context(), verdictCall(writerClock, v), v); err != nil {
+		t.Fatalf("record the verdict: %v", err)
+	}
+	if _, err := node.writer.Ran(t.Context(), engineCall(), command("sre", uuid.NewString(), text)); err != nil {
+		t.Fatalf("record the command: %v", err)
+	}
+	page, err := node.reader().Verdicts(t.Context(), accessdomain.VerdictQuery{Handle: "sre"}, staleRead)
+	if err != nil || len(page.Rows) != 1 {
+		t.Fatalf("the verdicts answer %+v, %v", page, err)
+	}
+	subject, reason, findings, err := page.Rows[0].Open(node.sealer)
+	if err != nil || len(findings) != 2 {
+		t.Fatalf("the row opens to %q, %q, %q, %v; want two findings", subject, reason, findings, err)
+	}
+	cmds, err := node.reader().Commands(t.Context(), accessdomain.AuditQuery{Handle: "sre"}, staleRead)
+	if err != nil || len(cmds.Rows) != 1 {
+		t.Fatalf("the commands answer %+v, %v", cmds, err)
+	}
+	ran, err := cmds.Rows[0].Open(node.sealer)
+	if err != nil {
+		t.Fatalf("the command does not open: %v", err)
+	}
+	values := []string{sample["anthropic-key"], sample["anthropic-key"], sample["anthropic-key"],
+		strings.TrimPrefix(sample["password"], "password: "), sample["jwt"]}
+	for i, opened := range append([]string{subject, ran, reason}, findings...) {
+		if strings.Contains(opened, values[i]) || !strings.Contains(opened, redact.Marker) {
+			t.Errorf("an audit's text opens as %q; want a marker in place of the secret", opened)
+		}
+	}
+	if !strings.HasPrefix(reason, "it echoes ") || !strings.HasSuffix(reason, " to the log") ||
+		!strings.HasPrefix(ran, "curl -H ") || !strings.HasSuffix(subject, " https://example.com/health") {
+		t.Errorf("the texts open as %q, %q, %q; want the words around the secret as written", subject, ran, reason)
 	}
 }
 

@@ -66,6 +66,9 @@ type world struct {
 	// the machine's own as a node's does.
 	memory        int64
 	machineMemory bool
+	// reserve is what every boot's pool keeps beside Gitlet
+	// (gitproc.Options.Reserve) of a node of the memory; nil keeps nothing.
+	reserve func(memory int64) int64
 }
 
 // newWorld prepares a fresh cache directory and a real pool over its HOME.
@@ -94,7 +97,7 @@ func (w *world) prepare(t testing.TB, dir string) {
 	if w.machineMemory {
 		memory = 0
 	}
-	w.layout, w.pool = layout, newPoolOf(t, layout, w.gitPath, w.processes, w.transfers, memory)
+	w.layout, w.pool = layout, newPoolOf(t, layout, w.gitPath, w.processes, w.transfers, memory, w.reserve)
 }
 
 // reboot prepares w's directory again: the boot's Prepare.
@@ -102,15 +105,16 @@ func (w *world) reboot(t testing.TB) { w.prepare(t, w.layout.Dir) }
 
 // newPool is a real pool over layout's HOME.
 func newPool(t testing.TB, layout cache.Layout) *gitproc.Pool {
-	return newPoolOf(t, layout, "", 0, 0, 1<<40)
+	return newPoolOf(t, layout, "", 0, 0, 1<<40, nil)
 }
 
 // newPoolOf is a pool over layout's HOME running the git at path ("" is the
 // one on PATH, held to the node floor: gittest.RequireNode) with processes
 // slots (0 is two) and transfers transfer slots (0 is the pool's default), on a
-// node of memory bytes (0 is the machine's own, read as a node's is).
+// node of memory bytes (0 is the machine's own, read as a node's is) keeping
+// reserve(memory) of it beside Gitlet (nil keeps nothing).
 func newPoolOf(t testing.TB, layout cache.Layout, path string, processes, transfers int,
-	memory int64) *gitproc.Pool {
+	memory int64, reserve func(int64) int64) *gitproc.Pool {
 	t.Helper()
 	if path == "" {
 		gittest.RequireNode(t)
@@ -118,8 +122,12 @@ func newPoolOf(t testing.TB, layout cache.Layout, path string, processes, transf
 	if processes == 0 {
 		processes = 2
 	}
-	pool, err := gitproc.New(t.Context(), gitproc.Options{Path: path, Home: layout.Home, MaxProcesses: processes,
-		MaxTransfers: transfers, Memory: memory})
+	o := gitproc.Options{Path: path, Home: layout.Home, MaxProcesses: processes, MaxTransfers: transfers,
+		Memory: memory}
+	if reserve != nil {
+		o.Reserve = func(memory int64, _ int) int64 { return reserve(memory) }
+	}
+	pool, err := gitproc.New(t.Context(), o)
 	if err != nil {
 		t.Fatalf("gitproc.New over %s: %v", layout.Home, err)
 	}

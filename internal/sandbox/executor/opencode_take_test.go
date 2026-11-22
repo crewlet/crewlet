@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
@@ -57,7 +58,7 @@ func TestAnOpenCodeSessionIsPackedOnDemandAndKeptScrubbed(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "export-messages"), []byte(messages), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Pack: true,
+	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), Pack: true,
 		Scrub: []string{plantedSecret}, MaxBytes: takeBound})
 	if err != nil || taken.Body == nil {
 		t.Fatalf("TakeSession = %+v, %v", taken, err)
@@ -178,7 +179,7 @@ func TestAnEndedOpenCodeJobsSessionIsTakenAsItsScriptExportedIt(t *testing.T) {
 	// ([sandbox.SessionTake.Pack] false).
 	askEnd(t, runner, b, handle)
 	awaitOver(t, runner, b, handle, promptEnd, "the end gives its client five seconds")
-	res, err := runner.Collect(t.Context(), b, handle)
+	res, err := runner.Collect(t.Context(), b, handle, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -186,7 +187,7 @@ func TestAnEndedOpenCodeJobsSessionIsTakenAsItsScriptExportedIt(t *testing.T) {
 		t.Fatalf("the ended job collected as ended %q with capture %+v; want it ended on request, its "+
 			"session exported:\n%s", res.JobEnd, res.Captured, boxFile(t, b, paths(b).Err()))
 	}
-	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{MaxBytes: takeBound})
+	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), MaxBytes: takeBound})
 	if err != nil || taken.Body == nil {
 		t.Fatalf("TakeSession of the ended job = %+v, %v", taken, err)
 	}

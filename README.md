@@ -30,50 +30,41 @@ learning from what it did, and escalating to the humans in the org chart when st
 
 ## The org chart is the execution graph
 
-Identity, delegation, communication, and knowledge are all scoped by where a seat
-sits in the hierarchy. The chart you draw is the graph the engine runs.
+Identity, delegation, communication and knowledge are scoped by a seat's place in the hierarchy. The chart you draw is the graph the engine runs.
 
 <table>
 <tr>
 <td width="33%" align="center" valign="top">
 <img src="docs/assets/hierarchy.svg" width="64" alt=""><br>
 <b>The org chart runs the work</b><br>
-<sub>Departments, teams, and seats nest to any depth. Leads assign work by reasoning
-about their reports — not by a routing algorithm.</sub>
+<sub>Departments, teams and seats nest to any depth. Leads assign work by reasoning about their reports, not by a routing algorithm.</sub>
 </td>
 <td width="33%" align="center" valign="top">
 <img src="docs/assets/company-as-code.svg" width="64" alt=""><br>
 <b>Company as code</b><br>
-<sub>The whole company is versioned YAML the engine stores and serves — live-editable
-through a REST API, with no restart for role, provider, or integration changes.</sub>
+<sub>Versioned YAML the engine stores and serves, live-editable through a REST API; role, provider and integration changes need no restart.</sub>
 </td>
 <td width="33%" align="center" valign="top">
 <img src="docs/assets/turn-engine.svg" width="64" alt=""><br>
 <b>Execute → Review</b><br>
-<sub>One agentic loop decides and acts with everything it has read still in front of
-it, then an adversarial reviewer judges the record — and loops it back when the
-work isn't done.</sub>
+<sub>One agentic loop decides and acts with everything it has read in front of it; an adversarial reviewer judges the record and loops it back if the work isn't done.</sub>
 </td>
 </tr>
 <tr>
 <td width="33%" align="center" valign="top">
 <img src="docs/assets/code-sandbox.svg" width="64" alt=""><br>
 <b>Agents that ship code</b><br>
-<sub>Every agent seat works as its harness's own run in a box — on your host, in a
-container or in a remote VM — and an engineer seat opens the merge request under
-its own identity, not yours.</sub>
+<sub>Every agent seat is its harness's own run in a box (your host, a container or a remote VM); an engineer seat opens the merge request under its own identity, not yours.</sub>
 </td>
 <td width="33%" align="center" valign="top">
 <img src="docs/assets/knowledge.svg" width="64" alt=""><br>
 <b>Memory that compounds</b><br>
-<sub>Agents search the team knowledge base at query time, keep a private diary, recall
-similar past turns, and synthesize reusable skills.</sub>
+<sub>Agents search the team knowledge base at query time, keep a private diary, recall similar past turns and synthesize reusable skills.</sub>
 </td>
 <td width="33%" align="center" valign="top">
 <img src="docs/assets/human-in-loop.svg" width="64" alt=""><br>
 <b>Humans hold seats too</b><br>
-<sub>Put yourself in the chart. Human seats lead units and receive escalations on the
-surfaces you already use.</sub>
+<sub>Human seats lead units and receive escalations on the surfaces you already use.</sub>
 </td>
 </tr>
 </table>
@@ -82,8 +73,7 @@ surfaces you already use.</sub>
 
 ## How a turn works
 
-A trigger — a chat message, a work-item webhook, a schedule — wakes exactly one
-agent, which runs a two-stage turn:
+A trigger (a chat message, a work-item webhook, a schedule) wakes exactly one agent, which runs a two-stage turn:
 
 ```mermaid
 flowchart LR
@@ -93,21 +83,13 @@ flowchart LR
     R -->|self_iterate| E
 ```
 
-Deciding and acting are ONE conversation, so a tool result the agent read is still
-in front of it when it acts on that result — and it discovers the tools it needs
-as it goes instead of naming them in advance. The reviewer is a separate, narrower
-prompt on its own model — a frontier model to work, a cheap one to check. See
-[Turn Engine](docs/concepts/turn-engine.md).
+Deciding and acting are ONE conversation, so a tool result the agent read is still in front of it when it acts, and it discovers tools as it goes instead of naming them in advance. The reviewer is a separate, narrower prompt on its own model: a frontier model to work, a cheap one to check. See [Turn Engine](docs/concepts/turn-engine.md).
 
 ---
 
 ## Quickstart
 
-There is no infrastructure to bring up. Crewlet is one binary: it embeds its
-event stream (a NATS JetStream server) and its database is two local files it
-creates. Its models run through the **harness** each vendor ships — Claude
-Code, Codex or OpenCode, installed beside it — so the vendor's own harness
-drives every model, on your plan or your key. Describe a company and run it:
+No infrastructure to bring up. Crewlet is one binary: it embeds its event stream (a NATS JetStream server) and keeps its database in two local files it creates. Models run through the **harness** each vendor ships (Claude Code, Codex or OpenCode, installed beside it), on your plan or your key. Describe a company and run it:
 
 ```bash
 go install github.com/crewlet/crewlet/cmd/crewlet@latest
@@ -124,24 +106,9 @@ crewlet llm doctor     # the model end to end: the harness, its sign-in, a real 
 crewlet run            # reads ./crewlet.yaml (Tier A) and ./company.yaml (Tier B)
 ```
 
-Those two filenames are the defaults, so nothing needs naming when they sit in
-the working directory; `-config` and `-company` point elsewhere. The Tier A
-file is the short one — where this node's store, stream and API live — and the
-[quickstart](docs/getting-started/quickstart.md) writes it out in full. Four
-things in it are not optional on a node that serves the dashboard: the
-**keyring** (`secrets.keys`, which signs every state-log record and every
-session cookie — every node needs it), `api.external_url`, the node's admin
-posture `api.auth.admin` (`serve` or `refuse`), and at least one
-`api.auth.tokens` entry — the token
-above, which is how the first person is invited onto their seat.
+Those filenames are the defaults; `-config` and `-company` point elsewhere. The Tier A file is the short one (where this node's store, stream and API live); the [quickstart](docs/getting-started/quickstart.md) writes it out in full. A node that serves the dashboard needs four things in it: the **keyring** (`secrets.keys`, which signs every state-log record and session cookie; every node needs it), `api.external_url`, the admin posture `api.auth.admin` (`serve` or `refuse`), and at least one `api.auth.tokens` entry (the token above, which invites the first person onto their seat).
 
-The company file is a **bootstrap seed**: it starts a company that does not
-exist yet — in the node's store or anywhere in its fleet — and is ignored once
-one does, so a restart never reverts a change made live.
-The store is the source of truth at runtime. To change a running fleet, run
-`crewlet config import company.yaml` — it goes through the node's API and every
-node converges with no restart. To make the file win on a restart instead, pass
-`-import-company`.
+The company file is a **bootstrap seed**: it starts a company that does not exist yet, in the node's store or anywhere in its fleet, and is ignored once one does, so a restart never reverts a live change. The store is the source of truth at runtime. To change a running fleet, run `crewlet config import company.yaml`: it goes through the node's API and every node converges with no restart. To make the file win on a restart instead, pass `-import-company`.
 
 A four-agent company, with a seat for you, is about 40 lines of YAML:
 
@@ -188,64 +155,34 @@ units:
         goal: "Implement features, write tests, ship quality code"
 ```
 
-`manages:` and `lead:` name a seat by its **handle** and a unit by its **key**
-(`id`), never by a display name, and a handle is the seat's identity for good
-([ADR-0013](adr/0013-a-seats-identity-is-derived.md)). Every person holds a
-`kind: human` seat ([ADR-0032](adr/0032-every-person-holds-a-human-seat.md)) —
-you join on yours from the org chart, invited under the founder token — so a
-company that declares none admits nobody.
+`manages:` and `lead:` name a seat by its **handle** and a unit by its **key** (`id`), never a display name, and a handle is the seat's identity for good ([ADR-0013](adr/0013-a-seats-identity-is-derived.md)). Every person holds a `kind: human` seat ([ADR-0032](adr/0032-every-person-holds-a-human-seat.md)) and joins on it from the org chart, invited under the founder token, so a company that declares none admits nobody.
 
-The dashboard and webhook API come up with the engine, and the dashboard
-opens on **Home**: how the company is, and the decisions waiting on you. The full
-[Quickstart](docs/getting-started/quickstart.md) walks through watching an agent's
-first turn with no integrations at all, then wiring in the real ones.
+The dashboard and webhook API come up with the engine; the dashboard opens on **Home**: how the company is, and the decisions waiting on you. The full [Quickstart](docs/getting-started/quickstart.md) watches an agent's first turn with no integrations, then wires in real ones.
 
-> **Want a whole company to run?** A complete seven-seat reference org ships
-> in `examples/`: `nimbus.company.yaml` with its Tier A file
-> `nimbus.config.yaml`, and it needs **no outside account**. Its chat, work
-> items, pages and code are the engine's own — [Chatlet](docs/concepts/chatlet.md),
-> Worklet, Doclet and [Gitlet](docs/concepts/gitlet.md) — and its model is
-> Claude Code on the Claude plan you already pay for, every seat running that
-> same harness as its own agentic run in a box on the engine host, on that same
-> login. Each vendor is a block added to a copy of it, on its own
-> [integration page](docs/integrations/). Every setting carries its reasoning
-> in a comment.
+> **Want a whole company to run?** A seven-seat reference org ships in `examples/`: `nimbus.company.yaml` with its Tier A file `nimbus.config.yaml`, needing **no outside account**. Its chat, work items, pages and code are the engine's own ([Chatlet](docs/concepts/chatlet.md), Worklet, Doclet, [Gitlet](docs/concepts/gitlet.md)), and its model is Claude Code on your Claude plan, every seat running that harness as its own run in a box on the engine host, on that login. Add each vendor as a block in a copy of it, per its [integration page](docs/integrations/). Every setting carries its reasoning in a comment.
 
-> **Rather not write it by hand?** An AI assistant can interview you and author
-> both files, checking its own work against the shipped JSON Schema — see
-> [Authoring with an AI assistant](docs/getting-started/ai-authoring.md) for a
-> step-by-step walkthrough.
+> **Rather not write it by hand?** An AI assistant can interview you and author both files, checking against the shipped JSON Schema: see [Authoring with an AI assistant](docs/getting-started/ai-authoring.md).
 
 ---
 
 ## Plug in your stack
 
-Crewlet is the engine; the surfaces your agents work on are yours to choose — see
-[Choosing your stack](docs/getting-started/choosing-your-stack.md).
+Crewlet is the engine; you choose the surfaces your agents work on: [Choosing your stack](docs/getting-started/choosing-your-stack.md).
 
 **Routed end to end** — a delivery from one of these wakes the seat it concerns:
 
 | | Options |
 |---|---|
-| **LLM** | Every model through the vendor's own [harness](docs/concepts/llm-backends.md) — Claude Code for Anthropic's models (on a Claude plan or an API key), Codex for OpenAI's, **OpenCode for open models** on OpenRouter, a hosted provider or your own server. Claude Code or OpenCode runs each seat's executor; Codex can serve a seat's reviewer, workers and side passes |
-| **Tracker** | [Jira](docs/integrations/jira.md) — Cloud or Data Center — or [GitLab](docs/integrations/gitlab.md) / [GitHub](docs/integrations/github.md) issues |
-| **Knowledge base** | [Confluence](docs/integrations/confluence.md) — searched at turn start and on demand, run as the asking seat |
-| **Code host** | [Gitlet, the engine's own](docs/concepts/gitlet.md) — repositories cloned and pushed over HTTPS, their changes reviewed in the dashboard, and it can run beside a vendor — or [GitLab](docs/integrations/gitlab.md), gitlab.com or self-hosted, or [GitHub](docs/integrations/github.md), github.com or Enterprise Server |
-| **Chat** | [Chatlet, the engine's own](docs/concepts/chatlet.md) — rooms in the dashboard, and the default where no vendor is declared — or [Mattermost](docs/integrations/mattermost.md), self-hosted, one bot identity per agent, or [Slack](docs/integrations/slack.md), one app per agent |
-| **Code sandbox** | [The engine host](docs/concepts/code-sandbox.md), as a process tree or a container; Claude Code or OpenCode as the harness |
+| **LLM** | Every model through the vendor's own [harness](docs/concepts/llm-backends.md): Claude Code for Anthropic's (Claude plan or API key), Codex for OpenAI's, **OpenCode for open models** on OpenRouter, a hosted provider or your own server. Claude Code, OpenCode, Copilot or Kimi Code runs each seat's executor; Codex can serve a seat's reviewer, workers and side passes |
+| **Tracker** | [Jira](docs/integrations/jira.md) (Cloud or Data Center) or [GitLab](docs/integrations/gitlab.md) / [GitHub](docs/integrations/github.md) issues |
+| **Knowledge base** | [Confluence](docs/integrations/confluence.md) (searched at turn start and on demand, as the asking seat) |
+| **Code host** | [Gitlet, the engine's own](docs/concepts/gitlet.md) (clone and push over HTTPS, changes reviewed in the dashboard, can run beside a vendor), [GitLab](docs/integrations/gitlab.md) (gitlab.com or self-hosted) or [GitHub](docs/integrations/github.md) (github.com or Enterprise Server) |
+| **Chat** | [Chatlet, the engine's own](docs/concepts/chatlet.md) (dashboard rooms; the default where no vendor is declared), [Mattermost](docs/integrations/mattermost.md) (self-hosted, one bot identity per agent) or [Slack](docs/integrations/slack.md) (one app per agent) |
+| **Code sandbox** | [The engine host](docs/concepts/code-sandbox.md), as a process tree or a container, with Claude Code, OpenCode, GitHub Copilot CLI or Kimi Code as the harness |
 
-The knowledge base is **single-homed** — one searcher per company, because two would
-make an agent's answer to "what do we already know about this" depend on which one was
-asked. It sits behind the backend-neutral `knowledge.Searcher` seam, so a second
-backend is a new implementation rather than a rewrite of everything that searches.
-Everything else composes: a company can run GitHub beside GitLab, or Slack beside
-Mattermost, which is what a migration and an open-source presence both look like.
+The knowledge base is **single-homed**: one searcher per company, because two would make the answer to "what do we already know about this" depend on which was asked. It sits behind the backend-neutral `knowledge.Searcher` seam, so a second backend is a new implementation. Everything else composes: a company can run GitHub beside GitLab, or Slack beside Mattermost (a migration, an open-source presence).
 
-Each agent's own account at an integration (a bot, a service account or an
-app), its access and its token are the engine's: turn the agent on, with its
-access, on the integration's Agents tab, and the reconcile loop creates the
-account and seals the token under a name it derives for the seat. What is left
-for the command line is company-wide, such as the webhooks, and checks:
+Each agent's account at an integration (bot, service account or app), its access and its token are the engine's: turn the agent on, with its access, on the integration's Agents tab, and the reconcile loop creates the account and seals the token under a name it derives for the seat. The command line keeps what is company-wide, such as webhooks, and checks:
 
 ```bash
 crewlet gitlab     provision company.yaml -public-url <url> -env-file .env
@@ -254,37 +191,13 @@ crewlet github     provision company.yaml -public-url <url> -env-file .env
 crewlet mattermost doctor    company.yaml
 ```
 
-Each run records what it mints where you send it — an env file (`-env-file`),
-the fleet's encrypted secret store (`-secret-store`) or your terminal
-(`-print`) — and a run that would mint takes exactly one of the three. It reads
-the company's values the way the engine does, the secret store before the
-environment: through the running engine, with `CREWLET_API_TOKEN` set to one
-of its Tier A tokens carrying `admin`, or through the running node `-api URL`
-names — and with the engine stopped from the fleet's store itself, which the
-command reaches through the node's own broker or the external one. A member of
-a cluster whose engine is stopped cannot reach the store alone, so a run there
-that reads it is refused before it changes anything, naming `-api`: every
-`gitlab`, `github` and `jira` run, its `-dry-run` included, and a `mattermost`
-or `slack` run with something to provision. A `mattermost` or `slack` run with
-`-dry-run` or nothing to provision reads nothing of the store and runs on any
-node
-([where a command reads the company's values](docs/reference/cli.md#where-a-command-reads-the-companys-values)).
-Beside a running engine, `-secret-store` is the sink the engine reads with no
-restart, at its next configuration apply; an env file reaches it only when it
-restarts from a shell that sourced the file.
+Each run records what it mints where you send it: an env file (`-env-file`), the fleet's encrypted secret store (`-secret-store`) or your terminal (`-print`); a run that would mint takes exactly one. It reads the company's values as the engine does, the secret store before the environment: through the running engine with `CREWLET_API_TOKEN` set to a Tier A token carrying `admin`, or through the running node `-api URL` names; with the engine stopped, from the fleet's store itself, reached through the node's own broker or the external one. A member of a cluster whose engine is stopped cannot reach the store alone, so a run that reads it is refused before changing anything, naming `-api`: every `gitlab`, `github` and `jira` run (`-dry-run` included), and a `mattermost` or `slack` run with something to provision. A `mattermost` or `slack` run with `-dry-run` or nothing to provision reads nothing of the store and runs on any node ([where a command reads the company's values](docs/reference/cli.md#where-a-command-reads-the-companys-values)). Beside a running engine, `-secret-store` is the sink the engine reads with no restart, at its next configuration apply; an env file reaches it only when it restarts from a shell that sourced the file.
 
-What each command can actually do differs by what the vendor allows: Mattermost and
-GitLab create an account per seat and mint its token; Jira and GitHub issue no
-credential on a provisioner's behalf, so those runs report which account each seat's
-own credential authenticates as and register the webhooks.
+What each command can do depends on the vendor: Mattermost and GitLab create an account per seat and mint its token; Jira and GitHub issue no credential for a provisioner, so those runs report which account each seat's own credential authenticates as and register the webhooks.
 
-Mattermost takes no URL because nothing has to reach the engine: it holds one
-outbound websocket per agent seat instead of receiving webhooks, so that loop
-runs behind NAT with no tunnel.
+Mattermost takes no URL: it holds one outbound websocket per agent seat instead of receiving webhooks, so it runs behind NAT with no tunnel.
 
-Add `-secret-store` and the minted credentials go straight into the encrypted
-[secret store](docs/concepts/secret-store.md) the engine reads `${VAR}` from —
-no env file to source, no shell to be in.
+With `-secret-store`, minted credentials go straight into the encrypted [secret store](docs/concepts/secret-store.md) the engine reads `${VAR}` from: no env file to source.
 
 ---
 
@@ -306,16 +219,9 @@ flowchart LR
     API --> DB
 ```
 
-That is the glance; **[Architecture](docs/concepts/architecture.md)** draws the
-same engine at six zoom levels — the process boundary, one node's interior, the
-path a trigger takes across a fleet, the path a turn takes, where every table
-and bucket lives, and what changes when a second node appears.
+That is the glance; **[Architecture](docs/concepts/architecture.md)** draws the engine at six zoom levels: the process boundary, one node's interior, a trigger's path across a fleet, a turn's path, where every table and bucket lives, and what changes with a second node.
 
-Agents are callback-driven: messages on an agent's inbox topic invoke its handler,
-and events that piled up while it was busy are batched into a single digest turn.
-Config lives in two tiers — an ops-owned bootstrap file on disk, and a versioned,
-live-editable company document in the store that can be
-[encrypted at rest](docs/concepts/configuration.md#secrets) as a single opaque blob.
+Agents are callback-driven: messages on an agent's inbox topic invoke its handler, and events that pile up while it is busy are batched into one digest turn. Config has two tiers: an ops-owned bootstrap file on disk, and a versioned, live-editable company document in the store that can be [encrypted at rest](docs/concepts/configuration.md#secrets) as a single opaque blob.
 
 ---
 
@@ -378,24 +284,23 @@ Full reference: [CLI](docs/reference/cli.md) ·
 
 ## Contributing
 
-Issues and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers the
-dev setup, conventions, and the checks CI runs:
+Issues and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers dev setup, conventions and the checks CI runs:
 
 ```bash
 make build    # go build ./...
 make check    # every gate CI runs on a pull request, which CONTRIBUTING.md
               #   lists under "Running tests and lint"; its first run on a
-              #   machine builds the pinned gits from source and fetches the
-              #   two pinned Chromiums (about 0.8 GB on disk)
+              #   machine builds the pinned gits from source, fetches the two
+              #   pinned Chromiums and the floor Node, and installs the
+              #   Playwright tree (about 1 GB on disk)
 make help     # everything else
 ```
 
-Commits are signed off (`git commit -s`), which certifies the
-[DCO](DCO) over them — CI checks it.
+Commits are signed off (`git commit -s`), certifying the [DCO](DCO); CI checks it.
 
-Releases are cut by pushing a `v*` tag — see [RELEASING.md](RELEASING.md).
+Releases are cut by pushing a `v*` tag; see [RELEASING.md](RELEASING.md).
 
-Security issues: please report them privately — see [SECURITY.md](SECURITY.md).
+Security issues: please report them privately; see [SECURITY.md](SECURITY.md).
 
 ## License
 

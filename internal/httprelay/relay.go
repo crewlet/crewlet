@@ -52,6 +52,10 @@ type Options struct {
 	// Handler answers an admitted request, exactly as it would one handed
 	// to it directly.
 	Handler http.Handler
+
+	// Answers is the node's answer budget an OPEN and a frame hold their
+	// weight of while they are opened and answered ([bridgeWeight]).
+	Answers *queue.AnswerBudget
 }
 
 // Relay is one process's end of a relay: the holder of what it serves, and the
@@ -63,6 +67,7 @@ type Relay struct {
 	owner   string
 	admit   func(*http.Request) Verdict
 	handler http.Handler
+	answers *queue.AnswerBudget
 	// time is the clock every instant and timer of the relay is read from
 	// ([timeSource]), and clock the durations it runs ([clocks]).
 	time  timeSource
@@ -93,6 +98,8 @@ func New(opts Options) (*Relay, error) {
 		return nil, errors.New("httprelay: a relay needs its name, its node and its incarnation")
 	case opts.Admit == nil || opts.Handler == nil:
 		return nil, errors.New("httprelay: a relay needs what admits a request and what answers it")
+	case opts.Answers == nil:
+		return nil, errors.New("httprelay: a relay needs the node's answer budget")
 	}
 	opens, err := signedask.New[openRequest, openReply](opts.Name+".open", opts.Keyring)
 	if err != nil {
@@ -104,7 +111,7 @@ func New(opts Options) (*Relay, error) {
 	}
 	return &Relay{
 		fabric: opts.Fabric, name: opts.Name, node: opts.Node, owner: opts.Owner,
-		admit: opts.Admit, handler: opts.Handler, time: wallTime{}, clock: defaultClocks,
+		admit: opts.Admit, handler: opts.Handler, answers: opts.Answers, time: wallTime{}, clock: defaultClocks,
 		opens: opens, frames: frames, taken: signedask.NewGuard(),
 		served: map[string]*exchange{}, ended: map[string]time.Time{},
 	}, nil
@@ -146,6 +153,11 @@ func (rl *Relay) Serve(ctx context.Context) (queue.Unsubscribe, error) {
 
 // answer is the holder's side of the node subject.
 func (rl *Relay) answer(ctx context.Context, raw []byte) ([]byte, error) {
+	release, err := rl.hold(ctx, raw, rl.clock.openWait)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	admitted := rl.opens.Admit(raw, rl.taken, rl.time.Now())
 	switch admitted.Disposition {
 	case signedask.Admitted:
@@ -405,4 +417,23 @@ func (rl *Relay) finish(ex *exchange) {
 	delete(rl.served, ex.id)
 	rl.ended[ex.id] = rl.time.Now()
 	rl.mu.Unlock()
+}
+
+// bridgeWeight is what an OPEN or a frame of raw sealed bytes holds of the node's
+// answer budget ([queue.AnswerBudget]) while it is opened and answered: three
+// times raw, from the code (the message, its opened JSON and the body it
+// decodes to, the last two each three quarters of it), at most 16 MiB for a
+// message at the broker's ceiling.
+func bridgeWeight(raw []byte) int64 { return 3 * max(int64(len(raw)), 1) }
+
+// hold takes raw's weight of the node's answer budget, waiting no longer than
+// wait, the round trip its sender allows before it sends it again.
+func (rl *Relay) hold(ctx context.Context, raw []byte, wait time.Duration) (func(), error) {
+	waitCtx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	release, err := rl.answers.Acquire(waitCtx, queue.AnswerBridge, bridgeWeight(raw))
+	if err != nil {
+		return nil, fmt.Errorf("httprelay: %w", err)
+	}
+	return release, nil
 }

@@ -27,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracing"
@@ -110,9 +111,8 @@ type turnTelemetry struct {
 	// cut under two tokens. Empty on a resume, which carries the parked task.
 	task string
 
-	// title is what a person reads the turn's work by ([turnctx.Turn.Title]):
-	// the ask, else the trigger's feed line; on a resume, the line its run is
-	// already listed under.
+	// title is what a person reads the turn's work by ([turnTitle]); on a
+	// resume, the line its run is already listed under.
 	title string
 
 	// senders is who spoke to this seat ([sendersSpoken] over the
@@ -307,12 +307,7 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 		t.trigger = types.DescribeTrigger(ev)
 		break
 	}
-	// The ask, or where the trigger stated none (an attachment-only message)
-	// its feed line, so a run the turn launches is never listed as nothing.
-	t.title = t.ask
-	if t.title == "" {
-		t.title = t.trigger.Summary
-	}
+	t.title = turnTitle(t.ask, t.trigger)
 	// THE ITEM, from the same first event the trigger is described from,
 	// and a fresh set for what the turn is about to write.
 	t.workItem, t.workItemBasis = workItemOf(req)
@@ -502,10 +497,11 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		// The LAST phase's model, which a one-line row names; the per-phase
 		// models ride beside it, since a fallback chain can run executor and
 		// reviewer on two different models.
-		Model:          lastModel(spend),
-		Trigger:        t.trigger,
-		Prompt:         t.trigger.Summary,
-		Response:       res.Artifact,
+		Model:   lastModel(spend),
+		Trigger: t.trigger,
+		Prompt:  t.trigger.Summary,
+		// Redacted as the phases' records hold it ([planSummary]).
+		Response:       redact.Secrets(res.Artifact),
 		InputTokens:    spend.InputTokens,
 		OutputTokens:   spend.OutputTokens,
 		TotalTokens:    spend.Total(),
@@ -542,7 +538,7 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 	if err != nil {
 		// Bounded so the event is publishable (events.MaxDiagnosticBytes):
 		// a refused event is dropped whole.
-		summary.Error = events.ClipDiagnostic(err.Error())
+		summary.Error = events.Diagnostic(err.Error())
 		// The phase's own classifier, so a spent plan and a revoked login
 		// are not the same word on the Turn screen.
 		summary.ErrorKind = runner.ErrorKind(err)
@@ -562,7 +558,7 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		// kind is not read as "error"; the error's text, naming phase and round,
 		// is kept.
 		if summary.Error == "" {
-			summary.Error = events.ClipDiagnostic(res.Breach.Detail)
+			summary.Error = events.Diagnostic(res.Breach.Detail)
 		}
 		summary.ErrorKind = string(res.Breach.Kind)
 	}
@@ -582,7 +578,9 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		EndedAt:       ended,
 		DurationMS:    int(ended.Sub(t.startedAt) / time.Millisecond),
 		TaskSummary:   t.trigger.Summary,
-		Ask:           t.unspokenAsk(),
+		// REDACTED, on the record alone: the turn-start judgements read the
+		// ask part by part (askParts) and the park keeps it as it came.
+		Ask:           redact.Secrets(t.unspokenAsk()),
 		AskProvenance: t.unspokenAskLabel(),
 		PlanSummary:   planSummary(res),
 		// ReviewOutcome is the reviewer's decision, which is the turn's
@@ -601,7 +599,7 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		Acted:           actedOutside(calls, deliverySurface(e.ToolsFor(t.handle))),
 		PickupAnswer:    res.PickupAnswer,
 		SkillsUsed:      t.skills,
-		Interactions:    t.interactions,
+		Interactions:    recordedInteractions(t.interactions),
 		ConversationKey: t.convKey,
 	}
 	if !res.Suspended && t.measuredWhole() {
@@ -730,7 +728,7 @@ func (e *Engine) publishFailure(ctx context.Context, t turnTelemetry,
 			Agent:    t.agentID,
 			RoleName: t.role,
 			Kind:     res.Breach.Kind,
-			Detail:   events.ClipDiagnostic(res.Breach.Detail),
+			Detail:   events.Diagnostic(res.Breach.Detail),
 			TurnID:   t.runID,
 			WorkKey:  t.workKey,
 		}, t.trace), t.role)
@@ -770,7 +768,7 @@ func (e *Engine) publishFailure(ctx context.Context, t turnTelemetry,
 			ProviderChain: exhausted.Attempted,
 			AttemptCount:  len(exhausted.Attempted),
 			LastErrorKind: llm.KindOf(exhausted.Err).String(),
-			LastError:     events.ClipDiagnostic(exhausted.Error()),
+			LastError:     events.Diagnostic(exhausted.Error()),
 			TurnID:        t.runID,
 			WorkKey:       t.workKey,
 		}, t.trace), t.role)
@@ -809,7 +807,33 @@ func (t turnTelemetry) unspokenAskLabel() *provenance.Label {
 	return t.askLabel
 }
 
-// planSummary is the reviewer's account of the turn, or the artifact.
+// turnTitle is what a person reads a turn's work by ([turnctx.Turn.Title]):
+// its ask REDACTED, or where the trigger stated none (an attachment-only
+// message) its feed line, which the descriptor redacted
+// ([types.DescribeTrigger]), so a run the turn launches is never listed as
+// nothing. Every copy is a person's (the run's row and label, its
+// announcement, its session's ask), and the model reads its brief instead.
+func turnTitle(ask string, trigger types.Trigger) string {
+	if ask != "" {
+		return redact.Secrets(ask)
+	}
+	return trigger.Summary
+}
+
+// recordedInteractions is the turn's interactions as its record keeps them,
+// each body REDACTED, in a copy: the park keeps the turn's own as they came,
+// and the model read the bodies through the trigger, never through these.
+// Whole, as the record carries them uncut.
+func recordedInteractions(in []types.InboundInteraction) []types.InboundInteraction {
+	out := slices.Clone(in)
+	for i := range out {
+		out[i].Body = redact.Secrets(out[i].Body)
+	}
+	return out
+}
+
+// planSummary is the reviewer's account of the turn, or the artifact,
+// REDACTED, as the turn's answer on its record is: both are the model's words.
 //
 // The learning subsystem reads this to build an episode. The LAST review's
 // completed-work prose is the better source where it exists — it is the
@@ -817,9 +841,9 @@ func (t turnTelemetry) unspokenAskLabel() *provenance.Label {
 // a turn that never reached Review has instead.
 func planSummary(res turn.Result) string {
 	if res.LastReview != nil && res.LastReview.CompletedWork != "" {
-		return res.LastReview.CompletedWork
+		return redact.Secrets(res.LastReview.CompletedWork)
 	}
-	return res.Artifact
+	return redact.Secrets(res.Artifact)
 }
 
 // publishEvent sends one turn-level event, or logs why it could not.

@@ -17,7 +17,7 @@ import (
 // heldStream is the one log every case here pins.
 const heldStream = "CREWLET_TRACKER_LOG"
 
-// stepClock is a clock a case moves by hand; the holder reads it on every put.
+// stepClock is a clock a case moves by hand.
 type stepClock struct {
 	mu  sync.Mutex
 	now time.Time
@@ -27,6 +27,12 @@ func (c *stepClock) Now() time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.now
+}
+
+func (c *stepClock) set(at time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = at
 }
 
 func (c *stepClock) advance(d time.Duration) time.Time {
@@ -64,9 +70,9 @@ func (c *countedHolds) ReleaseHold(ctx context.Context, owner string) error {
 	return c.HoldRegister.ReleaseHold(ctx, owner)
 }
 
-// pinAt takes a pin at seq on generation 1 of heldStream, renewed every beat
-// against clock, and releases it when the case ends.
-func pinAt(ctx context.Context, t *testing.T, register statelog.HoldWriter, clock *stepClock,
+// pinAt takes a pin at seq on generation 1 of heldStream, renewed every beat,
+// and releases it when the case ends.
+func pinAt(ctx context.Context, t *testing.T, register statelog.HoldWriter,
 	beat time.Duration, seq uint64, logger *slog.Logger) *statelog.TailPin {
 
 	t.Helper()
@@ -76,7 +82,7 @@ func pinAt(ctx context.Context, t *testing.T, register statelog.HoldWriter, cloc
 			heldStream: {Stream: heldStream, Generation: 1, Seq: seq},
 		},
 		Reason: "a case is pinning the tail",
-		Every:  beat, Now: clock.Now, Logger: logger,
+		Every:  beat, Logger: logger,
 	})
 	if err != nil {
 		t.Fatalf("HoldTail: %v", err)
@@ -85,47 +91,61 @@ func pinAt(ctx context.Context, t *testing.T, register statelog.HoldWriter, cloc
 	return pin
 }
 
-// renewedAt waits for a renewal stamped at or after at, and returns what the
-// trim reads of the register then.
-func renewedAt(t *testing.T, register coord.HoldRegister, at time.Time) []statelog.Hold {
+// heldRevision is the revision of the pin on heldStream the register holds
+// now, zero if none.
+func heldRevision(t *testing.T, register coord.HoldRegister) uint64 {
+	t.Helper()
+	holds, err := register.Holds(t.Context())
+	if err != nil {
+		t.Fatalf("read the holds: %v", err)
+	}
+	for _, h := range holds {
+		if _, pins := h.Streams[heldStream]; pins {
+			return h.Revision
+		}
+	}
+	return 0
+}
+
+// renewedPast waits for the pin on heldStream to be written at a revision
+// past revision, and answers it: a renewal, which is what the trim reads as a
+// holder alive.
+func renewedPast(t *testing.T, register coord.HoldRegister, revision uint64) coord.TrimHold {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
+	for {
 		holds, err := register.Holds(t.Context())
 		if err != nil {
 			t.Fatalf("read the holds: %v", err)
 		}
 		for _, h := range holds {
-			if pos, pins := h.Streams[heldStream]; pins && !h.At.Before(at) {
-				return []statelog.Hold{{
-					Owner: h.Owner, Generation: pos.Generation, Seq: pos.Seq, At: h.At,
-				}}
+			if _, pins := h.Streams[heldStream]; pins && h.Revision > revision {
+				return h
 			}
 		}
-		time.Sleep(time.Millisecond)
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline: its firing only ends the wait
+			t.Fatalf("no renewal past revision %d reached the register in ten "+
+				"seconds: the trim reads a pin nothing renews as a crashed "+
+				"holder once it has watched it %s", revision, statelog.TrimHoldStale)
+		}
+		time.Sleep(time.Millisecond) //fixedwait:liveness
 	}
-	t.Fatalf("no renewal stamped at %s reached the register in ten seconds — "+
-		"a pin nothing renews is read by the trim as a crashed holder once it "+
-		"is %s old", at, statelog.TrimHoldStale)
-	return nil
 }
 
 // A PIN ON THE REPLAY TAIL RENEWS ITSELF UNTIL IT IS RELEASED, AND NOT AFTER.
 //
-// The trim reads a pin older than [statelog.TrimHoldStale] as a crashed
-// holder's, so the holder's clock runs past that bound and the register must
-// hold a renewal stamped after it ([TestTrimRacesATransfer]'s second arm
-// covers the trim's side). Once released the pin stays gone: a renewal
+// The trim reads a pin it has watched unrenewed past [statelog.TrimHoldStale]
+// as a crashed holder's, so the register must hold a renewal, a write past the
+// first ([TestTrimRacesATransfer]'s second arm covers the trim's side). Once released the pin stays gone: a renewal
 // outliving the release would put it back for a whole stale window.
 func TestATailPinRenewsItselfUntilReleased(t *testing.T) {
 	t.Parallel()
-	clock := &stepClock{now: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}
 	register := &countedHolds{HoldRegister: memory.NewFleet()}
-	pin := pinAt(t.Context(), t, register, clock, time.Millisecond, 4_000, nil)
+	pin := pinAt(t.Context(), t, register, time.Millisecond, 4_000, nil)
 
-	held := renewedAt(t, register, clock.advance(statelog.TrimHoldStale+time.Second))
-	if held[0].Seq != 4_000 || held[0].Generation != 1 {
-		t.Fatalf("the renewed pin names %+v, want the position it was taken at", held[0])
+	held := renewedPast(t, register, heldRevision(t, register)).Streams[heldStream]
+	if held.Seq != 4_000 || held.Generation != 1 {
+		t.Fatalf("the renewed pin names %+v, want the position it was taken at", held)
 	}
 
 	pin.Release()
@@ -148,10 +168,9 @@ func TestATailPinRenewsItselfUntilReleased(t *testing.T) {
 // call may act.
 func TestATailPinIsReleasedOnceWhateverItsContextSays(t *testing.T) {
 	t.Parallel()
-	clock := &stepClock{now: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}
 	register := &countedHolds{HoldRegister: memory.NewFleet()}
 	ctx, cancel := context.WithCancel(t.Context())
-	pin := pinAt(ctx, t, register, clock, time.Millisecond, 4_000, nil)
+	pin := pinAt(ctx, t, register, time.Millisecond, 4_000, nil)
 	cancel()
 
 	pin.Release()
@@ -172,11 +191,10 @@ func TestATailPinIsReleasedOnceWhateverItsContextSays(t *testing.T) {
 // logs it and its next renewal lands. A holder that cannot pin at all is told.
 func TestATailPinSaysAMissedRenewalAndKeepsRenewing(t *testing.T) {
 	t.Parallel()
-	clock := &stepClock{now: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}
 	register := &countedHolds{HoldRegister: memory.NewFleet()}
 	logs := &lockedBuffer{}
 	logger := slog.New(slog.NewJSONHandler(logs, nil))
-	pinAt(t.Context(), t, register, clock, time.Millisecond, 4_000, logger)
+	pinAt(t.Context(), t, register, time.Millisecond, 4_000, logger)
 
 	register.refuse.Store(true)
 	deadline := time.Now().Add(10 * time.Second)
@@ -187,8 +205,9 @@ func TestATailPinSaysAMissedRenewalAndKeepsRenewing(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
+	refused := heldRevision(t, register)
 	register.refuse.Store(false)
-	renewedAt(t, register, clock.advance(time.Second))
+	renewedPast(t, register, refused)
 
 	register.refuse.Store(true)
 	if _, err := statelog.HoldTail(t.Context(), statelog.TailHold{

@@ -77,8 +77,11 @@
 // over a fleet that had moved on.
 //
 // No reader writes. A GET answers the pointer's revision from this node's
-// history or, where it holds none yet, from the body the pointer carries
-// ([RevisionOf]), and the reconciler's next tick keeps the copy.
+// history or, where it holds none yet, from the body the pointer names
+// ([RevisionOf]), and the reconciler's next tick keeps the copy. Reading that
+// body is part of propagation, so a lag is confirmed only past [LagGrace] plus
+// the body's crossing of this node's link ([FleetView.BodyCrossing]): a
+// document at its bound takes minutes at the slowest pace (ADR-0175).
 package configplane
 
 import (
@@ -165,7 +168,9 @@ const (
 	// LagGrace is how long a node may be behind before the lag counts as
 	// confirmed rather than as propagation. Three reconcile intervals,
 	// 45 seconds — long enough that a poll plus a normal apply never trips
-	// it, short enough that a real divergence is noticed.
+	// it, short enough that a real divergence is noticed. Reading the body
+	// is part of that apply, and across a link it takes the body's crossing,
+	// which the view adds ([FleetView.BodyCrossing]).
 	//
 	// A DURATION RATHER THAN A COUNT OF TICKS, because the case it exists
 	// for is the one in which ticks stop: an apply that hangs holds the
@@ -221,6 +226,12 @@ type FleetView struct {
 	// attempt has held it, which is what keeps a hung apply confirmed lag
 	// across every activation made while it hangs.
 	BehindFor time.Duration
+	// BodyCrossing is how long the target's body takes to cross this node's
+	// connection to the coordination store at the slowest pace allowed
+	// (coord's Plane.BodyCrossing): none in process, up to four minutes for a
+	// document at its bound across a link. A node reading it is propagating,
+	// so it extends the grace ([FleetView.LagConfirmed]).
+	BodyCrossing time.Duration
 	// Attempts is how many attempts at the target epoch have concluded in
 	// failure. Counted when an attempt ENDS, never when it starts, for the
 	// reason SelfStatus gives: the third attempt in flight is not three
@@ -290,9 +301,9 @@ func DecidePosture(v FleetView) Posture {
 
 // LagConfirmed reports whether this node's lag on the target epoch is
 // CONFIRMED rather than ordinary propagation: an attempt of its own at the
-// epoch concluded in failure, or it has been behind on it for [LagGrace] or
-// longer. An attempt still running is neither, and a node that is not behind
-// has no lag to confirm.
+// epoch concluded in failure, or it has been behind on it for [LagGrace] plus
+// the body's crossing ([FleetView.BodyCrossing]) or longer. An attempt still
+// running is neither, and a node that is not behind has no lag to confirm.
 //
 // THE RULE [DecidePosture] JUDGES BY, stated once for a second reader: the
 // engine's irreversible judgements against the active revision decline on a
@@ -301,7 +312,8 @@ func DecidePosture(v FleetView) Posture {
 // applying it. A copy there would drift, leaving a node the posture reads as
 // waiting while its purge duty reports it behind.
 func (v FleetView) LagConfirmed() bool {
-	return v.AppliedEpoch < v.TargetEpoch && (v.triedAndFailed() || v.BehindFor >= LagGrace)
+	return v.AppliedEpoch < v.TargetEpoch &&
+		(v.triedAndFailed() || v.BehindFor >= LagGrace+v.BodyCrossing)
 }
 
 // triedAndFailed is whether this node's own attempt at the target concluded in

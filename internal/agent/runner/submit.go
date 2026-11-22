@@ -16,7 +16,7 @@
 // before any box exists, cannot read; so where the session's count has a
 // bound it hands the launch both tellings, the held one picked and the
 // summarized one beside it, and the launch hands the held one only where the
-// box's point proves it whole (internal/sandbox's OpenCodePoint.SendsWhole).
+// box's point proves it whole (internal/sandbox's BoxPoint.SendsWhole).
 // A brief told by a reading of what the session holds is judged on its own
 // brief on either harness, never by the held one's verdict: it drops held
 // calls and may add sections of its own, so it is ordered against neither
@@ -49,6 +49,22 @@
 // [github.com/crewlet/crewlet/internal/agent/structured]'s. What counts as a
 // VALID one stays here, in the decoders below, because that belongs to the
 // phase doing the asking.
+//
+// # Where each rule lives
+//
+// Each rule is stated once, on the declaration that keeps it; the files group
+// them. agentrun.go launches and collects the executor's run; resume.go
+// re-enters a parked turn and seeds its call log by identity (seedCalls), so
+// no call a segment carries moves an operation id a later call derives. A
+// round a resume carries on rather than collects (carried: asked.go, lost.go,
+// rotated.go, refused.go) relaunches through continued.go, which decides the
+// session it continues and what each brief tells it; leads.go retells a
+// brief's leads to a session that may lack it, and readalike.go marks the
+// calls a session could take for one another. phases.go builds every phase's
+// surface (seatSnapshot, executorActive) and its notes' one source
+// ([SteerSource]); handedskills.go hands the executor its skills as its
+// harness's own; recordbytes.go holds a durable record to one message and the
+// live frame to its stream.
 //
 // # A continued session's words and measure
 //
@@ -86,6 +102,21 @@
 // after every placed one, follow in their own order. A read the source has
 // not placed (the first segment's box keeps no record) keeps its turn, after
 // every placed one.
+//
+// # What a record holds of somebody's words
+//
+// A phase's durable record (agent_phase_completed) holds its prompts, its
+// model's answer and prose, its notes, its failure and each call's arguments
+// and answer REDACTED BEFORE THEY ARE CUT (recordredact.go): a credential a
+// cut runs across, cut first, leaves a head no rule knows. Its live frame
+// shows them redacted before their end is taken (liveredact.go). Only those:
+// the model read every answer as it came, as an executor's harness does. A
+// call's arguments are redacted as values, each beside its key, never as the
+// JSON text, which a redaction can leave no JSON. A cut states the
+// redaction's size. An executor run's call whose log kept only an opening of
+// its answer, raw, is recorded as the redaction of that opening's settled
+// lines (redact.Settled), the rest said by the bytes the log measured past
+// them.
 package runner
 
 import (

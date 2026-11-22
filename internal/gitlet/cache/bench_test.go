@@ -646,7 +646,7 @@ func (w *syncWorld) bootCache(b *testing.B, dir string, fetch int, mutate ...fun
 		b.Fatalf("Prepare: %v", err)
 	}
 	o := cache.Options{
-		Layout: layout, MaxBytes: 1 << 40, Git: newPoolOf(b, layout, "", runtime.NumCPU(), 0, 1<<40), Objects: w.store,
+		Layout: layout, MaxBytes: 1 << 40, Git: newPoolOf(b, layout, "", runtime.NumCPU(), 0, 1<<40, nil), Objects: w.store,
 		Fetch: silent{w.log}, Fleet: soloFleet, Limits: gitlet.DefaultLimits, HookCommand: []string{"/bin/true"},
 		Metrics: w.rec, Now: time.Now,
 	}

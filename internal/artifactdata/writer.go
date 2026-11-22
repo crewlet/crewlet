@@ -514,7 +514,7 @@ func (w *Writer) current(ctx context.Context, c Call, id artifacts.ID, refs []do
 			if coll == nil || !coll.stored {
 				continue
 			}
-			docs, err := scanDocs(ctx, tx, coll, `
+			docs, err := scanDocs(ctx, tx, coll, nil, `
 				SELECT doc_id, body, created_by, created_by_kind, created_at, updated_by,
 				updated_by_kind, updated_at, version FROM artifact_data_docs
 				WHERE store_no = ? AND collection_no = ? AND doc_id = ?`, s.no, coll.no, ref.Doc)

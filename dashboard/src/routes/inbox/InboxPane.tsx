@@ -21,6 +21,7 @@
  * then opens the next row.
  */
 
+import { GrowthDecision, isGrowthAct } from "~/components/growth/GrowthDecisionReview.tsx";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Button,
@@ -70,6 +71,7 @@ import { LimitRemedy } from "~/components/LimitRemedy.tsx";
 import { AnswerAsk, type AskAnswer } from "~/components/writes.tsx";
 import { AnswerChoices, AnsweredChoices } from "~/components/AnswerChoices.tsx";
 import { HeldCallButtons } from "~/components/HeldCallButtons.tsx";
+import { FOLD_IN_REFUSE, FoldInButtons } from "~/components/FoldInButtons.tsx";
 import { runStanding } from "~/lib/runStanding.ts";
 import { PUT_OFF_CHOICES, putOffHolds, usePutOff } from "~/lib/putOff.ts";
 import type { McpHeldCall } from "~/contract/mcp.ts";
@@ -88,9 +90,16 @@ import { RUNS_POLL_MS, runAskTexts, unanswerable } from "~/lib/runs.ts";
 import { useFocusLanding } from "~/lib/focusLanding.ts";
 import { RunQuestion } from "~/components/RunQuestion.tsx";
 import { answerFate, closedAt, type GivenAnswer } from "./answerFate.ts";
-import { fmtAt } from "~/lib/format.ts";
+import { fmtAt, plural, possessive } from "~/lib/format.ts";
 import { addressMark, InertAddress, TokenScope } from "~/components/InlineToken.tsx";
-import { CHECKED_WORDS, renderInline, renderMarkdown, renderTokens } from "~/lib/markdown.ts";
+import {
+  CHECKED_WORDS,
+  renderInline,
+  renderMarkdown,
+  renderQuoted,
+  renderTokens,
+} from "~/lib/markdown.ts";
+import { Said } from "~/components/Said.tsx";
 import { nameOfIn, type OrgIndex } from "~/lib/seats.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useAgents } from "~/lib/store-hooks.ts";
@@ -107,6 +116,7 @@ import type {
   AnsweredDecision,
   AnsweredWorkAsk,
   ExecutorRow,
+  FoldInItem,
   WorkAskRow,
   WorkDecisionEvidence,
   WorkItem,
@@ -359,6 +369,15 @@ function OpenPane({
               index={index}
               now={now}
               answered={answered}
+              onSettled={onSettled}
+            />
+          );
+        case "fold_in":
+          return (
+            <FoldInPane
+              item={row.subject.foldIn}
+              frame={frame}
+              index={index}
               onSettled={onSettled}
             />
           );
@@ -632,17 +651,43 @@ function ArtifactNoticePane({
   );
 }
 
+/** What an outcome line says of an answer, and what stands under it. */
+interface Outcome {
+  line: ReactNode;
+  under: ReactNode;
+}
+
+/**
+ * The words written in an answer, read by the conversation's rule
+ * (`CHECKED_WORDS`): quoted in the line where they are one paragraph, and as
+ * a quote under it where they are more, since the line is a paragraph and
+ * holds no list.
+ */
+function writtenOutcome(text: string): Outcome {
+  const quoted = renderQuoted(text, CHECKED_WORDS);
+  return "inline" in quoted
+    ? { line: <Said quoted={quoted} />, under: null }
+    : { line: null, under: <ReadingPaneQuote>{quoted.blocks}</ReadingPaneQuote> };
+}
+
 /**
  * "Answered Exact search (Recommended)", where the controls that answered it
  * were: an ask's, or an executor's once it took the answer.
  */
-function answeredWith(answer: AskAnswer): ReactNode {
-  return (
-    <>
-      Answered <strong>{answer.kind === "choice" ? answer.label : `“${answer.text}”`}</strong>
-      {answer.kind === "choice" && answer.recommended && " (Recommended)"}
-    </>
-  );
+function answeredWith(answer: AskAnswer): Outcome {
+  if (answer.kind === "choice") {
+    return {
+      line: (
+        <>
+          Answered <strong>{answer.label}</strong>
+          {answer.recommended && " (Recommended)"}
+        </>
+      ),
+      under: null,
+    };
+  }
+  const written = writtenOutcome(answer.text);
+  return { line: <>Answered{written.line}</>, under: written.under };
 }
 
 function AskPane({
@@ -700,6 +745,7 @@ function AskPane({
   // A QUESTION ANSWERED IN WORDS is answered in its own field above, so the
   // conversation carries no second box.
   const inWords = options.length === 0 || open;
+  const outcome = answer ? answeredWith(answer) : null;
 
   const onAnswered = (given: AskAnswer) => {
     setAnswer(given);
@@ -748,8 +794,11 @@ function AskPane({
         ) : (
           chips
         )}
-        {answer ? (
-          <ReadingPaneOutcome {...landing}>{answeredWith(answer)}</ReadingPaneOutcome>
+        {outcome ? (
+          <>
+            <ReadingPaneOutcome {...landing}>{outcome.line}</ReadingPaneOutcome>
+            {outcome.under}
+          </>
         ) : (
           <AnswerAsk
             layout="buttons"
@@ -775,7 +824,7 @@ function AskPane({
         <Conversation
           item={frame.address}
           itemKey={frame.itemKey}
-          of={{ kind: "ask", comment: ask.comment, options }}
+          of={{ kind: "ask", comment: ask.comment }}
           label="Replies to this question"
           to={frame.name}
           replyTo={inWords && !answer ? null : ask.comment}
@@ -831,7 +880,8 @@ function AnsweredPane({
   const ask = "run" in answered ? null : answered;
   const decision = run ? run.decision : ask?.ask.decision;
   const asked = (decision && WAS_ASKED[decision.role]) || "asked you";
-  const said = words.kind === "choice" ? words.said : words.said ? `“${words.said}”` : null;
+  const written = words.kind === "choice" ? words.note : words.said;
+  const outcome = written ? writtenOutcome(written) : null;
   // An answered message is read whole, since its heading does not quote it.
   const context = run
     ? run.question_context.trim()
@@ -871,21 +921,19 @@ function AnsweredPane({
           />
         )}
         <ReadingPaneOutcome>
-          {`${words.who} ${words.verb}${words.kind === "withdrawn" && said ? ":" : ""}`}
-          {said && (
+          {`${words.who} ${words.verb}`}
+          {words.kind === "choice" && (
             <>
               {" "}
-              <strong>{said}</strong>
+              <strong>{words.said}</strong>
+              {words.recommended && " (Recommended)"}
+              {outcome && " and wrote"}
             </>
           )}
-          {words.recommended && " (Recommended)"}
-          {words.note && (
-            <>
-              {" and wrote "}
-              <strong>{`“${words.note}”`}</strong>
-            </>
-          )}
+          {words.kind === "withdrawn" && outcome && ":"}
+          {outcome?.line}
         </ReadingPaneOutcome>
+        {outcome?.under}
         {words.replaced && <ReplacedBy replaced={words.replaced} />}
         {words.who !== "You" && words.kind !== "withdrawn" && (
           <Text as="p" variant="caption">
@@ -955,7 +1003,7 @@ function AskFollowThrough({
       <Conversation
         item={frame.address}
         itemKey={frame.itemKey}
-        of={{ kind: "ask", comment: ask.comment, options: ask.decision?.options ?? [] }}
+        of={{ kind: "ask", comment: ask.comment }}
         label="Replies to this question"
         to={frame.name}
         replyTo={ask.comment}
@@ -1270,6 +1318,7 @@ function RunPane({
       ? "taken"
       : null;
   if (fate === "recorded" || fate === "taken") seenTaken.current = true;
+  const taken = said !== null && fate === "taken" ? answeredWith(said) : null;
   // THE OUTCOME TAKES THE FOCUS from the control that sent the answer, which
   // it replaces.
   const landing = useFocusLanding(given !== null);
@@ -1466,22 +1515,25 @@ function RunPane({
         {said !== null ? (
           // PENDING UNTIL THE EXECUTOR TOOK IT: sent, recorded or ended is
           // never the success check a used answer gets.
-          <ReadingPaneOutcome {...landing} tone={fate === "taken" ? "done" : "pending"}>
-            {fate === "taken" ? (
-              answeredWith(said)
-            ) : fate === "recorded" ? (
-              <>
-                Answer recorded.{" "}
-                {busyOn
-                  ? busyLine(busyOn, frame.name)
-                  : `${frame.name}’s executor picks it up next.`}
-              </>
-            ) : fate === "ended" ? (
-              <>Answer sent. {frame.name}’s executor is no longer running.</>
-            ) : (
-              <>Answer sent. Waiting for {frame.name}’s executor to take it.</>
-            )}
-          </ReadingPaneOutcome>
+          <>
+            <ReadingPaneOutcome {...landing} tone={taken ? "done" : "pending"}>
+              {taken ? (
+                taken.line
+              ) : fate === "recorded" ? (
+                <>
+                  Answer recorded.{" "}
+                  {busyOn
+                    ? busyLine(busyOn, frame.name)
+                    : `${frame.name}’s executor picks it up next.`}
+                </>
+              ) : fate === "ended" ? (
+                <>Answer sent. {frame.name}’s executor is no longer running.</>
+              ) : (
+                <>Answer sent. Waiting for {frame.name}’s executor to take it.</>
+              )}
+            </ReadingPaneOutcome>
+            {taken?.under}
+          </>
         ) : superseded ? (
           // THE PANE'S OWN SENTENCE names nobody, so the line beside it says
           // whose answer was used as well as when.
@@ -1595,6 +1647,77 @@ function StandingLine({ run, index }: { run: ExecutorRow; index: OrgIndex }) {
  * reply and no "Something else": the run's own answer is refused for a held
  * call, and the call is decided by the people its approval admits.
  */
+/**
+ * Another person's request asking to join an agent's running work: who asked,
+ * which agent and whose work it would join, on whose apps, their words quoted
+ * as they wrote them (the row keeps an excerpt, `cut` more where they wrote
+ * it), and the two answers ([FoldInButtons]).
+ */
+function FoldInPane({
+  item,
+  frame,
+  index,
+  onSettled,
+}: {
+  item: FoldInItem;
+  frame: Frame;
+  index: OrgIndex;
+  onSettled: (label: string | null, answer?: AskAnswer, hold?: boolean) => void;
+}) {
+  const [said, setSaid] = useState<string | null>(null);
+  const landing = useFocusLanding(said !== null);
+  const name = (handle: string) => index.byHandle.get(handle)?.name ?? handle;
+  const seat = name(item.seat);
+  const requester = name(item.requester);
+  const words = item.words.trim();
+  return (
+    <>
+      {frame.byline(
+        <>
+          <strong>{frame.name}</strong>
+          {` asks to add this to ${possessive(seat)} running work`}
+          {frame.task && <> on {frame.task}</>}
+        </>,
+      )}
+      <ReadingPaneTitle>{item.decision.question}</ReadingPaneTitle>
+      {words && (
+        <ReadingPaneLead>
+          {renderMarkdown(words, { ...CHECKED_WORDS, scoped: true })}
+          {item.cut > 0 && (
+            <Text variant="caption" tone="secondary">
+              {`${plural(item.cut, "more character")} of their message ${item.cut === 1 ? "is" : "are"} where they wrote it.`}
+            </Text>
+          )}
+        </ReadingPaneLead>
+      )}
+      <Text variant="caption" tone="secondary">
+        {`Approved, ${seat} works on it as part of what it is doing for ${requester}, with ${possessive(requester)} apps.`}
+      </Text>
+      {said && (
+        <ReadingPaneOutcome {...landing} tone="done">
+          {said}
+        </ReadingPaneOutcome>
+      )}
+      {said ? null : (
+        <Inline gap={2}>
+          <FoldInButtons
+            item={item}
+            seat={seat}
+            onAnswered={(choice) => {
+              setSaid(
+                choice === FOLD_IN_REFUSE
+                  ? "Left to run as its own turn once the running work ends."
+                  : `Added to ${possessive(seat)} running work.`,
+              );
+              onSettled("Answered");
+            }}
+          />
+        </Inline>
+      )}
+    </>
+  );
+}
+
 function HeldRunPane({
   run,
   held,
@@ -1668,7 +1791,16 @@ function HeldRunPane({
             {said.words}
           </ReadingPaneOutcome>
         )}
-        {said?.settled ? null : (
+        {said?.settled ? null : isGrowthAct(held.act) ? (
+          // A GROWTH DECISION is read and decided on its card, here in the pane.
+          <GrowthDecision
+            id={held.id}
+            onAnswered={(words, settled) => {
+              setSaid({ words, settled });
+              onSettled("Answered", undefined, !settled);
+            }}
+          />
+        ) : (
           <Inline gap={2}>
             <HeldCallButtons
               id={held.id}
@@ -1884,9 +2016,13 @@ function NoticePane({
               : "The comment and its replies"
             : "Conversation on this task"
         }
-        to={frame.name}
+        to={frame.who ? frame.name : frame.itemKey || frame.name}
         replyTo={comment || undefined}
-        placeholder={`Reply to ${frame.name}. @mention to bring someone in.`}
+        placeholder={
+          frame.who
+            ? `Reply to ${frame.name}. @mention to bring someone in.`
+            : `Comment on ${frame.itemKey || "the task"}. @mention to bring someone in.`
+        }
         index={index}
         now={now}
       />
