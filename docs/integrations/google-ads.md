@@ -271,6 +271,10 @@ Each row is one method the engine offers, with its class (or the classes its rul
 - `ProvideLeadFeedback` and `ApplyIncentive` are `spend`: a lead's credit and an incentive's terms move money.
 - Removes are terminal in Google Ads, so removing a container is `admin`; removing an ad or an asset link retracts published content and is `public`.
 
+## What the atlas shows
+
+Each account the company names (`integrations.google_ads.customers`) is an account with the `advertising` capability, keyed by its customer ID; a company that names none shows Google Ads as one account ([the atlas](../concepts/atlas.md)).
+
 ## Google Ads' limits worth knowing
 
 - The daily operations limit belongs to the identity project's API access level (2,880 a day on Explorer against production accounts, 15,000 on Basic, unlimited on Standard), counted over a sliding 24 hours; a search is one operation however many pages it reads.
