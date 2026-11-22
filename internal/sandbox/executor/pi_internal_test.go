@@ -306,8 +306,8 @@ func piNoteAt(t *testing.T, lines []map[string]any, inbox string) int {
 // not held, so it is served again. A last line cut off decides nothing.
 //
 // Mutation: hold a note on its record alone, ignore compactions, read the file
-// in order rather than along its branch, or count a torn last line — this
-// goes red.
+// in order rather than along its branch, count a torn last line, or drop an
+// entry whose details are of another shape — this goes red.
 func TestAPiNoteIsHeldOnlyByAnAnswerOnItsBranch(t *testing.T) {
 	t.Parallel()
 	steered := piSessionLines(t, "steered.session.jsonl")
@@ -333,6 +333,13 @@ func TestAPiNoteIsHeldOnlyByAnAnswerOnItsBranch(t *testing.T) {
 		lines[answer]["parentId"] = "edit0001"
 		return piJoin(t, append(lines[:answer], edit, lines[answer]))
 	}
+	foreign := func() []byte {
+		lines := piSessionLines(t, "steered.session.jsonl")[:answer+1]
+		other := map[string]any{"type": "custom_message", "customType": "another", "id": "other001",
+			"parentId": lines[at]["id"], "content": "x", "details": "not an object", "data": []any{1}}
+		lines[answer]["parentId"] = "other001"
+		return piJoin(t, append(lines[:answer], other, lines[answer]))
+	}
 	whole := piJoin(t, steered[:answer+1])
 	for _, tc := range []struct {
 		name   string
@@ -350,6 +357,7 @@ func TestAPiNoteIsHeldOnlyByAnAnswerOnItsBranch(t *testing.T) {
 		{name: "answered, the line whole", record: whole, inbox: "inbox-steer-1", held: true},
 		{name: "answered on another branch", record: offBranch(), inbox: "inbox-steer-1"},
 		{name: "edited out before the answer", record: edited(), inbox: "inbox-steer-1"},
+		{name: "another extension's entry between", record: foreign(), inbox: "inbox-steer-1", held: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
