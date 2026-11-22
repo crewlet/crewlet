@@ -1035,6 +1035,39 @@ func TestACopilotRunHandsItsSignInUnderOneName(t *testing.T) {
 	}
 }
 
+// A WEB-DENIED ENTRY'S COPILOT RUN HAS NO WEB TOOL: web_fetch, web_search and
+// GitHub's code search on --excluded-tools, each value after a flag of its own
+// (a list flag reads a second value into its list), which on 1.0.114 under
+// --yolo left none of them to the run or its subagents. A run on an entry that
+// keeps the web excludes nothing.
+//
+// Mutation: drop the exclusion, or leave a tool off it, and this fails.
+func TestAWebDeniedCopilotRunHasNoWebTool(t *testing.T) {
+	excluded := func(req sandbox.RunRequest) []string {
+		script := copilotScript(req, Session{ID: "s-1"}, Paths{Home: "/box"}, "", time.Second)
+		argv := strings.Fields(script[strings.Index(script, "copilot --output-format"):])
+		var out []string
+		for i, arg := range argv {
+			if arg != "--excluded-tools" {
+				continue
+			}
+			if i+2 < len(argv) && !strings.HasPrefix(argv[i+2], "-") && argv[i+2] != `"$@"` {
+				t.Errorf("--excluded-tools at %d is followed by two values: %q", i, argv[i:i+3])
+			}
+			out = append(out, argv[i+1])
+		}
+		return out
+	}
+	got := excluded(sandbox.RunRequest{WebDenied: true})
+	slices.Sort(got)
+	if want := []string{"semantic_code_search", "web_fetch", "web_search"}; !slices.Equal(got, want) {
+		t.Errorf("the web-denied run excludes %q, want %q", got, want)
+	}
+	if got := excluded(sandbox.RunRequest{}); len(got) > 0 {
+		t.Errorf("a run that keeps the web excludes %q", got)
+	}
+}
+
 // The run is pinned to its own home and trusted by COPILOT_ALLOW_ALL=true
 // (route (a), measured to widen nothing beyond --yolo); the switches that open
 // what a repository loads in prompt mode are unset.
