@@ -33,7 +33,8 @@ every ref answer and every applied push raises, so no box request pays a barrier
 already holds. `/box/git/` is published on `api.public` beside `/mcp/` and `/otlp/`, exempt from the operator guard.
 
 The engine gives the box its git configuration as the LAUNCH's environment, minted once the store has named the job
-(`GIT_CONFIG_COUNT`, appended after the operator's own entries): a reset of the helper list and a credential helper
+(appended after the operator's own entries; the helper's two in `GIT_CONFIG_PARAMETERS`, which git reads after every
+`GIT_CONFIG_COUNT` entry a harness appends): a reset of the helper list and a credential helper
 scoped to `CREWLET_BOX_GIT_URL` that answers the run's token, the seat's commit identity, protocol v2, and index
 version 4 with the untracked cache, which the box measurements adopted — which amends the sandbox's "the engine
 contributes only tool-agnostic facts" rule for the engine's own surface, as the tool bridge already did;

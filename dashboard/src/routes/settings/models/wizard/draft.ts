@@ -43,7 +43,7 @@ export type Harness = string;
  * environment): an edit keeps it exactly as Configuration wrote it.
  */
 export type Method = "api-key" | "cloud" | "host-login" | "token" | "device" | "unchanged";
-export type Cloud = "bedrock" | "vertex" | "foundry" | "gateway";
+export type Cloud = "bedrock" | "vertex" | "foundry" | "gateway" | "gemini-vertex";
 export type RunIn = "" | RunnerCellName;
 
 export interface Draft {
@@ -178,7 +178,7 @@ export interface CloudField {
   placeholder: string;
 }
 
-/** Each cloud provider's fields, by the variable Claude Code reads. */
+/** Each cloud provider's fields, by the variable its harness reads. */
 export const CLOUD_FIELDS: Readonly<Record<Cloud, { label: string; fields: CloudField[] }>> = {
   bedrock: {
     label: "Amazon Bedrock",
@@ -211,6 +211,19 @@ export const CLOUD_FIELDS: Readonly<Record<Cloud, { label: string; fields: Cloud
       },
     ],
   },
+  "gemini-vertex": {
+    label: "Google Vertex AI",
+    fields: [
+      { name: "GOOGLE_CLOUD_PROJECT", label: "Project ID", placeholder: "my-project" },
+      { name: "GOOGLE_CLOUD_LOCATION", label: "Region", placeholder: "us-central1" },
+      {
+        name: "GOOGLE_API_KEY",
+        label: "Vertex AI API key",
+        secret: true,
+        placeholder: "Paste the key",
+      },
+    ],
+  },
   gateway: {
     label: "LLM gateway",
     fields: [
@@ -229,21 +242,34 @@ export const CLOUD_FIELDS: Readonly<Record<Cloud, { label: string; fields: Cloud
   },
 };
 
-/** The switch that sends Claude Code to a cloud provider; a gateway has none. */
-const CLOUD_FLAG: Readonly<Partial<Record<Cloud, string>>> = {
-  bedrock: "CLAUDE_CODE_USE_BEDROCK",
-  vertex: "CLAUDE_CODE_USE_VERTEX",
-  foundry: "CLAUDE_CODE_USE_FOUNDRY",
+/**
+ * The switch that sends a harness to a cloud provider, and the value it is set
+ * to (each harness's profile `sign_in_env`); a gateway has none.
+ */
+const CLOUD_FLAG: Readonly<Partial<Record<Cloud, readonly [string, string]>>> = {
+  bedrock: ["CLAUDE_CODE_USE_BEDROCK", "1"],
+  vertex: ["CLAUDE_CODE_USE_VERTEX", "1"],
+  foundry: ["CLAUDE_CODE_USE_FOUNDRY", "1"],
+  "gemini-vertex": ["GOOGLE_GENAI_USE_VERTEXAI", "true"],
 };
+
+/** The clouds each harness that signs in from its env (`cloud`) is offered, in order. */
+const HARNESS_CLOUDS: Readonly<Record<string, readonly Cloud[]>> = {
+  "claude-code": ["bedrock", "vertex", "foundry", "gateway"],
+  "gemini-cli": ["gemini-vertex"],
+};
+
+/** The clouds harness is offered, none for a harness with no `cloud` sign-in. */
+export const cloudsOf = (harness: string): readonly Cloud[] => HARNESS_CLOUDS[harness] ?? [];
 
 /** Every env variable the wizard writes on the harness, which an edit replaces rather than keeps. */
 function managedEnv(harness: string): Set<string> {
   return new Set<string>([
     ...(methodsOf(harness).includes("cloud")
-      ? [
-          ...Object.values(CLOUD_FLAG),
-          ...Object.values(CLOUD_FIELDS).flatMap((c) => c.fields.map((f) => f.name)),
-        ]
+      ? cloudsOf(harness).flatMap((c) => [
+          ...(CLOUD_FLAG[c] ? [CLOUD_FLAG[c][0]] : []),
+          ...CLOUD_FIELDS[c].fields.map((f) => f.name),
+        ])
       : []),
     ...providersFor(harness).map((p) => p.variable),
     ...(harness === "qwen-code" ? [QWEN_ENDPOINT] : []),
@@ -471,6 +497,12 @@ export function withChoices(
     if (moved && stays && original) next.variable = original.variable;
     else if (!stays) next.variable = suggestedVariable(next, taken);
   }
+  // A CLOUD IS THE HARNESS'S: Claude Code's Bedrock is no Gemini CLI provider.
+  const clouds = cloudsOf(next.harness);
+  if (!("cloud" in patch) && clouds.length > 0 && !clouds.includes(next.cloud)) {
+    next.cloud = clouds[0] ?? next.cloud;
+    next.cloudFields = {};
+  }
   if (next.harness !== d.harness) {
     const coding = canExecute(next);
     const helpers = !!factsOf(next.harness).assistant;
@@ -535,7 +567,7 @@ function signInOf(
       return { auth: { mode: "subscription" }, env };
     case "cloud": {
       const flag = CLOUD_FLAG[d.cloud];
-      if (flag) env[flag] = "1";
+      if (flag) env[flag[0]] = flag[1];
       for (const field of CLOUD_FIELDS[d.cloud].fields) {
         const typed = d.cloudFields[field.name]?.trim();
         if (field.secret) {
@@ -620,10 +652,14 @@ function storedCloud(env: Record<string, unknown>): Record<string, string> {
   return out;
 }
 
-/** Which cloud provider an entry's env sends Claude Code to. */
-function cloudOf(env: Record<string, unknown>): Cloud {
-  const flagged = (Object.entries(CLOUD_FLAG) as [Cloud, string][]).find(([, flag]) => env[flag]);
-  return flagged ? flagged[0] : "gateway";
+/** Which of harness's clouds an entry's env sends it to: the one whose switch it sets, else the switchless one. */
+function cloudOf(harness: string, env: Record<string, unknown>): Cloud {
+  const clouds = cloudsOf(harness);
+  const flagged = clouds.find((c) => {
+    const flag = CLOUD_FLAG[c];
+    return flag !== undefined && env[flag[0]] !== undefined;
+  });
+  return flagged ?? clouds.find((c) => !CLOUD_FLAG[c]) ?? clouds[0] ?? "gateway";
 }
 
 /** The method a model signs in with, from its entry and the engine's reading of it. */
@@ -675,7 +711,8 @@ export function draftOf(model: ModelView, executors: readonly string[]): Draft {
   const raw = model.raw ?? {};
   const env = isRecord(raw.env) ? raw.env : {};
   const method = methodOf(model);
-  const cloud = method === "cloud" ? cloudOf(env) : d.cloud;
+  const cloud =
+    method === "cloud" ? cloudOf(model.harness, env) : (cloudsOf(model.harness)[0] ?? d.cloud);
   // THE PROVIDER a provider-key entry is keyed for, else the one its model names first.
   const keyed = providersFor(model.harness).find((p) => typeof env[p.variable] === "string");
   const [provider, rest] =

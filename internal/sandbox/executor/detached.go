@@ -154,7 +154,9 @@ type Harness interface {
 	// the path the harness is pointed at, or "" when there is nothing to write.
 	// It also writes the system text where the harness reads it from
 	// ([Paths.System]) when there is any, and nothing when there is none.
-	WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error)
+	// session is the run's, named before it ([Harness.Session]).
+	WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, session Session,
+		paths Paths) (string, error)
 }
 
 // Session is the harness session one run works in, as [Runner.Start] settles it
@@ -295,6 +297,16 @@ type contextReader interface {
 // ([sandbox.Result.Limits]): Claude Code's `rate_limit_event`.
 type limitReporter interface {
 	limitReport() string
+}
+
+// limitGate is a harness whose run's limit is its own word only where the
+// harness itself failed the run on its vendor's API error, which its exit
+// status names ([GeminiCLI.limitExit]): elsewhere the collection marks the
+// run's ending as no limit ([sandbox.Result.NoLimitExit]), so a line the run's
+// own output put in the stream (a box file its model can write) sits nothing
+// out.
+type limitGate interface {
+	limitExit(code int) bool
 }
 
 // windowReporter is a decoder that reads off its run's stream the least context
@@ -651,7 +663,7 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 		}
 		req.FreshWiring = &wired
 	}
-	configPath, err := r.harness.WriteConfig(ctx, box, req, paths)
+	configPath, err := r.harness.WriteConfig(ctx, box, req, session, paths)
 	if err != nil {
 		return sandbox.RunHandle{}, err
 	}
@@ -1145,6 +1157,13 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	result, refused, err = memoryKills(pieces.memory, result, refused, code)
 	if err != nil {
 		return sandbox.Result{}, err
+	}
+	// A LIMIT ONLY AT THE HARNESS'S OWN API FAILURE ([limitGate]); a status
+	// that does not read is no such failure.
+	if gate, ok := r.harness.(limitGate); ok {
+		if n, convErr := strconv.Atoi(code); convErr != nil || !gate.limitExit(n) {
+			result.NoLimitExit = true
+		}
 	}
 
 	// Whether the job was ended on request, as its script recorded
