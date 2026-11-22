@@ -38,18 +38,14 @@ func fakeChannel(ch harnessprofile.Channel) map[string]any {
 	}
 }
 
-// EVERY CALL HANDS THE HARNESS AN AGENT FILE WITH A BODY, and a seat's text opens it.
-//
-// Kimi Code trims the body and refuses one that trims to nothing ("Missing
-// prompt body", exit 1, measured on 2.7.2), so a call whose file came out
-// empty fails whatever it asked. The replacing body is the engine's text
-// alone and is empty for a call with no system prompt, which therefore has to
-// take the appending one: driven through Complete with the shipped channels,
-// for each kind of call with and without a system prompt.
-//
-// And where there is text, NOTHING comes before it: the vendor's default
-// carries the call's directory, its listing and the AGENTS.md chain, so it
-// follows the engine's text rather than leading it.
+// EVERY CALL HANDS THE HARNESS AN AGENT FILE WITH A BODY, and a seat's text
+// opens it. Kimi Code refuses a body that trims to nothing ("Missing prompt
+// body", exit 1, measured on 2.7.2). The replacing body is the engine's text
+// alone, empty for a call with no system prompt, which therefore takes the
+// appending one: driven through Complete with the shipped channels, for each
+// kind of call with and without a system prompt. Where there is text, NOTHING
+// comes before it: the vendor's default carries the call's directory, its
+// listing and the AGENTS.md chain, so it follows the engine's text.
 //
 // Mutation: send a call with no system prompt down its own kind's route in
 // routeFor, and a side pass with none hands the harness an empty body.

@@ -415,19 +415,13 @@ func TestTheKimiProfileArgvParsesAgainstTheRealHarness(t *testing.T) {
 	}
 }
 
-// THE KIMI PROFILE READS ONE ANSWER OUT OF ITS MESSAGE STREAM.
-//
-// These are the BYTES THE REAL HARNESS EMITTED, captured from 2.7.2 driven
-// through the engine's own code path against a stub HTTP endpoint standing in
-// for the model, not a stream written to match the profile. Two of the three
-// lines are the point.
-//
-// `session.resume_hint` carries its own `content` field, holding the harness's
-// prose about how to resume. A profile reading `content` off every line would
-// have appended "To resume this session: kimi -r session_…" to the model's
-// reply, and the tool loop, the reviewer and the dashboard would all have
-// read it as a sentence the agent said. `system.version` is the same hazard
-// with no `content` to hit. The `role` discriminator is what keeps them out.
+// THE KIMI PROFILE READS ONE ANSWER OUT OF ITS MESSAGE STREAM, here the bytes
+// 2.7.2 emitted through the engine's own code path against a stub model.
+// `session.resume_hint` carries a `content` of its own, the harness's prose
+// about resuming: read off every line, "To resume this session: kimi -r …"
+// would join the reply, and the tool loop, the reviewer and the dashboard
+// would take it for the agent's words. `system.version` is the same hazard
+// with no `content` to hit. The `role` discriminator keeps them out.
 //
 // Mutation: read `content` off every line (drop text_events), and the resume
 // hint joins the answer.
