@@ -126,7 +126,8 @@ func dropClaim(t *testing.T, rig *coordRig, id string) {
 // A BOUND JOB'S LOST CLAIM IS BACK BY ITS NEXT COLLECTION OR SAVE, through
 // the coordinator's own path: the record names the session already, and the
 // read binds it again, which makes the claim again for the job the record
-// binds where none stands.
+// binds where none stands. The save's pack fails, so no capture lands to
+// hand the session to the log, which would release the claim.
 //
 // Mutation: answer an id the record binds already without the store, and the
 // claim stays gone.
@@ -171,11 +172,17 @@ func TestABoundJobsLostClaimIsBackByItsNextCollectionOrSave(t *testing.T) {
 			report := mintedSession
 			reporting(rig, &report)
 			rig.launchKept(t, "t1")
-			if out := saveOf(rig, "t1", nil); out.class != saveLanded {
-				t.Fatalf("the first save came to %+v, want it landed", out)
+			if _, err := rig.pending.BindSession(t.Context(), "t1", SessionBind{Launch: rig.get("t1").LaunchID,
+				ID: mintedSession}); err != nil {
+				t.Fatalf("binding the report: %v", err)
 			}
 			dropClaim(t, rig, mintedSession)
-			saveOf(rig, "t1", nil)
+			// A SAVE THAT LANDS hands the session to the log, which releases
+			// the claim (recordCapture), so this one binds and packs nothing.
+			rig.runner.PackSaveErr = errors.New("the pack failed")
+			if out := saveOf(rig, "t1", nil); out.class == saveLanded {
+				t.Fatalf("the save came to %+v, want it stopped at its failed pack", out)
+			}
 			reclaimed(t, rig, "save")
 		})
 	})
