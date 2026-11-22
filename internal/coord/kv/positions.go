@@ -73,13 +73,11 @@ func (f *FleetStore) Positions(ctx context.Context) ([]coord.NodePositions, erro
 //
 // IN THE POSITIONS BUCKET, the one with no age: a hold that expired on a timer
 // would release the pin while its owner was still reading, the hole it exists
-// to close. A crashed holder is bounded by the trim's own stale window.
+// to close. A crashed holder is bounded by the trim, which reads past a hold it
+// has watched go unrenewed past its own stale window.
 func (f *FleetStore) PutHold(ctx context.Context, h coord.TrimHold) error {
 	if err := h.Validate(); err != nil {
 		return err
-	}
-	if h.At.IsZero() {
-		h.At = time.Now().UTC()
 	}
 	body, err := json.Marshal(h)
 	if err != nil {

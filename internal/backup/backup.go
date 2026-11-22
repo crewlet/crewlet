@@ -1086,7 +1086,6 @@ func (s *Service) hold(ctx context.Context, replicated *store.DB) (func(), error
 		Streams:  live,
 		Reason:   "a backup is copying this node's store",
 		Every:    statelog.TrimHoldHeartbeat,
-		Now:      s.now,
 		Logger:   log,
 	})
 	if err != nil {

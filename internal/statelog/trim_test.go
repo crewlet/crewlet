@@ -414,7 +414,7 @@ func TestTrimRacesATransfer(t *testing.T) {
 		t.Parallel()
 		clock := &stepClock{now: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}
 		register := memory.NewFleet()
-		pinAt(t.Context(), t, register, clock, time.Millisecond, 4_000, nil)
+		pinAt(t.Context(), t, register, time.Millisecond, 4_000, nil)
 		watch := &statelog.HoldWatch{Now: clock.Now}
 		var last uint64
 		for tick := range 5 * 4 {

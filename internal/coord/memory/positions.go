@@ -61,9 +61,6 @@ func (f *Fleet) PutHold(_ context.Context, h coord.TrimHold) error {
 	if err := h.Validate(); err != nil {
 		return err
 	}
-	if h.At.IsZero() {
-		h.At = time.Now().UTC()
-	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.holds == nil {

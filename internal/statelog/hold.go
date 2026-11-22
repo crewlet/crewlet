@@ -24,8 +24,7 @@ type TailHold struct {
 	// Register is where the pin is written and renewed.
 	Register HoldWriter
 
-	// Owner, Streams and Reason are the hold's own ([coord.TrimHold]); its At
-	// is stamped by every put.
+	// Owner, Streams and Reason are the hold's own ([coord.TrimHold]).
 	Owner   string
 	Streams map[string]coord.Position
 	Reason  string
@@ -35,9 +34,6 @@ type TailHold struct {
 	// Zero or below is refused: a pin that never renews is the defect this
 	// type removes.
 	Every time.Duration
-
-	// Now stamps each put. Nil is the wall clock, in UTC.
-	Now func() time.Time
 
 	// Logger is where a missed renewal and a failed release are said. Nil is
 	// the package's own component logger.
@@ -78,13 +74,9 @@ func HoldTail(ctx context.Context, spec TailHold) (*TailPin, error) {
 			"%s is never renewed, and the trim ignores it once it has watched it "+
 			"go unrenewed past %s — pass statelog.TrimHoldHeartbeat", spec.Every, TrimHoldStale)
 	}
-	now := spec.Now
-	if now == nil {
-		now = func() time.Time { return time.Now().UTC() }
-	}
 	put := func(ctx context.Context) error {
 		return spec.Register.PutHold(ctx, coord.TrimHold{
-			Owner: spec.Owner, At: now(), Streams: spec.Streams, Reason: spec.Reason,
+			Owner: spec.Owner, Streams: spec.Streams, Reason: spec.Reason,
 		})
 	}
 	if err := put(ctx); err != nil {

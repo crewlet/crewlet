@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 )
 
 // A TRIM HOLD is a live pin on the tail of every domain's log, one of
@@ -15,8 +14,8 @@ import (
 //
 // It is HEARTBEATED, and that is the whole safety property: a pin outliving
 // its owner would stop the trim until the log hit its ceiling and refused
-// appends. So the arithmetic ignores a hold older than its stale bound and the
-// normal path releases it. One key per owner, a node and a purpose
+// appends. So the trim ignores a hold it has watched go unrenewed past its
+// stale bound, and the normal path releases it. One key per owner, a node and a purpose
 // (`node-a/backup`), so a second backup replaces its node's hold and a crash
 // leaves at most one key per owner.
 
@@ -25,11 +24,6 @@ type TrimHold struct {
 	// Owner is who holds it: a node id and a purpose, joined. It is the
 	// key, so a second hold by the same owner replaces the first.
 	Owner string `json:"owner"`
-
-	// At is when it was last renewed. The arithmetic ignores a hold older
-	// than its stale bound, which is what stops a crashed holder pinning
-	// the log for ever.
-	At time.Time `json:"at"`
 
 	// Streams is the position held per STREAM, a triple each: a bare
 	// sequence from before a reanchor names a dead number space.
@@ -57,8 +51,8 @@ type TrimHold struct {
 //
 // A key class in the positions bucket, which has NO age ([PositionRegister]):
 // an expiring hold would release the pin while its owner still read, the
-// hole it exists to close. A crashed holder is bounded instead by the
-// arithmetic's stale window, a number the trim owns and reports.
+// hole it exists to close. A crashed holder is bounded instead by the trim's
+// watch of each hold's writes against a stale window the trim owns and reports.
 type HoldRegister interface {
 	// PutHold writes or renews a hold, replacing the owner's own. Last
 	// writer wins: the only writer of an owner's key is that owner.
@@ -70,7 +64,7 @@ type HoldRegister interface {
 	Holds(ctx context.Context) ([]TrimHold, error)
 
 	// ReleaseHold removes one: the NORMAL path, when the work that took it
-	// finishes; the stale bound is only for a holder that did not get to.
+	// finishes; the trim's stale bound is only for a holder that did not get to.
 	ReleaseHold(ctx context.Context, owner string) error
 }
 
