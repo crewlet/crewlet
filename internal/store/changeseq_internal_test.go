@@ -5,14 +5,14 @@ import (
 	"testing"
 )
 
-// A MEMORY ROW'S CHANGE SEQUENCE ONLY EVER RISES (node migration 0041).
+// A MEMORY ROW'S CHANGE SEQUENCE ONLY EVER RISES (node migrations 0041, 0070).
 //
-// memsync's watermark is over change_seq, so every insert — and every vector
-// set in place — must stamp a value above every value before it, across all
-// three tables, including after the newest row is deleted: these tables are
-// keyed on text, so a rowid IS reused after a delete, and a watermark over it
-// skipped the row written into the gap. An in-place change that does not
-// travel (a retrieval counter) takes no new value.
+// memsync's watermark is over change_seq, so every insert, every vector set in
+// place and every update of a mutable row must stamp a value above every value
+// before it, across the tables, including after the newest row is deleted:
+// these tables are keyed on text, so a rowid IS reused after a delete, and a
+// watermark over it skipped the row written into the gap. An in-place change
+// that does not travel (a retrieval counter) takes no new value.
 func TestEveryMemoryChangeIsStampedAboveEveryOneBeforeIt(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -109,5 +109,13 @@ func TestEveryMemoryChangeIsStampedAboveEveryOneBeforeIt(t *testing.T) {
 	if got := seq("agent_diary", "d2"); got != before {
 		t.Errorf("a retrieval counter moving restamped the note (%d → %d), "+
 			"which would republish bookkeeping every cycle", before, got)
+	}
+
+	// A skill's state and use count are its content: an update restamps it.
+	latest := seq("episodes", "e1")
+	exec(`UPDATE synthesized_skills SET use_count = use_count + 1 WHERE id = 's1'`)
+	if got := seq("synthesized_skills", "s1"); got <= latest {
+		t.Errorf("a skill's use counted left its change_seq at %d, behind the latest "+
+			"stamp %d — the change would never be carried", got, latest)
 	}
 }
