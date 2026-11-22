@@ -457,6 +457,9 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		// WHAT OF ITS ENVIRONMENT IS A CREDENTIAL, which only this side can
 		// tell, for its session's scrub.
 		Secrets: launchSecrets(agent, runEnv, run.env),
+		// THE NAMES THAT SIGN ITS HARNESS IN, which its runner keeps out of
+		// the model's shell.
+		SignInEnv: run.signInNames,
 		// AND THE PATHS ITS BOX FILES ARE NAMED BY, under the box's home,
 		// joined onto the box's own once the launch has one.
 		HomePaths:   run.homePaths,

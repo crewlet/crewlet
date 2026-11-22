@@ -4154,6 +4154,11 @@ type executorRun struct {
 	// withheld is the seat's integration credentials kept out of env because
 	// the harness signs in by their names, which the launch says.
 	withheld []string
+
+	// signInNames is the names of env that sign the harness in
+	// ([signInNames]), which its runner keeps out of the model's shell
+	// ([sandbox.RunRequest.SignInEnv]).
+	signInNames []string
 }
 
 // newExecutorRun is the [executorRun] of a box run on agent, the executor-chain
@@ -4204,6 +4209,7 @@ func newExecutorRun(agent *harness.Provider, seat runEnv) executorRun {
 			run.withheld = append(run.withheld, name)
 		}
 	}
+	run.signInNames = signInNames(agent, entry, env)
 	// A LOGIN THE HARNESS KEEPS IN ITS OWN DATABASE travels as the document its
 	// export printed, mapped where the runner imports it from — the runner's
 	// path, not the profile's, because the runner is what reads it
@@ -4215,6 +4221,21 @@ func newExecutorRun(agent *harness.Provider, seat runEnv) executorRun {
 		run.files[executor.CredentialDocument] = doc
 	}
 	return run
+}
+
+// signInNames is the names of the run's env that sign agent's harness in: a
+// name its profile signs in by, and a credential the entry's own env sets
+// ([entrySignInName]). Never a seat's or an integration's credential of
+// another name, which is the seat's work's own.
+func signInNames(agent *harness.Provider, entry, env map[string]string) []string {
+	var out []string
+	for _, name := range slices.Sorted(maps.Keys(env)) {
+		_, entrys := entry[name]
+		if slices.Contains(agent.CredentialEnvNames(), name) || (entrys && entrySignInName(agent, name)) {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 // integrationsOwn is what of vars, variables an integration puts in a box, the
