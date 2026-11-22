@@ -71,7 +71,7 @@ func (e *Engine) startSharedServers(ctx context.Context, c *Company) {
 		}
 		// SIGNED IN TO WITH OAUTH: under the company's grant, read afresh
 		// each pass and held back while there is none (or its vendor refused
-		// to renew it) until a person signs in (mcpoauth.go); or as its
+		// to renew it) until a person signs in (oauthgrant.go); or as its
 		// service identity, tokens issued on use (mcpserviceidentity.go).
 		// Retired below if running.
 		if server.OAuth != nil {

@@ -279,7 +279,7 @@ func TestWhatAHoldingWritesGoesBeforeWhatItsHydrationBroughtIn(t *testing.T) {
 	name[subjectOf(skills, "s1")], name[marker] = "the skill s1", "the marker"
 
 	js := &roundTripJS{}
-	s.js = js
+	stepping(s).js = js
 	turn := turnOf(t, s, js)
 	if !slices.Equal(turn.own, wantOwn) || turn.ownErr != nil {
 		t.Errorf("the own pass had %s acknowledged (%v), want %s: what the seat wrote or "+
@@ -307,8 +307,8 @@ func TestWhatAHoldingWritesGoesBeforeWhatItsHydrationBroughtIn(t *testing.T) {
 // live in memory, so after a restart every kept row is backlog; the flush
 // still carries the seat's own rows first. A kept store holds 200 notes and 50
 // episodes, all on the changelog; a new syncer hydrates, the seat writes one
-// episode and is released: the flush, cut by its bound after 71 rows, carries
-// the episode and then the 70 oldest notes.
+// episode and is released: the flush, which sends 72 rows inside its bound,
+// carries the episode and then the 71 oldest notes.
 //
 // Mutation: swap the two calls' bodies, and this goes red.
 func TestARestartsFlushCarriesWhatTheSeatWroteBeforeWhatTheStoreKept(t *testing.T) {
@@ -349,7 +349,7 @@ func TestARestartsFlushCarriesWhatTheSeatWroteBeforeWhatTheStoreKept(t *testing.
 				return ctx.Err()
 			}
 		}}
-		s.js = js
+		stepping(s).js = js
 		turn := turnFor(t, s, js, flushBound)
 		flushed := slices.Concat(turn.own, turn.backlog)
 		if len(flushed) == 0 || flushed[0] != written {
@@ -369,7 +369,7 @@ func TestARestartsFlushCarriesWhatTheSeatWroteBeforeWhatTheStoreKept(t *testing.
 // rest of its bound. Each range has its own mark, no page boundary takes a row
 // twice, the boundary's row is the backlog's, and a drained one is not read.
 // With 1 000 held notes, 100 written, then 10 before each later cycle, at
-// publishTrip a row: 100 then 328 of the backlog, 10 then 418, 10 then 254.
+// publishTrip a row: 100 then 329 of the backlog, 10 then 419, 10 then 252.
 //
 // Mutation: read either range from its mark's own row (>= for >), share one
 // mark between the ranges, read the backlog past the boundary or short of it,
@@ -426,9 +426,9 @@ func TestTheBacklogDrainsAcrossCyclesBehindWhatTheSeatWrites(t *testing.T) {
 			from, to int
 			carried  Carried
 		}{
-			{0, 328, Carried{Rows: 328, StoppedIn: "agent_diary"}},
-			{328, 746, Carried{Rows: 418, StoppedIn: "agent_diary"}},
-			{746, 1000, Carried{Rows: 254}},
+			{0, 329, Carried{Rows: 329, StoppedIn: "agent_diary"}},
+			{329, 748, Carried{Rows: 419, StoppedIn: "agent_diary"}},
+			{748, 1000, Carried{Rows: 252}},
 		}
 		for i, turn := range turns {
 			own := notesOf(t, written[i])
@@ -508,9 +508,9 @@ func TestTheRowAtTheBoundaryIsTheBacklogsAndIsCarriedOnce(t *testing.T) {
 
 // TWO PUBLISHES OF A SEAT AT ONCE KEEP EACH RANGE'S MARKS SOUND.
 //
-// A cycle takes no seat lock, so it and a release's flush can overlap. Here a
-// whole second call runs inside the first's publish of its first row, over 300
-// held notes and 300 written. At every publish, every row of either range at
+// No call takes a seat lock, so two calls of a seat can overlap. Here a whole
+// second call runs inside the first's publish of its first row, over 300 held
+// notes and 300 written. At every publish, every row of either range at
 // or below its mark has been acknowledged and no mark moved back; a page read
 // after the other call's acks starts above them, and different ranges never
 // read or move each other's marks.
@@ -649,7 +649,7 @@ func TestAForgottenSeatCarriesNothingUntilItsNextHydration(t *testing.T) {
 	db := openStore(t)
 	held := writeNotesUnder(t, db, "b", 200, 0)
 	js := &roundTripJS{}
-	s := newSyncer(db, js, func(string) string { return seat.AgentID })
+	s := stepping(newSyncer(db, js, func(string) string { return seat.AgentID }))
 	if err := s.recordBoundary(t.Context(), seat.Handle); err != nil {
 		t.Fatalf("record the boundary: %v", err)
 	}
@@ -720,7 +720,7 @@ func TestARestartMidDrainCarriesTheBacklogAgainBehindWhatTheSeatWrites(t *testin
 		}
 		return nil
 	}}
-	first.js = drainJS
+	stepping(first).js = drainJS
 	if turn := turnOf(t, first, drainJS); len(drainJS.acked) != 100 ||
 		!errors.Is(errors.Join(turn.ownErr, turn.backlogErr), refused) {
 		t.Fatalf("the first holding's turn had %d rows acknowledged and ended on (%v, %v), want 100 "+
@@ -736,7 +736,7 @@ func TestARestartMidDrainCarriesTheBacklogAgainBehindWhatTheSeatWrites(t *testin
 	writtenAfter := writeNotesUnder(t, kept, "F", 1, 0)
 	name := names{}.noted(t, held).noted(t, writtenAfter)
 	js := &roundTripJS{}
-	second.js = js
+	stepping(second).js = js
 	turn := turnOf(t, second, js)
 	carried := slices.Concat(turn.own, turn.backlog)
 	if want := slices.Concat(notesOf(t, writtenAfter), notesOf(t, held)); !slices.Equal(carried, want) {
@@ -904,15 +904,18 @@ func TestAHydrationCutAsItsBoundaryIsReadRecordsNoneAndBeginsNoHolding(t *testin
 			written := writeNotesUnder(t, fresh, "F", 1, 0)
 			name := names{}.noted(t, peerNotes).noted(t, written)
 			js := &roundTripJS{}
-			s.js = js
+			stepping(s).js = js
 			turn := turnOf(t, s, js)
 			if want := notesOf(t, written); !slices.Equal(turn.own, want) {
 				t.Errorf("the own pass had %s acknowledged, want %s alone", name.said(turn.own),
 					name.said(want))
 			}
-			if want := notesOf(t, peerNotes); !slices.Equal(turn.backlog, want) {
-				t.Errorf("the backlog had %s acknowledged, want the 10 notes the hydration wrote",
-					name.said(turn.backlog))
+			// In the order the hydration stamped them, which is the changelog's:
+			// the peer's rows went out together, in any order.
+			wrote := stamped(t, fresh, registered(t, "agent_diary"), 0, s.boundary(seat.Handle))
+			if !slices.Equal(turn.backlog, wrote) || len(wrote) != len(peerNotes) {
+				t.Errorf("the backlog had %s acknowledged, want the 10 notes the hydration wrote, %s",
+					name.said(turn.backlog), name.said(wrote))
 			}
 		})
 	}

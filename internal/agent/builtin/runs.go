@@ -172,8 +172,9 @@ func (t *listRuns) Name() string { return ListRunsTool }
 
 func (t *listRuns) Description() string {
 	return "List the other runs in flight around this one, your seat's and other seats' on the same work item, " +
-		"in the same conversation or on a work item linked to yours: each one's turn id, seat and how it " +
-		"relates to your work, where it stands (launching, running, parked on a question or a held call, " +
+		"in the same conversation, on a work item linked to yours, on a work item or conversation you filed or " +
+		"wrote, or that filed or wrote yours: each one's turn id, seat and how it " +
+		"relates to your work (`relation`), where it stands (launching, running, parked on a question or a held call, " +
 		"waiting for another run), its work item, and, for a " +
 		"run working for the same requester as you, its conversation, the branch it named and its task's " +
 		"title. A run for another requester shows its stage and item only. Use it to tell whether a run " +

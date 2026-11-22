@@ -1600,6 +1600,7 @@ type Fleet interface {
 	Channels
 	Follows
 	ChatReads
+	HomeBoards
 	Fires
 	Rebases
 	SandboxRuns
@@ -1628,8 +1629,8 @@ type Fleet interface {
 	SSHTests
 	IssueReports
 	InsightRecords
-	MCPGrants
-	MCPSignIns
+	OAuthGrants
+	OAuthSignIns
 	GoogleIdentities
 	MCPAccepted
 	PositionRegister
