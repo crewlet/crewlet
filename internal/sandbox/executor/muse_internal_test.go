@@ -581,7 +581,8 @@ func TestAMuseArchiveReadsAsTheSessionsTranscript(t *testing.T) {
 func TestAMuseRunsArtifactsAreItsOwnFiles(t *testing.T) {
 	p := Paths{Home: "/h"}
 	files, dirs := (Muse{}).artifactFiles(p), (Muse{}).artifactDirs(p)
-	if !slices.Equal(files, []string{p.MuseChildLines(), p.MuseTakeConfig(), p.MuseTakeConfigFresh(), p.MuseNoteHelper()}) ||
+	if !slices.Equal(files, []string{p.MuseChildLines(), p.MuseTakeConfig(), p.MuseTakeConfigFresh(), p.MuseNoteHelper(),
+		p.MuseNotesInstall()}) ||
 		!slices.Equal(dirs, []string{p.MuseServers(), p.MuseServersFresh(), p.MuseNotesPlugin()}) {
 		t.Fatalf("artifacts = %v %v", files, dirs)
 	}
@@ -609,7 +610,7 @@ func fixedMuseNonce(t *testing.T) {
 	t.Cleanup(func() { museNonce = was })
 }
 
-// EVERY RUN NAMES ITS SERVERS AFRESH, twelve hex digits no repository file
+// EVERY RUN NAMES ITS SERVERS AFRESH, six hex digits no repository file
 // can know beforehand: a trusted run loads the repository's `.mcp.json`
 // beside the run's own servers, so the run's bridge is never under a name a
 // checkout can hold.
@@ -619,8 +620,8 @@ func TestEveryMuseRunNamesItsServersAfresh(t *testing.T) {
 	seen := map[string]bool{}
 	for range 64 {
 		n := museNonce()
-		if len(n) != 12 || strings.Trim(n, "0123456789abcdef") != "" || seen[n] {
-			t.Fatalf("suffix %q: want twelve hex digits, new each run", n)
+		if len(n) != 6 || strings.Trim(n, "0123456789abcdef") != "" || seen[n] {
+			t.Fatalf("suffix %q: want six hex digits, new each run", n)
 		}
 		seen[n] = true
 	}
@@ -641,5 +642,31 @@ func TestMuseIsWrittenForTheReleaseItsProfileNames(t *testing.T) {
 	}
 	if ok, _ := (Muse{}).Continues("", ""); ok {
 		t.Error("an unread box continues an unread writer's session")
+	}
+}
+
+// A SERVER NAMED IN UP TO 19 CHARACTERS IS SHOWN WHOLE, AND A LONGER ONE STILL
+// RUNS: with the run's `-<6 hex>`, a 19-character name is within the 26 Muse
+// Code shows the model as written, and a 40-character one, which Muse shows
+// as a hash, is written all the same; nothing is refused for its length.
+//
+// Mutation: lengthen the suffix, or refuse a name for its length.
+func TestAMuseServerNameStaysWholeUpTo19Characters(t *testing.T) {
+	nonce := museNonce()
+	readable := strings.Repeat("a", 19)
+	if full := readable + "-" + nonce; len(full) > museServerNameShown {
+		t.Fatalf("a 19-character name runs as %q, past the %d Muse shows whole", full, museServerNameShown)
+	}
+	box := sandbox.NewFakeSandbox("b")
+	long := strings.Repeat("b", 40)
+	server := sandbox.MCPServer{URL: "http://e/mcp"}
+	err := writeMuseServers(t.Context(), box, "/s", map[string]sandbox.MCPServer{readable: server, long: server}, nonce)
+	if err != nil {
+		t.Fatalf("names of 19 and 40 characters: %v", err)
+	}
+	for _, name := range []string{readable, long} {
+		if _, err := box.ReadFile(t.Context(), "/s/"+name+"-"+nonce+".json"); err != nil {
+			t.Errorf("the server %s is not written under its name and the run's suffix: %v", name, err)
+		}
 	}
 }

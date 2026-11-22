@@ -1353,6 +1353,23 @@ func (p *Provider) SandboxCredentials() map[string]string {
 	return out
 }
 
+// SandboxCredentialRunKeys is, by each of [Provider.SandboxCredentials]' paths,
+// the keys its harness writes into that file during a run
+// ([harnessprofile.Profile.RunKeys]), which a box writing the login back keeps
+// as the shared login holds them. Nil where it names none.
+func (p *Provider) SandboxCredentialRunKeys() map[string][]string {
+	var out map[string][]string
+	for rel := range p.SandboxCredentials() {
+		if keys := p.profile.RunKeys[filepath.Base(rel)]; len(keys) > 0 {
+			if out == nil {
+				out = map[string][]string{}
+			}
+			out[rel] = slices.Clone(keys)
+		}
+	}
+	return out
+}
+
 // SandboxCredentialDocument is the shared login a harness keeps in a database of
 // its own ([harnessprofile.CredentialStore]) — the document its export printed —
 // as an absolute path on the engine host, or "" when the profile keeps none.
