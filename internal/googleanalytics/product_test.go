@@ -752,6 +752,18 @@ func TestACallsBodyAndParametersStayInTheSeatsScope(t *testing.T) {
 		"a filter on a subproperty out of scope": {"google_analytics_operate", map[string]any{
 			"operation": "analyticsadmin.properties.subpropertyEventFilters.create",
 			"path":      map[string]any{"propertiesId": "111"}, "body": map[string]any{"apply_to_property": "properties/222"}}},
+		"an audience export of another property": {"google_analytics_read", map[string]any{
+			"operation": "analyticsdata.properties.audienceExports.create",
+			"path":      map[string]any{"propertiesId": "111"}, "body": map[string]any{"audience": "properties/222/audiences/1"}}},
+		"an audience list of another property": {"google_analytics_read", map[string]any{
+			"operation": "analyticsdata.properties.audienceLists.create",
+			"path":      map[string]any{"propertiesId": "111"}, "body": map[string]any{"audience": "properties/222/audiences/1"}}},
+		"a standing audience list of another property": {"google_analytics_admin", map[string]any{
+			"operation": "analyticsdata.properties.recurringAudienceLists.create",
+			"path":      map[string]any{"propertiesId": "111"}, "body": map[string]any{"audience": "properties/222/audiences/1"}}},
+		"an audience named by no property": {"google_analytics_read", map[string]any{
+			"operation": "analyticsdata.properties.audienceExports.create",
+			"path":      map[string]any{"propertiesId": "111"}, "body": map[string]any{"audience": "audiences/1"}}},
 	} {
 		if _, err := w.call(t, tc.tool, tc.args); !refused(err) {
 			t.Errorf("%s answered %v, want it refused", name, err)
@@ -764,6 +776,11 @@ func TestACallsBodyAndParametersStayInTheSeatsScope(t *testing.T) {
 	}
 	if steps, _ := w.audit.take(); len(steps) != 0 {
 		t.Errorf("refused calls were recorded as %v", steps)
+	}
+	if _, err := w.call(t, "google_analytics_read", map[string]any{
+		"operation": "analyticsdata.properties.audienceExports.create", "path": map[string]any{"propertiesId": "111"},
+		"body": map[string]any{"audience": "properties/111/audiences/1"}}); err != nil {
+		t.Errorf("an audience export of the seat's own property answered %v", err)
 	}
 }
 
@@ -935,5 +952,59 @@ func TestAnAccountsWriteHoldsItsScopeUnderTheLease(t *testing.T) {
 	defer w.f.mu.Unlock()
 	if len(w.f.summariesLeased) == 0 || slices.Contains(w.f.summariesLeased, false) || w.f.writes != 1 {
 		t.Errorf("the apply read the summaries leased %v (writes %d)", w.f.summariesLeased, w.f.writes)
+	}
+}
+
+// A BATCH OF ACCESS BINDINGS BINDS TO THOSE BINDINGS AS THEY READ NOW: a
+// batch delete reads the bindings it names back through its parent's
+// batchGet, sends nothing where one changed since a person approved, and
+// refuses a binding of another parent; a reorder, which names every rule in
+// its new order, binds its request alone.
+//
+// Mutation: bind a batch to its request alone, or skip the parent check, and
+// a delete approved on a viewer's binding removes it after it became an
+// administrator's, or names another property's binding.
+func TestABatchOfAccessBindingsBindsToThoseBindings(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, "administer")
+	del := func(name string) map[string]any {
+		return map[string]any{"operation": "analyticsadmin.properties.accessBindings.batchDelete",
+			"path": map[string]any{"propertiesId": "111"}, "body": map[string]any{"requests": []any{
+				map[string]any{"name": name}}}}
+	}
+	call := growth.Call{Handle: "growth-lead", Tool: "google_analytics_admin", HeldCall: "held-del", Approver: "founder",
+		Args: del("properties/111/accessBindings/5")}
+	hold, err := w.p.Prepare(t.Context(), call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := w.f.called(); !slices.Equal(got, []string{"GET /v1alpha/properties/111/accessBindings:batchGet"}) ||
+		!strings.Contains(w.f.queries[0], "names=properties%2F111%2FaccessBindings%2F5") {
+		t.Fatalf("Prepare asked Google %v with %v", got, w.f.queries)
+	}
+	w.f.mu.Lock()
+	w.f.bindings["properties/111/accessBindings/5"]["roles"] = []any{"predefinedRoles/admin"}
+	w.f.mu.Unlock()
+	if _, err := w.p.Apply(t.Context(), call, hold.Binding); !errors.Is(err, growth.ErrMoved) || w.f.writes != 0 {
+		t.Fatalf("a delete over a changed binding answered %v (writes %d)", err, w.f.writes)
+	}
+	call.HeldCall = "held-del-2"
+	fresh, _ := w.p.Prepare(t.Context(), call)
+	if _, err := w.p.Apply(t.Context(), call, fresh.Binding); err != nil || w.f.writes != 1 {
+		t.Fatalf("an approved delete answered %v (writes %d)", err, w.f.writes)
+	}
+	w.f.called()
+	if _, err := w.call(t, "google_analytics_admin", del("properties/222/accessBindings/5")); !refused(err) {
+		t.Errorf("a delete naming another property's binding answered %v", err)
+	}
+	reorder := map[string]any{"operation": "analyticsadmin.properties.dataStreams.eventEditRules.reorder",
+		"path": map[string]any{"propertiesId": "111", "dataStreamsId": "3"},
+		"body": map[string]any{"eventEditRules": []any{"properties/111/dataStreams/3/eventEditRules/2",
+			"properties/111/dataStreams/3/eventEditRules/1"}}}
+	if _, err := w.call(t, "google_analytics_operate", reorder); err != nil {
+		t.Fatalf("a reorder answered %v", err)
+	}
+	if got := w.f.called(); !slices.Equal(got, []string{"POST /v1alpha/properties/111/dataStreams/3/eventEditRules:reorder"}) {
+		t.Errorf("a reorder asked Google %v, want its write alone", got)
 	}
 }

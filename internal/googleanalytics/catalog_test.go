@@ -57,18 +57,28 @@ func TestEveryFieldRuleNamesItsFieldInLowerCamel(t *testing.T) {
 	}
 }
 
-// EVERY WRITE NAMES WHAT IT ACTS IN, so the seat's scope holds it: its path's
-// property or account, the account or property its body names
-// ([bodyScopes]), the stream secret's property for the Measurement Protocol,
-// or, for the one write opening a new account, nothing that exists.
+// EVERY CALL WITH A BODY NAMES WHAT IT ACTS IN, so the seat's scope holds it:
+// its path's property or account, what its body names ([bodyScopes]), the
+// stream secret's property for the Measurement Protocol, or, for the one write
+// opening a new account, nothing that exists. A query taken in a POST (Reads)
+// is swept too, since its body can name another property's audience; a batch
+// read back through batchGet ([batchReads]) names a read of its own parent.
 //
-// Mutation: add a write on a collection with no body scope, or a body scope
-// for an operation the catalog lacks, and the test names it.
+// Mutation: add a call on a collection with no body scope, a body scope or a
+// batch read for an operation the catalog lacks, and the test names it.
 func TestEveryWriteNamesWhatItActsIn(t *testing.T) {
 	t.Parallel()
 	c := catalog()
+	for id, br := range batchReads() {
+		op, ok := c.Operation(id)
+		get, okGet := c.Operation(br.get)
+		if !ok || !okGet || get.Class != growth.ClassRead || strings.TrimSuffix(op.Path, op.Path[strings.LastIndex(op.Path, ":"):]) !=
+			strings.TrimSuffix(get.Path, ":batchGet") {
+			t.Errorf("%s reads its targets back through %s, which is no batchGet of its parent", id, br.get)
+		}
+	}
 	for _, op := range c.Operations {
-		if op.Method == "GET" || op.Reads {
+		if op.Method == "GET" {
 			continue
 		}
 		pathScoped := strings.Contains(op.Path, "{propertiesId}") || strings.Contains(op.Path, "{accountsId}")

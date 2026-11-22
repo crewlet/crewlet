@@ -11,9 +11,9 @@ import (
 )
 
 // bodyScope is where an operation's body names what it acts in beyond its
-// path, each a property or account resource name the seat's scope holds:
-// Target is the account or property it is made in where its path names none,
-// and Also the properties it reaches besides (a roll-up's sources).
+// path, each a resource name the seat's scope holds: Target is the account or
+// property it is made in where its path names none, and Also the properties
+// it reaches besides (a roll-up's sources, an audience of a property).
 type bodyScope struct {
 	Target string
 	Also   []string
@@ -29,6 +29,9 @@ func bodyScopes() map[string]bodyScope {
 		"analyticsadmin.properties.rollupPropertySourceLinks.create": {Also: []string{"sourceProperty"}},
 		"analyticsadmin.properties.subpropertyEventFilters.create":   {Also: []string{"applyToProperty"}},
 		"analyticsadmin.properties.subpropertyEventFilters.patch":    {Also: []string{"applyToProperty"}},
+		"analyticsdata.properties.audienceExports.create":            {Also: []string{"audience"}},
+		"analyticsdata.properties.audienceLists.create":              {Also: []string{"audience"}},
+		"analyticsdata.properties.recurringAudienceLists.create":     {Also: []string{"audience"}},
 	}
 }
 
@@ -39,6 +42,12 @@ const actsInNone = "analyticsadmin.accounts.provisionAccountTicket"
 // placeName is a property's or an account's resource name.
 var placeName = sync.OnceValue(func() *regexp.Regexp {
 	return regexp.MustCompile(`^(properties|accounts)/[0-9]{1,20}$`)
+})
+
+// underPlace is a resource name within a property or an account
+// (`properties/1/audiences/2`), its first two segments the place.
+var underPlace = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^((properties|accounts)/[0-9]{1,20})(/[A-Za-z0-9_.~-]+/[A-Za-z0-9_.~:-]+)*$`)
 })
 
 // newRequest is op's request, acting in the property or account its path
@@ -88,12 +97,64 @@ func placesOf(req googlegrowth.Request) ([]string, error) {
 		}
 		for _, n := range names {
 			s, _ := n.(string)
-			if !placeName().MatchString(s) {
-				return nil, refusal(growth.RefusedInvalid, fmt.Sprintf("body.%s names properties as "+
-					"properties/<id>, each once. No vendor was reached.", field))
+			m := underPlace().FindStringSubmatch(s)
+			if m == nil {
+				return nil, refusal(growth.RefusedInvalid, fmt.Sprintf("body.%s names resources as "+
+					"properties/<id> or a resource name within one, each once. No vendor was reached.", field))
 			}
-			out = append(out, s)
+			out = append(out, m[1])
 		}
 	}
 	return out, nil
+}
+
+// batchRead is how a batch that names its targets in its body reads them
+// back: the batchGet of its parent, and where in each of body.requests the
+// target's name sits.
+type batchRead struct{ get, name string }
+
+// batchReads are the writes changing access bindings their body names, which
+// a person approves on those bindings as they read now (who holds them, at
+// which roles): no one resource holds them. A batchCreate makes new bindings
+// and a reorder names every rule in its new order, so each binds its request.
+func batchReads() map[string]batchRead {
+	return map[string]batchRead{
+		"analyticsadmin.accounts.accessBindings.batchUpdate":   {"analyticsadmin.accounts.accessBindings.batchGet", "accessBinding.name"},
+		"analyticsadmin.accounts.accessBindings.batchDelete":   {"analyticsadmin.accounts.accessBindings.batchGet", "name"},
+		"analyticsadmin.properties.accessBindings.batchUpdate": {"analyticsadmin.properties.accessBindings.batchGet", "accessBinding.name"},
+		"analyticsadmin.properties.accessBindings.batchDelete": {"analyticsadmin.properties.accessBindings.batchGet", "name"},
+	}
+}
+
+// beforeRead reads a batch's targets back through its parent's batchGet, each
+// held to the call's own parent, so no binding outside it is named.
+func (p *Product) beforeRead(req googlegrowth.Request) (googlegrowth.Request, bool, error) {
+	br, ok := batchReads()[req.Op.ID]
+	if !ok {
+		return googlegrowth.Request{}, false, nil
+	}
+	requests, _ := req.Field("requests").([]any)
+	names := make([]string, 0, len(requests))
+	for _, r := range requests {
+		m, _ := r.(map[string]any)
+		name, _ := googlegrowth.Lookup(m, br.name).(string)
+		id, under := strings.CutPrefix(name, req.Account+"/accessBindings/")
+		if !under || !googlegrowth.IDParam("", id) {
+			return googlegrowth.Request{}, false, refusal(growth.RefusedInvalid, fmt.Sprintf("each of "+
+				"body.requests names a binding of %s as %s/accessBindings/<id> in its %s. No vendor was reached.",
+				req.Account, req.Account, br.name))
+		}
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return googlegrowth.Request{}, false, refusal(growth.RefusedInvalid, req.Op.ID+" names no binding in "+
+			"body.requests. No vendor was reached.")
+	}
+	op, _ := p.Catalog().Operation(br.get)
+	get, err := newRequest(op, req.Params, nil, nil)
+	if err != nil {
+		return googlegrowth.Request{}, false, err
+	}
+	get.Query["names"] = names
+	return get, true, nil
 }
