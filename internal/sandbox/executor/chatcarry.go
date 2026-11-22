@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // A SESSION THAT IS ONE CHAT FILE, carried between boxes: Gemini CLI's and Qwen
@@ -62,7 +63,7 @@ type freshCopy struct{ copy, file string }
 func chatSessionGate(session Session, paths Paths, g chatGate) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	if !session.Continues {
 		line(`s=%s k=no w= cf=`, q(session.ID))
 		return b.String()
@@ -81,9 +82,10 @@ func chatSessionGate(session Session, paths Paths, g chatGate) string {
 	} else {
 		line(`if [ -n "$h" ] && [ -n "$d" ] && ! grep -qxF "$s $d" %s 2> /dev/null; then h=; fi`, digests)
 	}
-	// ONLY THE ONE RELEASE CONTINUES, its own copy as much as a carried one: a
-	// newer release runs on sessions of its own ([exactCarry]).
-	line(`if [ "$v" != %s ]; then w=%s"$v"`, q(g.release),
+	// ONLY THE ONE RELEASE CONTINUES, its own copy as much as a carried one,
+	// read bare as the engine reads it ([bareReleaseShell], [exactInPlace]): a
+	// newer release runs on sessions of its own.
+	line(`%sif [ "$rv" != %s ]; then w=%s"${rv:-a release it could not read}"`, bareReleaseShell("rv"), q(g.release),
 		q("this build continues "+g.harness+" sessions only on "+g.release+", and this box runs "))
 	line(`elif [ -z "$h" ]; then`)
 	line(`  if [ ! -s %s ]; then w='it is not in this box, and no archive of it was carried here'`, carried)
@@ -141,7 +143,7 @@ const tornCut = `torn() { if [ -s "$1" ] && [ "$(tail -c 1 "$1" | wc -l)" -eq 0 
 func chatPack(paths Paths, at packAt, cfg string) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	line(`if [ -n "$cm" ]; then`)
 	line(`  if command -v tar > /dev/null 2>&1 && command -v gzip > /dev/null 2>&1; then`)
 	line(`    set -- "$cm"`)
@@ -165,7 +167,7 @@ func chatPack(paths Paths, at packAt, cfg string) string {
 // script, at at, its chat file found by locate (which sets cm): [packNothing]
 // where the box holds no chat file of it, [packFailed] where no archive was made.
 func chatOnDemand(paths Paths, session string, at packAt, cfg, locate string) string {
-	return "s=" + sandbox.ShellQuote(session) + " packed=\n" + locate + "\n" +
+	return "s=" + shellword.Quote(session) + " packed=\n" + locate + "\n" +
 		fmt.Sprintf("[ -n \"$cm\" ] || exit %d\n", packNothing) +
 		chatPack(paths, at, cfg) +
 		fmt.Sprintf("[ -n \"$packed\" ] || exit %d\n", packFailed)
@@ -204,23 +206,42 @@ func (b *transcriptBuilder) chatArchive(ctx context.Context, archive io.Reader, 
 // exactCarry reports whether harness continues, in a box of release box, a
 // session release writer wrote in another box, and if not, why in a person's
 // words: only where both are supported, the one release this build drives the
-// harness at, whose session layout and resume were read. A newer box runs on
-// sessions of its own, an older one not at all ([releaseGate]). box is ""
-// where no box was asked ([Runner.Restores]), which holds the writer alone;
-// a release a box printed that does not read arrives as printed ([boxSaid]).
+// harness at, whose session layout and resume were read ([carrier.Continues]).
+// A newer box runs on sessions of its own, an older one not at all
+// ([releaseGate]); a box or a writer that named no release this build reads
+// continues nothing.
 func exactCarry(harness, supported, box, writer string) (bool, string) {
-	switch {
-	case box != "" && box != supported:
-		return false, fmt.Sprintf("this build continues %s sessions only on %s, and this box runs %s",
-			harness, supported, box)
-	case writer != supported:
-		if writer == "" {
-			writer = "a release it did not record"
-		}
-		return false, fmt.Sprintf("this build continues %s sessions only on %s, and the session was written by %s",
-			harness, supported, writer)
+	if ok, why := exactInPlace(harness, supported, box); !ok {
+		return false, why
 	}
-	return true, ""
+	return exactWriter(harness, supported, writer)
+}
+
+// exactWriter is [exactCarry] judged of the writer alone
+// ([carrier.ContinuesWriter]).
+func exactWriter(harness, supported, writer string) (bool, string) {
+	switch writer {
+	case supported:
+		return true, ""
+	case "":
+		return false, writerNamedNoRelease(harness)
+	}
+	return false, fmt.Sprintf("this build continues %s sessions only on %s, and the session was written by %s",
+		harness, supported, writer)
+}
+
+// exactInPlace is [exactCarry] judged of the box alone: whether a box of
+// release box continues any session, the copy it holds as much as a carried
+// one ([inPlaceGate]), as the run's session gate holds it ([chatSessionGate]).
+func exactInPlace(harness, supported, box string) (bool, string) {
+	switch box {
+	case supported:
+		return true, ""
+	case "":
+		return false, boxNamedNoRelease(harness)
+	}
+	return false, fmt.Sprintf("this build continues %s sessions only on %s, and this box runs %s",
+		harness, supported, box)
 }
 
 // releaseRead is the shell reading into v the box's release as command prints
@@ -241,8 +262,8 @@ func releaseRead(command string) string {
 // is newer and runs, on sessions of its own like every newer one ([exactCarry]).
 func releaseGate(harness, supported string) string {
 	n, _ := releaseNumbers(supported)
-	say := sandbox.ShellQuote("crewlet: this box runs "+harness+" ") + `"${v:-that prints no release}"` +
-		sandbox.ShellQuote(", and this build runs "+harness+" "+supported+" or newer (a release it cannot "+
+	say := shellword.Quote("crewlet: this box runs "+harness+" ") + `"${v:-that prints no release}"` +
+		shellword.Quote(", and this build runs "+harness+" "+supported+" or newer (a release it cannot "+
 			"read counts as older): install "+harness+" "+supported)
 	return `r=${v%%[!0-9.]*} ro=1; rM=${r%%.*} rr=${r#*.}; rn=${rr%%.*} rp=${rr#*.}` + "\n" +
 		`case "$r" in *.*.*) ;; *) ro= ;; esac` + "\n" +

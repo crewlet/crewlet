@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 var log = logging.Get("sandbox.executor")
@@ -113,7 +114,7 @@ var prPattern = sync.OnceValue(func() *regexp.Regexp {
 // shared: a runner that could override it would be a second implementation of
 // the completion protocol.
 type Harness interface {
-	// Name is the harness's config name: "claude-code", "opencode".
+	// Name is the harness's config name: "claude-code", "codex", "opencode".
 	Name() string
 
 	// Session is the session req's run works in ([Session]), its ids in the
@@ -210,12 +211,15 @@ type carrier interface {
 
 	// Continues reports whether a session written by release writer, carried
 	// from another box, can be continued by release box (each as `--version`
-	// gave it), and if not, why, in a person's words. box is "" where no box
-	// was asked ([Runner.Restores]), and one that does not read is handed as
-	// printed ([boxSaid]). Claude Code and OpenCode take an unreadable release
-	// for a current one, as the notes gate does ([claudeNotesGate]); Gemini CLI
-	// and Qwen Code continue on their one release alone ([exactCarry]).
+	// gave it), and if not, why, in a person's words: [carrier.ContinuesWriter]'s
+	// answer, and the box's release held to the harness's own. A box release
+	// that does not read refuses ([boxNamedNoRelease]): the box's harness is
+	// one no rule here was read for.
 	Continues(box, writer string) (bool, string)
+
+	// ContinuesWriter is [carrier.Continues] judged of the writer alone, for a
+	// reader with no box to ask ([Runner.Restores]).
+	ContinuesWriter(writer string) (bool, string)
 
 	// Pack is the script that packs session now, the same pack the run's
 	// script makes once its harness exits, for a job that never got to
@@ -231,6 +235,12 @@ type carrier interface {
 	// layout is how the harness's archive is laid out, which the scrub a
 	// capture streams it through reads and writes it as ([scrubArchive]).
 	layout() archiveLayout
+
+	// meter reads an archive of ArchiveFormat, as kept, for what its
+	// session's last request carried, the harness's count of it and its
+	// estimate of the next request ([newContextMeter]), session's as release
+	// wrote it, within ctx and under large; err is the archive's own.
+	meter(ctx context.Context, r io.Reader, session, release string, large *passBudget) (meterReading, error)
 
 	// transcript reads an archive of ArchiveFormat, decompressed, as the
 	// session's transcript entries, handing each to b in recorded order until
@@ -504,7 +514,7 @@ func (r *Runner) noteInstruction() string {
 // the manager applies after this returns.
 func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 	paths := PathsFor(box)
-	if _, err := box.Exec(ctx, "mkdir -p "+sandbox.ShellQuote(paths.BinDir()), sandbox.ExecOptions{}); err != nil {
+	if _, err := box.Exec(ctx, "mkdir -p "+shellword.Quote(paths.BinDir()), sandbox.ExecOptions{}); err != nil {
 		return fmt.Errorf("executor: preparing %s: %w", paths.BinDir(), err)
 	}
 	return nil
@@ -534,8 +544,10 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	// EVERY HARNESS'S, not this run's alone: the box may last have run another.
 	for _, h := range Registered() {
 		if a, ok := h.(artifactHolder); ok {
-			ownFiles, ownDirs := a.artifacts(p)
-			files, dirs = append(files, ownFiles...), append(dirs, ownDirs...)
+			files = append(files, a.artifactFiles(p)...)
+		}
+		if a, ok := h.(artifactDirHolder); ok {
+			dirs = append(dirs, a.artifactDirs(p)...)
 		}
 	}
 	// The stream too, where it lives apart from the result: it is only
@@ -551,8 +563,8 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	// they cannot be listed and are matched by a glob outside the quotes: one
 	// whose node stopped part way would otherwise stay for the box's life.
 	cmd := "rm -f " + shellQuoteAll(files) + "; rm -rf " + shellQuoteAll(dirs) +
-		"; rm -rf " + sandbox.ShellQuote(p.WorkDir()) + "/" + saveFiles +
-		"; rm -rf " + sandbox.ShellQuote(p.WorkDir()) + "/" + packStagingFiles
+		"; rm -rf " + shellword.Quote(p.WorkDir()) + "/" + saveFiles +
+		"; rm -rf " + shellword.Quote(p.WorkDir()) + "/" + packStagingFiles
 	if _, err := box.Exec(ctx, cmd, sandbox.ExecOptions{}); err != nil {
 		return fmt.Errorf("executor: clearing the prior run's artefacts: %w", err)
 	}
@@ -563,7 +575,7 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 func shellQuoteAll(paths []string) string {
 	quoted := make([]string, len(paths))
 	for i, path := range paths {
-		quoted[i] = sandbox.ShellQuote(path)
+		quoted[i] = shellword.Quote(path)
 	}
 	return strings.Join(quoted, " ")
 }
@@ -686,14 +698,18 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 		return sandbox.RunHandle{}, err
 	}
 	if out.BriefOnStdin {
-		if err = box.WriteFile(ctx, paths.Brief(), []byte(req.Brief)); err != nil {
+		brief, fresh := req.Brief, req.FreshBrief
+		if _, ok := r.harness.(commandReader); ok {
+			brief, fresh = briefNotACommand(brief), briefNotACommand(fresh)
+		}
+		if err = box.WriteFile(ctx, paths.Brief(), []byte(brief)); err != nil {
 			return sandbox.RunHandle{}, fmt.Errorf("executor: writing the brief: %w", err)
 		}
 		// AND THE BRIEF A SESSION OF ITS OWN IS HANDED, for a run that
 		// continues one: its script points its harness at it where it starts
 		// a new session in the one's place ([sandbox.RunRequest.FreshBrief]).
-		if session.Continues && req.FreshBrief != "" {
-			if err = box.WriteFile(ctx, paths.FreshBrief(), []byte(req.FreshBrief)); err != nil {
+		if session.Continues && fresh != "" {
+			if err = box.WriteFile(ctx, paths.FreshBrief(), []byte(fresh)); err != nil {
 				return sandbox.RunHandle{}, fmt.Errorf("executor: writing the brief a new session is handed: %w", err)
 			}
 		}
@@ -703,7 +719,7 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	// is on PATH only after a profile a login shell sources. So PATH inside is
 	// the profile's, which is why the box's bin directory is prepended inside
 	// the script ([withBoxBin]): an export around it would be replaced.
-	pid, err := box.StartBackground(ctx, "sh -lc "+sandbox.ShellQuote(script), sandbox.ExecOptions{Env: req.Env})
+	pid, err := box.StartBackground(ctx, "sh -lc "+shellword.Quote(script), sandbox.ExecOptions{Env: req.Env})
 	if err != nil {
 		return sandbox.RunHandle{}, fmt.Errorf("executor: starting %s: %w", r.harness.Name(), err)
 	}
@@ -855,7 +871,7 @@ func (r *Runner) ownSpend(base *piece, result sandbox.Result, streamed *runSpend
 func wrapperScript(inner string, out Output, pins []Pinned, paths Paths, hooks string) (string, error) {
 	stdin := "/dev/null"
 	if out.BriefOnStdin {
-		stdin = sandbox.ShellQuote(paths.Brief())
+		stdin = shellword.Quote(paths.Brief())
 	}
 	var b strings.Builder
 	// A STATEMENT OF ITS OWN, before the harness's: an assignment prefix on the
@@ -882,15 +898,15 @@ func wrapperScript(inner string, out Output, pins []Pinned, paths Paths, hooks s
 	// THE JOB'S MEMORY DOMAIN EITHER SIDE OF ITS HARNESS, so a kill the kernel
 	// made for memory meanwhile is told from any other end ([Paths.MemoryBefore]).
 	fmt.Fprintf(&b, "%s\ncrewlet_memory > %s 2>/dev/null; ", sandbox.MemoryDomainScript,
-		sandbox.ShellQuote(paths.MemoryBefore()))
+		shellword.Quote(paths.MemoryBefore()))
 	fmt.Fprintf(&b, "%s < %s > %s 2> %s; code=$?; crewlet_memory > %s 2>/dev/null; ",
-		inner, stdin, sandbox.ShellQuote(out.Stdout), sandbox.ShellQuote(paths.Err()),
-		sandbox.ShellQuote(paths.MemoryAfter()))
+		inner, stdin, shellword.Quote(out.Stdout), shellword.Quote(paths.Err()),
+		shellword.Quote(paths.MemoryAfter()))
 	if out.Result != "" && out.Result != out.Stdout {
-		fmt.Fprintf(&b, "tail -n 1 %s > %s; ", sandbox.ShellQuote(out.Stdout), sandbox.ShellQuote(out.Result))
+		fmt.Fprintf(&b, "tail -n 1 %s > %s; ", shellword.Quote(out.Stdout), shellword.Quote(out.Result))
 	}
 	fmt.Fprintf(&b, "echo $code > %s; echo $code > %s",
-		sandbox.ShellQuote(paths.ExitCode()), sandbox.ShellQuote(paths.Done()))
+		shellword.Quote(paths.ExitCode()), shellword.Quote(paths.Done()))
 	return b.String(), nil
 }
 
@@ -925,7 +941,7 @@ func withNoteInstruction(system, instruction string) string {
 // one command, so an executable a setup step installed there resolves ahead of
 // the image's.
 func withBoxBin(cmd string, paths Paths) string {
-	return "PATH=" + sandbox.ShellQuote(paths.BinDir()) + `:"$PATH" ` + cmd
+	return "PATH=" + shellword.Quote(paths.BinDir()) + `:"$PATH" ` + cmd
 }
 
 // Poll reports what is known of the detached job ([sandbox.JobState]) from two
@@ -1102,7 +1118,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		}
 		result.SessionID, rec.id = minted, minted
 	}
-	result.Continued, result.HarnessVersion = rec.continued, r.releaseOf(rec.release)
+	result.Continued, result.HarnessVersion = rec.continued, releaseOf(rec.release)
 	result.FellBack = sandbox.BoundFellBack(rec.why)
 	if result.Captured, err = r.captured(ctx, box, paths, rec); err != nil {
 		return sandbox.Result{}, fmt.Errorf("executor: reading the session the box packed: %w", err)

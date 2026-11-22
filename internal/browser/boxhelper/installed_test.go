@@ -1,13 +1,18 @@
 package boxhelper_test
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -15,6 +20,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/browser"
 	"github.com/crewlet/crewlet/internal/browser/boxhelper/boxhelpertest"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // THE LOCKED CORE EXPECTS THE CHROMIUM SOMEBODY READ: the browsers.json of the
@@ -203,4 +209,81 @@ func installedOtherwise(t *testing.T, dir string) []string {
 		}
 	}
 	return odd
+}
+
+// THE INSTALLED DIGEST NAMES THE FILES THE LOCK INSTALLS: tree/installed.sha256
+// is one line, the digest of the files npm installed under the suite tree's
+// node_modules (boxhelpertest.Tree) as a box's install computes it before it
+// publishes a tree (js/tree.mjs's installedDigest): the hex SHA-256 over one
+// line per regular file, npm's own record aside, <path>\0<hex SHA-256>\n, the
+// path relative and slash-separated, in byte order. This is the definition's
+// second implementation, which holds the box's: every install case checks a
+// box's tree against the same file. A bump moves it, and this names the value.
+//
+// Mutations, each red: one digit of the file changed; the digest here taken
+// over the paths without the files' bytes.
+func TestTheInstalledDigestNamesTheFilesTheLockInstalls(t *testing.T) {
+	t.Parallel()
+	committed := committedInstalled(t)
+	tree := boxhelpertest.Tree(t)
+	got, err := installedDigest(filepath.Join(tree, "node_modules"))
+	if err != nil {
+		t.Fatalf("the suite's tree, %s: %v", tree, err)
+	}
+	if got != committed {
+		t.Errorf("the files the lock installs (the suite's tree, %s) have the digest %s, and "+
+			"internal/browser/boxhelper/tree/installed.sha256 names %s: write %s there (CONTRIBUTING.md, \"A "+
+			"Playwright MCP bump is read before it lands\")", tree, got, committed, got)
+	}
+}
+
+// committedInstalled is the digest tree/installed.sha256 names, failing t
+// unless the file is that one line: 64 lowercase hex digits and a newline.
+func committedInstalled(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(sourcetree.Root(t), "internal", "browser", "boxhelper", "tree", "installed.sha256")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`^[0-9a-f]{64}\n$`).Match(raw) {
+		t.Fatalf("%s holds %q, and it is one line: the digest's 64 lowercase hex digits", path, raw)
+	}
+	return strings.TrimSuffix(string(raw), "\n")
+}
+
+// installedDigest is the digest of the files under nodeModules, in Go, as
+// js/tree.mjs's installedDigest defines it; anything there that is neither a
+// file nor a directory, which no whole install holds, is an error naming it.
+func installedDigest(nodeModules string) (string, error) {
+	var lines [][]byte
+	err := filepath.WalkDir(nodeModules, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		rel, err := filepath.Rel(nodeModules, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		switch {
+		case !d.Type().IsRegular():
+			return fmt.Errorf("%s is a %s, neither a file nor a directory", rel, d.Type())
+		case rel == ".package-lock.json":
+			return nil
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		sum := sha256.Sum256(body)
+		lines = append(lines, []byte(rel+"\x00"+hex.EncodeToString(sum[:])+"\n"))
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	slices.SortFunc(lines, bytes.Compare)
+	sum := sha256.Sum256(bytes.Join(lines, nil))
+	return hex.EncodeToString(sum[:]), nil
 }

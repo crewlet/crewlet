@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // What a runner offers the saving of a session its run still works in: whether
@@ -178,7 +179,7 @@ func fileMeasuredSession(t *testing.T, b sandbox.Sandbox, session string) (threa
 	t.Helper()
 	cfg := paths(b).ClaudeConfigDir()
 	sidecar := cfg + "/projects/" + executor.ClaudeProjectDir + "/" + session
-	if res, err := b.Exec(t.Context(), "rm -rf "+shQuote(sidecar), sandbox.ExecOptions{}); err != nil ||
+	if res, err := b.Exec(t.Context(), "rm -rf "+shellword.Quote(sidecar), sandbox.ExecOptions{}); err != nil ||
 		res.ExitCode != 0 {
 		t.Fatalf("clearing the stand-in's sidecar directory: %v (exit %d) %s", err, res.ExitCode, res.Stderr)
 	}
@@ -269,9 +270,9 @@ func TestASaveDuringASubagentIsTakenAndToldWhatTheSubagentDid(t *testing.T) {
 	}
 	// THE THREAD'S LAST LINE BREAK LANDS once the first save's tar has read it,
 	// and never again.
-	landed := shQuote(b.Home() + "/line-break-landed")
+	landed := shellword.Quote(b.Home() + "/line-break-landed")
 	writeBoxStandIn(t, b, p.BinDir()+"/tar", rewritingTar(t, afterTar(`[ -e `+landed+` ] || { printf '\n' >> `+
-		shQuote(thread)+` && : > `+landed+`; }`)))
+		shellword.Quote(thread)+` && : > `+landed+`; }`)))
 	threadMember := strings.TrimPrefix(thread, p.ClaudeConfigDir()+"/")
 	spilledMember := strings.TrimPrefix(spilled, p.ClaudeConfigDir()+"/")
 

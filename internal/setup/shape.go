@@ -114,6 +114,32 @@ func (s Shape) Multiline() bool {
 		s == ShapeAppleKey || s == ShapeAppleAdsKey
 }
 
+// Accept is the file types a pasted value of this shape comes in, as a file
+// picker's accept list takes them, "" for a value that is never a file.
+func (s Shape) Accept() string {
+	switch s {
+	case ShapeAppleKey:
+		return ".p8"
+	case ShapeAppleAdsKey, ShapeES256Key:
+		return ".pem,.key"
+	default:
+		return ""
+	}
+}
+
+// Canonical is value as it is judged and stored: a pasted private key's PEM
+// with the line breaks a one-line box or a copy flattened written back
+// ([es256.NormalisePEM]), so the key sealed is one every reader parses. Every
+// other shape keeps value as it came.
+func (s Shape) Canonical(value string) string {
+	switch s {
+	case ShapeES256Key, ShapeAppleKey, ShapeAppleAdsKey:
+		return es256.NormalisePEM(value)
+	default:
+		return value
+	}
+}
+
 // Problem is the sentence for a pasted value this shape refuses, "" for one it
 // takes. noun names the field's value ("provisioner token"). It never quotes
 // the value, only where the characters it refuses are.

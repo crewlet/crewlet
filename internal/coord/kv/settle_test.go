@@ -8,30 +8,41 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
 // termed is a client whose every request waits term where its caller set no
-// deadline: what a settled bucket asks of the client it was opened on.
+// deadline: what a settled bucket asks of the client it was opened on. Its
+// publishes, a settled bucket's conditional writes ([settledBucket.update]),
+// go to publish where it is set, else to the client it embeds.
 type termed struct {
 	jetstream.JetStream
-	term time.Duration
+	term    time.Duration
+	publish func(ctx context.Context, m *nats.Msg, opts ...jetstream.PublishOpt) (*jetstream.PubAck, error)
 }
 
 func (c termed) Options() jetstream.JetStreamOptions {
 	return jetstream.JetStreamOptions{DefaultTimeout: c.term}
 }
 
-// scripted is a bucket's client handle whose conditional writes answer from a
-// script, one answer per attempt, and which counts the attempts. An answer of
-// nil hands the write to the bucket underneath, when there is one.
+func (c termed) PublishMsg(ctx context.Context, m *nats.Msg, opts ...jetstream.PublishOpt) (*jetstream.PubAck, error) {
+	if c.publish != nil {
+		return c.publish(ctx, m, opts...)
+	}
+	return c.JetStream.PublishMsg(ctx, m, opts...)
+}
+
+// scripted is a client whose conditional writes answer from a script, one
+// answer per attempt, and which counts the attempts. An answer of nil hands
+// the write to the client underneath, when there is one.
 type scripted struct {
-	jetstream.KeyValue
+	under    jetstream.JetStream
 	answers  []error
 	attempts int
 }
 
-func (s *scripted) Update(ctx context.Context, key string, value []byte, revision uint64) (uint64, error) {
+func (s *scripted) publish(ctx context.Context, m *nats.Msg, opts ...jetstream.PublishOpt) (*jetstream.PubAck, error) {
 	s.attempts++
 	var answer error
 	if len(s.answers) > 0 {
@@ -39,28 +50,25 @@ func (s *scripted) Update(ctx context.Context, key string, value []byte, revisio
 	}
 	switch {
 	case answer != nil:
-		return 0, answer
-	case s.KeyValue != nil:
-		return s.KeyValue.Update(ctx, key, value, revision)
+		return nil, answer
+	case s.under != nil:
+		return s.under.PublishMsg(ctx, m, opts...)
 	}
-	return 7, nil
+	return &jetstream.PubAck{Sequence: 7}, nil
 }
 
-func (s *scripted) Bucket() string {
-	if s.KeyValue != nil {
-		return s.KeyValue.Bucket()
-	}
-	return "scripted"
+// leaderRefusal is a conditional publish's refusal as the leader answers it:
+// its API error, the code alone telling a decided refusal from one in flight.
+func leaderRefusal(code jetstream.ErrorCode) error {
+	return &jetstream.APIError{Code: 400, ErrorCode: code, Description: "wrong last sequence"}
 }
 
-// refusedAs is a conditional write's refusal as the client hands it back:
-// the leader's API error, wrapped in the revision mismatch the client maps
-// BOTH "wrong last sequence" codes to — which is exactly why the code, and
-// not the sentinel, is what tells them apart.
+// refusedAs is a conditional write's refusal as a bucket's Update hands it
+// back: [leaderRefusal], wrapped in the revision mismatch BOTH "wrong last
+// sequence" codes map to, which is why the code, and not the sentinel, is
+// what tells them apart.
 func refusedAs(code jetstream.ErrorCode) error {
-	return fmt.Errorf("%w: %w", &jetstream.APIError{
-		Code: 400, ErrorCode: code, Description: "wrong last sequence",
-	}, jetstream.ErrKeyRevisionMismatch)
+	return fmt.Errorf("%w: %w", leaderRefusal(code), jetstream.ErrKeyRevisionMismatch)
 }
 
 // A CONDITIONAL WRITE IS ANSWERED BY WHAT THE LEADER DECIDED, NEVER BY ITS
@@ -75,11 +83,12 @@ func refusedAs(code jetstream.ErrorCode) error {
 // write still undecided at its deadline reads as a race somebody won.
 func TestAConditionalWriteIsAnsweredByWhatTheLeaderDecided(t *testing.T) {
 	t.Parallel()
-	inFlight := refusedAs(jetstream.JSErrCodeStreamWrongLastSequenceConstant)
-	decided := refusedAs(jetstream.JSErrCodeStreamWrongLastSequence)
+	inFlight := leaderRefusal(jetstream.JSErrCodeStreamWrongLastSequenceConstant)
+	decided := leaderRefusal(jetstream.JSErrCodeStreamWrongLastSequence)
 	bucket := func(answers ...error) (settledBucket, *scripted) {
 		s := &scripted{answers: answers}
-		return settledBucket{KeyValue: s, js: termed{term: time.Minute}, holding: undeclaredHolding}, s
+		return settledBucket{KeyValue: named{bucket: "scripted"},
+			js: termed{term: time.Minute, publish: s.publish}, holding: undeclaredHolding}, s
 	}
 
 	t.Run("in flight, then landed", func(t *testing.T) {
@@ -179,11 +188,12 @@ func TestACreateWaitsOutTheLeadersInFlightAnswer(t *testing.T) {
 		t.Fatalf("the runs bucket is a %T, not settled", f.runs)
 	}
 	s := &scripted{
-		KeyValue: underneath.KeyValue,
-		answers:  []error{refusedAs(jetstream.JSErrCodeStreamWrongLastSequenceConstant)},
+		under:   f.js,
+		answers: []error{leaderRefusal(jetstream.JSErrCodeStreamWrongLastSequenceConstant)},
 	}
-	if _, err := createKey(ctx, f.js, settledBucket{KeyValue: s, js: termed{term: time.Minute}, holding: undeclaredHolding},
-		"turn-1", []byte(`{"n":1}`)); err != nil {
+	if _, err := createKey(ctx, f.js, settledBucket{KeyValue: underneath.KeyValue,
+		js: termed{term: time.Minute, publish: s.publish}, holding: undeclaredHolding},
+		"turn-1", []byte(`{"n":1}`), nil); err != nil {
 		t.Fatalf("createKey = %v, want it written once the write ahead settled", err)
 	}
 	if s.attempts != 2 {

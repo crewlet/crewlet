@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // geminiCarryStandIn is the run of a stand-in Gemini CLI that keeps a session
@@ -38,10 +39,10 @@ for g in "$d"/session-*-"$i8".jsonl; do [ -f "$g" ] && f=$g; done
 cat > /dev/null
 case " $* " in
 *" --resume "*) [ -n "$f" ] || { echo "no session $s to resume" >&2; exit 1; }
-  grep '"type":"gemini"' ` + shQuote(session) + ` | tail -n 1 | sed "s/881853cd-0513-4cbd-b8bd-5bc81ae51ac1/resumed-response-1/" >> "$f";;
-*) sed "s/842120d9-2536-4808-8ba9-437d34456f75/$s/" ` + shQuote(session) + ` > "$d/session-2026-11-21T18-48-$i8.jsonl";;
+  grep '"type":"gemini"' ` + shellword.Quote(session) + ` | tail -n 1 | sed "s/881853cd-0513-4cbd-b8bd-5bc81ae51ac1/resumed-response-1/" >> "$f";;
+*) sed "s/842120d9-2536-4808-8ba9-437d34456f75/$s/" ` + shellword.Quote(session) + ` > "$d/session-2026-11-21T18-48-$i8.jsonl";;
 esac
-sed "s/6b8d5e13-304f-44a6-aa06-9f3ccff25600/$s/" ` + shQuote(stream) + "\n"
+sed "s/6b8d5e13-304f-44a6-aa06-9f3ccff25600/$s/" ` + shellword.Quote(stream) + "\n"
 }
 
 // geminiCarried is a Gemini CLI run's capture in a box of release, read out
@@ -175,8 +176,8 @@ func TestAReleaseOlderThanTheOneThisBuildDrivesIsRefusedAtTheStart(t *testing.T)
 			return geminiBoxAt(t, "", geminiCarryStandIn(t))
 		}, "argv", "this box runs Gemini CLI that prints no release"},
 		"qwen, an older patch": {func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
-			return qwenBoxAt(t, "0.28.2", qwenCarryStandIn(t))
-		}, "mode", "this box runs Qwen Code 0.28.2, and this build runs Qwen Code 0.28.3 or newer"},
+			return qwenBoxAt(t, "0.28.3", qwenCarryStandIn(t))
+		}, "mode", "this box runs Qwen Code 0.28.3, and this build runs Qwen Code 0.28.4 or newer"},
 		"qwen, a release that does not read": {func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 			return qwenBoxAt(t, "0.28", qwenCarryStandIn(t))
 		}, "mode", "this box runs Qwen Code 0.28,"},
@@ -184,8 +185,8 @@ func TestAReleaseOlderThanTheOneThisBuildDrivesIsRefusedAtTheStart(t *testing.T)
 			return geminiBoxAt(t, "0.70.0-nightly", geminiCarryStandIn(t))
 		}, "argv", "this box runs Gemini CLI 0.70.0-nightly, and this build runs Gemini CLI 0.70.0 or newer"},
 		"qwen, a pre-release of its release": {func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
-			return qwenBoxAt(t, "0.28.3-preview.1", qwenCarryStandIn(t))
-		}, "mode", "this box runs Qwen Code 0.28.3-preview.1, and this build runs Qwen Code 0.28.3 or newer"},
+			return qwenBoxAt(t, "0.28.4-preview.1", qwenCarryStandIn(t))
+		}, "mode", "this box runs Qwen Code 0.28.4-preview.1, and this build runs Qwen Code 0.28.4 or newer"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -203,7 +204,7 @@ func TestAReleaseOlderThanTheOneThisBuildDrivesIsRefusedAtTheStart(t *testing.T)
 }
 
 // qwenCarryStandIn is the run of a stand-in for the Qwen Code helper that
-// keeps a session as 0.28.3 does, from its own capture: argv is the helper,
+// keeps a session as 0.28.4 does, from its own capture: argv is the helper,
 // `run`, its config, the session and the mode, and `restore` is the real
 // helper's. A new session is chat-note.jsonl under the working directory's
 // key, its first line's cwd that realpath; a load must find the session there,
@@ -211,16 +212,16 @@ func TestAReleaseOlderThanTheOneThisBuildDrivesIsRefusedAtTheStart(t *testing.T)
 // It records the mode and the working directory.
 func qwenCarryStandIn(t *testing.T) string {
 	t.Helper()
-	chat, err := filepath.Abs(filepath.Join("testdata", "qwen", "0.28.3", "chat-note.jsonl"))
+	chat, err := filepath.Abs(filepath.Join("testdata", "qwen", "0.28.4", "chat-note.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return `case "$2" in restore) exec ` + shQuote(nodeForQwen(t)) + ` "$@";; run) ;; *) exit 2;; esac
+	return `case "$2" in restore) exec ` + shellword.Quote(nodeForQwen(t)) + ` "$@";; run) ;; *) exit 2;; esac
 s=$4 m=$5 w=$(pwd -P); cat > /dev/null
 printf '%s\n' "$m" > "$HOME/mode"; printf '%s\n' "$w" > "$HOME/cwd"
 c="$HOME/.qwen/projects/$(printf '%s' "$w" | sed 's/[^A-Za-z0-9]/-/g')/chats"; mkdir -p "$c"
 if [ "$m" = new ]; then
-  sed -e "s/` + qwenCapturedSession + `/$s/" -e "1s|\"cwd\":\"/work/proj\"|\"cwd\":\"$w\"|" ` + shQuote(chat) + ` > "$c/$s.jsonl"
+  sed -e "s/` + qwenCapturedSession + `/$s/" -e "1s|\"cwd\":\"/work/proj\"|\"cwd\":\"$w\"|" ` + shellword.Quote(chat) + ` > "$c/$s.jsonl"
 else
   head -n 1 "$c/$s.jsonl" 2> /dev/null | grep -qF "\"cwd\":\"$w\"" || { echo "no session $s recorded here" >&2; exit 1; }
   tail -n 1 "$c/$s.jsonl" >> "$c/$s.jsonl"
@@ -231,7 +232,7 @@ echo '{"type":"crewlet_qwen_end","stop_reason":"end_turn"}'
 }
 
 // A QWEN CODE SESSION CARRIED INTO A FRESH BOX IS LOADED UNDER ITS OWN KEY.
-// One run's capture is its chat file (0.28.3's chat-note.jsonl) under the
+// One run's capture is its chat file (0.28.4's chat-note.jsonl) under the
 // packing box's key. Handed to a run in a box of another realpath, so another
 // key, it is filed under the new key, its first line's cwd that realpath,
 // which the stand-in, like Qwen Code, holds a load to; the helper is told to
@@ -243,7 +244,7 @@ echo '{"type":"crewlet_qwen_end","stop_reason":"end_turn"}'
 // the carried archive in place; record the run's start as 0.
 func TestAQwenSessionCarriedIntoAFreshBoxIsLoadedUnderItsOwnKey(t *testing.T) {
 	t.Parallel()
-	chat, err := filepath.Abs(filepath.Join("testdata", "qwen", "0.28.3", "chat-note.jsonl"))
+	chat, err := filepath.Abs(filepath.Join("testdata", "qwen", "0.28.4", "chat-note.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +308,7 @@ func TestAQwenSessionCarriedIntoAFreshBoxIsLoadedUnderItsOwnKey(t *testing.T) {
 	}
 }
 
-// A NEWER QWEN CODE RELEASE LOADS NO CARRIED SESSION. A session 0.28.3 wrote,
+// A NEWER QWEN CODE RELEASE LOADS NO CARRIED SESSION. A session 0.28.4 wrote,
 // carried into a box running 0.29.0, is not restored: the helper starts the
 // session minted for it (`new`), the archive is removed, and the run says why,
 // naming the one release a session continues on.
@@ -330,7 +331,7 @@ func TestANewerQwenReleaseLoadsNoCarriedSession(t *testing.T) {
 	if mode := strings.TrimSpace(boxFile(t, b, b.Home()+"/mode")); mode != "new" {
 		t.Fatalf("the helper was told %q on 0.29.0, want new\n%s", mode, boxFile(t, b, paths(b).Err()))
 	}
-	const why = "this build continues Qwen Code sessions only on 0.28.3, and this box runs 0.29.0"
+	const why = "this build continues Qwen Code sessions only on 0.28.4, and this box runs 0.29.0"
 	if !res.Success || res.Continued || res.SessionID == ran.SessionID || res.FellBack != why {
 		t.Errorf("the run reports success %v, continued %v in session %q because %q; want a successful run "+
 			"in a session of its own because %q", res.Success, res.Continued, res.SessionID, res.FellBack, why)
@@ -365,7 +366,7 @@ func TestAContinuedGeminiRunIsChargedItsOwnRequestsThroughItsScript(t *testing.T
 			runner, b := geminiBoxAt(t, geminiCapturedRelease, geminiCarryStandIn(t))
 			if tc.failList {
 				writeBoxStandIn(t, b, paths(b).BinDir()+"/node", "#!/bin/sh\ncase \"$2\" in ids) exit 3;; esac\nexec "+
-					shQuote(geminiNode(t))+` "$@"`+"\n")
+					shellword.Quote(geminiNode(t))+` "$@"`+"\n")
 			}
 			_, res := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "carry on", Resume: ran.SessionID,
 				Carried: &sandbox.CarriedSession{Archive: described, Body: bytes.NewReader(raw)}})
@@ -412,7 +413,7 @@ func TestANewerReleaseRunsItsBoxsOwnCopyOfASessionFresh(t *testing.T) {
 		_, ran := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "begin"})
 		_, res := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "carry on", Resume: ran.SessionID})
 		mode := strings.TrimSpace(boxFile(t, b, b.Home()+"/mode"))
-		const why = "this build continues Qwen Code sessions only on 0.28.3, and this box runs 0.29.0"
+		const why = "this build continues Qwen Code sessions only on 0.28.4, and this box runs 0.29.0"
 		if mode != "new" || res.Continued || res.SessionID == ran.SessionID || res.FellBack != why {
 			t.Errorf("the second run was told %q, continued %v in %q because %q; want a session of its own "+
 				"because %q", mode, res.Continued, res.SessionID, res.FellBack, why)

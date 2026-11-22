@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -247,8 +248,8 @@ func (b *runBox) Files(ctx context.Context, dir string, max int) ([]string, erro
 	if dir != "." {
 		start = "./" + dir
 	}
-	q := sandbox.ShellQuote(start)
-	cmd := "cd " + sandbox.ShellQuote(b.root) + " 2>/dev/null || exit " + strconv.Itoa(listNoWorkspace) +
+	q := shellword.Quote(start)
+	cmd := "cd " + shellword.Quote(b.root) + " 2>/dev/null || exit " + strconv.Itoa(listNoWorkspace) +
 		"; [ -d " + q + " ] && [ ! -L " + q + " ] || exit " + strconv.Itoa(listNotADirectory) +
 		"; exec 3>&1; st=$( { { find " + q + " -type f -print0; echo $? >&4; } | head -c " +
 		strconv.Itoa(limit) + " >&3; } 4>&1 ) || exit $?; case $st in 0) ;; 126|127) exit $st ;; " +
@@ -305,7 +306,7 @@ func (b *runBox) Open(ctx context.Context, p string) (io.ReadCloser, error) {
 	b.mu.Unlock()
 	full := path.Join(b.root, p)
 	if !listed {
-		q := sandbox.ShellQuote(full)
+		q := shellword.Quote(full)
 		res, err := b.box.Exec(ctx, "test -f "+q+" && test ! -L "+q+" || exit "+
 			strconv.Itoa(checkNotARegularFile), sandbox.ExecOptions{TimeoutSec: boxListTimeout})
 		if err != nil {

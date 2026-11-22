@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // A GEMINI CLI SESSION CARRIED BETWEEN BOXES is its one chat file
@@ -38,10 +39,6 @@ var (
 	_ saver   = GeminiCLI{}
 )
 
-// exactRelease says Gemini CLI's `--version` prints its release alone
-// ([exactReleaser]).
-func (GeminiCLI) exactRelease() {}
-
 // Resumes says Gemini CLI continues a session it reported (`--resume`).
 func (GeminiCLI) Resumes() bool { return true }
 
@@ -56,6 +53,27 @@ func (GeminiCLI) VersionCommand() string { return "gemini --version" }
 // ([carrier], [exactCarry]).
 func (GeminiCLI) Continues(box, writer string) (bool, string) {
 	return exactCarry("Gemini CLI", geminiRelease, box, writer)
+}
+
+// ContinuesWriter is [GeminiCLI.Continues] judged of the writer alone
+// ([carrier]): only a session [geminiRelease] wrote.
+func (GeminiCLI) ContinuesWriter(writer string) (bool, string) {
+	return exactWriter("Gemini CLI", geminiRelease, writer)
+}
+
+// meter is the take's meter of a Gemini CLI archive ([carrier.meter]): no
+// figure. This build reads no count or estimate of a Gemini CLI session's next
+// request off its archive. The archive is left to the caller, which drains
+// it ([startMeter]).
+func (GeminiCLI) meter(context.Context, io.Reader, string, string, *passBudget) (meterReading, error) {
+	return meterReading{}, nil
+}
+
+// continuesInPlace reports whether a box whose Gemini CLI is release box
+// continues a session at all, the copy it holds as much as one carried to it
+// ([inPlaceGate]): only on [geminiRelease].
+func (GeminiCLI) continuesInPlace(box string) (bool, string) {
+	return exactInPlace("Gemini CLI", geminiRelease, box)
 }
 
 // Pack packs session now, as a run's script packs it once the harness exits
@@ -94,7 +112,7 @@ func geminiChatMember(name string) bool {
 // under the pinned slug named after the session's first eight characters
 // whose first line names the session, since two sessions may share the eight.
 func geminiLocate(paths Paths) string {
-	return `cf= cm=; i8=${s%"${s#????????}"}; for f in ` + sandbox.ShellQuote(paths.GeminiChats()) +
+	return `cf= cm=; i8=${s%"${s#????????}"}; for f in ` + shellword.Quote(paths.GeminiChats()) +
 		`/session-*-"$i8".jsonl; do if [ -s "$f" ] && [ ! -L "$f" ] && ` + geminiNamesSession(`"$f"`) +
 		`; then cf=$f cm=chats/${f##*/}; fi; done`
 }
@@ -109,7 +127,7 @@ func geminiNamesSession(file string) string {
 // geminiGate is a Gemini CLI run's part of the session gate ([chatSessionGate]),
 // its other wiring's copies fresh where the run was handed one.
 func geminiGate(paths Paths, fresh []freshCopy) chatGate {
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	chats := q(paths.GeminiChats())
 	restore := strings.Join([]string{
 		`rf=`,

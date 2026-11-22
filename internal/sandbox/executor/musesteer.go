@@ -73,10 +73,12 @@ const museHookAnswerBytes = 16384
 var museHookFraming = len(`{"hookSpecificOutput":{"additionalContext":"","hookEventName":"PostToolUse"}}`)
 
 // museItemUnits is the most UTF-16 units one Muse Code hook answer carries:
-// the ceiling less the framing, at three bytes a unit, the most any UTF-16
-// unit of text written raw takes. It holds the engine's widest item (4,505
-// units), ONE ITEM AN ANSWER: a second message goes to the next hook's
-// answer, three a step (ADR-0177's bounds stay as they are).
+// the ceiling less the framing, at three bytes a unit, the most any unit of
+// an item takes: the engine draws every control but tab and newline as
+// U+FFFD as it renders an item (internal/agent/prompts), so JSON escapes no
+// unit past two bytes. It holds the engine's widest item (4,505 units), ONE
+// ITEM AN ANSWER: a second message goes to the next hook's answer, three a
+// step (ADR-0177's bounds stay as they are).
 var museItemUnits = (museHookAnswerBytes - museHookFraming) / 3
 
 var _ hookDelivery = Muse{}
@@ -214,13 +216,9 @@ func musePluginManifest(helper, config string, notes, skills bool) ([]byte, erro
 }
 
 // writeMuseSkills writes each of a run's skills as `<skills>/<listed
-// name>/SKILL.md` ([Paths.MuseSkills]), after removing every skill an earlier
-// run wrote there, so a reused box lists only this run's.
+// name>/SKILL.md` ([Paths.MuseSkills]), into the directory the clear removed
+// whole ([Muse.artifacts]), so a reused box lists only this run's.
 func writeMuseSkills(ctx context.Context, box sandbox.Sandbox, skills []sandbox.Skill, paths Paths) error {
-	if _, err := box.Exec(ctx, "rm -rf "+sandbox.ShellQuote(paths.MuseSkills())+"/"+
-		sandbox.ShellQuote(sandbox.SkillNamespace+":")+"*", sandbox.ExecOptions{}); err != nil {
-		return fmt.Errorf("executor: removing an earlier run's Muse Code skills: %w", err)
-	}
 	for _, s := range skills {
 		file, err := skillFile(s.Listed(), s.Description, s.Body)
 		if err != nil {

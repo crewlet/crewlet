@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/prereqtest"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // kimiFixture is testdata/kimi/<release>/<name>: a real Kimi Code run's stream
@@ -333,7 +334,7 @@ func TestAKimiNoteIsConfirmedOffTheBoxsRecord(t *testing.T) {
 	box.Put(record, string(kimiFixture(t, "2.7.2", "steered.wire.jsonl")))
 	found := record
 	box.ExecFunc = func(_ context.Context, cmd string, _ sandbox.ExecOptions) (sandbox.ExecResult, error) {
-		if !strings.Contains(cmd, sandbox.ShellQuote(sessions)+"/*/"+session+"/agents/main/wire.jsonl") {
+		if !strings.Contains(cmd, shellword.Quote(sessions)+"/*/"+session+"/agents/main/wire.jsonl") {
 			t.Errorf("the record was looked for with %q", cmd)
 		}
 		return sandbox.ExecResult{Stdout: found}, nil
@@ -374,7 +375,7 @@ func TestAKimiRunIsStartedOnlyOnItsFloor(t *testing.T) {
 		starts  bool
 	}{{"2.7.0", false}, {"2.7.1", false}, {"2.7.2", true}, {"3.0.0-canary.1", true}, {"", true}} {
 		check := strings.Replace(kimiRelease, "$(kimi --version < /dev/null 2> /dev/null | head -n 1)",
-			sandbox.ShellQuote(tc.printed), 1) + "at " + floorArgs(kimiSupported)
+			shellword.Quote(tc.printed), 1) + "at " + floorArgs(kimiSupported)
 		err := exec.Command(sh, "-c", check).Run()
 		if starts := err == nil; starts != tc.starts {
 			t.Errorf("release %q: starts %v, want %v", tc.printed, starts, tc.starts)
@@ -571,7 +572,7 @@ func readJSON(t *testing.T, box sandbox.Sandbox, file string, v any) {
 // Mutation: leave the profile directory, or clear the home — the case fails.
 func TestAKimiRunsArtifactsAreItsOwnFiles(t *testing.T) {
 	paths := PathsFor(sandbox.NewFakeSandbox("b"))
-	files, dirs := (Kimi{}).artifacts(paths)
+	files, dirs := (Kimi{}).artifactFiles(paths), (Kimi{}).artifactDirs(paths)
 	if !slices.Equal(dirs, []string{paths.KimiAgents() + "/crewlet"}) ||
 		!slices.Contains(files, paths.KimiSettings()) || !slices.Contains(files, paths.KimiDriver()) {
 		t.Fatalf("artifacts = %v %v", files, dirs)

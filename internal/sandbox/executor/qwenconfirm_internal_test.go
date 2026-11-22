@@ -26,7 +26,7 @@ func qwenTakes(items ...string) []ServedTake {
 }
 
 // A QWEN CODE NOTE IS CONFIRMED BY ITS RECORD AND THE REPLY AFTER IT, AS
-// HANDED, ONCE PER RECORD, IN ORDER (0.28.3's chat file of a note handed
+// HANDED, ONCE PER RECORD, IN ORDER (0.28.4's chat file of a note handed
 // mid-turn). The framed text's digest confirms nothing, nor the framed text in
 // a tool result or the prompt; two records before the reply confirm two takes,
 // not three; of two with a reply after the first alone, one. A record with no
@@ -38,7 +38,7 @@ func qwenTakes(items ...string) []ServedTake {
 // pending matches past a skipped line.
 func TestAQwenCodeNoteIsConfirmedByItsRecordAsHanded(t *testing.T) {
 	t.Parallel()
-	raw, err := os.ReadFile(filepath.Join("testdata", "qwen", "0.28.3", "chat-note.jsonl"))
+	raw, err := os.ReadFile(filepath.Join("testdata", "qwen", "0.28.4", "chat-note.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestAQwenCodeSessionsRecordIsFoundByItsID(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	t.Cleanup(func() { box.Close(t.Context()) })
-	raw, err := os.ReadFile(filepath.Join("testdata", "qwen", "0.28.3", "chat-note.jsonl"))
+	raw, err := os.ReadFile(filepath.Join("testdata", "qwen", "0.28.4", "chat-note.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestAQwenCodeSessionsRecordIsFoundByItsID(t *testing.T) {
 }
 
 // A NOTE A COMPACTION KEEPS ONLY IN ITS SUMMARY IS NOT READ (ADR-0177). On
-// 0.28.3's own chat file of a note drained at the compaction point, whose
+// 0.28.4's own chat file of a note drained at the compaction point, whose
 // chat_compression record keeps it plain past the summary prefix: held. With
 // the note moved from that tail into the summary, the prefix unreadable, a
 // wider contextPrefixLength covering the note, or the note's entry the model's:
@@ -205,7 +205,7 @@ func TestAQwenCodeSessionsRecordIsFoundByItsID(t *testing.T) {
 // entry's text; read only the first entry past the prefix.
 func TestANoteACompactionKeepsOnlyInItsSummaryIsNotRead(t *testing.T) {
 	t.Parallel()
-	raw, err := os.ReadFile(filepath.Join("testdata", "qwen", "0.28.3", "chat-compact.jsonl"))
+	raw, err := os.ReadFile(filepath.Join("testdata", "qwen", "0.28.4", "chat-compact.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}

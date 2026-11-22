@@ -3,9 +3,10 @@ package executor
 // CopilotHome is the directory a Copilot run keeps its state in, pinned as
 // COPILOT_HOME ([Copilot.Pins]): the box home's `.copilot`, where the harness
 // keeps it by default and where a local box is seeded with the entry's login
-// (`config.json`'s copilotTokens). Its sessions are under `session-state/`,
-// and the run's own settings, standing instructions and extension are written
-// there ([Copilot.WriteConfig]), the one place Copilot reads each from.
+// (`config.json`'s copilotTokens and authTokens). Its sessions are under
+// `session-state/`, and the run's own settings, standing instructions and
+// extension are written there ([Copilot.WriteConfig]), the one place Copilot
+// reads each from.
 func (p Paths) CopilotHome() string { return p.Home + "/.copilot" }
 
 // CopilotSettings is the run's own user-level settings file, written whole by
@@ -28,6 +29,20 @@ func (p Paths) CopilotInstructions() string { return p.CopilotHome() + "/copilot
 // (copilot_steer.js), written as extension.mjs where the run reads notes or has
 // a turn cap, and removed where it has neither.
 func (p Paths) CopilotExtension() string { return p.CopilotHome() + "/extensions/crewlet-notes" }
+
+// CopilotLoaded is every place in the box home Copilot loads configuration
+// from that a run's launch does not write, measured on 1.0.114 to load in
+// prompt mode: user extensions (the whole directory, the run's own written
+// after), hooks, MCP servers, installed plugins, skills (Copilot's and the
+// home's `.agents/skills`), custom agents and instruction files; and the
+// language servers and saved model providers its help names. The login
+// (`config.json`) and the session store are not among them.
+func (p Paths) CopilotLoaded() (files, dirs []string) {
+	h := p.CopilotHome()
+	return []string{h + "/mcp-config.json", h + "/lsp-config.json", h + "/providers.json"},
+		[]string{h + "/extensions", h + "/hooks", h + "/installed-plugins", h + "/installed-plugins.lock",
+			h + "/skills", p.Home + "/.agents/skills", h + "/agents", h + "/instructions"}
+}
 
 // CopilotSessionDir is session's directory under the run's home: its
 // `events.jsonl`, the conversation, and `session.db`, the sql tool's tables,

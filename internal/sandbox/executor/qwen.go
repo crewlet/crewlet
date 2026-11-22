@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"cmp"
 	"context"
 	_ "embed"
 	"encoding/json"
@@ -15,13 +16,14 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // QwenCodeName is this runner's config name.
 const QwenCodeName = "qwen-code"
 
 // QwenCode drives Qwen Code (`qwen`) over ACP, its Agent Client Protocol
-// mode, from a helper in the box (qwen_helper.mjs), measured on 0.28.3
+// mode, from a helper in the box (qwen_helper.mjs), measured on 0.28.4
 // against a stub of an OpenAI-compatible API
 // (docs/concepts/code-sandbox.md, "Qwen Code", says what a run does). ACP
 // rather than `-p`: only ACP has a mid-run route for a note that Qwen Code
@@ -40,7 +42,7 @@ func (QwenCode) Name() string { return QwenCodeName }
 // it continues, or a new one under a uuid minted for it — Qwen Code takes the
 // id a new ACP session is created under (session/new's `_meta`
 // `qwen-code/sessionId`) and refuses one it already holds
-// (session_id_conflict, measured on 0.28.3) — and, for a run that continues
+// (session_id_conflict, measured on 0.28.4) — and, for a run that continues
 // one, a second uuid for the session it starts instead where its box holds
 // that one neither way.
 func (QwenCode) Session(req sandbox.RunRequest) Session {
@@ -56,15 +58,15 @@ func (QwenCode) Session(req sandbox.RunRequest) Session {
 // request reaches the helper as SIGTERM, which it answers with
 // session/cancel, never passing the signal to Qwen Code (qwen_helper.mjs).
 func (QwenCode) Command(req sandbox.RunRequest, session Session, paths Paths, _ string) string {
-	return "sh -c " + sandbox.ShellQuote(qwenScript(req, session, paths, sandbox.JobStopGrace))
+	return "sh -c " + shellword.Quote(qwenScript(req, session, paths, sandbox.JobStopGrace))
 }
 
 // qwenRelease is the Qwen Code release this build drives: the newest, whose
 // ACP messages, chat file and session/load it was measured against
-// (testdata/qwen/0.28.3). An older one is refused at the run's start, a newer
+// (testdata/qwen/0.28.4). An older one is refused at the run's start, a newer
 // one runs on sessions of its own, and only this one continues a carried
 // session ([releaseGate], [exactCarry]).
-const qwenRelease = "0.28.3"
+const qwenRelease = "0.28.4"
 
 // qwenScript is a Qwen Code run's script, giving its helper stop to go once
 // asked to end: the end protocol, the box's release read and gated
@@ -76,7 +78,7 @@ const qwenRelease = "0.28.3"
 func qwenScript(req sandbox.RunRequest, session Session, paths Paths, stop time.Duration) string {
 	var b strings.Builder
 	line := func(text string) { b.WriteString(text + "\n") }
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	var fresh []freshCopy
 	if req.FreshWiring != nil {
 		fresh = qwenFreshCopies(paths)
@@ -123,26 +125,37 @@ const otelExportUnset = `for n in $(env | sed -n 's/^\(OTEL_EXPORTER_OTLP_[A-Za-
 // Output is the helper's stream on stdout, which is also the result: the
 // session/update lines Qwen Code sent and the helper's own, ending with how
 // the turn ended ([qwenEndEvent]). The brief goes on stdin, which the helper
-// reads and sends as the turn's prompt. Unset is what would move or replace
-// what the run depends on: another home (QWEN_HOME, QWEN_RUNTIME_DIR) would
-// hide the settings and the session from the helper, QWEN_SYSTEM_MD replaces
-// the prompt the run's text is added to, OPENAI_API_KEY would reach the
+// reads and sends as the turn's prompt. Unset is what would move what the
+// run depends on: another home (QWEN_HOME, QWEN_RUNTIME_DIR) would hide the
+// settings and the session from the helper, OPENAI_API_KEY would reach the
 // model's shell (the key is in the settings, [qwenSettings]), and
 // QWEN_CODE_UNATTENDED_RETRY retries a refused request for up to six hours.
+// The prompt's variables are pinned ([QwenCode.Pins]).
 func (QwenCode) Output(paths Paths) Output {
 	return Output{Stdout: paths.Result(), Events: true, BriefOnStdin: true,
-		Unset: []string{"QWEN_HOME", "QWEN_RUNTIME_DIR", "QWEN_SYSTEM_MD", "OPENAI_API_KEY",
-			"QWEN_CODE_UNATTENDED_RETRY"}}
+		Unset: []string{"QWEN_HOME", "QWEN_RUNTIME_DIR", "OPENAI_API_KEY", "QWEN_CODE_UNATTENDED_RETRY"}}
 }
+
+// qwenDashScope is the endpoint Qwen Code's OpenAI-compatible sign-in sends a
+// key to when OPENAI_BASE_URL names none (measured on 0.28.4).
+const qwenDashScope = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 // Pins are what a run needs whatever the image says: the run's text in place
 // of Qwen Code's opening identity sentence, the rest of its prompt kept
 // (QWEN_SYSTEM_IDENTITY_MD, the profile's channel, measured under ACP on
-// 0.28.3); no catalogue fetch from models.dev, a connection of its own every
+// 0.28.4); no catalogue fetch from models.dev, a connection of its own every
 // run; and the entry's model, which Qwen Code reads from OPENAI_MODEL under
 // its OpenAI sign-in (as measured under ACP).
+//
+// AND THE VARIABLES THAT MOVE THE KEY OR REPLACE THE PROMPT, set whether or
+// not the entry names one, since Qwen Code fills each variable its
+// environment lacks from an `.env` file: OPENAI_BASE_URL the entry's or Qwen
+// Code's own, which its subscription sign-in does not read, and the prompt
+// files off (measured on 0.28.4).
 func (QwenCode) Pins(_ context.Context, req sandbox.RunRequest, paths Paths) []Pinned {
-	pins := []Pinned{{Name: "QWEN_SYSTEM_IDENTITY_MD", Value: paths.System()}, {Name: "QWEN_CODE_MODELS_DEV", Value: "off"}}
+	pins := []Pinned{{Name: "QWEN_SYSTEM_IDENTITY_MD", Value: paths.System()}, {Name: "QWEN_CODE_MODELS_DEV", Value: "off"},
+		{Name: "QWEN_SYSTEM_MD", Value: "false"}, {Name: "QWEN_WRITE_SYSTEM_MD", Value: "false"},
+		{Name: "OPENAI_BASE_URL", Value: cmp.Or(req.Env["OPENAI_BASE_URL"], qwenDashScope)}}
 	if req.Model != "" {
 		pins = append(pins, Pinned{Name: "OPENAI_MODEL", Value: req.Model})
 	}
@@ -156,21 +169,47 @@ func (QwenCode) Events() Decoder { return &qwenEvents{} }
 // stream.
 func (QwenCode) Parse(stdout []byte) sandbox.Result { return decodeAll(&qwenEvents{}, stdout) }
 
-// artifacts is what a Qwen Code run leaves in a box beside the shared
+// readsCommands marks Qwen Code as running a prompt that begins with `/` as one
+// of its commands (`/init` wrote a QWEN.md over ACP, measured on 0.28.4).
+func (QwenCode) readsCommands() {}
+
+// qwenHome is what a Qwen Code run may load from the box that its launch did
+// not write ([runHome]): the home's skills, commands, rules, memory files and
+// environment file. The run's own skills are in its work directory
+// ([Paths.QwenSkills]); extensions stay on disk, unloaded (the helper's
+// `--extensions none`); agents are denied in the settings.
+var qwenHome = runHome{State: ".qwen", Owned: []string{"skills", "commands", "rules", "QWEN.md", "AGENTS.md", ".env"},
+	Memory: []string{"QWEN.md", "AGENTS.md"}, WalksEnv: true}
+
+var (
+	_ artifactHolder    = QwenCode{}
+	_ artifactDirHolder = QwenCode{}
+)
+
+// artifactFiles is what a Qwen Code run leaves in a box beside the shared
 // artefacts ([artifactHolder]): its settings, which hold its key, the helper
-// and its configuration, and its skills.
-func (QwenCode) artifacts(p Paths) (files, dirs []string) {
+// and its configuration, a fresh session's copies of both, and where the run
+// began in its session.
+func (QwenCode) artifactFiles(p Paths) []string {
 	return []string{p.QwenSettings(), p.QwenSettings() + ".fresh", p.QwenHelper(), p.QwenHelperConfig(),
-		p.QwenHelperConfig() + ".fresh", p.QwenRunStart()}, []string{p.QwenSkills()}
+		p.QwenHelperConfig() + ".fresh", p.QwenRunStart()}
 }
 
-// WriteConfig writes what a run's helper and harness read: the run's system
-// text, the helper and its configuration, the settings in the box home, and
-// the run's skills. It returns "": Qwen Code reads its settings from its
-// home, and the helper hands it no MCP servers of its own.
+// artifactDirs is the directory a Qwen Code run leaves of its own
+// ([artifactDirHolder]): its skills, removed whole.
+func (QwenCode) artifactDirs(p Paths) []string { return []string{p.QwenSkills()} }
+
+// WriteConfig removes what an earlier run or the image left for Qwen Code
+// ([qwenHome]) and writes what a run's helper and harness read: the run's
+// system text, the helper and its configuration, the settings in the box
+// home, and the run's skills. It returns "": Qwen Code reads its settings
+// from its home, and the helper hands it no MCP servers of its own.
 func (q QwenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
 	paths Paths) (string, error) {
 	if _, err := toolEnvOmitted(req.SignInEnv); err != nil {
+		return "", err
+	}
+	if err := qwenHome.prune(ctx, box, paths.Home, "Qwen Code"); err != nil {
 		return "", err
 	}
 	system := req.System
@@ -234,12 +273,12 @@ func qwenWired(files map[string][]byte, req sandbox.RunRequest, paths Paths, set
 
 // qwenSkillName is the name a run's skill is written and listed under:
 // [sandbox.Skill.Listed] with its colon a dash, a name of the shape Qwen Code
-// was measured listing and loading (0.28.3); the helper maps it back as it
+// was measured listing and loading (0.28.4); the helper maps it back as it
 // reports a load.
 func qwenSkillName(s sandbox.Skill) string { return sandbox.SkillNamespace + "-" + s.Name }
 
 // qwenDenied is every tool of Qwen Code's a headless run must not reach,
-// each removed outright by `permissions.deny` (measured under ACP on 0.28.3:
+// each removed outright by `permissions.deny` (measured under ACP on 0.28.4:
 // none of the four offered): agent, a subagent whose loop Qwen Code never
 // asks for notes in; ask_user_question, which asks nobody; and plan mode,
 // which stops the run to wait for an approval nobody gives.
@@ -265,7 +304,7 @@ func qwenSettings(req sandbox.RunRequest, paths Paths) map[string]any {
 			"chatRecording":    true,
 		},
 		"memory": map[string]any{"enableManagedAutoMemory": false, "enableManagedAutoDream": false},
-		// No follow-up suggestion: over ACP, 0.28.3 sends one more request
+		// No follow-up suggestion: over ACP, 0.28.4 sends one more request
 		// after a finished turn to suggest the user's next prompt, whose
 		// counts no session/update carries (measured against the stub).
 		"ui":          map[string]any{"enableFollowupSuggestions": false},
@@ -279,7 +318,7 @@ func qwenSettings(req sandbox.RunRequest, paths Paths) map[string]any {
 	}
 	// THE RUN'S ROUND CAP, as Qwen Code caps a session's model requests: at
 	// the cap the turn ends with ACP's stopReason max_turn_requests (measured
-	// on 0.28.3: a cap of 2 and of 3 ended after 2 and 3 requests, a run done
+	// on 0.28.4: a cap of 2 and of 3 ended after 2 and 3 requests, a run done
 	// in 3 under a cap of 5 ended end_turn). A run is a session of its own, so
 	// the session's count is the run's.
 	if req.Limits.MaxTurns > 0 {
@@ -297,7 +336,7 @@ func qwenSettings(req sandbox.RunRequest, paths Paths) map[string]any {
 	}
 	// ONLY THE RUN'S SKILLS: "user" stays enabled, since a directory the
 	// settings name is listed at that level (measured: disabling it lists
-	// nothing), and the home's own skills directories are left empty.
+	// nothing), and the home's own skills directory is removed ([qwenHome]).
 	skills := map[string]any{"disabledLevels": []string{"project", "extension", "bundled"}}
 	if len(req.Skills) > 0 {
 		skills["directories"] = []string{paths.QwenSkills()}
@@ -305,8 +344,8 @@ func qwenSettings(req sandbox.RunRequest, paths Paths) map[string]any {
 			"matcher": "skill",
 			"hooks": []any{map[string]any{
 				"type": "command", "timeout": int(qwenHookTimeout / time.Second),
-				"command": "node " + sandbox.ShellQuote(paths.QwenHelper()) + " skill " +
-					sandbox.ShellQuote(paths.QwenHelperConfig()),
+				"command": "node " + shellword.Quote(paths.QwenHelper()) + " skill " +
+					shellword.Quote(paths.QwenHelperConfig()),
 			}},
 		}}}
 	}
@@ -325,8 +364,8 @@ const qwenHookTimeout = 10 * time.Second
 // milliseconds where the engine sets a wait, so a question the seat parks on
 // is held to the engine's hold rather than Qwen Code's ten minutes; and
 // `alwaysLoadTools` for a server whose tools are offered on every request,
-// which 0.28.3 otherwise hides behind its tool search and refuses a direct
-// call to.
+// which 0.28.4 otherwise hides behind its tool search (a request offered
+// tool_search and tool_call, none of the server's tools; measured).
 func qwenMCP(s sandbox.MCPServer) map[string]any {
 	var out map[string]any
 	if s.Transport == sandbox.TransportHTTP {
@@ -367,10 +406,10 @@ type qwenHelperConfig struct {
 }
 
 // qwenMCPWait bounds the wait for the run's MCP servers to connect before its
-// prompt goes in: the bridge connected 0.4 to 0.7 s after session/new
-// (measured on 0.28.3), and sixty seconds is the room an OpenCode run's
-// servers get for the same bridge (openCodeMCPWait), short of holding a seat
-// for a bridge that is not coming.
+// prompt goes in: a server the settings name connected 0.3 s after
+// session/new (measured on 0.28.4), and sixty seconds is the room an OpenCode
+// run's servers get for the same bridge (openCodeMCPWait), short of holding a
+// seat for a bridge that is not coming.
 const qwenMCPWait = 60 * time.Second
 
 // qwenHelperConfigOf is req's [qwenHelperConfig].
@@ -398,7 +437,7 @@ func qwenHelperConfigOf(req sandbox.RunRequest, paths Paths) qwenHelperConfig {
 // from the settings and the endpoint from OPENAI_BASE_URL, as the profile's
 // text phases sign in; and its paid login, read from the home's
 // subscription_credentials.json, its endpoint a constant of the bundle
-// (0.28.3's own names, NOT MEASURED against Qwen's service).
+// (0.28.4's own names, NOT MEASURED against Qwen's service).
 const (
 	qwenAuthOpenAI       = "openai"
 	qwenAuthSubscription = "qwen-subscription"

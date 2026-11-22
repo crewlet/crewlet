@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // e2bLog names the remote backend, so its lines are not attributed to local.go's
@@ -73,7 +74,7 @@ func NewE2B(opts E2BOptions) (*E2BProvider, error) {
 		// REFUSED AT CONSTRUCTION, so the apply fails rather than every
 		// launch, each a 401 at its first create, minutes into a turn.
 		return nil, errors.New(
-			"e2b: providers.sandbox.api_key resolved empty — the API " +
+			"e2b: providers.sandbox.e2b.api_key resolved empty — the API " +
 				"authenticates every call, including against a self-hosted " +
 				"cluster, where `domain` changes which API is talked to and " +
 				"not whether it authenticates")
@@ -109,9 +110,11 @@ func (p *E2BProvider) templateFor(spec Spec) string {
 
 // Create implements [Provider].
 //
-// EVERY BOX IS SECURED ([e2bAPI.createBox]): its envd refuses any request
-// without the box's access token, which every handle this backend builds
-// carries ([e2bBox.EnvdAccessToken]) and every envd call presents.
+// EVERY BOX IS PRIVATE AND SECURED ([e2bAPI.createBox]): E2B's proxy passes a
+// request to a port but envd's only with the box's traffic token, and envd
+// refuses a request without the box's access token, which every handle this
+// backend builds carries ([e2bBox.EnvdAccessToken]) and every envd call
+// presents.
 func (p *E2BProvider) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	template := p.templateFor(spec)
 	box, err := p.api.createBox(ctx, template, spec.TimeoutSec, spec.Env)
@@ -328,8 +331,7 @@ func killUserScript() string {
 // sender signal, and no zombie. Builtins only, so the walk forks nothing it
 // would then find; a record that goes as it is read is a process that went.
 func userLive(root string) string {
-	quoted := "'" + strings.ReplaceAll(root, "'", `'\''`) + "'"
-	return `userlive() { for d in ` + quoted + `/[0-9]*; do [ "${d##*/}" != "$$" ] || continue; z= m=; ` +
+	return `userlive() { for d in ` + shellword.Quote(root) + `/[0-9]*; do [ "${d##*/}" != "$$" ] || continue; z= m=; ` +
 		`while read -r k a b c r; do case "$k" in State:) [ "$a" != Z ] || z=1 ;; ` +
 		`Uid:) if [ "$a" = "$u" ] || [ "$c" = "$u" ]; then m=1; fi; break ;; esac; done < "$d/status"; ` +
 		`[ -z "$m" ] || [ -n "$z" ] || return 0; done 2> /dev/null; return 1; }

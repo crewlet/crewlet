@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // geminiFixture is one of testdata/gemini/0.70.0's files: Gemini CLI 0.70.0's
@@ -281,7 +282,7 @@ func TestOnlyATerminalQuotaAtTheRunsOwnFailureSitsAGeminiEntryOut(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			runner, b := geminiBox(t, "cat "+shQuote(fixture)+"\nexit "+strconv.Itoa(tc.exit)+"\n")
+			runner, b := geminiBox(t, "cat "+shellword.Quote(fixture)+"\nexit "+strconv.Itoa(tc.exit)+"\n")
 			_, res := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
 			kind, ok := p.EndedKind(harness.RunEnd{Answer: res.Text, Error: res.Error, Failed: !res.Success,
 				Event: res.Event, Limits: res.Limits, NoLimit: res.NoLimitExit,

@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // Commit attribution: what a run asked to credit Crewlet on its commits
@@ -46,7 +47,7 @@ const (
 // participants. Not `Signed-off-by`, which certifies the Developer Certificate
 // of Origin (only the party answerable for the code can) and GitHub renders
 // as nothing.
-const CoAuthor = "Crewlet <noreply@crewlet.ai>"
+const CoAuthor = "Crewlet <noreply@crewlet.com>"
 
 // The keys of the Crewlet trailers: the seat that made a commit, the run that
 // wrote it, and the work item its turn is charged to. A trailer is a claim the
@@ -173,10 +174,10 @@ func trailerValue(s string) string {
 func attributionHook(trailers []attributionTrailer, hooks string) []byte {
 	args := make([]string, len(trailers))
 	for i, trailer := range trailers {
-		args[i] = "--if-exists " + trailer.ifExists + " --trailer " + sandbox.ShellQuote(trailer.line)
+		args[i] = "--if-exists " + trailer.ifExists + " --trailer " + shellword.Quote(trailer.line)
 	}
 	return []byte(strings.NewReplacer(attributionTrailersMark, strings.Join(args, " "),
-		attributionEntryMark, sandbox.ShellQuote(hooksParameter(hooks))).Replace(attributionHookScript))
+		attributionEntryMark, shellword.Quote(hooksParameter(hooks))).Replace(attributionHookScript))
 }
 
 // installAttribution writes the hook into the box and links it under every
@@ -199,7 +200,7 @@ func installAttribution(ctx context.Context, box sandbox.Sandbox, paths Paths, a
 	// commit. A copy by an exited process is held open by nobody. The links are
 	// relative and made in the box: a host-made link names a host path a
 	// container lacks.
-	link := "cd " + sandbox.ShellQuote(paths.CommitAttribution()) + " && cp hook.source hook && rm hook.source && " +
+	link := "cd " + shellword.Quote(paths.CommitAttribution()) + " && cp hook.source hook && rm hook.source && " +
 		"chmod 700 hook && mkdir -p hooks && " +
 		"for hook in " + strings.Join(gitHooks, " ") + `; do ln -sf ../hook "hooks/$hook" || exit; done`
 	res, err := box.Exec(ctx, link, sandbox.ExecOptions{})
@@ -225,7 +226,7 @@ func installAttribution(ctx context.Context, box sandbox.Sandbox, paths Paths, a
 // Run in the wrapper, after the login profile, for [Output.Unset]'s reason.
 func attributionExports(hooks string) string {
 	return `export GIT_CONFIG_PARAMETERS="${GIT_CONFIG_PARAMETERS:+$GIT_CONFIG_PARAMETERS }"` +
-		sandbox.ShellQuote(hooksParameter(hooks)) + "; "
+		shellword.Quote(hooksParameter(hooks)) + "; "
 }
 
 // hooksParameter is the GIT_CONFIG_PARAMETERS item setting core.hooksPath to

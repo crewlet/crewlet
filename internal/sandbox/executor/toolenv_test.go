@@ -209,14 +209,15 @@ func TestTheToolEnvironmentPluginTakesEachNameFromACommandAndNoneFromTheServer(t
 }
 
 // A SIGN-IN NAME NO SHELL CAN UNSET IS REFUSED by every runner that keeps the
-// sign-in from its commands (Claude Code, OpenCode, Qwen Code) before its
-// harness starts, rather than left in the commands' environment.
+// sign-in from its commands (Claude Code, OpenCode, Codex, Qwen Code) before
+// its harness starts, rather than left in the commands' environment.
 //
-// Mutation: skip the check, and a runner writes its configuration.
+// Mutation: skip the check in any runner, and it writes its configuration.
 func TestASignInNameNoShellCanUnsetIsRefused(t *testing.T) {
 	t.Parallel()
 	req := sandbox.RunRequest{Brief: "x", SignInEnv: []string{"ANTHROPIC_API_KEY", "MY-KEY"}}
-	for _, h := range []executor.Harness{executor.ClaudeCode{}, executor.OpenCode{}, executor.QwenCode{}} {
+	for _, h := range []executor.Harness{executor.ClaudeCode{}, executor.OpenCode{}, executor.Codex{},
+		executor.QwenCode{}} {
 		b := sandbox.NewFakeSandbox("box-1")
 		if _, err := h.WriteConfig(t.Context(), b, req, executor.Session{}, executor.PathsFor(b)); err == nil ||
 			!strings.Contains(err.Error(), `"MY-KEY"`) {

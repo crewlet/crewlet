@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // kimiWireLine is the part of one wire.jsonl line the confirm reader reads: its
@@ -123,7 +124,7 @@ func (Kimi) notesHeld(ctx context.Context, box sandbox.Sandbox, session Session,
 		return nil, fmt.Errorf("executor: %q is no Kimi session id", session.ID)
 	}
 	paths := PathsFor(box)
-	found, err := box.Exec(ctx, `for w in `+sandbox.ShellQuote(paths.KimiSessions())+`/*/`+session.ID+
+	found, err := box.Exec(ctx, `for w in `+shellword.Quote(paths.KimiSessions())+`/*/`+session.ID+
 		`/agents/main/wire.jsonl; do [ -f "$w" ] && printf '%s\n' "$w"; done; :`, sandbox.ExecOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("executor: finding the Kimi session's record: %w", err)

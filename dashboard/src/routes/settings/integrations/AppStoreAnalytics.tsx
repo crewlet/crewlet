@@ -19,7 +19,7 @@ import {
   Select,
   Stack,
   Text,
-  Textarea,
+  ValueField,
 } from "@crewlethq/ui";
 import { ConfirmModal, Modal } from "~/components/Modal.tsx";
 import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
@@ -160,21 +160,17 @@ function TurnOn({
             />
           )}
         </FormField>
-        <FormField
+        {/* MASKED, LINE BREAKS KEPT, AND A FILE PICKER: the kit's box for a key
+            that spans lines, as the setup form draws one. */}
+        <ValueField
           label="Admin key (.p8)"
-          helper="Create a team key with the Admin role, paste it, then revoke it once this is done."
-        >
-          {(field) => (
-            <Textarea
-              id={field.id}
-              aria-describedby={field.describedBy}
-              spellCheck={false}
-              rows={6}
-              value={key}
-              onChange={(event) => setKey(event.target.value)}
-            />
-          )}
-        </FormField>
+          kind="secret-multiline"
+          accept=".p8"
+          rows={6}
+          value={key}
+          onChange={setKey}
+          help="Create a team key with the Admin role, paste it, then revoke it once this is done."
+        />
         {error && <Callout variant="danger">{error}</Callout>}
       </Stack>
     </Modal>

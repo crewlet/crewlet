@@ -1,10 +1,13 @@
 package executor
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // kimiArchiveFormat is the layout a Kimi run packs its session in
@@ -43,6 +46,41 @@ func (Kimi) Continues(box, writer string) (bool, string) {
 		"supports; this box runs %.64[2]q and the session was written by %.64[3]q", kimiSupported, box, writer)
 }
 
+// ContinuesWriter is [Kimi.Continues] judged of the writer alone ([carrier]):
+// only a session [kimiSupported] wrote, one written by any other release or by
+// one that cannot be read refused, saying so.
+func (Kimi) ContinuesWriter(writer string) (bool, string) {
+	if writer == kimiSupported {
+		return true, ""
+	}
+	return false, fmt.Sprintf("a Kimi Code session is continued only from %[1]s to %[1]s, the release Crewlet "+
+		"supports; the session was written by %.64[2]q", kimiSupported, writer)
+}
+
+// meter is the take's meter of a Kimi archive ([carrier.meter]): no figure.
+// This build reads no count or estimate of a Kimi session's next request off
+// its archive; a Kimi run's window is read off its own records at collection.
+// The archive is left to the caller, which drains it ([startMeter]).
+func (Kimi) meter(context.Context, io.Reader, string, string, *passBudget) (meterReading, error) {
+	return meterReading{}, nil
+}
+
+// continuesInPlace reports whether a box whose Kimi Code is release box
+// continues a session at all, the copy it holds as much as one carried to it
+// ([inPlaceGate]): only on [kimiSupported], as the run's own gate holds it
+// ([kimiSessionGate]), so the engine asks before a relaunch hands the brief
+// that continues the box's copy.
+func (Kimi) continuesInPlace(box string) (bool, string) {
+	if box == kimiSupported {
+		return true, ""
+	}
+	if box == "" {
+		box = "a release it could not read"
+	}
+	return false, fmt.Sprintf("this box runs Kimi Code %.64s, and a session is continued only on %s, the "+
+		"release Crewlet supports", box, kimiSupported)
+}
+
 // kimiSessionGate is the part of a run's script that names the session its
 // driver runs in (s), whether it continues the one asked (k) and, where it
 // could not, why (w), setting the driver's arguments. As [copilotSessionGate]:
@@ -57,7 +95,7 @@ func (Kimi) Continues(box, writer string) (bool, string) {
 func kimiSessionGate(session Session, paths Paths, rewired bool) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	if !session.Continues {
 		line(`s= k=no w=`)
 		return b.String()
@@ -83,9 +121,11 @@ func kimiSessionGate(session Session, paths Paths, rewired bool) string {
 		`src=$x`,
 	}, " && ")
 	line(`s=%s k=yes w= h= d= src=`, q(session.ID))
-	// THE SUPPORTED RELEASE ALONE CONTINUES ONE: n holds digits and dots only.
-	line(`[ "$n" = %s ] || w="this box runs Kimi Code ${n:-a release it could not read}, and a session is continued only on %s, the release Crewlet supports"`,
-		kimiSupported, kimiSupported)
+	// THE SUPPORTED RELEASE ALONE CONTINUES ONE, read bare as the engine reads
+	// it ([bareReleaseShell], [Kimi.continuesInPlace]): the run's loose n takes
+	// 2.7.2-rc.1 for 2.7.2, which the engine reads as no release.
+	line(`%s[ "$rv" = %s ] || w="this box runs Kimi Code ${rv:-a release it could not read}, and a session is continued only on %s, the release Crewlet supports"`,
+		bareReleaseShell("rv"), kimiSupported, kimiSupported)
 	line(`for y in %s/*/"$s"; do [ -s "$y/agents/main/wire.jsonl" ] && [ ! -L "$y" ] && src=$y && h=1; done`, sessions)
 	line(`if [ -s %s ]; then d=$(cksum < %s 2> /dev/null) || d=; fi`, carried, carried)
 	if session.Replaces {
@@ -136,7 +176,7 @@ func kimiSessionGate(session Session, paths Paths, rewired bool) string {
 // its driver started ([Paths.KimiLinesBefore]): what an earlier run wrote,
 // which the usage after the run is read past ([kimiUsage]).
 func kimiLinesBefore(paths Paths) string {
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	return `: > ` + q(paths.KimiLinesBefore()) + `; if [ -n "$s" ]; then for w in ` + q(paths.KimiSessions()) +
 		`/*/"$s"/agents/*/wire.jsonl; do [ -f "$w" ] && printf '%s %s\n' "$(wc -l < "$w" | tr -d ' ')" "$w"; done >> ` +
 		q(paths.KimiLinesBefore()) + `; fi
@@ -147,7 +187,7 @@ func kimiLinesBefore(paths Paths) string {
 // run's: the one it continued, else the one its driver reported, held to the
 // shape of an id Kimi mints, and "" for neither.
 func kimiSessionOf(paths Paths) string {
-	return `[ -n "$s" ] || s=$(cat ` + sandbox.ShellQuote(paths.SessionReport()) + ` 2> /dev/null) || s=
+	return `[ -n "$s" ] || s=$(cat ` + shellword.Quote(paths.SessionReport()) + ` 2> /dev/null) || s=
 case "$s" in session_*) case "$s" in *[!A-Za-z0-9_-]*) s= ;; esac ;; *) s= ;; esac
 `
 }
@@ -166,7 +206,7 @@ func kimiCapture(paths Paths) string {
 func kimiPack(paths Paths, at packAt) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	sessions := paths.KimiSessions()
 	line(`x=; if [ -n "$s" ]; then for y in %s/*/"$s"; do [ -s "$y/agents/main/wire.jsonl" ] && x=$y; done; fi`, q(sessions))
 	line(`if [ -n "$x" ]; then`)
@@ -209,7 +249,7 @@ func (Kimi) PackSave(paths Paths, rec sessionRecord, staged, dest string) (strin
 // script, at at. ONLY THE SESSION THE ENGINE NAMES, the one bound to the job,
 // never one the box reports now, which was never held to the bind's rules.
 func kimiOnDemand(paths Paths, session string, at packAt) string {
-	return "s=" + sandbox.ShellQuote(session) + " packed=\n" +
+	return "s=" + shellword.Quote(session) + " packed=\n" +
 		fmt.Sprintf("[ -n \"$s\" ] || exit %d\n", packNothing) +
 		kimiPack(paths, at) +
 		fmt.Sprintf("[ -n \"$packed\" ] || { [ -n \"$x\" ] || exit %d; exit %d; }\n", packNothing, packFailed)

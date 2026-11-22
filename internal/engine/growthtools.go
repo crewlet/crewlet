@@ -68,11 +68,11 @@ func GrowthToolDeps(e *Engine) builtin.GrowthDeps {
 func (e *Engine) growthProducts() []builtin.GrowthProduct {
 	e.growthOnce.Do(func() {
 		e.growth = []builtin.GrowthProduct{
-			metaads.New(metaads.Deps{Company: e.runningConfig, Resolve: e.resolver().Value, Audit: e.GrowthAudit(),
+			metaads.New(metaads.Deps{Company: e.runningConfig, Resolve: e.Resolve, Audit: e.GrowthAudit(),
 				Leases: growthLeases{engine: e}, Renewals: metaAdsRenewals{engine: e}, Signals: e.GrowthSignals()}),
-			appstoreconnect.New(appstoreconnect.Deps{Company: e.runningConfig, Resolve: e.resolver().Value,
+			appstoreconnect.New(appstoreconnect.Deps{Company: e.runningConfig, Resolve: e.Resolve,
 				Audit: e.GrowthAudit(), Leases: growthLeases{engine: e}, Signals: e.GrowthSignals()}),
-			appleads.New(appleads.Deps{Company: e.runningConfig, Resolve: e.resolver().Value,
+			appleads.New(appleads.Deps{Company: e.runningConfig, Resolve: e.Resolve,
 				Audit: e.GrowthAudit(), Leases: growthLeases{engine: e}, Signals: e.GrowthSignals()}),
 			googleanalytics.New(e.runningConfig, e.resolver, e, e.GrowthAudit(), growthLeases{engine: e}, nil),
 			e.adMob(),

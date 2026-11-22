@@ -489,8 +489,9 @@ func TestAFlushTheLeaderNeverDecidedMayHaveLanded(t *testing.T) {
 	if !ok {
 		t.Fatalf("the chat read bucket is a %T, not settled", f.chatReads)
 	}
-	pending := &inFlightForever{KeyValue: underneath.KeyValue}
-	f.chatReads = settledBucket{KeyValue: pending, js: termed{term: 50 * time.Millisecond}, holding: undeclaredHolding}
+	pending := &inFlightForever{}
+	f.chatReads = settledBucket{KeyValue: underneath.KeyValue,
+		js: termed{term: 50 * time.Millisecond, publish: pending.publish}, holding: undeclaredHolding}
 
 	_, err := f.AdvanceChatRead(ctx, "founder", coord.ChatReadDelta{
 		Cursors: map[string]int64{"room-c": 11}, At: chatReadAt0,
@@ -509,16 +510,15 @@ func TestAFlushTheLeaderNeverDecidedMayHaveLanded(t *testing.T) {
 	}
 }
 
-// inFlightForever is a bucket whose leader answers every update with its
-// in-flight answer, writing nothing.
+// inFlightForever is a client whose leader answers every conditional write
+// with its in-flight answer, writing nothing.
 type inFlightForever struct {
-	jetstream.KeyValue
 	answered atomic.Int64
 }
 
-func (k *inFlightForever) Update(context.Context, string, []byte, uint64) (uint64, error) {
+func (k *inFlightForever) publish(context.Context, *nats.Msg, ...jetstream.PublishOpt) (*jetstream.PubAck, error) {
 	k.answered.Add(1)
-	return 0, refusedAs(jetstream.JSErrCodeStreamWrongLastSequenceConstant)
+	return nil, leaderRefusal(jetstream.JSErrCodeStreamWrongLastSequenceConstant)
 }
 
 // A READ-STATE WATCH'S FIRST ANSWER IS CERTIFIED, AND AN OLDER REVISION AFTER

@@ -31,9 +31,9 @@ import {
   seat,
 } from "~/routes/settings/models/fixtures.ts";
 import type { ModelsData } from "../../data.ts";
-import { CATEGORY_WORDS, FAST_NOTE } from "../../words.ts";
+import { CATEGORY_WORDS, EVERYTHING, FAST_NOTE } from "../../words.ts";
 import { emptyDraft, type Draft } from "../draft.ts";
-import { UseItFor, seatChangesOf, summaryOf } from "./UseItFor.tsx";
+import { UseItFor, everythingHelpers, seatChangesOf, summaryOf } from "./UseItFor.tsx";
 
 const data = modelsData({
   entries: [
@@ -311,13 +311,13 @@ test("the fast-model note shows only where a category carries one, and only for 
 // a harness that cannot be run that way is refused with its reason.
 test("Ask Crewlet takes any model of a harness a helper can run on, with nothing to change on it", () => {
   render(<Harness start={{ key: "chat" }} />);
-  fireEvent.click(screen.getByRole("radio", { name: /Ask Crewlet/ }));
+  fireEvent.click(screen.getByRole("radio", { name: /^Ask Crewlet/ }));
   expect(latest.uses.assistant).toBe(true);
   expect(latest.webDenied).toBe(false);
   expect(screen.queryByRole("button", { name: /Deny web tools/ })).toBeNull();
   cleanup();
   render(<Harness start={{ key: "review", harness: "codex" }} />);
-  const refused = screen.getByRole("radio", { name: /Ask Crewlet/ });
+  const refused = screen.getByRole("radio", { name: /^Ask Crewlet/ });
   expect(
     refused.getAttribute("aria-disabled") === "true" || (refused as HTMLInputElement).disabled,
   ).toBe(true);
@@ -345,4 +345,76 @@ test("the summary counts the seats past a few, and names them all when asked", (
   expect(summaryOf(split, many)[0]).toBe(
     "Backend Engineer, Product Manager, and Designer will code with haiku.",
   );
+});
+
+// EVERYTHING GIVES THE MODEL TO EACH HELPER WITH NONE, in the uses its one
+// revision writes, and Review names each helper it gives.
+test("Everything gives Ask Crewlet and the Advisor the model where neither has one", () => {
+  const bare: ModelsData = { ...split, assistant: { key: null }, advisor: { key: null } };
+  render(<Harness company={bare} start={{}} />);
+  fireEvent.click(screen.getByRole("radio", { name: /Everything/ }));
+  expect(latest.intent).toBe("all");
+  expect(latest.uses.assistant).toBe(true);
+  expect(latest.uses.advisor).toBe(true);
+  expect(screen.getByText("It also answers in Ask Crewlet.")).toBeTruthy();
+  expect(screen.getByText("It also explains the Advisor's findings.")).toBeTruthy();
+  expect(seatChangesOf(bare, "haiku", noUses(), latest.uses)).toEqual([
+    "Ask Crewlet: no model → haiku",
+    "Advisor: no model → haiku",
+  ]);
+});
+
+// A HELPER ON A MODEL KEEPS IT, as a seat with one does; one naming a model
+// the company no longer has runs on nothing, so Everything takes it.
+test("Everything leaves a helper on another model where it is, and takes one whose model is gone", () => {
+  const on = { ...split, assistant: { key: "default" }, advisor: { key: "removed-model" } };
+  render(<Harness company={on} start={{}} />);
+  fireEvent.click(screen.getByRole("radio", { name: /Everything/ }));
+  expect(latest.uses.assistant).toBe(false);
+  expect(latest.uses.advisor).toBe(true);
+});
+
+// THE ADVISOR'S SWITCH IS ITS OWN: turned off in an edit, Everything leaves it off.
+test("in an edit, Everything keeps the Advisor off once its switch took it off", () => {
+  const today = usesOf(split.models.find((m) => m.key === "default")!.entry.used_by);
+  const held = { ...split, assistant: { key: null }, advisor: { key: "default" } };
+  render(
+    <Harness
+      company={held}
+      served={{ ...today, advisor: true }}
+      start={{ key: "default", intent: "all", uses: { ...today, advisor: true } }}
+    />,
+  );
+  fireEvent.click(screen.getByText("Customise per seat"));
+  fireEvent.click(screen.getByRole("switch", { name: /Also explain the Advisor's findings/ }));
+  expect(latest.uses.advisor).toBe(false);
+  fireEvent.click(screen.getByRole("radio", { name: /^Coding/ }));
+  fireEvent.click(screen.getByRole("radio", { name: /^Everything/ }));
+  expect(latest.uses.advisor).toBe(false);
+  expect(latest.uses.assistant).toBe(true);
+});
+
+test("Everything on a harness that runs no helper gives none, and does not say it would", () => {
+  const bare: ModelsData = { ...split, assistant: { key: null }, advisor: { key: null } };
+  render(<Harness company={bare} start={{ harness: "opencode" }} />);
+  expect(screen.queryByText(EVERYTHING.helpers)).toBeNull();
+  fireEvent.click(screen.getByRole("radio", { name: /Everything/ }));
+  expect(latest.intent).toBe("all");
+  expect(latest.uses.assistant).toBe(false);
+  expect(latest.uses.advisor).toBe(false);
+  cleanup();
+  render(<Harness company={bare} start={{}} />);
+  expect(screen.getByText(EVERYTHING.helpers)).toBeTruthy();
+});
+
+test("everythingHelpers takes a helper with no model or one on a model gone, never one on a model", () => {
+  const at = (assistant: string | null, advisor: string | null, harness = "claude-code") =>
+    everythingHelpers(
+      { ...split, assistant: { key: assistant }, advisor: { key: advisor } },
+      harness,
+    );
+  expect(at(null, null)).toEqual({ assistant: true, advisor: true });
+  expect(at("default", "gone")).toEqual({ assistant: false, advisor: true });
+  expect(at("gone", "default-host")).toEqual({ assistant: true, advisor: false });
+  expect(at(null, null, "opencode")).toEqual({ assistant: false, advisor: false });
 });
