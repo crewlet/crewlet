@@ -253,6 +253,12 @@ func (f *fakeNode) Tasks(ctx context.Context, q worklet.Query, _ time.Time) (wor
 	return worklet.Answer{TotalHint: 7}, nil
 }
 
+// ViewsPage is [fakeNode.Views] as one page.
+func (f *fakeNode) ViewsPage(ctx context.Context, q worklet.ViewQuery, _ string) (worklet.ViewListing, string, error) {
+	listing, err := f.Views(ctx, q)
+	return listing, "", err
+}
+
 // Views answers the strip of views this node holds, which a case sets.
 func (f *fakeNode) Views(context.Context, worklet.ViewQuery) (worklet.ViewListing, error) {
 	f.note("views")

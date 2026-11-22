@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // TurnLedgerRow is one seat's wakes under one wake, disposition and outcome over
@@ -47,11 +49,15 @@ func TurnLedger(ctx context.Context, estate Estate, q SpendQuery) ([]TurnLedgerR
 			return err
 		}
 		defer func() { _ = rows.Close() }()
+		held := statelog.RowsOf(ctx)
 		for rows.Next() {
 			var r TurnLedgerRow
 			if err := rows.Scan(&r.AgentID, &r.Handle, &r.Wake, &r.Disposition, &r.Outcome, &r.Turns, &r.Input,
 				&r.Output, &r.CacheRead, &r.CacheWrite, &r.AuxInput, &r.AuxOutput); err != nil {
 				return err
+			}
+			if !held.TakeEncoded(r) {
+				return pastAnswer("the turn ledger")
 			}
 			out = append(out, r)
 		}

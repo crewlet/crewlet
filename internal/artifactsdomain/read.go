@@ -701,19 +701,23 @@ func (r *Reader) Versions(ctx context.Context, id artifacts.ID, cursor string, l
 		}
 		defer func() { _ = rows.Close() }()
 		page = VersionPage{Versions: []VersionSummary{}}
+		held := statelog.RowsOf(ctx)
 		for rows.Next() {
 			v, err := scanVersion(rows)
 			if err != nil {
 				return fmt.Errorf("artifactsdomain: read %s's versions: %w", id, err)
+			}
+			if !held.TakeEncoded(v) {
+				break
 			}
 			page.Versions = append(page.Versions, v)
 		}
 		if err := rows.Err(); err != nil {
 			return err
 		}
-		if len(page.Versions) > limit {
-			page.Versions = page.Versions[:limit]
-			page.After = encodeIntCursor(int64(page.Versions[limit-1].Number))
+		if len(page.Versions) > limit || held.Cut() {
+			page.Versions = page.Versions[:min(len(page.Versions), limit)]
+			page.After = encodeIntCursor(int64(page.Versions[len(page.Versions)-1].Number))
 		}
 		return nil
 	})
@@ -806,19 +810,23 @@ func (r *Reader) History(ctx context.Context, id artifacts.ID, cursor string, li
 		}
 		defer func() { _ = rows.Close() }()
 		page = HistoryPage{Entries: []HistoryEntry{}}
+		held := statelog.RowsOf(ctx)
 		for rows.Next() {
 			e, err := scanHistory(rows)
 			if err != nil {
 				return fmt.Errorf("artifactsdomain: read %s's history: %w", id, err)
+			}
+			if !held.TakeEncoded(e) {
+				break
 			}
 			page.Entries = append(page.Entries, e)
 		}
 		if err := rows.Err(); err != nil {
 			return err
 		}
-		if len(page.Entries) > limit {
-			page.Entries = page.Entries[:limit]
-			page.After = encodeIntCursor(page.Entries[limit-1].Position)
+		if len(page.Entries) > limit || held.Cut() {
+			page.Entries = page.Entries[:min(len(page.Entries), limit)]
+			page.After = encodeIntCursor(page.Entries[len(page.Entries)-1].Position)
 		}
 		return nil
 	})
@@ -977,6 +985,7 @@ func (r *Reader) Trail(ctx context.Context, q TrailQuery) (TrailPage, error) {
 			}
 			defer func() { _ = rows.Close() }()
 			page = TrailPage{Entries: []TrailEntry{}}
+			held := statelog.RowsOf(ctx)
 			for rows.Next() {
 				var id string
 				var t TrailEntry
@@ -986,14 +995,17 @@ func (r *Reader) Trail(ctx context.Context, q TrailQuery) (TrailPage, error) {
 				if t.Artifact, err = artifacts.ParseID(id); err != nil {
 					return fmt.Errorf("artifactsdomain: a trail row names artifact %q: %w", id, err)
 				}
+				if !held.TakeEncoded(t) {
+					break
+				}
 				page.Entries = append(page.Entries, t)
 			}
 			if err := rows.Err(); err != nil {
 				return err
 			}
-			if len(page.Entries) > limit {
-				page.Entries = page.Entries[:limit]
-				last := page.Entries[limit-1]
+			if len(page.Entries) > limit || held.Cut() {
+				page.Entries = page.Entries[:min(len(page.Entries), limit)]
+				last := page.Entries[len(page.Entries)-1]
 				data, _ := json.Marshal(trailCursor{Position: last.Position,
 					Artifact: last.Artifact.String()})
 				page.After = base64.RawURLEncoding.EncodeToString(data)
@@ -1113,6 +1125,59 @@ func (r *Reader) SeenBy(ctx context.Context, id artifacts.ID) ([]Read, error) {
 		return rows.Err()
 	})
 	return out, err
+}
+
+// SeenByPage is [Reader.SeenBy] a page at a time, newest first, after the
+// cursor `after` (empty for the first), as a node holding no data reads it:
+// held to the bytes the read carries ([statelog.RowsOf]), and the cursor of
+// the page after, empty on the last.
+func (r *Reader) SeenByPage(ctx context.Context, id artifacts.ID, after string) ([]Read, string, error) {
+	var (
+		at   int64
+		seat string
+	)
+	if after != "" {
+		raw, s, ok := strings.Cut(after, "|")
+		n, err := strconv.ParseInt(raw, 10, 64)
+		if !ok || err != nil {
+			return nil, "", fmt.Errorf("%w: the cursor %q is not one a page answered", ErrInvalid, after)
+		}
+		at, seat = n, s
+	}
+	var out []Read
+	var next string
+	_, err := r.log.Read(ctx, staleFresh(statelog.Freshness{}).Query(
+		ArtifactScope(id.String()), true), func(tx *sql.Tx) error {
+		if _, err := mustHead(ctx, tx, id.String()); err != nil {
+			return err
+		}
+		rows, err := tx.QueryContext(ctx, `
+			SELECT seat, opened_at FROM artifact_reads WHERE artifact_id = ?
+			  AND (? = '' OR opened_at < ? OR (opened_at = ? AND seat > ?))
+			ORDER BY opened_at DESC, seat`, id.String(), after, at, at, seat)
+		if err != nil {
+			return fmt.Errorf("artifactsdomain: read who opened %s: %w", id, err)
+		}
+		defer func() { _ = rows.Close() }()
+		out, next = []Read{}, ""
+		held := statelog.RowsOf(ctx)
+		var lastAt int64
+		for rows.Next() {
+			var rd Read
+			var opened int64
+			if err := rows.Scan(&rd.Seat, &opened); err != nil {
+				return fmt.Errorf("artifactsdomain: read who opened %s: %w", id, err)
+			}
+			rd.OpenedAt = store.DecodeTime(opened)
+			if !held.TakeEncoded(rd) {
+				next = strconv.FormatInt(lastAt, 10) + "|" + out[len(out)-1].Seat
+				break
+			}
+			out, lastAt = append(out, rd), opened
+		}
+		return rows.Err()
+	})
+	return out, next, err
 }
 
 // Usage answers the company's counters.
@@ -1572,11 +1637,30 @@ func (s listSpec) run(ctx context.Context, tx *sql.Tx) (ListPage, error) {
 	if err := rows.Err(); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 		return ListPage{}, err
 	}
-	if len(page.Contents) > s.limit {
-		page.Contents = page.Contents[:s.limit]
-		last := page.Contents[s.limit-1]
-		cursor, err := json.Marshal(listCursor{Sort: s.sort, Key: keys[s.limit-1], //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-			ID: last.ID.String(), Folder: at.folder, Delimited: s.delimited})
+	more := len(page.Contents) > s.limit
+	page.Contents = page.Contents[:min(len(page.Contents), s.limit)]
+	ids := make([]string, len(page.Contents))
+	for i, item := range page.Contents {
+		ids[i] = item.ID.String()
+	}
+	shares, err := readShares(ctx, tx, ids)
+	if err != nil {
+		return ListPage{}, err
+	}
+	// HELD WITH ITS SHARES, which no cap bounds per artifact: a row is
+	// measured as the page answers it, so the cut follows the shares in.
+	held := statelog.RowsOf(ctx)
+	for i := range page.Contents {
+		page.Contents[i].Shares = shares[ids[i]]
+		if !held.TakeEncoded(page.Contents[i]) {
+			page.Contents, more = page.Contents[:i], true
+			break
+		}
+	}
+	if more {
+		n := len(page.Contents)
+		cursor, err := json.Marshal(listCursor{Sort: s.sort, Key: keys[n-1], //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
+			ID: page.Contents[n-1].ID.String(), Folder: at.folder, Delimited: s.delimited})
 		if err != nil {
 			return ListPage{}, fmt.Errorf("artifactsdomain: encode the listing cursor: %w", err)
 		}
@@ -1589,17 +1673,6 @@ func (s listSpec) run(ctx context.Context, tx *sql.Tx) (ListPage, error) {
 		}
 	}
 	page.KeyCount = len(page.Contents) + len(page.CommonPrefixes)
-	ids := make([]string, len(page.Contents))
-	for i, item := range page.Contents {
-		ids[i] = item.ID.String()
-	}
-	shares, err := readShares(ctx, tx, ids)
-	if err != nil {
-		return ListPage{}, err
-	}
-	for i := range page.Contents {
-		page.Contents[i].Shares = shares[ids[i]]
-	}
 	return page, nil
 }
 

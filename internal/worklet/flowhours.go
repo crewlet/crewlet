@@ -48,7 +48,23 @@ func (r *Reader) FlowHours(ctx context.Context, q FlowHoursQuery) ([]FlowHours, 
 	if err != nil {
 		return nil, err
 	}
-	return sumFlowHours(spans, q.Since, q.Until), nil
+	out := sumFlowHours(spans, q.Since, q.Until)
+	return out, heldWhole(ctx, "the flow hours", len(out), func(i int) any { return out[i] })
+}
+
+// heldWhole refuses a window's sums whose rows pass the bytes one read
+// answers ([statelog.RowsOf]): refused rather than cut, since a reader takes
+// totals and percentiles over the whole window, which a cut would skew
+// without a word.
+func heldWhole(ctx context.Context, what string, n int, row func(int) any) error {
+	held := statelog.RowsOf(ctx)
+	for i := range n {
+		if !held.TakeEncoded(row(i)) {
+			return fmt.Errorf("worklet: %s over this window pass the %d bytes one read answers: "+
+				"narrow the window", what, statelog.AnswerBytes)
+		}
+	}
+	return nil
 }
 
 // FlowItems counts, per seat, the items in progress that stood in any flow
@@ -73,10 +89,14 @@ func (r *Reader) FlowItems(ctx context.Context, q FlowHoursQuery) (map[string]in
 		items[s.seat][s.task] = true
 	}
 	out := make(map[string]int, len(items))
+	seats := make([]string, 0, len(items))
 	for seat, tasks := range items {
 		out[seat] = len(tasks)
+		seats = append(seats, seat)
 	}
-	return out, nil
+	return out, heldWhole(ctx, "the flow items", len(seats), func(i int) any {
+		return map[string]int{seats[i]: out[seats[i]]}
+	})
 }
 
 // FlowPickups is how long each item a seat picked up in the window had stood
@@ -91,7 +111,8 @@ func (r *Reader) FlowPickups(ctx context.Context, q FlowHoursQuery) ([]time.Dura
 	if err != nil {
 		return nil, err
 	}
-	return pickupsOf(spans, q.Since, q.Until), nil
+	out := pickupsOf(spans, q.Since, q.Until)
+	return out, heldWhole(ctx, "the pickups", len(out), func(i int) any { return out[i] })
 }
 
 // pickupsOf is every pickup spans hold that ended in [since, until).

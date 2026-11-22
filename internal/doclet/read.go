@@ -555,23 +555,40 @@ func (r *Reader) list(ctx context.Context, tx *sql.Tx, spec, child listSpec,
 	}
 	if len(out) > limit {
 		out = out[:limit]
-		last := out[len(out)-1]
-		after := listCursor{Container: last.Container, Title: last.Title, ID: last.ID}
-		if spec.newest() {
-			// THE ROW'S OWN PLACE IN THE ORDER: its row's instant, which
-			// the window read from the skill row the order is held on.
-			after = listCursor{Order: OrderNewest, Updated: store.EncodeTime(last.Updated), ID: last.ID}
-		}
-		page.after = after.String()
+		page.after = listAfter(spec, out[len(out)-1])
 	}
-	page.rows = out
 	if err := r.attachLabels(ctx, tx, out); err != nil {
 		return listPage{}, err
 	}
 	if err := attachChildren(ctx, tx, out, child); err != nil {
 		return listPage{}, err
 	}
-	return page, r.attachSaves(ctx, tx, out)
+	if err := r.attachSaves(ctx, tx, out); err != nil {
+		return listPage{}, err
+	}
+	// THE BYTE BOUND ([statelog.RowsOf]) over the rows as answered, their
+	// labels and saves attached, so the cursor names the last row kept and
+	// the next window starts at the first one refused.
+	held := statelog.RowsOf(ctx)
+	for i, row := range out {
+		if !held.TakeEncoded(row) {
+			out = out[:i]
+			page.after = listAfter(spec, out[i-1])
+			break
+		}
+	}
+	page.rows = out
+	return page, nil
+}
+
+// listAfter is the cursor a window ending on last hands the next one.
+func listAfter(spec listSpec, last Summary) string {
+	if spec.newest() {
+		// THE ROW'S OWN PLACE IN THE ORDER: its row's instant, which the
+		// window read from the skill row the order is held on.
+		return listCursor{Order: OrderNewest, Updated: store.EncodeTime(last.Updated), ID: last.ID}.String()
+	}
+	return listCursor{Container: last.Container, Title: last.Title, ID: last.ID}.String()
 }
 
 // listTotalStatement counts what the listing matches, and its arguments —
@@ -1183,6 +1200,52 @@ func (r *Reader) Containers(ctx context.Context, fresh statelog.Freshness) (
 	return out, err
 }
 
+// ContainersPage is [Reader.Containers] a page at a time, by key, after
+// `after` (empty for the first), as a node holding no data reads it: held to
+// the bytes the read carries ([statelog.RowsOf]), and the last key kept where
+// more follow.
+func (r *Reader) ContainersPage(ctx context.Context, after string,
+	fresh statelog.Freshness) ([]ContainerListing, string, error) {
+
+	if fresh.Level == "" {
+		return nil, "", errors.New("doclet: this read names no level")
+	}
+	var out []ContainerListing
+	var next string
+	_, err := r.log.Read(ctx, fresh.Query(ReadScope(""), true), func(tx *sql.Tx) error {
+		out, next = nil, ""
+		counts, err := r.pageCounts(ctx, tx)
+		if err != nil {
+			return err
+		}
+		rows, err := tx.QueryContext(ctx,
+			`SELECT document FROM pages_containers WHERE key > ? ORDER BY key`, after)
+		if err != nil {
+			return fmt.Errorf("doclet: list containers: %w", err)
+		}
+		defer func() { _ = rows.Close() }()
+		held := statelog.RowsOf(ctx)
+		for rows.Next() {
+			var document string
+			if err := rows.Scan(&document); err != nil {
+				return fmt.Errorf("doclet: scan container: %w", err)
+			}
+			container, err := DecodeContainer([]byte(document))
+			if err != nil {
+				continue
+			}
+			listing := ContainerListing{Container: container, Pages: counts[container.Key]}
+			if !held.TakeEncoded(listing) {
+				next = out[len(out)-1].Key
+				break
+			}
+			out = append(out, listing)
+		}
+		return rows.Err()
+	})
+	return out, next, err
+}
+
 // pageCounts is how many pages each container holds.
 //
 // ONE GROUP BY rather than a count per container: forty spaces would take forty
@@ -1267,6 +1330,62 @@ func (r *Reader) SkillPages(ctx context.Context, container string,
 	return out, err
 }
 
+// SkillPagesPage is [Reader.SkillPages] a page at a time, by title, after
+// the cursor `after` (empty for the first), as a node holding no data reads
+// it: held to the bytes the read carries ([statelog.RowsOf]), and the cursor
+// of the page after, empty on the last. Its caller gathers every page into the
+// registry it replaces wholesale.
+func (r *Reader) SkillPagesPage(ctx context.Context, container, after string,
+	fresh statelog.Freshness) ([]Page, string, error) {
+
+	if fresh.Level == "" {
+		return nil, "", errors.New("doclet: this read names no level")
+	}
+	container = ContainerKey(container)
+	if container == "" {
+		return nil, "", nil
+	}
+	title, id := "", ""
+	if after != "" {
+		var ok bool
+		if title, id, ok = strings.Cut(after, "\x00"); !ok {
+			return nil, "", fmt.Errorf("%w: the cursor %q is not one a page answered", ErrInvalid, after)
+		}
+	}
+	var out []Page
+	var next string
+	_, err := r.log.Read(ctx, fresh.Query(ReadScope(container), true), func(tx *sql.Tx) error {
+		out, next = nil, ""
+		rows, err := tx.QueryContext(ctx, skillPagesAfterStatement, container,
+			string(StatusTrashed), after, title, id)
+		if err != nil {
+			return fmt.Errorf("doclet: list the skills in %s: %w", container, err)
+		}
+		defer func() { _ = rows.Close() }()
+		held, last := statelog.RowsOf(ctx), ""
+		for rows.Next() {
+			var document, title, id string
+			if err := rows.Scan(&document, &title, &id); err != nil {
+				return fmt.Errorf("doclet: scan a skill page: %w", err)
+			}
+			if !held.Take(len(document)) {
+				next = last
+				break
+			}
+			last = title + "\x00" + id
+			page, err := DecodePage([]byte(document))
+			if err != nil {
+				log.WarnContext(ctx, "pages_skill_undecodable", "container", container,
+					"error", err.Error())
+				continue
+			}
+			out = append(out, page)
+		}
+		return rows.Err()
+	})
+	return out, next, err
+}
+
 func (r *Reader) skillPages(ctx context.Context, tx *sql.Tx,
 	container string) ([]Page, error) {
 
@@ -1347,4 +1466,11 @@ const (
 		  JOIN pages_skills k ON k.page_id = p.id
 		 WHERE p.container = ? AND k.skill = 1 AND p.status <> ?
 		 ORDER BY p.title`
+	skillPagesAfterStatement = `
+		SELECT p.document, p.title, p.id
+		  FROM pages_heads p
+		  JOIN pages_skills k ON k.page_id = p.id
+		 WHERE p.container = ? AND k.skill = 1 AND p.status <> ?
+		   AND (? = '' OR (p.title, p.id) > (?, ?))
+		 ORDER BY p.title, p.id`
 )
