@@ -25,6 +25,7 @@ import { pageContextFits } from "~/protocol/assistantWire.ts";
 import type { AccessDraft } from "./api.ts";
 import { accessDraft, accessDraftPart, accessDraftsOf } from "./assistantDraft.ts";
 import {
+  appStoreConnectAnswer,
   cloudflareAnswer,
   confluenceAnswer,
   datadogAnswer,
@@ -368,6 +369,23 @@ describe("a change Ask Crewlet proposes to the Agents tab", () => {
     expect(
       proposed(gitlab, { "agent_1.gitlab.scope": ["acme/backend", "acme/new-service"] }),
     ).toEqual(withScope({}, dev.seat, dev.lane, ["acme/backend", "acme/new-service"]));
+  });
+
+  // AN APP BY ITS NAME, ITS BUNDLE ID OR A TYPED APPLE ID, as the app chooser
+  // finds and takes it; a name it lists no app by is refused, never stored as
+  // an Apple ID. Mutation: drop the bundle ID from the names, or take any text
+  // on an open lane, and its case here is set.
+  test("chooses an app as the app chooser does", () => {
+    const apps = appStoreConnectAnswer();
+    const growth = at(apps, "growth", "app_store_connect");
+    expect(
+      proposed(apps, {
+        "agent_1.app_store_connect.scope": ["Field Notes", "com.example.maps", "987654321"],
+      }),
+    ).toEqual(withScope({}, growth.seat, growth.lane, ["6763222842", "1234567890", "987654321"]));
+    expect(proposed(apps, { "agent_1.app_store_connect.scope": ["Trail Map Pro"] })).toBe(
+      "App Store Connect lists no app called “Trail Map Pro”: name one it lists, or give its ID.",
+    );
   });
 
   // AN AGENT TURNED ON AND GIVEN ITS ACCESS IN ONE CHANGE, whichever the
