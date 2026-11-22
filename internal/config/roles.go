@@ -121,8 +121,8 @@ type Role struct {
 	// field naming the model that run is on would be two spellings of one
 	// setting — and the phases that remain here are the SATELLITES an
 	// operator points somewhere cheaper. They are also where a harness with no
-	// in-box runner serves a seat: only claude-code, codex and opencode can be
-	// its executor ([ExecutorHarnesses]), and any harness can be its reviewer.
+	// in-box runner serves a seat: only a harness with one can be its executor
+	// ([ExecutorHarnesses]), and any harness can be its reviewer.
 	LLMReview    ProviderKeys `yaml:"llm_review,omitempty" json:"llm_review,omitzero" desc:"Provider chain for the reviewer."`
 	LLMSubagent  ProviderKeys `yaml:"llm_subagent,omitempty" json:"llm_subagent,omitzero" desc:"Provider chain for spawned sub-agents."`
 	LLMAuxiliary ProviderKeys `yaml:"llm_auxiliary,omitempty" json:"llm_auxiliary,omitzero" desc:"Cheap model for reflection and summaries."`

@@ -76,7 +76,7 @@ type Work struct {
 
 To hand a task to a colleague the executor reaches them where the work lives (a chat mention, an issue comment or reassignment, or `a2a_ask`) and reports that as the delivery. There is no dedicated `delegate` outcome: a handoff is a colleague-surface tool call.
 
-**Real code work** is the executor's own run: every agent seat's executor is its harness's agentic run (Claude Code, Codex or OpenCode) in a box with a real shell, editor and checkout, the seat's tools reaching it over the [tool bridge](llm-backends.md#the-tool-bridge). The launch **parks** the turn; when the run completes the engine **resumes the same turn** with what the run submitted, so the engine's check and the reviewer judge it in the same turn. See [Code Sandbox](code-sandbox.md).
+**Real code work** is the executor's own run: every agent seat's executor is its harness's agentic run (Claude Code, Codex, OpenCode or Kimi Code) in a box with a real shell, editor and checkout, the seat's tools reaching it over the [tool bridge](llm-backends.md#the-tool-bridge). The launch **parks** the turn; when the run completes the engine **resumes the same turn** with what the run submitted, so the engine's check and the reviewer judge it in the same turn. See [Code Sandbox](code-sandbox.md).
 
 ### Who is waiting, and how they get an answer
 

@@ -625,8 +625,8 @@
 // that packs it alone ([Runner.PackCapture], [Paths.SessionPackHeld]), and a
 // SAVE, packed to a place of that save's own, named after its taker
 // ([Runner.PackSave], [Paths.SessionSave]), for the take that names it alone —
-// neither ever where the job's final archive is read. Every runner makes a
-// save ([saver], [Runner.Saves]), OpenCode's by its own export (below);
+// neither ever where the job's final archive is read. Every runner saves
+// ([saver], [Runner.Saves]), OpenCode by its own export (below);
 // whether a job moved since its last save is how far its harness's event
 // stream ran ([Runner.Streamed]); and a save no take will read is removed
 // from its box ([Runner.ReleaseSave]). And a job that is over and left no archive is

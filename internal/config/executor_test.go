@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // stubModel is an llm.Provider that is never called: the registry below is
@@ -145,7 +146,7 @@ func TestAnExecutorChainWithNoRunnerIsRefused(t *testing.T) {
 			name: "a seat's own chain of another harness",
 			llm:  ccEntry + grokEntry, roles: "  - name: SWE\n    llm: grok\n",
 			path: "roles[0].llm",
-			says: []string{"providers.llm.grok (grok)", `only "claude-code", "codex" and "opencode" have`,
+			says: []string{"providers.llm.grok (grok)", "only " + words.And(ExecutorHarnesses()) + " have",
 				"llm_review", "move one of them"},
 		},
 		{
@@ -161,7 +162,7 @@ func TestAnExecutorChainWithNoRunnerIsRefused(t *testing.T) {
 			roles: "  - name: CEO\n  - name: PM\n  - name: Ops\n" +
 				"  - name: SWE\n    llm: cc\n",
 			path: "providers.llm.default.harness",
-			says: []string{`the one called "default"`, "grok", `only "claude-code", "codex" and "opencode" have`,
+			says: []string{`the one called "default"`, "grok", "only " + words.And(ExecutorHarnesses()) + " have",
 				`seat "ceo"`, "2 more seats", "point those seats' `llm`"},
 		},
 		{
@@ -267,7 +268,7 @@ func TestAMixedExecutorChainIsAdvisedAbout(t *testing.T) {
 	if w.Path != "roles[0].llm" || w.Seat != "mixed" || w.Kind != WarningAdvisory {
 		t.Errorf("advisory = %+v, want one at roles[0].llm for seat mixed", w)
 	}
-	for _, said := range []string{"providers.llm.grok (grok)", `which only "claude-code", "codex" and "opencode" have`,
+	for _, said := range []string{"providers.llm.grok (grok)", "which only " + words.And(ExecutorHarnesses()) + " have",
 		"providers.llm.cc (claude-code), providers.llm.oc (opencode)"} {
 		if !strings.Contains(w.Message, said) {
 			t.Errorf("the advisory does not say %q: %s", said, w.Message)
@@ -480,8 +481,8 @@ func TestAnEntrysRunInIsACatalogueCell(t *testing.T) {
 	}
 }
 
-// A RUN_IN NO LAUNCH CAN READ IS REFUSED. Only claude-code, codex and opencode
-// have an in-box runner; an entry on any other harness serves text phases, so every launch
+// A RUN_IN NO LAUNCH CAN READ IS REFUSED. Only the harnesses with an in-box
+// runner launch one; an entry on any other harness serves text phases, so every launch
 // passes over it and its placement is read by nothing — whether or not it is a
 // seat's executor-chain member, and whatever cell it names, configured or not.
 // Admitted, it read as a setting that placed the entry's runs while it did
@@ -499,7 +500,7 @@ func TestARunInOnAHarnessThatLaunchesNoRunIsRefused(t *testing.T) {
 			if !errors.Is(err, ErrConflict) {
 				t.Fatalf("want ErrConflict, got %v", err)
 			}
-			for _, remedy := range []string{"Remove the field", `only "claude-code", "codex" and "opencode" launch`} {
+			for _, remedy := range []string{"Remove the field", "only " + words.And(ExecutorHarnesses()) + " launch"} {
 				if !strings.Contains(err.Error(), remedy) {
 					t.Errorf("the refusal does not name %q:\n%v", remedy, err)
 				}
