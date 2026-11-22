@@ -77,7 +77,7 @@ func TestAnExecutorBlocksFaultNamesItsProfileAndField(t *testing.T) {
 		"{runner: 3}":                   `profile "x": executor.runner: yaml: unmarshal errors`,
 		"{runner: true, temp_env: [a]}": `profile "x": executor.temp_env: yaml: unmarshal errors`,
 		"{runner: true, template: t}": `profile "x": executor.template: is no field of the block: use "e2b_template", ` +
-			`"refuses_root", "runner" or "temp_env"`,
+			`"floor", "probe_args", "refuses_root", "runner" or "temp_env"`,
 		"true": `profile "x": executor: is not a mapping of the block's fields`,
 	} {
 		raw := []byte("x:\n  binary: x\n  executor: " + block + "\n")
