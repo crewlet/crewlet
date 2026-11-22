@@ -228,3 +228,24 @@ export interface SetupVerdict {
   facts?: SetupVerdictFact[];
   warnings?: SetupVerdictWarning[];
 }
+
+/** One app's outcome of turning App Store analytics on. */
+type SetupAppStoreAnalyticsState = "on" | "already_on" | "failed";
+
+/** One app's line of the turn-on's answer: `detail` is why it failed, in Apple's redacted words. */
+export interface SetupAppStoreAnalyticsApp {
+  app: string;
+  state: SetupAppStoreAnalyticsState;
+  detail?: string;
+}
+
+/**
+ * What `POST /setup/integrations/app_store_connect/analytics` answers: each
+ * app's outcome, and what to do with the pasted Admin key, which no answer
+ * repeats.
+ */
+export interface SetupAppStoreAnalyticsAnswer {
+  connection: string;
+  apps: SetupAppStoreAnalyticsApp[];
+  revoke: string;
+}

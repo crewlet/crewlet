@@ -506,3 +506,51 @@ func TestAnMCPRowCarriesItsOutageClassAndRestartsAcrossTheStore(t *testing.T) {
 		}
 	}
 }
+
+// A NODE SAYS WHAT ITS GROWTH PRODUCTS MET AT THEIR VENDORS, so every node's
+// platform notices read the fleet's: each clock skew and deprecation read back
+// as written through the bytes a store keeps the record as, each list and name
+// bounded on the wire, nothing met nothing on the wire, and a row naming no
+// product, or a deprecation no version, dropped.
+//
+// Mutation: leave the signals off the wire, or carry a list past its bound,
+// and a case goes red.
+func TestAStatusRecordCarriesItsGrowthSignals(t *testing.T) {
+	t.Parallel()
+	since := time.Date(2026, 11, 20, 9, 0, 0, 7, time.UTC)
+	want := coord.NodeStatusRecord{Node: "n1", Epoch: 2, At: since, Growth: &coord.GrowthSignals{
+		ClockSkews: []coord.GrowthClockSkew{{Product: "appstoreconnect", Vendor: "Apple", OffsetSeconds: 95,
+			Since: since}},
+		Deprecations: []coord.GrowthDeprecation{{Product: "metaads", Version: "v23.0",
+			Retires: time.Date(2027, 2, 1, 0, 0, 0, 0, time.UTC), Since: since},
+			{Product: "appleads", Version: "v5", Since: since}},
+	}}
+	if got := recorded(t, want); !reflect.DeepEqual(got, want) {
+		t.Errorf("read back %+v, want %+v", got.Growth, want.Growth)
+	}
+	many := coord.NodeStatusRecord{Node: "n1", Epoch: 2, Growth: &coord.GrowthSignals{}}
+	for range coord.MaxGrowthSignals + 5 {
+		many.Growth.ClockSkews = append(many.Growth.ClockSkews, coord.GrowthClockSkew{
+			Product: strings.Repeat("p", 4*coord.MaxGrowthSignalBytes), OffsetSeconds: -70, Since: since})
+		many.Growth.Deprecations = append(many.Growth.Deprecations, coord.GrowthDeprecation{
+			Product: "metaads", Version: strings.Repeat("v", 4*coord.MaxGrowthSignalBytes), Since: since})
+	}
+	g := recorded(t, many).Growth
+	if g == nil || len(g.ClockSkews) != coord.MaxGrowthSignals || len(g.Deprecations) != coord.MaxGrowthSignals ||
+		len(g.ClockSkews[0].Product) > coord.MaxGrowthSignalBytes ||
+		len(g.Deprecations[0].Version) > coord.MaxGrowthSignalBytes {
+		t.Errorf("%d signals of %d-byte names crossed unbounded", coord.MaxGrowthSignals+5,
+			4*coord.MaxGrowthSignalBytes)
+	}
+	if _, sent := wireOf(t, coord.NodeStatusRecord{Node: "n1", Epoch: 2,
+		Growth: &coord.GrowthSignals{}})["growth"]; sent {
+		t.Error("a node that met nothing wrote growth signals")
+	}
+	got := decoded(t, map[string]any{"epoch": 2, "growth": map[string]any{
+		"clock_skews":  []any{map[string]any{"vendor": "Apple", "offset_seconds": 90}, "x"},
+		"deprecations": []any{map[string]any{"product": "metaads"}},
+	}})
+	if got.Growth != nil {
+		t.Errorf("rows naming nothing read as %+v, want no signal", got.Growth)
+	}
+}

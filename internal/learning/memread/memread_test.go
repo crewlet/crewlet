@@ -124,7 +124,7 @@ func (f *fleet) reader(t *testing.T, n *node, attached ...string) *memread.Reade
 		ids = append(ids, seatID(h))
 	}
 	seats := func() []uuid.UUID { return ids }
-	stop, err := memread.Serve(t.Context(), q, n.owner, seats, n.stores)
+	stop, err := memread.Serve(t.Context(), q, n.owner, seats, n.stores, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Serve: %v", err)
 	}

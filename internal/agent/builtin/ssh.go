@@ -24,6 +24,7 @@ import (
 	sshint "github.com/crewlet/crewlet/internal/ssh"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tools/argval"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The SSH tools (ADR-0107; package doc, "The company's servers") reach a seat's
@@ -521,7 +522,7 @@ func (t *sshOperate) BeforeHold(ctx context.Context, turn *turnctx.Turn, args ma
 
 // HeldWords is the question a person answers and its context: the server, the
 // command and the stdin's size, digest and start in code blocks no text inside
-// can close, and the reason as redacted prose made inert ([inertMarkdown]).
+// can close, and the reason as redacted prose made inert ([words.Inert]).
 func (t *sshOperate) HeldWords(turn *turnctx.Turn, args map[string]any) (question, context string) {
 	handle := turn.Handle()
 	a, _ := sshArgsOf(t.Name(), args, true)
@@ -534,7 +535,7 @@ func (t *sshOperate) HeldWords(turn *turnctx.Turn, args map[string]any) (questio
 		fmt.Fprintf(&b, " The server is: %s.", h.Description)
 	}
 	b.WriteString(" Allow once runs exactly this command, once; nothing else runs with it.\n\n**Command**\n\n")
-	b.WriteString(codeBlock(a.command))
+	b.WriteString(words.CodeBlock(a.command))
 	if len(a.stdin) > 0 {
 		sum := sha256.Sum256(a.stdin)
 		fmt.Fprintf(&b, "\n\n**Standard input**: %d bytes, SHA-256 `%s`", len(a.stdin), hex.EncodeToString(sum[:]))
@@ -545,44 +546,13 @@ func (t *sshOperate) HeldWords(turn *turnctx.Turn, args map[string]any) (questio
 		} else {
 			b.WriteString(":")
 		}
-		b.WriteString("\n\n" + codeBlock(string(preview)))
+		b.WriteString("\n\n" + words.CodeBlock(string(preview)))
 	}
 	// REDACTED BEFORE IT IS ESCAPED: the record's own redaction reads the
 	// whole context, and a secret with a backslash before each of its marks
 	// is a secret no pattern knows.
-	b.WriteString("\n\n**Reason given**\n\n" + inertMarkdown(redact.Secrets(a.reason)))
+	b.WriteString("\n\n**Reason given**\n\n" + words.Inert(redact.Secrets(a.reason)))
 	return question, b.String()
-}
-
-// inertMarkdown is text Markdown draws as exactly its characters: every ASCII
-// punctuation mark is escaped, so nothing in it opens a link, picture, heading,
-// list, quote, fence, table or emphasis, or reads as a reference or address.
-func inertMarkdown(text string) string {
-	var b strings.Builder
-	b.Grow(len(text) + len(text)/4)
-	for _, r := range text {
-		if r < utf8.RuneSelf && (unicode.IsPunct(r) || unicode.IsSymbol(r)) {
-			b.WriteByte('\\')
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
-}
-
-// codeBlock is text in a fenced code block whose fence is longer than any run
-// of backticks inside it, so no text can close it early.
-func codeBlock(text string) string {
-	longest, run := 0, 0
-	for _, r := range text {
-		if r == '`' {
-			run++
-			longest = max(longest, run)
-		} else {
-			run = 0
-		}
-	}
-	fence := strings.Repeat("`", max(3, longest+1))
-	return fence + "text\n" + strings.TrimSuffix(text, "\n") + "\n" + fence
 }
 
 func (t *sshOperate) Call(ctx context.Context, args map[string]any) (tools.Result, error) {

@@ -41,6 +41,9 @@ const (
 	// KindVerdict is one giver's verdict on a delegated request.
 	KindVerdict ObjectKind = "verdict"
 
+	// KindGrowth is one step of a growth act (ADR-0171).
+	KindGrowth ObjectKind = "growth"
+
 	// KindExpiry is the retention of one hour of records.
 	KindExpiry ObjectKind = "expiry"
 
@@ -60,7 +63,7 @@ const (
 // suite publishes the first three, twice each, in order, and these are a real
 // sequence (a told record, its seat's removal, a node's eviction).
 var ObjectKinds = []ObjectKind{
-	KindTold, KindSeat, KindEviction, KindCertificate, KindCommand, KindVerdict, KindExpiry,
+	KindTold, KindSeat, KindEviction, KindCertificate, KindCommand, KindVerdict, KindGrowth, KindExpiry,
 	KindGeneration, KindBarrier, KindTrimmed,
 }
 
@@ -81,7 +84,7 @@ func (k ObjectKind) InstallsGate() bool { return k == KindEviction }
 // seatOwned reports a kind whose subject id is a seat's handle, a dot and the
 // object's own id.
 func (k ObjectKind) seatOwned() bool {
-	return k == KindTold || k == KindCertificate || k == KindCommand || k == KindVerdict
+	return k == KindTold || k == KindCertificate || k == KindCommand || k == KindVerdict || k == KindGrowth
 }
 
 // Subject is the object a record arbitrates over.

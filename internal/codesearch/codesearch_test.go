@@ -3,6 +3,7 @@ package codesearch_test
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -16,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/codesearch"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/knowledge"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/signedask"
@@ -218,7 +220,7 @@ func newFleet(t *testing.T, e *estate, nodes map[string]*node) *fleet {
 	f := &fleet{servers: map[string]*codesearch.Server{}, silent: map[string]bool{}}
 	for id, n := range nodes {
 		n.e = e
-		s, err := codesearch.NewServer(wire(t, fleetRing), id, n, shareUnits)
+		s, err := codesearch.NewServer(wire(t, fleetRing), id, n, shareUnits, queue.NewAnswerBudget(nil))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -446,7 +448,7 @@ func TestARequestIsStampedWithTheProtocolItNeeds(t *testing.T) {
 		}
 	}
 
-	srv, err := codesearch.NewServer(wire(t, fleetRing), "git-a", n, shareUnits)
+	srv, err := codesearch.NewServer(wire(t, fleetRing), "git-a", n, shareUnits, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -528,7 +530,7 @@ func TestAnUnsignedSearchIsRefused(t *testing.T) {
 	r := indexed("alpha", "git-a")
 	r.lines = []gitlet.SearchHit{line("a.go", 1)}
 	n := &node{e: &estate{repos: []repo{r}}}
-	srv, err := codesearch.NewServer(wire(t, fleetRing), "git-a", n, shareUnits)
+	srv, err := codesearch.NewServer(wire(t, fleetRing), "git-a", n, shareUnits, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -826,6 +828,54 @@ func TestANodeHoldsTheFirstLimitLinesNotEveryAnswer(t *testing.T) {
 	}
 }
 
+// A NODE'S REPLY IS HELD TO ITS BYTES, NOT ONLY ITS LIMIT: lines past
+// codesearch.ReplyHitBytes of JSON are cut after the last that fits, the reply
+// says it cut, and the asker trusts the lines up to that one alone, so what it
+// answers is the search's first lines in order and says the search was cut.
+// Each repository here answers one line of 80 KiB, which a git answer's 56 KiB
+// would not carry but a node's reply of the Limit's 500 could.
+//
+// Mutations, each red: reply every line the limit keeps; cut without saying
+// so; count the room as one line's bytes.
+func TestANodesReplyIsHeldToItsBytes(t *testing.T) {
+	t.Parallel()
+	const repos, pathBytes = 40, 40 << 10
+	var all []repo
+	for i := range repos {
+		r := indexed(fmt.Sprintf("repo-%03d", i), "git-a")
+		r.lines = []gitlet.SearchHit{line(strings.Repeat("p", pathBytes)+".go", 1)}
+		all = append(all, r)
+	}
+	e := &estate{repos: all}
+	s := searcher(t, e, newFleet(t, e, map[string]*node{"git-a": {}}))
+	got, err := s.Search(context.Background(), query("needle"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := 0
+	for _, h := range got.Hits {
+		raw, err := json.Marshal(h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded += len(raw) + 1
+	}
+	if n := len(got.Hits); n == 0 || n == repos || encoded > codesearch.ReplyHitBytes {
+		t.Fatalf("the search answered %d of %d lines, %d bytes of JSON; want some cut under %d", n, repos,
+			encoded, codesearch.ReplyHitBytes)
+	}
+	for i, h := range got.Hits {
+		if want := fmt.Sprintf("repo-%03d", i); h.Repo != want {
+			t.Fatalf("line %d is %s's, want %s's: what a cut node answers is the first lines in order", i,
+				h.Repo, want)
+		}
+	}
+	if c := got.Coverage; !c.Truncated || c.PastLimit.Count != repos-len(got.Hits) {
+		t.Errorf("truncated %t, %d repositories past the limit; want true and the %d after the last line kept",
+			c.Truncated, c.PastLimit.Count, repos-len(got.Hits))
+	}
+}
+
 // sharedReads is a Gitlet node's reads as query's take the node's share: each
 // read's search holds a unit of it until the test lets it go, and how many
 // reads have begun is counted.
@@ -1014,7 +1064,7 @@ func TestASeatReadFindsAUnitWhileASearchRuns(t *testing.T) {
 	units := share.Units()
 	bound := codesearch.ScatterReads(units)
 	reads := &sharedReads{share: share, release: make(chan struct{})}
-	srv, err := codesearch.NewServer(wire(t, fleetRing), "git-a", reads, units)
+	srv, err := codesearch.NewServer(wire(t, fleetRing), "git-a", reads, units, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatal(err)
 	}

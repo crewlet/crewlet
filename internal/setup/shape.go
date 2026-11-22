@@ -68,6 +68,13 @@ const (
 	// ShapeScalewayAccessKey is a Scaleway API key's access key: SCW
 	// followed by 17 capital letters or digits.
 	ShapeScalewayAccessKey Shape = "scaleway_access_key"
+
+	// ShapeAppleKey is a private key Apple issued as a .p8 file: one PKCS#8
+	// PEM block holding a P-256 key, pasted whole, never minted.
+	ShapeAppleKey Shape = "apple_p8_key"
+
+	// ShapeAppleKeyID is an Apple API key's ID: ten capital letters or digits.
+	ShapeAppleKeyID Shape = "apple_key_id"
 )
 
 // The patterns the identifier shapes hold a value to.
@@ -81,12 +88,14 @@ var (
 	scalewayAccessKeyShape = sync.OnceValue(func() *regexp.Regexp {
 		return regexp.MustCompile(`^SCW[A-Z0-9]{17}$`)
 	})
+	appleKeyIDShape = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[A-Z0-9]{10}$`) })
 )
 
 // Multiline reports a shape whose values span lines, which its own rule
 // judges whole ([Shape.Problem]) in place of a credential's one-line rule.
 func (s Shape) Multiline() bool {
-	return s == ShapeES256Key || s == ShapeCertificateAuthority || s == ShapeSSHCertificateAuthority
+	return s == ShapeES256Key || s == ShapeCertificateAuthority || s == ShapeSSHCertificateAuthority ||
+		s == ShapeAppleKey
 }
 
 // Problem is the sentence for a pasted value this shape refuses, "" for one it
@@ -116,6 +125,18 @@ func (s Shape) Problem(noun, value string) string {
 				"on Save.", noun)
 		}
 		return ""
+	case ShapeAppleKey:
+		if _, err := parseES256(value); err != nil {
+			return fmt.Sprintf("This %s is not a .p8 key: paste the whole file Apple gave you, from BEGIN "+
+				"PRIVATE KEY to END PRIVATE KEY.", noun)
+		}
+		return ""
+	case ShapeAppleKeyID:
+		if appleKeyIDShape().MatchString(value) {
+			return ""
+		}
+		return fmt.Sprintf("This %s is not an Apple key ID: it is ten capital letters or digits, shown "+
+			"beside the key.", noun)
 	case ShapeUUID:
 		if uuidShape().MatchString(value) {
 			return ""
@@ -175,8 +196,8 @@ func opaqueTokenRune(r rune) bool {
 // field, which is where a shared token ends up.
 //
 // A VENDOR-ISSUED IDENTIFIER IS NEVER MINTED: a value of [ShapeUUID],
-// [ShapeScalewayAccessKey], [ShapeGoogleServiceAccount] or [ShapeGoogleProvider]
-// names something the vendor made, and one Crewlet made up would name nothing.
+// [ShapeScalewayAccessKey], [ShapeGoogleServiceAccount], [ShapeGoogleProvider],
+// [ShapeAppleKey] or [ShapeAppleKeyID] names something the vendor made, and one Crewlet made up would name nothing.
 func (s Shape) Mint(token func() string) (string, error) {
 	switch s {
 	case ShapeSigningKey:
@@ -187,7 +208,8 @@ func (s Shape) Mint(token func() string) (string, error) {
 		return GenerateSSHCertificateAuthority()
 	case ShapeES256Key:
 		return mintES256()
-	case ShapeUUID, ShapeScalewayAccessKey, ShapeGoogleServiceAccount, ShapeGoogleProvider:
+	case ShapeUUID, ShapeScalewayAccessKey, ShapeGoogleServiceAccount, ShapeGoogleProvider, ShapeAppleKey,
+		ShapeAppleKeyID:
 		return "", fmt.Errorf("setup: a %s value is issued by the vendor and cannot be minted", s)
 	default:
 		return token(), nil

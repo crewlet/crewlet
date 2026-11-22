@@ -271,9 +271,9 @@ func (b *boxReads) seal(reply sandbox.BoxReadReply) ([]byte, error) {
 // boxReadsHeld is how many reads of the boxes on this node's host it makes at
 // once for its peers: as many as its registration answered at once while the
 // registration's own slots bounded them (queue.ConcurrentAnswers), so a host
-// below that reads exactly as it did, and the replies it holds at once stay
-// inside what queue.ConcurrentAnswers's doc counts for a box read's —
-// sixty-four at the transport's ceiling, 512 MiB.
+// below that reads exactly as it did. What they hold in bytes is the node's
+// answer budget's to bound: each collection holds its weight of it until its
+// reply is written (internal/sandbox/executor's collectionWeight).
 const boxReadsHeld = queue.ConcurrentAnswers
 
 // boxReadsWaiting is how many reads wait for one of those at once, each

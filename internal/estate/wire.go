@@ -523,6 +523,10 @@ type opSpec struct {
 	// refusing a key this build does not declare ([ErrUnknownKeys]).
 	whole bool
 
+	// answer is how large the operation's answer can grow ([answerShape]):
+	// declared on every read, and one value on every write.
+	answer answerShape
+
 	// decode is the server half's first step: the request's arguments,
 	// decoded under the wire's rule ([decodeInput]) into the operation's own
 	// type — boxed — or every member they hold that the type does not
@@ -664,6 +668,9 @@ func define[A, R any](name string, class opClass, domain string, actor bool,
 		name: name, class: class, actor: actor, domain: domain, copies: domain,
 		args: reflect.TypeFor[A](), result: reflect.TypeFor[R](),
 	}
+	if class != opRead {
+		spec.answer = answerShape{kind: answerOne}
+	}
 	if domain != SeatCopy && domain != GitCopy {
 		stream, known := floorStreams[domain]
 		if !known {
@@ -699,7 +706,7 @@ func define[A, R any](name string, class opClass, domain string, actor bool,
 		if spec.judges != nil && b.Current != nil && !b.Current() && spec.judges(args) {
 			return zero, errDecidesNoGrant
 		}
-		return serve(ctx, b, who, args)
+		return serve(spec.answer.reading(ctx), b, who, args)
 	}
 	spec.run = func(ctx context.Context, b Backend, who *Actor, args any) (any, error) {
 		return checked(ctx, b, who, args.(A))

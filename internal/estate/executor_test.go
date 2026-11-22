@@ -238,6 +238,12 @@ func (l *logbook) Unended(_ context.Context, before time.Time, limit int) ([]exe
 		Turn: liveTurn, At: before}}, nil
 }
 
+func (l *logbook) HandlesPage(ctx context.Context, _ string,
+	fresh statelog.Freshness) (executordomain.HandlesPage, error) {
+	handles, err := l.Handles(ctx, fresh)
+	return executordomain.HandlesPage{Handles: handles}, err
+}
+
 func (l *logbook) Handles(_ context.Context, fresh statelog.Freshness) ([]string, error) {
 	l.asked("handles", fresh)
 	if fresh.Level == statelog.ReadStale {

@@ -39,7 +39,7 @@ func (e *Engine) armMemoryReads(ctx context.Context) error {
 	e.memoryReads.Queue = e.backends.Queue
 	e.memoryReads.Leases = e.backends.Coord
 	e.memoryReads.Attached = attached
-	stop, err := memread.Serve(ctx, e.backends.Queue, owner, attached, stores)
+	stop, err := memread.Serve(ctx, e.backends.Queue, owner, attached, stores, e.answerBudget)
 	if err != nil {
 		return err
 	}

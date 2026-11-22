@@ -207,6 +207,7 @@ func readPageActivity(ctx context.Context, tx *sql.Tx, q PageActivityQuery,
 
 	out := make([]PageChange, 0, limit)
 	more := false
+	held := statelog.RowsOf(ctx)
 	for rows.Next() {
 		if len(out) == limit {
 			// THE EXTRA ROW IS THE CURSOR'S EVIDENCE and never an
@@ -230,6 +231,13 @@ func readPageActivity(ctx context.Context, tx *sql.Tx, q PageActivityQuery,
 		change.Quiet = quiet != 0
 		change.At = store.DecodeTime(at)
 		change.LogSeq = uint64(version)
+		// THE BYTE BOUND ([statelog.RowsOf]), before this change is taken,
+		// so the cursor names the last one kept and the next page starts
+		// at this one.
+		if !held.TakeEncoded(change) {
+			more = true
+			break
+		}
 		out = append(out, change)
 	}
 	if err := rows.Err(); err != nil {

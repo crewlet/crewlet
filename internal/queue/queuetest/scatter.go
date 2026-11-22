@@ -638,6 +638,44 @@ func (s *suite) runScatter(t *testing.T) {
 		}
 	})
 
+	// AN ANSWER'S HOLD OF THE NODE'S ANSWER BUDGET LASTS UNTIL ITS REPLY IS
+	// WRITTEN, on every backend: each runs an answer under queue.Replying's
+	// context, so the handler letting go gives nothing back while its reply
+	// is still to be written, and the write gives it all back.
+	//
+	// Mutations, each red: hand the answerer its registration's context
+	// alone; never call the reply's done.
+	t.Run("an_answers_budget_hold_lasts_until_its_reply_is_written", func(t *testing.T) {
+		t.Parallel()
+		q := s.start(ctx, t)
+		subject := ns(t) + ".ask"
+		const weight = 20 << 20
+		meter := &freedMeter{freed: make(chan struct{})}
+		budget := queue.NewAnswerBudget(meter)
+		serve(ctx, t, q, subject, func(ctx context.Context, _ []byte) ([]byte, error) {
+			release, err := budget.Acquire(ctx, queue.AnswerHistory, weight)
+			if err != nil {
+				return nil, err
+			}
+			release()
+			return fmt.Append(nil, meter.bytes()), nil
+		})
+		replies := ask(ctx, t, q, subject, []byte("q"), 1)
+		if got := replyTexts(replies); !sameSet(got, []string{fmt.Sprint(weight)}) {
+			t.Fatalf("the handler let go and the budget held %v bytes, want %d until its reply was written",
+				got, weight)
+		}
+		// BOUNDED BY stallFor, one pause: a healthy backend gives the hold
+		// back as the reply is written, and a broken one never does.
+		stalled, cancel := context.WithTimeout(ctx, stallFor)
+		defer cancel()
+		select {
+		case <-meter.freed:
+		case <-stalled.Done():
+			t.Fatal("the reply was written and the budget never gave the answer's hold back")
+		}
+	})
+
 	if s.caps.Peer != nil {
 		t.Run("a_scatter_reaches_a_peer_process", func(t *testing.T) {
 			t.Parallel()
@@ -806,4 +844,31 @@ func ns(t *testing.T) string {
 	n := nsSeq.n
 	nsSeq.Unlock()
 	return fmt.Sprintf("crewlet.scatter%d", n)
+}
+
+// freedMeter records the bytes an answer budget holds, and is closed freed
+// once a hold it saw is given back whole.
+type freedMeter struct {
+	mu    sync.Mutex
+	held  int64
+	freed chan struct{}
+	once  sync.Once
+}
+
+func (m *freedMeter) AnswerWaited(queue.AnswerKind, queue.AnswerOutcome, time.Duration) {}
+
+func (m *freedMeter) AnswerHeld(bytes int64) {
+	m.mu.Lock()
+	was := m.held
+	m.held = bytes
+	m.mu.Unlock()
+	if was > 0 && bytes == 0 {
+		m.once.Do(func() { close(m.freed) })
+	}
+}
+
+func (m *freedMeter) bytes() int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.held
 }

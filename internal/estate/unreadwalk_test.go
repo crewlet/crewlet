@@ -224,12 +224,12 @@ func TestAViewSavedAgainIsListedWholeAndTheStripShownIsNot(t *testing.T) {
 	f.nodes["data-a"].set(func(n *fakeNode) {
 		n.strip = worklet.ViewListing{Views: []worklet.ViewRow{{ID: "v1", Key: "v1", Name: "Ready",
 			Type: worklet.ViewTable, Container: workspace}}, Level: statelog.ReadStale, Complete: true}
-		n.newerBuild = answersNewer("columns", "views")
+		n.newerBuild = answersNewer("columns", "Listing", "views")
 	})
 	q := worklet.ViewQuery{Container: workspace, Level: statelog.ReadStale}
 	_, err := f.client.Work().CarriedViews(t.Context(), q)
 	var unread *ErrUnknownKeys
-	if !errors.As(err, &unread) || !unread.Answer || !slices.Equal(unread.Keys, []string{"result.views[].columns"}) ||
+	if !errors.As(err, &unread) || !unread.Answer || !slices.Equal(unread.Keys, []string{"result.Listing.views[].columns"}) ||
 		!slices.Equal(unread.Nodes, []string{"data-a"}) {
 		t.Errorf("a strip listed to save a view of again, answered holding a field this build does not "+
 			"declare, = %v; want it refused, naming the field and the node that answered", err)

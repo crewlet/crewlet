@@ -488,6 +488,17 @@ func (b *directBox) ReadFile(ctx context.Context, path string) ([]byte, error) {
 	return content, b.explain(path, rel, err)
 }
 
+// OpenWhole implements [Sandbox] for a box on the engine host: the file
+// opened once and its size read off that open ([openHomeWhole]).
+func (b *directBox) OpenWhole(ctx context.Context, path string) (io.ReadCloser, int64, error) {
+	rel, err := b.homeRel(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	r, size, err := openHomeWhole(b.layout, rel, path, readLimit(b.readCap))
+	return r, size, b.explain(path, rel, err)
+}
+
 // OpenFile implements [Sandbox] for a box on the engine host: the file itself,
 // read in place, after the same escape check every other path takes.
 func (b *directBox) OpenFile(ctx context.Context, path string) (io.ReadCloser, error) {
@@ -968,6 +979,16 @@ func (b *containerBox) ReadFile(ctx context.Context, path string) ([]byte, error
 	return content, b.explain(path, rel, err)
 }
 
+// OpenWhole implements [Sandbox]: the host side of the mount, opened once.
+func (b *containerBox) OpenWhole(ctx context.Context, path string) (io.ReadCloser, int64, error) {
+	rel, err := b.homeRel(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	r, size, err := openHomeWhole(b.layout, rel, path, readLimit(b.readCap))
+	return r, size, b.explain(path, rel, err)
+}
+
 // OpenFile implements [Sandbox]: the host side of the mount, read in place.
 func (b *containerBox) OpenFile(ctx context.Context, path string) (io.ReadCloser, error) {
 	rel, err := b.homeRel(path)
@@ -1132,6 +1153,30 @@ func readHomeFile(l boxLayout, rel, path string, limit int) ([]byte, error) {
 		return nil, fmt.Errorf("local sandbox: read %s: %w", path, err)
 	}
 	return content, err
+}
+
+// openHomeWhole is a local box's OpenWhole once the path is mapped onto its
+// home: the file's size from a stat of the open file, never of the path, and
+// a SECTION to that size, so bytes written after the open are not read.
+// Refused past limit as [readHomeFile] refuses it, the file closed.
+func openHomeWhole(l boxLayout, rel, path string, limit int) (io.ReadCloser, int64, error) {
+	f, err := openHomeRegular(l, rel)
+	switch {
+	case absent(err):
+		return io.NopCloser(strings.NewReader("")), 0, nil
+	case err != nil:
+		return nil, 0, fmt.Errorf("local sandbox: open %s: %w", path, err)
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, 0, fmt.Errorf("local sandbox: stat %s: %w", path, err)
+	}
+	if size := info.Size(); size > int64(limit) {
+		_ = f.Close()
+		return nil, 0, &FileTooLargeError{Path: path, Limit: limit, Size: size}
+	}
+	return hostSection{Reader: io.NewSectionReader(f, 0, info.Size()), Closer: f}, info.Size(), nil
 }
 
 // writeHomeFile is a local box's WriteFile once the path is mapped onto its

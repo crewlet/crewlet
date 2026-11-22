@@ -96,6 +96,55 @@ func TestALocalBoxsRangeEndsAtTheSizeItsOpenAnswered(t *testing.T) {
 	}
 }
 
+// A LOCAL BOX'S WHOLE OPEN IS THE FILE AS ITS OPEN SIZED IT, though the file
+// grows in place under it before the read, so a collection reads no more than
+// the size it weighed: the size comes from the open file, never the path.
+//
+// Mutation: section the file to the cap rather than to the size, and the read
+// carries the appended bytes.
+func TestALocalBoxsWholeOpenIsTheFileAsItsOpenSizedIt(t *testing.T) {
+	t.Parallel()
+	for name, fresh := range map[string]func(*testing.T) (sandbox.Sandbox, string){
+		"direct": func(t *testing.T) (sandbox.Sandbox, string) {
+			box := directBox(t)
+			return box, box.Home()
+		},
+		"container": func(t *testing.T) (sandbox.Sandbox, string) {
+			return sandbox.NewContainerBoxAt(t.TempDir())
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			box, home := fresh(t)
+			content := bytes.Repeat([]byte("0123456789"), 100)
+			if err := box.WriteFile(t.Context(), box.Home()+"/.crewlet/findings.md", content); err != nil {
+				t.Fatalf("WriteFile: %v", err)
+			}
+			r, size, err := box.OpenWhole(t.Context(), box.Home()+"/.crewlet/findings.md")
+			if err != nil {
+				t.Fatalf("OpenWhole: %v", err)
+			}
+			defer func() { _ = r.Close() }()
+			f, err := os.OpenFile(filepath.Join(home, ".crewlet", "findings.md"), os.O_APPEND|os.O_WRONLY, 0)
+			if err != nil {
+				t.Fatalf("open the host file to append: %v", err)
+			}
+			_, err = f.WriteString("appended after the open\n")
+			if cerr := f.Close(); err == nil {
+				err = cerr
+			}
+			if err != nil {
+				t.Fatalf("append: %v", err)
+			}
+			got, err := io.ReadAll(r)
+			if err != nil || !bytes.Equal(got, content) || size != int64(len(content)) {
+				t.Errorf("the whole open = %d bytes of %d, %v; want the %d the open found",
+					len(got), size, err, len(content))
+			}
+		})
+	}
+}
+
 // THE FAKE'S STREAMS HOOK WRAPS EVERY STREAM IT OPENS, and what it hands out,
 // not what it reads beneath, is what the box counts as delivered: a case that
 // fails a stream part way or slows it holds every open, not only the one it

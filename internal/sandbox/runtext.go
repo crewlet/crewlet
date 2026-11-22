@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/activityline"
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
@@ -51,6 +52,9 @@ type FileTooLargeError struct {
 	// Limit is the most the box reads whole: [MaxFileBytes] on every box
 	// the engine builds.
 	Limit int
+	// Size is the file's size where the box read it ([Sandbox.OpenWhole]),
+	// zero where it read only past the limit.
+	Size int64
 }
 
 func (e *FileTooLargeError) Error() string {
@@ -311,6 +315,10 @@ var BoxReadCarries = []int{MaxCondenseBytes, MaxRunTextBytes}
 // result whose text, the stream's final message and the report are each near
 // 32 MiB), 4.3 times the file bound, rounded up to the next whole one.
 const BoxReadHeldBytes = 5 * MaxFileBytes
+
+// The node's answer budget admits a box read at its cap: a negative constant
+// does not compile.
+const _ = uint(queue.AnswerBudgetBytes - BoxReadHeldBytes)
 
 // CarriedResult is result with its report and failure each held to budget by
 // whole lines, the note saying so counted inside it (a report keeping its

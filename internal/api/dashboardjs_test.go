@@ -666,9 +666,10 @@ var priceForms = []priceForm{
 	// camel-cased copy a parser makes.
 	{"names the engine's price field", regexp.MustCompile(`(?i)cost_?usd|priced_?calls`)},
 	// Intl's currency formatting: the style value, and the option keys that
-	// exist only to go with it.
+	// exist only to go with it. A bare `currency:` is data (a growth account's
+	// currency), which the source scan admits only in the growth modules.
 	{"asks Intl for its currency style", regexp.MustCompile("[\"'`]currency[\"'`]")},
-	{"passes Intl a currency option", regexp.MustCompile(`\bcurrency(?:Display|Sign)?\s*:`)},
+	{"passes Intl a currency option", regexp.MustCompile(`\bcurrency(?:Display|Sign)\s*:`)},
 	// A currency by its code, as a whole word — `costUSD` is the field rule's.
 	{"names a currency by its code", regexp.MustCompile(`\b(?:USD|EUR|GBP)\b`)},
 	// The euro and the pound mean nothing but money here, so they are refused
@@ -687,12 +688,11 @@ var priceForms = []priceForm{
 }
 
 // priceExemptions is every span the bundle scan admits although a price form
-// matches inside it. Each is the design system's sheet model
-// (@crewlethq/ui SheetModel) handling an artifact sheet's own cells, which are
-// the author's data drawn in the format the author declared for the column,
-// never a figure the engine recorded: the carve-out rule 19 of
-// docs/reference/dashboard-design.md makes for a sheet's cells, as it does for
-// a record shown verbatim.
+// matches inside it, each one of the two carve-outs rule 19 of
+// docs/reference/dashboard-design.md makes: the design system's sheet model
+// (@crewlethq/ui SheetModel) drawing an artifact sheet's own cells in the
+// format the author declared, and the design system's Money drawing a growth
+// integration's vendor money, the one way the dashboard draws an amount.
 //
 // EACH IS WRITTEN AS THE WHOLE CONSTRUCT, not as a word inside it, so a
 // currency format or a sign anywhere else is still refused, and a rewrite of
@@ -708,6 +708,13 @@ var priceExemptions = []*regexp.Regexp{
 	// holds currency signs and nothing else, which matches what a person
 	// typed and never draws anything.
 	regexp.MustCompile(`/(?:\^?\[[$€£¥]+\]\$?\|)*\^?\[[$€£¥]+\]\$?/[dgimsuvy]*`),
+	// Money's formatter: Intl's currency style for an amount the kit has
+	// already rounded exactly, its display option the caller's or a symbol.
+	regexp.MustCompile(`new Intl\.NumberFormat\(\w+,\{style:` + quoted("currency") + `,currency:\w+,` +
+		`currencyDisplay:\w+\.currencyDisplay\?\?` + quoted("symbol") + `[,}]`),
+	// Money's ISO 4217 table: every code with a minor unit, a hundred and
+	// more, in one string. A shorter run of codes is a screen naming them.
+	regexp.MustCompile("[\"'`](?:[A-Z]{3} ){100,}[A-Z]{3}[\"'`]"),
 }
 
 // quoted is a regular expression for word as a string literal in any of the
@@ -796,9 +803,10 @@ func TestTheDashboardRendersNoPrice(t *testing.T) {
 	}
 	for url, body := range modules {
 		for _, p := range pricesInModule(body) {
-			t.Errorf("%s %s: …%s… — the dashboard renders tokens and never money "+
-				"(rule 19 in docs/reference/dashboard-design.md); remove it from "+
-				"dashboard/src, then `make dashboard`", url, p.what, p.near)
+			t.Errorf("%s %s: …%s… — the dashboard draws tokens for what agents spend, "+
+				"and money only through the kit's Money (rule 19 in "+
+				"docs/reference/dashboard-design.md); remove it from dashboard/src, "+
+				"then `make dashboard`", url, p.what, p.near)
 		}
 	}
 }
@@ -841,6 +849,11 @@ func TestThePriceScanReadsWhatTheMinifierWrites(t *testing.T) {
 		{"a sign written back after a stripped one", "r=r.replace(/^[$€£¥]/g,``)+`€`",
 			"carries a currency sign"},
 		{"a sign class that holds more than signs", "r=r.replace(/[€a]/g,``)", "carries a currency sign"},
+		// Money's admitted spans admit only themselves.
+		{"a currency format with its own display", "new Intl.NumberFormat(n,{style:`currency`,currency:a,currencyDisplay:`code`})",
+			"asks Intl for its currency style"},
+		{"a display option outside Money's props", "f({micros:e,currencyDisplay:`code`})", "passes Intl a currency option"},
+		{"a short run of codes", "var c=`USD EUR GBP JPY`.split(` `);", "names a currency by its code"},
 	} {
 		t.Run("finds "+tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -866,6 +879,12 @@ func TestThePriceScanReadsWhatTheMinifierWrites(t *testing.T) {
 		{"a sheet column's declared currency", "return e.numberStyle===`percent`?new Intl.NumberFormat(t,{style:`percent`,...r}):" +
 			"e.numberStyle===`currency`&&e.currency?new Intl.NumberFormat(t,{style:`currency`,currency:e.currency,...r}):new Intl.NumberFormat(t,r)}"},
 		{"the signs a sheet strips from input", "if(i&&(r=r.slice(0,-1)),r=r.replace(/^[$€£¥]|[$€£¥]$/g,``),/^-?\\d{1,3}(,\\d{3})+$/.test(r))"},
+		// The design system's Money, as the build writes it today: its
+		// formatter and its ISO table, and a growth account's currency
+		// carried as data.
+		{"Money's formatter", "s=new Intl.NumberFormat(n,{style:`currency`,currency:a,currencyDisplay:r.currencyDisplay??`symbol`,signDisplay:r.signDisplay??`auto`})"},
+		{"Money's ISO table", "Zt=new Set(`" + strings.Repeat("AED ", 60) + "EUR GBP USD " + strings.Repeat("ZAR ", 60) + "ZWL`.split(` `))"},
+		{"an account's currency as data", "t.push({account:e.id,currency:e.currency,per_change:n})"},
 	} {
 		t.Run("leaves "+tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -1034,7 +1053,7 @@ const (
 	// the shell links: everything a reader downloads before the first screen
 	// can draw. It began at 300 KiB, under two seconds on a 1.5 Mbit/s link
 	// (the slow end of a phone tether), and has moved up with each kit release
-	// and frame feature; the last measure was 432.1 KiB, about 2.36 seconds.
+	// and frame feature; the last measure was 432.5 KiB, about 2.36 seconds.
 	// The one sheet carries every design-system rule by rule (see
 	// TestNoLazyStylesheetCarriesTheDesignSystem), so kit releases grow it even
 	// when no screen joins the entry. A raise names the measured size and its
@@ -1059,10 +1078,10 @@ const (
 	// at 3 MiB over a 2.3 MB baseline and is set so a bundle that doubled the
 	// baseline is still refused; screens fetched only when opened (the rich
 	// editor, the brand and folder screens, the assistant's panel, Gitlet) and
-	// kit releases account for its growth, and the last measure was 7180.3 KiB,
-	// after a seat's several turns at once and its run cap in the org builder.
+	// kit releases account for its growth, and the last measure was 7225.7 KiB,
+	// after the growth integrations' settings, decision card, caps and changes.
 	// A raise names the measured size and its cause in its commit.
-	treeBudget = 5<<20 + 2061<<10
+	treeBudget = 5<<20 + 2106<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

@@ -160,7 +160,9 @@ const collectionBaseRecords = 1 << 13
 // (BenchmarkAThreadChainAtItsBounds); a line's reader within the line; and the
 // strings one charge covers, the last with the buffer json v2 unquotes it
 // through. TestTheBaseCoefficientsHold measures the last two. baseTierReadBytes
-// is what the base tier counts each read in flight at, about 5.3 MiB.
+// is what the base tier counts each read in flight at, about 5.3 MiB, and a
+// collection's least weight of the node's answer budget ([collectionWeight]):
+// what its fixed per-read buffers hold whatever its pieces weigh.
 const (
 	chainItemBytes     = 344
 	readerLineBytes    = 1730 << 10

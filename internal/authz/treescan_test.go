@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
@@ -166,10 +167,15 @@ func treeScan(t *testing.T) *verbScan {
 	if err != nil {
 		t.Fatalf("walk the tree: %v", err)
 	}
-	if len(scan.wire) != len(authz.Actions()) {
+	// THE TABLE'S VERBS, without the growth tools a catalog names and no
+	// constant declares.
+	table := slices.DeleteFunc(authz.Actions(), func(a authz.Action) bool {
+		_, named := growth.KindOfTool(string(a))
+		return named
+	})
+	if len(scan.wire) != len(table) {
 		t.Fatalf("read %d Action constants out of rules.go and the table holds %d "+
-			"verbs — the parse no longer sees the declarations", len(scan.wire),
-			len(authz.Actions()))
+			"verbs — the parse no longer sees the declarations", len(scan.wire), len(table))
 	}
 	if scan.files < 100 {
 		t.Fatalf("read %d Go files — the root is not this module's, so an "+

@@ -298,11 +298,11 @@ func TestNoCredentialShapeReachesTheAtlasFromASearch(t *testing.T) {
 func TestTheBlockMakesTheAtlasAccountOnlyWhenAsked(t *testing.T) {
 	t.Parallel()
 	_, pemText := fakeKey(t)
-	off, err := googlecloud.CloudShellBlock(testCompany, provisioner, pemText, false)
+	off, err := googlecloud.CloudShellBlock(testCompany, provisioner, pemText, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	on, err := googlecloud.CloudShellBlock(testCompany, provisioner, pemText, true)
+	on, err := googlecloud.CloudShellBlock(testCompany, provisioner, pemText, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,7 +358,7 @@ func TestTheConnectFormOffersTheAtlasReader(t *testing.T) {
 			FederationKey: "${" + googlecloud.FederationKeySecret + "}", AtlasRead: on}}
 		var block string
 		found := false
-		for _, req := range googlecloud.Requirements(testCompany, in, resolve) {
+		for _, req := range googlecloud.Requirements(testCompany, in, nil, resolve) {
 			switch req.Field {
 			case "atlas_read":
 				found = true

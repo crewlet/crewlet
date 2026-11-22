@@ -306,5 +306,34 @@ func serviceInstruments() []Instrument {
 				"counting `refused`; above zero with no run ending or saving " +
 				"on the node is a spool never given back.",
 		},
+
+		// ---- the node's answer budget ------------------------------------
+		{
+			Name: QueueAnswerWait, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"answer", "outcome"},
+			Shows: "How long each payload answer this engine process built " +
+				"for a peer waited for its weight of the node's answer budget " +
+				"(256 MiB, every payload answer on the node sharing it, in " +
+				"arrival order), and every collection of a run's box, by " +
+				"`answer` (`box_read`, `history`, `memory`, `replay`, " +
+				"`live_relay`, `bridge`, `tail`, `codesearch`, " +
+				"`search_slice`, `mcp_check`, `estate`) and `outcome`: `admitted`, at " +
+				"once or after waiting; `ended`, its asker's wait or its own " +
+				"ran out first, so it answered that the budget was full (or " +
+				"nothing). A p95 climbing beside `held_bytes` near the budget " +
+				"is a node answering more payload at once than its memory " +
+				"keeps for answers; `ended` above zero is answers refused for it. " +
+				"The budget is an engine constant: report it with both readings.",
+		},
+		{
+			Name: QueueAnswerHeldBytes, Kind: KindGauge, Unit: UnitBytes,
+			Attributes: nil,
+			Shows: "Bytes of the node's answer budget (256 MiB) its payload " +
+				"answers and box collections hold now, each at its weight " +
+				"from before its read until its reply is written. Near the " +
+				"budget for long is a node whose answers wait " +
+				"(`crewlet.queue.answers.wait`); above zero with nothing " +
+				"answered or collected is a hold never given back.",
+		},
 	}
 }

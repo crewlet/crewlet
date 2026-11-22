@@ -182,6 +182,11 @@ type delivery struct {
 
 // answer takes one frame off the exchange's subject.
 func (in *inbound) answer(ctx context.Context, raw []byte) ([]byte, error) {
+	release, err := in.rl.hold(ctx, raw, in.rl.clock.pushWait)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	admitted := in.rl.frames.Admit(raw, in.guard, in.rl.time.Now())
 	if admitted.Disposition != signedask.Admitted {
 		if admitted.Disposition == signedask.Tampered {

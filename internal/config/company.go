@@ -335,7 +335,7 @@ func (c *Company) validateAdmission(o *org.Organization) error {
 		c.validateFileRules(), c.validateMCPNames(), c.validateAssistant(), c.validateAdvisor(), c.validateSeatAccess(),
 		c.validateMCPRegistry(), c.validateMCPAccess(o), c.validateBoxToolLevels(),
 		c.validateMCPLimits(o), c.Code.validateAdmission(field("code")), c.validateSSHApprovers(),
-		c.validateDelegatedDecisions(o))
+		c.validateDelegatedDecisions(o), c.validateGrowth())
 }
 
 // validateUnitIDs requires an id on every authored unit, at any depth. See
@@ -1237,6 +1237,8 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 		return in.GoogleCloud != nil
 	case "ssh":
 		return in.SSH != nil
+	case "app_store_connect":
+		return in.AppStoreConnect != nil
 	case "atlassian":
 		return in.Atlassian != nil
 	default:
