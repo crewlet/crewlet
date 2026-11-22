@@ -156,7 +156,11 @@ function useKept(local: Local, keep: (next: Local) => void, fallback: Board) {
   const answer = useMemo(() => answerOf(query.data), [query.data]);
   const write = useAct("save_home_board");
   const [landed, setLanded] = useState<Landed | null>(null);
-  const drawn = drawnOf(answer, local, fallback, landed);
+  const asked = useRef(0);
+  const drawn = useMemo(
+    () => drawnOf(answer, local, fallback, landed),
+    [answer, local, fallback, landed],
+  );
 
   // WHAT IS DRAWN UNDER A SEAT IS KEPT HERE for the next cold load, and a
   // board this browser kept alone is dropped once the engine holds one.
@@ -166,10 +170,16 @@ function useKept(local: Local, keep: (next: Local) => void, fallback: Board) {
       if (local.kind !== "none") keep(NONE);
       return;
     }
-    if (local.kind === "cache" && local.seat === answer.seat && local.revision === drawn.revision)
+    // NEVER OLDER THAN WHAT IS KEPT: another tab's newer save is read again, not overwritten.
+    if (local.kind === "cache" && local.seat === answer.seat && local.revision >= drawn.revision) {
+      if (local.revision > drawn.revision && asked.current !== local.revision) {
+        asked.current = local.revision;
+        query.refetch();
+      }
       return;
+    }
     keep({ kind: "cache", v: 1, seat: answer.seat, revision: drawn.revision, board: drawn.board });
-  }, [drawn.home, drawn.migrate, drawn.revision, drawn.board, answer, local, keep]);
+  }, [drawn.home, drawn.migrate, drawn.revision, drawn.board, answer, local, keep, query]);
 
   const save = useCallback(
     async (
@@ -226,12 +236,13 @@ function useKept(local: Local, keep: (next: Local) => void, fallback: Board) {
   const retry = useRef<{ edit: (b: Board) => Board; after: number } | null>(null);
   const update = useCallback(
     async (edit: (b: Board) => Board) => {
-      setFolding(edit(drawn.board));
-      const outcome = await save(edit(drawn.board), { quiet: true });
+      const next = edit(folding ?? drawn.board);
+      setFolding(next);
+      const outcome = await save(next, { quiet: true });
       if (outcome === "conflict") retry.current = { edit, after: drawn.revision };
       else setFolding(null);
     },
-    [drawn.board, drawn.revision, save],
+    [folding, drawn.board, drawn.revision, save],
   );
   useEffect(() => {
     const again = retry.current;
