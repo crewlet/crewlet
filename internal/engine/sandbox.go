@@ -4147,6 +4147,10 @@ type executorRun struct {
 	files     map[string]string
 	env       map[string]string
 
+	// fileKeys is, by a path of files, the keys its harness writes into that
+	// file during a run ([sandbox.Spec.CredentialRunKeys]).
+	fileKeys map[string][]string
+
 	// signIn is env without the integrations' box defaults and the seat's
 	// own credentials for a tool: what the run's sign-in is judged on, since
 	// neither ever signs a harness in.
@@ -4210,6 +4214,7 @@ func newExecutorRun(agent *harness.Provider, seat runEnv) executorRun {
 		signIn:      signIn,
 		signInNames: signInNames(agent, entry),
 		files:       agent.SandboxCredentials(),
+		fileKeys:    agent.SandboxCredentialRunKeys(),
 		homePaths:   integrationsOwn(agent, seat.homePaths),
 	}
 	for _, name := range slices.Sorted(maps.Keys(seat.credentials)) {

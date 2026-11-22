@@ -292,7 +292,7 @@ const (
 	// MarkerScopeStderr searches stderr only, for a harness whose failures
 	// never reach the answer (pi; measured). Narrow only where the
 	// answer is an impossible place for the report: hermes prints a refused
-	// key on stdout with exit 2 (0.21.5).
+	// key on stdout with exit 2 (0.23.3).
 	MarkerScopeStderr MarkerScope = "stderr"
 	// MarkerScopeEvents matches STRUCTURE, not text, for a harness reporting a
 	// failure as its own event in a JSON stream (OpenCode 2's `provider.quota`).
@@ -513,6 +513,25 @@ type SeedFile struct {
 	In SeedScope `yaml:"in,omitempty"`
 	// Content is the file's bytes.
 	Content string `yaml:"content,omitempty"`
+}
+
+// HomeDaemon is a process the harness starts for a call and keeps running in the
+// background to serve the home's later calls, with the environment of the call
+// that started it: Hermes Agent 0.23.3's `-z` runs its turn in a gateway it
+// starts per HERMES_HOME in a session of its own, which outlives the call's
+// process group and serves the next call with the first one's variables.
+//
+// Declared, a home runs one call at a time, and the engine runs StopArgs in it
+// whenever PIDFile is there as a call releases the home and before a call
+// opens it (one an engine that ended mid-call left behind), so every call
+// starts its own daemon and none outlives the call that started it.
+type HomeDaemon struct {
+	// PIDFile is the file, relative to the seat home, the harness keeps while
+	// its daemon runs and removes when it stops.
+	PIDFile string `yaml:"pid_file,omitempty"`
+	// StopArgs is the harness's own command that stops the daemon of the home
+	// it runs in, and exits 0 when there is none.
+	StopArgs []string `yaml:"stop_args,omitempty"`
 }
 
 // staysInside is the load-time half of [UnderRoot] ([filepath.IsLocal]), for a
@@ -1020,11 +1039,23 @@ type Profile struct {
 	// named leaves a login the engine takes for none.
 	LoginKeys map[string][]string `yaml:"login_keys,omitempty"`
 
+	// RunKeys names, by a credential file's NAME, the keys (dotted, into a
+	// JSON object) the harness writes into that file during a run, which are
+	// not the login its sign-in made: Muse Code mints an API key as each run
+	// starts and writes it there. A run's login carried out keeps the shared
+	// login's value of each ([KeepLoginKeys]); a login command's takes all.
+	RunKeys map[string][]string `yaml:"run_keys,omitempty"`
+
 	// VolatilePaths are sessions, transcripts, history and todo state,
 	// relative to the seat home, deleted before and after every call: a hidden
 	// harness memory would make turns non-reproducible and carry one task's
 	// context into the next.
 	VolatilePaths []string `yaml:"volatile_paths,omitempty"`
+
+	// HomeDaemon is the background process the harness keeps for a home's
+	// calls, or nil for a harness whose calls end with their process group
+	// ([HomeDaemon]).
+	HomeDaemon *HomeDaemon `yaml:"home_daemon,omitempty"`
 
 	// LoginArgs brokers the vendor's own interactive login.
 	LoginArgs []string `yaml:"login_args,omitempty"`
@@ -1544,6 +1575,9 @@ func (p *Profile) kept(scope SeedScope) []keptPath {
 		}
 		for i, rel := range p.VolatilePaths {
 			add("volatile_paths", fmt.Sprintf("volatile_paths[%d]", i), rel)
+		}
+		if p.HomeDaemon != nil {
+			add("home_daemon", "home_daemon.pid_file", p.HomeDaemon.PIDFile)
 		}
 	}
 	for i, f := range p.SeedFiles {
@@ -2218,6 +2252,18 @@ func (p *Profile) validateHomePaths(add func(string, ...any)) {
 				"file holds a login under", name)
 		}
 	}
+	for _, name := range slices.Sorted(maps.Keys(p.RunKeys)) {
+		if byName[name] == "" {
+			add("run_keys names %q, which is the file name of no credential_paths entry — "+
+				"run keys say which keys of a credential file its harness writes during a run", name)
+		}
+		for i, key := range p.RunKeys[name] {
+			if slices.Contains(strings.Split(key, "."), "") {
+				add("run_keys.%s[%d] %q is no key path — name the key, its parents' keys before "+
+					"it, each joined by a dot", name, i, key)
+			}
+		}
+	}
 	// A host file is adopted under its file name and a seat is seeded only with
 	// credential_paths' names, so a host path with another name is adopted,
 	// reported as found, and read by no seat: copilot listed gh's
@@ -2234,6 +2280,15 @@ func (p *Profile) validateHomePaths(add func(string, ...any)) {
 	for i, rel := range p.VolatilePaths {
 		if !staysInside(rel) {
 			add("volatile_paths[%d] %q must be relative and stay inside the seat home", i, rel)
+		}
+	}
+	if d := p.HomeDaemon; d != nil {
+		if !staysInside(d.PIDFile) || !namesAFile(d.PIDFile) {
+			add("home_daemon.pid_file %q must name a file inside the seat home", d.PIDFile)
+		}
+		if len(d.StopArgs) == 0 {
+			add("home_daemon.stop_args is empty: name the harness's own command that stops " +
+				"the daemon of the home it runs in")
 		}
 	}
 }
