@@ -25,6 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitlet/gitlettest"
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc/gittest"
+	"github.com/crewlet/crewlet/internal/shellword"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -402,7 +403,7 @@ func TestAStepsMeasuredCopyIsThePackItsPushSends(t *testing.T) {
 	// git push runs its own pack-objects from git's exec path, never through
 	// this script.
 	operators := hermeticGitWith(t, "case \" $* \" in *\" pack.window=0 \"*\" pack-objects \"*)\n"+
-		"  out=$(mktemp "+shellQuote(filepath.Join(copies, "copy.XXXXXX"))+") || exit 125\n"+
+		"  out=$(mktemp "+shellword.Quote(filepath.Join(copies, "copy.XXXXXX"))+") || exit 125\n"+
 		"  \"$real_git\" \"$@\" > \"$out\" || exit $?\n"+
 		"  exec cat \"$out\";;\n"+
 		"esac\n")
@@ -1500,9 +1501,9 @@ func measuringGit(t *testing.T) (path string, measured func(oid string) int) {
 	dir := t.TempDir()
 	log := filepath.Join(dir, "measured")
 	path = hermeticGitWith(t, "case \" $* \" in *\" pack.window=0 \"*) ;; *\" pack-objects \"*)\n"+
-		"  in=$(mktemp "+shellQuote(filepath.Join(dir, "revs.XXXXXX"))+") || exit 125\n"+
+		"  in=$(mktemp "+shellword.Quote(filepath.Join(dir, "revs.XXXXXX"))+") || exit 125\n"+
 		"  cat > \"$in\" || exit 125\n"+
-		"  head -n 1 \"$in\" >> "+shellQuote(log)+"\n"+
+		"  head -n 1 \"$in\" >> "+shellword.Quote(log)+"\n"+
 		"  exec < \"$in\"\n"+
 		"  rm -f \"$in\";;\n"+
 		"esac\n")
@@ -1961,8 +1962,8 @@ func TestImportReportsARefusedStepWithoutWaitingForTheNextMeasurement(t *testing
 	// the copies a step's measurement and push make carry pack.window=0.
 	count := filepath.Join(t.TempDir(), "measurements")
 	held := hermeticGitWith(t, "case \" $* \" in *\" pack.window=0 \"*) ;; *\" pack-objects \"*)\n"+
-		"  echo x >> "+shellQuote(count)+"\n"+
-		"  if [ $(( $(wc -l < "+shellQuote(count)+") )) -ge 2 ]; then sleep 120; fi;;\n"+
+		"  echo x >> "+shellword.Quote(count)+"\n"+
+		"  if [ $(( $(wc -l < "+shellword.Quote(count)+") )) -ge 2 ]; then sleep 120; fi;;\n"+
 		"esac\n")
 
 	start := time.Now()

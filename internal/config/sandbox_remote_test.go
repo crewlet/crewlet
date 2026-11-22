@@ -295,3 +295,23 @@ func TestABareEnvArgNothingSuppliesIsAdvised(t *testing.T) {
 // that nobody can be mentioned at.
 const reachablePerson = "roles:\n  - name: Founder\n    kind: human\n" +
 	"    contact:\n      slack_user_id: U0FOUNDER\n"
+
+// AN E2B BOX RUNS A HARNESS E2B PREBUILDS NO IMAGE OF ONLY FROM THE COMPANY'S
+// TEMPLATE. Qwen Code's executor block names no E2B template, since no prebuilt
+// one holds it, so an executor entry on it placed in e2b with no template of
+// the company's would boot a bare box and fail every launch: refused at the
+// entry's run_in; with providers.sandbox.e2b.template named, admitted.
+//
+// Mutation: drop the rule in validateSandboxPlacement, or read the
+// harness's template where the company's is set, and a case goes red.
+func TestAnE2BBoxOfAHarnessWithNoPrebuiltTemplateNeedsTheCompanys(t *testing.T) {
+	t.Parallel()
+	const qwen = "  llm:\n    q:\n      harness: qwen-code\n      model: qwen3-coder-plus\n      run_in: e2b\n" +
+		"      auth: {mode: api-key, api_key: \"${QWEN_API_KEY}\"}\n" +
+		"      env: {OPENAI_BASE_URL: https://example.com/v1}\nroles:\n  - name: SWE\n    llm: q\n"
+	err := rejects(t, "name: Acme\nproviders:\n  sandbox:\n    e2b: {api_key: k}\n"+qwen, "providers.llm.q.run_in")
+	if !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), "providers.sandbox.e2b.template") {
+		t.Fatalf("want an ErrConflict naming the template to set, got %v", err)
+	}
+	mustCompany(t, "name: Acme\nproviders:\n  sandbox:\n    e2b: {api_key: k, template: qwen-box}\n"+qwen)
+}

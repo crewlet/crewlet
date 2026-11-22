@@ -21,13 +21,13 @@ import (
 // Gitlet was found absent, so gating on it gives no box git on any node and
 // every checkout clones from an empty base.
 func (e *Engine) launchBoxGit(seat *org.Role, turnID string,
-	run map[string]string) func(launchID string) (map[string]string, error) {
+	run map[string]string) func(launchID string) (sandbox.LaunchEnv, error) {
 
 	if _, served := OperatorCode(e); e.boxGitURL == "" || !served {
 		return nil
 	}
 	base := e.boxGitURL
-	return func(launchID string) (map[string]string, error) {
+	return func(launchID string) (sandbox.LaunchEnv, error) {
 		return e.boxGitEnv(seat, base, host.BoxRunRef{TurnID: turnID, LaunchID: launchID}, run)
 	}
 }
@@ -35,29 +35,31 @@ func (e *Engine) launchBoxGit(seat *org.Role, turnID string,
 // boxGitEnv is the engine's git environment for ONE LAUNCH of a run on a node
 // serving Gitlet, whatever the run checks out (ADR-0093), over run, the run
 // environment the launch assembled: a token naming the turn and the launch id
-// the store just minted (so a job a relaunch superseded is refused), Gitlet's
-// base, and git's configuration, the operator's entries kept and the engine's
-// appended ([sandbox.BoxGit]). No commit trailers: the run's attribution hook
+// the store just minted (so a job a relaunch superseded is refused), which the
+// launch writes into the box rather than any variable ([sandbox.LaunchEnv]),
+// Gitlet's base, and git's configuration, the operator's entries kept and the
+// engine's appended ([sandbox.BoxGit]). No commit trailers: the run's attribution hook
 // ([sandbox.CommitAttribution]) is the one place they are spelled.
 //
 // The commit identity is [codeSigner]'s, the engine's one rule for a seat's
 // commits, so the box's commits name the seat as the engine's do. Refused
 // where the run environment's git configuration has a hole git refuses.
 func (e *Engine) boxGitEnv(seat *org.Role, base string, ref host.BoxRunRef,
-	run map[string]string) (map[string]string, error) {
+	run map[string]string) (sandbox.LaunchEnv, error) {
 
 	sig, err := codeSigner{e: e}.Sign(gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: seat.Handle()})
 	if err != nil {
-		return nil, fmt.Errorf("engine: the commit identity of seat %s's executor: %w", seat.Handle(), err)
+		return sandbox.LaunchEnv{}, fmt.Errorf("engine: the commit identity of seat %s's executor: %w",
+			seat.Handle(), err)
 	}
 	if e.boxTokens == nil {
-		return nil, fmt.Errorf("engine: this node mints no coding box's credential")
+		return sandbox.LaunchEnv{}, fmt.Errorf("engine: this node mints no coding box's credential")
 	}
 	token, err := e.boxTokens.Mint(ref)
 	if err != nil {
-		return nil, fmt.Errorf("engine: no credential can be minted for launch %s of run %s: %w", ref.LaunchID,
-			ref.TurnID, err)
+		return sandbox.LaunchEnv{}, fmt.Errorf("engine: no credential can be minted for launch %s of run %s: %w",
+			ref.LaunchID, ref.TurnID, err)
 	}
 	return sandbox.BoxGit{Base: base, User: host.BoxUser, Token: token, Name: sig.AuthorName,
-		Email: sig.AuthorEmail}.Env(run)
+		Email: sig.AuthorEmail}.Launch(run)
 }

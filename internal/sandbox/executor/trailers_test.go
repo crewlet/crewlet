@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
+	"github.com/crewlet/crewlet/internal/shellword"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
@@ -103,12 +104,12 @@ func boxClone(t *testing.T, g boxGit) (*gittest.Client, string) {
 // child execs, and git's exec of the hook would fail ETXTBSY.
 func installed(t *testing.T, run boxRun) string {
 	t.Helper()
-	hook, err := executor.AttributionHook(run.attribution())
+	dir := t.TempDir()
+	hook, err := executor.AttributionHook(run.attribution(), filepath.Join(dir, "hooks"))
 	if err != nil {
 		t.Fatalf("AttributionHook: %v", err)
 	}
-	dir := t.TempDir()
-	cmd := exec.CommandContext(t.Context(), "/bin/sh", "-c", "printf '%s' "+sandbox.ShellQuote(string(hook))+
+	cmd := exec.CommandContext(t.Context(), "/bin/sh", "-c", "printf '%s' "+shellword.Quote(string(hook))+
 		" > hook && chmod 700 hook && mkdir hooks && ln -s ../hook hooks/prepare-commit-msg")
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -118,9 +119,9 @@ func installed(t *testing.T, run boxRun) string {
 }
 
 // pointedAt is client with its git pointed at hooks, as the run's wrapper
-// does: one GIT_CONFIG_COUNT entry.
+// does: its GIT_CONFIG_PARAMETERS item.
 func pointedAt(client *gittest.Client, hooks string) *gittest.Client {
-	return client.Env("GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=core.hooksPath", "GIT_CONFIG_VALUE_0="+hooks)
+	return client.Env("GIT_CONFIG_PARAMETERS=" + executor.HooksParameter(hooks))
 }
 
 // in is client running as run: its git pointed at the run's own hook.
@@ -467,13 +468,13 @@ func TestNoTrailerValueCanInject(t *testing.T) {
 		"an item with no seat":    {Run: thisRun.run, WorkItem: &engItem},
 		"a run of two lines":      {Seat: "swe", Run: thisRun.run + "\nSigned-off-by: Evil <e@x>"},
 	} {
-		if _, err := executor.AttributionHook(a); err == nil {
+		if _, err := executor.AttributionHook(a, "/hooks"); err == nil {
 			t.Errorf("the attribution took %s", name)
 		}
 	}
 	hook, err := executor.AttributionHook(sandbox.CommitAttribution{Seat: "swe",
-		WorkItem: &types.WorkItem{Backend: types.WorkWorklet}})
-	if want := sandbox.ShellQuote(executor.WorkItemTrailer + ": native"); err != nil ||
+		WorkItem: &types.WorkItem{Backend: types.WorkWorklet}}, "/hooks")
+	if want := shellword.Quote(executor.WorkItemTrailer + ": native"); err != nil ||
 		!strings.Contains(string(hook), "--trailer "+want+" ") {
 		t.Errorf("an item with no key is not named by its backend alone (%v):\n%s", err, hook)
 	}

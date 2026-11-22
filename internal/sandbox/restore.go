@@ -1452,6 +1452,14 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 		// ([copyWentPast]) came with a reading-told brief.
 		readPassedOver bool
 	)
+	if startsFresh(runner) {
+		// A HARNESS THAT CONTINUES NO SESSION starts one of its own: handed
+		// one to continue, its runner would refuse the run.
+		if req.Session != nil || (req.Continue != nil && req.Continue.SessionID != "") {
+			c.notContinued(ctx, req, "the run's harness continues no earlier session", startsItsOwn)
+		}
+		return freshLaunch(req)
+	}
 	if want := req.Session; want != nil {
 		var (
 			launch continuedLaunch
