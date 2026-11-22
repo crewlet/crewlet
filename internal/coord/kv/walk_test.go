@@ -504,7 +504,7 @@ func (k replayKV) Watch(context.Context, string, ...jetstream.WatchOpt) (jetstre
 }
 
 // watchHeaders is [replayKV.Watch]: a recorded pass is handed whole.
-func (k replayKV) watchHeaders(ctx context.Context, keys string) (jetstream.KeyWatcher, error) {
+func (k replayKV) watchHeaders(ctx context.Context, keys string, _ time.Duration) (jetstream.KeyWatcher, error) {
 	return k.Watch(ctx, keys)
 }
 
@@ -743,7 +743,7 @@ func TestAListingThatCannotBeCertifiedIsUnavailable(t *testing.T) {
 		}
 		var visited int
 		err = listUnder(ctx, f.js, read, probeKV{KeyValue: f.budgets, lose: encodeKey("seat-a")},
-			jetstream.AllKeys, "the budgets",
+			jetstream.AllKeys, "the budgets", false,
 			func(jetstream.KeyValueEntry) error { visited++; return nil })
 		if !errors.Is(err, coord.ErrUnavailable) || !errors.Is(err, nats.ErrNoResponders) {
 			t.Fatalf("err = %v, want ErrUnavailable wrapping the read's own "+

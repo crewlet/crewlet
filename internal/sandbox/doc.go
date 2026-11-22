@@ -14,8 +14,7 @@
 // before anything is done with it ("Owed answers"), and reaches the seat once:
 // TAKEN by a resumed turn ([RecordedAnswer.TakenAt]) or LET GO back through the
 // row's outbox ([PendingRun.HandBack]). An ending is DECIDED ONCE, on the row,
-// before any of it is done ([RecordedEnding]), and no ending deletes a row that
-// still owes a reply ([ErrAnswerOwed]); it is announced once, before the
+// before any of it is done ([RecordedEnding]), and announced once, before the
 // delete ([Coordinator.announceEnding]). Every claim stamps its claimant's lease
 // on the row, and a take under an older lease or none is refused
 // ([PendingStore.ClaimForResume]). A reply's delivery is recorded worked as the
@@ -27,10 +26,9 @@
 // Every subject a run is reached on is named by its row's seat ID, derived from
 // the immutable handle (ADR-0013); the handle is this node's bookkeeping key,
 // never an address. A `direct` or `container` box is touched only on its
-// launching node's host (ADR-0065, boxhost.go). A job lost with its host is
-// carried on, never collected (lost.go). What a run pushed to Gitlet is the
-// push record's account ([RunPushes]); an unreadable record is said unknown,
-// never left out, since silence reads as "nothing pushed".
+// launching node's host (ADR-0065, boxhost.go). What a run pushed to Gitlet is
+// the push record's account ([RunPushes]); an unreadable record is said
+// unknown, never left out, since silence reads as "nothing pushed".
 //
 // AND A HOOK'S NOTE IS READ ONLY ONCE ITS JOB'S SESSION SHOWS IT: a hook only
 // SERVES it ([PendingStore.ServeHook]). Every read of a job's box at its end
@@ -45,6 +43,11 @@
 // estimate of a session's next request ([NextRequest]) is never carried along
 // a lineage nor put on the executor log: a copy grown by its brief would be
 // understated.
+//
+// AND AN E2B BOX IS PRIVATE ([e2bAPI.createBox]): one E2B made without a
+// traffic token is public, so it is killed and its launch refused as
+// configuration ([e2bAPI.refusePublic]): no wait clears it, and a class that
+// waits would mint and kill a billed box on every retry.
 //
 // # A launch's harness session is kept, and a turn's end recorded
 //
@@ -222,7 +225,7 @@
 //
 // A refusal for a seat not held names [SeatLost]. While a clock runs on the
 // store of its box's host, a completion is acknowledged only where its run
-// settled ([ErrUnannounced]); an acknowledged refusal is recorded first.
+// settled ([ErrUnannounced]).
 //
 // # Launching a run
 //
@@ -244,10 +247,9 @@
 //
 // # A run's byte budget
 //
-// Each value is held to [RowBytes] ([coord.MaxValueBytes]), as the encoder
-// writes it: [ExecuteStateBytes] and [RestBytes] for the row, [BridgeLogBytes],
-// [InFlightBytes] and [LogRestBytes] for the log. [ExtraRowBytes] is a later
-// build's room; TestTheWholeRowFitsItsBudget holds the split.
+// Each value is held to [RowBytes] as the encoder writes it: the row in
+// [ExecuteStateBytes] and [RestBytes], the log in [BridgeLogBytes],
+// [InFlightBytes] and [LogRestBytes]; [ExtraRowBytes] is a later build's room.
 //
 // # Collecting a box
 //
@@ -268,8 +270,7 @@
 //
 // # Box read budget
 //
-// [BoxReadBudget] is [pollBound] plus the take, its rooms, a job's end where it
-// may end one, and each row change at coord.MaxValueCrossing: a slow host must
+// [BoxReadBudget] allows for all the read may do on the host: a slow host must
 // not be taken for a stopped one.
 //
 // # Collection failures
@@ -277,9 +278,9 @@
 // A retry is safe: nothing is written before a collection succeeds. Given up
 // after [MinConnectFailures] attempts across [ConnectGiveUp], counted on the
 // job's record; a box gone, at once. A cancellation of this node's own and a
-// store's silence are uncounted; a hand-back the store did not answer is kept.
-// Each failure gets one verdict ([collectVerdict]). [reannounceCeilingPolls] is
-// 20 polls, inside the broker's delivery budget.
+// store's silence are uncounted. Each failure gets one verdict
+// ([collectVerdict]). [reannounceCeilingPolls] is 20 polls, inside the broker's
+// delivery budget.
 //
 // # The clock on a box host's store
 //

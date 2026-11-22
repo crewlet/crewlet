@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/procgroup"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
 // localLog names the LOCAL backend; the package-neutral logger is in
@@ -251,11 +252,13 @@ const (
 // putting a stale seed back over a login the host refreshed meanwhile, whose
 // refresh token the vendor had already rotated away, logs every seat out.
 //
-// AN ABSENT FILE IS RECORDED TOO: a login is the set of its files, and a file
-// added since the seed is as much a newer login as one changed.
+// AN ABSENT FILE IS RECORDED TOO (a file added since the seed is a newer login
+// as much as one changed), and RUN KEYS ([Spec.CredentialRunKeys]) are written
+// back as the shared login holds them: a key minted in the run stays in the box.
 type seededCredential struct {
-	Source string `json:"source"`
-	Seed   string `json:"seed"`
+	Source  string   `json:"source"`
+	Seed    string   `json:"seed"`
+	RunKeys []string `json:"run_keys,omitempty"`
 }
 
 // boxLogin is one login a box is seeded with: the files of one shared
@@ -309,7 +312,9 @@ func loginsOf(files map[string]string) []boxLogin {
 // the run in a way nothing outside explains. Keys come from an
 // operator-overridable profile, so they go through hostbox.SafeJoin: a
 // "../../etc/cron.d/x" would otherwise write a host file.
-func seedCredentials(ctx context.Context, l boxLayout, files map[string]string) map[string]seededCredential {
+func seedCredentials(
+	ctx context.Context, l boxLayout, files map[string]string, runKeys map[string][]string,
+) map[string]seededCredential {
 	seeded := map[string]seededCredential{}
 	for _, login := range loginsOf(files) {
 		got, err := seedLogin(ctx, l, login)
@@ -319,7 +324,10 @@ func seedCredentials(ctx context.Context, l boxLayout, files map[string]string) 
 				"detail", "the box was given none of this login, so its run is not signed in by it")
 			continue
 		}
-		maps.Copy(seeded, got)
+		for relative, rec := range got {
+			rec.RunKeys = slices.Clone(runKeys[relative])
+			seeded[relative] = rec
+		}
 	}
 	return seeded
 }
@@ -542,6 +550,25 @@ func writeBackLogin(
 	current, err := hostbox.ReadCredentials(login.dir, names)
 	if err != nil {
 		return nil, fmt.Errorf("reading the shared login: %w", err)
+	}
+	// A KEY THE HARNESS WROTE DURING THE RUN IS NO LOGIN
+	// ([seededCredential.RunKeys]): it is written back as the shared login
+	// holds it, and a file that then is the shared one changed nothing.
+	for name, content := range changed {
+		keys := seeded[byName[name]].RunKeys
+		if len(keys) == 0 {
+			continue
+		}
+		kept := harnessprofile.KeepLoginKeys(content, current[name], keys)
+		if bytes.Equal(kept, current[name]) {
+			delete(changed, name)
+			got[byName[name]] = writeBackIdle
+			continue
+		}
+		changed[name] = kept
+	}
+	if len(changed) == 0 {
+		return got, nil
 	}
 	next := maps.Clone(current)
 	maps.Copy(next, changed)
@@ -1032,7 +1059,7 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	}
 
 	l.reapOrphans(ctx, time.Duration(spec.TimeoutSec)*time.Second)
-	seeded := seedCredentials(ctx, layout, spec.CredentialFiles)
+	seeded := seedCredentials(ctx, layout, spec.CredentialFiles, spec.CredentialRunKeys)
 	// The box records what it was seeded with and stamps itself alive before
 	// anyone can reap it.
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
