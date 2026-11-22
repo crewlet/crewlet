@@ -46,6 +46,9 @@ type Client struct {
 	Env        func() *config.Resolver
 	Tokens     Tokens
 	Audit      Audit
+	// Verdicts records a held call's answer where the product's apply does
+	// ([Client.Allow], [Client.Deny]); nil refuses to act on an answer.
+	Verdicts Verdicts
 	// HTTP is the transport Google is reached through; nil in production.
 	HTTP *http.Client
 	// Secrets are the fields of an answer that hold a credential.
@@ -87,9 +90,21 @@ func FailureOf(err error) growth.Failure {
 // Send makes req as handle's identity and answers Google's body. Its every
 // failure is a [*CallError], with the reason the access log keeps.
 func (c *Client) Send(ctx context.Context, handle string, req Request) ([]byte, error) {
+	var body any
+	if req.Body != nil {
+		body = req.Body
+	}
+	var raw json.RawMessage
+	err := c.send(ctx, handle, req, body, &raw)
+	return raw, err
+}
+
+// send mints handle's token for req and makes it with body, reading Google's
+// answer into out.
+func (c *Client) send(ctx context.Context, handle string, req Request, body, out any) error {
 	conn, err := googleauth.For(c.Company(), c.Env(), c.HTTP)
 	if err != nil {
-		return nil, &CallError{growth.FailureEngineError, growth.Refuse(growth.RefusedUnavailable,
+		return &CallError{growth.FailureEngineError, growth.Refuse(growth.RefusedUnavailable,
 			c.Name+" is not reachable: "+googleauth.Sentence(err)+". A person fixes it on the Google Cloud "+
 				"connection. No vendor was reached.")}
 	}
@@ -97,22 +112,17 @@ func (c *Client) Send(ctx context.Context, handle string, req Request) ([]byte, 
 	if len(req.Op.Permissions) > 0 {
 		token, mintErr := c.Tokens.GoogleGrowthToken(ctx, handle, req.Op.Permissions, TokenLife, c.HTTP)
 		if mintErr != nil {
-			return nil, &CallError{growth.FailureEngineError,
+			return &CallError{growth.FailureEngineError,
 				growth.Refuse(growth.RefusedUnavailable, c.Name+" was not called: "+mintErr.Error())}
 		}
 		bearer = token.Token
 	}
-	var body any
-	if req.Body != nil {
-		body = req.Body
-	}
-	var raw json.RawMessage
 	err = conn.Send(ctx, googleauth.Call{Method: req.Op.Method, Address: req.URL(), Bearer: bearer, Header: req.Header,
-		Body: body, Reads: req.Reads()}, &raw)
+		Body: body, Reads: req.Reads()}, out)
 	if err != nil {
-		return nil, &CallError{FailureOf(err), c.refused(req, err)}
+		return &CallError{FailureOf(err), c.refused(req, err)}
 	}
-	return raw, nil
+	return nil
 }
 
 // refused is Google's refusal in the product's words, where it has any.
