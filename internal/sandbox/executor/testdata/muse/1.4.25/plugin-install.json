@@ -1,0 +1,54 @@
+{
+  "diagnostics": [],
+  "installed": {
+    "cache_path": "/home/box/fx/.local/share/muse/plugins/cache/local/crewprobe/bf6b9b8c173702da61ca05d5b607aec0e1946cc50e6ae1294c31fec64ca0574c/package",
+    "description": "probe",
+    "display_name": "probe",
+    "enabled": true,
+    "id": "crewprobe",
+    "installed_at": "2026-11-22T16:18:11.515363366Z",
+    "manifest_family": "native",
+    "manifest_sha256": "sha256:0c0ce967bc84cb2880fb9a9653f8aab010d1f69ff2c7367523e2f99597ade67b",
+    "package_sha256": "sha256:bf6b9b8c173702da61ca05d5b607aec0e1946cc50e6ae1294c31fec64ca0574c",
+    "source": {
+      "path": "/home/box/.crewlet-fx",
+      "provenance": "native-local"
+    },
+    "trust": "user-local",
+    "updated_at": null,
+    "version": "0.1.0"
+  },
+  "lockfile_path": "/home/box/fx/.local/share/muse/plugins/installed.json",
+  "plugin": {
+    "capabilities": {
+      "commands": [],
+      "hooks": [
+        {
+          "async": false,
+          "command": [
+            "sh",
+            "hooks/post.sh"
+          ],
+          "compatibility_name": null,
+          "event": "PostToolUse",
+          "id": "posttooluse",
+          "matcher": null,
+          "shell_command": null,
+          "source_path": "/home/box/.crewlet-fx/hooks/post.sh",
+          "source_relative_path": "hooks/post.sh",
+          "timeout_ms": 10000
+        }
+      ],
+      "mcp_servers": [],
+      "reminders": [],
+      "session_providers": [],
+      "skills": []
+    },
+    "description": "probe",
+    "display_name": "probe",
+    "id": "crewprobe",
+    "manifest_family": "native",
+    "version": "0.1.0"
+  },
+  "warning": "third-party plugin: hooks require review before activation"
+}

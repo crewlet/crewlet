@@ -67,9 +67,9 @@ func scheduleOverdue(c *config.Company, ev Evidence) []Finding {
 			Class: ClassScheduleOverdue, Severity: SeverityCosts, Actor: ActorOwner, Source: SourceEvidence,
 			Area: AreaSchedules, Subject: p.subject(),
 			Title: "Scheduled runs were skipped.",
-			Why: "A run a schedule skips is a check nobody made: while its agent is paused a schedule " +
-				"does not run, and a run that came due while no server ran the schedules is made up " +
-				"only within the catch-up window.",
+			Why: "Each skipped run is a check nobody made. A paused agent's schedules do not run, and " +
+				"a run that came due while no server ran the schedules is made up only within the " +
+				"catch-up window.",
 			Item: fmt.Sprintf("%s (%s skipped: %d while paused, %d missed)", s.Name,
 				words.Count(t.paused+t.missed, "run", "runs"), t.paused, t.missed),
 			Evidence: []Fact{{Key: "paused_skips", Value: int64(t.paused)}, {Key: "missed_skips", Value: int64(t.missed)}},

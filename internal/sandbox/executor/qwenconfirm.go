@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // A Qwen Code note is CONFIRMED BY ITS RECORD AND THE REPLY AFTER IT. Qwen Code
@@ -49,7 +50,7 @@ func (QwenCode) notesHeld(ctx context.Context, box sandbox.Sandbox, session Sess
 // directory, which the runner does not know, so it is found by the session's
 // id, which names one file.
 func qwenChatFile(ctx context.Context, box sandbox.Sandbox, session string) (string, error) {
-	glob := sandbox.ShellQuote(PathsFor(box).QwenDir()+"/projects") + "/*/chats/" + sandbox.ShellQuote(session+".jsonl")
+	glob := shellword.Quote(PathsFor(box).QwenDir()+"/projects") + "/*/chats/" + shellword.Quote(session+".jsonl")
 	res, err := box.Exec(ctx, `for f in `+glob+`; do [ -f "$f" ] && printf '%s\n' "$f"; done; true`,
 		sandbox.ExecOptions{})
 	if err != nil {

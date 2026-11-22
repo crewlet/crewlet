@@ -699,7 +699,7 @@ func (f *FleetStore) get(ctx context.Context, kv jetstream.KeyValue,
 // create writes a key that must not hold a live value ([createKey]);
 // markers.go says why not the bucket handle's own create.
 func (f *FleetStore) create(ctx context.Context, kv jetstream.KeyValue, key string, value []byte) (uint64, error) {
-	return createKey(ctx, f.js, kv, key, value)
+	return createKey(ctx, f.js, kv, key, value, nil)
 }
 
 // eachUnder is [each] narrowed to the keys matching one filter, `what` naming

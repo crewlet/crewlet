@@ -15,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
+	"github.com/crewlet/crewlet/internal/shellword"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
@@ -72,7 +73,7 @@ func runsUnder(t *testing.T, box sandbox.Sandbox, sh boxShell, prelude string) {
 			}
 			word = resolved
 		}
-		words = append(words, shQuote(word))
+		words = append(words, shellword.Quote(word))
 	}
 	plain, err := exec.LookPath("sh")
 	if err != nil {
@@ -80,8 +81,8 @@ func runsUnder(t *testing.T, box sandbox.Sandbox, sh boxShell, prelude string) {
 	}
 	writeBoxStandIn(t, box, executor.PathsFor(box).BinDir()+"/sh", "#!/bin/sh\n"+
 		`if [ "$1" = -c ] && [ "$#" -eq 2 ]; then exec `+strings.Join(words, " ")+` -c `+
-		shQuote(sh.prelude+prelude)+`"$2"; fi`+"\n"+
-		"exec "+shQuote(plain)+` "$@"`+"\n")
+		shellword.Quote(sh.prelude+prelude)+`"$2"; fi`+"\n"+
+		"exec "+shellword.Quote(plain)+` "$@"`+"\n")
 }
 
 // steerWiring is what an executor run's launch hands its harness for its turn's
@@ -647,8 +648,8 @@ func startOn(t *testing.T, release string, req sandbox.RunRequest) startedOn {
 	p := executor.PathsFor(box)
 	record := t.TempDir()
 	writeBoxStandIn(t, box, p.BinDir()+"/claude", "#!/bin/sh\n"+
-		`[ "$1" = --version ] && { echo `+shQuote(release)+`; exit 0; }`+"\n"+
-		`d=`+shQuote(record)+"\n"+
+		`[ "$1" = --version ] && { echo `+shellword.Quote(release)+`; exit 0; }`+"\n"+
+		`d=`+shellword.Quote(record)+"\n"+
 		`for a in "$@"; do printf '%s\n' "$a"; done > "$d/argv"`+"\n"+
 		`prev=; for a in "$@"; do [ "$prev" = --settings ] && cp "$a" "$d/settings.json"; prev=$a; done`+"\n"+
 		`echo '{"type":"result","subtype":"success","is_error":false,"result":"done"}'`+"\n")

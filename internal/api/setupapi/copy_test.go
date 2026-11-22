@@ -221,6 +221,14 @@ func checkField(t *testing.T, tool string, r setup.Requirement, linked map[strin
 			line(t, label+" choice "+c.Value, c.Hint, ".")
 		}
 	}
+	// A FIELD THE INTEGRATION CANNOT WORK WITHOUT NEVER CALLS ITSELF OPTIONAL:
+	// a required one, or one of a set at least one entry of which is needed.
+	if (r.Required || r.Set != nil) && strings.HasPrefix(strings.ToLower(r.Hint), "optional") {
+		t.Errorf("%s: is required and its hint %q calls it optional", label, r.Hint)
+	}
+	if set := r.Set; set != nil {
+		checkSet(t, label, *set)
+	}
 	placed := strings.Contains(r.Hint, setup.LinkMark) || strings.Contains(r.More, setup.LinkMark)
 	switch {
 	case placed && (r.VendorURL == "" || r.LinkText == ""):
@@ -229,6 +237,33 @@ func checkField(t *testing.T, tool string, r setup.Requirement, linked map[strin
 		t.Errorf("%s: has a vendor link with no words to carry it", label)
 	case r.VendorURL != "" && !placed && !linked[r.Field] && !r.Hidden:
 		t.Errorf("%s: has a vendor link that neither its words nor a step place", label)
+	}
+}
+
+// checkSet holds a set's words to the rules: a heading, a control, an item
+// noun, a hint under the word cap, and a sentence for a set left short that
+// says what to add.
+func checkSet(t *testing.T, label string, set setup.Set) {
+	t.Helper()
+	for what, text := range map[string]string{"label": set.Label, "add": set.Add, "pick": set.Pick,
+		"item": set.Item, "entry": set.Entry.Label} {
+		if problem := setuptest.LineProblem(text+".", "."); text == "" || problem != "" {
+			t.Errorf("%s: the set's %s %q: %s", label, what, text, problem)
+		}
+	}
+	line(t, label+" set hint", set.Hint, ".")
+	if n := setuptest.Words(set.Hint, ""); n > setuptest.MaxHintWords {
+		t.Errorf("%s: the set's hint runs to %d words, past %d: %q", label, n, setuptest.MaxHintWords, set.Hint)
+	}
+	line(t, label+" set missing", set.Missing, ".")
+	if !strings.HasPrefix(set.Missing, "Add ") {
+		t.Errorf("%s: a set left short says %q, which does not say what to add", label, set.Missing)
+	}
+	if set.Entry.Hint != "" {
+		line(t, label+" entry "+set.Entry.Value, set.Entry.Hint, ".")
+	}
+	if set.Min < 1 {
+		t.Errorf("%s: a set of Min %d asks for nothing", label, set.Min)
 	}
 }
 

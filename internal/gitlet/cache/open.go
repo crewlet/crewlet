@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/nodememory"
+	"github.com/crewlet/crewlet/internal/shellword"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
@@ -394,13 +395,12 @@ func (c *Cache) writeHook(ctx context.Context, argv []string) error {
 }
 
 // hookScript is the text of hooks/proc-receive: answer the probe, else exec
-// argv, every argument single-quoted so the shell reads it as one word
-// whatever it holds.
+// argv, every argument a word of its own whatever it holds ([shellword.Quote]).
 func hookScript(argv []string) string {
 	var b strings.Builder
 	b.WriteString("#!/bin/sh\n[ \"${1-}\" = " + hookProbe + " ] && exit 0\nexec")
 	for _, arg := range argv {
-		b.WriteString(" '" + strings.ReplaceAll(arg, "'", `'\''`) + "'")
+		b.WriteString(" " + shellword.Quote(arg))
 	}
 	b.WriteString("\n")
 	return b.String()

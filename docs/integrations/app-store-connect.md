@@ -6,9 +6,9 @@ Agents read and work on your App Store apps through Crewlet's own tools: listing
 
 1. The Account Holder requests App Store Connect API access once, in **Users and Access**, **Integrations**.
 2. For each Apple role you want agents to use, create a **team key** there (**Team Keys**, **+**) with that role. Apple shows each key's `.p8` file once and keeps no copy.
-3. On the integration's page, add the team: its issuer ID (shown above the keys), its vendor number for sales (on **Payments and Financial Reports**), and each key's ID and `.p8` file in the slot of its role.
+3. On the integration's page, add the team: its issuer ID (shown above the keys), then under **API keys**, **Add a key** for each key: its role, its key ID and its `.p8` file (choose the file, or paste it whole). Its vendor number for sales (on **Payments and Financial Reports**) is under **More settings**.
 
-A company may connect several teams, each under its own connection id; a call that names no app goes to the only team, or names one. Every slot is optional; at least one is needed.
+A company may connect several teams, each under its own connection id; a call that names no app goes to the only team, or names one. A team needs at least one key; start with a Marketing key, and add one key per role so each call is made with the least access that can make it.
 
 ```yaml
 integrations:

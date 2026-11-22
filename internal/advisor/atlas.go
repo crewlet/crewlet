@@ -202,8 +202,8 @@ var atlasDetectors = sync.OnceValue(func() []atlasDetector {
 			class: ClassAtlasOwnerGone, severity: SeverityCosts, entries: ownerGone,
 			words: func(n int) (string, string) {
 				return fmt.Sprintf("%s by a seat or a unit that left the chart.", counted(n, "entry is owned", "entries are owned")),
-					"The atlas still names an owner the company no longer has, so a question about " +
-						"it, or a change its sources report, reaches nobody who can answer."
+					"Questions and changes about them reach nobody who can answer. The atlas still " +
+						"names an owner the company no longer has."
 			},
 			sentence: "Name the seat or the unit that answers for each now.",
 			act:      AtlasAct{Tool: AtlasToolSetOwner, Asks: AtlasAskOwner},
@@ -211,11 +211,10 @@ var atlasDetectors = sync.OnceValue(func() []atlasDetector {
 		{
 			class: ClassAtlasUnmonitored, severity: SeverityCosts, entries: unmonitored,
 			words: func(n int) (string, string) {
-				return fmt.Sprintf("%s the internet and nothing is recorded as watching %s.",
-						counted(n, "service is open to", "services are open to"), plural(n, "it", "them")),
-					"Each exposes an address outside the company's own networks, and the atlas holds " +
-						"no monitor for the service or for that address, so the first to see it fail " +
-						"may be whoever uses it."
+				return fmt.Sprintf("%s the internet with no monitor recorded.",
+						counted(n, "service is open to", "services are open to")),
+					"The first to see one fail may be whoever uses it. Each exposes an address outside " +
+						"the company's own networks, and the atlas holds no monitor for it or that address."
 			},
 			sentence: "Record the monitor, or the monitoring account, that watches each.",
 			act: AtlasAct{Tool: AtlasToolRelate, Asks: AtlasAskMonitor,
@@ -225,8 +224,7 @@ var atlasDetectors = sync.OnceValue(func() []atlasDetector {
 			class: ClassAtlasUnowned, severity: SeverityNote, entries: unowned,
 			words: func(n int) (string, string) {
 				return fmt.Sprintf("%s no owner.", counted(n, "service has", "services have")),
-					"Nobody is named as answering for a service the company runs, so what changes " +
-						"on it or breaks has nobody to go to."
+					"When a service changes or breaks, there is nobody to go to."
 			},
 			sentence: "Name the seat or the unit that answers for each.",
 			act:      AtlasAct{Tool: AtlasToolSetOwner, Asks: AtlasAskOwner},
@@ -237,8 +235,8 @@ var atlasDetectors = sync.OnceValue(func() []atlasDetector {
 				days := int(AtlasDisagreementAge / (24 * time.Hour))
 				return fmt.Sprintf("%s a disagreement nobody has decided in %d days.",
 						counted(n, "entry holds", "entries hold"), days),
-					"Two sources say different things about it, the atlas shows both, and nothing " +
-						"settles it but a person: until one does, a reader cannot tell which is true."
+					"Until a person decides, a reader cannot tell which value is true. Two sources " +
+						"say different things, and the atlas shows both."
 			},
 			sentence: "Decide each in the atlas's review: keep the value shown or take the other.",
 			act:      AtlasAct{Tool: AtlasToolConfirm, Asks: AtlasAskValue},
@@ -434,8 +432,8 @@ func staleSources(ev AtlasEvidence) []Finding {
 			Area: AreaAtlas, Subject: Subject{Kind: SubjectIntegration, Name: s.Name},
 			Path:  "integrations." + s.Kind,
 			Title: fmt.Sprintf("The atlas has not read %s whole in %s.", s.Name, hoursOrDays(quiet)),
-			Why: "What it last read still stands on the map and looks current: a change at the " +
-				"vendor since then is not on it, and nothing it stopped listing has left.",
+			Why: "The map looks current but misses whatever changed at the vendor since. What it last " +
+				"read still stands, and nothing it stopped listing has left.",
 			Evidence: []Fact{{Key: "hours", Value: int64(quiet / time.Hour)}},
 		}
 		out = append(out, named(f, nil, "Ask for a read now; its standing in the atlas's sources says what stopped it.",

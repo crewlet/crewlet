@@ -59,7 +59,7 @@ func TestAKeyNeverBecomesTheLoginOfRecord(t *testing.T) {
 	}
 
 	// What a process that ended mid-call left: no release ran to drop it.
-	left := filepath.Join(keyed.ws.KeySeatDir("shared"), "home", ".vendor", "auth.json")
+	left := filepath.Join(keyed.ws.KeySeatDir("shared", keyed.key), "home", ".vendor", "auth.json")
 	if err := os.MkdirAll(filepath.Dir(left), 0o700); err != nil {
 		t.Fatal(err)
 	}

@@ -31,7 +31,7 @@ func (k quietKV) Watch(context.Context, string, ...jetstream.WatchOpt) (jetstrea
 }
 
 // watchHeaders is [quietKV.Watch]: the sweep's pass goes quiet the same way.
-func (k quietKV) watchHeaders(ctx context.Context, keys string) (jetstream.KeyWatcher, error) {
+func (k quietKV) watchHeaders(ctx context.Context, keys string, _ time.Duration) (jetstream.KeyWatcher, error) {
 	return k.Watch(ctx, keys)
 }
 
