@@ -1668,19 +1668,25 @@ export function SetupForm({
         as="fieldset"
         className="int-set"
         label={set.label}
+        // THE LEGEND NAMES THE GROUP FOR ASSISTIVE TECHNOLOGY; the row below
+        // draws it in this form's sentence case, with the Add control beside it.
+        hideLabel
         // THE HINT ABOVE THE ENTRIES, where it says what to add before any is:
         // as the helper it fell under them once one was added.
         describedBy={`${headingId}-${set.id}-hint`}
         error={withProblems(fieldErrors[key])}
-        labelAction={
-          left.length > 0 && picking !== key ? (
-            <Button size="small" variant="secondary" onClick={() => setPicking(key)}>
-              {set.add}
-            </Button>
-          ) : undefined
-        }
       >
         <div className="int-set-entries">
+          <div className="int-set-head">
+            <span className="int-set-label" aria-hidden="true">
+              {set.label}
+            </span>
+            {left.length > 0 && picking !== key && (
+              <Button size="small" variant="secondary" onClick={() => setPicking(key)}>
+                {set.add}
+              </Button>
+            )}
+          </div>
           <span id={`${headingId}-${set.id}-hint`} className="int-set-hint">
             {set.hint}
           </span>

@@ -445,12 +445,14 @@ a.int-feed-what:hover {
    The set's legend reads as the fields' labels do, and each entry is a quiet
    card holding its own fields, named by what was picked, so two entries'
    identical "Key ID" boxes are never mistaken for one another. */
-.int-form .int-set > legend .crewlet-label,
-.int-form .int-set > legend .crewlet-label__text {
+.int-set-head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+.int-set-label {
   font-size: var(--font-size-compact);
   font-weight: var(--font-weight-medium);
-  letter-spacing: var(--font-letter-spacing-normal);
-  text-transform: none;
   color: var(--color-text-primary);
 }
 .int-set-hint {
