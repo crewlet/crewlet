@@ -513,21 +513,31 @@ func writeMuseServers(ctx context.Context, box sandbox.Sandbox, dir string, serv
 	nonce string) error {
 
 	for name, s := range servers {
-		if !museServerName(name) {
-			return fmt.Errorf("executor: the MCP server %q is not named as Muse Code reads a server's name: "+
-				"letters, digits, '-' and '_', at most 50", name)
+		full := name + "-" + nonce
+		if !museServerName(full) {
+			return fmt.Errorf("executor: the MCP server %q is not named as Muse Code shows a server's name: "+
+				"letters, digits, '-' and '_', at most %d once the run's own %d are added, so at most %d "+
+				"(rename it in the seat's MCP servers)", name, museServerNameMax, len(full)-len(name),
+				museServerNameMax-(len(full)-len(name)))
 		}
-		if err := writeJSON(ctx, box, dir+"/"+name+"-"+nonce+".json", museMCP(s)); err != nil {
+		if err := writeJSON(ctx, box, dir+"/"+full+".json", museMCP(s)); err != nil {
 			return fmt.Errorf("executor: writing the MCP server %q for Muse Code: %w", name, err)
 		}
 	}
 	return nil
 }
 
-// museServerName reports whether name is a server's name a file and a shell
-// word can carry as it is.
+// museServerNameMax is the longest server name Muse Code shows the model as
+// it is: a server's tools come under one entry, `mcp__<name>`, of at most 31
+// characters, and a longer name is shown as a hash of it (measured on 1.4.25;
+// any length is taken and runs), which leaves the model no way to tell the
+// server's tools for its own.
+const museServerNameMax = 26
+
+// museServerName reports whether name, a server's name with the run's suffix,
+// is one a file and a shell word carry as it is and Muse Code shows whole.
 func museServerName(name string) bool {
-	if name == "" || len(name) > 50 {
+	if name == "" || len(name) > museServerNameMax {
 		return false
 	}
 	for _, r := range name {
