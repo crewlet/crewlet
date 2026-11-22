@@ -34,6 +34,12 @@
 // caps), recording the outcome: applied, void, or failed with a closed reason. A write that went unanswered may have reached Google,
 // so its outcome is unknown, never "unavailable" ([FailureOf]).
 //
+// A call that says a change to its target rather than the whole of it (an
+// owner added to a list Google takes whole) is made from the before-state the
+// binding holds ([Request.Shape]): read once, under the lease, so no other
+// change is overwritten, and a state the change no longer applies to is a
+// target that moved, void rather than failed.
+//
 // # Every act on the access log
 //
 // A call made at once is made, or failed with its reason; a call refused
@@ -93,6 +99,12 @@ type Request struct {
 	// Fill makes the query sent from Query, adding a credential only as the
 	// request is sent; nil sends Query. It reads nothing it changes.
 	Fill func(ctx context.Context, q url.Values) (url.Values, error)
+	// Shape makes the request sent from its target's before-state, where the
+	// call says a change to the target rather than the whole of it (owners
+	// added and removed, sent as the whole list), so the change is built on
+	// the state its approval binds; nil sends the request as built. A refusal
+	// is a state the change does not apply to.
+	Shape func(before []byte) (Request, error)
 }
 
 // pathParam is one `{name}` of an operation's path.

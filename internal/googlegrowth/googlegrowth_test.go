@@ -818,3 +818,69 @@ func TestTwoAsksAreOneOnlyWhereTheyDecideTheSameThing(t *testing.T) {
 		t.Error("the same request is two subjects")
 	}
 }
+
+// A REQUEST SHAPED BY ITS TARGET IS MADE FROM THE STATE ITS APPROVAL BINDS:
+// what it sends is built from the target as read under the lease, and a state
+// the change no longer applies to is a target that moved, void and unsent.
+//
+// Mutation: send the request as built, or fail a change the target no longer
+// takes, and the body overwrites what was read or the log says the engine
+// erred.
+func TestARequestShapedByItsTargetIsMadeFromTheStateItBinds(t *testing.T) {
+	t.Parallel()
+	it := &item{name: "old", reads: make(chan struct{}, 8), release: make(chan struct{}), writing: make(chan struct{}, 1)}
+	close(it.release)
+	srv := httptest.NewServer(http.HandlerFunc(it.serve))
+	t.Cleanup(srv.Close)
+	w := newWorld(t, httpxtest.Rewrite(t, srv))
+	build := func() googlegrowth.Request {
+		req, err := googlegrowth.NewRequest(patch, map[string]string{"accountsId": "1", "itemsId": "2"},
+			map[string]string{"updateMask": "name"}, map[string]any{"suffix": "!"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Shape = func(before []byte) (googlegrowth.Request, error) {
+			var current map[string]any
+			_ = json.Unmarshal(before, &current)
+			name, _ := current["name"].(string)
+			if strings.HasSuffix(name, "!") {
+				return googlegrowth.Request{}, growth.Refuse(growth.RefusedInvalid, "the name is marked already")
+			}
+			shaped := req
+			shaped.Body = map[string]any{"name": name + "!"}
+			return shaped, nil
+		}
+		return req
+	}
+	h, err := w.client.Read(t.Context(), "seat-a", build())
+	if err != nil || googlegrowth.Words(h.Req.Body["name"]) != "old!" {
+		t.Fatalf("the shaped request is %v, %v", h.Req.Body, err)
+	}
+	call := growth.Call{Handle: "seat-a", Tool: "x_ads_admin", HeldCall: "held-1", Approver: "founder"}
+	if _, err := w.client.Apply(t.Context(), call, googlegrowth.Write{Req: build(), Class: growth.ClassAdmin},
+		h.Binding); err != nil {
+		t.Fatal(err)
+	}
+	it.mu.Lock()
+	name := it.name
+	it.mu.Unlock()
+	if name != "old!" {
+		t.Fatalf("Google holds %q, want the name made from the state read", name)
+	}
+	again, err := w.client.Read(t.Context(), "seat-a", build())
+	if err == nil || again.Req.Body["suffix"] == nil {
+		t.Fatalf("a state the change does not apply to was shaped into %v", again.Req.Body)
+	}
+	call.HeldCall = "held-2"
+	if _, err := w.client.Apply(t.Context(), call, googlegrowth.Write{Req: build(), Class: growth.ClassAdmin},
+		h.Binding); !errors.Is(err, growth.ErrMoved) {
+		t.Errorf("an approval on a state the change does not apply to answered %v", err)
+	}
+	got := strings.Join(steps(w.audit.taken()), ",")
+	it.mu.Lock()
+	writes := it.writes
+	it.mu.Unlock()
+	if got != "allowed,applied,allowed,void" || writes != 1 {
+		t.Errorf("recorded %s after %d writes, want the second approval void and unsent", got, writes)
+	}
+}
