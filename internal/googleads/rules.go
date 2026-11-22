@@ -61,7 +61,8 @@ const (
 	on
 	// off is hi for true to false, lo for false to true.
 	off
-	// toward is hi where the new value is one of values, lo otherwise.
+	// toward is lo where the new value is one of lows, by its name, and hi
+	// for any other value.
 	toward
 	// earlier is hi for an earlier time, lo for a later one.
 	earlier
@@ -80,7 +81,10 @@ type fieldRule struct {
 	path   string
 	how    how
 	hi, lo growth.Class
-	values []string
+	lows   []string
+	// unbounded marks a limit whose absence means none (a ceiling, a target
+	// CPA or ROAS), so setting one where none was narrows.
+	unbounded bool
 }
 
 // family is one service's rule (the matrix's FR-* rules): how each create,
@@ -97,17 +101,22 @@ type family struct {
 	update func(o operation, l live) growth.Class
 }
 
-// classOf is what op comes to under f, read against l.
-func (f family) classOf(op operation, l live) growth.Class {
+// classOf is what op comes to under f, read against l, and whether any part
+// of it is spend: a field that raises spend beside one that is admin still
+// spends, and is held to the caps (ruled.spends).
+func (f family) classOf(op operation, l live) (class growth.Class, spends bool) {
 	switch op.kind {
 	case opCreate:
-		return f.create(op, l)
+		class = f.create(op, l)
+		return class, class == growth.ClassSpend
 	case opRemove:
-		return f.remove(op, l)
+		class = f.remove(op, l)
+		return class, class == growth.ClassSpend
 	}
-	out := growth.ClassRead
+	class = growth.ClassRead
 	if f.update != nil {
-		out = f.update(op, l)
+		class = f.update(op, l)
+		spends = class == growth.ClassSpend
 	}
 	before := l[op.name]
 	for _, path := range op.mask {
@@ -115,9 +124,9 @@ func (f family) classOf(op operation, l live) growth.Class {
 		if r, ok := f.ruleFor(path); ok {
 			c = r.classOf(lookup(before, path), lookup(op.object, path), before == nil)
 		}
-		out = higher(out, c)
+		class, spends = higher(class, c), spends || c == growth.ClassSpend
 	}
-	return out
+	return class, spends
 }
 
 // ruleFor is the rule covering path: its own, or the nearest above it.
@@ -138,12 +147,11 @@ func (r fieldRule) classOf(before, after any, unread bool) growth.Class {
 		return r.hi
 	}
 	if r.how == toward {
-		// AN ENUM IS READ BY ITS NAME: Google also takes its number, and a
-		// value that names none of the others may be one of values.
-		if s, ok := after.(string); ok && !slices.Contains(r.values, s) {
-			return r.lo
-		}
-		return r.hi
+		// ONLY A NAMED LOWERING LOWERS: Google also takes an enum's number, as
+		// a JSON number or a string ("2"), so any other value may be the one
+		// that raises.
+		s, ok := after.(string)
+		return pick(ok && slices.Contains(r.lows, s), r.lo, r.hi)
 	}
 	if r.how == optsIn {
 		return pick(optedIn(before, after), r.hi, r.lo)
@@ -162,7 +170,10 @@ func (r fieldRule) classOf(before, after any, unread bool) growth.Class {
 		case !okA:
 			return r.hi
 		case !okB:
-			return pick(before == nil, r.lo, r.hi) // a cap added where there was none narrows
+			// A LIMIT ADDED WHERE NONE WAS narrows only where none means no
+			// limit: an absent bid inherits one, and an absent floor or modifier
+			// is a value Google applies.
+			return pick(before == nil && r.unbounded, r.lo, r.hi)
 		}
 		cmp := a.Cmp(b)
 		return pick((r.how == raise && cmp > 0) || (r.how == lower && cmp < 0), r.hi, r.lo)
@@ -190,22 +201,31 @@ func (r fieldRule) classOf(before, after any, unread bool) growth.Class {
 }
 
 // optedIn reports whether an asset automation list may turn a type OPTED_IN
-// that was not before: a list cleared or unreadable takes Google's defaults,
-// and a status not named (its number) may be OPTED_IN.
+// that was not before: a list cleared or unreadable, or a type it leaves out,
+// takes Google's defaults, and any status but OPTED_OUT by its name (its
+// number, as a JSON number or a string) may be OPTED_IN.
 func optedIn(before, after any) bool {
 	items, ok := after.([]any)
 	if !ok {
 		return true
 	}
-	was := map[string]string{}
-	for _, e := range list(before) {
-		m, _ := e.(map[string]any)
-		was[str(m["asset_automation_type"])] = str(m["asset_automation_status"])
+	statuses := func(entries []any) map[string]string {
+		out := map[string]string{}
+		for _, e := range entries {
+			m, _ := e.(map[string]any)
+			out[str(m["asset_automation_type"])] = str(m["asset_automation_status"])
+		}
+		return out
 	}
+	was, now := statuses(list(before)), statuses(items)
 	for _, e := range items {
 		m, _ := e.(map[string]any)
-		status, named := m["asset_automation_status"].(string)
-		if (!named || status == "OPTED_IN") && was[str(m["asset_automation_type"])] != "OPTED_IN" {
+		if str(m["asset_automation_status"]) != "OPTED_OUT" && was[str(m["asset_automation_type"])] != "OPTED_IN" {
+			return true
+		}
+	}
+	for kind, status := range was {
+		if _, kept := now[kind]; !kept && status != "OPTED_IN" {
 			return true
 		}
 	}
@@ -239,9 +259,9 @@ func fixed(c growth.Class) func(operation, live) growth.Class {
 	return func(operation, live) growth.Class { return c }
 }
 
-// statusRule is a status set to ENABLED (enabled) or PAUSED (operate).
+// statusRule is a status set to PAUSED (operate) or anything else (enabled).
 func statusRule(enabled growth.Class) fieldRule {
-	return fieldRule{path: "status", how: toward, hi: enabled, lo: growth.ClassOperate, values: []string{"ENABLED"}}
+	return fieldRule{path: "status", how: toward, hi: enabled, lo: growth.ClassOperate, lows: []string{"PAUSED"}}
 }
 
 // operates is a rule of operate for each path.
@@ -273,6 +293,15 @@ func compared(h how, paths ...string) []fieldRule {
 	out := make([]fieldRule, 0, len(paths))
 	for _, p := range paths {
 		out = append(out, fieldRule{path: p, how: h, hi: growth.ClassSpend, lo: growth.ClassOperate})
+	}
+	return out
+}
+
+// limits is [compared] for limits whose absence means none ([fieldRule]).
+func limits(h how, paths ...string) []fieldRule {
+	out := compared(h, paths...)
+	for i := range out {
+		out[i].unbounded = true
 	}
 	return out
 }
@@ -312,7 +341,8 @@ func number(v any) (*big.Rat, bool) {
 	case string:
 		return new(big.Rat).SetString(strings.TrimSpace(t))
 	case float64:
-		return new(big.Rat).SetFloat64(t), true
+		r := new(big.Rat).SetFloat64(t)
+		return r, r != nil
 	case json.Number:
 		return new(big.Rat).SetString(t.String())
 	}

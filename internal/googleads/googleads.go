@@ -31,9 +31,12 @@
 // removing a restriction are spend; pausing, lowering and adding a negative
 // are operate; new or changed ad text is public; removals of containers,
 // links, users and billing are admin. A rule that cannot read what it compares
-// classes the change as the highest it allows, and an enum it compares is read
-// by its name: Google also takes its number, which names none of the values
-// a rule lowers.
+// classes the change as the highest it allows, and only an enum value a rule
+// names as lowering (PAUSED, OPTED_OUT) lowers: Google also takes an enum's
+// number, as a JSON number or a string, which may be any value. A value set
+// where the live read holds none is a raise, but for a limit whose absence is
+// no limit (a ceiling, a maximize-conversions target CPA, a target ROAS),
+// since an absent bid, floor or modifier is one Google inherits or applies.
 //
 // The rules name fields in snake_case and read a body's keys in either
 // spelling, as Google does; a body naming one field in both with two values is
@@ -52,16 +55,22 @@
 //
 // What an approval binds is the live state its rules read (googlegrowth's
 // Client.BeforeRead), so the class and the binding are on one reading; a
-// batch job's run binds the job's operation count and the class its staging
-// came to.
+// batch job's run binds the job's operation count. Running one is admin:
+// Google gives no read of a job's operations and the access log keeps them
+// only as digests, so nothing can class them, or cap them, as the account
+// stands when the job runs (ADR-0171).
 //
 // # Spend is held to the company's caps
 //
-// A spend call is checked against the account's caps before a person is asked
-// and again when it is applied, inside the one write lease googlegrowth holds
-// on the account for every write, by spendguard's Recheck, so no act holds two
-// leases: capacity.go reads the account's daily capacity live with GAQL and
-// what an operation adds to it.
+// A call that spends is checked against the account's caps before a person
+// is asked and again when it is applied, whatever its class (an admin
+// operation beside a budget raise), inside the one write lease googlegrowth
+// holds on the account for every write, by spendguard's Recheck, so no act
+// holds two leases: capacity.go reads the account's daily capacity live with
+// GAQL, every budget the operations name, and what they add to it, reading
+// an amount as the rules do and failing on one it cannot. A spend method that
+// carries no operations names what it adds (classify.go's measures); one
+// whose request names no amount a cap could hold is admin (ADR-0171).
 //
 // # Somebody else's words
 //

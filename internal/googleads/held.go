@@ -5,7 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
+	"maps"
+	"slices"
 
 	"github.com/crewlet/crewlet/internal/googlegrowth"
 	"github.com/crewlet/crewlet/internal/growth"
@@ -14,14 +15,17 @@ import (
 
 // targets reads every resource req's rules compare against, as handle's
 // identity (googlegrowth's Client.BeforeRead): the state an approval binds
-// and the rules read, so a call is classed and bound on one reading. A batch
-// job's run holds the job as Google counts its operations and the class its
-// staging came to, so what was staged after an approval moves its binding.
+// and the rules read, so a call is classed and bound on one reading. It
+// follows what the targets point at (followed), and holds a batch job's run
+// to the job as Google counts its operations, so what was staged after an
+// approval moves its binding.
 func (p *Product) targets(ctx context.Context, handle string, req googlegrowth.Request) ([]byte, bool, error) {
 	ops, _ := parse(req.Op, req.Body)
-	names := append(toRead(ops), recommendationsToRead(req.Body)...)
-	job := runOf(req)
-	if job != "" {
+	names := toRead(ops)
+	if ruleOf[req.Op.ID] == "FR-RECOMMENDATION" {
+		names = append(names, recommendationsToRead(req.Body)...)
+	}
+	if job := runOf(req); job != "" {
 		names = append(names, job)
 	}
 	masks := map[string][]string{}
@@ -31,31 +35,38 @@ func (p *Product) targets(ctx context.Context, handle string, req googlegrowth.R
 		}
 	}
 	l := p.readLive(ctx, handle, names, masks)
-	if job != "" && p.staged != nil {
-		c, ok, err := p.staged.StagedClass(ctx, string(Kind), req.Account, req.Params["batchJobsId"])
-		if err != nil {
-			return nil, false, fmt.Errorf("googleads: read what batch job %s staged: %w", job, err)
-		}
-		if ok {
-			s := l[job]
-			if s == nil {
-				s = state{}
-			}
-			s[stagedClass] = string(c)
-			l[job] = s
-		}
-	}
+	maps.Copy(l, p.readLive(ctx, handle, followed(req, ops, l), nil))
 	before, err := json.Marshal(l)
 	return before, err == nil, err
 }
 
-// stagedClass is the field of a batch job's state holding the class its
-// staging came to, from the access log: no GAQL field holds it.
-const stagedClass = "crewlet_staged_class"
+// followed are what the targets as read point at that a rule compares: the
+// budget a campaign moved to another leaves, and the budget a recommendation
+// applied sets.
+func followed(req googlegrowth.Request, ops []operation, l live) []string {
+	var out []string
+	for _, o := range ops {
+		if o.service == "campaign" && slices.Contains(o.mask, "campaign_budget") {
+			out = append(out, str(l[o.name]["campaign_budget"]))
+		}
+	}
+	if ruleOf[req.Op.ID] == "FR-RECOMMENDATION" {
+		for _, name := range recommendationsToRead(req.Body) {
+			out = append(out, str(l[name]["campaign_budget"]))
+		}
+	}
+	return slices.DeleteFunc(out, func(name string) bool { _, read := l[name]; return read })
+}
+
+// batchRun is BatchJobService.RunBatchJob, admin: what the job does is the
+// operations staged into it, which Google gives no read of and the access log
+// keeps only as digests, so neither a class nor a cap can be held to it as
+// the account stands when it runs (ADR-0171).
+const batchRun = "googleads.customers.batchJobs.run"
 
 // runOf is the batch job req runs, "" for any other request.
 func runOf(req googlegrowth.Request) string {
-	if ruleOf[req.Op.ID] != "FR-BATCH" || !strings.HasSuffix(req.Op.ID, ".run") {
+	if req.Op.ID != batchRun {
 		return ""
 	}
 	return req.Account + "/batchJobs/" + req.Params["batchJobsId"]
@@ -66,10 +77,7 @@ func runOf(req googlegrowth.Request) string {
 func ruledOf(h googlegrowth.Held) (ruled, error) {
 	var l live
 	_ = json.Unmarshal(h.Before, &l)
-	return classify(h.Req.Op, h.Req.Body, l, func() (growth.Class, bool) {
-		c := growth.Class(str(l[runOf(h.Req)][stagedClass]))
-		return c, c != ""
-	})
+	return classify(h.Req.Op, h.Req.Body, l)
 }
 
 // prepared is call's request held to the seat's scope and to its targets as
@@ -91,15 +99,16 @@ func (p *Product) prepared(ctx context.Context, call growth.Call) (googlegrowth.
 	return h, r, err
 }
 
-// Prepare classes a write against its targets as read now, holds a spend to
-// the account's caps before a person is asked, and builds what is asked.
+// Prepare classes a write against its targets as read now, holds one that
+// spends to the account's caps before a person is asked, whatever its class,
+// and builds what is asked.
 func (p *Product) Prepare(ctx context.Context, call growth.Call) (growth.Hold, error) {
 	h, r, err := p.prepared(ctx, call)
 	if err != nil {
 		return growth.Hold{}, err
 	}
 	hold := p.client.Hold(call, h, r.class)
-	if r.class == growth.ClassSpend {
+	if r.spends {
 		f, err := p.checkSpend(ctx, call.Handle, h.Req, r)
 		if err != nil {
 			return growth.Hold{}, err
@@ -109,8 +118,8 @@ func (p *Product) Prepare(ctx context.Context, call growth.Call) (growth.Hold, e
 	return hold, nil
 }
 
-// Card is a held call's decision card as its targets read now, with a
-// spend's figures against the caps.
+// Card is a held call's decision card as its targets read now, with the
+// figures against the caps of one that spends.
 func (p *Product) Card(ctx context.Context, call growth.Call, binding string) (growth.Card, error) {
 	h, r, err := p.prepared(ctx, call)
 	if err != nil {
@@ -120,7 +129,7 @@ func (p *Product) Card(ctx context.Context, call growth.Call, binding string) (g
 	for i := range card.Acts {
 		card.Acts[i].Danger = card.Acts[i].Danger || r.danger
 	}
-	if r.class == growth.ClassSpend {
+	if r.spends {
 		f, err := p.checkSpend(ctx, call.Handle, h.Req, r)
 		if err != nil {
 			return growth.Card{}, err
@@ -142,12 +151,13 @@ func (p *Product) Apply(ctx context.Context, call growth.Call, binding string) (
 	}, binding)
 }
 
-// recheckSpend holds an allowed spend to its account's caps again, inside the
-// lease the client holds on the account (spendguard's Recheck), so no act
-// holds two leases; a refusal fails the act over its caps, and nothing is sent.
+// recheckSpend holds an allowed call that spends to its account's caps again,
+// whatever its class, inside the lease the client holds on the account
+// (spendguard's Recheck), so no act holds two leases; a refusal fails the act
+// over its caps, and nothing is sent.
 func (p *Product) recheckSpend(ctx context.Context, handle string, h googlegrowth.Held) error {
 	r, err := ruledOf(h)
-	if err != nil || r.class != growth.ClassSpend {
+	if err != nil || !r.spends {
 		return err
 	}
 	customer := customerOf(h.Req)

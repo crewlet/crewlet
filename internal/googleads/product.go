@@ -19,26 +19,18 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// Staged answers the highest class a batch job's staged operations came to,
-// from the access log's records of them (the engine's GrowthAudit); false
-// where it holds none.
-type Staged interface {
-	StagedClass(ctx context.Context, kind, account, batchJob string) (growth.Class, bool, error)
-}
-
 // Product is Google Ads as the growth tools reach it.
 type Product struct {
 	company func() *config.Company
 	client  *googlegrowth.Client
-	staged  Staged
 	now     func() time.Time
 }
 
 // New is the product on the engine's active document, resolver, tokens,
-// access log, apply leases and staged batch jobs; hc is nil in production.
+// access log and apply leases; hc is nil in production.
 func New(company func() *config.Company, env func() *config.Resolver, tokens googlegrowth.Tokens,
-	audit googlegrowth.Audit, leases googlegrowth.Leaser, staged Staged, hc *http.Client) *Product {
-	p := &Product{company: company, staged: staged, now: time.Now, client: &googlegrowth.Client{
+	audit googlegrowth.Audit, leases googlegrowth.Leaser, hc *http.Client) *Product {
+	p := &Product{company: company, now: time.Now, client: &googlegrowth.Client{
 		Kind: string(Kind), Name: "Google Ads", Company: company, Env: env, Tokens: tokens, Audit: audit,
 		Leases: leases, HTTP: hc, Refused: vendorRefusal,
 	}}

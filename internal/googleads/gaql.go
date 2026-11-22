@@ -16,8 +16,8 @@ import (
 // a batch job a run approves, how many operations it holds.
 var comparedFields = map[string][]string{
 	"batch_job":                        {"status", "metadata.operation_count"},
-	"campaign":                         {"status", "bidding_strategy_type", "campaign_budget"},
-	"campaign_budget":                  {"amount_micros", "total_amount_micros"},
+	"campaign":                         {"status", "bidding_strategy_type", "bidding_strategy", "campaign_budget"},
+	"campaign_budget":                  {"amount_micros", "total_amount_micros", "reference_count"},
 	"bidding_strategy":                 {"type"},
 	"ad_group_criterion":               {"negative", "type"},
 	"campaign_criterion":               {"negative", "type"},
@@ -27,7 +27,7 @@ var comparedFields = map[string][]string{
 	"asset_group_listing_group_filter": {"type"},
 	"asset_set":                        {"type"},
 	"account_budget":                   {"approved_spending_limit_micros", "approved_end_date_time"},
-	"recommendation":                   {"type"},
+	"recommendation":                   {"type", "campaign_budget"},
 }
 
 // searchOp is GoogleAdsService.Search, which every live read goes through.
