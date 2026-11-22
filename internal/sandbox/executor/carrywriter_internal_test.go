@@ -43,3 +43,33 @@ func TestEveryCarrierRefusesABoxThatNamedNoReleaseAndJudgesAWriterAlone(t *testi
 		}
 	}
 }
+
+// AN UNREAD WRITER CONTINUES IN NO BOX, for every carrier: a session whose
+// writer named no release this build reads (a pre-release, a snapshot, a
+// record with none, which releaseOf reads as "") is refused alone and beside a
+// box of every release, saying so; read as current, it would be carried into
+// a box older than the release that wrote it.
+//
+// Mutation: take an unread writer for a current one in any carrier's
+// ContinuesWriter, and its row goes red.
+func TestAnUnreadWriterContinuesInNoBox(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name    string
+		carrier carrier
+		boxes   []string
+	}{
+		{"claude-code", ClaudeCode{}, []string{"2.1.310", "2.1.322", "9.0.0"}},
+		{"opencode", OpenCode{}, []string{"2.0.32", "2.2.7", "9.0.0"}},
+		{"codex", Codex{}, []string{codexCarryRelease}},
+	} {
+		if ok, why := c.carrier.ContinuesWriter(""); ok || !strings.Contains(why, "named no release") {
+			t.Errorf("%s: an unread writer continues %v (%q), want refused as naming no release", c.name, ok, why)
+		}
+		for _, box := range c.boxes {
+			if ok, why := c.carrier.Continues(box, ""); ok || !strings.Contains(why, "named no release") {
+				t.Errorf("%s: an unread writer continues %v (%q) in box %s, want refused", c.name, ok, why, box)
+			}
+		}
+	}
+}
