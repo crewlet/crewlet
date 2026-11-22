@@ -105,6 +105,13 @@ const endWaitMs = 4_000
 const backoffFirstMs = 1_000
 const backoffMostMs = 30_000
 
+// The pause before a failed admission again is made again: a tenth of a
+// second, doubling to one. An admission answers in under 20 ms in OpenCode's
+// own process and costs no model call, and 2.3.2 began the next step 1.5 s
+// after the fold (both measured), so four retries land before it.
+const readmitFirstMs = 100
+const readmitMostMs = 1_000
+
 // pollFloorMs is the least time from one poll's start to the next one's, after
 // an answer that admitted nothing. The engine answers an empty poll only once
 // its hold is over, so polling again at once is the long poll working — but an
@@ -238,7 +245,7 @@ async function arm(ctx, url, session) {
   }
 
   // readmit admits a folded note again under its second id, made again after
-  // a pause while the session's execution runs: OpenCode answers a repeat
+  // a pause ([readmitFirstMs]) while the session's execution runs: OpenCode answers a repeat
   // admission under an id it holds with its first, before and after delivery
   // (measured on 2.3.2), so a call that failed once OpenCode stored it costs
   // nothing. The id stays mapped, so a message under it confirms the note
@@ -265,7 +272,7 @@ async function arm(ctx, url, session) {
       } catch {
         // Said above: made again after a pause.
       }
-      wait = next(wait)
+      wait = wait === 0 ? readmitFirstMs : Math.min(wait * 2, readmitMostMs)
       await sleep(wait, life.signal, gated.signal)
     }
   }
