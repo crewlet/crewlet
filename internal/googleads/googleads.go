@@ -145,16 +145,22 @@ func catalog() growth.Catalog {
 	}
 }
 
+// The registration's lists, laid out by the compiler rather than made at init,
+// which every push's hook pays for: the one API, and the one scope every
+// level and the company's reader take.
+var (
+	adsAPIs   = []string{"googleads.googleapis.com"}
+	adwordsOf = []string{scopeAdwords}
+)
+
 func init() {
 	growth.RegisterFunc(string(Kind), catalog)
 	googleauth.Register(googleauth.Product{
-		Kind: Kind, Name: "Google Ads",
-		APIs: []string{"googleads.googleapis.com"},
-		Scopes: map[string][]string{
-			string(growth.LevelRead): {scopeAdwords}, string(growth.LevelOperate): {scopeAdwords},
-			string(growth.LevelAdminister): {scopeAdwords},
-		},
-		ReaderScopes: []string{scopeAdwords},
-		On:           func(c *config.Company) bool { return c.Integrations.GrowthEnabled(string(Kind)) },
+		Kind: Kind, Name: "Google Ads", APIs: adsAPIs, ReaderScopes: adwordsOf, On: enabled,
+		Scopes: map[string][]string{string(growth.LevelRead): adwordsOf, string(growth.LevelOperate): adwordsOf,
+			string(growth.LevelAdminister): adwordsOf},
 	})
 }
+
+// enabled reports whether c turns Google Ads on.
+func enabled(c *config.Company) bool { return c.Integrations.GrowthEnabled(string(Kind)) }
