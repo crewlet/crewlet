@@ -18,7 +18,6 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { EXECUTOR_HARNESSES } from "./executors.ts";
 import { indexOrg, type Seat } from "~/lib/seats.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -48,6 +47,7 @@ const isRecord = (v: unknown): v is Record<string, unknown> =>
 /** No name for any model: each is said by its id. */
 const NO_NAMES: ReadonlyMap<string, string> = new Map();
 const NO_ENTRIES: readonly ModelEntriesAnswer["entries"][number][] = [];
+const NO_EXECUTORS: readonly string[] = [];
 
 /** One model as the page draws it: the engine's reading, and for an admin the document's entry. */
 export interface ModelView {
@@ -56,7 +56,7 @@ export interface ModelView {
   model: string;
   /** Its model as a person reads it ("Claude Opus 5.5"), or its id where nothing names it (`modelNames.ts`). */
   modelName: string;
-  /** Whether its harness can run a seat's coding (`EXECUTOR_HARNESSES`, held to the engine). */
+  /** Whether its harness can run a seat's coding: one of the engine's `executor_harnesses`. */
   executor: boolean;
   /** The admin's reading, or the member's, which names no credential. */
   entry: ModelEntry | MemberModelEntry;
@@ -94,6 +94,12 @@ export interface ModelsData {
   assistant: { key: string | null };
   /** The model the Advisor explains its findings with, or null where it has none and runs its checks alone. */
   advisor: { key: string | null };
+  /**
+   * The harnesses the engine runs a seat's executor on, in the profiles' order
+   * (`executor_harnesses`): served rather than compiled in, so a runner a build
+   * adds needs no dashboard rebuild. Empty until the engine answers.
+   */
+  executors: readonly string[];
   loading: boolean;
   error: string | null;
   /**
@@ -167,7 +173,7 @@ export function modelViews(
       harness: entry.harness,
       model: entry.model,
       modelName: names.get(nameKey(entry.harness, entry.model)) ?? entry.model,
-      executor: EXECUTOR_HARNESSES.includes(entry.harness),
+      executor: answer?.executor_harnesses.includes(entry.harness) ?? false,
       entry,
       admin: answer?.reading === "admin" ? (entry as ModelEntry) : null,
       uses: usesOf(entry.used_by),
@@ -237,6 +243,7 @@ export function useModelsData(): ModelsData {
     node: answer?.node ?? "",
     assistant,
     advisor,
+    executors: answer?.executor_harnesses ?? NO_EXECUTORS,
     loading: (entries.loading && !entries.data) || (admin && config.loading && !config.data),
     error: entries.error
       ? (entries.detail ?? entries.error)

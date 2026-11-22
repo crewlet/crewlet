@@ -24,6 +24,7 @@ import {
 } from "~/lib/modelUses.ts";
 import {
   EVERY_JOB,
+  EXECUTORS,
   modelEntry,
   modelsData,
   runs,
@@ -55,7 +56,7 @@ function Harness({
   company?: ModelsData;
 }) {
   const [draft, setDraft] = useState<Draft>({
-    ...emptyDraft(),
+    ...emptyDraft(EXECUTORS),
     key: "haiku",
     model: "haiku",
     ...start,
@@ -325,7 +326,7 @@ test("Ask Crewlet takes any model of a harness a helper can run on, with nothing
 // SAVED WITHOUT SEATS: Everything with no seat picked reads as no seat, never
 // as a sentence with nobody in it.
 test("the summary of Everything with no seat picked says no seat uses it", () => {
-  const draft = { ...emptyDraft(), key: "haiku", intent: "all" as const, uses: noUses() };
+  const draft = { ...emptyDraft(EXECUTORS), key: "haiku", intent: "all" as const, uses: noUses() };
   expect(summaryOf(split, draft)).toEqual([
     "No seat uses haiku yet. Every seat stays on the model it has now.",
   ]);
@@ -333,7 +334,7 @@ test("the summary of Everything with no seat picked says no seat uses it", () =>
 
 // M-018: PAST A FEW SEATS, a line counts them; the names stay a press away.
 test("the summary counts the seats past a few, and names them all when asked", () => {
-  const many = { ...emptyDraft(), key: "haiku", intent: "coding" as const, uses: noUses() };
+  const many = { ...emptyDraft(EXECUTORS), key: "haiku", intent: "coding" as const, uses: noUses() };
   many.uses.jobs.executor = ["backend-engineer", "designer", "pm"];
   expect(summaryOf(split, many, 2)).toEqual(["3 seats will code with haiku."]);
   expect(summaryOf(split, many)[0]).toBe(

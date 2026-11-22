@@ -16,6 +16,7 @@ function models() {
         modelEntry({ key: "b", used_by: [ASSISTANT_CHAT] }),
       ],
       alarms: [],
+      executor_harnesses: ["claude-code", "opencode"],
     },
     null,
   );
@@ -35,5 +36,32 @@ describe("Ask Crewlet's model", () => {
   it("reads a member's from where the engine says the chat runs", () => {
     expect(assistantOf(null, models())).toEqual({ key: "b" });
     expect(assistantOf(null, [])).toEqual({ key: null });
+  });
+});
+
+// A MODEL CAN RUN CODING WHERE THE ENGINE SAYS ITS HARNESS RUNS AN EXECUTOR, the
+// served list read rather than one compiled into the page.
+describe("a model's coding", () => {
+  it("follows the engine's executor_harnesses", () => {
+    const views = (executors: string[]) =>
+      modelViews(
+        {
+          reading: "admin",
+          node: "node-1",
+          nodes: [{ id: "node-1", reported: true }],
+          entries: [modelEntry({ key: "p", harness: "pi" }), modelEntry({ key: "c" })],
+          alarms: [],
+          executor_harnesses: executors,
+        },
+        null,
+      ).map((m) => [m.key, m.executor]);
+    expect(views(["claude-code", "opencode"])).toEqual([
+      ["p", false],
+      ["c", true],
+    ]);
+    expect(views(["claude-code", "opencode", "pi"])).toEqual([
+      ["p", true],
+      ["c", true],
+    ]);
   });
 });
