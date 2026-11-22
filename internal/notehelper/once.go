@@ -8,9 +8,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -121,7 +123,9 @@ func take(ctx context.Context, cfg takeConfig, boundary string) (answer, token s
 
 // splitTake is text, a take's answer, without [takeField], and that field's
 // token. The answer's other fields are handed on as their bytes stand, never
-// re-escaped: a harness's stdout ceiling counts them.
+// re-encoded: a harness's stdout ceiling counts them, and encoding/json
+// escapes U+2028 and U+2029 even in bytes it only re-emits, six bytes each.
+// Its keys come in sorted order.
 func splitTake(text string) (answer, token string, err error) {
 	var fields map[string]json.RawMessage
 	if err = json.Unmarshal([]byte(text), &fields); err != nil {
@@ -132,13 +136,19 @@ func splitTake(text string) (answer, token string, err error) {
 		return "", "", errors.New("the take's answer names no token")
 	}
 	delete(fields, takeField)
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err = enc.Encode(fields); err != nil {
-		return "", "", err
+	var b strings.Builder
+	b.WriteByte('{')
+	for i, key := range slices.Sorted(maps.Keys(fields)) {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		name, _ := json.Marshal(key)
+		b.Write(name)
+		b.WriteByte(':')
+		b.Write(fields[key])
 	}
-	return strings.TrimSuffix(buf.String(), "\n"), token, nil
+	b.WriteByte('}')
+	return b.String(), token, nil
 }
 
 // reportLoad posts skill, a load the harness made, to cfg's skill route.
