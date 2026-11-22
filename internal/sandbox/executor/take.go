@@ -208,7 +208,7 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 	// WHAT THE SESSION'S LAST REQUEST CARRIED, and what its harness counts it
 	// at, read off the archive as it is kept (measure.go), beside the take and
 	// within its context, never holding it up.
-	meter := newContextMeter(metering, carries.layout(), archive.SessionID, archive.Version, large)
+	meter := newContextMeter(metering, carries, archive.SessionID, archive.Version, large)
 	scrubbingStarted = true
 	go func() {
 		defer close(out.done)

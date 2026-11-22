@@ -36,6 +36,12 @@ type Executor struct {
 	// TempEnv is the variable the harness roots its own temporary directory
 	// at beside the standard ones, pointed at a host box's own; "" for none.
 	TempEnv string `yaml:"temp_env,omitempty"`
+	// Floor is the oldest release of the harness its runner drives, as
+	// MAJOR.MINOR.PATCH; "" for a runner that states none here.
+	Floor string `yaml:"floor,omitempty"`
+	// ProbeArgs is a command whose success shows the harness has what its
+	// runner starts beyond its release; none for a runner that needs no probe.
+	ProbeArgs []string `yaml:"probe_args,omitempty"`
 }
 
 // ErrExecutorOverride marks an `overrides` that sets `executor`: which

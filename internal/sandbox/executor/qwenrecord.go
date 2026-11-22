@@ -10,7 +10,7 @@ import (
 )
 
 // QWEN CODE'S CHAT FILE, read as a transcript: one record a line, written as
-// the run goes (measured on 0.28.3). A `user` record is the brief, or with
+// the run goes (measured on 0.28.4). A `user` record is the brief, or with
 // subtype `mid_turn_user_message` a message the helper handed between steps
 // behind Qwen Code's framing (a note, a late call or a wake by its heading,
 // [headingFraming]); an `assistant` record is one response, its parts the
@@ -90,7 +90,7 @@ func (b *transcriptBuilder) qwenResponded(at time.Time, parts json.RawMessage) e
 }
 
 // qwenCompressed reads a chat_compression record as the summary Qwen Code
-// goes on from (measured on 0.28.3): the user text of compressedHistory's
+// goes on from (measured on 0.28.4): the user text of compressedHistory's
 // first summaryPrefixLength entries, as one [EntrySummary], its headings
 // heading nothing. The prefix's model entry is Qwen Code's canned
 // acknowledgement and a copy of the tail's opening call, and every entry

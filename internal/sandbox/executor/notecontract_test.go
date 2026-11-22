@@ -43,6 +43,12 @@ var noteFixtures = map[string]noteFixture{
 		confirms: pluginAdmitsNotesAtTheRunsNextStep,
 		reaches:  pluginReadsTheBridgesOwnNotesRoute,
 	},
+	executor.CodexName: {
+		reads:    true,
+		wakeRead: codexWakeRead,
+		confirms: codexConfirmsATake,
+		reaches:  codexRealBoxsNotesReachTheBridgesRoute,
+	},
 	executor.GeminiCLIName: {
 		reads: true,
 		wakeRead: func(t *testing.T, wake string) []executor.TranscriptEntry {

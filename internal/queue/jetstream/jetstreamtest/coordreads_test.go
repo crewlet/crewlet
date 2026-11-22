@@ -68,7 +68,7 @@ func TestACoordinationReadIsNeverAnsweredByAMemberThatIsBehind(t *testing.T) {
 	if _, err := stores[0].Charge(ctx, charge); err != nil {
 		t.Fatalf("charge before the cut: %v", err)
 	}
-	if _, err := stores[0].CreateSandboxRun(ctx, turn, []byte(`{"n":1}`)); err != nil {
+	if _, err := stores[0].CreateSandboxRun(ctx, turn, []byte(`{"n":1}`), nil); err != nil {
 		t.Fatalf("create the run before the cut: %v", err)
 	}
 

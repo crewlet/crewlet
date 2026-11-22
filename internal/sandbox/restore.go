@@ -1439,7 +1439,8 @@ func freshLaunch(req LaunchRequest) continuedLaunch {
 // chose ([LaunchRequest.Session]), the kept capture over no copy that went on
 // past it ([copyWentPast]) or the conversation's base in a box of its own;
 // else the job before's copy in its own box, unless that job ran out of
-// context in it; else a session of its own. Each session not continued is
+// context in it or the box's harness continues no copy ([inPlaceRefused]);
+// else a session of its own. Each session not continued is
 // logged once the one it falls to is decided ([Coordinator.notContinued]), and
 // a reading of a capture passed over for the copy is said unused
 // ([Coordinator.exactUnused]).
@@ -1497,6 +1498,8 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 	if continued := req.Continue; continued != nil && reused && continued.SessionID != "" {
 		if opened.sessionExhausted(continued.SessionID) {
 			refused = append(refused, executorkeep.ExhaustedWhy(continued.SessionID, req.Turn.TurnID))
+		} else if why := inPlaceRefused(ctx, box, runner); why != "" {
+			refused = append(refused, why)
 		} else {
 			// THE COPY THE BOX HOLDS, measured as the job before's record holds
 			// it ([PriorBox.Context]).
@@ -1527,6 +1530,26 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 		c.exactUnused(ctx, req, copyWentPastUnused)
 	}
 	return launch
+}
+
+// inPlaceRefused is why box's harness continues no copy of a session the box
+// itself holds ([SessionRestorer.CheckInPlace]), "" where it does or its
+// runner restores nothing; a box that could not be asked continues nothing,
+// as a carried session's check refuses one ([Coordinator.continueKept]).
+func inPlaceRefused(ctx context.Context, box Sandbox, runner Runner) string {
+	restorer, ok := runner.(SessionRestorer)
+	if !ok {
+		return ""
+	}
+	check, err := restorer.CheckInPlace(ctx, box)
+	switch {
+	case err != nil:
+		return fmt.Sprintf("the box could not be asked whether its harness continues its own copy of the "+
+			"session: %v", err)
+	case !check.Continues:
+		return check.Why
+	}
+	return ""
 }
 
 // copyWentPastUnused is why a launch that continues its job's own box's copy in
@@ -1617,6 +1640,11 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 	// its session was taken whole there: the box holds the archive, so nothing
 	// is fetched to be kept over a copy it would not touch.
 	own := reused && !kept.Interrupted
+	if own {
+		if why := inPlaceRefused(ctx, box, runner); why != "" {
+			return continuedLaunch{}, why
+		}
+	}
 	archive := ArchiveOf(row)
 	// WHERE ITS FIRST REQUEST IS THIS LAUNCH'S TO JUDGE (an OpenCode session
 	// handed with its summarized telling), the box's point, read once on every
@@ -1736,7 +1764,7 @@ func answeredRelease(check CarryCheck) string {
 // telling: [SessionContinuation.Exact]).
 //
 // EXACTLY THE RELEASE THE READING WAS READ FOR, and a release read: an unread
-// answer ("", which [CarryCheck.Version] takes for a current release) matches
+// answer ("", which continues no carried session: [CarryCheck.Version]) matches
 // nothing, since what a session holds is what the resuming release's resume
 // hands its model ([HoldingsAsk.Resumer]), and a box of another release may
 // hand it otherwise. Equality, harness-neutral, rather than the reader's set of

@@ -173,7 +173,7 @@ func TestARunsRowAtItsBoundWrittenAcrossALeafsLinkLands(t *testing.T) {
 			seeded := kvtest.AtTheBound(t, raw, rowCrossingRoom)
 			// SEEDED THROUGH THE MEMBER, whose connection crosses no link: the
 			// case's time is the path's write, not its setup.
-			if _, err := across.Member.CreateSandboxRun(t.Context(), c.row.TurnID, seeded); err != nil {
+			if _, err := across.Member.CreateSandboxRun(t.Context(), c.row.TurnID, seeded, nil); err != nil {
 				t.Fatalf("seed a row of %d bytes: %v", len(seeded), err)
 			}
 			store := &stampsAsked{PendingStore: NewCoordStore(across.Leaf)}

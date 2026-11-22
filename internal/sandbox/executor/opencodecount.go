@@ -39,6 +39,16 @@ type exportReading struct {
 	next sandbox.NextRequest
 }
 
+// meter reads an OpenCode archive for the take's meter ([carrier.meter],
+// [meterExport]).
+func (OpenCode) meter(ctx context.Context, r io.Reader, _, release string,
+	_ *passBudget) (meterReading, error) {
+
+	export, err := meterExport(ctx, r, release)
+	return meterReading{tokens: export.figure, count: export.count, provider: export.provider,
+		next: export.next}, err
+}
+
 // meterExport reads r, an OpenCode export gzipped, once, within ctx: the
 // floor's figure and OpenCode's count of the session ([openCodeCountReading]),
 // the count read by the rules of release, the box's word on the release that

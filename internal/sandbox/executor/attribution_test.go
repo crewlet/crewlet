@@ -320,6 +320,19 @@ var creditBoxes = map[string]func(t *testing.T) (*executor.Runner, sandbox.Sandb
 				"sh \"$HOME/scenario.sh\" > \"$HOME/observed\" 2> \"$HOME/observed.err\"\n")
 		return runner, b
 	},
+	// The app-server's stand-in runs the scenario before it serves: the
+	// model's shell commands run under the app-server's environment, which
+	// the wrapper gave it ([codexStandIn] answers `codex-cli 0.171.0`).
+	executor.CodexName: func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
+		runner, b, _ := codexBox(t, "0.171.0")
+		path := executor.PathsFor(b).BinDir() + "/codex"
+		standIn, err := b.ReadFile(t.Context(), path)
+		if err != nil || !strings.Contains(string(standIn), "\napp-server)\n") {
+			t.Fatalf("the codex stand-in has no app-server branch (%v)", err)
+		}
+		writeBoxStandIn(t, b, path, strings.Replace(string(standIn), "\napp-server)\n", "\napp-server)\n  "+scenarioRun, 1))
+		return runner, b
+	},
 	executor.GeminiCLIName: geminiCreditBox,
 	// Its helper's stand-in runs the scenario: Qwen Code and its shell run
 	// under the helper's environment, which the wrapper gave it.
@@ -403,7 +416,8 @@ func geminiCreditBox(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 
 // geminiBox is a real box with a Gemini CLI runner's plumbing and a stand-in
 // `gemini` that writes a prompt when asked to export one, as the run's script
-// asks first, and otherwise runs run.
+// asks first (`false` and `0` ask for none, as Gemini CLI reads them), and
+// otherwise runs run.
 func geminiBox(t *testing.T, run string) (*executor.Runner, sandbox.Sandbox) {
 	t.Helper()
 	local, err := sandbox.NewLocal(sandbox.LocalOptions{Placement: sandbox.Direct, StateDir: t.TempDir()})
@@ -423,7 +437,7 @@ func geminiBox(t *testing.T, run string) (*executor.Runner, sandbox.Sandbox) {
 	// login shell's profile may reset PATH to the system's.
 	writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/node", "#!/bin/sh\nexec "+shellword.Quote(geminiNode(t))+` "$@"`+"\n")
 	writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/gemini",
-		"#!/bin/sh\nif [ -n \"${GEMINI_WRITE_SYSTEM_MD:-}\" ]; then echo prompt > \"$GEMINI_WRITE_SYSTEM_MD\"; exit 42; fi\n"+run)
+		"#!/bin/sh\ncase ${GEMINI_WRITE_SYSTEM_MD:-false} in false|0) ;; *) echo prompt > \"$GEMINI_WRITE_SYSTEM_MD\"; exit 42;; esac\n"+run)
 	return runner, b
 }
 

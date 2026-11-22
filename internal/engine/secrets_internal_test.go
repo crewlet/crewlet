@@ -1,6 +1,10 @@
 package engine
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -196,4 +200,72 @@ func TestNoReferenceReachesTheEnginesOwnKeys(t *testing.T) {
 	if got := e.Resolve("${GL}"); got != "glpat-x" {
 		t.Errorf("the operator's own ${GL} = %q, want its value", got)
 	}
+}
+
+// WHAT IS BUILT ONCE HOLDS THE NODE'S RESOLVER BY ASKING, never a snapshot of
+// it. The resolver is rebuilt on every apply, so `e.resolver().Value` taken as
+// a method value inside a sync.Once pins the snapshot of the first call: App
+// Store Connect's product read a key the setup form had just sealed as empty,
+// and reported it "does not read as a .p8 key" until the node restarted. A
+// snapshot taken per use (a check run's epoch) is what it should be.
+//
+// Mutation: hand a growth product `Resolve: e.resolver().Value` again, and this fails.
+func TestNothingBuiltOncePinsAResolverSnapshot(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			once, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			fn, ok := once.Fun.(*ast.SelectorExpr)
+			if !ok || (fn.Sel.Name != "Do" && fn.Sel.Name != "OnceValue" && fn.Sel.Name != "OnceFunc") {
+				return true
+			}
+			for _, arg := range once.Args {
+				for _, pinned := range pinnedResolvers(arg) {
+					t.Errorf("%s: resolver().%s is built once and pins the resolver of that moment; "+
+						"pass e.Resolve or e.resolver", fset.Position(pinned.Pos()), pinned.Sel.Name)
+				}
+			}
+			return true
+		})
+	}
+}
+
+// pinnedResolvers are the `….resolver().X` method values under n that are
+// taken rather than called.
+func pinnedResolvers(n ast.Node) []*ast.SelectorExpr {
+	called := map[ast.Expr]bool{}
+	ast.Inspect(n, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok {
+			called[call.Fun] = true
+		}
+		return true
+	})
+	var out []*ast.SelectorExpr
+	ast.Inspect(n, func(n ast.Node) bool {
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok || called[sel] {
+			return true
+		}
+		if inner, ok := sel.X.(*ast.CallExpr); ok {
+			if fn, ok := inner.Fun.(*ast.SelectorExpr); ok && fn.Sel.Name == "resolver" {
+				out = append(out, sel)
+			}
+		}
+		return true
+	})
+	return out
 }
