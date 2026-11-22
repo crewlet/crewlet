@@ -190,3 +190,22 @@ func TestACreateWaitsOutTheLeadersInFlightAnswer(t *testing.T) {
 		t.Errorf("%d attempts, want 2: one waited out and the one that landed", s.attempts)
 	}
 }
+
+// A BUCKET IS SETTLED WITH ONE HOLDING. Settled again with its own it is
+// returned as it is; with another, the second would be silently ignored and
+// its reads timed by the first, so it is a wiring mistake that panics.
+//
+// Mutation: return an already settled handle whatever holding is passed.
+func TestABucketSettledAgainKeepsOneHolding(t *testing.T) {
+	t.Parallel()
+	once := settled(nil, named{bucket: "runs"}, InProcess, runsHolding)
+	if again := settled(nil, once, InProcess, runsHolding); again.(settledBucket).holding.rest != runValue {
+		t.Errorf("settled again with its own holding, the handle holds %+v", again.(settledBucket).holding)
+	}
+	defer func() {
+		if recover() == nil {
+			t.Error("a bucket settled again with another holding kept its first without a word")
+		}
+	}()
+	settled(nil, once, InProcess, undeclaredHolding)
+}

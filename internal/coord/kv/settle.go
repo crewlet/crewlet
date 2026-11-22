@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"time"
 
@@ -110,6 +111,11 @@ func (h holding) of(key string) class {
 		}
 	}
 	return h.rest
+}
+
+// same reports whether h and o declare the same classes in the same order.
+func (h holding) same(o holding) bool {
+	return h.rest == o.rest && slices.Equal(h.classes, o.classes)
 }
 
 // most is the largest class a key under the filter keys may hold: a literal
@@ -261,16 +267,20 @@ var kvHeaderBytes = (&nats.Msg{Header: nats.Header{
 
 // settled wraps a bucket this node has opened, its writes held to the pace
 // its connection reaches it at and to the classes h declares. A handle
-// already settled is returned as it is, so wrapping twice never doubles a
-// retry.
+// already settled with h is returned as it is, so wrapping twice never
+// doubles a retry.
 func settled(js jetstream.JetStream, kv jetstream.KeyValue, reach Reach, h holding) jetstream.KeyValue {
-	if _, done := kv.(settledBucket); done {
-		return kv
-	}
+	// Every bucket declares its classes where it is opened, once; one that
+	// does not, or a second declaration the handle would silently ignore, is
+	// a wiring mistake no write or read should paper over.
 	if h.rest.bound == 0 {
-		// Every bucket declares its classes where it is opened; one that
-		// does not is a wiring mistake no write or read should paper over.
 		panic(fmt.Sprintf("coord/kv: %s is settled with no holding declared", kv.Bucket()))
+	}
+	if b, done := kv.(settledBucket); done {
+		if !b.holding.same(h) {
+			panic(fmt.Sprintf("coord/kv: %s is settled again with a holding other than its own", kv.Bucket()))
+		}
+		return kv
 	}
 	return settledBucket{KeyValue: kv, js: js, pace: reach.pace(), holding: h}
 }
