@@ -73,6 +73,10 @@ type Client struct {
 	HTTP *http.Client
 	// Secrets are the fields of an answer that hold a credential.
 	Secrets []string
+	// Texts are the fields a change sets to somebody's words whatever they
+	// look like (a one-word name reads as an identifier), by their last
+	// segment: the access log keeps them as their digest.
+	Texts []string
 	// Refused says Google's refusal of a request in the product's words; nil
 	// passes Google's error on.
 	Refused func(req Request, api *googleauth.APIError) error
