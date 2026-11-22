@@ -55,6 +55,12 @@ var noteFixtures = map[string]noteFixture{
 		confirms: executor.KimiConfirmsATake,
 		reaches:  kimiReachesTheBridgesRoute,
 	},
+	executor.MuseName: {
+		reads:    true,
+		wakeRead: executor.MuseWakeRead,
+		confirms: executor.MuseConfirmsATake,
+		reaches:  museReachesTheBridgesTool,
+	},
 }
 
 // noteFixtureOf is h's fixture, failing the case where h supplies none.
