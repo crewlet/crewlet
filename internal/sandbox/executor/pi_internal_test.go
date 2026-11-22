@@ -42,7 +42,7 @@ func piStream(t *testing.T, name string, cap int) []byte {
 // trusted repository's APPEND_SYSTEM.md), never `--session-id` (which finds a
 // session only in the directory it was made in).
 //
-// Mutation: drop `--approve` or `-e`, or pass the system text as a flag —
+// Mutation: drop `--approve` or `-e`, or pass the system text as a flag:
 // this goes red.
 func TestAPiRunIsHeadlessAndTrustsItsWorkingDirectory(t *testing.T) {
 	t.Parallel()
@@ -76,10 +76,10 @@ func TestAPiRunIsHeadlessAndTrustsItsWorkingDirectory(t *testing.T) {
 // piGate runs the script's session gate for session in a home of its own,
 // from a working directory of its own, and is what it settled: s, k, w, and
 // the arguments it handed pi.
-func piGate(t *testing.T, home, cwd string, session Session) []string {
+func piGate(t *testing.T, home, cwd, release string, session Session) []string {
 	t.Helper()
 	paths := Paths{Home: home}
-	script := piHeader + "set --\n" + piSessionGate(session, paths, false) +
+	script := "n=" + sandbox.ShellQuote(release) + "\n" + piHeader + "set --\n" + piSessionGate(session, paths, false) +
 		`printf '%s\n' "$s" "$k" "$w" "$@"` + "\n"
 	cmd := exec.Command("sh", "-c", script) //nolint:gosec // the runner's own script
 	cmd.Dir = cwd
@@ -122,7 +122,7 @@ func piArchive(t *testing.T, session string, body []byte) []byte {
 // starts the minted fresh one and says why.
 //
 // Mutation: restore the file as carried, keep the old header's directory, or
-// continue a session the box does not hold — this goes red.
+// continue a session the box does not hold: this goes red.
 func TestAPiSessionOpensInTheBoxsWorkingDirectory(t *testing.T) {
 	t.Parallel()
 	for _, tool := range []string{"sh", "tar", "gzip", "cksum", "sed", "date"} {
@@ -146,7 +146,7 @@ func TestAPiSessionOpensInTheBoxsWorkingDirectory(t *testing.T) {
 
 	t.Run("new", func(t *testing.T) {
 		home := t.TempDir()
-		got := piGate(t, home, cwd, Session{ID: id})
+		got := piGate(t, home, cwd, "1.6.0", Session{ID: id})
 		file := Paths{Home: home}.PiSessionFile(id)
 		if !slices.Equal(got, []string{id, "no", "", "--session", file}) {
 			t.Fatalf("the gate settled %q", got)
@@ -154,6 +154,9 @@ func TestAPiSessionOpensInTheBoxsWorkingDirectory(t *testing.T) {
 		h, rest := header(t, file)
 		if h["id"] != id || h["cwd"] != cwd || h["type"] != "session" || h["version"] != 3.0 || len(rest) != 0 {
 			t.Fatalf("the new session's file opens %v and holds %d lines more", h, len(rest))
+		}
+		if wrote, _ := os.ReadFile(file + ".release"); string(wrote) != "1.6.0\n" { //nolint:gosec // the gate's own file
+			t.Fatalf("the session's release is recorded as %q", wrote)
 		}
 	})
 	t.Run("carried", func(t *testing.T) {
@@ -166,7 +169,7 @@ func TestAPiSessionOpensInTheBoxsWorkingDirectory(t *testing.T) {
 		if err := os.WriteFile(paths.SessionCarried(), piArchive(t, id, carried), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		got := piGate(t, home, cwd, Session{ID: id, Continues: true, Fresh: "fresh-1"})
+		got := piGate(t, home, cwd, "1.6.0", Session{ID: id, Continues: true, Fresh: "fresh-1"})
 		if !slices.Equal(got, []string{id, "yes", "", "--session", paths.PiSessionFile(id)}) {
 			t.Fatalf("the gate settled %q", got)
 		}
@@ -183,12 +186,69 @@ func TestAPiSessionOpensInTheBoxsWorkingDirectory(t *testing.T) {
 			t.Fatalf("the digests read %q (%v)", digests, err)
 		}
 	})
+	carried := func(t *testing.T) Paths {
+		t.Helper()
+		paths := Paths{Home: t.TempDir()}
+		if err := os.MkdirAll(paths.WorkDir(), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(paths.SessionCarried(), piArchive(t, id, piFixture(t, "steered.session.jsonl")),
+			0o600); err != nil {
+			t.Fatal(err)
+		}
+		return paths
+	}
+	held := func(t *testing.T, writer string) Paths {
+		t.Helper()
+		paths := Paths{Home: t.TempDir()}
+		for path, body := range map[string]string{
+			paths.PiSessionFile(id):              string(piFixture(t, "steered.session.jsonl")),
+			paths.PiSessionFile(id) + ".release": writer + "\n",
+			paths.WorkDir() + "/.keep":           "",
+		} {
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return paths
+	}
+	fresh := func(t *testing.T, got []string, paths Paths, releases ...string) {
+		t.Helper()
+		if len(got) != 5 || got[0] != "fresh-1" || got[1] != "no" || got[4] != paths.PiSessionFile("fresh-1") {
+			t.Fatalf("the gate settled %q, want the fresh session", got)
+		}
+		for _, r := range releases {
+			if !strings.Contains(got[2], "Pi "+r) {
+				t.Errorf("why %q does not name Pi %s", got[2], r)
+			}
+		}
+	}
+	t.Run("a newer box starts fresh", func(t *testing.T) {
+		paths := carried(t)
+		fresh(t, piGate(t, paths.Home, cwd, "1.7.0", Session{ID: id, Continues: true, Fresh: "fresh-1"}), paths,
+			"1.7.0", "1.6.0")
+	})
+	t.Run("a copy another release wrote starts fresh", func(t *testing.T) {
+		paths := held(t, "1.7.0")
+		fresh(t, piGate(t, paths.Home, cwd, "1.6.0", Session{ID: id, Continues: true, Fresh: "fresh-1"}), paths,
+			"1.7.0", "1.6.0")
+	})
+	t.Run("the box's own copy on the release continues", func(t *testing.T) {
+		paths := held(t, "1.6.0")
+		got := piGate(t, paths.Home, cwd, "1.6.0", Session{ID: id, Continues: true, Fresh: "fresh-1"})
+		if !slices.Equal(got, []string{id, "yes", "", "--session", paths.PiSessionFile(id)}) {
+			t.Fatalf("the gate settled %q", got)
+		}
+	})
 	t.Run("neither", func(t *testing.T) {
 		home := t.TempDir()
 		if err := os.MkdirAll(Paths{Home: home}.WorkDir(), 0o700); err != nil {
 			t.Fatal(err)
 		}
-		got := piGate(t, home, cwd, Session{ID: id, Continues: true, Fresh: "fresh-1"})
+		got := piGate(t, home, cwd, "1.6.0", Session{ID: id, Continues: true, Fresh: "fresh-1"})
 		if len(got) != 5 || got[0] != "fresh-1" || got[1] != "no" || !strings.Contains(got[2], "not in this box") ||
 			got[4] != (Paths{Home: home}).PiSessionFile("fresh-1") {
 			t.Fatalf("the gate settled %q", got)
@@ -205,7 +265,7 @@ func TestAPiSessionOpensInTheBoxsWorkingDirectory(t *testing.T) {
 //
 // Mutation: read success off the last message whatever its stop, drop the
 // compaction's usage, or take a run whose extension never ran for one that
-// did — this goes red.
+// did: this goes red.
 func TestAPiRunsStreamSaysHowItEnded(t *testing.T) {
 	t.Parallel()
 	unarmed := bytes.ReplaceAll(piStream(t, "steered", 0), []byte(`"customType":"crewlet-armed"`),
@@ -307,7 +367,7 @@ func piNoteAt(t *testing.T, lines []map[string]any, inbox string) int {
 //
 // Mutation: hold a note on its record alone, ignore compactions, read the file
 // in order rather than along its branch, count a torn last line, or drop an
-// entry whose details are of another shape — this goes red.
+// entry whose details are of another shape: this goes red.
 func TestAPiNoteIsHeldOnlyByAnAnswerOnItsBranch(t *testing.T) {
 	t.Parallel()
 	steered := piSessionLines(t, "steered.session.jsonl")
@@ -381,7 +441,7 @@ func TestAPiNoteIsHeldOnlyByAnAnswerOnItsBranch(t *testing.T) {
 // no server there replaces one the extension registers.
 //
 // Mutation: leave the fresh copy on the continued token, drop the required
-// bridge, or key a skill by a relative path — this goes red.
+// bridge, or key a skill by a relative path: this goes red.
 func TestAPiRunsExtensionCarriesItsOwnWiring(t *testing.T) {
 	t.Parallel()
 	box := sandbox.NewFakeSandbox("b")
@@ -442,21 +502,66 @@ func TestAPiRunsExtensionCarriesItsOwnWiring(t *testing.T) {
 	}
 }
 
-// A PI SESSION CONTINUES IN A BOX NO OLDER THAN THE ONE THAT WROTE IT, both at
-// or after 1.6.0, the release whose session format and hooks the runner reads.
+// A PI SESSION CONTINUES ONLY BETWEEN BOXES ON EXACTLY THE SUPPORTED RELEASE,
+// writer and box both 1.6.0; any other pair is refused, the reason naming both
+// releases. A box whose release is unread is held to the writer alone, its
+// script holding the box to the release ([piSessionGate]).
 //
-// Mutation: drop either floor, or the order — this goes red.
-func TestAPiSessionContinuesOnlyInABoxAsNewAsItsWriter(t *testing.T) {
+// Mutation: compare releases by order rather than equality, or drop either
+// side's check: this goes red.
+func TestAPiSessionContinuesOnlyBetweenBoxesOnTheSupportedRelease(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		box, writer string
 		ok          bool
 	}{
-		{"1.6.0", "1.6.0", true}, {"1.7.2", "1.6.0", true}, {"1.6.0", "1.7.0", false},
-		{"1.5.2", "1.5.2", false}, {"1.6.0", "1.5.2", false},
+		{"1.6.0", "1.6.0", true}, {"", "1.6.0", true}, {"1.7.0", "1.6.0", false}, {"1.6.0", "1.7.0", false},
+		{"1.5.2", "1.5.2", false}, {"1.6.0", "1.5.2", false}, {"", "1.7.0", false},
 	} {
-		if ok, why := (Pi{}).Continues(tc.box, tc.writer); ok != tc.ok || ok == (why != "") {
-			t.Errorf("Continues(%s, %s) = %v, %q", tc.box, tc.writer, ok, why)
+		ok, why := (Pi{}).Continues(tc.box, tc.writer)
+		if ok != tc.ok || ok == (why != "") {
+			t.Errorf("Continues(%q, %q) = %v, %q", tc.box, tc.writer, ok, why)
+		}
+		for _, r := range []string{tc.box, tc.writer, piSupported} {
+			if !ok && r != "" && !strings.Contains(why, "Pi "+r) {
+				t.Errorf("Continues(%q, %q): %q does not name Pi %s", tc.box, tc.writer, why, r)
+			}
+		}
+	}
+}
+
+// A BOX ON A PI OLDER THAN THE SUPPORTED RELEASE IS REFUSED AT THE RUN'S START,
+// naming both releases, and a newer one runs: the script's own check, against
+// the release `pi --version` prints.
+//
+// Mutation: drop the check, or refuse a newer release: this goes red.
+func TestAPiOlderThanTheSupportedReleaseIsRefusedAtTheStart(t *testing.T) {
+	t.Parallel()
+	prereqtest.OnPath(t, "sh", "the release check runs under sh", "install it")
+	check := piRelease + `if ! at ` + floorArgs(piSupported) + `; then printf 'crewlet: this box runs Pi %s, older ` +
+		`than ` + piSupported + `, the release this build supports\n' "$n" >&2; exit 1; fi` + "\necho started\n"
+	if !strings.Contains(piScript(sandbox.RunRequest{}, Session{ID: "s"}, Paths{Home: "/h"}, "/h/e.mjs", time.Second),
+		check[len(piRelease):strings.Index(check, "\necho")]) {
+		t.Fatal("the run's script does not hold the release check this case runs")
+	}
+	for _, tc := range []struct {
+		release string
+		runs    bool
+	}{{"1.5.2", false}, {"1.6.0", true}, {"1.7.0", true}} {
+		bin := t.TempDir()
+		if err := os.WriteFile(filepath.Join(bin, "pi"), []byte("#!/bin/sh\necho "+tc.release+"\n"), 0o700); err != nil { //nolint:gosec // an executable stand-in
+			t.Fatal(err)
+		}
+		cmd := exec.Command("sh", "-c", check) //nolint:gosec // the runner's own script
+		cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"))
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		out, err := cmd.Output()
+		if runs := err == nil && string(out) == "started\n"; runs != tc.runs {
+			t.Errorf("Pi %s: started %v (%v), want %v", tc.release, runs, err, tc.runs)
+		}
+		if !tc.runs && (!strings.Contains(stderr.String(), "Pi "+tc.release) || !strings.Contains(stderr.String(), piSupported)) {
+			t.Errorf("Pi %s was refused saying %q", tc.release, stderr.String())
 		}
 	}
 }
@@ -467,7 +572,7 @@ func TestAPiSessionContinuesOnlyInABoxAsNewAsItsWriter(t *testing.T) {
 // left out.
 //
 // Mutation: read a tool result's tool off the result rather than its call, or
-// read the extension's entries as words — this goes red.
+// read the extension's entries as words: this goes red.
 func TestACarriedPiSessionReadsBackAsItsTranscript(t *testing.T) {
 	t.Parallel()
 	const session = "11111111-1111-4111-8111-111111111111"

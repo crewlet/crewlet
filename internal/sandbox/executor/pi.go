@@ -63,11 +63,13 @@ func (Pi) NoteInstruction() string { return PiSteerInstruction }
 // and loads it, measured on 1.6.0), whose loads the extension reports.
 func (Pi) HandsSkills() bool { return true }
 
-// piFloor is the oldest Pi release a run is started on, and the oldest whose
-// session another box continues: 1.6.0, the release every behaviour here was
-// measured on (the boundary hooks the notes are handed over at, the extension's
-// MCP registration, the session format's version 3).
-const piFloor = "1.6.0"
+// piSupported is the one Pi release this build drives, every behaviour here
+// measured on it (the boundary hooks the notes are handed over at, the
+// extension's MCP registration, the session format): an older release is
+// refused at the run's start, a newer one runs with a new session every time,
+// and a session is continued only between boxes on exactly this release
+// ([Pi.Continues], [piSessionGate]).
+const piSupported = "1.6.0"
 
 // Session is the session a Pi run works in ([Harness.Session]): the one it
 // continues, or a new one under a UUID minted for it (pi takes the id its
@@ -95,7 +97,7 @@ func (Pi) Command(req sandbox.RunRequest, session Session, paths Paths, configPa
 const piExtensionMark = "crewlet.extension"
 
 // piScript is a Pi run's script, giving its harness stop to go once asked to
-// end: the end protocol (end.go); the release read and held to [piFloor]; the
+// end: the end protocol (end.go); the release read, an older than [piSupported] refused; the
 // extension's mark ([piExtensionMark]); the session named, its file's header
 // written or its archive restored ([piSessionGate]), and recorded
 // ([Paths.SessionRecord]); the harness run under the end protocol
@@ -132,8 +134,8 @@ func piScript(req sandbox.RunRequest, session Session, paths Paths, extension st
 	b.WriteString(endPrologue(paths, stop))
 	b.WriteString(endHarness(""))
 	b.WriteString(piRelease)
-	line(`if ! at %s; then printf 'crewlet: this box runs Pi %%s, older than %s, the oldest a run is started on\n' "$n" >&2; exit 1; fi`,
-		floorArgs(piFloor), piFloor)
+	line(`if ! at %s; then printf 'crewlet: this box runs Pi %%s, older than %s, the release this build supports\n' "$n" >&2; exit 1; fi`,
+		floorArgs(piSupported), piSupported)
 	if extension != "" {
 		line(`printf '%%s\n' %s`, q(piMarkLine(req.Limits.MaxTurns)))
 	}
@@ -202,12 +204,20 @@ func piSessionGate(session Session, paths Paths, rewired bool) string {
 		line(`%sif ! { mkdir -p %s && piheader "$s" > "$f"; }; then echo 'crewlet: the Pi session'"'"'s file could not be written, so the run does not start' >&2; exit 1; fi`,
 			why, q(paths.PiSessions()))
 	}
+	// THE RELEASE THAT WROTE A SESSION, beside its file, which a later run in
+	// this box reads before it continues its copy.
+	release := func() {
+		line(`printf '%%s\n' "$n" > "$f.release" 2> /dev/null || :`)
+	}
 	if !session.Continues {
 		line(`s=%s k=no w= f=%s`, q(session.ID), q(paths.PiSessionFile(session.ID)))
 		start("")
 		line(`set -- "$@" --session "$f"`)
+		release()
 		return b.String()
 	}
+	supported := " and a session is continued only between boxes on Pi " + piSupported +
+		", the release this build supports"
 	staged := paths.SessionStaging()
 	carried := q(paths.SessionCarried())
 	from := q(staged + "/in/.pi/sessions/" + session.ID + ".jsonl")
@@ -224,8 +234,13 @@ func piSessionGate(session Session, paths Paths, rewired bool) string {
 	// conversation.
 	line(`  mv -f %s "$f"`, from)
 	line(`}`)
-	line(`s=%s k=yes w= h= d= f=%s`, q(session.ID), q(paths.PiSessionFile(session.ID)))
-	line(`grep -qF %s "$f" 2> /dev/null && h=1`, q(piConversation))
+	line(`s=%s k=yes w= h= d= x= f=%s`, q(session.ID), q(paths.PiSessionFile(session.ID)))
+	// EXACTLY THE SUPPORTED RELEASE, the box's and the writer's of the copy
+	// it holds; a carried archive's writer was judged before the launch
+	// ([Pi.Continues]).
+	line(`[ "$n" = %s ] || w="this box runs Pi ${n:-of a release it did not say},"%s`, piSupported, q(supported))
+	line(`if [ -z "$w" ] && grep -qF %s "$f" 2> /dev/null; then h=1; x=$(cat "$f.release" 2> /dev/null) || x=; [ "$x" = %s ] || h=; fi`,
+		q(piConversation), piSupported)
 	line(`if [ -s %s ]; then d=$(cksum < %s 2> /dev/null) || d=; fi`, carried, carried)
 	if session.Replaces {
 		line(`if [ -n "$h" ] && [ -s %s ]; then h=; fi`, carried)
@@ -233,8 +248,9 @@ func piSessionGate(session Session, paths Paths, rewired bool) string {
 		line(`if [ -n "$h" ] && [ -n "$d" ] && ! grep -qxF "$s $d" %s 2> /dev/null; then h=; fi`,
 			q(paths.SessionDigests()))
 	}
-	line(`if [ -z "$h" ]; then`)
-	line(`  if [ ! -s %s ]; then w='it is not in this box, and no archive of it was carried here'`, carried)
+	line(`if [ -z "$w" ] && [ -z "$h" ]; then`)
+	line(`  if [ ! -s %s ] && [ -n "$x" ]; then w="its copy in this box was written by Pi $x,"%s`, carried, q(supported))
+	line(`  elif [ ! -s %s ]; then w='it is not in this box, and no archive of it was carried here'`, carried)
 	line(`  elif ! command -v tar > /dev/null 2>&1 || ! command -v gzip > /dev/null 2>&1; then w='this box has no tar and gzip to restore its archive with'`)
 	line(`  elif ! pirestore; then w='its archive could not be restored'`)
 	// Continued only once its digest is recorded and read back, for
@@ -264,6 +280,7 @@ func piSessionGate(session Session, paths Paths, rewired bool) string {
 			q(paths.PiExtensionFresh()), q(paths.PiExtension()))
 	}
 	line(`fi`)
+	release()
 	return b.String()
 }
 
@@ -284,18 +301,18 @@ func (Pi) VersionCommand() string { return "pi --version" }
 func (Pi) layout() archiveLayout { return archiveTar }
 
 // Continues reports whether a session written by Pi release writer can be
-// continued in a box whose Pi is release box ([carrier]): both at or after
-// [piFloor], and never a box older than the writer.
+// continued in a box whose Pi is release box ([carrier]): only both exactly
+// [piSupported]. A box whose release is unread ("", a restore judged before
+// the box is asked) is held to the writer alone, and its script, which reads
+// the box's own, holds the box to it ([piSessionGate]).
 func (Pi) Continues(box, writer string) (bool, string) {
 	switch {
-	case !releaseAtLeast(box, piFloor):
-		return false, fmt.Sprintf("this box runs Pi %s, older than %s, the oldest that continues a session "+
-			"carried from another box", box, piFloor)
-	case !releaseAtLeast(writer, piFloor):
-		return false, fmt.Sprintf("the session was written by Pi %s, older than %s, the oldest whose session "+
-			"another box continues", writer, piFloor)
-	case !releaseAtLeast(box, writer):
-		return false, carriedOlder("Pi", box, writer)
+	case writer != piSupported:
+		return false, fmt.Sprintf("the session was written by Pi %s, and a session is continued only between "+
+			"boxes on Pi %s, the release this build supports", writer, piSupported)
+	case box != "" && box != piSupported:
+		return false, fmt.Sprintf("this box runs Pi %s, and the session, written by Pi %s, is continued only "+
+			"between boxes on Pi %s, the release this build supports", box, writer, piSupported)
 	}
 	return true, ""
 }
@@ -495,7 +512,7 @@ func (Pi) artifacts(p Paths) (files, dirs []string) { return nil, []string{p.PiR
 
 // notesOffWhy is what switches a Pi run's reading of notes off: the extension
 // failing to load, which pi says on the run's error stream ("Extension error")
-// and which fails the run ([piEvents.Result]). A release before [piFloor]
+// and which fails the run ([piEvents.Result]). A release before [piSupported]
 // runs nothing.
 func (Pi) notesOffWhy() string {
 	return "the run's extension failing to load, which pi names on the run's error stream"
