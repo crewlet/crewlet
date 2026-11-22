@@ -90,7 +90,7 @@ func (b *transcriptBuilder) geminiSession(ctx context.Context, r io.Reader) erro
 			return err
 		}
 		var w geminiEntryWire
-		if !wireObject(line) || wireAlias(line, &w) != nil {
+		if !wireObject(line) || !decodes(wireAlias, line, &w) {
 			return nil
 		}
 		if geminiSyncEnds(w.Patch, w.Rewind) {
@@ -139,7 +139,7 @@ func (b *transcriptBuilder) geminiResponded(r geminiResponse) error {
 		}
 	}
 	var calls []json.RawMessage
-	if len(r.calls) == 0 || r.calls[0] != '[' || wireDecode(r.calls, &calls) != nil {
+	if len(r.calls) == 0 || r.calls[0] != '[' || !decodes(wireDecode, r.calls, &calls) {
 		return nil
 	}
 	for _, raw := range calls {

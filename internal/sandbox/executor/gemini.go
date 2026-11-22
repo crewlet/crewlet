@@ -178,9 +178,9 @@ func (g GeminiCLI) WriteConfig(ctx context.Context, box sandbox.Sandbox, req san
 	}
 	files[paths.GeminiSettings()] = settings
 	for _, s := range req.Skills {
-		file, err := skillFile(geminiSkillName(s), s.Description, s.Body)
-		if err != nil {
-			return "", err
+		file, fileErr := skillFile(geminiSkillName(s), s.Description, s.Body)
+		if fileErr != nil {
+			return "", fileErr
 		}
 		files[paths.GeminiSkills()+"/"+geminiSkillName(s)+"/SKILL.md"] = file
 	}
