@@ -143,9 +143,10 @@ roles:
 }
 
 // THE MODELS SCREEN KNOWS EVERY HARNESS AS ITS PROFILE READS: the sign-ins, key
-// variable, login, web and Ask Crewlet rules, effort levels and whether it runs a
-// seat's executor HARNESS_FACTS gives each built-in harness are its profile's,
-// so the wizard offers nothing the engine refuses.
+// variable, login, web and Ask Crewlet rules and effort levels HARNESS_FACTS
+// gives each built-in harness are its profile's, so the wizard offers nothing
+// the engine refuses. Which harness runs a seat's executor is not among them:
+// `llm_entries` serves it (`executor_harnesses`).
 func TestTheModelsScreenKnowsEveryHarnessAsItsProfileReads(t *testing.T) {
 	t.Parallel()
 	body, err := clientsource.Literal(clientsource.Tree(t), "HARNESS_FACTS")
@@ -217,7 +218,6 @@ func TestTheModelsScreenKnowsEveryHarnessAsItsProfileReads(t *testing.T) {
 			{"effortNote", one(facts, "effortNote"), p.EffortNote},
 			{"webDeniable", one(facts, "webDeniable"), map[bool]string{true: "true"}[slices.Contains(harnessprofile.WebDeniable(), name)]},
 			{"assistant", one(facts, "assistant"), map[bool]string{true: "true"}[slices.Contains(harnessprofile.HelperEligible(), name)]},
-			{"executor", one(facts, "executor"), map[bool]string{true: "true"}[slices.Contains(harnessprofile.ExecutorRunners(), name)]},
 		} {
 			if tc.got != tc.want {
 				t.Errorf("%s: %s %q, want the profile's %q", name, tc.field, tc.got, tc.want)
