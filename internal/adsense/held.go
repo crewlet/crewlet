@@ -146,15 +146,20 @@ func (p *Product) Card(ctx context.Context, call growth.Call, binding string) (g
 	return p.client.Card(call, h, binding, class), nil
 }
 
-// Apply makes a prepared write once, reading its target again first and
-// sending nothing where it moved since binding was taken.
+// Apply makes a prepared write once, building it again and, under its
+// account's lease, holding it to the seat's scope and reading its target
+// again, sending nothing where it moved since binding was taken
+// (googlegrowth's Client.Apply). Every record names the tool's class.
 func (p *Product) Apply(ctx context.Context, call growth.Call, binding string) (any, error) {
-	h, class, err := p.prepared(ctx, call)
-	if class == "" {
-		tool, _ := p.Catalog().Tool(call.Tool)
-		class = tool.Class
+	req, _, err := p.requestOf(call)
+	if err == nil && req.Reads() {
+		err = refusal(growth.RefusedInvalid, call.Tool+" only reads AdSense, so it is run, never applied as a "+
+			"change. No vendor was reached.")
 	}
-	return p.client.Apply(ctx, call, h, err, binding, class, nil)
+	tool, _ := p.Catalog().Tool(call.Tool)
+	return p.client.Apply(ctx, call, googlegrowth.Write{Req: req, Err: err, Class: tool.Class,
+		Scope: func(context.Context) error { return p.inScope(call.Handle, req) },
+		Read:  func(ctx context.Context) ([]byte, error) { return p.before(ctx, call.Handle, req) }}, binding)
 }
 
 // classOf is the class req comes to on its target as before reads: its

@@ -255,8 +255,8 @@ func TestAHeldChangeWhoseTargetMovedSendsNothing(t *testing.T) {
 		t.Error("the delete was sent though its channel moved")
 	}
 	steps, _ := h.audit.take()
-	if !slices.Equal(steps, []growth.Step{growth.StepVoid}) {
-		t.Errorf("the access log holds %v, want one void", steps)
+	if !slices.Equal(steps, []growth.Step{growth.StepAllowed, growth.StepVoid}) {
+		t.Errorf("the access log holds %v, want the answer, then one void", steps)
 	}
 }
 

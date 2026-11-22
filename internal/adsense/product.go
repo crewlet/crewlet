@@ -26,14 +26,15 @@ type Product struct {
 }
 
 // New is the product on the engine's active document, the company's consent
-// grant and the access log; hc is nil in production.
+// grant, the access log and the engine's growth act lease; hc is nil in
+// production.
 func New(company func() *config.Company, env func() *config.Resolver, grant googlegrowth.Grant,
-	audit googlegrowth.Audit, hc *http.Client) *Product {
+	audit googlegrowth.Audit, leases googlegrowth.Leaser, hc *http.Client) *Product {
 	return &Product{
 		company: company,
 		client: &googlegrowth.Client{
-			Kind: string(Kind), Name: "AdSense", Company: company, Env: env, Grant: grant, Audit: audit, HTTP: hc,
-			Texts: []string{"displayName", "description", "title"}, Refused: vendorRefusal,
+			Kind: string(Kind), Name: "AdSense", Company: company, Env: env, Grant: grant, Audit: audit,
+			Leases: leases, HTTP: hc, Texts: []string{"displayName", "description", "title"}, Refused: vendorRefusal,
 		},
 		now:      time.Now,
 		accounts: newAccountCache(),

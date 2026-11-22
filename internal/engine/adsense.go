@@ -12,7 +12,7 @@ import (
 // and the pass's reads.
 func (e *Engine) adSense() *adsense.Product {
 	return adsense.New(e.runningConfig, e.resolver, consentGrant{engine: e, kind: integration.KindAdSense},
-		e.GrowthAudit(), nil)
+		e.GrowthAudit(), growthLeases{engine: e}, nil)
 }
 
 // adSensePass checks AdSense's company half: its consent grant, which every
