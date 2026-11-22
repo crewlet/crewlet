@@ -354,6 +354,15 @@ func withheldAs(t *testing.T, box *boxhelpertest.Box, home string, reason browse
 	}
 }
 
+// setEnsureDeadline writes ms as the box's ensure_deadline_ms, which each
+// ensure reads from config.json as it starts.
+func setEnsureDeadline(t *testing.T, box *boxhelpertest.Box, ms any) {
+	t.Helper()
+	config := box.Config(t)
+	config["ensure_deadline_ms"] = ms
+	box.SetConfig(t, config)
+}
+
 // rename renames from to to, failing t.
 func rename(t *testing.T, from, to string) {
 	t.Helper()
@@ -382,7 +391,8 @@ func appendTo(t *testing.T, file, text string) {
 // with its group and no tree published, and the next ensure leaves pw/
 // holding the tree alone; passed while the supervisor launches, it is
 // supervisor_failed timeout. The deadline (2 s) is each row's subject, every
-// bound it races set past the case.
+// bound it races set past the case; the install row's next ensure, which
+// installs for real, runs under the deadline the box ships with.
 //
 // Mutations, each red: answer supervisor_failed at every deadline; leave npm
 // running at the deadline (the stand-in outlives the case's wait).
@@ -393,8 +403,9 @@ func TestEnsuresDeadlineAnswersForTheStepItCaught(t *testing.T) {
 		t.Parallel()
 		t.Run("during the install", func(t *testing.T) {
 			t.Parallel()
-			box := boxhelpertest.Start(t, env, boxhelpertest.Options{Route: boxhelpertest.NoChromium,
-				Config: map[string]any{"ensure_deadline_ms": 2000}})
+			box := boxhelpertest.Start(t, env, boxhelpertest.Options{Route: boxhelpertest.NoChromium})
+			shipped := box.Config(t)["ensure_deadline_ms"]
+			setEnsureDeadline(t, box, 2000)
 			// It stops by itself if a failed case leaves it.
 			box.StandInNPM(t, "11.0.0", `echo $$ >"$HOME/npm.pid"`+"\nexec sleep 600")
 			withheldAs(t, box, box.Home, browser.ReasonPlaywrightMissing, browser.CauseTimeout)
@@ -416,6 +427,7 @@ func TestEnsuresDeadlineAnswersForTheStepItCaught(t *testing.T) {
 				}
 			}
 			relink(t, box, env)
+			setEnsureDeadline(t, box, shipped)
 			withheldAs(t, box, box.Home, browser.ReasonChromiumMissing, browser.CauseNotFound)
 			if left := inPW(t, box); len(left) != 1 || !nameOf(t, box).MatchString(left[0]) {
 				t.Errorf("pw/ holds %q after the next ensure, want the tree alone", left)
