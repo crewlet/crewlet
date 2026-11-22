@@ -2356,10 +2356,18 @@ cursor-agent:
     - sentinel: "Authentication required"
 
 copilot:
+  # The in-box runner (internal/sandbox/executor's copilot.go), on 1.0.114, the
+  # release supported. No refuses_root: 1.0.114 ran --yolo as uid 0 and ran its tools
+  # (measured in a node:24-bookworm container). E2B's prebuilt `copilot`
+  # template (docs.e2b.dev/agents/copilot-cli) pins no release of ours; the
+  # run's script refuses one below 1.0.114.
+  executor:
+    runner: true
+    e2b_template: copilot
   binary: copilot
-  written_for: "GitHub Copilot CLI 1.0.x, measured on 1.0.103 (`copilot --version`)"
+  written_for: "GitHub Copilot CLI 1.0.114 (`copilot --version`)"
   version_args: ["--version"]
-  # EVERY FLAG BELOW KEEPS THE HARNESS TO ITS CALL. Measured on 1.0.103 through
+  # EVERY FLAG BELOW KEEPS THE HARNESS TO ITS CALL. Measured on 1.0.114 through
   # the engine's own code path, on a custom provider (COPILOT_PROVIDER_BASE_URL
   # at a local stand-in), with the state directory inside a git checkout and
   # every level above the call holding an AGENTS.md, CLAUDE.md, GEMINI.md,
@@ -2373,8 +2381,8 @@ copilot:
   #                               tools" line, a line per tool call and a
   #                               usage footer around the answer.
   #   --disable-client-telemetry  no connection but the call's own: without
-  #                               it every call looked up three hosts that
-  #                               are not the provider; with it, none, and
+  #                               it a call looked up api.github.com, which
+  #                               is not the provider; with it, none, and
   #                               the request is unchanged.
   #   --available-tools           the tools that EXIST for the call: the web
   #                               tools. The deny list alone does not get
@@ -2383,21 +2391,31 @@ copilot:
   #                               glob, task, sql among them), refused only
   #                               once called — and the allowlist also takes
   #                               the skill and custom-agent listings out of
-  #                               the system prompt (8.4k characters of
-  #                               vendor prompt instead of 22.5k). It fails
+  #                               the system prompt (7.7k characters of
+  #                               vendor prompt instead of 21.6k). It fails
   #                               closed: a name that matches no tool adds
   #                               nothing. web_fetch is the harness's own fetch;
   #                               web_search does not exist on a custom
-  #                               provider, and the 1.0.103 bundle lists it
+  #                               provider, and the 1.0.114 bundle lists it
   #                               among the tools of the built-in GitHub MCP
   #                               server on a GitHub sign-in, which is why
   #                               that server is left on (not measured: no
   #                               GitHub sign-in).
-  #   --allow-tool                the web tools have to be ALLOWED as well as
-  #                               present: prompt mode never asks.
+  #   --allow-all-urls            what lets web_fetch fetch. A fetch asks a
+  #                               URL permission, which prompt mode cannot
+  #                               answer: with --allow-tool web_fetch alone it
+  #                               was denied ("Permission denied because no
+  #                               interactive user response was available").
+  #                               With --allow-all-urls it ran, with or
+  #                               without that --allow-tool, which is not
+  #                               passed.
+  #   --allow-tool                web_search, unmeasured (no GitHub sign-in).
   #   --deny-tool                 beside the allowlist, the shell, write and
   #                               read permission kinds; a denial wins over
-  #                               an allow.
+  #                               an allow (--allow-tool crewlet beside
+  #                               --deny-tool crewlet was refused). It does
+  #                               not reach a fetch: --deny-tool web_fetch
+  #                               beside --allow-all-urls did not stop one.
   #
   # Every value sits beside its own flag: each of these flags takes a LIST,
   # so a value standing alone after one would be read into it.
@@ -2420,9 +2438,8 @@ copilot:
     - "--available-tools"
     - "web_search"
     - "--allow-tool"
-    - "web_fetch"
-    - "--allow-tool"
     - "web_search"
+    - "--allow-all-urls"
     - "--deny-tool"
     - "shell"
     - "--deny-tool"
@@ -2430,10 +2447,30 @@ copilot:
     - "--deny-tool"
     - "read"
   local_tools: denied
-  web_tools_note: "no web denial: --deny-tool web_fetch and web_search would be one, but it has not been measured against a copilot harness, so this profile cannot serve the assistant"
+  # WEB OFF: the web tools out of --available-tools and no URL allowed, nothing
+  # left to --deny-tool. Measured on 1.0.114: with --allow-all-urls,
+  # --allow-url, COPILOT_ALLOW_ALL=true and a home allowedUrls all set, a
+  # web_fetch call was answered "Tool 'web_fetch' does not exist", with the
+  # crewlet server and without. `crewlet` keeps the allowlist where a call has
+  # no server: an empty --available-tools is no allowlist (all 21 tools were
+  # offered), and a name matching no tool adds nothing.
+  web_tools_note: "web_fetch and web_search left out of --available-tools, no URL allowed; measured: web_fetch does not exist on 1.0.114"
+  web_denial:
+    complete_args:
+      - "-s"
+      - "--disable-client-telemetry"
+      - "--available-tools"
+      - "crewlet"
+      - "--deny-tool"
+      - "shell"
+      - "--deny-tool"
+      - "write"
+      - "--deny-tool"
+      - "read"
   model_args: ["--model", "{model}"]
-  # Read from 1.0.103: clap refuses any other value; a level the model lacks is
-  # logged and the run continues on the model's default.
+  # Measured on 1.0.114: clap refuses any other value, and a model that refuses
+  # the effort fails the call (a stand-in answering 400: exit 1, the
+  # provider's message on stderr).
   effort:
     args: ["--reasoning-effort", "{effort}"]
     levels: [none, minimal, low, medium, high, xhigh, max]
@@ -2444,12 +2481,12 @@ copilot:
   #
   # The append channel is an AGENTS.md in the call's own directory, which the
   # harness reads on every run with nothing on argv asking for it. Measured on
-  # 1.0.103: its text lands inside the system prompt as a
+  # 1.0.114: its text lands inside the system prompt as a
   # <custom_instruction> block, after the vendor's identity ("You are the
   # GitHub Copilot CLI, a terminal assistant built by GitHub. You are running
   # in non-interactive mode…"), its tool guidance and its environment block,
-  # and before a session block; about 8,400 characters of vendor prompt with
-  # the tools above, 6,200 of them before the engine's text. A 128 KB text
+  # and before a session block; about 7,800 characters of vendor prompt with
+  # the tools above, 5,850 of them before the engine's text. A 128 KB text
   # arrived whole. The environment block names the call's directory, so
   # per-call bytes precede the engine's text and nothing about this channel
   # is a cacheable prefix.
@@ -2470,18 +2507,20 @@ copilot:
   # cached tokens (measured: a reply reporting 1,000 prompt tokens, 600 of
   # them cached, was recorded as inputTokens 1000 and cacheReadTokens 600),
   # so the cached reads are reported and not added again
-  # (input_includes_cache). cacheWriteTokens is not read: every measured call
-  # wrote 0, so whether the input count holds a write too is unmeasured. One
-  # entry per model the call used; every measured call used one.
+  # (input_includes_cache). Its cache writes are inside it too: a reply
+  # reporting cache_write_tokens 11 of its 1,000 was recorded as
+  # cacheWriteTokens 11 and inputTokens 1000 (measured on 1.0.114, against a
+  # stand-in). One entry per model the call used; every measured call used one.
   usage_file_args: ["--usage-output-file", "{usage_file}"]
   usage:
     input: [["providerModelMetrics", "0", "metrics", "usage", "inputTokens"]]
     output: [["providerModelMetrics", "0", "metrics", "usage", "outputTokens"]]
     cache_read: [["providerModelMetrics", "0", "metrics", "usage", "cacheReadTokens"]]
+    cache_write: [["providerModelMetrics", "0", "metrics", "usage", "cacheWriteTokens"]]
     input_includes_cache: true
   # NO SERVER OF THE HOME'S OWN: the harness starts every server its home's
   # mcp-config.json names on every run, beside any --additional-mcp-config —
-  # measured on 1.0.103, a server planted there started — and nothing in its
+  # measured on 1.0.114, a server planted there started — and nothing in its
   # help or settings keeps that file out, so the profile writes it, empty,
   # every generation.
   seed_files:
@@ -2491,21 +2530,23 @@ copilot:
   # own directory, added with --additional-mcp-config, made available beside
   # the web tools (--available-tools) and allowed (--allow-tool) by the
   # server's name, which covers every tool it lists — one activated mid-run
-  # included. Measured on 1.0.103 through the engine's own code path on a
+  # included. Measured on 1.0.114 through the engine's own code path on a
   # custom provider against a local stand-in, the state directory inside a
   # checkout holding an .mcp.json, .github/mcp.json, .vscode/mcp.json,
   # .copilot/mcp-config.json and every other harness's MCP configuration at each
   # level above the call, and a server in the home's mcp-config.json: the
   # model was offered the seat's tools, and no other server started. (Offline,
-  # as the stand-in needs, the harness offers no web tool and starts no built-in
+  # under COPILOT_OFFLINE, the harness offers no web tool and starts no built-in
   # GitHub server; signed in to GitHub it starts that server, whose tools the
   # available-tools list holds to web_search.)
   #
   # The server's `timeout` is the harness's per-call timeout, in milliseconds
   # (4,000 gave a slow call up at 4.0s). The harness re-reads the server's list
-  # when told it changed — a tool activated mid-run was offered from the
-  # request after the one the activation's result went back in — and makes
-  # one response's calls at once. A failed run says why on stderr.
+  # when told it changed: a tool activated mid-run was offered in the request
+  # carrying the activation's result when the server said so before answering,
+  # as the engine's does, and from the first request after its re-list when
+  # told 200 ms later. It makes one response's calls at once. A failed run says
+  # why on stderr.
   mcp:
     seed:
       - path: crewlet-mcp.json
@@ -2521,15 +2562,16 @@ copilot:
   # opens it, a usage_record carries its counts (the input count holding the
   # cached tokens, as the usage report's does), and assistant.message its
   # prose and the calls it asked for, each written before the calls run. The
-  # harness sends no id of its own with a call; a call is joined to its request by
-  # name and arguments, the server's tools spelled `crewlet-<name>`.
+  # harness hands the server each call's toolCallId in its `_meta`, as
+  # `com.github.copilot/toolCallId`, so a call is joined to its request by id
+  # (measured on 1.0.114); the server's tools are spelled `crewlet-<name>`.
   #
   # The session's directory is named by an id the harness mints — --session-id
   # takes a UUID only, which the engine's session id is not — so the file is
   # told by its first line, whose session.start names the call's working
   # directory (owner).
   #
-  # Measured on 1.0.103: each request's counts in the file before its calls
+  # Measured on 1.0.114: each request's counts in the file before its calls
   # had returned, their sum equal to the usage report's.
   requests:
     source: file
@@ -2537,6 +2579,7 @@ copilot:
     file: ".copilot/session-state/*/events.jsonl"
     owner: {path: ["data", "context", "cwd"], equals: "{work}"}
     host_prefix: "crewlet-"
+    call_id_meta: "com.github.copilot/toolCallId"
     events:
       - match: [{path: ["type"], equals: "assistant.turn_start"}]
         id: ["data", "turnId"]
@@ -2546,6 +2589,7 @@ copilot:
           input: [["data", "usage", "inputTokens"]]
           output: [["data", "usage", "outputTokens"]]
           cache_read: [["data", "usage", "cacheReadTokens"]]
+          cache_write: [["data", "usage", "cacheWriteTokens"]]
           input_includes_cache: true
       - match: [{path: ["type"], equals: "assistant.message"}]
         id: ["data", "turnId"]
@@ -2558,14 +2602,14 @@ copilot:
   env:
     # Auto-update is on by default for a standalone install, and it would
     # download a newer harness into each seat's own cache and run that instead
-    # of the one installed. Read from `copilot help environment` on 1.0.103;
+    # of the one installed. Read from `copilot help environment` on 1.0.114;
     # no measured call attempted an update.
     COPILOT_AUTO_UPDATE: "false"
   # THE LOGIN IS THE SYSTEM KEYCHAIN'S, or this file's. `copilot login` keeps
   # its token in the keychain — the Secret Service on Linux — and where none
   # answers, as on a headless engine host, asks "Store token in plaintext
   # config file? (y/N)" and, told yes, writes it under `copilotTokens` in
-  # .copilot/config.json (read from the 1.0.103 bundle and its runtime
+  # .copilot/config.json (read from the 1.0.114 bundle and its runtime
   # addon; `.copilot/hosts.json`, which this list named before, appears in
   # neither). A login kept in a keychain is out of a seat's reach: sign the
   # entry in with `crewlet llm login`, answering yes, or give it a token
@@ -2577,19 +2621,22 @@ copilot:
   credential_paths: [".copilot/config.json"]
   login_keys:
     config.json: "copilotTokens"
-  # What a call leaves in the seat's home, measured on 1.0.103: a session
-  # directory holding the call's events, and the session database every
-  # session is indexed in (which the harness's own session_store_sql tool
-  # queries). The standalone binary also unpacks its 236 MB package under
+  # What a call leaves in the seat's home, measured on 1.0.114: a session
+  # directory holding the call's events, the session database every session
+  # is indexed in (which the harness's own session_store_sql tool queries)
+  # with its write-ahead log and shared memory, an empty installed-plugins
+  # directory and an empty settings.json.lock, all outliving the call.
+  # The standalone binary also unpacks its 282 MB package under
   # XDG_CACHE_HOME/copilot/pkg on its first run, once per seat: the cache
   # is the seat's own, and nothing in a profile can point it elsewhere.
   volatile_paths:
     - ".copilot/logs"
     - ".copilot/session-state"
     - ".copilot/session-store.db"
-    - ".copilot/session-store.db-journal"
     - ".copilot/session-store.db-wal"
     - ".copilot/session-store.db-shm"
+    - ".copilot/installed-plugins"
+    - ".copilot/settings.json.lock"
   # NOT gh's `.config/gh/hosts.yml`, which this list named beside it.
   # `-from-host` keeps an adopted file under its file name and a seat is
   # seeded only with the names credential_paths gives, so gh's file was
@@ -2601,11 +2648,22 @@ copilot:
   # a GitHub token.
   host_credential_paths: [".copilot/config.json"]
   # Copilot authenticates with a GitHub token, read from COPILOT_GITHUB_TOKEN,
-  # then GH_TOKEN, then GITHUB_TOKEN (read from the 1.0.103 bundle): this is
-  # the first of the three and the harness's own, so it outranks the generic two,
-  # which a code-host integration's token is kept under. Reached deliberately
-  # through auth.mode api-key or inherit-env, never forwarded silently.
+  # then GH_TOKEN, then GITHUB_TOKEN, ALL THREE ABOVE ITS OWN LOGIN. Measured on
+  # 1.0.114 (--log-level debug): its sign-in tries Hmac, ApiKey and
+  # CopilotApiToken, then GitHubToken (these variables), and only then
+  # UserToken (the login config.json or a keychain holds) and GhCli; a GitHub
+  # App installation token (ghs_) in GITHUB_TOKEN is taken as GitHubToken.
+  # `copilot help environment` says the same: "takes precedence over
+  # previously stored credentials". COPILOT_GITHUB_TOKEN is the harness's own,
+  # reached deliberately through auth.mode api-key or inherit-env.
   api_key_env: "COPILOT_GITHUB_TOKEN"
+  # THE GENERIC TWO SIGN COPILOT IN AS SURELY: listed, a code-host
+  # integration's token kept under one (GitHub's GITHUB_TOKEN) is withheld from
+  # a Copilot executor's box rather than signing its model calls in over the
+  # seat's login, and auth.mode env takes a GitHub token under either. The
+  # agent's git and gh still have the token: the GitHub integration's file,
+  # ~/.config/crewlet/github-token, is written whatever its variable is.
+  sign_in_env: ["GH_TOKEN", "GITHUB_TOKEN"]
   login_args: ["login"]
   logout_args: ["logout"]
   # NOT MEASURED, the limit markers below: generic phrases rather than this
@@ -2617,10 +2675,28 @@ copilot:
   limit_markers:
     - sentinel: "usage limit"
     - sentinel: "rate limit"
-  # The harness's own words. Signed out, 1.0.103 exits 1 on "Error: No
+  # The harness's own report, measured on 1.0.114 against a stand-in model
+  # through COPILOT_PROVIDER_* (BYOK), NOT against GitHub's service: a 429,
+  # retried five times, ends the run on a `session.error` of errorType
+  # `rate_limit`, exit 1, in the session's events.jsonl (`in: record`) and on an
+  # executor's stream, whose "Rate limit" no sentinel above matches. `quota` is
+  # the other limit type session-events.d.ts declares. No said_path: the whole
+  # line is what is shown, so the service's errorCode (user_weekly_rate_limited,
+  # quota_exceeded, ...) is kept beside the sentence.
+  limit_events:
+    - in: record
+      match:
+        - {path: ["type"], equals: "session.error"}
+        - {path: ["data", "errorType"], equals: "rate_limit"}
+    - in: record
+      match:
+        - {path: ["type"], equals: "session.error"}
+        - {path: ["data", "errorType"], equals: "quota"}
+  # The harness's own words. Signed out, 1.0.114 exits 1 on "Error: No
   # authentication information found." (measured); a credential the service
-  # refuses is "Authentication failed due to invalid credentials" (read from
-  # the 1.0.103 bundle).
+  # refuses is "Authentication failed for this account. Sign in again with
+  # /login, then retry." or "Authentication failed: <reason>" (read from the
+  # 1.0.114 bundle).
   auth_markers:
     - sentinel: "No authentication information found"
     - sentinel: "Authentication failed"
@@ -2930,13 +3006,20 @@ grok:
     - sentinel: "Unauthorized (401)"
 
 muse-code:
+  # A seat's executor (internal/sandbox/executor, muse.go), on 1.4.25: an older
+  # release is refused, a newer one runs sessions of its own only. No E2B template: no prebuilt image is known to hold Muse Code, so a
+  # company names its own (docs/concepts/code-sandbox.md has the recipe).
+  # Nothing measured refuses root under --yolo (1.4.25 in a node:24-bookworm
+  # container, as uid 0).
+  executor:
+    runner: true
   binary: muse
   # Meta's own family, and the field is an open set for exactly this case:
   # writing `openai` because Meta's Model API also speaks chat-completions
   # would make the profile say something false about the model to buy nothing
   # — an unknown family already falls back to the same catalogue default.
   #
-  # MEASURED ON 1.4.25 (as on 1.4.13 and 1.0.3 before it) through the engine's
+  # MEASURED ON 1.4.25 through the engine's
   # own code path against a stub HTTP endpoint on 127.0.0.1 standing in for
   # Meta's Model API: a call with tools over the real relay and side passes,
   # with the state directory inside a git checkout whose root, and a directory
@@ -2959,10 +3042,8 @@ muse-code:
   #
   # --json is the stream the answer, the counts and each request are read
   # from (below), and where a failed run's cause is read by field: the
-  # `run.terminal.failed` event's `payload.reason`. 1.4.25 also writes it on
-  # stderr, as `run ended with Failed: <reason>`; 1.4.13 wrote only the fixed
-  # "run ended with Failed" there, so without the event a spent plan was a
-  # bare exit 1 that no marker could read.
+  # `run.terminal.failed` event's `payload.reason`, which 1.4.25 also writes on
+  # stderr, as `run ended with Failed: <reason>`.
   #
   # --no-session-log is this harness's isolation flag and the counterpart of
   # claude-code's --no-session-persistence: no retained session event log, so
@@ -2979,16 +3060,17 @@ muse-code:
   # until the wall-clock cap fires. Same reason opencode's seeded policy has
   # no `ask` in it and denies the tool that asks a person.
   #
-  # --disable-shell and --disable-write are DEFENCE IN DEPTH AND NOTHING MORE.
-  # Measured against 1.0.3: with both set, `bash`, `bash_input`, `write_file`
-  # and `edit_file` are still advertised to the model, byte-identical to the
-  # baseline surface. They are call-time refusals, not a denial of the tool.
-  # What actually removes them is run.toolset in the seeded settings file
-  # below; these two are here so that a build whose settings file failed to
-  # apply still refuses the call rather than running it.
+  # --disable-shell and --disable-write are DEFENCE IN DEPTH. Measured on
+  # 1.4.25 with no toolset: they take `bash`, `bash_input`, `write_file`,
+  # `edit_file` and the memory's writes off the surface, and leave the rest of
+  # the harness's own tools offered (`read_file`, `search`, the subagent and
+  # work families, `read_skill`, `write_todos` among them). What narrows the
+  # surface to the web tools is run.toolset in the seeded settings file
+  # below; these two are here so that a settings file that failed to apply
+  # still leaves no shell and no write.
   #
   # --no-foreign-personal-context keeps OTHER HARNESSES' personal rules and skills
-  # out of the call. Measured on 1.4.25 as on the earlier builds: a
+  # out of the call. Measured on 1.4.25: a
   # ~/.claude/CLAUDE.md and a skill under ~/.claude/skills, planted in the
   # seat's home, reached the developer message without the flag and did not
   # with it. The binary also reads CLAUDE_CONFIG_DIR and CODEX_HOME, which an
@@ -2999,11 +3081,9 @@ muse-code:
   # --disable-reminders turns off the harness's REMINDER OBSERVERS, each a
   # model request of its own that re-sends the call's prompt (the engine's
   # whole transcript) under instructions of its own, beside the main request:
-  # on 1.4.25 the goal observer (four requests beside a call's two, measured),
-  # on 1.4.13 goal and verify, on 1.0.3 skill, goal and verify. With the flag
-  # a 1.4.25 call makes one model request per turn. They are billed like any
-  # request, and each is one the engine never asked for. 1.0.x HAS NO SUCH FLAG
-  # and refuses it ("unknown option --disable-reminders", exit 2, measured).
+  # on 1.4.25 the goal observer (four requests beside a call's two, measured).
+  # With the flag a call makes one model request per turn. They are billed
+  # like any request, and each is one the engine never asked for.
   #
   # NOT --sandbox-network: it governs the OS sandbox around SHELL commands,
   # and the seeded toolset leaves no shell to sandbox.
@@ -3018,12 +3098,12 @@ muse-code:
   # marker, both levels' AGENTS.md reached the request and both .mcp.json
   # servers started; with it, none did, and no planted hook ran. A hook file in
   # the call's directory itself would run; nothing writes one there. The tool
-  # surface stays exactly the toolset, trusted; on 1.4.13 trust added six
-  # subagent tools past it, which is why this profile is written for 1.4.25.
+  # surface stays exactly the toolset, trusted.
   #
-  # Not --max-model-steps: breaching it exits 1, so a cap would DISCARD a
-  # finished answer, and timeout_seconds already bounds the call from the
-  # outside without throwing the work away.
+  # Not --max-model-steps: breaching it fails the run ("model did not reach a
+  # terminal state within N step(s)", exit 1, measured), so a cap would
+  # DISCARD a finished answer, and timeout_seconds already bounds the call
+  # from the outside without throwing the work away.
   complete_args:
     - "exec"
     - "--json"
@@ -3043,24 +3123,19 @@ muse-code:
   #
   # The two names are the harness's own web tools, the one local surface this
   # backend never denies. Measured on 1.4.25, trusted, they are the whole of
-  # the harness's own namespace: `web_search`, and `web_fetch`. On 1.0.3
-  # `web_fetch` is gated off by a remote rollout, so naming it admits nothing
-  # there, and three engine-owned tools survive any toolset — read_skill,
-  # snooze_reminder and write_todos, which read the harness's own skill catalogue,
-  # pause its reminders and keep its todo list; 1.4.13 and 1.4.25 offer none of
-  # them.
+  # the harness's own namespace: `web_search`, and `web_fetch`; no tool of its
+  # own survives the toolset.
   #
   # provider_retry.max_retries is 3 because the harness's own retries otherwise
-  # outlast the call. It retries a 429 with a delay that doubles from one
-  # second up to a minute (measured on 1.4.13: nine attempts, and still
-  # retrying when a four-minute wall-clock cap stopped the call), so a spent
-  # plan reached this backend as a TIMEOUT after the whole of timeout_seconds,
-  # which never sits the entry out, and the next call waited as long again.
-  # Three retries take seven seconds, which rides out a burst, and then the
-  # harness reports the limit itself — "API error 429: … (rate_limit_error) (after
-  # 4 provider attempts)", measured on both builds — so the entry sits out for
-  # the engine's one minute and the seat's chain carries on. The wait beyond a
-  # burst is the engine's to decide, not the harness's.
+  # outlast the call. Measured on 1.4.25, it makes ten attempts at a 429, the
+  # delay doubling from one second (1, 2, 4, 8, 16, 32 s and on) where the
+  # answer names no retry-after, so a spent plan reached this backend as a
+  # TIMEOUT after the whole of timeout_seconds, which never sits the entry
+  # out, and the next call waited as long again. Three retries take seven
+  # seconds, which rides out a burst, and then the harness reports the limit
+  # itself, "API error 429: … (rate_limit_error) (after 4 provider attempts)",
+  # so the entry sits out for the engine's one minute and the seat's chain
+  # carries on. The wait beyond a burst is the engine's to decide.
   #
   # "schema_version": 1 is MANDATORY: a settings file without it fails every
   # command at startup with `malformed settings file`.
@@ -3075,8 +3150,9 @@ muse-code:
     - path: .config/muse/settings.json
       content: '{"schema_version":1,"run":{"toolset":["web_search","web_fetch"]},"provider_retry":{"max_retries":3},"telemetry":{"enabled":false}}'
   model_args: ["--model", "{model}"]
-  # Read from 1.4.13: `none` is refused on Meta's provider and `ultra` is
-  # gated, so neither is offered.
+  # Measured on 1.4.25: `none` is refused on Meta's provider ("--reasoning-effort
+  # none is not supported with --provider meta", exit 2) and `ultra` is gated
+  # (the run falls back to xhigh, saying so), so neither is offered.
   effort:
     args: ["--reasoning-effort", "{effort}"]
     levels: [minimal, low, medium, high, xhigh, max]
@@ -3085,12 +3161,12 @@ muse-code:
   # appends, after a blank line, at the very end of its own instructions —
   # 64,155 characters on 1.4.25, opening "You are Muse Code, an agentic coding
   # CLI (command line interface) that helps users with software engineering
-  # tasks." (48,043 on 1.4.13, 37,518 on 1.0.3). Measured through the engine on
-  # each: the vendor's instructions were kept whole, they were byte-identical from
+  # tasks." Measured through the engine on 1.4.25: the vendor's instructions
+  # were kept whole, they were byte-identical from
   # one call to the next, so nothing per-call stands before the engine's text,
   # and the per-call workspace root travels in the developer message after
-  # them. The variable is in the binary's own list of what it reads at startup
-  # on each build, and is no part of the vendor's documentation, so a release
+  # them. The variable is in the binary's own list of what it reads at startup,
+  # and is no part of the vendor's documentation, so a release
   # may drop it without notice — and the seat's text would then reach the
   # model nowhere, with no error. An operator who would rather not depend on
   # it sets `overrides: {append_system_prompt: {env: ""}}`, which returns the
@@ -3101,7 +3177,7 @@ muse-code:
   # NO REPLACE CHANNEL PER CALL, so a side pass takes the append channel too.
   # `run.system_prompt` in the settings file replaces the instructions whole,
   # but that file is the seat's, which every call it runs at once shares; and
-  # 1.4.x's `-c run.system_prompt=…` would put the text on argv.
+  # `-c run.system_prompt=…` would put the text on argv.
   #
   # The vendor keys its prompt cache per session (`prompt_cache_key` is
   # `tbh:main:<session>`), and every call here is a session of its own.
@@ -3136,9 +3212,9 @@ muse-code:
   # terminal one, by every run: per model, `input_tokens` WITH the cached part
   # in it (`cached_tokens`) and `output_tokens` with the reasoning in it
   # (`reasoning_tokens`, which is therefore not read as well). Measured on
-  # 1.4.13 against a stand-in reporting 40 cached and 7 reasoning tokens on
-  # each of three requests of 102 to 104 tokens: 309 in, 120 of them cached,
-  # 36 out, 21 of them reasoning; and a text function's own. Summed over every
+  # 1.4.25 against a stand-in reporting 1,001 prompt tokens with 400 cached and
+  # 50 output with 7 reasoning: `run.usage` 1001 in, 400 of them cached, 50
+  # out, 7 of them reasoning, as the provider counted them. Summed over every
   # model the run used.
   usage:
     input: [["payload", "models", "*", "input_tokens"]]
@@ -3161,18 +3237,18 @@ muse-code:
   # the seat's, which every call shares; its project files are read from the
   # trusted call directory alone, which the `.git` marker bounds (see
   # --trust-workspace above); and a plugin's server or hook needs an approval
-  # in that same settings file. Measured on 1.4.25 (and 1.4.13) through the
+  # in that same settings file. Measured on 1.4.25 through the
   # engine's own code path against a local stand-in, with servers planted in
   # ~/.claude.json and ~/.codex/config.toml, and in an .mcp.json and a
   # .muse/settings.json at every level of a checkout above the call: the model
   # was offered the seat's tools and the two web tools, and no other server
   # started. The seed_files settings file is what keeps the home's out
-  # (without it a server planted there started on every call, text functions
-  # included, on 1.4.13) and, naming no approval, what keeps an installed
-  # plugin from running (measured outside the engine: an installed, approved
-  # plugin's server started on 1.4.13 and its hooks ran on a trusted 1.4.25
-  # run, and with the seeded file in place of the settings neither did);
-  # plugins live under the volatile .local/share/muse besides.
+  # (without it a server planted there started on every call, measured) and,
+  # naming no approval, what keeps an installed plugin from running (measured
+  # outside the engine: an installed, approved plugin's server started and its
+  # hooks ran on a trusted run, and with the seeded file in place of the
+  # settings neither did); plugins live under the volatile .local/share/muse
+  # besides.
   #
   # run.toolset, set for the run, adds `mcp__crewlet__*` to the two web
   # tools; the model sees the tools as `mcp__crewlet__<name>`.
@@ -3180,19 +3256,19 @@ muse-code:
   # NO TIMEOUT KNOB FOR A SERVER DECLARED THIS WAY: `-c` refuses any key past
   # transport, command and args (`tool_timeout_sec` among them: "unknown key"),
   # and the settings file that takes one is the seat's. The harness's own is 300 s
-  # — a 700 s call ended at 300 s as "tool timed out" — and the engine answers
+  # — a 330 s call ended at 300 s as "tool timed out" — and the engine answers
   # a call still running near it itself. The harness makes a response's calls one
   # after another ("tool action serialized"), whatever --parallel-tool-calls
   # or a read-only hint says; does not re-read the list when told it changed;
-  # refuses a name without the server's prefix itself; and on arguments that
-  # are not JSON asks its model again, with a growing pause, rather than
-  # calling — eight times in 55 s in the measurement, each a request of its
-  # own. It has no turn cap of
-  # its own: a run's rounds are bounded by the phase's (a stand-in that
-  # always called a tool drew 1,128 requests in 90 s).
+  # refuses a name without the server's prefix itself ("unknown tool"); and
+  # answers arguments that are not JSON with a result asking its model for the
+  # call again, never calling. It caps nothing a phase relies on: a stand-in
+  # calling a tool with new arguments each time drew 1,137 requests in 95 s
+  # (one repeating a call, or invalid arguments, ended after 17 with no
+  # answer), so a run's rounds are bounded by the phase's.
   #
   # A failed run's cause is its run.terminal.failed event's reason, read by
-  # field; 1.4.25 also writes it on stderr after "run ended with Failed:".
+  # field; the harness also writes it on stderr after "run ended with Failed:".
   mcp:
     args:
       - "-c"
@@ -3282,7 +3358,7 @@ muse-code:
   # no login to refresh from, an unauthorised token refresh, a login that is
   # no longer saved — all end in "run `muse login`". The fifth is the
   # environment key being rejected, "your API key from META_API_KEY was
-  # rejected — update or unset it" (measured on both builds, for a 401).
+  # rejected — update or unset it" (measured on 1.4.25, for a 401).
   # Neither is a phrase a model writes by accident.
   #
   # THE LIMIT SENTINELS ARE THE MODEL API'S ERROR **TYPE**, which is the token
@@ -3292,8 +3368,8 @@ muse-code:
   # captured case — an account that can no longer pay, which is a spent
   # credential and belongs on the fallback chain. `rate_limit_error` is the
   # published type for 429, and a stub answering 429 with it produced "API
-  # error 429: … (rate_limit_error) (after 4 provider attempts)" on both
-  # builds; a real 429 from Meta's API has not been captured, so if your plan's
+  # error 429: … (rate_limit_error) (after 4 provider attempts)" on 1.4.25; a
+  # real 429 from Meta's API has not been captured, so if your plan's
   # wording differs, put it in overrides.limit_markers rather than letting a
   # spent plan pass as an unexplained SERVER failure, which moves the chain on
   # but never sits the entry out. The error CODES (`rate_limit_exceeded`,

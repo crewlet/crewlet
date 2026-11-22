@@ -100,6 +100,31 @@ func TestAnApplyReadsAndAppliesInsideTheLease(t *testing.T) {
 	}
 }
 
+// A RECHECK READS THE ACCOUNT AND CAPACITY AGAIN AND TAKES NO LEASE: it runs
+// inside the one lease its product holds around every write on the account,
+// so the caps read now refuse what the ask's read let through.
+//
+// Mutation: check the caps the ask read, or take the spend lease inside the
+// product's, and a lowered cap passes or the act holds two leases.
+func TestARecheckReadsAgainInsideTheProductsLease(t *testing.T) {
+	t.Parallel()
+	var trace []string
+	v := &twin{daily: map[string]int64{"a": 90}, trace: &trace}
+	perChange, daily := int64(10), int64(100)
+	acct := spendguard.Account{ID: "a", Currency: "EUR", Serving: true}
+	_, err := spendguard.New("twin", v, recordingLocks{&trace}).Recheck(context.Background(), raise{delta: 5},
+		func(context.Context) (spendguard.Account, spendguard.Caps, error) {
+			trace = append(trace, "read")
+			lowered := daily - 10
+			return acct, spendguard.Caps{Currency: "EUR", PerChangeMicros: &perChange, DailyMicros: &lowered}, nil
+		})
+	var r *spendguard.Refusal
+	if !errors.As(err, &r) || r.Code != spendguard.CodeOverDaily ||
+		!slices.Equal(trace, []string{"read", "daily", "delta"}) {
+		t.Fatalf("a recheck went %v (%v), want a read and an over_daily refusal under no lease", trace, err)
+	}
+}
+
 // An account that cannot serve refuses spend, and a change adding nothing to
 // capacity already above the daily cap still passes the caps.
 //

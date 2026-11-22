@@ -450,6 +450,44 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		add("admob", in.AdMob.Enabled, nil, map[string]any{"client_id": client, "accounts": in.AdMob.Accounts,
 			"roles": growthRoles("admob")})
 	}
+	if in.AdSense != nil {
+		// AdMob's shape: the client's public ID, the accounts, and the roles.
+		var client string
+		if in.AdSense.OAuth != nil {
+			client = in.AdSense.OAuth.ClientID
+		}
+		add("adsense", in.AdSense.Enabled, nil, map[string]any{"client_id": client,
+			"accounts": in.AdSense.Accounts, "roles": growthRoles("adsense")})
+	}
+	if in.GoogleAds != nil {
+		// NO SECRET: the accounts agents may be given, which carry caps, and
+		// its catalog's access levels with what each allows.
+		capped := []string{}
+		if in.GoogleAds.Spend != nil {
+			for _, c := range in.GoogleAds.Spend.Accounts {
+				capped = append(capped, c.Account)
+			}
+		}
+		customers := []string{}
+		for _, c := range in.GoogleAds.Customers {
+			customers = append(customers, c.ID)
+		}
+		add("google_ads", in.GoogleAds.Enabled, nil, map[string]any{
+			"customers": customers, "capped": capped, "roles": growthRoles("google_ads")})
+	}
+	if in.SearchConsole != nil {
+		// NO SECRET: the sites the company narrows agents to, and its
+		// catalog's roles with what each allows.
+		add("search_console", in.SearchConsole.Enabled, nil, map[string]any{
+			"sites": in.SearchConsole.Sites, "roles": growthRoles("search_console")})
+	}
+	if in.GooglePlay != nil {
+		// NO SECRET: the apps, developer accounts and reports buckets the
+		// company names, and its catalog's permissions with what each allows.
+		add("google_play", in.GooglePlay.Enabled, nil, map[string]any{
+			"apps": nonNil(in.GooglePlay.Apps), "developer_accounts": nonNil(in.GooglePlay.DeveloperAccounts),
+			"reports_buckets": nonNil(in.GooglePlay.ReportsBuckets), "roles": growthRoles("google_play")})
+	}
 	if in.Atlassian != nil {
 		// THE ORGANIZATION, not a third product: where the account itself is
 		// created, which no site API can do. It reconciles identities,

@@ -96,6 +96,31 @@ const (
 var SealedMaxBytes = secrets.SealedStreamSize(SessionMaxBytes,
 	strings.Repeat("k", secrets.MaxStreamKeyIDBytes))
 
+// GzipMostBytes is the most Go's gzip writes of n bytes it cannot shrink, at
+// any level, in one member: flate stores such input as it came, five bytes of
+// header to a block, and its levels end a block of literals at 32 KiB (seven
+// to nine) or 64 KiB (one to six); counted here at 16 KiB, twice as often as
+// any does, beside the member's own [GzipMemberBytes]. On 48 MiB of random
+// bytes level seven writes 7,700 bytes more than it was given and one 3,865;
+// internal/sandbox/executor's spool test holds it at the spool's level.
+func GzipMostBytes(n int64) int64 {
+	const block = 16 << 10
+	return n + (n+block-1)/block*5 + GzipMemberBytes
+}
+
+// GzipMemberBytes is what one gzip member adds to its data: its 10-byte header,
+// its 8-byte trailer and flate's last empty block, five.
+const GzipMemberBytes = 10 + 8 + 5
+
+// SpoolMembersMostBytes is the most a take's scrub spool adds in gzip members
+// past its first: one for each unit that outgrows the 64 KiB a way of it is
+// held in, and so at most one for each 64 KiB of the 256 MiB of plaintext a
+// reading reads, each [GzipMemberBytes]: 92 KiB. A unit that writes more than
+// it reads opens more, which the take's room then counts, closed.
+// internal/sandbox/executor's wayRoomBytes and scrubPlainMax are those bounds,
+// which its test holds together with these.
+const SpoolMembersMostBytes = (256<<20/(64<<10) + 1) * GzipMemberBytes
+
 // ErrSessionTooLarge reports an archive past [SessionMaxBytes]: nothing is
 // recorded, and the turn's next launch starts from the session the row already
 // names, or fresh.

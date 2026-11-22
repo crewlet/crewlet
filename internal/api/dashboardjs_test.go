@@ -1079,11 +1079,11 @@ const (
 	// at 3 MiB over a 2.3 MB baseline and is set so a bundle that doubled the
 	// baseline is still refused; screens fetched only when opened (the rich
 	// editor, the brand and folder screens, the assistant's panel, Gitlet) and
-	// kit releases account for its growth, and the last measure was 7247.2 KiB,
-	// after the growth integrations train: Apple Ads, Meta Ads Manager, Google
-	// Analytics and AdMob with their entries, stories and access words.
+	// kit releases account for its growth, and the last measure was 7254.5 KiB,
+	// after the growth integrations train (AdSense, Google Ads, Search Console
+	// and Google Play) and a proposal's caution naming an agent's browser.
 	// A raise names the measured size and its cause in its commit.
-	treeBudget = 5<<20 + 2128<<10
+	treeBudget = 5<<20 + 2135<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

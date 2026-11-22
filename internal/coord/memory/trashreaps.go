@@ -16,7 +16,7 @@ func (f *Fleet) RecordTrashReap(_ context.Context, value []byte) error {
 	if len(value) == 0 {
 		return errors.New("coord/memory: a trash reap report needs a value")
 	}
-	if err := coord.HoldValue("the trash reap report", len(value)); err != nil {
+	if err := coord.HoldValue("the trash reap report", len(value), coord.MaxValueBytes); err != nil {
 		return err
 	}
 	f.mu.Lock()

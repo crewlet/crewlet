@@ -41,7 +41,7 @@ func (f *Fleet) CreateSandboxRun(_ context.Context, turnID string, value []byte)
 	if turnID == "" {
 		return false, errors.New("coord/memory: a sandbox run needs a turn id")
 	}
-	if err := coord.HoldValue("the sandbox run "+turnID, len(value)); err != nil {
+	if err := coord.HoldValue("the sandbox run "+turnID, len(value), coord.MaxValueBytes); err != nil {
 		return false, err
 	}
 	f.mu.Lock()
@@ -98,7 +98,7 @@ func (f *Fleet) MutateSandboxRun(ctx context.Context, turnID string,
 		if !change.Delete && len(change.Put) == 0 {
 			return read, false, nil
 		}
-		if err := coord.HoldValue("the sandbox run "+turnID, len(change.Put)); err != nil {
+		if err := coord.HoldValue("the sandbox run "+turnID, len(change.Put), coord.MaxValueBytes); err != nil {
 			return coord.Record{}, false, err
 		}
 		if written, won := f.applyRunChange(turnID, read, change); won {
@@ -294,7 +294,7 @@ func (f *Fleet) MutateSandboxRunPart(ctx context.Context, turnID string, part co
 		if len(put) == 0 {
 			return read, false, nil
 		}
-		if err := coord.HoldValue(fmt.Sprintf("the sandbox run %s's %s", turnID, part), len(put)); err != nil {
+		if err := coord.HoldValue(fmt.Sprintf("the sandbox run %s's %s", turnID, part), len(put), coord.MaxValueBytes); err != nil {
 			return coord.Record{}, false, err
 		}
 		written, won, gone := f.applyRunPart(key, read, found, put)
