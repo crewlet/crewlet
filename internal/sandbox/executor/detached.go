@@ -612,15 +612,6 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	if err = r.ClearArtifacts(ctx, box); err != nil {
 		return sandbox.RunHandle{}, err
 	}
-	// THE LOGIN AS THE ENGINE HOLDS IT, again, where only some of a file's
-	// tables are the login ([sandbox.LoginReseeder]): after the clear, which
-	// removes the file a run could have written settings into, and before the
-	// config, which may read it.
-	if reseeder, ok := box.(sandbox.LoginReseeder); ok {
-		if err = reseeder.ReseedLogin(ctx); err != nil {
-			return sandbox.RunHandle{}, fmt.Errorf("executor: handing the run its login again: %w", err)
-		}
-	}
 	if len(base) > 0 {
 		if err = box.WriteFile(ctx, paths.BaseResult(), base); err != nil {
 			return sandbox.RunHandle{}, fmt.Errorf("executor: keeping the session's spend so far: %w", err)

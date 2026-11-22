@@ -578,7 +578,7 @@ func TestAKimiRunsArtifactsAreItsOwnFiles(t *testing.T) {
 	if !slices.Equal(dirs, []string{paths.KimiAgents() + "/crewlet", paths.KimiSkills(), paths.KimiUserSkills(),
 		paths.KimiPlugins(), paths.KimiTrust()}) ||
 		!slices.Contains(files, paths.KimiSettings()) || !slices.Contains(files, paths.KimiDriver()) ||
-		!slices.Contains(files, paths.KimiInstructions()) || !slices.Contains(files, paths.KimiConfig()) {
+		!slices.Contains(files, paths.KimiInstructions()) {
 		t.Fatalf("artifacts = %v %v", files, dirs)
 	}
 	for _, name := range paths.KimiUserInstructions() {
@@ -588,7 +588,7 @@ func TestAKimiRunsArtifactsAreItsOwnFiles(t *testing.T) {
 	}
 	for _, f := range append(files, dirs...) {
 		if f == paths.KimiHome() || f == paths.KimiSessions() || f == paths.KimiHome()+"/credentials" ||
-			strings.HasPrefix(paths.KimiHome()+"/credentials/kimi-code.json", f+"/") {
+			f == paths.KimiConfig() || strings.HasPrefix(paths.KimiHome()+"/credentials/kimi-code.json", f+"/") {
 			t.Errorf("the clear removes %s", f)
 		}
 	}

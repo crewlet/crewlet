@@ -1364,23 +1364,6 @@ func (p *Provider) SandboxCredentialRunKeys() map[string][]string {
 	return out
 }
 
-// SandboxCredentialTables is, by each of [Provider.SandboxCredentials]' paths,
-// the top-level keys of that TOML file that are its login
-// ([harnessprofile.Profile.LoginTables]): a box is handed only those, before
-// every run, and never writes the file back. Nil where it names none.
-func (p *Provider) SandboxCredentialTables() map[string][]string {
-	var out map[string][]string
-	for rel := range p.SandboxCredentials() {
-		if keys := p.profile.LoginTables[filepath.Base(rel)]; len(keys) > 0 {
-			if out == nil {
-				out = map[string][]string{}
-			}
-			out[rel] = slices.Clone(keys)
-		}
-	}
-	return out
-}
-
 // SandboxCredentialDocument is the shared login a harness keeps in a database of
 // its own ([harnessprofile.CredentialStore]) — the document its export printed —
 // as an absolute path on the engine host, or "" when the profile keeps none.

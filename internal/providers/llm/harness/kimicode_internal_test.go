@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"slices"
@@ -180,5 +181,57 @@ func TestAKimiCodeCallIsToldNothingFromItsHomesConfig(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(home, rel)); err != nil {
 			t.Errorf("%s went with the prune: %v", rel, err)
 		}
+	}
+}
+
+// A SEAT HOME IS SEEDED WITH KIMI CODE'S LOGIN AND NOTHING ELSE OF ITS
+// config.toml: a [[hooks]] table, a plugin entry and a tool setting the shared
+// login came to hold beside the login reach no seat's home, since the harness
+// runs a hook it reads there; the token file and the login's tables do.
+//
+// Mutation: seed config.toml as the shared login holds it, or drop a login
+// table from the profile's login_keys.
+func TestAKimiCodeSeatHomeIsSeededWithTheLoginAlone(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	t.Cleanup(func() { forgetWorkspace(dir) })
+	ws, err := Shared(dir, "kimi-code", kimiCode(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	login := "default_model = \"managed:kimi-code/k\"\n\n[providers.\"managed:kimi-code\"]\ntype = \"kimi\"\n"
+	shared := map[string]string{
+		"config.toml": login + "\n[[hooks]]\nevent = \"SessionStart\"\ncommand = \"touch /tmp/planted\"\n" +
+			"\n[plugins.planted]\nenabled = true\n\n[tools]\ndisabled = [\"Bash\"]\n",
+		"kimi-code.json": `{"access_token":"t"}`,
+	}
+	if err := os.MkdirAll(ws.CredentialsDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range shared {
+		if err := os.WriteFile(filepath.Join(ws.CredentialsDir(), name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	co, err := ws.Acquire(t.Context(), "pm", "call-1", nil)
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	t.Cleanup(func() { _ = co.Release(context.WithoutCancel(t.Context())) })
+	config, err := os.ReadFile(filepath.Join(co.Home, ".kimi-code", "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, gone := range []string{"hooks", "touch /tmp/planted", "plugins", "tools"} {
+		if strings.Contains(string(config), gone) {
+			t.Errorf("the seat home is seeded with %q in %q", gone, config)
+		}
+	}
+	if !strings.Contains(string(config), "managed:kimi-code") {
+		t.Errorf("the seat home is seeded with %q, want the login's tables", config)
+	}
+	token, err := os.ReadFile(filepath.Join(co.Home, ".kimi-code", "credentials", "kimi-code.json"))
+	if err != nil || string(token) != shared["kimi-code.json"] {
+		t.Errorf("the seat home's token file holds %q (%v)", token, err)
 	}
 }

@@ -71,15 +71,6 @@ type Limits struct {
 	MaxTurns int
 }
 
-// LoginReseeder is a box that hands its run, again before every run, the login
-// files whose login is some of their tables ([Spec.CredentialTables]), as the
-// engine's own copy holds them: a local box, which is the one kind seeded with
-// a login. The executor's launch calls it after clearing the last run's
-// artefacts and before writing the run's config.
-type LoginReseeder interface {
-	ReseedLogin(ctx context.Context) error
-}
-
 // Spec is what it takes to mint and drive one box.
 //
 // AN EXTERNAL HOST'S REPOSITORY IS NOT HERE. Which repository on GitHub or
@@ -167,14 +158,6 @@ type Spec struct {
 	// which are not its login: a local box writing the file back keeps the
 	// shared login's value of each (harnessprofile.KeepLoginKeys).
 	CredentialRunKeys map[string][]string
-
-	// CredentialTables is, by a path of CredentialFiles, the top-level keys of
-	// that TOML file that are its login (harnessprofile.Profile.LoginTables),
-	// for a file its harness also reads hooks and settings from. A local box
-	// is handed only those tables, again before every run ([LoginReseeder]),
-	// and never writes the file back: nothing a run wrote into it reaches the
-	// shared login, a later run or a seat on the engine host.
-	CredentialTables map[string][]string
 
 	// Repos are the repositories on Gitlet this run is
 	// given, each resolved at launch ([RunRepo]), at most [MaxRunRepos]. Empty

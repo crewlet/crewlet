@@ -36,11 +36,10 @@ func (p Paths) KimiUserInstructions() []string {
 	return []string{p.Home + "/.agents/AGENTS.md", p.Home + "/.agents/agents.md"}
 }
 
-// KimiConfig is the home's config.toml. A local box's login is some of its
-// tables, which the box hands every run again ([sandbox.LoginReseeder]); the
-// rest of it is where Kimi reads hooks, which it runs, permission rules and
-// tool settings (measured on 2.7.2), so the clear removes the file first
-// ([Kimi.artifacts]) and a box with no login keeps none.
+// KimiConfig is the home's config.toml: where a local box is seeded with the
+// entry's login, and where Kimi also reads hooks, plugins, permission rules
+// and tool settings, so every run rewrites it to its login's tables first
+// ([writeKimiLoginConfig]).
 func (p Paths) KimiConfig() string { return p.KimiHome() + "/config.toml" }
 
 // KimiPlugins is where Kimi keeps the plugins installed in the home: their

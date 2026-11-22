@@ -255,18 +255,10 @@ const (
 // AN ABSENT FILE IS RECORDED TOO (a file added since the seed is a newer login
 // as much as one changed), and RUN KEYS ([Spec.CredentialRunKeys]) are written
 // back as the shared login holds them: a key minted in the run stays in the box.
-//
-// A FILE WHOSE LOGIN IS SOME OF ITS TABLES ([Spec.CredentialTables]) is handed
-// only those (Login, the engine's own copy, kept here out of the box's reach),
-// again before every run ([LoginReseeder]), and never written back: its Seed
-// is of the shared file as read, which the write-back's compare still holds
-// the rest of the login to.
 type seededCredential struct {
 	Source  string   `json:"source"`
 	Seed    string   `json:"seed"`
 	RunKeys []string `json:"run_keys,omitempty"`
-	Tables  []string `json:"tables,omitempty"`
-	Login   []byte   `json:"login,omitempty"`
 }
 
 // boxLogin is one login a box is seeded with: the files of one shared
@@ -321,11 +313,11 @@ func loginsOf(files map[string]string) []boxLogin {
 // operator-overridable profile, so they go through hostbox.SafeJoin: a
 // "../../etc/cron.d/x" would otherwise write a host file.
 func seedCredentials(
-	ctx context.Context, l boxLayout, files map[string]string, runKeys, tables map[string][]string,
+	ctx context.Context, l boxLayout, files map[string]string, runKeys map[string][]string,
 ) map[string]seededCredential {
 	seeded := map[string]seededCredential{}
 	for _, login := range loginsOf(files) {
-		got, err := seedLogin(ctx, l, login, tables)
+		got, err := seedLogin(ctx, l, login)
 		if err != nil {
 			localLog.Warn("local_sandbox_credential_seed_failed",
 				"sandbox_id", l.id, "dir", login.dir, "error", err.Error(),
@@ -341,12 +333,8 @@ func seedCredentials(
 }
 
 // seedLogin seeds one login into a box — every file the shared directory
-// holds of it, or none — and reports what it seeded. A file tables names is
-// handed only its login's tables ([harnessprofile.KeepLoginTables]); one that
-// cannot be read for them fails the whole login.
-func seedLogin(
-	ctx context.Context, l boxLayout, login boxLogin, tables map[string][]string,
-) (map[string]seededCredential, error) {
+// holds of it, or none — and reports what it seeded.
+func seedLogin(ctx context.Context, l boxLayout, login boxLogin) (map[string]seededCredential, error) {
 	// VALIDATED BEFORE ANYTHING IS READ OR WRITTEN, so a login with one
 	// path out of the box is seeded nowhere; WRITTEN through the box's home
 	// ([boxLayout.openHome]), where no component of a path leads out of it.
@@ -382,74 +370,23 @@ func seedLogin(
 		source := login.files[relative]
 		content, present := shared[filepath.Base(source)]
 		if !present {
-			seeded[relative] = seededCredential{Source: source, Tables: slices.Clone(tables[relative])}
+			seeded[relative] = seededCredential{Source: source}
 			continue
 		}
-		rec := seededCredential{Source: source, Seed: digestOf(content)}
-		handed := content
-		if keys := tables[relative]; len(keys) > 0 {
-			kept, filterErr := harnessprofile.KeepLoginTables(content, keys)
-			if filterErr != nil {
-				removeAll(home, written)
-				return nil, fmt.Errorf("reading the login's tables of %q: %w", relative, filterErr)
-			}
-			rec.Tables, rec.Login, handed = slices.Clone(keys), kept, kept
-		}
 		dst := targets[relative]
-		if err := writeBoxFile(home, dst, handed); err != nil {
-			removeAll(home, written)
+		if err := writeBoxFile(home, dst, content); err != nil {
+			for _, name := range written {
+				_ = home.Remove(name)
+			}
 			return nil, fmt.Errorf("seeding %q: %w", relative, err)
 		}
 		written = append(written, dst)
-		// THE SEED'S DIGEST IS OF THE BYTES READ, which for a whole file are the
-		// bytes the box was given: read separately it could describe a newer
-		// file than the box's, and the teardown would then excuse a write it
-		// should have refused.
-		seeded[relative] = rec
+		// THE SEED'S DIGEST IS OF THE BYTES THE BOX WAS GIVEN: read separately
+		// it could describe a newer file than the box's, and the teardown
+		// would then excuse a write it should have refused.
+		seeded[relative] = seededCredential{Source: source, Seed: digestOf(content)}
 	}
 	return seeded, nil
-}
-
-// removeAll removes each of names from a box's home: a seed undone.
-func removeAll(home *os.Root, names []string) {
-	for _, name := range names {
-		_ = home.Remove(name)
-	}
-}
-
-// reseedLogin hands a box, again, each login file whose login is some of its
-// tables, as the engine's own copy holds them ([seededCredential.Login]): what
-// a run wrote into the file in between, a hook or a setting, is gone before
-// the next run starts. A file the shared login did not hold is removed.
-func reseedLogin(l boxLayout, seeded map[string]seededCredential) error {
-	home, err := l.openHome()
-	switch {
-	case absent(err):
-		return nil
-	case err != nil:
-		return err
-	}
-	defer func() { _ = home.Close() }()
-	for _, relative := range slices.Sorted(maps.Keys(seeded)) {
-		rec := seeded[relative]
-		if len(rec.Tables) == 0 {
-			continue
-		}
-		if _, err := hostbox.SafeJoin(l.home(), relative); err != nil {
-			return fmt.Errorf("the credential path %q: %w", relative, err)
-		}
-		dst := filepath.Clean(relative)
-		if rec.Seed == "" {
-			if err := home.Remove(dst); err != nil && !absent(err) {
-				return fmt.Errorf("removing %q: %w", relative, err)
-			}
-			continue
-		}
-		if err := writeBoxFile(home, dst, rec.Login); err != nil {
-			return fmt.Errorf("handing %q again: %w", relative, err)
-		}
-	}
-	return nil
 }
 
 // writeBoxFile puts one seeded login file at name in a box's home, its parents
@@ -575,9 +512,7 @@ func writeBackLogin(
 		rec := seeded[relative]
 		name := filepath.Base(rec.Source)
 		byName[name] = relative
-		// NEVER WRITTEN BACK: a run refreshes no table of the login
-		// ([seededCredential.Tables]), and what it did write is settings.
-		if rec.Seed == "" || len(rec.Tables) > 0 {
+		if rec.Seed == "" {
 			continue
 		}
 		// READ THROUGH THE HOME'S ROOT, after the run that had the home to
@@ -1131,7 +1066,7 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	}
 
 	l.reapOrphans(ctx, time.Duration(spec.TimeoutSec)*time.Second)
-	seeded := seedCredentials(ctx, layout, spec.CredentialFiles, spec.CredentialRunKeys, spec.CredentialTables)
+	seeded := seedCredentials(ctx, layout, spec.CredentialFiles, spec.CredentialRunKeys)
 	// The box records what it was seeded with and stamps itself alive before
 	// anyone can reap it.
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
