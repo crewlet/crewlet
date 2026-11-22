@@ -10,7 +10,7 @@ import (
 
 func init() {
 	object := map[string]any{"type": "object"}
-	growth.Register("testgrowth", func() growth.Catalog {
+	growth.RegisterFunc("testgrowth", func() growth.Catalog {
 		return growth.Catalog{
 			Kind: "testgrowth", API: "Test Growth API", Version: "v1",
 			Operations: []growth.Operation{

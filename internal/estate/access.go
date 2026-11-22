@@ -96,7 +96,7 @@ var opAccessRecent = define("access.recent", opRead, accessDomain, false,
 			return accessdomain.Recent{}, err
 		}
 		return r.Recent(ctx, a.Handle, a.Since, a.Fresh)
-	})
+	}).oneAnswer()
 
 type accessToldArgs struct {
 	Handle string
@@ -112,7 +112,7 @@ var opAccessTold = define("access.told", opRead, accessDomain, false,
 			return accessdomain.ToldPage{}, err
 		}
 		return r.Told(ctx, a.Handle, a.Cursor, a.Limit, a.Fresh)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 type accessAuditArgs struct {
 	Query accessdomain.AuditQuery
@@ -126,7 +126,7 @@ var opAccessCertificates = define("access.certificates", opRead, accessDomain, f
 			return accessdomain.CertificatePage{}, err
 		}
 		return r.Certificates(ctx, a.Query, a.Fresh)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 type accessHostUseArgs struct {
 	Week, Month time.Time
@@ -142,7 +142,7 @@ var opAccessHostUse = define("access.host_use", opRead, accessDomain, false,
 			return nil, err
 		}
 		return r.HostUse(ctx, a.Week, a.Month, a.Fresh)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 var opAccessCommands = define("access.commands", opRead, accessDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a accessAuditArgs) (accessdomain.CommandPage, error) {
@@ -151,7 +151,7 @@ var opAccessCommands = define("access.commands", opRead, accessDomain, false,
 			return accessdomain.CommandPage{}, err
 		}
 		return r.Commands(ctx, a.Query, a.Fresh)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 // accessSealedArgs carries nothing: the count is the whole log's.
 type accessSealedArgs struct{}
@@ -163,7 +163,7 @@ var opAccessSealedKeys = define("access.sealed_keys", opRead, accessDomain, fals
 			return accessdomain.SealedCount{}, err
 		}
 		return r.SealedKeys(ctx)
-	})
+	}).oneAnswer()
 
 type accessGrowthChangedArgs struct {
 	Query accessdomain.GrowthCount
@@ -179,7 +179,7 @@ var opAccessGrowthChanged = define("access.growth_changed", opRead, accessDomain
 			return 0, err
 		}
 		return r.GrowthChanged(ctx, a.Query, a.Fresh)
-	})
+	}).oneAnswer()
 
 // ---- the writes: the engine's, each under the operation it carries ---------- //
 

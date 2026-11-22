@@ -610,6 +610,12 @@ func TestAServersUseIsCountedPerServerAndSeat(t *testing.T) {
 	if !maps.Equal(got, want) {
 		t.Errorf("each server's use is %v, want %v", got, want)
 	}
+	// PAST THE ANSWER'S BYTES THE USE IS REFUSED, never cut to a slice the
+	// atlas would draw as every server's.
+	if cut, err := node.reader().HostUse(statelog.WithAnswerBytes(t.Context(), 1), now.Add(-7*24*time.Hour),
+		now.Add(-30*24*time.Hour), fresh); err == nil {
+		t.Errorf("the use past one row's bytes was answered as %+v, not refused", cut)
+	}
 	later, err := node.reader().HostUse(t.Context(), now.Add(time.Hour), now.Add(-30*24*time.Hour), fresh)
 	if err != nil || len(later) != 3 || later[0].Week != 0 || later[0].Month != 1 {
 		t.Errorf("a week that starts after every command: %+v, %v", later, err)

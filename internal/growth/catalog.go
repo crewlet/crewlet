@@ -338,69 +338,59 @@ func Permits(op Operation, roles []string) bool {
 
 var (
 	catalogsMu sync.Mutex
-	builders   = map[string]func() Catalog{}
-	resolved   []Catalog
-	built      bool
+	catalogs   = map[string]func() Catalog{}
 )
 
-// Register adds kind's catalog, from its package's init, built at the
-// registry's first use rather than at start: a product's catalog is large,
-// and a command that never reaches a growth tool pays nothing for it. A
-// second catalog for a kind, or one registered after first use, panics.
-func Register(kind string, build func() Catalog) {
+// Register adds a product's catalog, from its package's init: an invalid
+// catalog, a second one for a kind, or a tool another catalog lists is a
+// build fault, and panics.
+func Register(c Catalog) { RegisterFunc(c.Kind, func() Catalog { return c }) }
+
+// RegisterFunc adds kind's catalog, built and validated at first use, so a
+// catalog of thousands of rows costs nothing at init (every push's hook runs
+// the binary's init).
+func RegisterFunc(kind string, build func() Catalog) {
 	catalogsMu.Lock()
 	defer catalogsMu.Unlock()
-	switch {
-	case built:
-		panic("growth: " + kind + " registered after the catalogs were first read")
-	case builders[kind] != nil:
+	if _, dup := catalogs[kind]; dup {
 		panic("growth: a second catalog for " + kind)
 	}
-	builders[kind] = build
+	built := sync.OnceValue(func() Catalog {
+		c := build()
+		if c.Kind != kind {
+			panic("growth: the catalog registered as " + kind + " says it is " + c.Kind)
+		}
+		if err := c.Validate(); err != nil {
+			panic(err)
+		}
+		return c
+	})
+	// A TOOL NAME IS ONE PRODUCT'S. Each starts with its kind's (Validate), so
+	// two catalogs can share one only where one kind begins the other's: those
+	// pairs alone are built here to compare, and every other stays lazy.
+	for other, theirs := range catalogs {
+		if !strings.HasPrefix(kind+"_", other+"_") && !strings.HasPrefix(other+"_", kind+"_") {
+			continue
+		}
+		for _, t := range built().Tools {
+			if _, listed := theirs().Tool(t.Name); listed {
+				panic("growth: " + kind + " lists tool " + t.Name + ", which " + other + " lists")
+			}
+		}
+	}
+	catalogs[kind] = built
 }
 
-// Catalogs is every registered catalog, by kind. The first read builds them
-// all, and an invalid catalog, one built for another kind, or a tool two
-// catalogs list is a build fault, and panics ([check]).
+// Catalogs is every registered catalog, by kind.
 func Catalogs() []Catalog {
 	catalogsMu.Lock()
 	defer catalogsMu.Unlock()
-	if !built {
-		out := make([]Catalog, 0, len(builders))
-		for kind, build := range builders {
-			c := build()
-			if c.Kind != kind {
-				panic("growth: the catalog registered for " + kind + " is " + c.Kind + "'s")
-			}
-			out = append(out, c)
-		}
-		if err := check(out); err != nil {
-			panic(err)
-		}
-		sort.Slice(out, func(i, j int) bool { return out[i].Kind < out[j].Kind })
-		resolved, built = out, true
-	}
-	return slices.Clone(resolved)
-}
-
-// check holds every catalog to its rules, and each tool name to one catalog:
-// one kind may begin another's, so a name's prefix alone does not keep two
-// products' tools apart.
-func check(catalogs []Catalog) error {
-	var errs []error
-	lister := map[string]string{}
+	out := make([]Catalog, 0, len(catalogs))
 	for _, c := range catalogs {
-		if err := c.Validate(); err != nil {
-			errs = append(errs, err)
-		}
-		for _, t := range c.Tools {
-			if other, listed := lister[t.Name]; listed {
-				errs = append(errs, fmt.Errorf("growth: %s lists tool %s, which %s lists", c.Kind, t.Name, other))
-			}
-			lister[t.Name] = c.Kind
-		}
+		out = append(out, c())
 	}
-	return errors.Join(errs...)
+	sort.Slice(out, func(i, j int) bool { return out[i].Kind < out[j].Kind })
+	return out
 }
 
 // KindOfTool is the kind whose catalog lists tool name, false for none.
@@ -415,10 +405,11 @@ func KindOfTool(name string) (string, bool) {
 
 // CatalogOf is kind's catalog, false for a kind that registered none.
 func CatalogOf(kind string) (Catalog, bool) {
-	for _, c := range Catalogs() {
-		if c.Kind == kind {
-			return c, true
-		}
+	catalogsMu.Lock()
+	defer catalogsMu.Unlock()
+	c, ok := catalogs[kind]
+	if !ok {
+		return Catalog{}, false
 	}
-	return Catalog{}, false
+	return c(), true
 }

@@ -164,6 +164,164 @@
         "null"
       ]
     },
+    "AppStoreConnect": {
+      "additionalProperties": false,
+      "properties": {
+        "approvers": {
+          "description": "Optional. Handles of human seats asked first about a reply, a submission, a price or an account change an agent asks for. Only an administrator may answer; without this list every administrator is asked.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "apps": {
+          "description": "Optional. Apple IDs (digits) of the apps agents may be given. Absent: every app the connections' keys reach.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "connections": {
+          "additionalProperties": {
+            "$ref": "#/$defs/AppStoreConnectTeam"
+          },
+          "description": "The App Store Connect teams the engine reaches, each under its connection id (lowercase letters, digits and hyphens, starting with a letter). Required when enabled.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Turn the integration on.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "AppStoreConnectKey": {
+      "additionalProperties": false,
+      "properties": {
+        "key_id": {
+          "description": "The key's ID: ten capital letters and digits, shown beside the key in App Store Connect.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "private_key": {
+          "description": "Reference to the sealed .p8 private key App Store Connect gave when the key was created, from BEGIN PRIVATE KEY to END PRIVATE KEY. Apple keeps no copy.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "AppStoreConnectKeys": {
+      "additionalProperties": false,
+      "properties": {
+        "access_to_reports": {
+          "$ref": "#/$defs/AppStoreConnectKey",
+          "description": "Optional. A key with the Access to Reports role: sales and trends reports."
+        },
+        "admin": {
+          "$ref": "#/$defs/AppStoreConnectKey",
+          "description": "Optional. A key with the Admin role: users, keys, agreements, and every account change, each held for an administrator."
+        },
+        "app_manager": {
+          "$ref": "#/$defs/AppStoreConnectKey",
+          "description": "Optional. A key with the App Manager role: versions, submissions, prices, TestFlight external testing, in-app purchases."
+        },
+        "customer_support": {
+          "$ref": "#/$defs/AppStoreConnectKey",
+          "description": "Optional. A key with the Customer Support role: replies to customer reviews."
+        },
+        "developer": {
+          "$ref": "#/$defs/AppStoreConnectKey",
+          "description": "Optional. A key with the Developer role (with access to certificates, identifiers and profiles where given): builds, certificates, devices, bundle IDs and profiles."
+        },
+        "finance": {
+          "$ref": "#/$defs/AppStoreConnectKey",
+          "description": "Optional. A key with the Finance role: sales, finance and analytics reports."
+        },
+        "marketing": {
+          "$ref": "#/$defs/AppStoreConnectKey",
+          "description": "Optional. A key with the Marketing role: listings, reviews, custom product pages, in-app events, internal TestFlight groups."
+        },
+        "sales": {
+          "$ref": "#/$defs/AppStoreConnectKey",
+          "description": "Optional. A key with the Sales role: sales and analytics reports."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "AppStoreConnectTeam": {
+      "additionalProperties": false,
+      "properties": {
+        "issuer_id": {
+          "description": "The team's issuer ID, a UUID shown on Users and Access, Integrations, App Store Connect API.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "keys": {
+          "$ref": "#/$defs/AppStoreConnectKeys",
+          "description": "The team's API keys, one per Apple role, each optional; at least one. The engine calls through the least-privileged key that can make each call and never falls back to another when one is refused."
+        },
+        "vendor_number": {
+          "description": "Optional. The team's vendor number (digits, on Payments and Financial Reports), which sales and finance reports need.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "Assistant": {
       "additionalProperties": false,
       "properties": {
@@ -2712,6 +2870,10 @@
     "Integrations": {
       "additionalProperties": false,
       "properties": {
+        "app_store_connect": {
+          "$ref": "#/$defs/AppStoreConnect",
+          "description": "App Store Connect teams and their API keys, one per Apple role, through which the engine makes every call for the agents. Absent = disabled."
+        },
         "atlassian": {
           "$ref": "#/$defs/Atlassian",
           "description": "Atlassian organization and its unscoped API key, used to create one service account per agent. Absent = accounts are made by hand."
@@ -4466,6 +4628,58 @@
         "null"
       ]
     },
+    "RoleAppStoreConnect": {
+      "additionalProperties": false,
+      "properties": {
+        "apps": {
+          "description": "Apple IDs of the apps this agent may touch. Required while enabled.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Whether this agent may use App Store Connect through the engine's tools. No agent holds a key.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "level": {
+          "description": "read (the default): reads apps, listings, reviews, TestFlight, reports. operate: also edits drafts and internal testing, and asks an administrator for anything customers or external testers see. administer: also asks for account changes (users, keys, certificates, devices, profiles, agreements).",
+          "enum": [
+            "read",
+            "operate",
+            "administer",
+            "",
+            null
+          ]
+        },
+        "team_resources": {
+          "description": "Optional. Let this agent reach the team's resources no app owns (users, devices, certificates, profiles, sandbox testers, reports across apps), within its level.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "RoleAvatar": {
       "additionalProperties": false,
       "properties": {
@@ -5004,6 +5218,10 @@
     "RoleIntegrations": {
       "additionalProperties": false,
       "properties": {
+        "app_store_connect": {
+          "$ref": "#/$defs/RoleAppStoreConnect",
+          "description": "This seat's App Store Connect access: whether it is on, its level and its apps."
+        },
         "aws": {
           "$ref": "#/$defs/RoleAWS",
           "description": "This seat's own IAM role: whether it is on and its level."
@@ -5302,7 +5520,7 @@
           ]
         },
         "max_concurrent_runs": {
-          "description": "How many of this seat's executor runs hold it at once, at most one per conversation. Unset = 1.",
+          "description": "How many of this seat's executor runs hold it at once, at most one per conversation. Unset = 2.",
           "minimum": 1,
           "type": [
             "integer",

@@ -14,6 +14,8 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/redact/redacttest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
@@ -198,6 +200,54 @@ func TestAnOperateCallsApproverReadsAllOfIt(t *testing.T) {
 	if code, got := answer(t, operateSurface(t, deny, seal), seated("ops-lead", time.Minute),
 		"/mcp-approvals/"+heldID, `{"answer": "deny"}`); code != http.StatusAccepted {
 		t.Fatalf("deny = %d %v", code, got)
+	}
+}
+
+// THE APPROVAL READ SHOWS A HELD CALL AS SENT ONLY TO WHO MAY ANSWER IT WHILE
+// IT WAITS: its approver reads the token in it, with the digest Allow once
+// names; the seat's lead, who may not answer an operate command, is refused
+// before anything is opened; and once it is answered its approver reads the
+// token as a marker and no digest, since nothing is answered from it and a
+// digest of the raw bytes would let a short secret be guessed from the rest.
+//
+// Mutation: drop the waiting arm of [sandbox.CallSeal.OpenArgumentsFor]'s
+// rule, and the answered call's token is read; serve the call without the
+// route's admission, and the lead reads it.
+func TestTheApprovalReadShowsAHeldCallAsSentOnlyToWhoMayAnswerItWhileItWaits(t *testing.T) {
+	t.Parallel()
+	var token string
+	for _, s := range redacttest.Shapes() {
+		if s.Name == "github-token" {
+			token = s.Sample
+		}
+	}
+	seal := operateSeal(t)
+	run := operateRun(t, seal)
+	sent := map[string]any{"host": "api-1", "command": "deploy --token " + token, "reason": "ship it"}
+	sealed, err := seal.SealArguments(run.TurnID, *run.HeldCall, sent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.HeldCall.Arguments = sealed
+	desk := &fakeApprovals{run: run}
+	svc := operateSurface(t, desk, seal)
+	wantDigest, _ := sandbox.HeldArgumentsDigest(sent)
+	code, held := read(t, svc, seated("ops-lead", time.Minute), "/mcp-approvals/"+heldID)
+	if code != http.StatusOK || !strings.Contains(fmt.Sprint(held["arguments"]), token) ||
+		held["arguments_sha256"] != wantDigest {
+		t.Errorf("the approver of the waiting call reads %d %v, want it as sent with its digest", code, held)
+	}
+	code, held = read(t, svc, seated("cto", time.Minute), "/mcp-approvals/"+heldID)
+	if code != http.StatusForbidden || strings.Contains(fmt.Sprint(held), token) || held["arguments"] != nil {
+		t.Errorf("the seat's lead, who may not answer it, reads %d %v, want a refusal and no arguments", code, held)
+	}
+	desk.run.Status, desk.run.Answer = sandbox.StatusResumed, &sandbox.RecordedAnswer{RecordedAt: time.Now().UTC()}
+	code, held = read(t, svc, seated("ops-lead", time.Minute), "/mcp-approvals/"+heldID)
+	args, _ := held["arguments"].(map[string]any)
+	command, _ := args["command"].(string)
+	if code != http.StatusOK || strings.Contains(command, token) || !strings.Contains(command, redact.Marker) ||
+		held["arguments_sha256"] != "" {
+		t.Errorf("the answered call reads %d %v, want the token as a marker and no digest", code, held)
 	}
 }
 

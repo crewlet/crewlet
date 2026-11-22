@@ -283,9 +283,22 @@ func (r *Reader) Activity(ctx context.Context, viewer string, q ActivityQuery,
 				return err
 			}
 			rows, next := mergeActivity(windows, window)
-			for _, row := range rows {
-				if q.Unread && !row.item.Unread {
+			// THE PAGED READ ENDS AT THE BYTES TOO ([statelog.RowsOf]),
+			// its cursor after the last row kept. An unread read has no
+			// cursor to carry on with, and needs none: it is at most
+			// [UnreadLimit] rows of an excerpt each.
+			held := statelog.RowsOf(ctx)
+			for i, row := range rows {
+				if q.Unread {
+					if row.item.Unread {
+						out.Items = append(out.Items, row.item)
+					}
 					continue
+				}
+				if !held.TakeEncoded(row.item) {
+					cut := rows[i-1].order
+					next = &cut
+					break
 				}
 				out.Items = append(out.Items, row.item)
 			}
@@ -820,20 +833,27 @@ func (r *Reader) Threads(ctx context.Context, viewer string, q ThreadsQuery,
 					return !after.before(c.order)
 				})
 			}
-			held := 0
+			held := statelog.RowsOf(ctx)
 			for i, c := range candidates {
-				if len(out.Threads) == limit || (len(out.Threads) > 0 && held > pageBytes) {
+				if len(out.Threads) == limit {
 					out.NextCursor = candidates[i-1].order.String()
 					break
 				}
-				thread, size, found, err := readFollowedThread(ctx, tx, who, c)
+				thread, found, err := readFollowedThread(ctx, tx, who, c)
 				if err != nil {
 					return err
 				}
-				if found {
-					out.Threads = append(out.Threads, thread)
-					held += size
+				if !found {
+					continue
 				}
+				// MEASURED AS THE WIRE ENCODES IT: a body's length is
+				// a sixth of what JSON may write for it, and its links
+				// and reactions ride beside it.
+				if !held.TakeEncoded(thread) {
+					out.NextCursor = candidates[i-1].order.String()
+					break
+				}
+				out.Threads = append(out.Threads, thread)
 			}
 			return nil
 		})
@@ -949,27 +969,26 @@ func markedThread(ctx context.Context, tx *sql.Tx, who string,
 		order: activityKey{at: at, key: marked.RootID}}, nil
 }
 
-// readFollowedThread reads one thread's root and its newest replies, and how
-// many bytes of words they carry, which the page is bounded by.
+// readFollowedThread reads one thread's root and its newest replies.
 func readFollowedThread(ctx context.Context, tx *sql.Tx, who string,
-	c followedThread) (FollowedThread, int, bool, error) {
+	c followedThread) (FollowedThread, bool, error) {
 
 	root, err := readMessagePage(ctx, tx, who,
 		[]string{"channel_id = ?", "id = ?"}, []any{c.channelID, c.root},
 		"channel_seq DESC", 1)
 	if err != nil {
-		return FollowedThread{}, 0, false, err
+		return FollowedThread{}, false, err
 	}
 	if len(root.views) == 0 {
 		// A ROOT PRUNED, ERASED OR UNREADABLE BY THIS BUILD names no thread
 		// this read can draw.
-		return FollowedThread{}, 0, false, nil
+		return FollowedThread{}, false, nil
 	}
 	latest, err := readMessagePage(ctx, tx, who,
 		[]string{"channel_id = ?", "thread_root = ?", "event = ''"},
 		[]any{c.channelID, c.root}, "channel_seq DESC", threadLatest)
 	if err != nil {
-		return FollowedThread{}, 0, false, err
+		return FollowedThread{}, false, err
 	}
 	slices.Reverse(latest.views)
 	reason := c.reason
@@ -979,11 +998,7 @@ func readFollowedThread(ctx context.Context, tx *sql.Tx, who string,
 	thread := FollowedThread{ChannelID: c.channelID, ChannelName: c.name,
 		ChannelKind: c.kind, Reason: reason, Root: root.views[0],
 		Latest: latest.views}
-	size := len(thread.Root.Message.Body)
-	for _, v := range thread.Latest {
-		size += len(v.Message.Body)
-	}
-	return thread, size, true, nil
+	return thread, true, nil
 }
 
 // ---- saved messages ------------------------------------------------------ //
@@ -1078,19 +1093,18 @@ func (r *Reader) Saved(ctx context.Context, viewer string, q SavedQuery,
 	out := SavedMessages{Saved: make([]SavedEntry, 0, len(marks)), ReadState: true}
 	answer, err := r.log.Read(ctx, fresh.Query(ReadScope(""), true),
 		func(tx *sql.Tx) error {
-			held := 0
+			held := statelog.RowsOf(ctx)
 			for i, mark := range marks {
-				if i > 0 && held > pageBytes {
-					out.NextCursor = savedKey(marks[i-1]).String()
-					return nil
-				}
 				//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 				entry, err := readSaved(ctx, tx, who, mark)
 				if err != nil {
 					return err
 				}
-				if entry.View != nil {
-					held += len(entry.View.Message.Body)
+				// MEASURED AS THE WIRE ENCODES IT, for [Reader.Threads]'
+				// reason; a gone entry is its mark alone.
+				if !held.TakeEncoded(entry) {
+					out.NextCursor = savedKey(marks[i-1]).String()
+					return nil
 				}
 				out.Saved = append(out.Saved, entry)
 			}
@@ -1224,10 +1238,10 @@ func (r *Reader) Sent(ctx context.Context, viewer string, q SentQuery,
 				out.Messages = append(out.Messages, SentMessage{
 					ChannelName: room.Name, ChannelKind: room.Kind, View: view})
 			}
-			if page.next != "" && len(page.views) > 0 {
-				last := page.views[len(page.views)-1].Message
-				out.NextCursor = activityKey{at: store.EncodeTime(last.CreatedAt),
-					key: last.ID}.String()
+			// THE LAST ROW SCANNED, not the last decoded: a page cut
+			// after rows this build cannot read must still move on.
+			if page.next != "" {
+				out.NextCursor = activityKey{at: page.lastAt, key: page.lastID}.String()
 			}
 			return nil
 		})
@@ -1319,7 +1333,7 @@ func (r *Reader) Links(ctx context.Context, viewer string, q LinksQuery,
 					q.ChannelID, err)
 			}
 			defer func() { _ = rows.Close() }()
-			read, held := 0, 0
+			read, held := 0, statelog.RowsOf(ctx)
 			var lastSeq int64
 			for rows.Next() {
 				var document []byte
@@ -1328,11 +1342,11 @@ func (r *Reader) Links(ctx context.Context, viewer string, q LinksQuery,
 					return fmt.Errorf("chatlet: scan a shared link of room %s: %w",
 						q.ChannelID, err)
 				}
-				if read == limit || (read > 0 && held+len(document) > pageBytes) {
+				if read == limit || !held.Take(len(document)) {
 					out.NextCursor = strconv.FormatInt(lastSeq, 10)
 					break
 				}
-				read, held, lastSeq = read+1, held+len(document), seq
+				read, lastSeq = read+1, seq
 				message, err := DecodeMessage(document)
 				if err != nil {
 					// A MESSAGE A NEWER PEER WROTE still holds its

@@ -457,6 +457,10 @@ const (
 	ActionGrowthSpendApprove  Action = "growth.spend.approve"
 	ActionGrowthPublicApprove Action = "growth.public.approve"
 	ActionGrowthAdminApprove  Action = "growth.admin.approve"
+	// ActionAppStoreAnalyticsEnable turns App Store analytics on with an Admin
+	// key a person pastes once (`POST /setup/integrations/app_store_connect/
+	// analytics`): an administrator alone, present, at the step-up window.
+	ActionAppStoreAnalyticsEnable Action = "app_store_connect.analytics.enable"
 	// ActionSSHRead runs an allowlisted read command on one of the agent's SSH
 	// hosts (the server's gate holds the allowlist); an agent's alone by its
 	// SSH grant, in its own run.
@@ -1655,6 +1659,8 @@ var rules = map[Action]rule{
 		recency: iam.RecencyStepUp, assist: AssistApprove},
 	ActionGrowthAdminApprove: {class: ClassAdmin, humanOnly: true, presence: PresencePerson,
 		recency: iam.RecencyStepUp, assist: AssistApprove},
+	ActionAppStoreAnalyticsEnable: {class: ClassAdmin, humanOnly: true, presence: PresencePerson,
+		recency: iam.RecencyStepUp, assist: AssistApprove},
 	// A SERVER IS REACHED BY AN AGENT ITS ROLE GRANTS IT TO (SSH on with a host
 	// for a read, at operate for a command a person approves). The tools answer
 	// only an agent's own run; a person reaches a server with their own key.
@@ -2150,6 +2156,8 @@ var assistantNever = sync.OnceValue(func() map[Action]neverEntry {
 			tellApproval},
 		ActionSSHAuditRead: {"the SSH audit answers each command's text in clear, which can carry a " +
 			"credential typed into it", tellSSHAudit},
+		ActionAppStoreAnalyticsEnable: {"an Admin key is pasted by the person holding it, and the assistant " +
+			"relaying one would carry a key that manages the team's users and keys through a model", tellSetup},
 	}
 })
 

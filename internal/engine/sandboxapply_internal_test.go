@@ -25,8 +25,10 @@ import (
 )
 
 // sandboxCompanyDoc is a one-seat company whose seat runs code on the in-process
-// double. The %s is the rest of the providers.sandbox block, so a case can
-// change the catalogue without changing the company.
+// double, one run at a time, so the run it starts holds it: what these cases'
+// holds and waits are about (ADR-0169). The %s is the rest of the
+// providers.sandbox block, so a case can change the catalogue without changing
+// the company.
 const sandboxCompanyDoc = `
 name: Nimbus
 providers:
@@ -36,6 +38,7 @@ providers:
 roles:
   - name: SWE
     handle: swe
+    sandbox: {max_concurrent_runs: 1}
 `
 
 // companyWithoutSandboxDoc is the same company with nothing that runs code.
@@ -44,6 +47,7 @@ name: Nimbus
 roles:
   - name: SWE
     handle: swe
+    sandbox: {max_concurrent_runs: 1}
 `
 
 // A NODE THAT BOOTED WITH NO COMPANY BRINGS THE CODE SANDBOX UP WITH THE FIRST

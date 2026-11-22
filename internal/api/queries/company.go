@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/appstoreconnect"
+
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/eventfan"
@@ -391,6 +393,20 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		// NOTHING INBOUND: the engine dials out to each registered server,
 		// and the row says how many there are.
 		add("ssh", in.SSH.Enabled, nil, map[string]any{"hosts": len(in.SSH.Hosts)})
+	}
+	if a := in.AppStoreConnect; a != nil {
+		// THE TEAMS AND THE ROLES, never a key: each connection's issuer and
+		// the slots it fills, and what each Apple role allows.
+		var teams []map[string]any
+		for _, id := range a.ConnectionIDs() {
+			var slots []string
+			for _, s := range a.Connections[id].Keys.Slots() {
+				slots = append(slots, s.Name)
+			}
+			teams = append(teams, map[string]any{"id": id, "identity": a.Connections[id].IssuerID, "key_slots": slots})
+		}
+		add("app_store_connect", a.Enabled, nil, map[string]any{"connections": teams,
+			"roles": appstoreconnect.Catalog().RoleOffers()})
 	}
 	if in.GoogleAnalytics != nil {
 		// NO SECRET: the properties the company narrows agents to, and its

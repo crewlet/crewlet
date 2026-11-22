@@ -34,7 +34,15 @@ import { href } from "~/app/router.tsx";
 import { fmtCountShort, fmtDate } from "~/lib/format.ts";
 import type { QueryResult } from "~/lib/useQuery.ts";
 import { EntryDisc } from "./parts.tsx";
-import { HEALTH, HEALTH_ORDER, VENDORS, WORDS, WORD_COLORS, entries } from "./words.ts";
+import {
+  ACTIVITY_CUT,
+  HEALTH,
+  HEALTH_ORDER,
+  VENDORS,
+  WORDS,
+  WORD_COLORS,
+  entries,
+} from "./words.ts";
 
 /** The healths that need a person, the most urgent first: what the attention tile counts. */
 const WRONG = HEALTH_ORDER.filter((one) => one !== "quiet");
@@ -290,6 +298,11 @@ function Week({ activity }: { activity: QueryResult<AtlasActivityAnswer> }) {
         reading={{ formatTime: (at) => fmtDate(new Date(at).toISOString()) }}
         emptyLabel="Nothing recorded in the window."
       />
+      {answer.truncated && (
+        <Text variant="caption" tone="secondary">
+          {ACTIVITY_CUT}
+        </Text>
+      )}
       <Link href={href(["company", "atlas", "changes"])} className="atlas-band__link">
         Every change
       </Link>

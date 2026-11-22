@@ -292,10 +292,12 @@ func (r Reply) Best(runs []PendingRun) (PendingRun, bool) {
 // admits nobody from the conversation; the dashboard's route still answers it.
 // Whether the holder may act NOW is asked once a run would take the reply
 // ([AudienceResolver.MayAnswer]). AND ONE TURN WORKS FOR ONE WHOM: the reply
-// must be written for whom the run works for ([Reply.writtenForTheRun]).
+// must be written for whom the run works for ([Reply.writtenForTheRun]). A run
+// waiting on another run ([PendingRun.WaitsFor]) is put to nobody: the engine
+// answers it, and mail in its conversation waits aside behind it (ADR-0176).
 func (r Reply) putTo(run PendingRun) bool {
-	return r.Writer != "" && (run.Requester == r.Writer || slices.Contains(run.AudienceHandles, r.Writer)) &&
-		r.writtenForTheRun(run)
+	return r.Writer != "" && run.WaitsFor == nil &&
+		(run.Requester == r.Writer || slices.Contains(run.AudienceHandles, r.Writer)) && r.writtenForTheRun(run)
 }
 
 // writtenForTheRun reports whether the reply was written for whom run works
@@ -1476,7 +1478,7 @@ func (c *Coordinator) retryOwed(turnID string) {
 	// lands while they are deciding is one the wait below must not sleep
 	// through. See [Coordinator.waitOwed].
 	seen := c.signalsSeen()
-	if refusal, refused := c.seatRefusal(handle, run.ConversationKey); refused {
+	if refusal, refused := c.seatRefusal(run.TurnID, handle, run.ConversationKey); refused {
 		c.waitOwed(ctx, turnID, refusal, seen)
 		return
 	}

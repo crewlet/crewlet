@@ -1018,6 +1018,13 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 				`entry's key as auth.api_key, e.g. api_key: "${DASHSCOPE_API_KEY}"`,
 			profile.APIKeyEnv, harness)
 	}
+	if mode == AuthInheritEnv && profile.APIKeyModelEnv != "" {
+		p.add(at(path, "auth.mode"), ErrConflict,
+			"inherit-env forwards %s from the engine's own environment, and the %q harness "+
+				"reads that key only beside its model in %s, which inherit-env does not set: "+
+				"set auth.mode: api-key and give the key as auth.api_key",
+			profile.APIKeyEnv, harness, profile.APIKeyModelEnv)
+	}
 	if mode == AuthInheritEnv && profile.TokenEnv == "" && profile.APIKeyEnv == "" {
 		remedy := "sign the harness in with `crewlet llm login`"
 		if profile.EnvSignIn {
@@ -1059,6 +1066,12 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 					"UTC), and reads the harness's limit resets in; it is not set per entry. "+
 					"Drop it, and set TZ in the engine's own environment to move every "+
 					"harness's zone", name)
+		case profile.APIKeyModelEnv:
+			p.add(entry(at(path, "env"), name), ErrConflict,
+				"%s is where this harness reads its model beside its key, which the engine "+
+					"sets from the entry: set here it would swap the entry's model and provider and "+
+					"sign the harness in uncounted. Give the key as auth.api_key with auth.mode "+
+					"api-key, and the model as model", name)
 		case profile.APIKeyEnv:
 			p.add(entry(at(path, "env"), name), ErrConflict,
 				"%s is this harness's key variable, which auth owns: whether a value "+
