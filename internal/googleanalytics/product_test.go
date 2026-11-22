@@ -415,17 +415,23 @@ func TestAReportFencesThePublicsWordsAndPassesGooglesFlags(t *testing.T) {
 // A WRITE IS MADE AT THE CLASS OF WHAT IT CHANGES, as Google reads it: a
 // rename is operate; lifting a revenue restriction is admin however the mask
 // is spelled, refused on the operate tool and made on the held admin tool once
-// approved, unless the metric moved since.
+// approved, unless the metric moved since. A BigQuery export turned off, or an
+// event excluded, is a brake made at once; the opposite is spend.
 //
-// Mutation: classify by the operation alone, or read the mask by its
-// camelCase key and spelling only, and the restriction is lifted with nobody
-// asked.
+// Mutation: classify by the operation alone, read the mask by its camelCase
+// key and spelling only, or compare a switch's pause as a string, and the
+// restriction is lifted or an export turned on with nobody asked, or a brake
+// waits on a person.
 func TestAWriteIsMadeAtTheClassOfWhatItChanges(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t, "administer")
 	metric := func(query, body map[string]any) map[string]any {
 		return map[string]any{"operation": "analyticsadmin.properties.customMetrics.patch",
 			"path": map[string]any{"propertiesId": "111", "customMetricsId": "9"}, "query": query, "body": body}
+	}
+	link := func(query, body map[string]any) map[string]any {
+		return map[string]any{"operation": "analyticsadmin.properties.bigQueryLinks.patch",
+			"path": map[string]any{"propertiesId": "111", "bigQueryLinksId": "4"}, "query": query, "body": body}
 	}
 	rename := metric(map[string]any{"updateMask": "displayName"}, map[string]any{"displayName": "Gross revenue"})
 	if _, err := w.call(t, "google_analytics_operate", rename); err != nil {
@@ -443,10 +449,24 @@ func TestAWriteIsMadeAtTheClassOfWhatItChanges(t *testing.T) {
 			map[string]any{"restrictedMetricType": []any{}}), growth.ClassAdmin},
 		"a lift by replacement": {metric(map[string]any{"updateMask": "*"},
 			map[string]any{"displayName": "Revenue"}), growth.ClassAdmin},
+		"an export turned on": {link(map[string]any{"update_mask": "streaming_export_enabled"},
+			map[string]any{"streaming_export_enabled": true}), growth.ClassSpend},
+		"an excluded event exported": {link(map[string]any{"updateMask": "excludedEvents"},
+			map[string]any{"excludedEvents": []any{}}), growth.ClassSpend},
 	} {
 		if _, err := w.call(t, "google_analytics_operate", tc.args); !errors.As(err, new(*aboveTool)) ||
 			!strings.Contains(err.Error(), string(tc.want)) {
 			t.Errorf("%s on the operate tool answered %v, want it refused as %s", name, err, tc.want)
+		}
+	}
+	for name, args := range map[string]map[string]any{
+		"an export turned off": link(map[string]any{"updateMask": "dailyExportEnabled"},
+			map[string]any{"dailyExportEnabled": false}),
+		"an event excluded": link(map[string]any{"updateMask": "excluded_events"},
+			map[string]any{"excluded_events": []any{"page_view", "scroll"}}),
+	} {
+		if _, err := w.call(t, "google_analytics_operate", args); err != nil {
+			t.Errorf("%s on the operate tool answered %v, want it made at once", name, err)
 		}
 	}
 	lift := metric(map[string]any{"updateMask": "restricted_metric_type"}, map[string]any{"restrictedMetricType": []any{}})
@@ -652,6 +672,89 @@ func TestACuratedWriteToolIsPreparedAndApplied(t *testing.T) {
 	}
 	if steps, records := w.audit.take(); len(steps) != 1 || steps[0] != growth.StepMade || records[0].Call != "call-1" {
 		t.Errorf("recorded %v", steps)
+	}
+}
+
+// A CALL'S BODY AND PARAMETERS STAY IN THE SEAT'S SCOPE: the account a
+// property is created in, a roll-up's source and a subproperty a filter
+// applies to are held like a path's property, in either spelling Google
+// takes, and a path parameter the operation's path does not name is refused,
+// all before Google is asked to write.
+//
+// Mutation: hold the path's property alone, or take a stray path parameter
+// as where the call acts, and a property is made in, or linked from, an
+// account and property the seat may not reach.
+func TestACallsBodyAndParametersStayInTheSeatsScope(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, "administer")
+	create := func(path map[string]any, body map[string]any) map[string]any {
+		return map[string]any{"operation": "analyticsadmin.properties.create", "path": path, "body": body}
+	}
+	for name, tc := range map[string]struct {
+		tool string
+		args map[string]any
+	}{
+		"a property in another account":  {"google_analytics_admin", create(nil, map[string]any{"parent": "accounts/999"})},
+		"a property in a shared account": {"google_analytics_admin", create(nil, map[string]any{"parent": "accounts/77"})},
+		"a property in no account":       {"google_analytics_admin", create(nil, map[string]any{"displayName": "New"})},
+		"a stray property parameter": {"google_analytics_admin", create(map[string]any{"propertiesId": "111"},
+			map[string]any{"parent": "accounts/999"})},
+		"a roll-up's source out of scope": {"google_analytics_admin", map[string]any{
+			"operation": "analyticsadmin.properties.rollupPropertySourceLinks.create",
+			"path":      map[string]any{"propertiesId": "111"}, "body": map[string]any{"sourceProperty": "properties/222"}}},
+		"a snake_case source out of scope": {"google_analytics_admin", map[string]any{
+			"operation": "analyticsadmin.properties.rollupPropertySourceLinks.create",
+			"path":      map[string]any{"propertiesId": "111"}, "body": map[string]any{"source_property": "properties/222"}}},
+		"a filter on a subproperty out of scope": {"google_analytics_operate", map[string]any{
+			"operation": "analyticsadmin.properties.subpropertyEventFilters.create",
+			"path":      map[string]any{"propertiesId": "111"}, "body": map[string]any{"apply_to_property": "properties/222"}}},
+	} {
+		if _, err := w.call(t, tc.tool, tc.args); !refused(err) {
+			t.Errorf("%s answered %v, want it refused", name, err)
+		}
+	}
+	for _, c := range w.f.called() {
+		if !strings.HasPrefix(c, "GET /v1beta/accountSummaries") {
+			t.Errorf("Google was asked %s", c)
+		}
+	}
+	if steps, _ := w.audit.take(); len(steps) != 0 {
+		t.Errorf("refused calls were recorded as %v", steps)
+	}
+}
+
+// A CUSTOM VERB ON A COLLECTION IS MADE WITHOUT A BEFORE-READ: a roll-up
+// property's creation and an account ticket read no listing Google would
+// refuse, and are made once approved, each held to what its body names.
+//
+// Mutation: read a before-state at the collection, and Google answers both
+// with a refusal, so neither can ever be made.
+func TestACustomVerbOnACollectionIsMadeWithoutABeforeRead(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, "administer", "111", "333")
+	rollup := map[string]any{"operation": "analyticsadmin.properties.createRollupProperty",
+		"body": map[string]any{"rollupProperty": map[string]any{"parent": "accounts/88", "displayName": "All"},
+			"sourceProperties": []any{"properties/111", "properties/333"}}}
+	ticket := map[string]any{"operation": "analyticsadmin.accounts.provisionAccountTicket",
+		"body": map[string]any{"account": map[string]any{"displayName": "New"}, "redirectUri": "https://example.com/"}}
+	for _, args := range []map[string]any{rollup, ticket} {
+		if _, err := w.call(t, "google_analytics_admin", args); err != nil {
+			t.Fatalf("%s answered %v", args["operation"], err)
+		}
+	}
+	for _, c := range w.f.called() {
+		if c == "GET /v1alpha/properties" || c == "GET /v1beta/accounts" {
+			t.Errorf("Google was asked %s, a listing with no filter", c)
+		}
+	}
+	if w.f.writes != 2 {
+		t.Errorf("Google got %d writes", w.f.writes)
+	}
+	outside := map[string]any{"operation": "analyticsadmin.properties.createRollupProperty",
+		"body": map[string]any{"rollup_property": map[string]any{"parent": "accounts/88"},
+			"source_properties": []any{"properties/111", "properties/222"}}}
+	if _, err := w.call(t, "google_analytics_admin", outside); !refused(err) {
+		t.Errorf("a roll-up over a property out of scope answered %v", err)
 	}
 }
 

@@ -75,7 +75,9 @@ func Guide() setup.Guide {
 }
 
 // Probe answers the connect form's Test button, which has nothing to check:
-// the form holds no credential, and the pass proves each property's access.
+// the form holds no credential. The pass checks the Google identity and the
+// two APIs; a property's access is Google's to answer at each call, whose
+// refusal names the role the agent's identity needs.
 func Probe(*http.Client) setup.Probe {
 	return func(_ context.Context, check setup.Check) (setup.Verdict, error) {
 		return setup.Verdict{}, setup.NotCheckable("Google Analytics", check.Field)

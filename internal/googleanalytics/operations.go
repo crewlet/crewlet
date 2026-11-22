@@ -1,14 +1,11 @@
-// Code generated from the Google Analytics coverage matrix; DO NOT EDIT BY HAND.
-// The matrix is docs/integrations/google-analytics.md, held to this table by
-// TestTheDocsMatrixIsTheCatalog.
-
 package googleanalytics
 
 import "github.com/crewlet/crewlet/internal/growth"
 
 // operations is every method of the Google Analytics Data and Admin APIs and
 // the Measurement Protocol, each with its class, the roles that may call it
-// and the scope the engine mints for it.
+// and the scope the engine mints for it. docs/integrations/google-analytics.md
+// is the same table for people (TestTheDocsMatrixIsTheCatalog).
 func operations() []growth.Operation {
 	return []growth.Operation{
 		{ID: "analyticsdata.properties.batchRunPivotReports", Method: "POST", Path: dataAPI + "/v1beta/properties/{propertiesId}:batchRunPivotReports", Resource: "properties", Class: growth.ClassRead, Reads: true, Roles: []string{"viewer", "analyst", "marketer", "editor", "admin"}, Permissions: []string{"https://www.googleapis.com/auth/analytics.readonly"}},
@@ -94,7 +91,7 @@ func operations() []growth.Operation {
 		{ID: "analyticsadmin.properties.bigQueryLinks.list", Method: "GET", Path: adminAPI + "/v1alpha/properties/{propertiesId}/bigQueryLinks", Resource: "properties.bigQueryLinks", Class: growth.ClassRead, Roles: []string{"viewer", "analyst", "marketer", "editor", "admin"}, Permissions: []string{"https://www.googleapis.com/auth/analytics.readonly"}},
 		{ID: "analyticsadmin.properties.bigQueryLinks.get", Method: "GET", Path: adminAPI + "/v1alpha/properties/{propertiesId}/bigQueryLinks/{bigQueryLinksId}", Resource: "properties.bigQueryLinks", Class: growth.ClassRead, Roles: []string{"viewer", "analyst", "marketer", "editor", "admin"}, Permissions: []string{"https://www.googleapis.com/auth/analytics.readonly"}},
 		{ID: "analyticsadmin.properties.bigQueryLinks.create", Method: "POST", Path: adminAPI + "/v1alpha/properties/{propertiesId}/bigQueryLinks", Resource: "properties.bigQueryLinks", Class: growth.ClassAdmin, Roles: []string{"editor", "admin"}, Permissions: []string{"https://www.googleapis.com/auth/analytics.edit"}},
-		{ID: "analyticsadmin.properties.bigQueryLinks.patch", Method: "PATCH", Path: adminAPI + "/v1alpha/properties/{propertiesId}/bigQueryLinks/{bigQueryLinksId}", Resource: "properties.bigQueryLinks", Class: growth.ClassOperate, Roles: []string{"editor", "admin"}, Permissions: []string{"https://www.googleapis.com/auth/analytics.edit"}, Fields: []growth.FieldRule{{Field: "streamingExportEnabled", Class: growth.ClassSpend}, {Field: "freshDailyExportEnabled", Class: growth.ClassSpend}, {Field: "dailyExportEnabled", Class: growth.ClassSpend}, {Field: "exportStreams", Class: growth.ClassSpend}, {Field: "excludedEvents", Class: growth.ClassOperate}, {Field: "includeAdvertisingId", Class: growth.ClassAdmin}}},
+		{ID: "analyticsadmin.properties.bigQueryLinks.patch", Method: "PATCH", Path: adminAPI + "/v1alpha/properties/{propertiesId}/bigQueryLinks/{bigQueryLinksId}", Resource: "properties.bigQueryLinks", Class: growth.ClassOperate, Roles: []string{"editor", "admin"}, Permissions: []string{"https://www.googleapis.com/auth/analytics.edit"}, Fields: []growth.FieldRule{{Field: "streamingExportEnabled", Class: growth.ClassSpend, Pausing: []any{false}}, {Field: "freshDailyExportEnabled", Class: growth.ClassSpend, Pausing: []any{false}}, {Field: "dailyExportEnabled", Class: growth.ClassSpend, Pausing: []any{false}}, {Field: "exportStreams", Class: growth.ClassSpend}, {Field: "excludedEvents", Class: growth.ClassSpend, Lower: growth.ClassOperate, Exclusions: true}, {Field: "includeAdvertisingId", Class: growth.ClassAdmin}}},
 		{ID: "analyticsadmin.properties.bigQueryLinks.delete", Method: "DELETE", Path: adminAPI + "/v1alpha/properties/{propertiesId}/bigQueryLinks/{bigQueryLinksId}", Resource: "properties.bigQueryLinks", Class: growth.ClassAdmin, Danger: true, Roles: []string{"editor", "admin"}, Permissions: []string{"https://www.googleapis.com/auth/analytics.edit"}},
 		{ID: "analyticsadmin.properties.calculatedMetrics.list", Method: "GET", Path: adminAPI + "/v1alpha/properties/{propertiesId}/calculatedMetrics", Resource: "properties.calculatedMetrics", Class: growth.ClassRead, Roles: []string{"viewer", "analyst", "marketer", "editor", "admin"}, Permissions: []string{"https://www.googleapis.com/auth/analytics.readonly"}},
 		{ID: "analyticsadmin.properties.calculatedMetrics.get", Method: "GET", Path: adminAPI + "/v1alpha/properties/{propertiesId}/calculatedMetrics/{calculatedMetricsId}", Resource: "properties.calculatedMetrics", Class: growth.ClassRead, Roles: []string{"viewer", "analyst", "marketer", "editor", "admin"}, Permissions: []string{"https://www.googleapis.com/auth/analytics.readonly"}},

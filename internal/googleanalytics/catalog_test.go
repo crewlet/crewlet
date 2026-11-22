@@ -1,8 +1,10 @@
 package googleanalytics
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/googlegrowth"
 	"github.com/crewlet/crewlet/internal/growth"
 )
 
@@ -36,5 +38,58 @@ func TestTheCatalogListsEveryMethodInExactlyOneClass(t *testing.T) {
 	}
 	if counts[growth.ClassRead] == 0 || counts[growth.ClassOperate] == 0 || counts[growth.ClassAdmin] == 0 {
 		t.Errorf("classes %v", counts)
+	}
+}
+
+// A RULE NAMES A FIELD AS GOOGLE'S JSON DOES, in lowerCamel, since a request is
+// classed with every spelling Google takes read as that name: a rule spelled
+// otherwise would match no change, and its field would take the highest class.
+//
+// Mutation: write a rule's field in snake_case, and the test names it.
+func TestEveryFieldRuleNamesItsFieldInLowerCamel(t *testing.T) {
+	t.Parallel()
+	for _, op := range catalog().Operations {
+		for _, f := range op.Fields {
+			if googlegrowth.LowerCamel(f.Field) != f.Field || strings.Contains(f.Field, "_") {
+				t.Errorf("%s's rule names %q, not its lowerCamel name", op.ID, f.Field)
+			}
+		}
+	}
+}
+
+// EVERY WRITE NAMES WHAT IT ACTS IN, so the seat's scope holds it: its path's
+// property or account, the account or property its body names
+// ([bodyScopes]), the stream secret's property for the Measurement Protocol,
+// or, for the one write opening a new account, nothing that exists.
+//
+// Mutation: add a write on a collection with no body scope, or a body scope
+// for an operation the catalog lacks, and the test names it.
+func TestEveryWriteNamesWhatItActsIn(t *testing.T) {
+	t.Parallel()
+	c := catalog()
+	for _, op := range c.Operations {
+		if op.Method == "GET" || op.Reads {
+			continue
+		}
+		pathScoped := strings.Contains(op.Path, "{propertiesId}") || strings.Contains(op.Path, "{accountsId}")
+		if !pathScoped && bodyScopes()[op.ID].Target == "" && op.ID != actsInNone && !strings.HasPrefix(op.ID, "mp.") {
+			t.Errorf("%s names no property or account a seat's scope can hold", op.ID)
+		}
+	}
+	for id, s := range bodyScopes() {
+		op, ok := c.Operation(id)
+		if !ok {
+			t.Errorf("a body scope names %s, which the catalog does not list", id)
+			continue
+		}
+		pathScoped := strings.Contains(op.Path, "{propertiesId}") || strings.Contains(op.Path, "{accountsId}")
+		if (s.Target != "") == pathScoped {
+			t.Errorf("%s's body names where it is made only where its path names none", id)
+		}
+		for _, f := range append([]string{s.Target}, s.Also...) {
+			if googlegrowth.LowerCamel(f) != f {
+				t.Errorf("%s's body scope names %q, not its lowerCamel name", id, f)
+			}
+		}
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/googlegrowth"
 	"github.com/crewlet/crewlet/internal/growth"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Product is Google Analytics as the growth tools reach it.
@@ -98,36 +99,57 @@ func roleNames(ids []string) string {
 	return strings.Join(out, ", ")
 }
 
-// inScope refuses req where it names a property the seat may not reach, or
-// an account any of whose properties it may not reach.
+// inScope refuses req where it acts in a property the seat may not reach, or
+// an account any of whose properties it may not reach, or names nothing the
+// seat's scope can hold: only a listing cut to the seat's properties and the
+// opening of a new account act in none.
 func (p *Product) inScope(ctx context.Context, handle string, req googlegrowth.Request) error {
 	b := p.seat(handle)
 	if b == nil {
 		return refusal(growth.RefusedForbidden, "this agent is off at Google Analytics. No vendor was reached.")
 	}
-	company := p.company().Integrations.GoogleAnalytics
-	switch {
-	case propertyOf(req) != "":
-		if !slices.Contains(b.Properties, propertyOf(req)) || !company.Reaches(propertyOf(req)) {
-			return refusal(growth.RefusedForbidden, "property "+propertyOf(req)+" is not one of this agent's "+
-				"properties ("+strings.Join(b.Properties, ", ")+"). No vendor was reached.")
-		}
-	case accountIDOf(req) != "":
-		props, err := p.accountProperties(ctx, handle, accountIDOf(req))
-		if err != nil {
+	places, err := placesOf(req)
+	if err != nil {
+		return err
+	}
+	listing := req.Reads() && listsAccounts(req.Op.ID)
+	if len(places) == 0 && !listing && req.Op.ID != actsInNone {
+		return refusal(growth.RefusedForbidden, req.Op.ID+" names no property or account this agent's "+
+			"properties can hold. No vendor was reached.")
+	}
+	for _, place := range places {
+		if err := p.reaches(ctx, handle, b, place); err != nil {
 			return err
 		}
-		for _, id := range props {
-			if !slices.Contains(b.Properties, id) {
-				return refusal(growth.RefusedForbidden, "account "+accountIDOf(req)+" holds property "+id+
-					", which is not one of this agent's properties, and a call on the account reaches every "+
-					"property in it. No vendor was reached.")
-			}
+	}
+	return nil
+}
+
+// reaches refuses place, a property or account, where the seat b may not
+// reach it: a call on an account reaches every property in it.
+func (p *Product) reaches(ctx context.Context, handle string, b *config.RoleGoogleAnalytics, place string) error {
+	kind, id, _ := strings.Cut(place, "/")
+	if kind == "properties" {
+		if !slices.Contains(b.Properties, id) || !p.company().Integrations.GoogleAnalytics.Reaches(id) {
+			return refusal(growth.RefusedForbidden, "property "+id+" is not one of this agent's properties ("+
+				words.And(b.Properties)+"). No vendor was reached.")
 		}
-		if len(props) == 0 {
-			return refusal(growth.RefusedForbidden, "account "+accountIDOf(req)+" holds none of this agent's "+
-				"properties. No vendor was reached.")
+		return nil
+	}
+	props, err := p.accountProperties(ctx, handle, id)
+	if err != nil {
+		return err
+	}
+	for _, prop := range props {
+		if !slices.Contains(b.Properties, prop) {
+			return refusal(growth.RefusedForbidden, "account "+id+" holds property "+prop+", which is not one "+
+				"of this agent's properties, and a call on the account reaches every property in it. No vendor "+
+				"was reached.")
 		}
+	}
+	if len(props) == 0 {
+		return refusal(growth.RefusedForbidden, "account "+id+" holds none of this agent's properties. No vendor "+
+			"was reached.")
 	}
 	return nil
 }
