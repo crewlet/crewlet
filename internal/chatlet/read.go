@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -81,23 +80,13 @@ func (r *Reader) At() statelog.Position { return r.committed() }
 // The page bounds every listing here takes, on the wiki's and the tracker's
 // reasoning: fifty is a screen, five hundred is what an export or a sync walk
 // may ask for in one round trip, and a caller that names neither gets the
-// screen rather than the export.
+// screen rather than the export. A page also ends at the bytes
+// [statelog.RowsOf] holds, its cursor carrying on: a message at its caps runs
+// to most of [MaxRecordBytes], so a page at [MaxLimit] is over a hundred MiB.
 const (
 	DefaultLimit = 50
 	MaxLimit     = 500
 )
-
-// pageBytes is the second bound on a page of messages: the stored documents it
-// carries, summed. A page ends at its limit or here, whichever comes first,
-// and its cursor carries on from the last message it holds.
-//
-// HALF OF [queue.MaxPayloadBytes]: a page is ONE REPLY when a node holding no
-// data reads it through the estate router, and a reply past that ceiling is
-// refused whole. The count alone never bounded it: a message at its caps runs
-// to most of [MaxRecordBytes], so a page at [MaxLimit] is over a hundred MiB.
-// The other half is for what rides with the page (reactions, a thread's root
-// and participants, the envelope) and the wire encoding.
-const pageBytes = queue.MaxPayloadBytes / 2
 
 // UnreadLimit is how far an unread count counts before it answers "at least
 // this many".
@@ -253,8 +242,8 @@ type Directory struct {
 	// nil.
 	Rooms []DirectoryRoom `json:"rooms"`
 
-	// Truncated says rooms were left out past [MaxRoomNames], the archived
-	// ones first.
+	// Truncated says rooms were left out past [MaxRoomNames] or the bytes
+	// [statelog.RowsOf] holds, the archived ones first.
 	Truncated bool `json:"truncated,omitempty"`
 
 	// Unreadable is how many rooms this build could not present, a
@@ -309,6 +298,7 @@ func directory(ctx context.Context, tx *sql.Tx, who string) (Directory, error) {
 		return Directory{}, fmt.Errorf("chatlet: read the rooms %q may browse: %w", who, err)
 	}
 	out := Directory{Rooms: make([]DirectoryRoom, 0, 16)}
+	held := statelog.RowsOf(ctx)
 	for rows.Next() {
 		var document []byte
 		if err = rows.Scan(&document); err != nil {
@@ -322,7 +312,7 @@ func directory(ctx context.Context, tx *sql.Tx, who string) (Directory, error) {
 			out.Unreadable++
 			continue
 		}
-		if len(out.Rooms) == MaxRoomNames {
+		if len(out.Rooms) == MaxRoomNames || !held.Take(len(document)) {
 			out.Truncated = true
 			break
 		}
@@ -502,8 +492,9 @@ type ChannelListing struct {
 	Channels []ChannelSummary `json:"channels"`
 
 	// Truncated says the listing left rooms out: this person is in more
-	// rooms than [MaxRailChannels], or more matched than the query's
-	// [ChannelsQuery.Limit]. STATED rather than left to a caller counting,
+	// rooms than [MaxRailChannels], more matched than the query's
+	// [ChannelsQuery.Limit], or more than the bytes [statelog.RowsOf]
+	// holds. STATED rather than left to a caller counting,
 	// because the list is sorted by activity after it is read: a caller
 	// could not tell a truncated list from a complete one by its length
 	// alone.
@@ -669,9 +660,10 @@ type RoomNames struct {
 	// most recently archived first. Never nil.
 	Rooms []RoomName `json:"rooms"`
 
-	// Truncated says rooms were left out past [MaxRoomNames]: a caller
-	// that reads a name as a room only where this answer holds it reads
-	// the rest by their shape, and has to know that it is doing so.
+	// Truncated says rooms were left out past [MaxRoomNames] or the bytes
+	// [statelog.RowsOf] holds: a caller that reads a name as a room only
+	// where this answer holds it reads the rest by their shape, and has to
+	// know that it is doing so.
 	Truncated bool `json:"truncated,omitempty"`
 }
 
@@ -729,6 +721,7 @@ func roomNames(ctx context.Context, tx *sql.Tx, who string) (RoomNames, error) {
 	}
 	defer func() { _ = rows.Close() }()
 	out := RoomNames{Rooms: make([]RoomName, 0, 16)}
+	held := statelog.RowsOf(ctx)
 	for rows.Next() {
 		var room RoomName
 		var kind string
@@ -741,7 +734,7 @@ func roomNames(ctx context.Context, tx *sql.Tx, who string) (RoomNames, error) {
 		if !Visible(who, Channel{Kind: room.Kind}, true) {
 			continue
 		}
-		if len(out.Rooms) == MaxRoomNames {
+		if len(out.Rooms) == MaxRoomNames || !held.TakeEncoded(room) {
 			out.Truncated = true
 			break
 		}
@@ -843,6 +836,17 @@ func (r *Reader) rail(ctx context.Context, tx *sql.Tx, who string,
 	if q.Limit > 0 && len(out.Channels) > q.Limit {
 		out.Channels = out.Channels[:q.Limit]
 		out.Truncated = true
+	}
+	// AND THE TOP THE BYTES HOLD ([statelog.RowsOf]), cut from the sorted
+	// list for the same reason: a room's newer-peer fields and its preview
+	// ride whole on its summary.
+	held := statelog.RowsOf(ctx)
+	for i, summary := range out.Channels {
+		if !held.TakeEncoded(summary) {
+			out.Channels = out.Channels[:i]
+			out.Truncated = true
+			break
+		}
 	}
 	return out, nil
 }
@@ -1992,6 +1996,12 @@ type messagePage struct {
 	next        string
 	undecodable int
 
+	// lastAt and lastID are the last row scanned, which a cursor keyed on
+	// `(created_at, id)` resumes after ([Reader.Sent]): the last view may
+	// sit above rows this build could not decode.
+	lastAt int64
+	lastID string
+
 	// workingFor is whom each message of the page that carries one was
 	// written for, by its id: taken before [Message.forReaders] strips it
 	// from the view, and handed on by [Reader.TurnThread] alone.
@@ -2015,7 +2025,8 @@ func readMessagePage(ctx context.Context, tx *sql.Tx, who string,
 	// caller back for one empty page at the end of every room.
 	args = append(slices.Clip(args), limit+1)
 	rows, err := tx.QueryContext(ctx, `
-		SELECT id, document, channel_seq, log_stream, log_generation, log_seq
+		SELECT id, document, channel_seq, log_stream, log_generation, log_seq,
+		       created_at
 		  FROM chat_messages
 		 WHERE `+strings.Join(where, " AND ")+`
 		 ORDER BY `+order+`
@@ -2028,7 +2039,7 @@ func readMessagePage(ctx context.Context, tx *sql.Tx, who string,
 	var out messagePage
 	ids := make([]string, 0, limit)
 	var lastSeq int64
-	var held int
+	held := statelog.RowsOf(ctx)
 	more := false
 	for rows.Next() {
 		if len(ids) == limit {
@@ -2042,26 +2053,25 @@ func readMessagePage(ctx context.Context, tx *sql.Tx, who string,
 			stream     string
 			generation int64
 			position   int64
+			createdAt  int64
 		)
 		if err := rows.Scan(&id, &document, &seq, &stream, &generation,
-			&position); err != nil {
+			&position, &createdAt); err != nil {
 
 			return messagePage{}, fmt.Errorf("chatlet: scan a message: %w", err)
 		}
-		// THE BYTE BOUND ([pageBytes]), past the first message — a page
-		// that held nothing would be a cursor that never moves — and
-		// before this row is taken, so the cursor names the last one
-		// the page holds and the next page starts at this one.
-		if len(ids) > 0 && held+len(document) > pageBytes {
+		// THE BYTE BOUND ([statelog.RowsOf]), before this row is taken, so
+		// the cursor names the last one the page holds and the next page
+		// starts at this one.
+		if !held.Take(len(document)) {
 			more = true
 			break
 		}
-		held += len(document)
 		// THE CURSOR IS THE LAST ROW SCANNED, not the last one decoded.
 		// A message this build cannot read still occupies a place in the
 		// room's sequence, and a cursor that skipped it would hand the
 		// next page a starting point above rows it never returned.
-		lastSeq = seq
+		lastSeq, out.lastAt, out.lastID = seq, createdAt, id
 		ids = append(ids, id)
 		message, err := DecodeMessage(document)
 		if err != nil {

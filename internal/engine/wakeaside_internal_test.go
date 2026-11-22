@@ -351,3 +351,55 @@ func TestAWakeSetAsideIsToldWhyOnce(t *testing.T) {
 		t.Fatal("a wake that ran and came back was not told again")
 	}
 }
+
+// A SECOND TURN NEVER STARTS IN A WAITING RUN'S CONVERSATION (ADR-0176). Parked
+// on another run, run-1 is a turn still in flight on its conversation: its
+// requester's follow-up there neither answers the wait nor starts a turn, but
+// waits aside, its writer told once that the work waits on the run; as run-1
+// resumes, the follow-up is handed back, screened against it running, and
+// joins it.
+//
+// Mutation: free a waiting run's keys at its park, and a turn starts on the
+// follow-up; readmit nothing at the resume, and it never joins.
+func TestASecondTurnNeverStartsInAWaitingRunsConversation(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	r, coordinator := besideRig(t)
+	ran := subscribeBeside(t, r)
+	wait := &sandbox.RunWait{Turn: "run-2", Seat: "swe", Reason: "its branch goes first"}
+	if got, err := r.store.RecordAsk(ctx, "run-1", r.job, sandbox.Ask{Question: sandbox.RunWaitQuestion(wait.Reason),
+		Wait: wait}); err != nil || got != sandbox.AskRecorded {
+		t.Fatalf("RecordAsk of run-1's wait = %v, %v", got, err)
+	}
+	runLeaves(t, r, coordinator)
+	if count := coordinator.SeatCount("swe"); count.Holding != 0 || count.Waiting != 1 {
+		t.Fatalf("the seat counts %+v, want run-1 waiting and holding no slot", count)
+	}
+
+	followUp := r.post(t, "lead", "chat:C1", "use staging, not production", 7)
+	if got := ran(); len(got) != 0 {
+		t.Fatalf("turns ran on %v in the waiting run's conversation", got)
+	}
+	r.e.waitsTold.mu.Lock()
+	why := r.e.waitsTold.told["swe\x00"+followUp.ID.String()]
+	r.e.waitsTold.mu.Unlock()
+	if why != asideWaitLine {
+		t.Errorf("the follow-up's writer was told %q, want %q", why, asideWaitLine)
+	}
+	if got := mustRow(t, r.store, "run-1"); got.Answer != nil {
+		t.Fatalf("the follow-up was taken as the answer to the wait: %+v", got.Answer)
+	}
+
+	if err := r.store.SetStatus(ctx, "run-1", sandbox.StatusRunning, sandbox.Fence{}); err != nil {
+		t.Fatalf("SetStatus: %v", err)
+	}
+	if err := coordinator.OnStarted(ctx, types.ExecutorLaunched{AgentHandle: "swe", TurnID: "run-1"}); err != nil {
+		t.Fatalf("OnStarted: %v", err)
+	}
+	if got := ran(); len(got) != 0 {
+		t.Fatalf("turns ran on %v once the waiting run resumed", got)
+	}
+	if got := r.filed(t); !slices.Contains(got, followUp.ID.String()) {
+		t.Fatalf("the run's record holds wakes %v, want the follow-up handed back at its resume", got)
+	}
+}

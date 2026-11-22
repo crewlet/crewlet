@@ -215,13 +215,20 @@ func (r *Reader) Told(ctx context.Context, handle, cursor string, limit int,
 		if queryErr != nil {
 			return queryErr
 		}
+		held := statelog.RowsOf(ctx)
 		for rows.Next() {
 			t, scanErr := scanTold(rows)
 			if scanErr != nil {
 				_ = rows.Close()
 				return scanErr
 			}
+			if !held.TakeEncoded(t) {
+				break
+			}
 			out.Rows = append(out.Rows, t)
+		}
+		if held.Cut() {
+			out.Next = cursorOf(out.Rows[len(out.Rows)-1].Position)
 		}
 		return errors.Join(rows.Err(), rows.Close())
 	})
@@ -372,13 +379,20 @@ func (r *Reader) Certificates(ctx context.Context, q AuditQuery,
 		if queryErr != nil {
 			return queryErr
 		}
+		held := statelog.RowsOf(ctx)
 		for rows.Next() {
 			c, scanErr := scanCertificate(rows)
 			if scanErr != nil {
 				_ = rows.Close()
 				return scanErr
 			}
+			if !held.TakeEncoded(c) {
+				break
+			}
 			out.Rows = append(out.Rows, c)
+		}
+		if held.Cut() {
+			out.Next = cursorOf(out.Rows[len(out.Rows)-1].Position)
 		}
 		return errors.Join(rows.Err(), rows.Close())
 	})
@@ -507,13 +521,20 @@ func (r *Reader) Commands(ctx context.Context, q AuditQuery,
 		if queryErr != nil {
 			return queryErr
 		}
+		held := statelog.RowsOf(ctx)
 		for rows.Next() {
 			c, scanErr := scanCommand(rows)
 			if scanErr != nil {
 				_ = rows.Close()
 				return scanErr
 			}
+			if !held.TakeEncoded(c) {
+				break
+			}
 			out.Rows = append(out.Rows, c)
+		}
+		if held.Cut() {
+			out.Next = cursorOf(out.Rows[len(out.Rows)-1].Position)
 		}
 		return errors.Join(rows.Err(), rows.Close())
 	})
@@ -791,6 +812,8 @@ var minAtStatements = []string{
 		WHERE at >= ? AND at < ?`,
 	`SELECT MIN(at) FROM access_verdicts INDEXED BY access_verdicts_expiry_idx
 		WHERE at >= ? AND at < ?`,
+	`SELECT MIN(at) FROM access_growth INDEXED BY access_growth_expiry_idx
+		WHERE at >= ? AND at < ?`,
 }
 
 // ExpirableHours lists, oldest first and at most limit of them, the hours that
@@ -888,6 +911,10 @@ func (r *Reader) HostUse(ctx context.Context, week, month time.Time, fresh state
 		if err != nil {
 			return err
 		}
+		// ONE SNAPSHOT, refused rather than cut past the answer's bytes: the
+		// atlas reads every server's use as a whole, and a cut would draw the
+		// rest as unused.
+		held := statelog.RowsOf(ctx)
 		for rows.Next() {
 			var u HostUse
 			var last int64
@@ -896,6 +923,10 @@ func (r *Reader) HostUse(ctx context.Context, week, month time.Time, fresh state
 				return scanErr
 			}
 			u.Last = store.DecodeTime(last)
+			if !held.TakeEncoded(u) {
+				_ = rows.Close()
+				return fmt.Errorf("every server's use passes the %d bytes one read answers", statelog.AnswerBytes)
+			}
 			out = append(out, u)
 		}
 		return errors.Join(rows.Err(), rows.Close())

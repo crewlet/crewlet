@@ -21,7 +21,7 @@ var opFiles = define("tracker.files", opRead, trackerDomain, false,
 			return worklet.FileListing{}, errNoHalf
 		}
 		return b.Tracker.Files(ctx, q)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 type fileArgs struct {
 	Project string
@@ -35,7 +35,7 @@ var opFile = define("tracker.read_file", opRead, trackerDomain, false,
 			return worklet.FileDetail{}, errNoHalf
 		}
 		return b.Tracker.File(ctx, a.Project, a.Path, a.Fresh)
-	})
+	}).oneAnswer()
 
 type putFileArgs struct {
 	OpID string
@@ -330,7 +330,7 @@ var opViewPrior = define("tracker.view_prior", opRead, trackerDomain, true,
 			return worklet.ViewPrior{}, err
 		}
 		return w.ViewPrior(ctx, a.ID)
-	}).answeredWhole()
+	}).oneAnswer().answeredWhole()
 
 type writeViewArgs struct {
 	OpID  string

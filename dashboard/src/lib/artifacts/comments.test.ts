@@ -13,6 +13,7 @@ import {
   elementText,
   filterOf,
   filterParam,
+  joinCommentPages,
   listed,
   pagePin,
   partPin,
@@ -38,6 +39,8 @@ function thread(over: Partial<ArtifactCommentThread> = {}): ArtifactCommentThrea
     created_at: "2026-11-14T10:00:00Z",
     updated_at: "2026-11-14T10:00:00Z",
     remarks: [],
+    continued: false,
+    remarks_cut: false,
     ...over,
   };
 }
@@ -215,5 +218,42 @@ describe("where a pin stands", () => {
     });
     expect(boardAnchorAt(boards, { x: 1500, y: 950 })).toBeNull();
     expect(boardAnchorAt(boards, { x: 1440, y: 10 })).toBeNull();
+  });
+});
+
+describe("the pages", () => {
+  test("a thread cut inside its remarks takes the rest from the next page, and counts add up", () => {
+    const answer = (threads: ArtifactCommentThread[], open: number, next?: string) => ({
+      artifact: "a1",
+      version: 2,
+      head: 2,
+      counts: { open, resolved: 0, outdated: 0 },
+      can_comment: true,
+      role: "owner" as const,
+      threads,
+      next,
+    });
+    const remark = (id: string) => ({
+      id,
+      author: "avery",
+      author_kind: "human",
+      body: id,
+      created_at: "2026-11-14T10:00:00Z",
+    });
+    const first = answer(
+      [thread({ id: "t1" }), thread({ id: "t2", remarks: [remark("r1")], remarks_cut: true })],
+      2,
+      "c1",
+    );
+    const second = answer(
+      [thread({ id: "t2", continued: true, remarks: [remark("r2")] }), thread({ id: "t3" })],
+      1,
+    );
+    const joined = joinCommentPages(first, second);
+    expect(joined.threads.map((t) => t.id)).toEqual(["t1", "t2", "t3"]);
+    expect(joined.threads[1]!.remarks.map((r) => r.id)).toEqual(["r1", "r2"]);
+    expect(joined.threads[1]!.remarks_cut).toBe(false);
+    expect(joined.counts.open).toBe(3);
+    expect(joined.next).toBeUndefined();
   });
 });

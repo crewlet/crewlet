@@ -421,13 +421,15 @@ func TestWindowsMergedPastTheLimitKeepTheEarliestWrite(t *testing.T) {
 // run of about the lag as its value's line: a layout the package doc names.
 // A flush decides every stage at the settled point, which moves the keys'
 // stage's later windows, so here a stream flushed once refuses where an
-// unflushed one answers nil. Either way it writes no text but Secrets.
+// unflushed one answers nil. Either way it writes no text but Secrets. The
+// run is sized from the claims' lag, which grows with every rule, so a rule
+// added keeps the layout rather than shrinking the run below it.
 func TestAFlushMayRefuseAPasswordsKeyOnTheLineAfterAKeysBegin(t *testing.T) {
 	t.Parallel()
 	h := holdBytes()
 	r := rand.New(rand.NewPCG(5, 5))
 	prefix := strings.Repeat("ok\n", 204800)
-	text := prefix + "-----BEGIN PRIVATE KEY-----\npassword: \nsk-" + testRun(r, testB64url, 5431296) + "\n" +
+	text := prefix + "-----BEGIN PRIVATE KEY-----\npassword: \nsk-" + testRun(r, testB64url, lagBytes()-111_288) + "\n" +
 		strings.Repeat("ok\n", stageStep/3+1)
 	want := Secrets(text)
 	read := func(flushAt int) (string, error) {

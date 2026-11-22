@@ -174,6 +174,22 @@ func serviceInstruments() []Instrument {
 				"`seat_wake_triaged`, `seat_wake_foldin_*` and `seat_wake_aside` " +
 				"lines name the reason.",
 		},
+		{
+			Name: SeatRunCalls, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"tool", "outcome"},
+			Shows: "What became of each call an executor's run made to the tools " +
+				"for the runs in flight around it (ADR-0176), by `tool` (the " +
+				"run tool called, or `wait_answered` for the engine's answer " +
+				"to a wait): `listed`, `sent`, `waited`, " +
+				"`resumed` when a wait's run left its seat and the wait was " +
+				"answered, `failed` when a store or the publish failed, or " +
+				"`refused_` and the reason (`self`, `unknown_run`, `requester`, " +
+				"`not_working`, `harness`, `bound`, `cycle`, `caller_done`, " +
+				"`invalid`, `unreachable` for another seat's run the caller's may not ask). " +
+				"`refused_requester` climbing is runs of one seat working for " +
+				"different people on the same work; `refused_bound` runs talking " +
+				"past what a handoff needs. The `seat_run_*` lines name the runs.",
+		},
 
 		// ---- the object store's S3 requests ---------------------------
 		{
@@ -288,6 +304,35 @@ func serviceInstruments() []Instrument {
 				"its uploads, where `crewlet.executor.spool.wait` starts " +
 				"counting `refused`; above zero with no run ending or saving " +
 				"on the node is a spool never given back.",
+		},
+
+		// ---- the node's answer budget ------------------------------------
+		{
+			Name: QueueAnswerWait, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"answer", "outcome"},
+			Shows: "How long each payload answer this engine process built " +
+				"for a peer waited for its weight of the node's answer budget " +
+				"(256 MiB, every payload answer on the node sharing it, in " +
+				"arrival order), and every collection of a run's box, by " +
+				"`answer` (`box_read`, `history`, `memory`, `replay`, " +
+				"`live_relay`, `bridge`, `tail`, `codesearch`, " +
+				"`search_slice`, `mcp_check`, `estate`) and `outcome`: `admitted`, at " +
+				"once or after waiting; `ended`, its asker's wait or its own " +
+				"ran out first, so it answered that the budget was full (or " +
+				"nothing). A p95 climbing beside `held_bytes` near the budget " +
+				"is a node answering more payload at once than its memory " +
+				"keeps for answers; `ended` above zero is answers refused for it. " +
+				"The budget is an engine constant: report it with both readings.",
+		},
+		{
+			Name: QueueAnswerHeldBytes, Kind: KindGauge, Unit: UnitBytes,
+			Attributes: nil,
+			Shows: "Bytes of the node's answer budget (256 MiB) its payload " +
+				"answers and box collections hold now, each at its weight " +
+				"from before its read until its reply is written. Near the " +
+				"budget for long is a node whose answers wait " +
+				"(`crewlet.queue.answers.wait`); above zero with nothing " +
+				"answered or collected is a hold never given back.",
 		},
 	}
 }

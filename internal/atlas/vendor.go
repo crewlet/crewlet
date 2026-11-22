@@ -10,6 +10,7 @@ type Vendor string
 // The vendors the engine knows.
 const (
 	VendorAWS          Vendor = "aws"
+	VendorApple        Vendor = "apple"
 	VendorAnthropic    Vendor = "anthropic"
 	VendorAtlassian    Vendor = "atlassian"
 	VendorCloudflare   Vendor = "cloudflare"
@@ -33,7 +34,7 @@ const (
 
 // Vendors is every vendor, [VendorOther] last.
 var Vendors = []Vendor{
-	VendorAWS, VendorAnthropic, VendorAtlassian, VendorCloudflare, VendorCursor,
+	VendorAWS, VendorAnthropic, VendorApple, VendorAtlassian, VendorCloudflare, VendorCursor,
 	VendorDatadog, VendorDigitalOcean, VendorE2B, VendorExpo, VendorGitHub,
 	VendorGitLab, VendorGitlet, VendorGoogle, VendorGoogleCloud, VendorMattermost,
 	VendorOpenAI, VendorScaleway, VendorSlack, VendorXAI, VendorOther,

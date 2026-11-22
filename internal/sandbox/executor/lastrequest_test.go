@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
@@ -434,7 +435,7 @@ func TestTheMeasureRidesOutOfTheCollection(t *testing.T) {
 		b.Put(p.Stream(), claudeAssistant("msg_1", "null", claudeUsageOf(20, 4000, 300))+"\n"+result+"\n")
 		b.Put(p.Result(), result)
 		b.Put(p.ExitCode(), "0")
-		res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+		res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 		if err != nil {
 			t.Fatalf("Collect: %v", err)
 		}
@@ -450,7 +451,7 @@ func TestTheMeasureRidesOutOfTheCollection(t *testing.T) {
 		b.Put(p.Result(), openCodeRunStep("msg_1")+"\n"+
 			openCodeContextLine(openCodePage(openCodeSettled("msg_1", 1015, 200, 0)))+"\n")
 		b.Put(p.ExitCode(), "0")
-		res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+		res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 		if err != nil {
 			t.Fatalf("Collect: %v", err)
 		}
@@ -489,7 +490,7 @@ func TestAReadingThatFailedIsSaidAtWarning(t *testing.T) {
 		b.Put(p.Stream(), c.stream+"\n"+result+"\n")
 		b.Put(p.Result(), result)
 		b.Put(p.ExitCode(), "0")
-		if _, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}); err != nil {
+		if _, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil)); err != nil {
 			t.Fatalf("%s: Collect: %v", c.name, err)
 		}
 		var said []string

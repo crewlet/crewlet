@@ -287,8 +287,11 @@ var errNotAddressed = errors.New("memread: the read is addressed to another inca
 // addressed and has not attached the seat says so rather than answering from a
 // copy that is still arriving — or that is left over from a tenure that ended.
 func Serve(ctx context.Context, q Server, owner string, attached func() []uuid.UUID,
-	local *Stores,
+	local *Stores, answers *queue.AnswerBudget,
 ) (queue.Unsubscribe, error) {
+	if answers == nil {
+		return nil, errors.New("memread: serving needs the node's answer budget")
+	}
 	return q.Serve(ctx, topics.HeldRead, queue.ConcurrentAnswers, func(ctx context.Context, raw []byte) ([]byte, error) {
 		var req request
 		if err := json.Unmarshal(raw, &req); err != nil {
@@ -320,6 +323,14 @@ func Serve(ctx context.Context, q Server, owner string, attached func() []uuid.U
 		)
 		switch req.Question {
 		case QuestionMemory:
+			// WAITED FOR NO LONGER THAN ITS ASKER WAITS ([DefaultBudget]).
+			wait, cancel := context.WithTimeout(ctx, DefaultBudget)
+			release, holdErr := answers.Acquire(wait, queue.AnswerMemory, answerWeight)
+			cancel()
+			if holdErr != nil {
+				return refuse(holdErr.Error())
+			}
+			defer release()
 			answer, err = local.Memory(ctx, req.Seat,
 				MemoryQuery{Limit: req.Limit, Skills: req.SkillsOrder})
 		case QuestionEpisode:

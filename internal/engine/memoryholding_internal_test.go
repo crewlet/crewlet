@@ -53,7 +53,7 @@ func scriptedBy(own, backlog passScripts) *scriptedMemory {
 		if play, ok := own[seat]; ok {
 			return play(ctx, runOut)
 		}
-		return carriedWhole, nil
+		return carriedAll, nil
 	}, playBacklog: func(ctx context.Context, seat string, runOut func()) (memsync.Carried, error) {
 		if play, ok := backlog[seat]; ok {
 			return play(ctx, runOut)
@@ -82,12 +82,12 @@ func TestACycleSaysNothingOfASeatThatIsNotItsToCarry(t *testing.T) {
 	}, {
 		name: "a seat whose release began partway through its own pass",
 		own: passScripts{
-			"b": notHeldAfter(memsync.Carried{Rows: 12, Marked: 12, StoppedIn: "agent_diary"})},
+			"b": notHeldAfter(memsync.Carried{Rows: 12, StoppedIn: "agent_diary"})},
 		backlog: passScripts{"b": notHeldAfter(memsync.Carried{})},
 	}, {
 		name: "a seat whose release began partway through its backlog",
 		backlog: passScripts{
-			"b": notHeldAfter(memsync.Carried{Rows: 40, Marked: 40, StoppedIn: "episodes"})},
+			"b": notHeldAfter(memsync.Carried{Rows: 40, StoppedIn: "episodes"})},
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -132,13 +132,13 @@ func TestASeatNotTheCyclesToCarryIsNoCutWhenTheBoundRunsOutInIt(t *testing.T) {
 		resume, backlogStart string
 	}{{
 		name: "in its own pass",
-		own: passScripts{"b": notHeldAsItRunsOut(memsync.Carried{Rows: 12, Marked: 12,
+		own: passScripts{"b": notHeldAsItRunsOut(memsync.Carried{Rows: 12,
 			StoppedIn: "agent_diary"})},
 		want:   "INFO memory_sync_ran_out pass=own next=c not_reached=c,(backlogs)",
 		resume: "c",
 	}, {
 		name: "in its backlog",
-		backlog: passScripts{"b": notHeldAsItRunsOut(memsync.Carried{Rows: 40, Marked: 40,
+		backlog: passScripts{"b": notHeldAsItRunsOut(memsync.Carried{Rows: 40,
 			StoppedIn: "episodes"})},
 		want: "INFO memory_sync_ran_out pass=backlog next= not_reached= " +
 			"backlogs_next=c backlogs_not_reached=c",
@@ -199,13 +199,13 @@ func TestAFlushWhoseHoldingEndsUnderItWarns(t *testing.T) {
 		want, called []string
 	}{{
 		name: "in its own pass",
-		own: passScripts{"a": notHeldAfter(memsync.Carried{Rows: 12, Marked: 12,
+		own: passScripts{"a": notHeldAfter(memsync.Carried{Rows: 12,
 			StoppedIn: "agent_diary"})},
 		want:   []string{"WARN seat_memory_not_flushed seat=a pass=own"},
 		called: []string{"own:a"},
 	}, {
 		name: "in its backlog",
-		backlog: passScripts{"a": notHeldAfter(memsync.Carried{Rows: 40, Marked: 40,
+		backlog: passScripts{"a": notHeldAfter(memsync.Carried{Rows: 40,
 			StoppedIn: "episodes"})},
 		want:   []string{"WARN seat_memory_not_flushed seat=a pass=backlog"},
 		called: []string{"own:a", "backlog:a"},

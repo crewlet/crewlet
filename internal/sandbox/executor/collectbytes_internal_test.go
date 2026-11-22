@@ -6,6 +6,7 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/redact/redacttest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -110,7 +111,11 @@ func TestTheStreamsLastLineIsKeptOnlyWhereItStandsInForTheResultFile(t *testing.
 	runner := NewClaudeCode()
 	b.Put(p.Stream(), `{"type":"system"}`+"\n"+`{"type":"result","subtype":"success"}`+"\n")
 	for _, keep := range []bool{false, true} {
-		read, _, err := runner.decodeStream(t.Context(), b, p.Stream(), keep)
+		stream, err := openStream(t.Context(), b, p.Stream())
+		if err != nil {
+			t.Fatal(err)
+		}
+		read, _, err := runner.decodeStream(stream, keep)
 		if err != nil {
 			t.Fatalf("decodeStream: %v", err)
 		}
@@ -145,7 +150,7 @@ func TestAFailedResultsTextIsRedactedOnceForItsReportAndItsError(t *testing.T) {
 	b.Put(p.Stream(), line+"\n")
 	b.Put(p.Result(), line)
 	b.Put(p.ExitCode(), "0")
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}

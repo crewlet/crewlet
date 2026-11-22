@@ -869,6 +869,10 @@ func New(opts Options) (*App, error) {
 		sources.Delegated = d.DelegatedReads()
 		sources.DelegatedGitHub = d.DelegatedGitHub()
 	}
+	// And what agents changed on the growth accounts (ADR-0171).
+	if g, ok := opts.Runtime.(growthRuntime); ok {
+		sources.Growth = g.GrowthReads()
+	}
 	// And the company's atlas, where the runtime reads one (ADR-0126).
 	if a, ok := opts.Runtime.(atlasRuntime); ok {
 		sources.Atlas = a.AtlasReads()
@@ -924,6 +928,7 @@ func New(opts Options) (*App, error) {
 	}, Detail: sources.MCPServer, Restarter: opts.Runtime.MCPRestarter(), Checker: opts.Runtime.MCPChecker(),
 		Drafts: drafts, Documents: documents, Tools: toolDocuments, Values: opts.Runtime.MCPValues(), Now: now,
 		SignIns: opts.Runtime.MCPSignIns(), Approvals: opts.Runtime.MCPApprovals(), HeldCalls: sources.HeldCalls,
+		Cards:   opts.Runtime.GrowthCards(),
 		Reviews: reviewDesk(sources, opts.Runtime.MCPAccepted()), Audit: opts.Audit,
 		// OVER THE CHART, which an approval asks: whether the caller leads
 		// the seat whose run made the held call.

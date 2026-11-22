@@ -120,6 +120,33 @@ func testAnEscalationEndsTheWaitOnTheDelegatesOnce(t *testing.T, s sandbox.Pendi
 	}
 }
 
+// GrowthParked records turnID's run as parked on a held growth spend act,
+// held at heldAt, which lapses a day after (sandbox.HeldApproversAdmin).
+func GrowthParked(t *testing.T, s sandbox.PendingStore, turnID string, heldAt time.Time) sandbox.HeldCall {
+	t.Helper()
+	ctx := t.Context()
+	launch := mustLaunched(t, s, run(turnID))
+	held := sandbox.HeldCall{ID: "0190f3a8-0000-7000-8000-0000000000e1", LaunchID: launch,
+		Server: "crewlet", Tool: "ads_raise_budget", Raw: "ads_raise_budget", Digest: "sha256:ads", HeldAt: heldAt,
+		LapsesAt: heldAt.Add(sandbox.HeldLapse), Fixed: true, Approvers: sandbox.HeldApproversAdmin,
+		Act: string(delegated.KindAdSpend), Binding: strings.Repeat("cd", 32)}
+	sealed, err := heldSeal(t).SealArguments(turnID, held, map[string]any{"campaign": "c1", "daily_budget": "60.00"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	held.Arguments = sealed
+	const question = "May sre raise a campaign's daily budget?"
+	ask := sandbox.Ask{Question: question, Decision: sandbox.HeldFixedDecision(question, nil),
+		To: sandbox.AskToManager, Held: &held}
+	if got, err := s.RecordAsk(ctx, turnID, launch, ask); err != nil || got != sandbox.AskRecorded {
+		t.Fatalf("RecordAsk of a held growth act = %v, %v", got, err)
+	}
+	if err := s.MarkAwaiting(ctx, turnID, sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
+		t.Fatalf("MarkAwaiting: %v", err)
+	}
+	return held
+}
+
 // A DELEGATE'S WORDS REACH THE ROW WITH NO SECRET THEY CARRIED: its reason
 // and findings, which people read before the call itself, hold a provider's
 // key, a password's value and a bearer token, and the answer the write gives

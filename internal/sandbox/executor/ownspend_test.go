@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
@@ -71,7 +72,7 @@ func TestAClaudeRunIsChargedWhatItsOwnResultsStated(t *testing.T) {
 	b.Put(p.Result(), last)
 	b.Put(p.ExitCode(), "0")
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -106,7 +107,7 @@ func TestAClaudeRunWhoseResultNamesTooManyModelsIsChargedItsResult(t *testing.T)
 	b.Put(p.Result(), last)
 	b.Put(p.ExitCode(), "0")
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -130,7 +131,7 @@ func TestAFreshClaudeRunOnAnOlderReleaseIsChargedItsResult(t *testing.T) {
 	b.Put(p.Result(), line)
 	b.Put(p.ExitCode(), "0")
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -190,7 +191,7 @@ func TestAContinuedClaudeRunIsChargedOnlyWhatItAddedToTheSession(t *testing.T) {
 				"\nrelease "+tc.version+"\n")
 			b.Put(p.ExitCode(), "0")
 
-			res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+			res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 			if err != nil {
 				t.Fatalf("Collect: %v", err)
 			}
@@ -238,7 +239,7 @@ func TestAContinuedRunWithoutItsSessionsTotalsIsNotChargedBelowNothing(t *testin
 				"\nrelease 2.1.290 (Claude Code)\n")
 			b.Put(p.ExitCode(), "1")
 
-			res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+			res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 			if err != nil {
 				t.Fatalf("Collect: %v", err)
 			}
@@ -278,7 +279,7 @@ func TestALaunchAfterAStoppedRelaunchIsChargedOnlyItsOwnDelta(t *testing.T) {
 		b.Put(p.Result(), stream)
 		b.Put(p.SessionRecord(), "id "+session+"\ncontinued yes\nrelease 2.1.290 (Claude Code)\n")
 		b.Put(p.ExitCode(), "0")
-		res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+		res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 		if err != nil {
 			t.Fatalf("Collect: %v", err)
 		}

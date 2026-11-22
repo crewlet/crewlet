@@ -266,6 +266,18 @@ Each ends by itself. A sync that cannot see its own write after 3 minutes says s
 
 **Disconnecting turns every agent off:** it disables each account this engine made and removes its roles, and deletes the accounts if you also choose to remove them. The identity project, provisioner, pool and provider are yours and stay; remove the provider's key if you will not reconnect.
 
+## Google's growth products sign in through this identity
+
+Google's growth products (Google Analytics, Search Console, Google Ads and Google Play) sign in through the identity project this connection sets up. No Google Cloud project needs to be prepared for them, but each needs Google Cloud connected with its provisioning block. The design is [ADR-0172](../../adr/0172-a-google-growth-product-signs-in-as-each-seats-own-growth-identity-never-its-cloud-identity.md).
+
+**Each agent gets a second account, its growth identity,** used for those products alone:
+- Its ID is `crewlet-g-` plus the agent's handle (cut to 15 characters) plus 4 characters, and its display name ends in `growth`.
+- It is never the agent's Google Cloud account, and its tokens never leave the engine: no agent's box holds one. You add its email in each product, at the role the agent may act with.
+- Crewlet makes it when the agent's first growth product turns on and turns it off when the last turns off or the agent is removed. It keeps the account, so the roles you gave it return with the agent; delete it in the identity project if the agent will not return. Turning Google Cloud off for an agent leaves it working.
+- It is recorded by Google's unique ID and never adopted by name. If somebody turns it off at Google, Crewlet reports it and leaves it off.
+
+**The company reads its figures as its own reader,** `crewlet-gr-` plus the company's name (cut to 14 characters) plus 4 characters. When a growth product is on, the Cloud Shell block makes it, enables that product's APIs in the identity project, and lets only this company's Crewlet act as it. You add its email once in each product, at the product's read role.
+
 ## Configuration
 
 ```yaml

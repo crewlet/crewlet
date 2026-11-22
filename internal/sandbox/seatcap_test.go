@@ -326,3 +326,81 @@ func TestAnAnsweredFoldInReadmitsTheWakeItDecides(t *testing.T) {
 		t.Fatalf("an answered fold-in readmitted %v, want %v", got, want)
 	}
 }
+
+// A RUN WAITING ON ANOTHER KEEPS ITS KEYS AND NO SLOT UNTIL IT RESUMES OR ENDS
+// (ADR-0176). Parked by `wait_for_run`, answered or not, a run is a turn still
+// in flight on its conversation: it frees no key, as a run parked on a question
+// does, so a second run of that conversation is refused and its mail waits
+// aside, while it holds no slot of the seat. Its own resume is never refused by
+// its wait, and hands back what waited aside behind it to be screened against
+// it running; its ending while parked frees and readmits what it kept. A
+// recount from the store rebuilds the waiting set as the writes left it.
+//
+// Mutation: free a waiting run's keys at its park, as a question's are, and
+// they are readmitted at once; readmit nothing at its resume, and the mail
+// waits for its end.
+func TestARunWaitingOnAnotherKeepsItsKeysUntilItResumesOrEnds(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	rig := newCoordRig(t)
+	rig.withCap(3)
+	holds := rig.withHold()
+	c := rig.coordinator
+	waiter := PendingRun{TurnID: "t1", AgentHandle: "swe", ConversationKey: "a",
+		WaitsFor: &RunWait{Turn: "t2", Seat: "swe", Reason: "its branch first"}}
+	keys := []string{"swe/a", "swe/" + RunKey("t1")}
+	readmitted := func() []string {
+		got := holds.readmitted()
+		slices.Sort(got)
+		return got
+	}
+	if err := enter(c, "t1", "a"); err != nil {
+		t.Fatal(err)
+	}
+	land(c, c.writingCount(waiter, StatusRunning, StatusAwaiting))
+	land(c, c.writingCount(waiter, StatusAwaiting, StatusAnswered))
+	if got := readmitted(); len(got) != 0 {
+		t.Fatalf("a run parking on another, and answered, readmitted %v", got)
+	}
+	for _, key := range []string{"a", RunKey("t1")} {
+		if busy, err := c.KeyBusy(ctx, "swe", key); err != nil || !busy {
+			t.Errorf("the waiting run's key %s is busy %v (%v), want held", key, busy, err)
+		}
+	}
+	if count := c.SeatCount("swe"); count.Holding != 0 || count.Reserved != 0 || count.Waiting != 1 {
+		t.Errorf("the seat counts %+v, want one run waiting and no slot held", count)
+	}
+	if err := enter(c, "t9", "a"); !errors.Is(err, ErrConversationBusy) {
+		t.Errorf("a second run of the waiting run's conversation entered: %v", err)
+	}
+	resumed, err := c.reservingCount(waiter, StatusAnswered, StatusResumed)
+	if err != nil {
+		t.Fatalf("the waiting run's own resume was refused: %v", err)
+	}
+	land(c, resumed)
+	if got := readmitted(); !slices.Equal(got, keys) {
+		t.Fatalf("the waiting run resuming readmitted %v, want %v to be screened against it running", got, keys)
+	}
+	land(c, c.writingCount(waiter, StatusRunning, StatusAwaiting))
+	if got := readmitted(); len(got) != 0 {
+		t.Fatalf("parking on a run again readmitted %v", got)
+	}
+	land(c, c.writingCount(waiter, StatusAwaiting, ""))
+	if got := readmitted(); !slices.Equal(got, keys) {
+		t.Fatalf("the waiting run ending readmitted %v, want %v", got, keys)
+	}
+
+	job := rig.launchWith("t3", func(run *PendingRun) { run.ConversationKey = "c" }).LaunchID
+	ask := Ask{Question: RunWaitQuestion("its branch first"), Wait: &RunWait{Turn: "t1", Seat: "swe",
+		Reason: "its branch first"}}
+	if got, err := rig.pending.RecordAsk(ctx, "t3", job, ask); err != nil || got != AskRecorded {
+		t.Fatalf("RecordAsk of t3's wait = %v, %v", got, err)
+	}
+	if err := rig.pending.SetStatus(ctx, "t3", StatusAwaiting, rigLease); err != nil {
+		t.Fatalf("SetStatus(t3): %v", err)
+	}
+	c.syncSeat(ctx, "swe")
+	if busy, err := c.KeyBusy(ctx, "swe", "c"); err != nil || !busy {
+		t.Errorf("after a recount the waiting run's conversation is busy %v (%v), want held", busy, err)
+	}
+}

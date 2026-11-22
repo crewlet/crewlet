@@ -47,6 +47,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/mirror"
 	"github.com/crewlet/crewlet/internal/gitlet/readaudit"
 	"github.com/crewlet/crewlet/internal/googleauth"
+	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -115,10 +116,11 @@ type Engine struct {
 	// each until it runs short ([awsSeatIssuer]).
 	awsIssuer awsint.Issuer
 
-	// googleCloudIssuer holds the access tokens issued to agents' Google
-	// Cloud service accounts, one per account, in memory only. See
-	// googlecloudtoken.go.
-	googleCloudIssuer googleauth.SeatIssuer
+	// googleIssuer holds the access tokens issued to agents' Google
+	// accounts, the cloud identity's and the growth identity's, one per
+	// account and scope set, in memory only. See googlecloudtoken.go and
+	// googlegrowth.go.
+	googleIssuer googleauth.SeatIssuer
 	// issuers replaces the integrations that issue seat credentials, for a
 	// test of their shared contract; nil is the build's ([Engine.seatIssuers]).
 	issuers []seatIssuer
@@ -209,6 +211,10 @@ type Engine struct {
 	setupRunner func() *setup.Runner
 	// metrics is the process's one recorder, from [Options.Metrics].
 	metrics *metrics.Recorder
+	// answerBudget is the node's answer budget, which every payload answerer
+	// it registers and every box collection it makes acquires from
+	// ([queue.AnswerBudget]; answermeter.go). Built once, in [New].
+	answerBudget *queue.AnswerBudget
 
 	// deadLetterLedger is the queue's dead-letter verbs as this node's wake
 	// feeds and operator surface call them, accounting for every entry a
@@ -398,6 +404,10 @@ type Engine struct {
 	// runner rows and infra summary, beside its presence (nodestatusrecord.go).
 	statusRecords statusRecords
 
+	// growthSignals is what this node's growth products met at their vendors,
+	// published on its status record ([Engine.GrowthSignals]).
+	growthSignals atomic.Pointer[growth.Signals]
+
 	// reviews is this node's watched copy of the definitions the fleet's MCP
 	// tools' levels were decided on ([mcpReviews]).
 	reviews mcpReviews
@@ -473,7 +483,10 @@ type Engine struct {
 	// sshRunner runs the SSH tools' commands, holding each turn's read
 	// certificate in memory until it ends ([Engine.sshRun]).
 	sshRunnerOnce sync.Once
-	sshRunner     *sshint.Runner
+	// growthOnce makes the growth products once ([Engine.growthProducts]).
+	growthOnce sync.Once
+	growth     []builtin.GrowthProduct
+	sshRunner  *sshint.Runner
 
 	// batch is the inbox coalescing window and cap, shared with every seat
 	// attachment here. ONE VALUE on the engine, mutated in place:
@@ -1033,6 +1046,9 @@ type Engine struct {
 	// wakeRouters is this node's routers of its busy seats' held inboxes
 	// (wakerouter.go, ADR-0167).
 	wakeRouters seatRouters
+	// runWaits is this node's watches over its seats' runs parked by
+	// `wait_for_run` (runwaits.go, ADR-0176).
+	runWaits runWaits
 
 	// waitsTold is what each wake waiting behind a busy seat was told of why
 	// it waits, so a person is told each reason once (foldin.go).
@@ -1634,6 +1650,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		checkTokens:         checkTokens,
 		sessions:            sessions,
 		metrics:             opts.Metrics,
+		answerBudget:        queue.NewAnswerBudget(answerMeter{metrics: opts.Metrics}),
 		deadLetterLedger:    newDeadLetterLedger(backends.Queue, backends.Fleet),
 		objectives:          newObjectives(opts.Metrics),
 		mode:                mode,
@@ -1703,9 +1720,9 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// servers retry that refusal on, before anything reads a seat's token:
 	// every reader of one installation meets the held refusal within the wait
 	// instead of asking GitHub again ([github.Issuer]). The same for every
-	// agent's Google Cloud token ([googleauth.SeatIssuer]).
+	// agent's Google tokens ([googleauth.SeatIssuer]).
 	e.githubIssuer.RetryWait = e.seatRetryDelay
-	e.googleCloudIssuer.RetryWait = e.seatRetryDelay
+	e.googleIssuer.RetryWait = e.seatRetryDelay
 
 	// The view of the fleet's data nodes, built before the router that asks it
 	// on every request. Building lists nothing: it runs once the boot's failure
@@ -2815,6 +2832,9 @@ func (e *Engine) teardown(ctx context.Context) {
 	// The routers of busy seats' held inboxes, once the coordinator that starts
 	// them has stopped.
 	e.stopRouters()
+	// And the watches over its seats' waits, which answer through the same
+	// coordinator.
+	e.stopRunWaits()
 	e.stopWaitingWatch(ctx)
 	e.stopNotifications(ctx)
 	e.stopMaintenance()

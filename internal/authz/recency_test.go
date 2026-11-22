@@ -275,6 +275,13 @@ func TestEveryAdminRowAsksForAProofOrSaysWhyNot(t *testing.T) {
 		}
 		walked++
 		why, excused := unproved[a]
+		// A GROWTH TOOL, which its catalog names rather than this list.
+		if grant, _ := authz.SeatGrantOf(a); !excused {
+			if _, _, growthTool := authz.GrowthSeatGrantOf(grant); growthTool {
+				why, excused = "a tool a granted seat holds, which no step-up reaches: each act it "+
+					"asks waits for an administrator at a fresh step-up (growth.*.approve)", true
+			}
+		}
 		switch {
 		case recency.Demands() && excused:
 			t.Errorf("%s asks for a %s proof and is also excused (%q) — drop "+

@@ -454,7 +454,7 @@ func applies(t *testing.T, db *store.DB, plane coord.Plane, cipher secrets.Ciphe
 	if !pointed {
 		return
 	}
-	payload, found, err := plane.Payload(t.Context(), target.RevisionID)
+	payload, found, err := plane.Body(t.Context(), target)
 	if err != nil || !found {
 		t.Fatalf("the tick's read of revision %s: found=%v err=%v", target.RevisionID, found, err)
 	}
@@ -898,7 +898,7 @@ func TestAnOverrideIsJudgedAgainstTheFleetsRevision(t *testing.T) {
 			t.Fatalf("-import-company left the fleet on %s, want a new revision of the file",
 				after.RevisionID)
 		}
-		payload, _, err := fleet.Payload(t.Context(), after.RevisionID)
+		payload, _, err := fleet.Body(t.Context(), after)
 		if err != nil {
 			t.Fatal(err)
 		}

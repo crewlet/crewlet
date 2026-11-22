@@ -697,6 +697,11 @@ type CoordinatorOptions struct {
 	// measures nothing.
 	Spools SpoolMeter
 
+	// AnswerBudget is the node's answer budget every collection of a run's
+	// box holds its weight of while it reads ([Runner.Collect]), its peers'
+	// payload answers beside. Nil is a budget of this coordinator's own.
+	AnswerBudget *queue.AnswerBudget
+
 	// Now is the clock, injectable for tests.
 	Now func() time.Time
 }
@@ -815,6 +820,8 @@ type Coordinator struct {
 	// spoolRoom is the room every spool of this process shares, in bytes
 	// ([spoolRoomBytes], spoolroom.go).
 	spoolRoom *spoolRoom
+	// answerBudget is the node's answer budget ([CoordinatorOptions.AnswerBudget]).
+	answerBudget *queue.AnswerBudget
 
 	// mainThreadWait bounds reading a job's main thread at its collection
 	// ([MainThreadReadWait], [Coordinator.readMainThread]); verdictWait and
@@ -847,6 +854,10 @@ type Coordinator struct {
 	// conversations (seatcap.go). Under mu.
 	reserved map[string]int
 	heldRuns map[string]heldRun
+	// waitingRuns is each run parked by `wait_for_run` this node counts, by
+	// turn: out of [Holding], its keys stay held while it waits, so its mail
+	// waits aside behind it (ADR-0176's amendment). Under mu.
+	waitingRuns map[string]heldRun
 	// freed is each seat's keys its runs leaving [Holding] freed, readmitted
 	// on its inbox where no run still holds them ([Coordinator.readmitFreed]),
 	// and asideFull each seat whose inbox holds as many deliveries aside as it
@@ -1080,6 +1091,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 			memos: map[string]*saveMemo{}},
 		sharedPack:   make(chan struct{}, 1),
 		spoolRoom:    newSpoolRoom(opts.Spools),
+		answerBudget: opts.AnswerBudget,
 		relaunchWait: relaunchCaptureWait,
 		holdingsWait: holdingsReadWait,
 		endWait:      JobEndWait,
@@ -1099,6 +1111,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		runs:         map[string]seatRuns{},
 		reserved:     map[string]int{},
 		heldRuns:     map[string]heldRun{},
+		waitingRuns:  map[string]heldRun{},
 		freed:        map[string][]freedKey{},
 		asideFull:    map[string]bool{},
 		moves:        map[string]uint64{},
@@ -1151,6 +1164,9 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		c.taker = newTakerLease(opts.Takers, opts.Incarnation, opts.TakerTTL)
 	}
 	c.sweepSpools()
+	if c.answerBudget == nil {
+		c.answerBudget = queue.NewAnswerBudget(nil)
+	}
 	return c, nil
 }
 
@@ -1397,11 +1413,12 @@ func (c *Coordinator) moved(handle string) {
 // outside c.mu, which [Coordinator.Readmit] takes.
 func (c *Coordinator) seatFreed(ctx context.Context, handle string, was, now seatRuns) {
 	c.readmitFreed(ctx, handle)
-	if now.holding < was.holding {
+	// A RUN PARKED ON A WAIT ENDING frees the conversations it kept busy too.
+	if now.holding < was.holding || now.awaiting < was.awaiting {
 		c.Readmit(ConversationBusy, handle)
-		if now.holding < c.capOf(handle) {
-			c.Readmit(SeatFull, handle)
-		}
+	}
+	if now.holding < was.holding && now.holding < c.capOf(handle) {
+		c.Readmit(SeatFull, handle)
 	}
 	if (was.holding > 0) != (now.holding > 0) && c.busy != nil {
 		c.busy(handle)
@@ -2139,7 +2156,7 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 			over = c.endJob(ctx, run, box, runner, sawWorking)
 		}
 	}
-	result, err := runner.Collect(ctx, box, run.Handle())
+	result, err := runner.Collect(ctx, box, run.Handle(), c.answerBudget)
 	if err != nil {
 		return Result{}, false, err
 	}
@@ -3043,6 +3060,16 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.ExecutorAnsw
 			answered(run, types.AnswerUnoffered)
 			return AnswerNotMine, nil
 		}
+		if run.HeldCall != nil && run.HeldCall.Lapsed(c.now()) && given.Choice != HeldDeny {
+			// A LAPSED CALL TAKES DENY ALONE, the engine's own or a person's:
+			// an allow arriving between the lapse and the sweep would make a
+			// call on figures a day old (ADR-0171).
+			log.WarnContext(ctx, "sandbox_answer_lapsed",
+				"turn_id", given.TurnID, "approval", given.Approval, "choice", given.Choice,
+				"answered_by", given.AnsweredBy, "lapsed_at", run.HeldCall.LapsesAt)
+			answered(run, types.AnswerNotAwaiting)
+			return AnswerNotMine, nil
+		}
 		// WHAT IT SAYS, MEASURED AS `answer_executor` MEASURED IT: as authored,
 		// trimmed, before redaction, the one string both ends hold to
 		// [MaxAnswerTextBytes], so a tool-accepted answer is never refused here
@@ -3206,12 +3233,17 @@ func answerGivenOf(run PendingRun, given types.ExecutorAnswerGiven, trigger *eve
 	if _, err := AnswerText(run.Decision, given.Choice, given.Answer); err != nil {
 		return AnswerWords{}, RecordedAnswer{}, err
 	}
+	waited, err := waitedOf(run, given.Waited)
+	if err != nil {
+		return AnswerWords{}, RecordedAnswer{}, err
+	}
 	words := AnswerWords{
 		// Redacted HERE, as a chat reply is: it is sealed on the row and handed
 		// as is to the harness, whose box and session keep it.
 		Text: redact.Secrets(strings.TrimSpace(given.Answer)), Choice: given.Choice,
 		Via: types.AnswerViaOperator,
 		By:  given.AnsweredBy, ByKind: given.AnsweredByKind, OperatorID: given.OperatorID,
+		Waited: waited,
 	}
 	answer := RecordedAnswer{
 		EventIDs: []string{trigger.ID.String()}, PostedAt: trigger.Timestamp, RecordedAt: now,
@@ -5749,6 +5781,7 @@ func (c *Coordinator) ReleaseSeat(handle string) {
 	delete(c.freed, handle)
 	delete(c.asideFull, handle)
 	maps.DeleteFunc(c.heldRuns, func(_ string, r heldRun) bool { return r.handle == handle })
+	maps.DeleteFunc(c.waitingRuns, func(_ string, r heldRun) bool { return r.handle == handle })
 	// AND A STOP OF ONE OF ITS LAUNCHES NO FRAME TOOK: its turns run on the next
 	// holder.
 	maps.DeleteFunc(c.launchStops, func(_ string, s launchStop) bool { return s.handle == handle })
@@ -5885,6 +5918,10 @@ type AskedRun struct {
 	// from who answered, never set beside Refused: a refused reply is no answer.
 	Withdrawn bool
 
+	// Waited is how the run a wait was for left its seat's slots, where the
+	// engine answered a run parked by `wait_for_run` (ADR-0176); nil otherwise.
+	Waited *types.RunWaited
+
 	// Refused is set where the question's outcome is no answer but the REFUSAL of a
 	// reply too large to be one ([PendingRun.AnswerRefusal]): what the run is told
 	// (how many messages, the figures) in place of an answer, Answer and By empty.
@@ -5925,5 +5962,6 @@ func askedRun(run PendingRun, answer AnswerWords) *AskedRun {
 		BoxKept:   run.SandboxID != "",
 		Label:     answer.Label,
 		Withdrawn: WithdrawnBy(run, answer.By, answer.ByKind),
+		Waited:    answer.Waited,
 	}
 }

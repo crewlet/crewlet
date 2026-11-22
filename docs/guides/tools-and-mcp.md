@@ -530,6 +530,18 @@ answers, with the commands that clone it, and the box's git reaches nothing
 the run did not check out ([Code
 Sandbox](../concepts/code-sandbox.md#repositories-on-gitlet)).
 
+**Nor are the three tools for the runs around a run:** `list_runs`,
+`message_run` and `wait_for_run`, offered on an executor's run's surface beside
+`ask_and_wait` when its launch found other runs in flight around it, its seat's or other seats' on its work
+([A seat's runs see each other](../concepts/code-sandbox.md#a-seats-runs-see-each-other)).
+`list_runs` takes nothing and answers each run's `turn_id`, `seat`, `this_seat`, `relation`, `stage`,
+`work_item`, `same_requester` and `takes_messages`, and for a run working for
+the same requester its `conversation` kind, `this_conversation`, `branch`,
+`started` and `title`, the title fenced. `message_run` takes a `turn_id` and
+`text` (at most 1,000 characters, never cut). `wait_for_run` takes a `turn_id`,
+a `reason` and the `branch` the run pushed, records the wait, and tells the run
+to end its turn.
+
 **Every revision is a commit id or a ref.** A whole or abbreviated commit id
 (7 or more hex digits) costs nothing; anything else — a branch, a tag, a
 whole ref, `HEAD` — is resolved to the commit it points at as part of the
@@ -856,6 +868,7 @@ and has a **gate**, which its authority row decides:
 | Health | `health` | `fleet_health` and `code_status` ([The deployment's health](#the-deployments-health)) |
 | Atlas | `atlas` | `atlas_search`, `atlas_get` and `atlas_trace` ([The company's atlas](#the-companys-atlas)) |
 | Servers | `servers` | The company's servers over SSH: `ssh_read`, `ssh_operate` and `ask_to_operate` ([SSH](../integrations/ssh.md#the-agents-tools)) |
+| Growth | `growth` | Each growth product's tools, filed from its catalog: reads, recorded changes, and spend, publishing and account changes an administrator approves first ([The sixteen rules](../concepts/identity-and-access.md#the-sixteen-rules)) |
 | Colleagues | `colleagues` | Finding a colleague, asking another agent a question |
 | Memory and skills | `memory` | The agent's own notes, past turns, sessions and skills |
 | MCP discovery | `discovery` | `list_mcp_server_tools` and `activate_tool`, handed to the onboarding pass and a worker so it can reach its MCP servers' tools (an executor holds every tool its seat does from launch, and its harness defers a server's tools itself) |
@@ -879,6 +892,9 @@ and has a **gate**, which its authority row decides:
 | `ssh_read` | An agent whose SSH access is on with a server |
 | `ssh_operate` | An agent whose SSH access is at `operate`: `ssh_operate`, each call also waiting for the company's delegate, an administrator or a named approver, and `ask_to_operate` |
 | `delegated_decisions` | An agent a rule of [delegated decisions](delegated-decisions.md) names a delegate: `review_delegated`, filed under Work items |
+| `growth_read` | An agent on the tool's growth product at `read` or above: its reads |
+| `growth_operate` | An agent on the product at `operate` or above: reversible changes, recorded, and spend or publishing, each call waiting for an administrator |
+| `growth_administer` | An agent on the product at `administer`: account, access and irreversible changes, each call waiting for an administrator |
 
 An administrator passes every app gate. A group whose surface the company does
 not run is not there: a company on Jira holds no Worklet tool, one on Slack no

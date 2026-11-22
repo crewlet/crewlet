@@ -2,6 +2,7 @@ package estate
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/atlas"
@@ -27,6 +28,8 @@ type AtlasReader interface {
 	Log(ctx context.Context, q atlasdomain.LogQuery) (atlasdomain.LogPage, error)
 	Activity(ctx context.Context, since time.Time, fresh statelog.Freshness) (atlasdomain.Activity, error)
 	Purges(ctx context.Context, fresh statelog.Freshness) ([]atlasdomain.PurgeRow, error)
+	LivePage(ctx context.Context, after string, fresh statelog.Freshness) (atlasdomain.Live, string, error)
+	PurgesPage(ctx context.Context, before int64, fresh statelog.Freshness) ([]atlasdomain.PurgeRow, int64, error)
 }
 
 // AtlasWriter is the atlas log's write side as a surface writes it: a person's
@@ -72,19 +75,28 @@ func (b Backend) atlasWriter() (AtlasWriter, error) {
 // ---- the reads ------------------------------------------------------------ //
 
 type atlasLiveArgs struct {
+	After string
 	Fresh statelog.Freshness
+}
+
+// atlasLivePage is a page of the live claims and the cursor the next page
+// starts after, empty on the last.
+type atlasLivePage struct {
+	Live atlasdomain.Live
+	Next string
 }
 
 // EVERY LIVE CLAIM, in one transaction on the node that answers, for the atlas
 // to fold beside the claims it computes at read time.
 var opAtlasLive = define("atlas.live", opRead, atlasDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, a atlasLiveArgs) (atlasdomain.Live, error) {
+	func(ctx context.Context, b Backend, _ *Actor, a atlasLiveArgs) (atlasLivePage, error) {
 		r, err := b.atlasReader()
 		if err != nil {
-			return atlasdomain.Live{}, err
+			return atlasLivePage{}, err
 		}
-		return r.Live(ctx, a.Fresh)
-	})
+		live, next, err := r.LivePage(ctx, a.After, a.Fresh)
+		return atlasLivePage{Live: live, Next: next}, err
+	}).rowsTo(statelog.AnswerBytes)
 
 type atlasEntryArgs struct {
 	ID    string
@@ -105,7 +117,7 @@ var opAtlasEntry = define("atlas.entry", opRead, atlasDomain, false,
 		}
 		row, found, err := r.Entry(ctx, a.ID, a.Fresh)
 		return atlasEntryAnswer{Entry: row, Found: found}, err
-	})
+	}).oneAnswer()
 
 // ONE PAGE OF THE LOG, newest first: the whole company's, or named entries'.
 var opAtlasLog = define("atlas.log", opRead, atlasDomain, false,
@@ -115,7 +127,7 @@ var opAtlasLog = define("atlas.log", opRead, atlasDomain, false,
 			return atlasdomain.LogPage{}, err
 		}
 		return r.Log(ctx, q)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 type atlasActivityArgs struct {
 	Since time.Time
@@ -131,20 +143,29 @@ var opAtlasActivity = define("atlas.activity", opRead, atlasDomain, false,
 			return atlasdomain.Activity{}, err
 		}
 		return r.Activity(ctx, a.Since, a.Fresh)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 type atlasPurgesArgs struct {
-	Fresh statelog.Freshness
+	Before int64
+	Fresh  statelog.Freshness
+}
+
+// atlasPurgesPage is a page of purges and the position the next page reads
+// below, zero on the last.
+type atlasPurgesPage struct {
+	Rows []atlasdomain.PurgeRow
+	Next int64
 }
 
 var opAtlasPurges = define("atlas.purges", opRead, atlasDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, a atlasPurgesArgs) ([]atlasdomain.PurgeRow, error) {
+	func(ctx context.Context, b Backend, _ *Actor, a atlasPurgesArgs) (atlasPurgesPage, error) {
 		r, err := b.atlasReader()
 		if err != nil {
-			return nil, err
+			return atlasPurgesPage{}, err
 		}
-		return r.Purges(ctx, a.Fresh)
-	})
+		rows, next, err := r.PurgesPage(ctx, a.Before, a.Fresh)
+		return atlasPurgesPage{Rows: rows, Next: next}, err
+	}).rowsTo(statelog.AnswerBytes)
 
 // ---- the writes: a surface's, each under the operation it carries ------- //
 
@@ -227,7 +248,29 @@ var _ AtlasReader = AtlasReads{}
 
 // Live answers every live claim.
 func (x AtlasReads) Live(ctx context.Context, fresh statelog.Freshness) (atlasdomain.Live, error) {
-	return call(ctx, x.r, opAtlasLive, nil, atlasLiveArgs{Fresh: fresh})
+	out := atlasdomain.Live{Complete: true}
+	for after := ""; ; {
+		page, next, err := x.LivePage(ctx, after, fresh)
+		if err != nil {
+			return atlasdomain.Live{}, err
+		}
+		if out.Claims = append(out.Claims, page.Claims...); len(out.Claims) > atlasdomain.MaxLiveClaims {
+			return atlasdomain.Live{}, fmt.Errorf("atlasdomain: the atlas holds more than %d live claims, "+
+				"past what one read answers", atlasdomain.MaxLiveClaims)
+		}
+		out.Position, out.Complete = page.Position, out.Complete && page.Complete
+		if after = next; after == "" {
+			out.Claims = atlasdomain.LiveClaims(out.Claims)
+			return out, nil
+		}
+	}
+}
+
+// LivePage answers one page of the live claims, by position.
+func (x AtlasReads) LivePage(ctx context.Context, after string,
+	fresh statelog.Freshness) (atlasdomain.Live, string, error) {
+	page, err := call(ctx, x.r, opAtlasLive, nil, atlasLiveArgs{After: after, Fresh: fresh})
+	return page.Live, page.Next, err
 }
 
 // Entry answers one entry by its id, and whether the log holds a claim on it.
@@ -251,7 +294,24 @@ func (x AtlasReads) Activity(ctx context.Context, since time.Time,
 
 // Purges answers every purge, newest first.
 func (x AtlasReads) Purges(ctx context.Context, fresh statelog.Freshness) ([]atlasdomain.PurgeRow, error) {
-	return call(ctx, x.r, opAtlasPurges, nil, atlasPurgesArgs{Fresh: fresh})
+	var out []atlasdomain.PurgeRow
+	for before := int64(0); ; {
+		rows, next, err := x.PurgesPage(ctx, before, fresh)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, rows...)
+		if before = next; before == 0 || len(out) >= atlasdomain.MaxPurges {
+			return out[:min(len(out), atlasdomain.MaxPurges)], nil
+		}
+	}
+}
+
+// PurgesPage answers one page of purges, newest first, below before.
+func (x AtlasReads) PurgesPage(ctx context.Context, before int64,
+	fresh statelog.Freshness) ([]atlasdomain.PurgeRow, int64, error) {
+	page, err := call(ctx, x.r, opAtlasPurges, nil, atlasPurgesArgs{Before: before, Fresh: fresh})
+	return page.Rows, page.Next, err
 }
 
 // AtlasWrites is the atlas log's writes, made by a data node whose copy serves

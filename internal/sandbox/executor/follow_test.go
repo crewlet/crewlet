@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
@@ -405,7 +406,7 @@ func TestALiveReadingEndsOnTheNoteItsSkippedLinesAreOwed(t *testing.T) {
 				b.Put(p.Done(), "0")
 				shown.WriteString(read(t, reading, b).Text)
 
-				res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+				res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 				if err != nil {
 					t.Fatalf("Collect: %v", err)
 				}
@@ -444,7 +445,7 @@ func TestALiveTranscriptsEntriesEndOnTheirWords(t *testing.T) {
 	b.Put(p.Done(), "0")
 	shown := read(t, runner.Follow(sandbox.RunHandle{}), b).Text
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}

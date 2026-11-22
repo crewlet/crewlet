@@ -131,6 +131,10 @@ type Deps struct {
 	// whose role carries the grant, as Health is. See ssh.go.
 	SSH SSHDeps
 
+	// Growth is the growth integrations' products (ADR-0170): each lists its
+	// tools in its catalog.
+	Growth GrowthDeps
+
 	// Atlas is the atlas tools': the company's atlas, read as the seat within
 	// whoever woke its turn (ADR-0109), a private address only within its own
 	// reach. The zero value omits them. See atlas.go.
@@ -334,7 +338,7 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		atlasCandidates(atlasReader{deps: deps.Atlas, code: deps.Code, authorize: deps.Authorize}),
 		atlasAgentCandidates(deps.AtlasRecord,
 			atlasReader{deps: deps.Atlas, code: deps.Code, authorize: deps.Authorize}),
-		releaseCandidates(release), delegatedCandidates(delegatedDeps))
+		releaseCandidates(release), delegatedCandidates(delegatedDeps), growthCandidates(deps.Growth))
 
 	var names []string
 	for _, c := range candidates {
@@ -408,6 +412,9 @@ type candidate struct {
 // AND `OpenWorld != No`, so a write to private state only (a seat's or a
 // person's own) says `OpenWorld: mcp.No`, or a sub-agent is denied it.
 func annotationsFor(name string) tools.Annotations {
+	if a, ok := growthAnnotations(name); ok {
+		return a
+	}
 	if a, ok := artifactAnnotations(name); ok {
 		return a
 	}

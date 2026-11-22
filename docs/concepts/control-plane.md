@@ -16,13 +16,16 @@ Delivering activation as a **competing-consumer** event (groups `engine-config`,
 flowchart TD
     ACT["activation<br/>(PUT /config, revert, crewlet config import,<br/>or a booting node publishing what it knows)"]
     DB[("company_config<br/><b>each node's own copy</b>")]
-    PTR[("coordination: <code>activation</code><br/><b>pointer + payload, revision = epoch</b>")]
+    PTR[("coordination: <code>activation</code><br/><b>small pointer, revision = epoch</b>")]
+    BODY[("coordination: <code>body.&lt;sha256&gt;</code><br/><b>the sealed document</b>")]
     NUDGE(["broadcast nudge<br/>revision_activated"])
     N1["node-0<br/>reconcile poll"]
     N2["node-1<br/>reconcile poll"]
     STATUS[("coordination: status bucket<br/><b>one key per node</b>")]
     ACT -->|stored as history| DB
-    ACT -->|pointer and payload, one write| PTR
+    ACT -->|1. the body, under its digest| BODY
+    ACT -->|2. the pointer, naming it| PTR
+    PTR -.->|names| BODY
     ACT -.->|best effort| NUDGE
     NUDGE -.->|wake early| N1
     NUDGE -.->|wake early| N2
@@ -37,9 +40,9 @@ flowchart TD
 
 **The `activation` key is the authoritative pointer**, in the coordination store, not a node's own database: *which revision is current* is something the fleet must agree on.
 
-**The payload travels inside the pointer.** Other nodes first meet a revision when the pointer names it, so `Activate` writes the sealed body in the pointer's own record: one write, whole or not at all (a separate body key let concurrent activators leave a pointer naming an overwritten body). The cost is the body's bytes on every pointer read; a company document is kilobytes. On the wire the envelope `{"__encrypted__":"enc:v1:<key id>:<ciphertext>"}` is the record's `payload` field, compacted and otherwise byte for byte what was sealed. Anything that is not a JSON object is refused before it is written.
+**The pointer is small and names the body.** Every probe, heartbeat and reconcile tick on every node reads the pointer, so it carries the revision, its instant, summary and origin, and `"body":{"bytes":N,"sha256":"…"}`: at most 8 KiB (`coord.MaxPointerBytes`), the summary at most 4 KiB of it. The sealed document, the envelope `{"__encrypted__":"enc:v1:<key id>:<ciphertext>"}` compacted and otherwise byte for byte what was sealed, is its own key, `body.<sha256>`, up to what [one key holds](coordination.md#what-one-key-holds). `Activate` writes the body first, then flips the pointer to it; content addressing is what makes that safe, since two writers' bodies are two keys unless they are one document. A node reads the body only when it has no copy of the revision, given the time the recorded size takes to cross its link, and refuses one whose length or digest is not what the pointer names. Anything that is not a JSON object is refused before it is written.
 
-Only the **current** revision's body is kept; a lagging node needs only the revision the pointer names. A node that fetches a revision **keeps** it in its own `company_config` as soon as its seal opens, before it validates or builds it; history, diffs and revert targets are read from there. What the node boots on moves only once its engine has applied the revision (see [A node's own store keeps three facts apart](#a-nodes-own-store-keeps-three-facts-apart)).
+A body no pointer names is [swept](coordination.md#superseded-bodies-are-swept) once it is an hour old; a flip lands within half that of its body's write or not at all, so the sweep never removes a body a flip in flight names. A node that fetches a revision **keeps** it in its own `company_config` as soon as its seal opens, before it validates or builds it; history, diffs and revert targets are read from there. What the node boots on moves only once its engine has applied the revision (see [A node's own store keeps three facts apart](#a-nodes-own-store-keeps-three-facts-apart)).
 
 **The revision's author travels too.** Every revision records who wrote it (`created_by`), what that is (`created_by_kind`: `agent`, `human`, `operator` or `system`) and the credential it came through (`operator_id`), as every write names its caller (`iam.ActorFor`):
 
@@ -211,7 +214,7 @@ The rule an obvious design gets backwards:
 
 Every successful rollout produces lag: the first node to apply advances the pointer and every peer is behind until it polls. A node that sheds on that makes the fastest node the cause of a fleet-wide outage.
 
-So lag must be **confirmed**: either an attempt of this node's at that epoch concluded in failure, or the lag outlasted what propagation explains (three poll intervals, 45 s: longer than a poll plus a normal apply, short enough that a stuck node leaves rotation quickly).
+So lag must be **confirmed**: either an attempt of this node's at that epoch concluded in failure, or the lag outlasted what propagation explains (three poll intervals, 45 s: longer than a poll plus a normal apply, short enough that a stuck node leaves rotation quickly). Reading the body is part of that apply, so across a link the grace grows by the body's crossing at the slowest pace allowed (up to four minutes for a document at its bound); in process it is 45 s exactly.
 
 **An attempt still running is neither.** A node applying the epoch reports `wait` for the whole apply (its first company on an unconfigured node included) and moves to `serve` when it succeeds. An attempt counts toward the retry bound, and its failure as evidence, only when it **concludes**; otherwise a client polling `/health` across a config write could not tell the transient from a revision that does not apply. A failed attempt stays the node's evidence while a retry runs, so a shedding node does not flap back into rotation.
 

@@ -10,9 +10,10 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE ACCESS LOG AS OPERATIONS: what each seat was told about its access and
-// every SSH certificate and command (ADR-0103), reached from whichever node
-// holds the seat, a seats-only leaf included; only a data node publishes.
+// THE ACCESS LOG AS OPERATIONS: what each seat was told about its access, every
+// SSH certificate and command (ADR-0103) and every growth step (ADR-0171),
+// reached from whichever node holds the seat, a seats-only leaf included; only
+// a data node publishes.
 //
 // Every write is the engine's own ([originEngine]): no surface writes the log,
 // and [AccessWrites] is the engine's alone. Each carries the operation id the
@@ -34,6 +35,7 @@ type AccessReader interface {
 	HostUse(ctx context.Context, week, month time.Time,
 		fresh statelog.Freshness) ([]accessdomain.HostUse, error)
 	SealedKeys(ctx context.Context) (accessdomain.SealedCount, error)
+	GrowthChanged(ctx context.Context, q accessdomain.GrowthCount, fresh statelog.Freshness) (int, error)
 }
 
 // AccessWriter is the access log's write side: the domain writer's records a
@@ -45,6 +47,7 @@ type AccessWriter interface {
 		sealed accessdomain.SealedCommand) (statelog.Result, error)
 	VerdictSealed(ctx context.Context, c accessdomain.Call, n accessdomain.NewVerdict,
 		sealed accessdomain.SealedVerdict) (statelog.Result, error)
+	Growth(ctx context.Context, c accessdomain.Call, n accessdomain.NewGrowth) (statelog.Result, error)
 }
 
 // The domain's own sides are what a data node serves the log with.
@@ -93,7 +96,7 @@ var opAccessRecent = define("access.recent", opRead, accessDomain, false,
 			return accessdomain.Recent{}, err
 		}
 		return r.Recent(ctx, a.Handle, a.Since, a.Fresh)
-	})
+	}).oneAnswer()
 
 type accessToldArgs struct {
 	Handle string
@@ -109,7 +112,7 @@ var opAccessTold = define("access.told", opRead, accessDomain, false,
 			return accessdomain.ToldPage{}, err
 		}
 		return r.Told(ctx, a.Handle, a.Cursor, a.Limit, a.Fresh)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 type accessAuditArgs struct {
 	Query accessdomain.AuditQuery
@@ -123,7 +126,7 @@ var opAccessCertificates = define("access.certificates", opRead, accessDomain, f
 			return accessdomain.CertificatePage{}, err
 		}
 		return r.Certificates(ctx, a.Query, a.Fresh)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 type accessHostUseArgs struct {
 	Week, Month time.Time
@@ -139,7 +142,7 @@ var opAccessHostUse = define("access.host_use", opRead, accessDomain, false,
 			return nil, err
 		}
 		return r.HostUse(ctx, a.Week, a.Month, a.Fresh)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 var opAccessCommands = define("access.commands", opRead, accessDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a accessAuditArgs) (accessdomain.CommandPage, error) {
@@ -148,7 +151,7 @@ var opAccessCommands = define("access.commands", opRead, accessDomain, false,
 			return accessdomain.CommandPage{}, err
 		}
 		return r.Commands(ctx, a.Query, a.Fresh)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 // accessSealedArgs carries nothing: the count is the whole log's.
 type accessSealedArgs struct{}
@@ -160,7 +163,23 @@ var opAccessSealedKeys = define("access.sealed_keys", opRead, accessDomain, fals
 			return accessdomain.SealedCount{}, err
 		}
 		return r.SealedKeys(ctx)
-	})
+	}).oneAnswer()
+
+type accessGrowthChangedArgs struct {
+	Query accessdomain.GrowthCount
+	Fresh statelog.Freshness
+}
+
+// THE CHANGES TO ONE GROWTH TARGET that took effect, counted on a data node's
+// copy for a product's rate rule on whichever node holds the seat.
+var opAccessGrowthChanged = define("access.growth_changed", opRead, accessDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a accessGrowthChangedArgs) (int, error) {
+		r, err := b.accessReader()
+		if err != nil {
+			return 0, err
+		}
+		return r.GrowthChanged(ctx, a.Query, a.Fresh)
+	}).oneAnswer()
 
 // ---- the writes: the engine's, each under the operation it carries ---------- //
 
@@ -228,6 +247,22 @@ var opAccessVerdict = define("access.verdict", opIdempotentWrite, accessDomain, 
 		return w.VerdictSealed(ctx, a.Call, a.Verdict, a.Sealed)
 	}).byEngine()
 
+type accessGrowthArgs struct {
+	Call   accessdomain.Call
+	Growth accessdomain.NewGrowth
+}
+
+// A GROWTH STEP'S RECORD crosses the router as it is: it holds no text to seal,
+// a published text being its digest already (ADR-0171).
+var opAccessGrowth = define("access.growth", opIdempotentWrite, accessDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a accessGrowthArgs) (statelog.Result, error) {
+		w, err := b.accessWriter()
+		if err != nil {
+			return statelog.Result{}, err
+		}
+		return w.Growth(ctx, a.Call, a.Growth)
+	}).byEngine()
+
 // ---- the asking half ---------------------------------------------------- //
 
 // AccessReads is the access log's reads, answered by a data node whose copy
@@ -278,6 +313,13 @@ func (x AccessReads) SealedKeys(ctx context.Context) (accessdomain.SealedCount, 
 		out.Values = secrets.KeyCounts{}
 	}
 	return out, err
+}
+
+// GrowthChanged counts the changes to one growth target that took effect since
+// an instant.
+func (x AccessReads) GrowthChanged(ctx context.Context, q accessdomain.GrowthCount,
+	fresh statelog.Freshness) (int, error) {
+	return call(ctx, x.r, opAccessGrowthChanged, nil, accessGrowthChangedArgs{Query: q, Fresh: fresh})
 }
 
 // AccessWrites is the access log's writes, the engine's alone, answered by a
@@ -335,6 +377,12 @@ func (x AccessWrites) Verdict(ctx context.Context, c accessdomain.Call,
 	}
 	n.Subject, n.Reason, n.Findings = "", "", nil
 	return x.written(call(ctx, x.r, opAccessVerdict, nil, accessVerdictArgs{Call: c, Verdict: n, Sealed: sealed}))
+}
+
+// Growth records one step of a growth act.
+func (x AccessWrites) Growth(ctx context.Context, c accessdomain.Call,
+	n accessdomain.NewGrowth) (statelog.Result, error) {
+	return x.written(call(ctx, x.r, opAccessGrowth, nil, accessGrowthArgs{Call: c, Growth: n}))
 }
 
 // written observes a write's position for the next read's floor and answers it.

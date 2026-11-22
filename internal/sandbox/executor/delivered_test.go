@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
@@ -20,7 +21,7 @@ func refsThroughEveryPath(t *testing.T, text string) map[string][]string {
 	b := box(t, runner)
 	b.Put(paths(b).Findings(), "Outcome: succeeded\n"+text)
 	b.Put(paths(b).ExitCode(), "0")
-	collected, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	collected, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -147,7 +148,7 @@ func TestADeliveredRefIsHandedOnAsTheAccountWroteIt(t *testing.T) {
 		b := box(t, runner)
 		b.Put(paths(b).Findings(), "Outcome: succeeded\n"+text)
 		b.Put(paths(b).ExitCode(), "0")
-		collected, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+		collected, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 		if err != nil {
 			t.Fatalf("Collect: %v", err)
 		}
@@ -201,7 +202,7 @@ func TestACollectionPrefersANamedRefWhereverItIs(t *testing.T) {
 			b.Put(p.Result(), `{"type":"result","subtype":"success","result":`+quote(t, tc.message)+`}`)
 			b.Put(p.Findings(), tc.report)
 			b.Put(p.ExitCode(), "0")
-			res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+			res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 			if err != nil {
 				t.Fatalf("Collect: %v", err)
 			}

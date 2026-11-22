@@ -7,6 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactdata/query"
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE DATASTORE AS OPERATIONS: every read and write a tool or the API makes of
@@ -35,6 +36,8 @@ type ArtifactDataReader interface {
 	Store(ctx context.Context, id artifacts.ID) (artifactdata.StoreInfo, error)
 	Usage(ctx context.Context) (artifactdata.Usage, error)
 	State(ctx context.Context, id artifacts.ID, rd artifactdata.Reading) ([]artifactdata.StateEntry, error)
+	StatePage(ctx context.Context, id artifacts.ID, rd artifactdata.Reading,
+		after string) ([]artifactdata.StateEntry, string, error)
 }
 
 // ArtifactDataWriter is the datastore's write side: exactly the domain
@@ -91,7 +94,7 @@ var opDataDocs = define("artifactdata.docs", opRead, artifactDataDomain, false,
 			return artifactdata.DocPage{}, err
 		}
 		return r.Docs(ctx, a.ID, a.Reading, a.Collection, a.Since, a.Cursor, a.Limit)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 type dataDocArgs struct {
 	ID         artifacts.ID
@@ -107,7 +110,7 @@ var opDataDoc = define("artifactdata.doc", opRead, artifactDataDomain, false,
 			return artifactdata.Doc{}, err
 		}
 		return r.Doc(ctx, a.ID, a.Reading, a.Collection, a.Doc)
-	})
+	}).oneAnswer()
 
 type dataQueryArgs struct {
 	ID         artifacts.ID
@@ -123,7 +126,7 @@ var opDataQuery = define("artifactdata.query", opRead, artifactDataDomain, false
 			return artifactdata.DocPage{}, err
 		}
 		return r.Query(ctx, a.ID, a.Reading, a.Collection, a.Query)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 type dataHistoryArgs struct {
 	ID      artifacts.ID
@@ -140,7 +143,7 @@ var opDataHistory = define("artifactdata.history", opRead, artifactDataDomain, f
 			return artifactdata.HistoryPage{}, err
 		}
 		return r.History(ctx, a.ID, a.Reading, a.Filter, a.Cursor, a.Limit)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 type dataStoreArgs struct {
 	ID artifacts.ID
@@ -148,7 +151,11 @@ type dataStoreArgs struct {
 
 // A STORE'S COLLECTIONS, as a tool filters rows by them and a screen shows
 // them: read leniently.
-var opDataSchema = define("artifactdata.schema", opRead, artifactDataDomain, false, dataSchema)
+//
+// One capped "row": a store's schema is written whole by one configure record,
+// so its answer is held by that record's cap.
+var opDataSchema = define("artifactdata.schema", opRead, artifactDataDomain, false,
+	dataSchema).cappedAt(1, int(artifactdata.ArtifactDataMaxRecordBytes))
 
 // A STORE'S COLLECTIONS A CALLER SENDS BACK, ANSWERED WHOLE ([op.answeredWhole]):
 // set_artifact_schema replaces every collection, which a model reads through
@@ -157,7 +164,7 @@ var opDataSchema = define("artifactdata.schema", opRead, artifactDataDomain, fal
 // written away. A separate operation, so reads that only filter rows by a
 // schema are not refused ([opArtifactVersionCarried]).
 var opDataSchemaCarried = define("artifactdata.schema_carried", opRead, artifactDataDomain, false,
-	dataSchema).answeredWhole()
+	dataSchema).cappedAt(1, int(artifactdata.ArtifactDataMaxRecordBytes)).answeredWhole()
 
 // dataSchema is a store's collections, read from this node's copy.
 func dataSchema(ctx context.Context, b Backend, _ *Actor, a dataStoreArgs) ([]artifacts.Collection, error) {
@@ -175,7 +182,7 @@ var opDataStore = define("artifactdata.store", opRead, artifactDataDomain, false
 			return artifactdata.StoreInfo{}, err
 		}
 		return r.Store(ctx, a.ID)
-	})
+	}).oneAnswer()
 
 // dataUsageArgs carries nothing: the counters are the company's.
 type dataUsageArgs struct{}
@@ -187,21 +194,30 @@ var opDataUsage = define("artifactdata.usage", opRead, artifactDataDomain, false
 			return artifactdata.Usage{}, err
 		}
 		return r.Usage(ctx)
-	})
+	}).oneAnswer()
 
 type dataStateArgs struct {
 	ID      artifacts.ID
 	Reading artifactdata.Reading
+	After   string
+}
+
+// dataStatePage is a page of a reader's state and the document the next page
+// starts after, empty on the last.
+type dataStatePage struct {
+	Entries []artifactdata.StateEntry
+	Next    string
 }
 
 var opDataState = define("artifactdata.state", opRead, artifactDataDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, a dataStateArgs) ([]artifactdata.StateEntry, error) {
+	func(ctx context.Context, b Backend, _ *Actor, a dataStateArgs) (dataStatePage, error) {
 		r, err := b.artifactDataReader()
 		if err != nil {
-			return nil, err
+			return dataStatePage{}, err
 		}
-		return r.State(ctx, a.ID, a.Reading)
-	})
+		entries, next, err := r.StatePage(ctx, a.ID, a.Reading, a.After)
+		return dataStatePage{Entries: entries, Next: next}, err
+	}).rowsTo(statelog.AnswerBytes)
 
 // ---- the writes ----------------------------------------------------------- //
 
@@ -338,11 +354,24 @@ func (a ArtifactData) Usage(ctx context.Context) (artifactdata.Usage, error) {
 // State answers a reader's per-viewer state keys.
 func (a ArtifactData) State(ctx context.Context, id artifacts.ID, rd artifactdata.Reading) (
 	[]artifactdata.StateEntry, error) {
-	out, err := call(ctx, a.r, opDataState, nil, dataStateArgs{ID: id, Reading: rd})
-	if out == nil && err == nil {
-		out = []artifactdata.StateEntry{}
+	out := []artifactdata.StateEntry{}
+	for after := ""; ; {
+		entries, next, err := a.StatePage(ctx, id, rd, after)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, entries...)
+		if after = next; after == "" {
+			return out, nil
+		}
 	}
-	return out, err
+}
+
+// StatePage answers one page of a reader's per-viewer state keys.
+func (a ArtifactData) StatePage(ctx context.Context, id artifacts.ID, rd artifactdata.Reading,
+	after string) ([]artifactdata.StateEntry, string, error) {
+	page, err := call(ctx, a.r, opDataState, nil, dataStateArgs{ID: id, Reading: rd, After: after})
+	return page.Entries, page.Next, err
 }
 
 // Write publishes one batch of ops. Like every write below, an unanswered one
