@@ -58,8 +58,9 @@ type RunAround struct {
 }
 
 // RunRelation is how another seat's run bears on a run's work: the same work
-// item, the same conversation, or a work item the tracker links to the
-// caller's.
+// item, the same conversation, a work item the tracker links to the caller's,
+// or a record one of the two runs created or wrote that the other is on, each
+// way named apart.
 type RunRelation string
 
 const (
@@ -69,10 +70,17 @@ const (
 	RelationSameConversation RunRelation = "same_conversation"
 	// RelationLinkedItem is a run on an item the tracker links to the caller's.
 	RelationLinkedItem RunRelation = "linked_item"
+	// RelationOnWhatYouWrote is a run on a work item, or in a conversation,
+	// the caller's calls created or wrote: the ticket it filed.
+	RelationOnWhatYouWrote RunRelation = "on_what_you_wrote"
+	// RelationWroteWhatYouAreOn is a run whose calls created or wrote the
+	// caller's work item or conversation: the run that filed its ticket.
+	RelationWroteWhatYouAreOn RunRelation = "wrote_what_you_are_on"
 )
 
 // RunRelations is the closed set.
-var RunRelations = []RunRelation{RelationSameItem, RelationSameConversation, RelationLinkedItem}
+var RunRelations = []RunRelation{RelationSameItem, RelationSameConversation, RelationLinkedItem,
+	RelationOnWhatYouWrote, RelationWroteWhatYouAreOn}
 
 // Valid reports whether r is one of [RunRelations].
 func (r RunRelation) Valid() bool { return slices.Contains(RunRelations, r) }
@@ -92,7 +100,8 @@ func RunsAround(runs []RunAround, b provenance.Boundary) string {
 	}
 	var w strings.Builder
 	w.WriteString(runsAroundHeader + "\n")
-	w.WriteString("Other runs are working while this one does: your seat's, and other seats' on the same work. " +
+	w.WriteString("Other runs are working while this one does: your seat's, and other seats' on the same work, " +
+		"or on a work item or conversation that this run or the other filed or wrote. " +
 		"Before you start, check whether one works on the " +
 		"same work item, branch or conversation as you: then call `" + toolname.ListRuns + "` to see where it " +
 		"stands, `" + toolname.MessageRun + "` to tell it what you are doing or found (it reads your message " +
@@ -151,7 +160,9 @@ func RunLine(r RunAround, b provenance.Boundary) string {
 
 // relationSaid is each relation as a run's line says it.
 var relationSaid = map[RunRelation]string{
-	RelationSameItem:         "on the same work item as yours",
-	RelationSameConversation: "in the same conversation as yours",
-	RelationLinkedItem:       "on a work item linked to yours",
+	RelationSameItem:          "on the same work item as yours",
+	RelationSameConversation:  "in the same conversation as yours",
+	RelationLinkedItem:        "on a work item linked to yours",
+	RelationOnWhatYouWrote:    "on a work item or conversation you filed or wrote",
+	RelationWroteWhatYouAreOn: "it filed or wrote the work item or conversation you are on",
 }

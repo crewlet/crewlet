@@ -61,11 +61,11 @@ const (
 	// serves', the calls those answered, an item's late call or wakes and the
 	// notes' tellings), and that this build carries without reading: STATED HERE,
 	// so the next field a build adds is added inside it, and the build that adds
-	// it moves its own figure out of this one, as the turn's wake items took
-	// theirs ([wakeRowBytes]) and the job's fold-ins theirs ([foldInRowBytes]).
-	// The turn's read of its conversation ([PendingRun.Base]) has its own
-	// place, at [ConversationBaseMaxBytes].
-	ExtraRowBytes = 256<<10 - wakeRowBytes - foldInRowBytes
+	// it moves its own figure out of this one, as the turn's wake items, the
+	// job's fold-ins and what the turn wrote took theirs ([wakeRowBytes],
+	// [foldInRowBytes], [wroteRowBytes]). The turn's read of its conversation
+	// ([PendingRun.Base]) has its own place, at [ConversationBaseMaxBytes].
+	ExtraRowBytes = 256<<10 - wakeRowBytes - foldInRowBytes - wroteRowBytes
 
 	// wakeRowBytes is the turn's wake items' figure, moved out of the room a
 	// later build adds keys in: [MaxTurnWakes] items at their bound, a hundred
@@ -76,6 +76,13 @@ const (
 	// foldInRowBytes is the job's fold-ins' figure, moved out of the room a
 	// later build adds keys in: [MaxJobFoldIns] at [MaxFoldInBytes] each.
 	foldInRowBytes = MaxJobFoldIns * MaxFoldInBytes
+
+	// wroteRowBytes is the figure of the keys of what the turn's calls wrote
+	// ([PendingRun.WroteKeys]), moved out of the room a later build adds keys
+	// in: [types.MaxWrittenRecords] keys of [writtenKeyBytes] in hex, written
+	// as themselves, 4,495 bytes with the field's name, which 4.5 KiB leaves a
+	// little over (TestTheWholeRowFitsItsBudget weighs them).
+	wroteRowBytes = 4<<10 + 512
 
 	// MaxAnswerBytes bounds a recorded answer as the row holds it (its seal
 	// and deliveries, [RecordedAnswer]) and, apart, the copies letting go of
@@ -259,8 +266,8 @@ const (
 // stated before them was read by nothing, and stayed what it was while the row
 // grew.
 const (
-	measuredOtherFields = 2_337_956
-	measuredSpare       = 376_736
+	measuredOtherFields = 2_342_451
+	measuredSpare       = 376_849
 )
 
 // The per-call bounds of the bridged call log. See [MaxBridgeCallBytes].
