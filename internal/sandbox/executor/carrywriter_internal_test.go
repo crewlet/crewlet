@@ -48,8 +48,9 @@ func TestEveryCarrierRefusesABoxThatNamedNoReleaseAndJudgesAWriterAlone(t *testi
 // session whose writer named no release this build reads (a pre-release, a
 // snapshot, none, which releaseOf reads as "") is refused alone and beside a
 // box of every release, saying why; read as current, it would be carried into
-// a box older than its writer. And a Codex or Kimi Code box of another release
-// than its one supported continues not even its own copy ([inPlaceGate]).
+// a box older than its writer. And a Codex, Copilot or Kimi Code box of another
+// release than its one supported continues not even its own copy
+// ([inPlaceGate]).
 //
 // Mutation: take an unread writer for a current one in any carrier's
 // ContinuesWriter, or let either box continue its own copy on another release,
@@ -64,7 +65,7 @@ func TestAnUnreadWriterContinuesInNoBox(t *testing.T) {
 		{"claude-code", ClaudeCode{}, []string{"2.1.310", "2.1.322", "9.0.0"}},
 		{"opencode", OpenCode{}, []string{"2.0.32", "2.2.7", "9.0.0"}},
 		{"codex", Codex{}, []string{codexCarryRelease}},
-		{"copilot", Copilot{}, []string{copilotFloor}},
+		{"copilot", Copilot{}, []string{copilotFloor()}},
 		{"kimi-code", Kimi{}, []string{kimiSupported}},
 	} {
 		if ok, why := c.carrier.ContinuesWriter(""); ok || why == "" {
@@ -78,7 +79,7 @@ func TestAnUnreadWriterContinuesInNoBox(t *testing.T) {
 	}
 	// EVERY CARRIER WHOSE BOX HOLDS A RELEASE TO ITS OWN COPY refuses another
 	// release in place, as its run's gate does ([inPlaceGate]).
-	for name, gate := range map[string]inPlaceGate{"codex": Codex{}, "kimi-code": Kimi{}} {
+	for name, gate := range map[string]inPlaceGate{"codex": Codex{}, "copilot": Copilot{}, "kimi-code": Kimi{}} {
 		if ok, why := gate.continuesInPlace("9.9.9"); ok || why == "" {
 			t.Errorf("%s: a box of 9.9.9 continues its own copy %v (%q), want refused", name, ok, why)
 		}

@@ -1456,7 +1456,7 @@ func TestACopilotSessionPacksAndRestoresItsOwnFilesAlone(t *testing.T) {
 	}
 	gate := copilotSessionGate(Session{ID: id, Continues: true, Fresh: "fresh-id"}, to, false) +
 		`printf '%s\n' "$s" "$k" "$w" "$@"`
-	out, err := exec.Command(sh, "-c", "set --\n"+gate).CombinedOutput()
+	out, err := exec.Command(sh, "-c", "set --\nv='GitHub Copilot CLI 1.0.114.'\n"+gate).CombinedOutput()
 	if err != nil {
 		t.Fatalf("gate: %v\n%s", err, out)
 	}
@@ -1465,5 +1465,49 @@ func TestACopilotSessionPacksAndRestoresItsOwnFilesAlone(t *testing.T) {
 	}
 	if _, err := os.Stat(to.CopilotSessionDir(id) + "/events.jsonl"); err != nil {
 		t.Fatalf("the restored session is not in the second home: %v", err)
+	}
+}
+
+// A COPILOT BOX CONTINUES EVEN ITS OWN COPY ONLY ON THE RELEASE SUPPORTED:
+// a box that holds the session, nothing carried, continues it only where its
+// Copilot is exactly the profile's written_for release (1.0.114); a newer,
+// older, pre-release or unreadable one starts the fresh session, saying why,
+// and the engine's own check answers the same.
+//
+// Mutation: drop the release check on the path where the box holds its copy,
+// or answer yes in continuesInPlace, and a row goes red.
+func TestACopilotBoxContinuesItsOwnCopyOnlyOnTheReleaseSupported(t *testing.T) {
+	t.Parallel()
+	sh := prereqtest.OnPath(t, "sh", "the case runs the box's session gate", "install a POSIX shell")
+	const id = "66666666-6666-4666-8666-666666666666"
+	for printed, want := range map[string]bool{
+		"GitHub Copilot CLI 1.0.114.": true, "GitHub Copilot CLI 1.0.120.": false,
+		"GitHub Copilot CLI 1.0.103.": false, "GitHub Copilot CLI 1.0.114-beta.1.": false, "": false,
+	} {
+		p := Paths{Home: t.TempDir()}
+		held := p.CopilotSessionDir(id) + "/events.jsonl"
+		if err := os.MkdirAll(filepath.Dir(held), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(held, copilotFixture(t, "steered.events.jsonl"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		gate := "set --\nv=" + sandbox.ShellQuote(printed) + "\n" +
+			copilotSessionGate(Session{ID: id, Continues: true, Fresh: "fresh-id"}, p, false) +
+			`printf '%s\n' "$k" "$w"`
+		out, err := exec.Command(sh, "-c", gate).CombinedOutput()
+		if err != nil {
+			t.Fatalf("%q: gate: %v\n%s", printed, err, out)
+		}
+		k, w, _ := strings.Cut(strings.TrimSuffix(string(out), "\n"), "\n")
+		if (k == "yes") != want || (!want && !strings.Contains(w, "continues only on "+copilotFloor())) {
+			t.Errorf("%q: the box's own copy continued %q because %q, want continued %v", printed, k, w, want)
+		}
+		if ok, _ := (Copilot{}).continuesInPlace(releaseOf(printed)); ok != want {
+			t.Errorf("%q: the engine's check answers %v, want %v", printed, ok, want)
+		}
+	}
+	if copilotFloor() == "" {
+		t.Error("the copilot profile's written_for names no release")
 	}
 }
