@@ -1,6 +1,7 @@
 package sandboxtest
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -137,5 +138,90 @@ func testAClaimWhoseRunHasNoRecordBindsNothing(t *testing.T, s sandbox.PendingSt
 	held, found, err := runs.SessionClaim(ctx, claimed)
 	if err != nil || !found || held.Turn != "t-live" {
 		t.Errorf("the claim reads %+v, %v, %v, want it the live run's", held, found, err)
+	}
+}
+
+// claimOf is claimed's claim as runs hold it, failing the case on an error.
+func claimOf(t *testing.T, runs coord.SandboxRuns) (coord.SessionClaim, bool) {
+	t.Helper()
+	held, found, err := runs.SessionClaim(t.Context(), claimed)
+	if err != nil {
+		t.Fatalf("reading the claim: %v", err)
+	}
+	return held, found
+}
+
+// A BIND WHOSE WRITE LANDED KEEPS ITS CLAIM, its answer lost or not: the record
+// read again binds the id, so the claim stays; and a retry finding the record
+// bound and no claim standing makes the claim again, for the job it binds.
+//
+// Mutation: release on any failed write, or answer a bound record without its
+// claim, and a check goes red.
+func testABindWhoseWriteLandedKeepsItsClaim(t *testing.T, staged *stagedRuns, s sandbox.PendingStore) {
+	ctx := t.Context()
+	job := mustLaunched(t, s, run("t-lost"))
+	staged.landRowThenFail(errors.New("the write's answer was lost"))
+	if _, err := s.BindSession(ctx, "t-lost", sandbox.SessionBind{Launch: job, ID: claimed}); err == nil {
+		t.Fatal("a bind whose answer was lost answered bound")
+	}
+	if got := mustGet(t, s, "t-lost").Launch.Minted; got != claimed {
+		t.Fatalf("the record binds %q, want the write landed", got)
+	}
+	held, found := claimOf(t, staged)
+	if !found || held.Launch != job {
+		t.Fatalf("the landed bind's claim is %+v, %v, want its job's", held, found)
+	}
+	if _, err := staged.records.DeleteSessionClaim(ctx, claimed, held.Revision); err != nil {
+		t.Fatalf("removing the claim: %v", err)
+	}
+	if _, err := s.BindSession(ctx, "t-lost", sandbox.SessionBind{Launch: job, ID: claimed}); err != nil {
+		t.Fatalf("the retry: %v", err)
+	}
+	if held, found := claimOf(t, staged); !found || held.Launch != job {
+		t.Errorf("the retry left the claim %+v, %v, want it made again for its job", held, found)
+	}
+}
+
+// A FAILED RELAUNCH BIND LEAVES THE CONTINUED CLAIM WITH ITS EARLIER OWNER: a
+// relaunch continuing its turn's session moves the claim to its job, and where
+// its record write fails the claim moves back, never removed.
+//
+// Mutation: remove a moved claim on a failed bind, and this goes red.
+func testAFailedRelaunchBindLeavesTheContinuedClaim(t *testing.T, staged *stagedRuns, s sandbox.PendingStore) {
+	ctx := t.Context()
+	first := mustLaunched(t, s, run("t-again"))
+	if _, err := s.BindSession(ctx, "t-again", sandbox.SessionBind{Launch: first, ID: claimed}); err != nil {
+		t.Fatalf("the first job's bind: %v", err)
+	}
+	next := mustBeginLaunch(t, s, run("t-again"))
+	if err := s.AttachSandbox(ctx, "t-again", sandbox.BoxRef{SandboxID: "box-t-again", CommandID: "cmd-2",
+		SessionID: claimed}, sandbox.Fence{}); err != nil {
+		t.Fatalf("the relaunch's attach naming the session it continues: %v", err)
+	}
+	staged.failNext(nil, errors.New("the record's write failed"))
+	if _, err := s.BindSession(ctx, "t-again", sandbox.SessionBind{Launch: next, ID: claimed,
+		Continued: true}); err == nil {
+		t.Fatal("a relaunch bind whose record write failed answered bound")
+	}
+	if held, found := claimOf(t, staged); !found || held.Launch != first {
+		t.Errorf("the continued session's claim is %+v, %v, want it back with job %s", held, found, first)
+	}
+}
+
+// A FAILED BIND RELEASES ITS CLAIM ON A CANCELLED CALLER: the failure it
+// undoes is often the caller's context ending, so the release runs on a
+// context of its own.
+//
+// Mutation: release on the caller's context, and this goes red.
+func testAFailedBindReleasesOnACancelledCaller(t *testing.T, staged *stagedRuns, s sandbox.PendingStore) {
+	job := mustLaunched(t, s, run("t-cancelled"))
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	staged.failRowThen(context.Canceled, cancel)
+	if _, err := s.BindSession(ctx, "t-cancelled", sandbox.SessionBind{Launch: job, ID: claimed}); err == nil {
+		t.Fatal("a bind cut by its caller's cancel answered bound")
+	}
+	if held, found := claimOf(t, staged); found {
+		t.Errorf("the cancelled bind left its claim %+v", held)
 	}
 }
