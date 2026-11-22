@@ -4140,8 +4140,11 @@ type executorRun struct {
 	model string
 	// effort is the entry's reasoning effort, passed beside the model.
 	effort string
-	files  map[string]string
-	env    map[string]string
+	// webDenied is the entry's `web_tools: denied`, which its executor honours
+	// as its runs on the engine host do ([sandbox.RunRequest.WebDenied]).
+	webDenied bool
+	files     map[string]string
+	env       map[string]string
 
 	// signIn is env without the integrations' box defaults and the seat's
 	// own credentials for a tool: what the run's sign-in is judged on, since
@@ -4193,9 +4196,11 @@ func newExecutorRun(agent *harness.Provider, seat runEnv) executorRun {
 	credentials := integrationsOwn(agent, seat.credentials)
 	env := underlay(underlay(maps.Clone(seat.env), entry), integrationsOwn(agent, seat.defaults))
 	maps.Copy(env, credentials)
+	profile := agent.Profile()
 	run := executorRun{
 		model:     agent.ModelArgument(),
 		effort:    agent.Effort(),
+		webDenied: profile.EffectiveWebTools() == harnessprofile.WebToolsDenied,
 		env:       env,
 		signIn:    signIn,
 		files:     agent.SandboxCredentials(),
