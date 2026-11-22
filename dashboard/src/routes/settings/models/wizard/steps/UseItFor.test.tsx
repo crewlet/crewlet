@@ -334,7 +334,12 @@ test("the summary of Everything with no seat picked says no seat uses it", () =>
 
 // M-018: PAST A FEW SEATS, a line counts them; the names stay a press away.
 test("the summary counts the seats past a few, and names them all when asked", () => {
-  const many = { ...emptyDraft(EXECUTORS), key: "haiku", intent: "coding" as const, uses: noUses() };
+  const many = {
+    ...emptyDraft(EXECUTORS),
+    key: "haiku",
+    intent: "coding" as const,
+    uses: noUses(),
+  };
   many.uses.jobs.executor = ["backend-engineer", "designer", "pm"];
   expect(summaryOf(split, many, 2)).toEqual(["3 seats will code with haiku."]);
   expect(summaryOf(split, many)[0]).toBe(

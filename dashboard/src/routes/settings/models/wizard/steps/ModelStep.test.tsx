@@ -58,7 +58,12 @@ const answered: ModelsAnswer = {
 
 let latest: Draft;
 function Step({ model, method = "api-key" }: { model: string; method?: Draft["method"] }) {
-  const [draft, setDraft] = useState<Draft>({ ...emptyDraft(EXECUTORS), key: "fast", model, method });
+  const [draft, setDraft] = useState<Draft>({
+    ...emptyDraft(EXECUTORS),
+    key: "fast",
+    model,
+    method,
+  });
   latest = draft;
   return (
     <ModelStep
