@@ -30,7 +30,7 @@ func TestAVendorsWordsAreTheOpeningOfTheirWholeRedaction(t *testing.T) {
 		for start := maxVendorWords - len(s.Sample) + 1; start < maxVendorWords; start++ {
 			raw := host + strings.Repeat("p", start-len(host)-1) + "/" + s.Sample + "/authorize"
 			ep := &mcp.OAuthEndpoints{Server: "https://mcp.example.com/", Authorization: raw}
-			_, err := AuthorizeURL(ep, Client{ID: "c"}, "r", "s", "c", nil)
+			_, err := AuthorizeURL(ep, Client{ID: "c"}, "r", "s", "c", nil, nil)
 			want := textcut.Bytes(redact.URL(raw), maxVendorWords)
 			if err == nil || !strings.Contains(err.Error(), " "+want+" ") {
 				t.Fatalf("%s at byte %d: refused with %v; want it to name %q", s.Name, start, err, want)
