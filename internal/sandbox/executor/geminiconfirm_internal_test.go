@@ -13,12 +13,12 @@ import (
 // a third as nothing; a take the session lacks leaves the next to confirm.
 // Through compressions (r6): a note sent plain, later folded and dropped by a
 // `$patch`, confirms once; the summary's text confirms nothing. A delivery
-// before the take's run started (an earlier job's) confirms nothing: the
-// twin's deliveries are lines 19 and 35.
+// before the take's run started (an earlier job's) confirms nothing, one on
+// its first line does: the twin's deliveries are its 0-based lines 19 and 35.
 //
-// Mutations, each red: match from the first take rather than after the last
-// confirmed; let one delivery confirm every take of its text; read a
-// compression's copy; confirm a take by a line before its run's start.
+// Mutations, each red: match from the first take, not past the last confirmed;
+// let one delivery confirm every take of its text; read a compression's copy;
+// confirm a take by a line before its run's start, or not on it (`from < at`).
 func TestAGeminiTakeIsConfirmedByItsTextAsAUserMessage(t *testing.T) {
 	t.Parallel()
 	const (
@@ -47,8 +47,8 @@ func TestAGeminiTakeIsConfirmedByItsTextAsAUserMessage(t *testing.T) {
 			[]string{folded, folded}, 1, nil},
 		"a compression's summary": {"session-compressed.jsonl",
 			[]string{"<state_snapshot>SUMMARY-MARK sawNote=false</state_snapshot>"}, 0, nil},
-		"a take whose run started past the first delivery": {"session-twin-end.jsonl",
-			[]string{twinEnd}, 1, []int{20}},
+		"a take whose run started on the second delivery's line": {"session-twin-end.jsonl",
+			[]string{twinEnd}, 1, []int{35}},
 		"a take whose run started past both deliveries": {"session-twin-end.jsonl",
 			[]string{twinEnd}, 0, []int{36}},
 		"a second take whose run started past both deliveries": {"session-twin-end.jsonl",

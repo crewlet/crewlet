@@ -28,6 +28,18 @@ func geminiCarryStandIn(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return geminiCarryStandInAppending(t, `grep '"type":"gemini"' `+shellword.Quote(session)+
+		` | tail -n 1 | sed "s/881853cd-0513-4cbd-b8bd-5bc81ae51ac1/resumed-response-1/"`)
+}
+
+// geminiCarryStandInAppending is [geminiCarryStandIn] whose resumed run
+// appends what the shell command appended prints, as its own responses.
+func geminiCarryStandInAppending(t *testing.T, appended string) string {
+	t.Helper()
+	session, err := filepath.Abs(filepath.Join("testdata", "gemini", "0.70.0", "session-tools.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	stream, err := filepath.Abs(filepath.Join("testdata", "gemini", "0.70.0", "stream-tools.jsonl"))
 	if err != nil {
 		t.Fatal(err)
@@ -39,7 +51,7 @@ for g in "$d"/session-*-"$i8".jsonl; do [ -f "$g" ] && f=$g; done
 cat > /dev/null
 case " $* " in
 *" --resume "*) [ -n "$f" ] || { echo "no session $s to resume" >&2; exit 1; }
-  grep '"type":"gemini"' ` + shellword.Quote(session) + ` | tail -n 1 | sed "s/881853cd-0513-4cbd-b8bd-5bc81ae51ac1/resumed-response-1/" >> "$f";;
+  ` + appended + ` >> "$f";;
 *) sed "s/842120d9-2536-4808-8ba9-437d34456f75/$s/" ` + shellword.Quote(session) + ` > "$d/session-2026-11-21T18-48-$i8.jsonl";;
 esac
 sed "s/6b8d5e13-304f-44a6-aa06-9f3ccff25600/$s/" ` + shellword.Quote(stream) + "\n"
@@ -119,31 +131,38 @@ func TestAGeminiSessionCarriedIntoAFreshBoxIsRestoredAndResumed(t *testing.T) {
 }
 
 // A NEWER GEMINI CLI RELEASE RUNS ON A SESSION OF ITS OWN. A session 0.70.0
-// wrote, carried into a box running 0.71.0, whose resume this build never
-// read, is not restored: the run starts the session minted for it
-// (`--session-id`) and runs, removes the archive, and says why in a person's
-// words, naming the one release a session continues on.
+// wrote, carried into a box running a newer minor (0.71.0) or major (1.0.0),
+// whose resume this build never read, is not restored: the run passes the
+// start gate, starts the session minted for it (`--session-id`) and runs,
+// removes the archive, and says why in a person's words, naming the one
+// release a session continues on.
 //
 // Mutations, each red: continue on any release past the start gate; read the
-// release after the gate; name the session asked for on the fallback.
+// release after the gate; name the session asked for on the fallback; judge
+// the minor whatever the major (1.0.0 refused at the start).
 func TestANewerGeminiReleaseRunsOnASessionOfItsOwn(t *testing.T) {
 	t.Parallel()
-	ran, described, raw := geminiCarried(t, geminiCapturedRelease)
-	runner, b := geminiBoxAt(t, "0.71.0", geminiCarryStandIn(t))
-	_, res := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "carry on", Resume: ran.SessionID,
-		Carried: &sandbox.CarriedSession{Archive: described, Body: bytes.NewReader(raw)}})
-	argv := argvOf(t, b)
-	fresh := after(argv, "--session-id")
-	if fresh == "" || fresh == ran.SessionID || slices.Contains(argv, "--resume") {
-		t.Fatalf("the run on 0.71.0 ran argv %q, want a session of its own", argv)
-	}
-	const why = "this build continues Gemini CLI sessions only on 0.70.0, and this box runs 0.71.0"
-	if !res.Success || res.Continued || res.SessionID != fresh || res.FellBack != why {
-		t.Errorf("the run reports success %v, continued %v in session %q because %q; want a successful "+
-			"run in session %s because %q", res.Success, res.Continued, res.SessionID, res.FellBack, fresh, why)
-	}
-	if left := boxFile(t, b, paths(b).SessionCarried()); left != "" {
-		t.Errorf("the refused archive was left in the box (%d bytes)", len(left))
+	for name, release := range map[string]string{"a newer minor": "0.71.0", "a newer major": "1.0.0"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ran, described, raw := geminiCarried(t, geminiCapturedRelease)
+			runner, b := geminiBoxAt(t, release, geminiCarryStandIn(t))
+			_, res := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "carry on", Resume: ran.SessionID,
+				Carried: &sandbox.CarriedSession{Archive: described, Body: bytes.NewReader(raw)}})
+			argv := argvOf(t, b)
+			fresh := after(argv, "--session-id")
+			if fresh == "" || fresh == ran.SessionID || slices.Contains(argv, "--resume") {
+				t.Fatalf("the run on %s ran argv %q, want a session of its own: %q", release, argv, res.Error)
+			}
+			why := "this build continues Gemini CLI sessions only on 0.70.0, and this box runs " + release
+			if !res.Success || res.Continued || res.SessionID != fresh || res.FellBack != why {
+				t.Errorf("the run reports success %v, continued %v in session %q because %q; want a successful "+
+					"run in session %s because %q", res.Success, res.Continued, res.SessionID, res.FellBack, fresh, why)
+			}
+			if left := boxFile(t, b, paths(b).SessionCarried()); left != "" {
+				t.Errorf("the refused archive was left in the box (%d bytes)", len(left))
+			}
+		})
 	}
 }
 
@@ -163,10 +182,10 @@ func TestAReleaseOlderThanTheOneThisBuildDrivesIsRefusedAtTheStart(t *testing.T)
 		started string
 		says    string
 	}{
-		"gemini, an older patch": {func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
+		"gemini, an older minor": {func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 			return geminiBoxAt(t, "0.69.9", geminiCarryStandIn(t))
 		}, "argv", "this box runs Gemini CLI 0.69.9, and this build runs Gemini CLI 0.70.0 or newer"},
-		"gemini, an older major": {func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
+		"gemini, an older minor that sorts after it as text": {func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 			return geminiBoxAt(t, "0.9.99", geminiCarryStandIn(t))
 		}, "argv", "this box runs Gemini CLI 0.9.99"},
 		"gemini, a release that does not read": {func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
@@ -343,27 +362,33 @@ func TestANewerQwenReleaseLoadsNoCarriedSession(t *testing.T) {
 
 // A CONTINUED GEMINI RUN IS CHARGED ITS OWN REQUESTS, through its script: the
 // responses the carried session holds (three, 0.70.0's session-tools.jsonl)
-// are listed before the harness starts, and the resumed run's one is all the
-// tool prompt moved to its input: 3,007 in (1,200 cached), 254 out of the
+// are listed before the harness starts, and the resumed run's two, of tokens
+// of their own ([geminiOwnResponses]), are its requests, their tool prompts
+// (11 and 13) moved to its input: 3,024 in (1,200 cached), 237 out of the
 // stream's 3,261. Where the list fails, the run is charged the stream's totals
-// unsplit (3,000 and 261), never the whole session's sums, and its transcript
-// says why.
+// unsplit (3,000 and 261) on no requests read, never the whole session's sums,
+// and its transcript says why.
 //
 // Mutations, each red: write an empty list where the list failed; sum the
-// session whatever the list names; pass a failed list over unsaid.
+// session whatever the list names; charge the file's last response alone;
+// pass a failed list over unsaid.
 func TestAContinuedGeminiRunIsChargedItsOwnRequestsThroughItsScript(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		failList            bool
-		input, output, note int
+		failList                      bool
+		input, output, requests, note int
 	}{
-		"its list read":   {false, 3007, 254, 0},
-		"its list failed": {true, 3000, 261, 1},
+		"its list read":   {false, 3024, 237, 2, 0},
+		"its list failed": {true, 3000, 261, 0, 1},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
+			own := filepath.Join(t.TempDir(), "own.jsonl")
+			if err := os.WriteFile(own, []byte(geminiOwnResponses(t)), 0o600); err != nil {
+				t.Fatal(err)
+			}
 			ran, described, raw := geminiCarried(t, geminiCapturedRelease)
-			runner, b := geminiBoxAt(t, geminiCapturedRelease, geminiCarryStandIn(t))
+			runner, b := geminiBoxAt(t, geminiCapturedRelease, geminiCarryStandInAppending(t, "cat "+shellword.Quote(own)))
 			if tc.failList {
 				writeBoxStandIn(t, b, paths(b).BinDir()+"/node", "#!/bin/sh\ncase \"$2\" in ids) exit 3;; esac\nexec "+
 					shellword.Quote(geminiNode(t))+` "$@"`+"\n")
@@ -375,10 +400,10 @@ func TestAContinuedGeminiRunIsChargedItsOwnRequestsThroughItsScript(t *testing.T
 			}
 			note := strings.Count(res.Transcript, "was not read off its chat file")
 			if res.InputTokens != tc.input || res.CacheReadTokens != 1200 || res.OutputTokens != tc.output ||
-				note != tc.note {
-				t.Errorf("the run is charged in %d (cached %d), out %d, its transcript saying the list failed %d "+
-					"times; want %d (1200), %d, %d", res.InputTokens, res.CacheReadTokens, res.OutputTokens, note,
-					tc.input, tc.output, tc.note)
+				res.Turns != tc.requests || note != tc.note {
+				t.Errorf("the run is charged in %d (cached %d), out %d over %d requests, its transcript saying "+
+					"the list failed %d times; want %d (1200), %d over %d, %d", res.InputTokens,
+					res.CacheReadTokens, res.OutputTokens, res.Turns, note, tc.input, tc.output, tc.requests, tc.note)
 			}
 		})
 	}
