@@ -18,7 +18,7 @@ This is how an agent answers a message, works a ticket, implements a feature, ma
 | Runner | How | Measured |
 |---|---|---|
 | Claude Code | `--disallowedTools WebFetch WebSearch` | 2.1.330: both refused, in subagents too, with a repository's settings allowing them and an agent of its own listing them |
-| Codex | `web_search="disabled"` on its app-server's command line, the top configuration layer | 0.171.0: the request offers no `web_search` tool, Codex's one web tool (the codex profile's web denial, measured on `exec`) |
+| Codex | `web_search="disabled"` on its app-server's command line, the top configuration layer | measured through the app-server on 0.171.0: the request offers no `web_search` tool, Codex's one web tool, where without the key it offers one; web search is hosted, so Codex runs nothing for it |
 | OpenCode | the `opencode.tool.webfetch` and `opencode.tool.websearch` plugins removed, and both actions denied in the run's rules and its agent's | 2.3.2: neither registered for the run or a subagent, a repository's agent allowing them and its `plugins` naming them again included; Code Mode's `fetch` refused |
 | GitHub Copilot CLI | `--excluded-tools` naming `web_fetch`, `web_search` and `semantic_code_search` (GitHub's code search, the one other tool that reached the network); `--deny-tool` would not do, since `--yolo` allows every URL | 1.0.114: none offered to the run, its built-in subagents or a repository's own agent listing them |
 
