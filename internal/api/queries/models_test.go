@@ -339,6 +339,39 @@ func TestAMemberReadsNoCredentialAccountOrSentence(t *testing.T) {
 	}
 }
 
+// BOTH READINGS NAME THE HARNESSES THIS BUILD RUNS AN EXECUTOR ON, in the
+// profiles' order: the Models screen reads which models can run a seat's
+// coding here, so a runner a build adds reaches it with no dashboard rebuild.
+//
+// Mutation: drop the list from either reading, or serve another order, and
+// this is red.
+func TestBothReadingsNameTheHarnessesThisBuildRunsAnExecutorOn(t *testing.T) {
+	t.Parallel()
+	backend := coordmemory.New()
+	presentNode(t, backend, "node-a", nil)
+	s := modelSources(t, backend)
+	want := config.ExecutorHarnesses()
+	if len(want) == 0 {
+		t.Fatal("this build runs no executor on any harness")
+	}
+	admin := answer(t, s, "llm_entries", nil).(queries.ModelEntriesAnswer)
+	if !slices.Equal(admin.ExecutorHarnesses, want) {
+		t.Errorf("admin reading names %v, want %v", admin.ExecutorHarnesses, want)
+	}
+	s.Now = func() time.Time { return pinned }
+	r := queries.NewRegistry()
+	queries.Register(r, s)
+	member := iam.WithPrincipal(t.Context(), iam.Principal{ID: uuid.New(), Login: "jane",
+		Kind: iam.KindPerson, Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantWorklet}})
+	data, err := r.Answer(member, "llm_entries", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := data.(queries.MemberEntriesAnswer); !ok || !slices.Equal(got.ExecutorHarnesses, want) {
+		t.Errorf("member reading %+v, want executor_harnesses %v", data, want)
+	}
+}
+
 // AN ENTRY'S LIMIT WINDOWS ARE ONE READING OF THE FLEET: newest report per window,
 // a warning from 80%, cleared once turned over, stale past 30 minutes, and the
 // sit-out marked reached (added where no report named it).
