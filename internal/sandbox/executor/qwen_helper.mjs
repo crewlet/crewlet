@@ -40,7 +40,7 @@ import fs from "node:fs"
 import path from "node:path"
 
 // framing is what Qwen Code puts before a drained message, in the request and
-// in its record (measured on 0.28.3 and 0.26.1).
+// in its record (measured on 0.28.3).
 const framing = "\n[User message received during tool execution]: "
 
 // limitExit is what the helper exits with where Qwen Code failed the turn on
@@ -296,7 +296,7 @@ class Host {
 
   // chatFile is where Qwen Code records session: its home's projects
   // directory, keyed by the working directory's real path with every
-  // character but a letter or digit made a dash (0.28.3 and 0.26.1).
+  // character but a letter or digit made a dash (0.28.3).
   chatFile(session) {
     const key = process.cwd().replace(/[^a-zA-Z0-9]/g, "-")
     return path.join(this.config.qwenHome, "projects", key, "chats", session + ".jsonl")

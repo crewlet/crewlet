@@ -20,8 +20,8 @@ import (
 const QwenCodeName = "qwen-code"
 
 // QwenCode drives Qwen Code (`qwen`) over ACP, its Agent Client Protocol
-// mode, from a helper in the box (qwen_helper.mjs), measured on 0.28.3 and
-// 0.26.1 against a stub of an OpenAI-compatible API
+// mode, from a helper in the box (qwen_helper.mjs), measured on 0.28.3
+// against a stub of an OpenAI-compatible API
 // (docs/concepts/code-sandbox.md, "Qwen Code", says what a run does). ACP
 // rather than `-p`: only ACP has a mid-run route for a note that Qwen Code
 // records out of tool output (craft/drainMidTurnQueue; ruling N3' of #1818).

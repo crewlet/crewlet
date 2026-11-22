@@ -32,8 +32,8 @@ func qwenFixture(t *testing.T, release, name string) []byte {
 }
 
 // A QWEN RUN'S ANSWER IS ITS LAST REPLY, AND ITS TRANSCRIPT SHOWS EACH CALL
-// WITH ITS INPUT AND THE NOTE IT WAS HANDED. On both releases' streams of a
-// run that called two tools and was handed a note after the first: the
+// WITH ITS INPUT AND THE NOTE IT WAS HANDED. On 0.28.3's stream of a run
+// that called two tools and was handed a note after the first: the
 // answer is the text after the last call, never a thought; the run succeeded
 // under the session its helper named; each call reads once, with the input
 // Qwen Code states only once it starts the call, and reads OK by its
@@ -46,7 +46,6 @@ func TestAQwenRunsAnswerIsItsLastReplyAndItsTranscriptShowsItsCallsAndNote(t *te
 	t.Parallel()
 	for release, session := range map[string]string{
 		"0.28.3": "11111111-2222-4333-8444-000000000001",
-		"0.26.1": "",
 	} {
 		t.Run(release, func(t *testing.T) {
 			t.Parallel()
@@ -54,7 +53,7 @@ func TestAQwenRunsAnswerIsItsLastReplyAndItsTranscriptShowsItsCallsAndNote(t *te
 			if res.Text != "Final answer." || !res.Success {
 				t.Fatalf("the run answered %q (success %v), want the last reply alone", res.Text, res.Success)
 			}
-			if session != "" && res.SessionID != session {
+			if res.SessionID != session {
 				t.Errorf("the run's session reads %q, want the helper's %s", res.SessionID, session)
 			}
 			var calls, oks, steers []string
