@@ -37,6 +37,7 @@ type ExecutorReader interface {
 	Expired(ctx context.Context, cutoff time.Time, limit int) ([]executordomain.Expiry, error)
 	Unended(ctx context.Context, before time.Time, limit int) ([]executordomain.Expiry, error)
 	Handles(ctx context.Context, fresh statelog.Freshness) ([]string, error)
+	SessionHeld(ctx context.Context, sessionID string, fresh statelog.Freshness) (bool, error)
 	HandlesPage(ctx context.Context, after string, fresh statelog.Freshness) (executordomain.HandlesPage, error)
 	SealedKeys(ctx context.Context) (executordomain.SealedCount, error)
 }
@@ -201,6 +202,23 @@ var opExecutorHandles = define("executor.handles", opRead, executorDomain, false
 		}
 		return r.HandlesPage(ctx, a.After, a.Fresh)
 	}).rowsTo(statelog.AnswerBytes)
+
+type executorSessionHeldArgs struct {
+	SessionID string
+	Fresh     statelog.Freshness
+}
+
+// Whether any turn's row names a session id, one seek over the whole log: what
+// a minted session's bind asks before it binds an id as fresh. An older data
+// node answers it unknown, unserved, and the router asks the next.
+var opExecutorSessionHeld = define("executor.session_held", opRead, executorDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a executorSessionHeldArgs) (bool, error) {
+		r, err := b.executorReader()
+		if err != nil {
+			return false, err
+		}
+		return r.SessionHeld(ctx, a.SessionID, a.Fresh)
+	}).oneAnswer()
 
 // executorSealedArgs carries nothing: the count is the whole log's.
 type executorSealedArgs struct{}
@@ -400,6 +418,13 @@ func (x ExecutorReads) Handles(ctx context.Context, fresh statelog.Freshness) ([
 			return out, nil
 		}
 	}
+}
+
+// SessionHeld answers whether any turn's row names the session id, at the
+// level fresh asks for.
+func (x ExecutorReads) SessionHeld(ctx context.Context, sessionID string, fresh statelog.Freshness) (bool,
+	error) {
+	return call(ctx, x.r, opExecutorSessionHeld, nil, executorSessionHeldArgs{SessionID: sessionID, Fresh: fresh})
 }
 
 // SealedKeys answers how many sessions sit sealed under each keyring key.
