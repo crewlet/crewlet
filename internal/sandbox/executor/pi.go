@@ -355,13 +355,14 @@ func (Pi) ContinuesWriter(writer string) (bool, string) {
 // session at all, the copy it holds as much as one carried to it
 // ([inPlaceGate]): only on [piSupported], as the run's own gate holds it
 // ([piSessionGate]), so the engine asks before a relaunch hands the brief
-// that continues the box's copy.
+// that continues the box's copy. A box release that does not read
+// ([releaseReads]: none, a pre-release, a snapshot) is said to be none.
 func (Pi) continuesInPlace(box string) (bool, string) {
 	if box == piSupported {
 		return true, ""
 	}
 	runs := fmt.Sprintf("this box runs Pi %.64s", box)
-	if box == "" {
+	if !releaseReads(box) {
 		runs = "this box's Pi named no release this build reads"
 	}
 	return false, fmt.Sprintf("%s, and a session is continued only on Pi %s, the release this build supports",
