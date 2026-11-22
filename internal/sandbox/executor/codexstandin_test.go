@@ -166,21 +166,18 @@ func answerCodexStandIn(ws *websocket.Conn, record string) {
 // session it starts.
 const codexStandInThread = "019a1f62-fbda-7aa2-af57-6c0abeb8e50b"
 
-// codexStandIn is a box's stand-in `codex`: `--version` prints release; `app-server`
-// records its argv to record/server-argv and runs this binary as the stand-in
-// app-server; `exec` records its argv, stdin and environment, prints a turn
-// ending in the answer `done` on the thread it continues or
-// [codexStandInThread], appends its rollout lines (one turn of 300 input, 200
-// cached, 40 out, a window of 258400 and two plan windows) to the thread's
-// rollout, and, where record/wait-steer exists, first waits for a steer, and
-// where record/final exists for an interrupt the app-server refused, the
-// turn's last response its answer; where record/block exists, it then works
-// until its turn is interrupted (exit 1, the rollout's turn_aborted written),
-// its app-server stops (exit 1, as exec does when its server goes) or it is
-// sent as many SIGTERMs as record/exec-terms says, one where it is absent
-// (`exec` in record/order). Two tell the script's signal from a teardown's:
-// the group's first reaches it with the script's, and only the script's
-// `end` sends a second.
+// codexStandIn is a box's stand-in `codex`: `--version` prints release;
+// `app-server` records its argv and runs this binary as the app-server; `exec`
+// records its argv, stdin and environment, prints a turn answering `done` on
+// its thread (or [codexStandInThread]) and appends one turn's rollout lines
+// (300 in, 200 cached, 40 out, a 258400 window, two plan windows). Before its
+// answer it waits for a steer (record/wait-steer) or a refused interrupt
+// (record/final); with record/block it then works until interrupted (exit 1,
+// turn_aborted written), its server stops (exit 1) or SIGTERM (`exec` in
+// record/order). With record/own-group it first moves to a group of its own
+// (setsid, pid kept), so only the script's own `end` reaches it: a shell runs a
+// trap once for two SIGTERMs arriving during one command, so counting them
+// cannot tell the group's from the script's.
 func codexStandIn(t *testing.T, box sandbox.Sandbox, release, record string) {
 	t.Helper()
 	bin, err := os.Executable()
@@ -202,6 +199,7 @@ app-server)
   for a; do case "$a" in unix://*) s=${a#unix://};; esac; done
   %[3]s="$s" %[4]s="$rec" exec %[5]s;;
 exec)
+  if [ -e "$rec/own-group" ] && [ -z "$CREWLET_TEST_OWN_GROUP" ]; then CREWLET_TEST_OWN_GROUP=1 exec setsid "$0" "$@"; fi
   printf '%%s\n' "$@" > "$rec/exec-argv"; pwd > "$rec/exec-cwd"; env > "$rec/env"; cat > "$rec/stdin"
   tid=%[6]s; [ "$5" != resume ] || tid=$6
   printf '{"type":"thread.started","thread_id":"%%s"}\n{"type":"turn.started"}\n' "$tid"
@@ -212,7 +210,7 @@ exec)
   cat >> "$f" <<'EOF'
 %[7]s
 EOF
-  if [ -e "$rec/block" ]; then need=$(cat "$rec/exec-terms" 2> /dev/null || echo 1); got=0; trap 'got=$((got+1)); if [ "$got" -ge "$need" ]; then echo exec >> "$rec/order"; exit 143; fi' TERM; : > "$rec/working"; until [ -s "$rec/interrupted" ] || grep -qx server "$rec/order" 2> /dev/null; do sleep 0.05; done; [ ! -s "$rec/interrupted" ] || printf '%%s\n' '{"timestamp":"2026-11-22T09:00:03.000Z","ordinal":93,"type":"event_msg","payload":{"type":"turn_aborted","turn_id":"t9","reason":"interrupted"}}' >> "$f"; exit 1; fi
+  if [ -e "$rec/block" ]; then trap 'echo exec >> "$rec/order"; exit 143' TERM; : > "$rec/working"; until [ -s "$rec/interrupted" ] || grep -qx server "$rec/order" 2> /dev/null; do sleep 0.05; done; [ ! -s "$rec/interrupted" ] || printf '%%s\n' '{"timestamp":"2026-11-22T09:00:03.000Z","ordinal":93,"type":"event_msg","payload":{"type":"turn_aborted","turn_id":"t9","reason":"interrupted"}}' >> "$f"; exit 1; fi
   printf '%%s\n' '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"done"}}' '{"type":"turn.completed","usage":{"input_tokens":9999,"cached_input_tokens":0,"output_tokens":9999}}'
   exit 0;;
 esac

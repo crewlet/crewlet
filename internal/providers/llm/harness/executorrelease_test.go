@@ -33,7 +33,9 @@ func TestAReleaseIsHeldToAFloorByItsNumbers(t *testing.T) {
 func codexEntry(t *testing.T, probe int) *Provider {
 	t.Helper()
 	dir := t.TempDir()
-	bin := filepath.Join(dir, "codex")
+	// THE BINARY IN A DIRECTORY OF ITS OWN: the entry keeps its captures
+	// under <StateDir>/codex, where a binary named codex would sit.
+	bin := filepath.Join(t.TempDir(), "codex")
 	script := "#!/bin/sh\n[ \"$1\" = app-server ] && exit " + strconv.Itoa(probe) + "\necho 'codex-cli 0.171.0'\n"
 	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil { //nolint:gosec // the case's own stand-in
 		t.Fatal(err)
