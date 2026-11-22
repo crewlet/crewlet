@@ -69,7 +69,7 @@ A report is a typed record. One in full:
 |---|---|
 | `class`, `component`, `site` | The defect, from a fixed catalogue; the engine's package it was detected in; and the function, from the public source. Each class names one fixed function, except a panic (the function that panicked) and a failure loop (the function its error left the engine's code through) |
 | `site_file` | Only where the `site` is not the class's own: the package and base name of the function's file, never the build machine's path, so the relay can verify it |
-| `fingerprint` | A digest of `class`, `component`, `site` and the class's identity values only, so one defect has one fingerprint on every engine and version. Identity is a short list of yes-or-no and closed-set values, never a number or version, at most 16 combinations per class |
+| `fingerprint` | A digest of `class`, `component`, `site` and the class's identity values only, so one defect has one fingerprint on every engine and version. Identity is a short list of yes-or-no and closed-set values, never a number or version, at most 16 combinations per class, and per harness for a class split by its harness |
 | `engine` | The build: version, commit (absent on a `go install`), Go toolchain, operating system and architecture ([which builds report](#which-builds-report)) |
 | `harness` | The coding CLI and its release; present for a class that involves one, absent for any other |
 | `topology` | Roughly how many nodes (`1`, `2-3`, `4-8` or `9+`), and three closed choices: `stream`, `coordination` and where the executor `sandbox` runs |
