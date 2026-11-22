@@ -349,7 +349,7 @@ func TestEveryGrowthSeatRoundTripsThroughItsOnePath(t *testing.T) {
 		}
 		got, present := seataccess.DesiredOf(role, lane)
 		generic, ok := role.GrowthSeatAccess(key)
-		if !present || !ok || !got.SameAccess(want) || got.Enabled != want.Enabled ||
+		if !present || !ok || !got.SameAccess(want.NormalizedFor(lane)) || got.Enabled != want.Enabled ||
 			generic.Level != got.Level || !config.SeatAccessOn(generic.On) {
 			t.Errorf("%s: read back %+v (present %v), config reads %+v, want %+v", lane, got, present, generic, want)
 		}
