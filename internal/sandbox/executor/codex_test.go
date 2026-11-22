@@ -503,16 +503,16 @@ func TestNoCodexCommandLineCarriesTheBridgesToken(t *testing.T) {
 
 // A CODEX RUN TORN DOWN ENDS IN ORDER WITHIN ITS GRACE: on the group's
 // SIGTERM, the script's teardown ends exec first, then the app-server, and the
-// session is packed before the run exits. The stand-in exec outlives the
-// group's SIGTERM and ends on the script's own, so the order is the script's,
-// never the group's.
+// session is packed before the run exits. The stand-in exec runs in a process
+// group of its own, so the group's SIGTERM misses it and the script's own ends
+// it: the order is the script's, never the group's.
 //
 // Mutation: stop the app-server before exec in the teardown, or drop the pack
 // from it, and this goes red.
 func TestACodexRunTornDownEndsInOrderAndPacksItsSession(t *testing.T) {
 	t.Parallel()
 	runner, box, record := codexBox(t, "0.171.0")
-	for name, body := range map[string]string{"block": "", "exec-terms": "2"} {
+	for name, body := range map[string]string{"block": "", "own-group": ""} {
 		if err := os.WriteFile(filepath.Join(record, name), []byte(body), 0o600); err != nil {
 			t.Fatalf("arm the stand-in: %v", err)
 		}
