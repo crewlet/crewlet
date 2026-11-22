@@ -9,9 +9,9 @@ import (
 	"github.com/crewlet/crewlet/internal/growth"
 )
 
-// Held is a held call's request, its target's live state and the binding a
-// person's approval is to. A product builds it, holding the request to the
-// seat's scope and its tool's class first.
+// Held is a write's request, its target's live state and the binding a
+// person's approval is to. A product builds the request, holding it to the
+// seat's scope first, and [Client.Read] reads its target.
 type Held struct {
 	Req     Request
 	Before  []byte
@@ -22,6 +22,30 @@ type Held struct {
 func NewHeld(req Request, before []byte) Held {
 	return Held{Req: req, Before: before, Binding: req.Digest(before)}
 }
+
+// Read is req held to its target as Google answers for it now, or to none for
+// a write that acts on nothing one read returns ([Request.Resource]).
+func (c *Client) Read(ctx context.Context, handle string, req Request) (Held, error) {
+	address := req.Resource()
+	if address == "" {
+		return NewHeld(req, nil), nil
+	}
+	scopes := req.Op.Permissions
+	if c.ReadScopes != nil {
+		scopes = c.ReadScopes(req.Op)
+	}
+	get := growth.Operation{ID: req.Op.ID + ".before", Method: "GET", Path: address, Class: growth.ClassRead,
+		Permissions: scopes}
+	raw, err := c.Send(ctx, handle, Request{Op: get, Address: address})
+	if err != nil {
+		return Held{Req: req}, err
+	}
+	return NewHeld(req, raw), nil
+}
+
+// Class is the class h comes to against its target as read now
+// ([growth.Classify]), on the same bytes its binding holds.
+func (h Held) Class() growth.Class { return growth.Classify(h.Req.Op, h.changes()) }
 
 // changes is what h changes on its target as it reads now.
 func (h Held) changes() []growth.Change {
@@ -50,7 +74,7 @@ func (c *Client) Hold(call growth.Call, h Held, class growth.Class) growth.Hold 
 		Class: class, Binding: h.Binding, Subject: h.Req.Subject(c.Kind),
 		Question: fmt.Sprintf("Allow %s to %s?", call.Handle, h.Req.Describe()),
 		Context:  c.Name + " " + h.Req.Op.ID + " on " + h.Req.Target() + ". " + h.changeWords(),
-		Ask:      c.Record(call, h.Req, class, h.Before),
+		Ask:      h.record(c, call, class),
 	}
 }
 
@@ -70,33 +94,50 @@ func (c *Client) Card(call growth.Call, h Held, binding string, class growth.Cla
 	}
 }
 
-// Apply makes a prepared write once and records it: an operate call made at
-// once (made or failed), or an approved held call (applied, void or failed).
-// h and prepared are the product's fresh read of the call, its target read
-// again and held to the seat's scope; nothing is sent where that failed or
-// where the target moved since binding was taken. cut shapes the answer.
-func (c *Client) Apply(ctx context.Context, call growth.Call, h Held, prepared error, binding string,
+// Apply makes a write once and records it at its tool's class: an operate
+// call at once (made or failed), or an approved held call, whose
+// administrator's answer is recorded first and which acts only on the act's
+// one answer (applied, void or failed, every way it ends). req is the
+// product's fresh build of the call, held to the seat's scope; built is why
+// that failed. Under the account's lease and within growth.ApplyBound it reads
+// the target again and sends nothing where binding no longer holds. cut
+// shapes the answer.
+func (c *Client) Apply(ctx context.Context, call growth.Call, req Request, built error, binding string,
 	class growth.Class, cut func(any) any) (any, error) {
 	held := call.HeldCall != ""
-	if prepared != nil {
-		if held && h.Req.Op.ID != "" {
-			r := c.Record(call, h.Req, class, nil)
-			r.Failure = applyFailure(prepared)
-			c.note(ctx, growth.StepFailed, r)
+	r := c.Record(call, req, class)
+	if held {
+		if err := c.allow(ctx, r, call.Approver); err != nil {
+			return nil, err
 		}
-		return nil, prepared
 	}
-	r := c.Record(call, h.Req, class, h.Before)
+	if built != nil {
+		return nil, c.failEarly(ctx, held, r, built)
+	}
+	release, err := c.hold(ctx, "write/"+c.Kind+"/"+req.AccountOrTarget())
+	if err != nil {
+		return nil, c.failEarly(ctx, held, r, err)
+	}
+	defer release()
+	// EVERYTHING UNDER THE LEASE IS CUT AT ITS BOUND, so nothing acts once the
+	// lease could lapse; the records take the caller's context.
+	act, cancel := context.WithTimeout(ctx, growth.ApplyBound)
+	defer cancel()
+	h, err := c.Read(act, call.Handle, req)
+	if err != nil {
+		return nil, c.failEarly(ctx, held, r, err)
+	}
+	r = h.record(c, call, class)
 	if !growth.BindingHolds(binding, h.Binding) {
 		if held {
 			c.note(ctx, growth.StepVoid, r)
 		}
 		return nil, growth.ErrMoved
 	}
-	out, err := c.SendAndRead(ctx, call.Handle, h.Req, cut)
+	out, err := c.SendAndRead(act, call.Handle, h.Req, cut)
 	switch {
 	case err != nil:
-		r.Failure = applyFailure(err)
+		r.Failure = failureOfStep(err)
 		c.note(ctx, growth.StepFailed, r)
 		return nil, err
 	case held:
@@ -105,4 +146,29 @@ func (c *Client) Apply(ctx context.Context, call growth.Call, h Held, prepared e
 		c.note(ctx, growth.StepMade, r)
 	}
 	return out, nil
+}
+
+// hold takes resource's lease, or answers why it could not.
+func (c *Client) hold(ctx context.Context, resource string) (func(), error) {
+	if c.Leases == nil {
+		return nil, growth.Refuse(growth.RefusedUnavailable, "this node cannot hold an act's lease, so nothing "+
+			"was sent.")
+	}
+	release, err := c.Leases.Hold(ctx, resource)
+	if err != nil {
+		return nil, growth.Refuse(growth.RefusedUnavailable, "another act on the same "+c.Name+" account is "+
+			"being made; nothing was sent. Call again.")
+	}
+	return release, nil
+}
+
+// failEarly records the failed outcome of an allowed held call that ended
+// before its write was sent, and answers err; an operate call that sent
+// nothing is no act.
+func (c *Client) failEarly(ctx context.Context, held bool, r growth.Record, err error) error {
+	if held {
+		r.Failure = failureOfStep(err)
+		c.note(ctx, growth.StepFailed, r)
+	}
+	return err
 }
