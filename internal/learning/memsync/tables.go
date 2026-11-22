@@ -81,11 +81,10 @@ type table struct {
 	// A hydration replays the parent's table first ([tables]) and LEAVES OUT
 	// a row whose parent is still not in the store ([table.parentHeld]),
 	// counted as an orphan: written, its foreign key refused the seat on every
-	// node lacking the parent, over a row nothing reads alone. The parent is
-	// missing after a turn cut between a version the holding wrote and a skill
-	// it left unchanged, which the backlog carries after the own pass, or when
-	// this store skipped it for another skill of that name on the
-	// (agent_handle, name) index ([table.onConflict]).
+	// node lacking the parent, over a row nothing reads alone. It is missing
+	// after a turn cut between a version the holding wrote and an unchanged
+	// skill the backlog carries, or when this store skipped it for another
+	// skill of that name ([table.onConflict]).
 	// TestEveryReferenceBetweenCarriedTablesNamesAParentReplayedFirst holds
 	// every schema reference between carried tables to a parent listed first.
 	parent *reference
