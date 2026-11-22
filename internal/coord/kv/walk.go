@@ -166,19 +166,24 @@ func beginPass(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValu
 	if err != nil {
 		return nil, unavailable("read "+what, fmt.Errorf("read its key index to certify the pass: %w", err))
 	}
+	// EITHER PASS KEEPS THE KEYS' QUIET, its consumer beating at it: a headers
+	// pass shares its connection, so its next delivery can wait behind another
+	// read's run at its bound, and ended then it would read every record left
+	// whole ([certify]).
+	quiet := passQuiet(kv, keys)
 	// Watch rather than WatchAll, so the filter narrows server-side too. NOT
 	// IgnoreDeletes: a key removed mid-pass arrives as its value then its
 	// marker, and dropping the marker would list the value it replaced.
 	var w jetstream.KeyWatcher
 	if headers {
-		w, err = h.watchHeaders(ctx, keys)
+		w, err = h.watchHeaders(ctx, keys, quiet)
 	} else {
 		w, err = kv.Watch(ctx, keys)
 	}
 	if err != nil {
 		return nil, unavailable("read "+what, err)
 	}
-	return &pass{w: w, index: names, quiet: passQuiet(kv, keys, headers)}, nil
+	return &pass{w: w, index: names, quiet: quiet}, nil
 }
 
 // walk runs the pass to its end; [passOver] gives both of its ends.
@@ -202,7 +207,7 @@ func watchWalk(ctx context.Context, kv jetstream.KeyValue, keys, what string) (m
 			"so nothing watches its headers alone", what, kv.Bucket())
 	}
 	// Markers included, for [beginPass]'s reasons: the sweep is after them.
-	w, err := h.watchHeaders(ctx, keys)
+	w, err := h.watchHeaders(ctx, keys, passIdle)
 	if err != nil {
 		return nil, unavailable("read "+what, err)
 	}
@@ -264,12 +269,11 @@ const passIdle = 5 * time.Second
 
 // passQuiet is how long a pass over keys of kv may go without a delivery:
 // the bucket's quiet for the largest value under keys ([settledBucket.quiet]),
-// else [passIdle], which a pass of headers alone keeps (they cross in
-// milliseconds). Across a link a run's value at its bound takes three minutes
-// to cross, so at passIdle a pass that met one ended before it arrived and
-// read every record after it again, one leader read each.
-func passQuiet(kv jetstream.KeyValue, keys string, headers bool) time.Duration {
-	if b, ok := kv.(settledBucket); ok && !headers {
+// else [passIdle]. Across a link a run's value at its bound takes three
+// minutes to cross, so at passIdle a pass that met one ended before it
+// arrived and read every record after it again, one leader read each.
+func passQuiet(kv jetstream.KeyValue, keys string) time.Duration {
+	if b, ok := kv.(settledBucket); ok {
 		return b.quiet(keys)
 	}
 	return passIdle

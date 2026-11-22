@@ -3,8 +3,8 @@
 // at five seconds and resets it when nothing arrived in two: no heartbeat
 // passes a delivery still crossing, so across a link a run's value at its
 // bound (three minutes raw) is cut and asked for again every ten seconds and
-// never lands. Here the heartbeat is the bucket's quiet for the filter
-// ([settledBucket.quiet]): a value lands whole before the consumer is
+// never lands. Here the heartbeat is the quiet of the pass or watch reading
+// it ([passQuiet]): a value lands whole before the consumer is
 // presumed lost, at the cost of noticing a lost one after twice that. Entries
 // are decoded as the client decodes them (nats.go jetstream/kv.go
 // WatchFiltered), so a pass reads the same either way. ADR-0175 has the
@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -26,10 +27,11 @@ import (
 )
 
 // headerWatcher is a bucket that watches its keys' headers alone, never
-// their values: what the marker sweep walks ([watchWalk]), and a pass of what
-// writers stated ([listHeadersUnder]).
+// their values, beating at the quiet of the pass that reads them: what the
+// marker sweep walks ([watchWalk]), and a pass of what writers stated
+// ([listHeadersUnder]).
 type headerWatcher interface {
-	watchHeaders(ctx context.Context, keys string) (jetstream.KeyWatcher, error)
+	watchHeaders(ctx context.Context, keys string, beat time.Duration) (jetstream.KeyWatcher, error)
 }
 
 // Watch watches the keys under the filter keys with the bucket's own watcher
@@ -40,7 +42,7 @@ func (b settledBucket) Watch(ctx context.Context, keys string, opts ...jetstream
 	if len(opts) > 0 {
 		return nil, fmt.Errorf("coord/kv: a watch of %s takes no option: its own watcher reads none", b.Bucket())
 	}
-	return b.watch(ctx, keys, false)
+	return b.watch(ctx, keys, false, b.quiet(keys))
 }
 
 // WatchAll is [settledBucket.Watch] of every key.
@@ -86,17 +88,19 @@ func (b settledBucket) History(context.Context, string, ...jetstream.WatchOpt) (
 	return nil, b.refuseClientWatch("History")
 }
 
-// watchHeaders is [settledBucket.Watch] delivering each key's headers alone.
-func (b settledBucket) watchHeaders(ctx context.Context, keys string) (jetstream.KeyWatcher, error) {
-	return b.watch(ctx, keys, true)
+// watchHeaders is [settledBucket.Watch] delivering each key's headers alone,
+// beating at beat: the quiet of the pass reading it, since a header waits
+// behind whatever else its connection carries.
+func (b settledBucket) watchHeaders(ctx context.Context, keys string, beat time.Duration) (jetstream.KeyWatcher, error) {
+	return b.watch(ctx, keys, true, beat)
 }
 
 // watch subscribes an ordered push consumer to the newest message of each
-// key under keys, as the client's KV watch does, with a heartbeat of the
-// bucket's quiet for keys; [passIdle] for headers alone, which cross in
-// milliseconds. The consumer's first answer ends with a nil entry, as the
-// client's does.
-func (b settledBucket) watch(ctx context.Context, keys string, headersOnly bool) (jetstream.KeyWatcher, error) {
+// key under keys, as the client's KV watch does, with a heartbeat of beat.
+// The consumer's first answer ends with a nil entry, as the client's does.
+func (b settledBucket) watch(ctx context.Context, keys string, headersOnly bool,
+	beat time.Duration) (jetstream.KeyWatcher, error) {
+
 	api, err := jsapi.Of(b.js)
 	if err != nil {
 		return nil, err
@@ -105,14 +109,11 @@ func (b settledBucket) watch(ctx context.Context, keys string, headersOnly bool)
 	if err != nil {
 		return nil, err
 	}
-	heartbeat := b.quiet(keys)
 	opts := []nats.SubOpt{nats.BindStream(bucketStream(b)), nats.OrderedConsumer(),
-		nats.DeliverLastPerSubject(), nats.Context(ctx)}
+		nats.DeliverLastPerSubject(), nats.Context(ctx), nats.IdleHeartbeat(beat)}
 	if headersOnly {
-		heartbeat = passIdle
 		opts = append(opts, nats.HeadersOnly())
 	}
-	opts = append(opts, nats.IdleHeartbeat(heartbeat))
 	w := &bucketWatcher{bucket: b.Bucket(), pre: bucketSubjects(b),
 		updates: make(chan jetstream.KeyValueEntry, watchBuffer)}
 	// Held until the first answer's size is known, so no delivery is

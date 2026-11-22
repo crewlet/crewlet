@@ -237,12 +237,14 @@ The store's consumer beats at the pass's quiet for what it watches, so the same
 records arrived once, at 20.5 and 25.6 seconds. The cost is a lost consumer
 noticed after up to twice that quiet: six minutes for a run's watch across a
 link, ten seconds in process. The marker sweep's consumer carries headers
-alone, which cross in milliseconds, and beats every five seconds. So does the
-pass of the sandbox runs' **standing**: the seat, the handle's SHA-256 and the
-lease epoch a run's writer states as headers in the same message as its record,
-which the boot's epoch floor and one seat's listings read in place of the
-records. A record that pass missed, or one stating none (an older version's
-write), is read whole. Every crossing is counted for one value on the link at
+alone, which cross in milliseconds, and beats every five seconds. The pass of
+the sandbox runs' **standing** carries headers alone too: the seat, the
+handle's SHA-256 and the lease epoch a run's writer states as headers in the
+same message as its record, which the boot's epoch floor and one seat's
+listings read in place of the records. It keeps the runs' quiet and beats at
+it, since its headers wait behind any record its link is carrying. A record
+that pass missed, or one stating none (an older version's write), is read
+whole. Every crossing is counted for one value on the link at
 a time, as a write's is.
 
 A key live from before the listing began until after it ended is therefore in
