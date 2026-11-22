@@ -99,9 +99,9 @@ export const STORIES: Record<string, ToolStory> = {
       "Ask you before any reply, submission, price or account change customers or testers see",
     ],
     identity:
-      "Agents never hold a key. Crewlet keeps your team's API keys, one per Apple role, and makes every call for them through the key with the least access.",
+      "Agents never hold a key: Crewlet makes every call for them through the key with the least access.",
     byHand:
-      "Create a team API key in App Store Connect, Users and Access, Integrations, for each role you want, and paste its key ID and .p8 file here. Apple has no API that creates keys.",
+      "Create the keys in App Store Connect, Users and Access, Integrations. Apple has no API that creates them.",
   },
   slack: {
     does: [

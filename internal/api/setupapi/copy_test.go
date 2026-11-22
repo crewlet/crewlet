@@ -138,10 +138,20 @@ func checkTool(t *testing.T, tool integration.Tool, byKind map[integration.Kind]
 	if _, ok := cautioned[cautioner]; cautioner != "" && !ok {
 		t.Errorf("%s warns of a risk cautioned does not name: decide it there, with the risk", cautioner)
 	}
+	// ONE PAGE, ONE NAME: a form calling one vendor page two things reads as two pages.
+	pages := map[string]string{}
 	for _, list := range lists {
 		for _, r := range list {
 			checkField(t, tool.Key, r, linked)
 			checkFieldLink(t, tool.Key, r, fields, order)
+			if r.VendorURL == "" || r.LinkText == "" {
+				continue
+			}
+			if named, ok := pages[r.VendorURL]; !ok {
+				pages[r.VendorURL] = r.LinkText
+			} else if named != r.LinkText {
+				t.Errorf("%s: %s calls %s %q, which the form also calls %q", tool.Key, r.Field, r.VendorURL, r.LinkText, named)
+			}
 		}
 	}
 }
