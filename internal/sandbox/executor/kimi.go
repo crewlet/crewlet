@@ -1,15 +1,18 @@
 package executor
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"maps"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
 )
@@ -349,6 +352,9 @@ func (k Kimi) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 	if err != nil {
 		return "", err
 	}
+	if err = writeKimiLoginConfig(ctx, box, paths); err != nil {
+		return "", err
+	}
 	system := req.System
 	if req.Steer.Set() {
 		system = withNoteInstruction(system, k.NoteInstruction())
@@ -387,6 +393,44 @@ func (k Kimi) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 		}
 	}
 	return paths.KimiSettings(), nil
+}
+
+// writeKimiLoginConfig rewrites the box's config.toml ([Paths.KimiConfig]) to
+// the tables its login is held under, as the kimi-code profile names them
+// ([harnessprofile.Profile.KeepLoginTOML]): Kimi reads hooks, which it runs,
+// plugins, permission rules and tool settings from the same file (measured on
+// 2.7.2), so whatever a seed or an earlier run left there beside the login is
+// gone before the run starts. A box holding none keeps none; one holding a
+// file that is not TOML is refused, since its login cannot be told apart.
+func writeKimiLoginConfig(ctx context.Context, box sandbox.Sandbox, paths Paths) error {
+	path := paths.KimiConfig()
+	held, err := box.Exec(ctx, "test -f "+shellword.Quote(path), sandbox.ExecOptions{})
+	if err != nil {
+		return fmt.Errorf("executor: looking for the box's Kimi Code config.toml: %w", err)
+	}
+	if held.ExitCode != 0 {
+		return nil
+	}
+	content, err := box.ReadFile(ctx, path)
+	if err != nil {
+		return fmt.Errorf("executor: reading the box's Kimi Code config.toml: %w", err)
+	}
+	profile, ok := harnessprofile.Builtin(KimiName)
+	if !ok {
+		return fmt.Errorf("executor: no built-in %s profile names the login's tables of config.toml", KimiName)
+	}
+	login, err := profile.KeepLoginTOML(filepath.Base(path), content)
+	if err != nil {
+		return fmt.Errorf("executor: the box's Kimi Code config.toml (%s) holds no login it can hand the run: "+
+			"%w; sign the entry in again with `crewlet llm login`", path, err)
+	}
+	if bytes.Equal(login, content) {
+		return nil
+	}
+	if err = box.WriteFile(ctx, path, login); err != nil {
+		return fmt.Errorf("executor: rewriting the box's Kimi Code config.toml to its login: %w", err)
+	}
+	return nil
 }
 
 // kimiDefaultTools is every tool Kimi Code offers a session by default, as
@@ -480,17 +524,25 @@ func kimiMCP(s sandbox.MCPServer) map[string]any {
 
 // artifactFiles is the files a Kimi run leaves in its box of its own: its
 // driver and its settings and their fresh copies, which hold the notes route's
-// token. Its MCP servers are written whole by every run, its sessions are
-// kept, and the session its driver reported goes with every run's
-// ([Runner.ClearArtifacts]).
+// token, and the personal AGENTS.md files Kimi loads as the user's own,
+// whatever wrote them (measured on 2.7.2), so a run loads only the config its
+// launch writes; its config.toml is rewritten to its login
+// ([writeKimiLoginConfig]). Its MCP servers are written whole by every run,
+// its sessions and login are kept, and the session its driver reported goes
+// with every run's ([Runner.ClearArtifacts]).
 func (Kimi) artifactFiles(p Paths) []string {
-	return []string{p.KimiDriver(), p.KimiSettings(), p.KimiServerPid(), p.KimiSettingsFresh(),
-		p.KimiMCPConfigFresh(), p.KimiLinesBefore()}
+	return append([]string{p.KimiDriver(), p.KimiSettings(), p.KimiServerPid(), p.KimiSettingsFresh(),
+		p.KimiMCPConfigFresh(), p.KimiLinesBefore(), p.KimiInstructions()}, p.KimiUserInstructions()...)
 }
 
-// artifactDirs is the directory a Kimi run leaves in its box of its own: its
-// agent profile's, which a later run must not find among its subagents.
-func (Kimi) artifactDirs(p Paths) []string { return []string{p.KimiAgents() + "/" + kimiProfileDir} }
+// artifactDirs is the directories a Kimi run leaves in its box of its own, or
+// that its home holds for Kimi to load as the user's own: its agent profile's,
+// which a later run must not find among its subagents, the skills, the
+// installed plugins and the saved workspace trust.
+func (Kimi) artifactDirs(p Paths) []string {
+	return []string{p.KimiAgents() + "/" + kimiProfileDir, p.KimiSkills(), p.KimiUserSkills(),
+		p.KimiPlugins(), p.KimiTrust()}
+}
 
 // notesOffWhy is what switches Kimi's reading of notes off: a release before
 // [kimiSupported], which the script refuses, or a driver that could not reach

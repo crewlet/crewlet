@@ -1492,6 +1492,7 @@ func TestEveryHarnessThisBuildDrivesCarriesItsSession(t *testing.T) {
 		executor.CopilotName:    executor.CopilotArchiveFormat,
 		executor.KimiName:       executor.KimiArchiveFormat,
 		executor.MuseName:       executor.MuseArchiveFormat,
+		executor.PiName:         executor.PiArchiveFormat,
 	}
 	for _, name := range executor.Names() {
 		if executor.RunnerNamed(name).StartsFresh() {
