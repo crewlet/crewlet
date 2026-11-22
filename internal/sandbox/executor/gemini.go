@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // GeminiCLIName is this runner's config name.
@@ -44,17 +45,17 @@ func (GeminiCLI) Session(sandbox.RunRequest) Session { return Session{ID: uuid.N
 func geminiFlags(req sandbox.RunRequest) []string {
 	flags := []string{"-p", `""`, "--output-format", "stream-json", "--approval-mode", "yolo"}
 	if req.Model != "" {
-		flags = append(flags, "-m", sandbox.ShellQuote(req.Model))
+		flags = append(flags, "-m", shellword.Quote(req.Model))
 	}
 	for _, name := range slices.Sorted(maps.Keys(req.MCPServers)) {
-		flags = append(flags, "--allowed-mcp-server-names", sandbox.ShellQuote(name))
+		flags = append(flags, "--allowed-mcp-server-names", shellword.Quote(name))
 	}
 	return flags
 }
 
 // Command is the run's script ([geminiScript]).
 func (GeminiCLI) Command(req sandbox.RunRequest, session Session, paths Paths, _ string) string {
-	return "sh -c " + sandbox.ShellQuote(geminiScript(req, session, paths))
+	return "sh -c " + shellword.Quote(geminiScript(req, session, paths))
 }
 
 // geminiExportExit is what `gemini` exits with once GEMINI_WRITE_SYSTEM_MD
@@ -75,7 +76,7 @@ const geminiExportExit = 42
 // export depends on the box's home, skills, policy and model.
 func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 	flags := strings.Join(geminiFlags(req), " ")
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	lines := []string{
 		"node " + q(paths.GeminiHelper()) + " pin " + q(paths.GeminiProjects()) + " " + GeminiProjectSlug + " || exit 1",
 	}
@@ -182,7 +183,7 @@ func (g GeminiCLI) WriteConfig(ctx context.Context, box sandbox.Sandbox, req san
 	// THE LAST RUN'S SKILLS GO FIRST: Gemini CLI reads skills only from the
 	// home's skills directory, which may hold the image's own, so the run's
 	// are named apart ([geminiSkillName]) and only those are removed.
-	res, err := box.Exec(ctx, "rm -rf "+sandbox.ShellQuote(paths.GeminiSkills())+"/"+sandbox.SkillNamespace+"-*",
+	res, err := box.Exec(ctx, "rm -rf "+shellword.Quote(paths.GeminiSkills())+"/"+sandbox.SkillNamespace+"-*",
 		sandbox.ExecOptions{})
 	if err != nil {
 		return "", fmt.Errorf("executor: clearing the last run's skills for Gemini CLI: %w", err)
@@ -244,7 +245,7 @@ func geminiSettings(req sandbox.RunRequest, paths Paths, hooked bool) map[string
 		hook := func() []any {
 			return []any{map[string]any{"matcher": "", "hooks": []any{map[string]any{
 				"type": "command", "name": "crewlet", "timeout": geminiHookTimeout.Milliseconds(),
-				"command": "node " + sandbox.ShellQuote(paths.GeminiTake()) + " " + sandbox.ShellQuote(paths.GeminiTakeConfig()),
+				"command": "node " + shellword.Quote(paths.GeminiTake()) + " " + shellword.Quote(paths.GeminiTakeConfig()),
 			}}}}
 		}
 		events := map[string]any{}

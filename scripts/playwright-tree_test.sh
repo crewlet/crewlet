@@ -3,16 +3,17 @@
 # playwright-tree_test.sh — the own suite of the Playwright tree's recipe (scripts/playwright-tree.sh).
 #
 # No Go test reaches the recipe, and it regresses silently where it matters: a recipe that installs into the directory
-# another checkout's suite reads its tree from, hands back a tree npm installed nothing into, lets a developer's npm
-# setting change what is installed, runs a package's script, waits on an npm that never ends, leaves one running once
-# interrupted, or prints something above the path a make target exports as the suite's tree. So every case runs the
-# REAL recipe — copied beside a manifest and a lock the case writes, because it reads them beside itself — against a
-# stand-in registry: node, serving stand-in packages on 127.0.0.1 and logging each request, under a lock the suite
-# builds (each SHA-512 from node's crypto) on registry.npmjs.org's addresses, as the real lock's are, which npm sends
-# to the registry a case names. Every other address goes to a proxy on a port nothing listens on, so no case, and no
-# mutation of the recipe, reaches the network. npm runs through a recorder that logs its command line, so a case
-# holds the recipe to how it runs npm as well as to what npm did. It needs bash, node, an npm the recipe's min_npm
-# accepts, tar and a SHA-256 tool.
+# another checkout's suite reads its tree from, hands back a tree npm installed nothing into or left short, lets a
+# developer's npm setting change what is installed, runs a package's script, waits on an npm that never ends, leaves
+# one running once interrupted, or prints something above the path a make target exports as the suite's tree. So every
+# case runs the REAL recipe — copied beside a manifest, a lock and an installed digest the case writes, and beside this
+# tree's box helper modules, whose check it runs, because it reads them all beside itself — against a stand-in
+# registry: node, serving stand-in packages on 127.0.0.1 and logging each request, under a lock the suite builds (each
+# SHA-512 from node's crypto) on registry.npmjs.org's addresses, as the real lock's are, which npm sends to the
+# registry a case names. Every other address goes to a proxy on a port nothing listens on, so no case, and no mutation
+# of the recipe, reaches the network. npm runs through a recorder that logs its command line, so a case holds the
+# recipe to how it runs npm as well as to what npm did. It needs bash, node, an npm the recipe's min_npm accepts, tar
+# and a SHA-256 tool.
 set -euo pipefail
 
 # THE PERSON'S ENVIRONMENT, GONE before the first case: every variable npm reads a setting from, npm_config_* in any
@@ -200,14 +201,16 @@ registry="http://127.0.0.1:$(cat "$TMPROOT/port")/"
 
 # THE STAND-IN PACKAGES, shaped as the real lock's: a scoped package naming two others exactly, with a bin, which
 # npm links unless told not to; one of them naming the third; and the third with an install script, which leaves a
-# file in the package if it ever runs.
+# file in the package if it ever runs. Each one's files are also laid out under modules/whole as a whole install lays
+# them out in node_modules.
 standin() { # <name> <version> <json>: a tarball laid out as npm packs one, served at the registry's path for it
 	local name="$1" version="$2" json="$3" base="${1##*/}" src="$TMPROOT/src-$RANDOM$RANDOM"
-	mkdir -p "$src/package" "$TMPROOT/web/$name/-"
+	mkdir -p "$src/package" "$TMPROOT/web/$name/-" "$TMPROOT/modules/whole/$name"
 	printf '{"name": "%s", "version": "%s"%s}\n' "$name" "$version" "$json" >"$src/package/package.json"
 	echo "module.exports = '$name';" >"$src/package/index.js"
 	printf '#!/usr/bin/env node\n' >"$src/package/cli.js"
 	tar -czf "$TMPROOT/web/$name/-/$base-$version.tgz" -C "$src" package
+	cp "$src/package/"* "$TMPROOT/modules/whole/$name/"
 	rm -rf "$src"
 }
 standin @standin/mcp 1.0.0 ', "dependencies": {"standin-runner": "2.0.0", "standin-core": "2.0.0"}, "bin": {"standin-mcp": "cli.js"}'
@@ -216,6 +219,23 @@ standin standin-core 2.0.0 ', "scripts": {"install": "echo ran >ran-install-scri
 tarballs="GET /@standin/mcp/-/mcp-1.0.0.tgz
 GET /standin-core/-/standin-core-2.0.0.tgz
 GET /standin-runner/-/standin-runner-2.0.0.tgz"
+
+# THE INSTALLED DIGEST, computed here in bash and never by the box helper's module the recipe checks with, so every
+# install holds that module to the definition as well as to the files npm installed: one line per file under
+# node_modules, npm's own record aside, `<path>\0<hex SHA-256 of its bytes>\n`, the path relative and slash-separated,
+# sorted by path in byte order, which is the lines' own order since NUL is the least byte; then the hex SHA-256 of
+# those lines (boxhelper's package doc). Each case's installed.sha256 holds the stand-in packages' digest;
+# other_installed is a digest of no install, as one left from before a bump of the lock is.
+installed_digest() { # <node_modules>: prints the digest of the files under it
+	(
+		cd "$1"
+		find . -type f ! -path ./.package-lock.json | sed 's|^\./||' | LC_ALL=C sort | while IFS= read -r file; do
+			printf '%s\0%s\n' "$file" "$(digest "$file")"
+		done
+	) | digest -
+}
+standin_installed="$(installed_digest "$TMPROOT/modules/whole")"
+other_installed="$(printf 'files no lock installs\n' | digest -)"
 
 # lock.cjs <web> <tree> <shape>: the manifest and lock of those packages, written into <tree> as npm writes them.
 # Shape "tampered" gives standin-core the SHA-512 of bytes no registry serves; "respaced" indents the same lock
@@ -244,13 +264,16 @@ const lock = { name: "crewlet-browser-tree", lockfileVersion: 3, requires: true,
 writeFileSync(`${tree}/package-lock.json`, JSON.stringify(lock, null, shape === "respaced" ? 4 : 2) + "\n");
 EOF
 
-# scripts <case> [shape]: the case's checkout — the recipe copied from this tree, byte for byte, beside the stand-in
-# manifest and lock of that shape — printing the recipe's path.
+# scripts <case> [shape]: the case's checkout — the recipe and the box helper's modules (js/) copied from this tree,
+# byte for byte, beside the stand-in manifest and lock of that shape and the stand-in packages' installed digest —
+# printing the recipe's path.
 scripts() {
 	local dir="$TMPROOT/$1"
-	mkdir -p "$dir/scripts"
+	mkdir -p "$dir/scripts" "$dir/internal/browser/boxhelper"
 	cp "$SCRIPT_DIR/playwright-tree.sh" "$dir/scripts/"
+	cp -R "$SCRIPT_DIR/../internal/browser/boxhelper/js" "$dir/internal/browser/boxhelper/"
 	node "$TMPROOT/lock.cjs" "$TMPROOT/web" "$dir/internal/browser/boxhelper/tree" "${2-whole}"
+	printf '%s\n' "$standin_installed" >"$dir/internal/browser/boxhelper/tree/installed.sha256"
 	echo "$dir/scripts/playwright-tree.sh"
 }
 lockdir() { echo "$TMPROOT/$1/internal/browser/boxhelper/tree"; }
@@ -282,11 +305,16 @@ install() {
 }
 
 # whole <case> <tree>: prints why <tree> is not the case's lock installed as the recipe installs it — the two files,
-# node_modules holding exactly the three packages, npm-cache holding npm's cache alone, .complete, and no link, log or
-# trace of a script — or nothing.
+# node_modules holding exactly the three packages, npm-cache holding npm's cache alone, .complete naming the installed
+# digest, and no link, log or trace of a script — or nothing. A <tree> that names no directory is said so before any
+# walk: an installer that failed prints no path, and an empty one would walk the file system from its root.
 whole() {
 	local dir top modules
 	dir="$(lockdir "$1")"
+	if [ -z "$2" ] || [ ! -d "$2" ]; then
+		echo "there is no tree at \"$2\""
+		return
+	fi
 	top="$( (cd "$2/" && ls -A | LC_ALL=C sort | tr '\n' ' ') 2>/dev/null || true)"
 	[ "$top" = ".complete node_modules npm-cache package-lock.json package.json " ] || echo "the tree holds $top"
 	modules="$( (cd "$2/node_modules/" && find . -mindepth 1 -maxdepth 2 | LC_ALL=C sort | tr '\n' ' ') 2>/dev/null || true)"
@@ -296,6 +324,8 @@ whole() {
 	[ "$( (cd "$2/npm-cache/" && ls -A | tr '\n' ' ') 2>/dev/null || true)" = "_cacache " ] ||
 		echo "its npm cache holds $(ls -A "$2/npm-cache" 2>&1 | tr '\n' ' ')"
 	cmp -s "$2/package-lock.json" "$dir/package-lock.json" || echo "its lock is not the case's"
+	printf '%s\n' "$standin_installed" | cmp -s - "$2/.complete" ||
+		echo "its .complete holds $(cat "$2/.complete" 2>&1), not the installed digest $standin_installed"
 }
 
 # served: the registry served exactly the three tarballs since its log was emptied, and nothing else.
@@ -387,12 +417,33 @@ sha_tools="sha256sum shasum"
 s="$(scripts usage)"
 refused usage "the recipe refuses an argument, with its usage" "usage: scripts/playwright-tree.sh" "$s" floor
 
-# The two files are read beside the recipe and nowhere else. Mutation: drop the recipe's check for them -> its digest
-# fails over a file that is not there, answering 2 without naming it (red).
-for file in package.json package-lock.json; do
-	s="$(scripts "no-$file")"
-	rm "$(lockdir "no-$file")/$file"
-	refused "no-$file" "the recipe refuses to run without $file beside it, naming it" "tree/$file is missing" "$s"
+# What the recipe reads is read beside it and nowhere else: the manifest and the lock it installs, and the installed
+# digest and the box helper's check it holds the install to. Mutation: drop the recipe's check for one -> the
+# manifest's or the lock's digest fails over a file that is not there, answering 2 without naming it, the installed
+# digest is refused as no digest, or the install runs and the check cannot load (1) (red).
+for file in tree/package.json tree/package-lock.json tree/installed.sha256 js/tree.mjs; do
+	c="no-${file##*/}"
+	s="$(scripts "$c")"
+	rm "$TMPROOT/$c/internal/browser/boxhelper/$file"
+	refused "$c" "the recipe refuses to run without $file beside it, naming it" "$file is missing" "$s"
+done
+
+# THE INSTALLED DIGEST is one line of 64 lowercase hex digits, as boxhelper's
+# TestTheInstalledDigestNamesTheFilesTheLockInstalls reads the file, and any other file is refused before anything is
+# fetched, each row holding the right digest's digits but the first, which lacks one. Mutations, in the recipe: drop
+# the length check -> 63 digits installs, and is refused only by the check (1, red); drop the digits' -> upper case,
+# likewise (red); drop the comparison with the file whole -> two lines, or no newline, installs (0, red).
+for shape in short upper twice unterminated; do
+	s="$(scripts "digest-$shape")"
+	file="$(lockdir "digest-$shape")/installed.sha256"
+	case $shape in
+	short) what="of 63 digits" && printf '%s\n' "${standin_installed:1}" >"$file" ;;
+	upper) what="in upper case" && printf '%s\n' "$standin_installed" | tr abcdef ABCDEF >"$file" ;;
+	twice) what="of two lines" && printf '%s\n%s\n' "$standin_installed" "$standin_installed" >"$file" ;;
+	unterminated) what="with no newline" && printf '%s' "$standin_installed" >"$file" ;;
+	esac
+	refused "digest-$shape" "the recipe refuses an installed digest $what, naming the line it takes" \
+		"tree/installed.sha256 is not one line of 64 lowercase hex digits" "$s"
 done
 
 # A tree cache that is not an absolute path is refused before anything is looked for in it, whichever variable gave
@@ -603,18 +654,21 @@ mapfile_why served
 [ ! -e "$elsewhere" ] || why+=("the developer's npm cache was written")
 verdict "every one of those settings in ~/.npmrc changes nothing installed" ${why[@]+"${why[@]}"}
 
-# --- npm's own record of the install decides, never its exit status -----------------------------------------------
+# --- the box helper's check decides, never npm's exit status -------------------------------------------------------
 
 # An npm that answers 0 having installed nothing, or other than the lock, as one does under a setting the command line
-# missed, publishes nothing: npm's record (node_modules/.package-lock.json) must name exactly the lock's packages, at
-# its versions, addresses and SHA-512s, and the tree hold no link. A stand-in npm, first on PATH, answers --version as
-# the machine's npm and an install 0, having written the record of the lock with one thing changed, or a link beside
-# it. Mutations: drop the check -> each case publishes (red); compare one field fewer -> its case (red); read the
-# lock's keys alone -> extra (red); drop the links' half -> link (red).
+# missed, publishes nothing: by the box helper's check, which the recipe runs, npm's record
+# (node_modules/.package-lock.json) must name exactly the lock's packages, at its versions, addresses and SHA-512s, and
+# the tree hold no link. A stand-in npm, first on PATH, answers --version as the machine's npm and an install 0, having
+# laid out what a whole install does, its files (modules/whole) and an npm cache, and written the record of the lock
+# with one thing changed, or a link beside it, so that one thing alone is refused, and by the check alone. Mutations,
+# in the box helper's js/tree.mjs: compare one field fewer, or read the lock's keys alone -> that case is published
+# (red); pass what is neither a file nor a directory -> link is published (red), or take a link for a file -> link is
+# refused in other words (red); and in the recipe, drop the check -> every case is published but nothing, which is
+# refused in other words (red).
 cat >"$TMPROOT/record.cjs" <<'EOF'
-const { mkdirSync, readFileSync, symlinkSync, writeFileSync } = require("node:fs");
+const { readFileSync, symlinkSync, writeFileSync } = require("node:fs");
 const [prefix, change] = process.argv.slice(2);
-if (change === "nothing") process.exit(0);
 const lock = JSON.parse(readFileSync(`${prefix}/package-lock.json`, "utf8"));
 delete lock.packages[""];
 const core = lock.packages["node_modules/standin-core"];
@@ -623,31 +677,34 @@ if (change === "resolved") core.resolved = core.resolved.replace("registry.npmjs
 if (change === "integrity") core.integrity = "sha512-" + Buffer.alloc(64).toString("base64");
 if (change === "dropped") delete lock.packages["node_modules/standin-core"];
 if (change === "extra") lock.packages["node_modules/standin-extra"] = { ...core };
-mkdirSync(`${prefix}/node_modules`);
 if (change === "link") symlinkSync("..", `${prefix}/node_modules/standin-link`);
 writeFileSync(`${prefix}/node_modules/.package-lock.json`, JSON.stringify(lock, null, 2));
 EOF
 for change in nothing version resolved integrity dropped extra link; do
-	says="npm did not install exactly the lock: node_modules/standin-core"
+	says="npm's record of what it installed is not the lock: node_modules/standin-core"
 	case $change in
 	nothing) what="nothing" says="npm left no record of what it installed" ;;
 	version) what="a package at another version" ;;
 	resolved) what="a package from another address" ;;
 	integrity) what="a package of another SHA-512" ;;
 	dropped) what="the lock less a package" ;;
-	extra) what="a package the lock does not hold" says="npm did not install exactly the lock: node_modules/standin-extra" ;;
-	link) what="the lock and a link" says="the install left links in" ;;
+	extra) what="a package the lock does not hold" says="npm's record of what it installed is not the lock: node_modules/standin-extra" ;;
+	link) what="the lock and a link" says="it holds what is neither a file nor a directory: node_modules/standin-link" ;;
 	esac
 	s="$(scripts "record-$change")"
 	mkdir -p "$TMPROOT/record-$change/bin"
 	cat >"$TMPROOT/record-$change/bin/npm" <<EOF
 #!/bin/sh
 [ "\$1" = --version ] && exec "$real_npm" --version
-prefix=""
+prefix="" cache=""
 while [ \$# -gt 0 ]; do
 	[ "\$1" != --prefix ] || prefix=\$2
+	[ "\$1" != --cache ] || cache=\$2
 	shift
 done
+[ $change != nothing ] || exit 0
+cp -R "$TMPROOT/modules/whole" "\$prefix/node_modules"
+mkdir -p "\$cache/_cacache"
 exec "$real_node" "$TMPROOT/record.cjs" "\$prefix" $change
 EOF
 	chmod +x "$TMPROOT/record-$change/bin/npm"
@@ -659,6 +716,58 @@ EOF
 	verdict "an npm answering 0 having installed $what is refused, saying so, and nothing is published" \
 		${why[@]+"${why[@]}"}
 done
+
+# A TREE NPM LEFT SHORT, its record whole, as when a file npm could not write (a full disk, a quota) was only a warning
+# to it: the real install through the recorder, then one file of it deleted. Only the files' digest tells, and the
+# refusal names it, computed here, the file that names another and what a bump writes there. Mutation: hold the
+# install to npm's record and its links alone -> the short tree is published (0, red).
+cp -R "$TMPROOT/modules/whole" "$TMPROOT/modules/short"
+rm "$TMPROOT/modules/short/standin-core/index.js"
+s="$(scripts short)"
+mkdir -p "$TMPROOT/short/bin"
+cat >"$TMPROOT/short/bin/npm" <<EOF
+#!/bin/sh
+[ "\$1" = --version ] && exec "$TMPROOT/tools/npm" --version
+prefix="" last=""
+for arg in "\$@"; do
+	[ "\$last" != --prefix ] || prefix=\$arg
+	last=\$arg
+done
+"$TMPROOT/tools/npm" "\$@" || exit
+rm "\$prefix/node_modules/standin-core/index.js"
+EOF
+chmod +x "$TMPROOT/short/bin/npm"
+install short PATH="$TMPROOT/short/bin:$PATH"
+why=()
+[ "$status" = 1 ] || why+=("exit $status, want 1")
+short_installed="$(installed_digest "$TMPROOT/modules/short")"
+for says in "the files it installed have the digest $short_installed, where" \
+	"internal/browser/boxhelper/tree/installed.sha256 names $standin_installed." \
+	"A bump of the lock writes $short_installed into"; do
+	grep -qF -- "$says" <<<"$err" || why+=("stderr lacks: $says" "$err")
+done
+mapfile_why untouched short
+verdict "an npm answering 0 having left a file short is refused, naming the digest its files have, and nothing is published" \
+	${why[@]+"${why[@]}"}
+
+# AN INSTALLED DIGEST NAMING OTHER FILES than the lock installs, as one left from before a bump of the lock does: a
+# whole install is refused, and the refusal names the file to change and the digest its files have, computed here, the
+# value a bump writes there, never npm as what failed. Mutations: skip the digest -> the tree is published (0, red);
+# word the refusal as npm's failure -> it names neither the file nor what to write (red).
+s="$(scripts stale)"
+printf '%s\n' "$other_installed" >"$(lockdir stale)/installed.sha256"
+install stale
+why=()
+[ "$status" = 1 ] || why+=("exit $status, want 1")
+for says in "the files it installed have the digest $standin_installed, where" \
+	"internal/browser/boxhelper/tree/installed.sha256 names $other_installed." \
+	"A bump of the lock writes $standin_installed into"; do
+	grep -qF -- "$says" <<<"$err" || why+=("stderr lacks: $says" "$err")
+done
+! grep -qF -- "npm did not install exactly the lock" <<<"$err" || why+=("the refusal blames npm: $err")
+mapfile_why untouched stale
+verdict "a whole install is refused when installed.sha256 names other files, naming the digest its files have, and nothing is published" \
+	${why[@]+"${why[@]}"}
 
 # --- an npm that outlives the bound is stopped: TERM, then KILL -------------------------------------------------
 
@@ -791,11 +900,12 @@ done
 # --- a name pointing at no intact tree is installed over ---------------------------------------------------------
 
 # Whichever way the name points there: a link to a tree without .complete; a directory at the name itself holding the
-# same; a link to a complete tree of another lock; a link to a complete tree of this lock that npm left no record of
-# an install in; and one without the npm cache boxhelper's cases install from. Mutations: drop .complete, the lock
-# comparison, the record or the npm cache from `intact` -> that tree is handed back, nothing installed (red); drop the
-# publish loop's case of a directory at the name -> the link is made INSIDE the directory, which the name stays (red).
-for shape in incomplete directory otherlock unrecorded uncached; do
+# same; a link to a complete tree of another lock; one checked against another installed digest, which its .complete
+# names; a link to a complete tree of this lock that npm left no record of an install in; and one without the npm
+# cache boxhelper's cases install from. Mutations: drop .complete, what it names, the lock comparison, the record or
+# the npm cache from `intact` -> that tree is handed back, nothing installed (red); drop the publish loop's case of a
+# directory at the name -> the link is made INSIDE the directory, which the name stays (red).
+for shape in incomplete directory otherlock otherdigest unrecorded uncached; do
 	s="$(scripts "over-$shape")"
 	dir="$(lockdir "over-$shape")"
 	link="$TMPROOT/over-$shape/cache/$(named "over-$shape")"
@@ -804,10 +914,11 @@ for shape in incomplete directory otherlock unrecorded uncached; do
 	mkdir -p "$broken/node_modules" "$broken/npm-cache/_cacache"
 	cp "$dir/package.json" "$dir/package-lock.json" "$broken/"
 	echo '{"packages": {}}' >"$broken/node_modules/.package-lock.json"
-	: >"$broken/.complete"
+	printf '%s\n' "$standin_installed" >"$broken/.complete"
 	case $shape in
 	incomplete | directory) rm "$broken/.complete" ;;
 	otherlock) echo " " >>"$broken/package-lock.json" ;;
+	otherdigest) printf '%s\n' "$other_installed" >"$broken/.complete" ;;
 	unrecorded) rm "$broken/node_modules/.package-lock.json" ;;
 	uncached) rm -r "$broken/npm-cache" ;;
 	esac

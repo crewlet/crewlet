@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // box mints a fake sandbox with the shared plumbing installed, reading whole
@@ -239,8 +240,8 @@ func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
 	// in a statement of its own (joined by `&&`, one removal that failed would
 	// keep them all), under the work directory quoted, so a home path holding a
 	// space is never split into words.
-	saves := "; rm -rf " + sandbox.ShellQuote(p.WorkDir()) + "/session-save*"
-	packs := "; rm -rf " + sandbox.ShellQuote(p.WorkDir()) + "/session-pack-staging.*"
+	saves := "; rm -rf " + shellword.Quote(p.WorkDir()) + "/session-save*"
+	packs := "; rm -rf " + shellword.Quote(p.WorkDir()) + "/session-pack-staging.*"
 	if !strings.HasSuffix(cleared, saves+packs) {
 		t.Fatalf("the clear does not end with %q, every save's files and every pack's removed: %s", saves+packs,
 			cleared)
