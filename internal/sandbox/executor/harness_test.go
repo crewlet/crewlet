@@ -98,6 +98,40 @@ func TestAnEntrysEffortReachesTheBoxsHarness(t *testing.T) {
 	}
 }
 
+// A WEB-DENIED ENTRY'S CLAUDE CODE RUN HAS NO WEB TOOL: both of Claude Code's
+// own web tools on --disallowedTools, which on 2.1.330 refused them under
+// bypassPermissions, in subagents too, whatever the repository's settings
+// allowed. The list takes values until the next flag, so a flag follows it.
+// A run on an entry that keeps the web names no such list.
+//
+// Mutation: drop the list, or leave a web tool off it, and this fails.
+func TestAWebDeniedClaudeRunHasNoWebTool(t *testing.T) {
+	t.Parallel()
+	argv := func(cmd string) []string {
+		i := strings.Index(cmd, "claude -p ")
+		if i < 0 {
+			t.Fatalf("no claude invocation in:\n%s", cmd)
+		}
+		return strings.Fields(cmd[i:])
+	}
+	denied := argv(scriptOf(t, commandOf(claude(), sandbox.RunRequest{Brief: "x", WebDenied: true},
+		executor.Paths{}, "")))
+	at := slices.Index(denied, "--disallowedTools")
+	if at < 0 || at+3 >= len(denied) {
+		t.Fatalf("the web-denied run names no --disallowedTools list: %q", denied)
+	}
+	if got := denied[at+1 : at+3]; !slices.Equal(got, []string{"WebFetch", "WebSearch"}) {
+		t.Errorf("--disallowedTools lists %q, want WebFetch and WebSearch", got)
+	}
+	if next := denied[at+3]; !strings.HasPrefix(next, "-") && next != `"$@"` {
+		t.Errorf("--disallowedTools is followed by %q, which its list would take", next)
+	}
+	allowed := argv(scriptOf(t, commandOf(claude(), sandbox.RunRequest{Brief: "x"}, executor.Paths{}, "")))
+	if slices.Contains(allowed, "--disallowedTools") {
+		t.Errorf("a run that keeps the web denies tools: %q", allowed)
+	}
+}
+
 // ---------------------------------------------------------------------
 // claude-code: the parser
 // ---------------------------------------------------------------------
