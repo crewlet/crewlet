@@ -59,26 +59,35 @@ func TestACodexRunLoadsOnlyWhatItsLaunchWrites(t *testing.T) {
 	}
 }
 
-// A CODEX RUN IS HANDED ITS CHECKOUT'S INSTRUCTIONS AND SKILLS, AND THE HOOK
-// FOR A LATER ONE. A real box whose working directory holds a checkout with
-// an AGENTS.md, a skill and a planted .codex/config.toml: as its run ends,
-// CODEX_HOME/AGENTS.md holds the checkout's file under its root, its skill
-// is the run's as `repo:check`, its config reached neither the Codex home nor
-// the app-server's command line, and that command line declares the nested
-// hook and its trust, the note helper it runs executable beside it, the run
-// saying nothing of a missing helper.
+// WHAT A CHECKOUT BELOW THE START DIRECTORY BRINGS A CODEX RUN, by kind, in a
+// real box whose working directory holds its own AGENTS.md and a checkout at
+// ./repo, as code_checkout places one, with every layer a repository brings:
+//   - instructions: the checkout's are handed, under its root
+//     (CODEX_HOME/AGENTS.md); the working directory's own are not, since
+//     Codex reads them itself;
+//   - skills: the checkout's .codex/skills and .agents/skills, whole, as
+//     `repo:<skill>`;
+//   - config, MCP servers, rules and hooks of the checkout's .codex: nowhere
+//     in the Codex home nor on the app-server's command line, and no trust
+//     for the checkout, since Codex loads them only for the directory a
+//     thread starts in; the one hook declared is the run's own, which hands
+//     a later checkout its instructions, its helper executable.
 //
-// Mutation: drop the gate from the script, test the helper with -x, or drop
-// the hook's flags from the app-server, and a check goes red.
-func TestACodexRunIsHandedItsCheckoutAndTheHookForALaterOne(t *testing.T) {
+// Mutation: drop the gate, hand the working directory's own file, filter a
+// skill, copy the checkout's config, or test the helper with -x.
+func TestWhatACheckoutBelowTheStartDirectoryBringsACodexRun(t *testing.T) {
 	t.Parallel()
 	runner, box, record := codexBox(t, "0.171.0")
 	p := executor.PathsFor(box)
 	for rel, body := range map[string]string{
+		"workspace/AGENTS.md":                         "WORKDIR-INSTRUCTIONS\n",
 		"workspace/repo/.git/HEAD":                    "ref: refs/heads/main\n",
 		"workspace/repo/AGENTS.md":                    "REPO-INSTRUCTIONS\n",
-		"workspace/repo/.codex/config.toml":           "developer_instructions = \"PLANT-PROJECT-CONFIG\"\n",
-		"workspace/repo/.codex/skills/check/SKILL.md": "---\nname: check\ndescription: Checks.\nmodel: gpt-planted\n---\nCheck.\n",
+		"workspace/repo/.codex/config.toml":           "developer_instructions = \"REPO-CONFIG\"\n[mcp_servers.repo-mcp]\ncommand = \"repo-mcp-server\"\n",
+		"workspace/repo/.codex/hooks.json":            `{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"repo-hook"}]}]}}`,
+		"workspace/repo/.codex/rules/repo.rules":      `prefix_rule(pattern=["echo"], decision="forbidden", justification="repo-rule")` + "\n",
+		"workspace/repo/.codex/skills/check/SKILL.md": "---\nname: check\ndescription: Checks.\nmodel: gpt-other\n---\nCheck.\n",
+		"workspace/repo/.agents/skills/lint/SKILL.md": "---\nname: lint\ndescription: Lints.\n---\nLint.\n",
 	} {
 		path := filepath.Join(box.Home(), rel)
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -95,27 +104,47 @@ func TestACodexRunIsHandedItsCheckoutAndTheHookForALaterOne(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	// Instructions.
 	if got := boxFile(t, box, p.CodexHome()+"/AGENTS.md"); got != "for `repo` with root "+work+"/repo\n\nREPO-INSTRUCTIONS\n" {
-		t.Errorf("CODEX_HOME/AGENTS.md is %q", got)
+		t.Errorf("instructions: CODEX_HOME/AGENTS.md is %q, want the checkout's alone", got)
 	}
-	skill := boxFile(t, box, p.CodexSkills()+"/repo:check/SKILL.md")
-	if skill != "---\nname: \"repo:check\"\ndescription: Checks.\nmodel: gpt-planted\n---\nCheck.\n" {
-		t.Errorf("the repository's skill reads\n%s", skill)
-	}
-	server := strings.Join(recorded(t, record, "server-argv"), "\n")
-	if !strings.Contains(server, "hooks.PostToolUse=") || !strings.Contains(server, "-adapter codex-nested") ||
-		!strings.Contains(server, "/<session-flags>/config.toml:post_tool_use:0:0") {
-		t.Errorf("the app-server declares no nested hook:\n%s", server)
-	}
-	for _, where := range []string{server, boxFile(t, box, p.CodexLiveConfig())} {
-		if strings.Contains(where, "PLANT-PROJECT-CONFIG") {
-			t.Error("the repository's .codex/config.toml reached the run's configuration")
+	// Skills.
+	for listed, want := range map[string]string{
+		"repo:check": "---\nname: \"repo:check\"\ndescription: Checks.\nmodel: gpt-other\n---\nCheck.\n",
+		"repo:lint":  "---\nname: \"repo:lint\"\ndescription: Lints.\n---\nLint.\n",
+	} {
+		if got := boxFile(t, box, p.CodexSkills()+"/"+listed+"/SKILL.md"); got != want {
+			t.Errorf("skills: %s reads %q, want %q", listed, got, want)
 		}
 	}
+	// Config, MCP servers, rules and hooks.
+	server := strings.Join(recorded(t, record, "server-argv"), "\n")
+	home := []string{server}
+	if err := filepath.WalkDir(p.CodexHome(), func(path string, d os.DirEntry, err error) error {
+		if err == nil && d.Type().IsRegular() && !strings.HasPrefix(path, p.CodexSkills()+"/") {
+			home = append(home, path+": "+boxFile(t, box, path))
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, where := range home {
+		for kind, mark := range map[string]string{"config": "REPO-CONFIG", "MCP servers": "repo-mcp",
+			"rules": "repo-rule", "hooks": "repo-hook", "trust": "trust_level"} {
+			if strings.Contains(where, mark) {
+				t.Errorf("%s: the checkout's .codex reached the run: %.300s", kind, where)
+			}
+		}
+	}
+	if !strings.Contains(server, "hooks.PostToolUse=") || !strings.Contains(server, "-adapter codex-nested") ||
+		strings.Count(server, "trusted_hash") != 1 || !strings.Contains(server, "/<session-flags>/config.toml:post_tool_use:0:0") {
+		t.Errorf("hooks: the app-server declares and trusts other than the run's own hook:\n%s", server)
+	}
 	if info, err := os.Stat(p.CodexNoteHelper()); err != nil || info.Mode().Perm()&0o100 == 0 {
-		t.Errorf("the note helper the hook runs is not executable in the box (%v, %v)", info, err)
+		t.Errorf("hooks: the note helper the run's hook runs is not executable in the box (%v, %v)", info, err)
 	}
 	if errs := boxFile(t, box, p.Err()); strings.Contains(errs, "no note helper") {
-		t.Errorf("the run said its box has no note helper:\n%s", errs)
+		t.Errorf("hooks: the run said its box has no note helper:\n%s", errs)
 	}
 }
