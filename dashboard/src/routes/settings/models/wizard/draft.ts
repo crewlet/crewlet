@@ -398,12 +398,93 @@ export function credentialValues(d: Draft): Record<string, string> {
   return out;
 }
 
-/** The model's id as its harness takes it: OpenCode's and Pi's name their provider first. */
+/**
+ * The model's id as its harness takes it: OpenCode's and Pi's name the chosen
+ * provider before the provider's own id, always, since that id may itself hold
+ * a slash or the provider's name (OpenRouter's `qwen/qwen3-coder`, `openrouter/auto`).
+ */
 export function modelId(d: Pick<Draft, "harness" | "provider" | "model">): string {
   const model = d.model.trim();
-  return namesProvider(d.harness) && model && !model.includes("/")
-    ? `${d.provider}/${model}`
-    : model;
+  return namesProvider(d.harness) && model ? `${d.provider}/${model}` : model;
+}
+
+/** A catalogue id offered for the draft's harness as the draft holds it: the provider's own id. */
+export function catalogueModel(d: Pick<Draft, "harness" | "provider">, id: string): string {
+  return namesProvider(d.harness) && id.startsWith(`${d.provider}/`)
+    ? id.slice(d.provider.length + 1)
+    : id;
+}
+
+/** The choices a model id is named under: the harness, and the provider or cloud it is sent to. */
+export const modelScope = (d: Pick<Draft, "harness" | "method" | "provider" | "cloud">) =>
+  [
+    d.harness,
+    providersFor(d.harness).length > 0 ? d.provider : "",
+    d.method === "cloud" ? d.cloud : "",
+  ].join("|");
+
+/** The choices a credential is for: the harness, the method, and the provider or cloud it signs in to. */
+export const credentialScope = (d: Pick<Draft, "harness" | "method" | "provider" | "cloud">) =>
+  `${d.method}|${modelScope(d)}`;
+
+/** What a change to the draft is weighed against. */
+export interface Choices {
+  /** The model as it stood when an edit opened; null while adding. */
+  original: Draft | null;
+  /** The secrets other models read, which a suggested name avoids. */
+  taken: readonly string[];
+  /** Whether the reader named the secret for the credential scope the draft is in. */
+  named: boolean;
+}
+
+/**
+ * The draft after `patch`, with every value that belongs to a choice the patch
+ * moved cleared, or put back as the edited model had it when the choice is
+ * back to its own: the model and its effort are their vendor's, the pasted
+ * credential and its secret's name are the provider's they sign in to, and a
+ * use or a place to run is the harness's. Returns whether the secret stays named.
+ */
+export function withChoices(
+  d: Draft,
+  patch: Partial<Draft>,
+  { original, taken, named }: Choices,
+): { draft: Draft; named: boolean } {
+  const next: Draft = { ...d, ...patch };
+  const keep = <K extends keyof Draft>(field: K, scope: (x: Draft) => string, blank: Draft[K]) => {
+    if (field in patch || scope(next) === scope(d)) return;
+    next[field] = original && scope(next) === scope(original) ? original[field] : blank;
+  };
+  keep("model", modelScope, "");
+  keep("effort", modelScope, "");
+  keep("credential", credentialScope, "");
+  keep("endpoint", (x) => x.harness, "");
+  const moved = credentialScope(next) !== credentialScope(d);
+  let stays = "variable" in patch || (named && !moved);
+  if (moved && original && credentialScope(next) === credentialScope(original))
+    stays = !!original.variable;
+  if (!("variable" in patch) && pastesCredential(next)) {
+    if (moved && stays && original) next.variable = original.variable;
+    else if (!stays) next.variable = suggestedVariable(next, taken);
+  }
+  if (next.harness !== d.harness) {
+    const coding = canExecute(next);
+    const helpers = !!factsOf(next.harness).assistant;
+    if (!coding) next.runIn = "";
+    const dropsCoding = !coding && (next.intent === "all" || next.intent === "coding");
+    const dropsHelper = !helpers && (next.intent === "assistant" || next.intent === "advisor");
+    next.uses = {
+      ...(dropsCoding ? noUses() : next.uses),
+      assistant: helpers && next.uses.assistant,
+      advisor: helpers && next.uses.advisor,
+    };
+    if (dropsCoding || dropsHelper) next.intent = intentOf(next.uses);
+    if (original && next.harness === original.harness) {
+      next.uses = original.uses;
+      next.intent = original.intent;
+      next.runIn = original.runIn;
+    }
+  }
+  return { draft: next, named: stays };
 }
 
 /** The effort levels the draft's harness takes on its model, lowest first (its profile may narrow
@@ -827,6 +908,32 @@ export interface Kept {
   credential: boolean;
   /** The cloud secrets stored now, by field. */
   cloud: Readonly<Record<string, string>>;
+}
+
+/**
+ * What an edit keeps of the model as it opened: its stored key or token only
+ * while the draft signs in to the same provider the same way under the same
+ * secret, and its cloud secrets only for the same cloud.
+ */
+export function keptOf(
+  d: Draft,
+  original: Draft | null,
+  base: Base | undefined,
+  replacing: boolean,
+): Kept {
+  return {
+    credential:
+      !!original &&
+      !replacing &&
+      pastesCredential(d) &&
+      credentialScope(d) === credentialScope(original) &&
+      d.variable === original.variable &&
+      !!original.variable,
+    cloud:
+      d.method === "cloud" && original?.method === "cloud" && d.cloud === original.cloud
+        ? storedCloudSecrets(base)
+        : {},
+  };
 }
 
 /** The problems the form can see before asking the engine. */

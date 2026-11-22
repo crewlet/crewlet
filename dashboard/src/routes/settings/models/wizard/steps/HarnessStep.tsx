@@ -23,6 +23,7 @@ import {
   type Harness,
   type Draft,
 } from "../draft.ts";
+import { NAME_EXAMPLE } from "../examples.ts";
 
 /** Each harness in a line, and how it signs in, in the words the Method step uses. */
 const HARNESS_WORDS: Readonly<Record<string, { description: string; methods: string }>> = {
@@ -107,7 +108,7 @@ export function HarnessStep({
             error={field.invalid}
             appearance="reference"
             value={draft.key}
-            placeholder="sonnet-key"
+            placeholder={NAME_EXAMPLE}
             readOnly={editing}
             // A NEW NAME STOPS AT ITS LIMIT, rather than counting past it in red.
             {...(editing ? {} : { maxLength: KEY_MAX })}
