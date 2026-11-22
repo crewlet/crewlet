@@ -178,11 +178,19 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 	}
 
 	line(`rm -f %s %s %s`, sock, thread, threadNext)
+	// THE REPOSITORIES' INSTRUCTIONS AND SKILLS, none of their configuration
+	// ([codexRepoGate]), and the nested hook that hands a later checkout's
+	// where the box holds the helper it runs ([codexNestedHookFlags]).
+	b.WriteString(codexRepoGate(paths, req.Repos))
+	hook, state := codexNestedHookFlags(paths)
+	line(`hk=; hp=%s; hs=%s`, q(hook), q(state))
+	line(`if [ -x %s ]; then hk=1; else echo 'crewlet: this box has no note helper for its machine, so the run starts without the hook that hands a checkout cloned during it its instructions' >&2; fi`,
+		q(paths.CodexNoteHelper()))
 	// No --ignore-user-config: app-server has none, and the config.toml it
 	// always loads is the run's own ([Paths.CodexLiveConfig]). Started in the
 	// script's own directory, exec's: under --remote a relative path and an
 	// item's cwd resolve against the SERVER's (CODEX-MEASURE §18).
-	line(`codex app-server --listen %s %s < /dev/null > %s 2>&1 &`,
+	line(`codex app-server --listen %s %s ${hk:+-c "$hp" -c "$hs"} < /dev/null > %s 2>&1 &`,
 		q("unix://"+paths.CodexSocket()), strings.Join(codexPosture(req), " "), serverLog)
 	line(`apid=$!`)
 	line(`deadline=$(( $(%s) + %d ))`, times.clock, secs(times.listen))
