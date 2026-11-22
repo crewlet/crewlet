@@ -40,7 +40,7 @@ In CI, `test plan` deals each half into shards by measured duration, every packa
 
 **`internal/skipgate`** reads both test targets' `go test -json`. Each `allowed.go` entry has a reason and a `When`: `Always` (also reported once it stops firing) or `Environment`.
 
-`node` runs four suites: the dashboard's (through `npm`), `internal/e2e`'s client replay (in `make test-solo`), `internal/sandbox/executor`'s probes of the two OpenCode plugins the engine embeds, notes and skill-load, and `internal/browser/boxhelper`'s, which installs the Playwright tree with each Node's own npm (both in `make test`). `npm` also installs the suite's tree (`make playwright-tree`). A make target that runs one refuses to start without `node`, or without `npm` where it needs it. A passing `make check` prints what it does not cover (`make snapshot`).
+`node` runs four suites: the dashboard's (through `npm`), `internal/e2e`'s client replay (in `make test-solo`), `internal/sandbox/executor`'s probes of the plugins and extensions the engine embeds (OpenCode's notes and skill-load plugins, Pi's extension), and `internal/browser/boxhelper`'s, which installs the Playwright tree with each Node's own npm (both in `make test`). `npm` also installs the suite's tree (`make playwright-tree`). A make target that runs one refuses to start without `node`, or without `npm` where it needs it. A passing `make check` prints what it does not cover (`make snapshot`).
 
 ## Writing tests
 - Test files sit beside what they cover, non-Go ones too (the Vitest suites in `dashboard/src`, `internal/e2e/replay.mjs`, `internal/sandbox/executor/opencode_*_probe.mjs`). There is no top-level `tests/` tree
