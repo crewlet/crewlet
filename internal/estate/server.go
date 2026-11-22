@@ -51,6 +51,11 @@ type ServerOptions struct {
 	// Now is the clock a request's deadline is judged on, injected for
 	// tests. Nil is the wall clock.
 	Now func() time.Time
+
+	// Answers is the node's answer budget a read answering a page or a
+	// capped list holds its weight of until its reply is written
+	// ([answerShape.weight]). Nil is a budget of this server's own.
+	Answers *queue.AnswerBudget
 }
 
 // Serve makes this node answer the fleet on its own subjects, one a [lane],
@@ -74,6 +79,9 @@ func Serve(ctx context.Context, q Server, opts ServerOptions) (queue.Unsubscribe
 	case opts.Envelopes == nil:
 		return nil, errNoEnvelopes
 	}
+	if opts.Answers == nil {
+		opts.Answers = queue.NewAnswerBudget(nil)
+	}
 	now := opts.Now
 	if now == nil {
 		now = time.Now
@@ -82,7 +90,7 @@ func Serve(ctx context.Context, q Server, opts ServerOptions) (queue.Unsubscribe
 	// the node has taken whichever lane it arrived on: a replay sent to
 	// another lane's subject is the same replay.
 	srv := server{self: opts.Self, local: opts.Local, git: opts.Git, seams: opts.Seams,
-		env: opts.Envelopes, now: now, seen: signedask.NewGuard(),
+		env: opts.Envelopes, now: now, seen: signedask.NewGuard(), answers: opts.Answers,
 		writes: make(chan struct{}, gitWritesHeld)}
 	registered := lanes
 	if opts.Git != nil {
@@ -124,6 +132,8 @@ type server struct {
 	env   *Envelopes
 	now   func() time.Time
 	seen  *signedask.Guard
+	// answers is the node's answer budget ([ServerOptions.Answers]).
+	answers *queue.AnswerBudget
 
 	// writes is the [gitWritesHeld] engine writes this node holds for its
 	// peers: a slot taken by every write it decodes and runs, until it is
@@ -238,6 +248,17 @@ func (s server) answer(ctx context.Context, l lane, raw []byte) []byte {
 	if reason != "" {
 		out.Unserved, out.Detail = reason, detail
 		return s.encodeReply(out)
+	}
+	// A PAGE OR A CAPPED LIST HOLDS ITS WEIGHT of the node's answer budget
+	// from before it reads until its reply is written; a node whose budget
+	// stays full answers behind, as one that cannot answer inside its budget.
+	if weight := spec.answer.weight(); weight > 0 {
+		release, holdErr := s.answers.Acquire(ctx, queue.AnswerEstate, weight)
+		if holdErr != nil {
+			out.Unserved, out.Detail = unservedBehind, fmt.Sprintf("%s: %v", s.self, holdErr)
+			return s.encodeReply(out)
+		}
+		defer release()
 	}
 	b.ServerSeams = s.seams
 	b.verifiers = s.env.verifiers

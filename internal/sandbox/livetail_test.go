@@ -116,7 +116,7 @@ func (rig *tailRig) serve(t *testing.T, owner string) *LiveFeeds {
 
 func (rig *tailRig) serveWith(t *testing.T, owner string, q TailServer, feeds *LiveFeeds) {
 	t.Helper()
-	stop, err := ServeTail(t.Context(), q, owner, nodeOf(owner), rig.pending, feeds, isCondition)
+	stop, err := ServeTail(t.Context(), q, owner, nodeOf(owner), rig.pending, feeds, isCondition, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("serve: %v", err)
 	}
@@ -442,7 +442,7 @@ func TestATailAnswererNeedsAConditionRule(t *testing.T) {
 	t.Parallel()
 	rig := newTailRig(t)
 	if _, err := ServeTail(t.Context(), rig.client(t), boxOwner, nodeOf(boxOwner), rig.pending,
-		rig.feeds(t), nil); err == nil {
+		rig.feeds(t), nil, queue.NewAnswerBudget(nil)); err == nil {
 		t.Error("ServeTail took no rule for a condition")
 	}
 }

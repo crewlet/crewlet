@@ -980,6 +980,20 @@ the limit guards none of ([When the host runs out of memory](#when-the-host-runs
 and native fragmentation. `engine_memory_limit` logs the limit, the memory and
 where it was read, what git holds and everything held outside the runtime.
 
+Inside the limit, the payload answers a node builds for its peers (a read of
+a box, a history or memory page, an assistant replay, a live relay's batches,
+a bridged call's frame, a run's tail, a code search's part, a knowledge
+search's slice, an MCP server's test, a data node's page of the estate) and
+every collection of a run's box share
+one **answer budget** of 256 MiB, each holding its weight (its byte bound times
+what it was measured to hold encoding it; a box read five times the files it
+reads, up to 160 MiB) from before its read until its reply is written, in
+arrival order, so the largest is never passed by smaller ones. An answer whose
+asker stops waiting first is answered that the budget was full. A Gitlet node
+keeps the budget as a line of its own, 284 MiB with the limit's tenth.
+`crewlet.queue.answers.wait` and `crewlet.queue.answers.held_bytes` show it;
+the budget is an engine constant, not a setting.
+
 Set `GOMEMLIMIT` yourself, `off` included, and the engine keeps it, logging
 `engine_memory_limit_explicit` with the figure it would have set. A node whose
 memory cannot be read sets none (`engine_memory_limit_unset`, a warning). A
@@ -1798,17 +1812,20 @@ everywhere. A repository NO Gitlet node can hold is still
 served, without a bitmap for what was pushed since its last publication, and
 its home raises [`code_maintenance_refused`](../reference/alarms.md), its
 `code_cache_maintenance_refused` line naming the repository and the charge.
-Every figure above is of the memory the executor's pools, the store's
+Every figure above is of the memory the executor's pools, the answers in flight, the store's
 [page cache](#the-page-cache) and the read lane leave: a Gitlet node keeps them first and sizes
 Gitlet by what is left
 ([Memory](../concepts/gitlet.md#the-cache-on-a-gitlet-node)), 97 MiB for the
-transcript reads its API answers and 1 650 MiB where it runs seats too, a
+transcript reads its API answers and 1 650 MiB where it runs seats too, 284 MiB for the answers in flight, a
 sixteenth of its memory for the page cache and 128 MiB a core for git's reads, so give it that much more. They are the executor's in-process pools alone: a node
 running seats also holds its harness calls and boxes
-([Replica count](#replica-count)). On 2 GiB of memory in all, such a node's one
-transfer takes it past its memory: it still boots and serves, logging
+([Replica count](#replica-count)). On 2 GiB of memory in all, such a node's pools
+alone take it past its memory, and its Go memory limit sits below them: under
+concurrent load at the bounds expect GC pressure, then the out-of-memory killer.
+It still boots and serves, logging
 `code_cache_memory_short` once, but at the default `node.max_concurrent` give a
-node running seats beside Gitlet 4 GiB of memory or more in all.
+node running seats beside Gitlet 4 GiB of memory or more in all, or run Gitlet
+on a node of its own.
 
 The node that publishes also holds:
 

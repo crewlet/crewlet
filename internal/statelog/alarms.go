@@ -839,7 +839,7 @@ type MCPApprovalNote struct {
 }
 
 // MCPSignInCondition is an MCP server's OAuth sign-in, as the fleet's record
-// of its grant holds it ([coord.MCPGrant]): never a token.
+// of its grant holds it ([coord.OAuthGrant]): never a token.
 type MCPSignInCondition struct {
 	// Held is whether anybody holds a grant for the server.
 	Held bool
@@ -1833,7 +1833,8 @@ var table = []rule{
 			"gitlet.max_transfers is set, give it fewer transfers. What the node " +
 			"keeps is fixed when it boots: first the Go runtime's share for the " +
 			"executor's pools it runs (97 MiB of transcript reads, 1 650 MiB on " +
-			"a node running seats), the store's page cache (a sixteenth of its " +
+			"a node running seats) and the answers in flight (284 MiB), the " +
+			"store's page cache (a sixteenth of its " +
 			"memory) and its read lane (128 MiB a core), then of " +
 			"the memory they leave 224 MiB for every transfer its git " +
 			"lane admits, whatever it serves, and 896 MiB for each core its " +

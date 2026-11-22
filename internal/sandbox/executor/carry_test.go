@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
@@ -82,7 +83,7 @@ func runToEnd(t *testing.T, runner *executor.Runner, box sandbox.Sandbox,
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	res, err := runner.Collect(t.Context(), box, handle)
+	res, err := runner.Collect(t.Context(), box, handle, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -845,7 +846,7 @@ func TestWhatTheRunDidIsItsScriptsRecord(t *testing.T) {
 		"release 2.1.310 (Claude Code)\nid a-line-the-harness-printed\ncontinued no\nwhy the harness's own words\n")
 	b.Put(p.SessionCapture(), "an archive")
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -863,7 +864,7 @@ func TestWhatTheRunDidIsItsScriptsRecord(t *testing.T) {
 
 	// THE HARNESS'S OWN WORD for its session, where it gave one.
 	b.Put(p.Result(), `{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"from-the-harness"}`)
-	if res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}); err != nil || res.SessionID != "from-the-harness" {
+	if res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil)); err != nil || res.SessionID != "from-the-harness" {
 		t.Errorf("the run reads session %q (%v), want its harness's own", res.SessionID, err)
 	}
 
@@ -872,7 +873,7 @@ func TestWhatTheRunDidIsItsScriptsRecord(t *testing.T) {
 	for _, named := range []string{"../../.credentials.json", strings.Repeat("s", 129)} {
 		b.Put(p.Result(), `{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"`+
 			named+`"}`)
-		if res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}); err != nil ||
+		if res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil)); err != nil ||
 			res.SessionID != "9a8b7c6d-0000-4000-8000-000000000001" {
 			t.Errorf("a harness that named %.40q (%d bytes) as its session read as %.40q (%v), want the record's",
 				named, len(named), res.SessionID, err)
@@ -882,7 +883,7 @@ func TestWhatTheRunDidIsItsScriptsRecord(t *testing.T) {
 	// AN ID NO HARNESS MINTS is no id, and a capture is described for none.
 	b.Put(p.Result(), `{"type":"result","subtype":"success","is_error":false,"result":"done"}`)
 	b.Put(p.SessionRecord(), "id ../../.credentials.json\ncontinued yes\nrelease 2.1.310 (Claude Code)\n")
-	if res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}); err != nil || res.SessionID != "" ||
+	if res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil)); err != nil || res.SessionID != "" ||
 		res.Captured != nil {
 		t.Errorf("a record naming no session id read as session %q, captured %+v (%v)", res.SessionID,
 			res.Captured, err)
@@ -892,7 +893,7 @@ func TestWhatTheRunDidIsItsScriptsRecord(t *testing.T) {
 	const why = "it is not in this box, and no archive of it was carried here"
 	b.Put(p.SessionRecord(), "id 9a8b7c6d-0000-4000-8000-000000000002\ncontinued no\nwhy "+why+
 		"\nrelease 2.1.310 (Claude Code)\n")
-	if res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}); err != nil || res.Continued ||
+	if res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil)); err != nil || res.Continued ||
 		res.FellBack != why {
 		t.Errorf("a run that started anew reads continued %v, fell back %q (%v); want %q", res.Continued,
 			res.FellBack, err, why)
@@ -902,7 +903,7 @@ func TestWhatTheRunDidIsItsScriptsRecord(t *testing.T) {
 	// its capture's description.
 	b.Put(p.SessionRecord(), "id 9a8b7c6d-0000-4000-8000-000000000001\ncontinued yes\nwhy \nrelease "+
 		strings.Repeat("2", 1<<10)+".1.310 (Claude Code)\n")
-	if res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}); err != nil || res.HarnessVersion != "" ||
+	if res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil)); err != nil || res.HarnessVersion != "" ||
 		res.Captured == nil || res.Captured.Version != "" {
 		described := -1
 		if res.Captured != nil {
@@ -915,7 +916,7 @@ func TestWhatTheRunDidIsItsScriptsRecord(t *testing.T) {
 	// NO CAPTURE, NONE DESCRIBED — and none streamed.
 	b.Put(p.SessionRecord(), "id 9a8b7c6d-0000-4000-8000-000000000001\ncontinued no\nwhy \nrelease 2.1.310 (Claude Code)\n")
 	b.Put(p.SessionCapture(), "")
-	if res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}); err != nil || res.Captured != nil || res.Continued {
+	if res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil)); err != nil || res.Captured != nil || res.Continued {
 		t.Errorf("a run with no capture reads captured %+v, continued %v (%v)", res.Captured, res.Continued, err)
 	}
 	if described, body, err := runner.OpenCapture(t.Context(), b); err != nil || body != nil ||

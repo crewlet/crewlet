@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
@@ -291,7 +292,7 @@ func TestARunWhoseWrapperDiedIsReadFromItsStream(t *testing.T) {
 			}
 			// No result file, no exit status, no done marker: the poll
 			// ended the run on the wrapper's liveness alone.
-			res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+			res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 			if err != nil {
 				t.Fatalf("Collect: %v", err)
 			}
@@ -395,7 +396,7 @@ func TestAClaudeRunInARealBoxIsCollectedFromItsStream(t *testing.T) {
 		t.Errorf("exit status %q; want the harness's own 3, not the copy's", code)
 	}
 
-	res, err := runner.Collect(t.Context(), box, handle)
+	res, err := runner.Collect(t.Context(), box, handle, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -438,7 +439,7 @@ func TestARunsLastLimitReportRidesItsResult(t *testing.T) {
 	stream := append([]string{first}, claudeRunStream...)
 	stream = append(stream[:len(stream)-1], last, stream[len(stream)-1])
 	b.Put(paths(b).Stream(), strings.Join(stream, "\n")+"\n")
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}

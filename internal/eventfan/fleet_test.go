@@ -56,7 +56,7 @@ func newNode(t *testing.T, b *memory.Broker, id string) node {
 	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), id+".db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	n := node{id: id, q: client(t, b), log: db.Events()}
-	stop, err := eventfan.Serve(t.Context(), n.q, id, n.log)
+	stop, err := eventfan.Serve(t.Context(), n.q, id, n.log, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("serve %s: %v", id, err)
 	}
@@ -277,7 +277,7 @@ func newNodeOn(t *testing.T, b *memory.Broker, id string, wrap func(queue.EventQ
 	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), id+".db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	n := node{id: id, q: client(t, b), log: db.Events()}
-	stop, err := eventfan.Serve(t.Context(), wrap(n.q), id, n.log)
+	stop, err := eventfan.Serve(t.Context(), wrap(n.q), id, n.log, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("serve %s: %v", id, err)
 	}

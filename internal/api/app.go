@@ -1075,7 +1075,7 @@ func New(opts Options) (*App, error) {
 	// The inbound edge. Exempt from the guard by prefix (see the auth
 	// package) because each route authenticates by provider credential,
 	// which is why every one of them verifies before it does anything.
-	if err := a.mountWebhooks(mux, opts.Inbound, opts.Runtime.MCPLanding(), now); err != nil {
+	if err := a.mountWebhooks(mux, opts.Inbound, opts.Runtime.OAuthLanding(), now); err != nil {
 		return nil, err
 	}
 	// The SANDBOX TELEMETRY edge, exempt by the same prefix rule and for
@@ -1467,7 +1467,7 @@ type Inbound struct {
 }
 
 // mountWebhooks registers the inbound edge.
-func (a *App) mountWebhooks(mux httpjson.Router, in Inbound, signIns webhooks.MCPSignIns,
+func (a *App) mountWebhooks(mux httpjson.Router, in Inbound, signIns webhooks.OAuthSignIns,
 	now func() time.Time) error {
 
 	receiver, err := webhooks.New(webhooks.Options{
@@ -1481,7 +1481,7 @@ func (a *App) mountWebhooks(mux httpjson.Router, in Inbound, signIns webhooks.MC
 		Now:        now,
 
 		SlackInstalls: in.SlackInstalls,
-		MCPSignIns:    signIns,
+		OAuthSignIns:  signIns,
 	})
 	if err != nil {
 		return fmt.Errorf("api: %w", err)

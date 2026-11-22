@@ -61,6 +61,7 @@ import { CopyGlyph, FileTextGlyph } from "@crewlethq/icons/glyphs";
 import { marked, paths, Problems, withProblems } from "~/ui/Problems.tsx";
 import { VerdictResult } from "./VerdictResult.tsx";
 import { pathSegment, rest, RestError } from "~/protocol/index.ts";
+import type { SetupConsentSignIn } from "~/contract/setup.ts";
 import { isWholeReference } from "~/lib/references.ts";
 import { asSentence, listed } from "~/lib/format.ts";
 import { useSecretNames } from "~/lib/useSecretNames.ts";
@@ -253,8 +254,9 @@ export function FieldHelp({
   );
 }
 
-/** The kit's input for a requirement's kind: a toggle is a two-way choice. */
-export function valueKind(kind: SetupRequirementKind): ValueFieldKind {
+/** The kit's input for a requirement's kind: a toggle is a two-way choice. A
+ * `consent` requirement is a sign-in, never a value ([ConsentSignIn]). */
+export function valueKind(kind: Exclude<SetupRequirementKind, "consent">): ValueFieldKind {
   if (kind === "add_identity") return "text";
   return kind === "toggle" ? "choice" : kind;
 }
@@ -332,6 +334,8 @@ export function gateOpen(r: SetupRequirement, answered: Answered): boolean {
 
 /** Whether a requirement must be answered, given what the form now holds. */
 export function neededField(r: SetupRequirement, answered: Answered): boolean {
+  // A SIGN-IN IS NO ANSWER a save waits for: it is made at the vendor.
+  if (r.kind === "consent") return false;
   if (!r.required_when) return r.required;
   return gateOpen(r, answered);
 }
@@ -971,7 +975,7 @@ export function SetupForm({
     const send: Record<string, string> = {};
     const generate: string[] = [];
     for (const r of reqs) {
-      if (r.kind === "add_identity") continue;
+      if (r.kind === "add_identity" || r.kind === "consent") continue;
       if (r.kind === "secret" && r.mintable) {
         // ONLY WHERE THERE IS NOTHING YET. A mintable credential this
         // company already holds is left alone: regenerating one is a
@@ -1515,6 +1519,8 @@ export function SetupForm({
       <div key={key} className="col gap-1">
         {r.kind === "add_identity" && r.identity ? (
           <AddIdentity step={r.identity} product={section.name} why={r.hint} />
+        ) : r.kind === "consent" ? (
+          <ConsentSignIn kind={section.tool.key} label={r.label} signedIn={r.present} help={help} />
         ) : shown ? (
           // WHAT THE ENGINE RENDERED, copied whole: a block a person pastes
           // into the app's own shell, which this form keeps no text of.
@@ -1738,5 +1744,51 @@ function KeyCheck({
         <span className="t-caption">A key is stored. Leave this empty to keep it.</span>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * A `consent` requirement: the person signs the company in at the vendor
+ * (`POST /setup/integrations/{kind}/consent`), and the browser goes to the
+ * address the engine answers. The engine keeps what the vendor grants, so the
+ * form holds no value for it.
+ */
+function ConsentSignIn({
+  kind,
+  label,
+  signedIn,
+  help,
+}: {
+  kind: string;
+  label: string;
+  signedIn: boolean;
+  help: ReactNode;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [refused, setRefused] = useState("");
+  async function start() {
+    setBusy(true);
+    setRefused("");
+    try {
+      const answer = (await rest.post(
+        `/setup/integrations/${pathSegment(kind)}/consent`,
+        {},
+      )) as SetupConsentSignIn;
+      window.location.assign(answer.authorize_url ?? "");
+    } catch (err) {
+      setRefused(err instanceof RestError ? err.message : String(err));
+      setBusy(false);
+    }
+  }
+  return (
+    <FormField as="fieldset" label={label} helper={help}>
+      <div className="row gap-2">
+        <Button onClick={() => void start()} disabled={busy}>
+          {signedIn ? "Sign in again" : "Sign in"}
+        </Button>
+        {signedIn && <Tag>Signed in</Tag>}
+      </div>
+      {refused && <Callout variant="danger">{refused}</Callout>}
+    </FormField>
   );
 }
