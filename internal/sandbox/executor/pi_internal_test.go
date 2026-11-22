@@ -15,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/prereqtest"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // piFixture is a capture of Pi 1.6.0 run with the runner's own extension
@@ -81,7 +82,7 @@ func TestAPiRunIsHeadlessAndLoadsOnlyWhatItsLaunchNames(t *testing.T) {
 func piGate(t *testing.T, home, cwd, release string, session Session) []string {
 	t.Helper()
 	paths := Paths{Home: home}
-	script := "v=" + sandbox.ShellQuote(release) + "\n" + piReleaseParse() + piHeader + "set --\n" +
+	script := "v=" + shellword.Quote(release) + "\n" + piReleaseParse() + piHeader + "set --\n" +
 		piSessionGate(session, paths, false) +
 		`printf '%s\n' "$s" "$k" "$w" "$@"` + "\n"
 	cmd := exec.Command("sh", "-c", script) //nolint:gosec // the runner's own script

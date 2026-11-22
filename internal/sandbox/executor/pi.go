@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 func init() { Register(Pi{}) }
@@ -86,7 +87,7 @@ func (Pi) Session(req sandbox.RunRequest) Session {
 // Command is the run as ONE SCRIPT ([piScript]), so the wrapper's redirections
 // (the brief on stdin, the stream, the error file) reach each step.
 func (Pi) Command(req sandbox.RunRequest, session Session, paths Paths, configPath string) string {
-	return "sh -c " + sandbox.ShellQuote(piScript(req, session, paths, configPath, sandbox.JobStopGrace))
+	return "sh -c " + shellword.Quote(piScript(req, session, paths, configPath, sandbox.JobStopGrace))
 }
 
 // piExtensionMark is the type of the line a run's script prints before its
@@ -110,7 +111,7 @@ const piExtensionMark = "crewlet.extension"
 // the extension adds it as a prompt section of its own, on every run, so a
 // continued run is told by its own launch.
 func piScript(req sandbox.RunRequest, session Session, paths Paths, extension string, stop time.Duration) string {
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	parts := []string{"pi", "--mode", "json", "-p",
 		// THE WORKING DIRECTORY UNTRUSTED: a repository's .pi settings, MCP
 		// servers, extensions, skills, prompts and system-prompt files do not
@@ -222,7 +223,7 @@ const piConversation = `{"type":"message"`
 func piSessionGate(session Session, paths Paths, rewired bool) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	start := func(why string) {
 		line(`%sif ! { mkdir -p %s && piheader "$s" > "$f"; }; then echo 'crewlet: the Pi session'"'"'s file could not be written, so the run does not start' >&2; exit 1; fi`,
 			why, q(paths.PiSessions()))
@@ -352,7 +353,7 @@ func piCapture(paths Paths) string {
 func piPack(paths Paths, at packAt) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	home := paths.Home
 	line(`if [ -s %s/.pi/sessions/"$s".jsonl ]; then`, q(home))
 	line(`  if command -v tar > /dev/null 2>&1 && command -v gzip > /dev/null 2>&1; then`)
@@ -390,8 +391,8 @@ func (Pi) PackSave(paths Paths, rec sessionRecord, staged, dest string) (string,
 // piOnDemand is a pack the engine makes of session outside the run's own
 // script, at at.
 func piOnDemand(paths Paths, session string, at packAt) string {
-	return "s=" + sandbox.ShellQuote(session) + " packed=\n" +
-		fmt.Sprintf("[ -s %s ] || exit %d\n", sandbox.ShellQuote(paths.PiSessionFile(session)), packNothing) +
+	return "s=" + shellword.Quote(session) + " packed=\n" +
+		fmt.Sprintf("[ -s %s ] || exit %d\n", shellword.Quote(paths.PiSessionFile(session)), packNothing) +
 		piPack(paths, at) +
 		fmt.Sprintf("[ -n \"$packed\" ] || exit %d\n", packFailed)
 }
