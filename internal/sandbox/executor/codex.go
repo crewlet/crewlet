@@ -181,7 +181,7 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 	// THE REPOSITORIES' INSTRUCTIONS AND SKILLS, none of their configuration
 	// ([codexRepoGate]), and the nested hook that hands a later checkout's
 	// where the box holds the helper it runs ([codexNestedHookFlags]).
-	b.WriteString(codexRepoGate(paths, req.Repos))
+	b.WriteString(codexRepoGate(paths, req.ReportedRepos))
 	hook, state := codexNestedHookFlags(paths)
 	line(`hk=; hp=%s; hs=%s`, q(hook), q(state))
 	line(`if [ -x %s ]; then hk=1; else echo 'crewlet: this box has no note helper for its machine, so the run starts without the hook that hands a checkout cloned during it its instructions' >&2; fi`,
