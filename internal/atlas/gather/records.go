@@ -38,7 +38,7 @@ type SeatAccess interface {
 // each node's instances listed, and the public half of each sign-in.
 type ToolServers interface {
 	ListMCPListings(ctx context.Context) ([]coord.MCPListing, error)
-	ListMCPGrants(ctx context.Context) ([]coord.MCPGrant, error)
+	ListOAuthGrants(ctx context.Context, f coord.GrantFamily) ([]coord.OAuthGrant, error)
 }
 
 // Nodes is the live nodes' leases, each carrying the node's last beat.
@@ -169,9 +169,9 @@ func readRecords(ctx context.Context, src Sources, s derive.Settings, req Reques
 			}
 			r.Listings = append(r.Listings, p)
 		}
-		grants, grantErr := src.ToolServers.ListMCPGrants(ctx)
+		grants, grantErr := src.ToolServers.ListOAuthGrants(ctx, coord.MCPGrantFamily)
 		for _, g := range grants {
-			p := derive.ToolServerSignIn{Server: g.Server, Issuer: g.Issuer}
+			p := derive.ToolServerSignIn{Server: g.Name, Issuer: g.Issuer}
 			if g.Expiry != nil {
 				p.Expiry = *g.Expiry
 			}

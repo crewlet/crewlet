@@ -722,8 +722,19 @@ func (r *Runner) packNow(ctx context.Context, box sandbox.Sandbox,
 // readSessionRecord is the box's record of the session its run worked in
 // ([Paths.SessionRecord]), read and parsed — or why it could not be read, a
 // refusal of a path that holds no file the engine reads, which names no
-// session.
+// session. A minting harness's session is the one its script reported
+// ([Runner.mintedRecord]).
 func (r *Runner) readSessionRecord(ctx context.Context, box sandbox.Sandbox, paths Paths) (sessionRecord, string, error) {
+	rec, refusal, err := readRecordedSession(ctx, box, paths)
+	if err != nil || refusal != "" || !r.MintsSession() {
+		return rec, refusal, err
+	}
+	return r.mintedRecord(ctx, box, paths, rec)
+}
+
+// readRecordedSession is [Runner.readSessionRecord] as the box records it,
+// whoever's harness minted the id it names.
+func readRecordedSession(ctx context.Context, box sandbox.Sandbox, paths Paths) (sessionRecord, string, error) {
 	recorded, refusal, err := readWhole(ctx, box, paths.SessionRecord(), "the record of the session its harness ran in")
 	if err != nil || refusal != "" {
 		return sessionRecord{}, refusal, err

@@ -2879,6 +2879,8 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// gets, its row read through the same router's reads and its object
 		// fetched through the same store. See executorrestore.go.
 		Restore: executorRestore{engine: e},
+		// AND WHETHER A MINTED SESSION'S ID IS ANY TURN'S, through the same reads.
+		Holders: executorRestore{engine: e},
 		// A seat's inbox is held while one of its runs holds it or an
 		// answer's resume is owed, and a retried resume asks the seat's
 		// conditions first — see [seatHold] and [Engine.mayResumeAnswer].
@@ -4073,10 +4075,10 @@ func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
 	// to releasing first, so the sync cycle stops publishing it and the flush
 	// alone carries it; a seat whose hydration failed has no holding and flushes
 	// nothing. The flush sends, from the cycles' marks and before the successor
-	// hydrates, what the seat wrote here, then its profiles, skills and
-	// onboarding marker whole, then, while the bound has time, the rows this
-	// node held when it took the seat ([flushSeatMemory]). It has
-	// [memoryFlushTimeout]; what it does not reach is lost as a crash loses it.
+	// hydrates, what the seat wrote or changed here, then, while the bound has
+	// time, the rows this node held when it took the seat ([flushSeatMemory]).
+	// It has [memoryFlushTimeout]; what it does not reach is lost as a crash
+	// loses it.
 	// Forgetting drops the marks and boundary, so the seat's next holding here
 	// takes a new boundary and carries back everything this node holds for it, as
 	// a restart does, which restores rows onto a changelog an operator recreated.

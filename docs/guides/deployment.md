@@ -1087,8 +1087,8 @@ drain takes milliseconds on a healthy fleet: giving leases back, closing the HTT
 which an open sandbox bridge session spends whole), flushing the auxiliary
 spend, the reads of unit repositories and the day's usage, on a seats pod the sandbox coordinator's own end (a retry still running, whose teardowns are held to one grace from the stop, a session keep still
 uploading, and the stamp of each keep it cuts, thirty seconds each), and closing
-the store. With each step waiting out its own bound it takes up to about 136 s on a member that runs seats and has lost both its
-event stream and its coordination store, about 140 s on a node without
+the store. With each step waiting out its own bound it takes up to about 141 s on a member that runs seats and has lost both its
+event stream and its coordination store, about 145 s on a node without
 `data`, and about 46 s on a member that runs none (see
 [Graceful shutdown](../concepts/agent-runtime.md#graceful-shutdown)); the extra 150 s covers that.
 So even a deployment whose turns finish in seconds

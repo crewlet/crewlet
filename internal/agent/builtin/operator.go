@@ -50,6 +50,10 @@ type OperatorDeps struct {
 	// through. The zero value omits the tool.
 	AtlasRefresh AtlasRefreshDeps
 
+	// HomeBoard is what a person saves their Home board through. The zero
+	// value omits the tool.
+	HomeBoard HomeBoardDeps
+
 	// Readers is `code_repo_readers`' half beside Code — who read a
 	// `visibility: unit` repository — served only where Code serves the
 	// code reads ([CodeDeps.serves]). A nil reader omits the tool.
@@ -182,6 +186,8 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		// a vendor is spent against the company's rate limit, so it is a
 		// person's to ask for (see atlasrefresh.go).
 		{&atlasRefresh{deps: deps.AtlasRefresh}, deps.AtlasRefresh.serves()},
+		// NOR A HOME BOARD: a seat has no dashboard to arrange (see homeboard.go).
+		{&saveHomeBoard{deps: deps.HomeBoard}, deps.HomeBoard.serves()},
 		// A SEAT IS NEVER GIVEN IT: a question an executor asked is a
 		// person's to answer, and a seat that could answer its own
 		// executor's question would be one guessing on its own behalf.
