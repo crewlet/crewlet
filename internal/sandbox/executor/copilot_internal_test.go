@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -633,74 +634,131 @@ func TestACopilotNoteAnAnswerFollowedIsNotCarriedOver(t *testing.T) {
 }
 
 // A compaction keeping one trailing message carries a note over whole only
-// where no line the model reads followed it: a main `system.notification`
-// (its text is the model's; subagent-note line 66), an answer or a tool's
-// result between the note and the compaction is that one message, and the note
-// is left only in the summary. compacted-queued keeps note 1 (line 241) over a
-// compaction retaining 1 (243); each case puts one such line between them.
-// The note is not held, and once served again a request after its new line
-// holds it.
+// where no line the model may read followed it: a main `system.notification`
+// (subagent-note line 66), an answer, a tool's result, a hook's end that
+// returned something, or a line naming an agent no `subagent.started`
+// announced is that one message, and the note is left only in the summary.
+// compacted-queued keeps note 1 (line 241) over a compaction retaining 1
+// (243); each case puts lines between them. A note so left is not held, and a
+// request after its line served again holds it; an announced subagent's
+// answer leaves it kept.
 //
-// Mutation: count only user messages toward the window, or take any one of
-// the three kinds for bookkeeping in copilotMessage — its case holds note 1.
+// Mutation: count only user messages, take any of these kinds for no message,
+// or drop the announcement for the line's agentId alone — its case fails.
 func TestACopilotNoteAMessageFollowedIsNotCarriedOver(t *testing.T) {
 	lines := copilotLines(t, "compacted-queued.events.jsonl")
-	note, record := lines[241], lines[247]
+	note, record, answer, hook := lines[241], lines[247], lines[248], lines[5]
 	if !bytes.Contains(note, []byte(`"clientTurnId":"crewlet-note:msg_inbox1"`)) ||
 		!bytes.HasPrefix(lines[243], []byte(`{"type":"session.compaction_start"`)) ||
 		!bytes.Contains(lines[243], []byte(`"retainedInputMessages":1`)) ||
-		!bytes.HasPrefix(record, []byte(`{"type":"session.usage_record"`)) {
-		t.Fatal("compacted-queued's lines 241, 243 and 247 are not note 1, a compaction retaining 1 and a request")
+		!bytes.HasPrefix(record, []byte(`{"type":"session.usage_record"`)) ||
+		!bytes.HasPrefix(answer, []byte(`{"type":"assistant.message"`)) ||
+		!bytes.HasPrefix(hook, []byte(`{"type":"hook.end","data":{"hookInvocationId"`)) {
+		t.Fatal("compacted-queued's lines 5, 241, 243, 247 and 248 are not a hook's end, note 1, a compaction retaining 1, a request and an answer")
 	}
-	notification := copilotLines(t, "subagent-note.events.jsonl")[66]
+	sub := copilotLines(t, "subagent-note.events.jsonl")
+	notification, started := sub[66], sub[19]
 	result := copilotLines(t, "tool.events.jsonl")[10]
 	if !bytes.HasPrefix(notification, []byte(`{"type":"system.notification"`)) ||
-		!bytes.HasPrefix(result, []byte(`{"type":"tool.execution_complete"`)) ||
-		!bytes.HasPrefix(lines[248], []byte(`{"type":"assistant.message"`)) {
-		t.Fatal("the lines put between are not a notification, a tool's result and an answer")
+		!bytes.HasPrefix(started, []byte(`{"type":"subagent.started"`)) ||
+		!bytes.HasPrefix(result, []byte(`{"type":"tool.execution_complete"`)) {
+		t.Fatal("the lines put between are not a notification, a subagent's start and a tool's result")
 	}
-	stamp := func(l []byte, from, to string) []byte {
-		out := bytes.Replace(l, []byte(`"timestamp":"`+from+`"`), []byte(`"timestamp":"`+to+`"`), 1)
+	edit := func(l []byte, from, to string) []byte {
+		out := bytes.Replace(l, []byte(from), []byte(to), 1)
 		if bytes.Equal(out, l) {
-			t.Fatalf("the line holds no timestamp %s", from)
+			t.Fatalf("the line holds no %s", from)
 		}
 		return out
 	}
+	agent := regexp.MustCompile(`"agentId":"([^"]+)"`).FindSubmatch(started)
+	if agent == nil {
+		t.Fatal("the subagent's start names no agentId")
+	}
+	named := func(id string) []byte {
+		return edit(answer, `{"type":"assistant.message",`, `{"type":"assistant.message","agentId":"`+id+`",`)
+	}
 	// Served again before the session ends: its line, then a request begun
 	// after it (610 ms before 03:03:32.000).
-	again := [][]byte{stamp(note, "2026-11-22T03:03:28.715Z", "2026-11-22T03:03:31.300Z"),
-		stamp(record, "2026-11-22T03:03:30.246Z", "2026-11-22T03:03:32.000Z")}
+	again := [][]byte{edit(note, `"timestamp":"2026-11-22T03:03:28.715Z"`, `"timestamp":"2026-11-22T03:03:31.300Z"`),
+		edit(record, `"timestamp":"2026-11-22T03:03:30.246Z"`, `"timestamp":"2026-11-22T03:03:32.000Z"`)}
 	for _, c := range []struct {
-		name string
-		line []byte
+		name  string
+		lines [][]byte
+		kept  bool
 	}{
-		{"a notification", notification},
-		{"an answer", lines[248]},
-		{"a tool's result", result},
+		{"a notification", [][]byte{notification}, false},
+		{"an answer", [][]byte{answer}, false},
+		{"a tool's result", [][]byte{result}, false},
+		{"a hook's end with output", [][]byte{edit(hook, `"success":true`, `"success":true,"output":{"additionalContext":"x"}`)}, false},
+		{"a hook's end with none", [][]byte{hook}, true},
+		{"an unannounced agent's answer", [][]byte{named(string(agent[1]))}, false},
+		{"an announced subagent's answer", [][]byte{started, named(string(agent[1]))}, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			var between, served2 []byte
 			for i, l := range lines[1:] {
 				between = append(between, l...)
 				if i+1 == 253 {
-					served2 = append(served2, between...)
-					served2 = append(served2, bytes.Join(again, nil)...)
+					served2 = append(append(served2, between...), bytes.Join(again, nil)...)
 				}
 				if i+1 == 241 {
-					between = append(between, c.line...)
+					between = append(between, bytes.Join(c.lines, nil)...)
 				}
 			}
 			for _, l := range lines[254:] {
 				served2 = append(served2, l...)
 			}
+			want := []string{"msg_inbox2", "msg_inbox3"}
+			if c.kept {
+				want = []string{"msg_inbox1", "msg_inbox2", "msg_inbox3"}
+			}
 			held, err := copilotNotesHeld(t.Context(), bytes.NewReader(between),
 				served("msg_inbox1", "msg_inbox2", "msg_inbox3"))
-			if err != nil || !slices.Equal(held, []string{"msg_inbox2", "msg_inbox3"}) {
-				t.Fatalf("held = %v (%v), want notes 2 and 3 only", held, err)
+			if err != nil || !slices.Equal(held, want) {
+				t.Fatalf("held = %v (%v), want %v", held, err, want)
 			}
 			held, err = copilotNotesHeld(t.Context(), bytes.NewReader(served2), served("msg_inbox1"))
 			if err != nil || !slices.Equal(held, []string{"msg_inbox1"}) {
 				t.Fatalf("served again: held = %v (%v), want note 1", held, err)
+			}
+		})
+	}
+}
+
+// The window counts what Copilot counts: in every compaction capture
+// (1.0.114), the lines it counts before the compaction's start are the
+// `preCompactionMessagesLength` the compaction states, so a kind wrongly
+// left out of the window, or wrongly counted, shows here.
+//
+// Mutation: leave out any further kind (system.message, a bare hook's end
+// counted) — a capture's count differs.
+func TestCopilotsWindowCountsWhatACompactionCounts(t *testing.T) {
+	for _, fixture := range []string{"compacted-queued.events.jsonl", "compacted-queued-steered.events.jsonl",
+		"compacted-after-tools.events.jsonl"} {
+		t.Run(fixture, func(t *testing.T) {
+			var window copilotWindow
+			counted, stated := -1, int64(-1)
+			for n, l := range copilotLines(t, fixture)[1:] {
+				ev, ok := decodeCopilotNoteLine(l)
+				switch {
+				case ok && ev.Type == "session.compaction_start":
+					counted = len(window.messages)
+				case ok && ev.Type == "session.compaction_complete":
+					var line struct {
+						Data struct {
+							Pre int64 `json:"preCompactionMessagesLength"`
+						} `json:"data"`
+					}
+					if err := json.Unmarshal(l, &line); err != nil {
+						t.Fatal(err)
+					}
+					stated = line.Data.Pre
+				}
+				window.read(n+1, ev, ok)
+			}
+			if counted < 0 || stated <= 0 || int64(counted) != stated {
+				t.Fatalf("counted %d lines before the compaction, which states %d", counted, stated)
 			}
 		})
 	}
