@@ -43,7 +43,8 @@ test("every role is a row with what it allows and what Crewlet offers, the held 
   expect(rows).toHaveLength(4);
   expect(within(rows[1]!).getByText("Held")).toBeTruthy();
   expect(within(rows[0]!).queryByText("Held")).toBeNull();
-  expect(within(rows[1]!).getByText("Read, Operate")).toBeTruthy();
+  // The levels by what they let an agent do, the same names every growth product uses.
+  expect(within(rows[1]!).getByText("View, Manage")).toBeTruthy();
   expect(within(rows[2]!).getByText("Administer, each act a decision")).toBeTruthy();
   expect(within(rows[3]!).getByText("Not used by Crewlet")).toBeTruthy();
   expect(levelsWords([])).toBe("Not used by Crewlet");
