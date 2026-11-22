@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // Session ids as a minting harness spells them: Kimi's are `session_<uuid>`.
@@ -124,7 +125,7 @@ func TestAMintingScriptStagesItsReportThenRenamesIt(t *testing.T) {
 	t.Parallel()
 	p := executor.Paths{Home: "/box"}
 	script := executor.ReportSession(p, "id")
-	staged, report := sandbox.ShellQuote(executor.SessionReportStaging(p)), sandbox.ShellQuote(p.SessionReport())
+	staged, report := shellword.Quote(executor.SessionReportStaging(p)), shellword.Quote(p.SessionReport())
 	if !strings.HasPrefix(script, `printf '%s\n' "$id" > `+staged+" && ") ||
 		!strings.HasSuffix(script, "mv -f "+staged+" "+report) {
 		t.Fatalf("the report is not staged and renamed into place:\n%s", script)
@@ -190,7 +191,7 @@ func TestAReusedBoxKeepsNoSessionReport(t *testing.T) {
 	execs := b.Execs()
 	clear := execs[len(execs)-1].Command
 	for _, path := range []string{p.SessionReport(), executor.SessionReportStaging(p)} {
-		if !strings.Contains(clear, sandbox.ShellQuote(path)+" ") {
+		if !strings.Contains(clear, shellword.Quote(path)+" ") {
 			t.Errorf("the clear leaves %s:\n%s", path, clear)
 		}
 	}

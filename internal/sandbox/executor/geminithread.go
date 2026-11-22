@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // A Gemini CLI take's receipt: the take script records each take it handed
@@ -115,7 +116,7 @@ func geminiSessionFile(ctx context.Context, box sandbox.Sandbox, paths Paths, se
 	if len(session) < 8 || !sandbox.ValidSessionID(session) {
 		return nil, fmt.Errorf("the run's Gemini CLI session %q is no session id Gemini CLI names a file by", session)
 	}
-	res, err := box.Exec(ctx, "ls -1 "+sandbox.ShellQuote(paths.GeminiChats()), sandbox.ExecOptions{})
+	res, err := box.Exec(ctx, "ls -1 "+shellword.Quote(paths.GeminiChats()), sandbox.ExecOptions{})
 	if err != nil || res.ExitCode != 0 {
 		return nil, fmt.Errorf("the run's Gemini CLI session %s has no chat directory to read", session)
 	}

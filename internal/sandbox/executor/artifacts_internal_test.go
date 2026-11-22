@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // A REUSED BOX KEEPS NO HARNESS'S ARTIFACTS, whichever runner clears it: the
@@ -34,7 +35,7 @@ func TestAReusedBoxKeepsNoHarnesssFilesOrDirectories(t *testing.T) {
 		t.Fatalf("the clear is not `rm -f <files>; rm -rf <dirs>; …`:\n%s", clear)
 	}
 	dirs, _, _ := strings.Cut(rest, "; ")
-	removes := func(list, path string) bool { return slices.Contains(strings.Fields(list), sandbox.ShellQuote(path)) }
+	removes := func(list, path string) bool { return slices.Contains(strings.Fields(list), shellword.Quote(path)) }
 	for _, path := range (Codex{}).artifactFiles(p) {
 		if !removes(files, path) {
 			t.Errorf("the clear leaves Codex's %s:\n%s", path, clear)
@@ -72,7 +73,7 @@ func TestAReusedBoxKeepsNoneOfASplitRunnersArtifacts(t *testing.T) {
 	clear := execs[len(execs)-1].Command
 	files, rest, _ := strings.Cut(strings.TrimPrefix(clear, "rm -f "), "; rm -rf ")
 	dirs, _, _ := strings.Cut(rest, "; ")
-	removes := func(list, path string) bool { return slices.Contains(strings.Fields(list), sandbox.ShellQuote(path)) }
+	removes := func(list, path string) bool { return slices.Contains(strings.Fields(list), shellword.Quote(path)) }
 	for _, c := range []struct {
 		name  string
 		files []string

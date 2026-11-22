@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/prereqtest"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // museFixture is testdata/muse/1.4.25/<name>: a real Muse Code 1.4.25 run's
@@ -385,7 +386,7 @@ func TestAMuseSessionPacksAndRestoresUnderItsDay(t *testing.T) {
 	if err := os.WriteFile(to.SessionCarried(), raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	gate := "v=" + sandbox.ShellQuote("Muse Code "+museSupported()) + "\n" +
+	gate := "v=" + shellword.Quote("Muse Code "+museSupported()) + "\n" +
 		museSessionGate(Session{ID: id, Continues: true, Replaces: true, Fresh: "fresh"}, to, false) +
 		`printf '%s\n' "$s" "$k" "$w"`
 	if got := string(runSh(t, gate)); got != id+"\nyes\n\n" {

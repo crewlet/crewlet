@@ -3,7 +3,7 @@ package executor
 // KimiHome is the directory a Kimi Code run keeps its state in, pinned as
 // KIMI_CODE_HOME ([Kimi.Pins]): the box home's `.kimi-code`, where the harness
 // keeps it by default and where a local box is seeded with the entry's login
-// (`credentials/oauth/kimi-code.json` and `config.toml`). Its sessions are
+// (`credentials/kimi-code.json` and `config.toml`). Its sessions are
 // under `sessions/`, and the run's agent profile and MCP servers are written
 // there ([Kimi.WriteConfig]), the one place `kimi web` reads each from.
 func (p Paths) KimiHome() string { return p.Home + "/.kimi-code" }

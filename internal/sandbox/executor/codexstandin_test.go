@@ -19,6 +19,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // The stand-in app-server: this test binary, run by a box's stand-in `codex
@@ -215,7 +216,7 @@ EOF
   exit 0;;
 esac
 exit 2
-`, shQuote(record), release, codexStandInSocket, codexStandInRecord, shQuote(bin), codexStandInThread, rollout)
+`, shellword.Quote(record), release, codexStandInSocket, codexStandInRecord, shellword.Quote(bin), codexStandInThread, rollout)
 	writeBoxStandIn(t, box, p.BinDir()+"/codex", script)
 }
 

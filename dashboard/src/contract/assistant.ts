@@ -183,7 +183,8 @@ export type AssistantTaintSource =
   | "server_output"
   | "delegated_request"
   | "atlas"
-  | "web_page";
+  | "web_page"
+  | "browser_page";
 
 /** One row of a proposal's change list, in the before and after grammar. */
 type AssistantChangeKind = "fact" | "changed" | "added" | "removed" | "text";

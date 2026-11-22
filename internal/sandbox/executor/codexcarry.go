@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // A CODEX SESSION CARRIED BETWEEN BOXES is its rollout alone (codexrollout.go):
@@ -147,7 +148,7 @@ func (Codex) PackSave(paths Paths, rec sessionRecord, staged, dest string) (stri
 // script: [packNothing] where the box holds nothing of it to pack,
 // [packFailed] where no archive was made.
 func codexOnDemand(paths Paths, session, staged, dest string) string {
-	return "sid=" + sandbox.ShellQuote(session) + " packed=\n" +
+	return "sid=" + shellword.Quote(session) + " packed=\n" +
 		codexPack(paths, staged, dest, fmt.Sprintf("exit %d", packNothing)) +
 		fmt.Sprintf("[ -n \"$packed\" ] || exit %d\n", packFailed)
 }
@@ -172,7 +173,7 @@ func codexCapture(paths Paths) string {
 func codexPack(paths Paths, staged, dest, nothing string) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	member := `rollout-` + codexCarriedStamp + `-"$sid".jsonl`
 	line(`pf= pn=0`)
 	line(`case "$sid" in ''|*[!A-Za-z0-9_-]*) ;; *) if command -v find > /dev/null 2>&1; then pf=$(find %s -type f -name "rollout-*-$sid.jsonl" 2> /dev/null | LC_ALL=C sort | head -n 1); else echo 'crewlet: this box has no find, so the session was not packed to be continued in another box' >&2; fi;; esac`,
@@ -222,7 +223,7 @@ func (p Paths) CodexLiveConfig() string { return p.CodexHome() + "/config.toml" 
 func codexSessionGate(session Session, paths Paths, rewired bool) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	if !session.Continues {
 		line(`sid= k=no w=`)
 		b.WriteString(codexInstallConfig(paths, paths.CodexConfig()))
@@ -295,7 +296,7 @@ func codexSessionGate(session Session, paths Paths, rewired bool) string {
 // run before Codex starts where it cannot: a run on no configuration, or on
 // another session's, is one the bridge cannot tell apart.
 func codexInstallConfig(paths Paths, config string) string {
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	return fmt.Sprintf("mkdir -p %s && mv -f %s %s || { echo 'crewlet: the Codex configuration of the run could not be installed, so the run does not start' >&2; exit 1; }\n",
 		q(paths.CodexHome()), q(config), q(paths.CodexLiveConfig()))
 }
@@ -311,7 +312,7 @@ func codexIndented(lines string) string {
 // the member moved to [codexRestoredRollout] LAST, so a box that holds it
 // holds it whole.
 func codexRestore(paths Paths, thread string) string {
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	in := paths.SessionStaging() + "/in"
 	from := in + "/" + codexArchiveMember(thread)
 	return strings.Join([]string{

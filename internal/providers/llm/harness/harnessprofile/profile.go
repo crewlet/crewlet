@@ -994,14 +994,15 @@ type Profile struct {
 	// in the home is conversation state.
 	CredentialPaths []string `yaml:"credential_paths,omitempty"`
 
-	// LoginKeys names, by a credential file's NAME, the top-level key that file
-	// holds only once signed in, for a file that also keeps state: Copilot CLI
-	// writes `firstLaunchAt` into config.json and Cursor Agent settings into
+	// LoginKeys names, by a credential file's NAME, the top-level keys that file
+	// holds a login under, for a file that also keeps state: Copilot CLI writes
+	// `firstLaunchAt` into config.json and Cursor Agent settings into
 	// cli-config.json signed in or not, which made the doctor report a sign-in
-	// nobody made. Without its key such a file is not a login
+	// nobody made. Holding none of its keys such a file is not a login
 	// ([Profile.HoldsLogin]); a credential file not named here is one whenever
-	// it exists.
-	LoginKeys map[string]string `yaml:"login_keys,omitempty"`
+	// it exists. Every key the harness signs in from: one it reads that is not
+	// named leaves a login the engine takes for none.
+	LoginKeys map[string][]string `yaml:"login_keys,omitempty"`
 
 	// VolatilePaths are sessions, transcripts, history and todo state,
 	// relative to the seat home, deleted before and after every call: a hidden
@@ -2187,9 +2188,11 @@ func (p *Profile) validateHomePaths(add func(string, ...any)) {
 			add("login_keys names %q, which is the file name of no credential_paths entry — "+
 				"a login key says which of the credential files holds a login only once it "+
 				"carries that key", name)
-		case strings.TrimSpace(p.LoginKeys[name]) == "":
-			add("login_keys.%s is empty — name the top-level key the file holds once the "+
-				"harness has signed in", name)
+		case len(p.LoginKeys[name]) == 0 || slices.ContainsFunc(p.LoginKeys[name], func(k string) bool {
+			return strings.TrimSpace(k) == ""
+		}):
+			add("login_keys.%s is empty or names an empty key — name the top-level keys the "+
+				"file holds a login under", name)
 		}
 	}
 	// A host file is adopted under its file name and a seat is seeded only with
@@ -2728,16 +2731,16 @@ func (p *Profile) ValidateCredentials(name string) error {
 }
 
 // HoldsLogin reports whether the credential file named name, holding content,
-// is a login: one [Profile.LoginKeys] does not name, or one whose top-level
-// key it names is set to something other than null or an empty string, object
-// or array.
+// is a login: one [Profile.LoginKeys] does not name, or one any of whose
+// top-level keys it names is set to something other than null or an empty
+// string, object or array.
 //
 // Read as JSON with every `//` line set aside, since Copilot CLI's plaintext
 // login file opens with two. A file that does not read that way IS taken for a
 // login: guessing harder means parsing a vendor's format, and the opposite
 // wrong guess is a login the engine would not carry, export or keep.
 func (p *Profile) HoldsLogin(name string, content []byte) bool {
-	key, named := p.LoginKeys[name]
+	keys, named := p.LoginKeys[name]
 	if !named {
 		return true
 	}
@@ -2751,8 +2754,19 @@ func (p *Profile) HoldsLogin(name string, content []byte) bool {
 	if err := json.Unmarshal([]byte(strings.Join(lines, "")), &doc); err != nil {
 		return true
 	}
+	for _, key := range keys {
+		if heldValue(doc[key]) {
+			return true
+		}
+	}
+	return false
+}
+
+// heldValue reports whether raw, one top-level value of a login file, holds
+// something: not absent, null, or an empty string, object or array.
+func heldValue(raw json.RawMessage) bool {
 	var value any
-	if err := json.Unmarshal(doc[key], &value); err != nil {
+	if err := json.Unmarshal(raw, &value); err != nil {
 		return false
 	}
 	switch v := value.(type) {

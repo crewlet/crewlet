@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/activityline"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // codexStream is a recorded `exec --json` stream of Codex 0.171.0.
@@ -342,7 +343,7 @@ func TestACodexSocketPastAUnixPathIsRefusedNamingTheStateDir(t *testing.T) {
 // Mutation: drop the override, or set it on every run, and this goes red.
 func TestAWebDeniedCodexRunHasNoWebTool(t *testing.T) {
 	t.Parallel()
-	off := sandbox.ShellQuote(`web_search="disabled"`)
+	off := shellword.Quote(`web_search="disabled"`)
 	if denied := codexPosture(sandbox.RunRequest{WebDenied: true}); !slices.Contains(denied, off) {
 		t.Errorf("a web-denied run's posture %q does not disable web search", denied)
 	}

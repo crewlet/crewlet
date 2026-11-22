@@ -16,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/prereqtest"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // A KIMI SESSION IS CONTINUED ONLY FROM 2.7.2 TO 2.7.2, the release Crewlet
@@ -145,7 +146,7 @@ func kimiGate(t *testing.T, paths Paths, work, printed string, session Session) 
 	t.Helper()
 	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
 	prereqtest.OnPath(t, "node", "the gate files a session through the run's driver", "install any current node")
-	script := "v=" + sandbox.ShellQuote(printed) + "\nset --\n" + kimiSessionGate(session, paths, false) +
+	script := "v=" + shellword.Quote(printed) + "\nset --\n" + kimiSessionGate(session, paths, false) +
 		`printf '%s|%s|%s|%s' "$s" "$k" "$w" "$*"`
 	cmd := exec.Command(sh, "-c", script)
 	cmd.Dir = work
@@ -352,7 +353,7 @@ func TestAContinuedKimiRunIsChargedItsOwnRecordsAlone(t *testing.T) {
 	}
 	kimiWrite(t, wire, record("1"))
 	script := "s=" + session + "\n" + kimiLinesBefore(paths) + "printf '%s' '" + record("2") + "' >> " +
-		sandbox.ShellQuote(wire) + "\n" + kimiUsage(paths)
+		shellword.Quote(wire) + "\n" + kimiUsage(paths)
 	out, err := exec.Command(sh, "-c", script).Output()
 	if err != nil {
 		t.Fatal(err)

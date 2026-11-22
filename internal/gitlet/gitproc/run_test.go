@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
+	"github.com/crewlet/crewlet/internal/shellword"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
@@ -653,7 +654,7 @@ func TestASlowReaderReceivesEveryByte(t *testing.T) {
 	holding := filepath.Join(t.TempDir(), "holding")
 	var logs logBuffer
 	p := fakePool(t, fmt.Sprintf("head -c %d /dev/zero; while [ ! -e %s ]; do sleep 0.01; done; head -c %d /dev/zero; exit 0",
-		size-last, quote(holding), last), gitproc.Options{Metrics: rec, Logger: logs.logger()})
+		size-last, shellword.Quote(holding), last), gitproc.Options{Metrics: rec, Logger: logs.logger()})
 	gitproc.SetTimings(p, 10*time.Second, 300*time.Millisecond)
 	exited := make(chan struct{})
 	release := sync.OnceFunc(func() { close(exited) })
@@ -686,8 +687,8 @@ func TestAnEscapedDescendantDoesNotHoldRun(t *testing.T) {
 	ready := filepath.Join(t.TempDir(), "escaped")
 	pids := newPIDFile(t)
 	var logs logBuffer
-	p := fakePool(t, escapeEnv+"="+quote(ready)+" "+quote(self)+" & echo $! > "+pids.shell()+
-		"; while [ ! -e "+quote(ready)+" ]; do sleep 0.01; done; exit 0", gitproc.Options{Logger: logs.logger()})
+	p := fakePool(t, escapeEnv+"="+shellword.Quote(ready)+" "+shellword.Quote(self)+" & echo $! > "+pids.shell()+
+		"; while [ ! -e "+shellword.Quote(ready)+" ]; do sleep 0.01; done; exit 0", gitproc.Options{Logger: logs.logger()})
 	gitproc.SetTimings(p, 10*time.Second, 300*time.Millisecond)
 	done := start(t.Context(), p, gitproc.Cmd{Args: []string{"x"}, Class: gitproc.ClassRead, Deadline: time.Minute})
 	pid := pids.read(t)
@@ -1029,7 +1030,7 @@ func TestARunReadsItsTraceToTheEnd(t *testing.T) {
 		`"category":"index","key":"read","value":"` + strings.Repeat("v", 100) + `"}`
 	damage := strings.TrimSuffix(errorLine(1, "index file %s is too small",
 		"index file ./objects/pack/pack-1.idx is too small"), "\n")
-	p := fakePool(t, "yes "+quote(data)+" | head -n 8192 >&3\nprintf '%s\\n' "+quote(damage)+" >&3\nexit 128",
+	p := fakePool(t, "yes "+shellword.Quote(data)+" | head -n 8192 >&3\nprintf '%s\\n' "+shellword.Quote(damage)+" >&3\nexit 128",
 		gitproc.Options{})
 	start := time.Now()
 	res, err := p.Run(t.Context(), gitproc.Cmd{Args: []string{"rev-list"}, Class: gitproc.ClassRead,

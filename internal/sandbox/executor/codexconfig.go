@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // codexTelemetryEnv is the OTLP exporter's variables, the endpoint and its
@@ -126,7 +127,7 @@ func codexPosture(req sandbox.RunRequest) []string {
 	}
 	out := make([]string, 0, 2*len(set))
 	for _, kv := range set {
-		out = append(out, "-c", sandbox.ShellQuote(kv))
+		out = append(out, "-c", shellword.Quote(kv))
 	}
 	return out
 }
@@ -309,8 +310,8 @@ func writeCodexNoteHelper(ctx context.Context, box sandbox.Sandbox, paths Paths)
 // a skill's file through its shell, which the helper sees off the app-server
 // and holds to the digest of the file as written ([codexSkillDigests]).
 func writeCodexSkills(ctx context.Context, box sandbox.Sandbox, skills []sandbox.Skill, paths Paths) error {
-	if _, err := box.Exec(ctx, "rm -rf "+sandbox.ShellQuote(paths.CodexSkills())+"/"+
-		sandbox.ShellQuote(sandbox.SkillNamespace+":")+"*", sandbox.ExecOptions{}); err != nil {
+	if _, err := box.Exec(ctx, "rm -rf "+shellword.Quote(paths.CodexSkills())+"/"+
+		shellword.Quote(sandbox.SkillNamespace+":")+"*", sandbox.ExecOptions{}); err != nil {
 		return fmt.Errorf("executor: removing an earlier run's Codex skills: %w", err)
 	}
 	for _, s := range skills {

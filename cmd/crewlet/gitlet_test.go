@@ -37,6 +37,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
+	"github.com/crewlet/crewlet/internal/shellword"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
@@ -244,10 +245,10 @@ func hermeticGitWith(t *testing.T, more string) string {
 func hermeticGitIn(t *testing.T, global, more string) (git, home string) {
 	t.Helper()
 	home = t.TempDir()
-	return gittest.Wrap(t, "export HOME="+shellQuote(home)+
-		" XDG_CONFIG_HOME="+shellQuote(filepath.Join(home, ".config"))+" LC_ALL=C"+
-		" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="+shellQuote(global)+" GIT_ATTR_NOSYSTEM=1 "+
-		procgrouptest.GORACE+"="+shellQuote(procgrouptest.StandInRaceOptions())+"\n"+
+	return gittest.Wrap(t, "export HOME="+shellword.Quote(home)+
+		" XDG_CONFIG_HOME="+shellword.Quote(filepath.Join(home, ".config"))+" LC_ALL=C"+
+		" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="+shellword.Quote(global)+" GIT_ATTR_NOSYSTEM=1 "+
+		procgrouptest.GORACE+"="+shellword.Quote(procgrouptest.StandInRaceOptions())+"\n"+
 		"unset http_proxy HTTP_PROXY https_proxy HTTPS_PROXY all_proxy ALL_PROXY no_proxy NO_PROXY\n"+
 		more), home
 }
@@ -291,7 +292,7 @@ func TestTheOperatorsGitInTheSuiteReadsNothingOfTheMachine(t *testing.T) {
 
 	// What git is started under, as the stand-in leaves it.
 	dump := filepath.Join(t.TempDir(), "env")
-	probe, home := hermeticGitIn(t, "/dev/null", "env > "+shellQuote(dump)+"\nexit 0\n")
+	probe, home := hermeticGitIn(t, "/dev/null", "env > "+shellword.Quote(dump)+"\nexit 0\n")
 	if out, err := exec.CommandContext(t.Context(), probe, "status").CombinedOutput(); err != nil {
 		t.Fatalf("the probe: %v\n%s", err, out)
 	}

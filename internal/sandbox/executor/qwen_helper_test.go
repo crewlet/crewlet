@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/prereqtest"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // nodeForQwen is the node a Qwen Code box's helper is run under here.
@@ -123,7 +124,7 @@ func startQwenHelper(t *testing.T, notes string, turn string, config map[string]
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeStandIn(t, filepath.Join(bin, "qwen"), "#!/bin/sh\nexec "+shQuote(node)+" "+shQuote(standin)+` "$@"`+"\n")
+	writeStandIn(t, filepath.Join(bin, "qwen"), "#!/bin/sh\nexec "+shellword.Quote(node)+" "+shellword.Quote(standin)+` "$@"`+"\n")
 	captures, err := filepath.Abs(filepath.Join("testdata", "qwen", "0.28.3"))
 	if err != nil {
 		t.Fatal(err)
