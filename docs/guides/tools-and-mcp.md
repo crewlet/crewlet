@@ -1850,6 +1850,12 @@ tools, with the description beside each name:
 - MCP server `handbook`: Searches the engineering handbook and the runbooks
 ```
 
+A server the executor's box runs itself
+([`role.sandbox.mcp.servers`](../concepts/code-sandbox.md#mcp-inside-the-sandbox))
+is reached past the bridge, so the run's
+[standing instructions](../concepts/code-sandbox.md#what-a-harness-is-told)
+give its description beside its name, under `## Your environment`.
+
 A name like `internal` says nothing about what is behind it; the description
 tells an agent which server to look in before it spends a call listing one.
 Editing it reaches the next turn and restarts nothing. It is also on the

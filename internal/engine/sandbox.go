@@ -2545,6 +2545,9 @@ func sandboxMCP(
 		box := sandbox.MCPServer{
 			Name: server.Name, Transport: sandbox.Transport(server.Kind()),
 			Command: server.Command, Args: server.Args, URL: values.url,
+			// For the run's brief to say: the box reaches this server past the
+			// bridge, whose endpoint would say it as the server's instructions.
+			Description: server.Description,
 		}
 		if server.Kind() == config.TransportHTTP {
 			box.Headers = values.values

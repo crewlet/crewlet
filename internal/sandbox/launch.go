@@ -1505,14 +1505,13 @@ func summarise(brief string) string {
 // alone: a Gitlet repository is not the box's at launch, and `code_checkout`
 // tells the run where each checkout is and how it pushes.
 func buildSystem(req LaunchRequest) string {
-	names := slices.Collect(maps.Keys(req.MCPServers))
 	own := strings.TrimSpace(req.System)
 	if own != "" {
 		own = agentRunNote + "\n\n" + own
 	}
 	parts := []string{
 		own,
-		strings.TrimSpace(EnvironmentBrief(req.Setup, names)),
+		strings.TrimSpace(EnvironmentBrief(req.Setup, req.MCPServers)),
 		strings.TrimSpace(req.Ask),
 	}
 	return strings.Join(slices.DeleteFunc(parts, func(p string) bool { return p == "" }), "\n\n")
