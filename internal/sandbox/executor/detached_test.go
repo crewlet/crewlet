@@ -738,12 +738,13 @@ func TestTheBoxsNotesRouteNamesTheEngineHostAsTheBoxReachesIt(t *testing.T) {
 	var cfg struct {
 		Plugins []openCodePlugin `json:"plugins"`
 	}
-	if err = json.Unmarshal(raw, &cfg); err != nil || len(cfg.Plugins) != 1 {
+	if err = json.Unmarshal(raw, &cfg); err != nil || len(runPlugins(cfg.Plugins)) != 1 {
 		t.Fatalf("the configuration names no notes plugin (%v):\n%s", err, raw)
 	}
-	file, ok := referencedPath(cfg.Plugins[0].Options.URL)
+	steer := runPlugins(cfg.Plugins)[0]
+	file, ok := referencedPath(steer.Options.URL)
 	if !ok {
-		t.Fatalf("the plugin's route is %q, want a reference to a file", cfg.Plugins[0].Options.URL)
+		t.Fatalf("the plugin's route is %q, want a reference to a file", steer.Options.URL)
 	}
 	value, err := b.ReadFile(t.Context(), file)
 	if err != nil {

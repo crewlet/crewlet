@@ -1,0 +1,211 @@
+package executor_test
+
+import (
+	"encoding/json"
+	"os"
+	"os/exec"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
+)
+
+// signInEnv is a run environment holding a sign-in beside variables its tools
+// use, and signInNames the names of it that sign the harness in.
+var (
+	signInEnv = map[string]string{
+		"ANTHROPIC_API_KEY": "sk-ant-api03-placeholder", "ANTHROPIC_AUTH_TOKEN": "gateway-placeholder",
+		"CREWLET_GIT_TOKEN": "git-placeholder", "GITHUB_TOKEN": "ghp_placeholder", "AWS_REGION": "eu-west-1",
+	}
+	signInNames = []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"}
+	toolNames   = []string{"CREWLET_GIT_TOKEN", "GITHUB_TOKEN", "AWS_REGION"}
+)
+
+// envLines is an `env` listing as a map.
+func envLines(listing string) map[string]string {
+	out := map[string]string{}
+	for line := range strings.SplitSeq(listing, "\n") {
+		if name, value, ok := strings.Cut(line, "="); ok {
+			out[name] = value
+		}
+	}
+	return out
+}
+
+// A CLAUDE CODE RUN'S COMMANDS START WITHOUT ITS SIGN-IN, AND ITS HARNESS WITH
+// IT. The harness signs in from its own environment; the file CLAUDE_ENV_FILE
+// names is run in the shell of each command its model runs, ahead of the
+// command, as Claude Code does (measured on 2.1.330). Played on a real box, the
+// harness a stand-in recording its own environment and running one command so.
+// A run handed no sign-in names no file, and an image's own CLAUDE_ENV_FILE
+// stays.
+//
+// Mutation: drop the export, or the names from the file, and the command holds
+// the sign-in; unset the names in the script, and the harness loses it.
+func TestAClaudeCodeRunsCommandsStartWithoutItsSignIn(t *testing.T) {
+	t.Parallel()
+	runner, b := realBox(t)
+	harness := strings.Replace(sessionHarness("2.1.330"), "env > \"$HOME/env\"\n",
+		"env > \"$HOME/env\"\nsh -c '[ -z \"$CLAUDE_ENV_FILE\" ] || . \"$CLAUDE_ENV_FILE\"; env' > \"$HOME/toolenv\"\n", 1)
+	writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/claude", harness)
+
+	runToEnd(t, runner, b, sandbox.RunRequest{Brief: "begin", Env: signInEnv, SignInEnv: signInNames})
+	own, tools := envLines(boxFile(t, b, b.Home()+"/env")), envLines(boxFile(t, b, b.Home()+"/toolenv"))
+	for name, value := range signInEnv {
+		if own[name] != value {
+			t.Errorf("the harness started with %s=%q, want %q", name, own[name], value)
+		}
+	}
+	for _, name := range signInNames {
+		if value, held := tools[name]; held {
+			t.Errorf("the model's command started with the sign-in's %s=%q", name, value)
+		}
+	}
+	for _, name := range toolNames {
+		if tools[name] != signInEnv[name] {
+			t.Errorf("the model's command started with %s=%q, want the run's %q", name, tools[name], signInEnv[name])
+		}
+	}
+
+	image := map[string]string{"CLAUDE_ENV_FILE": "/etc/profile.d/image.sh"}
+	runToEnd(t, runner, b, sandbox.RunRequest{Brief: "again", Env: image})
+	if got := envLines(boxFile(t, b, b.Home()+"/env"))["CLAUDE_ENV_FILE"]; got != image["CLAUDE_ENV_FILE"] {
+		t.Errorf("a run handed no sign-in started its harness with CLAUDE_ENV_FILE=%q, want the image's", got)
+	}
+}
+
+// toolEnvPlugin is the tool-environment plugin's entry in a run's configuration.
+type toolEnvPlugin struct {
+	Package string `json:"package"`
+	Options struct {
+		Names []string `json:"names"`
+	} `json:"options"`
+}
+
+// EVERY OPENCODE RUN NAMES THE TOOL-ENVIRONMENT PLUGIN, LAST, with its option
+// the names its harness signs in by and the server's own variables, sorted, and
+// the box holds this build's plugin; wired to its notes and skills or to
+// nothing alike.
+//
+// Mutation: name the plugin only for a run handed a sign-in, or leave the
+// server's variables or the sign-in out of its names, and a case goes red.
+func TestEveryOpenCodeRunNamesTheToolEnvironmentPluginLast(t *testing.T) {
+	t.Parallel()
+	embedded, err := os.ReadFile("opencode_toolenv.js")
+	if err != nil {
+		t.Fatalf("read the plugin's source: %v", err)
+	}
+	for name, tc := range map[string]struct {
+		req  sandbox.RunRequest
+		want []string
+	}{
+		"signed in, wired to nothing": {req: sandbox.RunRequest{Brief: "x", SignInEnv: []string{"OPENROUTER_API_KEY", "ANTHROPIC_API_KEY"}},
+			want: []string{"ANTHROPIC_API_KEY", "CREWLET_STEER_SESSION", "OPENCODE_CONFIG_CONTENT", "OPENROUTER_API_KEY"}},
+		"handed no sign-in": {req: sandbox.RunRequest{Brief: "x"},
+			want: []string{"CREWLET_STEER_SESSION", "OPENCODE_CONFIG_CONTENT"}},
+		"wired to its notes and skills": {req: sandbox.RunRequest{Brief: "x", SignInEnv: []string{"ANTHROPIC_API_KEY"},
+			Skills: handedSkills(), SkillLoads: skillWiring(), Steer: steerWiring},
+			want: []string{"ANTHROPIC_API_KEY", "CREWLET_STEER_SESSION", "OPENCODE_CONFIG_CONTENT"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, raw, b := writeOpenCodeConfigIn(t, tc.req)
+			var cfg struct {
+				Plugins []toolEnvPlugin `json:"plugins"`
+			}
+			if err := json.Unmarshal([]byte(raw), &cfg); err != nil || len(cfg.Plugins) == 0 {
+				t.Fatalf("the configuration names no plugin (%v):\n%s", err, raw)
+			}
+			last := cfg.Plugins[len(cfg.Plugins)-1]
+			if p := executor.PathsFor(b); last.Package != p.OpenCodeToolEnvPlugin() {
+				t.Fatalf("the last plugin is %q, want %q:\n%s", last.Package, p.OpenCodeToolEnvPlugin(), raw)
+			}
+			if !slices.Equal(last.Options.Names, tc.want) {
+				t.Errorf("the plugin keeps %v out of the commands, want %v", last.Options.Names, tc.want)
+			}
+			if got := boxFile(t, b, last.Package+"/index.js"); got != string(embedded) {
+				t.Error("the box holds a tool-environment plugin that is not this build's")
+			}
+		})
+	}
+}
+
+// THE TOOL-ENVIRONMENT PLUGIN TAKES EACH NAME FROM A COMMAND AND NONE FROM THE
+// SERVER: OpenCode copies its own environment into each shell command's and
+// hands that to the plugin's `create.before` hook, so the command lacks every
+// name while the server, whose providers read their keys from it, keeps them.
+// With no names it registers nothing. Driven under node by
+// opencode_toolenv_probe.mjs, as OpenCode 2.0.32 to 2.3.0 were measured to call it.
+//
+// Mutation: delete nothing in the hook, or delete from process.env, and a case
+// goes red.
+func TestTheToolEnvironmentPluginTakesEachNameFromACommandAndNoneFromTheServer(t *testing.T) {
+	t.Parallel()
+	node := nodeForNotes(t)
+	probe := func(t *testing.T, names []string) (hooked []string, command, server map[string]string) {
+		t.Helper()
+		arg, err := json.Marshal(names)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command(node, "opencode_toolenv_probe.mjs", "opencode_toolenv.js", string(arg)) //nolint:gosec // the probe under test
+		cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
+		for name, value := range signInEnv {
+			cmd.Env = append(cmd.Env, name+"="+value)
+		}
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("the probe: %v\n%s", err, out)
+		}
+		var got struct {
+			Hooked  []string          `json:"hooked"`
+			Command map[string]string `json:"command"`
+			Server  map[string]string `json:"server"`
+		}
+		if err = json.Unmarshal(out, &got); err != nil {
+			t.Fatalf("the probe's report: %v\n%s", err, out)
+		}
+		return got.Hooked, got.Command, got.Server
+	}
+
+	hooked, command, server := probe(t, signInNames)
+	if !slices.Equal(hooked, []string{"create.before"}) {
+		t.Fatalf("the plugin registered %v, want the shell's create.before", hooked)
+	}
+	for _, name := range signInNames {
+		if value, held := command[name]; held {
+			t.Errorf("the command started with the sign-in's %s=%q", name, value)
+		}
+	}
+	for name, value := range signInEnv {
+		if server[name] != value {
+			t.Errorf("the server's own %s = %q, want %q", name, server[name], value)
+		}
+	}
+	for _, name := range toolNames {
+		if command[name] != signInEnv[name] {
+			t.Errorf("the command started with %s=%q, want the run's %q", name, command[name], signInEnv[name])
+		}
+	}
+	if hooked, _, _ = probe(t, nil); len(hooked) != 0 {
+		t.Errorf("handed no names, the plugin registered %v", hooked)
+	}
+}
+
+// A SIGN-IN NAME NO SHELL CAN UNSET IS REFUSED by both runners before their
+// harness starts, rather than left in the commands' environment.
+//
+// Mutation: skip the check, and both write their configuration.
+func TestASignInNameNoShellCanUnsetIsRefused(t *testing.T) {
+	t.Parallel()
+	req := sandbox.RunRequest{Brief: "x", SignInEnv: []string{"ANTHROPIC_API_KEY", "MY-KEY"}}
+	for _, h := range []executor.Harness{executor.ClaudeCode{}, executor.OpenCode{}} {
+		b := sandbox.NewFakeSandbox("box-1")
+		if _, err := h.WriteConfig(t.Context(), b, req, executor.PathsFor(b)); err == nil ||
+			!strings.Contains(err.Error(), `"MY-KEY"`) {
+			t.Errorf("%s: WriteConfig = %v, want the name refused", h.Name(), err)
+		}
+	}
+}
