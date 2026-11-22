@@ -16,7 +16,7 @@ import (
 // of its own with a call, and the record its stream-json stdout — a response's
 // prose and its calls as `assistant` events of their own, each under an id of
 // its own, the calls' with the request's counts and its stop reason, then a
-// `user` event per result, and a `result` at the end (measured on 0.28.3; see
+// `user` event per result, and a `result` at the end (measured on 0.28.4; see
 // the profile).
 func init() {
 	fakeHarnesses["qwen-code"] = fakeHarness{

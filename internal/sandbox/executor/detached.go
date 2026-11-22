@@ -115,7 +115,7 @@ var prPattern = sync.OnceValue(func() *regexp.Regexp {
 // shared: a runner that could override it would be a second implementation of
 // the completion protocol.
 type Harness interface {
-	// Name is the harness's config name: "claude-code", "opencode".
+	// Name is the harness's config name: "claude-code", "codex", "opencode".
 	Name() string
 
 	// Session is the session req's run works in ([Session]), its ids in the
@@ -212,9 +212,15 @@ type carrier interface {
 
 	// Continues reports whether a session written by release writer, carried
 	// from another box, can be continued by release box (each as `--version`
-	// gave it), and if not, why, in a person's words. An unreadable release is
-	// taken for a current one, as the notes gate takes it ([claudeNotesGate]).
+	// gave it), and if not, why, in a person's words: [carrier.ContinuesWriter]'s
+	// answer, and the box's release held to the harness's own. A box release
+	// that does not read refuses ([boxNamedNoRelease]): the box's harness is
+	// one no rule here was read for.
 	Continues(box, writer string) (bool, string)
+
+	// ContinuesWriter is [carrier.Continues] judged of the writer alone, for a
+	// reader with no box to ask ([Runner.Restores]).
+	ContinuesWriter(writer string) (bool, string)
 
 	// Pack is the script that packs session now, the same pack the run's
 	// script makes once its harness exits, for a job that never got to
@@ -230,6 +236,12 @@ type carrier interface {
 	// layout is how the harness's archive is laid out, which the scrub a
 	// capture streams it through reads and writes it as ([scrubArchive]).
 	layout() archiveLayout
+
+	// meter reads an archive of ArchiveFormat, as kept, for what its
+	// session's last request carried, the harness's count of it and its
+	// estimate of the next request ([newContextMeter]), session's as release
+	// wrote it, within ctx and under large; err is the archive's own.
+	meter(ctx context.Context, r io.Reader, session, release string, large *passBudget) (meterReading, error)
 
 	// transcript reads an archive of ArchiveFormat, decompressed, as the
 	// session's transcript entries, handing each to b in recorded order until
@@ -533,8 +545,10 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	// EVERY HARNESS'S, not this run's alone: the box may last have run another.
 	for _, h := range Registered() {
 		if a, ok := h.(artifactHolder); ok {
-			ownFiles, ownDirs := a.artifacts(p)
-			files, dirs = append(files, ownFiles...), append(dirs, ownDirs...)
+			files = append(files, a.artifactFiles(p)...)
+		}
+		if a, ok := h.(artifactDirHolder); ok {
+			dirs = append(dirs, a.artifactDirs(p)...)
 		}
 	}
 	// The stream too, where it lives apart from the result: it is only
