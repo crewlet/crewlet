@@ -417,7 +417,7 @@ func claudeSessionGate(session Session, paths Paths, rewired bool) string {
 	// own instead, and the copy restored is never gone on past. Recorded
 	// before the restore, a restore that failed after the box's own copy
 	// went would leave the line naming a copy that does not hold it.
-	line(`  elif ! { %s; }; then w=%s`, recordDigest(paths, "s", "d"), q(restoreDigestUnrecorded))
+	line(`  elif ! { %s; }; then w=%s`, recordDigest(paths, "s"), q(restoreDigestUnrecorded))
 	line(`  fi`)
 	line(`  rm -rf %s`, q(staged))
 	line(`fi`)

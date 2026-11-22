@@ -371,6 +371,8 @@ func (Codex) Parse(stdout []byte) sandbox.Result { return decodeAll(&codexEvents
 // artifacts is what a Codex run leaves in its box beside the session it
 // continues: the configuration with its tokens, the socket, the thread, the
 // helper, its routes and its skills' digests, the server's output.
+//
+//nolint:unparam // the runners' contract (traits.go): Codex leaves no directory
 func (Codex) artifacts(p Paths) (files, dirs []string) {
 	return []string{p.CodexLiveConfig(), p.CodexConfig(), p.CodexConfigFresh(), p.CodexSocket(),
 		p.CodexCapFired(), p.CodexHelperLost(), p.CodexSkillsURL(), p.CodexSkillsURLFresh(), p.CodexSkillDigests(),

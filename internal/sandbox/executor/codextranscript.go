@@ -124,7 +124,7 @@ func (b *transcriptBuilder) codexLine(body []byte) error {
 		// A FRAGMENT Codex left where it was cut off: it skips the line and
 		// writes the next record on a line of its own (measured on 0.171.0),
 		// so the fragment was never part of the session.
-		return nil
+		return nil //nolint:nilerr // a fragment is no record: skipped, never the read's failure
 	}
 	at := codexInstant(line.Timestamp)
 	switch line.Type {

@@ -256,7 +256,7 @@ func codexSessionGate(session Session, paths Paths, rewired bool) string {
 	line(`  elif ! { %s; }; then w='its archive could not be restored'`, codexRestore(paths, session.ID))
 	// CONTINUED ONLY ONCE ITS DIGEST IS RECORDED and read back, for the reason
 	// Claude Code's restore is ([claudeSessionGate]).
-	line(`  elif ! { %s; }; then w=%s`, recordDigest(paths, "sid", "d"), q(restoreDigestUnrecorded))
+	line(`  elif ! { %s; }; then w=%s`, recordDigest(paths, "sid"), q(restoreDigestUnrecorded))
 	line(`  fi`)
 	line(`  rm -rf %s`, q(paths.SessionStaging()))
 	line(`fi`)
