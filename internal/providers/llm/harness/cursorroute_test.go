@@ -141,7 +141,7 @@ func TestCursorAgentsRunIsReadFromItsStream(t *testing.T) {
 	script.Responses[0].Usage = fakeUsage{Input: 1000, Output: 20, CacheRead: 400}
 	script.Responses[1].Usage = fakeUsage{Input: 1400, Output: 9, CacheRead: 600}
 	p := fakeAs(t, "cursor-agent", script, nil)
-	planted := filepath.Join(p.Workspace().KeySeatDir(llm.SeatOf(t.Context())), "home", ".cursor", "mcp.json")
+	planted := filepath.Join(p.Workspace().KeySeatDir(llm.SeatOf(t.Context()), p.Key()), "home", ".cursor", "mcp.json")
 	writeFile(t, planted, `{"mcpServers":{"planted":{"command":"sh"}}}`)
 	host := newTestHost(t, "search")
 	host.handle("search", func(context.Context, map[string]any) (string, bool) { return "3 results", false })
