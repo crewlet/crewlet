@@ -39,21 +39,21 @@ var _ sandbox.SessionTaker = (*Runner)(nil)
 // SessionTakesAtOnce is how many takes this process scrubs at once, each
 // holding a slot of [sessionTakes] from before it asks its box for anything
 // to its scrub's and its meter's end. 29: a take at its base holds at most
-// 11.63 MiB, its scrub's 8.29 (BenchmarkATakeAtItsBase, its spool's gzip
-// writer among it) and its meter's 3.34 (BenchmarkAMeterAtItsBase) at once,
-// the most of nine runs each, one a process, on a two-core slot, read in
-// bytes; 29 times over is 337 MiB, within the base tier's 340.6 MiB (64 reads
-// at [baseTierReadBytes], the package doc's "A collection's read of a
-// thread"): so the takes at their base hold no more than every read of the
-// tier does.
+// 11.52 MiB, its scrub's 8.00 (BenchmarkATakeAtItsBase, its spool's gzip
+// writer among it) and its meter's 3.53 (BenchmarkAMeterAtItsBase) at once,
+// the most of 30 runs each, one a process, on a two-core slot, live bytes
+// under a stop-the-world GC at every 1% of growth; 29 times over is 334.2
+// MiB, within the base tier's 340.6 MiB (64 reads at [baseTierReadBytes], the
+// package doc's "A collection's read of a thread"): so the takes at their
+// base hold no more than every read of the tier does.
 const SessionTakesAtOnce = 29
 
 // takeBaseHeldBytes is what a take at its base holds at most, its scrub's and
-// its meter's at once: 11.63 MiB ([SessionTakesAtOnce]), the scrub's 8.29 and
-// the meter's 3.34, each to the KiB.
+// its meter's at once: 11.52 MiB ([SessionTakesAtOnce]), the scrub's 8.00 and
+// the meter's 3.53, each to the KiB.
 const (
-	scrubBaseHeldBytes = 8490 << 10
-	meterBaseHeldBytes = 3420 << 10
+	scrubBaseHeldBytes = 8189 << 10
+	meterBaseHeldBytes = 3610 << 10
 	takeBaseHeldBytes  = scrubBaseHeldBytes + meterBaseHeldBytes
 )
 
