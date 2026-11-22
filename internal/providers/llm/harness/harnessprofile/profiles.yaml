@@ -2337,7 +2337,9 @@ cursor-agent:
       - match: [{path: ["type"], equals: "tool_call"}, {path: ["subtype"], equals: "completed"}]
         closes: true
   login_args: ["login"]
-  logout_args: ["logout"]
+  # No logout_args: 1.0.114 has no logout command (`copilot logout` exits 1 on
+  # "Invalid command format", and `copilot --help` lists none, measured);
+  # `/logout` is a slash command. A logout removes the login's files.
   status_args: ["status"]
   # NOT MEASURED, the limit markers below: generic phrases rather than this
   # harness's own sentences, safe to keep only because of WHERE they are matched
