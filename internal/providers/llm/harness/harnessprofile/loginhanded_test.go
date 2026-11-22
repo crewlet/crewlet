@@ -107,6 +107,40 @@ func TestAnOpaqueLoginsRefreshIsCarried(t *testing.T) {
 	}
 }
 
+// A CREDENTIAL OF ANY OTHER SHAPE IS CARRIED WHERE IT IS STILL THE SAME LOGIN:
+// its refresh, whatever field the store keeps its tokens in, but not another
+// integration's or label's credential under the handed id, a JWT naming
+// another account, or a credential the run added.
+//
+// Mutation: hold an untyped credential to OpenCode's fields, or carry it whole
+// whatever its names and subjects.
+func TestAnUntypedCredentialsRefreshIsCarried(t *testing.T) {
+	t.Parallel()
+	handed := []byte(`[{"id":"c1","integrationID":"x","key":"k-old","token":"` + accessFor("acct-a", 1) + `"}]` + "\n")
+	cases := []struct {
+		name, home string
+		carried    bool
+	}{
+		{"a refresh", `[{"id":"c1","integrationID":"x","key":"k-new","token":"` + accessFor("acct-a", 2) + `"}]`, true},
+		{"another account", `[{"id":"c1","integrationID":"x","key":"k-new","token":"` + accessFor("acct-b", 2) + `"}]`, false},
+		{"another integration", `[{"id":"c1","integrationID":"y","key":"k-new","token":"` + accessFor("acct-a", 2) + `"}]`, false},
+		{"an added credential", `[{"id":"c1","integrationID":"x","key":"k-old","token":"` + accessFor("acct-a", 1) + `"},{"id":"c2","key":"k-x"}]`, false},
+	}
+	for _, c := range cases {
+		got := KeepHandedCredentials([]byte(c.home), handed)
+		if carried := string(got) == c.home; carried != c.carried {
+			t.Errorf("%s: carried back\n%s\nwant carried=%t", c.name, got, c.carried)
+		}
+		if !c.carried && string(got) != string(handed) {
+			t.Errorf("%s: carried back\n%s\nwant the handed document", c.name, got)
+		}
+	}
+	refresh := []byte(`[{"id":"c","refresh":"R1"}]`)
+	if got := KeepHandedCredentials(refresh, []byte(`[{"id":"c","refresh":"R0"}]`)); string(got) != string(refresh) {
+		t.Errorf("a store keeping its token at the top level carried back %s, want its refresh", got)
+	}
+}
+
 // ONLY A STORE'S DOCUMENT IS HELD TO THE HANDED LOGIN: Profile.KeepLogin
 // filters the file named CredentialStoreDocument of a profile with a store,
 // and leaves every other file, and a store-less profile's, to its run keys.
