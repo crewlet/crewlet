@@ -213,6 +213,10 @@ type fakeAppServer struct {
 	fences     record[int]
 	conns      record[*websocket.Conn]
 	interrupts record[interruptCall]
+	// answeredLists records each thread/turns/list once its answer is on the
+	// wire: a client that took it in order has the turn it names in flight
+	// before any notice sent after.
+	answeredLists record[int]
 
 	mu       sync.Mutex
 	turn     string
@@ -357,7 +361,17 @@ func (s *fakeAppServer) serve(ws *websocket.Conn) {
 		if websocket.Message.Send(ws, string(data)) != nil {
 			return
 		}
+		if m.Method == "thread/turns/list" {
+			s.answeredLists.add(len(s.answeredLists.all()))
+		}
 	}
+}
+
+// joinedTurn blocks until a client's thread/turns/list was answered: the
+// helper has joined, its turn in flight set from the answer before any
+// notice after it reaches the helper ([appServer.callApplied]).
+func (s *fakeAppServer) joinedTurn() {
+	s.answeredLists.await(func(l []int) bool { return len(l) > 0 })
 }
 
 // setTurn changes the turn in flight and tells no client, as a turn that

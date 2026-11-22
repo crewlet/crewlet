@@ -257,7 +257,7 @@ func TestNotesWaitForATurnInFlight(t *testing.T) {
 	writeThread(t, threadFile, "thread-A")
 	bridge.add(note{Seq: 1, ID: "note-1", Message: "hello"})
 	startHelper(t, bridge, app, threadFile)
-	app.resumed.await(func(r []resume) bool { return len(r) == 1 })
+	app.joinedTurn()
 	if v := bridge.verbs.all(); len(v) > 0 {
 		t.Errorf("the helper polled %v with no turn in flight", v)
 	}
@@ -379,6 +379,12 @@ func TestTheHelperRefusesACommandLineItCannotRunWith(t *testing.T) {
 // NOTES ROUTE: with -step-cap 2 and no -notes-env the second response of the
 // turn in flight sends turn/interrupt naming the thread and the turn, with
 // -cap-marker already on disk holding the turn, and no route is ever polled.
+// Every response Codex sends once the helper's list of turns is answered
+// counts: the turn it lists is in flight before the reader reads on.
+//
+// Mutation: take the list's answer outside the reader's order (after the call
+// returns), and the responses can arrive with no turn in flight and the cap
+// never fires.
 func TestTheStepCapInterruptsTheTurnAtItsNthResponse(t *testing.T) {
 	t.Parallel()
 	bridge := newFakeBridge(t, testToken)
@@ -388,7 +394,7 @@ func TestTheStepCapInterruptsTheTurnAtItsNthResponse(t *testing.T) {
 	threadFile := filepath.Join(t.TempDir(), "thread.id")
 	writeThread(t, threadFile, "thread-A")
 	h := startHelperWith(t, bridge, app, threadFile, "-step-cap", "2", "-cap-marker", marker)
-	app.resumed.await(func(r []resume) bool { return len(r) == 1 })
+	app.joinedTurn()
 	tokens(t, app, "thread-A", "turn-1", 100)
 	tokens(t, app, "thread-A", "turn-1", 200)
 	calls := app.interrupts.await(func(c []interruptCall) bool { return len(c) == 1 })
@@ -475,7 +481,7 @@ func TestASkillLoadIsReportedAndTheSkillRouteNeverPrinted(t *testing.T) {
 	writeThread(t, threadFile, "thread-A")
 	h := startHelperWith(t, bridge, app, threadFile, "-skills-env", "SKILLS_ROUTE", "-skills-dir", dir,
 		"-skills-digests", writeDigests(t, alpha, beta))
-	app.resumed.await(func(r []resume) bool { return len(r) == 1 })
+	app.joinedTurn()
 	commandDone(t, app, "thread-A", 0, alpha.body, "/", action("read", alpha.path))
 	commandDone(t, app, "thread-A", 0, beta.body, "/", action("read", beta.path))
 	// One report at a time: beta's arrival is behind alpha's log line.

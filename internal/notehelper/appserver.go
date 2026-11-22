@@ -130,7 +130,7 @@ type appServer struct {
 	compacting bool
 
 	mu      sync.Mutex
-	pending map[int64]chan rpcAnswer
+	pending map[int64]waiter
 	// active is the turn in flight on the thread, "" for none; finished holds
 	// every turn the thread completed while the helper watched.
 	active   string
@@ -147,10 +147,19 @@ type rpcError struct {
 
 func (e *rpcError) Error() string { return strconv.Itoa(e.Code) + " " + e.Message }
 
-// rpcAnswer is one answer to a request.
+// rpcAnswer is one answer to a request, and what taking it in the reader's
+// order said ([appServer.callApplied]).
 type rpcAnswer struct {
-	result json.RawMessage
-	err    *rpcError
+	result  json.RawMessage
+	err     *rpcError
+	applied error
+}
+
+// waiter is a request waiting for its answer: where the answer goes, and what
+// the reader does with it first, nil for nothing.
+type waiter struct {
+	ch    chan rpcAnswer
+	apply func(json.RawMessage) error
 }
 
 // wire is one message off the socket: a request, a notification or an answer.
@@ -178,7 +187,7 @@ func joinAppServer(ctx context.Context, conn net.Conn, thread string, p pacing, 
 	_ = conn.SetDeadline(time.Time{})
 	a := &appServer{
 		ws: ws, thread: thread, bound: p.callBound, done: make(chan struct{}), ev: ev, skills: skills,
-		pending: map[int64]chan rpcAnswer{}, finished: map[string]bool{}, changed: make(chan struct{}),
+		pending: map[int64]waiter{}, finished: map[string]bool{}, changed: make(chan struct{}),
 	}
 	go a.read()
 	if _, err = a.call(ctx, "initialize", map[string]any{
@@ -198,11 +207,10 @@ func joinAppServer(ctx context.Context, conn net.Conn, thread string, p pacing, 
 		a.close()
 		return nil, fmt.Errorf("joining the run's thread %s: %w", thread, err)
 	}
-	raw, err := a.call(ctx, "thread/turns/list", map[string]any{"threadId": thread})
-	if err == nil {
-		err = a.listed(raw)
-	}
-	if err != nil {
+	// THE LIST IS TAKEN IN THE READER'S ORDER ([appServer.callApplied]): a
+	// notice Codex sends after its answer (a response of the listed turn) is
+	// read after the turn it names is in flight, never dropped before it is.
+	if _, err = a.callApplied(ctx, "thread/turns/list", map[string]any{"threadId": thread}, a.listed); err != nil {
 		a.close()
 		return nil, fmt.Errorf("listing the turns of the run's thread %s: %w", thread, err)
 	}
@@ -229,12 +237,17 @@ func (a *appServer) read() {
 				continue
 			}
 			a.mu.Lock()
-			ch := a.pending[id]
+			w, ok := a.pending[id]
 			delete(a.pending, id)
 			a.mu.Unlock()
-			if ch != nil {
-				ch <- rpcAnswer{result: m.Result, err: m.Error}
+			if !ok {
+				continue
 			}
+			ans := rpcAnswer{result: m.Result, err: m.Error}
+			if w.apply != nil && m.Error == nil {
+				ans.applied = w.apply(m.Result)
+			}
+			w.ch <- ans
 		}
 	}
 }
@@ -628,12 +641,20 @@ func (a *appServer) close() {
 // call sends method with params and waits, within the call bound, for its
 // answer: the result, or the server's error.
 func (a *appServer) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	return a.callApplied(ctx, method, params, nil)
+}
+
+// callApplied is call whose successful answer the reader hands apply before
+// it reads the next message, so what apply learns holds for every message
+// after the answer; apply's error is the call's.
+func (a *appServer) callApplied(ctx context.Context, method string, params any,
+	apply func(json.RawMessage) error) (json.RawMessage, error) {
 	ctx, cancel := context.WithTimeout(ctx, a.bound)
 	defer cancel()
 	id := a.ids.Add(1)
 	ch := make(chan rpcAnswer, 1)
 	a.mu.Lock()
-	a.pending[id] = ch
+	a.pending[id] = waiter{ch: ch, apply: apply}
 	a.mu.Unlock()
 	forget := func() {
 		a.mu.Lock()
@@ -646,8 +667,11 @@ func (a *appServer) call(ctx context.Context, method string, params any) (json.R
 	}
 	select {
 	case ans := <-ch:
-		if ans.err != nil {
+		switch {
+		case ans.err != nil:
 			return nil, ans.err
+		case ans.applied != nil:
+			return nil, ans.applied
 		}
 		return ans.result, nil
 	case <-a.done:
