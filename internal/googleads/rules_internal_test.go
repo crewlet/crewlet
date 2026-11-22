@@ -237,6 +237,58 @@ func TestAMutateIsItsHighestOperation(t *testing.T) {
 	}
 }
 
+// A VALUE A RULE CANNOT READ IS THE HIGHEST IT ALLOWS: an enum by its number
+// (2 is ENABLED, 2 OPTED_IN), a switch cleared or set to what is no boolean,
+// and a raise to what is no number never pass as the pause or lowering they
+// could be read as.
+//
+// Mutation: compare an enum by its name alone, read a switch by its truth
+// alone, or read an unreadable amount added where none was as a cap, and
+// each lands at operate.
+func TestAValueARuleCannotReadIsTheHighestItAllows(t *testing.T) {
+	t.Parallel()
+	crit := "customers/1234567890/campaignCriteria/5~6"
+	subs := "googleads.customers.recommendationSubscriptions.mutateRecommendationSubscription"
+	for name, tc := range map[string]struct {
+		id   string
+		body map[string]any
+		l    live
+		want growth.Class
+	}{
+		"a status by its number": {campaigns, ops(update(campaign1, "status", map[string]any{"status": 2.0})),
+			live{campaign1: state{"status": "PAUSED"}}, spend},
+		"a status cleared": {campaigns, ops(update(campaign1, "status", nil)),
+			live{campaign1: state{"status": "PAUSED"}}, spend},
+		"a criterion's status by its number": {"googleads.customers.campaignCriteria.mutate",
+			ops(update(crit, "status", map[string]any{"status": 2.0})), live{crit: state{"negative": false}}, spend},
+		"a subscription by its number": {subs, ops(map[string]any{"create": map[string]any{"type": "CAMPAIGN_BUDGET",
+			"status": 2.0}}), live{}, spend},
+		"a switch to a string": {campaigns, ops(update(campaign1, "networkSettings.targetContentNetwork",
+			map[string]any{"networkSettings": map[string]any{"targetContentNetwork": "true"}})),
+			live{campaign1: state{"network_settings": map[string]any{"target_content_network": false}}}, spend},
+		"a switch cleared": {campaigns, ops(update(campaign1, "networkSettings.targetContentNetwork", nil)),
+			live{campaign1: state{"network_settings": map[string]any{"target_content_network": false}}}, spend},
+		"automation by its number": {campaigns, ops(update(campaign1, "assetAutomationSettings",
+			map[string]any{"assetAutomationSettings": []any{map[string]any{"assetAutomationType": "TEXT_ASSET_AUTOMATION",
+				"assetAutomationStatus": 2.0}}})), live{campaign1: state{}}, public},
+		"a budget to what is no number": {budgets, ops(update(budgetA, "amountMicros",
+			map[string]any{"amountMicros": "lots"})), live{budgetA: state{}}, spend},
+	} {
+		if got := classOf(t, tc.id, tc.body, tc.l); got != tc.want {
+			t.Errorf("%s is %s, want %s", name, got, tc.want)
+		}
+	}
+	// The same rules lower what they can read.
+	if got := classOf(t, subs, ops(map[string]any{"create": map[string]any{"type": "CAMPAIGN_BUDGET",
+		"status": "PAUSED"}}), live{}); got != operate {
+		t.Errorf("a paused subscription is %s", got)
+	}
+	if got := classOf(t, "googleads.customers.mutate", map[string]any{"operation": update("customers/1234567890",
+		"descriptiveName", map[string]any{"descriptiveName": "Acme"})}, live{}); got != operate {
+		t.Errorf("an account renamed is %s", got)
+	}
+}
+
 // RUNNING A BATCH JOB IS WHAT IT STAGED, and one the engine holds no staging
 // of is refused rather than guessed.
 func TestRunningABatchJobIsWhatItStaged(t *testing.T) {

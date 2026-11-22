@@ -643,3 +643,47 @@ func TestACallActsOnlyInTheAccountItNames(t *testing.T) {
 		t.Errorf("the seat's account was called with managers %v, want %s", w.f.managers, manager)
 	}
 }
+
+// A WRITE IS CLASSED BY WHAT GOOGLE READS OF IT: a status given by its enum's
+// number, an operation list the method does not take beside the one it does,
+// and a field named in both spellings with two values never pass as the
+// pause they could be read as.
+//
+// Mutation: compare a status by its name alone, read a mutate's
+// mutateOperations whatever its method, or drop the spelling check, and
+// enabling the paused campaign is made at once as operate.
+func TestAWriteIsClassedByWhatGoogleReads(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	update := func(fields map[string]any) map[string]any {
+		obj := map[string]any{"resourceName": pausedC}
+		for k, v := range fields {
+			obj[k] = v
+		}
+		return map[string]any{"update": obj, "updateMask": "status"}
+	}
+	mutate := func(body map[string]any) map[string]any {
+		return map[string]any{"operation": "googleads.customers.campaigns.mutate",
+			"path": map[string]any{"customersId": customer}, "body": body}
+	}
+	for name, args := range map[string]map[string]any{
+		"a status by its number": mutate(map[string]any{"operations": []any{update(map[string]any{"status": 2})}}),
+		"a decoy operation list": mutate(map[string]any{
+			"mutateOperations": []any{map[string]any{"campaignOperation": update(map[string]any{"status": "PAUSED"})}},
+			"operations":       []any{update(map[string]any{"status": "ENABLED"})}}),
+		"a status in two spellings": mutate(map[string]any{"operations": []any{map[string]any{
+			"update":      map[string]any{"resourceName": pausedC, "status": "ENABLED"},
+			"updateMask":  "status",
+			"update_mask": "name"}}}),
+		"a snake_case mask": mutate(map[string]any{"operations": []any{map[string]any{
+			"update": map[string]any{"resource_name": pausedC, "status": "ENABLED"}, "update_mask": "status"}}}),
+	} {
+		_, _, err := w.call(t, "google_ads_operate", args)
+		if !refused(err) && !errors.As(err, new(*aboveTool)) {
+			t.Errorf("%s answered %v on the operate tool", name, err)
+		}
+	}
+	if w.f.campaigns[pausedC][0] != "PAUSED" || w.f.writes != 0 {
+		t.Errorf("the paused campaign is %s after %d writes", w.f.campaigns[pausedC][0], w.f.writes)
+	}
+}

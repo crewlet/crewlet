@@ -90,11 +90,15 @@ func (p *Product) Level(handle string) growth.Level {
 // newRequest is op's request, acting in the customer its path names or,
 // where it names none, its body's customer_id, which Google reads in either
 // spelling (a reach forecast's user lists), sent through that customer's
-// manager where the company names one.
+// manager where the company names one. A body naming a field twice with two
+// values is refused ([canonical]).
 func (p *Product) newRequest(op growth.Operation, path, query map[string]string, body map[string]any) (
 	googlegrowth.Request, error) {
 	req, err := googlegrowth.NewRequest(op, path, query, body)
 	if err != nil {
+		return req, err
+	}
+	if _, err = canonical(body, "body."); err != nil {
 		return req, err
 	}
 	// THE PATH'S CUSTOMER IS THE TEMPLATE'S: NewRequest refuses a parameter
