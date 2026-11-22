@@ -62,7 +62,7 @@ export function growthDetailsOf(row: IntegrationRow | undefined): {
           ...(text(a.state) ? { state: text(a.state) as GrowthAccountState } : {}),
           roles: strings(a.roles),
         })),
-      ...(c.open === true ? { open: true } : {}),
+      open: c.open === true,
       ...(text(c.unread) ? { unread: text(c.unread) } : {}),
     }));
   const roles = (Array.isArray(row?.roles) ? row.roles : [])

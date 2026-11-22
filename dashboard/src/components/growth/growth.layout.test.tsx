@@ -247,6 +247,7 @@ describe.each(["light", "dark"] as const)("on a %s document", (theme) => {
                   state: "serving",
                 },
               ],
+              open: false,
             },
           ]}
         />,
