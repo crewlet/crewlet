@@ -1079,7 +1079,7 @@ const (
 	// at 3 MiB over a 2.3 MB baseline and is set so a bundle that doubled the
 	// baseline is still refused; screens fetched only when opened (the rich
 	// editor, the brand and folder screens, the assistant's panel, Gitlet) and
-	// kit releases account for its growth, and the last measure was 7247.1 KiB,
+	// kit releases account for its growth, and the last measure was 7247.2 KiB,
 	// after the growth integrations train: Apple Ads, Meta Ads Manager, Google
 	// Analytics and AdMob with their entries, stories and access words.
 	// A raise names the measured size and its cause in its commit.
