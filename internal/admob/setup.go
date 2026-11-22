@@ -35,7 +35,7 @@ func Requirements(c *config.Company, resolve func(string) (string, bool)) []setu
 	id := setup.Requirement{Field: "client_id", Label: "OAuth client ID", Kind: setup.KindID,
 		ConfigPath: base + ".oauth.client_id", Required: true, Connect: true,
 		Format: "<project number>-<id>.apps.googleusercontent.com",
-		Hint:   "A Web application client from {link}, in a Google Cloud project you control.",
+		Hint:   "A Web application client from {link}, in a project you control.",
 		More: "Add Crewlet's callback address to its authorized redirect URIs, turn on the AdMob API in the " +
 			"same project, and publish its consent screen: a client left in Testing loses its sign-in after " +
 			"seven days.",
@@ -43,19 +43,22 @@ func Requirements(c *config.Company, resolve func(string) (string, bool)) []setu
 	id.Present, id.Resolved, id.Stored = setup.Held(client.ClientID, resolve)
 	secret := setup.Requirement{Field: "client_secret", Label: "OAuth client secret", Kind: setup.KindSecret,
 		ConfigPath: base + ".oauth.client_secret", Required: true,
-		Hint:      "The same client's secret. AdSense may sign in as the same client and name the same secret.",
+		Hint:      "The same client's secret, from {link}; AdSense may share it.",
 		CheckNote: "The client is proven by the Google sign-in, once saved.",
 		LinkText:  "Google Cloud, Credentials", VendorURL: credentialsURL, Blocks: integration.FindingCredentialMissing}
 	secret.Present, secret.Resolved, secret.Stored = setup.Held(client.ClientSecret, resolve)
-	return []setup.Requirement{enabled, id, secret}
+	// THE SIGN-IN IS THE ENGINE'S TO HOLD, never a value: whether it is held
+	// is the pass's finding, so the step blocks nothing here.
+	consent := setup.Requirement{Field: "google_sign_in", Label: "Sign in with Google", Kind: setup.KindConsent,
+		Hint: "As a person who manages the AdMob account; again once agents may change."}
+	return []setup.Requirement{enabled, id, secret, consent}
 }
 
 // Guide is what the connect form says around its fields.
 func Guide() setup.Guide {
 	return setup.Guide{
-		Summary: "A person who manages your AdMob account signs in with Google once; Crewlet keeps the sign-in " +
-			"and every agent reaches AdMob through it, at the level and on the accounts you give each one. No " +
-			"token reaches an agent's box.",
+		Summary: "A person who manages your AdMob account signs in with Google once, and agents reach AdMob " +
+			"through it. No token reaches an agent's box.",
 		Prepare: []setup.Step{
 			{Text: "In a Google Cloud project you control, turn on the AdMob API and make an OAuth client " +
 				"(Web application) with Crewlet's callback address as an authorized redirect URI. Publish its " +
