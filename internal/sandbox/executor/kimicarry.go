@@ -199,17 +199,15 @@ func (Kimi) Pack(paths Paths, session, staged, dest string, working bool) string
 
 // PackSave packs a save of rec's session beside a harness that may still be
 // working ([saver]): every record is append-only, so the rule of a pack beside
-// a working harness holds it ([claudeHeldTar]). rec names the session the
-// engine read off the run's report ([Runner.mintedRecord]). The record refuses
-// no save.
+// a working harness holds it ([claudeHeldTar]). rec names the session bound
+// to the job ([Runner.boundRecord]). The record refuses no save.
 func (Kimi) PackSave(paths Paths, rec sessionRecord, staged, dest string) (string, error) {
 	return kimiOnDemand(paths, rec.id, packAt{staged: staged, dest: dest, working: true}), nil
 }
 
 // kimiOnDemand is a pack the engine makes of session outside the run's own
-// script, at at. ONLY THE SESSION THE ENGINE NAMES, never one the box reports
-// now: a minting run's session is the report the engine read and bound, and
-// one written since was never held to the bind's rules.
+// script, at at. ONLY THE SESSION THE ENGINE NAMES, the one bound to the job,
+// never one the box reports now, which was never held to the bind's rules.
 func kimiOnDemand(paths Paths, session string, at packAt) string {
 	return "s=" + sandbox.ShellQuote(session) + " packed=\n" +
 		fmt.Sprintf("[ -n \"$s\" ] || exit %d\n", packNothing) +
