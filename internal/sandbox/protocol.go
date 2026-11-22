@@ -1164,7 +1164,9 @@ type RunRequest struct {
 	// WebDenied is the entry's `web_tools: denied`: the runner hands its
 	// harness none of the harness's own web tools, as the entry's runs on the
 	// engine host have none. The run's shell, and any code it runs, reach
-	// only what the box cell's egress policy allows.
+	// only what the box cell's egress policy allows. Muse Code's profile has
+	// no measured web denial, so config refuses the setting on a `muse-code`
+	// entry and it never reaches Muse Code's runner.
 	WebDenied bool
 
 	// MCPServers are the MCP servers the engine hands the run, keyed by
