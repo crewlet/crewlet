@@ -4,11 +4,12 @@ package sandbox
 // the id (internal/sandbox/executor's sessionMinter), and the coordinator binds
 // the report to the job's record ([PendingStore.BindSession]) where the id is
 // first used: before a running job's save is packed, as the job is collected,
-// and before any take of its box (a lost run's read after a recovery). The
-// report is the box's word, so a bind is ONCE, of a FRESH id (no turn's row
-// names it, [SessionHolders], one seek; no other live run claims it, which the
-// store holds, [PendingStore.BindSession]), and A RESUME REPORTS NOTHING NEW. A
-// refusal fails the run closed; a job that reported nothing is sessionless.
+// and before any take of its box (a lost run's read after a recovery). A bind
+// is ONCE, of a FRESH id, A RESUME BINDING THE ONE IT CONTINUED: the store
+// claims the id fleet-wide, then the executor log is asked ([SessionHolders],
+// one seek), then the record written. The claim holds the id until the log
+// does (the capture landed) or the record goes. A refusal fails the run
+// closed; a log that cannot answer leaves it undecided, asked again.
 
 import (
 	"context"
@@ -71,27 +72,30 @@ func (c *Coordinator) bindMinted(ctx context.Context, run PendingRun, box Sandbo
 	return c.bindReported(ctx, run, id)
 }
 
-// bindReported binds id, the session run's box reported, to the job's record:
-// asking first whether a fresh id is any turn's ([SessionHolders]), which a
-// coordinator built with none cannot tell, so it refuses every fresh id. The
-// session the job's launch continued is the job's own, and binds unasked.
+// bindReported binds id, the session run's box reported, to the job's record.
+// WHETHER THE LAUNCH CONTINUED is the engine's word, the token its box dialled
+// ([LaunchRecord.SessionStart]): a launch that continued a session reads as
+// continuing it unless its box said it started its own, as [PendingRun.SessionRan]
+// reads it, and binds that session alone. A fresh id is asked of the executor
+// log ([Coordinator.freshSession]) once the store has claimed it.
 func (c *Coordinator) bindReported(ctx context.Context, run PendingRun, id string) (PendingRun, error) {
 	if run.Launch.Minted == id {
 		return run, nil
 	}
-	continued := run.SessionID != "" && id == run.SessionID
-	if !continued && run.Launch.Minted == "" {
-		if err := c.freshSession(ctx, id); err != nil {
-			return run, err
-		}
+	continued := run.SessionID != "" && run.Launch.SessionStart != SessionStartFresh
+	bind := SessionBind{Launch: run.LaunchID, ID: id, Continued: continued}
+	if !continued {
+		bind.Fresh = func(_ context.Context, id string) error { return c.freshSession(ctx, id) }
 	}
 	write, cancel := c.rowContext(ctx, c.recordBudget)
 	defer cancel()
-	return c.pending.BindSession(write, run.TurnID, SessionBind{Launch: run.LaunchID, ID: id, Continued: continued})
+	return c.pending.BindSession(write, run.TurnID, bind)
 }
 
 // freshSession is why id cannot be bound as a new session, nil where no turn's
-// row names it. A question the executor log cannot answer refuses.
+// row names it: a coordinator built with no log refuses every fresh id, and a
+// log that cannot answer leaves the bind UNDECIDED, an error that is no
+// refusal, so the read that asked is made again and nothing is dropped.
 func (c *Coordinator) freshSession(ctx context.Context, id string) error {
 	if c.holders == nil {
 		return fmt.Errorf("%w: nothing can tell whether session %q is another turn's", ErrSessionBindRefused, id)
@@ -99,12 +103,18 @@ func (c *Coordinator) freshSession(ctx context.Context, id string) error {
 	held, err := c.holders.SessionHeld(ctx, id)
 	switch {
 	case err != nil:
-		return fmt.Errorf("%w: whether session %q is another turn's could not be told: %w",
-			ErrSessionBindRefused, id, err)
+		return fmt.Errorf("sandbox: whether session %q is another turn's could not be told: %w", id, err)
 	case held:
 		return fmt.Errorf("%w: session %q is another turn's", ErrSessionBindRefused, id)
 	}
 	return nil
+}
+
+// undecidedBind reports whether err is a bind neither made nor refused: a
+// store or the executor log that could not answer, which the read that asked
+// makes again.
+func undecidedBind(err error) bool {
+	return err != nil && !errors.Is(err, ErrSessionBindRefused) && !errors.Is(err, errNoSessionReported)
 }
 
 // bindCollected binds the session a minting job's collection read

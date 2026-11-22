@@ -214,10 +214,11 @@ func (r *waiterRig) launchingAs(turnID string, lease Fence, shape func(*PendingR
 	// THE SESSION THE LAUNCH NAMED, as a runner names it before its harness
 	// starts: what a run carried on in its box continues
 	// ([PendingRun.SessionRan]).
-	// A minting harness names none at its launch (minted.go).
+	// A minting harness names at its launch only the session it continues
+	// (minted.go), which a case shapes onto the run.
 	session := "sess-" + turnID
 	if r.runner.MintsSession() {
-		session = ""
+		session = run.SessionID
 	}
 	if err := r.pending.AttachSandbox(ctx, turnID, BoxRef{
 		SandboxID: box.ID(), CommandID: "cmd-1", SessionID: session,
