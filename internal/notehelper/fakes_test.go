@@ -13,7 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -416,20 +415,15 @@ func (s *fakeAppServer) hangUp() {
 	}
 }
 
-// writeDigests writes the skill digests the runner records as it installs
-// skills (-skills-digests), and answers the file's path.
-func writeDigests(t *testing.T, skills ...skillFile) string {
-	t.Helper()
-	var b strings.Builder
+// digestFlags is the -skill-digest flags the runner hands the helper for
+// skills as it installs them: one name=hex each.
+func digestFlags(skills ...skillFile) []string {
+	var out []string
 	for _, s := range skills {
 		sum := sha256.Sum256([]byte(s.body))
-		b.WriteString(hex.EncodeToString(sum[:]) + " " + filepath.Base(filepath.Dir(s.path)) + "\n")
+		out = append(out, "-skill-digest", filepath.Base(filepath.Dir(s.path))+"="+hex.EncodeToString(sum[:]))
 	}
-	path := filepath.Join(t.TempDir(), "skill-digests")
-	if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return path
+	return out
 }
 
 // writeThread writes the thread file as the run's script does: by a rename.

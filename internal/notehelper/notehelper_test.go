@@ -198,11 +198,10 @@ func TestANotesRouteThatRefusesTheHelperEndsOnlyItsPolls(t *testing.T) {
 	app := newFakeAppServer(t, "turn-1", 0)
 	dir := filepath.Join(t.TempDir(), "skills")
 	alpha := writeSkill(t, dir, "alpha", "# Alpha\n")
-	digests := writeDigests(t, alpha)
 	threadFile := filepath.Join(t.TempDir(), "thread.id")
 	writeThread(t, threadFile, "thread-A")
-	h := startHelperWith(t, bridge, app, threadFile, "-notes-env", "NOTES_ROUTE", "-step-cap", "2",
-		"-skills-env", "SKILLS_ROUTE", "-skills-dir", dir, "-skills-digests", digests)
+	h := startHelperWith(t, bridge, app, threadFile, append([]string{"-notes-env", "NOTES_ROUTE", "-step-cap", "2",
+		"-skills-env", "SKILLS_ROUTE", "-skills-dir", dir}, digestFlags(alpha)...)...)
 	h.stderr.await(func(s string) bool { return strings.Contains(s, "refused the helper") })
 	tokens(t, app, "thread-A", "turn-1", 100)
 	tokens(t, app, "thread-A", "turn-1", 200)
@@ -356,9 +355,12 @@ func TestTheHelperRefusesACommandLineItCannotRunWith(t *testing.T) {
 		"no -thread-file":               {append(slices.Clone(full[:4]), full[6:]...), route},
 		"skills with no digests": {append(slices.Clone(full), "-skills-env", "NOTES_ROUTE", "-skills-dir",
 			"/nowhere/skills"), route},
-		"digests with no skills": {append(slices.Clone(full), "-skills-digests", "/nowhere/digests"), route},
-		"digests it cannot read": {append(slices.Clone(full), "-skills-env", "NOTES_ROUTE", "-skills-dir",
-			"/nowhere/skills", "-skills-digests", "/nowhere/digests"), route},
+		"a digest with no skills": {append(slices.Clone(full), "-skill-digest", "a="+strings.Repeat("0", 64)), route},
+		"a digest it cannot read": {append(slices.Clone(full), "-skills-env", "NOTES_ROUTE", "-skills-dir",
+			"/nowhere/skills", "-skill-digest", "a=not-hex"), route},
+		"a skill named twice": {append(slices.Clone(full), "-skills-env", "NOTES_ROUTE", "-skills-dir",
+			"/nowhere/skills", "-skill-digest", "a="+strings.Repeat("0", 64), "-skill-digest",
+			"a="+strings.Repeat("1", 64)), route},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -479,8 +481,8 @@ func TestASkillLoadIsReportedAndTheSkillRouteNeverPrinted(t *testing.T) {
 	beta := writeSkill(t, dir, "beta", "# Beta\n")
 	threadFile := filepath.Join(t.TempDir(), "thread.id")
 	writeThread(t, threadFile, "thread-A")
-	h := startHelperWith(t, bridge, app, threadFile, "-skills-env", "SKILLS_ROUTE", "-skills-dir", dir,
-		"-skills-digests", writeDigests(t, alpha, beta))
+	h := startHelperWith(t, bridge, app, threadFile, append([]string{"-skills-env", "SKILLS_ROUTE", "-skills-dir",
+		dir}, digestFlags(alpha, beta)...)...)
 	app.joinedTurn()
 	commandDone(t, app, "thread-A", 0, alpha.body, "/", action("read", alpha.path))
 	commandDone(t, app, "thread-A", 0, beta.body, "/", action("read", beta.path))

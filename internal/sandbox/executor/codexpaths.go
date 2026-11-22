@@ -31,12 +31,6 @@ func (p Paths) CodexNotesURLFresh() string { return p.WorkDir() + "/codex-notes-
 // ([sandbox.Skill.Listed]).
 func (p Paths) CodexSkills() string { return p.CodexHome() + "/skills" }
 
-// CodexSkillDigests is the file the runner writes as it installs a run's
-// skills: each SKILL.md's SHA-256 as written, beside its listed name, which
-// the note helper judges a load by (internal/notehelper's -skills-digests),
-// never by the file as the model may have rewritten it.
-func (p Paths) CodexSkillDigests() string { return p.WorkDir() + "/codex-skill-digests" }
-
 // CodexCapFired is the marker the note helper writes, before it interrupts the
 // turn, where the run's round cap ended it (internal/notehelper's -cap-marker).
 func (p Paths) CodexCapFired() string { return p.WorkDir() + "/codex-cap-fired" }

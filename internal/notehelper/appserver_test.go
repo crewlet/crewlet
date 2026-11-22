@@ -471,7 +471,7 @@ func TestOnlyAWholeReadOfASkillsOwnFileIsALoad(t *testing.T) {
 }
 
 // A SKILL'S FILE THE MODEL REWROTE IS NO LOAD: what counts is the SKILL.md the
-// runner installed (-skills-digests), never the file as it stands when read,
+// runner installed (-skill-digest), never the file as it stands when read,
 // so a model that rewrites it and reads its own words back loaded nothing,
 // and an output Codex cut short is no load either; a read of the installed
 // words is, whatever the file now holds.

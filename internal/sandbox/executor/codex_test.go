@@ -442,7 +442,7 @@ func TestACodexRunStartsFromItsOwnConfigurationEveryRun(t *testing.T) {
 // Mutation: put the MCP url or the notes route on a command line, export the
 // route to Codex, drop a route or a sign-in name from the shell policy's
 // exclude list, read the profile's names in place of the run's SignInEnv, or
-// record no digest of the skill as written, and this goes red.
+// hand the helper no digest of the skill as written, and this goes red.
 func TestNoCodexCommandLineCarriesTheBridgesToken(t *testing.T) {
 	t.Parallel()
 	const token = "run-token-placeholder"
@@ -487,14 +487,17 @@ func TestNoCodexCommandLineCarriesTheBridgesToken(t *testing.T) {
 		t.Errorf("the helper's skill route file holds %q", got)
 	}
 	// A REQUIRED SKILL IS HANDED, its loads the helper's to report against
-	// the digest of the file as written, which the runner records beside it.
+	// the digest of the file as written, on the helper's command line, which
+	// the runner fixes before the model runs, never in a file the model can
+	// write.
 	skill := boxFile(t, box, p.CodexSkills()+"/crewlet:deploy/SKILL.md")
 	if !strings.Contains(skill, "Run make deploy.") {
 		t.Errorf("the run's skill was not written: %q", skill)
 	}
 	sum := sha256.Sum256([]byte(skill))
-	if got, want := boxFile(t, box, p.CodexSkillDigests()), hex.EncodeToString(sum[:])+" crewlet:deploy\n"; got != want {
-		t.Errorf("the skill digests hold %q, want %q", got, want)
+	script := (executor.Codex{}).Command(req, executor.Session{}, p, "")
+	if !strings.Contains(script, "-skill-digest ") || !strings.Contains(script, "crewlet:deploy="+hex.EncodeToString(sum[:])) {
+		t.Errorf("the helper is not handed the written skill's digest on its command line:\n%s", script)
 	}
 }
 
