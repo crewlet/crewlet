@@ -250,6 +250,11 @@ export interface AdvisorRunSummary {
     minutes: number;
     minutes_ceiling: number;
   } | null;
+  /**
+   * A deep run's questions and how many it has answered, in flight or ended;
+   * null for a rules run or one that kept none. Absent from an older engine.
+   */
+  agenda?: { items: number; answered: number } | null;
   /** What ended a deep run, null for a rules run and a run still going. */
   stopped_by: "done" | "tokens" | "minutes" | "rounds" | (string & {}) | null;
   /**

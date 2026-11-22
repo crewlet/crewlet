@@ -1,28 +1,22 @@
 /**
- * The Advisor's run, at the head of its page: when every check last ran and
- * what it moved, Run, and while a run is going, how long it has run and
- * what it is doing.
+ * The Advisor's run, at the head of its page: one line of where it stands
+ * (its state, how long or how long ago, what it moved), Run, and while a run
+ * is going what it is doing now and how far through its questions it is.
+ *
+ * CONCISE ON THE PAGE, WHOLE ON DEMAND: the line's notes are a word or two
+ * each, the full sentence is the state's tooltip, and every step the run
+ * reported is folded behind Steps, in the engine's plain words.
  *
  * A RUN IS FOLLOWED, NEVER WAITED ON: the page under it stays in use while it
- * runs (a deep run can take many minutes), its elapsed time ticks, and each
- * step the run reports is listed as it lands, the newest naming the lead it
- * is testing. When it ends, the page reads the findings again.
+ * runs (a deep run can take many minutes), its elapsed time ticks, and when it
+ * ends the page reads the findings again.
  *
  * A SOURCE IT COULD NOT READ IS SAID, so a short list never reads as nothing
- * to do.
- *
- * ONE PRESS, ONE RUN: Run runs every check at once (the findings update in
- * seconds), then goes on into the deep investigation on the Advisor's model,
- * which can take many minutes, under the same line. Its line says what it
- * spent of its bounds and the bound it stopped at (so a short list is read as
- * one); where an investigation concluded lately it says that one is kept and
- * from when, and where none could run, why. What its model found and the
- * engine mended, or left out, is counted, so an empty list never reads as
- * nothing found.
+ * to do; a check that could not judge says why, folded.
  */
 
 import { useEffect, useState, type ReactNode } from "react";
-import { Button, Disclosure, Text, useToast } from "@crewlethq/ui";
+import { Button, Disclosure, Meter, StatusLine, Text, useToast, type Tone } from "@crewlethq/ui";
 import { ago } from "~/lib/ago.ts";
 import { useNow } from "~/lib/clock.ts";
 import { fmtCount, fmtElapsed, plural } from "~/lib/format.ts";
@@ -66,6 +60,8 @@ export interface ViewRun {
   /** Why a press's deep part did not run, and when the one it keeps ran. */
   deepSkipped: string | null;
   keptFrom: string | null;
+  /** A deep run's questions and how many it has answered; null where it kept none. */
+  agenda: { items: number; answered: number } | null;
 }
 
 /** One class a run ran, and why it could not judge where it could not. */
@@ -96,6 +92,7 @@ export function runView(run: AdvisorRunSummary | null): ViewRun {
       repaired: {},
       deepSkipped: null,
       keptFrom: null,
+      agenda: null,
     };
   }
   const status = run.status === "running" ? "running" : run.status === "failed" ? "failed" : "done";
@@ -117,6 +114,7 @@ export function runView(run: AdvisorRunSummary | null): ViewRun {
     repaired: run.model?.repaired ?? {},
     deepSkipped: run.deep_skipped ?? null,
     keptFrom: run.deep_kept_from ?? null,
+    agenda: run.agenda && run.agenda.items > 0 ? run.agenda : null,
   };
 }
 
@@ -238,53 +236,162 @@ export function runWords(run: ViewRun, now: number): string {
   return did.length > 0 ? `${head} It ${did.join(", and ")}.` : head;
 }
 
+/** The bound a deep run stopped at, as a note. */
+const BOUND_NOTES: Readonly<Record<string, string>> = {
+  tokens: "hit its token limit",
+  minutes: "hit its time limit",
+  rounds: "hit its round limit",
+};
+
+/** The run's one line: its state's word, its tone, and a few short notes. */
+export interface RunState {
+  label: string;
+  tone: Tone | undefined;
+  pulse: boolean;
+  notes: string[];
+}
+
+/** Where the run stands, in a word and a few short notes. */
+export function runState(run: ViewRun, now: number): RunState {
+  const deep = run.kind === "deep";
+  const when = ago(run.endedAt ?? run.startedAt, now);
+  const unread = run.unread.length > 0 ? [`${plural(run.unread.length, "source")} not read`] : [];
+  switch (run.status) {
+    case "none":
+      return { label: "Not run yet", tone: undefined, pulse: false, notes: [] };
+    case "running":
+      return {
+        label: deep ? "Investigating" : "Running checks",
+        tone: "info",
+        pulse: true,
+        notes: [
+          fmtElapsed(now - Date.parse(run.startedAt ?? "")),
+          ...(run.agenda ? [`${run.agenda.answered} of ${run.agenda.items} answered`] : []),
+        ],
+      };
+    case "failed":
+      return {
+        label: deep ? "Investigation failed" : "Last run failed",
+        tone: "danger",
+        pulse: false,
+        notes: [ago(run.startedAt, now)],
+      };
+  }
+  const moved = [
+    run.opened > 0 ? `${fmtCount(run.opened)} new` : "",
+    run.resolved > 0 ? `${fmtCount(run.resolved)} closed` : "",
+  ].filter(Boolean);
+  const investigated = deep && !run.deepSkipped;
+  const bound =
+    investigated && run.stoppedBy && run.stoppedBy !== "done" ? BOUND_NOTES[run.stoppedBy] : "";
+  const left = investigated && run.dropped > 0 ? `${fmtCount(run.dropped)} left out` : "";
+  const skipped =
+    run.deepSkipped === "kept"
+      ? "investigation kept"
+      : run.deepSkipped
+        ? "investigation did not run"
+        : "";
+  const notes = [
+    ...(moved.length > 0 ? moved : ["nothing new"]),
+    ...[bound ?? "", left, skipped].filter(Boolean),
+    ...unread,
+  ];
+  const warn = unread.length > 0 || Boolean(bound) || (deep && run.deepSkipped === "no_model");
+  return {
+    label: `${investigated ? "Investigated" : "Checked"} ${when}`,
+    tone: warn ? "warning" : "success",
+    pulse: false,
+    notes,
+  };
+}
+
+/** The run in full: the line's tooltip, and what a screen reader reads with it. */
+export function runDetail(run: ViewRun, now: number): string {
+  const unread = run.unread.length > 0 ? ` Could not read ${unreadNames(run.unread)}.` : "";
+  return `${runWords(run, now)}${unread}`;
+}
+
 /**
- * The run in words, and while it runs the steps it reported so far, the
- * newest (the lead it is testing) on the line itself.
+ * The run in one line, and while it runs what it is doing now and how far
+ * through its questions it is; every step it reported, folded under Steps.
  */
 export function RunLine({ run, now }: { run: ViewRun; now: number }) {
   const running = run.status === "running";
-  const lead = run.progress.at(-1);
+  const state = runState(run, now);
+  const doing = running ? run.progress.at(-1)?.text : undefined;
   return (
     // THE PLACEMENT IS ON A BOX OF OUR OWN, never on the kit's Text: its own
     // rule (min-width: 0) ties with ours, and whichever chunk's style loads
     // last won, squeezing the line to a word a line on a phone.
-    <div className="advisor-head__run">
-      <Text as="p" tone="secondary" aria-live="polite">
-        {runWords(run, now)}
-        {running && lead ? ` ${lead.text}` : ""}
-        {run.unread.length > 0 ? ` Could not read ${unreadNames(run.unread)}.` : ""}
-      </Text>
-      {/* A CHECK THAT COULD NOT JUDGE SAYS WHY, folded: a quiet list never
-          reads as one that judged and found nothing. */}
-      {!running && run.silent.length > 0 ? (
-        <Disclosure
-          title={`${plural(run.silent.length, "check")} could not judge`}
-          size="compact"
-          headingLevel="none"
-          flush
-        >
-          <ul className="advisor-run__steps">
-            {run.silent.map((c) => (
-              <li key={c.class}>
-                <Text as="span" variant="caption" tone="secondary">
-                  {c.reason ?? c.class}
-                </Text>
-              </li>
-            ))}
-          </ul>
-        </Disclosure>
+    <div className="advisor-head__run" aria-live="polite">
+      <StatusLine
+        label={state.label}
+        tone={state.tone}
+        pulse={state.pulse}
+        notes={state.notes}
+        detail={runDetail(run, now)}
+      />
+      {doing ? (
+        <Text as="p" variant="caption" tone="secondary" className="advisor-run__now">
+          {doing}
+        </Text>
       ) : null}
-      {running && run.progress.length > 1 ? (
-        <ol className="advisor-run__steps" aria-label="What the run did so far">
-          {run.progress.slice(0, -1).map((step) => (
-            <li key={`${step.at}-${step.text}`}>
-              <Text as="span" variant="caption" tone="secondary">
-                {step.text}
-              </Text>
-            </li>
-          ))}
-        </ol>
+      {running && run.agenda ? (
+        <Meter
+          className="advisor-run__meter"
+          size="compact"
+          polarity="progress"
+          tone="quantity"
+          label="Questions answered"
+          hideLabel
+          value={run.agenda.answered}
+          max={run.agenda.items}
+          valueText={`${run.agenda.answered} of ${plural(run.agenda.items, "question")} answered`}
+        />
+      ) : null}
+      {run.progress.length > 0 || (!running && run.silent.length > 0) ? (
+        <div className="advisor-run__folds">
+          {run.progress.length > 0 ? (
+            <Disclosure
+              title="Steps"
+              count={run.progress.length}
+              size="compact"
+              headingLevel="none"
+              flush
+              lazy
+            >
+              <ol className="advisor-run__steps" aria-label="What the run did">
+                {run.progress.map((step, i) => (
+                  <li key={`${i}-${step.at}`}>
+                    <Text as="span" variant="caption" tone="secondary">
+                      {step.text}
+                    </Text>
+                  </li>
+                ))}
+              </ol>
+            </Disclosure>
+          ) : null}
+          {/* A CHECK THAT COULD NOT JUDGE SAYS WHY, folded: a quiet list never
+              reads as one that judged and found nothing. */}
+          {!running && run.silent.length > 0 ? (
+            <Disclosure
+              title={`${plural(run.silent.length, "check")} could not judge`}
+              size="compact"
+              headingLevel="none"
+              flush
+            >
+              <ul className="advisor-run__steps">
+                {run.silent.map((c) => (
+                  <li key={c.class}>
+                    <Text as="span" variant="caption" tone="secondary">
+                      {c.reason ?? c.class}
+                    </Text>
+                  </li>
+                ))}
+              </ul>
+            </Disclosure>
+          ) : null}
+        </div>
       ) : null}
     </div>
   );
