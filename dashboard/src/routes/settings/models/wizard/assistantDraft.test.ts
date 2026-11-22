@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { isSecretDraftPath } from "~/app/assistant/draft.ts";
 import { emptyDraft } from "./draft.ts";
+import { EXECUTORS } from "../fixtures.ts";
 import { modelDraftFields } from "./assistantDraft.ts";
 
 describe("the model wizard's draft, as the assistant reads it", () => {
@@ -8,7 +9,7 @@ describe("the model wizard's draft, as the assistant reads it", () => {
   // secret it is stored under, and none names a path the engine treats as one.
   it("carries no credential and no secret's name", () => {
     const draft = {
-      ...emptyDraft(),
+      ...emptyDraft(EXECUTORS),
       key: "opus",
       credential: "sk-ant-api03-SECRET-VALUE",
       variable: "ANTHROPIC_API_KEY_OPUS",
