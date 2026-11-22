@@ -59,6 +59,12 @@ var noteFixtures = map[string]noteFixture{
 		confirms: qwenHelperConfirmsEachNoteByItsRecord,
 		reaches:  qwenHelperReachesTheBridgesOwnNotesRoute,
 	},
+	executor.CopilotName: {
+		reads:    true,
+		wakeRead: executor.CopilotWakeRead,
+		confirms: executor.CopilotConfirmsATake,
+		reaches:  copilotReachesTheBridgesRoute,
+	},
 	executor.KimiName: {
 		reads:    true,
 		wakeRead: executor.KimiWakeRead,

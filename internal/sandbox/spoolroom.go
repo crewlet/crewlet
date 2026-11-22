@@ -17,18 +17,27 @@ import (
 // Every session spool on a node is held to one room, counted in bytes: the
 // package doc's "Every spool on a node in one room" has the argument.
 
-// spoolRoomBytes is the room every spool of one process shares: a sealed
-// session at its bound ([executorkeep.SealedMaxBytes]) for each save a node
-// takes at once ([maxConcurrentSaves]) and one more, so saves, which never
-// wait for it, always leave a final take room for a session at its bound.
-// 240.06 MiB today.
-var spoolRoomBytes = int64(maxConcurrentSaves+1) * executorkeep.SealedMaxBytes
+// takeRoomBytes is the room one take holds, in two parts of one size: a
+// sealed session at its bound ([executorkeep.SealedMaxBytes]) with as much as
+// gzip adds to input it cannot shrink ([executorkeep.GzipMostBytes]) and the
+// scrub spool's members ([executorkeep.SpoolMembersMostBytes]). Its sealed
+// spool takes its part first, and its scrub's spool ([SessionSpool]), written
+// at the kept archive's level so a session the seal keeps fits, the rest, so a
+// scrub's spool never makes a seal fail. 96.23 MiB today.
+var takeRoomBytes = 2 * (executorkeep.GzipMostBytes(executorkeep.SealedMaxBytes) +
+	executorkeep.SpoolMembersMostBytes)
+
+// spoolRoomBytes is the room every spool of one process shares: a take's
+// ([takeRoomBytes]) for each save a node takes at once ([maxConcurrentSaves])
+// and one more, so saves, which never wait for it, always leave a final take
+// room for a session at its bound. 481.17 MiB today.
+var spoolRoomBytes = int64(maxConcurrentSaves+1) * takeRoomBytes
 
 // spoolRoomWait is the longest a take waits for room in its spool before it
 // keeps nothing: room comes back as other takes' packs and uploads end,
 // seconds for a session at its bound on a working store, so a minute without
 // it is a store near its floor pace, which no read should hold its seat for.
-// Counted in the scrub's seven minutes ([SessionScrubWait]).
+// Counted in the scrub's six minutes ([SessionScrubWait]).
 const spoolRoomWait = time.Minute
 
 // errSpoolPastHold is a seal refused before it wrote past the room its spool
@@ -205,6 +214,23 @@ func (h *spoolHold) shrinkTo(n int64) {
 		h.room.give(h.n - n)
 		h.n = n
 	}
+}
+
+// split moves n bytes of what h holds into a hold of their own, which it
+// answers, h keeping the rest: a take's sealed spool and its scrub's, each
+// given back on its own ([takeRoomBytes]).
+func (h *spoolHold) split(n int64) *spoolHold {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	n = min(n, h.n)
+	h.n -= n
+	return &spoolHold{room: h.room, n: n}
+}
+
+// spooling is the scrub's spool a take names in dir, held by h, which it
+// shrinks and gives back as the scrub tells it what the spool holds.
+func (h *spoolHold) spooling(dir string) SessionSpool {
+	return SessionSpool{Dir: dir, Bytes: h.bytes(), Held: h.shrinkTo}
 }
 
 // release gives back everything h holds. Safe on nil and twice.

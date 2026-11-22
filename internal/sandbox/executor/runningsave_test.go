@@ -53,7 +53,7 @@ func TestASaveNotTakenIsRemovedFromItsBox(t *testing.T) {
 	if !boxHas(t, b, other.Path) {
 		t.Errorf("the release of one save removed another taker's, at %s", other.Path)
 	}
-	if taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Save: saved.Path,
+	if taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), Save: saved.Path,
 		MaxBytes: takeBound}); err != nil || taken.Body != nil {
 		t.Errorf("a take of a released save = %+v, %v; want nothing", taken, err)
 	}
@@ -213,7 +213,7 @@ func takenWhole(t *testing.T, runner *executor.Runner, b sandbox.Sandbox, path s
 	scrub ...string) (sandbox.SessionArchive, []byte) {
 
 	t.Helper()
-	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Save: path, Scrub: scrub,
+	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), Save: path, Scrub: scrub,
 		MaxBytes: takeBound})
 	if err != nil || taken.Body == nil {
 		t.Fatalf("the take of the save at %s = %+v, %v", path, taken, err)
