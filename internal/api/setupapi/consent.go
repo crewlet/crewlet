@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 )
@@ -145,7 +146,7 @@ func refuseConsent(w http.ResponseWriter, err error) {
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound, map[string]string{"detail": err.Error()})
 	default:
 		log.Warn("setup_consent_failed", "error", err)
-		httpjson.FailWith(w, http.StatusServiceUnavailable, httpjson.CodeUnavailable, map[string]string{
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, authz.RetryUndecidedSeconds, httpjson.Detail{
 			"detail": "the sign-in could not be read or written; try again in a moment"})
 	}
 }
