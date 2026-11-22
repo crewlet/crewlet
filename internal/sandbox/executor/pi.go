@@ -115,6 +115,7 @@ func piScript(req sandbox.RunRequest, session Session, paths Paths, extension st
 		// servers, extensions, skills, prompts and system-prompt files do not
 		// load, so none stands in for the run's own (measured on 1.6.0); its
 		// AGENTS.md, which pi reads whatever trust says, still does.
+		// Pi creates the directory a repository's sessionDir setting names; it stays empty, and the run's session is its own file.
 		"--no-approve"}
 	// VERBATIM, as the pi entry names it in pi's own terms (provider/id).
 	if req.Model != "" {
