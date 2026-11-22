@@ -722,7 +722,7 @@ func carried(document, payload []byte, summary string, at time.Time, origin coor
 	if err != nil {
 		return fmt.Errorf("configapi: size the activation's body: %w", err)
 	}
-	if coord.HoldValue("the activation's body", len(body)) != nil {
+	if coord.HoldValue("the activation's body", len(body), coord.MaxValueBytes) != nil {
 		return &DocumentTooLargeError{DocumentBytes: len(document), BodyBytes: len(body)}
 	}
 	size, err := coord.ActivationBytes(coord.ActivationRequest{
@@ -733,7 +733,7 @@ func carried(document, payload []byte, summary string, at time.Time, origin coor
 	}
 	// The summary is held above and the fixed fields are short, so only an
 	// origin of kilobytes reaches this: a writer's name no person chose.
-	if coord.HoldPointer(size) != nil {
+	if coord.HoldValue("the activation pointer", size, coord.MaxPointerBytes) != nil {
 		return &PointerTooLargeError{PointerBytes: size}
 	}
 	return nil

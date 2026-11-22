@@ -21,15 +21,12 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
-// truncatingKV is a bucket whose listing STOPS WITHOUT SAYING SO. It embeds
-// the interface so a method the test does not mean to reach panics rather
-// than quietly answers a zero value.
+// truncatingKV is a REAL bucket whose listing STOPS WITHOUT SAYING SO: its
+// index read is the broker's own, and its pass is cut.
 type truncatingKV struct {
 	jetstream.KeyValue
 	deliver int // entries handed over before the channel closes
 }
-
-func (k truncatingKV) Bucket() string { return "truncating" }
 
 func (k truncatingKV) Watch(context.Context, string, ...jetstream.WatchOpt) (jetstream.KeyWatcher, error) {
 	ch := make(chan jetstream.KeyValueEntry, k.deliver+1)
@@ -68,12 +65,13 @@ func (e stubEntry) Revision() uint64 { return 1 }
 // caller before the error.
 func TestAListingThatEndsEarlyIsUnavailableRatherThanShort(t *testing.T) {
 	t.Parallel()
-	js := jsOf(embeddedNATS(t))
+	nc := embeddedNATS(t)
+	f := openFleetForTest(t, nc, fmt.Sprintf("f%d", bucketSeq.Add(1)))
 	for _, delivered := range []int{0, 3} {
 		t.Run(fmt.Sprintf("after_%d_entries", delivered), func(t *testing.T) {
 			t.Parallel()
 			var seen int
-			err := eachEntryUnder(context.Background(), js, truncatingKV{deliver: delivered},
+			err := eachEntryUnder(context.Background(), f.js, truncatingKV{KeyValue: f.budgets, deliver: delivered},
 				jetstream.AllKeys, "the bucket",
 				func(jetstream.KeyValueEntry) error { seen++; return nil })
 			if err == nil {
@@ -87,7 +85,7 @@ func TestAListingThatEndsEarlyIsUnavailableRatherThanShort(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), "listing ended early") {
 				t.Errorf("error = %v, want the PASS's failure: the cut is what "+
-					"happened, and the key index this bucket does not have is not", err)
+					"happened, after the key index answered", err)
 			}
 			if seen != 0 {
 				t.Errorf("visited %d entries of a listing that failed; a failed "+
@@ -505,6 +503,11 @@ func (k replayKV) Watch(context.Context, string, ...jetstream.WatchOpt) (jetstre
 	return stubWatcher{ch: ch}, nil
 }
 
+// watchHeaders is [replayKV.Watch]: a recorded pass is handed whole.
+func (k replayKV) watchHeaders(ctx context.Context, keys string) (jetstream.KeyWatcher, error) {
+	return k.Watch(ctx, keys)
+}
+
 // recordPass is the pass kv delivers now, markers included, for a replayKV to
 // hand to a listing taken later.
 func recordPass(ctx context.Context, t *testing.T, kv jetstream.KeyValue) []jetstream.KeyValueEntry {
@@ -639,6 +642,48 @@ func TestATombstoneCostsOneLeaderReadUntilItIsSwept(t *testing.T) {
 	if n := wire.leaderReads(t) + wire.directReads(t); n != 0 {
 		t.Errorf("a listing of a swept bucket nobody was writing made %d reads "+
 			"key by key, want 0", n)
+	}
+}
+
+// watchCountingKV is a REAL bucket that counts the watches opened on it.
+type watchCountingKV struct {
+	jetstream.KeyValue
+	watches *atomic.Int32
+}
+
+func (k watchCountingKV) Watch(ctx context.Context, keys string, opts ...jetstream.WatchOpt) (jetstream.KeyWatcher, error) {
+	k.watches.Add(1)
+	return k.KeyValue.Watch(ctx, keys, opts...)
+}
+
+// A PASS OPENS NO CONSUMER UNTIL ITS KEY INDEX HAS ANSWERED ([beginPass]).
+// Across a link the index's reply crosses behind whatever the consumer is
+// already delivering, so asked beside a run's value at its bound it waited
+// the minutes the value takes and failed the listing at the lookup ceiling.
+// An index that never answers shows the order without a race: no watch.
+//
+// Mutation: read the index in a goroutine beside the watch, and it is red.
+func TestAPassOpensNoConsumerUntilItsKeyIndexAnswers(t *testing.T) {
+	t.Parallel()
+	nc := embeddedNATS(t)
+	f := openFleetForTest(t, nc, fmt.Sprintf("f%d", bucketSeq.Add(1)))
+	putBudget(t.Context(), t, f.budgets, "org", 1)
+	// Its API requests find no responder, so the index never answers.
+	blind, err := jsapi.Embedded().Client(nc)
+	if err != nil {
+		t.Fatalf("client: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	bucket := watchCountingKV{KeyValue: f.budgets, watches: new(atomic.Int32)}
+	err = eachEntryUnder(ctx, blind, bucket, jetstream.AllKeys, "the budgets",
+		func(jetstream.KeyValueEntry) error { return nil })
+	if !errors.Is(err, coord.ErrUnavailable) || !strings.Contains(err.Error(), "key index") {
+		t.Fatalf("err = %v, want ErrUnavailable naming the key index", err)
+	}
+	if n := bucket.watches.Load(); n != 0 {
+		t.Errorf("the pass opened %d watch(es) before its key index answered, want none: "+
+			"across a link the index's reply then crosses behind the deliveries", n)
 	}
 }
 

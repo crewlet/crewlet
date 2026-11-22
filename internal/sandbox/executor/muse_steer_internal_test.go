@@ -1,0 +1,412 @@
+package executor
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"strings"
+	"testing"
+
+	"github.com/crewlet/crewlet/internal/sandbox"
+)
+
+// museToken is the fixture's take n's token.
+func museToken(n string) string { return claudeTakeToken("00000000-0000-4000-8000-00000000000" + n) }
+
+// museHeldOf is the tokens record shows held, the case failing on a read
+// error.
+func museHeldOf(t *testing.T, record []byte) map[string]bool {
+	t.Helper()
+	held, err := museHeld(bytes.NewReader(record))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return held
+}
+
+// museLines is the fixture's lines, each with its break.
+func museLines(t *testing.T, name string) [][]byte {
+	t.Helper()
+	return bytes.SplitAfter(museFixture(t, name), []byte("\n"))
+}
+
+// museRecordLine is one record line of payload event, as the record writes one.
+func museRecordLine(t *testing.T, payloadType string, event map[string]any) []byte {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{"payload_type": payloadType, "payload": map[string]any{"event": event}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return append(raw, '\n')
+}
+
+// insertAfter is lines with extra placed after the line whose text holds
+// marker, first found.
+func insertAfter(t *testing.T, lines [][]byte, marker string, extra []byte) []byte {
+	t.Helper()
+	var out []byte
+	done := false
+	for _, l := range lines {
+		out = append(out, l...)
+		if !done && bytes.Contains(l, []byte(marker)) {
+			out, done = append(out, extra...), true
+		}
+	}
+	if !done {
+		t.Fatalf("no line holds %q", marker)
+	}
+	return out
+}
+
+// TWO HOOKS FIRING IN ONE STEP ARE EACH CONFIRMED ON THEIR OWN, and the finish's
+// too, off a real 1.4.25 record (three PostToolUse hooks of the run's plugin
+// over a two-call batch, the second hook timed out, and a Stop block): each
+// take whose token its hook's stderr shows, on a run Muse took the answer of,
+// followed by the next model request, is held; the timed-out hook's take is not.
+//
+// Mutation: read a hook's stderr whatever its status, or hold a take with no
+// model request after it.
+func TestTwoMuseHooksFiringInOneStepAreEachConfirmed(t *testing.T) {
+	held := museHeldOf(t, museFixture(t, "hooks.session.jsonl"))
+	for _, n := range []string{"1", "3", "9"} {
+		if !held[museToken(n)] {
+			t.Errorf("take %s is not held: %v", n, held)
+		}
+	}
+	if held[museToken("2")] || len(held) != 3 {
+		t.Errorf("held %v, want takes 1, 3 and 9 alone", held)
+	}
+}
+
+// A HOOK KILLED MID-TAKE LEAVES ITS TAKE UNCONFIRMED: a run Muse timed out or
+// killed records no effect, whatever its stderr says, so the note is told
+// again.
+//
+// Mutation: hold a token off any run of the plugin's hooks.
+func TestAMuseHookKilledMidTakeLeavesItsTakeUnconfirmed(t *testing.T) {
+	record := strings.ReplaceAll(string(museFixture(t, "hooks.session.jsonl")),
+		`"status":"timed_out","stderr":""`, `"status":"timed_out","stderr":"`+museToken("2")+`\n"`)
+	if !strings.Contains(record, museToken("2")) {
+		t.Fatal("the fixture's timed-out run was not found")
+	}
+	if held := museHeldOf(t, []byte(record)); held[museToken("2")] {
+		t.Fatalf("a take on a timed-out hook's stderr is held: %v", held)
+	}
+}
+
+// ONLY THE PLUGIN'S OWN HOOKS GIVE A RECEIPT: a repository's hook, recorded
+// under its file's path, writing a token on its stderr confirms nothing.
+//
+// Mutation: hold a token off any hook's run.
+func TestOnlyTheMusePluginsHooksGiveAReceipt(t *testing.T) {
+	forged := museRecordLine(t, "runtime.session", map[string]any{"kind": "hook_run_terminal",
+		"hook_key": "/work/repo/.muse/hooks.json:post_tool_use:def-1", "status": "completed",
+		"effects": []string{"context"}, "stderr": museToken("7") + "\n"})
+	record := insertAfter(t, museLines(t, "hooks.session.jsonl"), "posttooluse-3", forged)
+	if held := museHeldOf(t, record); held[museToken("7")] {
+		t.Fatalf("a repository hook's token is held: %v", held)
+	}
+}
+
+// A COMPACTION BETWEEN A TAKE AND THE NEXT REQUEST LEAVES IT UNCONFIRMED: the
+// record names what a compaction kept only by its own sequence, so the note
+// is told again rather than counted off a summary.
+//
+// Mutation: drop the compaction's reset.
+func TestACompactionBeforeTheNextMuseRequestLeavesTheTakeUnconfirmed(t *testing.T) {
+	compaction := museRecordLine(t, "runtime.session", map[string]any{"kind": "context_compaction_installed"})
+	record := insertAfter(t, museLines(t, "hooks.session.jsonl"), `"kind":"tool_result_batch_committed"`, compaction)
+	held := museHeldOf(t, record)
+	if held[museToken("1")] || held[museToken("3")] || !held[museToken("9")] {
+		t.Fatalf("held %v: want the batch's takes unconfirmed past the compaction, the finish's held", held)
+	}
+}
+
+// A FINISH'S TAKE IS NOT CONFIRMED ACROSS A RESTART: its block sits in the
+// leading developer instructions, which a resumed session does not restore.
+//
+// Mutation: keep a finish's pending take across a session's start.
+func TestAMuseFinishTakeIsNotConfirmedAcrossARestart(t *testing.T) {
+	restart := []byte(`{"payload_type":"session.started","payload":{}}` + "\n")
+	// After the Stop hook's end, which alone records it `blocked`: its take
+	// is pending there, and the restart comes before the next request.
+	record := insertAfter(t, museLines(t, "hooks.session.jsonl"), `"status":"blocked"`, restart)
+	if held := museHeldOf(t, record); held[museToken("9")] || !held[museToken("1")] {
+		t.Fatalf("held %v: want the finish's take unconfirmed, the batch's held", held)
+	}
+}
+
+// THE MAIN-THREAD READ ANSWERS EACH TAKE ASKED off the box's record: held as
+// shown, absent once the job is over and it is not, undecided before.
+//
+// Mutation: answer a take not shown as absent while the job runs.
+func TestAMuseMainThreadReadAnswersItsTakes(t *testing.T) {
+	const session = "0b5e0000-0000-4000-8000-0000000000f7"
+	box := sandbox.NewFakeSandbox("b")
+	p := PathsFor(box)
+	path := p.MuseSessions() + "/2026/11/22/" + session + "/session.jsonl"
+	box.Put(path, string(museFixture(t, "hooks.session.jsonl")))
+	box.ExecFunc = func(_ context.Context, cmd string, _ sandbox.ExecOptions) (sandbox.ExecResult, error) {
+		return sandbox.ExecResult{Stdout: path + "\n"}, nil
+	}
+	ask := sandbox.MainThreadAsk{Session: session, Takes: []sandbox.AskedTake{
+		{Take: "00000000-0000-4000-8000-000000000001"}, {Take: "00000000-0000-4000-8000-000000000002"}}}
+	got := (Muse{}).readMainThread(t.Context(), box, p, ask).Receipts
+	if len(got.Held) != 1 || got.Held[0] != ask.Takes[0].Take || len(got.Absent) != 0 {
+		t.Fatalf("receipts %+v, want the first held and the second undecided", got)
+	}
+	ask.Ended = true
+	got = (Muse{}).readMainThread(t.Context(), box, p, ask).Receipts
+	if len(got.Absent) != 1 || got.Absent[0] != ask.Takes[1].Take {
+		t.Fatalf("receipts %+v, want the second absent once the job is over", got)
+	}
+}
+
+// ONE ITEM AN ANSWER, WITHIN 16,384 BYTES OF RAW UTF-8: the engine's widest
+// item (4,505 UTF-16 units) with the answer's framing fits Muse Code's
+// ceiling once the note helper takes the token out, whether it is all `<`
+// (which encoding/json escapes unless told not to), all U+2028 (which it
+// escapes always) or all 3-byte characters, and a second item goes to the
+// next hook's answer.
+//
+// Mutation: carry two items in one answer, or write it with encoding/json.
+func TestAMuseHookAnswerCarriesOneItemWithinItsCeiling(t *testing.T) {
+	if museItemUnits < 4505 {
+		t.Fatalf("one answer carries %d units, under the engine's widest item", museItemUnits)
+	}
+	if got := (Muse{}).notesThatFit([]string{"a", "b", "c"}); got != 1 {
+		t.Errorf("one answer carries %d messages, want one", got)
+	}
+	for _, unit := range []string{"<", "\u2028", "中"} {
+		widest := strings.Repeat(unit, 4505)
+		for _, event := range []string{claudeEventToolBatch, claudeEventFinish} {
+			const take = "11111111-1111-4111-8111-111111111111"
+			answer := (Muse{}).hookAnswer(event, take, []HookNote{{Message: widest}})
+			if !json.Valid([]byte(answer)) {
+				t.Fatalf("%q %s: the answer is no JSON", unit, event)
+			}
+			// THE NOTE HELPER'S CUT: the token's field out, every other byte
+			// as it stands (internal/notehelper's splitTake), so the same
+			// length whatever order its fields come in.
+			field := `"` + museTakeField + `":` + museJSONString(claudeTakeToken(take)) + `,`
+			handed, cut := strings.CutPrefix(answer, "{"+field)
+			if !cut {
+				t.Fatalf("%q %s: the answer does not open with the token's field: %.80s", unit, event, answer)
+			}
+			handed = "{" + handed
+			if len(handed) > museHookAnswerBytes || strings.Contains(handed, `\u`) {
+				t.Errorf("%q %s: the answer Muse is handed is %d bytes (escaped %v), past %d", unit, event,
+					len(handed), strings.Contains(handed, `\u`), museHookAnswerBytes)
+			}
+		}
+	}
+}
+
+// A HOOK ANSWER'S TEXT READS BACK AS IT WAS WRITTEN, whatever it holds: the
+// quote, the backslash, every control character, U+2028 and characters past
+// the basic plane, as JSON's own reader decodes them.
+//
+// Mutation: leave a control character unescaped, or the backslash.
+func TestAMuseHookAnswersTextReadsBackWhole(t *testing.T) {
+	var text strings.Builder
+	for r := rune(0); r < 0x80; r++ {
+		text.WriteRune(r)
+	}
+	text.WriteString("\u2028\u2029 ünï 🚀 \\\" end")
+	answer := (Muse{}).hookAnswer(claudeEventFinish, "11111111-1111-4111-8111-111111111111",
+		[]HookNote{{Message: text.String()}})
+	var got struct {
+		Take     string `json:"crewlet_take"`
+		Decision string `json:"decision"`
+		Reason   string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(answer), &got); err != nil {
+		t.Fatalf("%v: %q", err, answer)
+	}
+	if got.Reason != text.String() || got.Decision != "block" ||
+		got.Take != claudeTakeToken("11111111-1111-4111-8111-111111111111") {
+		t.Fatalf("read back %+v, want the text, the block and the token as written", got)
+	}
+}
+
+// A LAUNCHED RUN'S NOTES ARE EACH HELD (the engine's own script, plugin, take
+// config and note helper, in a box against a stand-in bridge serving two
+// notes between steps and one at the finish): every take its record shows
+// delivered and sent is held, and the answer is the one given after the
+// finish's note.
+//
+// Mutation: hold no finish's take, or read another hook key.
+func TestALaunchedMuseRunsNotesAreEachHeld(t *testing.T) {
+	held := museHeldOf(t, museFixture(t, "launched-notes.session.jsonl"))
+	for _, n := range []string{"1", "2", "9"} {
+		if token := claudeTakeToken("aaaaaaaa-0000-4000-8000-00000000000" + n); !held[token] {
+			t.Errorf("take %s is not held: %v", n, held)
+		}
+	}
+	if res := (Muse{}).Parse(museFixture(t, "launched-notes.result.jsonl")); !res.Success ||
+		!strings.HasSuffix(res.Text, "ANSWER after the stop note.") {
+		t.Errorf("result %+v, want the answer after the finish's note", res)
+	}
+}
+
+// museShellSecrets are the names the model's shell never runs with: the
+// entry's key and the OTLP exporter's.
+var museShellSecrets = []string{"META_API_KEY", "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS"}
+
+// THE MODEL'S SHELL RUNS WITH ONLY WHAT IT NEEDS: the run's own shell, in the
+// launched run, saw none of the entry's key and the OTLP exporter's variables,
+// which the box was started with.
+//
+// Mutation: drop the unset of the key or of OTEL_EXPORTER_OTLP_*.
+func TestTheMuseShellRunsWithOnlyWhatItNeeds(t *testing.T) {
+	found := false
+	for l := range bytes.Lines(museFixture(t, "launched-notes.result.jsonl")) {
+		env, ok := decodeMuseEnvelope(l)
+		if !ok || env.PayloadType != "tool.result" {
+			continue
+		}
+		var p struct {
+			Text string `json:"text"`
+		}
+		_ = json.Unmarshal(env.Payload, &p)
+		if !strings.Contains(p.Text, "MUSE_SESSION_ID=") {
+			continue
+		}
+		found = true
+		for _, name := range append(museShellSecrets, "CREWLET_") {
+			if strings.Contains(p.Text, name) {
+				t.Errorf("the run's shell ran with %s", name)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("the fixture holds no shell's environment")
+	}
+}
+
+// THE SCRIPT HANDS THE KEY ON STDIN AND KEEPS IT, THE RUN'S OTHER SIGN-IN
+// VARIABLES AND THE EXPORTER'S OUT OF THE ENVIRONMENT IT LAUNCHES WITH: what
+// follows its part runs without any of them, reads the key on stdin, and no
+// file keeps it.
+//
+// Mutation: export the key, leave its file behind, or keep a sign-in name.
+func TestTheMuseScriptHandsTheKeyOnStdinAlone(t *testing.T) {
+	p := museScriptHome(t, nil)
+	script := "export META_API_KEY=sk-test-key OTEL_EXPORTER_OTLP_ENDPOINT=http://o OTEL_EXPORTER_OTLP_HEADERS=a=b " +
+		"MUSE_TEAM_TOKEN=t\n" + museShellEnvironment(p, []string{"META_API_KEY", "MUSE_TEAM_TOKEN"}) +
+		`env; echo "---$kf"; cat; echo; ls ` + p.WorkDir()
+	out := string(runSh(t, script))
+	env, rest, _ := strings.Cut(out, "---")
+	for _, name := range append(museShellSecrets, "MUSE_TEAM_TOKEN") {
+		if strings.Contains(env, name+"=") {
+			t.Errorf("the environment after the script's part holds %s", name)
+		}
+	}
+	if !strings.HasPrefix(rest, "--api-key-stdin\nsk-test-key\n") || strings.Contains(rest, "muse-key") {
+		t.Errorf("after the environment: %q, want the flag, the key on stdin and no key file", rest)
+	}
+}
+
+// NO REPOSITORY FILE DISPLACES OR IMPERSONATES THE RUN'S CHANNELS (a launched
+// run whose checkout declares a `crewlet` server and a hook writing a
+// take-shaped line on its stderr, in a home holding a decoy plugin of the
+// notes plugin's name): the model reached the bridge under the run's own
+// name, the repository's take token confirms nothing, and the run's own take
+// is held.
+//
+// Mutation: name the bridge `crewlet`, or hold a token off any hook's run.
+func TestARepositoryCannotDisplaceOrImpersonateTheMuseChannels(t *testing.T) {
+	held := museHeldOf(t, museFixture(t, "launched-repository.session.jsonl"))
+	if !held[claudeTakeToken("aaaaaaaa-0000-4000-8000-000000000011")] ||
+		held[claudeTakeToken("ffffffff-0000-4000-8000-000000000001")] ||
+		held[claudeTakeToken("ffffffff-0000-4000-8000-000000000002")] {
+		t.Fatalf("held %v: want the run's own take alone", held)
+	}
+	reached := false
+	for l := range bytes.Lines(museFixture(t, "launched-repository.result.jsonl")) {
+		var p musePayload
+		env, ok := decodeMuseEnvelope(l)
+		if !ok || env.PayloadType != "tool.result" || json.Unmarshal(env.Payload, &p) != nil {
+			continue
+		}
+		name, _ := strings.CutPrefix(p.Facts.ToolName, "mcp__crewlet_")
+		suffix, tool, _ := strings.Cut(name, "__")
+		if len(suffix) == 12 && tool == "echo" && p.Facts.Outcome == "success" {
+			reached = true
+		}
+	}
+	if !reached {
+		t.Fatal("the model reached no bridge tool under the run's own server name")
+	}
+}
+
+// THE SCRIPT REMOVES A PLUGIN OF THE NOTES PLUGIN'S NAME BEFORE IT INSTALLS AND
+// APPROVES ITS OWN, and adds the servers after the approval, which rewrites
+// the settings: an earlier plugin of that name never runs as the run's, and
+// the servers keep `required` and their wait.
+//
+// Mutation: install before removing, or add the servers first.
+func TestTheMuseScriptWiresItsPluginBeforeItsServers(t *testing.T) {
+	script := museWiring(Paths{Home: "/h"})
+	order := []string{"muse plugins remove " + museNotesPlugin, "muse plugins install ",
+		"muse plugins approve " + museNotesPlugin, "muse mcp add-json "}
+	last := -1
+	for _, step := range order {
+		at := strings.Index(script, step)
+		if at <= last {
+			t.Fatalf("%q is not after the step before it in:\n%s", step, script)
+		}
+		last = at
+	}
+}
+
+// A SIGN-IN NAME NO SHELL CAN UNSET IS REFUSED before anything is written: the
+// script could not keep it out of the model's shell.
+//
+// Mutation: write the config without checking the names.
+func TestAMuseRunWithASignInNameNoShellCanUnsetIsRefused(t *testing.T) {
+	box := sandbox.NewFakeSandbox("b")
+	_, err := (Muse{}).WriteConfig(t.Context(), box, sandbox.RunRequest{Brief: "x",
+		SignInEnv: []string{"META_API_KEY", "BAD-NAME"}}, Session{}, PathsFor(box))
+	if err == nil || !strings.Contains(err.Error(), "BAD-NAME") {
+		t.Fatalf("err = %v, want the name refused", err)
+	}
+}
+
+// AN UNREADABLE LINE WITH A LATER LINE AFTER IT CONFIRMS NOTHING: a line that
+// is no JSON, or a runtime record whose event is no object, may be the
+// compaction or the restart that leaves a take unconfirmed, so the read is
+// undecided, saying which line, and holds no take, nor answers one absent once
+// the job is over. The same line last is one Muse is still writing: the takes
+// before it hold.
+//
+// Mutation: skip an unreadable line, or hold the takes read before it.
+func TestAnUnreadableMuseRecordConfirmsNothing(t *testing.T) {
+	const session = "0b5e0000-0000-4000-8000-0000000000f7"
+	torn := []byte(`{"payload_type":"runtime.session","payload":{"ev` + "\n")
+	for name, bad := range map[string][]byte{
+		"no JSON":         torn,
+		"event no object": []byte(`{"payload_type":"runtime.session","payload":{"event":"compacted"}}` + "\n"),
+	} {
+		record := insertAfter(t, museLines(t, "hooks.session.jsonl"), "plugin:crewlet-notes:posttooluse-1", bad)
+		if held, err := museHeld(bytes.NewReader(record)); err == nil || len(held) != 0 {
+			t.Errorf("%s: held %v, err %v; want none held and the line named", name, held, err)
+		}
+		box := sandbox.NewFakeSandbox("b")
+		p := PathsFor(box)
+		path := p.MuseSessions() + "/2026/11/22/" + session + "/session.jsonl"
+		box.Put(path, string(record))
+		box.ExecFunc = func(_ context.Context, _ string, _ sandbox.ExecOptions) (sandbox.ExecResult, error) {
+			return sandbox.ExecResult{Stdout: path + "\n"}, nil
+		}
+		got := (Muse{}).readMainThread(t.Context(), box, p, sandbox.MainThreadAsk{Session: session, Ended: true,
+			Takes: []sandbox.AskedTake{{Take: "00000000-0000-4000-8000-000000000001"}}}).Receipts
+		if len(got.Held) != 0 || len(got.Absent) != 0 || !strings.Contains(got.Why, "line") {
+			t.Errorf("%s: receipts %+v, want undecided with the line named", name, got)
+		}
+	}
+	tail := append(museFixture(t, "hooks.session.jsonl"), torn[:len(torn)-1]...)
+	if held := museHeldOf(t, tail); !held[museToken("1")] || !held[museToken("9")] {
+		t.Errorf("held %v with a torn last line: want the takes before it", held)
+	}
+}

@@ -1,6 +1,8 @@
 package derive
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net/url"
 	"path"
@@ -138,6 +140,10 @@ var integrationRows = map[integration.Kind]func(b *builder, c *config.Company, z
 	integration.KindAppleAds:        appleAds,
 	integration.KindGoogleAnalytics: googleAnalytics,
 	integration.KindAdMob:           adMob,
+	integration.KindAdSense:         adSense,
+	integration.KindGoogleAds:       googleAds,
+	integration.KindSearchConsole:   searchConsole,
+	integration.KindGooglePlay:      googlePlay,
 	integration.KindAtlassian:       atlassian,
 }
 
@@ -442,6 +448,97 @@ func adMob(b *builder, c *config.Company, _ map[string]atlas.Ref) {
 	for i, id := range a.Accounts {
 		b.account("integrations.admob.accounts["+strconv.Itoa(i)+"]", atlas.VendorGoogle, "admob/"+id, id,
 			"AdMob", a.Enabled, atlas.CapabilityMonetization)
+	}
+}
+
+// adSense records each AdSense publisher account the company narrows agents
+// to, keyed by its ID, or the vendor alone where it names none.
+func adSense(b *builder, c *config.Company, _ map[string]atlas.Ref) {
+	a := c.Integrations.AdSense
+	if a == nil {
+		return
+	}
+	if len(a.Accounts) == 0 {
+		b.account("integrations.adsense", atlas.VendorGoogle, "adsense", "", "AdSense", a.Enabled,
+			atlas.CapabilityMonetization)
+		return
+	}
+	for i, id := range a.Accounts {
+		b.account("integrations.adsense.accounts["+strconv.Itoa(i)+"]", atlas.VendorGoogle, "adsense/"+id, id,
+			"AdSense", a.Enabled, atlas.CapabilityMonetization)
+	}
+}
+
+// googleAds records each Google Ads account the company names, keyed by its
+// customer ID, or the vendor alone where it names none.
+func googleAds(b *builder, c *config.Company, _ map[string]atlas.Ref) {
+	g := c.Integrations.GoogleAds
+	if g == nil {
+		return
+	}
+	if len(g.Customers) == 0 {
+		b.account("integrations.google_ads", atlas.VendorGoogle, "ads", "", "Google Ads", g.Enabled,
+			atlas.CapabilityAdvertising)
+		return
+	}
+	for i, cu := range g.Customers {
+		b.account("integrations.google_ads.customers["+strconv.Itoa(i)+"].id", atlas.VendorGoogle, "ads/"+cu.ID,
+			cu.ID, "Google Ads", g.Enabled, atlas.CapabilityAdvertising)
+	}
+}
+
+// searchConsole records each Search Console site the company names as an
+// account, or the vendor alone where it names none: a domain property keyed
+// as Search Console writes it (sc-domain:example.com), and a URL prefix by its
+// host and a short digest of the site, with the site as its site fact. A key
+// holds no scheme's `//`, and one host holds several properties (a path, http
+// beside https), each its own account; the digest also keeps its account
+// reference from joining another Google account named by the host.
+func searchConsole(b *builder, c *config.Company, _ map[string]atlas.Ref) {
+	g := c.Integrations.SearchConsole
+	if g == nil {
+		return
+	}
+	if len(g.Sites) == 0 {
+		b.account("integrations.search_console", atlas.VendorGoogle, "search-console", "", "Search Console",
+			g.Enabled, atlas.CapabilityAnalytics)
+		return
+	}
+	for i, site := range g.Sites {
+		where := "integrations.search_console.sites[" + strconv.Itoa(i) + "]"
+		if strings.HasPrefix(site, "sc-domain:") {
+			b.account(where, atlas.VendorGoogle, "search-console/"+site, site, "Search Console", g.Enabled,
+				atlas.CapabilityAnalytics)
+			continue
+		}
+		sum := sha256.Sum256([]byte(site))
+		id := hostOf(site) + "/" + hex.EncodeToString(sum[:siteDigestBytes])
+		if r, ok := b.account(where, atlas.VendorGoogle, "search-console/"+id, id, "Search Console", g.Enabled,
+			atlas.CapabilityAnalytics); ok {
+			b.says(where, r, atlas.FactSite, site)
+		}
+	}
+}
+
+// siteDigestBytes is how much of a site's SHA-256 its account's key holds:
+// 48 bits tell apart the at most 1000 properties a company names.
+const siteDigestBytes = 6
+
+// googlePlay records each Google Play app the company narrows agents to,
+// keyed by its package name, or the vendor alone where it names none.
+func googlePlay(b *builder, c *config.Company, _ map[string]atlas.Ref) {
+	g := c.Integrations.GooglePlay
+	if g == nil {
+		return
+	}
+	if len(g.Apps) == 0 {
+		b.account("integrations.google_play", atlas.VendorGoogle, "play", "", "Google Play", g.Enabled,
+			atlas.CapabilityAppDelivery)
+		return
+	}
+	for i, app := range g.Apps {
+		b.account("integrations.google_play.apps["+strconv.Itoa(i)+"]", atlas.VendorGoogle, "play/"+app, app,
+			"Google Play", g.Enabled, atlas.CapabilityAppDelivery)
 	}
 }
 

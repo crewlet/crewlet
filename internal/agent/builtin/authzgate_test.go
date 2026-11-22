@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -50,7 +51,7 @@ func TestEveryToolShapedActionIsARegisteredTool(t *testing.T) {
 	t.Parallel()
 	names := everyToolName(t)
 	for _, action := range authz.Actions() {
-		if strings.Contains(string(action), ".") {
+		if strings.Contains(string(action), ".") || unwiredGrowthTool(string(action)) {
 			continue
 		}
 		if !slices.Contains(names, string(action)) {
@@ -186,6 +187,18 @@ func TestEveryAppRowHasItsKindsApp(t *testing.T) {
 // everyToolName is every verb this build serves as a tool, over BOTH surfaces:
 // a seat's registry and the operator's assistant each serve verbs the other
 // does not, and either alone makes the walks above wrong in both directions.
+// unwiredGrowthTool reports whether name is a tool of a growth catalog this
+// test binary links and [fullDeps] does not wire: Google Play's, which its
+// end-to-end test links. Only the fake product's tools are offered.
+func unwiredGrowthTool(name string) bool {
+	for _, c := range growth.Catalogs() {
+		if _, listed := c.Tool(name); listed {
+			return c.Kind != "fakeads"
+		}
+	}
+	return false
+}
+
 func everyToolName(t *testing.T) []string {
 	t.Helper()
 	reg := tools.NewRegistry()

@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -249,14 +248,9 @@ func (p *Product) report(ctx context.Context, call growth.Call) (reportAnswer, e
 	if err != nil {
 		return reportAnswer{}, err
 	}
+	// A CAMPAIGN REPORT, WHICH GOOGLE CAPS AT NO ROW COUNT, may pass the most
+	// one call reads: googlegrowth refuses it then, saying to narrow it.
 	raw, err := p.client.Send(ctx, call.Handle, req)
-	var syntax *json.SyntaxError
-	if id == campaignReportOp && errors.As(err, &syntax) {
-		// THE ONE REPORT GOOGLE CAPS AT NO ROW COUNT: an answer past the most
-		// one call reads is cut, and reads as broken JSON.
-		err = &googlegrowth.CallError{Failure: growth.FailureUnknownOutcome, Err: refusal(growth.RefusedInvalid,
-			"the campaign report is larger than one answer holds; narrow its dates or dimensions.")}
-	}
 	var messages []googleReport
 	if err == nil {
 		err = decodeReport(id, raw, &messages)
