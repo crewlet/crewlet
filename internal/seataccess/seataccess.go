@@ -127,6 +127,10 @@ const (
 	// LaneGoogleAds is a seat's level and accounts at Google Ads, which the
 	// engine reaches as the seat's growth identity.
 	LaneGoogleAds Lane = "google_ads"
+
+	// LaneSearchConsole is a seat's level and sites at Search Console, which
+	// the engine reaches as the seat's growth identity.
+	LaneSearchConsole Lane = "search_console"
 )
 
 // Lanes is every lane, in the order an operator reads integrations
@@ -136,7 +140,7 @@ func Lanes() []Lane {
 	return []Lane{
 		LaneSlack, LaneMattermost, LaneJira, LaneConfluence,
 		LaneGitHub, LaneGitLab, LaneDatadog, LaneCloudflare, LaneExpo, LaneDigitalOcean, LaneScaleway, LaneAWS, LaneGoogleCloud,
-		LaneSSH, LaneMetaAds, LaneAppStoreConnect, LaneAppleAds, LaneGoogleAnalytics, LaneAdMob, LaneAdSense, LaneGoogleAds,
+		LaneSSH, LaneMetaAds, LaneAppStoreConnect, LaneAppleAds, LaneGoogleAnalytics, LaneAdMob, LaneAdSense, LaneGoogleAds, LaneSearchConsole,
 	}
 }
 

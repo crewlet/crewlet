@@ -221,6 +221,7 @@ export const INTEGRATION_TOOLS = {
   admob: ["admob"],
   adsense: ["adsense"],
   google_ads: ["google_ads"],
+  search_console: ["search_console"],
 } as const;
 
 /**

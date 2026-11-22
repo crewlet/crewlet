@@ -272,6 +272,17 @@ export const STORIES: Record<string, ToolStory> = {
     byHand:
       "Connect Google Cloud first and run its setup block again, which turns on the Google Ads API, then add each agent's email in Admin, Access and security, and set each account's spending caps.",
   },
+  search_console: {
+    does: [
+      "Read search performance, sitemaps and URL inspection for the sites you choose",
+      "Submit sitemaps, and notify Google of job posting and livestream pages, where you allow operate",
+      "Ask you before adding or removing a property, verifying a site or changing its owners, every time",
+    ],
+    identity:
+      "Each agent has its own Google identity in your Google identity project; you add it to each property at the permission it may act with. Its tokens never leave Crewlet.",
+    byHand:
+      "Connect Google Cloud first and run its setup block again, which turns on the Search Console APIs, then add each agent's email in Settings, Users and permissions.",
+  },
 };
 
 /** Where a tool stands, in the four words a person sorts by. */

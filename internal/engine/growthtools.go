@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/metaads"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/searchconsole"
 )
 
 // The growth tools on this node (ADR-0170): each product reads the running
@@ -48,6 +49,7 @@ var (
 	_ builtin.GrowthProduct = (*admob.Product)(nil)
 	_ builtin.GrowthProduct = (*adsense.Product)(nil)
 	_ builtin.GrowthProduct = (*googleads.Product)(nil)
+	_ builtin.GrowthProduct = (*searchconsole.Product)(nil)
 )
 
 // GrowthToolDeps are the growth tools' dependencies on this node, or the zero
@@ -74,6 +76,7 @@ func (e *Engine) growthProducts() []builtin.GrowthProduct {
 			e.adMob(),
 			e.adSense(),
 			googleads.New(e.runningConfig, e.resolver, e, e.GrowthAudit(), growthLeases{engine: e}, nil),
+			searchconsole.New(e.runningConfig, e.resolver, e, e.GrowthAudit(), growthLeases{engine: e}, nil, nil),
 		}
 	})
 	return e.growth

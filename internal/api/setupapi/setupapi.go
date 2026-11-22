@@ -166,6 +166,7 @@ import (
 	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/scaleway"
+	"github.com/crewlet/crewlet/internal/searchconsole"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/slack"
@@ -1078,6 +1079,14 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		block := company.Integrations.GoogleAds
 		guide = googleads.Guide()
 		reqs = googleads.Requirements(company)
+		configured = block != nil
+		enabled = block != nil && block.Enabled
+	case integration.KindSearchConsole:
+		// No roster and no credential: agents sign in as their growth
+		// identities, which the Google identity pass makes.
+		block := company.Integrations.SearchConsole
+		guide = searchconsole.Guide()
+		reqs = searchconsole.Requirements(company)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindSlack:

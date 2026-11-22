@@ -1,6 +1,8 @@
 package derive_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"go/build"
 	"slices"
@@ -245,6 +247,55 @@ func TestAGoogleAdsAccountIsAnAccount(t *testing.T) {
 	}
 	c.Integrations.GoogleAds.Customers = nil
 	find(t, read(c), atlas.KindAccount, "google/ads")
+}
+
+// A SEARCH CONSOLE SITE IS AN ACCOUNT, with the analytics capability: a
+// domain property keyed as Search Console writes it, and each URL prefix its
+// own account by its host and a digest of the site, which it carries as its
+// site, so three properties on one host are three accounts whose references
+// join no other Google account the host names; nothing is withheld, and a
+// company that names no site holds the vendor alone.
+//
+// Mutation: key a URL prefix by its host alone, and the three properties are
+// one account whose reference is the bare host.
+func TestASearchConsoleSiteIsAnAccount(t *testing.T) {
+	t.Parallel()
+	c := derive.AcmeCompany()
+	prefixes := []string{"https://www.example.com/", "https://www.example.com/blog/", "http://www.example.com/"}
+	c.Integrations.SearchConsole = &config.SearchConsole{Enabled: true,
+		Sites: append([]string{"sc-domain:example.com"}, prefixes...)}
+	d := derive.FromSettings(c, "r1", derive.AcmeDeployment).Claims(now)
+	for _, w := range d.Withheld {
+		if strings.HasPrefix(w.Where, "integrations.search_console") {
+			t.Errorf("%s was withheld: %s", w.Where, w.Reason)
+		}
+	}
+	v := read(c)
+	domain := find(t, v, atlas.KindAccount, "google/search-console/sc-domain:example.com")
+	if !slices.Equal(factOf(domain, atlas.FactAccountRef), []string{"sc-domain:example.com"}) ||
+		!slices.Contains(factOf(domain, atlas.FactCapability), "analytics") {
+		t.Errorf("the domain property is %+v", domain)
+	}
+	refs := map[string]bool{}
+	for _, site := range prefixes {
+		sum := sha256.Sum256([]byte(site))
+		ref := "www.example.com/" + hex.EncodeToString(sum[:6])
+		account := find(t, v, atlas.KindAccount, "google/search-console/"+ref)
+		said, err := atlas.Parse(atlas.TypeURL, site, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if account.Name != "Search Console" || !slices.Equal(factOf(account, atlas.FactSite), []string{said.Text}) ||
+			!slices.Equal(factOf(account, atlas.FactAccountRef), []string{ref}) {
+			t.Errorf("%s is %+v", site, account)
+		}
+		refs[ref] = true
+	}
+	if len(refs) != len(prefixes) {
+		t.Errorf("three properties on one host are %d accounts", len(refs))
+	}
+	c.Integrations.SearchConsole.Sites = nil
+	find(t, read(c), atlas.KindAccount, "google/search-console")
 }
 
 // A TOOL SERVER IS KNOWN BY ITS COMMAND, NEVER ITS ARGUMENTS: an argument is

@@ -475,6 +475,12 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		add("google_ads", in.GoogleAds.Enabled, nil, map[string]any{
 			"customers": customers, "capped": capped, "roles": growthRoles("google_ads")})
 	}
+	if in.SearchConsole != nil {
+		// NO SECRET: the sites the company narrows agents to, and its
+		// catalog's roles with what each allows.
+		add("search_console", in.SearchConsole.Enabled, nil, map[string]any{
+			"sites": in.SearchConsole.Sites, "roles": growthRoles("search_console")})
+	}
 	if in.Atlassian != nil {
 		// THE ORGANIZATION, not a third product: where the account itself is
 		// created, which no site API can do. It reconciles identities,

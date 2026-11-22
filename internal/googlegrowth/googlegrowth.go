@@ -43,6 +43,12 @@
 // reason. A write that went unanswered may have reached Google, so its
 // outcome is unknown, never "unavailable" ([FailureOf]).
 //
+// A call that says a change to its target rather than the whole of it (an
+// owner added to a list Google takes whole) is made from the before-state the
+// binding holds ([Request.Shape]): read once, under the lease, so no other
+// change is overwritten, and a state the change no longer applies to is a
+// target that moved, void rather than failed.
+//
 // # Every act on the access log
 //
 // A call made at once is made, or failed with its reason; a call refused
@@ -109,6 +115,12 @@ type Request struct {
 	// Raw marks a method answering google.api.HttpBody (a CSV report): its
 	// answer is {"contentType", "data"}, data the bytes Google sent as text.
 	Raw bool
+	// Shape makes the request sent from its target's before-state, where the
+	// call says a change to the target rather than the whole of it (owners
+	// added and removed, sent as the whole list), so the change is built on
+	// the state its approval binds; nil sends the request as built. A refusal
+	// is a state the change does not apply to.
+	Shape func(before []byte) (Request, error)
 }
 
 // pathParam is one `{name}` of an operation's path.
@@ -334,9 +346,11 @@ func (r Request) Digest(before []byte) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// Subject names what the request decides, for joining one seat's repeats.
+// Subject names what the request decides, for joining one seat's repeats:
+// its operation, its address and the account it acts in, which an address
+// alone does not always name (a site given in the body).
 func (r Request) Subject(kind string) string {
-	sum := sha256.Sum256([]byte(kind + "\x00" + r.Op.ID + "\x00" + r.Address))
+	sum := sha256.Sum256([]byte(kind + "\x00" + r.Op.ID + "\x00" + r.Address + "\x00" + r.AccountOrTarget()))
 	return hex.EncodeToString(sum[:])
 }
 
