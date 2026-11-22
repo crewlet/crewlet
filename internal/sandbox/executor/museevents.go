@@ -243,9 +243,7 @@ func (d *museEvents) Line(line []byte) {
 		}
 		// WHOLE OR NOT AT ALL: past what a record keeps of an event, the
 		// reason alone is said.
-		if len(line) <= sandbox.MaxRunEventBytes {
-			d.failureLine = string(line)
-		}
+		d.failureLine = boundedEvent(line)
 		if strings.Contains(p.Reason, museRateLimit) || strings.Contains(p.Reason, museBilling) {
 			d.limit = d.failureLine
 		}
