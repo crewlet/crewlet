@@ -127,6 +127,57 @@ func TestAnUpdateIsClassedByWhatItChanges(t *testing.T) {
 	}
 }
 
+// A field's named values class it before every other rule, a field's While
+// lowers its own class in a state the product read, and an operation's state
+// replaces its class for every field no rule names: archiving is admin where
+// a status change is spend, a creative swapped on a paused ad is operate, and
+// a paused create is operate whatever it sets.
+//
+// Mutation: check Values after Pausing, apply While to a value's class, or
+// keep op.Class while a state holds, and a case here is misclassed.
+func TestAValueOrAStateClassesAWrite(t *testing.T) {
+	t.Parallel()
+	op := growth.Operation{ID: "ad.update", Method: "POST", Path: "/{ad}", Class: growth.ClassSpend,
+		States: []growth.StateRule{{When: "paused", Class: growth.ClassOperate}},
+		Fields: []growth.FieldRule{
+			{Field: "status", Class: growth.ClassSpend, Pausing: []string{"PAUSED"},
+				Values: []growth.ValueRule{{Values: []string{"ARCHIVED", "DELETED"}, Class: growth.ClassAdmin}}},
+			{Field: "creative", Class: growth.ClassPublic, While: []growth.StateRule{{When: "inactive", Class: growth.ClassOperate}}},
+			{Field: "schedule", Class: growth.ClassPublic, Values: []growth.ValueRule{{Values: []string{""}, Class: growth.ClassOperate}}},
+			{Field: "enabled", Class: growth.ClassSpend, Values: []growth.ValueRule{{Values: []string{"false"}, Class: growth.ClassOperate}}},
+		}}
+	inactive := func(s string) bool { return s == "inactive" }
+	paused := func(s string) bool { return s == "paused" }
+	for name, c := range map[string]struct {
+		changes []growth.Change
+		holds   func(string) bool
+		want    growth.Class
+	}{
+		"an archive":                    {[]growth.Change{{Field: "status", Before: "ACTIVE", After: "ARCHIVED"}}, nil, growth.ClassAdmin},
+		"a pause":                       {[]growth.Change{{Field: "status", After: "PAUSED"}}, nil, growth.ClassOperate},
+		"an enable":                     {[]growth.Change{{Field: "status", After: "ACTIVE"}}, inactive, growth.ClassSpend},
+		"a creative on a live ad":       {[]growth.Change{{Field: "creative", After: "1"}}, nil, growth.ClassPublic},
+		"a creative on a paused ad":     {[]growth.Change{{Field: "creative", After: "1"}}, inactive, growth.ClassOperate},
+		"a creative and an enable":      {[]growth.Change{{Field: "creative", After: "1"}, {Field: "status", After: "ACTIVE"}}, inactive, growth.ClassSpend},
+		"an archive while paused":       {[]growth.Change{{Field: "status", After: "DELETED"}}, inactive, growth.ClassAdmin},
+		"a schedule cleared":            {[]growth.Change{{Field: "schedule", Before: "x", After: nil}}, nil, growth.ClassOperate},
+		"a schedule emptied":            {[]growth.Change{{Field: "schedule", After: []any{}}}, nil, growth.ClassOperate},
+		"a schedule set":                {[]growth.Change{{Field: "schedule", After: "y"}}, nil, growth.ClassPublic},
+		"a flag off":                    {[]growth.Change{{Field: "enabled", Before: true, After: false}}, nil, growth.ClassOperate},
+		"a flag on":                     {[]growth.Change{{Field: "enabled", After: true}}, nil, growth.ClassSpend},
+		"an unnamed field":              {[]growth.Change{{Field: "budget", After: "9"}}, nil, growth.ClassSpend},
+		"an unnamed field while paused": {[]growth.Change{{Field: "budget", After: "9"}}, paused, growth.ClassOperate},
+		"nothing named while paused":    {nil, paused, growth.ClassOperate},
+	} {
+		if got := growth.ClassifyIn(op, c.changes, c.holds); got != c.want {
+			t.Errorf("%s: %s, want %s", name, got, c.want)
+		}
+	}
+	if got := growth.Classify(op, []growth.Change{{Field: "creative", After: "1"}}); got != growth.ClassPublic {
+		t.Errorf("Classify read a state nobody gave: %s", got)
+	}
+}
+
 func validCatalog() growth.Catalog {
 	return growth.Catalog{
 		Kind: "test_ads", API: "Test Ads API", Version: "v1",
@@ -164,6 +215,12 @@ func TestACatalogIsHeldToItsRules(t *testing.T) {
 	if err := query.Validate(); err != nil {
 		t.Errorf("a POST that only reads was refused as read: %v", err)
 	}
+	head := validCatalog()
+	head.Operations = append(head.Operations, growth.Operation{ID: "events.check", Method: "HEAD",
+		Path: "/events", Class: growth.ClassRead})
+	if err := head.Validate(); err != nil {
+		t.Errorf("a HEAD was refused as read: %v", err)
+	}
 	for name, breakIt := range map[string]func(*growth.Catalog){
 		"no kind":              func(c *growth.Catalog) { c.Kind = "" },
 		"a never without why":  func(c *growth.Catalog) { c.Operations[3].Reason = "" },
@@ -191,6 +248,21 @@ func TestACatalogIsHeldToItsRules(t *testing.T) {
 		},
 		"a state with no name": func(c *growth.Catalog) {
 			c.Operations[2].States = []growth.StateRule{{Class: growth.ClassPublic}}
+		},
+		"a value rule naming none": func(c *growth.Catalog) {
+			c.Operations[1].Fields[1].Values = []growth.ValueRule{{Class: growth.ClassAdmin}}
+		},
+		"a value rule to never": func(c *growth.Catalog) {
+			c.Operations[1].Fields[1].Values = []growth.ValueRule{{Values: []string{"X"}, Class: growth.ClassNever}}
+		},
+		"a while raising": func(c *growth.Catalog) {
+			c.Operations[1].Fields[0].While = []growth.StateRule{{When: "paused", Class: growth.ClassAdmin}}
+		},
+		"a while with no name": func(c *growth.Catalog) {
+			c.Operations[1].Fields[0].While = []growth.StateRule{{Class: growth.ClassOperate}}
+		},
+		"a head classed spend": func(c *growth.Catalog) {
+			c.Operations[0].Method, c.Operations[0].Class = "HEAD", growth.ClassSpend
 		},
 	} {
 		c := validCatalog()

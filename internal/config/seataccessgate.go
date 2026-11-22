@@ -82,6 +82,8 @@ func (c *Company) SeatAccessConnected(kind string) bool {
 		return in.GoogleCloud != nil
 	case "ssh":
 		return in.SSH != nil
+	case "meta_ads":
+		return in.MetaAds != nil
 	case "app_store_connect":
 		return in.AppStoreConnect != nil
 	case "apple_ads":

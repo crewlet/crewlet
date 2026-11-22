@@ -133,6 +133,7 @@ var integrationRows = map[integration.Kind]func(b *builder, c *config.Company, z
 	integration.KindAWS:             aws,
 	integration.KindGoogleCloud:     googleCloud,
 	integration.KindSSH:             sshHosts,
+	integration.KindMetaAds:         metaAds,
 	integration.KindAppStoreConnect: appStoreConnect,
 	integration.KindAppleAds:        appleAds,
 	integration.KindAtlassian:       atlassian,
@@ -358,6 +359,20 @@ func expo(b *builder, c *config.Company, _ map[string]atlas.Ref) {
 	}
 	b.account("integrations.expo.provisioning.account_name", atlas.VendorExpo, name, name, "Expo", e.Enabled,
 		atlas.CapabilityAppDelivery)
+}
+
+// metaAds records the connected Meta business portfolio, keyed by its ID
+// where the document names it, else by its app's ID; neither is a secret.
+func metaAds(b *builder, c *config.Company, _ map[string]atlas.Ref) {
+	m := c.Integrations.MetaAds
+	if m == nil {
+		return
+	}
+	where, key := "integrations.meta_ads.business_id", strings.TrimSpace(m.BusinessID)
+	if key == "" {
+		where, key = "integrations.meta_ads.app_id", strings.TrimSpace(m.AppID)
+	}
+	b.account(where, atlas.VendorMeta, key, key, "Meta Ads Manager", m.Enabled)
 }
 
 // appStoreConnect records each connected App Store Connect team, keyed by its

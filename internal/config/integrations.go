@@ -40,6 +40,8 @@ type Integrations struct {
 	AWS          *AWS          `yaml:"aws,omitempty" json:"aws,omitempty" desc:"The Crewlet stack in an AWS account and the engine's certificate authority, used to create one IAM role per agent through IAM Roles Anywhere. Absent = disabled."`
 	SSH          *SSH          `yaml:"ssh,omitempty" json:"ssh,omitempty" desc:"The engine's SSH certificate authority and the servers agents may reach with short-lived certificates it signs. Absent = disabled."`
 
+	MetaAds *MetaAds `yaml:"meta_ads,omitempty" json:"meta_ads,omitempty" desc:"The company's Meta app and one system user's tokens, through which the engine makes every Marketing API call for the agents. Absent = disabled."`
+
 	AppStoreConnect *AppStoreConnect `yaml:"app_store_connect,omitempty" json:"app_store_connect,omitempty" desc:"App Store Connect teams and their API keys, one per Apple role, through which the engine makes every call for the agents. Absent = disabled."`
 	AppleAds        *AppleAds        `yaml:"apple_ads,omitempty" json:"apple_ads,omitempty" desc:"Apple Ads API users, each one organization's client credentials and private key, through which the engine makes every Apple Ads Platform API call for the agents. Absent = disabled."`
 
@@ -154,6 +156,9 @@ func (i *Integrations) validate(path Path) error {
 	}
 	if i.SSH != nil {
 		p.wrap(i.SSH.validate(at(path, "ssh")))
+	}
+	if i.MetaAds != nil {
+		p.wrap(i.MetaAds.validate(at(path, "meta_ads")))
 	}
 	if i.AppStoreConnect != nil {
 		p.wrap(i.AppStoreConnect.validate(at(path, "app_store_connect")))
