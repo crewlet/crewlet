@@ -56,7 +56,8 @@ func (accessVendor) FixedLevels(seataccess.Lane) []seataccess.Level {
 }
 
 // Reach is the apps the company names, which a seat's apps must be within;
-// open where it names none, since the keys' own reach is read live.
+// open where it names none: any app the keys reach, which Apple holds every
+// call to, and which the session lists where they were read.
 func (accessVendor) Reach(c *config.Company, _ *org.Organization, _ seataccess.Lane) seataccess.Reach {
 	if c == nil || c.Integrations.AppStoreConnect == nil || len(c.Integrations.AppStoreConnect.Apps) == 0 {
 		return seataccess.Reach{Open: true}
@@ -64,22 +65,45 @@ func (accessVendor) Reach(c *config.Company, _ *org.Organization, _ seataccess.L
 	return seataccess.Reach{Scope: c.Integrations.AppStoreConnect.Apps}
 }
 
-// Open builds a session from the company's block; one absent or off is not
-// configured.
+// Open builds a session from the company's block and the apps the engine's
+// product read with its keys ([Reach], handed in as in.Reads); one absent or
+// off is not configured.
 func (accessVendor) Open(_ context.Context, in seataccess.OpenInput) (seataccess.Session, error) {
 	if in.Config == nil || !in.Config.Integrations.AppStoreConnect.GrowthEnabled() {
 		return nil, fmt.Errorf("appstoreconnect: %w: integrations.app_store_connect is off",
 			integration.ErrNotConfigured)
 	}
-	return &accessSession{company: in.Config}, nil
+	reach, _ := in.Reads.(Reach)
+	return &accessSession{company: in.Config, reach: reach}, nil
 }
 
-type accessSession struct{ company *config.Company }
+type accessSession struct {
+	company *config.Company
+	// reach is what the company's keys reach, nil where nothing was handed in.
+	reach Reach
+}
 
-// Options are the three levels; the apps are the document's
-// ([accessVendor.Reach]), which [seataccess.ReadOptions] applies.
+// Options are the three levels and every app the keys were read to reach, by
+// name with its bundle ID, for the chooser. Which of them a seat may name is
+// the document's ([accessVendor.Reach]), which [seataccess.ReadOptions] applies.
 func (s *accessSession) Options(_ context.Context, lane seataccess.Lane) (seataccess.Options, error) {
-	return seataccess.Options{Lane: lane, Levels: accessVendor{}.FixedLevels(lane)}, nil
+	out := seataccess.Options{Lane: lane, Levels: accessVendor{}.FixedLevels(lane)}
+	for _, a := range s.reach.Apps() {
+		out.Scope = append(out.Scope, a.ID)
+		if a.Name != "" {
+			if out.ScopeNames == nil {
+				out.ScopeNames = map[string]string{}
+			}
+			out.ScopeNames[a.ID] = a.Name
+		}
+		if a.BundleID != "" {
+			if out.ScopeDetails == nil {
+				out.ScopeDetails = map[string]string{}
+			}
+			out.ScopeDetails[a.ID] = a.BundleID
+		}
+	}
+	return out, nil
 }
 
 // Observe is each seat's setting in the document, which there is nothing

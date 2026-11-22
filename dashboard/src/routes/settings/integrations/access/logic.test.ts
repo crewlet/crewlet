@@ -588,6 +588,20 @@ describe("a scope entry's name", () => {
     ]);
   });
 
+  test("adds the vendor's second identifier to the quiet line, as an app's bundle ID", () => {
+    const apps: Lane = {
+      ...JIRA_LANE,
+      scope: ["111", "222", "333"],
+      scope_names: { "111": "Notes", "222": "Maps" },
+      scope_details: { "111": "com.example.notes", "333": "com.example.bare" },
+    };
+    expect(scopeChoices(apps, [])).toEqual([
+      { value: "111", label: "Notes", description: "111 · com.example.notes" },
+      { value: "222", label: "Maps", description: "222" },
+      { value: "333", label: "333", description: "com.example.bare" },
+    ]);
+  });
+
   test("keeps an entry the connection no longer reaches, by its identifier", () => {
     expect(scopeChoices(named, ["ENG", "GONE"]).at(-1)).toEqual({ value: "GONE", label: "GONE" });
   });

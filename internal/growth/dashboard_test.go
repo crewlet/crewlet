@@ -36,10 +36,12 @@ func TestTheDashboardReadsTheGrowthWire(t *testing.T) {
 	holdUnion(t, "GrowthAccountState", growth.AccountStates())
 
 	account := growth.Account{Kind: "google_ads", Connection: "main", ID: "1234567890", Name: "Nimbus",
-		Currency: "EUR", TimeZone: "Europe/Berlin", State: growth.AccountServing, Roles: []string{"standard"}}
+		Currency: "EUR", TimeZone: "Europe/Berlin", Detail: "com.example.nimbus", State: growth.AccountServing,
+		Roles: []string{"standard"}}
 	holdObject(t, "GrowthAccount", account)
 	holdObject(t, "GrowthConnection", growth.Connection{ID: "main", Name: "Nimbus", Identity: "reader@example.com",
-		State: "connected", RolesHeld: []string{"standard"}, Accounts: []growth.Account{account}})
+		State: "connected", RolesHeld: []string{"standard"}, Accounts: []growth.Account{account}, Open: true,
+		Unread: "Add a key that lists accounts"})
 	holdObject(t, "GrowthRoleOffer", growth.RoleOffer{ID: "standard", Name: "Standard", Note: "Changes campaigns.",
 		Classes: []growth.Class{growth.ClassRead}, Levels: []growth.Level{growth.LevelRead}})
 	change := growth.CardChange{Field: "amount_micros", Label: "Daily budget", Before: "1", After: "2", Money: true}

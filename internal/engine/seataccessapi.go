@@ -493,6 +493,7 @@ func (e *Engine) seatOffers(ctx context.Context, kind integration.Kind,
 	defer cancel()
 	open := seataccess.OpenInput{Config: company, Org: roster, Env: e.resolver()}
 	if registered && provisioned {
+		open.Reads = e.seatReads(openCtx, kind)
 		var err error
 		if session, err = vendor.Open(openCtx, open); err != nil {
 			session = nil
