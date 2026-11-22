@@ -28,6 +28,8 @@ The roles Google Analytics gives, least first: **Viewer** (sees settings and dat
 2. Add the company reader's email, shown on the form, to each property at **Viewer**: Google Analytics, Admin, Property access management, Add users. Crewlet reads the company's figures for boards and the atlas as this identity.
 3. Turn agents on from the Agents tab, each with its properties. Add each agent's email, shown on its row, to those properties at the role its level needs.
 
+The integration's Settings tab then lists each connection and the properties it reaches, with the Google Analytics logo under them, linked to Google Analytics, as [Google's developer branding policy](https://developers.google.com/analytics/terms/branding-policy) asks of an application that shows Google Analytics data.
+
 ## The agents' tools
 
 | Tool | Class | What it does |

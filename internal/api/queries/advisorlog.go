@@ -34,6 +34,8 @@ type AdvisorLog interface {
 	LatestRun(ctx context.Context, fresh statelog.Freshness) (advisordomain.RunRow, bool, error)
 	// LiveProgress is the deep run in flight and its progress lines.
 	LiveProgress(ctx context.Context, fresh statelog.Freshness) (string, []advisordomain.ProgressLine, bool, error)
+	// Checkpoint is the newest checkpoint a deep run wrote, and whether it wrote one.
+	Checkpoint(ctx context.Context, run string, fresh statelog.Freshness) (json.RawMessage, bool, error)
 	// RunProgress is every progress line one run wrote, oldest first.
 	RunProgress(ctx context.Context, run string, fresh statelog.Freshness) ([]advisordomain.ProgressLine, error)
 	PendingRequests(ctx context.Context, fresh statelog.Freshness) ([]advisordomain.RunRow, error)

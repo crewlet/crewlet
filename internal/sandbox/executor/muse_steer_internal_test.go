@@ -372,16 +372,15 @@ func TestARepositoryCannotDisplaceOrImpersonateTheMuseChannels(t *testing.T) {
 	}
 }
 
-// THE SCRIPT REMOVES A PLUGIN OF THE NOTES PLUGIN'S NAME BEFORE IT INSTALLS AND
-// APPROVES ITS OWN, and adds the servers after the approval, which rewrites
-// the settings: an earlier plugin of that name never runs as the run's, and
-// the servers keep `required` and their wait.
+// THE SCRIPT INSTALLS AND APPROVES ITS NOTES PLUGIN BEFORE IT ADDS THE
+// SERVERS, since the approval rewrites the settings: the servers keep
+// `required` and their wait. (An earlier plugin of that name is gone with
+// every installed plugin, which the clear removes: [Paths.MusePlugins].)
 //
-// Mutation: install before removing, or add the servers first.
+// Mutation: add the servers first.
 func TestTheMuseScriptWiresItsPluginBeforeItsServers(t *testing.T) {
 	script := museWiring(Paths{Home: "/h"})
-	order := []string{"muse plugins remove " + museNotesPlugin, "muse plugins install ",
-		"muse plugins approve " + museNotesPlugin, "muse mcp add-json "}
+	order := []string{"muse plugins install ", "muse plugins approve " + museNotesPlugin, "muse mcp add-json "}
 	last := -1
 	for _, step := range order {
 		at := strings.Index(script, step)
