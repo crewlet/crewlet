@@ -3990,6 +3990,16 @@ kimi-code:
   credential_paths:
     - ".kimi-code/credentials/kimi-code.json"
     - ".kimi-code/config.toml"
+  # THE LOGIN IN config.toml IS SOME OF ITS TABLES, not the file: `kimi login`
+  # writes the provider with its OAuth reference, the models, the default
+  # model, the thinking default and the search and fetch services (2.7.2's
+  # applyManagedKimiCodeConfig), and the same file is where the harness reads
+  # hooks, which it runs, permission rules and tool settings. So a seat home
+  # is seeded with these tables of the shared copy alone, and a run in a box
+  # has its copy rewritten to them before it starts
+  # ([harnessprofile.Profile.KeepLoginTOML]).
+  login_keys:
+    config.toml: [default_model, default_provider, models, providers, services, thinking]
   # Sessions, their index, the logs, the project registry and the telemetry
   # queue: what a call writes about itself.
   #
@@ -4015,6 +4025,14 @@ kimi-code:
   # What else persists carries nothing of a call: `device_id`, one per home;
   # `cache/query-store`, made with empty shards; `locks`, its lock files;
   # `oauth/<key>`, the lock a token refresh takes.
+  #
+  # And what the harness hands every call from the home as the user's own,
+  # read with this profile's flags too (measured on 2.7.2): the skills under
+  # `skills` and `~/.agents/skills`, the personal AGENTS.md in the home and
+  # under `~/.agents`, the installed plugins (their record is seeded empty
+  # again after the prune, below), and the workspaces a trust was saved for.
+  # Nothing the engine writes; pruned so a call is told only what its seeds,
+  # its agent file and its prompt say.
   volatile_paths:
     - ".kimi-code/sessions"
     - ".kimi-code/session_index.jsonl"
@@ -4022,6 +4040,13 @@ kimi-code:
     - ".kimi-code/projects.json"
     - ".kimi-code/.projects-write-lock"
     - ".kimi-code/telemetry"
+    - ".kimi-code/skills"
+    - ".kimi-code/AGENTS.md"
+    - ".kimi-code/plugins"
+    - ".kimi-code/workspace-trust"
+    - ".agents/skills"
+    - ".agents/AGENTS.md"
+    - ".agents/agents.md"
   host_credential_paths:
     - ".kimi-code/credentials/kimi-code.json"
     - ".kimi-code/config.toml"
