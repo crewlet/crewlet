@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -911,7 +912,7 @@ func headingAt(text string, from int) (at, end int, kind EntryKind, ok bool) {
 		if n := strings.IndexByte(text[at:], '\n'); n >= 0 {
 			end = at + n
 		}
-		if kind, ok = headingKind(text[at:end]); ok && headingFraming.MatchString(text[start:at]) {
+		if kind, ok = headingKind(text[at:end]); ok && headingFraming().MatchString(text[start:at]) {
 			return at, end, kind, true
 		}
 		from = end + 1
@@ -995,8 +996,10 @@ func headedIn(text string) iter.Seq2[EntryKind, string] {
 // headingFraming is all a harness puts before a heading it hands its model:
 // a system reminder's opening tag, and Claude Code's `<event> hook additional
 // context:` ([claudeHookContext]).
-var headingFraming = regexp.MustCompile(`^\s*(?:<system-reminder>\s*)?(?:\w+` +
-	regexp.QuoteMeta(claudeHookContext) + `\s*)?$`)
+var headingFraming = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^\s*(?:<system-reminder>\s*)?(?:\w+` +
+		regexp.QuoteMeta(claudeHookContext) + `\s*)?$`)
+})
 
 // opensWithHeading reports text that is a note, a wake or a late call — its first
 // heading has nothing before it but what a harness frames one with — as
@@ -1004,7 +1007,7 @@ var headingFraming = regexp.MustCompile(`^\s*(?:<system-reminder>\s*)?(?:\w+` +
 // with the notes that arrived before it.
 func opensWithHeading(text string) bool {
 	at, _, _, ok := headingAt(text, 0)
-	return ok && headingFraming.MatchString(text[:at])
+	return ok && headingFraming().MatchString(text[:at])
 }
 
 // ---- what the readers share -------------------------------------------- //

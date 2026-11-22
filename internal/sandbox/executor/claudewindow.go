@@ -184,8 +184,10 @@ func onAnthropicAlone(window int) map[claudeRoute]int {
 // claudeModelDecorations are what a platform adds around a model's canonical id:
 // a Bedrock region and vendor prefix, a Bedrock version suffix, and a dated
 // snapshot written with `-` (Claude API, Bedrock) or `@` (Vertex AI).
-var claudeModelDecorations = regexp.MustCompile(
-	`^(?:(?:[a-z]{2,6}\.)?anthropic\.)?(.+?)(?:[-@]\d{8})?(?:-v\d+(?::\d+)?)?$`)
+var claudeModelDecorations = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(
+		`^(?:(?:[a-z]{2,6}\.)?anthropic\.)?(.+?)(?:[-@]\d{8})?(?:-v\d+(?::\d+)?)?$`)
+})
 
 // The two rates Claude Code estimates text at, in UTF-16 characters a token
 // ([claudeTextRateOf]).
@@ -304,7 +306,7 @@ func claudeCodeWindowOn(model string, route claudeRoute) sandbox.ExecutorWindow 
 	if m == "" {
 		m = "default"
 	}
-	if parts := claudeModelDecorations.FindStringSubmatch(m); parts != nil {
+	if parts := claudeModelDecorations().FindStringSubmatch(m); parts != nil {
 		m = parts[1]
 	}
 	tokens, ok := claudeWindows[m]
