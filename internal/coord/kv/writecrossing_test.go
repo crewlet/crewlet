@@ -403,12 +403,11 @@ func TestARunsValueIsGivenItsCrossingOnlyAcrossALink(t *testing.T) {
 // WATCH THE RAW CROSSING OF THE LARGEST VALUE UNDER ITS FILTER.
 //
 // A run's change starts with the leader's read, its reply 8 MiB at the bound:
-// four minutes at the slowest link pace, and none of its handling, which
-// would push a re-ask past a 5 s reason. A body's read is given its arrival;
-// the pointer and the claims keep the term. A pass delivering a run's value
-// raw is quiet 185 s across a link, 5 s in process. Every class an opened
-// bucket declares is held to what one key holds, and read at the term only if
-// it crosses inside it, save [undeclared] until #1814 declares every bucket's.
+// four minutes at the slowest link pace, and none of its handling, which would
+// push a re-ask past a 5 s reason. A body's read gets its arrival; the pointer
+// and the claims keep the term. A pass over a run's value is quiet 185 s across
+// a link, 5 s in process. Every opened bucket's class is held to what one key
+// holds, read at the term only if it crosses inside it, save [undeclared].
 //
 // Mutation: let leaderFor ignore the class, read bodies at the term, declare a
 // class past coord.MaxValueBytes, or let most drop rest, and a row goes red.
