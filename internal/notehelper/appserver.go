@@ -426,10 +426,12 @@ func (a *appServer) completed(params json.RawMessage) {
 func skillOf(dir, path string) (string, bool) {
 	rel, err := filepath.Rel(filepath.Clean(dir), path)
 	if err != nil || !filepath.IsLocal(rel) {
+		// Rel answers a clean path, so a local one has no "", "." or ".."
+		// element: the name below is one plain element, checked nowhere else.
 		return "", false
 	}
 	name, file, ok := strings.Cut(filepath.ToSlash(rel), "/")
-	if !ok || file != "SKILL.md" || name == "" || name == "." || name == ".." {
+	if !ok || file != "SKILL.md" {
 		return "", false
 	}
 	return name, true
