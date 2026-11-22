@@ -2,6 +2,8 @@ package executor
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -502,16 +504,30 @@ func writeMuseJSON(ctx context.Context, box sandbox.Sandbox, file string, v any)
 	return box.WriteFile(ctx, file, blob)
 }
 
-// writeMuseServers writes each of servers as dir/<name>.json, which the run's
-// script adds to its settings ([museWiring]): refused for a name that is not
-// a file's, which `muse mcp add-json` would be handed whole.
-func writeMuseServers(ctx context.Context, box sandbox.Sandbox, dir string, servers map[string]sandbox.MCPServer) error {
+// museNonce is a run's own suffix to its servers' names: twelve hex digits
+// from the system's random source, new every run, so the run's servers are
+// under names no file of the repository's can declare beforehand (a trusted
+// run loads the repository's `.mcp.json` beside them). A variable so a case
+// can name the files it reads.
+var museNonce = func() string {
+	var b [6]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
+}
+
+// writeMuseServers writes each of servers as dir/<name>-<nonce>.json, which
+// the run's script adds to its settings under that name ([museWiring]), the
+// model offered its tools as `mcp__<name>_<nonce>__<tool>`: refused for a
+// name that is not a file's, which `muse mcp add-json` would be handed whole.
+func writeMuseServers(ctx context.Context, box sandbox.Sandbox, dir string, servers map[string]sandbox.MCPServer,
+	nonce string) error {
+
 	for name, s := range servers {
 		if !museServerName(name) {
 			return fmt.Errorf("executor: the MCP server %q is not named as Muse Code reads a server's name: "+
-				"letters, digits, '-' and '_'", name)
+				"letters, digits, '-' and '_', at most 50", name)
 		}
-		if err := writeMuseJSON(ctx, box, dir+"/"+name+".json", museMCP(s)); err != nil {
+		if err := writeMuseJSON(ctx, box, dir+"/"+name+"-"+nonce+".json", museMCP(s)); err != nil {
 			return fmt.Errorf("executor: writing the MCP server %q for Muse Code: %w", name, err)
 		}
 	}
@@ -521,7 +537,7 @@ func writeMuseServers(ctx context.Context, box sandbox.Sandbox, dir string, serv
 // museServerName reports whether name is a server's name a file and a shell
 // word can carry as it is.
 func museServerName(name string) bool {
-	if name == "" || len(name) > 64 {
+	if name == "" || len(name) > 50 {
 		return false
 	}
 	for _, r := range name {
@@ -557,7 +573,8 @@ func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 	if err := writeMuseJSON(ctx, box, paths.MuseSettings(), settings); err != nil {
 		return "", fmt.Errorf("executor: writing Muse Code's settings: %w", err)
 	}
-	if err := writeMuseServers(ctx, box, paths.MuseServers(), req.MCPServers); err != nil {
+	nonce := museNonce()
+	if err := writeMuseServers(ctx, box, paths.MuseServers(), req.MCPServers, nonce); err != nil {
 		return "", err
 	}
 	if err := writeMuseSkills(ctx, box, req.Skills, paths); err != nil {
@@ -570,7 +587,7 @@ func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 		}
 	}
 	if f := req.FreshWiring; f != nil {
-		if err := writeMuseServers(ctx, box, paths.MuseServersFresh(), f.MCPServers); err != nil {
+		if err := writeMuseServers(ctx, box, paths.MuseServersFresh(), f.MCPServers, nonce); err != nil {
 			return "", err
 		}
 		if notes || loads {

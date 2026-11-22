@@ -250,6 +250,7 @@ func TestAMuseRunIsStartedOnItsPosture(t *testing.T) {
 // Mutation: drop `required`, round the wait down, or write the servers into
 // the settings, whose approval drops both.
 func TestMuseWriteConfigWritesItsSettingsAndServers(t *testing.T) {
+	fixedMuseNonce(t)
 	box := sandbox.NewFakeSandbox("b")
 	p := PathsFor(box)
 	req := sandbox.RunRequest{Brief: "fix it", System: "SEAT", MCPServers: map[string]sandbox.MCPServer{
@@ -273,11 +274,11 @@ func TestMuseWriteConfigWritesItsSettingsAndServers(t *testing.T) {
 		"telemetry": map[string]any{"enabled": false}, "run": map[string]any{"system_prompt_append": "SEAT"}}) {
 		t.Errorf("settings = %v", got)
 	}
-	if got := read(p.MuseServers() + "/crewlet.json"); !jsonEqual(got, map[string]any{"url": "http://e/mcp",
+	if got := read(p.MuseServers() + "/crewlet-n0nce.json"); !jsonEqual(got, map[string]any{"url": "http://e/mcp",
 		"headers": map[string]any{"Authorization": "Bearer t"}, "required": true, "tool_timeout_sec": 361.0}) {
 		t.Errorf("crewlet = %v", got)
 	}
-	if got := read(p.MuseServers() + "/local.json"); !jsonEqual(got, map[string]any{"type": "stdio",
+	if got := read(p.MuseServers() + "/local-n0nce.json"); !jsonEqual(got, map[string]any{"type": "stdio",
 		"command": "srv", "args": []any{"-x"}, "env": map[string]any{"K": "v"}, "required": true}) {
 		t.Errorf("local = %v", got)
 	}
@@ -326,6 +327,7 @@ func TestAMuseRunPastItsSystemLimitIsRefused(t *testing.T) {
 //
 // Mutation: write the fresh servers from the continued wiring.
 func TestAContinuingMuseRunWritesTheFreshSessionsWiring(t *testing.T) {
+	fixedMuseNonce(t)
 	box := sandbox.NewFakeSandbox("b")
 	p := PathsFor(box)
 	server := func(token string) map[string]sandbox.MCPServer {
@@ -337,8 +339,8 @@ func TestAContinuingMuseRunWritesTheFreshSessionsWiring(t *testing.T) {
 	if _, err := (Muse{}).WriteConfig(t.Context(), box, req, p); err != nil {
 		t.Fatal(err)
 	}
-	fresh, _ := box.ReadFile(t.Context(), p.MuseServersFresh()+"/crewlet.json")
-	continued, _ := box.ReadFile(t.Context(), p.MuseServers()+"/crewlet.json")
+	fresh, _ := box.ReadFile(t.Context(), p.MuseServersFresh()+"/crewlet-n0nce.json")
+	continued, _ := box.ReadFile(t.Context(), p.MuseServers()+"/crewlet-n0nce.json")
 	if !strings.Contains(string(fresh), "Bearer fresh") || !strings.Contains(string(continued), "Bearer continued") {
 		t.Fatalf("servers %s, fresh %s", continued, fresh)
 	}
@@ -579,5 +581,32 @@ func TestAMuseSessionIsJudgedOnTheSafeSide(t *testing.T) {
 	got := SessionTraits(MuseName)
 	if got.FirstRequest != sandbox.FirstRequestBox || got.CallKeying != sandbox.CallKeyingNone || got.Charge != 1 {
 		t.Fatalf("traits = %+v", got)
+	}
+}
+
+// fixedMuseNonce names every server of the case's runs with the suffix
+// "n0nce", for the case to read the files back by name. Never in a parallel
+// case: the suffix is the package's.
+func fixedMuseNonce(t *testing.T) {
+	t.Helper()
+	was := museNonce
+	museNonce = func() string { return "n0nce" }
+	t.Cleanup(func() { museNonce = was })
+}
+
+// EVERY RUN NAMES ITS SERVERS AFRESH, twelve hex digits no repository file
+// can know beforehand: a trusted run loads the repository's `.mcp.json`
+// beside the run's own servers, so the run's bridge is never under a name a
+// checkout can hold.
+//
+// Mutation: name the servers as handed, or reuse one suffix.
+func TestEveryMuseRunNamesItsServersAfresh(t *testing.T) {
+	seen := map[string]bool{}
+	for range 64 {
+		n := museNonce()
+		if len(n) != 12 || strings.Trim(n, "0123456789abcdef") != "" || seen[n] {
+			t.Fatalf("suffix %q: want twelve hex digits, new each run", n)
+		}
+		seen[n] = true
 	}
 }
