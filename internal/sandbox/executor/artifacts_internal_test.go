@@ -59,8 +59,8 @@ func TestAReusedBoxKeepsNoHarnesssFilesOrDirectories(t *testing.T) {
 // Named through the old (files, dirs) method, none satisfied the contract and
 // the clear left their files behind.
 //
-// Mutation: drop any of their artifactFiles or artifactDirs, or name a
-// directory among its files, and its row goes red.
+// Mutation: drop any of their artifactFiles or artifactDirs, and its row goes
+// red. A directory among its files is TestARunnersArtifactFilesAndDirectoriesAreDisjoint.
 func TestAReusedBoxKeepsNoneOfASplitRunnersArtifacts(t *testing.T) {
 	t.Parallel()
 	box := sandbox.NewFakeSandbox("box-1")

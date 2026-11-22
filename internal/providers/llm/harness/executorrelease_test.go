@@ -14,8 +14,8 @@ import (
 // no release meets no floor, since the script refuses it.
 //
 // Mutation: compare the numbers as text, read the last run of digits and dots,
-// accept three parts that are not all digits, or take an unread version for a
-// current one, and a case goes red.
+// or take an unread version for a current one, and a case goes red. Three
+// parts not all digits is harnessprofile's TestAReleaseIsABareMajorMinorPatch.
 func TestAReleaseIsHeldToAFloorByItsNumbers(t *testing.T) {
 	t.Parallel()
 	for version, want := range map[string]bool{
