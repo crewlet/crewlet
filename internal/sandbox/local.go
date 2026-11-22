@@ -253,10 +253,8 @@ const (
 // refresh token the vendor had already rotated away, logs every seat out.
 //
 // AN ABSENT FILE IS RECORDED TOO (a file added since the seed is a newer login
-// as much as one changed), RUN KEYS ([Spec.CredentialRunKeys]) are written
-// back as the shared login holds them: a key minted in the run stays in the box,
-// and IDENTITY KEYS ([Spec.CredentialIdentityKeys]) must name the shared
-// login's account: a copy naming another is no refresh of this login.
+// as much as one changed), and so are the file's RUN KEYS and IDENTITY KEYS
+// ([Spec.CredentialRunKeys], [Spec.CredentialIdentityKeys]).
 type seededCredential struct {
 	Source       string   `json:"source"`
 	Seed         string   `json:"seed"`

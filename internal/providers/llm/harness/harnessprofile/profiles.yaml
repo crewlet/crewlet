@@ -436,6 +436,9 @@ claude-code:
     - ".claude/shell-snapshots"
     - ".claude/telemetry"
   host_credential_paths: [".claude/.credentials.json"]
+  # NO identity_keys: .credentials.json names no account, only claudeAiOauth's
+  # tokens, expiry, scopes and plan (measured on 2.1.330); the account is in
+  # .claude.json's oauthAccount, which is pruned, not a login file.
   token_env: "CLAUDE_CODE_OAUTH_TOKEN"
   api_key_env: "ANTHROPIC_API_KEY"
   # How each credential begins: the hint a stored one shows, and what tells
@@ -1068,7 +1071,7 @@ codex:
   host_credential_paths: [".codex/auth.json"]
   # The account a login is: a ChatGPT sign-in's at tokens.account_id, a key
   # stored by `codex login --with-api-key` at OPENAI_API_KEY. A refresh keeps
-  # both, so a box's copy naming others is written back over no login.
+  # both, so a copy naming others is carried back over no login.
   identity_keys:
     auth.json: ["tokens.account_id", "OPENAI_API_KEY"]
   # CODEX_API_KEY, not OPENAI_API_KEY: `codex exec` signs its requests with the
@@ -1401,6 +1404,12 @@ gemini-cli:
   # 0.70.0). Pruned when no call of the seat is in flight.
   volatile_paths: [".gemini/tmp", ".gemini/history", ".gemini/projects.json"]
   host_credential_paths: [".gemini/oauth_creds.json", ".gemini/google_accounts.json"]
+  # The account a login is: google_accounts.json's `active`, the email Gemini
+  # CLI writes there on signing in (`{"active": ..., "old": [...]}`, read from
+  # the 0.70.0 bundle's UserAccountManager), which a refresh leaves alone.
+  # oauth_creds.json holds google-auth's tokens and expiry, and names none.
+  identity_keys:
+    google_accounts.json: ["active"]
   api_key_env: "GEMINI_API_KEY"
   # What signs Gemini CLI in from an entry's env under auth.mode env: the
   # switch that sends it to Vertex AI, whose own credentials (GOOGLE_API_KEY,
@@ -1736,6 +1745,8 @@ qwen-code:
   key_args: ["--auth-type", "openai"]
   subscription_args: ["--auth-type", "qwen-subscription"]
   credential_paths: [".qwen/subscription_credentials.json"]
+  # NO identity_keys: the file names no account, only its client, endpoint,
+  # model list and tokens (the 0.28.4 schema, measured against stubs).
   api_key_env: "OPENAI_API_KEY"
   # A name other vendors' keys go in too, sent to whatever OPENAI_BASE_URL
   # names: an entry names its key, and nothing falls back to this variable.
@@ -2165,6 +2176,8 @@ opencode:
   credential_store:
     export_args: ["auth", "export", "--standalone"]
     import_args: ["auth", "import", "--standalone"]
+  # NO identity_keys: the login is the store's document, a JSON array of
+  # credentials, which no key path into an object names.
   # NO api_key_env, and env_sign_in instead: OpenCode keys each provider by
   # that provider's own variable — its providers page (opencode.ai/docs/
   # providers) documents NVIDIA_API_KEY, AWS_BEARER_TOKEN_BEDROCK,
@@ -2342,6 +2355,11 @@ cursor-agent:
   # call the seat makes.
   volatile_paths: [".cursor/chats", ".cursor/logs", ".cursor/sessions", ".cursor/projects"]
   host_credential_paths: [".cursor/cli-config.json", ".cursor/auth.json"]
+  # The account a login is: cli-config.json's authInfo.userId, written from
+  # the vendor's GetMe on every start (measured against stubs on
+  # 2026.11.22-e9042b2). auth.json holds the tokens alone, and names none.
+  identity_keys:
+    cli-config.json: ["authInfo.userId"]
   platforms:
     linux:
       credential_paths: [".cursor/cli-config.json", ".config/cursor/auth.json"]
@@ -2747,6 +2765,13 @@ copilot:
   # profile's decision — COPILOT_GITHUB_TOKEN below is the way to give a seat
   # a GitHub token.
   host_credential_paths: [".copilot/config.json"]
+  # The account a login is: lastLoggedInUser and loggedInUsers, the host and
+  # login it signed in as. The first use of a login adds its token under
+  # authTokens and keeps both, and there is no refresh (measured on 1.0.114),
+  # so a copy naming another user is no refresh. The token maps are keyed by
+  # the same user, under keys no key path names.
+  identity_keys:
+    config.json: ["lastLoggedInUser", "loggedInUsers"]
   # Copilot authenticates with a GitHub token, read from COPILOT_GITHUB_TOKEN,
   # then GH_TOKEN, then GITHUB_TOKEN, ALL THREE ABOVE ITS OWN LOGIN. Measured on
   # 1.0.114 (--log-level debug): its sign-in tries Hmac, ApiKey and
@@ -3081,6 +3106,13 @@ grok:
   # log that grows by about 28 KB a call.
   volatile_paths: [".grok/sessions", ".grok/logs"]
   host_credential_paths: [".grok/auth.json"]
+  # The account a login is: each entry's user_id, the entries keyed
+  # `<issuer>::<client_id>` (so `*`: the key holds dots). A refresh rewrote
+  # the entry's tokens and expiry and left its user_id (measured on 1.0.92
+  # against stubs), so a copy naming another user, or another entry, is no
+  # refresh.
+  identity_keys:
+    auth.json: ["*.user_id"]
   # THE HARNESS'S OWN WORD: signed out, it says "set the XAI_API_KEY environment
   # variable". GROK_API_KEY is the community npm build's variable and this
   # is not that program.
@@ -3448,6 +3480,9 @@ muse-code:
     - ".config/muse/AGENTS.md"
     - ".agents/skills"
   host_credential_paths: [".config/muse/auth.json"]
+  # NO identity_keys: auth.json names no account, only OAuth tokens, their
+  # expiry and origin, and the key and base URL each run mints (run_keys;
+  # measured on 1.4.25 against stubs).
   # A Meta Model API key, so it is the METERED credential: reached through
   # auth.mode api-key or inherit-env, never forwarded silently. It takes
   # priority over every stored credential inside the harness itself, which is
@@ -3965,6 +4000,9 @@ kimi-code:
   host_credential_paths:
     - ".kimi-code/credentials/kimi-code.json"
     - ".kimi-code/config.toml"
+  # NO identity_keys: kimi-code.json holds OAuth tokens, scope and expiry
+  # alone (measured on 2.7.2), and config.toml is no JSON and names the
+  # provider, not an account.
   # A real one-shot subcommand, not a slash command: `kimi login` runs the
   # RFC 8628 device-code flow, prints the verification URL and user code to
   # stderr, polls, and exits 0 on success. Its one flag is `--region`
@@ -4351,6 +4389,9 @@ hermes:
     - ".hermes/.env"
     - ".hermes/auth.json"
     - ".hermes/shared/nous_auth.json"
+  # NO identity_keys: auth.json's Nous login and pool, and its shared copy,
+  # hold tokens, a client id, portal URLs and a minted agent key, but no
+  # account (measured on 0.23.3 against stubs); .env is no JSON.
   # A GATEWAY PER HOME RUNS EVERY `-z` TURN (hermes_cli/oneshot.py: "The run
   # itself goes through the gateway"). The first call into a home starts
   # `hermes gateway run --idle-exit` in a session of its own, with that call's
@@ -4714,6 +4755,11 @@ pi:
     - ".pi/agent/npm"
     - ".pi/agent/git"
   host_credential_paths: [".pi/agent/auth.json"]
+  # The account a login is, where a provider's entry names one: a ChatGPT
+  # sign-in's openai-codex.accountId (measured on 1.6.0 against stubs). The
+  # Anthropic and Copilot entries hold tokens and expiry alone.
+  identity_keys:
+    auth.json: ["openai-codex.accountId"]
   # THE TUI ITSELF, because `/login` is a SLASH COMMAND rather than a
   # subcommand — this harness has no headless login of any kind. So the broker
   # starts the interactive session in the credential home and the operator

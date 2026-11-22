@@ -55,30 +55,77 @@ func KeepLoginKeys(home, shared []byte, keys []string) []byte {
 
 // SameLoginIdentity reports whether home and shared, two copies of one
 // credential file, name one account at each of keys ([Profile.IdentityKeys]):
-// each key's value alike in both, or absent from both. Either copy no JSON
-// object names no account it can be held to, so it is the same only where
-// keys names none.
+// each key's value alike in both, or absent from both. A `*` part stands for
+// every key of the object there, so `*.user_id` holds each entry's user_id and
+// the set of entries alike. Each copy is read as JSON with every `//` line set
+// aside ([withoutCommentLines]); either copy no JSON object names no account it
+// can be held to, so it is the same only where keys names none.
 func SameLoginIdentity(home, shared []byte, keys []string) bool {
 	if len(keys) == 0 {
 		return true
 	}
-	h, ok := jsonObject(home)
+	h, ok := jsonObject(withoutCommentLines(home))
 	if !ok {
 		return false
 	}
-	s, ok := jsonObject(shared)
+	s, ok := jsonObject(withoutCommentLines(shared))
 	if !ok {
 		return false
 	}
 	for _, key := range keys {
 		path := strings.Split(key, ".")
-		hv, inHome := lookupKey(h, path)
-		sv, inShared := lookupKey(s, path)
+		hv, inHome := identityAt(h, path)
+		sv, inShared := identityAt(s, path)
 		if inHome != inShared || !reflect.DeepEqual(hv, sv) {
 			return false
 		}
 	}
 	return true
+}
+
+// identityAt is the value at path in doc, a `*` part standing for every key of
+// the object there: the values beneath it by key, a key holding none of the
+// rest of path as [absentIdentity], so an entry losing it is told apart.
+func identityAt(doc any, path []string) (any, bool) {
+	if len(path) == 0 {
+		return doc, true
+	}
+	object, ok := doc.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	if path[0] != "*" {
+		next, held := object[path[0]]
+		if !held {
+			return nil, false
+		}
+		return identityAt(next, path[1:])
+	}
+	each := make(map[string]any, len(object))
+	for key, next := range object {
+		if v, held := identityAt(next, path[1:]); held {
+			each[key] = v
+		} else {
+			each[key] = absentIdentity{}
+		}
+	}
+	return each, true
+}
+
+// absentIdentity stands, under a `*` part, for an entry holding no value at
+// the rest of the path ([identityAt]).
+type absentIdentity struct{}
+
+// withoutCommentLines is content with every line opening with `//` set aside:
+// Copilot CLI's plaintext login file opens with two.
+func withoutCommentLines(content []byte) []byte {
+	var out []byte
+	for line := range bytes.Lines(content) {
+		if !bytes.HasPrefix(bytes.TrimSpace(line), []byte("//")) {
+			out = append(out, line...)
+		}
+	}
+	return out
 }
 
 // jsonObject is content read as a JSON object, its numbers as written.

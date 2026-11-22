@@ -1460,7 +1460,7 @@ func (w *Workspace) carryChanged(
 //     it is ANOTHER SIGN-IN'S and dropped, told by the OPERATOR EPOCH
 //     ([Workspace.onlyRefreshedSince]);
 //   - a REFRESH is a COMPARE-AND-SWAP OF THE WHOLE LOGIN: only while the shared
-//     login is EXACTLY the seeded one, of seeded files only.
+//     login is EXACTLY the seeded one, of seeded files only, of its account.
 //
 // It answers the login then shared and whether to write it.
 func (w *Workspace) carry(
@@ -1532,6 +1532,27 @@ func (w *Workspace) carry(
 			w.superseded(ctx, who, w.sharedPath(name), how)
 		}
 		return nil, false, nil
+	}
+	if gen.Mode == syncRefresh {
+		// A COPY NAMING ANOTHER ACCOUNT IS NO REFRESH of this login
+		// ([harnessprofile.Profile.IdentityKeys]): the whole login stays as it
+		// is. current is the seeded login here, so the copy is held to it; a
+		// file the home was not seeded with is never written, so never asked.
+		var other []string
+		for _, name := range slices.Sorted(maps.Keys(changed)) {
+			if _, seeded := gen.Seeded[name]; !seeded {
+				continue
+			}
+			if !harnessprofile.SameLoginIdentity(changed[name], current[name], w.profile.IdentityKeys[name]) {
+				other = append(other, name)
+			}
+		}
+		for _, name := range other {
+			w.superseded(ctx, who, w.sharedPath(name), "other_account")
+		}
+		if len(other) > 0 {
+			return nil, false, nil
+		}
 	}
 	return next, true, nil
 }
