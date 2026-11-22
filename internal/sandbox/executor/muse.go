@@ -240,7 +240,7 @@ func museSessionGate(session Session, paths Paths, rewired bool) string {
 	line(`  elif ! { %s; }; then w='its archive could not be restored'`, restore)
 	// Continued only once its digest is recorded and read back, for
 	// [claudeSessionGate]'s reason.
-	line(`  elif ! { %s; }; then w=%s`, recordDigest(paths, "s", "d"), q(restoreDigestUnrecorded))
+	line(`  elif ! { %s; }; then w=%s`, recordDigest(paths, "s"), q(restoreDigestUnrecorded))
 	line(`  fi`)
 	line(`  rm -rf %s`, q(staged))
 	line(`fi`)
