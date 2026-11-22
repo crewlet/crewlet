@@ -85,7 +85,7 @@ func chatSessionGate(session Session, paths Paths, g chatGate) string {
 	// ONLY THE ONE RELEASE CONTINUES, its own copy as much as a carried one,
 	// read bare as the engine reads it ([bareReleaseShell], [exactInPlace]): a
 	// newer release runs on sessions of its own.
-	line(`%sif [ "$rv" != %s ]; then w=%s"${rv:-a release it could not read}"`, bareReleaseShell("rv"), q(g.release),
+	line(`%sif [ "$rv" != %s ]; then w=%s"${rv:-${v:-a release it could not read}}"`, bareReleaseShell("rv"), q(g.release),
 		q("this build continues "+g.harness+" sessions only on "+g.release+", and this box runs "))
 	line(`elif [ -z "$h" ]; then`)
 	line(`  if [ ! -s %s ]; then w='it is not in this box, and no archive of it was carried here'`, carried)
@@ -211,6 +211,9 @@ func (b *transcriptBuilder) chatArchive(ctx context.Context, archive io.Reader, 
 // ([releaseGate]); a box or a writer that named no release this build reads
 // continues nothing.
 func exactCarry(harness, supported, box, writer string) (bool, string) {
+	if box == "" {
+		return false, boxNamedNoRelease(harness)
+	}
 	if ok, why := exactInPlace(harness, supported, box); !ok {
 		return false, why
 	}
@@ -238,25 +241,28 @@ func exactInPlace(harness, supported, box string) (bool, string) {
 	case supported:
 		return true, ""
 	case "":
-		return false, boxNamedNoRelease(harness)
+		return false, fmt.Sprintf("this box's %s named no release this build reads, so it continues no "+
+			"session, its own copy nor one carried from another box", harness)
 	}
 	return false, fmt.Sprintf("this build continues %s sessions only on %s, and this box runs %s",
 		harness, supported, box)
 }
 
-// releaseRead is the shell reading into v the box's release as command prints
-// it: its first line, a carriage return ending it cut, so a release printed
-// on a CRLF line reads as itself, never as a suffixed one ([releaseGate]).
+// releaseRead is the shell reading into v what command prints, whole, as one
+// line: line ends and tabs as spaces, its ends trimmed, as the engine reads
+// the same output ([releaseOf]), so a release printed on a CRLF line reads as
+// itself and the gate, the session's gate and the engine judge one word.
 func releaseRead(command string) string {
-	return `v=$(` + command + ` < /dev/null 2> /dev/null | head -n 1 | tr -d '\r')`
+	return `v=$(` + command + ` < /dev/null 2> /dev/null | tr '\r\n\t' '   '); v=${v#"${v%%[! ]*}"}; v=${v%"${v##*[! ]}"}`
 }
 
 // releaseGate is the shell a run's script starts with, once it has read the
 // box's release as v: a release older than supported ends the run before
 // anything else happens, saying so on the error stream, because this build
-// read none of an older release's output. One whose first non-digit, non-dot
-// character on cut off leaves no MAJOR.MINOR.PATCH is refused too: it cannot
-// be shown not to be older, and refusing fails closed. What follows the
+// read none of an older release's output. It judges the word the engine reads
+// ([bareReleaseShell]: the first that starts with a digit, a leading v and one
+// closing period off); one whose digits and dots leave no MAJOR.MINOR.PATCH
+// is refused too, as it cannot be shown not to be older. What follows the
 // numbers is a pre-release's suffix, which comes before its release: so a
 // suffixed supported release is older and refused, and a suffixed later one
 // is newer and runs, on sessions of its own like every newer one ([exactCarry]).
@@ -265,11 +271,12 @@ func releaseGate(harness, supported string) string {
 	say := shellword.Quote("crewlet: this box runs "+harness+" ") + `"${v:-that prints no release}"` +
 		shellword.Quote(", and this build runs "+harness+" "+supported+" or newer (a release it cannot "+
 			"read counts as older): install "+harness+" "+supported)
-	return `r=${v%%[!0-9.]*} ro=1; rM=${r%%.*} rr=${r#*.}; rn=${rr%%.*} rp=${rr#*.}` + "\n" +
+	return `tk=; set -f; for rw in $v; do rw=${rw#v}; rw=${rw%.}; case "$rw" in [0-9]*) tk=$rw; break;; esac; done; set +f` + "\n" +
+		`r=${tk%%[!0-9.]*} ro=1; rM=${r%%.*} rr=${r#*.}; rn=${rr%%.*} rp=${rr#*.}` + "\n" +
 		`case "$r" in *.*.*) ;; *) ro= ;; esac` + "\n" +
 		`for x in "$rM" "$rn" "$rp"; do case "$x" in ''|*[!0-9]*) ro= ;; esac; done` + "\n" +
 		fmt.Sprintf(`if [ -z "$ro" ] || [ "$rM" -lt %d ] || { [ "$rM" -eq %d ] && { [ "$rn" -lt %d ] || `+
-			`{ [ "$rn" -eq %d ] && { [ "$rp" -lt %d ] || { [ "$rp" -eq %d ] && [ "$v" != "$r" ]; }; }; }; }; }; `+
+			`{ [ "$rn" -eq %d ] && { [ "$rp" -lt %d ] || { [ "$rp" -eq %d ] && [ "$tk" != "$r" ]; }; }; }; }; }; `+
 			`then printf '%%s\n' %s >&2; exit 1; fi`,
 			n[0], n[0], n[1], n[1], n[2], n[2], say)
 }

@@ -103,17 +103,17 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 		fresh = geminiFreshCopies(paths, geminiHooked(req))
 	}
 	lines := []string{
+		// THE TELEMETRY'S NAMES GO before Gemini CLI starts at all, its release
+		// read included: the run turns no Gemini CLI telemetry on, so it starts
+		// without them ([otelExportUnset]). The sign-in's stay
+		// ([sandbox.RunRequest.SignInEnv] is not applied): Gemini CLI signs in by
+		// them, and offers no way to withhold a name from its tools alone but its
+		// redaction, which would also take the seat's own token-named variables.
+		otelExportUnset,
 		// THE RELEASE, read once for the gate, the record and the session's,
 		// before anything else: an older one never runs ([releaseGate]).
 		releaseRead(GeminiCLI{}.VersionCommand()),
 		releaseGate("Gemini CLI", geminiRelease),
-		// THE TELEMETRY'S NAMES GO before Gemini CLI starts: the run turns no
-		// Gemini CLI telemetry on, so it starts without them ([otelExportUnset]).
-		// The sign-in's stay ([sandbox.RunRequest.SignInEnv] is not applied):
-		// Gemini CLI signs in by them, and offers no way to withhold a name from
-		// its tools alone but its redaction, which would also take the seat's own
-		// token-named variables from them.
-		otelExportUnset,
 		"node " + q(paths.GeminiHelper()) + " pin " + q(paths.GeminiProjects()) + " " + GeminiProjectSlug + " || exit 1",
 		strings.TrimSuffix(chatSessionGate(session, paths, geminiGate(paths, fresh)), "\n"),
 		// THE RECORD, before the harness starts, so a run killed before it
@@ -426,8 +426,9 @@ var geminiHelperScript []byte
 var _ artifactHolder = GeminiCLI{}
 
 // artifactFiles is what a Gemini CLI run leaves in the box's work directory,
-// each written afresh by the next ([Runner.ClearArtifacts]): files alone, so
-// it is no [artifactDirHolder]. The home's settings, policy and project
+// and a fresh session's copy of its settings in the home, each written afresh
+// by the next ([Runner.ClearArtifacts]): files alone, so it is no
+// [artifactDirHolder]. The home's settings, policy and project
 // registry are rewritten by every Gemini CLI run, its skills, policies and
 // commands removed first, an image's included ([geminiHome]); every other
 // harness's run leaves them alone.

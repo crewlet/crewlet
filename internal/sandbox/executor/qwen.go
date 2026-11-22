@@ -85,6 +85,19 @@ func qwenScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	}
 	b.WriteString(endPrologue(paths, stop))
 	b.WriteString(endHarness(""))
+	// THE TELEMETRY'S NAMES GO before Qwen Code starts at all, its release
+	// read included: the run turns no Qwen Code telemetry on, so it starts
+	// without them. Its key is in its settings, never the environment
+	// ([QwenCode.Output]).
+	line(otelExportUnset)
+	// AND THE SIGN-IN'S NAMES ([sandbox.RunRequest.SignInEnv]): Qwen Code reads
+	// none of them in a run, its key being in its settings and a subscription
+	// in its login file, and offers no way to keep a name from its tools
+	// alone, so the helper, and with it Qwen Code, starts without them.
+	// WriteConfig has refused a name no shell can unset ([toolEnvOmitted]).
+	if names, err := toolEnvOmitted(req.SignInEnv); err == nil && len(names) > 0 {
+		line("unset " + strings.Join(names, " "))
+	}
 	// THE RELEASE, read once for the gate, the record and the session's: an
 	// older one never runs ([releaseGate]).
 	line(releaseRead(QwenCode{}.VersionCommand()))
@@ -97,18 +110,6 @@ func qwenScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	// of the same text this run is handed was never delivered as.
 	line(`n=0; [ -z "$cf" ] || n=$(wc -l < "$cf" | tr -d ' '); printf '%s %s\n' "$s" "$n" > ` + q(paths.QwenRunStart()))
 	line(`if [ "$k" = yes ]; then m=load; else m=new; fi`)
-	// THE TELEMETRY'S NAMES GO before Qwen Code starts: the run turns no Qwen
-	// Code telemetry on, so it starts without them. Its key is in its settings,
-	// never the environment ([QwenCode.Output]).
-	line(otelExportUnset)
-	// AND THE SIGN-IN'S NAMES ([sandbox.RunRequest.SignInEnv]): Qwen Code reads
-	// none of them in a run, its key being in its settings and a subscription
-	// in its login file, and offers no way to keep a name from its tools
-	// alone, so the helper, and with it Qwen Code, starts without them.
-	// WriteConfig has refused a name no shell can unset ([toolEnvOmitted]).
-	if names, err := toolEnvOmitted(req.SignInEnv); err == nil && len(names) > 0 {
-		line("unset " + strings.Join(names, " "))
-	}
 	b.WriteString(launchHarness("node "+q(paths.QwenHelper())+" run "+q(paths.QwenHelperConfig())+` "$s" "$m"`, paths))
 	line(qwenLocate(paths))
 	b.WriteString(chatPack(paths, packAt{staged: paths.SessionStaging(), dest: paths.SessionCapture()}, paths.QwenDir()))
@@ -199,7 +200,8 @@ func (QwenCode) artifactFiles(p Paths) []string {
 // ([artifactDirHolder]): its skills, removed whole.
 func (QwenCode) artifactDirs(p Paths) []string { return []string{p.QwenSkills()} }
 
-// WriteConfig removes what an earlier run or the image left for Qwen Code
+// WriteConfig refuses a sign-in name no shell can unset ([toolEnvOmitted]),
+// then removes what an earlier run or the image left for Qwen Code
 // ([qwenHome]) and writes what a run's helper and harness read: the run's
 // system text, the helper and its configuration, the settings in the box
 // home, and the run's skills. It returns "": Qwen Code reads its settings
@@ -207,9 +209,6 @@ func (QwenCode) artifactDirs(p Paths) []string { return []string{p.QwenSkills()}
 func (q QwenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
 	paths Paths) (string, error) {
 	if _, err := toolEnvOmitted(req.SignInEnv); err != nil {
-		return "", err
-	}
-	if err := qwenHome.prune(ctx, box, paths.Home, "Qwen Code"); err != nil {
 		return "", err
 	}
 	system := req.System
@@ -247,6 +246,11 @@ func (q QwenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 			return "", fileErr
 		}
 		files[paths.QwenSkills()+"/"+qwenSkillName(s)+"/SKILL.md"] = file
+	}
+	// THE HOME IS PRUNED ONLY ONCE NOTHING ABOVE REFUSED THE RUN, as Gemini
+	// CLI's is: a refused launch leaves the box as it found it.
+	if err := qwenHome.prune(ctx, box, paths.Home, "Qwen Code"); err != nil {
+		return "", err
 	}
 	for _, path := range slices.Sorted(maps.Keys(files)) {
 		if err := box.WriteFile(ctx, path, files[path]); err != nil {
