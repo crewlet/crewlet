@@ -323,11 +323,14 @@ func (a *appServer) compaction(params json.RawMessage, started bool) {
 	}
 }
 
-// failed ends a compaction's window on an error Codex does not retry (the
-// app-server's `error` notification, willRetry false): the turn's work, the
-// compaction among it, stopped there, and a compaction whose item never
-// completes would otherwise stop the count for the rest of the run. One
-// Codex retries leaves the window open, as the retry is the compaction's.
+// failed ends a compaction's window on an error Codex does not retry: the
+// app-server's `error` notification (rust-v0.171.0's
+// codex-rs/app-server-protocol/src/protocol/common.rs, `Error => "error"`)
+// carries v2::ErrorNotification {error, willRetry, threadId, turnId}
+// (protocol/v2/notification.rs), whose willRetry false interrupts the turn.
+// Its work, the compaction among it, stopped there, and a compaction whose
+// item never completes would otherwise stop the count for the rest of the
+// run. One Codex retries leaves the window open: the retry is the compaction's.
 func (a *appServer) failed(params json.RawMessage) {
 	var p struct {
 		WillRetry bool `json:"willRetry"`
