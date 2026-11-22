@@ -450,3 +450,37 @@ func TestASessionAPreReleaseWroteIsNeverContinued(t *testing.T) {
 			"refused", described.Version, restores, why)
 	}
 }
+
+// A RELEASE PRINTED ON A CRLF LINE IS THE RELEASE. A box whose `--version`
+// ends its line with a carriage return runs as the release it names, not a
+// suffixed one the start gate refuses, and its session is recorded as written
+// by that release.
+//
+// Mutation, red: keep the carriage return in the release the script reads.
+func TestAReleasePrintedOnACRLFLineIsTheRelease(t *testing.T) {
+	t.Parallel()
+	t.Run("gemini", func(t *testing.T) {
+		t.Parallel()
+		runner, b := geminiBoxAt(t, geminiCapturedRelease+"\r", geminiCarryStandIn(t))
+		_, res := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "begin"})
+		if !res.Success || boxFile(t, b, b.Home()+"/argv") == "" {
+			t.Fatalf("a CRLF release line was not run: %q / %q", res.Error, res.Transcript)
+		}
+		described, body, err := runner.OpenCapture(t.Context(), b)
+		if err != nil || body == nil {
+			t.Fatalf("OpenCapture = %v, %v", body, err)
+		}
+		_ = body.Close()
+		if described.Version != geminiCapturedRelease {
+			t.Errorf("the session is recorded as written by %q, want %s", described.Version, geminiCapturedRelease)
+		}
+	})
+	t.Run("qwen", func(t *testing.T) {
+		t.Parallel()
+		runner, b := qwenBoxAt(t, qwenCapturedRelease+"\r", qwenCarryStandIn(t))
+		_, res := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "begin"})
+		if !res.Success || strings.TrimSpace(boxFile(t, b, b.Home()+"/mode")) != "new" {
+			t.Errorf("a CRLF release line was not run: %q / %q", res.Error, res.Transcript)
+		}
+	})
+}

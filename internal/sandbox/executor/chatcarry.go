@@ -223,6 +223,13 @@ func exactCarry(harness, supported, box, writer string) (bool, string) {
 	return true, ""
 }
 
+// releaseRead is the shell reading into v the box's release as command prints
+// it: its first line, a carriage return ending it cut, so a release printed
+// on a CRLF line reads as itself, never as a suffixed one ([releaseGate]).
+func releaseRead(command string) string {
+	return `v=$(` + command + ` < /dev/null 2> /dev/null | head -n 1 | tr -d '\r')`
+}
+
 // releaseGate is the shell a run's script starts with, once it has read the
 // box's release as v: a release older than supported ends the run before
 // anything else happens, saying so on the error stream, because this build

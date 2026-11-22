@@ -85,7 +85,7 @@ func qwenScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	b.WriteString(endHarness(""))
 	// THE RELEASE, read once for the gate, the record and the session's: an
 	// older one never runs ([releaseGate]).
-	line(`v=$(qwen --version < /dev/null 2> /dev/null | head -n 1)`)
+	line(releaseRead(QwenCode{}.VersionCommand()))
 	line(releaseGate("Qwen Code", qwenRelease))
 	b.WriteString(chatSessionGate(session, paths, qwenGate(paths, fresh)))
 	// THE RECORD, before the harness starts ([parseSessionRecord]).
