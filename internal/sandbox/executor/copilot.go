@@ -2,7 +2,6 @@ package executor
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
@@ -633,15 +632,6 @@ func writeCopilotExtension(ctx context.Context, box sandbox.Sandbox, file string
 		return fmt.Errorf("executor: writing the Copilot run's notes extension: %w", err)
 	}
 	return nil
-}
-
-// writeJSON renders v, indented, into file.
-func writeJSON(ctx context.Context, box sandbox.Sandbox, file string, v any) error {
-	blob, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return err
-	}
-	return box.WriteFile(ctx, file, blob)
 }
 
 // copilotMCPConfig is servers in Copilot's own MCP vocabulary, under

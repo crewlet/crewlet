@@ -1093,3 +1093,18 @@ func (b *budgetReader) Read(p []byte) (int, error) {
 	b.left -= int64(n)
 	return n, err
 }
+
+// lastByte is r, remembering the last byte it handed out.
+type lastByte struct {
+	r    io.Reader
+	last byte
+	read bool
+}
+
+func (l *lastByte) Read(p []byte) (int, error) {
+	n, err := l.r.Read(p)
+	if n > 0 {
+		l.last, l.read = p[n-1], true
+	}
+	return n, err
+}

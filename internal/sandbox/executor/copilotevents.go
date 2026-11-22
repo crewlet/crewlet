@@ -350,15 +350,6 @@ func copilotSubject(raw json.RawMessage) string {
 	return compactInput(raw)
 }
 
-// boundedEvent is line as a result carries an event, or "" past
-// [sandbox.MaxRunEventBytes], which the record would drop.
-func boundedEvent(line []byte) string {
-	if len(line) > sandbox.MaxRunEventBytes {
-		return ""
-	}
-	return string(line)
-}
-
 // runSpend is the run's own spend ([runSpender]): the records after the
 // script's mark, the prompt not served from the cache being the whole less
 // its cached shares, since Copilot's inputTokens counts them. Stated wherever
