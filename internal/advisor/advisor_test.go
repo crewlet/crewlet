@@ -228,6 +228,9 @@ func TestEveryClassHasWordsAndAFix(t *testing.T) {
 				t.Errorf("%s: %q holds an em dash", f.Class, s)
 			}
 		}
+		for _, long := range advisor.LongLines(f) {
+			t.Error(long)
+		}
 	}
 	for _, class := range config.AdvisoryClasses {
 		if !seen[advisor.Class(class)] {

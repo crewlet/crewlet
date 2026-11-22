@@ -134,9 +134,7 @@ function Findings({ days }: { days: RangeDays }) {
                 size="compact"
                 title="Nothing to change"
                 description={
-                  asleep.length > 0
-                    ? "Nothing to change right now beyond what you snoozed."
-                    : "The Advisor's checks found nothing worth changing right now."
+                  asleep.length > 0 ? "Only what you snoozed." : "The checks found nothing to fix."
                 }
               />
             ) : (
@@ -153,7 +151,7 @@ function Findings({ days }: { days: RangeDays }) {
               <AttentionList
                 items={items(engine)}
                 labels={{
-                  title: "What the engine is handling",
+                  title: "Handled by the engine",
                   tones: { danger: "Engine", warning: "Engine", info: "Engine" },
                 }}
               />

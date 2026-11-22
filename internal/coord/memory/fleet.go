@@ -44,6 +44,9 @@ type Fleet struct {
 	custody   map[string]string
 	rebases   map[string]rebaseEntry
 	runs      map[string]coord.Record
+	// runStandings is each record's standing as its last write stated it,
+	// by turn id; a record whose last write stated none has no entry.
+	runStandings map[string]coord.RunStanding
 	// runParts are the parts beside the runs' records, by turn id and part
 	// ([coord.RunPart]) — kept apart from runs as the KV keeps them under
 	// keys a listing of records never reads.
@@ -226,6 +229,7 @@ func NewFleet() *Fleet {
 		custody:           map[string]string{},
 		rebases:           map[string]rebaseEntry{},
 		runs:              map[string]coord.Record{},
+		runStandings:      map[string]coord.RunStanding{},
 		runParts:          map[runPartKey]coord.Record{},
 		secrets:           map[string]coord.SecretRecord{},
 		integrations:      map[string][]byte{},

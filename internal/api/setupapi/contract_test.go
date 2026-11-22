@@ -29,7 +29,8 @@ func TestTheSetupFormReadsWhatTheSetupWireSends(t *testing.T) {
 	}{
 		{"SetupStep", reflect.TypeFor[setup.Step](), nil},
 		{"SetupCaution", reflect.TypeFor[setup.Caution](), nil},
-		{"SetupRequirement", reflect.TypeFor[setup.Requirement](), map[string]bool{"value": true}},
+		{"SetupRequirement", reflect.TypeFor[setup.Requirement](), map[string]bool{"value": true, "multiline": true, "accept": true}},
+		{"SetupSet", reflect.TypeFor[setup.Set](), nil},
 		{"SetupToolState", reflect.TypeFor[setupapi.ToolState](), nil},
 		{"SetupSeatState", reflect.TypeFor[setupapi.SeatState](), nil},
 		{"SetupSSHServers", reflect.TypeFor[setupapi.SSHServers](), nil},

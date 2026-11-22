@@ -26,9 +26,8 @@ var catalogue = map[Class]entry{
 		severity: SeverityCosts, area: AreaAccess, company: true,
 		words: func(_ *config.Company, _ place, w config.Warning) (string, string) {
 			return sentence(w.Title),
-				"An alarm that fires on a server wakes the agents allowed to read the " +
-					"engine's health, and none is, so it reaches nobody until a person " +
-					"opens the dashboard."
+				"A server alarm reaches nobody until someone opens the dashboard. An alarm " +
+					"wakes only the agents allowed to read the engine's health."
 		},
 		fix: healthFix,
 	},
@@ -36,8 +35,8 @@ var catalogue = map[Class]entry{
 		severity: SeverityNote, area: AreaLearning,
 		words: func(_ *config.Company, _ place, w config.Warning) (string, string) {
 			return sentence(w.Title),
-				"Reflection, summaries and memory run after the agent's turns on the model its " +
-					"own work runs on, so learning costs a share of its spend at that model's price."
+				"Learning is paid at the main model's price when a smaller model would do. " +
+					"Reflection, summaries and memory run after each turn, on the model the agent works on."
 		},
 		fix: auxiliaryFix,
 	},
@@ -45,9 +44,9 @@ var catalogue = map[Class]entry{
 		severity: SeverityNote, area: AreaSchedules,
 		words: func(_ *config.Company, _ place, w config.Warning) (string, string) {
 			return sentence(w.Title),
-				"Each run starts a turn on the agent's models whether or not anything changed. " +
-					"A check that waits for something to happen, such as a deploy or a merge, is " +
-					"better as a work item dated for when to look."
+				"Every run is paid for, whether or not anything changed. A check that waits for " +
+					"something to happen, such as a deploy or a merge, is better as a work item dated " +
+					"for when to look."
 		},
 		fix: scheduleFix,
 	},

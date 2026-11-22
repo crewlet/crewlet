@@ -19,7 +19,9 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
+	"sync"
 )
 
 // ErrNotP256 is a value that is not one PEM block holding a P-256 key.
@@ -31,7 +33,7 @@ var ErrNotP256 = errors.New("es256: not one PKCS #8 or SEC 1 PEM block holding a
 // Apple Ads' key. Text around the block is refused, so a paste of two keys is
 // not one.
 func ParseKey(value string) (*ecdsa.PrivateKey, error) {
-	block, rest := pem.Decode([]byte(strings.TrimSpace(value)))
+	block, rest := pem.Decode([]byte(NormalisePEM(value)))
 	if block == nil || strings.TrimSpace(string(rest)) != "" {
 		return nil, ErrNotP256
 	}
@@ -54,6 +56,58 @@ func ParseKey(value string) (*ecdsa.PrivateKey, error) {
 		return nil, ErrNotP256
 	}
 	return key, nil
+}
+
+// pemArmour is one PEM block, its line breaks any or none: its BEGIN type, its
+// body, and its END type. Compiled at first use, not at init (setup's shape.go
+// says why).
+var pemArmour = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`-----BEGIN ([A-Z0-9 ]+)-----([A-Za-z0-9+/=\s]*)-----END ([A-Z0-9 ]+)-----`)
+})
+
+// NormalisePEM is value's PEM blocks written as [pem.Encode] writes them, each
+// body re-wrapped at 64 characters, whatever line breaks the value arrived with,
+// and trimmed as every stored value is.
+//
+// A ONE-LINE BOX STRIPS LINE BREAKS: a .p8 file pasted into a password input
+// reaches the engine as `-----BEGIN PRIVATE KEY-----MIGT...-----END PRIVATE
+// KEY-----`, which [pem.Decode] refuses, and some tools flatten them to spaces.
+// Base64 holds no whitespace, so dropping it from the body loses nothing.
+// Anything else is returned as it came, for the parser to refuse: text around
+// or between the blocks, a body holding headers (an encrypted key), or a BEGIN
+// and END that disagree.
+func NormalisePEM(value string) string {
+	value = strings.TrimSpace(value)
+	found := pemArmour().FindAllStringSubmatchIndex(value, -1)
+	if len(found) == 0 {
+		return value
+	}
+	blocks := make([]string, 0, len(found))
+	last := 0
+	for _, m := range found {
+		if strings.TrimSpace(value[last:m[0]]) != "" {
+			return value
+		}
+		kind, body, end := value[m[2]:m[3]], value[m[4]:m[5]], value[m[6]:m[7]]
+		if kind != end {
+			return value
+		}
+		body = strings.Join(strings.Fields(body), "")
+		lines := []string{"-----BEGIN " + kind + "-----"}
+		for len(body) > 64 {
+			lines = append(lines, body[:64])
+			body = body[64:]
+		}
+		if body != "" {
+			lines = append(lines, body)
+		}
+		blocks = append(blocks, strings.Join(append(lines, "-----END "+kind+"-----"), "\n"))
+		last = m[1]
+	}
+	if strings.TrimSpace(value[last:]) != "" {
+		return value
+	}
+	return strings.Join(blocks, "\n")
 }
 
 // Sign is a compact JWS of claims under key, its header naming kid and typ.
