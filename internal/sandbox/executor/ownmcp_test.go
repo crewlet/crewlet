@@ -8,14 +8,15 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
-// A SEAT'S EXECUTOR STARTS THE MCP SERVERS ITS OWN CONFIGURATION DECLARES beside
-// the ones the engine hands it: no --strict-mcp-config, so the box's own
-// servers, the repository's .mcp.json, a plugin's and the signed-in account's
-// connectors load, as they do for a person running Claude Code.
+// A CLAUDE CODE RUN'S SERVERS ARE THE ENGINE'S, ITS PLUGIN'S AND ITS ACCOUNT'S:
+// the run reads no settings source, so neither the repository's .mcp.json nor
+// the box's own servers start ([TestAClaudeCodeRunLoadsOnlyTheSettingsItsLaunchWrites]),
+// and no --strict-mcp-config, which would also drop the servers of the run's
+// own plugin and the claude.ai connectors of the signed-in account.
 //
 // Mutation: append --strict-mcp-config beside every file of servers, and this
 // fails.
-func TestASeatsClaudeCodeRunStartsItsOwnMCPServersToo(t *testing.T) {
+func TestAClaudeCodeRunIsNotHeldToTheEnginesServersAlone(t *testing.T) {
 	t.Parallel()
 	cmd := scriptOf(t, commandOf(claude(), sandbox.RunRequest{Brief: "x"}, executor.Paths{}, "/box/.crewlet/mcp.json"))
 	if !strings.Contains(cmd, "--mcp-config '/box/.crewlet/mcp.json'") {

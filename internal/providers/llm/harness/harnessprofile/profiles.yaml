@@ -34,9 +34,10 @@ claude-code:
   #   --setting-sources ""      no user, project or local settings file: the
   #                             hooks, permissions, MCP servers and plugins an
   #                             ancestor's .claude/settings.json would add stay
-  #                             out. The CLAUDE.md family is NOT a setting
-  #                             source, so the two switches in isolation_env
-  #                             below keep it out. A machine-wide managed
+  #                             out. 2.1.310 read the CLAUDE.md family as no
+  #                             setting source (2.1.330 drops it with them), so
+  #                             the two switches in isolation_env below keep it
+  #                             out on every release. A machine-wide managed
   #                             settings file, which only an administrator of
   #                             the host can write, still applies.
   #                             It replaces --safe-mode, which kept all of this
@@ -308,7 +309,7 @@ claude-code:
     # file and nothing more.
     CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: "1"
   # The two switches that keep the CLAUDE.md family out, which
-  # --setting-sources "" does not (it is no setting source): without them every
+  # --setting-sources "" did not on 2.1.310 (2.1.330 drops it): without them every
   # CLAUDE.md, CLAUDE.local.md and .claude/rules file above the call's
   # directory reached the request under the harness's "These instructions OVERRIDE
   # any default behavior" banner, and the auto-memory section named a

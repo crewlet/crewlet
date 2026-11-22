@@ -37,8 +37,9 @@ const ClaudeCodeName = "claude-code"
 type ClaudeCode struct{}
 
 var (
-	_ Harness = ClaudeCode{}
-	_ saver   = ClaudeCode{}
+	_ Harness        = ClaudeCode{}
+	_ saver          = ClaudeCode{}
+	_ artifactHolder = ClaudeCode{}
 )
 
 // NewClaudeCode returns the runner.
@@ -109,6 +110,14 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 		// reach is its box's cell's to bound (`container` and `e2b` keep it off the
 		// engine host, `direct` does not) beside the run env's credentials.
 		"--permission-mode", "bypassPermissions",
+		// NO SETTINGS FILE BUT THE RUN'S OWN: no user, project or local source,
+		// so neither the box home nor the repository adds an `env`, a hook, a key
+		// helper, a plugin or an MCP server. Its `--settings`, `--plugin-dir` and
+		// `--mcp-config` still apply, as does a sign-in from the environment or
+		// the login file (measured on 2.1.330). It drops the repository's
+		// CLAUDE.md, rules, skills, commands and agents too, which the harness
+		// ties to its project source ([claudeSettingSourcesFloor]).
+		"--setting-sources", shellword.Quote(""),
 	}
 	// THE ENTRY'S WEB TOOLS OFF where it denies them, as its runs on the engine
 	// host have none: on 2.1.330, under bypassPermissions, both are refused as
@@ -148,9 +157,9 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	if configPath != "" {
 		parts = append(parts, "--mcp-config", shellword.Quote(configPath))
 	}
-	// NO --strict-mcp-config: beside the engine's servers the run starts what
-	// Claude Code starts for a person, the box's, the repository's .mcp.json, a
-	// plugin's and the signed-in account's connectors.
+	// NO --strict-mcp-config: with no setting source neither the repository's
+	// .mcp.json nor the box's own servers start (measured on 2.1.330), and a
+	// `--plugin-dir` plugin's servers are the run's own.
 
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
@@ -160,6 +169,10 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	b.WriteString(endPrologue(paths, stop))
 	b.WriteString(endHarness(""))
 	b.WriteString(claudeRelease)
+	// NO RUN ON A RELEASE THAT CANNOT BE HELD TO ITS OWN SETTINGS, which would
+	// refuse the flag or load every settings file ([claudeSettingSourcesFloor]).
+	line(`if ! at %s; then printf 'crewlet: this box runs Claude Code %%s, older than %s, the oldest a run is started on\n' "$v" >&2; exit 1; fi`,
+		floorArgs(claudeSettingSourcesFloor), claudeSettingSourcesFloor)
 	// THE TRANSCRIPT KEPT NEAR ITS SIZE, on a release whose trim loses nothing
 	// ([claudeLocalGCFloor]) — and on an older one never, whatever set it.
 	line(`if at %s; then export CLAUDE_CODE_TRANSCRIPT_LOCAL_GC=1; else unset CLAUDE_CODE_TRANSCRIPT_LOCAL_GC; fi`,
@@ -239,6 +252,11 @@ a=${n%%.*}; r=${n#*.}; b=${r%%.*}; c=${r#*.}; c=${c%%.*}
 case "$n" in [0-9]*.[0-9]*.[0-9]*) ;; *) a= ;; esac
 at() { [ -z "$a" ] || [ "$a" -gt "$1" ] || { [ "$a" -eq "$1" ] && { [ "$b" -gt "$2" ] || { [ "$b" -eq "$2" ] && [ "$c" -ge "$3" ]; }; }; }; }
 `
+
+// claudeSettingSourcesFloor is the oldest Claude Code release a run is started
+// on: 1.0.125, the first to take `--setting-sources` (1.0.124 lists no such
+// flag), which takes the empty list on 1.0.125 and 2.1.118 as on 2.1.330.
+const claudeSettingSourcesFloor = "1.0.125"
 
 // claudeNotesFloor is the oldest Claude Code release a run is started with its
 // notes hooks on: 2.1.163, the first whose Stop hook's additional context reaches
@@ -1161,9 +1179,7 @@ func (ClaudeCode) Continues(box, writer string) (bool, string) {
 // role.sandbox.env, the image or a profile the login shell sources, which only
 // the wrapper, running after all three, reaches: so they are UNSET, not refused
 // in config, on every run, since the bridge is every run's tools.
-// `disableAllHooks` is likewise written false in the settings, because a
-// repository's `true` silently switches every hook off ([claudeHooksOnSettings]).
-// No --setting-sources (it drops CLAUDE.md) and no --include-hook-events.
+// No --include-hook-events.
 var claudeSwitchesOff = []string{"CLAUDE_CODE_SIMPLE", "CLAUDE_CODE_SAFE_MODE"}
 
 // claudeHostedOff is every variable that starts Claude Code in the mode of
@@ -1783,10 +1799,17 @@ func (ClaudeCode) notesOffWhy() string {
 		"hooks and whose error stream says so"
 }
 
-// artifacts is what a Claude Code run leaves in its box of its own.
+// artifacts is what a Claude Code run leaves in its box of its own, and what
+// a box keeps that no run may take up from an earlier one: the harness's state
+// file `.claude.json` (MCP servers keyed by directory) with its lock and
+// backups, and the instruction files of the home, which lies above the
+// workspace ([sandbox.WorkspaceSubdir]) on the walk a harness makes up from its
+// working directory. Removed whatever harness the box runs next.
 func (ClaudeCode) artifacts(p Paths) (files, dirs []string) {
+	cfg := p.ClaudeConfigDir()
 	return []string{p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(), p.ClaudeSkillsSettings(),
 			p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.ClaudeSkillsSettingsPinned(),
-			p.ClaudeToolEnv()},
-		[]string{p.ClaudeSkillsPlugin()}
+			p.ClaudeToolEnv(), cfg + "/.claude.json", cfg + "/CLAUDE.md",
+			p.Home + "/CLAUDE.md", p.Home + "/CLAUDE.local.md", p.Home + "/AGENTS.md"},
+		[]string{p.ClaudeSkillsPlugin(), cfg + "/.claude.json.lock", cfg + "/backups", cfg + "/rules"}
 }
