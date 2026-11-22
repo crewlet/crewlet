@@ -160,7 +160,7 @@ hours of each other:
   and any other node reads it as still being kept until its life and two
   hours have passed by its own clock, about three hours and twenty minutes; a
   read standing by beside it is read as standing until its window and two
-  hours have passed, about four hours and fifty and a half minutes.
+  hours have passed, about four hours and forty-nine and a half minutes.
   Neither wait holds that long on that reading alone: a turn's end holds each
   capture for its life, and each standby for its window and its takeover's
   life, from the moment it first sees it, on its own clock. A reader whose
@@ -916,6 +916,17 @@ stops everything else writing there, and a store and broker with
 no room stop the node. Whether that volume should outlive the engine's
 container depends on what a run's working tree is worth across a deploy
 ([below](#a-restart-and-the-executors-on-its-host)).
+
+**Give each engine process 481.17 MiB free in its temporary directory.** A
+node that runs seats spools each executor session it keeps or saves, sealed,
+beside its scrub's spool, until its upload ends, in a directory of each engine
+process's own under the process's temporary directory (`$TMPDIR`, else
+`/tmp`). Every spool of one process shares one fixed room of 481.17 MiB, so
+two engines on one host need it twice, beside what their runs and tool servers
+write there. Nothing checks the room at boot: a take whose spool finds the disk
+full keeps nothing, and the turn's next launch continues the newest kept
+session ([A session's spools on its
+node](../concepts/code-sandbox.md#a-sessions-spools-on-its-node)).
 
 **The box root bounds where a box's files land, not what a `direct` run may
 write.** A `direct` run is a process of the engine's own user with no mount
@@ -1837,7 +1848,7 @@ Every figure above is of the memory the executor's pools, the answers in flight,
 [page cache](#the-page-cache) and the read lane leave: a Gitlet node keeps them first and sizes
 Gitlet by what is left
 ([Memory](../concepts/gitlet.md#the-cache-on-a-gitlet-node)), 97 MiB for the
-transcript reads its API answers and 1 796 MiB where it runs seats too, 284 MiB for the answers in flight, a
+transcript reads its API answers and 1 805 MiB where it runs seats too, 284 MiB for the answers in flight, a
 sixteenth of its memory for the page cache and 128 MiB a core for git's reads, so give it that much more. They are the executor's in-process pools alone: a node
 running seats also holds its harness calls and boxes
 ([Replica count](#replica-count)). On 2 GiB of memory in all, such a node's pools

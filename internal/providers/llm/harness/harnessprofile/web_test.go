@@ -186,6 +186,27 @@ func TestAWebDenialKeepsEverySeatArgumentButTheWeb(t *testing.T) {
 			return append(out, "WebFetch", "WebSearch")
 		},
 		"pi": slices.Clone[[]string],
+		// Copilot's web tools leave the allowlist, which then names the
+		// engine's server alone (an empty one is none), and no URL is allowed.
+		"copilot": func(seat []string) []string {
+			var out []string
+			listed := false
+			for i := 0; i < len(seat); i++ {
+				switch {
+				case seat[i] == "--allow-all-urls":
+				case (seat[i] == "--available-tools" || seat[i] == "--allow-tool") && i+1 < len(seat) &&
+					(seat[i+1] == "web_fetch" || seat[i+1] == "web_search"):
+					if seat[i] == "--available-tools" && !listed {
+						out = append(out, "--available-tools", "crewlet")
+						listed = true
+					}
+					i++
+				default:
+					out = append(out, seat[i])
+				}
+			}
+			return out
+		},
 	}
 	for _, name := range BuiltinNames() {
 		p, _ := Builtin(name)

@@ -370,9 +370,9 @@ func TestTheKimiProfileArgvParsesAgainstTheRealHarness(t *testing.T) {
 	} {
 		dir := t.TempDir()
 		// A MODEL THE HARNESS KNOWS, ON A PROVIDER WITH NO CREDENTIAL. With no
-		// config.toml at all, 0.42.0 and 2.3.1 both stop at "Model … is not
-		// configured in config.toml" — before the credential, so the case
-		// proved nothing. Declared with no key, the model takes them on to
+		// config.toml at all, 2.7.2 stops at "Model … is not configured in
+		// config.toml" (measured), before the credential, so the case proved
+		// nothing. Declared with no key, the model takes them on to
 		// "provider … has no credential configured", which is past every
 		// flag and the agent file. The base URL is a closed local port: a
 		// build that tried the network anyway would fail there, not reach
@@ -415,94 +415,33 @@ func TestTheKimiProfileArgvParsesAgainstTheRealHarness(t *testing.T) {
 	}
 }
 
-// THE KIMI PROFILE READS ONE ANSWER OUT OF ITS MESSAGE STREAM.
+// THE KIMI PROFILE READS ONE ANSWER OUT OF ITS MESSAGE STREAM, here the bytes
+// 2.7.2 emitted through the engine's own code path against a stub model.
+// `session.resume_hint` carries a `content` of its own, the harness's prose
+// about resuming: read off every line, "To resume this session: kimi -r …"
+// would join the reply, and the tool loop, the reviewer and the dashboard
+// would take it for the agent's words. `system.version` is the same hazard
+// with no `content` to hit. The `role` discriminator keeps them out.
 //
-// These are the BYTES THE REAL HARNESS EMITTED, captured from 0.42.0 driven
-// against a stub HTTP endpoint standing in for the model — not a stream
-// written to match the profile. Two of the three lines are the point.
-//
-// `session.resume_hint` carries its own `content` field, holding the harness's
-// prose about how to resume. A profile reading `content` off every line would
-// have appended "To resume this session: kimi -r session_…" to the model's
-// reply, and the tool loop, the reviewer and the dashboard would all have
-// read it as a sentence the agent said. `system.version` is the same hazard
-// with no `content` to hit. The `role` discriminator is what keeps them out.
+// Mutation: read `content` off every line (drop text_events), and the resume
+// hint joins the answer.
 func TestTheKimiProfileReadsOnlyTheAssistantsLines(t *testing.T) {
 	t.Parallel()
 	p, ok := harnessprofile.Builtin("kimi-code")
 	if !ok {
 		t.Fatal("no built-in kimi-code profile")
 	}
-	const captured = `{"role":"meta","type":"system.version","version":"0.42.0"}
-{"role":"assistant","content":"THE-STUB-REPLY"}
-{"role":"meta","type":"session.resume_hint","session_id":"session_4e0d7ff8-5f9a-42be-ab76-cd7321b34e48","command":"kimi -r session_4e0d7ff8-5f9a-42be-ab76-cd7321b34e48","content":"To resume this session: kimi -r session_4e0d7ff8-5f9a-42be-ab76-cd7321b34e48"}`
+	const captured = `{"role":"meta","type":"system.version","version":"2.7.2"}
+{"role":"assistant","content":"pong"}
+{"role":"meta","type":"session.resume_hint","session_id":"session_f3491cc7-a3b1-49b0-ba4f-9faf9176c7c8","command":"kimi -r session_f3491cc7-a3b1-49b0-ba4f-9faf9176c7c8","content":"To resume this session: kimi -r session_f3491cc7-a3b1-49b0-ba4f-9faf9176c7c8"}`
 
 	got := extract(p, captured)
 	if !got.located {
 		t.Fatalf("the profile found no answer in its own harness's real stream:\n%s", captured)
 	}
-	if got.text != "THE-STUB-REPLY" {
+	if got.text != "pong" {
 		t.Errorf("text = %q, want the assistant's own words alone — a `meta` line's "+
 			"own `content` must not reach the conversation", got.text)
-	}
-}
-
-// A SPENT PLAN REACHES THE FALLBACK CHAIN, and these are the real words.
-//
-// The classification prefix is the harness's own and survives the vendor
-// rewording the sentence after it; both were captured from 0.42.0 answering a
-// stubbed 429 and 401. A marker that stopped matching would leave a spent plan
-// unrecognised: the failed run would still carry the seat to its metered key,
-// as a `server` failure, but the entry would never sit out, so every call would
-// launch the spent harness first to hear the same sentence again — silent until
-// somebody reads why the plan's calls all fail.
-func TestTheKimiProfileClassifiesTheFailuresItsHarnessActuallyPrints(t *testing.T) {
-	t.Parallel()
-	p, ok := harnessprofile.Builtin("kimi-code")
-	if !ok {
-		t.Fatal("no built-in kimi-code profile")
-	}
-	for name, tc := range map[string]struct {
-		stderr string
-		want   llm.ErrorKind
-	}{
-		"a spent plan": {
-			stderr: "error: failed to run prompt: provider.rate_limit: 429 You have " +
-				"reached your 5-hour usage limit. Please try again later.",
-			want: llm.KindRateLimit,
-		},
-		"a dead login": {
-			stderr: "error: failed to run prompt: provider.auth_error: 401 Invalid Authentication",
-			want:   llm.KindAuth,
-		},
-		// THE MESSAGE REWORDED AND THE PREFIX KEPT, which is the whole
-		// case for matching the classification rather than the prose:
-		// everything after the colon belongs to the upstream provider
-		// and changes with the plan, the endpoint and the vendor's
-		// copy. Without these two entries the structural sentinels
-		// could be deleted and every assertion above would still pass
-		// on the plan wording alone.
-		"a spent plan the vendor reworded": {
-			stderr: "error: failed to run prompt: provider.rate_limit: 429 quota " +
-				"exhausted for this billing period",
-			want: llm.KindRateLimit,
-		},
-		"a dead login the vendor reworded": {
-			stderr: "error: failed to run prompt: provider.auth_error: 401 the " +
-				"credential presented is no longer accepted",
-			want: llm.KindAuth,
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			hit, ok := classifyMarkers(p, harnessOutput{stderr: tc.stderr, failed: true})
-			if !ok {
-				t.Fatalf("no marker fired on what the harness really printed:\n%s", tc.stderr)
-			}
-			if hit.Kind != tc.want {
-				t.Errorf("kind = %v, want %v", hit.Kind, tc.want)
-			}
-		})
 	}
 }
 

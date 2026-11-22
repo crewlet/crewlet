@@ -464,6 +464,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		Skills:      req.Skills.Box(),
 		Model:       run.model,
 		Effort:      run.effort,
+		WebDenied:   run.webDenied,
 		ProviderKey: member.Key,
 		// THE SIGN-IN THE JOB'S HARNESS IS HANDED, on the job's record: what
 		// its collection compares the entry's against ([Engine.signInReplaced]).
@@ -1137,8 +1138,8 @@ func (l *agentLauncher) member(ctx context.Context, manager *sandbox.Manager,
 // manager — the members [agentLauncher.member] picks among, and so every
 // member whose cell a run of the seat can land in.
 //
-// Refused when there is none. Config refuses this chain on every write ("needs
-// a claude-code or opencode member"), so reaching it is a company built by hand
+// Refused when there is none. Config refuses this chain on every write (it
+// needs a member on a harness with a runner), so reaching it is a company built by hand
 // or a catalogue built without the runners: either way the operator's to fix,
 // and a retry changes nothing, which is the class it carries
 // ([sandbox.WhyConfiguration]). So does a company with no providers.llm entry
