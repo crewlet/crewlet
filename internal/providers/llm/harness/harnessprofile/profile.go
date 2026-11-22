@@ -878,8 +878,8 @@ type Profile struct {
 	// UsageArgs is a command run AFTER the call, in the same home, directory and
 	// environment, printing the token counts as one JSON document that
 	// [Profile.Usage] reads; `{session}` is the id [Profile.SessionArgs] gave.
-	// An earlier OpenCode 2 release's `run --format json` dropped the FINAL
-	// `step_finish`, so stdout alone can undercharge.
+	// A release whose `run --format json` dropped the FINAL `step_finish`
+	// would leave stdout alone undercharging (2.3.2 dropped none, measured).
 	//
 	// A failed or unreadable report is not a failed call: counts fall back to
 	// stdout (the estimate, where none) with a warning:

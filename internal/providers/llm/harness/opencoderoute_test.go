@@ -25,7 +25,7 @@ import (
 // its client, printing the server's record — step_start, prose, each call once
 // it has COMPLETED, step_finish with the step's counts, and nothing but the
 // prose of the final step; and the session's total asked of the server
-// (`api session.get`). Measured on an earlier OpenCode 2 release (not on 2.3.0); see the profile.
+// (`api session.get`). Measured on 2.3.2; see the profile.
 func init() {
 	fakeHarnesses["opencode"] = fakeHarness{run: runFakeOpenCode}
 }

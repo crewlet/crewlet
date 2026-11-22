@@ -14,10 +14,10 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
-// OpenCode 2.3.0's `run --format json` prints a step's step_start, text and
-// step_finish every time (measured); earlier OpenCode 2 releases dropped a
-// step's step_start or step_finish, which the reader still reads. The fixture
-// in testdata/opencode/run-format-json is a whole 2.3.0 capture of a run with
+// OpenCode 2.3.2's `run --format json` prints a step's step_start, text and
+// step_finish every time (measured over 20 runs of four steps); a dropped
+// step_start or step_finish is read all the same. The fixture
+// in testdata/opencode/run-format-json is a whole 2.3.2 capture of a run with
 // tools (`run --server`) against a stub, a 16 KiB answer; the sequences that
 // drop events are that capture with those lines left out ([dropped]).
 
@@ -29,7 +29,7 @@ type stepFixture struct {
 	finishes bool
 }
 
-const stepCapture = "2.3.0/step_start-text-step_finish.jsonl"
+const stepCapture = "2.3.2/step_start-text-step_finish.jsonl"
 
 var stepFixtures = []stepFixture{
 	{stepCapture, nil, true},

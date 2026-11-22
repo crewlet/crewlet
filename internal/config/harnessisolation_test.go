@@ -11,7 +11,7 @@ import (
 // The opencode profile sets OPENCODE_CONFIG_PROJECT_DISABLE=1 so OpenCode reads
 // no configuration from the working directory or any ancestor: with the walk on,
 // an allow-all opencode.json above the state directory handed every seat a shell
-// (measured on an earlier OpenCode 2 release (not on 2.3.0)). env is layered over the profile's, so "0" or an empty
+// (measured on 2.3.2). env is layered over the profile's, so "0" or an empty
 // value (read as off) reopened the walk while validating clean. env naming the
 // switch, or OPENCODE_CONFIG_DIR, is refused as HOME is: on a write, and warned
 // about on apply, because the entry still runs. The refusal names the field that
