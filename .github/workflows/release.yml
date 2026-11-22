@@ -88,7 +88,7 @@ jobs:
       # same exact key. No build cache is: goreleaser builds four targets with
       # -trimpath and its own -ldflags, which share no build action with any
       # ci.yml job, so a release compiles cold, once per tag.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache: false
@@ -201,7 +201,7 @@ jobs:
 
       # The Go caches as in the snapshot job, for its reasons: the module
       # cache main saved, read-only, and no build cache.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache: false

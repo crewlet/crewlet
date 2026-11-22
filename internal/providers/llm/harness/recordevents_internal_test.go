@@ -32,8 +32,8 @@ const (
 	kimi27Completed = `{"type":"turn.ended","agentId":"main","turnId":0,"reason":"completed","durationMs":710}`
 )
 
-// A KIMI CODE 2.7 RUN IS JUDGED BY THE CLASS ITS RECORD ENDS ON, because its
-// stdout and stderr no longer carry one: a spent plan sits the entry out and a
+// A KIMI CODE RUN IS JUDGED BY THE CLASS ITS RECORD ENDS ON, because its
+// stdout and stderr carry none: a spent plan sits the entry out and a
 // refused sign-in is said as one, while a 429 retried to an answer, or one
 // whose last attempt met a 500, is neither, though stdout named `rate_limit`.
 //
@@ -44,7 +44,7 @@ const (
 // or the refusal is a server failure; read the record's events from stdout,
 // and nothing classifies; match the retry line, or read the record of a run
 // that answered, and the answered run benches.
-func TestAKimiCode27RunIsJudgedByTheClassItsRecordEndsOn(t *testing.T) {
+func TestAKimiCodeRunIsJudgedByTheClassItsRecordEndsOn(t *testing.T) {
 	t.Parallel()
 	p, ok := harnessprofile.Builtin("kimi-code")
 	if !ok {
@@ -93,23 +93,21 @@ func TestAKimiCode27RunIsJudgedByTheClassItsRecordEndsOn(t *testing.T) {
 
 // A RECORD EVENT IS LOOKED FOR IN THE RECORD ALONE, and a stdout event on stdout
 // alone: a line the model could not write in one place is not read from the
-// other. Kimi Code's 2.3.x stderr is still read as it was.
+// other, nor from stderr.
 //
 // Mutation: drop the source test in limitEventHit or the auth scan, and the
-// turn.ended line on stdout benches the entry.
+// turn.ended line on stdout benches the entry; give the profile a stderr
+// marker for `provider.rate_limit` again, and the same line on stderr does.
 func TestARecordEventIsLookedForInTheRecordAlone(t *testing.T) {
 	t.Parallel()
 	p, _ := harnessprofile.Builtin("kimi-code")
-	if hit, fired := classifyMarkers(p, harnessOutput{stdout: kimi27Spent, failed: true}); fired {
-		t.Fatalf("classified %v from stdout, want the record's event read from the record only", hit.Kind)
-	}
-	hit, fired := classifyMarkers(p, harnessOutput{
-		stderr: "error: failed to run prompt: provider.rate_limit: 429 You have reached your 5-hour usage limit.",
-		failed: true,
-	})
-	if !fired || hit.Kind != llm.KindRateLimit || hit.Source != sourceStderr {
-		t.Fatalf("2.3.x stderr: fired=%v kind=%v source=%v, want the spent plan from stderr",
-			fired, hit.Kind, hit.Source)
+	for name, out := range map[string]harnessOutput{
+		"stdout": {stdout: kimi27Spent, failed: true},
+		"stderr": {stderr: kimi27Spent, failed: true},
+	} {
+		if hit, fired := classifyMarkers(p, out); fired {
+			t.Errorf("classified %v from %s, want the record's event read from the record only", hit.Kind, name)
+		}
 	}
 }
 

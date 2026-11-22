@@ -195,3 +195,39 @@ func TestAReusedBoxKeepsNoSessionReport(t *testing.T) {
 		}
 	}
 }
+
+// A MINTING JOB'S TAKE AND SAVE NAME ONLY ITS BOUND SESSION: a record naming
+// another session, or a report changed after the bind, is refused on a take and
+// on a save, nothing packed under the other id; the box still naming the bound
+// session takes it.
+//
+// Mutation: take the record's id, or the report's, over the bound one, and a
+// case goes red.
+func TestAMintingJobsTakeAndSaveNameOnlyItsBoundSession(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		record, report string
+		refused        bool
+	}{
+		"the box still naming it":          {record: "id " + minted + "\ncontinued no\n", report: minted + "\n"},
+		"a record naming another":          {record: "id " + mintedOther + "\ncontinued yes\n", refused: true},
+		"a report changed after the bind":  {record: "continued no\n", report: mintedOther + "\n", refused: true},
+		"a resume's record naming another": {record: "id " + mintedOther + "\ncontinued yes\n", report: minted + "\n", refused: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			runner := executor.New(executor.Minter{})
+			b := box(t, runner)
+			mintingStart(t, b, runner, sandbox.RunRequest{Brief: "begin"}, c.record, c.report)
+			_, takeErr := runner.TakeSession(t.Context(), b, sandbox.SessionTake{MaxBytes: 1 << 20, Session: minted,
+				Spool: testSpool(t)})
+			_, saveErr := runner.PackSave(t.Context(), b, "node-a:0b9c1d3e-5f70-4a8b-9c1d-2e3f4a5b6c7d", minted)
+			for what, err := range map[string]error{"take": takeErr, "save": saveErr} {
+				if refused := errors.Is(err, sandbox.ErrSessionBindRefused); refused != c.refused {
+					t.Errorf("the %s was refused as naming another session: %v (%v), want %v", what, refused, err,
+						c.refused)
+				}
+			}
+		})
+	}
+}
