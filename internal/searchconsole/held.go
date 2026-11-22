@@ -17,7 +17,7 @@ import (
 // later failure, for the record of it. No Search Console method's class
 // depends on its arguments, so a call comes to its tool's class.
 func (p *Product) prepared(ctx context.Context, call growth.Call) (googlegrowth.Held, growth.Class, error) {
-	req, class, err := p.requestOf(ctx, call)
+	req, class, err := p.requestOf(call)
 	if err != nil {
 		return googlegrowth.Held{}, "", err
 	}
@@ -70,7 +70,7 @@ func (p *Product) Card(ctx context.Context, call growth.Call, binding string) (g
 // Google's terms and reading its target again, sending nothing where it moved
 // since binding was taken.
 func (p *Product) Apply(ctx context.Context, call growth.Call, binding string) (any, error) {
-	req, _, err := p.requestOf(ctx, call)
+	req, _, err := p.requestOf(call)
 	return p.client.Apply(ctx, call, googlegrowth.Write{Req: req, Err: err, Class: p.toolClass(call.Tool),
 		Scope: func(ctx context.Context) error { return p.checked(ctx, call.Handle, req) },
 		Cut:   p.cut(call.Handle, req)}, binding)

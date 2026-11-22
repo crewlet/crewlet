@@ -24,7 +24,7 @@ func (p *Product) Run(ctx context.Context, call growth.Call) (any, error) {
 	case toolVerificationToken:
 		return p.verificationToken(ctx, call)
 	}
-	req, class, err := p.requestOf(ctx, call)
+	req, class, err := p.requestOf(call)
 	if err != nil {
 		return nil, err
 	}
@@ -45,8 +45,8 @@ func (p *Product) Run(ctx context.Context, call growth.Call) (any, error) {
 
 // requestOf is a tool's request and the class of its tool: a curated tool's
 // built from its typed arguments, a generic tool's from the operation it
-// names. ctx reads what a request is built from (an owner list), as now.
-func (p *Product) requestOf(ctx context.Context, call growth.Call) (googlegrowth.Request, growth.Class, error) {
+// names. It reaches no vendor, so a deny or a lapse names it as built.
+func (p *Product) requestOf(call growth.Call) (googlegrowth.Request, growth.Class, error) {
 	site := argString(call.Args, "site")
 	sites := p.sites(call.Handle)
 	switch call.Tool {
@@ -76,7 +76,7 @@ func (p *Product) requestOf(ctx context.Context, call growth.Call) (googlegrowth
 			argString(call.Args, "method"))
 		return req, growth.ClassAdmin, err
 	case toolOwnersUpdate:
-		req, err := p.ownersRequest(ctx, call, site)
+		req, err := p.ownersRequest(call, site)
 		return req, growth.ClassAdmin, err
 	}
 	return p.generic(call)
@@ -145,10 +145,13 @@ func cutToSites(sites []string, v any) any {
 	return obj
 }
 
-// ownersRequest is search_console_owners_update's request: the property's resource as it
-// reads now, its owners changed as the call asks. An owner never removes
-// itself here: that is relinquishing, webResource.delete.
-func (p *Product) ownersRequest(ctx context.Context, call growth.Call, site string) (googlegrowth.Request, error) {
+// ownersRequest is search_console_owners_update's request: the property's
+// resource, its owners changed as the call asks. Google takes the owner list
+// whole, so the list sent is made from the resource as the approval binds it
+// ([ownersShape]), read under the lease; until then the body says the change.
+// An owner never removes itself here: that is relinquishing,
+// webResource.delete.
+func (p *Product) ownersRequest(call growth.Call, site string) (googlegrowth.Request, error) {
 	add, remove := stringArgs(call.Args["add"]), stringArgs(call.Args["remove"])
 	invalid := func(said string) (googlegrowth.Request, error) {
 		return googlegrowth.Request{}, refusal(growth.RefusedInvalid, said+" No vendor was changed.")
@@ -167,53 +170,66 @@ func (p *Product) ownersRequest(ctx context.Context, call growth.Call, site stri
 		return invalid("this agent's own identity cannot remove itself as an owner: relinquishing is " +
 			"siteVerification.webResource.delete through search_console_admin, after its tokens are off the site.")
 	}
-	_, _, id := resourceOf(site)
-	get, _ := p.Catalog().Operation("siteVerification.webResource.get")
-	read, err := newRequest(p.sites(call.Handle), get, map[string]string{"id": id}, nil, nil)
-	if err != nil {
-		return googlegrowth.Request{}, err
-	}
-	if err = p.inScope(call.Handle, read); err != nil {
-		return googlegrowth.Request{}, err
-	}
-	raw, err := p.client.Send(ctx, call.Handle, read)
-	if err != nil {
-		return googlegrowth.Request{}, err
-	}
-	var resource map[string]any
-	if err = json.Unmarshal(raw, &resource); err != nil {
-		return googlegrowth.Request{}, fmt.Errorf("searchconsole: decode %s's resource: %w", site, err)
-	}
-	var owners []string
-	list, _ := resource["owners"].([]any)
-	for _, o := range list {
-		if s, ok := o.(string); ok {
-			owners = append(owners, s)
-		}
-	}
-	changed := slices.Clone(owners)
-	for _, e := range remove {
-		i := slices.IndexFunc(changed, func(o string) bool { return strings.EqualFold(o, e) })
-		if i < 0 {
-			return invalid(fmt.Sprintf("%s is not an owner of %s.", e, site))
-		}
-		changed = slices.Delete(changed, i, i+1)
-	}
-	for _, e := range add {
-		if !slices.ContainsFunc(changed, func(o string) bool { return strings.EqualFold(o, e) }) {
-			changed = append(changed, e)
-		}
-	}
-	if slices.Equal(changed, owners) {
-		return invalid("every email to add is an owner of " + site + " already.")
-	}
-	ownersAfter := make([]any, 0, len(changed))
-	for _, o := range changed {
-		ownersAfter = append(ownersAfter, o)
-	}
+	kind, identifier, id := resourceOf(site)
 	update, _ := p.Catalog().Operation("siteVerification.webResource.update")
-	return newRequest(p.sites(call.Handle), update, map[string]string{"id": id}, nil,
-		map[string]any{"site": resource["site"], "owners": ownersAfter})
+	req, err := newRequest(p.sites(call.Handle), update, map[string]string{"id": id}, nil, map[string]any{
+		"site": map[string]any{"type": kind, "identifier": identifier}, "add": stringsAny(add),
+		"remove": stringsAny(remove)})
+	if err != nil {
+		return req, err
+	}
+	req.Shape = ownersShape(req, site, add, remove)
+	return req, nil
+}
+
+// ownersShape makes the owners update sent from the resource as read: its
+// owners with remove taken out and add put in, refused where an owner to
+// remove is none or every one to add is one already.
+func ownersShape(req googlegrowth.Request, site string, add, remove []string) func([]byte) (googlegrowth.Request,
+	error) {
+	return func(before []byte) (googlegrowth.Request, error) {
+		invalid := func(said string) (googlegrowth.Request, error) {
+			return googlegrowth.Request{}, refusal(growth.RefusedInvalid, said+" No vendor was changed.")
+		}
+		var resource map[string]any
+		if err := json.Unmarshal(before, &resource); err != nil || resource["site"] == nil {
+			return invalid(site + " holds no verified resource to change the owners of.")
+		}
+		var owners []string
+		list, _ := resource["owners"].([]any)
+		for _, o := range list {
+			if s, ok := o.(string); ok {
+				owners = append(owners, s)
+			}
+		}
+		changed := slices.Clone(owners)
+		for _, e := range remove {
+			i := slices.IndexFunc(changed, func(o string) bool { return strings.EqualFold(o, e) })
+			if i < 0 {
+				return invalid(fmt.Sprintf("%s is not an owner of %s.", e, site))
+			}
+			changed = slices.Delete(changed, i, i+1)
+		}
+		for _, e := range add {
+			if !slices.ContainsFunc(changed, func(o string) bool { return strings.EqualFold(o, e) }) {
+				changed = append(changed, e)
+			}
+		}
+		if slices.Equal(changed, owners) {
+			return invalid("every email to add is an owner of " + site + " already.")
+		}
+		req.Body = map[string]any{"site": resource["site"], "owners": stringsAny(changed)}
+		return req, nil
+	}
+}
+
+// stringsAny is a list of strings as JSON holds one.
+func stringsAny(s []string) []any {
+	out := make([]any, 0, len(s))
+	for _, v := range s {
+		out = append(out, v)
+	}
+	return out
 }
 
 // stringMap is an argument object of strings.
