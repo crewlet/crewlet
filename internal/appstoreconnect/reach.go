@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 
@@ -46,9 +47,11 @@ func (Reach) ReadFor() integration.Kind { return integration.KindAppStoreConnect
 // Apps is every app r reaches, each once, by name.
 func (r Reach) Apps() []App {
 	var out []App
+	seen := map[string]bool{}
 	for _, t := range r {
 		for _, a := range t.Apps {
-			if !slices.ContainsFunc(out, func(o App) bool { return o.ID == a.ID }) {
+			if !seen[a.ID] {
+				seen[a.ID] = true
 				out = append(out, a)
 			}
 		}
@@ -65,9 +68,9 @@ func sortApps(apps []App) {
 }
 
 // noListingKey is a team's Unread where no connected key may list its apps:
-// the Admin key never reads (doc.go).
-const noListingKey = "Crewlet lists a team's apps with a key other than Admin, which it never reads with: " +
-	"add a Marketing, Finance or Sales key to list them here"
+// the Admin key never reads (doc.go), and every other role may list them.
+const noListingKey = "Crewlet never reads with the Admin key, so it lists a team's apps with a key of any " +
+	"other role: add one (Marketing suits most agents) to list them here"
 
 // Reach is every connection's apps, each team's read with its least-privileged
 // key that may list them and reused for reachTTL; fresh reads every team
@@ -124,12 +127,19 @@ func reachOf(teams []*team) Reach {
 	return out
 }
 
-// unreadWords is why a team's apps could not be listed, as a person acts on it.
+// unreadWords is why a team's apps could not be listed, as a person acts on
+// it, in Crewlet's words alone: never Apple's text, which is not ours to show.
 func unreadWords(err error) string {
-	if errors.Is(err, ErrNoKey) {
+	var apiErr *APIError
+	switch {
+	case errors.Is(err, ErrNoKey):
 		return noListingKey
+	case errors.As(err, &apiErr):
+		return fmt.Sprintf("Apple refused to list the team's apps (HTTP %d): check the team's keys on "+
+			"this page", apiErr.Status)
+	default:
+		return "Crewlet could not reach Apple to list the team's apps; it tries again on the next check"
 	}
-	return "Apple did not list the team's apps: " + err.Error()
 }
 
 // Connections is each connection of block as its card shows it: the issuer it
