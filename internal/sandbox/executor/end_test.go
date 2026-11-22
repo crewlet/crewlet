@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // endingHarness is a stand-in `claude` that files its session as
@@ -232,7 +233,7 @@ func TestAnEndAskedBeforeTheHarnessStartsStartsNothing(t *testing.T) {
 		asked := box.Home() + "/release-asked"
 		harness := strings.Replace(sessionHarness("2.1.310"),
 			`if [ "$1" = --version ]; then echo`,
-			`if [ "$1" = --version ]; then : > `+shQuote(asked)+`; sleep 2; echo`, 1)
+			`if [ "$1" = --version ]; then : > `+shellword.Quote(asked)+`; sleep 2; echo`, 1)
 		writeBoxStandIn(t, box, p.BinDir()+"/claude", harness)
 		handle, err := runner.Start(t.Context(), box, sandbox.RunRequest{Brief: "begin"})
 		if err != nil {
@@ -303,8 +304,8 @@ func TestTheScriptPublishesItsPIDOnlyOnceItsTrapIsSet(t *testing.T) {
 		seen := box.Home() + "/job-script-at-release"
 		harness := strings.Replace(sessionHarness("2.1.310"),
 			`if [ "$1" = --version ]; then echo`,
-			`if [ "$1" = --version ]; then cp `+shQuote(bp.JobScript())+` `+shQuote(seen)+
-				`; read -r proto pid < `+shQuote(bp.JobScript())+`; kill -USR1 "$pid"; echo`, 1)
+			`if [ "$1" = --version ]; then cp `+shellword.Quote(bp.JobScript())+` `+shellword.Quote(seen)+
+				`; read -r proto pid < `+shellword.Quote(bp.JobScript())+`; kill -USR1 "$pid"; echo`, 1)
 		writeBoxStandIn(t, box, bp.BinDir()+"/claude", harness)
 		handle, err := runner.Start(t.Context(), box, sandbox.RunRequest{Brief: "begin"})
 		if err != nil {
@@ -336,9 +337,9 @@ func slowTar(begun string, partial bool) string {
 	if partial {
 		return `tar() { slowtarout= slowtarprev=; for slowtararg; do [ "$slowtarprev" = -czf ] && ` +
 			`slowtarout=$slowtararg; slowtarprev=$slowtararg; done; [ -z "$slowtarout" ] || ` +
-			`printf 'part of an archive' > "$slowtarout"; : > ` + shQuote(begun) + `; sleep 300; }` + "\n"
+			`printf 'part of an archive' > "$slowtarout"; : > ` + shellword.Quote(begun) + `; sleep 300; }` + "\n"
 	}
-	return `tar() { : > ` + shQuote(begun) + `; sleep 1; command tar "$@"; }` + "\n"
+	return `tar() { : > ` + shellword.Quote(begun) + `; sleep 1; command tar "$@"; }` + "\n"
 }
 
 // A SECOND END REQUEST LEAVES THE PACK WHOLE, on Claude Code as on OpenCode (see
