@@ -18,6 +18,7 @@ This is how an agent answers a message, works a ticket, implements a feature, ma
 | Runner | How | Measured |
 |---|---|---|
 | Claude Code | `--disallowedTools WebFetch WebSearch` | 2.1.330: both refused, in subagents too, with a repository's settings allowing them and an agent of its own listing them |
+| Codex | `web_search="disabled"` on its app-server's command line, the top configuration layer | 0.171.0: the request offers no `web_search` tool, Codex's one web tool (the codex profile's web denial, measured on `exec`) |
 | OpenCode | the `opencode.tool.webfetch` and `opencode.tool.websearch` plugins removed, and both actions denied in the run's rules and its agent's | 2.3.2: neither registered for the run or a subagent, a repository's agent allowing them and its `plugins` naming them again included; Code Mode's `fetch` refused |
 
 Turning the web off turns off the harness's web tools. The run's shell, and any code it runs, reach only what the box cell's egress policy allows.

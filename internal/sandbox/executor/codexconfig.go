@@ -107,6 +107,14 @@ func codexPosture(req sandbox.RunRequest) []string {
 		`shell_environment_policy.inherit="all"`,
 		`shell_environment_policy.exclude=` + tomlArray(excluded),
 	}
+	// THE ENTRY'S WEB TOOLS OFF where it denies them, as its runs on the engine
+	// host have none: web search is Codex's one web tool, and `disabled` is the
+	// codex profile's own web denial, the request then offering no web_search
+	// tool (measured on 0.171.0, docs/concepts/llm-backends.md). The shell's
+	// reach is the box cell's egress policy's.
+	if req.WebDenied {
+		set = append(set, `web_search="disabled"`)
+	}
 	// THE ENTRY'S MODEL AND EFFORT AS WRITTEN, as its runs on the engine host
 	// hand them (the codex profile's model_args and effort).
 	if req.Model != "" {

@@ -334,3 +334,21 @@ func TestACodexSocketPastAUnixPathIsRefusedNamingTheStateDir(t *testing.T) {
 		t.Errorf("a socket at the %d-byte bound is refused: %v", maxCodexSocketPath, err)
 	}
 }
+
+// A WEB-DENIED ENTRY'S CODEX RUN HAS NO WEB TOOL: its app-server is started
+// with web search, Codex's one web tool, disabled, the codex profile's own web
+// denial; a run on an entry that keeps the web sets no such override.
+//
+// Mutation: drop the override, or set it on every run, and this goes red.
+func TestAWebDeniedCodexRunHasNoWebTool(t *testing.T) {
+	t.Parallel()
+	off := sandbox.ShellQuote(`web_search="disabled"`)
+	if denied := codexPosture(sandbox.RunRequest{WebDenied: true}); !slices.Contains(denied, off) {
+		t.Errorf("a web-denied run's posture %q does not disable web search", denied)
+	}
+	if kept := codexPosture(sandbox.RunRequest{}); slices.ContainsFunc(kept, func(kv string) bool {
+		return strings.Contains(kv, "web_search")
+	}) {
+		t.Errorf("a run that keeps the web sets web search: %q", kept)
+	}
+}
