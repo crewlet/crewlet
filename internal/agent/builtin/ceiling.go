@@ -106,6 +106,20 @@ func OutsideAnyTurn(ctx context.Context) context.Context {
 	}))
 }
 
+// CallCeiling is the requester ceiling the gate bound to this call
+// ([bindCeiling], [OutsideAnyTurn]), false where none is bound. For a
+// decision a surface makes inside a seat's call but outside this package (a
+// growth product reading an artifact to upload it), so it is held to whoever
+// woke the turn as a builtin's own decision is. An error is UNKNOWN.
+func CallCeiling(ctx context.Context) (authz.Ceiling, bool, error) {
+	bound, ok := ctx.Value(ceilingKey{}).(boundCeiling)
+	if !ok {
+		return authz.Ceiling{}, false, nil
+	}
+	c, err := bound()
+	return c, true, err
+}
+
 // credentialCeiling is the ceiling of a turn a credential acting as no seat
 // woke ([turnctx.Turn.RequesterLogin]): that credential, held to the apps both
 // its writes carried AND this node resolves it to now; never admin

@@ -23,6 +23,7 @@ import (
 	_ "github.com/crewlet/crewlet/internal/googleads"
 	_ "github.com/crewlet/crewlet/internal/googleanalytics"
 	_ "github.com/crewlet/crewlet/internal/googlecloud"
+	_ "github.com/crewlet/crewlet/internal/googleplay"
 	_ "github.com/crewlet/crewlet/internal/mattermost"
 	_ "github.com/crewlet/crewlet/internal/metaads"
 	_ "github.com/crewlet/crewlet/internal/searchconsole"

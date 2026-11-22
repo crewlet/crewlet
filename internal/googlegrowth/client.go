@@ -146,12 +146,28 @@ func FailureOf(err error, write bool) growth.Failure {
 // Send makes req as handle's identity and answers Google's body. Its every
 // failure is a [*CallError], with the reason the access log keeps.
 func (c *Client) Send(ctx context.Context, handle string, req Request) ([]byte, error) {
+	if req.Raw {
+		var kept googleauth.Raw
+		if err := c.send(ctx, handle, req, nil, &kept); err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]string{"contentType": kept.ContentType, "data": string(kept.Data)})
+	}
+	var raw json.RawMessage
+	err := c.send(ctx, handle, req, nil, &raw)
+	return raw, err
+}
+
+// send makes req as handle's identity, or as the company's consent grant
+// where the product has one, with body (req's own where nil), reading
+// Google's answer into out. Its every failure is a [*CallError].
+func (c *Client) send(ctx context.Context, handle string, req Request, body, out any) error {
 	if c.Grant != nil {
-		return c.sendAsGrant(ctx, req)
+		return c.sendAsGrant(ctx, req, body, out)
 	}
 	conn, err := googleauth.For(c.Company(), c.Env(), c.HTTP)
 	if err != nil {
-		return nil, &CallError{growth.FailureEngineError, growth.Refuse(growth.RefusedUnavailable,
+		return &CallError{growth.FailureEngineError, growth.Refuse(growth.RefusedUnavailable,
 			c.Name+" is not reachable: "+googleauth.Sentence(err)+". A person fixes it on the Google Cloud "+
 				"connection. No vendor was reached.")}
 	}
@@ -159,68 +175,60 @@ func (c *Client) Send(ctx context.Context, handle string, req Request) ([]byte, 
 	if len(req.Op.Permissions) > 0 {
 		token, mintErr := c.Tokens.GoogleGrowthToken(ctx, handle, req.Op.Permissions, TokenLife, c.HTTP)
 		if mintErr != nil {
-			return nil, &CallError{growth.FailureEngineError,
+			return &CallError{growth.FailureEngineError,
 				growth.Refuse(growth.RefusedUnavailable, c.Name+" was not called: "+mintErr.Error())}
 		}
 		bearer = token.Token
 	}
 	address, err := c.address(ctx, req)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	raw, err := sendOn(ctx, &conn.Transport, req, address, bearer)
-	if err != nil {
-		return nil, &CallError{FailureOf(err, !req.Reads()), c.refused(req, err)}
+	if err = sendOn(ctx, &conn.Transport, req, address, bearer, body, out); err != nil {
+		return &CallError{FailureOf(err, !req.Reads()), c.refused(req, err)}
 	}
-	return raw, nil
+	return nil
 }
 
 // sendAsGrant makes req with the company's consent grant: once, and once more
 // with a renewed token where Google refused the first as unauthenticated.
-func (c *Client) sendAsGrant(ctx context.Context, req Request) ([]byte, error) {
+func (c *Client) sendAsGrant(ctx context.Context, req Request, body, out any) error {
 	unsent := func(err error) error {
 		return &CallError{growth.FailureEngineError,
 			growth.Refuse(growth.RefusedUnavailable, c.Name+" was not called: "+err.Error())}
 	}
 	token, err := c.Grant.Token(ctx)
 	if err != nil {
-		return nil, unsent(err)
+		return unsent(err)
 	}
 	address, err := c.address(ctx, req)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	transport := googleauth.NewTransport(c.HTTP)
-	raw, err := sendOn(ctx, transport, req, address, token)
+	err = sendOn(ctx, transport, req, address, token, body, out)
 	if googleauth.Status(err) == http.StatusUnauthorized {
 		if token, err = c.Grant.Renewed(ctx, token); err != nil {
-			return nil, unsent(err)
+			return unsent(err)
 		}
-		raw, err = sendOn(ctx, transport, req, address, token)
+		err = sendOn(ctx, transport, req, address, token, body, out)
 	}
 	if err != nil {
-		return nil, &CallError{FailureOf(err, !req.Reads()), c.refused(req, err)}
+		return &CallError{FailureOf(err, !req.Reads()), c.refused(req, err)}
 	}
-	return raw, nil
+	return nil
 }
 
-// sendOn makes req at address on t with bearer and its API's headers, a
-// read's 429 waited out.
-func sendOn(ctx context.Context, t *googleauth.Transport, req Request, address, bearer string) (json.RawMessage, error) {
+// sendOn makes req at address on t with bearer and its API's headers, with
+// body (req's own where nil), reading the answer into out; a read's 429 is
+// waited out.
+func sendOn(ctx context.Context, t *googleauth.Transport, req Request, address, bearer string, body, out any) error {
 	call := googleauth.Call{Method: req.Op.Method, Address: address, Bearer: bearer, Header: req.Header,
-		Reads: req.Reads()}
-	if req.Body != nil {
+		Body: body, Reads: req.Reads()}
+	if body == nil && req.Body != nil {
 		call.Body = req.Body
 	}
-	if req.Raw {
-		var kept googleauth.Raw
-		if err := t.Send(ctx, call, &kept); err != nil {
-			return nil, err
-		}
-		return json.Marshal(map[string]string{"contentType": kept.ContentType, "data": string(kept.Data)})
-	}
-	var raw json.RawMessage
-	return raw, t.Send(ctx, call, &raw)
+	return t.Send(ctx, call, out)
 }
 
 // address is where req is sent: its query as [Request.Fill] makes it. A fill

@@ -157,6 +157,7 @@ import (
 	"github.com/crewlet/crewlet/internal/googleanalytics"
 	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/googlecloud"
+	"github.com/crewlet/crewlet/internal/googleplay"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/jira"
@@ -1087,6 +1088,14 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		block := company.Integrations.SearchConsole
 		guide = searchconsole.Guide()
 		reqs = searchconsole.Requirements(company)
+		configured = block != nil
+		enabled = block != nil && block.Enabled
+	case integration.KindGooglePlay:
+		// No roster and no credential: as Google Analytics, publishing held
+		// for an administrator.
+		block := company.Integrations.GooglePlay
+		guide = googleplay.Guide()
+		reqs = googleplay.Requirements(company)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindSlack:

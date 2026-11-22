@@ -131,6 +131,10 @@ const (
 	// LaneSearchConsole is a seat's level and sites at Search Console, which
 	// the engine reaches as the seat's growth identity.
 	LaneSearchConsole Lane = "search_console"
+
+	// LaneGooglePlay is a seat's level and apps at Google Play, which the
+	// engine reaches as the seat's growth identity.
+	LaneGooglePlay Lane = "google_play"
 )
 
 // Lanes is every lane, in the order an operator reads integrations
@@ -140,7 +144,8 @@ func Lanes() []Lane {
 	return []Lane{
 		LaneSlack, LaneMattermost, LaneJira, LaneConfluence,
 		LaneGitHub, LaneGitLab, LaneDatadog, LaneCloudflare, LaneExpo, LaneDigitalOcean, LaneScaleway, LaneAWS, LaneGoogleCloud,
-		LaneSSH, LaneMetaAds, LaneAppStoreConnect, LaneAppleAds, LaneGoogleAnalytics, LaneAdMob, LaneAdSense, LaneGoogleAds, LaneSearchConsole,
+		LaneSSH, LaneMetaAds, LaneAppStoreConnect, LaneAppleAds, LaneGoogleAnalytics, LaneAdMob, LaneAdSense,
+		LaneGoogleAds, LaneSearchConsole, LaneGooglePlay,
 	}
 }
 

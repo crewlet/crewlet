@@ -298,6 +298,20 @@ func TestASearchConsoleSiteIsAnAccount(t *testing.T) {
 	find(t, read(c), atlas.KindAccount, "google/search-console")
 }
 
+// A GOOGLE PLAY APP IS AN ACCOUNT, keyed by its package name, with the
+// app_delivery capability; a company that names none holds the vendor alone.
+func TestAGooglePlayAppIsAnAccount(t *testing.T) {
+	t.Parallel()
+	c := derive.AcmeCompany()
+	c.Integrations.GooglePlay = &config.GooglePlay{Enabled: true, Apps: []string{"com.acme.app"}}
+	account := find(t, read(c), atlas.KindAccount, "google/play/com.acme.app")
+	if account.Name != "Google Play" || !slices.Contains(factOf(account, atlas.FactCapability), "app_delivery") {
+		t.Errorf("the app's account is %+v", account)
+	}
+	c.Integrations.GooglePlay.Apps = nil
+	find(t, read(c), atlas.KindAccount, "google/play")
+}
+
 // A TOOL SERVER IS KNOWN BY ITS COMMAND, NEVER ITS ARGUMENTS: an argument is
 // where a person passes a token by mistake, and it is no secret position.
 func TestAToolServerIsKnownByItsCommandNotItsArguments(t *testing.T) {
