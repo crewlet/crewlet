@@ -96,9 +96,9 @@ var steerWiring = sandbox.SteerWiring{Server: "crewlet", Tool: "steer_take",
 // line: it can pass one argument's 128 KiB cap, and a direct box's command
 // line is readable by every account on its host. Every run is started with one
 // settings file, every run's unless a gate names another; only one wired to its
-// notes names the hooked settings, for its release to choose between. Nothing that drops the repository's own
-// settings and CLAUDE.md (--setting-sources) or doubles the stream
-// (--include-hook-events) is passed.
+// notes names the hooked settings, for its release to choose between. No other
+// settings source is read (`--setting-sources ”`), and nothing that doubles
+// the stream (--include-hook-events) is passed.
 //
 // Mutation: put the brief back after -p (first row), name the hooked settings
 // whatever the request (unwired row), or drop --settings (both): a row goes red.
@@ -136,10 +136,11 @@ func TestClaudesCommandCarriesNoBriefAndNamesItsSettings(t *testing.T) {
 			if got := strings.Contains(cmd, hooked); got != tc.hooked {
 				t.Errorf("names %s: %v, want %v:\n%s", hooked, got, tc.hooked, cmd)
 			}
-			for _, never := range []string{"--setting-sources", "--include-hook-events"} {
-				if strings.Contains(cmd, never) {
-					t.Errorf("the command passes %s:\n%s", never, cmd)
-				}
+			if !strings.Contains(cmd, "--permission-mode bypassPermissions --setting-sources '' ") {
+				t.Errorf("the run reads a settings source of its own:\n%s", cmd)
+			}
+			if strings.Contains(cmd, "--include-hook-events") {
+				t.Errorf("the command passes --include-hook-events:\n%s", cmd)
 			}
 		})
 	}
@@ -794,10 +795,9 @@ var claudeSettingsSince = map[string]string{
 
 // NO SETTINGS FILE HOLDS A KEY NEWER THAN THE OLDEST RELEASE IT IS HANDED:
 // print mode silently ignores a file holding a key it does not know, the
-// retention with it. Every run's file is handed from 1.0.61, the first with
-// --settings (none up to it starts a run, lacking --append-system-prompt-file,
-// both read in its shipped code); the skills' from the first that runs their
-// hook; the notes' from the first that reads a Stop hook's answer; each pinned
+// retention with it. Every run's file is handed from 1.0.125, the oldest a run
+// is started on; the skills' from the first that runs their hook; the notes'
+// from the first that reads a Stop hook's answer; each pinned
 // copy from the later of its file's floor and the pin's. A key or file this
 // case knows no release of goes red too.
 //
@@ -821,10 +821,10 @@ func TestNoSettingsFileHoldsAKeyNewerThanTheOldestReleaseItIsHanded(t *testing.T
 		return executor.ClaudeSettingsPinFloor
 	}
 	oldest := map[string]string{
-		p.ClaudeSettings():             "1.0.61",
+		p.ClaudeSettings():             executor.ClaudeSettingSourcesFloor,
 		p.ClaudeSkillsSettings():       executor.ClaudeSkillsFloor,
 		p.ClaudeNotesSettings():        executor.ClaudeNotesFloor,
-		p.ClaudeSettingsPinned():       pinned("1.0.61"),
+		p.ClaudeSettingsPinned():       pinned(executor.ClaudeSettingSourcesFloor),
 		p.ClaudeSkillsSettingsPinned(): pinned(executor.ClaudeSkillsFloor),
 		p.ClaudeNotesSettingsPinned():  pinned(executor.ClaudeNotesFloor),
 	}
