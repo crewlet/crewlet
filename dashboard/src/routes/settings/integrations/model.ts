@@ -99,9 +99,9 @@ export const STORIES: Record<string, ToolStory> = {
       "Ask you before any reply, submission, price or account change customers or testers see",
     ],
     identity:
-      "Agents never hold a key: Crewlet makes every call for them through the key with the least access.",
+      "Agents never hold a key: Crewlet makes every call for them through the least-privileged key that can make it.",
     byHand:
-      "Create the keys in App Store Connect, Users and Access, Integrations. Apple has no API that creates them.",
+      "In App Store Connect, Users and Access, Integrations, the Account Holder requests API access once; then create the keys there. Apple has no API that creates them.",
   },
   slack: {
     does: [
