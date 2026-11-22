@@ -172,19 +172,27 @@ func (b *transcriptBuilder) copilotCalls(raw json.RawMessage, at time.Time) erro
 // copilotNotesHeld is the inbox ids of takes, in serve order and once each,
 // whose note a session's events.jsonl shows reached the model as a current
 // message: the main agent's `user.message` under its clientTurnId
-// ([CopilotClientTurnID]), `steering` or `queued`, then the record of a main
-// agent's request ([copilotMainRequest]) with no compaction between, since a queued note's line precedes its turn's compaction, which
-// can leave it only in the summary (ADR-0177; measured on 1.0.114,
-// compacted-queued). The line alone is no proof (ruling 1 of #1818's design):
-// a kill or a refusal can follow it before any request. A last line with no
-// newline is a write cut off; a line past the bound is no line.
+// ([CopilotClientTurnID]), `steering` or `queued`, then a main agent's request
+// ([copilotMainRequest]) with no compaction between that may have left it only
+// in the summary (ADR-0177): one not stated failed, unless it carried the note
+// over whole among the newest inputs its start counts (`retainedInputMessages`;
+// measured on 1.0.114, compacted-queued: a queued note precedes its turn's
+// compaction, retained). The line alone is no proof (ruling 1 of #1818's
+// design): a kill or a refusal can follow it. A last line with no newline is
+// a write cut off; a line past the bound is no line.
 func copilotNotesHeld(ctx context.Context, events io.Reader, takes []ServedTake) ([]string, error) {
 	asked := make(map[string]string, len(takes))
 	for _, take := range takes {
 		asked[CopilotClientTurnID(take.InboxID)] = take.InboxID
 	}
-	pending := map[string]bool{}
+	// pending is each note sent and not yet held, by the number of its line;
+	// inputs the number of every line of the main agent's user messages, and
+	// retained the notes the compaction started last carries over whole.
+	pending := map[string]int{}
+	var inputs []int
+	var retained map[string]bool
 	held := map[string]bool{}
+	n := 0
 	// moved is what the line read last moved to held, taken back where that
 	// line turns out to be the file's unended last.
 	var moved []string
@@ -193,6 +201,7 @@ func copilotNotesHeld(ctx context.Context, events io.Reader, takes []ServedTake)
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		n++
 		moved = moved[:0]
 		ev, ok := decodeCopilotNoteLine(line)
 		if !ok {
@@ -200,9 +209,13 @@ func copilotNotesHeld(ctx context.Context, events io.Reader, takes []ServedTake)
 		}
 		switch ev.Type {
 		case "user.message":
+			if ev.AgentID != "" {
+				return nil
+			}
+			inputs = append(inputs, n)
 			inbox, ours := asked[ev.Data.ClientTurnID]
-			if ours && ev.AgentID == "" && (ev.Data.Delivery == "steering" || ev.Data.Delivery == "queued") {
-				pending[inbox] = true
+			if ours && (ev.Data.Delivery == "steering" || ev.Data.Delivery == "queued") {
+				pending[inbox] = n
 			}
 		case "session.usage_record":
 			if ev.AgentID != "" || ev.Data.Usage.InteractionType != copilotMainRequest {
@@ -215,15 +228,23 @@ func copilotNotesHeld(ctx context.Context, events io.Reader, takes []ServedTake)
 				}
 			}
 			clear(pending)
+		case "session.compaction_start":
+			retained = copilotRetained(pending, inputs, looseInt(ev.Data.RetainedInputMessages))
 		case "session.compaction_complete":
 			// Past a compaction, a request may carry the note only inside
-			// its summary: only one that says it failed keeps the note.
+			// its summary: only one that says it failed keeps every note, and
+			// one that applied those it carried over whole.
 			if string(ev.Data.Success) != "false" {
-				clear(pending)
+				for inbox := range pending {
+					if !retained[inbox] {
+						delete(pending, inbox)
+					}
+				}
 			}
+			retained = nil
 		}
 		return nil
-	}, func(int64) error { moved = moved[:0]; return nil })
+	}, func(int64) error { n++; moved = moved[:0]; return nil })
 	if err != nil {
 		return nil, fmt.Errorf("executor: reading which notes the Copilot session holds: %w", err)
 	}
@@ -241,6 +262,23 @@ func copilotNotesHeld(ctx context.Context, events io.Reader, takes []ServedTake)
 	return out, nil
 }
 
+// copilotRetained is the pending notes among the last count of the main
+// agent's user messages, inputs by line, which a compaction starting now
+// carries over whole.
+func copilotRetained(pending map[string]int, inputs []int, count int64) map[string]bool {
+	if count <= 0 || len(inputs) == 0 {
+		return nil
+	}
+	from := inputs[len(inputs)-int(min(count, int64(len(inputs))))]
+	kept := map[string]bool{}
+	for inbox, line := range pending {
+		if line >= from {
+			kept[inbox] = true
+		}
+	}
+	return kept
+}
+
 // copilotNoteLine is what [copilotNotesHeld] reads of one events.jsonl line:
 // its own few fields, raw where Copilot's kind could vary, so that no other
 // field of the line can lose them, as a field of another type loses the whole
@@ -252,7 +290,10 @@ type copilotNoteLine struct {
 		ClientTurnID string          `json:"clientTurnId"`
 		Delivery     string          `json:"delivery"`
 		Success      json.RawMessage `json:"success"`
-		Usage        struct {
+		// RetainedInputMessages is how many of the newest inputs a
+		// compaction's start carries over whole.
+		RetainedInputMessages json.RawMessage `json:"retainedInputMessages"`
+		Usage                 struct {
 			InteractionType string `json:"interactionType"`
 		} `json:"usage"`
 	} `json:"data"`

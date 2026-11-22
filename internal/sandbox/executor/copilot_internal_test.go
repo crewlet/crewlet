@@ -496,19 +496,39 @@ func TestACopilotQueuedNoteIsHeldOnceARequestCarriedIt(t *testing.T) {
 	}
 }
 
-// A request past a compaction holds no note whose line came before the
-// compaction: Copilot can leave such a note only inside the summary, as
-// history (ADR-0177). compacted-queued (1.0.114, a BYOK stand-in near its
-// compaction point): note 1 lands queued before its turn's compaction; notes 2
-// and 3 land steering after it, then the request.
+// A note whose line came before an applied compaction is held only where the
+// compaction carried it over whole: Copilot can otherwise leave it only inside
+// the summary, as history (ADR-0177). Both runs (1.0.114, a BYOK stand-in near
+// its compaction point) queue note 1 before its turn's compaction, which
+// counts one input retained, and send the rest steering after it; the request
+// after the compaction carried note 1 as a user message of its own as well as
+// in the summary's opening (captured request bodies, #1818's measurements).
+// compacted-queued with no input retained is the same run with nothing kept.
 //
-// Mutation: let a request past an applied compaction hold the note before
-// it — note 1 is held.
-func TestACopilotNoteIsNotHeldPastACompaction(t *testing.T) {
-	held, err := copilotNotesHeld(t.Context(), bytes.NewReader(copilotFixture(t, "compacted-queued.events.jsonl")),
-		served("msg_inbox1", "msg_inbox2", "msg_inbox3"))
-	if err != nil || !slices.Equal(held, []string{"msg_inbox2", "msg_inbox3"}) {
-		t.Fatalf("held = %v (%v), want notes 2 and 3, not note 1 past the compaction", held, err)
+// Mutation: drop the retained exemption — note 1 is not held in either run;
+// keep every pending note across a compaction — note 1 is held with none
+// retained.
+func TestACopilotNoteTheCompactionCarriedOverIsHeld(t *testing.T) {
+	cases := []struct {
+		name   string
+		events []byte
+		served []ServedTake
+		want   []string
+	}{
+		{"compacted-queued", copilotFixture(t, "compacted-queued.events.jsonl"),
+			served("msg_inbox1", "msg_inbox2", "msg_inbox3"), []string{"msg_inbox1", "msg_inbox2", "msg_inbox3"}},
+		{"compacted-queued-steered", copilotFixture(t, "compacted-queued-steered.events.jsonl"),
+			served("msg_inbox1", "msg_inbox2"), []string{"msg_inbox1", "msg_inbox2"}},
+		{"none retained", copilotCompactedUnretained(t, func(l []byte) []byte { return l }),
+			served("msg_inbox1", "msg_inbox2", "msg_inbox3"), []string{"msg_inbox2", "msg_inbox3"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			held, err := copilotNotesHeld(t.Context(), bytes.NewReader(c.events), c.served)
+			if err != nil || !slices.Equal(held, c.want) {
+				t.Fatalf("held = %v (%v), want %v", held, err, c.want)
+			}
+		})
 	}
 }
 
