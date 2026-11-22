@@ -1364,6 +1364,12 @@ func readValue[T textual](whole T, start, end int, prior [][2]int) aValue {
 	}
 	for _, pick := range []int{1, 2} {
 		o := readValueAs(whole, start, end, prior, pick)
+		// EVERY READING HOLDS WHAT IT READS, whatever it finds: a text cut
+		// before the line that decides a reading has no result from it yet,
+		// so the value is decided only where each reading is ([valueHolds]).
+		// Held by the result alone, a cut text read no second range, and the
+		// value a later line gives was shown past the cut.
+		v.decided, v.unread = max(v.decided, o.decided), v.unread && o.unread
 		if o.to > o.from && (o.from < end || sameLine(whole, o.from, start)) {
 			// A reading on the key's own line is no reading of a piece.
 			continue
@@ -1374,7 +1380,6 @@ func readValue[T textual](whole T, start, end int, prior [][2]int) aValue {
 			}
 			continue
 		}
-		v.decided = max(v.decided, o.decided)
 		o.to = min(o.to, len(whole), start+MaxReach)
 		if o.to <= o.from {
 			continue

@@ -10,14 +10,12 @@
  * twice. Layout widgets are the reader's own words and structure (a group, a
  * heading, a divider, a note, a list of links), as many as they like.
  *
- * PER READER, PER BROWSER, for `lib/starred.ts`'s reasons, and read from
- * storage as untrusted input: every field is checked, every string capped,
+ * KEPT UNDER THE READER'S SEAT on the engine (`kept.ts`), and read as untrusted
+ * input wherever it comes from: every field is checked, every string capped,
  * every link held to the two shapes a link may take (`linkHref`).
  */
 
 import { NODE_HUES, type NodeHue } from "@crewlethq/ui";
-import { readerStore } from "~/lib/readerStore.ts";
-import { STORAGE_KEYS } from "~/lib/storage.ts";
 import { widgetDef } from "./registry.tsx";
 
 export type Tone = NodeHue | "none";
@@ -522,8 +520,3 @@ export function fromLists(board: Board, lists: Record<string, string[]>): Board 
 }
 
 export const sameBoard = (a: Board, b: Board) => JSON.stringify(a) === JSON.stringify(b);
-
-/** The reader's board, kept in this browser per reader as their stars are. */
-export function boardStore(fallback: Board) {
-  return readerStore<Board>(STORAGE_KEYS.homeBoard, fallback, (raw) => validBoard(raw, fallback));
-}
