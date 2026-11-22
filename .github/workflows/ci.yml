@@ -859,9 +859,9 @@ jobs:
         with:
           path: ${{ env.CREWLET_PLAYWRIGHT_TREE_CACHE }}
           key: playwright-tree-${{ runner.os }}-l${{ steps.playwright-tree-key.outputs.layout }}.${{ hashFiles('internal/browser/boxhelper/tree/package.json', 'internal/browser/boxhelper/tree/package-lock.json', 'internal/browser/boxhelper/tree/installed.sha256') }}
-      # NODE, because this half runs internal/sandbox/executor's probe of
-      # the OpenCode notes plugin the engine embeds, which drives the plugin
-      # under plain `node` against a stand-in of the bridge's notes route, and
+      # NODE, because this half runs internal/sandbox/executor's probes of
+      # the OpenCode plugins and the Kimi Code driver the engine embeds,
+      # each under plain `node` against a stand-in of what it talks to, and
       # internal/browser/boxhelper's cases, which run the box helper under
       # this node and the floor's, each box installing the Playwright tree
       # with that Node's own npm, offline — and `make test` refuses to start
