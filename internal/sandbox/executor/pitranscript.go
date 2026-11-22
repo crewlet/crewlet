@@ -214,8 +214,8 @@ func piNotesHeld(ctx context.Context, r io.Reader, takes []ServedTake) ([]string
 		}
 		n := piNode{parent: e.ParentID}
 		switch {
-		case e.Type == "custom_message" && e.CustomType == piNoteType && asked[e.Details.Inbox]:
-			n.kind, n.inbox = piNote, e.Details.Inbox
+		case e.Type == "custom_message" && e.CustomType == piNoteType && asked[e.inbox()]:
+			n.kind, n.inbox = piNote, e.inbox()
 		case e.Type == "message" && e.Message != nil && e.Message.Role == "assistant" &&
 			piAnswered(e.Message.StopReason):
 			n.kind = piAnswer

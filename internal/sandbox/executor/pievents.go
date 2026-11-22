@@ -75,15 +75,32 @@ type piEntry struct {
 	Timestamp  string          `json:"timestamp"`
 	CustomType string          `json:"customType"`
 	Content    json.RawMessage `json:"content"`
-	Details    struct {
-		Inbox string `json:"inbox"`
-	} `json:"details"`
-	Data    piEntryData `json:"data"`
-	Message *piMessage  `json:"message"`
-	Summary string      `json:"summary"`
+	// Details and Data are an extension's own, raw: another extension's of
+	// another shape must not lose the entry its place on the branch.
+	Details json.RawMessage `json:"details"`
+	Data    json.RawMessage `json:"data"`
+	Message *piMessage      `json:"message"`
+	Summary string          `json:"summary"`
 	// TargetID is a context_edit's: the entry it takes out of what the model
 	// reads, or replaces.
 	TargetID string `json:"targetId"`
+}
+
+// inbox is the inbox id a note's details carry, "" for none.
+func (e piEntry) inbox() string {
+	var d struct {
+		Inbox string `json:"inbox"`
+	}
+	_ = json.Unmarshal(e.Details, &d)
+	return d.Inbox
+}
+
+// data is the extension's own data of the entry, zero where it has none of
+// this shape.
+func (e piEntry) data() piEntryData {
+	var d piEntryData
+	_ = json.Unmarshal(e.Data, &d)
+	return d
 }
 
 // piEntryData is the data of the extension's own entries: the cap that
@@ -285,11 +302,11 @@ func (d *piEvents) entry(e piEntry) {
 	case e.Type == "custom" && e.CustomType == piArmedType:
 		d.armed = true
 	case e.Type == "custom" && e.CustomType == piCapType:
-		d.capped = max(e.Data.Turns, 1)
+		d.capped = max(e.data().Turns, 1)
 	case e.Type == "custom" && e.CustomType == piBridgeType:
-		d.missing = e.Data.Missing
+		d.missing = e.data().Missing
 	case e.Type == "custom" && e.CustomType == piContextType:
-		if w := e.Data.ContextWindow; w > 0 && (d.window == 0 || w < d.window) {
+		if w := e.data().ContextWindow; w > 0 && (d.window == 0 || w < d.window) {
 			d.window = w
 		}
 	case e.Type == "custom_message" && e.CustomType == piNoteType:
