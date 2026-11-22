@@ -26,6 +26,20 @@ func (f *Fleet) SeatAccessRecords(_ context.Context, kind string) (map[string][]
 	return out, nil
 }
 
+// SeatAccessRecord is one seat's record at one integration, false where none.
+func (f *Fleet) SeatAccessRecord(_ context.Context, kind, handle string) ([]byte, bool, error) {
+	if kind == "" || handle == "" {
+		return nil, false, errors.New("coord/memory: a seat access record is read per integration and seat")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	value, found := f.seatAccess[kind][handle]
+	if !found {
+		return nil, false, nil
+	}
+	return bytes.Clone(value), true, nil
+}
+
 // PutSeatAccessRecord records one seat's record at one integration.
 func (f *Fleet) PutSeatAccessRecord(_ context.Context, kind, handle string, value []byte) error {
 	if kind == "" || handle == "" {

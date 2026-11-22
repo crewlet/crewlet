@@ -2,6 +2,7 @@ package seataccess
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -10,8 +11,10 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/provision"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // SyncInput is one kind's sync: which vendor, the document, the ledger, and
@@ -249,6 +252,17 @@ func (s *syncer) seat(
 		for _, lane := range lanes {
 			want[lane], _ = DesiredAt(seat.Role, lane, s.now)
 		}
+	}
+	// A SEAT WHOSE RECORD WOULD OUTGROW ITS KEY is told so before any vendor
+	// step: a step whose record cannot be kept is one the next pass cannot
+	// tell from a change made by hand. A dry run tells the vendor nothing.
+	if lane, ok := fitsLedger(rec, want); !ok && s.in.Sink != nil {
+		d := want[lane]
+		s.failAll(&rec, lanes, &Failure{Step: VerbScope, Actor: ByYou,
+			Said: fmt.Sprintf("%s's access on %s names %d scope entries and %d grants, more than "+
+				"its ledger record holds", h, LaneName(lane), len(d.Scope), len(d.Grants)),
+			Remedy: "Narrow its scope on the integration's Agents tab"})
+		return s.put(ctx, rec)
 	}
 	// AN ACCOUNT THE VENDOR SHOWS ON IS ACTIVE, whoever turned it on: a
 	// disabled state the ledger kept from an earlier off would otherwise
@@ -857,6 +871,43 @@ func (s *syncer) drifted(ctx context.Context, h string, lane Lane, want Desired,
 	}
 }
 
+// fitsLedger reports whether the widest record a pass could write for rec
+// encodes within [coord.MaxSeatAccessBytes]: each lane that is on with its
+// applied and observed access set to want, and the vendor naming each scope
+// entry. Where it does not, it names the lane whose want is widest. A lane
+// that is off is never held: taking access away goes ahead.
+func fitsLedger(rec Record, want map[Lane]Desired) (Lane, bool) {
+	widest := rec
+	widest.Lanes = maps.Clone(rec.Lanes)
+	if widest.Lanes == nil {
+		widest.Lanes = map[Lane]LaneRecord{}
+	}
+	var most Lane
+	for _, lane := range slices.Sorted(maps.Keys(want)) {
+		d := want[lane]
+		if !d.Enabled {
+			continue
+		}
+		lr := widest.Lanes[lane]
+		lr.Applied = &d
+		lr.Observed.Level, lr.Observed.Permissions = d.Level, d.Permissions
+		lr.Observed.Scope, lr.Observed.Grants = d.Scope, d.Grants
+		lr.Words = &GrantWords{ScopeNames: map[string]string{}}
+		for _, entry := range d.Scope {
+			lr.Words.ScopeNames[entry] = entry
+		}
+		widest.Lanes[lane] = lr
+		if most == "" || len(d.Scope)+len(d.Grants) > len(want[most].Scope)+len(want[most].Grants) {
+			most = lane
+		}
+	}
+	if most == "" {
+		return "", true
+	}
+	raw, err := json.Marshal(widest)
+	return most, err == nil && len(raw) <= coord.MaxSeatAccessBytes
+}
+
 // failAll records one failure on every lane of a seat that cannot be synced
 // at all.
 func (s *syncer) failAll(rec *Record, lanes []Lane, f *Failure) {
@@ -911,7 +962,8 @@ func failureOf(step Step, lane Lane, err error) *Failure {
 		if !actor.Valid() {
 			actor = ByYou
 		}
-		return &Failure{Step: step.Verb, Said: r.Said, Remedy: r.Remedy, Actor: actor, ActionURL: r.ActionURL}
+		return &Failure{Step: step.Verb, Said: textcut.Within(r.Said, MaxSeatAccessSaidBytes), Remedy: r.Remedy,
+			Actor: actor, ActionURL: r.ActionURL}
 	}
 	where := "the vendor"
 	if lane != "" {
@@ -919,7 +971,7 @@ func failureOf(step Step, lane Lane, err error) *Failure {
 	}
 	return &Failure{
 		Step: step.Verb, Actor: ByCrewlet,
-		Said: err.Error(),
+		Said: textcut.Within(err.Error(), MaxSeatAccessSaidBytes),
 		Remedy: fmt.Sprintf("Crewlet tries again on the next sync; if %s keeps failing, "+
 			"choose Retry once it answers", where),
 	}
