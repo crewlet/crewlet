@@ -265,10 +265,9 @@ func (r *Runner) openCapture(ctx context.Context, box sandbox.Sandbox, bound str
 
 // CheckCarry answers whether archive, packed in ANOTHER box, can be continued
 // in box, asked before the run starts there and before its brief is chosen
-// (briefs are written before the box is acquired): the box harness's release,
-// read by one login-shell exec of its `--version` with the box's bin directory
-// first on PATH as the wrapper puts it ([withBoxBin]), held against the
-// writer, the archive's format and the harness's floors ([carrier.Continues]).
+// (briefs are written before the box is acquired): the box harness's release
+// ([Runner.boxRelease]), held against the writer, the archive's format and
+// the harness's floors ([carrier.Continues]).
 // The release read is returned either way, with whether its resume was read
 // ([claudeResumeRead], [sandbox.UnheldTelling]): a brief told by a reading
 // goes only to the writer's release ([sandbox.ExactTelling]).
@@ -280,18 +279,11 @@ func (r *Runner) CheckCarry(ctx context.Context, box sandbox.Sandbox, archive sa
 	if !ok {
 		return sandbox.CarryCheck{Why: r.harness.Name() + " carries no session between boxes"}, nil
 	}
-	ask := "PATH=" + sandbox.ShellQuote(PathsFor(box).BinDir()) + `:"$PATH"; export PATH; exec ` +
-		carries.VersionCommand() + " < /dev/null"
-	res, err := box.Exec(ctx, "sh -lc "+sandbox.ShellQuote(ask), sandbox.ExecOptions{TimeoutSec: harnessVersionWait.Seconds()})
-	if err != nil {
-		return sandbox.CarryCheck{}, fmt.Errorf("executor: asking the box's %s for its release: %w",
-			r.harness.Name(), err)
+	release, silent, err := r.boxRelease(ctx, box, carries)
+	if err != nil || silent != "" {
+		return sandbox.CarryCheck{Why: silent}, err
 	}
-	if res.ExitCode != 0 {
-		return sandbox.CarryCheck{Why: fmt.Sprintf("the box's %s did not say its release: `%s` exited %d: %s",
-			r.harness.Name(), carries.VersionCommand(), res.ExitCode, firstLine(res.Stderr, transcriptDetailLimit))}, nil
-	}
-	check := sandbox.CarryCheck{Version: releaseOf(res.Stdout)}
+	check := sandbox.CarryCheck{Version: release}
 	check.ResumeRead = r.resumeRead(check.Version)
 	if restores, why := r.Restores(archive); !restores {
 		check.Why = why
@@ -299,6 +291,52 @@ func (r *Runner) CheckCarry(ctx context.Context, box sandbox.Sandbox, archive sa
 	}
 	check.Continues, check.Why = carries.Continues(check.Version, archive.Version)
 	return check, nil
+}
+
+// inPlaceGate is a [carrier] whose box continues no session, not even the
+// copy it holds, on a release it was not read for: Codex, whose one
+// supported release alone continues a session ([Codex.continuesInPlace]).
+type inPlaceGate interface {
+	carrier
+	continuesInPlace(box string) (bool, string)
+}
+
+// CheckInPlace answers whether box's harness continues the copy of a session
+// the box itself holds ([sandbox.SessionRestorer]), asked before a relaunch
+// in the box chooses the brief that continues it: yes without asking for a
+// harness that holds no release to it, else its release read as
+// [Runner.CheckCarry] reads it and held to its harness's rule
+// ([inPlaceGate]). Three answers, as CheckCarry's.
+func (r *Runner) CheckInPlace(ctx context.Context, box sandbox.Sandbox) (sandbox.CarryCheck, error) {
+	gate, ok := r.harness.(inPlaceGate)
+	if !ok {
+		return sandbox.CarryCheck{Continues: true}, nil
+	}
+	release, silent, err := r.boxRelease(ctx, box, gate)
+	if err != nil || silent != "" {
+		return sandbox.CarryCheck{Why: silent}, err
+	}
+	check := sandbox.CarryCheck{Version: release, ResumeRead: r.resumeRead(release)}
+	check.Continues, check.Why = gate.continuesInPlace(release)
+	return check, nil
+}
+
+// boxRelease is the release box's harness says, read by one login-shell exec
+// of its `--version` with the box's bin directory first on PATH as the
+// wrapper puts it ([withBoxBin]), as [releaseOf] reads it; why it said none
+// where the command failed; and an error where the box could not be asked.
+func (r *Runner) boxRelease(ctx context.Context, box sandbox.Sandbox, carries carrier) (release, silent string, err error) {
+	ask := "PATH=" + sandbox.ShellQuote(PathsFor(box).BinDir()) + `:"$PATH"; export PATH; exec ` +
+		carries.VersionCommand() + " < /dev/null"
+	res, err := box.Exec(ctx, "sh -lc "+sandbox.ShellQuote(ask), sandbox.ExecOptions{TimeoutSec: harnessVersionWait.Seconds()})
+	if err != nil {
+		return "", "", fmt.Errorf("executor: asking the box's %s for its release: %w", r.harness.Name(), err)
+	}
+	if res.ExitCode != 0 {
+		return "", fmt.Sprintf("the box's %s did not say its release: `%s` exited %d: %s", r.harness.Name(),
+			carries.VersionCommand(), res.ExitCode, firstLine(res.Stderr, transcriptDetailLimit)), nil
+	}
+	return releaseOf(res.Stdout), "", nil
 }
 
 // resumeReader is a [carrier] whose releases' resumes this build read.

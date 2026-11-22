@@ -23,6 +23,7 @@ var (
 	_ saver        = Codex{}
 	_ resumer      = Codex{}
 	_ resumeReader = Codex{}
+	_ inPlaceGate  = Codex{}
 )
 
 // codexCarryRelease is the one Codex release a box continues a carried
@@ -58,17 +59,27 @@ func (Codex) layout() archiveLayout { return archiveTar }
 
 // Continues reports whether a session written by Codex release writer can be
 // continued in a box whose Codex is release box ([carrier]): only where the
-// box's release is exactly [codexCarryRelease] and the writer is as
-// [Codex.ContinuesWriter] holds it. Any other box release, older or newer or
-// none that reads, starts fresh, saying which it found.
+// box continues any session ([Codex.continuesInPlace]) and the writer is as
+// [Codex.ContinuesWriter] holds it.
 func (c Codex) Continues(box, writer string) (bool, string) {
+	if ok, why := c.continuesInPlace(box); !ok {
+		return false, why
+	}
+	return c.ContinuesWriter(writer)
+}
+
+// continuesInPlace reports whether a box whose Codex is release box continues
+// a session at all, the copy it holds as much as one carried to it
+// ([inPlaceGate]): only where box is exactly [codexCarryRelease]. Any other,
+// older or newer or none that reads, starts fresh, saying which it found.
+func (Codex) continuesInPlace(box string) (bool, string) {
 	switch {
 	case !releaseReads(box):
-		return false, boxNamedNoRelease("Codex")
+		return false, codexNoRelease
 	case box != codexCarryRelease:
 		return false, fmt.Sprintf(codexBoxRefused, codexReleaseFound(box), codexCarryRelease)
 	}
-	return c.ContinuesWriter(writer)
+	return true, ""
 }
 
 // ContinuesWriter reports whether a session Codex release writer wrote can be
@@ -86,9 +97,17 @@ func (Codex) ContinuesWriter(writer string) (bool, string) {
 }
 
 // codexBoxRefused is why a box whose Codex is not [codexCarryRelease] continues
-// no carried session, the Codex found and the release first: the engine's
-// check and the run's own gate say it alike ([codexSessionGate]).
-const codexBoxRefused = "this box runs %s, and only Codex %s continues a session carried from another box"
+// no session, its own copy nor a carried one, the Codex found and the release
+// first: the engine's checks and the run's own gate say it alike
+// ([codexSessionGate]).
+const codexBoxRefused = "this box runs %s, and only Codex %s continues a session, the box's own copy or " +
+	"one carried from another box"
+
+// codexNoRelease is why a box whose Codex named no release this build reads
+// ([releaseOf]: a bare MAJOR.MINOR.PATCH, never a pre-release) continues no
+// session, said by the engine's checks and the run's own gate alike.
+const codexNoRelease = "this box's Codex named no release this build reads, so it continues no session, " +
+	"its own copy nor one carried from another box"
 
 // codexReleaseFound is release as a reason names the Codex found.
 func codexReleaseFound(release string) string {
@@ -195,13 +214,13 @@ func (p Paths) CodexLiveConfig() string { return p.CodexHome() + "/config.toml" 
 // script writes the record after it, resumes sid where k is yes, and
 // otherwise starts a new thread whose minted id it reports ([reportSession]).
 //
-// A run that continues one continues the rollout its box HOLDS unless a
+// A run that continues one does so only on a box whose Codex (n, the bare
+// release the runner's `--version` printed) is exactly [codexCarryRelease],
+// its own copy included. It continues the rollout its box HOLDS unless a
 // carried archive ([Paths.SessionCarried]) holds what the copy does not (a
 // digest not among the box's, [Paths.SessionDigests]) or the copy is one Codex
 // was cut off in ([Session.Replaces]); then the archive is RESTORED
-// ([codexRestore]), on a box whose Codex (n, the bare release the runner's
-// `--version` printed) is exactly [codexCarryRelease], and its digest
-// recorded before the run goes on.
+// ([codexRestore]) and its digest recorded before the run goes on.
 func codexSessionGate(session Session, paths Paths, rewired bool) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
@@ -224,16 +243,16 @@ func codexSessionGate(session Session, paths Paths, rewired bool) string {
 		line(`if [ -n "$h" ] && [ -n "$d" ] && ! grep -qxF "$sid $d" %s 2> /dev/null; then h=; fi`,
 			q(paths.SessionDigests()))
 	}
-	line(`if [ -z "$h" ]; then`)
-	line(`  if [ ! -s %s ]; then w='it is not in this box, and no archive of it was carried here'`, carried)
-	// THE BOX'S RELEASE, held as the engine's check holds it ([Codex.Continues]):
+	// THE BOX'S RELEASE, for the copy it holds as for an archive, held as the
+	// engine's checks hold it ([Codex.Continues], [Codex.continuesInPlace]):
 	// n, the bare release the runner's `codex --version` printed
-	// ([codexReleaseParse]); none restores nothing, nor one not exactly
-	// [codexCarryRelease].
-	line(`  elif [ -z "$n" ]; then w=%s`, q(boxNamedNoRelease("Codex")))
-	line(`  elif [ "$n" != %s ]; then w="%s"`, codexCarryRelease,
-		fmt.Sprintf(codexBoxRefused, "Codex $n", codexCarryRelease))
-	line(`  elif ! command -v tar > /dev/null 2>&1 || ! command -v gzip > /dev/null 2>&1 || ! command -v find > /dev/null 2>&1; then w='this box has no tar, gzip and find to restore its archive with'`)
+	// ([codexReleaseParse]); none continues nothing, nor one not exactly
+	// [codexCarryRelease], older or newer.
+	line(`if [ -z "$h" ] && [ ! -s %s ]; then w='it is not in this box, and no archive of it was carried here'`, carried)
+	line(`elif [ -z "$n" ]; then w=%s`, q(codexNoRelease))
+	line(`elif [ "$n" != %s ]; then w="%s"`, codexCarryRelease, fmt.Sprintf(codexBoxRefused, "Codex $n", codexCarryRelease))
+	line(`elif [ -z "$h" ]; then`)
+	line(`  if ! command -v tar > /dev/null 2>&1 || ! command -v gzip > /dev/null 2>&1 || ! command -v find > /dev/null 2>&1; then w='this box has no tar, gzip and find to restore its archive with'`)
 	line(`  elif ! { %s; }; then w='its archive could not be restored'`, codexRestore(paths, session.ID))
 	// CONTINUED ONLY ONCE ITS DIGEST IS RECORDED and read back, for the reason
 	// Claude Code's restore is ([claudeSessionGate]).

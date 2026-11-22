@@ -379,8 +379,8 @@ func TestACodexRunStartsOnTheConfigurationOfTheSessionItStarts(t *testing.T) {
 		if err := os.WriteFile(p.FreshBrief(), []byte("the fresh brief"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		out, errText, code := codexShell(t, p.Home, codexSessionGate(c.session, p, c.rewired)+
-			`printf '%s\n' "$k"; if [ "$k" = no ]; then cat; fi`)
+		out, errText, code := codexShell(t, p.Home, codexPrinted("codex-cli "+codexCarryRelease)+
+			codexSessionGate(c.session, p, c.rewired)+`printf '%s\n' "$k"; if [ "$k" = no ]; then cat; fi`)
 		if code != 0 {
 			t.Fatalf("%s: the gate exited %d: %s", c.name, code, errText)
 		}
@@ -429,9 +429,9 @@ func TestACodexBoxRestoresACarriedSessionOnlyOnTheOneSupportedRelease(t *testing
 		{"codex-cli 0.171.0", "yes", ""},
 		{"codex-cli 0.172.0", "no", engine},
 		{"codex-cli 0.170.9", "no", "this box runs Codex 0.170.9, and only Codex 0.171.0"},
-		{"codex-cli dev", "no", boxNamedNoRelease("Codex")},
-		{"codex-cli 0.171.0-alpha.1", "no", boxNamedNoRelease("Codex")},
-		{"", "no", boxNamedNoRelease("Codex")},
+		{"codex-cli dev", "no", codexNoRelease},
+		{"codex-cli 0.171.0-alpha.1", "no", codexNoRelease},
+		{"", "no", codexNoRelease},
 	} {
 		p := codexBox(t, nil)
 		if err := os.WriteFile(p.SessionCarried(), archive, 0o600); err != nil {
@@ -443,6 +443,42 @@ func TestACodexBoxRestoresACarriedSessionOnlyOnTheOneSupportedRelease(t *testing
 		}
 		if _, err := os.Stat(codexRestoredRollout(p, codexThread)); (c.k == "yes") != (err == nil) {
 			t.Errorf("%q: restored %v, want %v", c.version, err == nil, c.k == "yes")
+		}
+	}
+}
+
+// A CODEX BOX CONTINUES EVEN ITS OWN COPY ONLY ON THE ONE SUPPORTED RELEASE:
+// a box that holds the session's rollout, with nothing carried, resumes it
+// only where its Codex is exactly 0.171.0; a newer, older, pre-release or
+// unreadable one starts a new session, saying why in the engine's own words
+// ([Codex.continuesInPlace]), and leaves the copy as it was.
+//
+// Mutation: drop the release check on the path where the box holds its copy,
+// or read a pre-release as its numbers, and a row fails.
+func TestACodexBoxContinuesItsOwnCopyOnlyOnTheOneSupportedRelease(t *testing.T) {
+	t.Parallel()
+	whole := codexRolloutFixture(t)
+	_, newer := Codex{}.continuesInPlace("0.172.0")
+	for _, c := range []struct {
+		version, k, why string
+	}{
+		{"codex-cli 0.171.0", "yes", ""},
+		{"codex-cli 0.172.0", "no", newer},
+		{"codex-cli 0.170.9", "no", "this box runs Codex 0.170.9, and only Codex 0.171.0"},
+		{"codex-cli 0.171.0-alpha.2", "no", codexNoRelease},
+		{"codex-cli dev", "no", codexNoRelease},
+	} {
+		p := codexBox(t, whole)
+		s, k, w, stderr := codexGateOn(t, p, p.Home, Session{ID: codexThread, Continues: true}, false, c.version)
+		if k != c.k || (c.why == "" && w != "") || !strings.Contains(w, c.why) {
+			t.Errorf("%q: continued %q because %q, want %q because %q", c.version, k, w, c.k, c.why)
+		}
+		if c.k == "no" && (s != "" || !strings.Contains(stderr, "starts a new session instead")) {
+			t.Errorf("%q: the gate names %q and says %q, want a new session and why", c.version, s, stderr)
+		}
+		found, _, _ := codexShell(t, p.Home, codexRolloutPath(p, codexThread))
+		if got := codexFile(t, strings.TrimSpace(found)); !bytes.Equal(got, whole) {
+			t.Errorf("%q: the box's copy is %d bytes after the gate, want its %d untouched", c.version, len(got), len(whole))
 		}
 	}
 }
