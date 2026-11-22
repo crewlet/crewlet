@@ -275,7 +275,8 @@ func (Kimi) Output(paths Paths) Output {
 
 // Pins is the run's home and posture, over whatever the seat's env, the image
 // or a profile set: KIMI_CODE_HOME ([Paths.KimiHome]); updates and telemetry
-// off; the attempts a request gets ([kimiAttemptsPerStep]); the turn cap
+// off, its telemetry bearing the login's token (measured on 2.7.2); the
+// attempts a request gets ([kimiAttemptsPerStep]); the turn cap
 // (KIMI_LOOP_MAX_STEPS_PER_TURN, a model request a step); and the env model's
 // name where a key signs the run in ([kimiModelPins]).
 //
