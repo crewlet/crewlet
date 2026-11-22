@@ -1436,6 +1436,11 @@ gemini-cli:
     - sentinel: "IneligibleTierError"
 
 qwen-code:
+  # A seat's executor, over ACP (internal/sandbox/executor, qwen.go). No E2B
+  # template: no prebuilt image is known to hold Qwen Code, so a company names
+  # its own. Nothing measured refuses root under --approval-mode yolo.
+  executor:
+    runner: true
   binary: qwen
   written_for: "Qwen Code 0.23.x to 0.26.x, measured on 0.23.4 and 0.26.1 (`qwen --version`)"
   version_args: ["--version"]
@@ -1454,14 +1459,13 @@ qwen-code:
   #                                array came back as the seat's reply.
   #   --approval-mode default      a tool the settings below do not allow is
   #                                refused, since a headless run cannot ask.
-  #   --auth-type openai           the sign-in, under api_key_env below.
+  #
+  # The sign-in follows, by mode (key_args, subscription_args below).
   complete_args:
     - "--output-format"
     - "stream-json"
     - "--approval-mode"
     - "default"
-    - "--auth-type"
-    - "openai"
   local_tools: denied
   # The settings in the seat's home, each a switch both builds read:
   #
@@ -1537,7 +1541,7 @@ qwen-code:
   web_tools_note: "no web denial: removing web_fetch and web_search from the seeded allow list would be one, but it has not been measured against a qwen harness, so this profile cannot serve the assistant"
   seed_files:
     - path: .qwen/settings.json
-      content: '{"general":{"chatRecording":false,"enableAutoUpdate":false,"preventSystemSleep":false},"privacy":{"usageStatisticsEnabled":false},"memory":{"enableManagedAutoMemory":false,"enableManagedAutoDream":false,"enableAutoSkill":false},"model":{"openAILoggingDir":"~/.qwen/openai-logs","generationConfig":{"maxRetries":0}},"skills":{"disabledLevels":["project","user","extension","bundled"]},"disableAllHooks":true,"tools":{"core":["web_fetch","web_search"]},"permissions":{"allow":["web_fetch","web_search"],"deny":["advisor","agent","artifact","ask_user_question","create_sub_session","cron_create","cron_delete","cron_list","display_image","edit","enter_plan_mode","enter_worktree","exec","exit_plan_mode","exit_worktree","get_goal","glob","grep_search","image_gen","list_agents","list_directory","loop_wakeup","lsp","manage_memory","monitor","notebook_edit","omni_caption_audio","omni_caption_image","omni_clip_audio","omni_clip_image","omni_clip_video","omni_convert_image","omni_downsample_audio","omni_downsample_image","omni_downscale_video","omni_extract_audio","omni_extract_keyframes","omni_ocr_image","omni_recall_media_memory","omni_transcribe_audio","omni_understand_video_segments","propose_goal","read_file","read_mcp_resource","record_artifact","record_source","report_findings","request_shutdown","run_shell_command","save_memory","search_memory","send_message","skill","structured_output","task_create","task_list","task_stop","task_update","team_create","team_delete","team_plan_approval","todo_write","tool_call","tool_search","update_goal","workflow","write_file","zoom_image"]}}'
+      content: '{"general":{"chatRecording":false,"enableAutoUpdate":false,"preventSystemSleep":false},"privacy":{"usageStatisticsEnabled":false},"memory":{"enableManagedAutoMemory":false,"enableManagedAutoDream":false,"enableAutoSkill":false},"model":{"openAILoggingDir":"~/.qwen/openai-logs","generationConfig":{"maxRetries":0}},"skills":{"disabledLevels":["project","user","extension","bundled"]},"disableAllHooks":true,"tools":{"core":["web_fetch","web_search"]},"permissions":{"allow":["web_fetch","web_search"],"deny":["advisor","agent","artifact","ask_user_question","autofix_pr","create_sub_session","cron_create","cron_delete","cron_list","display_image","edit","enter_plan_mode","enter_worktree","exec","exit_plan_mode","exit_worktree","get_goal","glob","grep_search","image_gen","list_agents","list_directory","loop_wakeup","lsp","manage_memory","monitor","notebook_edit","omni_caption_audio","omni_caption_image","omni_clip_audio","omni_clip_image","omni_clip_video","omni_convert_image","omni_downsample_audio","omni_downsample_image","omni_downscale_video","omni_extract_audio","omni_extract_keyframes","omni_ocr_image","omni_recall_media_memory","omni_transcribe_audio","omni_understand_video_segments","propose_goal","read_file","read_mcp_resource","record_artifact","record_source","report_findings","request_shutdown","run_shell_command","save_memory","search_memory","send_message","skill","structured_output","task_create","task_list","task_stop","task_update","team_create","team_delete","team_plan_approval","todo_write","tool_call","tool_search","update_goal","workflow","write_file","zoom_image"]}}'
     - path: .qwen/.env
       in: work
       content: "# This call's environment is the engine's; nothing above this directory is read.\n"
@@ -1685,20 +1689,27 @@ qwen-code:
     - ".qwen/QWEN.md"
     - ".qwen/AGENTS.md"
     - ".qwen/rules"
-  # THE SIGN-IN IS AN API KEY. Qwen OAuth, the login this profile once
-  # adopted, is refused by both builds' own auth check ("Qwen OAuth free
-  # tier was discontinued on 2026-04-15", read from both bundles), and
-  # `qwen auth` is listed as removed, so there is no login to adopt and no
-  # token. The
-  # harness's OpenAI-compatible sign-in is what runs, chosen by --auth-type
-  # above: the key in OPENAI_API_KEY, the endpoint in OPENAI_BASE_URL, which
-  # an entry sets in env to its provider's (DashScope's, a Coding Plan's, any
-  # OpenAI-compatible one; unset, the harness falls back to an endpoint of its
-  # own), and the model from the entry's `model`. Without --auth-type the harness
-  # chooses that sign-in only when OPENAI_MODEL or QWEN_MODEL is set as well,
-  # and otherwise exits "No auth type is selected". DASHSCOPE_API_KEY, the
-  # variable this profile named before, is read by neither build's model
-  # sign-in.
+  # A KEY, OR QWEN CODE'S PAID LOGIN. The key is the harness's
+  # OpenAI-compatible sign-in, chosen by --auth-type: the key in
+  # OPENAI_API_KEY, the endpoint in OPENAI_BASE_URL, which an entry sets in env
+  # to its provider's (DashScope's, a Coding Plan's, any OpenAI-compatible one;
+  # unset, the harness falls back to an endpoint of its own), and the model
+  # from the entry's `model`. Without --auth-type the harness chooses that
+  # sign-in only when OPENAI_MODEL or QWEN_MODEL is set as well, and otherwise
+  # exits "No auth type is selected". DASHSCOPE_API_KEY, the variable this
+  # profile named before, is read by neither build's model sign-in.
+  #
+  # The login is 0.28's "Qwen Account with Subscription" (Plus or Pro),
+  # `--auth-type qwen-subscription`, made with the harness by hand and
+  # adopted: its tokens in subscription_credentials.json in the home's .qwen
+  # (baseUrl, clientId, tokens {access_token, refresh_token, expiresAt},
+  # models), its endpoint overridden by QWEN_SUBSCRIPTION_BASE_URL. Read from
+  # 0.28.3's bundle and docs, NOT MEASURED against Qwen's service. Free Qwen
+  # OAuth stays refused by the harness itself ("Qwen OAuth free tier was
+  # discontinued on 2026-04-15").
+  key_args: ["--auth-type", "openai"]
+  subscription_args: ["--auth-type", "qwen-subscription"]
+  credential_paths: [".qwen/subscription_credentials.json"]
   api_key_env: "OPENAI_API_KEY"
   # A name other vendors' keys go in too, sent to whatever OPENAI_BASE_URL
   # names: an entry names its key, and nothing falls back to this variable.
@@ -1709,6 +1720,28 @@ qwen-code:
   # refused before any request.
   limit_markers:
     - sentinel: "[API Error: 429"
+  # A SEAT'S RUN ENDS ON A SPENT QUOTA ONLY IN ITS HELPER'S LIMIT LINE. Over
+  # ACP, Qwen Code flattens every 429 to "Rate limit exceeded. Try again
+  # later." (0.28.3), and only the session's chat file keeps the provider's
+  # words, in the error record of each failed request. The helper quotes the
+  # record of the request that failed last, and only once Qwen Code failed the
+  # turn on the 429 (the executor's limitGate reads the line only from a run
+  # whose exit status says so): a spent quota sits the entry out, a rate limit
+  # is transient and sits nothing out. The provider sentences of OpenAI's and
+  # DashScope's spent quotas, as the measured runs relayed them.
+  limit_events:
+    - match:
+        - {path: ["type"], equals: "crewlet_qwen_limit"}
+        - {path: ["error_message"], prefix: "429 You exceeded your current quota"}
+      said_path: ["error_message"]
+    - match:
+        - {path: ["type"], equals: "crewlet_qwen_limit"}
+        - {path: ["error_message"], prefix: "429 Free allocated quota exceeded"}
+      said_path: ["error_message"]
+    - match:
+        - {path: ["type"], equals: "crewlet_qwen_limit"}
+        - {path: ["error_message"], prefix: "429 Allocated quota exceeded"}
+      said_path: ["error_message"]
   auth_markers:
     - sentinel: "[API Error: 401"
     - sentinel: "Missing API key for OpenAI-compatible auth"

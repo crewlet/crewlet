@@ -1,0 +1,601 @@
+package executor_test
+
+import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+
+	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/prereqtest"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
+)
+
+// nodeForQwen is the node a Qwen Code box's helper is run under here.
+func nodeForQwen(t *testing.T) string {
+	t.Helper()
+	return prereqtest.OnPath(t, "node", "a Qwen Code run's helper and the stand-in it drives run under it",
+		"install any current node, as ci.yml does (CONTRIBUTING.md, \"A skip is not a pass\")")
+}
+
+// qwenCapturedSession is the session the 0.28.3 note capture's probe minted,
+// which every helper run here creates, so the replayed messages name it.
+const qwenCapturedSession = "11111111-2222-4333-8444-000000000001"
+
+// qwenNote is one note the stand-in bridge serves.
+type qwenNote struct {
+	Seq     int    `json:"seq"`
+	ID      string `json:"id"`
+	Inbox   string `json:"inbox"`
+	Message string `json:"message"`
+}
+
+// qwenBridge is a stand-in for the run's notes and skill routes: it serves
+// every note not yet read past the poll's cursor, at once, and records each
+// read and each skill report in order.
+type qwenBridge struct {
+	mu     sync.Mutex
+	notes  []qwenNote
+	reads  []string
+	skills []string
+	srv    *httptest.Server
+}
+
+func newQwenBridge(t *testing.T, notes ...qwenNote) *qwenBridge {
+	t.Helper()
+	b := &qwenBridge{notes: notes}
+	b.srv = httptest.NewServer(b)
+	t.Cleanup(b.srv.Close)
+	return b
+}
+
+func (b *qwenBridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(r.Body)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	switch {
+	case r.Method == http.MethodGet && r.URL.Path == "/steer/notes":
+		after, _ := strconv.Atoi(r.URL.Query().Get("after"))
+		served := []qwenNote{}
+		for _, n := range b.notes {
+			if n.Seq > after && !slices.Contains(b.reads, n.ID) {
+				served = append(served, n)
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"notes": served})
+	case r.Method == http.MethodPost && r.URL.Path == "/steer/read":
+		var read struct {
+			IDs []string `json:"ids"`
+		}
+		_ = json.Unmarshal(body, &read)
+		b.reads = append(b.reads, read.IDs...)
+		w.WriteHeader(http.StatusNoContent)
+	case r.Method == http.MethodPost && r.URL.Path == "/skills":
+		b.skills = append(b.skills, string(body))
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		w.WriteHeader(http.StatusNotFound)
+	}
+}
+
+func (b *qwenBridge) read() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return slices.Clone(b.reads)
+}
+
+// qwenHelperRun is one run of the helper against the stand-in Qwen Code.
+type qwenHelperRun struct {
+	cmd    *exec.Cmd
+	stdout io.ReadCloser
+	log    string
+	home   string
+	cwd    string
+}
+
+// startQwenHelper starts the helper as a run's script does, its `qwen` the
+// stand-in replaying turn, its configuration config with the notes route
+// filled in, its environment env beside the stand-in's own.
+func startQwenHelper(t *testing.T, notes string, turn string, config map[string]any,
+	env ...string) *qwenHelperRun {
+	t.Helper()
+	node := nodeForQwen(t)
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	standin, err := filepath.Abs("qwen_acp_standin.mjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeStandIn(t, filepath.Join(bin, "qwen"), "#!/bin/sh\nexec "+shQuote(node)+" "+shQuote(standin)+` "$@"`+"\n")
+	captures, err := filepath.Abs(filepath.Join("testdata", "qwen", "0.28.3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := &qwenHelperRun{log: filepath.Join(dir, "standin.log"), home: filepath.Join(dir, "qwen-home"),
+		cwd: filepath.Join(dir, "work")}
+	if err := os.MkdirAll(run.cwd, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	full := map[string]any{"authType": "openai", "qwenHome": run.home, "servers": []string{"probe"},
+		"bridge": "probe", "mcpWaitMs": 60000, "notes": notes, "namespace": "crewlet"}
+	for k, v := range config {
+		full[k] = v
+	}
+	raw, _ := json.Marshal(full)
+	configPath := filepath.Join(dir, "qwen-helper.json")
+	if err := os.WriteFile(configPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	helper, err := filepath.Abs("qwen_helper.mjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.cmd = exec.CommandContext(t.Context(), node, helper, "run", configPath, qwenCapturedSession)
+	run.cmd.Dir = run.cwd
+	run.cmd.Stdin = strings.NewReader("Run the probe tools.")
+	run.cmd.Stderr = os.Stderr
+	run.cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"QWEN_FAKE_START="+filepath.Join(captures, "acp-wsmcp.jsonl"),
+		"QWEN_FAKE_TURN="+filepath.Join(captures, turn), "QWEN_FAKE_HOME="+run.home, "QWEN_FAKE_LOG="+run.log)
+	run.cmd.Env = append(run.cmd.Env, env...)
+	if run.stdout, err = run.cmd.StdoutPipe(); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.cmd.Start(); err != nil {
+		t.Fatalf("starting the helper: %v", err)
+	}
+	return run
+}
+
+// finish reads the helper's stream to its end and its exit status.
+func (r *qwenHelperRun) finish(t *testing.T) (lines []map[string]any, code int) {
+	t.Helper()
+	scanner := bufio.NewScanner(r.stdout)
+	scanner.Buffer(nil, 1<<20)
+	for scanner.Scan() {
+		lines = append(lines, decodeLine(t, scanner.Bytes()))
+	}
+	err := r.cmd.Wait()
+	code = r.cmd.ProcessState.ExitCode()
+	if err != nil && code < 0 {
+		t.Fatalf("the helper: %v", err)
+	}
+	return lines, code
+}
+
+func decodeLine(t *testing.T, line []byte) map[string]any {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal(line, &m); err != nil {
+		t.Fatalf("the helper wrote a line that is no JSON: %q", line)
+	}
+	return m
+}
+
+// standinSaw is the stand-in's log: what it was asked and handed.
+func (r *qwenHelperRun) standinSaw(t *testing.T) []map[string]any {
+	t.Helper()
+	raw, err := os.ReadFile(r.log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []map[string]any
+	for _, l := range bytes.Split(bytes.TrimSpace(raw), []byte("\n")) {
+		out = append(out, decodeLine(t, l))
+	}
+	return out
+}
+
+// typed is the helper's own lines of type kind.
+func typed(lines []map[string]any, kind string) []map[string]any {
+	var out []map[string]any
+	for _, l := range lines {
+		if l["type"] == kind {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// steer is the notes route of the stand-in bridge.
+func (b *qwenBridge) steer() string { return b.srv.URL + "/steer" }
+
+// A QWEN RUN'S HELPER RUNS ONE TURN AND CONFIRMS EACH NOTE ONLY BY ITS RECORD,
+// TWO IDENTICAL NOTES AS TWO. Against Qwen Code 0.28.3's own turn replayed
+// (two tool batches, a drain after each), the helper waits for the bridge to
+// connect before the prompt; answers every drain at once from what it
+// polled, every note it holds; writes every session/update, a line for each
+// note handed, the window and the turn's end; and confirms each note once the
+// chat file records it and the response after it, in order.
+//
+// Mutations, each red: send the prompt before the bridge connects (the
+// stand-in's first status says disconnected); hand the notes newest first;
+// answer a drain only after a wait of its own.
+// The note contract's confirm case for Qwen Code (notecontract_test.go).
+func qwenHelperConfirmsEachNoteByItsRecord(t *testing.T) {
+	t.Parallel()
+	const text = "## A note from eve, sent while this turn was running\nuse staging"
+	bridge := newQwenBridge(t, qwenNote{Seq: 1, ID: "n-1", Inbox: "qwen_1", Message: text},
+		qwenNote{Seq: 2, ID: "n-2", Inbox: "qwen_2", Message: text})
+	run := startQwenHelper(t, bridge.steer(), "acp-note.jsonl", nil, "QWEN_FAKE_AWAIT_NOTES=1")
+	lines, code := run.finish(t)
+	if code != 0 {
+		t.Fatalf("the helper exited %d, want 0", code)
+	}
+	if end := typed(lines, "crewlet_qwen_end"); len(end) != 1 || end[0]["stop_reason"] != "end_turn" {
+		t.Errorf("the turn ended %v, want one end at end_turn", end)
+	}
+	if notes := typed(lines, "crewlet_qwen_note"); len(notes) != 2 || notes[0]["id"] != "n-1" || notes[1]["id"] != "n-2" {
+		t.Errorf("the notes handed read %v, want n-1 then n-2", notes)
+	}
+	if w := typed(lines, "crewlet_qwen_window"); len(w) != 1 || w[0]["context_window"] != float64(200000) {
+		t.Errorf("the window lines read %v, want 200000", w)
+	}
+	updates := 0
+	for _, l := range lines {
+		if l["method"] == "session/update" {
+			updates++
+		}
+	}
+	if updates < 20 {
+		t.Errorf("the stream holds %d session/update lines, want the turn's every one", updates)
+	}
+	if got := bridge.read(); !slices.Equal(got, []string{"n-1", "n-2"}) {
+		t.Errorf("the notes confirmed read are %v, want n-1 then n-2", got)
+	}
+	var methods []string
+	for _, e := range run.standinSaw(t) {
+		if m, ok := e["method"].(string); ok {
+			methods = append(methods, m)
+		}
+		if ms, ok := e["ms"].(float64); ok && ms >= 2000 {
+			t.Errorf("a drain was answered after %v ms, past the 2 s Qwen Code gives it", ms)
+		}
+	}
+	prompt, connected := slices.Index(methods, "session/prompt"), 0
+	for _, m := range methods[:max(prompt, 0)] {
+		if m == "qwen/status/workspace/mcp" {
+			connected++
+		}
+	}
+	if prompt < 0 || connected < 2 {
+		t.Errorf("the helper asked %v, want the MCP status until connected before session/prompt", methods)
+	}
+}
+
+// A NOTE QWEN CODE NEVER RECORDED IS SERVED AGAIN, NEVER LOST. Qwen Code
+// 0.28.3 records a drained note after the fact; one whose harness died
+// between the drain and the record is never confirmed, so the engine serves
+// it again, and the next run hands and confirms it.
+//
+// Mutations, each red: confirm a note as it is handed (the first run
+// confirms what no session holds); confirm what was handed at the end
+// whatever the chat file shows.
+func TestANoteQwenNeverRecordedIsServedAgainNeverLost(t *testing.T) {
+	t.Parallel()
+	note := qwenNote{Seq: 1, ID: "n-1", Inbox: "qwen_1", Message: "## A note from eve, sent while this turn was running\nx"}
+	bridge := newQwenBridge(t, note)
+	first := startQwenHelper(t, bridge.steer(), "acp-note.jsonl", nil, "QWEN_FAKE_AWAIT_NOTES=1", "QWEN_FAKE_DIE_AFTER_NOTE=1")
+	lines, code := first.finish(t)
+	if code == 0 || len(typed(lines, "crewlet_qwen_note")) != 1 {
+		t.Fatalf("the first run exited %d having handed %v, want a failure after handing the note",
+			code, typed(lines, "crewlet_qwen_note"))
+	}
+	if got := bridge.read(); len(got) != 0 {
+		t.Fatalf("a note no session recorded was confirmed read: %v", got)
+	}
+	second := startQwenHelper(t, bridge.steer(), "acp-note.jsonl", nil, "QWEN_FAKE_AWAIT_NOTES=1")
+	if _, code := second.finish(t); code != 0 {
+		t.Fatalf("the second run exited %d", code)
+	}
+	if got := bridge.read(); !slices.Equal(got, []string{"n-1"}) {
+		t.Errorf("after the second run the reads are %v, want n-1 once", got)
+	}
+}
+
+// A NOTE A COMPACTION KEEPS ONLY IN ITS SUMMARY IS NOT CONFIRMED (ADR-0177).
+// The stand-in records the note, then Qwen Code 0.28.3's own chat_compression
+// record of a note drained at the compaction point (chat-compact.jsonl), its
+// note the case's, then the response after it. Kept plain in the history past
+// the summary prefix, the note is confirmed; moved from that tail into the
+// summary entry, a part of its own, it is not, and the engine serves it again.
+//
+// Mutations, each red: pass compaction records over (the summarized note is
+// confirmed); count the summary entry as kept (the tail read from 0); confirm
+// a note at its record, before the response after it.
+func TestAQwenNoteACompactionOnlySummarizedIsNotConfirmed(t *testing.T) {
+	t.Parallel()
+	const marker = "MARK-CN-START note at the compaction point MARK-CN-END"
+	var compaction string
+	for _, l := range strings.Split(string(qwenFixture(t, "0.28.3", "chat-compact.jsonl")), "\n") {
+		if strings.Contains(l, `"subtype":"chat_compression"`) {
+			compaction = l
+		}
+	}
+	tail := `,{"text":"\n[User message received during tool execution]: ` + marker + `"}`
+	const summary = `"parts":[{"text":"<state_snapshot>`
+	if !strings.Contains(compaction, tail) || !strings.Contains(compaction, summary) {
+		t.Fatal("the capture holds no compaction keeping its note plain past its summary")
+	}
+	note := qwenNote{Seq: 1, ID: "n-1", Inbox: "qwen_1", Message: "## A note from eve, sent while this turn was running\nx"}
+	quoted := strings.Trim(string(mustJSON(t, note.Message)), `"`)
+	summarized := strings.Replace(strings.Replace(compaction, tail, "", 1),
+		summary, `"parts":[{"text":"`+marker+`"},{"text":"<state_snapshot>`, 1)
+	for name, tc := range map[string]struct {
+		record string
+		want   []string
+	}{
+		"kept plain past the summary":  {compaction, []string{"n-1"}},
+		"kept only inside the summary": {summarized, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			file := filepath.Join(t.TempDir(), "compaction.jsonl")
+			if err := os.WriteFile(file, []byte(strings.ReplaceAll(tc.record, marker, quoted)+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			bridge := newQwenBridge(t, note)
+			run := startQwenHelper(t, bridge.steer(), "acp-note.jsonl", nil, "QWEN_FAKE_AWAIT_NOTES=1",
+				"QWEN_FAKE_COMPACT="+file)
+			lines, code := run.finish(t)
+			if code != 0 || len(typed(lines, "crewlet_qwen_note")) != 1 {
+				t.Fatalf("the run exited %d having handed %v, want the note handed and 0", code,
+					typed(lines, "crewlet_qwen_note"))
+			}
+			if got := bridge.read(); !slices.Equal(got, tc.want) {
+				t.Errorf("the notes confirmed read are %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A QWEN RUN WHOSE BRIDGE NEVER CONNECTS IS NOT STARTED. Qwen Code runs a
+// turn with a disconnected server and says nothing of it, so the helper
+// polls the workspace's MCP status and, at its bound, ends the run before
+// the prompt, saying the bridge never connected.
+//
+// Mutation: send the prompt at the bound anyway.
+func TestAQwenRunWhoseBridgeNeverConnectsIsNotStarted(t *testing.T) {
+	t.Parallel()
+	bridge := newQwenBridge(t)
+	run := startQwenHelper(t, bridge.steer(), "acp-note.jsonl", map[string]any{"mcpWaitMs": 600}, "QWEN_FAKE_NEVER_CONNECT=1")
+	lines, code := run.finish(t)
+	if code != 1 {
+		t.Errorf("the helper exited %d, want 1", code)
+	}
+	end := typed(lines, "crewlet_qwen_end")
+	if len(end) != 1 || !strings.Contains(string(mustJSON(t, end[0])), "did not connect the run's tool bridge (probe)") {
+		t.Errorf("the run ended %v, want the bridge named as never connected", end)
+	}
+	for _, e := range run.standinSaw(t) {
+		if e["method"] == "session/prompt" {
+			t.Error("the prompt went in with the bridge disconnected")
+		}
+	}
+}
+
+func mustJSON(t *testing.T, v any) []byte {
+	t.Helper()
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+// A QWEN RUN STOPS WITH session/cancel, NEVER A SIGNAL. Qwen Code tears its
+// chat file on SIGTERM (measured on 0.28.3), so the helper, signalled as an
+// end request signals it, cancels the turn, waits for its answer, closes
+// Qwen Code's stdin and exits as a stopped process; no signal reaches Qwen
+// Code. Replayed from 0.28.3's own cancelled turn, the stand-in holding where
+// the capture's host cancelled.
+//
+// Mutations, each red: pass the signal to Qwen Code's process group; exit
+// on the signal without cancelling.
+func TestAQwenRunStopsWithCancelNeverASignal(t *testing.T) {
+	t.Parallel()
+	bridge := newQwenBridge(t)
+	run := startQwenHelper(t, bridge.steer(), "acp-cancel.jsonl", nil)
+	scanner := bufio.NewScanner(run.stdout)
+	scanner.Buffer(nil, 1<<20)
+	var lines []map[string]any
+	signalled := false
+	for scanner.Scan() {
+		l := decodeLine(t, scanner.Bytes())
+		lines = append(lines, l)
+		// THE CALL UNDER WAY, the point at which the capture's host cancelled.
+		if !signalled && strings.Contains(scanner.Text(), `"status":"in_progress"`) {
+			signalled = true
+			if err := run.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	_ = run.cmd.Wait()
+	if code := run.cmd.ProcessState.ExitCode(); code != 143 {
+		t.Errorf("the stopped helper exited %d, want 143", code)
+	}
+	if end := typed(lines, "crewlet_qwen_end"); len(end) != 1 || end[0]["stop_reason"] != "cancelled" {
+		t.Errorf("the turn ended %v, want cancelled", end)
+	}
+	saw := run.standinSaw(t)
+	var cancelled, closed bool
+	for _, e := range saw {
+		cancelled = cancelled || e["method"] == "session/cancel"
+		closed = closed || e["stdin"] == "closed"
+		if e["signal"] != nil {
+			t.Errorf("Qwen Code was sent %v", e["signal"])
+		}
+	}
+	if !cancelled || !closed {
+		t.Errorf("Qwen Code saw %v, want session/cancel and its stdin closed", saw)
+	}
+}
+
+// AFTER QWEN CODE'S OWN 429 FAILURE THE HELPER QUOTES ONLY THE FAILING
+// REQUEST'S RECORD, AND NEVER OTHERWISE. Replayed from 0.28.3's turns that
+// failed on a spent quota and on a rate limit, each after seven attempts,
+// with their own chat files: the helper exits 173 and quotes the provider's
+// words of the request that failed last, the first record naming it, so a
+// record a process of the box appended later under the same request is never
+// read; a turn that finished never reads the chat file, whatever it holds.
+//
+// Mutations, each red: quote the last api_error record of the file; quote
+// the last record naming the failed request; read the record on a turn that
+// did not fail; exit 1 on the 429.
+func TestAfterQwensOwn429TheHelperQuotesOnlyTheFailingRequestsRecord(t *testing.T) {
+	t.Parallel()
+	captures := filepath.Join("testdata", "qwen", "0.28.3")
+	quotaRecord := func(t *testing.T) string {
+		for _, l := range strings.Split(string(qwenFixture(t, "0.28.3", "chat-quota.jsonl")), "\n") {
+			if strings.Contains(l, "qwen-code.api_error") {
+				return l
+			}
+		}
+		t.Fatal("the quota chat file holds no error record")
+		return ""
+	}
+	forged := filepath.Join(t.TempDir(), "chat-rate-forged.jsonl")
+	rate := string(qwenFixture(t, "0.28.3", "chat-rate.jsonl"))
+	// THE RATE LIMIT'S LAST FAILED REQUEST, its record copied with a quota's
+	// words, appended after the real one.
+	var lastID string
+	for _, l := range strings.Split(rate, "\n") {
+		if strings.Contains(l, "qwen-code.api_error") {
+			var r struct {
+				SystemPayload struct {
+					UIEvent map[string]any `json:"uiEvent"`
+				} `json:"systemPayload"`
+			}
+			_ = json.Unmarshal([]byte(l), &r)
+			lastID, _ = r.SystemPayload.UIEvent["execution_id"].(string)
+		}
+	}
+	var q map[string]any
+	_ = json.Unmarshal([]byte(quotaRecord(t)), &q)
+	q["systemPayload"].(map[string]any)["uiEvent"].(map[string]any)["execution_id"] = lastID
+	if err := os.WriteFile(forged, append([]byte(rate), append(mustJSON(t, q), '\n')...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		turn, seed string
+		code       int
+		said       string // the limit line's words, "" for none
+	}{
+		"a spent quota": {turn: "acp-quota.jsonl", seed: filepath.Join(captures, "chat-quota.jsonl"), code: 173,
+			said: "429 You exceeded your current quota"},
+		"a rate limit with a quota record appended": {turn: "acp-rate.jsonl", seed: forged, code: 173,
+			said: "429 Rate limit reached"},
+		"a finished turn with quota records": {turn: "acp-note.jsonl",
+			seed: filepath.Join(captures, "chat-quota.jsonl"), code: 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			seed, err := filepath.Abs(tc.seed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			run := startQwenHelper(t, newQwenBridge(t).steer(), tc.turn, nil, "QWEN_FAKE_CHAT_SEED="+seed)
+			lines, code := run.finish(t)
+			if code != tc.code {
+				t.Errorf("the helper exited %d, want %d", code, tc.code)
+			}
+			limits := typed(lines, "crewlet_qwen_limit")
+			switch {
+			case tc.said == "" && len(limits) != 0:
+				t.Errorf("a turn that did not fail quoted %v", limits)
+			case tc.said != "" && (len(limits) != 1 ||
+				!strings.HasPrefix(limits[0]["error_message"].(string), tc.said)):
+				t.Errorf("the limit lines read %v, want one quoting %q", limits, tc.said)
+			}
+		})
+	}
+}
+
+// A SKILL QWEN CODE LOADED IS REPORTED BY THE NAME IT WAS HANDED UNDER.
+// Driven as Qwen Code runs the PostToolUse hook, with the input it hands one
+// (measured on 0.28.3): the skill tool's load of `crewlet-probe` is reported
+// as `crewlet:probe`, any other tool's call reports nothing, and the hook
+// answers with an empty object either way.
+//
+// Mutations, each red: report by Qwen Code's spelling; report every tool.
+func TestAQwenSkillLoadIsReportedByTheNameItWasHandedUnder(t *testing.T) {
+	t.Parallel()
+	node := nodeForQwen(t)
+	for name, tc := range map[string]struct {
+		input map[string]any
+		want  string
+	}{
+		"a skill's load": {input: map[string]any{"hook_event_name": "PostToolUse", "tool_name": "skill",
+			"tool_input": map[string]any{"skill": "crewlet-probe"}}, want: `{"skill":"crewlet:probe"}`},
+		"another tool's call": {input: map[string]any{"hook_event_name": "PostToolUse",
+			"tool_name": "run_shell_command", "tool_input": map[string]any{"command": "ls"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			bridge := newQwenBridge(t)
+			path := filepath.Join(t.TempDir(), "qwen-helper.json")
+			if err := os.WriteFile(path, mustJSON(t, map[string]any{"skills": bridge.srv.URL + "/skills",
+				"namespace": "crewlet"}), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.CommandContext(t.Context(), node, "qwen_helper.mjs", "skill", path)
+			cmd.Stdin = bytes.NewReader(mustJSON(t, tc.input))
+			out, err := cmd.Output()
+			if err != nil || string(out) != "{}" {
+				t.Fatalf("the hook answered %q, %v; want {}", out, err)
+			}
+			bridge.mu.Lock()
+			defer bridge.mu.Unlock()
+			if got := strings.Join(bridge.skills, "|"); got != tc.want {
+				t.Errorf("the hook reported %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// A REAL BOX'S NOTES REACH THE BRIDGE'S ROUTE, for Qwen Code: the helper, with
+// the configuration a run is handed, polls a real bridge's notes route (its
+// inbox a stand-in of the engine's), hands the note to 0.28.3's replayed
+// turn, and confirms it through the route by the note's own id once the
+// session records it. A field either side renamed would leave every Qwen Code
+// run handing nothing, with no error anywhere.
+//
+// Mutation: rename `message`, `seq` or `id` on mcpbridge.SteerNote, or `ids`
+// on the route's read, or the field the helper reads for any of them.
+func qwenHelperReachesTheBridgesOwnNotesRoute(t *testing.T) {
+	t.Parallel()
+	note := mcpbridge.SteerNote{Seq: 3, ID: "req-7", Inbox: executor.InboxID(executor.QwenCodeName, "job-1", "req-7"),
+		Message: "## A note from ada, sent while this turn was running\n\nTarget the release branch."}
+	inbox := &routeInbox{notes: []mcpbridge.SteerNote{note}, reads: make(chan []string, 4)}
+	endpoint := probeBridge(t, inbox, &probeLedger{})
+	run := startQwenHelper(t, mcpbridge.SteerURL(endpoint), "acp-note.jsonl", nil, "QWEN_FAKE_AWAIT_NOTES=1")
+	lines, code := run.finish(t)
+	if code != 0 || len(typed(lines, "crewlet_qwen_note")) != 1 {
+		t.Fatalf("the helper exited %d having handed %v, want the note handed", code, typed(lines, "crewlet_qwen_note"))
+	}
+	// THE HELPER'S EXIT IS THE SIGNAL: it posts its confirmations before it
+	// ends.
+	select {
+	case ids := <-inbox.reads:
+		if len(ids) != 1 || ids[0] != note.ID {
+			t.Errorf("the route handed the inbox the read %v, want the note's id %q", ids, note.ID)
+		}
+	default:
+		t.Fatal("the helper's confirmation never reached the run's inbox through the route")
+	}
+}

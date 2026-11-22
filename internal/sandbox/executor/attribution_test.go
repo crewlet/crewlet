@@ -320,6 +320,12 @@ var creditBoxes = map[string]func(t *testing.T) (*executor.Runner, sandbox.Sandb
 		return runner, b
 	},
 	executor.GeminiCLIName: geminiCreditBox,
+	// Its helper's stand-in runs the scenario: Qwen Code and its shell run
+	// under the helper's environment, which the wrapper gave it.
+	executor.QwenCodeName: func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
+		return qwenBox(t, "sh \"$HOME/scenario.sh\" > \"$HOME/observed\" 2> \"$HOME/observed.err\"\n"+
+			"echo '{\"type\":\"crewlet_qwen_end\",\"stop_reason\":\"end_turn\"}'\n")
+	},
 	executor.OpenCodeName: func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 		runner, b := openCodeBox(t, t.TempDir())
 		standIn := strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`, "d="+shQuote(t.TempDir()), 1)

@@ -254,6 +254,9 @@ func TestTheStandingInstructionIsGivenExactlyWhenARunReadsNotes(t *testing.T) {
 		"gemini cli, wired to its notes": {executor.NewGeminiCLI(), steerWiring, plain,
 			executor.GeminiCLISteerInstruction},
 		"gemini cli, wired to none": {executor.NewGeminiCLI(), sandbox.SteerWiring{}, plain, ""},
+		"qwen code, wired to its notes": {executor.NewQwenCode(), steerWiring, plain,
+			executor.QwenCodeSteerInstruction},
+		"qwen code, wired to none": {executor.NewQwenCode(), sandbox.SteerWiring{}, plain, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

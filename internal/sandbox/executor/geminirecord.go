@@ -120,7 +120,7 @@ func (b *transcriptBuilder) geminiSession(ctx context.Context, r io.Reader) erro
 				restating = true
 				return b.add(TranscriptEntry{Kind: EntrySummary, At: at, Thread: b.thread}, summary)
 			}
-			return b.geminiUser(at, w.Content)
+			return b.userParts(at, w.Content, geminiSessionContext)
 		}
 		return nil
 	}, func(int64) error { return nil })
@@ -156,10 +156,14 @@ func (b *transcriptBuilder) geminiResponded(r geminiResponse) error {
 	return nil
 }
 
-// geminiUser adds one user entry's parts: the brief, or a note, a late call
-// or a wake by its heading (Gemini CLI hands a finish's block as the user's
-// words), and each call's response, as the tool that answered it.
-func (b *transcriptBuilder) geminiUser(at time.Time, content json.RawMessage) error {
+// userParts adds one user entry's parts, as Gemini CLI and Qwen Code both
+// record them: the brief, or a note, a late call or a wake by its heading
+// (Gemini CLI hands a finish's block as the user's words, Qwen Code a
+// message between steps behind its framing), and each call's response, as
+// the tool that answered it. A text opening with ownContext, where the
+// harness names one, is the harness's own words and never read (Gemini CLI's
+// [geminiSessionContext]); "" reads every text.
+func (b *transcriptBuilder) userParts(at time.Time, content json.RawMessage, ownContext string) error {
 	for _, part := range geminiParts(content) {
 		switch {
 		case part.Response != nil:
@@ -174,7 +178,7 @@ func (b *transcriptBuilder) geminiUser(at time.Time, content json.RawMessage) er
 			}
 		case part.Text != nil && !part.Thought:
 			text := strings.TrimSpace(*part.Text)
-			if text == "" || strings.HasPrefix(text, geminiSessionContext) {
+			if text == "" || (ownContext != "" && strings.HasPrefix(text, ownContext)) {
 				continue
 			}
 			if !opensWithHeading(text) {

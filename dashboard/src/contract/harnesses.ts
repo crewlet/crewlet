@@ -89,9 +89,11 @@ export const HARNESS_FACTS: Readonly<Record<string, HarnessFacts>> = {
   },
   "qwen-code": {
     binary: "qwen",
-    signIns: ["api-key"],
+    executor: true,
+    signIns: ["api-key", "host-login"],
     keyEnv: "OPENAI_API_KEY",
     keyShared: true,
+    login: "adopt",
     efforts: [],
     effortNote:
       "Qwen Code reads its reasoning effort only from its own settings file, which the engine writes for each call",

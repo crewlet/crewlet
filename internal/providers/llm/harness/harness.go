@@ -782,14 +782,22 @@ func newSessionID() string {
 }
 
 // argv is the invocation's arguments: the profile's completion argv (its tool
-// route's for a run with tools, rendered by [Provider.serveTools]), then the
-// model and its effort, then in argv mode the prompt, which the caller appends.
+// route's for a run with tools, rendered by [Provider.serveTools]), its
+// sign-in's flag, then the model and its effort, then in argv mode the prompt,
+// which the caller appends.
 func (p *Provider) argv(tools bool) []string {
 	complete := p.profile.CompleteArgs
 	if m := p.profile.MCP; tools && m != nil && len(m.CompleteArgs) > 0 {
 		complete = m.CompleteArgs
 	}
 	args := append([]string(nil), complete...)
+	// THE SIGN-IN'S OWN FLAG, where the profile names one: read off the home
+	// the call runs in, the key home or the login's ([Provider.signsInWithKey]).
+	if p.signsInWithKey() {
+		args = append(args, p.profile.KeyArgs...)
+	} else {
+		args = append(args, p.profile.SubscriptionArgs...)
+	}
 	if p.model != "" && !p.modelInEnv() {
 		model := p.profile.EffortModel(p.model, p.effort)
 		for _, arg := range p.profile.ModelArgs {
