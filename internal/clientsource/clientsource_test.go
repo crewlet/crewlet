@@ -430,6 +430,41 @@ export interface Other { key: string }
 	}
 }
 
+// A MEMBER THAT MAY BE NULL SAYS SO AT ITS TOP LEVEL. A gate that marshals a
+// zero value refuses a null only where the declaration does not admit one, so
+// a null inside a bracket, a method's result and a function's are not the
+// member's own.
+func TestANullableMemberIsNullable(t *testing.T) {
+	t.Parallel()
+	root := tree(t, map[string]string{
+		"protocol/types.ts": `export interface IntegrationRow {
+  money: Money | null;
+  wrapped:
+    | Money
+    | null
+  later?: null | string
+  list: Array<string | null>;
+  row: { inner: string | null };
+  read(): string | null
+  call: () => string | null;
+  plain: string
+}
+`,
+	})
+	got, err := clientsource.Interface(root, "IntegrationRow")
+	if err != nil {
+		t.Fatalf("Interface: %v", err)
+	}
+	want := []clientsource.Member{
+		{Name: "money", Nullable: true}, {Name: "wrapped", Nullable: true},
+		{Name: "later", Optional: true, Nullable: true}, {Name: "list"}, {Name: "row"},
+		{Name: "read"}, {Name: "call"}, {Name: "plain"},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("members = %v, want %v", got, want)
+	}
+}
+
 // AN INTERFACE'S MEMBERS INCLUDE WHAT IT EXTENDS.
 //
 // A row type built on a shared base declares half its members elsewhere, and

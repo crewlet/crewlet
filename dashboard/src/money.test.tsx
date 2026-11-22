@@ -1,5 +1,6 @@
 /**
- * NOTHING ON A SCREEN IS MONEY — rule 19, held from the source and the page.
+ * NOTHING ON A SCREEN IS MONEY BUT A VENDOR'S — rule 19, held from the source
+ * and the page.
  *
  * The dashboard measures spend in TOKENS and never in a currency
  * (`docs/reference/dashboard-design.md`, rule 19). The engine records a price
@@ -71,6 +72,30 @@ const CURRENCY_SIGN = /[€£]/;
  * option keys that only exist to go with it.
  */
 const INTL_CURRENCY = new Set(["currency", "currencyDisplay", "currencySign"]);
+/**
+ * The growth modules, which draw a vendor account's own money (ad spend,
+ * earnings, spending caps) through the kit's `Money` and nowhere else: each
+ * may name a `currency` as data. Nothing else is admitted there; Intl's
+ * currency options, a currency's code or sign and a price field stay refused.
+ */
+const VENDOR_MONEY = /^(?:contract\/growth\.ts|components\/growth\/|routes\/growth\/)/;
+/**
+ * The kit's money, which draws and reads an amount in a currency: the growth
+ * modules' alone, so a screen elsewhere cannot format one without naming
+ * `currency` at all.
+ */
+const KIT_MONEY = new Set([
+  "Money",
+  "MoneyField",
+  "formatMoney",
+  "parseMoney",
+  "moneyDecimal",
+  "moneyFieldProblem",
+  "toMicros",
+  "decimalOf",
+  "minorUnits",
+  "sumByCurrency",
+]);
 /** Text that ends in a dollar sign, which is what a price is written behind. */
 const ENDS_IN_DOLLAR = /\$\s*$/;
 
@@ -176,7 +201,7 @@ function textsOf(node: Node): string[] {
  * reads the tree and the certification cases below, so what those cases prove
  * about it is true of the scan that guards the tree.
  */
-function pricesIn(source: string, lang: Lang): Finding[] {
+function pricesIn(source: string, lang: Lang, vendorMoney = false): Finding[] {
   const line = lineOf(source);
   const found: Finding[] = [];
   const report = (node: Node, what: string) => found.push({ line: line(node.start), what });
@@ -190,7 +215,12 @@ function pricesIn(source: string, lang: Lang): Finding[] {
       typeof node.name === "string"
     ) {
       if (PRICE_FIELD.test(node.name)) report(node, `names the price field \`${node.name}\``);
-      if (INTL_CURRENCY.has(node.name)) report(node, `names Intl's \`${node.name}\` option`);
+      if (INTL_CURRENCY.has(node.name) && !(vendorMoney && node.name === "currency")) {
+        report(node, `names Intl's \`${node.name}\` option`);
+      }
+      if (KIT_MONEY.has(node.name) && !vendorMoney) {
+        report(node, `reaches for the kit's money \`${node.name}\``);
+      }
     }
 
     // TEXT: what a string, a template or a JSX run would put on screen.
@@ -242,12 +272,13 @@ describe("the source", () => {
     // nothing. The tree holds about two hundred modules.
     expect(shipped.length).toBeGreaterThan(150);
     const offenders = shipped.flatMap(({ path, text, lang }) =>
-      pricesIn(text, lang).map((f) => `${path}:${f.line} — ${f.what}`),
+      pricesIn(text, lang, VENDOR_MONEY.test(path)).map((f) => `${path}:${f.line} — ${f.what}`),
     );
     expect(
       offenders,
-      "the dashboard renders tokens and never money (rule 19 in docs/reference/dashboard-design.md): " +
-        "draw the token count instead, and declare no price field for a screen to reach for",
+      "the dashboard draws tokens for what agents spend, and money only through the kit's Money in the " +
+        "growth modules (rule 19 in docs/reference/dashboard-design.md): draw the token count instead, " +
+        "and declare no price field for a screen to reach for",
     ).toEqual([]);
   });
 
@@ -274,8 +305,35 @@ describe("the source", () => {
     ["a dollar concatenated", 'const s = "$" + n;', "by concatenation"],
     ["a dollar deep in a chain", 'const s = a + " at $" + n;', "by concatenation"],
     ["a dollar split across literals", 'const s = `${"$"}${n}`;', "in a template"],
-  ])("the scan catches %s", (_name, source, what) => {
-    const found = pricesIn(source, "tsx");
+    // A growth module names a vendor's currency as data, and nothing more.
+    [
+      "Intl's display option in a growth module",
+      "const f = { currencyDisplay: d };",
+      "names Intl's `currencyDisplay` option",
+      true,
+    ],
+    [
+      "Intl's currency style in a growth module",
+      'const f = { style: "currency" };',
+      "asks Intl for",
+      true,
+    ],
+    [
+      "a currency code in a growth module",
+      "const e = <span>{n} EUR</span>;",
+      "names a currency",
+      true,
+    ],
+    ["a price field in a growth module", "const t = p.cost_usd;", "names the price field", true],
+    // The kit's money outside a growth module, even where no `currency` is named.
+    ["the kit's formatter", "const s = formatMoney(m, code);", "reaches for the kit's money"],
+    [
+      "the kit's Money renamed",
+      'import { Money as Amount } from "@crewlethq/ui";',
+      "reaches for the kit's money `Money`",
+    ],
+  ])("the scan catches %s", (_name, source, what, vendorMoney = false) => {
+    const found = pricesIn(source, "tsx", vendorMoney);
     expect(found.length, `nothing found in ${source}`).toBeGreaterThan(0);
     expect(found.map((f) => f.what).join("\n")).toContain(what);
   });
@@ -295,8 +353,37 @@ describe("the source", () => {
     ["a doc comment naming the style", '/** never `style: "currency"` */\nconst x = 1;'],
     ["a sum that is not text", "const n = a + b;"],
     ["prose about currencies", 'const s = "a currency shown beside tokens misleads";'],
-  ])("the scan leaves %s alone", (_name, source) => {
-    expect(pricesIn(source, "tsx")).toEqual([]);
+    [
+      "a growth module's currency field",
+      "const caps = { account: id, currency: row.currency };",
+      true,
+    ],
+    [
+      "a growth module's Money",
+      "const e = <Money micros={m} currency={account.currency} />;",
+      true,
+    ],
+  ])("the scan leaves %s alone", (_name, source, vendorMoney = false) => {
+    expect(pricesIn(source, "tsx", vendorMoney)).toEqual([]);
+  });
+
+  test("only the growth modules may name a currency, each by its path", () => {
+    for (const path of [
+      "contract/growth.ts",
+      "components/growth/caps.ts",
+      "components/growth/SpendCaps.tsx",
+      "routes/growth/Growth.tsx",
+    ]) {
+      expect(VENDOR_MONEY.test(path), path).toBe(true);
+    }
+    for (const path of [
+      "routes/spend/Spend.tsx",
+      "lib/growthCaps.ts",
+      "components/GrowthBadge.tsx",
+      "contract/growthx.ts",
+    ]) {
+      expect(VENDOR_MONEY.test(path), path).toBe(false);
+    }
   });
 });
 

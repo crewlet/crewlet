@@ -14,12 +14,15 @@ import type { LimitsAnswer } from "./limits.ts";
 /**
  * What a request is for: its act, set by the engine from the structured data
  * that made it (`delegated.Kind`): a command on a server, a merge of one
- * change, a deploy of one commit, or `other`, which is never delegated.
+ * change, a deploy of one commit, a growth integration's ad spend, public post
+ * or account administration, which an administrator alone decides, or
+ * `other`. The last four are never delegated.
  * CLOSED: the engine sends only the acts it declares and a gate holds this
  * list to `delegated.Kinds()`; a reader still says an act it does not know as
  * written.
  */
-export type DelegatedAct = "ssh_operate" | "pr_merge" | "deploy" | "other";
+export type DelegatedAct =
+  "ssh_operate" | "pr_merge" | "deploy" | "ad_spend" | "public_post" | "account_admin" | "other";
 
 /** A delegate's answer, or what a request's answers came to (`delegated.Verdict`). */
 export type DelegatedVerdict = "allow" | "escalate" | "deny";

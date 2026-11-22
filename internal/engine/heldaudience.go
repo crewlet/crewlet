@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/delegated"
+	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -49,6 +50,14 @@ func heldAudience(company *Company, run sandbox.PendingRun, admins []string) san
 	case sandbox.HeldApproversSSH:
 		if s := company.SSH(); s != nil {
 			for _, handle := range s.Approvers {
+				add(handle)
+			}
+		}
+	case sandbox.HeldApproversAdmin:
+		// ROUTED ONLY: the people the product's block lists see it first, and
+		// only an administrator may answer it (ADR-0171).
+		if kind, ok := growth.KindOfTool(run.HeldCall.Tool); ok && company.Config != nil {
+			for _, handle := range company.Config.Integrations.GrowthApprovers(kind) {
 				add(handle)
 			}
 		}

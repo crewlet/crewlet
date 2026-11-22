@@ -331,6 +331,9 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		// AND WHAT A RULE CAN NAME FROM THE COMPANY'S GITHUB: the
 		// administrator's, who writes the rule into the document.
 		"delegated_repositories": "admin", "delegated_branches": "admin", "delegated_checks": "admin",
+		// WHAT AGENTS CHANGED ON THE GROWTH ACCOUNTS, the company-wide
+		// trail's (ADR-0171).
+		"growth_changes": "decided_by:" + string(authz.ActionAuditRead),
 
 		// THE ARTIFACTS: the listing and the folder tree are everybody's and
 		// filtered row by row and folder by folder;

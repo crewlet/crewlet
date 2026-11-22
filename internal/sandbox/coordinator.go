@@ -3049,6 +3049,16 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.ExecutorAnsw
 			answered(run, types.AnswerUnoffered)
 			return AnswerNotMine, nil
 		}
+		if run.HeldCall != nil && run.HeldCall.Lapsed(c.now()) && given.Choice != HeldDeny {
+			// A LAPSED CALL TAKES DENY ALONE, the engine's own or a person's:
+			// an allow arriving between the lapse and the sweep would make a
+			// call on figures a day old (ADR-0171).
+			log.WarnContext(ctx, "sandbox_answer_lapsed",
+				"turn_id", given.TurnID, "approval", given.Approval, "choice", given.Choice,
+				"answered_by", given.AnsweredBy, "lapsed_at", run.HeldCall.LapsesAt)
+			answered(run, types.AnswerNotAwaiting)
+			return AnswerNotMine, nil
+		}
 		// WHAT IT SAYS, MEASURED AS `answer_executor` MEASURED IT: as authored,
 		// trimmed, before redaction, the one string both ends hold to
 		// [MaxAnswerTextBytes], so a tool-accepted answer is never refused here

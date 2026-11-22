@@ -119,21 +119,22 @@ func (s Settings) derive(at time.Time) *builder {
 // integration kind has a row: an integration the engine connects is an
 // account the company holds, or for SSH the servers it declares.
 var integrationRows = map[integration.Kind]func(b *builder, c *config.Company, zones map[string]atlas.Ref){
-	integration.KindSlack:        slack,
-	integration.KindMattermost:   mattermost,
-	integration.KindJira:         jira,
-	integration.KindConfluence:   confluence,
-	integration.KindGitHub:       github,
-	integration.KindGitLab:       gitlab,
-	integration.KindDatadog:      datadog,
-	integration.KindCloudflare:   cloudflare,
-	integration.KindScaleway:     scaleway,
-	integration.KindExpo:         expo,
-	integration.KindDigitalOcean: digitalocean,
-	integration.KindAWS:          aws,
-	integration.KindGoogleCloud:  googleCloud,
-	integration.KindSSH:          sshHosts,
-	integration.KindAtlassian:    atlassian,
+	integration.KindSlack:           slack,
+	integration.KindMattermost:      mattermost,
+	integration.KindJira:            jira,
+	integration.KindConfluence:      confluence,
+	integration.KindGitHub:          github,
+	integration.KindGitLab:          gitlab,
+	integration.KindDatadog:         datadog,
+	integration.KindCloudflare:      cloudflare,
+	integration.KindScaleway:        scaleway,
+	integration.KindExpo:            expo,
+	integration.KindDigitalOcean:    digitalocean,
+	integration.KindAWS:             aws,
+	integration.KindGoogleCloud:     googleCloud,
+	integration.KindSSH:             sshHosts,
+	integration.KindAppStoreConnect: appStoreConnect,
+	integration.KindAtlassian:       atlassian,
 }
 
 var (
@@ -356,6 +357,20 @@ func expo(b *builder, c *config.Company, _ map[string]atlas.Ref) {
 	}
 	b.account("integrations.expo.provisioning.account_name", atlas.VendorExpo, name, name, "Expo", e.Enabled,
 		atlas.CapabilityAppDelivery)
+}
+
+// appStoreConnect records each connected App Store Connect team, keyed by its
+// issuer ID, which is not a secret.
+func appStoreConnect(b *builder, c *config.Company, _ map[string]atlas.Ref) {
+	a := c.Integrations.AppStoreConnect
+	if a == nil {
+		return
+	}
+	for _, id := range a.ConnectionIDs() {
+		issuer := strings.ToLower(a.Connections[id].IssuerID)
+		b.account("integrations.app_store_connect.connections."+id+".issuer_id", atlas.VendorApple, issuer, issuer,
+			"App Store Connect", a.Enabled, atlas.CapabilityAppDelivery)
+	}
 }
 
 func digitalocean(b *builder, c *config.Company, _ map[string]atlas.Ref) {

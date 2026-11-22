@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/googlecloud"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/seataccess"
@@ -113,7 +114,7 @@ func (w *syncWorld) record() seataccess.Record {
 
 // email is the seat's account address, as Google made it.
 func (w *syncWorld) email() string {
-	return googlecloud.AccountEmail(googlecloud.AccountID(testCompany, "sre"), identity)
+	return googleauth.AccountEmail(googlecloud.AccountID(testCompany, "sre"), identity)
 }
 
 // roles is every role the seat holds on project.

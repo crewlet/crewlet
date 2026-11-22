@@ -131,6 +131,10 @@ const (
 	// company's servers with and ingests nothing.
 	KindSSH Kind = "ssh"
 
+	// KindAppStoreConnect reaches the company's App Store Connect teams for
+	// the agents through the engine's own tools and ingests nothing.
+	KindAppStoreConnect Kind = "app_store_connect"
+
 	// KindAtlassian is the ORGANIZATION, not a third product. Jira and
 	// Confluence are sites this engine reads and writes as an account; this
 	// is where the account itself is created, which no site API can do. It
@@ -146,7 +150,7 @@ const (
 var Kinds = []Kind{
 	KindSlack, KindMattermost, KindJira, KindConfluence,
 	KindGitHub, KindGitLab, KindDatadog, KindCloudflare, KindExpo, KindDigitalOcean,
-	KindScaleway, KindAWS, KindGoogleCloud, KindSSH, KindAtlassian,
+	KindScaleway, KindAWS, KindGoogleCloud, KindSSH, KindAppStoreConnect, KindAtlassian,
 }
 
 // ConvergeOrder is the order the reconcile loop VISITS surfaces in, which is
@@ -166,7 +170,7 @@ var ConvergeOrder = []Kind{
 	KindAtlassian, KindJira, KindConfluence,
 	KindSlack, KindMattermost,
 	KindGitHub, KindGitLab, KindDatadog, KindCloudflare, KindExpo, KindDigitalOcean,
-	KindScaleway, KindAWS, KindGoogleCloud, KindSSH,
+	KindScaleway, KindAWS, KindGoogleCloud, KindSSH, KindAppStoreConnect,
 }
 
 // Valid reports whether k is a surface this build knows.
@@ -244,10 +248,10 @@ func (k Kind) Ingress() Ingress {
 // then receives everything said in its team; Atlassian only CREATES accounts
 // (Jira and Confluence have their own webhook and parser). So "no parser turns
 // deliveries into work" warns about Mattermost and means nothing for Atlassian.
-// Cloudflare, Expo, DigitalOcean, Scaleway, AWS, Google Cloud and SSH are
-// likewise: credentials there are minted, pasted or issued, and nothing they
-// send is routed to a seat.
+// Cloudflare, Expo, DigitalOcean, Scaleway, AWS, Google Cloud, SSH and App
+// Store Connect are likewise: credentials there are minted, pasted or issued,
+// and nothing they send is routed to a seat.
 func (k Kind) Ingests() bool {
 	return k != KindAtlassian && k != KindCloudflare && k != KindExpo && k != KindDigitalOcean &&
-		k != KindScaleway && k != KindAWS && k != KindGoogleCloud && k != KindSSH
+		k != KindScaleway && k != KindAWS && k != KindGoogleCloud && k != KindSSH && k != KindAppStoreConnect
 }
