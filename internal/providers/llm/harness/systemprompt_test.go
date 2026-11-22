@@ -166,7 +166,7 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 		// because only their flags had been read.
 		"gemini-cli": envChannel,
 		"qwen-code":  envChannel,
-		// 0.153.4 and 0.164.0: no flag, but a CONFIG KEY naming a file,
+		// 0.171.0: no flag, but a CONFIG KEY naming a file,
 		// `-c model_instructions_file=<path>`, which replaces the base
 		// instructions outright.
 		"codex": "{file}",
