@@ -26,6 +26,7 @@ import { SessionReading } from "~/lib/frameSession.ts";
 import { healthFrame } from "~/test/health.ts";
 import { pick } from "~/testing.tsx";
 import { afterMicrotasks } from "~/test/settle.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -43,7 +44,13 @@ const JANE = {
   owner: "jane",
   name: "Jane Founder",
   kind: "human",
-  acts: ["comment_on_work_item", "answer_executor", "update_work_item", "create_work_item"],
+  acts: [
+    "comment_on_work_item",
+    "answer_executor",
+    "update_work_item",
+    "create_work_item",
+    "save_home_board",
+  ],
 };
 
 /** A reader who holds the tracker and the knowledge base but not Admin. */
@@ -83,6 +90,36 @@ const QUIET = {
   inbox: { handle: "jane", notices: [], primary_reasons: [] },
 };
 
+/** The engine's record of the reader's board, which `save_home_board` writes. */
+let engine: { seat: string; board: unknown; revision: number } = {
+  seat: "jane",
+  board: null,
+  revision: 0,
+};
+/** Every act the page sent, in order. */
+let posted: { tool: string; args: Record<string, unknown> }[] = [];
+
+function actAnswer(url: string, init: RequestInit): Response {
+  const tool = decodeURIComponent(url.split("/operator/act/")[1] ?? "");
+  const args = (JSON.parse(init.body as string) as { args: Record<string, unknown> }).args;
+  posted.push({ tool, args });
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
+    });
+  if (tool !== "save_home_board")
+    return json({ tool, outcome: "applied", position: null, receipt: {} });
+  if (args.if_match !== engine.revision) return json({ error: "stale_version", tool }, 409);
+  engine = { ...engine, board: args.board, revision: engine.revision + 1 };
+  return json({
+    tool,
+    outcome: "applied",
+    position: null,
+    receipt: { seat: engine.seat, revision: engine.revision },
+  });
+}
+
 /** Each case reads as a reader of its own, so no case sees another's saved board. */
 let readers = 0;
 let reader = "";
@@ -102,17 +139,21 @@ beforeEach(() => {
   readers += 1;
   reader = `board-reader-${readers}`;
   noteReader(reader);
+  engine = { seat: "jane", board: null, revision: 0 };
+  posted = [];
   // THE FRAME LEARNS WHO READS THE TAB from `GET /auth/session`, so the
   // session answers as this case's reader and the board is kept under them.
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (url: string) =>
+    vi.fn(async (url: string, init?: RequestInit) =>
       String(url).includes("/auth/session")
         ? new Response(JSON.stringify({ person: reader, name: "Jane Founder" }), {
             status: 200,
             headers: { "Content-Type": "application/json" },
           })
-        : new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
+        : String(url).includes("/operator/act/")
+          ? actAnswer(String(url), init!)
+          : new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
     ),
   );
 });
@@ -137,7 +178,7 @@ function mount({
   store.applySeats([] as never);
   const socket = new LiveSocket(store);
   socket.query = ((what: string) => {
-    const all: Record<string, unknown> = { ...QUIET, viewer };
+    const all: Record<string, unknown> = { ...QUIET, viewer, home_board: { ...engine } };
     return Promise.resolve(what in all ? all[what] : {});
   }) as typeof socket.query;
   const page: ReactNode = (
@@ -345,21 +386,131 @@ describe("Edit Home", () => {
     expect(blocks()).toHaveLength(before);
   });
 
-  test("Done keeps the board under the reader's own name, and Home draws it again", async () => {
+  test("Done keeps the board on the engine under the reader's seat, and any browser draws it", async () => {
     mount();
     await settle();
     await editHome();
     await addNote();
     fireEvent.click(within(editBar()).getByRole("button", { name: "Done" }));
     await settle();
-    const saved = localStorage.getItem(`${STORAGE_KEYS.homeBoard}${reader}`);
-    expect(saved).toContain('"kind":"note"');
+    const saves = posted.filter((p) => p.tool === "save_home_board");
+    expect(saves).toHaveLength(1);
+    expect(saves[0]!.args.if_match).toBe(0);
+    expect(JSON.stringify(engine.board)).toContain('"kind":"note"');
     expect(screen.getByRole("button", { name: "Edit Home" })).toBeTruthy();
+
+    // ANOTHER BROWSER: nothing kept here, and the engine's board is drawn.
+    cleanup();
+    localStorage.clear();
+    mount();
+    await settle();
+    expect(notes()).toBe(1);
+  });
+
+  test("a board this browser kept alone moves onto the engine once, and is then the engine's", async () => {
+    const mine = {
+      widgets: [
+        {
+          id: "w-mine",
+          kind: "note",
+          text: "Mine",
+          tone: "amber",
+          align: "start",
+          size: "md",
+          w: 4,
+          h: null,
+        },
+      ],
+    };
+    localStorage.setItem(`${STORAGE_KEYS.homeBoard}${reader}`, JSON.stringify(mine));
+    mount();
+    await settle();
+    await settle();
+    const saves = posted.filter((p) => p.tool === "save_home_board");
+    expect(saves).toHaveLength(1);
+    expect(saves[0]!.args).toMatchObject({ if_match: 0, board: { widgets: [{ id: "w-mine" }] } });
+    expect(notes()).toBe(1);
+    // What this browser holds now is the engine's answer, not a board of its own.
+    expect(JSON.parse(localStorage.getItem(`${STORAGE_KEYS.homeBoard}${reader}`)!)).toMatchObject({
+      v: 1,
+      seat: "jane",
+      revision: 1,
+    });
 
     cleanup();
     mount();
     await settle();
-    expect(notes()).toBe(1);
+    expect(posted.filter((p) => p.tool === "save_home_board")).toHaveLength(1);
+  });
+
+  test("the engine's board wins over one this browser kept alone, which is dropped", async () => {
+    engine = { seat: "jane", board: { widgets: [] }, revision: 5 };
+    const mine = {
+      widgets: [
+        {
+          id: "w-mine",
+          kind: "note",
+          text: "Mine",
+          tone: "amber",
+          align: "start",
+          size: "md",
+          w: 4,
+          h: null,
+        },
+      ],
+    };
+    localStorage.setItem(`${STORAGE_KEYS.homeBoard}${reader}`, JSON.stringify(mine));
+    mount();
+    await settle();
+    expect(posted.filter((p) => p.tool === "save_home_board")).toHaveLength(0);
+    expect(notes()).toBe(0);
+    expect(JSON.parse(localStorage.getItem(`${STORAGE_KEYS.homeBoard}${reader}`)!)).toMatchObject({
+      v: 1,
+      revision: 5,
+    });
+  });
+
+  test("a Done beaten by a save from another browser asks, and Replace saves at the newer revision", async () => {
+    engine = { seat: "jane", board: { widgets: [] }, revision: 3 };
+    mount();
+    await settle();
+    await editHome();
+    await addNote();
+    // ANOTHER BROWSER SAVES while this one is being edited.
+    engine = { ...engine, board: { widgets: [] }, revision: 4 };
+    fireEvent.click(within(editBar()).getByRole("button", { name: "Done" }));
+    await settle();
+    await settle();
+    const dialog = screen.getByRole("dialog", { name: "Home was changed somewhere else" });
+    expect(posted.filter((p) => p.tool === "save_home_board").map((p) => p.args.if_match)).toEqual([
+      3,
+    ]);
+    expect(engine.revision).toBe(4);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Replace it with mine" }));
+    await settle();
+    expect(posted.filter((p) => p.tool === "save_home_board").map((p) => p.args.if_match)).toEqual([
+      3, 4,
+    ]);
+    expect(engine.revision).toBe(5);
+    expect(JSON.stringify(engine.board)).toContain('"kind":"note"');
+    expect(screen.getByRole("button", { name: "Edit Home" })).toBeTruthy();
+  });
+
+  test("a Done beaten by another browser can take the other board instead", async () => {
+    engine = { seat: "jane", board: { widgets: [] }, revision: 3 };
+    mount();
+    await settle();
+    await editHome();
+    await addNote();
+    engine = { ...engine, revision: 4 };
+    fireEvent.click(within(editBar()).getByRole("button", { name: "Done" }));
+    await settle();
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Use the other one" }));
+    await settle();
+    expect(posted.filter((p) => p.tool === "save_home_board")).toHaveLength(1);
+    expect(notes()).toBe(0);
+    expect(screen.getByRole("button", { name: "Edit Home" })).toBeTruthy();
   });
 
   test("Cancel with changes asks, and discarding puts the saved board back", async () => {
