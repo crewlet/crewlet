@@ -170,7 +170,7 @@ fi
 // hosts and keys. Set, it replaces the entry's sign-in or services.
 // KIMI_CODE_DANGEROUS_COMMAND_GUARD is left alone: it only raises asks, which
 // the driver approves in mode auto, so it switches nothing off (2.7.2).
-var kimiRouting = []string{
+var kimiRouting = slices.Concat([]string{
 	"KIMI_MODEL_NAME", "KIMI_MODEL_API_KEY", "KIMI_MODEL_PROVIDER_TYPE", "KIMI_MODEL_BASE_URL",
 	"KIMI_MODEL_MAX_CONTEXT_SIZE", "KIMI_MODEL_MAX_OUTPUT_SIZE", "KIMI_MODEL_CAPABILITIES",
 	"KIMI_MODEL_THINKING_EFFORT", "KIMI_MODEL_ADAPTIVE_THINKING", "KIMI_MODEL_THINKING_KEEP",
@@ -178,8 +178,7 @@ var kimiRouting = []string{
 	"KIMI_MODEL_TEMPERATURE", "KIMI_MODEL_MAX_TOKENS", "KIMI_MODEL_MAX_COMPLETION_TOKENS",
 	"KIMI_CODE_BASE_URL", "KIMI_BASE_URL", "KIMI_CODE_OAUTH_HOST", "KIMI_OAUTH_HOST", "KIMI_API_KEY",
 	"KIMI_CODE_CUSTOM_HEADERS",
-	"KIMI_WEB_SEARCH_BASE_URL", "KIMI_WEB_SEARCH_API_KEY", "KIMI_WEB_FETCH_BASE_URL", "KIMI_WEB_FETCH_API_KEY",
-}
+}, kimiWebServices)
 
 // kimiNoTelemetry is every OTLP exporter variable, the box's and any an image
 // or a profile sets per signal, which the wrapper removes ([Output.Unset]):
@@ -203,13 +202,17 @@ func otlpExporterVars() []string {
 // kimiRoutingOff is every routing variable ([kimiRouting]) neither the run's own
 // environment (env, the entry's) sets nor [Kimi.Pins] pins, which the script
 // unsets: one from the image or a login profile would send the seat's model
-// calls where its entry never named. In the script for [copilotProviderOff]'s
-// reason.
+// calls where its entry never named. A web-denied run unsets the web services
+// ([kimiWebServices]) whoever set them. In the script for
+// [copilotProviderOff]'s reason.
 func kimiRoutingOff(req sandbox.RunRequest) []string {
 	pinned := kimiModelPins(req)
 	var off []string
 	for _, name := range kimiRouting {
 		_, set := req.Env[name]
+		if req.WebDenied && slices.Contains(kimiWebServices, name) {
+			set = false
+		}
 		if !set && !slices.ContainsFunc(pinned, func(p Pinned) bool { return p.Name == name }) {
 			off = append(off, name)
 		}
@@ -315,6 +318,9 @@ type kimiSettings struct {
 	Report    string `json:"report"`
 	Staging   string `json:"reportStaging"`
 	ServerPid string `json:"serverPid"`
+	// WebDenied has the driver post the brief with Kimi's web tools on the
+	// session's disabled_tools ([kimiWebTools]).
+	WebDenied bool `json:"webDenied,omitempty"`
 }
 
 // kimiProfileDir is the directory under the home's agents a run's profile is
@@ -350,7 +356,7 @@ func (k Kimi) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 		system = withNoteInstruction(system, k.NoteInstruction())
 	}
 	profile := paths.KimiAgents() + "/" + kimiProfileDir + "/" + name + ".md"
-	if err := box.WriteFile(ctx, profile, []byte(kimiProfile(name, system, req.MCPServers))); err != nil {
+	if err := box.WriteFile(ctx, profile, []byte(kimiProfile(name, system, req.MCPServers, req.WebDenied))); err != nil {
 		return "", fmt.Errorf("executor: writing the Kimi run's agent profile: %w", err)
 	}
 	if err := writeJSON(ctx, box, paths.KimiMCPConfig(), kimiMCPConfig(req.MCPServers)); err != nil {
@@ -360,7 +366,7 @@ func (k Kimi) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 		return "", fmt.Errorf("executor: writing the Kimi run's driver: %w", err)
 	}
 	settings := kimiSettings{Profile: name, Thinking: req.Effort, Report: paths.SessionReport(),
-		Staging: paths.sessionReportStaging(), ServerPid: paths.KimiServerPid()}
+		Staging: paths.sessionReportStaging(), ServerPid: paths.KimiServerPid(), WebDenied: req.WebDenied}
 	if !kimiKeySignsIn(req) {
 		settings.Model = req.Model
 	}
@@ -394,6 +400,21 @@ func writeJSON(ctx context.Context, box sandbox.Sandbox, file string, v any) err
 	return box.WriteFile(ctx, file, blob)
 }
 
+// kimiWebTools is Kimi Code's own web tools, which a web-denied run turns off
+// twice (sandbox.RunRequest.WebDenied): left out of its profile's allowlist, so
+// its main agent is not offered them, and posted with its brief as the
+// session's disabled_tools (kimi_driver.js), which holds every agent of the
+// session, a subagent of its own profile included, and its later turns.
+// Measured on 2.7.2: the allowlist alone left a coder subagent both, and it
+// fetched; disabled_tools refused both to the subagent and the main agent.
+var kimiWebTools = []string{"FetchURL", "WebSearch"}
+
+// kimiWebServices is the environment that points Kimi's web tools at a
+// service ([kimiRouting]): unset on a web-denied run whoever set it.
+var kimiWebServices = []string{
+	"KIMI_WEB_SEARCH_BASE_URL", "KIMI_WEB_SEARCH_API_KEY", "KIMI_WEB_FETCH_BASE_URL", "KIMI_WEB_FETCH_API_KEY",
+}
+
 // kimiDefaultTools is every tool Kimi Code offers a session by default, as
 // 2.7.2 lists them (`tool_select.initialized`), less AskUserQuestion
 // (a headless run has nobody to answer; ask_and_wait is on the bridge) and
@@ -412,14 +433,17 @@ var kimiDefaultTools = []string{
 // `${base_prompt}` then the run's standing instructions, so they are APPENDED to
 // Kimi's own prompt. Kimi renders its template variables across the whole body
 // with no escape, the engine's text included: a `${cwd}` in a seat's prompt
-// reaches the model as the run's directory (the kimi-code profile's note).
-func kimiProfile(name, system string, servers map[string]sandbox.MCPServer) string {
+// reaches the model as the run's directory (the kimi-code profile's note). A
+// web-denied run's allowlist leaves out [kimiWebTools].
+func kimiProfile(name, system string, servers map[string]sandbox.MCPServer, webDenied bool) string {
 	var b strings.Builder
 	b.WriteString("---\nname: " + name + "\n")
 	b.WriteString("description: The Crewlet seat this run serves. Its own tools are the crewlet MCP server's.\n")
 	b.WriteString("tools:\n")
 	for _, tool := range kimiDefaultTools {
-		b.WriteString("  - " + tool + "\n")
+		if !webDenied || !slices.Contains(kimiWebTools, tool) {
+			b.WriteString("  - " + tool + "\n")
+		}
 	}
 	for _, server := range slices.Sorted(maps.Keys(servers)) {
 		b.WriteString("  - " + kimiYAMLString("mcp__"+server+"__*") + "\n")
