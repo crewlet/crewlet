@@ -162,3 +162,10 @@ func (r *Runner) ReadBoxPoint(ctx context.Context, box sandbox.Sandbox,
 	point.Charge = SessionTraits(r.harness.Name()).Charge
 	return point, err
 }
+
+// StartsFresh reports whether the runner's harness continues no earlier
+// session ([resumer]), so every launch on it starts one of its own.
+func (r *Runner) StartsFresh() bool {
+	c, ok := r.harness.(resumer)
+	return !ok || !c.Resumes()
+}

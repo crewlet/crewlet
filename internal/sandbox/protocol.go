@@ -192,7 +192,7 @@ const MaxConePaths = 64
 // shell argument, and Linux refuses one past 128 KiB (MAX_ARG_STRLEN) before
 // the shell starts, with a failure naming nothing the run asked for.
 // [MaxConePaths] paths quoted at their worst (all single quotes: four times
-// the length, plus two quotes and a space, per [ShellQuote]) are at most
+// the length, plus two quotes and a space, per `shellword.Quote`) are at most
 // 64 × 1 023 = 65 472 bytes; TestTheWorstCloneStepIsOneShellArgument holds the
 // step under the limit. It also bounds what grants add to a run's row, which
 // every node's completion poll reads whole: about 128 KiB at most.
@@ -631,6 +631,13 @@ type Result struct {
 	// Limits is the run's last limit report line, verbatim, read by
 	// harness.Provider.RunEnded; empty past [MaxRunEventBytes] ([boundBox]).
 	Limits string
+
+	// NoLimitExit says the run's exit status is not the one its harness ends
+	// a run with on its vendor's limit, so its ending reads as no limit
+	// whatever its words say: a box file the model can write could spell one.
+	// Set by a runner that knows that status (Gemini CLI's 173), never by one
+	// that does not, whose endings read as they always have.
+	NoLimitExit bool
 
 	// Transcript is the agent's activity log — what it said, each tool it
 	// called and the first line of what it ran — rebuilt from its own

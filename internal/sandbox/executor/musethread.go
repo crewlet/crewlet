@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // A Muse Code take's RECEIPT (ADR-0177's hook receipts, measured on 1.4.25):
@@ -72,8 +73,8 @@ func museRecord(ctx context.Context, box sandbox.Sandbox, paths Paths, session s
 	if !sandbox.ValidSessionID(session) {
 		return nil, fmt.Errorf("the run's Muse Code session %q is no session id its record is named by", session)
 	}
-	res, err := box.Exec(ctx, `for y in `+sandbox.ShellQuote(paths.MuseSessions())+`/*/*/*/`+
-		sandbox.ShellQuote(session)+`; do [ -f "$y/session.jsonl" ] && printf '%s\n' "$y/session.jsonl"; done`,
+	res, err := box.Exec(ctx, `for y in `+shellword.Quote(paths.MuseSessions())+`/*/*/*/`+
+		shellword.Quote(session)+`; do [ -f "$y/session.jsonl" ] && printf '%s\n' "$y/session.jsonl"; done`,
 		sandbox.ExecOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("the run's Muse Code session %s could not be looked for: %w", session, err)

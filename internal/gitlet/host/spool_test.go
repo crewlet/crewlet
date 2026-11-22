@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/gitlet/host"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/shellword"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -917,9 +918,9 @@ func holdFirst(t *testing.T) (fake, hold, started string) {
 	claimed := filepath.Join(dir, "claimed")
 	fake = gittest.Wrap(t, `case " $* " in
 *" --advertise-refs "*) ;;
-" upload-pack "*) if [ -e `+shellWord(hold)+` ] && ( set -C; : > `+shellWord(claimed)+` ) 2>/dev/null; then
-  : > `+shellWord(started)+`
-  while [ -e `+shellWord(hold)+` ]; do sleep 0.02; done
+" upload-pack "*) if [ -e `+shellword.Quote(hold)+` ] && ( set -C; : > `+shellword.Quote(claimed)+` ) 2>/dev/null; then
+  : > `+shellword.Quote(started)+`
+  while [ -e `+shellword.Quote(hold)+` ]; do sleep 0.02; done
 fi ;;
 esac`)
 	return fake, hold, started

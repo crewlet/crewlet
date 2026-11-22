@@ -48,6 +48,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/procgroup"
+	"github.com/crewlet/crewlet/internal/shellword"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
@@ -594,7 +595,7 @@ func Fake(t testing.TB, version, body string) string {
 	t.Helper()
 	exe := strings.TrimPrefix(version, "git version ")
 	event := `{"event":"version","sid":"gittest-fake","thread":"main","evt":"4","exe":"` + exe + `"}`
-	return fake(t, version, "case \"${GIT_TRACE2_EVENT-}\" in [2-9]) ev="+quote(event)+
+	return fake(t, version, "case \"${GIT_TRACE2_EVENT-}\" in [2-9]) ev="+shellword.Quote(event)+
 		"; eval 'printf \"%s\\n\" \"$ev\" >&'\"$GIT_TRACE2_EVENT\" ;; esac\n", body)
 }
 
@@ -612,7 +613,7 @@ func fake(t testing.TB, version, onVersion, body string) string {
 	path := filepath.Join(t.TempDir(), "git")
 	writeScript(t, path, "#!/bin/sh\n"+
 		"if [ \"${1-}\" = "+probe+" ]; then exit 0; fi\n"+
-		"if [ \"${1-}\" = version ]; then "+onVersion+"printf '%s\\n' "+quote(version)+"; exit 0; fi\n"+
+		"if [ \"${1-}\" = version ]; then "+onVersion+"printf '%s\\n' "+shellword.Quote(version)+"; exit 0; fi\n"+
 		body+"\n")
 	return path
 }
@@ -631,7 +632,7 @@ func Wrap(t testing.TB, body string) string {
 	path := filepath.Join(t.TempDir(), "git")
 	writeScript(t, path, "#!/bin/sh\n"+
 		"if [ \"${1-}\" = "+probe+" ]; then exit 0; fi\n"+
-		"real_git="+quote(git)+"\n"+
+		"real_git="+shellword.Quote(git)+"\n"+
 		"if [ \"${1-}\" = version ]; then exec \"$real_git\" version; fi\n"+
 		body+"\n"+
 		"exec \"$real_git\" \"$@\"\n")
@@ -656,9 +657,9 @@ func Recording(t testing.TB) (path string, calls func() []Call) {
 	path = filepath.Join(dir, "git")
 	writeScript(t, path, "#!/bin/sh\n"+
 		"if [ \"${1-}\" = "+probe+" ]; then exit 0; fi\n"+
-		"f=$(mktemp "+quote(filepath.Join(dir, "call.XXXXXX"))+") || exit 125\n"+
+		"f=$(mktemp "+shellword.Quote(filepath.Join(dir, "call.XXXXXX"))+") || exit 125\n"+
 		"printf '%s\\0' \"${GIT_DIR-}\" \"$@\" > \"$f\"\n"+
-		"exec "+quote(git)+" \"$@\"\n")
+		"exec "+shellword.Quote(git)+" \"$@\"\n")
 	return path, func() []Call {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
@@ -692,9 +693,4 @@ func writeScript(t testing.TB, path, text string) {
 	if err := hostbox.Settle(t.Context(), path, probe); err != nil {
 		t.Fatalf("settling %s: %v", path, err)
 	}
-}
-
-// quote is s as one POSIX shell word.
-func quote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

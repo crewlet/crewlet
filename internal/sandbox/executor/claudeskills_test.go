@@ -22,7 +22,7 @@ func TestAClaudeCodeRunTakesItsSkillsAsAPluginOfItsOwn(t *testing.T) {
 	b := sandbox.NewFakeSandbox("box-1")
 	p := executor.PathsFor(b)
 	req := sandbox.RunRequest{Brief: "x", Skills: handedSkills(), SkillLoads: skillWiring()}
-	if _, err := claude().WriteConfig(t.Context(), b, req, p); err != nil {
+	if _, err := claude().WriteConfig(t.Context(), b, req, executor.Session{}, p); err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
 	plugin := p.ClaudeSkillsPlugin()

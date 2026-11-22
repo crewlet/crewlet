@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 func init() { Register(Muse{}) }
@@ -79,7 +80,7 @@ func (Muse) Session(req sandbox.RunRequest) Session {
 // Command is the run as ONE SCRIPT ([museScript]), so the wrapper's
 // redirections (the stream, the error file) reach each step.
 func (Muse) Command(req sandbox.RunRequest, session Session, paths Paths, _ string) string {
-	return "sh -c " + sandbox.ShellQuote(museScript(req, session, paths, sandbox.JobStopGrace))
+	return "sh -c " + shellword.Quote(museScript(req, session, paths, sandbox.JobStopGrace))
 }
 
 // museScript is a Muse Code run's script, giving its harness stop to go once
@@ -93,7 +94,7 @@ func (Muse) Command(req sandbox.RunRequest, session Session, paths Paths, _ stri
 // THE BRIEF IS A FILE: `--prompt-file` reads it byte for byte, and stdin is
 // not read beside it (measured on 1.4.25).
 func museScript(req sandbox.RunRequest, session Session, paths Paths, stop time.Duration) string {
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	parts := []string{
 		"muse", "exec", "--json",
 		// Approvals and the OS sandbox off, the workspace trusted for this
@@ -175,9 +176,9 @@ at() { [ -z "$a" ] || [ "$a" -gt "$1" ] || { [ "$a" -eq "$1" ] && { [ "$b" -gt "
 // is filed under, and e to that directory from the sessions directory down;
 // both to nothing where the box holds none with a record.
 func museFind(paths Paths) string {
-	sessions := sandbox.ShellQuote(paths.MuseSessions())
+	sessions := shellword.Quote(paths.MuseSessions())
 	return `x= e=; for y in ` + sessions + `/*/*/*/"$s"; do [ -s "$y/session.jsonl" ] && [ ! -L "$y" ] && x=$y; done
-[ -z "$x" ] || e=${x#` + sandbox.ShellQuote(paths.MuseSessions()+"/") + `}
+[ -z "$x" ] || e=${x#` + shellword.Quote(paths.MuseSessions()+"/") + `}
 `
 }
 
@@ -196,7 +197,7 @@ func museFind(paths Paths) string {
 func museSessionGate(session Session, paths Paths, rewired bool) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	if !session.Continues {
 		line(`s=%s k=no w=`, q(session.ID))
 		return b.String()
@@ -276,7 +277,7 @@ func museSessionGate(session Session, paths Paths, rewired bool) string {
 // thread alone and its stream carries nothing of a child (measured on 1.4.25),
 // so these are the rest of the run's spend ([museEvents.runSpend]).
 func museChildUsage(paths Paths) (before, after string) {
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	lines := q(paths.MuseChildLines())
 	before = ": > " + lines + "\n" + museFind(paths) +
 		`if [ -n "$x" ] && [ -d "$x/subagent" ]; then find "$x/subagent" -type f -name session.jsonl -exec wc -l {} + > ` +
@@ -363,7 +364,7 @@ func museCapture(paths Paths) string {
 func musePack(paths Paths, at packAt) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	sessions := paths.MuseSessions()
 	b.WriteString(museFind(paths))
 	line(`if [ -n "$x" ]; then`)
@@ -405,7 +406,7 @@ func (Muse) PackSave(paths Paths, rec sessionRecord, staged, dest string) (strin
 // museOnDemand is a pack the engine makes of session outside the run's own
 // script, at at.
 func museOnDemand(paths Paths, session string, at packAt) string {
-	return "s=" + sandbox.ShellQuote(session) + " packed=\n" + musePack(paths, at) +
+	return "s=" + shellword.Quote(session) + " packed=\n" + musePack(paths, at) +
 		fmt.Sprintf("[ -n \"$x\" ] || exit %d\n[ -n \"$packed\" ] || exit %d\n", packNothing, packFailed)
 }
 
@@ -546,7 +547,8 @@ func museServerName(name string) bool {
 // a continued one's place, which `--prompt-file` names. Its standing
 // instructions, told of notes where it reads them, are refused past
 // [museSystemMax].
-func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error) {
+func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
+	paths Paths) (string, error) {
 	if _, err := toolEnvOmitted(req.SignInEnv); err != nil {
 		return "", err
 	}
@@ -635,7 +637,7 @@ func writeMuseNotes(ctx context.Context, box sandbox.Sandbox, req sandbox.RunReq
 // take leaves the run without its notes, as its error stream says; a server
 // it would not take fails the run, which would have no tools.
 func museWiring(paths Paths) string {
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	plugin := paths.MuseNotesPlugin()
 	errs := q(paths.WorkDir() + "/muse-wiring-error")
 	var b strings.Builder
@@ -675,7 +677,7 @@ const museShellOff = "OTEL_EXPORTER_OTLP_"
 // which Muse never reads, and every OTEL_EXPORTER_OTLP_* variable unset.
 // A sign-in name no shell can unset is refused by [Muse.WriteConfig].
 func museShellEnvironment(paths Paths, signIn []string) string {
-	key := sandbox.ShellQuote(paths.WorkDir() + "/muse-key")
+	key := shellword.Quote(paths.WorkDir() + "/muse-key")
 	unset := "unset META_API_KEY"
 	if names, err := toolEnvOmitted(signIn); err == nil {
 		for _, name := range names {
