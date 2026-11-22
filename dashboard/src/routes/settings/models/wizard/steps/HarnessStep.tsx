@@ -139,7 +139,12 @@ export function HarnessStep({
             media: <HarnessMark harness={a} size={MARK_SIZE} />,
             ...(words ? { description: words.description } : {}),
             facts: [
-              { label: "Jobs", value: canExecute({ harness: a, executors: draft.executors }) ? "All jobs" : "All but coding" },
+              {
+                label: "Jobs",
+                value: canExecute({ harness: a, executors: draft.executors })
+                  ? "All jobs"
+                  : "All but coding",
+              },
               ...(words ? [{ label: "Method", value: words.methods }] : []),
             ],
           };
