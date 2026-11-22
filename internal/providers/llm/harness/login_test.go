@@ -232,10 +232,10 @@ func TestABundleRestoresOnlyIntoTheHarnessItNames(t *testing.T) {
 			want := map[string]string{}
 			for _, file := range profileLoginNames(source.profile) {
 				want[file] = fmt.Sprintf(`{"harness":%q,"file":%q}`, from, file)
-				if key, ok := source.profile.LoginKeys[file]; ok {
+				if keys, ok := source.profile.LoginKeys[file]; ok {
 					// A file the harness keeps settings in too is a login
-					// only holding its key.
-					want[file] = fmt.Sprintf(`{"harness":%q,"file":%q,%q:"placeholder"}`, from, file, key)
+					// only holding one of its keys.
+					want[file] = fmt.Sprintf(`{"harness":%q,"file":%q,%q:"placeholder"}`, from, file, keys[0])
 				}
 				writeFile(t, filepath.Join(source.ws.CredentialsDir(), file), want[file])
 			}
@@ -711,13 +711,14 @@ func TestACredentialLoginRefusalFollowsTheEntrysAuthMode(t *testing.T) {
 }
 
 // A HARNESS THAT KEEPS NO LOGIN IS SENT TO ITS KEY, not to a login on the host:
-// Qwen Code keeps none — both measured builds refuse the OAuth login it once
-// kept — so `-from-host` would find nothing to adopt.
+// one keeping none (Qwen Code with its paid login taken out) leaves
+// `-from-host` nothing to adopt.
 func TestBrokeringALoginForAHarnessThatKeepsNoneNamesItsKey(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	t.Cleanup(func() { forgetWorkspace(dir) })
-	p, err := New(Config{Key: "qwen", Harness: "qwen-code", StateDir: dir, Timeout: time.Second, MaxConcurrent: 1})
+	p, err := New(Config{Key: "qwen", Harness: "qwen-code", StateDir: dir, Timeout: time.Second, MaxConcurrent: 1,
+		Overrides: map[string]any{"credential_paths": []any{}, "subscription_args": []any{}}})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

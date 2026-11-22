@@ -1113,21 +1113,36 @@ codex:
     - sentinel: "run `codex login`"
 
 gemini-cli:
+  # A seat's executor runs Gemini CLI in a box (internal/sandbox/executor's
+  # GeminiCLI). It refuses no run as root (measured on 0.70.0, run as root in
+  # the measuring container) and keeps no temporary variable of its own (it
+  # takes the system's). The template is E2B's prebuilt Gemini CLI image
+  # (docs.e2b.dev/agents/gemini-cli.md).
+  executor:
+    runner: true
+    e2b_template: gemini
   binary: gemini
-  written_for: "Gemini CLI 0.65.x, measured on 0.58.0 and 0.65.0 (`gemini --version`)"
+  written_for: "Gemini CLI 0.70.x, measured on 0.70.0 (`gemini --version`)"
   version_args: ["--version"]
-  # MEASURED on 0.58.0 and 0.65.0 through this backend's own code path — the
-  # built-in profile, harness.New and Complete — with the harness pointed at a
-  # local stand-in for the Gemini API, and the state directory inside a git
-  # checkout holding, at every level above the call, a GEMINI.md, an AGENTS.md,
-  # a CLAUDE.md, a .env and a .gemini/.env (naming another base URL, API key,
-  # API version and system prompt file), and a .gemini/ with settings (hooks,
+  # MEASURED on 0.70.0 through this backend's own code path (`crewlet llm
+  # doctor`, the harness pointed at a local stand-in for the Gemini API, no
+  # network), with the state directory inside a git checkout and the checkout
+  # and the level above it each holding a GEMINI.md, an AGENTS.md, a CLAUDE.md,
+  # a .env and a .gemini/.env (naming another base URL, API key, API version
+  # and system prompt file), an .mcp.json, and a .gemini/ with settings (hooks,
   # an MCP server, a tool list), skills, agents, commands, an extension and a
-  # policy allowing the shell. None of it reached a request or ran, the harness
-  # opened no file above the state directory, and its only connection was the
-  # API's. Everything that keeps it so is a file or a variable below; the argv
-  # is the output format, the approval mode and the model.
-  complete_args: ["--output-format", "json", "--approval-mode", "default"]
+  # policy allowing the shell. None of it reached a request or ran, no request
+  # went to the other base URL, and the key each call sent was its own.
+  # Everything that keeps it so is a file or a variable below; the argv is the
+  # output format, the approval mode, the one MCP server a call may start, and
+  # the model.
+  #
+  # --allowed-mcp-server-names crewlet is on every call, so no MCP server but
+  # the engine's starts: without it, a call with no tools (each of doctor's
+  # probes) started the server an extension in the seat's home declares; with
+  # it, a call with no crewlet server started none and answered (measured on
+  # 0.70.0).
+  complete_args: ["--output-format", "json", "--approval-mode", "default", "--allowed-mcp-server-names", "crewlet"]
   # Denied by the policy file below: the harness's file, shell, sub-agent, plan and
   # skill tools are not offered at all.
   local_tools: denied
@@ -1135,28 +1150,26 @@ gemini-cli:
   seed_files:
     # privacy.usageStatisticsEnabled=false: on by default, it opens a
     # connection to the vendor's logging service (play.googleapis.com) on every
-    # call, beside the API's. The tool lists of earlier profiles are gone from
-    # this file: both releases warn on every run that tools.exclude and
-    # tools.allowed "will be removed in 1.0", and the policy file replaces them.
+    # call, beside the API's; with it off, a call looked up no host at all
+    # (measured on 0.70.0). The policy files below, not settings' tool lists,
+    # choose the tools.
     - path: .gemini/settings.json
       content: '{"privacy":{"usageStatisticsEnabled":false}}'
     # THE TOOLS ARE web_fetch AND google_web_search, by the vendor's policy
-    # engine, which both releases read from the policies directory of the
-    # seat's home: every tool denied, the two web tools allowed above the
-    # denial. A denied tool is not offered, and a call the model makes to one
-    # is answered `Tool "<name>" not found` and runs nothing (measured with
-    # run_shell_command, read_file, invoke_agent, enter_plan_mode and
-    # activate_skill). The wildcard is what makes it an allowlist: a deny list
-    # of the file and shell tools left invoke_agent (three sub-agents),
-    # enter_plan_mode, update_topic and activate_skill on offer, and would leave
-    # whatever a later release adds.
+    # engine, which 0.70.0 reads from the policies directory of the seat's
+    # home: every tool denied, the two web tools allowed above the denial. A
+    # denied tool is not offered, and a call the model makes to one is
+    # answered `Tool "<name>" not found` and runs nothing (measured on 0.70.0
+    # with run_shell_command, read_file, invoke_agent, enter_plan_mode and
+    # activate_skill). The wildcard is what makes it an allowlist: it denies
+    # whatever a release adds, where a deny list names only what it knows.
     #
     # web_fetch is ALLOWED, not merely left undenied: its own default is to ask
     # first, and a headless run registers no tool whose answer would be to ask
-    # — without the allow, the model had no web_fetch at all.
-    # google_web_search's default already allows it. Each web tool asks a second
-    # model on the side (gemini-3-flash-preview on both releases), sending it
-    # the call's system prompt.
+    # — without the allow, the model was offered google_web_search alone.
+    # google_web_search's default already allows it, and it asks a second model
+    # on the side (gemini-3-flash-preview), sending it the call's system prompt
+    # (measured on 0.70.0).
     #
     # The user tier this file sits in outranks the workspace and the harness's
     # defaults (priority 999 is the highest the tier takes); a machine-wide
@@ -1178,9 +1191,9 @@ gemini-cli:
     # denial rather than in it: every tool of the crewlet MCP server, above
     # the deny-all. A text function has no such server, and the rule allows
     # nothing there. Not passed with --policy: that flag REPLACES the policies
-    # directory of the home rather than adding to it (read from 0.65.0's
-    # bundle), and with it the deny-all went and the harness offered its file,
-    # plan, sub-agent and topic tools beside the seat's (measured).
+    # directory of the home rather than adding to it, and with it the deny-all
+    # went: a run handed one allow that way was offered the harness's file,
+    # plan, sub-agent and topic tools (measured on 0.70.0).
     - path: .gemini/policies/crewlet-mcp.toml
       content: |
         # Written by Crewlet: the seat's own tools, served as the crewlet MCP server.
@@ -1193,12 +1206,12 @@ gemini-cli:
     # directory. It loads ONE environment file, the first `.gemini/.env` or
     # `.env` it finds walking from its working directory to the root — not
     # stopped by the engine's `.git` marker — and takes every key in it its
-    # environment lacks. Without these, an ancestor's `.gemini/.env` sent the
-    # call to the base URL and API version it named, and signed a keyless call
-    # in with its own GEMINI_API_KEY; with them, the walk ends where it starts
-    # and nothing is set. Both names, because the harness looks for `.gemini/.env`
-    # only in a trusted directory and for `.env` in any; a comment, because a
-    # seed is never empty.
+    # environment lacks, a base URL, API version, key or system prompt file
+    # among them. With these, the walk ends where it starts and nothing is
+    # set: the planted files above, each naming all four, reached no call
+    # (measured on 0.70.0). Both names, because the harness looks for
+    # `.gemini/.env` only in a trusted directory and for `.env` in any; a
+    # comment, because a seed is never empty.
     - path: .gemini/.env
       in: work
       content: "# Written by Crewlet: this call's own environment file, so none above it is read.\n"
@@ -1206,39 +1219,38 @@ gemini-cli:
       in: work
       content: "# Written by Crewlet: this call's own environment file, so none above it is read.\n"
   # GEMINI_CLI_TRUST_WORKSPACE trusts the call's own directory, which a headless
-  # run requires: untrusted, every call exited 55 before sending anything ("Gemini
-  # harness is not running in a trusted directory"). The variable rather than
-  # --skip-trust or a settings key, because the harness reads it before any
-  # settings file, a machine-wide one included. What trust admits is the call's
-  # directory, which holds only what the engine writes there; GEMINI.md above
-  # it stays out because the engine's `.git` file there is the root the harness's
-  # walk for it stops at.
+  # run requires: untrusted, a call exited 55 before sending anything ("Gemini
+  # CLI is not running in a trusted directory", measured on 0.70.0). The
+  # variable rather than --skip-trust or a settings key, because the harness
+  # reads it before any settings file, a machine-wide one included. What trust
+  # admits is the call's directory, which holds only what the engine writes
+  # there; GEMINI.md above it stays out because the engine's `.git` file there
+  # is the root the harness's walk for it stops at.
   #
-  # NO_BROWSER keeps a call that reaches the harness's login flow — a subscription
-  # seat whose copied login is missing or refused — from asking to open a
-  # browser. Asked, the harness read the call's own prompt from stdin as the
-  # answer and then ran with an empty prompt (measured on 0.65.0 with a
-  # display); told, it exits 41 at once, "Manual authorization is required".
+  # NO_BROWSER keeps a call that reaches the harness's login flow — a
+  # subscription seat whose copied login is missing or unusable — from asking
+  # to open a browser: it exits 41 at once, "Manual authorization is required"
+  # (measured on 0.70.0, with no login and with one it could not refresh).
   env:
     GEMINI_CLI_TRUST_WORKSPACE: "true"
     NO_BROWSER: "true"
   # THE LOGIN IS CHOSEN BY THE ENVIRONMENT, under subscription only. The harness
   # signs in with what settings name or, naming none, GOOGLE_GENAI_USE_GCA=true
-  # (the Google login), else GEMINI_API_KEY — read from both bundles. A copied
-  # login selects nothing, so without this every subscription call exited 41,
-  # "Please set an Auth method"; with it, the harness read the copied
-  # oauth_creds.json and went to Google's token endpoint with it (0.58.0 and
-  # 0.65.0). Not in env and not a settings seed, either of which would put
-  # every api-key call on the login instead of its key.
+  # (the Google login), else GEMINI_API_KEY. A copied login selects nothing,
+  # so without this a subscription call exited 41, "Please set an Auth
+  # method"; with it, the harness read the copied oauth_creds.json and went to
+  # Google's token endpoint with it (measured on 0.70.0). Not in env and not a
+  # settings seed, either of which would put every api-key call on the login
+  # instead of its key.
   subscription_env:
     GOOGLE_GENAI_USE_GCA: "true"
   # THE KEY IS CHOSEN BY THE SETTINGS, under a key sign-in. Naming no sign-in
   # in its settings, the harness takes one from its environment, and
   # GOOGLE_GEMINI_BASE_URL — an operator's gateway in front of the API, in the
   # entry's env — outranks GEMINI_API_KEY there: it selects the harness's gateway
-  # sign-in, which 0.65.0 then refuses, exit 41 "Invalid auth method selected",
-  # before any request (read from the bundle; measured through the engine with
-  # the base URL at a local stand-in). Settings outrank the environment, so a
+  # sign-in, which the harness then refuses, exit 41 "Invalid auth method
+  # selected", before any request (measured on 0.70.0, the base URL at a local
+  # stand-in). Settings outrank the environment, so a
   # key home's own settings name the key sign-in: the call then goes to the
   # base URL with its key. Not in seed_files, where it would put every
   # subscription call on a key it does not have.
@@ -1250,26 +1262,26 @@ gemini-cli:
   # ONE CHANNEL, AND IT REPLACES: GEMINI_SYSTEM_MD names a file whose text is
   # the request's whole systemInstruction — no identity line of the vendor's
   # and nothing per call — so a seat and a side pass both take it. NO CHANNEL
-  # KEEPS THE HARNESS'S OWN PROMPT in either release: no flag, setting or variable
-  # adds to it (GEMINI_WRITE_SYSTEM_MD only writes it out, and
-  # GEMINI_PROMPT_<SECTION>=0 only drops a section of it), and a GEMINI.md
-  # arrives as user content. The prompt it replaces opens "You are a
-  # non-interactive harness agent specializing in software engineering tasks" for
-  # gemini-2.5-pro: 23,058 characters on 0.58.0 and 23,410 on 0.65.0 with the
-  # two web tools, and it carries the call's temporary directory.
+  # KEEPS THE HARNESS'S OWN PROMPT: no flag, setting or variable adds to it
+  # (GEMINI_WRITE_SYSTEM_MD only writes it out, and GEMINI_PROMPT_<SECTION>=0
+  # only drops a section of it), and a GEMINI.md arrives as user content. The
+  # prompt it replaces opens "You are a non-interactive CLI agent specializing
+  # in software engineering tasks" for gemini-2.5-pro: 23,065 characters on
+  # 0.70.0 with the two web tools, and it carries the call's temporary
+  # directory.
   #
   # Two calls sent byte-identical systemInstructions and tool declarations, so
   # the engine's text opens the request; the working directory, the date, a
   # listing of the directory and the call's temporary directory follow in the
-  # first user turn, ahead of the prompt on stdin.
+  # first user turn, ahead of the prompt on stdin (measured on 0.70.0).
   #
   # THE HARNESS EDITS THE TEXT. Wherever it says ${AvailableTools}, ${AgentSkills},
   # ${SubAgents} or ${<tool>_ToolName} for a tool the call has, the harness writes
   # in its tool list, its bundled skills (with their install path), its
   # sub-agents, or the tool's name; and it collapses three or more newlines to
   # two. No escape exists: `$${…}` and `\${…}` are expanded after their first
-  # character (read from both bundles, and measured). Any other $-sequence
-  # ($HOME, ${NAME}) arrives as written.
+  # character (read from 0.70.0's bundle, and measured with ${AvailableTools}).
+  # Any other $-sequence ($HOME, ${NAME}) arrives as written.
   system_prompt:
     env: "GEMINI_SYSTEM_MD"
   prompt_mode: stdin
@@ -1296,43 +1308,43 @@ gemini-cli:
   # A POLICY FILE THE HARNESS CANNOT READ IS REPORTED AND SKIPPED: the harness prints
   # "[USER] Policy file error in <file>:" on stderr and carries on without the
   # file's rules — the deny-all, or the seat's allow. So the run is stopped at
-  # that line and fails (measured on 0.65.0 with a broken crewlet-mcp.toml:
-  # stopped, failed, and the request it had already sent offered the web tools
-  # alone).
+  # that line and fails (measured on 0.70.0 with a broken crewlet-mcp.toml:
+  # the line on stderr, then the harness ran on to exit 0 without the file's
+  # rule).
   failure_markers: ["Policy file error"]
   # THE SEAT'S TOOLS: one stdio server in the call's own workspace settings —
-  # trusted, by GEMINI_CLI_TRUST_WORKSPACE — and --allowed-mcp-server-names
-  # admitting it alone. Measured on 0.65.0 through the engine's own code path
-  # against a local stand-in, the state directory inside a checkout holding a
-  # .gemini/settings.json, an .mcp.json and every other harness's MCP
-  # configuration at each level above the call, and an extension with a server
-  # of its own in the seat's home: the model was offered the seat's tools,
-  # web_fetch and google_web_search, and no other server started. Without the
-  # flag, the home's extension started its server. The home's settings.json is
-  # the profile's own seed, rewritten every generation.
+  # trusted, by GEMINI_CLI_TRUST_WORKSPACE — and complete_args'
+  # --allowed-mcp-server-names admitting it alone. Measured on 0.70.0 through
+  # the engine's own code path, the state directory inside a checkout holding
+  # a .gemini/settings.json, an .mcp.json and an extension, each with a
+  # server, at each level above the call, and an extension with a server of
+  # its own in the seat's home: the model was offered the seat's tools,
+  # web_fetch and google_web_search, and no server but the engine's started,
+  # on any call. The home's settings.json is the profile's own seed, rewritten
+  # every generation.
   #
   # The server's `timeout` is the harness's per-call timeout, in milliseconds
-  # (600,000 by default; 4,000 gave a slow call up at 4.0s). It re-reads the
-  # server's list when told it changed — a tool activated mid-run was offered
-  # from the request after the one the activation's result went back in — and
-  # makes one response's calls at once.
+  # (600,000 by default; 4,000 gave a slow call up at 4.1s). It re-reads the
+  # server's list when told it changed — a tool the server added mid-run,
+  # announcing it, was offered from the request after the one the adding
+  # call's result went back in — and makes one response's calls at once (all
+  # measured on 0.70.0).
   mcp:
     seed:
       - path: .gemini/settings.json
         in: work
         content: '{"mcpServers":{"crewlet":{"command":{relay_command_json},"args":{relay_args_json},"timeout":{tool_timeout_ms}}}}'
-    args: ["--allowed-mcp-server-names", "crewlet"]
     tool_timeout_seconds: 600
     relists: true
     concurrency: at_once
   # EACH REQUEST, FROM THE CHAT RECORD the harness keeps as it goes — `json`
   # output prints nothing until the run is over. Each response is a `gemini`
   # entry with its id, prose, model and counts, written as the response
-  # arrives, and written WHOLE again once its calls have run, with the calls
-  # in it (whole). So the record shows a request's calls only after they ran
-  # (late_calls): a request is told once a later entry follows it — the
-  # `user` entry carrying its calls' results closes it — and its counts are
-  # charged when they are first read. The counts are the request's whole
+  # arrives, before its calls, then WHOLE again (whole) with them scheduled,
+  # and again once they have run. So the first writing of a request shows none
+  # of its calls (late_calls): a request is told once a later entry follows it
+  # — the `user` entry carrying its calls' results closes it — and its counts
+  # are charged when they are first read. The counts are the request's whole
   # prompt (promptTokenCount), the cached part inside it.
   #
   # The file is named after the first eight characters of the session id,
@@ -1340,8 +1352,11 @@ gemini-cli:
   # the whole id (owner). The harness sends no id of its own with a call; a call
   # is joined to its request by name and arguments.
   #
-  # Measured on 0.65.0: each request's counts as it was written, their sum
-  # equal to the final report's, and each call in the record once it had run.
+  # Measured on 0.70.0: each request's counts as it was written, their sum
+  # equal to the final report's, each call in the record scheduled and then
+  # run, and doctor's smoke call joined to its request by name and arguments;
+  # each request told once with its calls and charged once (harness's
+  # TestGeminis070RecordIsToldARequestAtATimeOnceWithItsCalls).
   requests:
     source: file
     in: home
@@ -1370,49 +1385,78 @@ gemini-cli:
         closes: true
   # model.maxSessionTurns, where an operator sets it in the settings: the run
   # exits 53, a FatalTurnLimitedError, the harness's code for that one cause
-  # (measured on 0.65.0; its report is on stderr, not in the output).
+  # (measured on 0.70.0; its report, "Reached max session turns for this
+  # session. …", is on stderr, not in the output).
   cap:
     exit_code: 53
   credential_paths: [".gemini/oauth_creds.json", ".gemini/google_accounts.json"]
   # What a call leaves in the seat's home: its transcript and temporary
   # directory under tmp/, a directory under history/, and an entry in
-  # projects.json, the registry naming each call's directory. Pruned when no
-  # call of the seat is in flight.
+  # projects.json, the registry naming each call's directory (measured on
+  # 0.70.0). Pruned when no call of the seat is in flight.
   volatile_paths: [".gemini/tmp", ".gemini/history", ".gemini/projects.json"]
   host_credential_paths: [".gemini/oauth_creds.json", ".gemini/google_accounts.json"]
   api_key_env: "GEMINI_API_KEY"
+  # What signs Gemini CLI in from an entry's env under auth.mode env: the
+  # switch that sends it to Vertex AI, whose own credentials (GOOGLE_API_KEY,
+  # or an application-default credentials file) ride the same env. Listed so a
+  # run in a remote box on Vertex is signed in, as Claude Code's cloud switches
+  # are, and so the switch beside another mode's credential is refused.
+  sign_in_env: ["GOOGLE_GENAI_USE_VERTEXAI"]
+  # Which Vertex AI project and region a switch reaches, none of it a
+  # credential: two entries that differ here are two sign-ins, and a limit one
+  # meets does not sit the other out.
+  identity_env: ["GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION"]
   # A project id is configuration, not a credential, and Gemini genuinely
   # needs the ambient one on a Workspace account.
   passthrough_env: ["GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION"]
   login_args: []
-  # A failed call exits non-zero with the harness's error on stderr. A spent daily
-  # quota is a TerminalQuotaError; a per-minute limit is retried ten times and
-  # then reported as a RetryableQuotaError; neither prints the API's
-  # RESOURCE_EXHAUSTED on its own.
+  # A failed call exits non-zero with the harness's error on stderr, and a
+  # seat's run says it again in its stream's result: a spent daily quota is a
+  # TerminalQuotaError, "You have exhausted your daily quota on this model.",
+  # after one try, the plan's limit, which sits the entry out. A per-minute
+  # limit is retried ten times over some 220 s and then reported as a
+  # RetryableQuotaError: transient, the vendor's own class says so, and it sits
+  # nothing out. Both exit 173, so the words decide and never the exit code
+  # alone; a seat's run is read as a limit only where it exited 173 (the
+  # executor's limitGate, sandbox.Result.NoLimitExit), since its words are a
+  # box file its model can write (measured on 0.70.0).
   limit_markers:
     - sentinel: "TerminalQuotaError"
-    - sentinel: "RetryableQuotaError"
+    - sentinel: "exhausted your daily quota"
   # A refused login is relayed with the API's UNAUTHENTICATED, a refused key
   # with the API's own sentence, and a login the call could not use — none
-  # copied, or one Google's token endpoint did not accept — with the harness's
-  # own (measured on 0.58.0 and 0.65.0).
+  # copied, or one it could not refresh at Google's token endpoint — with the
+  # harness's own (measured on 0.70.0).
   auth_markers:
     - sentinel: "UNAUTHENTICATED"
     - sentinel: "API key not valid"
     - sentinel: "Manual authorization is required"
+    # A GOOGLE LOGIN WHOSE ACCOUNT NO CODE ASSIST TIER TAKES: Gemini CLI asks
+    # Google which tier a login may use and fails with IneligibleTierError,
+    # its message the reasons Google gave (INELIGIBLE_ACCOUNT, RESTRICTED_AGE,
+    # UNSUPPORTED_LOCATION, VALIDATION_REQUIRED …; read from 0.70.0's bundle).
+    # The login's own refusal, upstream: never a generic one.
+    - sentinel: "IneligibleTierError"
 
 qwen-code:
+  # A seat's executor, over ACP (internal/sandbox/executor, qwen.go). No E2B
+  # template: no prebuilt image is known to hold Qwen Code, so a company names
+  # its own. Nothing measured refuses root under --approval-mode yolo.
+  executor:
+    runner: true
   binary: qwen
-  written_for: "Qwen Code 0.23.x to 0.26.x, measured on 0.23.4 and 0.26.1 (`qwen --version`)"
+  written_for: "Qwen Code 0.28.x, measured on 0.28.3 (`qwen --version`)"
   version_args: ["--version"]
-  # Measured on 0.23.4 and 0.26.1 through the engine's own code path, the
-  # harness pointed at a local stub, with the state directory inside a git
-  # checkout and every level above the call holding a QWEN.md, AGENTS.md,
-  # QWEN.local.md, .qwen/rules, skills under .qwen, .agents and .claude, a
-  # subagent, a command, a .qwen/settings.json with hooks and an MCP server,
-  # an .mcp.json and an .env: none of them reached a request, no hook or MCP
-  # server ran, the model was offered web_fetch alone, and every connection
-  # the harness opened was the call's own.
+  # Measured on 0.28.3 through the engine's own code path (`crewlet llm
+  # doctor`, the harness pointed at a local stub, no network), with the state
+  # directory inside a git checkout and the checkout and the level above it
+  # each holding a QWEN.md, AGENTS.md, QWEN.local.md, .qwen/rules, skills
+  # under .qwen, .agents and .claude, a subagent, a command, a
+  # .qwen/settings.json with hooks and an MCP server, an .mcp.json and an
+  # .env: none of them reached a request, no hook or project MCP server ran,
+  # the model was offered web_fetch alone (and the seat's tools), and the only
+  # host the harness looked up was its web tool's.
   #
   #   --output-format stream-json  one event a line, read below. `json` prints
   #                                the same events as one JSON ARRAY, which
@@ -1420,49 +1464,57 @@ qwen-code:
   #                                array came back as the seat's reply.
   #   --approval-mode default      a tool the settings below do not allow is
   #                                refused, since a headless run cannot ask.
-  #   --auth-type openai           the sign-in, under api_key_env below.
+  #   --allowed-mcp-server-names crewlet
+  #                                no MCP server but the engine's starts, on
+  #                                any call. Without it, a call with no tools
+  #                                (each of doctor's probes) started the
+  #                                server an extension in the seat's home
+  #                                declares; with it, a call with no crewlet
+  #                                server started none and ran, its init
+  #                                naming mcp_servers [] (measured on 0.28.3).
+  #
+  # The sign-in follows, by mode (key_args, subscription_args below).
   complete_args:
     - "--output-format"
     - "stream-json"
     - "--approval-mode"
     - "default"
-    - "--auth-type"
-    - "openai"
+    - "--allowed-mcp-server-names"
+    - "crewlet"
   local_tools: denied
-  # The settings in the seat's home, each a switch both builds read:
+  # The settings in the seat's home, each a switch 0.28.3 reads:
   #
   #   tools.core, permissions  the web tools and nothing else. tools.core is
   #                            the allowlist, and it covers only the tools
   #                            Qwen Code calls core; its agent, skill,
   #                            worktree, goal, messaging, scheduling and
-  #                            tool-search tools sit outside it, and with
-  #                            the file and shell tools excluded alone they
-  #                            stayed on offer — an enter_worktree the model
-  #                            asked for ran without a prompt and made a
-  #                            worktree in the repository above the state
-  #                            directory. So permissions.deny names every
-  #                            other tool either build registers, which
-  #                            removes it outright: a call the model makes
-  #                            to one anyway is answered "Matching deny
-  #                            rule". permissions.allow lets the web tools
-  #                            run unprompted — a fetch the model asked for
-  #                            ran. web_search is offered only where a
-  #                            DashScope web-search backend is configured,
-  #                            which nothing here does; neither build
-  #                            offered it.
+  #                            tool-search tools sit outside it (a headless
+  #                            call with neither setting is offered 31
+  #                            tools, those among them). So permissions.deny
+  #                            names every other tool of 0.28.3's ToolNames
+  #                            table, which removes it outright, and a call
+  #                            is offered web_fetch alone. permissions.allow
+  #                            lets the web tools run unprompted: a fetch
+  #                            the model asked for ran under
+  #                            --approval-mode default. web_search is
+  #                            offered only where a DashScope web-search
+  #                            backend is configured, which nothing here
+  #                            does; it was not offered.
   #   memory                   no background memory extraction or
-  #                            consolidation. Both ran after every call, as
-  #                            a second request carrying the transcript and
-  #                            file-writing tools, and the memories they
-  #                            wrote were handed to the seat's next call.
-  #   general.chatRecording    no transcript on disk.
+  #                            consolidation, each a request of its own
+  #                            carrying the transcript: with these off, a
+  #                            call made only its own requests.
+  #   general.chatRecording    no transcript on disk: the home kept no
+  #                            projects directory, a project's settings
+  #                            turning recording on notwithstanding.
   #   privacy.usageStatisticsEnabled
-  #                            no usage statistics, which both builds
-  #                            otherwise sent to the vendor's collector on
-  #                            every call.
+  #                            no usage statistics, which 0.28.3 otherwise
+  #                            sent to the vendor's collector
+  #                            (*.rum.aliyuncs.com) on every call. It also
+  #                            stops the models.dev catalogue refresh.
   #   general.enableAutoUpdate no update install, which would replace the
-  #                            binary every seat runs; neither build tried
-  #                            one in a headless call.
+  #                            binary every seat runs; no call opened an
+  #                            update connection.
   #   general.preventSystemSleep
   #                            no `systemd-inhibit … sleep infinity` helper
   #                            holding the host awake for the call.
@@ -1474,7 +1526,8 @@ qwen-code:
   #                            a marker file for every call.
   #   model.generationConfig.maxRetries
   #                            0: a 429 reaches the engine in about a minute
-  #                            (seven attempts, the retries that remain) and
+  #                            (seven attempts in 75s, the retries that
+  #                            remain) and
   #                            is recognised by limit_markers below. The
   #                            harness's own policy — the client's retries, then
   #                            ten more rounds starting 60s and growing to
@@ -1482,28 +1535,28 @@ qwen-code:
   #                            engine's timeout, so a spent quota came back
   #                            as a timeout and the entry never sat out.
   #   skills, disableAllHooks  no skill discovery at any level, and no hook
-  #                            from any settings file or extension. With
-  #                            the skill tool on offer, 0.26.1 listed its
-  #                            bundled skills in every call's first message.
+  #                            from any settings file or extension: the
+  #                            skill tool was not offered, no skill was
+  #                            listed in a call's first message, and the
+  #                            planted hooks never ran.
   #
-  # And `.qwen/.env` in the call's own directory. Both builds read an
+  # And `.qwen/.env` in the call's own directory. Qwen Code reads an
   # `.qwen/.env`, else an `.env`, from the first directory that has one on
   # the walk from the working directory to the root — the engine's `.git`
-  # file does not end that walk — and apply every variable the environment
-  # leaves unset: without this file, an .env between the checkout and the
-  # state directory set QWEN_SYSTEM_MD for a seat's call, and a file of the
-  # checkout's replaced the seat's whole system prompt. With it, the walk
-  # ends where the call begins, and the file sets nothing.
+  # file does not end that walk — and applies every variable the
+  # environment leaves unset, QWEN_SYSTEM_MD among them, which would replace
+  # the seat's whole system prompt. With this file the walk ends where the
+  # call begins, and the file sets nothing: the planted .env files at the
+  # checkout and above it, each setting QWEN_SYSTEM_MD, reached no call.
   #
   # The project files a working directory leads Qwen Code to — QWEN.md,
   # AGENTS.md, QWEN.local.md, .qwen/rules, .mcp.json — stop at the engine's
-  # `.git` file. 0.23.4 also looks one directory above the project root,
-  # which is <seat>/work: the engine's, holding nothing but call
-  # directories.
+  # `.git` file: those planted at the checkout and above it reached no
+  # call.
   web_tools_note: "no web denial: removing web_fetch and web_search from the seeded allow list would be one, but it has not been measured against a qwen harness, so this profile cannot serve the assistant"
   seed_files:
     - path: .qwen/settings.json
-      content: '{"general":{"chatRecording":false,"enableAutoUpdate":false,"preventSystemSleep":false},"privacy":{"usageStatisticsEnabled":false},"memory":{"enableManagedAutoMemory":false,"enableManagedAutoDream":false,"enableAutoSkill":false},"model":{"openAILoggingDir":"~/.qwen/openai-logs","generationConfig":{"maxRetries":0}},"skills":{"disabledLevels":["project","user","extension","bundled"]},"disableAllHooks":true,"tools":{"core":["web_fetch","web_search"]},"permissions":{"allow":["web_fetch","web_search"],"deny":["advisor","agent","artifact","ask_user_question","create_sub_session","cron_create","cron_delete","cron_list","display_image","edit","enter_plan_mode","enter_worktree","exec","exit_plan_mode","exit_worktree","get_goal","glob","grep_search","image_gen","list_agents","list_directory","loop_wakeup","lsp","manage_memory","monitor","notebook_edit","omni_caption_audio","omni_caption_image","omni_clip_audio","omni_clip_image","omni_clip_video","omni_convert_image","omni_downsample_audio","omni_downsample_image","omni_downscale_video","omni_extract_audio","omni_extract_keyframes","omni_ocr_image","omni_recall_media_memory","omni_transcribe_audio","omni_understand_video_segments","propose_goal","read_file","read_mcp_resource","record_artifact","record_source","report_findings","request_shutdown","run_shell_command","save_memory","search_memory","send_message","skill","structured_output","task_create","task_list","task_stop","task_update","team_create","team_delete","team_plan_approval","todo_write","tool_call","tool_search","update_goal","workflow","write_file","zoom_image"]}}'
+      content: '{"general":{"chatRecording":false,"enableAutoUpdate":false,"preventSystemSleep":false},"privacy":{"usageStatisticsEnabled":false},"memory":{"enableManagedAutoMemory":false,"enableManagedAutoDream":false,"enableAutoSkill":false},"model":{"openAILoggingDir":"~/.qwen/openai-logs","generationConfig":{"maxRetries":0}},"skills":{"disabledLevels":["project","user","extension","bundled"]},"disableAllHooks":true,"tools":{"core":["web_fetch","web_search"]},"permissions":{"allow":["web_fetch","web_search"],"deny":["advisor","agent","artifact","ask_user_question","autofix_pr","create_sub_session","cron_create","cron_delete","cron_list","display_image","edit","enter_plan_mode","enter_worktree","exec","exit_plan_mode","exit_worktree","get_goal","glob","grep_search","image_gen","list_agents","list_directory","loop_wakeup","lsp","manage_memory","monitor","notebook_edit","omni_caption_audio","omni_caption_image","omni_clip_audio","omni_clip_image","omni_clip_video","omni_convert_image","omni_downsample_audio","omni_downsample_image","omni_downscale_video","omni_extract_audio","omni_extract_keyframes","omni_ocr_image","omni_recall_media_memory","omni_transcribe_audio","omni_understand_video_segments","propose_goal","read_file","read_mcp_resource","record_artifact","record_source","report_findings","request_shutdown","run_shell_command","save_memory","search_memory","send_message","skill","structured_output","task_create","task_list","task_stop","task_update","team_create","team_delete","team_plan_approval","todo_write","tool_call","tool_search","update_goal","workflow","write_file","zoom_image"]}}'
     - path: .qwen/.env
       in: work
       content: "# This call's environment is the engine's; nothing above this directory is read.\n"
@@ -1517,18 +1570,18 @@ qwen-code:
   #   system_prompt         QWEN_SYSTEM_MD REPLACES the default: the
   #                         request's system message is the engine's text
   #                         and then, after a `---`, the harness's
-  #                         output-language rule (about 900 characters,
+  #                         output-language rule (about 950 characters,
   #                         from the seat's home). For a side pass, whose
   #                         system prompt is the whole instruction and whose
   #                         answer is parsed.
   #   append_system_prompt  QWEN_SYSTEM_IDENTITY_MD KEEPS the default and
   #                         puts the engine's text in place of its opening
   #                         sentence, "You are Qwen Code, a non-interactive
-  #                         harness agent developed by Alibaba Group,
+  #                         CLI agent developed by Alibaba Group,
   #                         specializing in software engineering tasks. …"
   #                         (261 characters); the rest follows byte for
-  #                         byte, about 23,000 characters on 0.23.4 and
-  #                         15,000 on 0.26.1, then the output-language rule.
+  #                         byte, about 14,300 characters, then the
+  #                         output-language rule.
   #                         For a seat at work. The harness ignores this file
   #                         when QWEN_SYSTEM_MD is set, and refuses a
   #                         missing or empty one; the engine sets one
@@ -1561,23 +1614,23 @@ qwen-code:
     input: [["usage", "input_tokens"]]
     output: [["usage", "output_tokens"]]
   # THE SEAT'S TOOLS: one stdio server in a configuration file in the call's
-  # own directory, named by --mcp-config, with --allowed-mcp-server-names
-  # admitting it alone and --allowed-tools letting its tools run unprompted
-  # (`mcp__crewlet` is every tool of the server). Measured on 0.26.1 through
-  # the engine's own code path against a local stand-in, the state directory
-  # inside a checkout holding a .qwen/settings.json, an .mcp.json and every
-  # other harness's MCP configuration at each level above the call, and an
-  # extension with a server of its own in the seat's home: the model was
-  # offered the seat's tools and web_fetch, and no other server started.
-  # Without --allowed-mcp-server-names, the home's extension started its
-  # server.
+  # own directory, named by --mcp-config, with complete_args'
+  # --allowed-mcp-server-names admitting it alone and --allowed-tools letting
+  # its tools run unprompted (`mcp__crewlet` is every tool of the server).
+  # Measured on 0.28.3 through the engine's own code path, the state directory
+  # inside a checkout holding a .qwen/settings.json and an .mcp.json, each
+  # with a server, at each level above the call, and an extension with a
+  # server of its own in the seat's home: the model was offered the seat's
+  # tools and web_fetch, and no server but the engine's started, on any
+  # call.
   #
   # The server's `timeout` is the harness's per-call timeout, in milliseconds
-  # (600,000 by default; 4,000 gave a slow call up at 4.0s). The harness does not
-  # re-read a server's list mid-run (a tool activated mid-run was never
-  # offered), and makes one response's calls at once only where every one is
-  # to a tool annotated read-only: two read-only calls of 1.5s each
-  # overlapped, two others ran one after the other.
+  # (600,000 by default; 4,000 gave a slow call up at 4.1s, "Request timed
+  # out"). The harness does not re-read a server's list mid-run (a tool the
+  # server added mid-run, announcing it, was not offered in the two requests
+  # that followed), and makes one response's calls at once only where every
+  # one is to a tool annotated read-only: two read-only calls of 1.5s each
+  # overlapped, two others ran one after the other (all measured on 0.28.3).
   #
   # A failed run's result event says why, by field: its subtype and its
   # error's message.
@@ -1586,7 +1639,7 @@ qwen-code:
       - path: crewlet-mcp.json
         in: work
         content: '{"mcpServers":{"crewlet":{"command":{relay_command_json},"args":{relay_args_json},"timeout":{tool_timeout_ms}}}}'
-    args: ["--mcp-config", "{work}/crewlet-mcp.json", "--allowed-mcp-server-names", "crewlet"]
+    args: ["--mcp-config", "{work}/crewlet-mcp.json"]
     allow_args: ["--allowed-tools", "mcp__crewlet"]
     tool_timeout_seconds: 600
     relists: false
@@ -1602,8 +1655,11 @@ qwen-code:
   # id of its own with a call; a call is joined to its request by name and
   # arguments. The init event lists the tools the model is offered.
   #
-  # Measured on 0.26.1: each request in the stream before its calls reached
-  # the server, its counts there, their sum equal to the result's.
+  # Measured on 0.28.3: a response's prose as one `assistant` event (no
+  # counts), its calls as the next with the request's counts and stop reason
+  # `tool_use`, each request's counts in the stream, their sum equal to the
+  # result's; doctor's smoke call was joined to its request by name and
+  # arguments.
   requests:
     source: stdout
     host_prefix: "mcp__crewlet__"
@@ -1627,21 +1683,22 @@ qwen-code:
       - match: [{path: ["type"], equals: "user"}]
         closes: true
   # --max-session-turns, where an operator adds it: the run exits 53 with no
-  # result event, "Reached max session turns for this session." on stderr
-  # (measured on 0.26.1). The harness's code for that one cause.
+  # result event, "Reached max session turns for this session. …" on stderr
+  # (measured on 0.28.3). The harness's code for that one cause.
   cap:
     exit_code: 53
   env:
-    # 0.26.1 fetched the models.dev catalogue on every call, a connection of
-    # its own; "off" leaves it on the table the build ships. 0.23.4 has no
-    # such fetch.
+    # 0.28.3 refreshes the models.dev catalogue in the background, a
+    # connection of its own (measured: a call in a home that leaves usage
+    # statistics on looked models.dev up); "off" keeps it on the table the
+    # build ships (the same call opened no such connection).
     QWEN_CODE_MODELS_DEV: "off"
   # What a call can leave in the seat's home for the next one: transcripts
   # and project memory under projects, the managed memories, per-project
   # scratch under tmp (a directory per call's working directory), the usage
-  # record both builds append to on every call, the request logs if an
-  # operator turns them on, and the global QWEN.md, AGENTS.md and rules,
-  # which both builds read into every call's system prompt.
+  # record 0.28.3 appends to on every call, the request logs if an operator
+  # turns them on, and the global QWEN.md, AGENTS.md and rules, which 0.28.3
+  # read into a call's system prompt (measured, each planted in a home).
   volatile_paths:
     - ".qwen/projects"
     - ".qwen/memories"
@@ -1651,30 +1708,61 @@ qwen-code:
     - ".qwen/QWEN.md"
     - ".qwen/AGENTS.md"
     - ".qwen/rules"
-  # THE SIGN-IN IS AN API KEY. Qwen OAuth, the login this profile once
-  # adopted, is refused by both builds' own auth check ("Qwen OAuth free
-  # tier was discontinued on 2026-04-15", read from both bundles), and
-  # `qwen auth` is listed as removed, so there is no login to adopt and no
-  # token. The
-  # harness's OpenAI-compatible sign-in is what runs, chosen by --auth-type
-  # above: the key in OPENAI_API_KEY, the endpoint in OPENAI_BASE_URL, which
-  # an entry sets in env to its provider's (DashScope's, a Coding Plan's, any
-  # OpenAI-compatible one; unset, the harness falls back to an endpoint of its
-  # own), and the model from the entry's `model`. Without --auth-type the harness
-  # chooses that sign-in only when OPENAI_MODEL or QWEN_MODEL is set as well,
-  # and otherwise exits "No auth type is selected". DASHSCOPE_API_KEY, the
-  # variable this profile named before, is read by neither build's model
-  # sign-in.
+  # A KEY, OR QWEN CODE'S PAID LOGIN. The key is the harness's
+  # OpenAI-compatible sign-in, chosen by --auth-type: the key in
+  # OPENAI_API_KEY, the endpoint in OPENAI_BASE_URL, which an entry sets in env
+  # to its provider's (DashScope's, a Coding Plan's, any OpenAI-compatible one;
+  # unset, the harness falls back to an endpoint of its own), and the model
+  # from the entry's `model`. Without --auth-type the harness chooses that
+  # sign-in only when OPENAI_MODEL or QWEN_MODEL is set as well, and otherwise
+  # exits "No auth type is selected" (measured on 0.28.3: OPENAI_MODEL or
+  # QWEN_MODEL beside the key ran, neither refused). DASHSCOPE_API_KEY, the
+  # variable this profile named before, is not read by its model sign-in:
+  # alone, it was refused "Missing API key for OpenAI-compatible auth".
+  #
+  # The login is 0.28's "Qwen Account with Subscription" (Plus or Pro),
+  # `--auth-type qwen-subscription`, made with the harness by hand and
+  # adopted: its tokens in subscription_credentials.json in the home's .qwen
+  # (baseUrl, clientId, tokens {access_token, refresh_token, expiresAt},
+  # models), its endpoint a constant of the bundle that no variable moves. Read from
+  # 0.28.3's bundle and docs, NOT MEASURED against Qwen's service. Free Qwen
+  # OAuth stays refused by the harness itself ("Qwen OAuth free tier was
+  # discontinued on 2026-04-15").
+  key_args: ["--auth-type", "openai"]
+  subscription_args: ["--auth-type", "qwen-subscription"]
+  credential_paths: [".qwen/subscription_credentials.json"]
   api_key_env: "OPENAI_API_KEY"
   # A name other vendors' keys go in too, sent to whatever OPENAI_BASE_URL
   # names: an entry names its key, and nothing falls back to this variable.
   api_key_env_shared: true
-  # The harness's own words, measured on both builds against a stub refusing
+  # The harness's own words, measured on 0.28.3 against a stub refusing
   # every request: the call exits 1 and its result event's error reads
   # "[API Error: <status> <the provider's message>]". A call with no key is
   # refused before any request.
   limit_markers:
     - sentinel: "[API Error: 429"
+  # A SEAT'S RUN ENDS ON A SPENT QUOTA ONLY IN ITS HELPER'S LIMIT LINE. Over
+  # ACP, Qwen Code flattens every 429 to "Rate limit exceeded. Try again
+  # later." (0.28.3), and only the session's chat file keeps the provider's
+  # words, in the error record of each failed request. The helper quotes the
+  # record of the request that failed last, and only once Qwen Code failed the
+  # turn on the 429 (the executor's limitGate reads the line only from a run
+  # whose exit status says so): a spent quota sits the entry out, a rate limit
+  # is transient and sits nothing out. The provider sentences of OpenAI's and
+  # DashScope's spent quotas, as the measured runs relayed them.
+  limit_events:
+    - match:
+        - {path: ["type"], equals: "crewlet_qwen_limit"}
+        - {path: ["error_message"], prefix: "429 You exceeded your current quota"}
+      said_path: ["error_message"]
+    - match:
+        - {path: ["type"], equals: "crewlet_qwen_limit"}
+        - {path: ["error_message"], prefix: "429 Free allocated quota exceeded"}
+      said_path: ["error_message"]
+    - match:
+        - {path: ["type"], equals: "crewlet_qwen_limit"}
+        - {path: ["error_message"], prefix: "429 Allocated quota exceeded"}
+      said_path: ["error_message"]
   auth_markers:
     - sentinel: "[API Error: 401"
     - sentinel: "Missing API key for OpenAI-compatible auth"
@@ -2242,7 +2330,7 @@ cursor-agent:
   # signed in or not (measured); a login adds the account it is for under
   # authInfo (read from the 2026.10.22 bundle), and it is a login only then.
   login_keys:
-    cli-config.json: "authInfo"
+    cli-config.json: ["authInfo"]
   # What a call leaves in the seat's home, measured on 2026.10.22: a chat
   # directory, and per call-directory a projects entry holding the trust
   # marker, the call's transcript and a worker log — one more entry for every
@@ -2337,7 +2425,9 @@ cursor-agent:
       - match: [{path: ["type"], equals: "tool_call"}, {path: ["subtype"], equals: "completed"}]
         closes: true
   login_args: ["login"]
-  logout_args: ["logout"]
+  # No logout_args: 1.0.114 has no logout command (`copilot logout` exits 1 on
+  # "Invalid command format", and `copilot --help` lists none, measured);
+  # `/logout` is a slash command. A logout removes the login's files.
   status_args: ["status"]
   # NOT MEASURED, the limit markers below: generic phrases rather than this
   # harness's own sentences, safe to keep only because of WHERE they are matched
@@ -2617,10 +2707,15 @@ copilot:
   #
   # The same file is the harness's own record of itself — it writes
   # `firstLaunchAt` there on its first start, signed in or not (measured) —
-  # so it is a login only while it holds copilotTokens.
+  # so it is a login only while it holds a token. It keeps one under two keys:
+  # on its first use of a login under `copilotTokens` (`{"https://github.com:
+  # <login>": "<token>"}`) it adds the same token under `authTokens`
+  # (`{"https://github.com:<login>:github": {"token": "<token>"}}`), and signs
+  # in from `authTokens` alone, `copilotTokens` empty or absent (measured on
+  # 1.0.114, offline, with a stand-in login).
   credential_paths: [".copilot/config.json"]
   login_keys:
-    config.json: "copilotTokens"
+    config.json: ["copilotTokens", "authTokens"]
   # What a call leaves in the seat's home, measured on 1.0.114: a session
   # directory holding the call's events, the session database every session
   # is indexed in (which the harness's own session_store_sql tool queries)
@@ -3685,7 +3780,8 @@ kimi-code:
     KIMI_LOOP_MAX_ATTEMPTS_PER_STEP: "3"
     # The vendor's own switch for its telemetry, which is on by default and is
     # a connection that is not the call's own: events keyed to a device id in
-    # the seat's home, sent with the seat's login, and — when a send fails —
+    # the seat's home, each request bearing the login's access token (measured
+    # on 2.7.2), and — when a send fails —
     # kept on disk under the home for the next start to send, which is one
     # call's trace waiting for the next. Read in 2.7.2's source, where it is
     # checked before the sink is started at all. Measured on 2.7.2 through the
@@ -3805,7 +3901,10 @@ kimi-code:
           cache_read: [["event", "usage", "inputCacheRead"]]
           cache_write: [["event", "usage", "inputCacheCreation"]]
   # TWO FILES, because this harness splits its login across them: `kimi login`
-  # writes the OAuth token to credentials/oauth/kimi-code.json AND injects the
+  # writes the OAuth token to credentials/kimi-code.json (its storage key
+  # `oauth/kimi-code`, filed by its last part; measured on 2.7.2: a run reads it
+  # there and writes a refreshed token back over it, and finds no credential in
+  # credentials/oauth/kimi-code.json) AND injects the
   # provider's `[providers.<name>.oauth]` reference into config.toml, which
   # also carries `default_model` and the `[models]` catalogue every `--model`
   # alias resolves against. A seat home with only the token has no provider
@@ -3814,7 +3913,7 @@ kimi-code:
   # Their base names differ (`kimi-code.json`, `config.toml`), which is what
   # the shared credential directory keys on.
   credential_paths:
-    - ".kimi-code/credentials/oauth/kimi-code.json"
+    - ".kimi-code/credentials/kimi-code.json"
     - ".kimi-code/config.toml"
   # Sessions, their index, the logs, the project registry and the telemetry
   # queue: what a call writes about itself.
@@ -3839,7 +3938,8 @@ kimi-code:
   # call where an entry turns telemetry back on.
   #
   # What else persists carries nothing of a call: `device_id`, one per home;
-  # `cache/query-store`, made with empty shards; `locks`, its lock files.
+  # `cache/query-store`, made with empty shards; `locks`, its lock files;
+  # `oauth/<key>`, the lock a token refresh takes.
   volatile_paths:
     - ".kimi-code/sessions"
     - ".kimi-code/session_index.jsonl"
@@ -3848,7 +3948,7 @@ kimi-code:
     - ".kimi-code/.projects-write-lock"
     - ".kimi-code/telemetry"
   host_credential_paths:
-    - ".kimi-code/credentials/oauth/kimi-code.json"
+    - ".kimi-code/credentials/kimi-code.json"
     - ".kimi-code/config.toml"
   # A real one-shot subcommand, not a slash command: `kimi login` runs the
   # RFC 8628 device-code flow, prints the verification URL and user code to

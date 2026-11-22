@@ -994,11 +994,12 @@ func headedIn(text string) iter.Seq2[EntryKind, string] {
 }
 
 // headingFraming is all a harness puts before a heading it hands its model:
-// a system reminder's opening tag, and Claude Code's `<event> hook additional
-// context:` ([claudeHookContext]).
+// a system reminder's opening tag, Claude Code's `<event> hook additional
+// context:` ([claudeHookContext]), and Qwen Code's words before a drained
+// message ([qwenNoteFraming]).
 var headingFraming = sync.OnceValue(func() *regexp.Regexp {
 	return regexp.MustCompile(`^\s*(?:<system-reminder>\s*)?(?:\w+` +
-		regexp.QuoteMeta(claudeHookContext) + `\s*)?$`)
+		regexp.QuoteMeta(claudeHookContext) + `\s*|` + regexp.QuoteMeta(qwenNoteFraming) + `)?$`)
 })
 
 // opensWithHeading reports text that is a note, a wake or a late call — its first

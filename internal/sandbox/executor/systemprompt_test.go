@@ -108,13 +108,13 @@ func TestTheStandingInstructionsReachOpenCodeAsAnInstructionFile(t *testing.T) {
 // harness's own contract apart from the runner's.
 func TestAHarnessGivenNoSystemTextWritesAndPassesNothing(t *testing.T) {
 	t.Parallel()
-	for _, cli := range []executor.Harness{executor.ClaudeCode{}, executor.OpenCode{}} {
+	for _, cli := range []executor.Harness{executor.ClaudeCode{}, executor.OpenCode{}, executor.GeminiCLI{}} {
 		t.Run(cli.Name(), func(t *testing.T) {
 			t.Parallel()
 			b := sandbox.NewFakeSandbox("box-1")
 			p := executor.PathsFor(b)
 			req := sandbox.RunRequest{Brief: "fix the flake"}
-			config, err := cli.WriteConfig(t.Context(), b, req, p)
+			config, err := cli.WriteConfig(t.Context(), b, req, executor.Session{}, p)
 			if err != nil {
 				t.Fatalf("WriteConfig: %v", err)
 			}
@@ -251,12 +251,22 @@ func TestTheStandingInstructionIsGivenExactlyWhenARunReadsNotes(t *testing.T) {
 		"a harness that reads no notes": {executor.New(unreading{executor.ClaudeCode{}}), steerWiring, plain, ""},
 		"opencode, wired to its notes":  {executor.NewOpenCode(), steerWiring, plain, executor.OpenCode{}.NoteInstruction()},
 		"opencode, wired to none":       {executor.NewOpenCode(), sandbox.SteerWiring{}, plain, ""},
+		"gemini cli, wired to its notes": {executor.NewGeminiCLI(), steerWiring, plain,
+			executor.GeminiCLISteerInstruction},
+		"gemini cli, wired to none": {executor.NewGeminiCLI(), sandbox.SteerWiring{}, plain, ""},
+		"qwen code, wired to its notes": {executor.NewQwenCode(), steerWiring, plain,
+			executor.QwenCodeSteerInstruction},
+		"qwen code, wired to none": {executor.NewQwenCode(), sandbox.SteerWiring{}, plain, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			b, system, _ := systemOfRun(t, tc.runner, sandbox.RunRequest{
-				System: seatSystem, Brief: "fix the flake", Steer: tc.steer,
-			})
+			req := sandbox.RunRequest{System: seatSystem, Brief: "fix the flake", Steer: tc.steer}
+			// THE BRIDGE ITS NOTES NAME, which Gemini CLI's take reaches by.
+			if strings.HasPrefix(name, "gemini cli") {
+				req.MCPServers = map[string]sandbox.MCPServer{"crewlet": {Name: "crewlet",
+					Transport: sandbox.TransportHTTP, URL: "http://127.0.0.1:7/mcp/tok"}}
+			}
+			b, system, _ := systemOfRun(t, tc.runner, req)
 			told := system
 			if file := tc.told(paths(b)); file != paths(b).System() {
 				raw, err := b.ReadFile(t.Context(), file)

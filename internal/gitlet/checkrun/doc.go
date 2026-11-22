@@ -73,12 +73,13 @@
 // code reads. Its environment is EXACTLY the company's check secrets its
 // definition names (code.checks.env, each ${VAR} resolved when the box is
 // made), what the check is (config.ReservedCheckEnv: CREWLET_CHECK_REPO, _SHA,
-// _BASE, _NAME, _ATTEMPT and _API), and Gitlet's base and its check's
-// token (CREWLET_GIT_URL, CREWLET_GIT_TOKEN) with git configured to present
-// the token under the user `check` for that base alone — and no user.name or
-// user.email, since a check acts as nobody. Its setup is the git floor's check
-// and a checkout of its ONE COMMIT, depth one, blobless, with its cone
-// (sandbox.CloneRecipe's single-sha) — or nothing at all for a check whose
+// _BASE, _NAME, _ATTEMPT and _API), and Gitlet's base and the path of the
+// file holding its check's token (CREWLET_GIT_URL, CREWLET_GIT_ACCESS_FILE),
+// with git configured to present it under the user `check` for that base
+// alone — and no user.name or user.email, since a check acts as nobody. Its
+// setup writes that file (the token is in no variable), checks the git floor
+// and checks out its ONE COMMIT, depth one, blobless, with its cone
+// (sandbox.CloneRecipe's single-sha) — or no checkout at all for a check whose
 // file says `checkout: none`, which reads its commit through /box/gitlet/.
 //
 // # A run: the box, the command, the poll
