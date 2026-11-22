@@ -1347,36 +1347,18 @@ func (p *Provider) SandboxCredentials() map[string]string {
 	return out
 }
 
-// SandboxCredentialIdentityKeys is, by each of [Provider.SandboxCredentials]'
-// paths, the keys naming the account its login is
-// ([harnessprofile.Profile.IdentityKeys]), which a box writing the login back
-// holds to the shared login's. Nil where it names none.
-func (p *Provider) SandboxCredentialIdentityKeys() map[string][]string {
-	var out map[string][]string
+// SandboxCredentialRules is, by each of [Provider.SandboxCredentials]' paths,
+// the rule its file is seeded and written back by ([harnessprofile.FileRule]):
+// a mixed file's login fields alone, its run keys as the shared login holds
+// them, and only a copy of the seeded login's account. Nil where there are no
+// paths.
+func (p *Provider) SandboxCredentialRules() map[string]harnessprofile.FileRule {
+	var out map[string]harnessprofile.FileRule
 	for rel := range p.SandboxCredentials() {
-		if keys := p.profile.IdentityKeys[filepath.Base(rel)]; len(keys) > 0 {
-			if out == nil {
-				out = map[string][]string{}
-			}
-			out[rel] = slices.Clone(keys)
+		if out == nil {
+			out = map[string]harnessprofile.FileRule{}
 		}
-	}
-	return out
-}
-
-// SandboxCredentialRunKeys is, by each of [Provider.SandboxCredentials]' paths,
-// the keys its harness writes into that file during a run
-// ([harnessprofile.Profile.RunKeys]), which a box writing the login back keeps
-// as the shared login holds them. Nil where it names none.
-func (p *Provider) SandboxCredentialRunKeys() map[string][]string {
-	var out map[string][]string
-	for rel := range p.SandboxCredentials() {
-		if keys := p.profile.RunKeys[filepath.Base(rel)]; len(keys) > 0 {
-			if out == nil {
-				out = map[string][]string{}
-			}
-			out[rel] = slices.Clone(keys)
-		}
+		out[rel] = p.profile.FileRule(filepath.Base(rel))
 	}
 	return out
 }

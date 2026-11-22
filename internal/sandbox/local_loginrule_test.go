@@ -15,30 +15,32 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
-// identityLogin is one harness's login shapes in harnessprofile's
-// testdata/identity-logins.json, each a login by file name.
-type identityLogin struct {
+// testLogin is one harness's login shapes in harnessprofile's
+// testdata/logins.json, each a login by file name.
+type testLogin struct {
 	Seed    map[string]string `json:"seed"`
 	Refresh map[string]string `json:"refresh"`
 	Other   map[string]string `json:"other"`
+	Planted map[string]string `json:"planted"`
 }
 
-// A BOX WRITES BACK ONLY THE ACCOUNT IT WAS SEEDED WITH, for every harness
-// whose profile names one: a login whose identity keys
-// ([Spec.CredentialIdentityKeys], the profile's) name another account at
-// teardown is no refresh of the shared login, which stays as it was, and the
-// box says so by file, never by value; a refresh of the seeded account is
-// written back. A box handed no identity keys writes its changed copy back
-// whole. Not parallel: it captures the process-wide logger ([captureLogs]).
+// A BOX CARRIES ONLY ITS LOGIN, AND ONLY THE ACCOUNT IT WAS SEEDED WITH, for
+// every harness with a mixed file or an account to name: it is seeded with a
+// mixed file's login fields alone ([Spec.CredentialRules]), none of the shared
+// copy's settings; a setting it writes beside an unchanged login leaves the
+// shared login as it was; a copy naming another account is refused and said
+// by file, never by value; and a refresh of the seeded account is written,
+// only its login fields taken. A box handed no rules writes its copy whole.
+// Not parallel: it captures the process-wide logger ([captureLogs]).
 //
-// Mutation: drop the identity check from the write-back, drop the keys from the
-// box's record, or log the refusal as another outcome.
-func TestABoxWritesBackOnlyTheAccountItWasSeededWith(t *testing.T) {
-	raw, err := os.ReadFile("../providers/llm/harness/harnessprofile/testdata/identity-logins.json")
+// Mutation: seed or write back a mixed file whole, drop the account check or
+// the rules from the box's record, or log the refusal as another outcome.
+func TestABoxCarriesOnlyItsLoginAndOnlyItsAccount(t *testing.T) {
+	raw, err := os.ReadFile("../providers/llm/harness/harnessprofile/testdata/logins.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var logins map[string]identityLogin
+	var logins map[string]testLogin
 	if err := json.Unmarshal(raw, &logins); err != nil {
 		t.Fatal(err)
 	}
@@ -49,18 +51,15 @@ func TestABoxWritesBackOnlyTheAccountItWasSeededWith(t *testing.T) {
 		if !ok {
 			t.Fatalf("no %s profile", harness)
 		}
-		run := func(keyed bool, copied map[string]string) map[string]string {
+		names := slices.Sorted(maps.Keys(login.Seed))
+		run := func(copied map[string]string) map[string]string {
 			t.Helper()
 			dir := filepath.Join(t.TempDir(), "credentials")
-			spec := Spec{CredentialFiles: map[string]string{}, CredentialIdentityKeys: map[string][]string{}}
+			spec := Spec{CredentialFiles: map[string]string{}, CredentialRules: map[string]harnessprofile.FileRule{}}
 			for _, rel := range profile.CredentialPaths {
-				name := filepath.Base(rel)
-				if _, held := login.Seed[name]; !held {
-					continue
-				}
-				spec.CredentialFiles[rel] = filepath.Join(dir, name)
-				if keys := profile.IdentityKeys[name]; keyed && len(keys) > 0 {
-					spec.CredentialIdentityKeys[rel] = keys
+				if name := filepath.Base(rel); slices.Contains(names, name) {
+					spec.CredentialFiles[rel] = filepath.Join(dir, name)
+					spec.CredentialRules[rel] = profile.FileRule(name)
 				}
 			}
 			putLogin(t, dir, login.Seed)
@@ -69,15 +68,19 @@ func TestABoxWritesBackOnlyTheAccountItWasSeededWith(t *testing.T) {
 				t.Fatalf("%s: Create: %v", harness, err)
 			}
 			for rel, shared := range spec.CredentialFiles {
+				handed, _ := os.ReadFile(filepath.Join(box.Home(), rel))
+				if strings.Contains(string(handed), "SHARED-SETTING") {
+					t.Errorf("%s: the box was seeded with the shared copy's settings:\n%s", harness, handed)
+				}
 				writeFile(t, filepath.Join(box.Home(), rel), copied[filepath.Base(shared)])
 			}
 			if err := box.Close(t.Context()); err != nil {
 				t.Fatalf("%s: Close: %v", harness, err)
 			}
-			return sharedLogin(t, dir, slices.Collect(maps.Keys(login.Seed)))
+			return sharedLogin(t, dir, names)
 		}
 		before := len(logs.String())
-		if got := run(true, login.Other); !maps.Equal(got, login.Seed) {
+		if got := run(login.Other); !maps.Equal(got, login.Seed) {
 			t.Errorf("%s: another account's copy left the shared login %v, want it as it was", harness, got)
 		}
 		said := logs.String()[before:]
@@ -85,11 +88,20 @@ func TestABoxWritesBackOnlyTheAccountItWasSeededWith(t *testing.T) {
 			!strings.Contains(said, "shared=other_account") {
 			t.Errorf("%s: the refused copy was not said as another account's:\n%s", harness, said)
 		}
-		if strings.Contains(said, "access-9") {
+		if strings.Contains(said, "access-9") || strings.Contains(said, "token-9") {
 			t.Errorf("%s: the log carries a login's value:\n%s", harness, said)
 		}
-		if got := run(true, login.Refresh); !maps.Equal(got, login.Refresh) {
-			t.Errorf("%s: a refresh of the seeded account left the shared login %v, want the refresh", harness, got)
+		want := map[string]string{}
+		for _, name := range names {
+			want[name] = string(profile.FileRule(name).Carry([]byte(login.Refresh[name]), []byte(login.Seed[name])))
+		}
+		if got := run(login.Refresh); !maps.Equal(got, want) {
+			t.Errorf("%s: a refresh of the seeded account left the shared login %v, want %v", harness, got, want)
+		}
+		if login.Planted != nil {
+			if got := run(login.Planted); !maps.Equal(got, login.Seed) {
+				t.Errorf("%s: a setting the box wrote left the shared login %v, want it as it was", harness, got)
+			}
 		}
 	}
 	codex := logins["codex"]
@@ -106,7 +118,7 @@ func TestABoxWritesBackOnlyTheAccountItWasSeededWith(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 	if got := sharedLogin(t, dir, []string{"auth.json"}); got["auth.json"] != codex.Other["auth.json"] {
-		t.Errorf("a box handed no identity keys wrote back %v, want its copy whole", got)
+		t.Errorf("a box handed no rules wrote back %v, want its copy whole", got)
 	}
 }
 

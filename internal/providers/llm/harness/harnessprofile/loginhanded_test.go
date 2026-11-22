@@ -142,8 +142,8 @@ func TestAnUntypedCredentialsRefreshIsCarried(t *testing.T) {
 }
 
 // ONLY A STORE'S DOCUMENT IS HELD TO THE HANDED LOGIN: Profile.KeepLogin
-// filters the file named CredentialStoreDocument of a profile with a store,
-// and leaves every other file, and a store-less profile's, to its run keys.
+// filters the file named CredentialStoreDocument, a name no credential path
+// may take, and leaves every other file to its run keys.
 //
 // Mutation: filter every file, or none.
 func TestOnlyAStoresDocumentIsHeldToTheHandedLogin(t *testing.T) {
@@ -156,8 +156,5 @@ func TestOnlyAStoresDocumentIsHeldToTheHandedLogin(t *testing.T) {
 	}
 	if got := store.KeepLogin("auth.json", home, handed); string(got) != string(home) {
 		t.Errorf("another file of a store's profile was filtered:\n%s", got)
-	}
-	if got := (&Profile{}).KeepLogin(CredentialStoreDocument, home, handed); string(got) != string(home) {
-		t.Errorf("a store-less profile's file was filtered:\n%s", got)
 	}
 }

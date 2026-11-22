@@ -1,7 +1,6 @@
 package harnessprofile
 
 import (
-	"encoding/json"
 	"fmt"
 	"maps"
 	"path/filepath"
@@ -1015,14 +1014,14 @@ type Profile struct {
 	// in the home is conversation state.
 	CredentialPaths []string `yaml:"credential_paths,omitempty"`
 
-	// LoginKeys names, by a credential file's NAME, the top-level keys that file
-	// holds a login under, for a file that also keeps state: Copilot CLI writes
-	// `firstLaunchAt` into config.json and Cursor Agent settings into
-	// cli-config.json signed in or not, which made the doctor report a sign-in
-	// nobody made. Holding none of its keys such a file is not a login
-	// ([Profile.HoldsLogin]); a credential file not named here is one whenever
-	// it exists. Every key the harness signs in from: one it reads that is not
-	// named leaves a login the engine takes for none.
+	// LoginKeys names, by a credential file's NAME, the key paths (dotted, into
+	// a JSON object or a `.toml` file's tables) that are its login, for a MIXED
+	// file the harness also reads its own settings from: Copilot CLI's
+	// config.json, Cursor Agent's cli-config.json, Kimi Code's config.toml. A
+	// home is seeded with only these fields, and a refresh carries back only
+	// these ([FileRule]); holding none of them the file is not a login
+	// ([Profile.HoldsLogin]). Every field the harness signs in from: one not
+	// named is never seeded. A file not named here is a login file, whole.
 	LoginKeys map[string][]string `yaml:"login_keys,omitempty"`
 
 	// RunKeys names, by a credential file's NAME, the keys (dotted, into a
@@ -1032,12 +1031,12 @@ type Profile struct {
 	// login's value of each ([KeepLoginKeys]); a login command's takes all.
 	RunKeys map[string][]string `yaml:"run_keys,omitempty"`
 
-	// IdentityKeys names, by a credential file's NAME, the keys (dotted, into a
-	// JSON object, `*` for every key of the object there) whose values say which
-	// account its login is: Codex's auth.json names its ChatGPT account at
+	// IdentityKeys names, by a credential file's NAME, the key paths (`*` for
+	// every key of the object there) whose values say which login it is: whose
+	// account, at which provider. Codex's auth.json names its ChatGPT account at
 	// tokens.account_id. A refresh a seat's call or a local box's run carries
 	// back is written only where each holds what the shared login's does
-	// ([SameLoginIdentity]): a refresh keeps its account. A file naming no
+	// ([FileRule.SameAccount]): a refresh keeps its account. A file naming no
 	// account (a token and its expiry alone) has none, and its profile says so.
 	IdentityKeys map[string][]string `yaml:"identity_keys,omitempty"`
 
@@ -2233,11 +2232,14 @@ func (p *Profile) validateHomePaths(add func(string, ...any)) {
 			add("login_keys names %q, which is the file name of no credential_paths entry — "+
 				"a login key says which of the credential files holds a login only once it "+
 				"carries that key", name)
-		case len(p.LoginKeys[name]) == 0 || slices.ContainsFunc(p.LoginKeys[name], func(k string) bool {
-			return strings.TrimSpace(k) == ""
-		}):
-			add("login_keys.%s is empty or names an empty key — name the top-level keys the "+
-				"file holds a login under", name)
+		case len(p.LoginKeys[name]) == 0:
+			add("login_keys.%s is empty — name the key paths the file holds its login under", name)
+		}
+		for i, key := range p.LoginKeys[name] {
+			if slices.Contains(strings.Split(key, "."), "") {
+				add("login_keys.%s[%d] %q is no key path — name the key, its parents' keys "+
+					"before it, each joined by a dot", name, i, key)
+			}
 		}
 	}
 	for _, name := range slices.Sorted(maps.Keys(p.RunKeys)) {
@@ -2809,52 +2811,6 @@ func (p *Profile) ValidateCredentials(name string) error {
 		return nil
 	}
 	return fmt.Errorf("harness profile %q: %s", name, strings.Join(bad, "; "))
-}
-
-// HoldsLogin reports whether the credential file named name, holding content,
-// is a login: one [Profile.LoginKeys] does not name, or one any of whose
-// top-level keys it names is set to something other than null or an empty
-// string, object or array.
-//
-// Read as JSON with every `//` line set aside ([withoutCommentLines]). A file
-// that does not read that way IS taken for a login: guessing harder means
-// parsing a vendor's format, and the opposite wrong guess is a login the
-// engine would not carry, export or keep.
-func (p *Profile) HoldsLogin(name string, content []byte) bool {
-	keys, named := p.LoginKeys[name]
-	if !named {
-		return true
-	}
-	var doc map[string]json.RawMessage
-	if err := json.Unmarshal(withoutCommentLines(content), &doc); err != nil {
-		return true
-	}
-	for _, key := range keys {
-		if heldValue(doc[key]) {
-			return true
-		}
-	}
-	return false
-}
-
-// heldValue reports whether raw, one top-level value of a login file, holds
-// something: not absent, null, or an empty string, object or array.
-func heldValue(raw json.RawMessage) bool {
-	var value any
-	if err := json.Unmarshal(raw, &value); err != nil {
-		return false
-	}
-	switch v := value.(type) {
-	case nil:
-		return false
-	case string:
-		return v != ""
-	case []any:
-		return len(v) > 0
-	case map[string]any:
-		return len(v) > 0
-	}
-	return true
 }
 
 // EffectivePromptMode is the prompt mode with its default applied.

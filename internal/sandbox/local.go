@@ -244,22 +244,20 @@ const (
 )
 
 // seededCredential is one login file a box was seeded with, as the box's
-// RECORD keeps it: its source on the engine host and the SHA-256 of the bytes
-// the box was given, "" for a file the shared login did not hold then.
+// RECORD keeps it: its source on the engine host, the SHA-256 of the bytes the
+// box was given ("" for a file the shared login did not hold then), and its
+// rule ([Spec.CredentialRules]), by which a mixed file's seed is its login's
+// fields alone.
 //
 // THE SEED IS WHAT A WRITE-BACK IS JUDGED AGAINST, not the shared login at
 // teardown: an idle box's copy differs from that once anybody else writes, and
 // putting a stale seed back over a login the host refreshed meanwhile, whose
-// refresh token the vendor had already rotated away, logs every seat out.
-//
-// AN ABSENT FILE IS RECORDED TOO (a file added since the seed is a newer login
-// as much as one changed), and so are the file's RUN KEYS and IDENTITY KEYS
-// ([Spec.CredentialRunKeys], [Spec.CredentialIdentityKeys]).
+// refresh token the vendor had already rotated away, logs every seat out. An
+// absent file is recorded too: a file added since is a newer login.
 type seededCredential struct {
-	Source       string   `json:"source"`
-	Seed         string   `json:"seed"`
-	RunKeys      []string `json:"run_keys,omitempty"`
-	IdentityKeys []string `json:"identity_keys,omitempty"`
+	Source string                  `json:"source"`
+	Seed   string                  `json:"seed"`
+	Rule   harnessprofile.FileRule `json:"rule"`
 }
 
 // boxLogin is one login a box is seeded with: the files of one shared
@@ -314,29 +312,29 @@ func loginsOf(files map[string]string) []boxLogin {
 // operator-overridable profile, so they go through hostbox.SafeJoin: a
 // "../../etc/cron.d/x" would otherwise write a host file.
 func seedCredentials(
-	ctx context.Context, l boxLayout, files map[string]string, runKeys, identityKeys map[string][]string,
+	ctx context.Context, l boxLayout, files map[string]string, rules map[string]harnessprofile.FileRule,
 ) map[string]seededCredential {
 	seeded := map[string]seededCredential{}
 	for _, login := range loginsOf(files) {
-		got, err := seedLogin(ctx, l, login)
+		got, err := seedLogin(ctx, l, login, rules)
 		if err != nil {
 			localLog.Warn("local_sandbox_credential_seed_failed",
 				"sandbox_id", l.id, "dir", login.dir, "error", err.Error(),
 				"detail", "the box was given none of this login, so its run is not signed in by it")
 			continue
 		}
-		for relative, rec := range got {
-			rec.RunKeys = slices.Clone(runKeys[relative])
-			rec.IdentityKeys = slices.Clone(identityKeys[relative])
-			seeded[relative] = rec
-		}
+		maps.Copy(seeded, got)
 	}
 	return seeded
 }
 
 // seedLogin seeds one login into a box — every file the shared directory
-// holds of it, or none — and reports what it seeded.
-func seedLogin(ctx context.Context, l boxLayout, login boxLogin) (map[string]seededCredential, error) {
+// holds of it, or none — and reports what it seeded. A mixed file is handed its
+// login's fields alone ([harnessprofile.FileRule.Seed]); one that cannot be
+// read for them fails the whole login.
+func seedLogin(
+	ctx context.Context, l boxLayout, login boxLogin, rules map[string]harnessprofile.FileRule,
+) (map[string]seededCredential, error) {
 	// VALIDATED BEFORE ANYTHING IS READ OR WRITTEN, so a login with one
 	// path out of the box is seeded nowhere; WRITTEN through the box's home
 	// ([boxLayout.openHome]), where no component of a path leads out of it.
@@ -370,23 +368,28 @@ func seedLogin(ctx context.Context, l boxLayout, login boxLogin) (map[string]see
 	var written []string
 	for _, relative := range slices.Sorted(maps.Keys(login.files)) {
 		source := login.files[relative]
+		rule := rules[relative]
+		rule.Name = filepath.Base(source)
 		content, present := shared[filepath.Base(source)]
 		if !present {
-			seeded[relative] = seededCredential{Source: source}
+			seeded[relative] = seededCredential{Source: source, Rule: rule}
 			continue
 		}
-		dst := targets[relative]
-		if err := writeBoxFile(home, dst, content); err != nil {
+		handed, err := rule.Seed(content)
+		if err == nil {
+			err = writeBoxFile(home, targets[relative], handed)
+		}
+		if err != nil {
 			for _, name := range written {
 				_ = home.Remove(name)
 			}
 			return nil, fmt.Errorf("seeding %q: %w", relative, err)
 		}
-		written = append(written, dst)
+		written = append(written, targets[relative])
 		// THE SEED'S DIGEST IS OF THE BYTES THE BOX WAS GIVEN: read separately
 		// it could describe a newer file than the box's, and the teardown
 		// would then excuse a write it should have refused.
-		seeded[relative] = seededCredential{Source: source, Seed: digestOf(content)}
+		seeded[relative] = seededCredential{Source: source, Seed: digestOf(handed), Rule: rule}
 	}
 	return seeded, nil
 }
@@ -399,6 +402,17 @@ func writeBoxFile(home *os.Root, name string, content []byte) error {
 		return err
 	}
 	return replaceIn(home, name, content)
+}
+
+// seedDigest is the digest of what rule seeds a box with of content, a copy
+// of the file: two copies whose login is one have one, whatever settings beside
+// it differ. A copy that cannot be read for its login has "", no seed's.
+func seedDigest(rule harnessprofile.FileRule, content []byte) string {
+	seed, err := rule.Seed(content)
+	if err != nil {
+		return ""
+	}
+	return digestOf(seed)
 }
 
 // digestOf is the SHA-256 of content in [hostbox.Digest]'s form.
@@ -483,7 +497,7 @@ const (
 	// `crewlet llm logout` — and a box never creates one.
 	writeBackRemoved writeBack = "removed"
 	// writeBackOtherAccount: the box's copy names another account than the
-	// shared login ([seededCredential.IdentityKeys]), so it is no refresh of
+	// shared login ([harnessprofile.FileRule.SameAccount]), so it is no refresh of
 	// that login, and the shared one was kept.
 	writeBackOtherAccount writeBack = "other_account"
 )
@@ -533,7 +547,7 @@ func writeBackLogin(
 			}
 			return nil, readErr
 		}
-		if !present || digestOf(content) == rec.Seed {
+		if !present || seedDigest(rec.Rule, content) == rec.Seed {
 			got[relative] = writeBackIdle
 			continue
 		}
@@ -558,22 +572,12 @@ func writeBackLogin(
 	if err != nil {
 		return nil, fmt.Errorf("reading the shared login: %w", err)
 	}
-	// A KEY THE HARNESS WROTE DURING THE RUN IS NO LOGIN
-	// ([seededCredential.RunKeys]): it is written back as the shared login
-	// holds it, and a file that then is the shared one changed nothing. A
-	// credential store's document carries back the handed logins alone
-	// ([harnessprofile.KeepHandedCredentials]), whatever the box's database
-	// came to hold.
+	// ONLY THE LOGIN IS CARRIED ([harnessprofile.FileRule.Carry]): a mixed
+	// file's login fields, never a run key or a setting the run wrote, and a
+	// store's document held to the logins it was handed. A file that then is
+	// the shared one changed nothing.
 	for name, content := range changed {
-		keys := seeded[byName[name]].RunKeys
-		store := name == harnessprofile.CredentialStoreDocument
-		if len(keys) == 0 && !store {
-			continue
-		}
-		kept := harnessprofile.KeepLoginKeys(content, current[name], keys)
-		if store {
-			kept = harnessprofile.KeepHandedCredentials(kept, current[name])
-		}
+		kept := seeded[byName[name]].Rule.Carry(content, current[name])
 		if bytes.Equal(kept, current[name]) {
 			delete(changed, name)
 			got[byName[name]] = writeBackIdle
@@ -592,7 +596,7 @@ func writeBackLogin(
 	for relative, rec := range login.files {
 		shared, present := current[filepath.Base(rec)]
 		seed := seeded[relative].Seed
-		if (seed == "") == present || (present && digestOf(shared) != seed) {
+		if (seed == "") == present || (present && seedDigest(seeded[relative].Rule, shared) != seed) {
 			if len(current) == 0 {
 				return verdict(writeBackRemoved), nil
 			}
@@ -600,10 +604,10 @@ func writeBackLogin(
 		}
 	}
 	// A COPY NAMING ANOTHER ACCOUNT IS NO REFRESH of this login
-	// ([seededCredential.IdentityKeys]): the whole login stays as it is.
+	// ([harnessprofile.FileRule.SameAccount]): the whole login stays as it is.
 	// Asked of the login the box was seeded with, which current is here.
 	for name, content := range changed {
-		if !harnessprofile.SameLoginIdentity(content, current[name], seeded[byName[name]].IdentityKeys) {
+		if !seeded[byName[name]].Rule.SameAccount(content, current[name]) {
 			return verdict(writeBackOtherAccount), nil
 		}
 	}
@@ -1081,7 +1085,7 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	}
 
 	l.reapOrphans(ctx, time.Duration(spec.TimeoutSec)*time.Second)
-	seeded := seedCredentials(ctx, layout, spec.CredentialFiles, spec.CredentialRunKeys, spec.CredentialIdentityKeys)
+	seeded := seedCredentials(ctx, layout, spec.CredentialFiles, spec.CredentialRules)
 	// The box records what it was seeded with and stamps itself alive before
 	// anyone can reap it.
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml

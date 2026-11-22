@@ -14,11 +14,14 @@
     "other": {
       "config.json": "// User settings belong in settings.json.\n// This file is managed automatically.\n{\n  \"copilotTokens\": {\n    \"https://github.com:other\": \"token-9\"\n  },\n  \"lastLoggedInUser\": {\n    \"host\": \"https://github.com\",\n    \"login\": \"other\"\n  },\n  \"loggedInUsers\": [\n    {\n      \"host\": \"https://github.com\",\n      \"login\": \"other\"\n    }\n  ],\n  \"firstLaunchAt\": \"2026-11-22T00:00:00.000Z\",\n  \"authTokens\": {\n    \"https://github.com:other:github\": {\n      \"token\": \"token-9\"\n    }\n  }\n}\n"
     },
+    "planted": {
+      "config.json": "// User settings belong in settings.json.\n// This file is managed automatically.\n{\n  \"copilotTokens\": {\n    \"https://github.com:seat\": \"token-1\"\n  },\n  \"lastLoggedInUser\": {\n    \"host\": \"https://github.com\",\n    \"login\": \"seat\"\n  },\n  \"loggedInUsers\": [\n    {\n      \"host\": \"https://github.com\",\n      \"login\": \"seat\"\n    }\n  ],\n  \"trustedFolders\": [\n    \"PLANTED-SETTING\"\n  ]\n}\n"
+    },
     "refresh": {
       "config.json": "// User settings belong in settings.json.\n// This file is managed automatically.\n{\n  \"copilotTokens\": {\n    \"https://github.com:seat\": \"token-1\"\n  },\n  \"lastLoggedInUser\": {\n    \"host\": \"https://github.com\",\n    \"login\": \"seat\"\n  },\n  \"loggedInUsers\": [\n    {\n      \"host\": \"https://github.com\",\n      \"login\": \"seat\"\n    }\n  ],\n  \"firstLaunchAt\": \"2026-11-22T00:00:00.000Z\",\n  \"authTokens\": {\n    \"https://github.com:seat:github\": {\n      \"token\": \"token-1\"\n    }\n  }\n}\n"
     },
     "seed": {
-      "config.json": "// User settings belong in settings.json.\n// This file is managed automatically.\n{\n  \"copilotTokens\": {\n    \"https://github.com:seat\": \"token-1\"\n  },\n  \"lastLoggedInUser\": {\n    \"host\": \"https://github.com\",\n    \"login\": \"seat\"\n  },\n  \"loggedInUsers\": [\n    {\n      \"host\": \"https://github.com\",\n      \"login\": \"seat\"\n    }\n  ]\n}\n"
+      "config.json": "// User settings belong in settings.json.\n// This file is managed automatically.\n{\n  \"copilotTokens\": {\n    \"https://github.com:seat\": \"token-1\"\n  },\n  \"lastLoggedInUser\": {\n    \"host\": \"https://github.com\",\n    \"login\": \"seat\"\n  },\n  \"loggedInUsers\": [\n    {\n      \"host\": \"https://github.com\",\n      \"login\": \"seat\"\n    }\n  ],\n  \"firstLaunchAt\": \"2026-11-01T00:00:00.000Z\",\n  \"trustedFolders\": [\n    \"SHARED-SETTING\"\n  ]\n}\n"
     }
   },
   "cursor-agent": {
@@ -26,13 +29,17 @@
       "auth.json": "{\n  \"accessToken\": \"access-9\",\n  \"refreshToken\": \"refresh-9\"\n}\n",
       "cli-config.json": "{\n  \"version\": 1,\n  \"authInfo\": {\n    \"email\": \"other@example.com\",\n    \"displayName\": \"Seat\",\n    \"userId\": 43\n  }\n}\n"
     },
+    "planted": {
+      "auth.json": "{\n  \"accessToken\": \"access-1\",\n  \"refreshToken\": \"refresh-1\"\n}\n",
+      "cli-config.json": "{\n  \"version\": 1,\n  \"authInfo\": {\n    \"email\": \"seat@example.com\",\n    \"displayName\": \"Seat\",\n    \"userId\": 42\n  },\n  \"permissions\": {\n    \"allow\": [\n      \"PLANTED-SETTING\"\n    ]\n  }\n}\n"
+    },
     "refresh": {
       "auth.json": "{\n  \"accessToken\": \"access-2\",\n  \"refreshToken\": \"refresh-2\"\n}\n",
       "cli-config.json": "{\n  \"version\": 1,\n  \"authInfo\": {\n    \"email\": \"seat@example.com\",\n    \"displayName\": \"Seat\",\n    \"userId\": 42\n  }\n}\n"
     },
     "seed": {
       "auth.json": "{\n  \"accessToken\": \"access-1\",\n  \"refreshToken\": \"refresh-1\"\n}\n",
-      "cli-config.json": "{\n  \"version\": 1,\n  \"authInfo\": {\n    \"email\": \"seat@example.com\",\n    \"displayName\": \"Seat\",\n    \"userId\": 42\n  }\n}\n"
+      "cli-config.json": "{\n  \"version\": 1,\n  \"authInfo\": {\n    \"email\": \"seat@example.com\",\n    \"displayName\": \"Seat\",\n    \"userId\": 42\n  },\n  \"permissions\": {\n    \"allow\": [\n      \"SHARED-SETTING\"\n    ]\n  }\n}\n"
     }
   },
   "gemini-cli": {
@@ -58,6 +65,24 @@
     },
     "seed": {
       "auth.json": "{\n  \"https://auth.x.ai::client-placeholder\": {\n    \"key\": \"access-1\",\n    \"auth_mode\": \"oidc\",\n    \"user_id\": \"user-seat\",\n    \"email\": \"seat@example.com\",\n    \"refresh_token\": \"refresh-1\",\n    \"expires_at\": \"2026-11-22T10:00:00Z\",\n    \"oidc_issuer\": \"https://auth.x.ai\",\n    \"oidc_client_id\": \"client-placeholder\"\n  }\n}\n"
+    }
+  },
+  "kimi-code": {
+    "other": {
+      "config.toml": "default_model = \"kimi-code/kimi-for-coding\"\ndefault_provider = \"managed:kimi-code\"\nthinking = true\n\n[providers.\"managed:kimi-code\"]\ntype = \"kimi\"\napi_key = \"\"\nbase_url = \"https://other.example.com/coding/v1\"\n\n[providers.\"managed:kimi-code\".oauth]\nstorage = \"file\"\nkey = \"oauth/kimi-code\"\n\n[models.\"kimi-code/kimi-for-coding\"]\nprovider = \"managed:kimi-code\"\nmodel = \"kimi-for-coding\"\n\n[services.moonshot_search]\nbase_url = \"https://other.example.com/coding/v1/search\"\n",
+      "kimi-code.json": "{\n  \"access_token\": \"access-9\",\n  \"refresh_token\": \"refresh-9\",\n  \"expires_at\": 1795003600,\n  \"scope\": \"kimi-code\",\n  \"token_type\": \"Bearer\",\n  \"expires_in\": 900\n}\n"
+    },
+    "planted": {
+      "config.toml": "default_model = \"kimi-code/kimi-for-coding\"\ndefault_provider = \"managed:kimi-code\"\nthinking = true\n\n[providers.\"managed:kimi-code\"]\ntype = \"kimi\"\napi_key = \"\"\nbase_url = \"https://api.example.com/coding/v1\"\n\n[providers.\"managed:kimi-code\".oauth]\nstorage = \"file\"\nkey = \"oauth/kimi-code\"\n\n[models.\"kimi-code/kimi-for-coding\"]\nprovider = \"managed:kimi-code\"\nmodel = \"kimi-for-coding\"\n\n[services.moonshot_search]\nbase_url = \"https://api.example.com/coding/v1/search\"\n\n[[hooks]]\nname = \"PLANTED-SETTING\"\n",
+      "kimi-code.json": "{\n  \"access_token\": \"access-1\",\n  \"refresh_token\": \"refresh-1\",\n  \"expires_at\": 1795000000,\n  \"scope\": \"kimi-code\",\n  \"token_type\": \"Bearer\",\n  \"expires_in\": 900\n}\n"
+    },
+    "refresh": {
+      "config.toml": "default_model = \"kimi-code/kimi-for-coding\"\ndefault_provider = \"managed:kimi-code\"\nthinking = true\n\n[providers.\"managed:kimi-code\"]\ntype = \"kimi\"\napi_key = \"\"\nbase_url = \"https://api.example.com/coding/v1\"\n\n[providers.\"managed:kimi-code\".oauth]\nstorage = \"file\"\nkey = \"oauth/kimi-code\"\n\n[models.\"kimi-code/kimi-for-coding\"]\nprovider = \"managed:kimi-code\"\nmodel = \"kimi-for-coding\"\n\n[services.moonshot_search]\nbase_url = \"https://api.example.com/coding/v1/search\"\n",
+      "kimi-code.json": "{\n  \"access_token\": \"access-2\",\n  \"refresh_token\": \"refresh-2\",\n  \"expires_at\": 1795003600,\n  \"scope\": \"kimi-code\",\n  \"token_type\": \"Bearer\",\n  \"expires_in\": 900\n}\n"
+    },
+    "seed": {
+      "config.toml": "default_model = \"kimi-code/kimi-for-coding\"\ndefault_provider = \"managed:kimi-code\"\nthinking = true\n\n[providers.\"managed:kimi-code\"]\ntype = \"kimi\"\napi_key = \"\"\nbase_url = \"https://api.example.com/coding/v1\"\n\n[providers.\"managed:kimi-code\".oauth]\nstorage = \"file\"\nkey = \"oauth/kimi-code\"\n\n[models.\"kimi-code/kimi-for-coding\"]\nprovider = \"managed:kimi-code\"\nmodel = \"kimi-for-coding\"\n\n[services.moonshot_search]\nbase_url = \"https://api.example.com/coding/v1/search\"\n\n[[hooks]]\nname = \"SHARED-SETTING\"\n",
+      "kimi-code.json": "{\n  \"access_token\": \"access-1\",\n  \"refresh_token\": \"refresh-1\",\n  \"expires_at\": 1795000000,\n  \"scope\": \"kimi-code\",\n  \"token_type\": \"Bearer\",\n  \"expires_in\": 900\n}\n"
     }
   },
   "pi": {
