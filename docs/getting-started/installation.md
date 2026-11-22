@@ -83,7 +83,8 @@ USER crewlet
 
 OpenCode: 2.3.2 is the one release supported, its newest. A box on an older
 release is refused at the run's start, naming its release; one on a newer
-release runs, its sessions fresh. A box continues a session packed in another
+release runs, a session carried in from another box starting fresh there while
+the box's own copy continues in place. A box continues a session packed in another
 box only where both are exactly 2.3.2, and a session is counted for its launch's
 floor only as 2.3.2 writes it; a session another release wrote is held to its
 newest request's input. Its first request is judged only in a box of the release that
