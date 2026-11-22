@@ -569,8 +569,7 @@ type Gate struct {
 //
 // A gate naming a field not in the list is CLOSED: reading a typo as "always
 // required" would turn a vendor's mistake into every company's blocked connect.
-//
-// A SET'S FIELD is needed once its entry is started, whatever Required says.
+// A set's field is needed once its entry is started ([Set]).
 func (r Requirement) Needed(among []Requirement) bool {
 	if r.Set != nil {
 		return started(r, among, stored)
