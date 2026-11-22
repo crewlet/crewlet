@@ -150,7 +150,7 @@ func museScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$s" "$k" "$w" "$v" > %s`,
 		q(paths.SessionRecord()))
 	b.WriteString(museWiring(paths))
-	b.WriteString(museShellEnvironment(paths))
+	b.WriteString(museShellEnvironment(paths, req.SignInEnv))
 	before, after := museChildUsage(paths)
 	b.WriteString(before)
 	b.WriteString(launchHarness(strings.Join(parts, " "), paths))
@@ -557,6 +557,9 @@ func museServerName(name string) bool {
 // instructions, told of notes where it reads them, are refused past
 // [museSystemMax].
 func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error) {
+	if _, err := toolEnvOmitted(req.SignInEnv); err != nil {
+		return "", err
+	}
 	system := req.System
 	if req.Steer.Set() {
 		system = withNoteInstruction(system, m.NoteInstruction())
@@ -677,16 +680,24 @@ const museShellOff = "OTEL_EXPORTER_OTLP_"
 // needs: the entry's META_API_KEY, where it has one, written to a file only
 // the script's user reads, opened as the script's stdin, which the launch
 // hands the harness, and removed at once, so Muse reads the key on stdin
-// (`--api-key-stdin`, kf) and no file or variable keeps it; and every
-// OTEL_EXPORTER_OTLP_* variable unset.
-func museShellEnvironment(paths Paths) string {
+// (`--api-key-stdin`, kf) and no file or variable keeps it; every other
+// variable the run signs in by (signIn, [sandbox.RunRequest.SignInEnv]),
+// which Muse never reads, and every OTEL_EXPORTER_OTLP_* variable unset.
+// A sign-in name no shell can unset is refused by [Muse.WriteConfig].
+func museShellEnvironment(paths Paths, signIn []string) string {
 	key := sandbox.ShellQuote(paths.WorkDir() + "/muse-key")
+	unset := "unset META_API_KEY"
+	if names, err := toolEnvOmitted(signIn); err == nil {
+		for _, name := range names {
+			unset += " " + name
+		}
+	}
 	return `kf=
 if [ -n "${META_API_KEY-}" ]; then
   (umask 077 && printf '%s' "$META_API_KEY" > ` + key + `) && exec 0< ` + key + ` && kf=--api-key-stdin
   rm -f ` + key + `
 fi
-unset META_API_KEY
+` + unset + `
 for o in $(env | sed -n 's/^\(` + museShellOff + `[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$o"; done
 `
 }
