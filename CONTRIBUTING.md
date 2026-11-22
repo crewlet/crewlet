@@ -252,6 +252,7 @@ git diff --exit-code -- $UI_OUT                               #   no tracked fil
 test -z "$(git ls-files --others -- $UI_OUT)"                 #   and none is untracked
 cd dashboard && npm run typecheck && npm test                 # dashboard-test
 cd dashboard && npm run test:layout                           #   and its layout suites
+make notehelper && git diff --exit-code -- internal/sandbox/executor/notehelper  # notehelper-check
 ```
 
 Capture the formatting list BEFORE handing it to gofmt, and copy that form into
@@ -424,6 +425,17 @@ same two commands, merging or rebasing:
 ```bash
 make dashboard && git add -A -- static/dashboard static/artifacts static/protocol
 ```
+
+`make notehelper-check` gates the note helper's committed builds the same way.
+`internal/notehelper` runs inside a box, so the engine embeds a gzipped build
+per box arch from `internal/sandbox/executor/notehelper/`. `make notehelper`
+writes them reproducibly (go.mod's toolchain, `-trimpath`, no VCS stamp, an
+empty build id, gzipped by `internal/notehelper/gzipbuild` rather than the
+`gzip` program, whose output is its version's), and the gate rebuilds and diffs
+them. A change to `internal/notehelper`, to go.mod's toolchain or to a module it
+links (`golang.org/x/net`) commits the rebuild with it: `make notehelper`, then
+commit both `.gz` files. Two branches that both rebuilt them are rebuilt again,
+never merged.
 
 `go mod tidy -diff` gates the silent half of tidiness (an *under*-tidy module
 already stops `go build ./...`): a `require` left behind when its last import was
