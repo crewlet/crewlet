@@ -94,11 +94,12 @@ Pick the harness by whose models you want, then the sign-in by how you pay:
 | Google's (Gemini) | `gemini-cli` | a Google account login (an individual's free Code Assist tier, Google AI Pro or Ultra, or an organization's Code Assist licence), a Gemini API key (`GEMINI_API_KEY`), or Vertex AI | yes; a person's notes, late calls and wakes reach its run only as it is about to finish ([Gemini CLI](code-sandbox.md#gemini-cli)) |
 | Alibaba's (Qwen) | `qwen-code` | an OpenAI-compatible key (`OPENAI_API_KEY`), or a Qwen subscription login (not measured against Qwen's service) | yes; a note reaches its run between tool batches, never after the last ([Qwen Code's notes](code-sandbox.md#qwen-codes-notes)) |
 | Open models: OpenRouter, a hosted provider, a local server | `opencode` | the model provider's key in `env`, under that provider's own variable, or a login of OpenCode's own | yes |
-| Cursor, Copilot, Grok, Muse, Kimi, Hermes, Pi | see [Supported harnesses](#supported-harnesses) | the vendor's own login, or a key | no — the other phases only |
+| Moonshot's (Kimi) | `kimi-code` | a Moonshot API key (`auth.mode: api-key`), or a Kimi Code login in a local cell | yes, on Kimi Code 2.7.2 |
+| Cursor, Copilot, Grok, Muse, Hermes, Pi | see [Supported harnesses](#supported-harnesses) | the vendor's own login, or a key | no — the other phases only |
 
 Every agent seat's executor is its harness's own run in a [sandbox](code-sandbox.md),
 doing the seat's work and code work alike; this build has a harness runner for
-`claude-code`, `opencode`, `gemini-cli` and `qwen-code` only, each listed by its built-in profile's
+`claude-code`, `gemini-cli`, `qwen-code`, `opencode` and `kimi-code` only, each listed by its built-in profile's
 `executor` block, which no `overrides` can set. Any other harness serves a seat's reviewer,
 workers and side passes (`llm_review`, `llm_subagent`, `llm_auxiliary`,
 `llm_judge`, `llm_triage`) — its own loop on this host, shell and editor denied, the seat's tools
@@ -174,7 +175,7 @@ no `Authorization` header; measured on 0.153.4 and 0.164.0). A key kept under
 Codex runs with its shell off and its own `--sandbox read-only`, so its one local
 tool, `apply_patch`, writes nothing — see [Tool calls on
 this host](#tool-calls-on-this-host). It has no harness runner, so a Codex entry
-cannot run an executor: a seat's `llm` points at a `claude-code`, `opencode`, `gemini-cli` or `qwen-code`
+cannot run an executor: a seat's `llm` points at a `claude-code`, `gemini-cli`, `qwen-code`, `opencode` or `kimi-code`
 entry, and Codex serves its reviewer, workers or side passes.
 
 ### Open models, OpenRouter and local servers: OpenCode
@@ -240,8 +241,9 @@ and 2.1.4 — see [The executor's run in a box](#the-executors-run-in-a-box).
 
 ### The other harnesses
 
-Gemini CLI, Qwen Code, Cursor, Copilot, Grok, Muse Code, Kimi Code, Hermes and
-Pi each have a built-in profile and serve the phases on this host only: own login
+Gemini CLI, Qwen Code, Cursor, Copilot, Grok, Muse Code, Hermes and Pi each
+have a built-in profile and serve the phases on this host only (Kimi Code runs a
+seat's executor too, [its runner](code-sandbox.md#kimi-code)): own login
 or key, own model grammar, own way of being handed the seat's tools ([per
 harness](#what-each-harness-does-with-the-seats-tools)). [Supported
 harnesses](#supported-harnesses) says how each signs in; `custom` is a profile you
@@ -516,7 +518,7 @@ being applied is warned about.
 | `muse-code` | `minimal` `low` `medium` `high` `xhigh` `max` | `--reasoning-effort` | Per model. |
 | `hermes` | `none` `minimal` `low` `medium` `high` `xhigh` `max` | `--reasoning` | Lowered to the nearest level the route takes. |
 | `pi` | `off` `minimal` `low` `medium` `high` `xhigh` `max` | `--thinking` | Clamped to the model's levels. |
-| `kimi-code` | `low` `medium` `high` `xhigh` `max` | `KIMI_MODEL_THINKING_EFFORT` | Kimi's provider refuses a level the model lacks. |
+| `kimi-code` | `low` `medium` `high` `xhigh` `max` | `KIMI_MODEL_THINKING_EFFORT` | Sent as given on Kimi's own provider type, unchecked by the harness (whether Moonshot's service refuses a level its model lacks is not measured); an OpenAI-shaped provider is sent none. |
 | `gemini-cli` | none | | Read only from its settings file, per model family. |
 | `qwen-code` | none | | Read only from its settings file. |
 | `cursor-agent` | none | | Part of the model id: name a variant `cursor-agent --list-models` prints, such as `gpt-5.5-high`. |
@@ -861,7 +863,7 @@ other MCP server — the home's, a project's or a plugin's — starts beside it
 | `copilot` | `web_fetch` (`--available-tools`; the 1.0.103 bundle lists a `web_search` among its GitHub server's tools on a GitHub sign-in, not measured) | The `.git` file ends the walk for instruction files, hooks and repository settings. Custom-agent discovery walks past it to the enclosing repository's root; none reaches a request, since the task tool that lists them is unavailable. `--disable-client-telemetry`, and `COPILOT_AUTO_UPDATE=false` |
 | `grok` | `web_search`, `web_fetch` (`--tools`, every other built-in in `--disallowed-tools`; `GROK_WEB_FETCH=1`, since the fetch ships off, and `--allow WebFetch`, without which a headless run's first fetch cancelled the run) | No `--trust`, so a headless run loads no project rules. It reads the enclosing repository's `.git/config` and `HEAD` past the `.git` file; nothing reached the request. Background workflows, the turn-summary request and cross-session memory off |
 | `muse-code` | `web_search`, `web_fetch` (`run.toolset` in the seeded settings) | The run trusts its workspace (`--trust-workspace`, without which 1.4.25 starts no MCP server), and the workspace is the call's own directory: the `.git` file ends the harness's walk for project rules, skills, hooks and servers there. `--no-foreign-personal-context` keeps other harnesses' personal rules and skills (a `CLAUDE.md` under the home's `.claude`) out; `--disable-reminders` turns off the reminder requests that each re-sent the prompt |
-| `kimi-code` | `FetchURL`, and `WebSearch` where a Moonshot search service is configured (the agent file's allowlist) | The `.git` file ends the `AGENTS.md` chain; project skills need a `Skill` tool the allowlist leaves out. Telemetry off |
+| `kimi-code` | `FetchURL`, and `WebSearch` where a Moonshot search service is configured (the agent file's allowlist) | The `.git` file ends the `AGENTS.md` chain and keeps the project's skills out of the prompt's `# Skills` list, which names them without a `Skill` tool. Telemetry off |
 | `hermes` | `web_search`, `web_extract` (`--toolsets web`) | The `.git` file ends its walk for `.hermes.md` and the `AGENTS.md` chain; it reads `CLAUDE.md` and `.cursorrules` from the call's directory alone. A seeded `config.yaml` turns off the coding brief a project marker within six levels above would switch on, the title request and memory |
 | `pi` | none — its built-in set has no web tool (`--no-tools`) | `--no-context-files`, because its `AGENTS.md` / `CLAUDE.md` walk goes up to `/` and ignores `.git`; `--no-approve` pins project trust to none; `--no-extensions`, `--no-skills` and the other discovery switches |
 
@@ -915,7 +917,7 @@ Where the loop runs, what else it may touch and how long it lives are the
 | How it reaches the seat's tools | over HTTP, the [MCP bridge](#the-tool-bridge) | a stdio relay into a unix socket this process serves for the run alone ([below](#the-seats-tools-as-one-mcp-server)); no listener |
 | Who decides each call | the bridge: grant, skill guard, fence, order and the run's end, per call; the rounds are the harness's alone | the phase's tool loop: grant, skill guard, fence, budget, round cap, terminator, a person's note ([every gate](#every-call-passes-the-phases-gates)) |
 | Lifetime | **detached** — outlives the turn, resumes it later | the turn's own: the phase starts a run, ends it when needed, and starts the next |
-| Needs | a sign-in *plus* a harness runner for the harness (`claude-code`, `opencode`, `gemini-cli` or `qwen-code`), `providers.sandbox` and a bridge the box can reach | a sign-in on this host, and a tool route in the harness's profile (`mcp`) |
+| Needs | a sign-in *plus* a harness runner for the harness (`claude-code`, `gemini-cli`, `qwen-code`, `opencode` or `kimi-code`), `providers.sandbox` and a bridge the box can reach | a sign-in on this host, and a tool route in the harness's profile (`mcp`) |
 
 **The executor is the vendor's whole harness**: a real shell, editor and
 checkout. **Every other phase is the turn's own**: every call passes the phase's
@@ -927,7 +929,7 @@ So one entry serves both: a seat whose `llm` names a `claude-code` entry runs
 its executor as Claude Code in a box and its reviewer, workers and side passes
 as Claude Code on this host. A harness with no harness runner serves the second
 column alone — a launch passes over it — and a seat whose executor chain holds
-no `claude-code`, `opencode`, `gemini-cli` or `qwen-code` entry is refused on the write.
+no `claude-code`, `gemini-cli`, `qwen-code`, `opencode` or `kimi-code` entry is refused on the write.
 
 ### The executor's run in a box
 
@@ -1104,7 +1106,7 @@ instead the seat's system prompt, which tells it the run ends with that call.
 Its rounds are uncapped unless the seat's `role.sandbox.max_turns`, else
 `providers.sandbox.default_max_turns`, sets a turn cap, which becomes the
 harness's own on every runner — Claude Code's `--max-turns`, Gemini CLI's `model.maxSessionTurns`, OpenCode's agent
-`steps`.
+`steps`, Kimi Code's steps a turn.
 #### The tool bridge
 
 The seat's tools cannot be shipped into the box: most are MCP children
@@ -1237,7 +1239,7 @@ run's resume would pay for it as its own. How such a call is listed:
   refused session's), and dropped where the next run starts a new round ([A call
   that ends after its job's
   relaunch](code-sandbox.md#a-relaunch-continues-the-turns-session)).
-- One its harness cancelled (Claude Code and OpenCode cancel a call at its
+- One its harness cancelled (Claude Code, OpenCode and Kimi Code cancel a call at its
   server's timeout, which the box is handed as the bridge's own bound, and the
   model reads it as timed out) or hung up on (which the next progress notification
   finds) is listed as its run's own, marked as one nobody waited for. Its job is
@@ -1360,7 +1362,7 @@ from a file a *variable* names, a channel `--help` never shows.
 | `copilot` | 1.0.103 | — none in prompt mode | discovered file, read always: `AGENTS.md` in the call's directory | its environment block, naming the call's directory |
 | `grok` | 1.0.70 | flag, text on argv: `--system-prompt-override` | flag, text on argv: `--rules`, at the very end of the vendor's prompt | none |
 | `muse-code` | 1.0.3, 1.4.13, 1.4.25 | — none per call | variable, file: `TBH_EVAL_APPEND_SYSTEM_PROMPT_FILE`, undocumented | none |
-| `kimi-code` | 0.42.0, 2.3.1 | flag, agent file: `--agent-file`, body `{system}` | flag, agent file: `--agent-file`, body `{system}` then `${base_prompt}` | none — the vendor's per-call text follows the engine's |
+| `kimi-code` | 2.7.2 | flag, agent file: `--agent-file`, body `{system}` | flag, agent file: `--agent-file`, body `{system}` then `${base_prompt}` | none: the vendor's per-call text follows the engine's |
 | `hermes` | 0.21.5 | — | — | — |
 | `pi` | 0.85.1, 1.4.0 | flag, file: `--system-prompt` | flag, file: `--append-system-prompt` | none; the working directory follows the engine's text, in the same block |
 
@@ -1780,7 +1782,7 @@ The switch is `OPENCODE_CONFIG_PROJECT_DISABLE` because OpenCode 2 reads `OPENCO
 
 **Web is the one local tool that stays on.** A seat must not have less reach than the same harness at a terminal, and a fetch is a read that never gates a delivery. Where a vendor gates web tools behind an approval a headless run cannot answer, the profile allows them explicitly (`--allowedTools WebFetch WebSearch`, Copilot's `--allow-tool`, the `allow` rule in Gemini CLI's policy, without which a headless Gemini run had no `web_fetch` at all); where a vendor ships its fetch off, the profile switches it on (grok's `GROK_WEB_FETCH=1`); where its default search answers from an offline index, the profile switches it live (Codex's `web_search="live"`). What the harness reads on the web is not in the event stream: an accepted cost. A seat on a harness with no web tool reaches the web through the MCP servers you configure.
 
-**The web can be turned off, and a helper's run always is.** Web stays on for every seat unless its entry sets `overrides: {web_tools: denied}`. A helper's run of an entry ([Ask Crewlet's](../getting-started/configuration.md#ask-crewlet)) is built with it denied whatever the entry says, so its model reads only what the engine's guard handed it while a seat on the same entry keeps its web. The profile's `web_denial` says what the harness runs with instead:
+**The web can be turned off, and a helper's run always is.** Web stays on for every seat unless its entry sets `overrides: {web_tools: denied}`, which the seat's executor honours too ([each runner's way](code-sandbox.md)). A helper's run of an entry ([Ask Crewlet's](../getting-started/configuration.md#ask-crewlet)) is built with it denied whatever the entry says, so its model reads only what the engine's guard handed it while a seat on the same entry keeps its web. The profile's `web_denial` says what the harness runs with instead:
 
 | Profile | How web is turned off | Measured |
 |---|---|---|
@@ -1887,11 +1889,9 @@ Measured per harness against the installed binary, through the engine's own code
 
 **Where a harness departs from what the gates assume:**
 
-- **Arguments a harness repairs or replaces.** Most harnesses check the model's arguments against the tool's schema before calling the server and answer the model themselves on a mismatch.
+- **Arguments a harness repairs or replaces.** Most harnesses check the model's arguments against the tool's schema before calling the server and answer the model themselves on a mismatch. Kimi Code refuses arguments that do not parse or are not an object, and its record keeps them as written.
   - Claude Code hands the server an array's elements as an object (`["a","b"]` arrives as `{"0":"a","1":"b"}`); its record keeps the array, so the engine answers that call as one whose arguments did not parse.
-  - Qwen Code repairs malformed arguments (an unterminated object is closed) and records the repair, so the repaired call runs.
-  - Kimi Code reads unparseable arguments as `{}`, also in its record, and calls the server only where `{}` fits the schema (a tool with no required argument).
-  - On those last two, a tool's own validation is what stands between a model's typo and a write.
+  - Qwen Code repairs malformed arguments (an unterminated object is closed) and records the repair, so the repaired call runs: there a tool's own validation is what stands between a model's typo and a write.
   - Muse Code instead asks its model again up to eight times, Hermes five times before it exits 2.
 - **A name a harness rewrites.** Hermes runs a close listed tool in place of a name its list does not hold. The engine refuses such a call, because Hermes's record (the file its hook writes) carries the name the model asked for. Grok refuses an unqualified name itself.
 - **No cap of its own.** Muse Code and Hermes have none a headless run can set (measured against a stand-in: over a thousand requests in ninety seconds on Muse Code, 948 in two minutes on Hermes), so the phase's round cap ends a run that will not stop; OpenCode's step limit ends a run like an answer.
@@ -2461,7 +2461,7 @@ would make its model calls with the agent's tool credential. A harness that read
 its key from one variable of its own declares it as `api_key_env` rather than
 `env_sign_in`, and the engine owns that variable: `kimi-code`'s key goes in
 `KIMI_MODEL_API_KEY` beside its model in `KIMI_MODEL_NAME` (a model of the
-harness's own, measured on 2.3.1 and 2.7.2), set from `auth.api_key` and `model`
+harness's own, measured on 2.7.2), set from `auth.api_key` and `model`
 under `auth.mode: api-key`, and refused in `env`.
 
 ### 7. A cloud provider or gateway (`auth.mode: env`)
@@ -2701,7 +2701,7 @@ sidesteps all of this.
 | `copilot` | `copilot` | GitHub Copilot seat, or a GitHub token (`COPILOT_GITHUB_TOKEN`) | Prompt on stdin. Authenticates with a GitHub token: `COPILOT_GITHUB_TOKEN` (first of the three variables it reads, ahead of `GH_TOKEN` and `GITHUB_TOKEN`) is its `api_key_env`, reached via `auth.mode: api-key` or `inherit-env`, never forwarded silently. Its login is the system keychain's, or, where none answers and you agree at `crewlet llm login`, `copilotTokens` in `.copilot/config.json`; a keychain login does not reach a seat. No channel replaces its prompt, so every call keeps it, and the engine's text goes in an `AGENTS.md` in the call's directory. Web tools only (`--available-tools`); real token counts from `--usage-output-file`. |
 | `grok` | `grok` | xAI, or `XAI_API_KEY` | **xAI's own harness** from [x.ai/cli](https://x.ai/cli), not the same-named npm package. Accepts `XAI_API_KEY` (named by its signed-out message) through `auth.mode: api-key`. Prompt in a file (`--prompt-file`); the system prompt on argv on both channels (neither flag takes a path): `--rules` for a seat, which keeps the harness's prompt, `--system-prompt-override` for a side pass. Web tools only: `--tools web_search,web_fetch` with every other built-in denied, `GROK_WEB_FETCH=1` and `--allow WebFetch`. A run with tools gets the server in an agent file, `--deny Read(**)` keeping file reads off, and is read from `--output-format streaming-json`; a text function's tokens are estimated. |
 | `muse-code` | `muse` | Muse Code subscription (Everyday / High / Power Usage), or pay-as-you-go | `muse login` / `muse logout`; the browser sign-in stores `~/.config/muse/auth.json`, which `-from-host` adopts. **No status command.** No headless token: `META_API_KEY` is a *metered* Model API key, via `auth.mode: api-key`. Runs `muse exec --json --trust-workspace` in the call's own directory, denies tools through a seeded `run.toolset`, seeds `telemetry.enabled: false`, and puts the prompt in a **file**, not argv. Token counts once, for the whole run (`run.usage`). A seat's and a side pass's system prompt alike follow the harness's own instructions, through `TBH_EVAL_APPEND_SYSTEM_PROMPT_FILE`, an undocumented variable ([Which harnesses actually have one](#which-harnesses-actually-have-one)). Written for 1.4.25: 1.4.13 admits six subagent tools past the toolset in a trusted run, and 1.0.x refuses `--disable-reminders`. |
-| `kimi-code` | `kimi` | Kimi Code OAuth (Moonshot), or a Moonshot API key (`KIMI_MODEL_API_KEY`) | **MoonshotAI's own harness**, `@moonshot-ai/kimi-code`, not the unscoped `kimi-code` npm package, which wraps Claude Code behind a proxy and installs its own `kimi` (a `1.0.x` version is that one). `kimi login` runs a device-code flow; no logout or status subcommand. Under `auth.mode: api-key` the key goes in `KIMI_MODEL_API_KEY` and the entry's `model` in `KIMI_MODEL_NAME`, a model of the harness's own that refuses `--model` beside it; `KIMI_MODEL_BASE_URL` and `KIMI_MODEL_PROVIDER_TYPE` in `env` name another endpoint. Runs `--output-format stream-json`: the default `text` prefixes every line with `• ` and re-wraps it, so no profile can read an answer from it. Tools are denied in the **agent file** that also carries the system prompt (measured: 25 tools down to `FetchURL`, plus `WebSearch` where a Moonshot search service is configured). A seat's agent file puts its text ahead of Kimi's own prompt (`${base_prompt}`) and lists the seat's tools (`mcp__crewlet__*`); a side pass's replaces it. A text function's counts are estimated; a run with tools reads them from its wire log. |
+| `kimi-code` | `kimi` | Kimi Code OAuth (Moonshot), or a Moonshot API key (`KIMI_MODEL_API_KEY`) | **MoonshotAI's own harness**, `@moonshot-ai/kimi-code`, not the unscoped `kimi-code` npm package, which wraps Claude Code behind a proxy and installs its own `kimi` (a `1.0.x` version is that one). `kimi login` runs a device-code flow; no logout or status subcommand. Under `auth.mode: api-key` the key goes in `KIMI_MODEL_API_KEY` and the entry's `model` in `KIMI_MODEL_NAME`, a model of the harness's own that refuses `--model` beside it; `KIMI_MODEL_BASE_URL` and `KIMI_MODEL_PROVIDER_TYPE` in `env` name another endpoint. Runs `--output-format stream-json`: the default `text` prefixes every line with `• ` and re-wraps it, so no profile can read an answer from it. Tools are denied in the **agent file** that also carries the system prompt (measured: 25 tools down to `FetchURL`, plus `WebSearch` where a Moonshot search service is configured). A seat's agent file puts its text ahead of Kimi's own prompt (`${base_prompt}`) and lists the seat's tools (`mcp__crewlet__*`); a side pass's replaces it. A text function's counts are estimated; a run with tools reads them from its wire log. Runs a seat's executor on 2.7.2, through `kimi web` ([its runner](code-sandbox.md#kimi-code)). |
 | `hermes` | `hermes` | Nous Portal, or any of 30+ providers it fronts | `hermes auth` for the credential wizard, `hermes status` for state; `hermes auth logout` needs a provider name, so no logout is declared. Runs `hermes -z`, whose contract is the final response text only, so tokens come from `--usage-file`. Tools are denied with `--toolsets web` on argv, replacing the run's enabled set; `--toolsets web,crewlet` on a run with tools, whose server is declared in the home's `config.yaml` with the run's relay and socket in its environment. **`-p` selects a profile on this harness**, not a prompt. No system-prompt channel: the seat's text rides the transcript, under the vendor's prompt. A provider key (`OPENROUTER_API_KEY`, …) goes in `env`, and `doctor` counts it ([A provider key in `env`](#6-a-provider-key-in-env-opencode-hermes-pi)). |
 | `pi` | `pi` | Claude Pro/Max, ChatGPT Plus/Pro, GitHub Copilot — whichever it is logged into | `@earendil-works/pi-coding-agent`. **No headless login**: `/login` is a slash command, so `crewlet llm login` starts its TUI in the credential directory and you type it there. `--no-tools` denies every tool, honest here because its built-in set has no web tool; a run with tools loads the seat's server as an extension and offers only its tools (`--tools mcp__crewlet__*`). Prompt on stdin; system prompt in a file on both channels: `--append-system-prompt` for a seat, which keeps pi's prompt, `--system-prompt` for a side pass. `--no-context-files`, because its `AGENTS.md` walk goes up to `/` past the `.git` marker. A text function's tokens are estimated, a run with tools reads them from its session file ([Token accounting](#token-accounting)). A provider key goes in `env` under that provider's own variable, and `doctor` counts it. |
 | `custom` | — | — | Ships nothing; declare everything under `overrides`. |
@@ -2796,9 +2796,7 @@ model writes classifies anything, failed run or not:
 marker_scope: stderr        # or answer-and-stderr (the default), or events
 ```
 
-Two profiles narrow it, each on a measurement: `kimi-code` puts its
-classification on stderr with the answer stream carrying only `role: meta`
-lines, and `pi` leaves stdout **empty** and writes `<status>: <the provider's JSON>` to stderr. Narrow it only where the vendor makes the answer an
+One profile narrows it, on a measurement: `pi` leaves stdout **empty** and writes `<status>: <the provider's JSON>` to stderr. Narrow it only where the vendor makes the answer an
 impossible place for the report; a wrong narrowing silently stops recognising
 spent plans. `hermes` stays on the default: measured on 0.21.5, a refused key
 and a spent plan print on **stdout** with exit 2, and only a run that never
@@ -2914,7 +2912,7 @@ it runs on.
 | `logout_args` | The command revoking the login. |
 | `stdin_login` | `{args, stdin_template, password_env}`: a real credential login, where the harness has one. |
 | `credential_store` | `{export_args, import_args}`: a login the harness keeps in a database of its own, moved as the document its export prints (stdout) and its import reads (stdin). Both, and never `{file}`. |
-| `limit_events` | The harness's own structured limit report, matched before any sentinel: `match` (conditions on the event, naming the `event_type_path` discriminator and at least one field beside it), `said_path` (the vendor's sentence), `reset_separator`/`reset_unit` (the reset in that sentence) and `in`. On stdout by default, `jsonl` output only; `in: record` reads it from the file `requests` names instead, on every run, a text function's included, but only where the harness itself failed the run (a process of the run can write that file), its `match` naming the record's event type and a field beside it (Kimi Code 2.7 says how a run ended only on its wire log's `turn.ended`). |
+| `limit_events` | The harness's own structured limit report, matched before any sentinel: `match` (conditions on the event, naming the `event_type_path` discriminator and at least one field beside it), `said_path` (the vendor's sentence), `reset_separator`/`reset_unit` (the reset in that sentence) and `in`. On stdout by default, `jsonl` output only; `in: record` reads it from the file `requests` names instead, on every run, a text function's included, but only where the harness itself failed the run (a process of the run can write that file), its `match` naming the record's event type and a field beside it (Kimi Code 2.7.2 says how a run ended only on its wire log's `turn.ended`). |
 | `limit_markers` | Sentences recognising a spent plan; see above. Each may carry `reset_separator` and `reset_unit` (`epoch`, `seconds` or `clock`). |
 | `auth_markers` | Sentences recognising an expired login. Each may carry `meaning`: `refused` (the default, the vendor turned the credential down) or `unread` (the harness did not use the credential it was handed, as Claude Code says "Not logged in" of a token with a space inside). Only the words a person is shown depend on it; the first marker that matches, in order, names the meaning. |
 | `auth_events` | The harness's own structured report of a refused sign-in, read before every limit report and sentinel: `match` (conditions on the event, naming the `event_type_path` discriminator and at least one field beside it), `said_path` (the vendor's sentence) and `in`, as for `limit_events`. On stdout, `jsonl` output only. Claude Code's are its result event with `api_error_status: 401` or `403` and its `system` event of subtype `api_retry` with `error: authentication_failed`. |
@@ -3187,8 +3185,8 @@ executor      : seats: swe, qa
 ```
 
 The **seats** line is which agent seats' executor chains hold this entry, resolved as the launch
-resolves them. The **runner** line is whether this build can drive that harness as a harness: the
-runners are `claude-code`, `gemini-cli`, `opencode` and `qwen-code`, and a member naming any other harness is skipped at
+resolves them. The **runner** line is whether this build can drive that harness as a harness: there
+are five runners, `claude-code`, `gemini-cli`, `qwen-code`, `opencode` and `kimi-code`, and a member naming any other harness is skipped at
 launch rather than faulted (it still serves that seat's text calls). The **tool bridge** line is
 where the run's box dials the seat's tools, which turns on the entry's cell: a `direct` box dials
 the node's own listener on loopback where the node binds `api.port`, whatever its roles, and
@@ -3333,7 +3331,7 @@ skips all three and says so on each line.
   `crewlet llm doctor` checks all of it ([Operating it](#operating-it)).
 - **Code work is the executor's run.** A seat's [code sandbox](code-sandbox.md) work is its
   executor's own run, on the entry the launch picks from its `llm` chain, running *that entry's own
-  harness*, so only a `claude-code`, `opencode`, `gemini-cli` or `qwen-code` entry can do it. On any backend including remote
+  harness*, so only a `claude-code`, `gemini-cli`, `qwen-code`, `opencode` or `kimi-code` entry can do it. On any backend including remote
   E2B, what travels into the box is the entry's `env` (a gateway's address, a cloud provider's
   switch, `opencode`'s [provider key](#6-a-provider-key-in-env-opencode-hermes-pi)) and what signs
   the harness in: a headless token (`crewlet llm login <key>
@@ -3345,8 +3343,8 @@ skips all three and says so on each line.
   [local cell](code-sandbox.md#local-sandboxes) (`providers.sandbox.local` plus `run_in: direct` or
   `container`), which is seeded with the login and, when the box closes, writes back one its run
   refreshed, only while the shared login still holds what the box was seeded with, by the same
-  compare-and-swap a seat's refresh takes. A seat's `llm` points at a `claude-code`, `opencode`, `gemini-cli` or `qwen-code`
-  entry; any other harness (Codex, Kimi Code, `hermes`, `pi`) serves its reviewer,
+  compare-and-swap a seat's refresh takes. A seat's `llm` points at a `claude-code`, `gemini-cli`, `qwen-code`, `opencode` or `kimi-code`
+  entry; any other harness (Codex, `hermes`, `pi`) serves its reviewer,
   workers and side passes; see [Code Sandbox](code-sandbox.md#failure-modes).
 - **No per-call sampling, effort or output cap.** Each is the harness's own configuration of its
   model ([What an entry does not set](#what-an-entry-does-not-set)).
