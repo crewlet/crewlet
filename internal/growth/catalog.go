@@ -102,20 +102,22 @@ type Change struct {
 func Classify(op Operation, changes []Change) Class { return ClassifyIn(op, changes, nil) }
 
 // ClassifyIn is [Classify] with the target's states as holds reads them: the
-// first of op's States that holds replaces its class, and a field's While
-// lowers it. A nil holds holds no state, the stricter reading.
+// first of op's States that holds replaces its class, the class of every field
+// no rule names too, and a field's While lowers it. A nil holds holds no
+// state, the stricter reading.
 func ClassifyIn(op Operation, changes []Change, holds func(state string) bool) Class {
 	in := func(state string) bool { return holds != nil && holds(state) }
 	base := op.Class
-	if i := slices.IndexFunc(op.States, func(s StateRule) bool { return in(s.When) }); i >= 0 {
-		base = op.States[i].Class
+	state := slices.IndexFunc(op.States, func(s StateRule) bool { return in(s.When) })
+	if state >= 0 {
+		base = op.States[state].Class
 	}
 	if len(changes) == 0 || len(op.Fields) == 0 {
 		return base
 	}
 	unruled := base
 	for _, r := range op.Fields {
-		if r.Class.Rank() > unruled.Rank() {
+		if state < 0 && r.Class.Rank() > unruled.Rank() {
 			unruled = r.Class
 		}
 	}
