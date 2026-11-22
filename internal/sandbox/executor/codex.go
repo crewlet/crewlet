@@ -147,6 +147,7 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 	line(`thread() { t=$(head -n 1 %s 2> /dev/null | sed -n 's/^{"type": *"thread.started", *"thread_id": *"\([0-9A-Za-z-]*\)"}$/\1/p'); [ -n "$t" ] || return 1; tid=$t; printf '%%s\n' "$tid" > %s && mv -f %s %s && %s; }`,
 		stream, threadNext, threadNext, thread, reportSession(paths, "tid"))
 	b.WriteString(codexFinish(paths))
+	b.WriteString(codexAborted(paths))
 	// quit: a teardown signal's end, as OpenCode's ([openCodeScript]): exec
 	// first, then everything beside it, then the session packed.
 	line(`quit() { trap '' USR1; trap - EXIT TERM INT HUP; end "$harness"; harness=; end "$tpid"; tpid=; thread || :; stop; finish; exit "$1"; }`)
@@ -207,13 +208,16 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 		line(`end "$gpid"; gpid=`)
 		line(`if [ -e %s ]; then printf '{"type":"%s"}\n'; code=1; fi`, q(paths.CodexHelperLost()), codexHelperLostEvent)
 	}
-	if limit := req.Limits.MaxTurns; limit > 0 {
-		line(`if [ -s %s ]; then printf '{"type":"%s","rounds":%d}\n'; code=1; fi`,
-			q(paths.CodexCapFired()), codexCappedEvent, limit)
-	}
 	// The watcher stopped before the last read, so no two writers race on the
 	// report's staging file.
 	line(`end "$tpid"; tpid=; thread || :`)
+	if limit := req.Limits.MaxTurns; limit > 0 {
+		// THE CAP ENDED THE RUN only where the helper marked it AND the turn
+		// was aborted by an interrupt: a turn whose Nth response was its final
+		// answer completed, marker or not, as Claude Code's --max-turns lets it.
+		line(`if [ -s %s ] && aborted; then printf '{"type":"%s","rounds":%d}\n'; code=1; fi`,
+			q(paths.CodexCapFired()), codexCappedEvent, limit)
+	}
 	line(`stop`)
 	line(`finish`)
 	line(`trap - EXIT TERM INT HUP`)
@@ -258,11 +262,13 @@ func codexFreshRoutes(req sandbox.RunRequest, paths Paths) string {
 	return b.String()
 }
 
-// codexCappedEvent is the line a run's script adds to its stream where the
-// note helper marked the turn it interrupted at the run's round cap
-// ([Paths.CodexCapFired]): read as [sandbox.Result.RoundCapped] only beside the
-// rollout's turn_aborted with reason interrupted, so no other interrupt is
-// taken for the cap.
+// codexCappedEvent is the line a run's script adds to its stream, exiting 1,
+// where the note helper marked the run's round cap ([Paths.CodexCapFired])
+// AND the rollout lines the run appended record its turn aborted as
+// interrupted (the script's `aborted`): the cap is model responses per turn,
+// and a turn whose last counted response was its final answer completed.
+// Read as [sandbox.Result.RoundCapped] only beside that turn_aborted line
+// too, so no other interrupt is taken for the cap.
 const codexCappedEvent = "crewlet.round_cap"
 
 // codexHelperLostEvent is the line a run's script adds to its stream where
@@ -281,9 +287,10 @@ func codexHelped(req sandbox.RunRequest) bool {
 // run, and the guard that fails the run closed where the helper ends while
 // Codex still works: the guard marks it lost ([Paths.CodexHelperLost]) and
 // interrupts the turn in flight with the helper's -interrupt-once, or, where
-// that cannot tell whether a turn runs (exit 1), stops the app-server. Every route
-// reaches the helper's environment alone, never argv nor Codex's, since each
-// carries the job's token; the helper's errors are the run's.
+// that interrupted none (exit 3: the next turn would run uncapped) or cannot
+// tell (exit 1), stops the app-server. Every route reaches the helper's
+// environment alone, never argv nor Codex's, since each carries the job's
+// token; the helper's errors are the run's.
 func codexStartHelper(req sandbox.RunRequest, paths Paths) string {
 	q := sandbox.ShellQuote
 	helper, sock, thread := q(paths.CodexNoteHelper()), q(paths.CodexSocket()), q(paths.CodexThread())
@@ -313,6 +320,15 @@ gpid=$!
 // a few of a model's shortest responses, so a run outlives its helper by at
 // most that before its turn is interrupted.
 const codexGuardPoll = "0.5"
+
+// codexAborted defines the script's `aborted`: true where the rollout lines
+// the run appended (past before, of the thread reported, else the one
+// continued) record a turn aborted as interrupted, as the result reads them
+// ([codexEvents.keepRollout]).
+func codexAborted(paths Paths) string {
+	return fmt.Sprintf(`aborted() { as=${tid:-$sid}; [ -n "$as" ] || return 1; af=$(find %s -type f -name "rollout-*-$as.jsonl" 2> /dev/null | LC_ALL=C sort | head -n 1); [ -n "$af" ] && tail -n +$((before + 1)) "$af" | grep -E '"type": *"turn_aborted"' | grep -qE '"reason": *"interrupted"'; }`+"\n",
+		sandbox.ShellQuote(paths.CodexSessions()))
+}
 
 // codexFinish defines the script's `finish`, run once Codex and everything
 // beside it have stopped, on the run's own end and a teardown's alike: the

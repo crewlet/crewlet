@@ -553,6 +553,74 @@ func TestACodexRunEndsAtItsRoundCapAndItsSessionGoesOn(t *testing.T) {
 	}
 }
 
+// A CODEX RUN WHOSE NTH RESPONSE IS ITS FINAL ANSWER COMPLETES, as Claude
+// Code's --max-turns lets one: the cap counts model responses per turn, and
+// the helper marks it and interrupts at the Nth, but the turn had completed,
+// so Codex interrupted nothing and the rollout records no turn aborted. The
+// run succeeds, exits 0 and is no round cap.
+//
+// Mutation: read the cap off the helper's marker alone in the script or the
+// result, and this goes red.
+func TestACodexRunWhoseNthResponseIsItsFinalAnswerCompletes(t *testing.T) {
+	t.Parallel()
+	runner, box, record := codexBox(t, "0.171.0")
+	for name, body := range map[string]string{"final": "", "steps": "2"} {
+		if err := os.WriteFile(filepath.Join(record, name), []byte(body), 0o600); err != nil {
+			t.Fatalf("arm the stand-in: %v", err)
+		}
+	}
+	p := executor.PathsFor(box)
+	_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go", Limits: sandbox.Limits{MaxTurns: 2}})
+	if len(recorded(t, record, "interrupt-refused")) != 1 || boxFile(t, box, p.CodexCapFired()) == "" {
+		t.Fatalf("the helper did not mark its cap and ask the ended turn's interrupt:\n%s", boxFile(t, box, p.Err()))
+	}
+	if !res.Success || res.RoundCapped || res.HarnessCutOff || res.Text != "done" {
+		t.Errorf("a run that answered at its Nth response collects success %v, capped %v, cut off %v, %q (%q)",
+			res.Success, res.RoundCapped, res.HarnessCutOff, res.Text, res.Error)
+	}
+}
+
+// A CODEX RUN WHOSE HELPER ENDS BEFORE ITS TURN STARTS FAILS AT ONCE: with the
+// thread reported but no turn in flight, the guard's interrupt cuts nothing
+// short, so it stops the app-server rather than let a turn run uncapped, and
+// the run fails as one whose helper ended, its turn never interrupted.
+//
+// Mutation: take -interrupt-once's "no turn in flight" for a turn stopped, or
+// stop the app-server only where the helper cannot tell, and the run never
+// ends.
+func TestACodexRunWhoseHelperEndsBeforeItsTurnStartsFailsAtOnce(t *testing.T) {
+	t.Parallel()
+	runner, box, record := codexBox(t, "0.171.0")
+	for _, name := range []string{"block", "idle"} {
+		if err := os.WriteFile(filepath.Join(record, name), nil, 0o600); err != nil {
+			t.Fatalf("arm the stand-in: %v", err)
+		}
+	}
+	p := executor.PathsFor(box)
+	handle, err := runner.Start(t.Context(), box, sandbox.RunRequest{Brief: "go", Limits: sandbox.Limits{MaxTurns: 50}})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitForFile(t, filepath.Join(record, "working"), "the stand-in to work")
+	waitForFile(t, p.CodexThread(), "the thread to be reported")
+	killProcess(t, p.CodexNoteHelper()+" -adapter")
+	awaitOver(t, runner, box, handle, 15*time.Second, "the helper was killed before its turn started")
+	res, err := runner.Collect(t.Context(), box, handle, queue.NewAnswerBudget(nil))
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if res.Success || res.RoundCapped || !strings.Contains(res.Error, "note helper ended") {
+		t.Errorf("a run whose helper ended before its turn collects success %v, capped %v, %q", res.Success,
+			res.RoundCapped, res.Error)
+	}
+	if !slices.Contains(recorded(t, record, "order"), "server") {
+		t.Error("the guard left the app-server running")
+	}
+	if _, err := os.Stat(filepath.Join(record, "interrupted")); err == nil {
+		t.Error("the guard interrupted a turn the stand-in never ran")
+	}
+}
+
 // A CODEX RUN WHOSE HELPER ENDS UNDER IT FAILS CLOSED: its guard interrupts the
 // turn in flight and the run fails, never going on past a cap no helper holds,
 // and never reads as capped.

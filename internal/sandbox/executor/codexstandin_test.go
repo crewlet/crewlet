@@ -76,10 +76,17 @@ func serveCodexStandIn(socket, record string) int {
 // answerCodexStandIn answers one client: initialize, thread/resume and
 // thread/turns/list with a turn in flight, then as many token-usage updates
 // as record/steps says (each a model response); turn/steer, recorded to
-// record/steers; and turn/interrupt, recorded to record/interrupted.
+// record/steers; and turn/interrupt, recorded to record/interrupted. Where
+// record/idle exists no turn is in flight, and where record/final exists the
+// turn completed before the interrupt reached it: either way an interrupt is
+// refused as Codex refuses one of no turn, and recorded to
+// record/interrupt-refused instead.
 func answerCodexStandIn(ws *websocket.Conn, record string) {
 	dec := json.NewDecoder(ws)
 	thread := ""
+	_, idleErr := os.Stat(filepath.Join(record, "idle"))
+	_, finalErr := os.Stat(filepath.Join(record, "final"))
+	idle, final := idleErr == nil, finalErr == nil
 	for {
 		var call struct {
 			ID     json.RawMessage `json:"id"`
@@ -93,7 +100,11 @@ func answerCodexStandIn(ws *websocket.Conn, record string) {
 			continue
 		}
 		var result any = map[string]any{}
+		var refusal map[string]any
 		turns := []map[string]string{{"id": codexStandInTurn, "status": "inProgress"}}
+		if idle {
+			turns[0]["status"] = "completed"
+		}
 		switch call.Method {
 		case "thread/resume":
 			var p struct {
@@ -108,9 +119,19 @@ func answerCodexStandIn(ws *websocket.Conn, record string) {
 			result = map[string]string{"turnId": codexStandInTurn}
 			standInNote(record, "steers", call.Params)
 		case "turn/interrupt":
+			if idle || final {
+				standInNote(record, "interrupt-refused", call.Params)
+				refusal = map[string]any{"code": -32600, "message": "no active turn to interrupt"}
+				break
+			}
 			standInNote(record, "interrupted", call.Params)
 		}
-		answer, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": call.ID, "result": result})
+		reply := map[string]any{"jsonrpc": "2.0", "id": call.ID, "result": result}
+		if refusal != nil {
+			delete(reply, "result")
+			reply["error"] = refusal
+		}
+		answer, _ := json.Marshal(reply)
 		if _, err := ws.Write(answer); err != nil {
 			return
 		}
@@ -119,7 +140,7 @@ func answerCodexStandIn(ws *websocket.Conn, record string) {
 		}
 		raw, _ := os.ReadFile(filepath.Join(record, "steps")) //nolint:gosec // the case's own file
 		steps, _ := strconv.Atoi(strings.TrimSpace(string(raw)))
-		if steps == 0 {
+		if steps == 0 || idle {
 			continue
 		}
 		// THE TURN STARTED FIRST, as Codex notifies a subscribed client, so
@@ -150,9 +171,12 @@ const codexStandInThread = "019a1f62-fbda-7aa2-af57-6c0abeb8e50b"
 // ending in the answer `done` on the thread it continues or
 // [codexStandInThread], appends its rollout lines (one turn of 300 input, 200
 // cached, 40 out, a window of 258400 and two plan windows) to the thread's
-// rollout, and, where record/wait-steer exists, first waits for a steer; where
-// record/block exists, it then works until its turn is interrupted (exit 1,
-// the rollout's turn_aborted written) or SIGTERM (`exec` in record/order).
+// rollout, and, where record/wait-steer exists, first waits for a steer, and
+// where record/final exists for an interrupt the app-server refused, the
+// turn's last response its answer; where record/block exists, it then works
+// until its turn is interrupted (exit 1, the rollout's turn_aborted written),
+// its app-server stops (exit 1, as exec does when its server goes) or SIGTERM
+// (`exec` in record/order).
 func codexStandIn(t *testing.T, box sandbox.Sandbox, release, record string) {
 	t.Helper()
 	bin, err := os.Executable()
@@ -178,12 +202,13 @@ exec)
   tid=%[6]s; [ "$5" != resume ] || tid=$6
   printf '{"type":"thread.started","thread_id":"%%s"}\n{"type":"turn.started"}\n' "$tid"
   if [ -e "$rec/wait-steer" ]; then i=0; until [ -s "$rec/steers" ] || [ "$i" -ge 200 ]; do sleep 0.05; i=$((i+1)); done; fi
+  if [ -e "$rec/final" ]; then i=0; until [ -s "$rec/interrupt-refused" ] || [ "$i" -ge 400 ]; do sleep 0.05; i=$((i+1)); done; fi
   f=$(find "$CODEX_HOME/sessions" -name "rollout-*-$tid.jsonl" | head -n 1)
   [ -n "$f" ] || { mkdir -p "$CODEX_HOME/sessions/2026/11/22"; f="$CODEX_HOME/sessions/2026/11/22/rollout-2026-11-22T09-00-00-$tid.jsonl"; }
   cat >> "$f" <<'EOF'
 %[7]s
 EOF
-  if [ -e "$rec/block" ]; then trap 'echo exec >> "$rec/order"; exit 143' TERM; : > "$rec/working"; until [ -s "$rec/interrupted" ]; do sleep 0.05; done; printf '%%s\n' '{"timestamp":"2026-11-22T09:00:03.000Z","ordinal":93,"type":"event_msg","payload":{"type":"turn_aborted","turn_id":"t9","reason":"interrupted"}}' >> "$f"; exit 1; fi
+  if [ -e "$rec/block" ]; then trap 'echo exec >> "$rec/order"; exit 143' TERM; : > "$rec/working"; until [ -s "$rec/interrupted" ] || grep -qx server "$rec/order" 2> /dev/null; do sleep 0.05; done; [ ! -s "$rec/interrupted" ] || printf '%%s\n' '{"timestamp":"2026-11-22T09:00:03.000Z","ordinal":93,"type":"event_msg","payload":{"type":"turn_aborted","turn_id":"t9","reason":"interrupted"}}' >> "$f"; exit 1; fi
   printf '%%s\n' '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"done"}}' '{"type":"turn.completed","usage":{"input_tokens":9999,"cached_input_tokens":0,"output_tokens":9999}}'
   exit 0;;
 esac
