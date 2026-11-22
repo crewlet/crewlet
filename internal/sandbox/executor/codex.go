@@ -368,14 +368,14 @@ func (Codex) Events() Decoder { return &codexEvents{} }
 // Parse decodes a whole stream already in hand ([codexEvents]).
 func (Codex) Parse(stdout []byte) sandbox.Result { return decodeAll(&codexEvents{}, stdout) }
 
-// artifacts is what a Codex run leaves in its box beside the session it
+// artifactFiles is what a Codex run leaves in its box beside the session it
 // continues: the configuration with its tokens, the socket, the thread, the
-// helper, its routes and its skills' digests, the server's output.
-//
-//nolint:unparam // the runners' contract (traits.go): Codex leaves no directory
-func (Codex) artifacts(p Paths) (files, dirs []string) {
+// helper, its routes and its skills' digests, the server's output. No
+// directory: its skills sit in CODEX_HOME's own skill root beside any the
+// image installed, and the next Codex run removes the run's ([writeCodexSkills]).
+func (Codex) artifactFiles(p Paths) []string {
 	return []string{p.CodexLiveConfig(), p.CodexConfig(), p.CodexConfigFresh(), p.CodexSocket(),
 		p.CodexCapFired(), p.CodexHelperLost(), p.CodexSkillsURL(), p.CodexSkillsURLFresh(), p.CodexSkillDigests(),
 		p.CodexThread(), p.CodexThread() + ".next", p.CodexNoteHelper(), p.CodexNotesURL(),
-		p.CodexNotesURLFresh(), p.WorkDir() + "/codex-server.log"}, nil
+		p.CodexNotesURLFresh(), p.WorkDir() + "/codex-server.log"}
 }
