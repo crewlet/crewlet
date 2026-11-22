@@ -211,6 +211,10 @@ type Engine struct {
 	setupRunner func() *setup.Runner
 	// metrics is the process's one recorder, from [Options.Metrics].
 	metrics *metrics.Recorder
+	// answerBudget is the node's answer budget, which every payload answerer
+	// it registers and every box collection it makes acquires from
+	// ([queue.AnswerBudget]; answermeter.go). Built once, in [New].
+	answerBudget *queue.AnswerBudget
 
 	// deadLetterLedger is the queue's dead-letter verbs as this node's wake
 	// feeds and operator surface call them, accounting for every entry a
@@ -1646,6 +1650,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		checkTokens:         checkTokens,
 		sessions:            sessions,
 		metrics:             opts.Metrics,
+		answerBudget:        queue.NewAnswerBudget(answerMeter{metrics: opts.Metrics}),
 		deadLetterLedger:    newDeadLetterLedger(backends.Queue, backends.Fleet),
 		objectives:          newObjectives(opts.Metrics),
 		mode:                mode,

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
@@ -90,7 +91,7 @@ func completesOnEveryHarness(t *testing.T, manager *sandbox.Manager, want string
 		if state, err := runner.Poll(t.Context(), box, handle); err != nil || state != sandbox.JobEnded {
 			t.Fatalf("%s: the run is %v (%v), want a run that finishes", cli, state, err)
 		}
-		res, err := runner.Collect(t.Context(), box, handle)
+		res, err := runner.Collect(t.Context(), box, handle, queue.NewAnswerBudget(nil))
 		if err != nil || !res.Success || res.Text != want {
 			t.Fatalf("%s: collected %+v (%v), want a finished run reporting %q", cli, res, err, want)
 		}

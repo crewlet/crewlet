@@ -40,6 +40,7 @@ func (e *Engine) joinBridgeFleet(ctx context.Context, boot *config.Bootstrap) er
 		Fabric: e.backends.Queue, Leases: e.backends.Coord,
 		Node: e.node.ID(), Owner: e.node.Owner(),
 		Keyring:    recordKeyring(boot),
+		Answers:    e.answerBudget,
 		HolderWait: bridgeHolderWaitLeases * leaseTTL(boot),
 	})
 	if err != nil {

@@ -697,6 +697,11 @@ type CoordinatorOptions struct {
 	// measures nothing.
 	Spools SpoolMeter
 
+	// AnswerBudget is the node's answer budget every collection of a run's
+	// box holds its weight of while it reads ([Runner.Collect]), its peers'
+	// payload answers beside. Nil is a budget of this coordinator's own.
+	AnswerBudget *queue.AnswerBudget
+
 	// Now is the clock, injectable for tests.
 	Now func() time.Time
 }
@@ -815,6 +820,8 @@ type Coordinator struct {
 	// spoolRoom is the room every spool of this process shares, in bytes
 	// ([spoolRoomBytes], spoolroom.go).
 	spoolRoom *spoolRoom
+	// answerBudget is the node's answer budget ([CoordinatorOptions.AnswerBudget]).
+	answerBudget *queue.AnswerBudget
 
 	// mainThreadWait bounds reading a job's main thread at its collection
 	// ([MainThreadReadWait], [Coordinator.readMainThread]); verdictWait and
@@ -1084,6 +1091,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 			memos: map[string]*saveMemo{}},
 		sharedPack:   make(chan struct{}, 1),
 		spoolRoom:    newSpoolRoom(opts.Spools),
+		answerBudget: opts.AnswerBudget,
 		relaunchWait: relaunchCaptureWait,
 		holdingsWait: holdingsReadWait,
 		endWait:      JobEndWait,
@@ -1156,6 +1164,9 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		c.taker = newTakerLease(opts.Takers, opts.Incarnation, opts.TakerTTL)
 	}
 	c.sweepSpools()
+	if c.answerBudget == nil {
+		c.answerBudget = queue.NewAnswerBudget(nil)
+	}
 	return c, nil
 }
 
@@ -2145,7 +2156,7 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 			over = c.endJob(ctx, run, box, runner, sawWorking)
 		}
 	}
-	result, err := runner.Collect(ctx, box, run.Handle())
+	result, err := runner.Collect(ctx, box, run.Handle(), c.answerBudget)
 	if err != nil {
 		return Result{}, false, err
 	}

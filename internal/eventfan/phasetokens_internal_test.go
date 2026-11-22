@@ -21,7 +21,7 @@ func spendNode(t *testing.T, b *memory.Broker, id string) (*store.EventLog, queu
 	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), id+".db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	q := memberQueue(t, b)
-	stop, err := Serve(t.Context(), q, id, db.Events())
+	stop, err := Serve(t.Context(), q, id, db.Events(), queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("serve %s: %v", id, err)
 	}

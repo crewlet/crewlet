@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
@@ -78,7 +79,7 @@ func TestAPieceThatIsNotARegularFileDegradesOnlyItself(t *testing.T) {
 			}
 			answered := make(chan collected, 1)
 			go func() {
-				res, err := runner.Collect(t.Context(), box, sandbox.RunHandle{})
+				res, err := runner.Collect(t.Context(), box, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 				answered <- collected{res, err}
 			}()
 			var got collected

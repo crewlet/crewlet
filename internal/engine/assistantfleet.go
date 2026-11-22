@@ -32,7 +32,7 @@ func AssistantFleet(e *Engine) (*live.Fleet, error) {
 	}
 	return live.NewFleet(live.FleetOptions{Node: e.Node().ID(), Broker: e.backends.Queue,
 		Roster: nodeRoster{coord: e.backends.Coord}, Cipher: e.cipher, Frames: wires.frames,
-		Replays: wires.replays, Stops: wires.stops,
+		Replays: wires.replays, Stops: wires.stops, Answers: e.answerBudget,
 		// THE FLEET'S READ BUDGET, the one every scatter a person waits on
 		// is bounded by: a resumed stream waits no longer for the running
 		// node than a history read does.

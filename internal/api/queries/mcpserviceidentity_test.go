@@ -54,14 +54,14 @@ func TestAServiceIdentityIsReadAsItsInstancesAndNeverAsASignIn(t *testing.T) {
 	presentNode(t, backend, "node-a", &coord.NodeStatusRecord{MCP: []coord.MCPServerStatus{
 		{Server: "vendor", Shared: true, Failed: 1, ErrorClass: "credential_rejected"},
 	}})
-	stale := coord.MCPGrant{Server: "vendor", Grant: uuid.New(), Client: "dcr", ClientID: "registered",
+	stale := coord.OAuthGrant{Name: "vendor", Grant: uuid.New(), Client: "dcr", ClientID: "registered",
 		Issuer: "https://auth.vendor.example.com", By: "jane.doe", ByKind: iam.ActorHuman,
 		At: oauthNow.Add(-time.Hour)}
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{
 		Coord: backend, NodeStatuses: recordsOf(backend), Company: companySource(t, cfg),
 		Builtins:  catalogueOffer,
-		MCPGrants: grantsReader{grants: []coord.MCPGrant{stale}},
+		MCPGrants: grantsReader{grants: []coord.OAuthGrant{stale}},
 		Now:       func() time.Time { return oauthNow },
 	})
 	raw, err := r.Answer(everyGrant(t), "mcp_servers_status", nil)

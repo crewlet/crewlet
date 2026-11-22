@@ -60,6 +60,27 @@ type answerShape struct {
 	rows  int
 }
 
+// answerEncodeMultiple is what an answer holds over the bytes its shape
+// declares while it is built and its reply written: five, the multiple
+// eventfan measured for its rows, their encoding and the reply's (its
+// answerWeight). It covers an own-bound page passing its bound by the row
+// that crossed it, which the reply ceiling's other half holds.
+const answerEncodeMultiple = 5
+
+// weight is what a read of shape holds of the node's answer budget
+// ([queue.AnswerBudget]): [answerEncodeMultiple] times the bytes a page is
+// read or cut to, or a capped list's count times its row bound; nothing for
+// one value or an entry per key asked, which the request's own size bounds.
+func (s answerShape) weight() int64 {
+	switch s.kind {
+	case answerRows, answerOwnBound:
+		return answerEncodeMultiple * int64(s.bytes)
+	case answerCapped:
+		return answerEncodeMultiple * int64(s.rows) * int64(s.bytes)
+	}
+	return 0
+}
+
 // rowsTo declares a read answering rows, read to at most bytes of them
 // through [statelog.RowsOf], to which every run carries the bound
 // ([statelog.WithAnswerBytes]), in-process too: a page's length must not

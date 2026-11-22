@@ -46,6 +46,7 @@ func Box(t *testing.T, readCap int, fresh func(t *testing.T) sandbox.Sandbox) {
 			testARangeIsTheFilesBytesFromItsOffsetAndNamesItsWholeSize},
 		{"AFilePastTheCapIsRefusedWholeAndReadAsAStream", testAFilePastTheCapIsRefusedWholeAndReadAsAStream},
 		{"AFileAtTheCapIsReadWhole", testAFileAtTheCapIsReadWhole},
+		{"AWholeOpenSizesTheFileAndRefusesOnePastTheCap", testAWholeOpenSizesTheFileAndRefusesOnePastTheCap},
 		{"AStreamClosedEarlyIsReleased", testAStreamClosedEarlyIsReleased},
 		{"ARewriteIsNeverReadHalfDone", testARewriteIsNeverReadHalfDone},
 		{"AStreamedWriteIsReadBackByteForByte", testAStreamedWriteIsReadBackByteForByte},
@@ -371,6 +372,43 @@ func testAFileAtTheCapIsReadWhole(t *testing.T, box sandbox.Sandbox, readCap int
 	got, err := box.ReadFile(t.Context(), path)
 	if err != nil || len(got) != len(content) {
 		t.Errorf("ReadFile of exactly the cap = %d bytes, %v; want all %d", len(got), err, len(content))
+	}
+}
+
+// A WHOLE OPEN SIZES THE FILE AND REFUSES ONE PAST THE CAP
+// ([sandbox.Sandbox.OpenWhole]): a file at the cap opens with its size and
+// reads back byte for byte from that open, a missing one is nothing and 0, and
+// one byte past the cap is refused as ReadFile refuses it, naming its size, so
+// a collection weighs what it will read before it reads.
+//
+// Mutations, each red: open a file past the cap; answer the cap for the size;
+// read past the size the open gave.
+func testAWholeOpenSizesTheFileAndRefusesOnePastTheCap(t *testing.T, box sandbox.Sandbox, readCap int) {
+	path := pathIn(box, "findings.md")
+	if r, size, err := box.OpenWhole(t.Context(), path); err != nil || size != 0 || len(readAllOf(t, r)) != 0 {
+		t.Errorf("OpenWhole of a missing file = size %d, %v; want nothing and 0", size, err)
+	}
+	content := pattern(readCap)
+	write(t, box, path, content)
+	r, size, err := box.OpenWhole(t.Context(), path)
+	if err != nil {
+		t.Fatalf("OpenWhole of a file at the cap: %v", err)
+	}
+	if got := readAllOf(t, r); size != int64(readCap) || !bytes.Equal(got, content) {
+		t.Errorf("OpenWhole of a file at the cap = size %d, %d bytes; want %d of each, byte for byte",
+			size, len(got), readCap)
+	}
+	write(t, box, path, pattern(readCap+1))
+	var tooLarge *sandbox.FileTooLargeError
+	switch r, _, err := box.OpenWhole(t.Context(), path); {
+	case !errors.As(err, &tooLarge):
+		if r != nil {
+			_ = r.Close()
+		}
+		t.Errorf("OpenWhole one byte past the cap: %v, want a FileTooLargeError", err)
+	case tooLarge.Size != int64(readCap+1) || tooLarge.Limit != readCap:
+		t.Errorf("OpenWhole one byte past the cap refused it at size %d of limit %d, want %d of %d",
+			tooLarge.Size, tooLarge.Limit, readCap+1, readCap)
 	}
 }
 

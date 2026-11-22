@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -215,6 +216,20 @@ const (
 	// envelope and the rest of the report fit beside it; 461 tools take about
 	// 150 KiB with their words whole.
 	maxMCPCheckToolBytes = 512 << 10
+	// mcpCheckReportBytes bounds the rest of a reply's report ([boundedReport]):
+	// at most six steps' details and a failure at [coord.MaxMCPErrorBytes]
+	// each, and four identity fields at [coord.MaxMCPServerInfoBytes], under
+	// 5 KiB, held at 8 KiB for their JSON and the reply's envelope.
+	mcpCheckReportBytes = 8 << 10
+	// mcpCheckAnswerWeight is what a test's answer holds of the node's
+	// answer budget ([queue.AnswerBudget]) from before its test until its
+	// reply is written: the server's own listing as the MCP client decoded
+	// it, before [boundedReport] cuts it, at most one stdio frame (the SDK's
+	// DefaultMaxLineLength, 16 MiB, which internal/mcp's IOTransport leaves
+	// in place); and its bounded reply five times (the report, its encoding,
+	// the seal's base64 at 4/3 and the encoder's buffer). An HTTP server's
+	// listing is bounded by its body, which #1617 states.
+	mcpCheckAnswerWeight = sdkmcp.DefaultMaxLineLength + 5*(maxMCPCheckToolBytes+mcpCheckReportBytes)
 )
 
 // mcpCheckBudget is how long a test of server may take on a node: its
@@ -470,6 +485,13 @@ func (e *Engine) answerMCPCheck(ctx context.Context, raw []byte) ([]byte, error)
 	// ends a reply's round trip before it.
 	testCtx, cancel := context.WithDeadline(ctx, ask.Deadline.Add(-mcpCheckReplyMargin))
 	defer cancel()
+	// HELD FROM BEFORE THE TEST until the reply is written, waited for no
+	// longer than the test may run.
+	release, err := e.answerBudget.Acquire(testCtx, queue.AnswerMCPCheck, mcpCheckAnswerWeight)
+	if err != nil {
+		return nil, fmt.Errorf("engine: an MCP test: %w", err)
+	}
+	defer release()
 	report := e.testHere(testCtx, ask)
 	if report == nil {
 		return nil, errMCPCheckNotHere
