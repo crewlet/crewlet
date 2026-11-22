@@ -804,7 +804,7 @@ func (w *Workspace) seed(
 			// the home — and skipping the seed used to leave the harness signed
 			// in with it, so a seat went on calling as a login `crewlet llm
 			// logout` had removed.
-			if err := os.Remove(dst); err != nil && !os.IsNotExist(err) {
+			if err = os.Remove(dst); err != nil && !os.IsNotExist(err) {
 				return generation{}, fmt.Errorf("harness: removing the stale login %q: %w", dst, err)
 			}
 			continue
@@ -816,7 +816,7 @@ func (w *Workspace) seed(
 		if err != nil {
 			return generation{}, fmt.Errorf("harness: reading the login's tables of %q: %w", rel, err)
 		}
-		if err := writePrivate(dst, content); err != nil {
+		if err = writePrivate(dst, content); err != nil {
 			return generation{}, err
 		}
 		seeded[name] = digestOf(content)
