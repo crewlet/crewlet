@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -119,7 +120,7 @@ func counting(cmd, output string) (sandbox.ExecResult, error) {
 	if err != nil {
 		return sandbox.ExecResult{}, err
 	}
-	cmd = strings.Replace(cmd, sandbox.ShellQuote(checkrun.OutputFile), sandbox.ShellQuote(file.Name()), 1)
+	cmd = strings.Replace(cmd, shellword.Quote(checkrun.OutputFile), shellword.Quote(file.Name()), 1)
 	out, err := exec.Command("/bin/sh", "-c", cmd).Output()
 	var exited *exec.ExitError
 	if errors.As(err, &exited) {

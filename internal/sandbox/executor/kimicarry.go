@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // kimiArchiveFormat is the layout a Kimi run packs its session in
@@ -57,7 +58,7 @@ func (Kimi) Continues(box, writer string) (bool, string) {
 func kimiSessionGate(session Session, paths Paths, rewired bool) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	if !session.Continues {
 		line(`s= k=no w=`)
 		return b.String()
@@ -136,7 +137,7 @@ func kimiSessionGate(session Session, paths Paths, rewired bool) string {
 // its driver started ([Paths.KimiLinesBefore]): what an earlier run wrote,
 // which the usage after the run is read past ([kimiUsage]).
 func kimiLinesBefore(paths Paths) string {
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	return `: > ` + q(paths.KimiLinesBefore()) + `; if [ -n "$s" ]; then for w in ` + q(paths.KimiSessions()) +
 		`/*/"$s"/agents/*/wire.jsonl; do [ -f "$w" ] && printf '%s %s\n' "$(wc -l < "$w" | tr -d ' ')" "$w"; done >> ` +
 		q(paths.KimiLinesBefore()) + `; fi
@@ -147,7 +148,7 @@ func kimiLinesBefore(paths Paths) string {
 // run's: the one it continued, else the one its driver reported, held to the
 // shape of an id Kimi mints, and "" for neither.
 func kimiSessionOf(paths Paths) string {
-	return `[ -n "$s" ] || s=$(cat ` + sandbox.ShellQuote(paths.SessionReport()) + ` 2> /dev/null) || s=
+	return `[ -n "$s" ] || s=$(cat ` + shellword.Quote(paths.SessionReport()) + ` 2> /dev/null) || s=
 case "$s" in session_*) case "$s" in *[!A-Za-z0-9_-]*) s= ;; esac ;; *) s= ;; esac
 `
 }
@@ -166,7 +167,7 @@ func kimiCapture(paths Paths) string {
 func kimiPack(paths Paths, at packAt) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	sessions := paths.KimiSessions()
 	line(`x=; if [ -n "$s" ]; then for y in %s/*/"$s"; do [ -s "$y/agents/main/wire.jsonl" ] && x=$y; done; fi`, q(sessions))
 	line(`if [ -n "$x" ]; then`)
@@ -209,7 +210,7 @@ func (Kimi) PackSave(paths Paths, rec sessionRecord, staged, dest string) (strin
 // script, at at. ONLY THE SESSION THE ENGINE NAMES, the one bound to the job,
 // never one the box reports now, which was never held to the bind's rules.
 func kimiOnDemand(paths Paths, session string, at packAt) string {
-	return "s=" + sandbox.ShellQuote(session) + " packed=\n" +
+	return "s=" + shellword.Quote(session) + " packed=\n" +
 		fmt.Sprintf("[ -n \"$s\" ] || exit %d\n", packNothing) +
 		kimiPack(paths, at) +
 		fmt.Sprintf("[ -n \"$packed\" ] || { [ -n \"$x\" ] || exit %d; exit %d; }\n", packNothing, packFailed)

@@ -29,6 +29,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/host"
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // A coding box's git, measured (ADR-0093): the clone recipes
@@ -742,8 +743,8 @@ func sessionCommand(r, s int, files []string, base string) string {
 	if sessionCommands[s] != "" {
 		return sessionCommands[s]
 	}
-	return "git log -p -3 --skip=" + strconv.Itoa(3*(r/len(files))) + " " + sandbox.ShellQuote(base) + " -- " +
-		sandbox.ShellQuote(files[r%len(files)])
+	return "git log -p -3 --skip=" + strconv.Itoa(3*(r/len(files))) + " " + shellword.Quote(base) + " -- " +
+		shellword.Quote(files[r%len(files)])
 }
 
 // boxSession is a session arm: a blobless coding clone, then sessionRounds of
@@ -938,11 +939,11 @@ func BenchmarkBoxDissociate(b *testing.B) {
 			}
 			copyOf := incarnation(b, f.Nodes()[0], rows.Repo.ID)
 			borrow := sandbox.SetupStep{Name: "borrow " + repo.Repo, Commands: []string{
-				"git clone --quiet --no-checkout --reference " + sandbox.ShellQuote(copyOf) + " --dissociate -- " +
-					`"$` + sandbox.GitURLVar + `"/` + sandbox.ShellQuote(repo.Repo+".git") + " " +
-					sandbox.ShellQuote(repo.Repo) + " &&\n" +
-					"git -C " + sandbox.ShellQuote(repo.Repo) + " checkout --quiet -B " +
-					sandbox.ShellQuote(repo.Branch) + " " + sandbox.ShellQuote(repo.Base),
+				"git clone --quiet --no-checkout --reference " + shellword.Quote(copyOf) + " --dissociate -- " +
+					`"$` + sandbox.GitURLVar + `"/` + shellword.Quote(repo.Repo+".git") + " " +
+					shellword.Quote(repo.Repo) + " &&\n" +
+					"git -C " + shellword.Quote(repo.Repo) + " checkout --quiet -B " +
+					shellword.Quote(repo.Branch) + " " + shellword.Quote(repo.Base),
 			}}
 			for _, arm := range []struct {
 				name string

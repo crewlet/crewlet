@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // A Muse Code run takes its notes through HOOKS of a plugin of its own
@@ -217,8 +218,8 @@ func musePluginManifest(helper, config string, notes, skills bool) ([]byte, erro
 // name>/SKILL.md` ([Paths.MuseSkills]), after removing every skill an earlier
 // run wrote there, so a reused box lists only this run's.
 func writeMuseSkills(ctx context.Context, box sandbox.Sandbox, skills []sandbox.Skill, paths Paths) error {
-	if _, err := box.Exec(ctx, "rm -rf "+sandbox.ShellQuote(paths.MuseSkills())+"/"+
-		sandbox.ShellQuote(sandbox.SkillNamespace+":")+"*", sandbox.ExecOptions{}); err != nil {
+	if _, err := box.Exec(ctx, "rm -rf "+shellword.Quote(paths.MuseSkills())+"/"+
+		shellword.Quote(sandbox.SkillNamespace+":")+"*", sandbox.ExecOptions{}); err != nil {
 		return fmt.Errorf("executor: removing an earlier run's Muse Code skills: %w", err)
 	}
 	for _, s := range skills {

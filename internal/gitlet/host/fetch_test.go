@@ -29,6 +29,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/gitlet/host"
+	"github.com/crewlet/crewlet/internal/shellword"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -1361,8 +1362,8 @@ func TestAFetchsBodyIsGivenBackAtItsAnswer(t *testing.T) {
 	}
 	fake := gittest.Wrap(t, `case " $* " in
 *" --advertise-refs "*) ;;
-" upload-pack "*) : > `+shellWord(started)+`; "$real_git" "$@"; s=$?
-  while [ -e `+shellWord(hold)+` ]; do sleep 0.02; done; exit $s ;;
+" upload-pack "*) : > `+shellword.Quote(started)+`; "$real_git" "$@"; s=$?
+  while [ -e `+shellword.Quote(hold)+` ]; do sleep 0.02; done; exit $s ;;
 esac`)
 	c := newCase(t, gitlettest.SoloOptions{GitPath: fake}, gitlettest.Settings())
 	node := c.Fleet.Nodes()[0]
