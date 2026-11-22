@@ -1331,7 +1331,6 @@ func testAServeTheRunsEndingOvertookServesNothing(t *testing.T, runs *overtaking
 // A poll naming no inbox id records no serve, as a plugin's that confirms
 // itself. A wake served once waits through a read that decided nothing (a
 // record not yet flushed) and is read off the verdict the run's end gives.
-//
 // Mutation: record the serve under the note's id or without its digest, again
 // on a second poll, let another job's verdict read it, or let a verdict that
 // held nothing lose the wake's one serve, and a check goes red.

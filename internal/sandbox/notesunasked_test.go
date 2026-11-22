@@ -39,13 +39,10 @@ func (r *coordRig) launchAnchored(turnID string) PendingRun {
 // no notes, a run its launch wired to none (no seat), or a run that did not
 // succeed, which may never have reached its end.
 //
-// Not parallel: it captures the process-wide logger ([captureLogs]).
-//
 // The warning carries what the runner says can switch reading off
-// ([FakeRunner.NotesOff], which a runner states for its own harness).
-//
-// Mutation: drop the warning, any one of its conditions, or the runner's
-// reason, and a row goes red.
+// ([FakeRunner.NotesOff]). Not parallel: it captures the process-wide logger
+// ([captureLogs]). Mutation: drop the warning, any one of its conditions, or
+// the runner's reason, and a row goes red.
 func TestARunThatNeverAskedForItsNotesIsSaid(t *testing.T) {
 	const statedNotesOff = "the box's own switch for the harness's note reader"
 	for name, tc := range map[string]struct {
