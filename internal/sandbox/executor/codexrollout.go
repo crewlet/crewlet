@@ -46,16 +46,6 @@ var errCodexRolloutLine = errors.New("executor: codex rollout line past its boun
 // path is derived from it.
 func (p Paths) CodexHome() string { return p.Home + "/.codex" }
 
-// CodexStartsWithout is what every Codex run starts without in its box's
-// home, removed before it starts: CODEX_HOME's instructions file and its
-// override, its command rules, and the home's own skills directory, each of
-// which a run on 0.171.0 reads as it starts (measured), so a run's
-// instructions, rules and skills are the ones its launch wrote.
-func (p Paths) CodexStartsWithout() []string {
-	return []string{p.CodexHome() + "/AGENTS.md", p.CodexHome() + "/AGENTS.override.md", p.CodexHome() + "/rules",
-		p.Home + "/.agents/skills"}
-}
-
 // CodexSessions is the directory under [Paths.CodexHome] Codex keeps its
 // rollouts in, and the only one a resume searches.
 func (p Paths) CodexSessions() string { return p.CodexHome() + "/sessions" }
