@@ -115,3 +115,22 @@ func TestKimiAndCopilotContinueOnlyTheirOneReleasesWriter(t *testing.T) {
 		}
 	}
 }
+
+// KIMI CODE'S AND COPILOT'S ARCHIVES ARE METERED AS NO FIGURE: this build
+// reads no count or estimate of their sessions' next request off an archive,
+// so the take's meter of either states none and fails nothing, whatever the
+// archive holds (on main both went through Claude Code's reader, which read
+// nothing of them either).
+//
+// Mutation: hand either runner Claude Code's or Codex's meter, or a figure
+// read off any line, and its row goes red.
+func TestKimiAndCopilotArchivesAreMeteredAsNoFigure(t *testing.T) {
+	t.Parallel()
+	archive := `{"type":"usage.record","input_tokens":123456}` + "\n"
+	for name, c := range map[string]carrier{"kimi-code": Kimi{}, "copilot": Copilot{}} {
+		read, err := c.meter(t.Context(), strings.NewReader(archive), "s-1", "1.0.0", nil)
+		if err != nil || read != (meterReading{}) {
+			t.Errorf("%s: the meter reads %+v (%v), want no figure", name, read, err)
+		}
+	}
+}
