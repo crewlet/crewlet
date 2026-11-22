@@ -573,12 +573,14 @@ func (Copilot) Output(paths Paths) Output {
 const copilotTrust = "true"
 
 // Pins is the run's home and posture, over whatever the seat's env, the image
-// or a profile set: COPILOT_HOME ([Paths.CopilotHome]); updates, the client's
-// telemetry and the MCP tool cache off (a cached list showed the previous run's
-// tools, measured); and the folder trusted ([copilotTrust]).
+// or a profile set: COPILOT_HOME ([Paths.CopilotHome]) and COPILOT_CACHE_HOME
+// ([Paths.CopilotCache]); updates, the client's telemetry and the MCP tool
+// cache off (a cached list showed the previous run's tools, measured); and the
+// folder trusted ([copilotTrust]).
 func (Copilot) Pins(_ context.Context, _ sandbox.RunRequest, paths Paths) []Pinned {
 	return []Pinned{
 		{Name: "COPILOT_HOME", Value: paths.CopilotHome()},
+		{Name: "COPILOT_CACHE_HOME", Value: paths.CopilotCache()},
 		{Name: "COPILOT_AUTO_UPDATE", Value: "false"},
 		{Name: "COPILOT_TELEMETRY_DISABLED", Value: "true"},
 		{Name: "COPILOT_MCP_TOOL_CACHE", Value: "false"},
@@ -734,7 +736,7 @@ func (Copilot) artifactFiles(p Paths) []string {
 // artifactDirs is the directories in a Copilot run's home it would load that
 // its launch does not write ([Paths.CopilotLoaded]), removed whole: its
 // extensions (the run's own extension among them, which a later run with
-// none must not find), hooks, plugins, skills, agents and instructions.
+// none must not find), hooks, plugins, skills, agents, instructions and cache.
 func (Copilot) artifactDirs(p Paths) []string {
 	_, loaded := p.CopilotLoaded()
 	return loaded
