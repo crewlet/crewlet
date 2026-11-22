@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/growth"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // metricSetOps are the vitals metric sets an agent queries, each by the
@@ -63,7 +63,7 @@ func (p *Product) queryVitals(ctx context.Context, call growth.Call) (any, error
 	set, _ := call.Args["metric_set"].(string)
 	id, ok := metricSetOps[set]
 	if !ok {
-		return nil, refusal(growth.RefusedInvalid, "metric_set is one of "+strings.Join(metricSets(), ", ")+
+		return nil, refusal(growth.RefusedInvalid, "metric_set is one of "+words.Or(metricSets())+
 			". No vendor was reached.")
 	}
 	period, _ := call.Args["aggregation"].(string)
