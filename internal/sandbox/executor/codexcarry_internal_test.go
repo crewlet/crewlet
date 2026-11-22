@@ -299,34 +299,37 @@ func TestACodexRolloutCutOffMidLineIsCutBackBeforeItIsResumed(t *testing.T) {
 	}
 }
 
-// A CODEX RELEASE PAIR CONTINUES ONLY AT OR PAST THE FLOOR, NEVER BACKWARDS: a
-// box below 0.171.0, a session written below it, and a box older than the
-// release that last wrote the session are each refused with a reason; a
-// version no reader can read is taken for a current one, as every harness's is.
-// Only 0.171.0's resume is read, a set and not a range.
+// A CODEX SESSION CONTINUES ONLY ON THE ONE SUPPORTED RELEASE: box and writer
+// both exactly 0.171.0. Any other, older or newer, or a writer that named no
+// release, starts fresh with a reason naming the release found; no ordering
+// of releases is read. An empty box release is the restorer's ask of the
+// writer alone. resumeRead answers for that one release alone.
 //
-// Mutation: drop a case of Continues, or answer resumeRead for a range, and a
-// row below fails.
-func TestACodexReleasePairContinuesOnlyAtOrPastTheFloor(t *testing.T) {
+// Mutation: let a newer release continue, compare releases by order, or read
+// an unnamed writer as the supported one, and a row below fails.
+func TestACodexSessionContinuesOnlyOnTheOneSupportedRelease(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
 		box, writer string
 		ok          bool
+		names       string
 	}{
-		{"0.171.0", "0.171.0", true},
-		{"0.172.3", "0.171.0", true},
-		{"0.170.9", "0.170.9", false},
-		{"0.171.0", "0.170.0", false},
-		{"0.171.0", "0.172.0", false},
-		{"codex-cli dev", "0.171.0", true},
+		{"0.171.0", "0.171.0", true, ""},
+		{"", "0.171.0", true, ""},
+		{"0.172.0", "0.171.0", false, "Codex 0.172.0"},
+		{"0.170.9", "0.171.0", false, "Codex 0.170.9"},
+		{"0.171.0", "0.170.0", false, "Codex 0.170.0"},
+		{"0.171.0", "0.172.3", false, "Codex 0.172.3"},
+		{"0.171.0", "", false, "named no release"},
 	} {
 		ok, why := Codex{}.Continues(c.box, c.writer)
-		if ok != c.ok || ok == (why != "") {
-			t.Errorf("box %s, writer %s: continues %v (%q), want %v", c.box, c.writer, ok, why, c.ok)
+		if ok != c.ok || ok == (why != "") || !strings.Contains(why, c.names) {
+			t.Errorf("box %q, writer %q: continues %v (%q), want %v naming %q", c.box, c.writer, ok, why, c.ok, c.names)
 		}
 	}
-	if !(Codex{}).resumeRead("0.171.0") || (Codex{}).resumeRead("0.172.0") || (Codex{}).resumeRead("") {
-		t.Error("resumeRead answers outside the one release whose resume was read")
+	if !(Codex{}).resumeRead("0.171.0") || (Codex{}).resumeRead("0.172.0") || (Codex{}).resumeRead("0.170.0") ||
+		(Codex{}).resumeRead("") {
+		t.Error("resumeRead answers for a release other than the one supported")
 	}
 }
 

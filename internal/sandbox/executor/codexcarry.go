@@ -25,11 +25,12 @@ var (
 	_ resumeReader = Codex{}
 )
 
-// codexCarryFloor is the oldest Codex release a box continues a carried
-// session on, and the oldest whose session it continues: 0.171.0, the release
-// the rollout's name, its portability to a fresh CODEX_HOME and another cwd,
-// and a resume after SIGTERM were measured on.
-const codexCarryFloor = "0.171.0"
+// codexCarryRelease is the one Codex release a box continues a carried
+// session on, and the one whose session it continues: the newest, 0.171.0,
+// on which the rollout's name, its portability to a fresh CODEX_HOME and
+// another cwd, and a resume after SIGTERM were measured. Only the newest
+// release of each harness is supported, so no ordering of releases is read.
+const codexCarryRelease = "0.171.0"
 
 // codexArchiveFormat is the layout a Codex run packs its session in: a gzipped
 // tar of the rollout's whole lines as one member ([codexArchiveMember]),
@@ -56,31 +57,37 @@ func (Codex) VersionCommand() string { return "codex --version" }
 func (Codex) layout() archiveLayout { return archiveTar }
 
 // Continues reports whether a session written by Codex release writer can be
-// continued in a box whose Codex is release box ([carrier]): both at or after
-// [codexCarryFloor], and never a box older than the writer. The writer is the
-// release that LAST ran the session (the record's `--version`), never the
-// rollout's session_meta.cli_version, which names the release that began it:
-// a resume appends to the rollout and writes no new session_meta (measured on
-// 0.171.0: one session_meta, at line 0, in every rollout, resumed or not).
+// continued in a box whose Codex is release box ([carrier]): only where both
+// are exactly [codexCarryRelease]; any other, older or newer or one the box
+// did not name, starts fresh, saying which it found. An empty box release is
+// [Runner.Restores]'s ask of the writer alone. The writer is the release that
+// LAST ran the session (the record's `--version`), never the rollout's
+// session_meta.cli_version, which names the release that began it: a resume
+// writes no new session_meta (measured on 0.171.0, CODEX-MEASURE §16.5).
 func (Codex) Continues(box, writer string) (bool, string) {
 	switch {
-	case !releaseAtLeast(box, codexCarryFloor):
-		return false, fmt.Sprintf("this box runs Codex %s, older than %s, the oldest that "+
-			"continues a session carried from another box", box, codexCarryFloor)
-	case !releaseAtLeast(writer, codexCarryFloor):
-		return false, fmt.Sprintf("the session was written by Codex %s, older than %s, the "+
-			"oldest whose session another box continues", writer, codexCarryFloor)
-	case !releaseAtLeast(box, writer):
-		return false, carriedOlder("Codex", box, writer)
+	case writer != codexCarryRelease:
+		return false, fmt.Sprintf("the session was written by %s, and only a session Codex %s wrote is "+
+			"continued", codexReleaseFound(writer), codexCarryRelease)
+	case box != "" && box != codexCarryRelease:
+		return false, fmt.Sprintf("this box runs %s, and only Codex %s continues a session carried "+
+			"from another box", codexReleaseFound(box), codexCarryRelease)
 	}
 	return true, ""
 }
 
-// resumeRead reports whether release is one whose resume this build read: a
-// SET, never a range, as Claude Code's is ([claudeResumeRead]). 0.171.0's
-// resume was measured: it replays the rollout whole, appends the new turn to
+// codexReleaseFound is release as a reason names the Codex found.
+func codexReleaseFound(release string) string {
+	if release == "" {
+		return "a Codex that named no release"
+	}
+	return "Codex " + release
+}
+
+// resumeRead reports whether release is the one whose resume this build read,
+// [codexCarryRelease]: it replays the rollout whole, appends the new turn to
 // the same file, and replays a call cut off by SIGTERM as `aborted`.
-func (Codex) resumeRead(release string) bool { return release == codexCarryFloor }
+func (Codex) resumeRead(release string) bool { return release == codexCarryRelease }
 
 // Pack packs session now ([carrier]), as the run's script does once Codex
 // exits ([codexCapture]): into staged and over dest, its digest kept;
