@@ -68,7 +68,7 @@ case "$1" in
   echo "${FAKE_VERSION:-opencode v2.0.32}" ;;
 auth)
   case "$2" in
-  import) cat > "$d/imported"; cp "$d/imported" "$d/db" ;;
+  import) f=; for a; do f=$a; done; if [ -f "$f" ]; then cat "$f"; else cat; fi > "$d/imported"; cp "$d/imported" "$d/db" ;;
   export)
     [ "$3" != --server ] || { authed; hangs auth.export; }
     if [ -n "${FAKE_EXPORT_SLEEP:-}" ]; then : > "$d/exporting"; sleep "$FAKE_EXPORT_SLEEP"; fi
