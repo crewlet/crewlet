@@ -127,6 +127,11 @@ const DECLARED: Declared[] = [
     element: "Meter",
     why: "The words beside the bar say how many files are viewed of how many.",
   },
+  {
+    where: "routes/settings/SetupForm.tsx",
+    element: "FormField",
+    why: "A set's head row draws its name beside the Add control.",
+  },
 ];
 
 /** The props that keep a name and draw no words. */
