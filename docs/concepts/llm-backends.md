@@ -1105,7 +1105,7 @@ opened by a corrective naming its tool, up to twice (see
 instead the seat's system prompt, which tells it the run ends with that call.
 Its rounds are uncapped unless the seat's `role.sandbox.max_turns`, else
 `providers.sandbox.default_max_turns`, sets a turn cap, which becomes the
-harness's own on every runner — Claude Code's `--max-turns`, Gemini CLI's `model.maxSessionTurns`, OpenCode's agent
+harness's own on every runner — Claude Code's `--max-turns`, Gemini CLI's and Qwen Code's `model.maxSessionTurns`, OpenCode's agent
 `steps`, Kimi Code's steps a turn.
 #### The tool bridge
 

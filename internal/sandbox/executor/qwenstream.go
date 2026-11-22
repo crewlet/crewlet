@@ -30,6 +30,10 @@ const (
 // qwenEndTurn is the stopReason of a turn Qwen Code finished: the one success.
 const qwenEndTurn = "end_turn"
 
+// qwenMaxTurns is the stopReason of a turn its run's round cap ended
+// (settings' model.maxSessionTurns, qwenSettings).
+const qwenMaxTurns = "max_turn_requests"
+
 // qwenLimitExit is what the helper exits with where Qwen Code failed the turn
 // on its vendor's 429 after its own retries: the status mod 256 (the
 // helper's limitExit). Only such a run's limit line is read ([limitGate]):
@@ -366,6 +370,7 @@ func (d *qwenEvents) Result() sandbox.Result {
 		res.Error = "the harness stopped before it reported how its run ended: its stream has no end line"
 	default:
 		res.Error = firstNonBlank(d.errText, qwenStopSaid(d.stop))
+		res.RoundCapped = d.stop == qwenMaxTurns
 		// THE LIMIT LINE WHERE THERE IS ONE, the provider's words for the 429,
 		// else the end line: what the run's ending is classified by.
 		res.Event = string(firstNonEmpty(d.limit, d.end))
@@ -391,6 +396,8 @@ func qwenStopSaid(stop string) string {
 	switch stop {
 	case "cancelled":
 		return "the turn was cancelled before it finished"
+	case qwenMaxTurns:
+		return "the run reached its turn cap before it finished"
 	case "":
 		return "the harness reported its run ended with no stop reason"
 	}
