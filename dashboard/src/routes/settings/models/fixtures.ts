@@ -67,6 +67,9 @@ export function runs(seat: string, ...jobs: ModelJob[]): ModelUse[] {
 /** The Dashboard Assistant chats on the model. */
 export const ASSISTANT_CHAT: ModelUse = { assistant: "chat", position: 0 };
 
+/** The harnesses the engine runs a seat's executor on, as `llm_entries` serves them today. */
+export const EXECUTORS: readonly string[] = ["claude-code", "opencode"];
+
 /** A sign-in on a stored subscription token, unless the case says otherwise. */
 export function signIn(over: Partial<ModelSignIn> = {}): ModelSignIn {
   return {
@@ -198,6 +201,7 @@ export function modelsData({
         nodes: [{ id: "node-1", reported: true }],
         entries,
         alarms,
+        executor_harnesses: [...EXECUTORS],
       }
     : {
         reading: "member",
@@ -205,6 +209,7 @@ export function modelsData({
         nodes: [{ id: "node-1", reported: true }],
         entries: entries.map(memberEntry),
         alarms: null,
+        executor_harnesses: [...EXECUTORS],
       };
   const models = modelViews(answer, admin ? doc : null, names);
   return {
@@ -217,6 +222,7 @@ export function modelsData({
     node: answer.node,
     assistant: assistant ?? assistantOf(admin ? doc : null, models),
     advisor: advisorOf(admin ? doc : null, models),
+    executors: answer.executor_harnesses,
     loading: false,
     error: null,
     failed: null,
