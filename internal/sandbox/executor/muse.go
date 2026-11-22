@@ -39,6 +39,7 @@ var (
 	_ saver             = Muse{}
 	_ artifactHolder    = Muse{}
 	_ artifactDirHolder = Muse{}
+	_ inPlaceGate       = Muse{}
 	_ sessionJudge      = Muse{}
 )
 
@@ -224,10 +225,11 @@ func museSessionGate(session Session, paths Paths, rewired bool) string {
 	line(`s=%s k=yes w= h= d=`, q(session.ID))
 	b.WriteString(museFind(paths))
 	line(`[ -n "$x" ] && h=1`)
-	// A SESSION CONTINUES ON THE SUPPORTED RELEASE ALONE: a newer one, or
-	// one whose version could not be read, starts a session of its own.
-	line(`if [ "$n" != %s ]; then w="this box runs Muse Code ${n:-of a version it could not read}, and a session continues only on %s, the release this runner is written for"; fi`,
-		q(museSupported), museSupported)
+	// A SESSION CONTINUES ON THE SUPPORTED RELEASE ALONE, read bare as the
+	// engine reads it ([releaseOf]): any other, or none that reads, starts a
+	// session of its own.
+	line(`%s[ "$rv" = %s ] || w="this box runs Muse Code ${rv:-a release it could not read}, and a session continues only on %s, the release this runner is written for"`,
+		bareReleaseShell("rv"), q(museSupported), museSupported)
 	line(`if [ -s %s ]; then d=$(cksum < %s 2> /dev/null) || d=; fi`, carried, carried)
 	if session.Replaces {
 		line(`if [ -n "$h" ] && [ -s %s ]; then h=; fi`, carried)
@@ -311,28 +313,50 @@ func (Muse) VersionCommand() string { return "muse --version" }
 func (Muse) layout() archiveLayout { return archiveTar }
 
 // Continues reports whether a session written by Muse Code release writer can
-// be continued in a box whose Muse Code is release box ([carrier]): only
-// where both are exactly [museSupported], as `muse --version` prints it; any
-// other pair starts a session of its own, naming both.
-func (Muse) Continues(box, writer string) (bool, string) {
-	have, writ := museNumbers(box), museNumbers(writer)
-	if museExactly(have) && museExactly(writ) {
-		return true, ""
+// be continued in a box whose Muse Code is release box ([carrier]): only where
+// the box continues any session ([Muse.continuesInPlace]) and the writer is
+// as [Muse.ContinuesWriter] holds it. Any other pair starts a session of its
+// own, saying which release it found.
+func (m Muse) Continues(box, writer string) (bool, string) {
+	if ok, why := m.continuesInPlace(box); !ok {
+		return false, why
 	}
-	return false, fmt.Sprintf("the session was written by Muse Code %s and this box runs Muse Code %s, and a "+
-		"session continues only between two boxes on %s, the release this runner is written for",
-		museVersionWords(writer), museVersionWords(box), museSupported)
+	return m.ContinuesWriter(writer)
 }
 
-// ContinuesWriter is [Muse.Continues] judged of the writer alone ([carrier]):
-// only a session [museSupported] wrote, one written by any other release, or
-// by one that printed none, refused, naming it.
-func (Muse) ContinuesWriter(writer string) (bool, string) {
-	if museExactly(museNumbers(writer)) {
+// continuesInPlace reports whether a box whose Muse Code is release box
+// continues a session at all, the copy it holds as much as one carried to it
+// ([inPlaceGate]): only on [museSupported], as the run's own gate holds it
+// ([museSessionGate]), so the engine asks before a relaunch hands the brief
+// that continues the box's copy.
+func (Muse) continuesInPlace(box string) (bool, string) {
+	if box == museSupported {
 		return true, ""
 	}
-	return false, fmt.Sprintf("the session was written by Muse Code %s, and a session continues only between "+
-		"two boxes on %s, the release this runner is written for", museVersionWords(writer), museSupported)
+	if box == "" {
+		box = "a release it could not read"
+	}
+	return false, fmt.Sprintf(museBoxRefused, box, museSupported)
+}
+
+// museBoxRefused is why a box whose Muse Code is not [museSupported]
+// continues no session, its own copy nor a carried one: the engine's check
+// and the run's gate say it alike.
+const museBoxRefused = "this box runs Muse Code %.64s, and a session continues only on %s, the release this " +
+	"runner is written for"
+
+// ContinuesWriter is [Muse.Continues] judged of the writer alone ([carrier]):
+// only a session [museSupported] wrote; one written by any other release, or
+// by one that named no release this build reads, is refused, saying so.
+func (Muse) ContinuesWriter(writer string) (bool, string) {
+	switch writer {
+	case museSupported:
+		return true, ""
+	case "":
+		return false, writerNamedNoRelease("Muse Code")
+	}
+	return false, fmt.Sprintf("the session was written by Muse Code %.64s, and only a session %s wrote "+
+		"continues, the release this runner is written for", writer, museSupported)
 }
 
 // meter is the take's meter of a Muse Code archive ([carrier.meter]): no
@@ -341,33 +365,6 @@ func (Muse) ContinuesWriter(writer string) (bool, string) {
 // caller, which drains it ([startMeter]).
 func (Muse) meter(context.Context, io.Reader, string, string, *passBudget) (meterReading, error) {
 	return meterReading{}, nil
-}
-
-// museExactly reports whether numbers, a release from its first digit, is
-// [museSupported] exactly.
-func museExactly(numbers string) bool {
-	v, ok := releaseNumbers(numbers)
-	want, _ := releaseNumbers(museSupported)
-	return ok && v == want
-}
-
-// museVersionWords is a release as a person reads it: as printed, or a word
-// for one that printed nothing.
-func museVersionWords(version string) string {
-	if v := strings.TrimSpace(version); v != "" {
-		return v
-	}
-	return "of a version it did not print"
-}
-
-// museNumbers is a release as `muse --version` prints it (`Muse Code 1.4.25
-// (1.4.25-R9361.1)`) from its first digit, which [releaseAtLeast] reads; the
-// version as it is where it holds no digit.
-func museNumbers(version string) string {
-	if at := strings.IndexAny(version, "0123456789"); at > 0 {
-		return version[at:]
-	}
-	return version
 }
 
 // museCapture is the part of a run's script that packs its session once its
