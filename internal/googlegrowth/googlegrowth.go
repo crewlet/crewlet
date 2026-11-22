@@ -193,9 +193,11 @@ func (r Request) Digest(before []byte) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// Subject names what the request decides, for joining one seat's repeats.
+// Subject names what the request decides, for joining one seat's repeats:
+// its operation, its address and the account it acts in, which an address
+// alone does not always name (a site given in the body).
 func (r Request) Subject(kind string) string {
-	sum := sha256.Sum256([]byte(kind + "\x00" + r.Op.ID + "\x00" + r.Address))
+	sum := sha256.Sum256([]byte(kind + "\x00" + r.Op.ID + "\x00" + r.Address + "\x00" + r.AccountOrTarget()))
 	return hex.EncodeToString(sum[:])
 }
 

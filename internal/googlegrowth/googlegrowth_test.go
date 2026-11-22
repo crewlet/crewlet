@@ -152,3 +152,28 @@ func TestAProductsParameterRuleNeverAdmitsADotSegment(t *testing.T) {
 		}
 	}
 }
+
+// TWO ASKS ARE ONE ONLY WHERE THEY DECIDE THE SAME THING: one operation on one
+// address in two accounts (a site its body names) are two subjects, so the
+// second is never joined to the first's waiting ask; the same request twice is
+// one.
+//
+// Mutation: leave the account out of the subject, and verifying a second site
+// reads as a repeat of the first.
+func TestTwoAsksAreOneOnlyWhereTheyDecideTheSameThing(t *testing.T) {
+	t.Parallel()
+	insert := growth.Operation{ID: "x.resources.insert", Method: "POST", Resource: "resources",
+		Class: growth.ClassAdmin, Path: "https://x.googleapis.com/v1/resources"}
+	a, err := googlegrowth.NewRequest(insert, nil, nil, map[string]any{"site": "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := a
+	a.Account, b.Account = "sc-domain:example.com", "sc-domain:example.org"
+	if a.Subject("x") == b.Subject("x") {
+		t.Error("one operation in two accounts is one subject")
+	}
+	if again := a; again.Subject("x") != a.Subject("x") {
+		t.Error("the same request is two subjects")
+	}
+}
