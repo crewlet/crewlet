@@ -25,7 +25,7 @@
 //     Files a session carried from another box (qwencarry.go) under this
 //     working directory's key, its first line's cwd rewritten to the
 //     directory's realpath, the one field a resume checks (measured on
-//     0.28.3), and removes every other key's copy of it.
+//     0.28.4), and removes every other key's copy of it.
 //
 // NOTES (the runner note contract's poll channel). While the turn runs, the
 // helper polls the notes route and keeps what it fetched. Qwen Code asks for
@@ -658,8 +658,10 @@ class Inbox {
   }
 }
 
-// workingDir is the run's working directory as Qwen Code keys and records it:
-// its realpath, which a symlinked directory resolves to (measured on 0.28.3).
+// workingDir is the run's working directory as the helper names it: its
+// realpath. Qwen Code keys and records the cwd session/new and session/load
+// name as given, unresolved (measured over ACP on 0.28.4), so the helper names
+// the realpath every time.
 function workingDir() {
   return fs.realpathSync(process.cwd())
 }
