@@ -716,30 +716,45 @@ func TestAnEngineRowIsRewrittenOnlyAtTheVersionItWasReadAt(t *testing.T) {
 	}
 }
 
-// AN MCP GRANT IS THE ENGINE'S, so no operator gesture reaches it: it is never
-// listed, revealed, set or deleted through the operator's view, and never
-// lands in the ${VAR} snapshot a child process is handed values from.
-func TestAnMCPGrantIsUnreachableFromTheOperatorsView(t *testing.T) {
+// AN OAUTH GRANT IS THE ENGINE'S, an MCP server's and an integration's alike,
+// so no operator gesture reaches it: it is never listed, revealed, set or
+// deleted through the operator's view, and never lands in the ${VAR} snapshot
+// a child process is handed values from.
+//
+// Mutation: drop "integration" from the estate owners and the integration's
+// row is listed, revealed and in the snapshot.
+func TestAnOAuthGrantIsUnreachableFromTheOperatorsView(t *testing.T) {
 	t.Parallel()
-	const name = "mcp/linear/refresh"
+	for _, row := range []struct {
+		name   string
+		source secrets.Source
+	}{
+		{"mcp/linear/refresh", secrets.SourceMCPSignIn},
+		{"integration/adsense/refresh", secrets.SourceIntegrationSignIn},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			t.Parallel()
+			s, _ := fleetStore(t, ring(t, "k1"))
+			if _, err := s.Estate().Create(t.Context(), row.name, "grant", nodeA, row.source,
+				clock); err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			if _, err := s.Get(t.Context(), row.name); !errors.Is(err, secrets.ErrReservedName) {
+				t.Errorf("a reveal of the grant answered %v, want ErrReservedName", err)
+			}
+			if _, err := s.Unset(t.Context(), row.name); !errors.Is(err, secrets.ErrReservedName) {
+				t.Errorf("an operator's delete of the grant answered %v, want ErrReservedName", err)
+			}
+			if values, err := s.All(t.Context()); err != nil || len(values) != 0 {
+				t.Errorf("the snapshot holds %d values (%v), want none", len(values), err)
+			}
+			if rows, err := s.List(t.Context()); err != nil || len(rows) != 0 {
+				t.Errorf("the operator's listing holds %+v (%v), want nothing", rows, err)
+			}
+		})
+	}
 	s, _ := fleetStore(t, ring(t, "k1"))
-	if _, err := s.Estate().Create(t.Context(), name, "grant", nodeA, secrets.SourceMCPSignIn,
-		clock); err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	if _, err := s.Get(t.Context(), name); !errors.Is(err, secrets.ErrReservedName) {
-		t.Errorf("a reveal of the grant answered %v, want ErrReservedName", err)
-	}
-	if _, err := s.Unset(t.Context(), name); !errors.Is(err, secrets.ErrReservedName) {
-		t.Errorf("an operator's delete of the grant answered %v, want ErrReservedName", err)
-	}
-	if values, err := s.All(t.Context()); err != nil || len(values) != 0 {
-		t.Errorf("the snapshot holds %d values (%v), want none", len(values), err)
-	}
-	if rows, err := s.List(t.Context()); err != nil || len(rows) != 0 {
-		t.Errorf("the operator's listing holds %+v (%v), want nothing", rows, err)
-	}
-	for _, other := range []string{"GITLAB_TOKEN", "iamx/x", "mcp//refresh"} {
+	for _, other := range []string{"GITLAB_TOKEN", "iamx/x", "mcp//refresh", "integration//refresh"} {
 		if _, err := s.Estate().Delete(t.Context(), other); !errors.Is(err, secrets.ErrInvalidName) {
 			t.Errorf("the engine's view deleted %q (%v)", other, err)
 		}

@@ -1298,6 +1298,15 @@ type PendingRun struct {
 	// nothing. The resume reads it as its own item under [types.BasisResume].
 	WorkItem *types.WorkItem `json:"work_item,omitempty"`
 
+	// WroteKeys is every record the turn's calls created or wrote
+	// ([BridgeLog.Wrote]), each as its key ([writtenKey]): what one listing of
+	// the fleet's runs relates another seat's run by ([RunsOn]), since a listing
+	// reads no log. Folded in by the write that records a call's spend, or for
+	// a late call one of its own ([CoordStore.AppendBridgeCall]), from the log's
+	// whole set, so a write lost is made good by the next. Never dropped, held
+	// to [types.MaxWrittenRecords] as the log's set is.
+	WroteKeys []string `json:"wrote_keys,omitempty"`
+
 	// Answered are the comments answering the seat's questions whose deliveries
 	// woke the launching turn, ON THE ROW as WorkItem is, so a call a later job
 	// of the turn holds still names the decision it carries out.
@@ -1809,10 +1818,10 @@ type BridgeLog struct {
 	// taking a call's record ([BridgeAppend.Wrote]; late, abandoned and an
 	// earlier round's alike, as each ran), and KEPT BY EVERY OPENING as
 	// [BridgeLog.Committed] is, so it lives as long as the log through a park,
-	// a relaunch and a takeover. HERE, NOT ON THE RECORD: the append is the one
-	// step that knows what a call wrote, and the store writes no two keys at
-	// once. Held to [types.MaxWrittenRecords]; WroteMore says a record was
-	// refused for want of room, which the append that first refused one says
+	// a relaunch and a takeover. HERE, the record keeping only their keys
+	// ([PendingRun.WroteKeys]): the append alone knows what a call wrote. Held to
+	// [types.MaxWrittenRecords]; WroteMore says a record was refused for want of
+	// room, which the append that first refused one says
 	// ([CoordStore.AppendBridgeCall]). Read through [PendingStore.TurnLog].
 	Wrote     []types.WrittenRecord `json:"wrote,omitempty"`
 	WroteMore bool                  `json:"wrote_more,omitempty"`
@@ -2643,9 +2652,11 @@ type PendingStore interface {
 	CountRunSend(ctx context.Context, turnID, job string, delta int) error
 
 	// ListActiveOn returns the unfinished runs of seats other than the one on
-	// excepts that are on its work: charged to an item it lists, or in its
-	// conversation, oldest first, at most [MaxRunsAround]; none for work that
-	// names nothing. One read, never one per seat.
+	// excepts that are on its work: charged to an item it names, or in its
+	// conversation; on what its caller created or wrote; or that created or
+	// wrote its item or conversation ([PendingRun.WroteKeys]). Oldest first, at
+	// most [MaxRunsAround]; none for work that names nothing. One read, never
+	// one per seat nor per run.
 	ListActiveOn(ctx context.Context, on RunsOn) ([]PendingRun, error)
 
 	// AskFoldIn records fold-in f on the run's row for its job ([FoldIn]):

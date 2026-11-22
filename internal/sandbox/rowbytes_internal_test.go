@@ -968,6 +968,12 @@ func worstRow(t *testing.T) PendingRun {
 		f.Words = plain(MaxFoldInBytes - size)
 		foldIns[i] = f
 	}
+	// WHAT THE TURN'S CALLS WROTE, as many keys as the row keeps, each at the
+	// one width a key has ([writtenKey]).
+	wroteKeys := make([]string, types.MaxWrittenRecords)
+	for i := range wroteKeys {
+		wroteKeys[i] = writtenKey(types.ConversationWritten(fmt.Sprintf("chatlet:room:%d", i)))
+	}
 	run := PendingRun{
 		TurnID: plain(64), WorkKey: plain(64), WorkSince: worstAt,
 		AgentHandle: plain(64), AgentID: uuid.NewString(), Role: markup(128),
@@ -1007,6 +1013,7 @@ func worstRow(t *testing.T) PendingRun {
 		// THE LONGEST TRACKER A WORK ITEM LIVES IN, `github` and `gitlab`.
 		WorkItem: &types.WorkItem{Backend: types.WorkGitHub, ID: plain(64), Key: plain(64),
 			Project: plain(64)},
+		WroteKeys:       wroteKeys,
 		Answered:        handles(100),
 		AudienceHandles: handles(MaxAudienceHandles), AudienceFallback: true, Requester: plain(64),
 		RequesterLogin: plain(iam.MaxLogin), RequesterApps: slices.Clone(iam.Apps), WorkingFor: workingFor(),
@@ -1107,7 +1114,8 @@ func TestARunsValuesAreBudgetedToWhatOneKeyOfTheStoreHolds(t *testing.T) {
 // the conversation, repos, cone paths, holds, leads, incarnations at 700,000),
 // or grow a seal or result, and the rest overruns; change a seal or the
 // conversation read by a byte, and a measured figure is off; hold a served call
-// to its length alone, and the worst row refuses to be built.
+// to its length alone, and the worst row refuses to be built; keep a written
+// record whole as its key, and the keys overrun their figure.
 func TestTheWholeRowFitsItsBudget(t *testing.T) {
 	t.Parallel()
 	run := worstRow(t)
@@ -1147,6 +1155,11 @@ func TestTheWholeRowFitsItsBudget(t *testing.T) {
 	}
 	if ExecuteStateBytes+RestBytes != RowBytes {
 		t.Error("the row's two shares do not add up to its budget")
+	}
+	withoutKeys := run
+	withoutKeys.WroteKeys = nil
+	if keys := whole - encoded(t, withoutKeys); keys > wroteRowBytes {
+		t.Errorf("the keys of what the turn wrote weigh %d, past their figure %d", keys, wroteRowBytes)
 	}
 
 	// THE HANDED SET, the third value: the most secrets a launch keeps

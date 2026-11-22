@@ -142,6 +142,9 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	// is this run's. The create writes NO part; readers tell another run's part
 	// by the name.
 	created.LeadsRun, created.LeadsAppended = run.LaunchID, 0
+	// NOR WHAT ITS CALLS WROTE, which only its log's appends fold in
+	// ([PendingRun.WroteKeys]).
+	created.WroteKeys = nil
 	created.Steer = RunSteer{Seat: bytes.Clone(run.Steer.Seat)}
 	openNotes(&created.Steer, run, run.LaunchID, now)
 	// A TRIGGER'S WORDS, HELD TO THEIR SHARE OF THE ROW ([MaxRunTitleBytes]):
@@ -2301,12 +2304,12 @@ func (s *CoordStore) ReleaseBox(ctx context.Context, turnID string) error {
 // NO FENCE, deliberately: this is a LOG APPEND of a call that already ran, and
 // refusing it because the seat moved would lose true evidence (the log's
 // version guards the write). Each step is one compare-and-swap on the log's own
-// fields. After a record lands the job's spend is written (own job only,
-// [BridgeLog.take]) and a late or abandoned call is handed to the log's job,
-// never failing the append ([CoordStore.fileLateItems]). THE ONE WRITER of a
-// call's steps and spend. A gone log, a stale-round begin or withdrawal, or an
-// append naming no job is dropped, no error (see [PendingStore]). A late call
-// is answered recorded beside [ErrJobReplaced].
+// fields. After a record lands the job's spend (own job only, [BridgeLog.take])
+// and the keys of what the turn wrote ([PendingRun.WroteKeys]) are written, and
+// a late or abandoned call is handed to the log's job, never failing the append
+// ([CoordStore.fileLateItems]). THE ONE WRITER of a call's steps and spend. A
+// gone log, a stale-round begin or withdrawal, or a jobless append is dropped,
+// no error (see [PendingStore]); a late call is recorded with [ErrJobReplaced].
 func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, a BridgeAppend) (bool, error) {
 	if !a.Step.Valid() {
 		return false, fmt.Errorf("sandbox: %q is no step of a bridged call", a.Step)
@@ -2357,13 +2360,18 @@ func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, a Brid
 		// that is over.
 		return false, nil
 	case a.Step != AppendRecord:
-		// A begin or withdrawal: no spend rides it.
+		// A begin or withdrawal: no spend rides it, nor anything it wrote.
 		return true, nil
 	case taken != takeOwn:
 		// A LATE CALL, in the log and paid by nobody: the row holds a later job,
 		// whose resume would pay it as its own. Said, so a caller asking again
-		// for an earlier attempt's spend stops. HANDED TO THE JOB THE LOG IS OPEN
-		// TO as the log lists it, which files it once however often asked.
+		// for an earlier attempt's spend stops. What it wrote reaches the row's
+		// keys in a write of its own, as a late item is filed. HANDED TO THE JOB
+		// THE LOG IS OPEN TO as the log lists it, which files it once however
+		// often asked.
+		if len(a.Wrote) > 0 {
+			s.keepWrittenKeys(ctx, turnID, logged)
+		}
 		listed, ok := logged.listedAs(a.Call)
 		if taken == takeEarlier {
 			listed, ok = logged.listedEarlierAs(a.Call)
@@ -2377,20 +2385,21 @@ func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, a Brid
 	// follows the reset naming the next job ([CoordStore.BeginLaunch]), so an
 	// append the log still takes as its own may find the row moved on, its spend
 	// dropped with the job. Written whether or not this append moved the log: an
-	// append asked again may be the first whose spend reaches the record.
+	// append asked again may be the first whose spend reaches the record. IN THE
+	// SAME WRITE, whatever job the row holds, the keys of the log's whole set.
 	_, _, err = s.mutateAny(ctx, turnID, func(run *PendingRun) bool {
+		var changed bool
+		run.WroteKeys, changed = foldWrittenKeys(run.WroteKeys, logged.Wrote)
 		if a.Launch != run.LaunchID {
-			return false
+			return changed
 		}
-		newest := run.Launch.Bridged.Newest(a.Spent)
-		if newest == run.Launch.Bridged {
-			return false
+		if newest := run.Launch.Bridged.Newest(a.Spent); newest != run.Launch.Bridged {
+			run.Launch.Bridged, changed = newest, true
 		}
-		run.Launch.Bridged = newest
-		return true
+		return changed
 	})
 	if err != nil {
-		return true, fmt.Errorf("sandbox: record what run %s's bridged calls cost: %w", turnID, err)
+		return true, fmt.Errorf("sandbox: record what run %s's bridged calls cost and wrote: %w", turnID, err)
 	}
 	// A CALL ITS HARNESS GAVE UP ON is handed to its job once its spend is
 	// written: an error above stands, and the ask again files it.
@@ -2398,6 +2407,24 @@ func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, a Brid
 		s.fileLateItems(ctx, turnID, a.Launch, logged.Round, []BridgeCall{listed})
 	}
 	return true, nil
+}
+
+// keepWrittenKeys folds the keys of what logged's set holds onto turnID's row
+// ([PendingRun.WroteKeys]) in a write of its own, for a late call, whose spend
+// rides no write. NEVER AN ERROR TO ITS CALLER, whose own write landed: said,
+// and the next record of the log's own job, or of a late call that wrote,
+// folds the whole set again.
+func (s *CoordStore) keepWrittenKeys(ctx context.Context, turnID string, logged BridgeLog) {
+	_, _, err := s.mutateAny(ctx, turnID, func(run *PendingRun) bool {
+		var changed bool
+		run.WroteKeys, changed = foldWrittenKeys(run.WroteKeys, logged.Wrote)
+		return changed
+	})
+	if err != nil {
+		log.WarnContext(ctx, "sandbox_run_written_keys_unkept", "turn_id", turnID, "error", err.Error(),
+			"detail", "the run's row lacks the keys of what a late call wrote until its next recorded call, so "+
+				"another seat's run on that work is not shown it meanwhile")
+	}
 }
 
 // logTake is what a run's log takes one bridged append for

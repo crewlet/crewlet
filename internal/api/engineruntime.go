@@ -286,9 +286,9 @@ func (r engineRuntime) MCPSignIns() mcpapi.SignIns { return mcpSignIns{e: r.engi
 // MCPGrants is the engine's read of each MCP server's OAuth grant.
 func (r engineRuntime) MCPGrants() queries.MCPGrantReader { return r.engine }
 
-// MCPLanding is the engine finishing a sign-in where the vendor sends the
-// person back, its refusals mapped onto the page's ([mcpLanding]).
-func (r engineRuntime) MCPLanding() webhooks.MCPSignIns { return mcpLanding{e: r.engine} }
+// OAuthLanding is the engine finishing a sign-in where the vendor sends the
+// person back, its refusals mapped onto the page's ([oauthLanding]).
+func (r engineRuntime) OAuthLanding() webhooks.OAuthSignIns { return oauthLanding{e: r.engine} }
 
 // Builtins is the engine's own tools as this node's seats are offered them, off
 // the registry of the revision this node runs ([builtinOffer]).
