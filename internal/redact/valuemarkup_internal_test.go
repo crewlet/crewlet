@@ -2,6 +2,7 @@ package redact
 
 import (
 	"bytes"
+	"math/rand/v2"
 	"strings"
 	"testing"
 )
@@ -247,5 +248,45 @@ func TestAKeysRunIsNoValueOfASuffixSpelledWithoutItsQuote(t *testing.T) {
 	text := "| Password: \" |\n| fAt0gun+ |\n| hunter2x9 \" " + pc + " " + testEnd + " |\n"
 	if once := Secrets(text); strings.Contains(once, "hunter2x9") {
 		t.Errorf("a word the key's block holds is shown:\n text %q\n once %q", text, once)
+	}
+}
+
+// A KEY BEFORE A VALUE PAST MARKUP IS FOUND WITHIN ITS LABEL'S RUN
+// ([keyBefore]): what it answers at every word end of a text is what the
+// first key read [MaxReach] past the word answers, over random lines of keys,
+// labels, markers, `_`, markup and bytes no UTF-8 holds. A key past where a
+// label read back to the word would stop ([labelEnd]) has a label beginning
+// at the word or past it, so the search ends there.
+//
+// Mutation: end the label's run at a key's marker, at `_`, or at the word
+// itself, or start it inside a marker, and an answer differs.
+func TestAKeyBeforeAValuePastMarkupIsFoundWithinItsLabelsRun(t *testing.T) {
+	t.Parallel()
+	r := rand.New(rand.NewPCG(1897, 1))
+	pieces := []string{
+		"Password: ", "password=", "Retype password:", "db_password=", "pwd ", "pass", "x",
+		" ", "  ", "\t", "\n", "|", "**", "- ", ":", ",", "_", "(", ".", "/", "'",
+		"hunter2", "é", "\xff", "\xe2\x82", keyMarker, keyMarker[:5], Marker,
+	}
+	whole := func(text string, from, w int) bool {
+		k := keyedIndex(passwordRule(), text[from:min(len(text), w+MaxReach)])
+		return k >= 0 && labelStart(text, from, from+k) < w
+	}
+	for range 4000 {
+		var b strings.Builder
+		for range 1 + r.IntN(24) {
+			b.WriteString(pieces[r.IntN(len(pieces))])
+		}
+		text := b.String()
+		from := r.IntN(len(text) + 1)
+		before := keyBefore(text, from)
+		for w := from; w <= len(text); w++ {
+			if w < len(text) && !valueSpace(text[w]) && text[w] != '\\' {
+				continue // a word ends at a space, an escaped break or the text's end
+			}
+			if got, want := before(w), whole(text, from, w); got != want {
+				t.Fatalf("%q from %d, a word ending at %d: a key before it %v, read MaxReach past it %v", text, from, w, got, want)
+			}
+		}
 	}
 }
