@@ -19,6 +19,12 @@ func (p Paths) OpenCodeConfig() string { return p.WorkDir() + "/opencode.json" }
 // there loads in a later run.
 func (p Paths) OpenCodeConfigDir() string { return p.WorkDir() + "/opencode-config" }
 
+// OpenCodeKeys is the store document of the run's provider keys
+// ([openCodeStoreKeys]), written by [OpenCode.WriteConfig], imported through
+// the run's server and removed by its script, and removed before every run
+// ([Runner.ClearArtifacts]).
+func (p Paths) OpenCodeKeys() string { return p.WorkDir() + "/opencode-keys" }
+
 // OpenCodeValues is the directory holding the values an OpenCode run's MCP
 // servers are configured with — each server's url, each header value, each
 // environment value — one file apiece, which [Paths.OpenCodeConfig] names by a

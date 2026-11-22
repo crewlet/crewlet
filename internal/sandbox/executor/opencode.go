@@ -563,7 +563,16 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	line(`  if bounded login %d e opencode auth import --server "$url" %s > /dev/null 2>&1; then imported=1; elif [ -z "$endasked" ]; then echo 'crewlet: OpenCode refused the login this box was given — sign the engine in again with crewlet llm login' >&2; exit 1; fi`,
 		secs(times.call), doc)
 	line(`fi`)
-	b.WriteString(openCodeEndpointCheck(req.Model, ans, secs(openCodeModelListWait)))
+	// THE ENTRY'S KEYS, after the login, so a login of the same provider
+	// stays the active one, as it was over a key in the environment (2.3.2
+	// keeps the first active credential of a provider active).
+	keys := shellword.Quote(paths.OpenCodeKeys())
+	line(`if [ -z "$endasked" ] && [ -s %s ]; then`, keys)
+	line(`  if bounded keys %d e opencode auth import --server "$url" %s > /dev/null 2>&1; then :; elif [ -z "$endasked" ]; then rm -f %s; echo 'crewlet: OpenCode refused the provider keys of the run' >&2; exit 1; fi`,
+		secs(times.call), keys, keys)
+	line(`fi`)
+	line(`rm -f %s`, keys)
+	b.WriteString(openCodeConfigCheck(ans, secs(openCodeListWait)))
 	line(`if [ -n "$imported" ]; then`)
 	line(`  %s &`, openCodeExporter(times.sync, loop))
 	line(`  xpid=$!`)
@@ -1168,14 +1177,30 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 	// THE ENTRY'S PROVIDER AT ITS OWN ENDPOINT, pinned where the run knows it
 	// ([openCodeEndpoints]), so no lower configuration points it elsewhere; a
 	// provider it does not know is checked by the script instead.
+	login, err := openCodeBoxLogin(ctx, box, paths)
+	if err != nil {
+		return "", err
+	}
 	if provider, _, ok := openCodeModelRef(req.Model); ok {
 		if endpoint, pinned := openCodeEndpoints[provider]; pinned {
-			kind, err := openCodeSignInKind(ctx, box, paths, provider)
-			if err != nil {
-				return "", err
-			}
 			cfg["provider"] = map[string]any{provider: map[string]any{
-				"options": map[string]any{"baseURL": endpoint.of(kind)}}}
+				"options": map[string]any{"baseURL": endpoint.of(openCodeSignInKind(login, provider))}}}
+		}
+	}
+	if stripped, changed := openCodeWithoutKeys(login); changed {
+		if err := box.WriteFile(ctx, paths.CredentialDocument(), stripped); err != nil {
+			return "", fmt.Errorf("executor: writing the box's OpenCode login: %w", err)
+		}
+	}
+	// THE ENTRY'S KEYS FOR THE PROVIDERS IT PINS, as a login the run imports
+	// rather than variables of its environment ([openCodeStoreKeys]).
+	keys, err := openCodeStoreKeys(req)
+	if err != nil {
+		return "", err
+	}
+	if keys != nil {
+		if err := box.WriteFile(ctx, paths.OpenCodeKeys(), keys); err != nil {
+			return "", fmt.Errorf("executor: writing the run's provider keys: %w", err)
 		}
 	}
 	agent := map[string]any{}
@@ -2108,7 +2133,7 @@ func (OpenCode) notesOffWhy() string {
 
 // artifacts is what an OpenCode run leaves in its box of its own.
 func (OpenCode) artifacts(p Paths) (files, dirs []string) {
-	return []string{p.OpenCodeConfig()},
+	return []string{p.OpenCodeConfig(), p.OpenCodeKeys()},
 		[]string{p.OpenCodeValues(), p.OpenCodeValuesFresh(), p.OpenCodeSteerPlugin(), p.OpenCodeSkills(),
 			p.OpenCodeSkillsPlugin(), p.OpenCodeToolEnvPlugin(), p.OpenCodeConfigDir()}
 }
