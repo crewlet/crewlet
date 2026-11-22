@@ -567,7 +567,8 @@ func TestAMuseArchiveReadsAsTheSessionsTranscript(t *testing.T) {
 func TestAMuseRunsArtifactsAreItsOwnFiles(t *testing.T) {
 	p := Paths{Home: "/h"}
 	files, dirs := (Muse{}).artifacts(p)
-	if !slices.Equal(files, []string{p.MuseChildLines(), p.MuseTakeConfig(), p.MuseTakeConfigFresh(), p.MuseNoteHelper()}) ||
+	if !slices.Equal(files, []string{p.MuseChildLines(), p.MuseTakeConfig(), p.MuseTakeConfigFresh(), p.MuseNoteHelper(),
+		p.MuseNotesInstall()}) ||
 		!slices.Equal(dirs, []string{p.MuseServers(), p.MuseServersFresh(), p.MuseNotesPlugin()}) {
 		t.Fatalf("artifacts = %v %v", files, dirs)
 	}
