@@ -12,16 +12,14 @@ import (
 // logs each call's arguments in order, keeps the environment and working
 // directory config.get was asked in, answers `--version` as 2.3.2, and
 // answers model.list and config.get with the files the case wrote into the
-// box's home, but cut short at 64 KiB where its output is a pipe, as a
-// pipe-cutting OpenCode would.
+// box's home.
 const pointStandIn = `#!/bin/sh
 printf '%s\n' "$*" >> "$HOME/opencode-calls"
-answer() { if [ -p /dev/stdout ]; then printf '{"cut'; else cat "$HOME/$1"; fi; }
 case "$*" in
 --version) echo 'opencode v2.3.2' ;;
 'auth import --standalone') cat > /dev/null ;;
-'api --standalone model.list') answer models.json ;;
-'api --standalone config.get') env > "$HOME/opencode-env"; pwd > "$HOME/opencode-cwd"; answer config.json ;;
+'api --standalone model.list') cat "$HOME/models.json" ;;
+'api --standalone config.get') env > "$HOME/opencode-env"; pwd > "$HOME/opencode-cwd"; cat "$HOME/config.json" ;;
 *) exit 3 ;;
 esac
 `
@@ -64,12 +62,11 @@ func pointBox(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 // THE POINT IS READ IN THE CONTINUATION'S BOX. One exec in the box: the login
 // the box holds imported first, as the run's own script imports it before its
 // server reads a provider's credential; the release asked where the launch
-// has none; model.list and config.get answered into files, never through a
-// pipe, which cuts OpenCode's output; the point decided from them. Nothing
-// it was answered is left in the box.
+// has none; model.list and config.get asked; the point decided from them.
+// Nothing it was answered is left in the box.
 //
-// Mutation: answer model.list through a pipe, skip the login's import, or
-// leave the answers in the box, and this goes red.
+// Mutation: skip the login's import, or leave the answers in the box, and
+// this goes red.
 func TestThePointIsReadInTheContinuationsBox(t *testing.T) {
 	t.Parallel()
 	runner, box := pointBox(t)

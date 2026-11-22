@@ -204,9 +204,16 @@ type carrier interface {
 
 	// Continues reports whether a session written by release writer, carried
 	// from another box, can be continued by release box (each as `--version`
-	// gave it), and if not, why, in a person's words. An unreadable release is
-	// taken for a current one, as the notes gate takes it ([claudeNotesGate]).
+	// gave it), and if not, why, in a person's words. Each harness says what
+	// an unreadable release is: Claude Code takes it for a current one, as
+	// the notes gate does ([claudeNotesGate]); OpenCode continues only on the
+	// release it names.
 	Continues(box, writer string) (bool, string)
+
+	// Writes reports whether a session written by release writer is one this
+	// runner continues in any box, and if not, why: the writer's floor alone,
+	// asked before a box is ([Runner.Restores]).
+	Writes(writer string) (bool, string)
 
 	// Pack is the script that packs session now, the same pack the run's
 	// script makes once its harness exits, for a job that never got to

@@ -353,7 +353,7 @@ func openCodeFixtureTranscript(version string) []shown {
 	notFound, pids := map[string]string{
 		"2.3.2": "File not found: /nonexistent/missing.go\n\nThe folder /nonexistent does not exist. " +
 			"The nearest folder that does is /.",
-	}[version], map[string][2]string{"2.3.2": {"198", "330"}}[version]
+	}[version], map[string][2]string{"2.3.2": {"329", "485"}}[version]
 	fixed := shown{kind: executor.EntryModel, text: "Fixed: the cache takes its lock."}
 	steps := func(note []shown, pid string) []shown {
 		return slices.Concat([]shown{

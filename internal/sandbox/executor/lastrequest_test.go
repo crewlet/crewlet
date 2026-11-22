@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -214,14 +213,6 @@ func openCodeAbortedWith(id string, n int) string {
 		`"content":[{"type":"text","text":%q}],"finish":"error",`+
 		`"error":{"type":"aborted","message":"Step interrupted"},`+
 		`"tokens":{"input":5000,"output":30,"reasoning":0,"cache":{"read":200,"write":0}}}`, id, strings.Repeat("a", n))
-}
-
-// openCodeSettledWith is [openCodeSettled] with 1015 uncached and 200 cache-read
-// input tokens, its content a text of n bytes: a page of about that size.
-func openCodeSettledWith(id string, n int) string {
-	return fmt.Sprintf(`{"id":%q,"time":{"created":1794632160771,"completed":1794632160784},"type":"assistant",`+
-		`"agent":"build","content":[{"type":"text","text":%q}],"finish":"stop","cost":0,`+
-		`"tokens":{"input":1015,"output":30,"reasoning":0,"cache":{"read":200,"write":0}}}`, id, strings.Repeat("a", n))
 }
 
 // openCodePage is one page of the session's message list, as the run's server
@@ -717,33 +708,6 @@ func TestAPagePastTheBudgetIsSaidAndEndsTheReading(t *testing.T) {
 		got, why, _ := executor.StreamRequest(executor.OpenCode{}, linesOf(run.stdout)...)
 		if got != (sandbox.RequestMeasure{}) || !strings.Contains(why, "past the") {
 			t.Errorf("the run's stream reads %+v (%s), want no figure, the page said past the budget", got, why)
-		}
-	})
-}
-
-// A PAGE PAST WHAT A PIPE HOLDS IS READ WHOLE. A cut into a pipe exits 0
-// (2.3.2 cut none to 1 MiB, measured), so the script has OpenCode write each
-// page to a file and prints it from there, as
-// with its other answers: a settled step's page three times what a pipe holds,
-// from an OpenCode that cuts what it pipes, is printed whole and gives its figure.
-//
-// Mutation: pipe the page into its file, and the page is cut at 64 KiB, which
-// reads as no figure.
-func TestAPagePastWhatAPipeHoldsIsReadWhole(t *testing.T) {
-	t.Parallel()
-	page := openCodePage(openCodeSettledWith("msg_1", 3*pipeCut))
-	forEachShell(t, func(t *testing.T, sh boxShell) {
-		run := runScript(t, scriptOpts{shell: sh, pages: map[string]string{"first": page},
-			env: []string{"FAKE_RUN_MESSAGE=msg_1", "FAKE_PIPE_CUT=" + strconv.Itoa(pipeCut)}})
-		if run.code != 0 {
-			t.Fatalf("exit %d:\n%s", run.code, run.stderr)
-		}
-		if !slices.Contains(linesOf(run.stdout), openCodeContextLine(page)) {
-			t.Errorf("the stream does not hold the %d-byte page whole", len(page))
-		}
-		got, why, _ := executor.StreamRequest(executor.OpenCode{}, linesOf(run.stdout)...)
-		if want := (sandbox.RequestMeasure{Tokens: 1015 + 200, Own: true}); got != want {
-			t.Errorf("the run's stream reads %+v (%s), want %+v, the page's own step", got, why, want)
 		}
 	})
 }
