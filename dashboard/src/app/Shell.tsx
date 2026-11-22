@@ -118,8 +118,7 @@ import { useAskReading } from "./assistant/place.ts";
 import {
   ASSISTANT_COMPOSER_ID,
   AssistantControlContext,
-  queueDraft,
-  queueQuestion,
+  askVerbs,
   type AssistantFocus,
 } from "./assistant/control.ts";
 import { framePageOf, setFramePage } from "./assistant/context.ts";
@@ -802,17 +801,13 @@ function Frame({ children, standalone }: { children: ReactNode; standalone: bool
         else showAssistant(!assistantOpen, focus);
       },
       // --- assistant page actions (WP12) ---
-      ask: (question: string) => {
-        if (assistantUnavailable !== null) return;
-        queueQuestion(question);
-        if (!assistantOpen && !askHere) showAssistant(true, "composer");
-      },
-      draft: (question: string) => {
-        if (assistantUnavailable !== null) return;
-        queueDraft(question);
-        if (!assistantOpen && !askHere) showAssistant(true, "composer");
-        else document.getElementById(ASSISTANT_COMPOSER_ID)?.focus();
-      },
+      ...askVerbs({
+        open: assistantOpen,
+        here: askHere,
+        closed: assistantUnavailable !== null,
+        show: () => showAssistant(true, "composer"),
+        focusComposer: () => document.getElementById(ASSISTANT_COMPOSER_ID)?.focus(),
+      }),
       // --- end assistant page actions (WP12) ---
     }),
     [assistantOpen, assistantUnavailable, showAssistant, askHere],

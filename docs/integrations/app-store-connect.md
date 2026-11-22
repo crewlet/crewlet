@@ -53,9 +53,9 @@ The Account Holder has no key: an act only it may take is done in App Store Conn
 
 | Level | The agent may |
 |---|---|
-| `read` (default) | Read everything its apps hold |
-| `operate` | Also make changes nobody outside the team sees at once (a draft version's text, a draft custom product page or in-app event, internal TestFlight), and ask for anything customers or external testers see |
-| `administer` | Also ask for account changes: users, invitations, devices, certificates, bundle IDs, profiles, sandbox testers, webhooks, and deletes that cannot be undone |
+| `read` (View, the default) | Read everything its apps hold |
+| `operate` (Manage) | Also make changes nobody outside the team sees at once (a draft version's text, a draft custom product page or in-app event, internal TestFlight), and ask for anything customers or external testers see |
+| `administer` (Administer) | Also ask for account changes: users, invitations, devices, certificates, bundle IDs, profiles, sandbox testers, webhooks, and deletes that cannot be undone |
 
 A seat names the apps it may touch (`apps`, required while on). Every resource a call names that belongs to an app, in its path, its filters or the body it sends, must be in one of those apps; Crewlet finds its app before anything is sent. Resources no app owns (users, beta testers, devices, certificates, reports across apps) need `team_resources: true` on the seat; Apple's own reference data (territories, app categories) needs nothing. An answer never shows an app outside the seat's apps, and a read through a resource no app owns that would show another app's resources (a tester's beta groups) is refused unless the seat's apps are all of the team's: read them through one of its apps instead.
 
