@@ -137,3 +137,7 @@ func (noGrants) HeldMCPGrant(context.Context, string) (bool, error) { return fal
 func (noGrants) RevokeMCPServerGrant(context.Context, *config.MCPServer) (string, string, bool, error) {
 	return "", "", false, nil
 }
+
+func (noGrants) GiveUpIntegrationGrant(context.Context, *config.Company, string) (string, string, bool, error) {
+	return "", "", false, nil
+}

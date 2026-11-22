@@ -2,6 +2,8 @@ package sandbox
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -330,18 +332,23 @@ func (c *Coordinator) ReadsNotes(harness string) bool {
 // newest are the ones a run is not shown, said as the bound.
 const MaxRunsAround = 8
 
-// RunsOn is the work other seats' runs are found on (ADR-0176's amendment):
-// work items by reference ([types.WorkItem.Ref]), a conversation by its
-// identity, and the seat whose runs are not wanted, the caller's own, which
-// [PendingStore.ListActiveForSeat] lists.
+// RunsOn is the work other seats' runs are found on (ADR-0176's amendment): the
+// caller's work item by reference ([types.WorkItem.Ref]) and the items linked
+// to it, its conversation by its identity, the keys of what its calls created
+// or wrote, as its row holds them ([PendingRun.WroteKeys]), and the seat whose
+// runs are not wanted, the caller's own, which [PendingStore.ListActiveForSeat]
+// lists.
 type RunsOn struct {
-	Items        []string
+	Item         string
+	Linked       []string
 	Conversation string
+	Wrote        []string
 	Except       string
 }
 
-// on reports whether run is on the work on names: an item it lists, or its
-// conversation, of a seat other than the one excepted.
+// on reports whether run, of a seat other than the one excepted, is on the
+// work on names: on its item or one linked to it, in its conversation, on what
+// its caller wrote, or having written its item or conversation.
 func (on RunsOn) on(run PendingRun) bool {
 	if run.AgentHandle == on.Except || !slices.Contains(Active, run.Status) {
 		return false
@@ -349,16 +356,74 @@ func (on RunsOn) on(run PendingRun) bool {
 	if on.Conversation != "" && run.ConversationKey == on.Conversation {
 		return true
 	}
-	return run.WorkItem != nil && slices.Contains(on.Items, run.WorkItem.Ref())
+	if run.WorkItem != nil && (run.WorkItem.Ref() == on.Item || slices.Contains(on.Linked, run.WorkItem.Ref())) {
+		return true
+	}
+	return on.OnWritten(run) || on.WrittenBy(run)
+}
+
+// OnWritten reports whether run is charged to an item, or in a conversation,
+// that on's caller created or wrote: a ticket its calls filed, a thread they
+// posted in.
+func (on RunsOn) OnWritten(run PendingRun) bool {
+	if run.WorkItem != nil && slices.Contains(on.Wrote, writtenKey(types.ItemWritten(*run.WorkItem))) {
+		return true
+	}
+	return slices.Contains(on.Wrote, writtenKey(types.ConversationWritten(run.ConversationKey)))
+}
+
+// WrittenBy reports whether run's calls created or wrote on's item or
+// conversation: the run that filed the ticket on's caller works on.
+func (on RunsOn) WrittenBy(run PendingRun) bool {
+	item := types.WrittenRecord{Kind: types.WrittenItem, ID: on.Item}
+	return slices.Contains(run.WroteKeys, writtenKey(item)) ||
+		slices.Contains(run.WroteKeys, writtenKey(types.ConversationWritten(on.Conversation)))
+}
+
+// writtenKeyBytes is how much of a written record's digest its key keeps
+// ([writtenKey]): SIXTEEN BYTES, 128 bits, at which two records sharing a key
+// is a chance no fleet meets, in half the whole digest's width.
+const writtenKeyBytes = 16
+
+// writtenKey is r as a run's row keeps it ([PendingRun.WroteKeys]), THE ONE KEY
+// the append writes, the listing matches and the tests read: the first
+// [writtenKeyBytes] of SHA-256 over its kind, a colon and its id (a kind holds
+// none, so no two records share an input), in hex. AN EXACT MEMBERSHIP INDEX,
+// never a likeness (ADR-0167), and never the authority: the log keeps the
+// records. Hex at a fixed width, so a set at [types.MaxWrittenRecords] weighs
+// 4.5 KiB of the row whatever its ids hold, where the records weigh up to 200
+// KB escaped. "" for a record no set holds.
+func writtenKey(r types.WrittenRecord) string {
+	if !r.Valid() {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(string(r.Kind) + ":" + r.ID))
+	return hex.EncodeToString(sum[:writtenKeyBytes])
+}
+
+// foldWrittenKeys is have with the key of each of records it lacks appended,
+// in their order, and whether any was: never one dropped, and held to
+// [types.MaxWrittenRecords], which the records, a log's set, already are.
+func foldWrittenKeys(have []string, records []types.WrittenRecord) ([]string, bool) {
+	out := have
+	for _, r := range records {
+		key := writtenKey(r)
+		if key == "" || slices.Contains(out, key) || len(out) >= types.MaxWrittenRecords {
+			continue
+		}
+		out = append(slices.Clip(out), key)
+	}
+	return out, len(out) != len(have)
 }
 
 // ListActiveOn returns the unfinished runs of other seats on the work on
 // names. See the contract on [PendingStore].
 //
 // ONE LISTING of the fleet's runs, the read [CoordStore.ListActiveForSeat]
-// makes, never one per seat.
+// makes, never one per seat, nor a log read per run: what each run wrote is
+// matched off its row ([PendingRun.WroteKeys]).
 func (s *CoordStore) ListActiveOn(ctx context.Context, on RunsOn) ([]PendingRun, error) {
-	if len(on.Items) == 0 && on.Conversation == "" {
+	if on.Item == "" && len(on.Linked) == 0 && on.Conversation == "" && len(on.Wrote) == 0 {
 		return nil, nil
 	}
 	runs, err := s.list(ctx, on.on)

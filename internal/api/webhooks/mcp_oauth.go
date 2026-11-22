@@ -1,6 +1,7 @@
 package webhooks
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,45 +14,52 @@ import (
 	"github.com/crewlet/crewlet/internal/mcp/oauth"
 )
 
-// THE MCP SIGN-IN'S TWO PUBLIC ADDRESSES, under /webhooks/ because that
+// THE OAUTH SIGN-IN'S TWO PUBLIC ADDRESSES, under /webhooks/ because that
 // partition is reached without an operator credential (internal/api/auth's
-// public prefixes): the vendor's callback and the client metadata document.
-//
-// # The callback trusts nothing but the state's signature
+// public prefixes): the vendor's callback, for an MCP server's and an
+// integration's grant alike (the state says which; companies registered the
+// path at their vendors), and the client metadata document.
 //
 // `GET /webhooks/mcp-oauth` is unauthenticated. Exchanging a code and sealing
 // a grant is decided by the state alone, signed under the fleet keyring and
-// spent once (internal/engine's mcpoauth.go). Every query value is bounded
+// spent once (internal/engine's oauthgrant.go). Every query value is bounded
 // first, nothing the vendor sent is shown, and the page is a template with no
 // script under its own Content-Security-Policy.
 
-// MCPSignIns finishes the MCP sign-ins the engine started and publishes its
+// OAuthSignIns finishes the sign-ins the engine started and publishes its
 // client metadata document.
-type MCPSignIns interface {
+type OAuthSignIns interface {
 	// CompleteSignIn finishes the sign-in landing's state names, answering
-	// the server's name; a refusal is an [*MCPSignInRefusal].
-	CompleteSignIn(ctx context.Context, landing MCPLanding) (string, error)
+	// what it signed in to; a refusal is a [*SignInRefusal].
+	CompleteSignIn(ctx context.Context, landing Landing) (Landed, error)
 	// ClientMetadata is the engine's client metadata document, false where
 	// the engine has no public address to publish one at.
 	ClientMetadata() (oauth.Metadata, bool)
 }
 
-// MCPLanding is what a vendor sent a person's browser back with.
-type MCPLanding struct {
+// Landing is what a vendor sent a person's browser back with.
+type Landing struct {
 	State, Code, Issuer string
 	// Error and Description are the vendor's refusal (RFC 6749, 4.1.2.1).
 	Error, Description string
 }
 
-// MCPSignInRefusal is why a sign-in could not be finished, in words a person
+// Landed is what a finished sign-in signed in to: an MCP server, or an
+// integration's consent grant, by name, and Title as a person calls it.
+type Landed struct {
+	Name, Title string
+	Integration bool
+}
+
+// SignInRefusal is why a sign-in could not be finished, in words a person
 // acts on, and the status the page answers with. It never carries the code, a
 // token or the verifier.
-type MCPSignInRefusal struct {
+type SignInRefusal struct {
 	Status         int
 	Reason, Remedy string
 }
 
-func (r *MCPSignInRefusal) Error() string { return "webhooks: " + r.Reason + ". " + r.Remedy }
+func (r *SignInRefusal) Error() string { return "webhooks: " + r.Reason + ". " + r.Remedy }
 
 // The bounds of a landing's query, past which it is no landing this engine
 // sent anybody to. REASONED: a state the engine signs is a server name, a uuid
@@ -88,7 +96,7 @@ const mcpOAuthTemplate = `<!doctype html>
 <html>
   <head>
     <meta charset="utf-8">
-    <title>Crewlet: MCP server sign-in</title>
+    <title>Crewlet: sign-in</title>
     <style>
       body { font-family: system-ui, sans-serif; max-width: 40rem;
              margin: 4rem auto; padding: 0 1rem; line-height: 1.5; }
@@ -96,7 +104,11 @@ const mcpOAuthTemplate = `<!doctype html>
     </style>
   </head>
   <body>
-    {{if .Server}}<h1>Signed in to {{.Server}}</h1>
+    {{if .Integration}}<h1>Signed in to {{.Integration}}</h1>
+      <p>Crewlet keeps the sign-in for the company and renews it on every
+      node. The integration reads with it in a moment.</p>
+      <p class="muted">You can close this tab and go back to Settings, Integrations.</p>
+    {{else if .Server}}<h1>Signed in to {{.Server}}</h1>
       <p>Crewlet keeps the sign-in for the company and starts the server on
       every node. Its tools reach the agents granted it in a moment.</p>
       <p class="muted">You can close this tab and go back to Settings, MCP &amp; tools.</p>
@@ -109,16 +121,17 @@ const mcpOAuthTemplate = `<!doctype html>
 `
 
 type mcpOAuthView struct {
-	// Server is the server signed in to, from the signed state; "" for a
-	// sign-in that was not finished, which Reason and Remedy explain.
-	Server         string
-	Reason, Remedy string
+	// Server is the MCP server signed in to, and Integration the integration
+	// kind, from the signed state; both "" for a sign-in that was not
+	// finished, which Reason and Remedy explain.
+	Server, Integration string
+	Reason, Remedy      string
 }
 
 // mcpOAuthLanding serves GET /webhooks/mcp-oauth.
 func (r *Receiver) mcpOAuthLanding(w http.ResponseWriter, req *http.Request) {
 	q := req.URL.Query()
-	landing := MCPLanding{State: q.Get("state"), Code: q.Get("code"), Issuer: q.Get("iss"),
+	landing := Landing{State: q.Get("state"), Code: q.Get("code"), Issuer: q.Get("iss"),
 		Error: q.Get("error"), Description: q.Get("error_description")}
 	view := mcpOAuthView{}
 	status := http.StatusOK
@@ -128,21 +141,25 @@ func (r *Receiver) mcpOAuthLanding(w http.ResponseWriter, req *http.Request) {
 		len(landing.Description) > maxMCPDescription:
 		status = http.StatusBadRequest
 		view.Reason = "this address is not one a sign-in returns to"
-		view.Remedy = "Start the sign-in again from the server's page in Settings, MCP & tools"
+		view.Remedy = "Start the sign-in again from its page in Settings"
 	case landing.State == "":
 		status = http.StatusBadRequest
 		view.Reason = "the vendor sent no sign-in state with this page"
-		view.Remedy = "Start the sign-in from the server's page in Settings, MCP & tools"
-	case r.mcpSignIns == nil:
+		view.Remedy = "Start the sign-in from its page in Settings"
+	case r.oauthSignIns == nil:
 		// NOT IMPLEMENTED HERE, rather than unavailable: this node does not
 		// finish sign-ins at all, and waiting would not change that.
 		status = http.StatusNotImplemented
-		view.Reason = "this engine does not finish MCP sign-ins"
+		view.Reason = "this engine does not finish sign-ins"
 		view.Remedy = "Start the sign-in again from an engine serving the dashboard"
 	default:
-		server, err := r.mcpSignIns.CompleteSignIn(req.Context(), landing)
-		var refused *MCPSignInRefusal
+		landed, err := r.oauthSignIns.CompleteSignIn(req.Context(), landing)
+		server := landed.Name
+		var refused *SignInRefusal
 		switch {
+		case err == nil && landed.Integration:
+			view.Integration = cmp.Or(landed.Title, server)
+			log.InfoContext(req.Context(), "integration_sign_in_landed", "grant", server)
 		case err == nil:
 			view.Server = server
 			log.InfoContext(req.Context(), "mcp_sign_in_landed", "server", server)
@@ -152,7 +169,7 @@ func (r *Receiver) mcpOAuthLanding(w http.ResponseWriter, req *http.Request) {
 		default:
 			status = http.StatusInternalServerError
 			view.Reason = "the sign-in could not be finished"
-			view.Remedy = "Start it again from the server's page in Settings, MCP & tools"
+			view.Remedy = "Start it again from its page in Settings"
 			log.WarnContext(req.Context(), "mcp_sign_in_refused", "server", server, "error", err.Error())
 		}
 	}
@@ -177,9 +194,9 @@ func (r *Receiver) mcpOAuthLanding(w http.ResponseWriter, req *http.Request) {
 // names the engine's callback and nothing else.
 func (r *Receiver) mcpClientMetadata(w http.ResponseWriter, _ *http.Request) {
 	var doc oauth.Metadata
-	ok := r.mcpSignIns != nil
+	ok := r.oauthSignIns != nil
 	if ok {
-		doc, ok = r.mcpSignIns.ClientMetadata()
+		doc, ok = r.oauthSignIns.ClientMetadata()
 	}
 	if !ok {
 		httpjson.FailWithFields(w, http.StatusNotFound, httpjson.CodeNotFound, httpjson.Detail{

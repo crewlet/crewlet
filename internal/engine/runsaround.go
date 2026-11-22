@@ -155,9 +155,11 @@ type aroundRun struct {
 
 // runsAround is turnID's run and every run in flight around it, by turn id:
 // every other run of its seat, in one listing of the seat's runs, and other
-// seats' runs on its work item, in its conversation or on an item linked to
-// its item, in one listing of the fleet's ([sandbox.PendingStore.ListActiveOn]).
-// A nil caller is a run with no row, or a node with no sandbox runtime.
+// seats' runs on its work item, in its conversation, on an item linked to its
+// item, on what it created or wrote or having created or written its item or
+// conversation, in one listing of the fleet's
+// ([sandbox.PendingStore.ListActiveOn]). A nil caller is a run with no row, or
+// a node with no sandbox runtime.
 func (d *runsDesk) runsAround(ctx context.Context, turnID string) (*sandbox.PendingRun, map[string]aroundRun,
 	error) {
 	rt := d.engine.sandbox.Load()
@@ -198,29 +200,36 @@ func inFlight(run sandbox.PendingRun, turn string) bool {
 }
 
 // workOf is the work other seats' runs are found on for caller's run: its
-// item and the items the tracker links to it, and its conversation where that
-// is one two seats can share (never a schedule's, which each seat it fans out
-// to works on its own, nor an event's own fallback).
+// item and the items the tracker links to it, its conversation where that is
+// one two seats can share (never a schedule's, which each seat it fans out to
+// works on its own, nor an event's own fallback), and what its calls created
+// or wrote, as its row keeps it ([sandbox.PendingRun.WroteKeys]): no read
+// beyond the row runsAround holds.
 func (d *runsDesk) workOf(ctx context.Context, caller sandbox.PendingRun) sandbox.RunsOn {
-	on := sandbox.RunsOn{Except: caller.AgentHandle}
+	on := sandbox.RunsOn{Except: caller.AgentHandle, Wrote: caller.WroteKeys}
 	if kind := conversationKind(caller.ConversationKey); kind != "" && kind != "schedule" {
 		on.Conversation = caller.ConversationKey
 	}
 	if caller.WorkItem != nil {
-		on.Items = append([]string{caller.WorkItem.Ref()}, d.linkedTo(ctx, *caller.WorkItem)...)
+		on.Item, on.Linked = caller.WorkItem.Ref(), d.linkedTo(ctx, *caller.WorkItem)
 	}
 	return on
 }
 
 // relationOf is how run, another seat's found on the work on names, bears on
-// caller's: the same item first, then the same conversation, else an item
-// linked to caller's.
+// caller's: the same item first, then the same conversation, then work
+// caller's calls wrote, then run's calls having written caller's work, else an
+// item linked to caller's. A write names the work more nearly than a link.
 func relationOf(caller, run sandbox.PendingRun, on sandbox.RunsOn) prompts.RunRelation {
 	switch {
 	case caller.WorkItem != nil && run.WorkItem != nil && run.WorkItem.Ref() == caller.WorkItem.Ref():
 		return prompts.RelationSameItem
 	case on.Conversation != "" && run.ConversationKey == on.Conversation:
 		return prompts.RelationSameConversation
+	case on.OnWritten(run):
+		return prompts.RelationOnWhatYouWrote
+	case on.WrittenBy(run):
+		return prompts.RelationWroteWhatYouAreOn
 	}
 	return prompts.RelationLinkedItem
 }

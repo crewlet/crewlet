@@ -502,7 +502,7 @@ func (s Sources) approvalArgs(ctx context.Context, run sandbox.PendingRun) map[s
 // the status question fills them from the offer it reads once
 // ([Sources.mcpServersStatus]), and a server's detail reads no shelf.
 func (s Sources) mcpStatusOf(leases []coord.Lease, records map[string]coord.NodeStatusRecord,
-	grants map[string]*coord.MCPGrant) MCPStatusAnswer {
+	grants map[string]*coord.OAuthGrant) MCPStatusAnswer {
 
 	type report struct {
 		node     string
