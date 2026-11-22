@@ -520,7 +520,7 @@ being applied is warned about.
 | `copilot` | `none` `minimal` `low` `medium` `high` `xhigh` `max` | `--reasoning-effort` | A model that refuses the effort fails the call, with the provider's message on stderr. |
 | `grok` | `none` `minimal` `low` `medium` `high` `xhigh` `max` | `--reasoning-effort` | A level the model's menu lacks is refused by name. |
 | `muse-code` | `minimal` `low` `medium` `high` `xhigh` `max` | `--reasoning-effort` | Per model. |
-| `hermes` | `none` `minimal` `low` `medium` `high` `xhigh` `max` | `--reasoning` | Lowered to the nearest level the route takes. |
+| `hermes` | `none` `minimal` `low` `medium` `high` `xhigh` `max` `ultra` | `--reasoning` | Lowered to the nearest level the route takes. |
 | `pi` | `off` `minimal` `low` `medium` `high` `xhigh` `max` | `--thinking` | Clamped to the model's levels. |
 | `kimi-code` | `low` `medium` `high` `xhigh` `max` | `KIMI_MODEL_THINKING_EFFORT` | Sent as given on Kimi's own provider type, unchecked by the harness (whether Moonshot's service refuses a level its model lacks is not measured); an OpenAI-shaped provider is sent none. |
 | `gemini-cli` | none | | Read only from its settings file, per model family. |
@@ -764,7 +764,8 @@ its own place to run:
     │       └── …
     └── key-seats/                    # where a call signed in with a key runs
         └── sarah-chen/
-            └── …                     # the same layout, never holding the login
+            └── <entry>/              # one per providers.llm entry
+                └── …                 # the same layout, never holding the login
 ```
 
 **Between seats.** Every seat gets its own `home`. `HOME`,
@@ -780,13 +781,15 @@ these variables is refused: it would replace the isolation silently.
 **Between a login and a key.** A call that hands its harness a key — every call
 under `auth.mode: api-key`, and one under `inherit-env` whose engine
 environment holds the profile's `api_key_env` — runs in the seat's
-`key-seats/` home, never seeded with the login, nothing carried back to
+`key-seats/` home of its own per seat and entry, never seeded with the login, nothing carried back to
 `credentials/`. Reason: a harness may keep what a key signed it in to in its
 login file (`cursor-agent` writes the `CURSOR_API_KEY` session and the key into
 `auth.json` and prefers it to the variable), which in a login's home would be
 carried back as the login of record and sign every subscription seat in with
 the key. A key home's credential files are removed as each generation opens and
-closes.
+closes, and while one of its calls runs, the next call into the same home would
+start on what it wrote down: per entry, a fallback entry's call never starts on
+the key of the entry before it.
 
 **Between turns.** Each profile declares its `volatile_paths` — sessions,
 transcripts, history, todo state. They are deleted whenever none of the seat's
@@ -887,6 +890,17 @@ call made from *inside* a run's tool call on the same entry (the workers a
 `delegate` call starts, a tool's condensing pass) borrows that run's slot when
 the entry has none free, one borrower at a time, since the run's harness is idle
 until the call answers.
+
+A harness that runs its calls in a daemon it keeps per home, with the
+environment of the call that started it (`home_daemon`: Hermes Agent's
+gateway), runs **one call per home at a time**: a second call for the same seat
+and home waits for the first to release it. The engine runs the harness's own
+stop command as each call releases the home, and before a call opens one an
+engine that ended mid-call left a daemon in, so every call starts a daemon of
+its own and none outlives it. One call at a time is per home: a call signed in
+with a key runs in a home of its seat and entry, so the seat's other entries'
+calls still run beside it, while the calls a seat signs in with the login share
+the seat's one login home and run in turn.
 
 ```mermaid
 sequenceDiagram
@@ -1368,7 +1382,7 @@ from a file a *variable* names, a channel `--help` never shows.
 | `grok` | 1.0.70 | flag, text on argv: `--system-prompt-override` | flag, text on argv: `--rules`, at the very end of the vendor's prompt | none |
 | `muse-code` | 1.4.25 | — none per call | variable, file: `TBH_EVAL_APPEND_SYSTEM_PROMPT_FILE`, undocumented | none |
 | `kimi-code` | 2.7.2 | flag, agent file: `--agent-file`, body `{system}` | flag, agent file: `--agent-file`, body `{system}` then `${base_prompt}` | none: the vendor's per-call text follows the engine's |
-| `hermes` | 0.21.5 | — | — | — |
+| `hermes` | 0.23.3 | — | — | — |
 | `pi` | 0.85.1, 1.4.0 | flag, file: `--system-prompt` | flag, file: `--append-system-prompt` | none; the working directory follows the engine's text, in the same block |
 
 Where a harness has one channel, both kinds of call take it: `gemini-cli`
@@ -1406,13 +1420,13 @@ for both.
   directory, a listing of it and the `AGENTS.md` chain: placed first, every call's
   copy of a seat's prompt would follow bytes no other call sends.
 - `hermes` has two candidates and takes neither. Its identity slot, `SOUL.md`,
-  lives in the harness's home, which a seat's concurrent calls share. A
+  lives in the harness's home, which is the seat's. A
   `.hermes.md` in the call's directory lands in the system message, but the
   harness scans it as project content and **replaces all of it** with a
   `[BLOCKED: …]` line when anything matches one of its patterns, silently, exiting
   0, and ordinary company prose matches ("You must report weekly progress to the
-  CEO", "Check in with your manager before shipping"; each blocked the file in
-  0.21.5's own scanner). So the seat's text rides the transcript.
+  CEO" blocked the file in 0.23.3's own scanner). So the seat's text rides the
+  transcript.
 - `grok`'s two flags take the text itself, and a path in its place is sent as the
   text, so `grok` is the one profile whose channels put the system prompt on argv.
   (`hermes` carries it in a transcript that is on argv too; see [How the prompt
@@ -2549,11 +2563,13 @@ keeps the rest of its `env` (the gateway's address, the region).
 
 ### A login of several files is written whole
 
-Four harnesses keep one login in two files: `gemini-cli` (`oauth_creds.json` beside
+Four harnesses keep one login in several files: `gemini-cli` (`oauth_creds.json` beside
 `google_accounts.json`), `cursor-agent` (`cli-config.json` and `auth.json`),
 `kimi-code` (its OAuth token beside the `config.toml` that names its provider) and
-`hermes` (`.env` and `auth.json`). The two are a login only while they come from
-the same sign-in, so Crewlet writes the shared login **as one unit**. Every writer
+`hermes` (`.env`, `auth.json` and `shared/nous_auth.json`, a second copy of a Nous
+Portal login that Hermes signs in from whenever it holds the later-issued pair).
+The files are a login only while they come from the same sign-in, so Crewlet
+writes the shared login **as one unit**. Every writer
 (the bundle restore, `crewlet llm import`, `-from-host`, `logout`, a seat's or a
 command's carry of a refreshed login, and a [local coding box](code-sandbox.md)'s
 write-back) first records the whole new login in a journal beside the credential
@@ -2582,7 +2598,8 @@ that touches the login, naming the file; removing it discards that write, after
 which sign the entry in again.
 
 **Any one file that holds a login is a login.** `hermes` keeps API keys in `.env`
-and an OAuth pool in `auth.json`, and an entry may use either alone; `gemini-cli`
+and an OAuth pool in `auth.json` (a Nous login copied into `shared/nous_auth.json`
+too), and an entry may use either alone; `gemini-cli`
 signs in without `google_accounts.json`. A file the harness also keeps its own
 state in holds a login only once one of the keys its profile's `login_keys` names is
 in it: without any of them it is still written, read and seeded with the rest, but
@@ -2710,7 +2727,7 @@ sidesteps all of this.
 | `grok` | `grok` | xAI, or `XAI_API_KEY` | **xAI's own harness** from [x.ai/cli](https://x.ai/cli), not the same-named npm package. Accepts `XAI_API_KEY` (named by its signed-out message) through `auth.mode: api-key`. Prompt in a file (`--prompt-file`); the system prompt on argv on both channels (neither flag takes a path): `--rules` for a seat, which keeps the harness's prompt, `--system-prompt-override` for a side pass. Web tools only: `--tools web_search,web_fetch` with every other built-in denied, `GROK_WEB_FETCH=1` and `--allow WebFetch`. A run with tools gets the server in an agent file, `--deny Read(**)` keeping file reads off, and is read from `--output-format streaming-json`; a text function's tokens are estimated. |
 | `muse-code` | `muse` | Muse Code subscription (Everyday / High / Power Usage), or pay-as-you-go | `muse login` / `muse logout`; the browser sign-in stores `~/.config/muse/auth.json`, which `-from-host` adopts. **No status command.** No headless token: `META_API_KEY` is a *metered* Model API key, via `auth.mode: api-key`. Runs `muse exec --json --trust-workspace` in the call's own directory, denies tools through a seeded `run.toolset`, seeds `telemetry.enabled: false`, and puts the prompt in a **file**, not argv. Token counts once, for the whole run (`run.usage`). A seat's and a side pass's system prompt alike follow the harness's own instructions, through `TBH_EVAL_APPEND_SYSTEM_PROMPT_FILE`, an undocumented variable ([Which harnesses actually have one](#which-harnesses-actually-have-one)). Written for 1.4.25. **Runs a seat's executor** on 1.4.25 ([Muse Code](code-sandbox.md#muse-code)): `META_API_KEY` reaches every cell, the login (`~/.config/muse/auth.json`) a local cell alone, read back after each run, so a login-only entry is refused on `e2b`. A signed-in run or call mints an API key as it starts and writes it, with its base URL, into that file; what is carried back to the shared login keeps the key `muse login` stored (`run_keys`), so only a login command changes it. A subscription's allowance and its spent-plan wording were not measured (no Meta sign-in): a spent plan is read only off the run's own failure, by the markers below. |
 | `kimi-code` | `kimi` | Kimi Code OAuth (Moonshot), or a Moonshot API key (`KIMI_MODEL_API_KEY`) | **MoonshotAI's own harness**, `@moonshot-ai/kimi-code`, not the unscoped `kimi-code` npm package, which wraps Claude Code behind a proxy and installs its own `kimi` (a `1.0.x` version is that one). `kimi login` runs a device-code flow; no logout or status subcommand. Under `auth.mode: api-key` the key goes in `KIMI_MODEL_API_KEY` and the entry's `model` in `KIMI_MODEL_NAME`, a model of the harness's own that refuses `--model` beside it; `KIMI_MODEL_BASE_URL` and `KIMI_MODEL_PROVIDER_TYPE` in `env` name another endpoint. Runs `--output-format stream-json`: the default `text` prefixes every line with `• ` and re-wraps it, so no profile can read an answer from it. Tools are denied in the **agent file** that also carries the system prompt (measured: 25 tools down to `FetchURL`, plus `WebSearch` where a Moonshot search service is configured). A seat's agent file puts its text ahead of Kimi's own prompt (`${base_prompt}`) and lists the seat's tools (`mcp__crewlet__*`); a side pass's replaces it. A text function's counts are estimated; a run with tools reads them from its wire log. Runs a seat's executor on 2.7.2, through `kimi web` ([its runner](code-sandbox.md#kimi-code)). |
-| `hermes` | `hermes` | Nous Portal, or any of 30+ providers it fronts | `hermes auth` for the credential wizard, `hermes status` for state; `hermes auth logout` needs a provider name, so no logout is declared. Runs `hermes -z`, whose contract is the final response text only, so tokens come from `--usage-file`. Tools are denied with `--toolsets web` on argv, replacing the run's enabled set; `--toolsets web,crewlet` on a run with tools, whose server is declared in the home's `config.yaml` with the run's relay and socket in its environment. **`-p` selects a profile on this harness**, not a prompt. No system-prompt channel: the seat's text rides the transcript, under the vendor's prompt. A provider key (`OPENROUTER_API_KEY`, …) goes in `env`, and `doctor` counts it ([A provider key in `env`](#6-a-provider-key-in-env-opencode-hermes-pi)). |
+| `hermes` | `hermes` | Nous Portal, or any of 30+ providers it fronts | `hermes auth` for the credential wizard, `hermes status` for state; `hermes auth logout` needs a provider name, so no logout is declared. Runs `hermes -z`, whose contract is the final response text only, so tokens come from `--usage-file`. Tools are denied with `--toolsets web` on argv, replacing the run's enabled set; `--toolsets web,crewlet` on a run with tools, whose server is declared in the home's `config.yaml` with the run's relay and socket in its environment. **`-p` selects a profile on this harness**, not a prompt. No system-prompt channel: the seat's text rides the transcript, under the vendor's prompt. A provider key (`OPENROUTER_API_KEY`, …) goes in `env`, and `doctor` counts it ([A provider key in `env`](#6-a-provider-key-in-env-opencode-hermes-pi)). Each `-z` turn runs in a gateway Hermes starts per home, so a seat's calls run one at a time and the gateway is stopped as each ends (`home_daemon`). |
 | `pi` | `pi` | Claude Pro/Max, ChatGPT Plus/Pro, GitHub Copilot — whichever it is logged into | `@earendil-works/pi-coding-agent`. **No headless login**: `/login` is a slash command, so `crewlet llm login` starts its TUI in the credential directory and you type it there. `--no-tools` denies every tool, honest here because its built-in set has no web tool; a run with tools loads the seat's server as an extension and offers only its tools (`--tools mcp__crewlet__*`). Prompt on stdin; system prompt in a file on both channels: `--append-system-prompt` for a seat, which keeps pi's prompt, `--system-prompt` for a side pass. `--no-context-files`, because its `AGENTS.md` walk goes up to `/` past the `.git` marker. A text function's tokens are estimated, a run with tools reads them from its session file ([Token accounting](#token-accounting)). A provider key goes in `env` under that provider's own variable, and `doctor` counts it. |
 | `custom` | — | — | Ships nothing; declare everything under `overrides`. |
 
@@ -2806,9 +2823,9 @@ marker_scope: stderr        # or answer-and-stderr (the default), or events
 
 One profile narrows it, on a measurement: `pi` leaves stdout **empty** and writes `<status>: <the provider's JSON>` to stderr. Narrow it only where the vendor makes the answer an
 impossible place for the report; a wrong narrowing silently stops recognising
-spent plans. `hermes` stays on the default: measured on 0.21.5, a refused key
-and a spent plan print on **stdout** with exit 2, and only a run that never
-reaches a model writes to stderr.
+spent plans. `hermes` stays on the default: measured on 0.23.3, a refused key
+and a spent plan print on **stdout** with exit 2, and so does a start with no
+credential at all, with exit 1.
 
 **The third scope matches structure instead of text, for a failure that is an
 event of its own.** OpenCode 2's `--format json` prints a refused key or a spent
@@ -2914,6 +2931,7 @@ it runs on.
 | `env_sign_in` | The harness reads its model provider's key from its own environment, so a [credential-named](#6-a-provider-key-in-env-opencode-hermes-pi) variable in the entry's `env` signs it in. |
 | `credential_paths` | The login files, relative to the seat home: each must name a file inside it (not the home itself, not a path ending in a separator), no two may share a file name, and none may be named `crewlet-bundle.json` (a bundle's manifest, naming the harness it was exported from) or, beside a `credential_store`, `exported-credentials` (the store's document): the shared directory and a bundle keep each file under its name. |
 | `volatile_paths` | Sessions, transcripts and history, deleted whenever none of the seat's calls is in flight — as its generation opens and as it closes. Each must stay inside the seat home; a directory is fine. The home's `tmp`, where `TMPDIR` points, is pruned with them whatever the list says. |
+| `home_daemon` | `{pid_file, stop_args}`: a process the harness starts for a call and keeps in the background to serve the home's later calls with that call's environment (Hermes Agent's gateway). `pid_file` is the file it keeps in the seat home while it runs; `stop_args` the harness's own command that stops the home's daemon and exits 0 when there is none. Declared, a home runs one call at a time, and the engine runs `stop_args` whenever `pid_file` is there as a call releases the home and before a call opens it ([Concurrency within a seat](#concurrency-within-a-seat)). |
 | `login_args` | The vendor's own interactive login, for `crewlet llm login`. |
 | `capture_token_args` | The command that mints a headless token on stdout (`-capture-token`). |
 | `status_args` | The command reporting who the harness is logged in as. |

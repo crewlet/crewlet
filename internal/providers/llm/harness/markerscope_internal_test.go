@@ -118,12 +118,12 @@ func TestTheDefaultMarkerScopeSurvivesForTheVendorsThatNeedIt(t *testing.T) {
 }
 
 // THE HERMES SENTINELS NAME WHAT HERMES PRINTS, and where it prints it: what
-// 0.21.5 printed for each failure, through `-z` under the profile's own argv,
+// 0.23.3 printed for each failure, through `-z` under the profile's own argv,
 // against a stub answering 401, 429 with a quota body and 429 with a
 // rate-limit body — each on STDOUT with exit 2 and nothing on stderr — and for
-// a start with no credential, which never reaches a model and is the one
-// failure written to stderr, with exit 1. Each must classify, and an answer
-// that merely quotes one must not.
+// a start with no credential, which never reaches a model and prints its setup
+// notice on stdout too, with exit 1. Each must classify, and an answer that
+// merely quotes one must not.
 //
 // Mutation: scope the profile's markers to stderr, or go back to the generic
 // sentinels, and a case here is red.
@@ -140,36 +140,31 @@ func TestTheHermesSentinelsNameWhatHermesPrints(t *testing.T) {
 		fires          bool
 	}{
 		"a refused key": {
-			stdout: "custom rejected your API key, so the model can't be reached. Update it in " +
+			stdout: "OpenRouter rejected your API key, so the model can't be reached. Update it in " +
 				"Settings → Providers, or run `hermes setup` in a terminal.\n\n" +
-				"Provider said: HTTP 401: Incorrect API key provided: sk-test.\n",
+				"Provider said: HTTP 401: Incorrect API key provided\n\nYour request was not " +
+				"processed. Send it again if you still want me to carry it out.\n",
 			exit: 2, want: llm.KindAuth, fires: true,
 		},
 		"a spent account": {
 			stdout: "Billing or credits exhausted: HTTP 429: You exceeded your current quota, please " +
-				"check your plan and billing details.\n\nCustom reported that billing, credits, or " +
-				"account entitlement is exhausted for stub-model.\nAdd credits or update billing with " +
-				"that provider, then retry.\nYou can switch providers temporarily with /model <model> " +
-				"--provider <provider>.\n",
+				"check your plan and billing details.\n\nOpenRouter reported that billing, credits, or " +
+				"account entitlement is exhausted for openai/gpt-5.4.\nAdd credits or update billing with " +
+				"that provider, then retry.\nOpenRouter billing: https://openrouter.ai/settings/credits\n" +
+				"You can switch providers temporarily with /model <model> --provider <provider>.\n",
 			exit: 2, want: llm.KindRateLimit, fires: true,
 		},
 		"a rate limit its retries could not wait out": {
-			stdout: "custom rate-limited every one of 3 attempts — it looks temporarily unavailable. " +
+			stdout: "OpenRouter rate-limited every one of 3 attempts — it looks temporarily unavailable. " +
 				"Wait a minute and send /retry, or switch models with /model. To avoid this in future, " +
-				"add a backup provider with `hermes fallback add`.\n",
+				"add a backup provider with `hermes fallback add`.\n\nProvider said: HTTP 429: Rate " +
+				"limit reached for requests\n",
 			exit: 2, want: llm.KindRateLimit, fires: true,
 		},
 		"no credential at all": {
-			stderr: "hermes -z: agent failed: Hermes is not connected to any AI provider yet. Run " +
-				"`hermes model` to pick one (the free Nous tier needs no API key), type `/login` in " +
-				"chat, or add a key with `hermes auth add <provider>`. (Advanced: put an API key such " +
-				"as OPENROUTER_API_KEY in ~/.hermes/.env.)\n",
-			exit: 1, want: llm.KindAuth, fires: true,
-		},
-		"a provider named with no credential": {
-			stderr: "hermes -z: agent failed: provider 'custom' resolved without credentials (no " +
-				"endpoint or API key configured). If this is a named custom provider, use its real " +
-				"name (see providers: in config.yaml).\n",
+			stdout: "\nIt looks like Hermes isn't configured yet -- no API keys or providers found.\n\n" +
+				"  Run:  hermes setup\n\n\n☤ Hermes Setup — Non-interactive mode\n\n" +
+				"  No interactive TTY detected for the first-run setup prompt.\n",
 			exit: 1, want: llm.KindAuth, fires: true,
 		},
 		"an answer that quotes one": {
