@@ -16,7 +16,7 @@ import (
 )
 
 // The invariants the built-in gemini-cli profile keeps, each measured against
-// Gemini CLI 0.58.0 and 0.65.0 (see the profile's comments): a call offers the
+// Gemini CLI 0.70.0 (see the profile's comments): a call offers the
 // two web tools and nothing else, trusts its own directory and reads no
 // environment file above it, sends nothing to the vendor but the call, and
 // every call — a seat's phase or a side pass — replaces the harness's prompt,
@@ -30,6 +30,37 @@ func geminiCLI(t *testing.T) harnessprofile.Profile {
 		t.Fatal("no built-in gemini-cli profile")
 	}
 	return p
+}
+
+// NO MCP SERVER BUT THE ENGINE'S STARTS, ON ANY CALL. Gemini CLI starts every
+// server it finds, an extension's in the seat's home among them, unless
+// --allowed-mcp-server-names names the ones it may: measured on 0.70.0, a call
+// with no tools (each of doctor's probes) started the home extension's server,
+// and a call with the flag and no crewlet server started none and answered.
+// So the flag is in complete_args, on every call, and a run with tools adds it
+// no second time.
+//
+// Mutations, each red: move the flag back to mcp.args (a tool-less call lacks
+// it); keep it in both (a run with tools names it twice).
+func TestGeminiStartsNoMCPServerButTheEnginesOnAnyCall(t *testing.T) {
+	t.Parallel()
+	admits := func(args []string) int {
+		n := 0
+		for i := range len(args) - 1 {
+			if args[i] == "--allowed-mcp-server-names" && args[i+1] == "crewlet" {
+				n++
+			}
+		}
+		return n
+	}
+	p := geminiCLI(t)
+	prov := &Provider{profile: p, model: "gemini-2.5-pro", now: time.Now}
+	if got := prov.argv(false); admits(got) != 1 {
+		t.Errorf("a call with no tools runs %q: it admits every MCP server it finds, a home extension's among them", got)
+	}
+	if got := slices.Concat(prov.argv(true), p.MCP.Args, p.MCP.AllowArgs); admits(got) != 1 {
+		t.Errorf("a run with tools runs %q, want --allowed-mcp-server-names crewlet once", got)
+	}
 }
 
 // geminiSeed returns the shipped profile's seed at path, failing when there is
@@ -241,7 +272,7 @@ func TestGeminiSignsInWithWhatTheModeNames(t *testing.T) {
 // A KEY CALL BEHIND A GATEWAY STAYS ON ITS KEY, AND A LOGIN CALL ON ITS LOGIN.
 // Naming no sign-in in its settings, the harness takes one from its
 // environment, where GOOGLE_GEMINI_BASE_URL (an operator's gateway) outranks
-// GEMINI_API_KEY and selects a sign-in 0.65.0 refuses: exit 41, "Invalid auth
+// GEMINI_API_KEY and selects a sign-in 0.70.0 refuses: exit 41, "Invalid auth
 // method selected". Settings outrank the environment, so a key call's home
 // names the key sign-in, and a subscription call's names none, leaving
 // GOOGLE_GENAI_USE_GCA to pick the login; the key sign-in there would send it
@@ -281,7 +312,7 @@ func TestGeminiKeyHomeNamesTheKeySignIn(t *testing.T) {
 	}
 
 	keyed := geminiProvider(t, nil)
-	co, err := keyed.ws.AcquireForKey(t.Context(), "pm", "call-1")
+	co, err := keyed.ws.AcquireForKey(t.Context(), "pm", keyed.key, "call-1", keyed)
 	if err != nil {
 		t.Fatalf("AcquireForKey: %v", err)
 	}
@@ -379,41 +410,41 @@ func TestGeminiSeatsAndSidePassesReplaceTheHarnessPrompt(t *testing.T) {
 	}
 }
 
-// A real Gemini CLI answer, from a 0.65.0 call that fetched a page: the model
-// it was asked for answered twice, and web_fetch asked a second model on the
-// side, whose prompt carried the fetched page as the tool's own (`tool`).
-// Pinned verbatim from that run, trimmed to the fields the profile reads and
-// the per-role breakdown beside them, so the sum is over the models and never
-// over a model's roles as well.
-const geminiAnswer = `{"session_id":"3e6bd605-11d3-49d9-b990-66e67eab4716",
-"response":"STUB-ANSWER for probe-webfetch","stats":{"models":{
-"gemini-2.5-pro":{"api":{"totalRequests":2,"totalErrors":0,"totalLatencyMs":94,"errorsByType":{}},
-"tokens":{"input":1234,"prompt":2234,"candidates":76,"total":2317,"cached":1000,"thoughts":7,"tool":0},
-"roles":{"main":{"totalRequests":2,"totalErrors":0,"totalLatencyMs":94,
-"tokens":{"input":1234,"prompt":2234,"candidates":76,"total":2317,"cached":1000,"thoughts":7,"tool":0}}}},
-"gemini-3-flash-preview":{"api":{"totalRequests":1,"totalErrors":0,"totalLatencyMs":4,"errorsByType":{}},
+// A real Gemini CLI answer, from a 0.70.0 call that searched the web, against
+// a stand-in of the API: the model it was asked for answered twice, and
+// google_web_search asked a second model on the side, whose tool prompt the
+// API reported apart (`tool`). Pinned verbatim from that run, trimmed to the
+// fields the profile reads and the per-role breakdown beside them, so the sum
+// is over the models and never over a model's roles as well.
+const geminiAnswer = `{"session_id":"b5c31e19-2d2f-4893-86bc-3e6317403589",
+"response":"searched","stats":{"models":{
+"gemini-2.5-pro":{"api":{"totalRequests":2,"totalErrors":0,"totalLatencyMs":122,"errorsByType":{}},
+"tokens":{"input":1200,"prompt":2000,"candidates":100,"total":2160,"cached":800,"thoughts":60,"tool":0},
+"roles":{"main":{"totalRequests":2,"totalErrors":0,"totalLatencyMs":122,
+"tokens":{"input":1200,"prompt":2000,"candidates":100,"total":2160,"cached":800,"thoughts":60,"tool":0}}}},
+"gemini-3-flash-preview":{"api":{"totalRequests":1,"totalErrors":0,"totalLatencyMs":10,"errorsByType":{}},
 "tokens":{"input":100,"prompt":100,"candidates":10,"total":5110,"cached":0,"thoughts":0,"tool":5000},
-"roles":{"utility_tool":{"totalRequests":1,"totalErrors":0,"totalLatencyMs":4,
+"roles":{"utility_tool":{"totalRequests":1,"totalErrors":0,"totalLatencyMs":10,
 "tokens":{"input":100,"prompt":100,"candidates":10,"total":5110,"cached":0,"thoughts":0,"tool":5000}}}}}}}`
 
 // EVERY MODEL A CALL USED IS CHARGED, AND EVERY TOKEN THE VENDOR BILLS. The
 // counts are keyed by model, so each is summed over the models; the cached
 // part of the prompt and the reasoning are read apart, as the harness reports
-// them; and the page a web fetch put in front of the side model is input. The
-// whole call: 2,334 prompt tokens and 5,000 of the tool's, 86 answered and 7
+// them; and the tool prompt put in front of the side model is input. The
+// whole call: 2,100 prompt tokens and 5,000 of the tool's, 110 answered and 60
 // reasoned.
 func TestTheGeminiProfileChargesEveryModelACallUsed(t *testing.T) {
 	t.Parallel()
 	p := geminiCLI(t)
 	got := extract(p, geminiAnswer)
-	if got.text != "STUB-ANSWER for probe-webfetch" {
+	if got.text != "searched" {
 		t.Errorf("text = %q", got.text)
 	}
 	if !got.reported {
 		t.Fatal("usage went unread, so every call would be charged an estimate")
 	}
-	if got.input != 1334 || got.cacheRead != 1000 || got.output != 86 || got.reasoning != 7 || got.toolPrompt != 5000 {
-		t.Errorf("usage = in %d cached %d out %d reasoning %d tool %d, want 1334 1000 86 7 5000",
+	if got.input != 1300 || got.cacheRead != 800 || got.output != 110 || got.reasoning != 60 || got.toolPrompt != 5000 {
+		t.Errorf("usage = in %d cached %d out %d reasoning %d tool %d, want 1300 800 110 60 5000",
 			got.input, got.cacheRead, got.output, got.reasoning, got.toolPrompt)
 	}
 	prov := &Provider{profile: p, model: "gemini-2.5-pro", now: time.Now}
@@ -421,8 +452,8 @@ func TestTheGeminiProfileChargesEveryModelACallUsed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("completion: %v", err)
 	}
-	if comp.InputTokens != 7334 || comp.OutputTokens != 93 || comp.CacheRead != 1000 {
-		t.Errorf("completion = in %d out %d cached %d, want 7334 93 1000",
+	if comp.InputTokens != 7100 || comp.OutputTokens != 170 || comp.CacheRead != 800 {
+		t.Errorf("completion = in %d out %d cached %d, want 7100 170 800",
 			comp.InputTokens, comp.OutputTokens, comp.CacheRead)
 	}
 }
@@ -441,36 +472,107 @@ func TestGeminiPrunesWhatEachCallLeaves(t *testing.T) {
 	}
 }
 
-// THE HARNESS'S OWN FAILURES ARE NAMED. Measured on both releases: a spent daily
-// quota is printed as a TerminalQuotaError, and a per-minute limit is retried
-// and then printed as a RetryableQuotaError, neither carrying the API's
-// RESOURCE_EXHAUSTED; a refused login is the API's UNAUTHENTICATED, and a
-// refused key the API's own sentence, both relayed whole. Each is the first
-// line of what the harness wrote to stderr, beside a non-zero exit.
+// THE HARNESS'S OWN FAILURES ARE NAMED. Measured on 0.70.0: a spent
+// daily quota prints a TerminalQuotaError, a limit; a per-minute limit is
+// retried, then printed as a RetryableQuotaError, transient, no limit; neither
+// carries the API's RESOURCE_EXHAUSTED. A refused login is the API's
+// UNAUTHENTICATED, a refused key the API's own sentence, both relayed whole,
+// and a login Google gives no Code Assist tier an IneligibleTierError (its
+// class from 0.70.0's bundle, its message Google's): each the first line of
+// the harness's stderr. A seat's run's spent quota is read only at its
+// harness's own exit (the executor's tests).
+//
+// Mutations, each red: mark RetryableQuotaError a limit; drop the daily
+// quota's sentence; drop the IneligibleTierError marker.
 func TestGeminiRecognisesItsOwnQuotaAndSignInFailures(t *testing.T) {
 	t.Parallel()
 	p := geminiCLI(t)
 	const report = "Error when talking to Gemini API Full report available at: /home/tmp/gemini-client-error.json "
 	for name, tc := range map[string]struct {
-		stderr string
-		want   llm.ErrorKind
+		stderr, said string
+		want         llm.ErrorKind
+		none         bool
 	}{
-		"a spent daily quota": {report + "TerminalQuotaError: You have exhausted your daily quota on this model.\n" +
-			"    at classifyGoogleError (file:///bundle/chunk.js:306678:16)", llm.KindRateLimit},
-		"a rate limit past its retries": {report + "RetryableQuotaError: Resource has been exhausted (e.g. check quota).\n" +
-			"    at classifyGoogleError (file:///bundle/chunk.js:306678:16)", llm.KindRateLimit},
-		"a refused login": {report + `_ApiError: {"error":{"code":401,"message":"Request had invalid authentication credentials.","status":"UNAUTHENTICATED"}}`, llm.KindAuth},
-		"a refused key":   {report + `_ApiError: {"error":{"code":400,"message":"API key not valid. Please pass a valid API key.","status":"INVALID_ARGUMENT"}}`, llm.KindAuth},
-		"a login it could not use": {"FatalAuthenticationError: Manual authorization is required but the current session is " +
+		"a spent daily quota": {stderr: report + "TerminalQuotaError: You have exhausted your daily quota on this model.\n" +
+			"    at classifyGoogleError (file:///bundle/chunk.js:306678:16)", want: llm.KindRateLimit},
+		"a spent daily quota, in a seat's run's result": {said: "[API Error: You have exhausted your daily " +
+			"quota on this model.]\nPlease wait and try again later.", want: llm.KindRateLimit},
+		"a rate limit past its retries": {stderr: report + "RetryableQuotaError: Resource has been exhausted (e.g. check quota).\n" +
+			"    at classifyGoogleError (file:///bundle/chunk.js:306678:16)", none: true},
+		"a refused login": {stderr: report + `_ApiError: {"error":{"code":401,"message":"Request had invalid authentication credentials.","status":"UNAUTHENTICATED"}}`, want: llm.KindAuth},
+		"a refused key":   {stderr: report + `_ApiError: {"error":{"code":400,"message":"API key not valid. Please pass a valid API key.","status":"INVALID_ARGUMENT"}}`, want: llm.KindAuth},
+		"a login whose account no tier takes": {stderr: report + "IneligibleTierError: This account is not " +
+			"eligible for Gemini Code Assist.", want: llm.KindAuth},
+		"a login it could not use": {stderr: "FatalAuthenticationError: Manual authorization is required but the current session is " +
 			"non-interactive. Please run the Gemini CLI in an interactive terminal to log in, provide a GEMINI_API_KEY, or " +
-			"ensure Application Default Credentials are configured.\n  exitCode: 41", llm.KindAuth},
+			"ensure Application Default Credentials are configured.\n  exitCode: 41", want: llm.KindAuth},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			hit, ok := classifyMarkers(p, harnessOutput{stderr: tc.stderr, failed: true})
+			hit, ok := classifyMarkers(p, harnessOutput{stderr: tc.stderr, said: tc.said, failed: true})
+			if tc.none {
+				if ok {
+					t.Errorf("classified %v, want nothing: a transient failure", hit.Kind)
+				}
+				return
+			}
 			if !ok || hit.Kind != tc.want {
 				t.Errorf("classified %v (found %v), want %v", hit.Kind, ok, tc.want)
 			}
 		})
+	}
+}
+
+// GEMINI CLI 0.70.0'S RECORD IS TOLD A REQUEST AT A TIME, ONCE, WITH ITS CALLS.
+// 0.70.0 writes a response's entry up to three times (its prose, its calls
+// scheduled, its calls run). The shipped
+// profile over 0.70.0's own record of a run that made two calls: a request is
+// told only once the next entry moves past it, though its calls showed
+// earlier; each of the three is told once, the first two with their call, and
+// charged once, its whole prompt with the tool prompt and its reply with the
+// reasoning, however often its entry was written.
+//
+// Mutations, each red: drop late_calls (the first request is told on its
+// first writing, with no call); read a whole entry as more of its request
+// (charged three times); match the calls by anything but `toolCalls`.
+func TestGeminis070RecordIsToldARequestAtATimeOnceWithItsCalls(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile(filepath.Join("testdata", "gemini-cli", "session-0.70.0-calls.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := newTestHost(t)
+	r := newRecordReader(geminiCLI(t), llm.Request{Tools: host}, "the prompt", time.Now)
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	for i, line := range lines {
+		r.fileLine(line)
+		// THE CALLS ARE SCHEDULED on the eighth line, before they run: the
+		// request is still untold until the user entry after it.
+		if i == 7 {
+			if !strings.Contains(line, `"status":"scheduled"`) {
+				t.Fatalf("line 8 of the record is not the calls' scheduled writing: %s", line)
+			}
+			if turns := host.latestTurns(); len(turns) != 0 {
+				t.Fatalf("a request was told as its calls were scheduled: %+v", turns)
+			}
+		}
+	}
+	r.finish()
+	_, _, spent, _ := host.snapshot()
+	turns := host.latestTurns()
+	if len(turns) != 3 {
+		t.Fatalf("the host was told %d requests, want 3: %+v", len(turns), turns)
+	}
+	for i, want := range [][]string{{"mcp_probe_slow"}, {"mcp_probe_echo"}, nil} {
+		var got []string
+		for _, c := range turns[i].Calls {
+			got = append(got, c.Name)
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("request %d was told with calls %q, want %q", i+1, got, want)
+		}
+	}
+	if spent.Input != 3*1007 || spent.Output != 3*80 || spent.CacheRead != 3*400 {
+		t.Errorf("the run was charged %+v, want each request once: 1,007 in (400 cached) and 80 out", spent)
 	}
 }

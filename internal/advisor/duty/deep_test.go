@@ -74,7 +74,7 @@ func TestADeepRunRunsBesideTheTick(t *testing.T) {
 	if deep.runs != 1 {
 		t.Errorf("the deep run ran %d times, want once", deep.runs)
 	}
-	if len(l.progress) != 2 || l.progress[0] != "pressed: checks done: 0 opened, 0 closed; investigating" ||
+	if len(l.progress) != 2 || l.progress[0] != "pressed: Checks done: 0 new, 0 closed" ||
 		l.progress[1] != "pressed: reading capacity" {
 		t.Errorf("progress on the log = %v, want the checks' line and the investigation's under the press", l.progress)
 	}

@@ -419,8 +419,8 @@ func foldWrittenKeys(have []string, records []types.WrittenRecord) ([]string, bo
 // ListActiveOn returns the unfinished runs of other seats on the work on
 // names. See the contract on [PendingStore].
 //
-// ONE LISTING of the fleet's runs, the read [CoordStore.ListActiveForSeat]
-// makes, never one per seat, nor a log read per run: what each run wrote is
+// ONE LISTING of the fleet's runs, the read [CoordStore.ListActive] makes,
+// never one per seat, nor a log read per run: what each run wrote is
 // matched off its row ([PendingRun.WroteKeys]).
 func (s *CoordStore) ListActiveOn(ctx context.Context, on RunsOn) ([]PendingRun, error) {
 	if on.Item == "" && len(on.Linked) == 0 && on.Conversation == "" && len(on.Wrote) == 0 {

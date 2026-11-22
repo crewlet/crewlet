@@ -257,12 +257,13 @@ func TestTheBoxTokenIsSignedFromTheKeyring(t *testing.T) {
 }
 
 // A BOX TOKEN IS REDACTED by its shape (M3-decisions M3-O53): printed bare or
-// as the box's environment holds it, nothing of it survives redact.Secrets.
+// as a transcript echoes the file the box holds it in, nothing of it survives
+// redact.Secrets.
 func TestABoxTokenIsRedacted(t *testing.T) {
 	t.Parallel()
 	token := mintedBox(t, boxTokens(t, boxRing("k1", runtoken.KeyMaterial{ID: "k1", Material: "a fleet's key"})), aRunRef())
 	marker := redact.Marker + "run-token]"
-	for _, printed := range []string{token, "CREWLET_GIT_TOKEN=" + token} {
+	for _, printed := range []string{token, "$ cat \"$CREWLET_GIT_ACCESS_FILE\"\n" + token + "\n"} {
 		if got, want := redact.Secrets(printed), strings.Replace(printed, token, marker, 1); got != want {
 			t.Errorf("a box token printed as %q was redacted to %q, want %q", printed, got, want)
 		}
@@ -301,7 +302,7 @@ func TestARunTokenOfAnEndedRunIsRefused(t *testing.T) {
 		reason     string
 	}{
 		{name: "no credential", status: http.StatusUnauthorized,
-			says: []string{"authenticates as `run` with its run token", "$CREWLET_GIT_TOKEN"}, reason: "none"},
+			says: []string{"authenticates as `run` with its run token", "$CREWLET_GIT_ACCESS_FILE"}, reason: "none"},
 		{name: "a person's user name", user: "crewlet", pass: runs.Token(t, live), status: http.StatusUnauthorized,
 			says: []string{"a coding box authenticates as `run` with its run token"}, reason: "user"},
 		{name: "a forged token", user: host.BoxUser, pass: "crewlet_rt1.x.y.1.z", status: http.StatusUnauthorized,

@@ -35,13 +35,30 @@ func (f *Fleet) SandboxRuns(context.Context) ([]coord.Record, error) {
 	return out, nil
 }
 
-// CreateSandboxRun writes a new record, ignoring a turn id that already
-// exists.
-func (f *Fleet) CreateSandboxRun(_ context.Context, turnID string, value []byte) (bool, error) {
+// SandboxRunStandings returns every record's standing as its last write
+// stated it, by turn id.
+func (f *Fleet) SandboxRunStandings(context.Context) ([]coord.StoodRun, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]coord.StoodRun, 0, len(f.runs))
+	for _, key := range slices.Sorted(maps.Keys(f.runs)) {
+		stood := coord.StoodRun{TurnID: key, Version: f.runs[key].Version}
+		if standing, stated := f.runStandings[key]; stated {
+			stood.Standing = &standing
+		}
+		out = append(out, stood)
+	}
+	return out, nil
+}
+
+// CreateSandboxRun writes a new record stating standing, ignoring a turn id
+// that already exists.
+func (f *Fleet) CreateSandboxRun(_ context.Context, turnID string, value []byte,
+	standing *coord.RunStanding) (bool, error) {
 	if turnID == "" {
 		return false, errors.New("coord/memory: a sandbox run needs a turn id")
 	}
-	if err := coord.HoldValue("the sandbox run "+turnID, len(value)); err != nil {
+	if err := coord.HoldValue("the sandbox run "+turnID, len(value), coord.MaxValueBytes); err != nil {
 		return false, err
 	}
 	f.mu.Lock()
@@ -49,7 +66,7 @@ func (f *Fleet) CreateSandboxRun(_ context.Context, turnID string, value []byte)
 	if _, exists := f.runs[turnID]; exists {
 		return false, nil
 	}
-	f.putRunLocked(turnID, value)
+	f.putRunLocked(turnID, value, standing)
 	return true, nil
 }
 
@@ -98,7 +115,7 @@ func (f *Fleet) MutateSandboxRun(ctx context.Context, turnID string,
 		if !change.Delete && len(change.Put) == 0 {
 			return read, false, nil
 		}
-		if err := coord.HoldValue("the sandbox run "+turnID, len(change.Put)); err != nil {
+		if err := coord.HoldValue("the sandbox run "+turnID, len(change.Put), coord.MaxValueBytes); err != nil {
 			return coord.Record{}, false, err
 		}
 		if written, won := f.applyRunChange(turnID, read, change); won {
@@ -122,6 +139,7 @@ func (f *Fleet) applyRunChange(turnID string, read coord.Record, change coord.Sa
 		// ITS PARTS GO WITH IT, under the same lock: this twin removes
 		// them at once, where the KV removes the record and then each part.
 		delete(f.runs, turnID)
+		delete(f.runStandings, turnID)
 		// AND ITS SESSION CLAIMS, which carry the record's lifetime.
 		for id, claim := range f.sessionClaims {
 			if claim.Turn == turnID {
@@ -138,7 +156,7 @@ func (f *Fleet) applyRunChange(turnID string, read coord.Record, change coord.Sa
 		f.notifyRunLocked(turnID, coord.SandboxRunUpdate{})
 		return read, true
 	}
-	return copyRecord(f.putRunLocked(turnID, change.Put)), true
+	return copyRecord(f.putRunLocked(turnID, change.Put, change.Standing)), true
 }
 
 // WatchSandboxRun streams one run's record, its first state included.
@@ -294,7 +312,7 @@ func (f *Fleet) MutateSandboxRunPart(ctx context.Context, turnID string, part co
 		if len(put) == 0 {
 			return read, false, nil
 		}
-		if err := coord.HoldValue(fmt.Sprintf("the sandbox run %s's %s", turnID, part), len(put)); err != nil {
+		if err := coord.HoldValue(fmt.Sprintf("the sandbox run %s's %s", turnID, part), len(put), coord.MaxValueBytes); err != nil {
 			return coord.Record{}, false, err
 		}
 		written, won, gone := f.applyRunPart(key, read, found, put)
@@ -328,17 +346,23 @@ func (f *Fleet) applyRunPart(key runPartKey, read coord.Record, found bool, put 
 	return copyRecord(stored), true, false
 }
 
-// putRunLocked stores value as turnID's record at the next store-wide version
-// and tells the run's watchers, answering the record stored.
+// putRunLocked stores value as turnID's record at the next store-wide version,
+// with the standing the write states (none for nil, as the KV's message
+// carries none), and tells the run's watchers, answering the record stored.
 //
 // Versions start at 1, so a zero version names no record, and they are drawn
 // from the counter every versioned write shares — see [Fleet.version] for the
 // incarnation that would otherwise hand a deleted run's version to its
 // successor.
-func (f *Fleet) putRunLocked(turnID string, value []byte) coord.Record {
+func (f *Fleet) putRunLocked(turnID string, value []byte, standing *coord.RunStanding) coord.Record {
 	f.version++
 	stored := coord.Record{Key: turnID, Value: slices.Clone(value), Version: f.version}
 	f.runs[turnID] = stored
+	if standing != nil {
+		f.runStandings[turnID] = *standing
+	} else {
+		delete(f.runStandings, turnID)
+	}
 	f.notifyRunLocked(turnID, coord.SandboxRunUpdate{Found: true, Record: stored})
 	return stored
 }

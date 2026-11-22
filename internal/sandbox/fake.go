@@ -677,6 +677,11 @@ type FakeRunner struct {
 	// is unset: the window the harness this fake stands in for pins a run to.
 	Pin func(model string) int
 
+	// Fresh is what [FakeRunner.StartsFresh] answers: the harness this fake
+	// stands in for continues no earlier session. Set it before the first
+	// launch.
+	Fresh bool
+
 	// TakesNotes is what [FakeRunner.ReadsNotes] answers: whether the
 	// harness this fake stands in for takes a person's notes between its own
 	// steps. Set it before the first collection.
@@ -1690,6 +1695,13 @@ func (r *FakeRunner) ThreadTraits() ThreadTraits {
 }
 
 var _ windowPinner = (*FakeRunner)(nil)
+
+// StartsFresh is [FakeRunner.Fresh] ([freshStarter]).
+func (r *FakeRunner) StartsFresh() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.Fresh
+}
 
 // PinnedWindow answers [FakeRunner.Pin] of model, 0 where it is unset.
 func (r *FakeRunner) PinnedWindow(model string) int {

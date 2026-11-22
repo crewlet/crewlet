@@ -35,6 +35,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
 	"github.com/crewlet/crewlet/internal/gitlet/host"
 	"github.com/crewlet/crewlet/internal/procgroup"
+	"github.com/crewlet/crewlet/internal/shellword"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/words"
@@ -1658,12 +1659,7 @@ func controllingTerminal() bool {
 // credentialHelper is the helper a git that talks to the node runs: this
 // binary's `gitlet credential`, spelled for the shell git runs it through.
 func credentialHelper(self string) string {
-	return "!" + shellQuote(self) + " gitlet credential"
-}
-
-// shellQuote is s as one POSIX shell word.
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+	return "!" + shellword.Quote(self) + " gitlet credential"
 }
 
 // repoURL is the git URL of a repository on the node: the API's base, then

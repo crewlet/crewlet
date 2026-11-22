@@ -36,7 +36,7 @@ import (
 const (
 	boxNoneSentence = "authentication required: a coding box authenticates as `" + BoxUser +
 		"` with its run token, and a check's box as `" + gitlet.CheckUser + "` with its check's token, each " +
-		"answered by the engine's credential helper from $CREWLET_GIT_TOKEN"
+		"answered by the engine's credential helper from the file $CREWLET_GIT_ACCESS_FILE names"
 	boxUserSentence = "a coding box authenticates as `" + BoxUser + "` with its run token, and a check's " +
 		"box as `" + gitlet.CheckUser + "` with its check's token"
 	boxTokenSentence = "this run token is not valid here: forged, expired, or signed under a key this " +

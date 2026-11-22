@@ -13,8 +13,11 @@
     ],
     "harness.name": [
       "claude-code",
+      "gemini-cli",
+      "qwen-code",
       "opencode",
       "copilot",
+      "muse-code",
       "kimi-code"
     ],
     "topology.coordination": [

@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // Commit attribution: what a run asked to credit Crewlet on its commits
@@ -21,8 +22,8 @@ import (
 // commit authored as the run's identity is credited: a person's commit the run
 // amends, cherry-picks or rebases keeps its author and gains no co-author.
 // Not reached, by construction: a commit made through a code host's API, which
-// runs no git in the box, and a git older than 2.31, which ignores
-// GIT_CONFIG_COUNT ([attributionExports]).
+// runs no git in the box, and a command run with GIT_CONFIG_PARAMETERS
+// stripped from its environment ([attributionExports]).
 
 // attributionHookScript is the hook, with [attributionTrailersMark] where the
 // run's trailers go. Embedded so the hook a run is handed is the one this
@@ -33,8 +34,13 @@ var attributionHookScript string
 
 // attributionTrailersMark is where [attributionHookScript] takes the run's
 // trailers, as `--if-exists` and `--trailer` arguments to git
-// interpret-trailers ([attributionHook]).
-const attributionTrailersMark = "@TRAILERS@"
+// interpret-trailers, and attributionEntryMark where it takes the run's
+// GIT_CONFIG_PARAMETERS item ([hooksParameter]), each quoted for sh
+// ([attributionHook]).
+const (
+	attributionTrailersMark = "@TRAILERS@"
+	attributionEntryMark    = "@HOOKS_ENTRY@"
+)
 
 // CoAuthor is who a run's commits credit: Crewlet, at an address verified on
 // the GitHub account that renders it, so the commit lists Crewlet among its
@@ -161,15 +167,17 @@ func trailerValue(s string) string {
 	return b.String()
 }
 
-// attributionHook is the hook script crediting trailers: each one argument
-// quoted for sh, after the --if-exists action it is added under, which git
-// interpret-trailers applies to every --trailer that follows it.
-func attributionHook(trailers []attributionTrailer) []byte {
+// attributionHook is the hook script crediting trailers from the hooks
+// directory hooks: each trailer one argument quoted for sh, after the
+// --if-exists action it is added under, which git interpret-trailers applies
+// to every --trailer that follows it.
+func attributionHook(trailers []attributionTrailer, hooks string) []byte {
 	args := make([]string, len(trailers))
 	for i, trailer := range trailers {
-		args[i] = "--if-exists " + trailer.ifExists + " --trailer " + sandbox.ShellQuote(trailer.line)
+		args[i] = "--if-exists " + trailer.ifExists + " --trailer " + shellword.Quote(trailer.line)
 	}
-	return []byte(strings.Replace(attributionHookScript, attributionTrailersMark, strings.Join(args, " "), 1))
+	return []byte(strings.NewReplacer(attributionTrailersMark, strings.Join(args, " "),
+		attributionEntryMark, shellword.Quote(hooksParameter(hooks))).Replace(attributionHookScript))
 }
 
 // installAttribution writes the hook into the box and links it under every
@@ -183,7 +191,7 @@ func installAttribution(ctx context.Context, box sandbox.Sandbox, paths Paths, a
 		return err
 	}
 	source := paths.AttributionHook() + ".source"
-	if err = box.WriteFile(ctx, source, attributionHook(trailers)); err != nil {
+	if err = box.WriteFile(ctx, source, attributionHook(trailers, paths.GitHooks())); err != nil {
 		return fmt.Errorf("executor: writing the commit attribution hook: %w", err)
 	}
 	// The box's own process copies the hook into place: on the engine host a
@@ -192,7 +200,7 @@ func installAttribution(ctx context.Context, box sandbox.Sandbox, paths Paths, a
 	// commit. A copy by an exited process is held open by nobody. The links are
 	// relative and made in the box: a host-made link names a host path a
 	// container lacks.
-	link := "cd " + sandbox.ShellQuote(paths.CommitAttribution()) + " && cp hook.source hook && rm hook.source && " +
+	link := "cd " + shellword.Quote(paths.CommitAttribution()) + " && cp hook.source hook && rm hook.source && " +
 		"chmod 700 hook && mkdir -p hooks && " +
 		"for hook in " + strings.Join(gitHooks, " ") + `; do ln -sf ../hook "hooks/$hook" || exit; done`
 	res, err := box.Exec(ctx, link, sandbox.ExecOptions{})
@@ -207,19 +215,20 @@ func installAttribution(ctx context.Context, box sandbox.Sandbox, paths Paths, a
 }
 
 // attributionExports is the wrapper's statement pointing git at the run's
-// hooks: one more GIT_CONFIG_COUNT entry, appended after any the run's
-// environment, image or profile holds, so theirs still hold. An environment
-// entry, not a configuration file: git ranks it above every file, whereas
-// written to the box's global configuration it would collide with the
-// operator's setup recipe, and a repository's own core.hooksPath (husky's)
-// would silently switch it off. Run in the wrapper, after the login profile,
-// for [Output.Unset]'s reason: a profile setting the count would replace it.
-//
-// A count that is not a number is left as it is: git then refuses every
-// command ("bogus count in GIT_CONFIG_COUNT"), which says what is wrong far
-// better than overwriting the run's own first entry would.
+// hooks: its GIT_CONFIG_PARAMETERS item ([hooksParameter]) appended to any the
+// run's environment, image or profile holds. An environment entry, not a
+// configuration file: git ranks it above every file, whereas written to the
+// box's global configuration it would collide with the operator's setup
+// recipe, and a repository's own core.hooksPath (husky's) would silently
+// switch it off. GIT_CONFIG_PARAMETERS rather than a GIT_CONFIG_COUNT entry
+// because git reads it after every COUNT entry: Gemini CLI's shell appends
+// COUNT entries blanking core.hooksPath, which outrank an earlier COUNT entry.
+// Run in the wrapper, after the login profile, for [Output.Unset]'s reason.
 func attributionExports(hooks string) string {
-	return `_crewlet_n=${GIT_CONFIG_COUNT:-0}; case $_crewlet_n in *[!0-9]*) ;; *) ` +
-		`export "GIT_CONFIG_KEY_$_crewlet_n=core.hooksPath" "GIT_CONFIG_VALUE_$_crewlet_n="` + sandbox.ShellQuote(hooks) +
-		` "GIT_CONFIG_COUNT=$((_crewlet_n + 1))" ;; esac; `
+	return `export GIT_CONFIG_PARAMETERS="${GIT_CONFIG_PARAMETERS:+$GIT_CONFIG_PARAMETERS }"` +
+		shellword.Quote(hooksParameter(hooks)) + "; "
 }
+
+// hooksParameter is the GIT_CONFIG_PARAMETERS item setting core.hooksPath to
+// hooks ([sandbox.GitConfigParameter]).
+func hooksParameter(hooks string) string { return sandbox.GitConfigParameter("core.hooksPath", hooks) }

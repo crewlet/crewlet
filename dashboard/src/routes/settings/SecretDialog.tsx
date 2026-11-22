@@ -148,9 +148,13 @@ export function SecretDialog({
         />
       )}
 
+      {/* A BOX THAT KEEPS LINE BREAKS, with a file picker: a stored value may
+          be a PEM key, and a one-line password box strips the lines from a
+          paste, which no reader of the key then parses. */}
       <ValueField
         label={editing ? "New value" : "Value"}
-        kind="secret"
+        kind="secret-multiline"
+        rows={3}
         isReference={isWholeReference}
         value={value}
         onChange={setValue}

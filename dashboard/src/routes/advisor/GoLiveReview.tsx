@@ -67,7 +67,7 @@ export function alikeAgents(agents: GoLiveReviewAnswer["agents"]): AlikeAgents[]
 
 export function GoLiveReview() {
   return (
-    <Disclosure title="Review what each agent can do" lazy>
+    <Disclosure title="What each agent can do" lazy>
       <Review />
     </Disclosure>
   );
@@ -79,9 +79,7 @@ function Review() {
   return (
     <div className="col gap-3">
       <Text as="p" tone="secondary">
-        Each agent is told this at the start of every turn. Check it against what you want each one
-        to do, for example who can merge or operate a server, and whether a sandbox has the browser
-        your work needs.
+        What each agent is told at the start of every turn. Check that it matches what you want.
       </Text>
       <QueryState error={error} refusal={refusal} detail={detail} loading={loading && !data}>
         {alikeAgents(data?.agents ?? []).map((group) => {

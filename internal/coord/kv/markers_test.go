@@ -210,7 +210,7 @@ func TestACreateOverAMarkerTheSweepRemovesMidWayStillCreates(t *testing.T) {
 		return err
 	}}
 
-	revision, err := createKey(ctx, f.js, racing, key, []byte(`{"status":"running"}`))
+	revision, err := createKey(ctx, f.js, racing, key, []byte(`{"status":"running"}`), nil)
 	if err != nil {
 		t.Fatalf("a create over a marker swept between its read and its write = %v, "+
 			"want it created: the key holds nothing at all", err)
@@ -266,11 +266,11 @@ func TestACreateAsksTheLeaderWhatTheKeyHolds(t *testing.T) {
 	}
 
 	wire := countWireReads(t, nc, f.runs)
-	_, err := createKey(ctx, f.js, f.runs, encodeKey("live"), []byte(`{"again":true}`))
+	_, err := createKey(ctx, f.js, f.runs, encodeKey("live"), []byte(`{"again":true}`), nil)
 	if !errors.Is(err, jetstream.ErrKeyExists) {
 		t.Fatalf("a create over a live value = %v, want ErrKeyExists", err)
 	}
-	if _, err := createKey(ctx, f.js, f.runs, encodeKey("removed"), []byte(`{"again":true}`)); err != nil {
+	if _, err := createKey(ctx, f.js, f.runs, encodeKey("removed"), []byte(`{"again":true}`), nil); err != nil {
 		t.Fatalf("a create over a marker = %v, want it created", err)
 	}
 	if n := wire.leaderReads(t); n != 2 {
@@ -301,6 +301,78 @@ func TestNothingCreatesThroughTheBucketHandleOrSweepsThroughTheClient(t *testing
 			"a create goes through createKey and a marker sweep through "+
 			"sweepMarkers — see markers.go for what each of these costs",
 			strings.Join(found, "\n  "))
+	}
+}
+
+// NOTHING WATCHES A SETTLED BUCKET THROUGH THE CLIENT. Its watch beats every
+// five seconds and resets when nothing arrived in two, so across a link a
+// value longer to cross is cut and asked for again for ever (bucketwatch.go);
+// on one server it passes every case, so the source is read: no call on a
+// handle's embedded KeyValue of a method the client serves through that
+// watch (Watch, WatchAll, WatchFiltered, Keys, ListKeys, ListKeysFiltered,
+// History).
+//
+// Mutation: let settledBucket.Watch delegate to b.KeyValue.Watch.
+func TestNothingWatchesASettledBucketThroughTheClient(t *testing.T) {
+	t.Parallel()
+	found := callsInPackage(t, func(method string, call *ast.CallExpr) bool {
+		switch method {
+		case "Watch", "WatchAll", "WatchFiltered", "Keys", "ListKeys", "ListKeysFiltered", "History":
+			on, ok := call.Fun.(*ast.SelectorExpr).X.(*ast.SelectorExpr)
+			return ok && on.Sel.Name == "KeyValue"
+		}
+		return false
+	})
+	if len(found) > 0 {
+		t.Errorf("these calls watch a settled bucket through the client's watcher:\n  %s\n"+
+			"a watch goes through settledBucket.Watch, whose heartbeat its largest value fits",
+			strings.Join(found, "\n  "))
+	}
+}
+
+// EVERY CLIENT WATCH A SETTLED BUCKET'S HANDLE WOULD PROMOTE IS REFUSED. The
+// client serves WatchFiltered, Keys, ListKeys, ListKeysFiltered and History
+// through its own KV watch, whose heartbeat cuts a value still crossing a
+// link; a call to one compiles and passes on one server, so each is refused
+// on every server alike ([errClientWatch]).
+//
+// Mutation: drop any of the five overrides, and the client's answer comes back.
+func TestEveryClientWatchOfASettledBucketIsRefused(t *testing.T) {
+	t.Parallel()
+	f := openFleetForTest(t, embeddedNATS(t), fmt.Sprintf("f%d", bucketSeq.Add(1)))
+	ctx := t.Context()
+	key := encodeKey("t1")
+	if _, err := f.runs.Put(ctx, key, []byte("{}")); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	for method, call := range map[string]func() error{
+		"WatchFiltered": func() error {
+			w, err := f.runs.WatchFiltered(ctx, []string{key})
+			if w != nil {
+				_ = w.Stop()
+			}
+			return err
+		},
+		"Keys": func() error { _, err := f.runs.Keys(ctx); return err },
+		"ListKeys": func() error {
+			l, err := f.runs.ListKeys(ctx)
+			if l != nil {
+				_ = l.Stop()
+			}
+			return err
+		},
+		"ListKeysFiltered": func() error {
+			l, err := f.runs.ListKeysFiltered(ctx, key)
+			if l != nil {
+				_ = l.Stop()
+			}
+			return err
+		},
+		"History": func() error { _, err := f.runs.History(ctx, key); return err },
+	} {
+		if err := call(); !errors.Is(err, errClientWatch) {
+			t.Errorf("%s on a settled bucket = %v, want it refused as %v", method, err, errClientWatch)
+		}
 	}
 }
 

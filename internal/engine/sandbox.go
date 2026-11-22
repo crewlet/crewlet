@@ -154,7 +154,7 @@ func fakeRunners(play fakePlayer) map[string]sandbox.Runner {
 		// WHAT THE HARNESS'S RUNNER STATES, so a fake run is read as its harness's is.
 		runner.Thread = sandbox.ThreadTraitsOf(real[name])
 		if r, ok := real[name].(*executor.Runner); ok {
-			runner.Pin, runner.NotesOff = r.PinnedWindow, r.NotesOffWhy()
+			runner.Pin, runner.NotesOff, runner.Fresh = r.PinnedWindow, r.NotesOffWhy(), r.StartsFresh()
 		}
 		runners[name] = runner
 	}
@@ -2017,7 +2017,8 @@ func (e *Engine) noteRunEnded(ctx context.Context, c *Company, run sandbox.Pendi
 		return
 	}
 	if agent.RunEnded(ctx, harness.RunEnd{Answer: ended.Text, Error: ended.Error,
-		Failed: !ended.Success, Event: ended.Event, Limits: ended.Limits, At: ended.At}) {
+		Failed: !ended.Success, Event: ended.Event, Limits: ended.Limits, NoLimit: ended.NoLimitExit,
+		At: ended.At}) {
 		log.InfoContext(ctx, "executor_run_spent_its_entry",
 			"turn_id", run.TurnID, "seat", run.AgentHandle,
 			"provider_key", run.Launch.ProviderKey,
@@ -4146,6 +4147,10 @@ type executorRun struct {
 	files     map[string]string
 	env       map[string]string
 
+	// fileKeys is, by a path of files, the keys its harness writes into that
+	// file during a run ([sandbox.Spec.CredentialRunKeys]).
+	fileKeys map[string][]string
+
 	// signIn is env without the integrations' box defaults and the seat's
 	// own credentials for a tool: what the run's sign-in is judged on, since
 	// neither ever signs a harness in.
@@ -4209,6 +4214,7 @@ func newExecutorRun(agent *harness.Provider, seat runEnv) executorRun {
 		signIn:      signIn,
 		signInNames: signInNames(agent, entry),
 		files:       agent.SandboxCredentials(),
+		fileKeys:    agent.SandboxCredentialRunKeys(),
 		homePaths:   integrationsOwn(agent, seat.homePaths),
 	}
 	for _, name := range slices.Sorted(maps.Keys(seat.credentials)) {

@@ -30,7 +30,7 @@ func kimiReachesTheBridgesRoute(t *testing.T) {
 	p := executor.PathsFor(box)
 	if _, err := (executor.Kimi{}).WriteConfig(t.Context(), box, sandbox.RunRequest{
 		Steer: sandbox.SteerWiring{Server: "crewlet", Tool: mcpbridge.SteerTool, URL: mcpbridge.SteerURL(endpoint)},
-	}, p); err != nil {
+	}, executor.Session{}, p); err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
 	raw, err := box.ReadFile(t.Context(), p.KimiSettings())

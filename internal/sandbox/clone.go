@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // How a box is given a repository on Gitlet.
@@ -73,9 +75,9 @@ END { if (!seen) { print "the git in this box did not say its version, so it can
 	return SetupStep{
 		Name: "git-version",
 		Commands: []string{
-			"command -v git >/dev/null 2>&1 || { echo " + ShellQuote("this box has no git: Gitlet needs git "+
+			"command -v git >/dev/null 2>&1 || { echo " + shellword.Quote("this box has no git: Gitlet needs git "+
 				ClientGitFloor+" or newer in the box's template or image") + " >&2; exit 3; }\n" +
-				"git version | awk -v want=" + ClientGitFloor + " " + ShellQuote(program),
+				"git version | awk -v want=" + ClientGitFloor + " " + shellword.Quote(program),
 		},
 	}
 }
@@ -140,7 +142,7 @@ const (
 func MonitorStep(repos []RunRepo) SetupStep {
 	dirs := make([]string, len(repos))
 	for i, r := range repos {
-		dirs[i] = ShellQuote(r.Repo)
+		dirs[i] = shellword.Quote(r.Repo)
 	}
 	program := versionNumber + `
 /^git version / { seen = 1; v = $3; sub(/[^0-9.].*$/, "", v); ok = n(v) >= n(want); exit }
@@ -170,7 +172,7 @@ END { exit !(seen && ok) }`
 		// fsmonitor=starved arm). The other half is for growth and the harness's
 		// own watchers.
 		"on=false",
-		"if git version | awk -v want=" + monitorGitFloor + " " + ShellQuote(program) + " &&",
+		"if git version | awk -v want=" + monitorGitFloor + " " + shellword.Quote(program) + " &&",
 		"  [ \"$held\" -le $((watches / 2)) ] && [ \"$checkouts\" -le $((instances / 2)) ]; then on=true; fi",
 		"for d in " + strings.Join(dirs, " ") + "; do",
 		"  if $on; then git -C \"$d\" config core.fsmonitor true",
@@ -183,7 +185,7 @@ END { exit !(seen && ok) }`
 
 // CloneRecipe is the ONE way a box is given a repository: the setup step that
 // checks r out for purpose into `./<r.Repo>` from
-// "$CREWLET_GIT_URL/<r.Repo>.git", every value quoted ([ShellQuote]), refused
+// "$CREWLET_GIT_URL/<r.Repo>.git", every value quoted ([shellword.Quote]), refused
 // where [RunRepo.ValidateFor] refuses r for purpose, an unknown one included.
 // Skipped whole where `./<r.Repo>/.git` exists, keeping a reused box's work.
 //
@@ -257,20 +259,20 @@ func (w cloneWords) sparseCone() string {
 	return "  git -C " + w.dir + " sparse-checkout set --cone --skip-checks -- " + w.cone + " &&"
 }
 
-// wordsOf quotes r's values for a recipe, each through [ShellQuote]. The
+// wordsOf quotes r's values for a recipe, each through [shellword.Quote]. The
 // remote is the one unquoted expansion, the launch environment's base URL,
 // itself in double quotes so whatever it holds is one word.
 func wordsOf(r RunRepo) cloneWords {
 	cone := make([]string, len(r.Paths))
 	for i, p := range r.Paths {
-		cone[i] = ShellQuote(p)
+		cone[i] = shellword.Quote(p)
 	}
 	return cloneWords{
-		dir:    ShellQuote(r.Repo),
-		url:    `"$` + GitURLVar + `"/` + ShellQuote(r.Repo+".git"),
-		branch: ShellQuote(r.Branch),
-		ref:    ShellQuote("refs/heads/" + r.Branch),
-		base:   ShellQuote(r.Base),
+		dir:    shellword.Quote(r.Repo),
+		url:    `"$` + GitURLVar + `"/` + shellword.Quote(r.Repo+".git"),
+		branch: shellword.Quote(r.Branch),
+		ref:    shellword.Quote("refs/heads/" + r.Branch),
+		base:   shellword.Quote(r.Base),
 		cone:   strings.Join(cone, " "),
 	}
 }

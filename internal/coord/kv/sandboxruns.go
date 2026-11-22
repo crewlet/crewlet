@@ -1,15 +1,30 @@
+// A run's STANDING rides the message of its record: three headers its writer
+// states ([standingHeader]) in the one conditional publish that writes the
+// value ([settledBucket.update]), so the two land at one revision or not at
+// all. [FleetStore.SandboxRunStandings] lists them over a pass of headers
+// alone: across a leaf's link a record at its bound takes minutes, its
+// standing milliseconds. A record whose last write stated none (an older
+// build's) is listed without one, for its reader to judge on the value read
+// whole, never skipped. Each header has a widest form, which [kvHeaderBytes]
+// counts: the handle rides as its digest because a handle has no bound.
+// ADR-0175 counts what the pass moves.
+
 package kv
 
 import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -89,13 +104,80 @@ func (f *FleetStore) SandboxRuns(ctx context.Context) ([]coord.Record, error) {
 	return out, nil
 }
 
-// CreateSandboxRun writes a new record, ignoring a turn id that already
-// exists.
-func (f *FleetStore) CreateSandboxRun(ctx context.Context, turnID string, value []byte) (bool, error) {
+// The headers a run's standing rides in ([coord.RunStanding]).
+const (
+	runSeatHeader   = "Crewlet-Run-Seat"
+	runHandleHeader = "Crewlet-Run-Handle-Sha256"
+	runEpochHeader  = "Crewlet-Run-Owner-Epoch"
+)
+
+// widestStanding is a standing at its widest on the wire: a seat and a digest
+// are one width whatever they hold, and an epoch's widest is math.MinInt64.
+var widestStanding = coord.StandingOf(uuid.Max, "", math.MinInt64)
+
+// standingHeader is the header stating s, and none for nil.
+func standingHeader(s *coord.RunStanding) nats.Header {
+	if s == nil {
+		return nil
+	}
+	return nats.Header{
+		runSeatHeader:   {s.Seat.String()},
+		runHandleHeader: {hex.EncodeToString(s.Handle[:])},
+		runEpochHeader:  {strconv.FormatInt(s.OwnerEpoch, 10)},
+	}
+}
+
+// standingOf is the standing h states: nil unless all three headers are there
+// and parse. A header this build does not know is not read.
+func standingOf(h nats.Header) *coord.RunStanding {
+	seat, err := uuid.Parse(h.Get(runSeatHeader))
+	if err != nil {
+		return nil
+	}
+	digest, err := hex.DecodeString(h.Get(runHandleHeader))
+	if err != nil || len(digest) != len(coord.RunStanding{}.Handle) {
+		return nil
+	}
+	epoch, err := strconv.ParseInt(h.Get(runEpochHeader), 10, 64)
+	if err != nil {
+		return nil
+	}
+	s := coord.RunStanding{Seat: seat, OwnerEpoch: epoch}
+	copy(s.Handle[:], digest)
+	return &s
+}
+
+// SandboxRunStandings returns every record's standing as its last write stated
+// it, by turn id: a certified pass of the records' headers alone
+// ([listHeadersUnder]), a record the pass missed read whole from the leader.
+func (f *FleetStore) SandboxRunStandings(ctx context.Context) ([]coord.StoodRun, error) {
+	var out []coord.StoodRun
+	err := listHeadersUnder(ctx, f.js, f.runs, runRecordKeys, "the sandbox runs' standing",
+		func(kve jetstream.KeyValueEntry) error {
+			turnID, ok := decodeKey(kve.Key())
+			if !ok {
+				return nil
+			}
+			out = append(out, coord.StoodRun{TurnID: turnID, Version: kve.Revision(),
+				Standing: standingOf(headersOf(kve))})
+			return nil
+		})
+	if err != nil {
+		return nil, err
+	}
+	slices.SortFunc(out, func(a, b coord.StoodRun) int { return cmp.Compare(a.TurnID, b.TurnID) })
+	return out, nil
+}
+
+// CreateSandboxRun writes a new record stating standing in its message,
+// ignoring a turn id that already exists.
+func (f *FleetStore) CreateSandboxRun(ctx context.Context, turnID string, value []byte,
+	standing *coord.RunStanding) (bool, error) {
+
 	if turnID == "" {
 		return false, errors.New("coord/kv: a sandbox run needs a turn id")
 	}
-	_, err := f.create(ctx, f.runs, encodeKey(turnID), value)
+	_, err := createKey(ctx, f.js, f.runs, encodeKey(turnID), value, standing)
 	switch {
 	case err == nil:
 		return true, nil
@@ -161,7 +243,7 @@ func (f *FleetStore) MutateSandboxRun(ctx context.Context, turnID string,
 			}
 		case len(change.Put) > 0:
 			var revision uint64
-			revision, err = f.runs.Update(ctx, key, change.Put, read.Version)
+			revision, err = f.updateRun(ctx, key, change.Put, read.Version, change.Standing)
 			if err == nil {
 				result = coord.Record{Key: turnID, Value: bytes.Clone(change.Put), Version: revision}
 				changed = true
@@ -187,6 +269,18 @@ func (f *FleetStore) MutateSandboxRun(ctx context.Context, turnID string,
 		return coord.Record{}, false, contended("MutateSandboxRun", turnID)
 	}
 	return result, changed, nil
+}
+
+// updateRun writes a run's record at revision, stating standing in its message.
+func (f *FleetStore) updateRun(ctx context.Context, key string, value []byte, revision uint64,
+	standing *coord.RunStanding) (uint64, error) {
+
+	h, ok := f.runs.(headedWriter)
+	if !ok {
+		return 0, fmt.Errorf("coord/kv: %s is not a bucket settled where it was opened, so "+
+			"nothing writes a run's standing with its record", f.runs.Bucket())
+	}
+	return h.update(ctx, key, value, revision, standing)
 }
 
 // ValueCrossing is how long a write of a run's largest value takes to cross

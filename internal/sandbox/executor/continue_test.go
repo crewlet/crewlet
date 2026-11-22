@@ -16,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // Continuing a turn's session, on a real box under the run's own script: the
@@ -174,7 +175,7 @@ type strippedBox struct {
 }
 
 func (b strippedBox) StartBackground(ctx context.Context, cmd string, opts sandbox.ExecOptions) (string, error) {
-	if _, err := b.Exec(ctx, "rm -f "+shQuote(b.path), sandbox.ExecOptions{}); err != nil {
+	if _, err := b.Exec(ctx, "rm -f "+shellword.Quote(b.path), sandbox.ExecOptions{}); err != nil {
 		return "", err
 	}
 	return b.Sandbox.StartBackground(ctx, cmd, opts)
@@ -301,7 +302,7 @@ func TestAnOpenCodeRunThatContinuesASessionIsConfiguredForEither(t *testing.T) {
 	p := executor.PathsFor(box)
 	req := sandbox.RunRequest{Resume: carriedOpenCode, MCPServers: bridgeAt("continued-token"),
 		FreshWiring: &sandbox.Wiring{MCPServers: bridgeAt("fresh-token")}}
-	path, err := executor.OpenCode{}.WriteConfig(t.Context(), box, req, p)
+	path, err := executor.OpenCode{}.WriteConfig(t.Context(), box, req, executor.Session{}, p)
 	if err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
@@ -324,7 +325,7 @@ func TestAnOpenCodeRunThatContinuesASessionIsConfiguredForEither(t *testing.T) {
 	} {
 		mismatched := req
 		mismatched.FreshWiring = other
-		if _, err := (executor.OpenCode{}).WriteConfig(t.Context(), box, mismatched, p); err == nil ||
+		if _, err := (executor.OpenCode{}).WriteConfig(t.Context(), box, mismatched, executor.Session{}, p); err == nil ||
 			!strings.Contains(err.Error(), "not the same configuration") {
 			t.Errorf("%s: WriteConfig = %v, want the two wirings refused", name, err)
 		}
@@ -461,7 +462,7 @@ const tornWhole = `{"type":"user","n":1}` + "\n" + `{"type":"assistant","n":2}` 
 func tornThreadsHarness(release string) string {
 	var b strings.Builder
 	for name, thread := range tornThreads {
-		b.WriteString(`mkdir -p "$(dirname "$p/$s/` + name + `")" && printf '%s' ` + shQuote(thread.left) +
+		b.WriteString(`mkdir -p "$(dirname "$p/$s/` + name + `")" && printf '%s' ` + shellword.Quote(thread.left) +
 			` > "$p/$s/` + name + `"` + "\n")
 	}
 	return strings.Replace(sessionHarness(release), `printf '{"type":"result"`, b.String()+`printf '{"type":"result"`, 1)
@@ -543,7 +544,7 @@ func threadsResumed(t *testing.T, b sandbox.Sandbox) {
 // link.
 func boxHas(t *testing.T, box sandbox.Sandbox, path string) bool {
 	t.Helper()
-	res, err := box.Exec(t.Context(), "[ -e "+shQuote(path)+" ] || [ -L "+shQuote(path)+" ]", sandbox.ExecOptions{})
+	res, err := box.Exec(t.Context(), "[ -e "+shellword.Quote(path)+" ] || [ -L "+shellword.Quote(path)+" ]", sandbox.ExecOptions{})
 	if err != nil {
 		t.Fatalf("asking the box for %s: %v", path, err)
 	}
@@ -765,7 +766,7 @@ func openCodeTaken(t *testing.T, messages string) int64 {
 	runner, b := openCodeBox(t, t.TempDir())
 	dir := t.TempDir()
 	writeBoxStandIn(t, b, paths(b).BinDir()+"/opencode",
-		strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`, "d="+shQuote(dir), 1))
+		strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`, "d="+shellword.Quote(dir), 1))
 	const session = "ses_0123456789abcdef0123456789"
 	if err := b.WriteFile(t.Context(), paths(b).SessionRecord(),
 		[]byte("id "+session+"\nrelease 2.0.32\n")); err != nil {
@@ -911,7 +912,7 @@ func TestAContinuedOpenCodeRunIsConfiguredWithItsOwnInstructions(t *testing.T) {
 	p := executor.PathsFor(box)
 	configure := func(req sandbox.RunRequest) string {
 		t.Helper()
-		path, err := executor.OpenCode{}.WriteConfig(t.Context(), box, req, p)
+		path, err := executor.OpenCode{}.WriteConfig(t.Context(), box, req, executor.Session{}, p)
 		if err != nil {
 			t.Fatalf("WriteConfig: %v", err)
 		}
