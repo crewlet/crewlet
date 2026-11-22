@@ -51,7 +51,7 @@ func (e *Engine) armHistory(ctx context.Context) error {
 		// deployment rather than a degradation: its reads are its store.
 		return nil
 	}
-	stop, err := eventfan.Serve(ctx, e.backends.Queue, e.id, e.backends.Store.Events())
+	stop, err := eventfan.Serve(ctx, e.backends.Queue, e.id, e.backends.Store.Events(), e.answerBudget)
 	if err != nil {
 		return err
 	}

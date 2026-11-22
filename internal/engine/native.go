@@ -460,7 +460,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	// or not anybody on it searches.
 	if e.backends.Queue != nil {
 		n.stopSlices, err = search.ServeSlices(runCtx, e.backends.Queue, nodeID,
-			search.NodeScanner{Index: n.indexer, Copies: copies})
+			search.NodeScanner{Index: n.indexer, Copies: copies}, e.answerBudget)
 		if err != nil {
 			return fmt.Errorf("engine: serve search slices: %w", err)
 		}
