@@ -844,8 +844,10 @@ codex:
         - "tools.experimental_request_user_input.enabled=false"
         - "-"
   model_args: ["--model", "{model}"]
-  # `-c model_reasoning_effort`: the value is sent as written, and a model's
-  # API refuses a level it lacks.
+  # `-c model_reasoning_effort`, read at rust-v0.171.0 (config_toml.rs, and
+  # protocol's openai_models.rs): every listed level parses by name, any other
+  # non-empty value passes as written, and a model's API refuses a level it
+  # lacks.
   effort:
     args: ["-c", 'model_reasoning_effort="{effort}"']
     levels: [none, minimal, low, medium, high, xhigh, max]
