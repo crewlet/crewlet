@@ -25,11 +25,12 @@ import { VendorMark } from "@crewlethq/icons";
 import { ProductMark } from "@crewlethq/icons/product-mark";
 import { CheckGlyph, InfoGlyph } from "@crewlethq/icons/glyphs";
 import type { ReconcileFinding } from "~/contract/integrations.ts";
-import type { SetupRequirement } from "~/contract/setup.ts";
-import { asSentence, relTime } from "~/lib/format.ts";
+import type { SetupRequirement, SetupSet } from "~/contract/setup.ts";
+import { asSentence, listed, relTime } from "~/lib/format.ts";
 import { marked } from "~/ui/Problems.tsx";
 import { href } from "~/app/router.tsx";
 import { DisconnectDialog } from "../DisconnectDialog.tsx";
+import { asksIn, type SetEntry } from "../SetupForm.tsx";
 // THE SCREEN'S OWN SHEET, with every module of the integrations screen (its
 // directory, panes, setup form and disconnect dialog), which all reach it here.
 import "~/styles/integrations.css";
@@ -276,8 +277,18 @@ export function IssueRow({
   );
 }
 
-/** What a tool is set to, minus credentials, which are named and never shown. */
-export function SettingsSummary({ tool }: { tool: Tool }) {
+/**
+ * What a tool is set to, minus credentials, which are named and never shown.
+ * A set is one row naming the entries held; `drawSet` draws them instead,
+ * for an app whose entries carry their own controls.
+ */
+export function SettingsSummary({
+  tool,
+  drawSet,
+}: {
+  tool: Tool;
+  drawSet?: ((set: SetupSet, held: SetEntry[]) => ReactNode) | undefined;
+}) {
   const reqs = tool.sections
     .filter((s) => s.seat === undefined)
     .flatMap((s) => s.tool.requirements)
@@ -293,21 +304,37 @@ export function SettingsSummary({ tool }: { tool: Tool }) {
       dense
       // CAPPED, so a long question wraps in its column and the answer gets the width.
       termWidth="minmax(8rem, 16rem)"
-      items={reqs.map((r) => [
-        r.label,
-        r.kind === "secret" ? (
-          r.present ? (
-            <StatusDot tone="success">{r.mintable ? "Made by Crewlet" : "Stored"}</StatusDot>
+      items={asksIn(reqs).map((ask) => {
+        if (ask.kind === "field") return [ask.r.label, <FieldValue r={ask.r} />];
+        const held = ask.entries.filter((e) => e.fields.some((r) => r.present));
+        return [
+          ask.set.label,
+          held.length === 0 ? (
+            <EmptyValue label="Not set" />
+          ) : drawSet ? (
+            drawSet(ask.set, held)
           ) : (
-            <StatusDot tone="neutral">Not set</StatusDot>
-          )
-        ) : r.value || r.default ? (
-          <SettingValue r={r} value={r.value || r.default || ""} />
-        ) : (
-          <EmptyValue label="Not set" />
-        ),
-      ])}
+            <span>{listed(held.map((e) => e.label))}</span>
+          ),
+        ];
+      })}
     />
+  );
+}
+
+/** One field's row value: a credential as whether it is held, anything else as itself. */
+function FieldValue({ r }: { r: SetupRequirement }) {
+  if (r.kind === "secret") {
+    return r.present ? (
+      <StatusDot tone="success">{r.mintable ? "Made by Crewlet" : "Stored"}</StatusDot>
+    ) : (
+      <StatusDot tone="neutral">Not set</StatusDot>
+    );
+  }
+  return r.value || r.default ? (
+    <SettingValue r={r} value={r.value || r.default || ""} />
+  ) : (
+    <EmptyValue label="Not set" />
   );
 }
 
@@ -356,10 +383,19 @@ export function BeforeYouStart({ tool }: { tool: Tool }) {
       <section aria-label="What you need">
         <h3 className="t-label">Have ready</h3>
         <List variant="numbered">
-          {tool.asks.map((r) => (
-            <List.Item key={r.field}>{r.label}</List.Item>
+          {tool.haveReady.map((item) => (
+            <List.Item key={`${item.label}\n${item.hint ?? ""}`}>
+              {item.hint ? (
+                <span className="col gap-1">
+                  <span>{item.label}</span>
+                  <span className="t-caption secondary">{item.hint}</span>
+                </span>
+              ) : (
+                item.label
+              )}
+            </List.Item>
           ))}
-          {tool.asks.length === 0 && (
+          {tool.haveReady.length === 0 && (
             <List.Item>
               {tool.story.byHand ? "Nothing." : "Nothing. Crewlet fills in the rest."}
             </List.Item>
