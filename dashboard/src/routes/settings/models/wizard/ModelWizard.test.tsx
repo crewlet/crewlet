@@ -1279,3 +1279,48 @@ test("a harness missing on the host is said plainly, flags no step, and holds Fi
     true,
   );
 });
+
+// A COMPANY'S FIRST MODEL DOES EVERYTHING, the helpers included, and keeps
+// them through a harness that runs none and back.
+test("a company's first model opens on Everything for every seat and both helpers", () => {
+  const first = modelsData({
+    doc: { ...DOC, providers: { llm: {} } } as unknown as CompanyDocument,
+    entries: [],
+  });
+  render(
+    <Router>
+      <ModelWizard
+        data={first}
+        target={{ step: "assign" }}
+        onClose={() => {}}
+        onDevice={() => {}}
+      />
+    </Router>,
+  );
+  const helpersSaid = () => [
+    screen.queryByText("It also answers in Ask Crewlet.") !== null,
+    screen.queryByText("It also explains the Advisor's findings.") !== null,
+  ];
+  const toUseItFor = () => {
+    fireEvent.click(
+      within(screen.getByRole("list", { name: /^Steps to/ })).getByRole("button", {
+        name: /Use it for/,
+      }),
+    );
+    expect(heading()).toBe("Use it for");
+    expect((screen.getByRole("radio", { name: /^Everything/ }) as HTMLInputElement).checked).toBe(
+      true,
+    );
+  };
+  toUseItFor();
+  expect(helpersSaid()).toEqual([true, true]);
+  fireEvent.click(
+    within(screen.getByRole("list", { name: /^Steps to/ })).getByRole("button", {
+      name: /Name and harness/,
+    }),
+  );
+  fireEvent.click(screen.getByRole("radio", { name: /^OpenCode/ }));
+  fireEvent.click(screen.getByRole("radio", { name: /^Claude Code/ }));
+  toUseItFor();
+  expect(helpersSaid()).toEqual([true, true]);
+});

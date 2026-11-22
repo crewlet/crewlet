@@ -2998,19 +2998,21 @@ work a person tells apart, and each choice writes every field it covers:
 | Coding | the seat's `llm` |
 | Reviewing and delegations | `llm_review` and `llm_subagent` |
 | Routines and evaluations | `llm_auxiliary`, `llm_judge` and `llm_triage` |
-| Everything | the seat's `llm`, clearing the five satellites, so every job resolves to it |
-| Ask Crewlet | the head of `assistant.llm`, company-wide, with no seats, keeping its fallbacks; the model must deny web tools |
+| Everything | the seat's `llm`, clearing the five satellites, so every job resolves to it; and `assistant.model` and `advisor.model` where either names none of the company's models, on a harness that runs helpers |
+| Ask Crewlet | `assistant.model`, company-wide, with no seats |
+| Advisor | `advisor.model`, company-wide, with no seats |
 
 Each group is grouped by what it wants: reviewing and delegated work a strong model; routines, the
 onboarding judge and the wake triage, each a bounded call under a fixed deadline, a fast one. A seat's field is written as one model, never
-a chain: a fallback it named is dropped, and the review names each one dropped. Ask Crewlet is the
-exception, because its chain is the only failover for everyone's questions: choosing its model
-replaces the first and keeps every fallback behind it, in order; its row and the review say which
-stay. Taking a model off a job removes it from the field; an emptied field is deleted, so the job
-resolves as an unset one does (the review shows where it lands). Routines and evaluations, whose
-jobs have a fixed deadline ([Auxiliary work and latency](#auxiliary-work-and-latency)), note a model
-that is not fast and never refuse it. A model Ask Crewlet already runs on keeps it until another is
-chosen.
+a chain: a fallback it named is dropped, and the review names each one dropped. Everything moves no
+helper that runs: one already on another model stays there unless its switch is turned on, and the
+review lists each helper that changes. Taking a model off a job
+removes it from the field; an emptied field is deleted, so the job resolves as an unset one does
+(the review shows where it lands). Routines and evaluations, whose jobs have a fixed deadline
+([Auxiliary work and latency](#auxiliary-work-and-latency)), note a model that is not fast and never
+refuse it. A model Ask Crewlet already runs on keeps it until another is chosen. A helper's model
+takes effect when a node applies the revision, with no restart: Ask Crewlet and the Advisor read it
+from the revision the node runs on every call, and the dashboard asks again when the node applies one.
 
 **Status comes from every node's status record.** Each node publishes, per model: how it signs in
 there, whether it sits out a vendor's limit and until when, last answer and last failure, seats
