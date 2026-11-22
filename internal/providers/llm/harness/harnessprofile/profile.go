@@ -290,7 +290,7 @@ const (
 	// sat the entry out. A sentinel that is not words ("429") still false-positives.
 	MarkerScopeAnswerAndStderr MarkerScope = "answer-and-stderr"
 	// MarkerScopeStderr searches stderr only, for a harness whose failures
-	// never reach the answer (kimi-code, pi; measured). Narrow only where the
+	// never reach the answer (pi; measured). Narrow only where the
 	// answer is an impossible place for the report: hermes prints a refused
 	// key on stdout with exit 2 (0.21.5).
 	MarkerScopeStderr MarkerScope = "stderr"
@@ -973,7 +973,7 @@ type Profile struct {
 	// key variable signs it in, for a harness whose metered key is part of a
 	// model of its own: Kimi Code's KIMI_MODEL_NAME, beside KIMI_MODEL_API_KEY,
 	// adds a provider that becomes its default and refuses a --model naming
-	// any other (2.3.1, 2.7.2). Under auth.mode api-key the entry's model goes
+	// any other (2.7.2). Under auth.mode api-key the entry's model goes
 	// here and model_args is not passed; under any other mode it is removed.
 	// The engine owns it, as it does api_key_env: an entry's env may not set it.
 	APIKeyModelEnv string `yaml:"api_key_model_env,omitempty"`

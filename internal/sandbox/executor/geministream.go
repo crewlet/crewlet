@@ -37,6 +37,13 @@ const geminiAPIErrorExit = 429 % 256
 // its vendor's 429 ([limitGate]), the one ending a limit is read off.
 func (GeminiCLI) limitExit(code int) bool { return code == geminiAPIErrorExit }
 
+// geminiTurnLimitError is the type of the result's error where the run's
+// round cap ended it (settings' model.maxSessionTurns, geminiSettings):
+// measured on 0.70.0, a cap of 2 and of 3 ended the run after 2 and 3
+// requests with this error, status "error" and exit 53, where every other
+// failure measured carries another type.
+const geminiTurnLimitError = "FatalTurnLimitedError"
+
 // geminiContextSentence is the API's own words for a request past the model's
 // window, which Gemini CLI relays in its result's error (measured with the
 // stub's 400 INVALID_ARGUMENT, exit 144). Read off the result alone, which no
@@ -126,6 +133,7 @@ type geminiEvents struct {
 	result   []byte
 	status   string
 	errText  string
+	errType  string
 	usage    *geminiTokens
 	stats    *geminiStats
 	requests int
@@ -218,6 +226,7 @@ func (d *geminiEvents) Line(line []byte) {
 	case "result":
 		d.status = looseString(ev.Status)
 		d.errText = geminiErrorText(ev.Error)
+		d.errType = geminiErrorType(ev.Error)
 		var stats geminiStats
 		if wireObject(ev.Stats) && wireDecode(ev.Stats, &stats) == nil {
 			d.stats = &stats
@@ -317,6 +326,10 @@ func (d *geminiEvents) Result() sandbox.Result {
 		res.Error = "the harness stopped before it reported how its run ended: its stream has no result event"
 	default:
 		res.Error = firstNonBlank(d.errText, "the harness reported its run ended "+firstNonBlank(d.status, "with no status"))
+		res.RoundCapped = d.errType == geminiTurnLimitError
+		if res.RoundCapped {
+			res.Error = "the run reached its turn cap before it finished: " + res.Error
+		}
 		res.Event = string(d.result)
 		res.ContextExhausted = strings.Contains(d.errText, geminiContextSentence)
 	}
@@ -334,6 +347,17 @@ func geminiErrorText(raw json.RawMessage) string {
 	}
 	if wireObject(raw) && wireAlias(raw, &e) == nil {
 		return looseString(e.Message)
+	}
+	return ""
+}
+
+// geminiErrorType is an error object's type, "" where it names none.
+func geminiErrorType(raw json.RawMessage) string {
+	var e struct {
+		Type json.RawMessage `json:"type"`
+	}
+	if wireObject(raw) && wireAlias(raw, &e) == nil {
+		return looseString(e.Type)
 	}
 	return ""
 }

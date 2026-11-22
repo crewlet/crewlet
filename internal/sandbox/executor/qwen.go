@@ -168,6 +168,7 @@ var qwenDenied = []string{"agent", "ask_user_question", "enter_plan_mode", "exit
 //     check (two connections home a run otherwise);
 //   - the chat file kept, since a note is confirmed by its record there;
 //   - the tools denied ([qwenDenied]);
+//   - the run's round cap, as model.maxSessionTurns;
 //   - the run's skills alone, with the hook reporting each load.
 func qwenSettings(req sandbox.RunRequest, paths Paths) map[string]any {
 	settings := map[string]any{
@@ -188,6 +189,14 @@ func qwenSettings(req sandbox.RunRequest, paths Paths) map[string]any {
 		// profile): Qwen Code's own policy holds a refused request for most
 		// of an hour.
 		"model": map[string]any{"generationConfig": map[string]any{"maxRetries": 0}},
+	}
+	// THE RUN'S ROUND CAP, as Qwen Code caps a session's model requests: at
+	// the cap the turn ends with ACP's stopReason max_turn_requests (measured
+	// on 0.28.3: a cap of 2 and of 3 ended after 2 and 3 requests, a run done
+	// in 3 under a cap of 5 ended end_turn). A run is a session of its own, so
+	// the session's count is the run's.
+	if req.Limits.MaxTurns > 0 {
+		settings["model"].(map[string]any)["maxSessionTurns"] = req.Limits.MaxTurns
 	}
 	if key := req.Env["OPENAI_API_KEY"]; key != "" {
 		settings["security"] = map[string]any{"auth": map[string]any{"apiKey": key}}
