@@ -15,6 +15,11 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
+// codexTelemetryEnv is the OTLP exporter's variables, the endpoint and its
+// headers, which carry the run's telemetry credential: Codex keeps them for its
+// own export, and the model's shell commands are handed none.
+const codexTelemetryEnv = "OTEL_EXPORTER_OTLP_*"
+
 // codexMCPStartupWait is how long Codex waits for a required MCP server to
 // finish its handshake before the run fails ([codexConfigTOML]): SIXTY
 // SECONDS, the wait OpenCode's script gives the same bridge
@@ -87,8 +92,9 @@ func waitSeconds(d time.Duration) int {
 // sandbox needs, and nobody answers); no analytics, plugins or bundled skills
 // (with all three off a run dials only its model and servers, measured); no
 // request_user_input (a question parks through ask_and_wait); and the model's
-// shell inherits the run's environment less the harness's own sign-in and the
-// helper's routes ([codexNotesEnv]), which Codex otherwise hands every command
+// shell inherits the run's environment less the harness's own sign-in, the
+// helper's routes ([codexNotesEnv]) and the telemetry exporter's endpoint and
+// headers ([codexTelemetryEnv]), which Codex otherwise hands every command
 // (measured), keeping PATH, HOME, GIT_CONFIG_* and the seat's tool credentials.
 func codexPosture(req sandbox.RunRequest) []string {
 	profile, _ := harnessprofile.Builtin(CodexName)
@@ -101,7 +107,7 @@ func codexPosture(req sandbox.RunRequest) []string {
 		`skills.bundled.enabled=false`,
 		`tools.experimental_request_user_input.enabled=false`,
 		`shell_environment_policy.inherit="all"`,
-		`shell_environment_policy.exclude=` + tomlArray(append(profile.CredentialEnvNames(nil), codexNotesEnv, codexSkillsEnv)),
+		`shell_environment_policy.exclude=` + tomlArray(append(profile.CredentialEnvNames(nil), codexNotesEnv, codexSkillsEnv, codexTelemetryEnv)),
 	}
 	// THE ENTRY'S MODEL AND EFFORT AS WRITTEN, as its runs on the engine host
 	// hand them (the codex profile's model_args and effort).

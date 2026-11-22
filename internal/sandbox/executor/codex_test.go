@@ -426,11 +426,13 @@ func TestNoCodexCommandLineCarriesTheBridgesToken(t *testing.T) {
 	}
 	p := executor.PathsFor(box)
 	// AND THE MODEL'S SHELL IS HANDED NONE OF THEM: every credential name the
-	// codex profile signs in by, and both routes, are excluded from the
-	// environment Codex hands the commands it runs (its shell_environment_policy).
+	// codex profile signs in by, both routes and the telemetry exporter's
+	// variables are excluded from the environment Codex hands the commands it
+	// runs (its shell_environment_policy).
 	profile, _ := harnessprofile.Builtin(executor.CodexName)
 	excluded := codexShellExcluded(t, recorded(t, record, "server-argv"))
-	for _, name := range append(profile.CredentialEnvNames(nil), "CREWLET_NOTES_URL", "CREWLET_SKILLS_URL") {
+	for _, name := range append(profile.CredentialEnvNames(nil), "CREWLET_NOTES_URL", "CREWLET_SKILLS_URL",
+		"OTEL_EXPORTER_OTLP_*") {
 		if !slices.Contains(excluded, name) {
 			t.Errorf("the model's shell may be handed %s: the policy excludes %q", name, excluded)
 		}
