@@ -505,6 +505,11 @@ func (k replayKV) Watch(context.Context, string, ...jetstream.WatchOpt) (jetstre
 	return stubWatcher{ch: ch}, nil
 }
 
+// watchHeaders is [replayKV.Watch]: a recorded pass is handed whole.
+func (k replayKV) watchHeaders(ctx context.Context, keys string) (jetstream.KeyWatcher, error) {
+	return k.Watch(ctx, keys)
+}
+
 // recordPass is the pass kv delivers now, markers included, for a replayKV to
 // hand to a listing taken later.
 func recordPass(ctx context.Context, t *testing.T, kv jetstream.KeyValue) []jetstream.KeyValueEntry {

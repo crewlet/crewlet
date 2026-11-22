@@ -36,8 +36,8 @@ var pointerOrigin = coord.RevisionOrigin{Author: "maya", AuthorKind: iam.ActorOp
 	Source: "api", CreatedAt: time.Date(2026, 9, 2, 7, 0, 0, 0, time.UTC)}
 
 // overASlowLeaf is one company's fleet store as a member reaches it in its
-// own process and a leaf across a link slow both ways ([pointerLinkRate]).
-func overASlowLeaf(t *testing.T) (member, leaf *FleetStore) {
+// own process and a leaf across a link carrying rate bytes a second each way.
+func overASlowLeaf(t *testing.T, rate int64) (member, leaf *FleetStore, link *linktest.Link) {
 	t.Helper()
 	// A MEMBER THAT SERVES LEAVES PERSISTS, or it is refused.
 	srv, err := js.StartServer(t.Context(), js.Config{ServerName: "member",
@@ -47,7 +47,7 @@ func overASlowLeaf(t *testing.T) (member, leaf *FleetStore) {
 		t.Fatalf("start a member serving leaves: %v", err)
 	}
 	t.Cleanup(srv.Shutdown)
-	link := linktest.SlowEachWay(t, fmt.Sprintf("127.0.0.1:%d", srv.LeafPort()), pointerLinkRate)
+	link = linktest.SlowEachWay(t, fmt.Sprintf("127.0.0.1:%d", srv.LeafPort()), rate)
 	nc, err := srv.Conn()
 	if err != nil {
 		t.Fatalf("connect to the member: %v", err)
@@ -61,7 +61,7 @@ func overASlowLeaf(t *testing.T) (member, leaf *FleetStore) {
 	prefix := fmt.Sprintf("x%d", bucketSeq.Add(1))
 	member = openFleetVia(t, client, InProcess, prefix)
 	leaf = openFleetVia(t, leafClientAt(t, link.Addr(), "leaf"), AcrossLink, prefix)
-	return member, leaf
+	return member, leaf, link
 }
 
 // activateAtTheBound activates, through store, a body of exactly what one key
@@ -96,7 +96,7 @@ func activateAtTheBound(t *testing.T, store *FleetStore) coord.Activation {
 // probe's budget.
 func TestAPointerReadAcrossALeafsLinkCarriesNoBody(t *testing.T) {
 	t.Parallel()
-	member, leaf := overASlowLeaf(t)
+	member, leaf, _ := overASlowLeaf(t, pointerLinkRate)
 	published := activateAtTheBound(t, member)
 	ctx, cancel := context.WithTimeout(t.Context(), probeBudget)
 	defer cancel()
@@ -120,7 +120,7 @@ func TestAPointerReadAcrossALeafsLinkCarriesNoBody(t *testing.T) {
 // is cut before its reply arrives.
 func TestABodyAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk(t *testing.T) {
 	t.Parallel()
-	member, leaf := overASlowLeaf(t)
+	member, leaf, _ := overASlowLeaf(t, pointerLinkRate)
 	published := activateAtTheBound(t, member)
 	target, found, err := leaf.Target(t.Context())
 	if err != nil || !found {

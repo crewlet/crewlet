@@ -187,9 +187,9 @@
 //
 // # A pass cannot tell that it is complete, so it is certified
 //
-// The pass is the client's key watcher, which GUESSES where the initial values
-// end (nats.go jetstream/kv.go WatchFiltered: `received >= initPending ||
-// delta == 0`), and neither count is exact on a bucket keeping one revision
+// The pass is a key watcher which, as the client's, GUESSES where the initial
+// values end (nats.go jetstream/kv.go WatchFiltered: `received >= initPending
+// || delta == 0`), and neither count is exact on a bucket keeping one revision
 // per key: an overwrite of a key the pass has not reached REMOVES the revision
 // ahead of the cursor and appends one at the tail, and the server's pending
 // count lags the write, so a delivery can report 0 pending while a live key is
