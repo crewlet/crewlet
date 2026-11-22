@@ -187,11 +187,32 @@ hours of each other:
   timeout has passed in real time, so a node whose clock runs further ahead of
   the decider's than that gives a host up early, and writes off the stopped
   run's spend while the host may still be restarting.
+- A [joining node](retention.md#the-join-runbook) waits on every node whose
+  positions-register row names an artefact and was taken by the coordination
+  store within the last forty seconds and two hours, by the joining node's
+  clock, which nothing has measured yet at boot. A joiner whose clock runs
+  further ahead of the store's than the two hours can leave a draining donor
+  unnamed and drop its offer; a stopped node named this way costs the join its
+  five seconds of collecting offers.
+- The trim and its report age other machines' instants by the clock of the
+  node reading them, each the edge of a policy or an alarm, moved by up to the
+  two hours rather than a margin: an [eviction's](retention.md#eviction) fence
+  window, from the broker's instant on the eviction; the
+  [`min_age` floor](retention.md#the-six-terms), from the broker's instant on
+  each record; the newest backup's age, stamped by the node that took it,
+  against [`backup_max_age`](retention.md#a-company-that-never-backs-up-never-trims),
+  which near its one-hour floor can refuse a fresh backup or accept one three
+  hours old; [`trim_blocked`](../reference/alarms.md#every-alarm) across a move
+  of the trim duty, from the previous holder's instant; and
+  [`maintenance_open`](../reference/alarms.md#every-alarm), from the instant
+  the entering node stamped, which can be raised at once or two hours late.
 
 Who holds a seat, a duty or a node's presence is not among them, nor how long
 its lease has left on Settings › Nodes and in `fleet_health`: a lease is judged,
 and its time left read, on the coordination store's clock alone, and every node
 takes the store's word for it ([Coordination](../concepts/coordination.md#the-three-valued-answer)).
+Nor is whether the trim honours a backup's or a join's pin: the node holding
+the trim duty judges it on its own clock, from the moment it first sees it.
 
 NTP keeps machines within milliseconds of each other; a host without it drifts,
 and a virtual machine restored from a snapshot can come back hours off.

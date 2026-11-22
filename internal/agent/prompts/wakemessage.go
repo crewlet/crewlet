@@ -56,7 +56,7 @@ func WakeMessage(w steer.Wake, b provenance.Boundary, conversation string) strin
 			"where it was written."
 	}
 	fenced := provenance.Fence(b, w.Label.Source, w.Label.Trust, w.Label.Authors, w.Text)
-	return WakeHeadOpen + writer + WakeHeadClose + "\n" + line + "\n\n" + fenced
+	return carried(WakeHeadOpen + writer + WakeHeadClose + "\n" + line + "\n\n" + fenced)
 }
 
 // WakeWriter is w's writer as its heading names them ([WakeMessage]), b the
@@ -82,7 +82,7 @@ func runMessage(w steer.Wake, b provenance.Boundary, writer string) string {
 		"the two runs' work overlaps, with `" + toolname.MessageRun + "` to turn " +
 		wakeName(b, w.FromRun, "unnamed") + "."
 	fenced := provenance.Fence(b, w.Label.Source, w.Label.Trust, w.Label.Authors, w.Text)
-	return WakeHeadOpen + writer + WakeHeadClose + "\n" + line + "\n\n" + fenced
+	return carried(WakeHeadOpen + writer + WakeHeadClose + "\n" + line + "\n\n" + fenced)
 }
 
 // wakeName is name as a wake's heading or line shows it: on one line, at most
