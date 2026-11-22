@@ -440,6 +440,8 @@ export interface Choices {
   taken: readonly string[];
   /** Whether the reader named the secret for the credential scope the draft is in. */
   named: boolean;
+  /** The helpers Everything gives the draft on its harness (`everythingHelpers`); none where left out. */
+  everything?: (d: Draft) => { assistant: boolean; advisor: boolean };
 }
 
 /**
@@ -452,7 +454,7 @@ export interface Choices {
 export function withChoices(
   d: Draft,
   patch: Partial<Draft>,
-  { original, taken, named }: Choices,
+  { original, taken, named, everything }: Choices,
 ): { draft: Draft; named: boolean } {
   const next: Draft = { ...d, ...patch };
   const keep = <K extends keyof Draft>(field: K, scope: (x: Draft) => string, blank: Draft[K]) => {
@@ -477,10 +479,17 @@ export function withChoices(
     if (!coding) next.runIn = "";
     const dropsCoding = !coding && (next.intent === "all" || next.intent === "coding");
     const dropsHelper = !helpers && (next.intent === "assistant" || next.intent === "advisor");
+    // EVERYTHING IS THE HARNESS'S TOO: kept, it takes again the helpers this
+    // harness runs; dropped, it leaves nothing it gave behind.
+    const takes =
+      next.intent === "all" && !dropsCoding && everything
+        ? everything(next)
+        : { assistant: false, advisor: false };
+    const gone = dropsCoding && next.intent === "all";
     next.uses = {
       ...(dropsCoding ? noUses() : next.uses),
-      assistant: helpers && next.uses.assistant,
-      advisor: helpers && next.uses.advisor,
+      assistant: helpers && !gone && (next.uses.assistant || takes.assistant),
+      advisor: helpers && !gone && (next.uses.advisor || takes.advisor),
     };
     if (dropsCoding || dropsHelper) next.intent = intentOf(next.uses);
     if (original && next.harness === original.harness) {
