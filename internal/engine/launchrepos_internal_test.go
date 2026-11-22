@@ -997,31 +997,32 @@ func TestALaunchIsGivenGitWhereGitletIsServed(t *testing.T) {
 				t.Fatal("a launch on a node serving Gitlet was given no git: every checkout of " +
 					"its run would clone from an empty base")
 			}
-			env, err := mint(uuid.NewString())
+			launched, err := mint(uuid.NewString())
 			if err != nil {
 				t.Fatalf("the launch's git environment: %v", err)
 			}
-			if env[sandbox.GitURLVar] != base || env[sandbox.GitTokenVar] == "" || env["GIT_CONFIG_COUNT"] == "" {
+			env := launched.Env
+			if env[sandbox.GitURLVar] != base || launched.GitAccess == "" || env["GIT_CONFIG_COUNT"] == "" {
 				t.Errorf("the launch's git environment names base %q, a token of %d bytes and %q "+
 					"configuration entries; want %q, a token and the engine's entries",
-					env[sandbox.GitURLVar], len(env[sandbox.GitTokenVar]), env["GIT_CONFIG_COUNT"], base)
+					env[sandbox.GitURLVar], len(launched.GitAccess), env["GIT_CONFIG_COUNT"], base)
 			}
 		})
 	}
 }
 
 // A BOX IS CONFIGURED BY ENVIRONMENT (ADR-0093), the one [Engine.boxGitEnv]
-// gives every executor launch on a node serving Gitlet (its
-// [sandbox.LaunchRequest.RunEnv]): a token Gitlet verifies for exactly this
-// launch, Gitlet's base, and git's configuration as exactly the engine's own —
-// the helper reset and the helper as git's parameters, the seat's identity as an
-// engine-built commit names it (a role with no email on the identity domain),
-// protocol v2, and the index settings measured to speed a wide checkout's
-// status. A second launch carries its own token. The variables beyond git's
-// own are exactly those config reserves, but the check's own.
+// gives every executor launch on a node serving Gitlet: a token Gitlet
+// verifies for this launch alone, in none of its variables, Gitlet's base, and
+// git's configuration as exactly the engine's own — the helper reset and the
+// helper as git's parameters, the seat's identity as an engine-built commit
+// names it, protocol v2, and the index settings a wide checkout's status was
+// measured faster with. A second launch carries its own token. The variables
+// beyond git's own are exactly those config reserves, but the check's own.
 //
 // Mutations: drop entry 1 (the helper reset) → the exact-entries assertion,
-// red; mint the token for the turn's first launch → the second launch, red.
+// red; mint the token for the turn's first launch → the second launch, red;
+// put the token in a variable → red.
 func TestABoxIsConfiguredByEnvironment(t *testing.T) {
 	t.Parallel()
 	const base = "https://git.example.com/box/git"
@@ -1036,17 +1037,24 @@ func TestABoxIsConfiguredByEnvironment(t *testing.T) {
 			turn := rig.turn(t, tc.seat, item)
 			for _, launch := range []string{uuid.NewString(), uuid.NewString()} {
 				ref := host.BoxRunRef{TurnID: turn.RunID, LaunchID: launch}
-				env, err := rig.e.boxGitEnv(turn.Seat, base, ref, nil)
+				launched, err := rig.e.boxGitEnv(turn.Seat, base, ref, nil)
 				if err != nil {
 					t.Fatalf("boxGitEnv: %v", err)
 				}
-				if got, ok := rig.tokens.Verify(env[sandbox.GitTokenVar]); !ok || got != ref {
+				if got, ok := rig.tokens.Verify(launched.GitAccess); !ok || got != ref {
 					t.Errorf("the box's token verifies %v (%v), want this launch's %v", got, ok, ref)
+				}
+				env := launched.Env
+				for name, value := range env {
+					if strings.Contains(value, launched.GitAccess) {
+						t.Errorf("the box's variable %s holds its token, which only its file holds", name)
+					}
 				}
 				if env[sandbox.GitURLVar] != base {
 					t.Errorf("%s=%q, want %q", sandbox.GitURLVar, env[sandbox.GitURLVar], base)
 				}
-				helper := `!f() { test "$1" = get || return 0; printf 'username=run\npassword=%s\n' "$CREWLET_GIT_TOKEN"; }; f`
+				helper := `!f() { test "$1" = get || return 0; t=$(cat "$CREWLET_GIT_ACCESS_FILE") || return 1; ` +
+					`printf 'username=run\npassword=%s\n' "$t"; }; f`
 				scope := "credential." + base + "/.helper"
 				credential := sandbox.GitConfigParameter(scope, "") + " " + sandbox.GitConfigParameter(scope, helper)
 				if want := credential; env[sandbox.GitConfigParametersVar] != want {
@@ -1073,17 +1081,18 @@ func TestABoxIsConfiguredByEnvironment(t *testing.T) {
 		})
 	}
 
-	// ONE LIST: what the engine sets beyond git's own variables is exactly
+	// ONE LIST: what the engine sets beyond git's own variables, with the path
+	// of the token's file the launch joins once it knows the box, is exactly
 	// what configuration reserves for an executor (all but the check's own),
 	// so no operator value stands beside it and nothing reserved goes unset.
 	rig := newReposRig(t, launchReposDoc, base)
-	env, err := rig.e.boxGitEnv(rig.c.Org.AgentSeatByHandle("swe"), base,
+	launched, err := rig.e.boxGitEnv(rig.c.Org.AgentSeatByHandle("swe"), base,
 		host.BoxRunRef{TurnID: statelog.NewOpID(time.Now(), ""), LaunchID: uuid.NewString()}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var set []string
-	for name := range env {
+	set := []string{sandbox.GitAccessFileVar}
+	for name := range launched.Env {
 		if !strings.HasPrefix(name, "GIT_CONFIG_") {
 			set = append(set, name)
 		}
@@ -1112,12 +1121,13 @@ func TestTheOperatorsGitConfigIsKept(t *testing.T) {
 	rig := newReposRig(t, launchReposDoc, base)
 	seat := rig.c.Org.AgentSeatByHandle("swe")
 	ref := host.BoxRunRef{TurnID: statelog.NewOpID(time.Now(), ""), LaunchID: uuid.NewString()}
-	env, err := rig.e.boxGitEnv(seat, base, ref, map[string]string{"GIT_CONFIG_COUNT": "1",
+	launched, err := rig.e.boxGitEnv(seat, base, ref, map[string]string{"GIT_CONFIG_COUNT": "1",
 		"GIT_CONFIG_KEY_0": "http.proxy", "GIT_CONFIG_VALUE_0": "http://proxy.example.com:3128",
 		sandbox.GitConfigParametersVar: "'http.lowSpeedLimit=1'"})
 	if err != nil {
 		t.Fatalf("boxGitEnv: %v", err)
 	}
+	env := launched.Env
 	// The additions over the run environment name no entry 0, so the
 	// operator's proxy stays there and the count covers it.
 	_, overwrote := env["GIT_CONFIG_KEY_0"]
