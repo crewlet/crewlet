@@ -686,8 +686,13 @@ export function ScopeDialog({
         `${c.label} ${c.value} ${c.description ?? ""}`.toLowerCase().includes(find),
       )
     : choices;
+  // A SEARCH IS NOT AN ENTRY: where the lane knows an entry's shape (an Apple
+  // ID's digits), a name or a bundle ID typed to find an app is never offered.
   const typed =
-    lane.scope_open && find && !choices.some((c) => c.value.toLowerCase() === find)
+    lane.scope_open &&
+    find &&
+    (words?.typed?.test(term.trim()) ?? true) &&
+    !choices.some((c) => c.value.toLowerCase() === find)
       ? term.trim()
       : null;
   const add = () => {
