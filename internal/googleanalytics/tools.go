@@ -127,7 +127,7 @@ func genericDescription(class growth.Class) string {
 			"annotations. Recorded in the access log; nobody is asked."
 	case growth.ClassSpend:
 		return "Ask an administrator to approve a Google Analytics change that raises money owed to Google " +
-			"(turning on a BigQuery export); held until they answer."
+			"Cloud (turning on a BigQuery export, or exporting an event it left out); held until they answer."
 	default:
 		return "Ask an administrator to approve a Google Analytics account, access, link, key or irreversible change, " +
 			"by its method's ID; held until they answer, at a fresh step-up."

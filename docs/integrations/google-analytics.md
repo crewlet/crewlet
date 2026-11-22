@@ -38,17 +38,20 @@ The roles Google Analytics gives, least first: **Viewer** (sees settings and dat
 | `google_analytics_mark_key_event` | operate | Marks an event as a key event |
 | `google_analytics_read` | read | Any method that only reads, by its ID |
 | `google_analytics_operate` | operate | Any reversible change, by its method's ID |
-| `google_analytics_spend` | spend | Turning on a BigQuery export, which raises money owed to Google Cloud: asked first |
+| `google_analytics_spend` | spend | Turning on a BigQuery export, or exporting an event it left out, which raises money owed to Google Cloud: asked first |
 | `google_analytics_admin` | admin | Any account, access, link, key or irreversible change, by its method's ID: asked first |
 
-A write whose class depends on what it changes is classed per call from its update mask and its new values: renaming a custom metric is `operate`, and taking off its revenue or cost restriction is `admin`. A call on the wrong tool for what it changes is refused with the tool that may make it.
+A write whose class depends on what it changes is classed per call from its update mask and its new values, however the mask and the body spell a field (`displayName` or `display_name`, `updateMask` or `update_mask`): renaming a custom metric is `operate`, and taking off its revenue or cost restriction is `admin`. A field no rule names takes the method's highest class, and a `*` mask counts every field the resource holds, since it replaces them all. A call on the wrong tool for what it changes is refused with the tool that may make it.
 
 **What a call may reach:**
-- A property outside the agent's list is refused before Google is asked.
+- A property outside the agent's list is refused before Google is asked, whether the path names it or the body does: the account a property is created in, a roll-up's sources, the subproperty a filter applies to.
 - A call on an account is made only where every property of that account is on the agent's list, since it reaches all of them.
+- A write that names no property or account is refused, except opening a new account, which reaches none that exists.
 - A listing is cut to the agent's properties.
 
-**What an agent reads:** every value Google answers with is fenced as somebody else's words, since anyone can write into a property (page titles, referrers, search terms, campaign names, event parameters) and property users write names and descriptions. A Measurement Protocol secret's value and a webhook's channel token are withheld from every answer; a Measurement Protocol call names its stream secret by resource name, and the engine fills in the value.
+**How a change is made:** a change made at once, and an approved one once its answer is on the access log, is made under its property's or account's lease, reading its target again first, and sends nothing where the target moved since it was read or approved. A change whose request got no answer from Google is recorded as an unknown outcome, never as not made.
+
+**What an agent reads:** every value Google answers with is fenced as somebody else's words, since anyone can write into a property (page titles, referrers, search terms, campaign names, event parameters) and property users write names and descriptions. A Measurement Protocol secret's value and a webhook's channel token are withheld from every answer; a Measurement Protocol call names its stream secret by resource name (`query.api_secret_name`), held to the agent's properties, and the engine fills in the value only as the call is sent, so no approval, record or error holds it.
 
 ## Configuration
 
@@ -269,7 +272,7 @@ Each row is one method the engine offers, with its class, the least role Google 
 
 **Notes on the classing:**
 - `recurringAudienceLists.create` only reads data, but no method stops or deletes the standing job it makes, so it is `admin`.
-- No method spends money or publishes directly. A BigQuery link's exports raise money owed to Google Cloud, so turning one on is `spend`.
+- No method publishes, and none spends money through Google Analytics itself. A BigQuery link's exports raise money owed to Google Cloud, so turning one on, or taking an event off its exclusions, is `spend`; turning one off, or excluding another event, is a brake made at once (`operate`). Google Analytics names no amount, so these acts are held for an administrator without spending caps.
 - Methods behind an Analytics 360 property or a limited rollout are offered; Google answers 400 or 403 where the property lacks them.
 
 ## What the atlas shows
