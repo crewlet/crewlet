@@ -250,6 +250,50 @@ export const STORIES: Record<string, ToolStory> = {
     byHand:
       "Make an OAuth client (Web application) in a Google Cloud project you control, turn on the AdMob API there, add Crewlet's callback address and publish its consent screen, then sign in with Google here.",
   },
+  adsense: {
+    does: [
+      "Read earnings reports, sites, alerts, policy issues and payments for the publisher accounts you choose",
+      "Create and rename ad units and custom channels where you allow operate",
+      "Ask you before a live ad unit's size changes, a channel is deleted or a platform's sub-account changes, every time",
+    ],
+    identity:
+      "A person who manages your AdSense account signs in with Google once, as your own OAuth client; every agent reaches AdSense through that sign-in, which never leaves Crewlet.",
+    byHand:
+      "Make an OAuth client (Web application) in a Google Cloud project you control, turn on the AdSense Management API there, add Crewlet's callback address and publish its consent screen, then sign in with Google here.",
+  },
+  google_ads: {
+    does: [
+      "Read campaign, ad, keyword and search term reports for the accounts you choose",
+      "Pause campaigns and ads, lower budgets and bids, and add negatives where you allow operate",
+      "Ask you before any change that can raise spend, publishes ad text or removes, held to your caps",
+    ],
+    identity:
+      "Each agent has its own Google identity in your Google identity project; you add it to the account at the access level it may act with. Its tokens never leave Crewlet.",
+    byHand:
+      "Connect Google Cloud first and run its setup block again, which turns on the Google Ads API, then add each agent's email in Admin, Access and security, and set each account's spending caps.",
+  },
+  search_console: {
+    does: [
+      "Read search performance, sitemaps and URL inspection for the sites you choose",
+      "Submit sitemaps, and notify Google of job posting and livestream pages, where you allow operate",
+      "Ask you before adding or removing a property, verifying a site or changing its owners, every time",
+    ],
+    identity:
+      "Each agent has its own Google identity in your Google identity project; you add it to each property at the permission it may act with. Its tokens never leave Crewlet.",
+    byHand:
+      "Connect Google Cloud first and run its setup block again, which turns on the Search Console APIs, then add each agent's email in Settings, Users and permissions.",
+  },
+  google_play: {
+    does: [
+      "Read reviews, listings, releases, products, vitals and the monthly reports for the apps you choose",
+      "Draft releases, halt rollouts and manage testers and draft products where you allow operate",
+      "Ask you before any reply, listing, image, release, price or refund: building and uploading stays with Expo",
+    ],
+    identity:
+      "Each agent has its own Google identity in your Google identity project; you invite it in Play Console with the app permissions it may act with. Its tokens never leave Crewlet.",
+    byHand:
+      "Connect Google Cloud first and run its setup block again, which turns on the Play APIs, then invite each agent's email in Play Console, Users and permissions.",
+  },
 };
 
 /** Where a tool stands, in the four words a person sorts by. */

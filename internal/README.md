@@ -207,7 +207,11 @@
 | `googleauth` | Every way the engine gets a Google token: the company's Google identity by federation, impersonation by scope, the token caches and the one call path to Google. |
 | `googlegrowth` | What every Google growth product shares: a request held to its operation's resource, sent as the seat's growth identity, bound to its live target and recorded on the access log. |
 | `admob` | AdMob: every method of its API in one catalog, offered as growth tools at the seat's level and publisher accounts, as the company's consent grant. |
+| `adsense` | AdSense: every Management and Platform API method in one catalog, offered as growth tools at the seat's level and publisher accounts, as the company's consent grant. |
 | `googleanalytics` | Google Analytics 4: every Data, Admin and Measurement Protocol method in one catalog, offered as growth tools at the seat's level and properties, as its Google growth identity. |
+| `googleads` | Google Ads: every API method in one catalog, each mutate classed by every operation it holds against live values, spend held to each account's caps, as the seat's Google growth identity. |
+| `searchconsole` | Google Search Console, Site Verification and the Indexing API: every method in one catalog, offered as growth tools at the seat's level and sites, as its Google growth identity. |
+| `googleplay` | Google Play: every Android Developer, Reporting and reports bucket method in one catalog, edits opened and committed by the engine, writes classed by their target, as the seat's Google growth identity. |
 | `origin` | records where a failure left the engine's own code: a deferred stamp names the function a failure passed through. |
 | `issuereport` | Opt-in anonymous reports of the engine's own defects, built from typed fields only and filed by a relay as GitHub issues. |
 | `panics` | The one way a contained panic is read: every `recover()` that keeps a defect from ending the process calls `Recovered`, which names the panicking function and its kind and tells the observers. |
