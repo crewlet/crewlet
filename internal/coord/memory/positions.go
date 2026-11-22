@@ -61,9 +61,6 @@ func (f *Fleet) PutHold(_ context.Context, h coord.TrimHold) error {
 	if err := h.Validate(); err != nil {
 		return err
 	}
-	if h.At.IsZero() {
-		h.At = time.Now().UTC()
-	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.holds == nil {
@@ -74,6 +71,9 @@ func (f *Fleet) PutHold(_ context.Context, h coord.TrimHold) error {
 	// cannot, because the real one serialises.
 	hold := h
 	hold.Streams = maps.Clone(h.Streams)
+	// THE STORE'S REVISION, never the caller's, which the KV never stores.
+	f.version++
+	hold.Revision = f.version
 	f.holds[h.Owner] = hold
 	return nil
 }

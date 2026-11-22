@@ -477,7 +477,7 @@ func TestTheNotesPluginIsWrittenAndItsRouteReferenced(t *testing.T) {
 		t.Error("the plugin written into the box is not opencode_steer.js")
 	}
 
-	// A RUN WIRED TO NO NOTES: no plugin named, none written.
+	// A RUN WIRED TO NO NOTES: no notes plugin named, none written.
 	_, bare := openCodeBox(t, t.TempDir())
 	bp := executor.PathsFor(bare)
 	path, err = executor.OpenCode{}.WriteConfig(t.Context(), bare, sandbox.RunRequest{MCPServers: seatServers()}, bp)
@@ -485,8 +485,11 @@ func TestTheNotesPluginIsWrittenAndItsRouteReferenced(t *testing.T) {
 		t.Fatalf("WriteConfig: %v", err)
 	}
 	raw, _ = os.ReadFile(path) //nolint:gosec // the run's configuration, under the test's box
-	if strings.Contains(string(raw), `"plugins"`) {
-		t.Errorf("a run wired to no notes names a plugin:\n%s", raw)
+	var bareCfg struct {
+		Plugins []openCodePlugin `json:"plugins"`
+	}
+	if err = json.Unmarshal(raw, &bareCfg); err != nil || len(runPlugins(bareCfg.Plugins)) != 0 {
+		t.Errorf("a run wired to no notes names a plugin (%v):\n%s", err, raw)
 	}
 	if _, err := os.Stat(bp.OpenCodeSteerPlugin()); !os.IsNotExist(err) {
 		t.Errorf("a run wired to no notes has a plugin written (%v)", err)
