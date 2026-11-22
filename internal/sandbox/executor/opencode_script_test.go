@@ -78,6 +78,7 @@ serve)
   printf '%s|%s' "${OPENCODE_PASSWORD:-}" "${OPENCODE_SERVER_PASSWORD:-}" > "$d/serve-env"
   printf '%s' "${OPENCODE_CONFIG_CONTENT-}" > "$d/serve-config"
   printf '%s' "${OPENCODE_CONFIG_DIR-}" > "$d/serve-config-dir"
+  printf '%s' "${OPENCODE_FILEWATCHER_DISABLE-}" > "$d/serve-watcher-off"
   ls -A "${OPENCODE_CONFIG_DIR:-$d/none}" > "$d/serve-config-dir-held" 2> /dev/null
   (cd "$HOME" && find . -path ./.crewlet -prune -o -type f -print) > "$d/serve-home" 2> /dev/null
   if [ -n "${FAKE_VALUES:-}" ]; then

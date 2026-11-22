@@ -466,6 +466,11 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	line(`rm -rf %[1]s && mkdir -p %[1]s || { echo 'crewlet: the run could not make its OpenCode configuration directory' >&2; exit 1; }`,
 		shellword.Quote(paths.OpenCodeConfigDir()))
 	line(`OPENCODE_CONFIG_DIR=%s; export OPENCODE_CONFIG_DIR`, shellword.Quote(paths.OpenCodeConfigDir()))
+	// AND READS IT ONCE: with its file watcher on, OpenCode 2.3.2 reloads its
+	// configuration when a file it read changes, so an opencode.json written
+	// mid-run reached the providers the run's server resolves (measured); off,
+	// the configuration [openCodeConfigCheck] checked is the one the run uses.
+	line(`OPENCODE_FILEWATCHER_DISABLE=1; export OPENCODE_FILEWATCHER_DISABLE`)
 	line(`rm -rf %s`, strings.Join(openCodeHomeConfig(paths), " "))
 	// THE SERVER'S PASSWORD IS ITS OWN: `opencode serve` given
 	// OPENCODE_PASSWORD or OPENCODE_SERVER_PASSWORD prints none, and the
