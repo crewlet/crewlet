@@ -30,6 +30,20 @@ func (p Paths) CopilotInstructions() string { return p.CopilotHome() + "/copilot
 // a turn cap, and removed where it has neither.
 func (p Paths) CopilotExtension() string { return p.CopilotHome() + "/extensions/crewlet-notes" }
 
+// CopilotLoaded is every place in the box home Copilot loads configuration
+// from that a run's launch does not write, measured on 1.0.114 to load in
+// prompt mode: user extensions (the whole directory, the run's own written
+// after), hooks, MCP servers, installed plugins, skills (Copilot's and the
+// home's `.agents/skills`), custom agents and instruction files; and the
+// language servers and saved model providers its help names. The login
+// (`config.json`) and the session store are not among them.
+func (p Paths) CopilotLoaded() (files, dirs []string) {
+	h := p.CopilotHome()
+	return []string{h + "/mcp-config.json", h + "/lsp-config.json", h + "/providers.json"},
+		[]string{h + "/extensions", h + "/hooks", h + "/installed-plugins", h + "/installed-plugins.lock",
+			h + "/skills", p.Home + "/.agents/skills", h + "/agents", h + "/instructions"}
+}
+
 // CopilotSessionDir is session's directory under the run's home: its
 // `events.jsonl`, the conversation, and `session.db`, the sql tool's tables,
 // which a pack never takes ([copilotPack]).
