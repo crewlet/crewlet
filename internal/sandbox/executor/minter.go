@@ -66,7 +66,7 @@ func (r *Runner) ReportedSession(ctx context.Context, box sandbox.Sandbox, handl
 			r.harness.Name())
 	}
 	paths := PathsFor(box)
-	rec, refusal, err := r.readSessionRecord(ctx, box, paths)
+	rec, refusal, err := readRecordedSession(ctx, box, paths)
 	if err != nil {
 		return "", fmt.Errorf("executor: reading which session the run worked in: %w", err)
 	}
@@ -109,4 +109,26 @@ func (r *Runner) reportedSession(ctx context.Context, box sandbox.Sandbox, paths
 			"was asked to continue, %q", ErrSessionReport, id)
 	}
 	return id, nil
+}
+
+// mintedRecord is rec with its id the session a minting run reported, for a
+// reader with no run handle (carry, take, a save): the record says whether the
+// run continued, so a resume that reported nothing keeps the id it continued.
+// A refused report names no session, so nothing is packed or carried under it.
+func (r *Runner) mintedRecord(ctx context.Context, box sandbox.Sandbox, paths Paths,
+	rec sessionRecord) (sessionRecord, string, error) {
+
+	var asked sandbox.RunHandle
+	if rec.continued {
+		asked.SessionID = rec.id
+	}
+	id, err := r.reportedSession(ctx, box, paths, asked, rec)
+	switch {
+	case errors.Is(err, ErrSessionReport):
+		return sessionRecord{}, err.Error(), nil
+	case err != nil:
+		return sessionRecord{}, "", err
+	}
+	rec.id = id
+	return rec, "", nil
 }

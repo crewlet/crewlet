@@ -497,8 +497,8 @@ func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 // the old result; a previous job's hooks name a bridge session its end closed;
 // its end-protocol records ([Paths.JobScript], [Paths.JobEnded]) would aim an
 // end request at another process or read as this run's own; its session record,
-// capture, saves and staging would be collected as this run's or wait in the box
-// for its life; its fresh-session wiring ([Paths.MCPConfigFresh]) would sit
+// report, capture, saves and staging would be collected as this run's (a stale
+// report bound as this run's session) or wait in the box for its life; its fresh-session wiring ([Paths.MCPConfigFresh]) would sit
 // beside a run that has none. Directories go whole, so no stale value, plugin or
 // commit hook survives, and every file a run starts with is new to its box: across
 // a VM mount, a harness opening a host-replaced file finds nothing for ~1 s.
@@ -508,7 +508,8 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	out := r.harness.Output(p)
 	files := []string{p.Done(), p.ExitCode(), p.MemoryBefore(), p.MemoryAfter(), p.Result(), p.Findings(), p.Brief(), p.FreshBrief(), p.System(),
 		p.BaseResult(),
-		p.SessionRecord(), p.SessionCapture(), p.SessionCarried(), p.MCPConfig(), p.MCPConfigFresh(),
+		p.SessionRecord(), p.SessionReport(), p.sessionReportStaging(), p.SessionCapture(), p.SessionCarried(),
+		p.MCPConfig(), p.MCPConfigFresh(),
 		p.JobScript(), p.JobScript() + ".next", p.JobEnded(), p.JobEnded() + ".next"}
 	dirs := []string{p.CommitAttribution(), p.SessionStaging()}
 	// EVERY HARNESS'S, not this run's alone: the box may last have run another.
@@ -1068,6 +1069,19 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	stated := result.SessionID
 	if !sandbox.ValidSessionID(result.SessionID) {
 		result.SessionID = rec.id
+	}
+	// A MINTING HARNESS'S SESSION IS THE ONE ITS SCRIPT REPORTED, never one it
+	// printed or its record names (minter.go): a refused report is a piece the
+	// run did not report, so it collects no session and no capture, and the run
+	// fails closed.
+	if r.MintsSession() {
+		minted, err := r.reportedSession(ctx, box, paths, handle, rec)
+		if errors.Is(err, ErrSessionReport) {
+			refused, minted = append(refused, err.Error()), ""
+		} else if err != nil {
+			return sandbox.Result{}, err
+		}
+		result.SessionID, rec.id = minted, minted
 	}
 	result.Continued, result.HarnessVersion = rec.continued, releaseOf(rec.release)
 	result.FellBack = sandbox.BoundFellBack(rec.why)
