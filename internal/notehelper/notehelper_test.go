@@ -187,8 +187,8 @@ func TestThePollsCarryTheRunsTokenAndAskAgainAfterA503(t *testing.T) {
 
 // A NOTES ROUTE THAT REFUSES THE HELPER ENDS ONLY ITS POLLS: a 401 is a token
 // that no longer resolves, and asking again would ask forever, but the cap
-// goes on, since a helper that ended would leave the turn unbounded and its
-// run's guard would stop it.
+// and the skill reports go on, since a helper that ended would leave the turn
+// unbounded and its run's guard would stop it.
 //
 // Mutation: end the helper on the notes route's refusal, or poll again after
 // it, and this goes red.
@@ -196,9 +196,13 @@ func TestANotesRouteThatRefusesTheHelperEndsOnlyItsPolls(t *testing.T) {
 	t.Parallel()
 	bridge := newFakeBridge(t, testToken, 401)
 	app := newFakeAppServer(t, "turn-1", 0)
+	dir := filepath.Join(t.TempDir(), "skills")
+	alpha := writeSkill(t, dir, "alpha", "# Alpha\n")
+	digests := writeDigests(t, alpha)
 	threadFile := filepath.Join(t.TempDir(), "thread.id")
 	writeThread(t, threadFile, "thread-A")
-	h := startHelperWith(t, bridge, app, threadFile, "-notes-env", "NOTES_ROUTE", "-step-cap", "2")
+	h := startHelperWith(t, bridge, app, threadFile, "-notes-env", "NOTES_ROUTE", "-step-cap", "2",
+		"-skills-env", "SKILLS_ROUTE", "-skills-dir", dir, "-skills-digests", digests)
 	h.stderr.await(func(s string) bool { return strings.Contains(s, "refused the helper") })
 	tokens(t, app, "thread-A", "turn-1", 100)
 	tokens(t, app, "thread-A", "turn-1", 200)
@@ -213,6 +217,8 @@ func TestANotesRouteThatRefusesTheHelperEndsOnlyItsPolls(t *testing.T) {
 		t.Fatalf("the helper ended with %d on the notes route's 401, its cap unheld:\n%s", code, h.stderr.String())
 	case <-interrupted:
 	}
+	commandDone(t, app, "thread-A", 0, alpha.body, "/", action("read", alpha.path))
+	bridge.skills.await(func(r []skillReport) bool { return len(r) == 1 })
 	if code := h.stop(); code != exitDone {
 		t.Errorf("exit status %d, want %d; stderr:\n%s", code, exitDone, h.stderr.String())
 	}
@@ -348,6 +354,11 @@ func TestTheHelperRefusesACommandLineItCannotRunWith(t *testing.T) {
 		"an adapter it does not have":   {append([]string{"-adapter", "other"}, full[2:]...), route},
 		"no -socket":                    {append(slices.Clone(full[:2]), full[4:]...), route},
 		"no -thread-file":               {append(slices.Clone(full[:4]), full[6:]...), route},
+		"skills with no digests": {append(slices.Clone(full), "-skills-env", "NOTES_ROUTE", "-skills-dir",
+			"/nowhere/skills"), route},
+		"digests with no skills": {append(slices.Clone(full), "-skills-digests", "/nowhere/digests"), route},
+		"digests it cannot read": {append(slices.Clone(full), "-skills-env", "NOTES_ROUTE", "-skills-dir",
+			"/nowhere/skills", "-skills-digests", "/nowhere/digests"), route},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -462,7 +473,8 @@ func TestASkillLoadIsReportedAndTheSkillRouteNeverPrinted(t *testing.T) {
 	beta := writeSkill(t, dir, "beta", "# Beta\n")
 	threadFile := filepath.Join(t.TempDir(), "thread.id")
 	writeThread(t, threadFile, "thread-A")
-	h := startHelperWith(t, bridge, app, threadFile, "-skills-env", "SKILLS_ROUTE", "-skills-dir", dir)
+	h := startHelperWith(t, bridge, app, threadFile, "-skills-env", "SKILLS_ROUTE", "-skills-dir", dir,
+		"-skills-digests", writeDigests(t, alpha, beta))
 	app.resumed.await(func(r []resume) bool { return len(r) == 1 })
 	commandDone(t, app, "thread-A", 0, alpha.body, "/", action("read", alpha.path))
 	commandDone(t, app, "thread-A", 0, beta.body, "/", action("read", beta.path))

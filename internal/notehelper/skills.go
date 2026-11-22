@@ -1,11 +1,16 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 )
 
@@ -93,3 +98,50 @@ func (r *reporter) report(ctx context.Context, name string) (refused bool, err e
 type statusError struct{ op, status, then string }
 
 func (e *statusError) Error() string { return e.op + ": it answered " + e.status + e.then }
+
+// skillSet is the run's skills as the runner installed them: the directory
+// they are written to, one directory per skill holding its SKILL.md, and the
+// SHA-256 of each SKILL.md as written, by name (-skills-digests). A load is
+// judged against that digest, never against the file as it stands when the
+// model reads it, which the model may have rewritten ([appServer.completed]).
+type skillSet struct {
+	dir     string
+	digests map[string][sha256.Size]byte
+}
+
+// maxDigestLine bounds one line of -skills-digests: a digest, a space and a
+// skill's listed name, a few dozen bytes; a line past 4 KiB is no line the
+// runner wrote.
+const maxDigestLine = 4 << 10
+
+// readDigests reads -skills-digests, written by the runner as it installed
+// the skills: one line per skill, its SKILL.md's SHA-256 in hex, a space, and
+// its name. A line of any other shape, or a name twice, refuses the file.
+func readDigests(path string) (map[string][sha256.Size]byte, error) {
+	f, err := os.Open(path) //nolint:gosec // the file the runner names
+	if err != nil {
+		return nil, usageError("reading the skill digests -skills-digests %s: %v", path, err)
+	}
+	defer f.Close()
+	out := map[string][sha256.Size]byte{}
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 256), maxDigestLine)
+	for sc.Scan() {
+		sum, name, ok := strings.Cut(sc.Text(), " ")
+		var digest [sha256.Size]byte
+		if !ok || len(sum) != hex.EncodedLen(sha256.Size) || name == "" || strings.ContainsAny(name, " /") {
+			return nil, usageError("-skills-digests %s holds a line that is no digest and skill name", path)
+		}
+		if _, bad := hex.Decode(digest[:], []byte(sum)); bad != nil {
+			return nil, usageError("-skills-digests %s holds a digest that is not hex: %v", path, bad)
+		}
+		if _, twice := out[name]; twice {
+			return nil, usageError("-skills-digests %s names skill %s twice", path, name)
+		}
+		out[name] = digest
+	}
+	if err = sc.Err(); err != nil {
+		return nil, usageError("reading the skill digests -skills-digests %s: %v", path, err)
+	}
+	return out, nil
+}

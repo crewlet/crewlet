@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -51,7 +52,7 @@ func openAppServer(ctx context.Context, f flags, p pacing, ev events) (harness, 
 	if err != nil {
 		return nil, err
 	}
-	a, err := joinAppServer(ctx, conn, thread, p, ev, f.skillsDir)
+	a, err := joinAppServer(ctx, conn, thread, p, ev, f.skills)
 	if err != nil {
 		_ = conn.Close()
 		return nil, err
@@ -118,11 +119,12 @@ type appServer struct {
 	ids    atomic.Int64
 	done   chan struct{}
 	ev     events
-	// skillsDir is the directory the run's skills are written to, one
-	// directory per skill holding its SKILL.md ([appServer.completed]).
-	skillsDir string
+	// skills is the run's skills as the runner installed them
+	// ([appServer.completed]).
+	skills skillSet
 	// tokens is the thread's total tokens as last reported, and compacting
-	// whether a context compaction runs: the reader's alone
+	// whether a context compaction runs, until its item completes or the
+	// turn's work ends without it ([appServer.notice]): the reader's alone
 	// ([appServer.counted]).
 	tokens     int64
 	compacting bool
@@ -162,7 +164,7 @@ type wire struct {
 
 // joinAppServer runs the WebSocket handshake over conn and joins thread,
 // reporting ev of it.
-func joinAppServer(ctx context.Context, conn net.Conn, thread string, p pacing, ev events, skillsDir string) (*appServer, error) {
+func joinAppServer(ctx context.Context, conn net.Conn, thread string, p pacing, ev events, skills skillSet) (*appServer, error) {
 	// THE HANDSHAKE IS BOUNDED as a call is: x/net's NewClient takes no context.
 	_ = conn.SetDeadline(time.Now().Add(p.callBound))
 	cfg, err := websocket.NewConfig("ws://localhost/", "http://localhost/")
@@ -175,7 +177,7 @@ func joinAppServer(ctx context.Context, conn net.Conn, thread string, p pacing, 
 	}
 	_ = conn.SetDeadline(time.Time{})
 	a := &appServer{
-		ws: ws, thread: thread, bound: p.callBound, done: make(chan struct{}), ev: ev, skillsDir: skillsDir,
+		ws: ws, thread: thread, bound: p.callBound, done: make(chan struct{}), ev: ev, skills: skills,
 		pending: map[int64]chan rpcAnswer{}, finished: map[string]bool{}, changed: make(chan struct{}),
 	}
 	go a.read()
@@ -354,16 +356,18 @@ func (a *appServer) counted(params json.RawMessage) {
 }
 
 // completed reports a load of one of the run's skills: a command that read
-// <skillsDir>/<name>/SKILL.md whole. Codex records each command it ran as a
-// commandExecution item with its parsed actions and its output, so a load
-// is a command that succeeded, whose one action is a read of that file
-// (named, resolved against the command's directory, exactly), and whose
-// output is that file's bytes exactly, as the helper reads them from disk;
-// the file a regular one, never a link. Anything else (a listing, a test, an
-// echo, a failed or partial read, another skill's file, a script) is no
-// load, and the bridge's guard fails closed on it.
+// <skills>/<name>/SKILL.md whole, as the runner installed it. Codex records
+// each command it ran as a commandExecution item with its parsed actions and
+// its output, so a load is a command that succeeded, whose one action is a
+// read of that file (named, resolved against the command's directory,
+// exactly), and whose output's SHA-256 is the one the runner recorded for that
+// skill (-skills-digests). Never the file as it stands now: a model that
+// rewrote it and read it back read no skill of the run's. Anything else (a
+// listing, a test, an echo, a failed or partial read, an output Codex cut
+// short, another skill's file, a script) is no load, and the bridge's guard
+// fails closed on it.
 func (a *appServer) completed(params json.RawMessage) {
-	if a.ev.skill == nil || a.skillsDir == "" {
+	if a.ev.skill == nil || a.skills.dir == "" {
 		return
 	}
 	var p struct {
@@ -391,16 +395,11 @@ func (a *appServer) completed(params json.RawMessage) {
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(it.Cwd, path)
 	}
-	name, ok := skillOf(a.skillsDir, filepath.Clean(path))
+	name, ok := skillOf(a.skills.dir, filepath.Clean(path))
 	if !ok {
 		return
 	}
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() {
-		return
-	}
-	body, err := os.ReadFile(path)
-	if err != nil || len(body) == 0 || it.Output != string(body) {
+	if want, ok := a.skills.digests[name]; !ok || sha256.Sum256([]byte(it.Output)) != want {
 		return
 	}
 	a.ev.skill(name)

@@ -6,7 +6,8 @@
 //	notehelper -adapter codex-app-server -socket $RUN/codex.sock \
 //	    -thread-file $RUN/thread.id -notes-env CREWLET_NOTES_URL \
 //	    -step-cap 200 -cap-marker $RUN/capped \
-//	    -skills-env CREWLET_SKILLS_URL -skills-dir $CODEX_HOME/skills
+//	    -skills-env CREWLET_SKILLS_URL -skills-dir $CODEX_HOME/skills \
+//	    -skills-digests $RUN/skill-digests
 //	notehelper -adapter codex-app-server -socket $RUN/codex.sock \
 //	    -thread-file $RUN/thread.id -interrupt-once
 //
@@ -69,12 +70,13 @@
 //
 // # Skill loads
 //
-// With -skills-env and -skills-dir the helper reports each load of one of the
-// run's skills to the skill route, as OpenCode's plugin does ([reporter]): a
-// load is what the adapter can prove the model read whole (for Codex, a
-// command whose output is the skill's SKILL.md byte for byte,
-// [appServer.completed]), and nothing else is one, so the bridge's guard
-// fails closed on everything the helper cannot prove.
+// With -skills-env, -skills-dir and -skills-digests the helper reports each
+// load of one of the run's skills to the skill route, as OpenCode's plugin
+// does ([reporter]): a load is what the adapter can prove the model read whole
+// as the runner installed it (for Codex, a command whose output's SHA-256 is
+// the one -skills-digests records for that SKILL.md, [appServer.completed]),
+// and nothing else is one, so the bridge's guard fails closed on everything
+// the helper cannot prove.
 //
 // # Exit
 //
@@ -144,7 +146,10 @@ type flags struct {
 	stepCap                               int
 	capMarker                             string
 	interruptOnce                         bool
-	skillsEnv, skillsDir                  string
+	skillsEnv, skillsDir, skillsDigests   string
+	// skills is the run's skills as -skills-dir and -skills-digests name
+	// them, read before the adapter opens: no flag of its own.
+	skills skillSet
 }
 
 // run is the whole program: the exit status for args, the environment
@@ -163,6 +168,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stderr 
 	set.BoolVar(&f.interruptOnce, "interrupt-once", false, "interrupt the turn in flight, if any, and exit")
 	set.StringVar(&f.skillsEnv, "skills-env", "", "the environment variable holding the bridge's skill route")
 	set.StringVar(&f.skillsDir, "skills-dir", "", "the directory of the run's skills, one directory per skill holding its SKILL.md")
+	set.StringVar(&f.skillsDigests, "skills-digests", "", "the file of each skill's SKILL.md SHA-256 as the runner wrote it, one 'digest name' line per skill")
 	if err := set.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -182,8 +188,9 @@ func run(ctx context.Context, args []string, getenv func(string) string, stderr 
 	case f.capMarker != "" && f.stepCap == 0:
 		logger.Print("-cap-marker is written only by a step cap: set -step-cap too")
 		return exitUsage
-	case (f.skillsEnv == "") != (f.skillsDir == ""):
-		logger.Print("-skills-env and -skills-dir go together: the skill route, and where the skills are")
+	case (f.skillsEnv == "") != (f.skillsDir == "") || (f.skillsEnv == "") != (f.skillsDigests == ""):
+		logger.Print("-skills-env, -skills-dir and -skills-digests go together: the skill route, where the " +
+			"skills are, and what the runner wrote there")
 		return exitUsage
 	case f.notesEnv == "" && f.stepCap == 0 && f.skillsEnv == "":
 		logger.Print("nothing to do: set -notes-env, -step-cap or -skills-env")
@@ -212,6 +219,14 @@ func run(ctx context.Context, args []string, getenv func(string) string, stderr 
 			return exitUsage
 		}
 		want.set(r)
+	}
+	if f.skillsDigests != "" {
+		digests, err := readDigests(f.skillsDigests)
+		if err != nil {
+			logger.Print(err)
+			return exitUsage
+		}
+		f.skills = skillSet{dir: f.skillsDir, digests: digests}
 	}
 	var ev events
 	var capped *stepCap
