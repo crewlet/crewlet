@@ -288,6 +288,18 @@ func TestThePluginConfirmsANoteOnlyOnceItsModelIsSentItPlain(t *testing.T) {
 			t.Errorf("the fold reads %s, want note-1's id alone", fold.body)
 		}
 		fold.reply(http.StatusNoContent, "")
+		// The retries made before the gate closed, each refused, then none.
+		for drain := time.After(1200 * time.Millisecond); ; {
+			select {
+			case r := <-pr.reports:
+				if r.Op != "subscribed" && r.Op != "prompt-started" && (r.Op != "prompt" || r.OK) {
+					t.Fatalf("after its pauses the plugin reported %s (%+v)", r.Op, r)
+				}
+				continue
+			case <-drain:
+			}
+			break
+		}
 		pr.quiet(1500*time.Millisecond, "a note given up is never admitted again")
 		route.none(300*time.Millisecond, "a note given up is never confirmed nor posted again")
 	})
