@@ -862,10 +862,13 @@ func TestTheContextASessionCarriesIsReadOffItsArchive(t *testing.T) {
 // A RUNNER RESTORES ONLY WHAT IT COULD CONTINUE, decided without a box: a
 // session its own harness wrote, in the one format it packs, by a release whose
 // sessions another box continues: what every reader of whether a session
-// continues asks before the box's own release is asked.
+// continues asks before the box's own release is asked. A runner of one
+// release (Kimi Code, Copilot, Muse Code) restores a session that release
+// wrote: judged of the writer alone, never refused for want of a box.
 //
-// Mutation: drop the writer's floor, or answer for another harness's session,
-// and a row goes red.
+// Mutation: drop the writer's floor, answer for another harness's session, or
+// judge a one-release runner's writer beside no box ([carrier.Continues] of
+// ""), and a row goes red.
 func TestARunnerRestoresOnlyWhatItCouldContinue(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -884,6 +887,14 @@ func TestARunnerRestoresOnlyWhatItCouldContinue(t *testing.T) {
 			Format: executor.OpenCodeArchiveFormat, Version: "2.2.5"}, true, ""},
 		"opencode, another format": {executor.NewOpenCode(), sandbox.SessionArchive{Harness: executor.OpenCodeName,
 			Format: executor.OpenCodeArchiveFormat + 1, Version: "2.2.5"}, false, "format"},
+		"kimi's own": {executor.NewKimi(), sandbox.SessionArchive{Harness: executor.KimiName,
+			Format: executor.KimiArchiveFormat, Version: "2.7.2"}, true, ""},
+		"copilot's own": {executor.NewCopilot(), sandbox.SessionArchive{Harness: executor.CopilotName,
+			Format: executor.CopilotArchiveFormat, Version: "1.0.114"}, true, ""},
+		"muse's own": {executor.NewMuse(), sandbox.SessionArchive{Harness: executor.MuseName,
+			Format: executor.MuseArchiveFormat, Version: "1.4.25"}, true, ""},
+		"muse, another release's writer": {executor.NewMuse(), sandbox.SessionArchive{Harness: executor.MuseName,
+			Format: executor.MuseArchiveFormat, Version: "1.4.26"}, false, "only a session 1.4.25 wrote"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

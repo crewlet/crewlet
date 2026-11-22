@@ -686,10 +686,11 @@ func versionBox(printed string, code int, errText string, asked *[]string) *sand
 // THE CONTINUATION CHECK HOLDS THE BOX HARNESS'S RELEASE TO THE FLOORS: the
 // writing harness, this build's format, a box at or past its floor (Claude Code
 // 2.1.310, OpenCode 2.0.32) and no older than the writer; Claude Code only a
-// session 2.1.300 or later wrote; Codex box and writer exactly 0.171.0. An
-// unread box release or writer refuses, for every harness. The printed release
-// is returned whatever the answer; a harness not answering is no continuation,
-// a box not asked an error; one login-shell exec, its bin first on PATH.
+// session 2.1.300 or later wrote; Codex box and writer exactly 0.171.0, Muse
+// Code's 1.4.25. An unread box release or writer refuses, for every harness.
+// The printed release is returned whatever the answer; a harness not
+// answering is no continuation, a box not asked an error; one login-shell
+// exec, its bin first on PATH.
 //
 // Mutation: compare against the writer's floor alone, let an older box take a
 // newer writer's session, or read an unreadable box release or writer as
@@ -708,6 +709,11 @@ func TestTheContinuationCheckHoldsTheBoxsReleaseToTheFloors(t *testing.T) {
 		return sandbox.SessionArchive{Harness: executor.CodexName, SessionID: "019a1f00-0000-7000-8000-000000000001",
 			Format: executor.Codex{}.ArchiveFormat(), Version: release}
 	}
+	museArchive := func(release string) sandbox.SessionArchive {
+		return sandbox.SessionArchive{Harness: executor.MuseName, SessionID: "0b5e0000-0000-4000-8000-000000000001",
+			Format: executor.MuseArchiveFormat, Version: release}
+	}
+	const muse = "Muse Code 1.4.25 (1.4.25-R9361.1)\n"
 	for name, tc := range map[string]struct {
 		runner    *executor.Runner
 		printed   string
@@ -741,6 +747,11 @@ func TestTheContinuationCheckHoldsTheBoxsReleaseToTheFloors(t *testing.T) {
 		"codex, another release's writer":     {executor.NewCodex(), "codex-cli 0.171.0\n", 0, codexArchive("0.172.0"), false, "0.171.0", "only a session Codex 0.171.0 wrote"},
 		"codex, an unreadable writer":         {executor.NewCodex(), "codex-cli 0.171.0\n", 0, codexArchive(""), false, "0.171.0", "named no release"},
 		"codex, an unreadable release":        {executor.NewCodex(), "codex-cli dev\n", 0, codexArchive("0.171.0"), false, "", "named no release"},
+		"muse at its release":                 {executor.NewMuse(), muse, 0, museArchive("1.4.25"), true, "1.4.25", ""},
+		"muse newer than its release":         {executor.NewMuse(), "Muse Code 1.4.30 (1.4.30-R1.1)\n", 0, museArchive("1.4.25"), false, "1.4.30", "continues only on 1.4.25"},
+		"muse, a pre-release":                 {executor.NewMuse(), "Muse Code 1.4.25-rc.1\n", 0, museArchive("1.4.25"), false, "", "a release it could not read"},
+		"muse, another release's writer":      {executor.NewMuse(), muse, 0, museArchive("1.4.30"), false, "1.4.25", "only a session 1.4.25 wrote"},
+		"muse, an unreadable writer":          {executor.NewMuse(), muse, 0, museArchive(""), false, "1.4.25", "named no release"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
