@@ -14,6 +14,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import type { ModelsAnswer } from "~/protocol/models.ts";
 import { emptyDraft, type Draft } from "../draft.ts";
+import { EXECUTORS } from "../../fixtures.ts";
 import { ModelStep } from "./ModelStep.tsx";
 
 // Haiku carries no version: an alias the engine cannot resolve.
@@ -57,7 +58,12 @@ const answered: ModelsAnswer = {
 
 let latest: Draft;
 function Step({ model, method = "api-key" }: { model: string; method?: Draft["method"] }) {
-  const [draft, setDraft] = useState<Draft>({ ...emptyDraft(), key: "fast", model, method });
+  const [draft, setDraft] = useState<Draft>({
+    ...emptyDraft(EXECUTORS),
+    key: "fast",
+    model,
+    method,
+  });
   latest = draft;
   return (
     <ModelStep
@@ -169,7 +175,7 @@ test("the effort control offers the levels the harness takes on the model", () =
 test("a harness with no effort setting says why", () => {
   render(
     <ModelStep
-      draft={{ ...emptyDraft(), harness: "cursor-agent", model: "gpt-5.5" }}
+      draft={{ ...emptyDraft(EXECUTORS), harness: "cursor-agent", model: "gpt-5.5" }}
       error={undefined}
       effortError={undefined}
       onChange={() => {}}
