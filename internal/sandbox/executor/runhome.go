@@ -14,8 +14,8 @@ import (
 // writes (Gemini CLI, Qwen Code, Codex), and so what the launch removes before
 // every run: a reused box's home outlives its runs and its user can write all
 // of it. The working directory is the box's own, never a checkout (a checkout
-// is cloned below it), so its State directory goes too where it is not the
-// home's.
+// is cloned below it), so its State directory goes too, unless it is the
+// home's own State by another name ([runHome.pruneScript]).
 type runHome struct {
 	// State is the harness's directory under the home (`.gemini`, `.qwen`,
 	// `.codex`), and Owned the entries under it that hold skills, commands,
@@ -32,8 +32,10 @@ type runHome struct {
 	// working directory upward (Gemini CLI to `/`, Qwen Code beside the home's
 	// own): the home's and the working directory's go, and the working
 	// directory is left an empty `<State>/.env`, so the walk ends where it
-	// starts and no file above the box's home is read or touched. Codex reads
-	// its State's `.env` alone, an Owned entry.
+	// starts and no file above the box's home is read or touched. Where the
+	// working directory is the home, that is the home's own `<State>/.env`,
+	// the Owned entry just removed: the walk starts there. Codex reads its
+	// State's `.env` alone, an Owned entry.
 	WalksEnv bool
 }
 
@@ -44,25 +46,32 @@ func (h runHome) pruneScript(home string) string {
 	q := shellword.Quote
 	state := home + "/" + h.State
 	var removed []string
-	inWork := []string{`"$PWD/` + h.State + `"`}
 	if h.WalksEnv {
-		removed = append(removed, q(home+"/.env"))
-		inWork = append(inWork, `"$PWD/.env"`)
+		removed = append(removed, q(home+"/.env"), `"$PWD/.env"`)
 	}
 	for _, entry := range h.Owned {
 		removed = append(removed, q(state+"/"+entry))
 	}
 	for _, name := range h.Memory {
-		removed = append(removed, q(home+"/"+name))
-		inWork = append(inWork, `"$PWD/`+name+`"`)
+		removed = append(removed, q(home+"/"+name), `"$PWD/`+name+`"`)
 	}
 	for _, entry := range h.Outside {
 		removed = append(removed, q(home+"/"+entry))
 	}
+	// THE SAME DIRECTORY, NOT THE SAME STRING: the box can make its working
+	// directory, or the State in either place, a link to the other, and a
+	// string compare then removed the home's State, sessions and login with
+	// it. `-ef` compares device and inode, whatever names reach the directory
+	// (a bind mount too, which `pwd -P` strings miss); it is POSIX.1-2024 and
+	// dash, busybox ash and bash all have it. The home's State, so reached, is
+	// already pruned and stays. Only the State is compared: the home's twin of
+	// every other working-directory entry is removed anyway, and `rm` removes
+	// a link, never its target.
+	inWork := `"$PWD/` + h.State + `"`
 	script := "rm -rf -- " + strings.Join(removed, " ") +
-		` && if [ "$PWD" != ` + q(home) + ` ]; then rm -rf -- ` + strings.Join(inWork, " ") + `; fi`
+		` && if ! [ ` + inWork + ` -ef ` + q(state) + ` ]; then rm -rf -- ` + inWork + `; fi`
 	if h.WalksEnv {
-		script += ` && mkdir -p -- "$PWD/` + h.State + `" && printf '%s\n' ` + q(runEnvSeed) + ` > "$PWD/` + h.State + `/.env"`
+		script += ` && mkdir -p -- ` + inWork + ` && printf '%s\n' ` + q(runEnvSeed) + ` > "$PWD/` + h.State + `/.env"`
 	}
 	return script
 }

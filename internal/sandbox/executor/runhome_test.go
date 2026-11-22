@@ -272,3 +272,136 @@ func TestAQwenRunsKeyGoesWhereItsEntrySays(t *testing.T) {
 		})
 	}
 }
+
+// linkLayout is a box's home rearranged as the box's user may leave it, around
+// a harness's State directory, before a run.
+type linkLayout struct {
+	name string
+	// arrange makes the links under home.
+	arrange func(t *testing.T, home, state string)
+	// workdirReal says the working directory is a directory of its own, whose
+	// copies a run removes.
+	workdirReal bool
+	// elsewhere says the working directory's State is a link to the home's
+	// `elsewhere/`, which holds a file of the box's.
+	elsewhere bool
+}
+
+// relink makes path a link to target, after removing what path held.
+func relink(t *testing.T, target, path string) {
+	t.Helper()
+	if err := os.RemoveAll(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// mkdirs makes each directory.
+func mkdirs(t *testing.T, dirs ...string) {
+	t.Helper()
+	for _, dir := range dirs {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+var linkLayouts = []linkLayout{
+	{name: "the working directory is a link to the home", arrange: func(t *testing.T, home, _ string) {
+		relink(t, ".", filepath.Join(home, "workspace"))
+	}},
+	{name: "the working directory's State is a link to the home's", workdirReal: true,
+		arrange: func(t *testing.T, home, state string) {
+			mkdirs(t, filepath.Join(home, state))
+			relink(t, filepath.Join("..", state), filepath.Join(home, "workspace", state))
+		}},
+	{name: "the home's State is a link to the working directory's", workdirReal: true,
+		arrange: func(t *testing.T, home, state string) {
+			mkdirs(t, filepath.Join(home, state), filepath.Join(home, "workspace"))
+			if err := os.Rename(filepath.Join(home, state), filepath.Join(home, "workspace", state)); err != nil {
+				t.Fatal(err)
+			}
+			relink(t, filepath.Join("workspace", state), filepath.Join(home, state))
+		}},
+	{name: "the working directory's State is a link elsewhere", workdirReal: true, elsewhere: true,
+		arrange: func(t *testing.T, home, state string) {
+			mkdirs(t, filepath.Join(home, "elsewhere"))
+			if err := os.WriteFile(filepath.Join(home, "elsewhere", "kept"), []byte("the box's\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			relink(t, filepath.Join("..", "elsewhere"), filepath.Join(home, "workspace", state))
+		}},
+}
+
+// A RUN KEEPS THE HOME'S STATE WHATEVER NAME REACHES IT. A real box of each
+// harness that prunes the home before its run, its home rearranged by links
+// as its user may (the working directory a link to the home, a State linked
+// either way, the working directory's State a link elsewhere): as the run
+// starts, the home's session is whole and its owned entries gone, a working
+// directory of its own has its copies removed, a link elsewhere is removed as
+// a link (its target's file whole), the walk's seed is where the walk starts,
+// and nothing above the home is touched.
+//
+// Mutation, red: compare the working directory and the home as strings.
+func TestARunKeepsTheHomesStateWhateverNameReachesIt(t *testing.T) {
+	t.Parallel()
+	for _, h := range []struct {
+		name, state, session, owned, memory string
+		walksEnv                            bool
+		start                               func(t *testing.T) (*executor.Runner, sandbox.Sandbox)
+		req                                 sandbox.RunRequest
+	}{
+		{name: "gemini", state: ".gemini", session: "tmp/crewlet/chats/session.json", owned: "skills/kept/SKILL.md",
+			memory: "GEMINI.md", walksEnv: true,
+			start: func(t *testing.T) (*executor.Runner, sandbox.Sandbox) { return geminiBox(t, observedRun) },
+			req:   sandbox.RunRequest{Brief: "go", Model: "gemini-2.5-pro"}},
+		{name: "qwen", state: ".qwen", session: "projects/crewlet/chats/session.jsonl", owned: "skills/kept/SKILL.md",
+			memory: "QWEN.md", walksEnv: true,
+			start: func(t *testing.T) (*executor.Runner, sandbox.Sandbox) { return qwenBox(t, observedRun) },
+			req: sandbox.RunRequest{Brief: "go", Model: "qwen3-coder-plus",
+				Env: map[string]string{"OPENAI_API_KEY": "key-placeholder"}}},
+		{name: "codex", state: ".codex", session: "sessions/2026/11/01/rollout-2026-11-01T09-00-00-kept.jsonl",
+			owned: "rules/kept.rules", memory: "AGENTS.md",
+			start: func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
+				runner, box, _ := codexBox(t, "0.171.0")
+				return runner, box
+			},
+			req: sandbox.RunRequest{Brief: "go"}},
+	} {
+		for _, layout := range linkLayouts {
+			t.Run(h.name+"/"+layout.name, func(t *testing.T) {
+				t.Parallel()
+				runner, box := h.start(t)
+				home := box.Home()
+				layout.arrange(t, home, h.state)
+				c := homeCase{left: []string{h.state + "/" + h.owned}, kept: []string{h.state + "/" + h.session}}
+				if layout.workdirReal {
+					c.left = append(c.left, "workspace/"+h.memory)
+				}
+				above := fillHome(t, box, c)
+				runObserved(t, runner, box, h.req)
+				checkHome(t, box, c, above)
+
+				workState := filepath.Join(home, "workspace", h.state)
+				if layout.elsewhere {
+					if fi, err := os.Lstat(workState); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+						t.Errorf("the working directory's %s is still a link: rm -rf removes a link", h.state)
+					}
+					if _, err := os.Stat(filepath.Join(home, "elsewhere", "kept")); err != nil {
+						t.Errorf("removing the link removed its target's file: %v", err)
+					}
+				}
+				if h.walksEnv {
+					if seed := boxFile(t, box, filepath.Join(workState, ".env")); !strings.HasPrefix(seed, "# ") {
+						t.Errorf("the working directory's %s/.env is %q, want the run's own, a comment alone", h.state, seed)
+					}
+				}
+			})
+		}
+	}
+}
