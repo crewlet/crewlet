@@ -69,7 +69,7 @@ func TestAConsentProductSendsAsTheGrantRenewedOnce(t *testing.T) {
 	if grant.renewed != 1 || len(bearers) != 2 || bearers[1] != "ya29.new-after-ya29.old" {
 		t.Errorf("renewed %d times, Google saw %v; want one renewal and the new token second", grant.renewed, bearers)
 	}
-	if r := c.Record(growth.Call{Handle: "finance", Tool: "x_read"}, req, growth.ClassRead, nil); r.Connection != googlegrowth.GrantConnection {
+	if r := c.Record(growth.Call{Handle: "finance", Tool: "x_read"}, req, growth.ClassRead); r.Connection != googlegrowth.GrantConnection {
 		t.Errorf("the access log names connection %q, want %q", r.Connection, googlegrowth.GrantConnection)
 	}
 }
