@@ -11,12 +11,12 @@ import (
 
 // AN MCP SERVER'S OAUTH SIGN-IN, as the configuration's reader reads it.
 //
-// The public half of a server's grant ([coord.MCPGrant]) beside what the
+// The public half of a server's grant ([coord.OAuthGrant]) beside what the
 // configuration asks for: the grant kind, how the engine registers, the client
 // id, the authorization server, scopes, who signed in and when, when the grant
 // runs out and why its last renewal failed. NEVER A TOKEN, and never the
 // client's secret: the refresh token is a sealed row nothing answers, and the
-// access token lives in each node's memory alone (internal/engine's mcpoauth.go).
+// access token lives in each node's memory alone (internal/engine's oauthgrant.go).
 //
 // THE ADMINISTRATOR'S READING ALONE. A member's reading carries the server's
 // state (`needs_sign_in` among them) and none of this: who signed the company
@@ -25,7 +25,7 @@ import (
 // MCPGrantReader reads the MCP servers' OAuth grants and the two addresses a
 // vendor is given for a sign-in, as the engine keeps and serves them.
 type MCPGrantReader interface {
-	MCPGrants(ctx context.Context) ([]coord.MCPGrant, error)
+	MCPGrants(ctx context.Context) ([]coord.OAuthGrant, error)
 	// MCPSignInAddresses are the callback a vendor sends a person back to
 	// and the engine's client metadata document, each "" where the engine
 	// has no public address.
@@ -108,7 +108,7 @@ type MCPOAuthFailure struct {
 // A SERVICE IDENTITY READS NO GRANT: nobody signs in to it, so a grant a
 // person made while the server was signed in to that way is no part of it
 // (a sign-out still gives it up), and what it shows is the configuration's.
-func oauthView(server *config.MCPServer, grant *coord.MCPGrant, now time.Time) *MCPOAuthView {
+func oauthView(server *config.MCPServer, grant *coord.OAuthGrant, now time.Time) *MCPOAuthView {
 	if server == nil || server.OAuth == nil {
 		return nil
 	}
@@ -139,7 +139,7 @@ func oauthView(server *config.MCPServer, grant *coord.MCPGrant, now time.Time) *
 
 // mcpGrants is every server's grant by name, nil where the engine keeps none
 // on this surface. A read that fails is UNKNOWN, never "nobody signed in".
-func (s Sources) mcpGrants(ctx context.Context) (map[string]*coord.MCPGrant, error) {
+func (s Sources) mcpGrants(ctx context.Context) (map[string]*coord.OAuthGrant, error) {
 	if s.MCPGrants == nil {
 		return nil, nil
 	}
@@ -147,9 +147,9 @@ func (s Sources) mcpGrants(ctx context.Context) (map[string]*coord.MCPGrant, err
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string]*coord.MCPGrant, len(grants))
+	out := make(map[string]*coord.OAuthGrant, len(grants))
 	for i := range grants {
-		out[grants[i].Server] = &grants[i]
+		out[grants[i].Name] = &grants[i]
 	}
 	return out, nil
 }

@@ -839,7 +839,7 @@ type MCPApprovalNote struct {
 }
 
 // MCPSignInCondition is an MCP server's OAuth sign-in, as the fleet's record
-// of its grant holds it ([coord.MCPGrant]): never a token.
+// of its grant holds it ([coord.OAuthGrant]): never a token.
 type MCPSignInCondition struct {
 	// Held is whether anybody holds a grant for the server.
 	Held bool

@@ -234,6 +234,12 @@ type Grants interface {
 	// as the document before the removal configured it.
 	RevokeMCPServerGrant(ctx context.Context, entry *config.MCPServer) (revocation, said string,
 		held bool, err error)
+	// GiveUpIntegrationGrant gives up kind's consent grant once its block
+	// is removed (ADR-0178), answering what Google was asked, the sentence a
+	// person reads about it, and whether there was a grant. before is the
+	// document before the disconnect.
+	GiveUpIntegrationGrant(ctx context.Context, before *config.Company, kind string) (revocation, said string,
+		held bool, err error)
 }
 
 // Options wire the service.

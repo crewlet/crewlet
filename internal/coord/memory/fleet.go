@@ -64,6 +64,9 @@ type Fleet struct {
 	// counter its revisions are drawn from.
 	accessReviews        map[string]accessReview
 	accessReviewRevision uint64
+	// homeBoards is each seat's Home board, by handle, its revisions drawn
+	// from version.
+	homeBoards map[string]homeBoard
 	// atlasWakes is each owning seat's atlas wake record, by its key, and the
 	// counter its revisions are drawn from.
 	atlasWakes        map[string]coord.AtlasWake
@@ -73,6 +76,10 @@ type Fleet struct {
 	conversationHoldRevision uint64
 	seen                     map[string]seenMark
 	seenRevision             uint64
+	// sessionClaims is each minted session's claim, by session id, and the
+	// counter its revisions are drawn from.
+	sessionClaims        map[string]coord.SessionClaim
+	sessionClaimRevision uint64
 	// boxReadings is each seat's box readings, by seat and cell.
 	boxReadings map[boxReadingKey]coord.BoxReading
 	mailboxes   map[uuid.UUID]coord.MailboxRecord
@@ -150,16 +157,15 @@ type Fleet struct {
 	// their whole key.
 	accepted entryRecords[coord.MCPAcceptedTool, coord.MCPAcceptedUpdate]
 
-	// grants and mcpSignIns are each MCP server's OAuth grant and its
-	// sign-in in progress, by the server's name.
-	grants     entryRecords[coord.MCPGrant, coord.MCPGrantUpdate]
-	mcpSignIns entryRecords[coord.MCPSignIn, coord.MCPSignIn]
+	// oauth are each family's OAuth grants and sign-ins in progress, by
+	// the grant's name.
+	oauth map[coord.GrantFamily]*grantFamilyRecords
 
 	// googleIdentities are each seat's Google growth identity, by handle.
 	googleIdentities entryRecords[coord.GoogleIdentity, coord.GoogleIdentity]
 
 	// version is the one counter every versioned write draws from, sandbox
-	// runs, mailbox records and chat read records alike. Store-wide rather
+	// runs, mailbox records, chat read records and Home boards alike. Store-wide rather
 	// than per record, as a KV revision is, so a record deleted and created
 	// again never hands back a version an older incarnation of it already
 	// used: a caller still holding that version must lose, not win against a
@@ -229,8 +235,10 @@ func NewFleet() *Fleet {
 		seatAccess:        map[string]map[string][]byte{},
 		grantRequests:     map[string][]byte{},
 		accessReviews:     map[string]accessReview{},
+		homeBoards:        map[string]homeBoard{},
 		atlasWakes:        map[string]coord.AtlasWake{},
 		conversationHolds: map[uuid.UUID]map[string]coord.ConversationHold{},
+		sessionClaims:     map[string]coord.SessionClaim{},
 		seen:              map[string]seenMark{},
 		boxReadings:       map[boxReadingKey]coord.BoxReading{},
 		mailboxes:         map[uuid.UUID]coord.MailboxRecord{},
@@ -247,8 +255,7 @@ func NewFleet() *Fleet {
 		sshTests:          newSSHTestRecords(),
 		issueReports:      newIssueReportRecords(),
 		insightRecords:    newInsightRecords(),
-		grants:            newGrantRecords(),
-		mcpSignIns:        newMCPSignInRecords(),
+		oauth:             newGrantFamilies(),
 		googleIdentities:  newGoogleIdentityRecords(),
 		accepted:          newAcceptedRecords(),
 		bodies:            map[string]storedBody{},
