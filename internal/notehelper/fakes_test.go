@@ -164,18 +164,26 @@ type steer struct {
 	} `json:"input"`
 }
 
+// resume is one thread/resume the fake app-server was sent.
+type resume struct {
+	ThreadID     string `json:"threadId"`
+	ExcludeTurns bool   `json:"excludeTurns"`
+}
+
 // fakeAppServer is a Codex app-server on a unix socket, as far as the adapter
-// speaks to it: initialize, thread/resume answering the turn in flight named
-// at its start ("" for none), and turn/steer, refused while refusals remain.
+// speaks to it, answering as 0.171.0 was measured to: initialize;
+// thread/resume; thread/turns/list, newest first, the turn in flight ("" for
+// none) first while there is one; and turn/steer, refused for no turn in
+// flight or another turn than the one named, and while refusals remain.
 type fakeAppServer struct {
 	path    string
-	turn    string
 	steers  record[steer]
-	resumed record[string]
+	resumed record[resume]
 	fences  record[int]
 	conns   record[*websocket.Conn]
 
 	mu       sync.Mutex
+	turn     string
 	refusals int
 }
 
@@ -212,30 +220,42 @@ func (s *fakeAppServer) serve(ws *websocket.Conn) {
 		case "initialized":
 			continue
 		case "thread/resume":
-			var p struct {
-				ThreadID string `json:"threadId"`
-			}
+			var p resume
 			_ = json.Unmarshal(m.Params, &p)
-			var turns []map[string]string
+			answer["result"] = map[string]any{"thread": map[string]any{"id": p.ThreadID, "turns": []any{},
+				"status": map[string]any{"type": "active"}}}
+			s.resumed.add(p)
+		case "thread/turns/list":
+			s.mu.Lock()
+			turns := []map[string]string{{"id": "turn-before", "status": "completed"}}
 			if s.turn != "" {
-				turns = append(turns, map[string]string{"id": "turn-before", "status": "completed"},
-					map[string]string{"id": s.turn, "status": "inProgress"})
+				turns = append([]map[string]string{{"id": s.turn, "status": "inProgress"}}, turns...)
 			}
-			answer["result"] = map[string]any{"thread": map[string]any{"id": p.ThreadID, "turns": turns}}
-			s.resumed.add(p.ThreadID)
+			s.mu.Unlock()
+			answer["result"] = map[string]any{"data": turns}
 		case "turn/steer":
 			var p steer
 			_ = json.Unmarshal(m.Params, &p)
 			s.steers.add(p)
 			s.mu.Lock()
-			refuse := s.refusals > 0
+			turn, refuse := s.turn, s.refusals > 0
 			s.refusals--
 			s.mu.Unlock()
-			if refuse {
+			var refusal map[string]any
+			switch {
+			case turn == "":
+				refusal = map[string]any{"code": -32600, "message": "no active turn to steer"}
+			case p.ExpectedTurnID != turn:
+				refusal = map[string]any{"code": -32600,
+					"message": "expected active turn id `" + p.ExpectedTurnID + "` but found `" + turn + "`"}
+			case refuse:
+				refusal = map[string]any{"code": -32602, "message": "refused by the fake"}
+			}
+			if refusal != nil {
 				delete(answer, "result")
-				answer["error"] = map[string]any{"code": -32602, "message": "refused by the fake"}
+				answer["error"] = refusal
 			} else {
-				answer["result"] = map[string]string{"turnId": p.ExpectedTurnID}
+				answer["result"] = map[string]string{"turnId": turn}
 			}
 		case "fence":
 			s.fences.add(len(s.fences.all()))
@@ -245,6 +265,30 @@ func (s *fakeAppServer) serve(ws *websocket.Conn) {
 			return
 		}
 	}
+}
+
+// setTurn changes the turn in flight and tells no client, as a turn that
+// moved on before its notice reached the helper.
+func (s *fakeAppServer) setTurn(turn string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.turn = turn
+}
+
+// startTurn starts turn and sends turn/started, in the measured shape.
+func (s *fakeAppServer) startTurn(t *testing.T, thread, turn string) {
+	t.Helper()
+	s.setTurn(turn)
+	s.notify(t, "turn/started", map[string]any{"threadId": thread, "turn": map[string]any{
+		"id": turn, "rootTurnId": turn, "items": []any{}, "itemsView": "notLoaded", "status": "inProgress"}})
+}
+
+// completeTurn ends turn and sends turn/completed.
+func (s *fakeAppServer) completeTurn(t *testing.T, thread, turn string) {
+	t.Helper()
+	s.setTurn("")
+	s.notify(t, "turn/completed", map[string]any{"threadId": thread, "turn": map[string]any{
+		"id": turn, "rootTurnId": turn, "items": []any{}, "status": "completed"}})
 }
 
 // notify sends a notification to every client.
