@@ -5,7 +5,7 @@
 
 /** What sort of value a requirement holds (`setup.Kinds`); a toggle is a JSON boolean. */
 export type SetupRequirementKind =
-  "secret" | "url" | "id" | "choice" | "text" | "handle" | "email" | "toggle";
+  "secret" | "url" | "id" | "choice" | "text" | "handle" | "email" | "toggle" | "consent";
 
 /** One step at the app: `{link}` in `text` is the vendor link of the field `link` names. */
 export interface SetupStep {
@@ -248,4 +248,23 @@ export interface SetupAppStoreAnalyticsAnswer {
   connection: string;
   apps: SetupAppStoreAnalyticsApp[];
   revoke: string;
+}
+
+/** A consent sign-in (`POST /setup/integrations/{kind}/consent`, `GET /setup/consent-sign-ins/{id}`). */
+export interface SetupConsentSignIn {
+  id: string;
+  kind: string;
+  status: "pending" | "completing" | "approved" | "failed";
+  detail?: string;
+  started_at: string;
+  expires_at: string;
+  /** Where the browser goes to consent: on the start's answer alone. */
+  authorize_url?: string;
+}
+
+/** A consent grant given up with its integration's block, on a forced disconnect's answer (`oauth`). */
+export interface SetupConsentRevocation {
+  /** What Google was asked: `shared` where revoking would have ended another product's sign-in. */
+  revocation: "revoked" | "not_offered" | "failed" | "shared";
+  said: string;
 }

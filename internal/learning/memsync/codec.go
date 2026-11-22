@@ -88,6 +88,33 @@
 // a release flush cut inside them lost every change after the cut
 // (crewlet/crewlet#1040).
 //
+// ROWS IN FLIGHT, THE MARK AT THE ACKNOWLEDGED PREFIX. A publish has up to
+// [rowsInFlight] of a page's rows sent and not yet answered, each its own
+// acknowledged write, and takes their answers in the order it sent them,
+// moving the mark past each acknowledged one. One row a round trip carried a
+// release flush's five seconds about fifty rows across a slow link
+// (crewlet/crewlet#1041). A row refused or unanswered ends the publish with the
+// mark at the row before it; those after it are waited for, neither marked nor
+// counted, and sent again by the next publish. Not the client's asynchronous
+// publish: its pending acknowledgements live on the client this node shares
+// with the coordination store, and with no timeout set there an unanswered one
+// is held for the process's life, where a request per row ends with its bound.
+// A drain flushes every seat at once (seat.Host.ReleaseAll). Across a link the
+// link's one window bounds all their rows; on a member each seat has up to 64
+// rows and a page out, 3,200 rows and some 67 MiB at fifty seats (vectors go
+// as base64), inside what the memory stream queues before it stores
+// (nats-server's max_buffered_msgs and max_buffered_size, 100,000 and 128 MiB
+// by default). A row refused there is not acknowledged, so it is sent again by
+// the next publish, or lost with the flush as a crash loses it.
+//
+// A ROW SENT IS CARRIED WHOLE. A call's context (a cycle's thirty seconds, a
+// flush's five) decides only whether a row is sent. Each row is waited for
+// within the budget internal/jsapi gives any acknowledged write: the request
+// term and its bytes' crossing at the link's floor for each send, so a row a
+// slow link carries in minutes lands rather than being cut and sent again
+// whole every cycle (crewlet/crewlet#1075). A call ends that much after its
+// context at most.
+//
 // WHAT A HOLDING WRITES GOES FIRST. A seat's marks live in memory, so every
 // acquisition and every restart leaves this node a backlog: everything its
 // store holds for the seat, the rows the hydration inserted and those it found
@@ -116,8 +143,9 @@
 // the moment its release begins, when only the release's flush does; and
 // none before the hydration completes, after one that failed, and once
 // the release has forgotten it. Every call checks the holding before each row
-// it sends, so a cycle partway through a seat as its release begins stops at
-// its next row (crewlet/crewlet#511).
+// it sends, so a cycle partway through a seat as its release begins sends no
+// more (crewlet/crewlet#511), and the flush starts once the rows the cycle had
+// out are answered, so no copy the cycle had answered lands after the flush's.
 //
 // # The end barrier
 //
@@ -236,8 +264,8 @@
 //
 // # A window across a link
 //
-// A replay's pulls take from the ONE window of the node's link
-// ([Config.Window], internal/jsapi's Window), which the object store's
+// A replay's pulls and a publish's rows take from the ONE window of the node's
+// link ([Config.Window], internal/jsapi's Window), which the object store's
 // uploads, downloads and walks on the same link take from too, so what the
 // node's bulk transfers hold out across the link, both ways together, never
 // crosses the floor in more than a request's term leaves after its own round

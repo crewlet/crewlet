@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/setup"
@@ -38,6 +39,8 @@ func TestTheSetupFormReadsWhatTheSetupWireSends(t *testing.T) {
 		{"SetupVerdict", reflect.TypeFor[setup.Verdict](), nil},
 		{"SetupVerdictFact", reflect.TypeFor[setup.Fact](), nil},
 		{"SetupVerdictWarning", reflect.TypeFor[setup.Warning](), nil},
+		{"SetupConsentSignIn", reflect.TypeFor[setupapi.ConsentSignIn](), nil},
+		{"SetupConsentRevocation", reflect.TypeFor[configapi.ConsentRevocation](), nil},
 	} {
 		members, err := clientsource.Interface(tree, tc.iface)
 		if err != nil {

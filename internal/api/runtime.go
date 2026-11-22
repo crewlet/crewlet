@@ -307,10 +307,10 @@ type NodeRuntime interface {
 	// given, which the servers' answers carry.
 	MCPSignIns() mcpapi.SignIns
 	MCPGrants() queries.MCPGrantReader
-	// MCPLanding finishes a sign-in where the vendor sends the person back
+	// OAuthLanding finishes a sign-in where the vendor sends the person back
 	// (`GET /webhooks/mcp-oauth`) and publishes the engine's client
 	// metadata document; nil answers both as an engine that finishes none.
-	MCPLanding() webhooks.MCPSignIns
+	OAuthLanding() webhooks.OAuthSignIns
 
 	// MCPApprovals finds a call held for a person's approval on the
 	// fleet's runs and puts its answer on the control topic of the seat

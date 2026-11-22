@@ -2979,6 +2979,10 @@ func TestEverySetupRouteIsAdmins(t *testing.T) {
 		// A CHECK SPENDS A CREDENTIAL AT A VENDOR, on a person's hand.
 		{"a credential check", http.MethodPost, "/setup/integrations/datadog/verify",
 			`{"field": "api_key", "value": "dd-api"}`},
+		// A CONSENT SIGN-IN MAKES A CREDENTIAL THE ENGINE SEALS, and a
+		// sign-out ends one.
+		{"a consent sign-in", http.MethodPost, "/setup/integrations/datadog/consent", `{}`},
+		{"a consent sign-out", http.MethodDelete, "/setup/integrations/datadog/consent", ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -3055,6 +3059,10 @@ type noGrants struct{}
 func (noGrants) HeldMCPGrant(context.Context, string) (bool, error) { return false, nil }
 
 func (noGrants) RevokeMCPServerGrant(context.Context, *config.MCPServer) (string, string, bool, error) {
+	return "", "", false, nil
+}
+
+func (noGrants) GiveUpIntegrationGrant(context.Context, *config.Company, string) (string, string, bool, error) {
 	return "", "", false, nil
 }
 

@@ -124,10 +124,11 @@ type Options struct {
 	// can finish it, and this one cannot say otherwise.
 	SlackInstalls SlackInstaller
 
-	// MCPSignIns finishes an MCP server's OAuth sign-in and publishes the
-	// engine's client metadata document (mcp_oauth.go). Nil answers the
-	// callback 501 and the document 404.
-	MCPSignIns MCPSignIns
+	// OAuthSignIns finishes a sign-in of the company's OAuth grants (an
+	// MCP server's, an integration's) and publishes the engine's client
+	// metadata document (mcp_oauth.go). Nil answers the callback 501 and the
+	// document 404.
+	OAuthSignIns OAuthSignIns
 
 	// Recheck asks the reconcile loop to look at GitHub immediately, for
 	// the moment a person finishes installing an agent's app there.
@@ -171,7 +172,7 @@ type Receiver struct {
 	appFlow    AppCompleter
 
 	slackInstalls SlackInstaller
-	mcpSignIns    MCPSignIns
+	oauthSignIns  OAuthSignIns
 
 	// recheck asks the reconcile loop to look at GitHub now, and
 	// recheckedAt is when this route last did. See [recheckEvery]: the
@@ -212,7 +213,7 @@ func New(opts Options) (*Receiver, error) {
 		recheck:   opts.Recheck,
 
 		slackInstalls: opts.SlackInstalls,
-		mcpSignIns:    opts.MCPSignIns,
+		oauthSignIns:  opts.OAuthSignIns,
 		claims:        opts.Claims,
 		configured:    opts.Configured,
 		now:           opts.Now,
