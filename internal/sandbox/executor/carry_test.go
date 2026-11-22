@@ -679,15 +679,15 @@ func versionBox(printed string, code int, errText string, asked *[]string) *sand
 // THE CONTINUATION CHECK HOLDS THE BOX HARNESS'S RELEASE TO THE FLOORS. Only
 // the writing harness, in this build's format, continues a session: Claude
 // Code from 2.1.310 (a session 2.1.300 or later wrote), OpenCode from 2.0.32,
-// never older than the writer; Gemini CLI and Qwen Code between the minors
-// measured (0.65 and 0.70; 0.26 and 0.28), box and writer alike. An unreadable
-// release counts as current; the printed one is returned whatever the answer;
-// a harness that does not answer is no continuation, a box that cannot be
-// asked an error. One login-shell exec reads it, the bin directory first.
+// never older than the writer, an unreadable release counting as current;
+// Gemini CLI and Qwen Code only exactly on their one release (0.70.0, 0.28.3),
+// box and writer alike, a newer or unreadable one not at all. The printed
+// release is returned whatever the answer; a harness that does not answer is
+// no continuation, a box that cannot be asked an error. One login-shell exec.
 //
 // Mutation: compare against the writer's floor alone, let an older box take a
-// newer writer's session, read an unreadable release as too old, or let a
-// release outside the measured minors continue, and a row goes red.
+// newer writer's session, read an unreadable Claude release as too old, or let
+// a Gemini or Qwen release other than the one continue, and a row goes red.
 func TestTheContinuationCheckHoldsTheBoxsReleaseToTheFloors(t *testing.T) {
 	t.Parallel()
 	claudeArchive := func(release string) sandbox.SessionArchive {
@@ -731,14 +731,18 @@ func TestTheContinuationCheckHoldsTheBoxsReleaseToTheFloors(t *testing.T) {
 		"opencode below the floor":            {executor.NewOpenCode(), "opencode v2.0.31\n", 0, openCodeArchive("2.0.31"), false, "2.0.31", "older than 2.0.32"},
 		"opencode older than its writer":      {executor.NewOpenCode(), "opencode v2.1.4\n", 0, openCodeArchive("2.2.5"), false, "2.1.4", "older than the 2.2.5"},
 		"opencode, another harness's session": {executor.NewOpenCode(), "opencode v2.1.4\n", 0, claudeArchive("2.1.310"), false, "2.1.4", "continued only by the harness that wrote it"},
-		"gemini, an older writer measured":    {executor.NewGeminiCLI(), "0.70.0\n", 0, geminiArchive("0.65.0"), true, "0.70.0", ""},
-		"gemini, a newer writer measured":     {executor.NewGeminiCLI(), "0.65.0\n", 0, geminiArchive("0.70.0"), true, "0.65.0", ""},
-		"gemini, a box no minor measured":     {executor.NewGeminiCLI(), "0.71.2\n", 0, geminiArchive("0.70.0"), false, "0.71.2", "this box runs Gemini CLI 0.71.2"},
-		"gemini, a writer no minor measured":  {executor.NewGeminiCLI(), "0.70.0\n", 0, geminiArchive("0.64.0"), false, "0.70.0", "written by Gemini CLI 0.64.0"},
-		"gemini, an unreadable release":       {executor.NewGeminiCLI(), "gemini nightly\n", 0, geminiArchive("0.70.0"), true, "", ""},
-		"qwen, an older writer measured":      {executor.NewQwenCode(), "0.28.3\n", 0, qwenArchive("0.26.1"), true, "0.28.3", ""},
-		"qwen, a newer writer measured":       {executor.NewQwenCode(), "0.26.1\n", 0, qwenArchive("0.28.3"), true, "0.26.1", ""},
-		"qwen, a box no minor measured":       {executor.NewQwenCode(), "0.27.0\n", 0, qwenArchive("0.28.3"), false, "0.27.0", "this box runs Qwen Code 0.27.0"},
+		"gemini, exact to exact":              {executor.NewGeminiCLI(), "0.70.0\n", 0, geminiArchive("0.70.0"), true, "0.70.0", ""},
+		"gemini, exact to newer":              {executor.NewGeminiCLI(), "0.71.2\n", 0, geminiArchive("0.70.0"), false, "0.71.2", "only on 0.70.0, and this box runs 0.71.2"},
+		"gemini, newer to exact":              {executor.NewGeminiCLI(), "0.70.0\n", 0, geminiArchive("0.71.0"), false, "0.70.0", "the session was written by 0.71.0"},
+		"gemini, an older box":                {executor.NewGeminiCLI(), "0.65.0\n", 0, geminiArchive("0.70.0"), false, "0.65.0", "this box runs 0.65.0"},
+		"gemini, an older writer":             {executor.NewGeminiCLI(), "0.70.0\n", 0, geminiArchive("0.65.0"), false, "0.70.0", "written by 0.65.0"},
+		"gemini, an unreadable release":       {executor.NewGeminiCLI(), "gemini nightly\n", 0, geminiArchive("0.70.0"), false, "", `this box runs "gemini nightly"`},
+		"gemini, an unrecorded writer":        {executor.NewGeminiCLI(), "0.70.0\n", 0, geminiArchive(""), false, "0.70.0", "a release it did not record"},
+		"qwen, exact to exact":                {executor.NewQwenCode(), "0.28.3\n", 0, qwenArchive("0.28.3"), true, "0.28.3", ""},
+		"qwen, exact to newer":                {executor.NewQwenCode(), "0.29.0\n", 0, qwenArchive("0.28.3"), false, "0.29.0", "only on 0.28.3, and this box runs 0.29.0"},
+		"qwen, newer to exact":                {executor.NewQwenCode(), "0.28.3\n", 0, qwenArchive("0.29.0"), false, "0.28.3", "the session was written by 0.29.0"},
+		"qwen, an older writer":               {executor.NewQwenCode(), "0.28.3\n", 0, qwenArchive("0.26.1"), false, "0.28.3", "written by 0.26.1"},
+		"qwen, an unreadable release":         {executor.NewQwenCode(), "qwen nightly\n", 0, qwenArchive("0.28.3"), false, "", `this box runs "qwen nightly"`},
 		"qwen, another harness's session":     {executor.NewQwenCode(), "0.28.3\n", 0, geminiArchive("0.70.0"), false, "0.28.3", "continued only by the harness that wrote it"},
 	} {
 		t.Run(name, func(t *testing.T) {

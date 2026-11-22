@@ -17,7 +17,9 @@
 //
 //   node gemini-helper.mjs usage <chats dir> <session id> [<ids file>]
 //     Prints one line of the run's stream: the tokens each request the chat
-//     file records spent, but the responses the ids file names, split as
+//     file records spent, but the responses the ids file names (an ids file
+//     named and missing is a list that failed: the line says so and sums
+//     nothing, never the whole session), split as
 //     stream-json's result does not split its total (the reasoning, the tool
 //     prompt; geministream.go's runSpend). 0.70.0 writes a response's entry
 //     up to three times as it goes (its prose, its calls scheduled, its calls
@@ -72,11 +74,12 @@ function usage(chats, session, before) {
   if (file === "") return { ...line, missing: "no chat file in " + chats + " names the session" }
   const requests = responses(file)
   if (before) {
-    let earlier = ""
+    let earlier
     try {
       earlier = fs.readFileSync(before, "utf8")
     } catch {
-      // None listed: the session began with the run.
+      return { ...line, missing: "the responses the session held as the run started were not listed, " +
+        "so the run's own are not told from the earlier jobs'" }
     }
     for (const id of earlier.split("\n")) requests.delete(id)
   }

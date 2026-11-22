@@ -465,6 +465,8 @@ class Inbox {
     this.refused = false
     this.offset = 0
     this.partial = ""
+    // lost is set once the chat file reads shorter than what was read of it.
+    this.lost = false
   }
 
   start(chat) {
@@ -563,7 +565,7 @@ class Inbox {
   // scan reads the chat file from where it last stopped and confirms, in
   // order, each note handed whose record it finds.
   scan() {
-    if (this.handed.length === 0 && this.matched.length === 0) return
+    if (this.lost || (this.handed.length === 0 && this.matched.length === 0)) return
     let fd
     try {
       fd = fs.openSync(this.chat, "r")
@@ -573,8 +575,14 @@ class Inbox {
     try {
       const size = fs.fstatSync(fd).size
       if (size < this.offset) {
-        this.offset = 0
-        this.partial = ""
+        // A FILE SHORTER THAN WHAT WAS READ OF IT was rewritten under the
+        // run, and its start holds a continued session's earlier records,
+        // which a note this run lost would match: it confirms nothing more,
+        // and what it has not confirmed is served again.
+        this.lost = true
+        this.matched = []
+        this.handed = []
+        return
       }
       const chunk = Buffer.alloc(Math.min(size - this.offset, 8 << 20))
       const n = chunk.length === 0 ? 0 : fs.readSync(fd, chunk, 0, chunk.length, this.offset)

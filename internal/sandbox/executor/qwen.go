@@ -59,12 +59,20 @@ func (QwenCode) Command(req sandbox.RunRequest, session Session, paths Paths, _ 
 	return "sh -c " + sandbox.ShellQuote(qwenScript(req, session, paths, sandbox.JobStopGrace))
 }
 
+// qwenRelease is the Qwen Code release this build drives: the newest, whose
+// ACP messages, chat file and session/load it was measured against
+// (testdata/qwen/0.28.3). An older one is refused at the run's start, a newer
+// one runs on sessions of its own, and only this one continues a carried
+// session ([releaseGate], [exactCarry]).
+const qwenRelease = "0.28.3"
+
 // qwenScript is a Qwen Code run's script, giving its helper stop to go once
-// asked to end: the end protocol, the box's release read, the session named
-// and recorded ([chatSessionGate], [Paths.SessionRecord]), the helper run on
-// it, loading a session the run continues and creating one it starts, and the
-// session packed to be continued in another box ([chatPack]). The session goes
-// on the helper's command line, as the gate settles it; an id is no secret.
+// asked to end: the end protocol, the box's release read and gated
+// ([releaseGate]), the session named and recorded ([chatSessionGate],
+// [Paths.SessionRecord]), the helper run on it, loading a session the run
+// continues and creating one it starts, and the session packed to be
+// continued in another box ([chatPack]). The session goes on the helper's
+// command line, as the gate settles it; an id is no secret.
 func qwenScript(req sandbox.RunRequest, session Session, paths Paths, stop time.Duration) string {
 	var b strings.Builder
 	line := func(text string) { b.WriteString(text + "\n") }
@@ -75,9 +83,10 @@ func qwenScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	}
 	b.WriteString(endPrologue(paths, stop))
 	b.WriteString(endHarness(""))
-	// THE RELEASE, read once for the record and the gate; one the box prints
-	// otherwise than MAJOR.MINOR.PATCH is taken for a current one.
+	// THE RELEASE, read once for the gate, the record and the session's: an
+	// older one never runs ([releaseGate]).
 	line(`v=$(qwen --version < /dev/null 2> /dev/null | head -n 1)`)
+	line(releaseGate("Qwen Code", qwenRelease))
 	b.WriteString(chatSessionGate(session, paths, qwenGate(paths, fresh)))
 	// THE RECORD, before the harness starts ([parseSessionRecord]).
 	line(`printf 'id %s\ncontinued %s\nwhy %s\nrelease %s\n' "$s" "$k" "$w" "$v" > ` + q(paths.SessionRecord()))

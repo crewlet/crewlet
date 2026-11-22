@@ -156,8 +156,21 @@ func TestAFailedQwenRunSaysHow(t *testing.T) {
 
 // qwenBox is a direct box whose `node`, the helper's runtime, is a stand-in
 // running run: the run's script starts `node <helper> run ...`, so the
-// stand-in plays the helper's whole run.
+// stand-in plays the helper's whole run. Its `qwen` prints the release the
+// suite's captures were made on when the script reads it.
 func qwenBox(t *testing.T, run string) (*executor.Runner, sandbox.Sandbox) {
+	t.Helper()
+	return qwenBoxAt(t, qwenCapturedRelease, run)
+}
+
+// qwenCapturedRelease is the Qwen Code release whose output the suite's
+// fixtures were captured from (testdata/qwen/0.28.3).
+const qwenCapturedRelease = "0.28.3"
+
+// qwenBoxAt is [qwenBox] whose Qwen Code prints release to `--version`, as
+// the run's script reads it before its gate, and does nothing else: the
+// helper's stand-in plays the harness.
+func qwenBoxAt(t *testing.T, release, run string) (*executor.Runner, sandbox.Sandbox) {
 	t.Helper()
 	local, err := sandbox.NewLocal(sandbox.LocalOptions{Placement: sandbox.Direct, StateDir: t.TempDir()})
 	if err != nil {
@@ -173,6 +186,8 @@ func qwenBox(t *testing.T, run string) (*executor.Runner, sandbox.Sandbox) {
 		t.Fatalf("Install: %v", err)
 	}
 	writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/node", "#!/bin/sh\n"+run)
+	writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/qwen",
+		"#!/bin/sh\ncase \"$1\" in --version) echo "+shQuote(release)+"; exit 0;; esac\nexit 2\n")
 	return runner, b
 }
 

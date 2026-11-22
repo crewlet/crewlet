@@ -206,8 +206,11 @@ type carrier interface {
 
 	// Continues reports whether a session written by release writer, carried
 	// from another box, can be continued by release box (each as `--version`
-	// gave it), and if not, why, in a person's words. An unreadable release is
-	// taken for a current one, as the notes gate takes it ([claudeNotesGate]).
+	// gave it), and if not, why, in a person's words. box is "" where no box
+	// was asked ([Runner.Restores]), and one that does not read is handed as
+	// printed ([boxSaid]). Claude Code and OpenCode take an unreadable release
+	// for a current one, as the notes gate does ([claudeNotesGate]); Gemini CLI
+	// and Qwen Code continue on their one release alone ([exactCarry]).
 	Continues(box, writer string) (bool, string)
 
 	// Pack is the script that packs session now, the same pack the run's

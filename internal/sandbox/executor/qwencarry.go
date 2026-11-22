@@ -15,8 +15,8 @@ import (
 // dash, which nothing pins. A resume checks only the first line's `cwd`, so
 // the restore ([qwenHelperScript]'s `restore`) rewrites that field and files
 // the session under the box's key; the run loads it over ACP (`session/load`),
-// history whole (0.28.3 elsewhere, 27 ms for 5 MB; 0.26.1 and 0.28.3 each
-// loading the other's). Writes are asynchronous, so a pack beside the harness
+// history whole (0.28.3 elsewhere, 27 ms for 5 MB; the one release it
+// continues on: [qwenRelease]). Writes are asynchronous, so a pack beside the harness
 // can end mid-line, which the restore cuts back ([chatSessionGate]).
 //
 // NO RECORD OF TAKES TRAVELS: a note is confirmed by the chat file's own
@@ -28,10 +28,6 @@ import (
 // is packed, or where it is restored to, is a new format, which a box of this
 // build refuses.
 const qwenArchiveFormat = 1
-
-// qwenCarried are the Qwen Code minors measured continuing each other's
-// carried sessions, both ways ([measuredCarry]).
-var qwenCarried = []string{"0.26", "0.28"}
 
 var (
 	_ resumer = QwenCode{}
@@ -49,9 +45,10 @@ func (QwenCode) ArchiveFormat() int { return qwenArchiveFormat }
 func (QwenCode) VersionCommand() string { return "qwen --version" }
 
 // Continues reports whether a session Qwen Code release writer wrote in another
-// box can be continued by release box ([carrier], [qwenCarried]).
+// box can be continued by release box: both [qwenRelease] ([carrier],
+// [exactCarry]).
 func (QwenCode) Continues(box, writer string) (bool, string) {
-	return measuredCarry("Qwen Code", box, writer, qwenCarried)
+	return exactCarry("Qwen Code", qwenRelease, box, writer)
 }
 
 // Pack packs session now, as a run's script packs it once the harness exits
@@ -120,10 +117,8 @@ func qwenGate(paths Paths, fresh []freshCopy) chatGate {
 		harness: "Qwen Code",
 		locate:  qwenHeld(paths),
 		restore: restore,
-		carries: measuredCase(qwenCarried),
-		refused: `"this box runs Qwen Code $v, and a carried session was measured continuing only between ` +
-			`Qwen Code ` + measuredMinors(qwenCarried) + `"`,
-		fresh: fresh,
+		release: qwenRelease,
+		fresh:   fresh,
 	}
 }
 
