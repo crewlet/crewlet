@@ -195,7 +195,8 @@ func (p *Product) Apply(ctx context.Context, call growth.Call, approved string) 
 	rec := p.client.Record(call, googlegrowth.Request{Op: growth.Operation{ID: call.Tool}}, tool.Class, nil)
 	if err == nil {
 		rec = p.record(call, a)
-		rec.Class = tool.Class
+		// THE ANSWER AND EVERY OUTCOME NAME THE OPERATION THE ASK BOUND.
+		rec.Class, rec.Operation = tool.Class, approved
 		for _, s := range a.steps {
 			if err = p.inScope(call.Handle, s.req); err != nil {
 				break

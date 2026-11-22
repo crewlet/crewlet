@@ -152,7 +152,7 @@ func draftsOrHalts(current, body map[string]any) bool {
 		status, _ := rel["status"].(string)
 		match := releaseOf(now, rel["versionCodes"])
 		switch {
-		case status == "draft":
+		case status == "draft" && (match == nil || match["status"] == "draft"):
 		case status == "halted" && match != nil && slices.Contains([]string{"inProgress", "halted"},
 			fmt.Sprint(match["status"])) && sameExcept(match, rel, "status"):
 		case match != nil && reflect.DeepEqual(normal(match), normal(rel)):

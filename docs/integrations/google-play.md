@@ -39,7 +39,7 @@ Building and uploading releases stays with [Expo](expo.md) or your pipeline: Cre
 | `google_play_read_listing` | read | The store listing in every language, the contact details, and the images of a language and type |
 | `google_play_read_tracks` | read | Every track and its releases: version codes, status, rollout fraction, notes |
 | `google_play_query_vitals` | read | Android vitals by day or hour: crashes, ANRs, slow starts and rendering, wakeups, wakelocks, memory, error counts |
-| `google_play_read_report` | read | The monthly reports in the bucket (installs, ratings, crashes, store performance, reviews, sales, earnings), listed or read with rows decoded |
+| `google_play_read_report` | read | The monthly reports in the bucket (installs, ratings, crashes, store performance, reviews; sales and earnings at `administer`), listed or read with rows decoded |
 | `google_play_halt_release` | operate | Halts a staged rollout, every other release kept |
 | `google_play_reply_to_reviews` | public | Replies to 1 to 10 reviews of one app, each at most 350 characters: asked first |
 | `google_play_update_listing` | public | One language's title, short and full description or video, and the contact details, in one commit: asked first |
@@ -82,7 +82,7 @@ The block needs `integrations.google_cloud` on with its provisioning block. It h
 
 ## Every method, and its class
 
-Each row is one method the engine offers, with its class (and the class its target's state or a field gives it), the least Play Console permission it needs, and the scope minted for it. The table is held to the engine's catalog by a test, both ways. Google removed `purchases.subscriptions.get`, `.refund` and `.revoke` from its discovery document; `purchases.subscriptionsv2.get`, `orders.refund` and `purchases.subscriptionsv2.revoke` replace them here. Three rows are held stricter than the coverage matrix allows, since the engine does not read the state that would lower them: `purchases.subscriptionsv2.defer` with `validateOnly` is `admin`, `apprecovery.addTargeting` on a draft action is `public`, and an offers `batchUpdate` creating a draft offer is `public`. A state rule lowers a call only on its target as read: a target that cannot be read keeps the stricter class.
+Each row is one method the engine offers, with its class (and the class its target's state or a field gives it), the least Play Console permission it needs, and the scope minted for it. The table is held to the engine's catalog by a test, both ways. Google removed `purchases.subscriptions.get`, `.refund` and `.revoke` from its discovery document; `purchases.subscriptionsv2.get`, `orders.refund` and `purchases.subscriptionsv2.revoke` replace them here. Three rows are held stricter than the coverage matrix allows, since the engine does not read the state that would lower them: `purchases.subscriptionsv2.defer` with `validateOnly` is `admin`, `apprecovery.addTargeting` on a draft action is `public`, an offers `batchUpdate` creating a draft offer is `public`, and a `subscriptions.patch` creating a subscription (`allowMissing`) is `public`. A state rule lowers a call only on its target as read: a target that cannot be read keeps the stricter class.
 
 | Method | Resource | Call | Class | Least permission | Scope |
 |---|---|---|---|---|---|

@@ -138,7 +138,7 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 		{Name: toolReadReport, Class: growth.ClassRead,
 			Operations: []string{"storage.objects.list", "storage.objects.get"},
 			Description: "Read Google Play's monthly reports (installs, ratings, crashes, store performance, " +
-				"reviews, sales, earnings) from the account's reports bucket, as the company's figures: list them " +
+				"reviews, and for an agent at administer sales and earnings) from the account's reports bucket, as the company's figures: list them " +
 				"by prefix, or read one, its rows decoded.",
 			Parameters: object(map[string]any{
 				"bucket": map[string]any{"type": "string", "description": "The reports bucket, as " +
