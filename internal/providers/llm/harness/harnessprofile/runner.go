@@ -114,15 +114,15 @@ func ExecutorOf(name string) (Executor, bool) {
 
 // Release is the release a harness's `--version` printed, as a bare
 // MAJOR.MINOR.PATCH, or "" where it printed none: the first word that starts
-// with a digit (after an optional "v", `opencode v2.0.32`) must be three runs
-// of digits joined by dots and nothing else. A pre-release
-// (`codex-cli 0.171.0-alpha.1`) names no release, so a floor or an exact
-// release is never met by a build cut before it; words around the release
-// (`2.1.310 (Claude Code)`) are passed over. The one reading the runners, the
-// sandbox and the doctor share.
+// with a digit (after an optional "v", `opencode v2.0.32`; less one closing
+// period, `GitHub Copilot CLI 1.0.114.`) must be three runs of digits joined by
+// dots and nothing else. A pre-release (`codex-cli 0.171.0-alpha.1`) names no
+// release, so a floor or an exact release is never met by a build cut before
+// it; words around the release (`2.1.310 (Claude Code)`) are passed over. The
+// one reading the runners, the sandbox and the doctor share.
 func Release(printed string) string {
 	for _, word := range strings.Fields(printed) {
-		word = strings.TrimPrefix(word, "v")
+		word = strings.TrimSuffix(strings.TrimPrefix(word, "v"), ".")
 		if word == "" || word[0] < '0' || word[0] > '9' {
 			continue
 		}
