@@ -275,6 +275,13 @@ func (f *FleetStore) SweepMarkers(ctx context.Context, cutoff time.Time) (int64,
 		if err != nil {
 			errs = append(errs, err)
 		}
+		// AND A MINTED SESSION'S CLAIM, which carries its run's record's
+		// lifetime as a part does.
+		n, err = f.sweepSessionClaims(ctx, pass, cutoff)
+		swept += n
+		if err != nil {
+			errs = append(errs, err)
+		}
 	}
 	return swept, errors.Join(errs...)
 }
