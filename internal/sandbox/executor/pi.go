@@ -26,9 +26,9 @@ const PiName = "pi"
 // EXTENSION (pi_extension.mjs, [Pi.WriteConfig]): the seat's MCP servers, its
 // standing instructions, its turn cap, notes and skill loads. Its session is one
 // file at one path ([Paths.PiSessionFile], [piSessionGate], [piPack]). Every
-// run trusts its working directory (`--approve`), so a repository's own
-// resources load beside the run's, as under Claude Code; pi has no approval
-// layer, so the run is fully permissioned by construction.
+// run leaves its working directory untrusted (`--no-approve`), so no
+// repository file loads in the run's place; pi has no approval layer, so the
+// run is fully permissioned by construction.
 type Pi struct{}
 
 var (
@@ -106,14 +106,16 @@ const piExtensionMark = "crewlet.extension"
 //
 // THE BRIEF IS NOT ON ITS COMMAND LINE: print mode with no message reads stdin,
 // which the wrapper points at the brief's file. THE SYSTEM TEXT IS NOT EITHER:
-// `--append-system-prompt` would replace a trusted repository's
-// .pi/APPEND_SYSTEM.md, so the extension adds it as a section after it.
+// the extension adds it as a prompt section of its own, on every run, so a
+// continued run is told by its own launch.
 func piScript(req sandbox.RunRequest, session Session, paths Paths, extension string, stop time.Duration) string {
 	q := sandbox.ShellQuote
 	parts := []string{"pi", "--mode", "json", "-p",
-		// The working directory trusted for this process alone (no trust.json
-		// written), so a repository's own resources load as under Claude Code.
-		"--approve"}
+		// THE WORKING DIRECTORY UNTRUSTED: a repository's .pi settings, MCP
+		// servers, extensions, skills, prompts and system-prompt files do not
+		// load, so none stands in for the run's own (measured on 1.6.0); its
+		// AGENTS.md, which pi reads whatever trust says, still does.
+		"--no-approve"}
 	// VERBATIM, as the pi entry names it in pi's own terms (provider/id).
 	if req.Model != "" {
 		parts = append(parts, "--model", q(req.Model))
@@ -450,7 +452,7 @@ func (p Pi) writeExtension(ctx context.Context, box sandbox.Sandbox, file string
 		system = withNoteInstruction(system, p.NoteInstruction())
 	}
 	settings := piExtensionSettings{System: system, Cap: max(req.Limits.MaxTurns, 0),
-		Required: piRequired(servers), Withheld: piWithheld(req.SignInEnv)}
+		Required: piRequired(servers), Withheld: piWithheld(req.SignInEnv), WithheldPrefixes: piShellWithout}
 	for _, name := range slices.Sorted(maps.Keys(servers)) {
 		settings.Servers = append(settings.Servers, piServer{Name: name, Config: piMCP(servers[name])})
 	}
@@ -478,6 +480,11 @@ func piWithheld(names []string) []string {
 	slices.Sort(out)
 	return slices.Compact(out)
 }
+
+// piShellWithout is the prefixes of the names the model's shell runs without
+// whatever the run sets: the telemetry exporter's settings, its endpoint and
+// its headers, which pi keeps for its own export.
+var piShellWithout = []string{"OTEL_EXPORTER_OTLP_"}
 
 // piRequired is the servers a run fails without, the extension checking each
 // offers a tool at its first turn: those the engine marks always loaded, the
@@ -536,7 +543,7 @@ func (Pi) notesOffWhy() string {
 const piChargeBytes sandbox.Charge = 1
 
 // sessionTraits is how a relaunch judges a Pi session, each value the one that
-// never under-counts its next request, since pi compacts by settings a trusted
+// never under-counts its next request, since pi compacts by settings an operator's
 // repository may change (compaction.reserveTokens):
 //   - FirstRequestBox, with no point its box can say ([Runner.ReadBoxPoint]
 //     marks it unread): the relaunch hands the summarized telling;

@@ -339,7 +339,7 @@ func TestThePiExtensionFailsARunWhoseBridgeOffersNoTool(t *testing.T) {
 
 // THE SEAT'S STANDING INSTRUCTIONS ARE A PROMPT SECTION OF THEIR OWN, set on
 // every run's before_agent_start, where pi renders it after its own prompt and
-// a trusted repository's APPEND_SYSTEM.md (measured on 1.6.0); and the
+// any APPEND_SYSTEM.md (measured on 1.6.0); and the
 // extension records that it ran, once.
 //
 // Mutation: drop the section, or record the extension's word on every start:
@@ -399,24 +399,30 @@ func TestThePiExtensionReportsASkillLoad(t *testing.T) {
 	p.expect("handled")
 }
 
-// THE MODEL'S SHELL RUNS WITHOUT THE NAMES THAT SIGN PI IN: the extension
-// registers pi's own bash tool again, its spawn hook leaving those names out
+// THE MODEL'S SHELL RUNS WITHOUT THE NAMES THAT SIGN PI IN, NOR THE TELEMETRY
+// EXPORTER'S SETTINGS: the extension registers pi's own bash tool again, its
+// spawn hook leaving those names, and every name under a withheld prefix, out
 // of every command's environment and keeping the rest (a seat's own tool
-// credentials among them); a run naming none leaves pi's bash tool as it is.
+// credentials among them); a run withholding nothing leaves pi's bash tool as
+// it is.
 // The same, in a real 1.6.0 run: TestAPiRunsShellRunsWithoutItsSignIn.
 //
-// Mutation: hand the hook's environment back whole, or drop the
-// registration: this goes red.
+// Mutation: hand the hook's environment back whole, drop the prefixes, or
+// drop the registration: this goes red.
 func TestThePiExtensionRunsTheShellWithoutTheSignIn(t *testing.T) {
 	t.Parallel()
-	p := startPiProbe(t, piExtensionSettings{Withheld: []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY"}})
+	p := startPiProbe(t, piExtensionSettings{Withheld: []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY"},
+		WithheldPrefixes: piShellWithout})
 	if r := p.expect("tool"); r.Name != "bash" {
 		t.Fatalf("the extension registered %q, want pi's bash tool", r.Name)
 	}
 	p.expect("loaded")
 	p.send(map[string]any{"op": "spawn", "name": "bash", "env": map[string]string{"ANTHROPIC_API_KEY": "sk-ant-x",
-		"OPENAI_API_KEY": "sk-y", "GITHUB_TOKEN": "ghs_z", "PATH": "/bin"}})
-	if got := p.expect("spawned").Names; len(got) != 2 || got[0] != "GITHUB_TOKEN" || got[1] != "PATH" {
+		"OPENAI_API_KEY": "sk-y", "GITHUB_TOKEN": "ghs_z", "PATH": "/bin",
+		"OTEL_EXPORTER_OTLP_ENDPOINT": "https://otel.example.com", "OTEL_EXPORTER_OTLP_HEADERS": "authorization=x",
+		"OTEL_SERVICE_NAME": "crewlet"}})
+	if got := p.expect("spawned").Names; len(got) != 3 || got[0] != "GITHUB_TOKEN" || got[1] != "OTEL_SERVICE_NAME" ||
+		got[2] != "PATH" {
 		t.Fatalf("the shell's environment holds %v", got)
 	}
 
