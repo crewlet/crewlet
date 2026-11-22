@@ -170,17 +170,14 @@ func (b *transcriptBuilder) copilotCalls(raw json.RawMessage, at time.Time) erro
 }
 
 // copilotNotesHeld is the inbox ids of takes, in serve order and once each,
-// whose note a session's events.jsonl shows reached the model (Digest unread:
-// the record names a note by its id): its `user.message`
-// under its clientTurnId ([CopilotClientTurnID]), delivered `steering` or
-// `queued`, AND a `session.usage_record` after it, a request made with it.
-//
-// THE LINE ALONE IS NO PROOF (ruling 1 of #1818's design, measured on 1.0.114):
-// Copilot writes it before the request it rides, flushing about every 100 ms, so
-// a process killed in that gap leaves the line and no request, and a request
-// refused before it was sent leaves it and a `session.error`. A LAST LINE WITH NO
-// NEWLINE is a write cut off, so a usage record there proves nothing, whole or
-// not; a line past the line bound is read as no line.
+// whose note a session's events.jsonl shows reached the model as a current
+// message: its `user.message` under its clientTurnId ([CopilotClientTurnID]),
+// `steering` or `queued`, then a `session.usage_record` with no applied
+// compaction between, since a queued note's line precedes its turn's
+// compaction, which can leave it only in the summary (ADR-0177; measured on
+// 1.0.114, compacted-queued). The line alone is no proof (ruling 1 of #1818's
+// design): a kill or a refusal can follow it before any request. A last line
+// with no newline is a write cut off; a line past the bound is no line.
 func copilotNotesHeld(ctx context.Context, events io.Reader, takes []ServedTake) ([]string, error) {
 	asked := make(map[string]string, len(takes))
 	for _, take := range takes {
@@ -215,6 +212,12 @@ func copilotNotesHeld(ctx context.Context, events io.Reader, takes []ServedTake)
 				}
 			}
 			clear(pending)
+		case "session.compaction_complete":
+			// Past an applied compaction, a request may carry the note only
+			// inside its summary.
+			if looseTrue(ev.Data.Success) {
+				clear(pending)
+			}
 		}
 		return nil
 	}, func(int64) error { moved = moved[:0]; return nil })

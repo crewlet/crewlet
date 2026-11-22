@@ -404,6 +404,22 @@ func TestACopilotQueuedNoteIsHeldOnceARequestCarriedIt(t *testing.T) {
 	}
 }
 
+// A request past a compaction holds no note whose line came before the
+// compaction: Copilot can leave such a note only inside the summary, as
+// history (ADR-0177). compacted-queued (1.0.114, a BYOK stand-in near its
+// compaction point): note 1 lands queued before its turn's compaction; notes 2
+// and 3 land steering after it, then the request.
+//
+// Mutation: let a request past an applied compaction hold the note before
+// it — note 1 is held.
+func TestACopilotNoteIsNotHeldPastACompaction(t *testing.T) {
+	held, err := copilotNotesHeld(t.Context(), bytes.NewReader(copilotFixture(t, "compacted-queued.events.jsonl")),
+		served("msg_inbox1", "msg_inbox2", "msg_inbox3"))
+	if err != nil || !slices.Equal(held, []string{"msg_inbox2", "msg_inbox3"}) {
+		t.Fatalf("held = %v (%v), want notes 2 and 3, not note 1 past the compaction", held, err)
+	}
+}
+
 // A torn last line proves nothing: a usage record cut off mid-write, or one
 // written whole but for its newline, does not hold the note before it.
 // (steered: the note's line, then its request's usage record, then more.)
