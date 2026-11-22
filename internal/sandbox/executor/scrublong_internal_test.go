@@ -709,7 +709,7 @@ func scrubBoundShapes(t *testing.T) {
 // liveBytesChildTimeout is the child's own hang detector: 25 minutes, 1.9
 // times its slowest measured run (775 s under -race on a two-core slot, where
 // CI's four-vCPU runners took 520 s for twice the readings), and under make
-// test's 30, so a child that hangs fails with its own goroutine dump.
+// test's 45, so a child that hangs fails with its own goroutine dump.
 const liveBytesChildTimeout = 25 * time.Minute
 
 const (
