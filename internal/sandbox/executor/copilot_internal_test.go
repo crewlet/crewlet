@@ -1274,10 +1274,12 @@ func TestCopilotWriteConfigWritesItsHomeAndKeepsTheLogin(t *testing.T) {
 
 // A run with neither notes nor a cap is written no extension, and what an
 // earlier run wrote in the home is the clear's to remove: the instructions,
-// the extension, a fresh session's copy and the tool environment file.
+// a fresh session's copy, the tool environment file and every place Copilot
+// loads configuration from that the launch does not write, the extensions
+// directory among them ([Paths.CopilotLoaded]).
 //
-// Mutation: drop the extension's directory from the artifacts, or write the
-// extension for every run — the case fails.
+// Mutation: drop the loaded places from the artifacts, or write the extension
+// for every run, and the case fails.
 func TestACopilotRunsArtifactsAreItsHomesOwnFiles(t *testing.T) {
 	box := sandbox.NewFakeSandbox("b")
 	paths := PathsFor(box)
@@ -1288,9 +1290,10 @@ func TestACopilotRunsArtifactsAreItsHomesOwnFiles(t *testing.T) {
 		t.Error("an extension was written for a run with no notes and no cap")
 	}
 	files, dirs := (Copilot{}).artifacts(paths)
-	if !slices.Equal(files, []string{paths.CopilotInstructions(), paths.CopilotExtensionFresh(),
-		paths.CopilotToolEnv()}) ||
-		!slices.Equal(dirs, []string{paths.CopilotExtension()}) {
+	loadedFiles, loadedDirs := paths.CopilotLoaded()
+	if !slices.Equal(files, append([]string{paths.CopilotInstructions(), paths.CopilotExtensionFresh(),
+		paths.CopilotToolEnv()}, loadedFiles...)) ||
+		!slices.Equal(dirs, loadedDirs) || !slices.Contains(dirs, paths.CopilotHome()+"/extensions") {
 		t.Fatalf("artifacts = %v, %v", files, dirs)
 	}
 }
