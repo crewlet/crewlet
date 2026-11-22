@@ -50,10 +50,7 @@ func argsDigest(call growth.Call) string {
 // its target's before-state's digest and what it changes there.
 func (h Held) record(c *Client, call growth.Call, class growth.Class) growth.Record {
 	r := c.Record(call, h.Req, class)
-	if len(h.Before) > 0 {
-		sum := sha256.Sum256(h.Before)
-		r.Before = hex.EncodeToString(sum[:])
-	}
+	r.Before = digest(h.Before)
 	changes := make([]growth.RecordChange, 0, len(h.changes()))
 	for _, ch := range h.changes() {
 		rc := RecordChange(ch)
@@ -63,6 +60,15 @@ func (h Held) record(c *Client, call growth.Call, class growth.Class) growth.Rec
 	}
 	r.Changes = accessdomain.RecordableGrowthChanges(changes)
 	return r
+}
+
+// digest is a before-state's SHA-256, "" where the target held none.
+func digest(before []byte) string {
+	if len(before) == 0 {
+		return ""
+	}
+	sum := sha256.Sum256(before)
+	return hex.EncodeToString(sum[:])
 }
 
 // textWords are the words of a field's name that say it holds somebody's

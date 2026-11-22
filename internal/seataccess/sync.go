@@ -1055,6 +1055,14 @@ func LaneName(lane Lane) string {
 		return "Google Analytics"
 	case LaneAdMob:
 		return "AdMob"
+	case LaneAdSense:
+		return "AdSense"
+	case LaneGoogleAds:
+		return "Google Ads"
+	case LaneSearchConsole:
+		return "Search Console"
+	case LaneGooglePlay:
+		return "Google Play"
 	default:
 		return string(lane)
 	}

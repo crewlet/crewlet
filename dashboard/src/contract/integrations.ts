@@ -219,6 +219,10 @@ export const INTEGRATION_TOOLS = {
   apple_ads: ["apple_ads"],
   google_analytics: ["google_analytics"],
   admob: ["admob"],
+  adsense: ["adsense"],
+  google_ads: ["google_ads"],
+  search_console: ["search_console"],
+  google_play: ["google_play"],
 } as const;
 
 /**

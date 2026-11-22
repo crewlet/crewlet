@@ -68,8 +68,12 @@ func (e *Engine) setupPasses() []setup.Pass {
 		&metaAdsPass{engine: e},
 		&appStoreConnectPass{engine: e},
 		&appleAdsPass{engine: e},
-		&googleAnalyticsPass{engine: e},
+		&googleGrowthPass{engine: e, kind: integration.KindGoogleAnalytics, name: "Google Analytics"},
+		&googleGrowthPass{engine: e, kind: integration.KindGoogleAds, name: "Google Ads"},
 		&adMobPass{engine: e},
+		&adSensePass{engine: e},
+		&googleGrowthPass{engine: e, kind: integration.KindSearchConsole, name: "Search Console"},
+		&googleGrowthPass{engine: e, kind: integration.KindGooglePlay, name: "Google Play"},
 		&atlassianPass{engine: e},
 	}
 }

@@ -1,6 +1,7 @@
 package googleauth_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -200,6 +201,41 @@ func TestACallersMistakeIsNeverHeldAsAGoogleRefusal(t *testing.T) {
 	}
 }
 
+// AN API'S OWN HEADER RIDES THE CALL AND NEVER STANDS IN FOR THE ENGINE'S: a
+// manager's login-customer-id reaches Google, and an Authorization header a
+// product sets is dropped for the bearer the engine minted.
+//
+// Mutation: set the product's headers after the engine's, and the forged
+// bearer is sent.
+func TestAnAPIsHeaderRidesTheCallButNeverTheBearer(t *testing.T) {
+	t.Parallel()
+	f, conn := newFake(t)
+	token, _, err := conn.SeatToken(t.Context(), seatAccount, []string{analytics}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = conn.Send(t.Context(), googleauth.Call{Method: http.MethodGet,
+		Address: "https://analyticsdata.googleapis.com/v1beta/x", Bearer: token, Reads: true,
+		Header: http.Header{"Login-Customer-Id": {"9876543210"}, "Authorization": {"Bearer forged"}}}, nil)
+	if err != nil {
+		t.Fatalf("a call carrying an API's header answered %v", err)
+	}
+	// A CALL WITH NO BEARER sends no Authorization, whatever the API's headers say.
+	_ = conn.Send(t.Context(), googleauth.Call{Method: http.MethodGet,
+		Address: "https://analyticsdata.googleapis.com/v1beta/x", Reads: true,
+		Header: http.Header{"Authorization": {"Bearer forged"}}}, nil)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	seen := f.seen[len(f.seen)-2]
+	if seen.Get("Login-Customer-Id") != "9876543210" || seen.Get("Authorization") != "Bearer "+token {
+		t.Errorf("Google read login-customer-id %q and authorization %q", seen.Get("Login-Customer-Id"),
+			seen.Get("Authorization"))
+	}
+	if bare := f.seen[len(f.seen)-1]; bare.Get("Authorization") != "" {
+		t.Errorf("a call with no bearer sent authorization %q", bare.Get("Authorization"))
+	}
+}
+
 // roundTrip is a transport answering every request with what it says.
 type roundTrip func(*http.Request) (*http.Response, error)
 
@@ -238,5 +274,36 @@ func TestAFailedRequestNeverQuotesItsQuery(t *testing.T) {
 	err = conn.Do(t.Context(), http.MethodGet, address+"\x7f", "", nil, nil)
 	if err == nil || strings.Contains(err.Error(), secret) {
 		t.Errorf("a request that could not be built answered %q, which quotes the secret", err)
+	}
+}
+
+// A FILE RIDES AS ITSELF AND A DOWNLOAD IS STREAMED: a Bytes body reaches
+// Google with its own content type and nothing re-encoded, and an answer read
+// into a writer arrives there whole, never decoded.
+//
+// Mutation: JSON-encode every body, and the upload's content type is
+// application/json.
+func TestAFileRidesAsItselfAndADownloadIsStreamed(t *testing.T) {
+	t.Parallel()
+	f, conn := newFake(t)
+	token, _, err := conn.SeatToken(t.Context(), seatAccount, []string{analytics}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got bytes.Buffer
+	err = conn.Send(t.Context(), googleauth.Call{Method: http.MethodPost,
+		Address: "https://analyticsdata.googleapis.com/v1beta/x?uploadType=media", Bearer: token,
+		Body: googleauth.Bytes{ContentType: "image/png", Data: []byte("\x89PNG")}}, &got)
+	if err != nil {
+		t.Fatalf("an upload answered %v", err)
+	}
+	f.mu.Lock()
+	seen := f.seen[len(f.seen)-1]
+	f.mu.Unlock()
+	if seen.Get("Content-Type") != "image/png" {
+		t.Errorf("Google read content type %q", seen.Get("Content-Type"))
+	}
+	if !strings.Contains(got.String(), `"rowCount":1`) {
+		t.Errorf("the streamed answer is %q", got.String())
 	}
 }
