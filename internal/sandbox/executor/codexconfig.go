@@ -146,6 +146,16 @@ func codexShellExcluded(req sandbox.RunRequest) ([]string, error) {
 	return append(names, codexTelemetryEnv), nil
 }
 
+// codexRunHome is what a Codex run may load from the box that its launch did
+// not write ([runHome]), measured on 0.171.0 and read off rust-v0.171.0:
+// CODEX_HOME's AGENTS.md, AGENTS.override.md and rules, and its .env (loaded
+// as Codex starts); the home's .agents/skills; and the working directory's
+// AGENTS.override.md or AGENTS.md (its own project root where no .git is
+// above it) and its .codex/ (a project configuration layer). CODEX_HOME's
+// skills are the skill writer's ([writeCodexSkills]), which keeps `.system`.
+var codexRunHome = runHome{State: ".codex", Owned: []string{"AGENTS.md", "AGENTS.override.md", "rules", ".env"},
+	Memory: []string{"AGENTS.md", "AGENTS.override.md"}, Outside: []string{".agents/skills"}}
+
 // tomlString is s as a TOML basic string: `"` and `\` escaped, every control
 // character as an escape, and bytes that are not UTF-8 as U+FFFD, which TOML
 // would refuse.
@@ -208,10 +218,11 @@ func codexBoxArch(machine string) (string, error) {
 		"helper for x86_64 and aarch64 alone", strconv.Quote(strings.TrimSpace(machine)))
 }
 
-// WriteConfig writes what a Codex run starts from: its configuration
-// ([codexConfigTOML]) for the session it was asked to work in and, where it
-// was handed two wirings, for one of its own; for a run wired to its notes,
-// the note helper's build for the box and its notes route
+// WriteConfig removes what the box holds for Codex that its launch did not
+// write ([codexRunHome]) and writes what a Codex run starts from: its
+// configuration ([codexConfigTOML]) for the session it was asked to work in
+// and, where it was handed two wirings, for one of its own; for a run wired
+// to its notes, the note helper's build for the box and its notes route
 // ([Paths.CodexNotesURL]); and its own skills ([writeCodexSkills]). It
 // writes no path the harness is pointed at: the script moves the
 // configuration into place once the session is settled ([codexSessionGate]).
@@ -221,6 +232,9 @@ func codexBoxArch(machine string) (string, error) {
 func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
 	paths Paths) (string, error) {
 	if _, err := codexShellExcluded(req); err != nil {
+		return "", err
+	}
+	if err := codexRunHome.prune(ctx, box, paths.Home, "Codex"); err != nil {
 		return "", err
 	}
 	if n := len(paths.CodexSocket()); n > maxCodexSocketPath {

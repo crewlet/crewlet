@@ -1,69 +1,56 @@
 package executor_test
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/sandbox/executor"
-	"github.com/crewlet/crewlet/internal/shellword"
 )
 
-// A CODEX RUN STARTS FROM ITS LAUNCH'S OWN INSTRUCTIONS, RULES AND SKILLS:
-// whatever its box's home held before the run at each place a run on 0.171.0
-// reads as it starts ([executor.Paths.CodexStartsWithout]: CODEX_HOME's
-// AGENTS.md and AGENTS.override.md, its rules, the home's .agents/skills) is
-// gone when Codex starts, and CODEX_HOME's skills are the run's own beside
-// Codex's `.system`, every other entry cleared, an earlier run's included.
+// A CODEX RUN LOADS ONLY WHAT ITS LAUNCH WRITES. A real box whose home holds
+// everything Codex 0.171.0 reads that a launch does not write (CODEX_HOME's
+// AGENTS.md, AGENTS.override.md, rules and .env; the home's .agents/skills;
+// the working directory's AGENTS.md, AGENTS.override.md and .codex/; skills
+// under CODEX_HOME/skills, an earlier run's included): as its run starts each
+// is gone; the login, the sessions, Codex's own `.system` skills and a
+// checkout's AGENTS.md are whole; nothing above the home is touched; the
+// working directory is left no `.codex/.env`, Codex walking for none; and the
+// skills are the run's own beside `.system`.
 //
-// Mutation: drop any path from CodexStartsWithout or the script's removal, or
-// clear only the engine's namespace from the skills, and this goes red.
-func TestACodexRunStartsFromItsLaunchsOwnInstructionsRulesAndSkills(t *testing.T) {
+// Mutations, each red: drop an entry from codexRunHome; prune only the
+// engine's skills; seed an .env for Codex.
+func TestACodexRunLoadsOnlyWhatItsLaunchWrites(t *testing.T) {
 	t.Parallel()
-	runner, box, record := codexBox(t, "0.171.0")
-	p := executor.PathsFor(box)
-	starts := p.CodexStartsWithout()
-	if len(starts) != 4 {
-		t.Fatalf("a run starts without %q, want the four places a run reads as it starts", starts)
+	c := homeCase{
+		left: []string{".codex/AGENTS.md", ".codex/AGENTS.override.md", ".codex/rules/kept.rules", ".codex/.env",
+			".agents/skills/kept/SKILL.md", "AGENTS.md", "AGENTS.override.md", "workspace/AGENTS.md",
+			"workspace/AGENTS.override.md", "workspace/.codex/config.toml", ".codex/skills/kept/SKILL.md",
+			".codex/skills/crewlet:old/SKILL.md"},
+		kept: []string{".codex/auth.json", ".codex/sessions/2026/11/01/rollout-2026-11-01T09-00-00-kept.jsonl",
+			".codex/skills/.system/kept/SKILL.md", "workspace/checkout/AGENTS.md"},
 	}
-	for _, path := range starts {
-		file := path
-		if !strings.HasSuffix(path, ".md") {
-			file = path + "/left/SKILL.md"
-		}
-		if err := box.WriteFile(t.Context(), file, []byte("left before the run\n")); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, name := range []string{"left", "crewlet:old", ".system"} {
-		if err := box.WriteFile(t.Context(), p.CodexSkills()+"/"+name+"/SKILL.md", []byte("x\n")); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// WHAT CODEX FINDS AS IT STARTS, recorded by its app-server's stand-in.
-	quoted := make([]string, len(starts))
-	for i, path := range starts {
-		quoted[i] = shellword.Quote(path)
-	}
-	look := `for f in ` + strings.Join(quoted, " ") + `; do [ ! -e "$f" ] || echo "$f"; done > "$rec/left"` + "\n" +
-		`  ls -A "$CODEX_HOME/skills" > "$rec/skills"` + "\n"
-	path := p.BinDir() + "/codex"
-	standIn := boxFile(t, box, path)
-	if !strings.Contains(standIn, "\napp-server)\n") {
-		t.Fatal("the codex stand-in has no app-server branch")
-	}
-	writeBoxStandIn(t, box, path, strings.Replace(standIn, "\napp-server)\n", "\napp-server)\n  "+look, 1))
-
+	runner, box, _ := codexBox(t, "0.171.0")
+	above := fillHome(t, box, c)
 	_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go",
 		Skills: []sandbox.Skill{{Name: "deploy", Description: "How we deploy.", Body: "Run make deploy."}}})
 	if !res.Success {
 		t.Fatalf("the run failed: %s", res.Error)
 	}
-	if left := strings.Join(recorded(t, record, "left"), " "); left != "" {
-		t.Errorf("Codex started beside %s, left in its home before the run", left)
+	checkHome(t, box, c, above)
+	if _, err := os.Stat(filepath.Join(box.Home(), "workspace", ".codex")); !os.IsNotExist(err) {
+		t.Errorf("the working directory holds a .codex/ (%v), which Codex walks for no .env of", err)
 	}
-	if skills := recorded(t, record, "skills"); !slices.Equal(skills, []string{".system", "crewlet:deploy"}) {
-		t.Errorf("Codex started with the skills %q, want the run's own beside .system", skills)
+	entries, err := os.ReadDir(filepath.Join(box.Home(), ".codex", "skills"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var skills []string
+	for _, e := range entries {
+		skills = append(skills, e.Name())
+	}
+	if !slices.Equal(skills, []string{".system", "crewlet:deploy"}) {
+		t.Errorf("the run's Codex home holds the skills %q, want the run's own beside .system", skills)
 	}
 }
