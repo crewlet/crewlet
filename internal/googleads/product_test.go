@@ -920,3 +920,47 @@ func TestABudgetRecommendationAppliedIsHeldToTheCaps(t *testing.T) {
 		t.Fatalf("a budget recommendation at Google's amount is held as %s, %v", hold.Class, err)
 	}
 }
+
+// A CUSTOMER NAMED ALONE IS HELD TO THE CALL'S ACCOUNT, except where the
+// method's purpose is to name another: another account named as a resource
+// of the account itself is refused before Google, while a manager linking a
+// client, or a client moving to a new manager, names it.
+//
+// Mutation: match full resource names alone, or allow another account at any
+// path of an exempt method, and the call reaches another account.
+func TestACustomerNamedAloneIsHeldToTheCallsAccount(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	call := func(id string, body map[string]any) growth.Call {
+		return growth.Call{Handle: "growth-lead", Tool: "google_ads_admin", Args: map[string]any{"operation": id,
+			"path": map[string]any{"customersId": customer}, "body": body}}
+	}
+	for name, c := range map[string]growth.Call{
+		"another account renamed": call("googleads.customers.mutate", map[string]any{"operation": map[string]any{
+			"update":     map[string]any{"resourceName": "customers/9999999999", "descriptiveName": "x"},
+			"updateMask": "descriptiveName"}}),
+		"another account outside the field": call("googleads.customers.customerClientLinks.mutate",
+			map[string]any{"operation": map[string]any{"create": map[string]any{"clientCustomer": "customers/1",
+				"hidden": "customers/9999999999"}}}),
+	} {
+		if _, err := w.p.Prepare(t.Context(), c); !refused(err) || !strings.Contains(err.Error(), "9999999999") {
+			t.Errorf("%s answered %v", name, err)
+		}
+	}
+	for name, c := range map[string]growth.Call{
+		"a client linked": call("googleads.customers.customerClientLinks.mutate", map[string]any{
+			"operation": map[string]any{"create": map[string]any{"clientCustomer": "customers/9999999999"}}}),
+		"a manager moved to": call("googleads.customers.customerManagerLinks.moveManagerLink", map[string]any{
+			"customerId": customer, "newManager": "customers/9999999999",
+			"previousCustomerManagerLink": "customers/1234567890/customerManagerLinks/1112223334~5"}),
+	} {
+		if hold, err := w.p.Prepare(t.Context(), c); err != nil || hold.Class != growth.ClassAdmin {
+			t.Errorf("%s is held as %s, %v", name, hold.Class, err)
+		}
+	}
+	for _, c := range pathsCalled(w.f) {
+		if strings.Contains(c, "9999999999") || !strings.HasSuffix(c, "googleAds:search") {
+			t.Errorf("Google was asked %s", c)
+		}
+	}
+}
