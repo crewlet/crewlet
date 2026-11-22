@@ -18,6 +18,9 @@ type signInCase struct {
 	auth  Auth
 	// files writes a credential file into the shared directory first.
 	files bool
+	// overrides change the agent's built-in profile, for a case about a
+	// profile no built-in is.
+	overrides map[string]any
 
 	signedIn bool
 	// line is a fragment the sign-in line must carry when signed in, and
@@ -96,12 +99,23 @@ func signInCases() []signInCase {
 			without: "run `crewlet llm login sub`",
 		},
 		{
-			// Qwen Code keeps no login of its own — both measured builds
-			// refuse the OAuth login it once kept — so there is nothing to
-			// adopt or broker: its key is the sign-in.
+			// A harness that keeps no login of its own (Qwen Code with its
+			// paid login taken out) has nothing to adopt or broker: its key
+			// is the sign-in.
 			name: "a harness that keeps no login", agent: "qwen-code",
-			problem: "set auth.mode: api-key and give the key as auth.api_key (the harness reads it from OPENAI_API_KEY)",
-			without: "-from-host",
+			overrides: map[string]any{"credential_paths": []any{}, "subscription_args": []any{}},
+			problem:   "set auth.mode: api-key and give the key as auth.api_key (the harness reads it from OPENAI_API_KEY)",
+			without:   "-from-host",
+		},
+		{
+			// Qwen Code's paid login is made with the harness by hand: the
+			// route is adopting it.
+			name: "Qwen Code's paid login, not adopted", agent: "qwen-code",
+			problem: "`crewlet llm login sub -from-host`",
+		},
+		{
+			name: "Qwen Code's paid login on disk", agent: "qwen-code", files: true,
+			signedIn: true, line: "credential files in",
 		},
 		{
 			// The operator wrote a token reference; that it resolved to
@@ -148,7 +162,7 @@ func newSignInProvider(t *testing.T, c signInCase) *Provider {
 		Key: "sub", Harness: c.agent, StateDir: dir, Timeout: time.Second, MaxConcurrent: 1,
 		// No binary to run: the version probe is skipped and the sign-in
 		// is judged on configuration and files alone.
-		Overrides: map[string]any{"binary": "crewlet-no-such-cli-binary"},
+		Overrides: overridesWith(map[string]any{"binary": "crewlet-no-such-cli-binary"}, c.overrides),
 		Env:       c.env, Auth: auth,
 	})
 	if err != nil {
@@ -165,6 +179,14 @@ func newSignInProvider(t *testing.T, c signInCase) *Provider {
 		}
 	}
 	return p
+}
+
+// overridesWith is base with more over it.
+func overridesWith(base, more map[string]any) map[string]any {
+	for k, v := range more {
+		base[k] = v
+	}
+	return base
 }
 
 // checkSignIn asserts the doctor's verdict and the list's agree, and that the

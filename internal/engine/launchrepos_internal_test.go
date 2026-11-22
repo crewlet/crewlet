@@ -1013,8 +1013,8 @@ func TestALaunchIsGivenGitWhereGitletIsServed(t *testing.T) {
 // A BOX IS CONFIGURED BY ENVIRONMENT (ADR-0093), the one [Engine.boxGitEnv]
 // gives every executor launch on a node serving Gitlet (its
 // [sandbox.LaunchRequest.RunEnv]): a token Gitlet verifies for exactly this
-// launch, Gitlet's base, and git's configuration as exactly the engine's seven
-// entries in order — the helper reset first, the seat's identity as an
+// launch, Gitlet's base, and git's configuration as exactly the engine's own —
+// the helper reset and the helper as git's parameters, the seat's identity as an
 // engine-built commit names it (a role with no email on the identity domain),
 // protocol v2, and the index settings measured to speed a wide checkout's
 // status. A second launch carries its own token. The variables beyond git's
@@ -1047,9 +1047,13 @@ func TestABoxIsConfiguredByEnvironment(t *testing.T) {
 					t.Errorf("%s=%q, want %q", sandbox.GitURLVar, env[sandbox.GitURLVar], base)
 				}
 				helper := `!f() { test "$1" = get || return 0; printf 'username=run\npassword=%s\n' "$CREWLET_GIT_TOKEN"; }; f`
+				scope := "credential." + base + "/.helper"
+				credential := sandbox.GitConfigParameter(scope, "") + " " + sandbox.GitConfigParameter(scope, helper)
+				if want := credential; env[sandbox.GitConfigParametersVar] != want {
+					t.Errorf("%s=%q, want the helper's reset and the helper, %q", sandbox.GitConfigParametersVar,
+						env[sandbox.GitConfigParametersVar], want)
+				}
 				want := [][2]string{
-					{"credential." + base + "/.helper", ""},
-					{"credential." + base + "/.helper", helper},
 					{"user.name", tc.name},
 					{"user.email", tc.email},
 					{"protocol.version", "2"},
@@ -1095,12 +1099,13 @@ func TestABoxIsConfiguredByEnvironment(t *testing.T) {
 }
 
 // THE OPERATOR'S GIT CONFIGURATION IS KEPT: a run environment's proxy at
-// GIT_CONFIG entry 0 stays there, the engine's seven appended and the count
-// eight; a count naming an entry the env does not set is refused, naming it,
-// since git refuses a configuration with a hole and every clone would fail.
+// GIT_CONFIG entry 0 stays there, the engine's five appended and the count
+// six, and its own GIT_CONFIG_PARAMETERS item stays ahead of the engine's
+// credential; a count naming an entry the env does not set is refused, naming
+// it, since git refuses a configuration with a hole and every clone would fail.
 //
-// Mutation: overwrite the operator's entries rather than append → the proxy
-// gone, red.
+// Mutations, each red: overwrite the operator's entries rather than append
+// (the proxy gone); replace its parameters rather than append to them.
 func TestTheOperatorsGitConfigIsKept(t *testing.T) {
 	t.Parallel()
 	const base = "https://git.example.com/box/git"
@@ -1108,7 +1113,8 @@ func TestTheOperatorsGitConfigIsKept(t *testing.T) {
 	seat := rig.c.Org.AgentSeatByHandle("swe")
 	ref := host.BoxRunRef{TurnID: statelog.NewOpID(time.Now(), ""), LaunchID: uuid.NewString()}
 	env, err := rig.e.boxGitEnv(seat, base, ref, map[string]string{"GIT_CONFIG_COUNT": "1",
-		"GIT_CONFIG_KEY_0": "http.proxy", "GIT_CONFIG_VALUE_0": "http://proxy.example.com:3128"})
+		"GIT_CONFIG_KEY_0": "http.proxy", "GIT_CONFIG_VALUE_0": "http://proxy.example.com:3128",
+		sandbox.GitConfigParametersVar: "'http.lowSpeedLimit=1'"})
 	if err != nil {
 		t.Fatalf("boxGitEnv: %v", err)
 	}
@@ -1116,11 +1122,15 @@ func TestTheOperatorsGitConfigIsKept(t *testing.T) {
 	// operator's proxy stays there and the count covers it.
 	_, overwrote := env["GIT_CONFIG_KEY_0"]
 	_, overwroteValue := env["GIT_CONFIG_VALUE_0"]
-	if env["GIT_CONFIG_COUNT"] != "8" || overwrote || overwroteValue ||
-		env["GIT_CONFIG_KEY_1"] != "credential."+base+"/.helper" || env["GIT_CONFIG_KEY_5"] != "protocol.version" ||
-		env["GIT_CONFIG_KEY_7"] != "core.untrackedCache" {
-		t.Errorf("the box's git configuration adds %v, want the proxy kept at 0 and the engine's seven at 1..7",
+	if env["GIT_CONFIG_COUNT"] != "6" || overwrote || overwroteValue ||
+		env["GIT_CONFIG_KEY_1"] != "user.name" || env["GIT_CONFIG_KEY_3"] != "protocol.version" ||
+		env["GIT_CONFIG_KEY_5"] != "core.untrackedCache" {
+		t.Errorf("the box's git configuration adds %v, want the proxy kept at 0 and the engine's five at 1..5",
 			env)
+	}
+	if got := env[sandbox.GitConfigParametersVar]; !strings.HasPrefix(got, "'http.lowSpeedLimit=1' 'credential.") {
+		t.Errorf("%s=%q, want the operator's item kept ahead of the engine's credential",
+			sandbox.GitConfigParametersVar, got)
 	}
 	_, err = rig.e.boxGitEnv(seat, base, ref, map[string]string{"GIT_CONFIG_COUNT": "2",
 		"GIT_CONFIG_KEY_0": "http.proxy", "GIT_CONFIG_VALUE_0": "http://proxy.example.com:3128"})

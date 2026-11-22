@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -61,5 +62,36 @@ func TestACheckBoxGitNamesNobody(t *testing.T) {
 		if _, err := half.Env(nil); err == nil {
 			t.Errorf("an identity of name %q and email %q was given", half.Name, half.Email)
 		}
+	}
+}
+
+// A BOX'S GITLET CREDENTIAL RIDES GIT_CONFIG_PARAMETERS, AFTER THE RUN'S OWN:
+// the helper's reset and the helper are its last two items, quoted as git
+// reads them, the run environment's items ahead of them; no count entry names
+// a credential helper; and a base holding '=', which an item cannot name, is
+// refused naming CREWLET_BOX_GIT_URL.
+//
+// Mutations, each red: keep the helper in GIT_CONFIG_COUNT; replace the run's
+// items; drop the '=' refusal.
+func TestABoxsGitletCredentialRidesGitConfigParameters(t *testing.T) {
+	t.Parallel()
+	const base = "https://git.example.com/box/git"
+	env, err := BoxGit{Base: base, User: "run", Token: "t"}.Env(map[string]string{
+		GitConfigParametersVar: "'http.lowSpeedLimit=1'"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := "credential." + base + "/.helper"
+	want := "'http.lowSpeedLimit=1' '" + scope + "=' '" + scope +
+		`='\!'f() { test "$1" = get || return 0; printf '\''username=run\npassword=%s\n'\'' "$CREWLET_GIT_TOKEN"; }; f'`
+	if got := env[GitConfigParametersVar]; got != want {
+		t.Errorf("%s=%q\nwant %q", GitConfigParametersVar, got, want)
+	}
+	if helpers, ok := gitConfigOf(t, env)[scope]; ok {
+		t.Errorf("a count entry still names the helper: %q", helpers)
+	}
+	if _, err := (BoxGit{Base: "https://git.example.com/box=git", User: "run", Token: "t"}).Env(nil); err == nil ||
+		!strings.Contains(err.Error(), BoxGitURLVar) {
+		t.Errorf("a base holding '=' answered %v, want it refused naming %s", err, BoxGitURLVar)
 	}
 }

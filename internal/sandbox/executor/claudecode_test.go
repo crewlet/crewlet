@@ -289,7 +289,7 @@ func TestTheSettingsFilesAreTheMeasuredShapes(t *testing.T) {
 	b := sandbox.NewFakeSandbox("box-1")
 	p := executor.PathsFor(b)
 	if _, err := (executor.ClaudeCode{}).WriteConfig(t.Context(), b,
-		sandbox.RunRequest{Brief: "x", Steer: steerWiring, Skills: handedSkills(), SkillLoads: skillWiring()},
+		sandbox.RunRequest{Brief: "x", Steer: steerWiring, Skills: handedSkills(), SkillLoads: skillWiring()}, executor.Session{},
 		p); err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
@@ -314,7 +314,7 @@ func TestTheSettingsFilesAreTheMeasuredShapes(t *testing.T) {
 	// every step for nothing. It still has every run's settings.
 	plain := sandbox.NewFakeSandbox("box-2")
 	if _, err := (executor.ClaudeCode{}).WriteConfig(t.Context(), plain,
-		sandbox.RunRequest{Brief: "x"}, executor.PathsFor(plain)); err != nil {
+		sandbox.RunRequest{Brief: "x"}, executor.Session{}, executor.PathsFor(plain)); err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
 	shape(t, plain, executor.PathsFor(plain).ClaudeSettings(), every)
@@ -808,7 +808,7 @@ func TestNoSettingsFileHoldsAKeyNewerThanTheOldestReleaseItIsHanded(t *testing.T
 	b := &writesRecorded{FakeSandbox: sandbox.NewFakeSandbox("box-1")}
 	p := executor.PathsFor(b)
 	if _, err := claude().WriteConfig(t.Context(), b, sandbox.RunRequest{Brief: "x", Steer: steerWiring,
-		Skills: handedSkills(), SkillLoads: skillWiring()}, p); err != nil {
+		Skills: handedSkills(), SkillLoads: skillWiring()}, executor.Session{}, p); err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
 	// A pinned copy is handed from the later of its file's own floor and the
@@ -915,7 +915,7 @@ func TestEverySettingsFileHasAPinnedCopyHoldingTheEnginesCompactionPoint(t *test
 	p := executor.PathsFor(b)
 	const model = "claude-haiku-4-5"
 	if _, err := claude().WriteConfig(t.Context(), b, sandbox.RunRequest{Brief: "x", Model: model,
-		Steer: steerWiring, Skills: handedSkills(), SkillLoads: skillWiring()}, p); err != nil {
+		Steer: steerWiring, Skills: handedSkills(), SkillLoads: skillWiring()}, executor.Session{}, p); err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
 	pin := map[string]any{
@@ -972,7 +972,7 @@ func TestEveryPinnedSettingsCopyBlanksWhatMovesWhatAResumeHandsItsModel(t *testi
 	b := sandbox.NewFakeSandbox("box-1")
 	p := executor.PathsFor(b)
 	if _, err := claude().WriteConfig(t.Context(), b, sandbox.RunRequest{Brief: "x", Steer: steerWiring,
-		Skills: handedSkills(), SkillLoads: skillWiring()}, p); err != nil {
+		Skills: handedSkills(), SkillLoads: skillWiring()}, executor.Session{}, p); err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
 	for _, file := range []string{p.ClaudeSettingsPinned(), p.ClaudeSkillsSettingsPinned(), p.ClaudeNotesSettingsPinned()} {

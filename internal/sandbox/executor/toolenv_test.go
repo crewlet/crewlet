@@ -217,7 +217,7 @@ func TestASignInNameNoShellCanUnsetIsRefused(t *testing.T) {
 	req := sandbox.RunRequest{Brief: "x", SignInEnv: []string{"ANTHROPIC_API_KEY", "MY-KEY"}}
 	for _, h := range []executor.Harness{executor.ClaudeCode{}, executor.OpenCode{}} {
 		b := sandbox.NewFakeSandbox("box-1")
-		if _, err := h.WriteConfig(t.Context(), b, req, executor.PathsFor(b)); err == nil ||
+		if _, err := h.WriteConfig(t.Context(), b, req, executor.Session{}, executor.PathsFor(b)); err == nil ||
 			!strings.Contains(err.Error(), `"MY-KEY"`) {
 			t.Errorf("%s: WriteConfig = %v, want the name refused", h.Name(), err)
 		}

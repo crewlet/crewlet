@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -17,7 +18,7 @@ import (
 // Qwen Code 0.23.4 and 0.26.1 (see the profile's comments): a call offers the
 // web tools and nothing else, a seat's phases keep the harness's own system prompt
 // and a side pass replaces it, the answer and its token counts are read from
-// the result event, a key alone signs the harness in, nothing above the call's
+// the result event, a key or the paid login signs the harness in, nothing above the call's
 // directory configures it, and nothing a call leaves in the seat's home
 // reaches the next one.
 
@@ -91,9 +92,10 @@ func qwenStrings(t *testing.T, doc map[string]any, path string) []string {
 var qwenWebTools = []string{"web_fetch", "web_search"}
 
 // qwenMeasuredTools is every tool name Qwen Code 0.23.4 and 0.26.1 register
-// (their ToolNames tables), the web tools included.
+// (their ToolNames tables), the web tools included, and autofix_pr, which
+// 0.28.3 adds (its headless init lists it).
 var qwenMeasuredTools = []string{
-	"advisor", "agent", "artifact", "ask_user_question", "create_sub_session",
+	"advisor", "agent", "artifact", "ask_user_question", "autofix_pr", "create_sub_session",
 	"cron_create", "cron_delete", "cron_list", "display_image", "edit",
 	"enter_plan_mode", "enter_worktree", "exec", "exit_plan_mode", "exit_worktree",
 	"get_goal", "glob", "grep_search", "image_gen", "list_agents", "list_directory",
@@ -268,10 +270,10 @@ func TestQwenCodeIsConfiguredByTheCallAlone(t *testing.T) {
 
 // qwenPlainOutput reads the fake harness's stdout as the answer, for a case whose
 // fake reports what it was handed rather than printing the harness's events — and
-// so drops what reads those events on a run with tools: the request record and
-// the failure events, which a text stream does not carry.
+// so drops what reads those events: the request record, the failure events and
+// the limit events, which a text stream does not carry.
 var qwenPlainOutput = map[string]any{"output": "text", "event_type_path": []any{}, "text_events": []any{},
-	"requests": nil, "mcp": map[string]any{"failure_events": []any{}}}
+	"requests": nil, "mcp": map[string]any{"failure_events": []any{}}, "limit_events": []any{}}
 
 // qwenProvider is the shipped profile with the suite's fake harness in its place.
 func qwenProvider(t *testing.T, env map[string]string, overrides map[string]any, auth Auth) *Provider {
@@ -354,34 +356,64 @@ func TestQwenCodeSeatAppendsAndASidePassReplaces(t *testing.T) {
 	}
 }
 
-// A KEY ALONE SIGNS THE HARNESS IN. Qwen OAuth, the login the profile once
-// carried, is refused by both measured builds ("discontinued on 2026-04-15"),
-// so the harness's OpenAI-compatible sign-in is the one that runs: its key in
-// OPENAI_API_KEY and its endpoint in OPENAI_BASE_URL. That sign-in is chosen
-// on argv, because without it the harness picks one only when OPENAI_MODEL or
-// QWEN_MODEL is set too, and otherwise exits "No auth type is selected"; the
-// model comes from the entry, as for every harness.
-func TestQwenCodeSignsInWithAKeyAlone(t *testing.T) {
+// A KEY OR THE PAID LOGIN SIGNS THE HARNESS IN, EACH CHOSEN ON ARGV. A key
+// runs `--auth-type openai` where it always was (argv byte for byte as before
+// the login), its key in OPENAI_API_KEY; the login runs `--auth-type
+// qwen-subscription` in a home holding the adopted
+// subscription_credentials.json, whole. Without the flag the harness exits
+// "No auth type is selected" unless OPENAI_MODEL or QWEN_MODEL is set. The
+// login's file is its documented shape (0.28.3), NOT MEASURED against Qwen's
+// service.
+//
+// Mutations, each red: leave the sign-in flag in complete_args (a login call
+// signs in as openai); swap key_args and subscription_args; drop
+// credential_paths (no login is seeded); put the flag after the model.
+func TestQwenCodeSignsInByItsModeChosenOnArgv(t *testing.T) {
 	t.Parallel()
 	p := qwenCode(t)
 	if p.APIKeyEnv != "OPENAI_API_KEY" {
 		t.Errorf("api_key_env = %q, want OPENAI_API_KEY", p.APIKeyEnv)
 	}
-	if auth, ok := valueAfter(p.CompleteArgs, "--auth-type"); !ok || auth != "openai" {
-		t.Errorf("complete_args = %q, want --auth-type openai", p.CompleteArgs)
+	if !slices.Equal(p.CredentialPaths, []string{".qwen/subscription_credentials.json"}) {
+		t.Errorf("credential_paths = %q, want the subscription login's file", p.CredentialPaths)
 	}
-	if len(p.CredentialPaths) > 0 || len(p.HostCredentialPaths) > 0 {
-		t.Errorf("credential_paths = %q, host_credential_paths = %q: both builds refuse the "+
-			"Qwen OAuth login those files hold", p.CredentialPaths, p.HostCredentialPaths)
-	}
-	q := qwenProvider(t, map[string]string{"FAKE_REPORT_ENV": "OPENAI_API_KEY"},
+	keyed := qwenProvider(t, map[string]string{"FAKE_REPORT_ENV": "OPENAI_API_KEY"},
 		qwenPlainOutput, Auth{Mode: AuthAPIKey, APIKey: "sk-test"})
-	comp, err := ask(t, q, llm.Request{})
+	if got, want := keyed.argv(false), []string{"--output-format", "stream-json", "--approval-mode", "default",
+		"--auth-type", "openai", "--model", "qwen3-coder-plus"}; !slices.Equal(got, want) {
+		t.Errorf("a key's argv is %q, want %q", got, want)
+	}
+	comp, err := ask(t, keyed, llm.Request{})
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
 	if comp.Content != "OPENAI_API_KEY present=true" {
 		t.Errorf("the key did not reach the harness: %s", comp.Content)
+	}
+
+	login, err := os.ReadFile(filepath.Join("testdata", "qwen-code", "subscription_credentials.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub := qwenProvider(t, map[string]string{"FAKE_READ_UNDER_ENV": "HOME:.qwen/subscription_credentials.json"},
+		qwenPlainOutput, Auth{Mode: AuthSubscription})
+	if got, want := sub.argv(false), []string{"--output-format", "stream-json", "--approval-mode", "default",
+		"--auth-type", "qwen-subscription", "--model", "qwen3-coder-plus"}; !slices.Equal(got, want) {
+		t.Errorf("a login's argv is %q, want %q", got, want)
+	}
+	shared := sub.Workspace().CredentialsDir()
+	if err := os.MkdirAll(shared, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(shared, "subscription_credentials.json"), login, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	comp, err = ask(t, sub, llm.Request{})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if want := ".qwen/subscription_credentials.json=" + base64.StdEncoding.EncodeToString(login); !strings.Contains(comp.Content, want) {
+		t.Errorf("the login's call found %q, want the adopted login copied whole", comp.Content)
 	}
 }
 

@@ -56,8 +56,9 @@ type builtinEntry struct {
 	// on Linux (read from its bundle, and measured on Linux).
 	Platforms map[string]map[string]any `yaml:"platforms,omitempty"`
 	// Executor is the harness's runner facts, read apart from the profile
-	// ([ExecutorRunners]) and never merged with it.
-	Executor *Executor `yaml:"executor,omitempty"`
+	// ([ExecutorRunners]) and never merged with it: held raw here, so its one
+	// reader, [decodeExecutors], names the profile and the field of a fault.
+	Executor yaml.Node `yaml:"executor,omitempty"`
 }
 
 // decodeTable decodes a profile table as it reads on goos.
@@ -145,6 +146,8 @@ func (p Profile) Clone() Profile {
 	out.VersionArgs = append([]string(nil), p.VersionArgs...)
 	out.CompleteArgs = append([]string(nil), p.CompleteArgs...)
 	out.ModelArgs = append([]string(nil), p.ModelArgs...)
+	out.KeyArgs = append([]string(nil), p.KeyArgs...)
+	out.SubscriptionArgs = append([]string(nil), p.SubscriptionArgs...)
 	out.Effort = p.Effort.clone()
 	out.SystemPrompt = p.SystemPrompt.clone()
 	out.AppendSystemPrompt = p.AppendSystemPrompt.clone()
