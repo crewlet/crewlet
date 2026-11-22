@@ -716,7 +716,7 @@ func (l *writeLines[T]) attempt(ctx context.Context, kv jetstream.KeyValue, js j
 		if found {
 			_, err = kv.Update(ctx, key, encoded, revision)
 		} else {
-			_, err = createKey(ctx, js, kv, key, encoded)
+			_, err = createKey(ctx, js, kv, key, encoded, nil)
 		}
 		switch {
 		case err == nil:
