@@ -74,3 +74,26 @@ func TestTheRunsAroundARunAreListedByWhomEachWorksFor(t *testing.T) {
 		t.Errorf("the same requester's title is not one fence: %q", fences)
 	}
 }
+
+// EVERY RUN RELATION IS SAID, each in words of its own. A line names how
+// another seat's run bears on the caller's work, so a relation without words
+// would list the run as bearing on nothing, and two relations said alike (the
+// two ways a written record relates two runs) could not be told apart.
+//
+// Mutation: drop a relation's words, or say both written ways alike, and this
+// goes red.
+func TestEveryRunRelationIsSaid(t *testing.T) {
+	t.Parallel()
+	seen := map[string]RunRelation{}
+	for _, r := range RunRelations {
+		said := relationSaid[r]
+		if said == "" {
+			t.Errorf("relation %s has no words", r)
+			continue
+		}
+		if other, ok := seen[said]; ok {
+			t.Errorf("relations %s and %s are both said %q", other, r, said)
+		}
+		seen[said] = r
+	}
+}

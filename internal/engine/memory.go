@@ -21,22 +21,22 @@ import (
 // failure. It sits inside the 45-second lease TTL, so a stopped node has
 // usually published once more before a peer can take its seats. Under overload
 // the window grows whatever this value is: up to 2k + 3 cycles for k seats a
-// cycle runs out in ([memorySync.resume]), longer behind a burst
-// (crewlet/crewlet#1041) or a row the broker refuses (crewlet/crewlet#349).
+// cycle runs out in ([memorySync.resume]), longer behind a burst larger than a
+// cycle carries or a row the broker refuses (crewlet/crewlet#349).
 const memorySyncInterval = 30 * time.Second
 
 // memoryFlushTimeout bounds the last publish a released seat gets: five
 // seconds, the bound of the seat's last lifecycle event beside it
-// ([lifecyclePublishBudget]), so a stream that stopped acknowledging costs a
-// release one bound, not two, and a drain (seat.Host.ReleaseAll) the five
-// seconds docs/concepts/agent-runtime.md counts. No test pins it. At one round
-// trip a row that is about fifty rows at 100 ms, a thousand at 5 ms. It carries
-// them in a cycle's order ([publishTurn]); what it misses of the seat's own
-// pass is lost as a crash loses it, which can exceed the last cycle's writes
-// (crewlet/crewlet#1041 and #349), and what it misses of the backlog
-// stays in this node's store. What it carries can still be overwritten by an
-// older copy, from the row a cycle had in flight as the release began or from
-// a node whose lease lapsed under it (crewlet/crewlet#511).
+// ([lifecyclePublishBudget]), and of a drain (seat.Host.ReleaseAll) in
+// docs/concepts/agent-runtime.md. No test pins it. It decides which rows are
+// sent; one sent is waited for within its own budget, at most five seconds
+// more on a member (crewlet/crewlet#1075). Rows go out memsync's 64 at once,
+// a few thousand small ones across 100 ms, in a cycle's order ([publishTurn]);
+// what it misses of the seat's own pass is lost as a crash loses it, and of
+// the backlog stays in this node's store. What it carries can still be
+// overwritten by an older copy, from a cycle's row whose answer never came
+// inside its budget or from a node whose lease lapsed under it
+// (crewlet/crewlet#511).
 const memoryFlushTimeout = 5 * time.Second
 
 // memoryAgentID is the id a seat's memory changelog is addressed by: the
@@ -115,9 +115,9 @@ func (e *Engine) startMemorySync(ctx context.Context) {
 // stopMemorySync ends the loop, waiting for an in-flight cycle: one
 // mid-publish holds a store read and a broker write, and closing either under
 // it turns an orderly shutdown into a logged failure. Called after the drain;
-// a cycle begun before a release stops at that seat's next row
-// (memsync.ErrNotHeld), so this waits for its other seats and the row in
-// flight, for up to the cycle's bound.
+// a cycle begun before a release sends no more of that seat's rows
+// (memsync.ErrNotHeld), so this waits for its other seats and the rows it has
+// out, for up to the cycle's bound and the budget of the last rows it sent.
 func (e *Engine) stopMemorySync() {
 	if e.memorySync == nil {
 		return
@@ -131,7 +131,8 @@ func (e *Engine) stopMemorySync() {
 // ([memorySync.cycle]), bounded by the interval: the loop's context is
 // detached, so an unanswering broker would otherwise block the cycle, and
 // stopMemorySync with it, for ever, and a cycle still running when the next is
-// due has fallen behind whatever it does.
+// due has fallen behind whatever it does. The bound decides which rows are
+// sent; each row sent has its own budget (memsync's publishRow).
 func (e *Engine) syncSeatMemory(ctx context.Context, loop *memorySync) {
 	node := e.node
 	if node == nil {
@@ -480,7 +481,7 @@ func (r syncReport) log(ctx context.Context) {
 // and one line for a run-out naming its `pass` (or the first not begun),
 // `next`, `not_reached` and, in the backlogs' turn, `backlogs_next` and
 // `backlogs_not_reached`. A run-out after the call moved a mark (a backlog
-// draining, a burst: crewlet/crewlet#1041) is INFO, since a warning every
+// draining, a burst the seat wrote) is INFO, since a warning every
 // thirty seconds would read as a fault on every boot, and so is one between two
 // calls, the last of them complete. One that moved no mark warns.
 func (r syncReport) lines() []reportLine {
@@ -536,7 +537,7 @@ func (r syncReport) lines() []reportLine {
 		line.level, line.msg = slog.LevelInfo, "memory_sync_ran_out"
 		detail = "the cycle's bound ran out inside this seat's own pass after it moved " +
 			"marks: a burst the seat wrote, such as a vector fill after a change of " +
-			"embedding model (crewlet/crewlet#1041); the seat's next turn carries on " +
+			"embedding model; the seat's next turn carries on " +
 			"from the first row past them"
 	default:
 		line.level, line.msg = slog.LevelInfo, "memory_sync_ran_out"
@@ -601,12 +602,12 @@ func flushSeatMemory(ctx context.Context, memory memoryFlusher, handle string) [
 
 // releaseSeatMemory is a released seat's memory: its holding here turned to
 // releasing, its last turn ([flushSeatMemory]), then the seat forgotten.
-// Releasing first, so a cycle partway through the seat stops at its next row
-// rather than put older profiles, skills and onboarding marker over the
-// flush's (crewlet/crewlet#511). No flush, and no line, without a live holding
-// to turn ([memsync.Syncer.Releasing]): a store whose hydration failed or never
-// ran can hold copies older than the changelog's; one that failed after its
-// hydration completed is flushed, as it holds the changelog's own copies. The
+// Releasing first, so a cycle partway through the seat sends no more rows and
+// the flush waits for those it has out: else their older profiles, skills and
+// onboarding marker could land over the flush's (crewlet/crewlet#511). No
+// flush, and no line, without a live holding to turn ([memsync.Syncer.Releasing]):
+// a store whose hydration failed or never ran can hold copies older than the
+// changelog's; one that failed after its hydration completed is flushed. The
 // flush is bounded on a context the release's does not cut, since a drain
 // releases every seat at once (seat.Host.ReleaseAll), and best effort: what it
 // misses costs the successor as a crash does, where refusing to release would

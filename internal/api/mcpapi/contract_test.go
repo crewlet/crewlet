@@ -329,7 +329,7 @@ func TestTheSignInReadsWhatTheRoutesSend(t *testing.T) {
 		t.Fatalf("the read answered %d %v", code, read)
 	}
 	holdDeclared(t, "McpSignIn", []map[string]any{started, read}, false)
-	holdUnion(t, "McpSignInStatus", coord.MCPSignInStatuses)
+	holdUnion(t, "McpSignInStatus", coord.OAuthSignInStatuses)
 	code, ended := call(t, svc, fresh, http.MethodDelete, "/mcp-servers/linear/oauth")
 	if code != http.StatusOK {
 		t.Fatalf("the sign-out answered %d %v", code, ended)

@@ -295,3 +295,27 @@ func TestAFieldOnlyTheEngineWritesIsRefusedFromAnyoneElse(t *testing.T) {
 		t.Errorf("the engine recording an app id = %v, want it admitted", err)
 	}
 }
+
+// A DISCONNECT GIVES UP THE INTEGRATION'S CONSENT GRANT once its block is
+// gone, handing the engine the document from before, whose client secret the
+// revocation authenticates with, and answers what became of it.
+//
+// Mutation: hand the engine the disconnected document, or skip the give-up,
+// and this is red.
+func TestADisconnectGivesUpTheIntegrationsConsentGrant(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t, githubSeatDoc)
+	out, err := s.service().Disconnect(t.Context(), configapi.DisconnectRequest{
+		Kind: "github", Summary: "disconnect github", By: iam.Actor{Name: "jane", Kind: iam.ActorHuman}})
+	if err != nil {
+		t.Fatalf("Disconnect: %v", err)
+	}
+	before := s.oauth.givenUp["github"]
+	if before == nil || before.Integrations.GitHub == nil {
+		t.Fatalf("the engine was handed %+v, want the document before the disconnect", before)
+	}
+	if out.Consent == nil || out.Consent.Revocation != "shared" || out.Consent.Said == "" {
+		t.Fatalf("the disconnect answered %+v, want what became of the sign-in", out.Consent)
+	}
+}

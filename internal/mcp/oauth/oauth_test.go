@@ -107,7 +107,7 @@ func TestOnlyPKCES256IsEverSentAndAServerWithoutItIsRefused(t *testing.T) {
 	ep := endpoints("https://mcp.example.com")
 	raw, err := oauth.AuthorizeURL(ep, oauth.Client{ID: "https://crewlet.example.com/client"},
 		"https://crewlet.example.com/webhooks/mcp-oauth", "signed-state", key.Challenge,
-		[]string{"read", "offline_access"})
+		[]string{"read", "offline_access"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,6 +140,66 @@ func TestOnlyPKCES256IsEverSentAndAServerWithoutItIsRefused(t *testing.T) {
 	}
 }
 
+// A VENDOR'S OWN AUTHORIZATION PARAMETERS ride beside the protocol's and never
+// replace one, and an authorization server that names no resource is sent no
+// resource on the authorization request, the exchange or a renewal: Google
+// refuses an empty one.
+//
+// Mutation: set the extra parameters after the protocol's, or send the
+// resource unconditionally, and a case goes red.
+func TestAVendorsOwnParametersRideBesideTheProtocolsAndNoEmptyResourceIsSent(t *testing.T) {
+	t.Parallel()
+	ep := endpoints("https://mcp.example.com")
+	ep.Resource = ""
+	raw, err := oauth.AuthorizeURL(ep, oauth.Client{ID: "client"}, "https://crewlet.example.com/cb", "state",
+		"challenge", []string{"scope-a"}, url.Values{"access_type": {"offline"}, "prompt": {"consent"},
+			"state": {"forged"}, "code_challenge_method": {"plain"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, _ := url.Parse(raw)
+	q := u.Query()
+	for name, want := range map[string]string{"access_type": "offline", "prompt": "consent",
+		"state": "state", "code_challenge_method": "S256", "scope": "scope-a"} {
+		if got := q[name]; len(got) != 1 || got[0] != want {
+			t.Errorf("the authorization address's %s = %q, want only %q", name, got, want)
+		}
+	}
+	if q.Has("resource") {
+		t.Errorf("an authorization server naming no resource was sent resource=%q", q.Get("resource"))
+	}
+	// A SCOPE OR RESOURCE THE SIGN-IN LEAVES UNSET stays unset.
+	bare, err := oauth.AuthorizeURL(ep, oauth.Client{ID: "client"}, "https://crewlet.example.com/cb", "state",
+		"challenge", nil, url.Values{"scope": {"everything"}, "resource": {"https://elsewhere.example.com"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u, _ := url.Parse(bare); u.Query().Has("scope") || u.Query().Has("resource") {
+		t.Errorf("a vendor's extra parameters set the protocol's own: %s", bare)
+	}
+
+	var forms []url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		forms = append(forms, r.PostForm)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"access_token":"at","token_type":"Bearer","refresh_token":"rt"}`)
+	}))
+	t.Cleanup(srv.Close)
+	local := &mcp.OAuthEndpoints{Server: srv.URL, Token: srv.URL + "/token", PKCEMethods: []string{"S256"}}
+	if _, err := oauth.Exchange(t.Context(), local, oauth.Client{ID: "c"}, "code", "verifier", "r", time.Now()); err != nil {
+		t.Fatalf("Exchange: %v", err)
+	}
+	if _, err := oauth.Refresh(t.Context(), local, oauth.Client{ID: "c"}, "rt", time.Now()); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	for i, form := range forms {
+		if form.Has("resource") {
+			t.Errorf("token request %d named resource=%q at a server naming none", i, form.Get("resource"))
+		}
+	}
+}
+
 // A REGISTRATION KIND THE SERVER DOES NOT SUPPORT IS REFUSED, naming the kind
 // to configure instead.
 func TestARegistrationKindTheServerDoesNotSupportIsRefused(t *testing.T) {
@@ -156,7 +216,7 @@ func TestARegistrationKindTheServerDoesNotSupportIsRefused(t *testing.T) {
 		t.Errorf("the company's own client was refused: %v", err)
 	}
 	ep.Authorization = "javascript:alert(1)"
-	if _, err := oauth.AuthorizeURL(ep, oauth.Client{ID: "c"}, "r", "s", "c", nil); err == nil {
+	if _, err := oauth.AuthorizeURL(ep, oauth.Client{ID: "c"}, "r", "s", "c", nil, nil); err == nil {
 		t.Error("an authorization endpoint that is no https address was handed to a browser")
 	}
 }

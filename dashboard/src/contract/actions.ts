@@ -230,6 +230,16 @@ export const ACTIONS = {
     refreshes: [],
     scope: "person",
   },
+  save_home_board: {
+    // HOME'S DONE and a group folded outside editing: the reader's whole board,
+    // kept under their seat, conditional on the revision `home_board` answered
+    // (a newer save from another browser is refused `stale_version`). On no log.
+    args: ["board", "if_match"],
+    domain: null,
+    apps: [],
+    refreshes: ["home_board"],
+    scope: "person",
+  },
   set_priorities: {
     // MY WORK'S REORDER: a row of somebody's priorities dragged, or moved
     // with Alt and an arrow, to a new place. The WHOLE list is sent, made

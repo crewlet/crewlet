@@ -412,13 +412,13 @@ export interface StoreState {
   /**
    * The last health frame this TAB received, and null only until the first:
    * `health` without the clearing. For a reader asking what this node last
-   * said about a configuration write (`lib/useLastHealth.ts`), never whether
-   * it is up — a node gone quiet has taken back neither an apply nor a
-   * refusal. The tab keeps it rather than each reader, because the org
-   * chart's note and the Builder's strip follow a save that outlives their
-   * mount: kept per mount, one mounted while the socket was down had nothing
-   * to read, and said the save was still applying. Moves with `health`, and
-   * is read under that slice.
+   * said about a configuration write (`lib/useLastHealth.ts`), or which build
+   * it runs (the sidebar's build line), never whether it is up — a node gone
+   * quiet has taken back neither an apply nor a refusal. The tab keeps it
+   * rather than each reader, because the org chart's note and the Builder's
+   * strip follow a save that outlives their mount: kept per mount, one
+   * mounted while the socket was down had nothing to read, and said the save
+   * was still applying. Moves with `health`, and is read under that slice.
    */
   lastHealth: EngineHealth | null;
   tokens: Rollup | null;
