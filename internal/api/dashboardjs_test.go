@@ -1079,11 +1079,10 @@ const (
 	// at 3 MiB over a 2.3 MB baseline and is set so a bundle that doubled the
 	// baseline is still refused; screens fetched only when opened (the rich
 	// editor, the brand and folder screens, the assistant's panel, Gitlet) and
-	// kit releases account for its growth, and the last measure was 7254.4 KiB,
-	// after the growth integrations train: AdSense, Google Ads, Search Console
-	// and Google Play with their entries, stories and access words.
+	// kit releases account for its growth, and the last measure was 7255.2 KiB,
+	// after Settings > Models' Everything came to give the helpers its model.
 	// A raise names the measured size and its cause in its commit.
-	treeBudget = 5<<20 + 2135<<10
+	treeBudget = 5<<20 + 2136<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
