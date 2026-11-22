@@ -2676,6 +2676,80 @@
         "null"
       ]
     },
+    "GoogleAds": {
+      "additionalProperties": false,
+      "properties": {
+        "approvers": {
+          "description": "Handles of human seats an agent's spend, publish and admin acts are routed to first. Only an administrator answers one, at a fresh step-up; without approvers every administrator is asked. Optional.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "customers": {
+          "description": "The Google Ads accounts agents may be given, at most 200, each with the manager account it is reached through. Absent: every account an agent's identity is added to directly. Optional.",
+          "items": {
+            "$ref": "#/$defs/GoogleAdsCustomer"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Turn the integration on. Needs integrations.google_cloud on with its provisioning block, whose identity agents sign in through.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "spend": {
+          "$ref": "#/$defs/GrowthSpend",
+          "description": "Each account's spending caps, in its own currency. An account without both caps refuses every spend call; reads, operate calls and pausing still work. Optional."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "GoogleAdsCustomer": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "The account's 10-digit customer ID, without hyphens.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "manager": {
+          "description": "The 10-digit customer ID of the manager account the identity is added to, where it reaches this account through a manager. Optional.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "GoogleAnalytics": {
       "additionalProperties": false,
       "properties": {
@@ -2813,6 +2887,84 @@
             "null"
           ],
           "x-crewlet-secret": true
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "GooglePlay": {
+      "additionalProperties": false,
+      "properties": {
+        "approvers": {
+          "description": "Handles of human seats an agent's publish, spend and admin acts are routed to first. Only an administrator answers one, at a fresh step-up; without approvers every administrator is asked. Optional.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "apps": {
+          "description": "Package names of the apps agents may be given, at most 200. Absent: every app an agent's identity is invited to. Optional.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "developer_accounts": {
+          "description": "Google Play developer account IDs (the digits after /developers/ in a Play Console address), at most 20, whose users and permissions an administer agent may ask to change. Optional.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Turn the integration on. Needs integrations.google_cloud on with its provisioning block, whose identity agents sign in through.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "reports_buckets": {
+          "description": "Each developer account's monthly reports bucket, as Play Console's Download reports page copies it (pubsite_prod_rev_ followed by digits), at most 20. The company reader reads them. Optional.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
       "type": [
@@ -3113,6 +3265,10 @@
           "$ref": "#/$defs/GitLab",
           "description": "GitLab instance, webhook signing and provisioning. Absent = disabled."
         },
+        "google_ads": {
+          "$ref": "#/$defs/GoogleAds",
+          "description": "Google Ads: agents read and manage accounts as their own Google growth identity, through the Google Cloud connection's identity, spend held to each account's caps. Absent = disabled."
+        },
         "google_analytics": {
           "$ref": "#/$defs/GoogleAnalytics",
           "description": "Google Analytics 4: agents read and manage properties as their own Google growth identity, through the Google Cloud connection's identity. Absent = disabled."
@@ -3120,6 +3276,10 @@
         "google_cloud": {
           "$ref": "#/$defs/GoogleCloud",
           "description": "Google Cloud provisioner service account and federation key, used to create one service account per agent and grant it on the projects prepared for Crewlet. Absent = disabled."
+        },
+        "google_play": {
+          "$ref": "#/$defs/GooglePlay",
+          "description": "Google Play: agents read and manage apps as their own Google growth identity, through the Google Cloud connection's identity, publishing held for an administrator. Absent = disabled."
         },
         "jira": {
           "$ref": "#/$defs/Jira",
@@ -5502,6 +5662,49 @@
         "null"
       ]
     },
+    "RoleGoogleAds": {
+      "additionalProperties": false,
+      "properties": {
+        "customers": {
+          "description": "10-digit customer IDs this agent may reach, within integrations.google_ads.customers when that is set. Required when the agent is on.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Whether this agent may reach Google Ads. Off turns its Google growth identity off once no other Google growth product is on for it.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "level": {
+          "description": "read (the default): reports, planning and settings, nothing changed. operate: also pausing, lowering budgets and bids, negatives and other changes that spend nothing more. administer: also asks an administrator to approve each change that spends, publishes ad text, removes or touches users, links and billing.",
+          "enum": [
+            "read",
+            "operate",
+            "administer",
+            "",
+            null
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "RoleGoogleAnalytics": {
       "additionalProperties": false,
       "properties": {
@@ -5598,6 +5801,49 @@
         "null"
       ]
     },
+    "RoleGooglePlay": {
+      "additionalProperties": false,
+      "properties": {
+        "apps": {
+          "description": "Package names of the apps this agent may reach, within integrations.google_play.apps when that is set. Required when the agent is on.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Whether this agent may reach Google Play. Off turns its Google growth identity off once no other Google growth product is on for it.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "level": {
+          "description": "read (the default): reviews, listings, releases, products, vitals and reports, nothing changed. operate: also draft releases, halted rollouts, tester groups and draft products made at once, and asks an administrator to approve each reply, listing change, release, price and refund. administer: also asks for user, access, key, deletion and other irreversible changes.",
+          "enum": [
+            "read",
+            "operate",
+            "administer",
+            "",
+            null
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "RoleIntegrations": {
       "additionalProperties": false,
       "properties": {
@@ -5649,6 +5895,10 @@
           "$ref": "#/$defs/RoleGitLab",
           "description": "This seat's GitLab service account: whether it is on, its role and its projects."
         },
+        "google_ads": {
+          "$ref": "#/$defs/RoleGoogleAds",
+          "description": "This seat's Google Ads access: whether it is on, its level and its accounts."
+        },
         "google_analytics": {
           "$ref": "#/$defs/RoleGoogleAnalytics",
           "description": "This seat's Google Analytics access: whether it is on, its level and its properties."
@@ -5656,6 +5906,10 @@
         "google_cloud": {
           "$ref": "#/$defs/RoleGoogleCloud",
           "description": "This seat's own Google Cloud service account: whether it is on, its level and its projects."
+        },
+        "google_play": {
+          "$ref": "#/$defs/RoleGooglePlay",
+          "description": "This seat's Google Play access: whether it is on, its level and its apps."
         },
         "jira": {
           "$ref": "#/$defs/RoleJira",
