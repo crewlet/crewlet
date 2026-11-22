@@ -587,17 +587,19 @@ type refusingWriter struct{ err error }
 
 func (f refusingWriter) Write([]byte) (int, error) { return 0, f.err }
 
+var _ = holdsScrubTerm("streams", "TestTheScrubHoldsNoMoreThanItsStatedFigure")
+
 // THE SCRUB HOLDS NO MORE THAN THE FIGURE ITS DOC STATES, AND NOTHING THAT
-// GROWS WITH A STRING: at a test's plaintext bound, each shape that drives a
-// term of scrubHeldBytes near its share ([boundShapes]) holds, plus what one
-// GC step can hide, at most the figure, and a string four times as long no
-// more than a little over a shorter one. Read in live bytes as the take's base
-// is ([atLiveBytes]), off the GC trace of a child of this test under
-// GODEBUG=gcstoptheworld=1,gctrace=1, which prints every cycle's live heap.
-// Below the miss, so no sampler holds them: the plan's blocks (24 KiB), the
-// spool's (192 KiB), each piece (257 KiB) and each rewrite (520 KiB).
+// GROWS WITH A STRING: at a test's plaintext bound, the shape nearest the
+// figure, a password-dense string read both ways, holds with what one GC step
+// hides at most scrubHeldBytes; one redaction stream over it at most the
+// "streams" term's share; a string four times as long no more than a little
+// over a shorter. In live bytes ([atLiveBytes]), off a child's GC trace under
+// GODEBUG=gcstoptheworld=1,gctrace=1. Each other term has its own test
+// ([TestEveryScrubTermIsHeldByATestOfItsOwn]); under the miss, so no sampler
+// holds them: the pieces, encoders, rewrites, spool and plan blocks.
 //
-// Mutation: read a long string whole, or drop the streams from the figure.
+// Mutation: read a long string whole, or count the streams' term at half.
 func TestTheScrubHoldsNoMoreThanItsStatedFigure(t *testing.T) {
 	if os.Getenv(liveBytesChild) != "" {
 		scrubBoundShapes(t)
@@ -610,11 +612,7 @@ func TestTheScrubHoldsNoMoreThanItsStatedFigure(t *testing.T) {
 		if !ok {
 			t.Fatalf("the child read no live heap for %s", sh.name)
 		}
-		longest := 0
-		for _, v := range sh.values {
-			longest = max(longest, len(jsonEscaped(v)))
-		}
-		figure := scrubHeldBytes(liveBytesPlain, longest)
+		figure := sh.figure(t)
 		// THE MISS: between two marks the heap grows by at most liveBytesGOGC
 		// percent of what the last one found, at most the heap before and the
 		// figure on it; a peak that rises and falls inside that step is never
@@ -633,58 +631,67 @@ func TestTheScrubHoldsNoMoreThanItsStatedFigure(t *testing.T) {
 	}
 }
 
-// boundShape is a session [TestTheScrubHoldsNoMoreThanItsStatedFigure]
-// scrubs at liveBytesPlain with a scrubber of values.
+// boundShape is a reading [TestTheScrubHoldsNoMoreThanItsStatedFigure] takes
+// in its child, and the figure it is held to: input builds what the reading
+// reads, outside it, and hands back the reading.
 type boundShape struct {
-	name    string
-	values  []string
-	archive func(t *testing.T) []byte
+	name   string
+	figure func(t testing.TB) int64
+	input  func(t *testing.T) func()
 }
 
-// boundShapes drive the terms of scrubHeldBytes near their shares: a line of
-// text, then a password-dense string read both ways, both streams' windows at
-// once; tiny definitions, the plan at its sixteenth; a 512 KiB value, the
-// longest a scrub holds; and one string at two lengths.
+// boundShapes are the readings: a password-dense string read both ways
+// scrubbed at liveBytesPlain, the shape nearest scrubHeldBytes, and one
+// redaction stream over the same string; and one string at two lengths.
 func boundShapes() []boundShape {
 	body := liveBytesPlain - 64<<10
-	built := func(write func(w io.Writer) error) func(t *testing.T) []byte {
-		return func(t *testing.T) []byte {
-			var b strings.Builder
-			if err := write(&b); err != nil {
-				t.Fatal(err)
+	dense := func(t *testing.T) string {
+		var b strings.Builder
+		b.WriteString("a line of text\n")
+		if err := benchOneString(&b, body-64, "pwd=x "); err != nil {
+			t.Fatal(err)
+		}
+		return b.String()
+	}
+	scrubbed := func(text func(t *testing.T) string) func(t *testing.T) func() {
+		return func(t *testing.T) func() {
+			archive := tarOf(t, map[string]string{benchTranscript: text(t)})
+			return func() {
+				if err := scrubTar(bytes.NewReader(archive), reopenOf(archive), io.Discard,
+					newScrubber([]string{longValue}), scrubBounds{plain: liveBytesPlain}); err != nil {
+					t.Fatalf("the scrub refused the session: %v", err)
+				}
 			}
-			return tarOf(t, map[string]string{benchTranscript: b.String()})
 		}
 	}
-	value := randomBase64(1171, 512<<10)
-	str := func(n int) func(t *testing.T) []byte {
-		return built(func(w io.Writer) error {
+	whole := func(testing.TB) int64 { return scrubHeldBytes(liveBytesPlain, len(jsonEscaped(longValue))) }
+	str := func(n int) func(t *testing.T) string {
+		return func(*testing.T) string {
 			r := rand.New(rand.NewPCG(1170, uint64(n)))
-			_, err := io.WriteString(w, `{"type":"user","message":{"content":"`+base64Run(r, n, 100, n/2)+`"}}`+"\n")
-			return err
-		})
+			return `{"type":"user","message":{"content":"` + base64Run(r, n, 100, n/2) + `"}}` + "\n"
+		}
+	}
+	stream := func(t *testing.T) func() {
+		text := dense(t)
+		return func() {
+			s := redact.NewStream(io.Discard)
+			for at := 0; at < len(text); at += 32 << 10 {
+				if _, err := io.WriteString(s, text[at:min(len(text), at+32<<10)]); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := s.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 	return []boundShape{
-		{"a line of text, then a password-dense string both ways", []string{longValue},
-			built(func(w io.Writer) error {
-				if _, err := io.WriteString(w, "a line of text\n"); err != nil {
-					return err
-				}
-				return benchOneString(w, body-64, "pwd=x ")
-			})},
-		{"tiny definitions", []string{longValue}, built(func(w io.Writer) error {
-			head := `{"parentUuid":null,"attachment":{"type":"deferred_tools_record","entries":[1`
-			if _, err := io.WriteString(w, head+strings.Repeat(",1", (body-len(head)-64)/2)); err != nil {
-				return err
-			}
-			_, err := io.WriteString(w, `]},"type":"attachment"}`+"\n")
-			return err
-		})},
-		{"a string of the 512 KiB value", []string{longValue, value}, built(func(w io.Writer) error {
-			return benchOneString(w, body/4, "pwd="+value+" ")
-		})},
-		{"a string of 6 MiB", []string{longValue}, str(6 << 20)},
-		{"a string of 24 MiB", []string{longValue}, str(24 << 20)},
+		{"a line of text, then a password-dense string both ways", whole, scrubbed(dense)},
+		{"one redaction stream over a password-dense string", func(t testing.TB) int64 {
+			return termFigure(t, "streams", liveBytesPlain, 0) / 2
+		}, stream},
+		{"a string of 6 MiB", whole, scrubbed(str(6 << 20))},
+		{"a string of 24 MiB", whole, scrubbed(str(24 << 20))},
 	}
 }
 
@@ -699,14 +706,10 @@ func scrubBoundShapes(t *testing.T) {
 	}
 	defer debug.SetGCPercent(debug.SetGCPercent(liveBytesGOGC))
 	for _, sh := range boundShapes() {
-		archive := sh.archive(t)
-		values := newScrubber(sh.values)
+		reading := sh.input(t)
 		before := liveNow()
 		fmt.Printf("%s %d %d %s\n", liveBytesMark, before, gcCycles(), sh.name)
-		if err := scrubTar(bytes.NewReader(archive), reopenOf(archive), io.Discard, values,
-			scrubBounds{plain: liveBytesPlain}); err != nil {
-			t.Fatalf("%s was refused: %v", sh.name, err)
-		}
+		reading()
 		fmt.Printf("%s %d\n", liveBytesMark, gcCycles())
 	}
 }
@@ -877,18 +880,24 @@ func TestAKeptLineIsJSONWhereItWasAndItsTextWhereItWasNot(t *testing.T) {
 	}
 }
 
+var (
+	_ = holdsScrubTerm("plan", "TestThePlanHoldsAtMostASixteenthOfThePlaintext")
+	_ = holdsScrubTerm("plan blocks", "TestThePlanHoldsAtMostASixteenthOfThePlaintext")
+)
+
 // THE PLAN HOLDS AT MOST A SIXTEENTH OF THE PLAINTEXT, HOWEVER THE BOX SHAPES
 // ITS SESSION: a bit for every two bytes beside the blocks its streams are
 // filling ([planBlockBytes]), never a block or a record for each cut line or
 // transcript, over a transcript of short lines each losing its one definition
-// and a tar of many small transcripts. Read off the heap after a collection
-// as the second reading reads the spool back; not in parallel, since another
-// case's heap would be read as the scrub's.
+// and a tar of many small transcripts. Read off the plan's own blocks as its
+// first readings hand it on, which a reading of the heap varied by a spool's
+// buffers across runs.
 //
 // Mutation: keep a block of bits for each cut line, or a plan of its own for
-// each transcript, and the plan holds kibibytes a line or a member, far past
+// each transcript, or count the "plan" term at half, and the plan holds past
 // the figure.
 func TestThePlanHoldsAtMostASixteenthOfThePlaintext(t *testing.T) {
+	t.Parallel()
 	s := newScrubber([]string{longValue})
 	cut := `{"attachment":{"type":"deferred_tools_record","entries":[1]},"m":"[REDACTED:x]"}` + "\n"
 	for name, members := range map[string][]tarMember{
@@ -905,41 +914,32 @@ func TestThePlanHoldsAtMostASixteenthOfThePlaintext(t *testing.T) {
 	} {
 		archive := tarOfMembers(t, members)
 		plain := plainOf(t, archive)
-		held := heldBetweenReadings(t, archive, s)
-		figure := plain/16 + planBlockBytes
+		held := planHeld(t, archive, s)
+		figure := termFigure(t, "plan", plain, 0) + termFigure(t, "plan blocks", plain, 0)
 		t.Logf("%s: %d KiB of plaintext from a %d KiB archive; the plan held %d KiB, its figure %d KiB", name,
 			plain>>10, len(archive)>>10, held>>10, figure>>10)
-		// A little room for the runtime's own allocations between two
-		// readings of the heap, far under a kibibyte a line or a member.
-		if held > figure+64<<10 {
-			t.Errorf("%s: the plan held %d bytes between the readings, past the %d a sixteenth of the "+
-				"plaintext and its blocks come to", name, held, figure)
+		if held > figure {
+			t.Errorf("%s: the plan held %d bytes as the first readings handed it on, past the %d a sixteenth "+
+				"of the plaintext and its blocks come to", name, held, figure)
 		}
 	}
 }
 
-// heldBetweenReadings scrubs archive and answers the heap in use, after a
-// collection, at the moment the second reading reads the spool back, less the
-// heap in use before the scrub began: what the first reading hands the second.
-func heldBetweenReadings(t *testing.T, archive []byte, s scrubber) int64 {
+// planHeld is the bytes of the blocks the plan of archive's first readings
+// holds as they hand it on to the second.
+func planHeld(t *testing.T, archive []byte, s scrubber) int64 {
 	t.Helper()
-	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
-	var before, at runtime.MemStats
-	read := false
-	held := func(n int64) {
-		if n > 0 && !read {
-			read = true
-			runtime.GC()
-			runtime.ReadMemStats(&at)
-		}
+	spool, err := newUnitSpool(spoolPlace{dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
 	}
-	runtime.GC()
-	runtime.ReadMemStats(&before)
-	if err := scrubTar(bytes.NewReader(archive), reopenOf(archive), io.Discard, s,
-		testBounds.spooling(spoolPlace{dir: t.TempDir(), held: held})); err != nil {
+	defer spool.remove()
+	plan, err := firstTarReadings(bytes.NewReader(archive), reopenOf(archive), s, testBounds, spool)
+	defer plan.letGo()
+	if err != nil {
 		t.Fatalf("the session was refused: %v", err)
 	}
-	return int64(at.HeapAlloc) - int64(before.HeapAlloc)
+	return int64(len(plan.members.list.blocks)+len(plan.edits.list.blocks)) * bitBlockWords * 8
 }
 
 // plainOf is how many bytes of plaintext a gzipped archive holds.

@@ -260,19 +260,45 @@ const (
 )
 
 // scrubHeldBytes is the most the scrub of a reading of at most plain bytes
-// holds, longest the longest value it takes out ([scrubber]): two text scrubs
-// at once, each a redaction's stream, its stage, a [valueStream] (fewer bytes
-// than the longest value held, and twice that read beside them) and a
-// string's encoder (a rune's bytes and the most of a text the cut reads); two
-// JSON rewrites; the archive's readers and writers; the spool's
-// ([spoolHeldBytes]); and the plan, a sixteenth of the plaintext ([tarPlan]).
+// holds, longest the longest value it takes out ([scrubber]): the sum of
+// [scrubTerms].
 //
-// TWO OF EACH, because a first reading reads a line, or a `.json` file, from
-// the first that is no JSON both ways at once ([measureLines],
-// [measureFile]); the second reads one.
+// TWO OF EACH TEXT'S PARTS, because a first reading reads a line, or a
+// `.json` file, from the first that is no JSON both ways at once
+// ([measureLines], [measureFile]); the second reads one.
 func scrubHeldBytes(plain int64, longest int) int64 {
-	text := int64(streamHeldBytes + pieceHeldBytes + 3*longest + utf8.UTFMax + providerToolNameMax + 1)
-	return 2*text + 2*rewriteHeldBytes + archiveHeldBytes + spoolHeldBytes + plain/16 + planBlockBytes
+	var sum int64
+	for _, term := range scrubTerms {
+		sum += term.figure(plain, longest)
+	}
+	return sum
+}
+
+// scrubTerm is one part of what a scrub holds: its name, by which a test of
+// its own holds it to its figure, and that figure at a reading of plain bytes
+// whose longest value is longest.
+type scrubTerm struct {
+	name   string
+	figure func(plain int64, longest int) int64
+}
+
+// scrubTerms are the parts [scrubHeldBytes] adds up: two text scrubs, each a
+// redaction's stream, its stage's chunk, a [valueStream] (fewer bytes than the
+// longest value held, and beside them a copy of those joined to twice it read
+// of the next piece) and a string's encoder
+// (a rune's bytes and the most of a text the cut reads); two JSON rewrites; the
+// archive's readers and writers; the spool's ([spoolHeldBytes]); and the plan,
+// a sixteenth of the plaintext ([tarPlan]), beside its blocks.
+var scrubTerms = []scrubTerm{
+	{"streams", func(int64, int) int64 { return 2 * streamHeldBytes }},
+	{"pieces", func(int64, int) int64 { return 2 * pieceHeldBytes }},
+	{"values", func(_ int64, longest int) int64 { return 2 * 4 * int64(longest) }},
+	{"encoders", func(int64, int) int64 { return 2 * (utf8.UTFMax + providerToolNameMax + 1) }},
+	{"rewrites", func(int64, int) int64 { return 2 * rewriteHeldBytes }},
+	{"archive", func(int64, int) int64 { return archiveHeldBytes }},
+	{"spool", func(int64, int) int64 { return spoolHeldBytes }},
+	{"plan", func(plain int64, _ int) int64 { return plain / 16 }},
+	{"plan blocks", func(int64, int) int64 { return planBlockBytes }},
 }
 
 // scrubLongestMax is the longest value a take's scrub can hold ([scrubber]):
@@ -883,37 +909,7 @@ func scrubTar(first io.Reader, reopen func() (io.ReadCloser, error), dst io.Writ
 		return err
 	}
 	defer spool.remove()
-	plan, err := firstReadings(first, reopen, s, b, spool, func(src io.Reader, s scrubber, plan *tarPlan) error {
-		member := -1
-		return eachMember(src, b, func(h *tar.Header, body io.Reader) error {
-			member++
-			resumed, memberErr := plan.memberAt(member, h, body)
-			if !resumed {
-				return memberErr
-			}
-			membersBits := plan.members.count()
-			plan.members.putByte(h.Typeflag)
-			if h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeDir {
-				return plan.holdPast()
-			}
-			if plan.carry == nil {
-				if memberErr = writeMemberHeader(plan.spool, memberName(s, h.Name), h.Mode&0o777,
-					h.ModTime); memberErr != nil {
-					return memberErr
-				}
-			}
-			if h.Typeflag == tar.TypeDir {
-				return plan.holdPast()
-			}
-			plan.markMember(member, membersBits, h.Name)
-			size, memberErr := measureFile(h.Name, body, s, plan)
-			if memberErr != nil {
-				return memberErr
-			}
-			plan.members.putNumber(uint64(size))
-			return plan.holdPast()
-		})
-	})
+	plan, err := firstTarReadings(first, reopen, s, b, spool)
 	defer plan.letGo()
 	if err != nil {
 		return err
@@ -961,6 +957,43 @@ func scrubTar(first io.Reader, reopen func() (io.ReadCloser, error), dst io.Writ
 		return err
 	}
 	return zw.Close()
+}
+
+// firstTarReadings is a tar's first readings into spool, and the plan the
+// second reads it back by ([firstReadings]).
+func firstTarReadings(first io.Reader, reopen func() (io.ReadCloser, error), s scrubber, b scrubBounds,
+	spool *unitSpool) (*tarPlan, error) {
+	return firstReadings(first, reopen, s, b, spool, func(src io.Reader, s scrubber, plan *tarPlan) error {
+		member := -1
+		return eachMember(src, b, func(h *tar.Header, body io.Reader) error {
+			member++
+			resumed, memberErr := plan.memberAt(member, h, body)
+			if !resumed {
+				return memberErr
+			}
+			membersBits := plan.members.count()
+			plan.members.putByte(h.Typeflag)
+			if h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeDir {
+				return plan.holdPast()
+			}
+			if plan.carry == nil {
+				if memberErr = writeMemberHeader(plan.spool, memberName(s, h.Name), h.Mode&0o777,
+					h.ModTime); memberErr != nil {
+					return memberErr
+				}
+			}
+			if h.Typeflag == tar.TypeDir {
+				return plan.holdPast()
+			}
+			plan.markMember(member, membersBits, h.Name)
+			size, memberErr := measureFile(h.Name, body, s, plan)
+			if memberErr != nil {
+				return memberErr
+			}
+			plan.members.putNumber(uint64(size))
+			return plan.holdPast()
+		})
+	})
 }
 
 // firstReadings runs read, a first reading, on first, writing into spool
