@@ -2,6 +2,7 @@ package statelog
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -30,10 +31,11 @@ func TestTheWatchForgetsAnOwnerTheListingNoLongerHolds(t *testing.T) {
 }
 
 // THE WATCH COUNTS ON A MONOTONIC CLOCK: its default reading carries one, so
-// a step of the wall clock never ages a hold. In UTC it would not.
+// a step of the wall clock never ages a hold. In UTC it would not. A time
+// prints its monotonic reading as "m=", the one place it shows.
 func TestTheWatchCountsOnAMonotonicClock(t *testing.T) {
 	t.Parallel()
-	if got := (&HoldWatch{}).clock(); got == got.Round(0) {
+	if got := (&HoldWatch{}).clock(); !strings.Contains(got.String(), " m=") {
 		t.Fatalf("the watch's default clock read %v with no monotonic reading: "+
 			"a wall clock stepped forward would age every hold it watches", got)
 	}
