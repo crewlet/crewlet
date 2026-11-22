@@ -50,6 +50,9 @@ func NewKimi() *Runner { return New(Kimi{}) }
 // Name is the harness's key in the runner registry.
 func (Kimi) Name() string { return KimiName }
 
+// Kimi Code signs in by the names of sandbox.RunRequest.SignInEnv, which reach
+// its environment, as code-sandbox.md ("Kimi Code") documents.
+
 // mintsSession says Kimi names its own session (`session_<uuid>`, which
 // neither the CLI nor KAP takes from a caller): the driver reports the id KAP
 // answers the session's creation with, before the brief ([sessionMinter]).
