@@ -113,7 +113,7 @@ func secretName(connection, slot string) string {
 // Guide is what the connect form says around its fields.
 func Guide() setup.Guide {
 	return setup.Guide{
-		Summary: "Crewlet keeps your team's API keys and makes each call through the one with the least " +
-			"access. No agent holds a key.",
+		Summary: "Crewlet keeps your team's API keys and makes each call through the least-privileged key " +
+			"that can make it. No agent holds a key.",
 	}
 }
