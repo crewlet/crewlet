@@ -242,10 +242,22 @@ func (f *fakeGoogle) note(s string) {
 }
 
 // sitePages are the company's own pages, which the engine reads for the
-// Indexing API's terms.
-func sitePages(w http.ResponseWriter, r *http.Request) {
+// Indexing API's terms; filled is false once the job is no longer posted.
+type sitePages struct {
+	mu     sync.Mutex
+	filled bool
+}
+
+func (s *sitePages) serve(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	filled := s.filled
+	s.mu.Unlock()
 	switch r.URL.Path {
 	case "/jobs/1":
+		if !filled {
+			_, _ = w.Write([]byte(`<h1>This job is filled</h1>`))
+			return
+		}
 		_, _ = w.Write([]byte(`<script type="application/ld+json">{"@type":"JobPosting","title":"Cook"}</script>`))
 	case "/about":
 		_, _ = w.Write([]byte(`<h1>About us</h1>`))
@@ -264,6 +276,7 @@ type world struct {
 	self    string
 	held    int
 	company *config.Company
+	pages   *sitePages
 }
 
 func newWorld(t *testing.T, level string) *world {
@@ -303,14 +316,15 @@ roles:
 	f := &fakeGoogle{owners: []any{"founder@example.com"}}
 	google := httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(google.Close)
-	pages := httptest.NewServer(http.HandlerFunc(sitePages))
+	site := &sitePages{filled: true}
+	pages := httptest.NewServer(http.HandlerFunc(site.serve))
 	t.Cleanup(pages.Close)
 	tokens, audit := &fakeTokens{}, &fakeAudit{}
 	p := searchconsole.New(func() *config.Company { return company }, func() *config.Resolver { return env },
 		tokens, audit, &leases{f: f}, &http.Client{Transport: httpxtest.Rewrite(t, google)},
 		&http.Client{Transport: httpxtest.Rewrite(t, pages)})
 	self := googleauth.AccountEmail(googleauth.GrowthAccountID("Acme", "growth-lead"), "acme-crewlet-id")
-	return &world{p: p, f: f, tokens: tokens, audit: audit, self: self, company: company}
+	return &world{p: p, f: f, tokens: tokens, audit: audit, self: self, company: company, pages: site}
 }
 
 // call makes tool's call as the framework does (internal/agent/builtin): a
@@ -769,6 +783,32 @@ func TestASeatsSitesAreHeldAgainWhenAnApprovalIsMade(t *testing.T) {
 	if len(steps) != 2 || steps[1] != growth.StepFailed || records[1].Failure != growth.FailureAccessLowered ||
 		w.f.writeCount() != 0 {
 		t.Errorf("the apply recorded %v (%+v) after %d writes", steps, records, w.f.writeCount())
+	}
+}
+
+// A NOTIFICATION IS HELD TO GOOGLE'S TERMS AGAIN WHEN IT IS MADE: a page that
+// carried a job posting when it was prepared and no longer does is refused
+// under the lease, and nothing reaches the Indexing API.
+//
+// Mutation: check the page only when the call is prepared, and a notification
+// for a page that stopped allowing it is sent.
+func TestANotificationIsHeldToGooglesTermsWhenItIsMade(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, "operate")
+	call := growth.Call{ID: "call-1", Handle: "growth-lead", Turn: "turn-1", Tool: "search_console_index_notify",
+		Args: map[string]any{"url": "https://www.example.com/jobs/1"}}
+	hold, err := w.p.Prepare(t.Context(), call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.pages.mu.Lock()
+	w.pages.filled = false
+	w.pages.mu.Unlock()
+	if _, err := w.p.Apply(t.Context(), call, hold.Binding); !refused(err, "JobPosting") {
+		t.Errorf("a notification for a page that stopped allowing it answered %v", err)
+	}
+	if strings.Contains(w.f.reached(), "urlNotifications:publish") {
+		t.Errorf("the notification reached the Indexing API:\n%s", w.f.reached())
 	}
 }
 
