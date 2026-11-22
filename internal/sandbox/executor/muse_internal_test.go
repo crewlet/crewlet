@@ -1,0 +1,613 @@
+package executor
+
+import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"maps"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/prereqtest"
+	"github.com/crewlet/crewlet/internal/sandbox"
+)
+
+// museFixture is testdata/muse/1.4.25/<name>: a real Muse Code 1.4.25 run's
+// stream (`*.stream.jsonl`), the file a run of this runner's own script left
+// (`*.result.jsonl`), or a session's record (`*.session.jsonl`,
+// `*.child.jsonl`), against a stand-in model and a stand-in bridge. A record
+// keeps every line under 4 KiB and every line a reader here reads, whole; the
+// lines carrying the vendor's system prompt and request traces are dropped.
+func museFixture(t *testing.T, name string) []byte {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", "muse", "1.4.25", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+// museDecoded is the decoder fed stream.
+func museDecoded(t *testing.T, stream []byte) *museEvents {
+	t.Helper()
+	dec := &museEvents{}
+	if err := eachLine(bytes.NewReader(stream), dec, maxLineBytes); err != nil {
+		t.Fatal(err)
+	}
+	return dec
+}
+
+// A RUN THIS RUNNER LAUNCHED (the engine's own script, settings and brief, in
+// a box against the stand-ins: a bridge call, a subagent, a shell call) reads
+// as its last answer, its session, and its WHOLE spend: every `run.usage` of
+// the exec and the subagent's requests its script added after the mark.
+//
+// Mutation: drop the records after the mark, or keep only the last
+// `run.usage`, and the spend comes out short.
+func TestALaunchedMuseRunReadsAsItsAnswerAndItsWholeSpend(t *testing.T) {
+	res := (Muse{}).Parse(museFixture(t, "launched.result.jsonl"))
+	if !res.Success || res.Text != "ANSWER launched run." || res.SessionID != "0b5e0000-0000-4000-8000-0000000000e1" {
+		t.Fatalf("result = %+v, want the answer of session ...e1", res)
+	}
+	// The main thread: 4137 input (1600 cached), 200 output over 4 requests;
+	// the subagent: 2070 (800 cached), 100 output.
+	if res.InputTokens != 6207 || res.CacheReadTokens != 2400 || res.OutputTokens != 300 || res.Turns != 4 {
+		t.Errorf("charged in %d (cache %d), out %d, turns %d; want 6207 (2400), 300, 4", res.InputTokens,
+			res.CacheReadTokens, res.OutputTokens, res.Turns)
+	}
+	if !strings.Contains(res.Transcript, "mcp__crewlet__echo") || !strings.Contains(res.Transcript, "subagent_spawn") {
+		t.Errorf("the transcript names the run's calls:\n%s", res.Transcript)
+	}
+}
+
+// A SUBAGENT'S RECORD IS CHARGED ONLY AFTER THE SCRIPT'S MARK: the stream
+// itself prints no session record, so one before the mark is not the
+// script's, and a stream with no run.usage states no spend.
+//
+// Mutation: count a `model_completed` record whatever came before it.
+func TestAMuseSubagentRecordBeforeTheMarkIsNotCharged(t *testing.T) {
+	child := museFixture(t, "subagent.child.jsonl")
+	stream := museFixture(t, "subagent.stream.jsonl")
+	spent, stated := museDecoded(t, append(slices.Clone(child), stream...)).runSpend()
+	if !stated || spent != (runSpend{input: 3048 - 1200, cacheRead: 1200, output: 150}) {
+		t.Fatalf("spend %+v (stated %v), want the main thread's alone", spent, stated)
+	}
+	marked := append(slices.Clone(stream), []byte(`{"payload_type":"`+museChildMark+`"}`+"\n")...)
+	spent, _ = museDecoded(t, append(marked, child...)).runSpend()
+	if spent != (runSpend{input: 3048 + 2032 - 2000, cacheRead: 2000, output: 250}) {
+		t.Fatalf("spend %+v, want the main thread's and the subagent's two requests", spent)
+	}
+	if _, stated := museDecoded(t, child).runSpend(); stated {
+		t.Error("a stream with no run.usage stated a spend")
+	}
+}
+
+// A RATE LIMIT OR A SPENT BALANCE IS A LIMIT ONLY ON MUSE'S OWN FAILED
+// TERMINAL: the run fails, and its terminal line is the limit report; a run
+// that completed reports none.
+//
+// Mutation: drop the limit from the failed terminal, or read it off any line.
+func TestAMuseRateLimitIsReportedAsALimit(t *testing.T) {
+	for _, name := range []string{"ratelimit.stream.jsonl", "billing.stream.jsonl"} {
+		res := (Muse{}).Parse(museFixture(t, name))
+		if res.Success || res.Limits == "" || !strings.Contains(res.Limits, `"run.terminal.failed"`) {
+			t.Errorf("%s: result %+v, want a failure whose terminal is the limit report", name, res)
+		}
+	}
+	if res := (Muse{}).Parse(museFixture(t, "tools.stream.jsonl")); !res.Success || res.Limits != "" {
+		t.Errorf("a completed run reads as %+v, want success and no limit", res)
+	}
+}
+
+// A RUN ITS CAP STOPPED READS AS CAPPED, even where Muse woke on a subagent's
+// result and ran on to an answer after it (measured: a capped run, then a
+// completed one, in one exec).
+//
+// Mutation: read the last terminal alone, and the woken exec reads as a success.
+func TestAMuseRunItsCapStoppedReadsAsCapped(t *testing.T) {
+	for _, name := range []string{"capped.stream.jsonl", "capped-then-woken.result.jsonl"} {
+		res := (Muse{}).Parse(museFixture(t, name))
+		if res.Success || !res.RoundCapped || !strings.HasPrefix(res.Error, museCapped) {
+			t.Errorf("%s: result %+v, want the round capped", name, res)
+		}
+	}
+}
+
+// AN EXEC PAST ITS CAP FAILS WHATEVER EACH RUN SAID: the script names the cap,
+// and the stream's own count of the main thread's requests is held to it.
+//
+// Mutation: drop the count check, and a five-request run under a cap of two
+// succeeds.
+func TestAMuseExecPastItsCapFailsWhateverEachRunSaid(t *testing.T) {
+	stream := append([]byte(`{"payload_type":"`+museCapMark+`","turns":2}`+"\n"), museFixture(t, "tools.stream.jsonl")...)
+	res := (Muse{}).Parse(stream)
+	if res.Success || res.RoundCapped || !strings.Contains(res.Error, "turn cap of 2 was not enforced") {
+		t.Fatalf("result %+v, want the unenforced cap", res)
+	}
+	stream = append([]byte(`{"payload_type":"`+museCapMark+`","turns":5}`+"\n"), museFixture(t, "tools.stream.jsonl")...)
+	if res := (Muse{}).Parse(stream); !res.Success {
+		t.Fatalf("a run within its cap reads as %+v", res)
+	}
+}
+
+// museScriptHome is a box home under a temporary directory holding files, by
+// path below it.
+func museScriptHome(t *testing.T, files map[string]string) Paths {
+	t.Helper()
+	p := Paths{Home: t.TempDir()}
+	for name, body := range files {
+		full := filepath.Join(p.Home, name)
+		if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(p.WorkDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// runSh runs script under sh, failing the case on an error.
+func runSh(t *testing.T, script string) []byte {
+	t.Helper()
+	for _, tool := range []string{"find", "wc", "sed", "tail", "grep", "head", "tar", "gzip", "cksum"} {
+		prereqtest.OnPath(t, tool, "the case runs the box's script", "install "+tool)
+	}
+	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
+	out, err := exec.Command(sh, "-c", script).Output()
+	if err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			t.Fatalf("the script failed: %v\n%s", err, exit.Stderr)
+		}
+		t.Fatalf("the script failed: %v", err)
+	}
+	return out
+}
+
+// THE SCRIPT ADDS ONLY THIS RUN'S SUBAGENT REQUESTS: lines a subagent's record
+// held before the harness started are an earlier run's, and only the
+// `model_completed` records after them follow the mark.
+//
+// Mutation: drop the count kept before the launch, and the earlier run's
+// request is charged again.
+func TestTheMuseScriptAddsOnlyThisRunsSubagentRequests(t *testing.T) {
+	const session = "0b5e0000-0000-4000-8000-000000000005"
+	child := "/.local/share/muse/sessions/2026/11/22/" + session + "/subagent/t1/session.jsonl"
+	lines := bytes.SplitAfter(museFixture(t, "subagent.child.jsonl"), []byte("\n"))
+	first := slices.IndexFunc(lines, func(l []byte) bool { return bytes.Contains(l, []byte(`"kind":"model_completed"`)) })
+	if first < 0 {
+		t.Fatal("the fixture holds no request")
+	}
+	p := museScriptHome(t, map[string]string{
+		"/.local/share/muse/sessions/2026/11/22/" + session + "/session.jsonl": "{}\n",
+		child: string(bytes.Join(lines[:first+1], nil)),
+	})
+	before, after := museChildUsage(p)
+	runSh(t, "s="+session+"\n"+before)
+	f, err := os.OpenFile(p.Home+child, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = f.Write(bytes.Join(lines[first+1:], nil))
+	_ = f.Close()
+	out := runSh(t, "s="+session+"\n"+after)
+	got := bytes.Split(bytes.TrimSpace(out), []byte("\n"))
+	if len(got) != 2 || !bytes.Contains(got[0], []byte(museChildMark)) ||
+		!bytes.Contains(got[1], []byte(`"input_tokens":1017`)) {
+		t.Fatalf("the script added %q, want the mark and the second request alone", out)
+	}
+}
+
+// A MUSE RUN STARTS ON ITS POSTURE: exec in JSON, every approval and the
+// sandbox off with the workspace trusted for this run, its own session id, no
+// reminder agents, no foreign personal context, no ask-the-user tool, the
+// brief from its file, the cap as Muse's own; and nothing secret on its
+// command line.
+//
+// Mutation: drop --yolo (an untrusted workspace loads no bridge), or put the
+// bridge's header on the command line.
+func TestAMuseRunIsStartedOnItsPosture(t *testing.T) {
+	p := Paths{Home: "/home/user"}
+	req := sandbox.RunRequest{Model: "muse-1", Effort: "high", Limits: sandbox.Limits{MaxTurns: 7},
+		MCPServers: map[string]sandbox.MCPServer{"crewlet": {Transport: sandbox.TransportHTTP, URL: "http://e/mcp",
+			Headers: map[string]string{"Authorization": "Bearer sekret-token"}}}}
+	cmd := (Muse{}).Command(req, Session{ID: "0b5e0000-0000-4000-8000-0000000000a1"}, p, p.MuseSettings())
+	for _, want := range []string{"muse exec --json --yolo", `--session-id "$s"`, "--disable-reminders",
+		"--no-foreign-personal-context", "--disable-request-user-input", "--allow-workspace-switch",
+		"--model '\\''muse-1'\\''", "--reasoning-effort '\\''high'\\''", "--max-model-steps 7",
+		`--prompt-file "$p" $kf`, "at 1 4 25", museCapMark, "--api-key-stdin"} {
+		if !strings.Contains(cmd, want) {
+			t.Errorf("the command lacks %q:\n%s", want, cmd)
+		}
+	}
+	if strings.Contains(cmd, "sekret-token") {
+		t.Errorf("the command line carries the bridge's header:\n%s", cmd)
+	}
+	if strings.Contains((Muse{}).Command(sandbox.RunRequest{}, Session{ID: "x"}, p, ""), "--max-model-steps") {
+		t.Error("a run with no cap is capped")
+	}
+}
+
+// MUSE'S SETTINGS ARE WRITTEN WHOLE, telemetry off and the standing
+// instructions appended, and EACH SERVER APART, for the script to add after
+// the notes plugin's approval: every one required (one that cannot be reached
+// fails the run) with the engine's call wait in whole seconds rounded up, a
+// command server as `stdio`; a run handed no system text writes no `run`.
+//
+// Mutation: drop `required`, round the wait down, or write the servers into
+// the settings, whose approval drops both.
+func TestMuseWriteConfigWritesItsSettingsAndServers(t *testing.T) {
+	fixedMuseNonce(t)
+	box := sandbox.NewFakeSandbox("b")
+	p := PathsFor(box)
+	req := sandbox.RunRequest{Brief: "fix it", System: "SEAT", MCPServers: map[string]sandbox.MCPServer{
+		"crewlet": {Transport: sandbox.TransportHTTP, URL: "http://e/mcp", Headers: map[string]string{"Authorization": "Bearer t"},
+			CallTimeout: 6*time.Minute + 500*time.Millisecond},
+		"local": {Command: "srv", Args: []string{"-x"}, Env: map[string]string{"K": "v"}},
+	}}
+	config, err := (Muse{}).WriteConfig(t.Context(), box, req, p)
+	if err != nil || config != p.MuseSettings() {
+		t.Fatalf("WriteConfig = %q, %v", config, err)
+	}
+	read := func(path string) map[string]any {
+		raw, _ := box.ReadFile(t.Context(), path)
+		var got map[string]any
+		if err := json.Unmarshal(raw, &got); err != nil {
+			t.Fatalf("%s: %v\n%s", path, err, raw)
+		}
+		return got
+	}
+	if got := read(p.MuseSettings()); !jsonEqual(got, map[string]any{"schema_version": 1.0,
+		"telemetry": map[string]any{"enabled": false}, "run": map[string]any{"system_prompt_append": "SEAT"}}) {
+		t.Errorf("settings = %v", got)
+	}
+	if got := read(p.MuseServers() + "/crewlet-n0nce.json"); !jsonEqual(got, map[string]any{"url": "http://e/mcp",
+		"headers": map[string]any{"Authorization": "Bearer t"}, "required": true, "tool_timeout_sec": 361.0}) {
+		t.Errorf("crewlet = %v", got)
+	}
+	if got := read(p.MuseServers() + "/local-n0nce.json"); !jsonEqual(got, map[string]any{"type": "stdio",
+		"command": "srv", "args": []any{"-x"}, "env": map[string]any{"K": "v"}, "required": true}) {
+		t.Errorf("local = %v", got)
+	}
+	if brief, _ := box.ReadFile(t.Context(), p.Brief()); string(brief) != "fix it" {
+		t.Errorf("the brief file holds %q", brief)
+	}
+	if _, err := (Muse{}).WriteConfig(t.Context(), box, sandbox.RunRequest{}, p); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := box.ReadFile(t.Context(), p.MuseSettings()); strings.Contains(string(raw), `"run"`) {
+		t.Errorf("a run with no system text wrote %s", raw)
+	}
+	if _, err := (Muse{}).WriteConfig(t.Context(), box, sandbox.RunRequest{MCPServers: map[string]sandbox.MCPServer{
+		"a b": {Transport: sandbox.TransportHTTP, URL: "http://e"}}}, p); err == nil {
+		t.Error("a server name no file and shell word carries was taken")
+	}
+}
+
+// jsonEqual reports whether a and b marshal to the same JSON.
+func jsonEqual(a, b any) bool {
+	x, _ := json.Marshal(a)
+	y, _ := json.Marshal(b)
+	return bytes.Equal(x, y)
+}
+
+// A MUSE RUN PAST ITS STANDING-INSTRUCTION LIMIT IS REFUSED AT LAUNCH, naming
+// the setting, rather than started to fail in its box: 1.4.25 refuses more than
+// 65,536 bytes of `run.system_prompt_append` (measured).
+//
+// Mutation: raise or drop museSystemMax.
+func TestAMuseRunPastItsSystemLimitIsRefused(t *testing.T) {
+	box := sandbox.NewFakeSandbox("b")
+	p := PathsFor(box)
+	if _, err := (Muse{}).WriteConfig(t.Context(), box, sandbox.RunRequest{System: strings.Repeat("x", 65536)}, p); err != nil {
+		t.Fatalf("65,536 bytes refused: %v", err)
+	}
+	_, err := (Muse{}).WriteConfig(t.Context(), box, sandbox.RunRequest{System: strings.Repeat("x", 65537)}, p)
+	if err == nil || !strings.Contains(err.Error(), "run.system_prompt_append") {
+		t.Fatalf("65,537 bytes: %v, want the limit named", err)
+	}
+}
+
+// A CONTINUING RUN WRITES A SECOND WIRING for the session its script may
+// start instead, its servers wired to the job's other token, and the brief
+// that session is handed.
+//
+// Mutation: write the fresh servers from the continued wiring.
+func TestAContinuingMuseRunWritesTheFreshSessionsWiring(t *testing.T) {
+	fixedMuseNonce(t)
+	box := sandbox.NewFakeSandbox("b")
+	p := PathsFor(box)
+	server := func(token string) map[string]sandbox.MCPServer {
+		return map[string]sandbox.MCPServer{"crewlet": {Transport: sandbox.TransportHTTP, URL: "http://e/mcp",
+			Headers: map[string]string{"Authorization": "Bearer " + token}}}
+	}
+	req := sandbox.RunRequest{Resume: "0b5e0000-0000-4000-8000-0000000000a1", FreshBrief: "start over",
+		MCPServers: server("continued"), FreshWiring: &sandbox.Wiring{MCPServers: server("fresh")}}
+	if _, err := (Muse{}).WriteConfig(t.Context(), box, req, p); err != nil {
+		t.Fatal(err)
+	}
+	fresh, _ := box.ReadFile(t.Context(), p.MuseServersFresh()+"/crewlet-n0nce.json")
+	continued, _ := box.ReadFile(t.Context(), p.MuseServers()+"/crewlet-n0nce.json")
+	if !strings.Contains(string(fresh), "Bearer fresh") || !strings.Contains(string(continued), "Bearer continued") {
+		t.Fatalf("servers %s, fresh %s", continued, fresh)
+	}
+	if brief, _ := box.ReadFile(t.Context(), p.FreshBrief()); string(brief) != "start over" {
+		t.Errorf("the fresh brief holds %q", brief)
+	}
+}
+
+// A MUSE SESSION PACKS ITS RECORD, ITS SUBAGENTS' AND ITS TOOL OUTPUTS UNDER
+// ITS DAY, never cron.db (binary, which the text scrub would corrupt) nor the
+// cli log; and restores in another home under the same day, every other copy
+// of it there removed, its script continuing it.
+//
+// Mutation: pack the whole directory, or restore under another day.
+func TestAMuseSessionPacksAndRestoresUnderItsDay(t *testing.T) {
+	const id = "0b5e0000-0000-4000-8000-0000000000b1"
+	day := "2026/11/22/" + id
+	dir := "/.local/share/muse/sessions/" + day
+	from := museScriptHome(t, map[string]string{
+		dir + "/session.jsonl":             "{\"payload_type\":\"x\"}\n",
+		dir + "/subagent/t1/session.jsonl": "{}\n",
+		dir + "/tool-outputs/a/out.txt":    "output",
+		dir + "/cron.db":                   "SQLite format 3\x00",
+		dir + "/cli-1.log":                 "log",
+		"/.config/muse/auth.json":          `{"providers":{}}`,
+	})
+	dest := from.WorkDir() + "/pack.tgz"
+	runSh(t, (Muse{}).Pack(from, id, from.WorkDir()+"/staged", dest, false))
+	raw, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	members := tarFiles(t, raw)
+	want := []string{day + "/session.jsonl", day + "/subagent/t1/session.jsonl", day + "/tool-outputs/a/out.txt"}
+	if !slices.Equal(members, want) {
+		t.Fatalf("members = %v, want %v", members, want)
+	}
+
+	stale := "/.local/share/muse/sessions/2026/11/01/" + id
+	to := museScriptHome(t, map[string]string{stale + "/session.jsonl": "{}\n"})
+	if err := os.WriteFile(to.SessionCarried(), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gate := "n=" + museSupported + "\n" +
+		museSessionGate(Session{ID: id, Continues: true, Replaces: true, Fresh: "fresh"}, to, false) +
+		`printf '%s\n' "$s" "$k" "$w"`
+	if got := string(runSh(t, gate)); got != id+"\nyes\n\n" {
+		t.Fatalf("the gate said %q, want the carried session continued", got)
+	}
+	if _, err := os.Stat(to.Home + dir + "/tool-outputs/a/out.txt"); err != nil {
+		t.Errorf("the session is not restored under its day: %v", err)
+	}
+	if _, err := os.Stat(to.Home + stale); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the box's own copy under another day stayed: %v", err)
+	}
+}
+
+// tarFiles is the regular files of a gzipped tar, in its order.
+func tarFiles(t *testing.T, raw []byte) []string {
+	t.Helper()
+	zr, err := gzip.NewReader(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var files []string
+	tr := tar.NewReader(zr)
+	for {
+		h, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			return files
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if h.Typeflag == tar.TypeReg {
+			files = append(files, h.Name)
+		}
+	}
+}
+
+// A MUSE SESSION CONTINUES ONLY BETWEEN TWO BOXES ON EXACTLY 1.4.25, each
+// release as `muse --version` prints it: any other pair, a newer release
+// included, starts a session of its own, naming both.
+//
+// Mutation: compare by a floor, or drop the writer's release.
+func TestAMuseSessionContinuesOnlyBetweenBoxesOnTheSupportedRelease(t *testing.T) {
+	const supported, newer, older = "Muse Code 1.4.25 (1.4.25-R9361.1)", "Muse Code 1.4.30 (1.4.30-R1.1)",
+		"Muse Code 1.4.13 (1.4.13-R6996.1)"
+	cases := []struct {
+		box, writer string
+		ok          bool
+	}{
+		{supported, supported, true},
+		{newer, supported, false},
+		{supported, newer, false},
+		{older, supported, false},
+		{supported, older, false},
+		{supported, "", false},
+	}
+	for _, c := range cases {
+		ok, why := (Muse{}).Continues(c.box, c.writer)
+		if ok != c.ok {
+			t.Errorf("Continues(%q, %q) = %v (%s), want %v", c.box, c.writer, ok, why, c.ok)
+		}
+		if !ok && (!strings.Contains(why, museVersionWords(c.box)) || !strings.Contains(why, museVersionWords(c.writer))) {
+			t.Errorf("Continues(%q, %q) says %q, naming neither release", c.box, c.writer, why)
+		}
+	}
+}
+
+// A BOX'S RELEASE DECIDES THE RUN: an older one is refused before anything
+// runs, a newer one starts a session of its own where a session was to be
+// continued, and only 1.4.25 continues it (the script as a box runs it, its
+// `muse --version` a stand-in's).
+//
+// Mutation: let a newer release continue, or start an older one.
+func TestAMuseBoxsReleaseDecidesTheRun(t *testing.T) {
+	const id = "0b5e0000-0000-4000-8000-0000000000c9"
+	for _, c := range []struct {
+		version string
+		refused bool
+		k       string
+	}{
+		{"Muse Code 1.4.13 (1.4.13-R6996.1)", true, ""},
+		{"Muse Code 1.4.30 (1.4.30-R1.1)", false, "no"},
+		{"Muse Code 1.4.25 (1.4.25-R9361.1)", false, "yes"},
+	} {
+		p := museScriptHome(t, map[string]string{
+			"/.local/share/muse/sessions/2026/11/22/" + id + "/session.jsonl": "{}\n",
+		})
+		bin := t.TempDir()
+		if err := os.WriteFile(filepath.Join(bin, "muse"), []byte("#!/bin/sh\necho '"+c.version+"'\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		script := "PATH=" + bin + ":$PATH\n" + museRelease +
+			fmt.Sprintf(`if ! at %s; then echo refused; exit 0; fi`+"\n", floorArgs(museSupported)) +
+			museSessionGate(Session{ID: id, Continues: true, Fresh: "fresh-id"}, p, false) +
+			`printf '%s %s\n' "$k" "$w"`
+		out := strings.TrimSpace(string(runSh(t, script)))
+		k, _, _ := strings.Cut(out, " ")
+		switch {
+		case c.refused && out != "refused":
+			t.Errorf("%s: the script said %q, want it refused", c.version, out)
+		case !c.refused && k != c.k:
+			t.Errorf("%s: the script said %q, want continued %s", c.version, out, c.k)
+		case c.k == "no" && !strings.Contains(out, "1.4.30"):
+			t.Errorf("%s: a newer release's fresh start says %q, naming no release", c.version, out)
+		}
+	}
+}
+
+// museArchive is a gzipped tar holding files, by member name.
+func museArchive(t *testing.T, files map[string][]byte) []byte {
+	t.Helper()
+	var out bytes.Buffer
+	zw := gzip.NewWriter(&out)
+	tw := tar.NewWriter(zw)
+	for _, name := range slices.Sorted(maps.Keys(files)) {
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o600, Size: int64(len(files[name])),
+			Typeflag: tar.TypeReg}); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = tw.Write(files[name])
+	}
+	_ = tw.Close()
+	_ = zw.Close()
+	return out.Bytes()
+}
+
+// museTranscriptOf is archive's transcript entries.
+func museTranscriptOf(t *testing.T, archive []byte) []TranscriptEntry {
+	t.Helper()
+	got, err := newTranscriptBuilder(0, TranscriptReadBounds(), TranscriptFilter{}).decode(t.Context(), Muse{},
+		bytes.NewReader(archive))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got.Entries
+}
+
+// A MUSE ARCHIVE READS AS ITS SESSION'S TRANSCRIPT: the brief, the model's
+// calls and their results, its answer, and a subagent's lines under its
+// thread; a compaction as its summary; a hook's context the engine wrote as
+// the note it carries, and one it did not write not at all.
+//
+// Mutation: read the subagent's record as the main thread's, or file a hook's
+// context as a brief.
+func TestAMuseArchiveReadsAsTheSessionsTranscript(t *testing.T) {
+	const day = "2026/11/22/0b5e0000-0000-4000-8000-000000000005"
+	got := museTranscriptOf(t, museArchive(t, map[string][]byte{
+		day + "/session.jsonl": museFixture(t, "subagent.session.jsonl"),
+		day + "/subagent/01a20260-c393-79c2-8689-54b9168800ec/session.jsonl": museFixture(t, "subagent.child.jsonl"),
+	}))
+	has := func(kind EntryKind, thread, text string) bool {
+		return slices.ContainsFunc(got, func(e TranscriptEntry) bool {
+			return e.Kind == kind && e.Thread == thread && strings.Contains(e.Text, text)
+		})
+	}
+	if !has(EntryBrief, "", "run it m5") || !has(EntryModel, "", "done m5.") ||
+		!slices.ContainsFunc(got, func(e TranscriptEntry) bool { return e.Kind == EntryToolCall && e.Tool == "subagent_spawn" }) ||
+		!has(EntryModel, "01a20260-c393-79c2-8689-54b9168800ec", "CHILD-FINAL") {
+		t.Fatalf("entries = %+v", got)
+	}
+
+	note := "## A note from ada, sent while this turn was running\n\nTarget main."
+	block, _ := json.Marshal(map[string]any{"payload_type": "runtime.session", "recorded_at": 1795336482096791,
+		"payload": map[string]any{"event": map[string]any{"kind": "context_block_updated", "source": museHookSource,
+			"text": note}}})
+	compacted := append(slices.Clone(museFixture(t, "compacted.session.jsonl")), append(block, '\n')...)
+	got = museTranscriptOf(t, museArchive(t, map[string][]byte{"2026/11/22/s/session.jsonl": compacted}))
+	if !has(EntrySummary, "", "SUMMARY-M6") || !has(EntryNote, "", "Target main.") {
+		t.Fatalf("entries = %+v, want the summary and the note", got)
+	}
+	if slices.ContainsFunc(got, func(e TranscriptEntry) bool { return strings.Contains(e.Text, "PERIWINKLE") }) {
+		t.Error("a hook's context the engine did not write was read as an entry")
+	}
+}
+
+// A MUSE RUN'S ARTEFACTS ARE ITS OWN FILES, never its settings (written whole
+// every run, beside the login), its skills (rewritten by every run) or its
+// sessions.
+//
+// Mutation: list the settings or the sessions directory.
+func TestAMuseRunsArtifactsAreItsOwnFiles(t *testing.T) {
+	p := Paths{Home: "/h"}
+	files, dirs := (Muse{}).artifacts(p)
+	if !slices.Equal(files, []string{p.MuseChildLines(), p.MuseTakeConfig(), p.MuseTakeConfigFresh(), p.MuseNoteHelper()}) ||
+		!slices.Equal(dirs, []string{p.MuseServers(), p.MuseServersFresh(), p.MuseNotesPlugin()}) {
+		t.Fatalf("artifacts = %v %v", files, dirs)
+	}
+}
+
+// A MUSE SESSION IS JUDGED ON THE SAFE SIDE: its record holds no window, so a
+// relaunch hands the summarized telling, thins nothing, and counts a brief's
+// byte as a token.
+//
+// Mutation: judge it by a window.
+func TestAMuseSessionIsJudgedOnTheSafeSide(t *testing.T) {
+	got := SessionTraits(MuseName)
+	if got.FirstRequest != sandbox.FirstRequestBox || got.CallKeying != sandbox.CallKeyingNone || got.Charge != 1 {
+		t.Fatalf("traits = %+v", got)
+	}
+}
+
+// fixedMuseNonce names every server of the case's runs with the suffix
+// "n0nce", for the case to read the files back by name. Never in a parallel
+// case: the suffix is the package's.
+func fixedMuseNonce(t *testing.T) {
+	t.Helper()
+	was := museNonce
+	museNonce = func() string { return "n0nce" }
+	t.Cleanup(func() { museNonce = was })
+}
+
+// EVERY RUN NAMES ITS SERVERS AFRESH, twelve hex digits no repository file
+// can know beforehand: a trusted run loads the repository's `.mcp.json`
+// beside the run's own servers, so the run's bridge is never under a name a
+// checkout can hold.
+//
+// Mutation: name the servers as handed, or reuse one suffix.
+func TestEveryMuseRunNamesItsServersAfresh(t *testing.T) {
+	seen := map[string]bool{}
+	for range 64 {
+		n := museNonce()
+		if len(n) != 12 || strings.Trim(n, "0123456789abcdef") != "" || seen[n] {
+			t.Fatalf("suffix %q: want twelve hex digits, new each run", n)
+		}
+		seen[n] = true
+	}
+}

@@ -34,7 +34,7 @@ func TestACoordinationValueIsHeldToWhatItsLeadersReadCarriesBackAcrossALink(t *t
 	if err != nil {
 		t.Fatalf("open the bucket through the leaf: %v", err)
 	}
-	b := settled(client, raw, AcrossLink)
+	b := settled(client, raw, AcrossLink, undeclaredHolding)
 	room := coord.MaxValueBytes
 	if want := jsapi.MaxReadable(client.Conn().MaxPayload()) - kvHeaderBytes; room != want {
 		t.Fatalf("a value is held to %d bytes, and a leaf's link carries back one of %d", room, want)
@@ -88,7 +88,7 @@ func TestACreateRefusedForItsValuesSizeWasNeverSent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open the bucket through the leaf: %v", err)
 	}
-	b := settled(client, raw, AcrossLink)
+	b := settled(client, raw, AcrossLink, undeclaredHolding)
 	_, err = createKey(ctx, client, b, "too-large", make([]byte, coord.MaxValueBytes+1))
 	if !errors.Is(err, coord.ErrValueTooLarge) || errors.Is(err, errCreateUnanswered) {
 		t.Fatalf("a create a byte past the bound = %v, want coord.ErrValueTooLarge and not a "+
@@ -108,7 +108,7 @@ func TestACreateRefusedForItsValuesSizeWasNeverSent(t *testing.T) {
 // reads as an outage.
 func TestARefusalMadeBeforeAnythingWasSentIsNeverMarked(t *testing.T) {
 	t.Parallel()
-	refused := coord.HoldValue("crewlet_test/key", coord.MaxValueBytes+1)
+	refused := coord.HoldValue("crewlet_test/key", coord.MaxValueBytes+1, coord.MaxValueBytes)
 	for name, err := range map[string]error{
 		"unavailable":  unavailable("write the key", refused),
 		"writeUnknown": writeUnknown("write the key", refused),
