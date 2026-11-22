@@ -1,4 +1,4 @@
-// How this package reads a whole bucket: ONE ORDERED PASS over the client's key
+// How this package reads a whole bucket: ONE ORDERED PASS over the bucket's key
 // watcher, carrying each key with its value and filtered at the broker, then
 // CERTIFIED against the stream leader's per-subject key index. Never a key
 // listing plus a Get per key (a round trip per key on top of a consumer per
@@ -207,13 +207,17 @@ func (p *pass) close() {
 // it opens and stops on every return, so no early return leaks one. [passOver]
 // says why its quiet counts from the start.
 //
-// METADATA ONLY: every sweep decides on a key's operation, revision and
-// instant, never its value, and a bucket of activation bodies or run logs
-// walked whole moves megabytes across a link for nothing.
+// HEADERS ONLY ([headerWatcher]): every sweep decides on a key's operation,
+// revision and instant, never its value, and a bucket of activation bodies or
+// run logs walked whole moves megabytes across a link for nothing.
 func watchWalk(ctx context.Context, kv jetstream.KeyValue, keys, what string) (map[string]jetstream.KeyValueEntry, error) {
-	// Watch, not IgnoreDeletes, for [beginPass]'s reasons: the sweep is after
-	// the markers.
-	w, err := kv.Watch(ctx, keys, jetstream.MetaOnly())
+	h, ok := kv.(headerWatcher)
+	if !ok {
+		return nil, fmt.Errorf("coord/kv: read %s: %s is not a bucket settled where it was opened, "+
+			"so nothing watches its headers alone", what, kv.Bucket())
+	}
+	// Markers included, for [beginPass]'s reasons: the sweep is after them.
+	w, err := h.watchHeaders(ctx, keys)
 	if err != nil {
 		return nil, unavailable("read "+what, err)
 	}
@@ -290,8 +294,8 @@ func passOver(ctx context.Context, w jetstream.KeyWatcher, what string,
 // lacks; across a link it grows by the crossing of the largest value the
 // pass may deliver ([passQuiet]).
 //
-// Five seconds is the client's own idleness interval for this consumer (nats.go
-// js.go orderedHeartbeatsInterval), where the broker itself calls it idle. A
+// Five seconds is the client's own idleness interval for an ordered consumer
+// (nats.go js.go orderedHeartbeatsInterval), where the broker calls it idle. A
 // delivering pass re-arms it on every entry. Shorter, a busy server's pause
 // turns the rest of a large pass into a leader read per key; longer, a pass
 // that met removed messages holds its caller longer. A cost bound, never a
@@ -597,9 +601,8 @@ func sizedReader(js jetstream.JetStream, kv jetstream.KeyValue, valueBytes int) 
 
 // operationOf reads what a stored KV message IS from its headers by the
 // client's own rule (nats.go jetstream/kv.go get): decoded differently from the
-// pass, it would list a key the pass dropped or drop one it listed. The
-// KV-Operation values are the KV protocol's (ADR-8), which neither library
-// exports. Headers that do not decode are [errUndecodableHeaders].
+// pass, it would list a key the pass dropped or drop one it listed. Headers
+// that do not decode are [errUndecodableHeaders].
 func operationOf(raw []byte) (jetstream.KeyValueOp, error) {
 	if len(raw) == 0 {
 		return jetstream.KeyValuePut, nil
@@ -608,22 +611,29 @@ func operationOf(raw []byte) (jetstream.KeyValueOp, error) {
 	if err != nil {
 		return 0, fmt.Errorf("%w: %w", errUndecodableHeaders, err)
 	}
+	return operationOfHeader(hdr), nil
+}
+
+// operationOfHeader is [operationOf] of headers already decoded, as a watch
+// delivers them ([settledBucket.watch]). The KV-Operation values are the KV
+// protocol's (ADR-8), which neither library exports.
+func operationOfHeader(hdr nats.Header) jetstream.KeyValueOp {
 	if op := hdr.Get(server.KVOperation); op != "" {
 		switch op {
 		case kvOperationDelete:
-			return jetstream.KeyValueDelete, nil
+			return jetstream.KeyValueDelete
 		case string(server.KVOperationValuePurge):
-			return jetstream.KeyValuePurge, nil
+			return jetstream.KeyValuePurge
 		}
-		return jetstream.KeyValuePut, nil
+		return jetstream.KeyValuePut
 	}
 	switch hdr.Get(jetstream.MarkerReasonHeader) {
 	case server.JSMarkerReasonMaxAge, server.JSMarkerReasonPurge:
-		return jetstream.KeyValuePurge, nil
+		return jetstream.KeyValuePurge
 	case server.JSMarkerReasonRemove:
-		return jetstream.KeyValueDelete, nil
+		return jetstream.KeyValueDelete
 	}
-	return jetstream.KeyValuePut, nil
+	return jetstream.KeyValuePut
 }
 
 // kvOperationDelete is the KV-Operation value of a delete marker.

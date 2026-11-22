@@ -304,6 +304,30 @@ func TestNothingCreatesThroughTheBucketHandleOrSweepsThroughTheClient(t *testing
 	}
 }
 
+// NOTHING WATCHES A SETTLED BUCKET THROUGH THE CLIENT. Its watch beats every
+// five seconds and resets when nothing arrived in two, so across a link a
+// value longer to cross is cut and asked for again for ever (bucketwatch.go);
+// on one server it passes every case, so the source is read: no Watch,
+// WatchAll or WatchFiltered called on a handle's embedded KeyValue.
+//
+// Mutation: let settledBucket.Watch delegate to b.KeyValue.Watch.
+func TestNothingWatchesASettledBucketThroughTheClient(t *testing.T) {
+	t.Parallel()
+	found := callsInPackage(t, func(method string, call *ast.CallExpr) bool {
+		switch method {
+		case "Watch", "WatchAll", "WatchFiltered":
+			on, ok := call.Fun.(*ast.SelectorExpr).X.(*ast.SelectorExpr)
+			return ok && on.Sel.Name == "KeyValue"
+		}
+		return false
+	})
+	if len(found) > 0 {
+		t.Errorf("these calls watch a settled bucket through the client's watcher:\n  %s\n"+
+			"a watch goes through settledBucket.Watch, whose heartbeat its largest value fits",
+			strings.Join(found, "\n  "))
+	}
+}
+
 // NOTHING IN THIS PACKAGE READS A KEY THROUGH A DIRECT GET.
 //
 // The rule that every single-key read is the LEADER's ([getLatest] or a

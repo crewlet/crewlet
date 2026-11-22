@@ -31,8 +31,9 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
-// settledBucket is a bucket handle whose conditional writes the leader decides.
-// Everything else is the client's handle, unchanged.
+// settledBucket is a bucket handle whose conditional writes the leader decides
+// and whose watches are its own ([settledBucket.Watch]). Everything else is
+// the client's handle, unchanged.
 type settledBucket struct {
 	jetstream.KeyValue
 
