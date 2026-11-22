@@ -258,7 +258,7 @@ func TestMuseWriteConfigWritesItsSettingsAndServers(t *testing.T) {
 			CallTimeout: 6*time.Minute + 500*time.Millisecond},
 		"local": {Command: "srv", Args: []string{"-x"}, Env: map[string]string{"K": "v"}},
 	}}
-	config, err := (Muse{}).WriteConfig(t.Context(), box, req, p)
+	config, err := (Muse{}).WriteConfig(t.Context(), box, req, Session{}, p)
 	if err != nil || config != p.MuseSettings() {
 		t.Fatalf("WriteConfig = %q, %v", config, err)
 	}
@@ -285,14 +285,14 @@ func TestMuseWriteConfigWritesItsSettingsAndServers(t *testing.T) {
 	if brief, _ := box.ReadFile(t.Context(), p.Brief()); string(brief) != "fix it" {
 		t.Errorf("the brief file holds %q", brief)
 	}
-	if _, err := (Muse{}).WriteConfig(t.Context(), box, sandbox.RunRequest{}, p); err != nil {
+	if _, err := (Muse{}).WriteConfig(t.Context(), box, sandbox.RunRequest{}, Session{}, p); err != nil {
 		t.Fatal(err)
 	}
 	if raw, _ := box.ReadFile(t.Context(), p.MuseSettings()); strings.Contains(string(raw), `"run"`) {
 		t.Errorf("a run with no system text wrote %s", raw)
 	}
 	if _, err := (Muse{}).WriteConfig(t.Context(), box, sandbox.RunRequest{MCPServers: map[string]sandbox.MCPServer{
-		"a b": {Transport: sandbox.TransportHTTP, URL: "http://e"}}}, p); err == nil {
+		"a b": {Transport: sandbox.TransportHTTP, URL: "http://e"}}}, Session{}, p); err == nil {
 		t.Error("a server name no file and shell word carries was taken")
 	}
 }
@@ -312,10 +312,10 @@ func jsonEqual(a, b any) bool {
 func TestAMuseRunPastItsSystemLimitIsRefused(t *testing.T) {
 	box := sandbox.NewFakeSandbox("b")
 	p := PathsFor(box)
-	if _, err := (Muse{}).WriteConfig(t.Context(), box, sandbox.RunRequest{System: strings.Repeat("x", 65536)}, p); err != nil {
+	if _, err := (Muse{}).WriteConfig(t.Context(), box, sandbox.RunRequest{System: strings.Repeat("x", 65536)}, Session{}, p); err != nil {
 		t.Fatalf("65,536 bytes refused: %v", err)
 	}
-	_, err := (Muse{}).WriteConfig(t.Context(), box, sandbox.RunRequest{System: strings.Repeat("x", 65537)}, p)
+	_, err := (Muse{}).WriteConfig(t.Context(), box, sandbox.RunRequest{System: strings.Repeat("x", 65537)}, Session{}, p)
 	if err == nil || !strings.Contains(err.Error(), "run.system_prompt_append") {
 		t.Fatalf("65,537 bytes: %v, want the limit named", err)
 	}
@@ -336,7 +336,7 @@ func TestAContinuingMuseRunWritesTheFreshSessionsWiring(t *testing.T) {
 	}
 	req := sandbox.RunRequest{Resume: "0b5e0000-0000-4000-8000-0000000000a1", FreshBrief: "start over",
 		MCPServers: server("continued"), FreshWiring: &sandbox.Wiring{MCPServers: server("fresh")}}
-	if _, err := (Muse{}).WriteConfig(t.Context(), box, req, p); err != nil {
+	if _, err := (Muse{}).WriteConfig(t.Context(), box, req, Session{}, p); err != nil {
 		t.Fatal(err)
 	}
 	fresh, _ := box.ReadFile(t.Context(), p.MuseServersFresh()+"/crewlet-n0nce.json")

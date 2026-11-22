@@ -133,3 +133,15 @@ func notesOffWhy(runner Runner) string {
 	}
 	return ""
 }
+
+// freshStarter is a [Runner] whose harness continues no earlier session, so
+// every launch on it starts one of its own whatever session the turn or the
+// box keeps ([Coordinator.continueSession]). Optional: a runner that is none
+// continues what a launch hands it.
+type freshStarter interface{ StartsFresh() bool }
+
+// startsFresh reports whether runner continues no earlier session.
+func startsFresh(runner Runner) bool {
+	starter, ok := runner.(freshStarter)
+	return ok && starter.StartsFresh()
+}

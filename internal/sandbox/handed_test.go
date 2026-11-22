@@ -61,7 +61,6 @@ func TestEverySecretALaunchHandsItsBoxIsKeptForTheScrubAndNothingElse(t *testing
 		"NODE_ENV": "production-settings", "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
 		otelBoxEndpointVar: "http://host.docker.internal:8080" + otelTokenPath + "the-runs-export-token",
 		"GITHUB_TOKEN":     "resolved-env-token",
-		GitTokenVar:        "the-runs-gitlet-token",
 	}
 	handed := handedSecrets(req, env)
 	for class, want := range map[string]string{
@@ -71,7 +70,6 @@ func TestEverySecretALaunchHandsItsBoxIsKeptForTheScrubAndNothingElse(t *testing
 		"an MCP server's env":                          "mcp-env-value",
 		"what an MCP server's url's reference held":    "url-path-secret-value",
 		"the run's own export token":                   "the-runs-export-token",
-		"the run's Gitlet credential":                  "the-runs-gitlet-token",
 		"the seeded login's access token":              "login-access-value",
 		"the seeded login's refresh token":             "login-refresh-value",
 		"a JSON-valued secret, whole":                  keyDocument,
@@ -779,4 +777,33 @@ func TestAServerNameALaunchDeclaresIsNeverTakenOutByValue(t *testing.T) {
 			t.Errorf("the handed set %q lost %q with the server's name", handed.Values, want)
 		}
 	}
+}
+
+// A LAUNCH'S GITLET CREDENTIAL IS WRITTEN INTO ITS BOX AND SEALED WITH ITS JOB.
+// In no variable, it is in nothing else a capture's scrub reads, so the
+// launch writes it to the box's file before the job starts and keeps it in
+// the job's set beside its row, where a transcript that prints the file is
+// scrubbed of it.
+//
+// Mutations, each red: write no file; keep the credential out of the job's
+// set.
+func TestALaunchsGitletCredentialIsWrittenIntoItsBoxAndSealedWithItsJob(t *testing.T) {
+	t.Parallel()
+	inBubble(t, func(t *testing.T) {
+		const access = "the-launchs-gitlet-credential"
+		rig, _, keep := keepingRigWith(t, nil)
+		req := launchReq("t1")
+		req.RunEnv = func(string) (LaunchEnv, error) { return LaunchEnv{GitAccess: access}, nil }
+		res, err := rig.coordinator.Launch(t.Context(), rig.manager, req)
+		if err != nil {
+			t.Fatalf("Launch: %v", err)
+		}
+		if got, err := rig.provider.Box(res.SandboxID).ReadFile(t.Context(), GitAccessFile); err != nil ||
+			string(got) != access {
+			t.Errorf("the box's credential file holds %q (%v), want the launch's", got, err)
+		}
+		if set := openedSet(t, rig, keep, "t1"); !slices.Contains(set.Values, access) {
+			t.Errorf("the job's set holds %q, want the launch's Gitlet credential among them", set.Values)
+		}
+	})
 }
