@@ -35,14 +35,19 @@ func launchedEnv(t *testing.T, c *Company, seat *org.Role) (map[string]string, s
 // was started with and the cell the launch picked.
 func launchedRequest(t *testing.T, c *Company, seat *org.Role) (sandbox.RunRequest, sandbox.Placement) {
 	t.Helper()
-	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
+	e, runners := launchRigRunners(t, c, bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	}))
 	l := launcherOn(e, c, seat, "t1")
 	if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err != nil {
 		t.Fatalf("LaunchExecutor: %v", err)
 	}
-	started := jobs.Started()
+	// EVERY HARNESS'S RUNNER, so a seat on any harness is read off the job its
+	// own runner started, and a launch on two is caught.
+	var started []sandbox.RunRequest
+	for _, runner := range runners {
+		started = append(started, runner.Started()...)
+	}
 	if len(started) != 1 {
 		t.Fatalf("%d jobs started, want the executor's one", len(started))
 	}
