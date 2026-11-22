@@ -12,6 +12,7 @@ import { LayerHost } from "@crewlethq/ui";
 import "~/test/layout.tsx";
 import { Router } from "~/app/router.tsx";
 import type { GrowthCard, GrowthChangeRow } from "~/contract/growth.ts";
+import { AnalyticsAttribution, GOOGLE_ANALYTICS_HOME } from "./AnalyticsAttribution.tsx";
 import { GrowthConnections } from "./GrowthConnections.tsx";
 import { GrowthDecisionCard } from "./GrowthDecisionCard.tsx";
 import { RecentChanges } from "./RecentChanges.tsx";
@@ -162,6 +163,15 @@ function overflowing(within: HTMLElement, width: number): string[] {
   return out;
 }
 
+/** The one logo file the stylesheet shows. */
+function shownLogo(): HTMLImageElement {
+  const shown = [...host!.querySelectorAll<HTMLImageElement>("img")].filter(
+    (img) => getComputedStyle(img).display !== "none",
+  );
+  expect(shown).toHaveLength(1);
+  return shown[0]!;
+}
+
 const card = (data: GrowthCard) => (
   <GrowthDecisionCard
     card={data}
@@ -310,6 +320,26 @@ describe.each(["light", "dark"] as const)("on a %s document", (theme) => {
     },
   );
 
+  test.each([1440, 390])(
+    "the Google Analytics logo shows the file for the ground, at the policy's 154 by 50 floor, inside %ipx",
+    async (width) => {
+      await mount(width, theme, <AnalyticsAttribution />);
+      expect(overflowing(host!, width)).toEqual([]);
+      const logo = shownLogo();
+      await logo.decode();
+      // The white-text file on a dark ground, the colour one on a light ground.
+      expect(logo.currentSrc).toContain(theme === "dark" ? "_wht" : "_clr");
+      const box = logo.getBoundingClientRect();
+      expect(box.height).toBe(50);
+      expect(box.width).toBeGreaterThanOrEqual(154);
+      // Unaltered: drawn at the file's own aspect, 1519 by 402.
+      expect(
+        Math.abs(box.width / box.height - logo.naturalWidth / logo.naturalHeight),
+      ).toBeLessThan(0.02);
+      expect(logo.closest("a")!.href).toBe(GOOGLE_ANALYTICS_HOME);
+    },
+  );
+
   test("the stars of a review sit on the author's line", async () => {
     await mount(390, theme, card(batch()));
     const target = host!.querySelector<HTMLElement>(".growth-decision__target")!;
@@ -321,4 +351,13 @@ describe.each(["light", "dark"] as const)("on a %s document", (theme) => {
       4,
     );
   });
+});
+
+test("with no theme set, the Google Analytics logo follows the system as the tokens do", async () => {
+  await mount(1440, "light", <AnalyticsAttribution />);
+  document.documentElement.removeAttribute("data-theme");
+  const light = window.matchMedia("(prefers-color-scheme: light)").matches;
+  const logo = shownLogo();
+  await logo.decode();
+  expect(logo.currentSrc).toContain(light ? "_clr" : "_wht");
 });
