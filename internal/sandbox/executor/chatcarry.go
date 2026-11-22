@@ -7,11 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A SESSION THAT IS ONE CHAT FILE, carried between boxes: Gemini CLI's and Qwen
@@ -36,11 +34,10 @@ type chatGate struct {
 	// unpacked under "$in", into the place locate finds it, the box's own copy
 	// replaced: true only once the session is in place.
 	restore string
-	// carries is a shell condition, true where the box's release ($v, as
-	// `--version` printed it) continues a session carried from another box;
-	// refused is the shell word the run says where it does not, double-quoted
-	// so it can name "$v".
-	carries, refused string
+	// release is the one release of the harness this build continues a
+	// carried session on, which the box's ($v, as `--version` printed it)
+	// must be exactly ([exactCarry]).
+	release string
 	// fresh are the files a run writes twice where it may start a session of
 	// its own ([sandbox.RunRequest.FreshWiring]): each copy, under the job's
 	// other bridge token, beside the file it replaces.
@@ -86,7 +83,8 @@ func chatSessionGate(session Session, paths Paths, g chatGate) string {
 	}
 	line(`if [ -z "$h" ]; then`)
 	line(`  if [ ! -s %s ]; then w='it is not in this box, and no archive of it was carried here'`, carried)
-	line(`  elif ! { %s; }; then w=%s`, g.carries, g.refused)
+	line(`  elif [ "$v" != %s ]; then w=%s"$v"`, q(g.release),
+		q("this build continues "+g.harness+" sessions only on "+g.release+", and this box runs "))
 	line(`  elif ! command -v tar > /dev/null 2>&1 || ! command -v gzip > /dev/null 2>&1; then w='this box has no tar and gzip to restore its archive with'`)
 	line(`  elif ! { in=%s && rm -rf %s && mkdir -p "$in" && tar -xzf %s -C "$in" < /dev/null > /dev/null 2>&1 && %s; }; then w='its archive could not be restored'`,
 		q(staged+"/in"), q(staged), carried, g.restore)
@@ -201,45 +199,44 @@ func (b *transcriptBuilder) chatArchive(ctx context.Context, archive io.Reader, 
 	}
 }
 
-// measuredCarry reports whether harness can continue, at release box, a
-// session release writer wrote in another box, each as `--version` printed
-// it, and if not, why in a person's words: both releases among the minors
-// measured carrying each other's sessions both ways ("0.70" holds every
-// 0.70.x). A release of a minor measured keeps that minor's session layout,
-// which only a minor moves; any other is refused, never resumed on a layout
-// nobody read. An unreadable release is taken for a current one, as the notes
-// gate takes it.
-func measuredCarry(harness, box, writer string, measured []string) (bool, string) {
-	for _, r := range []struct{ release, who string }{{box, "this box runs"}, {writer, "the session was written by"}} {
-		numbers, readable := releaseNumbers(r.release)
-		if !readable {
-			continue
+// exactCarry reports whether harness continues, in a box of release box, a
+// session release writer wrote in another box, and if not, why in a person's
+// words: only where both are supported, the one release this build drives the
+// harness at, whose session layout and resume were read. A newer box runs on
+// sessions of its own, an older one not at all ([releaseGate]). box is ""
+// where no box was asked ([Runner.Restores]), which holds the writer alone;
+// a release a box printed that does not read arrives as printed ([boxSaid]).
+func exactCarry(harness, supported, box, writer string) (bool, string) {
+	switch {
+	case box != "" && box != supported:
+		return false, fmt.Sprintf("this build continues %s sessions only on %s, and this box runs %s",
+			harness, supported, box)
+	case writer != supported:
+		if writer == "" {
+			writer = "a release it did not record"
 		}
-		if minor := fmt.Sprintf("%d.%d", numbers[0], numbers[1]); !slices.Contains(measured, minor) {
-			return false, fmt.Sprintf("%s %s %s, and a carried session was measured continuing only "+
-				"between %s %s", r.who, harness, r.release, harness, measuredMinors(measured))
-		}
+		return false, fmt.Sprintf("this build continues %s sessions only on %s, and the session was written by %s",
+			harness, supported, writer)
 	}
 	return true, ""
 }
 
-// measuredMinors is measured as a person reads it: "0.65.x and 0.70.x".
-func measuredMinors(measured []string) string {
-	out := make([]words.Said, len(measured))
-	for i, m := range measured {
-		out[i] = words.Said(m + ".x")
-	}
-	return words.And(out)
-}
-
-// measuredCase is the shell condition [measuredCarry] holds the box's release
-// to in its script, on "$v": true for an unreadable release and for one of the
-// minors measured.
-func measuredCase(measured []string) string {
-	patterns := make([]string, len(measured))
-	for i, m := range measured {
-		patterns[i] = m + ".*"
-	}
-	return `case "$v" in [0-9]*.[0-9]*.[0-9]*) case "$v" in ` + strings.Join(patterns, "|") +
-		`) true;; *) false;; esac;; *) true;; esac`
+// releaseGate is the shell a run's script starts with, once it has read the
+// box's release as v: a release older than supported ends the run before
+// anything else happens, saying so on the error stream, because this build
+// read none of an older release's output. One that does not read as
+// MAJOR.MINOR.PATCH (its first non-digit, non-dot character on cut off) is
+// refused too: it cannot be shown not to be older, and refusing is the reading
+// that fails closed. A newer one runs, on sessions of its own ([exactCarry]).
+func releaseGate(harness, supported string) string {
+	n, _ := releaseNumbers(supported)
+	say := sandbox.ShellQuote("crewlet: this box runs "+harness+" ") + `"${v:-that prints no release}"` +
+		sandbox.ShellQuote(", and this build runs "+harness+" "+supported+" or newer (a release it cannot "+
+			"read counts as older): install "+harness+" "+supported)
+	return `r=${v%%[!0-9.]*} ro=1; rM=${r%%.*} rr=${r#*.}; rn=${rr%%.*} rp=${rr#*.}` + "\n" +
+		`case "$r" in *.*.*) ;; *) ro= ;; esac` + "\n" +
+		`for x in "$rM" "$rn" "$rp"; do case "$x" in ''|*[!0-9]*) ro= ;; esac; done` + "\n" +
+		fmt.Sprintf(`if [ -z "$ro" ] || [ "$rM" -lt %d ] || { [ "$rM" -eq %d ] && { [ "$rn" -lt %d ] || `+
+			`{ [ "$rn" -eq %d ] && [ "$rp" -lt %d ]; }; }; }; then printf '%%s\n' %s >&2; exit 1; fi`,
+			n[0], n[0], n[1], n[1], n[2], say)
 }

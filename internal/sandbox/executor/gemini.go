@@ -72,11 +72,18 @@ func (GeminiCLI) Command(req sandbox.RunRequest, session Session, paths Paths, _
 // model request (measured on 0.70.0 and 0.65.0, zero requests at the stub).
 const geminiExportExit = 42
 
-// geminiScript is a Gemini CLI run's script: pin the slug, read the release,
-// name and record the session ([chatSessionGate], [Paths.SessionRecord]),
-// export the harness's prompt with the run's text after it, run the brief
-// (stdin, [GeminiCLI.Output]), append the run's own spend off its session file
-// ([geminiUsageEvent]), and pack the session for another box ([chatPack]).
+// geminiRelease is the Gemini CLI release this build drives: the newest, whose
+// stream, chat file, hooks and resume it was measured against
+// (testdata/gemini/0.70.0). An older one is refused at the run's start, a
+// newer one runs on sessions of its own, and only this one continues a
+// carried session ([releaseGate], [exactCarry]).
+const geminiRelease = "0.70.0"
+
+// geminiScript is a Gemini CLI run's script: gate the release ([releaseGate]),
+// pin the slug, name and record the session ([chatSessionGate]), export the
+// harness's prompt with the run's text after it, run the brief (stdin), append
+// the run's own spend off its session file ([geminiUsageEvent]), and pack the
+// session for another box ([chatPack]).
 //
 // THE ADD-TO CHANNEL IS BUILT, since Gemini CLI has none: GEMINI_SYSTEM_MD
 // replaces its prompt, so the script has it write the prompt out
@@ -92,10 +99,11 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 		fresh = geminiFreshCopies(paths, geminiHooked(req))
 	}
 	lines := []string{
-		"node " + q(paths.GeminiHelper()) + " pin " + q(paths.GeminiProjects()) + " " + GeminiProjectSlug + " || exit 1",
-		// THE RELEASE, read once for the record and the gate; one the box
-		// prints otherwise than MAJOR.MINOR.PATCH is taken for a current one.
+		// THE RELEASE, read once for the gate, the record and the session's,
+		// before anything else: an older one never runs ([releaseGate]).
 		`v=$(gemini --version < /dev/null 2> /dev/null | head -n 1)`,
+		releaseGate("Gemini CLI", geminiRelease),
+		"node " + q(paths.GeminiHelper()) + " pin " + q(paths.GeminiProjects()) + " " + GeminiProjectSlug + " || exit 1",
 		strings.TrimSuffix(chatSessionGate(session, paths, geminiGate(paths, fresh)), "\n"),
 		// THE RECORD, before the harness starts, so a run killed before it
 		// reported anything still says which session it took up, and why it
@@ -133,8 +141,11 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 		// THE RUN'S OWN SPEND, NOT THE SESSION'S: the responses the chat file
 		// holds as the run starts are listed first and left out of the sum
 		// ([GeminiCLI.Parse]).
-		`if [ "$k" = yes ]; then node `+q(paths.GeminiHelper())+` ids `+q(paths.GeminiChats())+
-			` "$s" > `+before+` 2> /dev/null || : > `+before+`; else : > `+before+`; fi`,
+		// A LIST THAT FAILED IS NO FILE, never an empty one, which would charge the
+		// earlier jobs' requests to this run: the usage line then says why it
+		// read none ([geminiEvents.runSpend]).
+		`rm -f `+before+`; if [ "$k" = yes ]; then node `+q(paths.GeminiHelper())+` ids `+q(paths.GeminiChats())+
+			` "$s" > `+before+`.part 2> /dev/null && mv -f `+before+`.part `+before+`; else : > `+before+`; fi`,
 		`if [ "$k" = yes ]; then set -- --resume "$s"; else set -- --session-id "$s"; fi`,
 		run,
 		"node "+q(paths.GeminiHelper())+" usage "+q(paths.GeminiChats())+` "$s" `+before,
@@ -391,5 +402,5 @@ var _ artifactHolder = GeminiCLI{}
 func (GeminiCLI) artifacts(p Paths) (files, dirs []string) {
 	return []string{p.GeminiHelper(), p.GeminiTake(), p.GeminiTakeConfig(), p.GeminiTakeConfig() + ".fresh",
 		p.GeminiSettings() + ".fresh", p.GeminiDefaultSystem(), p.GeminiExportErr(), p.GeminiSystem(),
-		p.GeminiUsageBefore()}, nil
+		p.GeminiUsageBefore(), p.GeminiUsageBefore() + ".part"}, nil
 }

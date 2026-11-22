@@ -21,6 +21,10 @@
 //                     count), as later tool batches would
 //   QWEN_FAKE_DIE_AFTER_NOTE exits at once after it is handed a note, before
 //                     recording it
+//   QWEN_FAKE_SHRINK_AFTER_NOTE once handed a note, cuts the chat file back
+//                     to its first reply after its first note's record, a
+//                     rewrite shorter than the file was, and exits recording
+//                     nothing
 //   QWEN_FAKE_CHAT_SEED a chat file of Qwen Code's laid in place before the
 //                     prompt is answered
 //   QWEN_FAKE_COMPACT a file of one chat_compression record of Qwen Code's,
@@ -142,6 +146,13 @@ async function replay(promptID) {
         log({ drain: notes, ms })
         if (notes.length > 0) {
           handed++
+          if (env.QWEN_FAKE_SHRINK_AFTER_NOTE) {
+            const lines = fs.readFileSync(chatFile(), "utf8").split("\n")
+            const note = lines.findIndex((l) => l.includes('"mid_turn_user_message"'))
+            const answered = lines.findIndex((l, i) => i > note && l.includes('"type":"assistant"'))
+            fs.writeFileSync(chatFile(), lines.slice(0, answered + 1).join("\n") + "\n")
+            process.exit(1)
+          }
           if (env.QWEN_FAKE_DIE_AFTER_NOTE) process.exit(1)
           record(notes)
           if (env.QWEN_FAKE_FAIL_AFTER_NOTE && handed === count(env.QWEN_FAKE_FAIL_AFTER_NOTE)) {

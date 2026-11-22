@@ -14,8 +14,8 @@ import (
 // filed under the slug the run's helper pins before every run, so it lies at
 // one path whatever the box's working directory is called. Restored there
 // after the pin, it resumes (`--resume <id>`) in a fresh home and another
-// working directory, its MCP call pairs whole (measured on 0.70.0 and 0.65.0,
-// each continuing the other's). Never `.project_root`: a foreign one makes the
+// working directory, its MCP call pairs whole (measured on 0.70.0, the one
+// release it continues on: [geminiRelease]). Never `.project_root`: a foreign one makes the
 // resume refuse the project. The file is append-only, and 0.70.0 appends a
 // call's second copy as it runs it, so a pack beside the harness can end
 // mid-line, which the restore cuts back ([chatSessionGate]).
@@ -31,10 +31,6 @@ import (
 // slug's directory ([Paths.GeminiSlugDir]). A change to what is packed, or
 // where it is restored to, is a new format, which a box of this build refuses.
 const geminiArchiveFormat = 1
-
-// geminiCarried are the Gemini CLI minors measured continuing each other's
-// carried sessions, both ways ([measuredCarry]).
-var geminiCarried = []string{"0.65", "0.70"}
 
 var (
 	_ resumer = GeminiCLI{}
@@ -52,9 +48,10 @@ func (GeminiCLI) ArchiveFormat() int { return geminiArchiveFormat }
 func (GeminiCLI) VersionCommand() string { return "gemini --version" }
 
 // Continues reports whether a session Gemini CLI release writer wrote in
-// another box can be continued by release box ([carrier], [geminiCarried]).
+// another box can be continued by release box: both [geminiRelease]
+// ([carrier], [exactCarry]).
 func (GeminiCLI) Continues(box, writer string) (bool, string) {
-	return measuredCarry("Gemini CLI", box, writer, geminiCarried)
+	return exactCarry("Gemini CLI", geminiRelease, box, writer)
 }
 
 // Pack packs session now, as a run's script packs it once the harness exits
@@ -127,10 +124,8 @@ func geminiGate(paths Paths, fresh []freshCopy) chatGate {
 		harness: "Gemini CLI",
 		locate:  geminiLocate(paths),
 		restore: restore,
-		carries: measuredCase(geminiCarried),
-		refused: `"this box runs Gemini CLI $v, and a carried session was measured continuing only between ` +
-			`Gemini CLI ` + measuredMinors(geminiCarried) + `"`,
-		fresh: fresh,
+		release: geminiRelease,
+		fresh:   fresh,
 	}
 }
 

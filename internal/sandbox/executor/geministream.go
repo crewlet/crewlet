@@ -60,6 +60,7 @@ type geminiEventWire struct {
 	Message    json.RawMessage `json:"message"`
 	Requests   json.RawMessage `json:"requests"`
 	Tokens     json.RawMessage `json:"tokens"`
+	Missing    json.RawMessage `json:"missing"`
 	Stats      json.RawMessage `json:"stats"`
 }
 
@@ -234,6 +235,9 @@ func (d *geminiEvents) Line(line []byte) {
 		if wireObject(ev.Tokens) && wireDecode(ev.Tokens, &tokens) == nil {
 			d.usage = &tokens
 			_ = wireDecode(ev.Requests, &d.requests)
+		} else if why := looseString(ev.Missing); why != "" {
+			d.transcript.add(activityline.Words(activityline.TagNote, firstLine("the run's own share of its "+
+				"session's tokens was not read off its chat file: "+why, transcriptDetailLimit)))
 		}
 	}
 }
@@ -272,7 +276,9 @@ func (d *geminiEvents) Skipped(n int64, bound int) {
 // rest past the prompt and reply is the reasoning and the tool prompt: the
 // usage line's tool prompt, summed over the run's own responses alone
 // ([geminiScript]), moves to the input, the rest stays output. A run that ended
-// with no result is charged the chat file's sums of its own responses.
+// with no result is charged the chat file's sums of its own responses. With no
+// sums (a usage line saying why it read none), the result is charged unsplit,
+// and no result charges nothing: never the whole session's sums.
 func (d *geminiEvents) runSpend() (runSpend, bool) {
 	tool := 0
 	if d.usage != nil {

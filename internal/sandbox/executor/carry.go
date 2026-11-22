@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -292,8 +293,19 @@ func (r *Runner) CheckCarry(ctx context.Context, box sandbox.Sandbox, archive sa
 		check.Why = why
 		return check, nil
 	}
-	check.Continues, check.Why = carries.Continues(check.Version, archive.Version)
+	check.Continues, check.Why = carries.Continues(boxSaid(check.Version, res.Stdout), archive.Version)
 	return check, nil
+}
+
+// boxSaid is a box's release as [carrier.Continues] is handed it: the release
+// where what the box printed reads as one, else the line it printed, quoted, so
+// an unreadable release is never the "" that asks nothing of a box
+// ([Runner.Restores]).
+func boxSaid(release, printed string) string {
+	if release != "" {
+		return release
+	}
+	return strconv.Quote(firstLine(printed, transcriptDetailLimit))
 }
 
 // resumeReader is a [carrier] whose releases' resumes this build read.

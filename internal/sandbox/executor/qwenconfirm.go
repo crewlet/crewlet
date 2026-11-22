@@ -37,29 +37,39 @@ func (QwenCode) notesHeld(ctx context.Context, box sandbox.Sandbox, session Sess
 	if err != nil || file == "" {
 		return nil, err
 	}
+	from, err := qwenRunFrom(ctx, box, session.ID)
+	if err != nil {
+		return nil, err
+	}
 	r, err := box.OpenFile(ctx, file)
 	if err != nil {
 		return nil, fmt.Errorf("opening %s: %w", file, err)
 	}
 	defer r.Close()
-	return qwenNotesHeld(r, takes, qwenRunFrom(ctx, box, session.ID), maxLineBytes)
+	return qwenNotesHeld(r, takes, from, maxLineBytes)
 }
 
 // qwenRunFrom is the first line of session's chat file the box's last run
-// wrote, 0 where the box's record of where it began ([Paths.QwenRunStart])
-// names another session or none: a session the run started holds no record
-// before it.
-func qwenRunFrom(ctx context.Context, box sandbox.Sandbox, session string) int {
-	raw, err := box.ReadFile(ctx, PathsFor(box).QwenRunStart())
+// wrote, off the box's record of where it began ([Paths.QwenRunStart]). A
+// record that cannot be read, does not parse or names another session is an
+// error, never 0: from 0, a continued session's earlier records would
+// confirm a note this run lost, so the take stays undecided instead.
+func qwenRunFrom(ctx context.Context, box sandbox.Sandbox, session string) (int, error) {
+	path := PathsFor(box).QwenRunStart()
+	raw, err := box.ReadFile(ctx, path)
 	if err != nil {
-		return 0
+		return 0, fmt.Errorf("reading where the run began in its session (%s): %w", path, err)
 	}
 	id, count, ok := strings.Cut(strings.TrimSpace(string(raw)), " ")
-	n, err := strconv.Atoi(count)
-	if !ok || id != session || err != nil || n < 0 {
-		return 0
+	n, atoiErr := strconv.Atoi(count)
+	switch {
+	case !ok || atoiErr != nil || n < 0:
+		return 0, fmt.Errorf("%s says %q, not a session and a count of its lines", path, raw)
+	case id != session:
+		return 0, fmt.Errorf("%s names the session %q, and the run's is %s: the box ran another "+
+			"session since", path, id, session)
 	}
-	return n
+	return n, nil
 }
 
 // qwenChatFile is the chat file Qwen Code records session in, "" for none:

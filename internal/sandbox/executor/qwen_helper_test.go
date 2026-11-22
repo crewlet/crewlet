@@ -845,3 +845,39 @@ func TestACarriedQwenSessionIsFiledUnderTheBoxsOwnKey(t *testing.T) {
 		})
 	}
 }
+
+// A QWEN CODE CHAT FILE THAT SHRANK CONFIRMS NOTHING MORE. The run loads a
+// session whose chat file (0.28.3's chat-note.jsonl) records an earlier job's
+// delivery of a note and the reply after it; handed the same note, Qwen Code's
+// stand-in rewrites the file shorter, down to that earlier record and reply,
+// and dies. The helper reads a file shorter than what it had read as a
+// rewrite and confirms nothing of it, so the note is served again rather than
+// confirmed by the earlier job's record.
+//
+// Mutation, red: read a shrunk file again from its start, as before the run.
+func TestAQwenChatFileThatShrankConfirmsNothingMore(t *testing.T) {
+	t.Parallel()
+	held, err := os.ReadFile(filepath.Join("testdata", "qwen", "0.28.3", "chat-note.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bridge := newQwenBridge(t, qwenNote{Seq: 1, ID: "n-1", Inbox: "qwen_1",
+		Message: "MARK-R6-START drained note MARK-R6-END"})
+	run := startQwenHelperAs(t, "load", held, bridge.steer(), "acp-note.jsonl", nil,
+		"QWEN_FAKE_AWAIT_NOTES=1", "QWEN_FAKE_SHRINK_AFTER_NOTE=1")
+	lines, _ := run.finish(t)
+	if got := typed(lines, "crewlet_qwen_note"); len(got) != 1 {
+		t.Fatalf("the run handed %v, want the note once", got)
+	}
+	real, err := filepath.EvalSymlinks(run.cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chat, err := os.ReadFile(filepath.Join(run.home, "projects", qwenKey(real), "chats", qwenCapturedSession+".jsonl"))
+	if err != nil || len(chat) >= len(held) || !bytes.Contains(chat, []byte(`"mid_turn_user_message"`)) {
+		t.Fatalf("the chat file was not cut back to the earlier delivery (%d of %d bytes, %v)", len(chat), len(held), err)
+	}
+	if got := bridge.read(); len(got) != 0 {
+		t.Errorf("a shrunk chat file confirmed %v by the earlier job's record", got)
+	}
+}
