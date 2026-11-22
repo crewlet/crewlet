@@ -154,7 +154,7 @@ func fakeRunners(play fakePlayer) map[string]sandbox.Runner {
 		// WHAT THE HARNESS'S RUNNER STATES, so a fake run is read as its harness's is.
 		runner.Thread = sandbox.ThreadTraitsOf(real[name])
 		if r, ok := real[name].(*executor.Runner); ok {
-			runner.Pin = r.PinnedWindow
+			runner.Pin, runner.NotesOff = r.PinnedWindow, r.NotesOffWhy()
 		}
 		runners[name] = runner
 	}

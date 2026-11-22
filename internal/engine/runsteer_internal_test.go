@@ -49,8 +49,14 @@ func steersOver(t *testing.T, ring recordseal.Keyring, store sandbox.PendingStor
 // the swe seat; it answers the job.
 func workingRun(t *testing.T, store sandbox.PendingStore, runs *runSteers, turnID string) string {
 	t.Helper()
+	return workingRunOn(t, store, runs, turnID, executor.ClaudeCodeName)
+}
+
+// workingRunOn is [workingRun] for a job of the harness named.
+func workingRunOn(t *testing.T, store sandbox.PendingStore, runs *runSteers, turnID, harness string) string {
+	t.Helper()
 	opened, err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
-		TurnID: turnID, AgentID: sweAgent, AgentHandle: "swe", Role: "SWE", Harness: "claude-code",
+		TurnID: turnID, AgentID: sweAgent, AgentHandle: "swe", Role: "SWE", Harness: harness,
 		TraceID: "tr-1", CreatedAt: time.Now().UTC(),
 		Steer: sandbox.RunSteer{Seat: runs.anchor(turnID, sweAgent, "swe")},
 	}, sandbox.Fence{})
@@ -817,7 +823,7 @@ func TestANotesInboxIDIsItsJobs(t *testing.T) {
 	t.Parallel()
 	store := sandbox.NewCoordStore(coordmem.NewFleet())
 	runs, _ := steersOver(t, steerRing, store)
-	first := workingRun(t, store, runs, "run-1")
+	first := workingRunOn(t, store, runs, "run-1", executor.OpenCodeName)
 	fileSealed(t, runs, "run-1", steer.Note{ID: "req-1", Text: "use staging", By: "founder",
 		ByKind: iam.ActorHuman})
 	waitFor := func(inbox *runInbox) []mcpbridge.SteerNote {
@@ -837,7 +843,7 @@ func TestANotesInboxIDIsItsJobs(t *testing.T) {
 		t.Errorf("the note's inbox id is %q, want %q, the job's", firstNotes[0].Inbox, want)
 	}
 	relaunched, err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
-		TurnID: "run-1", AgentID: sweAgent, AgentHandle: "swe", Role: "SWE", Harness: "opencode",
+		TurnID: "run-1", AgentID: sweAgent, AgentHandle: "swe", Role: "SWE", Harness: executor.OpenCodeName,
 	}, sandbox.Fence{})
 	if err != nil {
 		t.Fatalf("relaunch: %v", err)

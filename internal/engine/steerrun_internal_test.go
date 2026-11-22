@@ -2768,7 +2768,7 @@ type polledNote struct {
 func TestAnOpenCodeRunsNoteIsReadAtItsNextStepByItsJob(t *testing.T) {
 	t.Parallel()
 	model := &reviewWatch{}
-	e, _ := indicatingWith(t, notify.StatusAlways, model)
+	e, _ := indicatingOn(t, notify.StatusAlways, model, executor.OpenCodeName)
 	steerable(t, e)
 	script := modelPlayer(t, model.run)
 	client := httpxtest.Pool(t)

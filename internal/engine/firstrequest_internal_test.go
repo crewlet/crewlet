@@ -127,13 +127,21 @@ func TestRunnerResumeCarriesTheJobsCount(t *testing.T) {
 	}
 }
 
-// probingRecorder is a [relaunchRecorder] that answers the probe with basis.
+// probingRecorder is a [relaunchRecorder] that answers the probe with basis,
+// carrying every harness's traits where basis names none, as the engine's
+// launcher sets them on every basis it answers ([sessionTraits]).
 type probingRecorder struct {
 	relaunchRecorder
 	basis runner.SessionBasis
 }
 
-func (p *probingRecorder) ProbeSession(context.Context) runner.SessionBasis { return p.basis }
+func (p *probingRecorder) ProbeSession(context.Context) runner.SessionBasis {
+	basis := p.basis
+	if basis.Traits == nil {
+		basis.Traits = sessionTraits()
+	}
+	return basis
+}
 
 // AN IN-BOX CONTINUATION IS JUDGED BY ITS COLLECTION'S COUNT, end to end from the
 // job's record: a copy whose harness ended its own run, counted near its

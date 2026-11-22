@@ -45,12 +45,18 @@ type lateRig struct {
 // round on.
 func newLateRig(t *testing.T, turn string) *lateRig {
 	t.Helper()
+	return newLateRigOn(t, turn, executor.ClaudeCodeName)
+}
+
+// newLateRigOn is [newLateRig] for jobs of the harness named.
+func newLateRigOn(t *testing.T, turn, harness string) *lateRig {
+	t.Helper()
 	fleet := coordmem.NewFleet()
 	store := sandbox.NewCoordStore(fleet)
 	runs, _ := steersOver(t, steerRing, store)
 	r := &lateRig{fleet: fleet, store: store, runs: runs, turn: turn}
 	launch := sandbox.PendingRun{TurnID: turn, AgentID: sweAgent, AgentHandle: "swe", Role: "SWE",
-		Harness: "claude-code", TraceID: "tr-1", CreatedAt: time.Now().UTC(),
+		Harness: harness, TraceID: "tr-1", CreatedAt: time.Now().UTC(),
 		Steer: sandbox.RunSteer{Seat: runs.anchor(turn, sweAgent, "swe")}}
 	var err error
 	if r.first, err = store.BeginLaunch(t.Context(), launch, sandbox.Fence{}); err != nil {
@@ -303,7 +309,7 @@ func mustJSON(t *testing.T, v any) string {
 // (confirm-not-a-confirmation), and no telling is recorded.
 func TestALateCallReachesAnOpenCodeJobAtItsNextPollAndIsReadOnItsConfirmation(t *testing.T) {
 	t.Parallel()
-	r := newLateRig(t, "run-1")
+	r := newLateRigOn(t, "run-1", executor.OpenCodeName)
 	r.late(t, 1, tools.Call{Name: "delegate", Args: map[string]any{"to": "qa"}})
 	item := r.items(t)[0]
 	inbox := boundInbox(t, r.runs, r.store, r.turn, r.next.LaunchID)
