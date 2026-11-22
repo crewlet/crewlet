@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -205,24 +204,6 @@ func tomlTable(m map[string]string) string {
 	return "{ " + strings.Join(pairs, ", ") + " }"
 }
 
-// codexBoxArch is the note helper build a box runs: its `uname -m` as Go
-// names the architecture, refused where the engine embeds no build for it.
-func codexBoxArch(machine string) (string, error) {
-	switch strings.TrimSpace(machine) {
-	case "x86_64", "amd64":
-		return "amd64", nil
-	case "aarch64", "arm64":
-		return "arm64", nil
-	}
-	return "", fmt.Errorf("executor: this box's machine is %s, and the engine carries Codex's note "+
-		"helper for x86_64 and aarch64 alone: %w", strconv.Quote(strings.TrimSpace(machine)), errNoHelperBuild)
-}
-
-// errNoHelperBuild is a box whose machine the engine carries no note helper
-// build for ([codexBoxArch]): a run that needs the helper is refused, any other
-// starts without the nested hook.
-var errNoHelperBuild = errors.New("no note helper build for this machine")
-
 // WriteConfig removes what the box holds for Codex that its launch did not
 // write ([codexRunHome]) and writes what a Codex run starts from: its
 // configuration ([codexConfigTOML]) for the session it was asked to work in
@@ -270,7 +251,7 @@ func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox
 	// THE HELPER IN EVERY BOX ITS MACHINE HAS A BUILD FOR: the nested hook
 	// runs it ([codexNestedHookFlags]). A run that needs it for its notes,
 	// cap or skills is refused without one; any other starts without the hook.
-	if err := writeCodexNoteHelper(ctx, box, paths); err != nil && (codexHelped(req) || !errors.Is(err, errNoHelperBuild)) {
+	if err := writeNoteHelper(ctx, box, paths.CodexNoteHelper()); err != nil && (codexHelped(req) || !errors.Is(err, errNoHelperBuild)) {
 		return "", err
 	}
 	if codexHelped(req) {
@@ -299,28 +280,6 @@ func writeCodexRoutes(ctx context.Context, box sandbox.Sandbox, req sandbox.RunR
 		if err := box.WriteFile(ctx, skills, []byte(w.SkillLoads.URL)); err != nil {
 			return fmt.Errorf("executor: writing the run's skill-load route: %w", err)
 		}
-	}
-	return nil
-}
-
-// writeCodexNoteHelper writes the note helper's build for the box's machine
-// ([noteHelperBinary]) at every launch, never cached: a box reused across
-// builds would otherwise run another build's helper against this one's bridge.
-func writeCodexNoteHelper(ctx context.Context, box sandbox.Sandbox, paths Paths) error {
-	machine, err := box.Exec(ctx, "uname -m", sandbox.ExecOptions{})
-	if err != nil {
-		return fmt.Errorf("executor: reading the box's machine for Codex's note helper: %w", err)
-	}
-	arch, err := codexBoxArch(machine.Stdout)
-	if err != nil {
-		return err
-	}
-	helper, err := noteHelperBinary(arch)
-	if err != nil {
-		return fmt.Errorf("executor: Codex's note helper for %s: %w", arch, err)
-	}
-	if err = box.WriteFile(ctx, paths.CodexNoteHelper(), helper); err != nil {
-		return fmt.Errorf("executor: writing Codex's note helper: %w", err)
 	}
 	return nil
 }
