@@ -371,6 +371,13 @@ var creditBoxes = map[string]func(t *testing.T) (*executor.Runner, sandbox.Sandb
 			"node": "#!/bin/sh\n" + scenarioRun,
 		})
 	},
+	// One `pi` process is the run, and its bash tool's commands run under the
+	// environment its extension hands them; the stand-in answers the release
+	// check every run's script asks first, then runs the scenario.
+	executor.PiName: func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
+		return standInBox(t, executor.NewPi(), map[string]string{"pi": "#!/bin/sh\n" +
+			"case \"$1\" in --version) echo 1.6.0; exit 0;; esac\n" + scenarioRun})
+	},
 }
 
 // scenarioRun is a stand-in's line running $HOME/scenario.sh as its harness's
