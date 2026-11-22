@@ -66,6 +66,9 @@ func (a *fakeAudit) add(step growth.Step, r growth.Record) (bool, error) {
 func (a *fakeAudit) Made(_ context.Context, r growth.Record) (bool, error) {
 	return a.add(growth.StepMade, r)
 }
+func (a *fakeAudit) Verdict(_ context.Context, step growth.Step, r growth.Record) (bool, error) {
+	return a.add(step, r)
+}
 func (a *fakeAudit) Applied(_ context.Context, r growth.Record) (bool, error) {
 	return a.add(growth.StepApplied, r)
 }
@@ -75,6 +78,12 @@ func (a *fakeAudit) Void(_ context.Context, r growth.Record) (bool, error) {
 func (a *fakeAudit) Failed(_ context.Context, r growth.Record) (bool, error) {
 	return a.add(growth.StepFailed, r)
 }
+
+// fakeLeases grants every lease at once: one test process makes one act at a
+// time.
+type fakeLeases struct{}
+
+func (fakeLeases) Hold(context.Context, string) (func(), error) { return func() {}, nil }
 
 func (a *fakeAudit) take() ([]growth.Step, []growth.Record) {
 	a.mu.Lock()
@@ -227,7 +236,7 @@ func newHarness(t *testing.T, level string) *harness {
 		AdSense: &config.RoleAdSense{Enabled: &on, Level: level, Accounts: []string{mine}}}}}
 	grant, audit := &fakeGrant{token: "ya29.first"}, &fakeAudit{}
 	p := adsense.New(func() *config.Company { return company }, func() *config.Resolver { return nil }, grant, audit,
-		&http.Client{Transport: httpxtest.Rewrite(t, srv)})
+		fakeLeases{}, &http.Client{Transport: httpxtest.Rewrite(t, srv)})
 	return &harness{p: p, company: company, vend: vend, grant: grant, audit: audit}
 }
 
