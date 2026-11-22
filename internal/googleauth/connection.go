@@ -398,7 +398,7 @@ func (c *Connection) once(ctx context.Context, method, address, bearer string, b
 	}
 	req, err := http.NewRequestWithContext(ctx, method, address, reader)
 	if err != nil {
-		return fmt.Errorf("googleauth: build %s %s: %w", method, PathOf(address), err)
+		return fmt.Errorf("googleauth: build %s %s: %w", method, PathOf(address), pathOnly(err, address))
 	}
 	req.Header.Set("Accept", "application/json")
 	if contentType != "" {
@@ -409,10 +409,7 @@ func (c *Connection) once(ctx context.Context, method, address, bearer string, b
 	}
 	res, err := c.http.Do(req)
 	if err != nil {
-		// THE TRANSPORT'S TEXT, REDACTED, never its error: it can quote what
-		// was sent.
-		return fmt.Errorf("googleauth: %s %s: %w: %s", method, PathOf(address), ErrUnreached,
-			redact.Secrets(err.Error()))
+		return fmt.Errorf("googleauth: %s %s: %w: %w", method, PathOf(address), ErrUnreached, pathOnly(err, address))
 	}
 	defer func() { _ = res.Body.Close() }()
 	payload, err := io.ReadAll(io.LimitReader(res.Body, maxResponse))
@@ -437,6 +434,23 @@ func (c *Connection) once(ctx context.Context, method, address, bearer string, b
 		}
 	}
 	return nil
+}
+
+// transportError is a failure to send a request as an error may carry it on:
+// its text redacted, and its cause kept, so a deadline or a timeout is told.
+type transportError struct{ err error }
+
+func (e transportError) Error() string { return redact.Secrets(e.err.Error()) }
+func (e transportError) Unwrap() error { return e.err }
+
+// pathOnly is err, a request's failure, naming address's host and path alone:
+// a *url.Error quotes the whole address, whose query can hold a credential (a
+// Measurement Protocol secret), and no redaction knows every such name.
+func pathOnly(err error, address string) error {
+	if u, ok := errors.AsType[*url.Error](err); ok {
+		return transportError{&url.Error{Op: u.Op, URL: PathOf(address), Err: u.Err}}
+	}
+	return transportError{err}
 }
 
 // PathOf is an address's host and path, which is all an error names.
