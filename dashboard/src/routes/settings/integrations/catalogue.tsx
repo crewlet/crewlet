@@ -180,6 +180,7 @@ const SURFACE_NAMES: Record<string, string> = {
   google_cloud: "Google Cloud",
   ssh: "SSH",
   app_store_connect: "App Store Connect",
+  google_analytics: "Google Analytics",
 };
 
 /** One tool's surfaces, in the engine's grouping, named for this screen. */
@@ -306,6 +307,14 @@ export const CATALOG: Entry[] = [
     vendor: "ssh",
     surfaces: surfacesOf("ssh"),
     doc: "ssh",
+  },
+  {
+    key: "google_analytics",
+    name: "Google Analytics",
+    description: "Properties, traffic and conversion reports, and every setting.",
+    vendor: "google-analytics",
+    surfaces: surfacesOf("google_analytics"),
+    doc: "google-analytics",
   },
 ];
 

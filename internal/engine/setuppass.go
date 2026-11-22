@@ -66,6 +66,7 @@ func (e *Engine) setupPasses() []setup.Pass {
 		&googleCloudPass{engine: e},
 		&sshPass{engine: e},
 		&appStoreConnectPass{engine: e},
+		&googleAnalyticsPass{engine: e},
 		&atlassianPass{engine: e},
 	}
 }
