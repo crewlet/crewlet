@@ -297,7 +297,11 @@
 // # What a password's rule still publishes
 //
 // A password's value is read on its key's line, or on a later one where the
-// wrapping every line shares puts it ([readValue]); what neither finds is
+// wrapping every line shares puts it ([readValue]). There, markup the line
+// opens with that the key's line does not — a table's `|`, a list's `-`, a
+// quote's `>` — is read past to the value and replaced with it ([ownMarkup]):
+// THE RULE LEANS TO HIDE, since markup replaced costs a line its formatting,
+// and markup taken for the value shows the password. What neither finds is
 // published:
 //
 //   - a value under a quoted key whose name is more than a name — letters,
@@ -312,17 +316,10 @@
 //   - a value shaped like the word the key's line opens with, a space after
 //     it on both (`pass2 next` under `pass1 Retype password:`), which is read
 //     as the gutter, as one timestamp is under another;
-//   - a value on a line that opens with the punctuation the key's line has
-//     straight before its key, after words that line does not repeat — a
-//     list's dash after a logged message (`msg: - Password:` over
-//     `- hunter2x9`) — which is read as the value: the gutter is read from
-//     the line's start, and ends where the two lines' words part;
 //   - a value written over several lines — a YAML block scalar, a YAML
 //     sequence under the key, a heredoc — of which the first word at most is
 //     read, and a diff whose key is on a context line and whose value
-//     changed, of which the removed line's first word is read (where the
-//     values are indented, that word is the `-` alone, and both are
-//     published);
+//     changed, of which the removed line's value alone is read;
 //   - a value under a gutter that holds an armour, or under a blank line of
 //     the wrapping whose gutter holds a password's key;
 //   - under a wrapping's suffix, a value on a line that holds a password's key
@@ -1462,8 +1459,8 @@ func sameLine[T textual](text T, a, b int) bool {
 //     punctuation that closes a real line after an escaped break, the `" +` of
 //     a string concatenated across lines.
 //   - The line it stops at opens with the wrapping's GUTTER, the start of what
-//     the key's own line has before the password's key ([gutterLen]), and the
-//     value is the first word after it, ended before the suffix.
+//     the key's own line has before the password's key ([gutterLen]); the
+//     value is the first word past it and the line's own markup ([ownMarkup]).
 //   - A line holding a password's key where the value would be — in the
 //     gutter, or in the first word after it — ENDS THE READ with no value,
 //     since the key on it names what is there: taken as the first key's
@@ -1517,12 +1514,12 @@ func readValueAs[T textual](whole T, start, end int, prior [][2]int, pick int) (
 		word := wordEnd(text, r.from)
 		switch {
 		case word > r.from && isValue(text[r.from:word]):
-			return aValue{from: r.from, to: valueEnd(whole, r.from), decided: end, ran: true}
+			return aValue{from: r.from, to: keyLineValue(whole, text, r.from), decided: end, ran: true}
 		case word > r.from:
 			lineEnd, named := lineEndUnnamed(text, word)
 			if named {
 				// Another key on the line: a suffix holds none.
-				return aValue{from: r.from, to: valueEnd(whole, r.from), decided: end, ran: true}
+				return aValue{from: r.from, to: keyLineValue(whole, text, r.from), decided: end, ran: true}
 			}
 			r.setSuffix(trimLine(text[r.from:lineEnd]))
 		case r.from > end:
@@ -1542,14 +1539,41 @@ func readValueAs[T textual](whole T, start, end int, prior [][2]int, pick int) (
 		var named bool
 		if next, escaped, named = r.restOfLine(next); named {
 			// Another key on the rest of the line: a suffix holds none.
+			if v, ok := restValue(whole, text, next); ok {
+				v.decided, v.ran = end, true
+				return v
+			}
 			return aValue{from: r.from, to: valueEnd(whole, r.from), decided: end, ran: true}
 		}
 	case escaped && r.markupOnly && r.keyOnRest(next):
 		// The markup closes the key's piece of a string, and the rest of
 		// the line names its own value.
+		if v, ok := restValue(whole, text, next); ok {
+			v.decided, v.ran = end, true
+			return v
+		}
 		return aValue{from: r.from, to: valueEnd(whole, r.from), decided: end, ran: true}
 	}
 	return r.lines(next, escaped)
+}
+
+// keyLineValue is where a value read on a key's own line from from ends: past
+// its first word, or, beside another key on the line, past markup to the first
+// word after it that is a value ([ownMarkup]) and that key's label: the label's
+// words are the key's (`*** Retype password:`), no value.
+func keyLineValue[T textual](whole, text T, from int) int {
+	return valueEnd(whole, ownMarkup(text, from, len(text), keyBefore(text, from)))
+}
+
+// restValue is the value on the rest of a line an escaped break left, from
+// rest, before a key on that rest, where markup opens the rest and a value
+// follows it there ([ownMarkup]), and whether one does: read as a line below
+// the key is, the break being the string's line break. The key's label is the
+// key's (`- Confirm password:`), and markup with no value before it is read
+// as it was.
+func restValue[T textual](whole, text T, rest int) (aValue, bool) {
+	at := ownMarkup(text, rest, len(text), keyBefore(text, rest))
+	return aValue{from: rest, to: valueEnd(whole, at)}, at > rest
 }
 
 // outermost is the last closing of markup, the run of its last byte: the
@@ -1562,6 +1586,127 @@ func readValueAs[T textual](whole T, start, end int, prior [][2]int, pick int) (
 func outermost[T textual](markup T) T {
 	last := markup[len(markup)-1]
 	return markup[len(tTrimRight(markup, string(rune(last)))):]
+}
+
+// ownMarkup is where the value read on a line from from begins, the line
+// ending at end at the latest, or at its first break: at from, where the first
+// word there is a value ([isValue]); or, where that word and those after it are
+// markup alone (a table's `|`, a bullet's `-`, a quote's `>`, a list's number,
+// [listMarker]) and a word that is a value follows on the line, at that word,
+// the markup read as the line's own and replaced with it. Where keyBefore says
+// a key begins at or before that word, or the keys' reading holds it
+// ([keysHold]), the markup is the value, as a
+// masked `***` is: the key names its own value, and the run is the key's.
+// It reads no further than the first value word, so a line of many keys is
+// read once ([TestALineOfManyPasswordKeysIsLinear]).
+func ownMarkup[T textual](text T, from, end int, keyBefore func(w int) bool) int {
+	for i := from; i < end; {
+		w := i + 1
+		for w < end && !valueSpace(text[w]) && !tHasPrefix(text[w:], `\n`) {
+			w++
+		}
+		if isValue(text[i:w]) && (i > from || !listMarker(text[i:w])) {
+			if i > from && (keysHold(text, i, w) || keyBefore(w)) {
+				return from
+			}
+			return i
+		}
+		for i = w; i < end && (text[i] == ' ' || text[i] == '\t'); {
+			i++
+		}
+		if i < end && (valueSpace(text[i]) || tHasPrefix(text[i:], `\n`)) {
+			// The line ends in markup alone, the value: read no further, so
+			// a key's read costs its own line, whatever follows.
+			return from
+		}
+	}
+	return from
+}
+
+// keyBefore is [ownMarkup]'s keyBefore for a value read from from: whether
+// the first password's key at or past from, read no further than [MaxReach]
+// past the word ending at w, has a label beginning before w. Only a key
+// beginning before [labelEnd] can, a key's word opening with a letter, so
+// none past it is read.
+func keyBefore[T textual](text T, from int) func(w int) bool {
+	return func(w int) bool {
+		k := keyFrom(text, from, labelEnd(text, w, w+MaxReach), w+MaxReach)
+		return k >= 0 && labelStart(text, from, k) < w
+	}
+}
+
+// keyTried, where an in-package test sets it, is called at each place keyFrom
+// tries the pattern, so a test counts the tries a read costs, which a clock
+// on a loaded runner cannot pin; nil otherwise.
+var keyTried func()
+
+// keyFrom is where the first password's key at or past from begins, read no
+// further than bound, or -1, or -1 too where that key begins at by or past it.
+func keyFrom[T textual](text T, from, by, bound int) int {
+	k, text := passwordRule(), text[from:min(len(text), bound)]
+	by = min(by-from, len(text))
+	for i := keyedBeginsBefore(k, text, 0, by); i >= 0; i = keyedBeginsBefore(k, text, beyond(text, i), by) {
+		if keyTried != nil {
+			keyTried()
+		}
+		if keyedMatchesAt(k, text, i) {
+			return from + i
+		}
+	}
+	return -1
+}
+
+// keysHold reports whether the keys' reading holds the word text[i:w]: a key's
+// marker, an armour, or a run of a key's body ([keysRun]), by the key reader's
+// own predicates. ASKED BY SHAPE, NOT OF THE HOLDS: the claims read every value
+// before the keys read their blocks (keySpans excludes what is claimed), so no
+// block exists yet when a value is read; where it does, it is a marker.
+func keysHold[T textual](text T, i, w int) bool {
+	return markerLen(text[i:]) > 0 || armourAt(text, i) || keysRun(text[i:w])
+}
+
+// keysRun reports whether word is a run of a private key's body ([keyRun]) and
+// nothing else: base64 alone. A value glued to a key's last run
+// (`q8Zr4TfL2w==-placeholder9x`) is no key's run, and is read as a value.
+func keysRun[T textual](word T) bool {
+	for i := 0; i < len(word); i++ {
+		if c := word[i]; !isAlnum(rune(c)) && c != '+' && c != '/' && c != '=' {
+			return false
+		}
+	}
+	return keyRun(tString(word))
+}
+
+// holdsKeysWord reports whether the keys' reading would take a word of s, apart
+// at its spaces: an armour or a key's run ([keysHold]). Not a marker: one there
+// is the value a pass took, and the line is the wrapping's as it was.
+func holdsKeysWord[T textual](s T) bool {
+	for i := 0; i < len(s); {
+		for i < len(s) && valueSpace(s[i]) {
+			i++
+		}
+		w := i
+		for w < len(s) && !valueSpace(s[w]) {
+			w++
+		}
+		if w > i && (armourAt(s, i) || keysRun(s[i:w])) {
+			return true
+		}
+		i = w
+	}
+	return false
+}
+
+// listMarker reports whether word is a numbered list's marker: digits, then a
+// `.` or a `)`. Read as markup only where it opens the line's content and a
+// value follows it there ([ownMarkup]); alone, it is the value, as any word
+// is.
+func listMarker[T textual](word T) bool {
+	n := 0
+	for n < len(word) && '0' <= word[n] && word[n] <= '9' {
+		n++
+	}
+	return n > 0 && n == len(word)-1 && (word[n] == '.' || word[n] == ')')
 }
 
 // wordEnd is where the word that begins at from ends, as the rule's `\S+` read
@@ -1682,7 +1827,7 @@ func labelStart[T textual](text T, floor, start int) int {
 		}
 		r, size := tDecodeLastRune(text[floor:j])
 		switch {
-		case r == ' ' || r == '\t' || unicode.IsLetter(r) || unicode.IsDigit(r) || tContainsRune("-'.()/", r):
+		case labelRune(r):
 		case r == '_' && wordRune(tDecodeLastRune(text[floor:j-size])) && wordRune(tDecodeRune(text[j:])):
 		default:
 			return j
@@ -1690,6 +1835,34 @@ func labelStart[T textual](text T, floor, start int) int {
 		j -= size
 	}
 	return j
+}
+
+// labelRune reports whether r is one a label is written in ([labelStart]).
+func labelRune(r rune) bool {
+	return r == ' ' || r == '\t' || unicode.IsLetter(r) || unicode.IsDigit(r) || strings.ContainsRune("-'.()/", r)
+}
+
+// labelEnd is the first place at or past w, where a word ends (at a space, an
+// escaped break or the text's end, so never inside a rune or a key's marker),
+// short of bound, where a label read back to before w would stop
+// ([labelStart]): a rune no label is written in, outside a key's marker. A key
+// further on has a label beginning at w or past it, so a search for a key
+// whose label begins before w ends there ([keyBefore]) and costs the label's
+// run, not [MaxReach] of the text.
+func labelEnd[T textual](text T, w, bound int) int {
+	bound = min(bound, len(text))
+	for w < bound {
+		if tHasPrefix(text[w:], keyMarker) {
+			w += len(keyMarker)
+			continue
+		}
+		r, size := tDecodeRune(text[w:])
+		if r != '_' && !labelRune(r) {
+			return w
+		}
+		w += size
+	}
+	return min(w, bound)
 }
 
 // aValue is where the value a [passwordRule] match names begins and ends — or
@@ -1847,7 +2020,7 @@ func (r *valueRead[T]) restOfLine(pos int) (int, bool, bool) {
 	if i := tIndexByte(rest, ' '); i >= 0 {
 		word = rest[:i]
 	}
-	if len(rest) == 0 || isValue(word) {
+	if len(rest) == 0 || isValue(word) && !redirected(rest) {
 		return pos, true, false
 	}
 	if r.keyOnRest(pos) {
@@ -1866,6 +2039,20 @@ func (r *valueRead[T]) restOfLine(pos int) (int, bool, bool) {
 	}
 	r.setSuffix(rest)
 	return next, false, false
+}
+
+// redirected reports whether rest, what a real line holds after an escaped
+// break, is the string's closing quote and a shell's redirect or pipe glued to
+// it (`">>k`, `"|tee -a k`): the wrapping's suffix, whose target is no value.
+func redirected[T textual](rest T) bool {
+	i := 0
+	for i < len(rest) && (rest[i] == '"' || rest[i] == '\'') {
+		i++
+	}
+	for i > 0 && i < len(rest) && rest[i] == ' ' {
+		i++
+	}
+	return i > 0 && i < len(rest) && (rest[i] == '>' || rest[i] == '|')
 }
 
 // keyOnRest reports whether the rest of a real line an escaped break ended the
@@ -1972,7 +2159,8 @@ func (r *valueRead[T]) lines(pos int, escaped bool) aValue {
 			from := at + len(content) - len(rest)
 			to, ran := from, false
 			if !blank {
-				to, ran = valueEnd(r.whole, from), true
+				keyAt := func(w int) bool { return key >= 0 && pos+key < w }
+				to, ran = valueEnd(r.whole, ownMarkup(r.text, from, at+len(content), keyAt)), true
 			}
 			if suffixed && to >= at+len(content) {
 				to, ran = at+len(content), false
@@ -2031,15 +2219,39 @@ func (r *valueRead[T]) ending(trimmed T, lineEnd, next int) (T, bool) {
 		// the bound, took the key's own quote.
 		return trimmed[:0], false
 	}
-	for _, s := range [...]T{r.suffix, r.closing, r.appending} {
-		if len(s) != 0 && tHasSuffixOf(ends, s) {
-			if cut {
-				trimmed = trimmed[:len(trimmed)-len(s)]
-			}
-			return tTrimRight(trimmed, " \t"), true
+	for i, s := range [...]T{r.suffix, r.closing, r.appending, unquoted(r.suffix), unquoted(r.closing), unquoted(r.appending)} {
+		if len(s) == 0 || !tHasSuffixOf(ends, s) {
+			continue
 		}
+		content := trimmed
+		if cut {
+			content = trimmed[:len(trimmed)-len(s)]
+		}
+		if i >= 3 && holdsKeysWord(content) {
+			// Spelled without its quote, the suffix is a key's row's
+			// too: a run of a private key's body there is the key's,
+			// never this key's value, which a block reads on past.
+			continue
+		}
+		return tTrimRight(content, " \t"), true
 	}
 	return trimmed[:0], false
+}
+
+// unquoted is suffix without the quote it opens with, where a redirect or a
+// pipe follows the quote (`" >> k`, `\" |`, `" | tee -a k`), or "": the quote
+// closes the key's own string, and a line of the same wrapping need not quote
+// its content (`echo hunter2x9 >> k` under `echo "Password:\n" >> k`). Read
+// by the whole suffix alone, such a line was none of the wrapping's, the quote
+// was taken for the value and the value on it shown. Words after the quote
+// are no wrapping (a key's run and its END), and are matched whole.
+func unquoted[T textual](suffix T) T {
+	for _, q := range [...]string{`\"`, `\'`, `"`, `'`} {
+		if rest := tTrimLeft(suffix[min(len(q), len(suffix)):], " "); tHasPrefix(suffix, q) && len(rest) > 0 && (rest[0] == '>' || rest[0] == '|') {
+			return suffix[len(q):]
+		}
+	}
+	return suffix[:0]
 }
 
 // lineRest is where what the line ending at lineEnd ends in ends, the next
@@ -2967,8 +3179,14 @@ func (k *keyed) valued(with string, value *valueFunc) rule {
 func (k *keyed) begins(text string, from int) int { return keyedBegins(k, text, from) }
 
 func keyedBegins[T textual](k *keyed, text T, from int) int {
-	for from < len(text) {
-		i := tIndexAny(text[from:], k.firsts)
+	return keyedBeginsBefore(k, text, from, len(text))
+}
+
+// keyedBeginsBefore is [keyedBegins] for a word opening before by alone: it
+// scans no further.
+func keyedBeginsBefore[T textual](k *keyed, text T, from, by int) int {
+	for from < by {
+		i := tIndexAny(text[from:by], k.firsts)
 		if i < 0 {
 			return -1
 		}
