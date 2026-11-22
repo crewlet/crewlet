@@ -2624,6 +2624,15 @@ box](code-sandbox.md)'s teardown, writing back what its run refreshed, take alik
 `crewlet llm status` follows the same rule, so it can neither revert a refresh that
 landed while it ran nor bring back a removed login.
 
+**An exported login carries back only the logins it was handed.** For a harness
+keeping its login in its own database (OpenCode), a seat's or a local box's export
+is written back holding each handed credential's refreshed tokens, and only where it
+is still the same login: the same credential, OAuth method and every field a refresh
+leaves alone, and, for a token that is a JWT, the same account in its subject
+claims. A credential the database gained is dropped, and a key never changes on a
+refresh, so a changed one is not carried. A `crewlet llm login` takes the whole
+export.
+
 The commands that *make* a login are the one exception: what your sign-in stored is
 written whenever it differs from what the command started with, over whatever
 landed while it ran (a seat's refresh during a minutes-long browser flow, or your
