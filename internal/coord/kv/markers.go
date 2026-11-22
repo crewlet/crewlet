@@ -50,7 +50,7 @@ const createRounds = 8
 // needs it says so in its contract ([FleetStore.putChatReadAt]).
 var errCreateUnanswered = errors.New("the create was sent and its answer was not a refusal")
 
-// createKey writes value under key, with header in its message (nil: none), only
+// createKey writes value under key, stating standing with it (nil: none), only
 // when the key holds no live value, answering the revision written, or an error
 // wrapping [jetstream.ErrKeyExists] when the stream LEADER holds a live value.
 // Each refused round asks the leader: a live value is the key existing, a marker
@@ -62,7 +62,7 @@ var errCreateUnanswered = errors.New("the create was sent and its answer was not
 // failures are the caller's to call unavailable, marked [errCreateUnanswered] or
 // not; [coord.ErrValueTooLarge] returns as is, since nothing was sent.
 func createKey(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValue,
-	key string, value []byte, header nats.Header) (uint64, error) {
+	key string, value []byte, standing *coord.RunStanding) (uint64, error) {
 
 	// Resolved up front though only a refused create reads, for
 	// [eachEntryUnder]'s reason: a client on an API this engine does not
@@ -72,14 +72,14 @@ func createKey(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValu
 		return 0, err
 	}
 	write := kv.Update
-	if header != nil {
+	if standing != nil {
 		h, ok := kv.(headedWriter)
 		if !ok {
 			return 0, fmt.Errorf("coord/kv: create %s/%s: not a bucket settled where it was opened, "+
-				"so nothing writes a header with its value", kv.Bucket(), key)
+				"so nothing writes a standing with its value", kv.Bucket(), key)
 		}
 		write = func(c context.Context, k string, v []byte, at uint64) (uint64, error) {
-			return h.update(c, k, v, at, header)
+			return h.update(c, k, v, at, standing)
 		}
 	}
 	var expect uint64 // zero: the key must hold no message at all
@@ -114,10 +114,11 @@ func createKey(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValu
 	return 0, contended("create", kv.Bucket()+"/"+key)
 }
 
-// headedWriter is a bucket that writes a header in the message of a value
+// headedWriter is a bucket that writes a standing in the message of a value
 // ([settledBucket.update]).
 type headedWriter interface {
-	update(ctx context.Context, key string, value []byte, revision uint64, header nats.Header) (uint64, error)
+	update(ctx context.Context, key string, value []byte, revision uint64,
+		standing *coord.RunStanding) (uint64, error)
 }
 
 // sweepPass is one walk of a bucket the sweep reads, and the purge that
