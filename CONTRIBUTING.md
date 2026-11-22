@@ -529,15 +529,19 @@ The prerequisites that legitimately vary by machine:
   a relative value is read against the repository (the nearest directory above
   the script holding a `go.mod`), not the working directory.
 
-  `node` also runs the **two OpenCode plugins** the engine embeds
-  (`internal/sandbox/executor/opencode_steer.js` and `opencode_skills.js`).
+  `node` also runs the **three OpenCode plugins** the engine embeds
+  (`internal/sandbox/executor/opencode_steer.js`, `opencode_skills.js` and
+  `opencode_toolenv.js`) and its **Kimi Code driver** (`kimi_driver.js`).
   `opencode_steer_test.go` drives the notes plugin, as the engine writes it into
   a real box, through `opencode_steer_probe.mjs` against a stand-in of the
   bridge's notes route and a real bridge's; `opencode_skills_test.go` drives the
   skill-load plugin through `opencode_skills_probe.mjs` against a stand-in of
-  the bridge's skill route. That package is in the parallel half, so `make test`
-  requires node and CI's race shards install it; the probes find node by the
-  same rule as the replay. The plugins import nothing, so no npm.
+  the bridge's skill route; `toolenv_test.go` drives the tool-environment plugin
+  through `opencode_toolenv_probe.mjs`; and `kimi_driver_internal_test.go` runs
+  the driver against a stand-in of Kimi Code's server. That package is in the
+  parallel half, so `make test` requires node and CI's race shards install it;
+  the probes find node by the same rule as the replay. The plugins and the
+  driver import nothing outside Node itself, so no npm.
 
   `node` also runs the **box helper** the engine writes into a seat's box
   (`internal/browser/boxhelper`'s `js/` modules): its Go suite lays a box out
@@ -801,9 +805,10 @@ file that is not Go included: the dashboard's Vitest suites sit beside their
 modules in `dashboard/src`, `internal/e2e`'s client replay is
 `internal/e2e/replay.mjs` beside the `golden_test.go` that runs it, and the
 OpenCode plugins' probes are
-`internal/sandbox/executor/opencode_steer_probe.mjs` and
-`opencode_skills_probe.mjs` beside the `opencode_steer_test.go` and
-`opencode_skills_test.go` that run them, and the box helper's probe is
+`internal/sandbox/executor/opencode_steer_probe.mjs`,
+`opencode_skills_probe.mjs` and `opencode_toolenv_probe.mjs` beside the
+`opencode_steer_test.go`, `opencode_skills_test.go` and `toolenv_test.go` that
+run them, and the box helper's probe is
 `internal/browser/boxhelper/boxhelper_probe.mjs`, beside the tests that drive
 it. There is no top-level `tests/` tree.
 

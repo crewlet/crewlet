@@ -867,10 +867,12 @@ lint: ## run golangci-lint (ci: golangci-lint)
 	golangci-lint run
 
 # require-node, because this half runs packages that drive `node`:
-# internal/sandbox/executor's probes of the two OpenCode plugins the engine
-# embeds — the notes plugin (opencode_steer_test.go), run under node against a
-# stand-in of the bridge's notes route and a real bridge's, and the skill-load
-# plugin (opencode_skills_test.go), against a stand-in of its skill route — and
+# internal/sandbox/executor's probes of the three OpenCode plugins the engine
+# embeds — notes (opencode_steer_test.go), run under node against a stand-in of
+# the bridge's notes route and a real bridge's, skill-load
+# (opencode_skills_test.go), against a stand-in of its skill route, and tool
+# environment (toolenv_test.go) — and of its Kimi Code driver
+# (kimi_driver_internal_test.go), against a stand-in of Kimi Code's server — and
 # internal/browser/boxhelper, which runs the box helper under this node and the
 # floor's, each box installing the Playwright tree with that Node's own npm,
 # offline. Without node those cases fail under REQUIRED
@@ -1017,13 +1019,14 @@ require-npm: ## fail unless npm is on PATH (every dashboard target and the suite
 	  exit 1; \
 	} >&2
 
-require-node: ## fail unless node is on PATH (the e2e client replay, the OpenCode plugin probes and the box helper's cases need it)
+require-node: ## fail unless node is on PATH (the e2e client replay, the OpenCode plugin and Kimi Code driver probes, and the box helper's cases need it)
 	@command -v node >/dev/null 2>&1 || { \
 	  echo "node is not on PATH, and three of the suite's gates need it."; \
 	  echo "  internal/e2e's client replay runs the dashboard's own protocol"; \
 	  echo "  module over the frames a real engine produced,"; \
-	  echo "  internal/sandbox/executor runs the two OpenCode plugins the"; \
-	  echo "  engine embeds, and internal/browser/boxhelper runs the box"; \
+	  echo "  internal/sandbox/executor runs the three OpenCode plugins and"; \
+	  echo "  the Kimi Code driver the engine embeds, and"; \
+	  echo "  internal/browser/boxhelper runs the box"; \
 	  echo "  helper's modules under node, each box installing its Playwright"; \
 	  echo "  tree with that node's npm. Each FAILS without node"; \
 	  echo "  under the targets that run the suite"; \
