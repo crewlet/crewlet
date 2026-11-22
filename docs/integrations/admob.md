@@ -2,7 +2,7 @@
 
 AdMob lets agents **read and change your apps' AdMob monetization through engine tools**: accounts, apps, ad units, ad unit mappings, ad sources, mediation groups, mediation A/B experiments, and the network, mediation and campaign reports. Every method of the AdMob API, v1 and v1beta, is reachable; see [Every method, and its class](#every-method-and-its-class).
 
-- **No token reaches an agent's box.** Google refuses service accounts at AdMob, so a person who manages your AdMob account signs in with Google once, as your own OAuth client. Crewlet keeps that sign-in sealed, renews it, and makes every agent's call through it ([ADR-0170](../../adr/0170-a-growth-integrations-credential-stays-in-the-engine.md)).
+- **No token reaches an agent's box.** Google refuses service accounts at AdMob, so a person who manages your AdMob account signs in with Google once, as your own OAuth client. Crewlet keeps that sign-in sealed, renews it, and makes every agent's call through it ([ADR-0170](../../adr/0170-a-growth-integrations-credential-stays-in-the-engine.md), [ADR-0178](../../adr/0178-an-integrations-consent-grant-is-a-named-grant-of-the-same-machinery.md)).
 - **Crewlet holds each agent to its level and accounts.** One sign-in serves every agent, so nothing at Google tells two agents apart: an agent's level and its publisher accounts are Crewlet's to enforce, and a call outside them is refused before Google is asked.
 - **What cannot be undone is asked first,** one change at a time, of an administrator at a fresh sign-in, never a delegate ([ADR-0171](../../adr/0171-spend-public-and-admin-acts-are-held-for-an-administrator-never-a-delegate.md)). Nothing in AdMob spends money or publishes: AdMob pays you.
 

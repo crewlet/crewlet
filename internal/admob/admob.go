@@ -5,9 +5,9 @@
 // # Who the engine is at AdMob
 //
 // Google refuses service accounts at AdMob, so the company reaches it through
-// one consent grant: a person who manages the AdMob account signs in with
-// Google once, the engine seals the refresh token and renews it, and every
-// seat's call goes as that grant (internal/googlegrowth's Client.Grant). The
+// one consent grant (ADR-0178): a person who manages the AdMob account signs
+// in with Google once, the engine seals the refresh token and renews it, and
+// every seat's call goes as that grant (internal/googlegrowth's Client.Grant). The
 // grant's scopes are the company's ceiling: admob.readonly and admob.report
 // for reading, and admob.monetization once any seat may change settings. The
 // signing person's AdMob role is Google's: Administrator, Manager, or a
@@ -46,6 +46,8 @@
 package admob
 
 import (
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/integration"
 )
@@ -133,4 +135,22 @@ func catalog() growth.Catalog {
 	}
 }
 
-func init() { growth.RegisterFunc(string(Kind), catalog) }
+func init() {
+	growth.RegisterFunc(string(Kind), catalog)
+	googleauth.RegisterConsent(googleauth.Consent{Kind: Kind, Name: "AdMob", Scopes: GrantScopes,
+		Client: oauthClient})
+}
+
+// oauthClient is the company's own OAuth client as its block names it, false
+// where AdMob is off; on with no oauth block is a client with nothing set,
+// which the sign-in refuses by name.
+func oauthClient(c *config.Company) (googleauth.ConsentClient, bool) {
+	b := c.Integrations.AdMob
+	if !b.GrowthEnabled() {
+		return googleauth.ConsentClient{}, false
+	}
+	if b.OAuth == nil {
+		return googleauth.ConsentClient{}, true
+	}
+	return googleauth.ConsentClient{ID: b.OAuth.ClientID, Secret: b.OAuth.ClientSecret}, true
+}
