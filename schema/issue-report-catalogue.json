@@ -15,7 +15,8 @@
       "claude-code",
       "gemini-cli",
       "qwen-code",
-      "opencode"
+      "opencode",
+      "kimi-code"
     ],
     "topology.coordination": [
       "local",
