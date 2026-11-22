@@ -303,6 +303,11 @@ func (h Head) RetiredWhy() string {
 // not have applied yet.
 func RelaunchRead() statelog.Freshness { return statelog.Freshness{Level: statelog.ReadLinearizable} }
 
+// BindRead is the level a minted session's bind asks whether its id is any
+// turn's at ([Reader.SessionHeld]): the row naming it may be another node's
+// capture, which this node's copy may not have applied yet.
+func BindRead() statelog.Freshness { return statelog.Freshness{Level: statelog.ReadLinearizable} }
+
 // NotKept is why the row names no session's object, in a reader's words, ""
 // where it names one. Told apart off the row alone, it is one of four: a launch
 // ran the session out of context ([Session.RetiredBy]); nothing was captured
