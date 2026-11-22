@@ -670,6 +670,23 @@ func TestACopilotNoteIsNotHeldByATornLastLine(t *testing.T) {
 	}
 }
 
+// A torn last line takes back only what that line itself held: a note held by
+// a whole record earlier stays held when a later line is cut off. (steered,
+// the whole run, then its last line again with its second half cut off.)
+//
+// Mutation: forget to reset what the line read last moved to held — the
+// note held long before the torn line is taken back.
+func TestACopilotNoteHeldBeforeATornLineStaysHeld(t *testing.T) {
+	events := copilotFixture(t, "steered.events.jsonl")
+	lines := bytes.SplitAfter(bytes.TrimSuffix(events, []byte("\n")), []byte("\n"))
+	last := lines[len(lines)-1]
+	torn := append(append([]byte{}, events...), last[:len(last)/2]...)
+	held, err := copilotNotesHeld(t.Context(), bytes.NewReader(torn), served("msg_inbox1"))
+	if err != nil || !slices.Equal(held, []string{"msg_inbox1"}) {
+		t.Fatalf("held = %v (%v), want the note its whole record held", held, err)
+	}
+}
+
 // copilotArchive is a Copilot archive holding files, by member name.
 func copilotArchive(t *testing.T, files map[string][]byte) []byte {
 	t.Helper()
