@@ -169,7 +169,7 @@ func (p *Product) inScope(handle string, req googlegrowth.Request) error {
 // Denied records that an administrator denied the held call, or that it
 // lapsed: its one answer.
 func (p *Product) Denied(ctx context.Context, call growth.Call) error {
-	req, _, _ := p.requestOf(ctx, call)
+	req, _, _ := p.requestOf(call)
 	p.client.Denied(ctx, call, req, p.toolClass(call.Tool))
 	return nil
 }

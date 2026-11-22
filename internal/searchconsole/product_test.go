@@ -771,3 +771,114 @@ func TestASeatsSitesAreHeldAgainWhenAnApprovalIsMade(t *testing.T) {
 		t.Errorf("the apply recorded %v (%+v) after %d writes", steps, records, w.f.writeCount())
 	}
 }
+
+// AN OWNER CHANGE IS ANSWERED WITHOUT GOOGLE AND READ ONLY UNDER ITS LEASE: a
+// deny or a lapse reaches no vendor and names the site and its resource, even
+// once the site is off the seat, and an approval reads the owners first under
+// the site's lease, building the list it sends from that reading.
+//
+// Mutation: read the owners while the request is built, and a deny calls
+// Google, a deny for a lost site names no account, or the apply reads before
+// its lease.
+func TestAnOwnerChangeIsAnsweredWithoutGoogle(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, "administer")
+	call := growth.Call{Handle: "growth-lead", Turn: "turn-1", Tool: "search_console_owners_update",
+		Args: map[string]any{"site": siteWeb, "add": []any{"analyst@example.com"}}}
+	hold, err := w.p.Prepare(t.Context(), call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.f.mu.Lock()
+	called := len(w.f.calls)
+	w.f.mu.Unlock()
+	denied := call
+	denied.HeldCall, denied.Approver = "held-1", "founder"
+	if err := w.p.Denied(t.Context(), denied); err != nil {
+		t.Fatal(err)
+	}
+	w.company.Roles[0].Integrations.SearchConsole.Sites = []string{siteDom}
+	lapsed := call
+	lapsed.HeldCall, lapsed.Approver = "held-2", growth.EngineActor
+	if err := w.p.Denied(t.Context(), lapsed); err != nil {
+		t.Fatal(err)
+	}
+	w.f.mu.Lock()
+	reached := w.f.calls[called:]
+	w.f.mu.Unlock()
+	if len(reached) != 0 {
+		t.Errorf("a deny and a lapse reached Google: %v", reached)
+	}
+	steps, records := w.audit.take()
+	if !slices.Equal(steps, []growth.Step{growth.StepDenied, growth.StepLapsed}) {
+		t.Fatalf("recorded %v, want the deny and the lapse", steps)
+	}
+	for _, r := range records {
+		if r.Account != siteWeb || r.Target != "webResource/"+siteWeb {
+			t.Errorf("an answer names account %q and target %q, want the site and its resource", r.Account, r.Target)
+		}
+	}
+	w.company.Roles[0].Integrations.SearchConsole.Sites = []string{siteWeb, siteDom}
+	w.f.mu.Lock()
+	traced := len(w.f.trace)
+	w.f.mu.Unlock()
+	allowed := call
+	allowed.HeldCall, allowed.Approver = "held-3", "founder"
+	if _, err := w.p.Apply(t.Context(), allowed, hold.Binding); err != nil {
+		t.Fatal(err)
+	}
+	w.f.mu.Lock()
+	trace := strings.Join(w.f.trace[traced:], "\n")
+	w.f.mu.Unlock()
+	resource := "/siteVerification/v1/webResource/" + escWeb
+	lease := "write/search_console/" + siteWeb
+	if trace != "hold "+lease+"\nGET "+resource+"\nPUT "+resource+"\nrelease "+lease {
+		t.Errorf("the approved owner change went:\n%s", trace)
+	}
+}
+
+// AN APPROVED OWNER CHANGE ON OWNERS THAT MOVED IS VOID, never failed: an
+// owner to remove who was removed meanwhile, and one to add who was added
+// meanwhile, leave the change nothing it applies to, and nothing is sent.
+//
+// Mutation: fail a change the owners as read no longer take, and the log says
+// the engine erred where the target moved.
+func TestAnOwnerChangeOnMovedOwnersIsVoid(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		args  map[string]any
+		moved []any
+	}{
+		"removed meanwhile": {map[string]any{"site": siteWeb, "remove": []any{"cofounder@example.com"}},
+			[]any{"founder@example.com"}},
+		"added meanwhile": {map[string]any{"site": siteWeb, "add": []any{"analyst@example.com"}},
+			[]any{"founder@example.com", "cofounder@example.com", "analyst@example.com"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			w := newWorld(t, "administer")
+			w.f.mu.Lock()
+			w.f.owners = []any{"founder@example.com", "cofounder@example.com"}
+			w.f.mu.Unlock()
+			call := growth.Call{Handle: "growth-lead", Turn: "turn-1", Tool: "search_console_owners_update",
+				Args: tc.args}
+			hold, err := w.p.Prepare(t.Context(), call)
+			if err != nil {
+				t.Fatal(err)
+			}
+			w.f.mu.Lock()
+			w.f.owners = tc.moved
+			w.f.mu.Unlock()
+			call.HeldCall, call.Approver = "held-1", "founder"
+			if _, err := w.p.Apply(t.Context(), call, hold.Binding); !errors.Is(err, growth.ErrMoved) {
+				t.Errorf("the change answered %v, want it moved", err)
+			}
+			if steps, _ := w.audit.take(); !slices.Equal(steps, []growth.Step{growth.StepAllowed, growth.StepVoid}) {
+				t.Errorf("recorded %v, want the allow and a void", steps)
+			}
+			if w.f.writeCount() != 0 {
+				t.Errorf("Google was written %d times", w.f.writeCount())
+			}
+		})
+	}
+}
