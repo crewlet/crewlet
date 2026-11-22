@@ -90,7 +90,27 @@ func runFakeHarness() {
 		// (a smoke call on a profile with no mcp block).
 		fakeRecordEnv(dir)
 	}
+	if path := os.Getenv("FAKE_STARTED"); path != "" {
+		// Not a mode: a FIFO this invocation opens to say it is running, which
+		// returns once the case has opened it to hear so.
+		_ = os.WriteFile(path, nil, 0o600)
+	}
+	if path := os.Getenv("FAKE_WAIT_FOR"); path != "" {
+		// Not a mode: a FIFO read to its end, so the call stays in flight
+		// until the case opens and closes it.
+		_, _ = os.ReadFile(path) //nolint:gosec // the case's own FIFO
+	}
 	switch {
+	case os.Getenv("FAKE_DAEMON_CHILD") == "1":
+		// The daemon fakeHomeDaemon leaves running: see homedaemon_unix_test.go.
+		fakeDaemonChild()
+	case os.Getenv("FAKE_HOME_DAEMON") != "":
+		// A harness whose calls run in a daemon it keeps per home, as Hermes
+		// Agent's gateway: see homedaemon_unix_test.go.
+		fakeHomeDaemon()
+	case os.Getenv("FAKE_HERMES_LOGIN") != "":
+		// Hermes Agent's two copies of a Nous login: see hermeslogin_test.go.
+		fakeHermesLogin(os.Getenv("FAKE_HERMES_LOGIN"))
 	case os.Getenv("FAKE_STORE") == "1":
 		// A harness that keeps its login, its sessions and their usage in a
 		// database of its own — see credentialstore_test.go.
