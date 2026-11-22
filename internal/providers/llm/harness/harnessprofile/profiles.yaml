@@ -4125,6 +4125,10 @@ hermes:
   # as its first 8,000, measured): the answer itself is stdout, whole, and a
   # call whose arguments run longer is not joined to its request by its record
   # and is counted as the next request instead.
+  # The record does carry the model's id for each call (`call_…`), but the
+  # harness's `tools/call` carries none (its only `_meta` is the MCP SDK's
+  # progress token, read in tools/mcp_tool_handlers.py on 0.23.3), so there is
+  # no id to join the two on.
   #
   # The harness makes a response's calls one after another (measured: the
   # second began as the first ended), does not re-read the list when told it
