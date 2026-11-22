@@ -2164,13 +2164,13 @@ runs: each pool at its worst, half again for the heap's room under the
 engine's [memory limit](../guides/deployment.md#the-engines-memory-limit), over
 that limit's nine tenths: 97 MiB for the
 [transcript reads](code-sandbox.md#reading-a-seats-sessions) its API answers,
-and on a node running seats too 1 650 MiB at the default `node.max_concurrent`
+and on a node running seats too 1 796 MiB at the default `node.max_concurrent`
 (its collections of runs and reads of its boxes for its peers, 8.0 MiB a
 turn, the sessions it takes from boxes, and its seats' reads). A Gitlet node
 always serves ingress (git is served on the API listener, which only an
 ingress node mounts), so every Gitlet node keeps the transcript reads' pool,
-with seats or without; on a node without seats of 2 GiB of memory a core in
-all, that costs it no transfer. Beside the pools it keeps the node's [answer budget](../guides/deployment.md#the-engines-memory-limit) over the limit's nine tenths, 284 MiB, its store's
+with seats or without; on a node of 2 GiB of memory a core in all, that costs
+it no transfer without seats and at most one transfer with them. Beside the pools it keeps the node's [answer budget](../guides/deployment.md#the-engines-memory-limit) over the limit's nine tenths, 284 MiB, its store's
 [page cache](../guides/deployment.md#the-page-cache), a sixteenth of its memory
 shared by the connections of its two files (one pinned writer for each of its
 14 state logs among them), and its read lane, 128 MiB for each read slot (a
@@ -2236,17 +2236,17 @@ At the default lanes, with and without seats beside Gitlet (MiB, rounded):
 | Node | Seats | Executor's pools | Answers in flight | Store's page cache | Read lane | Transfers | Kept for the broker, the engine's own heap and the rest of the store | Background budget |
 |---|---|---|---|---|---|---|---|---|
 | 2 GiB, one core | no | 97 | 284 | 128 | 128 | 2 | 617 | 346 |
-| 2 GiB, one core | yes | 1 650 | 284 | 128 | 128 | 1 | 0 | 0 |
+| 2 GiB, one core | yes | 1 796 | 284 | 128 | 128 | 1 | 0 | 0 |
 | 4 GiB, two cores | no | 97 | 284 | 256 | 256 | 6 | 1 401 | 458 |
-| 4 GiB, two cores | yes | 1 650 | 284 | 256 | 256 | 3 | 722 | 256 |
+| 4 GiB, two cores | yes | 1 796 | 284 | 256 | 256 | 2 | 658 | 398 |
 | 8 GiB, four cores | no | 97 | 284 | 512 | 512 | 13 | 2 969 | 906 |
-| 8 GiB, four cores | yes | 1 650 | 284 | 512 | 512 | 10 | 2 290 | 704 |
+| 8 GiB, four cores | yes | 1 796 | 284 | 512 | 512 | 9 | 2 226 | 846 |
 | 16 GiB, eight cores | no | 97 | 284 | 1 024 | 1 024 | 27 | 6 105 | 1 802 |
-| 16 GiB, eight cores | yes | 1 650 | 284 | 1 024 | 1 024 | 24 | 5 426 | 1 600 |
+| 16 GiB, eight cores | yes | 1 796 | 284 | 1 024 | 1 024 | 23 | 5 362 | 1 742 |
 
 Its pools, page cache and read lane alone outgrow 2 GiB, and a node keeps at
-least one transfer, so 2 GiB running seats beside Gitlet keeps 367 MiB more
-than its memory, and its Go memory limit, 1 411 MiB, sits below the 1 741 MiB
+least one transfer, so 2 GiB running seats beside Gitlet keeps 513 MiB more
+than its memory, and its Go memory limit, 1 411 MiB, sits below the 1 873 MiB
 its pools and answers in flight keep: under concurrent load at the bounds its
 pools exceed the node, so expect GC pressure, then the out-of-memory killer.
 Small and development installs run there, so it still boots and serves, and
