@@ -69,7 +69,7 @@ var homeBoardCases = []fleetCase{
 			h.t.Fatalf("the first save answered %d, %v", first, ok)
 		}
 		// ZERO IS "NONE IS STORED": a second screen creating one loses.
-		if _, ok := h.saveHomeBoard("pm", `{"widgets":[]}`, 0); ok {
+		if _, created := h.saveHomeBoard("pm", `{"widgets":[]}`, 0); created {
 			h.t.Fatal("a create landed over a stored board")
 		}
 		b, revision, found := h.homeBoard("pm")
