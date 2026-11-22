@@ -496,7 +496,7 @@ func TestAWebDeniedKimiRunHasNoWebToolOrService(t *testing.T) {
 		paths := PathsFor(box)
 		req := sandbox.RunRequest{System: "S", WebDenied: denied,
 			Env: map[string]string{"KIMI_WEB_SEARCH_BASE_URL": "https://search.example.com", "KIMI_WEB_SEARCH_API_KEY": "k"}}
-		if _, err := (Kimi{}).WriteConfig(t.Context(), box, req, paths); err != nil {
+		if _, err := (Kimi{}).WriteConfig(t.Context(), box, req, Session{}, paths); err != nil {
 			t.Fatal(err)
 		}
 		var settings kimiSettings
