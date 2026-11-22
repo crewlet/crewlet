@@ -176,8 +176,8 @@ func TestAMuseMainThreadReadAnswersItsTakes(t *testing.T) {
 // item (4,505 UTF-16 units) with the answer's framing fits Muse Code's
 // ceiling once the note helper takes the token out, whether it is all `<`
 // (which encoding/json escapes unless told not to), all U+2028 (which it
-// escapes always) or all 3-byte characters, and a second item goes to the
-// next hook's answer.
+// escapes always), all 3-byte characters, or all tabs or newlines (two bytes
+// each, escaped), and a second item goes to the next hook's answer.
 //
 // Mutation: carry two items in one answer, or write it with encoding/json.
 func TestAMuseHookAnswerCarriesOneItemWithinItsCeiling(t *testing.T) {
@@ -187,23 +187,10 @@ func TestAMuseHookAnswerCarriesOneItemWithinItsCeiling(t *testing.T) {
 	if got := (Muse{}).notesThatFit([]string{"a", "b", "c"}); got != 1 {
 		t.Errorf("one answer carries %d messages, want one", got)
 	}
-	for _, unit := range []string{"<", "\u2028", "中"} {
+	for _, unit := range []string{"<", "\u2028", "中", "\t", "\n"} {
 		widest := strings.Repeat(unit, 4505)
-		for _, event := range []string{claudeEventToolBatch, claudeEventFinish} {
-			const take = "11111111-1111-4111-8111-111111111111"
-			answer := (Muse{}).hookAnswer(event, take, []HookNote{{Message: widest}})
-			if !json.Valid([]byte(answer)) {
-				t.Fatalf("%q %s: the answer is no JSON", unit, event)
-			}
-			// THE NOTE HELPER'S CUT: the token's field out, every other byte
-			// as it stands (internal/notehelper's splitTake), so the same
-			// length whatever order its fields come in.
-			field := `"` + museTakeField + `":` + museJSONString(claudeTakeToken(take)) + `,`
-			handed, cut := strings.CutPrefix(answer, "{"+field)
-			if !cut {
-				t.Fatalf("%q %s: the answer does not open with the token's field: %.80s", unit, event, answer)
-			}
-			handed = "{" + handed
+		for _, event := range MuseHookEvents {
+			handed := MuseHanded(t, event, widest)
 			if len(handed) > museHookAnswerBytes || strings.Contains(handed, `\u`) {
 				t.Errorf("%q %s: the answer Muse is handed is %d bytes (escaped %v), past %d", unit, event,
 					len(handed), strings.Contains(handed, `\u`), museHookAnswerBytes)
