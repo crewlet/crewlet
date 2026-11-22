@@ -822,8 +822,8 @@ func scrubDocument(first io.Reader, reopen func() (io.ReadCloser, error), dst io
 	}
 	defer spool.remove()
 	plan, err := firstReadings(first, reopen, s, b, spool, func(src io.Reader, s scrubber, plan *tarPlan) error {
-		if err := rewriteExport(src, plan.spool, s.way(jsonWay), b); err != nil {
-			return err
+		if exportErr := rewriteExport(src, plan.spool, s.way(jsonWay), b); exportErr != nil {
+			return exportErr
 		}
 		return plan.holdPast()
 	})
@@ -880,9 +880,9 @@ func scrubTar(first io.Reader, reopen func() (io.ReadCloser, error), dst io.Writ
 		member := -1
 		return eachMember(src, b, func(h *tar.Header, body io.Reader) error {
 			member++
-			resumed, err := plan.memberAt(member, h, body)
+			resumed, memberErr := plan.memberAt(member, h, body)
 			if !resumed {
-				return err
+				return memberErr
 			}
 			membersBits := plan.members.count()
 			plan.members.putByte(h.Typeflag)
@@ -890,18 +890,18 @@ func scrubTar(first io.Reader, reopen func() (io.ReadCloser, error), dst io.Writ
 				return plan.holdPast()
 			}
 			if plan.carry == nil {
-				if err = writeMemberHeader(plan.spool, memberName(s, h.Name), h.Mode&0o777,
-					h.ModTime); err != nil {
-					return err
+				if memberErr = writeMemberHeader(plan.spool, memberName(s, h.Name), h.Mode&0o777,
+					h.ModTime); memberErr != nil {
+					return memberErr
 				}
 			}
 			if h.Typeflag == tar.TypeDir {
 				return plan.holdPast()
 			}
 			plan.markMember(member, membersBits, h.Name)
-			size, err := measureFile(h.Name, body, s, plan)
-			if err != nil {
-				return err
+			size, memberErr := measureFile(h.Name, body, s, plan)
+			if memberErr != nil {
+				return memberErr
 			}
 			plan.members.putNumber(uint64(size))
 			return plan.holdPast()
@@ -929,9 +929,9 @@ func scrubTar(first io.Reader, reopen func() (io.ReadCloser, error), dst io.Writ
 		if kind != tar.TypeReg && kind != tar.TypeDir {
 			continue
 		}
-		header, err := readMemberHeader(from, kind)
-		if err != nil {
-			return err
+		header, headerErr := readMemberHeader(from, kind)
+		if headerErr != nil {
+			return headerErr
 		}
 		if kind == tar.TypeReg {
 			size, sized := plan.members.takeNumber()
@@ -984,7 +984,7 @@ func firstReadings(first io.Reader, reopen func() (io.ReadCloser, error), s scru
 				pieces.lookups = false
 			}
 			plan.letGo()
-			if err := spool.empty(); err != nil {
+			if err = spool.empty(); err != nil {
 				return plan, err
 			}
 			plan = &tarPlan{gate: b.gate, spool: spool, bothFrom: plan.bothFrom, textUnit: plan.textUnit}
