@@ -32,16 +32,12 @@ func (Codex) inboxID(launch, noteID string) string {
 	return "note_" + hex.EncodeToString(sum[:])[:32]
 }
 
-// codexPollCeiling is the most UTF-16 units one message the note helper steers
-// can carry: turn/steer refuses an input past 1,048,576 code points
-// (`input_too_large`, measured on 0.171.0 with ASCII, CJK and emoji), and a
-// text never holds more code points than UTF-16 units, so a message held to as
-// many units is always within it. The model's window, not the call, is the
-// real bound: a steer past it is compacted (ADR-0177's "Confirmed").
-const codexPollCeiling = 1 << 20
-
-// pollCeiling is [codexPollCeiling].
-func (Codex) pollCeiling() int { return codexPollCeiling }
+// pollCeiling is the most UTF-16 units one message the note helper steers can
+// carry: [codexSteerMaxCodePoints], since a text never holds more code points
+// than UTF-16 units, so a message held to as many units is within turn/steer's
+// bound. The model's window, not the call, is the real bound: a steer past it
+// is compacted (ADR-0177's "Confirmed").
+func (Codex) pollCeiling() int { return codexSteerMaxCodePoints }
 
 // notesHeld is the inbox ids of takes whose item Codex's rollout of session
 // holds as a user message, matched by its rendered text's digest

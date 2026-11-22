@@ -26,11 +26,12 @@ import (
 const (
 	codexStandInSocket = "CREWLET_TEST_CODEX_SOCKET"
 	codexStandInSteers = "CREWLET_TEST_CODEX_STEERS"
+	codexStandInOrder  = "CREWLET_TEST_CODEX_ORDER"
 )
 
 func TestMain(m *testing.M) {
 	if socket := os.Getenv(codexStandInSocket); socket != "" {
-		os.Exit(serveCodexStandIn(socket, os.Getenv(codexStandInSteers)))
+		os.Exit(serveCodexStandIn(socket, os.Getenv(codexStandInSteers), os.Getenv(codexStandInOrder)))
 	}
 	os.Exit(m.Run())
 }
@@ -38,16 +39,26 @@ func TestMain(m *testing.M) {
 // codexStandInTurn is the turn the stand-in says is in flight.
 const codexStandInTurn = "turn-standin"
 
-// serveCodexStandIn serves socket until SIGTERM, which ends it with 0.
-func serveCodexStandIn(socket, steers string) int {
+// serveCodexStandIn serves socket until a SECOND SIGTERM, as Codex's
+// app-server finishes the turn in flight on the first (measured on 0.171.0),
+// then records `server` in order and ends with 0.
+func serveCodexStandIn(socket, steers, order string) int {
 	ln, err := net.Listen("unix", socket)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "stand-in app-server:", err)
 		return 1
 	}
-	stop := make(chan os.Signal, 1)
+	stop := make(chan os.Signal, 2)
 	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
-	go func() { <-stop; _ = ln.Close() }()
+	go func() {
+		<-stop
+		<-stop
+		if f, err := os.OpenFile(order, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil { //nolint:gosec // the case's own file
+			_, _ = f.WriteString("server\n")
+			_ = f.Close()
+		}
+		_ = ln.Close()
+	}()
 	server := &http.Server{ReadHeaderTimeout: time.Minute,
 		Handler: websocket.Handler(func(ws *websocket.Conn) { answerCodexStandIn(ws, steers) })}
 	_ = server.Serve(ln)
@@ -102,7 +113,9 @@ const codexStandInThread = "019a1f62-fbda-7aa2-af57-6c0abeb8e50b"
 // ending in the answer `done` on the thread it continues or
 // [codexStandInThread], appends its rollout lines (one turn of 300 input, 200
 // cached, 40 out, a window of 258400 and two plan windows) to the thread's
-// rollout, and, where record/wait-steer exists, first waits for a steer.
+// rollout, and, where record/wait-steer exists, first waits for a steer; where
+// record/block exists, it then works until SIGTERM, recording `exec` in
+// record/order as it goes.
 func codexStandIn(t *testing.T, box sandbox.Sandbox, release, record string) {
 	t.Helper()
 	bin, err := os.Executable()
@@ -122,7 +135,7 @@ case "$1" in
 app-server)
   printf '%%s\n' "$@" > "$rec/server-argv"
   for a; do case "$a" in unix://*) s=${a#unix://};; esac; done
-  %[3]s="$s" %[4]s="$rec/steers" exec %[5]s;;
+  %[3]s="$s" %[4]s="$rec/steers" %[8]s="$rec/order" exec %[5]s;;
 exec)
   printf '%%s\n' "$@" > "$rec/exec-argv"; env > "$rec/env"; cat > "$rec/stdin"
   tid=%[6]s; [ "$5" != resume ] || tid=$6
@@ -133,11 +146,13 @@ exec)
   cat >> "$f" <<'EOF'
 %[7]s
 EOF
+  if [ -e "$rec/block" ]; then trap 'echo exec >> "$rec/order"; exit 143' TERM; : > "$rec/working"; while :; do sleep 0.05; done; fi
   printf '%%s\n' '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"done"}}' '{"type":"turn.completed","usage":{"input_tokens":9999,"cached_input_tokens":0,"output_tokens":9999}}'
   exit 0;;
 esac
 exit 2
-`, shQuote(record), release, codexStandInSocket, codexStandInSteers, shQuote(bin), codexStandInThread, rollout)
+`, shQuote(record), release, codexStandInSocket, codexStandInSteers, shQuote(bin), codexStandInThread, rollout,
+		codexStandInOrder)
 	writeBoxStandIn(t, box, p.BinDir()+"/codex", script)
 }
 

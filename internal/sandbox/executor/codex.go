@@ -67,11 +67,6 @@ func codexFloor() string {
 // measured; the bound is for one that never does.
 const codexListenWait = 60 * time.Second
 
-// codexBriefOnStdin says the brief reaches `exec --remote` on stdin (`-`), as
-// `exec` reads it (measured on 0.171.0): the one place the choice is made, for
-// [Codex.Output] and the script's prompt argument alike.
-const codexBriefOnStdin = true
-
 // codexTimes is the waits a run's script runs at: a value, so a case about a
 // wait runs it at a length it can tell apart ([openCodeTimes]).
 type codexTimes struct {
@@ -101,17 +96,16 @@ at() { [ -z "$a" ] || [ "$a" -gt "$1" ] || { [ "$a" -eq "$1" ] && { [ "$b" -gt "
 `
 
 // codexScript is a Codex run's script ([Codex.Command]): the end protocol
-// (end.go); the release, refused below [codexFloor]; the session settled
-// ([codexSessionGate], [codexFallBack]), recorded, and its configuration moved
-// into [Paths.CodexConfig]; the app-server started on [Paths.CodexSocket], its
+// (end.go); the release, refused below [codexFloor]; the session settled and
+// its configuration installed ([codexSessionGate], [codexFreshRoute]), and
+// recorded; the app-server started on [Paths.CodexSocket], its
 // output kept off the stream; the note helper beside it where the run is wired
 // to its notes; a watcher writing the thread `exec --json` reports to
 // [Paths.CodexThread] and reporting it ([reportSession]); `exec --remote`
 // under the end protocol ([launchHarness]); the helper and server stopped;
 // then the rollout lines the run appended, of the kinds the result reads
-// ([codexRolloutEvent]), and the session packed ([codexCapture]). Codex is
-// never PID 1: a container's PID 1 is its runtime's init (`--init`), and the
-// harness is the script's child everywhere.
+// ([codexRolloutEvent]), and the session packed ([codexCapture]). Codex is the
+// script's child, never PID 1 (a container's is its `--init`): no reaper.
 func codexScript(req sandbox.RunRequest, session Session, paths Paths, times codexTimes) string {
 	q := sandbox.ShellQuote
 	stream := q(paths.Result())
@@ -132,21 +126,30 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 		floorArgs(codexFloor()), codexFloor())
 	line(`mkdir -p %s %s && chmod 700 %s || exit 1`, q(paths.CodexHome()), q(paths.CodexSessions()),
 		q(paths.CodexHome()))
-	line(`apid= hpid= tpid= tid= before=0`)
-	line(`stop() { end "$tpid"; end "$hpid"; end "$apid"; tpid= hpid= apid=; rm -f %s; }`, sock)
-	// quit: a teardown signal's end, as OpenCode's ([openCodeScript]).
-	line(`quit() { trap '' USR1; trap - EXIT TERM INT HUP; end "$harness"; harness=; stop; exit "$1"; }`)
+	line(`apid= hpid= tpid= tid= before=0 r=`)
+	// stop: the watcher, the helper, then the app-server, TERM again on each
+	// probe: on TERM it finishes the running turn first, and a second TERM
+	// ends it at once (measured on 0.171.0), all within the job's grace.
+	line(`stop() { end "$tpid"; end "$hpid"; end "$apid" again; tpid= hpid= apid=; rm -f %s; }`, sock)
+	// THE THREAD, off the stream's first line, the one `exec --json` prints as
+	// the server starts the thread, before its turn: written for the helper
+	// and reported for collection. Whole lines only: the pattern ends the line.
+	line(`thread() { t=$(head -n 1 %s 2> /dev/null | sed -n 's/^{"type": *"thread.started", *"thread_id": *"\([0-9A-Za-z-]*\)"}$/\1/p'); [ -n "$t" ] || return 1; tid=$t; printf '%%s\n' "$tid" > %s && mv -f %s %s && %s; }`,
+		stream, threadNext, threadNext, thread, reportSession(paths, "tid"))
+	b.WriteString(codexFinish(paths))
+	// quit: a teardown signal's end, as OpenCode's ([openCodeScript]): exec
+	// first, then everything beside it, then the session packed.
+	line(`quit() { trap '' USR1; trap - EXIT TERM INT HUP; end "$harness"; harness=; end "$tpid"; tpid=; thread || :; stop; finish; exit "$1"; }`)
 	line(`trap 'stop' EXIT`)
 	line(`trap 'quit 143' TERM; trap 'quit 130' INT; trap 'quit 129' HUP`)
-	b.WriteString(codexSessionGate(session, paths))
-	if session.Continues {
-		b.WriteString(codexFallBack(paths, req.FreshWiring != nil))
+	b.WriteString(codexSessionGate(session, paths, req.FreshWiring != nil))
+	if session.Continues && req.FreshWiring != nil && req.Steer.Set() {
+		b.WriteString(codexFreshRoute(paths))
 	}
-	line(`mv -f %s %s && chmod 600 %s || { echo 'crewlet: the run has no Codex configuration at '%s >&2; exit 1; }`,
-		q(paths.CodexConfigStaged()), q(paths.CodexConfig()), q(paths.CodexConfig()), q(paths.CodexConfigStaged()))
+	line(`chmod 600 %s || exit 1`, q(paths.CodexLiveConfig()))
 	// THE RECORD, before the server and the run: the session continued, else
 	// none, since Codex has not minted the new one yet ([sessionMinter]).
-	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$s" "$k" "$w" "$v" > %s`, q(paths.SessionRecord()))
+	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$sid" "$k" "$w" "$v" > %s`, q(paths.SessionRecord()))
 	line(`endbefore() { endedas=before; %s; exit 143; }`, strings.TrimSuffix(recordEnded(paths), "\n"))
 	line(`[ -z "$endasked" ] || endbefore`)
 	// WHERE THE RUN BEGAN IN THE ROLLOUT IT CONTINUES: every line past it is
@@ -157,6 +160,8 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 	}
 
 	line(`rm -f %s %s %s`, sock, thread, threadNext)
+	// No --ignore-user-config: app-server has none, and the config.toml it
+	// always loads is the run's own ([Paths.CodexLiveConfig]).
 	line(`codex app-server --listen %s %s < /dev/null > %s 2>&1 &`,
 		q("unix://"+paths.CodexSocket()), strings.Join(codexPosture(req), " "), serverLog)
 	line(`apid=$!`)
@@ -170,45 +175,31 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 	line(`  sleep 0.1`)
 	line(`done`)
 
-	// THE THREAD, off the stream's first line, the one `exec --json` prints as
-	// the server starts the thread, before its turn: written for the helper
-	// and reported for collection. Whole lines only: the pattern ends the line.
-	line(`thread() { t=$(head -n 1 %s 2> /dev/null | sed -n 's/^{"type": *"thread.started", *"thread_id": *"\([0-9A-Za-z-]*\)"}$/\1/p'); [ -n "$t" ] || return 1; tid=$t; printf '%%s\n' "$tid" > %s && mv -f %s %s && %s; }`,
-		stream, threadNext, threadNext, thread, reportSession(paths, "tid"))
 	line(`( while kill -0 $$ 2> /dev/null; do thread && exit 0; sleep 0.1; done ) &`)
 	line(`tpid=$!`)
 
 	if steered {
 		// THE ROUTE IN THE HELPER'S ENVIRONMENT ALONE, never argv nor
 		// Codex's: it carries the job's token. Its errors are the run's.
-		line(`chmod 700 %s && CREWLET_NOTES_URL=$(cat %s) %s -adapter codex-app-server -socket %s -thread-file %s -notes-env CREWLET_NOTES_URL < /dev/null > /dev/null &`,
-			q(paths.CodexNoteHelper()), q(paths.CodexNotesURL()), q(paths.CodexNoteHelper()), sock, thread)
+		line(`chmod 700 %s && %s=$(cat %s) %s -adapter codex-app-server -socket %s -thread-file %s -notes-env %s < /dev/null > /dev/null &`,
+			q(paths.CodexNoteHelper()), codexNotesEnv, q(paths.CodexNotesURL()), q(paths.CodexNoteHelper()), sock, thread,
+			codexNotesEnv)
 		line(`hpid=$!`)
 	}
 
 	if session.Continues {
-		line(`set --; [ "$k" != yes ] || set -- resume "$s"`)
+		line(`set --; [ "$k" != yes ] || set -- resume "$sid"`)
 	} else {
 		line(`set --`)
 	}
-	prompt := "-"
-	if !codexBriefOnStdin {
-		prompt = `"$(cat ` + q(paths.Brief()) + `)"`
-	}
-	b.WriteString(launchHarness(fmt.Sprintf(`codex exec --json --remote %s "$@" %s`,
-		q("unix://"+paths.CodexSocket()), prompt), paths))
+	// THE BRIEF ON STDIN (`-`), as `exec --remote` reads it (measured on 0.171.0).
+	b.WriteString(launchHarness(fmt.Sprintf(`codex exec --json --remote %s "$@" -`,
+		q("unix://"+paths.CodexSocket())), paths))
 	// The watcher stopped before the last read, so no two writers race on the
 	// report's staging file.
 	line(`end "$tpid"; tpid=; thread || :`)
-	// THE SESSION THE RUN WORKED IN is the thread Codex reported, else the one
-	// it continued, as collection reads it ([Runner.ReportedSession]).
-	line(`[ -z "$tid" ] || s=$tid`)
 	line(`stop`)
-	line(`r=; [ -z "$s" ] || r=$(find %s -type f -name "rollout-*-$s.jsonl" 2> /dev/null | LC_ALL=C sort | head -n 1)`,
-		q(paths.CodexSessions()))
-	line(`[ -z "$r" ] || tail -n +$((before + 1)) "$r" | grep -E '"type": *"(turn_context|token_usage_record|token_count)"' | sed 's/^/{"type":"%s","line":/; s/$/}/'`,
-		codexRolloutEvent)
-	b.WriteString(codexCapture(paths))
+	line(`finish`)
 	line(`trap - EXIT TERM INT HUP`)
 	line(`[ "$code" = 0 ] || [ ! -s %s ] || { echo 'crewlet: codex app-server said:' >&2; tail -c %d %s >&2; }`,
 		serverLog, codexServerLogShown, serverLog)
@@ -216,30 +207,44 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 	return b.String()
 }
 
+// codexNotesEnv is the variable the note helper reads the notes route from,
+// set in its environment alone (internal/notehelper's -notes-env).
+const codexNotesEnv = "CREWLET_NOTES_URL"
+
 // codexServerLogShown is how much of the app-server's own output, from its
 // end, a failed run's error stream is given: 4 KiB, a few of its lines, since
 // the run's failure is read from that stream's end within
 // [sandbox.MaxFailureBytes] beside exec's own words.
 const codexServerLogShown = 4 << 10
 
-// codexFallBack is what a run that was asked to continue its session does
-// where the gate ([codexSessionGate]) started a new one instead (w set): it
-// is handed the brief written for a new session ([sandbox.RunRequest.FreshBrief])
-// and, where it was handed two wirings, the configuration and notes route
-// under the job's other token ([sandbox.RunRequest.FreshWiring]), so the token
-// it dials tells the bridge which session it started; else the other set is
-// removed before the server reads either.
-func codexFallBack(paths Paths, rewired bool) string {
-	var b strings.Builder
-	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
+// codexFreshRoute hands the note helper of a continued run that started a
+// session of its own (k=no) the notes route under the job's other token, as
+// the gate hands Codex that token's configuration ([codexSessionGate]), and
+// removes the other route otherwise: the one place a run's notes route is
+// chosen.
+func codexFreshRoute(paths Paths) string {
 	q := sandbox.ShellQuote
-	line(`if [ -n "$w" ] && [ -s %s ]; then exec < %s; fi`, q(paths.FreshBrief()), q(paths.FreshBrief()))
-	if rewired {
-		staged, fresh := q(paths.CodexConfigStaged()), q(paths.CodexConfigFresh())
-		url, freshURL := q(paths.CodexNotesURL()), q(paths.CodexNotesURLFresh())
-		line(`if [ -n "$w" ]; then mv -f %s %s && { [ ! -e %s ] || mv -f %s %s; } || { echo 'crewlet: the new session could not be wired to the tools of its seat, so the run does not start' >&2; exit 1; }; else rm -f %s %s; fi`,
-			fresh, staged, freshURL, freshURL, url, fresh, freshURL)
-	}
+	url, fresh := q(paths.CodexNotesURL()), q(paths.CodexNotesURLFresh())
+	return fmt.Sprintf("if [ \"$k\" = no ]; then mv -f %s %s || { echo 'crewlet: the new session could not be wired to its notes, so the run does not start' >&2; exit 1; }; else rm -f %s; fi\n",
+		fresh, url, fresh)
+}
+
+// codexFinish defines the script's `finish`, run once Codex and everything
+// beside it have stopped, on the run's own end and a teardown's alike: the
+// session is the thread Codex reported, else the one it continued, as
+// collection reads it ([Runner.ReportedSession]); the rollout lines the run
+// appended of the kinds the result reads go to the stream
+// ([codexRolloutEvent]); and the session is packed ([codexCapture]).
+func codexFinish(paths Paths) string {
+	var b strings.Builder
+	b.WriteString("finish() {\n")
+	b.WriteString(`[ -z "$tid" ] || sid=$tid` + "\n")
+	fmt.Fprintf(&b, `r=; [ -z "$sid" ] || r=$(find %s -type f -name "rollout-*-$sid.jsonl" 2> /dev/null | LC_ALL=C sort | head -n 1)`+"\n",
+		sandbox.ShellQuote(paths.CodexSessions()))
+	fmt.Fprintf(&b, `[ -z "$r" ] || tail -n +$((before + 1)) "$r" | grep -E '"type": *"(turn_context|token_usage_record|token_count)"' | sed 's/^/{"type":"%s","line":/; s/$/}/'`+"\n",
+		codexRolloutEvent)
+	b.WriteString(codexCapture(paths))
+	b.WriteString("}\n")
 	return b.String()
 }
 
@@ -247,7 +252,7 @@ func codexFallBack(paths Paths, rewired bool) string {
 // stdout, `exec --json`, with the rollout lines its script adds after it
 // ([codexEvents]).
 func (Codex) Output(paths Paths) Output {
-	return Output{Stdout: paths.Result(), Events: true, BriefOnStdin: codexBriefOnStdin}
+	return Output{Stdout: paths.Result(), Events: true, BriefOnStdin: true}
 }
 
 // Pins is CODEX_HOME, the box's own [Paths.CodexHome], where the run's
@@ -273,7 +278,7 @@ func (Codex) Parse(stdout []byte) sandbox.Result { return decodeAll(&codexEvents
 // continues: the configuration with its tokens, the socket, the thread, the
 // helper and its routes, the server's output.
 func (Codex) artifacts(p Paths) (files, dirs []string) {
-	return []string{p.CodexConfig(), p.CodexConfigStaged(), p.CodexConfigFresh(), p.CodexSocket(),
+	return []string{p.CodexLiveConfig(), p.CodexConfig(), p.CodexConfigFresh(), p.CodexSocket(),
 		p.CodexThread(), p.CodexThread() + ".next", p.CodexNoteHelper(), p.CodexNotesURL(),
 		p.CodexNotesURLFresh(), p.WorkDir() + "/codex-server.log"}, nil
 }
