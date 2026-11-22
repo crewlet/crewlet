@@ -37,7 +37,8 @@ const standingLinkRate = 160 << 10
 func TestALeafBootsBesideRunsAtTheirBound(t *testing.T) {
 	t.Parallel()
 	pace := time.Second * (1 << 20) / standingLinkRate
-	ceiling := jsprovision.SequenceBudget(true) * pace / objstore.MiBPace
+	// In milliseconds, since two durations multiplied overflow.
+	ceiling := jsprovision.SequenceBudget(true) * (pace / time.Millisecond) / (objstore.MiBPace / time.Millisecond)
 	across := kvtest.SlowLeaf(t, standingLinkRate)
 	member := sandbox.NewCoordStore(across.Member)
 	seat, epoch := uuid.New(), int64(41)
