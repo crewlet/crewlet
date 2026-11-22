@@ -18,19 +18,22 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// A KIMI SESSION IS CONTINUED ONLY ON ITS FLOOR: a box and a writer both at or
-// after 2.7.0, and never a box older than its writer (2.7.0 to 2.7.2 measured).
+// A KIMI SESSION IS CONTINUED ONLY FROM 2.7.2 TO 2.7.2, the release Crewlet
+// supports: an older or newer box or writer, or one whose release cannot be
+// read, starts fresh, saying so and naming 2.7.2.
 //
-// Mutation: lower the floor, or let an older box continue — a row goes red.
-func TestAKimiSessionContinuesOnlyOnItsFloor(t *testing.T) {
+// Mutation: admit a newer box, or a release that cannot be read — a row goes
+// red.
+func TestAKimiSessionContinuesOnlyOnTheSupportedRelease(t *testing.T) {
 	for _, tc := range []struct {
 		box, writer string
 		continues   bool
 	}{
-		{"2.7.0", "2.7.0", true}, {"2.7.2", "2.7.0", true}, {"2.7.2", "2.7.2", true},
-		{"2.7.0", "2.7.2", false}, {"2.6.9", "2.6.9", false}, {"2.7.2", "2.6.9", false}, {"", "2.7.0", true},
+		{"2.7.2", "2.7.2", true}, {"2.7.3", "2.7.2", false}, {"2.7.2", "2.7.3", false}, {"2.7.2", "2.7.0", false},
+		{"2.7.0", "2.7.0", false}, {"", "2.7.2", false}, {"2.7.2", "", false},
 	} {
-		if got, why := (Kimi{}).Continues(tc.box, tc.writer); got != tc.continues || (!got && why == "") {
+		got, why := (Kimi{}).Continues(tc.box, tc.writer)
+		if got != tc.continues || (!got && !strings.Contains(why, "2.7.2, the release Crewlet supports")) {
 			t.Errorf("box %q, writer %q: continues %v (%q), want %v", tc.box, tc.writer, got, why, tc.continues)
 		}
 	}
@@ -154,13 +157,12 @@ func kimiGate(t *testing.T, paths Paths, work, n string, session Session) []stri
 
 // A KIMI SESSION THE BOX HOLDS, OR A CARRIED ARCHIVE OF IT, IS CONTINUED FILED
 // UNDER THE RUN'S OWN DIRECTORY: moved to the directory Kimi files that cwd's
-// sessions in, its state.json naming the run's cwd, and the driver told to
-// renew its instructions by its bind on a measured release and in its brief on
-// any other. Neither held nor carried, or one that cannot be filed, is not
-// continued, and the run says why.
+// sessions in, its state.json naming the run's cwd, on 2.7.2 alone. Neither
+// held nor carried, one that cannot be filed, or a box on another release or
+// one it cannot read, is not continued, and the run says why.
 //
-// Mutation: skip the rekey, leave the cwd, renew by bind on an unmeasured
-// release, or continue a session the box does not hold — a row goes red.
+// Mutation: skip the rekey, leave the cwd, continue on a release but 2.7.2, or
+// continue a session the box does not hold — a row goes red.
 func TestAKimiSessionIsContinuedFiledUnderTheRunsDirectory(t *testing.T) {
 	const session = "session_11111111-1111-4111-8111-111111111111"
 	continues := Session{ID: session, Continues: true}
@@ -171,7 +173,7 @@ func TestAKimiSessionIsContinuedFiledUnderTheRunsDirectory(t *testing.T) {
 			kimiWrite(t, paths.KimiSessions()+"/wd_elsewhere_000000000000/"+session+"/"+name, body)
 		}
 		got := kimiGate(t, paths, work, "2.7.2", continues)
-		if got[0] != session || got[1] != "yes" || got[2] != "" || got[3] != "resume "+session+" bind" {
+		if got[0] != session || got[1] != "yes" || got[2] != "" || got[3] != "resume "+session {
 			t.Fatalf("gate = %q", got)
 		}
 		state, err := filepath.Glob(paths.KimiSessions() + "/wd_work_*/" + session + "/state.json")
@@ -183,8 +185,11 @@ func TestAKimiSessionIsContinuedFiledUnderTheRunsDirectory(t *testing.T) {
 		if json.Unmarshal(raw, &s) != nil || s.Cwd != work {
 			t.Errorf("state.json = %s, want its cwd the run's", raw)
 		}
-		if got := kimiGate(t, paths, work, "2.7.1", continues); got[3] != "resume "+session+" brief" {
-			t.Errorf("an unmeasured release's gate = %q, want its instructions in the brief", got)
+		for _, release := range []string{"2.7.3", "2.7.1", ""} {
+			got := kimiGate(t, paths, work, release, continues)
+			if got[1] != "no" || got[3] != "" || !strings.Contains(got[2], "continued only on 2.7.2") {
+				t.Errorf("release %q's gate = %q, want a session of the run's own, naming 2.7.2", release, got)
+			}
 		}
 	})
 	t.Run("carried", func(t *testing.T) {
@@ -194,8 +199,8 @@ func TestAKimiSessionIsContinuedFiledUnderTheRunsDirectory(t *testing.T) {
 			files["wd_elsewhere_000000000000/"+session+"/"+name] = []byte(body)
 		}
 		kimiWrite(t, paths.SessionCarried(), string(kimiArchive(t, files)))
-		got := kimiGate(t, paths, work, "2.7.0", continues)
-		if got[1] != "yes" || got[2] != "" || got[3] != "resume "+session+" bind" {
+		got := kimiGate(t, paths, work, "2.7.2", continues)
+		if got[1] != "yes" || got[2] != "" || got[3] != "resume "+session {
 			t.Fatalf("gate = %q", got)
 		}
 		if digests, _ := os.ReadFile(paths.SessionDigests()); !strings.HasPrefix(string(digests), session+" ") {
@@ -354,37 +359,17 @@ func TestAContinuedKimiRunIsChargedItsOwnRecordsAlone(t *testing.T) {
 	}
 }
 
-// THE SUPERSEDING HEADING IS ONE TEXT, in the driver and here, which
-// code-sandbox.md quotes.
-//
-// Mutation: reword either side — the case fails.
-func TestTheKimiSupersedingHeadingIsTheDriversOwn(t *testing.T) {
-	quoted, err := json.Marshal(kimiSupersedes)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(kimiDriverSource, "const supersedes = "+string(quoted)+"\n") {
-		t.Fatalf("the driver's supersedes is not %s", quoted)
-	}
-}
-
 // A SESSION CARRIED TO ANOTHER BOX IS CONTINUED THERE WITH THE RUN'S OWN
-// INSTRUCTIONS, ON EACH RELEASE ITS BIND IS RENEWED ON: the engine's rendered
+// INSTRUCTIONS, ITS BIND RENEWED: the engine's rendered
 // run, packed in one box and restored in a fresh one with another directory,
 // sent each request with the earlier brief in its history and a system prompt
 // naming this run's text and directory, never the first run's (the stand-in
 // model's log, each system prompt cut to those lines); charged its own two
 // requests; its record holding the first run's bind and the one appended.
 //
-// Mutation: list a release in kimiRenewsBind with no such run, skip the
-// renewal, or charge the record whole — the case fails.
-func TestACarriedKimiSessionIsRenderedWithTheRunsOwnInstructionsOnEachRenewingRelease(t *testing.T) {
+// Mutation: skip the renewal, or charge the record whole — the case fails.
+func TestACarriedKimiSessionIsRenderedWithTheRunsOwnInstructions(t *testing.T) {
 	for _, release := range kimiReleases {
-		if renews := slices.Contains(kimiRenewsBind, release); !renews {
-			t.Errorf("%s was measured and renews no bind", release)
-		}
-	}
-	for _, release := range kimiRenewsBind {
 		var requests int
 		for l := range bytes.Lines(kimiFixture(t, release, "carried.requests.jsonl")) {
 			var r struct {

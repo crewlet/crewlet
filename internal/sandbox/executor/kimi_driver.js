@@ -24,7 +24,7 @@
 // the prompt it holds (40927 where they conflict), so a note admitted twice
 // lands once. Kimi hands it over as a user message opening a turn after the
 // running tool's result; one sent while the model answers cuts that request
-// short, and at idle a steer starts a turn (measured on 2.7.0 and 2.7.2). THIS DRIVER
+// short, and at idle a steer starts a turn (measured on 2.7.2). THIS DRIVER
 // CONFIRMS NOTHING: a note counts as read only once the runner finds it in the
 // session's own record (kimitranscript.go), so it never posts the route's /read.
 // As the session goes idle the route is asked once more, briefly (stopAskMs),
@@ -88,27 +88,22 @@ const briefPrefix = "crewlet-brief-"
 
 // bindBoundMs bounds the wait for a fresh session's bound profile on disk, as a
 // continued session's instructions are renewed from it (renew): written as the
-// session is created (measured on 2.7.0 and 2.7.2), so ten seconds is room.
+// session is created (measured on 2.7.2), so ten seconds is room.
 const bindBoundMs = 10_000
-
-// supersedes heads the standing instructions a continued session is handed in
-// its brief where its release's bound profile is not renewed (code-sandbox.md,
-// "A Kimi Code run's session"; kimisteer.go, kimiSupersedes).
-const supersedes = "## Your standing instructions for this run\n\nThey replace the standing instructions this session was started with.\n\n"
 
 // kept is every event type the stream keeps: a turn's start, step and end, an
 // item's start and end, the context's size and a notice. Deltas and the
 // session's bookkeeping frames are left out, as nothing reads them, and so is
 // a subscription's `turns` page, which on a continued session repeats an
-// earlier run's turns (measured on 2.7.0 and 2.7.2).
+// earlier run's turns (measured on 2.7.2).
 const kept = new Set(["turn.started", "turn.updated", "turn.ended", "item.started", "item.ended", "context", "notice"])
 
 const settings = JSON.parse(fs.readFileSync(process.argv[2], "utf8"))
 // mode is `rekey <session> <dir>`, run before the run to file a session under
 // this run's working directory; `resume <session> <bind|brief>`, a run that
 // continues it; or none, a run that starts a session of its own.
-const [mode, continued, how] = process.argv.slice(3)
-if (mode === "rekey") process.exit(rekey(continued, how))
+const [mode, continued, dir] = process.argv.slice(3)
+if (mode === "rekey") process.exit(rekey(continued, dir))
 const life = new AbortController()
 let server = null
 let api = null
@@ -144,13 +139,11 @@ async function run() {
   const config = { permission_mode: "auto", profile: settings.profile }
   if (settings.model) config.model = settings.model
   if (settings.thinking) config.thinking = settings.thinking
-  let text = brief
   if (mode === "resume") {
     // A CONTINUED SESSION REPORTS NOTHING: its id is the one the run was
     // started on, and the seam refuses any other.
-    const renewed = how === "bind" ? await renew(continued, config) : ""
+    const renewed = await renew(continued, config)
     if (renewed !== "") return fail("the continued session's standing instructions could not be renewed: " + renewed)
-    if (how !== "bind") text = supersedes + standing() + "\n\n---\n\n" + brief
     const opened = await call("GET", `/api/v1/sessions/${continued}`)
     if (!opened.ok) return fail(`Kimi could not open the continued session ${continued}: ` + opened.why)
     sid = continued
@@ -165,7 +158,7 @@ async function run() {
   if (asked) return 143
 
   await subscribe()
-  const posted = await call("POST", `/api/v1/sessions/${sid}/prompts`, { prompt_id: briefPrefix + randomUUID(), content: [{ type: "text", text }] })
+  const posted = await call("POST", `/api/v1/sessions/${sid}/prompts`, { prompt_id: briefPrefix + randomUUID(), content: [{ type: "text", text: brief }] })
   if (!posted.ok) return fail("Kimi refused the brief: " + posted.why)
 
   const notes = typeof settings.notes === "string" && settings.notes !== "" ? poller(settings.notes) : null
@@ -229,7 +222,7 @@ async function start() {
 // resume (profile.bind): a throwaway session is created with this run's profile
 // in this run's directory, its bind read off its record and appended to the
 // continued session's, and the throwaway deleted. A resume renders from the
-// record's last bind (measured on 2.7.0 and 2.7.2). "" once renewed, else why.
+// record's last bind (measured on 2.7.2). "" once renewed, else why.
 async function renew(session, config) {
   const made = await call("POST", "/api/v1/sessions", { cwd: process.cwd(), agent_config: config })
   if (!made.ok || typeof made.data?.id !== "string" || typeof made.data?.workspace_id !== "string") return "Kimi refused the session it renders them in: " + made.why
@@ -252,19 +245,11 @@ async function renew(session, config) {
   return ""
 }
 
-// standing is the run's standing instructions, the body of its profile after
-// Kimi's own prompt (kimi.go, kimiProfile).
-function standing() {
-  const profile = fs.readFileSync(path.join(home(), "agents", "crewlet", settings.profile + ".md"), "utf8")
-  const at = profile.indexOf("${base_prompt}\n")
-  return at < 0 ? "" : profile.slice(at + "${base_prompt}\n".length).trim()
-}
-
 // rekey files the session's directory dir under this run's working directory,
 // as Kimi files a session it creates there (`wd_<name>_<hash>`, workDirKey),
 // and records that directory as its cwd: a continued session works in the cwd
 // its state.json names, and a box's path differs from the one it was written in
-// (measured on 2.7.0 and 2.7.2). 0 once filed, else 1, saying why.
+// (measured on 2.7.2). 0 once filed, else 1, saying why.
 function rekey(session, dir) {
   try {
     const dest = sessionDir(session)
@@ -297,7 +282,7 @@ function sessionDir(session) {
 }
 
 // workDirKey is Kimi's own name for a working directory's sessions
-// (encodeWorkDirKey in 2.7.0's and 2.7.2's bundle): `wd_`, the directory's
+// (encodeWorkDirKey in 2.7.2's bundle): `wd_`, the directory's
 // name made a slug of at most 40 characters, and 12 hex digits of SHA-256 of
 // its path.
 function workDirKey(dir) {

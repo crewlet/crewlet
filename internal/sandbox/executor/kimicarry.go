@@ -28,34 +28,20 @@ func (Kimi) layout() archiveLayout { return archiveTar }
 
 // Resumes says Kimi continues a session it reported: KAP opens one its home
 // holds, in whatever directory under `sessions/` it is filed (measured on
-// 2.7.0 and 2.7.2).
+// 2.7.2).
 func (Kimi) Resumes() bool { return true }
 
 // Continues reports whether a session written by Kimi Code release writer can
-// be continued in a box whose Kimi is release box ([carrier]): both at or
-// after [kimiFloor], and never a box older than the writer. A session 2.7.0
-// wrote was continued by 2.7.0 and 2.7.2 (measured).
+// be continued in a box whose Kimi is release box ([carrier]): only both on
+// [kimiSupported], the one release a session's record and its renewed
+// instructions were measured on. A release that cannot be read is no release.
 func (Kimi) Continues(box, writer string) (bool, string) {
-	switch {
-	case !releaseAtLeast(box, kimiFloor):
-		return false, fmt.Sprintf("this box runs Kimi Code %s, older than %s, the oldest that continues a "+
-			"session carried from another box", box, kimiFloor)
-	case !releaseAtLeast(writer, kimiFloor):
-		return false, fmt.Sprintf("the session was written by Kimi Code %s, older than %s, the oldest whose "+
-			"session another box continues", writer, kimiFloor)
-	case !releaseAtLeast(box, writer):
-		return false, carriedOlder("Kimi Code", box, writer)
+	if box == kimiSupported && writer == kimiSupported {
+		return true, ""
 	}
-	return true, ""
+	return false, fmt.Sprintf("a Kimi Code session is continued only from %[1]s to %[1]s, the release Crewlet "+
+		"supports; this box runs %.64[2]q and the session was written by %.64[3]q", kimiSupported, box, writer)
 }
-
-// kimiRenewsBind is every release on which a continued session's standing
-// instructions are renewed by appending a freshly rendered profile bind to its
-// record (kimi_driver.js's renew): 2.7.0 and 2.7.2, the releases a resume was
-// measured to render from the record's last bind. Any other release is handed
-// them in the brief under [kimiSupersedes], whose session still renders the
-// first run's (K5 of #1818's design).
-var kimiRenewsBind = []string{"2.7.0", "2.7.2"}
 
 // kimiSessionGate is the part of a run's script that names the session its
 // driver runs in (s), whether it continues the one asked (k) and, where it
@@ -64,9 +50,10 @@ var kimiRenewsBind = []string{"2.7.0", "2.7.2"}
 // (a digest not in [Paths.SessionDigests]); that archive is restored once it
 // holds the session's main record and no link, its digest recorded; either is
 // then filed under the run's own directory by the driver (kimi_driver.js's
-// rekey), since Kimi runs a session in the cwd its state.json names. Neither
-// held nor restored nor filed, the run starts a session of its own, which its
-// driver reports, and says why.
+// rekey), since Kimi runs a session in the cwd its state.json names. On any
+// box release but [kimiSupported] nothing is touched. Neither held nor
+// restored nor filed, the run starts a session of its own, which its driver
+// reports, and says why.
 func kimiSessionGate(session Session, paths Paths, rewired bool) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
@@ -96,6 +83,9 @@ func kimiSessionGate(session Session, paths Paths, rewired bool) string {
 		`src=$x`,
 	}, " && ")
 	line(`s=%s k=yes w= h= d= src=`, q(session.ID))
+	// THE SUPPORTED RELEASE ALONE CONTINUES ONE: n holds digits and dots only.
+	line(`[ "$n" = %s ] || w="this box runs Kimi Code ${n:-a release it could not read}, and a session is continued only on %s, the release Crewlet supports"`,
+		kimiSupported, kimiSupported)
 	line(`for y in %s/*/"$s"; do [ -s "$y/agents/main/wire.jsonl" ] && [ ! -L "$y" ] && src=$y && h=1; done`, sessions)
 	line(`if [ -s %s ]; then d=$(cksum < %s 2> /dev/null) || d=; fi`, carried, carried)
 	if session.Replaces {
@@ -104,7 +94,7 @@ func kimiSessionGate(session Session, paths Paths, rewired bool) string {
 		line(`if [ -n "$h" ] && [ -n "$d" ] && ! grep -qxF "$s $d" %s 2> /dev/null; then h=; fi`,
 			q(paths.SessionDigests()))
 	}
-	line(`if [ -z "$h" ]; then`)
+	line(`if [ -z "$w" ] && [ -z "$h" ]; then`)
 	line(`  if [ ! -s %s ]; then w='it is not in this box, and no archive of it was carried here'`, carried)
 	line(`  elif ! command -v tar > /dev/null 2>&1 || ! command -v gzip > /dev/null 2>&1; then w='this box has no tar and gzip to restore its archive with'`)
 	line(`  elif ! { %s; }; then w='its archive could not be restored'`, restore)
@@ -120,8 +110,7 @@ func kimiSessionGate(session Session, paths Paths, rewired bool) string {
 		q(paths.KimiDriver()), q(paths.KimiSettings()))
 	line(`rm -rf %s`, q(staged))
 	line(`if [ -z "$w" ]; then`)
-	line(`  case "$n" in %s) how=bind ;; *) how=brief ;; esac`, strings.Join(kimiRenewsBind, "|"))
-	line(`  set -- resume "$s" "$how"`)
+	line(`  set -- resume "$s"`)
 	if rewired {
 		line(`  rm -f %s %s`, q(paths.KimiMCPConfigFresh()), q(paths.KimiSettingsFresh()))
 	}

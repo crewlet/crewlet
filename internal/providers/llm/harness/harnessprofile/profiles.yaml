@@ -3307,12 +3307,12 @@ muse-code:
     - sentinel: "META_API_KEY was rejected"
 
 kimi-code:
-  # The in-box runner (internal/sandbox/executor's kimi.go), on 2.7.0 or later:
-  # `kimi web` and its API, driven by a node script of the engine's. No
+  # The in-box runner (internal/sandbox/executor's kimi.go), on 2.7.2: `kimi
+  # web` and its API, driven by a node script of the engine's. No
   # refuses_root: 2.7.2 ran as uid 0 in permission mode auto and ran its tools
   # (measured in a node:24-bookworm container). E2B's prebuilt `kimi` template
   # (e2b.dev/docs/agents/kimi-cli) pins no release of ours; the run's script
-  # refuses one below 2.7.0.
+  # refuses one below 2.7.2.
   executor:
     runner: true
     e2b_template: kimi
@@ -3821,7 +3821,7 @@ kimi-code:
   # last attempt met a 500 ends `provider.api_error`: neither benches the entry.
   # The record's own turn end, which the in-box runner adds to its stream from
   # the session's wire.jsonl once the run is over (kimi.go, kimiUsage): the
-  # same line for a text phase and an executor run. Measured on 2.7.0 and 2.7.2
+  # same line for a text phase and an executor run. Measured on 2.7.2
   # against a stand-in model, NOT Moonshot's service: a 429 ends the turn on
   # `provider.rate_limit` with the body's words.
   limit_events:

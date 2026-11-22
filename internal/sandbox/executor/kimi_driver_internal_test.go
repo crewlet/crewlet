@@ -387,7 +387,7 @@ func TestAContinuedKimiSessionIsRenewedByItsBindAndReportsNothing(t *testing.T) 
 	probe := &kimiProbe{t: t, idle: make(chan struct{}, 1), bind: bind}
 	wire := kimiFiled(t, probe)
 	probe.idle <- struct{}{}
-	cmd, stdout := kimiDriverRun(t, probe, "", "resume", "session_probe", "bind")
+	cmd, stdout := kimiDriverRun(t, probe, "", "resume", "session_probe")
 	if code := kimiDriverEnds(t, cmd); code != 0 {
 		t.Fatalf("the driver exited %d, want 0:\n%s", code, stdout)
 	}
@@ -411,28 +411,5 @@ func TestAContinuedKimiSessionIsRenewedByItsBindAndReportsNothing(t *testing.T) 
 	}
 	if _, err := os.Stat(probe.report); !os.IsNotExist(err) {
 		t.Errorf("a resume wrote a report (%v)", err)
-	}
-}
-
-// ON A RELEASE WHOSE BIND IS NOT RENEWED, A CONTINUED SESSION IS HANDED ITS
-// INSTRUCTIONS IN ITS BRIEF, under the heading that says they supersede, and no
-// session is created.
-//
-// Mutation: post the brief alone, or renew by bind — the case fails.
-func TestAContinuedKimiSessionOffTheMeasuredReleasesIsToldInItsBrief(t *testing.T) {
-	probe := &kimiProbe{t: t, idle: make(chan struct{}, 1)}
-	kimiFiled(t, probe)
-	probe.idle <- struct{}{}
-	cmd, stdout := kimiDriverRun(t, probe, "", "resume", "session_probe", "brief")
-	if code := kimiDriverEnds(t, cmd); code != 0 {
-		t.Fatalf("the driver exited %d, want 0:\n%s", code, stdout)
-	}
-	probe.mu.Lock()
-	defer probe.mu.Unlock()
-	if want := kimiSupersedes + "STANDING-NOW\n\n---\n\nFix the flake.\n$(not run)"; probe.brief != want {
-		t.Errorf("brief = %q, want %q", probe.brief, want)
-	}
-	if slices.ContainsFunc(probe.calls, func(c string) bool { return strings.HasPrefix(c, "create") }) {
-		t.Errorf("calls = %q, want no session created", probe.calls)
 	}
 }
