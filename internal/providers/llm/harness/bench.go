@@ -415,6 +415,12 @@ func (p *Provider) endedHit(end RunEnd, at time.Time) (markerHit, harnessOutput,
 		}
 	}
 	out.stdout = strings.Join(lines, "\n")
+	// THE SAME LINES AS THE RECORD'S: an in-box runner collects its terminal
+	// lines off the run's stream, where a profile whose text phases read their
+	// limit off the session's record ([harnessprofile.EventsInRecord]: Copilot's,
+	// Kimi Code's) finds the same event. [classifyEvents] reads the record for a
+	// failed run alone, as it does a call's.
+	out.record = out.stdout
 	hit, ok := classifyMarkers(p.profile, out)
 	return hit, out, ok
 }
