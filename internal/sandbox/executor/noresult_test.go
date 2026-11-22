@@ -41,6 +41,10 @@ var streamLines = map[string]struct{ unended, ended string }{
 		`{"type":"text","part":{"messageID":"msg_1","text":"done"}}`,
 		`{"type":"step_finish","part":{"messageID":"msg_1","reason":"stop"}}`,
 	},
+	executor.PiName: {
+		`{"type":"session","version":3,"id":"33333333-3333-4333-8333-333333333333","cwd":"/home/user/workspace"}`,
+		`{"type":"agent_settled","aborted":false}`,
+	},
 	executor.QwenCodeName: {
 		`{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"done"}}}}`,
 		`{"type":"crewlet_qwen_end","stop_reason":"end_turn"}`,
