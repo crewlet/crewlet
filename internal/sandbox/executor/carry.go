@@ -188,7 +188,7 @@ func releaseOf(printed string) string {
 // names, else "", so a box's gate and the engine's check read one release.
 // Globbing is off while v is split: it is the box's own words.
 func bareReleaseShell(name string) string {
-	return fmt.Sprintf(`%[1]s=; set -f; for rw in $v; do rw=${rw#v}; case "$rw" in [0-9]*) %[1]s=$rw; break;; esac; done; set +f
+	return fmt.Sprintf(`%[1]s=; set -f; for rw in $v; do rw=${rw#v}; rw=${rw%%.}; case "$rw" in [0-9]*) %[1]s=$rw; break;; esac; done; set +f
 case "$%[1]s" in *[!0-9.]*|.*|*.|*..*|*.*.*.*) %[1]s= ;; *.*.*) ;; *) %[1]s= ;; esac
 `, name)
 }
