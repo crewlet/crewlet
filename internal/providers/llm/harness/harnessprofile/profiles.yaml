@@ -3064,11 +3064,16 @@ muse-code:
   #
   # "schema_version": 1 is MANDATORY: a settings file without it fails every
   # command at startup with `malformed settings file`.
+  #
+  # telemetry.enabled false keeps the harness from reporting to api.meta.ai.
+  # Measured on 1.4.25 through a logging proxy: a run keeping its session log
+  # made 11 connections there, and none with the setting; a --no-session-log
+  # run made none either way, which this does not rely on.
   local_tools: denied
   web_tools_note: "no web denial: an empty run.toolset would be one, but it has not been measured against a muse-code harness, so this profile cannot serve the assistant"
   seed_files:
     - path: .config/muse/settings.json
-      content: '{"schema_version":1,"run":{"toolset":["web_search","web_fetch"]},"provider_retry":{"max_retries":3}}'
+      content: '{"schema_version":1,"run":{"toolset":["web_search","web_fetch"]},"provider_retry":{"max_retries":3},"telemetry":{"enabled":false}}'
   model_args: ["--model", "{model}"]
   # Read from 1.4.13: `none` is refused on Meta's provider and `ultra` is
   # gated, so neither is offered.

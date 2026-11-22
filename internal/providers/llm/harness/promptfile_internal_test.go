@@ -267,6 +267,9 @@ func TestTheMuseProfileDeniesItsToolsAndReadsItsFailures(t *testing.T) {
 		ProviderRetry struct {
 			MaxRetries *int `json:"max_retries"`
 		} `json:"provider_retry"`
+		Telemetry struct {
+			Enabled *bool `json:"enabled"`
+		} `json:"telemetry"`
 	}
 	if err := json.Unmarshal([]byte(settings.Content), &doc); err != nil {
 		t.Fatalf("the seeded settings file is not JSON: %v", err)
@@ -275,6 +278,11 @@ func TestTheMuseProfileDeniesItsToolsAndReadsItsFailures(t *testing.T) {
 	// file`, which would take the whole provider down rather than one call.
 	if doc.SchemaVersion != 1 {
 		t.Errorf("settings.json schema_version = %d, want 1", doc.SchemaVersion)
+	}
+	// The harness reports to api.meta.ai unless told not to (11 connections
+	// in one 1.4.25 run that kept its session log, none with this off).
+	if e := doc.Telemetry.Enabled; e == nil || *e {
+		t.Error("settings.json leaves telemetry.enabled unset or true, want false")
 	}
 	// An ALLOWLIST of the harness's own web tools, exactly: on 1.4.25 these two
 	// are the whole of its own namespace (web_fetch is gated off on 1.0.3, where
