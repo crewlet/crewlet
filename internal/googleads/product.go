@@ -12,7 +12,6 @@ import (
 	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/googlegrowth"
 	"github.com/crewlet/crewlet/internal/growth"
-	"github.com/crewlet/crewlet/internal/spendguard"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -27,19 +26,20 @@ type Staged interface {
 type Product struct {
 	company func() *config.Company
 	client  *googlegrowth.Client
-	leases  spendguard.Leaser
 	staged  Staged
 	now     func() time.Time
 }
 
 // New is the product on the engine's active document, resolver, tokens,
-// access log, spend leases and staged batch jobs; hc is nil in production.
+// access log, apply leases and staged batch jobs; hc is nil in production.
 func New(company func() *config.Company, env func() *config.Resolver, tokens googlegrowth.Tokens,
-	audit googlegrowth.Audit, leases spendguard.Leaser, staged Staged, hc *http.Client) *Product {
-	return &Product{company: company, leases: leases, staged: staged, now: time.Now, client: &googlegrowth.Client{
-		Kind: string(Kind), Name: "Google Ads", Company: company, Env: env, Tokens: tokens, Audit: audit, HTTP: hc,
-		Refused: vendorRefusal,
+	audit googlegrowth.Audit, leases googlegrowth.Leaser, staged Staged, hc *http.Client) *Product {
+	p := &Product{company: company, staged: staged, now: time.Now, client: &googlegrowth.Client{
+		Kind: string(Kind), Name: "Google Ads", Company: company, Env: env, Tokens: tokens, Audit: audit,
+		Leases: leases, HTTP: hc, Refused: vendorRefusal,
 	}}
+	p.client.BeforeRead = p.targets
+	return p
 }
 
 // Catalog is the product's catalog.
@@ -109,7 +109,7 @@ func customerOf(req googlegrowth.Request) string {
 
 // inScope refuses req where it acts in a customer the seat may not reach, or
 // where an operation in it names another customer's resource.
-func (p *Product) inScope(handle string, req googlegrowth.Request, ops []operation) error {
+func (p *Product) inScope(handle string, req googlegrowth.Request) error {
 	b := p.seat(handle)
 	if b == nil {
 		return refusal(growth.RefusedForbidden, "this agent is off at Google Ads. No vendor was reached.")
@@ -122,6 +122,7 @@ func (p *Product) inScope(handle string, req googlegrowth.Request, ops []operati
 		return refusal(growth.RefusedForbidden, "account "+customer+" is not one of this agent's accounts ("+
 			words.Or(b.Customers)+"). No vendor was reached.")
 	}
+	ops, _ := parse(req.Op, req.Body)
 	for _, name := range namesIn(ops) {
 		if owner, _, _ := kindOf(name); owner != customer {
 			return refusal(growth.RefusedForbidden, fmt.Sprintf("an operation names %s, which is not in account %s "+
@@ -162,9 +163,20 @@ func roleNames(ids []string) string {
 	return words.Or(out)
 }
 
-// Denied is the framework's notice that a person denied a held call, or that
-// it lapsed; the access log holds the verdict.
-func (p *Product) Denied(context.Context, growth.Call) error { return nil }
+// Denied records that an administrator denied the held call, or that it
+// lapsed: its one answer.
+func (p *Product) Denied(ctx context.Context, call growth.Call) error {
+	req, _ := p.requestOf(call)
+	p.client.Denied(ctx, call, req, p.toolClass(call.Tool))
+	return nil
+}
+
+// toolClass is the class of the tool named, which every record of its call
+// names: the class the call was made, or asked and answered, at.
+func (p *Product) toolClass(name string) growth.Class {
+	tool, _ := p.Catalog().Tool(name)
+	return tool.Class
+}
 
 // namesIn is every resource name the operations hold, at any depth: what each
 // acts on and every resource its fields point at.

@@ -23,7 +23,7 @@ type Operation struct {
 	// matrix groups rows by.
 	Resource string
 	// Class is the operation's class, or, for a write with [Operation.Fields],
-	// the class of changing a field no rule names.
+	// the class of one naming no field ([Classify]).
 	Class Class
 	// Reads marks a call that is not a GET and changes nothing: a report, a
 	// query, a search sent as a POST. Only such a call may be read.
@@ -67,11 +67,15 @@ type FieldRule struct {
 	// Class is the class of setting the field, or of raising it where Lower
 	// is set.
 	Class Class
-	// Lower is the class of lowering a number, "" where lowering is Class.
+	// Lower is the class of lowering, "" where lowering is Class: a number
+	// made smaller or, for Exclusions, a list that keeps every entry it held.
 	Lower Class
-	// Pausing are the values that pause, which are operate; every other value
-	// is Class.
-	Pausing []string
+	// Exclusions marks a list of what is left out (events kept from an
+	// export): adding an entry lowers, and dropping one raises at once.
+	Exclusions bool
+	// Pausing are the JSON values that pause, a string state or false for a
+	// switch, which are operate; every other value is Class.
+	Pausing []any
 }
 
 // Change is one field a write changes, with its value before and after, as
@@ -82,14 +86,22 @@ type Change struct {
 }
 
 // Classify is the class of a write of op making changes: the highest class
-// over its changes, and op's own class for a write that names no field.
+// over its changes, and op's own class for a write that names no field. A
+// field no rule names takes the highest class op's rules give, so a field
+// spelled otherwise or added by the vendor never lowers a write.
 func Classify(op Operation, changes []Change) Class {
 	if len(changes) == 0 || len(op.Fields) == 0 {
 		return op.Class
 	}
+	unruled := op.Class
+	for _, r := range op.Fields {
+		if r.Class.Rank() > unruled.Rank() {
+			unruled = r.Class
+		}
+	}
 	out := ClassRead
 	for _, ch := range changes {
-		c := op.Class
+		c := unruled
 		if i := slices.IndexFunc(op.Fields, func(r FieldRule) bool { return r.Field == ch.Field }); i >= 0 {
 			c = op.Fields[i].classOf(ch)
 		}
@@ -107,8 +119,15 @@ func Classify(op Operation, changes []Change) Class {
 
 func (r FieldRule) classOf(ch Change) Class {
 	if len(r.Pausing) > 0 {
-		if s, ok := ch.After.(string); ok && slices.Contains(r.Pausing, s) {
+		if slices.ContainsFunc(r.Pausing, func(v any) bool { return sameScalar(v, ch.After) }) {
 			return ClassOperate
+		}
+		return r.Class
+	}
+	if r.Exclusions {
+		// AN ABSENT LIST IS EMPTY, as the vendor leaves an empty one out.
+		if r.Lower != "" && keepsAll(ch.Before, ch.After) {
+			return r.Lower
 		}
 		return r.Class
 	}
@@ -122,6 +141,43 @@ func (r FieldRule) classOf(ch Change) Class {
 	}
 	// AN UNREADABLE NUMBER IS A RAISE: the higher class asks a person.
 	return r.Class
+}
+
+// sameScalar reports whether JSON value v is the string or boolean want, of
+// the same type: the string "false" is no pause of a switch.
+func sameScalar(want, v any) bool {
+	switch w := want.(type) {
+	case string:
+		s, ok := v.(string)
+		return ok && s == w
+	case bool:
+		b, ok := v.(bool)
+		return ok && b == w
+	}
+	return false
+}
+
+// keepsAll reports whether list after holds every entry of list before, nil
+// being empty; a value that is no list of strings keeps nothing.
+func keepsAll(before, after any) bool {
+	listOf := func(v any) ([]any, bool) {
+		if v == nil {
+			return nil, true
+		}
+		l, ok := v.([]any)
+		return l, ok
+	}
+	was, okB := listOf(before)
+	now, okA := listOf(after)
+	if !okB || !okA {
+		return false
+	}
+	for _, e := range was {
+		if !slices.ContainsFunc(now, func(n any) bool { return sameScalar(e, n) }) {
+			return false
+		}
+	}
+	return true
 }
 
 // number reads a JSON number, or a decimal string, exactly.
@@ -268,9 +324,12 @@ func (c Catalog) Validate() error {
 		}
 		for _, f := range op.Fields {
 			if f.Field == "" || !f.Class.Callable() ||
-				(f.Lower != "" && (!f.Lower.Callable() || f.Lower.Rank() > f.Class.Rank())) {
-				bad("growth: %s operation %s field rule %q needs a field, a callable class, "+
-					"and a lowering class no higher than it", c.Kind, op.ID, f.Field)
+				(f.Lower != "" && (!f.Lower.Callable() || f.Lower.Rank() > f.Class.Rank())) ||
+				(f.Exclusions && (f.Lower == "" || len(f.Pausing) > 0)) ||
+				slices.ContainsFunc(f.Pausing, func(v any) bool { return !sameScalar(v, v) }) {
+				bad("growth: %s operation %s field rule %q needs a field, a callable class, a lowering "+
+					"class no higher than it (one for exclusions, which name no pause), and pauses that "+
+					"are strings or booleans", c.Kind, op.ID, f.Field)
 			}
 		}
 	}

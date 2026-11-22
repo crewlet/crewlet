@@ -12,8 +12,10 @@ import (
 )
 
 // comparedFields is what each kind's rules read of a resource beyond an update's
-// own mask: its status, how it bids, what it points at and what it is.
+// own mask: its status, how it bids, what it points at and what it is; and of
+// a batch job a run approves, how many operations it holds.
 var comparedFields = map[string][]string{
+	"batch_job":                        {"status", "metadata.operation_count"},
 	"campaign":                         {"status", "bidding_strategy_type", "campaign_budget"},
 	"campaign_budget":                  {"amount_micros", "total_amount_micros"},
 	"bidding_strategy":                 {"type"},
