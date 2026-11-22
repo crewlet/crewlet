@@ -91,20 +91,22 @@ Pick the harness by whose models you want, then the sign-in by how you pay:
 |---|---|---|---|
 | Anthropic's (Claude) | `claude-code` — the default | a Claude Pro / Max login, a headless `CLAUDE_CODE_OAUTH_TOKEN` minted from it, or an Anthropic API key (`auth.mode: api-key`) | yes |
 | OpenAI's (GPT) | `codex` | a ChatGPT Plus / Pro login, or an OpenAI API key (`auth.mode: api-key`) | no — the other phases only |
+| Google's (Gemini) | `gemini-cli` | a Google account login (an individual's free Code Assist tier, Google AI Pro or Ultra, or an organization's Code Assist licence), a Gemini API key (`GEMINI_API_KEY`), or Vertex AI | yes; a person's notes, late calls and wakes reach its run only as it is about to finish ([Gemini CLI](code-sandbox.md#gemini-cli)) |
+| Alibaba's (Qwen) | `qwen-code` | an OpenAI-compatible key (`OPENAI_API_KEY`), or a Qwen subscription login (not measured against Qwen's service) | yes; a note reaches its run between tool batches, never after the last ([Qwen Code's notes](code-sandbox.md#qwen-codes-notes)) |
 | Open models: OpenRouter, a hosted provider, a local server | `opencode` | the model provider's key in `env`, under that provider's own variable, or a login of OpenCode's own | yes |
 | GitHub's (Copilot) | `copilot` | a fine-grained PAT with Copilot Requests in `COPILOT_GITHUB_TOKEN` (`auth.mode: api-key`), or a login of Copilot's own | yes |
 | Meta's (Muse) | `muse-code` | a Muse Code login, or a metered `META_API_KEY` (`auth.mode: api-key`) | yes — Muse Code 1.4.25 ([its runner](code-sandbox.md#muse-code)) |
 | Moonshot's (Kimi) | `kimi-code` | a Moonshot API key (`auth.mode: api-key`), or a Kimi Code login in a local cell | yes, on Kimi Code 2.7.2 |
-| Gemini, Qwen, Cursor, Grok, Hermes, Pi | see [Supported harnesses](#supported-harnesses) | the vendor's own login, or a key (Qwen Code: a key only) | no — the other phases only |
+| Cursor, Grok, Hermes, Pi | see [Supported harnesses](#supported-harnesses) | the vendor's own login, or a key | no — the other phases only |
 
 Every agent seat's executor is its harness's own run in a [sandbox](code-sandbox.md),
 doing the seat's work and code work alike; this build has a harness runner for
-`claude-code`, `opencode`, `copilot`, `kimi-code` and `muse-code` only, each listed by its built-in profile's
+`claude-code`, `gemini-cli`, `qwen-code`, `opencode`, `copilot`, `muse-code` and `kimi-code` only, each listed by its built-in profile's
 `executor` block, which no `overrides` can set. Any other harness serves a seat's reviewer,
 workers and side passes (`llm_review`, `llm_subagent`, `llm_auxiliary`,
 `llm_judge`, `llm_triage`) — its own loop on this host, shell and editor denied, the seat's tools
-its only working tools. A seat whose `llm` chain holds no `claude-code`,
-`opencode` or `muse-code` entry is refused on the write ([Where the harness runs](#where-the-harness-runs)).
+its only working tools. A seat whose `llm` chain holds no entry on one of those
+seven is refused on the write ([Where the harness runs](#where-the-harness-runs)).
 
 A seat can mix harnesses: executor on one entry, reviewer on another, auxiliary
 work on a third — see [Per-phase models](#per-phase-models).
@@ -175,8 +177,8 @@ no `Authorization` header; measured on 0.153.4 and 0.164.0). A key kept under
 Codex runs with its shell off and its own `--sandbox read-only`, so its one local
 tool, `apply_patch`, writes nothing — see [Tool calls on
 this host](#tool-calls-on-this-host). It has no harness runner, so a Codex entry
-cannot run an executor: a seat's `llm` points at a `claude-code`, `opencode`, `copilot`, `kimi-code` or
-`muse-code` entry, and Codex serves its reviewer, workers or side passes.
+cannot run an executor: a seat's `llm` points at a `claude-code`, `gemini-cli`, `qwen-code`, `opencode`, `copilot`, `muse-code` or `kimi-code`
+entry, and Codex serves its reviewer, workers or side passes.
 
 ### Open models, OpenRouter and local servers: OpenCode
 
@@ -251,13 +253,12 @@ harness](#what-each-harness-does-with-the-seats-tools)). [Supported
 harnesses](#supported-harnesses) says how each signs in; `custom` is a profile you
 write entirely yourself.
 
-**Qwen Code signs in with a key and nothing else.** Both measured builds (0.23.4
-and 0.26.1) refuse the Qwen OAuth login, so the profile keeps no login and runs the
+**Qwen Code signs in with a key, or with a Qwen subscription login.** A key is its
 OpenAI-compatible sign-in (`--auth-type openai`): key in `OPENAI_API_KEY`,
 endpoint in `OPENAI_BASE_URL`. Other vendors' keys live under `OPENAI_API_KEY`
-too, so a `qwen-code` entry is `auth.mode: api-key` and names its key; the engine
-never fills that variable from its own secret store or environment, and a write
-leaving either out is refused:
+too, so a keyed `qwen-code` entry is `auth.mode: api-key` and names its key; the
+engine never fills that variable from its own secret store or environment, and a
+write leaving either out is refused:
 
 ```yaml
 providers:
@@ -274,6 +275,15 @@ providers:
 
 `OPENAI_BASE_URL` names DashScope's endpoint, a Coding Plan's or any other
 OpenAI-compatible one; unset, the harness uses an endpoint of its own.
+
+The login is Qwen Code 0.28's paid one, a Qwen Plus or Pro subscription
+(`--auth-type qwen-subscription`), **not measured against Qwen's service**: the
+engine takes it from Qwen Code's own documentation and bundle. Sign in with `qwen`
+yourself on the engine host and adopt the login with `crewlet llm login <entry>
+-from-host`; the entry is `auth.mode: subscription`. The login is
+`~/.qwen/subscription_credentials.json`, copied into each seat's home and into a
+local box, never a remote one. Its endpoint is fixed in Qwen Code (`api.qwen.ai`):
+no variable moves it. Free Qwen OAuth stays refused by the harness itself.
 
 ---
 
@@ -850,8 +860,8 @@ other MCP server — the home's, a project's or a plugin's — starts beside it
 |---|---|---|
 | `claude-code` | `WebFetch`, `WebSearch` (`--tools` names the tools that exist; `--allowedTools` lets them run) | `--setting-sources ""`, so no settings file adds hooks, permissions, MCP servers or plugins; `CLAUDE_CODE_DISABLE_CLAUDE_MDS` and `CLAUDE_CODE_DISABLE_AUTO_MEMORY` (`isolation_env`) keep the `CLAUDE.md` family and auto-memory out (the `.git` file does not stop that walk). `--strict-mcp-config` (only `--mcp-config`'s servers: none on a text function, the seat's on a run with tools), `--disable-slash-commands`, `--no-session-persistence`. `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` stops every connection not the call's own; `CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS` drops the repository status. A machine-wide managed settings file (administrator-writable) still applies |
 | `codex` | web search, and `apply_patch`, which `--sandbox read-only` keeps from writing anything | `project_root_markers=[]` beside the `.git` file; skills, rules, hooks, connectors, plugins and memories off; the shell, `view_image`, the goal, multi-agent and `request_user_input` tools off; `--ignore-user-config` (no `config.toml` or declared MCP server is read); `--ephemeral` on a text function, and `CODEX_SQLITE_HOME` in the call's own directory. A run with tools drops `--ephemeral`, since its session file is the record of its requests; the sessions directory is volatile |
-| `gemini-cli` | `web_fetch`, `google_web_search` | A policy file in the seat's home denies every tool and allows the two web tools above the denial (a machine-wide policy under `/etc/gemini-cli/policies`, administrator-writable, outranks it). The first `.gemini/.env` or `.env` found walking up to `/` is loaded and the `.git` file does not stop it, so the call's directory holds one of each, only a comment. `GEMINI_CLI_TRUST_WORKSPACE=true` trusts the call's directory, which a headless run requires (untrusted, every call exited 55); usage statistics off |
-| `qwen-code` | `web_fetch` (`web_search` only where a DashScope search backend is configured) | `tools.core` allows the web tools and `permissions.deny` names every other tool either build registers; memory extraction, chat recording, usage statistics, skills, hooks and the harness's retry rounds off. The `.git` file does not stop its `.env` walk, so the call's directory holds its own `.qwen/.env` |
+| `gemini-cli` | `web_fetch`, `google_web_search` | A policy file in the seat's home denies every tool and allows the two web tools above the denial (a machine-wide policy under `/etc/gemini-cli/policies`, administrator-writable, outranks it). The first `.gemini/.env` or `.env` found walking up to `/` is loaded and the `.git` file does not stop it, so the call's directory holds one of each, only a comment. `GEMINI_CLI_TRUST_WORKSPACE=true` trusts the call's directory, which a headless run requires (untrusted, every call exited 55); usage statistics off. `--allowed-mcp-server-names crewlet` on every call, so no MCP server but the engine's starts, a home extension's included |
+| `qwen-code` | `web_fetch` (`web_search` only where a DashScope search backend is configured) | `tools.core` allows the web tools and `permissions.deny` names every other tool 0.28.3 registers; memory extraction, chat recording, usage statistics, skills, hooks and the harness's retry rounds off. `--allowed-mcp-server-names crewlet` on every call, so no MCP server but the engine's starts, a home extension's included. The `.git` file does not stop its `.env` walk, so the call's directory holds its own `.qwen/.env` |
 | `opencode` | `webfetch`, `websearch` | `OPENCODE_CONFIG_PROJECT_DISABLE` (`isolation_env`) switches off the project configuration walk, and `OPENCODE_CONFIG_DIR` points into the call's directory, where the policy is seeded — see [Tool calls on this host](#tool-calls-on-this-host). The managed configuration (`/etc/opencode` on Linux), administrator-writable, still applies |
 | `cursor-agent` | `WebFetch` (a `.cursor/cli.json` in the call's directory denies shell, write and read) | `--trust`, without which print mode refuses the new directory ("Workspace Trust Required"), and `--exclude-workspace-context`. With the `.git` file no hook, `cli.json` or `mcp.json` above the call is read. **Its rule loader does walk to `/`**: both measured builds open every `AGENTS.md`, `CLAUDE.md` and `.cursor/rules` file from the call's directory up, flag or not. None was in the run request, which carries the user message alone; what the service asks afterwards could not be measured. Put `state_dir` outside any tree holding such files |
 | `copilot` | `web_fetch` (`--available-tools`, its URLs allowed by `--allow-all-urls`; the 1.0.114 bundle lists a `web_search` among its GitHub server's tools on a GitHub sign-in, not measured) | The `.git` file ends the walk for instruction files, hooks and repository settings. Custom-agent discovery walks past it to the enclosing repository's root; none reaches a request, since the task tool that lists them is unavailable. `--disable-client-telemetry`, and `COPILOT_AUTO_UPDATE=false` |
@@ -911,7 +921,7 @@ Where the loop runs, what else it may touch and how long it lives are the
 | How it reaches the seat's tools | over HTTP, the [MCP bridge](#the-tool-bridge) | a stdio relay into a unix socket this process serves for the run alone ([below](#the-seats-tools-as-one-mcp-server)); no listener |
 | Who decides each call | the bridge: grant, skill guard, fence, order and the run's end, per call; the rounds are the harness's alone | the phase's tool loop: grant, skill guard, fence, budget, round cap, terminator, a person's note ([every gate](#every-call-passes-the-phases-gates)) |
 | Lifetime | **detached** — outlives the turn, resumes it later | the turn's own: the phase starts a run, ends it when needed, and starts the next |
-| Needs | a sign-in *plus* a harness runner for the harness (`claude-code`, `opencode`, `copilot`, `kimi-code` or `muse-code`), `providers.sandbox` and a bridge the box can reach | a sign-in on this host, and a tool route in the harness's profile (`mcp`) |
+| Needs | a sign-in *plus* a harness runner for the harness (`claude-code`, `gemini-cli`, `qwen-code`, `opencode`, `copilot`, `muse-code` or `kimi-code`), `providers.sandbox` and a bridge the box can reach | a sign-in on this host, and a tool route in the harness's profile (`mcp`) |
 
 **The executor is the vendor's whole harness**: a real shell, editor and
 checkout. **Every other phase is the turn's own**: every call passes the phase's
@@ -923,7 +933,7 @@ So one entry serves both: a seat whose `llm` names a `claude-code` entry runs
 its executor as Claude Code in a box and its reviewer, workers and side passes
 as Claude Code on this host. A harness with no harness runner serves the second
 column alone — a launch passes over it — and a seat whose executor chain holds
-no `claude-code`, `opencode`, `copilot`, `kimi-code` or `muse-code` entry is refused on the write.
+no `claude-code`, `gemini-cli`, `qwen-code`, `opencode`, `copilot`, `muse-code` or `kimi-code` entry is refused on the write.
 
 ### The executor's run in a box
 
@@ -1099,8 +1109,8 @@ opened by a corrective naming its tool, up to twice (see
 instead the seat's system prompt, which tells it the run ends with that call.
 Its rounds are uncapped unless the seat's `role.sandbox.max_turns`, else
 `providers.sandbox.default_max_turns`, sets a turn cap, which becomes the
-harness's own on every runner — Claude Code's `--max-turns`, OpenCode's agent
-`steps`, the extension's abort past the cap on Copilot ([its runner](code-sandbox.md#github-copilot-cli)), Kimi Code's steps a turn, Muse Code's `--max-model-steps`.
+harness's own on every runner — Claude Code's `--max-turns`, Gemini CLI's and Qwen Code's `model.maxSessionTurns`, OpenCode's agent
+`steps`, the extension's abort past the cap on Copilot ([its runner](code-sandbox.md#github-copilot-cli)), Muse Code's `--max-model-steps`, Kimi Code's steps a turn.
 #### The tool bridge
 
 The seat's tools cannot be shipped into the box: most are MCP children
@@ -1349,8 +1359,8 @@ from a file a *variable* names, a channel `--help` never shows.
 |---|---|---|---|---|
 | `claude-code` | 2.1.303, 2.1.310 | flag, file: `--system-prompt-file` | flag, file: `--append-system-prompt-file`, with `--exclude-dynamic-system-prompt-sections` | none, on either channel |
 | `codex` | 0.153.4, 0.164.0 | config key, file: `-c model_instructions_file={file}`, with the permissions and environment blocks switched off | discovered file, read always: `AGENTS.md` in the call's directory, after codex's own prompt | replace: none (the engine's text is the first prompt byte); append: codex's heading naming the call's directory |
-| `gemini-cli` | 0.58.0, 0.65.0 | variable, file: `GEMINI_SYSTEM_MD` | — none, in either release | none |
-| `qwen-code` | 0.23.4, 0.26.1 | variable, file: `QWEN_SYSTEM_MD` | variable, file: `QWEN_SYSTEM_IDENTITY_MD` — the engine's text in place of the vendor's opening identity sentence, the rest kept byte for byte | none |
+| `gemini-cli` | 0.70.0 | variable, file: `GEMINI_SYSTEM_MD` | — none | none |
+| `qwen-code` | 0.28.3 | variable, file: `QWEN_SYSTEM_MD` | variable, file: `QWEN_SYSTEM_IDENTITY_MD` — the engine's text in place of the vendor's opening identity sentence, the rest kept byte for byte | none |
 | `opencode` | 2.0.32, 2.1.4 | discovered file, selected: `.crewlet-config/agents/crewlet-seat.md`, run with `--agent crewlet-seat` | discovered file, read always: `.crewlet-config/AGENTS.md` | replace: none; append: an `Instructions from: <path>` line naming a file in the call's directory |
 | `cursor-agent` | 2026.09.10, 2026.10.22 | — | — (Cursor's service assembles the system prompt, and the run request carries none) | — |
 | `copilot` | 1.0.114 | — none in prompt mode | discovered file, read always: `AGENTS.md` in the call's directory | its environment block, naming the call's directory |
@@ -1737,7 +1747,7 @@ WebFetch,WebSearch`, `--available-tools`, grok's `--tools`, a Gemini policy deny
 
 - grok's fails *open*: a name the build does not know makes it warn that "other tools stay available" and apply none of the list. So the profile names only the two web tools 1.0.70 knows and passes a deny list naming every other built-in. A denial wins over the allowlist and an unknown deny name is skipped, so the pair fails closed both ways: a renamed web tool leaves the deny list in force, and a new tool is outside the allowlist.
 - Copilot's `--available-tools` fails closed: a name matching no tool adds nothing.
-- Qwen Code's `tools.core` covers only the tools the vendor calls core, so the profile's `permissions.deny` names every other tool either build registers.
+- Qwen Code's `tools.core` covers only the tools the vendor calls core, so the profile's `permissions.deny` names every other tool 0.28.3 registers.
 - `kimi-code`: an unrecognised entry "is reported with a warning" and matches nothing, so a stale name costs one tool rather than lifting the restriction.
 
 The flag's name says nothing about which way it fails.
@@ -1871,8 +1881,8 @@ Measured per harness against the installed binary, through the engine's own code
 |---|---|---|---|---|---|---|---|
 | `claude-code` | a file in the call's directory named by `--mcp-config`; `--strict-mcp-config` admits no other; `--allowedTools mcp__crewlet__*` | its `stream-json` output, with `--include-partial-messages` for true counts | `claudecode/toolUseId` | at once only when every one is to a read-only tool | yes | 600 s (the server's `timeout`) | `--max-turns`, where added: exit 1, `error_max_turns` |
 | `codex` | `-c mcp_servers.crewlet.…` on argv: approval `approve`, not deferred behind its tool search; `--ignore-user-config` | its rollout file in the seat's home, told from a concurrent run's by the working directory its first line names | `callId` | at once (`supports_parallel_tool_calls`) | no | 600 s (`tool_timeout_sec`) | none |
-| `gemini-cli` | the call's own `.gemini/settings.json`; `--allowed-mcp-server-names crewlet`; a home policy allowing it | its chat file in the seat's home, by session id; a response's calls only once they have run | name and arguments | at once | yes | 600 s | `model.maxSessionTurns`, where set: exit 53 |
-| `qwen-code` | a file named by `--mcp-config`; `--allowed-mcp-server-names crewlet`; `--allowed-tools mcp__crewlet` | its `stream-json` output | name and arguments | at once only when every one is to a read-only tool | no | 600 s | `--max-session-turns`, where added: exit 53 |
+| `gemini-cli` | the call's own `.gemini/settings.json`; `--allowed-mcp-server-names crewlet`, on every call; a home policy allowing it | its chat file in the seat's home, by session id; a response's calls from its second writing (0.70.0 writes its prose, then its calls scheduled, then run), so a request is read once the record moves past it | name and arguments | at once | yes | 600 s | `model.maxSessionTurns`, where set: exit 53 |
+| `qwen-code` | a file named by `--mcp-config`; `--allowed-mcp-server-names crewlet`, on every call; `--allowed-tools mcp__crewlet` | its `stream-json` output | name and arguments | at once only when every one is to a read-only tool | no | 600 s | `--max-session-turns`, where added: exit 53 |
 | `opencode` | `opencode serve` started first, the server in the call's own `opencode.jsonc` (`codemode: false`, `crewlet_*` allowed), polled until connected; the run is `run --server` | its JSON output, a step per request; calls only once they have run; the last step's counts from the server's session | name and arguments | at once | yes | 600 s (`timeout.execution`) | none it reports: its step limit exits 0 |
 | `cursor-agent` | the call's own `.cursor/mcp.json` (the call's directory is its project root); `--approve-mcps`; `cli.json` allows `Mcp(crewlet:*)` | its `stream-json` output, **read from its bundle, not measured** | name and arguments | declared at once, **not measured** | declared no, **not measured** | 60 s, the SDK's, with no knob in print mode | none |
 | `copilot` | `--additional-mcp-config` naming a file in the call's directory; `--available-tools crewlet`, `--allow-tool crewlet`; the home's own server list seeded empty | its session's events file in the seat's home, by the working directory it names | `com.github.copilot/toolCallId` | at once | yes | 600 s | none |
@@ -2689,8 +2699,8 @@ sidesteps all of this.
 |---|---|---|---|
 | `claude-code` | `claude` | Claude Pro / Max, or an Anthropic API key (`ANTHROPIC_API_KEY`, its `api_key_env`) | The default. `claude auth login` (and `auth status` / `auth logout`). `claude setup-token` gives a headless `CLAUDE_CODE_OAUTH_TOKEN`. A seat keeps Claude Code's own system prompt (`--append-system-prompt-file`), a side pass replaces it (`--system-prompt-file`). Web tools only (`--tools WebFetch,WebSearch`) beside the seat's server; `--setting-sources ""` and the two `CLAUDE.md` switches keep every settings and project file out. The reference tool route: its `stream-json` record shows every request (counts true with `--include-partial-messages`) and each call's id. Full usage incl. cache tokens. Runs a seat's executor. |
 | `codex` | `codex` | ChatGPT Plus / Pro, or an OpenAI API key (`CODEX_API_KEY`) | `codex login`; no headless token. The key goes in `CODEX_API_KEY`, which `codex exec` signs requests with (`OPENAI_API_KEY` alone sent no `Authorization` header). A seat keeps codex's prompt and adds its text in an `AGENTS.md` in the call's directory; a side pass replaces it (`-c model_instructions_file`). Streams JSONL; shell off, `--sandbox read-only`, so its own tools are web search and an `apply_patch` that writes nothing. A run with tools reads its rollout file per request and does not re-read a changed tool list. Serves the phases on this host only. |
-| `gemini-cli` | `gemini` | Google AI Pro / free tier, or `GEMINI_API_KEY` | No login subcommand: sign in with `gemini` yourself and adopt that login with `-from-host`. Under `subscription` the profile sets `GOOGLE_GENAI_USE_GCA=true` (`subscription_env`) so the harness uses the copied login (without it every call exited 41, "Please set an Auth method"). One system-prompt channel, `GEMINI_SYSTEM_MD`, replacing the harness's prompt for a seat and a side pass alike. Web tools only, by a policy file; usage read per model and summed. `GOOGLE_CLOUD_PROJECT` passes through. |
-| `qwen-code` | `qwen` | an OpenAI-compatible key (`OPENAI_API_KEY`), under `auth.mode: api-key` | **No login**: both measured builds refuse the Qwen OAuth login, so the entry is `auth.mode: api-key` and names its key as `auth.api_key`; `OPENAI_API_KEY` is [shared](#5-a-metered-api-key), so the engine never reads it in the entry's place. Signs in with `--auth-type openai`, the endpoint in `OPENAI_BASE_URL` in the entry's `env` ([example](#the-other-harnesses)). A seat's system prompt replaces the harness's opening identity sentence and keeps the rest (`QWEN_SYSTEM_IDENTITY_MD`); a side pass's replaces it whole (`QWEN_SYSTEM_MD`). Answer and usage from `--output-format stream-json`'s result event. Web tools only. |
+| `gemini-cli` | `gemini` | a Google account login (an individual's free Code Assist tier, Google AI Pro or Ultra, or an organization's Code Assist licence, as Gemini CLI 0.70.0's own authentication guide lists them), `GEMINI_API_KEY`, or Vertex AI under `auth.mode: env` (`GOOGLE_GENAI_USE_VERTEXAI: "true"`, its project and key in `env`); a login whose account Google gives no Code Assist tier is refused as `IneligibleTierError`, named as a refused sign-in | No login subcommand: sign in with `gemini` yourself and adopt that login with `-from-host`. Under `subscription` the profile sets `GOOGLE_GENAI_USE_GCA=true` (`subscription_env`) so the harness uses the copied login (without it every call exited 41, "Please set an Auth method"). One system-prompt channel, `GEMINI_SYSTEM_MD`, replacing the harness's prompt for a seat and a side pass alike. Web tools only, by a policy file; usage read per model and summed. `GOOGLE_CLOUD_PROJECT` passes through. Runs a seat's executor ([Code sandbox › Gemini CLI](code-sandbox.md#gemini-cli)), where its own prompt is kept and the seat's instructions added after it. |
+| `qwen-code` | `qwen` | an OpenAI-compatible key (`OPENAI_API_KEY`), under `auth.mode: api-key`, or a Qwen subscription login (not measured against Qwen's service) | A keyed entry is `auth.mode: api-key` and names its key as `auth.api_key`; `OPENAI_API_KEY` is [shared](#5-a-metered-api-key), so the engine never reads it in the entry's place. A subscription login is adopted with `-from-host` and run with `--auth-type qwen-subscription` ([The other harnesses](#the-other-harnesses)). Signs in with `--auth-type openai`, the endpoint in `OPENAI_BASE_URL` in the entry's `env` ([example](#the-other-harnesses)). A seat's system prompt replaces the harness's opening identity sentence and keeps the rest (`QWEN_SYSTEM_IDENTITY_MD`); a side pass's replaces it whole (`QWEN_SYSTEM_MD`). Answer and usage from `--output-format stream-json`'s result event. Web tools only. Runs a seat's executor over ACP ([Code sandbox › Qwen Code](code-sandbox.md#qwen-code)), where its own prompt is kept and the seat's instructions replace its opening sentence. |
 | `opencode` | `opencode` | a provider key in `env`, or a login of OpenCode's own | **OpenCode 2 only**: `@opencode/cli` (`opencode --version` prints `opencode v2.…`); 1.x (`opencode-ai`) runs neither the profile nor a coding box. Every command runs `--standalone`; without it OpenCode drives a background service on a port shared by every home on the machine, keeping the credentials of whichever call started it. `opencode auth login` (only `auth list` for status, no logout; see [the login it keeps in its own database](#1-broker-the-vendors-own-login-any-harness)). A provider key goes in `env` under that provider's own variable, and `doctor` counts it ([A provider key in `env`](#6-a-provider-key-in-env-opencode-hermes-pi)). `model` is `<provider>/<model>` (`anthropic/claude-sonnet-5`, `openrouter/anthropic/claude-sonnet-5`); a bare id is refused on a write. Prompt on stdin; no project configuration from the working directory or its ancestors, only the call's own (see [Tool calls on this host](#tool-calls-on-this-host)); a seat's system prompt in that configuration's `AGENTS.md`, after OpenCode's own, a side pass's as an agent there, replacing it; failures read from the class in its own JSON `error` events only; tokens from the call's session. Runs a seat's executor. |
 | `cursor-agent` | `cursor-agent` | Cursor seat, or `CURSOR_API_KEY` | `cursor-agent login`. The key is the headless alternative, via `auth.mode: api-key`. Runs `--trust` (print mode refuses the call's new directory without it: "Workspace Trust Required") and `--exclude-workspace-context`. Login kept per platform: `~/.cursor/auth.json` on macOS, `$XDG_CONFIG_HOME/cursor/auth.json` on Linux (the profile's `platforms` section). No system-prompt channel: Cursor's service assembles the prompt, so the seat's text rides the transcript. Its rule loader opens every `AGENTS.md`, `CLAUDE.md` and `.cursor/rules` file from the call's directory up to `/`, so put `state_dir` outside any tree holding such files ([Isolation](#isolation-the-part-that-actually-matters)). Its tool route follows Cursor's documentation and bundle and is **mostly unmeasured**: `crewlet llm doctor`'s smoke test on a real sign-in is the check, and a team account's required plugins can bring servers no profile keeps out ([caveats](#what-each-harness-does-with-the-seats-tools)). |
 | `copilot` | `copilot` | GitHub Copilot seat, or a GitHub token (`COPILOT_GITHUB_TOKEN`) | Prompt on stdin. Authenticates with a GitHub token: `COPILOT_GITHUB_TOKEN` (first of the three variables it reads, ahead of `GH_TOKEN` and `GITHUB_TOKEN`) is its `api_key_env`, reached via `auth.mode: api-key` or `inherit-env`, never forwarded silently. All three outrank its login (measured on 1.0.114, an app installation token included), so `GH_TOKEN` and `GITHUB_TOKEN` are its `sign_in_env`: `auth.mode: env` takes a token under either, and an agent's GitHub token is never put in its executor's box under them ([An agent's own integration credentials](code-sandbox.md#an-agents-own-integration-credentials)). Its login is the system keychain's, or, where none answers and you agree at `crewlet llm login`, `copilotTokens` in `.copilot/config.json`; a keychain login does not reach a seat. No channel replaces its prompt, so every call keeps it, and the engine's text goes in an `AGENTS.md` in the call's directory. Web tools only (`--available-tools`); real token counts from `--usage-output-file`. |
@@ -2869,6 +2879,8 @@ it runs on.
 | `written_for` | The harness version the profile was written against, printed by `doctor` beside the one installed. |
 | `version_args` | The argv of the version probe. |
 | `complete_args` | The argv of one completion, before the model and the prompt. |
+| `key_args` | Argv after `complete_args` on a call that signs in with a key (`api-key`, `env`, an `inherit-env` key), for a harness that picks its sign-in on argv: Qwen Code's `--auth-type openai`. Refused on a profile no key signs in. |
+| `subscription_args` | The same on a call that signs in with a login: Qwen Code's `--auth-type qwen-subscription`. Refused on a profile that keeps no login and mints no token. |
 | `model_args` | The model flag, with `{model}` substituted. Required in effect: every entry names a `model`, so a merged profile with no element carrying `{model}` — none at all, or a flag with a fixed value — is refused. |
 | `prompt_mode` | How the prompt travels: `stdin` (default), `argv` or `file`. |
 | `system_prompt` | `{args, env, file}`: the channel on which the engine's system prompt **replaces** the harness's own — taken by the auxiliary passes, and by a seat when the harness has no `append_system_prompt`. `args` carries `{file}` (preferred) or `{system}`; `env` names a variable the harness reads a file path from, exclusive with `args`; `file` is `{name, template, discovered}`: the file the channel writes and the text around `{system}`. `discovered: selected` is a file the harness finds by its location in the per-call directory (`name` may then carry a directory, and must name a file inside it) and `args` selects without `{file}` or `{system}`; `discovered: always` is one the harness reads on every run, which declares the channel by itself. See [The system prompt](#the-system-prompt-on-this-host). |
@@ -3179,7 +3191,7 @@ executor      : seats: swe, qa
 
 The **seats** line is which agent seats' executor chains hold this entry, resolved as the launch
 resolves them. The **runner** line is whether this build can drive that harness as a harness: there
-are five runners, `claude-code`, `opencode`, `copilot`, `kimi-code` and `muse-code`, and a member naming any other harness is skipped at
+are seven runners, `claude-code`, `gemini-cli`, `qwen-code`, `opencode`, `copilot`, `muse-code` and `kimi-code`, and a member naming any other harness is skipped at
 launch rather than faulted (it still serves that seat's text calls). The **tool bridge** line is
 where the run's box dials the seat's tools, which turns on the entry's cell: a `direct` box dials
 the node's own listener on loopback where the node binds `api.port`, whatever its roles, and
@@ -3324,7 +3336,7 @@ skips all three and says so on each line.
   `crewlet llm doctor` checks all of it ([Operating it](#operating-it)).
 - **Code work is the executor's run.** A seat's [code sandbox](code-sandbox.md) work is its
   executor's own run, on the entry the launch picks from its `llm` chain, running *that entry's own
-  harness*, so only a `claude-code`, `opencode`, `copilot`, `kimi-code` or `muse-code` entry can do it. On any backend including remote
+  harness*, so only a `claude-code`, `gemini-cli`, `qwen-code`, `opencode`, `copilot`, `muse-code` or `kimi-code` entry can do it. On any backend including remote
   E2B, what travels into the box is the entry's `env` (a gateway's address, a cloud provider's
   switch, `opencode`'s [provider key](#6-a-provider-key-in-env-opencode-hermes-pi)) and what signs
   the harness in: a headless token (`crewlet llm login <key>
@@ -3336,8 +3348,8 @@ skips all three and says so on each line.
   [local cell](code-sandbox.md#local-sandboxes) (`providers.sandbox.local` plus `run_in: direct` or
   `container`), which is seeded with the login and, when the box closes, writes back one its run
   refreshed, only while the shared login still holds what the box was seeded with, by the same
-  compare-and-swap a seat's refresh takes. A seat's `llm` points at a `claude-code`, `opencode`,
-  `copilot`, `kimi-code` or `muse-code` entry; any other harness (Codex, Gemini CLI, `hermes`, `pi`) serves its reviewer,
+  compare-and-swap a seat's refresh takes. A seat's `llm` points at a `claude-code`, `gemini-cli`, `qwen-code`, `opencode`, `copilot`, `muse-code` or `kimi-code`
+  entry; any other harness (Codex, `hermes`, `pi`) serves its reviewer,
   workers and side passes; see [Code Sandbox](code-sandbox.md#failure-modes).
 - **No per-call sampling, effort or output cap.** Each is the harness's own configuration of its
   model ([What an entry does not set](#what-an-entry-does-not-set)).

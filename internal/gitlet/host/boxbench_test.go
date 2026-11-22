@@ -1034,7 +1034,7 @@ func newBenchBox(b *testing.B, f *gitlettest.SoloFleet, rows gitlettest.Rows, gi
 
 // appendConfig is env with pairs (key, value, …) appended to git's
 // environment configuration after env's entries.
-func appendConfig(b *testing.B, env []string, pairs ...string) []string {
+func appendConfig(b testing.TB, env []string, pairs ...string) []string {
 	b.Helper()
 	if len(pairs) == 0 {
 		return env

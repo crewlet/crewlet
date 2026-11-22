@@ -18,10 +18,10 @@ import (
 var (
 	signInEnv = map[string]string{
 		"ANTHROPIC_API_KEY": "sk-ant-api03-placeholder", "ANTHROPIC_AUTH_TOKEN": "gateway-placeholder",
-		"CREWLET_GIT_TOKEN": "git-placeholder", "GITHUB_TOKEN": "ghp_placeholder", "AWS_REGION": "eu-west-1",
+		"CREWLET_GIT_ACCESS_FILE": "/home/box/.crewlet/git-access", "GITHUB_TOKEN": "ghp_placeholder", "AWS_REGION": "eu-west-1",
 	}
 	signInNames = []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"}
-	toolNames   = []string{"CREWLET_GIT_TOKEN", "GITHUB_TOKEN", "AWS_REGION"}
+	toolNames   = []string{"CREWLET_GIT_ACCESS_FILE", "GITHUB_TOKEN", "AWS_REGION"}
 
 	// telemetryEnv is a run's telemetry export as an OpenCode run's harness
 	// keeps it for its own.
@@ -217,7 +217,7 @@ func TestASignInNameNoShellCanUnsetIsRefused(t *testing.T) {
 	req := sandbox.RunRequest{Brief: "x", SignInEnv: []string{"ANTHROPIC_API_KEY", "MY-KEY"}}
 	for _, h := range []executor.Harness{executor.ClaudeCode{}, executor.OpenCode{}} {
 		b := sandbox.NewFakeSandbox("box-1")
-		if _, err := h.WriteConfig(t.Context(), b, req, executor.PathsFor(b)); err == nil ||
+		if _, err := h.WriteConfig(t.Context(), b, req, executor.Session{}, executor.PathsFor(b)); err == nil ||
 			!strings.Contains(err.Error(), `"MY-KEY"`) {
 			t.Errorf("%s: WriteConfig = %v, want the name refused", h.Name(), err)
 		}

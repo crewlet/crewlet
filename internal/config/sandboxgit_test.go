@@ -9,7 +9,7 @@ import (
 
 // The engine's git variables in a box: Gitlet's credential and base, and
 // the three values the coding clone's commit hook reads.
-var gitVariables = []string{"CREWLET_GIT_TOKEN", "CREWLET_GIT_URL"}
+var gitVariables = []string{"CREWLET_GIT_ACCESS_FILE", "CREWLET_GIT_URL"}
 
 // THE ENGINE'S GIT VARIABLES ARE RESERVED in each of the four envs a box's
 // environment is assembled from (a seat's sandbox block, a seat's setup step,

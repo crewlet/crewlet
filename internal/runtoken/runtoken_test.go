@@ -316,7 +316,7 @@ func TestAMintedTokenIsRedacted(t *testing.T) {
 		for _, printed := range []string{
 			token,
 			"OTEL_EXPORTER_OTLP_ENDPOINT=https://engine.example.com/otlp/" + token + "/v1/traces",
-			"CREWLET_GIT_TOKEN=" + token,
+			"$ cat \"$CREWLET_GIT_ACCESS_FILE\"\n" + token + "\n",
 			"RUN_TOKEN=" + token,
 			`{"mcpServers": {"crewlet": {"url": "https://engine.example.com/mcp/` + token + `"}}}`,
 			"PATH=/usr/bin\nX=" + token + "\nHOME=/home/box",

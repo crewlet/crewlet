@@ -13,6 +13,8 @@
     ],
     "harness.name": [
       "claude-code",
+      "gemini-cli",
+      "qwen-code",
       "opencode",
       "copilot",
       "muse-code",

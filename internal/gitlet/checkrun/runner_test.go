@@ -69,14 +69,15 @@ func TestACheckEndsByItsCommandsExit(t *testing.T) {
 
 // A CHECK'S BOX HOLDS NO MODEL'S CREDENTIAL: its environment is EXACTLY the
 // company's check secrets its definition names — resolved — what the check is,
-// and Gitlet's base and the check's own token with git's configuration
-// for them; no secret it did not name, no harness's sign-in, no login's
-// files and no commit identity.
+// and Gitlet's base and the path of the file holding the check's own token,
+// with git's configuration for them; no secret it did not name, no harness's
+// sign-in, no login's files, no commit identity, and the token itself in no
+// variable, only in that file.
 //
 // Mutation: hand the box every code.checks.env entry, or the process's own
 // model keys — the unnamed secret or ANTHROPIC_API_KEY reaches it, red; run
 // the check's command with ANTHROPIC_API_KEY — the command was run with it,
-// red.
+// red; put the token in a variable, red.
 func TestACheckBoxHoldsNoModelCredential(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-the-engine's-own")
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "the-engine's-plan")
@@ -93,7 +94,8 @@ func TestACheckBoxHoldsNoModelCredential(t *testing.T) {
 		t.Fatalf("a check's box was made with an agent %q, %d login files, %d run grants",
 			spec.Harness, len(spec.CredentialFiles), len(spec.Repos))
 	}
-	allowed := append([]string{"NPM_TOKEN", sandbox.GitURLVar, sandbox.GitTokenVar, "GIT_CONFIG_COUNT"},
+	allowed := append([]string{"NPM_TOKEN", sandbox.GitURLVar, sandbox.GitAccessFileVar, "GIT_CONFIG_COUNT",
+		sandbox.GitConfigParametersVar},
 		config.ReservedCheckEnv()...)
 	for name, value := range spec.Env {
 		switch {
@@ -111,16 +113,23 @@ func TestACheckBoxHoldsNoModelCredential(t *testing.T) {
 	}
 	for name, want := range map[string]string{"CREWLET_CHECK_REPO": "web", "CREWLET_CHECK_SHA": key.OID,
 		"CREWLET_CHECK_NAME": "unit", "CREWLET_CHECK_ATTEMPT": "1",
-		"CREWLET_CHECK_API": codeBase + "/web", sandbox.GitURLVar: gitBase} {
+		"CREWLET_CHECK_API": codeBase + "/web", sandbox.GitURLVar: gitBase,
+		sandbox.GitAccessFileVar: sandbox.DefaultHome + "/" + sandbox.GitAccessFile} {
 		if got := spec.Env[name]; got != want {
 			t.Errorf("%s = %q, want %q", name, got, want)
 		}
 	}
-	if tok := spec.Env[sandbox.GitTokenVar]; !strings.Contains(tok, ".chk-web-unit-1-") {
-		t.Errorf("the box's token is %q, want its check's", tok)
-	}
 	f.container.end(box, 0, "")
 	f.ended(key)
+	token, err := box.ReadFile(t.Context(), sandbox.GitAccessFile)
+	if err != nil || !strings.Contains(string(token), ".chk-web-unit-1-") {
+		t.Errorf("the box's token file holds %q (%v), want its check's token", token, err)
+	}
+	for name, value := range spec.Env {
+		if len(token) > 0 && strings.Contains(value, string(token)) {
+			t.Errorf("the box's variable %s holds its token, which only its file holds", name)
+		}
+	}
 	// Read once the attempt has ENDED, never once its box is made: the box
 	// is handed to the case before the runner sets it up and long before it
 	// starts the command, so a read between sees only what ran by then.

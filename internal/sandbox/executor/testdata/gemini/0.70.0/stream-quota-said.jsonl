@@ -1,0 +1,5 @@
+{"type":"init","timestamp":"2026-11-21T22:24:24.765Z","session_id":"11111111-2222-4333-8444-555555555555","model":"gemini-2.5-pro"}
+{"type":"message","timestamp":"2026-11-21T22:24:24.766Z","role":"user","content":"Call the slow tool, then echo, then answer."}
+{"type":"message","timestamp":"2026-11-21T22:24:24.804Z","role":"assistant","content":"You have exhausted your daily quota on this model.","delta":true}
+{"type":"result","timestamp":"2026-11-21T22:24:25.311Z","status":"success","stats":{"total_tokens":1087,"input_tokens":1000,"output_tokens":50,"cached":400,"input":600,"duration_ms":546,"tool_calls":0,"models":{"gemini-2.5-pro":{"total_tokens":1087,"input_tokens":1000,"output_tokens":50,"cached":400,"input":600}}}}
+{"type":"crewlet_gemini_usage","session_id":"11111111-2222-4333-8444-555555555555","requests":1,"tokens":{"input":1000,"output":50,"cached":400,"thoughts":30,"tool":7}}

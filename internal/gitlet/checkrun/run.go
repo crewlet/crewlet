@@ -216,14 +216,18 @@ func (a *attempt) spec(company Company) (sandbox.Spec, []sandbox.SetupStep, *git
 		return sandbox.Spec{}, nil, a.ended(gitlet.CheckStateErrored, gitlet.CheckReasonSetupFailed, nil, err.Error())
 	}
 	maps.Copy(env, git)
-	var setup []sandbox.SetupStep
+	// THE TOKEN IN A FILE, first, which its git's helper reads: a check's box
+	// is never Direct ([sandbox.Manager.AcquireBox]), so its home is the
+	// default one.
+	env[sandbox.GitAccessFileVar] = sandbox.DefaultHome + "/" + sandbox.GitAccessFile
+	setup := []sandbox.SetupStep{sandbox.GitAccessStep(token)}
 	if !def.Checkout.None {
 		clone, err := sandbox.CloneRecipe(sandbox.RunRepo{Repo: a.c.Repo, RepoID: a.c.RepoID, Base: a.c.OID,
 			Access: sandbox.RepoRead, Paths: def.Checkout.Cone}, sandbox.CloneSingleSHA)
 		if err != nil {
 			return sandbox.Spec{}, nil, a.ended(gitlet.CheckStateErrored, gitlet.CheckReasonDefsInvalid, nil, err.Error())
 		}
-		setup = []sandbox.SetupStep{sandbox.GitVersionStep(), clone}
+		setup = append(setup, sandbox.GitVersionStep(), clone)
 	}
 	spec := sandbox.Spec{Placement: sandbox.Placement(a.cell),
 		TimeoutSec: (a.timeout + gitlet.CheckBoxGrace).Seconds(), Env: env}

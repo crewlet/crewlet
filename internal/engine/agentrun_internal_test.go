@@ -528,20 +528,22 @@ func TestALaunchWithEveryRunnerSittingOutIsAnExhaustedChain(t *testing.T) {
 // take it: config refuses this chain on every write, so reaching it is a
 // company built by hand, and the operator's to fix rather than a retry's. The
 // chain is said as a list and the harnesses as the set an entry picks from, each
-// quoted, never as Go prints a slice or a list joined by hand.
+// quoted, never as Go prints a slice or a list joined by hand. Its members are on
+// harnesses no build runs in a box, and the harnesses are every runner this build
+// registers, as the refusal names them.
 //
 // Mutation: print the chain with brackets or the harnesses joined by commas and
 // this goes red.
 func TestAChainWithNoRunnerMemberIsRefusedNamingIt(t *testing.T) {
 	t.Parallel()
 	c, seat := chainCompany(t, chainMember{key: "codex", agent: "codex", model: "gpt-golden"},
-		chainMember{key: "gemini", agent: "gemini-cli", model: "gemini-golden"})
+		chainMember{key: "cursor", agent: "cursor-agent", model: "cursor-golden"})
 	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	}))
 	l := launcherOn(e, c, seat, "t1")
 	_, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
-	if err == nil || !strings.Contains(err.Error(), `("codex" and "gemini")`) ||
+	if err == nil || !strings.Contains(err.Error(), `("codex" and "cursor")`) ||
 		!strings.Contains(err.Error(), words.Or(executor.Names())) {
 		t.Fatalf("LaunchExecutor = %v, want a refusal naming the chain and the runners", err)
 	}
