@@ -802,13 +802,13 @@ node-test: ## run the floor Node's recipe's and the pin check's own suite (ci: b
 # The OWN SUITE of the Playwright tree's recipe (scripts/playwright-tree.sh),
 # for git-test's reasons: shell no Go test reaches, failing silently where it
 # matters — a recipe that installs over a tree another checkout's suite is
-# reading, hands back a tree npm installed nothing into, lets a developer's npm
-# setting change what is installed, waits on an npm that never ends, leaves one
-# running once interrupted, or prints something above the path a make target
-# exports as the suite's tree. It runs the real recipe against a stand-in
-# registry on 127.0.0.1, every other address sent to a refused proxy, so it
-# reads no network, then runs itself once more, by a relative path, under a
-# developer's most hostile environment: about a minute, half of it that second
+# reading, hands back a tree npm installed nothing into or left short, lets a
+# developer's npm setting change what is installed, waits on an npm that never
+# ends, leaves one running once interrupted, or prints something above the path
+# a make target exports as the suite's tree. It runs the real recipe against a
+# stand-in registry on 127.0.0.1, every other address sent to a refused proxy,
+# so it reads no network, then runs itself once more, by a relative path, under
+# a developer's most hostile environment: about a minute, half of it that second
 # run. It needs node, an npm of boxhelper's MinNPMMajor or newer, tar and
 # sha256sum (or shasum).
 playwright-tree-test: ## run the Playwright tree's recipe's own suite (ci: build + vet)
@@ -868,14 +868,17 @@ lint: ## run golangci-lint (ci: golangci-lint)
 	golangci-lint run
 
 # require-node, because this half runs packages that drive `node`:
-# internal/sandbox/executor's probes of the two OpenCode plugins the engine
-# embeds — the notes plugin (opencode_steer_test.go), run under node against a
-# stand-in of the bridge's notes route and a real bridge's, and the skill-load
-# plugin (opencode_skills_test.go), against a stand-in of its skill route, and
-# Pi's extension (pi_extension_internal_test.go), against a stand-in of pi's
-# extension API — and
-# internal/browser/boxhelper, which installs the Playwright tree with the
-# machine's npm under its node. Without node those cases fail under REQUIRED
+# internal/sandbox/executor's probes of the three OpenCode plugins the engine
+# embeds — notes (opencode_steer_test.go), run under node against a stand-in of
+# the bridge's notes route and a real bridge's, skill-load
+# (opencode_skills_test.go), against a stand-in of its skill route, and tool
+# environment (toolenv_test.go) — and of its Kimi Code driver
+# (kimi_driver_internal_test.go), against a stand-in of Kimi Code's server —
+# and of Pi's extension (pi_extension_internal_test.go), against a stand-in of
+# pi's extension API — and
+# internal/browser/boxhelper, which runs the box helper under this node and the
+# floor's, each box installing the Playwright tree with that Node's own npm,
+# offline. Without node those cases fail under REQUIRED
 # (internal/prereqtest's one rule), once the whole half has run; the
 # prerequisite says it before anything runs. ci.yml's `test (race)` installs
 # node for the same reason. (internal/e2e's dashboard replay is node's other
@@ -1019,14 +1022,16 @@ require-npm: ## fail unless npm is on PATH (every dashboard target and the suite
 	  exit 1; \
 	} >&2
 
-require-node: ## fail unless node is on PATH (the e2e client replay, the OpenCode plugin probes and the box helper's cases need it)
+require-node: ## fail unless node is on PATH (the e2e client replay, the OpenCode plugin and Kimi Code driver probes, and the box helper's cases need it)
 	@command -v node >/dev/null 2>&1 || { \
 	  echo "node is not on PATH, and three of the suite's gates need it."; \
 	  echo "  internal/e2e's client replay runs the dashboard's own protocol"; \
 	  echo "  module over the frames a real engine produced,"; \
-	  echo "  internal/sandbox/executor runs the plugins, helpers and extensions"; \
-	  echo "  the engine embeds for its runners, and internal/browser/boxhelper installs a box's"; \
-	  echo "  Playwright tree with the npm node runs. Each FAILS without node"; \
+	  echo "  internal/sandbox/executor runs the three OpenCode plugins and"; \
+	  echo "  the Kimi Code driver and Pi extension the engine embeds, and"; \
+	  echo "  internal/browser/boxhelper runs the box"; \
+	  echo "  helper's modules under node, each box installing its Playwright"; \
+	  echo "  tree with that node's npm. Each FAILS without node"; \
 	  echo "  under the targets that run the suite"; \
 	  echo "  (CREWLET_REQUIRE_PREREQUISITES=1), but only after the whole"; \
 	  echo "  suite has run, so this says so first."; \

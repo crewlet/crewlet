@@ -2,7 +2,7 @@
 paths:
   - "{go.mod,go.sum,Dockerfile,docker-compose.yml}"
   - "dashboard/{package.json,package-lock.json}"
-  - "internal/browser/boxhelper/tree/{package.json,package-lock.json}"
+  - "internal/browser/boxhelper/tree/{package.json,package-lock.json,installed.sha256}"
   - ".github/dependabot.yml"
   - ".github/workflows/*.yml"
   - "scripts/*-pin*"
@@ -12,7 +12,7 @@ paths:
   - "internal/mcp/catalogue/**"
   - ".claude/worktrees/*/{go.mod,go.sum,Dockerfile,docker-compose.yml}"
   - ".claude/worktrees/*/dashboard/{package.json,package-lock.json}"
-  - ".claude/worktrees/*/internal/browser/boxhelper/tree/{package.json,package-lock.json}"
+  - ".claude/worktrees/*/internal/browser/boxhelper/tree/{package.json,package-lock.json,installed.sha256}"
   - ".claude/worktrees/*/.github/dependabot.yml"
   - ".claude/worktrees/*/.github/workflows/*.yml"
   - ".claude/worktrees/*/scripts/*-pin*"
@@ -31,7 +31,7 @@ Dependabot watches every manifest (the workflows, `go.mod`, `dashboard/package.j
   - `dependabot-recreate.yml` asks a conflicted bump Dependabot will not rebase to `@dependabot recreate`, with `DEPENDABOT_RECREATE_TOKEN` (Pull requests read and write, in the `dependabot-recreate` environment).
   - `dependabot-merge.yml` approves and queues `gh pr merge --auto --squash` only when Dependabot is both author and actor, and never for a pull request that changes only `internal/browser/boxhelper/tree/` (its `paths-ignore`); it relies on `main`'s protection rule requiring the `ci` checks and on "Allow auto-merge".
 - **Tool servers are pins Dependabot cannot see**: each one's `internal/mcp/catalogue` entry records its release as `Release`, and moving one means reading and running the new release.
-- **The Playwright tree a seat's box installs is a manifest Dependabot watches**: `internal/browser/boxhelper/tree/`'s `package.json` (`@playwright/mcp` alone, exact, no `engines`) and `package-lock.json` have an npm entry, no group, and `dependabot-merge.yml` never queues a bump of them. `TestTheLockIsTheReleaseSomebodyRead` keeps each bump red until `internal/browser`'s release constants name it, and `TestTheLockedCoreExpectsTheChromiumSomebodyRead` until its expected Chromium does, so it lands only once read, from a branch of your own, as `build(deps): bump playwright mcp from <a> to <b>` (`CONTRIBUTING.md`, "A Playwright MCP bump is read before it lands"); Dependabot closes its own.
+- **The Playwright tree a seat's box installs is a manifest Dependabot watches**: `internal/browser/boxhelper/tree/`'s `package.json` (`@playwright/mcp` alone, exact, no `engines`) and `package-lock.json` have an npm entry, no group, and `dependabot-merge.yml` never queues a bump of them. `TestTheLockIsTheReleaseSomebodyRead` keeps each bump red until `internal/browser`'s release constants name it, `TestTheLockedCoreExpectsTheChromiumSomebodyRead` until its expected Chromium does, and `scripts/playwright-tree.sh` and `TestTheInstalledDigestNamesTheFilesTheLockInstalls` until `tree/installed.sha256` names the files the new lock installs, so it lands only once read, from a branch of your own, as `build(deps): bump playwright mcp from <a> to <b>` (`CONTRIBUTING.md`, "A Playwright MCP bump is read before it lands"); Dependabot closes its own.
 - **`.github/workflows/pins.yml`, not Dependabot, watches the git, Chromium and floor Node pins**, one matrix leg each. Nothing asserts the workflow, so read its `permissions:`, each leg's issue title and the key step of the git and floor Node legs on every edit.
   - git (`CONTRIBUTING.md`, "The git pin is checked every week"): weekly, `scripts/git-pin-check.sh` verifies each newer git release's signature against `scripts/git-signing-key.asc` and opens one issue, `git pin behind upstream`, naming the pin's new version and SHA-256; it fails 60 days before the key's signing subkeys expire. A bump moves a pin's version and SHA-256 together, from that report, and is titled as the report says: `build(deps): bump git from <a> to <b>` for the node pin, `build(deps): bump git's node floor from <a> to <b>` or `… client floor …` for a floor.
   - Chromium follows Chrome for Testing (`CONTRIBUTING.md`, "The Chromium pin is checked every week"): `scripts/chromium-pin-check.sh` holds the newest pin to Stable's major and the floor pin to the newest patch of `internal/browser.MinChromiumMajor`'s major, downloads and hashes every platform's zip of a release it proposes (these builds have no signature), and keeps one issue, `chromium pin behind upstream`. A bump is titled `build(deps): bump chromium from <a> to <b>` or `build(deps): bump chromium's floor from <a> to <b>`; raising the floor changes `MinChromiumMajor` and moves the floor pin with it.
