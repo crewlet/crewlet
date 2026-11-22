@@ -81,7 +81,7 @@ func runMuseHook(ctx context.Context, f flags, stdin io.Reader, stdout, stderr i
 	ctx, cancel := context.WithTimeout(ctx, onceBudget)
 	defer cancel()
 	if f.skillLoads && in.Event == "PostToolUse" && in.ToolName == "read_skill" && museSkillRead(in.ToolResponse) {
-		if err := reportLoad(ctx, cfg, in.ToolInput.Name); err != nil {
+		if err = reportLoad(ctx, cfg, in.ToolInput.Name); err != nil {
 			logger.Printf("the skill load was not reported: %v", err)
 		}
 	}
