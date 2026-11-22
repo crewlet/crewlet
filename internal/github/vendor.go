@@ -240,7 +240,6 @@ func (vendor) Open(_ context.Context, in seataccess.OpenInput) (seataccess.Sessi
 		seats:  map[string]seatDoc{},
 		cached: map[string]SeatObservation{},
 	}
-	s.repos = provisionedRepos(cfg)
 	for role := range in.Config.EachRole() {
 		seat := role.Seat()
 		if seat == nil || !seat.IsAgent() || role.Integrations.GitHub == nil {
@@ -261,9 +260,8 @@ func providedOrg(cfg *config.GitHub) string {
 
 // session is one pass's connection to GitHub.
 type session struct {
-	opts  SeatAppOptions
-	env   *config.Resolver
-	repos []string
+	opts SeatAppOptions
+	env  *config.Resolver
 
 	// seats is each agent seat's block, by handle.
 	seats map[string]seatDoc
@@ -279,17 +277,11 @@ type seatDoc struct {
 	block *config.RoleGitHub
 }
 
-// Options implements [seataccess.Session]: GitHub's permission set, and the
-// repositories the company block lists, which a seat's scope must be within.
-// A company that lists none reaches whatever its installations cover.
+// Options implements [seataccess.Session]: GitHub's permission set. The
+// repositories a seat's scope must be within are the document's
+// ([vendor.Reach]), which [seataccess.ReadOptions] applies.
 func (s *session) Options(context.Context, seataccess.Lane) (seataccess.Options, error) {
-	r := repoReach(s.repos)
-	return seataccess.Options{
-		Lane:        seataccess.LaneGitHub,
-		Permissions: PermissionSpecs(),
-		Scope:       r.Scope,
-		ScopeOpen:   r.Open,
-	}, nil
+	return seataccess.Options{Lane: seataccess.LaneGitHub, Permissions: PermissionSpecs()}, nil
 }
 
 // Reach implements [seataccess.DocumentReach]: the repositories the company

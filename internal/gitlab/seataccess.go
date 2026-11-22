@@ -425,7 +425,9 @@ func (Vendor) FixedLevels(seataccess.Lane) []seataccess.Level {
 	return levels
 }
 
-// Options implements [seataccess.Session].
+// Options implements [seataccess.Session]: GitLab's roles, its group's custom
+// roles read live. The projects are the document's ([Vendor.Reach]), which
+// [seataccess.ReadOptions] applies.
 func (s *session) Options(ctx context.Context, lane seataccess.Lane) (seataccess.Options, error) {
 	if lane != seataccess.LaneGitLab {
 		return seataccess.Options{}, fmt.Errorf("gitlab: no lane %q", lane)
@@ -443,8 +445,6 @@ func (s *session) Options(ctx context.Context, lane seataccess.Lane) (seataccess
 			Administers: Administration(role.BaseAccessLevel),
 		})
 	}
-	r := gitlabReach(s.cfg)
-	out.Scope, out.ScopeOpen = r.Scope, r.Open
 	return out, nil
 }
 

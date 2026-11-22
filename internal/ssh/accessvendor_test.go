@@ -133,11 +133,11 @@ func TestSSHAccessIsTheDocumentAlone(t *testing.T) {
 func TestTheSSHReachIsTheRegisteredHosts(t *testing.T) {
 	t.Parallel()
 	c := company("read", "api-1")
-	opts, err := session(t, c).Options(t.Context(), seataccess.LaneSSH)
+	in := seataccess.OpenInput{Config: c}
+	opts, err := seataccess.ReadOptions(t.Context(), vendor(t), session(t, c), in, seataccess.LaneSSH)
 	if err != nil {
 		t.Fatal(err)
 	}
-	opts = seataccess.WithReach(opts, vendor(t), c, nil)
 	if opts.ScopeOpen || !slices.Equal(opts.Scope, []string{"api-1", "db-2"}) || !opts.ScopeRequired {
 		t.Errorf("options %+v", opts)
 	}

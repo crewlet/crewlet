@@ -682,10 +682,17 @@ export function ScopeDialog({
   const choices = scopeChoices(lane, held);
   const find = term.trim().toLowerCase();
   const shown = find
-    ? choices.filter((c) => `${c.label} ${c.value}`.toLowerCase().includes(find))
+    ? choices.filter((c) =>
+        `${c.label} ${c.value} ${c.description ?? ""}`.toLowerCase().includes(find),
+      )
     : choices;
+  // A SEARCH IS NOT AN ENTRY: where the lane knows an entry's shape (an Apple
+  // ID's digits), a name or a bundle ID typed to find an app is never offered.
   const typed =
-    lane.scope_open && find && !choices.some((c) => c.value.toLowerCase() === find)
+    lane.scope_open &&
+    find &&
+    (words?.typed?.test(term.trim()) ?? true) &&
+    !choices.some((c) => c.value.toLowerCase() === find)
       ? term.trim()
       : null;
   const add = () => {
@@ -693,7 +700,9 @@ export function ScopeDialog({
     onChange([...held, typed]);
     setTerm("");
   };
-  const searchWords = lane.scope_open ? `Find or add a ${singular}` : `Find a ${singular}`;
+  // "AN APP", "AN AD ACCOUNT": the article follows the noun's own sound.
+  const one = `${/^[aeiou]/i.test(singular) ? "an" : "a"} ${singular}`;
+  const searchWords = lane.scope_open ? `Find or add ${one}` : `Find ${one}`;
   const alone = lane.scope_required || !words;
 
   const picker = (
@@ -747,7 +756,7 @@ export function ScopeDialog({
           </Stack>
         ) : (
           <Text as="p" variant="caption" tone="secondary">
-            {find ? `No ${singular} matches “${term.trim()}”.` : `Type a ${singular} to add it.`}
+            {find ? `No ${singular} matches “${term.trim()}”.` : `Type ${one} to add it.`}
           </Text>
         )}
       </FormField>

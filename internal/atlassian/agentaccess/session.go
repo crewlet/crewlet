@@ -149,7 +149,9 @@ func (s *session) mustAccount(ctx context.Context, in seataccess.ApplyInput) (at
 // the next pass resolves by creating it.
 var errNoAccount = errors.New("atlassian: the seat has no account yet")
 
-// Options implements [seataccess.Session].
+// Options implements [seataccess.Session]: each product's roles, read live.
+// The projects and spaces are the roster's ([Vendor.Reach]), which
+// [seataccess.ReadOptions] applies.
 func (s *session) Options(ctx context.Context, lane seataccess.Lane) (seataccess.Options, error) {
 	switch lane {
 	case seataccess.LaneJira:
@@ -157,7 +159,7 @@ func (s *session) Options(ctx context.Context, lane seataccess.Lane) (seataccess
 		if err != nil {
 			return seataccess.Options{}, err
 		}
-		out := seataccess.Options{Lane: lane, Live: true, Scope: slices.Clone(s.jiraIn)}
+		out := seataccess.Options{Lane: lane, Live: true}
 		out.Levels = append(out.Levels, productOnly(productJira))
 		for _, role := range roles {
 			out.Levels = append(out.Levels, seataccess.Level{
@@ -165,15 +167,13 @@ func (s *session) Options(ctx context.Context, lane seataccess.Lane) (seataccess
 				Administers: role.Administration(),
 			})
 		}
-		out.ScopeOpen = len(out.Scope) == 0
 		return out, nil
 	case seataccess.LaneConfluence:
 		mode, err := s.roleMode(ctx)
 		if err != nil {
 			return seataccess.Options{}, err
 		}
-		out := seataccess.Options{Lane: lane, Live: true, Scope: slices.Clone(s.confIn)}
-		out.ScopeOpen = len(out.Scope) == 0
+		out := seataccess.Options{Lane: lane, Live: true}
 		if !mode.Roles() {
 			// SPACE PERMISSIONS BY OPERATION, under Confluence's names,
 			// on a site without role-based access (D8). A level is then a
