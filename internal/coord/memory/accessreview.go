@@ -32,7 +32,7 @@ func (f *Fleet) CreateAccessReview(_ context.Context, handle string, value []byt
 	if handle == "" {
 		return false, errors.New("coord/memory: an access review needs its seat")
 	}
-	if err := coord.HoldValue("the access review of "+handle, len(value)); err != nil {
+	if err := coord.HoldValue("the access review of "+handle, len(value), coord.MaxValueBytes); err != nil {
 		return false, err
 	}
 	f.mu.Lock()
@@ -50,7 +50,7 @@ func (f *Fleet) UpdateAccessReview(_ context.Context, handle string, value []byt
 	if handle == "" || revision == 0 {
 		return false, errors.New("coord/memory: an access review is updated at the revision it was read at")
 	}
-	if err := coord.HoldValue("the access review of "+handle, len(value)); err != nil {
+	if err := coord.HoldValue("the access review of "+handle, len(value), coord.MaxValueBytes); err != nil {
 		return false, err
 	}
 	f.mu.Lock()

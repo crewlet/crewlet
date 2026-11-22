@@ -134,6 +134,10 @@ func Reject(err error) error {
 // clears.
 var ErrUnreached = errors.New("no answer from Google")
 
+// ErrTooLarge is an answer longer than one call reads (8 MiB): a narrower
+// request is the fix.
+var ErrTooLarge = errors.New("the answer from Google is larger than one call reads")
+
 // Passes reports a failure a wait clears: Google not reached, its rate limit,
 // or a 5xx.
 func Passes(err error) bool {
