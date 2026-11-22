@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -27,7 +29,8 @@ import (
 
 // publishTrip is one row's broker round trip on a bubble's clock: a leaf link
 // across regions, and a value dividing neither bound, so no row lands on one.
-// A cycle then acknowledges 428 rows (the 429th lands at 30.03 s), a flush 71.
+// A row at a time, a cycle then sends 429 rows, the last at 29.96 s, which its
+// own budget lets land at 30.03 s; a flush sends 72.
 const publishTrip = 70 * time.Millisecond
 
 const (
@@ -38,9 +41,10 @@ const (
 	flushBound = 5 * time.Second
 
 	// perCycle and perFlush are the rows one cycle and one flush have
-	// acknowledged at publishTrip a row.
-	perCycle = int(cycleBound / publishTrip)
-	perFlush = int(flushBound / publishTrip)
+	// acknowledged at publishTrip a row: every row sent inside the bound, the
+	// last landing past it (crewlet/crewlet#1075).
+	perCycle = int(cycleBound/publishTrip) + 1
+	perFlush = int(flushBound/publishTrip) + 1
 )
 
 // noteWidth is a vector's width in float32s: text-embedding-3-small's 1 536,
@@ -51,12 +55,17 @@ const noteWidth = 1536
 // lets it through, recording its subject. on, when set, is called with the
 // count acknowledged so far, inside that row's publish, so a case acts at the
 // row it names. Embedded rather than stubbed, as openFailsJS is: a publish
-// calls nothing else, and anything else is a nil interface's panic.
+// calls nothing else, and anything else is a nil interface's panic. trip and
+// on are called with no lock held, so a case whose hooks share state steps its
+// syncer ([stepping]); acked is read once the calls have returned, or through
+// [roundTripJS.ackedNow] while one runs.
 type roundTripJS struct {
 	jetstream.JetStream
-	trip  func(ctx context.Context) error
+	trip func(ctx context.Context) error
+	on   func(n int)
+
+	mu    sync.Mutex
 	acked []string
-	on    func(n int)
 
 	// most, when above 0, caps the rows it acknowledges ([errPastMost]), so
 	// a call re-reading a page it can no longer mark fails on its own terms,
@@ -70,7 +79,7 @@ var errPastMost = errors.New("the changelog was asked for more rows than the sea
 func (j *roundTripJS) Publish(ctx context.Context, subject string, _ []byte,
 	_ ...jetstream.PublishOpt) (*jetstream.PubAck, error) {
 
-	if j.most > 0 && len(j.acked) >= j.most {
+	if j.most > 0 && len(j.ackedNow()) >= j.most {
 		return nil, errPastMost
 	}
 	if j.trip != nil {
@@ -78,18 +87,45 @@ func (j *roundTripJS) Publish(ctx context.Context, subject string, _ []byte,
 			return nil, err
 		}
 	}
+	j.mu.Lock()
 	j.acked = append(j.acked, subject)
+	n := len(j.acked)
+	j.mu.Unlock()
 	if j.on != nil {
-		j.on(len(j.acked))
+		j.on(n)
 	}
 	return &jetstream.PubAck{}, nil
 }
 
+// Options is the client's own, which a row's budget is counted from.
+func (j *roundTripJS) Options() jetstream.JetStreamOptions {
+	return jetstream.JetStreamOptions{DefaultTimeout: jsapi.RequestTerm}
+}
+
+// ackedNow is every row acknowledged so far, in order, read while a call may
+// still be adding to it.
+func (j *roundTripJS) ackedNow() []string {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return slices.Clone(j.acked)
+}
+
 // syncerOver is a syncer of the seat over db publishing to js, which answers
 // publishes only, so it never hydrates: it HOLDS the seat as the node that
-// has held it all along ([heldFromEmpty]).
+// has held it all along ([heldFromEmpty]), and sends a row at a time
+// ([stepping]).
 func syncerOver(db *store.DB, js jetstream.JetStream) *Syncer {
-	return heldFromEmpty(newSyncer(db, js, func(string) string { return seat.AgentID }), seat.Handle)
+	return stepping(heldFromEmpty(newSyncer(db, js, func(string) string { return seat.AgentID }),
+		seat.Handle))
+}
+
+// stepping has s send one row at a time, each answered before the next is
+// sent, and answers s: for a case that names the row a call stands at, or
+// whose changelog's hooks share state with no lock. The cases of
+// pipeline_test.go run the shipped [rowsInFlight].
+func stepping(s *Syncer) *Syncer {
+	s.inFlight = 1
+	return s
 }
 
 // registered is the registry's entry for the table named, so a case names a
@@ -430,12 +466,12 @@ func TestARowWhosePublishFailedIsWhereTheNextPublishStarts(t *testing.T) {
 
 // A PUBLISH SKIPS WHAT ANOTHER PUBLISH OF THE SEAT HAD ACKNOWLEDGED.
 //
-// Two publishes of one seat's range can overlap: a cycle takes no seat's
-// lock, so the row it was sending as the release began moves the mark while
-// the release's flush carries the range. The mark is reread at each page, so
-// a page starts above what the other call had acknowledged, and each sends
-// again at most the page it already held. The case widens the overlap: it
-// runs the second publish whole inside the first's publish of its first row.
+// No call takes a seat's lock, and the mark is reread at each page, so a page
+// starts above what another call of the range had acknowledged, and each sends
+// again at most the page it already held. The cycle and the flush no longer
+// send at once (the flush waits for the cycle's rows), so this guards the
+// reread itself: the case runs the second publish whole inside the first's
+// publish of its first row.
 //
 // Mutation: read the mark once per table rather than at each page, and the
 // first publish sends the table again from where its first page ended.

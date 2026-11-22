@@ -114,7 +114,8 @@ type Config struct {
 	// Window is the link's ONE window (internal/queue/jetstream's
 	// LinkWindow), shared with the object store's transfers on the link:
 	// required with AcrossLink and refused without it. Each replay pull takes
-	// its bytes before it is asked and gives them back when it ends.
+	// its bytes before it is asked and gives them back when it ends, and each
+	// row a publish sends before it is sent, given back once it is answered.
 	Window *jsapi.Window
 }
 
