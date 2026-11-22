@@ -149,6 +149,7 @@ func everyOperatorOnlyTool(t *testing.T) []string {
 		AtlasWrite: builtin.AtlasWriteDeps{Log: newAtlasLedger(), Actor: actor,
 			Org: func() *org.Organization { return company }},
 		AtlasRefresh: builtin.AtlasRefreshDeps{Sources: stillSources{}, Actor: actor},
+		HomeBoard:    builtin.HomeBoardDeps{Boards: coordmem.NewFleet(), Actor: actor},
 		// AND A SCHEDULE RUN NOW.
 		ScheduleRuns: builtin.ScheduleRunDeps{Runner: stillRunner{}, Actor: actor,
 			Org: func() *org.Organization { return company }},
@@ -177,7 +178,7 @@ func everyOperatorOnlyTool(t *testing.T) []string {
 	}
 	for _, name := range append([]string{builtin.AnswerExecutorTool, builtin.PauseSeatTool,
 		builtin.ResumeSeatTool, builtin.SteerTurnTool, builtin.AnswerKnowledgeTool,
-		builtin.AtlasRefreshTool, builtin.RunScheduleTool, builtin.CodeRepoReadersTool,
+		builtin.AtlasRefreshTool, builtin.SaveHomeBoardTool, builtin.RunScheduleTool, builtin.CodeRepoReadersTool,
 		builtin.CodeMarkInboxTool, builtin.CodeMarkViewedTool}, append(chatlet.OperatorOnlyTools(),
 		builtin.AtlasWriteTools...)...) {
 		if !slices.Contains(only, name) {
@@ -264,13 +265,14 @@ func operatorCandidates(t *testing.T) int {
 	return count
 }
 
-// numberWords spells the counts these pages state. Past thirty a page would be
-// better served by a table than a sentence, and this fails loudly.
+// numberWords spells the counts these pages state. Past thirty-one a page would
+// be better served by a table than a sentence, and this fails loudly.
 var numberWords = []string{"zero", "one", "two", "three", "four", "five", "six",
 	"seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen",
 	"fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty",
 	"twenty-one", "twenty-two", "twenty-three", "twenty-four", "twenty-five",
-	"twenty-six", "twenty-seven", "twenty-eight", "twenty-nine", "thirty"}
+	"twenty-six", "twenty-seven", "twenty-eight", "twenty-nine", "thirty",
+	"thirty-one"}
 
 func spelled(t *testing.T, n int) string {
 	t.Helper()
@@ -327,7 +329,13 @@ func TestThePagesCountTheNativeToolsTheRegistryHolds(t *testing.T) {
 	}
 	atlasWrites := len(builtin.AtlasWriteTools)
 	besideAtlas := len(every) - atlasWrites
-	decisions := besideAtlas - len(operatorOnly) - len(chatOnly)
+	// AND A PERSON'S OWN HOME BOARD, counted apart from the decisions: it is
+	// their arrangement, no decision about the company.
+	if !slices.Contains(every, builtin.SaveHomeBoardTool) {
+		t.Errorf("%s is missing from the catalogue's set of what no seat is given",
+			builtin.SaveHomeBoardTool)
+	}
+	decisions := besideAtlas - len(operatorOnly) - len(chatOnly) - 1
 	title := func(word string) string { return strings.ToUpper(word[:1]) + word[1:] }
 
 	guide := readPage(t, "docs/guides/tools-and-mcp.md")
@@ -382,6 +390,8 @@ func TestThePagesCountTheNativeToolsTheRegistryHolds(t *testing.T) {
 			"And the atlas's **" + spelled(t, atlasWrites) + " writes**"},
 		{"docs/guides/tools-and-mcp.md", guide,
 			title(spelled(t, atlasWrites)) + " more change the company's atlas"},
+		{"docs/guides/tools-and-mcp.md", guide,
+			"And one more is a person's own arrangement: `" + builtin.SaveHomeBoardTool + "`"},
 	} {
 		if !strings.Contains(c.text, c.want) {
 			t.Errorf("%s does not say %q — the registry adds %d tracker and %d "+

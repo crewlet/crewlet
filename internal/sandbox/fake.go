@@ -1322,6 +1322,14 @@ func (r *FakeRunner) TakeSession(ctx context.Context, box Sandbox, take SessionT
 	if session.TakeErr != nil {
 		return TakenSession{}, session.TakeErr
 	}
+	// A MINTING FAKE'S SESSION IS THE ONE BOUND TO ITS JOB, as a real runner
+	// names it ([SessionTake.Session]); one with none bound takes nothing.
+	if r.MintsSession() {
+		if take.Session == "" {
+			return TakenSession{}, fmt.Errorf("fake: %w: no session is bound to the job", ErrSessionBindRefused)
+		}
+		archive.SessionID = take.Session
+	}
 	if session.Taking != nil {
 		session.Taking(ctx)
 	}
@@ -1442,7 +1450,7 @@ func (r *FakeRunner) StreamedReads() int {
 // no sessions, or holds none), and an error for a taker that names nobody or
 // a box that is paused or reclaimed. [FakeRunner.Packing] runs first, and
 // [FakeRunner.PackSaveErr] fails it.
-func (r *FakeRunner) PackSave(ctx context.Context, box Sandbox, taker string) (SessionArchive, error) {
+func (r *FakeRunner) PackSave(ctx context.Context, box Sandbox, taker, session string) (SessionArchive, error) {
 	r.mu.Lock()
 	saves, packing, failed := r.SavesSessions, r.Packing, r.PackSaveErr
 	r.mu.Unlock()
@@ -1451,6 +1459,8 @@ func (r *FakeRunner) PackSave(ctx context.Context, box Sandbox, taker string) (S
 		return SessionArchive{}, nil
 	case taker == "":
 		return SessionArchive{}, errors.New("fake: a save names no taker")
+	case r.MintsSession() && session == "":
+		return SessionArchive{}, fmt.Errorf("fake: %w: no session is bound to the job", ErrSessionBindRefused)
 	}
 	if fake, ok := box.(*FakeSandbox); ok && fake.unreadable() {
 		return SessionArchive{}, fmt.Errorf("fake: box %s is paused or reclaimed, and its session cannot be "+
@@ -1473,6 +1483,9 @@ func (r *FakeRunner) PackSave(ctx context.Context, box Sandbox, taker string) (S
 	r.packs++
 	archive := r.Session.Archive
 	archive.Path = path.Join(box.Home(), "session-save."+taker+"."+strconv.Itoa(r.packs))
+	if r.MintsSession() {
+		archive.SessionID = session
+	}
 	r.saves[archive.Path] = fakeSave{box: box.ID(), archive: archive, body: bytes.Clone(r.Session.Body)}
 	r.packedIn[archive.Path] = box.ID()
 	return archive, nil
