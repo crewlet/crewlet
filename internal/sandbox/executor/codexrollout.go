@@ -257,60 +257,69 @@ func (w codexItemWire) text() string {
 	return b.String()
 }
 
-// scanCodexRollout hands each whole line of the rollout r to each, in order,
-// decoded to its envelope, and reports whether the last line was torn. A line
-// that is no JSON object is skipped with the kinds no reader names; one past
-// [codexRolloutLineMaxBytes] fails the scan, as does an error from each.
-func scanCodexRollout(r io.Reader, each func(n int, line codexLine) error) (torn bool, err error) {
+// codexLines hands each whole line of the rollout r to each, in order, by its
+// number, trimmed and valid until the next line (a blank line is passed over);
+// and a line past [codexRolloutLineMaxBytes], read past and never held, to
+// long. It reports whether the last line was torn (no newline), which neither
+// is handed. An error from either ends the scan with it.
+func codexLines(r io.Reader, each func(n int, body []byte) error, long func(n int) error) (torn bool, err error) {
 	br := bufio.NewReaderSize(r, 64<<10)
 	for n := 1; ; n++ {
-		line, err := codexRolloutLine(br)
+		line, past, err := codexRolloutLine(br)
 		switch {
-		case errors.Is(err, errCodexRolloutLine):
-			return false, fmt.Errorf("%w: line %d is over %d bytes", err, n, codexRolloutLineMaxBytes)
 		case errors.Is(err, io.EOF):
-			return len(line) > 0, nil
+			return past || len(line) > 0, nil
 		case err != nil:
 			return false, fmt.Errorf("executor: reading codex rollout line %d: %w", n, err)
-		}
-		var env codexLine
-		if body := bytes.TrimSpace(line); len(body) > 0 && wireDecode(body, &env) == nil {
-			if err := each(n, env); err != nil {
-				return false, err
+		case past:
+			err = long(n)
+		default:
+			if body := bytes.TrimSpace(line); len(body) > 0 {
+				err = each(n, body)
 			}
+		}
+		if err != nil {
+			return false, err
 		}
 	}
 }
 
 // codexRolloutLine is br's next line with its newline, valid until the next
 // read; at the end, what is left with no newline and io.EOF. A line past
-// [codexRolloutLineMaxBytes] is [errCodexRolloutLine], never held whole.
-func codexRolloutLine(br *bufio.Reader) ([]byte, error) {
+// [codexRolloutLineMaxBytes] is read to its end and dropped, past true.
+func codexRolloutLine(br *bufio.Reader) (line []byte, past bool, err error) {
 	chunk, err := br.ReadSlice('\n')
 	if !errors.Is(err, bufio.ErrBufferFull) {
-		return chunk, err
+		return chunk, false, err
 	}
 	long := append([]byte(nil), chunk...)
-	for {
+	for errors.Is(err, bufio.ErrBufferFull) {
 		chunk, err = br.ReadSlice('\n')
-		if len(long)+len(chunk) > codexRolloutLineMaxBytes+1 {
-			return nil, errCodexRolloutLine
-		}
-		long = append(long, chunk...)
-		if !errors.Is(err, bufio.ErrBufferFull) {
-			return long, err
+		switch {
+		case past:
+		case len(long)+len(chunk) > codexRolloutLineMaxBytes+1:
+			past, long = true, nil
+		default:
+			long = append(long, chunk...)
 		}
 	}
+	return long, past, err
 }
 
-// readCodexRollout reads the rollout r ([scanCodexRollout]). A payload of a
-// shape the readers do not read is skipped as an unknown kind is.
+// readCodexRollout reads the rollout r ([codexLines]): a line that is no JSON
+// object, or a payload of a shape the readers do not read, is skipped as an
+// unknown kind is; a line past its bound fails the read ([errCodexRolloutLine]).
 func readCodexRollout(r io.Reader) (codexRollout, error) {
 	var out codexRollout
 	turnAt := map[string]int{}
-	torn, err := scanCodexRollout(r, func(_ int, line codexLine) error {
-		out.take(line, turnAt)
+	torn, err := codexLines(r, func(_ int, body []byte) error {
+		var env codexLine
+		if wireDecode(body, &env) == nil {
+			out.take(env, turnAt)
+		}
 		return nil
+	}, func(n int) error {
+		return fmt.Errorf("%w: line %d is over %d bytes", errCodexRolloutLine, n, codexRolloutLineMaxBytes)
 	})
 	if err != nil {
 		return codexRollout{}, err
