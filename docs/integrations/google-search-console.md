@@ -117,7 +117,7 @@ Hosts: `searchconsole.googleapis.com` for the Search Console API, `www.googleapi
 
 ## What the atlas shows
 
-Each site the company narrows agents to (`integrations.search_console.sites`) is an account with the `analytics` capability: a domain property keyed as Search Console writes it (`sc-domain:example.com`), a URL prefix by its host, so the URL prefixes of one host are one account. A company that names none shows Search Console as one account ([the atlas](../concepts/atlas.md)).
+Each site the company narrows agents to (`integrations.search_console.sites`) is an account with the `analytics` capability: a domain property keyed as Search Console writes it (`sc-domain:example.com`), and each URL prefix its own account, keyed by its host and a short digest of the site, with the site itself shown as the account's site. A company that names none shows Search Console as one account ([the atlas](../concepts/atlas.md)).
 
 ## Search Console's limits worth knowing
 
