@@ -31,9 +31,8 @@ var ErrReservedName = errors.New(
 
 // estateOwners are the subsystems that keep key material in the store, each
 // under its own first path segment: the identity estate (`iam/`), the MCP
-// servers' OAuth grants (`mcp/`), each a refresh token the engine renews a
-// server's access with and no person reads back (internal/mcp/oauth), and the
-// growth products' tokens the engine renews (`growth/`, internal/metaads).
+// servers' OAuth refresh tokens (`mcp/`, internal/mcp/oauth) and the growth
+// products' renewed tokens (`growth/`, internal/metaads), none read back.
 //
 // A CLOSED SET, so a name is reserved by its first segment rather than by
 // whatever a caller happened to put a slash in. An owner joins it BEFORE it
