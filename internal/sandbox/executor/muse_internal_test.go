@@ -384,7 +384,7 @@ func TestAMuseSessionPacksAndRestoresUnderItsDay(t *testing.T) {
 	if err := os.WriteFile(to.SessionCarried(), raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	gate := "n=" + museSupported + "\n" +
+	gate := "v=" + sandbox.ShellQuote("Muse Code "+museSupported) + "\n" +
 		museSessionGate(Session{ID: id, Continues: true, Replaces: true, Fresh: "fresh"}, to, false) +
 		`printf '%s\n' "$s" "$k" "$w"`
 	if got := string(runSh(t, gate)); got != id+"\nyes\n\n" {
@@ -422,41 +422,45 @@ func tarFiles(t *testing.T, raw []byte) []string {
 }
 
 // A MUSE SESSION CONTINUES ONLY BETWEEN TWO BOXES ON EXACTLY 1.4.25, each
-// release as `muse --version` prints it: any other pair, a newer release
-// included, starts a session of its own, naming both.
+// release as `muse --version` prints it, read as the engine reads it
+// ([releaseOf]): any other pair, a newer release or a pre-release included,
+// starts a session of its own, naming the release it found.
 //
-// Mutation: compare by a floor, or drop the writer's release.
+// Mutation: compare by a floor, read a release from its first digit, or drop
+// the writer's release.
 func TestAMuseSessionContinuesOnlyBetweenBoxesOnTheSupportedRelease(t *testing.T) {
-	const supported, newer, older = "Muse Code 1.4.25 (1.4.25-R9361.1)", "Muse Code 1.4.30 (1.4.30-R1.1)",
-		"Muse Code 1.4.13 (1.4.13-R6996.1)"
+	const supported, newer, older, pre = "Muse Code 1.4.25 (1.4.25-R9361.1)", "Muse Code 1.4.30 (1.4.30-R1.1)",
+		"Muse Code 1.4.13 (1.4.13-R6996.1)", "Muse Code 1.4.25-rc.1"
 	cases := []struct {
 		box, writer string
 		ok          bool
+		names       string
 	}{
-		{supported, supported, true},
-		{newer, supported, false},
-		{supported, newer, false},
-		{older, supported, false},
-		{supported, older, false},
-		{supported, "", false},
+		{supported, supported, true, ""},
+		{newer, supported, false, "1.4.30"},
+		{supported, newer, false, "1.4.30"},
+		{older, supported, false, "1.4.13"},
+		{supported, older, false, "1.4.13"},
+		{pre, supported, false, "a release it could not read"},
+		{supported, pre, false, "named no release this build reads"},
+		{supported, "", false, "named no release this build reads"},
 	}
 	for _, c := range cases {
-		ok, why := (Muse{}).Continues(c.box, c.writer)
-		if ok != c.ok {
-			t.Errorf("Continues(%q, %q) = %v (%s), want %v", c.box, c.writer, ok, why, c.ok)
-		}
-		if !ok && (!strings.Contains(why, museVersionWords(c.box)) || !strings.Contains(why, museVersionWords(c.writer))) {
-			t.Errorf("Continues(%q, %q) says %q, naming neither release", c.box, c.writer, why)
+		ok, why := (Muse{}).Continues(releaseOf(c.box), releaseOf(c.writer))
+		if ok != c.ok || !strings.Contains(why, c.names) {
+			t.Errorf("Continues(%q, %q) = %v (%q), want %v naming %q", c.box, c.writer, ok, why, c.ok, c.names)
 		}
 	}
 }
 
 // A BOX'S RELEASE DECIDES THE RUN: an older one is refused before anything
-// runs, a newer one starts a session of its own where a session was to be
-// continued, and only 1.4.25 continues it (the script as a box runs it, its
-// `muse --version` a stand-in's).
+// runs, a newer one or a pre-release starts a session of its own where a
+// session was to be continued, saying so in the engine's words
+// ([Muse.continuesInPlace]), and only 1.4.25 continues it (the script as a box
+// runs it, its `muse --version` a stand-in's).
 //
-// Mutation: let a newer release continue, or start an older one.
+// Mutation: let a newer release or a pre-release continue, or start an older
+// one.
 func TestAMuseBoxsReleaseDecidesTheRun(t *testing.T) {
 	const id = "0b5e0000-0000-4000-8000-0000000000c9"
 	for _, c := range []struct {
@@ -466,6 +470,7 @@ func TestAMuseBoxsReleaseDecidesTheRun(t *testing.T) {
 	}{
 		{"Muse Code 1.4.13 (1.4.13-R6996.1)", true, ""},
 		{"Muse Code 1.4.30 (1.4.30-R1.1)", false, "no"},
+		{"Muse Code 1.4.25-rc.1", false, "no"},
 		{"Muse Code 1.4.25 (1.4.25-R9361.1)", false, "yes"},
 	} {
 		p := museScriptHome(t, map[string]string{
@@ -486,10 +491,17 @@ func TestAMuseBoxsReleaseDecidesTheRun(t *testing.T) {
 			t.Errorf("%s: the script said %q, want it refused", c.version, out)
 		case !c.refused && k != c.k:
 			t.Errorf("%s: the script said %q, want continued %s", c.version, out, c.k)
-		case c.k == "no" && !strings.Contains(out, "1.4.30"):
-			t.Errorf("%s: a newer release's fresh start says %q, naming no release", c.version, out)
+		case c.k == "no" && !strings.Contains(out, inPlaceWhy(c.version)):
+			t.Errorf("%s: the fresh start says %q, not as the engine's check says it", c.version, out)
 		}
 	}
+}
+
+// inPlaceWhy is why the engine's check refuses a box whose `muse --version`
+// printed printed to continue a session in place.
+func inPlaceWhy(printed string) string {
+	_, why := (Muse{}).continuesInPlace(releaseOf(printed))
+	return why
 }
 
 // museArchive is a gzipped tar holding files, by member name.
