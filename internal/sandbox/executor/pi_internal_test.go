@@ -35,15 +35,16 @@ func piStream(t *testing.T, name string, cap int) []byte {
 	return append([]byte(piMarkLine(cap)+"\n"), piFixture(t, name+".stream.jsonl")...)
 }
 
-// A PI RUN IS HEADLESS, MACHINE-READABLE AND TRUSTS ITS WORKING DIRECTORY, its
+// A PI RUN IS HEADLESS, MACHINE-READABLE AND LEAVES ITS WORKING DIRECTORY
+// UNTRUSTED, so no repository file loads in place of the run's own; its
 // model and effort as the entry names them, everything of the run's own in the
 // one extension, and its session opened by its file: never the brief or the
-// system text on its command line (`--append-system-prompt` would replace a
-// trusted repository's APPEND_SYSTEM.md), never `--session-id` (which finds a
-// session only in the directory it was made in).
+// system text on its command line (the extension adds the text as a prompt
+// section), never `--session-id` (which finds a session only in the directory
+// it was made in).
 //
-// Mutation: drop `--approve` or `-e`, or pass the system text as a flag:
-// this goes red.
+// Mutation: trust the working directory, drop `-e`, or pass the system text
+// as a flag: this goes red.
 func TestAPiRunIsHeadlessAndTrustsItsWorkingDirectory(t *testing.T) {
 	t.Parallel()
 	paths := Paths{Home: "/home/user"}
@@ -51,7 +52,7 @@ func TestAPiRunIsHeadlessAndTrustsItsWorkingDirectory(t *testing.T) {
 		Brief: "BRIEF TEXT", Skills: []sandbox.Skill{{Name: "deploy", Description: "d", Body: "b"}}}
 	script := piScript(req, Session{ID: "s-1"}, paths, paths.PiExtension(), time.Second)
 	for _, want := range []string{
-		`pi --mode json -p --approve --model 'anthropic/claude-sonnet-4-5' --thinking 'high' -e '/home/user/.pi/crewlet/extension.mjs' --skill '/home/user/.pi/crewlet/skills' "$@"`,
+		`pi --mode json -p --no-approve --model 'anthropic/claude-sonnet-4-5' --thinking 'high' -e '/home/user/.pi/crewlet/extension.mjs' --skill '/home/user/.pi/crewlet/skills' "$@"`,
 		`set -- "$@" --session "$f"`, `f='/home/user/.pi/sessions/s-1.jsonl'`,
 		`printf '%s\n' '{"type":"crewlet.extension","cap":0}'`,
 	} {
@@ -494,7 +495,8 @@ func TestAPiRunsExtensionCarriesItsOwnWiring(t *testing.T) {
 		}
 		if !slices.Equal(s.Required, []string{"crewlet"}) || s.Cap != 7 || s.Notes != "http://e/mcp/"+token+"/steer" ||
 			s.SkillURL != "http://e/mcp/"+token+"/skill" || s.Skills[skill] != "crewlet:deploy" ||
-			!strings.HasPrefix(s.System, "SEAT\n\n") || !slices.Equal(s.Withheld, []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY"}) {
+			!strings.HasPrefix(s.System, "SEAT\n\n") || !slices.Equal(s.Withheld, []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY"}) ||
+			!slices.Equal(s.WithheldPrefixes, []string{"OTEL_EXPORTER_OTLP_"}) {
 			t.Errorf("%s is written %+v", path, s)
 		}
 	}
@@ -602,11 +604,13 @@ func TestACarriedPiSessionReadsBackAsItsTranscript(t *testing.T) {
 	}
 }
 
-// A REAL PI 1.6.0 RUN'S SHELL RUNS WITHOUT ITS SIGN-IN: in the capture of a run
-// whose extension withholds STUB_KEY, the name its model provider's key is
-// under, the model was reached with that key, and the bash tool's command and
-// a child of it saw no STUB_KEY while a seat's own credential (OTHER_SECRET)
-// and every other variable stayed.
+// A REAL PI 1.6.0 RUN'S SHELL RUNS WITHOUT ITS SIGN-IN OR ITS TELEMETRY
+// EXPORTER'S SETTINGS: in the capture of an untrusted run whose extension
+// withholds STUB_KEY, the name its model provider's key is under, and the
+// OTEL_EXPORTER_OTLP_ prefix, the model was reached with that key, and the
+// bash tool's command and a child of it saw neither the key nor the
+// exporter's endpoint and headers, while a seat's own credential
+// (OTHER_SECRET) and every other variable (OTEL_SERVICE_NAME) stayed.
 //
 // Mutation: re-capture with the extension's spawn hook removed: the command
 // prints the key, and this goes red.
@@ -629,7 +633,8 @@ func TestAPiRunsShellRunsWithoutItsSignIn(t *testing.T) {
 			printed = r.Content[0].Text
 		}
 	}
-	if printed != "STUB_KEY=unset OTHER=s3 KEEP=yes\n1\nchild=unset\n" {
+	if printed != "STUB_KEY=unset OTHER=s3 KEEP=yes OTEL_ENDPOINT=unset OTEL_HEADERS=unset OTEL_SERVICE=crewlet\n0\n"+
+		"child=unset/unset\n" {
 		t.Fatalf("the model's shell printed %q", printed)
 	}
 }

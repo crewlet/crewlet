@@ -10,7 +10,7 @@
 //     LOUDLY where one it must hold offers no tool: pi starts a run whose server
 //     is unreachable or refuses its token silently, with the tools absent;
 //   - adds the seat's standing instructions as a prompt section of its own,
-//     after pi's prompt and a trusted repository's .pi/APPEND_SYSTEM.md;
+//     after pi's own prompt;
 //   - holds the run to its turn cap: every turn_start is one model request,
 //     and the one past the cap is aborted before its request is sent;
 //   - polls the notes route while the agent works and hands every note it
@@ -24,7 +24,8 @@
 //   - records the context pi reports at each turn's end;
 //   - runs the model's shell with only what it needs: pi's own bash tool,
 //     registered again with a spawn hook that leaves out the names that sign
-//     pi in, which pi itself still reads from its own environment.
+//     pi in and the telemetry exporter's settings, which pi itself still
+//     reads from its own environment.
 // What it records for the runner is a `custom` session entry (pi.appendEntry),
 // which pi prints on its JSON stream and never sends to the model.
 //
@@ -64,15 +65,19 @@ export default function (pi) {
   arm(pi, config)
 }
 
-function arm(pi, { servers, required, system, notes, cap, skills, skillURL, withheld }) {
+function arm(pi, { servers, required, system, notes, cap, skills, skillURL, withheld, withheldPrefixes }) {
   for (const s of Array.isArray(servers) ? servers : []) pi.registerMcpServer(s.name, s.config)
-  const hidden = Array.isArray(withheld) ? withheld.filter((n) => typeof n === "string" && n !== "") : []
-  if (hidden.length > 0) {
+  const strings = (list) => (Array.isArray(list) ? list.filter((n) => typeof n === "string" && n !== "") : [])
+  const hidden = strings(withheld)
+  const prefixes = strings(withheldPrefixes)
+  if (hidden.length > 0 || prefixes.length > 0) {
     pi.registerTool(
       createBashToolDefinition(process.cwd(), {
         spawnHook: (spawn) => {
-          const env = { ...spawn.env }
-          for (const name of hidden) delete env[name]
+          const env = {}
+          for (const [name, value] of Object.entries(spawn.env ?? {})) {
+            if (!hidden.includes(name) && !prefixes.some((p) => name.startsWith(p))) env[name] = value
+          }
           return { ...spawn, env }
         },
       }),
