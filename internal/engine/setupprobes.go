@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"github.com/crewlet/crewlet/internal/appstoreconnect"
 	"github.com/crewlet/crewlet/internal/atlassian"
 	awsint "github.com/crewlet/crewlet/internal/aws"
 	"github.com/crewlet/crewlet/internal/cloudflare"
@@ -34,6 +35,7 @@ import (
 func SetupProbes() map[integration.Kind]setup.Probe {
 	return map[integration.Kind]setup.Probe{
 		integration.KindAtlassian:       atlassian.Probe(atlassian.ClientOptions{}),
+		integration.KindAppStoreConnect: appstoreconnect.Probe(),
 		integration.KindCloudflare:      cloudflare.Probe(nil),
 		integration.KindConfluence:      confluence.Probe(nil),
 		integration.KindDatadog:         datadog.Probe(nil),
@@ -43,12 +45,12 @@ func SetupProbes() map[integration.Kind]setup.Probe {
 		integration.KindGitHub:          github.Probe(nil),
 		integration.KindGitLab:          gitlab.Probe(nil),
 		integration.KindGoogleCloud:     googlecloud.Probe(nil),
-		integration.KindGoogleAnalytics: googleanalytics.Probe(nil),
 		integration.KindGoogleAds:       googleads.Probe(nil),
 		integration.KindJira:            jira.Probe(nil),
 		integration.KindMattermost:      mattermost.Probe(nil, nil),
 		integration.KindScaleway:        scaleway.Probe(nil),
 		integration.KindSlack:           slack.Probe(nil),
 		integration.KindSSH:             sshint.Probe(nil),
+		integration.KindGoogleAnalytics: googleanalytics.Probe(nil),
 	}
 }

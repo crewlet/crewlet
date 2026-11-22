@@ -676,7 +676,7 @@ days keep none.
 | **`crewlet_leases`** | `node:` · `seat:` ownership, and nothing else. The bucket's age **is** the lease TTL |
 | **`crewlet_duties`** | `worker:` ownership, and every other lease, Worklet's `move:` · `merge:` claims among them. Each record is judged by its own deadline; the bucket's age only has to outlive the longest duty |
 | **`crewlet_epochs`** | The monotonic fencing counter, which a single node's in-process leases mint from too, since their tokens are written into records that outlive the process. No age at all (see below) |
-| **`crewlet_config`** | The activation pointer and its payload — the pointer's own revision **is** the epoch |
+| **`crewlet_config`** | The activation pointer — its own revision **is** the epoch — and the sealed company document it names, `body.<sha256>` |
 | **`crewlet_status`** | One key per node: the epoch and revision it last attempted, how that went (`error` or `degraded` is a refusal), and the revision it serves. A refused re-activation of the revision a node already runs names one revision in both, so a refusal is read from the status, never from the two differing |
 | `crewlet_node_status` | One key per node: its [status record](coordination.md#its-status-record), what it says of its MCP servers, its models, its runners, what it runs on and the runs of its seats waiting for an operator, beside its presence rather than on it and counted only at its presence's epoch. The bucket's age, the same minute as `crewlet_status`, removes a dead node's |
 | **`crewlet_ledger`** · **`crewlet_claims`** · `crewlet_fires` | Turn completions, webhook delivery claims, scheduled-fire claims |

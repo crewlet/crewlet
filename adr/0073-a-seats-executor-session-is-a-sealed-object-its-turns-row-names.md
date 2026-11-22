@@ -170,9 +170,9 @@ streamed through the scrub and sealed under the fleet keyring into a spool on
 the node's own disk, bounded by the pack's and the scrub's waits
 (`SessionTakeBudget`). The scrub's, `SessionScrubWait`, is seven minutes, from
 its measured worst: the slowest session a harness writes at the scrub's
-256 MiB of plaintext (`scrubPlainMax`), 238 s, and the archive read twice out
+256 MiB of plaintext (`scrubPlainMax`), 261 s, and the archive read twice out
 of a box at a mebibyte a second, 96 s at 48 MiB, and the minute a take may
-wait for its spool's room (`spoolRoomWait`), 394 s; lines that are no JSON, which
+wait for its spool's room (`spoolRoomWait`), 417 s; lines that are no JSON, which
 only a corrupted transcript holds, do not set it. A take past it FAILS CLOSED:
 nothing is kept, its place is refused and the last kept copy stands, so a box
 can only cost its own session. The KEEP — the upload at the object store's

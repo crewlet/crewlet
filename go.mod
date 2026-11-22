@@ -11,8 +11,8 @@ ignore node_modules
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/aws/aws-sdk-go-v2 v1.48.0
-	github.com/aws/aws-sdk-go-v2/config v1.33.18
-	github.com/aws/aws-sdk-go-v2/credentials v1.21.0
+	github.com/aws/aws-sdk-go-v2/config v1.33.19
+	github.com/aws/aws-sdk-go-v2/credentials v1.21.1
 	github.com/aws/aws-sdk-go-v2/service/iam v1.66.0
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.115.0
 	github.com/aws/aws-sdk-go-v2/service/sts v1.52.0
@@ -26,7 +26,7 @@ require (
 	github.com/nats-io/nats.go v1.56.0
 	github.com/nats-io/nkeys v0.4.17
 	github.com/nats-io/nuid v1.0.1
-	github.com/openai/openai-go/v3 v3.99.0
+	github.com/openai/openai-go/v3 v3.103.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/tursodatabase/turso-go-platform-libs v0.8.3
 	github.com/yuin/goldmark v1.8.7
@@ -75,7 +75,7 @@ require (
 	github.com/nats-io/jwt/v2 v2.8.3 // indirect
 	github.com/segmentio/asm v1.1.3 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect
-	github.com/tidwall/gjson v1.20.0 // indirect
+	github.com/tidwall/gjson v1.20.1 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect

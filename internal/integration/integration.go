@@ -131,6 +131,10 @@ const (
 	// company's servers with and ingests nothing.
 	KindSSH Kind = "ssh"
 
+	// KindAppStoreConnect reaches the company's App Store Connect teams for
+	// the agents through the engine's own tools and ingests nothing.
+	KindAppStoreConnect Kind = "app_store_connect"
+
 	// KindGoogleAnalytics is Google Analytics 4: agents read and manage
 	// properties as their Google growth identity, through engine tools. It
 	// ingests nothing.
@@ -156,7 +160,7 @@ const (
 var Kinds = []Kind{
 	KindSlack, KindMattermost, KindJira, KindConfluence,
 	KindGitHub, KindGitLab, KindDatadog, KindCloudflare, KindExpo, KindDigitalOcean,
-	KindScaleway, KindAWS, KindGoogleCloud, KindSSH, KindAtlassian, KindGoogleAnalytics, KindGoogleAds,
+	KindScaleway, KindAWS, KindGoogleCloud, KindSSH, KindAppStoreConnect, KindAtlassian, KindGoogleAnalytics, KindGoogleAds,
 }
 
 // ConvergeOrder is the order the reconcile loop VISITS surfaces in, which is
@@ -176,7 +180,7 @@ var ConvergeOrder = []Kind{
 	KindAtlassian, KindJira, KindConfluence,
 	KindSlack, KindMattermost,
 	KindGitHub, KindGitLab, KindDatadog, KindCloudflare, KindExpo, KindDigitalOcean,
-	KindScaleway, KindAWS, KindGoogleCloud, KindSSH,
+	KindScaleway, KindAWS, KindGoogleCloud, KindSSH, KindAppStoreConnect,
 	// THE GOOGLE GROWTH PRODUCTS AFTER GOOGLE CLOUD, whose company pass makes
 	// the growth identities they sign in as (internal/googleauth).
 	KindGoogleAnalytics, KindGoogleAds,
@@ -258,10 +262,10 @@ func (k Kind) Ingress() Ingress {
 // (Jira and Confluence have their own webhook and parser). So "no parser turns
 // deliveries into work" warns about Mattermost and means nothing for Atlassian.
 // Cloudflare, Expo, DigitalOcean, Scaleway, AWS, Google Cloud, SSH and the
-// growth products are likewise: credentials there are minted, pasted or issued, and nothing they
-// send is routed to a seat.
+// growth products are likewise: credentials there are minted, pasted or issued,
+// and nothing they send is routed to a seat.
 func (k Kind) Ingests() bool {
 	return k != KindAtlassian && k != KindCloudflare && k != KindExpo && k != KindDigitalOcean &&
-		k != KindScaleway && k != KindAWS && k != KindGoogleCloud && k != KindSSH && k != KindGoogleAnalytics &&
+		k != KindScaleway && k != KindAWS && k != KindGoogleCloud && k != KindSSH && k != KindAppStoreConnect && k != KindGoogleAnalytics &&
 		k != KindGoogleAds
 }

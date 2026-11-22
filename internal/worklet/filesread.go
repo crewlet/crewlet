@@ -133,6 +133,7 @@ func (r *Reader) Files(ctx context.Context, q FileQuery) (FileListing, error) {
 				return fmt.Errorf("worklet: list the files of %s: %w", q.Project, err)
 			}
 			defer func() { _ = rows.Close() }()
+			held := statelog.RowsOf(ctx)
 			for rows.Next() {
 				row := FileRow{Project: q.Project}
 				var created, updated int64
@@ -147,14 +148,21 @@ func (r *Reader) Files(ctx context.Context, q FileQuery) (FileListing, error) {
 					at := store.DecodeTime(removed.Int64)
 					row.RemovedAt = &at
 				}
+				if !held.TakeEncoded(row) {
+					break
+				}
 				listing.Files = append(listing.Files, row)
 			}
 			if err = rows.Err(); err != nil {
 				return err
 			}
+			// Cut by its bytes, the page resumes after its last row kept;
+			// the first row is always kept, so there is one.
 			if len(listing.Files) > limit {
 				listing.Files = listing.Files[:limit]
 				listing.Next = listing.Files[limit-1].Path
+			} else if held.Cut() {
+				listing.Next = listing.Files[len(listing.Files)-1].Path
 			}
 			position, applied, err := readCheckpoint(ctx, tx)
 			if err != nil {

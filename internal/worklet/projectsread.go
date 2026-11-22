@@ -450,6 +450,9 @@ func readProjectRows(ctx context.Context, tx *sql.Tx, q ProjectQuery,
 	// as `"projects": null`, and the client's `projects?.length === 0` then
 	// misreads a company with none, hiding its first-project panel.
 	out := make([]ProjectRow, 0, limit)
+	// Held to the answer's bytes ([statelog.RowsOf]); a cut page says so
+	// through `truncated`, which is `total` over the rows kept.
+	held := statelog.RowsOf(ctx)
 	for rows.Next() {
 		var row ProjectRow
 		var unit string
@@ -467,6 +470,9 @@ func readProjectRows(ctx context.Context, tx *sql.Tx, q ProjectQuery,
 		row.TargetDate = target.String
 		row.LastChange = change.value()
 		row.Unit, row.Lead = resolveUnit(q.Units, unit)
+		if !held.TakeEncoded(row) {
+			break
+		}
 		out = append(out, row)
 	}
 	if err := rows.Err(); err != nil {

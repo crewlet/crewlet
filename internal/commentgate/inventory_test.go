@@ -4,7 +4,7 @@ package commentgate
 // blockBound the package held when the bound arrived. It only moves down.
 var excessInventory = map[string]int{
 	"internal/redact":           963,
-	"internal/sandbox/executor": 143,
+	"internal/sandbox/executor": 35,
 }
 
 // rowInventory is the length, in characters, of each internal/README.md row

@@ -60,6 +60,11 @@ const (
 	// MaxEpisodes bounds one read of a key's kept episodes: ninety days of a
 	// condition that returns every day.
 	MaxEpisodes = 200
+
+	// MaxRunRowBytes bounds one run's row as a read answers it: its class
+	// summary and model pass at their bounds, and a kibibyte for its ids,
+	// words and instants (each within MaxWordBytes or a timestamp).
+	MaxRunRowBytes = MaxClassesBytes + MaxModelBytes + 1<<10
 )
 
 // THE RETENTION (package doc, "Retention"), swept by one expiry record a day

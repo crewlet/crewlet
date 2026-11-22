@@ -103,6 +103,8 @@ func NewSetupSurface(boot *config.Bootstrap, e *engine.Engine, configSurface *co
 		SSHTests: e.Backends().Fleet,
 		// Test connection and the SSH audit, over this node's access log.
 		SSH: e.SSHAccess(),
+		// App Store analytics, turned on with an Admin key pasted once.
+		AppStoreAnalytics: e.AppStoreAnalytics(),
 	})
 	if err != nil {
 		return nil, err

@@ -123,7 +123,8 @@ export const HARNESS_FACTS: Readonly<Record<string, HarnessFacts>> = {
   },
   "kimi-code": {
     binary: "kimi",
-    signIns: ["host-login"],
+    signIns: ["api-key", "host-login"],
+    keyEnv: "KIMI_MODEL_API_KEY",
     login: "command",
     efforts: ["low", "medium", "high", "xhigh", "max"],
   },

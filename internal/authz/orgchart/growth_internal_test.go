@@ -9,7 +9,7 @@ import (
 )
 
 func init() {
-	growth.Register("chartgrowth", func() growth.Catalog {
+	growth.RegisterFunc("chartgrowth", func() growth.Catalog {
 		return growth.Catalog{Kind: "chartgrowth", API: "Chart Growth API", Version: "v1"}
 	})
 }

@@ -91,4 +91,13 @@
 // Growth page pages every growth step but a read's ([Reader.GrowthChanges]), at
 // the caller's level. A product counts the changes to one target that took
 // effect ([Reader.GrowthChanged]) before it calls, for a vendor's rate rule.
+//
+// A sealed text OPENS REDACTED ([CommandRow.Open], [VerdictRow.Open]), so a
+// credential a command or a giver's words carried reads as a marker in every
+// view, the audit's included; the digests of what ran stay to check it by.
+// The seal keeps the words whole and a reseal moves them unchanged. Redacting
+// before the seal is wrong: [Writer.VerdictSealed] opens the words again and
+// holds them to the writer's bounds ([VerdictReasonMaxRunes],
+// [VerdictFindingMaxRunes]), which a marker longer than what it replaced
+// would break for words the giver kept within them.
 package accessdomain

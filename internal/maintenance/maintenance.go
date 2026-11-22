@@ -6,8 +6,9 @@
 // notifications in the last second, has this fire already been claimed, has
 // this trigger already been worked, who is on this agent-to-agent channel,
 // where is each node on the config pointer. The same sweep keeps each state-log
-// domain's operation ledger ([StatelogJobs]) and the coordination store's
-// removal markers ([MarkerJobs]), which no clock ages and every listing re-reads.
+// domain's operation ledger ([StatelogJobs]), the coordination store's
+// removal markers ([MarkerJobs]), which no clock ages and every listing
+// re-reads, and the activation's superseded bodies ([BodyJobs]).
 //
 // They were all designed to be swept — every one of their migrations says
 // so, and each ships the index a range delete needs. The failure to avoid is

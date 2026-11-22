@@ -505,20 +505,21 @@ func (r *Reconciler) view(ctx context.Context) (configplane.FleetView, error) {
 	if err != nil {
 		return configplane.FleetView{}, err
 	}
-	view := progress.selfView(target.Epoch, r.now())
+	view := progress.selfView(target.Epoch, r.plane.BodyCrossing(target), r.now())
 	view.PeersOK, view.PeersReported = ok, reported
 	return view, nil
 }
 
 // selfView is this node's half of the fleet view against target as of now,
-// every field read from this one progress; the peers are the other half
+// every field read from this one progress and the target's body crossing
+// (coord's Plane.BodyCrossing); the peers are the other half
 // ([Reconciler.view]).
 //
 // ONE CONSTRUCTION for the posture and for the engine's irreversible
 // judgements ([Engine.servedFleetRevision]), which tell applying from failed
 // by the same rule ([configplane.FleetView.LagConfirmed]), so the two never
 // disagree.
-func (p applyProgress) selfView(target int64, now time.Time) configplane.FleetView {
+func (p applyProgress) selfView(target int64, bodyCrossing time.Duration, now time.Time) configplane.FleetView {
 	attempts := p.failedAttempts(target)
 	return configplane.FleetView{
 		TargetEpoch:  target,
@@ -527,8 +528,9 @@ func (p applyProgress) selfView(target int64, now time.Time) configplane.FleetVi
 		// MEASURED: probes and the heartbeat ask WHILE an apply runs,
 		// which reads as propagation (wait) until it lasts longer than
 		// propagation explains.
-		BehindFor: p.behindFor(target, now),
-		Attempts:  attempts,
+		BehindFor:    p.behindFor(target, now),
+		BodyCrossing: bodyCrossing,
+		Attempts:     attempts,
 	}
 }
 
@@ -859,9 +861,9 @@ func violations(warnings []config.Warning) []violation {
 // keeps it ([configplane.RevisionOf]), and whether its body came from this
 // node's own copy.
 //
-// From this node's history where it holds it, else off the coordination store,
-// where Activate writes the body in the pointer's record: THE ORDINARY CASE ON
-// A PEER, since a write stores its body only on the node that served it.
+// From this node's history where it holds it, else the body the pointer names
+// off the coordination store: THE ORDINARY CASE ON A PEER, since a write
+// stores its body only on the node that served it.
 //
 // It writes nothing: anything the broker admits can write that bucket
 // (ADR-0094), so the caller opens the seal before any of it is kept
@@ -878,7 +880,7 @@ func (r *Reconciler) fleetRevision(ctx context.Context, target coord.Activation)
 	if found {
 		return configplane.RevisionOf(target, held.Payload), true, nil
 	}
-	payload, found, err := r.plane.Payload(ctx, target.RevisionID)
+	payload, found, err := r.plane.Body(ctx, target)
 	if err != nil {
 		return store.Revision{}, false, fmt.Errorf("engine: fetch revision %s: %w",
 			target.RevisionID, err)
@@ -886,7 +888,8 @@ func (r *Reconciler) fleetRevision(ctx context.Context, target coord.Activation)
 	if !found {
 		// An error, not a silent skip: a fleet where every node ignores an
 		// unreadable pointer converges on nothing while reporting
-		// convergence.
+		// convergence. The body is gone only once the pointer moved on, so
+		// the next tick reads the pointer again.
 		return store.Revision{}, false, fmt.Errorf("engine: %w: %s",
 			store.ErrNoRevision, target.RevisionID)
 	}

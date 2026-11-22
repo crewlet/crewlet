@@ -70,6 +70,17 @@ export interface ToolStory {
 }
 
 export const STORIES: Record<string, ToolStory> = {
+  app_store_connect: {
+    does: [
+      "Read your apps, listings, reviews, TestFlight builds, sales and analytics",
+      "Edit drafts and internal testing at once, where you allow operate",
+      "Ask you before any reply, submission, price or account change customers or testers see",
+    ],
+    identity:
+      "Agents never hold a key. Crewlet keeps your team's API keys, one per Apple role, and makes every call for them through the key with the least access.",
+    byHand:
+      "Create a team API key in App Store Connect, Users and Access, Integrations, for each role you want, and paste its key ID and .p8 file here. Apple has no API that creates keys.",
+  },
   slack: {
     does: [
       "Answer mentions and direct messages",

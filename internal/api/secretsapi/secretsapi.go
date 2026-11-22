@@ -151,6 +151,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 var log = logging.Get("api.secrets")
@@ -960,11 +961,7 @@ func (s *Service) reactivate(ctx context.Context, names []string, readBy map[str
 	if len(read) == 0 {
 		return nil
 	}
-	summary := "reload: secret " + read[0] + " " + what
-	if len(read) > 1 {
-		summary = "reload: secrets " + strings.Join(read, ", ") + " " + what
-	}
-	applied, err := s.config.Reload(ctx, summary, by, "")
+	applied, err := s.config.Reload(ctx, reloadSummary(read, what), by, "")
 	outcome := configapi.ReloadOutcome(applied, err)
 	if err != nil {
 		log.WarnContext(ctx, "secret_reload_failed", "names", read, "error", err,
@@ -976,6 +973,21 @@ func (s *Service) reactivate(ctx context.Context, names []string, readBy map[str
 	}
 	return outcome
 }
+
+// reloadSummary is the summary of the re-activation a write of read makes, the
+// names cut to [reloadNamesBytes]: a batch holds up to [MaxRevealNames] names
+// of a kilobyte each, and a summary past coord.MaxSummaryBytes is refused, leaving
+// the values sealed and inactive.
+func reloadSummary(read []string, what string) string {
+	if len(read) == 1 {
+		return "reload: secret " + textcut.Within(read[0], reloadNamesBytes) + " " + what
+	}
+	return "reload: secrets " + textcut.Within(strings.Join(read, ", "), reloadNamesBytes) + " " + what
+}
+
+// reloadNamesBytes bounds the names in [reloadSummary]: six bytes a byte
+// escaped is under coord.MaxSummaryBytes with room for the words.
+const reloadNamesBytes = 512
 
 // deferQuery reads PUT /secrets/{name}'s one query parameter, `defer_reload`:
 // exactly `true` or `false`, given once, or absent for false. Anything else is
