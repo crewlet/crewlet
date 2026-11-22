@@ -1461,22 +1461,35 @@ func TestTheTranscriptBoundsAreTheEnginesOwn(t *testing.T) {
 	}
 }
 
-// EVERY HARNESS THIS BUILD DRIVES CARRIES ITS SESSION, and the transcript is
-// read for each in the one format its runner packs: the harnesses whose
-// session is read are the harnesses [executor.Names] lists, from one list.
+// EVERY HARNESS THIS BUILD DRIVES IS READ AS ITS RUNNER CARRIES IT: one that
+// carries its session is read in the one format its runner packs, and one
+// whose runner carries none (Kimi Code's, until its session carry lands) is
+// read in no format. The harnesses are the ones [executor.Names] lists, from
+// one list, so a new runner says which it is.
 //
-// Mutation: list a harness that carries no session, or read one in a format
-// its runner does not pack, and a row goes red.
-func TestEveryHarnessThisBuildDrivesCarriesItsSession(t *testing.T) {
+// Mutation: list a harness that carries no session as carrying one, or read
+// one in a format its runner does not pack, and a row goes red.
+func TestEveryHarnessThisBuildDrivesIsReadAsItsRunnerCarriesIt(t *testing.T) {
 	t.Parallel()
+	// carriesNone is the format of a harness whose runner carries no session.
+	const carriesNone = 0
 	formats := map[string]int{
 		executor.ClaudeCodeName: executor.ClaudeArchiveFormat,
 		executor.OpenCodeName:   executor.OpenCodeArchiveFormat,
+		executor.KimiName:       carriesNone,
 	}
 	for _, name := range executor.Names() {
 		format, ok := formats[name]
 		if !ok {
 			t.Errorf("%s is a harness this build drives, and this case names no archive format of it", name)
+			continue
+		}
+		if format == carriesNone {
+			for f := range 4 {
+				if c, _ := executor.Carries(name, f); c {
+					t.Errorf("%s carries no session, and its format %d is read", name, f)
+				}
+			}
 			continue
 		}
 		if carried, why := executor.Carries(name, format); !carried {

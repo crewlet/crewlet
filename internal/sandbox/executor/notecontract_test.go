@@ -43,6 +43,11 @@ var noteFixtures = map[string]noteFixture{
 		confirms: pluginAdmitsNotesAtTheRunsNextStep,
 		reaches:  pluginReadsTheBridgesOwnNotesRoute,
 	},
+	executor.KimiName: {
+		reads:    true,
+		confirms: executor.KimiConfirmsATake,
+		reaches:  kimiReachesTheBridgesRoute,
+	},
 }
 
 // noteFixtureOf is h's fixture, failing the case where h supplies none.
@@ -70,7 +75,10 @@ func TestEveryRunnerThatTakesNotesSaysSoAndMeetsTheContract(t *testing.T) {
 		if got := executor.New(h).ReadsNotes(); got != fixture.reads {
 			t.Errorf("%s's runner says it reads notes: %v, its fixture says %v", h.Name(), got, fixture.reads)
 		}
-		if fixture.reads && (fixture.wakeRead == nil || fixture.confirms == nil || fixture.reaches == nil) {
+		// A WAKE READ IS A CARRIER'S: a session's transcript is read from the
+		// archive its runner carries, so a runner that carries none reads none.
+		_, carries := h.(interface{ ArchiveFormat() int })
+		if fixture.reads && ((carries && fixture.wakeRead == nil) || fixture.confirms == nil || fixture.reaches == nil) {
 			t.Errorf("%s reads notes, and its fixture lacks a case of the contract: a wake read, a confirm "+
 				"path or a real box's route", h.Name())
 		}
