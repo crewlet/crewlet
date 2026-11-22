@@ -1143,7 +1143,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	// A LIMIT ONLY AT THE HARNESS'S OWN API FAILURE ([limitGate]); a status
 	// that does not read is no such failure.
 	if gate, ok := r.harness.(limitGate); ok {
-		if n, err := strconv.Atoi(code); err != nil || !gate.limitExit(n) {
+		if n, convErr := strconv.Atoi(code); convErr != nil || !gate.limitExit(n) {
 			result.NoLimitExit = true
 		}
 	}

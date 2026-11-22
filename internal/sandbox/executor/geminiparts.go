@@ -97,3 +97,8 @@ func geminiFunctionOf(raw json.RawMessage, response bool) *geminiFunction {
 	}
 	return f
 }
+
+// decodes reports whether decode reads raw into v. The Gemini-API readers pass
+// over a line or a field that does not decode, as Claude Code's reader does,
+// and answer nothing for it rather than an error.
+func decodes(decode func([]byte, any) error, raw []byte, v any) bool { return decode(raw, v) == nil }

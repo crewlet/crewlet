@@ -35,19 +35,24 @@ const GeminiProjectSlug = "crewlet"
 // GeminiHelper is the helper the run's script runs ([geminiHelperScript]).
 func (p Paths) GeminiHelper() string { return p.WorkDir() + "/gemini-helper.mjs" }
 
-// GeminiTake is the take script both hooks run ([geminiTakeScript]), and
-// GeminiTakeConfig what it reads: the bridge's endpoint and the routes, so no
-// token is on a hook's command line or in any process's environment.
-func (p Paths) GeminiTake() string       { return p.WorkDir() + "/gemini-take.mjs" }
+// GeminiTake is the take script both hooks run ([geminiTakeScript]).
+func (p Paths) GeminiTake() string { return p.WorkDir() + "/gemini-take.mjs" }
+
+// GeminiTakeConfig is what the take script reads: the bridge's endpoint and
+// the routes, so no token is on a hook's command line or in any process's
+// environment.
 func (p Paths) GeminiTakeConfig() string { return p.WorkDir() + "/gemini-take.json" }
 
-// GeminiDefaultSystem is Gemini CLI's prompt as the script exports it,
-// GeminiExportErr what the export printed, and GeminiSystem the export and
-// the run's own text ([Paths.System]) joined, which GEMINI_SYSTEM_MD names
+// GeminiDefaultSystem is Gemini CLI's prompt as the script exports it
 // ([geminiScript]).
 func (p Paths) GeminiDefaultSystem() string { return p.WorkDir() + "/gemini-default-system.md" }
-func (p Paths) GeminiExportErr() string     { return p.WorkDir() + "/gemini-export.err" }
-func (p Paths) GeminiSystem() string        { return p.WorkDir() + "/gemini-system.md" }
+
+// GeminiExportErr is what the export printed.
+func (p Paths) GeminiExportErr() string { return p.WorkDir() + "/gemini-export.err" }
+
+// GeminiSystem is the export and the run's own text ([Paths.System]) joined,
+// which GEMINI_SYSTEM_MD names.
+func (p Paths) GeminiSystem() string { return p.WorkDir() + "/gemini-system.md" }
 
 // GeminiTakes is where the take script records each take it handed Gemini CLI
 // in session, a line of its token and its text ([geminiRecordedTake]), which
