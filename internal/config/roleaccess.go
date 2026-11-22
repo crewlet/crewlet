@@ -26,7 +26,7 @@ func SeatAccessOn(enabled *bool) bool { return enabled != nil && *enabled }
 // SeatAccessLanes is every per-seat block, by its key under
 // `roles[].integrations`.
 func SeatAccessLanes() []string {
-	return []string{"slack", "mattermost", "jira", "confluence", "github", "gitlab", "datadog", "cloudflare", "expo", "digitalocean", "scaleway", "aws", "google_cloud", "ssh", "app_store_connect"}
+	return append([]string{"slack", "mattermost", "jira", "confluence", "github", "gitlab", "datadog", "cloudflare", "expo", "digitalocean", "scaleway", "aws", "google_cloud", "ssh"}, growthSeatKeys()...)
 }
 
 // SeatScope is the key and the entries of r's scope at lane: the containers
@@ -63,14 +63,13 @@ func (r *Role) SeatScope(lane string) (string, []string) {
 		if in.GoogleCloud != nil {
 			return "projects", in.GoogleCloud.Projects
 		}
-	case "app_store_connect":
-		if in.AppStoreConnect != nil {
-			return "apps", in.AppStoreConnect.Apps
-		}
 	case "ssh":
 		if in.SSH != nil {
 			return "hosts", in.SSH.Hosts
 		}
+	}
+	if s := r.growthSeatOf(lane); s != nil {
+		return s.seatScopeKey(), s.SeatAccess().Scope
 	}
 	return "", nil
 }
@@ -79,13 +78,16 @@ func (r *Role) SeatScope(lane string) (string, []string) {
 // least one scope entry, since one with none would reach nothing. The lane's
 // vendor declares the same (seataccess.LaneSpec.ScopeRequired), and a test
 // holds the two equal.
-func SeatScopeRequired(lane string) bool { return slices.Contains(scopeRequiredLanes, lane) }
+func SeatScopeRequired(lane string) bool {
+	return slices.Contains(scopeRequiredLanes, lane) || isGrowthSeat(lane)
+}
 
 // scopeRequiredLanes is every lane whose agents must name a scope entry:
 // Scaleway's, whose policy names its projects and grants nothing without one,
 // Google Cloud's, whose roles are granted per project and so on none without
-// one, and SSH's, whose certificates name one principal per host.
-var scopeRequiredLanes = []string{"scaleway", "google_cloud", "ssh", "app_store_connect"}
+// one, and SSH's, whose certificates name one principal per host. Every growth
+// product's is required too: its engine refuses a call outside the seat's scope.
+var scopeRequiredLanes = []string{"scaleway", "google_cloud", "ssh"}
 
 // checkScopeChosen refuses an agent turned on at lane with no scope entry
 // where required says the lane needs one.
@@ -168,14 +170,13 @@ func (r *Role) seatEnabledField(lane string) **bool {
 		if in.GoogleCloud != nil {
 			return &in.GoogleCloud.Enabled
 		}
-	case "app_store_connect":
-		if in.AppStoreConnect != nil {
-			return &in.AppStoreConnect.Enabled
-		}
 	case "ssh":
 		if in.SSH != nil {
 			return &in.SSH.Enabled
 		}
+	}
+	if s := r.growthSeatOf(lane); s != nil {
+		return s.seatEnabled()
 	}
 	return nil
 }
