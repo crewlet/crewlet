@@ -241,9 +241,10 @@ type Finding struct {
 	Source   Source   `json:"source"`
 	Area     Area     `json:"area"`
 	Subject  Subject  `json:"subject"`
-	// Title says what is wrong, in one line. Title and Why are the same on
-	// every finding of one class, so a class reads as one row: what it is
-	// about is Subject, Item, Names, Evidence and Records.
+	// Title says what is wrong, in one line (at most 70 characters where this
+	// package writes it). Title and Why are the same on every finding of one
+	// class, so a class reads as one row: what it is about is Subject, Item,
+	// Names, Evidence and Records.
 	Title string `json:"title"`
 	// Headline is one line that carries the finding's number ("Seats sat
 	// idle 11 h on 19 Nov: the model hit its limit 4 times"), where the
@@ -256,7 +257,9 @@ type Finding struct {
 	// Seats are the seats a finding about one cause is about, each with its
 	// share of the number, where the class states them (ADR-0166).
 	Seats []SeatShare `json:"seats,omitempty"`
-	// Why says what it costs, in the owner's words.
+	// Why says what it costs, in the owner's words. Where this package writes
+	// it, its first sentence, the one a row shows, is at most 90 characters,
+	// and detail follows ([TestEveryFindingLeadsWithOneShortLine]).
 	Why string `json:"why"`
 	// Item is the one thing within the subject the finding is about, as a
 	// person reads it in a list: a schedule's name and how often it runs.
