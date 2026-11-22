@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 
@@ -134,9 +135,13 @@ func unreadWords(err error) string {
 	switch {
 	case errors.Is(err, ErrNoKey):
 		return noListingKey
+	case errors.As(err, &apiErr) && (apiErr.Status == http.StatusUnauthorized || apiErr.Status == http.StatusForbidden):
+		return fmt.Sprintf("Apple refused the team's key when listing its apps (HTTP %d): check the team's "+
+			"keys on this page", apiErr.Status)
 	case errors.As(err, &apiErr):
-		return fmt.Sprintf("Apple refused to list the team's apps (HTTP %d): check the team's keys on "+
-			"this page", apiErr.Status)
+		// A RATE LIMIT OR AN OUTAGE IS APPLE'S, never a reason to replace a key.
+		return fmt.Sprintf("Apple did not list the team's apps (HTTP %d); Crewlet tries again on the next "+
+			"check", apiErr.Status)
 	default:
 		return "Crewlet could not reach Apple to list the team's apps; it tries again on the next check"
 	}

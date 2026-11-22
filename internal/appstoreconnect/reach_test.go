@@ -299,17 +299,26 @@ func TestACancelledReadIsNotApplesRefusal(t *testing.T) {
 }
 
 // APPLE'S REFUSAL IS SAID IN CREWLET'S WORDS, never Apple's text, which is
-// somebody else's and reaches a person's screen.
+// somebody else's and reaches a person's screen; only a refused key sends the
+// person to the keys, and any other answer says Crewlet tries again.
+//
+// Mutation: word every status as a refused key, and an outage at Apple sends
+// a person off to replace working keys.
 func TestAppleRefusingTheListIsSaidInCrewletsWords(t *testing.T) {
 	t.Parallel()
-	h := &held{status: http.StatusUnauthorized, asked: make(chan struct{}, 4)}
-	p := heldProduct(t, h, reachCompany(marketing(), nil))
-	r, err := p.Reach(t.Context(), true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(r[0].Unread, "HTTP 401") || strings.Contains(r[0].Unread, "Ignore") {
-		t.Fatalf("the refusal is said as %q", r[0].Unread)
+	for status, want := range map[int]string{
+		http.StatusUnauthorized: "HTTP 401): check the team's keys",
+		http.StatusBadRequest:   "HTTP 400); Crewlet tries again",
+	} {
+		h := &held{status: status, asked: make(chan struct{}, 8)}
+		p := heldProduct(t, h, reachCompany(marketing(), nil))
+		r, err := p.Reach(t.Context(), true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(r[0].Unread, want) || strings.Contains(r[0].Unread, "Ignore") {
+			t.Errorf("HTTP %d is said as %q, want %q", status, r[0].Unread, want)
+		}
 	}
 }
 
