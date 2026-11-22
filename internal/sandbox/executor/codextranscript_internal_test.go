@@ -45,8 +45,8 @@ func codexArchive(t *testing.T, rollout []byte) []byte {
 //
 // Mutation: read event_msg items, read harness-written user messages as
 // briefs, drop the namespace from an MCP tool, read the note as a brief, drop
-// the summary, say the fragment, or skip an unknown item silently, and the
-// kinds below differ.
+// the summary, say the fragment or fail the read on it (codexRecordOf), or
+// skip an unknown item silently, and the kinds below differ.
 func TestACodexTranscriptIsTheSessionAsAPersonReadsIt(t *testing.T) {
 	t.Parallel()
 	more := strings.Join([]string{

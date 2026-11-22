@@ -112,6 +112,16 @@ type codexResponseItem struct {
 	Meta      codexItemMeta   `json:"internal_chat_message_metadata_passthrough"`
 }
 
+// codexRecordOf is body as a rollout record, false for a FRAGMENT: a line
+// that does not decode is one Codex left where it was cut off, which it skips,
+// writing the next record on a line of its own (measured on 0.171.0), so the
+// fragment was never part of the session and makes no entry, never the read's
+// failure.
+func codexRecordOf(body []byte) (codexTranscriptLine, bool) {
+	var line codexTranscriptLine
+	return line, wireDecode(body, &line) == nil
+}
+
 // codexLine adds the entries one rollout line makes: a user message's brief
 // (or the notes it carries), the model's words, a call and its answer, a
 // compaction's summary. Bookkeeping lines (session_meta, turn_context, the
@@ -119,12 +129,9 @@ type codexResponseItem struct {
 // none, as do kinds a later release adds, and a line that is no record; an
 // item of a kind this read does not know is said.
 func (b *transcriptBuilder) codexLine(body []byte) error {
-	var line codexTranscriptLine
-	if wireDecode(body, &line) != nil {
-		// A FRAGMENT Codex left where it was cut off: it skips the line and
-		// writes the next record on a line of its own (measured on 0.171.0),
-		// so the fragment was never part of the session.
-		return nil //nolint:nilerr // a fragment is no record: skipped, never the read's failure
+	line, record := codexRecordOf(body)
+	if !record {
+		return nil
 	}
 	at := codexInstant(line.Timestamp)
 	switch line.Type {
