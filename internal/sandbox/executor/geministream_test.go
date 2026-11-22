@@ -255,3 +255,59 @@ func TestOnlyATerminalQuotaAtTheRunsOwnFailureSitsAGeminiEntryOut(t *testing.T) 
 		})
 	}
 }
+
+// A CONTINUED GEMINI RUN IS CHARGED ITS OWN RESPONSES, NOT ITS SESSION'S. A
+// headless resume reports only the process's own stream totals, so the chat
+// file's split is the run's only where it leaves out what the session held as
+// the run started. The session 0.70.0 wrote (session-tools.jsonl, three
+// responses) is listed before the run (`ids`), the resumed run appends one
+// response of the same shape, and the usage line charges that one alone.
+//
+// Mutations, each red: list no response before the run; sum the file whatever
+// the list names; list each entry rather than each response.
+func TestAContinuedGeminiRunIsChargedItsOwnResponses(t *testing.T) {
+	t.Parallel()
+	node := geminiNode(t)
+	chats := t.TempDir()
+	const session = "842120d9-2536-4808-8ba9-437d34456f75"
+	file := filepath.Join(chats, "session-2026-11-21T18-48-842120d9.jsonl")
+	held := geminiFixture(t, "session-tools.jsonl")
+	if err := os.WriteFile(file, held, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	helper := filepath.Join(".", "gemini_helper.mjs")
+	ids, err := exec.CommandContext(t.Context(), node, helper, "ids", chats, session).Output()
+	if err != nil {
+		t.Fatalf("the helper's ids: %v", err)
+	}
+	want := "8b3b6c59-1fd4-4048-8954-f05684ee2f4f\n5a74d896-f691-4287-bca9-99845c7f923d\n" +
+		"881853cd-0513-4cbd-b8bd-5bc81ae51ac1\n"
+	if string(ids) != want {
+		t.Fatalf("the session held %q as the run started, want its three responses %q", ids, want)
+	}
+	before := filepath.Join(t.TempDir(), "before")
+	if err := os.WriteFile(before, ids, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// THE RESUMED RUN'S RESPONSE: the capture's last, under an id of its own.
+	lines := strings.Split(strings.TrimSuffix(string(held), "\n"), "\n")
+	var last string
+	for _, l := range lines {
+		if strings.Contains(l, `"type":"gemini"`) {
+			last = l
+		}
+	}
+	own := strings.Replace(last, "881853cd-0513-4cbd-b8bd-5bc81ae51ac1", "resumed-response-1", 1)
+	if err := os.WriteFile(file, append(held, own+"\n"...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	usage, err := exec.CommandContext(t.Context(), node, helper, "usage", chats, session, before).Output()
+	if err != nil {
+		t.Fatalf("the helper's usage: %v", err)
+	}
+	const charged = `{"type":"crewlet_gemini_usage","session_id":"` + session + `","requests":1,` +
+		`"tokens":{"input":1000,"output":50,"cached":400,"thoughts":30,"tool":7}}` + "\n"
+	if string(usage) != charged {
+		t.Errorf("the continued run is charged %s, want its one response: %s", usage, charged)
+	}
+}

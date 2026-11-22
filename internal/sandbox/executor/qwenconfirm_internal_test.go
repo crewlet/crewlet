@@ -111,7 +111,7 @@ func TestAQwenCodeNoteIsConfirmedByItsRecordAsHanded(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			got, err := qwenNotesHeld(bytes.NewReader([]byte(tc.session)), tc.takes, qwenTestBound)
+			got, err := qwenNotesHeld(bytes.NewReader([]byte(tc.session)), tc.takes, 0, qwenTestBound)
 			if err != nil || !slices.Equal(got, tc.want) {
 				t.Fatalf("qwenNotesHeld = %v, %v; want %v", got, err, tc.want)
 			}
@@ -123,10 +123,14 @@ func TestAQwenCodeNoteIsConfirmedByItsRecordAsHanded(t *testing.T) {
 // file sits under the home's projects directory in a folder keyed by the
 // run's working directory, which the runner does not know: notesHeld finds
 // it by the session's id alone, reads the notes it holds, holds none where no
-// file names the session, and refuses an id that names a path.
+// file names the session, and refuses an id that names a path. It reads only
+// past where the box's last run began in the session (the note's record is
+// line 12): an earlier job's record is no delivery of this run's note of the
+// same text; another session's start moves nothing.
 //
 // Mutations, each red: look under a fixed project key; answer an error for a
-// session with no file.
+// session with no file; read the record before the run's start; take another
+// session's start.
 func TestAQwenCodeSessionsRecordIsFoundByItsID(t *testing.T) {
 	t.Parallel()
 	local, err := sandbox.NewLocal(sandbox.LocalOptions{Placement: sandbox.Direct, StateDir: t.TempDir()})
@@ -158,6 +162,19 @@ func TestAQwenCodeSessionsRecordIsFoundByItsID(t *testing.T) {
 	}
 	if _, err = (QwenCode{}).notesHeld(t.Context(), box, Session{ID: "../../x"}, takes); err == nil {
 		t.Error("an id naming a path was read")
+	}
+	for start, want := range map[string][]string{
+		session + " 13\n": nil,
+		session + " 12\n": {"i-1"},
+		"11111111-2222-4333-8444-000000000002 13\n": {"i-1"},
+	} {
+		if err := box.WriteFile(t.Context(), PathsFor(box).QwenRunStart(), []byte(start)); err != nil {
+			t.Fatal(err)
+		}
+		if held, err := (QwenCode{}).notesHeld(t.Context(), box, Session{ID: session}, takes); err != nil ||
+			!slices.Equal(held, want) {
+			t.Errorf("with the run's start %q, notesHeld = %v, %v; want %v", start, held, err, want)
+		}
 	}
 }
 
@@ -245,7 +262,7 @@ func TestANoteACompactionKeepsOnlyInItsSummaryIsNotRead(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			got, err := qwenNotesHeld(strings.NewReader(tc.session), qwenTakes(note), maxLineBytes)
+			got, err := qwenNotesHeld(strings.NewReader(tc.session), qwenTakes(note), 0, maxLineBytes)
 			if err != nil || !slices.Equal(got, tc.want) {
 				t.Fatalf("qwenNotesHeld = %v, %v; want %v", got, err, tc.want)
 			}

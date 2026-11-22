@@ -417,15 +417,15 @@ func TestTheSessionsARunRanOutInAreBounded(t *testing.T) {
 
 // A LAUNCH ON A HARNESS THAT CONTINUES NO SESSION STARTS ONE OF ITS OWN, handed
 // the fresh brief, whatever session its box or its turn keeps: handed one to
-// continue, its runner would refuse the run (Gemini CLI's, until it carries
-// its sessions).
+// continue, its runner would refuse the run. The fake stands in for such a
+// harness ([freshStarter]).
 //
 // Mutations, each red: drop the check from continueSession (the box's copy is
 // continued); read StartsFresh as false for every runner.
 func TestALaunchOnAHarnessThatContinuesNoSessionStartsItsOwn(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
-	runner := NewFakeRunner("gemini-cli")
+	runner := NewFakeRunner("fresh-harness")
 	runner.Fresh = true
 	req := launchReq("t1")
 	req.Brief = "the fresh brief"

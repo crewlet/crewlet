@@ -135,6 +135,8 @@ const (
 	ClaudeProjectDir      = claudeProjectDir
 	ClaudeArchiveFormat   = claudeArchiveFormat
 	OpenCodeArchiveFormat = openCodeArchiveFormat
+	GeminiArchiveFormat   = geminiArchiveFormat
+	QwenArchiveFormat     = qwenArchiveFormat
 )
 
 // HeldPlainMax is the most plaintext a pack beside a working harness packs

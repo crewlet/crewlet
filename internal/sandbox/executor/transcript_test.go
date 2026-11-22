@@ -1464,8 +1464,8 @@ func TestTheTranscriptBoundsAreTheEnginesOwn(t *testing.T) {
 // EVERY HARNESS THIS BUILD DRIVES THAT CONTINUES SESSIONS CARRIES THEM, and the
 // transcript is read for each in the one format its runner packs: the
 // harnesses whose session is read are the harnesses [executor.Names] lists,
-// from one list, but one whose every launch starts a session of its own
-// (Gemini CLI's), which keeps none to carry.
+// from one list, but one whose every launch starts a session of its own,
+// which keeps none to carry.
 //
 // Mutation: list a harness that continues sessions and carries none, or read
 // one in a format its runner does not pack, and a row goes red.
@@ -1474,6 +1474,8 @@ func TestEveryHarnessThisBuildDrivesCarriesItsSession(t *testing.T) {
 	formats := map[string]int{
 		executor.ClaudeCodeName: executor.ClaudeArchiveFormat,
 		executor.OpenCodeName:   executor.OpenCodeArchiveFormat,
+		executor.GeminiCLIName:  executor.GeminiArchiveFormat,
+		executor.QwenCodeName:   executor.QwenArchiveFormat,
 	}
 	for _, name := range executor.Names() {
 		if executor.RunnerNamed(name).StartsFresh() {
