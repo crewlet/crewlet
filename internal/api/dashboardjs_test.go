@@ -1079,7 +1079,7 @@ const (
 	// at 3 MiB over a 2.3 MB baseline and is set so a bundle that doubled the
 	// baseline is still refused; screens fetched only when opened (the rich
 	// editor, the brand and folder screens, the assistant's panel, Gitlet) and
-	// kit releases account for its growth, and the last measure was 7309.3 KiB,
+	// kit releases account for its growth, and the last measure was 7309.7 KiB,
 	// after a requirement set listed once in Have ready, the form and the
 	// Settings summary. A raise names the measured size and its cause in its
 	// commit.
