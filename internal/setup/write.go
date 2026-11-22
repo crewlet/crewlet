@@ -222,6 +222,11 @@ func (w Writer) Write(ctx context.Context, reqs []Requirement, in Submission) (R
 		return Result{}, badValue
 	}
 	in.Values = normalised
+	// A SET LEFT SHORT is refused here, at its field, before a key is sealed:
+	// config would refuse the block after the seal, naming its path.
+	if short := CheckSets(reqs, in.Values); short != nil {
+		return Result{}, &ValueError{Field: short.Field, ConfigPath: short.ConfigPath, Problem: short.Problem}
+	}
 
 	// The patch is built BEFORE anything is written, so a submission naming
 	// a field this third-party app does not have is refused having changed
@@ -523,7 +528,8 @@ func fields(reqs []Requirement) []string {
 // operator back to a form to delete a character they cannot see. An INTERIOR
 // space is different: nothing sensible produces one, so it is a wrong value
 // rather than an untidy one, and accepting it would store an address no
-// third-party app answers to.
+// third-party app answers to. A pasted key's line breaks are written back
+// ([Shape.Canonical]) before it is judged, so what is sealed is what passed.
 func normalise(reqs []Requirement, values map[string]string) (map[string]string, error) {
 	byField := map[string]Requirement{}
 	for _, r := range reqs {
@@ -533,6 +539,7 @@ func normalise(reqs []Requirement, values map[string]string) (map[string]string,
 	for field, value := range values {
 		trimmed := strings.TrimSpace(value)
 		if r, ok := byField[field]; ok {
+			trimmed = r.Shape.Canonical(trimmed)
 			if refused := r.Refusal(trimmed); refused != nil {
 				return nil, refused
 			}

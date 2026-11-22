@@ -68,6 +68,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/envref"
@@ -221,6 +222,11 @@ type Requirement struct {
 	//
 	// Nil is the ordinary requirement, answering to [Required] alone.
 	RequiredWhen *Gate `json:"required_when,omitempty"`
+
+	// Set is the list this requirement is one entry's field of, nil for a
+	// field on its own. A member is required once its entry is started, and
+	// the set by its Min, never by Required ([Set]).
+	Set *Set `json:"set,omitempty"`
 
 	// Required reports whether the integration can work without this.
 	// A false one is still worth showing: it is usually the difference
@@ -476,7 +482,11 @@ func (r Requirement) MarshalJSON() ([]byte, error) {
 	out := struct {
 		wire
 		Value string `json:"value,omitempty"`
-	}{wire: wire(r)}
+		// Multiline and Accept are the Shape's, for a form that draws a box
+		// keeping line breaks and offers a file of these types.
+		Multiline bool   `json:"multiline,omitempty"`
+		Accept    string `json:"accept,omitempty"`
+	}{wire: wire(r), Multiline: r.Shape.Multiline(), Accept: r.Shape.Accept()}
 	switch {
 	case r.Kind != KindSecret:
 		out.Value = r.Stored
@@ -519,11 +529,21 @@ func (r Requirement) Satisfied() bool {
 
 // Outstanding returns the requirements that are required and not satisfied,
 // in the order they were declared.
+//
+// A SET BELOW ITS Min is outstanding as its first field: the entry a form
+// offers first, and a name a client can place the set's refusal by.
 func Outstanding(reqs []Requirement) []Requirement {
 	out := []Requirement{}
 	for _, r := range reqs {
 		if r.Needed(reqs) && !r.Satisfied() {
 			out = append(out, r)
+		}
+	}
+	if short := CheckSets(reqs, nil); short != nil {
+		for _, r := range reqs {
+			if r.Field == short.Field && !slices.ContainsFunc(out, func(o Requirement) bool { return o.Field == r.Field }) {
+				out = append(out, r)
+			}
 		}
 	}
 	return out
@@ -549,7 +569,12 @@ type Gate struct {
 //
 // A gate naming a field not in the list is CLOSED: reading a typo as "always
 // required" would turn a vendor's mistake into every company's blocked connect.
+//
+// A SET'S FIELD is needed once its entry is started, whatever Required says.
 func (r Requirement) Needed(among []Requirement) bool {
+	if r.Set != nil {
+		return started(r, among, stored)
+	}
 	if r.RequiredWhen == nil {
 		return r.Required
 	}
