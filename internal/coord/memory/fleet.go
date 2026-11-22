@@ -64,6 +64,9 @@ type Fleet struct {
 	// counter its revisions are drawn from.
 	accessReviews        map[string]accessReview
 	accessReviewRevision uint64
+	// homeBoards is each seat's Home board, by handle, its revisions drawn
+	// from version.
+	homeBoards map[string]homeBoard
 	// atlasWakes is each owning seat's atlas wake record, by its key, and the
 	// counter its revisions are drawn from.
 	atlasWakes        map[string]coord.AtlasWake
@@ -158,7 +161,7 @@ type Fleet struct {
 	googleIdentities entryRecords[coord.GoogleIdentity, coord.GoogleIdentity]
 
 	// version is the one counter every versioned write draws from, sandbox
-	// runs, mailbox records and chat read records alike. Store-wide rather
+	// runs, mailbox records, chat read records and Home boards alike. Store-wide rather
 	// than per record, as a KV revision is, so a record deleted and created
 	// again never hands back a version an older incarnation of it already
 	// used: a caller still holding that version must lose, not win against a
@@ -228,6 +231,7 @@ func NewFleet() *Fleet {
 		seatAccess:        map[string]map[string][]byte{},
 		grantRequests:     map[string][]byte{},
 		accessReviews:     map[string]accessReview{},
+		homeBoards:        map[string]homeBoard{},
 		atlasWakes:        map[string]coord.AtlasWake{},
 		conversationHolds: map[uuid.UUID]map[string]coord.ConversationHold{},
 		seen:              map[string]seenMark{},

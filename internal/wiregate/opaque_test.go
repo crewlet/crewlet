@@ -77,6 +77,7 @@ var opaqueFields = func() map[string]carried {
 		"internal/api/queries.ModelCheck.check":                {types: []string{"internal/api/llmapi.CheckAnswer", "internal/api/llmapi.CheckLine"}},
 		"internal/api/queries.SettingRow.value":                {reason: "a setting's value: a string, a list of them or a bool"},
 		"internal/api/queries.SettingRow.default":              {reason: "a setting's default: a string, a list of them or a bool"},
+		"internal/api/queries.homeBoardAnswer.board":           {reason: "a person's Home board as the dashboard saved it, which the engine never reads inside"},
 		"internal/api/stream.Envelope.data":                    {reason: "built only in internal/api/stream, so the walk reads every value it holds as a root"},
 		"internal/assistant/wire.PageActionRef.payload":        {reason: modelArgs},
 		"internal/assistant/wire.TableCard.rows":               {reason: "a table's cells: strings, numbers and nulls"},
