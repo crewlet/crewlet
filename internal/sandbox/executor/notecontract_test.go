@@ -59,6 +59,12 @@ var noteFixtures = map[string]noteFixture{
 		confirms: qwenHelperConfirmsEachNoteByItsRecord,
 		reaches:  qwenHelperReachesTheBridgesOwnNotesRoute,
 	},
+	executor.KimiName: {
+		reads:    true,
+		wakeRead: executor.KimiWakeRead,
+		confirms: executor.KimiConfirmsATake,
+		reaches:  kimiReachesTheBridgesRoute,
+	},
 }
 
 // noteFixtureOf is h's fixture, failing the case where h supplies none.

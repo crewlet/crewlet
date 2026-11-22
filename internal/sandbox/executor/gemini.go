@@ -314,7 +314,8 @@ func geminiSettings(req sandbox.RunRequest, paths Paths, hooked bool) map[string
 		"experimental": map[string]any{"enableAgents": false},
 	}
 	// The run's round cap, as Gemini CLI caps a session's turns: it ends the
-	// run exit 53, a FatalTurnLimitedError (the profile's cap, measured).
+	// run with a FatalTurnLimitedError, which reads as the cap
+	// ([geminiTurnLimitError]).
 	if req.Limits.MaxTurns > 0 {
 		settings["model"] = map[string]any{"maxSessionTurns": req.Limits.MaxTurns}
 	}

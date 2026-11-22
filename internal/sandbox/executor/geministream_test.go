@@ -114,6 +114,44 @@ func TestAFailedGeminiRunSaysHow(t *testing.T) {
 	}
 }
 
+// A GEMINI RUN'S ROUND CAP IS ITS SESSION TURN CAP, AND A RUN THAT REACHES IT
+// READS AS CAPPED. The run's settings carry the cap as model.maxSessionTurns,
+// and none where the run is uncapped; on 0.70.0's own stream of a run capped
+// at 2, whose result ended it with a FatalTurnLimitedError after its second
+// request's call, the run failed as one that reached its cap, which the
+// engine records as ExecutorErrorMaxTurns. Every other failure measured reads
+// as it did.
+//
+// Mutations, each red: leave the cap out of the settings; read the cap off
+// anything but the result error's type (every failure capped, or none);
+// leave "turn cap" out of the error.
+func TestAGeminiRunsRoundCapIsItsSessionTurnCapAndReadsAsCapped(t *testing.T) {
+	t.Parallel()
+	settings, _, _ := writtenGemini(t, sandbox.RunRequest{System: "SYSTEM", Brief: "x",
+		Limits: sandbox.Limits{MaxTurns: 2}})
+	if model, _ := settings["model"].(map[string]any); model["maxSessionTurns"] != float64(2) {
+		t.Errorf("a run capped at 2 writes model %v, want maxSessionTurns 2", settings["model"])
+	}
+	settings, _, _ = writtenGemini(t, sandbox.RunRequest{System: "SYSTEM", Brief: "x"})
+	if model, ok := settings["model"]; ok {
+		t.Errorf("an uncapped run writes model %v, want none", model)
+	}
+	res := executor.GeminiCLI{}.Parse(geminiFixture(t, "stream-turn-cap.jsonl"))
+	if res.Success || !res.RoundCapped || !strings.Contains(res.Error, "turn cap") {
+		t.Errorf("a run ended at its cap reads %q (success %v, capped %v), want it failed at its turn cap",
+			res.Error, res.Success, res.RoundCapped)
+	}
+	if res.Turns != 2 {
+		t.Errorf("the capped run made %d requests, want the 2 its cap allowed", res.Turns)
+	}
+	for _, fixture := range []string{"stream-daily-quota.jsonl", "stream-per-minute.jsonl", "stream-context.jsonl"} {
+		if res := (executor.GeminiCLI{}).Parse(geminiFixture(t, fixture)); res.RoundCapped ||
+			strings.Contains(res.Error, "turn cap") {
+			t.Errorf("%s reads as capped (%q)", fixture, res.Error)
+		}
+	}
+}
+
 // A GEMINI RUN IS CHARGED ITS REASONING AND ITS TOOL PROMPT: stream-json's
 // result splits only the prompt and the reply out of its total, and the
 // helper's sums off 0.70.0's own chat file (each response once although 0.70.0
