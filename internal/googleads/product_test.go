@@ -100,6 +100,8 @@ type fakeAds struct {
 	// the access log says they came to.
 	batchOps int
 	staged   growth.Class
+	// brokenCustomer answers the customer's own search with what is no JSON.
+	brokenCustomer bool
 }
 
 // note adds what happened to the trace.
@@ -164,6 +166,8 @@ func (f *fakeAds) serve(w http.ResponseWriter, r *http.Request) {
 		f.trace = append(f.trace, "write "+r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:])
 	}
 	switch {
+	case strings.HasSuffix(r.URL.Path, "/googleAds:search") && f.brokenCustomer && strings.Contains(query, "FROM customer"):
+		_, _ = w.Write([]byte("not json"))
 	case strings.HasSuffix(r.URL.Path, "/googleAds:search"):
 		answer(map[string]any{"results": f.search(query)})
 	case strings.HasSuffix(r.URL.Path, ":listPlannableUserLists"):
@@ -685,5 +689,36 @@ func TestAWriteIsClassedByWhatGoogleReads(t *testing.T) {
 	}
 	if w.f.campaigns[pausedC][0] != "PAUSED" || w.f.writes != 0 {
 		t.Errorf("the paused campaign is %s after %d writes", w.f.campaigns[pausedC][0], w.f.writes)
+	}
+}
+
+// A SEARCH SERVING AN APPLY THAT GOOGLE ANSWERS UNREADABLY FAILS THE ACT AS
+// GOOGLE'S, never as an outcome not known: nothing was written.
+//
+// Mutation: fail an unreadable search as unknown_outcome, and the log says a
+// write may have happened that was never sent.
+func TestAnUnreadableSearchIsNoUnknownOutcome(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	call := growth.Call{Handle: "growth-lead", Tool: "google_ads_set_budget",
+		Args: map[string]any{"budget": budget1, "amount": "120.00"}}
+	hold, err := w.p.Prepare(t.Context(), call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.f.mu.Lock()
+	w.f.brokenCustomer = true
+	w.f.mu.Unlock()
+	call.HeldCall, call.Approver = "held-1", "founder"
+	if _, err := w.p.Apply(t.Context(), call, hold.Binding); err == nil {
+		t.Fatal("an apply whose caps could not be read was made")
+	}
+	w.audit.mu.Lock()
+	defer w.audit.mu.Unlock()
+	last := w.audit.recs[len(w.audit.recs)-1]
+	if w.audit.steps[len(w.audit.steps)-1] != growth.StepFailed || last.Failure != growth.FailureVendorUnavailable ||
+		w.f.writes != 0 {
+		t.Errorf("the apply is recorded %s %q after %d writes", w.audit.steps[len(w.audit.steps)-1], last.Failure,
+			w.f.writes)
 	}
 }
