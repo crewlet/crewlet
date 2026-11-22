@@ -62,7 +62,6 @@ export const HARNESS_FACTS: Readonly<Record<string, HarnessFacts>> = {
   },
   codex: {
     binary: "codex",
-    executor: true,
     webDeniable: true,
     signIns: ["api-key", "device", "host-login"],
     keyEnv: "CODEX_API_KEY",
