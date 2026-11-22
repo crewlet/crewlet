@@ -2175,12 +2175,16 @@ the server the id of the session the run works in, as `CREWLET_STEER_SESSION` on
   brief.
 - **It confirms only what the model is sent plain**: OpenCode runs the
   plugin's `context` hook on every model request before sending it, and only
-  where a user message of that request *is* the note (one text part, equal to
-  its text) does the plugin post the note's id to the route's `read`, which
+  where a user message of that request *is* the note (the message OpenCode made
+  of the plugin's own admission, under the id it admitted the note with, one
+  text part equal to its text) does the plugin post the note's id to the
+  route's `read`, which
   records it read by the run's job (`boundary: step`). Delivery alone
   (`session.inbox.delivered`) is not enough: a step boundary that tips the
   session past its compaction point delivers the note and then compacts, and
-  the model gets it only inside the checkpoint, framed as history.
+  the model gets it only inside the checkpoint, framed as history. A note of
+  the same words, or an earlier run's message, confirms nothing, and no request
+  between a compaction's start and end confirms anything.
   - A note delivered and never sent plain when the session's compaction ends
     is **admitted again once**, under a second id the plugin asks the route's
     `again` for then, and lands plain at the next step. The engine grants it

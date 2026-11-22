@@ -257,11 +257,15 @@ func (p *probe) sees(name, session string, messages ...map[string]any) {
 	}
 }
 
-// userText is a user message of a model request as OpenCode hands its hooks
-// one: a single text part.
-func userText(text string) map[string]any {
-	return map[string]any{"role": "user", "content": []map[string]any{{"type": "text", "text": text}}}
+// userText is a user message of a model request as OpenCode 2.3.0 hands its
+// hooks one: its id and a single text part.
+func userText(id, text string) map[string]any {
+	return map[string]any{"id": id, "role": "user", "content": []map[string]any{{"type": "text", "text": text}}}
 }
+
+// plainNote is note as the message OpenCode made of its admission: under the
+// id the note was admitted under, its words whole.
+func plainNote(note mcpbridge.SteerNote) map[string]any { return userText(note.Inbox, note.Message) }
 
 // expect is the probe's next report but a subscription's, which must be op.
 func (p *probe) expect(op string) probeReport {
@@ -463,16 +467,16 @@ func pluginAdmitsNotesAtTheRunsNextStep(t *testing.T) {
 		// CONFIRMED ONLY ONCE ITS OWN SESSION'S MODEL IS SENT IT PLAIN, never on
 		// its delivery alone: delivered, a compaction can still fold it.
 		pr.event("a", "session.inbox.delivered", steerSession, map[string]any{"inboxID": first.Inbox})
-		pr.sees("a", otherSession, userText(first.Message))
-		pr.sees("a", steerSession, userText("Fix the flake."))
+		pr.sees("a", otherSession, plainNote(first))
+		pr.sees("a", steerSession, userText("msg_brief", "Fix the flake."))
 		route.none(300*time.Millisecond, "no model request of the plugin's session carried the note")
-		pr.sees("a", steerSession, userText("Fix the flake."), userText(first.Message))
+		pr.sees("a", steerSession, userText("msg_brief", "Fix the flake."), plainNote(first))
 		read := route.next("POST read", "confirm the note its session's model is sent")
 		if read.body != `{"ids":["note-1"]}` {
 			t.Errorf("the confirmation reads %s, want the note's id", read.body)
 		}
 		read.reply(http.StatusNoContent, "")
-		pr.sees("a", steerSession, userText("Fix the flake."), userText(first.Message))
+		pr.sees("a", steerSession, userText("msg_brief", "Fix the flake."), plainNote(first))
 		route.none(300*time.Millisecond, "the note was confirmed already")
 
 		// THE EXECUTION SETTLES: the held poll is let go and nothing more is
@@ -648,7 +652,7 @@ func pluginAdmitsNotesAtTheRunsNextStep(t *testing.T) {
 		pr.expect("prompt-started")
 		pr.expect("prompt")
 		held := route.next("GET notes", "poll past the admitted note")
-		pr.sees("a", steerSession, userText(first.Message))
+		pr.sees("a", steerSession, plainNote(first))
 		route.next("POST read", "confirm the note sent plain").reply(http.StatusNotFound, `{"error":"not_found"}`)
 		route.letGo(held, "the route answered that the run has no notes")
 		route.none(2500*time.Millisecond, "the route answered that the run has no notes")
@@ -769,7 +773,7 @@ func pluginReadsTheBridgesOwnNotesRoute(t *testing.T) {
 			t.Fatal("the stand-in refused an admission it was not told to")
 		}
 	}
-	pr.sees("a", steerSession, userText(note.Message))
+	pr.sees("a", steerSession, plainNote(note))
 	// ONE BOUND FOR THE CASE'S TWO CROSSINGS, the read and the fold.
 	deadline := time.After(10 * time.Second)
 	select {
