@@ -2356,8 +2356,8 @@ cursor-agent:
     - sentinel: "Authentication required"
 
 copilot:
-  # The in-box runner (internal/sandbox/executor's copilot.go), on 1.0.114 or
-  # later. No refuses_root: 1.0.114 ran --yolo as uid 0 and ran its tools
+  # The in-box runner (internal/sandbox/executor's copilot.go), on 1.0.114, the
+  # release supported. No refuses_root: 1.0.114 ran --yolo as uid 0 and ran its tools
   # (measured in a node:24-bookworm container). E2B's prebuilt `copilot`
   # template (docs.e2b.dev/agents/copilot-cli) pins no release of ours; the
   # run's script refuses one below 1.0.114.
@@ -2365,7 +2365,7 @@ copilot:
     runner: true
     e2b_template: copilot
   binary: copilot
-  written_for: "GitHub Copilot CLI 1.0.x, measured on 1.0.103 and 1.0.114 (`copilot --version`)"
+  written_for: "GitHub Copilot CLI 1.0.114 (`copilot --version`)"
   version_args: ["--version"]
   # EVERY FLAG BELOW KEEPS THE HARNESS TO ITS CALL. Measured on 1.0.103 through
   # the engine's own code path, on a custom provider (COPILOT_PROVIDER_BASE_URL
