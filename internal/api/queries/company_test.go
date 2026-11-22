@@ -2526,8 +2526,12 @@ func TestEveryIntegrationKindCanBeReported(t *testing.T) {
 	cfg.Integrations.Scaleway = &config.Scaleway{Enabled: true}
 	cfg.Integrations.AWS = &config.AWS{Enabled: true}
 	cfg.Integrations.GoogleCloud = &config.GoogleCloud{Enabled: true}
+	cfg.Integrations.GoogleAnalytics = &config.GoogleAnalytics{Enabled: true}
+	cfg.Integrations.AdMob = &config.AdMob{Enabled: true}
 	cfg.Integrations.SSH = &config.SSH{Enabled: true}
+	cfg.Integrations.MetaAds = &config.MetaAds{Enabled: true}
 	cfg.Integrations.AppStoreConnect = &config.AppStoreConnect{Enabled: true}
+	cfg.Integrations.AppleAds = &config.AppleAds{Enabled: true}
 
 	body := asMap(t, answer(t, queries.Sources{
 		Company: companySource(t, cfg),

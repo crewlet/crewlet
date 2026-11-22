@@ -179,7 +179,11 @@ const SURFACE_NAMES: Record<string, string> = {
   aws: "AWS",
   google_cloud: "Google Cloud",
   ssh: "SSH",
+  meta_ads: "Meta Ads Manager",
   app_store_connect: "App Store Connect",
+  apple_ads: "Apple Ads",
+  google_analytics: "Google Analytics",
+  admob: "AdMob",
 };
 
 /** One tool's surfaces, in the engine's grouping, named for this screen. */
@@ -266,12 +270,30 @@ export const CATALOG: Entry[] = [
     doc: "expo",
   },
   {
+    key: "meta_ads",
+    name: "Meta Ads Manager",
+    description:
+      "Ad accounts, campaigns, ad sets, budgets and insights for Facebook and Instagram ads.",
+    vendor: "meta-ads",
+    surfaces: surfacesOf("meta_ads"),
+    doc: "meta-ads",
+  },
+  {
     key: "app_store_connect",
     name: growthProductName("app_store_connect"),
     description: "Apps, listings, reviews and replies, TestFlight, prices, sales and analytics.",
     vendor: "app-store-connect",
     surfaces: surfacesOf("app_store_connect"),
     doc: "app-store-connect",
+  },
+  {
+    key: "apple_ads",
+    name: "Apple Ads",
+    description:
+      "Campaigns, ad groups, keywords, budgets and reports for App Store and Apple Maps ads.",
+    vendor: "apple-ads",
+    surfaces: surfacesOf("apple_ads"),
+    doc: "apple-ads",
   },
   {
     key: "digitalocean",
@@ -306,6 +328,22 @@ export const CATALOG: Entry[] = [
     vendor: "ssh",
     surfaces: surfacesOf("ssh"),
     doc: "ssh",
+  },
+  {
+    key: "google_analytics",
+    name: "Google Analytics",
+    description: "Properties, traffic and conversion reports, and every setting.",
+    vendor: "google-analytics",
+    surfaces: surfacesOf("google_analytics"),
+    doc: "google-analytics",
+  },
+  {
+    key: "admob",
+    name: "AdMob",
+    description: "App earnings, ad units and mediation, and every setting the API offers.",
+    vendor: "google-admob",
+    surfaces: surfacesOf("admob"),
+    doc: "admob",
   },
 ];
 

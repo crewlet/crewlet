@@ -1,6 +1,11 @@
 package setup_test
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"strings"
 	"testing"
@@ -95,10 +100,18 @@ func TestAnIdentifierShapeHoldsAPasteAndRefusesAMint(t *testing.T) {
 		{setup.ShapeScalewayAccessKey, "SCWABCDEFGHIJ0123456", true},
 		{setup.ShapeScalewayAccessKey, "SCWABCDEFGHIJ012345", false},
 		{setup.ShapeScalewayAccessKey, "scwabcdefghij0123456", false},
+		{setup.ShapeMetaToken, "EAAGm0PX4ZCpsBA" + strings.Repeat("Zx9", 12), true},
+		{setup.ShapeMetaToken, "EAAGm0PX4Z", false},
+		{setup.ShapeMetaToken, "eaaGm0PX4ZCpsBA" + strings.Repeat("Zx9", 12), false},
+		{setup.ShapeMetaToken, "EAAGm0PX4ZCpsBA" + strings.Repeat("Zx-", 12), false},
 		{setup.ShapeAppleKeyID, "2X9R4HXF34", true},
 		{setup.ShapeAppleKeyID, "2x9r4hxf34", false},
 		{setup.ShapeAppleKeyID, "2X9R4HXF3", false},
 		{setup.ShapeAppleKey, "-----BEGIN PRIVATE KEY-----\nnot a key\n-----END PRIVATE KEY-----", false},
+		{setup.ShapeAppleAdsKey, sec1Key(t), true},
+		{setup.ShapeAppleAdsKey, "-----BEGIN EC PRIVATE KEY-----\nnot a key\n-----END EC PRIVATE KEY-----", false},
+		{setup.ShapeAppleAdsID, "SEARCHADS.aeb3ef5f-0c5a-4f2a-99c8-fca83f25a9e1", true},
+		{setup.ShapeAppleAdsID, "aeb3ef5f-0c5a-4f2a-99c8-fca83f25a9e1", false},
 	} {
 		problem := tc.shape.Problem("access key", tc.value)
 		if (problem == "") != tc.ok {
@@ -109,10 +122,13 @@ func TestAnIdentifierShapeHoldsAPasteAndRefusesAMint(t *testing.T) {
 		}
 	}
 	for _, shape := range []setup.Shape{setup.ShapeUUID, setup.ShapeScalewayAccessKey, setup.ShapeAppleKey,
-		setup.ShapeAppleKeyID} {
+		setup.ShapeAppleKeyID, setup.ShapeAppleAdsKey, setup.ShapeAppleAdsID} {
 		if value, err := shape.Mint(func() string { return "minted" }); err == nil || value != "" {
 			t.Errorf("%s minted %q", shape, value)
 		}
+	}
+	if value, err := setup.ShapeMetaToken.Mint(func() string { return "minted" }); err == nil || value != "" {
+		t.Errorf("a Meta token was minted: %q", value)
 	}
 }
 
@@ -147,4 +163,18 @@ func TestAGoogleIdentifierIsHeldToItsShapeAndNeverMinted(t *testing.T) {
 			t.Errorf("%s minted %q", shape, value)
 		}
 	}
+}
+
+// sec1Key is a fresh P-256 key as `openssl ecparam -genkey` writes it.
+func sec1Key(t *testing.T) string {
+	t.Helper()
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalECPrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der}))
 }

@@ -281,7 +281,10 @@ export function SettingsSummary({ tool }: { tool: Tool }) {
   const reqs = tool.sections
     .filter((s) => s.seat === undefined)
     .flatMap((s) => s.tool.requirements)
-    .filter((r, i, all) => !r.hidden && all.findIndex((o) => o.field === r.field) === i);
+    .filter(
+      (r, i, all) =>
+        !r.hidden && r.kind !== "add_identity" && all.findIndex((o) => o.field === r.field) === i,
+    );
   if (reqs.length === 0) {
     return <p className="t-caption">Nothing to set for the company as a whole.</p>;
   }

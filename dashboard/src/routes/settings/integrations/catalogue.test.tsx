@@ -693,7 +693,7 @@ test("the catalogue is ordered by name, whatever is connected", () => {
   const names = [...CATALOG].sort((a, b) => a.name.localeCompare(b.name)).map((e) => e.name);
   expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b)));
   // And the order does not depend on state: the same list, connected or not.
-  expect(names[0]).toBe("App Store Connect");
+  expect(names[0]).toBe("AdMob");
   expect(names.at(-1)).toBe("SSH");
 });
 

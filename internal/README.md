@@ -103,7 +103,9 @@
 | `delegated` | Delegated decisions (ADR-0125): the typed act of a request that waits on a person, how a panel's verdicts combine, and the engine's limits, escalating paths and required checks that bound a delegate; values only. |
 | `growth` | The marketing and growth integrations' vocabulary: the six classes, seat levels, each product's catalog of every vendor operation, money in micros, account-local days, report answers and the metrics (ADR-0170, ADR-0171). |
 | `spendguard` | Holds an ad product's spend to the company's per-account caps at the ask and again at the apply, under one lease per account; micros only, and `spendguardtest` is the one contract every capacity runs. |
+| `metaads` | Meta Ads as a growth product: every Marketing API operation an ads integration reaches, classed in its catalog, called as one system user of the company's own app through the least privileged token, scoped to the seat's ad accounts, spend held to the caps (ADR-0170, ADR-0171). |
 | `appstoreconnect` | App Store Connect as a growth product: every operation of Apple's API classed in its catalog, each call signed for itself with the least-privileged team key, scoped to the seat's apps, public and admin acts held (ADR-0170, ADR-0171). |
+| `appleads` | Apple Ads as a growth product: every Platform API operation classed in its catalog, called as the company's API users with roles read live per ad account, scoped to the seat's ad accounts, spend held to the caps (ADR-0170, ADR-0171). |
 | `es256` | Signs a JWT with ES256 (ECDSA P-256 over SHA-256) on the standard library alone, as Apple's APIs take it. |
 | `worklet` | Worklet, the engine's own work tracker and `statelog`'s first domain: its records, subjects, writer, applier, reads and the routing of who hears about a change. |
 | `changefeed` | Durable, fleet-wide pull consumer over a state log that derives a wake from each committed record, with replay and dead-lettering of records a node cannot read |
@@ -203,6 +205,9 @@
 | `maintenance` | The retention sweep for short-horizon tables, state-log operation ledgers, coordination removal markers, removed seats' chat read state and Home boards, and mailbox retirement; a fleet singleton, never a replicated row |
 | `mattermost`, `slack`, `gitlab`, `github`, `jira`, `confluence`, `datadog`, `cloudflare`, `expo`, `digitalocean`, `scaleway`, `googlecloud`, `atlassian`, `aws`, `ssh` | The vendor integrations: each vendor's client, inbound parsing, prompt, seat access and atlas read. |
 | `googleauth` | Every way the engine gets a Google token: the company's Google identity by federation, impersonation by scope, the token caches and the one call path to Google. |
+| `googlegrowth` | What every Google growth product shares: a request held to its operation's resource, sent as the seat's growth identity, bound to its live target and recorded on the access log. |
+| `admob` | AdMob: every method of its API in one catalog, offered as growth tools at the seat's level and publisher accounts, as the company's consent grant. |
+| `googleanalytics` | Google Analytics 4: every Data, Admin and Measurement Protocol method in one catalog, offered as growth tools at the seat's level and properties, as its Google growth identity. |
 | `origin` | records where a failure left the engine's own code: a deferred stamp names the function a failure passed through. |
 | `issuereport` | Opt-in anonymous reports of the engine's own defects, built from typed fields only and filed by a relay as GitHub issues. |
 | `panics` | The one way a contained panic is read: every `recover()` that keeps a defect from ending the process calls `Recovered`, which names the panicking function and its kind and tells the observers. |

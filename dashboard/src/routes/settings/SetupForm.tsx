@@ -79,6 +79,7 @@ import { SETUP_ASSISTANT_HELP, setupDraftFields } from "./setupDraft.ts";
 import { linkSegment } from "~/lib/segment.ts";
 import { withLink, type FieldLink } from "./setupWords.tsx";
 import { SetupStepsAside, SetupStepsSheet } from "./SetupSteps.tsx";
+import { AddIdentity } from "~/components/growth/SetupSteps.tsx";
 import { useNarrowerThan } from "~/lib/useNarrowerThan.ts";
 import { SERVICE_NAMES } from "~/lib/services.ts";
 import { useWaiting } from "~/lib/waiting.ts";
@@ -256,6 +257,7 @@ export function FieldHelp({
 /** The kit's input for a requirement's kind: a toggle is a two-way choice. A
  * `consent` requirement is a sign-in, never a value ([ConsentSignIn]). */
 export function valueKind(kind: Exclude<SetupRequirementKind, "consent">): ValueFieldKind {
+  if (kind === "add_identity") return "text";
   return kind === "toggle" ? "choice" : kind;
 }
 
@@ -858,6 +860,8 @@ export function SetupForm({
   const editable = useCallback(
     (section: SetupSection, r: SetupRequirement) => {
       const own = shownBy.get(sectionKey(section)) ?? [];
+      // AN IDENTITY STEP IS DONE AT THE VENDOR: the form shows it and holds no value for it.
+      if (r.kind === "add_identity") return false;
       return publicView(r) === undefined && shownField(r, answeredIn(section, own));
     },
     [shownBy, answeredIn],
@@ -971,7 +975,7 @@ export function SetupForm({
     const send: Record<string, string> = {};
     const generate: string[] = [];
     for (const r of reqs) {
-      if (r.kind === "consent") continue;
+      if (r.kind === "add_identity" || r.kind === "consent") continue;
       if (r.kind === "secret" && r.mintable) {
         // ONLY WHERE THERE IS NOTHING YET. A mintable credential this
         // company already holds is left alone: regenerating one is a
@@ -1513,7 +1517,9 @@ export function SetupForm({
     const help = <FieldHelp r={r} fill={fill} link={fieldLink(section, r)} />;
     return (
       <div key={key} className="col gap-1">
-        {r.kind === "consent" ? (
+        {r.kind === "add_identity" && r.identity ? (
+          <AddIdentity step={r.identity} product={section.name} why={r.hint} />
+        ) : r.kind === "consent" ? (
           <ConsentSignIn kind={section.tool.key} label={r.label} signedIn={r.present} help={help} />
         ) : shown ? (
           // WHAT THE ENGINE RENDERED, copied whole: a block a person pastes
