@@ -69,7 +69,7 @@ func TestEveryRuledMethodNamesARuleTheBuildHolds(t *testing.T) {
 	t.Parallel()
 	fams := families()
 	special := map[string]bool{"FR-MUTATE": true, "FR-BATCH": true, "FR-RECOMMENDATION": true}
-	for id, rule := range ruleOf {
+	for id, rule := range ruleOf() {
 		if _, ok := fams[rule]; !ok && !special[rule] {
 			t.Errorf("%s names %s, which the build holds no family for", id, rule)
 		}
@@ -518,7 +518,7 @@ func TestACallThatSpendsIsHeldToTheCapsWhateverElseItHolds(t *testing.T) {
 func TestEverySpendNamesWhatTheCapsMeasureOfIt(t *testing.T) {
 	t.Parallel()
 	for _, op := range operations() {
-		if _, ok := measures(op.ID); op.Class == spend && ruleOf[op.ID] == "" && !ok {
+		if _, ok := measures(op.ID); op.Class == spend && ruleOf()[op.ID] == "" && !ok {
 			t.Errorf("%s is spend and names nothing the caps measure of it", op.ID)
 		}
 	}

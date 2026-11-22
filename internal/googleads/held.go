@@ -22,7 +22,7 @@ import (
 func (p *Product) targets(ctx context.Context, handle string, req googlegrowth.Request) ([]byte, bool, error) {
 	ops, _ := parse(req.Op, req.Body)
 	names := toRead(ops)
-	if ruleOf[req.Op.ID] == "FR-RECOMMENDATION" {
+	if ruleOf()[req.Op.ID] == "FR-RECOMMENDATION" {
 		names = append(names, recommendationsToRead(req.Body)...)
 	}
 	if job := runOf(req); job != "" {
@@ -50,7 +50,7 @@ func followed(req googlegrowth.Request, ops []operation, l live) []string {
 			out = append(out, str(l[o.name]["campaign_budget"]))
 		}
 	}
-	if ruleOf[req.Op.ID] == "FR-RECOMMENDATION" {
+	if ruleOf()[req.Op.ID] == "FR-RECOMMENDATION" {
 		for _, name := range recommendationsToRead(req.Body) {
 			out = append(out, str(l[name]["campaign_budget"]))
 		}

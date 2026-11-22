@@ -11,23 +11,33 @@ import (
 	"github.com/crewlet/crewlet/internal/growth"
 )
 
-// comparedFields is what each kind's rules read of a resource beyond an update's
-// own mask: its status, how it bids, what it points at and what it is; and of
-// a batch job a run approves, how many operations it holds.
-var comparedFields = map[string][]string{
-	"batch_job":                        {"status", "metadata.operation_count"},
-	"campaign":                         {"status", "bidding_strategy_type", "bidding_strategy", "campaign_budget"},
-	"campaign_budget":                  {"amount_micros", "total_amount_micros", "reference_count"},
-	"bidding_strategy":                 {"type"},
-	"ad_group_criterion":               {"negative", "type"},
-	"campaign_criterion":               {"negative", "type"},
-	"ad_group_bid_modifier":            {"bid_modifier"},
-	"campaign_bid_modifier":            {"bid_modifier"},
-	"bidding_seasonality_adjustment":   {"conversion_rate_modifier"},
-	"asset_group_listing_group_filter": {"type"},
-	"asset_set":                        {"type"},
-	"account_budget":                   {"approved_spending_limit_micros", "approved_end_date_time"},
-	"recommendation":                   {"type", "campaign_budget"},
+// comparedFields is what each kind's rules read of a resource beyond an
+// update's own mask: its status, how it bids, what it points at and what it
+// is; and of a batch job a run approves, how many operations it holds.
+func comparedFields(kind string) []string {
+	switch kind {
+	case "batch_job":
+		return []string{"status", "metadata.operation_count"}
+	case "campaign":
+		return []string{"status", "bidding_strategy_type", "bidding_strategy", "campaign_budget"}
+	case "campaign_budget":
+		return []string{"amount_micros", "total_amount_micros", "reference_count"}
+	case "bidding_strategy":
+		return []string{"type"}
+	case "ad_group_criterion", "campaign_criterion":
+		return []string{"negative", "type"}
+	case "ad_group_bid_modifier", "campaign_bid_modifier":
+		return []string{"bid_modifier"}
+	case "bidding_seasonality_adjustment":
+		return []string{"conversion_rate_modifier"}
+	case "asset_group_listing_group_filter", "asset_set":
+		return []string{"type"}
+	case "account_budget":
+		return []string{"approved_spending_limit_micros", "approved_end_date_time"}
+	case "recommendation":
+		return []string{"type", "campaign_budget"}
+	}
+	return nil
 }
 
 // searchOp is GoogleAdsService.Search, which every live read goes through.
@@ -56,7 +66,7 @@ func (p *Product) readLive(ctx context.Context, handle string, names []string, m
 			queries[key] = q
 		}
 		q.names = append(q.names, name)
-		for _, f := range append(comparedFields[kind], masks[name]...) {
+		for _, f := range append(comparedFields(kind), masks[name]...) {
 			q.fields[f] = true
 		}
 	}
