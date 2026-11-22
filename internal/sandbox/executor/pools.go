@@ -67,7 +67,8 @@ func (w NodeWork) transcriptReads() int {
 //	h                     1.25         1.5         2            default
 //	main thread, empty    25.5-26.2 s  23.5 s      22.5-23.3 s  22.3 s
 //	main thread, ordinary 3.7-4.2 s    2.8-2.9 s   2.35-2.4 s   2.34 s
-//	scrub, a pwd string   274 s        259-261 s   255 s        256 s
+//	scrub, a pwd string   146 s        138-139 s   136 s        136 s
 //
-// The scrub sets it: internal/sandbox's SessionScrubWait keeps 3 s at 1.5.
+// The scrub's slowest shape at 1.5, a string torn at its last line (183 s),
+// leaves internal/sandbox's SessionScrubWait 21 s.
 const limitHeadroomHalves = 3

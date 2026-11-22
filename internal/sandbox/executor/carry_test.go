@@ -833,7 +833,7 @@ func TestATakeSaysWhetherItsArchivesResumeWasRead(t *testing.T) {
 			t.Parallel()
 			runner, b := sessionBox(t, release)
 			runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
-			taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{MaxBytes: takeBound})
+			taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), MaxBytes: takeBound})
 			if err != nil || taken.Body == nil {
 				t.Fatalf("TakeSession = %+v, %v", taken, err)
 			}
