@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/jsonscan"
 	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // THE SCRUB A KEPT SESSION LEAVES ITS BOX THROUGH: every secret the engine put
@@ -263,6 +264,12 @@ func scrubHeldBytes(plain int64, longest int) int64 {
 	text := int64(streamHeldBytes + pieceHeldBytes + 3*longest + utf8.UTFMax + providerToolNameMax + 1)
 	return 2*text + 2*rewriteHeldBytes + archiveHeldBytes + plain/16 + plain/512 + planBlockBytes
 }
+
+// scrubLongestMax is the longest value a take's scrub can hold ([scrubber]):
+// one line of every byte a capture scrubs out (sandbox.MaxScrubBytes), in its
+// JSON form, six bytes a byte where each is a control byte, `\u00XX`: no byte
+// escapes longer ([jsonEscaped]; an invalid one writes U+FFFD, three).
+const scrubLongestMax = 6 * sandbox.MaxScrubBytes
 
 // scrubber takes the engine's own values out of text: a whole text through
 // strings.Replacer ([scrubber.apply]), and a text that arrives in pieces
