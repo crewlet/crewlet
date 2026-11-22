@@ -14,7 +14,8 @@
     "harness.name": [
       "claude-code",
       "opencode",
-      "muse-code"
+      "muse-code",
+      "kimi-code"
     ],
     "topology.coordination": [
       "local",
