@@ -178,7 +178,7 @@ Crewlet is the engine; you choose the surfaces your agents work on: [Choosing yo
 | **Knowledge base** | [Confluence](docs/integrations/confluence.md) (searched at turn start and on demand, as the asking seat) |
 | **Code host** | [Gitlet, the engine's own](docs/concepts/gitlet.md) (clone and push over HTTPS, changes reviewed in the dashboard, can run beside a vendor), [GitLab](docs/integrations/gitlab.md) (gitlab.com or self-hosted) or [GitHub](docs/integrations/github.md) (github.com or Enterprise Server) |
 | **Chat** | [Chatlet, the engine's own](docs/concepts/chatlet.md) (dashboard rooms; the default where no vendor is declared), [Mattermost](docs/integrations/mattermost.md) (self-hosted, one bot identity per agent) or [Slack](docs/integrations/slack.md) (one app per agent) |
-| **Code sandbox** | [The engine host](docs/concepts/code-sandbox.md), as a process tree or a container, with Claude Code or OpenCode as the harness |
+| **Code sandbox** | [The engine host](docs/concepts/code-sandbox.md), as a process tree or a container, with Claude Code, OpenCode or GitHub Copilot CLI as the harness |
 
 The knowledge base is **single-homed**: one searcher per company, because two would make the answer to "what do we already know about this" depend on which was asked. It sits behind the backend-neutral `knowledge.Searcher` seam, so a second backend is a new implementation. Everything else composes: a company can run GitHub beside GitLab, or Slack beside Mattermost (a migration, an open-source presence).
 
