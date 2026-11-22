@@ -587,17 +587,17 @@ type refusingWriter struct{ err error }
 func (f refusingWriter) Write([]byte) (int, error) { return 0, f.err }
 
 // THE SCRUB HOLDS NO MORE THAN THE FIGURE ITS DOC STATES, AND NOTHING THAT
-// GROWS WITH A STRING: a session of one string near a test's plaintext bound
-// of 32 MiB, scrubbed both readings, holds at most scrubHeldBytes's figure,
-// less what one GC step can hide, and one four times as long no more than a
-// little over that. Read in live bytes as the take's base is ([atLiveBytes]),
-// in a child of this test under GODEBUG=gcstoptheworld=1, which GODEBUG must
-// name as the process starts; not in parallel, since another case's heap
-// would be read as the scrub's. The real bound is
-// BenchmarkTheScrubAtThePlaintextBound's.
+// GROWS WITH A STRING: at a test's plaintext bound of 32 MiB, each shape that
+// drives a term of scrubHeldBytes near its share (a line of text, then a
+// password-dense string read both ways, both streams' windows at once; tiny
+// definitions, the plan at its sixteenth; a 512 KiB value, the longest a
+// scrub holds) holds, plus what one GC step can hide, at most the figure, and
+// a string four times as long no more than a little over a shorter one. Read
+// in live bytes ([atLiveBytes]) in a child of this test under GODEBUG=
+// gcstoptheworld=1. Below the miss, so no sampler holds them: the plan's
+// blocks (24 KiB), the spool's (192 KiB), each piece (257 KiB), each rewrite.
 //
-// Mutation: read a long string whole rather than through the streams, hold a
-// transcript's line to learn what it is, or drop a term from scrubHeldBytes.
+// Mutation: read a long string whole, or drop the streams from the figure.
 func TestTheScrubHoldsNoMoreThanItsStatedFigure(t *testing.T) {
 	if os.Getenv(liveBytesChild) == "" {
 		runLiveBytesChild(t)
@@ -608,38 +608,72 @@ func TestTheScrubHoldsNoMoreThanItsStatedFigure(t *testing.T) {
 	}
 	defer debug.SetGCPercent(debug.SetGCPercent(liveBytesGOGC))
 	const plain = 32 << 20
-	s := newScrubber([]string{longValue})
-	figure := scrubHeldBytes(plain, len(jsonEscaped(longValue)))
-	held := func(n int) (high, miss int64) {
-		archive := func() []byte {
-			r := rand.New(rand.NewPCG(1170, uint64(n)))
-			line := `{"type":"user","message":{"content":"` + base64Run(r, n, 100, n/2) + `"}}` + "\n"
-			return tarOf(t, map[string]string{"projects/p/s.jsonl": line})
-		}()
+	body := plain - 64<<10
+	held := func(name string, s scrubber, longest int, archive []byte) (high, miss int64) {
 		before := liveNow()
 		watch := watchLiveCycles()
 		if err := scrubTar(bytes.NewReader(archive), reopenOf(archive), io.Discard, s,
 			scrubBounds{plain: plain}); err != nil {
-			t.Fatalf("a session of one string of %d bytes was refused: %v", n, err)
+			t.Fatalf("%s was refused: %v", name, err)
 		}
 		most, missed := watch.stop()
 		if missed != 0 {
-			t.Fatalf("the watch missed %d of the GC's cycles, whose live heap is then unread", missed)
+			t.Fatalf("%s: the watch missed %d of the GC's cycles, whose live heap is then unread", name, missed)
 		}
 		// THE MISS: between two marks the heap grows by at most liveBytesGOGC
 		// percent of what the last one found, at most the archive's heap and
 		// the figure on it; a peak that rises and falls inside that step is
 		// never marked.
+		figure := scrubHeldBytes(plain, longest)
 		return int64(most) - int64(before), (int64(before) + figure) * liveBytesGOGC / 100
 	}
-	small, _ := held(6 << 20)
-	large, miss := held(24 << 20)
-	t.Logf("held %d KiB for a string of 6 MiB, %d KiB for one of 24 MiB, %d KiB unseen at most; the figure at a "+
-		"%d MiB reading is %d KiB", small>>10, large>>10, miss>>10, plain>>20, figure>>10)
-	if large+miss > figure {
-		t.Errorf("the scrub held %d bytes, and %d more can rise unseen, past the %d its doc states at this bound",
-			large, miss, figure)
+	within := func(name string, s scrubber, longest int, archive []byte) int64 {
+		high, miss := held(name, s, longest, archive)
+		figure := scrubHeldBytes(plain, longest)
+		t.Logf("%s held %d KiB, %d KiB unseen at most, of a figure of %d KiB", name, high>>10, miss>>10, figure>>10)
+		if high+miss > figure {
+			t.Errorf("%s held %d bytes, and %d more can rise unseen, past the %d its doc states", name, high, miss,
+				figure)
+		}
+		return high
 	}
+	built := func(member string, write func(w io.Writer) error) []byte {
+		var b strings.Builder
+		if err := write(&b); err != nil {
+			t.Fatal(err)
+		}
+		return tarOf(t, map[string]string{member: b.String()})
+	}
+	short, shortest := newScrubber([]string{longValue}), len(jsonEscaped(longValue))
+	value := randomBase64(1171, 512<<10)
+	long, longest := newScrubber([]string{longValue, value}), len(jsonEscaped(value))
+	within("a line of text, then a password-dense string both ways", short, shortest,
+		built(benchTranscript, func(w io.Writer) error {
+			if _, err := io.WriteString(w, "a line of text\n"); err != nil {
+				return err
+			}
+			return benchOneString(w, body-64, "pwd=x ")
+		}))
+	within("tiny definitions", short, shortest, built(benchTranscript, func(w io.Writer) error {
+		head := `{"parentUuid":null,"attachment":{"type":"deferred_tools_record","entries":[1`
+		if _, err := io.WriteString(w, head+strings.Repeat(",1", (body-len(head)-64)/2)); err != nil {
+			return err
+		}
+		_, err := io.WriteString(w, `]},"type":"attachment"}`+"\n")
+		return err
+	}))
+	within("a string of the 512 KiB value", long, longest, built(benchTranscript, func(w io.Writer) error {
+		return benchOneString(w, body/4, "pwd="+value+" ")
+	}))
+	str := func(n int) []byte {
+		r := rand.New(rand.NewPCG(1170, uint64(n)))
+		return built(benchTranscript, func(w io.Writer) error {
+			_, err := io.WriteString(w, `{"type":"user","message":{"content":"`+base64Run(r, n, 100, n/2)+`"}}`+"\n")
+			return err
+		})
+	}
+	small := within("a string of 6 MiB", short, shortest, str(6<<20))
+	large := within("a string of 24 MiB", short, shortest, str(24<<20))
 	if large-small > 2<<20 {
 		t.Errorf("a string four times as long held %d bytes more: the scrub holds what grows with the string",
 			large-small)
