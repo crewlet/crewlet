@@ -1079,7 +1079,7 @@ const (
 	// at 3 MiB over a 2.3 MB baseline and is set so a bundle that doubled the
 	// baseline is still refused; screens fetched only when opened (the rich
 	// editor, the brand and folder screens, the assistant's panel, Gitlet) and
-	// kit releases account for its growth, and the last measure was 7313.6 KiB,
+	// kit releases account for its growth, and the last measure was 7313.9 KiB,
 	// after Home's packed board on kit 0.171.0 and App Store Connect's app
 	// chooser and connection card.
 	// A raise names the measured size and its cause in its commit.
