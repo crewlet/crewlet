@@ -1266,11 +1266,11 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 	// load to the bridge, with the skill route as its one option
 	// ([writeOpenCodeSkills], opencode_skills.js).
 	if len(req.Skills) > 0 {
-		if err := writeOpenCodeSkills(ctx, box, req.Skills, paths); err != nil {
+		if err = writeOpenCodeSkills(ctx, box, req.Skills, paths); err != nil {
 			return "", err
 		}
 		cfg["skills"] = []string{paths.OpenCodeSkills()}
-		if err := box.WriteFile(ctx, paths.OpenCodeSkillsPlugin()+"/"+openCodeSteerEntry, openCodeSkillsPlugin); err != nil {
+		if err = box.WriteFile(ctx, paths.OpenCodeSkillsPlugin()+"/"+openCodeSteerEntry, openCodeSkillsPlugin); err != nil {
 			return "", fmt.Errorf("executor: writing OpenCode's skill-load plugin: %w", err)
 		}
 		plugins = append(plugins, map[string]any{
@@ -1288,7 +1288,7 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 	}
 	// AND ON EVERY RUN THE PLUGIN THAT KEEPS omitted OUT OF THE COMMANDS ITS
 	// MODEL RUNS (opencode_toolenv.js), last.
-	if err := box.WriteFile(ctx, paths.OpenCodeToolEnvPlugin()+"/"+openCodeSteerEntry, openCodeToolEnvPlugin); err != nil {
+	if err = box.WriteFile(ctx, paths.OpenCodeToolEnvPlugin()+"/"+openCodeSteerEntry, openCodeToolEnvPlugin); err != nil {
 		return "", fmt.Errorf("executor: writing OpenCode's tool-environment plugin: %w", err)
 	}
 	cfg["plugins"] = append(plugins, map[string]any{
@@ -1296,14 +1296,14 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 		"options": map[string]any{"names": omitted},
 	})
 	for _, v := range values.files {
-		if err := box.WriteFile(ctx, v.path, []byte(v.value)); err != nil {
+		if err = box.WriteFile(ctx, v.path, []byte(v.value)); err != nil {
 			return "", fmt.Errorf("executor: writing a value of OpenCode's configuration: %w", err)
 		}
 	}
 	if fresh != nil {
 		for _, v := range fresh.files {
 			at := paths.OpenCodeValuesFresh() + strings.TrimPrefix(v.path, paths.OpenCodeValues())
-			if err := box.WriteFile(ctx, at, []byte(v.value)); err != nil {
+			if err = box.WriteFile(ctx, at, []byte(v.value)); err != nil {
 				return "", fmt.Errorf("executor: writing a value of OpenCode's configuration for a "+
 					"session of the run's own: %w", err)
 			}
@@ -1323,7 +1323,7 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 		system = withNoteInstruction(system, o.NoteInstruction())
 	}
 	if system != "" {
-		if err := box.WriteFile(ctx, paths.System(), []byte(system)); err != nil {
+		if err = box.WriteFile(ctx, paths.System(), []byte(system)); err != nil {
 			return "", fmt.Errorf("executor: writing the system prompt: %w", err)
 		}
 		cfg["instructions"] = []string{paths.System()}
@@ -1332,7 +1332,7 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 	if err != nil {
 		return "", err
 	}
-	if err := box.WriteFile(ctx, paths.OpenCodeConfig(), blob); err != nil {
+	if err = box.WriteFile(ctx, paths.OpenCodeConfig(), blob); err != nil {
 		return "", fmt.Errorf("executor: writing OpenCode's configuration: %w", err)
 	}
 	return paths.OpenCodeConfig(), nil
