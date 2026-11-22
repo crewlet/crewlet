@@ -527,8 +527,10 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	// EVERY HARNESS'S, not this run's alone: the box may last have run another.
 	for _, h := range Registered() {
 		if a, ok := h.(artifactHolder); ok {
-			ownFiles, ownDirs := a.artifacts(p)
-			files, dirs = append(files, ownFiles...), append(dirs, ownDirs...)
+			files = append(files, a.artifactFiles(p)...)
+		}
+		if a, ok := h.(artifactDirHolder); ok {
+			dirs = append(dirs, a.artifactDirs(p)...)
 		}
 	}
 	// The stream too, where it lives apart from the result: it is only

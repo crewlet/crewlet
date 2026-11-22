@@ -1756,9 +1756,12 @@ func (ClaudeCode) notesOffWhy() string {
 		"hooks and whose error stream says so"
 }
 
-// artifacts is what a Claude Code run leaves in its box of its own.
-func (ClaudeCode) artifacts(p Paths) (files, dirs []string) {
+// artifactFiles is the files a Claude Code run leaves in its box of its own.
+func (ClaudeCode) artifactFiles(p Paths) []string {
 	return []string{p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(), p.ClaudeSkillsSettings(),
-			p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.ClaudeSkillsSettingsPinned()},
-		[]string{p.ClaudeSkillsPlugin()}
+		p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.ClaudeSkillsSettingsPinned()}
 }
+
+// artifactDirs is the directories a Claude Code run leaves in its box of its
+// own.
+func (ClaudeCode) artifactDirs(p Paths) []string { return []string{p.ClaudeSkillsPlugin()} }

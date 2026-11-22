@@ -2018,9 +2018,12 @@ func (OpenCode) notesOffWhy() string {
 		"failed to load, which its own log names"
 }
 
-// artifacts is what an OpenCode run leaves in its box of its own.
-func (OpenCode) artifacts(p Paths) (files, dirs []string) {
-	return []string{p.OpenCodeConfig()},
-		[]string{p.OpenCodeValues(), p.OpenCodeValuesFresh(), p.OpenCodeSteerPlugin(), p.OpenCodeSkills(),
-			p.OpenCodeSkillsPlugin()}
+// artifactFiles is the files an OpenCode run leaves in its box of its own.
+func (OpenCode) artifactFiles(p Paths) []string { return []string{p.OpenCodeConfig()} }
+
+// artifactDirs is the directories an OpenCode run leaves in its box of its
+// own.
+func (OpenCode) artifactDirs(p Paths) []string {
+	return []string{p.OpenCodeValues(), p.OpenCodeValuesFresh(), p.OpenCodeSteerPlugin(), p.OpenCodeSkills(),
+		p.OpenCodeSkillsPlugin()}
 }
