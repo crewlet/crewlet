@@ -60,6 +60,7 @@ export type AtlasFamily = "calls" | "runs_on" | "around";
 export type AtlasVendor =
   | "aws"
   | "anthropic"
+  | "apple"
   | "atlassian"
   | "cloudflare"
   | "cursor"
@@ -562,6 +563,8 @@ export interface AtlasActivityAnswer extends AtlasRead {
   from: string;
   days: number[];
   entries: AtlasEntryActivity[];
+  /** The count stopped at the bytes one read answers: some days and entries are not in it. */
+  truncated: boolean;
 }
 
 /** How a source's last read went (`collect.State`): never read, read whole,
@@ -724,6 +727,7 @@ export const ATLAS_FACT_SPECS = {
     words: [
       "aws",
       "anthropic",
+      "apple",
       "atlassian",
       "cloudflare",
       "cursor",

@@ -142,7 +142,7 @@ nothing out; the request reaches people at its deadline.
 
 ## What you still see
 
-- **Escalations**, in the Inbox and on Home, with each delegate's verdict, confidence, reason and findings above the request, and why Crewlet put it to you.
+- **Escalations**, in the Inbox and on Home, with each delegate's verdict, confidence, reason and findings above the request, and why Crewlet put it to you. What was decided and a delegate's reason and findings are shown with any credential in them replaced by a marker in every view, the audit included.
 - **Decided under delegation**: every delegate answer is marked with its rule wherever shown: the run's page, the turn, the event and the live event log.
 - **The digest**: on Home, what delegates decided for you on the last whole company day.
 - **Today, so far**: **Settings › Delegated decisions** opens on the company day still running, every decision so far (refreshed every minute). Its pager goes back to earlier days, forward no further than today.

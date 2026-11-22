@@ -438,6 +438,10 @@ func (b *Broker) invoke(
 	// than in this backend's: what is carried is deliveries LEFT, where
 	// this package counts redeliveries already spent.
 	perMessage := headroomLocked(sub, evs, client.maxRedeliveries)
+	// A READMIT FROM HERE ON readmits what this call sets aside
+	// ([Broker.setAsideLocked]); one before it decides nothing.
+	m.readmits = nil
+	room := queue.MaxAside - len(m.aside)
 	b.mu.Unlock()
 	// THE HANDLER IS DETACHED FROM THE CONTEXT THAT DROVE THE DRAIN, which
 	// is a PUBLISHER's — inline dispatch is a property of this twin, and the
@@ -446,7 +450,7 @@ func (b *Broker) invoke(
 	// publisher to a consumer, and dispatched under it every redelivery
 	// after the cancellation ran on a dead context and failed at its first
 	// call until the message was dead-lettered.
-	ctx = queue.WithHeadroom(context.WithoutCancel(ctx), perMessage)
+	ctx = queue.WithAsideRoom(queue.WithHeadroom(context.WithoutCancel(ctx), perMessage), room)
 
 	res := runHandler(ctx, call)
 
@@ -485,11 +489,14 @@ func (b *Broker) invoke(
 		// keeps it, with its group's unhandled deliveries unless the
 		// message failed as itself before ([queue.RetiredTo]).
 		dead = b.retryLaterLocked(sub, evs, client.maxRedeliveries, queue.OutcomePass, res.Reason)
+	case queue.OutcomeAside:
+		dead = b.setAsideLocked(sub, m, evs, res.Key)
 	case queue.OutcomeAck:
 		// Acked: the events left the mailbox before the call, so there
 		// is nothing to put back, and nothing of them to remember.
 		for _, ev := range evs {
 			delete(sub.failed, ev.ID)
+			delete(sub.arrived, ev)
 		}
 	}
 	// IN FLIGHT UNTIL WHAT THE HANDLER RETURNED IS SETTLED, a dead letter's
@@ -650,6 +657,7 @@ func (b *Broker) chargeLocked(sub *subscription, evs []*events.Event, budget int
 			// The event was decoded from JSON, so it encodes again.
 			_, failed := sub.failed[ev.ID]
 			delete(sub.failed, ev.ID)
+			delete(sub.arrived, ev)
 			if wire, err := json.Marshal(ev); err == nil {
 				b.keepLocked(queue.RetiredTo(sub.topic, sub.group, failed), nil, wire)
 			}

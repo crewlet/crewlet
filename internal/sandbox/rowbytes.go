@@ -69,7 +69,7 @@ const (
 
 	// wakeRowBytes is the turn's wake items' figure, moved out of the room a
 	// later build adds keys in: [MaxTurnWakes] items at their bound, a hundred
-	// KiB, which the 99,696 bytes TestTheWholeRowFitsItsBudget weighs them at
+	// KiB, which the 102,064 bytes TestTheWholeRowFitsItsBudget weighs them at
 	// leave a little over.
 	wakeRowBytes = 100 << 10
 
@@ -259,8 +259,8 @@ const (
 // stated before them was read by nothing, and stayed what it was while the row
 // grew.
 const (
-	measuredOtherFields = 2_335_519
-	measuredSpare       = 379_173
+	measuredOtherFields = 2_337_956
+	measuredSpare       = 376_736
 )
 
 // The per-call bounds of the bridged call log. See [MaxBridgeCallBytes].
@@ -977,6 +977,30 @@ func keptTitle(s string) string {
 		}
 	}
 	return title
+}
+
+// keptQuestion is a colleague's question as the row keeps it, raw: within
+// [keptTitle]'s bound, and CUT WHERE ITS REDACTION ([ColleagueAsk.Question]) IS
+// AN OPENING OF THE WHOLE QUESTION'S. A cut inside a credential leaves a part
+// the redaction no longer knows as one, so such a cut moves back to where the
+// redaction settles ([redact.Settled]): the last line break before it. That
+// gives up as much as a line of the opening (all of it, for a question on one
+// line), which a question past 16 KiB can spare: the turn's own record keeps
+// the whole, and no shorter cut is known to settle. The second check holds what
+// is served, the redaction of the opening WITH the cut's note, to the opening's
+// own, so the guarantee never rests on how a rule reads the note's words.
+func keptQuestion(q string) string {
+	held := keptTitle(q)
+	opening, cut := rowRecord.Opening(held, len(q))
+	if !cut || held == q {
+		return held
+	}
+	shown := redact.Secrets(opening)
+	if strings.HasPrefix(redact.Secrets(q), shown) && strings.HasPrefix(redact.Secrets(held), shown) {
+		return held
+	}
+	held, _ = rowRecord.TextOf(opening[:redact.Settled(opening)], len(q), MaxRunTitleBytes)
+	return held
 }
 
 // answerFits reports why answer is past its share of the row

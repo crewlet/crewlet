@@ -19,6 +19,7 @@ func TestEveryLanesGrantIsPlacedOnItsIntegrationsCard(t *testing.T) {
 		seataccess.LaneExpo: "Expo", seataccess.LaneDigitalOcean: "DigitalOcean",
 		seataccess.LaneScaleway: "Scaleway", seataccess.LaneAWS: "AWS",
 		seataccess.LaneGoogleCloud: "Google Cloud", seataccess.LaneSSH: "SSH",
+		seataccess.LaneAppStoreConnect: "App Store Connect",
 		seataccess.LaneGoogleAnalytics: "Google Analytics",
 	}
 	for _, lane := range seataccess.Lanes() {

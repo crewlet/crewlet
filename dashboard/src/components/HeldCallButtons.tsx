@@ -9,7 +9,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { Button, CodeBlock, Text, useToast } from "@crewlethq/ui";
+import { Button, Text, useToast } from "@crewlethq/ui";
 import { Modal } from "./Modal.tsx";
 import type { DelegatedAct } from "~/contract/delegated.ts";
 import type { McpHeldWhole } from "~/contract/mcp.ts";
@@ -17,7 +17,8 @@ import { releaseRequestOf } from "~/lib/delegation.ts";
 import { answerHeldCall, heldAnswerWords, readHeldCall, type HeldAnswer } from "~/lib/heldCall.ts";
 import { refusalText } from "~/lib/refusal.ts";
 import { useAnswerHold } from "~/lib/useWriteAccess.ts";
-import { ReleaseRequestFacts } from "./Delegation.tsx";
+import { GrowthDecisionReview, isGrowthAct } from "./growth/GrowthDecisionReview.tsx";
+import { HeldCallWhole } from "./HeldCallWhole.tsx";
 
 /*
  * HELD FOR A READER THE ENGINE DOES NOT ADMIT, through the rule the run's own
@@ -61,6 +62,8 @@ export function HeldCallButtons({
   const held = approvers ? undefined : leadsHold;
   const [busy, setBusy] = useState<HeldAnswer | null>(null);
   const [reviewing, setReviewing] = useState(false);
+  // A GROWTH DECISION is read and decided on its card: spend, publish or account admin.
+  const growth = isGrowthAct(act);
   // ONLY A REVIEWED FIXED CALL NAMES THE DIGEST: any other answer is sent as
   // the id and the answer alone, as an MCP tool's held call always was.
   const answer = async (how: HeldAnswer, ...reviewed: [] | [argumentsSha256: string]) => {
@@ -90,11 +93,11 @@ export function HeldCallButtons({
         loading={busy === "once"}
         disabled={busy !== null}
         disabledReason={held}
-        onClick={() => (fixed ? setReviewing(true) : void answer("once"))}
+        onClick={() => (fixed || growth ? setReviewing(true) : void answer("once"))}
       >
-        {fixed ? "Review and allow once" : "Allow once"}
+        {growth ? "Review and decide" : fixed ? "Review and allow once" : "Allow once"}
       </Button>
-      {fixed ? null : (
+      {fixed || growth ? null : (
         <Button
           size="small"
           variant="secondary"
@@ -119,7 +122,17 @@ export function HeldCallButtons({
       >
         Deny
       </Button>
-      {reviewing ? (
+      {reviewing && growth ? (
+        <GrowthDecisionReview
+          id={id}
+          onClose={() => setReviewing(false)}
+          onAnswered={(words, settled) =>
+            onAnswered
+              ? onAnswered(words, settled)
+              : toast.show({ variant: settled ? "success" : "warning", title: words })
+          }
+        />
+      ) : reviewing ? (
         <HeldCallReview
           id={id}
           act={act}
@@ -134,12 +147,7 @@ export function HeldCallButtons({
   );
 }
 
-/*
- * THE WHOLE CALL, READ BEFORE ALLOW ONCE: every argument, its standard input
- * whole, as the engine opens it for whoever may answer. The answer names the
- * digest of what was shown, so it is never given from a view that showed less.
- * A merge or a deploy read whole is drawn as its request, each value as text.
- */
+/* THE WHOLE CALL, READ BEFORE ALLOW ONCE (`HeldCallWhole.tsx`). */
 function HeldCallReview({
   id,
   act,
@@ -196,16 +204,7 @@ function HeldCallReview({
           {failed}
         </Text>
       ) : whole ? (
-        <>
-          <Text as="p" variant="body">
-            {whole.question}
-          </Text>
-          {request ? (
-            <ReleaseRequestFacts request={request} />
-          ) : (
-            <CodeBlock language="json" code={JSON.stringify(whole.arguments, null, 2)} />
-          )}
-        </>
+        <HeldCallWhole whole={whole} act={act} />
       ) : (
         <Text as="p" variant="body">
           Reading the call.

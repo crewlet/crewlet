@@ -64,6 +64,10 @@ func (d oneSeatDirectory) PersonByLoginVouched(context.Context, string) (iamdoma
 	return iamdomain.Sighting{}, iamdomain.Vouch{}, errors.New("not asked here")
 }
 
+func (d oneSeatDirectory) SeatHoldersHeld(ctx context.Context) ([]iamdomain.SeatHolder, error) {
+	return d.SeatHolders(ctx)
+}
+
 func (d oneSeatDirectory) SeatHolders(context.Context) ([]iamdomain.SeatHolder, error) {
 	d.whole.Add(1)
 	return nil, errors.New("the whole directory was read for one seat")

@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/delegated"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -401,6 +402,22 @@ type HeldVerdict struct {
 	At         time.Time `json:"at"`
 }
 
+// Redacted is the answer with a secret its reason or findings carry replaced
+// by its marker, a copy: redacted where it is recorded, since every reader of
+// the row reads them. Who gave it, the verdict and the confidence are closed
+// words or a seat's name.
+func (v HeldVerdict) Redacted() HeldVerdict {
+	v.Reason = redact.Secrets(v.Reason)
+	if v.Findings != nil {
+		findings := make([]string, len(v.Findings))
+		for i, f := range v.Findings {
+			findings[i] = redact.Secrets(f)
+		}
+		v.Findings = findings
+	}
+	return v
+}
+
 // HeldEscalation is why a delegated call went to people: the engine's closed
 // words, and the sentences people read beside the delegates' answers.
 type HeldEscalation struct {
@@ -602,8 +619,54 @@ func (s *CallSeal) SealArguments(turnID string, h HeldCall, args map[string]any)
 	return s.cipher.Encrypt(string(body), heldAAD("arguments", turnID, h))
 }
 
-// OpenArguments opens held call h's arguments, as run turnID's row carries it.
+// OpenArguments opens held call h's arguments, as run turnID's row carries it,
+// redacted as values ([redact.Args]): what every reader is shown but those
+// [CallSeal.OpenRawArguments] names.
 func (s *CallSeal) OpenArguments(turnID string, h HeldCall) (map[string]any, error) {
+	args, err := s.OpenRawArguments(turnID, h)
+	if err != nil {
+		return nil, err
+	}
+	return redact.Args(args), nil
+}
+
+// OpenArgumentsFor opens run's held call's arguments for one reader, by THE ONE
+// RULE every view that serves them answers by: as the call would send them,
+// with their digest ([HeldArgumentsDigest]), only to a reader who may answer
+// the call (mayAnswer, decided as internal/runanswer's May decides it) and
+// only while it waits ([PendingRun.HeldOpen]), who consents to those bytes.
+// Every other reader, and every reader once it is answered, made or ended,
+// gets them redacted ([CallSeal.OpenArguments]) and an empty digest: nothing
+// is answered from them, and a digest of the raw bytes beside their redacted
+// form would let a short secret in them be guessed.
+func (s *CallSeal) OpenArgumentsFor(run PendingRun, mayAnswer bool) (map[string]any, string, error) {
+	if run.HeldCall == nil {
+		return nil, "", fmt.Errorf("sandbox: run %s holds no call to open the arguments of", run.TurnID)
+	}
+	if !mayAnswer || !run.HeldOpen() {
+		args, err := s.OpenArguments(run.TurnID, *run.HeldCall)
+		return args, "", err
+	}
+	args, err := s.OpenRawArguments(run.TurnID, *run.HeldCall)
+	if err != nil {
+		return nil, "", err
+	}
+	digest, err := HeldArgumentsDigest(args)
+	if err != nil {
+		return nil, "", err
+	}
+	return args, digest, nil
+}
+
+// OpenRawArguments opens held call h's arguments as the call would send them.
+// ONLY WHO CONSENTS TO OR MAKES THE PENDING CALL reads these: a person shown
+// the call by [CallSeal.OpenArgumentsFor]'s rule, which is every view's; Allow
+// once's digest check, which compares and serves nothing; the delegate
+// deciding it; and the engine making, escalating, settling or digesting it.
+// Every other reader is shown [CallSeal.OpenArguments], so a new reader is
+// redacted unless it asks, and `git grep RawArguments` is the list of who
+// reads them raw.
+func (s *CallSeal) OpenRawArguments(turnID string, h HeldCall) (map[string]any, error) {
 	if s == nil {
 		return nil, ErrNoCallSeal
 	}

@@ -270,6 +270,7 @@ func readAnswered(ctx context.Context, tx *sql.Tx, handle string, since time.Tim
 	}
 
 	out := make([]AnsweredAsk, 0, len(asks))
+	bound := statelog.RowsOf(ctx)
 	for i, rec := range pending {
 		ask, held := byComment[rec.comment]
 		if !held {
@@ -311,8 +312,14 @@ func readAnswered(ctx context.Context, tx *sql.Tx, handle string, since time.Tim
 		if err != nil {
 			return nil, false, err
 		}
-		out = append(out, AnsweredAsk{At: answer.At, Ask: ask, Answer: answer,
-			FollowedUp: followUp})
+		row := AnsweredAsk{At: answer.At, Ask: ask, Answer: answer, FollowedUp: followUp}
+		// Held to the answer's bytes ([statelog.RowsOf]): each row carries
+		// two bodies, so fifty of them can outgrow one reply.
+		if !bound.TakeEncoded(row) {
+			truncated = true
+			break
+		}
+		out = append(out, row)
 	}
 	return out, truncated, nil
 }

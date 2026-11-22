@@ -395,6 +395,25 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     tool: "ssh_read, ssh_operate and ask_to_operate, built in",
     issued: "15 minutes",
   },
+  app_store_connect: {
+    name: "App Store Connect",
+    access: "Level on its apps",
+    turnOn:
+      "Turning it on lets the agent use the chosen apps at the chosen level through Crewlet's own tools. Nothing is created at Apple, and the agent holds no key.",
+    off: "The agent's next App Store Connect call is refused.",
+    remove: "There is nothing to remove: the agent never held a key.",
+    rotate:
+      "The agent holds no key, so there is nothing to rotate. Replace a team key on the integration's page.",
+    scope: {
+      noun: "Apps",
+      singular: "app",
+      empty: "No app",
+      none: "No apps are reachable yet",
+      noneLink: { label: "Connect a team", doc: "app-store-connect", anchor: "connect-a-team" },
+    },
+    tool: "app_store_connect tools, built in",
+    issued: "never: Crewlet makes every call",
+  },
   google_analytics: {
     name: "Google Analytics",
     access: "Level on its properties",
@@ -416,7 +435,7 @@ export const LANE_WORDS: Record<string, LaneWords> = {
         anchor: "connecting-crewlet",
       },
     },
-    tool: "ga4 tools, built in",
+    tool: "google_analytics tools, built in",
     issued: "an hour",
   },
 };

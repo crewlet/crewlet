@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/period"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -262,6 +263,14 @@ func fireOutcomeArgs() []any {
 	return []any{scheduleOutcomeFired, scheduleOutcomeFiredManually, types.ScheduleOutcomeSuperseded}
 }
 
+// pastAnswer refuses a sum over a range whose rows pass the bytes one read
+// answers ([statelog.RowsOf]): refused rather than cut, since its readers sum
+// or rank the whole range, which a cut would skew without a word.
+func pastAnswer(what string) error {
+	return fmt.Errorf("usage: %s over this range pass the %d bytes one read answers: narrow the range",
+		what, statelog.AnswerBytes)
+}
+
 // ScheduleRuns reads one page of the schedule fires every data node recorded,
 // newest first: the company's through `usage_schedule_runs_newest_idx` and one
 // schedule's through `usage_schedule_runs_schedule_idx` (replicated 0076),
@@ -282,12 +291,15 @@ func ScheduleRuns(ctx context.Context, estate Estate, q ScheduleRunsQuery) (
 		return nil, false, invalid
 	}
 	var out []ScheduleRun
+	var cut bool
 	err := estate.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, query, args...)
 		if err != nil {
 			return err
 		}
 		defer func() { _ = rows.Close() }()
+		out, cut = nil, false
+		held := statelog.RowsOf(ctx)
 		for rows.Next() {
 			var r ScheduleRun
 			var fired, due int64
@@ -297,6 +309,10 @@ func ScheduleRuns(ctx context.Context, estate Estate, q ScheduleRunsQuery) (
 				return err
 			}
 			r.FiredAt, r.ScheduledAt = store.DecodeTime(fired), store.DecodeTime(due)
+			if !held.TakeEncoded(r) {
+				cut = true
+				break
+			}
 			out = append(out, r)
 		}
 		return rows.Err()
@@ -304,8 +320,8 @@ func ScheduleRuns(ctx context.Context, estate Estate, q ScheduleRunsQuery) (
 	if err != nil {
 		return nil, false, fmt.Errorf("usage: read the schedule runs: %w", err)
 	}
-	more := len(out) > q.Limit
-	if more {
+	more := cut || len(out) > q.Limit
+	if len(out) > q.Limit {
 		out = out[:q.Limit]
 	}
 	return out, more, nil

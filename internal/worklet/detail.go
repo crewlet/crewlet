@@ -806,8 +806,8 @@ func readCommentPage(ctx context.Context, tx *sql.Tx, taskID string, thread Comm
 		// what the next page continues strictly below.
 		lastAt int64
 		lastID string
-		// weight is the comment text on the page so far.
-		weight int
+		// held is the comment text on the page so far ([statelog.RowBytes]).
+		held = statelog.NewRowBytes(maxBytes)
 	)
 	for rows.Next() {
 		var body []byte
@@ -832,11 +832,10 @@ func readCommentPage(ctx context.Context, tx *sql.Tx, taskID string, thread Comm
 		// Whole, and the page ends before a comment past its budget, here
 		// rather than at a caller that could forget. The first is always
 		// taken, so a page is never empty while the thread is not.
-		if len(out) > 0 && weight+len(comment.Body) > maxBytes {
+		if !held.Take(len(comment.Body)) {
 			next = formatCommentCursor(lastAt, lastID)
 			break
 		}
-		weight += len(comment.Body)
 		out = append(out, comment)
 		lastAt, lastID = at, id
 	}

@@ -14,6 +14,7 @@ import { useScreenBelow, useToast } from "@crewlethq/ui";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { buildHash, parseHash, useNavigator, useParam } from "~/app/router.tsx";
 import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
+import { useClient } from "~/lib/store-hooks.ts";
 import { useKeyedGesture, type KeyedRequest } from "~/lib/keyedWrite.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { ROLE_WORDS } from "~/lib/artifacts/words.ts";
@@ -21,6 +22,7 @@ import {
   PLACEABLE_KINDS,
   filterOf,
   filterParam,
+  joinCommentPages,
   type CommentFilter,
 } from "~/lib/artifacts/comments.ts";
 import type {
@@ -128,6 +130,37 @@ export function commentReason(held: ArtifactDetail["role"], fallback: string | u
     : fallback;
 }
 
+/** Every page of the threads, read after the first: the engine answers them a page at a time, each
+ *  one reply, and the panel draws them all. Until the last arrives, the pages read so far. */
+function useEveryCommentPage(
+  first: ArtifactCommentsAnswer | null,
+  asked: Record<string, unknown>,
+): ArtifactCommentsAnswer | null {
+  const { socket } = useClient();
+  const [joined, setJoined] = useState(first);
+  const question = JSON.stringify(asked);
+  useEffect(() => {
+    setJoined(first);
+    if (!first?.next) return;
+    let gone = false;
+    void (async () => {
+      let all = first;
+      for (let cursor = first.next; cursor && !gone;) {
+        const page = await socket.query("artifact_comments", { ...asked, cursor });
+        all = joinCommentPages(all, page);
+        cursor = page.next;
+        if (!gone) setJoined(all);
+      }
+    })().catch(() => undefined);
+    return () => {
+      gone = true;
+    };
+    // THE QUESTION BY ITS WORDS: `asked` is built anew on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [first, socket, question]);
+  return joined;
+}
+
 export function useArtifactComments({
   detail,
   version,
@@ -144,10 +177,8 @@ export function useArtifactComments({
   covering: () => boolean;
 }): ArtifactComments {
   const nav = useNavigator();
-  const read = useQuery(
-    "artifact_comments",
-    version > 0 ? { id: detail.id, version } : { id: detail.id },
-  );
+  const asked = version > 0 ? { id: detail.id, version } : { id: detail.id };
+  const read = useQuery("artifact_comments", asked);
   const { refetch } = read;
   // THE ROOM'S HINT, never content: the threads are asked for again.
   useEffect(() => {
@@ -167,7 +198,7 @@ export function useArtifactComments({
   covers.current = covering;
   const narrow = useScreenBelow(PHONE_BREAKPOINT);
   const access = useArtifactAccess({ role: "commenter", held: detail.role });
-  const answer = read.data;
+  const answer = useEveryCommentPage(read.data ?? null, asked);
   const can = access.can && (answer?.can_comment ?? true);
   const reason = can
     ? undefined

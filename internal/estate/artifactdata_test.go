@@ -86,6 +86,12 @@ func (l *ledger) Usage(context.Context) (artifactdata.Usage, error) {
 	return artifactdata.Usage{Stores: 2, Footprint: 512, Complete: true}, nil
 }
 
+func (l *ledger) StatePage(ctx context.Context, id artifacts.ID, rd artifactdata.Reading,
+	_ string) ([]artifactdata.StateEntry, string, error) {
+	entries, err := l.State(ctx, id, rd)
+	return entries, "", err
+}
+
 func (l *ledger) State(_ context.Context, _ artifacts.ID, rd artifactdata.Reading) ([]artifactdata.StateEntry, error) {
 	return []artifactdata.StateEntry{{Key: rd.Record, Value: []byte(`"dark"`)}}, nil
 }

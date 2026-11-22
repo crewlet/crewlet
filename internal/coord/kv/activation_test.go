@@ -13,8 +13,8 @@ import (
 // THE POINTER RECORD IS PINNED ON THE WIRE. Its bytes are a contract between
 // builds sharing one bucket in a rolling upgrade, so a later build must keep
 // every key here with the meaning it has here. The origin (author, its kind,
-// the credential, the source and the creation instant) and the body ride in
-// it, the body as the JSON object it is.
+// the credential, the source and the creation instant) rides in it, and the
+// body it names by length and digest, never the body itself.
 func TestThePointerRecordIsPinnedOnTheWire(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 9, 2, 8, 0, 0, 0, time.UTC)
@@ -36,7 +36,8 @@ func TestThePointerRecordIsPinnedOnTheWire(t *testing.T) {
 	const want = `{"revision_id":"rev-1","at":"2026-09-02T08:00:00Z","summary":"s",` +
 		`"author":"maya","author_kind":"operator",` +
 		`"operator_id":"pat:0192f00d-0000-7000-8000-00000000000a","source":"api",` +
-		`"created_at":"2026-09-02T07:00:00Z","payload":{}}`
+		`"created_at":"2026-09-02T07:00:00Z","body":{"bytes":2,` +
+		`"sha256":"44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}}`
 	if string(entry.Value()) != want {
 		t.Fatalf("the pointer record is\n  %s\nwant\n  %s", entry.Value(), want)
 	}
@@ -54,7 +55,8 @@ func TestThePointerRecordIsPinnedOnTheWire(t *testing.T) {
 	}
 	const restored = `{"revision_id":"rev-1","at":"2026-09-02T09:00:00Z","summary":"s",` +
 		`"author":"node-a","author_kind":"system","source":"file",` +
-		`"created_at":"2026-09-02T07:00:00Z","payload":{},"restored":true}`
+		`"created_at":"2026-09-02T07:00:00Z","body":{"bytes":2,` +
+		`"sha256":"44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"},"restored":true}`
 	if string(entry.Value()) != restored {
 		t.Fatalf("the restored pointer record is\n  %s\nwant\n  %s", entry.Value(), restored)
 	}

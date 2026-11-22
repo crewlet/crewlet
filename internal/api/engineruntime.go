@@ -244,6 +244,9 @@ func (r engineRuntime) IssueReports() queries.IssueReportReader {
 	return nil
 }
 
+// GrowthCards is the engine's growth products, which word each held act's card.
+func (r engineRuntime) GrowthCards() mcpapi.GrowthCards { return r.engine.GrowthCards() }
+
 // MCPApprovals is the answer desk over the fleet's runs and this node's
 // queue, the one `answer_executor` answers a run through; untyped nil without
 // a fleet store or a queue, which answers an approval unavailable.

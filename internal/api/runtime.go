@@ -318,6 +318,10 @@ type NodeRuntime interface {
 	// holds no fleet store.
 	MCPApprovals() mcpapi.Approvals
 
+	// GrowthCards reads a held growth act's decision card from its product
+	// (`GET /mcp-approvals/{id}`'s `card`), nil on a node that runs none.
+	GrowthCards() mcpapi.GrowthCards
+
 	// MCPAccepted is where a decision about an MCP server's changed tool is
 	// written: the fleet's accepted definitions, the store every node
 	// decides a call by (`POST /mcp-servers/{name}/changes`, and an

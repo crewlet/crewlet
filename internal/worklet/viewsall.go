@@ -93,10 +93,11 @@ func (r *Reader) EveryView(ctx context.Context, q EveryViewQuery) (ViewListing, 
 		if err != nil {
 			return err
 		}
-		rows, err := everySavedView(ctx, tx, q.Viewer, pinned)
+		rows, _, err := everySavedView(ctx, tx, q.Viewer, pinned, "", nil)
 		if err != nil {
 			return err
 		}
+		rows = PinnedFirst(rows)
 		if q.Counts {
 			if err = countPinned(ctx, tx, counting, rows); err != nil {
 				return err
@@ -122,8 +123,89 @@ func (r *Reader) EveryView(ctx context.Context, q EveryViewQuery) (ViewListing, 
 	return listing, nil
 }
 
+// EveryViewPage is [Reader.EveryView] a page at a time, as a node holding no
+// data reads it: the views after `after` (empty for the first) in the
+// containers' and strips' order, held to the bytes the read carries
+// ([statelog.RowsOf]), and the cursor of the page after, empty on the last.
+// Pins are NOT put first: [PinnedFirst] over every page's rows does that.
+func (r *Reader) EveryViewPage(ctx context.Context, q EveryViewQuery,
+	after string) (ViewListing, string, error) {
+
+	if q.Level == "" {
+		return ViewListing{}, "", fmt.Errorf("worklet: this view read names no level")
+	}
+	counting := ViewQuery{Viewer: q.Viewer, Units: q.Units, Counts: q.Counts,
+		Now: q.Now, Zone: q.Zone}
+	var listing ViewListing
+	var next string
+	served, err := r.log.Read(ctx, statelog.Query{
+		Level:     q.Level,
+		Scope:     statelog.ScopeSet{Paths: []string{pathDomain}}.Normalised(),
+		Session:   q.Session,
+		Floors:    q.Floors,
+		MaxLag:    q.MaxLag,
+		MaxLagSeq: q.MaxLagSeq,
+		Set:       true,
+	}, func(tx *sql.Tx) error {
+		pinned, err := pinnedViews(ctx, tx, q.Viewer)
+		if err != nil {
+			return err
+		}
+		rows, cursor, err := everySavedView(ctx, tx, q.Viewer, pinned, after, statelog.RowsOf(ctx))
+		if err != nil {
+			return err
+		}
+		if q.Counts {
+			if err = countPinned(ctx, tx, counting, rows); err != nil {
+				return err
+			}
+		}
+		listing.Views, next = rows, cursor
+		position, applied, err := readCheckpoint(ctx, tx)
+		if err != nil {
+			return err
+		}
+		listing.LogSeq, listing.AppliedThrough = position, applied
+		return nil
+	})
+	if err != nil {
+		return ViewListing{}, "", err
+	}
+	listing.Level, listing.Complete, listing.LogLag = served.Level, served.Complete, served.Lag
+	if served.Incomplete != nil {
+		listing.Incomplete = incompleteFrom(served.Incomplete)
+	}
+	return listing, next, nil
+}
+
+// PinnedFirst is rows with those pinned for the viewer first, each half in
+// its own order: [Reader.EveryView]'s order over rows in the containers'.
+func PinnedFirst(rows []ViewRow) []ViewRow {
+	out := make([]ViewRow, 0, len(rows))
+	for _, pinned := range []bool{true, false} {
+		for _, row := range rows {
+			if row.Pinned == pinned {
+				out = append(out, row)
+			}
+		}
+	}
+	return out
+}
+
+// viewCursor is where a page of every saved view ends: its last row's place
+// in the containers' and strips' order.
+type viewCursor struct {
+	Order     int    `json:"o"`
+	Container string `json:"c"`
+	Rank      Rank   `json:"r"`
+	Name      string `json:"n"`
+	ID        string `json:"i"`
+}
+
 // everySavedView reads every view shared with the company or owned by the
-// viewer, in every container, pinned-for-the-viewer first.
+// viewer, in every container, in the containers' and strips' order, after
+// the cursor `after` and up to the bytes held keeps (every row for nil), and
+// the cursor of the rest where held refused one.
 //
 // A DELETED VIEW IS LEFT OUT, as [savedViews] leaves it out.
 //
@@ -132,7 +214,7 @@ func (r *Reader) EveryView(ctx context.Context, q EveryViewQuery) (ViewListing, 
 // strip draws them. Pinned and unpinned are TWO ORDERS CONCATENATED, as
 // [savedViews] does, so a pin re-ranks nothing.
 func everySavedView(ctx context.Context, tx *sql.Tx, viewer string,
-	pinned map[string]bool) ([]ViewRow, error) {
+	pinned map[string]bool, after string, held *statelog.RowBytes) ([]ViewRow, string, error) {
 
 	// THE SHARED HALF IS `owner = ''`, and the personal half the viewer's
 	// own name — [savedViews]' rule, over every container.
@@ -142,48 +224,68 @@ func everySavedView(ctx context.Context, tx *sql.Tx, viewer string,
 		own = " OR owner = ?"
 		args = append(args, viewer)
 	}
+	resume := ""
+	if after != "" {
+		var c viewCursor
+		if err := json.Unmarshal([]byte(after), &c); err != nil {
+			return nil, "", fmt.Errorf("%w: the cursor %q is not one a page answered", ErrInvalid, after)
+		}
+		resume = ` AND (` + viewOrder + `, container_id, rank, name, id) > (?, ?, ?, ?, ?)`
+		args = append(args, c.Order, c.Container, string(c.Rank), c.Name, c.ID)
+	}
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, name, type, owner, protected, is_default, rank, icon,
-		       params_json, container_kind, container_id
+		       params_json, container_kind, container_id, `+viewOrder+`
 		FROM tracker_views
-		WHERE (owner = ''`+own+`) AND deleted_at IS NULL
-		ORDER BY CASE container_kind
-		           WHEN '`+ContainerWorkspace+`' THEN 0
-		           WHEN '`+ContainerProject+`' THEN 1
-		           WHEN '`+ContainerUnit+`' THEN 2
-		           ELSE 3 END,
-		         container_id, rank, name`, args...)
+		WHERE (owner = ''`+own+`) AND deleted_at IS NULL`+resume+`
+		ORDER BY `+viewOrder+`, container_id, rank, name, id`, args...)
 	if err != nil {
-		return nil, fmt.Errorf("worklet: read every saved view: %w", err)
+		return nil, "", fmt.Errorf("worklet: read every saved view: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	var shared, first []ViewRow
+	var out []ViewRow
+	var next string
+	last := viewCursor{}
 	for rows.Next() {
 		var row ViewRow
-		var protected, isDefault int
+		var protected, isDefault, order int
 		var params []byte
 		if err := rows.Scan(&row.ID, &row.Name, &row.Type, &row.Owner,
 			&protected, &isDefault, &row.Rank, &row.Icon, &params,
-			&row.Container.Kind, &row.Container.ID); err != nil {
-			return nil, fmt.Errorf("worklet: scan a saved view: %w", err)
+			&row.Container.Kind, &row.Container.ID, &order); err != nil {
+			return nil, "", fmt.Errorf("worklet: scan a saved view: %w", err)
 		}
 		row.Key = row.ID
 		row.Protected, row.Default = protected == 1, isDefault == 1
 		if len(params) > 0 {
 			if err := json.Unmarshal(params, &row.Params); err != nil {
-				return nil, fmt.Errorf("worklet: decode view %s's params: %w",
+				return nil, "", fmt.Errorf("worklet: decode view %s's params: %w",
 					row.ID, err)
 			}
 		}
-		if row.Pinned = pinned[row.ID]; row.Pinned {
-			first = append(first, row)
-			continue
+		row.Pinned = pinned[row.ID]
+		if held != nil && !held.TakeEncoded(row) {
+			cursor, err := json.Marshal(last)
+			if err != nil {
+				return nil, "", err
+			}
+			next = string(cursor)
+			break
 		}
-		shared = append(shared, row)
+		out = append(out, row)
+		last = viewCursor{Order: order, Container: row.Container.ID, Rank: row.Rank, Name: row.Name, ID: row.ID}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("worklet: read every saved view: %w", err)
+		return nil, "", fmt.Errorf("worklet: read every saved view: %w", err)
 	}
-	return append(first, shared...), nil
+	return out, next, nil
 }
+
+// viewOrder is the containers' order every saved view is read in: the
+// workspace, projects, units, then people.
+const viewOrder = `CASE container_kind
+		           WHEN '` + ContainerWorkspace + `' THEN 0
+		           WHEN '` + ContainerProject + `' THEN 1
+		           WHEN '` + ContainerUnit + `' THEN 2
+		           ELSE 3 END`

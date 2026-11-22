@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/usage"
 )
 
@@ -44,6 +45,12 @@ func TestASeatDaysTurnLedgerIsReplacedAndSummedAcrossNodes(t *testing.T) {
 	}
 	if !reflect.DeepEqual(rows, want) {
 		t.Errorf("the ledger read\n%+v\nwant node-a's afternoon and node-b's day summed:\n%+v", rows, want)
+	}
+	// PAST THE ANSWER'S BYTES THE LEDGER IS REFUSED, never cut: its readers
+	// sum and rank the whole range.
+	if cut, err := usage.TurnLedger(statelog.WithAnswerBytes(t.Context(), 1), db.Replicated(),
+		usage.SpendQuery{From: day, To: day}); err == nil {
+		t.Errorf("the ledger past one row's bytes was answered as %+v, not refused", cut)
 	}
 }
 
