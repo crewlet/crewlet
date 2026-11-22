@@ -809,10 +809,16 @@ func (w *Workspace) seed(
 			}
 			continue
 		}
-		if err := writePrivate(dst, content); err != nil {
+		// A MIXED FILE IS SEEDED AS ITS LOGIN ALONE ([harnessprofile.FileRule]),
+		// so no setting in the shared copy reaches the home.
+		handed, seedErr := w.profile.FileRule(name).Seed(content)
+		if seedErr != nil {
+			return generation{}, fmt.Errorf("harness: seeding %q: %w", dst, seedErr)
+		}
+		if err := writePrivate(dst, handed); err != nil {
 			return generation{}, err
 		}
-		seeded[name] = digestOf(content)
+		seeded[name] = digestOf(handed)
 	}
 	if err := w.seedFiles(home, harnessprofile.SeedHome); err != nil {
 		return generation{}, err
@@ -1332,7 +1338,7 @@ func (w *Workspace) carryChanged(
 		if w.profile.HoldsLogin(name, content) {
 			holds = true
 		}
-		if digestOf(content) != gen.Seeded[name] {
+		if w.seedDigest(name, content) != gen.Seeded[name] {
 			changed[name] = content
 		}
 	}
@@ -1385,18 +1391,17 @@ func (w *Workspace) carryChanged(
 		return holds, nil, err
 	}
 	if gen.Mode == syncRefresh {
-		// A KEY THE HARNESS WROTE DURING THE RUN IS NO LOGIN
-		// ([harnessprofile.Profile.RunKeys]): a refresh carries the shared
-		// login's value of each, and a file that is then its seed changed
-		// nothing. Read here, under the lock, against the login a refresh is
-		// a compare-and-swap with.
+		// ONLY THE LOGIN IS CARRIED ([harnessprofile.FileRule.Carry]): a mixed
+		// file's login fields, never a run key or a setting the harness wrote,
+		// and a file whose login is then its seed changed nothing. Read here,
+		// under the lock, against the login a refresh is a compare-and-swap with.
 		for name, content := range held {
 			kept := w.profile.KeepLogin(name, content, current[name])
 			held[name] = kept
 			if _, ok := changed[name]; !ok {
 				continue
 			}
-			if digestOf(kept) == gen.Seeded[name] {
+			if w.seedDigest(name, kept) == gen.Seeded[name] {
 				delete(changed, name)
 			} else {
 				changed[name] = kept
@@ -1448,7 +1453,7 @@ func (w *Workspace) carryChanged(
 	if login == nil {
 		return holds, nil, nil
 	}
-	return holds, digestsOf(login), nil
+	return holds, w.seedDigests(login), nil
 }
 
 // carry decides, under the shared lock, what a home's changed login makes of
@@ -1483,7 +1488,7 @@ func (w *Workspace) carry(
 			if !seeded {
 				continue
 			}
-			if digestOf(content) != seed {
+			if w.seedDigest(name, content) != seed {
 				if refreshed == nil {
 					only, err := w.onlyRefreshedSince(gen)
 					if err != nil {
@@ -1518,7 +1523,7 @@ func (w *Workspace) carry(
 		}
 		return nil, false, nil
 	}
-	if gen.Mode == syncRefresh && !maps.Equal(digestsOf(current), gen.Seeded) {
+	if gen.Mode == syncRefresh && !maps.Equal(w.seedDigests(current), gen.Seeded) {
 		// Somebody else's newer write — another seat's refresh, an
 		// operator's login, a logout — and the newer one is kept.
 		for _, name := range slices.Sorted(maps.Keys(changed)) {
@@ -1543,7 +1548,7 @@ func (w *Workspace) carry(
 			if _, seeded := gen.Seeded[name]; !seeded {
 				continue
 			}
-			if !harnessprofile.SameLoginIdentity(changed[name], current[name], w.profile.IdentityKeys[name]) {
+			if !w.profile.FileRule(name).SameAccount(changed[name], current[name]) {
 				other = append(other, name)
 			}
 		}
@@ -1821,15 +1826,27 @@ func digestOf(content []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// digestsOf is [digestOf] of every file of a login, by name — a [generation]'s
-// baseline's form, so a login read now compares with the one a home was seeded
-// from.
-func digestsOf(login map[string][]byte) map[string]string {
+// seedDigests is [Workspace.seedDigest] of every file of a login, by name — a
+// [generation]'s baseline's form, so a login read now compares with the one a
+// home was seeded from, on its login alone.
+func (w *Workspace) seedDigests(login map[string][]byte) map[string]string {
 	out := make(map[string]string, len(login))
 	for name, content := range login {
-		out[name] = digestOf(content)
+		out[name] = w.seedDigest(name, content)
 	}
 	return out
+}
+
+// seedDigest is the digest of what a home is seeded with of content, a copy of
+// the file named name ([harnessprofile.FileRule.Seed]): two copies whose login
+// is one have one, whatever settings beside it differ. A copy that cannot be
+// read for its login has "", no seed's.
+func (w *Workspace) seedDigest(name string, content []byte) string {
+	seed, err := w.profile.FileRule(name).Seed(content)
+	if err != nil {
+		return ""
+	}
+	return digestOf(seed)
 }
 
 // writePrivate writes content at dst, 0600, creating its parent.

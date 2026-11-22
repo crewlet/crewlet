@@ -7,17 +7,11 @@ import (
 	"strings"
 )
 
-// KeepLogin is home, the credential file named name that a home's harness
-// left, with the keys the harness writes during a run ([Profile.RunKeys]) as
-// shared, the shared login's copy, holds them ([KeepLoginKeys]), and, for a
-// [CredentialStore]'s document, no login but the ones shared holds
-// ([KeepHandedCredentials]).
+// KeepLogin is what a refresh carries back of home, the credential file named
+// name that a home's harness left, over shared, the shared login's copy
+// ([FileRule.Carry]).
 func (p *Profile) KeepLogin(name string, home, shared []byte) []byte {
-	kept := KeepLoginKeys(home, shared, p.RunKeys[name])
-	if p.CredentialStore != nil && name == CredentialStoreDocument {
-		kept = KeepHandedCredentials(kept, shared)
-	}
-	return kept
+	return p.FileRule(name).Carry(home, shared)
 }
 
 // KeepLoginKeys is home with each of keys (dotted, into a JSON object) as
@@ -57,36 +51,6 @@ func KeepLoginKeys(home, shared []byte, keys []string) []byte {
 		return home
 	}
 	return append(out, '\n')
-}
-
-// SameLoginIdentity reports whether home and shared, two copies of one
-// credential file, name one account at each of keys ([Profile.IdentityKeys]):
-// each key's value alike in both, or absent from both. A `*` part stands for
-// every key of the object there, so `*.user_id` holds each entry's user_id and
-// the set of entries alike. Each copy is read as JSON with every `//` line set
-// aside ([withoutCommentLines]); either copy no JSON object names no account it
-// can be held to, so it is the same only where keys names none.
-func SameLoginIdentity(home, shared []byte, keys []string) bool {
-	if len(keys) == 0 {
-		return true
-	}
-	h, ok := jsonObject(withoutCommentLines(home))
-	if !ok {
-		return false
-	}
-	s, ok := jsonObject(withoutCommentLines(shared))
-	if !ok {
-		return false
-	}
-	for _, key := range keys {
-		path := strings.Split(key, ".")
-		hv, inHome := identityAt(h, path)
-		sv, inShared := identityAt(s, path)
-		if inHome != inShared || !reflect.DeepEqual(hv, sv) {
-			return false
-		}
-	}
-	return true
 }
 
 // identityAt is the value at path in doc, a `*` part standing for every key of

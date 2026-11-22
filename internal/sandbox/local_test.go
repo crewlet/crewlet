@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -21,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/procgroup"
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
 // newDirect mints a direct-mode provider rooted in a temp dir.
@@ -2094,14 +2096,15 @@ func TestAnUnwritableCredentialMapIsReported(t *testing.T) {
 func TestTheCredentialMapRoundTrips(t *testing.T) {
 	t.Parallel()
 	layout := boxLayout{id: "box-2", root: t.TempDir()}
-	want := seededCredential{Source: "/host/creds.json", Seed: "0a1b", RunKeys: []string{"providers.meta.api_key"},
-		IdentityKeys: []string{"tokens.account_id"}}
+	want := seededCredential{Source: "/host/creds.json", Seed: "0a1b", Rule: harnessprofile.FileRule{
+		Name: "config.json", LoginKeys: []string{"authTokens"}, RunKeys: []string{"providers.meta.api_key"},
+		IdentityKeys: []string{"tokens.account_id"},
+	}}
 	if err := recordCredentialMap(layout, map[string]seededCredential{".claude/.credentials.json": want}); err != nil {
 		t.Fatalf("recordCredentialMap: %v", err)
 	}
 	got := readCredentialMap(layout)
-	if rec := got[".claude/.credentials.json"]; rec.Source != want.Source || rec.Seed != want.Seed ||
-		!slices.Equal(rec.RunKeys, want.RunKeys) || !slices.Equal(rec.IdentityKeys, want.IdentityKeys) {
+	if rec := got[".claude/.credentials.json"]; !reflect.DeepEqual(rec, want) {
 		t.Errorf("the map did not round-trip, with the seed a write-back is judged against: %v", got)
 	}
 }

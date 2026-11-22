@@ -234,7 +234,7 @@ func TestABoxSeedThatStopsPartWayLeavesTheBoxNoFile(t *testing.T) {
 	// A directory in the second file's place fails it after the first
 	// (sorted ahead) is in.
 	writeFile(t, filepath.Join(layout.home(), ".fake", "config.toml", "in-the-way"), "x")
-	if _, err := seedLogin(t.Context(), layout, twoFileLogin(dir, files)); err == nil {
+	if _, err := seedLogin(t.Context(), layout, twoFileLogin(dir, files), nil); err == nil {
 		t.Fatal("a seed whose second file could not be written reported success")
 	}
 	if _, err := os.Lstat(filepath.Join(layout.home(), ".fake", "auth.json")); !errors.Is(err, os.ErrNotExist) {

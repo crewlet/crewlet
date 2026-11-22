@@ -4147,13 +4147,9 @@ type executorRun struct {
 	files     map[string]string
 	env       map[string]string
 
-	// fileKeys is, by a path of files, the keys its harness writes into that
-	// file during a run ([sandbox.Spec.CredentialRunKeys]).
-	fileKeys map[string][]string
-
-	// fileIdentities is, by a path of files, the keys naming the account its
-	// login is ([sandbox.Spec.CredentialIdentityKeys]).
-	fileIdentities map[string][]string
+	// fileRules is, by a path of files, the rule that file is seeded and
+	// written back by ([sandbox.Spec.CredentialRules]).
+	fileRules map[string]harnessprofile.FileRule
 
 	// signIn is env without the integrations' box defaults and the seat's
 	// own credentials for a tool: what the run's sign-in is judged on, since
@@ -4211,16 +4207,15 @@ func newExecutorRun(agent *harness.Provider, seat runEnv) executorRun {
 	maps.Copy(env, credentials)
 	profile := agent.Profile()
 	run := executorRun{
-		model:          agent.ModelArgument(),
-		effort:         agent.Effort(),
-		webDenied:      profile.EffectiveWebTools() == harnessprofile.WebToolsDenied,
-		env:            env,
-		signIn:         signIn,
-		signInNames:    signInNames(agent, entry),
-		files:          agent.SandboxCredentials(),
-		fileKeys:       agent.SandboxCredentialRunKeys(),
-		fileIdentities: agent.SandboxCredentialIdentityKeys(),
-		homePaths:      integrationsOwn(agent, seat.homePaths),
+		model:       agent.ModelArgument(),
+		effort:      agent.Effort(),
+		webDenied:   profile.EffectiveWebTools() == harnessprofile.WebToolsDenied,
+		env:         env,
+		signIn:      signIn,
+		signInNames: signInNames(agent, entry),
+		files:       agent.SandboxCredentials(),
+		fileRules:   agent.SandboxCredentialRules(),
+		homePaths:   integrationsOwn(agent, seat.homePaths),
 	}
 	for _, name := range slices.Sorted(maps.Keys(seat.credentials)) {
 		if _, kept := credentials[name]; !kept {

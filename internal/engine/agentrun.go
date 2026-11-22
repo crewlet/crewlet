@@ -370,15 +370,14 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 	// [mcpbridge.Session.Model].
 	session.Model = run.model
 	spec := manager.BuildSpec(sandbox.SpecInput{
-		Placement:              cell,
-		Harness:                agent.Harness(),
-		PauseTTL:               pauseTTL(settings),
-		MaxTurns:               maxTurnsFor(settings),
-		Env:                    run.env,
-		SignInEnv:              run.signInNames,
-		CredentialFiles:        run.files,
-		CredentialRunKeys:      run.fileKeys,
-		CredentialIdentityKeys: run.fileIdentities,
+		Placement:       cell,
+		Harness:         agent.Harness(),
+		PauseTTL:        pauseTTL(settings),
+		MaxTurns:        maxTurnsFor(settings),
+		Env:             run.env,
+		SignInEnv:       run.signInNames,
+		CredentialFiles: run.files,
+		CredentialRules: run.fileRules,
 	})
 	// THE PICKED MEMBER'S LOGIN, the one the box will actually run under:
 	// a fallback launch on a later member is judged on that member's entry,

@@ -436,9 +436,10 @@ claude-code:
     - ".claude/shell-snapshots"
     - ".claude/telemetry"
   host_credential_paths: [".claude/.credentials.json"]
-  # NO identity_keys: .credentials.json names no account, only claudeAiOauth's
-  # tokens, expiry, scopes and plan (measured on 2.1.330); the account is in
-  # .claude.json's oauthAccount, which is pruned, not a login file.
+  # .credentials.json is a login file, carried whole. NO identity_keys: it
+  # names no account, only claudeAiOauth's tokens, expiry, scopes and plan
+  # (measured on 2.1.330); the account is in .claude.json's oauthAccount,
+  # which is pruned, not a login file.
   token_env: "CLAUDE_CODE_OAUTH_TOKEN"
   api_key_env: "ANTHROPIC_API_KEY"
   # How each credential begins: the hint a stored one shows, and what tells
@@ -1069,8 +1070,10 @@ codex:
   # written by neither release.
   volatile_paths: [".codex/sessions"]
   host_credential_paths: [".codex/auth.json"]
-  # The account a login is: a ChatGPT sign-in's at tokens.account_id, a key
-  # stored by `codex login --with-api-key` at OPENAI_API_KEY. A refresh keeps
+  # auth.json is a login file, carried whole. The account it is: a ChatGPT
+  # sign-in's at tokens.account_id, a key stored by `codex login
+  # --with-api-key` at OPENAI_API_KEY (read from codex-rs's AuthDotJson and
+  # TokenData at rust-v0.171.0, not measured on a real login). A refresh keeps
   # both, so a copy naming others is carried back over no login.
   identity_keys:
     auth.json: ["tokens.account_id", "OPENAI_API_KEY"]
@@ -1404,9 +1407,10 @@ gemini-cli:
   # 0.70.0). Pruned when no call of the seat is in flight.
   volatile_paths: [".gemini/tmp", ".gemini/history", ".gemini/projects.json"]
   host_credential_paths: [".gemini/oauth_creds.json", ".gemini/google_accounts.json"]
-  # The account a login is: google_accounts.json's `active`, the email Gemini
-  # CLI writes there on signing in (`{"active": ..., "old": [...]}`, read from
-  # the 0.70.0 bundle's UserAccountManager), which a refresh leaves alone.
+  # Both files are login files, carried whole. The account a login is:
+  # google_accounts.json's `active`, the email Gemini CLI writes there on
+  # signing in (`{"active": ..., "old": [...]}`, read from the 0.70.0
+  # bundle's UserAccountManager, not measured), which a refresh leaves alone.
   # oauth_creds.json holds google-auth's tokens and expiry, and names none.
   identity_keys:
     google_accounts.json: ["active"]
@@ -1745,8 +1749,9 @@ qwen-code:
   key_args: ["--auth-type", "openai"]
   subscription_args: ["--auth-type", "qwen-subscription"]
   credential_paths: [".qwen/subscription_credentials.json"]
-  # NO identity_keys: the file names no account, only its client, endpoint,
-  # model list and tokens (the 0.28.4 schema, measured against stubs).
+  # A login file, carried whole. NO identity_keys: it names no account, only
+  # its client, endpoint, model list and tokens (the 0.28.4 schema, measured
+  # against stubs).
   api_key_env: "OPENAI_API_KEY"
   # A name other vendors' keys go in too, sent to whatever OPENAI_BASE_URL
   # names: an entry names its key, and nothing falls back to this variable.
@@ -2344,9 +2349,11 @@ cursor-agent:
   # never where a seat's harness looked, and the one it did use was never carried
   # back. cli-config.json follows CURSOR_CONFIG_DIR on both.
   credential_paths: [".cursor/cli-config.json", ".cursor/auth.json"]
-  # cli-config.json is the harness's settings file too, written on every run
-  # signed in or not (measured); a login adds the account it is for under
-  # authInfo (read from the 2026.10.22 bundle), and it is a login only then.
+  # A MIXED FILE: cli-config.json is the harness's settings file too, its
+  # permissions included, written on every run signed in or not (measured); a
+  # login adds the account it is for under authInfo (read from the 2026.10.22
+  # bundle), the one field a home is seeded with and a refresh carries back.
+  # auth.json is a login file, carried whole.
   login_keys:
     cli-config.json: ["authInfo"]
   # What a call leaves in the seat's home, measured on 2026.10.22: a chat
@@ -2728,9 +2735,10 @@ copilot:
   # entry in with `crewlet llm login`, answering yes, or give it a token
   # (api_key_env below).
   #
-  # The same file is the harness's own record of itself — it writes
+  # A MIXED FILE: the harness's own record and settings too — it writes
   # `firstLaunchAt` there on its first start, signed in or not (measured) —
-  # so it is a login only while it holds a token. It keeps one under two keys:
+  # so a home is seeded with, and a refresh carries back, only the login: the
+  # user it signed in as and its token, which it keeps under two keys:
   # on its first use of a login under `copilotTokens` (`{"https://github.com:
   # <login>": "<token>"}`) it adds the same token under `authTokens`
   # (`{"https://github.com:<login>:github": {"token": "<token>"}}`), and signs
@@ -2738,7 +2746,7 @@ copilot:
   # 1.0.114, offline, with a stand-in login).
   credential_paths: [".copilot/config.json"]
   login_keys:
-    config.json: ["copilotTokens", "authTokens"]
+    config.json: ["copilotTokens", "authTokens", "lastLoggedInUser", "loggedInUsers"]
   # What a call leaves in the seat's home, measured on 1.0.114: a session
   # directory holding the call's events, the session database every session
   # is indexed in (which the harness's own session_store_sql tool queries)
@@ -2768,8 +2776,7 @@ copilot:
   # The account a login is: lastLoggedInUser and loggedInUsers, the host and
   # login it signed in as. The first use of a login adds its token under
   # authTokens and keeps both, and there is no refresh (measured on 1.0.114),
-  # so a copy naming another user is no refresh. The token maps are keyed by
-  # the same user, under keys no key path names.
+  # so a copy naming another user is no refresh.
   identity_keys:
     config.json: ["lastLoggedInUser", "loggedInUsers"]
   # Copilot authenticates with a GitHub token, read from COPILOT_GITHUB_TOKEN,
@@ -3106,11 +3113,11 @@ grok:
   # log that grows by about 28 KB a call.
   volatile_paths: [".grok/sessions", ".grok/logs"]
   host_credential_paths: [".grok/auth.json"]
-  # The account a login is: each entry's user_id, the entries keyed
-  # `<issuer>::<client_id>` (so `*`: the key holds dots). A refresh rewrote
-  # the entry's tokens and expiry and left its user_id (measured on 1.0.92
-  # against stubs), so a copy naming another user, or another entry, is no
-  # refresh.
+  # A login file, carried whole. The account it is: each entry's user_id, the
+  # entries keyed `<issuer>::<client_id>` (so `*`: the key holds dots). A
+  # refresh rewrote the entry's tokens and expiry and left its user_id
+  # (measured on 1.0.92 against stubs answering the same subject), so a copy
+  # naming another user, or another entry, is no refresh.
   identity_keys:
     auth.json: ["*.user_id"]
   # THE HARNESS'S OWN WORD: signed out, it says "set the XAI_API_KEY environment
@@ -3480,9 +3487,9 @@ muse-code:
     - ".config/muse/AGENTS.md"
     - ".agents/skills"
   host_credential_paths: [".config/muse/auth.json"]
-  # NO identity_keys: auth.json names no account, only OAuth tokens, their
-  # expiry and origin, and the key and base URL each run mints (run_keys;
-  # measured on 1.4.25 against stubs).
+  # A login file, carried whole but for its run_keys. NO identity_keys: it
+  # names no account, only OAuth tokens, their expiry and origin, and the key
+  # and base URL each run mints (measured on 1.4.25 against stubs).
   # A Meta Model API key, so it is the METERED credential: reached through
   # auth.mode api-key or inherit-env, never forwarded silently. It takes
   # priority over every stored credential inside the harness itself, which is
@@ -4000,9 +4007,18 @@ kimi-code:
   host_credential_paths:
     - ".kimi-code/credentials/kimi-code.json"
     - ".kimi-code/config.toml"
-  # NO identity_keys: kimi-code.json holds OAuth tokens, scope and expiry
-  # alone (measured on 2.7.2), and config.toml is no JSON and names the
-  # provider, not an account.
+  # config.toml is a MIXED FILE: `kimi login` writes the login's tables
+  # (2.7.2's applyManagedKimiCodeConfig: the provider with its OAuth
+  # reference, the models and defaults, the search and fetch services) into
+  # the file the harness also reads hooks, permission rules and tool settings
+  # from (CHECK-HOME-KIMI), so a home is seeded with, and a refresh carries
+  # back, those tables alone. Which login it is: the provider and services,
+  # where its token is sent; a run refreshes only kimi-code.json, a login
+  # file of OAuth tokens, scope and expiry alone that names no account.
+  login_keys:
+    config.toml: [default_model, default_provider, models, providers, services, thinking]
+  identity_keys:
+    config.toml: [default_provider, providers, services]
   # A real one-shot subcommand, not a slash command: `kimi login` runs the
   # RFC 8628 device-code flow, prints the verification URL and user code to
   # stderr, polls, and exits 0 on success. Its one flag is `--region`
@@ -4389,9 +4405,11 @@ hermes:
     - ".hermes/.env"
     - ".hermes/auth.json"
     - ".hermes/shared/nous_auth.json"
-  # NO identity_keys: auth.json's Nous login and pool, and its shared copy,
-  # hold tokens, a client id, portal URLs and a minted agent key, but no
-  # account (measured on 0.23.3 against stubs); .env is no JSON.
+  # All three are login files, carried whole: auth.json's provider choice,
+  # Nous login and pool, and its shared copy hold tokens, a client id, portal
+  # URLs and a minted agent key, but no account (measured on 0.23.3 against
+  # stubs), so NO identity_keys; .env holds the keys `hermes auth` stores, and
+  # a seat's toolsets write no file. Its settings are config.yaml, seeded.
   # A GATEWAY PER HOME RUNS EVERY `-z` TURN (hermes_cli/oneshot.py: "The run
   # itself goes through the gateway"). The first call into a home starts
   # `hermes gateway run --idle-exit` in a session of its own, with that call's
@@ -4755,9 +4773,10 @@ pi:
     - ".pi/agent/npm"
     - ".pi/agent/git"
   host_credential_paths: [".pi/agent/auth.json"]
-  # The account a login is, where a provider's entry names one: a ChatGPT
-  # sign-in's openai-codex.accountId (measured on 1.6.0 against stubs). The
-  # Anthropic and Copilot entries hold tokens and expiry alone.
+  # A login file, carried whole. The account it is, where a provider's entry
+  # names one: a ChatGPT sign-in's openai-codex.accountId (its shape measured
+  # on 1.6.0 against stubs; its refresh read from the code). The Anthropic and
+  # Copilot entries hold tokens and expiry alone.
   identity_keys:
     auth.json: ["openai-codex.accountId"]
   # THE TUI ITSELF, because `/login` is a SLASH COMMAND rather than a

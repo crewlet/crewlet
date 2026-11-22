@@ -7,10 +7,12 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
 // A BOX WRITES BACK NO KEY ITS RUN MINTED: a login file whose run keys
-// ([Spec.CredentialRunKeys]) the harness rewrote during the run, as Muse Code
+// ([Spec.CredentialRules]) the harness rewrote during the run, as Muse Code
 // writes a key it minted into auth.json, is written back with the shared
 // login's value of each: nothing at all where the run changed nothing else,
 // the run's refresh beside the shared key where it did. A box handed no run
@@ -22,7 +24,7 @@ func TestABoxWritesBackNoKeyItsRunMinted(t *testing.T) {
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "credentials")
 	files := map[string]string{".fake/auth.json": filepath.Join(dir, "auth.json")}
-	keys := map[string][]string{".fake/auth.json": {"api_key"}}
+	rules := map[string]harnessprofile.FileRule{".fake/auth.json": {Name: "auth.json", RunKeys: []string{"api_key"}}}
 	login := `{"token":"t1","api_key":"LOGIN"}`
 	putLogin(t, dir, map[string]string{"auth.json": login})
 	run := func(spec Spec, body string) string {
@@ -41,7 +43,7 @@ func TestABoxWritesBackNoKeyItsRunMinted(t *testing.T) {
 		var x, y any
 		return json.Unmarshal([]byte(a), &x) == nil && json.Unmarshal([]byte(b), &y) == nil && reflect.DeepEqual(x, y)
 	}
-	spec := Spec{CredentialFiles: files, CredentialRunKeys: keys}
+	spec := Spec{CredentialFiles: files, CredentialRules: rules}
 	if got := run(spec, `{"token":"t1","api_key":"MINTED"}`); got != login {
 		t.Errorf("a run that minted a key alone left the shared login %s, want it as it was", got)
 	}
