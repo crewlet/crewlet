@@ -238,10 +238,10 @@ func tempDir(home string) string { return filepath.Join(home, seatTempDir) }
 //
 // THE TEMPORARY DIRECTORY TOO, because it is the one directory a program
 // expects to find rather than create: mktemp and every library like it fail
-// on a TMPDIR that names nothing. Named and never made, it failed every codex
-// call, whose sandbox helper resolves TMPDIR before it reads the call's
-// AGENTS.md ("failed to resolve synthetic mount registry temp directory"),
-// and it would fail any harness that writes a temporary file.
+// on a TMPDIR that names nothing, so named and never made it would fail any
+// harness, or any command it runs, that writes a temporary file. Codex 0.171.0
+// itself runs a call on one that names nothing (measured), so the reason is
+// every other writer, not Codex.
 func prepareHome(home, cache string) error {
 	for _, dir := range []string{home, cache, tempDir(home)} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
