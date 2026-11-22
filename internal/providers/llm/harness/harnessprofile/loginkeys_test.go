@@ -84,7 +84,8 @@ func TestALoginsAccountIsReadAtItsIdentityKeys(t *testing.T) {
 		"a TOML table changed inline": {"config.toml", []string{"providers"},
 			"[providers.p]\nbase_url = \"https://a.example\"\n", "providers = { p = { base_url = \"https://b.example\" } }\n", false},
 	} {
-		rule := FileRule{Name: tc.file, IdentityKeys: tc.keys}
+		// config.json stands for Copilot's, the one file declared with comment lines.
+		rule := FileRule{Name: tc.file, IdentityKeys: tc.keys, CommentLines: tc.file == "config.json"}
 		if got := rule.SameAccount([]byte(tc.other), []byte(tc.seed)); got != tc.want {
 			t.Errorf("%s: SameAccount = %v, want %v", name, got, tc.want)
 		}

@@ -60,6 +60,7 @@ func TestABoxCarriesOnlyItsTokensAndOnlyItsAccount(t *testing.T) {
 			t.Fatalf("no %s profile", harness)
 		}
 		names := slices.Sorted(maps.Keys(login.Seed))
+		carries := slices.ContainsFunc(names, func(name string) bool { return len(profile.RefreshKeys[name]) > 0 })
 		// run seeds a box with the login, puts copied in its home and tears it
 		// down, answering the shared login after and what the teardown said.
 		run := func(copied map[string]string) (map[string]string, string) {
@@ -108,8 +109,10 @@ func TestABoxCarriesOnlyItsTokensAndOnlyItsAccount(t *testing.T) {
 			if !maps.Equal(got, login.Seed) {
 				t.Errorf("%s: %s left the shared login %v, want it as it was", harness, what, got)
 			}
-			if !strings.Contains(said, "local_sandbox_credential_superseded") || !strings.Contains(said, "shared=other_account") {
-				t.Errorf("%s: %s was not said as another account's:\n%s", harness, what, said)
+			// A login none of whose files carries a token back writes nothing
+			// whatever the copy says, so there is no refusal to tell.
+			if refused := strings.Contains(said, "local_sandbox_credential_superseded") && strings.Contains(said, "shared=other_account"); refused != carries {
+				t.Errorf("%s: %s said as another account's = %v, want %v:\n%s", harness, what, !carries, carries, said)
 			}
 			if strings.Contains(said, "access-9") || strings.Contains(said, "token-9") {
 				t.Errorf("%s: the log carries a login's value:\n%s", harness, said)
