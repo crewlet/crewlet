@@ -165,7 +165,7 @@ type Fleet struct {
 	googleIdentities entryRecords[coord.GoogleIdentity, coord.GoogleIdentity]
 
 	// version is the one counter every versioned write draws from, sandbox
-	// runs, mailbox records, chat read records and Home boards alike. Store-wide rather
+	// runs, mailbox records, chat read records, trim holds and Home boards alike. Store-wide rather
 	// than per record, as a KV revision is, so a record deleted and created
 	// again never hands back a version an older incarnation of it already
 	// used: a caller still holding that version must lose, not win against a

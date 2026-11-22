@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net"
 	"regexp"
-	"strconv"
 	"sync"
 
 	"github.com/crewlet/crewlet/internal/accessdomain"
@@ -40,12 +39,7 @@ func recordOf(call growth.Call, m made) growth.Record {
 // it may not name, or one past its bound, is left out and counted.
 func recordChanges(ch []growth.CardChange, public bool) []growth.RecordChange {
 	out := make([]growth.RecordChange, 0, len(ch))
-	left := 0
 	for _, c := range ch {
-		if !accessdomain.GrowthFieldRecordable(c.Field) || len(out) == accessdomain.MaxGrowthChanges-1 {
-			left++
-			continue
-		}
 		label := c.Label
 		if len(label) > accessdomain.GrowthLabelMaxBytes || !accessdomain.GrowthValueRecordable(label) {
 			label = ""
@@ -54,15 +48,8 @@ func recordChanges(ch []growth.CardChange, public bool) []growth.RecordChange {
 		out = append(out, growth.RecordChange{Field: c.Field, Label: label, Before: c.Before, After: c.After,
 			Money: c.Money && !text, Text: text})
 	}
-	if left > 0 {
-		out = append(out, growth.RecordChange{Field: unrecordedField, Label: "Fields left out",
-			After: strconv.Itoa(left)})
-	}
-	return out
+	return accessdomain.RecordableGrowthChanges(out)
 }
-
-// unrecordedField is the change that counts the fields a record leaves out.
-const unrecordedField = "unrecordedFields"
 
 // tokenShape is a value kept in the clear: a state, a number, an ID or a flag,
 // never words somebody wrote.

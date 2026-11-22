@@ -106,6 +106,19 @@ type fakeGoogle struct {
 
 func newFake(t *testing.T) (*fakeGoogle, *googleauth.Connection) {
 	t.Helper()
+	clk := &testClock{t: time.Date(2026, 11, 21, 9, 0, 0, 0, time.UTC)}
+	f := &fakeGoogle{clock: clk, seatTokenCreator: true}
+	srv := httptest.NewServer(http.HandlerFunc(f.serve))
+	t.Cleanup(srv.Close)
+	conn, key := connectionOver(t, httpxtest.Rewrite(t, srv))
+	f.pub = &key.PublicKey
+	return f, conn.WithClock(googleauth.Clock{Now: clk.now, Sleep: clk.sleep})
+}
+
+// connectionOver is a connection whose every request goes through rt, and the
+// federation key it signs with.
+func connectionOver(t *testing.T, rt http.RoundTripper) (*googleauth.Connection, *ecdsa.PrivateKey) {
+	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -114,19 +127,15 @@ func newFake(t *testing.T) (*fakeGoogle, *googleauth.Connection) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	clk := &testClock{t: time.Date(2026, 11, 21, 9, 0, 0, 0, time.UTC)}
-	f := &fakeGoogle{pub: &key.PublicKey, clock: clk, seatTokenCreator: true}
-	srv := httptest.NewServer(http.HandlerFunc(f.serve))
-	t.Cleanup(srv.Close)
 	conn, err := googleauth.New(googleauth.Options{
 		Company: testCompany, Provisioner: provisioner, Provider: testProvider,
 		FederationKey: string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})),
-		HTTP:          &http.Client{Transport: httpxtest.Rewrite(t, srv)},
+		HTTP:          &http.Client{Transport: rt},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return f, conn.WithClock(googleauth.Clock{Now: clk.now, Sleep: clk.sleep})
+	return conn, key
 }
 
 func (f *fakeGoogle) edit(change func(*fakeGoogle)) {

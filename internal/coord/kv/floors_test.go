@@ -33,7 +33,7 @@ func TestAFloorReadCreatesNoConsumer(t *testing.T) {
 		t.Fatalf("PutFloor: %v", err)
 	}
 	if err := fleet.PutHold(ctx, coord.TrimHold{
-		Owner: "backup", At: time.Now().UTC(),
+		Owner:   "backup",
 		Streams: map[string]coord.Position{"LOG": {Stream: "LOG", Generation: 1, Seq: 5}},
 	}); err != nil {
 		t.Fatalf("PutHold: %v", err)

@@ -5,7 +5,16 @@
 
 /** What sort of value a requirement holds (`setup.Kinds`); a toggle is a JSON boolean. */
 export type SetupRequirementKind =
-  "secret" | "url" | "id" | "choice" | "text" | "handle" | "email" | "toggle" | "consent";
+  | "secret"
+  | "url"
+  | "id"
+  | "choice"
+  | "text"
+  | "handle"
+  | "email"
+  | "toggle"
+  | "add_identity"
+  | "consent";
 
 /** One step at the app: `{link}` in `text` is the vendor link of the field `link` names. */
 export interface SetupStep {
@@ -21,6 +30,17 @@ export interface SetupStep {
 export interface SetupCaution {
   title: string;
   body: string;
+}
+
+/** An identity a person adds at the vendor; `seat` names the agent when `level` is "seat". */
+interface SetupIdentityStep {
+  email: string;
+  role: { id: string; name: string };
+  where: { url: string; words: string };
+  level: "company" | "seat";
+  seat?: string;
+  /** Whether the engine saw the identity hold the role. */
+  state: "present" | "missing" | "unknown";
 }
 
 /** One input an integration needs; every word the form draws comes from here. */
@@ -52,6 +72,8 @@ export interface SetupRequirement {
   mintable?: boolean;
   /** The engine's rendering of a minted value's public half, to copy to the app. */
   public?: { text: string; language: string };
+  /** An `add_identity` step: the email to add at the vendor, at which role and where. */
+  identity?: SetupIdentityStep;
   /** Written from its default without being asked. */
   hidden?: boolean;
   /** The one line under the field, under fifteen words. */

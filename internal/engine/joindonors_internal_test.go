@@ -20,14 +20,17 @@ import (
 // one, which gives up its presence first but serves its donor until its state
 // log stops) has its offer dropped whenever it lands second; a named node that
 // cannot answer (this node at boot, its donor not started) costs the window.
+// A row is judged by the instant the store took it, read on the joiner's
+// clock, never by its writer's stamp ([donorRowWithin]).
 func TestAJoinNamesEveryNodeThatCanDonate(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	// A row written and stored age ago, on clocks that agree.
 	holds := func(id string, age time.Duration) coord.NodePositions {
-		return coord.NodePositions{NodeID: id, At: now.Add(-age), SnapshotBytes: 4096}
+		return coord.NodePositions{NodeID: id, At: now.Add(-age), StoredAt: now.Add(-age), SnapshotBytes: 4096}
 	}
 	empty := func(id string, age time.Duration) coord.NodePositions {
-		return coord.NodePositions{NodeID: id, At: now.Add(-age)}
+		return coord.NodePositions{NodeID: id, At: now.Add(-age), StoredAt: now.Add(-age)}
 	}
 	cases := map[string]struct {
 		ownServing bool
@@ -50,17 +53,39 @@ func TestAJoinNamesEveryNodeThatCanDonate(t *testing.T) {
 		"a row naming an artefact by a log's snapshot instant alone": {
 			ownServing: true,
 			live:       []string{"joiner"},
-			rows: []coord.NodePositions{{NodeID: "draining", At: now,
+			rows: []coord.NodePositions{{NodeID: "draining", At: now, StoredAt: now,
 				Domains: map[string]coord.DomainPosition{
 					"tracker": {SnapshotAt: now.Add(-time.Hour)},
 				}}},
 			want: []string{"draining", "joiner"},
 		},
-		"not a row older than four heartbeats": {
+		"a draining node whose clock stands behind, off a row the store took just now": {
 			ownServing: true,
 			live:       []string{"joiner"},
-			rows:       []coord.NodePositions{holds("gone", donorRowFresh+time.Second)},
-			want:       []string{"joiner"},
+			rows: []coord.NodePositions{{NodeID: "behind", SnapshotBytes: 4096,
+				At: now.Add(-90 * time.Second), StoredAt: now.Add(-5 * time.Second)}},
+			want: []string{"behind", "joiner"},
+		},
+		"not a row the store took past the skew bound, however fresh its writer's stamp": {
+			ownServing: true,
+			live:       []string{"joiner"},
+			rows: []coord.NodePositions{{NodeID: "gone", SnapshotBytes: 4096,
+				At: now, StoredAt: now.Add(-(donorRowWithin + time.Second))}},
+			want: []string{"joiner"},
+		},
+		"a row the store took inside the skew bound, however old its writer's stamp": {
+			ownServing: true,
+			live:       []string{"joiner"},
+			rows: []coord.NodePositions{{NodeID: "ahead", SnapshotBytes: 4096,
+				At: now.Add(-3 * time.Hour), StoredAt: now.Add(-(donorRowWithin - time.Second))}},
+			want: []string{"ahead", "joiner"},
+		},
+		"a row read with no stored instant": {
+			ownServing: true,
+			live:       []string{"joiner"},
+			rows: []coord.NodePositions{{NodeID: "unstamped", SnapshotBytes: 4096,
+				At: now.Add(-3 * time.Hour)}},
+			want: []string{"joiner", "unstamped"},
 		},
 		"not a fresh row naming no artefact": {
 			ownServing: true,

@@ -37,22 +37,28 @@ func TestAClientsProjectIsItsIDsNumericPrefix(t *testing.T) {
 	}
 }
 
-// A GRANT IS KEPT ONLY AS EXACTLY THE ONE SCOPE ASKED: a scope unticked on
-// Google's granular consent, one added, or silence is refused.
+// A GRANT IS KEPT ONLY AS EXACTLY THE SCOPES ASKED, in any order: a scope
+// unticked on Google's granular consent, one added, or silence is refused,
+// and so is a sign-in that asked for none.
 //
-// Mutation: accept a granted list that merely contains the scope, or read
-// silence as granted, and a case goes red.
-func TestAGrantIsKeptOnlyAsExactlyTheOneScopeAsked(t *testing.T) {
+// Mutation: accept a granted list that merely contains the scopes, or one
+// missing one, or read silence as granted, and a case goes red.
+func TestAGrantIsKeptOnlyAsExactlyTheScopesAsked(t *testing.T) {
 	t.Parallel()
-	const asked = "https://www.googleapis.com/auth/adsense.readonly"
-	if err := googleauth.CheckConsentScope(asked, []string{asked}); err != nil {
-		t.Fatalf("the scope asked was refused: %v", err)
+	const read, write = "https://www.googleapis.com/auth/admob.readonly",
+		"https://www.googleapis.com/auth/admob.monetization"
+	asked := []string{read, write}
+	if err := googleauth.CheckConsentScope(asked, []string{write, read}); err != nil {
+		t.Fatalf("the scopes asked, in another order, were refused: %v", err)
 	}
-	for _, granted := range [][]string{nil, {}, {"https://www.googleapis.com/auth/admob.readonly"},
-		{asked, "openid"}, {"adsense.readonly"}} {
+	for _, granted := range [][]string{nil, {}, {read}, {write}, {read, write, "openid"},
+		{"admob.readonly", "admob.monetization"}} {
 		if err := googleauth.CheckConsentScope(asked, granted); !errors.Is(err, googleauth.ErrScopeNotGranted) {
 			t.Errorf("granted %q was kept (%v)", granted, err)
 		}
+	}
+	if err := googleauth.CheckConsentScope(nil, nil); !errors.Is(err, googleauth.ErrScopeNotGranted) {
+		t.Errorf("a sign-in that asked for no scope was kept (%v)", err)
 	}
 }
 
@@ -81,7 +87,7 @@ func TestARefusalAboutAWeekAfterTheSignInReadsAsAnAppInTesting(t *testing.T) {
 }
 
 // THE AUTHORIZATION REQUEST ASKS FOR A REFRESH TOKEN EVERY TIME and nothing
-// granted earlier, so each sign-in is a grant of the one scope alone.
+// granted earlier, so each sign-in is a grant of the scopes asked alone.
 func TestTheAuthorizationRequestAsksForARefreshTokenEveryTime(t *testing.T) {
 	t.Parallel()
 	q := googleauth.ConsentParams()
@@ -93,15 +99,21 @@ func TestTheAuthorizationRequestAsksForARefreshTokenEveryTime(t *testing.T) {
 	}
 }
 
-// A CONSENT PRODUCT NAMES ONE SCOPE: one registered with two, or with none, is
-// a programming error the build refuses.
-func TestAConsentProductNamesOneScope(t *testing.T) {
+// A CONSENT PRODUCT NAMES ITS SCOPES AND CLIENT: one registered without
+// either is a programming error the build refuses, and scopes that are none,
+// or no single word, are refused before a sign-in starts.
+func TestAConsentProductNamesItsScopes(t *testing.T) {
 	t.Parallel()
 	client := func(*config.Company) (googleauth.ConsentClient, bool) { return googleauth.ConsentClient{}, false }
+	scopes := func(s ...string) func(*config.Company) []string { return func(*config.Company) []string { return s } }
+	for _, bad := range [][]string{nil, {"a b"}, {""}} {
+		if _, err := googleauth.ConsentScopes(googleauth.Consent{Name: "Bad", Scopes: scopes(bad...)}, nil); err == nil {
+			t.Errorf("scopes %q were taken", bad)
+		}
+	}
 	for _, p := range []googleauth.Consent{
-		{Kind: "consent_two_scopes", Name: "Two", Scope: "a b", Client: client},
 		{Kind: "consent_no_scope", Name: "None", Client: client},
-		{Kind: "consent_no_client", Name: "Client", Scope: "a"},
+		{Kind: "consent_no_client", Name: "Client", Scopes: scopes("a")},
 	} {
 		func() {
 			defer func() {

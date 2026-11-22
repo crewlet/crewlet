@@ -1213,6 +1213,9 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 		return vendor.declaredAt(c) != ""
 	}
 	in := c.Integrations
+	if slices.Contains(growthBlockKeys(), surface) {
+		return in.growthBlock(surface) != nil
+	}
 	switch surface {
 	case "jira":
 		return in.Jira != nil
@@ -1238,8 +1241,6 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 		return in.GoogleCloud != nil
 	case "ssh":
 		return in.SSH != nil
-	case "app_store_connect":
-		return in.AppStoreConnect != nil
 	case "atlassian":
 		return in.Atlassian != nil
 	default:
