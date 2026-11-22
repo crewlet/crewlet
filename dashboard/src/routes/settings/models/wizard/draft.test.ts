@@ -156,7 +156,7 @@ describe("the entry", () => {
       auth: entity.auth,
       env: entity.env,
     };
-    const back = draftOf(view({ harness: "gemini-cli", model: "gemini-2.5-pro", raw }));
+    const back = draftOf(view({ harness: "gemini-cli", model: "gemini-2.5-pro", raw }), EXECUTORS);
     expect([back.method, back.cloud]).toEqual(["cloud", "gemini-vertex"]);
   });
 
@@ -172,6 +172,7 @@ describe("the entry", () => {
     // AN EDIT ON ANOTHER METHOD that turns to its cloud takes Gemini CLI's too.
     const keyed = draftOf(
       view({ harness: "gemini-cli", model: "gemini-2.5-pro", raw: { harness: "gemini-cli" } }),
+      EXECUTORS,
     );
     expect(withChoices(keyed, { method: "cloud" }, fresh).draft.cloud).toBe("gemini-vertex");
   });
