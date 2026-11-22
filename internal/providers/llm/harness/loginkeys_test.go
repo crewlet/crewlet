@@ -8,6 +8,8 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
 // A SETTINGS FILE IS A LOGIN ONLY ONCE IT HOLDS ONE. Copilot CLI writes
@@ -27,7 +29,7 @@ func TestASettingsFileIsALoginOnlyOnceItHoldsOne(t *testing.T) {
 			"binary": os.Args[0], "complete_args": []any{"-test.run=TestFakeHarness"},
 			"model_args": []any{}, "output": "text",
 			"credential_paths": []any{".vendor/config.json"},
-			"login_keys":       map[string]any{"config.json": "tokens"},
+			"login_keys":       map[string]any{"config.json": []any{"tokens"}},
 		},
 	})
 	if err != nil {
@@ -68,7 +70,7 @@ func TestACarryOutOfSettingsAloneHoldsNoLogin(t *testing.T) {
 	t.Parallel()
 	profile := testProfile(t)
 	profile.CredentialPaths = []string{".vendor/config.json"}
-	profile.LoginKeys = map[string]string{"config.json": "tokens"}
+	profile.LoginKeys = map[string][]string{"config.json": {"tokens"}}
 	dir := t.TempDir()
 	t.Cleanup(func() { forgetWorkspace(dir) })
 	ws, err := Shared(dir, "fake-cli", profile)
@@ -113,7 +115,7 @@ func TestASettingsFileIsNeitherExportedNorLoggedOut(t *testing.T) {
 			"binary": os.Args[0], "complete_args": []any{"-test.run=TestFakeHarness"},
 			"model_args": []any{}, "output": "text",
 			"credential_paths": []any{".vendor/config.json", ".vendor/token.json"},
-			"login_keys":       map[string]any{"config.json": "tokens"},
+			"login_keys":       map[string]any{"config.json": []any{"tokens"}},
 		},
 	})
 	if err != nil {
@@ -150,5 +152,60 @@ func TestASettingsFileIsNeitherExportedNorLoggedOut(t *testing.T) {
 	if got := readLogin(t, p.Workspace()); len(got) != 2 || got["config.json"] != settings ||
 		got["token.json"] != token {
 		t.Errorf("after the import the shared login is %v, want the settings file and the token", got)
+	}
+}
+
+// BOTH OF COPILOT'S LOGIN ENTRIES ARE ITS LOGIN. On its first use of a login
+// under copilotTokens, Copilot 1.0.114 adds the same token under authTokens,
+// and signs in from authTokens alone (measured, see the profile). A config.json
+// holding either is carried out as a login, and is no settings file a logout
+// keeps; holding neither, it is the harness's settings alone.
+//
+// Mutation: drop authTokens from the copilot profile's login_keys, and the
+// second copy is kept by a logout and carries out no login.
+func TestBothOfCopilotsLoginEntriesAreItsLogin(t *testing.T) {
+	t.Parallel()
+	profile, err := harnessprofile.Load("copilot", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	t.Cleanup(func() { forgetWorkspace(dir) })
+	ws, err := Shared(dir, "copilot", profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const header = "// User settings belong in settings.json.\n// This file is managed automatically.\n"
+	for name, tc := range map[string]struct {
+		body  string
+		login bool
+	}{
+		"its first entry": {`{"copilotTokens": {"https://github.com:someone": "placeholder"}}`, true},
+		"its second entry alone": {`{"copilotTokens": {}, "authTokens": ` +
+			`{"https://github.com:someone:github": {"token": "placeholder"}}}`, true},
+		"both, as 1.0.114 leaves it": {`{"copilotTokens": {"https://github.com:someone": "placeholder"}, ` +
+			`"authTokens": {"https://github.com:someone:github": {"token": "placeholder"}}}`, true},
+		"neither": {`{"firstLaunchAt": "2026-11-22T00:00:00.000Z", "authTokens": {}}`, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			content := []byte(header + tc.body)
+			files := map[string][]byte{"config.json": content}
+			if _, kept := ws.notLoginIn(files)["config.json"]; kept == tc.login {
+				t.Errorf("a logout keeps the file = %v, want %v", kept, !tc.login)
+			}
+			if _, carried := ws.loginIn(files)["config.json"]; carried != tc.login {
+				t.Errorf("the file is a login to export = %v, want %v", carried, tc.login)
+			}
+			home := t.TempDir()
+			writeFile(t, filepath.Join(home, ".copilot", "config.json"), string(content))
+			holds, err := ws.syncCredentialsOut(t.Context(), home, t.TempDir(), nil,
+				generation{Mode: syncLogin, Seeded: map[string]string{}})
+			if err != nil {
+				t.Fatalf("syncCredentialsOut: %v", err)
+			}
+			if holds != tc.login {
+				t.Errorf("the carried-out home holds a login = %v, want %v", holds, tc.login)
+			}
+		})
 	}
 }

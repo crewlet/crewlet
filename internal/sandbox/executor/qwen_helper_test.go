@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/prereqtest"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // nodeForQwen is the node a Qwen Code box's helper is run under here.
@@ -123,7 +124,7 @@ func startQwenHelper(t *testing.T, notes string, turn string, config map[string]
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeStandIn(t, filepath.Join(bin, "qwen"), "#!/bin/sh\nexec "+shQuote(node)+" "+shQuote(standin)+` "$@"`+"\n")
+	writeStandIn(t, filepath.Join(bin, "qwen"), "#!/bin/sh\nexec "+shellword.Quote(node)+" "+shellword.Quote(standin)+` "$@"`+"\n")
 	captures, err := filepath.Abs(filepath.Join("testdata", "qwen", "0.28.4"))
 	if err != nil {
 		t.Fatal(err)
@@ -457,6 +458,27 @@ func TestAQwenRunWhoseBridgeNeverConnectsIsNotStarted(t *testing.T) {
 		if e["method"] == "session/prompt" {
 			t.Error("the prompt went in with the bridge disconnected")
 		}
+	}
+}
+
+// A QWEN RUN LOADS NO EXTENSION. Qwen Code starts every extension in its home
+// with a run, its context file, hooks and MCP servers (measured on 0.28.4),
+// and a reused box's home is anyone's to write, so the helper starts Qwen Code
+// with `--extensions none`, which loaded none of them.
+//
+// Mutation: drop the flag from the helper's argv.
+func TestAQwenRunLoadsNoExtension(t *testing.T) {
+	t.Parallel()
+	bridge := newQwenBridge(t)
+	run := startQwenHelper(t, bridge.steer(), "acp-note.jsonl", map[string]any{"mcpWaitMs": 600}, "QWEN_FAKE_NEVER_CONNECT=1")
+	run.finish(t)
+	saw := run.standinSaw(t)
+	if len(saw) == 0 {
+		t.Fatal("the stand-in saw nothing")
+	}
+	argv, _ := saw[0]["argv"].([]any)
+	if i := slices.Index(argv, any("--extensions")); i < 0 || i+1 >= len(argv) || argv[i+1] != "none" {
+		t.Errorf("Qwen Code started with %v, want --extensions none", argv)
 	}
 }
 

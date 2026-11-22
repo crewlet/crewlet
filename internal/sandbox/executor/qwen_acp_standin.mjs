@@ -14,7 +14,8 @@
 //                     connected)
 //   QWEN_FAKE_TURN    the capture whose turn session/prompt replays
 //   QWEN_FAKE_HOME    the home Qwen Code records sessions under
-//   QWEN_FAKE_LOG     where the stand-in writes what it saw, a JSON line each
+//   QWEN_FAKE_LOG     where the stand-in writes what it saw, a JSON line each,
+//                     its argv first
 //   QWEN_FAKE_NEVER_CONNECT  the MCP status never says connected
 //   QWEN_FAKE_AWAIT_NOTES    asks again at a drain until it has been handed
 //                     notes at that many drains (1 for any set value but a
@@ -43,6 +44,7 @@ const env = process.env
 const log = (entry) => fs.appendFileSync(env.QWEN_FAKE_LOG, JSON.stringify(entry) + "\n")
 const capture = (file) => fs.readFileSync(file, "utf8").split("\n").filter((l) => l !== "").map((l) => JSON.parse(l))
 
+log({ argv: process.argv.slice(2) })
 const start = capture(env.QWEN_FAKE_START)
 const turn = capture(env.QWEN_FAKE_TURN)
 const chatLines = fs.readFileSync(path.join(path.dirname(env.QWEN_FAKE_TURN), "chat-note.jsonl"), "utf8").split("\n")

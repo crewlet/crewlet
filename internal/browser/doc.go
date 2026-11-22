@@ -2,8 +2,9 @@
 // one package reads: the oldest major the engine accepts and the suite
 // certifies ([MinChromiumMajor]), the Playwright release a seat's box installs
 // and the Chromium build it expects ([PlaywrightMCPRelease],
-// [ExpectedChromiumVersion]), and that no Go but the artifact render's client
-// speaks DevTools (ADR-0165).
+// [ExpectedChromiumVersion]), the closed values of a box's ensure answer
+// ([EnsureReason] and its fellows), and that no Go but the artifact render's
+// client speaks DevTools (ADR-0165).
 //
 // # The floor
 //
@@ -12,7 +13,8 @@
 // versions — and the oldest the suite certifies: scripts/chromium-pin.env pins
 // its newest patch beside Chrome for Testing's Stable, and every case that
 // drives Chromium runs on both (chromiumtest.Each), unless its doc says why
-// the floor adds nothing to its claim.
+// the floor adds nothing to its claim. The box helper's cases pair each pin
+// with a Node instead (boxhelpertest.Each): this floor's with the floor Node.
 //
 // It is Chrome for Testing's first major published for all four platforms the
 // engine is released for: 153, its first build for linux-arm64 (Chrome for
@@ -37,6 +39,20 @@
 // here beside the floor, each the release somebody read: boxhelper's package
 // doc says how its tests hold them to the lock, and keep a bump of the lock
 // alone red until a person has read it and moved these.
+//
+// # A box's ensure
+//
+// The box helper's ensure (internal/browser/boxhelper) answers in closed
+// values, each a named type with Valid(), so a value off the wire is a value
+// rather than a panic: its verdict ([EnsureVerdict]); why a browser is
+// withheld and the cause ensure could tell ([EnsureReason], [EnsureCause]),
+// every reason with the causes it takes, the box's in the order ensure checks
+// them and then the engine's own ([EnsureReason.Printed]); the build it chose
+// ([ChromiumBuild]); the cell's sandbox ([ChromiumSandbox], whose zero value
+// is neither setting); and how its supervisor was come by
+// ([SupervisorStart]). They live here, never in the helper that prints them,
+// so a package that reads them, a configuration or an event's record, links
+// none of the helper's embedded modules and depends on no helper.
 //
 // # DevTools only through the artifact render's client
 //

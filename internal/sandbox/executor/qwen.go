@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"cmp"
 	"context"
 	_ "embed"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // QwenCodeName is this runner's config name.
@@ -47,7 +49,7 @@ func (QwenCode) Session(sandbox.RunRequest) Session { return Session{ID: uuid.Ne
 // request reaches the helper as SIGTERM, which it answers with
 // session/cancel, never passing the signal to Qwen Code (qwen_helper.mjs).
 func (QwenCode) Command(req sandbox.RunRequest, session Session, paths Paths, _ string) string {
-	return "sh -c " + sandbox.ShellQuote(qwenScript(session, paths, sandbox.JobStopGrace))
+	return "sh -c " + shellword.Quote(qwenScript(session, paths, sandbox.JobStopGrace))
 }
 
 // qwenScript is a Qwen Code run's script, giving its helper stop to go once
@@ -57,8 +59,8 @@ func qwenScript(session Session, paths Paths, stop time.Duration) string {
 	var b strings.Builder
 	b.WriteString(endPrologue(paths, stop))
 	b.WriteString(endHarness(""))
-	b.WriteString(launchHarness("node "+sandbox.ShellQuote(paths.QwenHelper())+" run "+
-		sandbox.ShellQuote(paths.QwenHelperConfig())+" "+sandbox.ShellQuote(session.ID), paths))
+	b.WriteString(launchHarness("node "+shellword.Quote(paths.QwenHelper())+" run "+
+		shellword.Quote(paths.QwenHelperConfig())+" "+shellword.Quote(session.ID), paths))
 	b.WriteString(`exit "$code"` + "\n")
 	return b.String()
 }
@@ -66,17 +68,20 @@ func qwenScript(session Session, paths Paths, stop time.Duration) string {
 // Output is the helper's stream on stdout, which is also the result: the
 // session/update lines Qwen Code sent and the helper's own, ending with how
 // the turn ended ([qwenEndEvent]). The brief goes on stdin, which the helper
-// reads and sends as the turn's prompt. Unset is what would move or replace
-// what the run depends on: another home (QWEN_HOME, QWEN_RUNTIME_DIR) would
-// hide the settings and the session from the helper, QWEN_SYSTEM_MD replaces
-// the prompt the run's text is added to, OPENAI_API_KEY would reach the
+// reads and sends as the turn's prompt. Unset is what would move what the
+// run depends on: another home (QWEN_HOME, QWEN_RUNTIME_DIR) would hide the
+// settings and the session from the helper, OPENAI_API_KEY would reach the
 // model's shell (the key is in the settings, [qwenSettings]), and
 // QWEN_CODE_UNATTENDED_RETRY retries a refused request for up to six hours.
+// The prompt's variables are pinned ([QwenCode.Pins]).
 func (QwenCode) Output(paths Paths) Output {
 	return Output{Stdout: paths.Result(), Events: true, BriefOnStdin: true,
-		Unset: []string{"QWEN_HOME", "QWEN_RUNTIME_DIR", "QWEN_SYSTEM_MD", "OPENAI_API_KEY",
-			"QWEN_CODE_UNATTENDED_RETRY"}}
+		Unset: []string{"QWEN_HOME", "QWEN_RUNTIME_DIR", "OPENAI_API_KEY", "QWEN_CODE_UNATTENDED_RETRY"}}
 }
+
+// qwenDashScope is the endpoint Qwen Code's OpenAI-compatible sign-in sends a
+// key to when OPENAI_BASE_URL names none (measured on 0.28.4).
+const qwenDashScope = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 // Pins are what a run needs whatever the image says: the run's text in place
 // of Qwen Code's opening identity sentence, the rest of its prompt kept
@@ -84,8 +89,16 @@ func (QwenCode) Output(paths Paths) Output {
 // 0.28.4); no catalogue fetch from models.dev, a connection of its own every
 // run; and the entry's model, which Qwen Code reads from OPENAI_MODEL under
 // its OpenAI sign-in (as measured under ACP).
+//
+// AND THE VARIABLES THAT MOVE THE KEY OR REPLACE THE PROMPT, set whether or
+// not the entry names one, since Qwen Code fills each variable its
+// environment lacks from an `.env` file: OPENAI_BASE_URL the entry's or Qwen
+// Code's own, which its subscription sign-in does not read, and the prompt
+// files off (measured on 0.28.4).
 func (QwenCode) Pins(_ context.Context, req sandbox.RunRequest, paths Paths) []Pinned {
-	pins := []Pinned{{Name: "QWEN_SYSTEM_IDENTITY_MD", Value: paths.System()}, {Name: "QWEN_CODE_MODELS_DEV", Value: "off"}}
+	pins := []Pinned{{Name: "QWEN_SYSTEM_IDENTITY_MD", Value: paths.System()}, {Name: "QWEN_CODE_MODELS_DEV", Value: "off"},
+		{Name: "QWEN_SYSTEM_MD", Value: "false"}, {Name: "QWEN_WRITE_SYSTEM_MD", Value: "false"},
+		{Name: "OPENAI_BASE_URL", Value: cmp.Or(req.Env["OPENAI_BASE_URL"], qwenDashScope)}}
 	if req.Model != "" {
 		pins = append(pins, Pinned{Name: "OPENAI_MODEL", Value: req.Model})
 	}
@@ -99,6 +112,18 @@ func (QwenCode) Events() Decoder { return &qwenEvents{} }
 // stream.
 func (QwenCode) Parse(stdout []byte) sandbox.Result { return decodeAll(&qwenEvents{}, stdout) }
 
+// readsCommands marks Qwen Code as running a prompt that begins with `/` as one
+// of its commands (`/init` wrote a QWEN.md over ACP, measured on 0.28.4).
+func (QwenCode) readsCommands() {}
+
+// qwenHome is what a Qwen Code run may load from the box that its launch did
+// not write ([runHome]): the home's skills, commands, rules, memory files and
+// environment file. The run's own skills are in its work directory
+// ([Paths.QwenSkills]); extensions stay on disk, unloaded (the helper's
+// `--extensions none`); agents are denied in the settings.
+var qwenHome = runHome{State: ".qwen", Owned: []string{"skills", "commands", "rules", "QWEN.md", "AGENTS.md", ".env"},
+	Memory: []string{"QWEN.md", "AGENTS.md"}}
+
 // artifacts is what a Qwen Code run leaves in a box beside the shared
 // artefacts ([artifactHolder]): its settings, which hold its key, the helper
 // and its configuration, and its skills.
@@ -106,12 +131,16 @@ func (QwenCode) artifacts(p Paths) (files, dirs []string) {
 	return []string{p.QwenSettings(), p.QwenHelper(), p.QwenHelperConfig()}, []string{p.QwenSkills()}
 }
 
-// WriteConfig writes what a run's helper and harness read: the run's system
-// text, the helper and its configuration, the settings in the box home, and
-// the run's skills. It returns "": Qwen Code reads its settings from its
-// home, and the helper hands it no MCP servers of its own.
+// WriteConfig removes what an earlier run or the image left for Qwen Code
+// ([qwenHome]) and writes what a run's helper and harness read: the run's
+// system text, the helper and its configuration, the settings in the box
+// home, and the run's skills. It returns "": Qwen Code reads its settings
+// from its home, and the helper hands it no MCP servers of its own.
 func (q QwenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
 	paths Paths) (string, error) {
+	if err := qwenHome.prune(ctx, box, paths.Home, "Qwen Code"); err != nil {
+		return "", err
+	}
 	system := req.System
 	if req.Steer.Set() {
 		system = withNoteInstruction(system, q.NoteInstruction())
@@ -210,7 +239,7 @@ func qwenSettings(req sandbox.RunRequest, paths Paths) map[string]any {
 	}
 	// ONLY THE RUN'S SKILLS: "user" stays enabled, since a directory the
 	// settings name is listed at that level (measured: disabling it lists
-	// nothing), and the home's own skills directories are left empty.
+	// nothing), and the home's own skills directory is removed ([qwenHome]).
 	skills := map[string]any{"disabledLevels": []string{"project", "extension", "bundled"}}
 	if len(req.Skills) > 0 {
 		skills["directories"] = []string{paths.QwenSkills()}
@@ -218,8 +247,8 @@ func qwenSettings(req sandbox.RunRequest, paths Paths) map[string]any {
 			"matcher": "skill",
 			"hooks": []any{map[string]any{
 				"type": "command", "timeout": int(qwenHookTimeout / time.Second),
-				"command": "node " + sandbox.ShellQuote(paths.QwenHelper()) + " skill " +
-					sandbox.ShellQuote(paths.QwenHelperConfig()),
+				"command": "node " + shellword.Quote(paths.QwenHelper()) + " skill " +
+					shellword.Quote(paths.QwenHelperConfig()),
 			}},
 		}}}
 	}

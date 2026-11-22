@@ -54,9 +54,9 @@ func sandboxOutOfMemory(ev Evidence, _ func(string) SeatKind) []Finding {
 			Class: ClassSandboxOutOfMemory, Severity: SeverityCosts, Actor: ActorOwner,
 			Source: SourceEvidence, Area: AreaSetup, Subject: Subject{Kind: SubjectSeat, Seat: seat},
 			Title: "Agent sandboxes ran out of memory this week.",
-			Why: "In the last 7 days the kernel stopped the agent's runs at its sandbox's memory " +
-				"ceiling, so their work was lost and started again. A second one in a row on a " +
-				"conversation holds it until the sandbox changes.",
+			Why: "Each run's work was lost and started again. The kernel stopped them at the sandbox's " +
+				"memory ceiling, and a second stop in a row on a conversation holds it until the " +
+				"sandbox changes.",
 			Item:     item,
 			Evidence: []Fact{{Key: "runs", Value: int64(n)}, {Key: "memory_bytes", Value: ceiling[seat]}},
 			Fix: Fix{Kind: FixOpenSetting, Setting: "providers.sandbox", Options: []Option{},

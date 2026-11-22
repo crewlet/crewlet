@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/activityline"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 func init() { Register(OpenCode{}) }
@@ -174,7 +175,7 @@ func (OpenCode) NoteInstruction() string { return OpenCodeSteerInstruction }
 // ([openCodeCapture]) and measured ([openCodeContext]), every call bounded
 // ([openCodeBounded]), an end on request honoured (end.go).
 func (OpenCode) Command(req sandbox.RunRequest, session Session, paths Paths, _ string) string {
-	return "sh -c " + sandbox.ShellQuote(openCodeScript(req, session, paths, openCodeRunTimes()))
+	return "sh -c " + shellword.Quote(openCodeScript(req, session, paths, openCodeRunTimes()))
 }
 
 // openCodeRunTimes is the waits every run's script runs at ([openCodeTimes]).
@@ -293,7 +294,7 @@ func (OpenCode) PackSave(paths Paths, rec sessionRecord, staged, dest string) (s
 func openCodePackNow(paths Paths, session, staged, dest string, room bool) string {
 	// A probe read as "no session" recorded a session the box held as none,
 	// and the turn's end named an older capture as its last.
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	answer := q(staged + "/answer")
 	var b strings.Builder
 	b.WriteString("sid=" + q(session) + " packed=\n" + openCodeStandalonePins)
@@ -312,7 +313,7 @@ func openCodePackNow(paths Paths, session, staged, dest string, room bool) strin
 		q(staged), answer, packFailed)
 	fmt.Fprintf(&b, `case "$held" in *%s*) ;; *) case "$probe" in %s) exit %d;; esac; `+
 		`printf '%%s\n' "${probe:-OpenCode answered nothing about the session}" >&2; exit %d;; esac`+"\n",
-		sandbox.ShellQuote(`"id":"`+session+`"`), openCodeNotHeld, packNothing, packFailed)
+		shellword.Quote(`"id":"`+session+`"`), openCodeNotHeld, packNothing, packFailed)
 	if room {
 		fmt.Fprintf(&b, `[ -n "$bounded" ] || { echo "crewlet: OpenCode's database is not at $db, so the memory its export takes cannot be bounded" >&2; exit %d; }`+"\n",
 			packFailed)
@@ -400,13 +401,13 @@ func (OpenCode) Continues(box, writer string) (bool, string) {
 // files. TestNoOpenCodeAnswerIsReadThroughAPipe holds every rendered script to
 // it.
 func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times openCodeTimes) string {
-	doc := sandbox.ShellQuote(paths.CredentialDocument())
-	next := sandbox.ShellQuote(paths.CredentialDocument() + ".next")
-	loop := sandbox.ShellQuote(paths.CredentialDocument() + ".sync")
-	srv := sandbox.ShellQuote(paths.WorkDir() + "/opencode-server")
-	vrr := sandbox.ShellQuote(paths.WorkDir() + "/opencode-version")
+	doc := shellword.Quote(paths.CredentialDocument())
+	next := shellword.Quote(paths.CredentialDocument() + ".next")
+	loop := shellword.Quote(paths.CredentialDocument() + ".sync")
+	srv := shellword.Quote(paths.WorkDir() + "/opencode-server")
+	vrr := shellword.Quote(paths.WorkDir() + "/opencode-version")
 	ans := openCodeAnswerFile(paths)
-	cfg := sandbox.ShellQuote(paths.OpenCodeConfig())
+	cfg := shellword.Quote(paths.OpenCodeConfig())
 
 	// The brief goes on stdin ([Output.BriefOnStdin]), since OpenCode
 	// re-quotes an argv prompt; the session is named ([OpenCode.Session]) so
@@ -425,7 +426,7 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 		if req.Effort != "" {
 			model += "#" + req.Effort
 		}
-		run = append(run, "--model", sandbox.ShellQuote(model))
+		run = append(run, "--model", shellword.Quote(model))
 	}
 
 	var b strings.Builder
@@ -507,7 +508,7 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	// it began again. The release last, as the harness printed it
 	// ([parseSessionRecord]).
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$sid" "$k" "$w" "$v" > %s`,
-		sandbox.ShellQuote(paths.SessionRecord()))
+		shellword.Quote(paths.SessionRecord()))
 	// A REQUEST BEFORE THE SERVER LISTENS starts no server and no run: the job
 	// is recorded as ended before its harness started, and the EXIT trap stops
 	// the server. A session the box holds is packed by the read that asked
@@ -621,8 +622,8 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 // reader stops at the release. Anything that fails writes no `from`, and the
 // capture names no start: "not known", never "the whole session".
 func openCodeRunStart(paths Paths, times openCodeTimes, ans string) string {
-	rec := sandbox.ShellQuote(paths.SessionRecord())
-	next := sandbox.ShellQuote(paths.SessionRecord() + ".next")
+	rec := shellword.Quote(paths.SessionRecord())
+	next := shellword.Quote(paths.SessionRecord() + ".next")
 	return fmt.Sprintf(`if [ "$k" = yes ] && bounded start %[1]d e opencode api --server "$url" session.message.list --param sessionID="$sid" --param order=desc --param limit=1 > %[2]s 2> /dev/null; then rs=$(listcursor %[2]s); [ -z "$rs" ] || { printf 'id %%s\ncontinued %%s\nwhy %%s\nfrom %%s\nrelease %%s\n' "$sid" "$k" "$w" "$rs" "$v" > %[4]s && mv -f %[4]s %[3]s; }; fi; rm -f %[2]s %[4]s
 `, secs(times.sessionCall), ans, rec, next)
 }
@@ -635,7 +636,7 @@ func openCodeRunStart(paths Paths, times openCodeTimes, ans string) string {
 // here. A bounded call writes here too, never into a command substitution,
 // whose subshell an end request never reaches ([openCodeBounded]).
 func openCodeAnswerFile(paths Paths) string {
-	return sandbox.ShellQuote(paths.WorkDir() + "/opencode-answer")
+	return shellword.Quote(paths.WorkDir() + "/opencode-answer")
 }
 
 // openCodeSessionGate decides, before the run's server starts (it is handed
@@ -653,7 +654,7 @@ func openCodeAnswerFile(paths Paths) string {
 func openCodeSessionGate(session Session, paths Paths, rewired bool) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	if !session.Continues {
 		line(`sid=%s k=no w=`, q(session.ID))
 		return b.String()
@@ -770,7 +771,7 @@ func openCodeCapture(paths Paths, times openCodeTimes) string {
 func openCodePack(paths Paths, staged, dest, server, call string, bounded bool) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	export, capture, failed := q(staged+"/export.json"), q(staged+"/capture"), q(staged+"/error")
 	bound := ""
 	if bounded {
@@ -803,7 +804,7 @@ func openCodePack(paths Paths, staged, dest, server, call string, bounded bool) 
 func openCodeContext(paths Paths, times openCodeTimes) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	line(`ctxfile=%s ctxcur= ctxn=0 ctxleft=%d`, sandbox.ShellQuote(paths.WorkDir()+"/opencode-context"),
+	line(`ctxfile=%s ctxcur= ctxn=0 ctxleft=%d`, shellword.Quote(paths.WorkDir()+"/opencode-context"),
 		openCodeContextBytes)
 	line(`while [ -z "$endasked" ] && [ "$ctxn" -lt %d ]; do`, openCodeContextPages)
 	line(`  ctxn=$((ctxn + 1))`)
@@ -890,7 +891,7 @@ func openCodeBounded(paths Paths, times openCodeTimes) string {
 	return fmt.Sprintf(`bcur=
 bounded() { bt=$1 bw=$2 bx=$3; shift 3; bf=%[1]s"$bt"; if [ "$bx" = e ] && [ -n "$endasked" ]; then return 124; fi; rm -f "$bf.pid" "$bf.done"; ( trap 'echo 143 > "$bf.done"; exit 143' TERM HUP; "$@" < /dev/null & echo $! > "$bf.pid"; wait $!; echo $? > "$bf.done" ) & bs=$! bcur=$bt bn=0; bd=$(( $(%[2]s) + bw )); until [ -s "$bf.done" ]; do if { [ "$bx" = e ] && [ -n "$endasked" ]; } || { [ $((bn %% 10)) = 0 ] && [ "$(%[2]s)" -ge "$bd" ]; }; then unbound; return 124; fi; sleep 0.1; bn=$((bn + 1)); done; wait "$bs" 2> /dev/null || wait "$bs" 2> /dev/null; bc=$(cat "$bf.done"); rm -f "$bf.pid" "$bf.done"; bcur=; return "$bc"; }
 unbound() { [ -n "$bcur" ] || return 0; bf=%[1]s"$bcur" bi=0; until [ -s "$bf.pid" ] || [ "$bi" -ge %[3]d ]; do sleep 0.1; bi=$((bi + 1)); done; bp=$(cat "$bf.pid" 2> /dev/null); [ -z "$bp" ] || [ -s "$bf.done" ] || kill "$bp" 2> /dev/null; bi=0; until [ -s "$bf.done" ] || [ "$bi" -ge %[3]d ]; do sleep 0.1; bi=$((bi + 1)); done; if [ ! -s "$bf.done" ] && [ -n "$bp" ]; then kill -9 "$bp" 2> /dev/null; bi=0; until [ -s "$bf.done" ] || [ "$bi" -ge %[3]d ]; do sleep 0.1; bi=$((bi + 1)); done; fi; [ ! -s "$bf.done" ] || wait "$bs" 2> /dev/null || wait "$bs" 2> /dev/null; rm -f "$bf.pid" "$bf.done"; bcur=; }
-`, sandbox.ShellQuote(paths.WorkDir()+"/opencode-call-"), times.clock, grace)
+`, shellword.Quote(paths.WorkDir()+"/opencode-call-"), times.clock, grace)
 }
 
 // openCodeEndCalls is every call a run's script makes to its own server that
@@ -973,7 +974,7 @@ func openCodeReadiness(servers map[string]sandbox.MCPServer) string {
 		present := `"name":` + jsonStringify(name)
 		pending := present + `,"status":{"status":"pending"`
 		fmt.Fprintf(&b, "  case \"$s\" in *%s*) case \"$s\" in *%s*) ready=0;; esac;; *) ready=0;; esac\n",
-			sandbox.ShellQuote(present), sandbox.ShellQuote(pending))
+			shellword.Quote(present), shellword.Quote(pending))
 	}
 	return b.String()
 }
@@ -996,13 +997,13 @@ func openCodeShadowCheck(servers map[string]sandbox.MCPServer) string {
 		if !servers[name].AlwaysLoaded {
 			continue
 		}
-		prefix := sandbox.ShellQuote(`"name":` + strings.TrimSuffix(jsonStringify(name), `"`))
+		prefix := shellword.Quote(`"name":` + strings.TrimSuffix(jsonStringify(name), `"`))
 		fmt.Fprintf(&b, "  r=$s\n")
 		fmt.Fprintf(&b, "  while :; do case \"$r\" in *%s*) r=${r#*%s};; *) break;; esac\n", prefix, prefix)
 		fmt.Fprintf(&b, "    case \"$r\" in [!\\\"%s]*) echo \"crewlet: this box's OpenCode configuration declares an MCP "+
 			"server named \"%s\"${r%%%%\\\"*}, whose tools OpenCode would name like those of the run's own server "+
 			"\"%s\" (\"%s\"_<tool>); rename it in the image's or the repository's OpenCode configuration\" >&2; exit 1;; esac\n",
-			kept, sandbox.ShellQuote(name), sandbox.ShellQuote(name), sandbox.ShellQuote(name))
+			kept, shellword.Quote(name), shellword.Quote(name), shellword.Quote(name))
 		fmt.Fprintf(&b, "  done\n")
 	}
 	return b.String()

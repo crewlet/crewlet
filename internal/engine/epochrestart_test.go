@@ -172,7 +172,7 @@ func TestAnUnreadableRunRecordStopsNeitherTheBootNorTheSeat(t *testing.T) {
 	first := r.boot(t)
 	run, old := r.parkUnder(t, sandbox.Fence{Owner: "node-0/old-build", Epoch: 2})
 	old.coordinator.Stop()
-	if _, err := first.Fleet.CreateSandboxRun(t.Context(), "t-garbled", []byte("{not json")); err != nil {
+	if _, err := first.Fleet.CreateSandboxRun(t.Context(), "t-garbled", []byte("{not json"), nil); err != nil {
 		t.Fatalf("CreateSandboxRun: %v", err)
 	}
 	first.Close(context.WithoutCancel(t.Context()))
