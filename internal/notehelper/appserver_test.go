@@ -394,6 +394,8 @@ func TestOnlyAWholeReadOfASkillsOwnFileIsALoad(t *testing.T) {
 	commandDone(t, app, "thread-A", 0, "", "/", action("unknown", ""))
 	commandDone(t, app, "thread-A", 0, alpha.path+"\n", "/", action("unknown", ""))
 	commandDone(t, app, "thread-A", 1, "cat: no such file\n", "/", action("read", alpha.path))
+	// The whole body printed, then a failure: exit 1 is no load either.
+	commandDone(t, app, "thread-A", 1, alpha.body, "/", action("read", alpha.path))
 	commandDone(t, app, "thread-A", 0, alpha.body, "/", action("read", other))
 	commandDone(t, app, "thread-A", 0, alpha.body, "/", action("read", outside.path))
 	commandDone(t, app, "thread-A", 0, "# Alpha\n", "/", action("read", alpha.path))

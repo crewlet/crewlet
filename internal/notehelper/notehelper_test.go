@@ -380,25 +380,29 @@ func TestTheStepCapInterruptsTheTurnAtItsNthResponse(t *testing.T) {
 // -INTERRUPT-ONCE INTERRUPTS THE TURN IN FLIGHT AND EXITS 0, AND EXITS 0
 // WITH NO TURN TO INTERRUPT: none listed (no interrupt sent), or one listed
 // that ended before the interrupt reached it. With no thread file it cannot
-// tell, and exits 1.
+// tell, and so does an interrupt Codex failed: it exits 1.
 func TestInterruptOnceLeavesNoTurnRunning(t *testing.T) {
 	t.Parallel()
 	cases := map[string]struct {
-		turn, listed string
-		noThread     bool
-		code         int
-		interrupts   []string
+		turn, listed    string
+		noThread, fails bool
+		code            int
+		interrupts      []string
 	}{
 		"a turn in flight":            {turn: "turn-5", code: exitDone, interrupts: []string{"turn-5"}},
 		"no turn":                     {code: exitDone},
 		"a turn that ended meanwhile": {listed: "turn-5", code: exitDone, interrupts: []string{"turn-5"}},
 		"no thread file":              {turn: "turn-5", noThread: true, code: exitError},
+		"an interrupt that failed":    {turn: "turn-5", fails: true, code: exitError, interrupts: []string{"turn-5"}},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			app := newFakeAppServer(t, c.turn, 0)
 			app.set(c.listed, "")
+			if c.fails {
+				app.failInterrupts()
+			}
 			threadFile := filepath.Join(t.TempDir(), "thread.id")
 			if !c.noThread {
 				writeThread(t, threadFile, "thread-A")
