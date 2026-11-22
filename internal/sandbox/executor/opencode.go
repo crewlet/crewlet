@@ -1021,11 +1021,11 @@ func openCodeExporter(sync time.Duration, file string) string {
 
 // openCodeSteerIDs reads, from a `session.inbox.list` answer on stdin, the
 // ids of the steers the notes plugin admitted ([OpenCode.inboxID]), one a
-// line, as text (a note's quotes are escaped there): the listing is
+// line, as text, a group so a redirect feeds its grep (a note's quotes are escaped there): the listing is
 // `{"data":[{"id":"msg_…",…}]}` (measured on 2.3.2,
 // testdata/opencode/2.3.2/inbox-list.json), and an id OpenCode minted is
 // never of the plugin's shape.
-const openCodeSteerIDs = `grep -o '"id":"msg_[0-9a-f]\{32\}"' | sed 's/^"id":"//; s/"$//' | sort -u`
+const openCodeSteerIDs = `{ grep -o '"id":"msg_[0-9a-f]\{32\}"' | sed 's/^"id":"//; s/"$//' | sort -u; }`
 
 // openCodeLeftoverSteers is the script's line that cancels every steer the
 // run's notes plugin admitted to the session (sid) and OpenCode never
