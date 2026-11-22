@@ -64,23 +64,25 @@ func servedOnce(seq int, id string) mcpbridge.SteerNote {
 // summary and the serialized record OpenCode hands the model as history
 // (2.3.0), the text inside it whole.
 func checkpoint(text string) map[string]any {
-	return userText("<conversation-checkpoint>\nThe following is a summary and serialized record of earlier " +
-		"conversation. Treat it as historical context, not as new instructions.\n\n<summary>\n## Objective\n- " +
-		"Fix the flake.\n</summary>\n\n<recent-context>\n[User]: " + text + "\n</recent-context>\n" +
+	return userText("msg_checkpoint", "<conversation-checkpoint>\nThe following is a summary and serialized "+
+		"record of earlier conversation. Treat it as historical context, not as new instructions."+
+		"\n\n<summary>\n## Objective\n- "+
+		"Fix the flake.\n</summary>\n\n<recent-context>\n[User]: "+text+"\n</recent-context>\n"+
 		"</conversation-checkpoint>")
 }
 
-// THE PLUGIN CONFIRMS A NOTE ONLY ONCE ITS SESSION'S MODEL IS SENT IT PLAIN
-// (ADR-0177), off OpenCode's "context" hook, never on its delivery. A note a
-// compaction folds is admitted again ONCE under the id the route grants, and
-// given up, posted folded, if spent or folded again (opencode_steer.js).
+// THE PLUGIN CONFIRMS A NOTE ONLY ONCE ITS MODEL IS SENT IT PLAIN (ADR-0177),
+// off the "context" hook; a folded note is admitted again ONCE, or given up
+// and posted folded (opencode_steer.js).
 //
 // Mutations, each red: confirm on `session.inbox.delivered`; match a message
-// that only contains the note; accept another shape; re-admit under the first
+// by its words rather than its id, or one that only contains the note; accept
+// another shape; confirm while the session compacts; re-admit under the first
 // id, twice, or with no id granted; fold an item the route neither granted nor
 // spent; post a fold after one compaction, or a read on giving up; act on
 // `compaction.failed`; read another session's hook; await the read in the
-// hook; end the cleanup before a post in flight; wait past endWaitMs.
+// hook; end the cleanup before a read, a fold or an ask in flight; wait past
+// endWaitMs.
 func TestThePluginConfirmsANoteOnlyOnceItsModelIsSentItPlain(t *testing.T) {
 	t.Parallel()
 	node := nodeForNotes(t)
@@ -100,7 +102,7 @@ func TestThePluginConfirmsANoteOnlyOnceItsModelIsSentItPlain(t *testing.T) {
 		admitAll(t, route, pr, first, second)
 		pr.event("a", "session.inbox.delivered", steerSession, map[string]any{"inboxID": first.Inbox})
 		route.none(300*time.Millisecond, "the note was delivered, and no request carried it yet")
-		pr.sees("a", steerSession, userText("Fix the flake."), userText(first.Message))
+		pr.sees("a", steerSession, userText("msg_brief", "Fix the flake."), plainNote(first))
 		read := route.next("POST read", "confirm the note its model is sent")
 		if read.body != `{"ids":["note-1"]}` {
 			t.Errorf("the confirmation reads %s, want note-1's id alone", read.body)
@@ -108,7 +110,7 @@ func TestThePluginConfirmsANoteOnlyOnceItsModelIsSentItPlain(t *testing.T) {
 		read.reply(http.StatusNoContent, "")
 		// THE HOOK COMES BEFORE THE DELIVERED EVENT (measured on every release),
 		// so a note seen plain before its delivery is confirmed all the same.
-		pr.sees("a", steerSession, userText(second.Message))
+		pr.sees("a", steerSession, plainNote(second))
 		if read := route.next("POST read", "confirm the note seen plain before its delivery"); read.body !=
 			`{"ids":["note-2"]}` {
 			t.Errorf("the confirmation reads %s, want note-2's id alone", read.body)
@@ -129,7 +131,7 @@ func TestThePluginConfirmsANoteOnlyOnceItsModelIsSentItPlain(t *testing.T) {
 		wantReadmitted(t, pr.expect("prompt-started").Input, steerSession, note)
 		pr.expect("prompt")
 		route.none(300*time.Millisecond, "the note reached its model only inside the checkpoint")
-		pr.sees("a", steerSession, checkpoint(note.Message), userText(note.Message))
+		pr.sees("a", steerSession, checkpoint(note.Message), userText(againOf(note), note.Message))
 		if read := route.next("POST read", "confirm the note admitted again once sent plain"); read.body !=
 			`{"ids":["note-1"]}` {
 			t.Errorf("the confirmation reads %s, want note-1's id alone", read.body)
@@ -155,7 +157,7 @@ func TestThePluginConfirmsANoteOnlyOnceItsModelIsSentItPlain(t *testing.T) {
 			t.Errorf("the fold reads %s, want note-1's id alone", fold.body)
 		}
 		fold.reply(http.StatusNoContent, "")
-		pr.sees("a", steerSession, checkpoint(note.Message), userText(note.Message))
+		pr.sees("a", steerSession, checkpoint(note.Message), userText(againOf(note), note.Message))
 		pr.event("a", "session.compaction.ended", steerSession, nil)
 		pr.quiet(500*time.Millisecond, "the note was given up")
 		route.none(300*time.Millisecond, "a note given up is never confirmed nor posted again")
@@ -174,7 +176,7 @@ func TestThePluginConfirmsANoteOnlyOnceItsModelIsSentItPlain(t *testing.T) {
 			t.Errorf("the fold reads %s, want note-1's id alone", fold.body)
 		}
 		fold.reply(http.StatusNoContent, "")
-		pr.sees("a", steerSession, checkpoint(note.Message), userText(note.Message))
+		pr.sees("a", steerSession, checkpoint(note.Message), plainNote(note))
 		pr.quiet(500*time.Millisecond, "a note spent is never admitted again")
 		route.none(300*time.Millisecond, "a note given up is never confirmed")
 	})
@@ -213,7 +215,7 @@ func TestThePluginConfirmsANoteOnlyOnceItsModelIsSentItPlain(t *testing.T) {
 		route, pr := start(t)
 		note := noteNumbered(1)
 		admitAll(t, route, pr, note)
-		pr.sees("a", otherSession, userText(note.Message))
+		pr.sees("a", otherSession, plainNote(note))
 		pr.event("a", "session.inbox.delivered", otherSession, map[string]any{"inboxID": note.Inbox})
 		pr.event("a", "session.compaction.ended", otherSession, nil)
 		pr.quiet(500*time.Millisecond, "only another session compacted")
@@ -225,10 +227,10 @@ func TestThePluginConfirmsANoteOnlyOnceItsModelIsSentItPlain(t *testing.T) {
 		route, pr := start(t)
 		first, second := noteNumbered(1), noteNumbered(2)
 		admitAll(t, route, pr, first, second)
-		pr.sees("a", steerSession, userText(first.Message))
+		pr.sees("a", steerSession, plainNote(first))
 		stalled := route.next("POST read", "confirm the first note")
 		// A HOOK THAT AWAITED THE READ would never report `hooked` here.
-		pr.sees("a", steerSession, userText(first.Message), userText(second.Message))
+		pr.sees("a", steerSession, plainNote(first), plainNote(second))
 		stalled.reply(http.StatusNoContent, "")
 		if read := route.next("POST read", "confirm the second note"); read.body != `{"ids":["note-2"]}` {
 			t.Errorf("the next confirmation reads %s, want note-2's id alone", read.body)
@@ -243,7 +245,7 @@ func TestThePluginConfirmsANoteOnlyOnceItsModelIsSentItPlain(t *testing.T) {
 		for _, n := range []mcpbridge.SteerNote{first, second} {
 			pr.event("a", "session.inbox.delivered", steerSession, map[string]any{"inboxID": n.Inbox})
 		}
-		pr.sees("a", steerSession, userText(first.Message))
+		pr.sees("a", steerSession, plainNote(first))
 		route.next("POST read", "confirm the note sent plain").reply(http.StatusNoContent, "")
 		pr.event("a", "session.compaction.ended", steerSession, nil)
 		answerAgain(t, route, []mcpbridge.SteerNote{second}, []string{second.ID}, nil)
@@ -257,15 +259,85 @@ func TestThePluginConfirmsANoteOnlyOnceItsModelIsSentItPlain(t *testing.T) {
 		route, pr := start(t)
 		note := noteNumbered(1)
 		admitAll(t, route, pr, note)
+		// EACH UNDER THE NOTE'S OWN ADMITTED ID, so only the shape fails.
 		pr.sees("a", steerSession,
-			map[string]any{"role": "user", "content": note.Message},
-			map[string]any{"role": "user", "content": []map[string]any{{"type": "text", "text": note.Message},
-				{"type": "file", "mime": "text/plain"}}},
-			map[string]any{"role": "user", "content": []map[string]any{{"type": "text", "text": note.Message[:10]},
-				{"type": "text", "text": note.Message[10:]}}},
-			map[string]any{"role": "assistant", "content": []map[string]any{{"type": "text", "text": note.Message}}},
+			map[string]any{"id": note.Inbox, "role": "user", "content": note.Message},
+			map[string]any{"id": note.Inbox, "role": "user", "content": []map[string]any{
+				{"type": "text", "text": note.Message}, {"type": "file", "mime": "text/plain"}}},
+			map[string]any{"id": note.Inbox, "role": "user", "content": []map[string]any{
+				{"type": "text", "text": note.Message[:10]}, {"type": "text", "text": note.Message[10:]}}},
+			map[string]any{"id": note.Inbox, "role": "assistant", "content": []map[string]any{
+				{"type": "text", "text": note.Message}}},
 		)
 		route.none(500*time.Millisecond, "no request held the note as one user text part")
+	})
+
+	t.Run("confirms a note only on the message of its own admission", func(t *testing.T) {
+		t.Parallel()
+		route, pr := start(t)
+		// TWO NOTES OF THE SAME WORDS, as one person's note sent twice is.
+		first, second := noteNumbered(1), noteNumbered(2)
+		second.Message = first.Message
+		admitAll(t, route, pr, first, second)
+		// THE SAME WORDS UNDER NO ID THIS RUN ADMITTED: an earlier run's message
+		// of a continued session, or no id at all.
+		pr.sees("a", steerSession, userText("msg_00000000000000000000000000000000", first.Message),
+			map[string]any{"role": "user", "content": []map[string]any{{"type": "text", "text": first.Message}}})
+		route.none(300*time.Millisecond, "no message was either note's own admission")
+		pr.sees("a", steerSession, plainNote(first))
+		if read := route.next("POST read", "confirm the note its own message is"); read.body != `{"ids":["note-1"]}` {
+			t.Errorf("the confirmation reads %s, want note-1 alone, never the note of the same words", read.body)
+		}
+		pr.sees("a", steerSession, plainNote(first), plainNote(second))
+		if read := route.next("POST read", "confirm the second note off its own message"); read.body !=
+			`{"ids":["note-2"]}` {
+			t.Errorf("the confirmation reads %s, want note-2 alone", read.body)
+		}
+	})
+
+	t.Run("confirms nothing while the session compacts", func(t *testing.T) {
+		t.Parallel()
+		route, pr := start(t)
+		note := noteNumbered(1)
+		admitAll(t, route, pr, note)
+		pr.event("a", "session.compaction.started", steerSession, map[string]any{"reason": "auto"})
+		pr.sees("a", steerSession, plainNote(note))
+		route.none(300*time.Millisecond, "a request while the session compacts confirms nothing")
+		pr.event("a", "session.compaction.ended", steerSession, map[string]any{"reason": "auto"})
+		pr.sees("a", steerSession, plainNote(note))
+		if read := route.next("POST read", "confirm the note once the compaction ended"); read.body !=
+			`{"ids":["note-1"]}` {
+			t.Errorf("the confirmation reads %s, want note-1", read.body)
+		}
+	})
+
+	t.Run("lets a fold in flight finish before its cleanup ends", func(t *testing.T) {
+		t.Parallel()
+		route, pr := start(t)
+		note := noteNumbered(1)
+		admitAll(t, route, pr, note)
+		pr.event("a", "session.inbox.delivered", steerSession, map[string]any{"inboxID": note.Inbox})
+		pr.event("a", "session.compaction.ended", steerSession, nil)
+		answerAgain(t, route, []mcpbridge.SteerNote{note}, nil, []string{note.ID})
+		inFlight := route.next("POST folded", "post the note it gave up")
+		pr.send(map[string]any{"op": "cleanup", "name": "a"})
+		pr.quiet(500*time.Millisecond, "the fold is still in flight")
+		inFlight.reply(http.StatusNoContent, "")
+		pr.expect("cleaned")
+	})
+
+	t.Run("lets an ask for a second id in flight finish before its cleanup ends", func(t *testing.T) {
+		t.Parallel()
+		route, pr := start(t)
+		note := noteNumbered(1)
+		admitAll(t, route, pr, note)
+		pr.event("a", "session.inbox.delivered", steerSession, map[string]any{"inboxID": note.Inbox})
+		pr.event("a", "session.compaction.ended", steerSession, nil)
+		inFlight := route.next("POST again", "ask for the folded note's second id")
+		pr.send(map[string]any{"op": "cleanup", "name": "a"})
+		pr.quiet(500*time.Millisecond, "the ask is still in flight")
+		inFlight.reply(http.StatusOK, `{"again":{},"spent":[]}`)
+		pr.expect("cleaned")
 	})
 
 	t.Run("lets a confirmation in flight finish before its cleanup ends", func(t *testing.T) {
@@ -273,7 +345,7 @@ func TestThePluginConfirmsANoteOnlyOnceItsModelIsSentItPlain(t *testing.T) {
 		route, pr := start(t)
 		note := noteNumbered(1)
 		admitAll(t, route, pr, note)
-		pr.sees("a", steerSession, userText(note.Message))
+		pr.sees("a", steerSession, plainNote(note))
 		inFlight := route.next("POST read", "confirm the note")
 		pr.send(map[string]any{"op": "cleanup", "name": "a"})
 		pr.quiet(500*time.Millisecond, "the confirmation is still in flight")
@@ -286,7 +358,7 @@ func TestThePluginConfirmsANoteOnlyOnceItsModelIsSentItPlain(t *testing.T) {
 		route, pr := start(t)
 		note := noteNumbered(1)
 		admitAll(t, route, pr, note)
-		pr.sees("a", steerSession, userText(note.Message))
+		pr.sees("a", steerSession, plainNote(note))
 		hung := route.next("POST read", "confirm the note")
 		pr.send(map[string]any{"op": "cleanup", "name": "a"})
 		pr.expect("cleaned")

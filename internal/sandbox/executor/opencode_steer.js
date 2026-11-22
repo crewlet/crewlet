@@ -22,10 +22,14 @@
 // framed as history (ADR-0177's confirm). So the plugin confirms a note to the
 // engine — which records it read by the run's job — only from the session's
 // "context" hook, which OpenCode runs on every model request before sending
-// it, and only where a user message of that request IS the note: one text part
-// equal to the note's text, so a checkpoint quoting it never matches and a
-// message of any other shape confirms nothing. The hook does no I/O: OpenCode
-// holds the request until it returns. A note delivered and never seen plain
+// it, and only where a user message of that request IS the note: the message
+// OpenCode made of the plugin's own admission, named by the id the note was
+// admitted under (2.3.0 hands the hook each message's id), holding one text
+// part equal to the note's text. So one message confirms one note, a note of
+// the same words, an earlier run's or a checkpoint quoting it never does, and a
+// message of any other shape confirms nothing. Between a compaction's start
+// and end no request confirms anything. The hook does no I/O: OpenCode holds
+// the request until it returns. A note delivered and never seen plain
 // when the session's compaction ends was folded: the plugin asks the route's
 // `again` for a second id to admit it under, ONCE, which the engine grants
 // only within the note's serves and only for a person's note or a late call
@@ -128,6 +132,8 @@ async function arm(ctx, url, session) {
   let gate = null
   // stopping is set by the cleanup: nothing is polled or admitted any more.
   let stopping = false
+  // compacting is set from the session's compaction's start to its end.
+  let compacting = false
   // cursor is the place of the last note admitted, which a poll asks past.
   let cursor = 0
   // held is every note admitted and not yet settled, by its id: {id, text,
@@ -159,18 +165,17 @@ async function arm(ctx, url, session) {
   }
 
   // see is the session's "context" hook: the request about to go to the model.
-  // No I/O and no await, since OpenCode holds the request on it.
+  // No I/O and no await, since OpenCode holds the request on it. Fails closed
+  // while the session compacts: its summary runs no context hook on 2.3.0
+  // (measured), and a request then is none a note may be confirmed off.
   const see = (input) => {
-    if (input?.sessionID !== session || !Array.isArray(input.messages)) return
+    if (compacting || input?.sessionID !== session || !Array.isArray(input.messages)) return
     for (const message of input.messages) {
-      const text = plainText(message)
-      if (text === null) continue
-      for (const note of held.values()) {
-        if (note.plain || note.text !== text) continue
-        note.plain = true
-        note.text = null
-        owed.add(note.id)
-      }
+      const note = typeof message?.id === "string" ? held.get(admitted.get(message.id)) : undefined
+      if (note === undefined || note.plain || plainText(message) !== note.text) continue
+      note.plain = true
+      note.text = null
+      owed.add(note.id)
     }
     if (owed.size > 0) confirm()
   }
@@ -262,8 +267,15 @@ async function arm(ctx, url, session) {
         if (note !== undefined && !note.plain) note.delivered = true
         return
       }
+      case "session.compaction.started":
+        compacting = true
+        return
       case "session.compaction.ended":
+        compacting = false
         compacted()
+        return
+      case "session.compaction.failed":
+        compacting = false
         return
     }
   }
@@ -332,13 +344,16 @@ async function arm(ctx, url, session) {
       // A gate closed meanwhile admits nothing more: what is left is asked
       // for again by the next execution's poll, or read by the review.
       if (gated.aborted || life.signal.aborted) return true
-      // KNOWN BEFORE IT IS ADMITTED, because OpenCode can deliver a note
-      // before the call that admitted it has returned.
-      if (!held.has(note.id)) {
+      // KNOWN WHILE IT IS ADMITTED, because OpenCode can deliver a note
+      // before the call that admitted it has returned; LET GO IF IT FAILS, so
+      // a note held is one admitted. Only the message of its own admitted id
+      // confirms it, which a failed admission never has.
+      const fresh = !held.has(note.id)
+      if (fresh) {
         held.set(note.id, { id: note.id, text: note.message, inbox: note.inbox, again: undefined,
           delivered: false, readmitted: false, plain: false })
+        admitted.set(note.inbox, note.id)
       }
-      admitted.set(note.inbox, note.id)
       try {
         await ctx.session.prompt({
           sessionID: session,
@@ -348,6 +363,10 @@ async function arm(ctx, url, session) {
           resume: false,
         })
       } catch {
+        if (fresh) {
+          held.delete(note.id)
+          admitted.delete(note.inbox)
+        }
         return false
       }
       cursor = note.seq
