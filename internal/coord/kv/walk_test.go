@@ -504,7 +504,7 @@ func (k replayKV) Watch(context.Context, string, ...jetstream.WatchOpt) (jetstre
 }
 
 // watchHeaders is [replayKV.Watch]: a recorded pass is handed whole.
-func (k replayKV) watchHeaders(ctx context.Context, keys string) (jetstream.KeyWatcher, error) {
+func (k replayKV) watchHeaders(ctx context.Context, keys string, _ time.Duration) (jetstream.KeyWatcher, error) {
 	return k.Watch(ctx, keys)
 }
 

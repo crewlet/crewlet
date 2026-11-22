@@ -155,8 +155,8 @@ type headersSpy struct {
 	err  error
 }
 
-func (s *headersSpy) watchHeaders(ctx context.Context, keys string) (jetstream.KeyWatcher, error) {
-	w, err := s.settledBucket.watchHeaders(ctx, keys)
+func (s *headersSpy) watchHeaders(ctx context.Context, keys string, beat time.Duration) (jetstream.KeyWatcher, error) {
+	w, err := s.settledBucket.watchHeaders(ctx, keys, beat)
 	if err != nil {
 		return nil, err
 	}

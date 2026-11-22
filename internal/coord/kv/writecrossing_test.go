@@ -405,14 +405,14 @@ func TestARunsValueIsGivenItsCrossingOnlyAcrossALink(t *testing.T) {
 // WATCH THE RAW CROSSING OF THE LARGEST VALUE UNDER ITS FILTER.
 //
 // A run's change starts with the leader's read, its reply 8 MiB at the bound:
-// four minutes at the slowest link pace, none of its handling, which would push a
-// re-ask past a 5 s reason. A body's read gets its arrival; the pointer and
-// claims keep the term. A pass over a run's value is quiet 185 s across a link,
-// 5 s in process or over headers. Each bucket's class is held to one key, read
-// at the term only if it crosses inside it ([undeclared] aside).
+// four minutes at the slowest link pace, none of its handling. A body's read
+// gets its arrival; the pointer and claims keep the term. A pass over the runs,
+// values or headers alone, is quiet 185 s across a link, 5 s in process, and
+// beats at that. A class is held to one key, read at the term only if it
+// crosses inside it ([undeclared] aside).
 //
 // Mutation: let leaderFor ignore the class, read bodies at the term, declare a
-// class past one key, let most drop rest, or quiet a headers pass as values.
+// class past one key, let most drop rest, or give a headers pass passIdle.
 func TestEveryReadIsGivenTheCrossingOfItsClassBound(t *testing.T) {
 	t.Parallel()
 	// THE FIGURES STATED, not derived again: a full value with the most header,
@@ -466,10 +466,18 @@ func TestEveryReadIsGivenTheCrossingOfItsClassBound(t *testing.T) {
 					reach, got, c.idle)
 			}
 		}
-		// THE RUNS' STANDING CROSSES AS HEADERS ALONE, in milliseconds on
-		// any link: its pass keeps passIdle, never the records' quiet.
-		if got := passQuiet(store.runs, runRecordKeys, true); got != passIdle {
-			t.Errorf("a pass of the runs' standing %s is quiet after %v, want %v", reach, got, passIdle)
+		standing, err := beginPass(t.Context(), store.js, store.runs, runRecordKeys, "the runs' standing", true)
+		if err != nil {
+			t.Fatalf("begin a pass of the runs' standing %s: %v", reach, err)
+		}
+		info, err := standing.w.(*bucketWatcher).sub.ConsumerInfo()
+		standing.stop()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if standing.quiet != quiet || info.Config.Heartbeat != quiet {
+			t.Errorf("a pass of the runs' standing %s is quiet after %v and beats at %v, want both %v",
+				reach, standing.quiet, info.Config.Heartbeat, quiet)
 		}
 	}
 	for _, h := range openedHoldings(t, nc) {
