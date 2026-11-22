@@ -1600,6 +1600,7 @@ type Fleet interface {
 	Channels
 	Follows
 	ChatReads
+	HomeBoards
 	Fires
 	Rebases
 	SandboxRuns
