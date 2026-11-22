@@ -17,7 +17,7 @@ import (
 // state a held call read, nil for a call made at once.
 func (c *Client) Record(call growth.Call, req Request, class growth.Class, before []byte) growth.Record {
 	r := growth.Record{
-		Product: c.Kind, Connection: Connection, Account: req.AccountOrTarget(), Target: req.Target(),
+		Product: c.Kind, Connection: c.connection(), Account: req.AccountOrTarget(), Target: req.Target(),
 		Tool: call.Tool, Class: class, Handle: call.Handle, Turn: call.Turn, Call: call.ID,
 		HeldCall: call.HeldCall, Operation: req.Digest(nil),
 	}
