@@ -39,7 +39,7 @@ test("a line whose app is not served is drawn nowhere, and a group left empty is
   expect(labels).toContain("Analytics");
   expect(labels).not.toContain("Advertising");
   expect(shown.find(([label]) => label === "Analytics")![1]).toEqual(["google_analytics"]);
-  expect(shown.find(([label]) => label === "Ad revenue")![1]).toEqual(["admob"]);
+  expect(shown.find(([label]) => label === "Ad revenue")![1]).toEqual(["adsense", "admob"]);
   expect(shown.find(([label]) => label === "Mobile apps")![1]).not.toContain("google_play");
 });
 

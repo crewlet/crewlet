@@ -101,6 +101,9 @@ type Request struct {
 	// on its target: for an update mask that is not the body's field names
 	// (a map entry's key, a snake_case path). Nil reads the mask ([Request.Changes]).
 	Diff func(before map[string]any) []growth.Change
+	// Raw marks a method answering google.api.HttpBody (a CSV report): its
+	// answer is {"contentType", "data"}, data the bytes Google sent as text.
+	Raw bool
 }
 
 // pathParam is one `{name}` of an operation's path.

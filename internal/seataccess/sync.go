@@ -1055,6 +1055,8 @@ func LaneName(lane Lane) string {
 		return "Google Analytics"
 	case LaneAdMob:
 		return "AdMob"
+	case LaneAdSense:
+		return "AdSense"
 	default:
 		return string(lane)
 	}

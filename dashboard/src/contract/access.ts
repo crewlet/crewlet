@@ -53,7 +53,8 @@ export type AccessLaneKey =
   | "app_store_connect"
   | "apple_ads"
   | "google_analytics"
-  | "admob";
+  | "admob"
+  | "adsense";
 
 /** "external" on a lane the engine does not provision for the company. */
 type AccessManaged = "external";
