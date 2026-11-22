@@ -28,8 +28,9 @@ func (GeminiCLI) threadTraits() sandbox.ThreadTraits {
 }
 
 // geminiRecordedTake is one line of [Paths.GeminiTakes]: a take the script
-// handed Gemini CLI, or the count of the session's lines as a run started
-// ([geminiScript]), which every take after it is confirmed past.
+// handed Gemini CLI, or the record's start line, From, the count of the
+// session's lines as a run started ([geminiScript]), which every take after
+// it is confirmed past.
 type geminiRecordedTake struct {
 	Take   string `json:"take"`
 	Digest string `json:"digest"`
@@ -59,16 +60,23 @@ func (GeminiCLI) readMainThread(ctx context.Context, box sandbox.Sandbox, paths 
 	var recorded []geminiRecordedTake
 	var asked []geminiAskedTake
 	from := 0
+	started := false
 	for line := range bytes.SplitSeq(raw, []byte("\n")) {
 		var t geminiRecordedTake
 		switch {
 		case json.Unmarshal(line, &t) != nil:
 		case t.From != nil && *t.From >= 0:
 			from = *t.From
+			started = true
 		case t.Take != "":
 			recorded = append(recorded, t)
 			asked = append(asked, geminiAskedTake{digest: t.Digest, from: from})
 		}
+	}
+	// A RECORD WITHOUT ITS START LINE was lost with its box (a box reads a
+	// missing file as empty), so a take it may have held stays undecided.
+	if !started {
+		return undecided("the run's record of its takes holds no start line, so the box lost it")
 	}
 	held := map[string]bool{}
 	if len(recorded) > 0 {

@@ -75,9 +75,9 @@ echo '{"type":"result","status":"success"}'`)
 	}
 	readJSON(t, filepath.Join(record, "settings.json"), &settings)
 	// THE HOOK RECORDS IN THE RECORD OF THE SESSION GEMINI CLI WAS HANDED, which
-	// exists before any hook fires, holding only where the run began in the
-	// session (its first line, for a session the run starts): a take never
-	// recorded reads absent once the job ends rather than undecided.
+	// opens with its start line before any hook fires, holding where the run
+	// began in the session (its first line, for a session the run starts): a
+	// take never recorded reads absent once the job ends rather than undecided.
 	args, err := os.ReadFile(filepath.Join(record, "args"))
 	if err != nil {
 		t.Fatal(err)
@@ -168,7 +168,7 @@ func TestAJobsRecordOfTakesOutlivesTheNextLaunchInItsBox(t *testing.T) {
 	}
 	for path, content := range map[string]string{
 		p.GeminiChats() + "/session-2026-11-21T22-24-11111111.jsonl": string(chat),
-		p.GeminiTakes(session): `{"take":"take-a","digest":"` + executor.ItemDigest(delivered) + `"}` + "\n" +
+		p.GeminiTakes(session): `{"from":0}` + "\n" + `{"take":"take-a","digest":"` + executor.ItemDigest(delivered) + `"}` + "\n" +
 			`{"take":"take-b","digest":"` + executor.ItemDigest("## A note never handed over") + `"}` + "\n",
 	} {
 		if err := box.WriteFile(t.Context(), path, []byte(content)); err != nil {
