@@ -365,6 +365,13 @@ type Call struct {
 	Reads                   bool
 }
 
+// Bytes is a call's body sent as it is, such as a file an upload sends. An
+// answer read into an io.Writer is streamed to it as it came (a download).
+type Bytes struct {
+	ContentType string
+	Data        []byte
+}
+
 // Send makes call, waiting out a short 429 where it reads.
 func (c *Connection) Send(ctx context.Context, call Call, out any) error {
 	for attempt := 0; ; attempt++ {
@@ -400,6 +407,8 @@ func (c *Connection) once(ctx context.Context, call Call, out any) error {
 	contentType := ""
 	switch b := body.(type) {
 	case nil:
+	case Bytes:
+		reader, contentType = bytes.NewReader(b.Data), b.ContentType
 	case url.Values:
 		reader, contentType = strings.NewReader(b.Encode()), "application/x-www-form-urlencoded"
 	default:
@@ -432,6 +441,13 @@ func (c *Connection) once(ctx context.Context, call Call, out any) error {
 			redact.Secrets(err.Error()))
 	}
 	defer func() { _ = res.Body.Close() }()
+	if w, ok := out.(io.Writer); ok && res.StatusCode < http.StatusMultipleChoices {
+		// A FILE IS STREAMED to its writer, which bounds what it keeps.
+		if _, copyErr := io.Copy(w, res.Body); copyErr != nil {
+			return fmt.Errorf("googleauth: read %s %s: %w", method, PathOf(address), copyErr)
+		}
+		return nil
+	}
 	payload, err := io.ReadAll(io.LimitReader(res.Body, maxResponse))
 	if err != nil {
 		return fmt.Errorf("googleauth: read %s %s: %w", method, PathOf(address), err)
