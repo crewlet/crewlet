@@ -346,10 +346,10 @@ func TestTheHelperRefusesACommandLineItCannotRunWith(t *testing.T) {
 	}
 }
 
-// THE STEP CAP INTERRUPTS THE TURN AT ITS NTH RESPONSE, MARKED FIRST: with
-// -step-cap 2 the second response of the turn in flight sends turn/interrupt
-// naming the thread and the turn, with -cap-marker already on disk holding
-// the turn, and no notes route is needed for it.
+// THE STEP CAP INTERRUPTS THE TURN AT ITS NTH RESPONSE, MARKED FIRST, WITH NO
+// NOTES ROUTE: with -step-cap 2 and no -notes-env the second response of the
+// turn in flight sends turn/interrupt naming the thread and the turn, with
+// -cap-marker already on disk holding the turn, and no route is ever polled.
 func TestTheStepCapInterruptsTheTurnAtItsNthResponse(t *testing.T) {
 	t.Parallel()
 	bridge := newFakeBridge(t, testToken)
@@ -371,6 +371,9 @@ func TestTheStepCapInterruptsTheTurnAtItsNthResponse(t *testing.T) {
 	}
 	if code := h.stop(); code != exitDone {
 		t.Errorf("exit status %d, want %d; stderr:\n%s", code, exitDone, h.stderr.String())
+	}
+	if v := bridge.verbs.all(); len(v) > 0 {
+		t.Errorf("a cap-only helper asked the notes route %v", v)
 	}
 }
 

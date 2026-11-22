@@ -121,9 +121,11 @@ type appServer struct {
 	// skillsDir is the directory the run's skills are written to, one
 	// directory per skill holding its SKILL.md ([appServer.completed]).
 	skillsDir string
-	// tokens is the thread's total tokens as last reported, read only by
-	// the reader ([appServer.tokens]).
-	tokens int64
+	// tokens is the thread's total tokens as last reported, and compacting
+	// whether a context compaction runs: the reader's alone
+	// ([appServer.counted]).
+	tokens     int64
+	compacting bool
 
 	mu      sync.Mutex
 	pending map[int64]chan rpcAnswer
@@ -280,17 +282,34 @@ func (a *appServer) notice(method string, params json.RawMessage) {
 		a.stop(p.Turn.ID)
 	case "thread/tokenUsage/updated":
 		a.counted(params)
+	case "item/started":
+		a.compaction(params, true)
 	case "item/completed":
+		a.compaction(params, false)
 		a.completed(params)
 	}
 }
 
-// counted reports a model response of the turn in flight to the step cap:
-// Codex updates the thread's token usage as each response completes, and
-// repeats an update unchanged (as a steer is taken), so a response is an
-// update whose total rose. Measured on 0.171.0: one rise per model request,
-// a compaction's request among them. A turn joined in flight counts from the
-// join, as excludeTurns replays no update.
+// compaction follows a context compaction's window: its contextCompaction
+// item's item/started to its item/completed ([appServer.counted]).
+func (a *appServer) compaction(params json.RawMessage, started bool) {
+	var p struct {
+		Item struct {
+			Type string `json:"type"`
+		} `json:"item"`
+	}
+	if json.Unmarshal(params, &p) == nil && p.Item.Type == "contextCompaction" {
+		a.compacting = started
+	}
+}
+
+// counted reports a model response of the turn in flight to the step cap,
+// the one place the step rule lives. Codex updates the thread's token usage
+// after each response, and repeats an update unchanged, so a response is an
+// update whose total rose; a compaction's request rises too, inside its
+// contextCompaction item's window, and is no response, as Claude Code's
+// --max-turns counts none (CODEX-MEASURE §18). A turn joined in flight counts
+// from the join, as excludeTurns replays no update.
 func (a *appServer) counted(params json.RawMessage) {
 	var p struct {
 		TurnID     string `json:"turnId"`
@@ -304,6 +323,9 @@ func (a *appServer) counted(params json.RawMessage) {
 		return
 	}
 	a.tokens = p.TokenUsage.Total.TotalTokens
+	if a.compacting {
+		return
+	}
 	a.mu.Lock()
 	inFlight := p.TurnID != "" && p.TurnID == a.active
 	a.mu.Unlock()
@@ -481,14 +503,21 @@ func (a *appServer) steer(ctx context.Context, turn, text string) error {
 		"expectedTurnId": turn,
 		"input":          []map[string]string{{"type": "text", "text": text}},
 	})
+	return classify(err, turn, "no active turn to steer")
+}
+
+// classify reads Codex's refusal of a call naming turn: [errNoTurn] for its
+// "no active turn" answer (noTurn), a [wrongTurn] where it names another turn
+// in flight, and err as it is otherwise.
+func classify(err error, turn, noTurn string) error {
 	var refused *rpcError
 	if !errors.As(err, &refused) || refused.Code != codeInvalidRequest {
 		return err
 	}
-	if refused.Message == "no active turn to steer" {
+	if refused.Message == noTurn {
 		return errNoTurn
 	}
-	if named, found, ok := foundTurn(refused.Message); ok && named == turn && found != "" && found != turn {
+	if named, found, ok := foundTurn(refused.Message); ok && named == turn && found != turn {
 		return wrongTurn(found)
 	}
 	return err
@@ -501,34 +530,42 @@ const codeInvalidRequest = -32600
 // errNoTurn is turn/steer's "no active turn to steer".
 var errNoTurn = errors.New("no turn is in flight")
 
-// foundTurn reads turn/steer's refusal of a steer naming another turn than the
-// one in flight, "expected active turn id `X` but found `Y`": the turn named
-// (X) and the turn in flight (Y). Read by hand, as regexp would add more to
-// the box's binary than the helper's own code.
+// foundTurn reads Codex's refusal of a call naming another turn than the one
+// in flight: the turn named (X) and the turn in flight (Y), worded
+// "expected active turn id `X` but found `Y`" by turn/steer and the same
+// without the backticks by turn/interrupt (measured on 0.171.0). Read by
+// hand, as regexp would add more to the box's binary than the helper's own
+// code.
 func foundTurn(msg string) (named, found string, ok bool) {
-	rest, ok := strings.CutPrefix(msg, "expected active turn id `")
+	rest, ok := strings.CutPrefix(msg, "expected active turn id ")
 	if !ok {
 		return "", "", false
 	}
-	named, rest, ok = strings.Cut(rest, "` but found `")
-	if !ok {
-		return "", "", false
+	quote := strings.HasPrefix(rest, "`")
+	sep := " but found "
+	if quote {
+		rest, sep = rest[1:], "` but found `"
+		if rest, ok = strings.CutSuffix(rest, "`"); !ok {
+			return "", "", false
+		}
 	}
-	found, ok = strings.CutSuffix(rest, "`")
-	if !ok || strings.Contains(named+found, "`") {
+	named, found, ok = strings.Cut(rest, sep)
+	if !ok || named == "" || found == "" || strings.ContainsAny(named+found, "` ") {
 		return "", "", false
 	}
 	return named, found, true
 }
 
-// wrongTurn is a steer refused for naming another turn: the turn in flight.
+// wrongTurn is a call refused for naming another turn: the turn in flight.
 type wrongTurn string
 
 func (w wrongTurn) Error() string { return "the turn in flight is " + string(w) }
 
 // interrupt sends turn/interrupt, which both of its params require
-// (CODEX-MEASURE §17.1): {} once Codex ends the turn, -32600 "no active turn
-// to interrupt" where none runs.
+// (CODEX-MEASURE §17.1, §18): {} once Codex ends the turn, -32600 "no active
+// turn to interrupt" where none runs, and a refusal naming the turn in flight
+// where turn is not it, which interrupts nothing: that turn is then the one
+// interrupted, once.
 func (a *appServer) interrupt(ctx context.Context, turn string) error {
 	if turn == "" {
 		a.mu.Lock()
@@ -538,15 +575,29 @@ func (a *appServer) interrupt(ctx context.Context, turn string) error {
 	if turn == "" {
 		return errNotNow
 	}
-	_, err := a.call(ctx, "turn/interrupt", map[string]any{"threadId": a.thread, "turnId": turn})
-	var refused *rpcError
-	if errors.As(err, &refused) && refused.Code == codeInvalidRequest && refused.Message == "no active turn to interrupt" {
+	err := a.interruptTurn(ctx, turn)
+	var other wrongTurn
+	if errors.As(err, &other) {
+		// Codex names the turn in flight and interrupted nothing: that one,
+		// once more.
+		a.stop(turn)
+		a.begin(string(other))
+		turn = string(other)
+		err = a.interruptTurn(ctx, turn)
+	}
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, errNoTurn):
 		return errNotNow
 	}
-	if err != nil {
-		return fmt.Errorf("turn/interrupt of turn %s: %w", turn, err)
-	}
-	return nil
+	return fmt.Errorf("turn/interrupt of turn %s: %w", turn, err)
+}
+
+// interruptTurn sends turn/interrupt of turn, classified ([classify]).
+func (a *appServer) interruptTurn(ctx context.Context, turn string) error {
+	_, err := a.call(ctx, "turn/interrupt", map[string]any{"threadId": a.thread, "turnId": turn})
+	return classify(err, turn, "no active turn to interrupt")
 }
 
 func (a *appServer) gone() <-chan struct{} { return a.done }

@@ -332,7 +332,8 @@ func (s *fakeAppServer) serve(ws *websocket.Conn) {
 				answer["error"] = map[string]any{"code": -32600, "message": "no active turn to interrupt"}
 			case p.TurnID != turn:
 				delete(answer, "result")
-				answer["error"] = map[string]any{"code": -32600, "message": "not the active turn"}
+				answer["error"] = map[string]any{"code": -32600,
+					"message": "expected active turn id " + p.TurnID + " but found " + turn}
 			}
 		case "fence":
 			s.fences.add(len(s.fences.all()))

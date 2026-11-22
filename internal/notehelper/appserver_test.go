@@ -202,6 +202,9 @@ func TestFoundTurnReadsCodexsRefusalOnly(t *testing.T) {
 		{"expected active turn id `a-1` but found `b-2` and more", "", "", false},
 		{"no active turn to steer", "", "", false},
 		{"expected active turn id `a`1` but found `b`", "", "", false},
+		{"expected active turn id a-1 but found b-2", "a-1", "b-2", true},
+		{"expected active turn id a 1 but found b-2", "", "", false},
+		{"expected active turn id a-1 but found ", "", "", false},
 	}
 	for _, c := range cases {
 		named, found, ok := foundTurn(c.msg)
@@ -268,10 +271,43 @@ func TestAModelResponseIsARiseOfTheThreadsTokens(t *testing.T) {
 	tokens(t, app, "thread-sub", "turn-1", 500)
 	tokens(t, app, "thread-A", "turn-x", 200)
 	tokens(t, app, "thread-A", "turn-1", 300)
-	// Read in order: the last step is behind every update before it.
-	got := steps.await(func(s []string) bool { return len(s) >= 2 })
-	if len(got) != 2 || got[0] != "turn-1" || got[1] != "turn-1" {
-		t.Errorf("steps %v: want two of turn-1, for the totals 100 and 300", got)
+	if got := stepsUpTo(t, app, &steps); got != 2 {
+		t.Errorf("turn-1 took %d steps, want two, for the totals 100 and 300", got)
+	}
+}
+
+// stepsUpTo is how many steps of turn-1 were counted before a step of a new
+// turn-2: notifications are read in order, so turn-2's step is behind every
+// update sent before it.
+func stepsUpTo(t *testing.T, app *fakeAppServer, steps *record[string]) int {
+	t.Helper()
+	app.startTurn(t, "thread-A", "turn-2")
+	tokens(t, app, "thread-A", "turn-2", 1_000_000)
+	got := steps.await(func(s []string) bool { return len(s) > 0 && s[len(s)-1] == "turn-2" })
+	return len(got) - 1
+}
+
+// A COMPACTION'S RISE IS NO STEP: Codex's compaction request raises the
+// thread's tokens inside its contextCompaction item's window, and is no model
+// response; the rises before and after it are.
+func TestACompactionsRiseIsNoStep(t *testing.T) {
+	t.Parallel()
+	app := newFakeAppServer(t, "turn-1", 0)
+	var steps record[string]
+	joinedWith(t, app, events{step: func(turn string) { steps.add(turn) }}, "")
+	compaction := func(method string) {
+		app.notify(t, method, map[string]any{"threadId": "thread-A", "turnId": "turn-1",
+			"item": map[string]any{"type": "contextCompaction", "id": "c-1"}})
+	}
+	tokens(t, app, "thread-A", "turn-1", 100)
+	compaction("item/started")
+	tokens(t, app, "thread-A", "turn-1", 100)
+	tokens(t, app, "thread-A", "turn-1", 700)
+	compaction("item/completed")
+	tokens(t, app, "thread-A", "turn-1", 700)
+	tokens(t, app, "thread-A", "turn-1", 800)
+	if got := stepsUpTo(t, app, &steps); got != 2 {
+		t.Errorf("turn-1 took %d steps, want two, for 100 and 800, none for the compaction's 700", got)
 	}
 }
 
@@ -291,6 +327,21 @@ func TestAnInterruptNamesTheThreadAndTheTurn(t *testing.T) {
 	}
 	if err := a.interrupt(ctx, "turn-7"); !errors.Is(err, errNotNow) {
 		t.Errorf("interrupt of an ended turn = %v, want errNotNow", err)
+	}
+
+	// Codex refuses a turn not in flight, naming the one that is, and
+	// interrupts nothing: that turn is interrupted, once more.
+	moved := newFakeAppServer(t, "turn-1", 0)
+	m := joined(t, moved)
+	moved.setTurn("turn-2")
+	if err := m.interrupt(ctx, ""); err != nil {
+		t.Fatalf("interrupt after the turn moved on = %v, want turn-2 interrupted", err)
+	}
+	if c := moved.interrupts.all(); len(c) != 2 || c[0].TurnID != "turn-1" || c[1].TurnID != "turn-2" {
+		t.Errorf("interrupts %+v: want turn-1 refused, then turn-2", c)
+	}
+	if got := turnNow(m); got != "turn-2" {
+		t.Errorf("turn in flight %q, want the one Codex named, turn-2", got)
 	}
 
 	idle := joined(t, newFakeAppServer(t, "", 0))
@@ -354,7 +405,7 @@ func TestOnlyAWholeReadOfASkillsOwnFileIsALoad(t *testing.T) {
 	commandDone(t, app, "thread-A", 0, alpha.body, dir, action("read", "alpha/SKILL.md"))
 	commandDone(t, app, "thread-A", 0, beta.body, "/", action("read", beta.path))
 	// Read in order: the last load is behind every command before it.
-	got := loads.await(func(l []string) bool { return len(l) >= 2 })
+	got := loads.await(func(l []string) bool { return len(l) > 0 && l[len(l)-1] == "beta" })
 	if len(got) != 2 || got[0] != "alpha" || got[1] != "beta" {
 		t.Errorf("loads %v: want alpha (the relative read) and beta, nothing else", got)
 	}

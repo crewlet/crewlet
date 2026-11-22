@@ -55,7 +55,8 @@
 // # The step cap
 //
 // -step-cap N ends a turn at its Nth model response, the unit of Claude
-// Code's --max-turns: the adapter counts the responses ([events]), and at N
+// Code's --max-turns, which a context compaction's request is not: the
+// adapter counts the responses ([events]), and at N
 // the helper writes -cap-marker, by a rename, and then interrupts the turn
 // ([stepCap]), so the run's collection tells the helper's cap from any other
 // interrupt by the marker alone. An interrupt that fails is asked again at
