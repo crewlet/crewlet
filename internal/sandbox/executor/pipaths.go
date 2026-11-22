@@ -18,7 +18,7 @@ func (p Paths) PiSessionFile(session string) string { return p.PiSessions() + "/
 
 // PiRun is the directory of what a Pi run is written of its own: its
 // extension and its skills, removed whole before the next run's are written
-// ([Pi.artifacts]).
+// ([Pi.artifactDirs]).
 func (p Paths) PiRun() string { return p.Home + "/.pi/crewlet" }
 
 // PiExtension is the run's extension (pi_extension.mjs), loaded with `-e`.

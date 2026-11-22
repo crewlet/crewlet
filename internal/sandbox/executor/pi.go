@@ -472,7 +472,7 @@ const piHomeMCP = `{"mcpServers":{}}`
 // list ([piHomeMCP]), the run's skills ([Paths.PiSkills]), and its extension
 // ([Paths.PiExtension]), returned as the file `-e` names, with a fresh
 // session's copy beside it ([sandbox.RunRequest.FreshWiring]). What an earlier
-// run wrote the clear removes first ([Pi.artifacts]).
+// run wrote the clear removes first ([Pi.artifactFiles], [Pi.artifactDirs]).
 func (p Pi) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
 	paths Paths) (string, error) {
 	if err := box.WriteFile(ctx, paths.PiAgentDir()+"/mcp.json", []byte(piHomeMCP)); err != nil {
