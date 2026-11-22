@@ -190,32 +190,7 @@ func (p *Product) report(ctx context.Context, call growth.Call) (reportAnswer, e
 	if err = p.inScope(call.Handle, probe); err != nil {
 		return reportAnswer{}, err
 	}
-	acct, err := p.accountOf(ctx, call, accountID)
-	if err != nil {
-		// THE CALL'S ONE OUTCOME is its failure, where the lookup it needed
-		// reached Google and failed.
-		p.client.MadeOrFailed(ctx, call, probe, growth.ClassRead, err)
-		return reportAnswer{}, err
-	}
-	zoneName := acct.TimeZone
-	switch z := argString(call.Args, "time_zone"); {
-	case z != "" && (z != pacific || id == campaignReportOp):
-		return reportAnswer{}, refusal(growth.RefusedInvalid, fmt.Sprintf("a report's days are cut in the "+
-			"account's zone, %s, or for a network or mediation report in %s, the one other zone Google "+
-			"accepts; not %q. No vendor was reached.", acct.TimeZone, pacific, z))
-	case z != "":
-		zoneName = z
-	}
-	zone, err := period.LoadZone(zoneName)
-	if err != nil {
-		return reportAnswer{}, refusal(growth.RefusedInvalid, fmt.Sprintf("the report's zone %q does not "+
-			"load: %v. No vendor was reached.", zoneName, err))
-	}
-	days, err := p.days(call.Args, zone, id == campaignReportOp)
-	if err != nil {
-		return reportAnswer{}, err
-	}
-	limit := growth.RowLimit(argInt(call.Args, "limit"))
+	// EVERY ARGUMENT IS HELD BEFORE ANYTHING IS SENT, the account lookup too.
 	dims, metrics := names(call.Args["dimensions"]), names(call.Args["metrics"])
 	if len(metrics) == 0 {
 		return reportAnswer{}, refusal(growth.RefusedInvalid, "name at least one metric. No vendor was reached.")
@@ -227,18 +202,48 @@ func (p *Product) report(ctx context.Context, call growth.Call) (reportAnswer, e
 	if err = within("metrics", stringsOf(metrics), closed[1]); err != nil {
 		return reportAnswer{}, err
 	}
+	campaign := id == campaignReportOp
+	order, err := reportOrder(call.Args, closed, campaign)
+	if err != nil {
+		return reportAnswer{}, err
+	}
+	z := argString(call.Args, "time_zone")
+	if z != "" && (z != pacific || campaign) {
+		return reportAnswer{}, refusal(growth.RefusedInvalid, fmt.Sprintf("a report's days are cut in the "+
+			"account's own zone, or for a network or mediation report in %s, the one other zone Google "+
+			"accepts; not %q. No vendor was reached.", pacific, z))
+	}
+	if _, err = p.days(call.Args, time.UTC, campaign); err != nil {
+		return reportAnswer{}, err
+	}
+	acct, err := p.accountOf(ctx, call, accountID)
+	if err != nil {
+		// THE CALL'S ONE OUTCOME is its failure, where the lookup it needed
+		// reached Google and failed.
+		p.client.MadeOrFailed(ctx, call, probe, growth.ClassRead, err)
+		return reportAnswer{}, err
+	}
+	zoneName := cmp.Or(z, acct.TimeZone)
+	zone, err := period.LoadZone(zoneName)
+	if err != nil {
+		return reportAnswer{}, refusal(growth.RefusedInvalid, fmt.Sprintf("the report's zone %q does not "+
+			"load: %v. No vendor was reached.", zoneName, err))
+	}
+	days, err := p.days(call.Args, zone, campaign)
+	if err != nil {
+		return reportAnswer{}, err
+	}
+	limit := growth.RowLimit(argInt(call.Args, "limit"))
 	spec := map[string]any{"dateRange": map[string]any{"startDate": date(days.Start), "endDate": date(days.End)},
 		"dimensions": dims, "metrics": metrics}
-	if id == campaignReportOp {
+	if campaign {
 		if lang := argString(call.Args, "language"); lang != "" {
 			spec["languageCode"] = lang
 		}
 	} else {
 		// ONE ROW MORE THAN THE LIMIT tells a full answer from a cut one.
 		spec["maxReportRows"] = limit + 1
-		if err = streamedSpec(call.Args, spec, zoneName != acct.TimeZone, closed); err != nil {
-			return reportAnswer{}, err
-		}
+		streamedSpec(call.Args, spec, zoneName != acct.TimeZone, order)
 	}
 	req, err := newRequest(op, map[string]string{"accountsId": accountID}, nil, map[string]any{"reportSpec": spec})
 	if err != nil {
@@ -347,47 +352,62 @@ func date(day string) map[string]any {
 	return map[string]any{"year": t.Year(), "month": int(t.Month()), "day": t.Day()}
 }
 
-// streamedSpec adds a network or mediation report's filters, sorting,
-// localization and zone, held to the report's closed lists; foreign is a zone
-// other than the account's.
-func streamedSpec(args, spec map[string]any, foreign bool, closed [2][]string) error {
-	var filters []any
-	for _, f := range listOf(args["dimension_filters"]) {
-		if err := within("dimension_filters.dimension", []string{argString(f, "dimension")}, closed[0]); err != nil {
-			return err
+// order is a report's filters and sorting, as Google takes them.
+type order struct{ filters, sorts []any }
+
+// reportOrder is a report's filters and sorting, held to its closed lists:
+// a campaign report takes neither, and each sort names a dimension or a
+// metric, and its order.
+func reportOrder(args map[string]any, closed [2][]string, campaign bool) (order, error) {
+	var out order
+	filters, sorts := listOf(args["dimension_filters"]), listOf(args["sort"])
+	if campaign && len(filters)+len(sorts) > 0 {
+		return out, refusal(growth.RefusedInvalid, "a campaign report takes no filters or sorting. No vendor "+
+			"was reached.")
+	}
+	for _, f := range filters {
+		dim := argString(f, "dimension")
+		if err := within("dimension_filters.dimension", []string{dim}, closed[0]); err != nil {
+			return out, err
 		}
-		filters = append(filters, map[string]any{"dimension": f["dimension"],
+		out.filters = append(out.filters, map[string]any{"dimension": dim,
 			"matchesAny": map[string]any{"values": f["matches_any"]}})
 	}
-	if len(filters) > 0 {
-		spec["dimensionFilters"] = filters
-	}
-	var sorts []any
-	for _, s := range listOf(args["sort"]) {
-		cond := map[string]any{"order": s["order"]}
-		if err := within("sort.order", []string{argString(s, "order")}, []string{"ASCENDING", "DESCENDING"}); err != nil {
-			return err
+	for _, s := range sorts {
+		ord := argString(s, "order")
+		if err := within("sort.order", []string{ord}, []string{"ASCENDING", "DESCENDING"}); err != nil {
+			return out, err
 		}
-		d, byDim := s["dimension"].(string)
-		m, byMetric := s["metric"].(string)
+		cond := map[string]any{"order": ord}
+		dim, metric := argString(s, "dimension"), argString(s, "metric")
 		switch {
-		case byDim == byMetric:
-			return refusal(growth.RefusedInvalid, "each sort names a dimension or a metric. No vendor was reached.")
-		case byDim:
-			if err := within("sort.dimension", []string{d}, closed[0]); err != nil {
-				return err
+		case (dim == "") == (metric == ""):
+			return out, refusal(growth.RefusedInvalid, "each sort names a dimension or a metric. No vendor was "+
+				"reached.")
+		case dim != "":
+			if err := within("sort.dimension", []string{dim}, closed[0]); err != nil {
+				return out, err
 			}
-			cond["dimension"] = d
+			cond["dimension"] = dim
 		default:
-			if err := within("sort.metric", []string{m}, closed[1]); err != nil {
-				return err
+			if err := within("sort.metric", []string{metric}, closed[1]); err != nil {
+				return out, err
 			}
-			cond["metric"] = m
+			cond["metric"] = metric
 		}
-		sorts = append(sorts, cond)
+		out.sorts = append(out.sorts, cond)
 	}
-	if len(sorts) > 0 {
-		spec["sortConditions"] = sorts
+	return out, nil
+}
+
+// streamedSpec adds a network or mediation report's filters, sorting,
+// localization and zone; foreign is a zone other than the account's.
+func streamedSpec(args, spec map[string]any, foreign bool, o order) {
+	if len(o.filters) > 0 {
+		spec["dimensionFilters"] = o.filters
+	}
+	if len(o.sorts) > 0 {
+		spec["sortConditions"] = o.sorts
 	}
 	loc := map[string]any{}
 	if c := argString(args, "currency"); c != "" {
@@ -402,7 +422,6 @@ func streamedSpec(args, spec map[string]any, foreign bool, closed [2][]string) e
 	if foreign {
 		spec["timeZone"] = argString(args, "time_zone")
 	}
-	return nil
 }
 
 // listOf is a list argument's objects.

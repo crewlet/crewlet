@@ -121,7 +121,7 @@ func reportArgs(dimensions, metrics []string, streamed bool) map[string]any {
 			"dimension": str("Sort by this dimension; or give metric.", dimensions...),
 			"metric":    str("Sort by this metric; or give dimension.", metrics...),
 			"order":     str("", "ASCENDING", "DESCENDING"),
-		}), "Sorting, first condition first.")
+		}, "order"), "Sorting, first condition first.")
 		props["currency"] = str("An ISO 4217 code for earnings (default: the account's currency).")
 		props["time_zone"] = str("The zone the report's days are cut in: the account's reporting zone by "+
 			"default, or America/Los_Angeles, the one other zone Google accepts.", pacific)
@@ -218,7 +218,8 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 				"update_mask": str("For a change: the fields it sets, comma-separated, as Google names them " +
 					"(mediation_group_lines[\"123\"].state, targeting.ad_unit_ids)."),
 				"mediation_group": map[string]any{"type": "object",
-					"description": "The MediationGroup as the API takes it; new lines keyed by distinct negative IDs."},
+					"description": "The MediationGroup as the API takes it: new lines keyed by distinct negative " +
+						"IDs, each line's id its key, and no experimentVariant, which Google alone sets."},
 			}, "account", "mediation_group")},
 		{Name: toolABExperiment, Class: growth.ClassOperate,
 			Operations: []string{"admob.accounts.mediationGroups.mediationAbExperiments.create",

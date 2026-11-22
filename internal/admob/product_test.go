@@ -278,11 +278,17 @@ func TestACallOnAnotherAccountNeverReachesGoogle(t *testing.T) {
 	})); !refusedAs(err, growth.RefusedForbidden) {
 		t.Errorf("a batch item on another account answered %v, want forbidden", err)
 	}
-	if _, err := h.p.Prepare(ctx, h.call("admob_operate", map[string]any{
-		"operation": "admob.accounts.adUnitMappings.batchCreate", "path": map[string]any{"accountsId": mine},
-		"body": map[string]any{"requests": []any{map[string]any{"parent": "accounts/" + mine + "/mediationGroups/1"}}},
-	})); !refusedAs(err, growth.RefusedForbidden) {
-		t.Errorf("a batch item whose parent is no ad unit answered %v, want forbidden", err)
+	for _, parent := range []string{"accounts/" + mine + "/mediationGroups/1", "accounts/" + mine + "/adUnits/1/x"} {
+		if _, err := h.p.Prepare(ctx, h.call("admob_operate", map[string]any{
+			"operation": "admob.accounts.adUnitMappings.batchCreate", "path": map[string]any{"accountsId": mine},
+			"body": map[string]any{"requests": []any{map[string]any{"parent": parent}}},
+		})); !refusedAs(err, growth.RefusedForbidden) {
+			t.Errorf("a batch item whose parent is %s answered %v, want forbidden", parent, err)
+		}
+	}
+	if _, err := h.p.Prepare(ctx, h.call("admob_ad_unit_create", map[string]any{"account": mine,
+		"app_id": "ca-app-pub-1111111111111111~1", "display_name": theirs, "ad_format": "BANNER"})); !refusedAs(err, growth.RefusedForbidden) {
+		t.Errorf("a body naming another publisher ID answered %v, want forbidden", err)
 	}
 	if _, err := h.p.Prepare(ctx, h.call("admob_mediation_group_upsert", map[string]any{"account": mine,
 		"mediation_group": map[string]any{"displayName": "G", "targeting": map[string]any{
@@ -346,7 +352,8 @@ func classOf(t *testing.T, h *harness, tool string, args map[string]any) growth.
 // ONLY WHAT CANNOT BE UNDONE IS ADMIN: a manual app is operate, linking a new
 // app to its store listing is admin; enabling or disabling a mediation line
 // is operate, removing one is admin whether its state says so, the whole
-// line does, or a replaced line map leaves it out.
+// line does, or the body leaves the line out; stopping an experiment keeping
+// the treatment is admin, keeping the control operate.
 //
 // Mutation: drop the store-link field rule or the line state rule, or let an
 // unknown line value class as operate, and a case goes red.
@@ -473,6 +480,10 @@ func TestAPatchWhoseMaskTheEngineCannotReadNeverReachesGoogle(t *testing.T) {
 			"path":  map[string]any{"accountsId": mine, "mediationGroupsId": "77"},
 			"query": map[string]any{"updateMask": "targeting.ad_unit_ids"},
 			"body":  map[string]any{"mediationGroupId": "78"}},
+		"a body naming another group by its name": {"operation": "admob.accounts.mediationGroups.patch",
+			"path":  map[string]any{"accountsId": mine, "mediationGroupsId": "77"},
+			"query": map[string]any{"updateMask": "targeting.ad_unit_ids"},
+			"body":  map[string]any{"name": "accounts/" + mine + "/mediationGroups/78"}},
 		"a stop keeping no variant": {"operation": "admob.accounts.mediationGroups.mediationAbExperiments.stop",
 			"path": map[string]any{"accountsId": mine, "mediationGroupsId": "77"}, "body": map[string]any{}},
 		"a mask in capitals": {"operation": "admob.accounts.mediationGroups.patch",
@@ -672,10 +683,8 @@ func TestALongCampaignReportNeverReachesGoogle(t *testing.T) {
 	if !refusedAs(err, growth.RefusedInvalid) {
 		t.Errorf("a 45-day campaign report answered %v, want invalid", err)
 	}
-	for _, c := range h.calls() {
-		if strings.Contains(c, "campaignReport") {
-			t.Errorf("Google was asked: %s", c)
-		}
+	if got := h.calls(); len(got) != 0 {
+		t.Errorf("Google was asked: %v", got)
 	}
 }
 
@@ -796,6 +805,16 @@ func TestAClosedListIsHeldInCode(t *testing.T) {
 		!strings.Contains(err.Error(), "sort.metric takes") {
 		t.Errorf("sorting a mediation report by a network metric answered %v, want invalid", err)
 	}
+	if _, err := h.p.Run(ctx, h.call("admob_network_report", map[string]any{"account": mine,
+		"metrics": []any{"CLICKS"}, "dimension_filters": []any{map[string]any{"dimension": "AD_SOURCE",
+			"matches_any": []any{"1"}}}})); !refusedAs(err, growth.RefusedInvalid) ||
+		!strings.Contains(err.Error(), "dimension_filters.dimension takes") {
+		t.Errorf("filtering a network report by a mediation dimension answered %v, want invalid", err)
+	}
+	// A REFUSED REPORT SENT NOTHING, its account lookup included.
+	if got := h.calls(); len(got) != 0 {
+		t.Errorf("refused reports reached Google: %v", got)
+	}
 	if _, err := h.p.Prepare(ctx, h.call("admob_ad_unit_create", map[string]any{"account": mine,
 		"app_id": "ca-app-pub-1111111111111111~1", "display_name": "B", "ad_format": "BANNER_INTERSTITIAL"})); !refusedAs(err, growth.RefusedInvalid) {
 		t.Errorf("a format AdMob no longer creates answered %v, want invalid", err)
@@ -872,5 +891,8 @@ func TestALargeCampaignReportSaysToNarrowIt(t *testing.T) {
 		"metrics": []any{"IMPRESSIONS"}, "dimensions": []any{"CAMPAIGN_NAME"}, "range": "last_7_days"}))
 	if !refusedAs(err, growth.RefusedInvalid) || !strings.Contains(err.Error(), "narrow") {
 		t.Errorf("an oversized campaign report answered %v, want a refusal saying to narrow it", err)
+	}
+	if _, records := h.audit.take(); len(records) != 1 || records[0].Failure != growth.FailureUnknownOutcome {
+		t.Errorf("the access log holds %+v, want one outcome failed as unknown", records)
 	}
 }
