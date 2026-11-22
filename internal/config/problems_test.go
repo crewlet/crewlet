@@ -236,6 +236,7 @@ var humanSeatKeys = []humanSeatKey{
 	{"integrations.aws", "{enabled: false}", seatAccessOnHumanSeat},
 	{"integrations.google_cloud", "{enabled: false}", seatAccessOnHumanSeat},
 	{"integrations.ssh", "{enabled: false}", seatAccessOnHumanSeat},
+	{"integrations.google_analytics", "{enabled: false}", seatAccessOnHumanSeat},
 	{"integrations.app_store_connect", "{enabled: false}", seatAccessOnHumanSeat},
 	{"avatar", "{character: hexlet, color: cyan}", avatarOnHuman},
 }

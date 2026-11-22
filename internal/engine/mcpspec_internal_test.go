@@ -246,6 +246,7 @@ func TestEveryPassThatMintsASeatsCredentialDeclaresItsPlan(t *testing.T) {
 		integration.KindSSH: "no pass mints a seat's SSH credential",
 		// The team's keys stay in the engine, which makes every call (ADR-0170).
 		integration.KindAppStoreConnect: "no seat holds an App Store Connect key",
+		integration.KindGoogleAnalytics: "no pass mints a seat's Google Analytics credential: its tokens are minted at use",
 	}
 	e := &Engine{}
 	for _, pass := range e.setupPasses() {

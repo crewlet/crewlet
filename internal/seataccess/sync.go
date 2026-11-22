@@ -1047,6 +1047,8 @@ func LaneName(lane Lane) string {
 		return "SSH"
 	case LaneAppStoreConnect:
 		return "App Store Connect"
+	case LaneGoogleAnalytics:
+		return "Google Analytics"
 	default:
 		return string(lane)
 	}

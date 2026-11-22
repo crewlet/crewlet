@@ -66,6 +66,7 @@ const (
 	CapabilityModelAPI      Capability = "model_api"
 	CapabilityAppDelivery   Capability = "app_delivery"
 	CapabilityIdentity      Capability = "identity"
+	CapabilityAnalytics     Capability = "analytics"
 )
 
 // Capabilities is every capability.
@@ -73,7 +74,7 @@ var Capabilities = []Capability{
 	CapabilityChat, CapabilityTracker, CapabilityKnowledge, CapabilityCodeHosting,
 	CapabilityCI, CapabilityMonitoring, CapabilityAlerting, CapabilityDNS, CapabilityCDN,
 	CapabilityCompute, CapabilityObjectStorage, CapabilityDatabase, CapabilityEmail,
-	CapabilityModelAPI, CapabilityAppDelivery, CapabilityIdentity,
+	CapabilityModelAPI, CapabilityAppDelivery, CapabilityIdentity, CapabilityAnalytics,
 }
 
 // Valid reports whether c is a member of the closed set.
