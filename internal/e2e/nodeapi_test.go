@@ -259,6 +259,9 @@ func wireAPI(
 			// EACH NODE'S MCP, MODEL AND RUNNER ROWS, on its status record
 			// beside its presence, as cmd/crewlet hands them.
 			NodeStatuses: backends.Fleet,
+			// EACH PERSON'S HOME BOARD, the fleet's record, as cmd/crewlet
+			// hands it.
+			HomeBoards: backends.Fleet,
 			// THE FLEET'S TOKEN COUNTERS, which the `budgets` question
 			// and every seat's live meter read.
 			Budget: backends.Fleet,
