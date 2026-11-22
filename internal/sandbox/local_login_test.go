@@ -268,8 +268,13 @@ func TestABoxRefreshThatCommittedIsWrittenThoughAFileWasRefused(t *testing.T) {
 	putLogin(t, dir, signedIn("before"))
 	layout := boxLayout{id: "unapplied", root: t.TempDir()}
 	seeded := map[string]seededCredential{}
+	rules := testRules(files)
 	for relative, source := range files {
-		seeded[relative] = seededCredential{Source: source, Seed: digestOf([]byte(signedIn("before")[filepath.Base(source)]))}
+		rule := rules[relative]
+		rule.Name = filepath.Base(source)
+		seeded[relative] = seededCredential{
+			Source: source, Seed: digestOf([]byte(signedIn("before")[filepath.Base(source)])), Rule: rule,
+		}
 	}
 	for name, body := range signedIn("refreshed") {
 		writeFile(t, filepath.Join(layout.home(), ".fake", name), body)
