@@ -427,17 +427,14 @@ func TestARunThatContinuesASessionIsWiredForEitherSessionItsBoxStarts(t *testing
 	})
 }
 
-// THE BRIEF MATCHES WHAT THE RUN HAS. The launch hands the continuation where
-// the session is taken up in the box it was last worked in (its own copy after
-// a clean end, the archive restored over a cut-off one), the new-box
-// continuation in any other box, and the fresh brief where it cannot be taken
-// up at all (a harness that cannot, an object gone, a kept session moved, a row
-// naming another capture or an earlier job's, a seal or a spool that does not
-// open, or a second read of it that does not). A box's own copy, kept or in
-// place, is continued only where its harness takes it up in place
-// ([SessionRestorer.CheckInPlace]: a Codex of another release than the one
-// supported does not). A newer capture not kept is none of these. It spools
-// nothing either way.
+// THE BRIEF MATCHES WHAT THE RUN HAS: the continuation in the box last worked
+// in (its copy after a clean end, the archive over a cut-off one), the new-box
+// continuation elsewhere, the fresh brief where it cannot be taken up (a
+// harness that cannot, an object gone, a kept session moved, a row naming
+// another capture or an earlier job's, a seal, spool or second read that does
+// not open), and a box's own copy only where its harness takes it up in place
+// ([SessionRestorer.CheckInPlace]). A newer capture not kept is none of these.
+// It spools nothing either way.
 //
 // Mutation: choose the brief before the box and object are asked, restore over
 // a clean copy, skip a check of the record as opened, skip CheckInPlace on

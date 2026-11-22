@@ -683,15 +683,13 @@ func versionBox(printed string, code int, errText string, asked *[]string) *sand
 	return b
 }
 
-// THE CONTINUATION CHECK READS THE BOX HARNESS'S RELEASE AND HOLDS IT TO THE
-// FLOORS. A carried session is continued only by the harness that wrote it, in
-// the format this build restores, on a box at or past its floor (Claude Code
-// 2.1.310, OpenCode 2.0.32) and no older than the writing release; for Claude
-// Code, only a session 2.1.300 or later wrote; for Codex, box and writer on
-// exactly 0.171.0. A box release that does not read refuses, and so does an
-// unreadable writer, for every harness. The printed release is returned
-// whatever the answer; a harness not answering is no continuation, a box not
-// asked an error; one login-shell exec, its bin directory on PATH, reads it.
+// THE CONTINUATION CHECK HOLDS THE BOX HARNESS'S RELEASE TO THE FLOORS: the
+// writing harness, this build's format, a box at or past its floor (Claude Code
+// 2.1.310, OpenCode 2.0.32) and no older than the writer; Claude Code only a
+// session 2.1.300 or later wrote; Codex box and writer exactly 0.171.0. An
+// unread box release or writer refuses, for every harness. The printed release
+// is returned whatever the answer; a harness not answering is no continuation,
+// a box not asked an error; one login-shell exec, its bin first on PATH.
 //
 // Mutation: compare against the writer's floor alone, let an older box take a
 // newer writer's session, or read an unreadable box release or writer as

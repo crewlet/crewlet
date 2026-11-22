@@ -208,18 +208,16 @@ func (p Paths) CodexConfigFresh() string { return p.WorkDir() + "/codex-config-f
 func (p Paths) CodexLiveConfig() string { return p.CodexHome() + "/config.toml" }
 
 // codexSessionGate is the part of a run's script that names the session its
-// Codex runs in, as sid ("" for one Codex mints as it starts), whether it is
-// the one asked to continue, as k, and where it was asked and could not, why,
-// as w; and installs the configuration the run starts with. The runner's
-// script writes the record after it, resumes sid where k is yes, and
-// otherwise starts a new thread whose minted id it reports ([reportSession]).
+// Codex runs in, as sid ("" for one Codex mints), whether it is the one asked
+// to continue, as k, and why not, as w; and installs the run's configuration.
+// The script writes the record after it, resumes sid where k is yes, else
+// starts a new thread whose minted id it reports ([reportSession]).
 //
-// A run that continues one does so only on a box whose Codex (n, the bare
-// release the runner's `--version` printed) is exactly [codexCarryRelease],
-// its own copy included. It continues the rollout its box HOLDS unless a
-// carried archive ([Paths.SessionCarried]) holds what the copy does not (a
-// digest not among the box's, [Paths.SessionDigests]) or the copy is one Codex
-// was cut off in ([Session.Replaces]); then the archive is RESTORED
+// It continues only on a box whose Codex (n, the bare release `--version`
+// printed) is exactly [codexCarryRelease], its own copy included: the rollout
+// its box HOLDS, unless a carried archive ([Paths.SessionCarried]) holds what
+// the copy does not (a digest not among [Paths.SessionDigests]) or Codex was
+// cut off in the copy ([Session.Replaces]); then the archive is RESTORED
 // ([codexRestore]) and its digest recorded before the run goes on.
 func codexSessionGate(session Session, paths Paths, rewired bool) string {
 	var b strings.Builder
