@@ -92,16 +92,16 @@ const openCodeMCPWait = 60 * time.Second
 
 // openCodeCallWait bounds one call a run's script makes to its own server
 // whose answer is a few KiB at most: the readiness `mcp.list`, `session.get`,
-// the leftover steers' inbox list and cancels, the end's `session.interrupt`
-// and the login's `auth export`. Past it the call is ended and the script goes
-// on as where the server is gone ([openCodeBounded]).
+// the leftover steers' inbox list and cancels, the end's `session.interrupt`,
+// the login's export and import, and the stored logins' list and removal. Past
+// it the call is ended and the script goes on as where the server is gone, or,
+// before the client, ends the run ([openCodeBounded], [openCodeForgetLogins]).
 //
 // TEN SECONDS, about fifteen times the slowest such call measured (687 ms, a
 // readiness `mcp.list` on OpenCode 2.2.7; each kind under 0.7 s on 2.0.32 to
-// 2.3.0, a busy 2-core box; crewlet#1088's probe). Past it a call costs only what a gone server
-// costs: a usage line, a steer left, an unsettled step. OpenCode bounds
-// nothing itself: its client waits on a call as long as an answering server
-// takes.
+// 2.3.0, a busy 2-core box; crewlet#1088's probe). Past it a call costs what a
+// gone server does. OpenCode bounds nothing itself: its client waits on a call
+// as long as an answering server takes.
 const openCodeCallWait = 10 * time.Second
 
 // openCodeSessionCallWait bounds one call a run's script makes to its own
@@ -552,10 +552,11 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	// the document while the run works and as it ends ([openCodeLoginSync]).
 	// A remote box is given none and signs in with the run environment's key.
 	// Through the server, so no second OpenCode runtime opens the database.
+	// Before the client, so an end request ends each call and starts no run.
 	b.WriteString(openCodeForgetLogins(ans, secs(times.call)))
-	line(`if [ -s %s ]; then`, doc)
-	line(`  opencode auth import --server "$url" < %s > /dev/null || { echo 'crewlet: OpenCode refused the login this box was given — sign the engine in again with crewlet llm login' >&2; exit 1; }`, doc)
-	line(`  imported=1`)
+	line(`if [ -z "$endasked" ] && [ -s %s ]; then`, doc)
+	line(`  if bounded login %d e opencode auth import --server "$url" %s > /dev/null 2>&1; then imported=1; elif [ -z "$endasked" ]; then echo 'crewlet: OpenCode refused the login this box was given — sign the engine in again with crewlet llm login' >&2; exit 1; fi`,
+		secs(times.call), doc)
 	line(`fi`)
 	line(`if [ -n "$imported" ]; then`)
 	line(`  %s &`, openCodeExporter(times.sync, loop))
@@ -674,16 +675,18 @@ func openCodeHomeConfig(paths Paths) []string {
 // the box's database holds: an earlier run's import, and whatever else was
 // stored since. The run imports its own after, so only the login it was handed
 // signs it in. A database still holding one ends the run before its client
-// starts. Each call is bounded by wait seconds.
+// starts. Each call is bounded by wait seconds and ended by an end request,
+// after which nothing more is asked: no run starts.
 func openCodeForgetLogins(ans string, wait int) string {
-	list := fmt.Sprintf(`bounded forget %[2]d - opencode api --server "$url" credential.list > %[1]s 2>&1 || { echo "crewlet: OpenCode could not list the logins its database holds: $(cat %[1]s)" >&2; exit 1; }`, ans, wait)
-	return list + "\n" +
-		`if grep -q '"id":' ` + ans + `; then` + "\n" +
-		`  grep -o '"id":"[^"]*","integrationID":' ` + ans + ` | sed 's/^"id":"\([^"]*\)".*/\1/' > ` + ans + `.ids` + "\n" +
-		fmt.Sprintf(`  while IFS= read -r id; do bounded forget %d - opencode api --server "$url" credential.remove --param credentialID="$id" > /dev/null 2>&1; done < %s.ids; rm -f %s.ids`, wait, ans, ans) + "\n" +
+	list := fmt.Sprintf(`bounded forget %[2]d e opencode api --server "$url" credential.list > %[1]s 2>&1 || [ -n "$endasked" ] || { echo "crewlet: OpenCode could not list the logins its database holds: $(cat %[1]s)" >&2; exit 1; }`, ans, wait)
+	return `if [ -z "$endasked" ]; then` + "\n" +
 		"  " + list + "\n" +
-		`  if grep -q '"id":' ` + ans + `; then echo 'crewlet: OpenCode kept a login the run could not remove, so the run does not start' >&2; exit 1; fi` + "\n" +
-		"fi\nrm -f " + ans + "\n"
+		`  if [ -z "$endasked" ] && grep -q '"id":' ` + ans + `; then` + "\n" +
+		`    grep -o '"id":"[^"]*","integrationID":' ` + ans + ` | sed 's/^"id":"\([^"]*\)".*/\1/' > ` + ans + `.ids` + "\n" +
+		fmt.Sprintf(`    while IFS= read -r id; do bounded forget %d e opencode api --server "$url" credential.remove --param credentialID="$id" > /dev/null 2>&1; done < %s.ids; rm -f %s.ids`, wait, ans, ans) + "\n" +
+		"    " + list + "\n" +
+		`    if [ -z "$endasked" ] && grep -q '"id":' ` + ans + `; then echo 'crewlet: OpenCode kept a login the run could not remove, so the run does not start' >&2; exit 1; fi` + "\n" +
+		"  fi\n  rm -f " + ans + "\nfi\n"
 }
 
 // openCodeSessionGate decides, before the run's server starts (it is handed
