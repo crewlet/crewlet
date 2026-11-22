@@ -34,6 +34,7 @@ func TestEverySurfaceDeclaresWhoOwnsItsAddress(t *testing.T) {
 		integration.KindAppStoreConnect: integration.IngressNone,
 		integration.KindAppleAds:        integration.IngressNone,
 		integration.KindGoogleAnalytics: integration.IngressNone,
+		integration.KindAdMob:           integration.IngressNone,
 	}
 	for _, kind := range integration.Kinds {
 		expect, listed := want[kind]

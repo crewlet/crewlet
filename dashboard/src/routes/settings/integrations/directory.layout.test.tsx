@@ -147,9 +147,11 @@ describe.each(["light", "dark"] as const)("on a %s document", (theme) => {
       await mount(width, theme, CATALOG);
       const labels = drawn().map(([heading]) => heading);
       expect(labels).not.toContain("Advertising");
-      expect(labels).not.toContain("Analytics");
-      expect(labels).not.toContain("Ad revenue");
-      expect(drawn().at(-1)).toEqual(["Mobile apps", ["Expo", "App Store Connect"]]);
+      expect(drawn().slice(-3)).toEqual([
+        ["Mobile apps", ["Expo", "App Store Connect"]],
+        ["Analytics", ["Google Analytics"]],
+        ["Ad revenue", ["AdMob"]],
+      ]);
       expect(overflowing(host!)).toEqual([]);
     },
   );

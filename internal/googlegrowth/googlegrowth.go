@@ -6,6 +6,14 @@
 // properties, sites or customers a seat names), its tool words and how it
 // shapes an answer.
 //
+// # A consent product sends as the company's grant
+//
+// Google refuses service accounts at AdSense and AdMob, so their calls go as
+// the company's consent grant ([Client.Grant]): one token every seat shares,
+// renewed once where Google answers 401, on the same call path as a seat's
+// ([googleauth.Transport]). Nothing at Google then tells two seats apart, so
+// the product holds each seat to its level and scope alone.
+//
 // # A request addresses its operation's resource and nothing else
 //
 // [NewRequest] fills an operation's `{name}` path parameters with IDs alone
@@ -89,6 +97,10 @@ type Request struct {
 	// Fill makes the query sent from Query, adding a credential only as the
 	// request is sent; nil sends Query. It reads nothing it changes.
 	Fill func(ctx context.Context, q url.Values) (url.Values, error)
+	// Diff, where set, is the product's reading of what the request changes
+	// on its target: for an update mask that is not the body's field names
+	// (a map entry's key, a snake_case path). Nil reads the mask ([Request.Changes]).
+	Diff func(before map[string]any) []growth.Change
 }
 
 // pathParam is one `{name}` of an operation's path.
@@ -188,10 +200,14 @@ func (r Request) verb() string {
 // Changes is what the request changes on before, field by field, each named
 // and valued as the request writes it, so a card shows what Google receives:
 // the fields its update masks name, every field the body sets where it names
-// none, and for a `*` mask those and every field before holds. Values are read
-// in either spelling Google takes (package doc), and [Held.Class] classes each
-// field by its lowerCamel name.
+// none, and for a `*` mask those and every field before holds; or its
+// product's own reading ([Request.Diff]). Values are read in either spelling
+// Google takes (package doc), and [Held.Class] classes each field by its
+// lowerCamel name.
 func (r Request) Changes(before map[string]any) []growth.Change {
+	if r.Diff != nil {
+		return r.Diff(before)
+	}
 	fields, masked := r.masked()
 	if !masked || slices.Contains(fields, "*") {
 		fields = slices.Collect(maps.Keys(r.Body))

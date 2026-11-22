@@ -218,6 +218,7 @@ export const INTEGRATION_TOOLS = {
   app_store_connect: ["app_store_connect"],
   apple_ads: ["apple_ads"],
   google_analytics: ["google_analytics"],
+  admob: ["admob"],
 } as const;
 
 /**
