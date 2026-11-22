@@ -37,6 +37,22 @@ const (
 	gitConfigValue = "GIT_CONFIG_VALUE_"
 )
 
+// GitConfigParametersVar is the variable `git -c` hands its settings to the
+// commands it runs in, which git reads AFTER every GIT_CONFIG_COUNT entry: the
+// one place a setting outranks entries a harness appends to the count (Gemini
+// CLI's shell empties credential.helper and core.hooksPath there).
+const GitConfigParametersVar = "GIT_CONFIG_PARAMETERS"
+
+// GitConfigParameter is one [GitConfigParametersVar] item setting key to
+// value, single-quoted as git's sq_quote_buf quotes one, which steps a quote
+// or a ! out of the quotes behind a backslash. In git's first form,
+// 'key=value', which every git reads: the 'key'='value' form git 2.31 writes
+// is refused by an older git as a bogus format, failing every command, so a
+// key holding '=' cannot be written ([BoxGit.Env] refuses such a base).
+func GitConfigParameter(key, value string) string {
+	return "'" + strings.NewReplacer("'", `'\''`, "!", `'\!'`).Replace(key+"="+value) + "'"
+}
+
 // BoxGit is the engine's git configuration of one launch of a run given
 // repositories on Gitlet: what [BoxGit.Env] puts in the launch's
 // environment.
@@ -75,6 +91,10 @@ func (g BoxGit) Env(run map[string]string) (map[string]string, error) {
 		return nil, fmt.Errorf("sandbox: a box's git user %q is not a plain word", g.User)
 	case g.Token == "":
 		return nil, fmt.Errorf("sandbox: a box's git is given no credential")
+	case strings.Contains(g.Base, "="):
+		return nil, fmt.Errorf("sandbox: %s=%q holds an '=', which no %s item a box's git reads can "+
+			"name in a credential key; serve Gitlet's box path at a URL without one",
+			BoxGitURLVar, g.Base, GitConfigParametersVar)
 	case (g.Name == "") != (g.Email == ""):
 		return nil, fmt.Errorf("sandbox: a box's git identity is a name and an email together, or none for " +
 			"a box that acts as nobody")
@@ -85,17 +105,24 @@ func (g BoxGit) Env(run map[string]string) (map[string]string, error) {
 	}
 	// The trailing '/' scopes the helper to Gitlet's paths: git matches a URL's
 	// path as a prefix ending at a '/', so never a sibling path of the same host.
+	// In GIT_CONFIG_PARAMETERS, after the run environment's own items: read
+	// after every count entry, so a harness's appended empty credential.helper
+	// (Gemini CLI's shell) cannot reset the list past it.
 	scope := "credential." + g.Base + "/.helper"
-	entries := []struct{ key, value string }{
+	credential := strings.Join([]string{
 		// Empty RESETS the helper list (git-config(1), credential.helper), so an
-		// operator's `credential.helper store` is neither asked for the token nor told
-		// to save it.
-		{scope, ""},
+		// operator's `credential.helper store` is neither asked for the token nor
+		// told to save it.
+		GitConfigParameter(scope, ""),
 		// Answers `get` from the PROCESS environment, so the token is never in a
 		// file; `store` and `erase` succeed doing nothing.
-		{scope, `!f() { test "$1" = get || return 0; printf 'username=` + g.User + `\npassword=%s\n' "$` +
-			GitTokenVar + `"; }; f`},
+		GitConfigParameter(scope, `!f() { test "$1" = get || return 0; printf 'username=`+g.User+
+			`\npassword=%s\n' "$`+GitTokenVar+`"; }; f`),
+	}, " ")
+	if prior := run[GitConfigParametersVar]; prior != "" {
+		credential = prior + " " + credential
 	}
+	var entries []struct{ key, value string }
 	// The seat's identity, as an engine-built commit has it. A convention a
 	// cooperating box keeps, never a check: the push's row is the provenance.
 	if g.Name != "" {
@@ -111,7 +138,7 @@ func (g BoxGit) Env(run map[string]string) (map[string]string, error) {
 		{"index.version", "4"},
 		{"core.untrackedCache", "true"},
 	}...)
-	out := map[string]string{GitTokenVar: g.Token, GitURLVar: g.Base,
+	out := map[string]string{GitTokenVar: g.Token, GitURLVar: g.Base, GitConfigParametersVar: credential,
 		gitConfigCount: strconv.Itoa(n + len(entries))}
 	for i, e := range entries {
 		out[gitConfigKey+strconv.Itoa(n+i)] = e.key

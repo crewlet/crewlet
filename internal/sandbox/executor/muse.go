@@ -546,7 +546,8 @@ func museServerName(name string) bool {
 // a continued one's place, which `--prompt-file` names. Its standing
 // instructions, told of notes where it reads them, are refused past
 // [museSystemMax].
-func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error) {
+func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
+	paths Paths) (string, error) {
 	if _, err := toolEnvOmitted(req.SignInEnv); err != nil {
 		return "", err
 	}

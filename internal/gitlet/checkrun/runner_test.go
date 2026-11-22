@@ -93,7 +93,8 @@ func TestACheckBoxHoldsNoModelCredential(t *testing.T) {
 		t.Fatalf("a check's box was made with an agent %q, %d login files, %d run grants",
 			spec.Harness, len(spec.CredentialFiles), len(spec.Repos))
 	}
-	allowed := append([]string{"NPM_TOKEN", sandbox.GitURLVar, sandbox.GitTokenVar, "GIT_CONFIG_COUNT"},
+	allowed := append([]string{"NPM_TOKEN", sandbox.GitURLVar, sandbox.GitTokenVar, "GIT_CONFIG_COUNT",
+		sandbox.GitConfigParametersVar},
 		config.ReservedCheckEnv()...)
 	for name, value := range spec.Env {
 		switch {

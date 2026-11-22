@@ -33,7 +33,7 @@ func TestABridgedEntryTellsEitherHarnessHowLongToWait(t *testing.T) {
 
 	b := sandbox.NewFakeSandbox("box-1")
 	path, err := executor.ClaudeCode{}.WriteConfig(t.Context(), b,
-		sandbox.RunRequest{MCPServers: servers}, executor.PathsFor(b))
+		sandbox.RunRequest{MCPServers: servers}, executor.Session{}, executor.PathsFor(b))
 	if err != nil || path == "" {
 		t.Fatalf("WriteConfig = %q, %v", path, err)
 	}

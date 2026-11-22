@@ -441,36 +441,107 @@ func TestGeminiPrunesWhatEachCallLeaves(t *testing.T) {
 	}
 }
 
-// THE HARNESS'S OWN FAILURES ARE NAMED. Measured on both releases: a spent daily
-// quota is printed as a TerminalQuotaError, and a per-minute limit is retried
-// and then printed as a RetryableQuotaError, neither carrying the API's
-// RESOURCE_EXHAUSTED; a refused login is the API's UNAUTHENTICATED, and a
-// refused key the API's own sentence, both relayed whole. Each is the first
-// line of what the harness wrote to stderr, beside a non-zero exit.
+// THE HARNESS'S OWN FAILURES ARE NAMED. Measured on both releases: a spent
+// daily quota prints a TerminalQuotaError, a limit; a per-minute limit is
+// retried, then printed as a RetryableQuotaError, transient, no limit; neither
+// carries the API's RESOURCE_EXHAUSTED. A refused login is the API's
+// UNAUTHENTICATED, a refused key the API's own sentence, both relayed whole,
+// and a login Google gives no Code Assist tier an IneligibleTierError (its
+// class from 0.70.0's bundle, its message Google's): each the first line of
+// the harness's stderr. A seat's run's spent quota is read only at its
+// harness's own exit (the executor's tests).
+//
+// Mutations, each red: mark RetryableQuotaError a limit; drop the daily
+// quota's sentence; drop the IneligibleTierError marker.
 func TestGeminiRecognisesItsOwnQuotaAndSignInFailures(t *testing.T) {
 	t.Parallel()
 	p := geminiCLI(t)
 	const report = "Error when talking to Gemini API Full report available at: /home/tmp/gemini-client-error.json "
 	for name, tc := range map[string]struct {
-		stderr string
-		want   llm.ErrorKind
+		stderr, said string
+		want         llm.ErrorKind
+		none         bool
 	}{
-		"a spent daily quota": {report + "TerminalQuotaError: You have exhausted your daily quota on this model.\n" +
-			"    at classifyGoogleError (file:///bundle/chunk.js:306678:16)", llm.KindRateLimit},
-		"a rate limit past its retries": {report + "RetryableQuotaError: Resource has been exhausted (e.g. check quota).\n" +
-			"    at classifyGoogleError (file:///bundle/chunk.js:306678:16)", llm.KindRateLimit},
-		"a refused login": {report + `_ApiError: {"error":{"code":401,"message":"Request had invalid authentication credentials.","status":"UNAUTHENTICATED"}}`, llm.KindAuth},
-		"a refused key":   {report + `_ApiError: {"error":{"code":400,"message":"API key not valid. Please pass a valid API key.","status":"INVALID_ARGUMENT"}}`, llm.KindAuth},
-		"a login it could not use": {"FatalAuthenticationError: Manual authorization is required but the current session is " +
+		"a spent daily quota": {stderr: report + "TerminalQuotaError: You have exhausted your daily quota on this model.\n" +
+			"    at classifyGoogleError (file:///bundle/chunk.js:306678:16)", want: llm.KindRateLimit},
+		"a spent daily quota, in a seat's run's result": {said: "[API Error: You have exhausted your daily " +
+			"quota on this model.]\nPlease wait and try again later.", want: llm.KindRateLimit},
+		"a rate limit past its retries": {stderr: report + "RetryableQuotaError: Resource has been exhausted (e.g. check quota).\n" +
+			"    at classifyGoogleError (file:///bundle/chunk.js:306678:16)", none: true},
+		"a refused login": {stderr: report + `_ApiError: {"error":{"code":401,"message":"Request had invalid authentication credentials.","status":"UNAUTHENTICATED"}}`, want: llm.KindAuth},
+		"a refused key":   {stderr: report + `_ApiError: {"error":{"code":400,"message":"API key not valid. Please pass a valid API key.","status":"INVALID_ARGUMENT"}}`, want: llm.KindAuth},
+		"a login whose account no tier takes": {stderr: report + "IneligibleTierError: This account is not " +
+			"eligible for Gemini Code Assist.", want: llm.KindAuth},
+		"a login it could not use": {stderr: "FatalAuthenticationError: Manual authorization is required but the current session is " +
 			"non-interactive. Please run the Gemini CLI in an interactive terminal to log in, provide a GEMINI_API_KEY, or " +
-			"ensure Application Default Credentials are configured.\n  exitCode: 41", llm.KindAuth},
+			"ensure Application Default Credentials are configured.\n  exitCode: 41", want: llm.KindAuth},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			hit, ok := classifyMarkers(p, harnessOutput{stderr: tc.stderr, failed: true})
+			hit, ok := classifyMarkers(p, harnessOutput{stderr: tc.stderr, said: tc.said, failed: true})
+			if tc.none {
+				if ok {
+					t.Errorf("classified %v, want nothing: a transient failure", hit.Kind)
+				}
+				return
+			}
 			if !ok || hit.Kind != tc.want {
 				t.Errorf("classified %v (found %v), want %v", hit.Kind, ok, tc.want)
 			}
 		})
+	}
+}
+
+// GEMINI CLI 0.70.0'S RECORD IS TOLD A REQUEST AT A TIME, ONCE, WITH ITS CALLS.
+// 0.70.0 writes a response's entry up to three times (its prose, its calls
+// scheduled, its calls run), where 0.65.0 wrote the calls once run. The shipped
+// profile over 0.70.0's own record of a run that made two calls: a request is
+// told only once the next entry moves past it, though its calls showed
+// earlier; each of the three is told once, the first two with their call, and
+// charged once, its whole prompt with the tool prompt and its reply with the
+// reasoning, however often its entry was written.
+//
+// Mutations, each red: drop late_calls (the first request is told on its
+// first writing, with no call); read a whole entry as more of its request
+// (charged three times); match the calls by anything but `toolCalls`.
+func TestGeminis070RecordIsToldARequestAtATimeOnceWithItsCalls(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile(filepath.Join("testdata", "gemini-cli", "session-0.70.0-calls.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := newTestHost(t)
+	r := newRecordReader(geminiCLI(t), llm.Request{Tools: host}, "the prompt", time.Now)
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	for i, line := range lines {
+		r.fileLine(line)
+		// THE CALLS ARE SCHEDULED on the eighth line, before they run: the
+		// request is still untold until the user entry after it.
+		if i == 7 {
+			if !strings.Contains(line, `"status":"scheduled"`) {
+				t.Fatalf("line 8 of the record is not the calls' scheduled writing: %s", line)
+			}
+			if turns := host.latestTurns(); len(turns) != 0 {
+				t.Fatalf("a request was told as its calls were scheduled: %+v", turns)
+			}
+		}
+	}
+	r.finish()
+	_, _, spent, _ := host.snapshot()
+	turns := host.latestTurns()
+	if len(turns) != 3 {
+		t.Fatalf("the host was told %d requests, want 3: %+v", len(turns), turns)
+	}
+	for i, want := range [][]string{{"mcp_probe_slow"}, {"mcp_probe_echo"}, nil} {
+		var got []string
+		for _, c := range turns[i].Calls {
+			got = append(got, c.Name)
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("request %d was told with calls %q, want %q", i+1, got, want)
+		}
+	}
+	if spent.Input != 3*1007 || spent.Output != 3*80 || spent.CacheRead != 3*400 {
+		t.Errorf("the run was charged %+v, want each request once: 1,007 in (400 cached) and 80 out", spent)
 	}
 }
