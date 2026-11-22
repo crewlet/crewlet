@@ -75,14 +75,14 @@ func checkpoint(text string) map[string]any {
 // off the "context" hook; a folded note is admitted again ONCE, or given up
 // and posted folded (opencode_steer.js).
 //
-// Mutations, each red: confirm on `session.inbox.delivered`; match a message
-// by its words rather than its id, or one that only contains the note; accept
-// another shape; confirm while the session compacts; re-admit under the first
-// id, twice, or with no id granted; fold an item the route neither granted nor
-// spent; post a fold after one compaction, or a read on giving up; act on
-// `compaction.failed`; read another session's hook; await the read in the
-// hook; end the cleanup before a read, a fold or an ask in flight; wait past
-// endWaitMs.
+// Mutations, each red: confirm on `session.inbox.delivered`; match by words
+// not id, or a message only containing the note; accept another shape; confirm
+// while compacting, or never again after a failed compaction; keep the id of
+// a failed admission or second admission; re-admit under the first id, twice,
+// or ungranted; fold an item neither granted nor spent; fold after one
+// compaction, or read on giving up; act on `compaction.failed`; read another
+// session's hook; await the read in the hook; end the cleanup before a read,
+// a fold or an ask in flight; wait past endWaitMs.
 func TestThePluginConfirmsANoteOnlyOnceItsModelIsSentItPlain(t *testing.T) {
 	t.Parallel()
 	node := nodeForNotes(t)
@@ -193,6 +193,69 @@ func TestThePluginConfirmsANoteOnlyOnceItsModelIsSentItPlain(t *testing.T) {
 		pr.event("a", "session.execution.failed", steerSession, nil)
 		pr.quiet(500*time.Millisecond, "the compaction failed")
 		route.none(300*time.Millisecond, "the compaction failed, and the note never reached its model")
+	})
+
+	t.Run("confirms again once a compaction failed", func(t *testing.T) {
+		t.Parallel()
+		route, pr := start(t)
+		note := noteNumbered(1)
+		admitAll(t, route, pr, note)
+		pr.event("a", "session.compaction.started", steerSession, map[string]any{"reason": "auto"})
+		pr.event("a", "session.compaction.failed", steerSession,
+			map[string]any{"reason": "auto", "error": map[string]any{"type": "compaction.failed"}})
+		// THE SESSION COMPACTS NO MORE: its next request is one a note is
+		// confirmed off, as before the compaction started.
+		pr.sees("a", steerSession, plainNote(note))
+		if read := route.next("POST read", "confirm the note sent plain after the compaction failed"); read.body !=
+			`{"ids":["note-1"]}` {
+			t.Errorf("the confirmation reads %s, want note-1's id alone", read.body)
+		}
+	})
+
+	t.Run("confirms nothing under the id of an admission that failed", func(t *testing.T) {
+		t.Parallel()
+		route, pr := start(t)
+		note := noteNumbered(1)
+		pr.send(map[string]any{"op": "fail-prompts", "name": "a", "count": 1})
+		pr.event("a", "session.execution.started", steerSession, nil)
+		route.next("GET notes", "poll once the session's execution started").reply(http.StatusOK, notesBody(note))
+		wantAdmitted(t, pr.expect("prompt-started").Input, steerSession, note)
+		if pr.expect("prompt").OK {
+			t.Fatal("the stand-in admitted what it was told to refuse")
+		}
+		again := route.next("GET notes", "ask again for the note it could not admit")
+		// A MESSAGE UNDER THE FAILED ADMISSION'S ID, which OpenCode never made:
+		// the plugin let the note go, so nothing confirms it.
+		pr.sees("a", steerSession, plainNote(note))
+		route.none(300*time.Millisecond, "the note's admission failed, so no message is its own")
+		again.reply(http.StatusOK, notesBody(note))
+		wantAdmitted(t, pr.expect("prompt-started").Input, steerSession, note)
+		if !pr.expect("prompt").OK {
+			t.Fatal("the stand-in refused an admission it was not told to")
+		}
+		route.next("GET notes", "poll past the admitted note")
+		pr.sees("a", steerSession, plainNote(note))
+		if read := route.next("POST read", "confirm the note once admitted"); read.body != `{"ids":["note-1"]}` {
+			t.Errorf("the confirmation reads %s, want note-1's id alone", read.body)
+		}
+	})
+
+	t.Run("confirms nothing under the second id of an admission again that failed", func(t *testing.T) {
+		t.Parallel()
+		route, pr := start(t)
+		note := noteNumbered(1)
+		admitAll(t, route, pr, note)
+		pr.event("a", "session.inbox.delivered", steerSession, map[string]any{"inboxID": note.Inbox})
+		// Ordered before the compaction's end, which leads to the admission.
+		pr.send(map[string]any{"op": "fail-prompts", "name": "a", "count": 1})
+		pr.event("a", "session.compaction.ended", steerSession, nil)
+		answerAgain(t, route, []mcpbridge.SteerNote{note}, []string{note.ID}, nil)
+		wantReadmitted(t, pr.expect("prompt-started").Input, steerSession, note)
+		if pr.expect("prompt").OK {
+			t.Fatal("the stand-in admitted again what it was told to refuse")
+		}
+		pr.sees("a", steerSession, checkpoint(note.Message), userText(againOf(note), note.Message))
+		route.none(300*time.Millisecond, "the second admission failed, so no message is the note's own")
 	})
 
 	t.Run("never admits again nor confirms a folded wake or run's message", func(t *testing.T) {

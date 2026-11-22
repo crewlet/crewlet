@@ -244,7 +244,10 @@ async function arm(ctx, url, session) {
         resume: false,
       })
     } catch {
-      // NOT ADMITTED AGAIN: the note waits on the record for its review.
+      // NOT ADMITTED AGAIN: the note waits on the record for its review, and
+      // no message under the second id confirms it, as none under a first
+      // id whose admission failed does.
+      admitted.delete(note.again)
     }
   }
 
