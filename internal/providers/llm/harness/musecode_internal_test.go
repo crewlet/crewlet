@@ -22,7 +22,7 @@ func museLine(t *testing.T, payloadType string, payload map[string]any) string {
 // A MUSE CODE RUN IS CHARGED THE COUNTS ITS STREAM REPORTS. Every run prints a
 // `run.usage` event before its terminal one, its counts per model: the prompt
 // with its cached part in it, and the output with its reasoning in it, beside
-// each part's own count (measured on 1.4.13). Read as the whole prompt, the
+// each part's own count (measured on 1.4.25). Read as the whole prompt, the
 // cached part is not charged twice; read with the reasoning added, the
 // reasoning is.
 //

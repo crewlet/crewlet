@@ -30,6 +30,11 @@ func (k quietKV) Watch(context.Context, string, ...jetstream.WatchOpt) (jetstrea
 	return stubWatcher{ch: ch}, nil
 }
 
+// watchHeaders is [quietKV.Watch]: the sweep's pass goes quiet the same way.
+func (k quietKV) watchHeaders(ctx context.Context, keys string) (jetstream.KeyWatcher, error) {
+	return k.Watch(ctx, keys)
+}
+
 // A LISTING WHOSE PASS GOES QUIET ENDS, AND THE INDEX SUPPLIES WHAT THE PASS
 // DID NOT DELIVER.
 //
