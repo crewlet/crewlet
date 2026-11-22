@@ -1,6 +1,7 @@
 package redact
 
 import (
+	"cmp"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -276,15 +277,29 @@ func decodedReading[T textual](whole T, start, end int, prior [][2]int) (aValue,
 	if o.decided < len(j.text) {
 		v.decided = j.raw(o.decided, false)
 	}
+	// The seams go back with the value: a claim without its gutter has a
+	// key's block written across it ([claims.apart]).
+	v.gutter, v.ending, v.opening = j.seam(o.gutter), j.seam(o.ending), j.seam(o.opening)
 	return v, true
+}
+
+// seam is where seam i of a reading of the view stands in the raw text, or 0
+// where there is none ([aValue]).
+func (j jsonString) seam(i int) int {
+	if i == 0 {
+		return 0
+	}
+	return j.raw(i, false)
 }
 
 // unionReading is v, the text's own reading, with o, the decoded one's, added:
 // every range either reads is hidden, the two that lie earliest kept as the
 // value and its second range and any more joined to the one before ([aValue]),
-// and the value is decided where both are.
+// the value is decided where both are, and each seam is the one the reading
+// that has it reads.
 func unionReading(v, o aValue) aValue {
 	v.decided, v.unread = max(v.decided, o.decided), v.unread && o.unread
+	v.gutter, v.ending, v.opening = cmp.Or(v.gutter, o.gutter), cmp.Or(v.ending, o.ending), cmp.Or(v.opening, o.opening)
 	var rs [][2]int
 	for _, r := range [][2]int{{v.from, v.to}, v.also, {o.from, o.to}, o.also} {
 		if r[1] > r[0] {
@@ -305,7 +320,7 @@ func unionReading(v, o aValue) aValue {
 		merged = append(merged, r)
 	}
 	if merged[0] != [2]int{v.from, v.to} {
-		v.gutter, v.ending, v.opening, v.ran = 0, 0, 0, false
+		v.ran = false
 	}
 	v.from, v.to, v.also = merged[0][0], merged[0][1], [2]int{}
 	if len(merged) == 2 {

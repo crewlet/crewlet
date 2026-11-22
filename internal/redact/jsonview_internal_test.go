@@ -51,10 +51,7 @@ func loggedShapes() []struct{ name, plain, text string } {
 
 // A VALUE IN A LOGGED STRING ESCAPED IN LAYERS IS HIDDEN AS IN THE LINE IT
 // CARRIES: over [loggedShapes], whose plain lines Secrets hides, Secrets shows
-// no value, a second pass changes nothing, a stream at its own hold and at
-// 256 KiB, written whole and in pieces of 7 bytes and of 1, writes Secrets,
-// and Settled keeps the split promise at every line's end c: with
-// s = Settled(text[:c]), Secrets(text[:s]) + Secrets(text[s:]) is Secrets.
+// no value, and the text writes as Secrets does ([writesAsSecrets]).
 //
 // Mutation: read no decoded string ([decodedReading]), decode no `\u`
 // ([jsonEscapeAt]), or read a JSON value only at its line's start
@@ -69,30 +66,76 @@ func TestAValueInALoggedStringIsHiddenAsInTheLineItCarries(t *testing.T) {
 		if strings.Contains(once, jsonValue) {
 			t.Errorf("%s: the value is shown:\n text %q\n once %q", c.name, c.text, once)
 		}
-		if twice := Secrets(once); twice != once {
-			t.Errorf("%s: a second pass changed\n%q\nto\n%q", c.name, once, twice)
-		}
-		for _, h := range []int{holdBytes(), 256 << 10} {
-			for _, n := range []int{len(c.text), 7, 1} {
-				var out bytes.Buffer
-				s := newStreamHolding(&out, h)
-				for at := 0; at < len(c.text); at += n {
-					_, _ = s.Write([]byte(c.text[at:min(len(c.text), at+n)]))
-				}
-				if err := s.Close(); err != nil || out.String() != once {
-					t.Errorf("%s: hold %d, pieces of %d: %v, %s", c.name, h, n, err, parted(out.String(), once))
-				}
+		writesAsSecrets(t, c.name, c.text, once)
+	}
+}
+
+// writesAsSecrets checks text, whose Secrets is once: a second pass changes
+// nothing, a stream at its own hold and at 256 KiB, written whole and in
+// pieces of 7 bytes and of 1, writes once, and Settled keeps the split promise
+// at every line's end c: with s = Settled(text[:c]), Secrets(text[:s]) +
+// Secrets(text[s:]) is once.
+func writesAsSecrets(t *testing.T, name, text, once string) {
+	t.Helper()
+	if twice := Secrets(once); twice != once {
+		t.Errorf("%s: a second pass changed\n%q\nto\n%q", name, once, twice)
+	}
+	for _, h := range []int{holdBytes(), 256 << 10} {
+		for _, n := range []int{len(text), 7, 1} {
+			var out bytes.Buffer
+			s := newStreamHolding(&out, h)
+			for at := 0; at < len(text); at += n {
+				_, _ = s.Write([]byte(text[at:min(len(text), at+n)]))
+			}
+			if err := s.Close(); err != nil || out.String() != once {
+				t.Errorf("%s: hold %d, pieces of %d: %v, %s", name, h, n, err, parted(out.String(), once))
 			}
 		}
-		for at := 0; at < len(c.text); at++ {
-			if c.text[at] != '\n' {
-				continue
+	}
+	for at := 0; at < len(text); at++ {
+		if text[at] != '\n' {
+			continue
+		}
+		s := Settled(text[:at+1])
+		if split := Secrets(text[:s]) + Secrets(text[s:]); split != once {
+			t.Errorf("%s: split at %d of the line ending at %d: %s", name, s, at, parted(split, once))
+		}
+	}
+}
+
+// A KEY'S BLOCK BESIDE A VALUE IN A LOGGED STRING IS WRITTEN APART FROM THE
+// KEY'S LINE'S GUTTER: where a key's END line goes on to a password's key and
+// the string's decoded reading reads the value below, past the gutter (a
+// table's `| `, an array's `"`), the claim carries that gutter, so the block
+// is cut as it is in the plain line the string carries: the key's body and
+// the value stay hidden as they are there, and the text writes as Secrets
+// does ([writesAsSecrets]).
+//
+// Mutation: drop the decoded reading's seams ([decodedReading]), or keep only
+// the text's own reading's ([unionReading]), and a body piece is shown.
+func TestAKeysBlockBesideAValueInALoggedStringIsWrittenApartFromItsGutter(t *testing.T) {
+	t.Parallel()
+	shown := []string{"MIIEowIBAAKCAQEAu1SU1Lf", "u1SU1Lf=", "hunter2x9", "q8Zr4TfL2w=="}
+	for _, c := range []struct{ name, text string }{
+		{"a table row's value below, a key's body on its line", "{\"log\": \"\\r\\nMIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun\\r\\n| u1SU1Lf=-----END RSA PRIVATE KEY-----\\\" ; user: bob password =  |\\r\\n\\r\\n\\r\\n| MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6 -----END RSA PRIVATE KEY----- |\\r\\n| MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6 -----END RSA PRIVATE KEY----- |\\r\\n\"}\n"},
+		{"a table row's value right below, a key's body on its line", "{\"log\": \"\\r\\nMIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun\\r\\n| MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun-----END PRIVATE KEY-----\\\" ; password =  |\\r\\n| MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6 -----END PRIVATE KEY----- |\\r\\n| done |\\r\\n\"}\n"},
+		{"a table row after a value, a key's body below", "{\"log\": \"Password:\\r\\nhunter2x9 MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6\\r\\n| MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun-----END EC PRIVATE KEY-----\\\", \\\"user: bob passwd: |\\r\\n| MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6 -----END EC PRIVATE KEY----- |\\r\\n| MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6 -----END EC PRIVATE KEY----- |\\r\\n\"}\n"},
+		{"an array's strings, a blank one before the value", "{\"log\": \"-----BEGIN OPENSSH PRIVATE KEY-----\\r\\nMIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun\\r\\nlXvB9yN4qL2sT8wE6rK1mP3oJ7hF5gD0cZ9aV4bN2xM8uY6iO1pQ3wE5rT7yU9iA\\r\\nsome log line\\r\\nanother log line\\r\\nMIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun\\r\\n  \\\"q8Zr4TfL2w==-----END OPENSSH PRIVATE KEY-----|Password:\\\",\\r\\n  \\\"\\\",\\r\\n  \\\"u1SU1Lf=\\\",\\r\\n  \\\"MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6 -----END OPENSSH PRIVATE KEY-----\\\",\\r\\n\"}\n"},
+	} {
+		var line struct{ Log string }
+		if err := json.Unmarshal([]byte(c.text), &line); err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		plain, once := Secrets(line.Log), Secrets(c.text)
+		for _, w := range shown {
+			if strings.Contains(plain, w) {
+				t.Fatalf("%s: the plain line shows %q, so this shape tests nothing:\n %q", c.name, w, plain)
 			}
-			s := Settled(c.text[:at+1])
-			if split := Secrets(c.text[:s]) + Secrets(c.text[s:]); split != once {
-				t.Errorf("%s: split at %d of the line ending at %d: %s", c.name, s, at, parted(split, once))
+			if strings.Contains(once, w) {
+				t.Errorf("%s: %q is shown:\n text %q\n once %q", c.name, w, c.text, once)
 			}
 		}
+		writesAsSecrets(t, c.name, c.text, once)
 	}
 }
 
