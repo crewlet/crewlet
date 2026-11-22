@@ -223,7 +223,7 @@ function openingDraft(
   target: WizardAt | undefined,
 ) {
   return withAdded(
-    editing ? draftOf(editing) : newDraft(data),
+    editing ? draftOf(editing, data.executors) : newDraft(data),
     target?.add ?? [],
     new Set(data.seats.map((s) => s.handle)),
   );
@@ -231,7 +231,7 @@ function openingDraft(
 
 /** A new model's draft: a variable no other model reads, and for the company's first model, everything. */
 function newDraft(data: ModelsData): Draft {
-  const d = emptyDraft();
+  const d = emptyDraft(data.executors);
   const taken = data.models.map((m) => m.admin?.sign_in.variable ?? "").filter(Boolean);
   d.variable = suggestedVariable(d, taken);
   // THE COMPANY'S FIRST MODEL does everything for every seat until a second one arrives.
@@ -286,7 +286,7 @@ export function ModelWizard({
   const checkModel = useCheckModel();
   // THE CONTROL THAT OPENED THE WIZARD is read while its page is still on screen.
   const [opener] = useState(openerNow);
-  const [original] = useState(() => (editing ? draftOf(editing) : null));
+  const [original] = useState(() => (editing ? draftOf(editing, data.executors) : null));
   const [base] = useState(() => (editing ? baseOf(editing) : undefined));
   const [initial] = useState(() => openingDraft(data, editing, target));
   const [draft, setDraft] = useDraftState<Draft>(initial);

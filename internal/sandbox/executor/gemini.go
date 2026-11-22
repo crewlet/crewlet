@@ -80,12 +80,13 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 		"node " + q(paths.GeminiHelper()) + " pin " + q(paths.GeminiProjects()) + " " + GeminiProjectSlug + " || exit 1",
 	}
 	run := "gemini " + flags + " --session-id " + q(session.ID) + "; code=$?"
-	// THE SESSION'S RECORD OF TAKES EXISTS, EMPTY, BEFORE THE RUN: an empty
-	// record settles a take never recorded (its hook killed first) as absent
-	// once the job ends, and only a missing one, lost with its box, waits.
+	// THE SESSION'S RECORD OF TAKES OPENS WITH ITS START LINE BEFORE THE RUN:
+	// a record holding it settles a take never recorded (its hook killed first)
+	// as absent once the job ends, and one without it, lost with its box, waits.
+	// A line rather than an empty file, as a box reads a missing file as empty.
 	if req.Steer.Set() {
-		lines = append(lines, "mkdir -p "+q(paths.GeminiTakesDir())+" && : >> "+q(paths.GeminiTakes(session.ID))+
-			" || exit 1")
+		lines = append(lines, "mkdir -p "+q(paths.GeminiTakesDir())+" && printf '{\"from\":0}\\n' >> "+
+			q(paths.GeminiTakes(session.ID))+" || exit 1")
 	}
 	// A RUN WITH NO STANDING INSTRUCTIONS keeps Gemini CLI's own prompt as it
 	// is, so nothing is exported or named.

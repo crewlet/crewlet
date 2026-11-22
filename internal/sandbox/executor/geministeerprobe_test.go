@@ -75,7 +75,7 @@ echo '{"type":"result","status":"success"}'`)
 	}
 	readJSON(t, filepath.Join(record, "settings.json"), &settings)
 	// THE HOOK RECORDS IN THE RECORD OF THE SESSION GEMINI CLI WAS HANDED, which
-	// exists, empty, before any hook fires: a take never recorded reads absent
+	// opens with its start line before any hook fires: a take never recorded reads absent
 	// once the job ends rather than undecided.
 	args, err := os.ReadFile(filepath.Join(record, "args"))
 	if err != nil {
@@ -91,8 +91,8 @@ echo '{"type":"result","status":"success"}'`)
 	if session == "" || takes != p.GeminiTakes(session) {
 		t.Fatalf("the hook records in %q, want the record of the session Gemini CLI was handed (%q)", takes, session)
 	}
-	if before, err := box.ReadFile(t.Context(), takes); err != nil || len(before) != 0 {
-		t.Errorf("before any hook the record of takes is %q (%v), want an empty file", before, err)
+	if before, err := box.ReadFile(t.Context(), takes); err != nil || string(before) != `{"from":0}`+"\n" {
+		t.Errorf("before any hook the record of takes is %q (%v), want its start line alone", before, err)
 	}
 	// EACH HOOK, PLAYED AS THE HARNESS PLAYS IT: its command, in sh, the
 	// hook's input on stdin.
@@ -167,7 +167,7 @@ func TestAJobsRecordOfTakesOutlivesTheNextLaunchInItsBox(t *testing.T) {
 	}
 	for path, content := range map[string]string{
 		p.GeminiChats() + "/session-2026-11-21T22-24-11111111.jsonl": string(chat),
-		p.GeminiTakes(session): `{"take":"take-a","digest":"` + executor.ItemDigest(delivered) + `"}` + "\n" +
+		p.GeminiTakes(session): `{"from":0}` + "\n" + `{"take":"take-a","digest":"` + executor.ItemDigest(delivered) + `"}` + "\n" +
 			`{"take":"take-b","digest":"` + executor.ItemDigest("## A note never handed over") + `"}` + "\n",
 	} {
 		if err := box.WriteFile(t.Context(), path, []byte(content)); err != nil {
