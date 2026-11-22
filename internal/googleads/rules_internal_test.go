@@ -1,6 +1,7 @@
 package googleads
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -266,16 +267,20 @@ func TestAValueARuleCannotReadIsTheHighestItAllows(t *testing.T) {
 }
 
 // A RESOURCE ANOTHER ACCOUNT HOLDS IS SEEN AT ANY DEPTH OF A BODY, for the
-// scope check: what an operation acts on, what its fields point at, and what
-// a method that is no mutate names.
+// scope check, and so is a customer named alone: what an operation acts on,
+// what its fields point at, and what a method that is no mutate names, each
+// at its path.
+//
+// Mutation: match full resource names alone, and customers/1 goes unseen.
 func TestEveryResourceABodyNamesIsSeen(t *testing.T) {
 	t.Parallel()
-	names := namesIn(ops(map[string]any{"create": map[string]any{
-		"campaign": "customers/9999999999/campaigns/7", "name": "customers/1"}},
-		map[string]any{"remove": "customers/1234567890/adGroups/2"}))
-	if len(names) != 2 || names[0] != "customers/9999999999/campaigns/7" ||
-		names[1] != "customers/1234567890/adGroups/2" {
-		t.Errorf("the names seen are %v", names)
+	got := namesIn(ops(map[string]any{"create": map[string]any{
+		"campaign": "customers/9999999999/campaigns/7", "clientCustomer": "customers/1", "name": "customers"}},
+		map[string]any{"remove": "customers/1234567890/adGroups/2"}), "")
+	want := []named{{"operations.create.campaign", "customers/9999999999/campaigns/7"},
+		{"operations.create.client_customer", "customers/1"}, {"operations.remove", "customers/1234567890/adGroups/2"}}
+	if !slices.Equal(got, want) {
+		t.Errorf("the names seen are %v, want %v", got, want)
 	}
 }
 
@@ -616,6 +621,21 @@ func TestASubscriptionIsTheClassOfWhatGoogleMayApplyUnasked(t *testing.T) {
 		made := ops(map[string]any{"create": map[string]any{"type": kind, "status": "ENABLED"}})
 		if got := classOf(t, subs, made, live{}); got != want {
 			t.Errorf("a %s subscription enabled is %s, want %s", kind, got, want)
+		}
+	}
+}
+
+// A FIELD THAT NAMES ANOTHER ACCOUNT IS ITS METHOD'S PURPOSE: each method a
+// body may name another customer in is admin, held for an administrator, and
+// each field it names is one of the method's own.
+//
+// Mutation: list a method that operates, and an operate seat names an
+// account it was never given.
+func TestAFieldThatNamesAnotherAccountIsItsMethodsPurpose(t *testing.T) {
+	t.Parallel()
+	for _, op := range operations() {
+		if otherAccount(op.ID) != "" && (op.Class != admin || len(op.Classes) > 0) {
+			t.Errorf("%s may name another account and is %s (or %v)", op.ID, op.Class, op.Classes)
 		}
 	}
 }

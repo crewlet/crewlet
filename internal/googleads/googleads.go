@@ -49,7 +49,10 @@
 //
 // A call acts in the customer its path names (the operation's template's) or,
 // where it names none, its body's customer_id; every resource name its body
-// holds, at any depth, is that customer's.
+// holds, and every customer it names alone, at any depth, is that customer's,
+// but in the one field a method exists to name another account by (a
+// manager's new client, a client's new manager, a product link's account),
+// each admin.
 //
 // # An approval binds what the rules read
 //
