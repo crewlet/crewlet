@@ -48,9 +48,11 @@ type kimiProbe struct {
 	home, work, bind string
 	prompt           string
 	// webDenied is the run's settings' webDenied; disabled is the brief's
-	// disabled_tools as posted, nil where the body carried none.
-	webDenied bool
-	disabled  *[]string
+	// disabled_tools as posted, nil where the body carried none, and
+	// steerDisabled each steer's, "none" where its body carried none.
+	webDenied     bool
+	disabled      *[]string
+	steerDisabled []string
 	// idle is sent a value, by each steer, for a `:wait` to return idle; with
 	// none sent every wait is held open until its request ends.
 	idle chan struct{}
@@ -134,10 +136,16 @@ func (p *kimiProbe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Content []struct {
 				Text string `json:"text"`
 			} `json:"content"`
+			Disabled *[]string `json:"disabled_tools"`
 		}
 		_ = json.Unmarshal(body, &steer)
 		p.mu.Lock()
 		p.calls = append(p.calls, "steer "+steer.ID)
+		disabled := "none"
+		if steer.Disabled != nil {
+			disabled = strings.Join(*steer.Disabled, ",")
+		}
+		p.steerDisabled = append(p.steerDisabled, disabled)
 		p.steers = append(p.steers, steer.ID+" "+steer.Content[0].Text)
 		code := 0
 		if n := len(p.steers); n <= len(p.steerCodes) {
@@ -289,16 +297,18 @@ func TestTheKimiDriverReportsOnceAndSteersEachNoteUnderItsInboxID(t *testing.T) 
 	}
 }
 
-// A WEB-DENIED RUN'S BRIEF TURNS KIMI'S WEB TOOLS OFF FOR THE WHOLE SESSION:
-// FetchURL and WebSearch posted as its disabled_tools, which every agent of the
-// session is held to, a subagent included (measured on 2.7.2); any other run
-// posts an empty list, so a session a denied run carried gets its web back.
+// A WEB-DENIED RUN'S BRIEF AND NOTES TURN KIMI'S WEB TOOLS OFF FOR THE WHOLE
+// SESSION: FetchURL and WebSearch posted as the disabled_tools of the brief and
+// of every steered note, which every agent of the session is held to, a
+// subagent included, a note's turn at idle too (measured on 2.7.2); any other
+// run posts an empty list, so a session a denied run carried gets its web back.
 //
 // Mutation: post the list on every run, post none on a run that keeps the web,
-// or leave a web tool off it — the case fails.
+// leave a web tool off it, or post none with a note — the case fails.
 func TestAWebDeniedKimiRunsBriefDisablesTheWebToolsForTheSession(t *testing.T) {
 	for _, denied := range []bool{true, false} {
-		probe := &kimiProbe{t: t, idle: make(chan struct{}, 1), webDenied: denied}
+		probe := &kimiProbe{t: t, idle: make(chan struct{}, 2), webDenied: denied,
+			early: []map[string]any{kimiNote(1, "inbox1", "## A note from ada\n\nTarget main.")}}
 		probe.idle <- struct{}{}
 		cmd, stdout := kimiDriverRun(t, probe, "")
 		if code := kimiDriverEnds(t, cmd); code != 0 {
@@ -314,6 +324,10 @@ func TestAWebDeniedKimiRunsBriefDisablesTheWebToolsForTheSession(t *testing.T) {
 			t.Errorf("denied %v: the brief carried no disabled_tools, want %q", denied, want)
 		case !slices.Equal(*probe.disabled, want):
 			t.Errorf("denied %v: the brief's disabled_tools = %q, want %q", denied, *probe.disabled, want)
+		}
+		if note := strings.Join(want, ","); !slices.Equal(probe.steerDisabled, []string{note}) {
+			t.Errorf("denied %v: the steered notes' disabled_tools = %q, want one note with %q", denied,
+				probe.steerDisabled, note)
 		}
 		probe.mu.Unlock()
 	}
