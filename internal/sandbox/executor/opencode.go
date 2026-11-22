@@ -377,18 +377,37 @@ const openCodeNotHeld = `*'Session not found'*|*NotFoundError*`
 func (OpenCode) layout() archiveLayout { return archiveDocument }
 
 // Continues reports whether a session written by OpenCode release writer can
-// be continued in a box whose OpenCode is release box ([carrier]): both at or
-// after [openCodeCarryFloor], and never a box older than the writer.
-func (OpenCode) Continues(box, writer string) (bool, string) {
+// be continued in a box whose OpenCode is release box ([carrier]): the box's
+// release read and at or after [openCodeCarryFloor], the writer as
+// [OpenCode.ContinuesWriter] holds it, and never a box older than the writer.
+func (o OpenCode) Continues(box, writer string) (bool, string) {
 	switch {
+	case !releaseReads(box):
+		return false, boxNamedNoRelease("OpenCode")
 	case !releaseAtLeast(box, openCodeCarryFloor):
 		return false, fmt.Sprintf("this box runs OpenCode %s, older than %s, the oldest that "+
 			"continues a session carried from another box", box, openCodeCarryFloor)
-	case !releaseAtLeast(writer, openCodeCarryFloor):
+	}
+	if ok, why := o.ContinuesWriter(writer); !ok {
+		return false, why
+	}
+	if !releaseAtLeast(box, writer) {
+		return false, carriedOlder("OpenCode", box, writer)
+	}
+	return true, ""
+}
+
+// ContinuesWriter reports whether a session OpenCode release writer wrote can
+// be continued at all ([carrier]): the writer read and at or after
+// [openCodeCarryFloor]. A writer that does not read continues nowhere
+// ([writerNamedNoRelease]).
+func (OpenCode) ContinuesWriter(writer string) (bool, string) {
+	if !releaseReads(writer) {
+		return false, writerNamedNoRelease("OpenCode")
+	}
+	if !releaseAtLeast(writer, openCodeCarryFloor) {
 		return false, fmt.Sprintf("the session was written by OpenCode %s, older than %s, the "+
 			"oldest whose session another box continues", writer, openCodeCarryFloor)
-	case !releaseAtLeast(box, writer):
-		return false, carriedOlder("OpenCode", box, writer)
 	}
 	return true, ""
 }
@@ -737,6 +756,10 @@ func openCodeSessionGate(session Session, paths Paths, rewired bool) string {
 	}
 	line(`if [ -z "$h" ]; then`)
 	line(`  if [ ! -s %s ]; then w='it is not in this box, and no export of it was carried here'`, carried)
+	// A BOX RELEASE THAT DOES NOT READ continues nothing carried, as the
+	// engine's check holds it ([boxNamedNoRelease]): no bare MAJOR.MINOR.PATCH
+	// in what `--version` printed, as [releaseOf] reads one.
+	line(`  elif ! { %s[ -n "$rv" ]; }; then w=%s`, bareReleaseShell("rv"), q(boxNamedNoRelease("OpenCode")))
 	line(`  elif ! command -v gzip > /dev/null 2>&1; then w='this box has no gzip to unpack its export with'`)
 	line(`  else`)
 	line(`    rm -rf %s`, q(staged))
@@ -2087,9 +2110,12 @@ func (OpenCode) notesOffWhy() string {
 		"failed to load, which its own log names"
 }
 
-// artifacts is what an OpenCode run leaves in its box of its own.
-func (OpenCode) artifacts(p Paths) (files, dirs []string) {
-	return []string{p.OpenCodeConfig()},
-		[]string{p.OpenCodeValues(), p.OpenCodeValuesFresh(), p.OpenCodeSteerPlugin(), p.OpenCodeSkills(),
-			p.OpenCodeSkillsPlugin(), p.OpenCodeToolEnvPlugin(), p.OpenCodeConfigDir()}
+// artifactFiles is the files an OpenCode run leaves in its box of its own.
+func (OpenCode) artifactFiles(p Paths) []string { return []string{p.OpenCodeConfig()} }
+
+// artifactDirs is the directories an OpenCode run leaves in its box of its
+// own.
+func (OpenCode) artifactDirs(p Paths) []string {
+	return []string{p.OpenCodeValues(), p.OpenCodeValuesFresh(), p.OpenCodeSteerPlugin(), p.OpenCodeSkills(),
+		p.OpenCodeSkillsPlugin(), p.OpenCodeToolEnvPlugin(), p.OpenCodeConfigDir()}
 }

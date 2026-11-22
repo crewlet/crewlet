@@ -11,8 +11,8 @@
 
 **Every agent seat's executor is its coding CLI's own agentic run, in a box.**
 The CLI drives its own loop with its own shell and editor, fully permissioned
-(Claude Code under `bypassPermissions`, OpenCode with every action allowed but
-`question`), because a headless run has nobody to answer a permission prompt.
+(Claude Code under `bypassPermissions`, Codex under `danger-full-access` with
+approval `never`, OpenCode with every action allowed but `question`), because a headless run has nobody to answer a permission prompt.
 The seat's tools reach it as one MCP server over the bridge
 (`internal/api/mcpbridge`), and every bridged call is decided by the same
 surface as a phase on this host: the seat's grant and the skill guard, the

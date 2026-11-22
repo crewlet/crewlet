@@ -3,11 +3,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,15 +29,22 @@ import (
 
 // openAppServer waits for the run's thread file, dials the app-server's socket
 // and joins the thread: initialize, initialized, thread/resume, then
-// thread/turns/list for the turn in flight.
-func openAppServer(ctx context.Context, f flags, p pacing) (harness, error) {
+// thread/turns/list for the turn in flight. -interrupt-once looks for the
+// thread file once: the helper it stands in for has already ended.
+func openAppServer(ctx context.Context, f flags, p pacing, ev events) (harness, error) {
 	switch {
 	case f.socket == "":
 		return nil, usageError("-socket is required for -adapter codex-app-server: the app-server's unix socket")
 	case f.threadFile == "":
 		return nil, usageError("-thread-file is required for -adapter codex-app-server: the file holding the run's thread id")
 	}
-	thread, err := waitThread(ctx, f.threadFile, os.ReadFile, p)
+	var thread string
+	var err error
+	if f.interruptOnce {
+		thread, err = readThread(f.threadFile)
+	} else {
+		thread, err = waitThread(ctx, f.threadFile, os.ReadFile, p)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -43,7 +52,7 @@ func openAppServer(ctx context.Context, f flags, p pacing) (harness, error) {
 	if err != nil {
 		return nil, err
 	}
-	a, err := joinAppServer(ctx, conn, thread, p)
+	a, err := joinAppServer(ctx, conn, thread, p, ev, f.skills)
 	if err != nil {
 		_ = conn.Close()
 		return nil, err
@@ -69,6 +78,18 @@ func waitThread(ctx context.Context, path string, read func(string) ([]byte, err
 			return "", ctx.Err()
 		}
 	}
+}
+
+// readThread is the thread id in path, which must already hold one.
+func readThread(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	switch {
+	case err != nil:
+		return "", fmt.Errorf("reading the thread file -thread-file %s: %w", path, err)
+	case len(bytes.TrimSpace(data)) == 0:
+		return "", fmt.Errorf("the thread file -thread-file %s holds no thread id", path)
+	}
+	return string(bytes.TrimSpace(data)), nil
 }
 
 // dialSocket dials the app-server's unix socket, again while it does not
@@ -97,9 +118,19 @@ type appServer struct {
 	bound  time.Duration
 	ids    atomic.Int64
 	done   chan struct{}
+	ev     events
+	// skills is the run's skills as the runner installed them
+	// ([appServer.completed]).
+	skills skillSet
+	// tokens is the thread's total tokens as last reported, and compacting
+	// whether a context compaction runs, until its item completes or the
+	// turn's work ends without it ([appServer.notice]): the reader's alone
+	// ([appServer.counted]).
+	tokens     int64
+	compacting bool
 
 	mu      sync.Mutex
-	pending map[int64]chan rpcAnswer
+	pending map[int64]waiter
 	// active is the turn in flight on the thread, "" for none; finished holds
 	// every turn the thread completed while the helper watched.
 	active   string
@@ -116,10 +147,19 @@ type rpcError struct {
 
 func (e *rpcError) Error() string { return strconv.Itoa(e.Code) + " " + e.Message }
 
-// rpcAnswer is one answer to a request.
+// rpcAnswer is one answer to a request, and what taking it in the reader's
+// order said ([appServer.callApplied]).
 type rpcAnswer struct {
-	result json.RawMessage
-	err    *rpcError
+	result  json.RawMessage
+	err     *rpcError
+	applied error
+}
+
+// waiter is a request waiting for its answer: where the answer goes, and what
+// the reader does with it first, nil for nothing.
+type waiter struct {
+	ch    chan rpcAnswer
+	apply func(json.RawMessage) error
 }
 
 // wire is one message off the socket: a request, a notification or an answer.
@@ -131,8 +171,9 @@ type wire struct {
 	Error  *rpcError       `json:"error"`
 }
 
-// joinAppServer runs the WebSocket handshake over conn and joins thread.
-func joinAppServer(ctx context.Context, conn net.Conn, thread string, p pacing) (*appServer, error) {
+// joinAppServer runs the WebSocket handshake over conn and joins thread,
+// reporting ev of it.
+func joinAppServer(ctx context.Context, conn net.Conn, thread string, p pacing, ev events, skills skillSet) (*appServer, error) {
 	// THE HANDSHAKE IS BOUNDED as a call is: x/net's NewClient takes no context.
 	_ = conn.SetDeadline(time.Now().Add(p.callBound))
 	cfg, err := websocket.NewConfig("ws://localhost/", "http://localhost/")
@@ -145,8 +186,8 @@ func joinAppServer(ctx context.Context, conn net.Conn, thread string, p pacing) 
 	}
 	_ = conn.SetDeadline(time.Time{})
 	a := &appServer{
-		ws: ws, thread: thread, bound: p.callBound, done: make(chan struct{}),
-		pending: map[int64]chan rpcAnswer{}, finished: map[string]bool{}, changed: make(chan struct{}),
+		ws: ws, thread: thread, bound: p.callBound, done: make(chan struct{}), ev: ev, skills: skills,
+		pending: map[int64]waiter{}, finished: map[string]bool{}, changed: make(chan struct{}),
 	}
 	go a.read()
 	if _, err = a.call(ctx, "initialize", map[string]any{
@@ -166,11 +207,10 @@ func joinAppServer(ctx context.Context, conn net.Conn, thread string, p pacing) 
 		a.close()
 		return nil, fmt.Errorf("joining the run's thread %s: %w", thread, err)
 	}
-	raw, err := a.call(ctx, "thread/turns/list", map[string]any{"threadId": thread})
-	if err == nil {
-		err = a.listed(raw)
-	}
-	if err != nil {
+	// THE LIST IS TAKEN IN THE READER'S ORDER ([appServer.callApplied]): a
+	// notice Codex sends after its answer (a response of the listed turn) is
+	// read after the turn it names is in flight, never dropped before it is.
+	if _, err = a.callApplied(ctx, "thread/turns/list", map[string]any{"threadId": thread}, a.listed); err != nil {
 		a.close()
 		return nil, fmt.Errorf("listing the turns of the run's thread %s: %w", thread, err)
 	}
@@ -197,12 +237,17 @@ func (a *appServer) read() {
 				continue
 			}
 			a.mu.Lock()
-			ch := a.pending[id]
+			w, ok := a.pending[id]
 			delete(a.pending, id)
 			a.mu.Unlock()
-			if ch != nil {
-				ch <- rpcAnswer{result: m.Result, err: m.Error}
+			if !ok {
+				continue
 			}
+			ans := rpcAnswer{result: m.Result, err: m.Error}
+			if w.apply != nil && m.Error == nil {
+				ans.applied = w.apply(m.Result)
+			}
+			w.ch <- ans
 		}
 	}
 }
@@ -249,8 +294,147 @@ func (a *appServer) notice(method string, params json.RawMessage) {
 	case "turn/started":
 		a.begin(p.Turn.ID)
 	case "turn/completed":
+		// A COMPACTION ENDS WITH ITS TURN, whether or not its item completed:
+		// one left open would keep every later response from the count.
+		a.compacting = false
 		a.stop(p.Turn.ID)
+	case "error":
+		a.failed(params)
+	case "thread/tokenUsage/updated":
+		a.counted(params)
+	case "item/started":
+		a.compaction(params, true)
+	case "item/completed":
+		a.compaction(params, false)
+		a.completed(params)
 	}
+}
+
+// compaction follows a context compaction's window: its contextCompaction
+// item's item/started to its item/completed ([appServer.counted]).
+func (a *appServer) compaction(params json.RawMessage, started bool) {
+	var p struct {
+		Item struct {
+			Type string `json:"type"`
+		} `json:"item"`
+	}
+	if json.Unmarshal(params, &p) == nil && p.Item.Type == "contextCompaction" {
+		a.compacting = started
+	}
+}
+
+// failed ends a compaction's window on an error Codex does not retry: the
+// app-server's `error` notification (rust-v0.171.0's
+// codex-rs/app-server-protocol/src/protocol/common.rs, `Error => "error"`)
+// carries v2::ErrorNotification {error, willRetry, threadId, turnId}
+// (protocol/v2/notification.rs), whose willRetry false interrupts the turn.
+// Its work, the compaction among it, stopped there, and a compaction whose
+// item never completes would otherwise stop the count for the rest of the
+// run. One Codex retries leaves the window open: the retry is the compaction's.
+func (a *appServer) failed(params json.RawMessage) {
+	var p struct {
+		WillRetry bool `json:"willRetry"`
+	}
+	if json.Unmarshal(params, &p) == nil && !p.WillRetry {
+		a.compacting = false
+	}
+}
+
+// counted reports a model response of the turn in flight to the step cap,
+// the one place the step rule lives. Codex updates the thread's token usage
+// after each response, and repeats an update unchanged, so a response is an
+// update whose total rose; a compaction's request rises too, inside its
+// contextCompaction item's window, and is no response, as Claude Code's
+// --max-turns counts none (CODEX-MEASURE §18). A turn joined in flight counts
+// from the join, as excludeTurns replays no update.
+func (a *appServer) counted(params json.RawMessage) {
+	var p struct {
+		TurnID     string `json:"turnId"`
+		TokenUsage struct {
+			Total struct {
+				TotalTokens int64 `json:"totalTokens"`
+			} `json:"total"`
+		} `json:"tokenUsage"`
+	}
+	if json.Unmarshal(params, &p) != nil || p.TokenUsage.Total.TotalTokens <= a.tokens {
+		return
+	}
+	a.tokens = p.TokenUsage.Total.TotalTokens
+	if a.compacting {
+		return
+	}
+	a.mu.Lock()
+	inFlight := p.TurnID != "" && p.TurnID == a.active
+	a.mu.Unlock()
+	if inFlight && a.ev.step != nil {
+		a.ev.step(p.TurnID)
+	}
+}
+
+// completed reports a load of one of the run's skills: a command that read
+// <skills>/<name>/SKILL.md whole, as the runner installed it. Codex records
+// each command it ran as a commandExecution item with its parsed actions and
+// its output, so a load is a command that succeeded, whose one action is a
+// read of that file (named, resolved against the command's directory,
+// exactly), and whose output's SHA-256 is the one the runner recorded for that
+// skill (-skill-digest). Never the file as it stands now: a model that
+// rewrote it and read it back read no skill of the run's. Anything else (a
+// listing, a test, an echo, a failed or partial read, an output Codex cut
+// short, another skill's file, a script) is no load, and the bridge's guard
+// fails closed on it.
+func (a *appServer) completed(params json.RawMessage) {
+	if a.ev.skill == nil || a.skills.dir == "" {
+		return
+	}
+	var p struct {
+		Item struct {
+			Type     string `json:"type"`
+			Status   string `json:"status"`
+			Cwd      string `json:"cwd"`
+			ExitCode *int   `json:"exitCode"`
+			Output   string `json:"aggregatedOutput"`
+			Actions  []struct {
+				Type string `json:"type"`
+				Path string `json:"path"`
+			} `json:"commandActions"`
+		} `json:"item"`
+	}
+	if json.Unmarshal(params, &p) != nil {
+		return
+	}
+	it := p.Item
+	if it.Type != "commandExecution" || it.Status != "completed" || it.ExitCode == nil || *it.ExitCode != 0 ||
+		len(it.Actions) != 1 || it.Actions[0].Type != "read" || it.Actions[0].Path == "" {
+		return
+	}
+	path := it.Actions[0].Path
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(it.Cwd, path)
+	}
+	name, ok := skillOf(a.skills.dir, filepath.Clean(path))
+	if !ok {
+		return
+	}
+	if want, ok := a.skills.digests[name]; !ok || sha256.Sum256([]byte(it.Output)) != want {
+		return
+	}
+	a.ev.skill(name)
+}
+
+// skillOf is the skill whose SKILL.md path is, where path is one: exactly
+// <dir>/<name>/SKILL.md, name one plain path element.
+func skillOf(dir, path string) (string, bool) {
+	rel, err := filepath.Rel(filepath.Clean(dir), path)
+	if err != nil || !filepath.IsLocal(rel) {
+		// Rel answers a clean path, so a local one has no "", "." or ".."
+		// element: the name below is one plain element, checked nowhere else.
+		return "", false
+	}
+	name, file, ok := strings.Cut(filepath.ToSlash(rel), "/")
+	if !ok || file != "SKILL.md" {
+		return "", false
+	}
+	return name, true
 }
 
 // stop marks turn over: never the turn in flight again.
@@ -355,14 +539,21 @@ func (a *appServer) steer(ctx context.Context, turn, text string) error {
 		"expectedTurnId": turn,
 		"input":          []map[string]string{{"type": "text", "text": text}},
 	})
+	return classify(err, turn, "no active turn to steer")
+}
+
+// classify reads Codex's refusal of a call naming turn: [errNoTurn] for its
+// "no active turn" answer (noTurn), a [wrongTurn] where it names another turn
+// in flight, and err as it is otherwise.
+func classify(err error, turn, noTurn string) error {
 	var refused *rpcError
 	if !errors.As(err, &refused) || refused.Code != codeInvalidRequest {
 		return err
 	}
-	if refused.Message == "no active turn to steer" {
+	if refused.Message == noTurn {
 		return errNoTurn
 	}
-	if named, found, ok := foundTurn(refused.Message); ok && named == turn && found != "" && found != turn {
+	if named, found, ok := foundTurn(refused.Message); ok && named == turn && found != turn {
 		return wrongTurn(found)
 	}
 	return err
@@ -375,30 +566,75 @@ const codeInvalidRequest = -32600
 // errNoTurn is turn/steer's "no active turn to steer".
 var errNoTurn = errors.New("no turn is in flight")
 
-// foundTurn reads turn/steer's refusal of a steer naming another turn than the
-// one in flight, "expected active turn id `X` but found `Y`": the turn named
-// (X) and the turn in flight (Y). Read by hand, as regexp would add more to
-// the box's binary than the helper's own code.
+// foundTurn reads Codex's refusal of a call naming another turn than the one
+// in flight: the turn named (X) and the turn in flight (Y), worded
+// "expected active turn id `X` but found `Y`" by turn/steer and the same
+// without the backticks by turn/interrupt (measured on 0.171.0). Read by
+// hand, as regexp would add more to the box's binary than the helper's own
+// code.
 func foundTurn(msg string) (named, found string, ok bool) {
-	rest, ok := strings.CutPrefix(msg, "expected active turn id `")
+	rest, ok := strings.CutPrefix(msg, "expected active turn id ")
 	if !ok {
 		return "", "", false
 	}
-	named, rest, ok = strings.Cut(rest, "` but found `")
-	if !ok {
-		return "", "", false
+	quote := strings.HasPrefix(rest, "`")
+	sep := " but found "
+	if quote {
+		rest, sep = rest[1:], "` but found `"
+		if rest, ok = strings.CutSuffix(rest, "`"); !ok {
+			return "", "", false
+		}
 	}
-	found, ok = strings.CutSuffix(rest, "`")
-	if !ok || strings.Contains(named+found, "`") {
+	named, found, ok = strings.Cut(rest, sep)
+	if !ok || named == "" || found == "" || strings.ContainsAny(named+found, "` ") {
 		return "", "", false
 	}
 	return named, found, true
 }
 
-// wrongTurn is a steer refused for naming another turn: the turn in flight.
+// wrongTurn is a call refused for naming another turn: the turn in flight.
 type wrongTurn string
 
 func (w wrongTurn) Error() string { return "the turn in flight is " + string(w) }
+
+// interrupt sends turn/interrupt, which both of its params require
+// (CODEX-MEASURE §17.1, §18): {} once Codex ends the turn, -32600 "no active
+// turn to interrupt" where none runs, and a refusal naming the turn in flight
+// where turn is not it, which interrupts nothing: that turn is then the one
+// interrupted, once.
+func (a *appServer) interrupt(ctx context.Context, turn string) error {
+	if turn == "" {
+		a.mu.Lock()
+		turn = a.active
+		a.mu.Unlock()
+	}
+	if turn == "" {
+		return errNotNow
+	}
+	err := a.interruptTurn(ctx, turn)
+	var other wrongTurn
+	if errors.As(err, &other) {
+		// Codex names the turn in flight and interrupted nothing: that one,
+		// once more.
+		a.stop(turn)
+		a.begin(string(other))
+		turn = string(other)
+		err = a.interruptTurn(ctx, turn)
+	}
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, errNoTurn):
+		return errNotNow
+	}
+	return fmt.Errorf("turn/interrupt of turn %s: %w", turn, err)
+}
+
+// interruptTurn sends turn/interrupt of turn, classified ([classify]).
+func (a *appServer) interruptTurn(ctx context.Context, turn string) error {
+	_, err := a.call(ctx, "turn/interrupt", map[string]any{"threadId": a.thread, "turnId": turn})
+	return classify(err, turn, "no active turn to interrupt")
+}
 
 func (a *appServer) gone() <-chan struct{} { return a.done }
 
@@ -410,12 +646,20 @@ func (a *appServer) close() {
 // call sends method with params and waits, within the call bound, for its
 // answer: the result, or the server's error.
 func (a *appServer) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	return a.callApplied(ctx, method, params, nil)
+}
+
+// callApplied is call whose successful answer the reader hands apply before
+// it reads the next message, so what apply learns holds for every message
+// after the answer; apply's error is the call's.
+func (a *appServer) callApplied(ctx context.Context, method string, params any,
+	apply func(json.RawMessage) error) (json.RawMessage, error) {
 	ctx, cancel := context.WithTimeout(ctx, a.bound)
 	defer cancel()
 	id := a.ids.Add(1)
 	ch := make(chan rpcAnswer, 1)
 	a.mu.Lock()
-	a.pending[id] = ch
+	a.pending[id] = waiter{ch: ch, apply: apply}
 	a.mu.Unlock()
 	forget := func() {
 		a.mu.Lock()
@@ -428,8 +672,11 @@ func (a *appServer) call(ctx context.Context, method string, params any) (json.R
 	}
 	select {
 	case ans := <-ch:
-		if ans.err != nil {
+		switch {
+		case ans.err != nil:
 			return nil, ans.err
+		case ans.applied != nil:
+			return nil, ans.applied
 		}
 		return ans.result, nil
 	case <-a.done:
