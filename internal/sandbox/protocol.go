@@ -134,6 +134,12 @@ type Spec struct {
 	// telemetry added at the job's start.
 	Env map[string]string
 
+	// SignInEnv is the names in Env that sign the run's harness in: its
+	// profile's token, key and sign-in variables, and the entry's credentials
+	// ([RunRequest.SignInEnv]). The harness reads them; the commands its model
+	// runs are started without them.
+	SignInEnv []string
+
 	// CredentialFiles is a subscription-harness login: a path relative to the
 	// box home mapped to an absolute path on the ENGINE HOST.
 	//
@@ -1123,7 +1129,14 @@ type RunRequest struct {
 	// where Resume is: a run that starts a session is handed Brief.
 	FreshBrief string
 
-	Env    map[string]string
+	Env map[string]string
+
+	// SignInEnv is the names in Env its harness signs in by ([Spec.SignInEnv]).
+	// The runner hands them to the harness and keeps them, with its own wiring's
+	// variables, out of the environment of the commands the model runs, through
+	// the harness's own mechanism for that environment.
+	SignInEnv []string
+
 	Limits Limits
 
 	// Model is the model the run works under, written in the grammar of the
@@ -1143,8 +1156,8 @@ type RunRequest struct {
 
 	// WebDenied is the entry's `web_tools: denied`: the runner hands its
 	// harness none of the harness's own web tools, as the entry's runs on the
-	// engine host have none. The run's shell, and any code it runs, reaches
-	// the network the box's cell allows, which no harness flag bounds.
+	// engine host have none. The run's shell, and any code it runs, reach
+	// only what the box cell's egress policy allows.
 	WebDenied bool
 
 	// MCPServers are the MCP servers the engine hands the run, keyed by

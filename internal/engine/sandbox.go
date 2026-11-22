@@ -4151,6 +4151,10 @@ type executorRun struct {
 	// neither ever signs a harness in.
 	signIn map[string]string
 
+	// signInNames is the variables of env that sign the harness in
+	// ([signInNames], [sandbox.Spec.SignInEnv]).
+	signInNames []string
+
 	// homePaths is the variables naming the integrations' box files, each to
 	// its path under the box's home, which the launch joins onto the box's
 	// own beneath env ([sandbox.LaunchRequest.HomePaths]). Never in signIn.
@@ -4198,13 +4202,14 @@ func newExecutorRun(agent *harness.Provider, seat runEnv) executorRun {
 	maps.Copy(env, credentials)
 	profile := agent.Profile()
 	run := executorRun{
-		model:     agent.ModelArgument(),
-		effort:    agent.Effort(),
-		webDenied: profile.EffectiveWebTools() == harnessprofile.WebToolsDenied,
-		env:       env,
-		signIn:    signIn,
-		files:     agent.SandboxCredentials(),
-		homePaths: integrationsOwn(agent, seat.homePaths),
+		model:       agent.ModelArgument(),
+		effort:      agent.Effort(),
+		webDenied:   profile.EffectiveWebTools() == harnessprofile.WebToolsDenied,
+		env:         env,
+		signIn:      signIn,
+		signInNames: signInNames(agent, entry),
+		files:       agent.SandboxCredentials(),
+		homePaths:   integrationsOwn(agent, seat.homePaths),
 	}
 	for _, name := range slices.Sorted(maps.Keys(seat.credentials)) {
 		if _, kept := credentials[name]; !kept {
@@ -4222,6 +4227,25 @@ func newExecutorRun(agent *harness.Provider, seat runEnv) executorRun {
 		run.files[executor.CredentialDocument] = doc
 	}
 	return run
+}
+
+// signInNames is the variables that sign agent's harness in from a run's
+// environment ([sandbox.Spec.SignInEnv]): the profile's own names
+// ([harnessprofile.Profile.CredentialEnvNames]) and each of the entry's
+// variables that is part of its sign-in ([entrySignInName]), such as a cloud
+// sign-in's key. A credential-named variable of the seat's own env counts only
+// under a profile's name: for a harness reading any provider's key it is as
+// likely a tool's token (a role.sandbox.env GITLAB_TOKEN), which its tools keep.
+func signInNames(agent *harness.Provider, entry map[string]string) []string {
+	profile := agent.Profile()
+	names := profile.CredentialEnvNames(entry)
+	for name := range entry {
+		if entrySignInName(agent, name) && !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	return names
 }
 
 // integrationsOwn is what of vars, variables an integration puts in a box, the
