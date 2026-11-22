@@ -1148,13 +1148,15 @@ A checkout costs a few reads at the seat's level: the repository, a `change` it 
 **Its git is the engine's to configure.** Every run launched on a node that serves Gitlet gets, in its launch's own environment (minted once the job is named, never written on the run's record), its Gitlet access:
 
 - `CREWLET_GIT_TOKEN`, the run's credential: a token naming the turn and THIS launch, so a job a later launch replaced is refused at once whatever its expiry. It reaches nothing until a checkout grants a repository. `CREWLET_GIT_URL` is the launching node's `CREWLET_BOX_GIT_URL`, which every clone's remote names.
-- git's configuration through the environment (`GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_<n>`, `GIT_CONFIG_VALUE_<n>`): the run environment's own entries are **kept** (a proxy or CA bundle) and seven of the engine's are appended after them, so for the identity, protocol and index its value wins:
+- git's configuration through the environment: the run environment's own entries are **kept** (a proxy or CA bundle) and the engine's are appended after them, so for the credential, identity, protocol and index its value wins. Two go in `GIT_CONFIG_PARAMETERS`, which git reads after every `GIT_CONFIG_COUNT` entry, so a harness whose shell appends count entries emptying `credential.helper` (Gemini CLI's does) still reaches Gitlet:
   - an empty `credential.<base>/.helper`, clearing every earlier credential helper for Gitlet's URL, so a `credential.helper store` from a setup step is neither asked for the token nor told to save it;
-  - a helper answering git's credential request with the run's token, read from the environment when git asks, so it is never written to a file;
+  - a helper answering git's credential request with the run's token, read from the environment when git asks, so it is never written to a file.
+
+  Five go in `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_<n>`, `GIT_CONFIG_VALUE_<n>`, which no harness empties:
   - `user.name` and `user.email`, the seat's identity as a commit the engine builds for it names it: its role's name and `email:`, else its handle on `code.identity_domain`;
   - `protocol.version 2`, which partial clones and fetches by id need;
   - `index.version 4` with `core.untrackedCache true`, the index settings a wide checkout's `git status` was [measured](#what-a-clone-costs) faster with: what `feature.manyFiles` sets minus its `index.skipHash`, which writes an index older libgit2 builds refuse.
-- A run environment whose own `GIT_CONFIG_COUNT` is not a count, or names an entry it does not set, is refused naming it (git would fail every clone).
+- A run environment whose own `GIT_CONFIG_COUNT` is not a count, or names an entry it does not set, is refused naming it (git would fail every clone), and so is a `CREWLET_BOX_GIT_URL` holding `=`, which no `GIT_CONFIG_PARAMETERS` item can name in a credential key.
 
 The identity is a **convention**, never a check: generated code can set any committer, and the push's record, never a commit header, says which run pushed what. The names the engine sets (`CREWLET_GIT_TOKEN`, `CREWLET_GIT_URL`, and what a [check's box](#check-boxes) is told of its check) are **reserved**: `role.sandbox.env`, every setup step's `env` and the company's check secrets (`code.checks.env`) are refused naming one: a value there would break a box's clones or tell a check's command another check than its own. A run launched where the company hosts no code, or on a node that does not serve Gitlet, gets none of this.
 
@@ -1373,16 +1375,16 @@ Crewlet-Work-Item: native ENG-7
 
 On unless `providers.sandbox.commit_attribution` is `false`, which turns all four off for every run launched from then on: a company wanting no Crewlet credit wants no trailer either. The trailers are a convention, never a check; nothing in the engine reads them, and on Gitlet a push's record is the provenance ([Commit trailers](#commit-trailers)).
 
-**Git adds the credit, not the model.** Each run's box is given a `prepare-commit-msg` hook, and the run's environment points git at it: one more `GIT_CONFIG_COUNT` entry setting `core.hooksPath`, added after the box's login profile is read. No git configuration file is written, so your setup recipe's `git config --global` and the repository's settings stay. Git runs `prepare-commit-msg` on every commit, including with `--no-verify`, so the credit does not depend on the agent remembering. A harness may add its own line too, such as Claude Code's `Co-Authored-By: Claude`; the two sit side by side.
+**Git adds the credit, not the model.** Each run's box is given a `prepare-commit-msg` hook, and the run's environment points git at it: a `GIT_CONFIG_PARAMETERS` item setting `core.hooksPath`, appended to any the box already sets after its login profile is read. Git reads that variable after every `GIT_CONFIG_COUNT` entry, so a harness whose shell appends entries emptying `core.hooksPath` (Gemini CLI's does) still runs the hook, and so do plain `git`, git by its full path and `--no-verify`. No git configuration file is written, so your setup recipe's `git config --global` and the repository's settings stay. Git runs `prepare-commit-msg` on every commit, including with `--no-verify`, so the credit does not depend on the agent remembering. A harness may add its own line too, such as Claude Code's `Co-Authored-By: Claude`; the two sit side by side.
 
-**The repository's own hooks still run.** The run's hooks directory stands in for the repository's, and every hook in it hands on to the repository's hook of the same name, from `.git/hooks` or the repository's own `core.hooksPath` (husky's, say). A repository hook that refuses a commit still refuses it.
+**The repository's own hooks still run.** The run's hooks directory stands in for the repository's, and every hook in it hands on to the repository's hook of the same name, from `.git/hooks` or the repository's own `core.hooksPath` (husky's, say), setting aside a harness's empty `core.hooksPath` entry when it looks. A repository hook that refuses a commit still refuses it.
 
 **Only the run's own commits.** A commit is credited only when its author is the identity the run commits as. A person's commit the run amends, rewords, cherry-picks or rebases keeps its author and gets no credit. A commit of the run's own that it amends, rebases or cherry-picks carries **one of each** Crewlet trailer, naming the run that rewrote it, never a second set; the co-author line is added only where not already there, so a person already credited stays credited. A message git would refuse as empty, an untouched template, and a message given whole whose every line starts with the comment character (`git commit -m '#42 fix'`) are left to git and carry none.
 
 **What it does not reach:**
 
 - A commit made through a code host's API, such as a GitHub tool that writes a file, runs no git in the box.
-- A box whose git is older than 2.31 does not read `GIT_CONFIG_COUNT`, so its commits go uncredited.
+- A command run with `GIT_CONFIG_PARAMETERS` removed from its environment (`env -u GIT_CONFIG_PARAMETERS git commit`) is not pointed at the hook.
 - A hook the repository keeps under a name git did not have when this build shipped is not handed on while the run's entry stands.
 
 The credit never stops a commit: a failed hook lookup hands nothing on and credits nothing, and a credit that cannot be written lets the commit through with a one-line warning.

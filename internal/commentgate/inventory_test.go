@@ -12,5 +12,5 @@ var excessInventory = map[string]int{
 // moves down.
 var rowInventory = map[string]int{
 	"logging, secrets, provision, envref, envfile, redact, workkey, backoff, cron, period": 6125,
-	"sandbox": 123249,
+	"sandbox": 123244,
 }

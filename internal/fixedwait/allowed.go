@@ -1019,7 +1019,6 @@ var allowed = []Entry{
 	{File: "internal/providers/llm/llmtest/llmtest.go", Func: "Script.play", NegativeWindow: 1, Piece: 10},
 	{File: "internal/provision/identity_test.go", Func: "TestIdentityLookupsRunAtMostTheCapAtOnce", NegativeWindow: 1, Piece: 14},
 	{File: "internal/redact/linear_test.go", Func: "withinFactor", ElapsedBound: 1, Piece: 14},
-	{File: "internal/sandbox/executor/attribution_test.go", Func: "TestARunsCommitsCreditCrewletAndOnlyTheRunsOwn", ExemptWait: 1, ExemptElapsed: 1, Piece: 15},
 	{File: "internal/sandbox/executor/carry_test.go", Func: "runToEnd", ExemptWait: 1, ExemptElapsed: 1, Piece: 15},
 	{File: "internal/sandbox/executor/claudecode_test.go", Func: "waitRun", ExemptWait: 1, ExemptElapsed: 1, Piece: 15},
 	{File: "internal/sandbox/executor/claudestream_test.go", Func: "TestAClaudeRunInARealBoxIsCollectedFromItsStream", ExemptWait: 1, ExemptElapsed: 1, Piece: 15},

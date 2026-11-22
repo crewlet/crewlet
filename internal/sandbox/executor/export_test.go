@@ -220,15 +220,19 @@ const (
 	WorkItemTrailer = workItemTrailer
 )
 
-// AttributionHook is the hook a run asking for a is handed, byte for byte, or
-// the refusal its start would answer.
-func AttributionHook(a sandbox.CommitAttribution) ([]byte, error) {
+// AttributionHook is the hook a run asking for a is handed in the hooks
+// directory hooks, byte for byte, or the refusal its start would answer.
+func AttributionHook(a sandbox.CommitAttribution, hooks string) ([]byte, error) {
 	trailers, err := attributionTrailers(a)
 	if err != nil {
 		return nil, err
 	}
-	return attributionHook(trailers), nil
+	return attributionHook(trailers, hooks), nil
 }
+
+// HooksParameter is the GIT_CONFIG_PARAMETERS item a run's wrapper points git
+// at the hooks directory hooks with ([hooksParameter]).
+func HooksParameter(hooks string) string { return hooksParameter(hooks) }
 
 // ClaudeSkillsFloor, ClaudeNotesFloor and ClaudeSettingsPinFloor are the
 // oldest Claude Code releases a run is started with its skills' plugin, and the

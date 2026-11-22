@@ -31,15 +31,15 @@ func TestTheBoxRecipesCloneFromGitlet(t *testing.T) {
 // boxRecipes is the box half of Gitlet's suite: the steps that give a coding
 // box its repositories (the version check, the coding clone, the check's
 // single-commit checkout) run as a box runs them, `sh -c` in its working
-// directory under its git (the pin, or the client floor's 2.40.4) with
-// EXACTLY the engine's box environment (sandbox.BoxGit, ADR-0093), over a
-// global credential helper answering as a PERSON, which the engine's reset
-// must keep from ever answering Gitlet. Each invariant is stated at its check.
+// directory under its git (the pin, or the client floor's 2.40.4) with EXACTLY
+// the engine's box environment (sandbox.BoxGit, ADR-0093), over a global
+// helper answering as a PERSON, which the engine's reset keeps from Gitlet.
 //
-// Mutations, each red: a commit hook in the coding recipe; checking the clone
-// out at its HEAD rather than its base; no --skip-checks (the cone naming
-// [odd] and !bang is refused); no --single-branch (every seat's work arrives
-// and is tracked); no reset of the helper list (every request is refused).
+// Mutations, each red: a commit hook in the coding recipe; the clone checked
+// out at HEAD, not its base; no --skip-checks (the cone naming [odd] and !bang
+// is refused); no --single-branch (every seat's work arrives and is tracked);
+// no reset of the helper list (every request refused); the helper back in
+// GIT_CONFIG_COUNT (the harness's blank entries refuse the fetch).
 func boxRecipes(t *testing.T, opts gitlettest.SoloOptions, git string) {
 	t.Helper()
 	ctx := t.Context()
@@ -213,6 +213,18 @@ func boxRecipes(t *testing.T, opts gitlettest.SoloOptions, git string) {
 	if got := trackedBranches(t, client, clone); !slices.Equal(got, []string{"refs/remotes/origin/main"}) {
 		t.Errorf("after fetching %s the coding clone tracks %q, want origin/main alone", other, got)
 	}
+
+	// UNDER A HARNESS'S BLANK ENTRIES, the box's own credential still answers:
+	// Gemini CLI's shell appends GIT_CONFIG_COUNT entries emptying
+	// credential.helper (resetting the helper list) and the rest, with no
+	// prompt, and the engine's helper, in GIT_CONFIG_PARAMETERS, is read after
+	// them, so a fetch and a push from that shell go through as the run.
+	blanked := append(appendConfig(t, box, "credential.helper", "", "core.fsmonitor", "", "core.hooksPath", "",
+		"core.sshCommand", "", "core.editor", "", "sequence.editor", "", "core.pager", "cat"),
+		"GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0")
+	runGit(t, clone, blanked, "fetch", "-q", "origin", other)
+	runGit(t, clone, blanked, "commit", "-q", "--allow-empty", "-m", "from a harness's shell")
+	runGit(t, clone, blanked, "push", "-q", "origin", branch)
 
 	// A RUN CONTINUING THE SEAT'S OWN BRANCH starts at its tip, off the
 	// default branch: fetched by its id, and the other seats' work still not.
