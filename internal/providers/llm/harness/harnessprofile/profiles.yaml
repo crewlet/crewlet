@@ -3982,6 +3982,11 @@ hermes:
   #     the usage report below is read from.
   #   - memory.memory_enabled and memory.user_profile_enabled false.
   #     memories/MEMORY.md and USER.md otherwise reach the prompt (measured).
+  #   - gateway.unmanaged_idle_exit_seconds 5. The gateway home_daemon names
+  #     (below) ends itself once idle this long; the engine stops it as each
+  #     call releases the home, so this only bounds one an engine that died
+  #     mid-call left (600 unset; at 2 one ended within 3 s of its call,
+  #     measured), with margin for a slow host's start.
   #
   # AND THE TOOL ROUTE'S HALF OF IT (see mcp and requests below), here because
   # this file is the only place the harness reads either from:
@@ -4022,6 +4027,8 @@ hermes:
         memory:
           memory_enabled: false
           user_profile_enabled: false
+        gateway:
+          unmanaged_idle_exit_seconds: 5
         tools:
           tool_search:
             enabled: "off"
