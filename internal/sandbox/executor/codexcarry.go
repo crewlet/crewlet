@@ -66,8 +66,7 @@ func (c Codex) Continues(box, writer string) (bool, string) {
 	case !releaseReads(box):
 		return false, boxNamedNoRelease("Codex")
 	case box != codexCarryRelease:
-		return false, fmt.Sprintf("this box runs %s, and only Codex %s continues a session carried "+
-			"from another box", codexReleaseFound(box), codexCarryRelease)
+		return false, fmt.Sprintf(codexBoxRefused, codexReleaseFound(box), codexCarryRelease)
 	}
 	return c.ContinuesWriter(writer)
 }
@@ -85,6 +84,11 @@ func (Codex) ContinuesWriter(writer string) (bool, string) {
 	}
 	return true, ""
 }
+
+// codexBoxRefused is why a box whose Codex is not [codexCarryRelease] continues
+// no carried session, the Codex found and the release first: the engine's
+// check and the run's own gate say it alike ([codexSessionGate]).
+const codexBoxRefused = "this box runs %s, and only Codex %s continues a session carried from another box"
 
 // codexReleaseFound is release as a reason names the Codex found.
 func codexReleaseFound(release string) string {
@@ -195,7 +199,8 @@ func (p Paths) CodexLiveConfig() string { return p.CodexHome() + "/config.toml" 
 // carried archive ([Paths.SessionCarried]) holds what the copy does not (a
 // digest not among the box's, [Paths.SessionDigests]) or the copy is one Codex
 // was cut off in ([Session.Replaces]); then the archive is RESTORED
-// ([codexRestore]) and its digest recorded before the run goes on.
+// ([codexRestore]), on a box whose Codex (v, the runner's `--version`) is
+// exactly [codexCarryRelease], and its digest recorded before the run goes on.
 func codexSessionGate(session Session, paths Paths, rewired bool) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
@@ -220,6 +225,14 @@ func codexSessionGate(session Session, paths Paths, rewired bool) string {
 	}
 	line(`if [ -z "$h" ]; then`)
 	line(`  if [ ! -s %s ]; then w='it is not in this box, and no archive of it was carried here'`, carried)
+	// THE BOX'S RELEASE, held as the engine's check holds it ([Codex.Continues]):
+	// the first MAJOR.MINOR.PATCH the runner's `codex --version` (v) printed,
+	// as [releaseOf] reads it; none restores nothing, nor one not exactly
+	// [codexCarryRelease].
+	line(`  elif ! cr=$(printf '%%s\n' "$v" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1) || [ -z "$cr" ]; then w=%s`,
+		q(boxNamedNoRelease("Codex")))
+	line(`  elif [ "$cr" != %s ]; then w="%s"`, codexCarryRelease,
+		fmt.Sprintf(codexBoxRefused, "Codex $cr", codexCarryRelease))
 	line(`  elif ! command -v tar > /dev/null 2>&1 || ! command -v gzip > /dev/null 2>&1 || ! command -v find > /dev/null 2>&1; then w='this box has no tar, gzip and find to restore its archive with'`)
 	line(`  elif ! { %s; }; then w='its archive could not be restored'`, codexRestore(paths, session.ID))
 	// CONTINUED ONLY ONCE ITS DIGEST IS RECORDED and read back, for the reason
