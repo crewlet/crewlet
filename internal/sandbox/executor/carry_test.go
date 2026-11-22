@@ -684,11 +684,11 @@ func versionBox(printed string, code int, errText string, asked *[]string) *sand
 // FLOORS. A carried session is continued only by the harness that wrote it, in
 // the format this build restores, on a box at or past its floor (Claude Code
 // 2.1.310, OpenCode 2.0.32) and no older than the writing release; for Claude
-// Code, only a session 2.1.300 or later wrote. A box release that does not
-// read refuses, never counted as current; an unreadable writer counts as
-// current. The printed release is returned for the run's record whatever the
-// answer; a harness that does not answer is no continuation, a box that cannot
-// be asked an error. One login-shell exec reads it, the bin directory first on PATH.
+// Code, only a session 2.1.300 or later wrote; for Codex, box and writer on
+// exactly 0.171.0. A box release that does not read refuses; an unreadable
+// writer counts as current but for Codex. The printed release is returned
+// whatever the answer; a harness not answering is no continuation, a box not
+// asked an error; one login-shell exec, its bin directory on PATH, reads it.
 //
 // Mutation: compare against the writer's floor alone, let an older box take a
 // newer writer's session, read an unreadable box release as current, or an
@@ -702,6 +702,10 @@ func TestTheContinuationCheckHoldsTheBoxsReleaseToTheFloors(t *testing.T) {
 	openCodeArchive := func(release string) sandbox.SessionArchive {
 		return sandbox.SessionArchive{Harness: executor.OpenCodeName, SessionID: "ses_s",
 			Format: executor.OpenCodeArchiveFormat, Version: release}
+	}
+	codexArchive := func(release string) sandbox.SessionArchive {
+		return sandbox.SessionArchive{Harness: executor.CodexName, SessionID: "019a1f00-0000-7000-8000-000000000001",
+			Format: executor.Codex{}.ArchiveFormat(), Version: release}
 	}
 	for name, tc := range map[string]struct {
 		runner    *executor.Runner
@@ -729,6 +733,12 @@ func TestTheContinuationCheckHoldsTheBoxsReleaseToTheFloors(t *testing.T) {
 		"opencode older than its writer":      {executor.NewOpenCode(), "opencode v2.1.4\n", 0, openCodeArchive("2.2.5"), false, "2.1.4", "older than the 2.2.5"},
 		"opencode, an unreadable release":     {executor.NewOpenCode(), "opencode dev\n", 0, openCodeArchive("2.0.32"), false, "", "named no release"},
 		"opencode, another harness's session": {executor.NewOpenCode(), "opencode v2.1.4\n", 0, claudeArchive("2.1.310"), false, "2.1.4", "continued only by the harness that wrote it"},
+		"codex at its release":                {executor.NewCodex(), "codex-cli 0.171.0\n", 0, codexArchive("0.171.0"), true, "0.171.0", ""},
+		"codex newer than its release":        {executor.NewCodex(), "codex-cli 0.172.0\n", 0, codexArchive("0.171.0"), false, "0.172.0", "only Codex 0.171.0 continues"},
+		"codex older than its release":        {executor.NewCodex(), "codex-cli 0.170.0\n", 0, codexArchive("0.171.0"), false, "0.170.0", "only Codex 0.171.0 continues"},
+		"codex, another release's writer":     {executor.NewCodex(), "codex-cli 0.171.0\n", 0, codexArchive("0.172.0"), false, "0.171.0", "only a session Codex 0.171.0 wrote"},
+		"codex, an unreadable writer":         {executor.NewCodex(), "codex-cli 0.171.0\n", 0, codexArchive(""), false, "0.171.0", "named no release"},
+		"codex, an unreadable release":        {executor.NewCodex(), "codex-cli dev\n", 0, codexArchive("0.171.0"), false, "", "named no release"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
