@@ -219,6 +219,10 @@ type LaunchRequest struct {
 	// Effort is the reasoning effort the run works at ([RunRequest.Effort]).
 	Effort string
 
+	// WebDenied is whether the run's harness is handed its own web tools
+	// ([RunRequest.WebDenied]).
+	WebDenied bool
+
 	// ProviderKey is the providers.llm entry the run was launched on: the
 	// member of the seat's executor chain that took it, which is not always
 	// the chain's head. Written onto the job's record ([LaunchRecord]) so
@@ -1047,6 +1051,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		Limits:     Limits{MaxTurns: req.Spec.MaxTurns},
 		Model:      req.Model,
 		Effort:     req.Effort,
+		WebDenied:  req.WebDenied,
 		MCPServers: req.MCPServers,
 		// WHERE THE JOB'S HARNESS ASKS FOR ITS TURN'S NOTES, as the job's own
 		// opening answered it — see [Opening.Steer].
