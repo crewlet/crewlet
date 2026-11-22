@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 )
 
 // locked is each package the suite's lock pins, its tarball's path as a
@@ -58,7 +60,7 @@ func get(t *testing.T, r *StandInRegistry, path string) (int, []byte) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpxtest.Pool(t).Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +127,7 @@ func TestTheStandInRegistryServesTheLocksBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpxtest.Pool(t).Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,8 +147,9 @@ func TestTheStandInRegistryServesTheLocksBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 	answered := make(chan error, 1)
+	client := httpxtest.Pool(t)
 	go func() {
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := client.Do(req)
 		if err == nil {
 			_ = resp.Body.Close()
 			err = errors.New(resp.Status)
