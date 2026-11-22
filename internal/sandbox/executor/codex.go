@@ -183,9 +183,7 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 	// where the box holds the helper it runs ([codexNestedHookFlags]).
 	b.WriteString(codexRepoGate(paths, req.ReportedRepos))
 	hook, state := codexNestedHookFlags(paths)
-	line(`hk=; hp=%s; hs=%s`, q(hook), q(state))
-	line(`if [ -x %s ]; then hk=1; else echo 'crewlet: this box has no note helper for its machine, so the run starts without the hook that hands a checkout cloned during it its instructions' >&2; fi`,
-		q(paths.CodexNoteHelper()))
+	line(`hp=%s; hs=%s`, q(hook), q(state))
 	// No --ignore-user-config: app-server has none, and the config.toml it
 	// always loads is the run's own ([Paths.CodexLiveConfig]). Started in the
 	// script's own directory, exec's: under --remote a relative path and an
@@ -325,12 +323,12 @@ func codexStartHelper(req sandbox.RunRequest, paths Paths) string {
 	if limit := req.Limits.MaxTurns; limit > 0 {
 		flags += fmt.Sprintf(" -step-cap %d -cap-marker %s", limit, q(paths.CodexCapFired()))
 	}
-	return fmt.Sprintf(`chmod 700 %[1]s || exit 1
-%[2]s%[3]s%[4]s < /dev/null > /dev/null &
+	// The helper is executable: the repository gate made it so ([codexRepoGate]).
+	return fmt.Sprintf(`%[1]s%[2]s%[3]s < /dev/null > /dev/null &
 hpid=$!
-( while kill -0 $$ 2> /dev/null && kill -0 "$hpid" 2> /dev/null; do sleep %[5]s; done; kill -0 $$ 2> /dev/null || exit 0; : > %[6]s; %[3]s -interrupt-once < /dev/null > /dev/null || end "$apid" again ) &
+( while kill -0 $$ 2> /dev/null && kill -0 "$hpid" 2> /dev/null; do sleep %[4]s; done; kill -0 $$ 2> /dev/null || exit 0; : > %[5]s; %[2]s -interrupt-once < /dev/null > /dev/null || end "$apid" again ) &
 gpid=$!
-`, helper, env, base, flags, codexGuardPoll, q(paths.CodexHelperLost()))
+`, env, base, flags, codexGuardPoll, q(paths.CodexHelperLost()))
 }
 
 // codexSkillDigests is each of skills as the note helper's -skill-digest:

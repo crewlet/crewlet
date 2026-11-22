@@ -89,15 +89,18 @@
 // firing instead (once.go): it takes the run's notes over the bridge's
 // steer_take, as a hook that calls an MCP tool would, hands the answer over
 // through the adapter, and exits 0 whatever happened, so a firing never stops
-// the harness; a take the harness never got is told again. A Codex run's own
-// PostToolUse hook runs it as codex-nested (codexnested.go), which hands each
-// repository checked out since the run began its root instructions, once.
+// the harness; a take the harness never got is told again. A Codex run's
+// script runs it once as codex-launch, which writes the root instructions of
+// the repositories checked out as the run starts, and the run's own
+// PostToolUse hook as codex-nested, which hands each one checked out since
+// its own, once (codexrepo.go).
 //
 // # Exit
 //
 // 0 on SIGTERM or SIGINT, and once the harness's connection closes (the run
 // is over); 1 when the harness cannot be reached; 2 for a command line or
-// environment it cannot run with. A route that refuses the helper (401 or 404:
+// environment it cannot run with; codex-launch exits 1 where it could not
+// write the instructions. A route that refuses the helper (401 or 404:
 // its token no longer resolves, or the run has no such route) ends only what
 // that route is for, logged: the notes route its polls, the skill route its
 // reports, the cap and the other route going on. -interrupt-once exits 0 once
