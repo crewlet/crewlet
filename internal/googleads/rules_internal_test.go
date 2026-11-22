@@ -599,10 +599,26 @@ func TestARecommendationAppliedIsHeldByTheBudgetItSets(t *testing.T) {
 		"a type nobody names":          {with(nil), live{rec: state{"type": "SOMETHING_NEW"}}, admin, false},
 		"a recommendation nobody read": {with(nil), live{}, admin, false},
 		"an ad":                        {with(nil), live{rec: state{"type": "RESPONSIVE_SEARCH_AD"}}, public, false},
+		"an ad naming a lowered budget": {newAmount("1000000"), live{rec: state{"type": "RESPONSIVE_SEARCH_AD",
+			"campaign_budget": budgetA}, budgetA: state{"amount_micros": "5000000"}}, public, false},
 	} {
 		if r := ruling(t, apply, tc.body, tc.l); r.class != tc.class || r.spends != tc.spends {
 			t.Errorf("%s applied is %s spending %v, want %s spending %v", name, r.class, r.spends, tc.class,
 				tc.spends)
+		}
+	}
+}
+
+// A WILDCARD MASK IS REFUSED, NOT READ: it names no field, so neither a rule
+// nor the caps could measure what it changes.
+//
+// Mutation: read `*` as a path, and the raise is read and measured as nothing.
+func TestAWildcardMaskIsRefused(t *testing.T) {
+	t.Parallel()
+	for _, mask := range []string{"*", "amountMicros,*", "campaign.*"} {
+		body := ops(update(budgetA, mask, map[string]any{"amountMicros": "900000000000"}))
+		if _, err := classify(opOf(t, "googleads.customers.campaignBudgets.mutate"), body, live{}); err == nil {
+			t.Errorf("an update masked %q was classed", mask)
 		}
 	}
 }

@@ -158,7 +158,10 @@ func operationOf(service string, raw any) (operation, bool) {
 		op.kind, op.object = opUpdate, object(m["update"])
 		op.name = str(op.object["resource_name"])
 		for _, path := range strings.Split(str(m["update_mask"]), ",") {
-			if path = strings.TrimSpace(path); path != "" {
+			if path = strings.TrimSpace(path); strings.Contains(path, "*") {
+				// A WILDCARD names no field, so no rule or cap could measure it.
+				return operation{}, false
+			} else if path != "" {
 				op.mask = append(op.mask, snake(path))
 			}
 		}
