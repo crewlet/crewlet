@@ -194,6 +194,10 @@ func TestThePollsCarryTheRunsTokenAndAskAgainAfterA503(t *testing.T) {
 // millisecond pacing, a helper that backed off and asked again would ask many
 // times within the window's round trips, and steer the waiting note.
 //
+// The refusal's one line says note polling has ended, which only the path that
+// ends the polls writes: a loop that logs the refusal and polls on writes the
+// refusal alone, so the case reads the line it awaits rather than a window.
+//
 // Mutation: end the helper on the notes route's refusal, or log it, back off
 // and poll again, and this goes red.
 func TestANotesRouteThatRefusesTheHelperEndsOnlyItsPolls(t *testing.T) {
@@ -207,6 +211,9 @@ func TestANotesRouteThatRefusesTheHelperEndsOnlyItsPolls(t *testing.T) {
 	h := startHelperWith(t, bridge, app, threadFile, append([]string{"-notes-env", "NOTES_ROUTE", "-step-cap", "2",
 		"-skills-env", "SKILLS_ROUTE", "-skills-dir", dir}, digestFlags(alpha)...)...)
 	h.stderr.await(func(s string) bool { return strings.Contains(s, "refused the helper") })
+	if line := h.stderr.String(); !strings.Contains(line, "(401 Unauthorized): note polling has ended") {
+		t.Fatalf("the refusal was logged as\n%s\nwant it to say note polling has ended", line)
+	}
 	bridge.add(note{Seq: 1, ID: "note-1", Message: "a note no poll should fetch"})
 	tokens(t, app, "thread-A", "turn-1", 100)
 	tokens(t, app, "thread-A", "turn-1", 200)
