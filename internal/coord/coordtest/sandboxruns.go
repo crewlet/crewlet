@@ -614,7 +614,8 @@ var runCases = []fleetCase{{
 	// version its value stands at; a part or a session claim is no record.
 	//
 	// Mutation: drop Standing from a backend's write, and the second state
-	// is not listed.
+	// is not listed; widen the listing past a record's key, and the part or
+	// the claim is listed.
 	name: "a run's standing is the one its last write stated",
 	fn: func(h *fleetHarness) {
 		seat := uuidOf(1)
@@ -624,6 +625,10 @@ var runCases = []fleetCase{{
 			h.t.Fatalf("CreateSandboxRun = (%v, %v), want created", created, err)
 		}
 		h.putRunPart("turn-1", coord.RunLog, `{"calls":[]}`)
+		claim := coord.SessionClaim{Session: claimedSession, Turn: "turn-1", Launch: "job-1"}
+		if ok, err := h.f.CreateSessionClaim(h.ctx, claim); err != nil || !ok {
+			h.t.Fatalf("CreateSessionClaim = (%v, %v), want claimed", ok, err)
+		}
 		if got := h.standings(); len(got) != 1 || got["turn-1"].Standing == nil ||
 			*got["turn-1"].Standing != first {
 			h.t.Fatalf("the standings after the create = %+v, want turn-1's alone, at epoch 3", got)
