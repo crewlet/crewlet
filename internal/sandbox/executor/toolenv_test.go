@@ -2,6 +2,7 @@ package executor_test
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
 	"os/exec"
 	"slices"
@@ -21,6 +22,11 @@ var (
 	}
 	signInNames = []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"}
 	toolNames   = []string{"CREWLET_GIT_TOKEN", "GITHUB_TOKEN", "AWS_REGION"}
+
+	// telemetryEnv is a run's telemetry export as an OpenCode run's harness
+	// keeps it for its own.
+	telemetryEnv = map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "https://engine.example.com/otlp/placeholder",
+		"OTEL_EXPORTER_OTLP_HEADERS": "x-placeholder=1"}
 )
 
 // envLines is an `env` listing as a map.
@@ -85,12 +91,13 @@ type toolEnvPlugin struct {
 }
 
 // EVERY OPENCODE RUN NAMES THE TOOL-ENVIRONMENT PLUGIN, LAST, with its option
-// the names its harness signs in by and the server's own variables, sorted, and
+// the names its harness signs in by and its own variables (the server's and
+// the telemetry export's), sorted, and
 // the box holds this build's plugin; wired to its notes and skills or to
 // nothing alike.
 //
 // Mutation: name the plugin only for a run handed a sign-in, or leave the
-// server's variables or the sign-in out of its names, and a case goes red.
+// harness's own variables or the sign-in out of its names, and a case goes red.
 func TestEveryOpenCodeRunNamesTheToolEnvironmentPluginLast(t *testing.T) {
 	t.Parallel()
 	embedded, err := os.ReadFile("opencode_toolenv.js")
@@ -102,12 +109,15 @@ func TestEveryOpenCodeRunNamesTheToolEnvironmentPluginLast(t *testing.T) {
 		want []string
 	}{
 		"signed in, wired to nothing": {req: sandbox.RunRequest{Brief: "x", SignInEnv: []string{"OPENROUTER_API_KEY", "ANTHROPIC_API_KEY"}},
-			want: []string{"ANTHROPIC_API_KEY", "CREWLET_STEER_SESSION", "OPENCODE_CONFIG_CONTENT", "OPENROUTER_API_KEY"}},
+			want: []string{"ANTHROPIC_API_KEY", "CREWLET_STEER_SESSION", "OPENCODE_CONFIG_CONTENT", "OPENROUTER_API_KEY",
+				"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS"}},
 		"handed no sign-in": {req: sandbox.RunRequest{Brief: "x"},
-			want: []string{"CREWLET_STEER_SESSION", "OPENCODE_CONFIG_CONTENT"}},
+			want: []string{"CREWLET_STEER_SESSION", "OPENCODE_CONFIG_CONTENT", "OTEL_EXPORTER_OTLP_ENDPOINT",
+				"OTEL_EXPORTER_OTLP_HEADERS"}},
 		"wired to its notes and skills": {req: sandbox.RunRequest{Brief: "x", SignInEnv: []string{"ANTHROPIC_API_KEY"},
 			Skills: handedSkills(), SkillLoads: skillWiring(), Steer: steerWiring},
-			want: []string{"ANTHROPIC_API_KEY", "CREWLET_STEER_SESSION", "OPENCODE_CONFIG_CONTENT"}},
+			want: []string{"ANTHROPIC_API_KEY", "CREWLET_STEER_SESSION", "OPENCODE_CONFIG_CONTENT",
+				"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -135,7 +145,8 @@ func TestEveryOpenCodeRunNamesTheToolEnvironmentPluginLast(t *testing.T) {
 // THE TOOL-ENVIRONMENT PLUGIN TAKES EACH NAME FROM A COMMAND AND NONE FROM THE
 // SERVER: OpenCode copies its own environment into each shell command's and
 // hands that to the plugin's `create.before` hook, so the command lacks every
-// name while the server, whose providers read their keys from it, keeps them.
+// name (a sign-in's, the telemetry export's) while the server, whose providers
+// read their keys from it and whose export reads its endpoint, keeps them.
 // With no names it registers nothing. Driven under node by
 // opencode_toolenv_probe.mjs, as OpenCode 2.0.32 to 2.3.0 were measured to call it.
 //
@@ -144,6 +155,9 @@ func TestEveryOpenCodeRunNamesTheToolEnvironmentPluginLast(t *testing.T) {
 func TestTheToolEnvironmentPluginTakesEachNameFromACommandAndNoneFromTheServer(t *testing.T) {
 	t.Parallel()
 	node := nodeForNotes(t)
+	harnessEnv := maps.Clone(signInEnv)
+	maps.Copy(harnessEnv, telemetryEnv)
+	omitted := slices.Concat(signInNames, slices.Sorted(maps.Keys(telemetryEnv)))
 	probe := func(t *testing.T, names []string) (hooked []string, command, server map[string]string) {
 		t.Helper()
 		arg, err := json.Marshal(names)
@@ -152,7 +166,7 @@ func TestTheToolEnvironmentPluginTakesEachNameFromACommandAndNoneFromTheServer(t
 		}
 		cmd := exec.Command(node, "opencode_toolenv_probe.mjs", "opencode_toolenv.js", string(arg)) //nolint:gosec // the probe under test
 		cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
-		for name, value := range signInEnv {
+		for name, value := range harnessEnv {
 			cmd.Env = append(cmd.Env, name+"="+value)
 		}
 		out, err := cmd.Output()
@@ -170,16 +184,16 @@ func TestTheToolEnvironmentPluginTakesEachNameFromACommandAndNoneFromTheServer(t
 		return got.Hooked, got.Command, got.Server
 	}
 
-	hooked, command, server := probe(t, signInNames)
+	hooked, command, server := probe(t, omitted)
 	if !slices.Equal(hooked, []string{"create.before"}) {
 		t.Fatalf("the plugin registered %v, want the shell's create.before", hooked)
 	}
-	for _, name := range signInNames {
+	for _, name := range omitted {
 		if value, held := command[name]; held {
-			t.Errorf("the command started with the sign-in's %s=%q", name, value)
+			t.Errorf("the command started with the harness's %s=%q", name, value)
 		}
 	}
-	for name, value := range signInEnv {
+	for name, value := range harnessEnv {
 		if server[name] != value {
 			t.Errorf("the server's own %s = %q, want %q", name, server[name], value)
 		}

@@ -1,7 +1,7 @@
 // crewlet.toolenv — the plugin an OpenCode run's server loads so the commands
 // its model runs start without the variables the harness alone reads: the
-// names it signs in by, and the run's own wiring (its configuration, the
-// session its notes plugin admits to).
+// names it signs in by, the run's own wiring (its configuration, the session
+// its notes plugin admits to) and its telemetry export's endpoint and headers.
 //
 // The engine embeds this file (opencodetoolenv.go) and writes it as index.js
 // in a directory of its own, which the run's configuration names with the
