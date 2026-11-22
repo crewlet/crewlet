@@ -992,6 +992,13 @@ type Profile struct {
 	// it exists.
 	LoginKeys map[string]string `yaml:"login_keys,omitempty"`
 
+	// RunKeys names, by a credential file's NAME, the keys (dotted, into a
+	// JSON object) the harness writes into that file during a run, which are
+	// not the login its sign-in made: Muse Code mints an API key as each run
+	// starts and writes it there. A run's login carried out keeps the shared
+	// login's value of each ([KeepLoginKeys]); a login command's takes all.
+	RunKeys map[string][]string `yaml:"run_keys,omitempty"`
+
 	// VolatilePaths are sessions, transcripts, history and todo state,
 	// relative to the seat home, deleted before and after every call: a hidden
 	// harness memory would make turns non-reproducible and carry one task's
@@ -2178,6 +2185,18 @@ func (p *Profile) validateHomePaths(add func(string, ...any)) {
 		case strings.TrimSpace(p.LoginKeys[name]) == "":
 			add("login_keys.%s is empty — name the top-level key the file holds once the "+
 				"harness has signed in", name)
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(p.RunKeys)) {
+		if byName[name] == "" {
+			add("run_keys names %q, which is the file name of no credential_paths entry — "+
+				"run keys say which keys of a credential file its harness writes during a run", name)
+		}
+		for i, key := range p.RunKeys[name] {
+			if slices.Contains(strings.Split(key, "."), "") {
+				add("run_keys.%s[%d] %q is no key path — name the key, its parents' keys before "+
+					"it, each joined by a dot", name, i, key)
+			}
 		}
 	}
 	// A host file is adopted under its file name and a seat is seeded only with

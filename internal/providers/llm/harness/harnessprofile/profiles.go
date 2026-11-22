@@ -193,6 +193,12 @@ func (p Profile) Clone() Profile {
 	out.Env = cloneMap(p.Env)
 	out.SubscriptionEnv = cloneMap(p.SubscriptionEnv)
 	out.LoginKeys = cloneMap(p.LoginKeys)
+	if p.RunKeys != nil {
+		out.RunKeys = make(map[string][]string, len(p.RunKeys))
+		for name, keys := range p.RunKeys {
+			out.RunKeys[name] = append([]string(nil), keys...)
+		}
+	}
 	if p.StdinLogin != nil {
 		login := *p.StdinLogin
 		login.Args = append([]string(nil), p.StdinLogin.Args...)
