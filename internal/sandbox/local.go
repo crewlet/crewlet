@@ -583,6 +583,18 @@ func writeBackLogin(
 	if err != nil {
 		return nil, fmt.Errorf("reading the shared login: %w", err)
 	}
+	// THE SHARED LOGIN STILL THE SEED, judged before anything is carried: a
+	// login another writer moved or removed is newer than any refresh here.
+	for relative, rec := range login.files {
+		shared, present := current[filepath.Base(rec)]
+		seed := seeded[relative].Seed
+		if (seed == "") == present || (present && seedDigest(seeded[relative].Rule, shared) != seed) {
+			if len(current) == 0 {
+				return verdict(writeBackRemoved), nil
+			}
+			return verdict(writeBackChanged), nil
+		}
+	}
 	// ONLY TOKENS ARE CARRIED ([harnessprofile.FileRule.Carry]): a file's
 	// refresh keys, never an endpoint, a key the run minted or a setting it
 	// wrote, and a store's document held to the logins it was handed. A file
@@ -609,16 +621,6 @@ func writeBackLogin(
 	maps.Copy(next, changed)
 	if maps.EqualFunc(next, current, bytes.Equal) {
 		return verdict(writeBackHeld), nil
-	}
-	for relative, rec := range login.files {
-		shared, present := current[filepath.Base(rec)]
-		seed := seeded[relative].Seed
-		if (seed == "") == present || (present && seedDigest(seeded[relative].Rule, shared) != seed) {
-			if len(current) == 0 {
-				return verdict(writeBackRemoved), nil
-			}
-			return verdict(writeBackChanged), nil
-		}
 	}
 	// A COPY WHOSE ACCOUNT FIELDS OR ID TOKEN NAME ANOTHER ACCOUNT is not
 	// written back ([harnessprofile.FileRule.SameAccount]): the whole login
