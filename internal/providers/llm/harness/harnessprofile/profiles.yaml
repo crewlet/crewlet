@@ -4217,7 +4217,7 @@ pi:
   # of them reached a request, no extension or MCP server ran, no tool was
   # offered, and the engine read each answer. The error format is off the
   # stand-in's 401 and 429 responses, in the providers' own shapes.
-  written_for: "Pi Coding Agent 1.6.0, measured on 1.6.0 (`pi --version`)"
+  written_for: "Pi Coding Agent 1.6.0"
   version_args: ["--version"]
   # `-p` is print mode: answer and exit, no TUI. The rest is the isolation, and
   # this harness is unusually generous with it — every discovery path it has can be
