@@ -49,8 +49,24 @@ var _ sandbox.SessionTaker = (*Runner)(nil)
 const SessionTakesAtOnce = 29
 
 // takeBaseHeldBytes is what a take at its base holds at most, its scrub's and
-// its meter's at once: 11.63 MiB ([SessionTakesAtOnce]).
-const takeBaseHeldBytes = 11910 << 10
+// its meter's at once: 11.63 MiB ([SessionTakesAtOnce]), the scrub's 8.29 and
+// the meter's 3.34, each to the KiB.
+const (
+	scrubBaseHeldBytes = 8490 << 10
+	meterBaseHeldBytes = 3420 << 10
+	takeBaseHeldBytes  = scrubBaseHeldBytes + meterBaseHeldBytes
+)
+
+// takeLargeHeldBytes is what the large slot adds for a take, past what
+// [takeBaseHeldBytes] counts: its scrub at the plaintext's bound and the
+// longest value it can hold, less the scrub's base, beside its meter's line
+// past the base's charge, at 1.25 bytes a charged byte (the package doc's THE
+// COEFFICIENTS); the meter's reader and the strings a charge covers are its
+// base whatever the line.
+func takeLargeHeldBytes() int64 {
+	return scrubHeldBytes(scrubPlainMax, scrubLongestMax) - scrubBaseHeldBytes +
+		(threadLineMax-collectionBaseLineCharge)*5/4
+}
 
 // The takes at their base hold no more than the box host's reads for its peers
 // at [baseTierReadBytes] each: a negative constant does not compile.

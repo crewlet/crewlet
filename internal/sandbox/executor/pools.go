@@ -30,10 +30,20 @@ func (w NodeWork) MemoryPools(memory int64) int64 {
 	if w.Boxes {
 		live += int64(w.Turns+w.PeerReads)*baseTierReadBytes +
 			SessionTakesAtOnce*takeBaseHeldBytes +
-			CollectionLargeReadsAtOnce*threadChainHeldBytes +
+			CollectionLargeReadsAtOnce*largeReadHeldBytes() +
 			HoldingsReadsAtOnce*threadChainHeldBytes
 	}
 	return live * limitHeadroomHalves / 2
+}
+
+// largeReadHeldBytes is what the large slot ([CollectionLargeReadsAtOnce])
+// adds at its worst: the larger of its holders' figures, never their sum. Each
+// pass takes it through its own [passBudget] (readMainThread's, take.go's), so
+// one holds it at a time; only a collection's builds a chain, and a take's is
+// its scrub and its meter at once, counted past its base ([takeLargeHeldBytes]).
+// The chain's is whole, its base's 2.7 MiB in it, which the max never reads.
+func largeReadHeldBytes() int64 {
+	return max(threadChainHeldBytes, takeLargeHeldBytes())
 }
 
 // transcriptReads is how many transcripts w's node decodes at once: every

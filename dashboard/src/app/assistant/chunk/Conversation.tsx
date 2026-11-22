@@ -108,6 +108,7 @@ import {
   takeQueuedQuestion,
   useQueuedConversation,
   useQueuedQuestion,
+  type QueuedQuestion,
 } from "../control.ts";
 import type { AssistantModelProblem, AssistantUnavailable, AttachClosed } from "../availability.ts";
 import type { InAppTarget } from "./openInApp.ts";
@@ -116,6 +117,7 @@ import {
   decline,
   deleteConversation,
   deleteRefusal,
+  newConversation,
   openConversation,
   pageMoved,
   reconnect,
@@ -395,19 +397,33 @@ export function AskProvider({ place, children }: { place: AskPlace; children: Re
   // A QUESTION TYPED ELSEWHERE (the palette's row) is asked at once where
   // this conversation could ask it now, and otherwise waits in the box for
   // the person to send when the running answer ends. One a screen offered
-  // (a draft) always waits in the box: it is the person's to send.
+  // (a draft) always waits in the box: it is the person's to send. ONE ABOUT
+  // SOMETHING A SCREEN SHOWS starts a new conversation with the page attached
+  // first, and is decided on the next draw, against that conversation.
   const queued = useQueuedQuestion();
+  const [taken, setTaken] = useState<QueuedQuestion | null>(null);
   useEffect(() => {
     if (queued === null) return;
     const question = takeQueuedQuestion();
     if (question === null) return;
-    const { text, send } = question;
+    if (question.fresh) {
+      newConversation();
+      setRemoved(null);
+      announce("New conversation");
+    }
+    setTaken(question);
+  }, [queued]);
+  useEffect(() => {
+    if (taken === null) return;
+    setTaken(null);
+    const { text, send, fresh } = taken;
     if (send && running === null && disabledReason === undefined && questionFits(text.trim())) {
-      ask(text);
+      // The composer's images are files of the conversation just left.
+      ask(text, fresh ? [] : undefined);
     } else {
       fill(text);
     }
-  }, [queued, running, disabledReason, ask, fill]);
+  }, [taken, running, disabledReason, ask, fill]);
 
   const { onComposerKey } = place;
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -520,9 +536,12 @@ function NoModel({ unavailable }: { unavailable: AssistantUnavailable }) {
 /** The conversation: the home until a question is asked, then its turns; or why the reader may not ask. */
 export function AskThread({
   label = "Conversation",
+  column = false,
   onNew,
 }: {
   label?: string;
+  /** Hold the turns to one centred column: a page of its own, much wider than a line of an answer. */
+  column?: boolean;
   /** Leave for a new conversation, as the holder's own New conversation does. */
   onNew: () => void;
 }) {
@@ -540,7 +559,7 @@ export function AskThread({
   }
   if (a.view.opening !== null) return <AskOpening opening={a.view.opening} onNew={onNew} />;
   return (
-    <ChatThread ref={a.thread} label={label} busy={openTurn(a.view) !== null}>
+    <ChatThread ref={a.thread} label={label} busy={openTurn(a.view) !== null} column={column}>
       {a.deleteFailed !== null ? (
         <Callout variant="warning" role="alert">
           {a.deleteFailed}

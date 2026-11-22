@@ -265,7 +265,7 @@ function Page({ conversation, deleted }: { conversation: string | undefined; del
           <div
             className={offline ? "ask-page__thread ask-page__thread--offline" : "ask-page__thread"}
           >
-            <AskThread onNew={startNew} />
+            <AskThread column onNew={startNew} />
           </div>
           {offline ? null : (
             <footer className="ask-page__foot">
