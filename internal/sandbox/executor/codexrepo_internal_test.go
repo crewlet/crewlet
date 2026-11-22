@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
 )
 
@@ -36,11 +35,7 @@ func codexRepoBox(t *testing.T, files map[string]string, repos ...string) (Paths
 		t.Fatal(err)
 	}
 	p := Paths{Home: home}
-	var named []sandbox.RunRepo
-	for _, r := range repos {
-		named = append(named, sandbox.RunRepo{Repo: r})
-	}
-	runSh(t, "cd "+shellword.Quote(work)+" || exit 1\n"+codexRepoGate(p, named))
+	runSh(t, "cd "+shellword.Quote(work)+" || exit 1\n"+codexRepoGate(p, repos))
 	real, err := filepath.EvalSymlinks(work)
 	if err != nil {
 		t.Fatal(err)
@@ -64,9 +59,9 @@ func readHome(t *testing.T, path string) string {
 // A CODEX RUN IS HANDED ITS CHECKOUTS' INSTRUCTIONS, NOT THEIR CONFIGURATION:
 // each repository checked out directly under the working directory hands its
 // root AGENTS.override.md, else AGENTS.md (what Codex reads started at that
-// root), labelled with its root, the run's repos first in its order, the rest
-// by name; a directory with no .git, a link to a checkout and the working
-// directory's own AGENTS.md hand nothing. Its .codex/skills and .agents/skills
+// root), labelled with its root, the repositories it pushes to first in its
+// order, the rest by name; a directory with no .git, a link to a checkout and
+// the working directory's own AGENTS.md hand nothing. Its .codex/skills and .agents/skills
 // come as `<repository>:<skill>`, frontmatter cut to the kept keys, links not
 // copied, never under the seat's namespace; its .codex config, hooks and rules
 // reach nothing.
@@ -101,7 +96,7 @@ func TestACodexRunIsHandedItsCheckoutsInstructionsNotTheirConfig(t *testing.T) {
 	if err := os.Symlink(filepath.Join(work, "alpha/.codex/skills/build"), filepath.Join(work, "alpha/.codex/skills/via-link")); err != nil {
 		t.Fatal(err)
 	}
-	runSh(t, "cd "+shellword.Quote(work)+" || exit 1\n"+codexRepoGate(p, []sandbox.RunRepo{{Repo: "zeta"}, {Repo: "alpha"}}))
+	runSh(t, "cd "+shellword.Quote(work)+" || exit 1\n"+codexRepoGate(p, []string{"zeta", "alpha"}))
 
 	want := "for `zeta` with root " + work + "/zeta\n\nZETA\n\n\nfor `alpha` with root " + work + "/alpha\n\nALPHA-OVERRIDE\n"
 	if got := readHome(t, p.CodexHome()+"/AGENTS.md"); got != want {

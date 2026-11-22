@@ -44,18 +44,19 @@ END { if (NR == 0) exit 1 }`
 // its working directory, none of their configuration ([Paths.CodexRepo]):
 //   - each checkout's root AGENTS.override.md, else AGENTS.md, the file Codex
 //     reads started at that root, written labelled into CODEX_HOME/AGENTS.md
-//     (replaced, never merged) within [codexRepoBudget], repos first in the
-//     order the run names them, then the rest by name;
+//     (replaced, never merged) within [codexRepoBudget], the repositories the
+//     run pushes to first ([sandbox.RunRequest.ReportedRepos], in its order),
+//     then the rest by name;
 //   - its .codex/skills and .agents/skills, links dropped, copied as
 //     `<repository>:<skill>` with [codexRepoFrontmatter];
 //   - the checkouts handed and the budget left, for the nested hook.
-func codexRepoGate(paths Paths, repos []sandbox.RunRepo) string {
+func codexRepoGate(paths Paths, repos []string) string {
 	q := shellword.Quote
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	named := make([]string, 0, len(repos))
 	for _, r := range repos {
-		named = append(named, q(r.Repo))
+		named = append(named, q(r))
 	}
 	line(`rr=%s; ra=%s; rk=%s; rm -rf "$rr" "$ra"; mkdir -p "$rr" && : > "$rr/handed" || exit 1`,
 		q(paths.CodexRepo()), q(paths.CodexHome()+"/AGENTS.md"), q(paths.CodexSkills()))
