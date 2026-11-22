@@ -184,6 +184,7 @@ const SURFACE_NAMES: Record<string, string> = {
   apple_ads: "Apple Ads",
   google_analytics: "Google Analytics",
   admob: "AdMob",
+  adsense: "AdSense",
 };
 
 /** One tool's surfaces, in the engine's grouping, named for this screen. */
@@ -344,6 +345,15 @@ export const CATALOG: Entry[] = [
     vendor: "google-admob",
     surfaces: surfacesOf("admob"),
     doc: "admob",
+  },
+  {
+    key: "adsense",
+    name: "AdSense",
+    description:
+      "Website earnings, sites, ad units, channels and policy alerts, and every setting the API offers.",
+    vendor: "google-adsense",
+    surfaces: surfacesOf("adsense"),
+    doc: "adsense",
   },
 ];
 

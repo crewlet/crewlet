@@ -41,6 +41,7 @@ type Integrations struct {
 	GoogleAnalytics *GoogleAnalytics `yaml:"google_analytics,omitempty" json:"google_analytics,omitempty" desc:"Google Analytics 4: agents read and manage properties as their own Google growth identity, through the Google Cloud connection's identity. Absent = disabled."`
 	SSH             *SSH             `yaml:"ssh,omitempty" json:"ssh,omitempty" desc:"The engine's SSH certificate authority and the servers agents may reach with short-lived certificates it signs. Absent = disabled."`
 	AdMob           *AdMob           `yaml:"admob,omitempty" json:"admob,omitempty" desc:"AdMob: agents read and change app monetization through one Google sign-in by a person who manages the account, made as the company's own OAuth client. Absent = disabled."`
+	AdSense         *AdSense         `yaml:"adsense,omitempty" json:"adsense,omitempty" desc:"AdSense: agents read and change website monetization through one Google sign-in by a person who manages the account, made as the company's own OAuth client. Absent = disabled."`
 
 	MetaAds *MetaAds `yaml:"meta_ads,omitempty" json:"meta_ads,omitempty" desc:"The company's Meta app and one system user's tokens, through which the engine makes every Marketing API call for the agents. Absent = disabled."`
 
@@ -167,6 +168,9 @@ func (i *Integrations) validate(path Path) error {
 	}
 	if i.AdMob != nil {
 		p.wrap(i.AdMob.validate(at(path, "admob")))
+	}
+	if i.AdSense != nil {
+		p.wrap(i.AdSense.validate(at(path, "adsense")))
 	}
 	if i.AppStoreConnect != nil {
 		p.wrap(i.AppStoreConnect.validate(at(path, "app_store_connect")))

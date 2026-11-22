@@ -46,6 +46,13 @@ type Transport struct {
 	clock Clock
 }
 
+// Raw is an answer kept as Google sent it: a method answering
+// google.api.HttpBody (a CSV report) sends bytes of their own type, not JSON.
+type Raw struct {
+	ContentType string
+	Data        []byte
+}
+
 // NewTransport is Google's call path on hc, nil for the engine's own.
 func NewTransport(hc *http.Client) *Transport {
 	if hc == nil {
@@ -391,8 +398,9 @@ func (c *Transport) DoRead(ctx context.Context, method, address, bearer string, 
 	return c.do(ctx, true, method, address, bearer, body, out)
 }
 
-// once sends one request and decodes its answer into out. It is the only
-// place a request to Google is built.
+// once sends one request and decodes its answer into out, or keeps it as
+// sent where out is a [*Raw]. It is the only place a request to Google is
+// built.
 func (c *Transport) once(ctx context.Context, method, address, bearer string, body, out any) error {
 	var reader io.Reader
 	contentType := ""
@@ -411,7 +419,11 @@ func (c *Transport) once(ctx context.Context, method, address, bearer string, bo
 	if err != nil {
 		return fmt.Errorf("googleauth: build %s %s: %w", method, PathOf(address), pathOnly(err, address))
 	}
+	raw, bytesAnswer := out.(*Raw)
 	req.Header.Set("Accept", "application/json")
+	if bytesAnswer {
+		req.Header.Set("Accept", "*/*")
+	}
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
@@ -423,7 +435,7 @@ func (c *Transport) once(ctx context.Context, method, address, bearer string, bo
 		return fmt.Errorf("googleauth: %s %s: %w: %w", method, PathOf(address), ErrUnreached, pathOnly(err, address))
 	}
 	defer func() { _ = res.Body.Close() }()
-	payload, err := io.ReadAll(io.LimitReader(res.Body, maxResponse))
+	payload, err := io.ReadAll(io.LimitReader(res.Body, maxResponse+1))
 	if err != nil {
 		return fmt.Errorf("googleauth: read %s %s: %w", method, PathOf(address), err)
 	}
@@ -438,6 +450,15 @@ func (c *Transport) once(ctx context.Context, method, address, bearer string, bo
 			api.RetryAfter = wait
 		}
 		return api
+	}
+	if len(payload) > maxResponse {
+		// A CUT ANSWER IS NO ANSWER: cut bytes would read as a whole report,
+		// and cut JSON as Google's broken answer.
+		return fmt.Errorf("googleauth: %s %s: %w", method, PathOf(address), ErrTooLarge)
+	}
+	if bytesAnswer {
+		raw.ContentType, raw.Data = res.Header.Get("Content-Type"), payload
+		return nil
 	}
 	if out != nil && len(bytes.TrimSpace(payload)) > 0 {
 		if err := json.Unmarshal(payload, out); err != nil {

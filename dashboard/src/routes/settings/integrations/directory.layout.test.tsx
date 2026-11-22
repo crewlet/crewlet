@@ -149,7 +149,7 @@ describe.each(["light", "dark"] as const)("on a %s document", (theme) => {
         ["Mobile apps", ["Expo", "App Store Connect"]],
         ["Advertising", ["Meta Ads Manager", "Apple Ads"]],
         ["Analytics", ["Google Analytics"]],
-        ["Ad revenue", ["AdMob"]],
+        ["Ad revenue", ["AdSense", "AdMob"]],
       ]);
       expect(overflowing(host!)).toEqual([]);
     },

@@ -450,6 +450,15 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		add("admob", in.AdMob.Enabled, nil, map[string]any{"client_id": client, "accounts": in.AdMob.Accounts,
 			"roles": growthRoles("admob")})
 	}
+	if in.AdSense != nil {
+		// AdMob's shape: the client's public ID, the accounts, and the roles.
+		var client string
+		if in.AdSense.OAuth != nil {
+			client = in.AdSense.OAuth.ClientID
+		}
+		add("adsense", in.AdSense.Enabled, nil, map[string]any{"client_id": client,
+			"accounts": in.AdSense.Accounts, "roles": growthRoles("adsense")})
+	}
 	if in.Atlassian != nil {
 		// THE ORGANIZATION, not a third product: where the account itself is
 		// created, which no site API can do. It reconciles identities,

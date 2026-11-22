@@ -250,6 +250,17 @@ export const STORIES: Record<string, ToolStory> = {
     byHand:
       "Make an OAuth client (Web application) in a Google Cloud project you control, turn on the AdMob API there, add Crewlet's callback address and publish its consent screen, then sign in with Google here.",
   },
+  adsense: {
+    does: [
+      "Read earnings reports, sites, alerts, policy issues and payments for the publisher accounts you choose",
+      "Create and rename ad units and custom channels where you allow operate",
+      "Ask you before a live ad unit's size changes, a channel is deleted or a platform's sub-account changes, every time",
+    ],
+    identity:
+      "A person who manages your AdSense account signs in with Google once, as your own OAuth client; every agent reaches AdSense through that sign-in, which never leaves Crewlet.",
+    byHand:
+      "Make an OAuth client (Web application) in a Google Cloud project you control, turn on the AdSense Management API there, add Crewlet's callback address and publish its consent screen, then sign in with Google here.",
+  },
 };
 
 /** Where a tool stands, in the four words a person sorts by. */
