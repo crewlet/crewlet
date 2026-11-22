@@ -1703,7 +1703,7 @@ qwen-code:
   # `--auth-type qwen-subscription`, made with the harness by hand and
   # adopted: its tokens in subscription_credentials.json in the home's .qwen
   # (baseUrl, clientId, tokens {access_token, refresh_token, expiresAt},
-  # models), its endpoint overridden by QWEN_SUBSCRIPTION_BASE_URL. Read from
+  # models), its endpoint a constant of the bundle that no variable moves. Read from
   # 0.28.3's bundle and docs, NOT MEASURED against Qwen's service. Free Qwen
   # OAuth stays refused by the harness itself ("Qwen OAuth free tier was
   # discontinued on 2026-04-15").

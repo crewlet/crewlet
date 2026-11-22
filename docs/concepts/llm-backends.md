@@ -282,8 +282,8 @@ engine takes it from Qwen Code's own documentation and bundle. Sign in with `qwe
 yourself on the engine host and adopt the login with `crewlet llm login <entry>
 -from-host`; the entry is `auth.mode: subscription`. The login is
 `~/.qwen/subscription_credentials.json`, copied into each seat's home and into a
-local box, never a remote one; `QWEN_SUBSCRIPTION_BASE_URL` in the entry's `env`
-moves its endpoint. Free Qwen OAuth stays refused by the harness itself.
+local box, never a remote one. Its endpoint is fixed in Qwen Code (`api.qwen.ai`):
+no variable moves it. Free Qwen OAuth stays refused by the harness itself.
 
 ---
 
