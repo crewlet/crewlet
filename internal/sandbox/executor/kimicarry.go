@@ -120,9 +120,11 @@ func kimiSessionGate(session Session, paths Paths, rewired bool) string {
 		`src=$x`,
 	}, " && ")
 	line(`s=%s k=yes w= h= d= src=`, q(session.ID))
-	// THE SUPPORTED RELEASE ALONE CONTINUES ONE: n holds digits and dots only.
-	line(`[ "$n" = %s ] || w="this box runs Kimi Code ${n:-a release it could not read}, and a session is continued only on %s, the release Crewlet supports"`,
-		kimiSupported, kimiSupported)
+	// THE SUPPORTED RELEASE ALONE CONTINUES ONE, read bare as the engine reads
+	// it ([bareReleaseShell], [Kimi.continuesInPlace]): the run's loose n takes
+	// 2.7.2-rc.1 for 2.7.2, which the engine reads as no release.
+	line(`%s[ "$rv" = %s ] || w="this box runs Kimi Code ${rv:-a release it could not read}, and a session is continued only on %s, the release Crewlet supports"`,
+		bareReleaseShell("rv"), kimiSupported, kimiSupported)
 	line(`for y in %s/*/"$s"; do [ -s "$y/agents/main/wire.jsonl" ] && [ ! -L "$y" ] && src=$y && h=1; done`, sessions)
 	line(`if [ -s %s ]; then d=$(cksum < %s 2> /dev/null) || d=; fi`, carried, carried)
 	if session.Replaces {

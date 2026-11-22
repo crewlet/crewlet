@@ -304,8 +304,10 @@ func (r *Runner) CheckCarry(ctx context.Context, box sandbox.Sandbox, archive sa
 }
 
 // inPlaceGate is a [carrier] whose box continues no session, not even the
-// copy it holds, on a release it was not read for: Codex, whose one
-// supported release alone continues a session ([Codex.continuesInPlace]).
+// copy it holds, on a release it was not read for: Codex, Kimi Code and
+// Copilot, whose one supported release alone continues a session
+// ([Codex.continuesInPlace], [Kimi.continuesInPlace],
+// [Copilot.continuesInPlace]).
 type inPlaceGate interface {
 	carrier
 	continuesInPlace(box string) (bool, string)

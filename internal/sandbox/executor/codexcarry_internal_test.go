@@ -520,6 +520,7 @@ func TestACodexReleaseIsReadAsABareMajorMinorPatch(t *testing.T) {
 		{"codex-cli 0.171.0+build.7", "", false},
 		{"codex-cli 0.171", "", false},
 		{"codex-cli 0.171.0.1", "", false},
+		{"codex-cli 0.171.0..", "", false},
 		{"codex-cli dev", "", false},
 		{"Usage: codex [OPTIONS] *", "", false},
 		{"", "", false},
