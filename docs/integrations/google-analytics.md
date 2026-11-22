@@ -272,6 +272,10 @@ Each row is one method the engine offers, with its class, the least role Google 
 - No method spends money or publishes directly. A BigQuery link's exports raise money owed to Google Cloud, so turning one on is `spend`.
 - Methods behind an Analytics 360 property or a limited rollout are offered; Google answers 400 or 403 where the property lacks them.
 
+## What the atlas shows
+
+Each property the company narrows agents to (`integrations.google_analytics.properties`) is an account with the `analytics` capability, keyed by its ID; a company that names none shows Google Analytics as one account ([the atlas](../concepts/atlas.md)).
+
 ## Google Analytics' limits worth knowing
 
 - The Data API spends tokens per property: 200,000 a day and 40,000 an hour on a standard property. A report's answer carries what is left, and a refusal says when quotas free up (hourly ones within the hour, daily ones at midnight Pacific).
