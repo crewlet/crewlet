@@ -14,7 +14,7 @@ import (
 
 // A Qwen Code note is CONFIRMED BY ITS RECORD AND THE REPLY AFTER IT. Qwen Code
 // records a drained message (`type: user`, subtype `mid_turn_user_message`)
-// BEFORE the request carrying it goes out (0.28.3: ahead of its
+// BEFORE the request carrying it goes out (0.28.4: ahead of its
 // request_lifecycle start), so only the next assistant record shows the model
 // read it. Not a request's successful end: the first after a note can be a
 // compaction's own summary call (chat-compact.jsonl). THE RECORD REFRAMES the
@@ -137,7 +137,7 @@ func qwenNotesHeld(r io.Reader, takes []ServedTake, bound int) ([]string, error)
 // keeps plain: each text part of a user entry of the history Qwen Code goes on
 // with, past its prefix, its framing cut (a model entry's words are never a
 // note). The prefix is the larger of summaryPrefixLength (the summary and the
-// model's acknowledgement, measured on 0.28.3) and contextPrefixLength, which
+// model's acknowledgement, measured on 0.28.4) and contextPrefixLength, which
 // no capture tells apart from it: the larger keeps less, so a note the
 // compaction summarized is never held. A record whose summary prefix does not
 // read keeps nothing.

@@ -790,7 +790,7 @@ type Profile struct {
 	// respectively: the flag choosing the sign-in, for a harness that picks
 	// one on argv and runs another without it. Qwen Code's `--auth-type
 	// openai` and `--auth-type qwen-subscription`: its OpenAI sign-in otherwise
-	// needs OPENAI_MODEL set beside the key (0.28.3). Lists replace wholesale
+	// needs OPENAI_MODEL set beside the key (0.28.4). Lists replace wholesale
 	// on override, as CompleteArgs does.
 	KeyArgs          []string `yaml:"key_args,omitempty"`
 	SubscriptionArgs []string `yaml:"subscription_args,omitempty"`

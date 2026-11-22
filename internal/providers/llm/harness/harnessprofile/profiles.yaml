@@ -1446,9 +1446,9 @@ qwen-code:
   executor:
     runner: true
   binary: qwen
-  written_for: "Qwen Code 0.28.x, measured on 0.28.3 (`qwen --version`)"
+  written_for: "Qwen Code 0.28.x, measured on 0.28.4 (`qwen --version`)"
   version_args: ["--version"]
-  # Measured on 0.28.3 through the engine's own code path (`crewlet llm
+  # Measured on 0.28.4 through the engine's own code path (`crewlet llm
   # doctor`, the harness pointed at a local stub, no network), with the state
   # directory inside a git checkout and the checkout and the level above it
   # each holding a QWEN.md, AGENTS.md, QWEN.local.md, .qwen/rules, skills
@@ -1471,7 +1471,7 @@ qwen-code:
   #                                server an extension in the seat's home
   #                                declares; with it, a call with no crewlet
   #                                server started none and ran, its init
-  #                                naming mcp_servers [] (measured on 0.28.3).
+  #                                naming mcp_servers [] (measured on 0.28.4).
   #
   # The sign-in follows, by mode (key_args, subscription_args below).
   complete_args:
@@ -1482,7 +1482,7 @@ qwen-code:
     - "--allowed-mcp-server-names"
     - "crewlet"
   local_tools: denied
-  # The settings in the seat's home, each a switch 0.28.3 reads:
+  # The settings in the seat's home, each a switch 0.28.4 reads:
   #
   #   tools.core, permissions  the web tools and nothing else. tools.core is
   #                            the allowlist, and it covers only the tools
@@ -1491,7 +1491,7 @@ qwen-code:
   #                            tool-search tools sit outside it (a headless
   #                            call with neither setting is offered 31
   #                            tools, those among them). So permissions.deny
-  #                            names every other tool of 0.28.3's ToolNames
+  #                            names every other tool of 0.28.4's ToolNames
   #                            table, which removes it outright, and a call
   #                            is offered web_fetch alone. permissions.allow
   #                            lets the web tools run unprompted: a fetch
@@ -1508,7 +1508,7 @@ qwen-code:
   #                            projects directory, a project's settings
   #                            turning recording on notwithstanding.
   #   privacy.usageStatisticsEnabled
-  #                            no usage statistics, which 0.28.3 otherwise
+  #                            no usage statistics, which 0.28.4 otherwise
   #                            sent to the vendor's collector
   #                            (*.rum.aliyuncs.com) on every call. It also
   #                            stops the models.dev catalogue refresh.
@@ -1526,7 +1526,7 @@ qwen-code:
   #                            a marker file for every call.
   #   model.generationConfig.maxRetries
   #                            0: a 429 reaches the engine in about a minute
-  #                            (seven attempts in 75s, the retries that
+  #                            (seven attempts in 67s, the retries that
   #                            remain) and
   #                            is recognised by limit_markers below. The
   #                            harness's own policy — the client's retries, then
@@ -1617,7 +1617,7 @@ qwen-code:
   # own directory, named by --mcp-config, with complete_args'
   # --allowed-mcp-server-names admitting it alone and --allowed-tools letting
   # its tools run unprompted (`mcp__crewlet` is every tool of the server).
-  # Measured on 0.28.3 through the engine's own code path, the state directory
+  # Measured on 0.28.4 through the engine's own code path, the state directory
   # inside a checkout holding a .qwen/settings.json and an .mcp.json, each
   # with a server, at each level above the call, and an extension with a
   # server of its own in the seat's home: the model was offered the seat's
@@ -1625,12 +1625,12 @@ qwen-code:
   # call.
   #
   # The server's `timeout` is the harness's per-call timeout, in milliseconds
-  # (600,000 by default; 4,000 gave a slow call up at 4.1s, "Request timed
+  # (600,000 by default; 4,000 gave a slow call up at 4.0s, "Request timed
   # out"). The harness does not re-read a server's list mid-run (a tool the
   # server added mid-run, announcing it, was not offered in the two requests
   # that followed), and makes one response's calls at once only where every
   # one is to a tool annotated read-only: two read-only calls of 1.5s each
-  # overlapped, two others ran one after the other (all measured on 0.28.3).
+  # overlapped, two others ran one after the other (all measured on 0.28.4).
   #
   # A failed run's result event says why, by field: its subtype and its
   # error's message.
@@ -1655,7 +1655,7 @@ qwen-code:
   # id of its own with a call; a call is joined to its request by name and
   # arguments. The init event lists the tools the model is offered.
   #
-  # Measured on 0.28.3: a response's prose as one `assistant` event (no
+  # Measured on 0.28.4: a response's prose as one `assistant` event (no
   # counts), its calls as the next with the request's counts and stop reason
   # `tool_use`, each request's counts in the stream, their sum equal to the
   # result's; doctor's smoke call was joined to its request by name and
@@ -1684,11 +1684,11 @@ qwen-code:
         closes: true
   # --max-session-turns, where an operator adds it: the run exits 53 with no
   # result event, "Reached max session turns for this session. …" on stderr
-  # (measured on 0.28.3). The harness's code for that one cause.
+  # (measured on 0.28.4). The harness's code for that one cause.
   cap:
     exit_code: 53
   env:
-    # 0.28.3 refreshes the models.dev catalogue in the background, a
+    # 0.28.4 refreshes the models.dev catalogue in the background, a
     # connection of its own (measured: a call in a home that leaves usage
     # statistics on looked models.dev up); "off" keeps it on the table the
     # build ships (the same call opened no such connection).
@@ -1696,8 +1696,8 @@ qwen-code:
   # What a call can leave in the seat's home for the next one: transcripts
   # and project memory under projects, the managed memories, per-project
   # scratch under tmp (a directory per call's working directory), the usage
-  # record 0.28.3 appends to on every call, the request logs if an operator
-  # turns them on, and the global QWEN.md, AGENTS.md and rules, which 0.28.3
+  # record 0.28.4 appends to on every call, the request logs if an operator
+  # turns them on, and the global QWEN.md, AGENTS.md and rules, which 0.28.4
   # read into a call's system prompt (measured, each planted in a home).
   volatile_paths:
     - ".qwen/projects"
@@ -1715,7 +1715,7 @@ qwen-code:
   # unset, the harness falls back to an endpoint of its own), and the model
   # from the entry's `model`. Without --auth-type the harness chooses that
   # sign-in only when OPENAI_MODEL or QWEN_MODEL is set as well, and otherwise
-  # exits "No auth type is selected" (measured on 0.28.3: OPENAI_MODEL or
+  # exits "No auth type is selected" (measured on 0.28.4: OPENAI_MODEL or
   # QWEN_MODEL beside the key ran, neither refused). DASHSCOPE_API_KEY, the
   # variable this profile named before, is not read by its model sign-in:
   # alone, it was refused "Missing API key for OpenAI-compatible auth".
@@ -1725,7 +1725,7 @@ qwen-code:
   # adopted: its tokens in subscription_credentials.json in the home's .qwen
   # (baseUrl, clientId, tokens {access_token, refresh_token, expiresAt},
   # models), its endpoint a constant of the bundle that no variable moves. Read from
-  # 0.28.3's bundle and docs, NOT MEASURED against Qwen's service. Free Qwen
+  # 0.28.4's bundle and Qwen Code's docs, NOT MEASURED against Qwen's service. Free Qwen
   # OAuth stays refused by the harness itself ("Qwen OAuth free tier was
   # discontinued on 2026-04-15").
   key_args: ["--auth-type", "openai"]
@@ -1735,7 +1735,7 @@ qwen-code:
   # A name other vendors' keys go in too, sent to whatever OPENAI_BASE_URL
   # names: an entry names its key, and nothing falls back to this variable.
   api_key_env_shared: true
-  # The harness's own words, measured on 0.28.3 against a stub refusing
+  # The harness's own words, measured on 0.28.4 against a stub refusing
   # every request: the call exits 1 and its result event's error reads
   # "[API Error: <status> <the provider's message>]". A call with no key is
   # refused before any request.
@@ -1743,7 +1743,7 @@ qwen-code:
     - sentinel: "[API Error: 429"
   # A SEAT'S RUN ENDS ON A SPENT QUOTA ONLY IN ITS HELPER'S LIMIT LINE. Over
   # ACP, Qwen Code flattens every 429 to "Rate limit exceeded. Try again
-  # later." (0.28.3), and only the session's chat file keeps the provider's
+  # later." (0.28.4), and only the session's chat file keeps the provider's
   # words, in the error record of each failed request. The helper quotes the
   # record of the request that failed last, and only once Qwen Code failed the
   # turn on the 429 (the executor's limitGate reads the line only from a run
