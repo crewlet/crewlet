@@ -36,16 +36,16 @@ func TestAnOpenCodeCallIsKeyedByItsPlaceInItsLog(t *testing.T) {
 		"held for a person":   {held, "3", false},
 		"carrying an id":      {withID, "4", true},
 	} {
-		key, valid := callKey(sandbox.OpenCodeHarness, tc.call)
+		key, valid := callKey(sandbox.CallKeyingByLogPlace, tc.call)
 		if key != tc.key || valid != tc.valid {
 			t.Errorf("%s: key %q, %t; want %q, %t", name, key, valid, tc.key, tc.valid)
 		}
 	}
-	if key, valid := callKey(sandbox.ClaudeCodeHarness, withID); key != "toolu_x" || !valid {
+	if key, valid := callKey(sandbox.CallKeyingByCallID, withID); key != "toolu_x" || !valid {
 		t.Errorf("Claude Code's key = %q, %t; want its id", key, valid)
 	}
 	twice := []BridgedCall{call(7, 1), call(7, 2), held}
-	ask, asked := (&Runner{}).holdingsAsk(sandbox.OpenCodeHarness, roundCalls{bridged: twice}, nil, nil, "2.2.7")
+	ask, asked := (&Runner{}).holdingsAsk(sandbox.CallKeyingByLogPlace, roundCalls{bridged: twice}, nil, nil, "2.2.7")
 	if len(asked) != 0 || slices.ContainsFunc(ask.Calls, func(c sandbox.LoggedCall) bool { return c.Asked }) {
 		t.Errorf("calls of one place and a held call: asked %+v; want none", ask.Calls)
 	}
@@ -75,12 +75,12 @@ func TestAnOpenCodeAskKeysEachCallByItsLoggedText(t *testing.T) {
 		"no object":            {BridgedCall{ArgsText: `[1]`, Call: ledger.Call{Digest: "d"}}, sandbox.ArgsKey{}},
 	} {
 		tc.call.Name, tc.call.Appended, tc.call.Seq = "echo", 1, 1
-		ask, _ := (&Runner{}).holdingsAsk(sandbox.OpenCodeHarness, roundCalls{bridged: []BridgedCall{tc.call}}, nil,
+		ask, _ := (&Runner{}).holdingsAsk(sandbox.CallKeyingByLogPlace, roundCalls{bridged: []BridgedCall{tc.call}}, nil,
 			nil, "2.2.7")
 		if got := ask.Calls[0].Args; got != tc.want {
 			t.Errorf("%s: key %+v; want %+v", name, got, tc.want)
 		}
-		claude, _ := (&Runner{}).holdingsAsk(sandbox.ClaudeCodeHarness, roundCalls{bridged: []BridgedCall{tc.call}},
+		claude, _ := (&Runner{}).holdingsAsk(sandbox.CallKeyingByCallID, roundCalls{bridged: []BridgedCall{tc.call}},
 			nil, nil, "2.1.322")
 		if got := claude.Calls[0].Args; got != (sandbox.ArgsKey{}) {
 			t.Errorf("%s: a Claude Code ask keys %+v; want none", name, got)
@@ -114,7 +114,7 @@ func TestAnAskHoldsEveryListedCallButTheApprovedOnes(t *testing.T) {
 			{Name: "mixed", Calls: 2, Failed: 1}, {Name: "stuck", Calls: 1, Failed: 1, Unfinished: 1}},
 		lateElided: 3,
 	}
-	ask, asked := (&Runner{}).holdingsAsk(sandbox.OpenCodeHarness, round, new(int), nil, "2.2.7")
+	ask, asked := (&Runner{}).holdingsAsk(sandbox.CallKeyingByLogPlace, round, new(int), nil, "2.2.7")
 	var names []string
 	for _, c := range ask.Calls {
 		names = append(names, c.Name)

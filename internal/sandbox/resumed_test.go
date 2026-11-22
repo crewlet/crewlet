@@ -5,144 +5,11 @@ import (
 	"testing"
 )
 
-// THE STANDARD WINDOW IS THE HARNESS'S OWN, by model and route, as Claude Code
-// 2.1.310 and 2.1.322 hold a run where nothing raises it: claude-opus-4-6 and
-// claude-sonnet-4-6 at 200,000 on every route though pinned at 1,000,000; an
-// alias at its model's window on the route (`opus` is claude-opus-4-6 on
-// Foundry, `sonnet` and `haiku` older models off Anthropic's API); no model and
-// `default` at 200,000 everywhere, the account's default possibly one of those;
-// an unknown route as the least off Anthropic's. The pin never moves.
-//
-// Mutation: take the pin for the standard window, or read every route as
-// Anthropic's, and a row goes red.
-func TestTheStandardWindowIsTheHarnessesOwn(t *testing.T) {
-	t.Parallel()
-	type row struct {
-		model    string
-		route    ClaudeRoute
-		tokens   int
-		standard int
-	}
-	for _, r := range []row{
-		{"claude-opus-4-6", ClaudeRouteAnthropic, 1_000_000, 200_000},
-		{"claude-sonnet-4-6", ClaudeRouteBedrock, 1_000_000, 200_000},
-		{"claude-opus-4-6[1m]", ClaudeRouteAnthropic, 1_000_000, 1_000_000},
-		{"claude-sonnet-4-5", ClaudeRouteAnthropic, 200_000, 200_000},
-		{"claude-fable-5-2", ClaudeRouteVertex, 1_000_000, 1_000_000},
-		{"claude-mythos-5-2", ClaudeRouteAnthropic, 1_000_000, 1_000_000},
-		{"claude-opus-5-5", ClaudeRouteFoundry, 1_000_000, 1_000_000},
-		{"opus", ClaudeRouteAnthropic, 1_000_000, 1_000_000},
-		{"opus", ClaudeRouteBedrock, 1_000_000, 1_000_000},
-		{"opus", ClaudeRouteFoundry, 1_000_000, 200_000},
-		{"opus", ClaudeRouteElsewhere, 1_000_000, 200_000},
-		{"best", ClaudeRouteVertex, 1_000_000, 1_000_000},
-		{"best", ClaudeRouteFoundry, 1_000_000, 200_000},
-		{"sonnet", ClaudeRouteAnthropic, 1_000_000, 1_000_000},
-		{"sonnet", ClaudeRouteBedrock, 1_000_000, 200_000},
-		{"haiku", ClaudeRouteVertex, 1_000_000, 200_000},
-		{"fable", ClaudeRouteElsewhere, 1_000_000, 1_000_000},
-		{"opusplan", ClaudeRouteAnthropic, 1_000_000, 1_000_000},
-		{"opusplan", ClaudeRouteBedrock, 1_000_000, 200_000},
-		{"default", ClaudeRouteAnthropic, 1_000_000, 200_000},
-		{"", ClaudeRouteBedrock, 1_000_000, 200_000},
-		{"sonnet", ClaudeRoute("a-later-builds-route"), 1_000_000, 200_000},
-	} {
-		got := ClaudeCodeWindowOn(r.model, r.route)
-		if got.Tokens != r.tokens || got.Standard != r.standard || !got.Known {
-			t.Errorf("ClaudeCodeWindowOn(%q, %s) = %+v, want the pin %d and the standard window %d, known",
-				r.model, r.route, got, r.tokens, r.standard)
-		}
-	}
-}
-
-// SENDS WHOLE IS THE HARNESS'S THRESHOLD: Claude Code compacts where its count of
-// the conversation, the brief and the resume's attachments reaches its window
-// less its reply reserve and compaction buffer, so a bound whose sum with the
-// brief's charge and the attachments is below that point sends whole, and one
-// at it does not. At a 200,000-token window the point is 167,000.
-//
-// Mutation: compare with <=, leave the brief's charge or the turn's attachments
-// out, or judge under the pin, and a case goes red.
-func TestSendsWholeIsTheHarnessesThreshold(t *testing.T) {
-	t.Parallel()
-	w := ClaudeCodeWindowOn("claude-opus-4-6", ClaudeRouteAnthropic)
-	const point = 167_000
-	if got := CompactionPoint(200_000); got != point {
-		t.Fatalf("the point at a 200,000-token window is %d, want %d", got, point)
-	}
-	brief := "0123456789" // ten bytes, five tokens at ClaudeCharge
-	below := &ResumedCount{Tokens: point - claudeTurnAttachments - 5 - 1}
-	at := &ResumedCount{Tokens: point - claudeTurnAttachments - 5}
-	if !w.SendsWhole(below, brief) {
-		t.Errorf("a bound one token below the point with its brief compacts: %+v", below)
-	}
-	if w.SendsWhole(at, brief) {
-		t.Errorf("a bound at the point with its brief sends whole: %+v", at)
-	}
-	if !w.SendsWhole(at, "") {
-		t.Errorf("the same bound with no brief compacts: the brief's charge is not what tips it")
-	}
-}
-
-// NO BOUND, OR A WINDOW THIS BUILD DOES NOT KNOW, MAY COMPACT: no count, a mark,
-// a figure that is no count, an unknown model, and a known window with no
-// standard one stated, whatever the brief.
-//
-// Mutation: read a mark as a bound of 0, or a standard window of 0 as one, and a
-// case goes red.
-func TestNoBoundOrAnUnknownWindowMayCompact(t *testing.T) {
-	t.Parallel()
-	known := ClaudeCodeWindow("claude-opus-5-5")
-	for name, tc := range map[string]struct {
-		w     ExecutorWindow
-		count *ResumedCount
-	}{
-		"no count":               {w: known},
-		"a mark":                 {w: known, count: &ResumedCount{Mark: CountMedia}},
-		"a later build's mark":   {w: known, count: &ResumedCount{Mark: "a-later-builds-mark"}},
-		"no figure":              {w: known, count: &ResumedCount{}},
-		"an unknown model":       {w: ClaudeCodeWindow("claude-next-preview"), count: &ResumedCount{Tokens: 10}},
-		"no standard window":     {w: ExecutorWindow{Tokens: 1_000_000, Known: true}, count: &ResumedCount{Tokens: 10}},
-		"a zero window, unknown": {count: &ResumedCount{Tokens: 10}},
-	} {
-		if tc.w.SendsWhole(tc.count, "") {
-			t.Errorf("%s: sends whole", name)
-		}
-	}
-}
-
-// A REPORTED WINDOW BELOW THE STANDARD DECIDES: a run that reported holding its
-// model to 200,000 tokens (the account's default, an alias its box retargeted, a
-// switch holding every model there) may compact at 150,000 under a standard
-// window of 1,000,000.
-//
-// Mutation: ignore the reported window, and this goes red.
-func TestAReportedWindowBelowTheStandardDecides(t *testing.T) {
-	t.Parallel()
-	w := ClaudeCodeWindow("claude-opus-5-5")
-	if w.SendsWhole(&ResumedCount{Tokens: 150_000, Window: 200_000}, "") {
-		t.Errorf("a count of 150,000 its run reported a 200,000-token window for sends whole under %+v", w)
-	}
-}
-
-// A REPORTED WINDOW NEVER RAISES THE STANDARD: a figure a box writes may make a
-// continuation read as cut off, never as whole, so a run reporting 1,000,000 for
-// a model the harness holds to 200,000 is judged at 200,000.
-//
-// Mutation: take the larger of the two, and this goes red.
-func TestAReportedWindowNeverRaisesTheStandard(t *testing.T) {
-	t.Parallel()
-	w := ClaudeCodeWindow("claude-sonnet-4-5")
-	if w.SendsWhole(&ResumedCount{Tokens: 150_000, Window: 1_000_000}, "") {
-		t.Errorf("a count of 150,000 reported under 1,000,000 sends whole under %+v", w)
-	}
-}
-
-// EVERY MARK AND ROUTE THIS BUILD WRITES IS VALID, `compacted` among the marks,
-// and a word it does not know is not: it reads as a mark all the same.
+// EVERY MARK THIS BUILD WRITES IS VALID, `compacted` among them, and a word it
+// does not know is not: it reads as a mark all the same.
 //
 // Mutation: leave a word out of its list, and a case goes red.
-func TestEveryCountMarkAndRouteIsValid(t *testing.T) {
+func TestEveryCountMarkIsValid(t *testing.T) {
 	t.Parallel()
 	for _, m := range []CountMark{CountUnread, CountRelease, CountPrecompact, CountCompacted, CountUsage,
 		CountCleared, CountPDF, CountMedia} {
@@ -150,13 +17,7 @@ func TestEveryCountMarkAndRouteIsValid(t *testing.T) {
 			t.Errorf("%q is not valid", m)
 		}
 	}
-	for _, r := range []ClaudeRoute{ClaudeRouteAnthropic, ClaudeRouteBedrock, ClaudeRouteVertex, ClaudeRouteFoundry,
-		ClaudeRouteElsewhere} {
-		if !r.Valid() {
-			t.Errorf("%q is not valid", r)
-		}
-	}
-	if CountMark("a-later-builds-mark").Valid() || ClaudeRoute("a-later-builds-route").Valid() {
+	if CountMark("a-later-builds-mark").Valid() {
 		t.Error("a word this build does not know is valid")
 	}
 	if !slices.Contains(CountMarks, CountCompacted) {

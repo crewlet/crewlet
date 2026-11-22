@@ -43,7 +43,7 @@ import { plural } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import type { IntegrationRow } from "~/contract/integrations.ts";
 import { CATALOG, deliveryEvent, type Entry } from "./catalogue.tsx";
-import { DIRECTORY, entryOf, type Line } from "./categories.ts";
+import { SHOWN, entryOf, type Line } from "./categories.ts";
 import { BUCKET_WORDS, type BuiltInService, type Intent, type Model, type Tool } from "./model.ts";
 import {
   actionName,
@@ -104,7 +104,7 @@ export function Landing({
 }) {
   const now = useNow();
   // IN THE LIST'S OWN ORDER, so a card stands where its line does.
-  const lines = DIRECTORY.flatMap((g) => g.lines).filter((l) => active(l, model, services));
+  const lines = SHOWN.flatMap((g) => g.lines).filter((l) => active(l, model, services));
   const facts = homeFacts(
     lines.map((l): InUse =>
       l.kind === "service" ? "service" : l.kind === "product" ? "product" : "app",

@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/queue"
 	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -83,7 +84,8 @@ func fleetAsking(t *testing.T, budget time.Duration, a, b evals.RigOptions) (*as
 			t.Fatal(err)
 		}
 		f, err := live.NewFleet(live.FleetOptions{Node: node, Broker: q, Roster: roster,
-			Cipher: cipher, Frames: frames, Replays: replays, Stops: stops, AskBudget: budget})
+			Cipher: cipher, Frames: frames, Replays: replays, Stops: stops, AskBudget: budget,
+			Answers: queue.NewAnswerBudget(nil)})
 		if err != nil {
 			t.Fatal(err)
 		}

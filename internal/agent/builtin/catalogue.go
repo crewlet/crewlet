@@ -97,7 +97,7 @@ var groupWords = map[Group]struct{ label, description string }{
 		"The company's atlas: what it runs on, how sure the atlas is of each entry, and what depends on what."},
 	GroupServers: {"Servers",
 		"The company's servers over SSH: allowlisted reads, and commands a person or a delegate approves first."},
-	GroupGrowth: {"Marketing and growth",
+	GroupGrowth: {"Growth",
 		"The company's analytics, ad, store and earnings accounts: reads, recorded changes, and acts an administrator approves first."},
 	GroupColleagues: {"Colleagues",
 		"Finding a colleague, and asking another agent a question."},

@@ -25,11 +25,12 @@ type liveRun struct {
 
 // readLive is text written to a stream holding h, live where flush is not
 // nil, in pieces of 1 to most bytes drawn from r, flushed after each write
-// where flush says, and once more after Close.
-func readLive(text string, h int, r *rand.Rand, most int, flush func() bool) liveRun {
+// where flush says, and once more after Close. A live stream's every ask of
+// Settled is held to the loop ([redact.HeldToTheLoop]).
+func readLive(t testing.TB, text string, h int, r *rand.Rand, most int, flush func() bool) liveRun {
 	var run liveRun
 	var out bytes.Buffer
-	s := redact.NewStreamHolding(&out, h, flush != nil)
+	s := redact.HeldToTheLoop(t, redact.NewStreamHolding(&out, h, flush != nil))
 	redact.CountEarly(s, &run.early)
 	for at := 0; at < len(text); {
 		n := min(len(text)-at, 1+r.IntN(most))
@@ -161,7 +162,7 @@ func TestALiveStreamWritesWhatTheWholeTextRedactsToHoweverItIsFlushed(t *testing
 						continue
 					}
 					if plain == nil && (!long || sc.odds == 0) {
-						run := readLive(tx.text, tx.hold, r, 64<<10, nil)
+						run := readLive(t, tx.text, tx.hold, r, 64<<10, nil)
 						plain = &run
 						mu.Lock()
 						if plains++; run.err != nil {
@@ -169,7 +170,7 @@ func TestALiveStreamWritesWhatTheWholeTextRedactsToHoweverItIsFlushed(t *testing
 						}
 						mu.Unlock()
 					}
-					got := readLive(tx.text, tx.hold, r, sc.most, func() bool { return sc.odds > 0 && r.IntN(sc.odds) == 0 })
+					got := readLive(t, tx.text, tx.hold, r, sc.most, func() bool { return sc.odds > 0 && r.IntN(sc.odds) == 0 })
 					name := tx.name + ", " + sc.name
 					at, plainAt := redact.RefusedAt(got.err), -2
 					if plain != nil {
@@ -277,7 +278,7 @@ func TestALiveStreamSettlesPastALineOfAnyLengthAsTheWholeTextDoes(t *testing.T) 
 		for _, k := range []int{30000, 30001} {
 			text := filler + sh[0] + "\n" + sh[1] + strings.Repeat(sh[2], k) + "\nhunter2secretvalue9\n" + strings.Repeat("ok\n", 20)
 			var out bytes.Buffer
-			s := redact.NewLiveStream(&out)
+			s := redact.HeldToTheLoop(t, redact.NewLiveStream(&out))
 			for at := 0; at < len(text); {
 				n := min(len(text)-at, 64<<10)
 				if i := strings.IndexByte(text[at:at+n], '\n'); i >= 0 {
@@ -312,8 +313,8 @@ func TestALiveStreamFlushedAtEachLineWritesSecretsOfAKeysLineAboveABlock(t *test
 	}
 	for i, text := range texts {
 		want := redact.Secrets(text)
-		lines := readLines(text)
-		pieces := readLive(text, redact.HoldBytes(), r, 40, func() bool { return r.IntN(2) == 0 })
+		lines := readLines(t, text)
+		pieces := readLive(t, text, redact.HoldBytes(), r, 40, func() bool { return r.IntN(2) == 0 })
 		for _, got := range []struct {
 			how string
 			run liveRun
@@ -326,11 +327,11 @@ func TestALiveStreamFlushedAtEachLineWritesSecretsOfAKeysLineAboveABlock(t *test
 }
 
 // readLines is text written to a live stream a line at a time, flushed
-// after each.
-func readLines(text string) liveRun {
+// after each, its every ask of Settled held to the loop.
+func readLines(t testing.TB, text string) liveRun {
 	var run liveRun
 	var out bytes.Buffer
-	s := redact.NewLiveStream(&out)
+	s := redact.HeldToTheLoop(t, redact.NewLiveStream(&out))
 	for line := range strings.SplitAfterSeq(text, "\n") {
 		_, _ = s.Write([]byte(line))
 		_, _, _ = s.Flush()
@@ -355,7 +356,7 @@ func TestALiveStreamBelowWholeBytesAsksOnlyOnceALineHasEnded(t *testing.T) {
 		t.Fatalf("the text runs %d bytes, not below %d", len(text), redact.WholeBytes)
 	}
 	var out bytes.Buffer
-	s := redact.NewLiveStream(&out)
+	s := redact.HeldToTheLoop(t, redact.NewLiveStream(&out))
 	_, _ = s.Write([]byte(text))
 	if _, held, _ := s.Flush(); held < len(text)/2 {
 		t.Fatalf("Settled held %d of %d bytes, so a flush has little to ask of", held, len(text))

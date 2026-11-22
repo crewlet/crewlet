@@ -252,6 +252,13 @@ function isLater(next, held) {
 	return next.seq > held.seq;
 }
 /**
+* What a revision this node applied moved: every read that asks again on a
+* reconnect (`refetchOnReconnect`), since a config write answers before the
+* node applies it and many answers are read from what it applied. A read that
+* opted out of reconnects (a transcript, a code search) is not moved by one.
+*/
+var APPLIED_REVISION = "*applied";
+/**
 * Two positions on ONE log in log order: negative when `a` is earlier, zero
 * when they are the same point, positive when `a` is later.
 *
@@ -521,6 +528,13 @@ function emptyState() {
 		chatRead: null
 	};
 }
+/**
+* A revision this node applied, said to every read that asks again on one
+* (`APPLIED_REVISION`), whether a push or a snapshot carried it.
+*/
+function announceApplied(was, health) {
+	if (health && was !== void 0 && health.applied_epoch > was) session.written(null, null, [APPLIED_REVISION]);
+}
 var Store = class {
 	state = emptyState();
 	/**
@@ -584,8 +598,10 @@ var Store = class {
 		if (snap.tokens && snap.tokens.totals) this.state.tokens = snap.tokens;
 		this.state.budget = snap.budget ?? null;
 		if (snap.schedules) this.state.schedules = snap.schedules;
+		const was = this.state.lastHealth?.applied_epoch;
 		if (snap.health) this.state.health = this.state.lastHealth = snap.health;
 		this.emit(...ALL_DATA_SLICES);
+		announceApplied(was, snap.health);
 	}
 	/**
 	* Changed seat overlays, merged onto the roster rows by AGENT ID — and the
@@ -753,10 +769,12 @@ var Store = class {
 		this.emit("tools");
 	}
 	applyHealth(health) {
+		const was = this.state.lastHealth?.applied_epoch;
 		this.state.health = health ?? null;
 		if (health) this.state.lastHealth = health;
 		this.link(!!health);
 		this.emit("health");
+		announceApplied(was, health);
 	}
 	setConnected(value) {
 		this.link(value);
@@ -4186,6 +4204,13 @@ var ACTIONS = {
 		domain: "tracker",
 		apps: ["worklet"],
 		refreshes: [],
+		scope: "person"
+	},
+	save_home_board: {
+		args: ["board", "if_match"],
+		domain: null,
+		apps: [],
+		refreshes: ["home_board"],
 		scope: "person"
 	},
 	set_priorities: {

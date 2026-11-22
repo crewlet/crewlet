@@ -190,13 +190,15 @@ func (q *Queue) AskEach(ctx context.Context, subject string, request []byte, eac
 			if !s.gate.Enter(scatter) {
 				return
 			}
+			answering, replied := queue.Replying(s.serving) //nolint:contextcheck // as below
 			//nolint:contextcheck // the ANSWERER's context, which the
 			// contract hands an answerer: the asker's deadline bounds
 			// the wait for a slot above and the collection below, never
 			// the answer — see [serveSub.serving].
-			reply, err := s.call(s.serving, request)
-			s.gate.Leave()
+			reply, err := s.call(answering, request)
 			if err != nil {
+				replied()
+				s.gate.Leave()
 				// AN ERROR ANSWERS NOTHING, which is the same
 				// fact as a server that was down — see
 				// [queue.AnswerFunc].
@@ -204,7 +206,11 @@ func (q *Queue) AskEach(ctx context.Context, subject string, request []byte, eac
 					"subject", subject, "error", err.Error())
 				return
 			}
+			// THE REPLY WRITTEN, then what the answer holds of the
+			// node's answer budget given back ([queue.Replying]).
 			answers <- reply
+			replied()
+			s.gate.Leave()
 		}()
 	}
 	// Closed by a goroutine of its own rather than after the loop, because

@@ -35,7 +35,7 @@ func TestAClaudeRunIsPinnedToTheWindowOfItsModel(t *testing.T) {
 		{model: "sonnet", want: 1_000_000},
 		{model: "us.anthropic.claude-haiku-4-5-20251001-v1:0", want: 200_000},
 		{model: "claude-sonnet-4-5[1m]", want: 1_000_000},
-		{model: "claude-next-preview", want: sandbox.FallbackExecutorWindow, unknown: true},
+		{model: "claude-next-preview", want: 200_000, unknown: true},
 	} {
 		from := len(logs.String())
 		script := startAndScript(t, runner, box(t, runner), sandbox.RunRequest{Brief: "x", Model: c.model})

@@ -46,6 +46,25 @@ func NewStreamHolding(w io.Writer, h int, liveStream bool) *Stream {
 	return s
 }
 
+// HeldToTheLoop is s with every ask it makes of Settled's readers, where it
+// is live, held to the loop ([SettledTwoWays]) from one reading of the holds;
+// the first where they differ fails t. A stream that is not live asks none.
+func HeldToTheLoop(t testing.TB, s *Stream) *Stream {
+	if s.live == nil {
+		return s
+	}
+	differed := false
+	s.live.view.ask = func(text string) int {
+		swept, looped := SettledTwoWays(text)
+		if swept != looped && !differed {
+			differed = true
+			t.Errorf("a live stream's ask of %d bytes: Settled settled %d, and a hold a pass %d; its end:\n%q", len(text), swept, looped, text[max(0, len(text)-2000):])
+		}
+		return swept
+	}
+	return s
+}
+
 // Settling is a [settling] for the package's external tests: Settle answers
 // how much more of the text written is settled; Held is what it holds, Kept
 // the buffer it keeps, and Asks how many times it asked Settled's readers.
@@ -63,13 +82,6 @@ func (s *Settling) Held() int { return len(s.s.text) }
 func (s *Settling) Kept() int { return cap(s.s.text) }
 
 func (s *Settling) Asks() int { return s.s.asks }
-
-// SettledWhole is [Settled] read whole by its readers ([settle]), with no
-// settling: the oracle a settling is held to.
-func SettledWhole(text string) int {
-	n, _ := settle(text)
-	return n
-}
 
 // SettlingKeeps is [settlingKeeps].
 const SettlingKeeps = settlingKeeps
@@ -118,9 +130,10 @@ var EarlyText = earlyText
 var HoldBytes, WholeBytes = holdBytes, wholeBytes
 
 // settledFrom is how far the text is settled from at, chained as a live
-// stream chains [Settled] ([Stream.settle]).
-func settledFrom(text string, at int) int {
-	return at + Settled(text[at:])
+// stream chains [Settled] ([Stream.settle]), each ask held to the loop
+// ([SettledByBoth]).
+func settledFrom(t testing.TB, text string, at int) int {
+	return at + SettledByBoth(t, text[at:])
 }
 
 // lined is text with a line break after every 2 KiB that runs without one,
@@ -163,7 +176,7 @@ func TestAFlushWritesTheRedactionAsFarAsTheTextIsSettled(t *testing.T) {
 	}
 	for name, text := range texts {
 		var out bytes.Buffer
-		s := NewLiveStream(&out)
+		s := HeldToTheLoop(t, NewLiveStream(&out))
 		settled, flushes := 0, 0
 		for at := 0; at < len(text); {
 			n := strings.IndexByte(text[at:], '\n') + 1
@@ -177,7 +190,7 @@ func TestAFlushWritesTheRedactionAsFarAsTheTextIsSettled(t *testing.T) {
 			}
 			final, held, err := s.Flush()
 			flushes++
-			settled = settledFrom(text[:at], settled)
+			settled = settledFrom(t, text[:at], settled)
 			want := Secrets(text[:settled])
 			switch {
 			case err != nil:
@@ -216,7 +229,7 @@ func TestAShortTextShowsItsSettledPartOnAFlush(t *testing.T) {
 	line := "step 3 passed\ntoken sk-" + strings.Repeat("q", 40) + "\n"
 	text := strings.Repeat(line, wholeBytes/len(line)+40)
 	var out bytes.Buffer
-	s := NewLiveStream(&out)
+	s := HeldToTheLoop(t, NewLiveStream(&out))
 	_, _ = s.Write([]byte(text[:10*len(line)+7]))
 	if _, _, err := s.Flush(); err != nil || out.String() != Secrets(text[:10*len(line)]) || !strings.Contains(out.String(), Marker) {
 		t.Fatalf("a flush of ten lines and a part answered %v and wrote %q, not the ten lines redacted", err, out.String())
@@ -241,7 +254,7 @@ func TestALiveStreamKeepsNoneOfItsHeadsBufferOnceItsStagesRun(t *testing.T) {
 	text := strings.Repeat("ok\n", (wholeBytes-len(tail))/3)
 	text += strings.Repeat("x", wholeBytes-len(tail)-len(text)) + tail
 	var out bytes.Buffer
-	s := NewLiveStream(&out)
+	s := HeldToTheLoop(t, NewLiveStream(&out))
 	s.head = make([]byte, 0, wholeBytes+4<<10)
 	head := s.head[:cap(s.head)]
 	_, _ = s.Write([]byte(text))
@@ -301,7 +314,7 @@ func TestAFlushCountsNothingAWindowDecidedEarlyWaitsOn(t *testing.T) {
 		want := Secrets(tx.s)
 		for _, liveStream := range []bool{false, true} {
 			var out bytes.Buffer
-			s := NewStreamHolding(&out, h, liveStream)
+			s := HeldToTheLoop(t, NewStreamHolding(&out, h, liveStream))
 			var waiting [][2]int64
 			s.observe = &keyObserver{decided: func(_, hi int) { waiting = append(waiting, [2]int64{int64(hi), s.written()}) }}
 			var finals []int64
@@ -365,7 +378,7 @@ func TestAFlushAfterCloseCountsAllTheStreamWrote(t *testing.T) {
 		{"a long text, live, flushed", long, true, true},
 	} {
 		var out bytes.Buffer
-		s := NewStreamHolding(&out, holdBytes(), c.liveStream)
+		s := HeldToTheLoop(t, NewStreamHolding(&out, holdBytes(), c.liveStream))
 		_, _ = s.Write([]byte(c.text[:len(c.text)/2]))
 		if c.flush {
 			_, _, _ = s.Flush()
@@ -421,7 +434,7 @@ func TestAFlushMayRefuseAPasswordsKeyOnTheLineAfterAKeysBegin(t *testing.T) {
 	want := Secrets(text)
 	read := func(flushAt int) (string, error) {
 		var out bytes.Buffer
-		s := NewStreamHolding(&out, h, flushAt > 0)
+		s := HeldToTheLoop(t, NewStreamHolding(&out, h, flushAt > 0))
 		for at := 0; at < len(text); {
 			n := min(len(text)-at, 64<<10)
 			if flushAt > at && flushAt < at+n {

@@ -1,7 +1,7 @@
 // crewlet.skills — the plugin an OpenCode run's server loads to report each
 // skill of the run's own its model loads, to the run's tool bridge.
 //
-// The engine embeds this file (skills.go) and writes it into the run's work
+// The engine embeds this file (opencodeskills.go) and writes it into the run's work
 // directory as index.js, a directory of its own that the run's configuration
 // names with the bridge's skill route as its one option — a {file:} reference,
 // so the configuration holds a path and never the route's token

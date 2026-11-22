@@ -432,7 +432,7 @@ func TestAJobRecordsTheEntryItWasLaunchedOn(t *testing.T) {
 	if got := rig.get("t1").Launch; got.ProviderKey != "fallback" || got.Model != "sonnet" {
 		t.Fatalf("the job's record = %+v, want the entry and model it was launched on", got)
 	}
-	rec := collectedRecord(rig.get("t1"), rig.get("t1").Launch, Result{Success: true}, time.Now())
+	rec := collectedRecord(rig.get("t1"), rig.get("t1").Launch, Result{Success: true}, 0, time.Now())
 	if rec.ProviderKey != "fallback" || rec.Model != "sonnet" {
 		t.Errorf("the job's launch record is filed under %q/%q, want fallback/sonnet",
 			rec.ProviderKey, rec.Model)

@@ -30,6 +30,13 @@ const PageLimit = 50
 // lists, a skill's description and a profile's traits are unbounded.
 const pageBytes = queue.MaxPayloadBytes / 2
 
+// answerWeight is what a memory answer holds of the node's answer budget
+// ([queue.AnswerBudget]) from its read until its reply is written: [pageBytes]
+// five times. Its encode is a history answer's (the rows, their encoding, the
+// reply's around it), measured at 4.7 times its rows' bound
+// (internal/eventfan's answerWeight).
+const answerWeight = 5 * pageBytes
+
 // collectionBytes is the share of [pageBytes] each of the episodes, the skills
 // and the profiles is read to, in the store ([learning.Episodes.Listing],
 // [learning.Skills.Listing], [learning.Counterparties.List]). A FIXED quarter,

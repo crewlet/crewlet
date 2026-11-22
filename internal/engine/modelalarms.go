@@ -37,7 +37,7 @@ type entryInputs struct {
 	// stored is when the secret store last wrote each secret, by name.
 	stored map[string]time.Time
 	// grants are the MCP servers' OAuth grants, by server.
-	grants map[string]coord.MCPGrant
+	grants map[string]coord.OAuthGrant
 	// runs is the fleet's active runs, read for the calls they hold for a
 	// person's approval ([heldConditions]).
 	runs []sandbox.PendingRun

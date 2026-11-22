@@ -12,15 +12,15 @@
  *
  * KEPT CURRENT three ways, because each misses what the others catch: every
  * 15 seconds while the page is open (a limit that lifted, a test that passed
- * elsewhere), when the fleet applies a new configuration (a model added or
- * removed by anyone), and when a seat's provider limit changes on the live
- * state (a model just started sitting out).
+ * elsewhere), when this node applies a new configuration (every question is
+ * asked again then, `Store.applyHealth`), and when a seat's provider limit
+ * changes on the live state (a model just started sitting out).
  */
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { EXECUTOR_HARNESSES } from "~/contract/models.ts";
+import { EXECUTOR_HARNESSES } from "./executors.ts";
 import { indexOrg, type Seat } from "~/lib/seats.ts";
-import { useAgents, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
+import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { usesOf, type Uses } from "~/lib/modelUses.ts";
@@ -167,7 +167,7 @@ export function modelViews(
       harness: entry.harness,
       model: entry.model,
       modelName: names.get(nameKey(entry.harness, entry.model)) ?? entry.model,
-      executor: (EXECUTOR_HARNESSES as readonly string[]).includes(entry.harness),
+      executor: EXECUTOR_HARNESSES.includes(entry.harness),
       entry,
       admin: answer?.reading === "admin" ? (entry as ModelEntry) : null,
       uses: usesOf(entry.used_by),
@@ -201,25 +201,19 @@ export function useModelsData(): ModelsData {
   });
   const config = useQuery("config", undefined, { enabled: admin });
   const org = useOrg();
-  const health = useEngineHealth();
   const agents = useAgents();
 
-  // A NEW CONFIGURATION APPLIED, OR A LIMIT THAT MOVED, is asked about at once.
-  const epoch = health?.applied_epoch ?? 0;
+  // A LIMIT THAT MOVED is asked about at once; a configuration applied re-reads
+  // every question (`Store.applyHealth`).
   const limits = limitsKey(agents);
   const { refetch: refetchEntries } = entries;
   const { refetch: refetchConfig } = config;
-  const seen = useRef({ epoch, limits });
+  const seen = useRef(limits);
   useEffect(() => {
-    const was = seen.current;
-    seen.current = { epoch, limits };
-    if (was.epoch !== epoch) {
-      refetchEntries();
-      if (admin) refetchConfig();
-    } else if (was.limits !== limits) {
-      refetchEntries();
-    }
-  }, [epoch, limits, admin, refetchEntries, refetchConfig]);
+    if (seen.current === limits) return;
+    seen.current = limits;
+    refetchEntries();
+  }, [limits, refetchEntries]);
 
   const seats = useMemo(() => indexOrg(org).seats.filter((s) => s.kind !== "human"), [org]);
   const doc = admin ? ((config.data as CompanyDocument | null) ?? null) : null;

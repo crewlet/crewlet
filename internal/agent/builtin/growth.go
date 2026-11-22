@@ -161,11 +161,12 @@ func (t *growthTool) admitted(ctx context.Context, turn *turnctx.Turn) (string, 
 	if !level.Allows(t.def.Class) {
 		at := "off"
 		if level != "" {
-			at = "at " + string(level)
+			at = "at " + level.Label()
 		}
+		// THE LEVELS BY THE NAMES THE AGENTS TAB SHOWS, so a person relaying this finds them there.
 		r := refused(tools.RefusalForbidden, fmt.Sprintf("%s didn't run: this agent's %s access is %s, and %s "+
 			"needs it at %s. A person raises it on the integration's Agents tab. No vendor was reached.",
-			t.Name(), t.product.Catalog().API, at, t.Name(), t.def.Class.Level()))
+			t.Name(), t.product.Catalog().API, at, t.Name(), t.def.Class.Level().Label()))
 		return "", &r
 	}
 	return handle, nil

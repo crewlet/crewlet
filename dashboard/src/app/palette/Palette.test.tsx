@@ -1966,7 +1966,7 @@ describe("artifacts", () => {
 test("a typed question can be asked of the assistant, where the reader may ask", async () => {
   const ask = vi.fn();
   const p = mount({
-    assistant: { open: false, unavailable: null, toggle: () => {}, ask, draft: () => {} },
+    assistant: { open: false, unavailable: null, toggle: () => {}, ask, askAbout: () => {} },
   });
   await p.type("why did spend go up");
   const row = p.row("Ask Crewlet: “why did spend go up”");
@@ -1987,7 +1987,9 @@ test("a typed question can be asked of the assistant, where the reader may ask",
 // scope.
 test("the assistant's row is last, and the artifacts scope is not what Enter takes", async () => {
   const ask = vi.fn();
-  mount({ assistant: { open: false, unavailable: null, toggle: () => {}, ask, draft: () => {} } });
+  mount({
+    assistant: { open: false, unavailable: null, toggle: () => {}, ask, askAbout: () => {} },
+  });
   const box = screen.getByRole("combobox");
   await act(async () => {
     fireEvent.change(box, { target: { value: "why did spend go up" } });
