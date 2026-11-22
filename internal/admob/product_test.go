@@ -882,7 +882,7 @@ func TestAReportWhoseLookupFailsRecordsItsFailure(t *testing.T) {
 // A CAMPAIGN REPORT LARGER THAN ONE ANSWER HOLDS IS REFUSED WITH ITS REMEDY,
 // never read as Google's fault: Google caps it at no row count.
 //
-// Mutation: drop the oversized arm, and the agent reads a decode error.
+// Mutation: drop googleauth's bound check, and the agent reads a decode error.
 func TestALargeCampaignReportSaysToNarrowIt(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, "read")
