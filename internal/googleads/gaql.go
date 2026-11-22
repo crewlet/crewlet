@@ -113,7 +113,9 @@ func (p *Product) search(ctx context.Context, handle, customer, gaql string) ([]
 			Next    string           `json:"nextPageToken"`
 		}
 		if err := json.Unmarshal(raw, &resp); err != nil {
-			return nil, &googlegrowth.CallError{Failure: growth.FailureUnknownOutcome,
+			// A SEARCH CHANGES NOTHING: an answer it cannot read is Google's
+			// fault, never an outcome of the act it serves that is not known.
+			return nil, &googlegrowth.CallError{Failure: growth.FailureVendorUnavailable,
 				Err: fmt.Errorf("googleads: decode a search on %s: %w", customer, err)}
 		}
 		out = append(out, resp.Results...)
