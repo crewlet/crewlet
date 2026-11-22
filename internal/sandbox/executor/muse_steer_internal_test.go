@@ -192,3 +192,79 @@ func TestAMuseHookAnswerCarriesOneItemWithinItsCeiling(t *testing.T) {
 		}
 	}
 }
+
+// A LAUNCHED RUN'S NOTES ARE EACH HELD (the engine's own script, plugin, take
+// config and note helper, in a box against a stand-in bridge serving two
+// notes between steps and one at the finish): every take its record shows
+// delivered and sent is held, and the answer is the one given after the
+// finish's note.
+//
+// Mutation: hold no finish's take, or read another hook key.
+func TestALaunchedMuseRunsNotesAreEachHeld(t *testing.T) {
+	held := museHeldOf(t, museFixture(t, "launched-notes.session.jsonl"))
+	for _, n := range []string{"1", "2", "9"} {
+		if token := claudeTakeToken("aaaaaaaa-0000-4000-8000-00000000000" + n); !held[token] {
+			t.Errorf("take %s is not held: %v", n, held)
+		}
+	}
+	if res := (Muse{}).Parse(museFixture(t, "launched-notes.result.jsonl")); !res.Success ||
+		!strings.HasSuffix(res.Text, "ANSWER after the stop note.") {
+		t.Errorf("result %+v, want the answer after the finish's note", res)
+	}
+}
+
+// museShellSecrets are the names the model's shell never runs with: the
+// entry's key and the OTLP exporter's.
+var museShellSecrets = []string{"META_API_KEY", "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS"}
+
+// THE MODEL'S SHELL RUNS WITH ONLY WHAT IT NEEDS: the run's own shell, in the
+// launched run, saw none of the entry's key and the OTLP exporter's variables,
+// which the box was started with.
+//
+// Mutation: drop the unset of the key or of OTEL_EXPORTER_OTLP_*.
+func TestTheMuseShellRunsWithOnlyWhatItNeeds(t *testing.T) {
+	found := false
+	for l := range bytes.Lines(museFixture(t, "launched-notes.result.jsonl")) {
+		env, ok := decodeMuseEnvelope(l)
+		if !ok || env.PayloadType != "tool.result" {
+			continue
+		}
+		var p struct {
+			Text string `json:"text"`
+		}
+		_ = json.Unmarshal(env.Payload, &p)
+		if !strings.Contains(p.Text, "MUSE_SESSION_ID=") {
+			continue
+		}
+		found = true
+		for _, name := range append(museShellSecrets, "CREWLET_") {
+			if strings.Contains(p.Text, name) {
+				t.Errorf("the run's shell ran with %s", name)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("the fixture holds no shell's environment")
+	}
+}
+
+// THE SCRIPT HANDS THE KEY ON STDIN AND KEEPS IT AND THE EXPORTER'S VARIABLES
+// OUT OF THE ENVIRONMENT IT LAUNCHES WITH: what follows its part runs without
+// any of them, reads the key on stdin, and no file keeps it.
+//
+// Mutation: export the key, or leave its file behind.
+func TestTheMuseScriptHandsTheKeyOnStdinAlone(t *testing.T) {
+	p := museScriptHome(t, nil)
+	script := "export META_API_KEY=sk-test-key OTEL_EXPORTER_OTLP_ENDPOINT=http://o OTEL_EXPORTER_OTLP_HEADERS=a=b\n" +
+		museShellEnvironment(p) + `env; echo "---$kf"; cat; echo; ls ` + p.WorkDir()
+	out := string(runSh(t, script))
+	env, rest, _ := strings.Cut(out, "---")
+	for _, name := range museShellSecrets {
+		if strings.Contains(env, name+"=") {
+			t.Errorf("the environment after the script's part holds %s", name)
+		}
+	}
+	if !strings.HasPrefix(rest, "--api-key-stdin\nsk-test-key\n") || strings.Contains(rest, "muse-key") {
+		t.Errorf("after the environment: %q, want the flag, the key on stdin and no key file", rest)
+	}
+}
