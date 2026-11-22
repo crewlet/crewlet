@@ -1121,24 +1121,25 @@ codex:
     - sentinel: "Not logged in"
     - sentinel: "run `codex login`"
   # AN EXECUTOR RUN'S PLAN LIMITS, which its runner composes from the
-  # rollout's newest token_count.rate_limits (`exec --json` carries none):
-  # each window keyed by its length in minutes, its use a fraction, and
-  # `reached` naming the window used up. A ChatGPT plan measured on 0.171.0
+  # rollout's newest token_count.rate_limits (`exec --json` carries none) as
+  # an item, its type at event_type_path like every exec event's: each window
+  # keyed by its length in minutes, its use a fraction, and `reached` naming
+  # the window used up. A ChatGPT plan measured on 0.171.0
   # had one weekly window (10080) and no secondary; 300 is the five-hour one
   # the vendor's headers name.
   limit_reports:
-    - match: [{path: ["type"], equals: "crewlet.codex_rate_limits"}]
+    - match: [{path: ["item", "type"], equals: "crewlet.codex_rate_limits"}]
       state:
-        path: ["state"]
+        path: ["item", "state"]
         map: {ok: ok, reached: reached}
       window:
-        path: ["window"]
+        path: ["item", "window"]
         map:
           "300": {window: session, hours: 5}
           "10080": {window: weekly, hours: 168}
-      resets_at: {path: ["resets_at"], unit: epoch}
+      resets_at: {path: ["item", "resets_at"], unit: epoch}
       windows:
-        path: ["windows"]
+        path: ["item", "windows"]
         used: ["used"]
         resets_at: {path: ["resets_at"], unit: epoch}
 

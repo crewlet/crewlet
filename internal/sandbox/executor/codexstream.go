@@ -25,7 +25,9 @@ const codexRolloutEvent = "crewlet.rollout"
 // `limit_reports` reads: the newest token_count.rate_limits the run's rollout
 // lines held, each window keyed by its length in minutes and its use a
 // fraction. Composed here because Codex writes its windows by position
-// (primary, secondary) and its use in percent.
+// (primary, secondary) and its use in percent. An item, as `exec --json`
+// writes each of its events, so its type sits at item.type, the profile's one
+// event_type_path.
 const codexLimitsEvent = "crewlet.codex_rate_limits"
 
 // codexRetryNotice opens the error event Codex writes as it retries a
@@ -369,7 +371,7 @@ func (d *codexEvents) limitReport() string {
 	return codexLimitsLine(limits)
 }
 
-// codexLimitsLine is limits as a [codexLimitsEvent] line: `reached` where a
+// codexLimitsLine is limits as a [codexLimitsEvent] item: `reached` where a
 // window is used up, naming it and its reset as `window` and `resets_at`; each
 // window by its minutes, its use as a fraction and its reset in epoch seconds.
 func codexLimitsLine(limits codexLimits) string {
@@ -377,13 +379,14 @@ func codexLimitsLine(limits codexLimits) string {
 		Used     float64 `json:"used"`
 		ResetsAt int64   `json:"resets_at,omitempty"`
 	}
-	line := struct {
+	type report struct {
 		Type     string            `json:"type"`
 		State    string            `json:"state"`
 		Window   string            `json:"window,omitempty"`
 		ResetsAt int64             `json:"resets_at,omitempty"`
 		Windows  map[string]window `json:"windows"`
-	}{Type: codexLimitsEvent, State: "ok", Windows: map[string]window{}}
+	}
+	line := report{Type: codexLimitsEvent, State: "ok", Windows: map[string]window{}}
 	for _, w := range []*codexLimitWindow{limits.Primary, limits.Secondary} {
 		if w == nil || w.Window <= 0 || math.IsNaN(w.UsedPercent) {
 			continue
@@ -398,7 +401,9 @@ func codexLimitsLine(limits codexLimits) string {
 			line.State, line.Window, line.ResetsAt = "reached", key, entry.ResetsAt
 		}
 	}
-	raw, err := json.Marshal(line)
+	raw, err := json.Marshal(struct {
+		Item report `json:"item"`
+	}{line})
 	if err != nil {
 		return ""
 	}
