@@ -3991,7 +3991,8 @@ test("App Store Connect's keys are one list up front that says what it needs", (
   const set = baseElement.querySelector("fieldset.int-set") as HTMLFieldSetElement;
   expect(set).toBeTruthy();
   expect(more.contains(set)).toBe(false);
-  expect(within(set).getByText("API keys")).toBeDefined();
+  expect(set.querySelector("legend")?.textContent).toBe("API keys");
+  expect(within(set).getByRole("button", { name: "Add a key" })).toBeDefined();
   expect(within(set).getByText(/Add at least one\. Start with Marketing/)).toBeDefined();
   expect(set.textContent).not.toMatch(/optional/i);
   expect(screen.queryByLabelText("Key ID")).toBeNull();
