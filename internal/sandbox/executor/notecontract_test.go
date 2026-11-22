@@ -43,6 +43,22 @@ var noteFixtures = map[string]noteFixture{
 		confirms: pluginAdmitsNotesAtTheRunsNextStep,
 		reaches:  pluginReadsTheBridgesOwnNotesRoute,
 	},
+	executor.GeminiCLIName: {
+		reads: true,
+		wakeRead: func(t *testing.T, wake string) []executor.TranscriptEntry {
+			return readGemini(t, geminiSessionWith(t, wake))
+		},
+		confirms: executor.GeminiConfirmsATake,
+		reaches:  geminiTakeReachesTheBridgeTool,
+	},
+	executor.QwenCodeName: {
+		reads: true,
+		wakeRead: func(t *testing.T, wake string) []executor.TranscriptEntry {
+			return readQwen(t, qwenSessionWith(t, wake))
+		},
+		confirms: qwenHelperConfirmsEachNoteByItsRecord,
+		reaches:  qwenHelperReachesTheBridgesOwnNotesRoute,
+	},
 	executor.CopilotName: {
 		reads:    true,
 		wakeRead: executor.CopilotWakeRead,
@@ -54,6 +70,12 @@ var noteFixtures = map[string]noteFixture{
 		wakeRead: executor.KimiWakeRead,
 		confirms: executor.KimiConfirmsATake,
 		reaches:  kimiReachesTheBridgesRoute,
+	},
+	executor.MuseName: {
+		reads:    true,
+		wakeRead: executor.MuseWakeRead,
+		confirms: executor.MuseConfirmsATake,
+		reaches:  museReachesTheBridgesTool,
 	},
 }
 

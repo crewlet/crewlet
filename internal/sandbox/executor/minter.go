@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // sessionMinter is a harness that mints its own session id as it starts, so no
@@ -32,9 +33,9 @@ func (p Paths) sessionReportStaging() string { return p.SessionReport() + ".next
 // has minted the id held in the shell variable idVar, before the prompt goes
 // in: the id written to the staging file, then renamed over the report.
 func reportSession(paths Paths, idVar string) string {
-	staged := sandbox.ShellQuote(paths.sessionReportStaging())
+	staged := shellword.Quote(paths.sessionReportStaging())
 	return `printf '%s\n' "$` + idVar + `" > ` + staged + ` && mv -f ` + staged + ` ` +
-		sandbox.ShellQuote(paths.SessionReport())
+		shellword.Quote(paths.SessionReport())
 }
 
 // ErrSessionReport is a minting run's report of its session refused: not one

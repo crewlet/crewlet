@@ -38,7 +38,7 @@ func (f *Fleet) CreateAtlasWake(_ context.Context, handle, entry string, value [
 		return false, errors.New("coord/memory: an atlas wake names its seat and its entry")
 	}
 	key := coord.AtlasWakeKey(handle, entry)
-	if err := coord.HoldValue(key, len(value)); err != nil {
+	if err := coord.HoldValue(key, len(value), coord.MaxValueBytes); err != nil {
 		return false, err
 	}
 	f.mu.Lock()
@@ -57,7 +57,7 @@ func (f *Fleet) UpdateAtlasWake(_ context.Context, handle, entry string, value [
 		return false, errors.New("coord/memory: an atlas wake is updated at the revision it was read at")
 	}
 	key := coord.AtlasWakeKey(handle, entry)
-	if err := coord.HoldValue(key, len(value)); err != nil {
+	if err := coord.HoldValue(key, len(value), coord.MaxValueBytes); err != nil {
 		return false, err
 	}
 	f.mu.Lock()

@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 var log = logging.Get("sandbox.executor")
@@ -154,7 +155,9 @@ type Harness interface {
 	// the path the harness is pointed at, or "" when there is nothing to write.
 	// It also writes the system text where the harness reads it from
 	// ([Paths.System]) when there is any, and nothing when there is none.
-	WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error)
+	// session is the run's, named before it ([Harness.Session]).
+	WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, session Session,
+		paths Paths) (string, error)
 }
 
 // Session is the harness session one run works in, as [Runner.Start] settles it
@@ -295,6 +298,16 @@ type contextReader interface {
 // ([sandbox.Result.Limits]): Claude Code's `rate_limit_event`.
 type limitReporter interface {
 	limitReport() string
+}
+
+// limitGate is a harness whose run's limit is its own word only where the
+// harness itself failed the run on its vendor's API error, which its exit
+// status names ([GeminiCLI.limitExit]): elsewhere the collection marks the
+// run's ending as no limit ([sandbox.Result.NoLimitExit]), so a line the run's
+// own output put in the stream (a box file its model can write) sits nothing
+// out.
+type limitGate interface {
+	limitExit(code int) bool
 }
 
 // windowReporter is a decoder that reads off its run's stream the least context
@@ -489,7 +502,7 @@ func (r *Runner) noteInstruction() string {
 // the manager applies after this returns.
 func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 	paths := PathsFor(box)
-	if _, err := box.Exec(ctx, "mkdir -p "+sandbox.ShellQuote(paths.BinDir()), sandbox.ExecOptions{}); err != nil {
+	if _, err := box.Exec(ctx, "mkdir -p "+shellword.Quote(paths.BinDir()), sandbox.ExecOptions{}); err != nil {
 		return fmt.Errorf("executor: preparing %s: %w", paths.BinDir(), err)
 	}
 	return nil
@@ -536,8 +549,8 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	// they cannot be listed and are matched by a glob outside the quotes: one
 	// whose node stopped part way would otherwise stay for the box's life.
 	cmd := "rm -f " + shellQuoteAll(files) + "; rm -rf " + shellQuoteAll(dirs) +
-		"; rm -rf " + sandbox.ShellQuote(p.WorkDir()) + "/" + saveFiles +
-		"; rm -rf " + sandbox.ShellQuote(p.WorkDir()) + "/" + packStagingFiles
+		"; rm -rf " + shellword.Quote(p.WorkDir()) + "/" + saveFiles +
+		"; rm -rf " + shellword.Quote(p.WorkDir()) + "/" + packStagingFiles
 	if _, err := box.Exec(ctx, cmd, sandbox.ExecOptions{}); err != nil {
 		return fmt.Errorf("executor: clearing the prior run's artefacts: %w", err)
 	}
@@ -548,7 +561,7 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 func shellQuoteAll(paths []string) string {
 	quoted := make([]string, len(paths))
 	for i, path := range paths {
-		quoted[i] = sandbox.ShellQuote(path)
+		quoted[i] = shellword.Quote(path)
 	}
 	return strings.Join(quoted, " ")
 }
@@ -651,7 +664,7 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 		}
 		req.FreshWiring = &wired
 	}
-	configPath, err := r.harness.WriteConfig(ctx, box, req, paths)
+	configPath, err := r.harness.WriteConfig(ctx, box, req, session, paths)
 	if err != nil {
 		return sandbox.RunHandle{}, err
 	}
@@ -688,7 +701,7 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	// is on PATH only after a profile a login shell sources. So PATH inside is
 	// the profile's, which is why the box's bin directory is prepended inside
 	// the script ([withBoxBin]): an export around it would be replaced.
-	pid, err := box.StartBackground(ctx, "sh -lc "+sandbox.ShellQuote(script), sandbox.ExecOptions{Env: req.Env})
+	pid, err := box.StartBackground(ctx, "sh -lc "+shellword.Quote(script), sandbox.ExecOptions{Env: req.Env})
 	if err != nil {
 		return sandbox.RunHandle{}, fmt.Errorf("executor: starting %s: %w", r.harness.Name(), err)
 	}
@@ -840,7 +853,7 @@ func (r *Runner) ownSpend(base *piece, result sandbox.Result, streamed *runSpend
 func wrapperScript(inner string, out Output, pins []Pinned, paths Paths, hooks string) (string, error) {
 	stdin := "/dev/null"
 	if out.BriefOnStdin {
-		stdin = sandbox.ShellQuote(paths.Brief())
+		stdin = shellword.Quote(paths.Brief())
 	}
 	var b strings.Builder
 	// A STATEMENT OF ITS OWN, before the harness's: an assignment prefix on the
@@ -867,15 +880,15 @@ func wrapperScript(inner string, out Output, pins []Pinned, paths Paths, hooks s
 	// THE JOB'S MEMORY DOMAIN EITHER SIDE OF ITS HARNESS, so a kill the kernel
 	// made for memory meanwhile is told from any other end ([Paths.MemoryBefore]).
 	fmt.Fprintf(&b, "%s\ncrewlet_memory > %s 2>/dev/null; ", sandbox.MemoryDomainScript,
-		sandbox.ShellQuote(paths.MemoryBefore()))
+		shellword.Quote(paths.MemoryBefore()))
 	fmt.Fprintf(&b, "%s < %s > %s 2> %s; code=$?; crewlet_memory > %s 2>/dev/null; ",
-		inner, stdin, sandbox.ShellQuote(out.Stdout), sandbox.ShellQuote(paths.Err()),
-		sandbox.ShellQuote(paths.MemoryAfter()))
+		inner, stdin, shellword.Quote(out.Stdout), shellword.Quote(paths.Err()),
+		shellword.Quote(paths.MemoryAfter()))
 	if out.Result != "" && out.Result != out.Stdout {
-		fmt.Fprintf(&b, "tail -n 1 %s > %s; ", sandbox.ShellQuote(out.Stdout), sandbox.ShellQuote(out.Result))
+		fmt.Fprintf(&b, "tail -n 1 %s > %s; ", shellword.Quote(out.Stdout), shellword.Quote(out.Result))
 	}
 	fmt.Fprintf(&b, "echo $code > %s; echo $code > %s",
-		sandbox.ShellQuote(paths.ExitCode()), sandbox.ShellQuote(paths.Done()))
+		shellword.Quote(paths.ExitCode()), shellword.Quote(paths.Done()))
 	return b.String(), nil
 }
 
@@ -910,7 +923,7 @@ func withNoteInstruction(system, instruction string) string {
 // one command, so an executable a setup step installed there resolves ahead of
 // the image's.
 func withBoxBin(cmd string, paths Paths) string {
-	return "PATH=" + sandbox.ShellQuote(paths.BinDir()) + `:"$PATH" ` + cmd
+	return "PATH=" + shellword.Quote(paths.BinDir()) + `:"$PATH" ` + cmd
 }
 
 // Poll reports what is known of the detached job ([sandbox.JobState]) from two
@@ -1145,6 +1158,13 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	result, refused, err = memoryKills(pieces.memory, result, refused, code)
 	if err != nil {
 		return sandbox.Result{}, err
+	}
+	// A LIMIT ONLY AT THE HARNESS'S OWN API FAILURE ([limitGate]); a status
+	// that does not read is no such failure.
+	if gate, ok := r.harness.(limitGate); ok {
+		if n, convErr := strconv.Atoi(code); convErr != nil || !gate.limitExit(n) {
+			result.NoLimitExit = true
+		}
 	}
 
 	// Whether the job was ended on request, as its script recorded

@@ -69,8 +69,9 @@ type ServeOptions struct {
 	ToolTimeout time.Duration
 
 	// RecordsCallsLate says the harness's record shows a response's calls only
-	// once they have run (Gemini CLI, OpenCode): a call always reaches the
-	// host before the record of the response that asked for it. The host
+	// once they have run (Gemini CLI 0.65, OpenCode; the reader tells a later
+	// release's earlier record no sooner): a call always reaches the host
+	// before the record of the response that asked for it. The host
 	// places such a call at once and joins it to its response when the
 	// record arrives, rather than holding the call for a record that cannot
 	// come until the call is answered.

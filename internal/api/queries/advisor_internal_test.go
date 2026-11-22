@@ -297,7 +297,11 @@ func TestABlockingFindingsNoticeNamesItsFinding(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return got.(AdvisorNotices).Notices
+		// Without the build's own API retirements, which follow its catalogs and
+		// the date rather than any finding.
+		return slices.DeleteFunc(got.(AdvisorNotices).Notices, func(n notice.Notice) bool {
+			return n.Class == notice.ClassAPIVersionRetiring
+		})
 	}
 	got := notices(row)
 	if len(got) != 1 || got[0].Finding == nil || got[0].Finding.ID != "f-1" || got[0].Finding.Fix != f.Fix.Sentence {
