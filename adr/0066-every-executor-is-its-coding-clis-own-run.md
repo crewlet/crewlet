@@ -20,7 +20,7 @@ seat fence before and after the call, the tool's schema through `tools.Invoke`
 with its canonical arguments
 ([ADR-0059](0059-a-tools-contract-is-its-validators-and-every-fault-comes-back-at-once.md)),
 and the run's end. The run ends by calling `submit_work` there. Only a
-CLI with an in-box runner can be one, Claude Code and OpenCode
+CLI with an in-box runner can be one: Claude Code, OpenCode and Muse Code
 (`config.ExecutorHarnesses`); every other CLI serves the reviewer, delegated workers,
 the onboarding pass and the side passes, which stay the engine's own tool loop
 on this host. A seat whose executor chain has no such member is refused, and
