@@ -607,12 +607,14 @@ func (Pi) artifactFiles(p Paths) []string {
 
 // artifactDirs is the directories a Pi run leaves in its box of its own,
 // removed whole: its run's own (the extension and skills), and its agent
-// directory's extensions, skills, prompts, themes, installed packages and
-// its own session store. The sessions the engine carries are kept.
+// directory's extensions, skills, prompts, themes, installed packages, its
+// own session store, and `bin`, which pi puts first on its shell's PATH (a
+// planted `rg` ran for the model's `rg`, measured on 1.6.0). Pi runs without
+// `bin` and, offline, never fills it again. The engine's sessions are kept.
 func (Pi) artifactDirs(p Paths) []string {
 	a := p.PiAgentDir() + "/"
 	return []string{p.PiRun(), a + "extensions", a + "skills", a + "prompts", a + "themes", a + "npm", a + "git",
-		a + "sessions"}
+		a + "sessions", a + "bin"}
 }
 
 // notesOffWhy is what switches a Pi run's reading of notes off: the extension
