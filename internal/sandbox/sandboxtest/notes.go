@@ -76,6 +76,8 @@ var noteCases = []struct {
 	{"AQuotedIDHoldingACharacterOutsideTheCharsetIsRecordedAsNoCall",
 		testAQuotedIDHoldingACharacterOutsideTheCharsetIsRecordedAsNoCall},
 	{"APollServeIsRecordedUnderItsInboxIDAndSettledByIt", testAPollServeIsRecordedUnderItsInboxIDAndSettledByIt},
+	{"APollServesANoteToNoNewJobPastItsBudget", testAPollServesANoteToNoNewJobPastItsBudget},
+	{"ASecondAdmissionIsGrantedOnceAJobWithinThePollBudget", testASecondAdmissionIsGrantedOnceAJobWithinThePollBudget},
 }
 
 // noteRawCases are the note cases that read the raw record.

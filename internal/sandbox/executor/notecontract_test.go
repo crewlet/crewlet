@@ -43,6 +43,12 @@ var noteFixtures = map[string]noteFixture{
 		confirms: pluginAdmitsNotesAtTheRunsNextStep,
 		reaches:  pluginReadsTheBridgesOwnNotesRoute,
 	},
+	executor.KimiName: {
+		reads:    true,
+		wakeRead: executor.KimiWakeRead,
+		confirms: executor.KimiConfirmsATake,
+		reaches:  kimiReachesTheBridgesRoute,
+	},
 	executor.MuseName: {
 		reads:    true,
 		wakeRead: executor.MuseWakeRead,

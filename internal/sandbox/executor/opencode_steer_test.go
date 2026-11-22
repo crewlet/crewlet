@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -133,6 +134,7 @@ type probeReport struct {
 	URL     string         `json:"url"`
 	Ms      float64        `json:"ms"`
 	Cleanup bool           `json:"cleanup"`
+	Count   int            `json:"count"`
 	Input   map[string]any `json:"input"`
 	OK      bool           `json:"ok"`
 	Message string         `json:"message"`
@@ -170,9 +172,9 @@ func startProbe(t *testing.T, node, plugin string) *probe {
 	go func() {
 		defer close(p.reports)
 		scan := bufio.NewScanner(stdout)
-		// A REPORT CARRIES THE ADMISSION'S WHOLE TEXT, a note at the probe's
-		// widest among them ([probeNoteUnits]).
-		scan.Buffer(make([]byte, 0, 64*1024), 1<<20)
+		// A REPORT CARRIES THE ADMISSION'S WHOLE TEXT, a note at OpenCode's
+		// ceiling among them, escaped as JSON.
+		scan.Buffer(make([]byte, 0, 64*1024), 8<<20)
 		for scan.Scan() {
 			var r probeReport
 			if err := json.Unmarshal(scan.Bytes(), &r); err != nil {
@@ -240,6 +242,31 @@ func (p *probe) event(name, typ, session string, data map[string]any) {
 	}
 	p.send(map[string]any{"op": "event", "name": name, "event": map[string]any{"type": typ, "data": fields}})
 }
+
+// sees runs plugin name's "context" hooks on a model request of session
+// carrying messages, as OpenCode runs them before sending it, and waits until
+// they returned.
+func (p *probe) sees(name, session string, messages ...map[string]any) {
+	p.t.Helper()
+	if messages == nil {
+		messages = []map[string]any{}
+	}
+	p.send(map[string]any{"op": "hook", "name": name, "hook": "context",
+		"input": map[string]any{"sessionID": session, "messages": messages}})
+	if r := p.expect("hooked"); r.Count != 1 {
+		p.t.Fatalf("the request ran %d context hooks, want the plugin's one", r.Count)
+	}
+}
+
+// userText is a user message of a model request as OpenCode 2.3.0 hands its
+// hooks one: its id and a single text part.
+func userText(id, text string) map[string]any {
+	return map[string]any{"id": id, "role": "user", "content": []map[string]any{{"type": "text", "text": text}}}
+}
+
+// plainNote is note as the message OpenCode made of its admission: under the
+// id the note was admitted under, its words whole.
+func plainNote(note mcpbridge.SteerNote) map[string]any { return userText(note.Inbox, note.Message) }
 
 // expect is the probe's next report but a subscription's, which must be op.
 func (p *probe) expect(op string) probeReport {
@@ -328,7 +355,25 @@ func notesBody(notes ...mcpbridge.SteerNote) string {
 // session.
 func wantAdmitted(t *testing.T, input map[string]any, session string, note mcpbridge.SteerNote) {
 	t.Helper()
-	want := map[string]any{"sessionID": session, "id": note.Inbox, "text": note.Message,
+	wantAdmittedAs(t, input, session, note, note.Inbox)
+}
+
+// wantReadmitted is [wantAdmitted] for the note's one admission again, under
+// its second id ([againOf]), once a compaction folded the first.
+func wantReadmitted(t *testing.T, input map[string]any, session string, note mcpbridge.SteerNote) {
+	t.Helper()
+	wantAdmittedAs(t, input, session, note, againOf(note))
+}
+
+// againOf is the second id the engine grants note in job-1, the job every
+// case's notes are served to.
+func againOf(note mcpbridge.SteerNote) string {
+	return executor.AgainID(executor.OpenCodeName, "job-1", note.ID)
+}
+
+func wantAdmittedAs(t *testing.T, input map[string]any, session string, note mcpbridge.SteerNote, id string) {
+	t.Helper()
+	want := map[string]any{"sessionID": session, "id": id, "text": note.Message,
 		"delivery": "steer", "resume": false}
 	if len(input) != len(want) {
 		t.Errorf("the admission is %v, want exactly %v", input, want)
@@ -339,11 +384,6 @@ func wantAdmitted(t *testing.T, input map[string]any, session string, note mcpbr
 		}
 	}
 }
-
-// probeNoteUnits is the widest note the plugin's probe admits, in UTF-16 units:
-// far past every runner's ceiling, so a plugin that cut a note anywhere below
-// it is caught (openCodePollCeiling says what it stands for).
-const probeNoteUnits = 100_000
 
 const (
 	steerSession = "ses_0123456789abcdef0123456789abcdef"
@@ -359,9 +399,9 @@ const (
 //
 // Mutations, each red: admit with `resume: true`; open the gate at setup;
 // advance the cursor on a failed admission; leave the gate open on
-// `succeeded`; confirm any delivery; retry a 401 or a 404; drop the doubling,
-// or its reset; await a poll in setup; write a file beside the plugin; cut a
-// long note's text.
+// `succeeded`; confirm on a delivery, another session's request, or twice;
+// retry a 401 or a 404; drop the doubling, or its reset; await a poll in
+// setup; write a file beside the plugin; cut a long note's text.
 func pluginAdmitsNotesAtTheRunsNextStep(t *testing.T) {
 	t.Parallel()
 	node := nodeForNotes(t)
@@ -398,7 +438,7 @@ func pluginAdmitsNotesAtTheRunsNextStep(t *testing.T) {
 		}
 	})
 
-	t.Run("admits each note at its next step and confirms only what OpenCode delivered", func(t *testing.T) {
+	t.Run("admits each note at its next step and confirms only what its model is sent plain", func(t *testing.T) {
 		t.Parallel()
 		route, pr := newNotesRoute(t), startProbe(t, node, entry)
 		pr.setup("a", route.url(), steerSession)
@@ -425,17 +465,20 @@ func pluginAdmitsNotesAtTheRunsNextStep(t *testing.T) {
 			t.Errorf("the poll after an admitted note asks past %q, want 1", held.after)
 		}
 
-		// CONFIRMED ONLY ON ITS OWN SESSION'S DELIVERY OF A NOTE IT ADMITTED.
-		pr.event("a", "session.inbox.delivered", otherSession, map[string]any{"inboxID": first.Inbox})
-		pr.event("a", "session.inbox.delivered", steerSession,
-			map[string]any{"inboxID": executor.InboxID(executor.OpenCodeName, "job-1", "not-admitted")})
-		route.none(300*time.Millisecond, "OpenCode delivered no note this plugin admitted to its session")
+		// CONFIRMED ONLY ONCE ITS OWN SESSION'S MODEL IS SENT IT PLAIN, never on
+		// its delivery alone: delivered, a compaction can still fold it.
 		pr.event("a", "session.inbox.delivered", steerSession, map[string]any{"inboxID": first.Inbox})
-		read := route.next("POST read", "confirm the note OpenCode delivered")
+		pr.sees("a", otherSession, plainNote(first))
+		pr.sees("a", steerSession, userText("msg_brief", "Fix the flake."))
+		route.none(300*time.Millisecond, "no model request of the plugin's session carried the note")
+		pr.sees("a", steerSession, userText("msg_brief", "Fix the flake."), plainNote(first))
+		read := route.next("POST read", "confirm the note its session's model is sent")
 		if read.body != `{"ids":["note-1"]}` {
-			t.Errorf("the confirmation reads %s, want the delivered note's id", read.body)
+			t.Errorf("the confirmation reads %s, want the note's id", read.body)
 		}
 		read.reply(http.StatusNoContent, "")
+		pr.sees("a", steerSession, userText("msg_brief", "Fix the flake."), plainNote(first))
+		route.none(300*time.Millisecond, "the note was confirmed already")
 
 		// THE EXECUTION SETTLES: the held poll is let go and nothing more is
 		// asked, until OpenCode starts another execution.
@@ -462,19 +505,22 @@ func pluginAdmitsNotesAtTheRunsNextStep(t *testing.T) {
 		route.none(time.Second, "the session's execution succeeded")
 	})
 
-	t.Run("admits a note of 100,000 UTF-16 units whole", func(t *testing.T) {
+	t.Run("admits a note at OpenCode's ceiling whole", func(t *testing.T) {
 		t.Parallel()
+		// THE CEILING THE RUNNER STATES, so a plugin that cut a note anywhere
+		// below it is caught.
+		ceiling, _ := executor.PollCeiling(executor.OpenCodeName)
 		route, pr := newNotesRoute(t), startProbe(t, node, entry)
 		pr.setup("a", route.url(), steerSession)
 		pr.expect("setup")
 		pr.event("a", "session.execution.started", steerSession, nil)
 		long := noteNumbered(1)
-		long.Message += "\n\n" + strings.Repeat("a", probeNoteUnits-executor.UTF16Len(long.Message)-2)
+		long.Message += "\n\n" + strings.Repeat("a", ceiling-executor.UTF16Len(long.Message)-2)
 		route.next("GET notes", "poll once the session's execution started").reply(http.StatusOK, notesBody(long))
 		input := pr.expect("prompt-started").Input
 		wantAdmitted(t, input, steerSession, long)
-		if text, _ := input["text"].(string); executor.UTF16Len(text) != probeNoteUnits {
-			t.Errorf("the plugin admitted %d UTF-16 units of a %d-unit note", executor.UTF16Len(text), probeNoteUnits)
+		if text, _ := input["text"].(string); executor.UTF16Len(text) != ceiling {
+			t.Errorf("the plugin admitted %d UTF-16 units of a %d-unit note", executor.UTF16Len(text), ceiling)
 		}
 		if !pr.expect("prompt").OK {
 			t.Fatal("the stand-in refused an admission it was not told to")
@@ -607,8 +653,8 @@ func pluginAdmitsNotesAtTheRunsNextStep(t *testing.T) {
 		pr.expect("prompt-started")
 		pr.expect("prompt")
 		held := route.next("GET notes", "poll past the admitted note")
-		pr.event("a", "session.inbox.delivered", steerSession, map[string]any{"inboxID": first.Inbox})
-		route.next("POST read", "confirm the delivered note").reply(http.StatusNotFound, `{"error":"not_found"}`)
+		pr.sees("a", steerSession, plainNote(first))
+		route.next("POST read", "confirm the note sent plain").reply(http.StatusNotFound, `{"error":"not_found"}`)
 		route.letGo(held, "the route answered that the run has no notes")
 		route.none(2500*time.Millisecond, "the route answered that the run has no notes")
 	})
@@ -653,6 +699,8 @@ type routeInbox struct {
 	mu    sync.Mutex
 	notes []mcpbridge.SteerNote
 	reads chan []string
+	folds chan []string
+	asks  chan []string
 }
 
 func (i *routeInbox) Take(context.Context, string, *sandbox.NoteCall) string { return "" }
@@ -678,21 +726,97 @@ func (i *routeInbox) Read(_ context.Context, ids []string) error {
 	return nil
 }
 
+func (i *routeInbox) Folded(_ context.Context, ids []string) { i.folds <- ids }
+
+// Again grants every note asked its second id in job-1.
+func (i *routeInbox) Again(_ context.Context, ids []string) (map[string]string, []string, error) {
+	i.asks <- ids
+	granted := map[string]string{}
+	for _, id := range ids {
+		granted[id] = executor.AgainID(executor.OpenCodeName, "job-1", id)
+	}
+	return granted, nil, nil
+}
+
 func (i *routeInbox) Close() {}
 
 // THE PLUGIN READS THE BRIDGE'S OWN NOTES ROUTE: run against a real bridge (its
-// inbox a stand-in of the engine's), the route's answer and read are crossed as
-// a run's harness crosses them: the note's place, id, inbox id and message, the
-// cursor polled past and the ids confirmed. A field either side renamed would
-// leave every OpenCode run admitting nothing with no error anywhere, since the
+// inbox a stand-in of the engine's), the route's answer, read and fold are
+// crossed as a run's harness crosses them: the note's place, id, both its
+// inbox ids and message, the cursor polled past, the ids confirmed and the ids
+// given up. A field either side renamed would leave every OpenCode run
+// admitting, confirming or giving up nothing with no error anywhere, since the
 // plugin skips a note it cannot read.
 //
-// Mutation: rename `inbox`, `message` or `seq` on mcpbridge.SteerNote, or `ids`
-// on the route's read, or the field the plugin reads for any of them, and this
-// goes red.
+// Mutation: rename `inbox`, `message` or `seq` on mcpbridge.SteerNote, `ids`
+// on the route's read, the `again` answer's fields, or the `again` or
+// `folded` verb, or the field the plugin reads for any of them, and this goes
+// red.
 func pluginReadsTheBridgesOwnNotesRoute(t *testing.T) {
 	t.Parallel()
 	node := nodeForNotes(t)
+	entry := steerEntry(t)
+	note := mcpbridge.SteerNote{Seq: 3, ID: "req-7", Inbox: executor.InboxID(executor.OpenCodeName, "job-1", "req-7"),
+		Message: "## A note from ada, sent while this turn was running\n\nTarget the release branch."}
+	folded := mcpbridge.SteerNote{Seq: 4, ID: "req-8", Inbox: executor.InboxID(executor.OpenCodeName, "job-1", "req-8"),
+		Message: "## A note from ada, sent while this turn was running\n\nAnd tag it."}
+	inbox := &routeInbox{notes: []mcpbridge.SteerNote{note, folded}, reads: make(chan []string, 4),
+		folds: make(chan []string, 4), asks: make(chan []string, 4)}
+	endpoint := probeBridge(t, inbox, &probeLedger{})
+
+	pr := startProbe(t, node, entry)
+	pr.setup("a", mcpbridge.SteerURL(endpoint), steerSession)
+	pr.expect("setup")
+	pr.event("a", "session.execution.started", steerSession, nil)
+	for _, n := range []mcpbridge.SteerNote{note, folded} {
+		wantAdmitted(t, pr.expect("prompt-started").Input, steerSession, n)
+		if !pr.expect("prompt").OK {
+			t.Fatal("the stand-in refused an admission it was not told to")
+		}
+	}
+	pr.sees("a", steerSession, plainNote(note))
+	// ONE BOUND FOR THE CASE'S TWO CROSSINGS, the read and the fold.
+	deadline := time.After(10 * time.Second)
+	select {
+	case ids := <-inbox.reads:
+		if len(ids) != 1 || ids[0] != note.ID {
+			t.Errorf("the route handed the inbox the read %v, want the note's id %q", ids, note.ID)
+		}
+	case <-deadline:
+		t.Fatalf("the plugin's confirmation never reached the run's inbox through the route\n%s",
+			pr.stderrText())
+	}
+	// THE OTHER NOTE IS FOLDED TWICE: admitted again under the second id the
+	// route granted it, then given up through the route's fold.
+	pr.event("a", "session.inbox.delivered", steerSession, map[string]any{"inboxID": folded.Inbox})
+	pr.event("a", "session.compaction.ended", steerSession, nil)
+	wantReadmitted(t, pr.expect("prompt-started").Input, steerSession, folded)
+	pr.expect("prompt")
+	if asked := <-inbox.asks; len(asked) != 1 || asked[0] != folded.ID {
+		t.Errorf("the route handed the inbox the ask %v, want the folded note's id %q", asked, folded.ID)
+	}
+	pr.event("a", "session.inbox.delivered", steerSession, map[string]any{"inboxID": againOf(folded)})
+	pr.event("a", "session.compaction.ended", steerSession, nil)
+	select {
+	case ids := <-inbox.folds:
+		if len(ids) != 1 || ids[0] != folded.ID {
+			t.Errorf("the route handed the inbox the fold %v, want the note's id %q", ids, folded.ID)
+		}
+	case <-deadline:
+		t.Fatalf("the plugin's fold never reached the run's inbox through the route\n%s", pr.stderrText())
+	}
+	// AND THE NEXT POLL ASKS PAST THE NOTES IT ADMITTED: nothing is admitted
+	// twice, nor read.
+	pr.quiet(1500*time.Millisecond, "every note was admitted already")
+	if len(inbox.reads) != 0 {
+		t.Errorf("the route handed the inbox another read: %v", <-inbox.reads)
+	}
+}
+
+// steerEntry is the notes plugin as a run is handed it: written by WriteConfig
+// into a real box, as index.js in the directory the configuration names.
+func steerEntry(t *testing.T) string {
+	t.Helper()
 	_, box := openCodeBox(t, t.TempDir())
 	p := executor.PathsFor(box)
 	cfgPath, err := executor.OpenCode{}.WriteConfig(t.Context(), box, sandbox.RunRequest{
@@ -702,34 +826,7 @@ func pluginReadsTheBridgesOwnNotesRoute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
-	entry := filepath.Join(steerPluginOf(t, cfgPath).Package, "index.js")
-
-	note := mcpbridge.SteerNote{Seq: 3, ID: "req-7", Inbox: executor.InboxID(executor.OpenCodeName, "job-1", "req-7"),
-		Message: "## A note from ada, sent while this turn was running\n\nTarget the release branch."}
-	inbox := &routeInbox{notes: []mcpbridge.SteerNote{note}, reads: make(chan []string, 4)}
-	endpoint := probeBridge(t, inbox, &probeLedger{})
-
-	pr := startProbe(t, node, entry)
-	pr.setup("a", mcpbridge.SteerURL(endpoint), steerSession)
-	pr.expect("setup")
-	pr.event("a", "session.execution.started", steerSession, nil)
-	wantAdmitted(t, pr.expect("prompt-started").Input, steerSession, note)
-	if !pr.expect("prompt").OK {
-		t.Fatal("the stand-in refused an admission it was not told to")
-	}
-	pr.event("a", "session.inbox.delivered", steerSession, map[string]any{"inboxID": note.Inbox})
-	select {
-	case ids := <-inbox.reads:
-		if len(ids) != 1 || ids[0] != note.ID {
-			t.Errorf("the route handed the inbox the read %v, want the note's id %q", ids, note.ID)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatalf("the plugin's confirmation never reached the run's inbox through the route\n%s",
-			pr.stderrText())
-	}
-	// AND THE NEXT POLL ASKS PAST THE NOTE IT ADMITTED: nothing is admitted
-	// twice.
-	pr.quiet(1500*time.Millisecond, "the only note was admitted already")
+	return filepath.Join(steerPluginOf(t, cfgPath).Package, "index.js")
 }
 
 // openCodePlugin is a run configuration's plugin entry.
@@ -740,7 +837,17 @@ type openCodePlugin struct {
 	} `json:"options"`
 }
 
-// steerPluginOf is the one plugin the run's configuration at path names.
+// runPlugins is plugins without the tool-environment plugin every run's
+// configuration names last ([Paths.OpenCodeToolEnvPlugin]), which its own
+// cases hold (opencode_toolenv_test.go).
+func runPlugins(plugins []openCodePlugin) []openCodePlugin {
+	return slices.DeleteFunc(slices.Clone(plugins), func(p openCodePlugin) bool {
+		return path.Base(p.Package) == "opencode-tool-env"
+	})
+}
+
+// steerPluginOf is the one plugin the run's configuration at path names, but
+// the tool-environment one ([runPlugins]).
 func steerPluginOf(t *testing.T, path string) openCodePlugin {
 	t.Helper()
 	raw, err := os.ReadFile(path) //nolint:gosec // the run's configuration, under the test's box
@@ -753,10 +860,11 @@ func steerPluginOf(t *testing.T, path string) openCodePlugin {
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		t.Fatalf("unmarshal: %v\n%s", err, raw)
 	}
-	if len(cfg.Plugins) != 1 {
-		t.Fatalf("the configuration names %d plugins, want the notes plugin alone:\n%s", len(cfg.Plugins), raw)
+	plugins := runPlugins(cfg.Plugins)
+	if len(plugins) != 1 {
+		t.Fatalf("the configuration names %d plugins, want the notes plugin alone:\n%s", len(plugins), raw)
 	}
-	return cfg.Plugins[0]
+	return plugins[0]
 }
 
 // readReference is what OpenCode reads a `{file:<path>}` reference as: the

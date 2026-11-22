@@ -64,7 +64,8 @@ func (c *Company) validateSeatBlocks() error {
 				// seat already, each with its own remedy: the GitHub App by
 				// [Company.validateHumanSeatCode], the chat apps by the org
 				// model's agent-only rule.
-				if slices.Contains([]string{"datadog", "gitlab", "jira", "confluence", "cloudflare", "expo", "digitalocean", "scaleway", "aws", "google_cloud", "ssh", "app_store_connect"}, b.lane) {
+				if slices.Contains([]string{"datadog", "gitlab", "jira", "confluence", "cloudflare", "expo", "digitalocean", "scaleway", "aws", "google_cloud", "ssh"}, b.lane) ||
+					isGrowthSeat(b.lane) {
 					p.add(here, ErrConflict, "%s: a person signs in as themselves. "+
 						"Remove this block, or make the seat an agent seat", seatAccessOnHuman)
 				}
@@ -103,7 +104,11 @@ func (c *Company) validateSeatBlocks() error {
 		c.checkAWS(&p, at(base, "aws"), in.AWS)
 		c.checkGoogleCloud(&p, at(base, "google_cloud"), in.GoogleCloud)
 		c.checkSSH(&p, at(base, "ssh"), in.SSH)
-		c.checkAppStoreConnect(&p, at(base, "app_store_connect"), in.AppStoreConnect)
+		for _, kind := range growthSeatKeys() {
+			if s := role.growthSeatOf(kind); s != nil {
+				s.check(c, &p, at(base, kind))
+			}
+		}
 	}
 	return p.err()
 }
@@ -130,10 +135,9 @@ func (c *Company) connected(lane string) bool {
 		return in.Confluence != nil
 	case "ssh":
 		return in.SSH != nil
-	case "app_store_connect":
-		return in.AppStoreConnect.GrowthEnabled()
 	default:
-		return true
+		// A growth product's seat acts through the company's connection.
+		return !isGrowthSeat(lane) || in.GrowthEnabled(lane)
 	}
 }
 
