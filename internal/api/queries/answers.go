@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/livestate"
+	"github.com/crewlet/crewlet/internal/appstoreconnect"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
@@ -436,6 +437,12 @@ type Sources struct {
 	// as it is configured. Nil is "cannot say", and the roll-up then reads
 	// an unreported surface as connecting rather than guessing either way.
 	Converges func(kind integration.Kind) bool
+
+	// AppStoreConnectReach is what this node last read of each App Store
+	// Connect connection's apps, without asking Apple, for each connection's
+	// card; nil reads none, and a card then lists only the apps the company
+	// names.
+	AppStoreConnectReach func() appstoreconnect.Reach
 
 	// Work and Pages are Worklet and Doclet, read through this node's
 	// estate router: a data node's copy of each state-log domain — this
