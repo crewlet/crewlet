@@ -307,11 +307,6 @@
   gap: var(--spacing-2);
 }
 
-/* The faces' cut-out takes the card's ground, not the page's. */
-.models-first-run__waiting > .crewlet-avatar-stack {
-  --crewlet-avatar-stack-ground: var(--color-surface-subtle);
-}
-
 /* A model's harness mark before its key, in a picker, an option or a menu item. */
 .models-option-mark {
   display: inline-flex;

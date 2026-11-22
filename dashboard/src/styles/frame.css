@@ -993,3 +993,10 @@
   font-family: var(--font-family-mono);
   font-size: var(--font-size-2xs);
 }
+
+/* THE MODELS FIRST-RUN CARD'S FACES are cut out of the card's ground
+   (`.models-first-run__waiting`). Here, not in models.css: a lazy sheet
+   may carry no kit rule. */
+.models-first-run__waiting > .crewlet-avatar-stack {
+  --crewlet-avatar-stack-ground: var(--color-surface-subtle);
+}
