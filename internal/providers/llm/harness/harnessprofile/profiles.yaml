@@ -2401,11 +2401,21 @@ copilot:
   #                               server on a GitHub sign-in, which is why
   #                               that server is left on (not measured: no
   #                               GitHub sign-in).
-  #   --allow-tool                on 1.0.103, the web tools had to be ALLOWED
-  #                               as well as present: prompt mode never asks.
+  #   --allow-all-urls            what lets web_fetch fetch. A fetch asks a
+  #                               URL permission, which prompt mode cannot
+  #                               answer: with --allow-tool web_fetch alone it
+  #                               was denied ("Permission denied because no
+  #                               interactive user response was available").
+  #                               With --allow-all-urls it ran, with or
+  #                               without that --allow-tool, which is not
+  #                               passed.
+  #   --allow-tool                web_search, unmeasured (no GitHub sign-in).
   #   --deny-tool                 beside the allowlist, the shell, write and
   #                               read permission kinds; a denial wins over
-  #                               an allow.
+  #                               an allow (--allow-tool crewlet beside
+  #                               --deny-tool crewlet was refused). It does
+  #                               not reach a fetch: --deny-tool web_fetch
+  #                               beside --allow-all-urls did not stop one.
   #
   # Every value sits beside its own flag: each of these flags takes a LIST,
   # so a value standing alone after one would be read into it.
@@ -2428,9 +2438,8 @@ copilot:
     - "--available-tools"
     - "web_search"
     - "--allow-tool"
-    - "web_fetch"
-    - "--allow-tool"
     - "web_search"
+    - "--allow-all-urls"
     - "--deny-tool"
     - "shell"
     - "--deny-tool"
@@ -2438,11 +2447,30 @@ copilot:
     - "--deny-tool"
     - "read"
   local_tools: denied
-  web_tools_note: "no web denial: --deny-tool web_fetch and web_search would be one, but it has not been measured against a copilot harness, so this profile cannot serve the assistant"
+  # WEB OFF: the web tools out of --available-tools and no URL allowed, nothing
+  # left to --deny-tool. Measured on 1.0.114: with --allow-all-urls,
+  # --allow-url, COPILOT_ALLOW_ALL=true and a home allowedUrls all set, a
+  # web_fetch call was answered "Tool 'web_fetch' does not exist", with the
+  # crewlet server and without. `crewlet` keeps the allowlist where a call has
+  # no server: an empty --available-tools is no allowlist (all 21 tools were
+  # offered), and a name matching no tool adds nothing.
+  web_tools_note: "web_fetch and web_search left out of --available-tools, no URL allowed; measured: web_fetch does not exist on 1.0.114"
+  web_denial:
+    complete_args:
+      - "-s"
+      - "--disable-client-telemetry"
+      - "--available-tools"
+      - "crewlet"
+      - "--deny-tool"
+      - "shell"
+      - "--deny-tool"
+      - "write"
+      - "--deny-tool"
+      - "read"
   model_args: ["--model", "{model}"]
-  # Measured on 1.0.114: clap refuses any other value. Read from 1.0.103: a
-  # level the model lacks is logged and the run continues on the model's
-  # default.
+  # Measured on 1.0.114: clap refuses any other value, and a model that refuses
+  # the effort fails the call (a stand-in answering 400: exit 1, the
+  # provider's message on stderr).
   effort:
     args: ["--reasoning-effort", "{effort}"]
     levels: [none, minimal, low, medium, high, xhigh, max]
@@ -2479,14 +2507,16 @@ copilot:
   # cached tokens (measured: a reply reporting 1,000 prompt tokens, 600 of
   # them cached, was recorded as inputTokens 1000 and cacheReadTokens 600),
   # so the cached reads are reported and not added again
-  # (input_includes_cache). cacheWriteTokens is not read: every measured call
-  # wrote 0, so whether the input count holds a write too is unmeasured. One
-  # entry per model the call used; every measured call used one.
+  # (input_includes_cache). Its cache writes are inside it too: a reply
+  # reporting cache_write_tokens 11 of its 1,000 was recorded as
+  # cacheWriteTokens 11 and inputTokens 1000 (measured on 1.0.114, against a
+  # stand-in). One entry per model the call used; every measured call used one.
   usage_file_args: ["--usage-output-file", "{usage_file}"]
   usage:
     input: [["providerModelMetrics", "0", "metrics", "usage", "inputTokens"]]
     output: [["providerModelMetrics", "0", "metrics", "usage", "outputTokens"]]
     cache_read: [["providerModelMetrics", "0", "metrics", "usage", "cacheReadTokens"]]
+    cache_write: [["providerModelMetrics", "0", "metrics", "usage", "cacheWriteTokens"]]
     input_includes_cache: true
   # NO SERVER OF THE HOME'S OWN: the harness starts every server its home's
   # mcp-config.json names on every run, beside any --additional-mcp-config —
@@ -2512,9 +2542,11 @@ copilot:
   #
   # The server's `timeout` is the harness's per-call timeout, in milliseconds
   # (4,000 gave a slow call up at 4.0s). The harness re-reads the server's list
-  # when told it changed — on 1.0.103 a tool activated mid-run was offered
-  # from the request after the one the activation's result went back in —
-  # and makes one response's calls at once. A failed run says why on stderr.
+  # when told it changed: a tool activated mid-run was offered in the request
+  # carrying the activation's result when the server said so before answering,
+  # as the engine's does, and from the first request after its re-list when
+  # told 200 ms later. It makes one response's calls at once. A failed run says
+  # why on stderr.
   mcp:
     seed:
       - path: crewlet-mcp.json
@@ -2530,8 +2562,9 @@ copilot:
   # opens it, a usage_record carries its counts (the input count holding the
   # cached tokens, as the usage report's does), and assistant.message its
   # prose and the calls it asked for, each written before the calls run. The
-  # harness sends no id of its own with a call; a call is joined to its request by
-  # name and arguments, the server's tools spelled `crewlet-<name>`.
+  # harness hands the server each call's toolCallId in its `_meta`, as
+  # `com.github.copilot/toolCallId`, so a call is joined to its request by id
+  # (measured on 1.0.114); the server's tools are spelled `crewlet-<name>`.
   #
   # The session's directory is named by an id the harness mints — --session-id
   # takes a UUID only, which the engine's session id is not — so the file is
@@ -2546,6 +2579,7 @@ copilot:
     file: ".copilot/session-state/*/events.jsonl"
     owner: {path: ["data", "context", "cwd"], equals: "{work}"}
     host_prefix: "crewlet-"
+    call_id_meta: "com.github.copilot/toolCallId"
     events:
       - match: [{path: ["type"], equals: "assistant.turn_start"}]
         id: ["data", "turnId"]
@@ -2555,6 +2589,7 @@ copilot:
           input: [["data", "usage", "inputTokens"]]
           output: [["data", "usage", "outputTokens"]]
           cache_read: [["data", "usage", "cacheReadTokens"]]
+          cache_write: [["data", "usage", "cacheWriteTokens"]]
           input_includes_cache: true
       - match: [{path: ["type"], equals: "assistant.message"}]
         id: ["data", "turnId"]
@@ -2586,19 +2621,22 @@ copilot:
   credential_paths: [".copilot/config.json"]
   login_keys:
     config.json: "copilotTokens"
-  # What a call leaves in the seat's home, measured on 1.0.103: a session
-  # directory holding the call's events, and the session database every
-  # session is indexed in (which the harness's own session_store_sql tool
-  # queries). The standalone binary also unpacks its 236 MB package under
+  # What a call leaves in the seat's home, measured on 1.0.114: a session
+  # directory holding the call's events, the session database every session
+  # is indexed in (which the harness's own session_store_sql tool queries)
+  # with its write-ahead log and shared memory, an empty installed-plugins
+  # directory and an empty settings.json.lock, all outliving the call.
+  # The standalone binary also unpacks its 282 MB package under
   # XDG_CACHE_HOME/copilot/pkg on its first run, once per seat: the cache
   # is the seat's own, and nothing in a profile can point it elsewhere.
   volatile_paths:
     - ".copilot/logs"
     - ".copilot/session-state"
     - ".copilot/session-store.db"
-    - ".copilot/session-store.db-journal"
     - ".copilot/session-store.db-wal"
     - ".copilot/session-store.db-shm"
+    - ".copilot/installed-plugins"
+    - ".copilot/settings.json.lock"
   # NOT gh's `.config/gh/hosts.yml`, which this list named beside it.
   # `-from-host` keeps an adopted file under its file name and a seat is
   # seeded only with the names credential_paths gives, so gh's file was
@@ -2656,8 +2694,9 @@ copilot:
         - {path: ["data", "errorType"], equals: "quota"}
   # The harness's own words. Signed out, 1.0.114 exits 1 on "Error: No
   # authentication information found." (measured); a credential the service
-  # refuses is "Authentication failed due to invalid credentials" (read from
-  # the 1.0.103 bundle).
+  # refuses is "Authentication failed for this account. Sign in again with
+  # /login, then retry." or "Authentication failed: <reason>" (read from the
+  # 1.0.114 bundle).
   auth_markers:
     - sentinel: "No authentication information found"
     - sentinel: "Authentication failed"
