@@ -498,8 +498,8 @@ func TestACodexBoxContinuesItsOwnCopyOnlyOnTheOneSupportedRelease(t *testing.T) 
 // floor is refused, one at or past it starts.
 //
 // Mutation: read the last run of digits and dots, take a pre-release for its
-// numbers, start on an unreadable release, or let releaseOf and the script
-// disagree, and a row fails.
+// numbers, accept three parts that are not all digits, start on an unreadable
+// release, or let releaseOf and the script disagree, and a row fails.
 func TestACodexReleaseIsReadAsABareMajorMinorPatch(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -513,6 +513,9 @@ func TestACodexReleaseIsReadAsABareMajorMinorPatch(t *testing.T) {
 		{"codex-cli 0.150.0-alpha.1", "", false},
 		{"codex-cli 0.171.0-alpha.1", "", false},
 		{"codex-cli 0.172.0-rc.2", "", false},
+		{"codex-cli 0.172.0-rc", "", false},
+		{"codex-cli 0.172.0+build", "", false},
+		{"codex-cli 0.172.x", "", false},
 		{"codex-cli 0.171.0+build.7", "", false},
 		{"codex-cli 0.171", "", false},
 		{"codex-cli 0.171.0.1", "", false},

@@ -491,14 +491,21 @@ func TestASkillFileTheModelRewroteIsNoLoad(t *testing.T) {
 	app := newFakeAppServer(t, "turn-1", 0)
 	var loads record[string]
 	joinedWith(t, app, events{skill: func(name string) { loads.add(name) }}, set)
-	commandDone(t, app, "thread-A", 0, rewritten, "/", action("read", alpha.path))
-	commandDone(t, app, "thread-A", 0, alpha.body[:len(alpha.body)-4], "/", action("read", alpha.path))
-	commandDone(t, app, "thread-A", 0, alpha.body, "/", action("read", alpha.path))
-	commandDone(t, app, "thread-A", 0, beta.body, "/", action("read", beta.path))
-	got := loads.await(func(l []string) bool { return len(l) > 0 && l[len(l)-1] == "beta" })
-	if !slices.Equal(got, []string{"alpha", "beta"}) {
-		t.Errorf("loads %v: want alpha once, for its installed words, then beta", got)
+	// Each command is judged by itself: a read of beta after it fences it, as
+	// notices are read in order.
+	read := func(output string, want ...string) {
+		t.Helper()
+		commandDone(t, app, "thread-A", 0, output, "/", action("read", alpha.path))
+		commandDone(t, app, "thread-A", 0, beta.body, "/", action("read", beta.path))
+		n := len(want)
+		got := loads.await(func(l []string) bool { return len(l) >= n && l[len(l)-1] == "beta" })
+		if !slices.Equal(got, want) {
+			t.Errorf("loads %v: want %v", got, want)
+		}
 	}
+	read(rewritten, "beta")
+	read(alpha.body[:len(alpha.body)-4], "beta", "beta")
+	read(alpha.body, "beta", "beta", "alpha", "beta")
 }
 
 // installed is the skill set the runner installed: dir and the digest of
