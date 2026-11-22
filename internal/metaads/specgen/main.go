@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/metaads"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 func main() {
@@ -182,7 +183,8 @@ func check(specs map[string]spec, version string, refs []metaads.SpecRef, owned 
 	}
 	slices.Sort(want)
 	if !slices.Equal(want, owned) {
-		bad("changed: the node types placed by account_id are %v in the table and %v in the specs", owned, want)
+		bad("changed: the node types placed by account_id are %s in the table and %s in the specs",
+			words.And(owned), words.And(want))
 	}
 	slices.Sort(out)
 	return out
