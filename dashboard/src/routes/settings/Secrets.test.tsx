@@ -234,20 +234,41 @@ test("a stored value goes as the request body rather than wrapped in JSON", asyn
   });
 });
 
-// A SECRET IS A PASSWORD FIELD. The type is what keeps the value out of an
-// autofill store and out of a screenshot, and it is the one property of this
-// form that is a security property rather than a nicety. And no saved login
-// is offered into it: browsers ignore autocomplete="off" on a password field,
-// so it says "new-password" and carries the password managers' opt-outs.
-test("the value is a password field that refuses every saved login", async () => {
+// A SECRET IS MASKED AND NO SAVED LOGIN IS OFFERED INTO IT, and it is the
+// one property of this form that is a security property rather than a
+// nicety. It is a box that keeps line breaks: a stored value may be a PEM key,
+// and a one-line password box stripped its lines from a paste.
+test("the value is a masked box no password manager fills", async () => {
   stubLoaded();
   render(<Secrets />);
 
   fireEvent.click(await screen.findByRole("button", { name: "Add secret" }));
   const value = screen.getByLabelText("Value");
-  expect(value.getAttribute("type")).toBe("password");
-  expect(value.getAttribute("autocomplete")).toBe("new-password");
+  expect(value.tagName).toBe("TEXTAREA");
+  expect(value.classList.contains("crewlet-value-field__key-box--masked")).toBe(true);
+  expect(value.getAttribute("autocomplete")).toBe("off");
   expect(value.hasAttribute("data-1p-ignore")).toBe(true);
+});
+
+// A KEY STORED HERE KEEPS ITS LINE BREAKS, to the byte: the body is what was
+// pasted. Mutation: draw the value as the one-line `secret` kind, and the
+// browser drops every line break before the write.
+test("a pasted PEM key is stored with its line breaks", async () => {
+  const spy = stubLoaded((path, init) =>
+    path === "/secrets/SIGNING_KEY" && init?.method === "PUT" ? ok({ name: "SIGNING_KEY" }) : null,
+  );
+  const pem = "-----BEGIN PRIVATE KEY-----\nMIGTAgEAMBMGByqGSM49\n-----END PRIVATE KEY-----\n";
+  render(<Secrets />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "Add secret" }));
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "SIGNING_KEY" } });
+  fireEvent.change(screen.getByLabelText("Value"), { target: { value: pem } });
+  fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+  await eventually(() => {
+    const write = spy.mock.calls.find(([, init]) => init?.method === "PUT");
+    expect(write?.[1]?.body).toBe(pem);
+  });
 });
 
 // THE ENGINE JUDGES THE NAME, not a regex written here. A second copy of the
