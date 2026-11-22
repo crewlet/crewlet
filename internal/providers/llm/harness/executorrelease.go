@@ -30,6 +30,12 @@ func (p *Provider) executorRelease(ctx context.Context, opts DiagnoseOptions, ve
 		// The version check already says why none was read.
 		return "", ""
 	}
+	if runner.Floor != "" && harnessprofile.Release(version) == "" {
+		return "release: " + version, fmt.Sprintf("this host's %s printed %q, which names no release its "+
+			"executor runner reads (a bare MAJOR.MINOR.PATCH, never a pre-release), so every run would be "+
+			"refused: a direct box runs this host's own, so install a release at or past %s before a seat "+
+			"launches on providers.llm.%s", p.profile.Binary, version, runner.Floor, p.key)
+	}
 	if runner.Floor != "" && !releaseAtLeast(version, runner.Floor) {
 		return "release: " + version, fmt.Sprintf("this host's %s is %s, and its executor runner drives %s "+
 			"or later: a direct box runs this host's own, so upgrade it before a seat launches on "+
@@ -77,39 +83,30 @@ func (p *Provider) probeExit(ctx context.Context, args []string) (int, error) {
 }
 
 // releaseAtLeast reports whether version, as a harness printed it, is at or
-// past floor, MAJOR.MINOR.PATCH: the numbers are the version's last run of
-// digits and dots (`codex-cli 0.171.0`). A version that reads no three numbers
-// is taken for a current release, as the run's script takes it.
+// past floor, MAJOR.MINOR.PATCH, each read as the run's script reads it
+// ([harnessprofile.Release]); one that names no release meets no floor.
 func releaseAtLeast(version, floor string) bool {
 	have, ok := releaseParts(version)
 	if !ok {
-		return true
+		return false
 	}
 	want, ok := releaseParts(floor)
 	if !ok {
-		return true
+		return false
 	}
 	return slices.Compare(have[:], want[:]) >= 0
 }
 
-// releaseParts is the three numbers ending the last run of digits and dots in
-// s, false where it holds none.
+// releaseParts is the three numbers of the bare release s names, false where
+// it names none.
 func releaseParts(s string) ([3]int, bool) {
-	end := len(s)
-	for end > 0 && !isReleaseByte(s[end-1]) {
-		end--
-	}
-	start := end
-	for start > 0 && isReleaseByte(s[start-1]) {
-		start--
-	}
-	fields := strings.Split(s[start:end], ".")
 	var out [3]int
-	if len(fields) < 3 {
+	release := harnessprofile.Release(s)
+	if release == "" {
 		return out, false
 	}
-	for i := range 3 {
-		n, err := strconv.Atoi(fields[i])
+	for i, field := range strings.SplitN(release, ".", 3) {
+		n, err := strconv.Atoi(field)
 		if err != nil {
 			return out, false
 		}
@@ -117,5 +114,3 @@ func releaseParts(s string) ([3]int, bool) {
 	}
 	return out, true
 }
-
-func isReleaseByte(c byte) bool { return c == '.' || (c >= '0' && c <= '9') }
