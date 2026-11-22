@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // testToken is the run's bridge token in the fake route's path: the secret
@@ -351,7 +352,12 @@ func TestASignalEndsTheHelperWithExitZero(t *testing.T) {
 
 // THE HELPER STARTS ONLY WITH WHAT IT NEEDS, AND TAKES NO ROUTE ON ITS
 // COMMAND LINE, which every process in the box can read: each refusal is
-// exit 2, and none prints the route.
+// exit 2, and none prints the route. A digest of the right length that is
+// not hex is refused by the hex check alone. Each run is bounded
+// ([refusalBound]), so a helper that runs on instead fails the exit status.
+//
+// Mutation: drop any of the command line's checks, the hex decode's or a
+// skill named twice included, and its row goes red.
 func TestTheHelperRefusesACommandLineItCannotRunWith(t *testing.T) {
 	t.Parallel()
 	route := "http://127.0.0.1:1/mcp/" + testToken + "/steer"
@@ -376,6 +382,8 @@ func TestTheHelperRefusesACommandLineItCannotRunWith(t *testing.T) {
 		"a digest with no skills": {append(slices.Clone(full), "-skill-digest", "a="+strings.Repeat("0", 64)), route},
 		"a digest it cannot read": {append(slices.Clone(full), "-skills-env", "NOTES_ROUTE", "-skills-dir",
 			"/nowhere/skills", "-skill-digest", "a=not-hex"), route},
+		"a digest of its length that is not hex": {append(slices.Clone(full), "-skills-env", "NOTES_ROUTE",
+			"-skills-dir", "/nowhere/skills", "-skill-digest", "a="+strings.Repeat("g", 64)), route},
 		"a skill named twice": {append(slices.Clone(full), "-skills-env", "NOTES_ROUTE", "-skills-dir",
 			"/nowhere/skills", "-skill-digest", "a="+strings.Repeat("0", 64), "-skill-digest",
 			"a="+strings.Repeat("1", 64)), route},
@@ -385,7 +393,9 @@ func TestTheHelperRefusesACommandLineItCannotRunWith(t *testing.T) {
 			t.Parallel()
 			var stderr lockedBuffer
 			env := func(string) string { return c.env }
-			if code := run(context.Background(), c.args, env, &stderr, quickPacing); code != exitUsage {
+			ctx, cancel := context.WithTimeout(t.Context(), refusalBound)
+			defer cancel()
+			if code := run(ctx, c.args, env, &stderr, quickPacing); code != exitUsage {
 				t.Errorf("exit status %d, want %d; stderr:\n%s", code, exitUsage, stderr.String())
 			}
 			if strings.Contains(stderr.String(), testToken) {
@@ -520,3 +530,10 @@ func TestASkillLoadIsReportedAndTheSkillRouteNeverPrinted(t *testing.T) {
 		t.Errorf("stderr carries the skill route or its token:\n%s", stderr)
 	}
 }
+
+// refusalBound is how long a command line's refusal may take: a liveness
+// bound, never a verdict. A refusal returns before the helper waits on
+// anything, so it is never reached; a helper that runs on past a check waits
+// on the box's files instead, and this ends it with exit 0, which the case's
+// exit-status assertion fails, rather than the package's timeout.
+const refusalBound = 10 * time.Second
