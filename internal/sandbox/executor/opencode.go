@@ -1061,12 +1061,18 @@ func jsonStringify(s string) string {
 // without it.
 func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
 	paths Paths) (string, error) {
-	if req.System != "" || len(req.MCPServers) > 0 || req.Steer.Set() || len(req.Skills) > 0 {
-		if err := openCodeReferable(paths.WorkDir()); err != nil {
-			return "", fmt.Errorf("executor: this box's home %q cannot be named in an OpenCode "+
-				"run's configuration: %w; a local box's home is under providers.sandbox.local.state_dir, "+
-				"which needs a path without such characters", paths.Home, err)
-		}
+	// THE COMMANDS ITS MODEL RUNS START WITHOUT WHAT THE HARNESS ALONE READS:
+	// the names it signs in by and its own variables, on every run
+	// (opencode_toolenv.js).
+	omitted, refused := toolEnvOmitted(req.SignInEnv, openCodeHarnessEnv...)
+	if refused != nil {
+		return "", refused
+	}
+	// So every run's configuration names a path under the work dir.
+	if err := openCodeReferable(paths.WorkDir()); err != nil {
+		return "", fmt.Errorf("executor: this box's home %q cannot be named in an OpenCode "+
+			"run's configuration: %w; a local box's home is under providers.sandbox.local.state_dir, "+
+			"which needs a path without such characters", paths.Home, err)
 	}
 	cfg := map[string]any{
 		"$schema": "https://opencode.ai/config.json",
@@ -1160,9 +1166,15 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 			"options": map[string]string{"url": wired.skills},
 		})
 	}
-	if len(plugins) > 0 {
-		cfg["plugins"] = plugins
+	// AND ON EVERY RUN THE PLUGIN THAT KEEPS omitted OUT OF THE COMMANDS ITS
+	// MODEL RUNS (opencode_toolenv.js), last.
+	if err := box.WriteFile(ctx, paths.OpenCodeToolEnvPlugin()+"/"+openCodeSteerEntry, openCodeToolEnvPlugin); err != nil {
+		return "", fmt.Errorf("executor: writing OpenCode's tool-environment plugin: %w", err)
 	}
+	cfg["plugins"] = append(plugins, map[string]any{
+		"package": paths.OpenCodeToolEnvPlugin(),
+		"options": map[string]any{"names": omitted},
+	})
 	for _, v := range values.files {
 		if err := box.WriteFile(ctx, v.path, []byte(v.value)); err != nil {
 			return "", fmt.Errorf("executor: writing a value of OpenCode's configuration: %w", err)
@@ -2003,5 +2015,5 @@ func (OpenCode) notesOffWhy() string {
 func (OpenCode) artifacts(p Paths) (files, dirs []string) {
 	return []string{p.OpenCodeConfig()},
 		[]string{p.OpenCodeValues(), p.OpenCodeValuesFresh(), p.OpenCodeSteerPlugin(), p.OpenCodeSkills(),
-			p.OpenCodeSkillsPlugin()}
+			p.OpenCodeSkillsPlugin(), p.OpenCodeToolEnvPlugin()}
 }
