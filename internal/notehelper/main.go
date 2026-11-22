@@ -14,6 +14,10 @@
 // Beside the notes it bounds a turn and reports skill loads, for a harness
 // that does neither itself; each part runs only where its flags ask.
 //
+// or, for a harness whose hook runs it once per firing (once.go):
+//
+//	notehelper -adapter muse-hook -config $RUN/muse-take.json -slot 1
+//
 // # What it does
 //
 // It polls the bridge's notes route OUTBOUND, as OpenCode's plugin does
@@ -79,6 +83,14 @@
 // and nothing else is one, so the bridge's guard fails closed on everything
 // the helper cannot prove.
 //
+// # Once per firing
+//
+// A harness whose hooks run a program (Muse Code's) runs the helper once per
+// firing instead (once.go): it takes the run's notes over the bridge's
+// steer_take, as a hook that calls an MCP tool would, hands the answer over
+// through the adapter, and exits 0 whatever happened, so a firing never stops
+// the harness; a take the harness never got is told again.
+//
 // # Exit
 //
 // 0 on SIGTERM or SIGINT, and once the harness's connection closes (the run
@@ -131,7 +143,10 @@ const (
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
-	code := run(ctx, os.Args[1:], os.Getenv, os.Stderr, defaultPacing)
+	code, once := runOnce(ctx, os.Args[1:], os.Getenv, os.Stdin, os.Stdout, os.Stderr)
+	if !once {
+		code = run(ctx, os.Args[1:], os.Getenv, os.Stderr, defaultPacing)
+	}
 	stop()
 	os.Exit(code)
 }
@@ -152,6 +167,13 @@ type flags struct {
 	// skills is the run's skills as -skills-dir and -skill-digest name them,
 	// set before the adapter opens: no flag of its own.
 	skills skillSet
+
+	// A one-shot adapter's (once.go): the take config's file, whether the
+	// hook reports skill loads and whether it takes no notes, and the hook's
+	// place among the run's hooks, which keeps each hook's command its own.
+	config                string
+	skillLoads, loadsOnly bool
+	slot                  int
 }
 
 // run is the whole program: the exit status for args, the environment

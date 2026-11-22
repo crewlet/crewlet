@@ -24,8 +24,9 @@ type Executor struct {
 	// root; "" for a harness that refuses none.
 	RefusesRoot string `yaml:"refuses_root,omitempty"`
 	// E2BTemplate is E2B's prebuilt image holding the harness, which a
-	// company naming no template of its own gets.
-	E2BTemplate string `yaml:"e2b_template"`
+	// company naming no template of its own gets; "" for a harness E2B
+	// prebuilds none of, whose e2b box needs the company's own template.
+	E2BTemplate string `yaml:"e2b_template,omitempty"`
 	// TempEnv is the variable the harness roots its own temporary directory
 	// at beside the standard ones, pointed at a host box's own; "" for none.
 	TempEnv string `yaml:"temp_env,omitempty"`
@@ -59,7 +60,7 @@ var executors = sync.OnceValue(func() []executorEntry {
 })
 
 // decodeExecutors reads raw's executor blocks in its order, refusing a block
-// that does not say it is a runner or names no template.
+// that does not say it is a runner.
 func decodeExecutors(raw []byte) ([]executorEntry, error) {
 	var doc yaml.Node
 	if err := yaml.NewDecoder(bytes.NewReader(raw)).Decode(&doc); err != nil {
@@ -82,8 +83,6 @@ func decodeExecutors(raw []byte) ([]executorEntry, error) {
 			continue
 		case !e.Runner:
 			return nil, fmt.Errorf("%s: executor: runner must be true where the block is set", table[i].Value)
-		case e.E2BTemplate == "":
-			return nil, fmt.Errorf("%s: executor: e2b_template is unset", table[i].Value)
 		}
 		out = append(out, executorEntry{name: table[i].Value, block: *entry.Executor})
 	}
