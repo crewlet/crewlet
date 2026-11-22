@@ -413,6 +413,10 @@ func (d *piEvents) request() contextRead {
 // getContextUsage().
 func (d *piEvents) reportedWindow() int64 { return d.window }
 
+// Ended implements [Decoder]: `agent_settled`, which pi prints as its run
+// ends, aborted or not.
+func (d *piEvents) Ended() bool { return d.settled }
+
 // Result implements [Decoder]: the answer, and how the run ended.
 //
 // A RUN WHOSE EXTENSION NEVER RAN fails whatever it answered: its script printed
