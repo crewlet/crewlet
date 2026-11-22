@@ -170,9 +170,9 @@ func startProbe(t *testing.T, node, plugin string) *probe {
 	go func() {
 		defer close(p.reports)
 		scan := bufio.NewScanner(stdout)
-		// A REPORT CARRIES THE ADMISSION'S WHOLE TEXT, a note at the probe's
-		// widest among them ([probeNoteUnits]).
-		scan.Buffer(make([]byte, 0, 64*1024), 1<<20)
+		// A REPORT CARRIES THE ADMISSION'S WHOLE TEXT, a note at OpenCode's
+		// ceiling among them, escaped as JSON.
+		scan.Buffer(make([]byte, 0, 64*1024), 8<<20)
 		for scan.Scan() {
 			var r probeReport
 			if err := json.Unmarshal(scan.Bytes(), &r); err != nil {
@@ -340,11 +340,6 @@ func wantAdmitted(t *testing.T, input map[string]any, session string, note mcpbr
 	}
 }
 
-// probeNoteUnits is the widest note the plugin's probe admits, in UTF-16 units:
-// far past every runner's ceiling, so a plugin that cut a note anywhere below
-// it is caught (openCodePollCeiling says what it stands for).
-const probeNoteUnits = 100_000
-
 const (
 	steerSession = "ses_0123456789abcdef0123456789abcdef"
 	otherSession = "ses_fedcba9876543210fedcba9876543210"
@@ -462,19 +457,22 @@ func pluginAdmitsNotesAtTheRunsNextStep(t *testing.T) {
 		route.none(time.Second, "the session's execution succeeded")
 	})
 
-	t.Run("admits a note of 100,000 UTF-16 units whole", func(t *testing.T) {
+	t.Run("admits a note at OpenCode's ceiling whole", func(t *testing.T) {
 		t.Parallel()
+		// THE CEILING THE RUNNER STATES, so a plugin that cut a note anywhere
+		// below it is caught.
+		ceiling, _ := executor.PollCeiling(executor.OpenCodeName)
 		route, pr := newNotesRoute(t), startProbe(t, node, entry)
 		pr.setup("a", route.url(), steerSession)
 		pr.expect("setup")
 		pr.event("a", "session.execution.started", steerSession, nil)
 		long := noteNumbered(1)
-		long.Message += "\n\n" + strings.Repeat("a", probeNoteUnits-executor.UTF16Len(long.Message)-2)
+		long.Message += "\n\n" + strings.Repeat("a", ceiling-executor.UTF16Len(long.Message)-2)
 		route.next("GET notes", "poll once the session's execution started").reply(http.StatusOK, notesBody(long))
 		input := pr.expect("prompt-started").Input
 		wantAdmitted(t, input, steerSession, long)
-		if text, _ := input["text"].(string); executor.UTF16Len(text) != probeNoteUnits {
-			t.Errorf("the plugin admitted %d UTF-16 units of a %d-unit note", executor.UTF16Len(text), probeNoteUnits)
+		if text, _ := input["text"].(string); executor.UTF16Len(text) != ceiling {
+			t.Errorf("the plugin admitted %d UTF-16 units of a %d-unit note", executor.UTF16Len(text), ceiling)
 		}
 		if !pr.expect("prompt").OK {
 			t.Fatal("the stand-in refused an admission it was not told to")
