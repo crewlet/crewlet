@@ -122,7 +122,7 @@ func readDigests(path string) (map[string][sha256.Size]byte, error) {
 	if err != nil {
 		return nil, usageError("reading the skill digests -skills-digests %s: %v", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // read only: nothing a failed close loses
 	out := map[string][sha256.Size]byte{}
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 256), maxDigestLine)
