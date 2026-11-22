@@ -1,27 +1,5 @@
 package executor
 
-// CodexConfig is the configuration file a Codex run's app-server reads, under
-// [Paths.CodexHome]: the run's MCP servers and its standing instructions,
-// which the script moves into place from [Paths.CodexConfigStaged] (or, for a
-// session of the run's own, [Paths.CodexConfigFresh]) before the server starts.
-//
-// A FILE, never `-c` on argv: a bridge server's url carries the job's token in
-// its path (internal/api/mcpbridge), and a command line is readable by every
-// account on a `direct` box's host. CODEX_HOME is the box's own, so the file
-// Codex calls the user's configuration is the run's, rewritten every run; the
-// run's posture still goes on argv, above anything a repository's own
-// configuration sets ([codexPosture]).
-func (p Paths) CodexConfig() string { return p.CodexHome() + "/config.toml" }
-
-// CodexConfigStaged is where [Codex.WriteConfig] writes a run's configuration
-// for the session it was asked to work in, beside the run's other artefacts.
-func (p Paths) CodexConfigStaged() string { return p.WorkDir() + "/codex-config.toml" }
-
-// CodexConfigFresh is the run's configuration under the job's other bridge
-// token, for a session its script starts in place of the one it continues
-// ([sandbox.RunRequest.FreshWiring]).
-func (p Paths) CodexConfigFresh() string { return p.WorkDir() + "/codex-config-fresh.toml" }
-
 // CodexSocket is the unix socket a Codex run's app-server listens on and its
 // `exec --remote` and note helper dial. In the work directory, which the box's
 // user owns and no other account may write: Codex refuses a socket whose

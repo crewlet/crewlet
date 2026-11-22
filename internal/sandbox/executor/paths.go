@@ -613,7 +613,9 @@
 // starts its own, saying why, where it can do neither. Whether a
 // box can continue a carried session is its harness's release, asked of the
 // box ([Runner.CheckCarry]). What each archive holds is its harness's: see
-// carry.go, [ClaudeCode] and [OpenCode].
+// carry.go and each runner; [Codex]'s is the rollout, not its sqlite, restored
+// as `rollout-2020-01-01T00-00-00-<id>.jsonl` in sessions/, release pairs
+// judged by the recorded `--version`.
 //
 // A SESSION ITS HARNESS IS STILL WORKING IN is packed by the engine, beside
 // it, by the pack the run's own end makes held to a stricter rule — every file
@@ -623,7 +625,7 @@
 // that packs it alone ([Runner.PackCapture], [Paths.SessionPackHeld]), and a
 // SAVE, packed to a place of that save's own, named after its taker
 // ([Runner.PackSave], [Paths.SessionSave]), for the take that names it alone —
-// neither ever where the job's final archive is read. Both runners make a
+// neither ever where the job's final archive is read. Every runner makes a
 // save ([saver], [Runner.Saves]), OpenCode's by its own export (below);
 // whether a job moved since its last save is how far its harness's event
 // stream ran ([Runner.Streamed]); and a save no take will read is removed
@@ -829,10 +831,8 @@
 // the text's alone (redact.Stream; its rules are the build's): each text has a
 // redaction of its own, a key's credential is judged on its raw name, and a
 // credential's value never reaches it. In memory alone: a restart, a deploy or
-// a seat's move to another node costs one take at most what it costs without.
-// On two cores of the build machine, two runs each
-// (BenchmarkASecondTakeOfAPDFSession), that read's take came to 4.3 s with no
-// memo, 2.8 s as a process's first and 1.2 s as its second.
+// a seat's move to another node costs one take at most what it costs without
+// (BenchmarkASecondTakeOfAPDFSession).
 //
 // # The scrub's bounds, and what it holds
 //

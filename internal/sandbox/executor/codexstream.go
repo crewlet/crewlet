@@ -311,14 +311,15 @@ func (d *codexEvents) runSpend() (runSpend, bool) {
 	return read.Usage().spend(), true
 }
 
-// reportedWindow implements [windowReporter]: the window Codex held the
-// run's model to (token_count.info.model_context_window).
+// reportedWindow implements [windowReporter]: the raw window Codex held the
+// run's model to, from the 95% its token_count states ([codexRawWindow]), in
+// the units the window is pinned and judged in ([codexWindowTokens]).
 func (d *codexEvents) reportedWindow() int64 {
 	read, ok := d.figures()
 	if !ok {
 		return 0
 	}
-	return read.ContextWindow()
+	return codexRawWindow(read.ContextWindow())
 }
 
 // limitReport implements [limitReporter]: the run's newest plan limits as a

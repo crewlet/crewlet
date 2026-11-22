@@ -23,7 +23,8 @@ import (
 // and a required server that misses it fails the run before its first step.
 const codexMCPStartupWait = 60 * time.Second
 
-// codexConfigTOML is a Codex run's [Paths.CodexConfig]: its standing
+// codexConfigTOML is a Codex run's [Paths.CodexConfig]: its compaction point,
+// its standing
 // instructions as `developer_instructions` (the developer message after
 // Codex's own prompt, which it keeps), and its MCP servers, every value a TOML
 // basic string, array or inline table and every key quoted ([tomlString]).
@@ -33,8 +34,11 @@ const codexMCPStartupWait = 60 * time.Second
 // never behind Codex's tool search, where the model saw none (measured).
 // Every server's calls are approved unasked and made at once, as the codex
 // profile measured.
-func codexConfigTOML(servers map[string]sandbox.MCPServer, system string) string {
+func codexConfigTOML(servers map[string]sandbox.MCPServer, system, model string) string {
 	var b strings.Builder
+	// THE COMPACTION POINT PINNED where the engine judges a continuation
+	// ([codexCompactLimit]).
+	fmt.Fprintf(&b, "model_auto_compact_token_limit = %d\n", codexCompactLimit(model))
 	if system != "" {
 		fmt.Fprintf(&b, "developer_instructions = %s\n", tomlString(system))
 	}
@@ -83,9 +87,9 @@ func waitSeconds(d time.Duration) int {
 // sandbox needs, and nobody answers); no analytics, plugins or bundled skills
 // (with all three off a run dials only its model and servers, measured); no
 // request_user_input (a question parks through ask_and_wait); and the model's
-// shell inherits the run's environment less the harness's own sign-in, which
-// Codex otherwise hands every command (measured), keeping PATH, HOME,
-// GIT_CONFIG_* and the seat's tool credentials.
+// shell inherits the run's environment less the harness's own sign-in and the
+// notes route ([codexNotesEnv]), which Codex otherwise hands every command
+// (measured), keeping PATH, HOME, GIT_CONFIG_* and the seat's tool credentials.
 func codexPosture(req sandbox.RunRequest) []string {
 	profile, _ := harnessprofile.Builtin(CodexName)
 	set := []string{
@@ -97,7 +101,7 @@ func codexPosture(req sandbox.RunRequest) []string {
 		`skills.bundled.enabled=false`,
 		`tools.experimental_request_user_input.enabled=false`,
 		`shell_environment_policy.inherit="all"`,
-		`shell_environment_policy.exclude=` + tomlArray(profile.CredentialEnvNames(nil)),
+		`shell_environment_policy.exclude=` + tomlArray(append(profile.CredentialEnvNames(nil), codexNotesEnv)),
 	}
 	// THE ENTRY'S MODEL AND EFFORT AS WRITTEN, as its runs on the engine host
 	// hand them (the codex profile's model_args and effort).
@@ -196,7 +200,7 @@ func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox
 	if req.Steer.Set() {
 		system = withNoteInstruction(system, c.NoteInstruction())
 	}
-	if err := box.WriteFile(ctx, paths.CodexConfigStaged(), []byte(codexConfigTOML(req.MCPServers, system))); err != nil {
+	if err := box.WriteFile(ctx, paths.CodexConfig(), []byte(codexConfigTOML(req.MCPServers, system, req.Model))); err != nil {
 		return "", fmt.Errorf("executor: writing Codex's configuration: %w", err)
 	}
 	if f := req.FreshWiring; f != nil {
@@ -205,7 +209,7 @@ func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox
 				"one of its own, do not both take notes, so the run cannot be wired to whichever session " +
 				"its box starts")
 		}
-		if err := box.WriteFile(ctx, paths.CodexConfigFresh(), []byte(codexConfigTOML(f.MCPServers, system))); err != nil {
+		if err := box.WriteFile(ctx, paths.CodexConfigFresh(), []byte(codexConfigTOML(f.MCPServers, system, req.Model))); err != nil {
 			return "", fmt.Errorf("executor: writing Codex's configuration for a session of the run's own: %w", err)
 		}
 		if f.Steer.Set() {

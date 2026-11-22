@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
@@ -62,8 +63,8 @@ func TestACodexRunReportsTheThreadItsHarnessMintedAndIsChargedItsRollout(t *test
 		t.Errorf("the run is charged %d in (%d cached), %d out; want the rollout turn's 300 (200), 40",
 			res.InputTokens, res.CacheReadTokens, res.OutputTokens)
 	}
-	if res.ReportedWindow != 258400 {
-		t.Errorf("the reported window is %d, want the rollout's 258400", res.ReportedWindow)
+	if res.ReportedWindow != 272000 {
+		t.Errorf("the reported window is %d, want the raw 272000 behind the rollout's 258400", res.ReportedWindow)
 	}
 	if !strings.Contains(res.Limits, `"300":{"used":0.375`) {
 		t.Errorf("the limit report %q holds no five-hour window", res.Limits)
@@ -71,7 +72,8 @@ func TestACodexRunReportsTheThreadItsHarnessMintedAndIsChargedItsRollout(t *test
 
 	server := recorded(t, record, "server-argv")
 	for _, want := range []string{"--listen", "unix://" + p.CodexSocket(), `sandbox_mode="danger-full-access"`,
-		`approval_policy="never"`, `shell_environment_policy.exclude=["CODEX_API_KEY"]`, `model="gpt-test"`,
+		`approval_policy="never"`, `shell_environment_policy.exclude=["CODEX_API_KEY", "CREWLET_NOTES_URL"]`,
+		`model="gpt-test"`,
 		`model_reasoning_effort="high"`} {
 		if !slices.Contains(server, want) {
 			t.Errorf("the app-server's argv lacks %q: %q", want, server)
@@ -92,7 +94,7 @@ func TestACodexRunReportsTheThreadItsHarnessMintedAndIsChargedItsRollout(t *test
 	if !slices.Contains(recorded(t, record, "env"), "CODEX_HOME="+p.CodexHome()) {
 		t.Error("exec ran without the box's own CODEX_HOME")
 	}
-	cfg := boxFile(t, box, p.CodexConfig())
+	cfg := boxFile(t, box, p.CodexLiveConfig())
 	for _, want := range []string{`url = "` + codexBridgeURL + `"`, "required = true",
 		`developer_instructions = "You are the seat.`} {
 		if !strings.Contains(cfg, want) {
@@ -225,10 +227,15 @@ func codexConfirmsATake(t *testing.T) {
 		return string(raw)
 	}
 	held, summarised, torn := probeNote, probeNote+" (folded)", probeNote+" (torn)"
-	compacted, _ := json.Marshal(map[string]any{"timestamp": "2026-11-22T09:00:01.000Z", "type": "compacted",
-		"payload": map[string]any{"message": summarised, "replacement_history": []any{}}})
-	rollout := user(held) + "\n" + string(compacted) + "\n" + user(torn)
-	if err := box.WriteFile(t.Context(), p.CodexSessions()+"/rollout-x-"+thread+".jsonl", []byte(rollout)); err != nil {
+	// A COMPACTION'S SUMMARY is a user message Codex marks as its own
+	// (content_item_kinds, measured on 0.171.0).
+	summary, _ := json.Marshal(map[string]any{"timestamp": "2026-11-22T09:00:01.000Z", "type": "response_item",
+		"payload": map[string]any{"type": "message", "role": "user",
+			"content": []map[string]string{{"type": "input_text", "text": summarised}},
+			"internal_chat_message_metadata_passthrough": map[string]any{
+				"content_item_kinds": []string{"compaction.summary"}}}})
+	rollout := user(held) + "\n" + string(summary) + "\n" + user(torn)
+	if err := box.WriteFile(t.Context(), p.CodexSessions()+"/rollout-2026-11-22T09-00-00-"+thread+".jsonl", []byte(rollout)); err != nil {
 		t.Fatalf("write the rollout: %v", err)
 	}
 	take := func(id, text string) sandbox.AskedTake {
@@ -247,7 +254,7 @@ func codexConfirmsATake(t *testing.T) {
 }
 
 // codexWakeRead is what a Codex session handed wake as a steered user message
-// reads back as: its archive, the rollout under the carry's member name.
+// reads back as: its archive, the rollout under the name it is restored by.
 func codexWakeRead(t *testing.T, wake string) []executor.TranscriptEntry {
 	t.Helper()
 	const thread = "019a1f00-0000-7000-8000-0000000000aa"
@@ -261,7 +268,7 @@ func codexWakeRead(t *testing.T, wake string) []executor.TranscriptEntry {
 	var archive bytes.Buffer
 	zw := gzip.NewWriter(&archive)
 	tw := tar.NewWriter(zw)
-	if err := tw.WriteHeader(&tar.Header{Name: "rollout-carried-" + thread + ".jsonl", Mode: 0o600,
+	if err := tw.WriteHeader(&tar.Header{Name: "rollout-2020-01-01T00-00-00-" + thread + ".jsonl", Mode: 0o600,
 		Size: int64(len(body)), Typeflag: tar.TypeReg}); err != nil {
 		t.Fatalf("tar: %v", err)
 	}
@@ -286,7 +293,7 @@ func codexWakeRead(t *testing.T, wake string) []executor.TranscriptEntry {
 // hands it, read back from their TOML string.
 func codexInstructions(t *testing.T, box sandbox.Sandbox) string {
 	t.Helper()
-	for _, line := range strings.Split(boxFile(t, box, executor.PathsFor(box).CodexConfig()), "\n") {
+	for _, line := range strings.Split(boxFile(t, box, executor.PathsFor(box).CodexLiveConfig()), "\n") {
 		if value, ok := strings.CutPrefix(line, "developer_instructions = "); ok {
 			// TOML's basic-string escapes are a subset of Go's.
 			text, err := strconv.Unquote(value)
@@ -355,5 +362,90 @@ func TestACodexRunReadsItsLoginWhereALocalBoxIsSeededWithIt(t *testing.T) {
 		if got := p.Home + "/" + rel; got != home+"/auth.json" {
 			t.Errorf("a local box is seeded with %s, and the run reads its login from %s/auth.json", got, home)
 		}
+	}
+}
+
+// A CODEX RUN STARTS FROM ITS OWN CONFIGURATION, every run: whatever an
+// earlier run or the model left in CODEX_HOME's config.toml is replaced whole
+// by the run's, readable by the box's user alone.
+//
+// Mutation: append to the file, or leave a stale one where none was staged,
+// and this goes red.
+func TestACodexRunStartsFromItsOwnConfigurationEveryRun(t *testing.T) {
+	t.Parallel()
+	runner, box, _ := codexBox(t, "0.171.0")
+	p := executor.PathsFor(box)
+	if err := box.WriteFile(t.Context(), p.CodexLiveConfig(),
+		[]byte("[mcp_servers.left]\nurl = \"http://127.0.0.1:9/mcp/stale-token\"\n")); err != nil {
+		t.Fatalf("leave a configuration behind: %v", err)
+	}
+	runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go", MCPServers: map[string]sandbox.MCPServer{
+		"crewlet": {Transport: sandbox.TransportHTTP, URL: codexBridgeURL, AlwaysLoaded: true}}})
+	cfg := boxFile(t, box, p.CodexLiveConfig())
+	if strings.Contains(cfg, "stale-token") || !strings.Contains(cfg, codexBridgeURL) {
+		t.Errorf("the run's configuration is not its own:\n%s", cfg)
+	}
+	info, err := os.Stat(p.CodexLiveConfig())
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Errorf("the configuration's mode is %v (%v), want 0600", info.Mode().Perm(), err)
+	}
+}
+
+// NO COMMAND LINE AND NO MODEL SHELL CARRIES THE BRIDGE'S TOKEN, which is in
+// the path of every bridge URL: the run's script, the app-server's and exec's
+// argv, and the helper's command line name files, and the route reaches the
+// helper's environment alone, which the model's shell policy excludes too.
+//
+// Mutation: put the MCP url or the notes route on a command line, or export
+// the route to Codex, and this goes red.
+func TestNoCodexCommandLineCarriesTheBridgesToken(t *testing.T) {
+	t.Parallel()
+	const token = "run-token-placeholder"
+	req := sandbox.RunRequest{Brief: "go", MCPServers: map[string]sandbox.MCPServer{
+		"crewlet": {Transport: sandbox.TransportHTTP, URL: codexBridgeURL, AlwaysLoaded: true}},
+		Steer: sandbox.SteerWiring{Server: "crewlet", Tool: mcpbridge.SteerTool, URL: codexBridgeURL + "/steer"}}
+	if script := (executor.Codex{}).Command(req, executor.Session{}, executor.Paths{Home: "/home/box"}, ""); strings.Contains(script, token) {
+		t.Errorf("the run's script carries the token:\n%s", script)
+	}
+	runner, box, record := codexBox(t, "0.171.0")
+	runToEnd(t, runner, box, req)
+	for _, file := range []string{"server-argv", "exec-argv", "env"} {
+		if got := strings.Join(recorded(t, record, file), "\n"); strings.Contains(got, token) ||
+			strings.Contains(got, "CREWLET_NOTES_URL") {
+			t.Errorf("%s carries the bridge's route:\n%s", file, got)
+		}
+	}
+	if got := boxFile(t, box, executor.PathsFor(box).CodexNotesURL()); got != codexBridgeURL+"/steer" {
+		t.Errorf("the helper's route file holds %q", got)
+	}
+}
+
+// A CODEX RUN TORN DOWN ENDS IN ORDER WITHIN ITS GRACE: on the group's
+// SIGTERM, exec goes first, then the app-server, sent SIGTERM again since it
+// finishes the turn in flight on the first (measured on 0.171.0), and the
+// session is packed before the run exits.
+//
+// Mutation: stop the app-server before exec, send it one SIGTERM, or drop the
+// pack from the teardown, and this goes red.
+func TestACodexRunTornDownEndsInOrderAndPacksItsSession(t *testing.T) {
+	t.Parallel()
+	runner, box, record := codexBox(t, "0.171.0")
+	if err := os.WriteFile(filepath.Join(record, "block"), nil, 0o600); err != nil {
+		t.Fatalf("arm the stand-in: %v", err)
+	}
+	handle, err := runner.Start(t.Context(), box, sandbox.RunRequest{Brief: "go"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitForFile(t, filepath.Join(record, "working"), "the stand-in to work")
+	if err := box.KillJob(t.Context(), handle.CommandID); err != nil {
+		t.Fatalf("KillJob: %v", err)
+	}
+	awaitOver(t, runner, box, handle, 15*time.Second, "the job was torn down")
+	if order := recorded(t, record, "order"); !slices.Equal(order, []string{"exec", "server"}) {
+		t.Errorf("the teardown stopped %q, want exec, then the app-server", order)
+	}
+	if boxFile(t, box, executor.PathsFor(box).SessionCapture()) == "" {
+		t.Error("the torn-down run packed no session")
 	}
 }

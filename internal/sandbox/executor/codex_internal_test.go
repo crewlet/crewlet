@@ -105,8 +105,8 @@ func TestACodexRunsFiguresAreItsRolloutLines(t *testing.T) {
 	if want := (runSpend{input: 90, cacheRead: 200, cacheWrite: 10, output: 40}); !stated || spent != want {
 		t.Errorf("the run's own spend is %+v (stated %v), want the rollout turn's %+v", spent, stated, want)
 	}
-	if got := d.reportedWindow(); got != 258400 {
-		t.Errorf("the reported window is %d, want 258400", got)
+	if got := d.reportedWindow(); got != 272000 {
+		t.Errorf("the reported window is %d, want the raw 272000 behind the reported 258400", got)
 	}
 	want := `{"type":"crewlet.codex_rate_limits","state":"reached","window":"10080","resets_at":1795372440,` +
 		`"windows":{"10080":` +
@@ -154,6 +154,27 @@ func TestEveryCodexConfigValueIsATOMLStringThatReadsBack(t *testing.T) {
 	}
 }
 
+// A CODEX RUN COMPACTS WHERE THE ENGINE JUDGES A CONTINUATION: the limit its
+// configuration pins is the point of the window the engine holds it to, 90% of
+// the raw 272,000 (§16.4), and a request carries at most the 95% Codex reports
+// as its model_context_window.
+//
+// Mutation: pin another limit, or change the reserve or buffer, and this goes red.
+func TestACodexRunCompactsWhereTheEngineJudgesIt(t *testing.T) {
+	t.Parallel()
+	w := Codex{}.Window(WindowAsk{Model: "gpt-test"})
+	if got := w.Point(int64(w.Tokens)); got != 244_800 || codexCompactLimit("gpt-test") != got {
+		t.Errorf("the engine judges compaction at %d and the run pins %d, want both 244800", got,
+			codexCompactLimit("gpt-test"))
+	}
+	if !w.Carries(258_400, 0) || w.Carries(258_401, 0) {
+		t.Error("the window carries other than the 258,400 Codex reports it holds a request to")
+	}
+	if got := (Codex{}).PinnedWindow("gpt-test"); got != 272_000 {
+		t.Errorf("the pinned window is %d, want the raw 272000", got)
+	}
+}
+
 // ONLY THE ENGINE'S OWN TOOLS ARE REQUIRED AND ALWAYS OFFERED: a seat's other
 // server failing to start leaves the run its tools, and one Codex deferred
 // behind its tool search would hide the bridge's. Every server's url,
@@ -168,8 +189,9 @@ func TestOnlyTheEnginesOwnCodexServerIsRequired(t *testing.T) {
 		"docs": {Transport: sandbox.TransportHTTP, URL: "https://docs.example.com/mcp",
 			Headers: map[string]string{"Authorization": "Bearer docs-token"}},
 		"local": {Command: "node", Args: []string{"server.js"}, Env: map[string]string{"KEY": "v"}},
-	}, "You are the seat.")
-	want := `developer_instructions = "You are the seat."
+	}, "You are the seat.", "gpt-test")
+	want := `model_auto_compact_token_limit = 244800
+developer_instructions = "You are the seat."
 
 [mcp_servers."crewlet"]
 url = "http://127.0.0.1:7/mcp/run-token"
