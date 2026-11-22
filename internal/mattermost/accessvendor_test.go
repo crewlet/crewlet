@@ -271,6 +271,23 @@ func (c *accessChat) serve(w http.ResponseWriter, r *http.Request) {
 // open is a session against the fake through the registered vendor.
 func (c *accessChat) open(t *testing.T, channels ...string) seataccess.Session {
 	t.Helper()
+	_, _, session := c.opened(t, channels...)
+	return session
+}
+
+// offer is what a session over a company listing channels offers, read as
+// the sync and the access routes read it ([seataccess.ReadOptions]).
+func (c *accessChat) offer(t *testing.T, channels ...string) (seataccess.Options, error) {
+	t.Helper()
+	vendor, in, session := c.opened(t, channels...)
+	return seataccess.ReadOptions(context.Background(), vendor, session, in, seataccess.LaneMattermost)
+}
+
+// opened is a session over a company listing channels, with its vendor and
+// what it was opened from.
+func (c *accessChat) opened(t *testing.T, channels ...string) (seataccess.Vendor, seataccess.OpenInput,
+	seataccess.Session) {
+	t.Helper()
 	vendor, ok := seataccess.Lookup(integration.KindMattermost)
 	if !ok {
 		t.Fatal("the mattermost package registered no access vendor")
@@ -282,14 +299,15 @@ func (c *accessChat) open(t *testing.T, channels ...string) seataccess.Session {
 			UsernamePrefix: "agent-", AdminToken: "${MM_ADMIN}", Channels: channels,
 		},
 	}
-	session, err := vendor.Open(context.Background(), seataccess.OpenInput{
+	in := seataccess.OpenInput{
 		Config: company,
 		Env:    config.NewResolver(config.MapSource{"MM_ADMIN": "fake-admin"}),
-	})
+	}
+	session, err := vendor.Open(context.Background(), in)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	return session
+	return vendor, in, session
 }
 
 func sre() seataccess.SeatRef { return seataccess.SeatRef{Handle: "sre", Name: "SRE"} }
@@ -356,8 +374,7 @@ func TestTheMattermostCatalog(t *testing.T) {
 // channels as the scope.
 func TestMattermostOptions(t *testing.T) {
 	t.Parallel()
-	opts, err := newAccessChat(t).open(t, "incidents", "general").
-		Options(context.Background(), seataccess.LaneMattermost)
+	opts, err := newAccessChat(t).offer(t, "incidents", "general")
 	if err != nil {
 		t.Fatalf("options: %v", err)
 	}
@@ -381,7 +398,7 @@ func TestMattermostOptions(t *testing.T) {
 		seataccess.Desired{Enabled: true, Level: sysAdmin}) {
 		t.Error("a raise to System Admin does not ask for a step-up")
 	}
-	open, _ := newAccessChat(t).open(t).Options(context.Background(), seataccess.LaneMattermost)
+	open, _ := newAccessChat(t).offer(t)
 	if !open.ScopeOpen {
 		t.Error("a company with no channel list is not an open scope")
 	}

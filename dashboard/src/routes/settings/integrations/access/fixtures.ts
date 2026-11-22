@@ -472,6 +472,52 @@ export function gitlabAnswer(): AccessAnswer {
   };
 }
 
+/**
+ * App Store Connect with Growth operating one app, on a team whose apps the
+ * engine read with its key: each by name with its bundle ID, and the reach
+ * open, since the company names no apps.
+ */
+export function appStoreConnectAnswer(): AccessAnswer {
+  return {
+    kind: "app_store_connect",
+    revision: "rev-7",
+    syncing: false,
+    options: [
+      {
+        lane: "app_store_connect",
+        live: false,
+        levels: [
+          { id: "read", name: "View" },
+          { id: "operate", name: "Manage", administers: true },
+          { id: "administer", name: "Administer", administers: true },
+        ],
+        scoped: true,
+        scope_required: true,
+        scope_live: true,
+        scope_open: true,
+        scope: ["6763222842", "1234567890"],
+        scope_names: { "6763222842": "Field Notes", "1234567890": "Trail Maps" },
+        scope_details: { "6763222842": "com.example.notes", "1234567890": "com.example.maps" },
+      },
+    ],
+    seats: [
+      seat("growth", "Growth", {
+        app_store_connect: {
+          ...onLane({ variable: "" }),
+          desired: { enabled: true, level: "operate", scope: ["6763222842"] },
+          observed: {
+            exists: true,
+            enabled: true,
+            account: "crewlet/growth",
+            level: "operate",
+            scope: ["6763222842"],
+          },
+        },
+      }),
+    ],
+  };
+}
+
 /** Mattermost with one bot on and in no channel yet. */
 export function mattermostAnswer(): AccessAnswer {
   return {

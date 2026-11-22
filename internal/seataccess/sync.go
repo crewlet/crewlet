@@ -497,7 +497,7 @@ func (s *syncer) offered(ctx context.Context, lane Lane, d Desired) (*Failure, e
 	opts, ok := s.options[lane]
 	if !ok {
 		var err error
-		if opts, err = ReadOptions(ctx, s.sess, lane); err != nil {
+		if opts, err = ReadOptions(ctx, s.in.Vendor, s.sess, s.in.Open, lane); err != nil {
 			return nil, fmt.Errorf("seataccess: read what %s offers: %w", LaneName(lane), err)
 		}
 		s.options[lane] = opts
