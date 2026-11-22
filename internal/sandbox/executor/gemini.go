@@ -105,6 +105,10 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 		releaseGate("Gemini CLI", geminiRelease),
 		// THE TELEMETRY'S NAMES GO before Gemini CLI starts: the run turns no
 		// Gemini CLI telemetry on, so it starts without them ([otelExportUnset]).
+		// The sign-in's stay ([sandbox.RunRequest.SignInEnv] is not applied):
+		// Gemini CLI signs in by them, and offers no way to withhold a name from
+		// its tools alone but its redaction, which would also take the seat's own
+		// token-named variables from them.
 		otelExportUnset,
 		"node " + q(paths.GeminiHelper()) + " pin " + q(paths.GeminiProjects()) + " " + GeminiProjectSlug + " || exit 1",
 		strings.TrimSuffix(chatSessionGate(session, paths, geminiGate(paths, fresh)), "\n"),
