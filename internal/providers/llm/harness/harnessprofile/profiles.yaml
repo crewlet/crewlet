@@ -2930,6 +2930,13 @@ grok:
     - sentinel: "Unauthorized (401)"
 
 muse-code:
+  # A seat's executor (internal/sandbox/executor, muse.go), on 1.4.25 or
+  # later. No E2B template: no prebuilt image is known to hold Muse Code, so a
+  # company names its own (docs/concepts/code-sandbox.md has the recipe).
+  # Nothing measured refuses root under --yolo (1.4.25 in a node:24-bookworm
+  # container, as uid 0).
+  executor:
+    runner: true
   binary: muse
   # Meta's own family, and the field is an open set for exactly this case:
   # writing `openai` because Meta's Model API also speaks chat-completions
