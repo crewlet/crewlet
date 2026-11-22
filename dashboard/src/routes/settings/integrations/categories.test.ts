@@ -33,7 +33,8 @@ test("with every growth product served, each sits in the group of what it does",
 });
 
 test("a line whose app is not served is drawn nowhere, and a group left empty is not drawn", () => {
-  const shown = keysOf(shownDirectory(serving("google_analytics")));
+  const advertising = ["google_ads", "meta_ads", "apple_ads"];
+  const shown = keysOf(shownDirectory(CATALOG.filter((e) => !advertising.includes(e.key))));
   const labels = shown.map(([label]) => label);
   expect(labels).toContain("Analytics");
   expect(labels).not.toContain("Advertising");
