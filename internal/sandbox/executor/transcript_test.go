@@ -1474,6 +1474,7 @@ func TestEveryHarnessThisBuildDrivesCarriesItsSession(t *testing.T) {
 	formats := map[string]int{
 		executor.ClaudeCodeName: executor.ClaudeArchiveFormat,
 		executor.OpenCodeName:   executor.OpenCodeArchiveFormat,
+		executor.KimiName:       executor.KimiArchiveFormat,
 	}
 	for _, name := range executor.Names() {
 		if executor.RunnerNamed(name).StartsFresh() {

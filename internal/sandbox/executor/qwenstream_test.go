@@ -153,6 +153,36 @@ func TestAFailedQwenRunSaysHow(t *testing.T) {
 	}
 }
 
+// A QWEN RUN'S ROUND CAP IS QWEN CODE'S SESSION TURN CAP, AND A RUN THAT
+// REACHES IT READS AS CAPPED. The run's settings carry the cap as
+// model.maxSessionTurns, and none where the run is uncapped; on 0.28.3's own
+// stream of a run capped at 2, whose turn ended max_turn_requests after its
+// second request's call, the run failed as one that reached its cap, which
+// the engine records as ExecutorErrorMaxTurns.
+//
+// Mutations, each red: leave the cap out of the settings; write it at 0;
+// read max_turn_requests as any other stop (not RoundCapped).
+func TestAQwenRunsRoundCapIsItsSessionTurnCapAndReadsAsCapped(t *testing.T) {
+	t.Parallel()
+	capped := sandbox.RunRequest{System: "SYSTEM", Brief: "x", Limits: sandbox.Limits{MaxTurns: 2}}
+	settings, _, _, _ := writtenQwen(t, capped)
+	if got := settings["model"].(map[string]any)["maxSessionTurns"]; got != float64(2) {
+		t.Errorf("a run capped at 2 writes model.maxSessionTurns %v, want 2", got)
+	}
+	settings, _, _, _ = writtenQwen(t, sandbox.RunRequest{System: "SYSTEM", Brief: "x"})
+	if got, ok := settings["model"].(map[string]any)["maxSessionTurns"]; ok {
+		t.Errorf("an uncapped run writes model.maxSessionTurns %v, want none", got)
+	}
+	res := executor.QwenCode{}.Parse(qwenFixture(t, "0.28.3", "stream-cap.jsonl"))
+	if res.Success || !res.RoundCapped || !strings.Contains(res.Error, "turn cap") {
+		t.Errorf("a run ended at its cap reads %q (success %v, capped %v), want it failed at its turn cap",
+			res.Error, res.Success, res.RoundCapped)
+	}
+	if res.Turns != 2 {
+		t.Errorf("the capped run made %d requests, want the 2 its cap allowed", res.Turns)
+	}
+}
+
 // qwenBox is a direct box whose `node`, the helper's runtime, is a stand-in
 // running run: the run's script starts `node <helper> run ...`, so the
 // stand-in plays the helper's whole run.
