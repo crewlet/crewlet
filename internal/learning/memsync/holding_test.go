@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"sync"
 	"testing"
+	"testing/synctest"
 
 	"github.com/nats-io/nats.go/jetstream"
 
@@ -30,7 +32,7 @@ import (
 func heldFromEmpty(s *Syncer, handle string) *Syncer {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.holdings[handle] = &seatHolding{state: live}
+	s.holdings[handle] = newHolding(0)
 	return s
 }
 
@@ -75,8 +77,10 @@ func noMarksOf(t *testing.T, s *Syncer) {
 // records every row subject published through it, barriers aside.
 type takingJS struct {
 	jetstream.JetStream
-	during    func()
-	ran       bool
+	during func()
+	ran    bool
+
+	mu        sync.Mutex
 	published []string
 }
 
@@ -94,7 +98,9 @@ func (j *takingJS) Publish(ctx context.Context, subject string, body []byte,
 	opts ...jetstream.PublishOpt) (*jetstream.PubAck, error) {
 
 	if subject != barrierSubject(seat.AgentID) {
+		j.mu.Lock()
 		j.published = append(j.published, subject)
+		j.mu.Unlock()
 	}
 	return j.JetStream.Publish(ctx, subject, body, opts...)
 }
@@ -284,7 +290,7 @@ func TestAPublishAForgetOvertakesStopsAtItsNextRowAndLeavesNoMark(t *testing.T) 
 				seedMemory(t, db)
 				writeNotes(t, db, 300, noteWidth)
 				js := &roundTripJS{most: 300 + len(tables)}
-				s := newSyncer(db, js, func(string) string { return seat.AgentID })
+				s := stepping(newSyncer(db, js, func(string) string { return seat.AgentID }))
 				publish := s.PublishOwn
 				if of == ownRange {
 					heldFromEmpty(s, seat.Handle)
@@ -338,75 +344,85 @@ func TestAPublishAForgetOvertakesStopsAtItsNextRowAndLeavesNoMark(t *testing.T) 
 //
 // A cycle that went on past the flush would land its copies of the seat's
 // profiles, skills and onboarding marker, read before the flush's, over them.
-// The release turns the holding to releasing before its flush, and the cycle
-// stops at its next row. Here 300 notes and a row of every table, the release
-// inside the cycle's publish of its hundredth row.
+// The cycle sends no more rows once the release begins, and the flush starts
+// past the row the cycle has out, once it is answered. Here 300 notes and a
+// row of every table, stepped, the release inside the cycle's hundredth row.
 //
 // Mutation: check the holding only as a call begins, flush under the live
-// holding, or let the cycle go on under a releasing one, and this goes red.
+// holding, let the cycle go on under a releasing one, or start the flush
+// before the cycle's row out is answered, and this goes red.
 func TestACyclePartWayThroughASeatAtItsReleasePublishesNothingAfterTheFlushBegins(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
 	seedMemory(t, db)
 	ids := writeNotes(t, db, 300, 0)
 	numbers := noteNumbers(t, ids)
-	js := &roundTripJS{}
-	s := syncerOver(db, js)
-	var flushOwn, flushBacklog Carried
-	var flushErr error
-	from, to := -1, -1
-	js.on = func(n int) {
-		if n != 100 || from >= 0 {
-			return
+	synctest.Test(t, func(t *testing.T) {
+		js := &roundTripJS{}
+		s := syncerOver(db, js)
+		var flushOwn, flushBacklog Carried
+		var flushErr error
+		flushed := make(chan struct{})
+		from, early := -1, -1
+		js.on = func(n int) {
+			if n != 100 || from >= 0 {
+				return
+			}
+			// THE RELEASE, inside the cycle's publish of its hundredth row: its
+			// holding turned, and its flush begun while that row is out.
+			from = n
+			if !s.Releasing(seat.Handle) {
+				t.Error("the premise: Releasing found no live holding to turn")
+			}
+			go func() {
+				defer close(flushed)
+				var ownErr, backlogErr error
+				flushOwn, ownErr = s.FlushOwn(t.Context(), seat.Handle)
+				flushBacklog, backlogErr = s.FlushBacklog(t.Context(), seat.Handle)
+				flushErr = errors.Join(ownErr, backlogErr)
+			}()
+			// Every other goroutine blocked: what the flush sends before this
+			// row is answered, it has sent.
+			synctest.Wait()
+			early = len(js.ackedNow()) - n
 		}
-		// THE RELEASE, inside the cycle's publish of its hundredth row: its
-		// holding turned, and its flush run whole.
-		from = n
-		if !s.Releasing(seat.Handle) {
-			t.Error("the premise: Releasing found no live holding to turn")
+		own, ownErr := s.PublishOwn(t.Context(), seat.Handle)
+		backlog, backlogErr := s.PublishBacklog(t.Context(), seat.Handle)
+		if from < 0 {
+			t.Fatalf("the premise: the cycle had %d rows acknowledged, never its hundredth",
+				len(js.acked))
 		}
-		var ownErr, backlogErr error
-		flushOwn, ownErr = s.FlushOwn(t.Context(), seat.Handle)
-		flushBacklog, backlogErr = s.FlushBacklog(t.Context(), seat.Handle)
-		flushErr = errors.Join(ownErr, backlogErr)
-		to = len(js.acked)
-	}
-	own, ownErr := s.PublishOwn(t.Context(), seat.Handle)
-	backlog, backlogErr := s.PublishBacklog(t.Context(), seat.Handle)
-	if from < 0 {
-		t.Fatalf("the premise: the cycle had %d rows acknowledged, never its hundredth",
-			len(js.acked))
-	}
-	if flushErr != nil || flushOwn.Rows == 0 {
-		t.Fatalf("the release's flush answered %+v and %+v (%v), want the seat carried",
-			flushOwn, flushBacklog, flushErr)
-	}
-	var flushedNotes []int
-	for _, subject := range js.acked[from:to] {
-		if n, ok := numbers[subject]; ok {
-			flushedNotes = append(flushedNotes, n)
+		<-flushed
+		if early != 0 {
+			t.Errorf("the flush had %d rows acknowledged while the cycle's hundredth was still out, "+
+				"want none: the cycle's copy could land after the flush's", early)
 		}
-	}
-	// THE ROW IN FLIGHT, the hundredth the cycle sent: seedMemory's note went
-	// first.
-	inFlight := numbers[js.acked[from-1]]
-	if want := span(inFlight, len(ids)); inFlight == 0 || !slices.Equal(flushedNotes, want) {
-		t.Errorf("the flush had notes %s acknowledged, want %s: from the row the cycle was "+
-			"sending as the release began", runsOf(flushedNotes), runsOf(want))
-	}
-	if after := js.acked[to:]; len(after) > 0 {
-		t.Errorf("the cycle had %d rows acknowledged after the flush began, want none: its "+
-			"copies of the seat's rows land after the flush's and replace them",
-			len(after))
-	}
-	if own.Rows != 100 || !errors.Is(ownErr, ErrNotHeld) {
-		t.Errorf("the cycle's own pass answered %+v (%v), want its 100 rows and ErrNotHeld",
-			own, ownErr)
-	}
-	if backlog != (Carried{}) || !errors.Is(backlogErr, ErrNotHeld) {
-		t.Errorf("the cycle's backlog answered %+v (%v), want nothing and ErrNotHeld", backlog,
-			backlogErr)
-	}
+		if flushErr != nil || flushOwn.Rows == 0 {
+			t.Fatalf("the release's flush answered %+v and %+v (%v), want the seat carried",
+				flushOwn, flushBacklog, flushErr)
+		}
+		var flushedNotes []int
+		for _, subject := range js.acked[from:] {
+			if n, ok := numbers[subject]; ok {
+				flushedNotes = append(flushedNotes, n)
+			}
+		}
+		// THE ROW THAT WAS OUT, the hundredth the cycle sent (seedMemory's note
+		// went first), was answered and marked before the flush began.
+		last := numbers[js.acked[from-1]]
+		if want := span(last+1, len(ids)); last == 0 || !slices.Equal(flushedNotes, want) {
+			t.Errorf("the flush had notes %s acknowledged, want %s: from the row after the one the "+
+				"cycle had out as the release began", runsOf(flushedNotes), runsOf(want))
+		}
+		if own.Rows != 100 || !errors.Is(ownErr, ErrNotHeld) {
+			t.Errorf("the cycle's own pass answered %+v (%v), want its 100 rows and ErrNotHeld",
+				own, ownErr)
+		}
+		if backlog != (Carried{}) || !errors.Is(backlogErr, ErrNotHeld) {
+			t.Errorf("the cycle's backlog answered %+v (%v), want nothing and ErrNotHeld", backlog,
+				backlogErr)
+		}
+	})
 }
 
 // A SEAT WHOSE HYDRATION FAILED FLUSHES NOTHING ON ITS RELEASE.

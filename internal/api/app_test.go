@@ -186,9 +186,9 @@ func (f *fakeRuntime) MCPSignIns() mcpapi.SignIns { return noSignIns{} }
 // MCPGrants reads no server's grant, and no address for a sign-in.
 func (f *fakeRuntime) MCPGrants() queries.MCPGrantReader { return noSignIns{} }
 
-// MCPLanding finishes no sign-in: the callback answers as an engine that
+// OAuthLanding finishes no sign-in: the callback answers as an engine that
 // finishes none.
-func (f *fakeRuntime) MCPLanding() webhooks.MCPSignIns { return nil }
+func (f *fakeRuntime) OAuthLanding() webhooks.OAuthSignIns { return nil }
 
 // noSignIns is an engine nobody has signed in to any server through.
 type noSignIns struct{}
@@ -205,13 +205,17 @@ func (noSignIns) SignOut(context.Context, string, iam.Actor) (mcpapi.SignOutAnsw
 	return mcpapi.SignOutAnswer{}, mcpapi.ErrNotSignedIn
 }
 
-func (noSignIns) MCPGrants(context.Context) ([]coord.MCPGrant, error) { return nil, nil }
+func (noSignIns) MCPGrants(context.Context) ([]coord.OAuthGrant, error) { return nil, nil }
 
 func (noSignIns) MCPSignInAddresses() (string, string) { return "", "" }
 
 func (noSignIns) HeldMCPGrant(context.Context, string) (bool, error) { return false, nil }
 
 func (noSignIns) RevokeMCPServerGrant(context.Context, *config.MCPServer) (string, string, bool, error) {
+	return "", "", false, nil
+}
+
+func (noSignIns) GiveUpIntegrationGrant(context.Context, *config.Company, string) (string, string, bool, error) {
 	return "", "", false, nil
 }
 

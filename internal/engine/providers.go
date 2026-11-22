@@ -12,9 +12,8 @@
 // does not fit (failurehold.go, conversationhold.go; ADR-0117); absorbing a
 // wake a completed turn read past (seenthrough.go; ADR-0120); settling a task
 // on its pull request with no turn (changesettle.go; ADR-0121); and a remote
-// MCP server's OAuth grant, its refresh token sealed and each node's access
-// token in memory, renewed under a fleet lease (mcpoauth.go,
-// mcpserviceidentity.go; ADR-0075).
+// MCP server's or an integration's OAuth grant, its refresh token sealed,
+// its access token in memory (oauthgrant.go; ADR-0075, ADR-0178).
 //
 // # The core runtime
 //

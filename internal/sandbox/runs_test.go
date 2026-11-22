@@ -1,13 +1,16 @@
 package sandbox_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -254,7 +257,7 @@ func TestOtherSeatsRunsOnTheWorkAreOneBoundedListing(t *testing.T) {
 	launch("linked", "ops", "i-2", "", 1)
 	launch("elsewhere", "qa", "i-9", "chatlet:c9", 4)
 	item := func(id string) string { return types.WorkItem{Backend: types.WorkWorklet, ID: id}.Ref() }
-	on := sandbox.RunsOn{Items: []string{item("i-1"), item("i-2")}, Conversation: "chatlet:c1", Except: "swe"}
+	on := sandbox.RunsOn{Item: item("i-1"), Linked: []string{item("i-2")}, Conversation: "chatlet:c1", Except: "swe"}
 	runs, err := store.ListActiveOn(ctx, on)
 	if err != nil {
 		t.Fatal(err)
@@ -274,5 +277,103 @@ func TestOtherSeatsRunsOnTheWorkAreOneBoundedListing(t *testing.T) {
 	}
 	if runs, err := store.ListActiveOn(ctx, sandbox.RunsOn{Except: "swe"}); err != nil || len(runs) != 0 {
 		t.Errorf("work naming nothing listed %d runs (%v)", len(runs), err)
+	}
+}
+
+// countedRuns is the fleet's run records, counting the listings made of them
+// and the reads of one run's record or of a part beside it.
+type countedRuns struct {
+	runStore
+	listings, reads atomic.Int32
+}
+
+func (c *countedRuns) SandboxRuns(ctx context.Context) ([]coord.Record, error) {
+	c.listings.Add(1)
+	return c.runStore.SandboxRuns(ctx)
+}
+
+func (c *countedRuns) SandboxRun(ctx context.Context, turnID string) (coord.Record, bool, error) {
+	c.reads.Add(1)
+	return c.runStore.SandboxRun(ctx, turnID)
+}
+
+func (c *countedRuns) SandboxRunPart(ctx context.Context, turnID string, part coord.RunPart) (coord.Record, bool,
+	error) {
+	c.reads.Add(1)
+	return c.runStore.SandboxRunPart(ctx, turnID, part)
+}
+
+// WHAT EITHER RUN WROTE FINDS IT, IN ONE LISTING OF THE ROWS. A run answering a
+// thread files a ticket that wakes another seat: the ticket's run finds the
+// thread's by the ticket in what that run wrote, and the thread's run finds the
+// ticket's by what its own row says it wrote, each in one listing of the
+// fleet's runs and no read of a run's record or log; another seat's run whose
+// calls wrote other work, and that is on other work, is found by neither.
+//
+// Mutation: match the written records nowhere (written-unmatched), keep them on
+// the log alone (log-only), or read each run's log in the listing, and this
+// goes red.
+func TestWhatEitherRunWroteFindsItInOneListingOfTheRows(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	runs := &countedRuns{runStore: memory.NewFleet()}
+	store := sandbox.NewCoordStore(runs)
+	launch := func(turn, seat, item, conversation string) sandbox.PendingRun {
+		t.Helper()
+		run := sandbox.PendingRun{TurnID: turn, AgentHandle: seat, Status: sandbox.StatusLaunching,
+			ConversationKey: conversation}
+		if item != "" {
+			run.WorkItem = &types.WorkItem{Backend: types.WorkWorklet, ID: item}
+		}
+		opened, err := store.BeginLaunch(ctx, run, sandbox.Fence{})
+		if err != nil {
+			t.Fatalf("BeginLaunch %s: %v", turn, err)
+		}
+		return opened
+	}
+	wrote := func(run sandbox.PendingRun, records ...types.WrittenRecord) {
+		t.Helper()
+		if _, err := store.AppendBridgeCall(ctx, run.TurnID, sandbox.BridgeAppend{Launch: run.LaunchID,
+			Round: run.Round, Call: sandbox.BridgeCall{Name: "create_work_item", Seq: 1}, Wrote: records}); err != nil {
+			t.Fatalf("AppendBridgeCall %s: %v", run.TurnID, err)
+		}
+	}
+	ticket := types.WorkItem{Backend: types.WorkWorklet, ID: "T-1"}
+	thread := launch("thread", "swe", "", "chatlet:room-1:msg-0")
+	wrote(thread, types.ItemWritten(ticket))
+	launch("ticket", "qa", "T-1", "worklet:T-1")
+	other := launch("other", "ops", "T-9", "chatlet:room-9:msg-0")
+	wrote(other, types.ItemWritten(types.WorkItem{Backend: types.WorkWorklet, ID: "T-8"}),
+		types.ConversationWritten("chatlet:room-7:msg-0"))
+	row, _, err := store.Get(ctx, "thread")
+	if err != nil || len(row.WroteKeys) != 1 {
+		t.Fatalf("the thread's run keeps %d keys of what it wrote (%v), want the ticket's", len(row.WroteKeys), err)
+	}
+	runs.listings.Store(0)
+	runs.reads.Store(0)
+	for _, c := range []struct {
+		name string
+		on   sandbox.RunsOn
+		want string
+	}{
+		{"the ticket's run", sandbox.RunsOn{Item: ticket.Ref(), Conversation: "worklet:T-1", Except: "qa"}, "thread"},
+		{"the thread's run", sandbox.RunsOn{Conversation: "chatlet:room-1:msg-0", Wrote: row.WroteKeys,
+			Except: "swe"}, "ticket"},
+	} {
+		found, err := store.ListActiveOn(ctx, c.on)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, run := range found {
+			got = append(got, run.TurnID)
+		}
+		if !slices.Equal(got, []string{c.want}) {
+			t.Errorf("%s finds %v, want %s alone", c.name, got, c.want)
+		}
+	}
+	if listings, reads := runs.listings.Load(), runs.reads.Load(); listings != 2 || reads != 0 {
+		t.Errorf("two lookups made %d listings and %d reads of a run, want one listing each and no read",
+			listings, reads)
 	}
 }

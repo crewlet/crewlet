@@ -87,6 +87,9 @@ func NewSetupSurface(boot *config.Bootstrap, e *engine.Engine, configSurface *co
 		// running transport learned it from Slack when it wired the
 		// seat, and this is the only process that holds it.
 		SlackApps: e.SlackApps,
+		// AN INTEGRATION'S CONSENT GRANT, signed in by a person at the
+		// vendor and kept by the engine (ADR-0178).
+		Consents: consentSignIns{e: e},
 		// ONE AGENT'S OWN GITHUB APP, which is the one thing here a
 		// reconcile loop cannot do alone: an app is created by POSTing a
 		// manifest from a page carrying the operator's own GitHub session.
