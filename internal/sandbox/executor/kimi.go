@@ -166,7 +166,8 @@ fi
 // kimiRouting is every variable that routes Kimi's model calls or its login to
 // a provider or host of the box's own (2.7.2's bundle): the env model
 // (KIMI_MODEL_*, which adds a provider and makes it the default), the API and
-// OAuth hosts and the extra headers. Set, it replaces the entry's sign-in.
+// OAuth hosts, the extra headers, and the web search and fetch services'
+// hosts and keys. Set, it replaces the entry's sign-in or services.
 var kimiRouting = []string{
 	"KIMI_MODEL_NAME", "KIMI_MODEL_API_KEY", "KIMI_MODEL_PROVIDER_TYPE", "KIMI_MODEL_BASE_URL",
 	"KIMI_MODEL_MAX_CONTEXT_SIZE", "KIMI_MODEL_MAX_OUTPUT_SIZE", "KIMI_MODEL_CAPABILITIES",
@@ -175,13 +176,26 @@ var kimiRouting = []string{
 	"KIMI_MODEL_TEMPERATURE", "KIMI_MODEL_MAX_TOKENS", "KIMI_MODEL_MAX_COMPLETION_TOKENS",
 	"KIMI_CODE_BASE_URL", "KIMI_BASE_URL", "KIMI_CODE_OAUTH_HOST", "KIMI_OAUTH_HOST", "KIMI_API_KEY",
 	"KIMI_CODE_CUSTOM_HEADERS",
+	"KIMI_WEB_SEARCH_BASE_URL", "KIMI_WEB_SEARCH_API_KEY", "KIMI_WEB_FETCH_BASE_URL", "KIMI_WEB_FETCH_API_KEY",
 }
 
-// kimiNoTelemetry is the box's telemetry export variables, which the wrapper
-// removes ([Output.Unset]): Kimi Code exports no OTLP (2.7.2's bundle reads
-// none of them), so the run and its tools are handed only what they need.
-var kimiNoTelemetry = []string{
-	sandbox.OtelUpstreamEndpointVar, sandbox.OtelUpstreamHeadersVar, "OTEL_EXPORTER_OTLP_PROTOCOL",
+// kimiNoTelemetry is every OTLP exporter variable, the box's and any an image
+// or a profile sets per signal, which the wrapper removes ([Output.Unset]):
+// Kimi Code exports no OTLP (2.7.2's bundle reads no OTEL_ variable), so the
+// run and its tools are handed only what they need.
+var kimiNoTelemetry = otlpExporterVars()
+
+// otlpExporterVars is OTEL_EXPORTER_OTLP_{,TRACES_,METRICS_,LOGS_} with each of
+// ENDPOINT, HEADERS and PROTOCOL: the box's own ([sandbox.OtelUpstreamEndpointVar])
+// and the per-signal forms that override them.
+func otlpExporterVars() []string {
+	var out []string
+	for _, signal := range []string{"", "TRACES_", "METRICS_", "LOGS_"} {
+		for _, part := range []string{"ENDPOINT", "HEADERS", "PROTOCOL"} {
+			out = append(out, "OTEL_EXPORTER_OTLP_"+signal+part)
+		}
+	}
+	return out
 }
 
 // kimiRoutingOff is every routing variable ([kimiRouting]) neither the run's own
