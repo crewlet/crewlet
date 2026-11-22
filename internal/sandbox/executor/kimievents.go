@@ -347,15 +347,6 @@ func kimiSubject(raw json.RawMessage) string {
 	return compactInput(raw)
 }
 
-// boundedEvent is line as a result carries an event, or "" past
-// [sandbox.MaxRunEventBytes], which the record would drop.
-func boundedEvent(line []byte) string {
-	if len(line) > sandbox.MaxRunEventBytes {
-		return ""
-	}
-	return string(line)
-}
-
 // runSpend is the run's own spend ([runSpender]): the records after the
 // script's mark, every request of every agent, compactions included. Stated
 // wherever the mark was read, a run that made no request spending nothing.

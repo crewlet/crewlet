@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 )
 
@@ -148,5 +149,80 @@ func TestAToolTokenUnderASignInNameIsWithheldAndSaid(t *testing.T) {
 		!slices.Equal(executor.withheld, []string{"DIGITALOCEAN_ACCESS_TOKEN"}) {
 		t.Errorf("env = %v, withheld = %v: want the agent's token withheld from the model's name",
 			executor.env, executor.withheld)
+	}
+}
+
+// copilotGitHubDoc is a company running GitHub whose builder's executor runs
+// GitHub Copilot CLI on the login its home keeps (auth.mode subscription).
+const copilotGitHubDoc = `
+name: Acme
+providers:
+  sandbox: {fake: true}
+  llm:
+    cp:
+      harness: copilot
+      model: gpt-5.5
+integrations:
+  github:
+    enabled: true
+    webhook_secret: "${GITHUB_WEBHOOK_SECRET}"
+    provisioning:
+      org: acme
+roles:
+  - name: Builder
+    handle: builder
+    llm: cp
+    integrations:
+      github:
+        enabled: true
+        repos: [acme/backend]
+        app_id: 101
+        app_slug: acme-builder
+        installation_id: 9001
+        private_key: "${GITHUB_APP_KEY_BUILDER}"
+        permissions:
+          contents: write
+`
+
+// THE GITHUB APP'S TOKEN NEVER SIGNS COPILOT IN: Copilot takes GITHUB_TOKEN
+// (or GH_TOKEN) before the login its home keeps, an installation token
+// included (measured on 1.0.114), so a Copilot executor's box is handed no
+// GITHUB_TOKEN, said at the seat, and keeps the token file git's helper and
+// gh read.
+//
+// Mutation: drop GH_TOKEN and GITHUB_TOKEN from the copilot profile's
+// sign_in_env — the app's token reaches the box as GITHUB_TOKEN.
+func TestAGitHubAppTokenNeverSignsCopilotIn(t *testing.T) {
+	t.Parallel()
+	c := specCompany(t, copilotGitHubDoc)
+	warnings := BoxCredentialWarnings(c.Config)
+	if len(warnings) != 1 || warnings[0].Item != github.BoxTokenEnv ||
+		!strings.Contains(warnings[0].Message, "does not put the agent's own GitHub credential there") {
+		t.Fatalf("warnings = %+v, want the withheld GITHUB_TOKEN said at the seat", warnings)
+	}
+	e := &Engine{}
+	e.secretsMu.Lock()
+	e.installSecrets(map[string]string{"GITHUB_APP_TOKEN_BUILDER": "ghs_fake-installation-token"})
+	e.secretsMu.Unlock()
+	seat := c.Org.AgentSeatByHandle("builder")
+	run := e.runEnvironment(t.Context(), c, seat, nil, nil, e.boxDefaults(c.Config, "builder"))
+	member, err := c.Models.Head(seat, phase.Execute)
+	if err != nil {
+		t.Fatalf("executor chain: %v", err)
+	}
+	executor := newExecutorRun(member.Provider.(*harness.Provider), run)
+	if _, handed := executor.env[github.BoxTokenEnv]; handed ||
+		!slices.Equal(executor.withheld, []string{github.BoxTokenEnv}) {
+		t.Errorf("env = %v, withheld = %v: want the app's token withheld from Copilot's sign-in name",
+			executor.env, executor.withheld)
+	}
+	file := ""
+	for _, step := range run.setup {
+		if step.Name == integrationFilesStep {
+			file = step.Files[github.BoxTokenFile]
+		}
+	}
+	if file != "ghs_fake-installation-token" {
+		t.Errorf("the box's %s holds %q, want the app's token for git and gh", github.BoxTokenFile, file)
 	}
 }
