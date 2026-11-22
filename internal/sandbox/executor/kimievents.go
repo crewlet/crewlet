@@ -11,7 +11,7 @@ import (
 )
 
 // kimiFrame is the part of one line of a Kimi run's stream that this runner
-// reads: a KAP event the driver kept (`turn.*`, `item.*`, `context`, `turns`),
+// reads: a KAP event the driver kept (`turn.*`, `item.*`, `context`),
 // one of the driver's own (`crewlet.end`), or, after the script's mark, a
 // `usage.record` of the session's wire.jsonl. DECODED LOOSELY: a field a
 // release retyped reads as zero, and the rest still read.
@@ -21,7 +21,6 @@ type kimiFrame struct {
 	Turn   kimiTurn        `json:"turn"`
 	Step   kimiStep        `json:"step"`
 	Item   kimiItem        `json:"item"`
-	Turns  []kimiTurn      `json:"turns"`
 	Max    int64           `json:"max_context_tokens"`
 	Asked  bool            `json:"asked"`
 	Code   json.RawMessage `json:"code"`
@@ -37,7 +36,6 @@ type kimiFrame struct {
 type kimiTurn struct {
 	TurnID    string     `json:"turn_id"`
 	Steps     []kimiStep `json:"steps"`
-	Items     []kimiItem `json:"items"`
 	Outcome   string     `json:"outcome"`
 	EndReason string     `json:"end_reason"`
 	Error     *kimiError `json:"error"`
@@ -201,14 +199,6 @@ func (d *kimiEvents) Line(line []byte) {
 		}
 	case "item.ended":
 		d.item(f.TurnID, f.Item)
-	case "turns":
-		// A (re)subscription's latest page: its ended turns' steps count, and
-		// nothing else repeats into the transcript.
-		for _, t := range f.Turns {
-			for _, s := range t.Steps {
-				d.stepped(t.TurnID, s)
-			}
-		}
 	case "context":
 		if f.Max > 0 && (d.window == 0 || f.Max < d.window) {
 			d.window = f.Max

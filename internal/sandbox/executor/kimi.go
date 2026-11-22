@@ -27,8 +27,8 @@ const KimiName = "kimi-code"
 // ([Kimi.Pins]) or a login's alias, named in the session ([kimiSettings]); its
 // state is the box home's `.kimi-code` ([Paths.KimiHome]); its workspace is
 // never trusted ([kimiSwitchesOff]). Kimi names its session as it creates it
-// ([sessionMinter]); this runner carries no session between boxes, so a run
-// asked to continue one is refused (code-sandbox.md, "Kimi Code").
+// ([sessionMinter]); its session is carried between boxes and its standing
+// instructions renewed on a resume (kimicarry.go; code-sandbox.md, "Kimi Code").
 type Kimi struct{}
 
 var (
@@ -38,6 +38,10 @@ var (
 	_ recordConfirmer   = Kimi{}
 	_ artifactHolder    = Kimi{}
 	_ notesOffExplainer = Kimi{}
+	_ carrier           = Kimi{}
+	_ saver             = Kimi{}
+	_ resumer           = Kimi{}
+	_ sessionJudge      = Kimi{}
 )
 
 // NewKimi returns the runner.
@@ -61,24 +65,32 @@ func (Kimi) NoteInstruction() string { return KimiSteerInstruction }
 // on 2.7.2). Every behaviour here was measured on 2.7.0 and 2.7.2.
 const kimiFloor = "2.7.0"
 
-// Session is a fresh session with no id: Kimi mints it, and the run's driver
-// reports it ([sessionMinter]).
-func (Kimi) Session(sandbox.RunRequest) Session { return Session{} }
+// Session is the session a Kimi run works in ([Harness.Session]): the one it
+// continues, or a fresh one with no id, which Kimi mints and the run's driver
+// reports ([sessionMinter]). A run that continues one and starts its own
+// instead is handed no id for it either: its driver reports the one Kimi minted.
+func (Kimi) Session(req sandbox.RunRequest) Session {
+	if req.Resume != "" {
+		return Session{ID: req.Resume, Continues: true, Replaces: req.Carried != nil && req.Carried.Replace}
+	}
+	return Session{}
+}
 
 // Command is the run as ONE SCRIPT ([kimiScript]).
-func (Kimi) Command(req sandbox.RunRequest, _ Session, paths Paths, configPath string) string {
-	return "sh -c " + sandbox.ShellQuote(kimiScript(req, paths, configPath, sandbox.JobStopGrace))
+func (Kimi) Command(req sandbox.RunRequest, session Session, paths Paths, configPath string) string {
+	return "sh -c " + sandbox.ShellQuote(kimiScript(req, session, paths, configPath, sandbox.JobStopGrace))
 }
 
 // kimiScript is a Kimi run's script, giving its driver stop to go once asked to
 // end: the end protocol (end.go); the release read and held to [kimiFloor];
 // node required, which the driver runs on; the routing variables the entry did
-// not set removed ([kimiRoutingOff]); the session recorded as new
-// ([Paths.SessionRecord]); the driver run under the end protocol
-// ([launchHarness]), its brief on stdin; the server it started ended where it
-// outlived it; and the run's own usage added to the stream ([kimiUsage]),
-// exiting with the driver's status.
-func kimiScript(req sandbox.RunRequest, paths Paths, settings string, stop time.Duration) string {
+// not set removed ([kimiRoutingOff]); the session settled and recorded
+// ([kimiSessionGate], [Paths.SessionRecord]); the driver run under the end
+// protocol ([launchHarness]), its brief on stdin; the server it started ended
+// where it outlived it; the run's own usage added to the stream
+// ([kimiUsage]); and its session packed ([kimiCapture]), exiting with the
+// driver's status.
+func kimiScript(req sandbox.RunRequest, session Session, paths Paths, settings string, stop time.Duration) string {
 	q := sandbox.ShellQuote
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
@@ -91,13 +103,18 @@ func kimiScript(req sandbox.RunRequest, paths Paths, settings string, stop time.
 	if off := kimiRoutingOff(req); len(off) > 0 {
 		line(`unset %s`, strings.Join(off, " "))
 	}
-	line(`printf 'id \ncontinued no\nwhy \nrelease %%s\n' "$v" > %s`, q(paths.SessionRecord()))
-	b.WriteString(launchHarness("node "+q(paths.KimiDriver())+" "+q(settings), paths))
+	line(`set --`)
+	b.WriteString(kimiSessionGate(session, paths, req.FreshWiring != nil))
+	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$s" "$k" "$w" "$v" > %s`, q(paths.SessionRecord()))
+	b.WriteString(kimiLinesBefore(paths))
+	b.WriteString(launchHarness("node "+q(paths.KimiDriver())+" "+q(settings)+` "$@"`, paths))
 	// THE SERVER, ENDED WHERE IT OUTLIVED ITS DRIVER: one the end had to kill
 	// never got to stop it. Asked at once, so its pid is the driver's child's.
 	line(`p=$(cat %s 2> /dev/null) || p=; case "$p" in ''|*[!0-9]*) ;; *) kill -0 "$p" 2> /dev/null && end "$p" ;; esac`,
 		q(paths.KimiServerPid()))
+	b.WriteString(kimiSessionOf(paths))
 	b.WriteString(kimiUsage(paths))
+	b.WriteString(kimiCapture(paths))
 	line(`exit "$code"`)
 	return b.String()
 }
@@ -120,20 +137,23 @@ const kimiUsageMark = "crewlet.usage"
 // kimiUsage is the part of a run's script that adds to its stream the run's own
 // record of its spend and its turns' ends, once its driver has exited: the mark
 // ([kimiUsageMark]), then every `usage.record` and `turn.ended` line of every
-// agent's wire.jsonl in the session the driver reported — the main agent's
-// requests (`usageScope: turn`), its compactions' (`session`) and each
-// subagent's, which KAP's turns leave out (measured on 2.7.2). The session is
-// the run's own from its first line, so every record is the run's. A box with
-// no awk adds no mark, and says so.
+// agent's wire.jsonl in the run's session ([kimiSessionOf]) past the lines it
+// held before the run ([kimiLinesBefore]) — the main agent's requests
+// (`usageScope: turn`), its compactions' (`session`) and each subagent's,
+// which KAP's turns leave out (measured on 2.7.2). A box with no awk adds no
+// mark, and says so.
 func kimiUsage(paths Paths) string {
 	q := sandbox.ShellQuote
 	return `if command -v awk > /dev/null 2>&1; then
   printf '%s\n' '{"type":"` + kimiUsageMark + `"}'
-  s=$(cat ` + q(paths.SessionReport()) + ` 2> /dev/null) || s=
-  case "$s" in session_*) case "$s" in *[!A-Za-z0-9_-]*) ;; *)
+  if [ -n "$s" ]; then
     for w in ` + q(paths.KimiSessions()) + `/*/"$s"/agents/*/wire.jsonl; do
-      [ -f "$w" ] && awk 'index($0, "{\"type\":\"usage.record\"") == 1 || index($0, "{\"type\":\"turn.ended\"") == 1' "$w" 2> /dev/null
-    done ;; esac ;; esac
+      [ -f "$w" ] || continue
+      before=$(awk -v f="$w" '{ n = $1; sub(/^[0-9]+ /, ""); if ($0 == f) { print n; exit } }' ` +
+		q(paths.KimiLinesBefore()) + ` 2> /dev/null); before=${before:-0}
+      awk -v n="$before" 'NR > n && (index($0, "{\"type\":\"usage.record\"") == 1 || index($0, "{\"type\":\"turn.ended\"") == 1)' "$w" 2> /dev/null
+    done
+  fi
 else
   echo 'crewlet: this box has no awk, so the run'"'"'s own usage was not read from its session' >&2
 fi
@@ -290,7 +310,8 @@ func kimiProfileName() (string, error) {
 // WriteConfig writes what a Kimi run reads: its agent profile
 // ([kimiProfile]), told of notes where it is wired to them; its MCP servers in
 // the home ([Paths.KimiMCPConfig]); the driver; and the driver's settings,
-// whose path it returns for [Kimi.Command]. What an earlier run wrote there the
+// whose path it returns for [Kimi.Command]; with a fresh session's copies of
+// the servers and settings beside them ([sandbox.RunRequest.FreshWiring]). What an earlier run wrote there the
 // clear removes first ([Kimi.artifacts]).
 func (k Kimi) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error) {
 	name, err := kimiProfileName()
@@ -321,6 +342,18 @@ func (k Kimi) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 	}
 	if err := writeJSON(ctx, box, paths.KimiSettings(), settings); err != nil {
 		return "", fmt.Errorf("executor: writing the Kimi run's settings: %w", err)
+	}
+	if f := req.FreshWiring; f != nil {
+		if err := writeJSON(ctx, box, paths.KimiMCPConfigFresh(), kimiMCPConfig(f.MCPServers)); err != nil {
+			return "", fmt.Errorf("executor: writing Kimi's MCP servers for a new session: %w", err)
+		}
+		settings.Notes = ""
+		if f.Steer.Set() {
+			settings.Notes = f.Steer.URL
+		}
+		if err := writeJSON(ctx, box, paths.KimiSettingsFresh(), settings); err != nil {
+			return "", fmt.Errorf("executor: writing the Kimi run's settings for a new session: %w", err)
+		}
 	}
 	return paths.KimiSettings(), nil
 }
@@ -425,11 +458,14 @@ func kimiMCP(s sandbox.MCPServer) map[string]any {
 
 // artifacts is what a Kimi run leaves in its box of its own: its agent profile,
 // which a later run must not find among its subagents, and its driver and its
-// settings, which hold the notes route's token. Its MCP servers are written
+// settings and their fresh copies, which hold the notes route's token; and the
+// session its driver reported, which a later run in the box must not read as
+// its own ([Paths.SessionReport]). Its MCP servers are written
 // whole by every run, and its sessions are kept.
 func (Kimi) artifacts(p Paths) (files, dirs []string) {
-	return []string{p.KimiDriver(), p.KimiSettings(), p.KimiServerPid()},
-		[]string{p.KimiAgents() + "/" + kimiProfileDir}
+	files = []string{p.KimiDriver(), p.KimiSettings(), p.KimiServerPid(), p.KimiSettingsFresh(),
+		p.KimiMCPConfigFresh(), p.KimiLinesBefore(), p.SessionReport()}
+	return files, []string{p.KimiAgents() + "/" + kimiProfileDir}
 }
 
 // notesOffWhy is what switches Kimi's reading of notes off: a release before

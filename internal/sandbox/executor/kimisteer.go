@@ -26,9 +26,13 @@ var kimiDriverSource string
 // the confirm reader takes no other message for a note ([kimiNotesHeld]).
 const kimiNotePrefix = "crewlet-note-"
 
-// kimiBriefID is the prompt_id the brief is posted under (kimi_driver.js's
-// briefID), by which the decoder tells the brief from a note.
-const kimiBriefID = "crewlet-brief"
+// kimiSupersedes heads the standing instructions a continued session is handed
+// in its brief on a release whose bound profile is not renewed
+// ([kimiRenewsBind]; kimi_driver.js's supersedes): Kimi binds them into the
+// session as it creates it, so a resume would otherwise run on the first
+// run's.
+const kimiSupersedes = "## Your standing instructions for this run\n\n" +
+	"They replace the standing instructions this session was started with.\n\n"
 
 // KimiNoteID is the message id the note admitted under inbox carries in the
 // session's record: the prompt_id the driver steered it under.

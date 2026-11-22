@@ -38,7 +38,9 @@
 // the turn is cancelled, the server stopped, and the driver exits 143.
 
 import { spawn } from "node:child_process"
+import { createHash, randomUUID } from "node:crypto"
 import fs from "node:fs"
+import path from "node:path"
 
 // startBoundMs bounds `kimi web`'s first line: about four seconds on one core
 // (measured on 2.7.2), so a minute is room for a loaded box.
@@ -77,17 +79,36 @@ const endBoundMs = 1_500
 // stopBoundMs bounds the server's stop at the run's own end.
 const stopBoundMs = 10_000
 
-// notePrefix opens every prompt_id a note is steered under, and briefID is the
-// brief's (kimisteer.go, kimiNotePrefix and kimiBriefID).
+// notePrefix opens every prompt_id a note is steered under, and briefPrefix the
+// brief's, made the run's own: a continued session already holds an earlier
+// run's brief, and KAP answers a reused prompt_id with the prompt it holds
+// (kimisteer.go, kimiNotePrefix).
 const notePrefix = "crewlet-note-"
-const briefID = "crewlet-brief"
+const briefPrefix = "crewlet-brief-"
+
+// bindBoundMs bounds the wait for a fresh session's bound profile on disk, as a
+// continued session's instructions are renewed from it (renew): written as the
+// session is created (measured on 2.7.0 and 2.7.2), so ten seconds is room.
+const bindBoundMs = 10_000
+
+// supersedes heads the standing instructions a continued session is handed in
+// its brief where its release's bound profile is not renewed (code-sandbox.md,
+// "A Kimi Code run's session"; kimisteer.go, kimiSupersedes).
+const supersedes = "## Your standing instructions for this run\n\nThey replace the standing instructions this session was started with.\n\n"
 
 // kept is every event type the stream keeps: a turn's start, step and end, an
 // item's start and end, the context's size and a notice. Deltas and the
-// session's bookkeeping frames are left out, as nothing reads them.
-const kept = new Set(["turn.started", "turn.updated", "turn.ended", "item.started", "item.ended", "context", "notice", "turns"])
+// session's bookkeeping frames are left out, as nothing reads them, and so is
+// a subscription's `turns` page, which on a continued session repeats an
+// earlier run's turns (measured on 2.7.0 and 2.7.2).
+const kept = new Set(["turn.started", "turn.updated", "turn.ended", "item.started", "item.ended", "context", "notice"])
 
 const settings = JSON.parse(fs.readFileSync(process.argv[2], "utf8"))
+// mode is `rekey <session> <dir>`, run before the run to file a session under
+// this run's working directory; `resume <session> <bind|brief>`, a run that
+// continues it; or none, a run that starts a session of its own.
+const [mode, continued, how] = process.argv.slice(3)
+if (mode === "rekey") process.exit(rekey(continued, how))
 const life = new AbortController()
 let server = null
 let api = null
@@ -123,16 +144,28 @@ async function run() {
   const config = { permission_mode: "auto", profile: settings.profile }
   if (settings.model) config.model = settings.model
   if (settings.thinking) config.thinking = settings.thinking
-  const created = await call("POST", "/api/v1/sessions", { cwd: process.cwd(), agent_config: config })
-  if (!created.ok || typeof created.data?.id !== "string") return fail("Kimi refused the session: " + created.why)
-  sid = created.data.id
-  // THE ID REPORTED ONCE, BEFORE THE BRIEF: a reader finds the whole id or none.
-  fs.writeFileSync(settings.report + ".next", sid + "\n")
-  fs.renameSync(settings.report + ".next", settings.report)
+  let text = brief
+  if (mode === "resume") {
+    // A CONTINUED SESSION REPORTS NOTHING: its id is the one the run was
+    // started on, and the seam refuses any other.
+    const renewed = how === "bind" ? await renew(continued, config) : ""
+    if (renewed !== "") return fail("the continued session's standing instructions could not be renewed: " + renewed)
+    if (how !== "bind") text = supersedes + standing() + "\n\n---\n\n" + brief
+    const opened = await call("GET", `/api/v1/sessions/${continued}`)
+    if (!opened.ok) return fail(`Kimi could not open the continued session ${continued}: ` + opened.why)
+    sid = continued
+  } else {
+    const created = await call("POST", "/api/v1/sessions", { cwd: process.cwd(), agent_config: config })
+    if (!created.ok || typeof created.data?.id !== "string") return fail("Kimi refused the session: " + created.why)
+    sid = created.data.id
+    // THE ID REPORTED ONCE, BEFORE THE BRIEF: a reader finds the whole id or none.
+    fs.writeFileSync(settings.report + ".next", sid + "\n")
+    fs.renameSync(settings.report + ".next", settings.report)
+  }
   if (asked) return 143
 
   await subscribe()
-  const posted = await call("POST", `/api/v1/sessions/${sid}/prompts`, { prompt_id: briefID, content: [{ type: "text", text: brief }] })
+  const posted = await call("POST", `/api/v1/sessions/${sid}/prompts`, { prompt_id: briefPrefix + randomUUID(), content: [{ type: "text", text }] })
   if (!posted.ok) return fail("Kimi refused the brief: " + posted.why)
 
   const notes = typeof settings.notes === "string" && settings.notes !== "" ? poller(settings.notes) : null
@@ -191,8 +224,91 @@ async function start() {
   return Promise.race([line, exited, failed, timer, aborted(life.signal, "")])
 }
 
+// renew renews the standing instructions bound into the continued session
+// session, which Kimi renders once, as it creates a session, and restores on a
+// resume (profile.bind): a throwaway session is created with this run's profile
+// in this run's directory, its bind read off its record and appended to the
+// continued session's, and the throwaway deleted. A resume renders from the
+// record's last bind (measured on 2.7.0 and 2.7.2). "" once renewed, else why.
+async function renew(session, config) {
+  const made = await call("POST", "/api/v1/sessions", { cwd: process.cwd(), agent_config: config })
+  if (!made.ok || typeof made.data?.id !== "string" || typeof made.data?.workspace_id !== "string") return "Kimi refused the session it renders them in: " + made.why
+  const wire = path.join(home(), "sessions", made.data.workspace_id, made.data.id, "agents", "main", "wire.jsonl")
+  let bind = ""
+  for (const until = Date.now() + bindBoundMs; bind === "" && Date.now() < until && !asked; ) {
+    try {
+      bind = fs.readFileSync(wire, "utf8").split("\n").find((l) => l.startsWith('{"type":"profile.bind"')) ?? ""
+    } catch {}
+    if (bind === "") await sleep(100, life.signal)
+  }
+  const deleted = await call("POST", `/api/v1/sessions/${made.data.id}:delete`, {})
+  if (bind === "") return `the session it renders them in bound no profile within ${bindBoundMs / 1000} seconds`
+  if (!deleted.ok) return "the session it renders them in could not be deleted: " + deleted.why
+  try {
+    fs.appendFileSync(path.join(sessionDir(session), "agents", "main", "wire.jsonl"), bind + "\n")
+  } catch (error) {
+    return "the continued session's record could not be written: " + error.message
+  }
+  return ""
+}
+
+// standing is the run's standing instructions, the body of its profile after
+// Kimi's own prompt (kimi.go, kimiProfile).
+function standing() {
+  const profile = fs.readFileSync(path.join(home(), "agents", "crewlet", settings.profile + ".md"), "utf8")
+  const at = profile.indexOf("${base_prompt}\n")
+  return at < 0 ? "" : profile.slice(at + "${base_prompt}\n".length).trim()
+}
+
+// rekey files the session's directory dir under this run's working directory,
+// as Kimi files a session it creates there (`wd_<name>_<hash>`, workDirKey),
+// and records that directory as its cwd: a continued session works in the cwd
+// its state.json names, and a box's path differs from the one it was written in
+// (measured on 2.7.0 and 2.7.2). 0 once filed, else 1, saying why.
+function rekey(session, dir) {
+  try {
+    const dest = sessionDir(session)
+    if (path.resolve(dir) !== dest) {
+      fs.mkdirSync(path.dirname(dest), { recursive: true })
+      fs.rmSync(dest, { recursive: true, force: true })
+      fs.renameSync(dir, dest)
+    }
+    const file = path.join(dest, "state.json")
+    const state = JSON.parse(fs.readFileSync(file, "utf8"))
+    if (state === null || typeof state !== "object" || state.id !== session) throw new Error("its state.json names another session")
+    state.cwd = process.cwd()
+    fs.writeFileSync(file + ".next", JSON.stringify(state))
+    fs.renameSync(file + ".next", file)
+    return 0
+  } catch (error) {
+    process.stderr.write("crewlet: the session could not be filed under this run's directory: " + error.message + "\n")
+    return 1
+  }
+}
+
+// home is the run's KIMI_CODE_HOME, which the wrapper pins.
+function home() {
+  return process.env.KIMI_CODE_HOME || path.join(process.env.HOME ?? "", ".kimi-code")
+}
+
+// sessionDir is where Kimi files session for this run's working directory.
+function sessionDir(session) {
+  return path.join(home(), "sessions", workDirKey(process.cwd()), session)
+}
+
+// workDirKey is Kimi's own name for a working directory's sessions
+// (encodeWorkDirKey in 2.7.0's and 2.7.2's bundle): `wd_`, the directory's
+// name made a slug of at most 40 characters, and 12 hex digits of SHA-256 of
+// its path.
+function workDirKey(dir) {
+  const normalized = dir.replaceAll("\\", "/").replace(/\/+$/, "")
+  let slug = (normalized.split("/").pop() ?? normalized).toLowerCase().replaceAll(/[^a-z0-9._-]+/g, "-").replaceAll(/^-+|-+$/g, "").slice(0, 40).replaceAll(/^-+|-+$/g, "")
+  if (slug === "" || slug === "." || slug === "..") slug = "workspace"
+  return "wd_" + slug + "_" + createHash("sha256").update(normalized).digest("hex").slice(0, 12)
+}
+
 // subscribe streams the session's events to stdout, again after a drop while
-// the run goes on: a resubscription's `turns` frame repeats the latest page.
+// the run goes on.
 async function subscribe() {
   let tries = 0
   const open = () =>

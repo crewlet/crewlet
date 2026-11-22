@@ -334,7 +334,7 @@ func TestAKimiNoteIsConfirmedOffTheBoxsRecord(t *testing.T) {
 //
 // Mutation: lower the floor, or drop the node check — the case fails.
 func TestAKimiRunIsStartedOnlyOnItsFloor(t *testing.T) {
-	script := kimiScript(sandbox.RunRequest{}, PathsFor(sandbox.NewFakeSandbox("b")), "/s.json", sandbox.JobStopGrace)
+	script := kimiScript(sandbox.RunRequest{}, Session{}, PathsFor(sandbox.NewFakeSandbox("b")), "/s.json", sandbox.JobStopGrace)
 	for _, want := range []string{"if ! at 2 7 0; then", "older than 2.7.0", "command -v node"} {
 		if !strings.Contains(script, want) {
 			t.Errorf("the script lacks %q", want)
@@ -389,7 +389,7 @@ func TestKimisScriptAddsTheReportedSessionsRecords(t *testing.T) {
 	run := func(report string) string {
 		t.Helper()
 		write(paths.SessionReport(), report)
-		out, err := exec.Command(sh, "-c", kimiUsage(paths)).Output()
+		out, err := exec.Command(sh, "-c", "s=\n"+kimiSessionOf(paths)+kimiUsage(paths)).Output()
 		if err != nil {
 			t.Fatalf("the usage part of the script failed: %v", err)
 		}
@@ -553,19 +553,22 @@ func TestAKimiRunsArtifactsAreItsOwnFiles(t *testing.T) {
 	}
 }
 
-// A KIMI SESSION IS MINTED BY ITS HARNESS AND NEVER CONTINUED: its start names
-// no id, the runner reports minting, and a run asked to continue one is
-// refused, as this runner carries no session.
+// A KIMI SESSION IS MINTED BY ITS HARNESS AND CONTINUED BY ITS ID: a fresh
+// start names no id and the runner reports minting; a resume starts, its
+// script continuing the session it names and starting the driver on it.
 //
-// Mutation: implement a resumer, or name an id at start — the case fails.
-func TestAKimiSessionIsMintedAndNeverContinued(t *testing.T) {
+// Mutation: name an id at a fresh start, or drop Resumes — the case fails.
+func TestAKimiSessionIsMintedAndContinuedByItsID(t *testing.T) {
 	if s := (Kimi{}).Session(sandbox.RunRequest{}); s != (Session{}) || !NewKimi().MintsSession() {
 		t.Fatalf("session %+v, mints %v; want none named and minting", s, NewKimi().MintsSession())
 	}
-	_, err := NewKimi().Start(t.Context(), sandbox.NewFakeSandbox("b"),
-		sandbox.RunRequest{Resume: "session_6752b286-da65-4fa6-b177-7c428c2282fe"})
-	if err == nil || !strings.Contains(err.Error(), "cannot continue") {
-		t.Fatalf("Start = %v, want the resume refused", err)
+	box := sandbox.NewFakeSandbox("b")
+	handle, err := NewKimi().Start(t.Context(), box, sandbox.RunRequest{Resume: kimiFixtureSession})
+	if err != nil || handle.SessionID != kimiFixtureSession {
+		t.Fatalf("Start = %+v, %v; want the resume started on its session", handle, err)
+	}
+	if script := box.Background()[0]; !strings.Contains(script, "set -- resume") {
+		t.Fatal("a resume's script never starts the driver on the session it continues")
 	}
 }
 

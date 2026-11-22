@@ -42,6 +42,11 @@ type kimiProbe struct {
 	// activeAsks is how many asks of the prompts route answer a prompt still
 	// active, as 2.7.2 does between a steered note's turn and the one it opens.
 	activeAsks int
+	// home and work are the run's KIMI_CODE_HOME and working directory; a
+	// session created there is filed as Kimi files one, its record holding
+	// its profile's bind (bind), and the continued session is session_probe.
+	home, work, bind string
+	prompt           string
 	// idle is sent a value, by each steer, for a `:wait` to return idle; with
 	// none sent every wait is held open until its request ends.
 	idle chan struct{}
@@ -76,6 +81,19 @@ func (p *kimiProbe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch path := r.URL.Path; {
 	case path == "/api/v1/sessions" && r.Method == http.MethodPost:
 		p.record("create " + string(body))
+		if p.bind == "" {
+			ok(map[string]any{"id": "session_probe", "workspace_id": "wd_probe"})
+			return
+		}
+		wire := filepath.Join(p.home, "sessions", "wd_throwaway", "session_throwaway", "agents", "main", "wire.jsonl")
+		_ = os.MkdirAll(filepath.Dir(wire), 0o700)
+		_ = os.WriteFile(wire, []byte(`{"type":"metadata"}`+"\n"+p.bind+"\n"), 0o600)
+		ok(map[string]any{"id": "session_throwaway", "workspace_id": "wd_throwaway"})
+	case path == "/api/v1/sessions/session_throwaway:delete":
+		p.record("delete")
+		ok(map[string]any{"deleted": true})
+	case path == "/api/v1/sessions/session_probe" && r.Method == http.MethodGet:
+		p.record("get")
 		ok(map[string]any{"id": "session_probe"})
 	case path == "/api/v1/sessions/session_probe/prompts" && r.Method == http.MethodPost:
 		var prompt struct {
@@ -87,8 +105,12 @@ func (p *kimiProbe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal(body, &prompt)
 		report, _ := os.ReadFile(p.report)
 		p.mu.Lock()
-		p.calls = append(p.calls, "prompt "+prompt.ID)
-		p.brief, p.reportAtBrief = prompt.Content[0].Text, string(report)
+		recorded := prompt.ID
+		if strings.HasPrefix(recorded, "crewlet-brief-") {
+			recorded = "crewlet-brief"
+		}
+		p.calls = append(p.calls, "prompt "+recorded)
+		p.brief, p.reportAtBrief, p.prompt = prompt.Content[0].Text, string(report), prompt.ID
 		p.mu.Unlock()
 		ok(map[string]any{"prompt_id": prompt.ID, "status": "running"})
 	case path == "/api/v1/sessions/session_probe/prompts":
@@ -150,7 +172,7 @@ func (p *kimiProbe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // kimiDriverRun starts the driver against probe, the brief on its stdin, its
 // notes route probe's own where notes is "", and returns the running command
 // and its stdout.
-func kimiDriverRun(t *testing.T, probe *kimiProbe, notes string) (*exec.Cmd, *bytes.Buffer) {
+func kimiDriverRun(t *testing.T, probe *kimiProbe, notes string, args ...string) (*exec.Cmd, *bytes.Buffer) {
 	t.Helper()
 	node := prereqtest.OnPath(t, "node", "the Kimi driver's probe runs the driver under it",
 		"install any current node, as ci.yml does (CONTRIBUTING.md, \"A skip is not a pass\")")
@@ -158,6 +180,12 @@ func kimiDriverRun(t *testing.T, probe *kimiProbe, notes string) (*exec.Cmd, *by
 	t.Cleanup(srv.Close)
 	dir := t.TempDir()
 	probe.report, probe.down = filepath.Join(dir, "session-report"), filepath.Join(dir, "down")
+	if probe.home == "" {
+		probe.home, probe.work = filepath.Join(dir, "home"), filepath.Join(dir, "work")
+	}
+	if err := os.MkdirAll(probe.work, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	kimi := filepath.Join(dir, "kimi")
 	stub := "#!/bin/sh\nprintf '{\"origin\":\"%s\",\"ws_url\":\"ws://127.0.0.1:1/api/v1/ws\",\"token\":\"t\"," +
 		"\"kimi_agent_protocol_version\":\"1.0.0\"}\\n' \"$PROBE_ORIGIN\"\n" +
@@ -174,8 +202,10 @@ func kimiDriverRun(t *testing.T, probe *kimiProbe, notes string) (*exec.Cmd, *by
 			t.Fatal(err)
 		}
 	}
-	cmd := exec.Command(node, driver, filepath.Join(dir, "settings.json")) //nolint:gosec // the suite's own probe
-	cmd.Env = append(os.Environ(), "PROBE_ORIGIN="+srv.URL, "PROBE_DOWN="+probe.down, "NODE_NO_WARNINGS=1")
+	cmd := exec.Command(node, append([]string{driver, filepath.Join(dir, "settings.json")}, args...)...) //nolint:gosec // the suite's own probe
+	cmd.Dir = probe.work
+	cmd.Env = append(os.Environ(), "PROBE_ORIGIN="+srv.URL, "PROBE_DOWN="+probe.down, "NODE_NO_WARNINGS=1",
+		"KIMI_CODE_HOME="+probe.home)
 	cmd.Stdin = strings.NewReader("Fix the flake.\n$(not run)")
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
@@ -239,7 +269,8 @@ func TestTheKimiDriverReportsOnceAndSteersEachNoteUnderItsInboxID(t *testing.T) 
 		!strings.Contains(create, `"profile":"crewlet-probe"`) {
 		t.Errorf("the session was created with %s", create)
 	}
-	if probe.calls[1] != "prompt crewlet-brief" {
+	if probe.calls[1] != "prompt crewlet-brief" || !strings.HasPrefix(probe.prompt, "crewlet-brief-") ||
+		len(probe.prompt) != len("crewlet-brief-")+36 {
 		t.Errorf("calls = %q, want the brief right after the session", probe.calls)
 	}
 	if !slices.Contains(probe.calls, "shutdown") || slices.ContainsFunc(probe.calls, func(c string) bool {
@@ -310,5 +341,100 @@ func TestTheKimiDriverWaitsOutAPromptStillActiveAtIdle(t *testing.T) {
 	}
 	if waits != 2 {
 		t.Fatalf("calls = %q, want a second wait after the prompt still active", probe.calls)
+	}
+}
+
+// kimiFiled files a session_probe for a run in probe's directory through the
+// driver's own rekey, as the run's script does, and returns its main record.
+func kimiFiled(t *testing.T, probe *kimiProbe) string {
+	t.Helper()
+	node := prereqtest.OnPath(t, "node", "the Kimi driver's probe runs the driver under it", "install any current node")
+	dir := t.TempDir()
+	probe.home, probe.work = filepath.Join(dir, "home"), filepath.Join(dir, "work")
+	src := filepath.Join(dir, "carried", "session_probe")
+	for name, body := range kimiSessionFiles("session_probe", "/elsewhere") {
+		kimiWrite(t, filepath.Join(src, name), body)
+	}
+	kimiWrite(t, filepath.Join(probe.home, "agents", "crewlet", "crewlet-probe.md"),
+		"---\nname: crewlet-probe\n---\n${base_prompt}\n\nSTANDING-NOW\n")
+	settings := filepath.Join(dir, "s.json")
+	kimiWrite(t, settings, `{}`)
+	driver := filepath.Join(dir, "d.mjs")
+	kimiWrite(t, driver, kimiDriverSource)
+	if err := os.MkdirAll(probe.work, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(node, driver, settings, "rekey", "session_probe", src) //nolint:gosec // the suite's own probe
+	cmd.Dir, cmd.Env = probe.work, append(os.Environ(), "KIMI_CODE_HOME="+probe.home)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("rekey: %v\n%s", err, out)
+	}
+	wires, _ := filepath.Glob(filepath.Join(probe.home, "sessions", "wd_work_*", "session_probe", "agents", "main", "wire.jsonl"))
+	if len(wires) != 1 {
+		t.Fatalf("the session was filed at %v", wires)
+	}
+	return wires[0]
+}
+
+// A CONTINUED SESSION'S INSTRUCTIONS ARE RENEWED BY ITS BIND, AND IT REPORTS
+// NOTHING: the driver creates a throwaway session with the run's profile in the
+// run's directory, appends its bind to the continued session's record, deletes
+// it, opens the continued session and posts the brief there as it is; no
+// report is written, as a resume names exactly the session it continues.
+//
+// Mutation: skip the renewal, keep the throwaway, write a report on a resume,
+// or post to another session — the case fails.
+func TestAContinuedKimiSessionIsRenewedByItsBindAndReportsNothing(t *testing.T) {
+	const bind = `{"type":"profile.bind","agentId":"main","profileName":"crewlet-probe","systemPrompt":"RENDERED-NOW"}`
+	probe := &kimiProbe{t: t, idle: make(chan struct{}, 1), bind: bind}
+	wire := kimiFiled(t, probe)
+	probe.idle <- struct{}{}
+	cmd, stdout := kimiDriverRun(t, probe, "", "resume", "session_probe", "bind")
+	if code := kimiDriverEnds(t, cmd); code != 0 {
+		t.Fatalf("the driver exited %d, want 0:\n%s", code, stdout)
+	}
+	probe.mu.Lock()
+	defer probe.mu.Unlock()
+	record, _ := os.ReadFile(wire)
+	if !strings.HasSuffix(string(record), bind+"\n") {
+		t.Errorf("the continued record ends %q, want the fresh bind", record)
+	}
+	order := []string{}
+	for _, c := range probe.calls {
+		if strings.HasPrefix(c, "create") || c == "delete" || c == "get" || strings.HasPrefix(c, "prompt ") {
+			order = append(order, strings.SplitN(c, " ", 2)[0])
+		}
+	}
+	if !slices.Equal(order, []string{"create", "delete", "get", "prompt"}) {
+		t.Errorf("calls = %q, want the throwaway created and deleted, then the session opened and prompted", probe.calls)
+	}
+	if probe.brief != "Fix the flake.\n$(not run)" || probe.reportAtBrief != "" {
+		t.Errorf("brief %q, report %q; want the brief as it is and no report", probe.brief, probe.reportAtBrief)
+	}
+	if _, err := os.Stat(probe.report); !os.IsNotExist(err) {
+		t.Errorf("a resume wrote a report (%v)", err)
+	}
+}
+
+// ON A RELEASE WHOSE BIND IS NOT RENEWED, A CONTINUED SESSION IS HANDED ITS
+// INSTRUCTIONS IN ITS BRIEF, under the heading that says they supersede, and no
+// session is created.
+//
+// Mutation: post the brief alone, or renew by bind — the case fails.
+func TestAContinuedKimiSessionOffTheMeasuredReleasesIsToldInItsBrief(t *testing.T) {
+	probe := &kimiProbe{t: t, idle: make(chan struct{}, 1)}
+	kimiFiled(t, probe)
+	probe.idle <- struct{}{}
+	cmd, stdout := kimiDriverRun(t, probe, "", "resume", "session_probe", "brief")
+	if code := kimiDriverEnds(t, cmd); code != 0 {
+		t.Fatalf("the driver exited %d, want 0:\n%s", code, stdout)
+	}
+	probe.mu.Lock()
+	defer probe.mu.Unlock()
+	if want := kimiSupersedes + "STANDING-NOW\n\n---\n\nFix the flake.\n$(not run)"; probe.brief != want {
+		t.Errorf("brief = %q, want %q", probe.brief, want)
+	}
+	if slices.ContainsFunc(probe.calls, func(c string) bool { return strings.HasPrefix(c, "create") }) {
+		t.Errorf("calls = %q, want no session created", probe.calls)
 	}
 }

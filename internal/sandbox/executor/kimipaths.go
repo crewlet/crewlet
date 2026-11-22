@@ -33,3 +33,19 @@ func (p Paths) KimiSettings() string { return p.WorkDir() + "/kimi-run.json" }
 // KimiServerPid is where the driver records the pid of the `kimi web` it
 // started, which the run's script ends if it outlived the driver ([kimiScript]).
 func (p Paths) KimiServerPid() string { return p.WorkDir() + "/kimi-server.pid" }
+
+// KimiMCPConfigFresh is where a continuing run's MCP servers are written a
+// second time, wired to the job's other bridge token, for a session its script
+// starts in the continued one's place ([sandbox.RunRequest.FreshWiring]),
+// which the script moves over [Paths.KimiMCPConfig] where it starts one and
+// removes where it continues ([kimiSessionGate]).
+func (p Paths) KimiMCPConfigFresh() string { return p.WorkDir() + "/kimi-mcp-fresh.json" }
+
+// KimiSettingsFresh is the driver's settings written a second time, for the
+// same session ([Paths.KimiMCPConfigFresh]): their notes route is the job's
+// other one.
+func (p Paths) KimiSettingsFresh() string { return p.WorkDir() + "/kimi-run-fresh.json" }
+
+// KimiLinesBefore is where a continuing run's script records how many lines
+// each agent's wire.jsonl held before its driver started ([kimiLinesBefore]).
+func (p Paths) KimiLinesBefore() string { return p.WorkDir() + "/kimi-lines-before" }
