@@ -292,8 +292,9 @@ func run(ctx context.Context, args []string, getenv func(string) string, stderr 
 		}
 		// THE NOTES ROUTE ALONE REFUSED THE HELPER: its polls end, and the cap
 		// and the skill reports go on, since a helper that ended would leave
-		// the turn unbounded (the run's guard would stop it).
-		logger.Print(err)
+		// the turn unbounded (the run's guard would stop it). Said in the one
+		// line that names the refusal, so a reader knows the polls are over.
+		logger.Printf("%v: note polling has ended; the step cap and skill reports go on", err)
 	}
 	// The helper caps and reports until the run is over.
 	select {
