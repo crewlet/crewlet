@@ -44,6 +44,7 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) (node func() coord.Fleet
 		{"rebases", rebaseCases},
 		{"sandbox_runs", runCases},
 		{"sandbox_run_parts", runPartCases},
+		{"session_claims", sessionClaimCases},
 		{"secrets", secretCases},
 		{"integrations", integrationCases},
 		{"atlas_sources", atlasSourceCases},

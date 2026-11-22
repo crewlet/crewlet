@@ -73,6 +73,10 @@ type Fleet struct {
 	conversationHoldRevision uint64
 	seen                     map[string]seenMark
 	seenRevision             uint64
+	// sessionClaims is each minted session's claim, by session id, and the
+	// counter its revisions are drawn from.
+	sessionClaims        map[string]coord.SessionClaim
+	sessionClaimRevision uint64
 	// boxReadings is each seat's box readings, by seat and cell.
 	boxReadings map[boxReadingKey]coord.BoxReading
 	mailboxes   map[uuid.UUID]coord.MailboxRecord
@@ -231,6 +235,7 @@ func NewFleet() *Fleet {
 		accessReviews:     map[string]accessReview{},
 		atlasWakes:        map[string]coord.AtlasWake{},
 		conversationHolds: map[uuid.UUID]map[string]coord.ConversationHold{},
+		sessionClaims:     map[string]coord.SessionClaim{},
 		seen:              map[string]seenMark{},
 		boxReadings:       map[boxReadingKey]coord.BoxReading{},
 		mailboxes:         map[uuid.UUID]coord.MailboxRecord{},
