@@ -8,10 +8,12 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -54,11 +56,15 @@ func (Muse) Name() string { return MuseName }
 func (Muse) Resumes() bool { return true }
 
 // museSupported is the one Muse Code release this runner is written for, every
-// behaviour here measured on it. An older box is refused before anything
-// runs; a newer one runs a session of its own and never continues one; and a
-// session continues only where its writer and the box both run it exactly
-// ([Muse.Continues], [museSessionGate]).
-const museSupported = "1.4.25"
+// behaviour here measured on it: the release the profile's written_for names
+// ([harnessprofile.Release]), so the profile and the runner never name two. An
+// older box is refused before anything runs; a newer one runs a session of its
+// own and never continues one; and a session continues only where its writer
+// and the box both run it exactly ([Muse.Continues], [museSessionGate]).
+var museSupported = sync.OnceValue(func() string {
+	p, _ := harnessprofile.Builtin(MuseName)
+	return harnessprofile.Release(p.WrittenFor)
+})
 
 // museSystemMax is the most bytes of standing instructions Muse Code takes in
 // `run.system_prompt_append`: past it, 1.4.25 refuses the run before its model
@@ -141,7 +147,7 @@ func museScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	b.WriteString(endHarness(""))
 	b.WriteString(museRelease)
 	line(`if ! at %s; then printf 'crewlet: this box runs Muse Code %%s, older than %s, the release this runner is written for\n' "$n" >&2; exit 1; fi`,
-		floorArgs(museSupported), museSupported)
+		floorArgs(museSupported()), museSupported())
 	line(`p=%s`, q(paths.Brief()))
 	// THE CAP NAMED IN THE STREAM, for the decoder to hold the exec's runs
 	// to ([museCapMark]).
@@ -229,7 +235,7 @@ func museSessionGate(session Session, paths Paths, rewired bool) string {
 	// engine reads it ([releaseOf]): any other, or none that reads, starts a
 	// session of its own.
 	line(`%s[ "$rv" = %s ] || w="this box runs Muse Code ${rv:-a release it could not read}, and a session continues only on %s, the release this runner is written for"`,
-		bareReleaseShell("rv"), q(museSupported), museSupported)
+		bareReleaseShell("rv"), q(museSupported()), museSupported())
 	line(`if [ -s %s ]; then d=$(cksum < %s 2> /dev/null) || d=; fi`, carried, carried)
 	if session.Replaces {
 		line(`if [ -n "$h" ] && [ -s %s ]; then h=; fi`, carried)
@@ -330,13 +336,13 @@ func (m Muse) Continues(box, writer string) (bool, string) {
 // ([museSessionGate]), so the engine asks before a relaunch hands the brief
 // that continues the box's copy.
 func (Muse) continuesInPlace(box string) (bool, string) {
-	if box == museSupported {
+	if box == museSupported() {
 		return true, ""
 	}
 	if box == "" {
 		box = "a release it could not read"
 	}
-	return false, fmt.Sprintf(museBoxRefused, box, museSupported)
+	return false, fmt.Sprintf(museBoxRefused, box, museSupported())
 }
 
 // museBoxRefused is why a box whose Muse Code is not [museSupported]
@@ -350,13 +356,13 @@ const museBoxRefused = "this box runs Muse Code %.64s, and a session continues o
 // by one that named no release this build reads, is refused, saying so.
 func (Muse) ContinuesWriter(writer string) (bool, string) {
 	switch writer {
-	case museSupported:
+	case museSupported():
 		return true, ""
 	case "":
 		return false, writerNamedNoRelease("Muse Code")
 	}
 	return false, fmt.Sprintf("the session was written by Muse Code %.64s, and only a session %s wrote "+
-		"continues, the release this runner is written for", writer, museSupported)
+		"continues, the release this runner is written for", writer, museSupported())
 }
 
 // meter is the take's meter of a Muse Code archive ([carrier.meter]): no

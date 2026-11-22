@@ -67,7 +67,7 @@ func TestAnUnreadWriterContinuesInNoBox(t *testing.T) {
 		{"codex", Codex{}, []string{codexCarryRelease}},
 		{"copilot", Copilot{}, []string{copilotFloor()}},
 		{"kimi-code", Kimi{}, []string{kimiSupported}},
-		{"muse-code", Muse{}, []string{museSupported}},
+		{"muse-code", Muse{}, []string{museSupported()}},
 	} {
 		if ok, why := c.carrier.ContinuesWriter(""); ok || why == "" {
 			t.Errorf("%s: an unread writer continues %v (%q), want refused, saying why", c.name, ok, why)
@@ -105,7 +105,7 @@ func TestSingleReleaseCarriersContinueOnlyTheirOneReleasesWriter(t *testing.T) {
 	}{
 		{"kimi-code", Kimi{}, kimiSupported},
 		{"copilot", Copilot{}, copilotFloor()},
-		{"muse-code", Muse{}, museSupported},
+		{"muse-code", Muse{}, museSupported()},
 	} {
 		for writer, want := range map[string]bool{c.supported: true, "9.9.9": false, "0.0.1": false, "": false} {
 			ok, why := c.carrier.ContinuesWriter(writer)
