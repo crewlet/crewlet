@@ -152,8 +152,8 @@ func TestACodexRolloutsUserMessagesAreAPersonsWordsAlone(t *testing.T) {
 // message is a person's, a `compaction.summary` or harness-written one never
 // is, and a user message with no metadata at all is taken as a person's.
 //
-// Mutation: read the provenance before the kinds, or refuse a message with
-// no metadata, and a row below fails.
+// Mutation: read the provenance before the kinds, read the provenance alone,
+// or refuse a message with no metadata, and a row below fails.
 func TestCodexsOneRuleForAPersonsMessage(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -166,6 +166,9 @@ func TestCodexsOneRuleForAPersonsMessage(t *testing.T) {
 		{"provenance alone", "user", `{"content_item_metadata":[{"provenance":{"type":"user"}}]}`, true},
 		{"harness provenance alone", "user", `{"content_item_metadata":[{"provenance":{"type":"harness"}}]}`, false},
 		{"no metadata", "user", `{}`, true},
+		// KINDS AND PROVENANCE DISAGREE: the kinds decide, both ways.
+		{"a person's kind, harness provenance", "user", `{"content_item_kinds":["user.text"],"content_item_metadata":[{"provenance":{"type":"harness"}}]}`, true},
+		{"a summary's kind, user provenance", "user", `{"content_item_kinds":["compaction.summary"],"content_item_metadata":[{"provenance":{"type":"user"}}]}`, false},
 		{"the model", "assistant", `{"content_item_kinds":["user.text"]}`, false},
 	} {
 		var meta codexItemMeta
