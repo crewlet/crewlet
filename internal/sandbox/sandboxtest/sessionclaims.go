@@ -65,18 +65,18 @@ func testAMintedSessionIsOneLiveRuns(t *testing.T, s sandbox.PendingStore) {
 	}
 }
 
-// A BIND CUT BETWEEN ITS CLAIM AND ITS RECORD LEAVES NO CLAIM PAST THE RECORD:
-// the claim is taken first, so a record never binds an id its claim does not
-// hold, and a claim whose record write did not follow holds the id only as long
-// as the run's record does.
+// A BIND WHOSE RECORD WRITE FAILS RELEASES ITS CLAIM: the claim is taken
+// first, so a record never binds an id its claim does not hold, and a claim
+// whose record write did not follow is released at once, the id free for
+// another run's job while the failed one's record still stands.
 //
-// Mutation: write the record before the claim, or leave a claim past its
-// record, and this goes red.
-func testABindCutBeforeItsRecordLeavesNoClaimPastIt(t *testing.T, staged *stagedRuns, s sandbox.PendingStore) {
+// Mutation: write the record before the claim, or keep the claim past the
+// failed write, and this goes red.
+func testABindWhoseRecordFailsReleasesItsClaim(t *testing.T, staged *stagedRuns, s sandbox.PendingStore) {
 	ctx := t.Context()
 	mustLaunched(t, s, run("t-cut"))
 	mustLaunched(t, s, run("t-next"))
-	staged.failNext(nil, errors.New("the node stopped before the record's write"))
+	staged.failNext(nil, errors.New("the record's write failed"))
 	cut := mustGet(t, s, "t-cut").LaunchID
 	if _, err := s.BindSession(ctx, "t-cut", sandbox.SessionBind{Launch: cut, ID: claimed}); err == nil {
 		t.Fatal("a bind whose record write failed answered bound")
@@ -84,14 +84,37 @@ func testABindCutBeforeItsRecordLeavesNoClaimPastIt(t *testing.T, staged *staged
 	if got := mustGet(t, s, "t-cut").Launch.Minted; got != "" {
 		t.Fatalf("the record binds %q although its write failed", got)
 	}
-	if bindable(t, s, "t-next", false) {
-		t.Error("another run bound the id while the cut run's record still stands")
-	}
-	if _, gone, err := end(ctx, s, "t-cut", everyJob(sandbox.Fence{}, sandbox.Active)); err != nil || !gone {
-		t.Fatalf("ending the cut run = %v, %v", gone, err)
-	}
 	if !bindable(t, s, "t-next", false) {
-		t.Error("the cut bind's claim held the id past its run's record")
+		t.Error("the failed bind's claim still holds the id")
+	}
+}
+
+// A CLAIM A CRASH LEFT NEVER BLOCKS ITS OWN JOB: a bind cut after its claim and
+// before its record (its process gone, nothing released) leaves the claim with
+// its owner; the same job binding again takes it as its own, another run's job
+// is refused while the record stands, and the record's end frees the id.
+//
+// Mutation: refuse the claim's own job, or let another run's job past it, and
+// this goes red.
+func testAClaimACrashLeftNeverBlocksItsOwnJob(t *testing.T, s sandbox.PendingStore, runs coord.SandboxRuns) {
+	ctx := t.Context()
+	job := mustLaunched(t, s, run("t-crashed"))
+	mustLaunched(t, s, run("t-other"))
+	if ok, err := runs.CreateSessionClaim(ctx, coord.SessionClaim{Session: claimed, Turn: "t-crashed",
+		Launch: job}); err != nil || !ok {
+		t.Fatalf("leaving the crashed bind's claim = %v, %v", ok, err)
+	}
+	if bindable(t, s, "t-other", false) {
+		t.Error("another run's job bound an id a live run's claim holds")
+	}
+	if !bindable(t, s, "t-crashed", false) {
+		t.Fatal("the claim's own job was refused the id it claimed")
+	}
+	if _, gone, err := end(ctx, s, "t-crashed", everyJob(sandbox.Fence{}, sandbox.Active)); err != nil || !gone {
+		t.Fatalf("ending the crashed run = %v, %v", gone, err)
+	}
+	if !bindable(t, s, "t-other", false) {
+		t.Error("the id stayed claimed past the record that bound it")
 	}
 }
 
