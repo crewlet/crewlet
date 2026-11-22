@@ -414,6 +414,16 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		add("google_analytics", in.GoogleAnalytics.Enabled, nil, map[string]any{
 			"properties": in.GoogleAnalytics.Properties, "roles": growthRoles("google_analytics")})
 	}
+	if in.AdMob != nil {
+		// NO SECRET: the OAuth client's public ID, the accounts the company
+		// narrows agents to, and its catalog's roles with what each allows.
+		var client string
+		if in.AdMob.OAuth != nil {
+			client = in.AdMob.OAuth.ClientID
+		}
+		add("admob", in.AdMob.Enabled, nil, map[string]any{"client_id": client, "accounts": in.AdMob.Accounts,
+			"roles": growthRoles("admob")})
+	}
 	if in.Atlassian != nil {
 		// THE ORGANIZATION, not a third product: where the account itself is
 		// created, which no site API can do. It reconciles identities,

@@ -216,6 +216,7 @@ export const INTEGRATION_TOOLS = {
   ssh: ["ssh"],
   app_store_connect: ["app_store_connect"],
   google_analytics: ["google_analytics"],
+  admob: ["admob"],
 } as const;
 
 /**
