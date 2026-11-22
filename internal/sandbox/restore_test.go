@@ -433,19 +433,22 @@ func TestARunThatContinuesASessionIsWiredForEitherSessionItsBoxStarts(t *testing
 // continuation in any other box, and the fresh brief where it cannot be taken
 // up at all (a harness that cannot, an object gone, a kept session moved, a row
 // naming another capture or an earlier job's, a seal or a spool that does not
-// open, or a second read of it that does not). A newer capture not kept is none
-// of these. It spools nothing either way.
+// open, or a second read of it that does not). A box's own copy, kept or in
+// place, is continued only where its harness takes it up in place
+// ([SessionRestorer.CheckInPlace]: a Codex of another release than the one
+// supported does not). A newer capture not kept is none of these. It spools
+// nothing either way.
 //
 // Mutation: choose the brief before the box and object are asked, restore over
-// a clean copy, skip a check of the record as opened, or spool the session,
-// and a row goes red.
+// a clean copy, skip a check of the record as opened, skip CheckInPlace on
+// either path to the box's own copy, or spool the session, and a row goes red.
 func TestTheBriefMatchesWhatTheRunHas(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
 		reused, interrupted, unreadable, inPlace, moved bool
 		newerUnkept, logMoved, earlierJob               bool
 		failOpen                                        int
-		carryWhy                                        string
+		carryWhy, inPlaceWhy                            string
 		want                                            BriefKind
 		session                                         string
 		carried, replace                                bool
@@ -463,6 +466,10 @@ func TestTheBriefMatchesWhatTheRunHas(t *testing.T) {
 		"in place, a new box":             {inPlace: true, want: BriefFresh},
 		"a seal that does not open":       {failOpen: 1, want: BriefFresh},
 		"a read again that does not open": {failOpen: 2, want: BriefFresh},
+		"its own box, ended cleanly, a harness refusing its copy": {reused: true,
+			inPlaceWhy: "this box runs Codex 0.172.0", want: BriefFresh},
+		"in place, its own box, a harness refusing its copy": {reused: true, inPlace: true,
+			inPlaceWhy: "this box runs Codex 0.172.0", want: BriefFresh},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -470,7 +477,7 @@ func TestTheBriefMatchesWhatTheRunHas(t *testing.T) {
 			// ITS SPOOLS ITS OWN, so what a case leaves in them is the case's
 			// to see.
 			rig.coordinator.spoolDir = t.TempDir()
-			rig.runner.Carries, rig.runner.CarryWhy = true, tc.carryWhy
+			rig.runner.Carries, rig.runner.CarryWhy, rig.runner.InPlaceWhy = true, tc.carryWhy, tc.inPlaceWhy
 			key := objstore.KeyAt(time.Now())
 			kept := SessionCapture{LaunchSeq: 1, CaptureSeq: 1, State: CaptureLanded, Final: true,
 				Interrupted: tc.interrupted, Through: new(0), Object: key.String(),
@@ -786,6 +793,9 @@ type fakeRestorer struct{ why string }
 
 func (f fakeRestorer) Restores(SessionArchive) (bool, string) { return f.why == "", f.why }
 func (f fakeRestorer) CheckCarry(context.Context, Sandbox, SessionArchive) (CarryCheck, error) {
+	return CarryCheck{Continues: f.why == "", Why: f.why}, nil
+}
+func (f fakeRestorer) CheckInPlace(context.Context, Sandbox) (CarryCheck, error) {
 	return CarryCheck{Continues: f.why == "", Why: f.why}, nil
 }
 

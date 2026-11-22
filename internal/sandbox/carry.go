@@ -224,6 +224,13 @@ type SessionRestorer interface {
 	// which reads the box harness's release. Three answers: it can, it cannot
 	// (and why), and the box could not be asked, an error.
 	CheckCarry(ctx context.Context, box Sandbox, archive SessionArchive) (CarryCheck, error)
+
+	// CheckInPlace asks box whether its harness continues the copy of a
+	// session the box itself holds, before a relaunch there hands the brief
+	// that continues it: [Runner.CheckInPlace] in internal/sandbox/executor,
+	// which reads the release of a harness that continues no session on a
+	// release it was not read for (Codex). Three answers, as CheckCarry's.
+	CheckInPlace(ctx context.Context, box Sandbox) (CarryCheck, error)
 }
 
 // SessionTaker is a [Runner] whose harness's session a capture takes out of a

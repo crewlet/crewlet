@@ -755,6 +755,10 @@ type FakeRunner struct {
 	// resume this build did not read ([CarryCheck.ResumeRead]); unset, it
 	// answers one it did. Set it before the launch that asks.
 	CarryResumeUnread bool
+	// InPlaceWhy, set, is why every box's harness continues no copy of a
+	// session the box itself holds ([FakeRunner.CheckInPlace]); unset, each
+	// continues its own. Set it before the launch that asks.
+	InPlaceWhy string
 	// carried is every archive a job was started with, read whole as a
 	// runner writes it into its box.
 	carried []FakeCarried
@@ -1598,6 +1602,16 @@ func (r *FakeRunner) CheckCarry(_ context.Context, _ Sandbox, archive SessionArc
 		return CarryCheck{Version: r.CarryVersion, ResumeRead: !r.CarryResumeUnread, Why: r.CarryWhy}, nil
 	}
 	return CarryCheck{Version: r.CarryVersion, ResumeRead: !r.CarryResumeUnread, Continues: true}, nil
+}
+
+// CheckInPlace answers [FakeRunner.InPlaceWhy], with the release that harness
+// answered ([FakeRunner.CarryVersion]), as a real runner reads it before it
+// decides.
+func (r *FakeRunner) CheckInPlace(context.Context, Sandbox) (CarryCheck, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return CarryCheck{Version: r.CarryVersion, ResumeRead: !r.CarryResumeUnread, Continues: r.InPlaceWhy == "",
+		Why: r.InPlaceWhy}, nil
 }
 
 var _ HoldingsReader = (*FakeRunner)(nil)
