@@ -38,7 +38,7 @@ func geminiReceiptsAreReadOffItsTakesAndItsSession(t *testing.T) {
 			"\n" + `{"type":"user","content":[{"text":"` + text + `"}]}` + "\n" +
 			`{"type":"user","content":[{"text":"` + text + `"}]}` + "\n" +
 			`{"type":"user","content":[{"text":"` + text + `"}]}` + "\n",
-		p.GeminiTakes(session): `{"take":"take-a","digest":"` + ItemDigest(text) + `"}` + "\n" +
+		p.GeminiTakes(session): `{"from":0}` + "\n" + `{"take":"take-a","digest":"` + ItemDigest(text) + `"}` + "\n" +
 			`{"take":"take-b","digest":"` + ItemDigest(text) + `"}` + "\n" +
 			`{"take":"take-c","digest":"` + ItemDigest(text) + `"}` + "\n",
 	}
@@ -70,14 +70,15 @@ func geminiReceiptsAreReadOffItsTakesAndItsSession(t *testing.T) {
 	}
 }
 
-// AN EMPTY RECORD OF TAKES SETTLES, A MISSING ONE WAITS. The run's script leaves
-// the record empty before the run, so a take the script never recorded (its
-// hook killed between the bridge's answer and the record) reads absent once
-// the job is over, and is served again; a box with no record at all lost it,
-// and its takes stay undecided whether or not the job is over.
+// A STARTED RECORD OF TAKES SETTLES, A MISSING ONE WAITS. The run's script
+// opens the record with its start line before the run, so a take the script
+// never recorded (its hook killed between the bridge's answer and the record)
+// reads absent once the job is over, and is served again; a box whose record
+// holds no start line lost it (a box reads a missing file as empty), and its
+// takes stay undecided whether or not the job is over.
 //
-// Mutations, each red: read a missing record as empty; read an empty record
-// as unreadable.
+// Mutations, each red: read a record without its start line as started; read
+// a started record as unreadable.
 func TestAnEmptyRecordOfTakesSettlesAndAMissingOneWaits(t *testing.T) {
 	t.Parallel()
 	asked := []sandbox.AskedTake{{Take: "take-a"}}
@@ -97,7 +98,7 @@ func TestAnEmptyRecordOfTakesSettlesAndAMissingOneWaits(t *testing.T) {
 			b := sandbox.NewFakeSandbox("box-1")
 			p := PathsFor(b)
 			if tc.record {
-				if err := b.WriteFile(t.Context(), p.GeminiTakes(session), nil); err != nil {
+				if err := b.WriteFile(t.Context(), p.GeminiTakes(session), []byte(`{"from":0}`+"\n")); err != nil {
 					t.Fatal(err)
 				}
 			}
