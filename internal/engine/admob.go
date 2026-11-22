@@ -39,7 +39,7 @@ func (g consentGrant) Renewed(ctx context.Context, refused string) (string, erro
 // the pass's reads.
 func (e *Engine) adMob() *admob.Product {
 	return admob.New(e.runningConfig, e.resolver, consentGrant{engine: e, kind: integration.KindAdMob},
-		e.GrowthAudit(), nil)
+		e.GrowthAudit(), growthLeases{engine: e}, nil)
 }
 
 // adMobPass checks AdMob's company half: its consent grant, which every seat's
