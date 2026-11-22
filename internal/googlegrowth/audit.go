@@ -8,6 +8,8 @@ import (
 	"errors"
 	"log/slog"
 	"regexp"
+	"slices"
+	"strings"
 	"sync"
 
 	"github.com/crewlet/crewlet/internal/growth"
@@ -32,7 +34,10 @@ func (c *Client) Record(call growth.Call, req Request, class growth.Class, befor
 		_ = json.Unmarshal(before, &current)
 	}
 	for _, ch := range req.Changes(current) {
-		r.Changes = append(r.Changes, RecordChange(ch))
+		rc := RecordChange(ch)
+		field := ch.Field[strings.LastIndex(ch.Field, ".")+1:]
+		rc.Text = rc.Text || slices.Contains(c.Texts, field)
+		r.Changes = append(r.Changes, rc)
 	}
 	return r
 }
