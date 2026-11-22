@@ -1,6 +1,7 @@
 package harnessprofile
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"maps"
 	"os"
@@ -10,84 +11,34 @@ import (
 	"testing"
 )
 
-// A RUN'S OWN KEYS TAKE THE SHARED LOGIN'S VALUES, AND NOTHING ELSE MOVES: each
-// key [Profile.RunKeys] names is as shared holds it (absent where shared holds
-// none), every other key as home has it; a home that differed only there is
-// shared, byte for byte; a file that is no JSON object is home as it stands.
-//
-// Mutation: keep home's value of a run key, drop a key home changed, or
-// re-encode a home that equals the shared login.
-func TestARunsOwnKeysTakeTheSharedLoginsValues(t *testing.T) {
-	t.Parallel()
-	keys := []string{"providers.meta.api_key", "providers.meta.api_base_url", "providers.meta.subs_active"}
-	shared := []byte(`{"schema_version":1,"providers":{"meta":{"access_token":"a1","api_key":"LOGIN",` +
-		`"api_base_url":"https://login","expires_at":1795365318}}}`)
-	minted := []byte(`{"schema_version":1,"providers":{"meta":{"access_token":"a1","api_key":"MINTED",` +
-		`"api_base_url":"https://minted","expires_at":1795365318,"subs_active":true}}}`)
-	if got := KeepLoginKeys(minted, shared, keys); string(got) != string(shared) {
-		t.Errorf("a home that differs only in run keys reads %s, want the shared login as it is", got)
+// testJWT is an unsigned JWT carrying claims, the shape a harness's token
+// takes; nothing here checks a signature.
+func testJWT(t *testing.T, claims map[string]any) string {
+	t.Helper()
+	raw, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatal(err)
 	}
-	refreshed := []byte(`{"schema_version":1,"providers":{"meta":{"access_token":"a2","api_key":"MINTED",` +
-		`"api_base_url":"https://minted","expires_at":1795369999}}}`)
-	var got, want any
-	_ = json.Unmarshal(KeepLoginKeys(refreshed, shared, keys), &got)
-	_ = json.Unmarshal([]byte(`{"schema_version":1,"providers":{"meta":{"access_token":"a2","api_key":"LOGIN",`+
-		`"api_base_url":"https://login","expires_at":1795369999}}}`), &want)
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("a refreshed home reads %v, want its refresh with the shared login's key", got)
-	}
-	if got := KeepLoginKeys([]byte("not json"), shared, keys); string(got) != "not json" {
-		t.Errorf("a home that is no JSON reads %q, want it as it stands", got)
-	}
-	if got := KeepLoginKeys(minted, nil, nil); string(got) != string(minted) {
-		t.Errorf("no run keys reads %s, want home as it stands", got)
-	}
-}
-
-// MUSE CODE'S PROFILE NAMES THE KEYS ITS CALLS MINT: the key, its base URL and
-// the plan flag of auth.json (measured on 1.4.25), and run_keys refuses a file
-// no credential path has and a key path with an empty part.
-//
-// Mutation: drop muse-code's run_keys, or validate none.
-func TestMuseCodesProfileNamesTheKeysItsCallsMint(t *testing.T) {
-	t.Parallel()
-	p, ok := Builtin("muse-code")
-	if !ok {
-		t.Fatal("no muse-code profile")
-	}
-	for _, key := range []string{"providers.meta.api_key", "providers.meta.api_base_url"} {
-		if !slices.Contains(p.RunKeys["auth.json"], key) {
-			t.Errorf("muse-code's run_keys for auth.json are %v, want %s among them", p.RunKeys["auth.json"], key)
-		}
-	}
-	for name, tc := range map[string]struct {
-		keys map[string]any
-		says string
-	}{
-		"a file no credential path has": {map[string]any{"hosts.json": []any{"token"}}, `run_keys names "hosts.json"`},
-		"an empty part":                 {map[string]any{"auth.json": []any{"providers..api_key"}}, "is no key path"},
-	} {
-		if _, err := Load("muse-code", map[string]any{"run_keys": tc.keys}); err == nil ||
-			!strings.Contains(err.Error(), tc.says) {
-			t.Errorf("%s: err = %v, want one saying %q", name, err, tc.says)
-		}
-	}
+	return "eyJhbGciOiJub25lIn0." + base64.RawURLEncoding.EncodeToString(raw) + ".c2ln"
 }
 
 // A LOGIN'S ACCOUNT IS READ AT ITS IDENTITY KEYS: two copies are one account
 // only where each identity key holds alike in both, or is absent from both; a
 // refresh that changes its tokens and keeps the account is one, a copy naming
-// another account, dropping it or naming a key is not, and a copy that does not
-// read in its format names none it can be held to. A `*` part holds every
-// entry of the object there, its set of entries too, `//` lines are set aside,
-// and a `.toml` file is read as TOML. identity_keys refuses a file no
-// credential path has, an empty list and a key path with an empty part.
+// another account, dropping it or naming a key is not, a token whose subject
+// claims name another account is not, and a copy that does not read in its
+// format names none. `*` holds every entry, `//` lines are set aside, `.toml`
+// is TOML. identity_keys refuses a file no credential path has, an empty list,
+// an empty part and `@subject` anywhere but last.
 //
 // Mutation: compare the whole file, read only the first key, take an absent
-// key for a match against a present one, read `*` as a literal key, drop an
-// entry's absence under `*`, read `//` lines as JSON, or read TOML as JSON.
+// key for a match, read `*` or `@subject` as a literal key, compare a token
+// whole rather than its subject, or read TOML as JSON.
 func TestALoginsAccountIsReadAtItsIdentityKeys(t *testing.T) {
 	t.Parallel()
+	seat := testJWT(t, map[string]any{"sub": "u-seat", "iat": 1})
+	seatAgain := testJWT(t, map[string]any{"sub": "u-seat", "iat": 2})
+	other := testJWT(t, map[string]any{"sub": "u-other", "iat": 2})
 	for name, tc := range map[string]struct {
 		file        string
 		keys        []string
@@ -95,37 +46,43 @@ func TestALoginsAccountIsReadAtItsIdentityKeys(t *testing.T) {
 		want        bool
 	}{
 		"a refresh keeping the account": {"auth.json", []string{"tokens.account_id", "OPENAI_API_KEY"},
-			`{"OPENAI_API_KEY":null,"tokens":{"account_id":"acct-A","access_token":"a1"},"last_refresh":"1"}`,
-			`{"OPENAI_API_KEY":null,"tokens":{"account_id":"acct-A","access_token":"a2"},"last_refresh":"2"}`, true},
-		"another account": {"auth.json", []string{"tokens.account_id", "OPENAI_API_KEY"},
-			`{"OPENAI_API_KEY":null,"tokens":{"account_id":"acct-A"}}`,
-			`{"OPENAI_API_KEY":null,"tokens":{"account_id":"acct-B"}}`, false},
-		"the account dropped": {"auth.json", []string{"tokens.account_id", "OPENAI_API_KEY"},
-			`{"OPENAI_API_KEY":null,"tokens":{"account_id":"acct-A"}}`,
-			`{"OPENAI_API_KEY":null,"tokens":{}}`, false},
+			`{"OPENAI_API_KEY":null,"tokens":{"account_id":"acct-A","access_token":"a1"}}`,
+			`{"OPENAI_API_KEY":null,"tokens":{"account_id":"acct-A","access_token":"a2"}}`, true},
+		"another account": {"auth.json", []string{"tokens.account_id"},
+			`{"tokens":{"account_id":"acct-A"}}`, `{"tokens":{"account_id":"acct-B"}}`, false},
+		"the account dropped": {"auth.json", []string{"tokens.account_id"},
+			`{"tokens":{"account_id":"acct-A"}}`, `{"tokens":{}}`, false},
 		"the second key changed": {"auth.json", []string{"tokens.account_id", "OPENAI_API_KEY"},
 			`{"OPENAI_API_KEY":null,"tokens":{"account_id":"acct-A"}}`,
 			`{"OPENAI_API_KEY":"sk-other","tokens":{"account_id":"acct-A"}}`, false},
 		"no JSON":          {"auth.json", []string{"tokens.account_id"}, `{"tokens":{"account_id":"acct-A"}}`, `not json`, false},
 		"no keys, no JSON": {"auth.json", nil, `{"tokens":{"account_id":"acct-A"}}`, `not json`, true},
+		"a key named twice": {"auth.json", []string{"user"},
+			`{"user":"seat"}`, `{"user":"seat","user":"other"}`, false},
 		"every entry's account kept": {"auth.json", []string{"*.user_id"},
 			`{"https://a.example::c":{"user_id":"u1","key":"k1"}}`,
 			`{"https://a.example::c":{"user_id":"u1","key":"k2"}}`, true},
-		"an entry's account changed": {"auth.json", []string{"*.user_id"},
-			`{"https://a.example::c":{"user_id":"u1"}}`, `{"https://a.example::c":{"user_id":"u2"}}`, false},
 		"an entry added": {"auth.json", []string{"*.user_id"},
 			`{"https://a.example::c":{"user_id":"u1"}}`,
 			`{"https://a.example::c":{"user_id":"u1"},"https://b.example::c":{"user_id":"u2"}}`, false},
 		"an entry's account dropped": {"auth.json", []string{"*.user_id"},
 			`{"https://a.example::c":{"user_id":"u1"}}`, `{"https://a.example::c":{"key":"k2"}}`, false},
+		"a token refreshed for its subject": {"auth.json", []string{"accessToken.@subject"},
+			`{"accessToken":"` + seat + `"}`, `{"accessToken":"` + seatAgain + `"}`, true},
+		"a token of another subject": {"auth.json", []string{"accessToken.@subject"},
+			`{"accessToken":"` + seat + `"}`, `{"accessToken":"` + other + `"}`, false},
+		"a token no longer a JWT": {"auth.json", []string{"accessToken.@subject"},
+			`{"accessToken":"` + seat + `"}`, `{"accessToken":"opaque"}`, false},
+		"opaque tokens alike": {"auth.json", []string{"accessToken.@subject"},
+			`{"accessToken":"opaque-1"}`, `{"accessToken":"opaque-2"}`, true},
 		"comment lines set aside": {"config.json", []string{"lastLoggedInUser"},
 			"// managed\n{\"lastLoggedInUser\":{\"login\":\"seat\"}}\n",
 			"// managed\n{\"lastLoggedInUser\":{\"login\":\"seat\"},\"firstLaunchAt\":\"x\"}\n", true},
 		"a TOML table kept": {"config.toml", []string{"providers"},
 			"[providers.p]\nbase_url = \"https://a.example\"\n",
 			"[providers.p]\nbase_url = \"https://a.example\"\n\n[[hooks]]\nname = \"x\"\n", true},
-		"a TOML table changed": {"config.toml", []string{"providers"},
-			"[providers.p]\nbase_url = \"https://a.example\"\n", "[providers.p]\nbase_url = \"https://b.example\"\n", false},
+		"a TOML table changed inline": {"config.toml", []string{"providers"},
+			"[providers.p]\nbase_url = \"https://a.example\"\n", "providers = { p = { base_url = \"https://b.example\" } }\n", false},
 	} {
 		rule := FileRule{Name: tc.file, IdentityKeys: tc.keys}
 		if got := rule.SameAccount([]byte(tc.other), []byte(tc.seed)); got != tc.want {
@@ -139,6 +96,7 @@ func TestALoginsAccountIsReadAtItsIdentityKeys(t *testing.T) {
 		"a file no credential path has": {map[string]any{"hosts.json": []any{"token"}}, `identity_keys names "hosts.json"`},
 		"an empty list":                 {map[string]any{"auth.json": []any{}}, "identity_keys.auth.json is empty"},
 		"an empty part":                 {map[string]any{"auth.json": []any{"tokens..account_id"}}, "is no key path"},
+		"a subject not last":            {map[string]any{"auth.json": []any{"tokens.@subject.x"}}, "is no key path"},
 	} {
 		if _, err := Load("codex", map[string]any{"identity_keys": tc.keys}); err == nil ||
 			!strings.Contains(err.Error(), tc.says) {
@@ -147,112 +105,120 @@ func TestALoginsAccountIsReadAtItsIdentityKeys(t *testing.T) {
 	}
 }
 
-// A MIXED FILE TRAVELS AS ITS LOGIN ALONE: a home is seeded with only its
-// login's fields, so no setting in the shared copy rides along; a refresh
-// carries only those fields back, the shared copy's settings and `//` header
-// kept; a setting a home wrote, beside a login it did not change, leaves the
-// shared copy byte for byte; and a field the home dropped is dropped. A login
-// file travels whole. login_keys refuses an empty list and an empty part.
+// A REFRESH CARRIES ITS TOKENS ALONE AND FAILS CLOSED: a home is seeded with a
+// mixed file's login fields alone; a refresh carries back exactly its refresh
+// keys, `*` walking an object's entries and an array's indices both copies
+// hold, while an endpoint, a field or an entry the home added, and a field the
+// home dropped, stay as the shared copy has them; a file naming no refresh keys
+// carries nothing; and a copy either side cannot read (malformed, a key named
+// twice, anything after the object) carries nothing, saying why.
 //
-// Mutation: seed a mixed file whole, carry a home's copy whole, take a
-// setting from the home, drop the shared copy's settings or header, or keep a
-// dropped login field.
-func TestAMixedFileTravelsAsItsLoginAlone(t *testing.T) {
+// Mutation: seed a mixed file whole, carry a home's copy whole, carry an added
+// entry or field, drop a field the home lacks, or return the home's copy on a
+// copy that does not read.
+func TestARefreshCarriesItsTokensAloneAndFailsClosed(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct {
-		name, shared, home string
-		keys               []string
-		carried            []string
-	}{
-		{"config.json", "// managed\n{\"tokens\":{\"a\":\"t1\"},\"user\":\"seat\",\"trusted\":[\"SHARED-SETTING\"]}\n",
-			"{\"tokens\":{\"a\":\"t2\"},\"user\":\"seat\",\"trusted\":[\"PLANTED-SETTING\"]}\n",
-			[]string{"tokens", "user"}, []string{"// managed\n{", `"a": "t2"`, "SHARED-SETTING"}},
-		{"config.toml", "default_provider = \"p\"\n\n[providers.p]\nbase_url = \"https://a.example\"\n\n[[hooks]]\nname = \"SHARED-SETTING\"\n",
-			"default_provider = \"q\"\n\n[providers.p]\nbase_url = \"https://a.example\"\n\n[[hooks]]\nname = \"PLANTED-SETTING\"\n",
-			[]string{"default_provider", "providers"}, []string{`default_provider = "q"`, "https://a.example", "SHARED-SETTING"}},
+	mixed := FileRule{Name: "config.toml", LoginKeys: []string{"default_provider", "providers"}}
+	seed, err := mixed.Seed([]byte("default_provider = \"p\"\n\n[providers.p]\nbase_url = \"https://a.example\"\n\n" +
+		"[[hooks]]\nname = \"SHARED-SETTING\"\n"))
+	if err != nil || strings.Contains(string(seed), "SHARED-SETTING") || !strings.Contains(string(seed), "https://a.example") {
+		t.Errorf("a mixed file seeded %q, %v; want its login alone", seed, err)
+	}
+	rule := FileRule{Name: "auth.json", RefreshKeys: []string{"token", "*.access", "pool.*.access"}}
+	shared := `{"token":"t1","url":"https://a.example","x":{"access":"a1","type":"oauth"},"pool":[{"access":"p1"}]}`
+	for name, tc := range map[string]struct{ home, want string }{
+		"tokens alone": {`{"token":"t2","url":"https://b.example","x":{"access":"a2","type":"key"},` +
+			`"y":{"access":"added"},"pool":[{"access":"p2"},{"access":"added"}],"added":1}`,
+			"{\n  \"pool\": [\n    {\n      \"access\": \"p2\"\n    }\n  ],\n  \"token\": \"t2\",\n" +
+				"  \"url\": \"https://a.example\",\n  \"x\": {\n    \"access\": \"a2\",\n    \"type\": \"oauth\"\n  }\n}\n"},
+		"a token dropped": {`{"url":"https://a.example","x":{"access":"a1","type":"oauth"},"pool":[{"access":"p1"}]}`, shared},
+		"its own copy":    {shared, shared},
+		"the home's copy, every field one": {`{"token":"t2","url":"https://a.example","x":{"access":"a1","type":"oauth"},"pool":[{"access":"p1"}]}`,
+			`{"token":"t2","url":"https://a.example","x":{"access":"a1","type":"oauth"},"pool":[{"access":"p1"}]}`},
 	} {
-		rule := FileRule{Name: tc.name, LoginKeys: tc.keys}
-		seed, err := rule.Seed([]byte(tc.shared))
-		if err != nil || strings.Contains(string(seed), "SHARED-SETTING") || !strings.Contains(string(seed), "seat") &&
-			!strings.Contains(string(seed), "https://a.example") {
-			t.Errorf("%s: seeded %q, %v; want its login alone", tc.name, seed, err)
-		}
-		got := string(rule.Carry([]byte(tc.home), []byte(tc.shared)))
-		for _, part := range tc.carried {
-			if !strings.Contains(got, part) {
-				t.Errorf("%s: a refresh carried\n%s\nwant it holding %q", tc.name, got, part)
-			}
-		}
-		if strings.Contains(got, "PLANTED-SETTING") {
-			t.Errorf("%s: a refresh carried the home's setting:\n%s", tc.name, got)
-		}
-		if got := rule.Carry(seed, []byte(tc.shared)); string(got) != tc.shared {
-			t.Errorf("%s: its own seed carried %q, want the shared copy as it is", tc.name, got)
-		}
-		planted := strings.Replace(tc.shared, "SHARED-SETTING", "PLANTED-SETTING", 1)
-		if got := rule.Carry([]byte(planted), []byte(tc.shared)); string(got) != tc.shared {
-			t.Errorf("%s: a setting the home wrote carried %q, want the shared copy as it is", tc.name, got)
+		if got, err := rule.Carry([]byte(tc.home), []byte(shared)); err != nil || string(got) != tc.want {
+			t.Errorf("%s: carried\n%s\n%v; want\n%s", name, got, err, tc.want)
 		}
 	}
-	dropped := FileRule{Name: "config.json", LoginKeys: []string{"tokens", "user"}}
-	if got := dropped.Carry([]byte(`{"user":"seat"}`), []byte(`{"tokens":{"a":"t1"},"user":"seat","x":1}`)); string(got) != "{\n  \"user\": \"seat\",\n  \"x\": 1\n}\n" {
-		t.Errorf("a login field the home dropped carried %s, want it dropped", got)
+	for name, home := range map[string]string{
+		"malformed":         `{"token":`,
+		"a key named twice": `{"token":"t2","token":"t3"}`,
+		"after the object":  `{"token":"t2"} {"token":"t3"}`,
+	} {
+		if got, err := rule.Carry([]byte(home), []byte(shared)); err == nil || string(got) != shared {
+			t.Errorf("%s: carried %s, %v; want the shared copy and why", name, got, err)
+		}
 	}
-	whole := FileRule{Name: "auth.json"}
-	if seed, _ := whole.Seed([]byte("anything")); string(seed) != "anything" {
-		t.Errorf("a login file seeded %q, want it whole", seed)
+	if got, err := rule.Carry([]byte(`{"token":"t2"}`), []byte("not json")); err == nil || string(got) != "not json" {
+		t.Errorf("over a shared copy that does not read: carried %s, %v; want it and why", got, err)
+	}
+	if got, err := (FileRule{Name: "auth.json"}).Carry([]byte(`{"token":"t2"}`), []byte(shared)); err != nil || string(got) != shared {
+		t.Errorf("a file naming no refresh keys carried %s, %v; want nothing", got, err)
 	}
 	for name, tc := range map[string]struct {
 		keys map[string]any
 		says string
 	}{
-		"an empty list": {map[string]any{"config.json": []any{}}, "login_keys.config.json is empty"},
-		"an empty part": {map[string]any{"config.json": []any{"lastLoggedInUser..login"}}, "is no key path"},
+		"login_keys empty":       {map[string]any{"login_keys": map[string]any{"config.json": []any{}}}, "login_keys.config.json is empty"},
+		"login_keys empty part":  {map[string]any{"login_keys": map[string]any{"config.json": []any{"a..b"}}}, "is no key path"},
+		"refresh_keys elsewhere": {map[string]any{"refresh_keys": map[string]any{"hosts.json": []any{"t"}}}, `refresh_keys names "hosts.json"`},
+		"refresh_keys empty":     {map[string]any{"refresh_keys": map[string]any{"config.json": []any{}}}, "refresh_keys.config.json is empty"},
+		"refresh_keys a subject": {map[string]any{"refresh_keys": map[string]any{"config.json": []any{"t.@subject"}}}, "is no key path"},
 	} {
-		if _, err := Load("copilot", map[string]any{"login_keys": tc.keys}); err == nil ||
-			!strings.Contains(err.Error(), tc.says) {
+		if _, err := Load("copilot", tc.keys); err == nil || !strings.Contains(err.Error(), tc.says) {
 			t.Errorf("%s: err = %v, want one saying %q", name, err, tc.says)
 		}
 	}
 }
 
-// EVERY HARNESS SAYS WHICH OF ITS FILES ARE MIXED AND WHICH LOGIN IT IS: each
-// built-in profile's login_keys are the login fields of each file it also
-// keeps settings in, and its identity_keys the keys its measured login shape
-// names a login at (or none, for a login of tokens alone); a new profile has
-// to be placed here. On each harness's own login shapes (testdata/logins.json)
-// a refresh of the seeded account is one login with the seed, another
-// account's is not, and a mixed file is seeded without the shared copy's
-// settings.
+// EVERY HARNESS SAYS HOW EACH LOGIN FILE TRAVELS: each built-in profile's
+// login_keys (the login fields of a file it also keeps settings in),
+// refresh_keys (the token fields a refresh carries back) and identity_keys
+// (what names the login) are decided here, a new profile included. On each
+// harness's own login shapes (testdata/logins.json) a refresh of the seeded
+// account is one login with the seed and carries exactly what the fixture
+// writes out, another account's or a swapped token's is not one, and a mixed
+// file is seeded without the shared copy's settings.
 //
-// Mutation: drop or misname any profile's login_keys or identity_keys, or add
-// a profile without deciding them here.
-func TestEveryHarnessSaysWhichLoginItsFilesAre(t *testing.T) {
+// Mutation: drop or misname any profile's keys, or add a profile without
+// deciding them here.
+func TestEveryHarnessSaysHowEachLoginFileTravels(t *testing.T) {
 	t.Parallel()
+	type keys = map[string][]string
 	kimiTables := []string{"default_model", "default_provider", "models", "providers", "services", "thinking"}
-	want := map[string]struct{ login, identity map[string][]string }{
-		"claude-code": {},
-		"codex":       {identity: map[string][]string{"auth.json": {"tokens.account_id", "OPENAI_API_KEY"}}},
-		"gemini-cli":  {identity: map[string][]string{"google_accounts.json": {"active"}}},
-		"qwen-code":   {},
-		"opencode":    {},
-		"cursor-agent": {login: map[string][]string{"cli-config.json": {"authInfo"}},
-			identity: map[string][]string{"cli-config.json": {"authInfo.userId"}}},
-		"copilot": {
-			login:    map[string][]string{"config.json": {"copilotTokens", "authTokens", "lastLoggedInUser", "loggedInUsers"}},
-			identity: map[string][]string{"config.json": {"lastLoggedInUser", "loggedInUsers"}}},
-		"grok":      {identity: map[string][]string{"auth.json": {"*.user_id"}}},
-		"muse-code": {},
-		"kimi-code": {login: map[string][]string{"config.toml": kimiTables},
-			identity: map[string][]string{"config.toml": {"default_provider", "providers", "services"}}},
-		"hermes": {},
-		"pi":     {identity: map[string][]string{"auth.json": {"openai-codex.accountId"}}},
+	want := map[string]struct{ login, refresh, identity keys }{
+		"claude-code": {refresh: keys{".credentials.json": {"claudeAiOauth.accessToken", "claudeAiOauth.refreshToken", "claudeAiOauth.expiresAt"}}},
+		"codex": {refresh: keys{"auth.json": {"tokens.id_token", "tokens.access_token", "tokens.refresh_token", "last_refresh"}},
+			identity: keys{"auth.json": {"tokens.account_id", "OPENAI_API_KEY", "tokens.id_token.@subject"}}},
+		"gemini-cli": {refresh: keys{"oauth_creds.json": {"access_token", "refresh_token", "expiry_date", "id_token"}},
+			identity: keys{"google_accounts.json": {"active"}, "oauth_creds.json": {"id_token.@subject"}}},
+		"qwen-code": {refresh: keys{"subscription_credentials.json": {"tokens.access_token", "tokens.refresh_token", "tokens.expiresAt", "tokens.expires_in"}},
+			identity: keys{"subscription_credentials.json": {"tokens.access_token.@subject"}}},
+		"opencode": {},
+		"cursor-agent": {login: keys{"cli-config.json": {"authInfo"}}, refresh: keys{"auth.json": {"accessToken", "refreshToken"}},
+			identity: keys{"cli-config.json": {"authInfo.userId"}, "auth.json": {"accessToken.@subject"}}},
+		"copilot": {login: keys{"config.json": {"copilotTokens", "authTokens", "lastLoggedInUser", "loggedInUsers"}},
+			identity: keys{"config.json": {"lastLoggedInUser", "loggedInUsers"}}},
+		"grok": {refresh: keys{"auth.json": {"*.key", "*.refresh_token", "*.expires_at"}},
+			identity: keys{"auth.json": {"*.user_id", "*.key.@subject"}}},
+		"muse-code": {refresh: keys{"auth.json": {"providers.meta.access_token", "providers.meta.refresh_token", "providers.meta.expires_at"}},
+			identity: keys{"auth.json": {"providers.meta.access_token.@subject"}}},
+		"kimi-code": {login: keys{"config.toml": kimiTables}, refresh: keys{"kimi-code.json": {"access_token", "refresh_token", "expires_at", "expires_in"}},
+			identity: keys{"config.toml": {"default_provider", "providers", "services"}, "kimi-code.json": {"access_token.@subject"}}},
+		"hermes": {refresh: keys{
+			"auth.json": {"providers.nous.access_token", "providers.nous.refresh_token", "providers.nous.obtained_at",
+				"providers.nous.expires_at", "providers.nous.expires_in"},
+			"nous_auth.json": {"access_token", "refresh_token", "obtained_at", "expires_at"}},
+			identity: keys{"auth.json": {"providers.nous.user_id", "providers.nous.access_token.@subject"},
+				"nous_auth.json": {"user_id", "access_token.@subject"}}},
+		"pi": {refresh: keys{"auth.json": {"*.access", "*.refresh", "*.expires"}},
+			identity: keys{"auth.json": {"openai-codex.accountId", "*.access.@subject"}}},
 	}
 	logins := testLogins(t, "testdata/logins.json")
 	for _, name := range BuiltinNames() {
 		w, decided := want[name]
 		if !decided {
-			t.Errorf("%s: no decision on its login_keys and identity_keys here; read its login shape and add it", name)
+			t.Errorf("%s: no decision on its login, refresh and identity keys here; read its login shape and add it", name)
 			continue
 		}
 		p, _ := Builtin(name)
@@ -268,33 +234,39 @@ func TestEveryHarnessSaysWhichLoginItsFilesAre(t *testing.T) {
 			if slices.ContainsFunc(env, func(k string) bool { return !strings.HasSuffix(k, "_KEY") && !strings.HasSuffix(k, "_TOKEN") }) {
 				t.Errorf("hermes: .env's login_keys %v name a variable that is no key", env)
 			}
-			w.login = map[string][]string{".env": env}
-			w.identity = map[string][]string{".env": env}
+			w.login = keys{".env": env}
+			w.identity[".env"] = env
 		}
-		if !reflect.DeepEqual(p.LoginKeys, w.login) {
-			t.Errorf("%s: login_keys = %v, want %v", name, p.LoginKeys, w.login)
-		}
-		if !reflect.DeepEqual(p.IdentityKeys, w.identity) {
-			t.Errorf("%s: identity_keys = %v, want %v", name, p.IdentityKeys, w.identity)
+		for field, pair := range map[string][2]keys{
+			"login_keys": {p.LoginKeys, w.login}, "refresh_keys": {p.RefreshKeys, w.refresh}, "identity_keys": {p.IdentityKeys, w.identity},
+		} {
+			if !reflect.DeepEqual(pair[0], pair[1]) {
+				t.Errorf("%s: %s = %v, want %v", name, field, pair[0], pair[1])
+			}
 		}
 		login, measured := logins[name]
-		if (len(w.login) > 0 || len(w.identity) > 0) && !measured {
-			t.Errorf("%s: names login or identity keys but has no login in testdata/logins.json", name)
-			continue
-		}
 		if !measured {
+			if name != "opencode" {
+				t.Errorf("%s: no login shapes in testdata/logins.json", name)
+			}
 			continue
 		}
 		if !sameAccount(p, login.Refresh, login.Seed) {
 			t.Errorf("%s: a refresh of the seeded account reads as another login", name)
 		}
-		if sameAccount(p, login.Other, login.Seed) {
-			t.Errorf("%s: another account's login reads as the seeded one", name)
+		for _, foreign := range []map[string]string{login.Other, login.Swap} {
+			if foreign != nil && sameAccount(p, foreign, login.Seed) {
+				t.Errorf("%s: another account's login reads as the seeded one", name)
+			}
 		}
 		for file, content := range login.Seed {
 			seed, err := p.FileRule(file).Seed([]byte(content))
 			if err != nil || strings.Contains(string(seed), "SHARED-SETTING") {
 				t.Errorf("%s: %s seeded %q, %v; want no setting of the shared copy", name, file, seed, err)
+			}
+			got, err := p.FileRule(file).Carry([]byte(login.Refresh[file]), []byte(content))
+			if err != nil || string(got) != login.Carried[file] {
+				t.Errorf("%s: %s's refresh carried\n%s\n%v; want\n%s", name, file, got, err, login.Carried[file])
 			}
 		}
 	}
@@ -312,13 +284,21 @@ func sameAccount(p Profile, login, seed map[string]string) bool {
 }
 
 // testLogin is one harness's login shapes in testdata/logins.json, each a
-// login by file name: as shared, refreshed in a home, another account's, and,
-// for a mixed file, the seed's login with a setting a home wrote.
+// login by file name: as shared, refreshed in a home and the shared login
+// that refresh carries to (written out), another account's, one whose token
+// file alone names another, the seed's login beside a setting a home wrote,
+// and copies that carry nothing.
 type testLogin struct {
 	Seed    map[string]string `json:"seed"`
 	Refresh map[string]string `json:"refresh"`
+	Carried map[string]string `json:"carried"`
 	Other   map[string]string `json:"other"`
+	Swap    map[string]string `json:"swap"`
 	Planted map[string]string `json:"planted"`
+	Broken  []struct {
+		Copy   map[string]string `json:"copy"`
+		Logged bool              `json:"logged"`
+	} `json:"broken"`
 }
 
 // testLogins reads the login shapes at path by harness.
@@ -336,24 +316,30 @@ func testLogins(t *testing.T, path string) map[string]testLogin {
 }
 
 // A .ENV IS READ AS HERMES READS IT, AND WRITTEN SO IT READS BACK: comments and
-// blank lines skipped, an `export ` prefix, spaces around the name, a later
-// line winning, double quotes with their escapes, single quotes as written, an
-// unquoted value ending at a `#` after a space, a quoted one at its closing
-// quote; what encodeDotenv writes parses to the same variables.
+// blank lines skipped, an `export ` prefix, spaces around the name, double
+// quotes with their escapes, single quotes as written, an unquoted value
+// ending at a `#` after a space, a quoted one at its closing quote; a name set
+// twice is refused; what encodeDotenv writes parses to the same variables.
 //
 // Mutation: keep a comment line, keep the export prefix, cut an unquoted value
 // at a `#` with no space before it, leave a double-quoted value's escapes in,
-// or write a value with a space unquoted.
+// take a name set twice, or write a value with a space unquoted.
 func TestADotenvIsReadAsHermesReadsIt(t *testing.T) {
 	t.Parallel()
-	got := parseDotenv([]byte("\ufeff# a comment\n\nexport A=1\n  B = two  \nC=\"x \\\"q\\\" \\\\ y\" # note\n" +
-		"D='a # b'\nE=foo#bar\nF=val # trailing\nA=3\nnoequals\n=novalue\nG=\"open\n"))
-	want := map[string]string{"A": "3", "B": "two", "C": `x "q" \ y`, "D": "a # b", "E": "foo#bar", "F": "val", "G": `"open`}
-	if !maps.Equal(got, want) {
-		t.Errorf("parseDotenv = %v, want %v", got, want)
+	got, err := parseDotenv([]byte("\ufeff# a comment\n\nexport A=1\n  B = two  \nC=\"x \\\"q\\\" \\\\ y\" # note\n" +
+		"D='a # b'\nE=foo#bar\nF=val # trailing\nnoequals\n=novalue\nG=\"open\n"))
+	want := map[string]string{"A": "1", "B": "two", "C": `x "q" \ y`, "D": "a # b", "E": "foo#bar", "F": "val", "G": `"open`}
+	if err != nil || !maps.Equal(got, want) {
+		t.Errorf("parseDotenv = %v, %v; want %v", got, err, want)
+	}
+	if _, err := parseDotenv([]byte("A=1\nexport A=2\n")); err == nil {
+		t.Error("a name set twice was read")
 	}
 	vars := map[string]any{"PLAIN": "abc", "SPACED": "a b", "HASH": "a#b", "QUOTE": `say "hi" \ 'x'`, "EMPTY": ""}
-	back := parseDotenv(encodeDotenv(vars))
+	back, err := parseDotenv(encodeDotenv(vars))
+	if err != nil {
+		t.Fatal(err)
+	}
 	for key, value := range vars {
 		if back[key] != value {
 			t.Errorf("%s written and read back is %q, want %q", key, back[key], value)

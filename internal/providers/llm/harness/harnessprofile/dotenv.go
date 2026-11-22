@@ -12,12 +12,13 @@ import (
 // 0.23.3 reads it in (agent/secret_scope.py's load_env_file, the one tokenizer
 // every reader of its .env goes through): a line per variable, blank lines and
 // lines opening with `#` skipped, an optional `export ` prefix, the name
-// before the first `=` with its spaces trimmed, a later line winning. A value
+// before the first `=` with its spaces trimmed. A name set twice, which Hermes
+// takes the later of, is refused: two readers could take different ones. A value
 // in double quotes takes `\"` and `\\` escapes, one in single quotes is taken
 // as written, and an unquoted one ends at a `#` that follows a space.
 
 // parseDotenv is content's variables.
-func parseDotenv(content []byte) map[string]string {
+func parseDotenv(content []byte) (map[string]string, error) {
 	vars := map[string]string{}
 	content = bytes.TrimPrefix(content, []byte("\xef\xbb\xbf"))
 	for raw := range strings.Lines(string(content)) {
@@ -30,10 +31,13 @@ func parseDotenv(content []byte) map[string]string {
 		}
 		key, value, found := strings.Cut(line, "=")
 		if key = strings.TrimSpace(key); found && key != "" {
+			if _, set := vars[key]; set {
+				return nil, fmt.Errorf("the variable %s is set twice", key)
+			}
 			vars[key] = dotenvValue(dotenvWithoutComment(value))
 		}
 	}
-	return vars
+	return vars, nil
 }
 
 // dotenvWithoutComment is value less a trailing `# ...`: after a quoted value's

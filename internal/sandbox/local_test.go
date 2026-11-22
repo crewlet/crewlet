@@ -841,7 +841,7 @@ func TestTheLoginIsSeededInAndARefreshedOneIsWrittenBack(t *testing.T) {
 	files := map[string]string{".claude/.credentials.json": shared}
 
 	local := newDirect(t)
-	box, err := local.Create(t.Context(), Spec{CredentialFiles: files})
+	box, err := local.Create(t.Context(), Spec{CredentialFiles: files, CredentialRules: testRules(files)})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -873,6 +873,7 @@ func TestAReconnectedBoxStillWritesARefreshedLoginBack(t *testing.T) {
 	local := newDirect(t)
 	box, err := local.Create(t.Context(), Spec{
 		CredentialFiles: map[string]string{".claude/.credentials.json": shared},
+		CredentialRules: testRules(map[string]string{".claude/.credentials.json": ""}),
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -909,6 +910,7 @@ func TestARemovedLoginIsNotRecreatedByATeardown(t *testing.T) {
 	local := newDirect(t)
 	box, err := local.Create(t.Context(), Spec{
 		CredentialFiles: map[string]string{".claude/.credentials.json": shared},
+		CredentialRules: testRules(map[string]string{".claude/.credentials.json": ""}),
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -934,6 +936,7 @@ func TestALoginTheBoxWasNotSeededWithIsNeverWrittenBack(t *testing.T) {
 	local := newDirect(t)
 	box, err := local.Create(t.Context(), Spec{
 		CredentialFiles: map[string]string{".claude/.credentials.json": shared},
+		CredentialRules: testRules(map[string]string{".claude/.credentials.json": ""}),
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -981,6 +984,7 @@ func TestAnIdleBoxNeverWritesItsSeedBackOverALoginTheHostRefreshed(t *testing.T)
 			local := newDirect(t)
 			box, err := local.Create(t.Context(), Spec{
 				CredentialFiles: map[string]string{".claude/.credentials.json": shared},
+				CredentialRules: testRules(map[string]string{".claude/.credentials.json": ""}),
 			})
 			if err != nil {
 				t.Fatalf("Create: %v", err)
@@ -1016,6 +1020,7 @@ func TestARefreshIsDroppedWhereTheSharedLoginMovedPastItsSeed(t *testing.T) {
 	// a warning for it would bury the one that matters.
 	idle, err := local.Create(t.Context(), Spec{
 		CredentialFiles: map[string]string{".claude/.credentials.json": shared},
+		CredentialRules: testRules(map[string]string{".claude/.credentials.json": ""}),
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -1031,6 +1036,7 @@ func TestARefreshIsDroppedWhereTheSharedLoginMovedPastItsSeed(t *testing.T) {
 	writeFile(t, shared, `{"refresh":"v1"}`)
 	box, err := local.Create(t.Context(), Spec{
 		CredentialFiles: map[string]string{".claude/.credentials.json": shared},
+		CredentialRules: testRules(map[string]string{".claude/.credentials.json": ""}),
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -1058,6 +1064,7 @@ func TestARefreshIsDroppedWhereTheSharedLoginMovedPastItsSeed(t *testing.T) {
 	writeFile(t, shared, `{"refresh":"v1"}`)
 	box, err = local.Create(t.Context(), Spec{
 		CredentialFiles: map[string]string{".claude/.credentials.json": shared},
+		CredentialRules: testRules(map[string]string{".claude/.credentials.json": ""}),
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -1105,6 +1112,7 @@ func TestAWriteBackWaitsForTheSharedLoginsLock(t *testing.T) {
 		local := newDirect(t)
 		box, err := local.Create(t.Context(), Spec{
 			CredentialFiles: map[string]string{".claude/.credentials.json": shared},
+			CredentialRules: testRules(map[string]string{".claude/.credentials.json": ""}),
 		})
 		if err != nil {
 			t.Fatalf("Create: %v", err)
@@ -1491,6 +1499,7 @@ func TestTheReaperCollectsCredentialsBeforeDeleting(t *testing.T) {
 	local := newDirect(t)
 	box, err := local.Create(t.Context(), Spec{
 		CredentialFiles: map[string]string{".claude/.credentials.json": shared},
+		CredentialRules: testRules(map[string]string{".claude/.credentials.json": ""}),
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -2097,7 +2106,7 @@ func TestTheCredentialMapRoundTrips(t *testing.T) {
 	t.Parallel()
 	layout := boxLayout{id: "box-2", root: t.TempDir()}
 	want := seededCredential{Source: "/host/creds.json", Seed: "0a1b", Rule: harnessprofile.FileRule{
-		Name: "config.json", LoginKeys: []string{"authTokens"}, RunKeys: []string{"providers.meta.api_key"},
+		Name: "config.json", LoginKeys: []string{"authTokens"}, RefreshKeys: []string{"providers.meta.access_token"},
 		IdentityKeys: []string{"tokens.account_id"},
 	}}
 	if err := recordCredentialMap(layout, map[string]seededCredential{".claude/.credentials.json": want}); err != nil {

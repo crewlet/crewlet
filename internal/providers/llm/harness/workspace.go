@@ -1313,9 +1313,11 @@ func (w *Workspace) carryChanged(
 	ctx context.Context, home, cache string, store loginStore, gen generation,
 ) (bool, map[string]string, error) {
 	// held is every file of the login the home holds; changed is those of
-	// them that differ from what the home was seeded with.
+	// them that differ from what the home was seeded with; raw is held as the
+	// home holds it, which the account check reads ([Workspace.carry]).
 	held := map[string][]byte{}
 	changed := map[string][]byte{}
+	raw := map[string][]byte{}
 	holds := false
 	for _, rel := range w.profile.CredentialPaths {
 		src, err := harnessprofile.UnderRoot(home, rel)
@@ -1331,6 +1333,7 @@ func (w *Workspace) carryChanged(
 		}
 		name := filepath.Base(rel)
 		held[name] = content
+		raw[name] = content
 		// A settings file the harness also keeps its login in is carried with
 		// the rest, but answers "holds a login" only holding one
 		// ([harnessprofile.Profile.HoldsLogin]): a login command that left
@@ -1354,6 +1357,7 @@ func (w *Workspace) carryChanged(
 		if holdsLogin(document) {
 			holds = true
 			held[harnessprofile.CredentialStoreDocument] = document
+			raw[harnessprofile.CredentialStoreDocument] = document
 			if digestOf(document) != gen.Seeded[harnessprofile.CredentialStoreDocument] {
 				changed[harnessprofile.CredentialStoreDocument] = document
 			}
@@ -1391,12 +1395,18 @@ func (w *Workspace) carryChanged(
 		return holds, nil, err
 	}
 	if gen.Mode == syncRefresh {
-		// ONLY THE LOGIN IS CARRIED ([harnessprofile.FileRule.Carry]): a mixed
-		// file's login fields, never a run key or a setting the harness wrote,
-		// and a file whose login is then its seed changed nothing. Read here,
-		// under the lock, against the login a refresh is a compare-and-swap with.
-		for name, content := range held {
-			kept := w.profile.KeepLogin(name, content, current[name])
+		// ONLY TOKENS ARE CARRIED ([harnessprofile.FileRule.Carry]): a file's
+		// refresh keys, never an endpoint, a key a call minted or a setting the
+		// harness wrote, and a file whose login is then its seed changed
+		// nothing. A copy that cannot be read carries nothing, the shared login
+		// kept. Read here, under the lock, against the login a refresh is a
+		// compare-and-swap with.
+		for _, name := range slices.Sorted(maps.Keys(held)) {
+			kept, carryErr := w.profile.KeepLogin(name, held[name], current[name])
+			if carryErr != nil {
+				w.superseded(ctx, who, w.sharedPath(name), "unreadable")
+				return holds, nil, nil
+			}
 			held[name] = kept
 			if _, ok := changed[name]; !ok {
 				continue
@@ -1408,7 +1418,7 @@ func (w *Workspace) carryChanged(
 			}
 		}
 	}
-	login, write, err := w.carry(ctx, who, gen, current, held, changed)
+	login, write, err := w.carry(ctx, who, gen, current, held, changed, raw)
 	if err != nil {
 		return holds, nil, err
 	}
@@ -1469,7 +1479,7 @@ func (w *Workspace) carryChanged(
 //
 // It answers the login then shared and whether to write it.
 func (w *Workspace) carry(
-	ctx context.Context, who string, gen generation, current, held, changed map[string][]byte,
+	ctx context.Context, who string, gen generation, current, held, changed, raw map[string][]byte,
 ) (map[string][]byte, bool, error) {
 	next := maps.Clone(current)
 	switch gen.Mode {
@@ -1540,15 +1550,18 @@ func (w *Workspace) carry(
 	}
 	if gen.Mode == syncRefresh {
 		// A COPY NAMING ANOTHER ACCOUNT IS NO REFRESH of this login
-		// ([harnessprofile.Profile.IdentityKeys]): the whole login stays as it
-		// is. current is the seeded login here, so the copy is held to it; a
-		// file the home was not seeded with is never written, so never asked.
+		// ([harnessprofile.FileRule.SameAccount]): the whole login stays as it
+		// is. Asked of EVERY seeded file the home holds, changed or not, against
+		// current, the seeded login here: a token file swapped beside an
+		// untouched file naming the account is caught by the token's own
+		// subject, and a file naming the account that the home dropped names none.
 		var other []string
-		for _, name := range slices.Sorted(maps.Keys(changed)) {
-			if _, seeded := gen.Seeded[name]; !seeded {
+		for _, name := range slices.Sorted(maps.Keys(gen.Seeded)) {
+			rule := w.profile.FileRule(name)
+			if len(rule.IdentityKeys) == 0 {
 				continue
 			}
-			if !w.profile.FileRule(name).SameAccount(changed[name], current[name]) {
+			if copied, present := raw[name]; !present || !rule.SameAccount(copied, current[name]) {
 				other = append(other, name)
 			}
 		}
