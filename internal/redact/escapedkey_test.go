@@ -21,7 +21,7 @@ func redactsAsWritten(t *testing.T, name, text, want string) {
 		t.Errorf("%s: a second pass changed %q to %q", name, got, again)
 	}
 	for _, sizes := range [][]int{{1}, {5, 400}} {
-		if shown, _ := settle(text, sizes); shown != want {
+		if shown, _ := settle(t, text, sizes); shown != want {
 			t.Errorf("%s in pieces of %v: shown as it settled\n%q\nwant\n%q", name, sizes, shown, want)
 		}
 	}

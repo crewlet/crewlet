@@ -234,7 +234,7 @@ func TestNoPieceOfARealKeySurvivesAnyWrapping(t *testing.T) {
 				t.Errorf("%s, %s: a second pass changed the text", kname, name)
 			}
 			for _, sizes := range [][]int{{97}, {5, 400}} {
-				if shown, _ := settle(text, sizes); shown != got {
+				if shown, _ := settle(t, text, sizes); shown != got {
 					t.Errorf("%s, %s in pieces of %v: shown as it settled\n%q\nwant\n%q", kname, name, sizes, shown, got)
 				}
 			}
@@ -286,7 +286,7 @@ func TestAPasswordAfterARealKeyWithNoEndIsNeverPublished(t *testing.T) {
 					if again := redact.Secrets(got); again != got {
 						t.Errorf("%s: a second pass changed the text", name)
 					}
-					if shown, _ := settle(text, []int{5, 400}); shown != got {
+					if shown, _ := settle(t, text, []int{5, 400}); shown != got {
 						t.Errorf("%s in pieces: shown as it settled\n%q\nwant\n%q", name, shown, got)
 					}
 				}
