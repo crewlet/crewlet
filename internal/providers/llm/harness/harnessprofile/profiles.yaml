@@ -3121,25 +3121,68 @@ grok:
   # system prompt and the prompt history, a session-search database, and a
   # log that grows by about 30 KB a call.
   #
-  # AND WHAT A CALL WOULD TAKE FROM IT: a call starts with no instructions,
-  # skills, commands or hooks in its home. 1.0.92 sends ~/.grok's AGENTS.md,
-  # rules, skills and commands with every request and runs ~/.grok/hooks'
-  # hooks.json (each measured, planted through the engine); the other two
-  # vendors' directories go too, beside the cells above. Measured not read
-  # under this profile: ~/.grok/GROK.md, agents (one named as the default
-  # agent too), the old ~/.grok/memory (with GROK_MEMORY on too), lsp.json, a
-  # plugin config.toml does not enable, managed_config.toml and a .env.
+  # AND WHAT A CALL STARTS WITH FROM IT: nothing the profile does not write
+  # but the login. Each path below was planted in a seat's home and measured
+  # on 1.0.92, through the engine or run directly:
+  #
+  #   in the request     ~/.grok's AGENTS.md, Agents.md, AGENT.md, CLAUDE.md,
+  #                      Claude.md and CLAUDE.local.md (each its own
+  #                      <user_rule>), the *.md directly in rules/, skills/
+  #                      (nested too), commands/, agents/ (in spawn_subagent's
+  #                      list), workflows/*.rhai, bundled/skills/; ~/.agents'
+  #                      skills and commands, which no compat cell or switch
+  #                      stops; and ~/.claude's and ~/.cursor's, beside the
+  #                      cells above (~/.claude/agents and enabled plugins
+  #                      whatever the cells say).
+  #   run                every *.json in ~/.grok/hooks, and the hook files
+  #                      ~/.grok/hooks-paths names; and, as each call starts
+  #                      (a text call too), .bashrc and the first of
+  #                      .bash_profile, .bash_login and .profile, whose exports
+  #                      reach the processes the call starts. `[toolset.bash]
+  #                      login_shell_capture = false` in config.toml left both
+  #                      running, so they are pruned.
+  #   model settings     ~/.grok/models_cache.json and its lock: a home's
+  #                      first call writes it, and later calls take the
+  #                      model's API base, temperature and output cap from it
+  #                      without refetching it while it is fresh (an edited
+  #                      copy sent every request of a call to its API base,
+  #                      over GROK_XAI_API_BASE_URL).
+  #
+  # Each is pruned every generation, with any requirements.toml, so the
+  # generation's first call writes the cache afresh. What only a config.toml
+  # key the seed does not write turns on was not loaded or run: extra rule
+  # and skill directories, ~/.grok/plugins and plugin paths, subagent roles,
+  # the status line. Not read under this profile: ~/.grok/GROK.md, the memory
+  # directories (GROK_MEMORY=0), lsp.json, managed_config.toml and a .env.
+  # Opened with nothing of theirs in a request and nothing run: ~/.gitconfig
+  # and $XDG_CONFIG_HOME/git/config; ~/.grok/docs is rewritten every call.
   volatile_paths:
     - ".grok/sessions"
     - ".grok/logs"
     - ".grok/AGENTS.md"
+    - ".grok/Agents.md"
+    - ".grok/AGENT.md"
+    - ".grok/CLAUDE.md"
+    - ".grok/Claude.md"
+    - ".grok/CLAUDE.local.md"
     - ".grok/rules"
     - ".grok/skills"
     - ".grok/commands"
+    - ".grok/agents"
+    - ".grok/workflows"
+    - ".grok/bundled"
     - ".grok/hooks"
+    - ".grok/hooks-paths"
     - ".grok/requirements.toml"
+    - ".grok/models_cache.json"
+    - ".grok/models_cache.json.lock"
+    - ".agents"
     - ".claude"
     - ".cursor"
+    - ".bash_profile"
+    - ".bash_login"
+    - ".profile"
+    - ".bashrc"
   host_credential_paths: [".grok/auth.json"]
   # THE HARNESS'S OWN WORD: signed out, it says "set the XAI_API_KEY environment
   # variable". GROK_API_KEY is the community npm build's variable and this
@@ -4447,9 +4490,16 @@ hermes:
   # removed when it stops; `hermes gateway stop` stops the home's gateway and
   # exits 0 when there is none, a stale pid file left by a killed one included
   # (measured, about 3 s).
+  #
+  # --yes, BECAUSE A CALL CUT SHORT LEAVES ITS TURN RUNNING IN THE GATEWAY:
+  # killing the client mid-turn stopped neither the turn nor its tool, and
+  # `gateway stop` then refused ("1 live session(s) would be interrupted",
+  # exit 1), which is the very case the stop is for. With --yes it interrupted
+  # the turn, the tool's process ended with it, and the gateway was gone in
+  # 11 s (measured on 0.23.3).
   home_daemon:
     pid_file: ".hermes/gateway.pid"
-    stop_args: ["gateway", "stop"]
+    stop_args: ["gateway", "stop", "--yes"]
   # `hermes auth` with no subcommand is the interactive credential wizard, and
   # it is what brokers an OAuth sign-in. `hermes login` still exists and its
   # help says "Deprecated. Use `hermes auth`".

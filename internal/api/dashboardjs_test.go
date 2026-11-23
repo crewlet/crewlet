@@ -1079,10 +1079,10 @@ const (
 	// at 3 MiB over a 2.3 MB baseline and is set so a bundle that doubled the
 	// baseline is still refused; screens fetched only when opened (the rich
 	// editor, the brand and folder screens, the assistant's panel, Gitlet) and
-	// kit releases account for its growth, and the last measure was 7314.1 KiB,
-	// after Have ready listing a key set as one item.
+	// kit releases account for its growth, and the last measure was 7315.0 KiB,
+	// after App Store Connect's app chooser and connection card.
 	// A raise names the measured size and its cause in its commit.
-	treeBudget = 5<<20 + 2195<<10
+	treeBudget = 5<<20 + 2196<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

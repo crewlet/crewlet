@@ -101,6 +101,8 @@ func TestASessionsStreamedLengthIsItsHarnesssEventStream(t *testing.T) {
 	}{
 		"Claude Code": {runner: executor.NewClaudeCode(), stream: executor.Paths.Stream},
 		"OpenCode":    {runner: executor.NewOpenCode(), stream: executor.Paths.Result},
+		"Gemini CLI":  {runner: executor.NewGeminiCLI(), stream: executor.Paths.Result},
+		"Qwen Code":   {runner: executor.NewQwenCode(), stream: executor.Paths.Result},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -136,15 +138,15 @@ func TestASessionsStreamedLengthIsItsHarnesssEventStream(t *testing.T) {
 	}
 }
 
-// EVERY CARRYING RUNNER SAVES: Claude Code's packs a save beside its working
-// harness, and OpenCode's exports one beside its running server, so a save is
-// offered a run of either.
+// EVERY CARRYING RUNNER SAVES: Claude Code's, Gemini CLI's and Qwen Code's
+// each pack a save beside their working harness, and OpenCode's exports one
+// beside its running server, so a save is offered a run of any.
 //
-// Mutation: drop OpenCode's PackSave, and its row goes red.
+// Mutation: drop a runner's PackSave, and its row goes red.
 func TestEveryCarryingRunnerSaves(t *testing.T) {
 	t.Parallel()
 	for name, runner := range map[string]*executor.Runner{"Claude Code": executor.NewClaudeCode(),
-		"OpenCode": executor.NewOpenCode()} {
+		"OpenCode": executor.NewOpenCode(), "Gemini CLI": executor.NewGeminiCLI(), "Qwen Code": executor.NewQwenCode()} {
 		if !runner.Saves() {
 			t.Errorf("the %s runner says it packs no saves", name)
 		}
