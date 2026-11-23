@@ -116,6 +116,12 @@ type APIError struct {
 	MethodAndRoute string
 }
 
+// VendorUnavailable reports Meta failing to serve the call: a 5xx or a
+// rate limit or an error Meta calls transient.
+func (e *APIError) VendorUnavailable() bool {
+	return e.Status >= 500 || e.Status == http.StatusTooManyRequests || e.Transient
+}
+
 func (e *APIError) Error() string {
 	msg := e.Message
 	if e.UserMessage != "" {

@@ -803,8 +803,49 @@ func toolsWithin(tools []mcp.TestedTool, budget int) []mcp.TestedTool {
 // is handed it.
 func infoField(s string) string { return textcut.Bytes(s, coord.MaxMCPServerInfoBytes) }
 
+// checkWithin is record with its sentences cut until it encodes within budget
+// bytes: every stage's sentence to half as many bytes again until it fits,
+// then every reason and failure, then the server's identity, each cut marked.
+// EVERY NODE AND STAGE STAYS, as every tool does in [toolsWithin]: which node
+// failed, and at which stage, is what the record is read for.
+func checkWithin(record coord.MCPCheck, budget int) coord.MCPCheck {
+	detail, said, info := coord.MaxMCPErrorBytes, coord.MaxMCPErrorBytes, coord.MaxMCPServerInfoBytes
+	for {
+		out := record
+		out.Nodes = make([]coord.MCPCheckNode, len(record.Nodes))
+		for i, n := range record.Nodes {
+			n.Reason = textcut.Within(n.Reason, said)
+			n.Steps = slices.Clone(n.Steps)
+			for j := range n.Steps {
+				n.Steps[j].Detail = textcut.Within(n.Steps[j].Detail, detail)
+			}
+			if n.Failure != nil {
+				failure := *n.Failure
+				failure.Said = textcut.Within(failure.Said, said)
+				n.Failure = &failure
+			}
+			n.Server = coord.MCPServerInfo{Name: textcut.Within(n.Server.Name, info),
+				Title: textcut.Within(n.Server.Title, info), Version: textcut.Within(n.Server.Version, info),
+				Protocol: textcut.Within(n.Server.Protocol, info)}
+			out.Nodes[i] = n
+		}
+		if out.EncodedSize() <= budget || info == 0 {
+			return out
+		}
+		switch {
+		case detail > 0:
+			detail /= 2
+		case said > 0:
+			said /= 2
+		default:
+			info /= 2
+		}
+	}
+}
+
 // recordMCPCheck keeps a saved server's test as its latest ([coord.MCPCheck]),
-// bounded to [coord.MaxMCPCheckNodes] nodes. A test the store could not
+// bounded to [coord.MaxMCPCheckNodes] nodes and [coord.MaxMCPCheckBytes]
+// ([checkWithin]). A test the store could not
 // record is still the answer to the person who asked; the page shows the
 // previous one until the next test.
 func (e *Engine) recordMCPCheck(ctx context.Context, result MCPCheckResult, seat uuid.UUID, by iam.Actor) {
@@ -816,7 +857,7 @@ func (e *Engine) recordMCPCheck(ctx context.Context, result MCPCheckResult, seat
 	for _, n := range result.Nodes[:min(len(result.Nodes), coord.MaxMCPCheckNodes)] {
 		record.Nodes = append(record.Nodes, checkedNodeRecord(n))
 	}
-	if _, err := e.backends.Fleet.PutMCPCheck(ctx, record); err != nil {
+	if _, err := e.backends.Fleet.PutMCPCheck(ctx, checkWithin(record, coord.MaxMCPCheckBytes)); err != nil {
 		log.WarnContext(ctx, "mcp_check_not_recorded", "server", result.Server, "error", err,
 			"detail", "the test was answered; the server's page shows its previous test until the next one")
 	}

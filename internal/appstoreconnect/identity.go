@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/seatname"
+	"github.com/crewlet/crewlet/internal/vendortext"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -33,9 +34,10 @@ const (
 // team key.
 const TeamKeysURL = "https://appstoreconnect.apple.com/access/integrations/api"
 
-// identitySpec is the lane's identity: handed in, the company's by default.
+// identitySpec is the lane's identity: each seat's own key, handed in, and
+// never the company's, which holds none (ADR-0179).
 var identitySpec = seataccess.IdentitySpec{
-	Ways: []seataccess.IdentityWay{seataccess.WayHandedIn}, Default: seataccess.IdentityCompany, Company: true,
+	Ways: []seataccess.IdentityWay{seataccess.WayHandedIn}, Default: seataccess.IdentityOwn,
 	Name: seatname.AppStoreConnect, Credential: identityField, Retiring: retiringField,
 }
 
@@ -44,9 +46,8 @@ var keyFile = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`
 
 // LevelRole is the Apple role a seat's own key holds for its level: Marketing
 // reads what most agents need and changes nothing customers see; App Manager
-// is the only role short of Admin that makes every operate-class call, and
-// administer's few Admin-only acts go through the company's Admin key once
-// an administrator allows them.
+// is the only role short of Admin that makes every operate-class call. An act
+// only Admin may make is made by a person in App Store Connect.
 func LevelRole(l growth.Level) string {
 	if l == growth.LevelRead || l == "" {
 		return RoleMarketing
@@ -56,11 +57,15 @@ func LevelRole(l growth.Level) string {
 
 // roleFit is how role sits against level: the role it needs, one that reaches
 // more and is allowed with a warning, or one that does not fit. Admin never
-// fits: it reaches users, keys and agreements.
+// fits: it reaches users, keys and agreements. Sales fits the read level, for
+// an agent that reads sales, and Customer Support the operate level, for one
+// that answers reviews: no other role an agent holds may make either.
 func roleFit(role string, level growth.Level) (fits, broader bool) {
 	need := LevelRole(level)
 	switch {
 	case role == need:
+		return true, false
+	case need == RoleMarketing && role == RoleSales, need == RoleAppManager && role == RoleCustomerSupport:
 		return true, false
 	case role == RoleAdmin || role == RoleAccountHolder:
 		return false, false
@@ -85,48 +90,79 @@ func roleName(id string) string {
 const aliveOp = "appCategories_getCollection"
 
 // probeOps are the reads that tell the eight roles apart, from the operation
-// table's roles (TestTheRoleProbeTellsEveryRoleApart). All reads; an app's is
-// read on one of the seat's apps.
+// table's roles (TestTheRoleProbeTellsEveryRoleApart), each one whose roles
+// Apple publishes and no team-level program gates
+// (TestEachRoleProbeHoldsApplesRoles). All reads; an app's is read on one of
+// the seat's apps.
 var probeOps = []string{
-	"alternativeDistributionDomains_getCollection", "apps_appPriceSchedule_getToOneRelated",
-	"apps_backgroundAssets_getToManyRelated", "apps_analyticsReportRequests_getToManyRelated",
-	"financeReports_getCollection", "actors_getCollection", "apps_perfPowerMetrics_getToManyRelated",
+	"apps_appPriceSchedule_getToOneRelated", "apps_backgroundAssets_getToManyRelated",
+	"apps_analyticsReportRequests_getToManyRelated", "financeReports_getCollection",
+	"apps_perfPowerMetrics_getToManyRelated",
 }
 
 // probeRoles are the roles a team key may hold.
 var probeRoles = []string{RoleAdmin, RoleAppManager, RoleDeveloper, RoleMarketing, RoleFinance, RoleSales,
 	RoleCustomerSupport, RoleAccessToReports}
 
-// roleOf is the one role whose permits are exactly permitted, false where none
-// or several are.
-func roleOf(permitted []bool) (string, bool) {
-	var found []string
-	for _, role := range probeRoles {
-		match := true
-		for i, id := range probeOps {
-			op, _ := Catalog().Operation(id)
-			if growth.Permits(op, []string{role}) != permitted[i] {
-				match = false
-				break
-			}
-		}
-		if match {
-			found = append(found, role)
-		}
-	}
-	if len(found) != 1 {
-		return "", false
-	}
-	return found[0], true
+// probeAnswer is what Apple answered one probe read: known where the answer
+// says whether the key's role may make it.
+type probeAnswer struct {
+	op    string
+	known bool
+	may   bool
+	// said is the answer as a log and the sheet's detail line show it: the
+	// status and Apple's code, never the key or its token.
+	said string
 }
 
-// The check's reads, as the sheet lists them.
+// rolesOf is every role whose permits agree with each known answer.
+func rolesOf(answers []probeAnswer) []string {
+	var out []string
+	for _, role := range probeRoles {
+		if len(contradicted(role, answers)) == 0 {
+			out = append(out, role)
+		}
+	}
+	return out
+}
+
+// contradicted is each probe whose known answer role's permits disagree with.
+func contradicted(role string, answers []probeAnswer) []string {
+	var out []string
+	for _, a := range answers {
+		op, _ := Catalog().Operation(a.op)
+		if a.known && growth.Permits(op, []string{role}) != a.may {
+			out = append(out, a.op)
+		}
+	}
+	return out
+}
+
+// answersLine is the probes' answers on one line, in probe order.
+func answersLine(answers []probeAnswer) string {
+	parts := make([]string, 0, len(answers))
+	for _, a := range answers {
+		parts = append(parts, a.op+" "+a.said)
+	}
+	return strings.Join(parts, "; ")
+}
+
+// The check's reads, as the sheet lists them, in the order the check makes
+// them: a read that did not run is never drawn done.
 var identityChecks = []seataccess.GuideCheck{
 	{ID: "sign", Label: "Sign in with the key and the team's issuer"},
 	{ID: "alive", Label: "Make a read every role may make"},
-	{ID: "role", Label: "Read its role from seven reads"},
 	{ID: "apps", Label: "Find the agent's apps in the key's team"},
+	{ID: "role", Label: "Read its role from five reads"},
 }
+
+// The steps of identityChecks, by position.
+const (
+	stepSign = iota
+	stepAlive
+	stepApps
+	stepRole
+)
 
 // keyCheck is one check of a key for a seat.
 type keyCheck struct {
@@ -137,9 +173,18 @@ type keyCheck struct {
 	only string
 }
 
-// checkKey reads k back: which team accepts it, its role, and whether that
-// team reaches the seat's apps. A fault (Apple not answering) is an error;
-// everything Apple answered is the verdict.
+// refusedAt ends out at step with Apple's refusal: that step's read failed
+// with Apple's reason, and no later step ran.
+func refusedAt(out seataccess.IdentityCheck, step int, r *seataccess.Refusal) seataccess.IdentityCheck {
+	out.Reads = append(out.Reads, seataccess.IdentityRead{Label: identityChecks[step].Label, Said: r.Said})
+	out.Status, out.Said, out.Remedy = seataccess.IdentityRefused, r.Said, r.Remedy
+	return out
+}
+
+// checkKey reads k back: which team accepts it, whether that team holds the
+// seat's apps, listed with k itself, which also names the team's apps for the
+// chooser, and its role. A fault (Apple not answering) is an error;
+// everything Apple answered is the verdict, a refusal at the step it refused.
 func (p *Product) checkKey(ctx context.Context, k keyCheck) (seataccess.IdentityCheck, error) {
 	need := roleName(LevelRole(k.level))
 	out := seataccess.IdentityCheck{ID: k.key.ID, Needs: need}
@@ -149,28 +194,26 @@ func (p *Product) checkKey(ctx context.Context, k keyCheck) (seataccess.Identity
 	}
 	var t *team
 	var client *Client
+	var signErr error
 	for _, candidate := range teams {
 		if k.only != "" && candidate.id != k.only {
 			continue
 		}
 		c := p.ownClient(candidate, k.key)
-		_, signErr := c.Do(ctx, ownSlot, Request{Method: "GET", Path: "/v1/appCategories",
+		_, signErr = c.Do(ctx, ownSlot, Request{Method: "GET", Path: "/v1/appCategories",
 			Query: url.Values{"limit": {"1"}}, Read: true, Reserved: true})
-		if status := statusOf(signErr); status == http.StatusUnauthorized {
+		if statusOf(signErr) == http.StatusUnauthorized {
 			continue
-		} else if signErr != nil && status == 0 {
-			return out, fmt.Errorf("appstoreconnect: check key %s with the %s team: %w", k.key.ID, candidate.id,
-				signErr)
 		}
 		t, client = candidate, c
 		break
 	}
 	if t == nil {
-		out.Reads = append(out.Reads, seataccess.IdentityRead{Label: identityChecks[0].Label})
+		out.Reads = append(out.Reads, seataccess.IdentityRead{Label: identityChecks[stepSign].Label})
 		if k.only != "" {
 			out.Status = seataccess.IdentityRefused
 			out.Said = "Apple refuses key " + k.key.ID + ": it was revoked."
-			out.Remedy = "Make a new key and hand it in, or set this agent back to the company's keys."
+			out.Remedy = "Make a new key and hand it in."
 			return out, nil
 		}
 		out.Status = seataccess.IdentityWrongTeam
@@ -180,10 +223,21 @@ func (p *Product) checkKey(ctx context.Context, k keyCheck) (seataccess.Identity
 		return out, nil
 	}
 	out.Team = t.id
+	if signErr != nil {
+		if r, ok := seataccess.RefusalOf(signErr); ok {
+			return refusedAt(out, stepSign, r), nil
+		}
+		return out, fmt.Errorf("appstoreconnect: check key %s with the %s team: %w", k.key.ID, t.id, signErr)
+	}
 	out.Reads = append(out.Reads,
-		seataccess.IdentityRead{Label: identityChecks[0].Label, OK: true, Said: "The " + t.id + " team accepts it."},
-		seataccess.IdentityRead{Label: identityChecks[1].Label, OK: true})
-	teamApps, err := p.appsOf(ctx, t)
+		seataccess.IdentityRead{Label: identityChecks[stepSign].Label, OK: true, Said: "The " + t.id + " team accepts it."},
+		seataccess.IdentityRead{Label: identityChecks[stepAlive].Label, OK: true})
+	// THE KEY BEING CHECKED LISTS THE APPS: it is the reach that matters for
+	// this agent, and the company holds no key to list them with.
+	teamApps, err := p.readApps(ctx, t, client, true)
+	if r, ok := seataccess.RefusalOf(err); ok {
+		return refusedAt(out, stepApps, r), nil
+	}
 	if err != nil {
 		return out, err
 	}
@@ -193,97 +247,175 @@ func (p *Product) checkKey(ctx context.Context, k keyCheck) (seataccess.Identity
 			missing = append(missing, app)
 		}
 	}
-	probeApp := ""
-	for _, app := range k.apps {
-		if !slices.Contains(missing, app) {
-			probeApp = app
-			break
-		}
+	if len(missing) > 0 {
+		named := p.appLabels(missing)
+		out.Reads = append(out.Reads, seataccess.IdentityRead{Label: identityChecks[stepApps].Label,
+			Said: "Not in the " + t.id + " team: " + words.And(named) + "."})
+		out.Status = seataccess.IdentityWrongTeam
+		out.Said = "This agent's apps " + words.And(named) + " are not in the " + t.id + " team, whose key this is."
+		out.Remedy = "Make the key in the team this agent's apps are in."
+		return out, nil
 	}
-	if probeApp == "" && len(teamApps) > 0 {
+	out.Reads = append(out.Reads, seataccess.IdentityRead{Label: identityChecks[stepApps].Label, OK: true})
+	probeApp := ""
+	if len(k.apps) > 0 {
+		probeApp = k.apps[0]
+	} else if len(teamApps) > 0 {
 		probeApp = teamApps[0].ID
 	}
-	role, read, err := p.probeRole(ctx, client, probeApp)
+	answers, err := p.probeRole(ctx, client, probeApp)
 	if err != nil {
 		return out, err
 	}
-	out.Reads = append(out.Reads, read)
-	out.Role = roleName(role)
-	switch fits, broader := roleFit(role, k.level); {
-	case role == "":
+	candidates := rolesOf(answers)
+	log.InfoContext(ctx, "appstoreconnect_role_probe", "key", k.key.ID, "team", t.id,
+		"answers", answersLine(answers), "roles", strings.Join(candidates, ","))
+	return p.judgeRole(out, k, answers, candidates), nil
+}
+
+// judgeRole ends out at the role step from the roles Apple's answers leave:
+// one, several that each fit the level, or none.
+func (p *Product) judgeRole(out seataccess.IdentityCheck, k keyCheck, answers []probeAnswer,
+	candidates []string) seataccess.IdentityCheck {
+
+	need := out.Needs
+	read := seataccess.IdentityRead{Label: identityChecks[stepRole].Label, Detail: answersLine(answers)}
+	names := make([]words.Said, 0, len(candidates))
+	for _, c := range candidates {
+		names = append(names, words.Said(roleName(c)))
+	}
+	fitsAll, broader := len(candidates) > 0, false
+	for _, c := range candidates {
+		fits, wider := roleFit(c, k.level)
+		// A SALES KEY NEEDS THE VENDOR NUMBER, so its role must be known, not one of several.
+		fitsAll = fitsAll && fits && (len(candidates) == 1 || c != RoleSales)
+		broader = broader || wider
+	}
+	switch {
+	case len(candidates) == 0:
+		var differs []words.Said
+		for _, role := range probeRoles {
+			differs = append(differs, words.Said(roleName(role)+" on "+words.And(contradicted(role, answers))))
+		}
+		read.Said = "Apple's answers fit no role."
+		out.Reads = append(out.Reads, read)
 		out.Status = seataccess.IdentityWrongRole
-		out.Said = "Crewlet could not tell key " + k.key.ID + "'s role from Apple's answers."
-		out.Remedy = "Make a key with the " + need + " role."
-		return out, nil
-	case role == RoleAdmin:
+		out.Said = "Apple's answers about key " + k.key.ID + " fit no role: " +
+			words.And(differs) + " disagree."
+		out.Remedy = "Check the key's Access in Users and Access, Integrations, Team Keys; it needs the " + need +
+			" role."
+		return out
+	case len(candidates) == 1 && candidates[0] == RoleAdmin:
+		out.Role = roleName(RoleAdmin)
+		read.Said = out.Role + "."
+		out.Reads = append(out.Reads, read)
 		out.Status = seataccess.IdentityWrongRole
 		out.Said = "Key " + k.key.ID + " holds the Admin role, which Crewlet never gives an agent: it reaches " +
 			"the team's users, keys and agreements."
 		out.Remedy = "Make a key with the " + need + " role; Apple cannot change a key's role."
-		return out, nil
-	case !fits:
+		return out
+	case !fitsAll && len(candidates) == 1:
+		out.Role = roleName(candidates[0])
+		read.Said = out.Role + "."
+		out.Reads = append(out.Reads, read)
 		out.Status = seataccess.IdentityWrongRole
 		out.Said = "Key " + k.key.ID + " holds the " + out.Role + " role, and this agent's level needs " + need + "."
 		out.Remedy = "Make a key with the " + need + " role; Apple cannot change a key's role."
-		return out, nil
+		return out
+	case !fitsAll:
+		read.Said = "One of " + words.Or(names) + "."
+		out.Reads = append(out.Reads, read)
+		out.Status = seataccess.IdentityWrongRole
+		out.Said = "Apple's answers leave key " + k.key.ID + "'s role as one of " + words.Or(names) +
+			", and not every one of them fits this agent's level."
+		out.Remedy = "Check the key's Access in Users and Access, Integrations, Team Keys; if it is not " + need +
+			", make a key with the " + need + " role."
+		return out
+	}
+	read.OK = true
+	out.Role = words.Or(names)
+	read.Said = out.Role + "."
+	if len(candidates) > 1 {
+		read.Said = "One of " + out.Role + "."
+	}
+	out.Reads = append(out.Reads, read)
+	out.Status = seataccess.IdentityReady
+	switch {
 	case broader:
 		out.Broader = true
 		out.Said = "Key " + k.key.ID + " holds the " + out.Role + " role, which reaches more than " + need +
 			"; Crewlet still holds every call to this agent's level."
+	case len(candidates) > 1:
+		out.Said = "Key " + k.key.ID + " holds one of " + out.Role + ", which Apple's answers do not tell apart; " +
+			"each fits this agent's level."
+	default:
+		out.Said = "Key " + k.key.ID + " works in the " + out.Team + " team at the " + out.Role + " role."
 	}
-	appsRead := seataccess.IdentityRead{Label: identityChecks[3].Label, OK: len(missing) == 0}
-	if len(missing) > 0 {
-		appsRead.Said = "Not in the " + t.id + " team: " + words.And(missing) + "."
-		out.Reads = append(out.Reads, appsRead)
-		out.Status = seataccess.IdentityWrongTeam
-		out.Said = "This agent's apps " + words.And(missing) + " are not in the " + t.id + " team, whose key this is."
-		out.Remedy = "Make the key in the team this agent's apps are in."
-		return out, nil
-	}
-	out.Reads = append(out.Reads, appsRead)
-	out.Status = seataccess.IdentityReady
-	if out.Said == "" {
-		out.Said = "Key " + k.key.ID + " works in the " + t.id + " team at the " + out.Role + " role."
-	}
-	return out, nil
+	return out
 }
 
-// probeRole reads the seven probes as the key and answers its role, "" where
-// the answers match no one role. A 403 is a read the role may not make; any
-// other answer from Apple, a 400 on a read it may make included, is one it may.
-func (p *Product) probeRole(ctx context.Context, c *Client, app string) (string, seataccess.IdentityRead,
-	error) {
+// appLabels names each app by the name any team's held list gives it, its
+// Apple ID beside: "Field Notes (6763222842)"; the ID alone where none does.
+func (p *Product) appLabels(ids []string) []string {
+	names := map[string]string{}
+	for _, t := range p.heldTeams() {
+		t.mu.Lock()
+		for _, a := range t.apps {
+			if a.Name != "" {
+				names[a.ID] = a.Name
+			}
+		}
+		t.mu.Unlock()
+	}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if name := names[id]; name != "" {
+			out = append(out, name+" ("+id+")")
+			continue
+		}
+		out = append(out, id)
+	}
+	return out
+}
 
-	read := seataccess.IdentityRead{Label: identityChecks[2].Label}
-	permitted := make([]bool, len(probeOps))
-	for i, id := range probeOps {
+// probeRole reads the five probes as the key and answers what Apple said to
+// each. Only Apple's role denial (403 FORBIDDEN_ERROR) is "may not"; another
+// 403 (a feature or program the team lacks), a 404 or a 409 says nothing of
+// the role, and any other answer is a read the role may make.
+func (p *Product) probeRole(ctx context.Context, c *Client, app string) ([]probeAnswer, error) {
+	answers := make([]probeAnswer, 0, len(probeOps))
+	for _, id := range probeOps {
 		op, _ := Catalog().Operation(id)
 		path := op.Path
 		if strings.Contains(path, "{id}") {
 			if app == "" {
-				read.Said = "The team has no app to read the role on."
-				return "", read, nil
+				answers = append(answers, probeAnswer{op: id, said: "not read: the team has no app"})
+				continue
 			}
 			path = strings.Replace(path, "{id}", url.PathEscape(app), 1)
 		}
 		_, err := c.Do(ctx, ownSlot, Request{Method: "GET", Path: path, Query: url.Values{"limit": {"1"}},
 			Read: true, Reserved: true})
-		switch status := statusOf(err); {
+		a := probeAnswer{op: id, said: "200"}
+		apiErr, answered := errors.AsType[*APIError](err)
+		switch {
 		case err == nil:
-			permitted[i] = true
-		case status == http.StatusForbidden:
-		case status == http.StatusUnauthorized || status == http.StatusTooManyRequests || status >= 500 ||
-			status == 0:
-			return "", read, fmt.Errorf("appstoreconnect: read the key's role (%s): %w", id, err)
+			a.known, a.may = true, true
+		case !answered || apiErr.Status == http.StatusUnauthorized || apiErr.VendorUnavailable():
+			return answers, fmt.Errorf("appstoreconnect: read the key's role (%s): %w", id, err)
+		case apiErr.RoleDenied():
+			a.known = true
+		case apiErr.Status == http.StatusForbidden || apiErr.Status == http.StatusNotFound ||
+			apiErr.Status == http.StatusConflict:
 		default:
-			permitted[i] = true
+			a.known, a.may = true, true
 		}
+		if answered {
+			a.said = strings.TrimSpace(fmt.Sprintf("%d %s", apiErr.Status, apiErr.Code))
+		}
+		answers = append(answers, a)
 	}
-	role, ok := roleOf(permitted)
-	if ok {
-		read.OK, read.Said = true, roleName(role)+"."
-	}
-	return role, read, nil
+	return answers, nil
 }
 
 // statusOf is Apple's HTTP status in err, 0 where err is no answer of Apple's.
@@ -297,7 +429,7 @@ func statusOf(err error) int {
 
 // ownClient is a client that signs with key alone, in t's team.
 func (p *Product) ownClient(t *team, key Key) *Client {
-	c := NewClient(p.deps.Base, t.client.issuer, map[string]Key{ownSlot: key}, p.deps.HTTP)
+	c := NewClient(p.deps.Base, t.issuer, map[string]Key{ownSlot: key}, p.deps.HTTP)
 	c.now, c.answered = p.deps.Now, p.clock
 	return c
 }
@@ -325,6 +457,9 @@ func handedKey(in seataccess.IdentityInput) (Key, error) {
 // ascKeyID is a team key's ID.
 var ascKeyID = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[A-Z0-9]{10}$`) })
 
+// vendorDigits is a team's vendor number.
+var vendorDigits = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[0-9]{1,20}$`) })
+
 // keepKey checks a key a person handed in for a seat and answers what to keep.
 func (p *Product) keepKey(ctx context.Context, in seataccess.IdentityInput) (seataccess.IdentityKept, error) {
 	key, err := handedKey(in)
@@ -334,12 +469,28 @@ func (p *Product) keepKey(ctx context.Context, in seataccess.IdentityInput) (sea
 	if taken := p.keyTaken(in, key.ID); taken != nil {
 		return seataccess.IdentityKept{}, taken
 	}
+	vendor := strings.TrimSpace(in.Detail)
+	if vendor != "" && !vendorDigits().MatchString(vendor) {
+		return seataccess.IdentityKept{}, &seataccess.Refusal{Said: "The vendor number is the team's digits.",
+			Remedy: "Copy it from Payments and Financial Reports, or leave it empty for a key that is not Sales."}
+	}
 	company := p.deps.Company()
 	check, err := p.checkKey(ctx, keyCheck{key: key, level: growth.LevelOf(in.Want.Level), apps: in.Want.Scope})
 	if err != nil {
 		return seataccess.IdentityKept{}, err
 	}
-	kept := seataccess.IdentityKept{Check: check, Way: seataccess.WayHandedIn, ID: key.ID,
+	if check.Status == seataccess.IdentityReady && roleID(check.Role) == RoleSales {
+		if vendor == "" {
+			// A SALES KEY READS SALES, which Apple files under the vendor number.
+			check.Status = seataccess.IdentityRefused
+			check.Said = "Key " + key.ID + " holds the Sales role, which reads sales, and sales need the team's " +
+				"vendor number."
+			check.Remedy = "Hand the key in again with the vendor number, on Payments and Financial Reports."
+		}
+	} else {
+		vendor = ""
+	}
+	kept := seataccess.IdentityKept{Check: check, Way: seataccess.WayHandedIn, ID: key.ID, Detail: vendor,
 		Name:   seatname.For(seatname.AppStoreConnect, company.Name, in.Seat.Handle),
 		Minted: []seataccess.Minted{{Field: identityField, Value: in.Value, CredentialID: key.ID}}}
 	if rec := in.Record; rec.Kept() && rec.ID != key.ID {
@@ -351,7 +502,7 @@ func (p *Product) keepKey(ctx context.Context, in seataccess.IdentityInput) (sea
 	return kept, nil
 }
 
-// keyTaken refuses a key another seat keeps, or one of the company's slots.
+// keyTaken refuses a key another seat keeps.
 func (p *Product) keyTaken(in seataccess.IdentityInput, id string) error {
 	for handle, rec := range in.Records {
 		other := rec.Lanes[seataccess.LaneAppStoreConnect].Identity
@@ -360,15 +511,6 @@ func (p *Product) keyTaken(in seataccess.IdentityInput, id string) error {
 		if handle != in.Seat.Handle && (other.Kept() && other.ID == id || retiring) {
 			return &seataccess.Refusal{Said: "Key " + id + " is already @" + handle + "'s own key.",
 				Remedy: "Make a key for this agent alone, so Apple tells the two apart."}
-		}
-	}
-	block := p.deps.Company().Integrations.AppStoreConnect
-	for _, cid := range block.ConnectionIDs() {
-		for _, s := range block.Connections[cid].Keys.Slots() {
-			if strings.TrimSpace(p.deps.Resolve(s.Key.KeyID)) == id {
-				return &seataccess.Refusal{Said: "Key " + id + " is the company's " + slotWords[s.Name][0] + " key.",
-					Remedy: "Make a key for this agent alone."}
-			}
 		}
 	}
 	return nil
@@ -463,25 +605,38 @@ func (accessVendor) IdentityGuide(c *config.Company, seat seataccess.SeatRef, _ 
 
 	name := seatname.For(seatname.AppStoreConnect, c.Name, seat.Handle)
 	role := roleName(LevelRole(growth.LevelOf(want.Level)))
+	access := []vendortext.Part{vendortext.UI("Access"), vendortext.W(": "), vendortext.UI(role)}
+	switch role {
+	case roleName(RoleMarketing):
+		access = append(access, vendortext.W(", or "), vendortext.UI("Sales"), vendortext.W(" for an agent that reads sales"))
+	case roleName(RoleAppManager):
+		access = append(access, vendortext.W(", or "), vendortext.UI("Customer Support"),
+			vendortext.W(" for an agent that answers reviews"))
+	}
+	access = append(access, vendortext.W(". Never "), vendortext.UI("Admin"), vendortext.W("."))
 	return seataccess.IdentityGuide{
 		Vendor: "Apple", Noun: "key", Records: "its submissions",
-		Why:     "Apple then records its submissions under its own key, and you can revoke it alone.",
-		Company: "the company's team keys", Name: name, NameRule: seatname.AppStoreConnect.Words,
+		Why:  "Apple then records its submissions under its own key, and you can revoke it alone.",
+		Name: name, NameRule: seatname.AppStoreConnect.Words,
 		NameWhat: seatname.AppStoreConnect.What, Role: role, Never: "Admin",
 		Steps: []seataccess.GuideStep{
-			{Text: "Open Users and Access, then Integrations, then Team Keys."},
-			{Text: "Press Generate API Key, or + if the team already has keys."},
-			{Text: "Name:", Copy: &seataccess.GuideCopy{Label: "key's name", Value: name,
+			{Text: vendortext.Of(vendortext.W("Open "),
+				vendortext.UI("Users and Access", "Integrations", "Team Keys").At(TeamKeysURL), vendortext.W("."))},
+			{Text: vendortext.Of(vendortext.W("Press "), vendortext.UI("Generate API Key"), vendortext.W(", or "),
+				vendortext.UI("+"), vendortext.W(" if the team already has keys."))},
+			{Text: vendortext.Of(vendortext.UI("Name"), vendortext.W(":")), Copy: &seataccess.GuideCopy{Label: "key's name", Value: name,
 				Rule: seatname.AppStoreConnect.Words}},
-			{Text: "Access: " + role + ". Never Admin."},
-			{Text: "Press Generate."},
-			{Text: "On the new key's row, press Download API Key. Apple offers the file once."},
+			{Text: vendortext.Of(access...)},
+			{Text: vendortext.Of(vendortext.W("Press "), vendortext.UI("Generate"), vendortext.W("."))},
+			{Text: vendortext.Of(vendortext.W("On the new key's row, press "), vendortext.UI("Download API Key"),
+				vendortext.W(". Apple offers the file once."))},
 		},
-		Link: seataccess.GuideLink{Label: "Open Team Keys", URL: TeamKeysURL},
-		Note: "Only the Account Holder or an Admin can make team keys. A key reaches every app of the team; " +
-			"Crewlet keeps the agent to its own.",
+		Note: vendortext.Plain("Only the Account Holder or an Admin can make team keys. A key reaches every app of the team; " +
+			"Crewlet keeps the agent to its own."),
 		Back: seataccess.GuideBack{Kind: seataccess.BackFile, Accept: ".p8",
-			Hint: "The file Apple offered: AuthKey_<Key ID>.p8", Label: "Key ID"},
+			Hint: vendortext.Plain("The file Apple offered: `AuthKey_<Key ID>.p8`"), Label: "Key ID",
+			Detail: &seataccess.GuideDetail{Label: "Vendor number",
+				Hint: "Only for a Sales key: digits, on Payments and Financial Reports."}},
 		Checks: identityChecks,
 	}
 }

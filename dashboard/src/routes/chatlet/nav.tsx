@@ -39,7 +39,7 @@ import {
   type ReactNode,
 } from "react";
 import { href, useNavigator } from "~/app/router.tsx";
-import { CHAT_VIEWS, type ChatView } from "~/app/routes.ts";
+import { CHAT_VIEWS, mintedID, type ChatView } from "~/app/routes.ts";
 import { STORAGE_KEYS } from "~/lib/storage.ts";
 import type { QueryResult } from "~/lib/useQuery.ts";
 import type {
@@ -138,18 +138,21 @@ export function paneParam(pane: ChatPane): string {
 export function paneOf(raw: string | null): ChatPane | null {
   if (!raw) return null;
   const [kind, first = "", second = ""] = raw.split(SEP);
+  // A ROOM AND A ROOT IN THE ENGINE'S SPELLING ([mintedID]), as the room's
+  // own place is: a pane flushes read state under them.
+  const room = mintedID(first);
   switch (kind) {
     case "thread":
-      return first && second ? { kind: "thread", room: first, root: second } : null;
+      return first && second ? { kind: "thread", room, root: mintedID(second) } : null;
     case "details":
       return first && (DETAILS_TABS as readonly string[]).includes(second)
-        ? { kind: "details", room: first, tab: second as DetailsTab }
+        ? { kind: "details", room, tab: second as DetailsTab }
         : null;
     case "profile":
       return first ? { kind: "profile", handle: first } : null;
     case "catchup":
     case "summarize":
-      return first ? { kind: "catchup", room: first, mode: kind } : null;
+      return first ? { kind: "catchup", room, mode: kind } : null;
     default:
       return null;
   }
@@ -174,7 +177,10 @@ export function placeOf(
   where: { id?: string | undefined; view?: ChatView | undefined },
   query: URLSearchParams,
 ): ChatPlace {
-  if (where.id) return { kind: "room", id: where.id, message: query.get("message") || undefined };
+  // EVERY ID IN THE ENGINE'S SPELLING ([mintedID]): the router gives the
+  // room's already, and a room or a message in the query is read here.
+  const id = (key: string) => mintedID(query.get(key) ?? "") || undefined;
+  if (where.id) return { kind: "room", id: mintedID(where.id), message: id("message") };
   switch (where.view) {
     case undefined: {
       const dm = query.get("dm");
@@ -183,12 +189,12 @@ export function placeOf(
     case "activity":
       return { kind: "activity", item: query.get("item") || undefined };
     case "dms":
-      return { kind: "dms", room: query.get("room") || undefined };
+      return { kind: "dms", room: id("room") };
     case "search":
       return {
         kind: "search",
         q: query.get("q") || undefined,
-        room: query.get("in") || undefined,
+        room: id("in"),
       };
     case "new": {
       const to = (query.get("to") ?? "").split(",").filter(Boolean);

@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/accessreview"
 	"github.com/crewlet/crewlet/internal/capability"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/toolname"
 )
@@ -206,5 +207,33 @@ func TestTheSectionNamesTheWorkAndHowToWithdrawIt(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("the section does not say %q:\n%s", want, got)
 		}
+	}
+}
+
+// THE WIDEST PENDING REVIEW FITS ITS CLASS: every line at its bound in a byte
+// JSON writes as six, a turn's id, a digest and three instants at their
+// longest, encoded as the store keeps it, within internal/coord's
+// MaxAccessReviewBytes, the bound its key's class holds it to.
+//
+// Mutation: lower MaxAccessReviewBytes to 35 KiB, and this is red.
+func TestTheWidestPendingReviewFitsItsClass(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 11, 22, 10, 0, 0, 123456789, time.UTC)
+	p := accessreview.Pending{Baseline: "0196f3a2-7c41-7d2e-9b1a-3f5e8c2d4a61", BaselineAt: at,
+		Digest: strings.Repeat("f", 64), ChangedAt: at, ToldTurn: "0196f3a2-7c41-7d2e-9b1a-3f5e8c2d4a62", ToldAt: at}
+	for range capability.MaxLines + 5 {
+		p.Lines = append(p.Lines, strings.Repeat("<", capability.MaxLineBytes))
+	}
+	raw, err := accessreview.EncodePending(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) > coord.MaxAccessReviewBytes {
+		t.Errorf("the widest pending review is stored as %d bytes, past its class's %d", len(raw),
+			coord.MaxAccessReviewBytes)
+	}
+	if back, err := accessreview.DecodePending(raw); err != nil || len(back.Lines) != capability.MaxLines {
+		t.Errorf("premise: the record keeps %d lines (%v), want the %d a review holds", len(back.Lines), err,
+			capability.MaxLines)
 	}
 }

@@ -47,8 +47,8 @@ func hexSum(data []byte) string {
 }
 
 // before is a held act's target as it reads now: its attributes, and their
-// digest, which the approval binds. unread is a target only the Admin key may
-// read, which reads nothing: the approval binds the request alone.
+// digest, which the approval binds. unread is a target the agent's key may
+// not read: the approval binds the request alone.
 type before struct {
 	attrs  map[string]any
 	digest string
@@ -65,11 +65,10 @@ func (p *Product) beforeOf(ctx context.Context, m made) (before, error) {
 		return before{attrs: map[string]any{}, digest: hexSum(data)}, nil
 	}
 	path := "/v1/" + typ + "/" + url.PathEscape(id)
-	slot, err := m.reader(path)
-	if errors.Is(err, ErrNoKey) {
-		return before{attrs: map[string]any{}, digest: hexSum([]byte("unread")), unread: true}, nil
+	if err := m.reader(path); err != nil {
+		return before{attrs: map[string]any{}, digest: hexSum([]byte("unread")), unread: true}, nil //nolint:nilerr // An unreadable target binds the request alone.
 	}
-	resp, err := m.team.client.Do(ctx, slot, Request{Method: "GET", Path: path, Read: true, Reserved: true})
+	resp, err := m.do(ctx, Request{Method: "GET", Path: path, Read: true, Reserved: true})
 	if err != nil {
 		return before{}, err
 	}
@@ -150,8 +149,8 @@ func (p *Product) Prepare(ctx context.Context, call growth.Call) (growth.Hold, e
 	}
 	question := fmt.Sprintf("May %s %s %s on %s?", call.Handle, verbOf(m.op.Method), m.op.Resource, where)
 	var ctxt strings.Builder
-	fmt.Fprintf(&ctxt, "%s asks to make **%s** (%s %s) on %s, through the %s key. Allow once sends exactly this "+
-		"request, once.", call.Handle, m.op.ID, m.op.Method, words.Inert(m.path), where, slotRole[m.slot])
+	fmt.Fprintf(&ctxt, "%s asks to make **%s** (%s %s) on %s, through its own %s key. Allow once sends exactly "+
+		"this request, once.", call.Handle, m.op.ID, m.op.Method, words.Inert(m.path), where, roleName(m.key.role))
 	if m.op.Danger {
 		ctxt.WriteString(" **It cannot be undone.**")
 	}
@@ -199,8 +198,8 @@ func (p *Product) Card(ctx context.Context, call growth.Call, approved string) (
 	}
 	var findings []string
 	if b.unread {
-		findings = append(findings, "Only the Admin key may read the target, and it makes the allowed change "+
-			"alone: Allow once sends exactly this request without reading the target first.")
+		findings = append(findings, "The agent's own "+roleName(m.key.role)+" key may not read the target: "+
+			"Allow once sends exactly this request without reading the target first.")
 	}
 	return cardOf(call, m, b, !growth.BindingHolds(approved, binding(m, b)), findings), nil
 }
@@ -290,7 +289,7 @@ func (p *Product) Apply(ctx context.Context, call growth.Call, approved string) 
 	if rootedAt(m, resp.Body) {
 		p.owners.remember(m.app, resp.Body)
 	}
-	return Answer{Operation: m.op.ID, Status: resp.Status, Connection: m.team.id, Role: slotRole[m.slot],
+	return Answer{Operation: m.op.ID, Status: resp.Status, Connection: m.team.id, Role: m.key.role,
 		Document: string(resp.Body)}, nil
 }
 

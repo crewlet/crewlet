@@ -10,6 +10,10 @@
 //
 // Loggers are obtained through Get, which binds a component= attribute so
 // every line says which subsystem emitted it.
+//
+// It imports nothing of the engine but internal/redact, which every record
+// passes on its way to any destination ([redacting]), so a credential a call
+// site did not know it logged reaches neither the console nor the file.
 package logging
 
 import (

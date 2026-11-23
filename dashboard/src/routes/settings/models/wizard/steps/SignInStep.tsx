@@ -48,8 +48,7 @@ export const METHOD_WORDS: Record<Method, { label: string; detail: string }> = {
   },
   token: {
     label: "Subscription token",
-    detail:
-      "A token you make with claude setup-token on your own computer. Self-hosted engines and your own subscription only.",
+    detail: "A token you make with claude setup-token on your own computer.",
   },
   device: {
     label: "ChatGPT sign-in with a device code",
@@ -203,10 +202,6 @@ export function SignInStep({
             monospace
             ariaLabel="Copy the command"
           />
-          <Callout variant="warning" title="Your own subscription, on your own engine">
-            Use this only on a self-hosted engine doing your own work. Anthropic's terms do not
-            allow sharing a subscription or using it to serve other people.
-          </Callout>
         </>
       ) : null}
 

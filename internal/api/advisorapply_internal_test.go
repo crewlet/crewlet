@@ -79,6 +79,9 @@ func (l *applyLog) Checkpoint(context.Context, string, statelog.Freshness) (json
 func (l *applyLog) PendingRequests(context.Context, statelog.Freshness) ([]advisordomain.RunRow, error) {
 	return nil, nil
 }
+func (*applyLog) Unowned(context.Context, statelog.Freshness) ([]advisordomain.UnownedRun, error) {
+	return nil, nil
+}
 func (l *applyLog) LastRunOfClasses(context.Context, statelog.Freshness) (map[string]time.Time, error) {
 	return map[string]time.Time{}, nil
 }

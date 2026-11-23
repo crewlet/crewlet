@@ -34,10 +34,16 @@ type SeatAccess interface {
 	Records(ctx context.Context, kind integration.Kind) (map[string]seataccess.Record, error)
 }
 
-// ToolServers is what the coordination store keeps about tool servers: what
-// each node's instances listed, and the public half of each sign-in.
-type ToolServers interface {
-	ListMCPListings(ctx context.Context) ([]coord.MCPListing, error)
+// Listings is what each node's MCP server instances listed, as this node
+// watches it (the engine's): a read on a turn waits for no listing to cross
+// a link, each up to 896 KiB. An error until the watch has answered.
+type Listings interface {
+	MCPListings(ctx context.Context) ([]coord.MCPListing, error)
+}
+
+// SignIns is the public half of each tool server's sign-in, as the
+// coordination store keeps it.
+type SignIns interface {
 	ListOAuthGrants(ctx context.Context, f coord.GrantFamily) ([]coord.OAuthGrant, error)
 }
 
@@ -155,13 +161,13 @@ func readRecords(ctx context.Context, src Sources, s derive.Settings, req Reques
 		leases, leaseErr = src.Nodes.ListLive(ctx, coord.ClassNode)
 	}
 	switch {
-	case src.ToolServers == nil:
+	case src.Listings == nil || src.SignIns == nil:
 		note(SourceToolServers, ErrNoSource)
 	case leaseErr != nil:
 		note(SourceToolServers, fmt.Errorf("a listing counts only while its node is live, and the nodes are unread: %w",
 			leaseErr))
 	default:
-		listings, listErr := src.ToolServers.ListMCPListings(ctx)
+		listings, listErr := src.Listings.MCPListings(ctx)
 		for _, l := range coord.LiveMCPListings(listings, leases) {
 			p := derive.ToolServerListing{Server: l.Server, ToolCount: len(l.Tools), At: l.At}
 			if l.Info != nil {
@@ -169,7 +175,7 @@ func readRecords(ctx context.Context, src Sources, s derive.Settings, req Reques
 			}
 			r.Listings = append(r.Listings, p)
 		}
-		grants, grantErr := src.ToolServers.ListOAuthGrants(ctx, coord.MCPGrantFamily)
+		grants, grantErr := src.SignIns.ListOAuthGrants(ctx, coord.MCPGrantFamily)
 		for _, g := range grants {
 			p := derive.ToolServerSignIn{Server: g.Name, Issuer: g.Issuer}
 			if g.Expiry != nil {

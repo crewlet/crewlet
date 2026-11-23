@@ -14,7 +14,8 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
-// A person's chat read state: one record per seat handle.
+// A person's chat read state: one record per seat handle, under its one key
+// class ([coord.ChatReadClass], [chatReadsHolding]).
 //
 // One key, not a cursor per channel: a person's state stays one read rather
 // than a filtered bucket walk on every chat paint, and the mute list shares the
@@ -22,26 +23,16 @@ import (
 // is a read-modify-write, safe to retry because the merge is forward-only.
 //
 // Reads are the leader's ([FleetStore.get]: a stale replica would lose every
-// compare-and-set), a first write is [createKey], to write over a forgotten
-// record's purge marker (markers.go), and a refusal reaching this file is one
-// the leader DECIDED ([settled]). The bucket has no age ([coord.ChatReads]):
-// a record leaves only by [FleetStore.ForgetChatRead]'s purge.
-
-// chatReadClass is the key class, so a read record cannot collide with
-// anything else that might one day share this bucket.
-const chatReadClass = "chatread"
-
-// chatReadKey composes one seat's key.
-func chatReadKey(handle string) string {
-	return coord.DocumentKey(chatReadClass, handle)
-}
+// compare-and-set), a first write is [createKey], over a forgotten record's
+// purge marker (markers.go), and a refusal here is one the leader DECIDED
+// ([settled]). A record leaves only by [FleetStore.ForgetChatRead]'s purge.
 
 // chatReadHandle recovers the seat's handle from a key of the read class,
 // reporting false for a key of any other shape — one this build does not
 // write, which names no seat it should judge or push.
 func chatReadHandle(key string) (string, bool) {
 	segments, ok := coord.DocumentSegments(key)
-	if !ok || len(segments) != 2 || segments[0] != chatReadClass || segments[1] == "" {
+	if !ok || len(segments) != 2 || segments[0] != coord.ChatReadClass || segments[1] == "" {
 		return "", false
 	}
 	return segments[1], true
@@ -77,7 +68,7 @@ func (f *FleetStore) ChatRead(ctx context.Context, handle string) (coord.ChatRea
 // compare-and-set. A missing key (never written, or forgotten) reads as
 // revision zero, which [FleetStore.putChatReadAt] takes to mean "create".
 func (f *FleetStore) chatReadAt(ctx context.Context, handle string) (coord.ChatReadState, uint64, error) {
-	entry, err := f.get(ctx, f.chatReads, chatReadKey(handle))
+	entry, err := f.get(ctx, f.chatReads, coord.ChatReadKey(handle))
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
 		return coord.ChatReadState{}, 0, nil
 	}
@@ -145,7 +136,7 @@ func (f *FleetStore) SetChatReadAbsence(ctx context.Context, handle string, sinc
 func (f *FleetStore) mutateChatRead(ctx context.Context, what, handle string, create bool,
 	change func(coord.ChatReadState) (coord.ChatReadState, bool, error),
 ) (coord.ChatReadState, bool, error) {
-	key := chatReadKey(handle)
+	key := coord.ChatReadKey(handle)
 	var (
 		result coord.ChatReadState
 		exists bool
@@ -168,12 +159,11 @@ func (f *FleetStore) mutateChatRead(ctx context.Context, what, handle string, cr
 			result, exists = next, true
 			return true, nil
 		}
-		// The revision is not stored: only the write's answer says where it lands.
-		persisted := next
-		persisted.Revision = 0
-		raw, err := json.Marshal(persisted)
+		// The revision is not stored: only the write's answer says where it
+		// lands. The twin's rule too, refused past the class's bound.
+		raw, err := coord.EncodeChatRead(handle, next)
 		if err != nil {
-			return false, fmt.Errorf("coord/kv: encode the chat read state for %s: %w", handle, err)
+			return false, err
 		}
 		landed, written, err := f.putChatReadAt(ctx,
 			fmt.Sprintf("%s the chat read state for %s", what, handle), key, raw, revision)
@@ -250,7 +240,7 @@ func (f *FleetStore) ForgetChatRead(ctx context.Context, handle string, absentBy
 	if handle == "" {
 		return false, errors.New("coord/kv: forget a person's chat state needs a handle")
 	}
-	key := chatReadKey(handle)
+	key := coord.ChatReadKey(handle)
 	var removed bool
 	settled, err := casRetry(ctx, &f.chatReadTrips, "forget the chat read state for "+handle, func() (bool, error) {
 		stored, revision, err := f.chatReadAt(ctx, handle)
@@ -314,7 +304,7 @@ func (f *FleetStore) purgeChatReadAt(ctx context.Context, key string, revision u
 // and a reader dropped from it is never judged and so never forgotten.
 func (f *FleetStore) ChatReaders(ctx context.Context) ([]coord.ChatReader, error) {
 	var readers []coord.ChatReader
-	err := f.eachUnder(ctx, f.chatReads, coord.DocumentFilter(chatReadClass),
+	err := f.eachUnder(ctx, f.chatReads, coord.DocumentFilter(coord.ChatReadClass),
 		"the chat read state",
 		func(entry jetstream.KeyValueEntry) error {
 			handle, ok := chatReadHandle(entry.Key())
@@ -351,7 +341,7 @@ func (f *FleetStore) ChatReaders(ctx context.Context) ([]coord.ChatReader, error
 // replaces, where a read per change is a leader read per flush per node on the
 // fleet's busiest record.
 func (f *FleetStore) WatchChatReads(ctx context.Context) (<-chan coord.ChatReadUpdate, error) {
-	return watchRecords(ctx, f, f.chatReads, coord.DocumentFilter(chatReadClass),
+	return watchRecords(ctx, f, f.chatReads, coord.DocumentFilter(coord.ChatReadClass),
 		recordWatch[coord.ChatReadUpdate]{
 			what: "the chat read state",
 			ours: func(key string) bool {

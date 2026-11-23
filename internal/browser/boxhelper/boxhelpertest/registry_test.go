@@ -2,6 +2,7 @@ package boxhelpertest
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha512"
 	"encoding/base64"
@@ -72,6 +73,20 @@ func get(t *testing.T, r *StandInRegistry, path string) (int, []byte) {
 	return resp.StatusCode, body
 }
 
+// inflated is gzip's one member, inflated whole, its trailer's CRC checked.
+func inflated(t *testing.T, gz []byte) []byte {
+	t.Helper()
+	r, err := gzip.NewReader(bytes.NewReader(gz))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("the tarball does not inflate: %v", err)
+	}
+	return out
+}
+
 // integrityOf is body's SHA-512 as a lock writes it.
 func integrityOf(body []byte) string {
 	sum := sha512.Sum512(body)
@@ -81,15 +96,15 @@ func integrityOf(body []byte) string {
 // THE STAND-IN REGISTRY SERVES THE LOCK'S BYTES: each path the lock resolves
 // a package at serves bytes whose SHA-512 is the lock's integrity, read from
 // the npm cache of the suite's tree, which npm itself checked going in;
-// Corrupt serves the core's with one byte changed and the others whole;
-// NotFound and Fail answer 404 and 500; Stall declares a tarball's whole
-// length and sends its first half; Hang holds a request, which it witnesses
-// as held, and answers it only with its end; and every request is recorded,
-// as its method and path. What npm makes of a hang and a stall, the install
+// Corrupt serves the core's with one byte changed, inflating to the core's own
+// tarball, and the others whole; NotFound and Fail answer 404 and 500; Stall
+// declares a tarball's whole length and sends its first half; Hang holds a
+// request, which it witnesses as held, and answers it only with its end; and
+// every request is recorded. What npm makes of a hang and a stall, the install
 // cases hold.
 //
-// Mutations, each red: serve another content path; Corrupt flipping no byte;
-// Hang answering at once (it answers before it holds the request).
+// Mutations, each red: serve another content path; Corrupt flipping no byte,
+// or one of the deflate data; Hang answering at once.
 func TestTheStandInRegistryServesTheLocksBytes(t *testing.T) {
 	t.Parallel()
 	paths := locked(t)
@@ -110,6 +125,10 @@ func TestTheStandInRegistryServesTheLocksBytes(t *testing.T) {
 		if status != http.StatusOK || (integrityOf(bad) == paths[p]) == core || len(bad) != len(body) {
 			t.Errorf("Corrupt answers %s with %d and %d bytes of %s, want the lock's bytes whole, but for the "+
 				"core's, one changed", p, status, len(bad), integrityOf(bad))
+		}
+		if core && !bytes.Equal(inflated(t, bad), inflated(t, body)) {
+			t.Errorf("Corrupt answers %s with bytes that inflate to another tarball, want the core's own, "+
+				"so npm's integrity check alone can refuse them", p)
 		}
 	}
 	if got := serve.Requests(); !slices.Equal(got, asked) {
