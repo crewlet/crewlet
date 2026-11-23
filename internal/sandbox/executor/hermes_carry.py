@@ -11,14 +11,15 @@
 #                                                   STAGED's keys over it
 #   hermes_carry.py top DB                          the store's newest message id (0 for none), where a
 #                                                   launch's own rows begin
-#   hermes_carry.py route DB TITLE                  whether the box's model route (provider, base URL) is the
-#                                                   one Hermes froze with the session titled TITLE
+#   hermes_carry.py route DB TITLE MODEL            whether the box's model route (provider, base URL, model)
+#                                                   is the one Hermes froze with the session titled TITLE
 #
 # Run under Hermes's own interpreter through its launcher (`hermes --run-module cProfile -o /dev/null`),
 # which keeps no exit status, so every command ends on one line of its own on stdout: `crewlet-carry ok`
 # (with the restored session's stored id after a restore, the id after top), or `crewlet-carry none` where
-# the store holds no session of that title (or, for renew, no launch Hermes froze with it; for route, another
-# route). Anything else is a failure, its traceback on stderr.
+# the store holds no session of that title (or, for renew, no launch Hermes froze with it; for route, no
+# route), and route answers `crewlet-carry moved` for another route. Anything else is a failure, its traceback
+# on stderr.
 #
 # A dump is JSON lines: the store's schema ({"ddl", "kind"}, never the full-text index's own tables, which
 # its triggers fill again), the store's own bookkeeping rows whole, then the session's rows ({"t", "r"}),
@@ -197,27 +198,32 @@ def top(db_path):
     return "ok %d" % (db.execute("select coalesce(max(id), 0) from messages").fetchone()[0])
 
 
-def model_route(model):
-    """A model section's provider and base URL; a bare string names a model alone, as Hermes reads it."""
-    model = model if isinstance(model, dict) else {}
-    return model.get("provider") or "", (model.get("base_url") or "").rstrip("/")
-
-
-def route(db_path, title):
-    """Hermes keeps a session on the model route it froze as it created it, whatever the box's configuration
-    says at a resume (measured on 0.23.3: a resume under another provider and base URL still calls the frozen
-    one), so a continued session would keep a route its entry no longer names; a resume is right only on the
-    same route. The box's route is read as hermes_cli.config reads it under the box's own managed scope; the
-    run's overlay sets no model key."""
+def route(db_path, title, model):
+    """Hermes keeps a session on the model route it froze as it created it (its gateway_runtime: provider,
+    base URL and model), whatever the box's configuration says at a resume (measured on 0.23.3: a resume under
+    another provider and base URL still calls the frozen one), so a continued session would keep a route its
+    entry no longer names; a resume is right only on the route Hermes resolves for the box now
+    (hermes_cli.runtime_provider, as it resolved the frozen one; measured equal for a named provider and for one
+    found from a key), with the run's model, or else the configuration's. moved where they differ, none where
+    the store holds no frozen route of the session. The box's own managed scope is read; the run's overlay sets
+    no model key."""
     os.environ.pop("HERMES_MANAGED_DIR", None)
-    from hermes_cli.config import load_config
     db = sqlite3.connect("file:%s?mode=ro" % db_path, uri=True)
     ids = lineage(db, title)
-    row = db.execute("select value from state_meta where key = ?", (POLICY_KEY % ids[0],)).fetchone() if ids else None
-    if row is None:
+    row = db.execute("select model_config, model from sessions where id = ?", (ids[-1],)).fetchone() if ids else None
+    frozen = (json.loads(row[0] or "{}") or {}).get("gateway_runtime") if row else None
+    if not isinstance(frozen, dict) or not frozen.get("provider"):
         return "none"
-    frozen = json.loads(json.loads(row[0]).get("policy", {}).get("config_json") or "{}").get("model")
-    return "ok" if model_route(frozen) == model_route(load_config().get("model")) else "none"
+    from hermes_cli.config import load_config
+    from hermes_cli.runtime_provider import resolve_runtime_provider
+    now = resolve_runtime_provider()
+    if not model:
+        configured = load_config().get("model")
+        model = configured.get("default") if isinstance(configured, dict) else configured
+    same = (now.get("provider") == frozen.get("provider") and
+            (now.get("base_url") or "").rstrip("/") == (frozen.get("base_url") or "").rstrip("/") and
+            (not model or model == (frozen.get("model") or row[1])))
+    return "ok" if same else "moved"
 
 
 def merged(under, over):
@@ -266,12 +272,12 @@ def overlay(staged_path, managed_dir):
 
 
 COMMANDS = {"dump": (dump, 4), "renew": (renew, 3), "restore": (restore, 4), "overlay": (overlay, 2), "top": (top, 1),
-            "route": (route, 2)}
+            "route": (route, 3)}
 
 if __name__ == "__main__":
     command = COMMANDS.get(sys.argv[1] if len(sys.argv) > 1 else "")
     if command is None or len(sys.argv) != command[1] + 2:
         sys.stderr.write("usage: hermes_carry.py dump DB TITLE POLICY OUT | renew DB TITLE SYSTEM | "
-                         "restore MEMBER DB POLICY TITLE | overlay STAGED MANAGED | top DB | route DB TITLE\n")
+                         "restore MEMBER DB POLICY TITLE | overlay STAGED MANAGED | top DB | route DB TITLE MODEL\n")
         sys.exit(2)
     sys.stdout.write("crewlet-carry %s\n" % command[0](*sys.argv[2:]))
