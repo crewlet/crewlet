@@ -227,7 +227,8 @@ func hermesSessionGate(req sandbox.RunRequest, session Session, paths Paths, rew
 	line(`if [ -z "$w" ] && [ "$(cat %s-"$sid" 2> /dev/null)" != "$(printf '%%s%%s' %s "$PWD")" ]; then w='its launch (model, effort, round cap or working directory) is not the one Hermes froze with the session'; fi`,
 		q(paths.WorkDir()+"/hermes-policy"), q(hermesPolicy(req)))
 	// THE MODEL ROUTE HERMES FROZE, which a resume keeps whatever the box's
-	// configuration says (measured on 0.23.3), with no key frozen beside it.
+	// configuration says (measured on 0.23.3), so a continued session would
+	// keep a route its entry no longer names.
 	line(`if [ -z "$w" ] && [ "$(hcarry route %s "$sid")" != 'crewlet-carry ok' ]; then w='its model provider or base URL is not the one Hermes froze with the session'; fi`,
 		q(paths.HermesStateDB()))
 	// THE RUN'S OWN STANDING INSTRUCTIONS, in place of the ones Hermes froze
