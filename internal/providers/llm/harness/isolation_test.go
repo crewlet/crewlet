@@ -245,7 +245,7 @@ func TestEveryShippedProfileDeclaresItsLocalToolsStance(t *testing.T) {
 	}
 	for _, name := range []string{
 		"claude-code", "codex", "gemini-cli", "qwen-code", "opencode",
-		"cursor-agent", "copilot", "muse-code", "kimi-code", "hermes", "pi",
+		"cursor-agent", "copilot", "grok", "muse-code", "kimi-code", "hermes", "pi",
 	} {
 		p, _ := harnessprofile.Builtin(name)
 		if p.LocalTools != harnessprofile.LocalToolsDenied {
