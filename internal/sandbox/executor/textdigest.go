@@ -3,11 +3,15 @@ package executor
 import (
 	"bytes"
 	"crypto/sha256"
+	"errors"
 	"hash"
+	"io"
 	"slices"
+	"strconv"
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/crewlet/crewlet/internal/jsonscan"
 	"github.com/crewlet/crewlet/internal/redact"
 )
 
@@ -15,12 +19,17 @@ import (
 // scanner copies in one step and SHA-256 hashes in one call.
 const textDigestBytes = 32 << 10
 
+// textDigestHeadBytes is how much of a text's opening a digest keeps as
+// read ([textDigest.opens]): room for the longest opening a reading compares,
+// a harness's stub of a spilled output or its wrapper's opening tag.
+const textDigestHeadBytes = 32
+
 // textDigest is what a reading by content reads of a string it digests (the
 // export walk's [meansDigest]), which passes through it a piece at a time and
 // is never held: its decoded text's length, its SHA-256, the sum of each
 // opening the reading names ([newTextDigest]), whether it holds
-// [redact.Marker], and whether it is blank (white space alone, as
-// strings.TrimSpace reads it).
+// [redact.Marker], whether it is blank (white space alone, as
+// strings.TrimSpace reads it), and its first [textDigestHeadBytes] bytes.
 type textDigest struct {
 	h hash.Hash
 	// openings are the opening lengths a sum is kept at, ascending, and sums
@@ -36,6 +45,9 @@ type textDigest struct {
 	marker, blank bool
 	tail, edge    []byte
 	buf           []byte
+	// head is the text's opening, its first headN bytes read.
+	head  [textDigestHeadBytes]byte
+	headN int
 }
 
 // newTextDigest is a digest keeping the sums of openings.
@@ -49,12 +61,13 @@ func newTextDigest(openings []int) *textDigest {
 // reset starts a text.
 func (d *textDigest) reset() {
 	d.h.Reset()
-	d.n, d.next, d.marker, d.blank, d.tail = 0, 0, false, true, d.tail[:0]
+	d.n, d.next, d.marker, d.blank, d.tail, d.headN = 0, 0, false, true, d.tail[:0], 0
 	d.sum(nil)
 }
 
 // write reads the next piece of the text, whole characters.
 func (d *textDigest) write(p []byte) {
+	d.headN += copy(d.head[d.headN:], p)
 	d.blank = d.blank && blank(p)
 	if !d.marker {
 		// A MARKER ACROSS TWO PIECES is read off the edge between them: the
@@ -86,6 +99,34 @@ func (d *textDigest) sum(p []byte) {
 
 // end ends the text.
 func (d *textDigest) end() { d.h.Sum(d.whole[:0]) }
+
+// scan reads sc's current string into d, a piece at a time, from its start
+// to its end, holding none of it.
+func (d *textDigest) scan(sc *jsonscan.Scanner) error {
+	d.reset()
+	for {
+		n, err := sc.Read(d.buf)
+		d.write(d.buf[:n])
+		switch {
+		case errors.Is(err, io.EOF):
+			d.end()
+			return nil
+		case err != nil:
+			return err
+		}
+	}
+}
+
+// opens reports whether the text read opens with prefix, at most
+// [textDigestHeadBytes] long: a longer one is a reading's own mistake, which
+// no answer fits (false holds a stub, true passes a missing opening), so it
+// panics on the first case that compares it.
+func (d *textDigest) opens(prefix string) bool {
+	if len(prefix) > len(d.head) {
+		panic("executor: a text digest keeps no opening as long as " + strconv.Quote(prefix))
+	}
+	return d.headN >= len(prefix) && string(d.head[:len(prefix)]) == prefix
+}
 
 // blank reports whether p, whole characters, is white space alone, as
 // strings.TrimSpace reads it.
