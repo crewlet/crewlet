@@ -15,7 +15,14 @@
  * as "nothing points at it".
  */
 
-import { act, cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render as rtlRender,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { CredentialPeek, provenance, Secrets, sourceWords } from "./Secrets.tsx";
 import type { ReactElement } from "react";
@@ -96,7 +103,7 @@ function stubLoaded(extra: (path: string, init?: RequestInit) => Response | null
 /** Opens the removal confirmation for one row of the table. */
 async function openRemove(name: string) {
   fireEvent.click(await screen.findByRole("button", { name: `Remove ${name}` }));
-  return screen.findByRole("dialog", { name: `Remove ${name}` });
+  return screen.findByRole("alertdialog", { name: `Remove ${name}` });
 }
 
 function ok(payload: unknown): Response {
@@ -327,19 +334,21 @@ test("a name a reference cannot name is refused under the field before anything 
 // one refusing every delivery. Both readers of one name have to be on screen
 // before the operator can go through with it.
 test("a removal names every config field that points at the secret", async () => {
-  stubLoaded();
+  const spy = stubLoaded();
   render(<Secrets />);
-  await openRemove("GITHUB_TOKEN");
+  const dialog = await openRemove("GITHUB_TOKEN");
 
-  expect(screen.getByText("2 fields use it and will stop working:")).toBeDefined();
-  expect(screen.getByText("integrations.github.token")).toBeDefined();
-  expect(screen.getByText("roles[0].mcp_env.github.GITHUB_TOKEN")).toBeDefined();
-  expect(screen.getByText("Repoint them first.")).toBeDefined();
-  // AND IT IS GATED. A referenced credential does not go on one click.
-  const remove = screen.getByRole("button", { name: "Remove" });
-  expect((remove as HTMLButtonElement).disabled).toBe(true);
-  fireEvent.click(screen.getByRole("checkbox"));
-  expect((remove as HTMLButtonElement).disabled).toBe(false);
+  const group = screen.getByRole("group", { name: "2 fields use it" });
+  expect(group.textContent).toContain("integrations.github.token stops working");
+  expect(group.textContent).toContain("roles[0].mcp_env.github.GITHUB_TOKEN stops working");
+  expect(screen.getByText("Repoint them first to keep them working.")).toBeDefined();
+  // AND IT IS GATED. A referenced credential does not go on one click, nor on Enter.
+  const remove = within(dialog).getByRole("button", { name: "Remove" });
+  expect(remove.getAttribute("aria-disabled")).toBe("true");
+  fireEvent.submit(remove.closest("form")!);
+  expect(spy.mock.calls.some(([, init]) => init?.method === "DELETE")).toBe(false);
+  fireEvent.click(screen.getByRole("checkbox", { name: /Remove it anyway/ }));
+  expect(remove.getAttribute("aria-disabled")).not.toBe("true");
 });
 
 // A row nothing points at is an ordinary delete: no acknowledgement, and the
@@ -374,13 +383,18 @@ test("a reference check that failed is never shown as nothing pointing at it", a
     return ok({});
   });
   render(<Secrets />);
-  await openRemove("GITHUB_TOKEN");
+  const dialog = await openRemove("GITHUB_TOKEN");
 
   expect(screen.getByText("Couldn’t check whether anything uses it.")).toBeDefined();
   expect(screen.queryByText("Nothing uses it.")).toBeNull();
   // And it is gated exactly as a referenced row is: an unknown answer is not
   // a safe one.
-  expect((screen.getByRole("button", { name: "Remove" }) as HTMLButtonElement).disabled).toBe(true);
+  expect(
+    screen.getByRole("checkbox", { name: "Remove it without knowing what points at it" }),
+  ).toBeDefined();
+  expect(within(dialog).getByRole("button", { name: "Remove" }).getAttribute("aria-disabled")).toBe(
+    "true",
+  );
 });
 
 // A DEPLOYMENT BEFORE ITS FIRST IMPORT has no active document, so nothing can
@@ -399,8 +413,9 @@ test("no active configuration reads as nothing pointing at it, not as a failure"
   await openRemove("GITHUB_TOKEN");
 
   expect(screen.getByText("Nothing uses it.")).toBeDefined();
-  expect((screen.getByRole("button", { name: "Remove" }) as HTMLButtonElement).disabled).toBe(
-    false,
+  expect(screen.queryByRole("checkbox")).toBeNull();
+  expect(screen.getByRole("button", { name: "Remove" }).getAttribute("aria-disabled")).not.toBe(
+    "true",
   );
 });
 

@@ -8026,10 +8026,10 @@ One MCP server, whole, for its page under **Settings › MCP & tools**. Decided 
   - `level` is the level the tool runs at, decided by the server's entry by `raw` (`tools.levels`, else `tools.default`, else the level its hints start it at): `allow`, `approve` (offered, each call held for a person's answer) or `blocked` (listed here, offered to no agent; [Tools and MCP › Setting each tool's level](../guides/tools-and-mcp.md#setting-each-tools-level)). For a server the configuration does not declare, `level` says what the nodes did. `custom` is whether `tools.levels` names it.
   - `held` is a tool its level would run unasked whose definition changed since that level was decided, or that the server added after its first listing: its `level` answers `approve`, and each call asks a person until somebody accepts the change (`changes`).
   - `removed` is a tool the server no longer lists, kept, named by the definition accepted for it, with no instances or nodes, until somebody accepts that it went.
-- `baseline` is the level of every tool `tools.levels` does not name: the entry's `tools.default`, or `null` where it sets none, leaving each at the level its hints start it at (`allow` where `risk` is `read_only`, else `approve`). `unlisted_levels` are the tools `tools.levels` names that no live node lists, sorted: a level that decides nothing, most often a name written with the `tool_prefix` or spelled otherwise than the server spells it. Empty where the listings cannot say (no live node lists the server).
+- `baseline` is the level of every tool `tools.levels` does not name: the entry's `tools.default`, or `null` where it sets none, leaving each at the level its hints start it at (`allow` where `risk` is `read_only`, else `approve`). `auto_accept_changes` is the entry's `tools.auto_accept_changes`: each change is accepted as it is listed rather than held for review ([Tools and MCP › Accepting a server's changes automatically](../guides/tools-and-mcp.md#accepting-a-servers-changes-automatically)); `false` for a server the configuration does not declare. `unlisted_levels` are the tools `tools.levels` names that no live node lists, sorted: a level that decides nothing, most often a name written with the `tool_prefix` or spelled otherwise than the server spells it. Empty where the listings cannot say (no live node lists the server).
 - `changes` is every change the server made to its tools since their levels were decided ([Tools and MCP › When a server changes a tool](../guides/tools-and-mcp.md#when-a-server-changes-a-tool)), by `tool` (the server's own name), then by definition: one per tool listed under a definition nobody accepted (two nodes listing two such definitions make two changes), and one per accepted tool no live node lists, judged only where every live listing is whole. Empty for a server whose first listing is not accepted yet. The administrator's reading only.
   - `kinds` is `added` or `removed` alone, or the parts that moved: `title`, `description`, `schema`, `annotations`.
-  - `before` is the definition accepted (`null` for an added tool), `after` the one listed now (`null` for a removed tool), each `{digest, whole, title, hints_title, description, annotations, risk, risk_declared, external, input_schema, output_schema}` read off the declared hints; `before` adds `accepted_by` (`null` for the server's first listing), `accepted_at` and `first_listing`; `after` adds `instances`.
+  - `before` is the definition accepted (`null` for an added tool), `after` the one listed now (`null` for a removed tool), each `{digest, whole, title, hints_title, description, annotations, risk, risk_declared, external, input_schema, output_schema}` read off the declared hints; `before` adds `accepted_by` (`null` for the server's first listing), `accepted_at`, `first_listing` and `auto_accepted` (accepted as listed under `tools.auto_accept_changes`, `accepted_by` naming the node); `after` adds `instances`.
   - `whole` is a definition read from the record the fleet keeps under its digest, words and schemas whole: `title` is the tool's own title, `hints_title` the one its hints carry. Where `whole` is `false` the fleet keeps no record, `title` and `description` are the words a listing keeps (a description's first KiB) and `hints_title` is `""`.
   - `unshown` names each part in `kinds` the answer cannot show: a part either side has no record for, or whose two sides read alike (say it changed and is not shown, never that nothing changed). Always a list.
   - `loosened` is a change whose hints claim less risk than the accepted ones; `held` whether it holds the tool at Needs approval now; `seen_at` when the fleet first stored the definition listed now (`null` for a removal, or a definition with no record).
@@ -8406,8 +8406,14 @@ to every agent the server reaches, `blocked` never offers it
 
 ```json
 {"default": "blocked", "levels": {"search_issues": "allow", "get_issue": "allow", "merge_pull_request": "approve", "delete_repository": null},
+ "auto_accept_changes": false,
  "_summary": "github: block every tool but the two reads"}
 ```
+- `auto_accept_changes` sets `tools.auto_accept_changes`: `true` accepts each
+  change the server makes to its tools as it is listed, audited as accepted
+  automatically, rather than holding it for review
+  ([Tools and MCP › Accepting a server's changes automatically](../guides/tools-and-mcp.md#accepting-a-servers-changes-automatically)).
+  Left out, it stays as it is. A body may set it alone.
 - `levels` names each tool by the server's own name (`raw` on
   [`GET /mcp-servers/{name}`](#get-mcp-serversname)), never with the
   `tool_prefix`. A tool left out keeps its level; `null` removes a tool's own
@@ -8442,12 +8448,13 @@ does not declare.
   "server": "github", "dry_run": false,
   "default": "blocked",
   "levels": {"get_issue": "allow", "search_issues": "allow"},
+  "auto_accept_changes": false,
   "unlisted": ["get_issue"], "listing": "read",
   "revision_id": "rev-0193", "epoch": 15, "warnings": [], "derived": {}
 }
 ```
 - `default` is `tools.default` as written, `null` where unset; `levels` every
-  tool's own level now.
+  tool's own level now; `auto_accept_changes` the setting as written.
 - `unlisted` are the tools `levels` names that no live node's listing of the
   server names, as `unlisted_levels` on the detail: **kept**, since a server may
   list the tool later, and **said**, since a level that decides nothing is most
@@ -8501,7 +8508,17 @@ server. A body may name a decision for each of the most tools one server lists
 somebody else decided between this node's read and its write, for which
 nothing was written; `revision` the configuration's answer to the block, `null`
 where nothing was blocked. Every call is one `mcp_server_acted` with the action
-`review_changes`, naming the tools accepted and kept blocked.
+`review_changes`, naming the tools accepted and kept blocked. Accepting every
+change at once is one body naming each by its digest: each is recorded as it
+would be alone, and the one audit record names them all.
+
+A server whose entry sets `tools.auto_accept_changes` has its changes accepted
+by the node that lists them, each record marked `auto_accepted`; the node
+audits them as its own `mcp_server_acted` (actor kind `system`), action
+`auto_accept_changes`, naming the tools in `accepted` and, in `changes`, what
+each moved: `{tool, kind, parts, loosened, before, after}`, each definition
+`{digest, title, description, read_only, destructive, idempotent, open_world}`
+as a listing keeps it.
 
 Decisions are written one by one, so where the store fails one the answer is
 `503 unavailable` naming what was and was not decided, beside the detail:

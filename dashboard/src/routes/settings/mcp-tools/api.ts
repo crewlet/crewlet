@@ -283,6 +283,8 @@ export async function storeValue(
 export interface LevelsChange {
   default?: McpToolLevel | null;
   levels?: Readonly<Record<string, McpToolLevel | null>>;
+  /** `tools.auto_accept_changes`; left out, it stays. */
+  auto_accept_changes?: boolean;
 }
 
 /**

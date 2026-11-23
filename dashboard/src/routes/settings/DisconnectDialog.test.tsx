@@ -67,6 +67,20 @@ test("ticking the box asks for the accounts too", async () => {
   expect(sent[0]!.body).toEqual({ remove_seats: true, force: false });
 });
 
+// WHAT DISCONNECTING DOES is one group: the one destructive choice, and what
+// stays whichever way it is answered.
+test("the accounts choice and what stays are said under When you disconnect", () => {
+  render(
+    <DisconnectDialog name="GitHub" kinds={["github"]} onClose={() => {}} onDone={() => {}} />,
+  );
+  const group = screen.getByRole("group", { name: "When you disconnect" });
+  const box = screen.getByRole("checkbox", { name: "Also remove the accounts Crewlet created" });
+  expect(group.contains(box)).toBe(true);
+  expect((box as HTMLInputElement).checked).toBe(false);
+  expect(group.textContent).toContain("What they wrote stays.");
+  expect(group.textContent).toContain("keeps what it was given");
+});
+
 // FORCE IS NOT OFFERED UP FRONT. It leaves the third-party app holding things
 // nobody will remove, so it appears only once a teardown has actually failed —
 // otherwise it is just the easier button beside the correct one.
