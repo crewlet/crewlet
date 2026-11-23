@@ -11,6 +11,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // A call its harness sends again (the package doc's "A call longer than its
@@ -172,6 +173,144 @@ func TestADuplicateWhoseFirstRequestStillWaitsIsACallOfItsOwn(t *testing.T) {
 			t.Errorf("a call was answered %v %q, want its own answer", res.IsError, text(res))
 		}
 	}
+	if rows := g.ledger.rows(); len(rows) != 2 {
+		t.Errorf("the calls are recorded %+v, want both", rows)
+	}
+}
+
+// shortCeiling is a ceiling whose park clock runs one second
+// ([toolloop.ParkBefore]), for a case over real connections, which no bubble
+// can hold.
+const shortCeiling = 6 * time.Second
+
+// A CALL SENT AGAIN AFTER ITS PARK WENT TO A DROPPED POST JOINS IT. The park's
+// answer (end your turn, you will be resumed) written onto a POST the box had
+// dropped is never read, and Kimi Code sends the call again: run again, its
+// tool takes effect twice while the job is parked on the first. So it joins
+// the first and is answered with that park, and the tool runs once, recorded
+// once, as the park's to tell.
+//
+// Mutation: join only a call whose answer is undecided (resentLocked without
+// parkUnread), and the tool runs a second time.
+func TestACallSentAgainAfterItsParkWentToADroppedPostJoinsIt(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	held := newHeldTool("write")
+	parking, release := make(chan struct{}, 1), make(chan struct{})
+	g := newGatedWith(t, nil, func(s *mcpbridge.Session) {
+		s.CallCeiling = shortCeiling
+		s.Park = func(context.Context, sandbox.CallWait) (sandbox.AskOutcome, error) {
+			parking <- struct{}{}
+			<-release
+			return sandbox.AskRecorded, nil
+		}
+	}, held)
+	t.Cleanup(held.free)
+	releasePark := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(releasePark)
+	joined := make(chan struct{}, 1)
+	mcpbridge.OnJoin(g.bridge, func() { joined <- struct{}{} })
+	args := map[string]any{"value": "hold"}
+
+	lost := &severable{}
+	callBare(ctx, dialOver(t, g.url, lost.client()), "write", args)
+	select {
+	case <-held.entered:
+	case <-ctx.Done():
+		t.Fatal("the call never reached its tool")
+	}
+	// PARKED, ITS ANSWER NOT YET WRITTEN, AS THE BOX DROPS ITS POST: the park's
+	// answer goes to a request nobody reads.
+	select {
+	case <-parking:
+	case <-ctx.Done():
+		t.Fatal("the call was never parked")
+	}
+	lost.sever()
+	mcpbridge.AwaitRequestsLost(g.session)
+	releasePark()
+
+	again := callBare(ctx, dialOver(t, g.url, (&severable{}).client()), "write", args)
+	select {
+	case <-joined:
+	case <-held.entered:
+		t.Fatal("the call sent again ran its tool a second time")
+	case <-ctx.Done():
+		t.Fatal("the call sent again neither joined nor ran")
+	}
+	select {
+	case res := <-again:
+		if res.IsError || text(res) != mcpbridge.ParkedNote {
+			t.Fatalf("the call sent again was answered %v %q, want the park's, %q", res.IsError, text(res),
+				mcpbridge.ParkedNote)
+		}
+	case <-ctx.Done():
+		t.Fatal("the call sent again was never answered")
+	}
+	held.free()
+	g.bridge.Close("run-1")
+	g.bridge.AwaitCalls(ctx)
+	select {
+	case <-held.entered:
+		t.Fatal("the call sent again ran its tool a second time")
+	default:
+	}
+	if rows := g.ledger.rows(); len(rows) != 1 || rows[0].Output != "write done" || !rows[0].Abandoned {
+		t.Errorf("the call is recorded %+v, want once, as the park's, one nobody waited for", rows)
+	}
+}
+
+// A CALL SENT AGAIN ONCE THE BOX READ ITS PARK IS A CALL OF ITS OWN. A box
+// told the call still runs knows it, so the same call made again is the run's
+// on purpose: it runs its tool, and each is recorded.
+//
+// Mutation: join a parked call whatever request it went out on (parkUnread
+// reading c.request.gone(), which the answer's own write ends), and the call
+// joins.
+func TestACallSentAgainOnceTheBoxReadItsParkIsACallOfItsOwn(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	held := newHeldTool("write")
+	g := newGatedWith(t, nil, func(s *mcpbridge.Session) {
+		s.CallCeiling = shortCeiling
+		s.Park = func(context.Context, sandbox.CallWait) (sandbox.AskOutcome, error) {
+			return sandbox.AskRecorded, nil
+		}
+	}, held)
+	t.Cleanup(held.free)
+	joined := make(chan struct{}, 1)
+	mcpbridge.OnJoin(g.bridge, func() { joined <- struct{}{} })
+	args := map[string]any{"value": "hold"}
+
+	box := dialOver(t, g.url, (&severable{}).client())
+	first := callBare(ctx, box, "write", args)
+	select {
+	case <-held.entered:
+	case <-ctx.Done():
+		t.Fatal("the call never reached its tool")
+	}
+	select {
+	case res := <-first:
+		if res.IsError || text(res) != mcpbridge.ParkedNote {
+			t.Fatalf("the call was answered %v %q, want the park's", res.IsError, text(res))
+		}
+	case <-ctx.Done():
+		t.Fatal("the call was never parked")
+	}
+
+	callBare(ctx, box, "write", args)
+	select {
+	case <-held.entered:
+	case <-joined:
+		t.Fatal("the call made again joined the one whose park the box read")
+	case <-ctx.Done():
+		t.Fatal("the call made again neither ran nor joined")
+	}
+	held.free()
+	g.bridge.Close("run-1")
+	g.bridge.AwaitCalls(ctx)
 	if rows := g.ledger.rows(); len(rows) != 2 {
 		t.Errorf("the calls are recorded %+v, want both", rows)
 	}
