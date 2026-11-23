@@ -421,6 +421,9 @@ func (Copilot) VersionCommand() string { return "copilot --version" }
 // layout is a Copilot archive's: a gzipped tar of the session's files.
 func (Copilot) layout() archiveLayout { return archiveTar }
 
+// meters is false: its meter counts nothing ([carrier.meters]).
+func (Copilot) meters(string, string) bool { return false }
+
 // Continues reports whether a session written by Copilot release writer can be
 // continued in a box whose Copilot is release box ([carrier]): only where both
 // are [copilotFloor], the one release supported. Any other pair, a release

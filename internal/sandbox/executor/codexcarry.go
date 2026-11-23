@@ -58,6 +58,10 @@ func (Codex) VersionCommand() string { return "codex --version" }
 // ([codexArchiveFormat]).
 func (Codex) layout() archiveLayout { return archiveTar }
 
+// meters reports whether member is the rollout the meter counts
+// ([carrier.meters], [codexArchiveRollout]).
+func (Codex) meters(_, member string) bool { return codexIsMember(member) }
+
 // Continues reports whether a session written by Codex release writer can be
 // continued in a box whose Codex is release box ([carrier]): only where the
 // box continues any session ([Codex.continuesInPlace]) and the writer is as
