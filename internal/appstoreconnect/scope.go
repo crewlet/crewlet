@@ -158,10 +158,10 @@ const searchPages = 20
 // errElsewhere is a resource its team does not hold: another team may.
 var errElsewhere = errors.New("appstoreconnect: the team does not hold the resource")
 
-// placer places owned resources through one team's readers, never the Admin key.
+// placer places owned resources with the calling agent's own key.
 type placer struct {
 	owners *owners
-	t      *team
+	key    agentKey
 }
 
 // appOf is the app owned resource typ/id is in, [teamOwned] for one in no
@@ -208,12 +208,11 @@ func (pl placer) appOf(ctx context.Context, typ, id string, apps []string) (stri
 // up reads typ/id's first non-empty to-one link toward its app.
 func (pl placer) up(ctx context.Context, link upLink, typ, id string) (*resourceRef, error) {
 	path := strings.Replace(link.path, "{id}", url.PathEscape(id), 1)
-	slot, ok := readerOf(pl.t, path)
-	if !ok {
-		return nil, fmt.Errorf("%w: placing %s %s", ErrNoKey, typ, id)
+	if !mayRead(pl.key.role, path) {
+		return nil, fmt.Errorf("%w: placing %s %s", ErrRole, typ, id)
 	}
 	rels := strings.Join(link.rels, ",")
-	resp, err := pl.t.client.Do(ctx, slot, Request{Method: "GET", Path: path, Read: true, Reserved: true,
+	resp, err := pl.key.client.Do(ctx, ownSlot, Request{Method: "GET", Path: path, Read: true, Reserved: true,
 		Query: url.Values{"include": {rels}, "fields[" + typ + "]": {rels}}})
 	var apiErr *APIError
 	if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
@@ -273,9 +272,8 @@ func (pl placer) search(ctx context.Context, typ, id string, apps []string) (str
 // children are the resources hop reads below parent: one, or a list paged.
 func (pl placer) children(ctx context.Context, h hop, parent string) ([]resourceRef, error) {
 	path := strings.Replace(h.path, "{id}", url.PathEscape(parent), 1)
-	slot, ok := readerOf(pl.t, path)
-	if !ok {
-		return nil, fmt.Errorf("%w: reading %s", ErrNoKey, path)
+	if !mayRead(pl.key.role, path) {
+		return nil, fmt.Errorf("%w: reading %s", ErrRole, path)
 	}
 	var out []resourceRef
 	cursor := ""
@@ -287,7 +285,7 @@ func (pl placer) children(ctx context.Context, h hop, parent string) ([]resource
 		if cursor != "" {
 			q.Set("cursor", cursor)
 		}
-		resp, err := pl.t.client.Do(ctx, slot, Request{Method: "GET", Path: path, Query: q, Read: true, Reserved: true})
+		resp, err := pl.key.client.Do(ctx, ownSlot, Request{Method: "GET", Path: path, Query: q, Read: true, Reserved: true})
 		var apiErr *APIError
 		if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
 			return out, nil
@@ -313,38 +311,21 @@ func (pl placer) children(ctx context.Context, h hop, parent string) ([]resource
 	return out, nil
 }
 
-// placeOwned is the app among the seat's that owned resource typ/id is in,
-// and its team: [teamOwned] for one in no app, a refusal for one elsewhere.
-func (p *Product) placeOwned(ctx context.Context, seat *config.RoleAppStoreConnect, typ, id string) (string, *team,
+// placeOwned is the app among the seat's that owned resource typ/id is in:
+// [teamOwned] for one in no app, a refusal for one elsewhere.
+func (p *Product) placeOwned(ctx context.Context, seat *config.RoleAppStoreConnect, m *made, typ, id string) (string,
 	error) {
-	byTeam := map[*team][]string{}
-	var order []*team
-	for _, app := range seat.Apps {
-		t, err := p.teamOf(ctx, app)
-		if err != nil {
-			continue
-		}
-		if _, seen := byTeam[t]; !seen {
-			order = append(order, t)
-		}
-		byTeam[t] = append(byTeam[t], app)
+	app, err := placer{owners: p.owners, key: m.key}.appOf(ctx, typ, id, seat.Apps)
+	switch {
+	case errors.Is(err, ErrRole):
+		return "", growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("this agent's key holds the %s role, which "+
+			"may not read %s %s to find its app. No call was made.", roleName(m.key.role), typ, id))
+	case err != nil && !errors.Is(err, errElsewhere):
+		return "", said(err)
+	case err == nil && (app == teamOwned || slices.Contains(seat.Apps, app)):
+		return app, nil
 	}
-	for _, t := range order {
-		app, err := placer{owners: p.owners, t: t}.appOf(ctx, typ, id, byTeam[t])
-		switch {
-		case errors.Is(err, errElsewhere):
-			continue
-		case errors.Is(err, ErrNoKey):
-			return "", nil, growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("no connected key but Admin may "+
-				"read %s %s to find its app, and Crewlet never reads with the Admin key. No call was made.", typ, id))
-		case err != nil:
-			return "", nil, said(err)
-		case app != teamOwned && !slices.Contains(seat.Apps, app):
-			continue
-		}
-		return app, t, nil
-	}
-	return "", nil, growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("%s %s is in none of this agent's apps (%s), "+
+	return "", growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("%s %s is in none of this agent's apps (%s), "+
 		"as far as the engine can find: read it through its app's list first. No call was made.", typ, id,
 		words.And(seat.Apps)))
 }
@@ -434,9 +415,9 @@ func namesOwned(body []byte) bool {
 	return false
 }
 
-// covers reports whether the seat's apps are every app t reaches.
-func (p *Product) covers(ctx context.Context, seat *config.RoleAppStoreConnect, t *team) (bool, error) {
-	apps, err := p.appsOf(ctx, t)
+// covers reports whether the seat's apps are every app of m's team.
+func (p *Product) covers(ctx context.Context, seat *config.RoleAppStoreConnect, m made) (bool, error) {
+	apps, err := p.appsOf(ctx, m.team, m.key.client)
 	if err != nil {
 		return false, err
 	}

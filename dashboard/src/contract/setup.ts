@@ -3,6 +3,8 @@
  * `internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends`.
  */
 
+import type { VendorTextPart } from "./vendortext.ts";
+
 /** What sort of value a requirement holds (`setup.Kinds`); a toggle is a JSON boolean. */
 export type SetupRequirementKind =
   | "secret"
@@ -16,10 +18,9 @@ export type SetupRequirementKind =
   | "add_identity"
   | "consent";
 
-/** One step at the app: `{link}` in `text` is the vendor link of the field `link` names. */
+/** One step at the app, its vendor UI names marked and its page linked. */
 export interface SetupStep {
-  text: string;
-  link?: string;
+  text: VendorTextPart[];
   /** Permissions, roles or scopes to grant there, in the app's own words. */
   grants?: string[];
   /** The field the step produces a value for. */
@@ -36,33 +37,11 @@ export interface SetupCaution {
 interface SetupIdentityStep {
   email: string;
   role: { id: string; name: string };
-  where: { url: string; words: string };
+  where: VendorTextPart[];
   level: "company" | "seat";
   seat?: string;
   /** Whether the engine saw the identity hold the role. */
   state: "present" | "missing" | "unknown";
-}
-
-/**
- * A list the form builds an entry at a time, at least `min` entries, each
- * answering every field of its entry (App Store Connect's keys by role).
- * Every member requirement carries it, with its own `entry`.
- */
-export interface SetupSet {
-  id: string;
-  /** Heads the list ("API keys"). */
-  label: string;
-  /** One entry in a sentence ("key"). */
-  item: string;
-  /** The line under the label, on the form and in Have ready: what an entry holds, how many. */
-  hint: string;
-  /** The control that adds an entry ("Add a key"). */
-  add: string;
-  /** Labels the choice of which entry to add ("Role"). */
-  pick: string;
-  min: number;
-  /** This requirement's entry: its value, how it is picked, what it unlocks. */
-  entry: { value: string; label: string; hint?: string };
 }
 
 /** One input an integration needs; every word the form draws comes from here. */
@@ -79,8 +58,6 @@ export interface SetupRequirement {
   connect?: boolean;
   /** One value across every surface of the tool, asked once (Atlassian's account). */
   shared?: boolean;
-  /** The words `{link}` stands for in `hint`, `more` or a step naming this field. */
-  link_text?: string;
   /** A suggestion the form offers where the company has no value, never stored by itself. */
   default?: string;
   /** What a non-credential `${VAR}` here reads as, for the links built from it. */
@@ -98,12 +75,10 @@ export interface SetupRequirement {
   identity?: SetupIdentityStep;
   /** Written from its default without being asked. */
   hidden?: boolean;
-  /** The one line under the field, under fifteen words. */
-  hint?: string;
+  /** The one line under the field, under fifteen words; a link waits for each `{field}` in its address. */
+  hint?: VendorTextPart[];
   /** What a person may want once about the field, behind its disclosure. */
-  more?: string;
-  /** The app's page for this value; no link until each `{field}` in it has a value. */
-  vendor_url?: string;
+  more?: VendorTextPart[];
   choices?: { value: string; label: string; hint?: string }[];
   format?: string;
   /** The one form a value has to take at the app; absent is a token. */
@@ -112,8 +87,6 @@ export interface SetupRequirement {
   multiline?: boolean;
   /** The file types such a value comes in, for a file picker. */
   accept?: string;
-  /** The set this is one entry's field of; required once the entry is added. */
-  set?: SetupSet;
   /** The reconcile finding this input clears; the server's join, not read here. */
   blocks?: string;
   /** What the document holds here, for everything that is not a credential. */
@@ -277,27 +250,6 @@ export interface SetupVerdict {
   summary: string;
   facts?: SetupVerdictFact[];
   warnings?: SetupVerdictWarning[];
-}
-
-/** One app's outcome of turning App Store analytics on. */
-type SetupAppStoreAnalyticsState = "on" | "already_on" | "failed";
-
-/** One app's line of the turn-on's answer: `detail` is why it failed, in Apple's redacted words. */
-export interface SetupAppStoreAnalyticsApp {
-  app: string;
-  state: SetupAppStoreAnalyticsState;
-  detail?: string;
-}
-
-/**
- * What `POST /setup/integrations/app_store_connect/analytics` answers: each
- * app's outcome, and what to do with the pasted Admin key, which no answer
- * repeats.
- */
-export interface SetupAppStoreAnalyticsAnswer {
-  connection: string;
-  apps: SetupAppStoreAnalyticsApp[];
-  revoke: string;
 }
 
 /** A consent sign-in (`POST /setup/integrations/{kind}/consent`, `GET /setup/consent-sign-ins/{id}`). */

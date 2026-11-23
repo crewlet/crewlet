@@ -431,7 +431,9 @@ export function UserBlock({
         // reach the whole line without opening the menu.
         title={menu ? (via ? `Signed in ${via}. ${MENU_TITLE}` : MENU_TITLE) : undefined}
         linkSuffix=", your menu"
-        build={version ? `Crewlet ${version}` : undefined}
+        // THE LINE HOLDS ITS ROOM before the first health push names the
+        // version, so the foot does not grow when it lands.
+        build={version ? `Crewlet ${version}` : "Crewlet"}
         // FOLDED, THE FACE STANDS ALONE: the places are tiles above it and
         // Preferences is in its menu.
         actions={

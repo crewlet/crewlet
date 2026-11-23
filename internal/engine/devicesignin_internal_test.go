@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/seat/placement"
@@ -329,5 +330,104 @@ func TestADeviceSignInsEndIsAudited(t *testing.T) {
 	if len(ends) != 2 || ends[1].Status != "failed" || ends[1].Outcome != types.AuditFailed ||
 		ends[1].ProviderKey != "other" {
 		t.Errorf("the orphan's end is audited as %+v", ends)
+	}
+}
+
+// A REMOVED MODEL'S SIGN-IN GOES WITH IT. The apply that removes the model ends
+// the session this node runs, which deletes its own record, and deletes the
+// record of a session already over; another live node's session is that
+// node's to end. Only the fleet's current company does any of it.
+//
+// Mutation: drop the sweep from the apply, or let the session update its
+// record rather than delete it, and this fails.
+func TestARemovedModelsSignInGoesWithIt(t *testing.T) {
+	t.Parallel()
+	fleet, leases := coordmemory.NewFleet(), coordmemory.New()
+	login := &fakeDeviceLogin{finish: make(chan error)}
+	one := signInNode(t, fleet, leases, "node-1", login)
+	current, err := fleet.Activate(t.Context(), coord.ActivationRequest{RevisionID: "rev-1",
+		Payload: []byte("{}"), At: time.Now(), Origin: coord.RevisionOrigin{Author: "maya",
+			AuthorKind: iam.ActorHuman, Source: "api", CreatedAt: time.Now()}})
+	if err != nil {
+		t.Fatalf("Activate: %v", err)
+	}
+	started, err := one.StartDeviceSignIn(t.Context(), "codex-review", person)
+	if err != nil {
+		t.Fatalf("StartDeviceSignIn: %v", err)
+	}
+	if _, _, err := leases.TryAcquire(t.Context(), coord.NodeResource("node-2"), coord.AcquireOptions{
+		Owner: "node-2:boot-1", TTL: time.Minute, Meta: placement.NodeProfile{ID: "node-2"}.Meta()}); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []coord.DeviceSignIn{
+		{ID: uuid.New(), Entry: "ended", Node: "node-1", Status: coord.DeviceExpired},
+		{ID: uuid.New(), Entry: "elsewhere", Node: "node-2", Status: coord.DevicePending},
+	} {
+		s.StartedAt, s.ExpiresAt, s.By, s.ByKind = time.Now(), time.Now().Add(15*time.Minute), person.Name, person.Kind
+		if _, _, err := fleet.CreateDeviceSignIn(t.Context(), s); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	next, _ := chainCompany(t, chainMember{key: "plan", agent: "claude-code", model: "opus"})
+	one.clearRemovedDeviceSignIns(t.Context(), next)
+	if all, _ := fleet.ListDeviceSignIns(t.Context()); len(all) != 3 {
+		t.Fatalf("a company no activation named cleared sign-ins: %+v", all)
+	}
+	next.ActivatedAt = current.At
+	session := runningSession(one, "codex-review")
+	one.clearRemovedDeviceSignIns(t.Context(), next)
+	sessionEnded(t, session)
+	if all, err := fleet.ListDeviceSignIns(t.Context()); err != nil || len(all) != 1 || all[0].Entry != "elsewhere" {
+		t.Fatalf("sign-ins kept %+v (%v), want node-2's alone", all, err)
+	}
+	if _, err := one.DeviceSignIn(t.Context(), started.ID); !errors.Is(err, ErrNoSuchSignIn) {
+		t.Errorf("the removed model's session reads %v, want no such sign-in", err)
+	}
+}
+
+// A LOGIN APPROVED AFTER ITS MODEL WAS REMOVED IS NOT STORED: nothing would
+// read it, and the session deletes its record rather than say it approved.
+//
+// Mutation: seal without asking whether the model is still configured, and
+// the session reads approved.
+func TestALoginApprovedAfterItsModelWasRemovedIsNotStored(t *testing.T) {
+	t.Parallel()
+	fleet, leases := coordmemory.NewFleet(), coordmemory.New()
+	login := &fakeDeviceLogin{finish: make(chan error, 1)}
+	one := signInNode(t, fleet, leases, "node-1", login)
+	if _, err := one.StartDeviceSignIn(t.Context(), "codex-review", person); err != nil {
+		t.Fatalf("StartDeviceSignIn: %v", err)
+	}
+	next, _ := chainCompany(t, chainMember{key: "plan", agent: "claude-code", model: "opus"})
+	one.epoch.current.Store(next)
+	session := runningSession(one, "codex-review")
+	login.finish <- nil
+	sessionEnded(t, session)
+	if held, found, err := fleet.DeviceSignIn(t.Context(), "codex-review"); err != nil || found {
+		t.Fatalf("the session's record reads %+v (%v), want it deleted", held, err)
+	}
+	if rows, err := fleet.SecretValues(t.Context()); err != nil || len(rows) != 0 {
+		t.Errorf("the store holds %d values (%v), want nothing sealed", len(rows), err)
+	}
+}
+
+// runningSession is the session node e runs for entry.
+func runningSession(e *Engine, entry string) *deviceSession {
+	e.signIns.mu.Lock()
+	defer e.signIns.mu.Unlock()
+	return e.signIns.running[entry]
+}
+
+// sessionEnded waits for the session's last write.
+func sessionEnded(t *testing.T, s *deviceSession) {
+	t.Helper()
+	if s == nil {
+		t.Fatal("the node runs no such session")
+	}
+	select {
+	case <-s.done:
+	case <-t.Context().Done():
+		t.Fatal("the session never ended")
 	}
 }

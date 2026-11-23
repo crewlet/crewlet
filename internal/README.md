@@ -105,7 +105,7 @@
 | `growth` | The marketing and growth integrations' vocabulary: the six classes, seat levels, each product's catalog of every vendor operation, money in micros, account-local days, report answers and the metrics (ADR-0170, ADR-0171). |
 | `spendguard` | Holds an ad product's spend to the company's per-account caps at the ask and again at the apply, under one lease per account; micros only, and `spendguardtest` is the one contract every capacity runs. |
 | `metaads` | Meta Ads as a growth product: every Marketing API operation an ads integration reaches, classed in its catalog, called as one system user of the company's own app through the least privileged token, scoped to the seat's ad accounts, spend held to the caps (ADR-0170, ADR-0171). |
-| `appstoreconnect` | App Store Connect as a growth product: every operation of Apple's API classed in its catalog, each call signed for itself with the least-privileged team key, scoped to the seat's apps, public and admin acts held (ADR-0170, ADR-0171). |
+| `appstoreconnect` | App Store Connect as a growth product: every operation of Apple's API classed in its catalog, each call signed for itself with the agent's own team key, scoped to its apps, public and admin acts held (ADR-0171, ADR-0179). |
 | `appleads` | Apple Ads as a growth product: every Platform API operation classed in its catalog, called as the company's API users with roles read live per ad account, scoped to the seat's ad accounts, spend held to the caps (ADR-0170, ADR-0171). |
 | `es256` | Signs a JWT with ES256 (ECDSA P-256 over SHA-256) on the standard library alone, as Apple's APIs take it. |
 | `worklet` | Worklet, the engine's own work tracker and `statelog`'s first domain: its records, subjects, writer, applier, reads and the routing of who hears about a change. |
@@ -257,6 +257,7 @@
 | `api/datasetsapi` | A dashboard artifact's datasets, answered as their viewer, plus the engine source catalogue |
 | `artifactspike` | Test-only: the artifacts capacity spikes as reproducible benchmarks over the shipped components; they gate nothing and run alone |
 | `setup` | What an integration needs before it works, in one vocabulary every vendor and the dashboard share: requirements, the secret-then-pointer-then-epoch write order, vendor passes and credential checks |
+| `vendortext` | The one form of the words a person follows at a vendor: plain words, the vendor's own UI names and menu paths, and each page linked on the words that name it. |
 | `jsprovision` | The one place that decides how long a replicated JetStream create gets, how a forming cluster is re-asked, and how metadata reads are hedged; shared by `queue/jetstream` and `coord/kv`. |
 | `jsinflight` | Waits out a conditional JetStream publish refused as in flight (10164), which decides nothing, so it is never read as a lost compare-and-set race (10071). |
 | `jsapi` | Which JetStream API a connection speaks (embedded fleet domain vs external cluster), decided once; leader reads, hedged listings, pulls and write budgets for the JetStream clients. |

@@ -282,10 +282,6 @@ type Options struct {
 	// SSH is the engine's half of Test connection and the SSH audit.
 	SSH SSHAccess
 
-	// AppStoreAnalytics turns App Store analytics on with an Admin key pasted
-	// once; nil on a node that reaches no App Store Connect, which answers 503.
-	AppStoreAnalytics AppStoreAnalytics
-
 	// Access is the engine's per-seat access: each seat's setting, account and
 	// last sync on every integration managing one account per agent, the plan
 	// a draft would take, and the sync a save starts ([Access]).
@@ -317,11 +313,9 @@ type Service struct {
 	// sshTests is [Options.SSHTests].
 	sshTests SSHTests
 	// ssh is [Options.SSH].
-	ssh SSHAccess
-	// analytics is [Options.AppStoreAnalytics].
-	analytics AppStoreAnalytics
-	clock     func() time.Time
-	appFlow   *AppFlow
+	ssh     SSHAccess
+	clock   func() time.Time
+	appFlow *AppFlow
 
 	// guard decides every route and the credential write one adds. No chart: no
 	// verb here asks a relation.
@@ -382,7 +376,6 @@ func New(opts Options) (*Service, error) {
 		access:         opts.Access,
 		sshTests:       opts.SSHTests,
 		ssh:            opts.SSH,
-		analytics:      opts.AppStoreAnalytics,
 		probes:         maps.Clone(opts.Probes),
 		sink:           opts.Sink,
 		status:         opts.Status,
@@ -500,16 +493,6 @@ func (s *Service) Routes(mux authz.Mux) error {
 	mount("GET /setup/integrations/ssh/audit", authz.ActionSSHAuditRead, s.sshAudit)
 	// A rotation seals a new authority or replaces the current one.
 	post("POST /setup/integrations/ssh/rotation", authz.EffectRewrites, s.sshRotation)
-	// ONE ACTION REMOVES AN APP STORE CONNECT KEY, the document's slot and then
-	// its sealed .p8 (appstorekeys.go).
-	mount("DELETE /setup/integrations/app_store_connect/keys/{connection}/{slot}", authz.ActionSetupConnect,
-		s.appStoreKeyRemove)
-	// A PASTED ADMIN KEY IS ITS OWN VERB, an administrator's in person at a
-	// step-up, never the connect verb a lead may hold (appstoreanalytics.go).
-	if err := router.Handle("POST /setup/integrations/app_store_connect/analytics", authz.Policy{
-		Action: authz.ActionAppStoreAnalyticsEnable, Effect: authz.EffectCreates}, http.HandlerFunc(s.appStoreAnalytics)); err != nil {
-		failures = append(failures, err)
-	}
 	return errors.Join(failures...)
 }
 

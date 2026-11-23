@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
-	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 )
@@ -30,27 +29,12 @@ import (
 // ([config.Company.MCPServerDependants]).
 
 // MCPRemovalRequest is the body `DELETE /config/mcp-servers/{id}` reads.
-//
-// THE VALUES GO AFTER THE REVISION IS WRITTEN, never before: a removal that
-// then lost its write would leave the server running with its credentials
-// gone. Each is asked again of the fleet's revision just before it goes, so a
-// value a write that landed meanwhile reads is kept, and the answer says which
-// revision paths read it. Only names are read or answered here.
 type MCPRemovalRequest struct {
 	// Clear clears every field that names the server alone, in the same
 	// revision. Without it, a server anything names is refused naming all of
 	// it.
 	Clear bool `json:"clear"`
-	// DeleteSecrets names stored values to delete once the removal is
-	// written, each one nothing reads once the server and the fields it
-	// clears are gone. ONLY those: a name anything else reads (another
-	// server, an integration, a model) is refused at its index, since deleting
-	// it would sign that reader out. "Read" is [config.Company.VariablesRead],
-	// the answer `/secrets` gives before a row is deleted. Deleting needs
-	// `secrets.write` on top of `config.write`, decided before anything is
-	// read: the Dashboard Assistant never takes it, so it never removes
-	// credentials.
-	DeleteSecrets []string `json:"delete_secrets"`
+	SecretsRequest
 }
 
 // MCPHolderKind is whose block an [MCPBlockDependant] is.
@@ -101,14 +85,10 @@ type MCPCleared struct {
 }
 
 // MCPDependants is what a removal of an MCP server takes with it: the fields it
-// clears, and the stored values nothing reads once it is written, which it may
-// delete.
+// clears, and the stored values the server and those fields read.
 type MCPDependants struct {
 	MCPCleared
-	// Secrets is every name the credential store holds a value under that
-	// nothing reads once the removal is written, sorted: what
-	// `delete_secrets` may name. Never null.
-	Secrets []string `json:"secrets"`
+	RemovalSecrets
 	// OAuth is whether somebody holds an OAuth grant for the server, which
 	// the removal revokes at its vendor where it offers that, and forgets.
 	OAuth bool `json:"oauth"`
@@ -124,52 +104,14 @@ type MCPGrantRevocation struct {
 	Said       string `json:"said"`
 }
 
-// MCPSecretOutcome is what became of one value a removal was asked to delete.
-type MCPSecretOutcome string
-
-const (
-	// MCPSecretDeleted is a value the store held and no longer does.
-	MCPSecretDeleted MCPSecretOutcome = "deleted"
-	// MCPSecretAbsent is a name the store held no value under: there was
-	// nothing to delete.
-	MCPSecretAbsent MCPSecretOutcome = "absent"
-	// MCPSecretKept is a value a revision activated after the removal reads,
-	// so it stays.
-	MCPSecretKept MCPSecretOutcome = "kept"
-	// MCPSecretFailed is a value the store or the fleet's revision did not
-	// answer for: it may still be there, and `DELETE /secrets/{name}`
-	// deletes it.
-	MCPSecretFailed MCPSecretOutcome = "failed"
-)
-
-// Valid reports whether o is one of the four outcomes.
-func (o MCPSecretOutcome) Valid() bool {
-	switch o {
-	case MCPSecretDeleted, MCPSecretAbsent, MCPSecretKept, MCPSecretFailed:
-		return true
-	}
-	return false
-}
-
-// MCPSecretDeletion is one value a removal was asked to delete, and what
-// became of it.
-type MCPSecretDeletion struct {
-	Name    string           `json:"name"`
-	Outcome MCPSecretOutcome `json:"outcome"`
-	// ReadBy is, for a value kept, the paths of the fleet's revision that
-	// read it.
-	ReadBy []string `json:"read_by,omitempty"`
-}
-
 // MCPRemovalError is a removal that would leave a field naming the server it
-// removes, or that names a value it may not delete: the problems, each at its
-// field, and what the removal takes with it.
+// removes: the problems, each at its field, and what the removal takes with it.
 type MCPRemovalError struct {
 	Problems []config.Problem
 	Cleared  MCPCleared
-	// Unread is every name nothing reads once the removal is written; the
-	// refusal offers the ones the store holds.
-	Unread []string
+	// Before and After are what the document reads before the removal and,
+	// at its paths, after it ([entryReads]): the refusal offers the values.
+	Before, After []config.Reference
 }
 
 func (e *MCPRemovalError) Error() string {
@@ -182,11 +124,12 @@ func (e *MCPRemovalError) Error() string {
 
 // serverRemoval is `DELETE /config/mcp-servers/{id}`.
 var serverRemoval = removalRoute{
-	kind: EntityMCPServers, what: "an MCP server",
+	kind: EntityMCPServers, what: "an MCP server", noun: "MCP server",
 	read: readServerRemoval,
 	bodyHint: `send {"clear": true} to clear every field that names the server, and ` +
-		`"delete_secrets" with the stored values only it read that should go with it`,
+		`"delete_secrets" with the stored values it read that should go with it`,
 	summaryHint: "name the server removed",
+	logAs:       "server",
 }
 
 // readServerRemoval reads a server's removal from its body strictly; an empty
@@ -208,16 +151,8 @@ func readServerRemoval(s *Service, name string, text []byte) (removing, string, 
 		return nil, "", fmt.Errorf("the body is not {\"clear\": true, "+
 			"\"delete_secrets\": [...]}: %w", err)
 	}
-	first := map[string]int{}
-	for i, secret := range body.DeleteSecrets {
-		if strings.TrimSpace(secret) == "" {
-			return nil, "", fmt.Errorf("delete_secrets[%d] names no value", i)
-		}
-		if j, seen := first[secret]; seen {
-			return nil, "", fmt.Errorf("delete_secrets[%d] names %q, as delete_secrets[%d] "+
-				"does: name each value once", i, secret, j)
-		}
-		first[secret] = i
+	if err := body.check(); err != nil {
+		return nil, "", err
 	}
 	m.req = body.MCPRemovalRequest
 	return m, strings.TrimSpace(body.Summary), nil
@@ -230,31 +165,14 @@ type mcpRemoval struct {
 	req  MCPRemovalRequest
 }
 
-// admit asks `secrets.write` of a removal that deletes a value, as a check
-// too, so the Dashboard Assistant's preview is refused before a person
-// approves a card that could never land. A removal that deletes nothing asks
-// nothing beyond the route's `config.write`.
-func (m *mcpRemoval) admit(w http.ResponseWriter, r *http.Request) bool {
-	if len(m.req.DeleteSecrets) == 0 {
-		return true
-	}
-	p, ok := principalOf(w, r)
-	if !ok {
-		return false
-	}
-	policy := authz.Policy{Action: authz.ActionSecretWrite}
-	d := authz.Decide(r.Context(), *p, policy.Action, authz.Object{Kind: authz.KindCompany},
-		authz.NoChart{}, authz.DecidedAt(r.Context()))
-	if d.Unknown() || !d.Allowed {
-		authz.EnvelopeRefusal(w, r, policy, d)
-		return false
-	}
-	return true
+func (m *mcpRemoval) deleting() []string { return m.req.DeleteSecrets }
+
+func (m *mcpRemoval) readsAfter(prior *config.Company) ([]config.Reference, error) {
+	return readAfter(prior, m.name)
 }
 
 // draft removes the server and, with clear, every field that names it alone,
-// as one revision built on expect; it refuses what the request leaves
-// unanswered ([mcpRemoval.problems]).
+// as one revision built on expect; it refuses a field left naming it.
 func (m *mcpRemoval) draft(expect string) draft {
 	return draft{
 		expect: expect, requireActive: true,
@@ -268,14 +186,13 @@ func (m *mcpRemoval) draft(expect string) draft {
 			if !found {
 				return nil, nil, &EntityError{Err: ErrNoSuchEntity}
 			}
-			unread := unreadAfter(b.prior, next)
-			readers, err := readAfter(b.document, m.name)
-			if err != nil {
-				return nil, nil, err
-			}
-			if problems := m.problems(cleared, unread, readers); len(problems) > 0 {
+			if problems := m.problems(cleared); len(problems) > 0 {
+				after, readErr := readAfter(b.prior, m.name)
+				if readErr != nil {
+					return nil, nil, readErr
+				}
 				return nil, nil, &MCPRemovalError{Problems: problems,
-					Cleared: clearedOf(cleared), Unread: unread}
+					Cleared: clearedOf(cleared), Before: b.prior.VariablesRead(), After: after}
 			}
 			document, err := json.Marshal(next)
 			if err != nil {
@@ -291,43 +208,18 @@ func (m *mcpRemoval) draft(expect string) draft {
 	}
 }
 
-// problems is what the request leaves wrong: each field still naming the
-// server when it does not clear them, and each value it names to delete that
-// something still reads ([readAfter]) or that the server never read.
-func (m *mcpRemoval) problems(cleared []config.MCPServerReference, unread []string,
-	readers []config.Reference) []config.Problem {
-
+// problems is each field still naming the server, when the request does not
+// clear them.
+func (m *mcpRemoval) problems(cleared []config.MCPServerReference) []config.Problem {
+	if m.req.Clear {
+		return nil
+	}
 	var out []config.Problem
-	if !m.req.Clear {
-		for _, ref := range cleared {
-			out = append(out, config.Problem{
-				Path: ref.Segments.String(), Segments: ref.Segments, Kind: "conflict",
-				Seat: ref.Seat, Unit: ref.Unit, Message: stillNames(ref),
-			})
-		}
-	}
-	readBy := map[string][]string{}
-	for _, ref := range readers {
-		readBy[ref.Name] = append(readBy[ref.Name], ref.Path)
-	}
-	for i, secret := range m.req.DeleteSecrets {
-		if slices.Contains(unread, secret) {
-			continue
-		}
-		// AT THE NAME ITSELF, by its index in the body, so a page marks the
-		// one value it may not delete rather than the whole list.
-		path := config.Path{"delete_secrets", i}
-		problem := config.Problem{Path: path.String(), Segments: path}
-		if paths := readBy[secret]; len(paths) > 0 {
-			problem.Kind = "conflict"
-			problem.Message = fmt.Sprintf("%s is still read by %s: a value stays while "+
-				"anything reads it", secret, strings.Join(paths, ", "))
-		} else {
-			problem.Kind = "unknown_value"
-			problem.Message = fmt.Sprintf("%s is not read by %q or a field that names it: "+
-				"this removal deletes only a value it leaves nothing reading", secret, m.name)
-		}
-		out = append(out, problem)
+	for _, ref := range cleared {
+		out = append(out, config.Problem{
+			Path: ref.Segments.String(), Segments: ref.Segments, Kind: "conflict",
+			Seat: ref.Seat, Unit: ref.Unit, Message: stillNames(ref),
+		})
 	}
 	return out
 }
@@ -362,7 +254,7 @@ func (m *mcpRemoval) refuse(w http.ResponseWriter, r *http.Request, err error) b
 	if !errors.As(err, &refused) {
 		return false
 	}
-	held, err := m.s.held(r.Context(), refused.Unread)
+	values, err := m.s.removalSecrets(r.Context(), refused.Before, refused.After)
 	if err != nil {
 		m.s.fail(w, r, "read which values the credential store holds", err)
 		return true
@@ -371,7 +263,7 @@ func (m *mcpRemoval) refuse(w http.ResponseWriter, r *http.Request, err error) b
 		httpjson.Detail{
 			"detail":     refused.Error(),
 			"problems":   refused.Problems,
-			"dependants": MCPDependants{MCPCleared: refused.Cleared, Secrets: held},
+			"dependants": MCPDependants{MCPCleared: refused.Cleared, RemovalSecrets: values},
 			"hint": "send clear: true to clear every field that names the server in the " +
 				"same write; delete_secrets may name only values listed under " +
 				"dependants.secrets",
@@ -379,17 +271,13 @@ func (m *mcpRemoval) refuse(w http.ResponseWriter, r *http.Request, err error) b
 	return true
 }
 
-// checked answers a dry run that passed: the check, and what the removal
-// takes with it.
-func (m *mcpRemoval) checked(w http.ResponseWriter, r *http.Request, p *prepared) {
-	dependants, err := m.s.mcpDependants(r.Context(), p.prior, p.company, m.name)
+// checked answers what the removal takes with it.
+func (m *mcpRemoval) checked(ctx context.Context, p *prepared, values RemovalSecrets) (map[string]any, error) {
+	dependants, err := m.s.serverDependants(ctx, p.prior, m.name, values)
 	if err != nil {
-		m.s.fail(w, r, "read which values the credential store holds", err)
-		return
+		return nil, err
 	}
-	answer := checkedAnswer(p)
-	answer["dependants"] = dependants
-	writeJSON(w, http.StatusOK, answer)
+	return map[string]any{"dependants": dependants}, nil
 }
 
 // ServerDependants is what removing the server called name from the fleet's
@@ -397,10 +285,8 @@ func (m *mcpRemoval) checked(w http.ResponseWriter, r *http.Request, p *prepared
 // as `dependants`, and what a server's detail shows. False where the revision
 // declares no such server.
 //
-// THE DRY RUN'S OWN COMPUTATION ([Service.mcpDependants]), on the same two
-// documents: the revision, and the revision with the server removed and every
-// field naming it alone cleared. A second walk would be a detail page that
-// promises one removal and a dry run that answers another.
+// THE DRY RUN'S OWN COMPUTATION, on the same two documents: a second walk
+// would be a detail page that promises one removal and a dry run another.
 func (s *Service) ServerDependants(ctx context.Context, name string) (MCPDependants, bool, error) {
 	cur, found, err := s.current(ctx)
 	if err != nil {
@@ -409,52 +295,47 @@ func (s *Service) ServerDependants(ctx context.Context, name string) (MCPDependa
 	if !found {
 		return MCPDependants{}, false, ErrNoActiveRevision
 	}
-	document, prior, err := s.openDocument(cur)
+	_, prior, err := s.openDocument(cur)
 	if err != nil {
 		return MCPDependants{}, false, err
 	}
-	next, err := config.DecodeCompany(document)
-	if err != nil {
-		return MCPDependants{}, false, fmt.Errorf("configapi: decode the active revision: %w", err)
-	}
-	if _, found := next.RemoveMCPServer(name); !found {
+	after, err := readAfter(prior, name)
+	if errors.Is(err, ErrNoSuchEntity) {
 		return MCPDependants{}, false, nil
 	}
-	dependants, err := s.mcpDependants(ctx, prior, next, name)
+	if err != nil {
+		return MCPDependants{}, false, err
+	}
+	values, err := s.removalSecrets(ctx, prior.VariablesRead(), after)
+	if err != nil {
+		return MCPDependants{}, false, err
+	}
+	dependants, err := s.serverDependants(ctx, prior, name, values)
 	return dependants, err == nil, err
 }
 
-// mcpDependants is what removing the server called name from prior takes with
-// it, next being prior with it removed: every field naming it alone, and every
-// value the store holds that nothing reads once it is gone.
-func (s *Service) mcpDependants(ctx context.Context, prior, next *config.Company,
-	name string) (MCPDependants, error) {
+// serverDependants is what removing the server called name from prior takes
+// with it: every field naming it alone, values, and whether a grant goes.
+func (s *Service) serverDependants(ctx context.Context, prior *config.Company, name string,
+	values RemovalSecrets) (MCPDependants, error) {
 
-	held, err := s.held(ctx, unreadAfter(prior, next))
-	if err != nil {
-		return MCPDependants{}, err
-	}
 	signedIn, err := s.grants.HeldMCPGrant(ctx, name)
 	if err != nil {
 		return MCPDependants{}, fmt.Errorf("configapi: read the server's OAuth grant: %w", err)
 	}
-	return MCPDependants{MCPCleared: clearedOf(prior.MCPServerDependants(name)), Secrets: held,
-		OAuth: signedIn}, nil
+	return MCPDependants{MCPCleared: clearedOf(prior.MCPServerDependants(name)),
+		RemovalSecrets: values, OAuth: signedIn}, nil
 }
 
-// applied deletes the values the request named, now that the removal is
-// written, and answers the write: what it cleared, and what became of each
-// value.
-func (m *mcpRemoval) applied(w http.ResponseWriter, r *http.Request, p *prepared, a Applied) {
-	answer := appliedAnswer(a)
-	answer["removed"] = m.name
-	answer["cleared"] = clearedOf(p.prior.MCPServerDependants(m.name))
-	// THE GRANT BEFORE THE VALUES: the company's own OAuth client
-	// authenticates its revocation with the secret the server's entry
-	// names, which `delete_secrets` may be about to delete.
-	answer["oauth"] = m.revokeGrant(r.Context(), p.prior, attributionOf(r))
-	answer["secrets"] = m.deleteSecrets(r.Context(), attributionOf(r))
-	writeJSON(w, http.StatusCreated, answer)
+// written gives up the server's grant and answers what the removal cleared.
+// THE GRANT BEFORE THE VALUES: its revocation authenticates with the secret
+// the server's entry names, which `delete_secrets` may be about to delete.
+func (m *mcpRemoval) written(ctx context.Context, p *prepared, by iam.Actor) map[string]any {
+	return map[string]any{
+		"removed": m.name,
+		"cleared": clearedOf(p.prior.MCPServerDependants(m.name)),
+		"oauth":   m.revokeGrant(ctx, p.prior, by),
+	}
 }
 
 // revokeGrant gives up the removed server's OAuth grant, now that the removal
@@ -481,75 +362,14 @@ func (m *mcpRemoval) revokeGrant(ctx context.Context, prior *config.Company, by 
 	return &MCPGrantRevocation{Revocation: revocation, Said: said}
 }
 
-// deleteSecrets deletes each value the request named that the fleet's revision
-// still reads nothing of, and says what became of every one. Never null.
-//
-// ASKED AGAIN OF THE FLEET'S REVISION, which is this removal's unless a write
-// landed since: a value that write reads is kept. And a revision that cannot be
-// read deletes nothing, since nothing then says the value is unread.
-func (m *mcpRemoval) deleteSecrets(ctx context.Context, by iam.Actor) []MCPSecretDeletion {
-	out := make([]MCPSecretDeletion, 0, len(m.req.DeleteSecrets))
-	if len(m.req.DeleteSecrets) == 0 {
-		return out
-	}
-	readBy, err := m.s.Reads(ctx, m.req.DeleteSecrets)
+// readAfter is every variable prior reads once the server called name is
+// removed from it, at prior's paths: an empty entry stays where the server
+// stood, so "read by mcp_servers[1].env.TOKEN" names the document a person has.
+func readAfter(prior *config.Company, name string) ([]config.Reference, error) {
+	document, err := json.Marshal(prior)
 	if err != nil {
-		log.WarnContext(ctx, "secret_remove_failed", "server", m.name,
-			"names", m.req.DeleteSecrets, "error", err, "by", by.Name, "operator", by.OperatorID,
-			"detail", "the server is removed; which paths read its values could not be "+
-				"read, so none was deleted: DELETE /secrets/{name} deletes each")
-		for _, secret := range m.req.DeleteSecrets {
-			out = append(out, MCPSecretDeletion{Name: secret, Outcome: MCPSecretFailed})
-		}
-		return out
+		return nil, fmt.Errorf("configapi: encode the active revision: %w", err)
 	}
-	for _, secret := range m.req.DeleteSecrets {
-		if paths := readBy[secret]; len(paths) > 0 {
-			out = append(out, MCPSecretDeletion{Name: secret, Outcome: MCPSecretKept, ReadBy: paths})
-			continue
-		}
-		removed, err := m.s.secrets.Unset(ctx, secret)
-		if err != nil {
-			log.WarnContext(ctx, "secret_remove_failed", "name", secret, "server", m.name,
-				"error", err, "by", by.Name, "operator", by.OperatorID)
-			out = append(out, MCPSecretDeletion{Name: secret, Outcome: MCPSecretFailed})
-			continue
-		}
-		// THE NAME, never the value, as `DELETE /secrets/{name}` logs it.
-		log.InfoContext(ctx, "secret_removed", "name", secret, "removed", removed,
-			"server", m.name, "by", by.Name, "operator", by.OperatorID)
-		outcome := MCPSecretDeleted
-		if !removed {
-			outcome = MCPSecretAbsent
-		}
-		out = append(out, MCPSecretDeletion{Name: secret, Outcome: outcome})
-	}
-	return out
-}
-
-// held is the names the credential store holds a value under, of names, in
-// their order. Never null.
-func (s *Service) held(ctx context.Context, names []string) ([]string, error) {
-	out := []string{}
-	for _, name := range names {
-		_, stored, err := s.secrets.Describe(ctx, name)
-		if err != nil {
-			return nil, fmt.Errorf("configapi: describe the stored value %s: %w", name, err)
-		}
-		if stored {
-			out = append(out, name)
-		}
-	}
-	return out, nil
-}
-
-// readAfter is every variable the stored document reads once the server called
-// name is removed from it, at the paths the document has NOW: the removal made
-// with an empty entry left where the server stood, so nothing after it moves.
-// A person reads "still read by mcp_servers[1].env.TOKEN" against the document
-// in front of them, where the next document has every later server one place
-// up.
-func readAfter(document []byte, name string) ([]config.Reference, error) {
 	kept, err := config.DecodeCompany(document)
 	if err != nil {
 		return nil, fmt.Errorf("configapi: decode the active revision: %w", err)
@@ -560,23 +380,6 @@ func readAfter(document []byte, name string) ([]config.Reference, error) {
 	}
 	kept.MCPServers = slices.Insert(kept.MCPServers, at, config.MCPServer{})
 	return kept.VariablesRead(), nil
-}
-
-// unreadAfter is every variable prior reads and next does not, sorted: the
-// values a write leaves nothing reading ([config.Company.VariablesRead]).
-func unreadAfter(prior, next *config.Company) []string {
-	still := map[string]bool{}
-	for _, ref := range next.VariablesRead() {
-		still[ref.Name] = true
-	}
-	var out []string
-	for _, ref := range prior.VariablesRead() {
-		if !still[ref.Name] {
-			out = append(out, ref.Name)
-		}
-	}
-	slices.Sort(out)
-	return slices.Compact(out)
 }
 
 // clearedOf is the fields a removal clears, as the answer names them.

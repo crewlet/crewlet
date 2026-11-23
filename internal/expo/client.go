@@ -73,6 +73,12 @@ type APIError struct {
 	RetryAfter time.Duration
 }
 
+// VendorUnavailable reports Expo failing to serve the call: a 5xx or a
+// rate limit.
+func (e *APIError) VendorUnavailable() bool {
+	return e.Status >= 500 || e.Status == http.StatusTooManyRequests
+}
+
 func (e *APIError) Error() string {
 	code := ""
 	if e.Code != "" {

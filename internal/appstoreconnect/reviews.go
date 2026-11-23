@@ -77,10 +77,14 @@ func (p *Product) reviewCall(ctx context.Context, handle, app string, opID strin
 	}
 	op, _ := Catalog().Operation(opID)
 	m := made{op: op, class: op.Class, query: url.Values{}}
-	if err := p.placeApp(ctx, seat, &m, app); err != nil {
+	if m.key, err = p.keyOf(ctx, handle); err != nil {
 		return made{}, err
 	}
-	if err := p.sign(ctx, handle, &m); err != nil {
+	m.team = m.key.team
+	if err := sign(&m, growth.LevelOf(seat.Level)); err != nil {
+		return made{}, err
+	}
+	if err := p.placeApp(ctx, seat, &m, app); err != nil {
 		return made{}, err
 	}
 	return m, nil
@@ -184,7 +188,7 @@ func (p *Product) replies(ctx context.Context, call growth.Call) (made, []reply,
 			return made{}, nil, invalid("`replies[%d].text` is 1 to %d characters; it is %d.", i, replyLimit, n)
 		}
 		seen[id] = true
-		found, err := placer{owners: p.owners, t: m.team}.appOf(ctx, "customerReviews", id, []string{app})
+		found, err := placer{owners: p.owners, key: m.key}.appOf(ctx, "customerReviews", id, []string{app})
 		if err != nil || found != app {
 			return made{}, nil, growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("review %s is not a review "+
 				"of app %s. No call was made.", id, app))
@@ -242,8 +246,8 @@ func (p *Product) prepareReplies(ctx context.Context, call growth.Call) (growth.
 	}
 	question := fmt.Sprintf("May %s reply to %s of app %s?", call.Handle, words.Count(len(rs), "review", "reviews"), m.app)
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s asks to post these replies, through the %s key. Allow once posts them all, each exactly as "+
-		"shown; Apple publishes a reply within a day.", call.Handle, slotRole[m.slot])
+	fmt.Fprintf(&b, "%s asks to post these replies, through its own %s key. Allow once posts them all, each exactly "+
+		"as shown; Apple publishes a reply within a day.", call.Handle, roleName(m.key.role))
 	for i, r := range rs {
 		fmt.Fprintf(&b, "\n\n**Review %d** (%d stars, %s): %s", i+1, r.review.Attributes.Rating,
 			r.review.Attributes.Territory, words.Inert(textcut.Within(r.review.Attributes.Body, excerptRunes)))
