@@ -185,22 +185,25 @@ func (s *Sweeper) end(ctx context.Context, row gitlet.CheckRow, why string) erro
 }
 
 // kill ends a lost runner's REMOTE (e2b) box through its provider, since no
-// other node's teardown reaches it and it bills until its TTL. Best effort: a
-// box already gone is no error, and its TTL reclaims one that cannot be reached.
+// other node's teardown reaches it and it bills until its TTL: by the handle
+// the row names, or by the claim's stamp where the runner died or failed to
+// record before naming it ([killClaimBox]). Best effort: a box already gone is
+// no error, and its TTL reclaims one that cannot be reached.
 func (s *Sweeper) kill(ctx context.Context, row gitlet.CheckRow) {
-	if row.Placement != gitlet.PlacementE2B || row.Box == "" {
+	if row.Placement != gitlet.PlacementE2B {
 		return
 	}
 	boxes, ok := s.o.Boxes()
 	if !ok || boxes == nil {
 		return
 	}
+	launch := claimLaunch(row.CheckKey, row.Runner)
 	provider, err := boxes.Provider(sandbox.Placement(config.PlacementE2B))
 	if err == nil {
-		err = provider.Kill(ctx, row.Box)
+		err = killClaimBox(ctx, provider, row.Box, launch)
 	}
 	if err != nil {
 		s.log.WarnContext(ctx, "code_check_box_not_killed", "repo_id", row.RepoID, "check", row.Name,
-			"box", row.Box, "error", err.Error(), "detail", "its TTL reclaims it")
+			"box", row.Box, "launch_id", launch, "error", err.Error(), "detail", "its TTL reclaims it")
 	}
 }

@@ -214,10 +214,11 @@ func (p *E2BProvider) Kill(ctx context.Context, sandboxID string) error {
 }
 
 // KillLaunch kills every box stamped with launch ([e2bLaunchKey]), running or
-// paused: the boxes a run's row may never have named, its create's answer lost
-// or its engine gone before the attach. The run's ending asks, so none is
-// billed to its TTL ([Spec.LaunchID]). Every kill is attempted; the first
-// failure is returned, a box already gone being none.
+// paused: the boxes what made them (a run's row, a check's claim) may never
+// have named, the create's answer lost or the engine gone before the naming.
+// Their ending asks, so none is billed to its TTL ([Spec.LaunchID]). Every
+// kill is attempted; the first failure is returned, a box already gone being
+// none.
 func (p *E2BProvider) KillLaunch(ctx context.Context, launch string) error {
 	ids, err := p.api.launchBoxes(ctx, launch)
 	if err != nil {
