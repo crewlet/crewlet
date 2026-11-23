@@ -5,6 +5,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -33,10 +34,19 @@ func NewGeminiCLI() *Runner { return New(GeminiCLI{}) }
 // Name is this runner's config name.
 func (GeminiCLI) Name() string { return GeminiCLIName }
 
-// Session mints the run's own session: Gemini CLI names a new session by any
-// word of letters, digits, dashes and underscores (`--session-id`) and refuses
-// one it already holds (exit 42), so every run gets a fresh uuid.
-func (GeminiCLI) Session(sandbox.RunRequest) Session { return Session{ID: uuid.NewString()} }
+// Session is the session a Gemini CLI run works in ([Harness.Session]): the one
+// it continues, or a new one under a uuid minted for it — Gemini CLI names a
+// new session by any word of letters, digits, dashes and underscores
+// (`--session-id`) and refuses one it already holds (exit 42) — and, for a run
+// that continues one, a second uuid for the session it starts instead where
+// its box holds that one neither way.
+func (GeminiCLI) Session(req sandbox.RunRequest) Session {
+	if req.Resume != "" {
+		return Session{ID: req.Resume, Continues: true, Fresh: uuid.NewString(),
+			Replaces: req.Carried != nil && req.Carried.Replace}
+	}
+	return Session{ID: uuid.NewString()}
+}
 
 // geminiFlags is what both the prompt's export and the run itself are started
 // with: the export depends on the tools the approval mode offers, on the model
@@ -66,10 +76,18 @@ func (GeminiCLI) Command(req sandbox.RunRequest, session Session, paths Paths, _
 // model request (measured on 0.70.0, zero requests at the stub).
 const geminiExportExit = 42
 
-// geminiScript is a Gemini CLI run's script. It pins the project slug, exports
-// the harness's own system prompt and adds the run's text after it, runs the
-// harness on the brief (stdin, [GeminiCLI.Output]), and appends the run's own
-// spend read off its session file ([geminiUsageEvent]).
+// geminiRelease is the Gemini CLI release this build drives: the newest, whose
+// stream, chat file, hooks and resume it was measured against
+// (testdata/gemini/0.70.0). An older one is refused at the run's start, a
+// newer one runs on sessions of its own, and only this one continues a
+// carried session ([releaseGate], [exactCarry]).
+const geminiRelease = "0.70.0"
+
+// geminiScript is a Gemini CLI run's script: gate the release ([releaseGate]),
+// pin the slug, name and record the session ([chatSessionGate]), export the
+// harness's prompt with the run's text after it, run the brief (stdin), append
+// the run's own spend off its session file ([geminiUsageEvent]), and pack the
+// session for another box ([chatPack]).
 //
 // THE ADD-TO CHANNEL IS BUILT, since Gemini CLI has none: GEMINI_SYSTEM_MD
 // replaces its prompt, so the script has it write the prompt out
@@ -80,18 +98,40 @@ const geminiExportExit = 42
 func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 	flags := strings.Join(geminiFlags(req), " ")
 	q := shellword.Quote
+	var fresh []freshCopy
+	if req.FreshWiring != nil {
+		fresh = geminiFreshCopies(paths, geminiHooked(req))
+	}
 	lines := []string{
+		// THE TELEMETRY'S NAMES GO before Gemini CLI starts at all, its release
+		// read included: the run turns no Gemini CLI telemetry on, so it starts
+		// without them ([otelExportUnset]). The sign-in's stay
+		// ([sandbox.RunRequest.SignInEnv] is not applied): Gemini CLI signs in by
+		// them, and offers no way to withhold a name from its tools alone but its
+		// redaction, which would also take the seat's own token-named variables.
+		otelExportUnset,
+		// THE RELEASE, read once for the gate, the record and the session's,
+		// before anything else: an older one never runs ([releaseGate]).
+		releaseRead(GeminiCLI{}.VersionCommand()),
+		releaseGate("Gemini CLI", geminiRelease),
 		"node " + q(paths.GeminiHelper()) + " pin " + q(paths.GeminiProjects()) + " " + GeminiProjectSlug + " || exit 1",
+		strings.TrimSuffix(chatSessionGate(session, paths, geminiGate(paths, fresh)), "\n"),
+		// THE RECORD, before the harness starts, so a run killed before it
+		// reported anything still says which session it took up, and why it
+		// began again where it did; the release last ([parseSessionRecord]).
+		`printf 'id %s\ncontinued %s\nwhy %s\nrelease %s\n' "$s" "$k" "$w" "$v" > ` + q(paths.SessionRecord()),
 	}
-	run := "gemini " + flags + " --session-id " + q(session.ID) + "; code=$?"
-	// THE SESSION'S RECORD OF TAKES OPENS WITH ITS START LINE BEFORE THE RUN:
-	// a record holding it settles a take never recorded (its hook killed first)
-	// as absent once the job ends, and one without it, lost with its box, waits.
-	// A line rather than an empty file, as a box reads a missing file as empty.
+	// THE SESSION'S RECORD OF TAKES OPENS WITH ITS START LINE BEFORE THE RUN,
+	// the count of the session's lines as the run starts ([geminiConfirmed]): a
+	// record holding it settles a take never recorded (its hook killed first)
+	// as absent once the job ends, and one without it, lost with its box, waits
+	// (a line, as a box reads a missing file as empty). The count keeps a take
+	// from being confirmed by a delivery an earlier job's run made.
 	if req.Steer.Set() {
-		lines = append(lines, "mkdir -p "+q(paths.GeminiTakesDir())+" && printf '{\"from\":0}\\n' >> "+
-			q(paths.GeminiTakes(session.ID))+" || exit 1")
+		lines = append(lines, `n=0; [ -z "$cf" ] || n=$(wc -l < "$cf" | tr -d ' '); mkdir -p `+q(paths.GeminiTakesDir())+
+			` && printf '{"from":%s}\n' "$n" >> `+q(paths.GeminiTakesDir())+`/"$s".jsonl || exit 1`)
 	}
+	run := `gemini ` + flags + ` "$@"; code=$?`
 	// A RUN WITH NO STANDING INSTRUCTIONS keeps Gemini CLI's own prompt as it
 	// is, so nothing is exported or named.
 	if geminiSystemText(GeminiCLI{}, req) != "" {
@@ -107,10 +147,28 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 				"; } > "+q(paths.GeminiSystem())+" || exit 1")
 		run = "GEMINI_SYSTEM_MD=" + q(paths.GeminiSystem()) + " " + run
 	}
-	return strings.Join(append(lines, run,
-		"node "+q(paths.GeminiHelper())+" usage "+q(paths.GeminiChats())+" "+q(session.ID),
+	before := q(paths.GeminiUsageBefore())
+	return strings.Join(append(lines,
+		// THE RUN'S OWN SPEND, NOT THE SESSION'S: the responses the chat file
+		// holds as the run starts are listed first and left out of the sum
+		// ([GeminiCLI.Parse]).
+		// A LIST THAT FAILED IS NO FILE, never an empty one, which would charge the
+		// earlier jobs' requests to this run: the usage line then says why it
+		// read none ([geminiEvents.runSpend]).
+		`rm -f `+before+`; if [ "$k" = yes ]; then node `+q(paths.GeminiHelper())+` ids `+q(paths.GeminiChats())+
+			` "$s" > `+before+`.part 2> /dev/null && mv -f `+before+`.part `+before+`; else : > `+before+`; fi`,
+		`if [ "$k" = yes ]; then set -- --resume "$s"; else set -- --session-id "$s"; fi`,
+		run,
+		"node "+q(paths.GeminiHelper())+" usage "+q(paths.GeminiChats())+` "$s" `+before,
+		geminiLocate(paths),
+		strings.TrimSuffix(chatPack(paths, packAt{staged: paths.SessionStaging(), dest: paths.SessionCapture()},
+			paths.GeminiSlugDir()), "\n"),
 		"exit $code"), "\n")
 }
+
+// geminiHooked reports whether a run of req starts the take script: for its
+// notes or its skills' loads.
+func geminiHooked(req sandbox.RunRequest) bool { return req.Steer.Set() || len(req.Skills) > 0 }
 
 // geminiSystemText is the system text a run of req adds to Gemini CLI's own
 // prompt: its standing instructions, with h's instruction about notes last
@@ -187,20 +245,33 @@ func (g GeminiCLI) WriteConfig(ctx context.Context, box sandbox.Sandbox, req san
 	if system := geminiSystemText(g, req); system != "" {
 		files[paths.System()] = []byte(system)
 	}
-	hooked := req.Steer.Set() || len(req.Skills) > 0
+	hooked := geminiHooked(req)
 	if hooked {
-		take, err := geminiTakeConfig(req, paths.GeminiTakes(session.ID))
-		if err != nil {
+		files[paths.GeminiTake()] = geminiTakeScript
+	}
+	if err := geminiWired(files, req, paths, paths.GeminiSettings(), paths.GeminiTakeConfig(),
+		paths.GeminiTakes(session.ID), hooked); err != nil {
+		return "", err
+	}
+	// AND THE SAME FILES UNDER THE JOB'S OTHER BRIDGE TOKEN, for a session the
+	// script starts in place of the continued one, beside the first
+	// ([sandbox.RunRequest.FreshWiring], [chatSessionGate]): the take
+	// configuration naming that session's record of takes. A wiring that
+	// changes what the run is hooked for would need another settings file
+	// than the one the script chose, so it is refused.
+	if f := req.FreshWiring; f != nil {
+		if f.Steer.Set() != req.Steer.Set() || f.SkillLoads.Set() != req.SkillLoads.Set() {
+			return "", errors.New("executor: the run's two wirings, for the session it continues and for " +
+				"one of its own, are not hooked alike, so the run cannot be wired to whichever session its " +
+				"box starts")
+		}
+		rewired := req
+		rewired.MCPServers, rewired.Steer, rewired.SkillLoads = f.MCPServers, f.Steer, f.SkillLoads
+		if err := geminiWired(files, rewired, paths, paths.GeminiSettings()+".fresh",
+			paths.GeminiTakeConfig()+".fresh", paths.GeminiTakes(session.Fresh), hooked); err != nil {
 			return "", err
 		}
-		files[paths.GeminiTake()] = geminiTakeScript
-		files[paths.GeminiTakeConfig()] = take
 	}
-	settings, err := json.MarshalIndent(geminiSettings(req, paths, hooked), "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("executor: rendering Gemini CLI's settings: %w", err)
-	}
-	files[paths.GeminiSettings()] = settings
 	for _, s := range req.Skills {
 		file, fileErr := skillFile(geminiSkillName(s), s.Description, s.Body)
 		if fileErr != nil {
@@ -219,6 +290,27 @@ func (g GeminiCLI) WriteConfig(ctx context.Context, box sandbox.Sandbox, req san
 		}
 	}
 	return "", nil
+}
+
+// geminiWired puts into files the two files of req's wiring: its settings, at
+// settingsPath, and where the run is hooked, its take script's configuration,
+// at takePath, naming takes as the session's record of takes.
+func geminiWired(files map[string][]byte, req sandbox.RunRequest, paths Paths, settingsPath, takePath,
+	takes string, hooked bool) error {
+
+	if hooked {
+		take, err := geminiTakeConfig(req, takes)
+		if err != nil {
+			return err
+		}
+		files[takePath] = take
+	}
+	settings, err := json.MarshalIndent(geminiSettings(req, paths, hooked), "", "  ")
+	if err != nil {
+		return fmt.Errorf("executor: rendering Gemini CLI's settings: %w", err)
+	}
+	files[settingsPath] = settings
+	return nil
 }
 
 // geminiSkillName is the name a run's skill is written and listed under:
@@ -334,12 +426,14 @@ var geminiHelperScript []byte
 var _ artifactHolder = GeminiCLI{}
 
 // artifactFiles is what a Gemini CLI run leaves in the box's work directory,
-// each written afresh by the next ([Runner.ClearArtifacts]): files alone, so
-// it is no [artifactDirHolder]. The home's settings, policy and project
+// and a fresh session's copy of its settings in the home, each written afresh
+// by the next ([Runner.ClearArtifacts]): files alone, so it is no
+// [artifactDirHolder]. The home's settings, policy and project
 // registry are rewritten by every Gemini CLI run, its skills, policies and
 // commands removed first, an image's included ([geminiHome]); every other
 // harness's run leaves them alone.
 func (GeminiCLI) artifactFiles(p Paths) []string {
-	return []string{p.GeminiHelper(), p.GeminiTake(), p.GeminiTakeConfig(),
-		p.GeminiDefaultSystem(), p.GeminiExportErr(), p.GeminiSystem()}
+	return []string{p.GeminiHelper(), p.GeminiTake(), p.GeminiTakeConfig(), p.GeminiTakeConfig() + ".fresh",
+		p.GeminiSettings() + ".fresh", p.GeminiDefaultSystem(), p.GeminiExportErr(), p.GeminiSystem(),
+		p.GeminiUsageBefore(), p.GeminiUsageBefore() + ".part"}
 }

@@ -15,6 +15,35 @@ export function growthProductName(kind: string): string {
   return NAMES[kind] ?? kind;
 }
 
+/** What a connection reaches, in a product's own words: its accounts, or an app store's apps. */
+export interface ReachWords {
+  /** The list's noun: "Accounts". */
+  noun: string;
+  /** A connection that reaches none of them yet. */
+  none: string;
+  /** A connection the company narrows to none, whose list Crewlet has not read. */
+  every: string;
+}
+
+const REACH: Readonly<Record<string, ReachWords>> = {
+  app_store_connect: {
+    noun: "Apps",
+    none: "Reaches no app yet.",
+    every: "Reaches every app its keys reach.",
+  },
+};
+
+const ACCOUNTS: ReachWords = {
+  noun: "Accounts",
+  none: "Reaches no account yet.",
+  every: "Reaches every account its sign-in reaches.",
+};
+
+/** A growth product's words for what its connections reach. */
+export function reachWords(kind: string): ReachWords {
+  return REACH[kind] ?? ACCOUNTS;
+}
+
 /**
  * What caps cannot promise about a vendor's spending, said wherever a cap is:
  * they bound the budgets agents may set, and a vendor may spend past a daily

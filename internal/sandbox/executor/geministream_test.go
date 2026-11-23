@@ -294,3 +294,78 @@ func TestOnlyATerminalQuotaAtTheRunsOwnFailureSitsAGeminiEntryOut(t *testing.T) 
 		})
 	}
 }
+
+// geminiOwnResponses is two responses a resumed run appends to 0.70.0's
+// session-tools.jsonl: its last response under ids of their own, each with
+// tokens no response of the capture has, so a sum shows which were charged.
+func geminiOwnResponses(t *testing.T) string {
+	t.Helper()
+	const captured = `"tokens":{"input":1000,"output":50,"cached":400,"thoughts":30,"tool":7,"total":1087}`
+	var last string
+	for _, l := range strings.Split(string(geminiFixture(t, "session-tools.jsonl")), "\n") {
+		if strings.Contains(l, `"type":"gemini"`) {
+			last = l
+		}
+	}
+	if !strings.Contains(last, captured) {
+		t.Fatalf("the capture's last response holds no %s: %s", captured, last)
+	}
+	var own strings.Builder
+	for _, r := range [][2]string{
+		{"resumed-response-1", `"tokens":{"input":1500,"output":60,"cached":500,"thoughts":40,"tool":11,"total":1611}`},
+		{"resumed-response-2", `"tokens":{"input":2000,"output":70,"cached":600,"thoughts":50,"tool":13,"total":2133}`},
+	} {
+		l := strings.Replace(last, "881853cd-0513-4cbd-b8bd-5bc81ae51ac1", r[0], 1)
+		own.WriteString(strings.Replace(l, captured, r[1], 1) + "\n")
+	}
+	return own.String()
+}
+
+// A CONTINUED GEMINI RUN IS CHARGED ITS OWN RESPONSES, NOT ITS SESSION'S. A
+// headless resume reports only the process's own stream totals, so the chat
+// file's split is the run's only where it leaves out what the session held as
+// the run started. The session 0.70.0 wrote (session-tools.jsonl, three
+// responses) is listed before the run (`ids`), the resumed run appends two
+// responses of tokens of their own, and the usage line charges those two
+// alone, summed.
+//
+// Mutations, each red: list no response before the run; sum the file whatever
+// the list names; list each entry rather than each response; charge the
+// file's last response alone.
+func TestAContinuedGeminiRunIsChargedItsOwnResponses(t *testing.T) {
+	t.Parallel()
+	node := geminiNode(t)
+	chats := t.TempDir()
+	const session = "842120d9-2536-4808-8ba9-437d34456f75"
+	file := filepath.Join(chats, "session-2026-11-21T18-48-842120d9.jsonl")
+	held := geminiFixture(t, "session-tools.jsonl")
+	if err := os.WriteFile(file, held, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	helper := filepath.Join(".", "gemini_helper.mjs")
+	ids, err := exec.CommandContext(t.Context(), node, helper, "ids", chats, session).Output()
+	if err != nil {
+		t.Fatalf("the helper's ids: %v", err)
+	}
+	want := "8b3b6c59-1fd4-4048-8954-f05684ee2f4f\n5a74d896-f691-4287-bca9-99845c7f923d\n" +
+		"881853cd-0513-4cbd-b8bd-5bc81ae51ac1\n"
+	if string(ids) != want {
+		t.Fatalf("the session held %q as the run started, want its three responses %q", ids, want)
+	}
+	before := filepath.Join(t.TempDir(), "before")
+	if err := os.WriteFile(before, ids, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, append(held, geminiOwnResponses(t)...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	usage, err := exec.CommandContext(t.Context(), node, helper, "usage", chats, session, before).Output()
+	if err != nil {
+		t.Fatalf("the helper's usage: %v", err)
+	}
+	const charged = `{"type":"crewlet_gemini_usage","session_id":"` + session + `","requests":2,` +
+		`"tokens":{"input":3500,"output":130,"cached":1100,"thoughts":90,"tool":24}}` + "\n"
+	if string(usage) != charged {
+		t.Errorf("the continued run is charged %s, want its two responses: %s", usage, charged)
+	}
+}

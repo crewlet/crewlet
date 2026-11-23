@@ -867,9 +867,10 @@ func TestTheContextASessionCarriesIsReadOffItsArchive(t *testing.T) {
 // release (Kimi Code, Copilot, Muse Code) restores a session that release
 // wrote: judged of the writer alone, never refused for want of a box.
 //
-// Mutation: drop the writer's floor, answer for another harness's session, or
-// judge a one-release runner's writer beside no box ([carrier.Continues] of
-// ""), and a row goes red.
+// Mutation: drop the writer's floor or the one release Gemini CLI and Qwen
+// Code continue on, answer for another harness's session, or judge a
+// one-release runner's writer beside no box ([carrier.Continues] of ""), and
+// a row goes red.
 func TestARunnerRestoresOnlyWhatItCouldContinue(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -900,6 +901,20 @@ func TestARunnerRestoresOnlyWhatItCouldContinue(t *testing.T) {
 			Format: executor.HermesArchiveFormat, Version: "0.23.3"}, true, ""},
 		"hermes, another release's writer": {executor.NewHermes(), sandbox.SessionArchive{Harness: executor.HermesName,
 			Format: executor.HermesArchiveFormat, Version: "0.23.4"}, false, "only a session Hermes Agent 0.23.3 wrote"},
+		"gemini's own": {executor.NewGeminiCLI(), sandbox.SessionArchive{Harness: executor.GeminiCLIName,
+			Format: executor.GeminiArchiveFormat, Version: "0.70.0"}, true, ""},
+		"gemini, a newer writer": {executor.NewGeminiCLI(), sandbox.SessionArchive{Harness: executor.GeminiCLIName,
+			Format: executor.GeminiArchiveFormat, Version: "0.71.0"}, false, "only on 0.70.0, and the session was written by 0.71.0"},
+		"gemini, an older writer": {executor.NewGeminiCLI(), sandbox.SessionArchive{Harness: executor.GeminiCLIName,
+			Format: executor.GeminiArchiveFormat, Version: "0.65.0"}, false, "written by 0.65.0"},
+		"gemini, an unrecorded writer": {executor.NewGeminiCLI(), sandbox.SessionArchive{Harness: executor.GeminiCLIName,
+			Format: executor.GeminiArchiveFormat}, false, "named no release"},
+		"qwen's own": {executor.NewQwenCode(), sandbox.SessionArchive{Harness: executor.QwenCodeName,
+			Format: executor.QwenArchiveFormat, Version: "0.28.4"}, true, ""},
+		"qwen, another format": {executor.NewQwenCode(), sandbox.SessionArchive{Harness: executor.QwenCodeName,
+			Format: executor.QwenArchiveFormat + 1, Version: "0.28.4"}, false, "format"},
+		"qwen, an older writer": {executor.NewQwenCode(), sandbox.SessionArchive{Harness: executor.QwenCodeName,
+			Format: executor.QwenArchiveFormat, Version: "0.26.1"}, false, "only on 0.28.4, and the session was written by 0.26.1"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
