@@ -164,6 +164,11 @@ type LeadAnswer struct {
 	// Called is the run's own bridged call it parked on, which returned
 	// (callwait.go): told again as that call, never as a person's answer.
 	Called *types.CallReturned `json:"called"`
+
+	// Waited is how the run a `wait_for_run` waited for left its seat, where
+	// the engine answered it (ADR-0176): told again as that run's account,
+	// never as a person's answer.
+	Waited *types.RunWaited `json:"waited"`
 }
 
 // LeadRefused is a refused reply's figures as the run was told them: its
