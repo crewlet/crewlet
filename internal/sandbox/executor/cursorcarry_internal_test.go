@@ -117,15 +117,17 @@ func cursorScrubbed(t *testing.T, lines []byte, values ...string) []byte {
 }
 
 // A CURSOR CONVERSATION IS CARRIED SCRUBBED, WHOLE AND IN ORDER: a real chat
-// store of the release (a shell call's turn, then a resumed one) holding a
-// handed value, exported, scrubbed as a capture is and made the history a
-// continued run hands Cursor, holds the scrub's marker and never the value,
-// every message in the store's order, and not Cursor's own account of the box.
-// Measured beside it: this history, imported by the release's local-loop
-// build, put the marker and never the value in the model's request, in order.
+// store of the release (a shell call's turn under the rule RULE-OLD, then a
+// person's message opening "<user_info>") holding a handed value, exported,
+// scrubbed and made the history a continued run hands Cursor, holds the
+// marker and never the value, every message in order, the person's own kept,
+// and not Cursor's account of the box with its old rule. Measured beside it:
+// imported under RULE-NEW, the request held the marker, RULE-NEW once,
+// RULE-OLD nowhere and the person's message, in order.
 //
-// Mutation: walk the root's fields out of order, keep the user_info message,
-// or write the export as one document the scrub reads as text: this goes red.
+// Mutation: walk the root's fields out of order, keep Cursor's user_info,
+// drop every message opening "<user_info>", or scrub the export as one
+// document: this goes red.
 func TestACursorConversationIsCarriedScrubbedWholeAndInOrder(t *testing.T) {
 	t.Parallel()
 	lines, code, stderr := cursorExport(t, "plain")
@@ -166,28 +168,32 @@ func TestACursorConversationIsCarriedScrubbedWholeAndInOrder(t *testing.T) {
 	if want := []string{"user", "assistant", "tool", "assistant", "user", "assistant"}; !slices.Equal(kinds, want) {
 		t.Errorf("the history's messages are %v, want %v", kinds, want)
 	}
-	if bytes.Contains(raw, []byte("<user_info>")) {
+	if bytes.Contains(raw, []byte("OS Version")) {
 		t.Error("the history carries Cursor's own account of the box, which the next run writes afresh")
 	}
-	if !strings.Contains(string(raw), "PROMPT-TWO") {
-		t.Error("the history lost the resumed turn")
+	if !strings.Contains(string(raw), "PERSON-OWN-TEXT") {
+		t.Error("the history lost the person's own message opening <user_info>")
+	}
+	if strings.Contains(string(raw), "RULE-OLD") {
+		t.Error("the history carries the rule its session started under")
 	}
 }
 
 // THE EXPORT REFUSES WHAT IT DOES NOT KNOW: a store whose conversation holds a
-// part of a kind it does not carry, a message that is no JSON blob, or a role
-// it does not carry is refused with a reason naming it, and nothing is
-// written, so the capture fails and the next run starts afresh rather than
-// continue a conversation with a part left out.
+// part of a kind it does not carry, a message that is no JSON blob, a role it
+// does not carry, or an account of the box where Cursor writes none, is
+// refused naming it, and nothing is written: the capture fails and the next
+// run starts afresh rather than continue a conversation with a part left out.
 //
-// Mutation: skip an unknown part, an unknown blob or an unknown role, or write
-// what was read before the refusal: a row goes red.
+// Mutation: skip an unknown part, blob or role, drop a misplaced account of
+// the box, or write what was read before the refusal: a row goes red.
 func TestTheCursorExportRefusesWhatItDoesNotKnow(t *testing.T) {
 	t.Parallel()
 	for store, says := range map[string]string{
-		"unknown-part":   `part of type "file"`,
-		"binary-message": "not a JSON message",
-		"unknown-role":   `the role "developer"`,
+		"unknown-part":        `part of type "file"`,
+		"binary-message":      "not a JSON message",
+		"unknown-role":        `the role "developer"`,
+		"misplaced-user-info": "an account of the box",
 	} {
 		lines, code, stderr := cursorExport(t, store)
 		if code != 3 || !strings.Contains(stderr, says) || len(lines) != 0 {
@@ -240,5 +246,50 @@ func TestACarriedCursorConversationKeepsNoCredential(t *testing.T) {
 	}
 	if strings.Count(kept, "\n") != 3 {
 		t.Errorf("the scrub did not keep a message a line:\n%s", kept)
+	}
+}
+
+// A CONTINUED CURSOR RUN CALLS ITS OWN SERVERS: a history's calls to one of
+// Crewlet's servers name an earlier run's suffix, which this run's Cursor does
+// not serve (measured: "MCP server does not exist"), so handing the history
+// back renames each to this run's; a person's own server, though named like
+// one, is left as it is.
+//
+// Mutation: leave the old name, rename by any suffix whatever its server, or
+// rename a server not the run's: this goes red.
+func TestAContinuedCursorRunCallsItsOwnServers(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	in, fragment, out := filepath.Join(dir, "in.jsonl"), filepath.Join(dir, "mcp.json"), filepath.Join(dir, "doc.json")
+	call := func(id, server string) string {
+		args, err := json.Marshal(map[string]any{"server": server, "toolName": "submit_work", "arguments": map[string]any{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		line, err := json.Marshal(map[string]any{"assistant": map[string]any{"content": []any{map[string]any{
+			"toolCall": map[string]any{"toolCallId": id, "toolName": "CallMcpTool", "argsJson": string(args)}}}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(line) + "\n"
+	}
+	lines := `{"user":{"content":[{"text":{"text":"go"}}]}}` + "\n" + call("c1", "crewlet-aaaa1111") + call("c2", "mine-bbbb2222")
+	for file, body := range map[string]string{in: lines,
+		fragment: `{"mcpServers":{"crewlet-cccc3333":{"url":"http://127.0.0.1:9/mcp"}}}`} {
+		if err := os.WriteFile(file, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if code, stderr := cursorHelperRun(t, "doc", in, out, fragment); code != 0 {
+		t.Fatalf("the history was refused (exit %d): %s", code, stderr)
+	}
+	raw, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(raw)
+	if strings.Contains(got, "crewlet-aaaa1111") || strings.Count(got, `\"server\":\"crewlet-cccc3333\"`) != 1 ||
+		!strings.Contains(got, `\"server\":\"mine-bbbb2222\"`) {
+		t.Errorf("the history handed back calls %s, want the run's crewlet-cccc3333 and the person's mine-bbbb2222", got)
 	}
 }

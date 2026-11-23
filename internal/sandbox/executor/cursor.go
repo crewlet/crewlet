@@ -150,7 +150,7 @@ func cursorScript(req sandbox.RunRequest, session Session, paths Paths, configur
 	line(`mkdir -p %s || exit 1`, q(paths.CursorSessions()))
 	line(`set --`)
 	b.WriteString(cursorRules(paths))
-	b.WriteString(cursorSessionGate(session, paths, req.FreshWiring != nil && configured))
+	b.WriteString(cursorSessionGate(session, paths, configured, req.FreshWiring != nil && configured))
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$s" "$k" "$w" "${n%%%%-*}" > %s`,
 		q(paths.SessionRecord()))
 	add := q(paths.CursorMCPAdded())
@@ -280,7 +280,7 @@ const cursorHeld = `hc=$(ls -d "$HOME"/.cursor/chats/*/"$s" 2> /dev/null | head 
 // as they were; `--resume` of a chat it does not hold starts an empty
 // conversation, exit 0 (measured). A conversation the export cannot read
 // whole starts a new session, saying why.
-func cursorSessionGate(session Session, paths Paths, rewired bool) string {
+func cursorSessionGate(session Session, paths Paths, configured, rewired bool) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	q := shellword.Quote
@@ -333,8 +333,12 @@ func cursorSessionGate(session Session, paths Paths, rewired bool) string {
 	line(`  rm -rf %s`, q(staged))
 	line(`fi`)
 	line(`rm -f %s`, carried)
-	line(`if [ -z "$w" ]; then "$cn" %s doc %s %s 2> %s.error || w="its conversation could not be handed to Cursor Agent: $(cat %s.error 2> /dev/null)"; fi`,
-		helper, f, q(paths.CursorHistory()), f, f)
+	servers := ""
+	if configured {
+		servers = " " + q(paths.MCPConfig())
+	}
+	line(`if [ -z "$w" ]; then "$cn" %s doc %s %s%s 2> %s.error || w="its conversation could not be handed to Cursor Agent: $(cat %s.error 2> /dev/null)"; fi`,
+		helper, f, q(paths.CursorHistory()), servers, f, f)
 	line(`rm -f %s.error`, f)
 	line(`if [ -z "$w" ]; then`)
 	line(`  [ -z "$hc" ] || rm -rf "$hc" || exit 1`)
