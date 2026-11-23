@@ -6,11 +6,13 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/artifactupload"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
@@ -119,27 +121,60 @@ func TestAnUploadRecordsTheTypeAFileIsServedAs(t *testing.T) {
 // A RETRY REFUSED AS MOVED LEAVES WHAT AN EARLIER ATTEMPT LANDED: a publish
 // whose version landed and whose answer was lost is retried under its
 // operation key, the head has moved past its base, and the retry is refused
-// as moved before it stages a byte. The generated files the landed version
-// names stay stored, since a refusal undoes only its own attempt's objects.
+// as moved before it stages a byte. The generated file the landed version
+// names stays stored, inline or beside an upload's file, through what may
+// follow on the upload the refusal reopens: its window closing and a ledger
+// change releasing it early, or another publish of it closing.
 //
-// Mutation: let fail delete every held generated file of the record, and the
-// landed version's files are gone.
+// Mutation: let fail delete every held generated file of the record, or keep
+// another attempt's generated files on the record it reopens, and the landed
+// version's notes are gone.
 func TestARetryRefusedAsMovedLeavesWhatAnEarlierAttemptLanded(t *testing.T) {
 	t.Parallel()
-	h := newHarness(t, options{loseAnswer: true})
-	created := h.create(h.person("ada", h.opKey("create")), map[string]string{"index.html": "<p>v1</p>"})
-	c := h.person("ada", h.opKey("lost"))
-	req := artifactupload.PublishRequest{Artifact: created.Artifact, Base: 1, Mode: manifest.ModePatch,
-		Files: []artifactupload.FileSpec{{Path: "notes.txt", Inline: []byte("landed notes")}}}
-	if _, _, err := h.svc.Publish(t.Context(), c, req); err == nil {
-		t.Fatal("premise: the first attempt's answer was not lost")
-	}
-	_, _, err := h.svc.Publish(t.Context(), c, req)
-	var moved *artifactsdomain.VersionMoved
-	if !errors.As(err, &moved) {
-		t.Fatalf("the retry answered %v, want it refused as moved", err)
-	}
-	if got := h.file(h.version(created.Artifact, 2), "notes.txt"); got != "landed notes" {
-		t.Errorf("the landed version's notes read %q after the retry's refusal, want them as landed", got)
+	for _, c := range []struct {
+		name string
+		// upload carries an uploaded file beside the inline one.
+		upload bool
+		// then is what follows the refusal on the upload it reopened.
+		then func(h *harness, id artifacts.ID, up string)
+	}{
+		{"inline", false, func(*harness, artifacts.ID, string) {}},
+		{"with an upload, released once its window closes", true, func(h *harness, id artifacts.ID, _ string) {
+			h.clock.advance(objstore.MaxPresignTerm + time.Minute)
+			h.upload(h.person("ada", h.opKey("next")), id, map[string]string{"b.txt": "next"})
+		}},
+		{"with an upload, published again", true, func(h *harness, id artifacts.ID, up string) {
+			if _, _, err := h.svc.Publish(h.t.Context(), h.person("ada", h.opKey("again")),
+				artifactupload.PublishRequest{Artifact: id, Base: 2, Mode: manifest.ModePatch, Upload: up,
+					Files: []artifactupload.FileSpec{{Path: "a.txt", Upload: true}}}); err != nil {
+				h.t.Fatalf("publish the reopened upload again: %v", err)
+			}
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t, options{loseAnswer: true})
+			created := h.create(h.person("ada", h.opKey("create")), map[string]string{"index.html": "<p>v1</p>"})
+			req := artifactupload.PublishRequest{Artifact: created.Artifact, Base: 1, Mode: manifest.ModePatch,
+				Files: []artifactupload.FileSpec{{Path: "notes.txt", Inline: []byte("landed notes")}}}
+			if c.upload {
+				req.Upload = h.upload(h.person("ada", h.opKey("upload")), created.Artifact,
+					map[string]string{"a.txt": "uploaded"})
+				req.Files = append(req.Files, artifactupload.FileSpec{Path: "a.txt", Upload: true})
+			}
+			k := h.person("ada", h.opKey("lost"))
+			if _, _, err := h.svc.Publish(t.Context(), k, req); err == nil {
+				t.Fatal("premise: the first attempt's answer was not lost")
+			}
+			_, _, err := h.svc.Publish(t.Context(), k, req)
+			var moved *artifactsdomain.VersionMoved
+			if !errors.As(err, &moved) {
+				t.Fatalf("the retry answered %v, want it refused as moved", err)
+			}
+			c.then(h, created.Artifact, req.Upload)
+			if got := h.file(h.version(created.Artifact, 2), "notes.txt"); got != "landed notes" {
+				t.Errorf("the landed version's notes read %q, want them as landed", got)
+			}
+		})
 	}
 }

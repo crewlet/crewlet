@@ -408,10 +408,12 @@ func kitFile(version, file string) string { return artifacts.KitPrefix + version
 // fail answers a publish the domain or the pipeline refused, undoing what the
 // run wrote: every object it staged ([run.staged]) is deleted, dropped from
 // the record and its reservation released, and the caller's upload is open
-// again for another try. An earlier attempt's objects are never undone: its
-// outcome is unknown, and a version it landed may name them, so they are left
-// to the collector. An outcome nobody could establish leaves everything for
-// the retry of the same operation.
+// again for another try. A generated file another attempt recorded is dropped
+// from the record and never deleted: that attempt's outcome is unknown and a
+// version it landed may name it, so only the collector judges it, unreserved.
+// The upload's own transferred files stay held on it (#1986). An outcome
+// nobody could establish leaves everything for the retry of the same
+// operation.
 func (r *run) fail(ctx context.Context, cause error) error {
 	if r.stage == nil || r.stageNew {
 		return cause
@@ -441,8 +443,13 @@ func (r *run) fail(ctx context.Context, cause error) error {
 	}
 	updated, err := r.s.updateRecord(ctx, r.stage.ID, func(rec *record) error {
 		// DROPPED, NOT MARKED: the upload opens again for another publish,
-		// whose files would pile onto these past the record's bound.
-		rec.Files = slices.DeleteFunc(rec.Files, func(f file) bool { return slices.Contains(deleted, f.Key) })
+		// whose files would pile onto these past the record's bound; and an
+		// earlier attempt's, left held, would be deleted by its next close
+		// or its early release.
+		rec.Files = slices.DeleteFunc(rec.Files, func(f file) bool {
+			return slices.Contains(deleted, f.Key) ||
+				f.Transport == transportGenerated && !slices.Contains(r.staged, f.Key)
+		})
 		if rec.Purpose == purposeStage {
 			rec.State = stateClosed
 		} else {

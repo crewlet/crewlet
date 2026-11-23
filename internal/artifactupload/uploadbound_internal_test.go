@@ -197,7 +197,8 @@ func TestAStagedRecordAtItsBoundClosesWithItsOutcome(t *testing.T) {
 // A SIZE REFUSAL UNDOES NO EARLIER ATTEMPT'S OBJECTS: a retry of one publish
 // whose files would outgrow the record is refused before it stores a byte,
 // and the files an earlier attempt stored, whose outcome is unknown and which
-// a version it landed may name, stay stored and recorded.
+// a version it landed may name, stay stored, dropped from the record so no
+// later close or early release of it deletes them.
 //
 // Mutation: let fail delete every held generated file of the record, as it
 // did before a run kept what it staged, and the earlier object is deleted.
@@ -244,8 +245,8 @@ func TestASizeRefusalUndoesNoEarlierAttemptsObjects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if i := after.fileAt(earlier.Path); i < 0 || after.Files[i].State != fileStored {
-		t.Errorf("the record holds %+v after the refusal, want the earlier attempt's file stored", after.Files)
+	if len(after.Files) != 0 {
+		t.Errorf("the record holds %+v after the refusal, want the earlier attempt's file dropped", after.Files)
 	}
 }
 
