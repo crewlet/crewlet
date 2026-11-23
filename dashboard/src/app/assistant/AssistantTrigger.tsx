@@ -30,6 +30,7 @@ import {
   VisuallyHidden,
   useMediaMatch,
 } from "@crewlethq/ui";
+import type { ReactNode } from "react";
 import { ProductMark } from "@crewlethq/icons/product-mark";
 import { PHONE_BREAKPOINT, useKeyHints } from "../layout.ts";
 import { ariaKeysOf, keyRow, pressText } from "../keymap.ts";
@@ -100,4 +101,10 @@ export function AssistantTrigger() {
       {shown ? <VisuallyHidden>{`, ${ACTIVITY_WORDS[shown]}`}</VisuallyHidden> : null}
     </Button>
   );
+}
+
+/** The button for a slot that draws room around what it holds (an artifact bar's end): none while open. */
+export function useAssistantTriggerSlot(): ReactNode {
+  const { open } = useAssistantControl();
+  return open ? null : <AssistantTrigger />;
 }
