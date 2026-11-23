@@ -115,3 +115,31 @@ func TestAnUploadRecordsTheTypeAFileIsServedAs(t *testing.T) {
 			len(got))
 	}
 }
+
+// A RETRY REFUSED AS MOVED LEAVES WHAT AN EARLIER ATTEMPT LANDED: a publish
+// whose version landed and whose answer was lost is retried under its
+// operation key, the head has moved past its base, and the retry is refused
+// as moved before it stages a byte. The generated files the landed version
+// names stay stored, since a refusal undoes only its own attempt's objects.
+//
+// Mutation: let fail delete every held generated file of the record, and the
+// landed version's files are gone.
+func TestARetryRefusedAsMovedLeavesWhatAnEarlierAttemptLanded(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, options{loseAnswer: true})
+	created := h.create(h.person("ada", h.opKey("create")), map[string]string{"index.html": "<p>v1</p>"})
+	c := h.person("ada", h.opKey("lost"))
+	req := artifactupload.PublishRequest{Artifact: created.Artifact, Base: 1, Mode: manifest.ModePatch,
+		Files: []artifactupload.FileSpec{{Path: "notes.txt", Inline: []byte("landed notes")}}}
+	if _, _, err := h.svc.Publish(t.Context(), c, req); err == nil {
+		t.Fatal("premise: the first attempt's answer was not lost")
+	}
+	_, _, err := h.svc.Publish(t.Context(), c, req)
+	var moved *artifactsdomain.VersionMoved
+	if !errors.As(err, &moved) {
+		t.Fatalf("the retry answered %v, want it refused as moved", err)
+	}
+	if got := h.file(h.version(created.Artifact, 2), "notes.txt"); got != "landed notes" {
+		t.Errorf("the landed version's notes read %q after the retry's refusal, want them as landed", got)
+	}
+}

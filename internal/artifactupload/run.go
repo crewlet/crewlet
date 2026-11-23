@@ -45,6 +45,10 @@ type run struct {
 	stage    *record
 	stageNew bool
 
+	// staged are the keys this run minted and recorded on stage for the files
+	// it produced: the only objects a refusal of it undoes ([run.fail]).
+	staged []objstore.Key
+
 	// files are the new version's files this run names, by path.
 	files map[string]*pending
 

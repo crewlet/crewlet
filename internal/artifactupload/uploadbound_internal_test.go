@@ -1,6 +1,7 @@
 package artifactupload
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"math"
@@ -17,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/objstore/memobj"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -192,6 +194,61 @@ func TestAStagedRecordAtItsBoundClosesWithItsOutcome(t *testing.T) {
 	}
 }
 
+// A SIZE REFUSAL UNDOES NO EARLIER ATTEMPT'S OBJECTS: a retry of one publish
+// whose files would outgrow the record is refused before it stores a byte,
+// and the files an earlier attempt stored, whose outcome is unknown and which
+// a version it landed may name, stay stored and recorded.
+//
+// Mutation: let fail delete every held generated file of the record, as it
+// did before a run kept what it staged, and the earlier object is deleted.
+func TestASizeRefusalUndoesNoEarlierAttemptsObjects(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	now := func() time.Time { return widestInstant }
+	objects, err := objstore.NewStoreAt(memobj.NewAt(now), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Service{res: memory.NewFleet(), objects: objects, now: now}
+	body := []byte("p { color: red }")
+	earlier := file{Path: "style.css", ContentType: "text/css; charset=utf-8", SHA256: objstore.HashOf(body),
+		Size: int64(len(body)), Key: objects.Mint(), Transport: transportGenerated, State: fileStored}
+	if _, err := objects.PutMinted(ctx, earlier.Key, bytes.NewReader(body), earlier.Size,
+		objstore.PutMeta{ContentType: earlier.ContentType}); err != nil {
+		t.Fatal(err)
+	}
+	rec := &record{ID: uuid.NewString(), Principal: "ada.lovelace", Purpose: purposeStage, Created: widestInstant,
+		Expires: widestInstant, State: stateFinalizing, FinalizeKey: "a-publish", Files: []file{earlier}}
+	if wrote, err := s.writeRecord(ctx, rec, 0); err != nil || wrote == 0 {
+		t.Fatalf("premise: write the earlier attempt's record = %d, %v", wrote, err)
+	}
+	var fresh []file
+	for range 3 * artifacts.MaxFilesPerVersion {
+		fresh = append(fresh, file{Path: widestPath(`"`), ContentType: earlier.ContentType, SHA256: earlier.SHA256,
+			Size: earlier.Size, Key: objects.Mint(), Transport: transportGenerated, State: filePending})
+	}
+	r := &run{s: s, stage: rec}
+	refusal := r.recordFresh(ctx, fresh, widestInstant)
+	if !errors.Is(refusal, ErrInvalid) || !errors.Is(refusal, coord.ErrValueTooLarge) {
+		t.Fatalf("premise: the retry's files were recorded = %v, want them refused as too large", refusal)
+	}
+	if got := r.fail(ctx, refusal); !errors.Is(got, refusal) {
+		t.Fatalf("fail answered %v, want the refusal", got)
+	}
+	rc, err := objects.Open(ctx, earlier.object())
+	if err != nil {
+		t.Fatalf("the earlier attempt's object after the refusal: %v, want it stored", err)
+	}
+	_ = rc.Close()
+	after, _, err := s.readRecord(ctx, rec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if i := after.fileAt(earlier.Path); i < 0 || after.Files[i].State != fileStored {
+		t.Errorf("the record holds %+v after the refusal, want the earlier attempt's file stored", after.Files)
+	}
+}
+
 // AN UPLOAD RECORD PAST ITS BOUND IS REFUSED BY ITS WRITER, before it is
 // sent: as invalid (a definite refusal, which undoes what the publish
 // staged, never an outcome left for a retry), and as too large, naming the
@@ -209,7 +266,7 @@ func TestAnUploadRecordPastItsBoundIsRefusedByItsWriter(t *testing.T) {
 	switch {
 	case !errors.Is(err, ErrInvalid) || !errors.Is(err, coord.ErrValueTooLarge):
 		t.Fatalf("a record past its bound written = %v, want it refused as invalid and too large", err)
-	case !strings.Contains(err.Error(), r.ID) || !strings.Contains(err.Error(), "fewer files"):
+	case !strings.Contains(err.Error(), r.ID) || !strings.Contains(err.Error(), "new operation key"):
 		t.Errorf("the refusal %q names neither the upload nor what to do", err)
 	case !refused(err):
 		t.Errorf("the refusal %q is not one a publish undoes its staging on", err)
