@@ -1273,20 +1273,21 @@ func withLoopFindings(state ToolState, loop loopFound) ToolState {
 			faults[f.Subject] = f
 		}
 	}
-	if len(faults) == 0 && !loop.unsure {
+	if len(faults) == 0 && loop.unsure == "" {
 		return state
 	}
 	seats := make([]SeatState, 0, len(state.Seats))
 	for _, seat := range state.Seats {
 		if f, named := faults[seat.Handle]; named {
 			seat.Satisfied = false
-			seat.Detail = f.Detail
-		} else if loop.unsure && seat.Satisfied {
+			// The finding's own sentence, or its kind's where the record
+			// kept it without its words.
+			seat.Detail = integration.Classify([]integration.Finding{f}).Detail
+		} else if loop.unsure != "" && seat.Satisfied {
 			// NEVER SATISFIED ON FINDINGS NOT IN HAND: what the loop found
 			// about this seat may be among them.
 			seat.Satisfied = false
-			seat.Detail = "this node could not read everything the reconcile loop last found, " +
-				"so this agent's credential cannot be confirmed just now"
+			seat.Detail = loop.unsure
 		}
 		seats = append(seats, seat)
 	}
@@ -1295,13 +1296,22 @@ func withLoopFindings(state ToolState, loop loopFound) ToolState {
 }
 
 // loopFound is what the loop last recorded about one surface's seats: its
-// findings, and whether some of them are not in hand (the status or the
-// findings unread, or the record cut), when no seat they may name is
-// confirmed ([withLoopFindings]).
+// findings, and why some that may name a seat are not in hand, "" where all
+// are: the status or the findings unread, or the record cut a finding that
+// may name a seat. No seat they may name is then confirmed ([withLoopFindings]).
 type loopFound struct {
 	findings []integration.Finding
-	unsure   bool
+	unsure   string
 }
+
+// The reasons a seat is not confirmed: what a reader could not read, and what
+// the record's writer cut.
+const (
+	unsureUnread = "this node could not read everything the reconcile loop last found, so this " +
+		"agent's credential cannot be confirmed just now"
+	unsureCut = "the reconcile loop's last pass found more than its findings record keeps, and the " +
+		"record cut findings that may name this agent, so its credential cannot be confirmed"
+)
 
 // loopFindings is what the loop last recorded about one surface: its status by
 // key, then the findings it names by theirs, given their crossing. Not failing
@@ -1315,10 +1325,16 @@ func (s *Service) loopFindings(ctx context.Context, kind integration.Kind) loopF
 		log.WarnContext(ctx, "setup_roster_without_loop_findings",
 			"integration", kind.String(), "error", err.Error(),
 			"detail", "the roster confirms no seat the loop's findings may name until they can be read again")
-		return loopFound{unsure: true}
+		return loopFound{unsure: unsureUnread}
 	}
-	return loopFound{findings: state.Findings,
-		unsure: state.FindingsUnread || state.FindingsRecord.LeftOut()}
+	found := loopFound{findings: state.Findings}
+	switch {
+	case state.FindingsUnread:
+		found.unsure = unsureUnread
+	case state.FindingsRecord.NamesOmitted > 0:
+		found.unsure = unsureCut
+	}
+	return found
 }
 
 // seatCredentialAt is where one app keeps a seat's credential, passed in rather
