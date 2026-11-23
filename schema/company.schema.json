@@ -776,7 +776,7 @@
           ]
         },
         "max_timeout_seconds": {
-          "description": "How long the company lets a check run, whatever its checks file's timeout_seconds: 60..21600 seconds; unset is 3000 — the longest a hung check holds one of its Gitlet node's check slots.",
+          "description": "How long the company lets a check run, whatever its checks file's timeout_seconds: 60..21600 seconds; unset is 3600 — an hour, GitLab CI's and Azure Pipelines' default job timeout, and the longest a hung check holds one of its Gitlet node's check slots.",
           "maximum": 21600,
           "minimum": 60,
           "type": [

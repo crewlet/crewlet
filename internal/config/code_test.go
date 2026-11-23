@@ -1068,7 +1068,7 @@ func TestAQueuesCapacityIsItsRoundsOverASpan(t *testing.T) {
 // code.checks.max_timeout_seconds. Who may merge: every human seat, and each full_access agent seat that writes
 // the repository (the owning unit's lead and every seat of its subtree, a child unit's included, never a review
 // seat or one outside it), under the stricter of merge_by and code.merge_by_floor. Here five may merge against a
-// queue of one candidate of one change at six-hour rounds, four a day: warned; two candidates, the fifty-minute
+// queue of one candidate of one change at six-hour rounds, four a day: warned; two candidates, the hour-long
 // default rounds, merge_by maintainers or a maintainers floor (two may merge) and merge_by persons (the founder
 // alone) are each silent.
 //

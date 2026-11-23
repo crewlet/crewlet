@@ -87,7 +87,7 @@ func TestTheChecksBlockIsHeldToItsRules(t *testing.T) {
 		"a catalogue only a check reaches":  {doc: checksDoc(cells{local: true, image: true})},
 		"an image on a direct-seat company": {doc: checksDoc(cells{local: true, image: true, defaultRunIn: "direct"})},
 		"a timeout under a minute": {doc: checksDoc(direct, "max_timeout_seconds: 59"),
-			path: "code.checks.max_timeout_seconds", kind: "out_of_range", says: []string{"60..21600", "3000"}},
+			path: "code.checks.max_timeout_seconds", kind: "out_of_range", says: []string{"60..21600", "3600"}},
 		"a timeout past six hours": {doc: checksDoc(direct, "max_timeout_seconds: 21601"),
 			path: "code.checks.max_timeout_seconds", kind: "out_of_range", says: []string{"21601", "60..21600"}},
 		"a negative timeout": {doc: checksDoc(direct, "max_timeout_seconds: -1"),
@@ -225,6 +225,20 @@ func TestTheChecksBlockIsTheSchemas(t *testing.T) {
 	}
 	if got := (config.CodeChecks{MaxTimeoutSeconds: 600}).MaxTimeout(); got != 10*time.Minute {
 		t.Errorf("max_timeout_seconds: 600 is %s", got)
+	}
+}
+
+// AN UNSET CHECK TIMEOUT IS THE CI'S DEFAULT JOB TIMEOUT: an hour, GitLab CI's
+// and Azure Pipelines' alike, so a pipeline moved here keeps the default it ran
+// under. The schema test above holds the constant only to itself and its
+// bounds, so this is what keeps the stated reason true.
+// Mutation: set CodeDefaultCheckMaxTimeout to 50 minutes, and this goes red.
+func TestAnUnsetCheckTimeoutIsTheCIsDefaultJobTimeout(t *testing.T) {
+	t.Parallel()
+	const ciDefaultJobTimeout = time.Hour
+	if got := (config.CodeChecks{}).MaxTimeout(); got != ciDefaultJobTimeout {
+		t.Errorf("an unset code.checks.max_timeout_seconds is %s, want %s: GitLab CI's and "+
+			"Azure Pipelines' default job timeout", got, ciDefaultJobTimeout)
 	}
 }
 
