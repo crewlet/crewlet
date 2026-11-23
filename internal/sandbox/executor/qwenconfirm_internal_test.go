@@ -2,6 +2,7 @@ package executor
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -31,7 +32,7 @@ func qwenTakes(items ...string) []ServedTake {
 // a tool result or the prompt; two records before the reply confirm two takes,
 // not three; of two with a reply after the first alone, one. A record with no
 // reply, a torn reply, or a line past the bound or undecodable before the
-// reply confirms nothing.
+// reply confirms nothing; a take the session lacks leaves the next to match.
 //
 // Mutations, each red: hash the framed part; drop the subtype check; match out
 // of order; confirm whatever the digest; hold a match no reply follows; keep
@@ -100,7 +101,7 @@ func TestAQwenCodeNoteIsConfirmedByItsRecordAsHanded(t *testing.T) {
 		"the note with its framing":            {string(raw), qwenTakes("\n" + qwenNoteFraming + note), nil},
 		"two of one text, two records":         {twice, qwenTakes(note, note), []string{"i-1", "i-2"}},
 		"three of one text, two records":       {twice, qwenTakes(note, note, note), []string{"i-1", "i-2"}},
-		"a note the session lacks first":       {string(raw), qwenTakes("another note", note), nil},
+		"a note the session lacks first":       {string(raw), qwenTakes("another note", note), []string{"i-2"}},
 		"a prefix of the text":                 {string(raw), qwenTakes("MARK-R6-START"), nil},
 		"the framed text in a tool result":     {strings.Replace(string(raw), result, forged, 1), qwenTakes("FORGED"), nil},
 		"the framed text as a prompt":          {strings.Replace(string(raw), prompt, asPrompt, 1), qwenTakes("FORGED"), nil},
@@ -280,5 +281,36 @@ func TestANoteACompactionKeepsOnlyInItsSummaryIsNotRead(t *testing.T) {
 				t.Fatalf("qwenNotesHeld = %v, %v; want %v", got, err, tc.want)
 			}
 		})
+	}
+}
+
+// A QWEN NOTE THE HELPER NEVER HANDED LEAVES THE LATER ONES TO MATCH: a take
+// polled and never handed is unheld, and each later record matches the first
+// take after the last one matched with its words.
+//
+// Mutation: match a record against the next take alone, and C reads unheld.
+func TestAQwenNoteNeverHandedLeavesTheLaterOnesToMatch(t *testing.T) {
+	t.Parallel()
+	const (
+		a    = "## A note from ada, sent while this turn was running\n\nuse main"
+		lost = "## A note from ada, sent while this turn was running\n\nnever handed"
+		c    = "## A note from ada, sent while this turn was running\n\nrun the tests"
+	)
+	line := func(v map[string]any) string {
+		raw, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw) + "\n"
+	}
+	handed := func(text string) string {
+		return line(map[string]any{"type": "user", "subtype": "mid_turn_user_message",
+			"message": map[string]any{"parts": []map[string]string{{"text": "\n" + qwenNoteFraming + text}}}})
+	}
+	reply := line(map[string]any{"type": "assistant", "message": map[string]any{"parts": []map[string]string{{"text": "ok"}}}})
+	session := handed(a) + reply + handed(c) + reply
+	got, err := qwenNotesHeld(strings.NewReader(session), qwenTakes(a, lost, c), 0, qwenTestBound)
+	if err != nil || !slices.Equal(got, []string{"i-1", "i-3"}) {
+		t.Errorf("qwenNotesHeld = %v, %v; want A and C held and the lost one not", got, err)
 	}
 }

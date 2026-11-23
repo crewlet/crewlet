@@ -96,8 +96,10 @@ func qwenChatFile(ctx context.Context, box sandbox.Sandbox, session string) (str
 
 // qwenNotesHeld is the inbox ids of takes, in serve order, whose items the
 // session read from r holds as a current instruction: each record, at or past
-// the line from where the takes' run began, whose handed text's digest is the
-// next take's matches it, so two takes of identical text need two records. A
+// the line from where the takes' run began, matches the first unmatched take
+// after the last one matched with its handed text's digest, so two takes of
+// identical text need two records, and a take the helper never handed leaves
+// the later ones to be matched, unheld itself. A
 // match is settled only by the next assistant record, the reply to a request
 // that carried the note plain; a compaction before it keeps the match only
 // where the note survives plain in the history Qwen Code goes on with, past
@@ -147,12 +149,15 @@ func qwenNotesHeld(r io.Reader, takes []ServedTake, from, bound int) ([]string, 
 				}
 			}
 			pending = kept
-		case record.Type == "user" && record.Subtype == "mid_turn_user_message" && next < len(takes) &&
+		case record.Type == "user" && record.Subtype == "mid_turn_user_message" &&
 			len(record.Message.Parts) > 0 && record.Message.Parts[0].Text != nil:
 			handed, framed := strings.CutPrefix(*record.Message.Parts[0].Text, framing)
-			if digest := ItemDigest(handed); framed && digest == takes[next].Digest {
-				pending = append(pending, match{takes[next].InboxID, digest})
-				next++
+			digest := ItemDigest(handed)
+			for i := next; framed && i < len(takes); i++ {
+				if takes[i].Digest == digest {
+					pending, next = append(pending, match{takes[i].InboxID, digest}), i+1
+					break
+				}
 			}
 		}
 		return nil
