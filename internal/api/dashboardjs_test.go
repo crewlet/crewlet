@@ -1053,14 +1053,14 @@ const (
 	// the shell links: everything a reader downloads before the first screen
 	// can draw. It began at 300 KiB, under two seconds on a 1.5 Mbit/s link
 	// (the slow end of a phone tether), and has moved up with each kit release
-	// and frame feature; the last measure was 436.8 KiB, about 2.39 seconds,
-	// on kit 0.178.1, whose stylesheet carries the components added since 0.173.0.
+	// and frame feature; the last measure was 435.4 KiB, about 2.38 seconds,
+	// on kit 0.178.1, whose one sheet carries the new step and card rules.
 	// The one sheet carries every design-system rule by rule (see
 	// TestNoLazyStylesheetCarriesTheDesignSystem), so kit releases grow it even
 	// when no screen joins the entry. A raise names the measured size and its
 	// cause in its commit; a screen's module in the entry is the failure to fix
 	// rather than raise for.
-	initialBudget = 437 << 10
+	initialBudget = 436 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1079,8 +1079,8 @@ const (
 	// at 3 MiB over a 2.3 MB baseline and is set so a bundle that doubled the
 	// baseline is still refused; screens fetched only when opened (the rich
 	// editor, the brand and folder screens, the assistant's panel, Gitlet) and
-	// kit releases account for its growth, and the last measure was 7409.7 KiB
-	// on kit 0.178.1, whose vendor marks draw their owners' logos.
+	// kit releases account for its growth, and the last measure was 7409.0 KiB,
+	// on kit 0.178.1, whose vendor marks draw the store, ads and analytics logos.
 	// A raise names the measured size and its cause in its commit.
 	treeBudget = 5<<20 + 2290<<10
 )
