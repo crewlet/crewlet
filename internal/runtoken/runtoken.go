@@ -195,6 +195,7 @@ type Signer struct {
 	activeTag string
 	keys      map[string][]byte
 	now       func() time.Time
+	lifelong  bool
 }
 
 // Options configure [New].
@@ -216,6 +217,13 @@ type Options struct {
 	// processes and a monotonic reading's epoch is per-boot — meaningless
 	// anywhere but where it was taken.
 	Now func() time.Time
+
+	// Lifelong lets this domain's tokens carry no expiry of their own
+	// ([Signer.MintUntil]'s zero): what ends one is its endpoint's own
+	// authority, a live session it is checked against on every request, and
+	// a fixed expiry would only end a run that is still working. A signer
+	// without it refuses to mint one ([ErrLifelong]) and to validate one.
+	Lifelong bool
 }
 
 // New builds a signer, or refuses a keyring that cannot sign for the fleet.
@@ -235,7 +243,7 @@ func New(opts Options) (*Signer, error) {
 	if now == nil {
 		now = time.Now
 	}
-	s := &Signer{keys: map[string][]byte{}, now: now}
+	s := &Signer{keys: map[string][]byte{}, now: now, lifelong: opts.Lifelong}
 	for _, key := range opts.Material.Keys {
 		tag := KeyTag(opts.Domain, key.ID)
 		s.keys[tag] = DeriveKey(opts.Domain, key.ID, key.Material)
@@ -250,6 +258,15 @@ func New(opts Options) (*Signer, error) {
 // would not know a token over by its shape.
 var ErrSubject = errors.New("runtoken: a token over this subject would not be redacted")
 
+// ErrLifelong reports a token with no expiry asked of, or shown to, a signer
+// whose domain did not declare its tokens may carry none ([Options.Lifelong]).
+var ErrLifelong = errors.New("runtoken: this domain's tokens expire")
+
+// lifelong is the expiry a token with none carries: an instant no token of an
+// expiring domain names, since every one is minted at least [minTTL] past a
+// clock that reads past the epoch, and digits, as internal/redact reads one.
+const lifelong = "0"
+
 // Mint returns a token scoped to one subject, valid for ttl, signed under the
 // keyring's active key and naming it, or refuses a subject its token could
 // not carry ([ErrSubject]).
@@ -262,14 +279,25 @@ var ErrSubject = errors.New("runtoken: a token over this subject would not be re
 // what redaction keys on"), persisted as printed. An error, never a panic: a
 // subject can carry what a person named.
 func (s *Signer) Mint(subject string, ttl time.Duration) (string, error) {
+	return s.MintUntil(subject, s.now().Add(ttl))
+}
+
+// MintUntil is [Signer.Mint] with the instant the token expires at, no
+// sooner than [minTTL] from now; or, where until is zero, a token with no
+// expiry of its own, which only a signer of a [Options.Lifelong] domain mints
+// ([ErrLifelong]).
+func (s *Signer) MintUntil(subject string, until time.Time) (string, error) {
 	if err := redactable(subject); err != nil {
 		return "", err
 	}
-	if ttl < minTTL {
-		ttl = minTTL
+	expiry := lifelong
+	switch {
+	case until.IsZero() && !s.lifelong:
+		return "", ErrLifelong
+	case !until.IsZero():
+		expiry = strconv.FormatInt(max(until.Unix(), s.now().Add(minTTL).Unix()), 10)
 	}
-	payload := version + "." + s.activeTag + "." + subject + "." +
-		strconv.FormatInt(s.now().Add(ttl).Unix(), 10)
+	payload := version + "." + s.activeTag + "." + subject + "." + expiry
 	return payload + "." + s.sign(s.keys[s.activeTag], payload), nil
 }
 
@@ -297,7 +325,8 @@ func redactable(subject string) error {
 }
 
 // Validate returns the token's subject, or empty for one that is forged,
-// malformed, expired, or signed under a key this node does not hold.
+// malformed, expired, signed under a key this node does not hold, or with no
+// expiry in a domain whose tokens expire ([Options.Lifelong]).
 //
 // A FOUR-WAY ANSWER COLLAPSED TO ONE ON PURPOSE. The caller's only move for
 // any of them is to refuse the request, and telling a caller which of its
@@ -320,6 +349,12 @@ func (s *Signer) Validate(token string) string {
 	// are deliberately reachable without other credentials.
 	if !hmac.Equal([]byte(parts[4]), []byte(s.sign(key, payload))) {
 		return ""
+	}
+	if parts[3] == lifelong {
+		if !s.lifelong {
+			return ""
+		}
+		return parts[2]
 	}
 	expiry, err := strconv.ParseInt(parts[3], 10, 64)
 	if err != nil || !s.now().Before(time.Unix(expiry, 0)) {
