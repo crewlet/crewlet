@@ -2,9 +2,12 @@ package executor
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // A GEMINI TAKE IS CONFIRMED BY ITS TEXT AS A USER MESSAGE, ONCE PER DELIVERY,
@@ -78,5 +81,36 @@ func TestAGeminiTakeIsConfirmedByItsTextAsAUserMessage(t *testing.T) {
 				t.Fatalf("geminiConfirmed = %d, %v; want %d", got, err, tc.want)
 			}
 		})
+	}
+}
+
+// A READ GEMINI NOTE KEEPS ITS PLACE: the take script records every take,
+// read ones included, so a read note's entry is spent on it and settles no
+// later take of the same words whose entry the session never got (the run
+// killed before Gemini CLI wrote it).
+//
+// Mutation: match the session against the asked takes alone, and B reads held
+// off A's entry.
+func TestAReadGeminiNoteKeepsItsPlace(t *testing.T) {
+	t.Parallel()
+	const session = "11111111-2222-4333-8444-555555555555"
+	const note = "## A note from Lead, sent while this turn was running: use staging"
+	box := sandbox.NewFakeSandbox("gemini-read")
+	p := PathsFor(box)
+	const name = "session-2026-11-23T09-00-11111111.jsonl"
+	box.Put(p.GeminiChats()+"/"+name, `{"sessionId":"`+session+`"}`+"\n"+
+		`{"type":"user","content":[{"text":"Fix the flake."}]}`+"\n"+`{"type":"user","content":[{"text":"`+note+`"}]}`+"\n"+
+		`{"type":"gemini","content":"On it."}`+"\n")
+	box.Put(p.GeminiTakes(session), `{"from":0}`+"\n"+`{"take":"take-a","digest":"`+ItemDigest(note)+`"}`+"\n"+
+		`{"take":"take-b","digest":"`+ItemDigest(note)+`"}`+"\n")
+	box.ExecFunc = func(context.Context, string, sandbox.ExecOptions) (sandbox.ExecResult, error) {
+		return sandbox.ExecResult{Stdout: name + "\n"}, nil
+	}
+	a := sandbox.AskedTake{Take: "take-a", Digest: ItemDigest(note), Read: true}
+	b := sandbox.AskedTake{Take: "take-b", Digest: ItemDigest(note)}
+	got := GeminiCLI{}.readMainThread(t.Context(), box, p, sandbox.MainThreadAsk{Session: session,
+		Takes: []sandbox.AskedTake{b}, Served: []sandbox.AskedTake{a, b}}).Receipts
+	if len(got.Held) != 0 {
+		t.Errorf("B, never written to the session, reads %+v off the read A's entry, want nothing held", got)
 	}
 }

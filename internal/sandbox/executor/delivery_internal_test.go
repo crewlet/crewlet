@@ -190,7 +190,8 @@ func (s servedOrder) notesHeld(_ context.Context, _ sandbox.Sandbox, _ Session, 
 // take, and a case goes red.
 func TestARecordIsMatchedAgainstEveryServeAndAnswersTheAskedAlone(t *testing.T) {
 	t.Parallel()
-	read, asked := sandbox.AskedTake{Take: "msg_read", Digest: "d-1"}, sandbox.AskedTake{Take: "msg_asked", Digest: "d-1"}
+	read := sandbox.AskedTake{Take: "msg_read", Digest: "d-1", Read: true}
+	asked := sandbox.AskedTake{Take: "msg_asked", Digest: "d-1"}
 	var handed []ServedTake
 	got := recordReceipts(t.Context(), servedOrder{&handed}, sandbox.NewFakeSandbox("b"),
 		sandbox.MainThreadAsk{Session: "s-1", Takes: []sandbox.AskedTake{asked}, Served: []sandbox.AskedTake{read, asked}})
