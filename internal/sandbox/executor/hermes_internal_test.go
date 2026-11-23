@@ -633,6 +633,15 @@ func TestACarriedHermesSessionContinuesOnlyUnderItsLaunch(t *testing.T) {
 			t.Fatalf("gate = %q, want the fresh session, saying the model route differs", got)
 		}
 	})
+	t.Run("a model named in -m's own words", func(t *testing.T) {
+		home := t.TempDir()
+		named := sandbox.RunRequest{Model: "openrouter:stub-model"}
+		policy, _ := json.Marshal(map[string]string{"crewlet_policy": hermesPolicy(named) + home})
+		archive := append(bytes.Clone(hermesFixture(t, "0.23.3", "session-steered.jsonl")), append(policy, '\n')...)
+		if got := hermesGate(t, home, hermesFloor(), hermesFixtureRoute, named, archive); got[1] != "yes" {
+			t.Fatalf("gate = %q, want the session continued: 0.23.3 freezes openrouter:m as m", got)
+		}
+	})
 	t.Run("no route frozen", func(t *testing.T) {
 		home := t.TempDir()
 		got := hermesGate(t, home, hermesFloor(), hermesFixtureRoute, req,

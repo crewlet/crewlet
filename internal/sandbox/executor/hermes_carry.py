@@ -198,31 +198,37 @@ def top(db_path):
     return "ok %d" % (db.execute("select coalesce(max(id), 0) from messages").fetchone()[0])
 
 
+def configured_model(model):
+    """A model section's default model; a bare string names it alone, as Hermes reads it."""
+    return (model.get("default") if isinstance(model, dict) else model) or ""
+
+
 def route(db_path, title, model):
-    """Hermes keeps a session on the model route it froze as it created it (its gateway_runtime: provider,
-    base URL and model), whatever the box's configuration says at a resume (measured on 0.23.3: a resume under
-    another provider and base URL still calls the frozen one), so a continued session would keep a route its
-    entry no longer names; a resume is right only on the route Hermes resolves for the box now
-    (hermes_cli.runtime_provider, as it resolved the frozen one; measured equal for a named provider and for one
-    found from a key), with the run's model, or else the configuration's. moved where they differ, none where
-    the store holds no frozen route of the session. The box's own managed scope is read; the run's overlay sets
-    no model key."""
+    """Hermes keeps a session on the route it froze as it created it (its gateway_runtime's provider and base
+    URL, written before the first request answers), whatever the box's configuration says at a resume
+    (measured on 0.23.3: a resume under another provider and base URL still calls the frozen one), so a
+    continued session would keep a route its entry no longer names. A resume is right only on the route Hermes
+    resolves for the box now (hermes_cli.runtime_provider, as it resolved the frozen one: measured equal for a
+    named provider and for one found from a key). The model: a run naming one has it compared with its kept
+    launch, since -m's words are not the frozen form (openrouter:m freezes m); a run naming none, the
+    configured default against the one frozen. moved where any differs, none where no route was frozen. The
+    box's own managed scope is read; the run's overlay sets no model key."""
     os.environ.pop("HERMES_MANAGED_DIR", None)
     db = sqlite3.connect("file:%s?mode=ro" % db_path, uri=True)
     ids = lineage(db, title)
-    row = db.execute("select model_config, model from sessions where id = ?", (ids[-1],)).fetchone() if ids else None
+    row = db.execute("select model_config from sessions where id = ?", (ids[-1],)).fetchone() if ids else None
     frozen = (json.loads(row[0] or "{}") or {}).get("gateway_runtime") if row else None
     if not isinstance(frozen, dict) or not frozen.get("provider"):
         return "none"
     from hermes_cli.config import load_config
     from hermes_cli.runtime_provider import resolve_runtime_provider
     now = resolve_runtime_provider()
-    if not model:
-        configured = load_config().get("model")
-        model = configured.get("default") if isinstance(configured, dict) else configured
     same = (now.get("provider") == frozen.get("provider") and
-            (now.get("base_url") or "").rstrip("/") == (frozen.get("base_url") or "").rstrip("/") and
-            (not model or model == (frozen.get("model") or row[1])))
+            (now.get("base_url") or "").rstrip("/") == (frozen.get("base_url") or "").rstrip("/"))
+    if same and not model:
+        policy = db.execute("select value from state_meta where key = ?", (POLICY_KEY % ids[0],)).fetchone()
+        config = json.loads(json.loads(policy[0]).get("policy", {}).get("config_json") or "{}") if policy else {}
+        same = configured_model(load_config().get("model")) == configured_model(config.get("model"))
     return "ok" if same else "moved"
 
 
