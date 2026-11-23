@@ -115,7 +115,7 @@ type Fact struct {
 
 	// Identifier marks a value that is an ID (a key, a team), drawn in the
 	// mono face.
-	Identifier bool `json:"identifier,omitempty"`
+	Identifier bool `json:"identifier,omitempty"` //wiregate:absent-is-false a mark the fact draws only when set
 }
 
 // Warning is one risk or problem a check found, with what to do about it.
