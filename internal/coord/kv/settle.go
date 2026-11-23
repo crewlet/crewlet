@@ -160,8 +160,8 @@ var (
 		{keys: activationKey, class: pointerClass},
 		{keys: bodyPrefix + "*", class: bodyClass},
 	}, rest: undeclared}
-	// undeclaredHolding is every bucket's but the runs, the config and the
-	// positions register.
+	// undeclaredHolding is every bucket's but the runs, the config, the
+	// positions register and the uploads.
 	undeclaredHolding = holding{rest: undeclared}
 
 	// The positions register's classes, each at the bound its writer holds
@@ -188,6 +188,21 @@ var (
 		{keys: coord.DocumentFilter(coord.HomeBoardClass), class: homeBoardValue},
 		{keys: coord.DocumentFilter(coord.AtlasWakeClass), class: smallValue},
 		{keys: coord.DocumentFilter(coord.DeviceSignInClass), class: smallValue},
+	}, rest: undeclared}
+
+	// The uploads bucket's classes (ADR-0175, "The uploads bucket declares
+	// its classes"): every read of each decides a compare-and-set a caller
+	// waits on. No other key is written there.
+	uploadLedgerValue = class{bound: coord.MaxUploadLedgerBytes, reply: replyDeciding}
+	uploadRecordValue = class{bound: coord.MaxUploadRecordBytes, reply: replyDeciding}
+	saveLedgerValue   = class{bound: coord.MaxSaveLedgerBytes, reply: replyDeciding}
+
+	// uploadsHolding is the uploads bucket's: the three classes, and the
+	// rest undeclared until #1814 makes the default small.
+	uploadsHolding = holding{classes: []keyClass{
+		{keys: coord.UploadLedgerKey, class: uploadLedgerValue},
+		{keys: coord.DocumentFilter(coord.UploadRecordClass), class: uploadRecordValue},
+		{keys: coord.DocumentFilter(coord.SaveLedgerClass), class: saveLedgerValue},
 	}, rest: undeclared}
 )
 

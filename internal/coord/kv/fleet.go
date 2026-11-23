@@ -644,7 +644,7 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 			cfg.CustodyRetention, undeclaredHolding},
 		{&store.uploads, uploadsSuffix,
 			"Crewlet artifact upload reservations and seat save ledgers; the bucket TTL outlasts the longest hold either keeps",
-			cfg.UploadRetention, undeclaredHolding},
+			cfg.UploadRetention, uploadsHolding},
 		{&store.positions, positionsSuffix,
 			"Crewlet per-node state-log positions; NO TTL — an expired position reads as a node that applied nothing", 0, positionsHolding},
 	} {

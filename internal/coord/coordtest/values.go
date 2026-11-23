@@ -133,6 +133,41 @@ var positionsValueCases = []fleetCase{
 	}},
 }
 
+// uploadsValueCases hold every backend to the bound each class of the uploads
+// bucket declares: the reservation ledger, an upload's record and a seat's
+// save ledger one byte past theirs are refused as too large, created or
+// changed, and at it are written. A twin left at coord.MaxValueBytes would
+// certify a record the KV backend refuses.
+var uploadsValueCases = []fleetCase{
+	{"an uploads value past its class's bound is refused as too large, and at it is written", func(h *fleetHarness) {
+		for _, c := range []struct {
+			what  string
+			bound int
+			swap  func(value []byte, revision uint64) (uint64, error)
+		}{
+			{"the reservation ledger", coord.MaxUploadLedgerBytes, func(value []byte, revision uint64) (uint64, error) {
+				return h.f.SwapUploadLedger(h.ctx, value, revision)
+			}},
+			{"an upload's record", coord.MaxUploadRecordBytes, func(value []byte, revision uint64) (uint64, error) {
+				return h.f.SwapUploadRecord(h.ctx, "u-bound", value, revision)
+			}},
+			{"a seat's save ledger", coord.MaxSaveLedgerBytes, func(value []byte, revision uint64) (uint64, error) {
+				return h.f.SwapSaveLedger(h.ctx, "sre", value, revision)
+			}},
+		} {
+			_, err := c.swap(paddedValue(c.bound+1), 0)
+			h.tooLarge(c.what+" created", err)
+			wrote, err := c.swap(paddedValue(c.bound), 0)
+			if err != nil || wrote == 0 {
+				h.t.Errorf("%s at its bound, %d bytes = %d, %v, want it written", c.what, c.bound, wrote, err)
+				continue
+			}
+			_, err = c.swap(paddedValue(c.bound+1), wrote)
+			h.tooLarge(c.what+" changed", err)
+		}
+	}},
+}
+
 // paddedValue is a JSON string of exactly size bytes.
 func paddedValue(size int) []byte {
 	return []byte(`"` + strings.Repeat("x", size-2) + `"`)

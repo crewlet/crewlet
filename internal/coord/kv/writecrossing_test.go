@@ -410,9 +410,9 @@ func TestARunsValueIsGivenItsCrossingOnlyAcrossALink(t *testing.T) {
 // runs, values or headers, is quiet and beats 185 s across a link, 5 s in
 // process. A class is one key at most, at the term only if it crosses in it.
 //
-// Mutation: let leaderFor or most ignore a class, undeclare a positions
-// class, read bodies at the term, declare a class past one key, or give a
-// headers pass passIdle.
+// Mutation: let leaderFor or most ignore a class, undeclare a positions or
+// uploads class, read bodies at the term, declare a class past one key, or
+// give a headers pass passIdle.
 func TestEveryReadIsGivenTheCrossingOfItsClassBound(t *testing.T) {
 	t.Parallel()
 	// THE FIGURES STATED, not derived again: a full value with the most header,
@@ -517,6 +517,35 @@ func TestEveryReadIsGivenTheCrossingOfItsClassBound(t *testing.T) {
 					reach, got, c.idle)
 			}
 		}
+		// THE UPLOADS BUCKET'S CLASSES, every read of each deciding a write a
+		// caller waits on; a pass over the whole bucket an upload record's.
+		for _, c := range []struct {
+			key, keys  string // key "" for a filter no read names
+			term, idle time.Duration
+		}{
+			{coord.UploadLedgerKey, coord.UploadLedgerKey,
+				deciding(coord.MaxUploadLedgerBytes), raw(coord.MaxUploadLedgerBytes)},
+			{coord.UploadRecordKey(turnID), coord.DocumentFilter(coord.UploadRecordClass),
+				deciding(coord.MaxUploadRecordBytes), raw(coord.MaxUploadRecordBytes)},
+			{coord.SaveLedgerKey("sre"), coord.DocumentFilter(coord.SaveLedgerClass),
+				deciding(coord.MaxSaveLedgerBytes), raw(coord.MaxSaveLedgerBytes)},
+			{"", jetstream.AllKeys, 0, raw(coord.MaxUploadRecordBytes)},
+		} {
+			if c.key != "" {
+				read, err := newLeaderReader(store.js, store.uploads)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := read.leaderFor(c.key).Term(); got != c.term {
+					t.Errorf("the uploads bucket's %q %s is read at a term of %v, want %v", c.key, reach, got,
+						c.term)
+				}
+			}
+			if got := store.uploads.(settledBucket).quiet(c.keys); got != c.idle {
+				t.Errorf("a pass over the uploads bucket's %q %s is quiet after %v, want %v", c.keys, reach,
+					got, c.idle)
+			}
+		}
 		standing, err := beginPass(t.Context(), store.js, store.runs, runRecordKeys, "the runs' standing", true)
 		if err != nil {
 			t.Fatalf("begin a pass of the runs' standing %s: %v", reach, err)
@@ -569,7 +598,7 @@ func openedHoldings(t *testing.T, nc *nats.Conn) []holding {
 	for _, kv := range []jetstream.KeyValue{leases.leases.kv, leases.duties.kv, leases.counter.kv} {
 		found = append(found, kv.(settledBucket).holding)
 	}
-	for _, want := range []holding{runsHolding, configHolding, positionsHolding, undeclaredHolding} {
+	for _, want := range []holding{runsHolding, configHolding, positionsHolding, uploadsHolding, undeclaredHolding} {
 		if !slices.ContainsFunc(found, want.same) {
 			t.Fatalf("premise: no opened bucket holds %+v, so the walk read the handles wrong", want)
 		}
@@ -610,11 +639,12 @@ func TestASmallClassCrossesTheFloorInsideTheReadTerm(t *testing.T) {
 
 // A SETTLED WRITE IS HELD TO ITS CLASS'S BOUND, refused before anything is
 // sent: the activation pointer past coord.MaxPointerBytes, read at the term by
-// every probe, while a body of the same size beside it is written; and an
-// atlas wake past coord.SmallValueBytes beside a node's positions.
+// every probe, while a body of the same size beside it is written; an atlas
+// wake past coord.SmallValueBytes beside a node's positions; and the
+// reservation ledger past coord.MaxUploadLedgerBytes beside an upload record.
 //
 // Mutation: hold every value to coord.MaxValueBytes in carriedBack, and the
-// pointer and the wake are written.
+// pointer, the wake and the ledger are written.
 func TestASettledWriteIsHeldToItsClassBound(t *testing.T) {
 	t.Parallel()
 	d := &deadlined{}
@@ -655,6 +685,27 @@ func TestASettledWriteIsHeldToItsClassBound(t *testing.T) {
 	}
 	if len(p.writes) != 1 {
 		t.Errorf("the positions reached the client %d times, want once", len(p.writes))
+	}
+
+	// AND IN THE UPLOADS BUCKET: the reservation ledger past its bound,
+	// while an upload's record of the same size, under its own, is written.
+	u := &deadlined{}
+	uploads := settled(termed{term: jsapi.RequestTerm}, named{KeyValue: u, bucket: "uploads"}, AcrossLink,
+		uploadsHolding)
+	ledger := make([]byte, coord.MaxUploadLedgerBytes+1)
+	_, err = uploads.Put(t.Context(), coord.UploadLedgerKey, ledger)
+	if !errors.Is(err, coord.ErrValueTooLarge) || !strings.Contains(err.Error(), "65536") {
+		t.Errorf("a reservation ledger of %d bytes put = %v, want coord.ErrValueTooLarge naming its bound, 65536",
+			len(ledger), err)
+	}
+	if len(u.writes) != 0 {
+		t.Fatalf("the refused ledger reached the client %d times, want never", len(u.writes))
+	}
+	if _, err := uploads.Put(t.Context(), coord.UploadRecordKey("u-1"), ledger); err != nil {
+		t.Errorf("an upload record of %d bytes put = %v, want it written", len(ledger), err)
+	}
+	if len(u.writes) != 1 {
+		t.Errorf("the record reached the client %d times, want once", len(u.writes))
 	}
 }
 
