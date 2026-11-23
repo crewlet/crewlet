@@ -187,8 +187,8 @@ func grokScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 // run starts from.
 func grokRestoreConfig(paths Paths) string {
 	q := shellword.Quote
-	return fmt.Sprintf(`if [ -f %[1]s ]; then { if [ -s %[1]s ]; then cp %[1]s %[2]s && mv -f %[2]s %[3]s; else rm -f %[3]s; fi; } && rm -f %[1]s; fi
-`, q(paths.GrokConfigBox()), q(paths.GrokConfig()+".next"), q(paths.GrokConfig()))
+	return fmt.Sprintf(`if [ -f %[1]s ]; then { if [ -s %[1]s ]; then cp %[1]s %[2]s && mv -f %[2]s %[3]s; else rm -f %[3]s; fi; } && rm -f %[1]s %[4]s; fi
+`, q(paths.GrokConfigBox()), q(paths.GrokConfig()+".next"), q(paths.GrokConfig()), q(paths.GrokConfigOurs()))
 }
 
 // grokMainRecord is the part of a run's script that adds to its stream, once
@@ -674,13 +674,15 @@ func grokConfig(servers map[string]sandbox.MCPServer, nonce string, hooks string
 
 // grokBoxConfig is the box's own ~/.grok/config.toml, as it stood before this
 // run wrote it, kept at [Paths.GrokConfigBox] (empty where the box had none)
-// until the run puts it back ([grokRestoreConfig]); a copy an earlier run cut
-// off left is the box's own still. So every run lays its tables into the box's
-// settings and none into an earlier run's.
+// until the run puts it back ([grokRestoreConfig]). Where a kept copy is
+// already there, an earlier run was cut off before it put the box's back: the
+// settings as they now stand less that run's tables ([grokLeftOut]) are kept
+// in its place. So every run lays its tables into the box's settings and none
+// into an earlier run's, and an edit made since stands.
 func grokBoxConfig(ctx context.Context, box sandbox.Sandbox, paths Paths) ([]byte, error) {
 	q := shellword.Quote
 	kept, next := q(paths.GrokConfigBox()), q(paths.GrokConfigBox()+".next")
-	res, err := box.Exec(ctx, fmt.Sprintf(`[ -e %[1]s ] || { mkdir -p %[3]s && if [ -f %[4]s ]; then cp %[4]s %[2]s; else : > %[2]s; fi && mv -f %[2]s %[1]s; }`,
+	res, err := box.Exec(ctx, fmt.Sprintf(`if [ -e %[1]s ]; then echo cut; else mkdir -p %[3]s && if [ -f %[4]s ]; then cp %[4]s %[2]s; else : > %[2]s; fi && mv -f %[2]s %[1]s; fi`,
 		kept, next, q(paths.WorkDir()), q(paths.GrokConfig())), sandbox.ExecOptions{})
 	if err == nil && res.ExitCode != 0 {
 		err = fmt.Errorf("exit %d: %s", res.ExitCode, strings.TrimSpace(res.Stderr))
@@ -688,11 +690,90 @@ func grokBoxConfig(ctx context.Context, box sandbox.Sandbox, paths Paths) ([]byt
 	if err != nil {
 		return nil, fmt.Errorf("executor: keeping the box's own Grok Build settings: %w", err)
 	}
-	raw, err := box.ReadFile(ctx, paths.GrokConfigBox())
-	if err != nil {
-		return nil, fmt.Errorf("executor: reading the box's own Grok Build settings: %w", err)
+	files := []string{paths.GrokConfigBox()}
+	if strings.TrimSpace(res.Stdout) == "cut" {
+		files = append(files, paths.GrokConfig(), paths.GrokConfigOurs())
 	}
-	return raw, nil
+	read := make([][]byte, len(files))
+	for i, f := range files {
+		if read[i], err = box.ReadFile(ctx, f); err != nil {
+			return nil, fmt.Errorf("executor: reading the box's own Grok Build settings: %w", err)
+		}
+	}
+	if len(read) == 1 {
+		return read[0], nil
+	}
+	own, err := grokLeftOut(read[0], read[1], strings.Fields(string(read[2])), paths.GrokNoteHelper())
+	if err != nil {
+		return nil, err
+	}
+	if err = box.WriteFile(ctx, paths.GrokConfigBox(), own); err != nil {
+		return nil, fmt.Errorf("executor: keeping the box's own Grok Build settings: %w", err)
+	}
+	return own, nil
+}
+
+// grokLeftOut is the box's ~/.grok/config.toml live, as a run cut off before
+// its script put the box's own back left it, less that run's tables: each
+// server it recorded (names) given back the box's own of that name kept, or
+// removed, and each hook running the note helper (helper) removed, an event
+// left with none removed too. Every other key stands as live holds it, an
+// edit made since included; nothing where live is gone.
+func grokLeftOut(kept, live []byte, names []string, helper string) ([]byte, error) {
+	if strings.TrimSpace(string(live)) == "" {
+		return nil, nil
+	}
+	settings, own := map[string]any{}, map[string]any{}
+	if _, err := toml.Decode(string(live), &settings); err != nil {
+		return nil, fmt.Errorf("executor: the box's Grok Build settings (~/.grok/config.toml) do not read as TOML, "+
+			"so a cut-off run's servers cannot be taken out of them: %w; fix the file in the box", err)
+	}
+	if _, err := toml.Decode(string(kept), &own); err != nil {
+		return nil, fmt.Errorf("executor: the box's own Grok Build settings kept by a cut-off run do not read as "+
+			"TOML: %w; remove that run's work directory's grok-config-box.toml", err)
+	}
+	if servers, ok := settings["mcp_servers"].(map[string]any); ok {
+		theirs, _ := own["mcp_servers"].(map[string]any)
+		for _, name := range names {
+			if s, ok := theirs[name]; ok {
+				servers[name] = s
+			} else {
+				delete(servers, name)
+			}
+		}
+		if _, had := own["mcp_servers"]; len(servers) == 0 && !had {
+			delete(settings, "mcp_servers")
+		}
+	}
+	if hooks, ok := settings["hooks"].(map[string]any); ok {
+		ran := shellword.Quote(helper) + " "
+		for event, entries := range hooks {
+			list, ok := grokHookList(entries)
+			if !ok {
+				continue
+			}
+			list = slices.DeleteFunc(list, func(e map[string]any) bool {
+				inner, _ := grokHookList(e["hooks"])
+				return slices.ContainsFunc(inner, func(h map[string]any) bool {
+					command, _ := h["command"].(string)
+					return strings.HasPrefix(command, ran)
+				})
+			})
+			if len(list) == 0 {
+				delete(hooks, event)
+			} else {
+				hooks[event] = list
+			}
+		}
+		if _, had := own["hooks"]; len(hooks) == 0 && !had {
+			delete(settings, "hooks")
+		}
+	}
+	var b strings.Builder
+	if err := toml.NewEncoder(&b).Encode(settings); err != nil {
+		return nil, fmt.Errorf("executor: writing the box's own Grok Build settings: %w", err)
+	}
+	return []byte(b.String()), nil
 }
 
 // grokMergeConfig is a run's ~/.grok/config.toml: the box's own settings (boxOwn,
@@ -850,6 +931,21 @@ func (g Grok) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 	boxOwn, err := grokBoxConfig(ctx, box, paths)
 	if err != nil {
 		return "", err
+	}
+	ours := slices.Clone(named)
+	if f := req.FreshWiring; f != nil {
+		for name := range f.MCPServers {
+			if full, ok := grokServerName(name, nonce); ok {
+				ours = append(ours, full)
+			}
+		}
+	}
+	var record strings.Builder
+	for _, name := range slices.Compact(slices.Sorted(slices.Values(ours))) {
+		record.WriteString(name + "\n")
+	}
+	if err = box.WriteFile(ctx, paths.GrokConfigOurs(), []byte(record.String())); err != nil {
+		return "", fmt.Errorf("executor: recording the Grok Build run's own MCP servers: %w", err)
 	}
 	own, err := grokConfig(req.MCPServers, nonce, grokHooks(paths, notes, loads, req.Skills))
 	if err != nil {
