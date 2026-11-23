@@ -14,6 +14,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/advisordomain"
+	"github.com/crewlet/crewlet/internal/config"
 )
 
 // THE DEEP RUN ON THE DUTY (ADR-0166): an investigation on the Advisor's model,
@@ -54,6 +55,11 @@ const (
 	DeepNightHour  = 3
 	DeepMondayHour = 5
 )
+
+// DeepLongest is the longest a deep run in flight goes without a line: its
+// reads' deadline, the largest loop a company may set, and a lease's TTL for
+// its records. A run unheard for longer is not in flight.
+const DeepLongest = ObserveFor + config.MaxAdvisorDeepMinutes*time.Minute + LeaseTTL
 
 // flight is the deep run in flight on this holder.
 type flight struct {

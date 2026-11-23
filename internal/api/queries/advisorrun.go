@@ -39,7 +39,8 @@ type AdvisorRunSummary struct {
 	By        string     `json:"by"`
 	StartedAt time.Time  `json:"started_at"`
 	EndedAt   *time.Time `json:"ended_at"`
-	// Status is running, done, failed or ceiling.
+	// Status is running, done, failed, ceiling or interrupted (a deep run
+	// whose holder stopped during it, which concluded nothing).
 	Status string `json:"status"`
 	// ClassesRun is how many scopes the run concluded about, and Unread the
 	// sources it could not read, by their words.
@@ -127,7 +128,9 @@ func (s Sources) advisorRun(ctx context.Context, _ Params) (any, error) {
 
 // latestRun is the run a person reads as the latest: a deep run in flight
 // with its progress so far, a Run waiting for the duty's next tick, which
-// reads as running, or the run that ended last; nil where none ran.
+// reads as running, or the run that ended last; nil where none ran. A run
+// heard from before the last run ended, or not for longer than a deep run
+// lasts, is not in flight: its holder stopped, and the next one closes it.
 func (s Sources) latestRun(ctx context.Context) (*AdvisorRunSummary, error) {
 	live, lines, flying, err := s.Advisor.LiveProgress(ctx, advisorFresh)
 	if err != nil {
@@ -165,16 +168,19 @@ func (s Sources) latestRun(ctx context.Context) (*AdvisorRunSummary, error) {
 			StartedAt: p.RequestedAt, Status: RunRunning, Unread: []string{}, Kind: string(p.Kind.OrRules()),
 			Progress: []AdvisorProgress{}, Classes: []AdvisorClassOutcome{}}), nil
 	}
-	if flying && len(lines) > 0 {
-		// A DEEP RUN AT ITS SLOT, which nobody asked for: its first line is
-		// as early as the log says it began.
-		return progress(&AdvisorRunSummary{RunID: live, Trigger: string(advisordomain.TriggerSchedule),
-			StartedAt: lines[0].At, Status: RunRunning, Unread: []string{}, Progress: []AdvisorProgress{},
-			Classes: []AdvisorClassOutcome{}}), nil
-	}
 	row, found, err := s.Advisor.LatestRun(ctx, advisorFresh)
 	if err != nil {
 		return nil, advisorUnreadable(err)
+	}
+	if flying && len(lines) > 0 {
+		heard := lines[len(lines)-1].At
+		if (!found || !heard.Before(row.EndedAt)) && s.clock().Sub(heard) < duty.DeepLongest {
+			// A DEEP RUN AT ITS SLOT, which nobody asked for: its first
+			// line is as early as the log says it began.
+			return progress(&AdvisorRunSummary{RunID: live, Trigger: string(advisordomain.TriggerSchedule),
+				StartedAt: lines[0].At, Status: RunRunning, Unread: []string{}, Progress: []AdvisorProgress{},
+				Classes: []AdvisorClassOutcome{}}), nil
+		}
 	}
 	if !found {
 		return nil, nil
@@ -246,10 +252,13 @@ func runSummary(row advisordomain.RunRow) (*AdvisorRunSummary, error) {
 			for _, p := range pass.Progress {
 				out.Progress = append(out.Progress, AdvisorProgress{At: p.At, Text: p.Text})
 			}
-			// A DEEP PART THAT DID NOT RUN spent nothing of bounds it never had.
-			if pass.Skipped != "" {
+			// A DEEP PART THAT DID NOT RUN spent nothing of bounds it never
+			// had, and one interrupted kept no measure of what it spent.
+			switch {
+			case pass.Skipped != "":
 				out.DeepSkipped, out.DeepKeptFrom = &pass.Skipped, pass.KeptFrom
-			} else {
+			case row.Status == advisordomain.RunInterrupted:
+			default:
 				out.Budget = &AdvisorRunBudget{Tokens: int64(pass.InputTokens + pass.OutputTokens),
 					TokensCeiling: int64(pass.Bounds.Tokens), Minutes: int64(math.Ceil(pass.Minutes)),
 					MinutesCeiling: int64(pass.Bounds.Minutes)}
