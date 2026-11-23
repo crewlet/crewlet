@@ -198,7 +198,7 @@ func RunDeepFrom(ctx context.Context, deps Deps, d DeepData, b DeepBounds, progr
 	case errors.Is(err, context.DeadlineExceeded) || errors.Is(runCtx.Err(), context.DeadlineExceeded):
 		out.StoppedBy = StoppedMinutes
 	case err != nil && !accepted:
-		out.Status, out.Reason = advisor.PassFailed, "The Advisor's model did not answer: "+err.Error()
+		out.Status, out.Reason = advisor.PassFailed, "The Advisor's model did not answer: "+stopped(ctx, err).Error()
 		return out
 	case surf.woundDown() != "":
 		out.StoppedBy = surf.woundDown()
