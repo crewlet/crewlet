@@ -255,16 +255,20 @@ func TestAHermesSessionReadsAsItsTranscript(t *testing.T) {
 	}
 }
 
-// THE OVERLAY CARRIES THE RUN'S SERVERS AND ITS WEB DENIAL, and only those:
-// each server as written, the web, browser and x_search toolsets disabled on
-// a web-denied run alone, and a value Hermes would expand refused.
+// THE OVERLAY CARRIES THE RUN'S SERVERS, ITS WEB DENIAL AND ITS ALWAYS-LOADED
+// TOOLS, and only those: each server as written, the web, browser and x_search
+// toolsets disabled on a web-denied run alone, tool search off where a server
+// is always loaded alone (Hermes exempts no server from it), and a value
+// Hermes would expand refused.
 //
-// Mutation: drop a server's header, disable the web on an allowed run, or let
-// a `${` through, and a row goes red.
+// Mutation: drop a server's header, disable the web on an allowed run, leave
+// tool search on beside an always-loaded server or turn it off with none, or
+// let a `${` through, and a row goes red.
 func TestTheHermesOverlayCarriesTheServersAndTheWebDenial(t *testing.T) {
 	t.Parallel()
 	servers := map[string]sandbox.MCPServer{"crewlet": {Transport: sandbox.TransportHTTP, URL: "http://bridge.example.com/mcp",
-		Headers: map[string]string{"Authorization": "Bearer t"}, CallTimeout: 600 * time.Second}}
+		Headers: map[string]string{"Authorization": "Bearer t"}, CallTimeout: 600 * time.Second, AlwaysLoaded: true},
+		"other": {Transport: sandbox.TransportHTTP, URL: "http://other.example.com/mcp"}}
 	raw, err := hermesOverlay(servers, true)
 	if err != nil {
 		t.Fatal(err)
@@ -278,6 +282,11 @@ func TestTheHermesOverlayCarriesTheServersAndTheWebDenial(t *testing.T) {
 		Agent struct {
 			Disabled []string `json:"disabled_toolsets"`
 		} `json:"agent"`
+		Tools struct {
+			Search struct {
+				Enabled string `json:"enabled"`
+			} `json:"tool_search"`
+		} `json:"tools"`
 	}
 	if err := json.Unmarshal(raw, &got); err != nil {
 		t.Fatal(err)
@@ -289,9 +298,13 @@ func TestTheHermesOverlayCarriesTheServersAndTheWebDenial(t *testing.T) {
 	if !slices.Equal(got.Agent.Disabled, []string{"web", "browser", "x_search"}) {
 		t.Errorf("disabled toolsets = %v", got.Agent.Disabled)
 	}
+	if got.Tools.Search.Enabled != "off" {
+		t.Errorf("tool search beside an always-loaded server = %q, want off", got.Tools.Search.Enabled)
+	}
+	delete(servers, "crewlet")
 	allowed, err := hermesOverlay(servers, false)
-	if err != nil || strings.Contains(string(allowed), "disabled_toolsets") {
-		t.Errorf("an allowed run's overlay disables toolsets: %s (%v)", allowed, err)
+	if err != nil || strings.Contains(string(allowed), "disabled_toolsets") || strings.Contains(string(allowed), "tool_search") {
+		t.Errorf("an allowed run with no always-loaded server disables toolsets or tool search: %s (%v)", allowed, err)
 	}
 	servers["crewlet"] = sandbox.MCPServer{Transport: sandbox.TransportHTTP, URL: "http://x/${HOME}"}
 	if _, err := hermesOverlay(servers, false); err == nil {
