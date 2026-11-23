@@ -897,8 +897,8 @@ func (w *Waiter) pollOne(ctx context.Context, manager *Manager, run PendingRun) 
 
 	// KEEPALIVE. The engine imposes NO run-time TTL on a launched job: it
 	// touches the box's stamp every tick ([Sandbox.Touch]), so the orphan
-	// reaper sees a box its waiter still drives, and completion is detected
-	// by tracking the job, not by a clock.
+	// reaper sees a box its waiter still drives where the box's record of its
+	// run did not land, and completion is detected by tracking the job.
 	if err = box.Touch(ctx); err != nil {
 		log.DebugContext(ctx, "sandbox_keepalive_failed", "turn_id", run.TurnID, "error", err.Error())
 	}

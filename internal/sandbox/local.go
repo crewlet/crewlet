@@ -193,7 +193,9 @@ func (l boxLayout) mkdirHome(rel string) error {
 // somebody else's processes, and probing it would keep a dead box alive.
 func (l boxLayout) pidFile() string { return filepath.Join(l.records(), pidRecord) }
 
-// aliveFile is the keepalive stamp the orphan reaper reads ([lastSeen]).
+// aliveFile is the keepalive stamp the orphan reaper reads ([lastSeen]) of a box
+// that records no run ([recordedRun]): a check's, or a run's whose record did
+// not land.
 //
 // A directory's mtime does NOT move on writes inside its subdirectories, so
 // the box root's timestamp is its creation time for life. This file is touched
@@ -1317,7 +1319,7 @@ func (l *Local) Kill(ctx context.Context, sandboxID string) error {
 		// And WAIT for it to go: the kernel takes the process down moments after
 		// delivery, and until then the wrapper still writes its exit code and
 		// marker, so removing the tree under it fails non-empty and leaves the box
-		// for the orphan reaper.
+		// for a later reclaim.
 		awaitJobExit(ctx, layout)
 	}
 	// A teardown like any other: the box may hold a login the run refreshed,
@@ -1333,7 +1335,7 @@ func (l *Local) Kill(ctx context.Context, sandboxID string) error {
 
 // removeBox deletes a box's directory, saying so when it cannot: a box that
 // survives its teardown holds the seeded login and the run's writes, and only
-// a later create's orphan reaper would ever clean it.
+// a later reclaim, its host's sweep or a create's orphan reaper, would clean it.
 //
 // THROUGH THE ROOT OF THE DIRECTORY HOLDING EVERY BOX, by the box's name, so
 // no link in the box leads the removal anywhere else.
@@ -1408,6 +1410,29 @@ func recordRun(l boxLayout, run boxRun) error {
 	return nil
 }
 
+// recordedRun is the run a box records ([recordRun]), and false where it
+// records none it can use: none at all, or one unreadable or naming no turn in
+// a known cell, which the error says. THE ONE READING, so the boxes its host's
+// sweep reclaims ([Local.RunBoxes]) and those the orphan reaper judges
+// ([Local.reapOrphans]) are each other's complement.
+func recordedRun(l boxLayout) (boxRun, bool, error) {
+	blob, err := readRecord(l, runRecord)
+	if absent(err) {
+		return boxRun{}, false, nil
+	}
+	var run boxRun
+	if err == nil {
+		err = json.Unmarshal(blob, &run)
+	}
+	if err == nil && (run.TurnID == "" || !run.Placement.Valid()) {
+		err = fmt.Errorf("the record names turn %q in cell %q", run.TurnID, run.Placement)
+	}
+	if err != nil {
+		return boxRun{}, false, err
+	}
+	return run, true, nil
+}
+
 // HostBox is one box on this node's host and the run it was made for.
 type HostBox struct {
 	SandboxID string
@@ -1441,22 +1466,15 @@ func (l *Local) RunBoxes() ([]HostBox, error) {
 		if err != nil {
 			continue
 		}
-		blob, err := readRecord(layout, runRecord)
-		if absent(err) {
-			continue
-		}
-		var run boxRun
-		if err == nil {
-			err = json.Unmarshal(blob, &run)
-		}
-		if err == nil && (run.TurnID == "" || !run.Placement.Valid()) {
-			err = fmt.Errorf("the record names turn %q in cell %q", run.TurnID, run.Placement)
-		}
+		run, recorded, err := recordedRun(layout)
 		if err != nil {
 			localLog.Warn("local_sandbox_run_unreadable", "sandbox_id", layout.id,
 				"path", layout.runFile(), "error", err.Error(),
 				"detail", "the box's record of its run could not be used, so this host cannot "+
 					"tell whether a run still names it; the orphan reaper bounds it")
+			continue
+		}
+		if !recorded {
 			continue
 		}
 		out = append(out, HostBox{SandboxID: layout.id, TurnID: run.TurnID, Placement: run.Placement})
@@ -1468,17 +1486,18 @@ func (l *Local) RunBoxes() ([]HostBox, error) {
 // orphan reaping
 // ---------------------------------------------------------------------
 
-// reapOrphans removes box directories an engine crash left behind, bounded by
-// the host grace ([LocalOptions.HostGrace]): how long a box's node may be away
-// before its runs are carried on without it.
+// reapOrphans removes the box directories left behind that record no run
+// ([recordedRun]), bounded by the host grace ([LocalOptions.HostGrace]). A box
+// that records its run is its host's sweep's ([Waiter.sweep]), which asks the
+// run's row: a PARKED one has an exited job and a stamp nothing touches, and is
+// kept until its pause TTL, past a grace that would have reaped it.
 //
-// A box is reaped only when it fails BOTH questions. IN USE? A live process
-// group still the box's own job (direct) or an existing container, asked of
-// the OS. ABANDONED? Its keepalive stamp ([boxLayout.aliveFile]) untouched for
-// a whole grace. Age alone is not orphanhood, and the root's mtime is its birth
-// time ([lastSeen]): reaping on it would delete a long run's checkout and job
-// record while its process tree ran on, unkillable. A paused box counts as in
-// use; bounding that wait is the clarification pause TTL's.
+// Any other box is reaped only when it fails BOTH questions. IN USE? A live
+// process group still the box's own job (direct) or an existing container,
+// asked of the OS. ABANDONED? Its keepalive stamp ([boxLayout.aliveFile])
+// untouched for a whole grace. Age alone is not orphanhood: the root's mtime is
+// its birth ([lastSeen]), and reaping on it would delete a long run's checkout
+// while its process tree ran on, unkillable.
 func (l *Local) reapOrphans(ctx context.Context, olderThan time.Duration) {
 	boxes := filepath.Join(l.root, "boxes")
 	entries, err := os.ReadDir(boxes)
@@ -1494,9 +1513,14 @@ func (l *Local) reapOrphans(ctx context.Context, olderThan time.Duration) {
 		layout := boxLayout{
 			id: entry.Name(), root: filepath.Join(boxes, entry.Name()), credentialSteps: l.credentialSteps,
 		}
-		if lastSeen(layout).Before(cutoff) {
-			candidates = append(candidates, layout)
+		if !lastSeen(layout).Before(cutoff) {
+			continue
 		}
+		if _, recorded, _ := recordedRun(layout); recorded {
+			// Its host's sweep's, whatever its job and stamp say.
+			continue
+		}
+		candidates = append(candidates, layout)
 	}
 	if len(candidates) == 0 {
 		// The common case, and the reason age is tested first: this runs on

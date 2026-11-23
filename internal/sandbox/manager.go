@@ -14,9 +14,9 @@ import (
 
 // DefaultHostGrace is how long the node holding a run's box may be absent from
 // the roster, or its store silent, before the run is carried on without that
-// box (recorded lost, or its parked box released); and how long a box whose
-// job is gone sits untouched before the orphan reaper on its node's box root
-// may take it ([LocalOptions.HostGrace]).
+// box (recorded lost, or its parked box released); and how long a box that
+// records no run, its job gone, sits untouched before the orphan reaper on its
+// node's box root may take it ([LocalOptions.HostGrace]).
 //
 // NOT a run-time or provisioning limit, nor a timer on any box: a job is never
 // stopped on a clock. 900s outlasts a node's restart or rolling deploy (drain,
@@ -541,13 +541,13 @@ func (m *Manager) provision(ctx context.Context, spec Spec, setup []SetupStep, r
 // stop, which waits out a touch in flight. The caller stops it when
 // provisioning ends, before any teardown.
 //
-// The waiter's keepalive takes over only once the row RUNS; a LAUNCHING row
-// has no box while install, setup, the git check and a clone per repository
-// ([MaxRunRepos]) run back to back, each to its own [DefaultSetupTimeout], and
-// a box with no job yet whose stamp aged past the cutoff would be taken by
-// another launch's orphan sweep. The first touch precedes the return: a reused
-// box's stamp is whatever its last use left. A failed touch is left to the
-// next; the launch's few calls after provisioning fit inside the last one.
+// The waiter's keepalive takes over only once the row RUNS; a LAUNCHING row has
+// no box while install, setup, the git check and a clone per repository
+// ([MaxRunRepos]) run back to back, each to its own [DefaultSetupTimeout], a
+// sum past the cutoff at which another launch's orphan sweep takes a jobless
+// box that records no run (a check's). The first touch precedes the return: a
+// reused box's stamp is whatever its last use left. A failed touch is left to
+// the next; the launch's few calls after provisioning fit inside the last one.
 func keepProvisioning(ctx context.Context, box Sandbox) (stop func()) {
 	ctx, cancel := context.WithCancel(ctx)
 	refresh := func() {

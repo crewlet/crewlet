@@ -1350,9 +1350,8 @@ func launchEnv(req LaunchRequest, launchID string) (_ map[string]string, gitAcce
 // be in ([Coordinator.SetManager]), one a later revision dropped included.
 //
 // BEST EFFORT, the launch goes ahead whatever it answers: a failed kill
-// leaves the box to its host's sweep and the orphan reaper, and refusing the
-// launch would cost the turn too. Under a context of its own
-// ([Coordinator.abandon]).
+// leaves the box for its host to reclaim, and refusing the launch would cost
+// the turn too. Under a context of its own ([Coordinator.abandon]).
 func (c *Coordinator) reclaimPrior(ctx context.Context, m *Manager, req LaunchRequest, prior PriorBox) {
 	killCtx, cancel := detached(ctx)
 	defer cancel()

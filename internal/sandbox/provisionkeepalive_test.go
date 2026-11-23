@@ -18,12 +18,12 @@ const slowStep = 4 * time.Minute
 const provisionSteps = 10
 
 // A BOX IS KEPT ALIVE FOR AS LONG AS ITS LAUNCH PROVISIONS IT. A box with no
-// job yet is taken by another launch's orphan sweep once its stamp is older
-// than the host grace, and the waiter's keepalive touches only a running row's
-// box, never one still given setup steps. A box given ten four-minute steps is
-// touched when provisioning begins (before the first command) and at most
-// every provisionRefresh after, so its stamp never ages out; and nothing
-// touches it once the launch has returned.
+// job yet that records no run is taken by another launch's orphan sweep once
+// its stamp is older than the host grace, and the waiter's keepalive touches
+// only a running row's box, never one still given setup steps. A box given ten
+// four-minute steps is touched when provisioning begins (before the first
+// command) and at most every provisionRefresh after, so its stamp never ages
+// out; and nothing touches it once the launch has returned.
 //
 // Mutations: start no keepalive in Acquire — swept at its fourth command,
 // red; touch only on the ticker — the first touch comes an interval after the
@@ -49,11 +49,11 @@ func TestABoxIsKeptAliveWhileItsLaunchProvisionsIt(t *testing.T) {
 	})
 }
 
-// sweptBoxes is a provider whose boxes are taken by another launch's orphan
-// sweep as the local backend's are ([Local.reapOrphans]): a box with no job
-// whose stamp — its create, else its last [Sandbox.Touch] — has gone
-// [DefaultHostGrace] untouched is gone for good, so a command on it fails as
-// on a reaped box. Every command takes step.
+// sweptBoxes is a provider whose boxes record no run, so another launch's
+// orphan sweep takes them as the local backend's would ([Local.reapOrphans]): a
+// box with no job whose stamp — its create, else its last [Sandbox.Touch] — has
+// gone [DefaultHostGrace] untouched is gone for good, so a command on it fails
+// as on a reaped box. Every command takes step.
 //
 // ONLY IN A BUBBLE ([newSweptBoxes]): stamps, touches and commands are
 // instants on the case's clock, which only a bubble keeps exact.

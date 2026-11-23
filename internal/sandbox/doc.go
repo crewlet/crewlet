@@ -303,6 +303,13 @@
 // Freed and opened as one move: between two writes the seat reads idle and the
 // answer runs as an unrelated turn.
 //
+// # A box left on its host
+//
+// Each box has one reclaimer. One that records its run is its host's sweep's
+// ([Waiter.sweep]), off the run's row, so a parked box, its job ended and its
+// stamp untouched, lives to its pause TTL; any other, the orphan reaper's
+// ([Local.reapOrphans]), once nothing runs in it or touches it.
+//
 // # Releasing a claim
 //
 // To the status the claim took, the charge in the same write; a taken answer
