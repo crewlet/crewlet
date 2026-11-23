@@ -18,25 +18,28 @@ func inBox(t *testing.T, box sandbox.Sandbox, shell string) {
 }
 
 // A GEMINI CLI OR QWEN CODE POINT IS MARKED WHERE A BOX SETTING MOVES IT: a
-// knob's name in the workspace's settings, a system settings file an
-// environment variable names, a `.env` file or the environment itself, a
-// sign-in but the measured key (a Google login, whose server sets Gemini
-// CLI's masking, or Vertex AI, never measured), a GEMINI.md that imports
-// another, a launch naming no model (whose window was not measured), or a
-// release other than the measured one or the writer's;
-// and a box with none, the run's own settings beside it, is the threshold of
-// its window, with what the box hands over beside the brief.
+// knob's name in the workspace's or the run's own settings, a system settings
+// or defaults file an environment variable names, a `.env` file (the
+// workspace's, one above it, the home's) or the environment itself, a model a
+// `.env` names for a run that pins none, a sign-in but the measured key (a
+// Google login or Vertex AI for Gemini CLI, the paid login for Qwen Code), a
+// GEMINI.md that imports another, a Gemini CLI launch naming no model, or a
+// release other than the measured one or the writer's; and a box with none,
+// the run's own settings beside it, is the threshold of its window, with what
+// the box hands over beside the brief.
 //
-// Mutation: skip any one source, search the run's own Qwen Code settings for
-// "model", or let a hit pass, and its row goes red.
+// Mutation: skip any one source but the /etc files (no test box writes there),
+// search the run's own Qwen Code settings for "model", read a sign-in as the
+// key, or let a hit pass, and its row goes red.
 func TestAGeminiOrQwenPointIsMarkedWhereABoxSettingMovesIt(t *testing.T) {
 	t.Parallel()
 	key := map[string]string{"GEMINI_API_KEY": "a key"}
+	elsewhere := map[string]string{"HOME": "elsewhere"}
 	for _, tc := range []struct {
 		name, harness, setup string
 		env                  map[string]string
 		release, writer      string
-		noModel              bool
+		noModel, login       bool
 		mark                 sandbox.PointMark
 		tokens, boxBytes     int64
 	}{
@@ -69,6 +72,28 @@ func TestAGeminiOrQwenPointIsMarkedWhereABoxSettingMovesIt(t *testing.T) {
 		{name: "qwen, a .env file", harness: "qwen", mark: sandbox.PointSettings,
 			setup: `mkdir -p .qwen && echo 'QWEN_COMPACT_SCREENSHOT_TRIGGER=0' > .qwen/.env`},
 		{name: "qwen, a pair", harness: "qwen", writer: "0.28.3", mark: sandbox.PointPair},
+		{name: "qwen, the paid login", harness: "qwen", login: true, mark: sandbox.PointSettings},
+		{name: "qwen, system defaults by the environment", harness: "qwen", mark: sandbox.PointSettings,
+			setup: `echo '{"context":{"autoCompactThreshold":0.1}}' > "$HOME/sys.json"`,
+			env:   map[string]string{"QWEN_CODE_SYSTEM_DEFAULTS_PATH": "sys.json"}},
+		{name: "qwen, a knob in the run's own settings", harness: "qwen", mark: sandbox.PointSettings,
+			setup: `echo '{"context":{"autoCompactThreshold":0.1}}' > ` +
+				`"$HOME/.qwen/settings.json"`},
+		{name: "qwen, a .env file in the workspace", harness: "qwen", mark: sandbox.PointSettings,
+			setup: `echo 'QWEN_COMPACT_SCREENSHOT_THRESHOLD=1' > .env`},
+		// ELSEWHERE, so the walk up from the workspace passes the home's files.
+		{name: "qwen, a .env file above the workspace", harness: "qwen", mark: sandbox.PointSettings,
+			setup: `echo 'QWEN_COMPACT_SCREENSHOT_THRESHOLD=1' > ../.env`, env: elsewhere},
+		{name: "qwen, the home's .qwen/.env", harness: "qwen", mark: sandbox.PointSettings, env: elsewhere,
+			setup: `mkdir -p "$HOME/elsewhere/.qwen" && echo 'QWEN_COMPACT_SCREENSHOT_THRESHOLD=1' > ` +
+				`"$HOME/elsewhere/.qwen/.env"`},
+		{name: "qwen, the home's .env", harness: "qwen", mark: sandbox.PointSettings, env: elsewhere,
+			setup: `mkdir -p "$HOME/elsewhere" && echo 'QWEN_COMPACT_SCREENSHOT_THRESHOLD=1' > "$HOME/elsewhere/.env"`},
+		{name: "qwen, no model", harness: "qwen", noModel: true, tokens: 98_072, boxBytes: executor.QwenReminderBytes},
+		{name: "qwen, a model in a .env for a run that pins none", harness: "qwen", noModel: true,
+			mark: sandbox.PointSettings, setup: `echo 'OPENAI_MODEL=deepseek-chat' > .env`},
+		{name: "qwen, a model in a .env under the pin", harness: "qwen", tokens: 167_000,
+			boxBytes: executor.QwenReminderBytes, setup: `echo 'OPENAI_MODEL=deepseek-chat' > .env`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -97,8 +122,13 @@ func TestAGeminiOrQwenPointIsMarkedWhereABoxSettingMovesIt(t *testing.T) {
 			if path, ok := env["GEMINI_CLI_SYSTEM_SETTINGS_PATH"]; ok {
 				env["GEMINI_CLI_SYSTEM_SETTINGS_PATH"] = box.Home() + "/" + path
 			}
-			if path, ok := env["QWEN_CODE_SYSTEM_SETTINGS_PATH"]; ok {
-				env["QWEN_CODE_SYSTEM_SETTINGS_PATH"] = box.Home() + "/" + path
+			for _, name := range []string{"QWEN_CODE_SYSTEM_SETTINGS_PATH", "QWEN_CODE_SYSTEM_DEFAULTS_PATH", "HOME"} {
+				if path, ok := env[name]; ok {
+					env[name] = box.Home() + "/" + path
+				}
+			}
+			if tc.harness == "qwen" && !tc.login {
+				env["OPENAI_API_KEY"] = "a key"
 			}
 			ask := sandbox.PointAsk{Model: model, Release: release, Writer: release, Env: env}
 			if tc.release != "" {
