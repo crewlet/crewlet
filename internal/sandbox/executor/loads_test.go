@@ -259,7 +259,8 @@ func qwenLoads(t *testing.T) {
 //
 // Mutations, each red: install the run's configuration alone; clear every
 // skill but `.system`; restore features.plugins=false or
-// skills.bundled.enabled=false.
+// skills.bundled.enabled=false; leave the bridge's enabled or disabled_tools
+// to the files.
 func codexLoads(t *testing.T) {
 	c := homeCase{
 		left: []string{".codex/skills/crewlet:old/SKILL.md"},
@@ -302,6 +303,12 @@ func codexLoads(t *testing.T) {
 	}
 	if !strings.Contains(argv, "analytics.enabled=false") {
 		t.Errorf("the app-server started without analytics off:\n%s", argv)
+	}
+	for _, on := range []string{"mcp_servers.crewlet.enabled=true", "mcp_servers.crewlet.disabled_tools=[]"} {
+		if !strings.Contains(argv, on) {
+			t.Errorf("the app-server started without %s, so a repository's configuration can switch the "+
+				"bridge off:\n%s", on, argv)
+		}
 	}
 }
 
