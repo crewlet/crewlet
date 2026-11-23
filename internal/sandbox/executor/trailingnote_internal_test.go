@@ -104,6 +104,22 @@ func MuseTrailingNoteHeld(t *testing.T) bool {
 	return false
 }
 
+// GrokTrailingNoteHeld is whether a take whose Stop block 1.0.92 recorded, no
+// model's answer after it, is held: the notes fixture cut after that block.
+func GrokTrailingNoteHeld(t *testing.T) bool {
+	record := grokFixture(t, "notes.chat.jsonl")
+	lines := bytes.SplitAfter(record, []byte("\n"))
+	stop := slices.IndexFunc(lines, func(l []byte) bool { return bytes.Contains(l, []byte("stop_hook_feedback")) })
+	if stop < 0 {
+		t.Fatal("the notes fixture holds no stop block to cut after")
+	}
+	held, err := grokHeld(bytes.NewReader(bytes.Join(lines[:stop+1], nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return held[claudeTakeToken("0f0e0d0c-0000-4000-8000-000000000002")]
+}
+
 // PiTrailingNoteHeld is whether a note 1.6.0's session holds last on its
 // branch, no answer after it, is held.
 func PiTrailingNoteHeld(t *testing.T) bool {

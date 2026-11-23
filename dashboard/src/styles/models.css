@@ -283,30 +283,6 @@
   }
 }
 
-/* The first-run card's picture: every harness a model can run on, six to a row. */
-.models-first-run__marks {
-  display: grid;
-  grid-template-columns: repeat(6, auto);
-  justify-content: center;
-  gap: var(--spacing-2);
-}
-
-.models-first-run__body {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--spacing-3);
-}
-
-/* Who waits for a model: their faces, then the sentence naming them. */
-.models-first-run__waiting {
-  display: inline-flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  align-items: center;
-  gap: var(--spacing-2);
-}
-
 /* A model's harness mark before its key, in a picker, an option or a menu item. */
 .models-option-mark {
   display: inline-flex;

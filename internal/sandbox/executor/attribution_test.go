@@ -354,6 +354,13 @@ var creditBoxes = map[string]func(t *testing.T) (*executor.Runner, sandbox.Sandb
 		return standInBox(t, executor.NewCopilot(), map[string]string{"copilot": "#!/bin/sh\n" +
 			"case \"$1\" in --version) echo 'GitHub Copilot CLI 1.0.114.'; exit 0;; esac\n" + scenarioRun})
 	},
+	// One `grok` process is the run, and its shell inherits its environment
+	// whole; its stand-in answers the release check every run's script asks
+	// first, then runs the scenario.
+	executor.GrokName: func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
+		return standInBox(t, executor.NewGrok(), map[string]string{"grok": "#!/bin/sh\n" +
+			"case \"$1\" in --version) echo 'grok 1.0.92 (b06756fd6256)'; exit 0;; esac\n" + scenarioRun})
+	},
 	// One `muse exec` is the run, and its shell inherits its environment whole;
 	// the script's other calls (the release, `muse mcp` and `muse plugins`
 	// wiring the run) only answer.
