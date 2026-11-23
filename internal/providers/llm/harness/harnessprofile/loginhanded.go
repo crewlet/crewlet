@@ -86,27 +86,15 @@ func credentialList(content []byte) ([]map[string]any, bool) {
 // refresh fills in included ([refreshed]).
 var refreshTokenKeys = []string{"access", "refresh", "expires"}
 
-// sameLogin reports whether run is handed after a refresh. A credential whose
-// value names its type (OpenCode's shape, [sameTypedLogin]) is held to that
-// type's refresh. Any other is the same login where its integrationID and
-// label agree and every top-level token of handed that is a JWT naming an
-// account names the same one in run ([sameSubject]): the store's fields are
-// not known, so nothing else in it can be told apart from a refresh.
+// sameLogin reports whether run is handed after a refresh: only a credential
+// whose value names its type (OpenCode's shape, [sameTypedLogin]), held to
+// that type's refresh. One of any other shape is no login whose tokens can be
+// told apart, so it is never one.
 func sameLogin(handed, run map[string]any) bool {
-	if _, typed := typedValue(handed); typed {
-		return sameTypedLogin(handed, run)
+	if _, typed := typedValue(handed); !typed {
+		return false
 	}
-	for _, key := range []string{"integrationID", "label"} {
-		if !reflect.DeepEqual(handed[key], run[key]) {
-			return false
-		}
-	}
-	for key, v := range handed {
-		if !sameSubject(v, run[key]) {
-			return false
-		}
-	}
-	return true
+	return sameTypedLogin(handed, run)
 }
 
 // typedValue is c's value where it is an object naming its type.
@@ -150,11 +138,12 @@ func sameTypedLogin(handed, run map[string]any) bool {
 
 // refreshed is the credential carried for handed, which run refreshed: of
 // OpenCode's shape, handed with each token and expiry handed holds taken from
-// run where it is of the same kind ([sameScalar]); of any other, run's.
+// run where it is of the same kind ([sameScalar]); of any other, handed as it
+// is ([sameLogin] never takes one).
 func refreshed(handed, run map[string]any) map[string]any {
 	hv, typed := typedValue(handed)
 	if !typed {
-		return maps.Clone(run)
+		return maps.Clone(handed)
 	}
 	out := maps.Clone(handed)
 	value := maps.Clone(hv)
