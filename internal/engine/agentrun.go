@@ -376,8 +376,8 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		MaxTurns:        maxTurnsFor(settings),
 		Env:             run.env,
 		SignInEnv:       run.signInNames,
-		CredentialFiles: run.files,
-		CredentialRules: run.fileRules,
+		CredentialFiles: run.files(),
+		CredentialRules: run.fileRules(),
 	})
 	// THE PICKED MEMBER'S LOGIN, the one the box will actually run under:
 	// a fallback launch on a later member is judged on that member's entry,
