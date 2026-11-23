@@ -1928,7 +1928,7 @@ const openCodeStepCalls = "tool-calls"
 // with no step begun after it, or an `error` event, which `opencode run`
 // prints as it gives up. Measured on 2.3.2: a finished run ends on a `stop`
 // step, a refused request and an interrupted session on an `error`, and a
-// client killed mid-turn prints neither.
+// client killed mid-turn on a `tool-calls` step or on nothing.
 func (d *openCodeEvents) Ended() bool { return d.ended }
 
 func (d *openCodeEvents) Result() sandbox.Result {
