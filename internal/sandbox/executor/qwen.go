@@ -422,7 +422,7 @@ const qwenMCPWait = 60 * time.Second
 // qwenHelperConfigOf is req's [qwenHelperConfig].
 func qwenHelperConfigOf(req sandbox.RunRequest, paths Paths) qwenHelperConfig {
 	c := qwenHelperConfig{
-		AuthType:  qwenAuthType(req),
+		AuthType:  qwenSignIn(req.Env),
 		QwenHome:  paths.QwenDir(),
 		Servers:   slices.Sorted(maps.Keys(req.MCPServers)),
 		MCPWaitMs: qwenMCPWait.Milliseconds(),
@@ -450,10 +450,11 @@ const (
 	qwenAuthSubscription = "qwen-subscription"
 )
 
-// qwenAuthType is the sign-in req's run takes: the key where it is handed
-// one, else the login the box holds.
-func qwenAuthType(req sandbox.RunRequest) string {
-	if req.Env["OPENAI_API_KEY"] != "" {
+// qwenSignIn is the sign-in a run handed env takes: the key where it is handed
+// one, else the login the box holds. THE ONE RULE the run's settings and its
+// box's point read ([QwenCode.readBoxPoint]) share.
+func qwenSignIn(env map[string]string) string {
+	if env["OPENAI_API_KEY"] != "" {
 		return qwenAuthOpenAI
 	}
 	return qwenAuthSubscription

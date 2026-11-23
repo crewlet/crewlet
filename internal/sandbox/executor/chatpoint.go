@@ -311,7 +311,9 @@ func geminiPoint(model string) int64 { return geminiWindow(model) / geminiThresh
 // readBoxPoint reads, in box, where Qwen Code compresses a continued session's
 // first request ([Runner.ReadBoxPoint]): its threshold of the window of the
 // launch's model ([qwenPoint]), with the dated reminder beside the brief as
-// BoxBytes; marked where a source moves it.
+// BoxBytes; marked where a source moves it, or where the run signs in by its
+// paid login ([qwenSignIn]), which was never measured: its model list may set
+// the model and the window (MEASURE-P2 Q3's first rule).
 func (QwenCode) readBoxPoint(ctx context.Context, box sandbox.Sandbox,
 	ask sandbox.PointAsk) (sandbox.BoxPoint, error) {
 
@@ -332,6 +334,10 @@ func (QwenCode) readBoxPoint(ctx context.Context, box sandbox.Sandbox,
 		envNames: []string{"QWEN_COMPACT_SCREENSHOT"},
 	}
 	return readChatPoint(ctx, box, ask, QwenCode{}, "Qwen Code", qwenRelease, read, func(chatPointAnswer) sandbox.BoxPoint {
+		if qwenSignIn(ask.Env) != qwenAuthOpenAI {
+			return pointMarked(sandbox.PointSettings, "the run signs Qwen Code in by its paid login, whose "+
+				"model list may set the model and its window, and which was not measured")
+		}
 		return sandbox.BoxPoint{Tokens: qwenPoint(ask.Model), BoxBytes: qwenReminderBytes}
 	})
 }
