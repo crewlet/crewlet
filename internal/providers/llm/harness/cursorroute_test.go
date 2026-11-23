@@ -14,9 +14,9 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
-// Cursor Agent, as the fake plays it — from its documentation and the
-// 2026.10.22 bundle, since a run's model streams from Cursor's own service
-// and no stand-in answers it (see the profile): every server the home's
+// Cursor Agent, as the fake plays it — as Cursor's local-loop build of
+// 2026.11.22-e9042b2 measured it, the signed-in build's model streaming from
+// Cursor's own service, which no stand-in answers (see the profile): every server the home's
 // mcp.json names started with no approval asked; the project's — the call's
 // own .cursor/mcp.json — only with --approve-mcps; a call to the server's
 // tools run only where the project's cli.json allows `Mcp(crewlet:*)`; and
