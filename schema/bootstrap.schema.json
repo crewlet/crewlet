@@ -80,7 +80,15 @@
       "additionalProperties": false,
       "properties": {
         "external_url": {
-          "description": "Where browsers reach artifacts: https://{artifact}.artifacts.example.net for an origin per artifact (wildcard DNS and TLS), or a plain origin such as https://artifacts.example.com for one opaque origin. Required once port is set on an ingress node.",
+          "anyOf": [
+            {
+              "maxLength": 2048
+            },
+            {
+              "pattern": "\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}"
+            }
+          ],
+          "description": "Where browsers reach artifacts: https://{artifact}.artifacts.example.net for an origin per artifact (wildcard DNS and TLS), or a plain origin such as https://artifacts.example.com for one opaque origin. Required once port is set on an ingress node. At most 2048 characters.",
           "type": [
             "string",
             "number",
