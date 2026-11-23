@@ -40,7 +40,7 @@ func widestRecord(t *testing.T, path string) *record {
 	r := &record{ID: id, Principal: strings.Repeat("p", iam.MaxLogin), Purpose: purposePublish,
 		Artifact: uuid.NewString(), TurnID: strings.Repeat("t", 64), Created: widestInstant,
 		Expires: widestInstant, State: stateFinalizing,
-		FinalizeKey: strings.Repeat(`"`, statelog.MaxCallerOpIDBytes), Claimed: widestInstant}
+		FinalizeKey: strings.Repeat(`"`, statelog.MaxCallerOpIDBytes), Claimed: widestInstant, Kept: math.MaxInt64}
 	widestType := ""
 	for _, ext := range []string{".xml", ".js", ".md", ".html"} {
 		if typ, ok := typeFor(ext); ok && len(typ) > len(widestType) {
@@ -280,7 +280,7 @@ func TestAnUploadRecordPastItsBoundIsRefusedByItsWriter(t *testing.T) {
 // THE WIDEST RESERVATION LEDGER FITS ITS BOUND: every hold the budgets admit
 // (MaxOutstandingUploads a principal, CompanyPendingFactor times that for the
 // company), each at its widest principal, an int64's count of bytes, two
-// instants and a direct put.
+// instants, a direct put and an attempt at a uint32's widest.
 //
 // Mutation: raise MaxOutstandingUploads to 80, or lower
 // coord.MaxUploadLedgerBytes below the widest, and this is red.
@@ -289,7 +289,8 @@ func TestTheWidestReservationLedgerFitsItsBound(t *testing.T) {
 	l := ledger{V: ledgerVersion}
 	for range artifacts.CompanyPendingFactor * MaxOutstandingUploads {
 		l.Holds = append(l.Holds, hold{Upload: uuid.NewString(), Principal: strings.Repeat("p", iam.MaxLogin),
-			Bytes: math.MaxInt64, Until: widestInstant, Expires: widestInstant, Direct: true})
+			Bytes: math.MaxInt64, Until: widestInstant, Expires: widestInstant, Direct: true,
+			Attempt: math.MaxUint32})
 	}
 	raw, err := json.Marshal(l)
 	if err != nil {

@@ -738,8 +738,8 @@ func TestASettledWriteIsHeldToItsClassBound(t *testing.T) {
 		uploadsHolding)
 	ledger := make([]byte, coord.MaxUploadLedgerBytes+1)
 	_, err = uploads.Put(t.Context(), coord.UploadLedgerKey, ledger)
-	if !errors.Is(err, coord.ErrValueTooLarge) || !strings.Contains(err.Error(), "65536") {
-		t.Errorf("a reservation ledger of %d bytes put = %v, want coord.ErrValueTooLarge naming its bound, 65536",
+	if !errors.Is(err, coord.ErrValueTooLarge) || !strings.Contains(err.Error(), "73728") {
+		t.Errorf("a reservation ledger of %d bytes put = %v, want coord.ErrValueTooLarge naming its bound, 73728",
 			len(ledger), err)
 	}
 	if len(u.writes) != 0 {
