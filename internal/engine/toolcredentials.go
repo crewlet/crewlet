@@ -501,6 +501,17 @@ func (m *credentialMissing) judged(states map[integration.Kind]integration.State
 			// No pass has run: the first boot, where the claim comes first.
 			continue
 		}
+		if state.FindingsUnread {
+			// CANNOT SAY for this one: its findings are not in hand, so it
+			// keeps m's judgement, as an unread record does whole.
+			if why, ok := m.stopped[kind]; ok {
+				if out.stopped == nil {
+					out.stopped = map[integration.Kind]string{}
+				}
+				out.stopped[kind] = why
+			}
+			continue
+		}
 		if why, stopped := mintStopped(state, m.seat); stopped {
 			if out.stopped == nil {
 				out.stopped = map[integration.Kind]string{}
@@ -720,9 +731,11 @@ func asWritten(items []string) string {
 // mintingStates reads the fleet's record of every integration that mints a
 // variable one of missing waits for, keyed by integration: nil when nothing
 // waits on one, or when the record could not be read, which
-// [credentialMissing.judged] takes as "cannot say". One read per integration,
-// only while a child is held back on one. The record is the fleet's because
-// the pass that writes it runs on whichever node holds the integration duty.
+// [credentialMissing.judged] takes as "cannot say". One status read by its key
+// at the term per integration, only while a child is held back on one, and
+// findings only where a person owes one, from [mintFindings], never read on
+// this path. The record is the fleet's because the pass that writes it runs
+// on whichever node holds the integration duty.
 func (e *Engine) mintingStates(
 	ctx context.Context, missing []*credentialMissing,
 ) map[integration.Kind]integration.State {
@@ -745,9 +758,15 @@ func (e *Engine) mintingStates(
 		if err != nil {
 			return nil
 		}
-		if found {
-			states[kind] = state
+		if !found {
+			continue
 		}
+		// NO PERSON OWES A FINDING NAMING ANYTHING: none can stop or hold
+		// this seat's mint, so the status alone judges it ([mintStopped]).
+		if state.FindingsRecord.NeedsFindingsFor() {
+			state = e.mintFindings.attach(state, store.LoadFindings)
+		}
+		states[kind] = state
 	}
 	return states
 }
