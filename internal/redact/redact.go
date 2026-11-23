@@ -136,7 +136,7 @@
 // window, the text they trail it by, which it caps at the claims' lag: once the
 // text has run that far past a window, about 5.3 MiB, it decides the window
 // whatever its claims say. With every rule run twice, and the claims' readers,
-// that is at most about 21 MiB of text, and about 28 MiB of the edits, values
+// that is at most about 21 MiB of text, and about 31 MiB of the edits, values
 // and claims the stages keep beside it, where a text is markers end to end (a
 // JSON Web Token every fifteen bytes). So a stream allocates its buffers, about
 // 16 MiB, and past them under a quarter of a byte a byte of a session or a PDF,
@@ -290,9 +290,8 @@
 // block's first line before the block, whose keys begin no further than
 // MaxReach before it, inside what the stage holds, and asks of the claims
 // over that stretch, so a claim handed or ended late there is a miss. A claim
-// is a key, its separator's end, its value's start and end, its three seams
-// and its second range ([aValue]), 72 bytes, held while a window may still ask
-// of it.
+// is a key, its separator's end, and each of its value's two ranges with
+// three seams ([aValue]), 96 bytes, held while a window may ask of it.
 //
 // # What a password's rule still publishes
 //
@@ -681,16 +680,16 @@ func decideIn[T textual](r rule, text T, from int, prior [][2]int) (key, replace
 
 // decideRead is [rule.decide], with a password's value's seams, where the
 // gutter of the key's line ends, where what the line the value was read on
-// ends in begins, and where the markup the key's line opened ends, each or 0
-// ([aValue]).
-func (r rule) decideRead(text string, from int, prior [][2]int) (key, replaced [2]int, seams [3]int, also [2]int, found bool) {
+// ends in begins, and where the markup the key's line opened ends, each or 0,
+// then its second range's ([aValue]).
+func (r rule) decideRead(text string, from int, prior [][2]int) (key, replaced [2]int, seams [6]int, also [2]int, found bool) {
 	key, replaced, seams, also, _, found = decideReadIn(r, text, from, prior)
 	return key, replaced, seams, also, found
 }
 
 // decideReadIn is [rule.decideRead] of a text of either kind ([textual]), and
 // whether a password's value is its run read in the whole text ([aValue]).
-func decideReadIn[T textual](r rule, text T, from int, prior [][2]int) (key, replaced [2]int, seams [3]int, also [2]int, ran, found bool) {
+func decideReadIn[T textual](r rule, text T, from int, prior [][2]int) (key, replaced [2]int, seams [6]int, also [2]int, ran, found bool) {
 	for from <= len(text) {
 		start, end, found := findIn(r, text, from)
 		if !found {
@@ -698,7 +697,8 @@ func decideReadIn[T textual](r rule, text T, from int, prior [][2]int) (key, rep
 		}
 		if r.read != nil {
 			v := callRead(r.read, text, start, end, prior)
-			return [2]int{start, end}, [2]int{v.from, v.to}, [3]int{v.gutter, v.ending, v.opening}, v.also, v.ran, true
+			seams = [6]int{v.gutter, v.ending, v.opening, v.alsoSeams[0], v.alsoSeams[1], v.alsoSeams[2]}
+			return [2]int{start, end}, [2]int{v.from, v.to}, seams, v.also, v.ran, true
 		}
 		if r.value != nil {
 			valueStart, valueEnd := callValue(r.value, text, start, end, prior)
@@ -1907,9 +1907,11 @@ type aValue struct {
 	// opened and the read closed ends ([pastMarkup]).
 	gutter, ending, opening int
 	// also is a second range a reading of an ambiguous first piece names,
-	// after [from, to), or zeros; firstQuote whether the read's key sat on
-	// a string's first piece after a quote.
+	// after [from, to), or zeros, and alsoSeams its own seams where the
+	// reading that named it read them ([unionReading]); firstQuote whether
+	// the read's key sat on a string's first piece after a quote.
 	also       [2]int
+	alsoSeams  [3]int
 	firstQuote bool
 }
 
@@ -5210,11 +5212,11 @@ type claims struct {
 	// ending's start and the opening's end, each or 0), and where each AWS
 	// secret's key begins and its separator ends ([claimed]).
 	tokens    [][2]int
-	passwords [][9]int
-	// endings are the passwords whose value was read on a line it ends as
-	// the key's did, as indexes of passwords, in the order of their
+	passwords [][12]int
+	// endings are where each value read on a line it ends as the key's did
+	// has that ending begin, and where the value ends, in the order of the
 	// endings ([claims.endingApart]).
-	endings []int
+	endings [][2]int
 	// taken are the blocks read forward from a BEGIN ([claims.take]).
 	taken [][2]int
 	read  bool
@@ -5346,16 +5348,19 @@ func (c *claims) take(blocks [][2]int) {
 func (c *claims) build() {
 	// In the order of their keys, which [claims.apart] and
 	// [claims.shortOfValues] search: an AWS secret's are claimed apart.
-	slices.SortFunc(c.passwords, func(a, b [9]int) int { return cmp.Compare(a[0], b[0]) })
+	slices.SortFunc(c.passwords, func(a, b [12]int) int { return cmp.Compare(a[0], b[0]) })
 	whole := slices.Clone(c.tokens)
 	named := slices.Clone(c.tokens)
 	c.endings = c.endings[:0]
-	for i, p := range c.passwords {
+	for _, p := range c.passwords {
 		if p[5] > 0 && p[3] > p[2] {
-			c.endings = append(c.endings, i)
+			c.endings = append(c.endings, [2]int{p[5], p[3]})
+		}
+		if p[10] > 0 && p[8] > p[7] {
+			c.endings = append(c.endings, [2]int{p[10], p[8]})
 		}
 	}
-	slices.SortFunc(c.endings, func(a, b int) int { return cmp.Compare(c.passwords[a][5], c.passwords[b][5]) })
+	slices.SortFunc(c.endings, func(a, b [2]int) int { return cmp.Compare(a[0], b[0]) })
 	for _, p := range c.passwords {
 		named = append(named, [2]int{p[0], p[1]})
 		whole = append(whole, [2]int{p[0], p[1]})
@@ -5458,18 +5463,22 @@ func (c *claims) apartIn(spans, known [][2]int) [][2]int {
 		lineEnd, _ := lineAt(c.text, s[1])
 		limit := min(lineEnd, s[1]+MaxReach)
 		c.askedBegins(s[1], limit+1)
-		i, _ := slices.BinarySearchFunc(c.passwords, s[1], func(p [9]int, at int) int { return cmp.Compare(p[0], at) })
+		i, _ := slices.BinarySearchFunc(c.passwords, s[1], func(p [12]int, at int) int { return cmp.Compare(p[0], at) })
 		for ; i < len(c.passwords) && c.passwords[i][0] <= limit; i++ {
 			p := c.passwords[i]
 			if inSpan(known, p[0]) {
 				continue
 			}
-			s, out = c.pieceApart(s, p, out)
-			if !c.readsAValue(p) {
-				continue
+			s, out = c.pieceApart(s, p[0], cmp.Or(p[4], p[9]), out)
+			if c.readsAValue(p) {
+				s, out = c.gutterApart(s, p[4], known, out)
+				s, out = c.openingApart(s, p[4], p[6], out)
 			}
-			s, out = c.gutterApart(s, p, known, out)
-			s, out = c.openingApart(s, p, out)
+			// The second range's own seams, where a reading gave it some.
+			if p[8] > p[7] {
+				s, out = c.gutterApart(s, p[9], known, out)
+				s, out = c.openingApart(s, p[9], p[11], out)
+			}
 		}
 		if s[1] > s[0] {
 			out = append(out, s)
@@ -5478,19 +5487,19 @@ func (c *claims) apartIn(spans, known [][2]int) [][2]int {
 	return out
 }
 
-// gutterApart is s, a span, written apart from the gutter of the line the key
-// of p, a password's claim, is on, and the line break before it ([aValue]),
-// the piece before them appended to out.
-func (c *claims) gutterApart(s [2]int, p [9]int, known, out [][2]int) ([2]int, [][2]int) {
-	if p[4] <= 0 || p[4] > len(c.text) {
+// gutterApart is s, a span, written apart from the gutter of the line a
+// password's key is on, which ends at gutter, and the line break before it
+// ([aValue]), the piece before them appended to out.
+func (c *claims) gutterApart(s [2]int, gutter int, known, out [][2]int) ([2]int, [][2]int) {
+	if gutter <= 0 || gutter > len(c.text) {
 		return s, out
 	}
-	seg := segmentStart(c.text, p[4])
+	seg := segmentStart(c.text, gutter)
 	lineBreak := breakBefore(c.text, seg)
-	if s[0] >= p[4] || s[1] <= lineBreak {
+	if s[0] >= gutter || s[1] <= lineBreak {
 		return s, out
 	}
-	if s[0] < lineBreak && c.opensAlike(s[0], seg, p[4], known) {
+	if s[0] < lineBreak && c.opensAlike(s[0], seg, gutter, known) {
 		// The line the block begins on opens, before it, with the gutter
 		// the key's line opens with: written whole, the key's line opens
 		// so still.
@@ -5499,20 +5508,20 @@ func (c *claims) gutterApart(s [2]int, p [9]int, known, out [][2]int) ([2]int, [
 	if s[0] < lineBreak {
 		out = append(out, [2]int{s[0], lineBreak})
 	}
-	s[0] = max(s[0], p[4])
+	s[0] = max(s[0], gutter)
 	return s, out
 }
 
 // pieceApart is s, a span, written apart from the escaped break before the
-// piece of a string the key of p, a password's claim, is on, where s runs
-// across it from the string's first piece, the piece before appended to out.
-// Joined to the first piece, the key's piece was read by the first piece's
-// gutter, and its value against the wrong lines. The key's line keeps its own
-// gutter: the claim's (p[4]), or the one the block's first piece opens with
+// piece of a string a password's key, at key, is on, where s runs across it
+// from the string's first piece, the piece before appended to out. Joined to
+// the first piece, the key's piece was read by the first piece's gutter, and
+// its value against the wrong lines. The key's line keeps its own gutter: the
+// claim's, ending at gutter, or the one the block's first piece opens with
 // where the key's piece opens with it too. A block that begins on a later
 // piece stays joined.
-func (c *claims) pieceApart(s [2]int, p [9]int, out [][2]int) ([2]int, [][2]int) {
-	seg := segmentStart(c.text, p[0])
+func (c *claims) pieceApart(s [2]int, key, gutter int, out [][2]int) ([2]int, [][2]int) {
+	seg := segmentStart(c.text, key)
 	lineBreak := breakBefore(c.text, seg)
 	if seg-lineBreak != 2 || c.text[lineBreak] != '\\' || s[0] >= lineBreak || s[1] <= lineBreak {
 		return s, out
@@ -5528,13 +5537,13 @@ func (c *claims) pieceApart(s [2]int, p [9]int, out [][2]int) ([2]int, [][2]int)
 	for g > f && strings.IndexByte("|>#* \t", c.text[g-1]) >= 0 {
 		g--
 	}
-	gutter := c.text[g:s[0]]
+	opens := c.text[g:s[0]]
 	s[0] = max(s[0], seg)
 	switch {
-	case p[4] > s[0] && p[4] <= p[0]:
-		s[0] = p[4]
-	case gutter != "" && strings.HasPrefix(c.text[seg:], gutter) && seg+len(gutter) <= p[0]:
-		s[0] = seg + len(gutter)
+	case gutter > s[0] && gutter <= key:
+		s[0] = gutter
+	case opens != "" && strings.HasPrefix(c.text[seg:], opens) && seg+len(opens) <= key:
+		s[0] = seg + len(opens)
 	}
 	return s, out
 }
@@ -5544,9 +5553,8 @@ func (c *claims) pieceApart(s [2]int, p [9]int, out [][2]int) ([2]int, [][2]int)
 // gutter ([aValue]): the markup and the spaces among it, and, where only
 // spaces stand before it on the key's line, those and the line break before
 // them, the piece before them appended to out.
-func (c *claims) openingApart(s [2]int, p [9]int, out [][2]int) ([2]int, [][2]int) {
-	end := p[6]
-	if end <= p[4] || end > len(c.text) || s[0] >= end {
+func (c *claims) openingApart(s [2]int, gutter, end int, out [][2]int) ([2]int, [][2]int) {
+	if end <= gutter || end > len(c.text) || s[0] >= end {
 		return s, out
 	}
 	start := end
@@ -5579,16 +5587,16 @@ func (c *claims) endingApart(s [2]int, out [][2]int) ([2]int, [][2]int) {
 	}
 	lineS := segmentStart(c.text, s[0])
 	c.asked(lineS, s[0])
-	i, _ := slices.BinarySearchFunc(c.endings, lineS, func(j, at int) int { return cmp.Compare(c.passwords[j][5], at) })
+	i, _ := slices.BinarySearchFunc(c.endings, lineS, func(e [2]int, at int) int { return cmp.Compare(e[0], at) })
 	for ; i < len(c.endings); i++ {
-		p := c.passwords[c.endings[i]]
-		if p[5] > len(c.text) || segmentStart(c.text, p[5]) != lineS {
+		e := c.endings[i]
+		if e[0] > len(c.text) || segmentStart(c.text, e[0]) != lineS {
 			break
 		}
-		lineEnd, next := lineAt(c.text, p[5])
-		if _, after := lineAt(c.text, lineRest(c.text, lineEnd, next, len(c.text))); after >= 0 && s[0] >= p[3] && s[1] > after {
-			if s[0] < p[5] {
-				out = append(out, [2]int{s[0], p[5]})
+		lineEnd, next := lineAt(c.text, e[0])
+		if _, after := lineAt(c.text, lineRest(c.text, lineEnd, next, len(c.text))); after >= 0 && s[0] >= e[1] && s[1] > after {
+			if s[0] < e[0] {
+				out = append(out, [2]int{s[0], e[0]})
 			}
 			s[0] = after
 		}
@@ -5602,7 +5610,7 @@ func (c *claims) endingApart(s [2]int, out [][2]int) ([2]int, [][2]int) {
 // the block the first cut ([claims.apart]). A window places the start of a
 // value it holds none of, and of a word that names none, one past its end
 // ([keyStage.claimsIn]), where it has no line to read.
-func (c *claims) readsAValue(p [9]int) bool {
+func (c *claims) readsAValue(p [12]int) bool {
 	if p[3] > p[2] {
 		return true
 	}
@@ -5642,7 +5650,7 @@ func (c *claims) opensAlike(start, seg, gutterEnd int, known [][2]int) bool {
 func (c *claims) shortOfValues(start, end int) int {
 	c.load()
 	c.asked(start, end+1)
-	i, _ := slices.BinarySearchFunc(c.passwords, start, func(p [9]int, at int) int { return cmp.Compare(p[0], at) })
+	i, _ := slices.BinarySearchFunc(c.passwords, start, func(p [12]int, at int) int { return cmp.Compare(p[0], at) })
 	for ; i < len(c.passwords) && c.passwords[i][0] < end; i++ {
 		p := c.passwords[i]
 		if p[3] <= p[2] || p[2] < end {
@@ -5844,7 +5852,7 @@ func promptAt(line string) int {
 // token's base64 — is one run with the value as written and another beside
 // the value's marker, which a second pass would read as a key's text where
 // the first read a claimed run.
-func claimed(text string) (tokens [][2]int, passwords [][9]int) {
+func claimed(text string) (tokens [][2]int, passwords [][12]int) {
 	w := passwordInput(text, nil)
 	for _, e := range w.edits {
 		tokens = append(tokens, [2]int{e[2], e[3]})
@@ -5862,7 +5870,7 @@ func claimed(text string) (tokens [][2]int, passwords [][9]int) {
 			if !ok {
 				break
 			}
-			passwords, from = append(passwords, [9]int{w.at(start), w.at(end), w.at(end), w.at(end), 0, 0, 0, 0, 0}), end
+			passwords, from = append(passwords, [12]int{w.at(start), w.at(end), w.at(end), w.at(end)}), end
 		}
 	}
 	password := rules()[len(rules())-1]
@@ -5878,18 +5886,18 @@ func claimed(text string) (tokens [][2]int, passwords [][9]int) {
 			}
 		}
 		if value[1] > value[0] {
-			a := [2]int{}
+			a, as := [2]int{}, [3]int{}
 			if also[1] > also[0] {
-				a = [2]int{w.at(also[0]), w.at(also[1])}
+				a, as = [2]int{w.at(also[0]), w.at(also[1])}, [3]int(seams[3:])
 			}
-			passwords = append(passwords, [9]int{w.at(key[0]), w.at(key[1]), w.at(value[0]), w.at(value[1]), seams[0], seams[1], seams[2], a[0], a[1]})
+			passwords = append(passwords, [12]int{w.at(key[0]), w.at(key[1]), w.at(value[0]), w.at(value[1]), seams[0], seams[1], seams[2], a[0], a[1], as[0], as[1], as[2]})
 			prior, from = append(prior, value), value[1]
 			if also[1] > also[0] {
 				prior, from = append(prior, also), also[1]
 			}
 			continue
 		}
-		passwords, from = append(passwords, [9]int{w.at(key[0]), w.at(key[1]), w.at(key[1]), w.at(key[1]), seams[0], seams[1], seams[2], 0, 0}), beyond(w.text, key[0])
+		passwords, from = append(passwords, [12]int{w.at(key[0]), w.at(key[1]), w.at(key[1]), w.at(key[1]), seams[0], seams[1], seams[2]}), beyond(w.text, key[0])
 	}
 	return tokens, passwords
 }

@@ -295,36 +295,53 @@ func (j jsonString) seam(i int) int {
 // unionReading is v, the text's own reading, with o, the decoded one's, added:
 // every range either reads is hidden, the two that lie earliest kept as the
 // value and its second range and any more joined to the one before ([aValue]),
-// the value is decided where both are, and each seam is the one the reading
-// that has it reads.
+// the value is decided where both are, and each range keeps the seams of the
+// reading that named it, so the claims cut a key's block by each.
 func unionReading(v, o aValue) aValue {
 	v.decided, v.unread = max(v.decided, o.decided), v.unread && o.unread
-	v.gutter, v.ending, v.opening = cmp.Or(v.gutter, o.gutter), cmp.Or(v.ending, o.ending), cmp.Or(v.opening, o.opening)
-	var rs [][2]int
-	for _, r := range [][2]int{{v.from, v.to}, v.also, {o.from, o.to}, o.also} {
-		if r[1] > r[0] {
+	type read struct {
+		r     [2]int
+		seams [3]int
+		own   bool
+	}
+	var rs []read
+	for _, r := range []read{
+		{[2]int{v.from, v.to}, [3]int{v.gutter, v.ending, v.opening}, true}, {v.also, v.alsoSeams, true},
+		{[2]int{o.from, o.to}, [3]int{o.gutter, o.ending, o.opening}, false}, {o.also, o.alsoSeams, false},
+	} {
+		if r.r[1] > r.r[0] {
 			rs = append(rs, r)
 		}
 	}
 	if len(rs) == 0 {
 		return v
 	}
-	slices.SortFunc(rs, func(a, b [2]int) int { return a[0] - b[0] })
+	slices.SortStableFunc(rs, func(a, b read) int { return a.r[0] - b.r[0] })
 	merged := rs[:1]
 	for _, r := range rs[1:] {
 		last := &merged[len(merged)-1]
-		if r[0] <= last[1] || len(merged) == 2 {
-			last[1] = max(last[1], r[1])
+		if r.r[0] <= last.r[1] || len(merged) == 2 {
+			// One range both readings name keeps the text's own reading's
+			// seams, as its claims had them, and the other's where it has none.
+			first, second := last.seams, r.seams
+			if r.own && !last.own {
+				first, second = second, first
+			}
+			last.r[1], last.own = max(last.r[1], r.r[1]), last.own || r.own
+			for i := range last.seams {
+				last.seams[i] = cmp.Or(first[i], second[i])
+			}
 			continue
 		}
 		merged = append(merged, r)
 	}
-	if merged[0] != [2]int{v.from, v.to} {
+	if merged[0].r != [2]int{v.from, v.to} {
 		v.ran = false
 	}
-	v.from, v.to, v.also = merged[0][0], merged[0][1], [2]int{}
+	v.from, v.to, v.also, v.alsoSeams = merged[0].r[0], merged[0].r[1], [2]int{}, [3]int{}
+	v.gutter, v.ending, v.opening = merged[0].seams[0], merged[0].seams[1], merged[0].seams[2]
 	if len(merged) == 2 {
-		v.also = merged[1]
+		v.also, v.alsoSeams = merged[1].r, merged[1].seams
 	}
 	return v
 }
