@@ -3236,7 +3236,7 @@ muse-code:
   # with it. The binary also reads CLAUDE_CONFIG_DIR and CODEX_HOME, which an
   # entry's env could point at another harness's real home. Its own personal
   # skills (the home's .agents/skills) are read with or without the flag and
-  # trusted or not, and are pruned with the volatile paths below.
+  # trusted or not; nothing but the harness writes the seat's home.
   #
   # --disable-reminders turns off the harness's REMINDER OBSERVERS, each a
   # model request of its own that re-sends the call's prompt (the engine's
@@ -3492,21 +3492,11 @@ muse-code:
   # an operator's override could, and none of which will ever exist again; and
   # .auth.json.lock is what a killed harness leaves held — the same half-prune the
   # claude-code profile's .claude.json.lock note records.
-  #
-  # And what Muse hands every call from the home as the user's own: the skills
-  # under .agents/skills and .config/muse/skills and the personal
-  # .config/muse/AGENTS.md, read with this profile's flags too (measured on
-  # 1.4.25). Nothing the engine writes; pruned so a call is told only what its
-  # seeds and its prompt say. Installed plugins, whose skills load unapproved,
-  # are under .local/share/muse and go with it.
   volatile_paths:
     - ".local/share/muse"
     - ".local/state/muse"
     - ".config/muse/trust.json"
     - ".config/muse/.auth.json.lock"
-    - ".config/muse/skills"
-    - ".config/muse/AGENTS.md"
-    - ".agents/skills"
   host_credential_paths: [".config/muse/auth.json"]
   # A Meta Model API key, so it is the METERED credential: reached through
   # auth.mode api-key or inherit-env, never forwarded silently. It takes
