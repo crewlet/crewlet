@@ -30,6 +30,7 @@ var oneShots = map[string]func(ctx context.Context, f flags, stdin io.Reader, st
 	"muse-hook":    runMuseHook,
 	"codex-launch": runCodexLaunch,
 	"codex-nested": runCodexNested,
+	"codex-renew":  runCodexRenew,
 }
 
 // runOnce runs args as a one-shot adapter's firing, and is its exit status
@@ -46,6 +47,7 @@ func runOnce(ctx context.Context, args []string, getenv func(string) string, std
 	set.BoolVar(&f.skillLoads, "skill-loads", false, "")
 	set.BoolVar(&f.loadsOnly, "loads-only", false, "")
 	set.IntVar(&f.slot, "slot", 0, "")
+	set.StringVar(&f.rollout, "rollout", "", "")
 	if set.Parse(args) != nil {
 		return 0, false
 	}
