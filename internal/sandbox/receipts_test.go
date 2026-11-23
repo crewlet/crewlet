@@ -275,6 +275,41 @@ func TestACollectionReadsReceiptsOnlyWhereItsJobHasServedNotes(t *testing.T) {
 	}
 }
 
+// A NOTE READ ELSEWHERE KEEPS ITS SERVE IN THE SERVED ORDER: a note served to
+// the job and then read by a later launch's brief, or by the review, may have
+// reached the job's record all the same, so its serve keeps its place before
+// an unread take of the same words. A text matcher then spends that row on it,
+// and the unread take, with no row of its own, is not held off it (executor's
+// TestAReadCodexNoteKeepsItsPlace and TestAReadQwenNoteKeepsItsPlace).
+//
+// Mutation: keep a read note's serve only where this job's own confirm read
+// it, and the brief's and the review's serves drop out.
+func TestANoteReadElsewhereKeepsItsServeInTheServedOrder(t *testing.T) {
+	t.Parallel()
+	const job, digest = "job-1", "d-same"
+	batch := types.SteerBoundaryToolBatch
+	serve := func(take string) []HookServed {
+		return []HookServed{{Take: take, Launch: job, Boundary: string(batch), Digest: digest}}
+	}
+	run := PendingRun{TurnID: "t1", LaunchID: job, Harness: "codex"}
+	run.Steer.Notes = []RunNote{
+		{ID: "briefed", Serves: serve("take-briefed"), Served: job,
+			Read: &NoteRead{Launch: "job-2", Boundary: string(types.SteerBoundaryBrief)}},
+		{ID: "reviewed", Serves: serve("take-reviewed"), Served: job,
+			Read: &NoteRead{Boundary: "round", Unanswered: true}},
+		{ID: "unread", Serves: serve("take-unread")},
+	}
+	unread := AskedTake{Take: "take-unread", Boundary: batch, Digest: digest}
+	if got := askedTakes(run); !slices.Equal(got, []AskedTake{unread}) {
+		t.Errorf("the read asks %+v, want the unread take alone", got)
+	}
+	want := []AskedTake{{Take: "take-briefed", Boundary: batch, Digest: digest, Read: true},
+		{Take: "take-reviewed", Boundary: batch, Digest: digest, Read: true}, unread}
+	if got := servedTakes(run); !slices.Equal(got, want) {
+		t.Errorf("the job's serves in order are %+v, want the read notes' before the unread take: %+v", got, want)
+	}
+}
+
 // EVERY ENDING READ PUBLISHES WHAT ITS JOB'S HOOKS READ: a collection's, a
 // stop's and a loss's read each hand the engine the notes the job's session
 // confirmed and the wake items it took, for the engine to claim, never a late

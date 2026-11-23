@@ -144,7 +144,10 @@ func servedTakes(run PendingRun) []AskedTake {
 }
 
 // launchServes is the serves [askedTakes] names, those of read notes too
-// where withRead.
+// where withRead. A READ NOTE'S SERVE IS KEPT WHATEVER READ IT, a brief's or
+// the review's as much as this job's own confirm: the serve went to this job,
+// whose record may hold it, and a row it holds left out would match a later
+// unread take of the same words, holding that take falsely.
 func launchServes(run PendingRun, withRead bool) []AskedTake {
 	var takes []AskedTake
 	for _, n := range run.Steer.Notes {
