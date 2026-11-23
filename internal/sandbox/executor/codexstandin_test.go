@@ -197,6 +197,7 @@ case "$1" in
 --version) echo 'codex-cli %[2]s'; exit 0;;
 app-server)
   printf '%%s\n' "$@" > "$rec/server-argv"; pwd > "$rec/server-cwd"
+  cp "$CODEX_HOME/config.toml" "$rec/config.toml" 2> /dev/null; stat -c %%a "$CODEX_HOME/config.toml" > "$rec/config-mode" 2> /dev/null
   for a; do case "$a" in unix://*) s=${a#unix://};; esac; done
   %[3]s="$s" %[4]s="$rec" exec %[5]s;;
 exec)
