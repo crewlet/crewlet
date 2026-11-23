@@ -411,8 +411,8 @@ func TestARunsValueIsGivenItsCrossingOnlyAcrossALink(t *testing.T) {
 // process. A class is one key at most, at the term only if it crosses in it.
 //
 // Mutation: let leaderFor or most ignore a class, undeclare a positions,
-// uploads or chat reads class, read bodies at the term, declare a class past
-// one key, or give a headers pass passIdle.
+// uploads, chat reads or secrets class, read bodies at the term, declare a
+// class past one key, or give a headers pass passIdle.
 func TestEveryReadIsGivenTheCrossingOfItsClassBound(t *testing.T) {
 	t.Parallel()
 	// THE FIGURES STATED, not derived again: a full value with the most header,
@@ -572,6 +572,20 @@ func TestEveryReadIsGivenTheCrossingOfItsClassBound(t *testing.T) {
 					reach, got, c.idle)
 			}
 		}
+		// THE SECRETS BUCKET'S CLASS, whose reads decide a put, a create, a
+		// rekey and a grant's renewal; the boot's snapshot and every other
+		// pass over the bucket wait its raw crossing.
+		secret := encodeKey("GITLAB_TOKEN")
+		read, err := newLeaderReader(store.js, store.secrets)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := read.leaderFor(secret).Term(), deciding(coord.MaxSecretRecordBytes); got != want {
+			t.Errorf("the secrets bucket's %q %s is read at a term of %v, want %v", secret, reach, got, want)
+		}
+		if got, want := store.secrets.(settledBucket).quiet(jetstream.AllKeys), raw(coord.MaxSecretRecordBytes); got != want {
+			t.Errorf("a pass over the secrets bucket %s is quiet after %v, want %v", reach, got, want)
+		}
 		standing, err := beginPass(t.Context(), store.js, store.runs, runRecordKeys, "the runs' standing", true)
 		if err != nil {
 			t.Fatalf("begin a pass of the runs' standing %s: %v", reach, err)
@@ -625,7 +639,7 @@ func openedHoldings(t *testing.T, nc *nats.Conn) []holding {
 		found = append(found, kv.(settledBucket).holding)
 	}
 	for _, want := range []holding{runsHolding, configHolding, positionsHolding, uploadsHolding,
-		chatReadsHolding, undeclaredHolding} {
+		chatReadsHolding, secretsHolding, undeclaredHolding} {
 		if !slices.ContainsFunc(found, want.same) {
 			t.Fatalf("premise: no opened bucket holds %+v, so the walk read the handles wrong", want)
 		}
@@ -669,10 +683,12 @@ func TestASmallClassCrossesTheFloorInsideTheReadTerm(t *testing.T) {
 // every probe, while a body of the same size beside it is written; an atlas
 // wake past coord.SmallValueBytes beside a node's positions; the
 // reservation ledger past coord.MaxUploadLedgerBytes beside an upload record;
-// and a chat read record past coord.MaxChatReadBytes beside another key.
+// a chat read record past coord.MaxChatReadBytes beside another key; and a
+// credential's record past coord.MaxSecretRecordBytes, one at it written.
 //
 // Mutation: hold every value to coord.MaxValueBytes in carriedBack, and the
-// pointer, the wake, the ledger and the chat read record are written.
+// pointer, the wake, the ledger, the chat read and the secret records are
+// written.
 func TestASettledWriteIsHeldToItsClassBound(t *testing.T) {
 	t.Parallel()
 	d := &deadlined{}
@@ -755,6 +771,27 @@ func TestASettledWriteIsHeldToItsClassBound(t *testing.T) {
 	}
 	if len(c.writes) != 1 {
 		t.Errorf("the other key reached the client %d times, want once", len(c.writes))
+	}
+
+	// AND IN THE SECRETS BUCKET, every key a credential's record: one past
+	// its bound refused, one at it written.
+	k := &deadlined{}
+	credentials := settled(termed{term: jsapi.RequestTerm}, named{KeyValue: k, bucket: "secrets"}, AcrossLink,
+		secretsHolding)
+	sealed := make([]byte, coord.MaxSecretRecordBytes+1)
+	_, err = credentials.Put(t.Context(), encodeKey("GITLAB_TOKEN"), sealed)
+	if !errors.Is(err, coord.ErrValueTooLarge) || !strings.Contains(err.Error(), "98304") {
+		t.Errorf("a secret's record of %d bytes put = %v, want coord.ErrValueTooLarge naming its bound, 98304",
+			len(sealed), err)
+	}
+	if len(k.writes) != 0 {
+		t.Fatalf("the refused record reached the client %d times, want never", len(k.writes))
+	}
+	if _, err := credentials.Put(t.Context(), encodeKey("GITLAB_TOKEN"), sealed[1:]); err != nil {
+		t.Errorf("a secret's record of %d bytes put = %v, want it written", len(sealed)-1, err)
+	}
+	if len(k.writes) != 1 {
+		t.Errorf("the record at its bound reached the client %d times, want once", len(k.writes))
 	}
 }
 
