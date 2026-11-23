@@ -704,10 +704,10 @@ const SUBJECT_CHIPS = 6;
  * Everything a finding is about — as things, not as prose.
  *
  * The engine caps a finding's `detail` because that string is the card's
- * status line and an oversized status row is refused by its store outright,
- * so a finding about thirty-six things arrived as a wall cut off mid-item. It
- * now sends the count in the sentence and the list here, and this is where
- * the list is laid out.
+ * status line, so a finding about thirty-six things arrived as a wall cut off
+ * mid-item. It now sends the count in the sentence and the list here, cut
+ * only past what its record keeps (`omitted`), and this is where the list is
+ * laid out.
  *
  * CHIPS RATHER THAN A DISCLOSURE. What was here was a `<details>` whose
  * summary read `all {n} {subject}s` — which produced "all 1 agents without an
