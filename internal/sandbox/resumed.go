@@ -5,15 +5,15 @@ import "slices"
 // WHAT ITS HARNESS COUNTS A SESSION AT BEFORE ITS NEXT REQUEST
 // ([ResumedCount]). Before every request, a resumed run's first included,
 // Claude Code compares its count with its window less its reply reserve and a
-// 13,000-token buffer, and there COMPACTS the session to a summary (read in
-// 2.1.310 and 2.1.322); OpenCode compacts by a rule of its own (boxpoint.go).
-// The engine's floor continues a session whose next request and brief fit the
-// window less 20,000 tokens, so in that band what it counts as held may be
-// gone. So the count is bounded FROM ABOVE wherever a copy is read whole
-// ([SessionCapture.ResumedCount], [LaunchRecord.ResumedCount]), judged by
-// [ExecutorWindow.SendsWhole], a continuation not proven whole told as cut off
-// (internal/agent/runner's firstRequest); what the bound cannot see is a
-// [CountMark]. NEVER CARRIED: a carried count could under-state a grown copy.
+// 13,000-token buffer, and there COMPACTS the session to a summary (2.1.310,
+// 2.1.322); OpenCode, Gemini CLI and Qwen Code by rules of their own, judged in
+// the box (boxpoint.go). The engine's floor continues a session whose next
+// request and brief fit the window less 20,000 tokens, so what it counts as
+// held may be gone. So the count is bounded FROM ABOVE wherever a copy is read
+// whole ([SessionCapture.ResumedCount], [LaunchRecord.ResumedCount]), a
+// continuation not proven whole told as cut off (internal/agent/runner's
+// firstRequest); what the bound cannot see is a [CountMark]. NEVER CARRIED: a
+// carried count could under-state a grown copy.
 
 // CountMark is why a [ResumedCount] holds no bound: what a whole read of the
 // main thread could not bound by its bytes, or why it was not read whole. Every
@@ -32,7 +32,8 @@ const (
 	// not read in: none named, or one below internal/sandbox/executor's
 	// claudeCountFloor (2.1.310); or an OpenCode session from a release outside
 	// the set its rules were read in (internal/sandbox/executor's
-	// openCodeCountRead), or none named.
+	// openCodeCountRead), or none named; or a Gemini CLI or Qwen Code
+	// session from any release but the one measured.
 	CountRelease CountMark = "release"
 	// CountPrecompact is a session holding a saved compaction Claude Code swaps
 	// in for a summary where its threshold fires
@@ -41,14 +42,21 @@ const (
 	CountPrecompact CountMark = "precompact"
 	// CountCompacted is a thread whose last main compact boundary has no
 	// counted reply after it: the segment the compaction preserved sits before
-	// the boundary, off the chain the count reads, yet the harness sends it.
+	// the boundary, off the chain the count reads, yet the harness sends it;
+	// or a Qwen Code compression whose figure does not read.
 	CountCompacted CountMark = "compacted"
+	// CountMasked is a Gemini CLI session its first request would mask or
+	// collapse before it is sent: tool output past the newest it protects,
+	// or a history past the size it collapses at, each replaced by a stub
+	// the model reads instead, which the request is no longer whole without.
+	CountMasked CountMark = "masked"
 	// CountUnanchored is an OpenCode session with no counted reply since its
 	// start or its newest completed compaction: OpenCode then estimates the
 	// system prompt, the tools and every message, which no export holds.
 	CountUnanchored CountMark = "unanchored"
 	// CountUsage is a reply since the last boundary whose usage does not read
-	// as Claude Code counts it, or one with no usage and no message id.
+	// as Claude Code counts it, or one with no usage and no message id; or a
+	// Qwen Code session with no reply or compression stating a figure.
 	CountUsage CountMark = "usage"
 	// CountCleared is a reply since the last boundary saying the server cleared
 	// old tool results: Claude Code counts those tokens back, and no line
@@ -62,14 +70,16 @@ const (
 	// Claude Code counts at a flat 2,000 tokens, unbounded by its bytes; or any
 	// other file in an OpenCode session after its counted reply (a person's
 	// message's files, a tool's answer that is no text), whose estimate is not
-	// its bytes.
+	// its bytes; or inline or file data in a Gemini CLI session, or twenty
+	// tool-answer images in a Qwen Code one, which its first request
+	// compacts at whatever its count.
 	CountMedia CountMark = "media"
 )
 
 // CountMarks are the marks this build writes, IN PRECEDENCE ORDER: a count
 // that is marked keeps the first of them that applies, one word.
-var CountMarks = []CountMark{CountUnread, CountRelease, CountPrecompact, CountCompacted, CountUnanchored,
-	CountUsage, CountCleared, CountPDF, CountMedia}
+var CountMarks = []CountMark{CountUnread, CountRelease, CountPrecompact, CountCompacted, CountMasked,
+	CountUnanchored, CountUsage, CountCleared, CountPDF, CountMedia}
 
 // Valid reports whether this build knows m. A word it does not know, a later
 // build's, is still a mark: it reads as a session that may compact.
