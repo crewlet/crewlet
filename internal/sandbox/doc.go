@@ -36,10 +36,11 @@
 // take ([PendingStore.SettleHook]), so a capture's cursor counts only what was
 // confirmed; a verdict the store does not answer is [ErrStoreSilent].
 //
-// An OpenCode continuation's first request is judged in its box: the held
-// telling only where the box's compaction point is read and the count sits
-// below it ([OpenCodePoint.SendsWhole]), else the summarized one. A session a
-// run starts of its own keeps its task as a [LeadKindFresh] lead. The harness's
+// An OpenCode, Gemini CLI or Qwen Code continuation's first request is judged
+// in its box, whose own settings can move the point: the held telling only
+// where the box's point is read and the count sits below it
+// ([BoxPoint.SendsWhole]), else the summarized one. A session a run starts of
+// its own keeps its task as a [LeadKindFresh] lead. The harness's
 // estimate of a session's next request ([NextRequest]) is never carried along
 // a lineage nor put on the executor log: a copy grown by its brief would be
 // understated.
@@ -121,9 +122,9 @@
 //
 // # A save is offered by the poll, from memory
 //
-// The poll already reaches every running box on its launching node; any other
-// trigger would be a second way in. The offer decides from memory and never
-// blocks the keepalive; [maxConcurrentSaves] slots bound packs and uploads.
+// The poll already reaches every running box; any other trigger would be a
+// second way in. The offer decides from memory and never blocks the
+// keepalive; [maxConcurrentSaves] slots bound packs and uploads.
 //
 // # A save as its node drains
 //
@@ -306,11 +307,10 @@
 // # A box left on its host
 //
 // Each box has one reclaimer, by its record, which a kill deletes only with the
-// box ([Provider.Kill]), so a failed one is retried. One recording its run is
-// its host's sweep's ([Waiter.sweep]), off its row, so a parked box lives to
-// its pause TTL. A check's is its node's check runner's ([CheckBox]); any
-// other the orphan reaper's ([Local.reapOrphans]), once nothing runs in it or
-// touches it.
+// box ([Provider.Kill]), so a failed kill is retried. One recording its run
+// is its host's sweep's ([Waiter.sweep]), off its row, so a parked box lives
+// to its pause TTL; a check's, its check runner's ([CheckBox]); any other,
+// the orphan reaper's ([Local.reapOrphans]) once it is idle.
 //
 // # Releasing a claim
 //
