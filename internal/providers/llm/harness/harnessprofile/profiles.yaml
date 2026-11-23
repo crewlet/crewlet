@@ -3753,7 +3753,8 @@ kimi-code:
   # admitted four tools nobody knew to name.
   #
   # `FetchURL` is the one that survives without more, and it is web — the one
-  # local tool this backend never denies. `WebSearch` is the other: the harness
+  # local tool this backend keeps unless the entry denies the web
+  # (web_denial). `WebSearch` is the other: the harness
   # registers it only when the Moonshot search service is configured, which
   # the OAuth login provisions (`[services.moonshot_search].oauth` is
   # "injected automatically by the login flow"). Measured on 2.7.2 with that
@@ -3763,7 +3764,40 @@ kimi-code:
   # opposite of muse-code's gated `web_fetch` — there, naming it admitted
   # nothing ever.
   local_tools: denied
-  web_tools_note: "no web denial: dropping FetchURL from the agent file's allowlist would be one, but it has not been measured against a kimi harness, so this profile cannot serve the assistant"
+  web_tools_note: "the agent file's allowlist without WebSearch and FetchURL; measured on Kimi Code 2.7.2: neither offered, both refused as disabled by the active tool policy, with a search service configured"
+  # WEB OFF IN THE AGENT FILE, which is both channels' allowlist: the same
+  # file without `WebSearch` and `FetchURL`. Measured on 2.7.2 against a
+  # stand-in, a search service set in the environment: a text function was
+  # offered NO tool, a call to either was refused ("disabled by the active
+  # tool policy") and nothing reached the network. No `Agent` tool is listed,
+  # so no subagent of its own profile can bring the web back.
+  web_denial:
+    system_prompt:
+      args: ["--agent-file", "{file}"]
+      file:
+        name: crewlet-seat.md
+        template: |
+          ---
+          name: crewlet-seat
+          description: The Crewlet seat this run serves. Its own tools are the crewlet MCP server's.
+          tools:
+            - mcp__crewlet__*
+          ---
+          {system}
+    append_system_prompt:
+      args: ["--agent-file", "{file}"]
+      file:
+        name: crewlet-seat.md
+        template: |
+          ---
+          name: crewlet-seat
+          description: The Crewlet seat this run serves. Its own tools are the crewlet MCP server's.
+          tools:
+            - mcp__crewlet__*
+          ---
+          {system}
+
+          ${base_prompt}
   model_args: ["--model", "{model}"]
   # Measured on 2.7.2: no flag. On Kimi's own provider type the variable is
   # sent as the request's `thinking.effort`, unchecked (a level no model has
