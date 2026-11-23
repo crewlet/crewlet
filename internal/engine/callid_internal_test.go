@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/agent/runner"
+	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/notify"
 )
@@ -120,5 +122,69 @@ func TestARecoveredRunsCallsCarryTheIDsTheirHarnessGaveThem(t *testing.T) {
 	if logged := rig.calls(t, "run-call-id"); len(logged.Calls) != 1 || logged.Calls[0].CallID != id {
 		t.Errorf("the run's log holds %+v, want the submission made after the recovery under the id its "+
 			"harness gave it, %q", logged.Calls, id)
+	}
+}
+
+// A RECOVERED RUN'S CALLS ARE PARKED BEFORE ITS HARNESS'S CEILING, the one
+// THIS NODE'S runner of the harness states ([sandbox.OpenedJob.CallCeiling]):
+// the row records none, and a call the reopened session never parks is cut by
+// the harness's own timeout and sent again, the double run the ceiling stops.
+// Launched under a runner that stated none and recovered once it states one,
+// so the park is the recovery's: the call is answered to end the turn while
+// its tool runs, and the job is parked on it.
+//
+// Mutation: open the recovered job's session with no ceiling
+// (reopen-names-no-ceiling), and the call is not answered until its tool
+// returns.
+func TestARecoveredRunsCallsAreParkedBeforeItsHarnesssCeiling(t *testing.T) {
+	t.Parallel()
+	const ceiling = 6 * time.Second
+	read := newHeldTool("read_page")
+	run := launchRecoverable(t, read)
+	row := run.row(t)
+	if row.Harness != run.jobs.Name() {
+		t.Fatalf("the run's harness is %q, want the rig's runner's %q", row.Harness, run.jobs.Name())
+	}
+	run.jobs.Ceiling = ceiling
+
+	run.restart()
+	run.e.reopenAgentRun(t.Context(), row)
+	session, err := connect(t, run.server)
+	if err != nil {
+		t.Fatalf("the box's endpoint for the probe's server does not reach the recovered run: %v", err)
+	}
+	// FREED FIRST of everything the case built, so no close waits on it.
+	var freed sync.Once
+	free := func() { freed.Do(func() { close(read.release) }) }
+	t.Cleanup(free)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	answered := make(chan *mcp.CallToolResult, 1)
+	go func() {
+		res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "read_page", Arguments: map[string]any{}})
+		if err != nil {
+			res = &mcp.CallToolResult{IsError: true}
+		}
+		answered <- res
+	}()
+	select {
+	case <-read.entered:
+	case <-ctx.Done():
+		t.Fatal("the call after the recovery never reached its tool")
+	}
+	select {
+	case res := <-answered:
+		if res.IsError || !strings.Contains(contentText(res), "END YOUR TURN NOW") {
+			t.Fatalf("the call after the recovery was answered %+v while its tool ran, want it still "+
+				"running and the turn to end", res)
+		}
+	case <-ctx.Done():
+		t.Fatalf("the call after the recovery was not answered while its tool ran, %v before its "+
+			"harness's ceiling of %v", ceiling-toolloop.ParkBefore(ceiling), ceiling)
+	}
+	if parked := run.row(t); !parked.WaitsOnOwnCalls() || len(parked.ParkedCalls) != 1 ||
+		parked.ParkedCalls[0].Tool != "read_page" {
+		t.Errorf("the recovered run's row parks on %+v, want its job parked on its call to read_page",
+			parked.ParkedCalls)
 	}
 }
