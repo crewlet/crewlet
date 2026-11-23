@@ -8,23 +8,16 @@
 //   {"op":"tools","names":[...]}           what pi.getAllTools() names from now on
 //   {"op":"usage","usage":U}               what ctx.getContextUsage() answers
 //   {"op":"event","name":N,"event":E}      every handler of N, awaited in order
-//   {"op":"spawn","name":N,"env":V}        the spawn hook of the tool registered
-//                                          as N, handed an environment V
 //
 // Reports, one JSON object a line on stdout: `loaded`, `register` (name,
 // config), `tool` (name), `entry` (customType, data), `abort`, `handled`
-// (name, result, the event as the handlers left it), `spawned` (the names of
-// the environment the hook handed back), `error`.
-//
-// The extension's one import of pi's own, its tool factory, resolves to the
-// stand-in the suite installs beside it (pi_export_test.go, PiAPIStub).
+// (name, result, the event as the handlers left it), `error`.
 
 import { createInterface } from "node:readline"
 import { pathToFileURL } from "node:url"
 
 const report = (fields) => process.stdout.write(JSON.stringify(fields) + "\n")
 const handlers = new Map()
-const registered = new Map()
 let tools = []
 let usage
 
@@ -37,7 +30,6 @@ const pi = {
     report({ op: "register", name, config })
   },
   registerTool(tool) {
-    registered.set(tool.name, tool)
     report({ op: "tool", name: tool.name })
   },
   appendEntry(customType, data) {
@@ -72,11 +64,6 @@ for await (const line of createInterface({ input: process.stdin })) {
     const command = JSON.parse(line)
     if (command.op === "tools") tools = command.names
     if (command.op === "usage") usage = command.usage
-    if (command.op === "spawn") {
-      const hook = registered.get(command.name)?.spawnHook
-      const out = hook ? hook({ command: "true", cwd: ctx.cwd, env: command.env ?? {} }) : { env: command.env ?? {} }
-      report({ op: "spawned", names: Object.keys(out.env).sort() })
-    }
     if (command.op === "event") {
       const event = command.event ?? {}
       let result

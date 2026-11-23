@@ -211,10 +211,6 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	// ([parseSessionRecord]).
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$s" "$k" "$w" "$v" > %s`,
 		shellword.Quote(paths.SessionRecord()))
-	// CREWLET'S OWN VARIABLES STAY THE HARNESS'S: the file it runs ahead of
-	// every command its model runs takes them out of that command's
-	// ([writeClaudeToolEnv]).
-	line(`export CLAUDE_ENV_FILE=%s`, shellword.Quote(paths.ClaudeToolEnv()))
 	b.WriteString(claudeStateLink(paths))
 	b.WriteString(launchHarness(strings.Join(parts, " "), paths))
 	b.WriteString(claudeCapture(paths))
@@ -785,9 +781,6 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 			return "", fmt.Errorf("executor: writing the system prompt: %w", err)
 		}
 	}
-	if err := writeClaudeToolEnv(ctx, box, paths); err != nil {
-		return "", err
-	}
 	pin := claudeSettingsPin(claudeCodeWindow(req.Model))
 	if err := writeClaudeSettingsPair(ctx, box, paths.ClaudeSettings(), paths.ClaudeSettingsPinned(),
 		newClaudeSettings(nil), newClaudeSettings(pin)); err != nil {
@@ -830,18 +823,6 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 		}
 	}
 	return paths.MCPConfig(), nil
-}
-
-// writeClaudeToolEnv writes the file [Paths.ClaudeToolEnv]: Crewlet's own
-// variables unset ([crewletShellOff]). Claude Code runs the file
-// CLAUDE_ENV_FILE names in the shell of each command its model runs, ahead of
-// the command, and keeps its own environment, which its telemetry export reads
-// (measured on 2.1.330).
-func writeClaudeToolEnv(ctx context.Context, box sandbox.Sandbox, paths Paths) error {
-	if err := box.WriteFile(ctx, paths.ClaudeToolEnv(), []byte(crewletShellOff().script())); err != nil {
-		return fmt.Errorf("executor: writing the run's tool environment file: %w", err)
-	}
-	return nil
 }
 
 // writeClaudeSettingsPair writes one of a run's settings files twice: settings
@@ -1809,7 +1790,7 @@ func (ClaudeCode) notesOffWhy() string {
 // artifactFiles is the files a Claude Code run leaves in its box of its own.
 func (ClaudeCode) artifactFiles(p Paths) []string {
 	return []string{p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(), p.ClaudeSkillsSettings(),
-		p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.ClaudeSkillsSettingsPinned(), p.ClaudeToolEnv()}
+		p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.ClaudeSkillsSettingsPinned()}
 }
 
 // artifactDirs is the directories a Claude Code run leaves in its box of its

@@ -3,8 +3,6 @@ package executor
 import (
 	"bytes"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"slices"
 	"testing"
 
@@ -67,29 +65,3 @@ const PiArchiveFormat = piArchiveFormat
 // PiProbe is the stand-in of pi's extension API the suite runs the rendered
 // extension against (pi_extension_probe.mjs).
 const PiProbe = "pi_extension_probe.mjs"
-
-// PiAPIStub is the stand-in of pi's own module the extension imports its tool
-// factory from, which pi maps to its own copy in a real run: the definition it
-// returns carries the spawn hook, for the probe to play.
-const PiAPIStub = `export function createBashToolDefinition(cwd, options) {
-  return { name: "bash", cwd, spawnHook: options?.spawnHook, async execute() { return { content: [] } } }
-}
-`
-
-// WritePiAPIStub installs [PiAPIStub] as dir's node_modules package, where the
-// extension written into dir resolves its import.
-func WritePiAPIStub(t *testing.T, dir string) {
-	t.Helper()
-	pkg := filepath.Join(dir, "node_modules", "@earendil-works", "pi-coding-agent")
-	if err := os.MkdirAll(pkg, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	for name, body := range map[string]string{
-		"package.json": `{"name":"@earendil-works/pi-coding-agent","type":"module","exports":"./index.mjs"}`,
-		"index.mjs":    PiAPIStub,
-	} {
-		if err := os.WriteFile(filepath.Join(pkg, name), []byte(body), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-}

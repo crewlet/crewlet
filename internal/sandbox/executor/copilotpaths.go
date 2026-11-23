@@ -13,11 +13,6 @@ func (p Paths) CopilotHome() string { return p.Home + "/.copilot" }
 // sets its own keys in, keeping the rest ([copilotSettings]).
 func (p Paths) CopilotSettings() string { return p.CopilotHome() + "/settings.json" }
 
-// CopilotToolEnv is the file BASH_ENV names in a Copilot run
-// ([copilotToolEnv]). Under WorkDir, as Claude Code's is
-// ([Paths.ClaudeToolEnv]).
-func (p Paths) CopilotToolEnv() string { return p.WorkDir() + "/copilot-tool-env.sh" }
-
 // CopilotInstructions is where a Copilot run's standing instructions are
 // written: Copilot appends this file to its own system prompt after its tool
 // list and before the repository's instructions, and renders it afresh on

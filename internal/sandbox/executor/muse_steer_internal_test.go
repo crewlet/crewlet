@@ -280,17 +280,13 @@ func TestALaunchedMuseRunsNotesAreEachHeld(t *testing.T) {
 	}
 }
 
-// museShellSecrets are the names the model's shell never runs with: the OTLP
-// exporter's.
-var museShellSecrets = []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS"}
-
-// THE MODEL'S SHELL RUNS WITHOUT CREWLET'S OWN VARIABLES: the run's own shell,
-// in the launched run, saw none of the OTLP exporter's variables, which the
-// box was started with, and no CREWLET_ name. (Its sign-in, present:
-// TestEveryRunnersShellHoldsItsSignInAndNoneOfCrewletsVariables.)
+// THE MODEL'S SHELL HOLDS NO CREWLET_ VARIABLE: the run's own shell, in the
+// launched run, saw no CREWLET_ name; the bridge's token is in the box home's
+// settings file, never a variable. (Its sign-in and an operator's exporter,
+// present: TestEveryRunnersShellHoldsWhatItsHarnessIsHanded.)
 //
-// Mutation: drop the unset of OTEL_EXPORTER_OTLP_*.
-func TestTheMuseShellRunsWithoutCrewletsVariables(t *testing.T) {
+// Mutation: re-capture with a CREWLET_ variable handed to Muse.
+func TestTheMuseShellHoldsNoCrewletVariable(t *testing.T) {
 	found := false
 	for l := range bytes.Lines(museFixture(t, "launched-notes.result.jsonl")) {
 		env, ok := decodeMuseEnvelope(l)
@@ -305,10 +301,8 @@ func TestTheMuseShellRunsWithoutCrewletsVariables(t *testing.T) {
 			continue
 		}
 		found = true
-		for _, name := range append(museShellSecrets, "CREWLET_") {
-			if strings.Contains(p.Text, name) {
-				t.Errorf("the run's shell ran with %s", name)
-			}
+		if strings.Contains(p.Text, "CREWLET_") {
+			t.Errorf("the run's shell ran with a CREWLET_ variable:\n%s", p.Text)
 		}
 	}
 	if !found {

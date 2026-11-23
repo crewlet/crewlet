@@ -43,8 +43,7 @@ const (
 // registers and those that must offer a tool ([piRequired]), the seat's
 // standing instructions, the notes route ("" for none), the turn cap (0 for
 // none), the run's skill files by absolute path with the name each is listed
-// under, the skill route ("" for none), and the names, and prefixes of names,
-// the model's shell runs without ([crewletShellOff]).
+// under, and the skill route ("" for none).
 type piExtensionSettings struct {
 	Servers  []piServer        `json:"servers"`
 	Required []string          `json:"required"`
@@ -53,9 +52,6 @@ type piExtensionSettings struct {
 	Cap      int               `json:"cap,omitempty"`
 	Skills   map[string]string `json:"skills,omitempty"`
 	SkillURL string            `json:"skillURL,omitempty"`
-	Withheld []string          `json:"withheld,omitempty"`
-	// WithheldPrefixes is matched against the start of a name.
-	WithheldPrefixes []string `json:"withheldPrefixes,omitempty"`
 	// MCPFiles is the mcp.json files whose entry would win over a server the
 	// extension registers under its name ([piMCPFiles]); a relative one is the
 	// working directory's.

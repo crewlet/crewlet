@@ -1,8 +1,7 @@
 // crewlet: the extension every Pi run loads with `-e`, written into the run's
 // box with the run's own settings in place of the `config` placeholder below
 // (pi.go, Pi.WriteConfig; pisteer.go, piExtension). It imports Node's own
-// `node:path` and `node:fs` and pi's own tool factory, which pi maps to its own copy, runs in
-// the pi process, and writes no file.
+// `node:path` and `node:fs` alone, runs in the pi process, and writes no file.
 //
 // WHAT IT DOES, each from the settings it is written with:
 //   - registers the seat's MCP servers (the tool bridge's), declared to the
@@ -23,11 +22,7 @@
 //     no read;
 //   - reports each load of one of the run's own skills (a `read` of its
 //     SKILL.md) to the skill route, awaited before the model sees the file;
-//   - records the context pi reports at each turn's end;
-//   - runs the model's shell without Crewlet's own variables: pi's own bash
-//     tool, registered again with a spawn hook that leaves out the run's
-//     telemetry and trace context, which pi itself still reads from its own
-//     environment.
+//   - records the context pi reports at each turn's end.
 // What it records for the runner is a `custom` session entry (pi.appendEntry),
 // which pi prints on its JSON stream and never sends to the model.
 //
@@ -38,7 +33,6 @@
 
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
-import { createBashToolDefinition } from "@earendil-works/pi-coding-agent"
 
 // config is the run's, written over the placeholder by the runner; null in
 // the file as embedded, where the extension does nothing.
@@ -68,24 +62,8 @@ export default function (pi) {
   arm(pi, config)
 }
 
-function arm(pi, { servers, required, system, notes, cap, skills, skillURL, withheld, withheldPrefixes, mcpFiles }) {
+function arm(pi, { servers, required, system, notes, cap, skills, skillURL, mcpFiles }) {
   for (const s of Array.isArray(servers) ? servers : []) pi.registerMcpServer(s.name, s.config)
-  const strings = (list) => (Array.isArray(list) ? list.filter((n) => typeof n === "string" && n !== "") : [])
-  const hidden = strings(withheld)
-  const prefixes = strings(withheldPrefixes)
-  if (hidden.length > 0 || prefixes.length > 0) {
-    pi.registerTool(
-      createBashToolDefinition(process.cwd(), {
-        spawnHook: (spawn) => {
-          const env = {}
-          for (const [name, value] of Object.entries(spawn.env ?? {})) {
-            if (!hidden.includes(name) && !prefixes.some((p) => name.startsWith(p))) env[name] = value
-          }
-          return { ...spawn, env }
-        },
-      }),
-    )
-  }
   const polling = typeof notes === "string" && notes !== ""
   const capped = Number.isSafeInteger(cap) && cap > 0
   const skillFiles = skills !== null && typeof skills === "object" ? skills : {}

@@ -201,6 +201,7 @@ func (r LaunchRequest) withFloor(floor string) LaunchRequest {
 func TestTheLaunchEnvironmentReachesSetupAndTheRun(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
+	rig.runner.Exports = true
 	receiver := testReceiver(t)
 	manager, err := NewManager(ManagerOptions{
 		Providers: map[Placement]Provider{Direct: rig.provider},

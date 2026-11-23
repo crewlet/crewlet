@@ -96,12 +96,6 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 		fresh = geminiFreshCopies(paths, geminiHooked(req))
 	}
 	lines := []string{
-		// CREWLET'S OWN VARIABLES GO before Gemini CLI starts at all, its
-		// release read included ([crewletShellOff]): the run turns no Gemini
-		// CLI telemetry on, and Gemini CLI offers no way to keep a name from
-		// its tools alone but its redaction, which would also take the run's
-		// own token-named variables.
-		strings.TrimSuffix(crewletShellOff().script(), "\n"),
 		// THE RELEASE, read once for the gate, the record and the session's,
 		// before anything else: an older one never runs ([releaseGate]).
 		releaseRead(GeminiCLI{}.VersionCommand()),

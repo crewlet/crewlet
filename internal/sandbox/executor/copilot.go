@@ -130,9 +130,6 @@ func copilotScript(req sandbox.RunRequest, session Session, paths Paths, configP
 		// The session stays in the box: synced, it would sit on the
 		// account's history too.
 		"--sync-session=off",
-		// THE TELEMETRY EXPORT'S VARIABLES KEPT FROM ITS TOOLS AND MCP SERVERS
-		// ([copilotTelemetryNames]).
-		"--secret-env-vars=" + strings.Join(copilotTelemetryNames, ","),
 	}
 	if configPath != "" {
 		parts = append(parts, "--additional-mcp-config", q("@"+configPath))
@@ -175,10 +172,6 @@ func copilotScript(req sandbox.RunRequest, session Session, paths Paths, configP
 		line(`unset %s`, strings.Join(off, " "))
 	}
 	b.WriteString(copilotSignIn())
-	// CREWLET'S OWN VARIABLES KEPT OUT OF THE SHELL ITS MODEL RUNS COMMANDS IN,
-	// by the file BASH_ENV names, which the run's settings switch on
-	// ([copilotToolEnv]).
-	line(`BASH_ENV=%s; export BASH_ENV`, q(paths.CopilotToolEnv()))
 	// THE CAP NAMED IN THE STREAM, for the decoder to fail a run whose
 	// extension, which enforces it, never ran ([copilotEvents]).
 	if req.Limits.MaxTurns > 0 {
@@ -242,26 +235,6 @@ var copilotSignInNames = []string{"COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TO
 // copilotHeldToken is Copilot's own names for the GitHub token it holds, which
 // it sets itself and no entry is given.
 var copilotHeldToken = []string{"GITHUB_COPILOT_GITHUB_TOKEN", "GITHUB_COPILOT_AGENT_GITHUB_TOKEN"}
-
-// copilotToolEnv is the file BASH_ENV names: Crewlet's own variables unset
-// ([crewletShellOff]), which bash runs as the shell its model's commands run
-// in starts, the run's settings having switched BASH_ENV on (bashEnv).
-// Measured on 1.0.114: those commands lacked every name it unsets, and the
-// stream was untouched. Not `--secret-env-vars`, which also rewrote each value
-// wherever the JSON stream held it, keys included (a value `type` left no line
-// a `type`).
-func copilotToolEnv() []byte { return []byte(crewletShellOff().script()) }
-
-// copilotTelemetryNames is the run's OTLP export variables ([sandbox.OtelReceiver]),
-// the endpoint carrying the run's token, which `--secret-env-vars` keeps from
-// its MCP servers: Copilot keeps them from its shell itself, and hands an MCP
-// server them otherwise (measured on 1.0.114). These alone, never another of
-// the run's variables ([copilotToolEnv]): the flag also masks each value in the stream,
-// safe for the engine's long endpoints and an empty HEADERS (measured), not
-// for a value an entry may set short.
-var copilotTelemetryNames = []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS",
-	"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
-	"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "OTEL_EXPORTER_OTLP_METRICS_HEADERS"}
 
 // copilotSignIn is the part of a run's script that hands Copilot its GitHub
 // sign-in under COPILOT_GITHUB_TOKEN: the first of [copilotSignInNames] set,
@@ -595,10 +568,6 @@ func (Copilot) Parse(stdout []byte) sandbox.Result { return decodeAll(&copilotEv
 // (measured).
 type copilotSettings struct {
 	Experimental bool `json:"experimental"`
-	// BashEnv has the shell the model's commands run in read the file BASH_ENV
-	// names ([copilotToolEnv]): a user-level key, which a repository's settings
-	// cannot set.
-	BashEnv bool `json:"bashEnv"`
 }
 
 // WriteConfig writes what a Copilot run reads from its home and its work
@@ -612,11 +581,8 @@ type copilotSettings struct {
 // clear removes first ([Copilot.artifactFiles], [Copilot.artifactDirs]).
 func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
 	paths Paths) (string, error) {
-	if err := box.WriteFile(ctx, paths.CopilotToolEnv(), copilotToolEnv()); err != nil {
-		return "", fmt.Errorf("executor: writing the run's tool environment file: %w", err)
-	}
 	if err := writeCopilotSettings(ctx, box, paths.CopilotSettings(),
-		copilotSettings{Experimental: true, BashEnv: true}); err != nil {
+		copilotSettings{Experimental: true}); err != nil {
 		return "", err
 	}
 	system := req.System
@@ -739,13 +705,18 @@ func copilotMCP(s sandbox.MCPServer) map[string]any {
 	return out
 }
 
+// exportsTelemetry: Copilot CLI turns its OpenTelemetry export on where
+// OTEL_EXPORTER_OTLP_ENDPOINT is set, and files its spans under
+// OTEL_RESOURCE_ATTRIBUTES (`copilot help environment`, 1.0.114).
+func (Copilot) exportsTelemetry() bool { return true }
+
 // artifactFiles is the files a Copilot run leaves in its box of its own: its
-// standing instructions, a fresh session's extension beside the work
-// directory and its tool environment file. Everything else in its home (the
+// standing instructions and a fresh session's extension beside the work
+// directory. Everything else in its home (the
 // login, the sessions, a person's own extensions, hooks, MCP servers, plugins,
 // skills, agents and instructions) is kept, and loads as it would for them.
 func (Copilot) artifactFiles(p Paths) []string {
-	return []string{p.CopilotInstructions(), p.CopilotExtensionFresh(), p.CopilotToolEnv()}
+	return []string{p.CopilotInstructions(), p.CopilotExtensionFresh()}
 }
 
 // artifactDirs is the run's own notes extension ([Paths.CopilotExtension]),

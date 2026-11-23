@@ -497,10 +497,8 @@ func piMCPFiles(paths Paths) []string {
 }
 
 // writeExtension writes the extension, wired to servers, steer's notes route
-// and loads' skill route, with req's cap and Crewlet's own variables, which
-// pi keeps for its own telemetry export and its bash tool's commands start
-// without ([crewletShellOff]), to file: the seat's system text told of notes
-// where the run is wired to them.
+// and loads' skill route, with req's cap, to file: the seat's system text told
+// of notes where the run is wired to them.
 func (p Pi) writeExtension(ctx context.Context, box sandbox.Sandbox, paths Paths, file string,
 	req sandbox.RunRequest, servers map[string]sandbox.MCPServer, steer sandbox.SteerWiring, loads sandbox.SkillWiring,
 	skills map[string]string) error {
@@ -509,10 +507,8 @@ func (p Pi) writeExtension(ctx context.Context, box sandbox.Sandbox, paths Paths
 	if steer.Set() {
 		system = withNoteInstruction(system, p.NoteInstruction())
 	}
-	off := crewletShellOff()
 	settings := piExtensionSettings{System: system, Cap: max(req.Limits.MaxTurns, 0),
-		Required: piRequired(servers), Withheld: off.names, WithheldPrefixes: off.prefixes,
-		MCPFiles: piMCPFiles(paths)}
+		Required: piRequired(servers), MCPFiles: piMCPFiles(paths)}
 	for _, name := range slices.Sorted(maps.Keys(servers)) {
 		settings.Servers = append(settings.Servers, piServer{Name: name, Config: piMCP(servers[name])})
 	}

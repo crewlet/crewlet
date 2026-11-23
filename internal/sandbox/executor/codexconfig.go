@@ -121,12 +121,11 @@ func codexPosture(req sandbox.RunRequest) []string {
 }
 
 // codexShellExcluded is what the commands a Codex run's model runs start
-// without (its shell_environment_policy.exclude, patterns): Crewlet's own
-// variables ([crewletShellOff]), the note helper's routes among them, which
-// Codex keeps for its own telemetry export and the helper's.
-func codexShellExcluded() []string {
-	return crewletShellOff(codexNotesEnv, codexSkillsEnv).globs()
-}
+// without (its shell_environment_policy.exclude): the note helper's routes,
+// which lead to the run's bridge token, so that a tool the model runs does
+// not pick one up by accident. No protection: the run's `config.toml` holds
+// the token (code-sandbox.md, "Credentials and the run environment").
+func codexShellExcluded() []string { return []string{codexNotesEnv, codexSkillsEnv} }
 
 // tomlString is s as a TOML basic string: `"` and `\` escaped, every control
 // character as an escape, and bytes that are not UTF-8 as U+FFFD, which TOML
