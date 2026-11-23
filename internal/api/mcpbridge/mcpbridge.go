@@ -1784,23 +1784,34 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 }
 
 // resentLocked is the call running on the opening that a call to name with
-// arguments of digest sends again, nil where none is: one begun, its answer not
-// decided, and every request for it gone ([toolsession.Call.Over]), its own and
-// each that joined it. Under mu.
+// arguments of digest sends again, nil where none is: one begun whose every
+// request is gone ([toolsession.Call.Over]), its own and each that joined it,
+// and whose answer is not decided or is a park's no request read ([parkUnread]).
+// Under mu.
 //
 // WHY: Kimi Code sends a call again, under an id of its own, once the
 // connection its request was on fails (measured on 2.7.2: twice after Node's
 // fetch dropped a silent response), and the box's run never sees the first's
-// answer. Run again, the tool takes effect twice. A duplicate while a request
-// for the first still waits is a call the run made twice on purpose, and runs.
+// answer, a park's included. Run again, the tool takes effect twice. A
+// duplicate while a request for the first still waits, or once the box read its
+// park, is a call the run made twice on purpose, and runs.
 func (o *binding) resentLocked(name, digest string) *bridgedCall {
 	for c := range o.running {
-		if c.begun && !c.answeredLocked() && c.name == name && c.digest == digest &&
-			c.request.gone() && !joinerWaitsLocked(c) {
+		if c.begun && c.name == name && c.digest == digest &&
+			(!c.answeredLocked() && c.request.gone() && !joinerWaitsLocked(c) || parkUnread(c)) {
 			return c
 		}
 	}
 	return nil
+}
+
+// parkUnread reports whether c was answered by a park ([binding.park]) that
+// reached the box on no request: its own POST and each joiner's dropped
+// ([bridgedCalls.watchPost]) before the answer could be read. Under mu. A POST
+// that ended normally carried the answer to the box, which then knows the call.
+func parkUnread(c *bridgedCall) bool {
+	return c.cutFirst && !c.own && !c.unrun && gone(c.request.lost) &&
+		!slices.ContainsFunc(c.waiters, func(r callRequest) bool { return !gone(r.lost) })
 }
 
 // join answers a call its harness sent again ([binding.resentLocked]) with the
