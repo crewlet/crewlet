@@ -622,6 +622,7 @@ func TestTheReportLeavesTheRunnerWhole(t *testing.T) {
 	// and inside the cap the box reads a report to.
 	report := "Outcome: succeeded\n" + strings.Repeat("detail\n", sandbox.MaxRunTextBytes/7+1024)
 	b.Put(p.Findings(), report)
+	b.Put(p.Result(), `{"type":"result","subtype":"success","result":"done"}`)
 	b.Put(p.ExitCode(), "0")
 
 	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
