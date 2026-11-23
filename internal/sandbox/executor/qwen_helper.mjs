@@ -40,9 +40,12 @@
 // confirmed read on the notes route only once the chat file holds that record
 // with its exact text, matched in order (two identical notes need two
 // records, and one never recorded is passed over), and an assistant record
-// after it, the reply to the request that carried it; one with no reply (its request failed, was cancelled or the run
-// was killed) is never confirmed, and the engine serves it again. What the helper fetched and never handed
-// dies with it: nothing of it is left in Qwen Code's session.
+// after it, the reply to the request that carried it. A turn cancelled
+// mid-reply records the streamed part as one, and a resume hands the note back
+// before it (measured on 0.28.4), so it confirms; one with no reply (its
+// request failed, or the run was killed before one) is never confirmed, and
+// the engine serves it again. What the helper fetched and never handed dies
+// with it: nothing of it is left in Qwen Code's session.
 import { spawn } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
