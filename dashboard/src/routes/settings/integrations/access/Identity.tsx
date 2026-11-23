@@ -8,6 +8,7 @@
  */
 
 import {
+  AGENT_IDENTITY_STATES,
   AgentIdentity,
   AgentIdentitySheet,
   type AgentIdentityBrought,
@@ -26,7 +27,7 @@ import { Modal } from "~/components/Modal.tsx";
 import type { IdentityRequest } from "./api.ts";
 
 /** A vendor's ID read from the file's name: Apple's `AuthKey_<KEY ID>.p8`. */
-const ID_IN_FILE_NAME = /_([A-Z0-9]{6,})\.[A-Za-z0-9]+$/;
+const ID_IN_FILE_NAME = /_([A-Z0-9]{6,})(?: \(\d+\))?\.[A-Za-z0-9]+$/;
 
 export interface IdentityBoxProps {
   seat: AccessSeat;
@@ -35,7 +36,7 @@ export interface IdentityBoxProps {
   identity: AccessIdentity;
   /** A check of this agent's identity is running. */
   checking: boolean;
-  /** Why nothing here may change, or undefined. */
+  /** Why nothing here may change now (held, read-only, syncing, an answer pending), or undefined. */
   held: string | undefined;
   onSetUp: () => void;
   onUseCompany: () => void;
@@ -52,13 +53,16 @@ export function IdentityBox({
   onUseCompany,
 }: IdentityBoxProps) {
   const acts = identity.offered && (identity.set_up === true || identity.replace === true);
+  // A STATUS THIS BUNDLE DOES NOT KNOW is drawn as needing a person, its own
+  // word leading the line, rather than taking the tab down.
+  const known = (AGENT_IDENTITY_STATES as readonly string[]).includes(identity.status);
   return (
     <AgentIdentity
       vendor={identity.guide?.vendor ?? vendor}
       agent={seat.name}
-      state={checking ? "checking" : identity.status}
+      state={checking ? "checking" : known ? identity.status : "none"}
       perAgent={identity.offered}
-      summary={identity.said}
+      summary={known ? identity.said : `${identity.status_label}. ${identity.said}`}
       problem={identity.problem}
       onSetUp={acts ? onSetUp : undefined}
       onUseCompany={identity.use_company ? onUseCompany : undefined}
