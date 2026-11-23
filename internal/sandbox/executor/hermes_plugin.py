@@ -30,14 +30,13 @@ logger = logging.getLogger("crewlet")
 
 # How long the steps before a note's steer may take (finding the gateway, connecting, session.resume), which a
 # retry repeats harmlessly. Measured on 0.23.3 (two cores): 0.3 s idle, 1.0 s with both cores busy, 2.3 s with
-# three busy loops a core (session.resume 1.9 s of it). Half the notes route's 10 s hold, so a gateway that
-# accepts and never answers costs the notes no more than a poll.
+# three busy loops a core (session.resume 1.9 s of it). Half the notes route's 10 s hold: a gateway that accepts
+# and never answers costs a note at most this and the steer's bound below.
 _REACH_SECONDS = 5.0
 # How long session.steer itself may take, which no retry may repeat. Measured on 0.23.3: 0.003 to 0.028 s idle,
 # 0.005 to 0.055 s with both cores busy, 0.006 to 0.015 s with three busy loops a core. Past it the steer's
 # outcome is unknown and the session's record decides (a note that landed late is held; one that did not is
-# served again), so waiting longer buys nothing but a later note's delay. 10 s is the gateway stop's wait
-# (hermes.go's hermesGatewayStop): a gateway slower than that to answer is one the run would be stopping.
+# served again), so waiting longer buys nothing but a later note's delay; 10 s is some 180 times the worst.
 _STEER_SECONDS = 10.0
 
 _lock = threading.Lock()
