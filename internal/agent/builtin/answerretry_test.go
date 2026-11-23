@@ -2,9 +2,11 @@ package builtin_test
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -70,14 +72,16 @@ func TestAnExecutorAnswersRetryAfterItWasRecordedIsAppliedNotRefused(t *testing.
 	desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": parked(t, "t1", sandbox.StatusAwaiting)},
 		seal: seal}
 	tool := answerExecutorTool(t, desk)
-	args := map[string]any{"turn_id": "t1", "launch_id": "launch-t1", "answer": "use main"}
+	// WORDS THE RECORD REDACTS, so the retry is matched on the words as recorded.
+	args := map[string]any{"turn_id": "t1", "launch_id": "launch-t1",
+		"answer": "use main, token ghp_" + strings.Repeat("a1B2", 9)}
 	if result, err := tool.Call(t.Context(), args); err != nil || result.Failed || len(desk.delivered) != 1 {
 		t.Fatalf("the answer came to %+v, %v, delivering %d", result, err, len(desk.delivered))
 	}
 	// THE SEAT RECORDS IT as its coordinator does, from what was delivered.
 	given := desk.delivered[0]
 	run := parked(t, "t1", sandbox.StatusAnswered)
-	answer, err := seal.Seal(run, sandbox.AnswerWords{Text: given.Answer, Choice: given.Choice,
+	answer, err := seal.Seal(run, sandbox.AnswerWords{Text: redact.Secrets(given.Answer), Choice: given.Choice,
 		Via: types.AnswerViaOperator, By: given.AnsweredBy, ByKind: given.AnsweredByKind,
 		OperatorID: given.OperatorID}, sandbox.RecordedAnswer{EventIDs: []string{"answer-1"}})
 	if err != nil {
