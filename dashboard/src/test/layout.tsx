@@ -25,7 +25,8 @@ import "~/styles/base.css";
 import "~/styles/components.css";
 import "~/styles/frame.css";
 import "~/styles/screens.css";
-import { useLayoutEffect, type ReactNode } from "react";
+import type { ReactNode } from "react";
+import { createRoot } from "react-dom/client";
 import { afterEach, expect, vi } from "vitest";
 import { Announcer, LayerHost, ToastProvider } from "@crewlethq/ui";
 import { Router } from "~/app/router.tsx";
@@ -132,9 +133,14 @@ export const CARD_SURFACES = [
   ".crewlet-widget-frame",
   ".crewlet-pricing-card",
   ".crewlet-brief-card",
+  ".crewlet-deep-work-card",
+  ".crewlet-refusal-card",
+  ".crewlet-result-table-card",
+  ".crewlet-open-in-app-card",
+  ".crewlet-access-denied-card",
 ].join(", ");
 
-/** Home's arranged board packs its blocks as a masonry on purpose, so it is measured apart. */
+/** Home's arranged board packs its blocks as a masonry on purpose, so it is left out. */
 const PACKED = ".crewlet-arrange-grid, .crewlet-arrange-board";
 
 /** A grid of two or more tracks, or a flex row: where boxes stand side by side. */
@@ -151,47 +157,81 @@ function sticks(card: Element, row: Element): boolean {
   return false;
 }
 
+/** How many of `el`'s children are, or hold, a card. */
+const cardCells = (el: Element) =>
+  [...el.children].filter((c) => c.matches(CARD_SURFACES) || c.querySelector(CARD_SURFACES)).length;
+
+const overlap = (a: DOMRect, b: DOMRect, tolerance: number) =>
+  a.top < b.bottom - tolerance && b.top < a.bottom - tolerance;
+
 /**
- * Cards that share a row of one container and end at different heights, one
+ * Cards that stand side by side in one container and start or end apart, one
  * line per row. A cell holding a column of cards is not a row of cards.
  */
 export function unevenCardRows(root: Element = document.body, tolerance = 1): string[] {
   const rows = new Map<Element, Map<Element, Element[]>>();
   for (const card of root.querySelectorAll(CARD_SURFACES)) {
     if (card.closest(PACKED) || card.getBoundingClientRect().height === 0) continue;
-    let cell: Element = card;
-    while (cell.parentElement && cell.parentElement !== root && !laysOutARow(cell.parentElement))
-      cell = cell.parentElement;
-    const row = cell.parentElement;
     // A card inside another card's content, with no row of its own, is that card's content.
     const inside = card.parentElement?.closest(CARD_SURFACES);
-    if (!row || !laysOutARow(row) || (inside && cell.contains(inside))) continue;
+    let cell: Element = card;
+    let row: Element | null = null;
+    for (let up = card.parentElement; up && up !== inside; up = up.parentElement) {
+      if (laysOutARow(up) && cardCells(up) > 1) {
+        row = up;
+        break;
+      }
+      cell = up;
+      if (up === root) break;
+    }
     // A sticky pane (a list's detail) keeps to the top of its row so that it can stick.
-    if (sticks(card, row)) continue;
+    if (!row || sticks(card, row)) continue;
     const cells = rows.get(row) ?? new Map<Element, Element[]>();
     cells.set(cell, [...(cells.get(cell) ?? []), card]);
     rows.set(row, cells);
   }
   const found: string[] = [];
   for (const [row, cells] of rows) {
-    const lines: { top: number; cards: Element[] }[] = [];
-    for (const [cell, cards] of cells) {
+    const lines: { card: Element; box: DOMRect }[][] = [];
+    for (const cards of cells.values()) {
       if (cards.length > 1) continue;
-      const top = cell.getBoundingClientRect().top;
-      const line = lines.find((l) => Math.abs(l.top - top) <= tolerance);
-      if (line) line.cards.push(cards[0]!);
-      else lines.push({ top, cards: [cards[0]!] });
+      const card = cards[0]!;
+      const box = card.getBoundingClientRect();
+      const line = lines.find((l) => l.some((other) => overlap(other.box, box, tolerance)));
+      if (line) line.push({ card, box });
+      else lines.push([{ card, box }]);
     }
-    for (const { cards } of lines) {
-      const bottoms = cards.map((card) => Math.round(card.getBoundingClientRect().bottom));
-      if (cards.length > 1 && Math.max(...bottoms) - Math.min(...bottoms) > tolerance)
+    for (const line of lines) {
+      if (line.length < 2) continue;
+      const spread = (edge: (b: DOMRect) => number) =>
+        Math.max(...line.map((c) => edge(c.box))) - Math.min(...line.map((c) => edge(c.box)));
+      if (spread((b) => b.top) > tolerance || spread((b) => b.bottom) > tolerance)
         found.push(
-          `${label(row)}: ${cards.map((c, i) => `${label(c)} ends at ${bottoms[i]}`).join(", ")}`,
+          `${label(row)}: ${line.map((c) => `${label(c.card)} ${Math.round(c.box.top)} to ${Math.round(c.box.bottom)}`).join(", ")}`,
         );
     }
   }
   return found;
 }
+
+/** What the page's rows of cards were as each root of this case was unmounted. */
+const unevenAtUnmount: string[] = [];
+
+// Every layout case fails on cards side by side that end apart, measured as a root
+// unmounts while its page is still laid out; Vitest runs this after the file's own hooks.
+const probe = createRoot(document.createElement("div"));
+const rootType = Object.getPrototypeOf(probe) as { unmount(this: unknown): void };
+const unmountRoot = rootType.unmount;
+probe.unmount();
+rootType.unmount = function (this: unknown) {
+  unevenAtUnmount.push(...unevenCardRows());
+  unmountRoot.call(this);
+};
+
+afterEach(() => {
+  const found = unevenAtUnmount.splice(0);
+  expect(found, "cards side by side that end at different heights").toEqual([]);
+});
 
 export interface Glyph {
   c: string;
@@ -275,21 +315,6 @@ export class InertWebSocket {
 }
 
 /** Every read a layout case's screen asks, answered from `answers`, around `children`. */
-/** What the screens of this file's cases left uneven as they were unmounted. */
-const unevenAtUnmount: string[] = [];
-
-// Every case that mounts a screen in a LayoutClient fails on cards of one row ending apart.
-afterEach(() => {
-  const found = unevenAtUnmount.splice(0);
-  expect(found, "cards side by side that end at different heights").toEqual([]);
-});
-
-/** Measures the page as it is unmounted, while it is still laid out. */
-function CardRowsWatch() {
-  useLayoutEffect(() => () => void unevenAtUnmount.push(...unevenCardRows()), []);
-  return null;
-}
-
 export function LayoutClient({
   answers,
   ask,
@@ -320,7 +345,6 @@ export function LayoutClient({
       <LayerHost>
         <ClientContext.Provider value={{ store, socket }}>
           <FrameReadings>
-            <CardRowsWatch />
             <Router>{children}</Router>
           </FrameReadings>
         </ClientContext.Provider>

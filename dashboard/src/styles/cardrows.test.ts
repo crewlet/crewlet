@@ -34,12 +34,16 @@ const KIT_CARDS = new Set([
   "PricingCard",
   "BriefCard",
   "ProposalCard",
+  "DeepWorkCard",
+  "RefusalCard",
+  "ResultTableCard",
+  "OpenInAppCard",
+  "AccessDeniedCard",
 ]);
 
-const UNEVEN =
-  /(?:^|[;\s])align-items\s*:\s*(start|flex-start|end|flex-end|center|baseline|self-start|self-end)\b/;
-const OFF_ROW =
-  /(?:^|[;\s])align-self\s*:\s*(start|flex-start|end|flex-end|center|baseline|self-start|self-end)\b/;
+const OFF = "(start|flex-start|end|flex-end|center|baseline|self-start|self-end)\\b";
+const UNEVEN = new RegExp(`(?:^|[;\\s])(?:align|place)-items\\s*:\\s*${OFF}`);
+const OFF_ROW = new RegExp(`(?:^|[;\\s])(?:align|place)-self\\s*:\\s*${OFF}`);
 
 interface Scope {
   module: Module;
@@ -63,13 +67,19 @@ function scopeOf(module: Module): Scope {
       const source = String((statement.source as Node).value);
       const path = resolveSource(module.path, source);
       for (const spec of statement.specifiers as Node[]) {
-        if (spec.type !== "ImportSpecifier") continue;
+        if (spec.type !== "ImportSpecifier" && spec.type !== "ImportDefaultSpecifier") continue;
         const local = String((spec.local as Node).name);
-        const imported = String((spec.imported as Node).name ?? (spec.imported as Node).value);
+        const named = spec.imported as Node | undefined;
+        const imported = named ? String(named.name ?? named.value) : "default";
         if (source === "@crewlethq/ui") scope.kit.set(local, imported);
         else if (path)
           scope.imports.set(local, { path: path.replace(/\.tsx?$/, ""), name: imported });
       }
+      continue;
+    }
+    if (statement.type === "ExportDefaultDeclaration") {
+      const fn = component(statement.declaration as Node);
+      if (fn) scope.defined.set("default", fn);
       continue;
     }
     const declaration =
@@ -81,13 +91,20 @@ function scopeOf(module: Module): Scope {
       scope.defined.set(String((declaration.id as Node).name), declaration);
     if (declaration.type === "VariableDeclaration")
       for (const d of declaration.declarations as Node[]) {
-        const init = d.init as Node | null;
-        if (init && /FunctionExpression$/.test(init.type))
-          scope.defined.set(String((d.id as Node).name), init);
+        const fn = component(d.init as Node | null);
+        if (fn) scope.defined.set(String((d.id as Node).name), fn);
       }
   }
   scopes.set(module.path, scope);
   return scope;
+}
+
+/** A component's function, also inside `memo(...)` or `forwardRef(...)`. */
+function component(node: Node | null): Node | null {
+  if (!node) return null;
+  if (/Function/.test(node.type)) return node;
+  if (node.type === "CallExpression") return component((node.arguments as Node[])[0] ?? null);
+  return null;
 }
 
 function moduleAt(path: string): Module | undefined {
@@ -195,6 +212,12 @@ function rulesFor(cls: string, rules: SheetRule[]): SheetRule[] {
   return rules.filter((r) => splitSelectors(r.selector).some((s) => own.test(s)));
 }
 
+/** The rules for the element's own cells: `.cls > *`, `.cls > li`. */
+function cellRulesFor(cls: string, rules: SheetRule[]): SheetRule[] {
+  const cell = new RegExp(`^\\.${cls.replace(/[-_]/g, "\\$&")}(?:\\[[^\\]]*\\])* > [^ >+~]+$`);
+  return rules.filter((r) => splitSelectors(r.selector).some((s) => cell.test(s)));
+}
+
 /** A sheet sticks a pane inside the element: a list's detail keeps to its row's top to stick. */
 const holdsASticky = (classes: string[], rules: SheetRule[]) =>
   rules.some(
@@ -218,23 +241,38 @@ test("no row of kit cards is aligned off its height", () => {
       const cards = (node.children as Node[]).reduce((n, c) => n + cardsIn(scope, c), 0);
       const classes = classesOf(node);
       if (cards < 2 || holdsASticky(classes, rules)) return;
-      for (const cls of classes) {
-        const own = rulesFor(cls, rules);
-        if (!own.some((r) => laysOutARow(r.body))) continue;
-        for (const rule of own.filter((r) => UNEVEN.test(r.body)))
-          found.push(`${module.path}:${line(node.start)} .${cls} (${rule.file})`);
-      }
+      // The element's classes together: one may lay out the row and another align it.
+      const own = classes.flatMap((cls) => rulesFor(cls, rules));
+      if (!own.some((r) => laysOutARow(r.body))) return;
+      const cells = classes.flatMap((cls) => cellRulesFor(cls, rules));
+      for (const rule of [
+        ...own.filter((r) => UNEVEN.test(r.body)),
+        ...cells.filter((r) => OFF_ROW.test(r.body)),
+      ])
+        found.push(`${module.path}:${line(node.start)} ${rule.selector} (${rule.file})`);
     });
   }
   expect(found, "lay cards side by side in the kit's CardGrid").toEqual([]);
 });
 
+/** The compound a selector styles, and the compound it is a child of. */
+function subject(selector: string): { own: string; parent: string | null } {
+  const parts = selector.split(/\s*([>+~ ])\s*/);
+  return { own: parts.at(-1)!, parent: parts.at(-2) === ">" ? parts.at(-3)! : null };
+}
+
+const names = (compound: string, cls: string) => new RegExp(`\\.${cls}(?![\\w-])`).test(compound);
+
 test("no sheet moves a kit card or a CardGrid cell off its row's height", () => {
   const found = sheetRules()
-    .filter((r) => /\.crewlet-card(?:-grid)?\b/.test(r.selector))
-    .filter(
-      (r) =>
-        OFF_ROW.test(r.body) || (/\.crewlet-card-grid\b/.test(r.selector) && UNEVEN.test(r.body)),
+    .filter((r) =>
+      splitSelectors(r.selector).some((selector) => {
+        const { own, parent } = subject(selector);
+        const cell = names(own, "crewlet-card") || (!!parent && names(parent, "crewlet-card-grid"));
+        return (
+          (cell && OFF_ROW.test(r.body)) || (names(own, "crewlet-card-grid") && UNEVEN.test(r.body))
+        );
+      }),
     )
     .map((r) => `${r.file}: ${r.selector}`);
   expect(found).toEqual([]);
