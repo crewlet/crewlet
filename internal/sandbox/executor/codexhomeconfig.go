@@ -22,23 +22,24 @@ func (p Paths) CodexHomeConfig() string { return p.WorkDir() + "/codex-home-conf
 // where the home had none.
 func (p Paths) CodexHomeInstructions() string { return p.WorkDir() + "/codex-home-AGENTS.md" }
 
-// codexHomeConfig is the home's own configuration, and whether it is already
-// held: the held copy where one is there (an earlier run's configuration is
-// still installed, its script having ended before it put the home's back),
-// else the live file as the home left it, "" for none.
-func codexHomeConfig(ctx context.Context, box sandbox.Sandbox, paths Paths) (string, bool, error) {
-	q := shellword.Quote
-	read := fmt.Sprintf(`if [ -e %[1]s ]; then echo held; cat %[1]s; else echo home; [ ! -e %[2]s ] || cat %[2]s; fi`,
-		q(paths.CodexHomeConfig()), q(paths.CodexLiveConfig()))
+// codexHomeConfig is the home's own configuration, "" for none, read once an
+// earlier run's leftovers are gone. A RUN KILLED BEFORE ITS SCRIPT PUT THE
+// HOME'S FILES BACK left its own configuration, its bridge token in it, and
+// instructions installed, the home's held beside them, so the next run's start
+// puts the held copies back ([codexRestoreHome]) before anything else, a run
+// it then refuses included: no home file keeps an earlier run's entries.
+func codexHomeConfig(ctx context.Context, box sandbox.Sandbox, paths Paths) (string, error) {
+	read := fmt.Sprintf(`set -e; %s; [ ! -e %[2]s ] || cat %[2]s`, codexRestoreHome(paths),
+		shellword.Quote(paths.CodexLiveConfig()))
 	res, err := box.Exec(ctx, read, sandbox.ExecOptions{})
 	if err == nil && res.ExitCode != 0 {
 		err = fmt.Errorf("exit %d: %s", res.ExitCode, firstLine(res.Stderr, transcriptDetailLimit))
 	}
 	if err != nil {
-		return "", false, fmt.Errorf("executor: reading the box home's own Codex configuration: %w", err)
+		return "", fmt.Errorf("executor: putting back the box home's own Codex configuration an earlier run "+
+			"left held, and reading it: %w", err)
 	}
-	state, content, _ := strings.Cut(res.Stdout, "\n")
-	return content, state == "held", nil
+	return res.Stdout, nil
 }
 
 // codexConfigOver is the configuration a run installs: the home's own with

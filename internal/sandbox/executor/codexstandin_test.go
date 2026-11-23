@@ -168,7 +168,10 @@ func answerCodexStandIn(ws *websocket.Conn, record string) {
 const codexStandInThread = "019a1f62-fbda-7aa2-af57-6c0abeb8e50b"
 
 // codexStandIn is a box's stand-in `codex`: `--version` prints release;
-// `app-server` records its argv and runs this binary as the app-server; `exec`
+// `app-server` over stdio (the launch's guard) records its argv, directory,
+// home and requests and prints record/config-read, else an answer of the run's
+// own layers alone; `app-server --listen`
+// records its argv and runs this binary as the app-server; `exec`
 // records its argv, stdin and environment, prints a turn answering `done` on
 // its thread (or [codexStandInThread]) and appends one turn's rollout lines
 // (300 in, 200 cached, 40 out, a 258400 window, two plan windows). Before its
@@ -193,6 +196,12 @@ func codexStandIn(t *testing.T, box sandbox.Sandbox, release, record string) {
 	}, "\n")
 	script := fmt.Sprintf(`#!/bin/sh
 rec=%[1]s
+if [ "$1" = app-server ] && [ "$2" != --listen ]; then
+  printf '%%s\n' "$@" > "$rec/guard-argv"; pwd -P > "$rec/guard-cwd"; printf '%%s\n' "$CODEX_HOME" > "$rec/guard-home"
+  cp "$CODEX_HOME/config.toml" "$rec/guard-config.toml" 2> /dev/null
+  i=0; while [ "$i" -lt 3 ] && IFS= read -r l; do printf '%%s\n' "$l" >> "$rec/guard-stdin"; i=$((i+1)); done
+  if [ -e "$rec/config-read" ]; then cat "$rec/config-read"; else printf '%%s\n' '{"id":2,"result":{"config":{},"layers":[{"name":{"type":"sessionFlags"},"config":{}},{"name":{"type":"user","file":"/h/config.toml"},"config":{}}]}}'; fi; exit 0
+fi
 case "$1" in
 --version) echo 'codex-cli %[2]s'; exit 0;;
 app-server)
