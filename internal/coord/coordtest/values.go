@@ -175,7 +175,8 @@ var uploadsValueCases = []fleetCase{
 // id Chatlet did not mint, of any length, is refused as the caller's before
 // anything is written. A record past coord.MaxChatReadBytes is one no flush
 // can make, so its refusal is held where both backends encode it
-// (coord.TestAChatReadRecordPastItsBoundIsRefusedWhereItIsEncoded).
+// (coord.TestAChatReadRecordPastItsBoundIsRefusedWhereItIsEncoded) and in
+// the twin (memory.TestTheTwinRefusesAChatReadRecordPastItsBound).
 //
 // Mutation: declare the chat read class at coord.SmallValueBytes, or have the
 // twin hold its record to it, and that backend refuses the widest; drop
