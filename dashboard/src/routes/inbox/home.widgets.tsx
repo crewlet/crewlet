@@ -10,7 +10,7 @@
  */
 
 import { useMemo } from "react";
-import { List, ListItem } from "@crewlethq/ui";
+import { ListItem } from "@crewlethq/ui";
 import { InboxGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { inboxItemPath } from "~/app/routes.ts";
@@ -31,7 +31,9 @@ import {
   shortWhen,
 } from "~/routes/inbox/model.ts";
 import {
+  WIDGET_PAGE,
   WidgetCard,
+  WidgetList,
   WidgetNote,
   WidgetQuery,
   defineWidgets,
@@ -47,7 +49,7 @@ function Updates() {
   // permission on the engine's side.
   const read = useQuery(
     "inbox",
-    owner ? { handle: owner, limit: ROWS, unread: true, primary_only: true } : undefined,
+    owner ? { handle: owner, limit: WIDGET_PAGE, unread: true, primary_only: true } : undefined,
     { enabled: owner !== "", pollMs: 60_000, refetchOnInboxOf: owner },
   );
   const org = useOrg();
@@ -74,7 +76,12 @@ function Updates() {
               : undefined
           }
         >
-          <List className="home-tasks">
+          <WidgetList
+            className="home-tasks"
+            rows={ROWS}
+            total={rows.length}
+            capped={Boolean(read.data?.next_cursor)}
+          >
             {rows.map((row) => {
               if (row.kind === "change") {
                 const words = changeWords(row.notice);
@@ -139,12 +146,7 @@ function Updates() {
                 </ListItem>
               );
             })}
-          </List>
-          {read.data?.next_cursor ? (
-            <a className="home-card-more t-link" href={href(["inbox"])}>
-              {`All ${unread} unread`}
-            </a>
-          ) : null}
+          </WidgetList>
         </WidgetQuery>
       )}
     </WidgetCard>

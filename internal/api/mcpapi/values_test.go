@@ -248,7 +248,8 @@ func TestAValueIsSealedOnlyAfterItsTestPasses(t *testing.T) {
 	if err != nil || !found || !row.WriteOnly || row.Source != secrets.SourceMCP || row.UpdatedBy != "jane.doe" {
 		t.Fatalf("the sealed row = %+v (%v, %v), want it write-only from mcp by jane.doe", row, found, err)
 	}
-	all, err := store.All(t.Context())
+	snapshot, err := store.All(t.Context())
+	all := snapshot.Values
 	if err != nil || all["MCP_SENTRY_AUTHORIZATION"] != theValue {
 		t.Fatalf("the resolver does not read the sealed value: %v", err)
 	}
@@ -424,7 +425,11 @@ func TestAPerAgentValueIsTestedAsItsSeat(t *testing.T) {
 	}
 }
 
-// A value that cannot be sent as written is refused before any test, unquoted.
+// A value that cannot be sent as written is refused before any test, unquoted,
+// and so is one under a key whose variable no secret can be stored under.
+//
+// Mutation: answer config.ErrMCPValueVariableLong as an internal error, and
+// the long key is a 500.
 func TestAValueTheServerCannotBeSentIsRefused(t *testing.T) {
 	t.Parallel()
 	checker := &valueChecker{}
@@ -438,6 +443,8 @@ func TestAValueTheServerCannotBeSentIsRefused(t *testing.T) {
 		"another param":      {"/mcp-servers/sentry/values/X-Org?dry_run=true", valueBody(theValue)},
 		"a test not bool":    {"/mcp-servers/sentry/values/X-Org?test=maybe", valueBody(theValue)},
 		"a test given twice": {"/mcp-servers/sentry/values/X-Org?test=true&test=false", valueBody(theValue)},
+		"a key no secret's name holds": {"/mcp-servers/sentry/values/" + strings.Repeat("K", secrets.MaxNameBytes),
+			valueBody(theValue)},
 	} {
 		code, raw := put(t, svc, admin, tc.path, tc.body)
 		if code != http.StatusBadRequest || strings.Contains(raw, "lin_api") || strings.Contains(raw, "Evil") {

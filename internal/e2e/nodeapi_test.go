@@ -341,7 +341,7 @@ func wireAPI(
 		return fail("model surface", err)
 	}
 	opts.Models = modelSurface
-	api.ModelSources(&opts.Sources, e, cipher)
+	api.ModelSources(&opts.Sources, e)
 	if amend != nil {
 		amend(&opts)
 	}

@@ -78,37 +78,37 @@
 // there), or an npm cache. js/tree.mjs installs it at
 // pw/<release>-<digest>-l<layout>/, named by what decides its bytes. First an
 // install a dead ensure left is reaped, its npm's group killed only while the
-// kernel still reports the pid with the start time its record names (a pid
-// handed out again is left alone). Then a tree published at the name is reused
-// with nothing more read, so a box that has one needs no npm. Otherwise the
-// folder's lock files must be what config.json names, the box's npm must
-// answer --version at or above npm_floor, and `npm ci` runs into a directory
-// of its own, under umask 077, in a process group of its own, with the whole
-// environment the helper was given. Its command line carries every setting
-// that decides what is installed, since it beats the environment and every
-// npmrc, and the log level that decides what the helper reads of npm, its
-// --json answer; where the bytes come from, registry, cache, proxy, CA and
-// credentials, stays the box's. It is bounded: TERM at install.timeout_ms,
-// then the group killed after stop_grace_ms, since npm defers its exit to an
-// outstanding fetch, and npm is reaped before its directory goes.
+// kernel still reports the pid with the start time its record names. Then a
+// tree published at the name is reused with nothing more read, so a box that
+// has one needs no npm. Otherwise the folder's lock files must be what
+// config.json names, the box's npm must answer --version at or above npm_floor,
+// and `npm ci` runs into a directory of its own, under umask 077, in a process
+// group of its own, with the whole environment the helper was given. Its
+// command line carries every setting that decides what is installed, since it
+// beats the environment and every npmrc, and the log level that decides what
+// the helper reads of npm, its --json answer; where the bytes come from,
+// registry, cache, proxy, CA and credentials, stays the box's. It is bounded:
+// TERM at install.timeout_ms, then the group killed after stop_grace_ms, since
+// npm defers its exit to an outstanding fetch, and npm is reaped before its
+// directory goes.
 //
 // npm's status proves nothing: under a setting the command line missed it
 // answers 0 having installed nothing, and a file it could not write is only a
 // warning to it. So before .complete is written and the directory renamed into
 // place, npm's own record (node_modules/.package-lock.json) must equal the
 // lock, nothing in the directory may be a link, and the digest of every file
-// installed must be installed_digest. A failure publishes nothing and names
-// its cause: digest_mismatch, npm_missing, npm_too_old, registry_unreachable
-// (not reached, failing on its side, or in TLS), registry_refused (a mirror
-// lacking the release or wanting a credential), integrity_mismatch, timeout,
-// no_space, unwritable or install_failed. A box that must start with no
-// registry brings an npm cache an image filled with `npm ci` of the lock,
-// never a node_modules, which npm cannot vouch for: kept outside the home a
-// container box mounts over its image's, named in the image's global npmrc,
-// and writable by any user, since npm writes what it fetches into the cache it
-// reads. The tree is loaded, never run: @playwright/mcp from it, and
-// playwright-core through mcp's own resolver, so the helper and mcp's server
-// share one core.
+// installed must be installed_digest. A failure publishes nothing and names its
+// cause: digest_mismatch, npm_missing, npm_too_old, registry_unreachable (not
+// reached, failing on its side, or in TLS), registry_refused (a mirror lacking
+// the release or wanting a credential), integrity_mismatch (a tarball the
+// lock's SHA-512 or zlib refuses), timeout, no_space, unwritable or
+// install_failed. A box that must start with no registry brings an npm cache an
+// image filled with `npm ci` of the lock, never a node_modules, which npm
+// cannot vouch for: kept outside the home a container box mounts over its
+// image's, named in the image's global npmrc, and writable by any user, since
+// npm writes what it fetches into the cache it reads. The tree is loaded, never
+// run: @playwright/mcp from it, and playwright-core through mcp's own resolver,
+// so the helper and mcp's server share one core.
 //
 // # The supervisor
 //

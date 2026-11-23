@@ -4,7 +4,15 @@
  */
 
 import { useState, type ReactNode } from "react";
-import { Button, Count, EmptyValue, SegmentedMeter, Tag, VisuallyHidden } from "@crewlethq/ui";
+import {
+  Button,
+  Count,
+  EmptyValue,
+  overflowWords,
+  SegmentedMeter,
+  Tag,
+  VisuallyHidden,
+} from "@crewlethq/ui";
 import {
   ArrowDownGlyph,
   ArrowUpRightGlyph,
@@ -53,6 +61,7 @@ import { checksKept, type Standing } from "./mergeSections.ts";
 import { partMovedBy, refusedWords, useAskAgainWhenMoved, type LatestChecks } from "./reads.ts";
 import type { DiscTone } from "./Timeline.tsx";
 import "~/styles/gitlet.css";
+import { PARTICIPANT_NOUN } from "~/lib/listNouns.ts";
 
 /** A section of the rail: its heading and what sits at its end, then its rows. */
 function RailSection({
@@ -348,7 +357,11 @@ function Participants({ change }: { change: CodeChangeDetail }) {
           </span>
         );
       })}
-      {(list.omitted ?? 0) > 0 && <span className="code-rail__note">+{list.omitted}</span>}
+      {(list.omitted ?? 0) > 0 && (
+        <span className="code-rail__note">
+          {overflowWords(list.omitted ?? 0, PARTICIPANT_NOUN)}
+        </span>
+      )}
     </p>
   );
 }

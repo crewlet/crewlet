@@ -23,10 +23,12 @@ import {
   Card,
   EmptyState,
   EmptyValue,
-  Skeleton,
-  TableNumberCell,
-  TableDateCell,
+  ListOverflow,
   peekClickHandler,
+  shownBeforeOverflow,
+  Skeleton,
+  TableDateCell,
+  TableNumberCell,
 } from "@crewlethq/ui";
 import {
   ClockGlyph,
@@ -57,6 +59,7 @@ import { firstLines } from "./page/body.ts";
 import { PAGES_WINDOW } from "./usePagedPages.ts";
 import { ownerSentence, useSpaceOwners, type SpaceOwners } from "./spaceOwners.ts";
 import { ago } from "~/lib/ago.ts";
+import { WRITER_NOUN } from "~/lib/listNouns.ts";
 
 /**
  * How many of a space's pages and writers the rail lists before it counts the
@@ -361,11 +364,16 @@ function SpaceWriters({
       </Card.Header>
       {writers.length > 0 ? (
         <div className="row wrap gap-2">
-          {writers.slice(0, PEEK_ROWS).map((handle) => (
+          {writers.slice(0, shownBeforeOverflow(writers.length, PEEK_ROWS)).map((handle) => (
             <SeatChip key={handle} handle={handle} {...who(handle)} />
           ))}
-          {writers.length > PEEK_ROWS && (
-            <span className="t-caption">+{writers.length - PEEK_ROWS} more</span>
+          {writers.length > shownBeforeOverflow(writers.length, PEEK_ROWS) && (
+            <ListOverflow
+              noun={WRITER_NOUN}
+              items={writers.slice(PEEK_ROWS).map((handle) => (
+                <SeatChip key={handle} handle={handle} {...who(handle)} />
+              ))}
+            />
           )}
         </div>
       ) : (

@@ -33,6 +33,7 @@ import { EDIT_IN_FLIGHT, NOTHING_CHANGED } from "./Editor.tsx";
 import { MAX_BODY_BYTES, PENDING_REASK_MS } from "~/contract/chat.ts";
 import { plural } from "~/lib/format.ts";
 import { WAIT_BOUND_MS } from "~/test/bounds.ts";
+import { afterMicrotasks, runOutConfirmWaits, SENDS_UNCONFIRMED } from "~/test/settle.ts";
 import { Store, type ChatPresencePush, type RoomMember, type QueryName } from "~/protocol/index.ts";
 import { MAX_CHAT_LIVE } from "~/protocol/store.ts";
 import { LoneRoom } from "./testkit.tsx";
@@ -103,6 +104,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   location.hash = "#/";
 });
@@ -457,17 +459,20 @@ test("retrying an unknown write reuses its operation key, because a fresh one wo
   // A post arbitrates nothing at the broker, so the operation key is the
   // ONLY thing that can tell a resubmission from a second remark — the engine
   // derives the message's own id from it.
+  vi.useFakeTimers({ shouldAdvanceTime: true });
   reply = (tool) => unknown(tool);
   mount();
   await screen.findByText("line 2");
   await say("did that land?");
+  const posts = () => pressesOf("post_message").length;
+  await runOutConfirmWaits(posts, SENDS_UNCONFIRMED);
 
   const first = await screen.findByRole("button", { name: /send again/i });
   fireEvent.click(first);
-  await waitFor(() => expect(pressesOf("post_message")).toHaveLength(2));
-  const [sent, again] = pressesOf("post_message");
+  await runOutConfirmWaits(posts, 2 * SENDS_UNCONFIRMED);
+  const [sent, ...again] = pressesOf("post_message");
   expect(sent!.opId).toBeTruthy();
-  expect(again!.opId).toBe(sent!.opId);
+  expect(new Set(again.map((p) => p.opId))).toEqual(new Set([sent!.opId]));
   // AND IT IS THE MESSAGE AS TYPED: what it names is the engine's reading.
   expect(sent!.args).toEqual({ channel: "room-1", body: "did that land?" });
 });
@@ -477,18 +482,20 @@ test("a retry offline is held with why, in the room", async () => {
   // every control is held with, rather than drawn pressable and sending
   // nothing — the row would flicker to "Sending…" and back, which reads as a
   // second attempt that failed.
+  vi.useFakeTimers({ shouldAdvanceTime: true });
   reply = (tool) => unknown(tool);
   const { store } = mount();
   await screen.findByText("line 2");
   await say("did that land?");
+  await runOutConfirmWaits(() => pressesOf("post_message").length, SENDS_UNCONFIRMED);
   await screen.findByRole("button", { name: /send again/i });
   act(() => store.setConnected(false));
   const retry = () => screen.getByRole("button", { name: /send again/i });
   await waitFor(() => expect(retry().getAttribute("title")).toBe(WRITE_REASONS.offline));
   expect(retry().getAttribute("aria-disabled")).toBe("true");
   fireEvent.click(retry());
-  await new Promise((r) => setTimeout(r, 20));
-  expect(pressesOf("post_message")).toHaveLength(1);
+  await afterMicrotasks();
+  expect(pressesOf("post_message")).toHaveLength(SENDS_UNCONFIRMED);
 });
 
 test("a refusal is shown as the engine's own sentence rather than as a failure", async () => {
@@ -1425,10 +1432,12 @@ test("clearing the rewrite keeps the editor open", async () => {
 test("a pending message's retry is held once its room stops taking messages", async () => {
   // THE ROOM'S OWN REFUSAL HOLDS A RETRY as it closes the box: a retry into
   // a room archived since the first attempt is refused however often it goes.
+  vi.useFakeTimers({ shouldAdvanceTime: true });
   reply = (tool) => unknown(tool);
   const { store } = mount();
   await screen.findByText("line 2");
   await say("did that land?");
+  await runOutConfirmWaits(() => pressesOf("post_message").length, SENDS_UNCONFIRMED);
   const retry = await screen.findByRole("button", { name: /send again/i });
   expect(holdOf(retry)).toBeNull();
   answers.chat_channel = detailOf({ archived_at: "2026-02-01T00:00:00Z" });
@@ -1436,8 +1445,8 @@ test("a pending message's retry is held once its room stops taking messages", as
   const held = () => screen.getByRole("button", { name: /send again/i });
   await waitFor(() => expect(holdOf(held())).toMatch(/archived/i));
   fireEvent.click(held());
-  await new Promise((r) => setTimeout(r, 20));
-  expect(pressesOf("post_message")).toHaveLength(1);
+  await afterMicrotasks();
+  expect(pressesOf("post_message")).toHaveLength(SENDS_UNCONFIRMED);
 });
 
 test("a refused reaction is said above the transcript", async () => {

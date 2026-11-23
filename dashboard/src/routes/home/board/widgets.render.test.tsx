@@ -26,7 +26,8 @@ import { noteReader } from "~/lib/reader.ts";
 import { resetForTest as resetStars, starsKey } from "~/lib/starred.ts";
 import { HomeDataProvider, useHomeData } from "../useHomeData.ts";
 import { WIDGETS, canUse } from "./registry.tsx";
-import { NOTHING_TO_LIST, destinationOf, type WidgetDef } from "./kit.tsx";
+import { NOTHING_TO_LIST, WIDGET_PAGE, destinationOf, type WidgetDef } from "./kit.tsx";
+import { ROWS } from "~/routes/worklet/taskRows.tsx";
 import { LeafView } from "./widgets.tsx";
 import type { ContribWidget } from "./model.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
@@ -627,10 +628,17 @@ describe("the Inbox widget", () => {
       inbox,
     });
     await settle();
+    // It reads a page, draws its first rows at its content's height, and
+    // counts the rest in its foot, as a floor where more lie past the page.
     const shown = document.querySelectorAll(".home-tasks li").length;
-    expect(shown).toBeGreaterThan(0);
-    expect(screen.getByText(`Inbox · ${shown}+ unread`)).toBeTruthy();
-    expect(screen.getByText(`All ${shown}+ unread`)).toBeTruthy();
+    expect(shown).toBe(ROWS);
+    expect(screen.getByText(`Inbox · ${WIDGET_PAGE}+ unread`)).toBeTruthy();
+    expect(
+      screen
+        .getByText(`${WIDGET_PAGE - ROWS}+ more`)
+        .closest("a")
+        ?.getAttribute("href"),
+    ).toBe("#/inbox");
   });
 
   // A COMMENT ON AN ARTIFACT IS A ROW TOO, saying who did what to which
@@ -863,9 +871,10 @@ describe("the Atlas attention widget", () => {
     expect(screen.getByText("billing").closest("a")?.getAttribute("href")).toBe(
       `#/company/atlas/${odd.id}`,
     );
-    // A QUIET ENTRY A SHORT ATLAS ANSWERS IS NOT LISTED, and the rest are counted.
+    // A QUIET ENTRY A SHORT ATLAS ANSWERS IS NOT LISTED, and the rest are
+    // counted in the card's foot, which opens the page.
     expect(screen.queryByText("search")).toBeNull();
-    expect(screen.getByText("4 more on the page").getAttribute("href")).toBe("#/company/atlas");
+    expect(screen.getByText("+4 more").closest("a")?.getAttribute("href")).toBe("#/company/atlas");
   });
 
   test("says nothing is alerting over a whole read of a quiet atlas", async () => {

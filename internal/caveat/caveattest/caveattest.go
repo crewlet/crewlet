@@ -84,7 +84,7 @@ func Problems(text string) []string {
 var valueFields = []string{"tool", "outcome", "position", "op_id", "id", "item", "key",
 	"status", "rank", "code", "action", "type", "project", "assignee", "labels_created",
 	"error", "reason", "grants", "field", "fields", "window",
-	"comment_id", "page", "merged_into", "moved_from", "artifact", "url", "write",
+	"comment_id", "page", "merged_into", "moved_from", "artifact", "url", "result",
 	"handle", "title", "withdrawn_from", "verdict", "container", "content_type", "hash",
 	"path", "folder", "move_waits_for", "operator_id", "paused_at", "paused_by",
 	"paused_by_kind", "agent_handle", "note_id", "turn_id", "model", "kind", "ref",
