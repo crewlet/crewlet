@@ -43,6 +43,11 @@ func (p *Product) sales(ctx context.Context, call growth.Call) (any, error) {
 	if _, perr := time.Parse(time.DateOnly, date); perr != nil {
 		return nil, invalid("`date` is a day as YYYY-MM-DD, or yesterday.")
 	}
+	// A READ NO SEAT KEY MAY MAKE goes through the company's report key, unless
+	// the seat's own identity was refused, which stops every call of its.
+	if _, err := p.signer(ctx, call.Handle); err != nil {
+		return nil, err
+	}
 	name, _ := call.Args["connection"].(string)
 	t, err := p.teamNamed(name)
 	if err != nil {

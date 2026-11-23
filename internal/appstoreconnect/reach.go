@@ -102,14 +102,24 @@ func (p *Product) HeldReach() Reach {
 	return reachOf(teams)
 }
 
-// SeatReads is [Product.Reach] as the agents' access session reads it, nil
-// where the block reaches nothing.
+// Reads is what a pass hands the agents' access session: the apps the keys
+// reach, and the product, which checks a seat's own key with Apple.
+type Reads struct {
+	Reach   Reach
+	product *Product
+}
+
+// ReadFor implements [seataccess.PassReads].
+func (Reads) ReadFor() integration.Kind { return integration.KindAppStoreConnect }
+
+// SeatReads is [Product.Reach] as the agents' access session reads it, with
+// the product; nil where the block reaches nothing.
 func (p *Product) SeatReads(ctx context.Context, fresh bool) seataccess.PassReads {
 	r, err := p.Reach(ctx, fresh)
 	if err != nil {
 		return nil
 	}
-	return r
+	return Reads{Reach: r, product: p}
 }
 
 // reachOf is each team's held list.
