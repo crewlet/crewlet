@@ -108,7 +108,9 @@ func (s *Sweeper) Due(ctx context.Context, floor statelog.Position, cursor strin
 // Work sweeps repoID's running attempts: each whose runner has left the
 // repository's git order, or whose claim has outlived its check's timeout,
 // the setup's grace and SweepPolls, is ended `errored runner_lost` (package
-// doc, "A runner that is gone"). An attempt a person's CI reports runs on no
+// doc, "A runner that is gone"), and nothing is killed: its box, on its
+// runner's node, is that node's runner's to reclaim once the row has ended
+// ("A box its attempt left"). An attempt a person's CI reports runs on no
 // engine runner and is not swept.
 //
 // AN ENDING ASKED BY TWO HOMES (a presence view split for a moment) is one

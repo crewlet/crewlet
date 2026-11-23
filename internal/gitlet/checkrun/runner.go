@@ -39,11 +39,15 @@ type Order interface {
 }
 
 // Boxes is this node's sandbox catalogue (sandbox.Manager): a box with no
-// harness, and the cells the CURRENT catalogue configures (Placements, the
-// only ones a new box is made in), of which a check needs the container.
+// harness, the cells the CURRENT catalogue configures (Placements, the only
+// ones a new box is made in), of which a check needs the container, and for
+// reclaiming a box an attempt left (package doc, "A box its attempt left") the
+// boxes on this node recording an attempt and the backend that reaches each.
 type Boxes interface {
 	AcquireBox(ctx context.Context, spec sandbox.Spec, setup []sandbox.SetupStep) (sandbox.Sandbox, error)
 	Placements() []sandbox.Placement
+	CheckBoxes() ([]sandbox.CheckBox, error)
+	Provider(placement sandbox.Placement) (sandbox.Provider, error)
 }
 
 // Tokens mints a check's box's credential: Gitlet's CheckTokens, reached
@@ -80,8 +84,9 @@ type Company struct {
 // Timing is a runner's cadences. [Production] is the engine's; a suite
 // shortens them.
 type Timing struct {
-	// Poll is how often a running check's row is read, its box asked whether
-	// its command still runs and touched: [CheckPoll].
+	// Poll is how often a running check's row is read and its box asked
+	// whether its command still runs, and how often a box an attempt may have
+	// left is judged again: [CheckPoll].
 	Poll time.Duration
 	// Stagger is how long the node at rank r of a repository's git order
 	// waits, r times, past an attempt's queuing before it claims it:
@@ -101,7 +106,7 @@ const (
 	// CheckPoll is sandbox.DefaultPollInterval, FIFTEEN SECONDS: the
 	// executors' waiter's cadence, so a box is polled at one rate whatever
 	// runs in it. An ending is at most that late, which a check of minutes
-	// does not notice, for three calls a box (its row, its job, its touch).
+	// does not notice, for two calls a box (its row, its job).
 	CheckPoll = sandbox.DefaultPollInterval
 
 	// ClaimStagger is TWO SECONDS: the wait of each rank of a repository's
@@ -123,6 +128,15 @@ const (
 	// seconds at most, and an idle Gitlet node reads the queue four times a
 	// minute.
 	WalkBackstop = CheckPoll
+
+	// ReclaimPerWalk is how many of this node's check boxes no run of its
+	// runner holds one walk judges, a linearizable read of its attempt's row
+	// each and a kill each it reclaims: FOUR, JUDGMENT. A walk claims nothing
+	// while it reclaims, and a kill (`docker rm -f` and the box's directory)
+	// takes about a second, so four hold a walk a few seconds at most, which
+	// costs a home's attempts the stagger to its runner-up; and a crash's
+	// leftovers, at most the node's gitlet.max_checks, go within a few walks.
+	ReclaimPerWalk = 4
 
 	// WalkPage is how many queued attempts one read of the walk takes: 256,
 	// JUDGMENT. A Gitlet node claims at most its free containers' worth a
@@ -224,11 +238,18 @@ type Runner struct {
 	started bool
 	stopped bool
 	ending  context.Context
-	// held is the checks this runner runs now, at most Slots.
-	held int
+	// running is the attempts this runner runs now, each from its reserved
+	// container to its box closed: at most Slots.
+	running map[gitlet.CheckKey]bool
 	// unconfigured is a catalogue with no container backend said once, until
 	// one has it again.
 	unconfigured bool
+
+	// judged is when each check box the loop's reclaim last judged and kept
+	// was judged, by id; unlisted a listing failure said once, until the boxes
+	// list again. The loop's own, so unlocked.
+	judged   map[string]time.Time
+	unlisted bool
 }
 
 // New builds a runner, refusing what it cannot work without. It starts
@@ -261,7 +282,8 @@ func New(o Options) (*Runner, error) {
 		return nil, fmt.Errorf("%w: CodeBase: a check's box reads its commit without a clone there "+
 			"(CREWLET_CHECK_API), and no base names it", ErrOptions)
 	}
-	r := &Runner{o: o, timing: o.Timing, log: o.Logger, now: o.Now, wake: make(chan struct{}, 1)}
+	r := &Runner{o: o, timing: o.Timing, log: o.Logger, now: o.Now, wake: make(chan struct{}, 1),
+		running: map[gitlet.CheckKey]bool{}, judged: map[string]time.Time{}}
 	if r.timing == (Timing{}) {
 		r.timing = Production()
 	}
@@ -339,13 +361,15 @@ func (r *Runner) Nudge() {
 
 // loop is the runner's walks: one at once, then one whenever a nudge, an
 // attempt falling due at this node's rank, a check ending or the backstop
-// asks — never two within the walk's gap.
+// asks — never two within the walk's gap. Each begins by reclaiming the boxes
+// attempts left on this node ([Runner.reclaim]), the first a predecessor's.
 func (r *Runner) loop() {
 	ctx := r.life
 	stopWatch := r.watch(ctx)
 	defer stopWatch()
 	for {
 		walked := time.Now()
+		r.reclaim(ctx)
 		next := r.walk(ctx)
 		wait := r.timing.Backstop
 		if !next.IsZero() {
@@ -499,18 +523,18 @@ func (r *Runner) consider(ctx context.Context, w *walking, c gitlet.RunnableChec
 		r.endUnrun(ctx, c, w.refusal)
 		return time.Time{}
 	}
-	if !r.reserve() {
+	if !r.reserve(c.CheckKey) {
 		return time.Time{}
 	}
 	started := r.now()
 	if !r.claim(ctx, c, started) {
-		r.release()
+		r.release(c.CheckKey)
 		return time.Time{}
 	}
 	r.wg.Add(1)
 	go func() { //nolint:contextcheck // The run is the runner's, not this walk's: it runs under r.life, so a walk that ends never cuts the box it started, and records its ending under Stop's context.
 		defer r.wg.Done()
-		defer r.release()
+		defer r.release(c.CheckKey)
 		r.run(c, started)
 	}()
 	return time.Time{}
@@ -550,26 +574,27 @@ func (r *Runner) configured() bool {
 func (r *Runner) room() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.held < r.o.Slots
+	return len(r.running) < r.o.Slots
 }
 
-// reserve takes a container under gitlet.max_checks, false where none is
-// free.
-func (r *Runner) reserve() bool {
+// reserve takes a container under gitlet.max_checks for attempt, false where
+// none is free or this runner runs attempt already: a queue read behind its
+// claim lists it again, and claiming it again would be refused.
+func (r *Runner) reserve(attempt gitlet.CheckKey) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.held >= r.o.Slots {
+	if len(r.running) >= r.o.Slots || r.running[attempt] {
 		return false
 	}
-	r.held++
+	r.running[attempt] = true
 	r.gauge()
 	return true
 }
 
-// release gives back what reserve took.
-func (r *Runner) release() {
+// release gives back what reserve took for attempt.
+func (r *Runner) release(attempt gitlet.CheckKey) {
 	r.mu.Lock()
-	r.held--
+	delete(r.running, attempt)
 	r.gauge()
 	r.mu.Unlock()
 	// A CONTAINER FREED is a walk's worth of room: a check left queued for
@@ -580,7 +605,7 @@ func (r *Runner) release() {
 // gauge records the checks held. Called under mu.
 func (r *Runner) gauge() {
 	if r.o.Metrics != nil {
-		r.o.Metrics.Set(metrics.CodeChecksRunning, float64(r.held), nil)
+		r.o.Metrics.Set(metrics.CodeChecksRunning, float64(len(r.running)), nil)
 	}
 }
 
@@ -589,7 +614,14 @@ func (r *Runner) gauge() {
 func (r *Runner) Held() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.held
+	return len(r.running)
+}
+
+// runs reports whether this runner runs attempt now.
+func (r *Runner) runs(attempt gitlet.CheckKey) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.running[attempt]
 }
 
 // claim asks for c claimed by this node at started, and answers whether this

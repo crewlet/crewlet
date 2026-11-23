@@ -18,7 +18,7 @@ const slowStep = 4 * time.Minute
 const provisionSteps = 10
 
 // A BOX IS KEPT ALIVE FOR AS LONG AS ITS LAUNCH PROVISIONS IT. A box with no
-// job yet that records no run is taken by another launch's orphan sweep once
+// job yet that records nothing is taken by another launch's orphan sweep once
 // its stamp is older than the host grace, and the waiter's keepalive touches
 // only a running row's box, never one still given setup steps. A box given ten
 // four-minute steps is touched when provisioning begins (before the first
@@ -49,7 +49,7 @@ func TestABoxIsKeptAliveWhileItsLaunchProvisionsIt(t *testing.T) {
 	})
 }
 
-// sweptBoxes is a provider whose boxes record no run, so another launch's
+// sweptBoxes is a provider whose boxes record nothing, so another launch's
 // orphan sweep takes them as the local backend's would ([Local.reapOrphans]): a
 // box with no job whose stamp — its create, else its last [Sandbox.Touch] — has
 // gone [DefaultHostGrace] untouched is gone for good, so a command on it fails

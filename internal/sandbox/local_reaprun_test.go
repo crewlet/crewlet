@@ -24,16 +24,18 @@ func endedJob(t *testing.T, box Sandbox) {
 	}, "a job that exits at once still reads as running")
 }
 
-// THE ORPHAN REAPER TAKES ONLY A BOX THAT RECORDS NO RUN. A box that records
-// the run it was made for is its host's sweep's, which asks the run's row: a
-// parked run's box has an exited job and a stamp nothing touches, and the
-// reaper taking it at the host grace would lose it inside its pause TTL. A box
-// that records no run, or one whose record cannot be used, is the reaper's
-// (the sweep cannot list it), whichever cell's backend makes the next box.
+// THE ORPHAN REAPER TAKES ONLY A BOX THAT RECORDS NO RUN OR CHECK. A box that
+// records the run it was made for is its host's sweep's, which asks the run's
+// row: a parked run's box has an exited job and a stamp nothing touches, and
+// the reaper taking it at the host grace would lose it inside its pause TTL.
+// One that records its check's attempt is its node's check runner's, which
+// asks the attempt's row. A box that records neither, or one whose record
+// cannot be used, is the reaper's, whichever cell's backend makes the next box.
 //
-// Mutations: drop the record check from the reaper, and the boxes that record
-// their run are reaped; skip a box whatever its record says, or skip one whose
-// record cannot be read, and the box that is nobody's survives.
+// Mutations: drop the record check from the reaper, and the recorded boxes are
+// reaped; read a check's record as none, and the check's box is reaped; skip a
+// box whatever its record says, or one whose record cannot be read, and the box
+// that is nobody's survives.
 func TestTheOrphanReaperTakesOnlyABoxThatRecordsNoRun(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -47,6 +49,16 @@ func TestTheOrphanReaperTakesOnlyABoxThatRecordsNoRun(t *testing.T) {
 				t.Fatalf("recordRun: %v", err)
 			}
 		}, false},
+		{"records its check", func(t *testing.T, box Sandbox) {
+			if err := recordRun(layoutOf(t, box), boxRun{Check: "attempt-1", Placement: Direct}); err != nil {
+				t.Fatalf("recordRun: %v", err)
+			}
+		}, false},
+		{"records both a run and a check", func(t *testing.T, box Sandbox) {
+			if err := recordRun(layoutOf(t, box), boxRun{TurnID: "t1", Check: "attempt-1", Placement: Direct}); err != nil {
+				t.Fatalf("recordRun: %v", err)
+			}
+		}, true},
 		{"records no run", func(t *testing.T, box Sandbox) {
 			if err := os.Remove(layoutOf(t, box).runFile()); err != nil {
 				t.Fatalf("remove the record: %v", err)

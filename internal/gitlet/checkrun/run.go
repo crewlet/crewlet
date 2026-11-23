@@ -164,7 +164,8 @@ func (a *attempt) run(ctx context.Context) (*gitlet.CheckFinished, string) {
 	defer func() {
 		if err := box.Close(context.WithoutCancel(ctx)); err != nil {
 			r.log.Warn("code_check_box_not_closed", "box", box.ID(), "repo_id", a.c.RepoID, "check", a.c.Name,
-				"error", err.Error(), "detail", "its container is left on this node until it is removed there")
+				"error", err.Error(), "detail", "this node's runner reclaims a box its attempt left, from the "+
+					"box's record, once the attempt has ended")
 		}
 	}()
 	if ended := a.nameBox(ctx, box.ID()); ended {
@@ -210,6 +211,13 @@ func (a *attempt) spec(company Company) (sandbox.Spec, []sandbox.SetupStep, *git
 	// default one.
 	env[sandbox.GitAccessFileVar] = sandbox.DefaultHome + "/" + sandbox.GitAccessFile
 	setup := []sandbox.SetupStep{sandbox.GitAccessStep(token)}
+	// RECORDED ON THE BOX, so the box an attempt leaves is told from a live one
+	// and reclaimed (package doc, "A box its attempt left").
+	check, err := attemptRecord(a.c.CheckKey)
+	if err != nil {
+		return sandbox.Spec{}, nil, a.ended(gitlet.CheckStateErrored, gitlet.CheckReasonBoxFailed, nil,
+			"its attempt could not be recorded on its box: "+err.Error())
+	}
 	if !def.Checkout.None {
 		clone, err := sandbox.CloneRecipe(sandbox.RunRepo{Repo: a.c.Repo, RepoID: a.c.RepoID, Base: a.c.OID,
 			Access: sandbox.RepoRead, Paths: def.Checkout.Cone}, sandbox.CloneSingleSHA)
@@ -218,7 +226,7 @@ func (a *attempt) spec(company Company) (sandbox.Spec, []sandbox.SetupStep, *git
 		}
 		setup = append(setup, sandbox.GitVersionStep(), clone)
 	}
-	spec := sandbox.Spec{Placement: sandbox.Container, Env: env}
+	spec := sandbox.Spec{Placement: sandbox.Container, Check: check, Env: env}
 	return spec, setup, nil
 }
 
@@ -350,11 +358,6 @@ func (a *attempt) command(ctx context.Context, box sandbox.Sandbox) (*gitlet.Che
 			a.failed(read, box, f, nil, said)
 			cancel()
 			return f, opID
-		}
-		// THE KEEPALIVE: the box's last-seen stamp, which the node's orphan
-		// reaper judges a box by (sandbox.Sandbox.Touch), moved every poll.
-		if err := box.Touch(ctx); err != nil {
-			r.log.WarnContext(ctx, "code_check_keepalive_failed", "box", box.ID(), "error", err.Error())
 		}
 	}
 }
