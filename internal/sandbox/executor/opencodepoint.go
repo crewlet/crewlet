@@ -40,24 +40,24 @@ const openCodePointCleanupWait = 10 * time.Second
 
 // The share of a model's limit OpenCode holds back below its point where no
 // buffer is set, and the floor it holds back at least once the limit is twice
-// it (read in each release's point function, measured at its boundaries).
+// it (read in 2.3.2's bundle, measured at its boundaries on 2.3.2).
 const (
-	openCodeShareOn2032 = 0.10
-	openCodeShare       = 0.15
-	openCodeShareFloor  = 16000
+	openCodeShare      = 0.15
+	openCodeShareFloor = 16000
 )
 
 // The bytes of OpenCode's renders the read charges beside what each renders
-// whole (read in 2.3.0's: the headers of a changed, added or removed
-// instruction, a list's preamble and its replacement sentence, a skill's entry
-// tags beside its listed name twice, a server's entry beside its name twice in
-// its Code Mode line, the date's line, the environment block beside its
-// working directory twice and the box's home), each rounded up past the
-// longest. What no constant bounds is the package doc's to say.
+// whole, measured on 2.3.2 in a continued session's update: the headers of a
+// changed instruction, a list's preamble, a skill's escaped entry tags (133)
+// beside its listed name twice, a server's entry beside its name twice, the
+// date's line, the environment block beside its working directory twice and
+// the box's home, each rounded up past the longest. Text inside an entry is
+// XML-escaped ([openCodeEscapedLen]). What no constant bounds is the package
+// doc's to say.
 const (
 	openCodeInstructionHeader = 64
 	openCodeListHeader        = 1024
-	openCodeSkillEntry        = 96
+	openCodeSkillEntry        = 160
 	openCodeServerEntry       = 128
 	openCodeDateBytes         = 64
 	openCodeEnvironmentBytes  = 1024
@@ -117,8 +117,9 @@ func (OpenCode) readBoxPoint(ctx context.Context, box sandbox.Sandbox,
 
 // openCodePointScript is the one exec the read runs ([Runner.ReadBoxPoint]):
 // the login imported where the box holds one, the release asked where the
-// launch has none, model.list and config.get each answered into a file (a
-// pipe cuts OpenCode's output at 64 KiB on 2.0.32 and 2.1.4), the plugin
+// launch has none, model.list and config.get each answered into a file (the
+// exec's stdout carries the read's own lines, and each answer is read back
+// apart, held to its bound), the plugin
 // folders listed, and in the box that holds the session's copy the sizes of
 // the instruction files OpenCode may hand it. Every line it prints is the
 // read's: `status`, `cwd`, `dir`, `plugin`, `walk`, `instr`.
@@ -289,7 +290,7 @@ func openCodePointOf(ask sandbox.PointAsk, a openCodeAnswers, paths Paths) sandb
 			"option, which edits the conversation server-side", provider, model))
 	}
 	auto := docs.auto == nil || *docs.auto
-	limit := record.limitOn(release)
+	limit := record.limit()
 	if listed && auto {
 		switch {
 		case !docs.statesLimit(provider, model, record):
@@ -308,7 +309,7 @@ func openCodePointOf(ask sandbox.PointAsk, a openCodeAnswers, paths Paths) sandb
 	}
 	if !auto {
 		point.Never = true
-	} else if point.Tokens, err = openCodePointAt(release, limit, docs.buffer); err != nil {
+	} else if point.Tokens, err = openCodePointAt(limit, docs.buffer); err != nil {
 		return pointMarked(sandbox.PointUnread, "the box's compaction buffer did not read: "+err.Error())
 	}
 	if ask.Sources != nil {
@@ -317,38 +318,32 @@ func openCodePointOf(ask sandbox.PointAsk, a openCodeAnswers, paths Paths) sandb
 	return point
 }
 
-// openCodePointAt is the point a release compacts at for a model of limit L
+// openCodePointAt is the point OpenCode compacts at for a model of limit L
 // (above zero) under buffer, nil where no document sets one: L less a buffer
-// below L (2.0.32 takes any buffer, one at or past L compacting at every
-// request), a `"N%"` buffer read as round(L·N/100) on 2.2.7 and 2.3.0; else L
-// less the larger of the release's share of L and [openCodeShareFloor] once L
-// is twice it.
-func openCodePointAt(release string, limit int64, buffer json.RawMessage) (int64, error) {
+// below L, a `"N%"` buffer read as round(L·N/100); else L less the larger of
+// [openCodeShare] of L and [openCodeShareFloor] once L is twice it.
+func openCodePointAt(limit int64, buffer json.RawMessage) (int64, error) {
 	if buffer != nil {
-		held, err := openCodeBufferOf(release, limit, buffer)
+		held, err := openCodeBufferOf(limit, buffer)
 		if err != nil {
 			return 0, err
 		}
-		if release == "2.0.32" || held < limit {
+		if held < limit {
 			return limit - held, nil
 		}
-	}
-	share := openCodeShare
-	if release == "2.0.32" {
-		share = openCodeShareOn2032
 	}
 	floor := int64(0)
 	if limit >= 2*openCodeShareFloor {
 		floor = openCodeShareFloor
 	}
-	return limit - max(int64(math.Floor(float64(limit)*share)), floor), nil
+	return limit - max(int64(math.Floor(float64(limit)*openCodeShare)), floor), nil
 }
 
 // openCodeBufferOf is the tokens a buffer holds back from a limit of L: an
-// integer, or on 2.2.7 and 2.3.0 a `"N%"` of L rounded half up as
-// JavaScript's Math.round does. Anything else does not read, since a release
-// whose schema refuses it starts no run on it.
-func openCodeBufferOf(release string, limit int64, raw json.RawMessage) (int64, error) {
+// integer, or a `"N%"` of L rounded half up as JavaScript's Math.round does.
+// Anything else does not read, since a release whose schema refuses it starts
+// no run on it.
+func openCodeBufferOf(limit int64, raw json.RawMessage) (int64, error) {
 	var n int64
 	if err := json.Unmarshal(raw, &n); err == nil {
 		if n < 0 {
@@ -357,7 +352,7 @@ func openCodeBufferOf(release string, limit int64, raw json.RawMessage) (int64, 
 		return n, nil
 	}
 	var text string
-	if err := json.Unmarshal(raw, &text); err != nil || (release != "2.2.7" && release != "2.3.0") {
+	if err := json.Unmarshal(raw, &text); err != nil {
 		return 0, fmt.Errorf("the buffer %s is no integer this release takes", raw)
 	}
 	digits, percent := strings.CutSuffix(text, "%")
@@ -387,17 +382,109 @@ func openCodeBoxBytes(sources sandbox.RunSources, listing pointListing, paths Pa
 	if len(sources.Skills) > 0 {
 		total += openCodeListHeader
 		for _, skill := range sources.Skills {
-			total += openCodeSkillEntry + int64(2*len(skill.Listed())+len(skill.Description))
+			total += openCodeSkillEntry + 2*openCodeEscapedLen(skill.Listed()) + openCodeEscapedLen(skill.Description)
 		}
 	}
 	if len(sources.Guidance) > 0 {
 		total += openCodeListHeader
 		for server, said := range sources.Guidance {
-			total += openCodeServerEntry + int64(2*len(server)+len(said)+4*(strings.Count(said, "\n")+1))
+			total += openCodeServerEntry + int64(2*len(server)+4*(strings.Count(said, "\n")+1)) +
+				openCodeEscapedLen(said)
+		}
+	}
+	if len(sources.Catalogs) > 0 {
+		total += openCodeListHeader
+		for server, tools := range sources.Catalogs {
+			total += openCodeCatalogServer + openCodeEscapedLen(server)
+			for _, tool := range tools {
+				total += openCodeCatalogTool + openCodeEscapedLen(server) + openCodeEscapedLen(tool.Name) +
+					openCodeEscapedLen(tool.Description) + openCodeSchemaBytes(tool.Schema, 0)
+			}
 		}
 	}
 	return total + openCodeDateBytes + openCodeEnvironmentBytes + 2*int64(len(listing.cwd)) +
 		int64(len(paths.Home))
+}
+
+// THE CODE MODE CATALOG. A server new to a session is listed in its update
+// as a line naming it and one TypeScript signature per tool, `tools.<server>.
+// <tool>(<schema>): Promise&lt;unknown&gt; // <description>`, escaped as every
+// entry is. Its bytes are bounded, not re-rendered: each schema node at most
+// its own keywords as JSON, escaped, plus [openCodeCatalogNode] and three
+// lines of its depth's indentation; children walked. Measured on 2.3.2 over
+// nested, enum, array, union and escaped schemas, the bound was 2 to 3.5
+// times the render, and it grows faster than the render with depth.
+const (
+	openCodeCatalogServer = 32
+	openCodeCatalogTool   = 48
+	openCodeCatalogNode   = 32
+)
+
+// openCodeSchemaOne, openCodeSchemaMap and openCodeSchemaList are the keywords
+// whose values are schemas (one, a map of them by name, a list), each walked
+// as a node of its own.
+var (
+	openCodeSchemaOne  = []string{"items", "additionalProperties", "not", "if", "then", "else", "contains"}
+	openCodeSchemaMap  = []string{"properties", "patternProperties", "$defs", "definitions"}
+	openCodeSchemaList = []string{"anyOf", "oneOf", "allOf", "prefixItems"}
+)
+
+// openCodeSchemaBytes bounds what OpenCode renders of the schema node at
+// depth, its children included ([openCodeCatalogNode]).
+func openCodeSchemaBytes(node map[string]any, depth int64) int64 {
+	own := make(map[string]any, len(node))
+	var total int64
+	for key, value := range node {
+		switch v := value.(type) {
+		case map[string]any:
+			switch {
+			case slices.Contains(openCodeSchemaOne, key):
+				total += openCodeSchemaBytes(v, depth+1)
+				continue
+			case slices.Contains(openCodeSchemaMap, key):
+				for name, child := range v {
+					if c, ok := child.(map[string]any); ok {
+						total += openCodeEscapedLen(name) + openCodeSchemaBytes(c, depth+1)
+					} else {
+						total += openCodeEscapedLen(name) + openCodeJSONBytes(child)
+					}
+				}
+				continue
+			}
+		case []any:
+			if slices.Contains(openCodeSchemaList, key) {
+				for _, child := range v {
+					if c, ok := child.(map[string]any); ok {
+						total += openCodeSchemaBytes(c, depth+1)
+					} else {
+						total += openCodeJSONBytes(child)
+					}
+				}
+				continue
+			}
+		}
+		own[key] = value
+	}
+	return total + openCodeJSONBytes(own) + openCodeCatalogNode + 6*(depth+1)
+}
+
+// openCodeJSONBytes is value as JSON, `<`, `>` and `&` left as they are, then
+// escaped as an update escapes them ([openCodeEscapedLen]).
+func openCodeJSONBytes(value any) int64 {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(value); err != nil {
+		return openCodeEscapedLen(fmt.Sprint(value))
+	}
+	return openCodeEscapedLen(b.String())
+}
+
+// openCodeEscapedLen is the bytes text renders to inside an entry of a
+// session's update: OpenCode 2.3.2 escapes `<` and `>` (four bytes each) and
+// `&` (five), and leaves quotes as they are (measured).
+func openCodeEscapedLen(text string) int64 {
+	return int64(len(text) + 3*strings.Count(text, "<") + 3*strings.Count(text, ">") + 4*strings.Count(text, "&"))
 }
 
 // pointListing is the lines the read's script printed ([openCodePointScript]).
@@ -657,12 +744,12 @@ type openCodeModel struct {
 	contextManagement bool
 }
 
-// limitOn is the model's limit as release reads it: the smaller of its input
-// and context limits where both are set on 2.2.7 and 2.3.0, else its input
-// limit, else its context limit.
-func (m openCodeModel) limitOn(release string) int64 {
+// limit is the model's limit as OpenCode reads it: the smaller of its input
+// and context limits where both are set, else its input limit, else its
+// context limit.
+func (m openCodeModel) limit() int64 {
 	in, ctx := m.Limit.Input, m.Limit.Context
-	if in > 0 && ctx > 0 && (release == "2.2.7" || release == "2.3.0") {
+	if in > 0 && ctx > 0 {
 		return min(in, ctx)
 	}
 	if in > 0 {

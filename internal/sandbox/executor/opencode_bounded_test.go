@@ -105,13 +105,12 @@ func assertHungEnded(t *testing.T, dir, kind string) {
 func TestACallItsServerNeverAnswersGoesAsACallToAGoneServerGoes(t *testing.T) {
 	t.Parallel()
 	const (
-		pending = `"time":{"created":1793072423854},"type":"user","payload":{"text":"x"},"delivery":"steer"`
-		first   = "msg_30292d427a87e479be9f88cba42963ca"
-		second  = "msg_05536338060eb18a87638c49f196ffcf"
-		third   = "msg_8a2c0f4e9b1d7a6c3e5f0b2d4a6c8e0f"
+		first  = "msg_30292d427a87e479be9f88cba42963ca"
+		second = "msg_05536338060eb18a87638c49f196ffcf"
+		third  = "msg_8a2c0f4e9b1d7a6c3e5f0b2d4a6c8e0f"
 	)
-	inbox := `{"data":[{"id":"` + first + `",` + pending + `},{"id":"` + second + `",` + pending + `},{"id":"` +
-		third + `",` + pending + `}]}`
+	inbox := inboxOf(t, inboxItem{first, "x", "steer"}, inboxItem{second, "x", "steer"},
+		inboxItem{third, "x", "steer"})
 	steered := sandbox.RunRequest{MCPServers: bridgeOnly, Steer: steerWiring}
 	// THE READINESS CHECK, A CALL A POLL, is held to its own bound and to what
 	// is left of the loop's: with only its first call unanswered, the run

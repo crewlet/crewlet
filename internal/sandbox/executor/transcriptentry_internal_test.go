@@ -274,7 +274,7 @@ func shaperSessions(t *testing.T) []shaperSession {
 				tarOfTree(t, tree)})
 		}
 	}
-	for _, path := range []string{"2.0.32/export.json", "2.2.5/export.json", "2.3.0/text.json", "2.3.0/tool.json"} {
+	for _, path := range []string{"2.3.2/export.json", "2.3.2/text.json", "2.3.2/tool.json"} {
 		raw, err := os.ReadFile(filepath.Join("testdata", "opencode", path))
 		if err != nil {
 			t.Fatal(err)

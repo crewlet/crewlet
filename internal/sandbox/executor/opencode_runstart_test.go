@@ -20,7 +20,7 @@ import (
 
 // startCursor is the cursor OpenCode's message list ends a page with as `next`
 // where the page's message is id: the unpadded base64url of JSON.stringify of
-// {id, order, direction}, as the 2.0.32 and 2.2.7 pages hold it
+// {id, order, direction}, as the 2.3.2 pages hold it
 // (testdata/opencode/<version>/context).
 func startCursor(id, order, direction string) string {
 	return base64.RawURLEncoding.EncodeToString(
@@ -214,7 +214,7 @@ func TestARecordsStartIsReadWholeOrNotAtAll(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			record := "id " + carriedOpenCode + "\ncontinued yes\nwhy \nfrom " + tc.cursor + "\nrelease opencode v2.2.7\n"
+			record := "id " + carriedOpenCode + "\ncontinued yes\nwhy \nfrom " + tc.cursor + "\nrelease opencode v2.3.2\n"
 			if began, after := executor.RecordStart(record); began || after != tc.want {
 				t.Errorf("the record's start reads (began %v, after %q), want after %q", began, after, tc.want)
 			}
@@ -267,7 +267,7 @@ func TestAFromLineAfterTheReleaseIsNeverRead(t *testing.T) {
 	t.Parallel()
 	from := "from " + startCursor("msg_1d8699fae001Qp6E4C1MPr6kP4", "desc", "next") + "\n"
 	for name, record := range map[string]string{
-		"a release of two lines":   "id " + carriedOpenCode + "\ncontinued yes\nwhy \nrelease opencode v2.2.7\n" + from,
+		"a release of two lines":   "id " + carriedOpenCode + "\ncontinued yes\nwhy \nrelease opencode v2.3.2\n" + from,
 		"a from the box appended":  "id " + carriedOpenCode + "\ncontinued yes\nwhy \nrelease v\n\n" + from,
 		"a record missing its why": "id " + carriedOpenCode + "\ncontinued yes\nrelease v\n" + from,
 	} {
@@ -306,7 +306,7 @@ func TestTheTakeSpellsTheRunsStartAsItsScrubSpellsTheExport(t *testing.T) {
 			writeBoxStandIn(t, b, paths(b).BinDir()+"/opencode",
 				strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`, "d="+shellword.Quote(dir), 1))
 			record := "id " + session + "\ncontinued yes\nwhy \nfrom " + startCursor(start, "desc", "next") +
-				"\nrelease opencode v2.2.7\n"
+				"\nrelease opencode v2.3.2\n"
 			if err := b.WriteFile(t.Context(), paths(b).SessionRecord(), []byte(record)); err != nil {
 				t.Fatal(err)
 			}

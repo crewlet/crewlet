@@ -165,7 +165,7 @@ func ExecutorOf(name string) (Executor, bool) {
 
 // Release is the release a harness's `--version` printed, as a bare
 // MAJOR.MINOR.PATCH, or "" where it printed none: the first word that starts
-// with a digit (after an optional "v", `opencode v2.0.32`; less one closing
+// with a digit (after an optional "v", `opencode v2.3.2`; less one closing
 // period, `GitHub Copilot CLI 1.0.114.`) must be three runs of digits joined by
 // dots and nothing else. A pre-release (`codex-cli 0.171.0-alpha.1`) names no
 // release, so a floor or an exact release is never met by a build cut before
