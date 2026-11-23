@@ -199,12 +199,12 @@ func recordReceipts(ctx context.Context, h recordConfirmer, box sandbox.Sandbox,
 		served = ask.Takes
 	}
 	takes := make([]ServedTake, 0, len(served))
+	ids := make([]string, 0, len(served))
 	for _, take := range served {
 		takes = append(takes, ServedTake{InboxID: take.Take, Digest: take.Digest})
-	}
-	ids := make([]string, 0, len(ask.Takes))
-	for _, take := range ask.Takes {
-		ids = append(ids, take.Take)
+		if !take.Read {
+			ids = append(ids, take.Take)
+		}
 	}
 	held, err := h.notesHeld(ctx, box, Session{ID: ask.Session}, takes)
 	if err != nil {

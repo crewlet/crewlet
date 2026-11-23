@@ -64,8 +64,8 @@ type MainThreadAsk struct {
 	// notes and items; none asks no receipt.
 	Takes []AskedTake
 	// Served is every serve of a note to the job in the record's order, its
-	// read notes' included ([servedTakes]): Takes, each in its place among
-	// those. A runner that matches its record by text in serve order reads it,
+	// read notes' included and marked ([servedTakes]): Takes, each in its
+	// place among those. A runner that matches its record by text in serve order reads it,
 	// so a read note keeps its place and its record settles no later take of
 	// the same words; nothing is asked of a read note's serve. Nil where the
 	// job has no read note among its serves, Takes being the order then.
@@ -83,6 +83,9 @@ type AskedTake struct {
 	Take     string
 	Boundary types.SteerBoundary
 	Digest   string
+	// Read marks a serve of a note already read, in [MainThreadAsk.Served]
+	// alone: no receipt is asked of it.
+	Read bool
 }
 
 // TakeReceipts is what the job's session shows of the takes asked: each asked
@@ -152,7 +155,8 @@ func launchServes(run PendingRun, withRead bool) []AskedTake {
 				slices.ContainsFunc(takes, func(t AskedTake) bool { return t.Take == h.Take }) {
 				continue
 			}
-			takes = append(takes, AskedTake{Take: h.Take, Boundary: types.SteerBoundary(h.Boundary), Digest: h.Digest})
+			takes = append(takes, AskedTake{Take: h.Take, Boundary: types.SteerBoundary(h.Boundary), Digest: h.Digest,
+				Read: n.Read != nil})
 		}
 	}
 	return takes

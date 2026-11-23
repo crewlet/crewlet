@@ -199,6 +199,7 @@ func TestAReadCodexNoteKeepsItsPlace(t *testing.T) {
 	t.Parallel()
 	const note = "## A note from ada, sent while this turn was running\n\nuse main"
 	a, b := codexTake("n-a", note), codexTake("n-b", note)
+	a.Read = true
 	ask := sandbox.MainThreadAsk{Session: codexConfirmThread, Takes: []sandbox.AskedTake{b},
 		Served: []sandbox.AskedTake{a, b}}
 	killed := codexUserLine(t, "Fix the flake.") + codexReplyLine(t) + codexUserLine(t, note) + codexReplyLine(t) +

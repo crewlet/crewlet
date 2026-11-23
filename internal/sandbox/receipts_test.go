@@ -227,7 +227,7 @@ func TestACollectionReadsReceiptsOnlyWhereItsJobHasServedNotes(t *testing.T) {
 	if got := askedTakes(run); !slices.Equal(got, want) {
 		t.Errorf("the read asks %+v, want %+v", got, want)
 	}
-	served := slices.Insert(slices.Clone(want), 3, AskedTake{Take: "take-read", Boundary: batch})
+	served := slices.Insert(slices.Clone(want), 3, AskedTake{Take: "take-read", Boundary: batch, Read: true})
 	if got := servedTakes(run); !slices.Equal(got, served) {
 		t.Errorf("the job's serves in order are %+v, want %+v", got, served)
 	}

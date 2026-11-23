@@ -2,6 +2,7 @@ package executor
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -312,5 +313,49 @@ func TestAQwenNoteNeverHandedLeavesTheLaterOnesToMatch(t *testing.T) {
 	got, err := qwenNotesHeld(strings.NewReader(session), qwenTakes(a, lost, c), 0, qwenTestBound)
 	if err != nil || !slices.Equal(got, []string{"i-1", "i-3"}) {
 		t.Errorf("qwenNotesHeld = %v, %v; want A and C held and the lost one not", got, err)
+	}
+}
+
+// A READ QWEN NOTE KEEPS ITS PLACE: the run's read notes are matched in their
+// places among its serves, so a read note's record settles no later note of
+// the same words, which a run killed before its reply leaves unheld.
+//
+// Mutation: match the record against the asked takes alone, and B reads held
+// off A's record and reply.
+func TestAReadQwenNoteKeepsItsPlace(t *testing.T) {
+	t.Parallel()
+	const session = "33333333-3333-4333-8333-333333333333"
+	const note = "## A note from eve, sent while this turn was running\nuse staging"
+	line := func(v map[string]any) string {
+		raw, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw) + "\n"
+	}
+	handed := line(map[string]any{"type": "user", "subtype": "mid_turn_user_message",
+		"message": map[string]any{"parts": []map[string]string{{"text": "\n" + qwenNoteFraming + note}}}})
+	reply := line(map[string]any{"type": "assistant", "message": map[string]any{"parts": []map[string]string{{"text": "ok"}}}})
+	a := sandbox.AskedTake{Take: "qwen_a", Digest: ItemDigest(note), Read: true}
+	b := sandbox.AskedTake{Take: "qwen_b", Digest: ItemDigest(note)}
+	ask := sandbox.MainThreadAsk{Session: session, Takes: []sandbox.AskedTake{b}, Served: []sandbox.AskedTake{a, b}}
+	for name, tc := range map[string]struct {
+		chat string
+		held bool
+	}{
+		"B killed before its reply": {handed + reply + handed, false},
+		"B answered":                {handed + reply + handed + reply, true},
+	} {
+		box := sandbox.NewFakeSandbox("qwen-read")
+		file := PathsFor(box).QwenDir() + "/projects/work/chats/" + session + ".jsonl"
+		box.Put(file, tc.chat)
+		box.Put(PathsFor(box).QwenRunStart(), session+" 0\n")
+		box.ExecFunc = func(context.Context, string, sandbox.ExecOptions) (sandbox.ExecResult, error) {
+			return sandbox.ExecResult{Stdout: file + "\n"}, nil
+		}
+		got := NewQwenCode().ReadMainThread(t.Context(), box, ask).Receipts
+		if held := slices.Equal(got.Held, []string{"qwen_b"}); held != tc.held {
+			t.Errorf("%s: B reads %+v, want held %v", name, got, tc.held)
+		}
 	}
 }
