@@ -470,11 +470,11 @@ to cross:
 
 | Records | Bound | A read waits |
 |---|---|---|
-| MCP listings | 896 KiB | its arrival: 35 s at the floor |
+| MCP listings | 896 KiB | its arrival: 36 s at the floor |
 | MCP tool definitions | 128.5 KiB | its arrival: 5 s |
 | MCP checks | 64 KiB, its sentences cut to fit | its crossing: 2.5 s |
 | access reviews | 40 KiB | its crossing: 1.6 s |
-| seat access records | 256 KiB, a seat past it not synced | its crossing: 10 s |
+| seat access records | 256 KiB, a lane past it taking no step | its crossing: 10 s |
 | Home boards | the board's 512 KiB and 256 bytes | its crossing: 20 s |
 | atlas wakes, device sign-ins | 16 KiB, a sign-in's detail cut to fit | the read term |
 
