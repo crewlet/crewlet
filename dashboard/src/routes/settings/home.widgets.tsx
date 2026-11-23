@@ -12,7 +12,7 @@
  */
 
 import { useMemo } from "react";
-import { EMPTY_VALUE, List, ListItem, StatCard, StatGroup, Tag } from "@crewlethq/ui";
+import { EMPTY_VALUE, ListItem, StatCard, StatGroup, Tag } from "@crewlethq/ui";
 import {
   CodeGlyph,
   CpuGlyph,
@@ -49,8 +49,9 @@ import {
 } from "~/routes/settings/Access.tsx";
 import { FINDING_KINDS } from "~/contract/identity.ts";
 import {
+  WIDGET_PAGE,
   WidgetCard,
-  WidgetMore,
+  WidgetList,
   WidgetNote,
   WidgetQuery,
   defineWidgets,
@@ -58,16 +59,11 @@ import {
 } from "~/routes/home/board/kit.tsx";
 import { ago } from "~/lib/ago.ts";
 
-/** The rows a widget lists before it says how many more its page holds. */
+/** The rows a widget lists at its content's height. */
 const ROWS = 4;
 
 /** Every widget here polls at its screen's slowest cadence: a Home is glanced at, not watched. */
 const POLL_MS = 60_000;
-
-/** "and 3 more" under a list cut to [ROWS], linking to the page that lists them all. */
-function More({ total, to }: { total: number; to: string[] }) {
-  return <WidgetMore more={total - ROWS} to={to} />;
-}
 
 // ---- Backups ------------------------------------------------------------------
 
@@ -111,8 +107,8 @@ function Backups() {
           />
         </StatGroup>
         {alarms.length > 0 && (
-          <List className="home-admin-list">
-            {alarms.slice(0, ROWS).map((a) => (
+          <WidgetList className="home-admin-list" rows={ROWS}>
+            {alarms.map((a) => (
               <ListItem
                 key={a.kind}
                 href={href(link.path, link.query)}
@@ -121,7 +117,7 @@ function Backups() {
                 {alarmTitle(a)}
               </ListItem>
             ))}
-          </List>
+          </WidgetList>
         )}
       </WidgetQuery>
     </WidgetCard>
@@ -167,17 +163,8 @@ function Nodes() {
           />
         </StatGroup>
         {(behind.length > 0 || stranded.length > 0) && (
-          <List className="home-admin-list">
-            {behind.slice(0, ROWS).map(({ node: n, caption }) => (
-              <ListItem
-                key={`node:${n.id}`}
-                href={href(["settings", "nodes", n.id])}
-                leading={<StandingTag caption={caption} />}
-              >
-                {n.id}
-              </ListItem>
-            ))}
-            {stranded.slice(0, ROWS).map((s) => (
+          <WidgetList className="home-admin-list" rows={ROWS}>
+            {stranded.map((s) => (
               <ListItem
                 key={`seat:${s.handle}`}
                 href={href(["settings", "nodes"])}
@@ -186,7 +173,16 @@ function Nodes() {
                 {s.handle}
               </ListItem>
             ))}
-          </List>
+            {behind.map(({ node: n, caption }) => (
+              <ListItem
+                key={`node:${n.id}`}
+                href={href(["settings", "nodes", n.id])}
+                leading={<StandingTag caption={caption} />}
+              >
+                {n.id}
+              </ListItem>
+            ))}
+          </WidgetList>
         )}
       </WidgetQuery>
     </WidgetCard>
@@ -237,8 +233,8 @@ function Integrations() {
           <WidgetNote>{`${plural(working, "connected tool")}, all working.`}</WidgetNote>
         ) : (
           <>
-            <List>
-              {owed.slice(0, ROWS).map(({ entry, state }) => (
+            <WidgetList rows={ROWS}>
+              {owed.map(({ entry, state }) => (
                 <ListItem
                   key={entry.key}
                   href={href(["company", "integrations", entry.key])}
@@ -248,8 +244,7 @@ function Integrations() {
                   {entry.name}
                 </ListItem>
               ))}
-            </List>
-            <More total={owed.length} to={["company", "integrations"]} />
+            </WidgetList>
             {working > 0 && <WidgetNote>{`${plural(working, "other tool")} working.`}</WidgetNote>}
           </>
         )}
@@ -283,8 +278,8 @@ function McpServers() {
             : undefined
         }
       >
-        <List>
-          {servers.slice(0, ROWS).map((s) => {
+        <WidgetList rows={ROWS}>
+          {servers.map((s) => {
             const words = SERVER_STATE[s.state];
             return (
               <ListItem
@@ -296,8 +291,7 @@ function McpServers() {
               </ListItem>
             );
           })}
-        </List>
-        <More total={servers.length} to={["settings", "mcp-tools"]} />
+        </WidgetList>
         {failing === 0 && servers.length > 0 && (
           <WidgetNote>{`${plural(servers.length, "server")}, all running.`}</WidgetNote>
         )}
@@ -334,8 +328,8 @@ function Models() {
             : undefined
         }
       >
-        <List>
-          {entries.slice(0, ROWS).map((entry) => {
+        <WidgetList rows={ROWS}>
+          {entries.map((entry) => {
             const health = HEALTH[entry.health];
             return (
               <ListItem
@@ -358,8 +352,7 @@ function Models() {
               </ListItem>
             );
           })}
-        </List>
-        <More total={entries.length} to={["settings", "models"]} />
+        </WidgetList>
         {stopped === 0 && unused === 0 && entries.length > 0 && (
           <WidgetNote>{`${plural(entries.length, "model")}, each ready and in use.`}</WidgetNote>
         )}
@@ -432,8 +425,8 @@ function Secrets() {
         </StatGroup>
         {unused.length > 0 && (
           <>
-            <List className="home-admin-list">
-              {unused.slice(0, ROWS).map((r) => (
+            <WidgetList className="home-admin-list" rows={ROWS}>
+              {unused.map((r) => (
                 <ListItem
                   key={r.name}
                   href={href(["settings", "secrets", r.name])}
@@ -442,8 +435,7 @@ function Secrets() {
                   {r.name}
                 </ListItem>
               ))}
-            </List>
-            <More total={unused.length} to={["settings", "secrets"]} />
+            </WidgetList>
           </>
         )}
       </WidgetQuery>
@@ -492,8 +484,8 @@ function Configuration() {
             sub={fleet.data ? `of ${plural(nodes.length, "node")}` : "not read"}
           />
         </StatGroup>
-        <List className="home-admin-list">
-          {revisions.slice(0, 3).map((r) => (
+        <WidgetList className="home-admin-list" rows={3}>
+          {revisions.map((r) => (
             <ListItem
               key={r.revision_id}
               href={href(["settings", "config", "revisions", r.revision_id])}
@@ -502,7 +494,7 @@ function Configuration() {
               {r.summary || r.revision_id.slice(0, 8)}
             </ListItem>
           ))}
-        </List>
+        </WidgetList>
       </WidgetQuery>
     </WidgetCard>
   );
@@ -520,8 +512,12 @@ interface Change {
 
 function AuditLog() {
   const now = useNow();
-  const config = useQuery("config_audit", { limit: ROWS }, { pollMs: POLL_MS });
-  const runtime = useQuery("events", { source: OPERATOR_SOURCE, limit: ROWS }, { pollMs: POLL_MS });
+  const config = useQuery("config_audit", { limit: WIDGET_PAGE }, { pollMs: POLL_MS });
+  const runtime = useQuery(
+    "events",
+    { source: OPERATOR_SOURCE, limit: WIDGET_PAGE },
+    { pollMs: POLL_MS },
+  );
   const changes = useMemo<Change[]>(() => {
     const out: Change[] = [];
     for (const r of config.data ?? []) {
@@ -542,7 +538,7 @@ function AuditLog() {
         path: ["settings", "audit"],
       });
     }
-    return out.sort((a, b) => b.at.localeCompare(a.at)).slice(0, ROWS);
+    return out.sort((a, b) => b.at.localeCompare(a.at)).slice(0, WIDGET_PAGE);
   }, [config.data, runtime.data]);
   const failed = config.error ? config : runtime.error ? runtime : null;
   return (
@@ -560,7 +556,14 @@ function AuditLog() {
             : undefined
         }
       >
-        <List>
+        <WidgetList
+          rows={ROWS}
+          // EACH HALF READ A PAGE: one that came back full may hold more.
+          capped={
+            (config.data?.length ?? 0) >= WIDGET_PAGE ||
+            (runtime.data?.events.length ?? 0) >= WIDGET_PAGE
+          }
+        >
           {changes.map((c) => (
             <ListItem
               key={c.id}
@@ -570,7 +573,7 @@ function AuditLog() {
               {c.who ? `${c.who}: ${c.what}` : c.what}
             </ListItem>
           ))}
-        </List>
+        </WidgetList>
       </WidgetQuery>
     </WidgetCard>
   );
@@ -645,8 +648,8 @@ function PeopleWidget() {
             )
           ) : (
             <>
-              <List className="home-admin-list">
-                {findings.slice(0, ROWS).map((f, i) => {
+              <WidgetList className="home-admin-list" rows={ROWS}>
+                {findings.map((f, i) => {
                   const words = findingWords(f.kind);
                   return (
                     <ListItem
@@ -660,8 +663,7 @@ function PeopleWidget() {
                     </ListItem>
                   );
                 })}
-              </List>
-              <More total={findings.length} to={["settings", "people"]} />
+              </WidgetList>
             </>
           ))}
       </WidgetQuery>

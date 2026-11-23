@@ -22,7 +22,6 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
-	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -81,6 +80,12 @@ type LocalModel struct {
 	// TokenLifetime is how long the harness's headless token lasts, zero when
 	// unknown or not a token.
 	TokenLifetime time.Duration
+	// StoredAt and StoredBy are when and by whom the store wrote the value
+	// this node resolves Variable from, as its snapshot holds it; zero when
+	// the value came from elsewhere. The node's own expiry alarm judges the
+	// same instant, so the page and the alarm above it agree.
+	StoredAt time.Time
+	StoredBy string
 }
 
 // ModelSource is the engine's half of the model questions: what this node
@@ -88,12 +93,6 @@ type LocalModel struct {
 // ([Sources.Alarms]).
 type ModelSource interface {
 	LocalModels() []LocalModel
-}
-
-// SecretRows lists the fleet's secret rows, metadata only: when each was
-// stored and by whom, which a model's credential is dated by.
-type SecretRows interface {
-	List(ctx context.Context) ([]secrets.Record, error)
 }
 
 // DeviceSignIns lists the fleet's device sign-ins in progress or lingering
@@ -479,10 +478,6 @@ func (s Sources) llmEntries(ctx context.Context, _ Params) (any, error) {
 		for _, m := range s.Models.LocalModels() {
 			local[m.Key] = m
 		}
-		stored, err := s.storedRows(ctx)
-		if err != nil {
-			return nil, err
-		}
 		usage := s.modelUsage(ctx)
 		devices, err := s.runningDevices(ctx, now)
 		if err != nil {
@@ -490,7 +485,7 @@ func (s Sources) llmEntries(ctx context.Context, _ Params) (any, error) {
 		}
 		for _, key := range company.Providers.ProviderOrder() {
 			entry := company.Providers.LLM[key]
-			e := s.modelEntry(company, organization, key, &entry, local[key], reports, stored,
+			e := s.modelEntry(company, organization, key, &entry, local[key], reports,
 				usage[key], now)
 			if d, ok := devices[key]; ok {
 				view := DeviceOf(d)
@@ -531,22 +526,6 @@ func memberEntry(e ModelEntry) MemberEntry {
 		out.SittingOut = &sit
 	}
 	return out
-}
-
-// storedRows is the fleet's secret rows by name.
-func (s Sources) storedRows(ctx context.Context) (map[string]secrets.Record, error) {
-	out := map[string]secrets.Record{}
-	if s.Secrets == nil {
-		return out, nil
-	}
-	rows, err := s.Secrets.List(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list the secret store: %w", err)
-	}
-	for _, row := range rows {
-		out[row.Name] = row
-	}
-	return out, nil
 }
 
 // modelUsage is each entry's spend over [ModelUsageDays], through the same
@@ -595,7 +574,7 @@ func (s Sources) runningDevices(ctx context.Context, now time.Time) (map[string]
 // modelEntry is one entry's admin reading.
 func (s Sources) modelEntry(company *config.Company, organization *org.Organization, key string,
 	entry *config.LLMProvider, local LocalModel, reports []nodeModels,
-	stored map[string]secrets.Record, usage ModelUsage, now time.Time) ModelEntry {
+	usage ModelUsage, now time.Time) ModelEntry {
 
 	e := ModelEntry{Key: key, Harness: string(cmp.Or(entry.Harness, config.Harness("claude-code"))),
 		Model: entry.Model, UsedBy: usedBy(company, key),
@@ -616,11 +595,11 @@ func (s Sources) modelEntry(company *config.Company, organization *org.Organizat
 		}
 	}
 	// WHERE THE VALUE CAME FROM: the store, which resolution reads first,
-	// when a row holds the variable; else the environment it resolved from.
+	// when this node's snapshot holds the variable; else the environment it
+	// resolved from.
 	source := "none"
-	row, inStore := stored[local.Variable]
 	switch {
-	case local.Variable != "" && inStore:
+	case local.Variable != "" && !local.StoredAt.IsZero():
 		source = "store"
 	case local.Variable != "" && resolves:
 		source = "environment"
@@ -634,9 +613,9 @@ func (s Sources) modelEntry(company *config.Company, organization *org.Organizat
 		e.SignIn.Hint = ptr(local.Hint)
 	}
 	if source == "store" {
-		at := row.UpdatedAt
+		at := local.StoredAt
 		e.SignIn.StoredAt = &at
-		e.SignIn.StoredBy = ptr(row.UpdatedBy)
+		e.SignIn.StoredBy = ptr(local.StoredBy)
 		if local.TokenLifetime > 0 && route == "token" {
 			expires := at.Add(local.TokenLifetime)
 			e.SignIn.ExpiresAt = &expires

@@ -10,16 +10,22 @@
  */
 
 import { useMemo } from "react";
-import { List, ListItem, StatCard, StatGroup, StatusDot } from "@crewlethq/ui";
+import { ListItem, StatCard, StatGroup, StatusDot } from "@crewlethq/ui";
 import { MapGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import type { AtlasCoverage } from "~/contract/atlas.ts";
 import { plural } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { WidgetCard, WidgetMore, WidgetQuery, defineWidgets } from "~/routes/home/board/kit.tsx";
+import {
+  WIDGET_PAGE,
+  WidgetCard,
+  WidgetList,
+  WidgetQuery,
+  defineWidgets,
+} from "~/routes/home/board/kit.tsx";
 import { COVERAGE, HEALTH } from "./words.ts";
 
-/** The entries the card lists before it says how many more the page holds. */
+/** The entries the card lists at its content's height. */
 const ROWS = 4;
 
 /** A Home is glanced at, not watched: half the page's own cadence. */
@@ -29,7 +35,7 @@ const POLL_MS = 60_000;
 const WHOLE = {};
 
 /** The most urgent entries first; the quiet ones a short atlas answers are left out below. */
-const URGENT = { sort: "health", limit: ROWS };
+const URGENT = { sort: "health", limit: WIDGET_PAGE };
 
 /**
  * Every row's tracks: the health word in a column of its own, wide enough
@@ -97,7 +103,7 @@ function Attention() {
             sub={look > 0 ? "waiting on a person" : "nothing waiting"}
           />
         </StatGroup>
-        <List className="home-admin-list" template={ROW}>
+        <WidgetList className="home-admin-list" template={ROW} rows={ROWS} total={wrong}>
           {rows.map((row) => (
             <ListItem
               key={row.id}
@@ -114,8 +120,7 @@ function Attention() {
               </span>
             </ListItem>
           ))}
-        </List>
-        <WidgetMore more={wrong - rows.length} to={ATLAS} />
+        </WidgetList>
       </WidgetQuery>
     </WidgetCard>
   );

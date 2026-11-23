@@ -82,7 +82,7 @@ func sinkCases() []sinkCase {
 						if err != nil {
 							t.Fatalf("All: %v", err)
 						}
-						return got
+						return got.Values
 					}
 			},
 		},
