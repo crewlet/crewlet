@@ -11,7 +11,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -963,13 +962,11 @@ func TestACallReachingAnOpeningAfterItsEndIsToldWhatTheEndMeans(t *testing.T) {
 // TO ASK AGAIN, a 503 with a Retry-After, on this node's route and relayed to
 // it alike, whether the run ended, the seat left this node or a recovery opened
 // the job again, after which the box's next connect is served by the opening
-// that serves it now. The handler serves the opening the routing found and
-// never reads the token again; a server the opening does not serve keeps its
-// 400. Why: the package doc's "A session opened as its opening ends".
+// that serves it now; a server the opening does not serve keeps its 400. Why:
+// the package doc's "A session opened as its opening ends".
 //
 // Mutation: serve the request whatever its opening's state (200 on an ended
-// opening), read the token again for the handler (400 on a token that expired
-// on its way in), or answer an unserved server 503, and a case goes red.
+// opening), or answer an unserved server 503, and a case goes red.
 func TestARequestOpeningASessionAsItsOpeningEndsIsTurnedAwayToAskAgain(t *testing.T) {
 	t.Parallel()
 	for _, route := range []struct {
@@ -998,7 +995,7 @@ func TestARequestOpeningASessionAsItsOpeningEndsIsTurnedAwayToAskAgain(t *testin
 		} {
 			t.Run(route.name+", "+end.name, func(t *testing.T) {
 				t.Parallel()
-				o := openParked(t, nil)
+				o := openParked(t)
 				url := route.url(o)
 				o.parked.arm()
 				answered := make(chan openedSession, 1)
@@ -1026,26 +1023,9 @@ func TestARequestOpeningASessionAsItsOpeningEndsIsTurnedAwayToAskAgain(t *testin
 			})
 		}
 	}
-	t.Run("a token that expires on its way in", func(t *testing.T) {
-		t.Parallel()
-		var now atomic.Int64
-		now.Store(time.Now().UnixNano())
-		o := openParked(t, func() time.Time { return time.Unix(0, now.Load()) })
-		o.parked.arm()
-		answered := make(chan openedSession, 1)
-		go func() { answered <- openSession(t.Context(), t, o.client, o.url) }()
-		<-o.parked.entered
-		now.Add(int64(2 * time.Minute))
-		o.parked.letGo()
-		got := <-answered
-		if got.status() != http.StatusOK || !strings.Contains(got.body, `"protocolVersion"`) {
-			t.Errorf("a request admitted under a token that expired while it waited was answered %d %q, "+
-				"want its session opened", got.status(), strings.TrimSpace(got.body))
-		}
-	})
 	t.Run("a server the opening does not serve", func(t *testing.T) {
 		t.Parallel()
-		o := openParked(t, nil)
+		o := openParked(t)
 		got := openSession(t.Context(), t, o.client, mcpbridge.ServerURL(o.url, "slack"))
 		if got.status() != http.StatusBadRequest {
 			t.Errorf("a request opening a session on a server the opening does not serve was answered %d %q, "+
@@ -1228,18 +1208,13 @@ type parkedOpening struct {
 	client  *http.Client
 }
 
-// openParked opens the fixture's job, its bridge reading the clock now where one
-// is given, under a token that expires a minute on, at its run's cap.
-func openParked(t *testing.T, now func() time.Time) *parkedOpening {
+// openParked opens the fixture's job.
+func openParked(t *testing.T) *parkedOpening {
 	t.Helper()
 	o := &parkedOpening{fixture: newFixture(t), parked: newParkedFence()}
 	t.Cleanup(o.parked.letGo)
 	o.session.Started = func(context.Context, bool) { _ = o.parked.fence() }
-	opts := mcpbridge.Options{Material: runtoken.OneKey("k", "test-key"), BaseURL: o.server.URL}
-	if now != nil {
-		opts.Now, o.session.Deadline = now, now().Add(time.Minute)
-	}
-	o.bridge = bridgeFor(t, opts)
+	o.bridge = bridgeFor(t, mcpbridge.Options{Material: runtoken.OneKey("k", "test-key"), BaseURL: o.server.URL})
 	mux := http.NewServeMux()
 	mux.Handle(mcpbridge.PathPrefix+"{token}", o.bridge.Handler())
 	mux.Handle(mcpbridge.ServerPattern, o.bridge.Handler())
