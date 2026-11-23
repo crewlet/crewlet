@@ -1063,7 +1063,6 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		Resume:      continued.session,
 		Carried:     continued.carried,
 		Env:         jobEnv,
-		SignInEnv:   req.Spec.SignInEnv,
 		// FROM THE SPEC, which is where the provider default and the
 		// seat's override have already been reconciled. A Limits the
 		// caller passed alongside would be a second answer to the same

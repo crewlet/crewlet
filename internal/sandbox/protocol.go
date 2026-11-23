@@ -134,12 +134,6 @@ type Spec struct {
 	// telemetry added at the job's start.
 	Env map[string]string
 
-	// SignInEnv is the names in Env that sign the run's harness in: its
-	// profile's token, key and sign-in variables, and the entry's credentials
-	// ([RunRequest.SignInEnv]). The harness reads them; the commands its model
-	// runs are started without them.
-	SignInEnv []string
-
 	// CredentialFiles is a subscription-harness login: a path relative to the
 	// box home mapped to an absolute path on the ENGINE HOST.
 	//
@@ -1143,12 +1137,6 @@ type RunRequest struct {
 	FreshBrief string
 
 	Env map[string]string
-
-	// SignInEnv is the names in Env its harness signs in by ([Spec.SignInEnv]).
-	// The runner hands them to the harness and keeps them, with its own wiring's
-	// variables, out of the environment of the commands the model runs, through
-	// the harness's own mechanism for that environment.
-	SignInEnv []string
 
 	Limits Limits
 
