@@ -1803,6 +1803,21 @@ Set it back to `true`, or remove the key (on is the default), and the next apply
 starts it with the credentials its seats kept. Removing a server instead takes
 every block that names it: see [Removing a server](#removing-a-server).
 
+### A browser on the engine host
+
+A stdio server that launches Playwright MCP (the `@playwright/mcp` package, its
+`playwright-mcp` command or its `mcr.microsoft.com/playwright/mcp` image) runs a
+web browser on the engine host, outside every box, for every seat and phase
+that reaches it: a page's words reach a model holding the seat's tools, beside
+the engine's own keys. `crewlet validate` and a `/config` write advise each
+such enabled server, at the command or argument that names Playwright MCP, as
+*A browser on the engine host*, and every node logs it as a
+[`config_advisory`](../concepts/configuration.md#what-an-applied-company-is-worth-knowing).
+A seat that needs a browser gets one in its own container box with
+`role.sandbox.browser: true` instead
+([A seat's browser](../concepts/code-sandbox.md#a-seats-browser)): keep such a
+server only where a browser on the engine host is what you mean.
+
 ### Removing a server
 
 Beyond its own entry, a server is named from three places: every seat's and
@@ -1869,7 +1884,7 @@ write that breaks one is refused at the field, saying what to write instead:
 
 | Field | Rule | Why |
 |---|---|---|
-| `name` | Lowercase letters, digits and hyphens, starting and ending with a letter or a digit, at most 32 characters; not `crewlet` or `container` | It is the origin of every tool the server serves (`mcp:<name>`), the key seats declare its credentials under, a route segment, and, for a server an executor's box runs, the middle of every tool name the harness hands its model (`mcp__<name>__<tool>`). `crewlet` is the seat's own tools' name; `container` is Claude Code's for its own container's tools, whose results it clears from a long session |
+| `name` | Lowercase letters, digits and hyphens, starting and ending with a letter or a digit, at most 32 characters; not `crewlet`, `container` or `browser` | It is the origin of every tool the server serves (`mcp:<name>`), the key seats declare its credentials under, a route segment, and, for a server an executor's box runs, the middle of every tool name the harness hands its model (`mcp__<name>__<tool>`). `crewlet` is the seat's own tools' name; `container` is Claude Code's for its own container's tools, whose results it clears from a long session; `browser` is a browser seat's [own browser](../concepts/code-sandbox.md#a-seats-browser) in its box, which takes the place of a server of that name there |
 | `tool_prefix` | Letters, digits, `_` and `-`, at most 49 characters | Put before every tool the server serves; a tool's whole name is at most 50 characters ([below](#a-tools-name)) |
 | A key of an http server's `headers`, of a seat's or a unit's `mcp_env` block for it, or of its `seat_credentials` | An HTTP header name (RFC 9110's token): letters, digits and `-`, no space, colon or quote | The value is sent as a request header |
 | A key of a stdio server's `env`, of a block for it, or of its `seat_credentials` | An environment variable name: letters, digits and `_`, not starting with a digit | The value is an environment variable of the server's process |
@@ -1886,8 +1901,8 @@ breaks it is not started, fails on its row with the reason (the address is
 never quoted, since a resolved one can carry a secret), and no executor's box
 is given it.
 
-A name's characters and length, the prefix, the keys and the address are
-admission rules: a revision stored before them still applies, and
+A name's characters and length, the prefix, the keys, the address and the name
+`browser` are admission rules: a revision stored before them still applies, and
 `crewlet validate` and the warnings on a config read name each one, at the path
 a write keeping it is refused at. The names `crewlet` and `container` are
 refused at apply too, like every

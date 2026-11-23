@@ -1,5 +1,5 @@
 // Package hostreach is the launch's check that a browser seat's box is off
-// its host's network: that the box runs on the engine's own
+// its host's network (ADR-0180): that the box runs on the engine's own
 // kernel, and that no route it has carries a connection to the engine's
 // loopback. internal/sandbox runs it in every container box at every launch,
 // before the box's helper is written, so it judges the box as it is: a kept

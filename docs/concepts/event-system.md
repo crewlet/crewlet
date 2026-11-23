@@ -540,7 +540,8 @@ task_assigned              # published to the seat's inbox by the scheduler
 work_pickup                # published to the seat's inbox by the work pickup
 delegated_review           # published to a delegate's inbox once a delegated request is parked
 executor_launched        # names the providers.llm entry the launch picked
-                           # and its model (provider_key, model)
+                           # and its model (provider_key, model), and a
+                           # browser seat's browser, ready or withheld (browser)
 executor_asked
 executor_finished
 executor_failed         # a run failed, once: published under an id and an
