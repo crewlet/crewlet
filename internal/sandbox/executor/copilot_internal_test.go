@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -1147,10 +1148,14 @@ func TestAWebDeniedCopilotRunHasNoWebTool(t *testing.T) {
 }
 
 // The run is pinned to its own home and trusted by COPILOT_ALLOW_ALL=true
-// (route (a), measured to widen nothing beyond --yolo); the switches that open
-// what a repository loads in prompt mode are unset.
+// (route (a), measured to widen nothing beyond --yolo), with the prompt-mode
+// switches on, so a repository's hooks, MCP servers and extensions load as in
+// an interactive session. The variables that add instruction and skill
+// directories are left as set; the ones that change how the run reaches its
+// model or waits are unset.
 //
-// Mutation: leave COPILOT_ALLOW_ALL out of the pins — the case fails.
+// Mutations, each red: leave COPILOT_ALLOW_ALL or a prompt-mode switch out of
+// the pins; unset COPILOT_SKILLS_DIRS again.
 func TestACopilotRunIsPinnedToItsHomeAndTrust(t *testing.T) {
 	paths := Paths{Home: "/box"}
 	pins := map[string]string{}
@@ -1158,17 +1163,71 @@ func TestACopilotRunIsPinnedToItsHomeAndTrust(t *testing.T) {
 		pins[p.Name] = p.Value
 	}
 	want := map[string]string{"COPILOT_HOME": "/box/.copilot", "COPILOT_AUTO_UPDATE": "false",
-		"COPILOT_TELEMETRY_DISABLED": "true", "COPILOT_MCP_TOOL_CACHE": "false", "COPILOT_ALLOW_ALL": "true"}
+		"COPILOT_TELEMETRY_DISABLED": "true", "COPILOT_MCP_TOOL_CACHE": "false", "COPILOT_ALLOW_ALL": "true",
+		"GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS": "true", "GITHUB_COPILOT_PROMPT_MODE_WORKSPACE_MCP": "true",
+		"GITHUB_COPILOT_PROMPT_MODE_EXTENSIONS": "true"}
 	for k, v := range want {
 		if pins[k] != v {
 			t.Errorf("%s = %q, want %q", k, pins[k], v)
 		}
 	}
 	unset := (Copilot{}).Output(paths).Unset
-	for _, name := range []string{"GITHUB_COPILOT_PROMPT_MODE_EXTENSIONS", "COPILOT_SKILLS_DIRS",
-		"COPILOT_TASK_WAIT_TIMEOUT_SECONDS", "COPILOT_CLI_VERSION"} {
+	for _, name := range []string{"COPILOT_TASK_WAIT_TIMEOUT_SECONDS", "COPILOT_CLI_VERSION", "COPILOT_OFFLINE"} {
 		if !slices.Contains(unset, name) {
 			t.Errorf("%s is not unset", name)
+		}
+	}
+	for _, name := range []string{"COPILOT_CUSTOM_INSTRUCTIONS_DIRS", "COPILOT_SKILLS_DIRS"} {
+		if slices.Contains(unset, name) {
+			t.Errorf("%s is unset, so the directories it adds do not load", name)
+		}
+	}
+}
+
+// A RUN SETS ITS OWN KEYS IN THE HOME'S SETTINGS AND KEEPS THE REST: Copilot
+// reads user settings from one file, so the run's `experimental` and `bashEnv`
+// are merged into whatever a person or the image wrote there, over their own
+// value for either. A file holding no JSON object is refused by name, not
+// replaced.
+//
+// Mutation: write the run's keys whole again, or replace an unreadable file.
+func TestACopilotRunSetsItsKeysInTheHomesSettings(t *testing.T) {
+	for name, tc := range map[string]struct {
+		home string
+		want map[string]any
+	}{
+		"no settings": {want: map[string]any{"experimental": true, "bashEnv": true}},
+		"a person's settings": {home: `{"model":"gpt-x","experimental":false,"hooks":{"sessionStart":[]}}`,
+			want: map[string]any{"model": "gpt-x", "experimental": true, "bashEnv": true,
+				"hooks": map[string]any{"sessionStart": []any{}}}},
+		"an empty file": {home: "\n", want: map[string]any{"experimental": true, "bashEnv": true}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			box := sandbox.NewFakeSandbox("b")
+			paths := PathsFor(box)
+			if tc.home != "" {
+				box.Put(paths.CopilotSettings(), tc.home)
+			}
+			if _, err := (Copilot{}).WriteConfig(t.Context(), box, sandbox.RunRequest{}, Session{}, paths); err != nil {
+				t.Fatalf("WriteConfig: %v", err)
+			}
+			raw, _ := box.ReadFile(t.Context(), paths.CopilotSettings())
+			var got map[string]any
+			if err := json.Unmarshal(raw, &got); err != nil || !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("settings = %s (%v), want %v", raw, err, tc.want)
+			}
+		})
+	}
+	for _, bad := range []string{"not json", "[1]", "null"} {
+		box := sandbox.NewFakeSandbox("b")
+		paths := PathsFor(box)
+		box.Put(paths.CopilotSettings(), bad)
+		_, err := (Copilot{}).WriteConfig(t.Context(), box, sandbox.RunRequest{}, Session{}, paths)
+		if err == nil || !strings.Contains(err.Error(), paths.CopilotSettings()) {
+			t.Errorf("settings %q: err = %v, want a refusal naming the file", bad, err)
+		}
+		if raw, _ := box.ReadFile(t.Context(), paths.CopilotSettings()); string(raw) != bad {
+			t.Errorf("settings %q were replaced by %q", bad, raw)
 		}
 	}
 }
@@ -1231,13 +1290,12 @@ func TestCopilotWriteConfigWritesItsHomeAndKeepsTheLogin(t *testing.T) {
 }
 
 // A run with neither notes nor a cap is written no extension, and what an
-// earlier run wrote in the home is the clear's to remove: the instructions,
-// a fresh session's copy, the tool environment file and every place Copilot
-// loads configuration from that the launch does not write, the extensions
-// directory among them ([Paths.CopilotLoaded]).
+// earlier run wrote is the clear's to remove: the instructions, a fresh
+// session's copy, the tool environment file and the run's own notes
+// extension, and nothing else of the home's.
 //
-// Mutation: drop the loaded places from the artifacts, or write the extension
-// for every run, and the case fails.
+// Mutation: clear the whole extensions directory, or write the extension for
+// every run, and the case fails.
 func TestACopilotRunsArtifactsAreItsHomesOwnFiles(t *testing.T) {
 	box := sandbox.NewFakeSandbox("b")
 	paths := PathsFor(box)
@@ -1248,10 +1306,8 @@ func TestACopilotRunsArtifactsAreItsHomesOwnFiles(t *testing.T) {
 		t.Error("an extension was written for a run with no notes and no cap")
 	}
 	files, dirs := (Copilot{}).artifactFiles(paths), (Copilot{}).artifactDirs(paths)
-	loadedFiles, loadedDirs := paths.CopilotLoaded()
-	if !slices.Equal(files, append([]string{paths.CopilotInstructions(), paths.CopilotExtensionFresh(),
-		paths.CopilotToolEnv()}, loadedFiles...)) ||
-		!slices.Equal(dirs, loadedDirs) || !slices.Contains(dirs, paths.CopilotHome()+"/extensions") {
+	if !slices.Equal(files, []string{paths.CopilotInstructions(), paths.CopilotExtensionFresh(),
+		paths.CopilotToolEnv()}) || !slices.Equal(dirs, []string{paths.CopilotExtension()}) {
 		t.Fatalf("artifacts = %v, %v", files, dirs)
 	}
 }

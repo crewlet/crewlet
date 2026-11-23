@@ -1,7 +1,9 @@
 package executor
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"maps"
@@ -31,9 +33,10 @@ const CopilotName = "copilot"
 // writes the run's settings, standing instructions and notes extension, and its
 // session is `session-state/<id>/`, packed and restored by its script
 // ([copilotSessionGate], [copilotPack]). Every run is approved every tool
-// (`--yolo`) and its folder trusted (COPILOT_ALLOW_ALL, [copilotTrust]), so a
-// repository's hooks, MCP servers and settings load beneath the run's, as a
-// repository's do under Claude Code. Its end on request is end.go's protocol.
+// (`--yolo`), its folder trusted (COPILOT_ALLOW_ALL, [copilotTrust]) and prompt
+// mode opened ([copilotPromptMode]), so a repository's hooks, MCP servers,
+// extensions and settings load beneath the run's, and its home's own
+// configuration loads beside the run's, as either does in a person's session. Its end on request is end.go's protocol.
 type Copilot struct{}
 
 var (
@@ -521,19 +524,16 @@ func copilotOnDemand(paths Paths, session string, at packAt) string {
 		fmt.Sprintf("[ -n \"$packed\" ] || exit %d\n", packFailed)
 }
 
-// copilotSwitchesOff is every variable that changes what a Copilot run loads or
-// how long it waits, removed whatever set it (`copilot help environment`, 1.0.114):
-//   - GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS, _WORKSPACE_MCP and _EXTENSIONS open
-//     a repository's hooks, MCP servers and extensions to prompt mode;
-//   - COPILOT_CUSTOM_INSTRUCTIONS_DIRS and COPILOT_SKILLS_DIRS add instructions
-//     and skills no seat was given; COPILOT_OFFLINE cuts the run off its model;
-//   - the two compaction thresholds move where a session compacts, and
-//     COPILOT_TASK_WAIT_TIMEOUT_SECONDS how long a run waits for background agents;
-//   - COPILOT_CLI_VERSION selects a cached package other than the binary's, and
-//     COPILOT_ASSISTED_APPROVAL puts a judge model before every approval.
+// copilotSwitchesOff is every variable that changes how a Copilot run reaches
+// its model or how long it waits, removed whatever set it (`copilot help
+// environment`, 1.0.114): COPILOT_OFFLINE cuts the run off its model; the two
+// compaction thresholds move where a session compacts, and
+// COPILOT_TASK_WAIT_TIMEOUT_SECONDS how long a run waits for background agents;
+// COPILOT_CLI_VERSION selects a cached package other than the binary's, and
+// COPILOT_ASSISTED_APPROVAL puts a judge model before every approval. What a
+// run loads is not among them: a person's added instruction and skill
+// directories (COPILOT_CUSTOM_INSTRUCTIONS_DIRS, COPILOT_SKILLS_DIRS) load.
 var copilotSwitchesOff = []string{
-	"GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS", "GITHUB_COPILOT_PROMPT_MODE_WORKSPACE_MCP",
-	"GITHUB_COPILOT_PROMPT_MODE_EXTENSIONS", "COPILOT_CUSTOM_INSTRUCTIONS_DIRS", "COPILOT_SKILLS_DIRS",
 	"COPILOT_OFFLINE", "COPILOT_BACKGROUND_COMPACTION_THRESHOLD", "COPILOT_BUFFER_EXHAUSTION_THRESHOLD",
 	"COPILOT_TASK_WAIT_TIMEOUT_SECONDS", "COPILOT_CLI_VERSION", "COPILOT_ASSISTED_APPROVAL",
 }
@@ -551,22 +551,34 @@ func (Copilot) Output(paths Paths) Output {
 // would mean rewriting the login's config.json. MEASURED TO WIDEN NOTHING
 // BEYOND `--yolo` on 1.0.114: a `--deny-tool` rule (an MCP tool's, a shell
 // command's) and a `--deny-url` still refuse, and the repository's MCP servers,
-// hooks and skills load exactly as under trustedFolders, its extensions under
-// neither in prompt mode.
+// hooks and skills load exactly as under trustedFolders.
 const copilotTrust = "true"
+
+// copilotPromptMode is the variables that load in prompt mode what an
+// interactive session loads from a trusted repository: its hooks, its MCP
+// servers and its extensions. Each is read as exactly `true` (the 1.0.114
+// bundle); the extensions' alone has no other switch in prompt mode, where
+// COPILOT_ALLOW_ALL loads the other two as well.
+var copilotPromptMode = []string{"GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS",
+	"GITHUB_COPILOT_PROMPT_MODE_WORKSPACE_MCP", "GITHUB_COPILOT_PROMPT_MODE_EXTENSIONS"}
 
 // Pins is the run's home and posture, over whatever the seat's env, the image
 // or a profile set: COPILOT_HOME ([Paths.CopilotHome]); updates, the client's
 // telemetry and the MCP tool cache off (a cached list showed the previous run's
-// tools, measured); and the folder trusted ([copilotTrust]).
+// tools, measured); the folder trusted ([copilotTrust]); and a repository's
+// hooks, MCP servers and extensions loaded ([copilotPromptMode]).
 func (Copilot) Pins(_ context.Context, _ sandbox.RunRequest, paths Paths) []Pinned {
-	return []Pinned{
+	pins := []Pinned{
 		{Name: "COPILOT_HOME", Value: paths.CopilotHome()},
 		{Name: "COPILOT_AUTO_UPDATE", Value: "false"},
 		{Name: "COPILOT_TELEMETRY_DISABLED", Value: "true"},
 		{Name: "COPILOT_MCP_TOOL_CACHE", Value: "false"},
 		{Name: "COPILOT_ALLOW_ALL", Value: copilotTrust},
 	}
+	for _, name := range copilotPromptMode {
+		pins = append(pins, Pinned{Name: name, Value: "true"})
+	}
+	return pins
 }
 
 // Events is a new decoder for one stream, read whole or followed ([Decoder]).
@@ -576,11 +588,12 @@ func (Copilot) Events() Decoder { return &copilotEvents{} }
 // result IS its stream.
 func (Copilot) Parse(stdout []byte) sandbox.Result { return decodeAll(&copilotEvents{}, stdout) }
 
-// copilotSettings is the run's own user-level settings ([Paths.CopilotSettings]),
-// written whole: `experimental`, without which 1.0.114 loads no extension in
-// prompt mode (measured), so neither the notes nor the turn cap would run. A
-// repository's `experimental: false` does not reach it: extension settings are
-// read from the user's settings alone (measured).
+// copilotSettings is the keys a run sets in the home's user-level settings
+// ([Paths.CopilotSettings], [writeCopilotSettings]): `experimental`, without
+// which 1.0.114 loads no extension in prompt mode (measured), so neither the
+// notes nor the turn cap would run. A repository's `experimental: false` does
+// not reach it: extension settings are read from the user's settings alone
+// (measured).
 type copilotSettings struct {
 	Experimental bool `json:"experimental"`
 	// BashEnv has the shell the model's commands run in read the file BASH_ENV
@@ -590,21 +603,22 @@ type copilotSettings struct {
 }
 
 // WriteConfig writes what a Copilot run reads from its home and its work
-// directory: its settings ([copilotSettings]); its standing instructions
-// ([Paths.CopilotInstructions]), told of notes where it is wired to them; its
-// extension where it reads notes or has a turn cap ([Paths.CopilotExtension]);
-// and its MCP servers, returning the file `--additional-mcp-config` names, with
-// a fresh session's copies beside them ([sandbox.RunRequest.FreshWiring]).
-// What an earlier run wrote there the clear removes first
-// ([Copilot.artifactFiles], [Copilot.artifactDirs]).
+// directory: its settings' keys ([writeCopilotSettings]); its standing
+// instructions ([Paths.CopilotInstructions]), told of notes where it is wired
+// to them; its extension where it reads notes or has a turn cap
+// ([Paths.CopilotExtension]); and its MCP servers, returning the file
+// `--additional-mcp-config` names, which Copilot adds to the home's own
+// `mcp-config.json`, with a fresh session's copies beside them
+// ([sandbox.RunRequest.FreshWiring]). What an earlier run wrote there the
+// clear removes first ([Copilot.artifactFiles], [Copilot.artifactDirs]).
 func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
 	paths Paths) (string, error) {
-	settings := copilotSettings{Experimental: true, BashEnv: true}
 	if err := box.WriteFile(ctx, paths.CopilotToolEnv(), copilotToolEnv()); err != nil {
 		return "", fmt.Errorf("executor: writing the run's tool environment file: %w", err)
 	}
-	if err := writeJSON(ctx, box, paths.CopilotSettings(), settings); err != nil {
-		return "", fmt.Errorf("executor: writing Copilot's settings: %w", err)
+	if err := writeCopilotSettings(ctx, box, paths.CopilotSettings(),
+		copilotSettings{Experimental: true, BashEnv: true}); err != nil {
+		return "", err
 	}
 	system := req.System
 	if req.Steer.Set() {
@@ -639,6 +653,36 @@ func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandb
 		}
 	}
 	return paths.MCPConfig(), nil
+}
+
+// writeCopilotSettings sets own's keys ([copilotSettings]) in file, the home's
+// user-level settings, keeping every other key a person or the image put
+// there: Copilot reads user settings from that one file and has no layer a
+// run could add beside it (1.0.114), so the run's keys are merged in. A file
+// holding no JSON object is refused, naming it, rather than replaced.
+func writeCopilotSettings(ctx context.Context, box sandbox.Sandbox, file string, own copilotSettings) error {
+	raw, err := box.ReadFile(ctx, file)
+	if err != nil {
+		return fmt.Errorf("executor: reading Copilot's settings %s: %w", file, err)
+	}
+	settings := map[string]any{}
+	if len(bytes.TrimSpace(raw)) > 0 {
+		if err = json.Unmarshal(raw, &settings); err != nil || settings == nil {
+			return fmt.Errorf("executor: Copilot's settings %s hold no JSON object (%v): fix the file, "+
+				"or remove it from the box", file, err)
+		}
+	}
+	keys, err := json.Marshal(own)
+	if err != nil {
+		return err
+	}
+	if err = json.Unmarshal(keys, &settings); err != nil {
+		return err
+	}
+	if err = writeJSON(ctx, box, file, settings); err != nil {
+		return fmt.Errorf("executor: writing Copilot's settings: %w", err)
+	}
+	return nil
 }
 
 // writeCopilotExtension writes the extension, wired to steer's notes route
@@ -696,26 +740,19 @@ func copilotMCP(s sandbox.MCPServer) map[string]any {
 	return out
 }
 
-// artifactFiles is the files a Copilot run leaves in its box of its own (its
+// artifactFiles is the files a Copilot run leaves in its box of its own: its
 // standing instructions, a fresh session's extension beside the work
-// directory, its tool environment) and every other file in its home a run
-// would load that its launch does not write ([Paths.CopilotLoaded]), an
-// earlier run's or the image's: a Copilot run loads only the configuration
-// its launch writes. Its settings are written whole by every run; its login
-// and sessions are kept.
+// directory and its tool environment file. Everything else in its home (the
+// login, the sessions, a person's own extensions, hooks, MCP servers, plugins,
+// skills, agents and instructions) is kept, and loads as it would for them.
 func (Copilot) artifactFiles(p Paths) []string {
-	loaded, _ := p.CopilotLoaded()
-	return append([]string{p.CopilotInstructions(), p.CopilotExtensionFresh(), p.CopilotToolEnv()}, loaded...)
+	return []string{p.CopilotInstructions(), p.CopilotExtensionFresh(), p.CopilotToolEnv()}
 }
 
-// artifactDirs is the directories in a Copilot run's home it would load that
-// its launch does not write ([Paths.CopilotLoaded]), removed whole: its
-// extensions (the run's own extension among them, which a later run with
-// none must not find), hooks, plugins, skills, agents and instructions.
-func (Copilot) artifactDirs(p Paths) []string {
-	_, loaded := p.CopilotLoaded()
-	return loaded
-}
+// artifactDirs is the run's own notes extension ([Paths.CopilotExtension]),
+// which a later run with neither notes nor a cap must not find; the home's
+// other extensions stay beside it.
+func (Copilot) artifactDirs(p Paths) []string { return []string{p.CopilotExtension()} }
 
 // notesOffWhy is what switches Copilot's reading of notes off: a managed policy
 // that allows only managed hooks (allowManagedHooksOnly), which stops an
