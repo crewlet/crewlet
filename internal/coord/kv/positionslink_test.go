@@ -81,9 +81,12 @@ func leaderReads(t *testing.T, across kvtest.Across) func() int {
 
 // EVERY POSITIONS CLASS AT ITS BOUND IS READ ACROSS A LEAF'S LINK AT ITS FIRST
 // ASK. A value at its class's bound, on a link at or above the slowest pace
-// allowed, crosses past the read term or a pass's idle: a read given its
+// allowed, crosses past a term read's re-ask or a pass's idle: a read given its
 // class's crossing asks the leader once, and a pass given its quiet delivers
-// the value, asking none. Requests are counted as they reach the member.
+// the value, asking none. A class whose reply crosses inside the re-ask is held
+// a second behind a reply sent ahead of it. Requests are counted as they reach
+// the member. The two classes read at the term cross the floor inside it
+// (TestASmallClassCrossesTheFloorInsideTheReadTerm).
 //
 // Mutation: read a class at the term (replyTerm), and its row asks again or
 // fails.
@@ -92,6 +95,9 @@ func TestEveryPositionsClassAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk(t *tes
 	for _, c := range []struct {
 		name string
 		rate int64
+		// behind is how long the link holds the member's bytes as the read
+		// begins: none, or a second past a term read's re-ask.
+		behind time.Duration
 		// asks is how many leader reads the read makes: one for a key's
 		// read, none for a pass that delivers its value.
 		asks int
@@ -100,7 +106,7 @@ func TestEveryPositionsClassAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk(t *tes
 		write func(ctx context.Context, t *testing.T, member *kv.FleetStore)
 		read  func(ctx context.Context, leaf *kv.FleetStore) error
 	}{
-		{"an MCP listing", 160 << 10, 0, putListing, func(ctx context.Context, leaf *kv.FleetStore) error {
+		{"an MCP listing", 64 << 10, 0, 0, putListing, func(ctx context.Context, leaf *kv.FleetStore) error {
 			updates, err := leaf.WatchMCPListings(ctx)
 			if err != nil {
 				return err
@@ -112,19 +118,27 @@ func TestEveryPositionsClassAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk(t *tes
 			}
 			return fmt.Errorf("the watch ended before its first answer: %w", context.Cause(ctx))
 		}},
-		{"an MCP definition", 64 << 10, 1, putDefinition, func(ctx context.Context, leaf *kv.FleetStore) error {
+		{"an MCP definition", 64 << 10, 0, 1, putDefinition, func(ctx context.Context, leaf *kv.FleetStore) error {
 			_, found, err := leaf.MCPToolDefinition(ctx, linkDigest)
 			return found1(found, err)
 		}},
-		{"an MCP check", 36 << 10, 1, putCheck, func(ctx context.Context, leaf *kv.FleetStore) error {
+		{"an MCP check", 36 << 10, time.Second, 1, putCheck, func(ctx context.Context, leaf *kv.FleetStore) error {
 			_, found, err := leaf.MCPCheck(ctx, "search")
 			return found1(found, err)
 		}},
-		{"a seat's access record", 40 << 10, 0, putSeatAccess, func(ctx context.Context, leaf *kv.FleetStore) error {
+		{"an access review", 36 << 10, time.Second, 1, putAccessReview, func(ctx context.Context, leaf *kv.FleetStore) error {
+			_, _, found, err := leaf.AccessReview(ctx, "sre")
+			return found1(found, err)
+		}},
+		{"the seat access records", 40 << 10, 0, 0, putSeatAccess, func(ctx context.Context, leaf *kv.FleetStore) error {
 			records, err := leaf.SeatAccessRecords(ctx, "gitlab")
 			return found1(len(records) == 1, err)
 		}},
-		{"a Home board", 96 << 10, 1, putHomeBoard, func(ctx context.Context, leaf *kv.FleetStore) error {
+		{"one seat's access record", 40 << 10, 0, 1, putSeatAccess, func(ctx context.Context, leaf *kv.FleetStore) error {
+			_, found, err := leaf.SeatAccessRecord(ctx, "gitlab", "sre")
+			return found1(found, err)
+		}},
+		{"a Home board", 96 << 10, 0, 1, putHomeBoard, func(ctx context.Context, leaf *kv.FleetStore) error {
 			_, _, found, err := leaf.HomeBoard(ctx, "founder")
 			return found1(found, err)
 		}},
@@ -139,6 +153,9 @@ func TestEveryPositionsClassAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk(t *tes
 			defer cancel()
 			c.write(ctx, t, across.Member)
 			asked := leaderReads(t, across)
+			if c.behind > 0 {
+				across.Link.Delay(c.behind)
+			}
 			if err := c.read(ctx, across.Leaf); err != nil {
 				t.Fatalf("read %s at its bound across the link: %v", c.name, err)
 			}
@@ -199,16 +216,25 @@ func putDefinition(ctx context.Context, t *testing.T, member *kv.FleetStore) {
 
 func putCheck(ctx context.Context, t *testing.T, member *kv.FleetStore) {
 	t.Helper()
-	text := randomText(t, coord.MaxMCPErrorBytes)
+	// A TEXT OF ITS OWN FOR EVERY FIELD, so no link compresses the record.
+	const fields, steps = 13, 7
+	texts := make([][]string, coord.MaxMCPCheckNodes)
+	for i := range texts {
+		for range fields {
+			texts[i] = append(texts[i], randomText(t, coord.MaxMCPErrorBytes))
+		}
+	}
 	c := widest(t, coord.MaxMCPErrorBytes, coord.MaxMCPCheckBytes, func(n int) coord.MCPCheck {
 		c := coord.MCPCheck{Server: "search", At: time.Now().UTC(), By: "jane-doe", ByKind: iam.ActorHuman}
-		info := text[:min(n, coord.MaxMCPServerInfoBytes)]
-		for i := range coord.MaxMCPCheckNodes {
-			node := coord.MCPCheckNode{Node: fmt.Sprintf("node-%02d", i), Answered: true, Reason: text[:n],
-				Failure: &coord.MCPInstanceFailure{Class: "exited", Said: text[:n], At: time.Now().UTC()},
-				Server:  coord.MCPServerInfo{Name: info, Title: info, Version: info, Protocol: info}}
-			for range 7 {
-				node.Steps = append(node.Steps, coord.MCPCheckStep{Stage: "launch", State: "failed", Detail: text[:n]})
+		info := min(n, coord.MaxMCPServerInfoBytes)
+		for i, text := range texts {
+			node := coord.MCPCheckNode{Node: fmt.Sprintf("node-%02d", i), Answered: true, Reason: text[0][:n],
+				Failure: &coord.MCPInstanceFailure{Class: "exited", Said: text[1][:n], At: time.Now().UTC()},
+				Server: coord.MCPServerInfo{Name: text[2][:info], Title: text[3][:info], Version: text[4][:info],
+					Protocol: text[5][:info]}}
+			for j := range steps {
+				node.Steps = append(node.Steps, coord.MCPCheckStep{Stage: "launch", State: "failed",
+					Detail: text[6+j][:n]})
 			}
 			c.Nodes = append(c.Nodes, node)
 		}
@@ -216,6 +242,14 @@ func putCheck(ctx context.Context, t *testing.T, member *kv.FleetStore) {
 	}, coord.MCPCheck.EncodedSize)
 	if _, err := member.PutMCPCheck(ctx, c); err != nil {
 		t.Fatalf("put a check at its bound: %v", err)
+	}
+}
+
+func putAccessReview(ctx context.Context, t *testing.T, member *kv.FleetStore) {
+	t.Helper()
+	value := []byte(`"` + randomText(t, coord.MaxAccessReviewBytes-2) + `"`)
+	if created, err := member.CreateAccessReview(ctx, "sre", value); err != nil || !created {
+		t.Fatalf("create an access review at its bound = %v, %v", created, err)
 	}
 }
 
