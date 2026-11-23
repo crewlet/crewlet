@@ -45,12 +45,14 @@ const (
 	// CountCompacted is a thread whose last main compact boundary has no
 	// counted reply after it: the segment the compaction preserved sits before
 	// the boundary, off the chain the count reads, yet the harness sends it;
-	// or a Qwen Code compression whose figure does not read.
+	// or a Qwen Code compression whose figure or history does not read.
 	CountCompacted CountMark = "compacted"
 	// CountMasked is a Gemini CLI session its first request would mask or
 	// collapse before it is sent: tool output past the newest it protects,
-	// or a history past the size it collapses at, each replaced by a stub
-	// the model reads instead, which the request is no longer whole without.
+	// or a history past the size it collapses at; or a Qwen Code session
+	// whose tool answers may reach the size past which its first request
+	// clears the oldest. Each is replaced by a stub the model reads instead,
+	// which the request is no longer whole without.
 	CountMasked CountMark = "masked"
 	// CountUnanchored is an OpenCode session with no counted reply since its
 	// start or its newest completed compaction: OpenCode then estimates the

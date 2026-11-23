@@ -17,7 +17,8 @@ import (
 // brief's UTF-16 units and a dated reminder; it compresses where that is at
 // least its point ([qwenPoint]). The count is an upper bound of it read whole
 // off the kept chat file ([qwenCounting]); twenty tool-answer images after
-// the restart compress whatever the figure ([sandbox.CountMedia]).
+// the restart compress whatever the figure ([sandbox.CountMedia]), and tool
+// answers past [qwenClearsAt] are cleared ([sandbox.CountMasked]).
 
 // qwenSyntheticFailureBytes is the failure 0.28.4 hands a call with no answer
 // at its first request (151 bytes, measured), counted a token a byte.
@@ -27,17 +28,30 @@ const qwenSyntheticFailureBytes = 151
 // whatever the figure (19 did not, 20 did).
 const qwenImageCompaction = 20
 
+// qwenClearsAt is the characters of built-in tool answers past which 0.28.4's
+// first request replaces the oldest with `[Old tool result content cleared]`
+// (over 500,000 in all; 25 of 24,508 had 15 cleared, MEASURE-P2 Q6.2). An
+// MCP tool's answer is never cleared ([qwenMCPPrefix]).
+const qwenClearsAt = 500_000
+
+// qwenMCPPrefix begins every MCP tool's name in a 0.28.4 chat file
+// (`mcp__<server>__<tool>`). Every other answer is counted toward
+// [qwenClearsAt], a superset of the ten built-in tools 0.28.4 clears, so a
+// tool that list missed only tells more.
+const qwenMCPPrefix = "mcp__"
+
 // qwenCounting is one walk's account of a Qwen Code chat file for its count
 // ([qwenCounting.line]): the anchor's figure, the bytes of every message
-// after it, the calls no answer followed, the images since the restart, and
-// what the walk could not read.
+// after it, the calls no answer followed, the images and the bytes of tool
+// answers but MCP's since the restart, whether the restart's own history did
+// not read, and what the walk could not read.
 type qwenCounting struct {
-	anchored, compacted, unsure bool
-	base, tail                  int64
-	restart                     string
-	open                        map[string]bool
-	images                      int
-	marks                       countMarks
+	anchored, compacted, unsure, historyUnread bool
+	base, tail, answers                        int64
+	restart                                    string
+	open                                       map[string]bool
+	images                                     int
+	marks                                      countMarks
 }
 
 // qwenCountLine is one record as the count reads it.
@@ -84,25 +98,30 @@ func (c *qwenCounting) line(raw []byte) {
 }
 
 // compression restarts the count at a chat_compression: its uuid the restart,
-// its new size the figure where it reads, and its history's images counted.
+// its history's images and answers counted, its new size the figure where it
+// reads. A history that does not read is marked for good: no later reply
+// counts what it restores ([qwenCounting.count]).
 func (c *qwenCounting) compression(w qwenCountLine) {
 	c.restart = ""
 	_ = wireDecode(w.UUID, &c.restart)
-	c.open, c.images = map[string]bool{}, 0
+	c.open, c.images, c.answers, c.tail = map[string]bool{}, 0, 0, 0
+	c.anchored, c.compacted, c.unsure = false, true, false
 	var payload struct {
 		Info struct {
 			New *int64 `json:"newTokenCount"`
 		} `json:"info"`
-		History []json.RawMessage `json:"compressedHistory"`
+		History json.RawMessage `json:"compressedHistory"`
 	}
-	if wireDecode(w.Payload, &payload) != nil || payload.Info.New == nil || *payload.Info.New <= 0 {
-		c.anchored, c.compacted, c.unsure, c.tail = false, true, false, 0
-		return
-	}
-	for _, content := range payload.History {
+	var history []json.RawMessage
+	c.historyUnread = wireDecode(w.Payload, &payload) != nil || absent(payload.History) ||
+		wireDecode(payload.History, &history) != nil
+	for _, content := range history {
 		c.images += qwenImages(content)
+		c.answers += qwenAnswerBytes(content)
 	}
-	c.anchored, c.compacted, c.unsure, c.base, c.tail = true, false, false, *payload.Info.New, 0
+	if !c.historyUnread && payload.Info.New != nil && *payload.Info.New > 0 {
+		c.anchored, c.compacted, c.base = true, false, *payload.Info.New
+	}
 }
 
 // qwenFigure is what 0.28.4 reads off a reply's usage: its prompt beside its
@@ -140,6 +159,7 @@ func (c *qwenCounting) message(raw json.RawMessage) {
 	}
 	c.tail += int64(len(raw))
 	c.images += qwenImages(raw)
+	c.answers += qwenAnswerBytes(raw)
 	var m struct {
 		Parts []struct {
 			Call *struct {
@@ -164,6 +184,34 @@ func (c *qwenCounting) message(raw json.RawMessage) {
 			delete(c.open, p.Answer.ID)
 		}
 	}
+}
+
+// qwenAnswerBytes is at least the characters of the tool answers but an MCP
+// tool's ([qwenMCPPrefix]) a message's parts hold, toward [qwenClearsAt]:
+// each answer's bytes as the file holds them, which JSON.stringify wrote, never
+// fewer than its UTF-16 units; the whole message where its parts do not read.
+func qwenAnswerBytes(raw json.RawMessage) int64 {
+	var m struct {
+		Parts []struct {
+			Answer json.RawMessage `json:"functionResponse"`
+		} `json:"parts"`
+	}
+	if wireDecode(raw, &m) != nil {
+		return int64(len(raw))
+	}
+	var n int64
+	for _, p := range m.Parts {
+		if absent(p.Answer) {
+			continue
+		}
+		var a struct {
+			Name string `json:"name"`
+		}
+		if wireDecode(p.Answer, &a) != nil || !strings.HasPrefix(a.Name, qwenMCPPrefix) {
+			n += int64(len(p.Answer))
+		}
+	}
+	return n
 }
 
 // qwenImages is how many inline or file data parts a message's parts hold,
@@ -203,16 +251,21 @@ func qwenImages(raw json.RawMessage) int {
 
 // count is the count c read, under marks the read set before the walk: the
 // anchor's figure, every message after it and a failure for each call left
-// unanswered; [sandbox.CountCompacted] for a compression whose size does not
-// read, [sandbox.CountUsage] where nothing recorded a figure or the newest
-// usage does not read.
+// unanswered; [sandbox.CountCompacted] for a compression whose size or
+// history does not read, [sandbox.CountUsage] where nothing recorded a figure
+// or the newest usage does not read, [sandbox.CountMasked] where the answers
+// since the restart, a failure for each unanswered call among them, may reach
+// [qwenClearsAt].
 func (c *qwenCounting) count(marks countMarks) *sandbox.ResumedCount {
 	marks |= c.marks
 	switch {
-	case c.compacted && !c.anchored:
+	case c.historyUnread || c.compacted && !c.anchored:
 		marks = marks.with(sandbox.CountCompacted)
 	case !c.anchored || c.unsure:
 		marks = marks.with(sandbox.CountUsage)
+	}
+	if c.answers+int64(len(c.open))*qwenSyntheticFailureBytes >= qwenClearsAt {
+		marks = marks.with(sandbox.CountMasked)
 	}
 	if c.images >= qwenImageCompaction {
 		marks = marks.with(sandbox.CountMedia)

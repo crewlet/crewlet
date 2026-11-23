@@ -4,9 +4,13 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -256,6 +260,171 @@ func TestTheChatPointIsTheThresholdOfItsWindow(t *testing.T) {
 	} {
 		if got := tc.point(tc.model); got != tc.want {
 			t.Errorf("model %q: the point is %d, want %d", tc.model, got, tc.want)
+		}
+	}
+}
+
+// qwenRecord is one Qwen Code 0.28.4 chat file record of kind (its type) and
+// fields beside it, as the count reads one.
+func qwenRecord(t *testing.T, kind string, fields map[string]any) string {
+	t.Helper()
+	r := map[string]any{"uuid": "u-" + kind, "parentUuid": nil, "sessionId": "s", "timestamp": "t", "type": kind}
+	for k, v := range fields {
+		r[k] = v
+	}
+	raw, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+// qwenAnswer is a tool answer to call id of tool name holding output, as a
+// message's part.
+func qwenAnswer(id, name, output string) map[string]any {
+	return map[string]any{"functionResponse": map[string]any{"id": id, "name": name,
+		"response": map[string]any{"output": output}}}
+}
+
+// qwenAnswerSize is the bytes qwenAnswer's part's functionResponse takes in a
+// line, as the count adds them.
+func qwenAnswerSize(t *testing.T, id, name, output string) int64 {
+	t.Helper()
+	raw, err := json.Marshal(qwenAnswer(id, name, output)["functionResponse"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return int64(len(raw))
+}
+
+// qwenSession is a Qwen Code chat file of a brief, a call and an answer of
+// name for each of outputs, and a reply recording 150,000 prompt tokens,
+// then more.
+func qwenSession(t *testing.T, name string, outputs []string, more ...string) []byte {
+	t.Helper()
+	lines := []string{qwenRecord(t, "user", map[string]any{"message": map[string]any{"role": "user",
+		"parts": []any{map[string]any{"text": "Run the probe round."}}}})}
+	for i, out := range outputs {
+		id := fmt.Sprintf("call_%d", i)
+		lines = append(lines,
+			qwenRecord(t, "assistant", map[string]any{"message": map[string]any{"role": "model",
+				"parts": []any{map[string]any{"functionCall": map[string]any{"id": id, "name": name}}}}}),
+			qwenRecord(t, "tool_result", map[string]any{"message": map[string]any{"role": "user",
+				"parts": []any{qwenAnswer(id, name, out)}}}))
+	}
+	lines = append(lines, qwenRecord(t, "assistant", map[string]any{
+		"message":       map[string]any{"role": "model", "parts": []any{map[string]any{"text": "Done."}}},
+		"usageMetadata": map[string]any{"promptTokenCount": 150_000, "candidatesTokenCount": 50, "totalTokenCount": 150_050}}))
+	return []byte(strings.Join(append(lines, more...), "\n") + "\n")
+}
+
+// qwenSessionCount is the count Qwen Code 0.28.4's take meters chat at.
+func qwenSessionCount(t *testing.T, chat []byte) *sandbox.ResumedCount {
+	t.Helper()
+	member := "projects/-work/chats/0b6f3c2e-0000-4000-8000-000000000001.jsonl"
+	return executor.MeterCount(executor.QwenCode{}, "0.28.4", bytes.NewReader(tarGz(t, member, chat)))
+}
+
+// A QWEN CODE SESSION ITS FIRST REQUEST WOULD CLEAR IS MARKED: tool answers
+// since the restart but MCP's whose bytes, with a failure for each call left
+// unanswered, reach the 500,000 characters past which 0.28.4 clears the oldest
+// (25 shell answers of 24,508 measured clearing 15, MEASURE-P2 Q6.2) are
+// CountMasked, never a bound, the answers a compression kept in its history
+// among them; a byte below is a bound, as are the measured shape's answers
+// from an MCP tool (never cleared, R2:3) and answers a compression dropped.
+// The sessions are built to the measured sizes, not captured.
+//
+// Mutations, each red: mark past the size, not at it; count MCP answers; drop
+// a compression's history's answers, or keep the ones before it; drop the
+// unanswered calls' failures.
+func TestAQwenSessionItsFirstRequestWouldClearIsMarked(t *testing.T) {
+	t.Parallel()
+	const shell, mcp = "run_shell_command", "mcp__crewlet__shell"
+	measured := make([]string, 25)
+	for i := range measured {
+		measured[i] = strings.Repeat("x", 24_508)
+	}
+	// TO THE BYTE: nineteen measured answers, the twentieth sized so the
+	// answers total size.
+	upTo := func(size int64) []string {
+		outs := slices.Clone(measured[:19])
+		var total int64
+		for i, out := range outs {
+			total += qwenAnswerSize(t, fmt.Sprintf("call_%d", i), shell, out)
+		}
+		last := size - total - qwenAnswerSize(t, "call_19", shell, "")
+		return append(outs, strings.Repeat("x", int(last)))
+	}
+	unanswered := qwenRecord(t, "assistant", map[string]any{"message": map[string]any{"role": "model",
+		"parts": []any{map[string]any{"functionCall": map[string]any{"id": "open", "name": shell}}}}})
+	history := make([]any, 25)
+	for i := range history {
+		history[i] = map[string]any{"role": "user", "parts": []any{qwenAnswer(fmt.Sprintf("h%d", i), shell, measured[i])}}
+	}
+	compression := func(history []any) string {
+		return qwenRecord(t, "system", map[string]any{"subtype": "chat_compression", "systemPayload": map[string]any{
+			"info": map[string]any{"newTokenCount": 100_000}, "compressedHistory": history}})
+	}
+	for _, tc := range []struct {
+		name   string
+		chat   []byte
+		masked bool
+	}{
+		{"the measured shape", qwenSession(t, shell, measured), true},
+		{"the measured shape as MCP answers", qwenSession(t, mcp, measured), false},
+		{"at the size", qwenSession(t, shell, upTo(executor.QwenClearsAt)), true},
+		{"a byte below it", qwenSession(t, shell, upTo(executor.QwenClearsAt-1)), false},
+		{"an unanswered call's failure reaching it",
+			qwenSession(t, shell, upTo(executor.QwenClearsAt-executor.QwenSyntheticFailureBytes), unanswered), true},
+		{"answers a compression dropped", qwenSession(t, shell, measured, compression([]any{})), false},
+		{"answers a compression kept", qwenSession(t, shell, nil, compression(history)), true},
+	} {
+		count := qwenSessionCount(t, tc.chat)
+		if got := count.Mark == sandbox.CountMasked; got != tc.masked {
+			t.Errorf("%s: counted %+v, want masked %v", tc.name, count, tc.masked)
+		}
+		if _, bounded := count.Bound(); !tc.masked && !bounded {
+			t.Errorf("%s: counted %+v, want a bound", tc.name, count)
+		}
+	}
+}
+
+// A QWEN CODE COMPRESSION'S HISTORY IS COUNTED WHATEVER ITS FIGURE: one whose
+// new size does not read still has its kept history's images counted, so
+// twenty there are CountMedia after a reply anchors the figure again; one
+// whose payload or history does not read is CountCompacted, which no later
+// reply clears.
+//
+// Mutations, each red: return before the history where the size does not
+// read; let a later reply clear an unread history's mark.
+func TestAQwenCompressionsHistoryIsCountedWhateverItsFigure(t *testing.T) {
+	t.Parallel()
+	image := map[string]any{"inlineData": map[string]any{"mimeType": "image/png", "data": "iVBORw0KGgo="}}
+	images := make([]any, 20)
+	for i := range images {
+		images[i] = image
+	}
+	shot := map[string]any{"role": "user", "parts": []any{map[string]any{"functionResponse": map[string]any{
+		"id": "c", "name": "mcp__crewlet__shot", "response": map[string]any{"output": "o"}, "parts": images}}}}
+	reply := qwenRecord(t, "assistant", map[string]any{
+		"message":       map[string]any{"role": "model", "parts": []any{map[string]any{"text": "Done."}}},
+		"usageMetadata": map[string]any{"promptTokenCount": 1_000, "candidatesTokenCount": 50, "totalTokenCount": 1_050}})
+	compression := func(payload any) string {
+		return qwenRecord(t, "system", map[string]any{"subtype": "chat_compression", "systemPayload": payload})
+	}
+	for _, tc := range []struct {
+		name, compression string
+		mark              sandbox.CountMark
+	}{
+		{"no figure, twenty images kept", compression(map[string]any{"info": map[string]any{},
+			"compressedHistory": []any{shot}}), sandbox.CountMedia},
+		{"a payload that does not read", compression("a payload"), sandbox.CountCompacted},
+		{"no history", compression(map[string]any{"info": map[string]any{"newTokenCount": 900}}),
+			sandbox.CountCompacted},
+	} {
+		count := qwenSessionCount(t, qwenSession(t, "run_shell_command", nil, tc.compression, reply))
+		if count.Mark != tc.mark {
+			t.Errorf("%s, then a reply: counted %+v, want %q", tc.name, count, tc.mark)
 		}
 	}
 }

@@ -365,3 +365,11 @@ const (
 	GeminiContextBase = geminiContextBase
 	QwenReminderBytes = qwenReminderBytes
 )
+
+// QwenClearsAt is the tool answers' size past which Qwen Code clears the
+// oldest at its first request ([qwenClearsAt]), and QwenSyntheticFailureBytes
+// the failure it hands an unanswered call ([qwenSyntheticFailureBytes]).
+const (
+	QwenClearsAt              = qwenClearsAt
+	QwenSyntheticFailureBytes = qwenSyntheticFailureBytes
+)
