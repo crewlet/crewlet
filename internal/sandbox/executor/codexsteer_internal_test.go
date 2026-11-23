@@ -44,6 +44,12 @@ func codexReplyLine(t *testing.T) string {
 // run began is start ("" for none).
 func codexConfirm(t *testing.T, rollout, start string, takes ...sandbox.AskedTake) sandbox.TakeReceipts {
 	t.Helper()
+	return codexConfirmAsk(t, rollout, start, sandbox.MainThreadAsk{Session: codexConfirmThread, Takes: takes})
+}
+
+// codexConfirmAsk is [codexConfirm] of a whole ask.
+func codexConfirmAsk(t *testing.T, rollout, start string, ask sandbox.MainThreadAsk) sandbox.TakeReceipts {
+	t.Helper()
 	box := sandbox.NewFakeSandbox("codex-confirm")
 	p := PathsFor(box)
 	path := p.CodexSessions() + "/2026/11/23/rollout-2026-11-23T09-00-00-" + codexConfirmThread + ".jsonl"
@@ -54,8 +60,7 @@ func codexConfirm(t *testing.T, rollout, start string, takes ...sandbox.AskedTak
 	box.ExecFunc = func(context.Context, string, sandbox.ExecOptions) (sandbox.ExecResult, error) {
 		return sandbox.ExecResult{Stdout: path + "\n"}, nil
 	}
-	return New(Codex{}).ReadMainThread(t.Context(), box, sandbox.MainThreadAsk{Session: codexConfirmThread,
-		Takes: takes}).Receipts
+	return New(Codex{}).ReadMainThread(t.Context(), box, ask).Receipts
 }
 
 // codexTake is a take of text served under id.
@@ -159,5 +164,51 @@ func TestACodexRunWithoutItsStartDecidesNothing(t *testing.T) {
 		if len(got.Held) != 0 || len(got.Absent) != 0 || got.Why == "" {
 			t.Errorf("%s: the note reads %+v, want undecided with why", name, got)
 		}
+	}
+}
+
+// A TAKE CODEX NEVER RECORDED LEAVES THE LATER ONES TO MATCH: a steer Codex
+// accepted and did not record (the note helper takes an accepted steer as
+// delivered) is unheld, and each later message matches the first take after
+// the last one matched with its words, as Gemini CLI's do.
+//
+// Mutation: match a message against the next take alone, and C reads unheld.
+func TestATakeCodexNeverRecordedLeavesTheLaterOnesToMatch(t *testing.T) {
+	t.Parallel()
+	const (
+		a    = "## A note from ada, sent while this turn was running\n\nuse main"
+		lost = "## A note from ada, sent while this turn was running\n\nnever recorded"
+		c    = "## A note from ada, sent while this turn was running\n\nrun the tests"
+	)
+	rollout := codexUserLine(t, "Fix the flake.") + codexReplyLine(t) + codexUserLine(t, a) + codexReplyLine(t) +
+		codexUserLine(t, c) + codexReplyLine(t)
+	got := codexConfirm(t, rollout, codexConfirmThread+" 0\n", codexTake("n-a", a), codexTake("n-lost", lost),
+		codexTake("n-c", c))
+	if !slices.Equal(got.Held, []string{"n-a", "n-c"}) {
+		t.Errorf("the takes read %+v, want A and C held and the lost one not", got)
+	}
+}
+
+// A READ CODEX NOTE KEEPS ITS PLACE: the run's read notes are matched in their
+// places among its serves, so a read note's message settles no later take of
+// the same words, which a run killed before its reply leaves unheld.
+//
+// Mutation: match the record against the asked takes alone, and B reads held
+// off A's message and reply.
+func TestAReadCodexNoteKeepsItsPlace(t *testing.T) {
+	t.Parallel()
+	const note = "## A note from ada, sent while this turn was running\n\nuse main"
+	a, b := codexTake("n-a", note), codexTake("n-b", note)
+	a.Read = true
+	ask := sandbox.MainThreadAsk{Session: codexConfirmThread, Takes: []sandbox.AskedTake{b},
+		Served: []sandbox.AskedTake{a, b}}
+	killed := codexUserLine(t, "Fix the flake.") + codexReplyLine(t) + codexUserLine(t, note) + codexReplyLine(t) +
+		codexUserLine(t, note)
+	if got := codexConfirmAsk(t, killed, codexConfirmThread+" 0\n", ask); len(got.Held) != 0 {
+		t.Errorf("B, killed before its reply, reads %+v off the read A's record, want nothing held", got)
+	}
+	if got := codexConfirmAsk(t, killed+codexReplyLine(t), codexConfirmThread+" 0\n", ask); !slices.Equal(got.Held,
+		[]string{"n-b"}) {
+		t.Errorf("B, answered, reads %+v, want it held", got)
 	}
 }

@@ -31,6 +31,9 @@
 //   QWEN_FAKE_COMPACT a file of one chat_compression record of Qwen Code's,
 //                     recorded between the notes' records and the response
 //                     after them
+//   QWEN_FAKE_UNRECORDED_NOTE records nothing of the notes of that many-th
+//                     drain to hand any (1 for any set value but a number),
+//                     and goes on as though it had
 //   QWEN_FAKE_FAIL_AFTER_NOTE fails the request that carries the notes of
 //                     that many-th drain to hand any (1 for any set value but a
 //                     count) once they are recorded: no reply is recorded,
@@ -128,6 +131,7 @@ function record(notes) {
 // reply records the response to the request that carried the notes recorded
 // last, as the turn goes on past it.
 function reply() {
+  fs.mkdirSync(path.dirname(chatFile()), { recursive: true })
   fs.appendFileSync(chatFile(), JSON.stringify({ ...replyTemplate, sessionId: session }) + "\n")
 }
 let owedReply = false
@@ -156,7 +160,7 @@ async function replay(promptID) {
             process.exit(1)
           }
           if (env.QWEN_FAKE_DIE_AFTER_NOTE) process.exit(1)
-          record(notes)
+          if (!env.QWEN_FAKE_UNRECORDED_NOTE || handed !== count(env.QWEN_FAKE_UNRECORDED_NOTE)) record(notes)
           if (env.QWEN_FAKE_FAIL_AFTER_NOTE && handed === count(env.QWEN_FAKE_FAIL_AFTER_NOTE)) {
             send({ jsonrpc: "2.0", id: promptID, error: { code: -32603, message: "Internal error" } })
             return
