@@ -35,6 +35,12 @@
 // accepted removal keeps its record, so a server whose tools all went stays
 // baselined and its return reads as added. A removal is judged only while some
 // live listing exists: none says nothing about what the server lists.
+//
+// # A server may have its changes accepted as they are listed
+//
+// An entry setting `tools.auto_accept_changes` has each change accepted by
+// the node that sees it ([AutoAccepts]): definitions only, never a level or a
+// held call, and never a tool listed under two definitions at once.
 package mcpreview
 
 import (
@@ -296,5 +302,33 @@ func Baseline(l coord.MCPListing, at time.Time) []coord.MCPAcceptedTool {
 		seen[t.Raw] = struct{}{}
 		out = append(out, Accepting(l.Server, t, "", at))
 	}
+	return out
+}
+
+// AutoAccepts is the changes a server whose entry sets
+// `tools.auto_accept_changes` accepts as listed: every one but those of a
+// tool listed under two definitions at once, which wait for a person.
+func AutoAccepts(changes []Change) []Change {
+	listed := map[string]int{}
+	for _, c := range changes {
+		listed[c.Tool]++
+	}
+	var out []Change
+	for _, c := range changes {
+		if listed[c.Tool] == 1 {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// AutoAccepting is the record accepting c for its server's
+// `tools.auto_accept_changes`: by the node that saw it, marked automatic.
+func AutoAccepting(server string, c Change, node string, at time.Time) coord.MCPAcceptedTool {
+	out := Removing(server, c.Tool, node, at)
+	if c.After != nil {
+		out = Accepting(server, *c.After, node, at)
+	}
+	out.Auto = true
 	return out
 }

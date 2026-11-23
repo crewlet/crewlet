@@ -102,7 +102,8 @@ than the heartbeat, its entry naming the seat whose run waits. A tool a server
 changed since its level was decided, or added after its first listing, that its
 level would let run unasked raises `mcp_tools_changed` as soon as the fleet's
 listings name it, read off the listings and what was accepted of them rather than
-the heartbeat; a removal, or a change to a tool that asks anyway, raises nothing.
+the heartbeat; a removal, a change to a tool that asks anyway, or a change its
+server's `tools.auto_accept_changes` accepts at the next beat, raises nothing.
 The MCP servers answer (`GET /mcp-servers`) carries each of them with the
 gesture that fixes it.
 

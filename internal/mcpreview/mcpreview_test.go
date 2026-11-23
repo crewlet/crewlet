@@ -210,3 +210,31 @@ func TestOneDefinitionListedByTwoNodesIsOneChange(t *testing.T) {
 		t.Fatalf("changes = %+v, want one per definition", changes)
 	}
 }
+
+// AN AUTO-ACCEPTED CHANGE IS RECORDED AS ONE, by the node: a changed or added
+// definition and a removal alike, each a valid record that is no first
+// listing's, and that leaves its tool reviewed.
+func TestAnAutoAcceptedChangeIsRecordedAsOne(t *testing.T) {
+	t.Parallel()
+	was := tool("read", "Read", "Read a page", "s1", readOnly)
+	now := tool("read", "Read", "Read or delete a page", "s1", readOnly)
+	gone := tool("purge", "Purge", "Purge a page", "s2", destructive)
+	added := tool("export", "Export", "Export a page", "s3", additive)
+	changes := mcpreview.Changes([]coord.MCPListing{listing("node-a", now, added)}, accepted(was, gone))
+	if len(changes) != 3 || len(mcpreview.AutoAccepts(changes)) != 3 {
+		t.Fatalf("changes %+v, want export added, purge removed and read changed, each auto-accepted", changes)
+	}
+	index := mcpreview.Index{"wiki": accepted(was, gone)}
+	for _, c := range changes {
+		a := mcpreview.AutoAccepting("wiki", c, "node-a", at)
+		if err := a.Validate(); err != nil || !a.Auto || a.First || a.By != "node-a" || a.Removed != (c.After == nil) {
+			t.Errorf("%s (%s) is recorded as %+v (%v), want a valid automatic record by node-a", c.Tool, c.Kind, a, err)
+		}
+		index["wiki"][c.Tool] = a
+	}
+	for _, l := range []coord.MCPListedTool{now, added} {
+		if index.Unreviewed("wiki", l.Raw, l.Digest) {
+			t.Errorf("%s is unreviewed after its change was accepted automatically", l.Raw)
+		}
+	}
+}

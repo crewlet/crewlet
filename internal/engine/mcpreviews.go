@@ -9,9 +9,14 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcpreview"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 // WHAT EACH MCP TOOL'S LEVEL WAS DECIDED ON, WATCHED; AND A SERVER'S FIRST
@@ -20,8 +25,8 @@ import (
 // A tool's level holds only for the definition it was decided on. This node's
 // watched copy of every accepted definition decides each MCP call it files
 // ([Engine.toolUnreviewed]), which servers a box gets ([Engine.boxServers]) and
-// what the alarm counts; each beat of its listings' publisher accepts the first
-// listing of every server it lists that nobody has accepted a listing of yet.
+// what the alarm counts; each beat of its listings' publisher accepts every
+// server's first listing, and the changes of one set to auto-accept them.
 //
 // UNANSWERED IS UNREVIEWED: until the watch's first answer (a moment after
 // start) a changed tool cannot be told from an accepted one, so every allowed
@@ -242,6 +247,119 @@ func (e *Engine) baselineMCPTools(ctx context.Context, desired map[string]nodeLi
 	}
 }
 
+// autoAcceptMCPChanges accepts and audits the changes of every server set to
+// auto-accept them ([mcpreview.AutoAccepts]), each written at the version the
+// store holds, so a peer at the same beat writes it once and only it audits.
+func (e *Engine) autoAcceptMCPChanges(ctx context.Context, now time.Time) {
+	c := e.Company()
+	if c == nil || c.Config == nil {
+		return
+	}
+	live, ok := e.LiveMCPListings()
+	index, answered := e.reviewIndex()
+	if !ok || !answered {
+		return
+	}
+	byServer := map[string][]coord.MCPListing{}
+	for _, l := range live {
+		byServer[l.Server] = append(byServer[l.Server], l)
+	}
+	var pending []string
+	for i := range c.Config.MCPServers {
+		entry := &c.Config.MCPServers[i]
+		if entry.Tools.AutoAcceptChanges && entry.IsEnabled() &&
+			len(mcpreview.AutoAccepts(mcpreview.Changes(byServer[entry.Name], index[entry.Name]))) > 0 {
+			pending = append(pending, entry.Name)
+		}
+	}
+	if len(pending) == 0 {
+		return
+	}
+	held, err := e.backends.Fleet.ListMCPAccepted(ctx)
+	if err != nil {
+		log.WarnContext(ctx, "mcp_tools_auto_accept_unread", "servers", pending, "error", err,
+			"detail", "their changes are accepted at the next beat, and each changed tool asks first until then")
+		return
+	}
+	stored := mcpreview.IndexOf(held)
+	node := e.nodeID()
+	for _, server := range pending {
+		var accepted []mcpreview.Change
+		for _, change := range mcpreview.AutoAccepts(mcpreview.Changes(byServer[server], stored[server])) {
+			var version uint64
+			if before, ok := stored[server][change.Tool]; ok {
+				version = before.Version
+			}
+			_, wrote, putErr := e.backends.Fleet.PutMCPAccepted(ctx,
+				mcpreview.AutoAccepting(server, change, node, now), version)
+			if putErr != nil {
+				log.WarnContext(ctx, "mcp_tools_auto_accept_not_written", "server", server,
+					"tool", change.Tool, "error", putErr,
+					"detail", "the change is accepted at the next beat, and the tool asks first until then")
+				break
+			}
+			if wrote {
+				accepted = append(accepted, change)
+			}
+		}
+		if len(accepted) > 0 {
+			e.auditAutoAccepted(ctx, server, node, accepted)
+		}
+	}
+}
+
+// auditAutoAccepted records changes accepted automatically as the node's own
+// `mcp_server_acted`, each with what it moved ([types.MCPToolChangeRecord]).
+// The records stand whether or not the audit lands; the log names them too.
+func (e *Engine) auditAutoAccepted(ctx context.Context, server, node string, accepted []mcpreview.Change) {
+	rec := types.MCPServerActed{ActorName: node, ActorKind: string(iam.KindEngine),
+		Action: types.MCPServerAutoAcceptChanges, Server: server, Outcome: types.AuditApplied}
+	for _, c := range accepted {
+		rec.Accepted = append(rec.Accepted, c.Tool)
+		rec.Changes = append(rec.Changes, changeRecord(c))
+	}
+	log.InfoContext(ctx, "mcp_tools_auto_accepted", "server", server, "tools", rec.Accepted,
+		"detail", "the server's entry sets tools.auto_accept_changes, so each change was accepted as listed")
+	if e.backends == nil || e.backends.Queue == nil {
+		return
+	}
+	ev := events.NewFrom(types.NewMCPServerActed(rec), tracing.TraceOf(ctx))
+	ev.Source = types.OperatorSource
+	// A FRESH BUDGET: the records are written, and the beat's may be spent.
+	publishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), autoAcceptAuditBudget)
+	defer cancel()
+	if err := e.backends.Queue.Publish(publishCtx, topics.Event(ev.Type), ev); err != nil {
+		log.WarnContext(ctx, "mcp_tools_auto_accept_not_audited", "server", server, "tools", rec.Accepted,
+			"error", err, "detail", "the changes are accepted; this log line is their record")
+	}
+}
+
+// autoAcceptAuditBudget bounds publishing one auto-acceptance's audit: a few
+// round trips to the broker, as a device sign-in's last write takes.
+const autoAcceptAuditBudget = 10 * time.Second
+
+// changeRecord is what an audit keeps of a change accepted unreviewed: its
+// kind, the parts it moved, and each definition's digest, words and hints.
+func changeRecord(c mcpreview.Change) types.MCPToolChangeRecord {
+	out := types.MCPToolChangeRecord{Tool: c.Tool, Kind: string(c.Kind), Loosened: c.Loosened}
+	for _, p := range c.Parts {
+		out.Parts = append(out.Parts, string(p))
+	}
+	if b := c.Before; b != nil && !b.Removed {
+		out.Before = toolWords(b.Digest, b.Title, b.Description, b.Hints)
+	}
+	if a := c.After; a != nil {
+		out.After = toolWords(a.Digest, a.Title, a.Description, a.Declared)
+	}
+	return out
+}
+
+// toolWords is one definition as a change record keeps it.
+func toolWords(digest, title, description string, h coord.MCPToolHints) *types.MCPToolWords {
+	return &types.MCPToolWords{Digest: digest, Title: title, Description: description,
+		ReadOnly: h.ReadOnly, Destructive: h.Destructive, Idempotent: h.Idempotent, OpenWorld: h.OpenWorld}
+}
+
 // acceptedDigests is every digest an accepted definition names: a definition
 // the sweep keeps for as long as a change is shown beside it.
 func acceptedDigests(accepted []coord.MCPAcceptedTool) map[string]struct{} {
@@ -300,7 +418,8 @@ func (e *Engine) sweepMCPAccepted(ctx context.Context, accepted []coord.MCPAccep
 // raises nothing, rather than every allowed tool at once, and clears nothing.
 //
 // A REMOVAL OR A CHANGE THAT HOLDS NOTHING (a tool that already asks, or is
-// blocked) is not counted: nothing waits on its review.
+// blocked) is not counted: nothing waits on its review. Nor is a change its
+// server's `tools.auto_accept_changes` accepts at the next beat.
 func (e *Engine) changedConditions(ctx context.Context, c *Company, conds []statelog.MCPServerCondition) {
 	live, ok := e.LiveMCPListings()
 	index, answered := e.reviewIndex()
@@ -336,8 +455,17 @@ func (e *Engine) changedConditions(ctx context.Context, c *Company, conds []stat
 			conds[j].ChangesUnread = true
 			continue
 		}
-		for _, change := range mcpreview.Changes(byServer[entry.Name], index[entry.Name]) {
-			if !mcpreview.Holds(entry.Tools, change) {
+		changes := mcpreview.Changes(byServer[entry.Name], index[entry.Name])
+		auto := map[string]bool{}
+		if entry.Tools.AutoAcceptChanges {
+			// ACCEPTED AT THE NEXT BEAT, so raised by nothing: the alarm
+			// counts only what waits on a person.
+			for _, c := range mcpreview.AutoAccepts(changes) {
+				auto[c.Tool] = true
+			}
+		}
+		for _, change := range changes {
+			if auto[change.Tool] || !mcpreview.Holds(entry.Tools, change) {
 				continue
 			}
 			holding = append(holding, pending{&conds[j], change})

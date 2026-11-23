@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/mcpreview`
-- **Enforced-by:** `internal/mcpreview.TestAChangedDefinitionHoldsAnAllowedToolAtApproveUntilAccepted`, `internal/mcpreview.TestALoosenedHintIsFlagged`, `internal/mcpreview.TestARemovedToolKeepsItsRow`, `internal/engine.TestAChangedDefinitionHoldsAnAllowedToolAtApproveUntilAccepted`, `internal/engine.TestAServersFirstListingIsAcceptedOnceAndAnAdditionAfterItIsNot`, `internal/engine.TestANodeThatHasNotReadWhatWasAcceptedHoldsEveryTool`, `internal/engine.TestTheSweepKeepsTheDefinitionWhatWasAcceptedNames`, `internal/engine.TestABoxIsGivenNoServerAToolOfWhichChanged`, `internal/mcp.TestARunningServerIsListedAgainOnItsTTLHeldBetweenTheFloorAndTheCeiling`, `internal/mcp.TestAToolAServerChangesWhileItRunsIsRefiledWhenItsTTLRunsOut`, `internal/mcp.TestAListChangedNotificationListsAgainNoSoonerThanTheFloor`, `internal/mcp.TestTheProbeHandsTheSDKAListingThatIsNeverFresh`, `internal/api/mcpapi.TestAChangeIsAcceptedOrKeptBlockedByTheDefinitionReviewed`, `internal/api/mcpapi.TestAServerCannotMakeAChangeLookAccepted`, `internal/api/mcpapi.TestAlwaysAllowAcceptsTheDefinitionTheCallWasMadeUnder`, `internal/api/mcpapi.TestAlwaysAllowOnAToolPastThe256thAcceptsItsDefinition`, `internal/api/mcpapi.TestAnAlwaysAllowThatAcceptsNothingSaysWhy`, `internal/engine.TestAlwaysAllowOnTheThreeHundredThirtySixthToolSticks`, `internal/coord/memory.TestFleetContract`, `internal/coord/kv.TestFleetContract`, `internal/api/queries.TestADescriptionChangedPastTheListingsCutIsServedWhole`, `internal/api/queries.TestAPartNoRecordCanShowIsSaidUnshown`
+- **Enforced-by:** `internal/mcpreview.TestAChangedDefinitionHoldsAnAllowedToolAtApproveUntilAccepted`, `internal/mcpreview.TestALoosenedHintIsFlagged`, `internal/mcpreview.TestARemovedToolKeepsItsRow`, `internal/engine.TestAChangedDefinitionHoldsAnAllowedToolAtApproveUntilAccepted`, `internal/engine.TestAServersFirstListingIsAcceptedOnceAndAnAdditionAfterItIsNot`, `internal/engine.TestANodeThatHasNotReadWhatWasAcceptedHoldsEveryTool`, `internal/engine.TestTheSweepKeepsTheDefinitionWhatWasAcceptedNames`, `internal/engine.TestABoxIsGivenNoServerAToolOfWhichChanged`, `internal/mcp.TestARunningServerIsListedAgainOnItsTTLHeldBetweenTheFloorAndTheCeiling`, `internal/mcp.TestAToolAServerChangesWhileItRunsIsRefiledWhenItsTTLRunsOut`, `internal/mcp.TestAListChangedNotificationListsAgainNoSoonerThanTheFloor`, `internal/mcp.TestTheProbeHandsTheSDKAListingThatIsNeverFresh`, `internal/api/mcpapi.TestAChangeIsAcceptedOrKeptBlockedByTheDefinitionReviewed`, `internal/api/mcpapi.TestAServerCannotMakeAChangeLookAccepted`, `internal/api/mcpapi.TestAlwaysAllowAcceptsTheDefinitionTheCallWasMadeUnder`, `internal/api/mcpapi.TestAlwaysAllowOnAToolPastThe256thAcceptsItsDefinition`, `internal/api/mcpapi.TestAnAlwaysAllowThatAcceptsNothingSaysWhy`, `internal/engine.TestAlwaysAllowOnTheThreeHundredThirtySixthToolSticks`, `internal/coord/memory.TestFleetContract`, `internal/coord/kv.TestFleetContract`, `internal/api/queries.TestADescriptionChangedPastTheListingsCutIsServedWhole`, `internal/api/queries.TestAPartNoRecordCanShowIsSaidUnshown`, `internal/mcpreview.TestAnAutoAcceptedChangeIsRecordedAsOne`, `internal/engine.TestAChangeToAServerSetToAutoAcceptIsAcceptedAndAuditedWithItsDiff`, `internal/engine.TestAutoAcceptIsOffUnlessTheEntrySetsIt`, `internal/engine.TestAToolListedUnderTwoDefinitionsIsLeftForAPerson`, `internal/api/mcpapi.TestAcceptingEveryChangeAtOnceRecordsEachAsItsOwnAcceptanceDoes`
 - **Cost-when-tried:** a tool's level was read off its name alone, so a server could change what a tool its operator had set to Always allow does (a description that now says it deletes, a read-only hint dropped, a new tool behind a familiar prefix) and every agent went on calling it unasked; and the engine listed a running server only when it started it, so nothing would have seen the change anyway.
 - **Tag-status:** unreleased
 
@@ -59,6 +59,13 @@ each call, exactly as a tool at Needs approval does (ADR-0077).
 7. **The sweep keeps what an accepted record names**: its definition whole,
    for as long as a change is shown beside it, and the records of a server
    the company declares or a node lists.
+8. **A server's entry may accept its changes as they are listed**
+   (`tools.auto_accept_changes`, off unless the entry sets it): the node that
+   lists a change writes its record by compare-and-set at the version it read
+   from the store, marked automatic and naming the node, and audits what each
+   change moved, since nobody reviewed it; the alarm does not count it. It
+   accepts definitions alone, never a level or a held call, and leaves a tool
+   two live listings name under two definitions for a person.
 
 ## Why the obvious alternatives are wrong
 
@@ -76,6 +83,10 @@ node. Asked at each call, the answer moves the moment the record does.
 **Accepting by the tool's name alone**: the definition listed when the person
 answers may not be the one they read, and a server that controls its
 definitions could make any change look accepted by swapping it in between.
+
+**Accepting changes automatically by a company-wide switch**: the operator
+trusts a vendor, not every server at once, and a server added later would
+inherit a trust nobody gave it; so the setting is each entry's own.
 
 **Listing again only on a list-changed notification**: a server that never
 sends one, or sends one constantly, decides whether and how often it is
