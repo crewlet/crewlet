@@ -319,6 +319,9 @@ func (Muse) VersionCommand() string { return "muse --version" }
 // layout is a Muse Code archive's: a gzipped tar of the session's files.
 func (Muse) layout() archiveLayout { return archiveTar }
 
+// meters is false: its meter counts nothing ([carrier.meters]).
+func (Muse) meters(string, string) bool { return false }
+
 // Continues reports whether a session written by Muse Code release writer can
 // be continued in a box whose Muse Code is release box ([carrier]): only where
 // the box continues any session ([Muse.continuesInPlace]) and the writer is

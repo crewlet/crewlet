@@ -379,14 +379,15 @@ func (c *geminiCounting) answer(id string, at int, raw json.RawMessage) {
 	got.carriers = append(got.carriers, id)
 }
 
-// count is the count c read, under marks the read set before the walk: the
-// bound, rounded up; [sandbox.CountMasked] where the answers reach
-// [geminiMaskProtect] or the history's bytes as 0.70.0 sizes it for its
-// collapse (its texts' UTF-8 and its answers' JSON), with the context allowed,
-// reach [geminiCollapseBytes]; restarted at the newest summary kept. Only
+// count is the count c read, under marks the read set before the walk, with
+// taken bytes put back ([chatCounter]): the bound, rounded up;
+// [sandbox.CountMasked] where the answers reach [geminiMaskProtect] or the
+// history's bytes as 0.70.0 sizes it for its collapse (its texts' UTF-8 and
+// its answers' JSON), with the context allowed, reach [geminiCollapseBytes];
+// restarted at the newest summary kept. Only
 // what a kept record carries is restored, so a kept call whose every answer
 // sits in a removed record gets the synthetic answer a resume hands it.
-func (c *geminiCounting) count(marks countMarks) *sandbox.ResumedCount {
+func (c *geminiCounting) count(marks countMarks, taken int64) *sandbox.ResumedCount {
 	marks |= c.marks
 	var quarters, answers, view, responses int64
 	restart := ""
@@ -414,11 +415,14 @@ func (c *geminiCounting) count(marks countMarks) *sandbox.ResumedCount {
 			view, responses = view+geminiSyntheticAnswerBytes, responses+1
 		}
 	}
-	quarters += 4 * answers
+	// WHAT THE SCRUB TOOK OUT may have been any answer's or text's: a token
+	// a byte on the bound, its bytes on the history, a quarter on the answers.
+	quarters += 4 * (answers + taken)
+	view += taken
 	// A COLLAPSE PREVIEWS ONLY ANSWERS older than the newest three tool turns,
 	// so a history of three answers or fewer has none it changes.
 	collapses := view+geminiContextAllowance >= geminiCollapseBytes && responses > geminiCollapseKeptTurns
-	if answers >= geminiMaskProtect || collapses {
+	if answers+(taken+3)/4 >= geminiMaskProtect || collapses {
 		marks = marks.with(sandbox.CountMasked)
 	}
 	out := &sandbox.ResumedCount{Restart: &restart}
@@ -461,10 +465,7 @@ func geminiTextQuarters(s string) int64 {
 // the count of its one chat file, by the rules of [geminiRelease] alone, its
 // bound no estimate of the next request (the launch's floor reads none).
 func (GeminiCLI) meter(ctx context.Context, r io.Reader, _, release string, _ *passBudget) (meterReading, error) {
-	count, err := countChat(ctx, newGeminiCounting(), release, geminiRelease, func(line func([]byte) error) error {
-		return chatMemberLines(r, geminiChatMember, line)
-	})
-	return meterReading{count: count}, err
+	return chatMeter(ctx, newGeminiCounting(), r, geminiChatMember, release, geminiRelease)
 }
 
 // sessionTraits is how a relaunch judges a Gemini CLI session: in the box the

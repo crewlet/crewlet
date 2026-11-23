@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -1140,6 +1141,13 @@ func claudeOnDemand(paths Paths, session string, at packAt) string {
 // layout is a Claude Code archive's: a gzipped tar of the session's files
 // ([claudeArchiveFormat]).
 func (ClaudeCode) layout() archiveLayout { return archiveTar }
+
+// meters reports whether member is session's main thread, the one the meter
+// counts ([carrier.meters], [meterArchive]).
+func (ClaudeCode) meters(session, member string) bool {
+	m, ok := claudeMemberOf(session, path.Clean(member))
+	return ok && m.Kind == memberMainThread
+}
 
 // Continues reports whether a session written by Claude Code release writer
 // can be continued in a box whose Claude Code is release box ([carrier]): the

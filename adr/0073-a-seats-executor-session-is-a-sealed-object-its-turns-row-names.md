@@ -5020,6 +5020,22 @@ KiB `boxsources`, a Gemini CLI launch naming no model `nomodel`.
 `BoxPoint.Anchored` keeps OpenCode's provider check to OpenCode's points: the
 other two count no provider.
 
+**What the scrub took out is counted back.** The meter reads the scrub's
+output, but a box that resumes its own copy resumes it unscrubbed, and every
+value or redaction the scrub took out may have cost its harness more than the
+marker left in its place: a non-ASCII password shorter than its marker costs
+Gemini CLI more, so a length less its marker's is no bound. So the take tallies,
+for the members its meter counts (`carrier.meters`), what each text loses: its
+charge less that of the own words its kept text holds, each byte charged as
+JSON.stringify writes it, a credential's whole value and a loaded tool
+definition the cut takes out among it. The tally travels with the bytes through
+the scrub's spool and its ways, cut back with them, and is added once the scrub
+ends: to the bound and to the next request's estimate at a token a byte, above
+every charge these harnesses put on a byte of a file their JSON writer wrote,
+and for Gemini CLI and Qwen Code also to the sizes their masking, collapse and
+clearing read. A marker the text already held counts as taken, which only
+tells more.
+
 **A run's start is a counted prefix** (`RunStart.Lines`): the script records
 the chat file's line count and the POSIX `cksum` of those lines once the gate
 cut it back, and the take checks that digest against the archive's raw bytes

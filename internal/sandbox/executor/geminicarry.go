@@ -89,6 +89,10 @@ func (GeminiCLI) startsByLines() {}
 // layout is a Gemini CLI archive's: a gzipped tar of the chat file.
 func (GeminiCLI) layout() archiveLayout { return archiveTar }
 
+// meters reports whether member is a chat file, the one the meter counts
+// ([carrier.meters], [chatMemberLines]).
+func (GeminiCLI) meters(_, member string) bool { return geminiChatMember(member) }
+
 // transcript reads a Gemini CLI archive ([geminiArchiveFormat]): its chat
 // file, as a session file is read ([transcriptBuilder.geminiSession]).
 func (GeminiCLI) transcript(ctx context.Context, b *transcriptBuilder, archive io.Reader) error {

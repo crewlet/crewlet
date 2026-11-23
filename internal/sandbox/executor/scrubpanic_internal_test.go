@@ -101,7 +101,7 @@ func TestAMeterThatPanicsMeasuresNothingAndTheTakeGoesOn(t *testing.T) {
 			t.Fatalf("the take's write was answered %d, %v", n, err)
 		}
 	}
-	m.finish(nil)
+	m.finish(nil, 0)
 	if got := m.context(); got != 0 {
 		t.Errorf("a meter that panicked measured %d tokens, want none", got)
 	}

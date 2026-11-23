@@ -239,14 +239,15 @@ func qwenImages(raw json.RawMessage) int {
 	return n
 }
 
-// count is the count c read, under marks the read set before the walk: the
-// anchor's figure, every message after it and a failure for each call left
-// unanswered; [sandbox.CountCompacted] for a compression whose size or
+// count is the count c read, under marks the read set before the walk, with
+// taken bytes put back ([chatCounter]): the anchor's figure, every message
+// after it and a failure for each call left unanswered;
+// [sandbox.CountCompacted] for a compression whose size or
 // history does not read, [sandbox.CountUsage] where nothing recorded a figure
 // or the newest usage does not read, [sandbox.CountMasked] where the answers
 // since the restart, a failure for each unanswered call among them, may reach
 // [qwenClearsAt].
-func (c *qwenCounting) count(marks countMarks) *sandbox.ResumedCount {
+func (c *qwenCounting) count(marks countMarks, taken int64) *sandbox.ResumedCount {
 	marks |= c.marks
 	switch {
 	case c.historyUnread || c.compacted && !c.anchored:
@@ -254,7 +255,9 @@ func (c *qwenCounting) count(marks countMarks) *sandbox.ResumedCount {
 	case !c.anchored || c.unsure:
 		marks = marks.with(sandbox.CountUsage)
 	}
-	if c.answers+int64(len(c.open))*qwenSyntheticFailureBytes >= qwenClearsAt {
+	// WHAT THE SCRUB TOOK OUT may have been any answer's: on the answers'
+	// bytes, and a token a byte on the figure.
+	if c.answers+taken+int64(len(c.open))*qwenSyntheticFailureBytes >= qwenClearsAt {
 		marks = marks.with(sandbox.CountMasked)
 	}
 	if c.images >= qwenImageCompaction {
@@ -264,7 +267,7 @@ func (c *qwenCounting) count(marks countMarks) *sandbox.ResumedCount {
 	out := &sandbox.ResumedCount{Restart: &restart}
 	switch mark := marks.first(); mark {
 	case "":
-		out.Tokens = c.base + c.tail + int64(len(c.open))*qwenSyntheticFailureBytes
+		out.Tokens = c.base + c.tail + taken + int64(len(c.open))*qwenSyntheticFailureBytes
 	case sandbox.CountUnread, sandbox.CountRelease:
 		out.Mark, out.Restart = mark, nil
 	default:
@@ -277,10 +280,7 @@ func (c *qwenCounting) count(marks countMarks) *sandbox.ResumedCount {
 // count of its one chat file, by the rules of [qwenRelease] alone, its bound
 // no estimate of the next request (the launch's floor reads none).
 func (QwenCode) meter(ctx context.Context, r io.Reader, _, release string, _ *passBudget) (meterReading, error) {
-	count, err := countChat(ctx, new(qwenCounting), release, qwenRelease, func(line func([]byte) error) error {
-		return chatMemberLines(r, qwenChatMember, line)
-	})
-	return meterReading{count: count}, err
+	return chatMeter(ctx, new(qwenCounting), r, qwenChatMember, release, qwenRelease)
 }
 
 var _ mainThreadHarness = QwenCode{}
