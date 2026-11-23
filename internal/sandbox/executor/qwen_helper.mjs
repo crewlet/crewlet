@@ -7,7 +7,7 @@
 //
 //   node qwen-helper.mjs run <config> <session id> <new|load>
 //     Reads the brief on stdin and runs it as one ACP turn of
-//     `qwen --acp --approval-mode yolo --extensions none`: initialize;
+//     `qwen --acp --approval-mode yolo`: initialize;
 //     session/new under the run's minted id, or session/load of the session
 //     the run continues; the bridge connected (qwen/status/workspace/mcp);
 //     session/prompt. Every session/update Qwen Code sends from then on is
@@ -162,9 +162,7 @@ class Host {
   }
 
   async run(brief) {
-    // No extension is loaded: one in the home adds its context file, hooks
-    // and MCP servers (measured on 0.28.4).
-    const args = ["--acp", "--auth-type", this.config.authType, "--approval-mode", "yolo", "--extensions", "none"]
+    const args = ["--acp", "--auth-type", this.config.authType, "--approval-mode", "yolo"]
     // ITS OWN PROCESS GROUP, so a signal meant for the job's processes
     // reaches the helper, which stops the turn with session/cancel, and never
     // Qwen Code itself; a helper killed outright closes Qwen Code's stdin,

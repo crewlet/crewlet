@@ -7,8 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
-	"slices"
 	"strings"
 	"time"
 
@@ -49,19 +47,14 @@ func (GeminiCLI) Session(req sandbox.RunRequest) Session {
 }
 
 // geminiFlags is what both the prompt's export and the run itself are started
-// with: the export depends on the tools the approval mode offers, on the model
-// family and on the servers admitted, so it is made with the run's own. No
-// extension is loaded (`--extensions none`: an extension in the home adds its
-// context file, skills and hooks, measured on 0.70.0), and each of the run's
-// servers is admitted by name.
+// with: the export depends on the tools the approval mode offers and on the
+// model family, so it is made with the run's own. Everything a person's
+// session loads loads, the home's and the working directory's extensions and
+// MCP servers among it.
 func geminiFlags(req sandbox.RunRequest) []string {
-	flags := []string{"-p", `""`, "--output-format", "stream-json", "--approval-mode", "yolo",
-		"--extensions", "none"}
+	flags := []string{"-p", `""`, "--output-format", "stream-json", "--approval-mode", "yolo"}
 	if req.Model != "" {
 		flags = append(flags, "-m", shellword.Quote(req.Model))
-	}
-	for _, name := range slices.Sorted(maps.Keys(req.MCPServers)) {
-		flags = append(flags, "--allowed-mcp-server-names", shellword.Quote(name))
 	}
 	return flags
 }
@@ -203,8 +196,11 @@ const geminiCodeAssist = "https://cloudcode-pa.googleapis.com"
 // empty, which Gemini CLI reads as its own endpoint; the Code Assist endpoint
 // is named, since an empty one is read as a URL; the prompt files are `false`
 // until the script names its own (measured on 0.70.0).
-func (GeminiCLI) Pins(_ context.Context, req sandbox.RunRequest, _ Paths) []Pinned {
+//
+// AND THE RUN'S SETTINGS AS GEMINI CLI'S SYSTEM TIER ([Paths.GeminiSettings]).
+func (GeminiCLI) Pins(_ context.Context, req sandbox.RunRequest, paths Paths) []Pinned {
 	return []Pinned{{Name: "GEMINI_CLI_TRUST_WORKSPACE", Value: "true"}, {Name: "NO_BROWSER", Value: "true"},
+		{Name: "GEMINI_CLI_SYSTEM_SETTINGS_PATH", Value: paths.GeminiSettings()},
 		{Name: "GEMINI_SYSTEM_MD", Value: "false"}, {Name: "GEMINI_WRITE_SYSTEM_MD", Value: "false"},
 		{Name: "CODE_ASSIST_ENDPOINT", Value: cmp.Or(req.Env["CODE_ASSIST_ENDPOINT"], geminiCodeAssist)},
 		{Name: "GOOGLE_GEMINI_BASE_URL", Value: req.Env["GOOGLE_GEMINI_BASE_URL"]},
@@ -215,14 +211,6 @@ func (GeminiCLI) Pins(_ context.Context, req sandbox.RunRequest, _ Paths) []Pinn
 // one of its commands (`/init` wrote a GEMINI.md, measured on 0.70.0).
 func (GeminiCLI) readsCommands() {}
 
-// geminiHome is what a Gemini CLI run may load from the box that its launch
-// did not write ([runHome]): the home's skills (the run's own are written
-// after), policies (the run's file is written after), commands, memory file
-// and environment file. Extensions stay on disk, unloaded ([geminiFlags]);
-// agents are off in the settings.
-var geminiHome = runHome{State: ".gemini", Owned: []string{"skills", "policies", "commands", "GEMINI.md", ".env"},
-	Memory: []string{"GEMINI.md"}, WalksEnv: true}
-
 // Events is a new decoder for one stream ([geminiEvents]).
 func (GeminiCLI) Events() Decoder { return &geminiEvents{} }
 
@@ -231,10 +219,10 @@ func (GeminiCLI) Events() Decoder { return &geminiEvents{} }
 func (GeminiCLI) Parse(stdout []byte) sandbox.Result { return decodeAll(&geminiEvents{}, stdout) }
 
 // WriteConfig writes what a run's script and harness read: the run's system
-// text, the helper the script runs, the settings and policy in the box home,
-// the run's skills, and, where notes or skills are wired, the take script and
-// its configuration. It returns "": Gemini CLI reads its settings from its
-// home, never from a path it is handed.
+// text, the helper the script runs, the run's settings ([Paths.GeminiSettings]),
+// its policy and skills in the box home beside the home's own, and, where
+// notes or skills are wired, the take script and its configuration. It
+// returns "": Gemini CLI finds its settings by a variable, never an argument.
 func (g GeminiCLI) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, session Session,
 	paths Paths) (string, error) {
 	files := map[string][]byte{
@@ -278,10 +266,16 @@ func (g GeminiCLI) WriteConfig(ctx context.Context, box sandbox.Sandbox, req san
 		}
 		files[paths.GeminiSkills()+"/"+geminiSkillName(s)+"/SKILL.md"] = file
 	}
-	// EVERYTHING AN EARLIER RUN OR THE IMAGE LEFT GOES FIRST, the home's
-	// skills and policies among it, so the run loads only what it writes.
-	if err := geminiHome.prune(ctx, box, paths.Home, "Gemini CLI"); err != nil {
-		return "", err
+	// THE LAST RUN'S SKILLS GO FIRST, and only those: the home's skills
+	// directory is the person's and the image's too, so the run's are named
+	// apart ([geminiSkillName]).
+	res, err := box.Exec(ctx, "rm -rf -- "+shellword.Quote(paths.GeminiSkills())+"/"+sandbox.SkillNamespace+"-*",
+		sandbox.ExecOptions{})
+	if err == nil && res.ExitCode != 0 {
+		err = fmt.Errorf("exit %d: %s", res.ExitCode, strings.TrimSpace(res.Stderr))
+	}
+	if err != nil {
+		return "", fmt.Errorf("executor: clearing the last run's skills for Gemini CLI: %w", err)
 	}
 	for path, content := range files {
 		if err := box.WriteFile(ctx, path, content); err != nil {
@@ -319,11 +313,12 @@ func geminiWired(files map[string][]byte, req sandbox.RunRequest, paths Paths, s
 // take script as it reports a load ([geminiSkillReported]).
 func geminiSkillName(s sandbox.Skill) string { return sandbox.SkillNamespace + "-" + s.Name }
 
-// geminiSettings is the run's ~/.gemini/settings.json: the key sign-in for a
-// run handed GEMINI_API_KEY and Vertex for one handed GOOGLE_GENAI_USE_VERTEXAI
-// (a gateway base URL would otherwise select the gateway sign-in, which the
-// harness refuses; the profile's key_seed_files), none for a login, which
-// GOOGLE_GENAI_USE_GCA selects; usage statistics and the update check off (two
+// geminiSettings is the run's settings, Gemini CLI's system tier
+// ([Paths.GeminiSettings]): the key sign-in for a run handed GEMINI_API_KEY
+// and Vertex for one handed GOOGLE_GENAI_USE_VERTEXAI (a gateway base URL
+// would otherwise select the gateway sign-in, which the harness refuses; the
+// profile's key_seed_files), none for a login, which GOOGLE_GENAI_USE_GCA
+// selects; usage statistics and the update check off (two
 // connections to the vendor a run otherwise); subagents off, since the hooks
 // fire inside a subagent's loop as in the main agent's, so a note would land
 // in delegated work; and the take script's hooks where wired: AfterTool for
@@ -425,14 +420,13 @@ var geminiHelperScript []byte
 var _ artifactHolder = GeminiCLI{}
 
 // artifactFiles is what a Gemini CLI run leaves in the box's work directory,
-// and a fresh session's copy of its settings in the home, each written afresh
-// by the next ([Runner.ClearArtifacts]): files alone, so it is no
-// [artifactDirHolder]. The home's settings, policy and project
-// registry are rewritten by every Gemini CLI run, its skills, policies and
-// commands removed first, an image's included ([geminiHome]); every other
-// harness's run leaves them alone.
+// its settings with their tokens among it, each written afresh by the next
+// ([Runner.ClearArtifacts]): files alone, so it is no [artifactDirHolder].
+// The home's policy file and project registry are rewritten by every Gemini
+// CLI run, its `crewlet-` skills removed first; the rest of the home is the
+// person's and the image's, which no run removes.
 func (GeminiCLI) artifactFiles(p Paths) []string {
 	return []string{p.GeminiHelper(), p.GeminiTake(), p.GeminiTakeConfig(), p.GeminiTakeConfig() + ".fresh",
-		p.GeminiSettings() + ".fresh", p.GeminiDefaultSystem(), p.GeminiExportErr(), p.GeminiSystem(),
+		p.GeminiSettings(), p.GeminiSettings() + ".fresh", p.GeminiDefaultSystem(), p.GeminiExportErr(), p.GeminiSystem(),
 		p.GeminiUsageBefore(), p.GeminiUsageBefore() + ".part"}
 }

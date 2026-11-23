@@ -5,10 +5,11 @@ package executor
 // the wrapper unsets that ([GeminiCLI.Output]).
 func (p Paths) GeminiDir() string { return p.Home + "/.gemini" }
 
-// GeminiSettings is the run's settings file ([geminiSettings]), the home's
-// own: Gemini CLI reads no settings path it is handed, and a workspace's
-// `.gemini/settings.json` is the repository's, which a commit would carry.
-func (p Paths) GeminiSettings() string { return p.GeminiDir() + "/settings.json" }
+// GeminiSettings is the run's settings file ([geminiSettings]), Gemini CLI's
+// system tier (GEMINI_CLI_SYSTEM_SETTINGS_PATH, [GeminiCLI.Pins]): read after
+// the home's and the working directory's own settings, which it overrides key
+// by key while their MCP servers and hooks stay beside the run's.
+func (p Paths) GeminiSettings() string { return p.WorkDir() + "/gemini-settings.json" }
 
 // GeminiPolicy is the run's policy file ([geminiPolicy]), in the home's
 // policies directory, which Gemini CLI reads every file of.

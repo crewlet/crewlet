@@ -55,7 +55,7 @@ func geminiTakeReachesTheBridgeTool(t *testing.T) {
 	inbox := &geminiProbeInbox{}
 	endpoint := probeBridge(t, inbox, &probeLedger{})
 	record := t.TempDir()
-	runner, box := geminiBox(t, `cp "$HOME/.gemini/settings.json" '`+record+`/settings.json'
+	runner, box := geminiBox(t, `cp "$GEMINI_CLI_SYSTEM_SETTINGS_PATH" '`+record+`/settings.json'
 printf '%s\n' "$@" > '`+record+`/args'
 cat > '`+record+`/stdin'
 echo '{"type":"result","status":"success"}'`)

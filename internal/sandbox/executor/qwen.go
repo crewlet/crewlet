@@ -136,11 +136,13 @@ const qwenDashScope = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 // not the entry names one, since Qwen Code fills each variable its
 // environment lacks from an `.env` file: OPENAI_BASE_URL the entry's or Qwen
 // Code's own, which its subscription sign-in does not read, and the prompt
-// files off (measured on 0.28.4).
+// files off (measured on 0.28.4). And the run's settings as Qwen Code's
+// system tier ([Paths.QwenSettings]).
 func (QwenCode) Pins(_ context.Context, req sandbox.RunRequest, paths Paths) []Pinned {
 	pins := []Pinned{{Name: "QWEN_SYSTEM_IDENTITY_MD", Value: paths.System()}, {Name: "QWEN_CODE_MODELS_DEV", Value: "off"},
 		{Name: "QWEN_SYSTEM_MD", Value: "false"}, {Name: "QWEN_WRITE_SYSTEM_MD", Value: "false"},
-		{Name: "OPENAI_BASE_URL", Value: cmp.Or(req.Env["OPENAI_BASE_URL"], qwenDashScope)}}
+		{Name: "OPENAI_BASE_URL", Value: cmp.Or(req.Env["OPENAI_BASE_URL"], qwenDashScope)},
+		{Name: "QWEN_CODE_SYSTEM_SETTINGS_PATH", Value: paths.QwenSettings()}}
 	if req.Model != "" {
 		pins = append(pins, Pinned{Name: "OPENAI_MODEL", Value: req.Model})
 	}
@@ -158,21 +160,14 @@ func (QwenCode) Parse(stdout []byte) sandbox.Result { return decodeAll(&qwenEven
 // of its commands (`/init` wrote a QWEN.md over ACP, measured on 0.28.4).
 func (QwenCode) readsCommands() {}
 
-// qwenHome is what a Qwen Code run may load from the box that its launch did
-// not write ([runHome]): the home's skills, commands, rules, memory files and
-// environment file. The run's own skills are in its work directory
-// ([Paths.QwenSkills]); extensions stay on disk, unloaded (the helper's
-// `--extensions none`); agents are denied in the settings.
-var qwenHome = runHome{State: ".qwen", Owned: []string{"skills", "commands", "rules", "QWEN.md", "AGENTS.md", ".env"},
-	Memory: []string{"QWEN.md", "AGENTS.md"}, WalksEnv: true}
-
 var (
 	_ artifactHolder    = QwenCode{}
 	_ artifactDirHolder = QwenCode{}
 )
 
 // artifactFiles is what a Qwen Code run leaves in a box beside the shared
-// artefacts ([artifactHolder]): its settings, which hold its key, the helper
+// artefacts ([artifactHolder]): its settings ([Paths.QwenSettings], in its
+// work directory, never the home's own), which hold its key, the helper
 // and its configuration, a fresh session's copies of both, and where the run
 // began in its session.
 func (QwenCode) artifactFiles(p Paths) []string {
@@ -184,11 +179,11 @@ func (QwenCode) artifactFiles(p Paths) []string {
 // ([artifactDirHolder]): its skills, removed whole.
 func (QwenCode) artifactDirs(p Paths) []string { return []string{p.QwenSkills()} }
 
-// WriteConfig removes what an earlier run or the image left for Qwen Code
-// ([qwenHome]) and writes what a run's helper and harness read: the run's
-// system text, the helper and its configuration, the settings in the box
-// home, and the run's skills. It returns "": Qwen Code reads its settings
-// from its home, and the helper hands it no MCP servers of its own.
+// WriteConfig writes what a run's helper and harness read: the run's system
+// text, the helper and its configuration, the run's settings
+// ([Paths.QwenSettings]) and its skills, all in its work directory, so the
+// home is the person's and the image's as it stands. It returns "": Qwen Code
+// finds its settings by a variable, and the helper hands it no MCP servers.
 func (q QwenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
 	paths Paths) (string, error) {
 	system := req.System
@@ -227,11 +222,6 @@ func (q QwenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 		}
 		files[paths.QwenSkills()+"/"+qwenSkillName(s)+"/SKILL.md"] = file
 	}
-	// THE HOME IS PRUNED ONLY ONCE NOTHING ABOVE REFUSED THE RUN, as Gemini
-	// CLI's is: a refused launch leaves the box as it found it.
-	if err := qwenHome.prune(ctx, box, paths.Home, "Qwen Code"); err != nil {
-		return "", err
-	}
 	for _, path := range slices.Sorted(maps.Keys(files)) {
 		if err := box.WriteFile(ctx, path, files[path]); err != nil {
 			return "", fmt.Errorf("executor: writing %s for Qwen Code: %w", path, err)
@@ -268,7 +258,8 @@ func qwenSkillName(s sandbox.Skill) string { return sandbox.SkillNamespace + "-"
 // which stops the run to wait for an approval nobody gives.
 var qwenDenied = []string{"agent", "ask_user_question", "enter_plan_mode", "exit_plan_mode"}
 
-// qwenSettings is the run's ~/.qwen/settings.json:
+// qwenSettings is the run's settings, Qwen Code's system tier
+// ([Paths.QwenSettings]):
 //   - the key, read by the OpenAI sign-in, from the settings, OPENAI_API_KEY
 //     staying in the run's environment as well;
 //   - every MCP server, each tool offered from the start ([qwenMCP]);
@@ -279,7 +270,8 @@ var qwenDenied = []string{"agent", "ask_user_question", "enter_plan_mode", "exit
 //   - the chat file kept, since a note is confirmed by its record there;
 //   - the tools denied ([qwenDenied]);
 //   - the run's round cap, as model.maxSessionTurns;
-//   - the run's skills alone, with the hook reporting each load.
+//   - the run's skills beside every other level's, with the hook reporting
+//     each load.
 func qwenSettings(req sandbox.RunRequest, paths Paths) map[string]any {
 	settings := map[string]any{
 		"general": map[string]any{
@@ -318,12 +310,10 @@ func qwenSettings(req sandbox.RunRequest, paths Paths) map[string]any {
 		}
 		settings["mcpServers"] = servers
 	}
-	// ONLY THE RUN'S SKILLS: "user" stays enabled, since a directory the
-	// settings name is listed at that level (measured: disabling it lists
-	// nothing), and the home's own skills directory is removed ([qwenHome]).
-	skills := map[string]any{"disabledLevels": []string{"project", "extension", "bundled"}}
+	// THE RUN'S SKILLS BESIDE EVERY OTHER LEVEL'S: Qwen Code unions skill
+	// directories across its tiers, so the home's own stay listed.
 	if len(req.Skills) > 0 {
-		skills["directories"] = []string{paths.QwenSkills()}
+		settings["skills"] = map[string]any{"directories": []string{paths.QwenSkills()}}
 		settings["hooks"] = map[string]any{"PostToolUse": []any{map[string]any{
 			"matcher": "skill",
 			"hooks": []any{map[string]any{
@@ -333,7 +323,6 @@ func qwenSettings(req sandbox.RunRequest, paths Paths) map[string]any {
 			}},
 		}}}
 	}
-	settings["skills"] = skills
 	return settings
 }
 

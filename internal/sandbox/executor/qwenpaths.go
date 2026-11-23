@@ -5,10 +5,12 @@ package executor
 // ([QwenCode.Output]).
 func (p Paths) QwenDir() string { return p.Home + "/.qwen" }
 
-// QwenSettings is the run's settings file ([qwenSettings]), the home's own:
-// a workspace's `.qwen/settings.json` is the repository's, which a commit
-// would carry, and needs a folder trust a headless run has not given.
-func (p Paths) QwenSettings() string { return p.QwenDir() + "/settings.json" }
+// QwenSettings is the run's settings file ([qwenSettings]), Qwen Code's
+// system tier (QWEN_CODE_SYSTEM_SETTINGS_PATH, [QwenCode.Pins]): read after
+// the home's and the working directory's own settings, which it overrides key
+// by key while their MCP servers, hooks and skill directories stay beside the
+// run's.
+func (p Paths) QwenSettings() string { return p.WorkDir() + "/qwen-settings.json" }
 
 // QwenSkills is where a run's own skills are written, a directory each
 // ([qwenSkillName]): a directory of the run's that the settings name in
