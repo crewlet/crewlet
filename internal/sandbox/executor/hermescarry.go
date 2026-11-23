@@ -178,16 +178,13 @@ func hermesPack(paths Paths, staged, dest, nothing string) string {
 // hermesSessionGate is the part of a run's script that names the session its
 // Hermes runs in, as sid, whether it is the one asked to continue, as k, and
 // why not, as w; and installs the run's overlay. The script creates sid where
-// k is no (`--create-if-missing`) and continues it where k is yes.
-//
-// It continues only on a box whose Hermes (n) is exactly [hermesFloor]: the
-// session its box HOLDS ([Paths.HermesSessions]), unless a carried archive
-// holds what the copy does not (a digest not among [Paths.SessionDigests]) or
-// Hermes was cut off in the copy ([Session.Replaces]); then the archive is
-// RESTORED into a new store ([hermesRestore]) and its digest recorded. And only
-// where the run's launch is the one Hermes froze with the session
-// ([hermesPolicy]), which would otherwise refuse the resume, and once the
-// session holds the run's own standing instructions (`renew`).
+// k is no (`--create-if-missing`) and continues it where k is yes: only on a
+// box whose Hermes (n) is exactly [hermesFloor], in the session its box HOLDS
+// ([Paths.HermesSessions]) unless a carried archive holds what the copy does
+// not (a digest not among [Paths.SessionDigests]) or Hermes was cut off in it
+// ([Session.Replaces]), when the archive is RESTORED ([hermesRestore]); only
+// under the launch and model route Hermes froze with it ([hermesPolicy],
+// `route`), and once it holds the run's own standing instructions (`renew`).
 func hermesSessionGate(req sandbox.RunRequest, session Session, paths Paths, rewired bool) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
