@@ -261,7 +261,7 @@ func decodedReading[T textual](whole T, start, end int, prior [][2]int) (aValue,
 		}
 	}
 	vs, ve := j.view(start), j.view(end)
-	if ve <= vs || ve > len(j.text) || strings.IndexAny(j.text[vs:ve], ":=") < 0 {
+	if ve <= vs || ve > len(j.text) || !strings.ContainsAny(j.text[vs:ve], ":=") {
 		// The key's separator is an escape, or the key runs past the
 		// string: the decoded string names no key here.
 		return aValue{}, false
