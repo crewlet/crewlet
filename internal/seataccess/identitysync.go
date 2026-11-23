@@ -29,21 +29,23 @@ func (s *syncer) identities(ctx context.Context, rec *Record, ref SeatRef, want 
 		}
 		in := IdentityInput{Seat: ref, Lane: lane, Want: d, Record: lr.Identity, Records: s.records,
 			Sinks: map[string]string{}}
-		if sink := IdentitySink(s.kind, spec.Identity, ref.Handle); sink != "" {
-			in.Sinks[spec.Identity.Credential] = sink
+		for _, field := range []string{spec.Identity.Credential, spec.Identity.Retiring} {
+			if field != "" {
+				in.Sinks[field] = SinkName(s.kind, field, ref.Handle)
+			}
 		}
 		own := d.Enabled && !s.in.Disconnect && spec.Identity.ModeOf(d) == IdentityOwn
 		var err error
 		switch {
 		case s.in.Sink == nil:
-			lr.Identity, err = s.checkIdentity(ctx, maker, in)
+			lr.Identity, err = s.checkIdentity(ctx, maker, spec.Identity, in, rec.Handle)
 		case ask != nil && ask.Drop, lr.Identity.Kept() && !own:
-			lr.Identity, err = s.dropIdentity(ctx, maker, in, rec.Handle)
+			lr.Identity, err = s.dropIdentity(ctx, maker, spec.Identity, in, rec.Handle)
 		case ask != nil && ask.Keep:
-			in.Way, in.Value, in.FileName = ask.Way, ask.Value, ask.FileName
+			in.Way, in.Value, in.FileName, in.ID = ask.Way, ask.Value, ask.FileName, ask.ID
 			lr.Identity, err = s.keepIdentity(ctx, maker, spec.Identity, in, rec.Handle)
 		default:
-			lr.Identity, err = s.checkIdentity(ctx, maker, in)
+			lr.Identity, err = s.checkIdentity(ctx, maker, spec.Identity, in, rec.Handle)
 		}
 		if err != nil {
 			return fmt.Errorf("seataccess: %s identity for %s: %w", lane, ref.Handle, err)
@@ -56,7 +58,8 @@ func (s *syncer) identities(ctx context.Context, rec *Record, ref SeatRef, want 
 // checkIdentity reads back the kept identity, and the one it replaced while a
 // person has still to revoke it. Nothing kept and nothing retiring reads
 // nothing.
-func (s *syncer) checkIdentity(ctx context.Context, maker IdentityMaker, in IdentityInput) (*IdentityRecord, error) {
+func (s *syncer) checkIdentity(ctx context.Context, maker IdentityMaker, spec IdentitySpec, in IdentityInput,
+	handle string) (*IdentityRecord, error) {
 	rec := in.Record
 	if !rec.Kept() && (rec == nil || rec.Retiring == nil) {
 		return rec, nil
@@ -70,8 +73,14 @@ func (s *syncer) checkIdentity(ctx context.Context, maker IdentityMaker, in Iden
 	if rec.Kept() {
 		out.Check = &check
 	}
-	if check.RetiringGone {
-		out.Retiring = nil
+	if check.RetiringGone && out.Retiring != nil {
+		// A DRY RUN CLEARS NOTHING: the next writing pass reads it again.
+		if s.in.Sink != nil {
+			if err := s.clear(ctx, in.Sinks[spec.Retiring], handle); err != nil {
+				return rec, err
+			}
+			out.Retiring = nil
+		}
 	}
 	return &out, nil
 }
@@ -112,11 +121,15 @@ func (s *syncer) keepIdentity(ctx context.Context, maker IdentityMaker, spec Ide
 			return &out, nil
 		}
 		for _, m := range kept.Minted {
-			if m.Field != spec.Credential {
+			name := in.Sinks[m.Field]
+			if name == "" || (m.Field != spec.Credential && m.Field != spec.Retiring) {
 				continue
 			}
-			if err := s.in.Sink.Record(ctx, sink, m.Value); err != nil {
-				return in.Record, errors.Join(fmt.Errorf("seal %s: %w", sink, err), s.revokeMinted(ctx, kept.Minted))
+			if err := s.in.Sink.Record(ctx, name, m.Value); err != nil {
+				return in.Record, errors.Join(fmt.Errorf("seal %s: %w", name, err), s.revokeMinted(ctx, kept.Minted))
+			}
+			if m.Field != spec.Credential {
+				continue
 			}
 			cred = &Credential{Variable: sink, MintedAt: s.now, By: s.in.By, Source: CredentialExternal}
 			if in.Way == WayMade {
@@ -136,7 +149,7 @@ func (s *syncer) keepIdentity(ctx context.Context, maker IdentityMaker, spec Ide
 // dropIdentity gives up the kept identity: the vendor undoes what it can,
 // the sealed credential is cleared, and an identity only a person can revoke
 // stays as retiring until the vendor refuses it.
-func (s *syncer) dropIdentity(ctx context.Context, maker IdentityMaker, in IdentityInput,
+func (s *syncer) dropIdentity(ctx context.Context, maker IdentityMaker, spec IdentitySpec, in IdentityInput,
 	handle string) (*IdentityRecord, error) {
 
 	if !in.Record.Kept() {
@@ -146,20 +159,42 @@ func (s *syncer) dropIdentity(ctx context.Context, maker IdentityMaker, in Ident
 	if err != nil {
 		return in.Record, err
 	}
-	var names []string
-	for _, name := range in.Sinks {
-		names = append(names, name)
-	}
-	if names = Forgettable(names, handle, s.refs); len(names) > 0 {
-		if err := s.in.Sink.Forget(ctx, names...); err != nil {
-			return in.Record, fmt.Errorf("clear %v: %w", names, err)
-		}
-	}
 	out := &IdentityRecord{Retiring: in.Record.Retiring}
 	if dropped.Waiting != nil {
 		out.Retiring = &RetiringIdentity{ID: in.Record.ID, Name: in.Record.Name, Since: in.Record.Since}
 	}
+	kept := false
+	for _, m := range dropped.Minted {
+		if name := in.Sinks[m.Field]; name != "" && m.Field == spec.Retiring {
+			if err := s.in.Sink.Record(ctx, name, m.Value); err != nil {
+				return in.Record, fmt.Errorf("seal %s: %w", name, err)
+			}
+			kept = true
+		}
+	}
+	if err := s.clear(ctx, in.Sinks[spec.Credential], handle); err != nil {
+		return in.Record, err
+	}
+	if !kept && out.Retiring == nil {
+		if err := s.clear(ctx, in.Sinks[spec.Retiring], handle); err != nil {
+			return in.Record, err
+		}
+	}
 	return out, nil
+}
+
+// clear forgets one sealed name of the seat's, never one something outside
+// the seat names; "" clears nothing.
+func (s *syncer) clear(ctx context.Context, name, handle string) error {
+	if name == "" || s.in.Sink == nil {
+		return nil
+	}
+	if names := Forgettable([]string{name}, handle, s.refs); len(names) > 0 {
+		if err := s.in.Sink.Forget(ctx, names...); err != nil {
+			return fmt.Errorf("clear %s: %w", name, err)
+		}
+	}
+	return nil
 }
 
 // revokeMinted undoes what a keep minted and is not keeping, with a context

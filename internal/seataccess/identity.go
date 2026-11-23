@@ -135,6 +135,11 @@ type IdentitySpec struct {
 	// for an identity with none to seal. Never one of [Catalog.Credentials],
 	// and never put in a box (ADR-0170).
 	Credential string
+
+	// Retiring is the field a superseded identity's credential stays sealed
+	// under while a person revokes it at the vendor, so each pass can read
+	// whether the vendor refuses it yet; empty where none is kept.
+	Retiring string
 }
 
 // IdentitySink is where a seat's own identity's credential is sealed on a lane
@@ -321,9 +326,11 @@ type IdentityInput struct {
 
 	// Value is what a person handed in (a .p8 key's contents, a token), and
 	// FileName the name of the file it came in, which can carry the vendor's
-	// ID for it (`AuthKey_<KEY ID>.p8`). Never logged or echoed.
+	// ID for it (`AuthKey_<KEY ID>.p8`), and ID the vendor's ID where the
+	// person named it. Never logged or echoed.
 	Value    string `json:"-"`
 	FileName string
+	ID       string
 
 	// Sinks are the engine-owned names the seat's credentials are sealed
 	// under, by field ([SinkNames]), for a session that resolves the kept
@@ -354,6 +361,11 @@ type IdentityDropped struct {
 	// Waiting is the step a person takes at the vendor (revoke the key at
 	// Apple), nil where Crewlet undid everything.
 	Waiting *Waiting
+
+	// Minted is the given-up credential to keep sealed under the spec's
+	// Retiring field while a person revokes it, so a pass can read the
+	// vendor refuse it; empty where nothing waits.
+	Minted []Minted
 }
 
 // IdentityAsk is a person's ask about one seat's identity, carried by [Ask].
@@ -364,10 +376,11 @@ type IdentityAsk struct {
 	Drop bool
 	Way  IdentityWay
 
-	// Value and FileName are what was handed in ([IdentityInput]). Never
-	// logged or marshalled.
+	// Value, FileName and ID are what was handed in ([IdentityInput]).
+	// Never logged or marshalled.
 	Value    string `json:"-"`
 	FileName string
+	ID       string
 }
 
 // Signer is who signs one seat's calls on a lane.
