@@ -183,6 +183,10 @@ func copilotScript(req sandbox.RunRequest, session Session, paths Paths, configP
 	if req.Limits.MaxTurns > 0 {
 		line(`printf '%%s\n' %s`, q(copilotCapLine(req.Limits.MaxTurns)))
 	}
+	// AND THE GUARD, for the same reason, where the run has a bridge.
+	if configPath != "" && len(bridgeServers(req.MCPServers)) > 0 {
+		line(`printf '%%s\n' %s`, q(`{"type":"`+copilotGuardMark+`"}`))
+	}
 	line(`set --`)
 	b.WriteString(copilotSessionGate(session, paths, req.FreshWiring != nil && configPath != ""))
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$s" "$k" "$w" "$v" > %s`,
@@ -609,7 +613,8 @@ type copilotSettings struct {
 // WriteConfig writes what a Copilot run reads from its home and its work
 // directory: its settings ([copilotSettings]); its standing instructions
 // ([Paths.CopilotInstructions]), told of notes where it is wired to them; its
-// extension where it reads notes or has a turn cap ([Paths.CopilotExtension]);
+// extension where it reads notes, has a turn cap or a bridge to guard
+// ([Paths.CopilotExtension]);
 // and its MCP servers, returning the file `--additional-mcp-config` names, with
 // a fresh session's copies beside them ([sandbox.RunRequest.FreshWiring]).
 // What an earlier run wrote there the clear removes first
@@ -639,14 +644,15 @@ func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandb
 			return "", fmt.Errorf("executor: writing Copilot's standing instructions: %w", err)
 		}
 	}
-	if req.Steer.Set() || req.Limits.MaxTurns > 0 {
+	bridges := bridgeServers(req.MCPServers)
+	if req.Steer.Set() || req.Limits.MaxTurns > 0 || len(bridges) > 0 {
 		if err := writeCopilotExtension(ctx, box, paths.CopilotExtension()+"/extension.mjs", req.Steer,
-			req.Limits.MaxTurns); err != nil {
+			req.Limits.MaxTurns, bridges); err != nil {
 			return "", err
 		}
 		if f := req.FreshWiring; f != nil {
 			if err := writeCopilotExtension(ctx, box, paths.CopilotExtensionFresh(), f.Steer,
-				req.Limits.MaxTurns); err != nil {
+				req.Limits.MaxTurns, bridgeServers(f.MCPServers)); err != nil {
 				return "", err
 			}
 		}
@@ -666,10 +672,10 @@ func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandb
 }
 
 // writeCopilotExtension writes the extension, wired to steer's notes route
-// where it is set and to the turn cap, to file.
+// where it is set, to the turn cap and to the bridges it guards, to file.
 func writeCopilotExtension(ctx context.Context, box sandbox.Sandbox, file string, steer sandbox.SteerWiring,
-	turns int) error {
-	settings := copilotExtensionSettings{Cap: turns}
+	turns int, bridges []string) error {
+	settings := copilotExtensionSettings{Cap: turns, Bridges: bridges}
 	if steer.Set() {
 		settings.URL = steer.URL
 	}
