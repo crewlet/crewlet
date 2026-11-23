@@ -66,7 +66,7 @@ func TestTheWidestStatusFitsItsBound(t *testing.T) {
 			OperatorID: "pat:" + strings.Repeat("o", iam.MaxLogin)},
 		FindingsRecord: FindingsRecord{Bytes: coord.MaxIntegrationFindingsBytes, SHA256: strings.Repeat("f", 64),
 			Count: math.MaxInt, PersonOwes: math.MaxInt, Naming: math.MaxInt, Expiring: math.MaxInt,
-			Omitted: math.MaxInt, SeatOmitted: math.MaxInt, WordsOmitted: math.MaxInt, NamesOmitted: math.MaxInt},
+			Omitted: math.MaxInt, OwedOmitted: math.MaxInt, SeatOmitted: math.MaxInt, WordsOmitted: math.MaxInt, NamesOmitted: math.MaxInt},
 	}
 	whole, err := encodeRecord(state)
 	if err != nil {
@@ -104,68 +104,186 @@ func widestFinding(kind FindingKind, seat bool, subjects int) Finding {
 	return f
 }
 
-// A SURFACE'S FINDINGS ARE CUT TO WHAT THEIR RECORD KEEPS, names after words
-// and what a person owes after what nobody does. Past the bound: the vendor's
-// 400 findings about nothing beside a refused credential naming 400 agents,
-// with and without room for the vendor's names; 400 agents each waiting on an
-// administrator and on the vendor; 2,000 agents waiting on an administrator.
-// Only the last hides a name, each counted; the first finding stays first, its
-// words whole and its list whole until only names are left to cut.
+// A SURFACE'S FINDINGS ARE CUT TO WHAT THEIR RECORD KEEPS, every word before
+// any name and what nobody owes before what a person does, each step only as
+// far as the bound needs: agents' own words, then the vendor's, then a
+// person's; then findings about nothing, the vendor's first; then subject
+// lists, the reported finding's last; then the rest, the vendor's first. Each
+// case is sized so the step before it is not enough and its own is, and each
+// finding is counted once, by what the cut left of it. The first finding stays
+// first and keeps its words.
 //
-// Mutation: cut subject lists before what nobody owes, keep words before
-// names, drop a person's before the vendor's, or count no hidden name.
+// Mutation: swap any two adjacent steps of fitFindings, cut the first list
+// with the others, or count a finding in two counters, and a case goes red.
 func TestAPassesFindingsAreCutToTheirRecordFirstFindingWhole(t *testing.T) {
 	t.Parallel()
-	agents := func(n int) []string {
+	words := func(n int) string { return strings.Repeat("w", n) }
+	agents := func(prefix string, n int) []string {
 		out := make([]string, n)
 		for i := range out {
-			out[i] = fmt.Sprintf("agent-%04d", i)
+			out[i] = fmt.Sprintf("%s-%04d", prefix, i)
 		}
 		return out
 	}
-	refused := widestFinding(FindingCredentialMissing, false, 0)
-	refused.Subjects = agents(400)
-	waiting := func(n int, vendor bool) []Finding {
-		var out []Finding
-		for i, handle := range agents(n) {
-			own := Finding{Kind: FindingApprovalRequired, Seat: true, Subject: handle,
-				Detail: sixFold(MaxDetailLength), Remedy: sixFold(MaxDetailLength)}
-			out = append(out, own)
-			if vendor {
-				out = append(out, Finding{Kind: FindingGrantPending, Subject: handle,
-					Title: fmt.Sprintf("grant %d", i), Detail: sixFold(MaxDetailLength)})
+	refused := func(subjects int) Finding {
+		return Finding{Kind: FindingCredentialMissing, Title: words(100), Detail: words(400),
+			Remedy: words(400), ActionURL: "https://example.com/token", Subjects: agents("agent", subjects)}
+	}
+	// many is n findings f makes of each subject, or of nothing where
+	// prefix is empty.
+	many := func(n int, prefix string, f func(subject string) Finding) []Finding {
+		out := make([]Finding, n)
+		for i := range out {
+			subject := ""
+			if prefix != "" {
+				subject = fmt.Sprintf("%s-%04d", prefix, i)
+			}
+			out[i] = f(subject)
+		}
+		return out
+	}
+	own := func(s string) Finding {
+		return Finding{Kind: FindingApprovalRequired, Seat: true, Subject: s, Detail: words(400), Remedy: words(400)}
+	}
+	ownWordless := func(s string) Finding { return Finding{Kind: FindingApprovalRequired, Seat: true, Subject: s} }
+	vendor := func(s string) Finding {
+		return Finding{Kind: FindingGrantPending, Subject: s, Title: "grant", Detail: words(400)}
+	}
+	vendorWordless := func(s string) Finding { return Finding{Kind: FindingGrantPending, Subject: s} }
+	admin := func(s string) Finding {
+		return Finding{Kind: FindingGrantShort, Subject: s, Detail: words(300), Remedy: words(150),
+			ActionURL: "https://example.com/grant"}
+	}
+	expiring := func(string) Finding { return Finding{Kind: FindingCredentialExpiring} }
+	listed := func(n int) Finding {
+		return Finding{Kind: FindingApprovalRequired, Subjects: agents("seat", n)}
+	}
+	// keepsWords is whether every kept finding of kind keeps its words.
+	keepsWords := func(kept []Finding, kind FindingKind, want bool) error {
+		for _, f := range kept[1:] {
+			if f.Kind == kind && (f.Detail != "") != want {
+				return fmt.Errorf("a kept %s keeps its words: %t, want %t", kind, !want, want)
 			}
 		}
-		return out
+		return nil
 	}
-	var nameless []Finding
-	for i := range 400 {
-		nameless = append(nameless, Finding{Kind: FindingGrantPending, Title: fmt.Sprintf("grant %d", i),
-			Detail: sixFold(MaxDetailLength), Remedy: sixFold(MaxDetailLength)})
+	of := func(kept []Finding, kind FindingKind) int {
+		n := 0
+		for _, f := range kept {
+			if f.Kind == kind {
+				n++
+			}
+		}
+		return n
 	}
 	for _, c := range []struct {
 		name     string
 		findings []Finding
-		// named is every seat a person holds up that must stay named, and
-		// hidden how many names the cut may hide.
-		named  int
-		hidden func(rec FindingsRecord) bool
-		// list is whether the first finding keeps its whole subject list.
-		list bool
+		check    func(kept []Finding, rec FindingsRecord) error
 	}{
-		{"the vendor's findings about nothing", append([]Finding{refused}, nameless...), 0,
-			func(rec FindingsRecord) bool { return rec.NamesOmitted == 0 && rec.WordsOmitted > 0 }, true},
-		{"the vendor's findings about nothing past their words",
-			append([]Finding{refused}, slices.Repeat(nameless, 8)...), 0,
-			func(rec FindingsRecord) bool { return rec.NamesOmitted == 0 && rec.Omitted > 0 }, true},
-		{"agents waiting on a person and on the vendor", append([]Finding{refused}, waiting(400, true)...), 400,
-			func(rec FindingsRecord) bool { return rec.NamesOmitted == 0 && rec.SeatOmitted == 400 }, true},
-		{"more agents waiting on a person than the record holds", append([]Finding{refused}, waiting(2000, false)...),
-			-1, func(rec FindingsRecord) bool { return rec.NamesOmitted == rec.Omitted+1 && rec.Omitted > 0 }, false},
+		{"agents' own words go before the vendor's",
+			slices.Concat([]Finding{refused(10)}, many(150, "agent", own), many(50, "vendor", vendor)),
+			func(kept []Finding, rec FindingsRecord) error {
+				if rec.SeatOmitted == 0 || rec.WordsOmitted != 0 {
+					return fmt.Errorf("the cut counts %+v, want agents' own words alone left out", rec)
+				}
+				return keepsWords(kept, FindingGrantPending, true)
+			}},
+		{"the vendor's words go before a person's",
+			slices.Concat([]Finding{refused(10)}, many(60, "seat", admin), many(200, "vendor", vendor)),
+			func(kept []Finding, rec FindingsRecord) error {
+				if rec.WordsOmitted == 0 || rec.Omitted != 0 {
+					return fmt.Errorf("the cut counts %+v, want only words left out", rec)
+				}
+				return keepsWords(kept, FindingGrantShort, true)
+			}},
+		{"a person's words go before a name nobody owes",
+			slices.Concat([]Finding{refused(10)}, many(150, "seat", admin), many(1, "new", vendor)),
+			func(kept []Finding, rec FindingsRecord) error {
+				if of(kept, FindingGrantPending) != 1 || rec.NamesOmitted != 0 || rec.WordsOmitted < 2 {
+					return fmt.Errorf("the vendor's one name is kept %d times, the cut counting %+v, want it "+
+						"kept and a person's words left out", of(kept, FindingGrantPending), rec)
+				}
+				return nil
+			}},
+		{"a person's words go before findings about nothing",
+			slices.Concat([]Finding{refused(10)}, many(120, "seat", admin), many(700, "", vendor)),
+			func(kept []Finding, rec FindingsRecord) error {
+				if rec.Omitted != 0 {
+					return fmt.Errorf("the cut dropped %d findings, want only words left out", rec.Omitted)
+				}
+				return nil
+			}},
+		{"findings about nothing go before any name, the vendor's first",
+			slices.Concat([]Finding{refused(400)}, many(2000, "", vendorWordless), many(1000, "", expiring)),
+			func(kept []Finding, rec FindingsRecord) error {
+				if rec.Omitted == 0 || rec.OwedOmitted != 0 || rec.NamesOmitted != 0 || len(kept[0].Subjects) != 400 {
+					return fmt.Errorf("the cut counts %+v, the first keeping %d of 400 names, want the vendor's "+
+						"findings about nothing alone dropped", rec, len(kept[0].Subjects))
+				}
+				return nil
+			}},
+		{"a person's findings about nothing go before any name",
+			slices.Concat([]Finding{refused(400)}, many(3000, "", expiring)),
+			func(kept []Finding, rec FindingsRecord) error {
+				if rec.OwedOmitted == 0 || rec.NamesOmitted != 0 || len(kept[0].Subjects) != 400 {
+					return fmt.Errorf("the cut counts %+v, the first keeping %d of 400 names, want findings "+
+						"about nothing dropped and every name kept", rec, len(kept[0].Subjects))
+				}
+				return nil
+			}},
+		{"subject lists are cut before a name is dropped",
+			slices.Concat([]Finding{refused(10), listed(6000)}, many(100, "vendor", vendorWordless)),
+			func(kept []Finding, rec FindingsRecord) error {
+				if rec.Omitted != 0 || rec.NamesOmitted != 1 || kept[1].SubjectsOmitted == 0 {
+					return fmt.Errorf("the cut counts %+v, the list losing %d, want one list cut and no finding "+
+						"dropped", rec, kept[1].SubjectsOmitted)
+				}
+				return nil
+			}},
+		{"the reported finding's list is cut last",
+			[]Finding{refused(3000), listed(3000)},
+			func(kept []Finding, rec FindingsRecord) error {
+				if len(kept[0].Subjects) != 3000 || kept[1].SubjectsOmitted == 0 {
+					return fmt.Errorf("the first keeps %d of 3000 names and the second lost %d, want the second's "+
+						"cut alone", len(kept[0].Subjects), kept[1].SubjectsOmitted)
+				}
+				return nil
+			}},
+		{"the vendor's names go before a person's",
+			slices.Concat([]Finding{refused(10)}, many(400, "vendor", vendorWordless), many(2000, "agent", ownWordless)),
+			func(kept []Finding, rec FindingsRecord) error {
+				if of(kept, FindingGrantPending) != 0 || rec.Omitted-rec.OwedOmitted != 400 || rec.OwedOmitted == 0 {
+					return fmt.Errorf("the cut counts %+v with %d of the vendor's kept, want every one of the "+
+						"vendor's dropped before a person's", rec, of(kept, FindingGrantPending))
+				}
+				return nil
+			}},
+		{"a finding whose list is cut and then dropped is counted once",
+			slices.Concat([]Finding{refused(10)}, many(3000, "", func(string) Finding { return listed(4) })),
+			func(kept []Finding, rec FindingsRecord) error {
+				if rec.Omitted == 0 || rec.NamesOmitted != len(kept)+rec.Omitted {
+					return fmt.Errorf("the cut counts %+v of %d findings, want every one hiding a name once",
+						rec, len(kept)+rec.Omitted)
+				}
+				return nil
+			}},
+		{"more agents waiting on a person than the record holds",
+			slices.Concat([]Finding{refused(400)}, many(2000, "agent", own)),
+			func(kept []Finding, rec FindingsRecord) error {
+				if rec.NamesOmitted != rec.Omitted+1 || rec.Omitted == 0 || len(kept[0].Subjects) == 400 {
+					return fmt.Errorf("the cut counts %+v, the first keeping %d names, want the first's list cut "+
+						"too", rec, len(kept[0].Subjects))
+				}
+				return nil
+			}},
 	} {
 		_, all := bound(Classify(c.findings), Promote(c.findings))
 		if all[0].Kind != FindingCredentialMissing {
 			t.Fatalf("%s: premise: the promoted finding is %s, want the credential's", c.name, all[0].Kind)
+		}
+		if listBytes(findingSizes(all)) <= coord.MaxIntegrationFindingsBytes {
+			t.Fatalf("%s: premise: the pass fits its record whole", c.name)
 		}
 		kept, rec := FitFindings(all)
 		raw, err := encodeFindings(kept)
@@ -174,29 +292,50 @@ func TestAPassesFindingsAreCutToTheirRecordFirstFindingWhole(t *testing.T) {
 				coord.MaxIntegrationFindingsBytes)
 		}
 		first := kept[0]
-		if !c.list {
-			first.Subjects, first.SubjectsOmitted = all[0].Subjects, 0
-		}
+		first.Subjects, first.SubjectsOmitted = all[0].Subjects, 0
 		if !first.Same(all[0]) {
-			t.Errorf("%s: the first finding kept is %s (%d subjects), want the promoted one whole", c.name,
-				kept[0].Kind, len(kept[0].Subjects))
+			t.Errorf("%s: the first finding kept is %s, want the promoted one with its words", c.name, kept[0].Kind)
 		}
-		if got := len(kept) + rec.Omitted; got != len(all) {
-			t.Errorf("%s: kept %d and dropped %d of %d findings", c.name, len(kept), rec.Omitted, len(all))
+		if want := cutOf(all, kept); rec != want {
+			t.Errorf("%s: the cut counts %+v, want each finding once by what was left of it: %+v", c.name, rec, want)
 		}
-		if !c.hidden(rec) {
-			t.Errorf("%s: the cut counts %+v", c.name, rec)
-		}
-		held := 0
-		for _, f := range kept[1:] {
-			if f.Kind == FindingApprovalRequired {
-				held++
-			}
-		}
-		if c.named >= 0 && held != c.named {
-			t.Errorf("%s: %d of the %d agents a person holds up are still named", c.name, held, c.named)
+		if err := c.check(kept, rec); err != nil {
+			t.Errorf("%s: %v", c.name, err)
 		}
 	}
+}
+
+// cutOf is what a cut of all to kept left out, each finding counted once by
+// what is left of it, matched in order by kind, subject and seat.
+func cutOf(all, kept []Finding) FindingsRecord {
+	var rec FindingsRecord
+	j := 0
+	for _, f := range all {
+		if j < len(kept) && kept[j].Kind == f.Kind && kept[j].Subject == f.Subject && kept[j].Seat == f.Seat {
+			k := kept[j]
+			j++
+			listCut := len(k.Subjects) < len(f.Subjects)
+			if f.Title+f.Detail+f.Remedy+f.ActionURL != "" && k.Title+k.Detail+k.Remedy+k.ActionURL == "" {
+				if f.Seat {
+					rec.SeatOmitted++
+				} else {
+					rec.WordsOmitted++
+				}
+			}
+			if listCut && mayNameSeat(f) {
+				rec.NamesOmitted++
+			}
+			continue
+		}
+		rec.Omitted++
+		if personOwed(f) {
+			rec.OwedOmitted++
+		}
+		if mayNameSeat(f) {
+			rec.NamesOmitted++
+		}
+	}
+	return rec
 }
 
 // A PASS THAT FITS IS KEPT WHOLE, uncut and uncounted: an agent's own finding

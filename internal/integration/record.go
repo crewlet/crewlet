@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -52,13 +51,15 @@ type FindingsRecord struct {
 	// deadline the tools' roll-up reads from the status alone.
 	Expiring int `json:"expiring,omitempty"`
 
-	// What the cut left out ([FitFindings]): Omitted how many findings it
-	// dropped; SeatOmitted how many of an agent's own ([Finding.Seat]) it kept
+	// What the cut left out ([FitFindings]), each finding counted once:
+	// Omitted how many it dropped, OwedOmitted how many of those a person
+	// owes; SeatOmitted how many of an agent's own ([Finding.Seat]) it kept
 	// without their words (on each agent's access record), WordsOmitted how
-	// many others; NamesOmitted how many findings that may name a seat
-	// ([mayNameSeat]) it dropped or cut the subject list of. Only the last
+	// many others. NamesOmitted, apart, is how many findings that may name a
+	// seat ([mayNameSeat]) it dropped or cut the subject list of: only these
 	// can hide a seat from a reader judging one, which then cannot say.
 	Omitted      int `json:"omitted,omitempty"`
+	OwedOmitted  int `json:"owed_omitted,omitempty"`
 	SeatOmitted  int `json:"seat_omitted,omitempty"`
 	WordsOmitted int `json:"words_omitted,omitempty"`
 	NamesOmitted int `json:"names_omitted,omitempty"`
@@ -75,13 +76,14 @@ const MaxActionURLBytes = 2 << 10
 
 // FitFindings is findings, already [Promote]d and [bound], cut to what one
 // surface's findings record keeps ([coord.MaxIntegrationFindingsBytes]) as
-// encoded, and the counts of what it left out. Names go after words and what
-// a person owes after what nobody does, each step only while the list is still
-// past the bound, from the tail: agents' own findings lose their words (on the
-// agent's access record); findings no person owes lose theirs, then go; those
-// a person owes lose theirs; subject lists are cut to a common length, the
-// first finding's last; those a person owes go. The first, the one the report
-// names, is never dropped, so the report and its "(and N more)", classified
+// encoded, and the counts of what it left out. Every word goes before any
+// name, each step from the tail and only while the list is still past the
+// bound: agents' own findings lose their words (on the agent's access record),
+// then findings no person owes, then those a person owes; findings that can
+// name no seat ([mayNameSeat]) go, those no person owes first; subject lists
+// are cut to a common length, the first finding's last; the rest go, those no
+// person owes first. The first, the one the report names, is never dropped
+// and keeps its words, so the report and its "(and N more)", classified
 // before the cut, stay true.
 func FitFindings(findings []Finding) ([]Finding, FindingsRecord) {
 	kept, rec, _ := fitFindings(findings)
@@ -97,7 +99,7 @@ func fitFindings(findings []Finding) (kept []Finding, rec FindingsRecord, unkept
 		return findings, rec, nil
 	}
 	kept = slices.Clone(findings)
-	cut, dropped := map[int]bool{}, map[int]bool{}
+	wordless, listed, dropped := map[int]bool{}, map[int]bool{}, map[int]bool{}
 	// each runs step on the findings past the first that pick chooses, from
 	// the tail, while the list is still past the bound.
 	each := func(pick func(Finding) bool, step func(int)) {
@@ -107,50 +109,70 @@ func fitFindings(findings []Finding) (kept []Finding, rec FindingsRecord, unkept
 			}
 		}
 	}
-	wordless := func(counter *int) func(int) {
-		return func(i int) {
-			f := &kept[i]
-			if f.Title == "" && f.Detail == "" && f.Remedy == "" && f.ActionURL == "" {
-				return
-			}
-			f.Title, f.Detail, f.Remedy, f.ActionURL = "", "", "", ""
-			sizes[i], cut[i] = findingSize(*f), true
-			*counter++
+	strip := func(i int) {
+		f := &kept[i]
+		if f.Title == "" && f.Detail == "" && f.Remedy == "" && f.ActionURL == "" {
+			return
 		}
+		f.Title, f.Detail, f.Remedy, f.ActionURL = "", "", "", ""
+		sizes[i], wordless[i] = findingSize(*f), true
 	}
-	drop := func(i int) {
-		dropped[i], cut[i], sizes[i] = true, true, -1
-		rec.Omitted++
-		if mayNameSeat(kept[i]) {
-			rec.NamesOmitted++
-		}
-	}
+	drop := func(i int) { dropped[i], sizes[i] = true, -1 }
 	own := func(f Finding) bool { return f.Seat }
 	unowed := func(f Finding) bool { return !personOwed(f) }
-	every := func(Finding) bool { return true }
-	each(own, wordless(&rec.SeatOmitted))
-	each(unowed, wordless(&rec.WordsOmitted))
+	nameless := func(owes bool) func(Finding) bool {
+		return func(f Finding) bool { return !mayNameSeat(f) && personOwed(f) == owes }
+	}
+	each(own, strip)
+	each(unowed, strip)
+	each(personOwed, strip)
+	each(nameless(false), drop)
+	each(nameless(true), drop)
+	cutSubjects(kept, dropped, sizes, over, listed)
 	each(unowed, drop)
-	each(every, wordless(&rec.WordsOmitted))
-	cutSubjects(kept, dropped, sizes, over, cut, &rec)
-	each(every, drop)
+	each(personOwed, drop)
+	return counts(findings, kept, wordless, listed, dropped, rec)
+}
+
+// counts is what [fitFindings] kept, each finding counted once on rec by what
+// the cut left of it (dropped, or kept without its words), apart from whether
+// it may have hidden a seat's name; and the index of every finding it cut.
+func counts(findings, kept []Finding, wordless, listed, dropped map[int]bool,
+	rec FindingsRecord) ([]Finding, FindingsRecord, []int) {
+
 	out := make([]Finding, 0, len(kept))
+	var unkept []int
 	for i, f := range kept {
 		if !dropped[i] {
 			out = append(out, f)
 		}
+		if !dropped[i] && !wordless[i] && !listed[i] {
+			continue
+		}
+		unkept = append(unkept, i)
+		switch {
+		case dropped[i]:
+			rec.Omitted++
+			if personOwed(f) {
+				rec.OwedOmitted++
+			}
+		case wordless[i] && f.Seat:
+			rec.SeatOmitted++
+		case wordless[i]:
+			rec.WordsOmitted++
+		}
+		if mayNameSeat(findings[i]) && (dropped[i] || listed[i]) {
+			rec.NamesOmitted++
+		}
 	}
-	return out, rec, slices.Sorted(maps.Keys(cut))
+	return out, rec, unkept
 }
 
 // cutSubjects cuts the subject lists of the findings past the first that are
 // still kept to a common length, halved while the list is past its bound, and
-// only then the first finding's, counting on each what it lost and on rec each
-// list whose names may be a seat's ([mayNameSeat]).
-func cutSubjects(kept []Finding, dropped map[int]bool, sizes []int, over func() bool, cut map[int]bool,
-	rec *FindingsRecord) {
-
-	listed := map[int]bool{}
+// only then the first finding's, counting on each what it lost and marking
+// each in listed.
+func cutSubjects(kept []Finding, dropped map[int]bool, sizes []int, over func() bool, listed map[int]bool) {
 	for _, first := range []bool{false, true} {
 		longest := 0
 		for i, f := range kept {
@@ -165,13 +187,9 @@ func cutSubjects(kept []Finding, dropped map[int]bool, sizes []int, over func() 
 				if dropped[i] || (i == 0) != first || len(f.Subjects) <= limit {
 					continue
 				}
-				if !listed[i] && mayNameSeat(*f) {
-					rec.NamesOmitted++
-				}
-				listed[i] = true
 				f.SubjectsOmitted += len(f.Subjects) - limit
 				f.Subjects = f.Subjects[:limit:limit]
-				sizes[i], cut[i] = findingSize(*f), true
+				sizes[i], listed[i] = findingSize(*f), true
 			}
 		}
 	}
