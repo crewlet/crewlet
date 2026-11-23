@@ -394,12 +394,14 @@ func (s *Store) get(ctx context.Context, name string, refuseWriteOnly bool) (str
 	return value, nil
 }
 
-// Snapshot is every operator value unsealed, by name, and when the store last
-// wrote each: what a node resolves ${VAR} from, and the instant a credential's
-// expiry is judged from, read in one pass.
+// Snapshot is every operator value unsealed, by name, beside its row's
+// metadata (when the store wrote it and who did, never the envelope): what a
+// node resolves ${VAR} from, and what it says of each value it resolves (a
+// credential's expiry, its alarm and Settings › Models alike), read in one
+// pass.
 type Snapshot struct {
 	Values  map[string]string
-	Written map[string]time.Time
+	Records map[string]secrets.Record
 }
 
 // All unseals every OPERATOR value, for the resolver's [Snapshot].
@@ -422,7 +424,7 @@ func (s *Store) All(ctx context.Context) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("fleetsecrets: read the secrets: %w", err)
 	}
-	out := Snapshot{Values: make(map[string]string, len(rows)), Written: make(map[string]time.Time, len(rows))}
+	out := Snapshot{Values: make(map[string]string, len(rows)), Records: make(map[string]secrets.Record, len(rows))}
 	for _, row := range rows {
 		if secrets.Reserved(row.Name) {
 			continue
@@ -434,7 +436,7 @@ func (s *Store) All(ctx context.Context) (Snapshot, error) {
 			// might later open.
 			return Snapshot{}, fmt.Errorf("fleetsecrets: open %s: %w", row.Name, err)
 		}
-		out.Values[row.Name], out.Written[row.Name] = value, row.UpdatedAt
+		out.Values[row.Name], out.Records[row.Name] = value, record(row)
 	}
 	return out, nil
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -198,18 +199,30 @@ func variableOf(source config.CredentialSource) string {
 	return source.Fallback
 }
 
-// storedAt is when the secret store last wrote each secret this node resolves
-// from, by name, as its snapshot holds it ([secretView]): empty before one is
-// installed. THE SNAPSHOT, never the store: the expiry judged is that of the
-// value this node sends, and a listing every beat on every node would carry
-// every sealed value across its link (ADR-0175, "The secrets bucket declares
-// its class"). A value written with its reload deferred keeps its earlier
-// instant until the next apply, as it keeps its earlier value.
-func (e *Engine) storedAt() map[string]time.Time {
-	if v := e.env.Load(); v != nil && v.written != nil {
-		return v.written
+// storedRecords is the row of each secret this node resolves from, by name,
+// as its snapshot holds it ([secretView]): empty before one is installed. THE
+// SNAPSHOT, never the store, for the alarm beat ([Engine.storedAt]) and
+// Settings › Models ([Engine.LocalModels]) alike: what both judge is the value
+// this node sends, and a listing every beat on every node would carry every
+// sealed value across its link (ADR-0175, "The secrets bucket declares its
+// class"). A value written with its reload deferred keeps its earlier row
+// until the next apply, as it keeps its earlier value.
+func (e *Engine) storedRecords() map[string]secrets.Record {
+	if v := e.env.Load(); v != nil && v.records != nil {
+		return v.records
 	}
-	return map[string]time.Time{}
+	return map[string]secrets.Record{}
+}
+
+// storedAt is when the store wrote each value this node resolves, by name
+// ([Engine.storedRecords]).
+func (e *Engine) storedAt() map[string]time.Time {
+	records := e.storedRecords()
+	out := make(map[string]time.Time, len(records))
+	for name, rec := range records {
+		out[name] = rec.UpdatedAt
+	}
+	return out
 }
 
 // tokenLifetimes is each harness entry's headless-token lifetime, zero where

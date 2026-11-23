@@ -1967,7 +1967,10 @@ drawn as "no node knows".
   `environment`, `device` or `none`, as the answering node resolves it;
   `source` is `store`, `environment` or `none`. A stored token's `expires_at` is
   its row's `stored_at` plus the lifetime its vendor documents (the token is
-  opaque); `expiry_basis` says so.
+  opaque); `expiry_basis` says so. The row, `stored_at` and `stored_by` are
+  those of the value the answering node resolves, as its snapshot holds it,
+  which the node's expiry alarms judge too: a value written with its reload
+  deferred moves them at the next apply.
 - `sitting_out` is the latest window across live nodes (`until`, `resets_at`,
   `window`, `said`, `since`) and the `nodes` sitting it out; `last_success` and
   `last_failure` (`kind`, `at`, `said`, `node`) are the latest across live nodes;

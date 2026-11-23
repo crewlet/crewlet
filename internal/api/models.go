@@ -69,7 +69,8 @@ func (m modelSource) LocalModels() []queries.LocalModel {
 	out := make([]queries.LocalModel, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, queries.LocalModel{Key: r.Key, Route: r.Route, Variable: r.Variable,
-			Resolves: r.Resolves, Hint: r.Hint, TokenLifetime: r.TokenLifetime})
+			Resolves: r.Resolves, Hint: r.Hint, TokenLifetime: r.TokenLifetime,
+			StoredAt: r.StoredAt, StoredBy: r.StoredBy})
 	}
 	return out
 }
