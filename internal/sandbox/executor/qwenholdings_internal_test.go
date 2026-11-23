@@ -583,6 +583,9 @@ func TestOnlyAPartQwenHandsItsModelVerbatimCounts(t *testing.T) {
 		"a failure that ran": func(r *qhChat) *qhChat {
 			return r.edit(t, 2, `"executionStatus":"error"`, `"executionStatus":"success"`)
 		},
+		"a failure beside an output": func(r *qhChat) *qhChat {
+			return r.edit(t, 2, `"response":{"error"`, `"response":{"output":"probe failure","error"`)
+		},
 	} {
 		h, err := qhRead(t, edit(failure()).file(), ohBegan, fail)
 		if err == nil && slices.Equal(ohHeld(t, h, err, fail), []int{1}) {
