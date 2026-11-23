@@ -16,10 +16,12 @@ import (
 // list in any settings file, the home's and the repository's included, or
 // above `disabledMcpServers` in the home's `.claude.json` for the start
 // directory (measured on 2.1.330): the server is then missing from, or
-// `disabled` in, the `mcp_servers` its stream's init event lists, and the run
-// goes on without its notes and its tools. So the script reads that event and
-// ends a run whose own server is not there ([claudeGuard]), saying which file
-// switched it off.
+// `disabled` in, the `mcp_servers` its stream's init event lists. Nor above a
+// `permissions.deny` entry naming the server (`mcp__crewlet`): it connects, and
+// its tools are missing from the event's `tools`. Either way the run goes on
+// without its notes and its tools, so the script reads that event and ends a
+// run whose own server or tools are not there ([claudeGuard]), saying which
+// file switched them off.
 
 // crewletServers is the run's servers of Crewlet's own, by name, which a
 // guard holds the harness to: the engine's own tools, the bridge's `crewlet`
@@ -39,13 +41,14 @@ func crewletServers(req sandbox.RunRequest) []string {
 // [launchWatched] runs once the harness has started: it waits for the
 // stream's first whole line (or the harness's end, or an end request), and
 // where that is the init event, ends the harness unless each of servers is
-// `connected` or still `pending` in it, saying why on the error stream.
+// still `pending` in it, or `connected` with a tool of its own listed, saying
+// why on the error stream.
 //
-// AN INIT EVENT IT CANNOT FIND IS NO VERDICT: every release measured opens
-// its stream with one, keys in this order, so a stream that does not is not
-// one a switch-off shows in. The reason names the file that switched the
-// server off: each settings file holding a deny or allow list, or the state
-// file that disables it.
+// AN INIT EVENT IT CANNOT FIND, OR ONE LISTING NO TOOLS, IS NO VERDICT: every
+// release measured opens its stream with one, keys in this order, so a stream
+// that does not is not one a switch-off shows in. The reason names the file
+// that switched the server off: each settings file holding a deny or allow
+// list or naming its tools, or the state file that disables it.
 func claudeGuard(paths Paths, servers []string) string {
 	q := shellword.Quote
 	stream := q(paths.Stream())
@@ -64,8 +67,16 @@ gw=
 	for _, name := range servers {
 		entry := claudeServerEntry(name)
 		said := "Crewlet's MCP server " + name + ", which the run's notes and tools go through"
+		tool := claudeToolPrefix(name)
 		b.WriteString(`[ -n "$gw" ] || case "$gl" in
-*` + q(entry+`"connected"`) + `*|*` + q(entry+`"pending"`) + `*) ;;
+*` + q(entry+`"connected"`) + `*) case "$gl" in *'"tools":['*) gt=${gl#*'"tools":['}; gt=${gt%%']'*} ;; *) gt= ;; esac
+case "$gt" in *` + q(`"`+tool+`__`) + `*|'') ;; *) gf=$(grep -l -F -e ` + q(tool) + ` ` + lists +
+			` 2> /dev/null | tr '\n' ' '); gw="Claude Code started with ` + said + ` connected, and none of its ` +
+			`tools: a permissions.deny entry naming it (` + tool + `) or its tools takes them away, and no setting ` +
+			`of the run's undoes that. Settings naming it: ${gf:-none of those it reads (the managed settings of ` +
+			`the box, ~/.claude/settings.json, and .claude/settings.json and .claude/settings.local.json in the ` +
+			`start directory), so the error stream says what blocked it}" ;; esac ;;
+*` + q(entry+`"pending"`) + `*) ;;
 *` + q(entry+`"disabled"`) + `*) gf=` + state + `; [ ! -L "$gf" ] || gf=` + q(paths.ClaudeState()) +
 			`; gw="Claude Code started with ` + said + `, disabled: $gf disables it for the start directory ` +
 			`(its projects entry's disabledMcpServers), and no setting of the run's undoes that" ;;
@@ -84,6 +95,18 @@ esac
 }
 `)
 	return b.String()
+}
+
+// claudeToolPrefix is how each tool of server name is named, less its `__`
+// and tool: `mcp__<name>`, every character but letters, digits, `_` and `-`
+// made `_`, as 2.1.330 names it ([claudeBridgedToolPrefix]).
+func claudeToolPrefix(name string) string {
+	return "mcp__" + strings.Map(func(r rune) rune {
+		if r == '_' || r == '-' || r < 128 && (r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9') {
+			return r
+		}
+		return '_'
+	}, name)
 }
 
 // claudeServerEntry is how a server's entry opens in the init event's
