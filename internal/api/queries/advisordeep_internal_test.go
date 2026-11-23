@@ -35,6 +35,20 @@ func TestTheDeepRunAsksAsTheAdvisor(t *testing.T) {
 	}
 }
 
+// A REFUSED READ IS SAID IN ITS OWN SENTENCE, the one a failed step shows as
+// why, never with the refusal class's package text. Mutation: return the
+// error as asked, and the sentence carries "queries: bad parameters".
+func TestARefusedReadSaysItsOwnSentence(t *testing.T) {
+	t.Parallel()
+	reads := deepReads{ask: func(context.Context, string, Params) (any, error) {
+		return nil, fmt.Errorf("%w: %q is not one of the four status groups", ErrBadParams, "open")
+	}}
+	_, err := reads.Answer(t.Context(), "work_items", map[string]any{"status_group": "open"})
+	if err == nil || err.Error() != `"open" is not one of the four status groups` {
+		t.Errorf("a refused read said %v, want its own sentence alone", err)
+	}
+}
+
 // A DEEP RUN'S SUMMARY SAYS WHAT IT DID: its kind, its progress lines, what it
 // spent of its bounds, the bound it stopped at and how many questions it answered. Mutation: read its record as
 // a daily pass's, and the progress is lost.
