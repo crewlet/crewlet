@@ -506,7 +506,7 @@ func (e *WriteOnlyError) Unwrap() error { return secrets.ErrWriteOnly }
 
 // Inventory is what the store holds, read in one pass and opening nothing:
 // the operator's rows' metadata, sorted by name, and the engine's own rows
-// counted per keyring key ([Store.EngineKeys]).
+// counted per keyring key, naming none.
 type Inventory struct {
 	Records []secrets.Record
 	Engine  secrets.EngineKeys
@@ -549,18 +549,10 @@ func (s *Store) Inventory(ctx context.Context) (Inventory, error) {
 }
 
 // List reports what the operator has stored, without opening anything: the
-// records of [Store.Inventory], and no engine row, which
-// [Store.EngineKeys] counts.
+// records of [Store.Inventory], for a reader that needs no engine count.
 func (s *Store) List(ctx context.Context) ([]secrets.Record, error) {
 	held, err := s.Inventory(ctx)
 	return held.Records, err
-}
-
-// EngineKeys counts the engine's own rows, per keyring key, naming none: the
-// count of [Store.Inventory].
-func (s *Store) EngineKeys(ctx context.Context) (secrets.EngineKeys, error) {
-	held, err := s.Inventory(ctx)
-	return held.Engine, err
 }
 
 // Describe reports one row's metadata without opening it.
