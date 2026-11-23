@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/kept"
 	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/runanswer"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -199,7 +200,8 @@ func (t *answerExecutor) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// and is never told as an answer the executor resumes with (ADR-0114).
 		recorded := t.deps.Desk.Answered(run)
 		by := recorded.By
-		if _, isRefusal := run.Refused(); !isRefusal && sameAnswer(recorded, actor, choice, answer) {
+		if _, isRefusal := run.Refused(); !isRefusal && launchID == run.LaunchID &&
+			sameAnswer(recorded, actor, choice, answer) {
 			// THIS PERSON'S OWN ANSWER, LANDED: a retry of a press whose
 			// answer was lost is told it was recorded, and nothing is sent.
 			return answerReceipt(ctx, turn, actor, run, run.AgentHandle, choice, statelog.OutcomeApplied, uuid.Nil)
@@ -297,12 +299,13 @@ func answerReceipt(ctx context.Context, turn *turnctx.Turn, actor Actor, run san
 	return read.answer(ctx, AnswerExecutorTool, result, "")
 }
 
-// sameAnswer reports whether recorded is the answer actor gives now, by turn
-// and under the same credential: the same press sent again after its answer
-// was lost, never a second person's or a different answer.
+// sameAnswer reports whether recorded is the answer actor gives now, by turn,
+// under the same credential and in the words as recorded (redacted): the same
+// press sent again after its answer was lost, never another's or other words.
 func sameAnswer(recorded sandbox.AnswerWords, actor Actor, choice, answer string) bool {
 	return recorded.By != "" && recorded.By == actor.Handle && recorded.OperatorID == actor.OperatorID &&
-		recorded.Via == types.AnswerViaOperator && recorded.Choice == choice && recorded.Text == answer
+		recorded.Via == types.AnswerViaOperator && recorded.Choice == choice &&
+		recorded.Text == redact.Secrets(answer)
 }
 
 // refusedAlready is the model's refusal for a question an oversized reply
