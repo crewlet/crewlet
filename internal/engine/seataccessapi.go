@@ -123,14 +123,13 @@ func (a *SeatAccessAPI) InstallLink(ctx context.Context, q setupapi.AccessQuery,
 	if err != nil {
 		return "", err
 	}
-	records, err := ledger.Records(ctx, integration.KindSlack)
+	rec, ok, err := ledger.SeatRecord(ctx, integration.KindSlack, handle)
 	if errors.Is(err, coord.ErrUnavailable) {
 		return "", fmt.Errorf("%w: %w", setupapi.ErrAccessUnavailable, err)
 	}
 	if err != nil {
 		return "", err
 	}
-	rec, ok := records[handle]
 	if !ok || !rec.Held() || !a.awaitsInstall(rec) {
 		return "", fmt.Errorf("%w: %s", setupapi.ErrNotAwaitingInstall, handle)
 	}
