@@ -965,15 +965,14 @@ const claudeProjectDir = "crewlet"
 // box, over whatever the seat's role.sandbox.env, the image or a profile set
 // ([Harness.Pins]): CLAUDE_CONFIG_DIR, the box home's `.claude`
 // ([Paths.ClaudeConfigDir]), because the project directory is read only where it
-// is set (set, it moves the harness's `.claude.json` there, which the script
-// links back to the home's own, [claudeStateLink]; the login stays at
-// `.claude/.credentials.json`, where a local box is seeded);
-// CLAUDE_CODE_PROJECT_DIR_NAME, [claudeProjectDir], so a transcript is
-// `<config>/projects/crewlet/<session>.jsonl` whatever the working directory
-// (2.1.234+); auto memory off; the compaction window; and DISABLE_AUTOUPDATER 1
-// (the package doc's "A box's release is pinned"). The transcript's trim is the
-// script's, by release ([claudeLocalGCFloor]); the retention sweep is held off by
-// [claudeSettings], since no variable reaches it.
+// is set (it moves `.claude.json` there, which the script links back to the
+// home's own, [claudeStateLink]; the login stays at `.claude/.credentials.json`,
+// where a local box is seeded); CLAUDE_CODE_PROJECT_DIR_NAME, [claudeProjectDir],
+// so a transcript is `<config>/projects/crewlet/<session>.jsonl` whatever the
+// working directory (2.1.234+); auto memory off; the compaction window; and
+// DISABLE_AUTOUPDATER 1 (the package doc's "A box's release is pinned"). The
+// transcript's trim is the script's, by release ([claudeLocalGCFloor]); the
+// retention sweep is held off by [claudeSettings], since no variable reaches it.
 func claudeSessionLayout(paths Paths, window sandbox.ExecutorWindow) []Pinned {
 	return []Pinned{
 		{Name: "CLAUDE_CONFIG_DIR", Value: paths.ClaudeConfigDir()},

@@ -195,9 +195,8 @@ const geminiCodeAssist = "https://cloudcode-pa.googleapis.com"
 // lacks from an `.env` file. The base URLs keep the entry's value or are
 // empty, which Gemini CLI reads as its own endpoint; the Code Assist endpoint
 // is named, since an empty one is read as a URL; the prompt files are `false`
-// until the script names its own (measured on 0.70.0).
-//
-// AND THE RUN'S SETTINGS AS GEMINI CLI'S SYSTEM TIER ([Paths.GeminiSettings]).
+// until the script names its own (measured on 0.70.0). AND THE RUN'S SETTINGS
+// AS GEMINI CLI'S SYSTEM TIER ([Paths.GeminiSettings]).
 func (GeminiCLI) Pins(_ context.Context, req sandbox.RunRequest, paths Paths) []Pinned {
 	return []Pinned{{Name: "GEMINI_CLI_TRUST_WORKSPACE", Value: "true"}, {Name: "NO_BROWSER", Value: "true"},
 		{Name: "GEMINI_CLI_SYSTEM_SETTINGS_PATH", Value: paths.GeminiSettings()},
