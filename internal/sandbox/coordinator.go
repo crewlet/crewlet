@@ -4993,9 +4993,10 @@ var errStopGrace = errors.New("sandbox: the node stopped, and the write was held
 
 // reclaimBox kills a run's box under killCtx, and every box its launch made
 // that the row may never have named ([Coordinator.reclaimUnnamed]), and closes
-// the run's credentials, logging under ctx. The error is a failed kill, the one
-// outcome a retry can change; a run with no box, or a box whose placement is no
-// longer configured, reports nil (nothing later could reach it).
+// the run's credentials, logging under ctx. The error is a failed kill, of the
+// box the row names or of one its launch made, the one outcome a retry can
+// change; a cell no longer configured reports nil (nothing later could reach
+// its boxes).
 func (c *Coordinator) reclaimBox(ctx, killCtx context.Context, run PendingRun) error {
 	// BEFORE THE BOX CHECK: a launch that failed at create still opened a bridge
 	// session nothing else closes.
