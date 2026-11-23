@@ -849,27 +849,6 @@ export function offSentence(lane: Lane, saved: AccessSeatLane, departed = false)
     : `Off. ${laneWords(lane.key).turnOn}`;
 }
 
-/**
- * What turning an off agent on does, said once per distinct sentence over the
- * off agents it is true of ("2 agents are off. Turning one on creates ..."),
- * where every off row said it again in its details.
- */
-export function offNote(
-  rows: readonly { lane: Lane; saved: AccessSeatLane; seat: { departed?: boolean | undefined } }[],
-): string[] {
-  const counts = new Map<string, number>();
-  for (const { lane, saved, seat } of rows) {
-    if (saved.desired.enabled || seat.departed) continue;
-    const said = offSentence(lane, saved).replace(/^Off\. /, "");
-    counts.set(said, (counts.get(said) ?? 0) + 1);
-  }
-  return [...counts].map(([said, n]) =>
-    n === 1
-      ? `One agent is off. ${said}`
-      : `${n} agents are off. ${said.replace(/^Turning it on/, "Turning one on")}`,
-  );
-}
-
 const STATUS_ORDER: Record<string, number> = {
   danger: 0,
   warning: 1,
