@@ -138,8 +138,8 @@ type Spec struct {
 	// SignInEnv is the names in Env that sign the run's harness in: its
 	// profile's token, key and sign-in variables, and the entry's credentials
 	// ([RunRequest.SignInEnv]). The harness reads them; the commands its model
-	// runs are started without them, but by Grok Build's runner, whose model's
-	// shell keeps them as a person's does (docs/concepts/code-sandbox.md).
+	// runs are started without them, but by Kimi Code's and Grok Build's
+	// runners, whose model's shell keeps them (docs/concepts/code-sandbox.md).
 	SignInEnv []string
 
 	// CredentialFiles is a subscription-harness login: a path relative to the
@@ -1151,8 +1151,10 @@ type RunRequest struct {
 	// SignInEnv is the names in Env its harness signs in by ([Spec.SignInEnv]).
 	// The runner hands them to the harness and keeps them, with its own wiring's
 	// variables, out of the environment of the commands the model runs, through
-	// the harness's own mechanism for that environment; Grok Build's runner
-	// reads none of them, its model's shell starting as a person's does.
+	// the harness's own mechanism for that environment. The exemptions are
+	// Kimi Code's runner (executor.Kimi, code-sandbox.md "Kimi Code") and Grok
+	// Build's, which reads none of them, its model's shell starting as a
+	// person's does.
 	SignInEnv []string
 
 	Limits Limits
