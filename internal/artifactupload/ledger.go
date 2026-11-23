@@ -2,6 +2,8 @@ package artifactupload
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -45,12 +47,30 @@ type hold struct {
 	// Direct reports a client putting bytes straight to the bucket, whose
 	// puts the engine never sees: such a hold is never released early.
 	Direct bool `json:"direct,omitempty"`
+
+	// Attempt is the intent attempt the hold reserves for, drawn afresh
+	// where one reserves it or a retry takes it up, and changed by nothing
+	// else: what tells a released hold from one a retry took up since.
+	Attempt uint32 `json:"attempt"`
 }
 
-// same reports whether h is o unchanged.
+// same reports whether h is the reservation o was: the same attempt's, its
+// bytes and directness unchanged. Its window and lapse are not compared,
+// since any change's recheck moves the window ([earlyRecheck]).
 func (h hold) same(o hold) bool {
 	return h.Upload == o.Upload && h.Principal == o.Principal && h.Bytes == o.Bytes &&
-		h.Until.Equal(o.Until) && h.Expires.Equal(o.Expires) && h.Direct == o.Direct
+		h.Direct == o.Direct && h.Attempt == o.Attempt
+}
+
+// newAttempt draws an attempt other than old.
+func newAttempt(old uint32) uint32 {
+	for {
+		var b [4]byte
+		_, _ = rand.Read(b[:]) // crypto/rand.Read never fails: it crashes rather than answer short.
+		if a := binary.BigEndian.Uint32(b[:]); a != old {
+			return a
+		}
+	}
 }
 
 // live reports a hold that still counts.
@@ -311,12 +331,13 @@ func (s *Service) reserve(ctx context.Context, h hold, named int64) error {
 			}
 			l.Holds[i] = hold{Upload: old.Upload, Principal: old.Principal, Bytes: max(h.Bytes, old.Bytes),
 				Until: maxTime(h.Until, old.Until), Expires: maxTime(h.Expires, old.Expires),
-				Direct: old.Direct || h.Direct}
+				Direct: old.Direct || h.Direct, Attempt: newAttempt(old.Attempt)}
 			return nil
 		}
 		if err := l.admit(h.Principal, h.Bytes, true, s.limits(), named, now); err != nil {
 			return err
 		}
+		h.Attempt = newAttempt(0)
 		l.Holds = append(l.Holds, h)
 		return nil
 	})
@@ -340,7 +361,7 @@ func (s *Service) grow(ctx context.Context, upload, principal string, bytes int6
 		}
 		if i < 0 {
 			l.Holds = append(l.Holds, hold{Upload: upload, Principal: principal, Bytes: bytes,
-				Until: until, Expires: until})
+				Until: until, Expires: until, Attempt: newAttempt(0)})
 			return nil
 		}
 		l.Holds[i].Bytes += bytes

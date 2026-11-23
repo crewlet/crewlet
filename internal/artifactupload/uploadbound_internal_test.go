@@ -289,7 +289,8 @@ func TestTheWidestReservationLedgerFitsItsBound(t *testing.T) {
 	l := ledger{V: ledgerVersion}
 	for range artifacts.CompanyPendingFactor * MaxOutstandingUploads {
 		l.Holds = append(l.Holds, hold{Upload: uuid.NewString(), Principal: strings.Repeat("p", iam.MaxLogin),
-			Bytes: math.MaxInt64, Until: widestInstant, Expires: widestInstant, Direct: true})
+			Bytes: math.MaxInt64, Until: widestInstant, Expires: widestInstant, Direct: true,
+			Attempt: math.MaxUint32})
 	}
 	raw, err := json.Marshal(l)
 	if err != nil {
