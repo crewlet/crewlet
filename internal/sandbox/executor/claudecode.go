@@ -215,6 +215,7 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	// every command its model runs takes them out of that command's
 	// ([writeClaudeToolEnv]).
 	line(`export CLAUDE_ENV_FILE=%s`, shellword.Quote(paths.ClaudeToolEnv()))
+	b.WriteString(claudeStateLink(paths))
 	b.WriteString(launchHarness(strings.Join(parts, " "), paths))
 	b.WriteString(claudeCapture(paths))
 	line(`exit "$code"`)
@@ -238,6 +239,22 @@ a=${n%%.*}; r=${n#*.}; b=${r%%.*}; c=${r#*.}; c=${c%%.*}
 case "$n" in [0-9]*.[0-9]*.[0-9]*) ;; *) a= ;; esac
 at() { [ -z "$a" ] || [ "$a" -gt "$1" ] || { [ "$a" -eq "$1" ] && { [ "$b" -gt "$2" ] || { [ "$b" -eq "$2" ] && [ "$c" -ge "$3" ]; }; }; }; }
 `
+
+// claudeStateLink is the part of a run's script that has the harness keep its
+// state in the home's own `.claude.json`, as a person's session does: the
+// pinned CLAUDE_CONFIG_DIR moves that file into the directory
+// ([claudeSessionLayout]), which then hides the home's user and local MCP
+// servers, so the directory's copy is made a link to it (2.1.330 reads and
+// writes through the link, and creates the file where it is missing). A file
+// the directory holds of its own is left: a box that sets CLAUDE_CONFIG_DIR
+// there itself reads that one.
+func claudeStateLink(paths Paths) string {
+	in := shellword.Quote(paths.ClaudeConfigDir() + "/.claude.json")
+	return "if [ ! -e " + in + " ] && [ ! -L " + in + " ]; then mkdir -p " +
+		shellword.Quote(paths.ClaudeConfigDir()) + " && ln -s " + shellword.Quote(paths.ClaudeState()) + " " + in +
+		` || echo "crewlet: the run could not link Claude Code's .claude.json to the home's own, ` +
+		`so it does not read that" >&2; fi` + "\n"
+}
 
 // claudeNotesFloor is the oldest Claude Code release a run is started with its
 // notes hooks on: 2.1.163, the first whose Stop hook's additional context reaches
@@ -948,7 +965,8 @@ const claudeProjectDir = "crewlet"
 // box, over whatever the seat's role.sandbox.env, the image or a profile set
 // ([Harness.Pins]): CLAUDE_CONFIG_DIR, the box home's `.claude`
 // ([Paths.ClaudeConfigDir]), because the project directory is read only where it
-// is set (set, it moves the harness's `.claude.json` there; the login stays at
+// is set (set, it moves the harness's `.claude.json` there, which the script
+// links back to the home's own, [claudeStateLink]; the login stays at
 // `.claude/.credentials.json`, where a local box is seeded);
 // CLAUDE_CODE_PROJECT_DIR_NAME, [claudeProjectDir], so a transcript is
 // `<config>/projects/crewlet/<session>.jsonl` whatever the working directory
