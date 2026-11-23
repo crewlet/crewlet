@@ -212,7 +212,14 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$s" "$k" "$w" "$v" > %s`,
 		shellword.Quote(paths.SessionRecord()))
 	b.WriteString(claudeStateLink(paths))
-	b.WriteString(launchHarness(strings.Join(parts, " "), paths))
+	// THE RUN'S OWN SERVER CONNECTED AS IT STARTS, or the run ended saying
+	// what switched it off ([claudeGuard]).
+	watch := ""
+	if guarded := crewletServers(req); len(guarded) > 0 {
+		b.WriteString(claudeGuard(paths, guarded))
+		watch = "claudeguard"
+	}
+	b.WriteString(launchWatched(strings.Join(parts, " "), watch, paths))
 	b.WriteString(claudeCapture(paths))
 	line(`exit "$code"`)
 	return b.String()
