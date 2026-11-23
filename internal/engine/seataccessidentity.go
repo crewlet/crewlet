@@ -9,7 +9,9 @@ import (
 	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/seataccess"
+	"github.com/crewlet/crewlet/internal/setup"
 )
 
 // Identity has one seat's sync keep or give up its own identity on lane
@@ -48,9 +50,11 @@ func (a *SeatAccessAPI) Identity(ctx context.Context, q setupapi.AccessQuery, ha
 	if err != nil {
 		return seataccess.IdentityCheck{}, err
 	}
-	started := time.Now().UTC().Add(-time.Second)
+	// THIS PASS'S VERDICT ALONE: the sync stamps what it records at its own
+	// start, never earlier than this.
+	started := time.Now().UTC()
 	asks := map[string]seataccess.Ask{handle: {Lane: lane, Identity: &ask}}
-	if err := a.syncNow(ctx, q.Kind, by, asks, []string{handle}, nil); err != nil {
+	if err := a.syncIdentity(ctx, q.Kind, by, asks, handle); err != nil {
 		return seataccess.IdentityCheck{}, err
 	}
 	rec, _, err := ledger.SeatRecord(ctx, q.Kind, handle)
@@ -72,12 +76,29 @@ func (a *SeatAccessAPI) Identity(ctx context.Context, q setupapi.AccessQuery, ha
 	case ir.Kept() && ir.Check != nil && !ir.Check.At.Before(started):
 		return *ir.Check, nil
 	}
-	// THE SYNC RECORDED NOTHING NEWER: it failed, and its record says why.
-	if sync := rec.Lanes[lane].Sync; sync != nil && sync.Error != nil {
-		return seataccess.IdentityCheck{}, &setupapi.AccessRefusal{Status: 502, Reason: sync.Error.Said,
-			Remedy: sync.Error.Remedy}
-	}
 	return seataccess.IdentityCheck{}, errors.New("engine: the sync kept no identity and recorded no reason")
+}
+
+// syncIdentity runs the seat's sync carrying an identity ask and answers its
+// fault, which a save's sync leaves to the record: here the person waits on
+// this pass's verdict, and an older record's reason would answer the wrong one.
+func (a *SeatAccessAPI) syncIdentity(ctx context.Context, kind integration.Kind, by iam.Actor,
+	asks map[string]seataccess.Ask, handle string) error {
+
+	ctx, cancel := context.WithTimeout(ctx, setup.PassDeadline)
+	defer cancel()
+	a.mark(kind, true)
+	defer a.mark(kind, false)
+	_, err := a.engine.SyncSeatAccess(ctx, kind, by, asks, []string{handle})
+	switch {
+	case errors.Is(err, ErrSeatAccessBusy):
+		return fmt.Errorf("%w: %w", setupapi.ErrAccessSyncInFlight, err)
+	case errors.Is(err, coord.ErrUnavailable):
+		return fmt.Errorf("%w: %w", setupapi.ErrAccessUnavailable, err)
+	case errors.Is(err, integration.ErrNotConfigured):
+		return fmt.Errorf("%w: %w", setupapi.ErrNotAwaitingHandIn, err)
+	}
+	return err
 }
 
 // seatIdentity is who signs handle's calls on lane, for a growth product.

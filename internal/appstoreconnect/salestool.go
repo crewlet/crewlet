@@ -92,7 +92,7 @@ func (p *Product) sales(ctx context.Context, call growth.Call) (any, error) {
 		out.EmptyReason = growth.EmptyNoData
 	}
 	p.note(ctx, growth.StepMade, recordOf(call, made{op: op, class: growth.ClassRead, team: t, path: "/v1/salesReports",
-		query: q}))
+		query: q, slot: slot, signer: growth.SignerCompany}))
 	return out, nil
 }
 

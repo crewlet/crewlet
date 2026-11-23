@@ -228,21 +228,21 @@ func TestAPassFindsARevokedKeyAndAReplacedOneGone(t *testing.T) {
 	rig := newIdentityRig(t, "read")
 	rig.apple.roles["7KQ4M2ZX9P"] = appstoreconnect.RoleMarketing
 	rig.sealed["${APP_STORE_CONNECT_KEY_GROWTH}"] = p8(t)
-	rig.sealed["${APP_STORE_CONNECT_RETIRING_KEY_GROWTH}"] = p8(t)
+	rig.sealed["${APP_STORE_CONNECT_RETIRING_KEY_OLDKEY0001_GROWTH}"] = p8(t)
 	in := seataccess.IdentityInput{Seat: seataccess.SeatRef{Handle: "growth"}, Lane: seataccess.LaneAppStoreConnect,
 		Want: seataccess.Desired{Enabled: true, Level: "read", Scope: []string{"111"}},
 		Record: &seataccess.IdentityRecord{ID: "7KQ4M2ZX9P", Check: &seataccess.IdentityCheck{
-			Status: seataccess.IdentityReady, Team: "main"}, Retiring: &seataccess.RetiringIdentity{ID: "OLDKEY0001"}},
+			Status: seataccess.IdentityReady, Team: "main"}, Retiring: []seataccess.RetiringIdentity{{ID: "OLDKEY0001"}}},
 		Sinks: map[string]string{"KEY": "APP_STORE_CONNECT_KEY_GROWTH",
-			"RETIRING_KEY": "APP_STORE_CONNECT_RETIRING_KEY_GROWTH"}}
+			"RETIRING_KEY_OLDKEY0001": "APP_STORE_CONNECT_RETIRING_KEY_OLDKEY0001_GROWTH"}}
 	check, err := rig.session.CheckIdentity(t.Context(), in)
-	if err != nil || check.Status != seataccess.IdentityReady || !check.RetiringGone {
+	if err != nil || check.Status != seataccess.IdentityReady || len(check.RetiringGone) != 1 {
 		t.Fatalf("a working key with its old one revoked: %+v, %v", check, err)
 	}
 	rig.apple.roles["OLDKEY0001"] = appstoreconnect.RoleMarketing
 	delete(rig.apple.roles, "7KQ4M2ZX9P")
 	check, err = rig.session.CheckIdentity(t.Context(), in)
-	if err != nil || check.Status != seataccess.IdentityRefused || check.RetiringGone {
+	if err != nil || check.Status != seataccess.IdentityRefused || len(check.RetiringGone) != 0 {
 		t.Fatalf("a revoked key with its old one still live: %+v, %v", check, err)
 	}
 }
@@ -260,7 +260,7 @@ func TestGivingAKeyUpAsksForItsRevoke(t *testing.T) {
 		!strings.Contains(dropped.Waiting.Detail, "7KQ4M2ZX9P") {
 		t.Fatalf("drop: %+v, %v", dropped, err)
 	}
-	if len(dropped.Minted) != 1 || dropped.Minted[0].Field != "RETIRING_KEY" || dropped.Minted[0].Value != "the sealed key" {
+	if len(dropped.Minted) != 1 || dropped.Minted[0].Field != "RETIRING_KEY_7KQ4M2ZX9P" || dropped.Minted[0].Value != "the sealed key" {
 		t.Fatalf("the given-up key is not kept as retiring: %+v", dropped.Minted)
 	}
 }
