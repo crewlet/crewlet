@@ -178,7 +178,7 @@ func TestEveryReaderOfASessionSaysItsStateInOneSetOfWords(t *testing.T) {
 	backend.Corrupt(tampered.Object.Key.Name(), stored)
 	malformed := sealedSession(t, store, "ana", []byte("not an archive"))
 	unsupported := sealedSession(t, store, "ana", archive)
-	unsupported.Harness = "grok"
+	unsupported.Harness = "cursor-agent"
 	when := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
 	nothing := executordomain.Session{Handle: "ana", Turn: uuid.NewString(), EndedAt: when,
 		Ending: &executorkeep.Ending{Outcome: executorkeep.OutcomeFailed}}
@@ -189,7 +189,7 @@ func TestEveryReaderOfASessionSaysItsStateInOneSetOfWords(t *testing.T) {
 	rows := &stubRows{rows: []executordomain.Session{missing, tampered, malformed, unsupported, nothing,
 		unkept}}
 
-	_, carriedWhy := executor.Carries("grok", unsupported.ArchiveFormat)
+	_, carriedWhy := executor.Carries("cursor-agent", unsupported.ArchiveFormat)
 	for _, c := range []struct {
 		name  string
 		row   executordomain.Session

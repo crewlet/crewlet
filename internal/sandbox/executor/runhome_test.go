@@ -11,6 +11,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/crewlet/crewlet/internal/envfile"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
@@ -297,7 +298,11 @@ func TestAGrokRunsRequestsGoWhereAPersonsWould(t *testing.T) {
 	var profile strings.Builder
 	for _, name := range routing {
 		if name != "GROK_MODELS_BASE_URL" {
-			profile.WriteString("export " + name + "=" + image + "\n")
+			line, err := envfile.FormatAssignment(name, image)
+			if err != nil {
+				t.Fatal(err)
+			}
+			profile.WriteString(line + "\n")
 		}
 	}
 	if err := box.WriteFile(t.Context(), box.Home()+"/.profile", []byte(profile.String())); err != nil {
