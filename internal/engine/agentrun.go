@@ -1219,13 +1219,11 @@ func executorHeadroom(ctx context.Context, remaining runner.Remaining, floor lau
 // token names a job that is over.
 //
 // The engine's tools sit under the reserved name config refuses to any
-// mcp_servers entry ([config.ToolServerName]), so they never shadow a seat's
-// server, and are always loaded ([sandbox.MCPServer.AlwaysLoaded]). Each of the
-// seat's servers the surface offers a tool of follows under its own name at
-// its bridge route ([mcpbridge.ServerURL], [mcpbridge.Servers]). Every call
-// waits as long as wait ([mcpbridge.Bridge.CallTimeout]). The engine's server
-// names the tools it lists as the run starts ([mcpbridge.Listed]), which a
-// runner holds its harness's offer to.
+// mcp_servers entry ([config.ToolServerName]), always loaded, naming the tools
+// it lists as the run starts ([mcpbridge.Listed]), which a runner holds its
+// harness's offer to. Each seat server the surface offers a tool of follows
+// under its own name at its bridge route ([mcpbridge.ServerURL],
+// [mcpbridge.Servers]). Every call waits as long as wait.
 func bridgeServers(endpoint string, s *mcpbridge.Session, wait time.Duration) map[string]sandbox.MCPServer {
 	out := map[string]sandbox.MCPServer{config.ToolServerName: {
 		Name: config.ToolServerName, Transport: sandbox.TransportHTTP, URL: endpoint,
