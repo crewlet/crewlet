@@ -23,7 +23,10 @@ import (
 // ended or parked delivers an answer by turn carrying how that run went
 // ([types.RunWaited]), which records and resumes the wait as a person's answer
 // to a question would. A run that leaves on this node nudges every watch at
-// once; one that leaves on another is found at the backstop.
+// once; one that leaves on another is found at the backstop. A job parked on
+// its own bridged call is answered by the same watch, at once: its call has
+// returned, or is past waiting for, by the time it parks
+// (internal/sandbox's callwait.go).
 
 // runWaitBackstop is how long a watch waits for a nudge before it reads its
 // seat's waits again. A run leaving a seat on this node nudges at once, so the
@@ -195,6 +198,15 @@ func (e *Engine) answerWaits(ctx context.Context, handle string) (int, error) {
 			continue
 		}
 		waiting++
+		if run.WaitsOnCall() {
+			// ITS CALL HAS RETURNED, or is past waiting for: its collection
+			// waited for it before the job parked (internal/sandbox's
+			// callwait.go), so a parked job is answered at once.
+			if e.runWaits.due(run, e.now()) {
+				e.answerCallWait(ctx, run)
+			}
+			continue
+		}
 		target, found := byTurn[run.WaitsFor.Turn]
 		if !found {
 			if target, found, err = rt.pending.Get(ctx, run.WaitsFor.Turn); err != nil {
@@ -338,35 +350,62 @@ func (e *Engine) pushedBy(ctx context.Context, run sandbox.PendingRun) (types.Ru
 }
 
 // answerWait delivers run's answer, how the run it waited for went, on its
-// seat's control topic as an answer by turn ([sandbox.AnswerDesk.Deliver]):
+// seat's control topic as an answer by turn ([Engine.deliverWaitAnswer]):
 // recorded and resumed by the seat's holder as a person's answer would be,
 // carrying waited ([types.ExecutorAnswerGiven.Waited]). Its conversation's
 // line saying the work waits comes down.
 func (e *Engine) answerWait(ctx context.Context, run sandbox.PendingRun, waited types.RunWaited) {
-	deliver := e.runWaits.deliver
-	if deliver == nil {
-		desk := e.waitDesk()
-		if desk == nil {
-			return
-		}
-		deliver = func(ctx context.Context, given types.ExecutorAnswerGiven) error {
-			_, err := desk.Deliver(ctx, given)
-			return err
-		}
-	}
 	given := types.ExecutorAnswerGiven{
 		TurnID: run.TurnID, AgentHandle: run.AgentHandle, LaunchID: run.LaunchID,
 		Answer:         "The run you waited for, " + waited.Turn + ", left its seat: " + string(waited.Left) + ".",
 		AnsweredByKind: string(iam.ActorSystem), Waited: &waited,
 	}
+	delivered, err := e.deliverWaitAnswer(ctx, given)
+	if !delivered {
+		return
+	}
 	outcome, failure := runResumed, error(nil)
-	if err := deliver(ctx, given); err != nil {
+	if err != nil {
 		outcome, failure = runFailed, err
 	}
 	(&runsDesk{engine: e}).count(ctx, runToolAnswer, outcome, run.TurnID, waited.Turn, failure)
 	if failure == nil {
 		e.Status().Dequeue(context.WithoutCancel(ctx), run.AgentHandle, []string{runWaitWake(run.TurnID, run.LaunchID)})
 	}
+}
+
+// answerCallWait delivers the answer of run's job parked on its own call
+// ([sandbox.PendingRun.WaitsOnCall]): that the call returned, carrying which
+// ([types.ExecutorAnswerGiven.Called]), recorded and resumed as a person's
+// answer would be, so the run is carried on in its own session with a brief
+// telling the call and what it returned.
+func (e *Engine) answerCallWait(ctx context.Context, run sandbox.PendingRun) {
+	call := run.WaitsFor.Call
+	given := types.ExecutorAnswerGiven{
+		TurnID: run.TurnID, AgentHandle: run.AgentHandle, LaunchID: run.LaunchID,
+		Answer:         "Your call to " + call.Tool + " returned.",
+		AnsweredByKind: string(iam.ActorSystem), Called: &types.CallReturned{Tool: call.Tool, Seq: call.Seq},
+	}
+	if _, err := e.deliverWaitAnswer(ctx, given); err != nil {
+		log.WarnContext(ctx, "seat_call_wait_unanswered", "turn_id", run.TurnID, "launch_id", run.LaunchID,
+			"tool", call.Tool, "error", err.Error(),
+			"detail", "the run parked on its own call was not answered; asked again at the next read")
+	}
+}
+
+// deliverWaitAnswer puts given on its seat's control topic as an answer by
+// turn ([sandbox.AnswerDesk.Deliver]), false where this node has no desk to
+// deliver it through.
+func (e *Engine) deliverWaitAnswer(ctx context.Context, given types.ExecutorAnswerGiven) (bool, error) {
+	if deliver := e.runWaits.deliver; deliver != nil {
+		return true, deliver(ctx, given)
+	}
+	desk := e.waitDesk()
+	if desk == nil {
+		return false, nil
+	}
+	_, err := desk.Deliver(ctx, given)
+	return true, err
 }
 
 // waitDesk is the answer desk a wait's answer is delivered through, nil

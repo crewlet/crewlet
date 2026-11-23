@@ -603,7 +603,8 @@ func (d *runsDesk) Wait(ctx context.Context, turnID, job, target, reason, branch
 		return fmt.Errorf("engine: recording run %s's wait: %w", turnID, err)
 	case outcome == sandbox.AskAlreadyAsked:
 		return d.refuse(ctx, runToolWait, turnID, target, builtin.RunRefusedCallerDone,
-			"This run already asked a question or waits on a run in this launch, and that stands. End your turn.")
+			"This run already asked a question, or waits on a run or on a call of its own, in this launch, and "+
+				"that stands. End your turn.")
 	case outcome != sandbox.AskRecorded:
 		return d.refuse(ctx, runToolWait, turnID, target, builtin.RunRefusedCallerDone,
 			"This run is no longer working in the launch that called, so it waits on nothing. End your turn.")
