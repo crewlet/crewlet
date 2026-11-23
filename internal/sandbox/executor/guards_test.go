@@ -42,17 +42,20 @@ printf '%s\n' '{"type":"system","subtype":"init","cwd":"/w","session_id":"s","to
 // `permissions.deny` one in any settings file, or a `disabledMcpServers` entry
 // for the start directory in the home's `.claude.json` (measured), so a run
 // whose init event reports the bridge missing, disabled or failed, or
-// connected with none of its tools, is ended as it starts, its failure naming
-// the file; one whose bridge connected with its tools, or is still connecting,
-// runs to its end, a deny of another server's tools included.
+// connected without a tool the engine says it lists, is ended as it starts,
+// its failure naming the file and the entry; one whose bridge connected with
+// its tools, or is still connecting, runs to its end, a deny of another
+// server's tools included.
 //
-// Mutations, each red: launch without the guard (the switched-off runs never
-// end); read `disabled` as connected; read a connected server as whole
-// without its tools; name no settings file.
+// Mutations, each red: launch without the guard; read `disabled` as
+// connected; check no tool by name; name no file or entry.
 func TestClaudeCodesBridgeCannotBeSwitchedOffUnseen(t *testing.T) {
 	t.Parallel()
 	const denied = `{"deniedMcpServers":[{"serverName":"crewlet"}]}`
-	const bridgeTools, otherTools = `["Bash","mcp__crewlet__report"]`, `["Bash","mcp__other__x"]`
+	const bridgeTools = `["Bash","mcp__crewlet__report","mcp__crewlet__submit_work","mcp__other__submit_work"]`
+	const otherTools = `["Bash","mcp__other__x"]`
+	bridge := map[string]sandbox.MCPServer{"crewlet": {Transport: sandbox.TransportHTTP, URL: codexBridgeURL,
+		AlwaysLoaded: true, Tools: []string{"submit_work", "report"}}}
 	entry := func(status string) string {
 		return `[{"name":"crewlet","status":"` + status + `","source":"dynamic"}]`
 	}
@@ -65,11 +68,25 @@ func TestClaudeCodesBridgeCannotBeSwitchedOffUnseen(t *testing.T) {
 		"the home denies another server's tools": {tools: bridgeTools, servers: entry("connected"),
 			switchOffCase: switchOffCase{plant: map[string]string{
 				".claude/settings.json": `{"permissions":{"deny":["mcp__other"],"allow":["mcp__crewlet"]}}`}}},
+		"the repository denies another server's tool of a bridge tool's name": {
+			tools: `["Bash","mcp__crewlet__report","mcp__crewlet__submit_work"]`, servers: entry("connected"),
+			switchOffCase: switchOffCase{plant: map[string]string{
+				"workspace/.claude/settings.json": `{"permissions":{"deny":["mcp__other__submit_work"]}}`}}},
+		"the home denies one of the bridge's tools": {tools: `["Bash","mcp__crewlet__report"]`,
+			servers: entry("connected"), switchOffCase: switchOffCase{
+				plant: map[string]string{".claude/settings.json": `{"permissions":{"deny":["mcp__crewlet__submit_work"]}}`},
+				fails: []string{"started with Crewlet's MCP server crewlet", "connected, and without its tools mcp__crewlet__submit_work:",
+					"permissions.deny", "/.claude/settings.json (mcp__crewlet__submit_work)"}}},
+		"the repository's local settings deny every tool by a wildcard": {tools: otherTools, servers: entry("connected"),
+			switchOffCase: switchOffCase{
+				plant: map[string]string{"workspace/.claude/settings.local.json": `{"permissions":{"deny":["mcp__*"]}}`},
+				fails: []string{"connected, and none of its tools", "permissions.deny",
+					"/workspace/.claude/settings.local.json (mcp__*)"}}},
 		"the repository denies the bridge's tools": {tools: otherTools, servers: entry("connected"),
 			switchOffCase: switchOffCase{
 				plant: map[string]string{"workspace/.claude/settings.json": `{"permissions":{"deny":["mcp__crewlet"]}}`},
 				fails: []string{"started with Crewlet's MCP server crewlet", "connected, and none of its tools",
-					"permissions.deny", "(mcp__crewlet)", "/workspace/.claude/settings.json"}}},
+					"permissions.deny", "/workspace/.claude/settings.json (mcp__crewlet)"}}},
 		"the home's settings deny it": {tools: `["Bash"]`, servers: `[]`, switchOffCase: switchOffCase{
 			plant: map[string]string{".claude/settings.json": denied},
 			fails: []string{"started without Crewlet's MCP server crewlet", "/.claude/settings.json"}}},
@@ -88,7 +105,7 @@ func TestClaudeCodesBridgeCannotBeSwitchedOffUnseen(t *testing.T) {
 			writeBoxStandIn(t, box, executor.PathsFor(box).BinDir()+"/claude",
 				claudeInitThenWait(tc.tools, tc.servers, len(tc.fails) > 0))
 			plant(t, box, tc.plant)
-			_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go", MCPServers: loadsBridge})
+			_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go", MCPServers: bridge})
 			checkSwitchOff(t, box, res, tc.switchOffCase)
 		})
 	}

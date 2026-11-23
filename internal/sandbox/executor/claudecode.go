@@ -216,7 +216,7 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	// what switched it off ([claudeGuard]).
 	watch := ""
 	if guarded := crewletServers(req); len(guarded) > 0 {
-		b.WriteString(claudeGuard(paths, guarded))
+		b.WriteString(claudeGuard(paths, guarded, req.MCPServers))
 		watch = "claudeguard"
 	}
 	b.WriteString(launchWatched(strings.Join(parts, " "), watch, paths))
