@@ -169,7 +169,14 @@ func oneAsk(leads []ResumeLead, tells func(ResumeLead) bool) func(ResumeLead) bo
 // tells one answer under each. Never an answer of the task's own job, which
 // carried that job on and is told after it as a lead of its own.
 func (t tasksTold) carries(lead sandbox.Lead) bool {
-	return lead.Kind == sandbox.LeadKindAnswer && len(t) > 0 && lead.Seq < t[len(t)-1]
+	return answerKind(lead.Kind) && len(t) > 0 && lead.Seq < t[len(t)-1]
+}
+
+// answerKind reports whether a lead of kind is told by [answerAgain]: a
+// person's answer, or the engine's to a wait or to calls the run parked on,
+// each sealed under a kind of its own (sandbox.LeadKindCalled).
+func answerKind(kind sandbox.LeadKind) bool {
+	return kind == sandbox.LeadKindAnswer || kind == sandbox.LeadKindCalled || kind == sandbox.LeadKindWaited
 }
 
 // from is where the task told again at place starts carrying earlier answers
@@ -203,8 +210,8 @@ func (r *Runner) leadAgain(ctx context.Context, told ResumeLead, tasks tasksTold
 	lead := told.Lead
 	switch {
 	case lead.Unread != "":
-	case lead.Kind == sandbox.LeadKindAnswer && lead.Answer != nil:
-		return answerAgain(*lead.Answer, told.Result, answerAt{}, b), nil, 0
+	case answerKind(lead.Kind) && lead.Answer != nil:
+		return answerAgain(lead.Kind, *lead.Answer, told.Result, answerAt{}, b), nil, 0
 	case lead.Kind == sandbox.LeadKindReview:
 		if notes, found := reviewOf(history, lead.Round); found {
 			return prompts.BuildContinuedRound(prompts.ContinuedRound{Task: r.cfg.Task, Review: notes,
@@ -383,19 +390,22 @@ func heldIn(done *ledger.Iteration, tool string) heldListing {
 	return heldUnlisted
 }
 
-// answerAgain is an answer lead told again under fence token b, standing where
-// at says: the question and the answer, the withdrawal, the refused reply, or
-// the held call and its outcome, in words true of any session of the work (the
-// file comment says why). result is what a held call returned, opened, nil
-// where it did not open here.
+// answerAgain is an answer lead of kind told again under fence token b,
+// standing where at says: the question and the answer, the withdrawal, the
+// refused reply, the held call and its outcome, the wait's account or the
+// calls that returned, in words true of any session of the work (the file
+// comment says why). result is what a held call returned, opened, nil where it
+// did not open here.
 //
 // A REPLY IS FENCED UNDER WHO WROTE IT, AN ANSWER BY TURN DEFUSED, as the lead
 // was ([Asked.answered]): the run reads a chat reply as its sender's
 // information and an answer by turn as its answerer's own instruction
 // (ADR-0040, ADR-0068), whichever relaunch tells it.
-func answerAgain(a sandbox.LeadAnswer, result *sandbox.HeldResult, at answerAt, b provenance.Boundary) string {
-	told := answerItself(a, result, at, b)
-	if len(a.Called) == 0 || a.CallsReturned {
+func answerAgain(kind sandbox.LeadKind, a sandbox.LeadAnswer, result *sandbox.HeldResult, at answerAt,
+	b provenance.Boundary) string {
+
+	told := answerItself(kind, a, result, at, b)
+	if len(a.Called) == 0 || kind == sandbox.LeadKindCalled {
 		return told
 	}
 	// EACH CALL THE RUN PARKED ON BESIDE IT, once, as its own calls.
@@ -417,7 +427,9 @@ func calledAgain(a sandbox.LeadAnswer, heading string, b provenance.Boundary) st
 
 // answerItself is [answerAgain] but for the calls its run parked on beside an
 // answer that was not theirs.
-func answerItself(a sandbox.LeadAnswer, result *sandbox.HeldResult, at answerAt, b provenance.Boundary) string {
+func answerItself(kind sandbox.LeadKind, a sandbox.LeadAnswer, result *sandbox.HeldResult, at answerAt,
+	b provenance.Boundary) string {
+
 	var w strings.Builder
 	switch {
 	case a.Held != nil && a.Refused == nil:
@@ -451,7 +463,7 @@ func answerItself(a sandbox.LeadAnswer, result *sandbox.HeldResult, at answerAt,
 		w.WriteString("### A run this work waited for" + at.named + "\n" +
 			Asked{Question: a.Question, Waited: a.Waited}.waited(b, "A run of this work"))
 		return w.String()
-	case a.CallsReturned:
+	case kind == sandbox.LeadKindCalled:
 		w.WriteString(calledAgain(a, "### Calls this work waited for"+at.named, b))
 		return w.String()
 	case a.Refused != nil:
@@ -522,13 +534,19 @@ func keptWords(words string) (string, int) {
 // [sandbox.MaxLeadWordsBytes] with the cut counted, who answered and who wrote
 // them, and a held call's outcome and result as its row sealed it. BUILT ONCE
 // THE CALL IS MADE ([makeHeld]), so a later brief tells the outcome this
-// relaunch told. A refused reply names no held call ([Asked.tellsHeld]).
+// relaunch told. A refused reply names no held call ([Asked.tellsHeld]). The
+// engine's answer to a wait or to calls that returned is sealed under a kind
+// of its own, which an older build tells as unreadable, never as a person's.
 func (a *Asked) lead() *sandbox.Lead {
 	words, cut := keptWords(a.Answer)
 	answer := &sandbox.LeadAnswer{Question: a.Question, Words: words, Cut: cut, By: a.By, Label: a.Label,
-		Withdrawn: a.Withdrawn, Waited: a.Waited, Called: a.Called, CallsReturned: a.CallsReturned}
-	if a.CallsReturned {
-		answer.Words, answer.Cut = "", 0
+		Withdrawn: a.Withdrawn, Waited: a.Waited, Called: a.Called}
+	kind := sandbox.LeadKindAnswer
+	switch {
+	case a.Waited != nil:
+		kind = sandbox.LeadKindWaited
+	case a.CallsReturned:
+		kind, answer.Words, answer.Cut = sandbox.LeadKindCalled, "", 0
 	}
 	if len(a.Called) > 0 {
 		// WHAT THE CALLS RETURNED, kept as an answer's words are.
@@ -539,7 +557,7 @@ func (a *Asked) lead() *sandbox.Lead {
 	} else if a.Held != nil {
 		answer.Held = a.Held.lead()
 	}
-	return &sandbox.Lead{Kind: sandbox.LeadKindAnswer, Answer: answer}
+	return &sandbox.Lead{Kind: kind, Answer: answer}
 }
 
 // lead is the held call as its answer's lead keeps it ([sandbox.LeadHeld]): the
@@ -699,7 +717,7 @@ func (r *Runner) turnsAnswers(current int, history []ledger.Iteration, b provena
 // earlierAnswers is the answer leads among leads as a brief tells them to a run
 // in round current, under token b, oldest first: each by [answerAgain], headed
 // with its round ([prompts.AnswerRound]), one not opened here said in its place
-// ([prompts.AnswerUnread]), with cut earlier leads not kept, as
+// ([prompts.EarlierUnread]), with cut earlier leads not kept, as
 // [prompts.EarlierAnswers] tells them, fresh or told again. listed is the
 // closed rounds the same brief tells the calls of: an answer's held call is
 // among its round's, so the answer defers to that list ([answerAt], [heldIn]).
@@ -717,31 +735,32 @@ func earlierAnswers(leads []ResumeLead, current int, listed []ledger.Iteration, 
 	)
 	for _, told := range leads {
 		lead := told.Lead
-		if lead.Kind != sandbox.LeadKindAnswer {
+		if !answerKind(lead.Kind) {
 			continue
 		}
 		named := prompts.AnswerRound(lead.Round, current)
+		kind := earlierKind(lead.Kind)
 		if lead.Unread != "" || lead.Answer == nil {
-			rendered = append(rendered, prompts.EarlierLead{Text: prompts.AnswerUnread(named)})
+			rendered = append(rendered, prompts.EarlierLead{Text: prompts.EarlierUnread(kind, named), Kind: kind})
 			continue
 		}
 		out.held = append(out.held, toldOf(lead)...)
 		at := answerAt{named: named, round: lead.Round, done: doneFor(listed, lead.Round)}
-		rendered = append(rendered, prompts.EarlierLead{Text: answerAgain(*lead.Answer, told.Result, at, b),
-			Kind: earlierKind(*lead.Answer)})
+		rendered = append(rendered, prompts.EarlierLead{Text: answerAgain(lead.Kind, *lead.Answer, told.Result, at,
+			b), Kind: kind})
 	}
 	out.section = prompts.EarlierAnswers(rendered, cut, fresh)
 	return out
 }
 
-// earlierKind is what an answer lead told among the earlier ones was, for the
+// earlierKind is what a lead of kind told among the earlier ones was, for the
 // section's intro ([prompts.EarlierAnswers]): the engine's account of the run
 // a wait was for or of the calls the run parked on, never a person's answer.
-func earlierKind(a sandbox.LeadAnswer) prompts.EarlierKind {
-	switch {
-	case a.Waited != nil:
+func earlierKind(kind sandbox.LeadKind) prompts.EarlierKind {
+	switch kind {
+	case sandbox.LeadKindWaited:
 		return prompts.EarlierWait
-	case a.CallsReturned:
+	case sandbox.LeadKindCalled:
 		return prompts.EarlierCalls
 	}
 	return prompts.EarlierAnswer

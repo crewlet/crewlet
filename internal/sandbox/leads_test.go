@@ -16,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
@@ -630,7 +631,8 @@ func TestTheCountOfKeptLeadsNeverDropsALeadTheirBytesWouldKeep(t *testing.T) {
 // Mutation: leave a known kind or outcome off its list, and a check goes red.
 func TestEveryLeadKindAndOutcomeIsValid(t *testing.T) {
 	t.Parallel()
-	for _, k := range []LeadKind{LeadKindAnswer, LeadKindReview, LeadKindTask, LeadKindFresh} {
+	for _, k := range []LeadKind{LeadKindAnswer, LeadKindCalled, LeadKindWaited, LeadKindReview, LeadKindTask,
+		LeadKindFresh} {
 		if !k.Valid() {
 			t.Errorf("lead kind %q is not valid", k)
 		}
@@ -664,6 +666,12 @@ func TestOnlyALeadOfANamedJobInItsKindsShapeIsSealedOrOpened(t *testing.T) {
 		"a task without its facts":    {Kind: LeadKindTask, Job: "job-1", Seq: 1},
 		"a fresh task with an answer": {Kind: LeadKindFresh, Job: "job-1", Seq: 1, Answer: words, Task: &LeadTask{}},
 		"a review carrying an answer": {Kind: LeadKindReview, Job: "job-1", Seq: 1, Round: 1, Answer: words},
+		"an answer carrying a wait's account": {Kind: LeadKindAnswer, Job: "job-1", Seq: 1, Round: 1,
+			Answer: &LeadAnswer{Waited: &types.RunWaited{Turn: "run-t"}}},
+		"calls returned naming no call": {Kind: LeadKindCalled, Job: "job-1", Seq: 1, Round: 1, Answer: words},
+		"calls returned with a held call": {Kind: LeadKindCalled, Job: "job-1", Seq: 1, Round: 1,
+			Answer: &LeadAnswer{Called: []types.CallReturned{{Tool: "delegate", Seq: 4}}, Held: &LeadHeld{}}},
+		"a wait without its account": {Kind: LeadKindWaited, Job: "job-1", Seq: 1, Round: 1, Answer: words},
 	} {
 		if kept, err := rigLeads().Seal("t1", lead); err == nil {
 			t.Errorf("%s: the lead is sealed as %+v, want it refused", name, kept)
@@ -678,6 +686,38 @@ func TestOnlyALeadOfANamedJobInItsKindsShapeIsSealedOrOpened(t *testing.T) {
 	if got, err := rigLeads().Open("t1", signed); !errors.Is(err, ErrLeadUnopened) || got.Answer != nil {
 		t.Errorf("a review signed carrying an answer opens as %+v, %v; want it refused, %v", got, err,
 			ErrLeadUnopened)
+	}
+}
+
+// THE ENGINE'S OWN ANSWERS ARE SEALED UNDER KINDS OF THEIR OWN. The engine
+// answers a run's `wait_for_run` with how the run it waited for left, and a run
+// parked on its own calls with what they returned: nobody answered a question.
+// Sealed as an answer, a build that does not read their keys would tell them as
+// a person's answer; under kinds of their own (LeadKindWaited, LeadKindCalled)
+// such a build fails LeadKind.Valid and tells them as unreadable, while this
+// one opens each exactly as sealed.
+//
+// Mutation: drop either kind from LeadKinds or shapeRefusal, and its lead does
+// not seal or open.
+func TestTheEnginesOwnAnswersAreSealedUnderKindsOfTheirOwn(t *testing.T) {
+	t.Parallel()
+	called := []types.CallReturned{{Tool: "delegate", Seq: 4}}
+	for name, lead := range map[string]Lead{
+		"calls returned": {Kind: LeadKindCalled, Round: 1, Answer: &LeadAnswer{
+			Question: "Waiting for its call to return: delegate", Called: called, Returned: "It returned: done"}},
+		"a wait answered": {Kind: LeadKindWaited, Round: 1, Answer: &LeadAnswer{Question: "Waiting for another run",
+			Waited: &types.RunWaited{Turn: "run-t", Seat: "swe", Left: types.RunLeftEnded, Outcome: "completed"},
+			Called: called, Returned: "It returned: done"}},
+	} {
+		kept := sealedFor(t, rigLeads(), lead, "job-1", 1)
+		got, err := rigLeads().Open("t1", kept)
+		lead.Job, lead.Seq = "job-1", 1
+		if err != nil || !reflect.DeepEqual(got, lead) {
+			t.Errorf("%s: the lead opens as %+v, %v; want %+v", name, got, err, lead)
+		}
+		if slices.Contains([]LeadKind{LeadKindAnswer, LeadKindReview, LeadKindTask, LeadKindFresh}, kept.Kind) {
+			t.Errorf("%s: the lead is kept as %q, a kind an older build reads", name, kept.Kind)
+		}
 	}
 }
 

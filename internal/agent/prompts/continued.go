@@ -1587,12 +1587,17 @@ func HeldCallCounted(round, first, last int) string {
 		"already done earlier in this turn may count rather than list, so what became of it is told here. "
 }
 
-// AnswerUnread is an answer told to a run that the brief cannot read on the
-// node that builds it ([EarlierAnswers]), its heading naming its round as
+// EarlierUnread is a lead of kind told to a run that the brief cannot read on
+// the node that builds it ([EarlierAnswers]), its heading naming its round as
 // [AnswerRound] says it (named): its seal under a key that node does not hold,
 // or one that does not open. Told rather than left out, as [LeadUnread] is, so
-// the run knows an answer is missing; never a word of what it said.
-func AnswerUnread(named string) string {
-	return "### An answer that carried this work on, which cannot be read here" + named +
+// the run knows a lead is missing; never a word of what it said, and an
+// account of what a run waited for never as an answer.
+func EarlierUnread(kind EarlierKind, named string) string {
+	what := "An answer"
+	if kind != EarlierAnswer {
+		what = "A message"
+	}
+	return "### " + what + " that carried this work on, which cannot be read here" + named +
 		"\nThe engine's copy of it does not open on the node carrying this run on, so it is not told here."
 }

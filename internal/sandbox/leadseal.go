@@ -82,13 +82,26 @@ type sealedLead struct {
 }
 
 // shapeRefusal is why lead's source does not suit its kind, "" where it does: an
-// answer carries its answer alone, a task or a fresh brief's task its own facts
-// alone, and a review neither, its words recomposed from the round it closed.
+// answer carries its answer alone, never a wait's account; the engine's answer
+// that calls returned carries those calls, and to a wait that wait's account,
+// neither a held call nor a refused reply, which only a person's reply makes;
+// a task or a fresh brief's task its own facts alone; and a review neither,
+// its words recomposed from the round it closed.
 func shapeRefusal(lead Lead) string {
 	switch lead.Kind {
 	case LeadKindAnswer:
-		if lead.Answer == nil || lead.Task != nil {
+		if lead.Answer == nil || lead.Task != nil || lead.Answer.Waited != nil {
 			return "an answer lead carries its answer and nothing else"
+		}
+	case LeadKindCalled, LeadKindWaited:
+		a := lead.Answer
+		switch {
+		case a == nil || lead.Task != nil || a.Held != nil || a.Refused != nil:
+			return "the engine's answer carries what it answered and nothing else"
+		case lead.Kind == LeadKindCalled && (len(a.Called) == 0 || a.Waited != nil):
+			return "a lead of calls that returned carries those calls"
+		case lead.Kind == LeadKindWaited && a.Waited == nil:
+			return "a wait's lead carries the account of the run it waited for"
 		}
 	case LeadKindTask, LeadKindFresh:
 		if lead.Task == nil || lead.Answer != nil {
