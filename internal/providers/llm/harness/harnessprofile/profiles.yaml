@@ -2343,9 +2343,16 @@ cursor-agent:
   # build's first run request carries the user message alone; the local-loop
   # build put every one of them in its model's first request, the flag above
   # set or not (measured), and the service asks the harness for its context as
-  # that client does. A state_dir outside any directory holding such files
-  # keeps them out entirely.
+  # that client does. NO MARKER STOPS THAT WALK: a `.git` file or directory in
+  # the call's directory, a repository above it, a home above it, a
+  # .cursorignore there, --workspace and --disable-project-configs each left
+  # every file above it in the request (measured on 2026.11.22-e9042b2; the
+  # bundle's loop climbs to the root unconditionally). A .cursorignore covers
+  # only its own directory's tree, so none Crewlet writes reaches a directory
+  # above its own. So a call whose directory has one of these files above it
+  # is refused, naming the file (ancestor_files).
   complete_args: ["-p", "--output-format", "json", "--trust", "--exclude-workspace-context"]
+  ancestor_files: ["AGENTS.md", "CLAUDE.md", "CLAUDE.local.md", ".cursor/rules"]
   # Cursor reads a permissions block from the project's .cursor/cli.json —
   # the per-call scratch directory IS the project, so the file is seeded there
   # on every call. Its user-level file, cli-config.json, is synced back with

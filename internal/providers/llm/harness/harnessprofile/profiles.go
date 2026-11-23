@@ -162,6 +162,7 @@ func (p Profile) Clone() Profile {
 	out.PassthroughEnv = append([]string(nil), p.PassthroughEnv...)
 	out.CredentialPaths = append([]string(nil), p.CredentialPaths...)
 	out.VolatilePaths = append([]string(nil), p.VolatilePaths...)
+	out.AncestorFiles = append([]string(nil), p.AncestorFiles...)
 	out.HostCredentialPaths = append([]string(nil), p.HostCredentialPaths...)
 	out.TextPaths = clonePaths(p.TextPaths)
 	out.ErrorPaths = clonePaths(p.ErrorPaths)

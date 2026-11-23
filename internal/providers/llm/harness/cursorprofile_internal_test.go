@@ -176,3 +176,57 @@ func TestCursorAgentNamesALoginItCannotUse(t *testing.T) {
 		t.Errorf("classified %+v (matched %v), want the login named for:\n%s", hit, ok, stderr)
 	}
 }
+
+// A CURSOR AGENT CALL WITH INSTRUCTIONS ABOVE IT IS NEVER RUN: Cursor reads
+// every AGENTS.md, CLAUDE.md, CLAUDE.local.md and .cursor/rules from its
+// call's directory up to the root into the model's request, and nothing in the
+// call's directory stops that walk (measured on 2026.11.22-e9042b2). So a seat
+// whose state directory has one of them above it is refused its call, naming
+// the file, and one with none runs.
+//
+// Mutation: drop the profile's ancestor_files, or stop the walk below the
+// root: a row goes red.
+func TestACursorAgentCallWithInstructionsAboveItIsNeverRun(t *testing.T) {
+	t.Parallel()
+	p := cursorAgent(t)
+	for _, name := range []string{"AGENTS.md", "CLAUDE.md", "CLAUDE.local.md", ".cursor/rules"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			above := t.TempDir()
+			planted := filepath.Join(above, name)
+			if err := os.MkdirAll(filepath.Dir(planted), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if name == ".cursor/rules" {
+				if err := os.Mkdir(planted, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.WriteFile(planted, []byte("INSTRUCTIONS FROM ABOVE\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			state := filepath.Join(above, "deep", "state")
+			t.Cleanup(func() { forgetWorkspace(state) })
+			ws, err := Shared(state, "cursor-agent", p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := ws.Acquire(t.Context(), "agent-pm", "call-1", nil); err == nil ||
+				!strings.Contains(err.Error(), planted) {
+				t.Fatalf("a call with %s above it ran (%v), want it refused naming the file", planted, err)
+			}
+		})
+	}
+	state := filepath.Join(t.TempDir(), "state")
+	t.Cleanup(func() { forgetWorkspace(state) })
+	ws, err := Shared(state, "cursor-agent", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := ws.Acquire(t.Context(), "agent-pm", "call-1", nil)
+	if err != nil {
+		t.Fatalf("a call with nothing above it was refused: %v", err)
+	}
+	if err := c.Release(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
