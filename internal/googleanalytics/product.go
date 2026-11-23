@@ -28,7 +28,7 @@ func New(company func() *config.Company, env func() *config.Resolver, tokens goo
 	p := &Product{company: company, client: &googlegrowth.Client{
 		Kind: string(Kind), Name: "Google Analytics", Company: company, Env: env, Tokens: tokens,
 		Audit: audit, Leases: leases, HTTP: hc, Secrets: []string{"secretValue", "channelToken"},
-		Refused: vendorRefusal, ReadScopes: readScope,
+		Refused: vendorRefusal, ReadScopes: readScope, Signer: growth.SignerOwn,
 	}}
 	p.client.BeforeRead = p.beforeRead
 	return p

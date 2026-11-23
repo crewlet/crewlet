@@ -11,7 +11,7 @@ import (
 func identityOf(handle string, at time.Time) coord.GoogleIdentity {
 	return coord.GoogleIdentity{
 		Handle: handle, UniqueID: "112233445566778899001",
-		Email:     "crewlet-g-" + handle + "-1a2b@acme-crewlet-id.iam.gserviceaccount.com",
+		Email:     "crewlet-" + handle + "-1a2b3c@acme-crewlet-id.iam.gserviceaccount.com",
 		Delegated: true, CreatedAt: at,
 	}
 }

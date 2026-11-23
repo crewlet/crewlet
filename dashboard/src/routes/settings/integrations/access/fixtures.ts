@@ -16,6 +16,10 @@
 import type {
   AccessAnswer,
   AccessBox,
+  AccessIdentity,
+  AccessIdentityGuide,
+  AccessIdentityMode,
+  AccessIdentityStatus,
   AccessLaneKey,
   AccessOptions,
   AccessSeat,
@@ -512,6 +516,399 @@ export function appStoreConnectAnswer(): AccessAnswer {
             level: "operate",
             scope: ["6763222842"],
           },
+        },
+      }),
+    ],
+  };
+}
+
+/** Apple's sheet for Growth's own key at Manage, as the engine words it. */
+export const ASC_GUIDE: AccessIdentityGuide = {
+  vendor: "Apple",
+  noun: "key",
+  records: "its submissions",
+  why: "Apple then records its submissions under its own key, and you can revoke it alone.",
+  company: "the company's team keys",
+  name: "crewlet-growth",
+  name_rule: "Lowercase letters, digits and hyphens, at most 30.",
+  name_what: "Team key name",
+  role: "App Manager",
+  never: "Admin",
+  steps: [
+    { text: "Open Users and Access, then Integrations, then Team Keys." },
+    { text: "Press Generate API Key, or + if the team already has keys." },
+    {
+      text: "Name:",
+      copy: {
+        label: "key's name",
+        value: "crewlet-growth",
+        rule: "Lowercase letters, digits and hyphens, at most 30.",
+      },
+    },
+    { text: "Access: App Manager. Never Admin." },
+    { text: "Press Generate." },
+    { text: "On the new key's row, press Download API Key. Apple offers the file once." },
+  ],
+  link: {
+    label: "Open Team Keys",
+    url: "https://appstoreconnect.apple.com/access/integrations/api",
+  },
+  note: "Only the Account Holder or an Admin can make team keys.",
+  back: {
+    kind: "file",
+    accept: ".p8",
+    hint: "The file Apple offered: AuthKey_<Key ID>.p8",
+    label: "Key ID",
+  },
+  checks: [
+    { id: "sign", label: "Sign in with the key and the team's issuer" },
+    { id: "alive", label: "Make a read every role may make" },
+    { id: "role", label: "Read its role from seven reads" },
+    { id: "apps", label: "Find the agent's apps in the key's team" },
+  ],
+};
+
+const IDENTITY_LABEL: Record<AccessIdentityStatus, string> = {
+  company: "Company's",
+  none: "Not set up",
+  ready: "Ready",
+  wrong_role: "Wrong role",
+  wrong_team: "Wrong team",
+  refused: "Refused",
+  replacing: "Replacing",
+};
+
+/** The box's actions, none offered: each identity below turns on its own. */
+const NO_ACTIONS = { set_up: false, replace: false, use_company: false };
+
+/** The setting a seat on its own identity holds, which the route writes before its check. */
+const OWN_MODE: AccessIdentityMode = "own";
+
+/** Growth's identity at Apple in one state, as the engine answers it. */
+export function ascIdentity(status: AccessIdentityStatus): AccessIdentity {
+  const base = {
+    ...NO_ACTIONS,
+    offered: true,
+    status,
+    status_label: IDENTITY_LABEL[status],
+    needs: "App Manager",
+    guide: ASC_GUIDE,
+  };
+  const needsYou =
+    "Needs you: set up Growth's own key so Apple records its submissions. Until then Apple sees the company's team keys.";
+  switch (status) {
+    case "company":
+      return { ...base, mode: "company", holds: "company", said: needsYou, set_up: true };
+    case "none":
+      return { ...base, mode: OWN_MODE, holds: "company", said: needsYou, set_up: true };
+    case "wrong_role":
+      return {
+        ...base,
+        mode: "own",
+        holds: "company",
+        role: "Marketing",
+        said: needsYou,
+        set_up: true,
+        problem: {
+          title: "Wrong role",
+          body: "Key 7KQ4M2ZX9P holds the Marketing role, and this agent's level needs App Manager.",
+        },
+      };
+    case "wrong_team":
+      return {
+        ...base,
+        mode: "own",
+        holds: "company",
+        team: "other",
+        said: needsYou,
+        set_up: true,
+        problem: {
+          title: "Wrong team",
+          body: "Apple accepts key 7KQ4M2ZX9P with none of the company's teams.",
+        },
+      };
+    case "refused":
+      return {
+        ...base,
+        mode: "own",
+        holds: "none",
+        name: "crewlet-growth",
+        id: "7KQ4M2ZX9P",
+        said: "Refused: Apple no longer accepts Growth's own key, so its calls stop until it has a working one.",
+        set_up: true,
+        use_company: true,
+        problem: { title: "Refused", body: "Apple refuses key 7KQ4M2ZX9P: it was revoked." },
+      };
+    case "replacing":
+      return {
+        ...base,
+        mode: "own",
+        holds: "own",
+        name: "crewlet-growth",
+        id: "3HN8RT6YQ1",
+        role: "App Manager",
+        team: "main",
+        said: "Apple sees Growth's own key, crewlet-growth.",
+        replace: true,
+        retiring: [{ id: "7KQ4M2ZX9P", name: "crewlet-growth" }],
+        problem: {
+          title: "Revoke the old key at Apple",
+          body: "crewlet-growth is no longer used. Revoke it at Apple; Crewlet clears this once Apple refuses it.",
+        },
+      };
+    default:
+      return {
+        ...base,
+        mode: "own",
+        holds: "own",
+        name: "crewlet-growth",
+        id: "7KQ4M2ZX9P",
+        role: "App Manager",
+        team: "main",
+        said: "Apple sees Growth's own key, crewlet-growth.",
+        replace: true,
+      };
+  }
+}
+
+/** App Store Connect with Growth's identity in one state, its row's status folded in as the engine folds it. */
+export function appStoreConnectIdentityAnswer(status: AccessIdentityStatus): AccessAnswer {
+  const answer = appStoreConnectAnswer();
+  const lane = answer.seats[0]!.lanes.app_store_connect!;
+  lane.identity = ascIdentity(status);
+  if (status === "refused") {
+    lane.status = "refused";
+    lane.status_label = "Refused";
+  } else if (status !== "ready" && status !== "replacing") {
+    lane.status = "needs_you";
+    lane.status_label = "Needs you";
+  }
+  return answer;
+}
+
+/** Apple Ads, which offers no identity per agent: the company's is the finished state. */
+export function appleAdsAnswer(): AccessAnswer {
+  return {
+    kind: "apple_ads",
+    revision: "rev-7",
+    syncing: false,
+    options: [{ lane: "apple_ads", live: false, levels: [{ id: "read", name: "View" }] }],
+    seats: [
+      seat("growth", "Growth", {
+        apple_ads: {
+          ...onLane({ variable: "" }),
+          desired: { enabled: true, level: "read" },
+          observed: { exists: true, enabled: true, account: "crewlet/growth", level: "read" },
+          identity: {
+            ...NO_ACTIONS,
+            offered: false,
+            mode: "company",
+            holds: "company",
+            status: "company",
+            status_label: "Company's",
+            said: "Apple Ads sees the company's API user for every agent.",
+          },
+        },
+      }),
+    ],
+  };
+}
+
+/**
+ * Expo with PM's robot to make, its identity on the one pattern: offered, its
+ * own by construction, the robot's token the thing brought back.
+ */
+export function expoIdentityAnswer(): AccessAnswer {
+  const answer = expoWaitingAnswer("create");
+  const pm = answer.seats[0]!.lanes.expo!;
+  pm.hand_in = { name: "crewlet-pm" };
+  pm.identity = {
+    ...NO_ACTIONS,
+    offered: true,
+    mode: "own",
+    holds: "own",
+    status: "none",
+    status_label: "Not set up",
+    said: "Needs you: set up PM's own robot so Expo records its actions.",
+    set_up: true,
+    needs: "Runner",
+    guide: {
+      vendor: "Expo",
+      noun: "robot",
+      records: "its builds",
+      why: "Expo then records its builds under its own robot, and you can remove it alone.",
+      name: "crewlet-pm",
+      name_rule: "Lowercase letters, digits and hyphens, at most 30.",
+      name_what: "Robot name",
+      role: "Runner",
+      steps: [
+        { text: "Open Access tokens, then Robots, then Add robot." },
+        {
+          text: "Name:",
+          copy: {
+            label: "robot's name",
+            value: "crewlet-pm",
+            rule: "Lowercase letters, digits and hyphens, at most 30.",
+          },
+        },
+        { text: "Role: Runner." },
+        { text: "Create a token for the robot and copy it." },
+      ],
+      link: {
+        label: "Open Access tokens",
+        url: "https://expo.dev/accounts/acme/settings/access-tokens",
+      },
+      back: { kind: "token", label: "Robot token", hint: "Expo shows the token once." },
+      checks: [
+        { id: "robot", label: "Read the robot the token belongs to" },
+        { id: "role", label: "Read its role on the account" },
+      ],
+    },
+  };
+  return answer;
+}
+
+/** Meta's sheet for Growth's own system user at Operate, as the engine words it. */
+function metaGuide(canMake: boolean): AccessIdentityGuide {
+  const rule = "Lowercase letters, digits and hyphens, at most 30.";
+  return {
+    vendor: "Meta",
+    noun: "system user",
+    records: "its changes",
+    why: "Meta's activity history then names the agent, and its token can be cut off alone.",
+    company: "the company's system user",
+    name: "crewlet-growth",
+    name_rule: rule,
+    name_what: "System user name",
+    role: "Manage campaigns and View performance",
+    never: "Admin",
+    steps: [
+      { text: "Open Business settings, then Users, then System users." },
+      { text: "Press Add." },
+      { text: "Name:", copy: { label: "system user's name", value: "crewlet-growth", rule } },
+      { text: "Role: Employee. Press Create system user." },
+      {
+        text: 'Press Assign assets, choose "act_111" and turn on Manage campaigns and View performance.',
+      },
+      {
+        text: 'Press Generate token. App: 987654321012345. Expiry: 60 days. Tick "ads_management" and "ads_read".',
+      },
+      { text: "Copy the token. Meta shows it once." },
+    ],
+    link: {
+      label: "Open System users",
+      url: "https://business.facebook.com/settings/system-users",
+    },
+    note: "Meta allows a business 10 system users at Full access and 1 at Limited, shared with every integration there.",
+    back: { kind: "token", label: "Token", hint: "Crewlet checks it with Meta and seals it." },
+    make: {
+      label: "Crewlet can make it for you",
+      does: `With the business's admin system user, Crewlet makes crewlet-growth an Employee system user, gives it "act_111" at Manage campaigns and View performance, and mints a 60-day token it renews.`,
+      ...(canMake
+        ? {}
+        : {
+            unavailable:
+              "Paste the Admin system user's token and the business portfolio ID on the Settings tab, and Crewlet makes it for you.",
+          }),
+      reads: [
+        { id: "make", label: "Make crewlet-growth, an Employee system user" },
+        { id: "assign", label: 'Give it "act_111": Manage campaigns and View performance' },
+        { id: "mint", label: 'Mint its token: "ads_management" and "ads_read"' },
+      ],
+    },
+    checks: [
+      { id: "token", label: "Read the token: the company's app, its permissions" },
+      { id: "user", label: "Read its system user: an Employee of the business" },
+      {
+        id: "accounts",
+        label: 'Read its ad accounts: Manage campaigns and View performance on "act_111"',
+      },
+    ],
+  };
+}
+
+/**
+ * Meta Ads with Growth at Operate on one ad account: on the company's system
+ * user, past Meta's system user cap, or on its own, ready.
+ */
+export function metaAdsIdentityAnswer(
+  state: "company" | "blocked" | "ready",
+  canMake = true,
+): AccessAnswer {
+  const guide = metaGuide(canMake);
+  const needsYou =
+    "Needs you: set up Growth's own system user so Meta records its changes. Until then Meta sees the company's system user.";
+  const identity: AccessIdentity =
+    state === "ready"
+      ? {
+          ...NO_ACTIONS,
+          offered: true,
+          mode: "own",
+          holds: "own",
+          status: "ready",
+          status_label: "Ready",
+          name: "crewlet-growth",
+          id: "100200300",
+          role: "Manage campaigns and View performance",
+          needs: guide.role,
+          team: "business 5550001",
+          said: "Meta sees Growth's own system user, crewlet-growth.",
+          replace: true,
+          guide,
+        }
+      : {
+          ...NO_ACTIONS,
+          offered: true,
+          mode: state === "blocked" ? "own" : "company",
+          holds: "company",
+          status: state === "blocked" ? "none" : "company",
+          status_label: state === "blocked" ? "Not set up" : "Company's",
+          needs: guide.role,
+          said:
+            state === "blocked"
+              ? "Meta allows this business 10 system users and all 10 are used, so Growth stays on the company's system user. Meta sees the company's system user."
+              : needsYou,
+          ...(state === "blocked"
+            ? {
+                blocked:
+                  "Meta allows this business 10 system users and all 10 are used, so Growth stays on the company's system user.",
+              }
+            : { set_up: true }),
+          guide,
+        };
+  return {
+    kind: "meta_ads",
+    revision: "rev-7",
+    syncing: false,
+    options: [
+      {
+        lane: "meta_ads",
+        live: false,
+        levels: [
+          { id: "read", name: "Read" },
+          { id: "operate", name: "Operate", administers: true },
+          { id: "administer", name: "Administer", administers: true },
+        ],
+        scoped: true,
+        scope_required: true,
+        scope_open: true,
+        scope: ["act_111"],
+      },
+    ],
+    seats: [
+      seat("growth", "Growth", {
+        meta_ads: {
+          ...onLane({ variable: "" }),
+          desired: { enabled: true, level: "operate", scope: ["act_111"] },
+          observed: {
+            exists: true,
+            enabled: true,
+            account: state === "ready" ? "crewlet-growth" : "crewlet/growth",
+            level: "operate",
+            scope: ["act_111"],
+          },
+          ...(state === "ready" ? {} : { status: "needs_you", status_label: "Needs you" }),
+          identity,
         },
       }),
     ],
