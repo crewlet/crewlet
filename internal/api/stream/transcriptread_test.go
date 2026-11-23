@@ -17,21 +17,22 @@ import (
 // A READ ITS CLIENT LEAVES ENDS AT THE ENGINE, AND FREES ITS SLOTS: a
 // transcript page whose read is still working when its client gives it up
 // (`query_cancel`), one value that never ends or an archive whose bytes never
-// come, is ended there by the engine's own read, with no answer sent, closing
-// its archive; and every transcript slot ([executor.TranscriptReadsAtOnce]) is
-// free, each taken by the reads asked next. Each is given up on once inside
-// what it reads, so it ends mid-read at any runner's pace (#1904); a frame's
-// wait ending a question is TestAQueryItsClientStoppedWaitingForStopsAndFreesItsSlot's.
+// come, is ended there by the engine's own read, taking nothing after the
+// cancel but what it had asked for, with no answer sent, closing its archive;
+// and every transcript slot ([executor.TranscriptReadsAtOnce]) is free, each
+// taken by the reads asked next. Each is given up on once inside what it reads
+// (#1904); a frame's wait ending a question is TestAQueryItsClientStoppedWaitingForStopsAndFreesItsSlot's.
 //
-// Mutation: stream a value past its read's context, and the reads run on to
-// the read budget, answered; keep a slot past a read its client left, and the
-// reads asked next never read.
+// Mutation: stream a value past its read's context, and a read takes more than
+// [streamedPast] after its cancel, still ending cancelled with no answer; keep
+// a slot past a read its client left, and the reads asked next never read.
 func TestAReadItsClientLeavesEndsAtTheEngineAndFreesItsSlots(t *testing.T) {
 	t.Parallel()
 	type ended struct {
-		err    error
-		opened bool
-		closed <-chan struct{}
+		err         error
+		opened      bool
+		closed      <-chan struct{}
+		afterCancel *int
 	}
 	ends := make(chan ended, executor.TranscriptReadsAtOnce)
 	inside := make(chan struct{}, executor.TranscriptReadsAtOnce)
@@ -40,19 +41,19 @@ func TestAReadItsClientLeavesEndsAtTheEngineAndFreesItsSlots(t *testing.T) {
 			return "answered", nil
 		}
 		closed := make(chan struct{})
-		opened := false
+		opened, afterCancel := false, 0
 		reading := sync.OnceFunc(func() { inside <- struct{}{} })
 		open := func(ctx context.Context) (io.ReadCloser, error) {
 			opened = true
 			if params["archive"] == "endless" {
-				return endlessArchive(reading, closed), nil
+				return endlessArchive(ctx, reading, &afterCancel, closed), nil
 			}
 			return stalledArchive{ctx: ctx, inside: reading,
 				closing: sync.OnceFunc(func() { close(closed) })}, nil
 		}
 		got, err := executor.ReadTranscript(ctx, executor.OpenCodeName, executor.OpenCode{}.ArchiveFormat(),
 			open, 0)
-		ends <- ended{err: err, opened: opened, closed: closed}
+		ends <- ended{err: err, opened: opened, closed: closed, afterCancel: &afterCancel}
 		return got, err
 	})
 	conn, _, err := f.dial(t, "")
@@ -79,10 +80,15 @@ func TestAReadItsClientLeavesEndsAtTheEngineAndFreesItsSlots(t *testing.T) {
 		for range executor.TranscriptReadsAtOnce {
 			e := awaited(t, ends, "a read its client left had not ended")
 			if !errors.Is(e.err, context.Canceled) || !e.opened {
-				t.Fatalf("a read of a %s archive its client left ended %v (its archive opened: %t), "+
+				t.Fatalf("a read of the %s archive, left by its client, ended %v (its archive opened: %t), "+
 					"want cancelled, mid-read", archive, e.err, e.opened)
 			}
 			awaited(t, e.closed, "a read its client left had not closed its "+archive+" archive")
+			if *e.afterCancel > streamedPast {
+				t.Fatalf("a read of the %s archive, left by its client, took %d bytes of it after its cancel, "+
+					"want at most %d: it streamed a value past its context", archive, *e.afterCancel,
+					streamedPast)
+			}
 		}
 	}
 	write(t, conn, map[string]any{"kind": "query", "id": 100, "what": "events"})
@@ -108,12 +114,15 @@ func awaited[T any](t *testing.T, c <-chan T, what string) T {
 }
 
 // endlessArchive is an OpenCode session whose one message's text never ends,
-// gzipped as it is read: a read of it runs until its caller leaves, or to its
-// read budget. Each piece is flushed into a pipe, which hands it over only as
-// the read asks, so inside is told once the read has taken [streamedPast] of
-// the text: its walk is then streaming the value, where only the read's own
-// context can end it. done closes once nothing writes it any more.
-func endlessArchive(inside func(), done chan<- struct{}) io.ReadCloser {
+// gzipped as it is read. Each piece is flushed into a pipe, which hands it
+// over only as the read asks, so once the read has taken [streamedPast] of the
+// text its walk is streaming the value, where only the read's own ctx can end
+// it: inside is told then, and nothing more is written until ctx is done.
+// afterCancel counts the pieces the read takes whole after that, and the text
+// ends once it passes streamedPast, so a read that streams on past its context
+// fails on what it took, not on the time its read budget takes to spend. done
+// closes once nothing writes the archive any more, afterCancel then final.
+func endlessArchive(ctx context.Context, inside func(), afterCancel *int, done chan<- struct{}) io.ReadCloser {
 	r, w := io.Pipe()
 	go func() {
 		defer close(done)
@@ -121,12 +130,22 @@ func endlessArchive(inside func(), done chan<- struct{}) io.ReadCloser {
 		_, err := io.WriteString(zw, `{"info":{"id":"ses_0123456789abcdef0123456789abcdef"},"messages":[`+
 			`{"id":"msg_0","type":"user","text":"`)
 		words := strings.Repeat("words a box wrote, and wrote again ", 1<<10)
-		for taken := 0; err == nil; taken += len(words) {
-			if taken >= streamedPast {
-				inside()
+		piece := func() error {
+			if _, err := io.WriteString(zw, words); err != nil {
+				return err
 			}
-			if _, err = io.WriteString(zw, words); err == nil {
-				err = zw.Flush()
+			return zw.Flush()
+		}
+		for taken := 0; err == nil && taken < streamedPast; taken += len(words) {
+			err = piece()
+		}
+		if err == nil {
+			inside()
+			<-ctx.Done()
+		}
+		for err == nil && *afterCancel <= streamedPast {
+			if err = piece(); err == nil {
+				*afterCancel += len(words)
 			}
 		}
 		_ = w.CloseWithError(err)
@@ -139,6 +158,9 @@ func endlessArchive(inside func(), done chan<- struct{}) io.ReadCloser {
 // of its walk (gzip's 4 KiB reader and 32 KiB window, the scanner's 64 KiB).
 // Told at the open, a cancel can land before the walk reaches the value, where
 // the walk's own check between messages ends it and no value streams past it.
+// It bounds what a read takes after its cancel too: one that stops takes at
+// most the piece its read in flight asked for, and one that streams on would
+// take its whole read budget ([executor.TranscriptReadBytes], 256 MiB).
 const streamedPast = 1 << 20
 
 // stalledArchive is an archive whose bytes never come: a read of it says so on
