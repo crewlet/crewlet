@@ -84,15 +84,27 @@ type secretView struct {
 	// values is the store snapshot the resolver was built from, never nil:
 	// an engine with no store holds no view at all.
 	values map[string]string
+
+	// written is when the store last wrote each of values, read in the same
+	// pass: the instant a credential's expiry alarm judges the value this
+	// node resolves from ([Engine.storedAt]).
+	written map[string]time.Time
 }
 
-// installSecrets publishes one snapshot as this node's resolver, the store in
-// front of [Engine.environment] (the chain [config.WithStore] builds). The
-// caller holds [Engine.secretsMu].
+// installSecrets publishes values as this node's snapshot, with no instant
+// written ([Engine.installSnapshot]).
 func (e *Engine) installSecrets(values map[string]string) {
+	e.installSnapshot(fleetsecrets.Snapshot{Values: values})
+}
+
+// installSnapshot publishes one snapshot as this node's resolver, the store
+// in front of [Engine.environment] (the chain [config.WithStore] builds). The
+// caller holds [Engine.secretsMu].
+func (e *Engine) installSnapshot(snapshot fleetsecrets.Snapshot) {
 	e.env.Store(&secretView{
-		resolver: config.NewResolver(config.MapSource(values), e.environment()),
-		values:   values,
+		resolver: config.NewResolver(config.MapSource(snapshot.Values), e.environment()),
+		values:   snapshot.Values,
+		written:  snapshot.Written,
 	})
 }
 
@@ -128,18 +140,18 @@ func (e *Engine) loadSecrets(ctx context.Context) (bool, error) {
 	// always holds the later read.
 	e.secretsMu.Lock()
 	defer e.secretsMu.Unlock()
-	values, err := e.secretSnapshot(ctx)
+	snapshot, err := e.secretSnapshot(ctx)
 	if err != nil {
 		return false, err
 	}
-	if values == nil {
+	if snapshot.Values == nil {
 		// No store at all, not an empty one: logging secret_snapshot_loaded
 		// here would tell an operator a store is wired when it is not.
 		return false, nil
 	}
-	e.installSecrets(values)
+	e.installSnapshot(snapshot)
 	// A count only: this line could otherwise log the whole credential set.
-	log.InfoContext(ctx, "secret_snapshot_loaded", "secrets", len(values))
+	log.InfoContext(ctx, "secret_snapshot_loaded", "secrets", len(snapshot.Values))
 	return true, nil
 }
 
@@ -206,12 +218,12 @@ func (e *Engine) holdsSecretStore() bool {
 //
 // Nil values with a nil error is an engine with no fleet store (hand-built in
 // a test; [New] refuses one), leaving the environment-only resolver.
-func (e *Engine) secretSnapshot(ctx context.Context) (map[string]string, error) {
+func (e *Engine) secretSnapshot(ctx context.Context) (fleetsecrets.Snapshot, error) {
 	if e.backends == nil || e.backends.Fleet == nil {
-		return nil, nil
+		return fleetsecrets.Snapshot{}, nil
 	}
 	if e.cipher == nil {
-		return nil, secrets.ErrNoKeyring
+		return fleetsecrets.Snapshot{}, secrets.ErrNoKeyring
 	}
 	return fleetsecrets.New(e.backends.Fleet, e.cipher).All(ctx)
 }

@@ -182,7 +182,8 @@ func TestNoReferenceReachesTheEnginesOwnKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	values, err := e.secretSnapshot(t.Context())
+	snapshot, err := e.secretSnapshot(t.Context())
+	values := snapshot.Values
 	if err != nil {
 		t.Fatalf("secretSnapshot: %v", err)
 	}

@@ -248,7 +248,8 @@ func TestAValueIsSealedOnlyAfterItsTestPasses(t *testing.T) {
 	if err != nil || !found || !row.WriteOnly || row.Source != secrets.SourceMCP || row.UpdatedBy != "jane.doe" {
 		t.Fatalf("the sealed row = %+v (%v, %v), want it write-only from mcp by jane.doe", row, found, err)
 	}
-	all, err := store.All(t.Context())
+	snapshot, err := store.All(t.Context())
+	all := snapshot.Values
 	if err != nil || all["MCP_SENTRY_AUTHORIZATION"] != theValue {
 		t.Fatalf("the resolver does not read the sealed value: %v", err)
 	}
