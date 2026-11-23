@@ -64,6 +64,9 @@ type made struct {
 	conn    *conn
 	account string
 	seat    *config.RoleMetaAds
+	// own is the seat's own system user's token, which signs the call; nil
+	// for the company's ([Product.ownOf]).
+	own *token
 }
 
 // toolClass is the class each tool calls with.
@@ -92,7 +95,13 @@ func (p *Product) concrete(ctx context.Context, handle, tool string, args map[st
 	if err != nil {
 		return made{}, err
 	}
-	m := made{tool: tool, seat: seat, conn: c}
+	// WHO SIGNS IS DECIDED FIRST: a seat whose own identity is refused is
+	// refused before the engine reads anything for its call.
+	own, err := p.ownOf(ctx, handle, seat)
+	if err != nil {
+		return made{}, err
+	}
+	m := made{tool: tool, seat: seat, conn: c, own: own}
 	switch tool {
 	case ToolPause:
 		err = m.statuses(args, "PAUSED")
@@ -364,7 +373,7 @@ var errAnswer = errors.New("metaads: Meta's answer could not be read")
 
 // readObject reads id's fields with a reserved read through the read path.
 func (p *Product) readObject(ctx context.Context, c *conn, id string, fields []string) (map[string]any, error) {
-	tok, err := p.tokenFor(ctx, c, growth.ClassRead, []string{"ads_read"})
+	tok, err := p.tokenFor(ctx, c, nil, growth.ClassRead, []string{"ads_read"})
 	if err != nil {
 		return nil, err
 	}

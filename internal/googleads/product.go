@@ -32,7 +32,7 @@ func New(company func() *config.Company, env func() *config.Resolver, tokens goo
 	audit googlegrowth.Audit, leases googlegrowth.Leaser, hc *http.Client) *Product {
 	p := &Product{company: company, now: time.Now, client: &googlegrowth.Client{
 		Kind: string(Kind), Name: "Google Ads", Company: company, Env: env, Tokens: tokens, Audit: audit,
-		Leases: leases, HTTP: hc, Refused: vendorRefusal,
+		Leases: leases, HTTP: hc, Refused: vendorRefusal, Signer: growth.SignerOwn,
 	}}
 	p.client.BeforeRead = p.targets
 	return p

@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/seatname"
 )
 
 // Options is what one pass over the company's half of Datadog needs.
@@ -227,7 +228,7 @@ func madeHere(email, domain string) bool {
 	if strings.HasSuffix(strings.ToLower(host), ".invalid") {
 		return true
 	}
-	return strings.HasPrefix(strings.ToLower(local), "crewlet-")
+	return strings.HasPrefix(strings.ToLower(local), seatname.Prefix+"-")
 }
 
 func emailDomainOf(cfg *config.Datadog) string {

@@ -170,7 +170,7 @@ func (p *Product) read(ctx context.Context, c *conn, account, currency, zone str
 	}
 	l := ledger{currency: currency, zone: loc, now: p.deps.Now(), campaigns: map[string]*budgeted{},
 		adSets: map[string]*budgeted{}}
-	tok, err := p.tokenFor(ctx, c, growth.ClassRead, []string{"ads_read"})
+	tok, err := p.tokenFor(ctx, c, nil, growth.ClassRead, []string{"ads_read"})
 	if err != nil {
 		return ledger{}, err
 	}
@@ -181,7 +181,7 @@ func (p *Product) read(ctx context.Context, c *conn, account, currency, zone str
 		{"/campaigns", "id,status,daily_budget,lifetime_budget,budget_remaining,stop_time", l.campaigns},
 		{"/adsets", "id,campaign_id,status,daily_budget,lifetime_budget,budget_remaining,end_time", l.adSets},
 	} {
-		err := p.pages(ctx, c, tok, "/"+account+list.edge, url.Values{"fields": {list.fields}, "limit": {"200"}},
+		err := pages(ctx, c.client, tok.valueNow(), "/"+account+list.edge, url.Values{"fields": {list.fields}, "limit": {"200"}},
 			objectOf(account), true, maxLedgerPages, func(raw json.RawMessage) error {
 				var d map[string]any
 				if err := decode(raw, &d); err != nil {
@@ -375,7 +375,7 @@ func (c capacity) Delta(ctx context.Context, account string, act spendAct) (int6
 // freshAccount is ad account id read now, never from the list a pass keeps:
 // its status and currency are what the guard holds a change to.
 func (p *Product) freshAccount(ctx context.Context, c *conn, id string) (adAccount, error) {
-	tok, err := p.tokenFor(ctx, c, growth.ClassRead, []string{"ads_read"})
+	tok, err := p.tokenFor(ctx, c, nil, growth.ClassRead, []string{"ads_read"})
 	if err != nil {
 		return adAccount{}, err
 	}

@@ -13,7 +13,8 @@ import (
 
 // MetaAds connects the company's Meta ad accounts through the Marketing API:
 // the engine holds one system user's tokens from the company's own Meta app
-// and makes every call for the agents (ADR-0170).
+// and makes every call for the agents (ADR-0170), as an agent's own system
+// user where the agent keeps one (`identity: own`).
 type MetaAds struct {
 	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Turn the integration on."`
 
@@ -30,6 +31,8 @@ type MetaAds struct {
 	OperateToken string `secret:"true" yaml:"operate_token,omitempty" json:"operate_token,omitempty" desc:"Optional. Reference to the sealed token of the same system user with ads_management, for operate changes and the spend and public acts an administrator allows. Without it agents read only."`
 
 	AdminToken string `secret:"true" yaml:"admin_token,omitempty" json:"admin_token,omitempty" desc:"Optional. Reference to the sealed token of the same system user with business_management, used only for account changes an administrator allows (users, assets, catalogs, deletes), never for a read or a change made at once."`
+
+	AdminSystemUserToken string `secret:"true" yaml:"admin_system_user_token,omitempty" json:"admin_system_user_token,omitempty" desc:"Optional. Reference to the sealed token of the business's Admin system user, from the same app, with business_management. Crewlet uses it only to make each agent's own Employee system user, assign it the agent's ad accounts, mint, renew and revoke its token, never for an agent's call. Needs business_id. Without it a person makes each agent's system user in Business settings."`
 
 	BusinessID string `yaml:"business_id,omitempty" json:"business_id,omitempty" desc:"Optional. The business portfolio's ID (digits). When set, the system user's ad accounts are read as this business's."`
 
@@ -50,6 +53,8 @@ type RoleMetaAds struct {
 	AdAccounts []string `yaml:"ad_accounts,omitempty" json:"ad_accounts,omitempty" desc:"IDs of the ad accounts this agent may touch, act_ and its digits. Required while enabled."`
 
 	BusinessResources bool `yaml:"business_resources,omitempty" json:"business_resources,omitempty" desc:"Optional. Let this agent reach what no ad account owns (the business portfolio, Pages, Instagram accounts, pixels, catalogs, apps, billing), within its level, and name it in a change."`
+
+	Identity string `yaml:"identity,omitempty" json:"identity,omitempty" js:"enum=own|company" desc:"Optional. own: calls go as this agent's own Employee system user, which Meta records under it: Crewlet makes it with integrations.meta_ads.admin_system_user_token, or a person makes it in Business settings and hands in its token, and Crewlet checks it before it keeps it and on every pass. Until one is kept, and while the business holds Meta's system user cap, calls go as the company's system user and the agent reads Needs you. company (the default): calls go as the company's system user."`
 }
 
 // Meta's own shapes.
@@ -131,10 +136,15 @@ func (m *MetaAds) validate(path Path) error {
 		}
 	}
 	for _, f := range []struct{ name, value string }{{"app_secret", m.AppSecret}, {"read_token", m.ReadToken},
-		{"operate_token", m.OperateToken}, {"admin_token", m.AdminToken}} {
+		{"operate_token", m.OperateToken}, {"admin_token", m.AdminToken},
+		{"admin_system_user_token", m.AdminSystemUserToken}} {
 		if _, whole := envref.Whole(f.value); f.value != "" && !whole {
 			p.add(at(path, f.name), ErrUnknownValue, "a ${VAR} naming the sealed value, never the value itself")
 		}
+	}
+	if strings.TrimSpace(m.AdminSystemUserToken) != "" && strings.TrimSpace(m.BusinessID) == "" {
+		p.add(at(path, "business_id"), ErrMissing, "the business portfolio's ID, which admin_system_user_token makes "+
+			"each agent's system user in")
 	}
 	if !m.Enabled {
 		return p.err()
@@ -200,13 +210,16 @@ func (*RoleMetaAds) GrowthKind() string { return (*MetaAds)(nil).GrowthKind() }
 
 // SeatAccess is the block as seat access reads it.
 func (r *RoleMetaAds) SeatAccess() GrowthSeatAccess {
-	return GrowthSeatAccess{On: r.Enabled, Level: string(growth.LevelOf(r.Level)), Scope: r.AdAccounts}
+	return GrowthSeatAccess{On: r.Enabled, Level: string(growth.LevelOf(r.Level)), Scope: r.AdAccounts,
+		Identity: r.Identity}
 }
 
 // SetSeatAccess writes the block from seat access; business_resources is kept.
 func (r *RoleMetaAds) SetSeatAccess(a GrowthSeatAccess) {
-	r.Enabled, r.Level, r.AdAccounts = a.On, a.Level, a.Scope
+	r.Enabled, r.Level, r.AdAccounts, r.Identity = a.On, a.Level, a.Scope, a.Identity
 }
+
+func (r *RoleMetaAds) seatIdentity() *string { return &r.Identity }
 
 func (r *RoleMetaAds) seatScopeKey() string { return "ad_accounts" }
 func (r *RoleMetaAds) seatEnabled() **bool  { return &r.Enabled }

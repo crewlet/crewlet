@@ -245,12 +245,12 @@ func (p *Product) unused(ctx context.Context, m made, audience string) bool {
 	if ids, _ := attrs["lookalike_audience_ids"].([]any); len(ids) > 0 {
 		return false
 	}
-	tok, err := p.tokenFor(ctx, m.conn, growth.ClassRead, []string{"ads_read"})
+	tok, err := p.tokenFor(ctx, m.conn, nil, growth.ClassRead, []string{"ads_read"})
 	if err != nil {
 		return false
 	}
 	used := false
-	err = p.pages(ctx, m.conn, tok, "/"+url.PathEscape(audience)+"/ads",
+	err = pages(ctx, m.conn.client, tok.valueNow(), "/"+url.PathEscape(audience)+"/ads",
 		url.Values{"fields": {"effective_status"}, "limit": {"100"}}, objectOf(m.account), true, maxAudiencePages,
 		func(raw json.RawMessage) error {
 			var ad struct {

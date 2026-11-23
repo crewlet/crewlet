@@ -37,6 +37,9 @@ type SeatIssuer struct {
 type SeatToken struct {
 	Token     string `json:"-"`
 	ExpiresAt time.Time
+	// Account is the identity's email as its owner records it, which the
+	// product it calls knows it by; "" where the issuer names none.
+	Account string
 }
 
 // tokenRefusal is the last mint Google refused for one key, the count of

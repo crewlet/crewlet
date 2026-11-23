@@ -157,6 +157,9 @@ type Growth struct {
 	// product holding several (growth.Record.Via).
 	Via string `json:"via,omitempty"`
 
+	// Signer is whose identity signed the call (growth.Record.Signer).
+	Signer growth.Signer `json:"signer,omitempty"`
+
 	// Operation and Before are SHA-256 digests in lowercase hex of the exact
 	// vendor operation and the target's before-state.
 	Operation string `json:"operation"`
@@ -193,6 +196,8 @@ type NewGrowth struct {
 	Answerer string
 	// Via is the vendor role of the credential the call went through.
 	Via string
+	// Signer is whose identity signed the call.
+	Signer growth.Signer
 
 	Operation, Before string
 
@@ -303,7 +308,7 @@ func GrowthOf(step growth.Step, r growth.Record) NewGrowth {
 	n := NewGrowth{
 		Handle: r.Handle, Turn: r.Turn, Call: r.Call, HeldCall: r.HeldCall, Product: r.Product,
 		Connection: r.Connection, Account: r.Account, Target: r.Target, Tool: r.Tool, Class: r.Class,
-		Step: step, Answerer: r.Answerer, Via: r.Via, Operation: r.Operation, Before: r.Before, Failure: r.Failure,
+		Step: step, Answerer: r.Answerer, Via: r.Via, Signer: r.Signer, Operation: r.Operation, Before: r.Before, Failure: r.Failure,
 	}
 	for _, c := range r.Changes {
 		if c.Text {
@@ -383,6 +388,8 @@ func (n NewGrowth) Validate() error {
 	case n.Via != "" && !growthProductPattern().MatchString(n.Via):
 		// NOT ECHOED: a value refused here may be the credential itself.
 		return invalid("via is a vendor role's word: lowercase letters, digits and underscores, never a credential")
+	case !n.Signer.Valid():
+		return invalid("signer %q is not own or company", n.Signer)
 	case !n.Class.Callable():
 		return invalid("class %q is not one a call is made in", n.Class)
 	case !n.Step.Valid():
@@ -572,7 +579,7 @@ func (w *Writer) Growth(ctx context.Context, c Call, n NewGrowth) (statelog.Resu
 		V: baseRecordVersion, ID: GrowthID(act, n.Step), Handle: n.Handle, Turn: n.Turn, Call: n.Call,
 		HeldCall: n.HeldCall, Product: n.Product, Connection: n.Connection, Account: n.Account,
 		Target: n.Target, Tool: n.Tool, Class: n.Class, Step: n.Step, AnsweredBy: n.answeredBy(),
-		Answerer: n.Answerer, Via: n.Via, Operation: n.Operation, Before: n.Before,
+		Answerer: n.Answerer, Via: n.Via, Signer: n.Signer, Operation: n.Operation, Before: n.Before,
 		Changes: append([]GrowthChange(nil), n.Changes...), Money: money, Failure: n.Failure,
 	}
 	subject, scope := GrowthSubject(n.Handle, p.ID), ScopeSet{Subject: true}
@@ -594,6 +601,7 @@ type GrowthRow struct {
 	AnsweredBy GrowthAnswerer
 	Answerer   string
 	Via        string
+	Signer     growth.Signer
 
 	Operation, Before string
 	Changes           []GrowthChange
@@ -617,25 +625,27 @@ func (g GrowthRow) Act() string {
 const growthColumns = `agent_handle, growth_id, turn_id, call_id, held_call, product, connection, account,
 	target, tool, class, step, answered_by, answerer, via, operation_digest, before_digest, changes, currency,
 	delta_micros, daily_micros, daily_after_micros, per_change_cap_micros, daily_cap_micros, failure, at,
-	position`
+	position, signer`
 
 // scanGrowth reads one growth row.
 func scanGrowth(row rowScanner) (GrowthRow, error) {
 	var (
 		g                                      GrowthRow
 		class, step, answeredBy, changes, fail string
+		signer                                 string
 		m                                      GrowthMoney
 		at, posn                               int64
 	)
 	if err := row.Scan(&g.Handle, &g.ID, &g.Turn, &g.Call, &g.HeldCall, &g.Product, &g.Connection, &g.Account,
 		&g.Target, &g.Tool, &class, &step, &answeredBy, &g.Answerer, &g.Via, &g.Operation, &g.Before, &changes,
 		&m.Currency, &m.DeltaMicros, &m.DailyMicros, &m.DailyAfterMicros, &m.PerChangeCapMicros,
-		&m.DailyCapMicros, &fail, &at, &posn); err != nil {
+		&m.DailyCapMicros, &fail, &at, &posn, &signer); err != nil {
 		return GrowthRow{}, err
 	}
 	if err := json.Unmarshal([]byte(changes), &g.Changes); err != nil {
 		return GrowthRow{}, fmt.Errorf("accessdomain: growth record %s names its changes as %w", g.ID, err)
 	}
+	g.Signer = growth.Signer(signer)
 	if m.Currency != "" {
 		g.Money = &m
 	}

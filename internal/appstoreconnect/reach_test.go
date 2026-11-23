@@ -113,7 +113,7 @@ func TestATeamWithOnlyAnAdminKeyListsNoApps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reach) != 1 || reach[0].Read || !strings.Contains(reach[0].Unread, "any other role") {
+	if len(reach) != 1 || reach[0].Read || !strings.Contains(reach[0].Unread, "any role but Admin") {
 		t.Fatalf("the Admin-only team reads %+v", reach)
 	}
 	if len(s.kids) != 0 {
