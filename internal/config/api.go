@@ -216,6 +216,10 @@ func (p *APIPublic) validate(path Path, ingress bool) error {
 		}
 		return probs.err()
 	}
+	if err := checkAddressLength(at(path, "external_url"), raw); err != nil {
+		probs.wrap(err)
+		return probs.err()
+	}
 	probs.wrap(checkExternalURL(at(path, "external_url"), raw,
 		"webhook and sandbox URLs are built on it, and vendors refuse one "+
 			"without a scheme",
@@ -292,6 +296,9 @@ func (a *API) validateExternalURL(path Path, serving bool) error {
 		}
 		return p.err()
 	}
+	if err := checkAddressLength(at(path, "external_url"), raw); err != nil {
+		return err
+	}
 	p.wrap(checkExternalURL(at(path, "external_url"), raw,
 		"the scheme sets cookie security and every link, so it can't be guessed",
 		"people use to reach this deployment in a browser"))
@@ -301,25 +308,31 @@ func (a *API) validateExternalURL(path Path, serving bool) error {
 	return p.err()
 }
 
-// MaxExternalURLLength bounds `api.external_url` and `api.public.external_url`,
-// in characters: 2,048, past the 2,000 browsers and vendors reliably carry.
-// An integration's status records the vendors' address exactly, to compare it
-// with the one in force, so this bound is what gives that record a widest
-// form (internal/integration's status at coord.MaxIntegrationStatusBytes).
+// MaxExternalURLLength bounds every external address, `api.external_url`,
+// `api.public.external_url` and `api.artifacts.external_url`, in characters
+// as written: 2,048, past the 2,000 browsers reliably carry. An integration's
+// status records the vendors' address exactly, to compare it with the one in
+// force, so this bound is what gives that record a widest form
+// (internal/integration's status at coord.MaxIntegrationStatusBytes).
 const MaxExternalURLLength = 2048
 
-// checkExternalURL is the shape every external address is held to: at most
-// [MaxExternalURLLength] characters, an http or https scheme, a host, and no
-// query or fragment. why says what the scheme decides for this field and
-// reachedBy who reaches the address, so each refusal speaks about its own
-// field.
-func checkExternalURL(path Path, raw, why, reachedBy string) error {
+// checkAddressLength refuses an external address past [MaxExternalURLLength]
+// characters as written, before any other rule judges it.
+func checkAddressLength(path Path, raw string) error {
 	var p problems
 	if n := utf8.RuneCountInString(raw); n > MaxExternalURLLength {
 		p.add(path, ErrOutOfRange, "the address is %d characters; it can be at most %d, the "+
-			"longest every browser and vendor carries", n, MaxExternalURLLength)
-		return p.err()
+			"longest every browser reliably carries", n, MaxExternalURLLength)
 	}
+	return p.err()
+}
+
+// checkExternalURL is the shape every external address is held to: an http or
+// https scheme, a host, and no query or fragment. why says what the scheme
+// decides for this field and reachedBy who reaches the address, so each
+// refusal speaks about its own field.
+func checkExternalURL(path Path, raw, why, reachedBy string) error {
+	var p problems
 	if !hasHTTPScheme(raw) {
 		p.add(path, ErrShape, "%q must start with http:// or https://: %s", raw, why)
 		return p.err()
