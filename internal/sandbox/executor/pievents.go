@@ -104,10 +104,12 @@ func (e piEntry) data() piEntryData {
 }
 
 // piEntryData is the data of the extension's own entries: the cap that
-// stopped the run, the servers that offered no tool, the context pi reported.
+// stopped the run, the servers that offered no tool or an mcp.json entry
+// redefines, the context pi reported.
 type piEntryData struct {
 	Turns         int      `json:"turns"`
 	Missing       []string `json:"missing"`
+	Redefined     []string `json:"redefined"`
 	Tokens        int64    `json:"tokens"`
 	ContextWindow int64    `json:"contextWindow"`
 }
@@ -190,11 +192,13 @@ type piEvents struct {
 
 	// marked is the script's mark ([piExtensionMark]), capTurns the cap it
 	// names; armed the extension's word that it ran; capped the cap it says
-	// stopped the run; missing the servers it says offered no tool; settled
-	// and aborted agent_settled's.
+	// stopped the run; missing the servers it says offered no tool,
+	// redefined those an mcp.json entry stood in for; settled and aborted
+	// agent_settled's.
 	marked, armed    bool
 	capTurns, capped int
 	missing          []string
+	redefined        []string
 	settled, aborted bool
 	overflowFailed   string
 	requests         int
@@ -304,7 +308,7 @@ func (d *piEvents) entry(e piEntry) {
 	case e.Type == "custom" && e.CustomType == piCapType:
 		d.capped = max(e.data().Turns, 1)
 	case e.Type == "custom" && e.CustomType == piBridgeType:
-		d.missing = e.data().Missing
+		d.missing, d.redefined = e.data().Missing, e.data().Redefined
 	case e.Type == "custom" && e.CustomType == piContextType:
 		if w := e.data().ContextWindow; w > 0 && (d.window == 0 || w < d.window) {
 			d.window = w
@@ -441,6 +445,9 @@ func (d *piEvents) Result() sandbox.Result {
 	case d.capTurns > 0 && d.requests > d.capTurns:
 		res.Error = fmt.Sprintf("the turn cap of %d was not enforced: the run made %d model requests",
 			d.capTurns, d.requests)
+	case len(d.redefined) > 0:
+		res.Error = fmt.Sprintf("the seat's tools never reached this run: %s, which pi uses in place of the "+
+			"server the run registers under that name; rename that entry", strings.Join(d.redefined, "; "))
 	case len(d.missing) > 0:
 		res.Error = fmt.Sprintf("the seat's tools never reached this run: no tool of %s was offered, so its "+
 			"MCP server was unreachable or refused the run's token", strings.Join(d.missing, ", "))
