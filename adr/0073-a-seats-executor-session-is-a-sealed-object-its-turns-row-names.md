@@ -4997,9 +4997,11 @@ sweep holds every harness that resumes a session to stating its first request;
 compresses where the floor of its estimate of the restored history is at least
 half the window, the brief not counted; the count is that estimate's bound
 (each record's and answer's largest copy, a call's id, thoughts, the synthetic
-answers a resume adds), its masking of tool output past
-50,000 estimated tokens or its collapse at 256 KiB marked `masked`, never
-bounded. Qwen Code 0.28.4 compresses on a recorded figure (the newest reply's
+answer a resume adds for each kept call no kept record answers), its masking
+of tool output past 50,000 estimated tokens or its collapse of more than three
+answers at 256 KiB marked `masked`, never bounded, and a line separator, raw
+or as the scrub escapes it, or a patch ordering the records (`orderIds`)
+`unread`. Qwen Code 0.28.4 compresses on a recorded figure (the newest reply's
 prompt and output, or a newer compression's size) beside a quarter of the
 brief and a dated reminder, at 85% of its window held 33,000 below it; the
 count is that figure's bound, every message after it a token a byte, and
@@ -5009,9 +5011,11 @@ so a copy continued there is told as a summary.
 **The launch reads each box's point** in one exec: the threshold of the window
 its release states for the model, Gemini CLI's session context (its tree and
 `GEMINI.md` files) beside the brief, Qwen Code's reminder; a knob's name found
-in any source it loads is `settings`, a `GEMINI.md` import or a context past
-64 KiB `boxsources`. `BoxPoint.Anchored` keeps OpenCode's provider check to
-OpenCode's points: the other two count no provider.
+in any source it loads, or a Gemini CLI sign-in other than a key, is
+`settings`, a `GEMINI.md` import or a context past 64 KiB `boxsources`, a
+Gemini CLI launch naming no model `nomodel`. `BoxPoint.Anchored` keeps
+OpenCode's provider check to OpenCode's points: the other two count no
+provider.
 
 **A run's start is a counted prefix** (`RunStart.Lines`): the script records
 the chat file's line count and the POSIX `cksum` of those lines once the gate
@@ -5022,12 +5026,16 @@ keeps no start and a reading of it is never asked.
 
 **Measured** (MEASURE-P2): Gemini CLI's rule to the quarter token at 524,288
 and Gemma 4's 128,000, its estimator, masking and collapse boundaries, the
-sources that move its point, and 52 resumed runs append-only; Qwen Code's rule
-to the token at 167,000, 98,072 and 850,000, its window table, sources and
-image trigger, and 94 runs append-only. Not measured, and told as a summary
-where met: media in a Gemini CLI history, a Google login's server flags, a
-window `modelConfigs` sets, and a provider refusing a Qwen Code first request
-over its window.
+sources that move its point under a key sign-in, and 52 resumed runs
+append-only; Qwen Code's rule to the token at 167,000, 98,072 and 850,000, its
+window table, sources and image trigger, and 94 runs append-only. Not
+measured, and told as a summary where met: media in a Gemini CLI history, a
+Google login's server flags, a Vertex AI sign-in, a window `modelConfigs`
+sets, what the context keys `includeDirectoryTree`, `fileName` and
+`memoryBoundaryMarkers` do, a `.env` file naming the system settings' paths,
+the window of a launch naming no model, a patch ordering the records
+(`orderIds`), and a provider refusing a Qwen Code first request over its
+window.
 
 **Mid-upgrade.** No record version moves. An older build carries
 `run_after_lines` among a capture's unknown keys, reads no start from it, and
