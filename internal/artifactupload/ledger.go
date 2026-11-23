@@ -258,7 +258,9 @@ func (s *Service) releaseAbandoned(ctx context.Context, l *ledger, now time.Time
 		}
 		read[h.Upload] = true
 		r, rev, err := s.readRecord(ctx, h.Upload)
-		if err != nil || r == nil || r.State != stateOpen {
+		// A RECORD KEEPING ANOTHER ATTEMPT'S BYTES ([record.Kept]) keeps its
+		// hold until it lapses, which no early release may shorten.
+		if err != nil || r == nil || r.State != stateOpen || r.Kept > 0 {
 			continue
 		}
 		if slices.ContainsFunc(r.Files, func(f file) bool { return f.State == fileStreaming }) {

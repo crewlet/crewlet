@@ -40,7 +40,7 @@ func widestRecord(t *testing.T, path string) *record {
 	r := &record{ID: id, Principal: strings.Repeat("p", iam.MaxLogin), Purpose: purposePublish,
 		Artifact: uuid.NewString(), TurnID: strings.Repeat("t", 64), Created: widestInstant,
 		Expires: widestInstant, State: stateFinalizing,
-		FinalizeKey: strings.Repeat(`"`, statelog.MaxCallerOpIDBytes), Claimed: widestInstant}
+		FinalizeKey: strings.Repeat(`"`, statelog.MaxCallerOpIDBytes), Claimed: widestInstant, Kept: math.MaxInt64}
 	widestType := ""
 	for _, ext := range []string{".xml", ".js", ".md", ".html"} {
 		if typ, ok := typeFor(ext); ok && len(typ) > len(widestType) {

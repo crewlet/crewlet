@@ -409,11 +409,11 @@ func kitFile(version, file string) string { return artifacts.KitPrefix + version
 // run wrote: every object it staged ([run.staged]) is deleted, dropped from
 // the record and its reservation released, and the caller's upload is open
 // again for another try. A generated file another attempt recorded is dropped
-// from the record and never deleted: that attempt's outcome is unknown and a
-// version it landed may name it, so only the collector judges it, unreserved.
-// The upload's own transferred files stay held on it (#1986). An outcome
-// nobody could establish leaves everything for the retry of the same
-// operation.
+// from the record and never deleted, since that attempt's outcome is unknown
+// and a version it landed may name it: its bytes stay reserved as the
+// record's Kept until the hold lapses, and only the collector judges it. The
+// upload's own transferred files stay held on it (#1986). An outcome nobody
+// could establish leaves everything for the retry of the same operation.
 func (r *run) fail(ctx context.Context, cause error) error {
 	if r.stage == nil || r.stageNew {
 		return cause
@@ -447,8 +447,14 @@ func (r *run) fail(ctx context.Context, cause error) error {
 		// earlier attempt's, left held, would be deleted by its next close
 		// or its early release.
 		rec.Files = slices.DeleteFunc(rec.Files, func(f file) bool {
-			return slices.Contains(deleted, f.Key) ||
-				f.Transport == transportGenerated && !slices.Contains(r.staged, f.Key)
+			if slices.Contains(deleted, f.Key) {
+				return true
+			}
+			another := f.Transport == transportGenerated && !slices.Contains(r.staged, f.Key)
+			if another && f.held() {
+				rec.Kept += f.Size
+			}
+			return another
 		})
 		if rec.Purpose == purposeStage {
 			rec.State = stateClosed
