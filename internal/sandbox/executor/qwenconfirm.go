@@ -99,9 +99,9 @@ func qwenChatFile(ctx context.Context, box sandbox.Sandbox, session string) (str
 // the line from where the takes' run began, matches the first unmatched take
 // after the last one matched with its handed text's digest, so two takes of
 // identical text need two records, and a take the helper never handed leaves
-// the later ones to be matched, unheld itself. A
-// match is settled only by the next assistant record, the reply to a request
-// that carried the note plain; a compaction before it keeps the match only
+// the later ones to be matched, unheld itself. A match is settled only by the
+// next assistant record, the reply to a request that carried the note plain,
+// a turn cancelled mid-reply's streamed part included; a compaction before it keeps the match only
 // where the note survives plain in the history Qwen Code goes on with, past
 // the summary (ADR-0177). A match no reply follows is not held, so the note is
 // served again. A line past bound or one that does not decode drops every
@@ -136,8 +136,9 @@ func qwenNotesHeld(r io.Reader, takes []ServedTake, from, bound int) ([]string, 
 		switch {
 		case record.Type == "assistant":
 			// A TURN CANCELLED MID-REPLY records the reply's streamed part as
-			// an assistant record (measured on 0.28.4, session/cancel after a
-			// first chunk): the model answered the request, so it settles too.
+			// an assistant record, and session/load hands the note back plain
+			// before it (measured on 0.28.4: session/cancel after a first
+			// chunk, then a resumed request): it settles as any reply does.
 			for _, m := range pending {
 				settled = append(settled, m.id)
 			}
