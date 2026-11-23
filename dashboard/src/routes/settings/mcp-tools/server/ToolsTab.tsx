@@ -25,6 +25,7 @@ import {
   AttentionList,
   Button,
   Card,
+  Switch,
   FilterChip,
   FilterChipGroup,
   Input,
@@ -46,8 +47,9 @@ import { useParam } from "~/app/router.tsx";
 import { plural } from "~/lib/format.ts";
 import { sortGridRows, useGridPage } from "~/lib/gridPage.ts";
 import { setLevels, type LevelsChange, type ServerDetail } from "../api.ts";
-import { BaselineSelect, LevelSelect, RiskChips, type OnFlow } from "../parts.tsx";
-import { BASELINE, LEVEL, LEVELS, refusedWords, RISK } from "../words.ts";
+import { BaselineSelect, DriftActions, LevelSelect, RiskChips, type OnFlow } from "../parts.tsx";
+import { ConfirmModal } from "~/components/Modal.tsx";
+import { AUTO_ACCEPT, BASELINE, LEVEL, LEVELS, refusedWords, RISK } from "../words.ts";
 
 type Filter = "all" | McpRisk | "changed" | "custom";
 
@@ -79,6 +81,8 @@ export function ToolsTab({
   const [q, setQ] = useParam("q", "");
   const [filter, setFilter] = useState<Filter>("all");
   const [busy, setBusy] = useState(false);
+  // TURNING AUTO-ACCEPT ON ASKS FIRST, saying what it gives up; off is written at once.
+  const [trusting, setTrusting] = useState(false);
   const calls = useMemo(
     () => new Map(detail.usage.tools.map((u) => [u.tool, u.calls])),
     [detail.usage.tools],
@@ -286,11 +290,7 @@ export function ToolsTab({
               tone: "warning",
               title: `${plural(changes.length, "tool")} changed since ${changes.length === 1 ? "its level was" : "their levels were"} decided`,
               meta: "A changed tool asks first until somebody reviews the change",
-              action: (
-                <Button size="small" variant="secondary" onClick={() => onFlow("drift")}>
-                  Review
-                </Button>
-              ),
+              action: <DriftActions onFlow={onFlow} />,
             },
           ]}
         />
@@ -374,8 +374,44 @@ export function ToolsTab({
                 <span className="mono">{unlistedLevels.join(", ")}</span>
               </Text>
             ) : null}
+            <Switch
+              label={AUTO_ACCEPT.label}
+              description={AUTO_ACCEPT.help}
+              checked={detail.auto_accept_changes}
+              disabled={busy}
+              onCheckedChange={(on) =>
+                on
+                  ? setTrusting(true)
+                  : void write(
+                      { auto_accept_changes: false },
+                      `${server.title}'s tool changes wait for a review`,
+                    )
+              }
+            />
           </Card.Body>
         </Card>
+      ) : null}
+      {trusting ? (
+        <ConfirmModal
+          open
+          onClose={() => setTrusting(false)}
+          onConfirm={async () => {
+            await write(
+              { auto_accept_changes: true },
+              `${server.title}'s tool changes are accepted automatically`,
+            );
+            setTrusting(false);
+          }}
+          submitting={busy}
+          title={`Accept ${server.title}'s tool changes automatically?`}
+          message={`Its tools can then change what they do without review, a change that claims less risk included. Each change is accepted as it is listed and recorded in the audit log; levels still apply, and a call waiting for an answer still waits.${
+            changes.length > 0
+              ? ` The ${plural(changes.length, "change")} waiting now ${changes.length === 1 ? "is" : "are"} accepted too.`
+              : ""
+          } Other servers, and any added later, still ask first.`}
+          confirmLabel="Accept automatically"
+          cancelLabel="Cancel"
+        />
       ) : null}
       {detail.tools.length === 0 ? (
         <Card padding="none">

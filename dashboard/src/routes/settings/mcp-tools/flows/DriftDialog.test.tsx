@@ -41,21 +41,26 @@ vi.mock("../api.ts", async (actual) => ({
 const onDone = vi.fn();
 const onClose = vi.fn();
 
-function tree() {
+function tree(start?: "all") {
   const server = mcpData("admin").server("linear")!;
   return (
     <TestClient>
       <ToastProvider>
         <LayerHost>
-          <DriftDialog server={server} onClose={onClose} onDone={onDone} />
+          <DriftDialog
+            server={server}
+            {...(start ? { start } : {})}
+            onClose={onClose}
+            onDone={onDone}
+          />
         </LayerHost>
       </ToastProvider>
     </TestClient>
   );
 }
 
-function mount() {
-  return render(tree());
+function mount(start?: "all") {
+  return render(tree(start));
 }
 
 beforeEach(() => {
@@ -486,4 +491,96 @@ test("a decision written in part says what was decided and what was not", async 
   expect(screen.queryByText("Nothing was changed")).toBeNull();
   expect(reload).toHaveBeenCalled();
   expect(onDone).toHaveBeenCalled();
+});
+
+/** The terms and definitions the open list shows. */
+function listedRows(dialog: HTMLElement) {
+  return {
+    terms: within(dialog)
+      .getAllByRole("term")
+      .map((t) => t.textContent),
+    words: within(dialog)
+      .getAllByRole("definition")
+      .map((d) => d.textContent),
+  };
+}
+
+// ACCEPT ALL LISTS EVERY CHANGE FIRST, the one claiming less risk flagged, then
+// sends each by its digest in one decision. Mutation: send on the first press,
+// or accept by name without the digest, and this is red.
+test("accept all lists every change, then accepts each by its digest in one decision", async () => {
+  vi.mocked(reviewChanges).mockResolvedValue({
+    kind: "ok",
+    status: 200,
+    value: {
+      server: "linear",
+      accepted: ["delete_issue", "export_board"],
+      blocked: [],
+      moved: [],
+      revision: null,
+    },
+  });
+  mount();
+  expect(screen.getByRole("button", { name: "Accept change" })).toBeDefined();
+  fireEvent.click(screen.getByRole("button", { name: "Accept all 2 changes" }));
+  await afterMicrotasks();
+  expect(reviewChanges).not.toHaveBeenCalled();
+  const listed = screen.getByRole("dialog");
+  expect(within(listed).getByText("Accept all 2 changes on Linear?")).toBeDefined();
+  expect(within(listed).getByText("1 change now claims less risk")).toBeDefined();
+  expect(listedRows(listed)).toEqual({
+    terms: ["delete_issue", "export_board"],
+    words: ["Description, HintsClaims less risk", "Removed"],
+  });
+  fireEvent.click(within(listed).getByRole("button", { name: "Accept 2 changes" }));
+  await afterMicrotasks();
+  expect(reviewChanges).toHaveBeenCalledTimes(1);
+  expect(reviewChanges).toHaveBeenLastCalledWith(
+    "linear",
+    { accept: { delete_issue: "c".repeat(64), export_board: null } },
+    "Accepted all 2 changes on linear",
+  );
+  expect(onDone).toHaveBeenCalled();
+  expect(onClose).toHaveBeenCalled();
+});
+
+// OPENED FROM THE ATTENTION ROW the dialog starts on Accept all's list, naming
+// the server and the count, and Cancel closes it with nothing sent. Mutation:
+// open on the review, or send on Cancel, and this is red.
+test("opened from the attention row, it starts on Accept all's list and Cancel closes it", async () => {
+  mount("all");
+  const listed = screen.getByRole("dialog");
+  expect(within(listed).getByText("Accept all 2 changes on Linear?")).toBeDefined();
+  expect(screen.queryByRole("button", { name: "Accept change" })).toBeNull();
+  fireEvent.click(within(listed).getByRole("button", { name: "Cancel" }));
+  await afterMicrotasks();
+  expect(onClose).toHaveBeenCalled();
+  expect(reviewChanges).not.toHaveBeenCalled();
+});
+
+// A TOOL LISTED UNDER TWO DEFINITIONS IS LEFT OUT, said under the list, since a
+// decision names a tool once; one change alone is accepted with Accept change.
+test("accept all leaves out a tool listed under two definitions, and needs two changes", () => {
+  const [moved, removed] = LINEAR_CHANGES;
+  const twin = { ...moved!, after: { ...moved!.after!, digest: "e".repeat(64) } };
+  detail = { ...LINEAR_DETAIL, changes: [moved!, twin, removed!] };
+  mount();
+  expect(screen.queryByRole("button", { name: /^Accept all/ })).toBeNull();
+  // EACH DEFINITION IS ITS OWN ROW, chosen apart.
+  fireEvent.click(screen.getByRole("button", { name: "delete_issue (definition 2 of 2)" }));
+  expect(
+    screen.getByRole("button", { name: "delete_issue (definition 2 of 2)", current: "page" }),
+  ).toBeDefined();
+  detail = {
+    ...LINEAR_DETAIL,
+    changes: [moved!, twin, removed!, { ...removed!, tool: "old_board" }],
+  };
+  cleanup();
+  mount();
+  fireEvent.click(screen.getByRole("button", { name: "Accept all 2 changes" }));
+  const listed = screen.getByRole("dialog");
+  expect(listedRows(listed).terms).toEqual(["export_board", "old_board"]);
+  expect(listed.textContent).toContain(
+    "Left to decide one by one: 2 changes to a tool listed under two definitions at once.",
+  );
 });

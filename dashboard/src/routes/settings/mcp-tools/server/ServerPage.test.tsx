@@ -518,7 +518,9 @@ test("a changed tool is marked on the tools tab, with a review of the changes", 
   expect(screen.getByText("2 tools changed since their levels were decided")).toBeDefined();
   expect(screen.getAllByText("Changed").length).toBeGreaterThan(1);
   fireEvent.click(screen.getByRole("button", { name: "Review" }));
-  expect(onFlow).toHaveBeenCalledWith("drift");
+  expect(onFlow).toHaveBeenLastCalledWith("drift", undefined);
+  fireEvent.click(screen.getByRole("button", { name: "Accept all" }));
+  expect(onFlow).toHaveBeenLastCalledWith("drift", undefined, { step: "all" });
 });
 
 // A TOOL A TEAM'S LEAD HOLDS BACK is marked on the Tools tab, naming who it is
@@ -644,4 +646,97 @@ test("the reason a tool is not offered wraps, a long quoted name included", () =
   const card = screen.getByText("Not offered").closest(".crewlet-card") as HTMLElement;
   const reason = within(card).getAllByRole("cell")[1]!;
   expect(reason.className).toMatch(/crewlet-data-grid__cell--wrap/);
+});
+
+/** The admin's data with linear's tools raised as changed. */
+function changedAlarm(): McpData {
+  return mcpData("admin", () => {}, {
+    alarms: [
+      {
+        kind: "mcp_tools_changed",
+        title: "A tool changed and needs review",
+        person: "",
+        detail: "linear: 2 tools changed",
+        remedy: "",
+        entries: [
+          {
+            key: "linear",
+            detail: "linear: 2 tools changed",
+            since: new Date(MCP_NOW).toISOString(),
+            seat: "",
+            fix: { kind: "review", server: "linear", seat: "" },
+          },
+        ],
+      },
+    ],
+  });
+}
+
+// THE NEEDS ATTENTION ROW OFFERS ACCEPT ALL BESIDE REVIEW, opening the review on
+// Accept all's list. Mutation: drop the action, or open the plain review, and
+// this is red.
+test("the needs attention row offers accept all beside review", () => {
+  detail = { ...LINEAR_DETAIL, changes: LINEAR_CHANGES };
+  const onFlow = vi.fn();
+  mountAt("", changedAlarm(), onFlow);
+  const row = screen
+    .getByText("Each changed tool asks first", { exact: false })
+    .closest(".crewlet-attention-list__row") as HTMLElement;
+  fireEvent.click(within(row).getByRole("button", { name: "Accept all" }));
+  expect(onFlow).toHaveBeenLastCalledWith("drift", "linear", { step: "all" });
+  fireEvent.click(within(row).getByRole("button", { name: "Review" }));
+  expect(onFlow).toHaveBeenLastCalledWith("drift", "linear");
+});
+
+// TURNING AUTO-ACCEPT ON ASKS FIRST, saying its tools can change without review
+// and the changes waiting now are accepted too; turning it off writes at once.
+// Mutation: write on the switch's first press, or drop the count, and this is red.
+test("auto-accept asks before it is turned on, and is turned off at once", async () => {
+  detail = { ...LINEAR_DETAIL, changes: LINEAR_CHANGES };
+  mountAt("tools", mcpData("admin"));
+  const toggle = screen.getByRole("switch", { name: "Accept tool changes automatically" });
+  fireEvent.click(toggle);
+  await afterMicrotasks();
+  expect(setLevels).not.toHaveBeenCalled();
+  const asked = screen.getByRole("dialog");
+  expect(within(asked).getByText("Accept Linear's tool changes automatically?")).toBeDefined();
+  expect(asked.textContent).toContain("Its tools can then change what they do without review");
+  expect(asked.textContent).toContain("The 2 changes waiting now are accepted too.");
+  expect(asked.textContent).toContain("Other servers, and any added later, still ask first.");
+  fireEvent.click(within(asked).getByRole("button", { name: "Accept automatically" }));
+  await afterMicrotasks();
+  expect(setLevels).toHaveBeenLastCalledWith(
+    "linear",
+    { auto_accept_changes: true },
+    "Linear's tool changes are accepted automatically",
+  );
+
+  cleanup();
+  vi.mocked(setLevels).mockClear();
+  detail = { ...LINEAR_DETAIL, auto_accept_changes: true };
+  mountAt("tools", mcpData("admin"));
+  fireEvent.click(screen.getByRole("switch", { name: "Accept tool changes automatically" }));
+  await afterMicrotasks();
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(setLevels).toHaveBeenLastCalledWith(
+    "linear",
+    { auto_accept_changes: false },
+    "Linear's tool changes wait for a review",
+  );
+});
+
+// A SERVER WHOSE CHANGES ARE ACCEPTED AUTOMATICALLY SAYS SO on its Overview,
+// quietly, and one reviewed says nothing. Mutation: drop the note, and this is red.
+test("the overview notes that a server's tool changes are accepted automatically", () => {
+  detail = { ...LINEAR_DETAIL, auto_accept_changes: true };
+  mountAt("", mcpData("admin"));
+  expect(
+    screen.getByText(
+      "Tool changes are accepted automatically and recorded in the audit log. Turn this off on the Tools tab.",
+    ),
+  ).toBeDefined();
+  cleanup();
+  detail = LINEAR_DETAIL;
+  mountAt("", mcpData("admin"));
+  expect(screen.queryByText(/accepted automatically/)).toBeNull();
 });

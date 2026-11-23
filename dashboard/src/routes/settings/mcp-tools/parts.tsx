@@ -5,6 +5,8 @@
  */
 
 import {
+  Button,
+  Inline,
   Menu,
   RelativeTime,
   Select,
@@ -31,7 +33,7 @@ import type {
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { listed, plural } from "~/lib/format.ts";
 import type { McpData } from "./data.ts";
-import { BASELINE, failureWords, LEVEL, LEVELS, RISK, STATE } from "./words.ts";
+import { BASELINE, failureWords, FIX, LEVEL, LEVELS, RISK, STATE } from "./words.ts";
 
 /**
  * The flows the page opens, by the `flow` parameter. `add` and `edit` are the
@@ -39,7 +41,7 @@ import { BASELINE, failureWords, LEVEL, LEVELS, RISK, STATE } from "./words.ts";
  * the dialog that stores one header or variable (`key`); `signin` and
  * `revoke` a server's OAuth sign-in, made and given up; `approve` the calls
  * a server's tools hold for a person's answer; `drift` the review of the tools
- * a server changed.
+ * a server changed (`step=all` opens on Accept all's list).
  */
 export type Flow =
   | "add"
@@ -89,6 +91,27 @@ export function useFlow() {
 
 /** Opens a flow on a server: from the list it names the server, on its page it is the page's. */
 export type OnFlow = (flow: Flow, server?: string, args?: Record<string, string>) => void;
+
+/**
+ * What a row saying a server's tools changed offers: Accept all, which lists
+ * every change before it accepts them, and Review. Every such row draws this.
+ */
+export function DriftActions({ server, onFlow }: { server?: string; onFlow: OnFlow }) {
+  return (
+    <Inline gap={2}>
+      <Button
+        size="small"
+        variant="secondary"
+        onClick={() => onFlow("drift", server, { step: "all" })}
+      >
+        Accept all
+      </Button>
+      <Button size="small" variant="secondary" onClick={() => onFlow("drift", server)}>
+        {FIX.review}
+      </Button>
+    </Inline>
+  );
+}
 
 /**
  * A server's mark is drawn at a glyph step, never a number of its own: `xl`
