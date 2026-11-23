@@ -1007,7 +1007,7 @@ Drives Nous Research's **Hermes Agent 0.23.3** (`hermes --version` prints `Herme
 
 #### A Hermes Agent run's session
 
-**The runner names the session**, as its title: `-c <id> --create-if-missing` creates a session titled with the runner's id, and `-c <id>` continues it, through its compaction lineage (a compaction child of a session that ended `compression`; a delegated subagent's session names its parent too, and is none of the run's). Measured, Hermes compacts a session in place, under the same id and title, so the lineage is one session; Hermes's own stored id, which the client prints, is indexed beside it in `<home>/.crewlet/hermes-sessions`.
+**The runner names the session**, as its title: `-c <id> --create-if-missing` creates a session titled with the runner's id, and `-c <id>` continues it, through its compaction lineage (a compaction child of a session that ended `compression`; a delegated subagent's session names its parent too, and is none of the run's). Measured, Hermes compacts a session in place, under the same id and title, so the lineage is one session; on a box whose `compression.in_place` is `false` it rotates instead, ending the session `compression` and moving its title to a child that names it and holds a copy of the kept tail, so the carry starts at the titled session and walks back through the sessions it continues. Hermes's own stored id, which the client prints, is indexed beside it in `<home>/.crewlet/hermes-sessions`.
 
 **It is carried as text.** The session is rows of Hermes's SQLite store, so a pack dumps the store's schema and the session's rows (its messages, usage, admissions and system prompt, its own launch and admission results, and the store's own bookkeeping rows, all read in one transaction) as JSON lines with the runner's `hermes-carry.py`, standard-library Python run under Hermes's own interpreter (`hermes --run-module cProfile -o /dev/null hermes-carry.py …`, the launcher running modules alone), one `session.jsonl` member, which the scrub rewrites as any transcript; a restore builds a new store from it, holding that session alone, the full-text index refilled by the store's own triggers. A restored store resumed its session with its whole history in another home (measured). A run that continues a session takes the box's own copy, or a carried archive where the box holds none or one the archive goes past, as a Claude Code run does.
 
@@ -2788,7 +2788,8 @@ message as a turn of its own after the run's, so it is not used. The plugin
 confirms nothing: a note is confirmed read only once the session's record
 holds it in this launch's own rows (above the store's newest row as the
 launch began) as a user message of the conversation shown as a steer, in
-Hermes's frame (never one a compaction folded away or its summary), matched by
+Hermes's frame (never one a compaction folded away, its summary, or a copy of
+a row a compaction wrote again under the same `message_uid`), matched by
 the digest of the text the route served, in serve order with a serve the
 record lacks passed over, and a reply the model finished is stored after it
 (measured: the note rides the request after the tool result). Notes steered
@@ -2800,9 +2801,12 @@ core) and are tried again; the steer itself has 10 seconds, the gateway
 stop's wait (under 0.06 s measured), and one whose outcome is unknown once
 sent is not sent again, its record deciding it, since
 `session.steer` takes no key that would make a repeat harmless, while one
-Hermes rejects (no turn running) is. A delegated subagent's turn, which fires
-the plugin's turn hooks under its own session, is no turn of the run's
-(measured). A notes route that refuses the plugin (401 or 404) ends its polls.
+Hermes rejects (no turn running) is. The run's session is the first
+top-level session the gateway turns for, and then each session a compaction
+rotates it into (named by the turn hooks with no parent, measured, so the
+plugin reads the store to tell); a delegated subagent's turn, which fires the
+plugin's turn hooks under its own session, and another top-level session's
+are no turns of the run's (measured). A notes route that refuses the plugin (401 or 404) ends its polls.
 A note may run to the engine's item bound, 4,505 UTF-16 units.
 
 ## Mid-run clarification (`ask_and_wait`)

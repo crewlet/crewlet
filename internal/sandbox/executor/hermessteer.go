@@ -154,8 +154,9 @@ func hermesNotesHeld(r io.Reader, takes []ServedTake, from int64) ([]string, err
 	var pending []match
 	next := 0
 	// A COMPACTION'S REWRITTEN TAIL keeps each row's message_uid under a new
-	// id (measured on 0.23.3), so a copy of an earlier launch's row is no row
-	// of this launch's, however high its id.
+	// id (measured on 0.23.3), in place or in a rotated child whose parent's
+	// rows stay current, so a copy of a row read or of an earlier launch's is
+	// passed over, however high its id.
 	earlier := map[string]bool{}
 	err := hermesRows(r, func(row hermesRow) error {
 		m := row.Message
@@ -170,6 +171,9 @@ func hermesNotesHeld(r io.Reader, takes []ServedTake, from int64) ([]string, err
 		}
 		if !m.current() || earlier[m.UID] {
 			return nil
+		}
+		if m.UID != "" {
+			earlier[m.UID] = true
 		}
 		switch {
 		case m.replied():

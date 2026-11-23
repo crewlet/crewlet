@@ -1173,6 +1173,82 @@ func TestAHermesRowIsReadWholeBeforeItsNotesAreMatched(t *testing.T) {
 	}
 }
 
+// A ROTATED HERMES SESSION CARRIES WITH THE SESSION IT CONTINUES: where the
+// box's compression.in_place is false, 0.23.3 ends the run's session
+// "compression", moves its title to a child naming it as parent, and copies
+// the kept tail there (measured). The dump of the title holds the parent and
+// then the child, so the restore's stored id is the child's, and the earlier
+// conversation is carried too.
+//
+// Mutation: start the lineage at the titled session alone, and the parent is
+// dropped.
+func TestARotatedHermesSessionCarriesWithTheSessionItContinues(t *testing.T) {
+	t.Parallel()
+	python := prereqtest.OnPath(t, "python3", "the case runs the run's carry script", "install python3")
+	dir := t.TempDir()
+	member, db := filepath.Join(dir, "session.jsonl"), filepath.Join(dir, "state.db")
+	if err := os.WriteFile(member, hermesFixture(t, "0.23.3", "session-steered.jsonl"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	parent := strings.TrimSpace(strings.TrimPrefix(hermesCarry(t, "restore", member, db, filepath.Join(dir, "policy"),
+		hermesFixtureTitle), "crewlet-carry ok "))
+	rotate := `import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+db.execute("update sessions set title = null, end_reason = 'compression' where id = ?", (sys.argv[2],))
+db.execute("insert into sessions (id, title, parent_session_id, source, model_config, started_at) select 'child', ?, id, "
+           "source, model_config, started_at + 1 from sessions where id = ?", (sys.argv[3], sys.argv[2]))
+db.commit()`
+	if out, err := exec.Command(python, "-I", "-c", rotate, db, parent, hermesFixtureTitle).CombinedOutput(); err != nil {
+		t.Fatalf("rotating the session: %v: %s", err, out)
+	}
+	var sessions []string
+	messages := 0
+	for line := range strings.Lines(hermesCarry(t, "dump", db, hermesFixtureTitle, "/dev/null")) {
+		var rec struct {
+			T string         `json:"t"`
+			R map[string]any `json:"r"`
+		}
+		if json.Unmarshal([]byte(line), &rec) != nil {
+			continue
+		}
+		switch id, _ := rec.R["id"].(string); {
+		case rec.T == "sessions":
+			sessions = append(sessions, id)
+		case rec.T == "messages" && rec.R["session_id"] == parent:
+			messages++
+		}
+	}
+	if !slices.Equal(sessions, []string{parent, "child"}) || messages == 0 {
+		t.Errorf("the rotated session dumps sessions %v and %d of the parent's messages, want %s then child with them",
+			sessions, messages, parent)
+	}
+}
+
+// A HERMES NOTE A ROTATION COPIES IS READ ONCE: a rotated child holds a copy
+// of the kept tail under new ids with each row's message_uid (measured on
+// 0.23.3), while the parent's rows stay current. A note of this launch
+// steered before the rotation holds its own take alone, never a later
+// identical one, whose steer the record lacks.
+//
+// Mutation: skip only copies of an earlier launch's rows, and the copy holds
+// the second take.
+func TestAHermesNoteARotationCopiesIsReadOnce(t *testing.T) {
+	t.Parallel()
+	note := func(id int, uid string) map[string]any {
+		return map[string]any{"id": id, "message_uid": uid, "role": "user", "display_kind": "steer",
+			"content": hermesNoteOpen + "W" + hermesNoteClose}
+	}
+	reply := func(id int, uid string) map[string]any {
+		return map[string]any{"id": id, "message_uid": uid, "role": "assistant", "finish_reason": "stop", "content": "ok"}
+	}
+	summary := map[string]any{"id": 3, "message_uid": "s", "role": "user", "_compressed_summary": 1, "content": "summary"}
+	takes := []ServedTake{{InboxID: "a", Digest: ItemDigest("W")}, {InboxID: "b", Digest: ItemDigest("W")}}
+	record := hermesRecordOf(t, note(1, "n"), reply(2, "r"), summary, note(4, "n"), reply(5, "r"))
+	if got, err := hermesNotesHeld(bytes.NewReader(record), takes, 0); err != nil || !slices.Equal(got, []string{"a"}) {
+		t.Errorf("held %v (%v), want a alone: the child's row is a copy", got, err)
+	}
+}
+
 // A HERMES NOTE SURVIVES AN IN-PLACE COMPACTION ONLY AS A ROW OF THE
 // CONVERSATION: in 0.23.3's in-place compaction (measured,
 // session-compacted.jsonl) the folded rows go inactive and compacted, the
