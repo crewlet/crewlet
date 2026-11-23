@@ -135,6 +135,7 @@ var loadsRows = map[string]func(t *testing.T){
 	executor.QwenCodeName:  qwenLoads,
 	executor.CodexName:     codexLoads,
 	executor.OpenCodeName:  openCodeLoads,
+	executor.MuseName: museLoads,
 	executor.KimiName: kimiLoads,
 	executor.CopilotName: copilotLoads,
 }
