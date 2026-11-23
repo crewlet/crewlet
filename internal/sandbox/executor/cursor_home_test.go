@@ -333,3 +333,33 @@ printf '{"type":"turn_ended","status":"success"}\n' > "$HOME/.cursor/projects/w/
 		t.Fatalf("a continued run that recorded no end of its own collected as a success: %+v", res)
 	}
 }
+
+// CURSOR'S WORKER ENDS WITH ITS RUN: Cursor starts `<package>/index.js
+// worker-server` beside itself, which outlives cursor-agent whether it
+// finished, was interrupted or terminated (measured on 2026.11.22-e9042b2),
+// so the run's script ends it once the harness exits; a stand-in that leaves
+// such a worker running finds it gone when the run is collected.
+//
+// Mutation: drop the script's end of the worker: this goes red.
+func TestCursorsWorkerEndsWithItsRun(t *testing.T) {
+	t.Parallel()
+	runner, box := cursorBox(t, `"${0%/*}/node" "${0%/*}/index.js" worker-server < /dev/null > /dev/null 2>&1 &
+i=0; until [ -s "$HOME/worker.pid" ] || [ "$i" -ge 200 ]; do sleep 0.05; i=$((i + 1)); done
+`)
+	worker := `require("fs").writeFileSync(process.env.HOME + "/worker.pid", String(process.pid)); setInterval(() => {}, 1000)`
+	writeBoxStandIn(t, box, executor.PathsFor(box).BinDir()+"/index.js", worker)
+	_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go"})
+	if !res.Success {
+		t.Fatalf("the run failed: %s", res.Error)
+	}
+	pid := strings.TrimSpace(boxFile(t, box, box.Home()+"/worker.pid"))
+	if pid == "" {
+		t.Fatal("the stand-in's worker never started, so nothing tests its end")
+	}
+	// GONE, OR A ZOMBIE its new parent has yet to reap: either has ended.
+	if stat, err := os.ReadFile("/proc/" + pid + "/stat"); err == nil {
+		if _, rest, _ := strings.Cut(string(stat), ") "); !strings.HasPrefix(rest, "Z") {
+			t.Errorf("Cursor's worker (pid %s) outlived its run: %s", pid, stat)
+		}
+	}
+}

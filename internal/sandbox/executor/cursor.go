@@ -177,6 +177,7 @@ func cursorScript(req sandbox.RunRequest, session Session, paths Paths, configur
 	if turns > 0 {
 		line(`kill "$cf" 2> /dev/null; wait "$cf" 2> /dev/null`)
 	}
+	b.WriteString(cursorWorkersEnd)
 	b.WriteString(cursorTurnEnded)
 	if turns > 0 {
 		line(`[ ! -s %s ] || printf '\n%%s\n' %s`, q(paths.CursorCapped()), q(cursorCapLine(turns)))
@@ -261,6 +262,18 @@ func cursorCapFollow(paths Paths, turns int) string {
 // session's transcript ends in the earlier run's.
 const cursorTurnEnded = `tg=$(ls -t "$HOME"/.cursor/projects/*/agent-transcripts/"$s"/"$s".jsonl 2> /dev/null | head -n 1)
 if [ -n "$tg" ]; then [ "$tg" = "$tf" ] || ts=0; e=$(tail -c +$((ts + 1)) "$tg" 2> /dev/null | grep -F '"type":"turn_ended"' | tail -n 1); [ -z "$e" ] || printf '\n%s\n' "$e"; fi
+`
+
+// cursorWorkersEnd is the part of a run's script that ends the worker Cursor
+// starts beside itself (`<package>/index.js worker-server`), which outlives
+// cursor-agent finished, interrupted or terminated alike (measured on
+// [cursorSupported]), held to the run's own process group: through end
+// ([endFunction]), as OpenCode's script ends its server, before the session is
+// packed from a store the worker could still hold.
+const cursorWorkersEnd = `g=$(sed 's/.*) //' /proc/$$/stat 2> /dev/null | cut -d' ' -f3)
+for d in /proc/[0-9]*; do c=$(tr '\000' ' ' < "$d/cmdline" 2> /dev/null) || continue
+  case "$c" in *"${cn%/*}/index.js worker-server"*) [ -n "$g" ] && [ "$(sed 's/.*) //' "$d/stat" 2> /dev/null | cut -d' ' -f3)" = "$g" ] && end "${d#/proc/}";; esac
+done
 `
 
 // cursorHeld finds, as hc, the box's chat of session s, filed under any
