@@ -240,10 +240,30 @@ func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 	case "Op progress":
 		return rawRecord(advisordomain.RunSubject(run), "suite-node", "op-run-progress", advisordomain.OpProgress,
 			sentinel(), advisordomain.RunProgress{Run: run, At: suiteStamped, Text: "reading capacity"})
+	case "RunProgress.Step":
+		return rawRecord(advisordomain.RunSubject(run), "suite-node", "op-run-step", advisordomain.OpProgress,
+			sentinel(), advisordomain.RunProgress{Run: run, At: suiteStamped, Text: "reading capacity",
+				Step: advisordomain.ProgressRead})
+	case "RunProgress.Failed":
+		return rawRecord(advisordomain.RunSubject(run), "suite-node", "op-run-failed", advisordomain.OpProgress,
+			sentinel(), advisordomain.RunProgress{Run: run, At: suiteStamped, Text: "Could not read capacity",
+				Failed: true})
+	case "RunProgress.Detail":
+		return rawRecord(advisordomain.RunSubject(run), "suite-node", "op-run-detail", advisordomain.OpProgress,
+			sentinel(), advisordomain.RunProgress{Run: run, At: suiteStamped, Text: "reading capacity",
+				Detail: "capacity days=7"})
+	case "RunProgress.Why":
+		return rawRecord(advisordomain.RunSubject(run), "suite-node", "op-run-why", advisordomain.OpProgress,
+			sentinel(), advisordomain.RunProgress{Run: run, At: suiteStamped, Text: "Could not read capacity",
+				Why: "the ledger is down"})
 	case "RunProgress.Checkpoint":
 		return rawRecord(advisordomain.RunSubject(run), "suite-node", "op-run-checkpoint", advisordomain.OpProgress,
 			sentinel(), advisordomain.RunProgress{Run: run, At: suiteStamped,
 				Checkpoint: []byte(`{"agenda":[{"id":"A1","verdict":"confirmed"}],"reads":[]}`)})
+	case "RunStatus interrupted":
+		return rawRecord(advisordomain.RunSubject(run), "suite-node", "op-run-interrupted", advisordomain.OpRecord,
+			sentinel(), advisordomain.RunRecord{Run: run, Trigger: advisordomain.TriggerSchedule, StartedAt: suiteStamped,
+				EndedAt: suiteStamped, Status: advisordomain.RunInterrupted, Classes: []byte(`[]`)})
 	}
 	return nil, fmt.Errorf("no suite record carries %s", field.Name)
 }

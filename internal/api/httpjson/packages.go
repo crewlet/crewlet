@@ -62,7 +62,7 @@ var goPackages = sync.OnceValue(func() map[string]bool {
 		"redact": true, "research": true, "redacttest": true, "references": true, "regexlit": true, "regexlittest": true, "rendezvous": true, "replicated": true, "routing": true, "runner": true, "runanswer": true, "runtoken": true,
 		"s3fake": true, "s3obj": true, "sandbox": true, "scaleway": true, "sandboxtest": true, "scenario": true, "searchconsole": true,
 		"schedule": true, "scheduletest": true, "search": true, "seat": true,
-		"seataccess": true, "seataccesstest": true, "secrets": true, "secretsapi": true, "session": true, "setup": true,
+		"seataccess": true, "seataccesstest": true, "seatname": true, "secrets": true, "secretsapi": true, "session": true, "setup": true,
 		"setupapi": true, "setuptest": true, "shellword": true, "signedask": true, "sigv4": true, "skills": true,
 		"skillsync": true, "slack": true, "ssh": true, "sshdtest": true, "slideformat": true, "solo": true, "sockcount": true,
 		"sourcetree": true, "spendguard": true, "spendguardtest": true, "sqlledger": true,
@@ -73,7 +73,7 @@ var goPackages = sync.OnceValue(func() map[string]bool {
 		"toolsession": true, "toolsessiontest": true,
 		"topics": true, "tracing": true, "turn": true, "turnctx": true, "types": true,
 		"ticket": true, "trashreap": true,
-		"usage": true, "version": true, "webhooks": true, "whsec": true, "wiregate": true,
+		"usage": true, "vendortext": true, "version": true, "webhooks": true, "whsec": true, "wiregate": true,
 		"words": true, "workapi": true, "workkey": true, "worklet": true,
 	}
 })

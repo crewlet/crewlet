@@ -2064,6 +2064,58 @@ describe("the assistant", () => {
       win.restore();
     }
   });
+  // THE ASK BUTTON IS GONE WHILE THE PANEL IS OPEN, in every shape, and
+  // closing the panel hands focus back to it once it is drawn again.
+  // Mutation: drop the frame's hand-back and focus is left on the body.
+  test.each([
+    ["beside the page", 1440, "column"],
+    ["over the page's end edge", 1100, "overlay"],
+    ["as the whole window", 600, "sheet"],
+  ])(
+    "opened from the Ask button %s, it hides the button and closes back onto it",
+    async (_, width, shape) => {
+      const win = installWindow(width);
+      try {
+        location.hash = "#/worklet";
+        const { store, socket } = answering({
+          viewer: {
+            login: "U0FOUNDER",
+            grants: ["admin", "worklet", "doclet"],
+            handle: "ada",
+            owner: "ada",
+            name: "Ada Lovelace",
+            kind: "human",
+            assistant: {
+              available: true,
+              model: null,
+              notice: null,
+              can_assign: false,
+              reads_images: false,
+            },
+          },
+          fleet: { nodes: [] },
+        });
+        mountShell(store, socket);
+        await settle();
+        await loadChunk("assistant");
+        const ask = () => document.getElementById("assistant-trigger");
+        await waitFor(() => expect(ask()?.getAttribute("aria-disabled")).not.toBe("true"));
+        act(() => ask()!.focus());
+        fireEvent.click(ask()!);
+        const app = document.querySelector<HTMLElement>(".app")!;
+        await waitFor(() => expect(app.getAttribute("data-aside")).toBe(shape));
+        expect(ask()).toBeNull();
+        const close = await screen.findByRole("button", { name: "Close Ask Crewlet" });
+        act(() => close.focus());
+        fireEvent.click(close);
+        await waitFor(() => expect(app.hasAttribute("data-aside")).toBe(false));
+        expect(ask()).not.toBeNull();
+        expect(document.activeElement).toBe(ask());
+      } finally {
+        win.restore();
+      }
+    },
+  );
 });
 
 // A ROOM READS ONLY WHAT SOMEBODY COULD SEE. On a phone the assistant is the

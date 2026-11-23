@@ -240,8 +240,8 @@ test("the page has no lens tabs, and under the models come the helpers, then the
   expect(screen.queryByRole("tablist", { name: "Lens" })).toBeNull();
   expect(screen.queryByRole("tab", { name: "By job" })).toBeNull();
   const models = screen.getByRole("columnheader", { name: /Usage limits/ });
-  const helpers = screen.getByRole("list", { name: "Helpers" });
-  const seats = screen.getByRole("list", { name: "Seats" });
+  const helpers = screen.getByRole("region", { name: "Helpers" });
+  const seats = screen.getByRole("region", { name: "Seats" });
   const follows = (a: Node, b: Node) =>
     (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
   expect(follows(models, helpers)).toBe(true);
@@ -253,6 +253,6 @@ test("an address for the old By job lens opens the one page", async () => {
   current = company(true);
   await mountAt({ hash: "#/settings/models?view=jobs" });
   expect(location.hash).not.toContain("view=");
-  expect(screen.getByRole("list", { name: "Seats" })).toBeTruthy();
+  expect(screen.getByRole("region", { name: "Seats" })).toBeTruthy();
   expect(screen.getByRole("columnheader", { name: /Usage limits/ })).toBeTruthy();
 });

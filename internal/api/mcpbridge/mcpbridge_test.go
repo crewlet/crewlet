@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -505,28 +506,70 @@ func TestNoBaseURLMintsNoEndpointAndHoldsNoSession(t *testing.T) {
 	}
 }
 
-func TestAnExpiredTokenIsRefused(t *testing.T) {
+// A JOB'S TOKEN LIVES AS LONG AS ITS RUN, BOUNDED BY THE RUN'S OWN CAP: a run
+// with no wall-clock cap is served under the token its launch minted however
+// long it works (a month here, four hours being where a fixed expiry cut a
+// working run off its tools), and refused once it ends; a run with a cap
+// ([mcpbridge.Session.Deadline], a scheduled turn's) is served until the cap
+// and refused at it, its session still open. Why: [mcpbridge.Session.Deadline].
+//
+// Mutation: mint the tokens under a fixed lifetime, or past the run's cap, and
+// a row goes red.
+func TestAJobsTokenLivesAsLongAsItsRunBoundedByItsOwnCap(t *testing.T) {
 	t.Parallel()
-	f := newFixture(t)
-	clock := time.Now()
-	f.bridge = bridgeFor(t, mcpbridge.Options{
-		Material: runtoken.OneKey("k", "test-key"), BaseURL: f.server.URL, TTL: time.Minute,
-		Now: func() time.Time { return clock },
-	})
-	mux := http.NewServeMux()
-	mux.Handle(mcpbridge.PathPrefix+"{token}", f.bridge.Handler())
-	f.server.Config.Handler = mux
-	url := f.bridge.Open(t.Context(), f.session)
+	launched := time.Unix(1_800_000_000, 0).UTC()
+	for _, tc := range []struct {
+		name   string
+		cap    time.Duration // the run's own, from its launch; 0 for none
+		served time.Duration // a working run, still served
+		ended  bool          // the run ends; else the cap is reached
+	}{
+		{name: "a run with no cap, a month on, then ended", served: 30 * 24 * time.Hour, ended: true},
+		{name: "a run capped at six hours, at its cap", cap: 6 * time.Hour, served: 6*time.Hour - time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t)
+			var now atomic.Int64
+			now.Store(launched.UnixNano())
+			f.bridge = bridgeFor(t, mcpbridge.Options{
+				Material: runtoken.OneKey("k", "test-key"), BaseURL: f.server.URL,
+				Now: func() time.Time { return time.Unix(0, now.Load()) },
+			})
+			mux := http.NewServeMux()
+			mux.Handle(mcpbridge.PathPrefix+"{token}", f.bridge.Handler())
+			f.server.Config.Handler = mux
+			if tc.cap > 0 {
+				f.session.Deadline = launched.Add(tc.cap)
+			}
+			url := f.bridge.Open(t.Context(), f.session)
+			if url == "" {
+				t.Fatal("no endpoint was minted")
+			}
 
-	clock = clock.Add(2 * time.Minute)
-	res, err := f.server.Client().Post(url, "application/json",
-		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
-	if err != nil {
-		t.Fatalf("post: %v", err)
-	}
-	defer res.Body.Close()
-	if res.StatusCode != http.StatusUnauthorized {
-		t.Errorf("an expired token still worked: %d", res.StatusCode)
+			now.Store(launched.Add(tc.served).UnixNano())
+			if res := callTool(t, dial(t, url), "read_page", map[string]any{}); res.IsError {
+				t.Fatalf("%v after its launch, a working run's call was refused: %s", tc.served, text(res))
+			}
+			if tc.ended {
+				f.bridge.Close("run-1")
+			} else {
+				now.Store(launched.Add(tc.cap).UnixNano())
+				if f.bridge.Live() != 1 {
+					t.Fatalf("%d sessions live at the run's cap, want its one", f.bridge.Live())
+				}
+			}
+			res, err := f.server.Client().Post(url, "application/json",
+				strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
+			if err != nil {
+				t.Fatalf("post: %v", err)
+			}
+			defer res.Body.Close()
+			if res.StatusCode != http.StatusUnauthorized {
+				t.Errorf("the token was answered %d once its run ended or reached its cap, want 401",
+					res.StatusCode)
+			}
+		})
 	}
 }
 

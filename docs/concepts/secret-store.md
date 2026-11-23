@@ -36,7 +36,8 @@ _secrets (a coordination KV bucket, no TTL)
                    token — the engine's own name for a key or a pass it
                    wrote itself, or the shell's user ($CREWLET_OPERATOR,
                    else $USER, else $LOGNAME) for a command that wrote the
-                   store itself with its node's engine stopped
+                   store itself with its node's engine stopped; at most
+                   64 bytes, as operator_id is, and refused past it
   updated_by_kind  agent | human | operator | system
   operator_id      the credential it was stored through — `pat:<id>`,
                    `session:<lineage>`, a Tier A token's login — and empty
@@ -64,7 +65,7 @@ The listing shows `api`, `setup`, `provision`, `cli` and `llm-login`. A rekey wr
 
 **Why the request cannot choose it:** `?source=` and `-source` no longer exist; a caller-chosen word would let any writer make a row claim any path. Author and credential come from the authenticating credential; each path stamps its own word and the stores refuse any other.
 
-**The name is the reference grammar's, and a write that is not one is refused.** A record is keyed by the name a `${VAR}` resolves through: letters, digits and underscores, starting with a letter or an underscore. A store accepting `gitlab-token` would seal, list and report it done, yet resolve it from nowhere. `PUT /secrets/{name}` answers `400 invalid_name`, and `crewlet secrets set` refuses against a running and a stopped node alike. Reading and removing take the name as given, so nothing becomes unremovable.
+**The name is the reference grammar's, at most 255 bytes, and a write that is not one is refused.** A record is keyed by the name a `${VAR}` resolves through: letters, digits and underscores, starting with a letter or an underscore. A store accepting `gitlab-token` would seal, list and report it done, yet resolve it from nowhere. The name is also the key its record is stored under and a field of the record, so it is bounded as the value is, and the record has a widest form its coordination class holds it to (`secrets.MaxNameBytes`, the engine's own names included; [Coordination § What one key holds](coordination.md#what-one-key-holds)). `PUT /secrets/{name}` answers `400 invalid_name`, and `crewlet secrets set` refuses against a running and a stopped node alike. Reading and removing take the name as given, so nothing becomes unremovable; a name past 255 bytes names no row, so a read of one answers that nothing holds it.
 
 **A value is at most 64 KiB, on every write path and in every store.** Real credentials are a few kilobytes, so the limit refuses mistakes (`crewlet secrets set X < backup.tar`). One limit covers the API and direct writes with the engine stopped, because every read back through a node is sized from it; a larger value could be stored yet unreadable.
 - `PUT /secrets/{name}` answers a longer body `413 body_too_large`.
@@ -211,11 +212,11 @@ The rotation is a runbook with no window in it:
 
    **The longest token lifetime is the longest of the per-run tokens'**, each its own:
    - a coding box's git credential lives `host.RunTokenTTL`, seven days (dropped sooner, every running box's pushes and fetches are refused, so the drop waits at least that long after step 3);
-   - the tool bridge's, at most four hours (`mcpbridge.DefaultTTL`);
+   - the tool bridge's lives as long as its run, ended only by the run's end or its turn's own wall-clock cap (a scheduled turn's `timeout_seconds`): an executor launched before step 3 and still working, or parked on a person's answer, holds one, and dropped sooner its every tool call and note is refused;
    - the OTLP receiver's, twice the run's box timeout plus its pause allowance (`pause_ttl_seconds`), which no setting bounds, so a long pause allowance waits that out instead;
    - an artifact view ticket's, at most an hour and ten minutes.
 
-   Wait out whichever is longest in your configuration. After the drop, a token, record or cookie signed under the key is refused. Records still in a log become unappliable on a node replaying from the floor (reported as retained records, not data loss; adding the key back applies them), and a person's value a rekey did not move renders as *sealed* until the key is back.
+   Wait out whichever is longest in your configuration, and every executor run launched before step 3. After the drop, a token, record or cookie signed under the key is refused. Records still in a log become unappliable on a node replaying from the floor (reported as retained records, not data loss; adding the key back applies them), and a person's value a rekey did not move renders as *sealed* until the key is back.
 
    **Dropping it early is what signs people out.** A browser holding a session cookie minted before step 3 is refused the moment the key leaves the ring and sees a sign-in screen. A cookie is re-issued under the *active* key the first time it is used after step 3, so waiting out the absolute lifetime is waiting for sessions nobody has touched since the flip.
 

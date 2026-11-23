@@ -1229,6 +1229,11 @@ a.unit-key:hover {
   align-items: center;
   gap: var(--spacing-2);
 }
+/* A ROW'S ICONS: one line at the icon step, in a cell sized for the widest set. */
+.seat-controls--icons {
+  flex-wrap: nowrap;
+  gap: var(--spacing-1);
+}
 
 /* THE SEATS A CONTROL OF MANY APPLIES TO, listed in its confirmation. */
 .seat-control-seats {
@@ -1746,7 +1751,6 @@ a.prof-row:hover {
   .prof-side {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
-    align-items: start;
   }
 }
 @container page (width < 640px) {
@@ -3320,17 +3324,6 @@ a.prof-row:hover {
   --clamp-lines: 3;
 }
 
-/* CONNECTIONS: as many cards side by side as the reading column holds at a
-   card's floor. It asks the column's own width: the page's said a wide window
-   had room for three, in a column that left each 202px. */
-.knowledge-connections-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(18.75rem, 100%), 1fr));
-  gap: var(--spacing-3);
-}
-.knowledge-connection {
-  min-width: 0;
-}
 /* A SPACE'S TRASH, under its outline: a heading and the trashed pages as
    links, set apart from the outline by the same gap the outline keeps. */
 .knowledge-trash {
@@ -9116,7 +9109,6 @@ a.work-cal-chip {
   display: grid;
   grid-template-columns: minmax(0, 17rem) minmax(0, 1fr);
   gap: var(--spacing-3);
-  align-items: start;
 }
 @media (width < 640px) {
   .entity-pick {
@@ -9363,6 +9355,15 @@ a.work-cal-chip {
   margin: 0;
   padding: 0;
   list-style: none;
+}
+/* Each item hands its row's height to its card, as the folders' tiles do. */
+.artifacts-cards > li {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.artifacts-cards > li > * {
+  flex: 1 1 auto;
 }
 @container page (width < 1000px) {
   .artifacts-cards {

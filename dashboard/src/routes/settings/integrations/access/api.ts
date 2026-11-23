@@ -49,12 +49,12 @@ export const accessApi = {
     (await rest.get(`/setup/access/requests/${pathSegment(id)}`, signal)) as AccessGrantRequest,
   plan: async (kind: string, seats: AccessDraft) =>
     (await rest.post(`/setup/integrations/${pathSegment(kind)}/access/plan`, {
-      seats,
+      seats: withoutIdentity(seats),
     } satisfies AccessDraftRequest)) as AccessPlanAnswer,
   save: async (kind: string, seats: AccessDraft, revision: string) =>
     (await rest.put(
       `/setup/integrations/${pathSegment(kind)}/access`,
-      { seats } satisfies AccessDraftRequest,
+      { seats: withoutIdentity(seats) } satisfies AccessDraftRequest,
       ifMatch(revision),
     )) as AccessAnswer,
   /**
@@ -83,6 +83,22 @@ export const accessApi = {
       `/setup/integrations/${pathSegment(kind)}/access/seats/${pathSegment(handle)}/${pathSegment(lane)}/credential`,
       { value },
     )) as AccessCredentialAnswer,
+  /**
+   * An agent's own identity at the vendor, checked before Crewlet keeps it: a
+   * key or token a person made there, or one Crewlet makes (`made`). The
+   * engine writes the agent's identity setting as it goes; what was handed in
+   * is never echoed.
+   */
+  identity: async (kind: string, handle: string, lane: string, body: IdentityRequest) =>
+    (await rest.post(
+      `/setup/integrations/${pathSegment(kind)}/access/seats/${pathSegment(handle)}/${pathSegment(lane)}/identity`,
+      body,
+    )) as AccessCredentialAnswer,
+  /** The agent back on the company's identity, its own given up. */
+  useCompany: async (kind: string, handle: string, lane: string) =>
+    (await rest.del(
+      `/setup/integrations/${pathSegment(kind)}/access/seats/${pathSegment(handle)}/${pathSegment(lane)}/identity`,
+    )) as AccessCredentialAnswer,
   /** A fresh, single-use link to install a seat's app at the vendor (Slack's approval). */
   install: async (kind: string, handle: string, lane: string) =>
     (await rest.post(
@@ -90,6 +106,35 @@ export const accessApi = {
       {},
     )) as AccessInstallLink,
 };
+
+/**
+ * A draft as the save route takes it: never an agent's identity, which only
+ * the identity route changes, so a draft that copied the saved setting sends
+ * none.
+ */
+export function withoutIdentity(seats: AccessDraft): AccessDraft {
+  return Object.fromEntries(
+    Object.entries(seats).map(([handle, lanes]) => [
+      handle,
+      Object.fromEntries(
+        Object.entries(lanes ?? {}).map(([lane, d]) => {
+          const { identity: _, ...rest } = d!;
+          return [lane, rest];
+        }),
+      ),
+    ]),
+  );
+}
+
+/** What the identity route takes: how the identity was made, and what came back from the vendor. */
+export interface IdentityRequest {
+  way: "handed_in" | "invited" | "made";
+  value?: string;
+  file_name?: string;
+  id?: string;
+  /** The optional value the guide asks for beside a file (Apple's vendor number). */
+  detail?: string;
+}
 
 /** The access routes' refusals, in the reader's words. */
 const REFUSALS: Record<string, string> = {

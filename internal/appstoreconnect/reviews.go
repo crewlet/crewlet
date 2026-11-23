@@ -77,14 +77,16 @@ func (p *Product) reviewCall(ctx context.Context, handle, app string, opID strin
 	}
 	op, _ := Catalog().Operation(opID)
 	m := made{op: op, class: op.Class, query: url.Values{}}
+	if m.key, err = p.keyOf(ctx, handle); err != nil {
+		return made{}, err
+	}
+	m.team = m.key.team
+	if err := sign(&m, growth.LevelOf(seat.Level)); err != nil {
+		return made{}, err
+	}
 	if err := p.placeApp(ctx, seat, &m, app); err != nil {
 		return made{}, err
 	}
-	slot, ok := keyFor(op, m.team.slots, m.class == growth.ClassAdmin)
-	if !ok {
-		return made{}, noKey(op, m.team.slots)
-	}
-	m.slot = slot
 	return m, nil
 }
 
@@ -117,7 +119,7 @@ func (p *Product) reviews(ctx context.Context, call growth.Call) (any, error) {
 		}
 	}
 	m.path = "/v1/apps/" + url.PathEscape(app) + "/customerReviews"
-	resp, err := m.team.client.Do(ctx, m.slot, Request{Method: "GET", Path: m.path, Query: q, Read: true})
+	resp, err := m.do(ctx, Request{Method: "GET", Path: m.path, Query: q, Read: true})
 	if err != nil {
 		return nil, said(err)
 	}
@@ -186,7 +188,7 @@ func (p *Product) replies(ctx context.Context, call growth.Call) (made, []reply,
 			return made{}, nil, invalid("`replies[%d].text` is 1 to %d characters; it is %d.", i, replyLimit, n)
 		}
 		seen[id] = true
-		found, err := placer{owners: p.owners, t: m.team}.appOf(ctx, "customerReviews", id, []string{app})
+		found, err := placer{owners: p.owners, key: m.key}.appOf(ctx, "customerReviews", id, []string{app})
 		if err != nil || found != app {
 			return made{}, nil, growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("review %s is not a review "+
 				"of app %s. No call was made.", id, app))
@@ -203,7 +205,7 @@ func (p *Product) replies(ctx context.Context, call growth.Call) (made, []reply,
 
 // readReview reads a review and its current reply.
 func (p *Product) readReview(ctx context.Context, m made, id string) (reply, error) {
-	resp, err := m.team.client.Do(ctx, m.slot, Request{Method: "GET", Path: "/v1/customerReviews/" + url.PathEscape(id),
+	resp, err := m.do(ctx, Request{Method: "GET", Path: "/v1/customerReviews/" + url.PathEscape(id),
 		Query: url.Values{"include": {"response"}}, Read: true, Reserved: true})
 	if err != nil {
 		return reply{}, err
@@ -244,8 +246,8 @@ func (p *Product) prepareReplies(ctx context.Context, call growth.Call) (growth.
 	}
 	question := fmt.Sprintf("May %s reply to %s of app %s?", call.Handle, words.Count(len(rs), "review", "reviews"), m.app)
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s asks to post these replies, through the %s key. Allow once posts them all, each exactly as "+
-		"shown; Apple publishes a reply within a day.", call.Handle, slotRole[m.slot])
+	fmt.Fprintf(&b, "%s asks to post these replies, through its own %s key. Allow once posts them all, each exactly "+
+		"as shown; Apple publishes a reply within a day.", call.Handle, roleName(m.key.role))
 	for i, r := range rs {
 		fmt.Fprintf(&b, "\n\n**Review %d** (%d stars, %s): %s", i+1, r.review.Attributes.Rating,
 			r.review.Attributes.Territory, words.Inert(textcut.Within(r.review.Attributes.Body, excerptRunes)))
@@ -333,7 +335,7 @@ func (p *Product) applyReplies(ctx context.Context, call growth.Call, approved s
 		body := map[string]any{"data": map[string]any{"type": "customerReviewResponses",
 			"attributes":    map[string]any{"responseBody": r.text},
 			"relationships": map[string]any{"review": map[string]any{"data": map[string]any{"type": "customerReviews", "id": r.review.ID}}}}}
-		_, err := m.team.client.Do(act, m.slot, Request{Method: "POST", Path: "/v1/customerReviewResponses", Body: body,
+		_, err := m.do(act, Request{Method: "POST", Path: "/v1/customerReviewResponses", Body: body,
 			Reserved: true})
 		pr := PostedReply{Review: r.review.ID, Status: "posted"}
 		switch {

@@ -24,7 +24,7 @@ func clientFor(t *testing.T, f *fakeExpo, token string) *expo.Client {
 func TestTheClientOnlyAddressesExpo(t *testing.T) {
 	t.Parallel()
 	f := newFakeExpo()
-	_, tok := f.robot("crewlet-acme-qa", expo.RoleRunner)
+	_, tok := f.robot("crewlet-qa", expo.RoleRunner)
 	if _, err := clientFor(t, f, tok.value).Viewer(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -39,11 +39,11 @@ func TestTheClientOnlyAddressesExpo(t *testing.T) {
 func TestTheViewerIsTheTokensActor(t *testing.T) {
 	t.Parallel()
 	f := newFakeExpo()
-	robot, tok := f.robot("crewlet-acme-qa", expo.RoleRunner)
+	robot, tok := f.robot("crewlet-qa", expo.RoleRunner)
 	second := f.mint(robot.id)
 	f.revoke(second)
 	me, err := clientFor(t, f, tok.value).Viewer(context.Background())
-	if err != nil || !me.Robot() || me.ID != robot.id || me.Name != "crewlet-acme-qa" || len(me.Tokens) != 2 {
+	if err != nil || !me.Robot() || me.ID != robot.id || me.Name != "crewlet-qa" || len(me.Tokens) != 2 {
 		t.Fatalf("viewer = %+v, %v", me, err)
 	}
 	revoked := 0
@@ -67,7 +67,7 @@ func TestTheViewerIsTheTokensActor(t *testing.T) {
 func TestARefusedTokenIsA401(t *testing.T) {
 	t.Parallel()
 	f := newFakeExpo()
-	_, tok := f.robot("crewlet-acme-qa", expo.RoleRunner)
+	_, tok := f.robot("crewlet-qa", expo.RoleRunner)
 	f.revoke(tok)
 	_, err := clientFor(t, f, tok.value).Viewer(context.Background())
 	if expo.Status(err) != http.StatusUnauthorized ||
@@ -84,7 +84,7 @@ func TestARefusedTokenIsA401(t *testing.T) {
 func TestTheRoleIsReadByExposRole(t *testing.T) {
 	t.Parallel()
 	f := newFakeExpo()
-	robot, tok := f.robot("crewlet-acme-qa", expo.RoleDeveloper)
+	robot, tok := f.robot("crewlet-qa", expo.RoleDeveloper)
 	c := clientFor(t, f, tok.value)
 	role, err := c.RoleOn(context.Background(), testAccountName)
 	if err != nil || role != expo.RoleDeveloper {
@@ -118,7 +118,7 @@ func TestAGraphQLErrorReadsAsItsStatus(t *testing.T) {
 			http.StatusBadGateway},
 	} {
 		f := newFakeExpo()
-		_, tok := f.robot("crewlet-acme-qa", expo.RoleRunner)
+		_, tok := f.robot("crewlet-qa", expo.RoleRunner)
 		f.refuse["CrewletViewer"] = tc.ref
 		_, err := clientFor(t, f, tok.value).Viewer(context.Background())
 		if got := expo.Status(err); got != tc.status {
@@ -135,7 +135,7 @@ func TestAGraphQLErrorReadsAsItsStatus(t *testing.T) {
 func TestARateLimitIsWaitedOut(t *testing.T) {
 	t.Parallel()
 	f := newFakeExpo()
-	_, tok := f.robot("crewlet-acme-qa", expo.RoleRunner)
+	_, tok := f.robot("crewlet-qa", expo.RoleRunner)
 	c := clientFor(t, f, tok.value)
 	f.limited["CrewletViewer"] = 2
 	if _, err := c.Viewer(context.Background()); err != nil {

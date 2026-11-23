@@ -37,16 +37,21 @@ const ROLES: GrowthRoleOffer[] = [
   { id: "none", name: "No role", note: "No access to the property.", classes: [], levels: [] },
 ];
 
-test("every role is a row with what it allows and what Crewlet offers, the held one marked", () => {
+// COMPACT: the roles that back a level are the table, one line each, the held
+// one marked; the rest fold away under one line. Mutation: draw every role in
+// one table, and the unused one is a row of it.
+test("each role Crewlet uses is one line with what it allows and the level it backs; the rest fold", () => {
   render(<GrowthRoles product="Google Analytics" roles={ROLES} held={["marketer"]} />);
-  const rows = screen.getAllByRole("row").slice(1);
-  expect(rows).toHaveLength(4);
+  const used = screen.getByRole("table", { name: "Google Analytics roles Crewlet uses" });
+  const rows = within(used).getAllByRole("row").slice(1);
+  expect(rows).toHaveLength(3);
   expect(within(rows[1]!).getByText("Held")).toBeTruthy();
   expect(within(rows[0]!).queryByText("Held")).toBeNull();
   // The levels by what they let an agent do, the same names every growth product uses.
   expect(within(rows[1]!).getByText("View, Manage")).toBeTruthy();
   expect(within(rows[2]!).getByText("Administer, each act a decision")).toBeTruthy();
-  expect(within(rows[3]!).getByText("Not used by Crewlet")).toBeTruthy();
+  expect(within(used).queryByText("No role")).toBeNull();
+  expect(screen.getByText("Roles Crewlet does not use (1)")).toBeTruthy();
   expect(levelsWords([])).toBe("Not used by Crewlet");
 });
 
@@ -54,7 +59,7 @@ const CONNECTIONS: GrowthConnection[] = [
   {
     id: "main",
     name: "Nimbus team",
-    identity: "crewlet-g-growth-ab12@identity.example.com",
+    identity: "crewlet-growth-ab12cd@identity.example.com",
     state: "connected",
     roles_held: ["marketer"],
     accounts: [
@@ -98,7 +103,7 @@ test("each connection says who Crewlet is there, the roles it holds and every ac
     />,
   );
   const main = screen.getByRole("region", { name: "Nimbus team" });
-  expect(within(main).getByText("crewlet-g-growth-ab12@identity.example.com")).toBeTruthy();
+  expect(within(main).getByText("crewlet-growth-ab12cd@identity.example.com")).toBeTruthy();
   expect(within(main).getByText("Marketer")).toBeTruthy();
   expect(within(main).getByText("Nimbus web")).toBeTruthy();
   expect(within(main).getAllByText("987654321")).toHaveLength(1);
@@ -113,22 +118,19 @@ test("each connection says who Crewlet is there, the roles it holds and every ac
   expect(accountStateWords("frozen")).toBe("frozen");
 });
 
-// AN APP STORE CONNECT TEAM SAYS WHAT ITS KEYS HOLD AND REACH: the role each
-// key was added under, every app its keys reach where the company names none
-// (by name, with the bundle ID and no serving state, which an app has none
-// of), and, before Crewlet could list them, that it reaches every app its keys
-// reach and why the list is not read. Mutation: drop `open`, and a working
-// Admin key reads as reaching nothing.
-test("an App Store Connect team names its key's role and the apps it reaches", () => {
-  const roles: GrowthRoleOffer[] = [
-    { id: "ADMIN", name: "Admin", note: "Everything.", classes: ["read"], levels: ["read"] },
-  ];
-  const team = (over: Partial<GrowthConnection>): GrowthConnection => ({
-    id: "main",
+// AN APP STORE CONNECT TEAM HOLDS NO ROLE: each agent signs with its own key,
+// so a team says who it is and the apps it lists, never a role line. Before
+// any agent's key is checked it lists none and says why in the engine's words;
+// after, each app by name, with its bundle ID and Apple ID and no serving
+// state, which an app has none of. Mutation: draw the roles row for it, and
+// the team reads "Holds no role Crewlet can read."
+test("an App Store Connect team says no role, and lists its apps once a key is checked", () => {
+  const team = (id: string, over: Partial<GrowthConnection> = {}): GrowthConnection => ({
+    id,
     name: "",
-    identity: "57246542-96fe-1a63-e053-0824d011072a",
+    identity: `issuer-${id}`,
     state: "",
-    roles_held: ["ADMIN"],
+    roles_held: [],
     accounts: [],
     open: true,
     ...over,
@@ -137,25 +139,26 @@ test("an App Store Connect team names its key's role and the apps it reaches", (
     <GrowthConnections
       kind="app_store_connect"
       product="App Store Connect"
-      roles={roles}
-      connections={[team({ unread: "Add a Marketing key to list them here" })]}
+      roles={[]}
+      connections={[
+        team("main", { unread: "App names appear once an agent's key is checked." }),
+        team("eu"),
+      ]}
     />,
   );
-  // A LONE CONNECTION IS NOT NAMED by its document key, which tells a reader nothing.
-  expect(screen.queryByRole("heading", { name: "main" })).toBeNull();
   let main = within(container.querySelector<HTMLElement>(".growth-connection")!);
-  expect(main.getByText("Admin")).toBeTruthy();
+  expect(main.getByText("issuer-main")).toBeTruthy();
   expect(main.queryByText("Holds no role Crewlet can read.")).toBeNull();
-  expect(main.getByText("Reaches every app its keys reach.")).toBeTruthy();
-  expect(main.getByText("Add a Marketing key to list them here")).toBeTruthy();
+  expect(main.getByText("No app listed yet.")).toBeTruthy();
+  expect(main.getByText("App names appear once an agent's key is checked.")).toBeTruthy();
   unmount();
   const second = render(
     <GrowthConnections
       kind="app_store_connect"
       product="App Store Connect"
-      roles={roles}
+      roles={[]}
       connections={[
-        team({
+        team("main", {
           accounts: [
             {
               product: "app_store_connect",
@@ -183,8 +186,8 @@ test("a product with no connection says so", () => {
 });
 
 test("an identity too long for a phone may break after its own @, dots and dashes, and reads whole", () => {
-  const { container } = render(<span>{breakable("crewlet-g-lead@id.example.com")}</span>);
-  expect(container.textContent).toBe("crewlet-g-lead@id.example.com");
+  const { container } = render(<span>{breakable("crewlet-lead-ab12cd@id.example.com")}</span>);
+  expect(container.textContent).toBe("crewlet-lead-ab12cd@id.example.com");
   expect(container.querySelectorAll("wbr")).toHaveLength(5);
 });
 

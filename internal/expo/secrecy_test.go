@@ -38,7 +38,7 @@ func TestAPastedExpoTokenIsKeptOnlyInTheSealedStore(t *testing.T) {
 	}
 	seen = append(seen, refusedErr.Error())
 
-	robot, tok := w.expo.robot("crewlet-acme-qa", expo.RoleViewOnly)
+	robot, tok := w.expo.robot("crewlet-qa", expo.RoleViewOnly)
 	handed, err := w.paste(tok.value)
 	if err != nil {
 		t.Fatal(err)

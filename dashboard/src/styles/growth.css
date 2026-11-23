@@ -364,6 +364,9 @@
   overflow-wrap: break-word;
 }
 
-.growth-step__role {
-  font-weight: var(--font-weight-medium);
+/* The roles a product's levels use, then the rest folded under one line. */
+.growth-roles {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
 }

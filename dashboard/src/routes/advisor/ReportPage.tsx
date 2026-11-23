@@ -25,6 +25,9 @@ import {
   Card,
   DescriptionList,
   Link,
+  Skeleton,
+  StackedColumns,
+  StatCard,
   StatGroup,
   Tag,
   Text,
@@ -55,9 +58,39 @@ export function ReportPage({ week }: { week: string }) {
       refusal={read.refusal}
       detail={read.detail}
       loading={read.loading && !report}
+      placeholder={<ReportLoading />}
     >
       {report ? <Report report={report} title={title} /> : null}
     </QueryState>
+  );
+}
+
+/** A week's report while it is read: its head, its figures and its charts holding their room. */
+function ReportLoading() {
+  return (
+    <div className="advisor-report" aria-busy="true">
+      <Skeleton variant="text" rows={2} width="24rem" label="Loading the report" />
+      <StatGroup columns={4}>
+        {[0, 1, 2, 3].map((i) => (
+          <StatCard key={i} label="" value="" loading subLines={2} />
+        ))}
+      </StatGroup>
+      <div className="advisor-charts" data-columns={2}>
+        {[0, 1].map((i) => (
+          <Card key={i} padding="md" className="advisor-chart">
+            <Skeleton variant="text" rows={1} width="10rem" />
+            <StackedColumns
+              label=""
+              series={[]}
+              buckets={[]}
+              height="7rem"
+              loading
+              loadingLabel=""
+            />
+          </Card>
+        ))}
+      </div>
+    </div>
   );
 }
 

@@ -13,21 +13,14 @@ import (
 
 // The uploads bucket holds the ONE ledger of every hold the company has
 // outstanding, one record per upload and one save ledger per seat
-// ([coord.SaveAllowances]). The ledger's key has one segment and the others
-// two, each under its own class, so no upload id or seat spells another's key.
-const uploadLedgerKey = "ledger"
-
-// uploadRecordKey is one upload's record key.
-func uploadRecordKey(upload string) string { return coord.DocumentKey("upload", upload) }
-
-// saveLedgerKey is one seat's save ledger key.
-func saveLedgerKey(seat string) string { return coord.DocumentKey("save", seat) }
+// ([coord.SaveAllowances]), each under its own class (coord's
+// [coord.UploadLedgerKey], [coord.UploadRecordKey], [coord.SaveLedgerKey]).
 
 // UploadLedger reads the reservation ledger from the stream LEADER
 // ([getLatest]): a replica behind the last reservation would hand the next one
 // a total already spent, and its compare-and-set would lose for nothing.
 func (f *FleetStore) UploadLedger(ctx context.Context) ([]byte, uint64, error) {
-	return f.uploadValue(ctx, uploadLedgerKey, "read the upload ledger")
+	return f.uploadValue(ctx, coord.UploadLedgerKey, "read the upload ledger")
 }
 
 // SwapUploadLedger writes the ledger while it is still at revision
@@ -36,7 +29,7 @@ func (f *FleetStore) SwapUploadLedger(ctx context.Context, value []byte, revisio
 	if len(value) == 0 {
 		return 0, errors.New("coord/kv: an upload ledger needs a value")
 	}
-	return f.swapUpload(ctx, uploadLedgerKey, value, revision, "write the upload ledger")
+	return f.swapUpload(ctx, coord.UploadLedgerKey, value, revision, "write the upload ledger")
 }
 
 // UploadRecord reads one upload's record from the stream leader.
@@ -44,7 +37,7 @@ func (f *FleetStore) UploadRecord(ctx context.Context, upload string) ([]byte, u
 	if upload == "" {
 		return nil, 0, errors.New("coord/kv: an upload record needs an upload")
 	}
-	return f.uploadValue(ctx, uploadRecordKey(upload), "read the upload record")
+	return f.uploadValue(ctx, coord.UploadRecordKey(upload), "read the upload record")
 }
 
 // SwapUploadRecord writes one upload's record while it is still at revision,
@@ -56,7 +49,7 @@ func (f *FleetStore) SwapUploadRecord(ctx context.Context, upload string, value 
 	case len(value) == 0:
 		return 0, errors.New("coord/kv: an upload record needs a value")
 	}
-	return f.swapUpload(ctx, uploadRecordKey(upload), value, revision, "write the upload record")
+	return f.swapUpload(ctx, coord.UploadRecordKey(upload), value, revision, "write the upload record")
 }
 
 // DeleteUploadRecord removes one upload's record while it is still at revision.
@@ -73,7 +66,7 @@ func (f *FleetStore) DeleteUploadRecord(ctx context.Context, upload string, revi
 		// which would remove a record another node had just claimed.
 		return false, nil
 	}
-	err := f.uploads.Delete(ctx, uploadRecordKey(upload), jetstream.LastRevision(revision))
+	err := f.uploads.Delete(ctx, coord.UploadRecordKey(upload), jetstream.LastRevision(revision))
 	switch {
 	case err == nil:
 		return true, nil
@@ -91,7 +84,7 @@ func (f *FleetStore) SaveLedger(ctx context.Context, seat string) ([]byte, uint6
 	if seat == "" {
 		return nil, 0, errors.New("coord/kv: a save ledger needs a seat")
 	}
-	return f.uploadValue(ctx, saveLedgerKey(seat), "read the seat's save ledger")
+	return f.uploadValue(ctx, coord.SaveLedgerKey(seat), "read the seat's save ledger")
 }
 
 // SwapSaveLedger writes one seat's save ledger while it is still at revision,
@@ -103,7 +96,7 @@ func (f *FleetStore) SwapSaveLedger(ctx context.Context, seat string, value []by
 	case len(value) == 0:
 		return 0, errors.New("coord/kv: a save ledger needs a value")
 	}
-	return f.swapUpload(ctx, saveLedgerKey(seat), value, revision, "write the seat's save ledger")
+	return f.swapUpload(ctx, coord.SaveLedgerKey(seat), value, revision, "write the seat's save ledger")
 }
 
 // uploadValue reads one key of the uploads bucket as the leader holds it,

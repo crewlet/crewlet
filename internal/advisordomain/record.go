@@ -22,7 +22,9 @@ import (
 //     run's progress lines (op `progress`) (ADR-0166).
 //   - 3: a deep run's checkpoint on its progress record (`checkpoint`), which
 //     a holder taking the run over resumes from (ADR-0166).
-const RecordVersion = 3
+//   - 4: a run recorded `interrupted` ([RunInterrupted]), and a progress
+//     line's `step`, `failed`, `detail` and `why` (ADR-0166).
+const RecordVersion = 4
 
 // baseRecordVersion is version 1, the base format.
 const baseRecordVersion = 1
@@ -42,6 +44,12 @@ var versionedFields = statelog.RecordFields{
 	{Name: "Run.RunKind", Since: 2, Path: []string{"mutation", "run_kind"}},
 	{Name: "Op progress", Since: 2, Path: []string{"op"}, Equals: string(OpProgress)},
 	{Name: "RunProgress.Checkpoint", Since: 3, Path: []string{"mutation", "checkpoint"}},
+	{Name: "RunStatus interrupted", Since: 4, Op: string(OpRecord), Path: []string{"mutation", "status"},
+		Equals: string(RunInterrupted)},
+	{Name: "RunProgress.Step", Since: 4, Path: []string{"mutation", "step"}},
+	{Name: "RunProgress.Failed", Since: 4, Path: []string{"mutation", "failed"}},
+	{Name: "RunProgress.Detail", Since: 4, Path: []string{"mutation", "detail"}},
+	{Name: "RunProgress.Why", Since: 4, Path: []string{"mutation", "why"}},
 }
 
 // VersionedFields is the table, for the conformance suite.

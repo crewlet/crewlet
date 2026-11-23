@@ -1,6 +1,6 @@
 # Meta Ads Manager
 
-Agents read and work on your Facebook and Instagram ads through Crewlet's own tools: ad accounts, campaigns, ad sets, ads and creatives, audiences, pixels and datasets, catalogs, lead forms, Instant Experiences, the Page and Instagram calls an ad needs, insights and the business portfolio. Every operation of Meta's Marketing API v27.0 an ads integration reaches is listed ([the full list](../reference/meta-ads-operations.md)), each in one class, and no agent ever holds a token: Crewlet keeps one system user's tokens from your own Meta app and makes every call ([ADR-0170](../../adr/0170-a-growth-integrations-credential-stays-in-the-engine.md)).
+Agents read and work on your Facebook and Instagram ads through Crewlet's own tools: ad accounts, campaigns, ad sets, ads and creatives, audiences, pixels and datasets, catalogs, lead forms, Instant Experiences, the Page and Instagram calls an ad needs, insights and the business portfolio. Every operation of Meta's Marketing API v27.0 an ads integration reaches is listed ([the full list](../reference/meta-ads-operations.md)), each in one class, and no agent ever holds a token: Crewlet keeps one system user's tokens from your own Meta app and makes every call ([ADR-0170](../../adr/0170-a-growth-integrations-credential-stays-in-the-engine.md)), as the agent's own system user where you give it one ([below](#give-an-agent-its-own-identity)).
 
 Organic Pages and Instagram publishing, messaging and insights, the WhatsApp Business Platform, Commerce and Rights Manager are other Meta products with their own permissions, review and rate limits: they would be separate integrations, and this one leaves them out.
 
@@ -24,7 +24,8 @@ integrations:
     read_token: ${META_ADS_READ_TOKEN}
     operate_token: ${META_ADS_OPERATE_TOKEN}   # optional: changes and asks
     admin_token: ${META_ADS_ADMIN_TOKEN}       # optional: account changes an administrator allows
-    business_id: "1234567890"                  # optional
+    admin_system_user_token: ${META_ADS_ADMIN_SYSTEM_USER_TOKEN}  # optional: makes each agent's own system user
+    business_id: "1234567890"                  # optional; needed with admin_system_user_token
     ad_accounts: ["act_1112223333"]            # optional: the ad accounts agents may be given
     spend:                                     # optional: without both caps every spend act is refused
       accounts:
@@ -32,7 +33,7 @@ integrations:
 roles:
   - handle: growth-lead
     integrations:
-      meta_ads: {enabled: true, level: operate, ad_accounts: ["act_1112223333"]}
+      meta_ads: {enabled: true, level: operate, ad_accounts: ["act_1112223333"], identity: own}
 ```
 
 A token's or the app secret's variable may be named at its own field alone: the company document refuses it anywhere else. Meta's own Ads MCP server (`mcp.facebook.com/ads`) is refused in `mcp_servers` while the integration is on: it would reach the same ad accounts around the caps, the decisions and each agent's ad accounts.
@@ -44,6 +45,21 @@ Each call goes through the least privileged token holding every permission its o
 Every call carries the bearer in its `Authorization` header and `appsecret_proof`, the token's HMAC-SHA256 keyed by the app secret. No token, secret or proof reaches a log, an error, a record or an answer; Meta's paging links, which carry the token, are dropped from answers.
 
 A token that expires is renewed when ten days of its sixty are left, once a day until a renewal holds, under one lease for the whole fleet. The renewal is sealed in the engine's own store beside the SHA-256 of the pasted token it came from, and used only while the document names that token: paste a new one and it wins, clear it and its renewal goes. A renewal that keeps failing is a `credential_expiring` finding with the date.
+
+## Give an agent its own identity
+
+By default every agent calls Meta as the company's system user, so Meta's activity history shows one actor for all of them. With `identity: own` on its seat, an agent calls as its own **Employee** system user instead: Meta records its changes under it, and its token can be cut off alone. On the integration's **Agents** tab, an agent set to the company's reads **Needs you** until its own is ready; press **Set up identity** in its box.
+
+- **Crewlet makes it**, once you connect the business's **Admin** system user: in Business Settings, **System users**, add an Admin system user (Meta allows one), generate its token from your app with `business_management`, and paste it on the integration's page as the admin system user token, with the business portfolio ID. Crewlet uses it for nothing else. **Make it for me** then makes `crewlet-<handle>` an Employee system user, assigns it the agent's ad accounts with its level's tasks (**View performance** to read, **Manage campaigns** to operate, **Manage ad account** to administer), and mints a 60-day token holding the level's permissions (`business_management` only at administer) within what your own tokens hold.
+- **You make it** without that token: the sheet gives the name to copy, the tasks to turn on and the permissions to tick, and you paste the token it generates.
+
+Crewlet checks the token before it keeps it and on every pass: your app's, an Employee system user (never an Admin one, which reaches every asset), the level's permissions, and each of the agent's ad accounts assigned with its tasks. It is sealed as `META_ADS_TOKEN_<HANDLE>` and reaches no box. The engine's own reads that hold a call to its rules (an object's ad account, a target's state, an account's spend) stay the company's; every call the agent asks for goes as its own.
+
+- **Refused at Meta** (revoked, expired, its tasks taken away): the agent's calls stop, with the reason in its box, until it has a working identity or is set back to the company's. Crewlet never puts the company's system user in its place.
+- **Meta's cap**: a business may have 10 system users at Full access and 1 at Limited, shared with every integration there. Past it, the agent stays on the company's system user and its box says so.
+- **Level or ad accounts changed**: Crewlet brings a system user it made to the new level and accounts on the next pass, with a fresh token. One you made reads **Wrong role** until you change it in Business Settings.
+- **Renewal**: a token with ten days left is renewed (minted anew, or exchanged where no admin system user token is connected) and the old one revoked once the new one is sealed.
+- **Turned off, or back to the company's**: Crewlet takes the system user's ad accounts (where it holds the admin system user token) and revokes its tokens. Meta deletes no system user, so it stays, and is reused if the agent comes back.
 
 ## Levels
 

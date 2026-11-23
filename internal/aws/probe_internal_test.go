@@ -197,13 +197,13 @@ func TestTheConnectFormShowsTheCloudShellBlock(t *testing.T) {
 	if strings.Contains(ca.Public.Text, "PRIVATE KEY") {
 		t.Fatal("the block carries the certificate authority's key")
 	}
-	if !strings.Contains(ca.VendorURL, "{home_region}") {
-		t.Errorf("the CloudShell link names no home Region: %q", ca.VendorURL)
+	if links := ca.Hint.URLs(); len(links) != 1 || !strings.Contains(links[0], "{home_region}") {
+		t.Errorf("the CloudShell link names no home Region: %v", links)
 	}
 	for _, r := range Requirements(&config.AWS{Enabled: true, Provisioning: prov}, "Acme", resolve) {
-		if r.Field == "home_region" && !strings.Contains(r.More, "Agents work in eu-west-1, us-east-1, as "+
+		if r.Field == "home_region" && !strings.Contains(r.More.String(), "Agents work in eu-west-1, us-east-1, as "+
 			"integrations.aws.provisioning.regions sets them") {
-			t.Errorf("the home Region shows no Regions: %q", r.More)
+			t.Errorf("the home Region shows no Regions: %q", r.More.String())
 		}
 	}
 	prov.HomeRegion = ""

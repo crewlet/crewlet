@@ -21,12 +21,14 @@ import (
 // reads of the slowest allowed cadence rather than within one.
 const RetireAfter = 24 * time.Hour
 
-// MaxMissing bounds the entries one source's standing remembers as missed.
-// A standing is one coordination record, and the store bounds a record well
-// under a mebibyte: 8,192 entry ids with their first-missed instants encode
-// to about 330 KiB. A deletion larger than that (every record of a large zone
-// at once) retires the oldest misses first and the rest as the standing
-// empties, a few reads later rather than never.
+// MaxMissing bounds the entries one source remembers as missed. Its misses
+// are one coordination record of their own, held to
+// coord.MaxAtlasSourceMissesBytes: 8,192 entry ids each first missed at an
+// instant of its own encode to 770,092 bytes, 320 KB where one read missed
+// them all. A deletion larger than that (every record of a large zone at
+// once) retires the oldest misses first and the rest as they empty, a few
+// reads later rather than never. Halving it would halve the duty's one read
+// of the record (31 s at the floor) and the deletion one pass retires.
 const MaxMissing = 8192
 
 // Status is one source's standing in the coordination store: when it was
@@ -75,12 +77,17 @@ type Status struct {
 	// complete read was refused.
 	Scopes []Scope `json:"scopes,omitempty"`
 
+	// Missed is how many entries complete reads have stopped seeing and
+	// have not retired, those held back past [MaxMissing] among them.
+	Missed int `json:"missed,omitempty"`
+
 	// Missing is every entry the voice holds that complete reads have
 	// stopped seeing, grouped by the instant of the first read that missed
 	// it; MissingOverflow how many more a deletion past [MaxMissing] holds
-	// back for a later read.
-	Missing         []Missing `json:"missing,omitempty"`
-	MissingOverflow int       `json:"missing_overflow,omitempty"`
+	// back for a later read. NOT IN THE STANDING'S RECORD: they are its
+	// misses, a record of their own only the duty reads ([CoordStore]).
+	Missing         []Missing `json:"-"`
+	MissingOverflow int       `json:"-"`
 }
 
 // Finding is one part of a vendor a source may not read, and what to grant.
@@ -103,10 +110,11 @@ type Scope struct {
 	Unread     int       `json:"unread,omitempty"`
 }
 
-// MaxScopes bounds the scopes a standing carries. A standing is one
-// coordination record: 2,048 scopes with a 64-byte id each encode to about
-// 250 KiB, and a company declares its servers by hand, far below that.
-const MaxScopes = 2048
+// MaxScopes bounds the scopes a standing carries: one per server a company
+// may declare, the one source with scopes being SSH. A scope's id is a host's
+// ([config.SSHHostID]: at most 40 plain bytes), so at this bound they encode
+// to about 26 KB of a standing's coord.MaxAtlasSourceStandingBytes.
+const MaxScopes = config.SSHMaxHosts
 
 // MaxUnread bounds the findings a standing carries, and MaxFindingLength the
 // text of each: a source reads a handful of listings, and the standing is one
@@ -292,6 +300,7 @@ func Decide(live []atlas.Claim, read Read, status Status, now time.Time) Plan {
 		missing = missing[:MaxMissing]
 	}
 	status.Missing, status.MissingOverflow = groupMissed(missing), overflow
+	status.Missed = len(missing) + overflow
 	status.Entries, status.Calls, status.Withheld = len(seen), read.Calls, len(read.Withheld)
 	status.Digest = digest(read.Claims)
 	status.Unread, status.UnreadOverflow = findings(refused(read.Unread, held))
@@ -422,7 +431,8 @@ func findings(unread []Unread) ([]Finding, int) {
 // whole at now where the read was refused none of its parts, and otherwise
 // as last read whole, with how many parts were refused. A scope the read no
 // longer visits has no standing. Counted from the read rather than from the
-// findings, which are bounded.
+// findings, which are bounded. An id that is no host's is not kept
+// ([Builder.Scope] withholds it): it would leave the standing no widest form.
 func scopes(prior []Scope, read Read, now time.Time) []Scope {
 	last := map[string]time.Time{}
 	for _, s := range prior {
@@ -438,7 +448,7 @@ func scopes(prior []Scope, read Read, now time.Time) []Scope {
 		}
 		refused[u.Scope][u.Part] = true
 	}
-	ids := slices.Clone(read.Scopes)
+	ids := slices.DeleteFunc(slices.Clone(read.Scopes), func(id string) bool { return !config.SSHHostID(id) })
 	slices.Sort(ids)
 	ids = slices.Compact(ids)
 	if len(ids) > MaxScopes {

@@ -16,6 +16,7 @@ import {
   Button,
   Callout,
   Card,
+  CardGrid,
   DescriptionList,
   RelativeTime,
   StatusDot,
@@ -32,7 +33,7 @@ import type { McpData } from "../data.ts";
 import { ApprovalCard } from "../flows/ApprovalCard.tsx";
 import type { OnFlow } from "../parts.tsx";
 import { Alarms } from "../servers/Alarms.tsx";
-import { failureWords, INSTANCE } from "../words.ts";
+import { AUTO_ACCEPT, failureWords, INSTANCE } from "../words.ts";
 import { plainSeat } from "~/app/frame/cells.tsx";
 
 /** Each state, the one to look at first: a failed instance leads the default order. */
@@ -245,6 +246,11 @@ export function OverviewTab({
           integration={detail.resolved?.binding?.vendor ?? ""}
         />
       ) : null}
+      {admin?.auto_accept_changes ? (
+        <Text as="p" variant="caption" tone="secondary">
+          {AUTO_ACCEPT.on}
+        </Text>
+      ) : null}
       {/* THE INSTANCES TAKE THE FULL ROW: a table of agents, one per agent on an
           unshared server, beside a card of facts left the agents' names no room. */}
       <Card padding="none">
@@ -258,7 +264,7 @@ export function OverviewTab({
           </Text>
         ) : null}
       </Card>
-      <div className="mcp-grid">
+      <CardGrid columns={2} min="lg" gap={3}>
         <Card padding="none">
           <Card.Header
             actions={
@@ -346,7 +352,7 @@ export function OverviewTab({
             </div>
           </Card.Body>
         </Card>
-      </div>
+      </CardGrid>
       {admin?.instructions ? (
         <Card padding="none">
           <Card.Header>

@@ -110,15 +110,14 @@ func TestFindingsPastTheBoundAreCounted(t *testing.T) {
 }
 
 // THE REPORT SAYS EACH SOURCE IN ONE WORD, WHEN IT IS READ NEXT AND WHEN AN
-// ASK IS HONOURED, and never carries the read's digest or the ids of what it
-// stopped seeing.
+// ASK IS HONOURED, and never carries the read's digest; what it stopped
+// seeing is the standing's count, never its misses' ids.
 func TestTheReportDescribesEverySourceTheCompanyConnects(t *testing.T) {
 	t.Parallel()
 	now := t0.Add(2 * time.Minute)
 	standings := map[integration.Kind]collect.Status{
 		integration.KindCloudflare: {LastAttemptAt: t0, Completed: true, LastCompleteAt: t0, Entries: 7, Calls: 4,
-			Withheld: 1, Digest: "ab", Missing: []collect.Missing{{Since: t0, Entries: []string{"a", "b"}}},
-			MissingOverflow: 1},
+			Withheld: 1, Digest: "ab", Missed: 3},
 		integration.KindDatadog: {LastAttemptAt: t0, Completed: true, LastCompleteAt: t0,
 			Unread: []collect.Finding{{Part: "monitors", Detail: "Grant monitors_read."}}},
 		integration.KindGitHub: {LastAttemptAt: t0, LastCompleteAt: t0.Add(-time.Hour), LastError: "boom"},

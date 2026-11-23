@@ -62,8 +62,13 @@ const row = (extra: Partial<GrowthChangeRow>): GrowthChangeRow => ({
 });
 
 const page = (rows: GrowthChangeRow[], next = "", complete = true) => ({ rows, next, complete });
-const draw = (accounts = new Map<string, string>()) =>
-  render(<RecentChanges product="google_ads" accounts={accounts} />);
+/** The tab's accounts, each ID to its currency, and to its name where one is given. */
+const accountsOf = (currencies: Map<string, string>, names = new Map<string, string>()) =>
+  new Map(
+    [...currencies].map(([id, currency]) => [id, { id, currency, name: names.get(id) ?? "" }]),
+  );
+const draw = (currencies = new Map<string, string>(), names = new Map<string, string>()) =>
+  render(<RecentChanges product="google_ads" accounts={accountsOf(currencies, names)} />);
 
 beforeEach(() => {
   answers.asked = [];
@@ -257,4 +262,29 @@ test("a spend step's own currency wins over the account's", () => {
   draw(new Map([["123-456-7890", "EUR"]]));
   expect(screen.getByText(/Daily budget: nothing →/)).toBeTruthy();
   expect(screen.getByText("¥3,400")).toBeTruthy();
+});
+
+// AN APP IS NAMED, ITS APPLE ID QUIET BESIDE IT: a bare ID tells a reader
+// nothing, and an act on the app itself is titled by its name too. Mutation:
+// draw `row.account` as sent, and the line reads the ID alone.
+test("a change names its account, the ID beside the name, and an act on the account itself by name", () => {
+  answers.pages.set(
+    "",
+    page([
+      row({
+        product: "app_store_connect",
+        account: "6763222842",
+        target: "6763222842",
+        tool: "app_store_connect_update_listing",
+      }),
+    ]),
+  );
+  draw(new Map([["6763222842", ""]]), new Map([["6763222842", "Field Notes"]]));
+  expect(screen.getByText("Field Notes", { selector: ".growth-change__what" })).toBeTruthy();
+  expect(screen.getByText(/^Field Notes \(6763222842\) · by /)).toBeTruthy();
+  cleanup();
+  // NO NAME KNOWN: the ID alone, never an empty name.
+  answers.pages.set("", page([row({})]));
+  draw(new Map([["123-456-7890", ""]]));
+  expect(screen.getByText(/^123-456-7890 · by /)).toBeTruthy();
 });

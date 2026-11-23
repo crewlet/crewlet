@@ -211,6 +211,10 @@ type Ask struct {
 	// HandIn is a credential a person pasted for the seat ([HandsIn]),
 	// which the step that checks it seals. Never logged or marshalled.
 	HandIn string `json:"-"`
+
+	// Identity is a person keeping or giving up the seat's own identity on
+	// Lane ([IdentityAsk]); nil where they asked nothing of it.
+	Identity *IdentityAsk `json:"-"`
 }
 
 // Zero reports an ask for nothing.
@@ -279,4 +283,24 @@ type Refusal struct {
 // Error implements error.
 func (r *Refusal) Error() string {
 	return fmt.Sprintf("%s (%s)", r.Said, r.Remedy)
+}
+
+// vendorRefused is a vendor client's error that may be the vendor's definite
+// answer refusing a call (a 4xx about the account, never a 5xx or a rate
+// limit), declared by each vendor's own type as it declares VendorUnavailable.
+type vendorRefused interface{ VendorRefusal() *Refusal }
+
+// RefusalOf is err as a refusal a person fixes: a [*Refusal], or a vendor's
+// definite answer in its own words. False is a fault: no answer, or Crewlet's.
+func RefusalOf(err error) (*Refusal, bool) {
+	if r, ok := errors.AsType[*Refusal](err); ok {
+		return r, true
+	}
+	var v vendorRefused
+	if errors.As(err, &v) {
+		if r := v.VendorRefusal(); r != nil {
+			return r, true
+		}
+	}
+	return nil, false
 }

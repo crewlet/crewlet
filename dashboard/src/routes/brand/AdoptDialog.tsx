@@ -10,7 +10,7 @@
  */
 
 import { useId, type ReactNode } from "react";
-import { Button, Callout, ContrastHelp, Tag, Text, VisuallyHidden } from "@crewlethq/ui";
+import { Button, Callout, ChangeList, ContrastHelp, Tag, Text } from "@crewlethq/ui";
 import { Modal } from "~/components/Modal.tsx";
 import { TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
 import type { BrandDocument } from "~/protocol/index.ts";
@@ -86,23 +86,15 @@ export function AdoptDialog({
     >
       <div className="brand-adopt">
         {changes.length > 0 ? (
-          <dl className="brand-diff" aria-label="What changes">
-            {changes.map((c) => (
-              <div key={c.key} className="brand-diff-row">
-                <dt>{c.label}</dt>
-                <dd>
-                  {c.was ? (
-                    <>
-                      <del className="brand-diff-was">{c.was}</del>
-                      <span aria-hidden="true">{" → "}</span>
-                      <VisuallyHidden> to </VisuallyHidden>
-                    </>
-                  ) : null}
-                  {c.now}
-                </dd>
-              </div>
-            ))}
-          </dl>
+          <ChangeList
+            heading="What changes"
+            truncate
+            rows={changes.map((c) =>
+              c.was
+                ? { kind: "changed" as const, label: c.label, from: c.was, to: c.now }
+                : { kind: "fact" as const, label: c.label, value: c.now },
+            )}
+          />
         ) : (
           <Text as="p" variant="body">
             Nothing changes from the published brand.

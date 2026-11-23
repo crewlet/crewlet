@@ -7,6 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/googlegrowth"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/vendortext"
 )
 
 // accessManagementURL is Google Analytics' admin, where a person adds an
@@ -15,18 +16,23 @@ const accessManagementURL = "https://analytics.google.com/analytics/web/"
 
 // Requirements says what the company still needs for Google Analytics: the
 // integration turned on, and the company's reader added to each property at
-// Viewer, which a person does in Google Analytics. Each agent's own identity
-// is the Agents tab's: its row shows the email to add and the role its level
-// needs.
-func Requirements(c *config.Company) []setup.Requirement {
+// Viewer, which a person does in Google Analytics; and, optionally, an
+// Administrator's sign-in, with which Crewlet adds each agent's identity
+// itself. Each agent's own identity is the Agents tab's: its box shows the
+// email to add, the role its level needs, and its check.
+func Requirements(c *config.Company, resolve func(string) (string, bool)) []setup.Requirement {
 	var enabled bool
+	var client *config.GoogleOAuthClient
 	if c != nil && c.Integrations.GoogleAnalytics != nil {
 		enabled = c.Integrations.GoogleAnalytics.Enabled
+		client = c.Integrations.GoogleAnalytics.OAuth
 	}
-	return append([]setup.Requirement{googlegrowth.Enabled(string(Kind), "Google Analytics", enabled)},
+	out := append([]setup.Requirement{googlegrowth.Enabled(string(Kind), "Google Analytics", enabled)},
 		googlegrowth.Reader(c, setup.IdentityRole{ID: roleViewer, Name: "Viewer"},
-			setup.IdentityWhere{URL: accessManagementURL, Words: "Admin, Property access management, Add users"},
-			"enough to read every report; it changes nothing.")...)
+			vendortext.Of(vendortext.UI("Admin", "Property access management", "Add users").At(accessManagementURL)),
+			vendortext.Plain("enough to read every report; it changes nothing."))...)
+	return append(out, googlegrowth.AdminSignIn(string(Kind), "Google Analytics",
+		"a Google Analytics Administrator", client, resolve)...)
 }
 
 // Guide is what the connect form says around its fields.
@@ -35,11 +41,13 @@ func Guide() setup.Guide {
 		Summary: "Agents use your Google Analytics properties as their own Google identity, at the role you " +
 			"give it on each property. No token reaches an agent's box.",
 		Prepare: []setup.Step{
-			{Text: "Connect Google Cloud first; no project needs preparing. Its Cloud Shell block, run again, " +
-				"turns on the Analytics Data and Admin APIs and makes the company reader."},
-			{Text: "Add the company reader below to each property at Viewer."},
-			{Text: "Turn agents on from the Agents tab, then add each one's email to its properties at the role " +
-				"its level needs: Viewer for read, Marketer or Editor for operate, Editor for administer."},
+			{Text: vendortext.Plain("Connect Google Cloud first; no project needs preparing. Its Cloud Shell block, " +
+				"run again, turns on the Analytics Data and Admin APIs and makes the company reader.")},
+			{Text: vendortext.Of(vendortext.W("Add the company reader below to each property at "),
+				vendortext.UI("Viewer"), vendortext.W("."))},
+			{Text: vendortext.Plain("Turn agents on from the Agents tab, then set up each one's identity there: add " +
+				"its email to its properties at the role its level needs, or press Add it for me once an " +
+				"Administrator has signed in below. Crewlet checks each agent's access on every pass.")},
 		},
 	}
 }

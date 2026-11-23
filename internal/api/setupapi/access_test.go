@@ -56,6 +56,12 @@ type fakeAccess struct {
 	// about, with what was pasted.
 	handInErr error
 	handIns   []string
+	// identityOffered is the lanes whose vendor offers a seat its own
+	// identity; identities every identity ask, and identityErr what each
+	// answers.
+	identityOffered map[seataccess.Lane]bool
+	identities      []seataccess.IdentityAsk
+	identityErr     error
 	// requests are the agents' stored grant requests, by id, and grants
 	// every grant change a save recorded.
 	requests map[string]seataccess.GrantRequest
@@ -118,6 +124,11 @@ func (f *fakeAccess) Answer(_ context.Context, q setupapi.AccessQuery) (seatacce
 			if verb, ok := f.waitingOn[seat.Handle]; ok {
 				la.Sync = &seataccess.SyncResult{Outcome: seataccess.OutcomeWaiting,
 					Error: &seataccess.Failure{Step: verb, Said: "Delete it at the vendor.", Actor: seataccess.ByYou}}
+			}
+			if f.identityOffered[lane] {
+				mode := modeOf(q.Kind, lane, la.Desired)
+				la.Identity = &seataccess.IdentityAnswer{Offered: true, Mode: mode,
+					Status: seataccess.IdentityCompanys}
 			}
 			seat.Lanes[lane] = la
 		}
@@ -860,4 +871,39 @@ func TestAPastedCredentialIsNeverLogged(t *testing.T) {
 			t.Errorf("a pasted value appears outside the engine: %s", text)
 		}
 	}
+}
+
+// modeOf is who signs d on lane, as the engine reads it: the lane's own rule,
+// so an own-only lane is always the seat's own.
+func modeOf(kind integration.Kind, lane seataccess.Lane, d seataccess.Desired) seataccess.IdentityMode {
+	if v, ok := seataccess.Lookup(kind); ok {
+		if spec, ok := v.Catalog().Lane(lane); ok && spec.Identity.Offered() {
+			return spec.Identity.ModeOf(d)
+		}
+	}
+	if d.Identity != "" {
+		return d.Identity
+	}
+	return seataccess.IdentityCompany
+}
+
+func (f *fakeAccess) Identity(_ context.Context, q setupapi.AccessQuery, handle string, lane seataccess.Lane,
+	ask seataccess.IdentityAsk, _ iam.Actor) (seataccess.IdentityCheck, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.identities = append(f.identities, ask)
+	if f.identityErr != nil {
+		return seataccess.IdentityCheck{}, f.identityErr
+	}
+	for r := range q.Company.EachRole() {
+		if r.Seat().Handle() == handle && modeOf(q.Kind, lane, desiredOf(r, lane)) != map[bool]seataccess.IdentityMode{
+			true: seataccess.IdentityOwn, false: seataccess.IdentityCompany}[ask.Keep] {
+			return seataccess.IdentityCheck{}, errors.New("the engine was asked before the document said so")
+		}
+	}
+	if ask.Drop {
+		return seataccess.IdentityCheck{Status: seataccess.IdentityCompanys, Said: "Calls go as the company's."}, nil
+	}
+	return seataccess.IdentityCheck{Status: seataccess.IdentityReady, ID: "7KQ4M2ZX9P", Role: "Marketing",
+		Team: "main", Said: "Key 7KQ4M2ZX9P works.", Reads: []seataccess.IdentityRead{{Label: "Sign in", OK: true}}}, nil
 }

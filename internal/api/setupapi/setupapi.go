@@ -282,10 +282,6 @@ type Options struct {
 	// SSH is the engine's half of Test connection and the SSH audit.
 	SSH SSHAccess
 
-	// AppStoreAnalytics turns App Store analytics on with an Admin key pasted
-	// once; nil on a node that reaches no App Store Connect, which answers 503.
-	AppStoreAnalytics AppStoreAnalytics
-
 	// Access is the engine's per-seat access: each seat's setting, account and
 	// last sync on every integration managing one account per agent, the plan
 	// a draft would take, and the sync a save starts ([Access]).
@@ -317,11 +313,9 @@ type Service struct {
 	// sshTests is [Options.SSHTests].
 	sshTests SSHTests
 	// ssh is [Options.SSH].
-	ssh SSHAccess
-	// analytics is [Options.AppStoreAnalytics].
-	analytics AppStoreAnalytics
-	clock     func() time.Time
-	appFlow   *AppFlow
+	ssh     SSHAccess
+	clock   func() time.Time
+	appFlow *AppFlow
 
 	// guard decides every route and the credential write one adds. No chart: no
 	// verb here asks a relation.
@@ -382,7 +376,6 @@ func New(opts Options) (*Service, error) {
 		access:         opts.Access,
 		sshTests:       opts.SSHTests,
 		ssh:            opts.SSH,
-		analytics:      opts.AppStoreAnalytics,
 		probes:         maps.Clone(opts.Probes),
 		sink:           opts.Sink,
 		status:         opts.Status,
@@ -480,6 +473,12 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// agent.
 	post("POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/credential",
 		authz.EffectRewrites, s.accessCredential)
+	// An agent's own identity at the vendor (accessidentity.go): kept, or given
+	// up for the company's. Each may seal or clear a credential.
+	post("POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/identity",
+		authz.EffectRewrites, s.accessIdentity)
+	mount("DELETE /setup/integrations/{kind}/access/seats/{handle}/{lane}/identity", authz.ActionSetupConnect,
+		s.accessIdentity)
 	// The SSH servers (ssh.go). A scan dials an address an administrator typed,
 	// so it is the connect verb, reading; a server's fields are a revision; the
 	// setup is a read of what it renders.
@@ -494,16 +493,6 @@ func (s *Service) Routes(mux authz.Mux) error {
 	mount("GET /setup/integrations/ssh/audit", authz.ActionSSHAuditRead, s.sshAudit)
 	// A rotation seals a new authority or replaces the current one.
 	post("POST /setup/integrations/ssh/rotation", authz.EffectRewrites, s.sshRotation)
-	// ONE ACTION REMOVES AN APP STORE CONNECT KEY, the document's slot and then
-	// its sealed .p8 (appstorekeys.go).
-	mount("DELETE /setup/integrations/app_store_connect/keys/{connection}/{slot}", authz.ActionSetupConnect,
-		s.appStoreKeyRemove)
-	// A PASTED ADMIN KEY IS ITS OWN VERB, an administrator's in person at a
-	// step-up, never the connect verb a lead may hold (appstoreanalytics.go).
-	if err := router.Handle("POST /setup/integrations/app_store_connect/analytics", authz.Policy{
-		Action: authz.ActionAppStoreAnalyticsEnable, Effect: authz.EffectCreates}, http.HandlerFunc(s.appStoreAnalytics)); err != nil {
-		failures = append(failures, err)
-	}
 	return errors.Join(failures...)
 }
 
@@ -1071,7 +1060,7 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		// identities, which the Google identity pass makes.
 		block := company.Integrations.GoogleAnalytics
 		guide = googleanalytics.Guide()
-		reqs = googleanalytics.Requirements(company)
+		reqs = googleanalytics.Requirements(company, s.resolve)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindGoogleAds:
@@ -1095,7 +1084,7 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		// for an administrator.
 		block := company.Integrations.GooglePlay
 		guide = googleplay.Guide()
-		reqs = googleplay.Requirements(company)
+		reqs = googleplay.Requirements(company, s.resolve)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindSlack:

@@ -19,8 +19,22 @@ const running: ViewRun = {
   opened: 0,
   resolved: 0,
   progress: [
-    { at: "2026-11-20T09:59:00Z", text: "Reading flow hours." },
-    { at: "2026-11-20T09:59:30Z", text: "Testing: releases pile up behind one seat." },
+    {
+      at: "2026-11-20T09:59:00Z",
+      text: "Reading flow hours",
+      step: "read",
+      state: "done",
+      detail: "flow_hours days=7",
+      why: "",
+    },
+    {
+      at: "2026-11-20T09:59:30Z",
+      text: "Testing: releases pile up behind one seat",
+      step: "note",
+      state: "running",
+      detail: "",
+      why: "",
+    },
   ],
   unread: [],
   silent: [],
@@ -36,24 +50,91 @@ const running: ViewRun = {
   agenda: null,
 };
 
-// A RUN IS FOLLOWED, NEVER WAITED ON, AND SAID CONCISELY: one line of its
-// state and how long it has run, what it is doing now under it, and every
-// step it reported folded under Steps rather than listed on the page.
-// Mutation: list the steps open, and the head is a log again.
+// A RUN IS FOLLOWED, NEVER WAITED ON, AND SAID IN TWO LINES: its state and
+// how long it has run, then what it is doing now, every step folded under a
+// toggle that opens them as a timeline, each with its state and the read
+// behind it. Mutation: list the steps open, and the head is a log again.
 test("a running run says its state, how long, and what it is doing now, its steps folded", async () => {
   render(<RunLine run={running} now={NOW} />);
   expect(screen.getByText("Running checks")).toBeDefined();
   expect(screen.getByText("1m 12s")).toBeDefined();
-  expect(screen.getByText("Testing: releases pile up behind one seat.")).toBeDefined();
+  expect(screen.getByText("Testing: releases pile up behind one seat")).toBeDefined();
   expect(screen.queryByRole("list", { name: "What the run did" })).toBeNull();
+  const toggle = screen.getByRole("button", { name: "2 steps" });
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
   await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: /Steps/ }));
+    fireEvent.click(toggle);
   });
   const steps = screen.getByRole("list", { name: "What the run did" });
-  expect([...steps.querySelectorAll("li")].map((li) => li.textContent)).toEqual([
-    "Reading flow hours.",
-    "Testing: releases pile up behind one seat.",
+  expect([...steps.querySelectorAll("li")].map((li) => li.dataset.state)).toEqual([
+    "done",
+    "running",
   ]);
+  expect(steps.textContent).toContain("flow_hours days=7");
+});
+
+// A FAILED STEP IS ONE STEP, SAID AS FAILED WITH WHY: the toggle counts it,
+// the run's second line names it once the run has ended, and the timeline
+// draws its reason under it. Mutation: draw the engine's state as done, and
+// the failure reads as a step that went well.
+test("a failed read is counted, named, and explained", async () => {
+  const ended: ViewRun = {
+    ...running,
+    status: "done",
+    kind: "deep",
+    endedAt: "2026-11-20T09:59:50Z",
+    progress: [
+      { ...running.progress[0]!, state: "done" },
+      {
+        at: "2026-11-20T09:59:40Z",
+        text: "Could not read open work items",
+        step: "read",
+        state: "failed",
+        detail: "work_items status_group=open",
+        why: '"open" is not one of the four status groups',
+      },
+    ],
+  };
+  render(<RunLine run={ended} now={NOW} />);
+  expect(screen.getByText("Could not read open work items")).toBeDefined();
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "2 steps, 1 failed" }));
+  });
+  const steps = screen.getByRole("list", { name: "What the run did" });
+  const failed = [...steps.querySelectorAll("li")].find((li) => li.dataset.state === "failed")!;
+  expect(failed.textContent).toContain('"open" is not one of the four status groups');
+  expect(failed.textContent).toContain("work_items status_group=open");
+});
+
+// A RUN WHOSE OWNER STOPPED IS SAID AS INTERRUPTED, never as running: the
+// engine closed it, and the head says it did not finish and why.
+test("an interrupted run reads as interrupted, with the engine's reason", () => {
+  const stopped: ViewRun = {
+    ...running,
+    status: "interrupted",
+    kind: "deep",
+    endedAt: "2026-11-20T09:00:00Z",
+    reason: "The engine stopped during the run, so it did not finish.",
+  };
+  expect(runState(stopped, NOW)).toMatchObject({
+    label: "Investigation interrupted",
+    tone: "warning",
+    pulse: false,
+  });
+  expect(runWords(stopped, NOW)).toBe(
+    "The last deep run stopped 1 hour ago. The engine stopped during the run, so it did not finish.",
+  );
+});
+
+// UNREAD, THE HEAD HOLDS ITS TWO LINES' ROOM and its controls stay mounted,
+// so nothing under it moves and a press is never lost.
+test("while the run is read the head holds its room, controls in place", () => {
+  const { container } = render(
+    <RunLine run={running} now={NOW} loading controls={<button type="button">Run</button>} />,
+  );
+  expect(container.querySelectorAll(".advisor-head__state, .advisor-head__trail")).toHaveLength(2);
+  expect(screen.queryByText("Running checks")).toBeNull();
+  expect(screen.getByRole("button", { name: "Run" })).toBeDefined();
 });
 
 // HOW FAR A DEEP RUN IS: its questions answered, as a meter under its line.

@@ -20,6 +20,7 @@ import {
   Button,
   Callout,
   Card,
+  CardGrid,
   DescriptionList,
   EntityChip,
   RelativeTime,
@@ -724,17 +725,17 @@ export function EntryPage({
       <ConditionCallout model={model} data={data} open={open} />
       <UsageLimitsCard model={model} />
       {model.admin ? (
-        <div className="models-entry-grid">
+        <CardGrid columns={2} min="lg">
           <SignInCard model={model} data={data} open={open} focusRef={signInRef} />
           <TestCard model={model} open={open} />
-        </div>
+        </CardGrid>
       ) : null}
       <WhoRunsCard model={model} data={data} />
       {model.admin ? (
-        <div className="models-entry-grid">
+        <CardGrid columns={2} min="lg">
           <UsageCard model={model} />
           <LimitsCard model={model} open={open} />
-        </div>
+        </CardGrid>
       ) : null}
     </div>
   );

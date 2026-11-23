@@ -572,7 +572,7 @@ func TestTheConnectFormOffersTheAtlasReader(t *testing.T) {
 			switch req.Field {
 			case "atlas_read":
 				if req.Required || req.Connect || req.Blocks != "" || req.Default != "false" ||
-					!strings.Contains(req.More, "run the CloudShell block again") || !strings.Contains(req.More, "To undo it") {
+					!strings.Contains(req.More.String(), "run the CloudShell block again") || !strings.Contains(req.More.String(), "To undo it") {
 					t.Errorf("the reader's switch is %+v: it must be optional, off, and say its step and its undo", req)
 				}
 				present = req.Present

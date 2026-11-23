@@ -1,6 +1,7 @@
 package artifactupload
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,7 +9,9 @@ import (
 	"slices"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
@@ -151,6 +154,12 @@ type record struct {
 	// intent answered without a transfer.
 	Carried []string `json:"carried,omitempty"`
 
+	// Kept are the bytes of the generated files a refusal dropped from Files
+	// that another attempt, of unknown outcome, stored ([run.fail]): still
+	// held, so the hold keeps them reserved until it lapses, which is when
+	// the collector could have taken them, and deleted by nothing here.
+	Kept int64 `json:"kept,omitempty"`
+
 	Files []file `json:"files"`
 }
 
@@ -159,9 +168,10 @@ func (r *record) fileAt(path string) int {
 	return slices.IndexFunc(r.Files, func(f file) bool { return f.Path == path })
 }
 
-// heldBytes is every byte the record's files still hold.
+// heldBytes is every byte the record's files still hold, and the bytes it
+// keeps for another attempt.
 func (r *record) heldBytes() int64 {
-	var n int64
+	n := r.Kept
 	for _, f := range r.Files {
 		if f.held() {
 			n += f.Size
@@ -200,19 +210,63 @@ func (s *Service) readRecord(ctx context.Context, id string) (*record, uint64, e
 	return &r, rev, nil
 }
 
+// maxOutcomeBytes is the most [run.close] adds to a record as it stores the
+// outcome: [MaxReportWarnings] warnings and the count, each at its widest path
+// and message as encoded (two bytes a path byte, six a message byte) beside
+// findingFrameBytes of names and numbers, and a kibibyte for the published
+// version (TestTheWidestOutcomeFitsWhatARecordKeepsForIt).
+const maxOutcomeBytes = (MaxReportWarnings+1)*(2*artifacts.MaxPathBytes+6*MaxWarningBytes+findingFrameBytes) + 1<<10
+
+// findingFrameBytes is the most one warning encodes to beside its path and
+// message: its field names, a line of an int's 20 digits and the longest code.
+const findingFrameBytes = 128
+
+// recordBound is the most r may be stored as: what its key holds, less room
+// for the outcome where it has none yet. close writes the outcome after the
+// version has landed, where a refusal could undo nothing, so every write
+// before it leaves the room.
+func recordBound(r *record) int {
+	if r.Outcome == nil {
+		return coord.MaxUploadRecordBytes - maxOutcomeBytes
+	}
+	return coord.MaxUploadRecordBytes
+}
+
 // writeRecord writes r at rev (0 creating it), answering the revision written
-// and zero for a lost race.
+// and zero for a lost race. A record past [recordBound] is refused before it
+// is sent: only retries of one publish that each ended unknown and recorded
+// files of other bytes grow one that far.
 func (s *Service) writeRecord(ctx context.Context, r *record, rev uint64) (uint64, error) {
 	r.V = recordVersion
-	raw, err := json.Marshal(r)
+	raw, err := encodeRecord(r)
 	if err != nil {
 		return 0, fmt.Errorf("artifactupload: encode upload %s: %w", r.ID, err)
+	}
+	if past := coord.HoldValue(coord.UploadRecordKey(r.ID), len(raw), recordBound(r)); past != nil {
+		return 0, fmt.Errorf("%w: upload %s would record %d files, more than it keeps: earlier attempts of "+
+			"this publish, whose outcomes are unknown, recorded files of other bytes; send the publish again "+
+			"under a new operation key, with a new upload where it named one: %w", ErrInvalid, r.ID,
+			len(r.Files), past)
 	}
 	wrote, err := s.res.SwapUploadRecord(ctx, r.ID, raw, rev)
 	if err != nil {
 		return 0, fmt.Errorf("artifactupload: write upload %s: %w", r.ID, err)
 	}
 	return wrote, nil
+}
+
+// encodeRecord is r as stored: without HTML escaping, so a path holding `<`,
+// `>` or `&` keeps its own bytes rather than six apiece ([coord.MaxUploadRecordBytes]
+// counts each path byte as two at most). Every reader decodes it with
+// encoding/json, which reads both spellings alike.
+func encodeRecord(r *record) ([]byte, error) {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(r); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(b.Bytes(), []byte("\n")), nil
 }
 
 // updateRecord applies change to the upload's current record and writes it,

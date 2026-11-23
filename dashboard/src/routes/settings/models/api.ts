@@ -36,6 +36,7 @@ import { isAbort, pathSegment, rest, RestError, type RestResponse } from "~/prot
 import { QueryError, queryErrorCode } from "~/protocol/index.ts";
 import type { CompanyDocument } from "~/protocol/types.ts";
 import { MODEL_CREDENTIAL_BUDGET_SECONDS, MODEL_RETRY_BUDGET_SECONDS } from "~/contract/models.ts";
+import type { RemovalSecrets, SecretDeletion } from "~/contract/config.ts";
 import type {
   CheckAnswer,
   CredentialCheck,
@@ -331,6 +332,8 @@ export async function cancelDeviceSignIn(
 export interface Removal {
   /** Every reference's next model; Ask Crewlet's pointed at none turns it off. */
   repoint: ModelRepoint[];
+  /** The stored values the model read to delete once it is removed. */
+  deleteSecrets: readonly string[];
 }
 
 /** What a removal came to, and every place that names the model where the engine listed them. */
@@ -342,6 +345,8 @@ export interface RemovalAnswer {
    * repoints from. Empty on any other answer.
    */
   references: ModelReference[];
+  /** What became of each value asked to delete, on a written removal; empty otherwise. */
+  secrets: SecretDeletion[];
 }
 
 /** A refusal body's references, as the engine wrote them; nothing else is read as one. */
@@ -367,21 +372,27 @@ export function referencesOf(body: unknown): ModelReference[] {
 export async function modelReferences(
   key: string,
   signal?: AbortSignal,
-): Promise<{ references: ModelReference[] } | { refused: ConfigCheckOutcome }> {
+): Promise<
+  { references: ModelReference[]; values: RemovalSecrets } | { refused: ConfigCheckOutcome }
+> {
   const answer = await answerOf(
     rest.request("GET", `/config/llm-providers/${pathSegment(key)}/references`, {
       ...(signal ? { signal } : {}),
     }),
   );
-  if (answer.status === 200) return { references: referencesOf(answer.body) };
+  if (answer.status === 200)
+    return {
+      references: referencesOf(answer.body),
+      values: (answer.body as { dependants: RemovalSecrets }).dependants,
+    };
   return { refused: outcomeOf(answer) };
 }
 
 /**
  * `DELETE /config/llm-providers/{key}`: the model removed and every dependant
- * repointed in one revision, or with `dryRun` the same checked and stored
- * nowhere. A refusal for repoints that miss a reference carries every
- * reference, from which the page draws its list.
+ * repointed in one revision, then the values asked for deleted, or with
+ * `dryRun` the same checked and stored nowhere. A refusal for repoints that
+ * miss a reference carries every reference, from which the page draws its list.
  */
 export async function removeModel(
   key: string,
@@ -391,7 +402,7 @@ export async function removeModel(
 ): Promise<RemovalAnswer> {
   const answer = await answerOf(
     rest.request("DELETE", `/config/llm-providers/${pathSegment(key)}`, {
-      body: { repoint: removal.repoint },
+      body: { repoint: removal.repoint, delete_secrets: removal.deleteSecrets },
       headers: {
         "If-Match": options.etag,
         ...(options.dryRun ? {} : { "X-Summary": options.summary }),
@@ -400,7 +411,12 @@ export async function removeModel(
       ...(signal ? { signal } : {}),
     }),
   );
-  return { outcome: outcomeOf(answer), references: referencesOf(answer.body) };
+  const outcome = outcomeOf(answer);
+  return {
+    outcome,
+    references: referencesOf(answer.body),
+    secrets: outcome.kind === "saved" ? (answer.body as { secrets: SecretDeletion[] }).secrets : [],
+  };
 }
 
 /**
