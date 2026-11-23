@@ -37,6 +37,7 @@ type AdvisorReader interface {
 	Checkpoint(ctx context.Context, run string, fresh statelog.Freshness) (json.RawMessage, bool, error)
 	Run(ctx context.Context, id string, fresh statelog.Freshness) (advisordomain.RunRow, bool, error)
 	PendingRequests(ctx context.Context, fresh statelog.Freshness) ([]advisordomain.RunRow, error)
+	Unowned(ctx context.Context, fresh statelog.Freshness) ([]advisordomain.UnownedRun, error)
 	LastRunOfClasses(ctx context.Context, fresh statelog.Freshness) (map[string]time.Time, error)
 	ClassRunsPage(ctx context.Context, after string, fresh statelog.Freshness) (map[string]time.Time, string, error)
 	Reports(ctx context.Context, cursor string, limit int,
@@ -254,6 +255,11 @@ var opAdvisorPending = advisorRead("advisor.pending_requests",
 	func(ctx context.Context, r AdvisorReader, a advisorFreshArgs) ([]advisordomain.RunRow, error) {
 		return r.PendingRequests(ctx, a.Fresh)
 	}).cappedAt(advisordomain.MaxPending, advisordomain.MaxRunRowBytes)
+
+var opAdvisorUnowned = advisorRead("advisor.unowned_runs",
+	func(ctx context.Context, r AdvisorReader, a advisorFreshArgs) ([]advisordomain.UnownedRun, error) {
+		return r.Unowned(ctx, a.Fresh)
+	}).cappedAt(advisordomain.MaxPending, advisordomain.MaxWordBytes+2*timeBytes)
 
 type advisorClassRunsArgs struct {
 	After string
@@ -581,6 +587,12 @@ func (x AdvisorReads) Run(ctx context.Context, id string,
 // PendingRequests answers the runs requested and not yet recorded.
 func (x AdvisorReads) PendingRequests(ctx context.Context, fresh statelog.Freshness) ([]advisordomain.RunRow, error) {
 	return call(ctx, x.r, opAdvisorPending, nil, advisorFreshArgs{Fresh: fresh})
+}
+
+// Unowned answers the runs that wrote progress and have no row: their holder
+// stopped mid-run.
+func (x AdvisorReads) Unowned(ctx context.Context, fresh statelog.Freshness) ([]advisordomain.UnownedRun, error) {
+	return call(ctx, x.r, opAdvisorUnowned, nil, advisorFreshArgs{Fresh: fresh})
 }
 
 // LastRunOfClasses answers each class's last run that ran to done, a page at
