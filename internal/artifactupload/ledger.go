@@ -55,12 +55,13 @@ type hold struct {
 }
 
 // remains reports whether h is the reservation o was, or what a release left
-// of it: the same attempt's, its directness unchanged and no more bytes,
-// since [Service.release] lowers them. Its window is not compared, since any
+// of it: the same attempt's, its directness unchanged, no more bytes, since
+// [Service.release] lowers them, and no later lapse, which a later intent's
+// hold has whatever attempt it drew. Its window is not compared, since any
 // change's recheck moves it ([earlyRecheck]).
 func (h hold) remains(o hold) bool {
 	return h.Upload == o.Upload && h.Principal == o.Principal && h.Direct == o.Direct &&
-		h.Attempt == o.Attempt && h.Bytes <= o.Bytes
+		h.Attempt == o.Attempt && h.Bytes <= o.Bytes && !h.Until.After(o.Until)
 }
 
 // newAttempt draws an attempt other than old.
@@ -229,6 +230,13 @@ func (s *Service) changeLedger(ctx context.Context, change func(l *ledger, now t
 				return refusal
 			}
 			l.Holds = kept
+		}
+		for i, h := range l.Holds {
+			// A HOLD THIS CHANGE MADE for an upload whose hold it released
+			// draws an attempt of its own, so no later round takes it for that.
+			if seen, ok := released[h.Upload]; ok && drop[h.Upload] && h.Attempt == seen.Attempt {
+				l.Holds[i].Attempt = newAttempt(seen.Attempt)
+			}
 		}
 		l.Holds = slices.DeleteFunc(l.Holds, func(h hold) bool { return h.Bytes <= 0 })
 		l.V = ledgerVersion

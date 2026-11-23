@@ -456,3 +456,60 @@ func TestAReleaseDropsWhatAnotherReleaseLeftOfItsHold(t *testing.T) {
 			after.Holds)
 	}
 }
+
+// A HOLD MADE FOR A RELEASED UPLOAD IS NEVER TAKEN FOR THE RELEASED ONE: a
+// change that releases an upload's hold and, in the same change, makes a new
+// hold for that upload with the released one's attempt has the new hold draw
+// an attempt of its own; and a later intent's hold another node wrote in its
+// place, whose attempt happens to match, is told apart by its later lapse.
+// Either way a release that loses its round never drops the new reservation.
+//
+// Mutation: skip the redraw in changeLedger, or drop the lapse from
+// hold.remains, and the new hold is taken for the released one.
+func TestAHoldMadeForAReleasedUploadIsNeverTakenForTheReleasedOne(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
+	t.Run("made by the same change", func(t *testing.T) {
+		t.Parallel()
+		fleet := memory.NewFleet()
+		s := &Service{res: fleet, now: func() time.Time { return now }}
+		abandoned := abandonedBehind(t, s, fleet, 0, 10)
+		if err := s.changeLedger(t.Context(), func(l *ledger, now time.Time) error {
+			l.Holds = append(l.Holds, hold{Upload: abandoned, Principal: "ada.lovelace", Bytes: 10,
+				Until: now.Add(time.Hour), Expires: now.Add(10 * time.Minute)})
+			return nil
+		}); err != nil {
+			t.Fatalf("change the ledger: %v", err)
+		}
+		after := storedLedger(t, fleet)
+		if i := after.holdOf(abandoned); i < 0 || after.Holds[i].Attempt == 0 {
+			t.Errorf("the hold made beside the release is %+v, want one with an attempt of its own", after.Holds)
+		}
+	})
+	t.Run("written by another node", func(t *testing.T) {
+		t.Parallel()
+		fleet := memory.NewFleet()
+		other := &Service{res: fleet, now: func() time.Time { return now.Add(time.Second) }}
+		res := &interleaved{Fleet: fleet}
+		s := &Service{res: res, now: func() time.Time { return now }}
+		abandoned := abandonedBehind(t, s, fleet, 0, 10)
+		res.between = func() {
+			if err := other.changeLedger(t.Context(), func(l *ledger, now time.Time) error {
+				if i := l.holdOf(abandoned); i >= 0 {
+					l.Holds[i] = hold{Upload: abandoned, Principal: "ada.lovelace", Bytes: 10,
+						Until: now.Add(2 * time.Hour), Expires: now.Add(10 * time.Minute)}
+				}
+				return nil
+			}); err != nil {
+				t.Errorf("the other node's change: %v", err)
+			}
+		}
+		if err := s.changeLedger(t.Context(), func(*ledger, time.Time) error { return nil }); err != nil {
+			t.Fatalf("change the ledger: %v", err)
+		}
+		if after := storedLedger(t, fleet); after.holdOf(abandoned) < 0 {
+			t.Errorf("after the release lost its round the ledger holds %+v, want the later intent's hold",
+				after.Holds)
+		}
+	})
+}
