@@ -35,8 +35,9 @@ type fakeLog struct {
 	progress []string
 	// checkpoints is the newest checkpoint each run wrote.
 	checkpoints map[string]json.RawMessage
-	// heard is when each run wrote each of its lines.
+	// heard is when each run wrote each of its lines, and lines every line.
 	heard map[string][]time.Time
+	lines []duty.Line
 }
 
 func (l *fakeLog) Live(context.Context) ([]advisor.Stored, error)      { return l.live, nil }
@@ -56,14 +57,15 @@ func (l *fakeLog) LastDone(context.Context) (map[string]time.Time, error) {
 	return out, nil
 }
 
-func (l *fakeLog) Progress(_ context.Context, run string, at time.Time, text string) error {
+func (l *fakeLog) Progress(_ context.Context, run string, line duty.Line) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.progress = append(l.progress, run+": "+text)
+	l.progress = append(l.progress, run+": "+line.Text)
+	l.lines = append(l.lines, line)
 	if l.heard == nil {
 		l.heard = map[string][]time.Time{}
 	}
-	l.heard[run] = append(l.heard[run], at)
+	l.heard[run] = append(l.heard[run], line.At)
 	return nil
 }
 

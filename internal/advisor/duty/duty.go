@@ -188,7 +188,7 @@ type Log interface {
 	// no record): a deep run at its slot whose holder stopped mid-run.
 	Unowned(ctx context.Context) ([]Unowned, error)
 	// Progress writes one line of a deep run's progress.
-	Progress(ctx context.Context, run string, at time.Time, text string) error
+	Progress(ctx context.Context, run string, l Line) error
 	// Checkpoint writes where a deep run stands, which a holder taking it
 	// over resumes from.
 	Checkpoint(ctx context.Context, run string, at time.Time, body json.RawMessage) error
@@ -197,6 +197,18 @@ type Log interface {
 	// Explain writes the model's explanation of a finding's verdict; one
 	// whose verdict moved since is left for the next pass.
 	Explain(ctx context.Context, e advisor.Explained) error
+}
+
+// Line is one line of a deep run's progress: when, what it says, what step it
+// is, whether that step failed and why, and what it asked (a read's call, a
+// verdict's item and question).
+type Line struct {
+	At     time.Time
+	Text   string
+	Step   advisordomain.ProgressStep
+	Failed bool
+	Detail string
+	Why    string
 }
 
 // Unowned is a run whose holder stopped mid-run, and when it was first and

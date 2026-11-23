@@ -83,10 +83,16 @@ const (
 	lookRows = 12
 )
 
-// Progress is one line of what a deep run is doing.
+// Progress is one line of what a deep run is doing: what step it is, whether
+// it failed and why, in the engine's words, and what it asked (a read's call,
+// a verdict's item and question).
 type Progress struct {
-	At   time.Time `json:"at"`
-	Text string    `json:"text"`
+	At     time.Time                  `json:"at"`
+	Text   string                     `json:"text"`
+	Step   advisordomain.ProgressStep `json:"step,omitempty"`
+	Failed bool                       `json:"failed,omitempty"`
+	Detail string                     `json:"detail,omitempty"`
+	Why    string                     `json:"why,omitempty"`
 }
 
 // The stops a deep run ends at.
@@ -164,8 +170,8 @@ func RunDeepFrom(ctx context.Context, deps Deps, d DeepData, b DeepBounds, progr
 		surf.agenda, out.Resumed = resumedAgenda(surf.agenda, resume.Agenda)
 		surf.reads = lastRead(resume.Reads)
 		surf.kept = slices.Clone(resume.Reads)
-		surf.line(fmt.Sprintf("Picked up where it stopped: %d of %d questions already answered", out.Resumed,
-			len(surf.agenda)))
+		surf.line(Progress{Step: advisordomain.ProgressNote, Text: fmt.Sprintf(
+			"Picked up where it stopped: %d of %d questions already answered", out.Resumed, len(surf.agenda))})
 	}
 	runCtx, cancel := context.WithTimeout(ctx, time.Duration(b.Minutes)*time.Minute)
 	defer cancel()
@@ -472,7 +478,7 @@ func (s *deepSurface) snapshot() (toolloop.ToolResult, error) {
 	if again {
 		return toolloop.ToolResult{Output: "You read the snapshot already: look at snapshot.<path> for any part of it."}, nil
 	}
-	s.line("Reading the company's numbers")
+	s.line(Progress{Step: advisordomain.ProgressRead, Text: "Reading the company's numbers", Detail: SnapshotTool})
 	raw, err := json.Marshal(s.data.Snapshot)
 	if err != nil {
 		return toolloop.ToolResult{}, err
@@ -582,13 +588,14 @@ func (s *deepSurface) read(ctx context.Context, args map[string]any) (toolloop.T
 			"part of it.", before, before)}, nil
 	}
 	said := s.readSaid(name, params)
-	s.line("Reading " + said)
+	s.line(Progress{Step: advisordomain.ProgressRead, Text: "Reading " + said, Detail: asking})
 	answer, err := s.data.Reads.Answer(ctx, name, params)
 	if err != nil {
 		s.mu.Lock()
 		s.failed[name] = true
 		s.mu.Unlock()
-		s.line("Could not read " + said)
+		s.line(Progress{Step: advisordomain.ProgressRead, Failed: true, Text: "Could not read " + said,
+			Detail: asking, Why: err.Error()})
 		return toolloop.ToolResult{Failed: true, Cause: mcp.RefusalInvalid,
 			Output: fmt.Sprintf("%s could not be read: %v", name, err)}, nil
 	}
@@ -695,7 +702,7 @@ func (s *deepSurface) say(args map[string]any) toolloop.ToolResult {
 	s.mu.Lock()
 	s.said++
 	s.mu.Unlock()
-	s.line(text)
+	s.line(Progress{Step: advisordomain.ProgressNote, Text: text})
 	return toolloop.ToolResult{Output: "shown"}
 }
 
@@ -703,13 +710,16 @@ func (s *deepSurface) say(args map[string]any) toolloop.ToolResult {
 // many as one read of its progress answers, so its whole trail is read.
 const maxRunLines = advisordomain.MaxProgressLines
 
-// line keeps one progress line and tells it, cut to one plain short line.
-func (s *deepSurface) line(text string) {
-	text = strings.Join(strings.Fields(text), " ")
+// line keeps one step and tells it, its text cut to one plain short line and
+// its detail and why to one line within the log's bound.
+func (s *deepSurface) line(p Progress) {
+	text := strings.Join(strings.Fields(p.Text), " ")
 	if r := []rune(text); len(r) > maxProgressRunes {
 		text = string(r[:maxProgressRunes-1]) + "…"
 	}
-	line := Progress{At: s.now().UTC(), Text: text}
+	line := Progress{At: s.now().UTC(), Text: text, Step: p.Step, Failed: p.Failed,
+		Detail: cut(strings.Join(strings.Fields(p.Detail), " "), advisordomain.MaxProgressBytes),
+		Why:    cut(strings.Join(strings.Fields(p.Why), " "), advisordomain.MaxProgressBytes)}
 	s.mu.Lock()
 	if len(s.lineList) >= maxRunLines {
 		s.mu.Unlock()
@@ -775,10 +785,12 @@ func (s *deepSurface) verdict(args map[string]any) toolloop.ToolResult {
 	}
 	s.mu.Lock()
 	s.agenda[at].Verdict, s.agenda[at].Note, s.agenda[at].Numbers, s.agenda[at].Read = Verdict(v), note, numbers, read
+	asked := s.agenda[at].ID + " " + s.agenda[at].Question
 	left := open(s.agenda)
 	s.mu.Unlock()
 	s.keep()
-	s.line(verdictWords[Verdict(v)] + ": " + note)
+	s.line(Progress{Step: advisordomain.ProgressVerdict, Failed: Verdict(v) == VerdictUnreadable,
+		Text: verdictWords[Verdict(v)] + ": " + note, Detail: asked})
 	return toolloop.ToolResult{Output: fmt.Sprintf("recorded; %d items still have no verdict", len(left))}
 }
 
@@ -808,7 +820,7 @@ func (s *deepSurface) add(args map[string]any) toolloop.ToolResult {
 	s.agenda = append(s.agenda, AgendaItem{ID: id, Source: AgendaModel, Question: question, Numbers: []AgendaNumber{}})
 	s.mu.Unlock()
 	s.keep()
-	s.line("New question: " + question)
+	s.line(Progress{Step: advisordomain.ProgressQuestion, Text: "New question: " + question, Detail: id})
 	return toolloop.ToolResult{Output: fmt.Sprintf("added as %s; it needs a verdict too", id)}
 }
 
