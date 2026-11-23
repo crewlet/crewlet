@@ -2128,7 +2128,7 @@ Codex's profile also declares its **device-code sign-in** (`device_login_args`: 
 cli_auth_credentials_store=file`, pinned to the file store so a host whose Codex config selects the keyring cannot leave
 `auth.json` empty), which the engine runs with **no terminal**. It runs in the entry's login home like the command above, reads what Codex prints on either stream with its colour stripped, and relays two things, once: the address to open (`https://auth.openai.com/codex/device`) and the one-time code to enter there. Nothing is pasted back through Crewlet: the person approves at OpenAI, Codex polls and writes its own `auth.json`, and the engine carries that file into `credentials/` as it carries any login, with a new [install record](#the-newest-login-wins). Exported to the secret store, that login replaces the older login every other node holds at its next apply.
 
-The code lapses after the lifetime Codex prints (`expires in 15 minutes`), or 15 minutes where it prints none; the engine waits that long and 30 seconds more for the approval, then stops Codex and its process group and signs nothing in. A Codex that prints no code within a minute is stopped. How a session ended, with the harness's own line where it failed, is kept fleet-wide in a record of at most 16 KiB that every node reads: a longer line is cut to its head, marked as cut. The sign-in is refused for an entry whose calls read no login (`auth.mode: api-key` or `env`, or `inherit-env` with the key in the engine's environment), since nothing it stored would sign a call in.
+The code lapses after the lifetime Codex prints (`expires in 15 minutes`), or 15 minutes where it prints none; the engine waits that long and 30 seconds more for the approval, then stops Codex and its process group and signs nothing in. A Codex that prints no code within a minute is stopped. How a session ended, with the harness's own line where it failed, is kept fleet-wide in a record of at most 16 KiB that every node reads: a longer line is cut to its head, marked as cut. A revision that removes the model ends its sign-in on the node running it and deletes its record; a login approved after the removal is not stored. The sign-in is refused for an entry whose calls read no login (`auth.mode: api-key` or `env`, or `inherit-env` with the key in the engine's environment), since nothing it stored would sign a call in.
 
 **One `crewlet llm` command at a time per state directory and harness.** `login`, `status` and a vendor's own `logout` all run the harness in the same login home, rebuilt from the shared login for each command and emptied after it, so a second one started while the first runs (a `status` in another terminal while a login waits on its browser flow) is refused at once with a message saying so, rather than pruning the database the sign-in is about to store its login in. Entries that share a `state_dir` and drive one harness share one login home, so a command for one refuses a command for the other.
 
@@ -3118,6 +3118,11 @@ target that runs on the model, asks where each moves (another model, or unset, w
 an unset job does), shows where a job that named nothing lands now, and removes the model and every
 repoint as one revision
 ([the route](../reference/api-endpoints.md#delete-configllm-providersid-remove-a-model-and-repoint-what-names-it)).
+Its stored sign-in goes with it by default: the API key, subscription token or credential bundle
+(a device sign-in's login included) it read, each deleted once the revision is written. A value
+another model, an MCP server or an integration still reads stays, and the flow says so. Deleting
+takes `secrets.write`, so a caller without it removes the model and leaves its values in
+Settings › Secrets. A device sign-in still running for the model ends, and stores no login.
 
 **Suggestions without a credential.** The model step lists each vendor's models from the public
 [models.dev](https://models.dev) catalogue, the harness's aliases and the vendor's model page;

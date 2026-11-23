@@ -1758,11 +1758,12 @@ for an integration under the same name (`github`, `gitlab`, `datadog`,
 The values a server and its blocks read are `${VAR}` references into the
 credential store. Once it is gone some are read by nothing, and the dry run
 lists those the store holds under `dependants.secrets`; name any in
-`"delete_secrets"` and they are deleted once the removal is written. Only
-those: a value another server, a seat's integration or a model still reads is
-refused, since deleting it would sign that reader out. Deleting a value also
-takes `secrets.write`, so Ask Crewlet can remove a server and leaves its values
-to you. The whole request and its answers are in
+`"delete_secrets"` and they are deleted once the removal is written. A value
+another server, a seat's integration or a model still reads is listed under
+`dependants.kept_secrets` with where it is read, and stays even when named,
+since deleting it would sign that reader out. Deleting a value also takes
+`secrets.write`, so Ask Crewlet can remove a server and leaves its values to
+you. Removing a model works the same way. The whole request and its answers are in
 [the API reference](../reference/api-endpoints.md#delete-configmcp-serversid-remove-an-mcp-server-and-clear-what-names-it).
 
 A server the company is [signed in to with OAuth](#signing-in-with-oauth) gives

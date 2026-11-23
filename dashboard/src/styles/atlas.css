@@ -97,11 +97,6 @@
   font-size: var(--font-size-xs);
   white-space: nowrap;
 }
-.atlas-band__attention {
-  display: grid;
-  gap: var(--spacing-2);
-  grid-template-columns: repeat(auto-fit, minmax(min(12rem, 100%), 1fr));
-}
 .atlas-band__entry {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
