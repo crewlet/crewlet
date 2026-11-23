@@ -96,18 +96,15 @@ func integrityOf(body []byte) string {
 // THE STAND-IN REGISTRY SERVES THE LOCK'S BYTES: each path the lock resolves
 // a package at serves bytes whose SHA-512 is the lock's integrity, read from
 // the npm cache of the suite's tree, which npm itself checked going in;
-// Corrupt serves the core's with one byte changed, still inflating to the
-// tarball it was, so integrity is the one check that can refuse it, and the
-// others whole;
-// NotFound and Fail answer 404 and 500; Stall declares a tarball's whole
-// length and sends its first half; Hang holds a request, which it witnesses
-// as held, and answers it only with its end; and every request is recorded,
-// as its method and path. What npm makes of a hang and a stall, the install
+// Corrupt serves the core's with one byte changed, inflating to the core's own
+// tarball, and the others whole; NotFound and Fail answer 404 and 500; Stall
+// declares a tarball's whole length and sends its first half; Hang holds a
+// request, which it witnesses as held, and answers it only with its end; and
+// every request is recorded. What npm makes of a hang and a stall, the install
 // cases hold.
 //
-// Mutations, each red: serve another content path; Corrupt flipping no byte;
-// Corrupt flipping a byte of the deflate data;
-// Hang answering at once (it answers before it holds the request).
+// Mutations, each red: serve another content path; Corrupt flipping no byte,
+// or one of the deflate data; Hang answering at once.
 func TestTheStandInRegistryServesTheLocksBytes(t *testing.T) {
 	t.Parallel()
 	paths := locked(t)
