@@ -614,11 +614,20 @@ export function scopeChoices(lane: Lane, held: string[] | undefined): ScopeChoic
   for (const id of held ?? []) if (!ids.includes(id)) ids.push(id);
   return ids.map((id) => {
     const label = scopeLabel(lane, id);
-    const quiet = [label === id ? "" : id, lane.scope_details?.[id] ?? ""]
-      .filter(Boolean)
-      .join(" · ");
+    const quiet = scopeQuiet(lane, id);
     return quiet ? { value: id, label, description: quiet } : { value: id, label };
   });
+}
+
+/**
+ * An entry's secondary text under or beside its name: the identifier where the
+ * name differs from it, and the vendor's second identifier (an app's bundle
+ * ID). Empty where the name is the identifier and the vendor gives no other.
+ */
+export function scopeQuiet(lane: Lane, id: string): string {
+  return [scopeLabel(lane, id) === id ? "" : id, lane.scope_details?.[id] ?? ""]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 /** What a scope picker says in place of itself, and where a person makes an entry to offer. */
