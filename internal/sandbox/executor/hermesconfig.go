@@ -138,6 +138,8 @@ func hermesSkillDir(s sandbox.Skill) string { return s.Listed() }
 // ([withNoteInstruction]).
 func (h Hermes) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
 	paths Paths) (string, error) {
+	// EVERY REFUSAL BEFORE THE BOX IS TOUCHED: a refused launch leaves the
+	// box as it found it, as every runner's WriteConfig does.
 	system := req.System
 	if req.Steer.Set() {
 		system = withNoteInstruction(system, h.NoteInstruction())
@@ -147,74 +149,75 @@ func (h Hermes) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbo
 			"one environment variable, which holds %d; shorten the seat's instructions or memory", len(system),
 			hermesSystemMaxBytes)
 	}
-	write := func(path string, body []byte, what string) error {
-		if err := box.WriteFile(ctx, path, body); err != nil {
-			return fmt.Errorf("executor: writing %s: %w", what, err)
-		}
-		return nil
-	}
-	if system != "" {
-		if err := write(paths.System(), []byte(system), "Hermes's standing instructions"); err != nil {
-			return "", err
-		}
-	}
 	overlay, err := hermesOverlay(req.MCPServers, req.WebDenied)
 	if err != nil {
 		return "", err
 	}
-	if err = write(paths.HermesOverlayStaged(), overlay, "Hermes's overlay"); err != nil {
-		return "", err
-	}
+	var fresh []byte
 	if f := req.FreshWiring; f != nil {
 		if f.Steer.Set() != req.Steer.Set() || (len(req.Skills) > 0 && !f.SkillLoads.Set()) {
 			return "", errors.New("executor: the run's two wirings, for the session it continues and for " +
 				"one of its own, do not reach the same routes, so the run cannot be wired to whichever " +
 				"session its box starts")
 		}
-		fresh, err := hermesOverlay(f.MCPServers, req.WebDenied)
-		if err != nil {
+		if fresh, err = hermesOverlay(f.MCPServers, req.WebDenied); err != nil {
 			return "", err
 		}
-		if err = write(paths.HermesOverlayFresh(), fresh, "Hermes's overlay for a session of the run's own"); err != nil {
-			return "", err
-		}
-		if err = hermesRoutes(write, req, *f, paths.HermesNotesURLFresh(), paths.HermesSkillsURLFresh()); err != nil {
-			return "", err
-		}
-	}
-	wired := sandbox.Wiring{Steer: req.Steer, SkillLoads: req.SkillLoads}
-	if err = hermesRoutes(write, req, wired, paths.HermesNotesURL(), paths.HermesSkillsURL()); err != nil {
-		return "", err
 	}
 	settings, err := hermesPluginSettings(req, paths)
 	if err != nil {
 		return "", err
 	}
 	stage := paths.HermesStage()
-	for _, f := range []struct {
-		path string
-		body []byte
-		what string
-	}{
+	files := []hermesFile{
+		{paths.HermesOverlayStaged(), overlay, "Hermes's overlay"},
 		{paths.HermesPluginConfig(), settings, "the Hermes plugin's settings"},
 		{stage + "/plugin/plugin.yaml", []byte(hermesPluginManifest), "the Hermes plugin's manifest"},
 		{stage + "/plugin/__init__.py", hermesPluginSource, "the Hermes plugin"},
 		{paths.HermesCarry(), hermesCarryScript, "the Hermes session reader"},
-	} {
-		if err = write(f.path, f.body, f.what); err != nil {
-			return "", err
-		}
+	}
+	if system != "" {
+		files = append(files, hermesFile{paths.System(), []byte(system), "Hermes's standing instructions"})
 	}
 	for _, s := range req.Skills {
 		file, err := skillFile(s.Listed(), s.Description, s.Body)
 		if err != nil {
 			return "", err
 		}
-		if err = write(stage+"/skills/"+hermesSkillDir(s)+"/SKILL.md", file, fmt.Sprintf("the run's skill %q", s.Listed())); err != nil {
+		files = append(files, hermesFile{stage + "/skills/" + hermesSkillDir(s) + "/SKILL.md", file, fmt.Sprintf("the run's skill %q", s.Listed())})
+	}
+	write := func(path string, body []byte, what string) error {
+		if err := box.WriteFile(ctx, path, body); err != nil {
+			return fmt.Errorf("executor: writing %s: %w", what, err)
+		}
+		return nil
+	}
+	for _, f := range files {
+		if err := write(f.path, f.body, f.what); err != nil {
 			return "", err
 		}
 	}
+	if f := req.FreshWiring; f != nil {
+		if err := write(paths.HermesOverlayFresh(), fresh, "Hermes's overlay for a session of the run's own"); err != nil {
+			return "", err
+		}
+		if err := hermesRoutes(write, req, *f, paths.HermesNotesURLFresh(), paths.HermesSkillsURLFresh()); err != nil {
+			return "", err
+		}
+	}
+	wired := sandbox.Wiring{Steer: req.Steer, SkillLoads: req.SkillLoads}
+	if err := hermesRoutes(write, req, wired, paths.HermesNotesURL(), paths.HermesSkillsURL()); err != nil {
+		return "", err
+	}
 	return "", nil
+}
+
+// hermesFile is one file WriteConfig writes: its path, its body and what it
+// is, as an error names it.
+type hermesFile struct {
+	path string
+	body []byte
+	what string
 }
 
 // hermesRoutes writes the routes w gives the plugin of req's run to notes and
