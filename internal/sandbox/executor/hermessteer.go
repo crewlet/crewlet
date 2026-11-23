@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
+	"strconv"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -69,15 +71,20 @@ func hermesSteered(text string) (string, bool) {
 	return "", false
 }
 
-// notesHeld is the inbox ids of takes whose item Hermes's record of session
-// holds as a steered note, matched by its text's digest ([ItemDigest]): the
-// plugin never confirms, so the record is the one confirm path
-// ([recordConfirmer]). The record is the box's session store, dumped as the
-// pack dumps it ([hermesCarryScript]).
+// notesHeld is the inbox ids of takes, in serve order, that Hermes's record
+// of session shows the model was sent in this launch ([hermesNotesHeld]). The
+// record is the box's session store, dumped as the pack dumps it
+// ([hermesCarryScript]); where the launch began is the box's record of it
+// ([Paths.HermesRunStart]). The plugin never confirms, so the record is the
+// one confirm path ([recordConfirmer]).
 func (Hermes) notesHeld(ctx context.Context, box sandbox.Sandbox, session Session,
 	takes []ServedTake) ([]string, error) {
 	if !sandbox.ValidSessionID(session.ID) {
 		return nil, fmt.Errorf("executor: %q is no Hermes session the run named", session.ID)
+	}
+	from, err := hermesRunFrom(ctx, box, session.ID)
+	if err != nil {
+		return nil, err
 	}
 	paths := PathsFor(box)
 	q := shellword.Quote
@@ -96,24 +103,107 @@ func (Hermes) notesHeld(ctx context.Context, box sandbox.Sandbox, session Sessio
 		return nil, fmt.Errorf("executor: opening Hermes's record of session %s: %w", session.ID, err)
 	}
 	defer func() { _ = body.Close() }()
-	recorded := map[string]bool{}
-	err = hermesRows(body, func(row hermesRow) error {
-		if row.Table != "messages" || row.Message.Role != "user" {
-			return nil
-		}
-		if note, ok := hermesSteered(row.Message.text()); ok {
-			recorded[ItemDigest(note)] = true
-		}
-		return nil
-	}, nil)
+	held, err := hermesNotesHeld(body, takes, from)
 	if err != nil {
 		return nil, fmt.Errorf("executor: reading Hermes's record of session %s: %w", session.ID, err)
 	}
-	var held []string
-	for _, take := range takes {
-		if recorded[take.Digest] {
-			held = append(held, take.InboxID)
+	return held, nil
+}
+
+// hermesRunFrom is the newest message id the store held as the box's last
+// launch began, off its record ([Paths.HermesRunStart]). One that cannot be
+// read, does not parse or names another session is an error, never 0: from 0,
+// an earlier launch's rows would confirm a note this launch lost, so the take
+// stays undecided instead.
+func hermesRunFrom(ctx context.Context, box sandbox.Sandbox, session string) (int64, error) {
+	path := PathsFor(box).HermesRunStart()
+	raw, err := box.ReadFile(ctx, path)
+	if err != nil {
+		return 0, fmt.Errorf("executor: reading where the run began in its Hermes session (%s): %w", path, err)
+	}
+	id, count, ok := strings.Cut(strings.TrimSpace(string(raw)), " ")
+	n, atoiErr := strconv.ParseInt(count, 10, 64)
+	switch {
+	case !ok || atoiErr != nil || n < 0:
+		return 0, fmt.Errorf("executor: %s says %q, not a session and a message id", path, raw)
+	case id != session:
+		return 0, fmt.Errorf("executor: %s names the session %q, and the run's is %s: the box ran another "+
+			"session since", path, id, session)
+	}
+	return n, nil
+}
+
+// hermesNotesHeld is the inbox ids of takes, in serve order, whose items the
+// record r holds as notes the model was sent: each active user row above from
+// (this launch's own), shown as a steer and framed, holds the notes steered
+// before one request, each stripped and joined by a newline (measured on
+// 0.23.3: three notes steered during one tool call are one row), so it matches
+// the next takes whose digests its newline-bounded parts give, in order; two
+// takes of identical words need two parts. A
+// match is settled only by an active assistant row stored after it, the reply
+// to a request that carried it (measured on 0.23.3: the steered note rides the
+// next request after the tool result, and its row is stored before that reply's,
+// though stamped later); one no reply follows is not held, so it is served
+// again. A row past [hermesRowMaxBytes] drops every pending match.
+func hermesNotesHeld(r io.Reader, takes []ServedTake, from int64) ([]string, error) {
+	type match struct {
+		inbox string
+		row   int64
+	}
+	var settled []string
+	var pending []match
+	next := 0
+	err := hermesRows(r, func(row hermesRow) error {
+		m := row.Message
+		if row.Table != "messages" || m.ID <= from || !m.active() {
+			return nil
+		}
+		switch {
+		case m.Role == "assistant":
+			kept := pending[:0]
+			for _, p := range pending {
+				if p.row < m.ID {
+					settled = append(settled, p.inbox)
+				} else {
+					kept = append(kept, p)
+				}
+			}
+			pending = kept
+		case m.Role == "user" && m.DisplayKind != nil && *m.DisplayKind == "steer":
+			inner, ok := hermesSteered(m.text())
+			for ok && inner != "" && next < len(takes) {
+				var rest string
+				rest, ok = hermesNextNote(inner, takes[next].Digest)
+				if ok {
+					pending = append(pending, match{takes[next].InboxID, m.ID})
+					inner = rest
+					next++
+				}
+			}
+		}
+		return nil
+	}, func() error {
+		pending = pending[:0]
+		return nil
+	})
+	return settled, err
+}
+
+// hermesNextNote cuts from joined (notes joined by newlines) the shortest
+// leading part, ending at a newline or at its end, whose digest is digest, and
+// returns what follows it; a note's own newlines are tried past, so a note of
+// several lines still matches whole.
+func hermesNextNote(joined, digest string) (string, bool) {
+	for i := 0; i <= len(joined); i++ {
+		if i < len(joined) && joined[i] != '\n' {
+			continue
+		}
+		if ItemDigest(joined[:i]) == digest {
+			if i == len(joined) {
+				return "", true
+			}
+			return joined[i+1:], true
 		}
 	}
-	return held, nil
+	return joined, false
 }

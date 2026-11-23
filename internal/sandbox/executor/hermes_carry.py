@@ -9,11 +9,16 @@
 #                                                   POLICY
 #   hermes_carry.py overlay STAGED MANAGED          the run's managed scope at MANAGED: the box's own with
 #                                                   STAGED's keys over it
+#   hermes_carry.py top DB                          the store's newest message id (0 for none), where a
+#                                                   launch's own rows begin
+#   hermes_carry.py route DB TITLE                  whether the box's model route (provider, base URL) is the
+#                                                   one Hermes froze with the session titled TITLE
 #
 # Run under Hermes's own interpreter through its launcher (`hermes --run-module cProfile -o /dev/null`),
 # which keeps no exit status, so every command ends on one line of its own on stdout: `crewlet-carry ok`
-# (with the restored session's stored id after a restore), or `crewlet-carry none` where the store holds
-# no session of that title. Anything else is a failure, its traceback on stderr.
+# (with the restored session's stored id after a restore, the id after top), or `crewlet-carry none` where
+# the store holds no session of that title (or, for renew, no launch Hermes froze with it; for route, another
+# route). Anything else is a failure, its traceback on stderr.
 #
 # A dump is JSON lines: the store's schema ({"ddl", "kind"}, never the full-text index's own tables, which
 # its triggers fill again), the store's own bookkeeping rows whole, then the session's rows ({"t", "r"}),
@@ -25,7 +30,11 @@ import os
 import sqlite3
 import sys
 
-WHOLE = ("schema_version", "state_meta", "runtime_epoch")
+WHOLE = ("schema_version", "runtime_epoch")
+# state_meta keys of one session or one admission, carried only for the dumped lineage's own.
+POLICY_KEY = "gateway.local_policy.v1:%s"
+ADMISSION_KEY = "gateway.admission.result.v1.%s"
+PER_SESSION = ("gateway.local_policy.v1:", "gateway.admission.result.v1.")
 SESSION_ROWS = (("messages", "session_id"), ("session_model_usage", "session_id"),
                 ("session_admissions", "target_session_id"))
 INDEX_SUFFIXES = ("_config", "_data", "_docsize", "_idx", "_content")
@@ -39,16 +48,42 @@ def dec(v):
     return base64.b64decode(v["$b64"]) if isinstance(v, dict) and "$b64" in v else v
 
 
+def continues(parent_end, source, model_config, parent):
+    """Whether a child session is its parent's compaction continuation, as 0.23.3's
+    lineage.is_compression_child reads it: the parent ended "compression", the child is no tool's, and no
+    branch, delegation or reset marker names the parent. A delegated subagent's session names its parent
+    too, and is not the conversation the run's notes and transcript come from."""
+    try:
+        config = json.loads(model_config) if model_config else {}
+    except ValueError:
+        config = {}
+    config = config if isinstance(config, dict) else {}
+    markers = {config.get(k) for k in ("_branched_from", "_delegate_from", "_reset_from")}
+    return parent_end == "compression" and source != "tool" and parent not in markers
+
+
+def lineage(db, title):
+    """The session titled title and every session a compaction continued it in, oldest first."""
+    root = db.execute("select id from sessions where title = ? order by started_at limit 1", (title,)).fetchone()
+    if root is None:
+        return []
+    ids = [root[0]]
+    for sid in ids:
+        end = db.execute("select end_reason from sessions where id = ?", (sid,)).fetchone()[0]
+        ids.extend(r[0] for r in db.execute("select id, source, model_config from sessions where parent_session_id = ? "
+                                            "order by started_at", (sid,))
+                   if r[0] not in ids and continues(end, r[1], r[2], sid))
+    return ids
+
+
 def dump(db_path, title, policy_path, out_path):
     db = sqlite3.connect("file:%s?mode=ro" % db_path, uri=True)
     db.row_factory = sqlite3.Row
-    root = db.execute("select id from sessions where title = ? order by started_at limit 1", (title,)).fetchone()
-    if root is None:
+    # ONE SNAPSHOT: a live gateway may write between the reads, and a torn dump restores a turn half settled.
+    db.execute("begin")
+    ids = lineage(db, title)
+    if not ids:
         return "none"
-    ids = [root[0]]
-    for sid in ids:
-        ids.extend(r[0] for r in db.execute("select id from sessions where parent_session_id = ? order by started_at",
-                                            (sid,)) if r[0] not in ids)
     out = open(out_path, "w", encoding="utf-8")
     put = lambda o: out.write(json.dumps(o, ensure_ascii=False) + "\n")
     virtual = {r[0] for r in db.execute("select name from sqlite_master where type = 'table' and sql like 'CREATE VIRTUAL TABLE%'")}
@@ -61,6 +96,13 @@ def dump(db_path, title, policy_path, out_path):
     for table in WHOLE:
         for r in rows('select * from "%s"' % table):
             put({"t": table, "r": {k: enc(v) for k, v in r.items()}})
+    marks = ["?"] * len(ids)
+    admitted = [r[0] for r in db.execute('select admission_id from session_admissions where target_session_id in (%s)'
+                                         % ",".join(marks), ids)]
+    own = {POLICY_KEY % sid for sid in ids} | {ADMISSION_KEY % a for a in admitted}
+    for r in rows("select * from state_meta order by key"):
+        if not r["key"].startswith(PER_SESSION) or r["key"] in own:
+            put({"t": "state_meta", "r": {k: enc(v) for k, v in r.items()}})
     for sid in ids:
         for r in rows("select * from sessions where id = ?", (sid,)):
             put({"t": "sessions", "r": {k: enc(v) for k, v in r.items()}})
@@ -109,7 +151,6 @@ def restore(member, db_path, policy_path, title):
     return "ok " + stored
 
 
-POLICY_KEY = "gateway.local_policy.v1:%s"
 SYSTEM_ENV = "HERMES_EPHEMERAL_SYSTEM_PROMPT"
 
 
@@ -119,17 +160,13 @@ def renew(db_path, title, system_path):
     before the resume, with the gateway stopped."""
     try:
         with open(system_path, encoding="utf-8") as f:
-            system = f.read()
+            # As the launch's $(cat) reads it, trailing newlines dropped.
+            system = f.read().rstrip("\n")
     except FileNotFoundError:
         system = ""
     db = sqlite3.connect(db_path)
-    root = db.execute("select id from sessions where title = ? order by started_at limit 1", (title,)).fetchone()
-    if root is None:
-        return "none"
-    ids = [root[0]]
-    for sid in ids:
-        ids.extend(r[0] for r in db.execute("select id from sessions where parent_session_id = ?", (sid,)) if r[0] not in ids)
-    for sid in ids:
+    renewed = 0
+    for sid in lineage(db, title):
         row = db.execute("select value from state_meta where key = ?", (POLICY_KEY % sid,)).fetchone()
         if row is None:
             continue
@@ -140,11 +177,47 @@ def renew(db_path, title, system_path):
             env[SYSTEM_ENV] = system
         else:
             env.pop(SYSTEM_ENV, None)
+        # Written back as Hermes writes both (measured on 0.23.3): the environment spaced, the whole compact,
+        # each with its keys sorted.
         policy["client_env_json"] = json.dumps(env, sort_keys=True)
         local["policy"] = policy
-        db.execute("update state_meta set value = ? where key = ?", (json.dumps(local), POLICY_KEY % sid))
+        db.execute("update state_meta set value = ? where key = ?",
+                   (json.dumps(local, sort_keys=True, separators=(",", ":")), POLICY_KEY % sid))
+        renewed += 1
     db.commit()
-    return "ok"
+    return "ok" if renewed else "none"
+
+
+def top(db_path):
+    """The newest message id in the store: a launch's own rows are those above it."""
+    if not os.path.isfile(db_path):
+        return "ok 0"
+    db = sqlite3.connect("file:%s?mode=ro" % db_path, uri=True)
+    if db.execute("select 1 from sqlite_master where type = 'table' and name = 'messages'").fetchone() is None:
+        return "ok 0"
+    return "ok %d" % (db.execute("select coalesce(max(id), 0) from messages").fetchone()[0])
+
+
+def model_route(model):
+    """A model section's provider and base URL; a bare string names a model alone, as Hermes reads it."""
+    model = model if isinstance(model, dict) else {}
+    return model.get("provider") or "", (model.get("base_url") or "").rstrip("/")
+
+
+def route(db_path, title):
+    """Hermes keeps a session on the model route it froze as it created it, whatever the box's configuration
+    says at a resume (measured on 0.23.3: a resume under another provider and base URL still calls the frozen
+    one, and no API key is frozen), so a resume is right only on the same route. The box's route is read as
+    hermes_cli.config reads it under the box's own managed scope; the run's overlay sets no model key."""
+    os.environ.pop("HERMES_MANAGED_DIR", None)
+    from hermes_cli.config import load_config
+    db = sqlite3.connect("file:%s?mode=ro" % db_path, uri=True)
+    ids = lineage(db, title)
+    row = db.execute("select value from state_meta where key = ?", (POLICY_KEY % ids[0],)).fetchone() if ids else None
+    if row is None:
+        return "none"
+    frozen = json.loads(json.loads(row[0]).get("policy", {}).get("config_json") or "{}").get("model")
+    return "ok" if model_route(frozen) == model_route(load_config().get("model")) else "none"
 
 
 def merged(under, over):
@@ -192,12 +265,13 @@ def overlay(staged_path, managed_dir):
     return "ok"
 
 
-COMMANDS = {"dump": (dump, 4), "renew": (renew, 3), "restore": (restore, 4), "overlay": (overlay, 2)}
+COMMANDS = {"dump": (dump, 4), "renew": (renew, 3), "restore": (restore, 4), "overlay": (overlay, 2), "top": (top, 1),
+            "route": (route, 2)}
 
 if __name__ == "__main__":
     command = COMMANDS.get(sys.argv[1] if len(sys.argv) > 1 else "")
     if command is None or len(sys.argv) != command[1] + 2:
         sys.stderr.write("usage: hermes_carry.py dump DB TITLE POLICY OUT | renew DB TITLE SYSTEM | "
-                         "restore MEMBER DB POLICY TITLE | overlay STAGED MANAGED\n")
+                         "restore MEMBER DB POLICY TITLE | overlay STAGED MANAGED | top DB | route DB TITLE\n")
         sys.exit(2)
     sys.stdout.write("crewlet-carry %s\n" % command[0](*sys.argv[2:]))
