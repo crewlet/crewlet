@@ -194,6 +194,7 @@ function draw(
     readOnly?: string;
     only?: string;
     avatarOf?: (handle: string) => AgentAvatar | null;
+    scopeNote?: string;
   } = {},
 ) {
   const reload = vi.fn();
@@ -216,6 +217,7 @@ function draw(
           readOnly={over.readOnly}
           only={over.only}
           avatarOf={over.avatarOf ?? (() => null)}
+          scopeNote={over.scopeNote}
         />
       </LayerHost>
     </Router>
@@ -760,9 +762,9 @@ test("an agent's permissions are a count beside a pencil that edits them, and re
   expect([...table.querySelectorAll("svg")].map((g) => g.innerHTML)).not.toContain(PENCIL);
 });
 
-// THE PENCIL IS HELD WHERE THE COUNT'S BUTTON WAS: an agent that is off, one
-// that has left, and a tab nobody here may change.
-test("the permissions pencil is held for an agent that is off or gone, and on a held tab", () => {
+// THE PENCIL IS HELD WHERE THE COUNT'S BUTTON WAS: an agent that has left and
+// a tab nobody here may change. An agent that is off holds no access to edit.
+test("the permissions pencil is held for an agent that is gone and on a held tab, and absent while off", () => {
   const data = githubAnswer();
   data.seats.push(seat("pm", "PM", { github: offLane() }));
   data.seats.push({
@@ -779,7 +781,7 @@ test("the permissions pencil is held for an agent that is off or gone, and on a 
     (screen.getByRole("button", { name: `Edit ${who}'s GitHub permissions` }) as HTMLButtonElement)
       .disabled;
   expect(held("QA")).toBe(false);
-  expect(held("PM")).toBe(true);
+  expect(screen.queryByRole("button", { name: "Edit PM's GitHub permissions" })).toBeNull();
   expect(held("Ops")).toBe(true);
   cleanup();
   draw(githubAnswer(), { held: "Admins change an agent's access." });
@@ -913,7 +915,9 @@ test("a lane managed outside Crewlet keeps its switch and says so in place of a 
   data.options = [{ ...data.options[0]!, managed: "external" }];
   data.seats[2]!.lanes.datadog!.observed.credential = undefined;
   draw(data);
-  expect(screen.getAllByText("Managed outside Crewlet").length).toBe(3);
+  // THE ON AGENT SAYS SO; the two that are off hold no access to say anything of.
+  expect(screen.getAllByText("Managed outside Crewlet").length).toBe(1);
+  expect(screen.getAllByText("None while off").length).toBe(2);
   expect(screen.queryByRole("combobox")).toBeNull();
   expect(screen.getByRole("switch", { name: "QA on Datadog" })).toBeTruthy();
   details("SRE");
@@ -1498,9 +1502,9 @@ test("a long repository list is searched, and offers only what the installation 
   expect(within(dialog).queryByRole("button", { name: /^Add/ })).toBeNull();
 });
 
-// THE CONTROL IS HELD WHERE THE INLINE FIELD WAS: an agent that is off or
-// gone, and a held tab; a read-only tab draws the choice alone.
-test("the repositories control is held for an agent that is off or gone, on a held tab, and absent read-only", () => {
+// THE CONTROL IS HELD WHERE THE INLINE FIELD WAS: an agent that is gone, and
+// a held tab; a read-only tab draws the choice alone, and an off agent none.
+test("the repositories control is held for an agent that is gone and on a held tab, and absent read-only or off", () => {
   const data = githubAnswer();
   data.seats.push(seat("pm", "PM", { github: offLane() }));
   data.seats.push({
@@ -1520,7 +1524,7 @@ test("the repositories control is held for an agent that is off or gone, on a he
   const held = (name: string) =>
     (screen.getByRole("button", { name }) as HTMLButtonElement).disabled;
   expect(held("Edit QA's GitHub repositories")).toBe(false);
-  expect(held("Choose PM's GitHub repositories")).toBe(true);
+  expect(screen.queryByRole("button", { name: "Choose PM's GitHub repositories" })).toBeNull();
   expect(held("Edit Ops's GitHub repositories")).toBe(true);
   cleanup();
   draw(githubAnswer(), { held: "Admins change an agent's access." });
@@ -1561,6 +1565,59 @@ test("a scope entry is picked by its name, with its identifier beneath, and the 
   fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
   const review = await screen.findByRole("dialog");
   expect(within(review).getByText("Engineering and Operations")).toBeTruthy();
+});
+
+// AN OFF AGENT HOLDS NO ACCESS, so its Access and Apps cells read a dash, not
+// the level and apps it would get once on; turning it on brings both back.
+// Mutation: drop `offRow` from either cell and "View" or "Field Notes" is
+// back in the off row.
+test("an off agent's access and apps read a dash until it is turned on", () => {
+  const data = appStoreConnectAnswer();
+  const pm = offLane("read");
+  pm.desired.scope = ["6763222842"];
+  data.seats.push(seat("pm", "PM", { app_store_connect: pm }));
+  draw(data);
+  const row = screen
+    .getByRole("switch", { name: "PM on App Store Connect" })
+    .closest<HTMLElement>('[role="row"]')!;
+  expect(within(row).getAllByText("None while off")).toHaveLength(2);
+  expect(within(row).queryByText("View")).toBeNull();
+  expect(within(row).queryByText("Field Notes")).toBeNull();
+  expect(within(row).queryByRole("button")).toBeNull();
+  fireEvent.click(screen.getByRole("switch", { name: "PM on App Store Connect" }));
+  expect(within(row).queryByText("None while off")).toBeNull();
+  expect(within(row).getByRole("combobox", { name: "PM's App Store Connect access" })).toBeTruthy();
+  expect(
+    within(row).getByRole("button", { name: "Edit PM's App Store Connect apps" }),
+  ).toBeTruthy();
+});
+
+// AN APP IS ITS NAME, WITH ITS IDS AS SECONDARY TEXT; where the names cannot be
+// read, why (and the key to add) is said once over the agents and in the
+// chooser, where the bare IDs are. Mutation: drop `scopeQuiet` from the chip's
+// title, or the note from either place, and its line below fails.
+test("an app reads by name with its IDs beside it, and missing names say why once", async () => {
+  draw(appStoreConnectAnswer(), { scopeNote: "Add a key of any role but Admin" });
+  expect(cellWith("Field Notes").querySelector("[title]")?.getAttribute("title")).toBe(
+    "Field Notes · 6763222842 · com.example.notes",
+  );
+  expect(screen.getAllByText("Add a key of any role but Admin.")).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: "Edit Growth's App Store Connect apps" }));
+  const dialog = await screen.findByRole("dialog", { name: "Growth's App Store Connect apps" });
+  expect(within(dialog).getByText("Add a key of any role but Admin.")).toBeTruthy();
+});
+
+// THE REASON STANDS BESIDE A REFUSAL, not in its place: an agent just turned
+// on with no app yet is told to choose one and why the names are missing.
+test("the chooser says why names are missing while it asks for an app", async () => {
+  const data = appStoreConnectAnswer();
+  data.seats.push(seat("pm", "PM", { app_store_connect: offLane("read") }));
+  draw(data, { scopeNote: "Add a key of any role but Admin" });
+  fireEvent.click(screen.getByRole("switch", { name: "PM on App Store Connect" }));
+  fireEvent.click(screen.getByRole("button", { name: "Choose PM's App Store Connect apps" }));
+  const dialog = await screen.findByRole("dialog", { name: "PM's App Store Connect apps" });
+  expect(dialog.textContent).toContain("Choose at least one app for PM");
+  expect(dialog.textContent).toContain("Add a key of any role but Admin.");
 });
 
 // AN APP IS CHOSEN BY ITS NAME: the engine reads the apps the team's keys
@@ -1948,8 +2005,8 @@ test("a Google Cloud project reads by its name, and none set up links to prepari
   const none = googleCloudAnswer(undefined, { scope: [], scope_names: {} });
   none.seats[1]!.lanes.google_cloud!.desired.scope = [];
   redraw(none);
-  // EVERY ROW SAYS IT, the off one too, since its picker is where it would be.
-  expect(screen.getAllByText(/No projects are set up for Crewlet yet/)).toHaveLength(2);
+  // THE ON ROW SAYS IT, where its picker would be; the off row holds nothing.
+  expect(screen.getAllByText(/No projects are set up for Crewlet yet/)).toHaveLength(1);
   for (const link of screen.getAllByRole("link", { name: /Prepare a project/ })) {
     expect(link.getAttribute("href")).toBe(
       "https://docs.crewlet.ai/engine/latest/integrations/google-cloud/#prepare-a-project-for-crewlet",

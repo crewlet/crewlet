@@ -93,7 +93,6 @@ type codexRollout struct {
 	limits                      codexLimits
 	hasLimits                   bool
 	turns                       []codexTurnUsage
-	userMessages                []string
 	torn                        bool
 }
 
@@ -189,13 +188,6 @@ func (r codexRollout) Usage() codexTokens {
 	return sum
 }
 
-// UserMessages is the text of every message a person's words went in as, in
-// order: each top-level response_item that [codexPersonsMessage] reads as
-// one, its input_text parts joined. Never anything inside a `compacted` line
-// (ADR-0177: a note found only in a summary is never held), and never the
-// summary, which Codex writes as a user message of its own kind.
-func (r codexRollout) UserMessages() []string { return r.userMessages }
-
 // Torn reports that the rollout's last line had no newline: a line Codex was
 // still writing, left unread.
 func (r codexRollout) Torn() bool { return r.torn }
@@ -261,7 +253,7 @@ type codexItemMeta struct {
 }
 
 // codexPersonsMessage is THE ONE RULE for a message whose words are a
-// person's (a brief or a steered note), as both [codexRollout.UserMessages]
+// person's (a brief or a steered note), as both [codexConversation]
 // and the transcript read it: role `user`, and every part's kind `user.text`;
 // where Codex records no kinds, no part's provenance `harness`. Codex writes
 // its compaction summary, its environment context and a hook's prompt as
@@ -392,11 +384,6 @@ func (r *codexRollout) take(line codexLine, turnAt map[string]int) {
 		var tc codexTurnContextWire
 		if wireDecode(line.Payload, &tc) == nil && tc.Model != "" {
 			r.model = tc.Model
-		}
-	case "response_item":
-		var item codexItemWire
-		if wireDecode(line.Payload, &item) == nil && item.Type == "message" && codexPersonsMessage(item.Role, item.Meta) {
-			r.userMessages = append(r.userMessages, item.text())
 		}
 	case "token_usage_record":
 		var rec codexUsageRecordWire

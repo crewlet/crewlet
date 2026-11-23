@@ -2,6 +2,8 @@ package executor
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -83,4 +85,23 @@ func skillFile(name, description, body string) ([]byte, error) {
 		return nil, err
 	}
 	return []byte("---\nname: " + n + "\ndescription: " + d + "\n---\n\n" + body), nil
+}
+
+// skillDigests is each of skills as the note helper's -skill-digest:
+// `<listed name>=<SHA-256 hex>` of the SKILL.md [skillFile] makes, which Codex's
+// and Grok Build's runners write, handed on the helper's command line, which is
+// fixed before the model runs (the digests of the skills' words, no secret). A
+// skill whose file cannot be made is one WriteConfig refused the run for,
+// before any script.
+func skillDigests(skills []sandbox.Skill) []string {
+	out := make([]string, 0, len(skills))
+	for _, s := range skills {
+		file, err := skillFile(s.Listed(), s.Description, s.Body)
+		if err != nil {
+			continue
+		}
+		sum := sha256.Sum256(file)
+		out = append(out, s.Listed()+"="+hex.EncodeToString(sum[:]))
+	}
+	return out
 }

@@ -17,6 +17,7 @@
 // or, for a harness whose hook runs it once per firing (once.go):
 //
 //	notehelper -adapter muse-hook -config $RUN/muse-take.json -slot 1
+//	notehelper -adapter grok-hook -config $RUN/grok-take.json
 //
 // # What it does
 //
@@ -85,17 +86,17 @@
 //
 // # Once per firing
 //
-// A harness whose hooks run a program (Muse Code's) runs the helper once per
-// firing instead (once.go): it takes the run's notes over the bridge's
-// steer_take, as a hook that calls an MCP tool would, hands the answer over
-// through the adapter, and exits 0 whatever happened, so a firing never stops
-// the harness; a take the harness never got is told again. A Codex run's
-// script runs it once as codex-launch, which writes the root instructions of
-// the repositories checked out as the run starts, and the run's own
-// PostToolUse hook as codex-nested, which hands each one checked out since
-// its own, once (codexrepo.go). A run that continues a session runs it first
-// as codex-renew, which rewrites the standing instructions its rollout
-// replays to the run's own (codexrenew.go).
+// A harness whose hooks run a program (Muse Code's, Grok Build's) runs the
+// helper once per firing instead (once.go): it takes the run's notes over the
+// bridge's steer_take, as a hook that calls an MCP tool would, hands the
+// answer over through the adapter, and exits 0 whatever happened, so a firing
+// never stops the harness; a take the harness never got is told again. A Codex
+// run's script runs it once as codex-launch, which writes the root
+// instructions of the repositories checked out as the run starts, and the
+// run's own PostToolUse hook as codex-nested, which hands each one checked out
+// since its own, once (codexrepo.go). A run that continues a session runs
+// it first as codex-renew, which rewrites the standing instructions its
+// rollout replays to the run's own (codexrenew.go).
 //
 // # A continued Codex session's standing instructions
 //

@@ -23,6 +23,8 @@ export interface ReachWords {
   none: string;
   /** A connection the company narrows to none, whose list Crewlet has not read. */
   every: string;
+  /** The settings above already name a lone connection and its roles (an issuer and its keys). */
+  settingsSay?: boolean;
 }
 
 const REACH: Readonly<Record<string, ReachWords>> = {
@@ -30,6 +32,7 @@ const REACH: Readonly<Record<string, ReachWords>> = {
     noun: "Apps",
     none: "Reaches no app yet.",
     every: "Reaches every app its keys reach.",
+    settingsSay: true,
   },
 };
 

@@ -322,7 +322,7 @@ func codexSkillFiles(skills []sandbox.Skill) ([]codexSkill, error) {
 // every entry there but Codex's own `.system`, whatever wrote it, so a run
 // lists only its own. The note helper reports each load ([codexStartHelper]): Codex reads
 // a skill's file through its shell, which the helper sees off the app-server
-// and holds to the digest of the file as written ([codexSkillDigests]).
+// and holds to the digest of the file as written ([skillDigests]).
 func writeCodexSkills(ctx context.Context, box sandbox.Sandbox, skills []codexSkill, paths Paths) error {
 	// EVERY SKILL BUT THE RUN'S AND CODEX'S OWN `.system`: Codex lists each
 	// directory under its skills, so the run's skills are all a run lists.

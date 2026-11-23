@@ -658,6 +658,7 @@ export function ScopeDialog({
   lane,
   want,
   refused,
+  note,
   onChange,
   onClose,
 }: {
@@ -666,6 +667,8 @@ export function ScopeDialog({
   want: AccessDesired;
   /** The engine's refusal of this seat's scope, said over the list until the draft changes. */
   refused?: string | undefined;
+  /** Why the entries show by identifier and not by name, said under the list's label. */
+  note?: string | undefined;
   onChange: (scope: string[]) => void;
   onClose: () => void;
 }) {
@@ -737,7 +740,7 @@ export function ScopeDialog({
         as="fieldset"
         label={words?.noun ?? "Scope"}
         hideLabel={!alone}
-        helper={refusedScope(lane, want, seat.name) ?? undefined}
+        helper={[refusedScope(lane, want, seat.name), note].filter(Boolean).join(" ") || undefined}
         error={refused}
       >
         {shown.length > 0 ? (

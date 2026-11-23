@@ -25,6 +25,14 @@ const TestStoreDir = "/var/lib/crewlet/stream"
 // is refused on every node ([Stream.Durable]).
 const TestStreamYAML = "stream:\n  store_dir: " + TestStoreDir + "\n"
 
+// RunnerlessProfile is the `overrides` of a `custom` entry that can be handed
+// a seat's tools, as a YAML flow mapping. `custom` never gets an in-box runner
+// (#1818), so a chain of it is refused or advised about for that alone,
+// whichever vendor harness gains a runner next.
+const RunnerlessProfile = "{binary: my-cli, complete_args: [run], output: text, " +
+	"model_args: [--model, '{model}'], " +
+	"mcp: {args: [--mcp-server, '{relay_argv_json}'], concurrency: in_turn, tool_timeout_seconds: 60}}"
+
 // Runnable is a Tier A document carrying the two things every node requires
 // whatever else it says — [TestKeyringYAML] and a stream that survives a
 // restart ([TestStreamYAML]) — so that a case states what it is about and
