@@ -5028,8 +5028,8 @@ supports. Measured so on 2026-11-23: Claude Code 2.1.310 (its carry floor and
 the box image's) and 2.1.330, Codex 0.171.0 (another provider id is refused
 before any request, and none is met: a run's config names no provider),
 OpenCode 2.3.2, Gemini CLI 0.70.0, Qwen Code 0.28.4 over ACP, and Pi 1.6.0.
-Copilot, Grok Build, Muse Code and Kimi Code are not measured and continue a
-session only under the entry it ran under.
+Copilot, Grok Build, Muse Code, Kimi Code and Hermes Agent are not measured and
+continue a session only under the entry it ran under.
 
 **Mid-upgrade.** A build reading version 5 retains a version 6 capture, and
 every later record of its seat, until it is upgraded. A capture an older build
