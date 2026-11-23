@@ -55,18 +55,16 @@ func (Grok) transcript(ctx context.Context, b *transcriptBuilder, archive io.Rea
 
 // grokRecord reads one chat_history.jsonl as entries, in recorded order:
 //   - a person's prompt (a user line with its prompt_index and no
-//     synthetic_reason) is the brief, or, where it opens with an engine
-//     heading, each it carries ([headedIn]); one with a reason is Grok's own
-//     (`subagent_completed`: a background subagent ended, measured on 1.0.92);
+//     synthetic_reason) is the brief, or each engine-headed part it carries
+//     ([headedIn]); one with a reason is Grok's own (`subagent_completed`:
+//     a background subagent ended, measured on 1.0.92);
 //   - a hook's words the run's settings answered with ([grokHookWords]) each
 //     note, late call and wake it carries, without the take's token;
-//   - an assistant line is the model's words and a call each, and a tool
-//     result each call's result.
-//
-// The system message, Grok's own context and its reminders are passed over;
-// the record carries no time. A line that is no JSON is said where it was, and
-// read counts the lines of every record of the read, a subagent's included,
-// against the one bound a read has ([TranscriptBounds.ReadLines]).
+//   - an assistant line is the model's words and a call each, a tool result
+//     each call's result. The system message, Grok's context and reminders
+//     are passed over; the record carries no time. A line that is no JSON is
+//     said where it was; read counts every record's lines, a subagent's
+//     included, against [TranscriptBounds.ReadLines].
 func (b *transcriptBuilder) grokRecord(ctx context.Context, lines *bufio.Reader, read *int) error {
 	return readLines(lines, maxLineBytes, func(line []byte) error {
 		if err := ctx.Err(); err != nil {

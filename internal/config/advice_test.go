@@ -151,9 +151,9 @@ func everyRule(t *testing.T) []config.Warning {
 		"name: Acme\nproviders:\n  sandbox:\n    local:\n      image: \"example.invalid/box:1\"\n" +
 			"      run_args: [\"-e\", \"UNSET_IN_BOX\"]\n" +
 			"    default_run_in: container\n" +
-			"  llm:\n    cc: {model: sonnet}\n    grok: {model: grok-4, harness: grok}\n" +
+			"  llm:\n    cc: {model: sonnet}\n    cursor: {model: gpt-5.5, harness: cursor-agent}\n" +
 			"mcp_servers:\n  - {name: nobody, command: nobody-mcp, shared: false, access: {}}\n" +
-			"roles:\n  - name: Mixed\n    llm: [cc, grok]\n    health_tools: true\n" +
+			"roles:\n  - name: Mixed\n    llm: [cc, cursor]\n    health_tools: true\n" +
 			"    code: {access: full_access}\n" +
 			"  - {name: Founder, handle: founder, kind: human}\n",
 		// A vendor chat: a person with no account on it, and two teams in one

@@ -68,7 +68,7 @@ func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 	fired := sealedSession(t, store, "ana", gzipText(t, openCodeExport("check the services")))
 	fired.ConversationKey = notify.ScheduleConversation(types.ScheduleScopeRole, "a-1", "health-check")
 	fired.EndedAtPosition = statelog.Position{Stream: stubAt.Stream, Generation: 1, Seq: 4}
-	live := executordomain.Session{Handle: "ana", Turn: uuid.NewString(), Harness: "grok"}
+	live := executordomain.Session{Handle: "ana", Turn: uuid.NewString(), Harness: "cursor-agent"}
 	// A LIVE TURN A RELAUNCH WOULD CONTINUE, which alone sends where it would
 	// and is in progress, on the conversation whose head its first launch was
 	// handed.
