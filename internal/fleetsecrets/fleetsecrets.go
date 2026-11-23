@@ -113,6 +113,11 @@ func operatorName(name string) error {
 	return nil
 }
 
+// namesNoRow reports whether name is past [secrets.MaxNameBytes], which no
+// write stores a row under: a read or a delete of it answers absent without
+// asking the store, whose key it could not be.
+func namesNoRow(name string) bool { return len(name) > secrets.MaxNameBytes }
+
 // Set seals a value and writes it for the whole fleet, recording its author
 // and the credential beside them — see [secrets.Author] — and the write path
 // it arrived by, which [secrets.CheckSource] holds to the paths' own words.
@@ -191,6 +196,9 @@ func (s *Store) Create(ctx context.Context, name, value string, by secrets.Autho
 func (s *Store) OpOf(ctx context.Context, name string) (string, time.Time, bool, error) {
 	if err := operatorName(name); err != nil {
 		return "", time.Time{}, false, err
+	}
+	if namesNoRow(name) {
+		return "", time.Time{}, false, nil
 	}
 	rec, found, err := s.fleet.Secret(ctx, name)
 	if err != nil {
@@ -330,6 +338,9 @@ func (s *Store) Get(ctx context.Context, name string) (string, error) {
 	}
 	if err := operatorName(name); err != nil {
 		return "", err
+	}
+	if namesNoRow(name) {
+		return "", fmt.Errorf("%w: a name of %d bytes", secrets.ErrNotFound, len(name))
 	}
 	return s.get(ctx, name, true)
 }
@@ -523,6 +534,9 @@ func (s *Store) Describe(ctx context.Context, name string) (secrets.Record, bool
 	if err := operatorName(name); err != nil {
 		return secrets.Record{}, false, err
 	}
+	if namesNoRow(name) {
+		return secrets.Record{}, false, nil
+	}
 	rec, found, err := s.fleet.Secret(ctx, name)
 	if err != nil {
 		return secrets.Record{}, false, fmt.Errorf("fleetsecrets: read %s: %w", name, err)
@@ -540,6 +554,9 @@ func (s *Store) Unset(ctx context.Context, name string) (bool, error) {
 	}
 	if err := operatorName(name); err != nil {
 		return false, err
+	}
+	if namesNoRow(name) {
+		return false, nil
 	}
 	return s.unset(ctx, name)
 }
