@@ -75,7 +75,9 @@ func (e *Engine) GoogleGrowthToken(
 	case !found || !rec.Usable():
 		return googleauth.SeatToken{}, errGrowthIdentityNotReady
 	}
-	return e.googleIssuer.Token(ctx, conn, rec.UniqueID, scopes, life)
+	token, err := e.googleIssuer.Token(ctx, conn, rec.UniqueID, scopes, life)
+	token.Account = rec.Email
+	return token, err
 }
 
 // GoogleReaderToken is a token of the company's reader carrying scopes: the

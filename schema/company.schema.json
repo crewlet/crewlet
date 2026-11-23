@@ -2777,6 +2777,10 @@
             "null"
           ]
         },
+        "oauth": {
+          "$ref": "#/$defs/GoogleOAuthClient",
+          "description": "The company's own OAuth client (a Web application, in a Google Cloud project it controls), which a Google Analytics Administrator signs in as so Crewlet adds each agent's identity to its properties itself; other Google products may share it. Optional: without it a person adds each agent's identity in Google Analytics."
+        },
         "properties": {
           "description": "Numeric Google Analytics property IDs agents may be given, at most 200. Absent: every property an agent's identity is added to. Optional.",
           "items": {
@@ -2950,6 +2954,10 @@
             "string",
             "null"
           ]
+        },
+        "oauth": {
+          "$ref": "#/$defs/GoogleOAuthClient",
+          "description": "The company's own OAuth client (a Web application, in a Google Cloud project it controls), which a Play Console admin signs in as so Crewlet adds each agent's identity to its apps itself; other Google products may share it. Optional: without it a person invites each agent's identity in Play Console."
         },
         "reports_buckets": {
           "description": "Each developer account's monthly reports bucket, as Play Console's Download reports page copies it (pubsite_prod_rev_ followed by digits), at most 20. The company reader reads them. Optional.",

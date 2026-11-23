@@ -164,12 +164,6 @@ func (p *Product) ownersRequest(call growth.Call, site string) (googlegrowth.Req
 			return invalid(fmt.Sprintf("%q is not an email.", e))
 		}
 	}
-	if self := p.identityEmail(call.Handle); self != "" && slices.ContainsFunc(remove, func(e string) bool {
-		return strings.EqualFold(e, self)
-	}) {
-		return invalid("this agent's own identity cannot remove itself as an owner: relinquishing is " +
-			"siteVerification.webResource.delete through search_console_admin, after its tokens are off the site.")
-	}
 	kind, identifier, id := resourceOf(site)
 	update, _ := p.Catalog().Operation("siteVerification.webResource.update")
 	req, err := newRequest(p.sites(call.Handle), update, map[string]string{"id": id}, nil, map[string]any{
