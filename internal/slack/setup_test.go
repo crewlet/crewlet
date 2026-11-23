@@ -14,7 +14,13 @@ import (
 )
 
 // copyOf is every word a field says under it: its hint and what More holds.
-func copyOf(r setup.Requirement) string { return r.Hint + " " + r.More }
+func copyOf(r setup.Requirement) string { return r.Hint.String() + " " + r.More.String() }
+
+// namesOf is every vendor UI name a field's hint and More mark.
+func namesOf(r setup.Requirement) []string { return append(r.Hint.Names(), r.More.Names()...) }
+
+// urlsOf is every page a field's hint and More link.
+func urlsOf(r setup.Requirement) []string { return append(r.Hint.URLs(), r.More.URLs()...) }
 
 func byField(reqs []setup.Requirement) map[string]setup.Requirement {
 	out := map[string]setup.Requirement{}
@@ -45,13 +51,12 @@ func TestEverySlackCredentialSaysWhereToGetIt(t *testing.T) {
 		// THE PAGE, AS A LINK, and inside the sentence rather than after
 		// it: the first thing a reader needs is the address, and a
 		// trailing anchor makes them work out which page the words meant.
-		if !strings.Contains(copyOf(r), "](https://api.slack.com/apps)") {
+		if !slices.Contains(urlsOf(r), "https://api.slack.com/apps") {
 			t.Errorf("%s does not link the page that issues it: %q", field, copyOf(r))
 		}
-		// THE PATH, in the face this screen gives a literal, for the reason
-		// Mattermost's administrator token carries one: a menu path is
+		// THE PATH, marked as the vendor's own UI names: a menu path is
 		// followed exactly, and prose runs it into the sentence around it.
-		if !strings.Contains(copyOf(r), "`") {
+		if len(namesOf(r)) == 0 {
 			t.Errorf("%s sets no part of the path apart: %q", field, copyOf(r))
 		}
 		// AND WHAT TO DO WITH WHAT YOU FIND. The line is a walk, so it
@@ -59,16 +64,10 @@ func TestEverySlackCredentialSaysWhereToGetIt(t *testing.T) {
 		if !strings.Contains(copyOf(r), "paste") {
 			t.Errorf("%s never says to paste the value here: %q", field, copyOf(r))
 		}
-		// NO TRAILING "Open Slack". A field whose sentence carries its own
-		// link gets a second one appended from VendorURL, and two links to
-		// one page in one line is the reader's question asked twice.
-		if r.VendorURL != "" {
-			t.Errorf("%s adds a trailing link beside the one in its sentence", field)
-		}
 		// ONE LINE UNDER THE BOX, and the walk behind More: the walk
 		// written into the line under the field is how it grew to three
 		// clauses.
-		if strings.Contains(r.Hint, "](") || r.More == "" {
+		if len(r.Hint.URLs()) > 0 || len(r.More) == 0 {
 			t.Errorf("%s walks the pages in its hint rather than behind More: %q", field, r.Hint)
 		}
 	}
@@ -81,11 +80,12 @@ func TestTheTwoSlackCredentialsNameDifferentPages(t *testing.T) {
 	reqs := byField(slack.Requirements("sre-lead", nil, nil))
 
 	bot, secret := copyOf(reqs["bot_token"]), copyOf(reqs["signing_secret"])
+	botNames, secretNames := namesOf(reqs["bot_token"]), namesOf(reqs["signing_secret"])
 	// THE APP IS CREATED ON THIS LINE, and from the manifest rather than
 	// from scratch: an app built by hand has no scopes, no events and no
 	// request URL, so installing it hands back a token that reports success
 	// and sees an empty workspace.
-	if !strings.Contains(bot, "`Create New App > From an app manifest`") {
+	if !slices.Contains(botNames, "Create New App > From an app manifest") {
 		t.Errorf("the bot token does not say to create the app from its manifest: %q", bot)
 	}
 	// AND IT WALKS THE WIZARD THIS FORM'S OWN MANIFEST OPENS.
@@ -98,12 +98,12 @@ func TestTheTwoSlackCredentialsNameDifferentPages(t *testing.T) {
 	// somebody follows it and concludes the value is missing rather than
 	// that they are somewhere else.
 	for _, step := range []string{
-		"`Create New App > From an app manifest`",
-		"`Create and Install`",
-		"`Allow`",
-		"`Your app credentials`",
+		"Create New App > From an app manifest",
+		"Create and Install",
+		"Allow",
+		"Your app credentials",
 	} {
-		if !strings.Contains(bot, step) {
+		if !slices.Contains(botNames, step) {
 			t.Errorf("the bot token's directions skip %s: %q", step, bot)
 		}
 	}
@@ -111,7 +111,7 @@ func TestTheTwoSlackCredentialsNameDifferentPages(t *testing.T) {
 		t.Errorf("the bot token sends an operator down the from-scratch "+
 			"path, which this form's manifest does not take: %q", bot)
 	}
-	if !strings.Contains(secret, "`Basic Information > App Credentials`") {
+	if !slices.Contains(secretNames, "Basic Information > App Credentials") {
 		t.Errorf("the signing secret does not name the page it is on: %q", secret)
 	}
 	if bot == secret {

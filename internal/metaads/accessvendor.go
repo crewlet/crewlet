@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/seatname"
+	"github.com/crewlet/crewlet/internal/vendortext"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -142,20 +143,25 @@ func (accessVendor) IdentityGuide(c *config.Company, seat seataccess.SeatRef, _ 
 		Role:  TasksWords(level),
 		Never: "Admin",
 		Steps: []seataccess.GuideStep{
-			{Text: "Open Business settings, then Users, then System users."},
-			{Text: "Press Add."},
-			{Text: "Name:", Copy: &seataccess.GuideCopy{Label: "system user's name", Value: name,
+			{Text: vendortext.Of(vendortext.W("Open "),
+				vendortext.UI("Business settings", "Users", "System users").At(systemUsersPage), vendortext.W("."))},
+			{Text: vendortext.Of(vendortext.W("Press "), vendortext.UI("Add"), vendortext.W("."))},
+			{Text: vendortext.Of(vendortext.UI("Name"), vendortext.W(":")), Copy: &seataccess.GuideCopy{Label: "system user's name", Value: name,
 				Rule: seatname.MetaAds.Words}},
-			{Text: "Role: Employee. Press Create system user."},
-			{Text: "Press Assign assets, choose " + assets + " and turn on " + TasksWords(level) + "."},
-			{Text: "Press Generate token. App: " + app + ". Expiry: 60 days. Tick " + words.And(seatBase(level)) + "."},
-			{Text: "Copy the token. Meta shows it once."},
+			{Text: vendortext.Of(vendortext.UI("Role"), vendortext.W(": "), vendortext.UI("Employee"),
+				vendortext.W(". Press "), vendortext.UI("Create system user"), vendortext.W("."))},
+			{Text: vendortext.Of(append(append([]vendortext.Part{vendortext.W("Press "), vendortext.UI("Assign assets"),
+				vendortext.W(", choose " + assets + " and turn on ")}, vendortext.And(taskNames(level)...)...), vendortext.W("."))...)},
+			{Text: vendortext.Of(append(append([]vendortext.Part{vendortext.W("Press "), vendortext.UI("Generate token"),
+				vendortext.W(". "), vendortext.UI("App"), vendortext.W(": " + app + ". "), vendortext.UI("Expiry"),
+				vendortext.W(": "), vendortext.UI("60 days"), vendortext.W(". Tick ")}, vendortext.And(seatBase(level)...)...),
+				vendortext.W("."))...)},
+			{Text: vendortext.Plain("Copy the token. Meta shows it once.")},
 		},
-		Link: seataccess.GuideLink{Label: "Open System users", URL: systemUsersPage},
-		Note: "Meta allows a business 10 system users at Full access and 1 at Limited, shared with every " +
-			"integration there.",
+		Note: vendortext.Of(vendortext.W("Meta allows a business 10 system users at "), vendortext.UI("Full access"),
+			vendortext.W(" and 1 at "), vendortext.UI("Limited"), vendortext.W(", shared with every integration there.")),
 		Back: seataccess.GuideBack{Kind: seataccess.BackToken, Label: "Token",
-			Hint: "Crewlet checks it with Meta and seals it."},
+			Hint: vendortext.Plain("Crewlet checks it with Meta and seals it.")},
 		Checks: []seataccess.GuideCheck{
 			{ID: "token", Label: "Read the token: the company's app, its permissions"},
 			{ID: "user", Label: "Read its system user: an Employee of the business"},
@@ -163,8 +169,10 @@ func (accessVendor) IdentityGuide(c *config.Company, seat seataccess.SeatRef, _ 
 		},
 	}
 	mk := &seataccess.GuideMake{Label: "Crewlet can make it for you",
-		Does: "With the business's admin system user, Crewlet makes " + name + " an Employee system user, gives it " +
-			assets + " at " + TasksWords(level) + ", and mints a 60-day token it renews.",
+		Does: vendortext.Of(append(append([]vendortext.Part{
+			vendortext.W("With the business's admin system user, Crewlet makes " + name + " an "),
+			vendortext.UI("Employee"), vendortext.W(" system user, gives it " + assets + " at ")},
+			vendortext.And(taskNames(level)...)...), vendortext.W(", and mints a 60-day token it renews."))...),
 		Reads: []seataccess.GuideCheck{
 			{ID: "make", Label: "Make " + name + ", an Employee system user"},
 			{ID: "assign", Label: "Give it " + assets + ": " + TasksWords(level)},
@@ -176,6 +184,17 @@ func (accessVendor) IdentityGuide(c *config.Company, seat seataccess.SeatRef, _ 
 	}
 	g.Make = mk
 	return g
+}
+
+// taskNames are a level's tasks as Business settings labels them, in its order.
+func taskNames(level growth.Level) []string {
+	var out []string
+	for _, t := range []string{taskManage, taskAdvertise, taskAnalyze} {
+		if slices.Contains(seatTasks(level), t) {
+			out = append(out, taskWords[t])
+		}
+	}
+	return out
 }
 
 // Open builds a session from the company's block; one absent or off is not

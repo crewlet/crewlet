@@ -6,6 +6,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/vendortext"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -30,10 +31,9 @@ func Requirements(in *config.Scaleway, resolve func(string) (string, bool)) []se
 			Connect:    true,
 			Format:     "A UUID",
 			Shape:      setup.ShapeUUID,
-			Hint:       "Shown in your {link}.",
-			LinkText:   "Organization settings",
-			VendorURL:  OrganizationURL,
-			Blocks:     integration.FindingCredentialMissing,
+			Hint: vendortext.Of(vendortext.W("Shown in your "), vendortext.UI("Organization settings").At(OrganizationURL),
+				vendortext.W(".")),
+			Blocks: integration.FindingCredentialMissing,
 		},
 		{
 			Field:      "access_key",
@@ -44,12 +44,11 @@ func Requirements(in *config.Scaleway, resolve func(string) (string, bool)) []se
 			Connect:    true,
 			Format:     "SCW followed by 17 capital letters or digits",
 			Shape:      setup.ShapeScalewayAccessKey,
-			Hint:       "The crewlet-provisioner API key's access key, starting with SCW.",
-			More: "Create the application on your {link}, with one policy at Organization scope granting " +
-				words.And(asSaid(provisionerSets)) + ".",
-			LinkText:  "IAM applications page",
-			VendorURL: ApplicationsURL,
-			Blocks:    integration.FindingCredentialMissing,
+			Hint:       vendortext.Plain("The crewlet-provisioner API key's access key, starting with SCW."),
+			More: vendortext.Of(vendortext.W("Create the application on your "),
+				vendortext.W("IAM applications page").At(ApplicationsURL),
+				vendortext.W(", with one policy at Organization scope granting "+words.And(asSaid(provisionerSets))+".")),
+			Blocks: integration.FindingCredentialMissing,
 		},
 		{
 			Field:      "secret_key",
@@ -63,12 +62,11 @@ func Requirements(in *config.Scaleway, resolve func(string) (string, bool)) []se
 			CheckWith:  []string{"organization_id", "access_key"},
 			// A PASTE IS CHECKED AGAINST SCALEWAY'S SHAPE before it is
 			// stored or tested: every secret key is a UUID.
-			Shape:     setup.ShapeUUID,
-			Hint:      "Shown once, when you create the API key on your {link}.",
-			More:      "Give the API key an expiry of 30 days or less, and rotate it before it ends.",
-			LinkText:  "API keys page",
-			VendorURL: APIKeysURL,
-			Blocks:    integration.FindingCredentialMissing,
+			Shape: setup.ShapeUUID,
+			Hint: vendortext.Of(vendortext.W("Shown once, when you create the API key on your "),
+				vendortext.W("API keys page").At(APIKeysURL), vendortext.W(".")),
+			More:   vendortext.Plain("Give the API key an expiry of 30 days or less, and rotate it before it ends."),
+			Blocks: integration.FindingCredentialMissing,
 		},
 		{
 			// THE ONE STEP OF "SEE MORE IN ATLAS" (ADR-0144): the provisioner
@@ -79,13 +77,12 @@ func Requirements(in *config.Scaleway, resolve func(string) (string, bool)) []se
 			Kind:       setup.KindToggle,
 			ConfigPath: "integrations.scaleway.atlas",
 			Default:    "false",
-			Hint:       "Shows servers, databases, buckets and DNS in Atlas, read-only.",
-			More: "Crewlet makes a read-only IAM application named crewlet-atlas for it, with its own " +
-				"policy and API key, on your {link}. It holds " + words.And(asSaid(AtlasSets())) +
-				" on every project and nothing else, and no agent uses it. Turn this off to delete the " +
-				"application, its policy and its key.",
-			LinkText:  "IAM applications page",
-			VendorURL: ApplicationsURL,
+			Hint:       vendortext.Plain("Shows servers, databases, buckets and DNS in Atlas, read-only."),
+			More: vendortext.Of(vendortext.W("Crewlet makes a read-only IAM application named crewlet-atlas for it, with its own "+
+				"policy and API key, on your "), vendortext.W("IAM applications page").At(ApplicationsURL),
+				vendortext.W(". It holds "+words.And(asSaid(AtlasSets()))+
+					" on every project and nothing else, and no agent uses it. Turn this off to delete the "+
+					"application, its policy and its key.")),
 		},
 		{
 			// Hidden and on: connecting a switched-off integration is not a
@@ -123,13 +120,15 @@ func Guide() setup.Guide {
 		Summary: "Crewlet gives each agent its own Scaleway IAM application and API key, and rotates, " +
 			"narrows and deletes them for you.",
 		Prepare: []setup.Step{
-			{Text: "Create an IAM application named crewlet-provisioner on your {link}.", Link: "access_key"},
-			{Text: "Attach one policy to it at Organization scope, with:", Grants: slices.Clone(provisionerSets)},
+			{Text: vendortext.Of(vendortext.W("Create an IAM application named crewlet-provisioner on your "),
+				vendortext.W("IAM applications page").At(ApplicationsURL), vendortext.W("."))},
+			{Text: vendortext.Plain("Attach one policy to it at Organization scope, with:"), Grants: slices.Clone(provisionerSets)},
 			{
-				Text: "Create an API key for the application on your {link}, expiring in 30 days or less.",
-				Link: "secret_key", Yields: "secret_key",
+				Text: vendortext.Of(vendortext.W("Create an API key for the application on your "),
+					vendortext.W("API keys page").At(APIKeysURL), vendortext.W(", expiring in 30 days or less.")),
+				Yields: "secret_key",
 			},
-			{Text: "Paste the keys here and test them."},
+			{Text: vendortext.Plain("Paste the keys here and test them.")},
 		},
 		Caution: &setup.Caution{
 			Title: "This key administers IAM for your whole Organization",

@@ -28,6 +28,7 @@ import type { ReconcileFinding } from "~/contract/integrations.ts";
 import type { SetupRequirement } from "~/contract/setup.ts";
 import { asSentence, relTime } from "~/lib/format.ts";
 import { marked } from "~/ui/Problems.tsx";
+import { VendorWords } from "~/ui/VendorWords.tsx";
 import { href } from "~/app/router.tsx";
 import { DisconnectDialog } from "../DisconnectDialog.tsx";
 // THE SCREEN'S OWN SHEET, with every module of the integrations screen (its
@@ -372,7 +373,9 @@ export function BeforeYouStart({ tool }: { tool: Tool }) {
       {tool.story.byHand && (
         <section aria-label="What you do by hand">
           <h3 className="t-label">You do by hand</h3>
-          <p className="t-body">{tool.story.byHand}</p>
+          <p className="t-body">
+            <VendorWords text={tool.story.byHand} />
+          </p>
         </section>
       )}
     </div>

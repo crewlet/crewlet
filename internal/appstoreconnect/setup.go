@@ -4,6 +4,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/vendortext"
 )
 
 // defaultConnection is the connection the form fills for a company that names
@@ -31,8 +32,8 @@ func Requirements(in *config.AppStoreConnect, resolve func(string) (string, bool
 		}
 		issuer := setup.Requirement{Field: id + "_issuer_id", Label: "Issuer ID", Kind: setup.KindID,
 			ConfigPath: "integrations." + Kind + ".connections." + id + ".issuer_id", Required: true, Connect: true,
-			Shape: setup.ShapeUUID, Format: "a UUID", Hint: "Shown above the team keys on {link}.",
-			LinkText: "Users and Access, Integrations", VendorURL: TeamKeysURL,
+			Shape: setup.ShapeUUID, Format: "a UUID", Hint: vendortext.Of(vendortext.W("Shown above the team keys on "),
+				vendortext.UI("Users and Access", "Integrations").At(TeamKeysURL), vendortext.W(".")),
 			Blocks: integration.FindingCredentialMissing}
 		issuer.Present, issuer.Resolved, issuer.Stored = setup.Held(team.IssuerID, resolve)
 		reqs = append(reqs, issuer)
