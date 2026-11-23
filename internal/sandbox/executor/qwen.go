@@ -133,11 +133,10 @@ const qwenDashScope = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 // its OpenAI sign-in (as measured under ACP).
 //
 // AND THE VARIABLES THAT MOVE THE KEY OR REPLACE THE PROMPT, set whether or
-// not the entry names one, since Qwen Code fills each variable its
-// environment lacks from an `.env` file: OPENAI_BASE_URL the entry's or Qwen
-// Code's own, which its subscription sign-in does not read, and the prompt
-// files off (measured on 0.28.4). And the run's settings as Qwen Code's
-// system tier ([Paths.QwenSettings]).
+// not the entry names one, since Qwen Code fills each variable its environment
+// lacks from an `.env` file: OPENAI_BASE_URL the entry's or Qwen Code's own
+// (its subscription sign-in reads none), the prompt files off (measured on
+// 0.28.4); and the run's settings as its system tier ([Paths.QwenSettings]).
 func (QwenCode) Pins(_ context.Context, req sandbox.RunRequest, paths Paths) []Pinned {
 	pins := []Pinned{{Name: "QWEN_SYSTEM_IDENTITY_MD", Value: paths.System()}, {Name: "QWEN_CODE_MODELS_DEV", Value: "off"},
 		{Name: "QWEN_SYSTEM_MD", Value: "false"}, {Name: "QWEN_WRITE_SYSTEM_MD", Value: "false"},
@@ -264,12 +263,10 @@ var qwenDenied = []string{"agent", "ask_user_question", "enter_plan_mode", "exit
 //     staying in the run's environment as well;
 //   - every MCP server, each tool offered from the start ([qwenMCP]);
 //   - off: Qwen Code's own co-author trailer (the run's git hook credits a
-//     commit, attribution.go), the background memory requests and the
-//     follow-up suggestion after a turn, usage statistics and the update
-//     check (two connections home a run otherwise);
+//     commit, attribution.go), the background memory requests, the follow-up
+//     suggestion, usage statistics and the update check (two connections home);
 //   - the chat file kept, since a note is confirmed by its record there;
-//   - the tools denied ([qwenDenied]);
-//   - the run's round cap, as model.maxSessionTurns;
+//   - the tools denied ([qwenDenied]); the round cap, as model.maxSessionTurns;
 //   - the run's skills beside every other level's, with the hook reporting
 //     each load.
 func qwenSettings(req sandbox.RunRequest, paths Paths) map[string]any {

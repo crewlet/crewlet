@@ -30,13 +30,12 @@ const CopilotName = "copilot"
 // Its model is reached through the run ENVIRONMENT (COPILOT_GITHUB_TOKEN, or a
 // provider's COPILOT_PROVIDER_* variables), never a file the run writes. Its
 // state is the box home's `.copilot` ([Paths.CopilotHome]), where WriteConfig
-// writes the run's settings, standing instructions and notes extension, and its
-// session is `session-state/<id>/`, packed and restored by its script
-// ([copilotSessionGate], [copilotPack]). Every run is approved every tool
-// (`--yolo`), its folder trusted (COPILOT_ALLOW_ALL, [copilotTrust]) and prompt
-// mode opened ([copilotPromptMode]), so a repository's hooks, MCP servers,
-// extensions and settings load beneath the run's, and its home's own
-// configuration loads beside the run's, as either does in a person's session. Its end on request is end.go's protocol.
+// writes the run's settings, standing instructions and notes extension; its
+// session is `session-state/<id>/`, packed and restored ([copilotSessionGate],
+// [copilotPack]). Every tool is approved (`--yolo`), the folder trusted
+// ([copilotTrust]) and prompt mode opened ([copilotPromptMode]), so the home's
+// and a repository's hooks, MCP servers, extensions and settings load beside
+// the run's, as in a person's session. Its end on request is end.go's protocol.
 type Copilot struct{}
 
 var (

@@ -25,19 +25,17 @@ cat "$KIMI_CODE_HOME"/agents/crewlet/*.md > "$s/profile"
 `
 
 // kimiLoads is the Kimi Code row of TestEveryRunLoadsWhatAPersonsSessionLoads.
-// The start directory (the box's workspace) holds a repository's
-// instructions, skills, agent, permission rules and MCP servers, and the home
-// a person's own instructions, skills, plugin, saved trust, config.toml with
-// its hook beside the login, and MCP servers: as the driver starts every one
-// is there and config.toml is as the home wrote it, the workspace is trusted,
-// the home's MCP file holds its own server beside the run's, the profile
-// offers every server's tools, and the driver is told the servers its guard
-// holds to that file. Once the run is over the home's MCP file is its own
-// again; a later run finds the earlier run's profile gone and the rest there.
-// (Crewlet writes no Kimi hook; a repository can add none.)
-//
-// Mutations, each red: clear any of the home's places again; rewrite
-// config.toml; write the MCP file whole; unset the trust; drop the restore.
+// The start directory holds a repository's instructions, skills, agent,
+// permission rules and MCP servers, and the home a person's own instructions,
+// skills, plugin, saved trust, config.toml with its hook beside the login, and
+// MCP servers: as the driver starts every one is there, config.toml as the home
+// wrote it, the workspace trusted, the home's MCP file holding its own server
+// beside the run's, the profile offering every server's tools, and the driver
+// told the servers its guard holds to that file. After the run the home's MCP
+// file is its own again; a later run finds the earlier profile gone, the rest
+// there. Crewlet writes no Kimi hook. Mutations, each red: clear any of the
+// home's places again; rewrite config.toml; write the MCP file whole; unset the
+// trust; drop the restore.
 func kimiLoads(t *testing.T) {
 	runner, box := standInBox(t, executor.NewKimi(), map[string]string{
 		"kimi": "#!/bin/sh\ncase \"$1\" in --version) echo 2.7.2; exit 0;; esac\nexit 1\n",

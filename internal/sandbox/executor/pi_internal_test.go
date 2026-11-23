@@ -461,10 +461,8 @@ func TestAPiNoteIsHeldOnlyByAnAnswerOnItsBranch(t *testing.T) {
 // cap, the seat's system text told of notes, each skill by the absolute path it
 // is written at with the name it is listed under; a fresh session's copy with
 // the job's other token; and the mcp.json files whose entry would stand in for
-// one of its servers, which the extension checks at the first turn.
-//
-// Crewlet's own variables are the ones the model's shell runs without, in
-// both copies.
+// one of its servers, which the extension checks at the first turn. Crewlet's
+// own variables are the ones the model's shell runs without, in both copies.
 //
 // Mutation: leave the fresh copy on the continued token, drop the required
 // bridge, drop the withheld names or the mcp.json files, or key a skill by a
