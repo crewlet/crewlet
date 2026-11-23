@@ -17,16 +17,19 @@ import (
 // Each case takes one removal through the take's scrub, tally and meter: a
 // value far longer than its marker; seven CJK characters (21 bytes, 10.5
 // Gemini CLI tokens beside the marker's six); a GitHub token; a credential's
-// string and number; and a tool definition the cut takes out. A Codex count,
-// a figure its rollout states, is never raised.
+// string and number; a tool definition the cut takes out; and a marker
+// carrying a text past Gemini CLI's 100,000 units. A Codex count, a figure
+// its rollout states, is never raised.
 //
 // Mutation: drop any tally, count length less kept length, have Claude Code
-// or Qwen Code charge no member, and a case goes red.
+// or Qwen Code charge no member, or charge a marked long text by Gemini CLI's
+// long rule, and a case goes red.
 func TestACountIsNeverBelowWhatTheScrubTookOut(t *testing.T) {
 	t.Parallel()
 	long := "sk-engine-" + strings.Repeat("Q7x", 100)
 	const short = "秘密鍵値暗号語"
 	const token = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
+	const v16 = "engine-v16-abcde"
 	planted := "keys " + long + " and " + short + " and " + token + " go here"
 	gemini := bytes.Join(geminiFixture(t, "thought"), nil)
 	if !bytes.Contains(gemini, []byte(`"text":"Think.\n"`)) {
@@ -54,11 +57,16 @@ func TestACountIsNeverBelowWhatTheScrubTookOut(t *testing.T) {
 		// stated says the count is a figure the session states, which the
 		// scrub never moves: the take's count is the box's exactly.
 		stated bool
+		// atTheLine says the case is a rule's line, not what the tally adds:
+		// the kept archive alone is not below the box's.
+		atTheLine bool
 	}{
 		"a Gemini CLI chat file": {carries: GeminiCLI{}, release: geminiRelease, values: []string{long, short},
 			archive: chat(planted)},
 		"a Gemini CLI value shorter than its marker": {carries: GeminiCLI{}, release: geminiRelease,
 			values: []string{short}, archive: chat("the key " + short + " is short")},
+		"a Gemini CLI marker carrying its text past 100,000 units": {carries: GeminiCLI{}, release: geminiRelease,
+			values: []string{v16}, archive: chat(strings.Repeat("漢", 99_979) + v16), atTheLine: true},
 		"a Qwen Code chat file": {carries: QwenCode{}, release: qwenRelease, values: []string{long, short},
 			archive: tarOfMembers(t, []tarMember{{h: qwenMember, body: qwenTallyChat(t, planted)}})},
 		"an OpenCode export": {carries: OpenCode{}, release: "2.3.2", values: []string{long, short},
@@ -92,7 +100,7 @@ func TestACountIsNeverBelowWhatTheScrubTookOut(t *testing.T) {
 			}
 			alone, err := tc.carries.meter(t.Context(), bytes.NewReader(kept.Bytes()), tc.session, tc.release,
 				new(passBudget))
-			if n, ok := alone.count.Bound(); err != nil || !ok || (n >= raw) != tc.stated {
+			if n, ok := alone.count.Bound(); err != nil || !ok || !tc.atTheLine && (n >= raw) != tc.stated {
 				t.Fatalf("the kept archive alone counts %+v (%v) against the box's %d, so this proves nothing",
 					alone.count, err, raw)
 			}

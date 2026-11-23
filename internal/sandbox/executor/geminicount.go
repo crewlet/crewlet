@@ -9,6 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -440,8 +441,16 @@ func (c *geminiCounting) count(marks countMarks, taken int64) *sandbox.ResumedCo
 // geminiTextQuarters is Gemini CLI 0.70.0's estimate of a text, in quarter
 // tokens: a quarter for each UTF-16 unit of an ASCII character, a token and a
 // half for each other unit (an unreadable byte one unit); a text past 100,000
-// units a quarter a unit.
+// units a quarter a unit, unless it holds [redact.Marker].
+//
+// A TEXT HOLDING A MARKER IS CHARGED BY THE SHORT RULE WHATEVER ITS LENGTH:
+// the rule is no sum of its characters, and a marker the scrub wrote in place
+// of a shorter value can carry a kept text past the line the box's own copy
+// stays under, at a sixth of its charge. Every text the scrub changes holds a
+// marker and every other is kept as it was, so with what the scrub took out
+// ([scrubTally]) the count never falls below the copy's.
 func geminiTextQuarters(s string) int64 {
+	marked := strings.Contains(s, redact.Marker)
 	var units, q int64
 	for len(s) > 0 {
 		r, size := utf8.DecodeRuneInString(s)
@@ -455,7 +464,7 @@ func geminiTextQuarters(s string) int64 {
 			units, q = units+1, q+6
 		}
 	}
-	if units > 100_000 {
+	if units > 100_000 && !marked {
 		return units
 	}
 	return q
