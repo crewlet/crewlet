@@ -336,6 +336,7 @@ function Row({
   waiting,
   title,
   sub,
+  subText,
   line,
   detail,
   item,
@@ -352,6 +353,8 @@ function Row({
   waiting?: string;
   title: ReactNode;
   sub: ReactNode[];
+  /** The words `sub` quotes, whole, for the hover of a line cut to two. */
+  subText?: string;
   /** One more line of words under the title: how long a box is held. */
   line?: ReactNode;
   /** Blocks under the row, across its whole width: an escalation, the arguments. */
@@ -379,7 +382,8 @@ function Row({
       <div className="decision-item">
         <div className="decision-text">
           <span className="decision-title">{title}</span>
-          <span className="decision-sub">
+          {/* Two lines at most; the whole of it on hover, and in the pane it opens. */}
+          <span className="decision-sub clamp" title={subText}>
             <span className="decision-state" data-state={waiting ? "waiting" : status}>
               {waiting ?? stateWord(status)}
             </span>
@@ -592,6 +596,7 @@ function RunRow({ run, index, now }: { run: ExecutorRow; index: OrgIndex; now: n
       waiting={standing.needs ? undefined : standing.word}
       title="Executor parked on a question"
       sub={sub}
+      subText={question || undefined}
       item={item}
       at={since}
       now={now}
@@ -638,6 +643,7 @@ function FoldInRow({
       waiting={others ? YOU_CAN_ANSWER : undefined}
       title={`Asks to add this to ${possessive(seat)} running work for ${requester}`}
       sub={joined([words ? <InPlace key="w">{firstLine(words)}</InPlace> : ""])}
+      subText={words || undefined}
       item={item.work_item ?? null}
       at={item.asked_at}
       now={now}
