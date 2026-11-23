@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -114,24 +116,71 @@ func TestAGrokSubagentsFiringTakesNothing(t *testing.T) {
 	}
 }
 
-// A GROK SKILL HOOK REPORTS A SKILL THE MODEL READ, BY ITS LISTED NAME, AND NO
-// FILE IT FAILED TO READ: 1.0.92 fires PostToolUse for a read_file of a missing
-// file too, its response a FileNotFound where a read's is a FileContent.
+// grokSkillDigest is -skill-digest for the skill testdata's read returned, as
+// the runner would name it: its listed name and the SHA-256 of the text read.
+func grokSkillDigest(t *testing.T) string {
+	t.Helper()
+	var in grokHookInput
+	if err := json.Unmarshal([]byte(grokInput(t, "posttooluse-skill-read.json")), &in); err != nil ||
+		in.ToolResponse.FileContent.RawOutput == nil {
+		t.Fatalf("the captured read holds no raw_output (%v)", err)
+	}
+	sum := sha256.Sum256([]byte(*in.ToolResponse.FileContent.RawOutput))
+	return "crewlet:probe-skill=" + hex.EncodeToString(sum[:])
+}
+
+// A GROK SKILL HOOK REPORTS A SKILL THE RUN'S OWN SESSION READ WHOLE AS WRITTEN,
+// BY ITS LISTED NAME, AND NOTHING ELSE: not a file 1.0.92 failed to read (its
+// response a FileNotFound), not a part of the file (`offset`), a file Grok cut
+// or the model rewrote (the text read is not the SHA-256 -skill-digest names),
+// not a skill the hook has no digest of, and not a subagent's read, which is in
+// the child's context alone.
 //
-// Mutation: report on the event alone, or name the skill by its file's path.
-func TestAGrokSkillHookReportsAReadSkillAndNoMissingOne(t *testing.T) {
+// Mutations, each red: report on the event alone; name the skill by its file's
+// path; report without the digest check; report before the session check.
+func TestAGrokSkillHookReportsOnlyTheRunsOwnWholeRead(t *testing.T) {
 	t.Parallel()
-	m := newFakeMCP(t, "")
-	cfg := takeConfigFile(t, m)
-	for _, input := range []string{"posttooluse-skill-read.json", "posttooluse-skill-missing.json"} {
-		_, stdout, _ := fire(t, []string{"-adapter", "grok-hook", "-config", cfg, "-skill-loads", "-loads-only"},
-			grokInput(t, input), noEnv)
-		if stdout != "" {
-			t.Errorf("%s: a loads-only hook answered %q", input, stdout)
+	read := grokInput(t, "posttooluse-skill-read.json")
+	const child = "01a205c8-9b2b-79e3-9a56-a4594d1d97c3"
+	part := strings.Replace(read, `"raw_output":"---\n`, `"raw_output":"`, 1)
+	if part == read {
+		t.Fatal("the captured read's raw_output does not open as the skill file does")
+	}
+	digest := grokSkillDigest(t)
+	for _, tc := range []struct {
+		name, input, digest string
+		reported            bool
+	}{
+		{"a whole read", read, digest, true},
+		{"a missing file", grokInput(t, "posttooluse-skill-missing.json"), digest, false},
+		{"a part of the file", part, digest, false},
+		{"a skill with no digest", read, "crewlet:other=" + strings.Repeat("0", 64), false},
+		{"a subagent's read", strings.ReplaceAll(read, grokMain, child), digest, false},
+	} {
+		m := newFakeMCP(t, "")
+		_, stdout, _ := fire(t, []string{"-adapter", "grok-hook", "-config", takeConfigFile(t, m), "-skill-loads",
+			"-loads-only", "-thread-file", grokThreadFile(t, grokMain), "-skill-digest", tc.digest}, tc.input, noEnv)
+		if stdout != "" || len(m.calls) != 0 {
+			t.Errorf("%s: a loads-only hook answered %q and took %d times", tc.name, stdout, len(m.calls))
+		}
+		if got := len(m.skills) == 1 && m.skills[0] == "crewlet:probe-skill"; got != tc.reported || len(m.skills) > 1 {
+			t.Errorf("%s: reported %v, want crewlet:probe-skill reported: %v", tc.name, m.skills, tc.reported)
 		}
 	}
-	if len(m.skills) != 1 || m.skills[0] != "crewlet:probe-skill" || len(m.calls) != 0 {
-		t.Fatalf("skills %v, takes %d; want crewlet:probe-skill reported once and no take", m.skills, len(m.calls))
+}
+
+// A GROK RUN'S SHUTDOWN STOP TAKES NOTHING: 1.0.92 fires Stop once more as it
+// exits (reason `shutdown`, after the turn's), and no request follows it, so a
+// note taken there would be spent on no model and only told again.
+//
+// Mutation: take at every Stop.
+func TestAGrokRunsShutdownStopTakesNothing(t *testing.T) {
+	t.Parallel()
+	m := newFakeMCP(t, `{"crewlet_take":"[crewlet take t-1]","decision":"block","reason":"Use main."}`)
+	code, stdout, stderr := fire(t, []string{"-adapter", "grok-hook", "-config", takeConfigFile(t, m),
+		"-thread-file", grokThreadFile(t, grokMain)}, grokInput(t, "stop-shutdown.json"), noEnv)
+	if code != exitDone || stdout != "" || len(m.calls) != 0 {
+		t.Errorf("exit %d, answer %q, %d takes (%s); want nothing taken", code, stdout, len(m.calls), stderr)
 	}
 }
 
