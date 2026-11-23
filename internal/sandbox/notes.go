@@ -1045,7 +1045,12 @@ func (s *CoordStore) fileLateItems(ctx context.Context, turnID, job, round strin
 	var filed, spent int
 	moved := false
 	_, _, _, err := s.writeFound(ctx, turnID, true, Fence{}, func(run *PendingRun) bool {
-		filed, spent, moved = 0, 0, run.LaunchID != job || !slices.Contains(ItemStatuses, run.Status)
+		// A JOB PARKED ON ITS OWN CALL is handed none: the relaunch its call's
+		// answer carries tells every call nobody waited for, with what it
+		// returned, and an item here would leave that session holding the
+		// call without it (callwait.go).
+		filed, spent, moved = 0, 0, run.LaunchID != job || !slices.Contains(ItemStatuses, run.Status) ||
+			run.WaitsOnCall()
 		if moved {
 			return false
 		}
@@ -1088,7 +1093,7 @@ func (s *CoordStore) fileLateItems(ctx context.Context, turnID, job, round strin
 	if moved {
 		log.DebugContext(ctx, "sandbox_late_call_not_handed", "turn_id", turnID, "launch_id", job,
 			"calls", placesOf(calls), "detail", "the record no longer names a job working that takes notes, "+
-				"so the next continuation tells these calls")
+				"or its job is parked on a call of its own, so the next continuation tells these calls")
 	}
 	if spent > 0 {
 		log.InfoContext(ctx, "sandbox_late_calls_spent", "turn_id", turnID, "launch_id", job, "calls", spent,

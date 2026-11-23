@@ -119,6 +119,11 @@ type AnswerWords struct {
 	// engine answered a run parked by `wait_for_run` (ADR-0176), nil
 	// otherwise; Text is then the engine's one sentence of it.
 	Waited *types.RunWaited
+
+	// Called is the job's own bridged call that returned, where the engine
+	// answered a job parked on it (callwait.go), nil otherwise; Text is then
+	// the engine's one sentence of it.
+	Called *types.CallReturned
 }
 
 // attribution is who the resumed turn is told gave this answer: an answer by
@@ -143,18 +148,19 @@ func (w AnswerWords) answerer() answerer {
 // A FIXED STRUCT AND NO omitempty, so the bytes are a function of the values
 // alone: every field is present, in this order, on every seal.
 type sealedAnswer struct {
-	TurnID     string            `json:"turn_id"`
-	LaunchID   string            `json:"launch_id"`
-	EventIDs   []string          `json:"event_ids"`
-	Via        types.AnswerVia   `json:"via"`
-	By         string            `json:"by"`
-	ByKind     string            `json:"by_kind"`
-	OperatorID string            `json:"operator_id"`
-	Text       string            `json:"text"`
-	Choice     string            `json:"choice"`
-	Label      *provenance.Label `json:"label"`
-	Refusal    *AnswerRefusal    `json:"refusal"`
-	Waited     *types.RunWaited  `json:"waited"`
+	TurnID     string              `json:"turn_id"`
+	LaunchID   string              `json:"launch_id"`
+	EventIDs   []string            `json:"event_ids"`
+	Via        types.AnswerVia     `json:"via"`
+	By         string              `json:"by"`
+	ByKind     string              `json:"by_kind"`
+	OperatorID string              `json:"operator_id"`
+	Text       string              `json:"text"`
+	Choice     string              `json:"choice"`
+	Label      *provenance.Label   `json:"label"`
+	Refusal    *AnswerRefusal      `json:"refusal"`
+	Waited     *types.RunWaited    `json:"waited"`
+	Called     *types.CallReturned `json:"called"`
 }
 
 // Seal is answer recording words as the answer to the question run's job
@@ -167,6 +173,7 @@ func (s *AnswerSeal) Seal(run PendingRun, words AnswerWords, answer RecordedAnsw
 		TurnID: run.TurnID, LaunchID: run.LaunchID, EventIDs: answer.EventIDs, Via: words.Via,
 		By: words.By, ByKind: words.ByKind, OperatorID: words.OperatorID, Text: words.Text,
 		Choice: words.Choice, Label: words.Label, Refusal: words.Refusal, Waited: words.Waited,
+		Called: words.Called,
 	})
 	if err != nil {
 		return RecordedAnswer{}, fmt.Errorf("sandbox: encoding the answer to run %s: %w", run.TurnID, err)
@@ -220,7 +227,7 @@ func (s *AnswerSeal) Open(run PendingRun) (AnswerWords, error) {
 	}
 	return AnswerWords{Text: sealed.Text, Choice: sealed.Choice, Via: sealed.Via, By: sealed.By,
 		ByKind: sealed.ByKind, OperatorID: sealed.OperatorID, Label: sealed.Label,
-		Refusal: sealed.Refusal, Waited: sealed.Waited}, nil
+		Refusal: sealed.Refusal, Waited: sealed.Waited, Called: sealed.Called}, nil
 }
 
 // refusalWord names what a seal or a row holds, for the error that says the two

@@ -3245,13 +3245,17 @@ func answerGivenOf(run PendingRun, given types.ExecutorAnswerGiven, trigger *eve
 	if err != nil {
 		return AnswerWords{}, RecordedAnswer{}, err
 	}
+	called, err := calledOf(run, given.Called)
+	if err != nil {
+		return AnswerWords{}, RecordedAnswer{}, err
+	}
 	words := AnswerWords{
 		// Redacted HERE, as a chat reply is: it is sealed on the row and handed
 		// as is to the harness, whose box and session keep it.
 		Text: redact.Secrets(strings.TrimSpace(given.Answer)), Choice: given.Choice,
 		Via: types.AnswerViaOperator,
 		By:  given.AnsweredBy, ByKind: given.AnsweredByKind, OperatorID: given.OperatorID,
-		Waited: waited,
+		Waited: waited, Called: called,
 	}
 	answer := RecordedAnswer{
 		EventIDs: []string{trigger.ID.String()}, PostedAt: trigger.Timestamp, RecordedAt: now,
@@ -5930,6 +5934,10 @@ type AskedRun struct {
 	// engine answered a run parked by `wait_for_run` (ADR-0176); nil otherwise.
 	Waited *types.RunWaited
 
+	// Called is the job's own bridged call that returned, where the engine
+	// answered a job parked on it (callwait.go); nil otherwise.
+	Called *types.CallReturned
+
 	// Refused is set where the question's outcome is no answer but the REFUSAL of a
 	// reply too large to be one ([PendingRun.AnswerRefusal]): what the run is told
 	// (how many messages, the figures) in place of an answer, Answer and By empty.
@@ -5971,5 +5979,6 @@ func askedRun(run PendingRun, answer AnswerWords) *AskedRun {
 		Label:     answer.Label,
 		Withdrawn: WithdrawnBy(run, answer.By, answer.ByKind),
 		Waited:    answer.Waited,
+		Called:    answer.Called,
 	}
 }

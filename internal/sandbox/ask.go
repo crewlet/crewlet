@@ -85,7 +85,9 @@ type Ask struct {
 	// Wait is the run `wait_for_run` parks the job until, nil for a question
 	// put to a person (ADR-0176): its Question is the engine's words, it is put
 	// to nobody (To and Decision empty), and the engine answers it once that run
-	// leaves [Holding]. Recorded on the row as [PendingRun.WaitsFor].
+	// leaves [Holding]. Recorded on the row as [PendingRun.WaitsFor]. Or the
+	// job's own bridged call it parks on ([RunWait.Call], callwait.go),
+	// answered once its run is collected.
 	Wait *RunWait
 }
 
