@@ -14,8 +14,7 @@ import (
 )
 
 // The invariants the built-in cursor-agent profile keeps, measured against
-// Cursor Agent 2026.10.22 and read from the 2026.09.10 bundle (see the
-// profile's comments): a call runs in a directory it has never seen without
+// Cursor Agent 2026.11.22-e9042b2 (see the profile's comments): a call runs in a directory it has never seen without
 // stopping for trust, asks the service to leave workspace context out, keeps
 // the engine's text in the transcript, and leaves nothing in the seat's home
 // that outlives the calls that share it.
@@ -54,8 +53,8 @@ func TestCursorAgentRunsUnpromptedWithoutWorkspaceContext(t *testing.T) {
 
 // A CURSOR AGENT RUN IS CHARGED THE COUNTS ITS RESULT EVENT CARRIES, under the
 // names it gives them: `usage` in camelCase, the input with the cached parts
-// taken out, as the 2026.10.22 bundle writes it (not measured: no call through
-// a stand-in gets an answer).
+// taken out (measured on 2026.11.22-e9042b2: 100 sent, 40 of them cached,
+// reported 60 and 40).
 //
 // Mutation: read the counts under snake_case names, as the profile once did,
 // and the run is estimated; read the input as the whole prompt, and its cached
@@ -124,8 +123,9 @@ func TestCursorAgentCarriesTheSystemPromptInTheTranscript(t *testing.T) {
 
 // NOTHING A CALL LEAVES IN THE SEAT'S HOME OUTLIVES ITS GENERATION. --trust
 // writes its marker per call directory under .cursor/projects, beside that
-// call's transcript and a worker log, and a chat directory per call — one more
-// entry for every call the seat makes, all measured on 2026.10.22.
+// call's transcript and its servers' approvals, a chat directory per call,
+// and a cache of the sandbox's walk under .cursor/sandbox-policies — one more
+// entry for every call the seat makes, measured on 2026.11.22-e9042b2.
 func TestCursorAgentPrunesWhatACallLeaves(t *testing.T) {
 	t.Parallel()
 	p := cursorAgent(t)
@@ -140,6 +140,8 @@ func TestCursorAgentPrunesWhatACallLeaves(t *testing.T) {
 	left := []string{
 		project + "/.workspace-trusted",
 		project + "/worker.log",
+		project + "/mcp-approvals.json",
+		".cursor/sandbox-policies/walk-cache/2dd8b872885de1acaa56777ff4385a3a3f9e15ce34ded1e6b6e251f929310f65.walk",
 		project + "/agent-transcripts/893411a1-6f96-49e0-811b-89d238f575a7/893411a1-6f96-49e0-811b-89d238f575a7.jsonl",
 		".cursor/chats/258ab4dea5f1/893411a1-6f96-49e0-811b-89d238f575a7/meta.json",
 	}
