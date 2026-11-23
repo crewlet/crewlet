@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/browser"
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/org"
@@ -259,6 +260,17 @@ func (s *SandboxProvider) AttributesCommits() bool {
 	return s == nil || s.CommitAttribution == nil || *s.CommitAttribution
 }
 
+// ChromiumSandbox is Chromium's own sandbox in a browser seat's container box
+// ([LocalSandbox.ChromiumSandbox]): waived only where local.chromium_sandbox
+// is exactly waived, and required, the stricter, for an unset value and for
+// one this build does not know. Nil-safe, as [SandboxProvider.MaxTurns] is.
+func (s *SandboxProvider) ChromiumSandbox() browser.ChromiumSandbox {
+	if s == nil || s.Local == nil || s.Local.ChromiumSandbox != browser.SandboxWaived {
+		return browser.SandboxRequired
+	}
+	return browser.SandboxWaived
+}
+
 // PauseTTL is the paused-box TTL as configured, or nil when the field is
 // absent and the engine-wide default applies.
 //
@@ -508,6 +520,17 @@ type LocalSandbox struct {
 	// is `role.sandbox.env`. A credential field, for the reason an MCP server's
 	// `env:` is one.
 	RuntimeEnv map[string]string `secret:"true" yaml:"runtime_env,omitempty" json:"runtime_env,omitempty" desc:"Environment for the container runtime's own CLI (not the box); ${VAR} supported."`
+
+	// ChromiumSandbox is Chromium's own sandbox in a browser seat's container
+	// box: required, the default, or waived, which runs Chromium with
+	// --no-sandbox. Read through [SandboxProvider.ChromiumSandbox].
+	//
+	// HELD BY NO RUNNABLE RULE: a later build may add a value, and this build
+	// runs such a revision on the stricter reading. Off its list, or set where
+	// no browser seat's box is a container, it is refused as an admission rule
+	// ([Company.validateBrowserSeats]), not among containerOnly's fields: a
+	// container box with no browser does not read it either.
+	ChromiumSandbox browser.ChromiumSandbox `yaml:"chromium_sandbox,omitempty" json:"chromium_sandbox,omitempty" js:"enum=required|waived" desc:"Chromium's own sandbox in a browser seat's container box: required (default) or waived, which runs Chromium with --no-sandbox."`
 }
 
 // containerOnly are the fields no direct box reads, named as an operator

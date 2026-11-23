@@ -197,6 +197,8 @@ func everyRule(t *testing.T) []config.Warning {
 			"integrations:\n", "integrations:\n  github: {enabled: true, webhook_secret: s, provisioning: {org: Acme}}\n", 1),
 		delegatedDoc(t, "    - {kinds: [pr_merge], delegates: [security-a], escalate_to: [ops-lead], "+
 			"required_checks: [{repo: acme/api, branch: main, checks: [test]}]}\n"),
+		// A server that runs a browser on the engine host.
+		"name: Acme\nmcp_servers:\n  - {name: web, command: npx, args: [\"@playwright/mcp@latest\"]}\n",
 		// A lead, a unit and a manages entry that name nothing.
 		"name: Acme\nroles:\n  - {name: CEO, handle: ceo, manages: [ghost], unit: nowhere}\n" +
 			"  - {name: Founder, handle: founder, kind: human}\n" +

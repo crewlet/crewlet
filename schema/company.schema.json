@@ -3549,6 +3549,15 @@
     "LocalSandbox": {
       "additionalProperties": false,
       "properties": {
+        "chromium_sandbox": {
+          "description": "Chromium's own sandbox in a browser seat's container box: required (default) or waived, which runs Chromium with --no-sandbox.",
+          "enum": [
+            "required",
+            "waived",
+            "",
+            null
+          ]
+        },
         "image": {
           "description": "Container image: with the harness installed for an executor run's box, and git 2.40 or newer and what its checks build with for a check's. Required where an executor run or a check runs in a container.",
           "type": [
@@ -4920,7 +4929,7 @@
         },
         "sandbox": {
           "$ref": "#/$defs/RoleSandbox",
-          "description": "What this seat's executor box reads beyond providers.sandbox: setup, env, optional_keys, mcp, pause_ttl_seconds, max_turns, max_concurrent_runs. Absent = the engine-wide settings only."
+          "description": "What this seat's executor box reads beyond providers.sandbox: setup, env, optional_keys, mcp, pause_ttl_seconds, max_turns, max_concurrent_runs, browser. Absent = the engine-wide settings only."
         },
         "schedules": {
           "description": "Recurring work fired into this seat's inbox.",
@@ -6144,6 +6153,15 @@
     "RoleSandbox": {
       "additionalProperties": false,
       "properties": {
+        "browser": {
+          "description": "Give this seat's executor a browser in its box: a headless Chromium its harness drives through the browser MCP server. Refused unless every run of the seat lands in a container box off the host's network, on a providers.llm entry that keeps its web tools.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
         "env": {
           "additionalProperties": {
             "type": [

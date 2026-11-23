@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/browser"
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
@@ -56,8 +57,12 @@ var headerName = regexp.MustCompile("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 func MaxMCPToolPrefix() int { return harnessprofile.ToolNameMax() - 1 }
 
 // validateMCPNames refuses every name and address an `mcp_servers` entry, or
-// a seat's or a unit's `mcp_env` block for it, holds that no client can use.
-// See the file comment.
+// a seat's or a unit's `mcp_env` block for it, holds that no client can use,
+// and a server named [browser.ServerName], which a browser seat's box gives
+// its own browser. Unlike the runnable reservations of [ToolServerName] and
+// Claude Code's container, that one is a new reservation over a name a
+// company may already use, which nothing that runs depends on. See the file
+// comment.
 func (c *Company) validateMCPNames() error {
 	var p problems
 	for i := range c.MCPServers {
@@ -101,11 +106,17 @@ func (c *Company) validateMCPNames() error {
 }
 
 // validateName holds the server's name to [mcpServerName] and
-// [MaxMCPServerName]. An empty name is the runnable rule's to refuse, and
-// [ToolServerName] the document's.
+// [MaxMCPServerName], and keeps [browser.ServerName] for a seat's own browser.
+// An empty name is the runnable rule's to refuse, and [ToolServerName] the
+// document's.
 func (m *MCPServer) validateName(p *problems, path Path) {
 	switch {
 	case m.Name == "":
+	case m.Name == browser.ServerName:
+		p.addSaying(path, ErrConflict,
+			"Crewlet keeps the name browser for an agent's own browser. Rename this server.",
+			"%q is reserved for a seat's own browser, which its box sees under that name; a "+
+				"server called the same would be replaced by it there. Rename the server", m.Name)
 	case !mcpServerName.MatchString(m.Name):
 		p.add(path, ErrUnknownValue,
 			"%q is not a server name: use lowercase letters, digits and hyphens, starting "+
