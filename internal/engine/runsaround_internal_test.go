@@ -735,8 +735,7 @@ func TestAJobParkedOnItsOwnCallIsAnsweredOnceAtItsPark(t *testing.T) {
 	w := newWaitsRig(t)
 	job := w.launch(t, "run-c", "ana", "claude-code", "fix the login page", "ENG-1")
 	call := sandbox.CallWait{Tool: "delegate", Seq: 4}
-	if outcome, err := w.store.RecordAsk(ctx, "run-c", job, sandbox.Ask{
-		Question: sandbox.CallWaitQuestion(call.Tool), Wait: &sandbox.RunWait{Call: &call}}); err != nil ||
+	if outcome, err := w.store.RecordAsk(ctx, "run-c", job, sandbox.Ask{Call: &call}); err != nil ||
 		outcome != sandbox.AskRecorded {
 		t.Fatalf("parking the job on its call: %v, %v", outcome, err)
 	}
@@ -757,7 +756,7 @@ func TestAJobParkedOnItsOwnCallIsAnsweredOnceAtItsPark(t *testing.T) {
 		t.Fatalf("the call wait was answered %d times, want once: %+v", len(got), got)
 	}
 	if given := got[0]; given.TurnID != "run-c" || given.LaunchID != job || given.Waited != nil ||
-		given.Called == nil || *given.Called != (types.CallReturned{Tool: "delegate", Seq: 4}) ||
+		len(given.Called) != 1 || given.Called[0] != (types.CallReturned{Tool: "delegate", Seq: 4}) ||
 		given.AnsweredByKind != string(iam.ActorSystem) {
 		t.Errorf("the call wait is answered as %+v", given)
 	}

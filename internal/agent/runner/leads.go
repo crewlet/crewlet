@@ -393,6 +393,28 @@ func heldIn(done *ledger.Iteration, tool string) heldListing {
 // information and an answer by turn as its answerer's own instruction
 // (ADR-0040, ADR-0068), whichever relaunch tells it.
 func answerAgain(a sandbox.LeadAnswer, result *sandbox.HeldResult, at answerAt, b provenance.Boundary) string {
+	told := answerItself(a, result, at, b)
+	if len(a.Called) == 0 || a.CallsReturned {
+		return told
+	}
+	// EACH CALL THE RUN PARKED ON BESIDE IT, once, as its own calls.
+	return told + "\n\n" + calledAgain(a, "### Calls of this work that ran on returned too", b)
+}
+
+// calledAgain is the calls a lead's run parked on, told again under heading,
+// as the relaunch told them ([Asked.calledAccount]), defused under b.
+func calledAgain(a sandbox.LeadAnswer, heading string, b provenance.Boundary) string {
+	told := heading + "\n" + provenance.Neutralise(b, a.Returned)
+	if a.ReturnedCut > 0 {
+		told += "\n\nWhat they returned is cut here: " + kept.SizeUp(a.ReturnedCut) + " more of it is not " +
+			"kept to tell again."
+	}
+	return told
+}
+
+// answerItself is [answerAgain] but for the calls its run parked on beside an
+// answer that was not theirs.
+func answerItself(a sandbox.LeadAnswer, result *sandbox.HeldResult, at answerAt, b provenance.Boundary) string {
 	var w strings.Builder
 	switch {
 	case a.Held != nil && a.Refused == nil:
@@ -426,14 +448,8 @@ func answerAgain(a sandbox.LeadAnswer, result *sandbox.HeldResult, at answerAt, 
 		w.WriteString("### A run this work waited for" + at.named + "\n" +
 			Asked{Question: a.Question, Waited: a.Waited}.waited(b, "A run of this work"))
 		return w.String()
-	case a.Called != nil:
-		w.WriteString("### A call this work waited for" + at.named + "\nA run of this work called `" +
-			provenance.Neutralise(b, a.Called.Tool) + "`, was told the call was still running, longer than the " +
-			"harness waits for one call, and ended its turn to wait. It ran once. " + provenance.Neutralise(b, a.Words))
-		if a.Cut > 0 {
-			w.WriteString("\n\nWhat it returned is cut here: " + kept.SizeUp(a.Cut) + " more of it is not kept to " +
-				"tell again.")
-		}
+	case a.CallsReturned:
+		w.WriteString(calledAgain(a, "### Calls this work waited for"+at.named, b))
 		return w.String()
 	case a.Refused != nil:
 		refused := RefusedReply{Messages: a.Refused.Messages, Bytes: a.Refused.Bytes, MaxBytes: a.Refused.MaxBytes}
@@ -505,14 +521,16 @@ func keptWords(words string) (string, int) {
 // THE CALL IS MADE ([makeHeld]), so a later brief tells the outcome this
 // relaunch told. A refused reply names no held call ([Asked.tellsHeld]).
 func (a *Asked) lead() *sandbox.Lead {
-	said := a.Answer
-	if a.Called != nil {
-		// WHAT THE CALL RETURNED, kept as an answer's words are.
-		said = a.resultText()
-	}
-	words, cut := keptWords(said)
+	words, cut := keptWords(a.Answer)
 	answer := &sandbox.LeadAnswer{Question: a.Question, Words: words, Cut: cut, By: a.By, Label: a.Label,
-		Withdrawn: a.Withdrawn, Called: a.Called, Waited: a.Waited}
+		Withdrawn: a.Withdrawn, Waited: a.Waited, Called: a.Called, CallsReturned: a.CallsReturned}
+	if a.CallsReturned {
+		answer.Words, answer.Cut = "", 0
+	}
+	if len(a.Called) > 0 {
+		// WHAT THE CALLS RETURNED, kept as an answer's words are.
+		answer.Returned, answer.ReturnedCut = keptWords(a.calledAccount("A run of this work", "its"))
+	}
 	if r := a.Refused; r != nil {
 		answer.Refused = &sandbox.LeadRefused{Messages: r.Messages, Bytes: r.Bytes, MaxBytes: r.MaxBytes}
 	} else if a.Held != nil {

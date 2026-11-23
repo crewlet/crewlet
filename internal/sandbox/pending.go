@@ -1184,6 +1184,13 @@ type PendingRun struct {
 	// carrying later keys inside it ([RunWait.Extra]).
 	WaitsFor *RunWait `json:"waits_for,omitempty"`
 
+	// ParkedCalls is every bridged call of the job answered still running
+	// before its harness's ceiling, its job parked on it ([Ask.Call],
+	// callwait.go), in the order they parked: each told with what it returned
+	// by the resume that carries the run on, whatever answers its ask.
+	// Written by [PendingStore.RecordAsk] and cleared with the question.
+	ParkedCalls []CallWait `json:"parked_calls,omitempty"`
+
 	// RunSendsFor and RunSends are how many messages the job RunSendsFor names
 	// sent other runs ([PendingStore.CountRunSend]), within [MaxJobRunSends]: a
 	// count for an older job counts nothing.

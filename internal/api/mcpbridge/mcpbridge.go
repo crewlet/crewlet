@@ -455,10 +455,10 @@ type Session struct {
 	Skills map[string]string
 
 	// Park parks the job on a call of its own answered still running before
-	// its harness's ceiling ([binding.park]): marked on the run's row as a
-	// wait on the call (sandbox.CallWait), which the engine answers once the
-	// run is collected, carrying it on with the call's result. Nil marks
-	// nothing, a test's: the call is then answered still running alone.
+	// its harness's ceiling ([binding.park]): marked on the run's row among
+	// the calls its job parks on (sandbox.Ask.Call), whose resume tells each
+	// with its result, whatever answers the job. Nil marks nothing, a test's:
+	// the call is then answered still running alone.
 	Park func(ctx context.Context, call sandbox.CallWait) (sandbox.AskOutcome, error)
 
 	// Started is told which session the job's box started, the first time a
@@ -1904,11 +1904,11 @@ func (o *binding) park(c *bridgedCall, name string, seq int, ceiling, after time
 			"seat", s.Handle, "tool", name, "seq", seq, "error", err.Error(),
 			"detail", "the call was answered still running without parking its job on it, so its result "+
 				"reaches the run only as a call nobody waited for")
-	case outcome == sandbox.AskRecorded, outcome == sandbox.AskAlreadyAsked:
-		// PARKED, on this call or on what the job asked before it, whose
-		// resume tells this call too.
+	case outcome == sandbox.AskRecorded:
+		// PARKED: the call is on the job's row, whose resume tells it,
+		// whatever else the job asked (internal/sandbox's callwait.go).
 		note = parkedNote
-	case s.Park != nil:
+	case outcome == sandbox.AskNotRunning && s.Park != nil:
 		note = endedRunningNote
 	}
 	close(marked)

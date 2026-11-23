@@ -464,8 +464,7 @@ func TestAJobParkedOnItsOwnCallIsToldSoIfItSubmits(t *testing.T) {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
 	call := sandbox.CallWait{Tool: "delegate", Seq: 2}
-	if outcome, err := store.RecordAsk(t.Context(), "run-1", run.LaunchID, sandbox.Ask{
-		Question: sandbox.CallWaitQuestion(call.Tool), Wait: &sandbox.RunWait{Call: &call}}); err != nil ||
+	if outcome, err := store.RecordAsk(t.Context(), "run-1", run.LaunchID, sandbox.Ask{Call: &call}); err != nil ||
 		outcome != sandbox.AskRecorded {
 		t.Fatalf("parking the job on its call: %v, %v", outcome, err)
 	}
@@ -474,7 +473,7 @@ func TestAJobParkedOnItsOwnCallIsToldSoIfItSubmits(t *testing.T) {
 	got, err := submit.(tools.SeatCallable).CallForTurn(turnctx.WithJob(t.Context(), run.LaunchID),
 		&turnctx.Turn{RunID: "run-1"}, map[string]any{})
 	if err != nil || !got.Failed || tools.RefusalOf(got) != tools.RefusalNotRunning || inner.called != 0 ||
-		!strings.Contains(got.Output, "call to delegate is still running") ||
+		!strings.Contains(got.Output, "call to `delegate` is still running") ||
 		!strings.Contains(got.Output, "END YOUR TURN NOW") || strings.Contains(got.Output, "question") {
 		t.Fatalf("the parked job's submission answered %+v, %v (called %d); want refused, naming its call",
 			got, err, inner.called)
