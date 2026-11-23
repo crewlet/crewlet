@@ -26,8 +26,8 @@ func (p Paths) CopilotToolEnv() string { return p.WorkDir() + "/copilot-tool-env
 func (p Paths) CopilotInstructions() string { return p.CopilotHome() + "/copilot-instructions.md" }
 
 // CopilotExtension is the directory of the run's notes extension
-// (copilot_steer.js), written as extension.mjs where the run reads notes or has
-// a turn cap, and removed where it has neither.
+// (copilot_steer.js), written as extension.mjs where the run reads notes, has
+// a turn cap or a bridge to guard, and removed where it has none of them.
 func (p Paths) CopilotExtension() string { return p.CopilotHome() + "/extensions/crewlet-notes" }
 
 // CopilotLoaded is every place in the box home Copilot loads configuration
