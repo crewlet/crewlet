@@ -461,22 +461,10 @@ func geminiTextQuarters(s string) int64 {
 // the count of its one chat file, by the rules of [geminiRelease] alone, its
 // bound no estimate of the next request (the launch's floor reads none).
 func (GeminiCLI) meter(ctx context.Context, r io.Reader, _, release string, _ *passBudget) (meterReading, error) {
-	var marks countMarks
-	if release != geminiRelease {
-		marks = marks.with(sandbox.CountRelease)
-	}
-	c := newGeminiCounting()
-	err := chatMemberLines(r, geminiChatMember, func(line []byte) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		c.line(line)
-		return nil
+	count, err := countChat(ctx, newGeminiCounting(), release, geminiRelease, func(line func([]byte) error) error {
+		return chatMemberLines(r, geminiChatMember, line)
 	})
-	if err != nil {
-		return meterReading{count: c.count(marks.with(sandbox.CountUnread))}, err
-	}
-	return meterReading{count: c.count(marks)}, nil
+	return meterReading{count: count}, err
 }
 
 // sessionTraits is how a relaunch judges a Gemini CLI session: in the box the

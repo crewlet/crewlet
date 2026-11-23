@@ -4,18 +4,22 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"io"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // WHAT A GEMINI CLI OR QWEN CODE CONTINUATION'S FIRST REQUEST CARRIES, read off
-// the one chat file its archive holds, a line at a time (geminicount.go,
-// qwencount.go): an upper bound of the figure each harness compares with its
-// point before the brief, judged in the box the launch gets (chatpoint.go).
+// the one chat file a capture's archive holds, or a job's box at its
+// collection, a line at a time (geminicount.go, qwencount.go): an upper bound
+// of the figure each harness compares with its point before the brief, judged
+// in the box the launch gets (chatpoint.go).
 
 // errChatArchive is an archive that holds no one chat file the meter reads.
 var errChatArchive = errors.New("executor: the archive holds no one chat file")
@@ -52,11 +56,76 @@ func chatMemberLines(r io.Reader, member func(string) bool, line func([]byte) er
 			return errChatArchive
 		}
 		read = true
-		if _, err := codexLines(tr, func(_ int, body []byte) error { return line(body) },
-			func(n int) error { return fmt.Errorf("%w: line %d", errChatLine, n) }); err != nil {
+		if err := chatFileLines(tr, line); err != nil {
 			return err
 		}
 	}
+}
+
+// chatFileLines hands line each whole line of r, one chat file, a torn last
+// line passed over, as the gate cuts it before a resume ([chatSessionGate]).
+func chatFileLines(r io.Reader, line func([]byte) error) error {
+	_, err := codexLines(r, func(_ int, body []byte) error { return line(body) },
+		func(n int) error { return fmt.Errorf("%w: line %d", errChatLine, n) })
+	return err
+}
+
+// chatCounter is a harness's count of its chat file, a line at a time
+// ([geminiCounting], [qwenCounting]).
+type chatCounter interface {
+	line(raw []byte)
+	count(marks countMarks) *sandbox.ResumedCount
+}
+
+// countChat is c's count of the lines each hands it, by the rules of measured,
+// the one release they were read in, alone: [sandbox.CountRelease] for a chat
+// file release wrote, [sandbox.CountUnread] with each's error where it did not
+// hand every line (ctx's end among them).
+func countChat(ctx context.Context, c chatCounter, release, measured string,
+	each func(line func([]byte) error) error) (*sandbox.ResumedCount, error) {
+
+	var marks countMarks
+	if release != measured {
+		marks = marks.with(sandbox.CountRelease)
+	}
+	err := each(func(line []byte) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		c.line(line)
+		return nil
+	})
+	if err != nil {
+		return c.count(marks.with(sandbox.CountUnread)), err
+	}
+	return c.count(marks), nil
+}
+
+// chatCopyCount is what a job's harness counts the copy of its session its box
+// holds at, read at the job's collection ([sandbox.MainThreadAsk.Count]) by
+// the rules the take's meter counts a capture by: the chat file file names
+// ("" for none, [sandbox.CountUnread]) read whole within the read's wait. A box
+// whose job continues it in place resumes that file, unscrubbed, so a relaunch
+// continuing the copy, or a capture of it taken whole, is judged by this count
+// ([sandbox.LaunchRecord.ResumedCount]); a release but measured counts nothing.
+func chatCopyCount(ctx context.Context, box sandbox.Sandbox, file string, c chatCounter,
+	release, measured string) *sandbox.ResumedCount {
+
+	if release != measured {
+		return &sandbox.ResumedCount{Mark: sandbox.CountRelease}
+	}
+	if file == "" {
+		return &sandbox.ResumedCount{Mark: sandbox.CountUnread}
+	}
+	r, err := box.OpenFile(ctx, file)
+	if err != nil {
+		return &sandbox.ResumedCount{Mark: sandbox.CountUnread}
+	}
+	defer func() { _ = r.Close() }()
+	count, _ := countChat(ctx, c, release, measured, func(line func([]byte) error) error {
+		return chatFileLines(r, line)
+	})
+	return count
 }
 
 // lineSeparators reports whether raw, a chat file line, holds U+2028 or

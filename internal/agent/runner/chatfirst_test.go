@@ -13,15 +13,20 @@ import (
 // A GEMINI CLI OR QWEN CODE CONTINUATION IS JUDGED AT ITS FIRST REQUEST, as
 // their runners state it (executor.SessionTraits): both compress there, before
 // the brief, at a point the box sets, so neither is held whatever its brief.
-// A kept capture with a bounded count is handed both tellings, the held one
-// picked and the summarized one beside it for the launch to judge in its box;
-// a copy its box holds, whose record counts nothing, is told as a summary
-// alone.
+// A kept capture taken whole in its box is judged by the worse of its count
+// and its copy's, which the job's collection counts as the take does (the
+// executor's chatCopyCount): both bounded, it is handed both tellings, the
+// held one picked and the summarized one beside it for the launch to judge in
+// its box; a copy counted nothing (nil, as no collection asked) or unread (its
+// harness cut off) hands the summarized telling alone. A copy continued in
+// its box is judged by its own count the same way.
 //
-// Mutation: give either harness no traits (held whatever its brief), and a
-// case goes red.
+// Mutations, each red: give either harness no traits (held whatever its
+// brief); judge a kept capture by its own count alone; hand the held telling
+// for a copy with no bound.
 func TestAGeminiOrQwenContinuationIsJudgedAtItsFirstRequest(t *testing.T) {
 	t.Parallel()
+	unread := &sandbox.ResumedCount{Mark: sandbox.CountUnread}
 	for _, harness := range []string{executor.GeminiCLIName, executor.QwenCodeName} {
 		copied := func(count *sandbox.ResumedCount) func(*runner.Resume) {
 			return func(r *runner.Resume) {
@@ -31,23 +36,58 @@ func TestAGeminiOrQwenContinuationIsJudgedAtItsFirstRequest(t *testing.T) {
 		}
 		basis := keptClaude(far, false)
 		basis.Harness = harness
-		kept := guarded{basis: basis, bridged: []runner.BridgedCall{earlierCall}, prep: copied(far)}.relaunch(t)
-		switch s := kept.Session; {
-		case s == nil:
-			t.Fatalf("%s: the relaunch continues no kept session", harness)
-		case strings.Contains(s.Replaced, prompts.MayCompactSession):
-			t.Errorf("%s: the kept path's picked telling is the summarized one", harness)
-		case s.Summarized == nil || !strings.Contains(s.Summarized.Replaced, prompts.MayCompactSession):
-			t.Errorf("%s: the kept path hands no summarized telling beside the held one: %+v", harness,
-				s.Summarized)
-		case s.Count == nil || s.Count.Tokens != far.Tokens:
-			t.Errorf("%s: the kept path is judged by %+v, want the capture's count", harness, s.Count)
+		for _, tc := range []struct {
+			name         string
+			copy, judged *sandbox.ResumedCount
+		}{
+			{"its copy counted as the capture", far, far},
+			{"its copy counted above the capture", near, near},
+			{"its copy counted nothing", nil, nil},
+			{"its copy unread", unread, nil},
+		} {
+			kept := guarded{basis: basis, bridged: []runner.BridgedCall{earlierCall}, prep: copied(tc.copy)}.relaunch(t)
+			s := kept.Session
+			switch {
+			case s == nil:
+				t.Fatalf("%s, %s: the relaunch continues no kept session", harness, tc.name)
+			case tc.judged == nil:
+				if !strings.Contains(s.Replaced, prompts.MayCompactSession) || s.Summarized != nil {
+					t.Errorf("%s, %s: the kept path is handed %q beside %+v, want the summarized telling "+
+						"alone", harness, tc.name, s.Replaced, s.Summarized)
+				}
+			case strings.Contains(s.Replaced, prompts.MayCompactSession):
+				t.Errorf("%s, %s: the kept path's picked telling is the summarized one", harness, tc.name)
+			case s.Summarized == nil || !strings.Contains(s.Summarized.Replaced, prompts.MayCompactSession):
+				t.Errorf("%s, %s: the kept path hands no summarized telling beside the held one: %+v", harness,
+					tc.name, s.Summarized)
+			case s.Count == nil || s.Count.Tokens != tc.judged.Tokens:
+				t.Errorf("%s, %s: the kept path is judged by %+v, want %d", harness, tc.name, s.Count,
+					tc.judged.Tokens)
+			}
 		}
-		inPlace := guarded{basis: inBoxBasis, bridged: []runner.BridgedCall{earlierCall},
-			carry: func(r *runner.Resume) { answered("use main")(r); copied(nil)(r) }}.relaunch(t)
-		if c := inPlace.Continue; c == nil || !strings.Contains(c.Brief, prompts.MayCompactSession) ||
-			c.Summarized != "" {
-			t.Errorf("%s: the copy is continued as %+v, want the summarized telling alone", harness, c)
+		for _, tc := range []struct {
+			name  string
+			count *sandbox.ResumedCount
+			held  bool
+		}{
+			{"counted", far, true},
+			{"counted nothing", nil, false},
+			{"unread", unread, false},
+		} {
+			inPlace := guarded{basis: inBoxBasis, bridged: []runner.BridgedCall{earlierCall},
+				carry: func(r *runner.Resume) { answered("use main")(r); copied(tc.count)(r) }}.relaunch(t)
+			c := inPlace.Continue
+			switch {
+			case c == nil:
+				t.Fatalf("%s, a copy %s: the relaunch continues no copy", harness, tc.name)
+			case !tc.held && (!strings.Contains(c.Brief, prompts.MayCompactSession) || c.Summarized != ""):
+				t.Errorf("%s, a copy %s: continued as %+v, want the summarized telling alone", harness, tc.name, c)
+			case tc.held && (strings.Contains(c.Brief, prompts.MayCompactSession) ||
+				!strings.Contains(c.Summarized, prompts.MayCompactSession) || c.Count == nil ||
+				c.Count.Tokens != tc.count.Tokens):
+				t.Errorf("%s, a copy %s: continued as %+v, want the held telling, the summarized one beside "+
+					"it, judged by its count", harness, tc.name, c)
+			}
 		}
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -21,6 +22,14 @@ import (
 // packed as its take packs it: a gzipped tar of its one chat file under the
 // member name its harness's archive names it by.
 func chatCountArchive(t *testing.T, harness, name string) []byte {
+	t.Helper()
+	member := map[string]string{"gemini": "chats/session-2026-11-23T06-14-63e9014e.jsonl",
+		"qwen": "projects/-work/chats/0b6f3c2e-0000-4000-8000-000000000001.jsonl"}[harness]
+	return tarGz(t, member, chatCountFixture(t, harness, name))
+}
+
+// chatCountFixture is the count fixture name of harness's chat file.
+func chatCountFixture(t *testing.T, harness, name string) []byte {
 	t.Helper()
 	dir := map[string]string{"gemini": "gemini/0.70.0", "qwen": "qwen/0.28.4"}[harness]
 	f, err := os.Open(filepath.Join("testdata", dir, "count", name+".chat.jsonl.gz"))
@@ -36,9 +45,7 @@ func chatCountArchive(t *testing.T, harness, name string) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
-	member := map[string]string{"gemini": "chats/session-2026-11-23T06-14-63e9014e.jsonl",
-		"qwen": "projects/-work/chats/0b6f3c2e-0000-4000-8000-000000000001.jsonl"}[harness]
-	return tarGz(t, member, chat)
+	return chat
 }
 
 // tarGz is a gzipped tar of one regular member, name, holding body.
@@ -426,5 +433,113 @@ func TestAQwenCompressionsHistoryIsCountedWhateverItsFigure(t *testing.T) {
 		if count.Mark != tc.mark {
 			t.Errorf("%s, then a reply: counted %+v, want %q", tc.name, count, tc.mark)
 		}
+	}
+}
+
+// A GEMINI CLI OR QWEN CODE JOB'S COLLECTION COUNTS ITS BOX'S COPY AS ITS TAKE
+// WOULD: the one chat file naming the job's session, read in its box, counts
+// exactly what the take's meter counts the same file at, a torn last line
+// passed over as the gate cuts it, so a relaunch continuing the copy, or a
+// capture of it taken whole, is judged by a bound; a release but the measured
+// one, a session with no file or one with two is no bound, and a read that
+// asks no count reads none.
+//
+// Mutations, each red: count nothing at a collection (the copy's count nil, or
+// unread); read the first of two files naming the session; count another
+// release; count a torn line.
+func TestAGeminiOrQwenCollectionCountsItsBoxsCopyAsItsTakeWould(t *testing.T) {
+	t.Parallel()
+	const geminiSession, qwenSession = "4759e486-b48b-459f-81aa-9b61a3bc8b09", "33333333-1818-4333-8444-000000000001"
+	for _, tc := range []struct {
+		name, harness, fixture, release string
+		files                           func(p executor.Paths, chat []byte) map[string][]byte
+		uncounted                       bool
+		mark                            sandbox.CountMark
+	}{
+		{name: "gemini, its one file", harness: "gemini", fixture: "round.run1",
+			files: func(p executor.Paths, chat []byte) map[string][]byte {
+				return map[string][]byte{p.GeminiChats() + "/session-2026-11-23T03-07-4759e486.jsonl": chat}
+			}},
+		{name: "gemini, a torn last line", harness: "gemini", fixture: "round.run1",
+			files: func(p executor.Paths, chat []byte) map[string][]byte {
+				return map[string][]byte{p.GeminiChats() + "/session-2026-11-23T03-07-4759e486.jsonl": append(
+					slices.Clone(chat), `{"id":"torn","type":"user","content":[{"text":"`+strings.Repeat("x", 4096)...)}
+			}},
+		{name: "gemini, two files naming it", harness: "gemini", fixture: "round.run1", mark: sandbox.CountUnread,
+			files: func(p executor.Paths, chat []byte) map[string][]byte {
+				return map[string][]byte{p.GeminiChats() + "/session-2026-11-23T03-07-4759e486.jsonl": chat,
+					p.GeminiChats() + "/session-2026-11-23T03-01-4759e486.jsonl": chat[:bytes.IndexByte(chat, '\n')+1]}
+			}},
+		{name: "gemini, another release", harness: "gemini", fixture: "round.run1", release: "0.71.0",
+			mark: sandbox.CountRelease, files: func(p executor.Paths, chat []byte) map[string][]byte {
+				return map[string][]byte{p.GeminiChats() + "/session-2026-11-23T03-07-4759e486.jsonl": chat}
+			}},
+		{name: "gemini, no file", harness: "gemini", fixture: "round.run1", mark: sandbox.CountUnread,
+			files: func(executor.Paths, []byte) map[string][]byte { return nil }},
+		{name: "gemini, no count asked", harness: "gemini", fixture: "round.run1", uncounted: true,
+			files: func(p executor.Paths, chat []byte) map[string][]byte {
+				return map[string][]byte{p.GeminiChats() + "/session-2026-11-23T03-07-4759e486.jsonl": chat}
+			}},
+		{name: "qwen, its one file", harness: "qwen", fixture: "boundary-at",
+			files: func(p executor.Paths, chat []byte) map[string][]byte {
+				return map[string][]byte{p.QwenDir() + "/projects/-work/chats/" + qwenSession + ".jsonl": chat}
+			}},
+		{name: "qwen, a torn last line", harness: "qwen", fixture: "boundary-at",
+			files: func(p executor.Paths, chat []byte) map[string][]byte {
+				return map[string][]byte{p.QwenDir() + "/projects/-work/chats/" + qwenSession + ".jsonl": append(
+					slices.Clone(chat), `{"type":"user","message":{"parts":[{"text":"`+strings.Repeat("x", 4096)...)}
+			}},
+		{name: "qwen, two files naming it", harness: "qwen", fixture: "boundary-at", mark: sandbox.CountUnread,
+			files: func(p executor.Paths, chat []byte) map[string][]byte {
+				return map[string][]byte{p.QwenDir() + "/projects/-work/chats/" + qwenSession + ".jsonl": chat,
+					p.QwenDir() + "/projects/-other/chats/" + qwenSession + ".jsonl": chat}
+			}},
+		{name: "qwen, another release", harness: "qwen", fixture: "boundary-at", release: "0.28.5",
+			mark: sandbox.CountRelease, files: func(p executor.Paths, chat []byte) map[string][]byte {
+				return map[string][]byte{p.QwenDir() + "/projects/-work/chats/" + qwenSession + ".jsonl": chat}
+			}},
+		{name: "qwen, no file", harness: "qwen", fixture: "boundary-at", mark: sandbox.CountUnread,
+			files: func(executor.Paths, []byte) map[string][]byte { return nil }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var (
+				runner *executor.Runner
+				box    sandbox.Sandbox
+			)
+			session, release := geminiSession, "0.70.0"
+			if tc.harness == "qwen" {
+				session, release = qwenSession, "0.28.4"
+				runner, box = qwenBox(t, "exit 0")
+			} else {
+				runner, box = geminiBoxAt(t, release, "exit 0")
+			}
+			chat := chatCountFixture(t, tc.harness, tc.fixture)
+			for path, content := range tc.files(executor.PathsFor(box), chat) {
+				if err := box.WriteFile(t.Context(), path, content); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ask := sandbox.MainThreadAsk{Session: session, Release: release, Count: !tc.uncounted, Ended: true}
+			if tc.release != "" {
+				ask.Release = tc.release
+			}
+			got := runner.ReadMainThread(t.Context(), box, ask).Count
+			switch {
+			case tc.uncounted:
+				if got != nil {
+					t.Fatalf("a read asking no count counted %+v", got)
+				}
+			case tc.mark != "":
+				if got == nil || got.Mark != tc.mark {
+					t.Fatalf("the copy counts %+v, want %q", got, tc.mark)
+				}
+			default:
+				want := chatCount(t, tc.harness, tc.fixture)
+				if got == nil || got.Mark != "" || got.Tokens != want.Tokens || !reflect.DeepEqual(got.Restart, want.Restart) {
+					t.Fatalf("the copy counts %+v, want the take's %+v", got, want)
+				}
+			}
+		})
 	}
 }
