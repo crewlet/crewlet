@@ -412,7 +412,7 @@ type CoordinatorOptions struct {
 	// every collection's wait for calls in flight (drain.go), so more than once
 	// per run: it is idempotent. It exists for credentials a run HOLDS: an open
 	// session would let a box that outlived its run keep a working key to a seat's
-	// surface for the token's four hours. A parked run's session ends at its
+	// surface for as long as its token lives. A parked run's session ends at its
 	// park's collection ([Coordinator.drainCalls]); waiting notes stay on the
 	// record ([CoordinatorOptions.SteersEnded]). IT WAITS FOR NO CALL STILL
 	// RUNNING (its update may land later, [BridgeLog.InFlight]): collections wait
