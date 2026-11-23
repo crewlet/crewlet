@@ -126,24 +126,34 @@ func (m hermesMessage) calls() []hermesCall {
 func hermesRows(r io.Reader, each func(hermesRow) error, long func() error) error {
 	br := bufio.NewReaderSize(r, 64<<10)
 	return readLines(br, hermesRowMaxBytes, func(line []byte) error {
-		var wire struct {
-			Table string          `json:"t"`
-			Row   json.RawMessage `json:"r"`
+		// A LINE THAT IS NO ROW (the schema, the launch, one torn) is passed
+		// over: the rows are what the readers take.
+		if row, ok := hermesRowOf(line); ok {
+			return each(row)
 		}
-		if json.Unmarshal(line, &wire) != nil || wire.Table == "" {
-			return nil
-		}
-		row := hermesRow{Table: wire.Table}
-		if wire.Table == "messages" && json.Unmarshal(wire.Row, &row.Message) != nil {
-			return nil
-		}
-		return each(row)
+		return nil
 	}, func(int64) error {
 		if long == nil {
 			return nil
 		}
 		return long()
 	})
+}
+
+// hermesRowOf is line as a row, and false for a line that is none.
+func hermesRowOf(line []byte) (hermesRow, bool) {
+	var wire struct {
+		Table string          `json:"t"`
+		Row   json.RawMessage `json:"r"`
+	}
+	if json.Unmarshal(line, &wire) != nil || wire.Table == "" {
+		return hermesRow{}, false
+	}
+	row := hermesRow{Table: wire.Table}
+	if wire.Table == "messages" && json.Unmarshal(wire.Row, &row.Message) != nil {
+		return hermesRow{}, false
+	}
+	return row, true
 }
 
 // transcript reads a Hermes archive ([hermesArchiveFormat]): its one member's
