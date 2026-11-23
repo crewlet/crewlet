@@ -472,7 +472,7 @@ func (c *Coordinator) HoldingsOf(ctx context.Context, turnID string, launchSeq, 
 	// WHERE THE RUN BEGAN IS THE KEPT CAPTURE'S WORD, the capture ContinuityOf
 	// has just held the row to, and never the caller's.
 	archive := ArchiveOf(row)
-	archive.RunStart = kept.RunStart()
+	archive.RunStart, archive.Unshadowed = kept.RunStart(), kept.RunUnshadowed
 	holdings, err := reader.ReadHoldings(ctx, archive, func(ctx context.Context) (io.ReadCloser, error) {
 		return c.restore.Open(ctx, row)
 	}, ask)
