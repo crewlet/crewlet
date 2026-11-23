@@ -721,13 +721,20 @@ const SUBJECT_CHIPS = 6;
  * Renders nothing for a finding that names no list, the ordinary finding
  * about one thing.
  */
-export function FindingSubjects({ subjects: all }: { subjects: readonly string[] }) {
+export function FindingSubjects({
+  subjects: all,
+  omitted = 0,
+}: {
+  subjects: readonly string[];
+  /** How many more it is about than the engine's record kept (`subjects_omitted`). */
+  omitted?: number;
+}) {
   const [open, setOpen] = useState(false);
-  if (all.length === 0) return null;
+  if (all.length === 0 && omitted === 0) return null;
   const shown = open ? all : all.slice(0, SUBJECT_CHIPS);
   const hidden = all.length - shown.length;
   return (
-    <ul className="int-subjects" aria-label={`what this is about, ${all.length}`}>
+    <ul className="int-subjects" aria-label={`what this is about, ${all.length + omitted}`}>
       {shown.map((one) => (
         <li key={one} className="int-subject">
           {one}
@@ -744,8 +751,36 @@ export function FindingSubjects({ subjects: all }: { subjects: readonly string[]
           </button>
         </li>
       )}
+      {/* NOT A BUTTON: the engine did not keep these, so there is nothing to
+          open. Said so a long list cut short does not read as the whole. */}
+      {omitted > 0 && (open || hidden === 0) && (
+        <li className="int-subject int-subject-more">{omitted} more not kept</li>
+      )}
     </ul>
   );
+}
+
+/**
+ * What the engine's records of `present`'s findings leave out of the list
+ * drawn from them: the findings each dropped to fit its size (an agent's own,
+ * which its row draws, are not counted), and whether any surface's findings
+ * could not be read beside its status. Null where the list is whole.
+ */
+export function findingsNotShown(present: readonly Present[]): string | null {
+  let omitted = 0;
+  let unread = false;
+  for (const p of present) {
+    omitted += p.row.reconcile?.findings_omitted ?? 0;
+    unread ||= p.row.reconcile?.findings_unread === true;
+  }
+  const said: string[] = [];
+  if (omitted > 0) {
+    said.push(
+      `${omitted} more ${omitted === 1 ? "finding was" : "findings were"} not kept: the engine keeps the most important first.`,
+    );
+  }
+  if (unread) said.push("Some findings could not be read just now.");
+  return said.length > 0 ? said.join(" ") : null;
 }
 
 /**
@@ -2208,6 +2243,7 @@ export function IntegrationPeek({ kind }: { kind: string }) {
   const present = presentSurfaces(entry, rows);
   const state = entryState(entry, rows, data?.tools);
   const findings = openFindings(present);
+  const notShown = findingsNotShown(present);
 
   return (
     <>
@@ -2319,7 +2355,10 @@ export function IntegrationPeek({ kind }: { kind: string }) {
                           {finding.detail ||
                             `${finding.kind.replace(/_/g, " ")}${finding.subject ? `: ${finding.subject}` : ""}`}
                         </span>
-                        <FindingSubjects subjects={finding.subjects ?? []} />
+                        <FindingSubjects
+                          subjects={finding.subjects ?? []}
+                          omitted={finding.subjects_omitted}
+                        />
                         {finding.remedy && (
                           <span className="int-note-remedy">{finding.remedy}</span>
                         )}
@@ -2336,6 +2375,7 @@ export function IntegrationPeek({ kind }: { kind: string }) {
                       : "No status reported yet."}
                   </span>
                 )}
+                {notShown && <span className="t-caption">{notShown}</span>}
               </Card>
 
               {/* IS ANYTHING ARRIVING, per surface — the question the facts
