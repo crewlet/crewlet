@@ -99,8 +99,9 @@ type geminiCountLine struct {
 
 // line reads one line: the header, a `$set` or a `$rewindTo` (which only
 // over-counts what it rewinds) are passed over; a `$patch` adds its updates
-// as copies of their records and removes what it names; an entry is a copy
-// of its record. Anything else is unread.
+// as copies of their records and removes what it names, and one that orders
+// the records (`orderIds`, whose effect on the history was not measured) is
+// unread; an entry is a copy of its record. Anything else is unread.
 func (c *geminiCounting) line(raw []byte) {
 	if lineSeparators(raw) {
 		c.marks = c.marks.with(sandbox.CountUnread)
@@ -116,8 +117,9 @@ func (c *geminiCounting) line(raw []byte) {
 		var patch struct {
 			Updates   []json.RawMessage `json:"updates"`
 			RemoveIDs []string          `json:"removeIds"`
+			OrderIDs  json.RawMessage   `json:"orderIds"`
 		}
-		if wireDecode(w.Patch, &patch) != nil {
+		if wireDecode(w.Patch, &patch) != nil || !absent(patch.OrderIDs) {
 			c.marks = c.marks.with(sandbox.CountUnread)
 			return
 		}
