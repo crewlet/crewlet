@@ -888,11 +888,11 @@ type claimSource struct {
 	frontier int
 	tokens   [][2]int
 	// words are each password's or AWS secret's key, its separator's end,
-	// and its value's start and end, -1 while to come, and its seams
-	// ([aValue]). A start of
+	// and its value's start and end, -1 while to come, its seams, its
+	// second range and that range's seams ([aValue]). A start of
 	// -1 stays so: only a word that names no value is claimed without one,
 	// and the window reads it past its end, as none ([keyStage.claimsIn]).
-	words [][9]int
+	words [][12]int
 	// keys is the keys' stage that reads the claims: a claim that ends at
 	// or before where its next window begins ([keyStage.floor]) is asked
 	// of no window, and is not kept.
@@ -911,7 +911,7 @@ func (c *claimSource) token(t [2]int) {
 // while to come: a key and separator with no value, or an AWS secret's, whose
 // value is claimed as a token is.
 func (c *claimSource) word(w [3]int) {
-	c.valued(w, w[1], [3]int{}, [2]int{})
+	c.valued(w, w[1], [6]int{}, [2]int{})
 }
 
 // valued claims k as [claimSource.word] does, its value beginning at start, -1
@@ -922,8 +922,8 @@ func (c *claimSource) word(w [3]int) {
 // its value's end ([keyStage.handed]), which holds every part of it an answer
 // can read: a claim that comes late over a window's footprint is a miss
 // whichever part the answers read.
-func (c *claimSource) valued(k [3]int, start int, seams [3]int, also [2]int) {
-	w := [9]int{k[0], k[1], start, k[2], seams[0], seams[1], seams[2], also[0], also[1]}
+func (c *claimSource) valued(k [3]int, start int, seams [6]int, also [2]int) {
+	w := [12]int{k[0], k[1], start, k[2], seams[0], seams[1], seams[2], also[0], also[1], seams[3], seams[4], seams[5]}
 	end := max(w[1], w[3], w[8])
 	if w[1] < 0 || w[3] < 0 {
 		end = -1
@@ -955,7 +955,7 @@ func (c *claimSource) endWord(sep, end int) {
 // prune lets go of the claims that end at or before lo.
 func (c *claimSource) prune(lo int) {
 	c.tokens = slices.DeleteFunc(c.tokens, func(t [2]int) bool { return t[1] >= 0 && t[1] <= lo })
-	c.words = slices.DeleteFunc(c.words, func(w [9]int) bool { return w[3] >= 0 && max(w[3], w[8]) <= lo })
+	c.words = slices.DeleteFunc(c.words, func(w [12]int) bool { return w[3] >= 0 && max(w[3], w[8]) <= lo })
 }
 
 // stageMode is what a rule's stage does with what it decides.
@@ -1259,10 +1259,11 @@ func (s *ruleStage) hand(e edit) {
 
 // event is one decision of a stage's rule: where what decides it begins and
 // ends (the match, a value rule's key and separator), what it replaces, empty
-// where the key names nothing, and a password's value's seams ([aValue]).
+// where the key names nothing, and a password's value's seams and its second
+// range's ([aValue]).
 type event struct {
 	key, v, also [2]int
-	seams        [3]int
+	seams        [6]int
 	// ran says a password's value is its run read in the whole text
 	// ([aValue]), which [ruleStage.trusted] decides by: read with the
 	// decision, never again, since a read of a value that ends at an
@@ -1272,8 +1273,8 @@ type event struct {
 
 // seamsAt is ev's value's seams in the text as written, each or 0
 // ([aValue]).
-func (s *ruleStage) seamsAt(lo int, ev event) [3]int {
-	var at [3]int
+func (s *ruleStage) seamsAt(lo int, ev event) [6]int {
+	var at [6]int
 	for i, seam := range ev.seams {
 		if seam > 0 {
 			at[i] = s.raw.at(lo + seam)
@@ -2392,8 +2393,8 @@ func (k *keyStage) claimsIn(text string, lo int) *claims {
 				if w[2] > hi && w[3] != w[2] {
 					start = len(text)
 				}
-				var seams [3]int
-				for i, seam := range w[4:7] {
+				var seams [6]int
+				for i, seam := range [6]int{w[4], w[5], w[6], w[9], w[10], w[11]} {
 					if seam > lo && seam <= hi {
 						seams[i] = seam - lo
 					}
@@ -2402,7 +2403,7 @@ func (k *keyStage) claimsIn(text string, lo int) *claims {
 				if w[8] > lo && w[7] <= hi {
 					also = [2]int{max(w[7]-lo, 0), clip(w[8])}
 				}
-				c.passwords = append(c.passwords, [9]int{w[0] - lo, clip(w[1]), start, clip(w[3]), seams[0], seams[1], seams[2], also[0], also[1]})
+				c.passwords = append(c.passwords, [12]int{w[0] - lo, clip(w[1]), start, clip(w[3]), seams[0], seams[1], seams[2], also[0], also[1], seams[3], seams[4], seams[5]})
 			}
 		}
 	}
