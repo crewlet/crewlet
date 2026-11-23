@@ -25,8 +25,15 @@
  */
 
 import { useState } from "react";
-import { Button, Callout, Checkbox, InlineCode } from "@crewlethq/ui";
-import { Modal } from "~/components/Modal.tsx";
+import {
+  Button,
+  Callout,
+  ConsequenceList,
+  InlineCode,
+  ResourceName,
+  type ConsequenceItem,
+} from "@crewlethq/ui";
+import { ConfirmModal, Modal } from "~/components/Modal.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { PlugGlyph, ExternalLinkGlyph } from "@crewlethq/icons/glyphs";
@@ -267,13 +274,14 @@ export function DisconnectDialog({
         <p className="t-body secondary" style={{ margin: 0 }}>
           These credentials stay in your secret store.
         </p>
-        <ul className="col gap-1" style={{ margin: 0, paddingLeft: "1.1rem" }}>
-          {orphans.map((name) => (
-            <li key={name}>
-              <InlineCode>{name}</InlineCode>
-            </li>
-          ))}
-        </ul>
+        <ConsequenceList
+          items={orphans.map((name) => ({
+            kind: "fact",
+            key: name,
+            tone: "kept",
+            text: <ResourceName>{name}</ResourceName>,
+          }))}
+        />
         {/* THE ORDER MATTERS WHILE A TEARDOWN IS STILL OWED, and getting it
             wrong is not cosmetic: the loop removes the webhooks and the
             accounts AFTERWARDS, using these very credentials. Revoke one
@@ -296,101 +304,85 @@ export function DisconnectDialog({
     );
   }
 
+  const handedOver = removeSeats && apps !== undefined && apps.length > 0;
+  const consequences: ConsequenceItem[] = [
+    {
+      kind: "choice",
+      key: "accounts",
+      label: "Also remove the accounts Crewlet created",
+      description: "Deletes each agent’s account.",
+      tone: "danger",
+      checked: removeSeats,
+      disabled: busy,
+      onCheckedChange: setRemoveSeats,
+    },
+    { kind: "fact", key: "wrote", tone: "kept", text: "What they wrote stays." },
+    {
+      kind: "fact",
+      key: "given",
+      tone: "kept",
+      text: "Each agent is turned off there and keeps what it was given, so connecting again and turning it on restores it.",
+    },
+    ...(handedOver
+      ? [
+          {
+            kind: "fact" as const,
+            key: "apps",
+            tone: "warning" as const,
+            text: (
+              <>
+                Each agent’s app is uninstalled. Delete the apps yourself
+                {appPath ? <> at {marked(appPath)}</> : null}.
+              </>
+            ),
+          },
+        ]
+      : []),
+  ];
+
+  // A DISCONNECT IS SEVERAL SURFACES IN ORDER, and one may sit out a busy
+  // vendor for up to forty-five seconds: `submitting` holds the dialog open.
   return (
-    <Modal
+    <ConfirmModal
       open
+      destructive
+      shape="framed"
+      size="md"
       title={`Disconnect ${name}`}
       icon={<PlugGlyph size="md" />}
       onClose={onClose}
-      // A DISCONNECT IS SEVERAL SURFACES IN ORDER, and one of them may be
-      // sitting out a busy vendor for up to forty-five seconds. Dismissing
-      // part-way is how a tool ends up half disconnected with nobody told.
-      dismissable={!busy}
-      size="md"
-      stackBody
-      footer={
-        <>
-          <Button variant="ghost" onClick={onClose} disabled={busy}>
-            Cancel
-          </Button>
-          <Button variant="danger" onClick={() => void submit(false)} disabled={busy}>
-            {busy ? "Disconnecting" : "Disconnect"}
-          </Button>
-        </>
-      }
+      onConfirm={() => submit(false)}
+      submitting={busy}
+      message={`Agents stop working in ${name}, and its webhooks are removed.`}
+      consequencesHeading="When you disconnect"
+      consequences={consequences}
+      confirmLabel="Disconnect"
     >
-      <p className="t-body secondary" style={{ margin: 0 }}>
-        Agents stop working in {name}, and its webhooks are removed. Each agent is turned off there
-        and keeps what it was given, so connecting again and turning it on restores it.
-      </p>
-
-      {/* THE DESIGN SYSTEM'S, and it fixes two things this row had of its own.
-          The whole row is ONE target — a 16px square is under every
-          pointer-target floor there is — and the box is named by its LABEL
-          alone, where a hand-rolled `<label>` wrapping both spans made the
-          accessible name the run-on paragraph with the consequence buried
-          inside it. The consequence is `description`, which is read after the
-          name and on request.
-
-          It is also the ink: that sentence was set in `faint`, the
-          decoration-only step measured between 2.8:1 and 4.5:1, and the words
-          saying what gets DELETED are the last words on this dialog that
-          should be under the text contrast floor. */}
-      <Checkbox
-        framed
-        tone="danger"
-        checked={removeSeats}
-        disabled={busy}
-        onCheckedChange={setRemoveSeats}
-        label="Also remove the accounts Crewlet created"
-        description="Deletes each agent’s account. What they wrote stays."
-      />
-
-      {/* WHO IS LEFT, and where. The engine uninstalls each agent's app,
-          which stops it acting at once, and cannot delete the app itself:
-          neither vendor offers that at any permission this engine could
-          hold. So the agents are named, as agents rather than as handles in
-          a sentence, each with the page that finishes it off.
-
-          A ROW PER AGENT, not a bulleted list of links: this is the same
-          roster the card shows, and the question it answers is "which of my
-          colleagues do I still have to go and remove", which is a list of
-          people rather than a list of URLs. */}
-      {removeSeats && apps && apps.length > 0 && (
-        <div className="col gap-2">
-          <span className="t-caption">
-            Each agent’s app is uninstalled. Delete the apps yourself
-            {appPath ? <> at {marked(appPath)}</> : null}.
-          </span>
-          <ul className="int-rows">
-            {apps.map((app) => (
-              <li key={app.handle} className="int-row int-seat-row">
-                {/* DECORATIVE: the row states the agent's name in the line
-                      beside it, and an avatar that announced it too would say
-                      one thing twice. */}
-                <SeatAvatar
-                  name={app.name || app.handle}
-                  kind="agent"
-                  avatar={avatarOf?.(app.handle)}
-                  size="sm"
-                  decorative
-                />
-                <div className="int-row-identity">
-                  <span className="int-row-name">{app.name || app.handle}</span>
-                </div>
-                <a
-                  className="t-caption int-row-link"
-                  href={app.url}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  <ExternalLinkGlyph size="xs" />
-                  Link to delete
-                </a>
-              </li>
-            ))}
-          </ul>
-        </div>
+      {/* WHO IS LEFT, and where: the engine uninstalls each agent's app and
+          cannot delete the app itself, so each agent is named with the page
+          that finishes it off. */}
+      {handedOver && (
+        <ul className="int-rows">
+          {apps.map((app) => (
+            <li key={app.handle} className="int-row int-seat-row">
+              {/* DECORATIVE: the row states the agent's name beside it. */}
+              <SeatAvatar
+                name={app.name || app.handle}
+                kind="agent"
+                avatar={avatarOf?.(app.handle)}
+                size="sm"
+                decorative
+              />
+              <div className="int-row-identity">
+                <span className="int-row-name">{app.name || app.handle}</span>
+              </div>
+              <a className="t-caption int-row-link" href={app.url} target="_blank" rel="noreferrer">
+                <ExternalLinkGlyph size="xs" />
+                Link to delete
+              </a>
+            </li>
+          ))}
+        </ul>
       )}
 
       {/* NOT AN ERROR, so not the error banner. Something else is writing
@@ -444,6 +436,6 @@ export function DisconnectDialog({
           {error} Disconnecting anyway leaves anything still there for you to remove.
         </Callout>
       )}
-    </Modal>
+    </ConfirmModal>
   );
 }

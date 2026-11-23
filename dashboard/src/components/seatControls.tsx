@@ -24,7 +24,7 @@
 import { useState, type ReactNode } from "react";
 import {
   Button,
-  Checkbox,
+  ConsequenceList,
   FormField,
   IconButton,
   Input,
@@ -287,11 +287,20 @@ export function SeatControlDialog({
           </FormField>
         )}
         {kind === "pause" && running && (
-          <Checkbox
-            checked={alsoStop}
-            onChange={(event) => setAlsoStop(event.target.checked)}
-            label={one ? "Also stop the running turn" : "Also stop the running turns"}
-            description="Otherwise a running turn finishes first. A stop also ends its executor at once. Unfinished work is lost."
+          <ConsequenceList
+            divided
+            items={[
+              {
+                kind: "choice",
+                key: "stop",
+                label: one ? "Also stop the running turn" : "Also stop the running turns",
+                description:
+                  "Otherwise a running turn finishes first. A stop also ends its executor at once. Unfinished work is lost.",
+                tone: "danger",
+                checked: alsoStop,
+                onCheckedChange: setAlsoStop,
+              },
+            ]}
           />
         )}
         <RefusalNote write={write} />
