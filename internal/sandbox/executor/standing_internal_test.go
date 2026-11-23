@@ -65,8 +65,8 @@ func standingFile(t *testing.T, box *sandbox.FakeSandbox, path string) string {
 }
 
 // standingRoutes is every registered runner's route, by name. A runner
-// registered without one fails the table, so a runner that lands (Hermes,
-// Cursor Agent) adds its row with it.
+// registered without one fails the table, so a runner that lands (Cursor
+// Agent) adds its row with it.
 var standingRoutes = map[string]standingProbe{
 	// Claude Code reuses a conversation's recorded prompt unless told not to:
 	// a resume is started with --system-prompt-snapshot off on the release
@@ -161,6 +161,18 @@ var standingRoutes = map[string]standingProbe{
 		if !strings.Contains(grokSessionGate(session, p, false), grokRenewRules(p)) ||
 			!strings.Contains(standingFile(t, box, p.GrokRules()), strings.Trim(string(want), `"`)) {
 			t.Error("a continued session's record is resumed on instructions this launch did not renew")
+		}
+	}},
+	// Hermes Agent freezes the standing instructions in the session's local
+	// policy as it creates it, and a resume keeps them (measured on 0.23.3):
+	// the gate runs hermes_carry.py's renew on the store, handing it this
+	// launch's file, before the resume (hermesSessionGate).
+	HermesName: {routeRewrite, func(t *testing.T, h Harness, req sandbox.RunRequest, session Session) {
+		box, p := standingWritten(t, h, req, session)
+		renew := `"$(hcarry renew ` + shellword.Quote(p.HermesStateDB()) + ` "$sid" ` + shellword.Quote(p.System()) + `)"`
+		if !strings.Contains(hermesSessionGate(req, session, p, false), renew) ||
+			standingFile(t, box, p.System()) != req.System {
+			t.Error("a continued session's frozen launch is resumed on instructions this launch did not renew")
 		}
 	}},
 	// OpenCode renders a session's instruction sources once and tells it a
@@ -283,11 +295,11 @@ func section(t *testing.T) string {
 // launch's in its own words. The thread, questions, memory and knowledge of an
 // earlier launch never read as current.
 //
-// Mutation: drop Claude Code's snapshot switch; Codex's, Kimi's or Grok
-// Build's renew before the resume; the reload channel of Gemini CLI, Qwen
-// Code, Copilot or Muse Code; OpenCode's re-import or Pi's fixed section
-// name; and that runner's row goes red. Register a runner with no
-// row, and the table does.
+// Mutation: drop Claude Code's snapshot switch; Codex's, Kimi's, Grok
+// Build's or Hermes Agent's renew before the resume; the reload channel of
+// Gemini CLI, Qwen Code, Copilot or Muse Code; OpenCode's re-import or Pi's
+// fixed section name; and that runner's row goes red. Register a runner with
+// no row, and the table does.
 func TestAContinuedRunHandsItsModelThisLaunchsStandingInstructions(t *testing.T) {
 	t.Parallel()
 	seen := map[string]bool{}
