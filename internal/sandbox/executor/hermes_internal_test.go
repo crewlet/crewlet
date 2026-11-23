@@ -545,21 +545,16 @@ func hermesGate(t *testing.T, home, release, config string, req sandbox.RunReque
 }
 
 // A CARRIED HERMES SESSION IS RESTORED AND CONTINUED ONLY UNDER THE LAUNCH IT
-// WAS CREATED WITH: restored into a new store and indexed where the box runs
-// the one release and the launch and model route match; a launch naming
-// another model, one whose working directory the box no longer has (Hermes
-// 0.23.3 then runs nothing and exits 1), a box configured for another model
-// provider (which Hermes would ignore for the frozen one), an archive with no
-// launch kept, or a box on another release, starts the fresh session instead,
-// saying why.
-//
-// The restored store is the archive's alone, so no other session's index line
-// or kept launch stays beside it.
+// WAS CREATED WITH: restored into a store of its own alone (no other session's
+// index line or kept launch stays) and indexed where the box runs the one
+// release and the launch and model route match; another model, a working
+// directory the box no longer has (0.23.3 then runs nothing), another model
+// provider (which Hermes would ignore for the frozen one), no launch kept, or
+// another release starts the fresh session instead, saying why.
 //
 // Mutation: skip the policy or route check, read a missing launch as a
-// mismatch of its values, restore on another release, continue without
-// indexing the restored session, or keep another session's index line, and a
-// row goes red.
+// mismatch, restore on another release, skip the index, or keep another
+// session's index line, and a row goes red.
 func TestACarriedHermesSessionContinuesOnlyUnderItsLaunch(t *testing.T) {
 	t.Parallel()
 	req := sandbox.RunRequest{Model: "stub-model"}
@@ -726,17 +721,14 @@ db.commit()`
 
 // A CONTINUED HERMES SESSION IS HANDED THE RUN'S OWN STANDING INSTRUCTIONS:
 // Hermes freezes them with the session (its local policy's client
-// environment) and a resume keeps them, so the carry script writes the run's
-// there, and removes them for a run that has none. Measured on 0.23.3: the
-// resumed request's system message then ends with the renewed text.
+// environment) and a resume keeps them (measured on 0.23.3), so the carry
+// script writes the run's there as the launch reads them ($(cat)), the launch
+// written back compact as Hermes writes it, removes them for a run with none,
+// and answers none for a store holding no frozen launch of the session.
 //
-// The text is the launch's own ($(cat), trailing newlines dropped), the
-// launch is written back compact as Hermes writes it, and a store holding no
-// frozen launch of the session answers none.
-//
-// Mutation: skip the policy's rewrite, keep the old text for a run with none,
-// keep the file's trailing newlines, write the launch back spaced, or answer
-// ok having renewed nothing, and this goes red.
+// Mutation: skip the rewrite, keep the old text for a run with none, keep the
+// file's trailing newlines, write the launch back spaced, or answer ok having
+// renewed nothing, and this goes red.
 func TestAContinuedHermesSessionIsHandedTheRunsOwnInstructions(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -942,18 +934,16 @@ func TestAHermesSessionCutOffInItsFirstLaunchStillContinues(t *testing.T) {
 }
 
 // WHAT A CHECKOUT BELOW THE START DIRECTORY BRINGS A HERMES RUN: a box whose
-// working directory holds its own AGENTS.md and a checkout at ./repo, as
-// code_checkout places one, with every layer a repository brings. The runner
-// hands none of it: Hermes 0.23.3's own subdirectory hints add a checkout's
-// instructions (the first of AGENTS.override.md, AGENTS.md, agents.md,
-// CLAUDE.md, claude.md and .cursorrules in each directory the model touches,
-// up to the working directory) to the tool result that first touches it
-// (measured), and it loads none of a checkout's .hermes.md, .cursor rules,
-// skills, plugins or configuration, which it reads from the working directory
-// alone. So no file the run writes, nor its script, carries any of them.
+// working directory holds its own AGENTS.md and a checkout at ./repo with
+// every layer a repository brings. The runner hands none of it: 0.23.3's own
+// subdirectory hints add a checkout's instructions to the tool result that
+// first touches a directory, and it reads a checkout's .hermes.md, .cursor
+// rules, skills, plugins and configuration not at all (measured;
+// code-sandbox.md "Hermes Agent"). So no file the run writes, nor its script,
+// carries any of them.
 //
 // Mutation: hand the checkout's instructions, skills, plugins or settings to
-// the run in any file it writes or in its script, and its kind goes red.
+// the run in a file it writes or its script, and its kind goes red.
 func TestWhatACheckoutBelowTheStartDirectoryBringsAHermesRun(t *testing.T) {
 	t.Parallel()
 	fake := sandbox.NewFakeSandbox("b")
