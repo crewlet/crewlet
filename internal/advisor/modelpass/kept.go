@@ -82,7 +82,8 @@ func (r DeepRun) Kept() DeepRun {
 		}
 	}
 	for _, p := range r.Progress[max(0, len(r.Progress)-keptLines):] {
-		out.Progress = append(out.Progress, Progress{At: p.At, Text: cut(p.Text, keptLineBytes)})
+		out.Progress = append(out.Progress, Progress{At: p.At, Text: cut(p.Text, keptLineBytes), Step: p.Step,
+			Failed: p.Failed, Detail: cut(p.Detail, keptLineBytes), Why: cut(p.Why, keptLineBytes)})
 	}
 	tally := tallyOf(r.Agenda)
 	out.Tally = &tally

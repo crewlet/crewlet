@@ -121,8 +121,9 @@ func TestTheEndOfAStreamIsWholeLines(t *testing.T) {
 
 // A KEY THAT BEGAN BEFORE THE READ IS NEVER SHOWN, however much redaction
 // shrinks what follows: read without its BEGIN, a key is redacted back from
-// its END only until three foreign lines (package redact's doc), and later
-// keys collapsing into markers must not pull the kept end into the context.
+// its END only until three foreign lines (redact's keyBlocks and backReading),
+// and later keys collapsing into markers must not pull the kept end into the
+// context.
 //
 // Mutation: keep the end of the whole read's redaction (sandbox.KeepEnd over
 // redact.Secrets of every whole line read), and the key's body is shown.

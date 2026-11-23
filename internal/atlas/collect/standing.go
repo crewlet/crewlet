@@ -30,8 +30,9 @@ var States = []State{StateNever, StateRead, StatePartial, StateFailed}
 func (s State) Valid() bool { return slices.Contains(States, s) }
 
 // Standing is one source as a reader is shown it: its recorded standing
-// ([Status]) without the read's digest or the ids of what it stopped seeing,
-// the ask that waits on it, and when it is read next.
+// ([Status]) without the read's digest, the ask that waits on it, and when it
+// is read next. It never needs the ids of what the source stopped seeing,
+// which are a record of their own a report never reads.
 type Standing struct {
 	Kind  integration.Kind `json:"kind"`
 	State State            `json:"state"`
@@ -115,16 +116,12 @@ func Describe(kinds []integration.Kind, standings map[integration.Kind]Status,
 
 // describe is one source's standing as a reader is shown it.
 func describe(kind integration.Kind, st Status, req Request, interval time.Duration, now time.Time) Standing {
-	missing := st.MissingOverflow
-	for _, g := range st.Missing {
-		missing += len(g.Entries)
-	}
 	out := Standing{
 		Kind: kind, State: st.state(),
 		LastAttemptAt: st.LastAttemptAt, LastCompleteAt: st.LastCompleteAt,
 		Entries: st.Entries, Calls: st.Calls, Withheld: st.Withheld,
 		Recorded: st.Recorded, Retired: st.Retired, Purged: st.Purged,
-		Missing: missing, LastError: st.LastError,
+		Missing: st.Missed, LastError: st.LastError,
 		Unread: slices.Clone(st.Unread), UnreadOverflow: st.UnreadOverflow,
 		Scopes: slices.Clone(st.Scopes),
 	}

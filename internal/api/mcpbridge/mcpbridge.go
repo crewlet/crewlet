@@ -41,9 +41,10 @@
 //   - THE MODEL A CALL WAS MADE ON. A harness's rounds are invisible to the
 //     engine, so each call is told the model the launch pointed the harness at
 //     ([Session.Model]), which a seat's code write names on its push.
-//   - AN IDENTITY. The per-run token (per-job, expiring with the run, nothing secret
-//     in the box: internal/runtoken) makes every call the run's SEAT acting; see
-//     [seatCaller.Acting] for why the request's own answer cannot be the one.
+//   - AN IDENTITY. The per-run token (per-job, living as long as the run,
+//     [Session.Deadline]; nothing secret in the box: internal/runtoken) makes
+//     every call the run's SEAT acting; see [seatCaller.Acting] for why the
+//     request's own answer cannot be the one.
 //
 // # A note inbox
 //
@@ -298,7 +299,7 @@
 // page in a browser cannot make, authenticates it, so the SDK's DNS-rebinding guard is off
 // ([mcp.StreamableHTTPOptions.DisableLocalhostProtection]): it refused the hop an
 // executor's call commonly takes, a reverse proxy or tunnel connecting on 127.0.0.1 and
-// passing the public Host on. A leaked token is bounded by its run ([DefaultTTL]).
+// passing the public Host on. A leaked token is bounded by its run ([Session.Deadline]).
 //
 // # A hook's cancel is heard before the SDK
 //
@@ -410,6 +411,17 @@ type Session struct {
 	// against. A seat's is its [*tools.Surface] bound to the run's turn
 	// ([tools.Surface.ForTurn]); [Bridge.Open] refuses one that names no seat.
 	Surface Surface
+
+	// Deadline is the run's own wall-clock cap (sandbox.PendingRun.Deadline, a
+	// scheduled turn's), zero for none, which its job's tokens expire at.
+	// WHERE IT HAS NONE, NEITHER HAVE THEY: an executor run has no other wall-
+	// clock limit, works and parks on a person for as long as its turn needs,
+	// and holds the one endpoint its launch wrote into its harness's
+	// configuration, which nothing can renew. What ends a token is its run:
+	// every request is checked against the job's live opening ([Bridge.held]),
+	// which the run's end, a relaunch or the seat leaving closes, and a job's
+	// id is never minted again, so a token outlives its run by nothing (#1833).
+	Deadline time.Time
 
 	// OnHost is whether the run's box is on this node's own host — the
 	// `direct` cell — and so dials the bridge at this node's own listener
@@ -671,8 +683,6 @@ type Bridge struct {
 	// host is the URL a box on this node's own host dials — see
 	// [Options.HostURL].
 	host string
-	// ttl bounds a minted endpoint.
-	ttl time.Duration
 
 	mu sync.RWMutex
 	// sessions is every live opening by id, which a token names.
@@ -713,7 +723,8 @@ type Options struct {
 	// refused ([runtoken.Options]).
 	Material runtoken.Material
 
-	// Now is the clock, for the token expiry. Nil takes wall-clock time.
+	// Now is the clock, for a token's expiry ([Session.Deadline]). Nil takes
+	// wall-clock time.
 	Now func() time.Time
 
 	// BaseURL is where a box reaches the fleet's bridge, e.g.
@@ -727,26 +738,14 @@ type Options struct {
 	// to BaseURL because loopback never leaves the host. Empty where the node
 	// binds none, whose direct boxes dial BaseURL.
 	HostURL string
-
-	// TTL bounds a minted endpoint. Zero takes [DefaultTTL].
-	TTL time.Duration
 }
-
-// DefaultTTL is how long a run's endpoint stays valid: four hours, outliving
-// an executor parked on a person's answer (hours, not minutes). A run that
-// ends early takes its session with it ([Bridge.Close]), so this bounds only
-// the window a LEAKED token could match a live session.
-const DefaultTTL = 4 * time.Hour
 
 // New builds a bridge, or refuses a keyring that cannot sign for the fleet
 // ([runtoken.ErrNoKeyring]).
 func New(opts Options) (*Bridge, error) {
-	ttl := opts.TTL
-	if ttl <= 0 {
-		ttl = DefaultTTL
-	}
+	// LIFELONG: a job's token lives as long as its run ([Session.Deadline]).
 	signer, err := runtoken.New(runtoken.Options{
-		Domain: KeyDomain, Material: opts.Material, Now: opts.Now,
+		Domain: KeyDomain, Material: opts.Material, Now: opts.Now, Lifelong: true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("mcpbridge: %w", err)
@@ -755,7 +754,6 @@ func New(opts Options) (*Bridge, error) {
 		signer:   signer,
 		base:     strings.TrimSuffix(opts.BaseURL, "/"),
 		host:     strings.TrimSuffix(opts.HostURL, "/"),
-		ttl:      ttl,
 		sessions: map[string]*binding{},
 		runs:     map[string]*binding{},
 		ready:    map[uuid.UUID]bool{},
@@ -839,9 +837,9 @@ func (b *Bridge) Open(ctx context.Context, s *Session) string {
 	// when asked for as it was, could be refused only after its session was
 	// filed, which a caller reading the refusal as no session opened would
 	// leave live.
-	token, err := b.signer.Mint(opened.subject(false), b.ttl)
+	token, err := b.signer.MintUntil(opened.subject(false), s.Deadline)
 	if err == nil {
-		opened.other, err = b.signer.Mint(opened.subject(true), b.ttl)
+		opened.other, err = b.signer.MintUntil(opened.subject(true), s.Deadline)
 	}
 	if err != nil {
 		log.Error("mcp_bridge_token_refused", "run_id", s.RunID, "launch_id", s.Launch, "seat", s.Handle,

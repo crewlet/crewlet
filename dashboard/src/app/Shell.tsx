@@ -57,7 +57,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { AppShell, SectionFrame, useMediaMatch, useStoredWidth } from "@crewlethq/ui";
+import { AppShell, SectionFrame, returnFocus, useMediaMatch, useStoredWidth } from "@crewlethq/ui";
 import {
   DESTINATIONS,
   WORKSPACES,
@@ -117,6 +117,7 @@ import { STORAGE_KEYS } from "~/lib/storage.ts";
 import { useAskReading } from "./assistant/place.ts";
 import {
   ASSISTANT_COMPOSER_ID,
+  ASSISTANT_TRIGGER_ID,
   AssistantControlContext,
   askVerbs,
   type AssistantFocus,
@@ -401,6 +402,13 @@ export function usePageInView(): boolean {
   return visible && !covered;
 }
 
+/** Whether focus is inside the frame's aside, where the assistant's panel stands. */
+function asideHoldsFocus(): boolean {
+  return (
+    document.querySelector(".crewlet-app-shell__aside")?.contains(document.activeElement) ?? false
+  );
+}
+
 /** Whether the tab is in front: a hidden one is drawing for nobody. */
 function tabInFront(): boolean {
   return document.visibilityState !== "hidden";
@@ -601,21 +609,33 @@ function Frame({ children, standalone }: { children: ReactNode; standalone: bool
   // somebody else signs in takes that too.
   const [assistantWanted, setAssistantOpen] = useState(() => readTab().open);
   const [assistantFocus, setAssistantFocus] = useState<AssistantFocus>("heading");
+  // Whether focus was in the panel as it closed: the Ask button it came from
+  // was not drawn while it was open, so the panel could not hand focus back.
+  const handBack = useRef(false);
   const showAssistant = useCallback((open: boolean, focus: AssistantFocus = "composer") => {
+    if (!open) handBack.current = asideHoldsFocus();
     setAssistantFocus(focus);
     setAssistantOpen(open);
     writeTab({ open });
   }, []);
   // ASK CREWLET'S PAGE IS THE CONVERSATION ITSELF, the one the drawer holds
   // (`assistant/chunk/AskPage.tsx`): no drawer is drawn over it, the drawer
-  // open on arrival is closed, and the Ask button and its key go to the
-  // page's own composer.
+  // open on arrival is closed, and the Ask button is not drawn while the
+  // page is the screen; its key goes to the page's own composer.
   const routed = resolve(route.path);
   const askHere = routed.resolved && routed.screen === "ask";
   const assistantOpen = assistantWanted && !askHere;
   useEffect(() => {
     if (askHere && assistantWanted) showAssistant(false);
   }, [askHere, assistantWanted, showAssistant]);
+  useEffect(() => {
+    if (assistantOpen || !handBack.current) return;
+    handBack.current = false;
+    const held = document.activeElement;
+    if (held === null || held === document.body) {
+      returnFocus(document.getElementById(ASSISTANT_TRIGGER_ID));
+    }
+  }, [assistantOpen]);
 
   const [labels, setLabels] = useState<Labels>({});
   const [coverage, setCoverage] = useState<CoverageFacts | null>(null);
@@ -794,7 +814,8 @@ function Frame({ children, standalone }: { children: ReactNode; standalone: bool
   const assistantUnavailable = ask.unavailable;
   const assistantControl = useMemo(
     () => ({
-      open: assistantOpen,
+      // THE ONE "IS ASK CREWLET ON SCREEN": its panel, or its page as the screen.
+      open: assistantOpen || askHere,
       unavailable: assistantUnavailable,
       toggle: (focus: AssistantFocus = "composer") => {
         if (askHere) document.getElementById(ASSISTANT_COMPOSER_ID)?.focus();

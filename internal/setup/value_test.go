@@ -104,10 +104,6 @@ func TestAnIdentifierShapeHoldsAPasteAndRefusesAMint(t *testing.T) {
 		{setup.ShapeMetaToken, "EAAGm0PX4Z", false},
 		{setup.ShapeMetaToken, "eaaGm0PX4ZCpsBA" + strings.Repeat("Zx9", 12), false},
 		{setup.ShapeMetaToken, "EAAGm0PX4ZCpsBA" + strings.Repeat("Zx-", 12), false},
-		{setup.ShapeAppleKeyID, "2X9R4HXF34", true},
-		{setup.ShapeAppleKeyID, "2x9r4hxf34", false},
-		{setup.ShapeAppleKeyID, "2X9R4HXF3", false},
-		{setup.ShapeAppleKey, "-----BEGIN PRIVATE KEY-----\nnot a key\n-----END PRIVATE KEY-----", false},
 		{setup.ShapeAppleAdsKey, sec1Key(t), true},
 		{setup.ShapeAppleAdsKey, "-----BEGIN EC PRIVATE KEY-----\nnot a key\n-----END EC PRIVATE KEY-----", false},
 		{setup.ShapeAppleAdsID, "SEARCHADS.aeb3ef5f-0c5a-4f2a-99c8-fca83f25a9e1", true},
@@ -121,8 +117,8 @@ func TestAnIdentifierShapeHoldsAPasteAndRefusesAMint(t *testing.T) {
 			t.Errorf("%s: the refusal quotes the value", tc.shape)
 		}
 	}
-	for _, shape := range []setup.Shape{setup.ShapeUUID, setup.ShapeScalewayAccessKey, setup.ShapeAppleKey,
-		setup.ShapeAppleKeyID, setup.ShapeAppleAdsKey, setup.ShapeAppleAdsID} {
+	for _, shape := range []setup.Shape{setup.ShapeUUID, setup.ShapeScalewayAccessKey, setup.ShapeAppleAdsKey,
+		setup.ShapeAppleAdsID} {
 		if value, err := shape.Mint(func() string { return "minted" }); err == nil || value != "" {
 			t.Errorf("%s minted %q", shape, value)
 		}
@@ -179,18 +175,18 @@ func sec1Key(t *testing.T) string {
 	return string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der}))
 }
 
-// appleKey is App Store Connect's .p8 field.
+// appleKey is Apple Ads' private key field, which takes a PKCS #8 key too.
 var appleKey = setup.Requirement{
-	Field: "main_admin_private_key", Label: "Admin key (.p8)", Kind: setup.KindSecret,
-	ConfigPath: "integrations.app_store_connect.connections.main.keys.admin.private_key",
-	SecretName: "APP_STORE_CONNECT_MAIN_ADMIN_KEY", Shape: setup.ShapeAppleKey,
+	Field: "main_private_key", Label: "Private key", Kind: setup.KindSecret,
+	ConfigPath: "integrations.apple_ads.connections.main.private_key",
+	SecretName: "APPLE_ADS_MAIN_KEY", Shape: setup.ShapeAppleAdsKey,
 }
 
-// A .P8 PASTED INTO A ONE-LINE BOX IS STILL THE KEY. The browser drops every
+// A KEY PASTED INTO A ONE-LINE BOX IS STILL THE KEY. The browser drops every
 // line break from a paste into a password input, so the key reached the
-// engine as one line, was refused as "not a .p8 key", and nothing the operator
-// could do in that box would ever pass. It is taken and sealed as Apple wrote
-// it; anything that is not one PKCS#8 P-256 key is still refused.
+// engine as one line, was refused as not a key, and nothing the operator
+// could do in that box would ever pass. It is taken and sealed as it was
+// written; anything that is not one P-256 key is still refused.
 //
 // Mutation: drop Shape.Canonical from normalise, and the flattened key is
 // refused or sealed on one line.
@@ -205,8 +201,8 @@ func TestAnAppleKeyPastedOnOneLineIsSealedWithItsLineBreaks(t *testing.T) {
 	} {
 		rec := &recorder{}
 		_, err := writer(rec).Write(t.Context(), []setup.Requirement{appleKey}, setup.Submission{
-			Kind: integration.KindAppStoreConnect, Values: map[string]string{appleKey.Field: pasted},
-			Summary: "connect app store connect", By: founder,
+			Kind: integration.KindAppleAds, Values: map[string]string{appleKey.Field: pasted},
+			Summary: "connect apple ads", By: founder,
 		})
 		if err != nil {
 			t.Fatalf("%s: Write = %v", name, err)
@@ -218,7 +214,7 @@ func TestAnAppleKeyPastedOnOneLineIsSealedWithItsLineBreaks(t *testing.T) {
 	rsaLike := strings.ReplaceAll(whole, "PRIVATE KEY", "RSA PRIVATE KEY")
 	for _, bad := range []string{strings.ReplaceAll(rsaLike, "\n", ""), "MIGTAgEAMBMG", "BEGIN PRIVATE KEY"} {
 		if appleKey.ValueProblem(bad) == "" {
-			t.Errorf("%.30q was taken for a .p8 key", bad)
+			t.Errorf("%.30q was taken for a P-256 key", bad)
 		}
 	}
 }

@@ -190,7 +190,7 @@ const card = (data: GrowthCard) => (
   />
 );
 
-/** An App Store Connect team with one key, two apps read by name, and the roles reference. */
+/** An App Store Connect team, two apps read by name with an agent's key, and the roles reference. */
 const ASC_ROW = {
   key: "app_store_connect",
   configured: true,
@@ -200,12 +200,12 @@ const ASC_ROW = {
       name: "",
       identity: "57246542-96fe-1a63-e053-0824d011072a",
       state: "",
-      roles_held: ["MARKETING"],
+      roles_held: [],
       accounts: [
         { product: "app_store_connect", account: "6763222842", account_name: "Field Notes" },
         { product: "app_store_connect", account: "1234567890", account_name: "Trail Maps" },
       ],
-      open: false,
+      open: true,
     },
   ],
   roles: [
@@ -361,7 +361,14 @@ describe.each(["light", "dark"] as const)("on a %s document", (theme) => {
       await mount(
         width,
         theme,
-        <RecentChanges product="google_ads" accounts={new Map([[LONG_ID.slice(0, 64), "KWD"]])} />,
+        <RecentChanges
+          product="google_ads"
+          accounts={
+            new Map([
+              [LONG_ID.slice(0, 64), { id: LONG_ID.slice(0, 64), name: "", currency: "KWD" }],
+            ])
+          }
+        />,
       );
       expect(overflowing(host!, width)).toEqual([]);
       const targets = [...host!.querySelectorAll<HTMLElement>(".growth-change__what")];

@@ -158,9 +158,12 @@ func TestTheAdsGuideNamesTheManagerAndTheLevel(t *testing.T) {
 	g := access.IdentityGuide(company, in.Seat, in.Lane, in.Want)
 	var text []string
 	for _, s := range g.Steps {
-		text = append(text, s.Text)
+		text = append(text, s.Text.String())
 	}
 	all := strings.Join(text, "\n")
+	if err := g.Check(); err != nil {
+		t.Errorf("the guide is not of the one form: %v", err)
+	}
 	for _, want := range []string{"manager account 9998887776", "Access and security", "Users tab",
 		"Access level: Standard", "Add account"} {
 		if !strings.Contains(all, want) {

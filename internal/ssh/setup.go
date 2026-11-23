@@ -7,6 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/vendortext"
 )
 
 // The names the engine seals the company's certificate authorities under.
@@ -45,9 +46,9 @@ func Requirements(in *config.SSH, resolve func(string) (string, bool)) []setup.R
 			// engine makes the authority, seals its key, and nobody
 			// downloads a credential at all.
 			Mintable: true, Shape: setup.ShapeSSHCertificateAuthority,
-			Hint: "Crewlet makes it when you save.",
-			More: "Crewlet seals it as " + CertificateAuthoritySecret + ". " + trustNote + " Each server's " +
-				"setup adds the line, and each agent's certificate lasts minutes.",
+			Hint: vendortext.Plain("Crewlet makes it when you save."),
+			More: vendortext.Plain("Crewlet seals it as " + CertificateAuthoritySecret + ". " + trustNote + " Each server's " +
+				"setup adds the line, and each agent's certificate lasts minutes."),
 			CheckNote: "Each server proves it with Test connection.",
 			Blocks:    integration.FindingCredentialMissing,
 		},
@@ -86,9 +87,9 @@ func Guide() setup.Guide {
 		Summary: "Agents reach your servers with certificates Crewlet signs for minutes at a time. No SSH key " +
 			"is stored on a server or in an agent's box.",
 		Prepare: []setup.Step{
-			{Text: "Save to create Crewlet's certificate authority.", Yields: "certificate_authority"},
-			{Text: "Add each server, compare its host key with the server's console, and run its setup as root."},
-			{Text: "Press Test connection on each server, then turn agents on from the Agents tab."},
+			{Text: vendortext.Plain("Save to create Crewlet's certificate authority."), Yields: "certificate_authority"},
+			{Text: vendortext.Plain("Add each server, compare its host key with the server's console, and run its setup as root.")},
+			{Text: vendortext.Plain("Press Test connection on each server, then turn agents on from the Agents tab.")},
 		},
 	}
 }
