@@ -1229,7 +1229,7 @@ type parkedOpening struct {
 }
 
 // openParked opens the fixture's job, its bridge reading the clock now where one
-// is given, under a token of a minute.
+// is given, under a token that expires a minute on, at its run's cap.
 func openParked(t *testing.T, now func() time.Time) *parkedOpening {
 	t.Helper()
 	o := &parkedOpening{fixture: newFixture(t), parked: newParkedFence()}
@@ -1237,7 +1237,7 @@ func openParked(t *testing.T, now func() time.Time) *parkedOpening {
 	o.session.Started = func(context.Context, bool) { _ = o.parked.fence() }
 	opts := mcpbridge.Options{Material: runtoken.OneKey("k", "test-key"), BaseURL: o.server.URL}
 	if now != nil {
-		opts.Now, opts.TTL = now, time.Minute
+		opts.Now, o.session.Deadline = now, now().Add(time.Minute)
 	}
 	o.bridge = bridgeFor(t, opts)
 	mux := http.NewServeMux()

@@ -302,8 +302,10 @@ func TestAnIdentityFactSplitsAClassAndNothingElseDoes(t *testing.T) {
 }
 
 // AN IDENTITY STAYS SMALL AND CLOSED: required, a boolean, a closed set or the
-// harness's name, sorted, with at most 16 combinations. Anything per-engine in it
-// would split one defect into an issue per engine.
+// harness's name, sorted, its facts at most 16 combinations. Anything per-engine
+// in it would split one defect into an issue per engine. The harness's name is
+// not counted: its set is the runners this build ships, each its own code, so
+// a defect split by it is one per runner, however many runners there are.
 func TestAnIdentityIsSmallAndClosed(t *testing.T) {
 	t.Parallel()
 	for _, entry := range catalogue {
@@ -326,6 +328,12 @@ func TestAnIdentityIsSmallAndClosed(t *testing.T) {
 	wide.Identity = []FactKey{"wide"}
 	noHarness := with(IdentityHarnessName)
 	noHarness.Harness = false
+	sixteen := base
+	sixteen.Facts = []Fact{{Key: "wide", Type: FactEnum, Enum: big[:16]}}
+	sixteen.Identity = []FactKey{IdentityHarnessName, "wide"}
+	if problems := identityProblems(sixteen); len(problems) > 0 {
+		t.Errorf("sixteen combinations beside the harness were refused: %v", problems)
+	}
 	for name, e := range map[string]Entry{
 		"an integer": with(FactContextWindowTokens),
 		"an optional fact": func() Entry {
@@ -360,7 +368,6 @@ func identityProblems(e Entry) []string {
 			if !e.Harness {
 				problems = append(problems, "harness.name on a class with no harness")
 			}
-			product *= len(knownHarnesses())
 			continue
 		}
 		i := slices.IndexFunc(e.Facts, func(f Fact) bool { return f.Key == path })

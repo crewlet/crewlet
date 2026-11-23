@@ -13,12 +13,15 @@
     ],
     "harness.name": [
       "claude-code",
+      "codex",
       "gemini-cli",
       "qwen-code",
       "opencode",
       "copilot",
+      "grok",
       "muse-code",
-      "kimi-code"
+      "kimi-code",
+      "pi"
     ],
     "topology.coordination": [
       "local",

@@ -245,6 +245,9 @@ type claudeToolInput struct {
 type claudeEvents struct {
 	transcript transcriptLines
 
+	// ended is whether a `result` line was read ([claudeEvents.Ended]).
+	ended bool
+
 	// calls is each pending call by its id, so its result, in this read or a
 	// later one, names it ([activityline]). A call is forgotten when its result
 	// arrives, so the map holds only calls in flight; seq numbers the run's calls.
@@ -450,6 +453,7 @@ func (d *claudeEvents) Line(line []byte) {
 			return nil
 		})
 	case "result":
+		d.ended = true
 		// A run that succeeded ends on its final text, already carried as the
 		// assistant's last message, so its text is decoded only where it did
 		// not, to say how, as [ClaudeCode.Parse] reads the same line.
@@ -510,6 +514,10 @@ func (d *claudeEvents) lost(line string) {
 // Entries implements [Decoder]. Nothing else here grows with the stream: the
 // pending calls are forgotten as their results arrive.
 func (d *claudeEvents) Entries(end bool) []string { return d.transcript.take(end) }
+
+// Ended implements [Decoder]: a `result` line, which Claude Code prints as its
+// run ends.
+func (d *claudeEvents) Ended() bool { return d.ended }
 
 func (d *claudeEvents) Result() sandbox.Result {
 	var r sandbox.Result

@@ -153,7 +153,7 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 	// that fact rather than an omission.
 	want := map[string]string{
 		"claude-code": "{file}", // 2.1.303 and 2.1.310: --system-prompt-file
-		// 1.0.70, xAI's OWN HARNESS from x.ai/cli:
+		// 1.0.92, xAI's OWN HARNESS from x.ai/cli:
 		// --system-prompt-override, string only — a path there is sent as
 		// the text — and --rules the same on the appending channel. NOT
 		// the same-named community package on npm, which has no such
@@ -166,7 +166,7 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 		// because only their flags had been read.
 		"gemini-cli": envChannel,
 		"qwen-code":  envChannel,
-		// 0.153.4 and 0.164.0: no flag, but a CONFIG KEY naming a file,
+		// 0.171.0: no flag, but a CONFIG KEY naming a file,
 		// `-c model_instructions_file=<path>`, which replaces the base
 		// instructions outright.
 		"codex": "{file}",
@@ -177,7 +177,7 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 		// 2026.09.10 and 2026.10.22: Cursor's own service assembles the
 		// system prompt, and the run request carries none.
 		"cursor-agent": "",
-		// 2.0.32 and 2.1.4: no flag and no variable, but a DISCOVERED
+		// OpenCode 2.3.2: no flag and no variable, but a DISCOVERED
 		// AGENT — `agents/<name>.md` in its configuration directory, which
 		// the profile points inside the per-call directory, its body
 		// replacing the harness's own prompt — which `--agent` selects. Its
@@ -206,7 +206,7 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 		// when ordinary company prose matches its scan. `-p` on this harness
 		// selects a PROFILE, not a prompt.
 		"hermes": "",
-		// 0.85.1 and 1.4.0: --system-prompt, which reads its value as a
+		// 1.6.0: --system-prompt, which reads its value as a
 		// path when a file exists there — and sends the value itself as
 		// the prompt when none does, silently, so the file has to be
 		// written before the harness starts. --append-system-prompt reads it

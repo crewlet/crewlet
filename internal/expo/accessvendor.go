@@ -38,7 +38,8 @@ func (accessVendor) Catalog() seataccess.Catalog {
 			Lane: seataccess.LaneExpo, Levels: true,
 			CreatedBy: seataccess.ByYou, EnabledBy: seataccess.ByYou,
 			Rotatable: true, Releasable: true,
-			BoxEnv: []seataccess.BoxVar{{Field: TokenField, Env: ToolEnv}},
+			BoxEnv:   []seataccess.BoxVar{{Field: TokenField, Env: ToolEnv}},
+			Identity: identitySpec,
 		}},
 	}
 }

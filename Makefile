@@ -873,7 +873,9 @@ lint: ## run golangci-lint (ci: golangci-lint)
 # the bridge's notes route and a real bridge's, skill-load
 # (opencode_skills_test.go), against a stand-in of its skill route, and tool
 # environment (toolenv_test.go) — and of its Kimi Code driver
-# (kimi_driver_internal_test.go), against a stand-in of Kimi Code's server — and
+# (kimi_driver_internal_test.go), against a stand-in of Kimi Code's server —
+# and of Pi's extension (pi_extension_internal_test.go), against a stand-in of
+# pi's extension API — and
 # internal/browser/boxhelper, which runs the box helper under this node and the
 # floor's, each box installing the Playwright tree with that Node's own npm,
 # offline. Without node those cases fail under REQUIRED
@@ -1026,7 +1028,7 @@ require-node: ## fail unless node is on PATH (the e2e client replay, the OpenCod
 	  echo "  internal/e2e's client replay runs the dashboard's own protocol"; \
 	  echo "  module over the frames a real engine produced,"; \
 	  echo "  internal/sandbox/executor runs the three OpenCode plugins and"; \
-	  echo "  the Kimi Code driver the engine embeds, and"; \
+	  echo "  the Kimi Code driver and Pi extension the engine embeds, and"; \
 	  echo "  internal/browser/boxhelper runs the box"; \
 	  echo "  helper's modules under node, each box installing its Playwright"; \
 	  echo "  tree with that node's npm. Each FAILS without node"; \
@@ -1321,10 +1323,10 @@ snapshot: ## rehearse a release locally (needs goreleaser and docker)
 # carries, which neither way goreleaser runs can do, so the build is written
 # out here with .goreleaser.yaml's settings (CGO_ENABLED=0, -trimpath, -s -w,
 # the -X stamp) and staged in the layout its dockers_v2 stages: each binary
-# under its platform, beside the license, both notices files and the git pin
-# and recipe (scripts/git-pin.env, scripts/git.sh) the Dockerfile's git stage
-# builds from — the files .goreleaser.yaml's extra_files names. A change to the
-# release build is a change to both files.
+# under its platform, beside the license, its notice, both notices files and
+# the git pin and recipe (scripts/git-pin.env, scripts/git.sh) the Dockerfile's
+# git stage builds from — the files .goreleaser.yaml's extra_files names. A
+# change to the release build is a change to both files.
 #
 # VERSION is required, because an unstamped binary reports a module version:
 # a name for a build nobody made. And the binary this host can run is run and
@@ -1345,7 +1347,7 @@ image-context: ## stage the engine image's build context, stamped VERSION (ci: m
 	$(GO) run ./scripts/notices -out $(IMAGE_CONTEXT)/build/notices/THIRD_PARTY_NOTICES.txt \
 	  -main ./cmd/crewlet -targets $$(echo $(IMAGE_PLATFORMS) | tr ' ' ',')
 	mkdir -p $(IMAGE_CONTEXT)/static/dashboard $(IMAGE_CONTEXT)/scripts
-	cp LICENSE $(IMAGE_CONTEXT)/LICENSE
+	cp LICENSE NOTICE $(IMAGE_CONTEXT)/
 	cp static/dashboard/THIRD_PARTY_NOTICES.txt $(IMAGE_CONTEXT)/static/dashboard/
 	cp scripts/git-pin.env scripts/git.sh $(IMAGE_CONTEXT)/scripts/
 	@host=$$($(GO) env GOHOSTOS)/$$($(GO) env GOHOSTARCH); \

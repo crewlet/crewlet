@@ -317,6 +317,9 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		// takes it over the box's calls reach their holder only relayed
 		// from this node — which a loopback-only session refuses.
 		OnHost: cell == sandbox.Direct,
+		// THE TURN'S OWN WALL-CLOCK CAP, the one limit a run's tokens end at:
+		// none, and they live as long as the run ([mcpbridge.Session.Deadline]).
+		Deadline: l.turn.Deadline,
 		// THE SEAT'S FENCE, built HERE, inside the turn the run is the
 		// executor of, so it closes on the grant that turn was admitted
 		// under — the same check the turn's own phases run, now asked
@@ -370,14 +373,14 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 	// [mcpbridge.Session.Model].
 	session.Model = run.model
 	spec := manager.BuildSpec(sandbox.SpecInput{
-		Placement:         cell,
-		Harness:           agent.Harness(),
-		PauseTTL:          pauseTTL(settings),
-		MaxTurns:          maxTurnsFor(settings),
-		Env:               run.env,
-		SignInEnv:         run.signInNames,
-		CredentialFiles:   run.files,
-		CredentialRunKeys: run.fileKeys,
+		Placement:       cell,
+		Harness:         agent.Harness(),
+		PauseTTL:        pauseTTL(settings),
+		MaxTurns:        maxTurnsFor(settings),
+		Env:             run.env,
+		SignInEnv:       run.signInNames,
+		CredentialFiles: run.files(),
+		CredentialRules: run.fileRules(),
 	})
 	// THE PICKED MEMBER'S LOGIN, the one the box will actually run under:
 	// a fallback launch on a later member is judged on that member's entry,
@@ -1074,7 +1077,7 @@ func bridgeOpening(endpoint string, s *mcpbridge.Session, steered bool, wait tim
 // withRunsOwn is out with what req says of the run itself beside the launch's
 // decisions: its own context sources, which a launch charges an OpenCode
 // continuation in the box that holds its copy (internal/sandbox's RunSources),
-// what each server the run's bridge serves says it is for; the leads its fresh
+// what each server the run's bridge serves says it is for and offers; the leads its fresh
 // brief opened with, which the launch keeps for its job; and the read its
 // briefs were built from ([sandbox.LaunchRequest.BriefRead]). Set beside
 // [agentLauncher.launch]'s literal rather than in it, since that literal is the
@@ -1082,6 +1085,7 @@ func bridgeOpening(endpoint string, s *mcpbridge.Session, steered bool, wait tim
 // crewlet-operator mirrors, and none of these is one.
 func withRunsOwn(req runner.AgentRunRequest, out sandbox.LaunchRequest) sandbox.LaunchRequest {
 	out.MCPGuidance = mcpbridge.Guidance(req.Surface)
+	out.MCPCatalogs = mcpbridge.Catalogs(req.Surface)
 	out.FreshOwn = req.FreshOwn
 	out.BriefRead = req.BriefRead
 	return out

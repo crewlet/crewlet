@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -19,8 +20,13 @@ func noteHelperArch(machine string) (string, error) {
 		return "arm64", nil
 	}
 	return "", fmt.Errorf("executor: this box's machine is %s, and the engine carries the note helper "+
-		"for x86_64 and aarch64 alone", strconv.Quote(strings.TrimSpace(machine)))
+		"for x86_64 and aarch64 alone: %w", strconv.Quote(strings.TrimSpace(machine)), errNoHelperBuild)
 }
+
+// errNoHelperBuild is a box whose machine the engine carries no note helper
+// build for ([noteHelperArch]): a run that needs the helper is refused, and a
+// Codex run that does not starts without what the helper hands it.
+var errNoHelperBuild = errors.New("no note helper build for this machine")
 
 // writeNoteHelper writes the note helper's build for box's machine
 // ([noteHelperBinary]) to path, at every launch, never cached: a box reused

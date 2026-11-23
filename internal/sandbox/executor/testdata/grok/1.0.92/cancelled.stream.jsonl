@@ -1,0 +1,8 @@
+{"type":"available_commands","tools":["search_tool","use_tool","web_search","web_fetch"],"commands":["compact","always-approve","context","session-info","feedback"]}
+{"type":"available_commands","tools":["search_tool","use_tool","web_search","web_fetch"],"commands":["compact","always-approve","context","session-info","feedback"]}
+{"type":"available_commands","tools":["search_tool","use_tool","web_search","web_fetch","crewlet__echo","crewlet__slow"],"commands":["compact","always-approve","context","session-info","feedback"]}
+{"type":"usage","usage":{"input_tokens":699,"output_tokens":50,"cache_read_input_tokens":400,"cache_creation_input_tokens":0,"reasoning_tokens":20}}
+{"type":"tool_call","toolCallId":"call_99","title":"use_tool","kind":"use_tool","status":"pending","toolName":"use_tool","rawInput":{"tool_name":"echo","tool_input":{"text":"unprefixed"}},"content":[],"locations":[]}
+{"type":"tool_call_update","toolCallId":"call_99","status":null,"content":[],"rawOutput":null,"locations":[]}
+{"type":"tool_call_update","toolCallId":"call_99","status":"failed","content":[{"type":"content","content":{"type":"text","text":"User cancelled the execution for tool `use_tool`"}}],"rawOutput":null,"locations":[]}
+{"type":"end","stopReason":"cancelled","sessionId":"01a2047d-135d-7e80-a35d-0f12238ba4fa","requestId":"ba681e72-378a-4e99-aaf2-0e11e3df17e7","cwd":"/tmp/wk","usage":{"input_tokens":699,"cache_read_input_tokens":400,"cache_creation_input_tokens":0,"output_tokens":50,"reasoning_tokens":20,"total_tokens":1149},"num_turns":1,"modelUsage":{"grok-4.6":{"inputTokens":699,"outputTokens":50,"cacheReadInputTokens":400,"cacheCreationInputTokens":0,"modelCalls":1}}}

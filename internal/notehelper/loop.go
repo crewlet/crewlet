@@ -19,11 +19,24 @@ type harness interface {
 	// other error for a note the harness refused.
 	deliver(ctx context.Context, text string) error
 
+	// interrupt ends turn ("" for the turn in flight) at once. [errNotNow]
+	// where no turn is in flight.
+	interrupt(ctx context.Context, turn string) error
+
 	// gone is closed once the connection to the harness has ended.
 	gone() <-chan struct{}
 
 	// close lets go of the connection.
 	close()
+}
+
+// events is what an adapter reports of the harness besides taking notes,
+// each from the harness's reader and so never blocking: every model response
+// of a turn ([stepCap.step]) and every load of one of the run's skills
+// ([reporter.loaded]). A nil func is a report nobody asked for.
+type events struct {
+	step  func(turn string)
+	skill func(name string)
 }
 
 var (

@@ -12,7 +12,7 @@ import (
 // sites. A value the compiler lays out, so registering it at init allocates
 // nothing of its own.
 var seatAccess = googlegrowth.SeatAccess{Product: Kind, Lane: seataccess.LaneSearchConsole,
-	Name: "Search Console", Levels: levels, Scope: sitesOf}
+	Name: "Search Console", Levels: levels, Scope: sitesOf, Identity: identity}
 
 func init() { seataccess.Register(&seatAccess) }
 

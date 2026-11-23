@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,9 +13,38 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
+// hermesPair is a copy of a Nous login holding the token pair "pair-<n>" in
+// Hermes's own shape: auth.json's providers.nous, or the shared copy's top
+// level.
+func hermesPair(name string, n int) string {
+	pair := fmt.Sprintf(`{"access_token":"pair-%d","refresh_token":"pair-%d"}`, n, n)
+	if name == "auth.json" {
+		return `{"providers":{"nous":` + pair + `}}`
+	}
+	return pair
+}
+
+// pairOf is the n of the pair a copy of a Nous login holds, 0 for none.
+func pairOf(raw []byte) int {
+	var copyOf struct {
+		AccessToken string `json:"access_token"`
+		Providers   struct {
+			Nous struct {
+				AccessToken string `json:"access_token"`
+			} `json:"nous"`
+		} `json:"providers"`
+	}
+	if json.Unmarshal(raw, &copyOf) != nil {
+		return 0
+	}
+	token := copyOf.AccessToken + copyOf.Providers.Nous.AccessToken
+	n, _ := strconv.Atoi(strings.TrimPrefix(token, "pair-"))
+	return n
+}
+
 // fakeHermesLogin plays Hermes Agent's two copies of a Nous login under
-// HERMES_HOME: auth.json and shared/nous_auth.json, each "pair-<n>", the
-// higher n the later-issued pair. As 0.23.3 does, it takes the shared copy's
+// HERMES_HOME: auth.json and shared/nous_auth.json, each holding "pair-<n>"
+// ([hermesPair]), the higher n the later-issued pair. As 0.23.3 does, it takes the shared copy's
 // pair into auth.json when that copy holds the later one, and answers with
 // the pair it signed in with. Then it rotates: "both" writes the next pair to
 // both copies, as a refresh does; "shared" writes it to the shared copy alone,
@@ -24,17 +54,13 @@ func fakeHermesLogin(rotate string) {
 	auth := filepath.Join(home, "auth.json")
 	shared := filepath.Join(home, "shared", "nous_auth.json")
 	pair := func(path string) int {
-		raw, err := os.ReadFile(path) //nolint:gosec // the fake's own home
-		if err != nil {
-			return 0
-		}
-		n, _ := strconv.Atoi(strings.TrimPrefix(strings.TrimSpace(string(raw)), "pair-"))
-		return n
+		raw, _ := os.ReadFile(path) //nolint:gosec // the fake's own home
+		return pairOf(raw)
 	}
 	write := func(path string, n int) {
 		err := os.MkdirAll(filepath.Dir(path), 0o700)
 		if err == nil {
-			err = os.WriteFile(path, []byte(fmt.Sprintf("pair-%d", n)), 0o600)
+			err = os.WriteFile(path, []byte(hermesPair(filepath.Base(path), n)), 0o600)
 		}
 		if err != nil {
 			fmt.Fprint(os.Stderr, "UNWRITABLE: ", err)
@@ -99,14 +125,14 @@ func TestHermesLoginIsKeptAsOne(t *testing.T) {
 	for _, tc := range []struct {
 		name, rotate string
 		want         string
-		auth, shared string
+		auth, shared int
 	}{
 		{name: "a refresh the engine did not carry", rotate: "none",
-			want: "pair-1", auth: "pair-1", shared: "pair-1"},
+			want: "pair-1", auth: 1, shared: 1},
 		{name: "a refresh through both copies", rotate: "both",
-			want: "pair-1", auth: "pair-2", shared: "pair-2"},
+			want: "pair-1", auth: 2, shared: 2},
 		{name: "a refresh through the shared copy alone", rotate: "shared",
-			want: "pair-1", auth: "pair-1", shared: "pair-2"},
+			want: "pair-1", auth: 1, shared: 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -114,11 +140,11 @@ func TestHermesLoginIsKeptAsOne(t *testing.T) {
 			t.Cleanup(func() { forgetWorkspace(dir) })
 			p := hermesLoginProvider(t, dir, tc.rotate)
 			creds := p.ws.CredentialsDir()
-			for name, content := range map[string]string{"auth.json": "pair-1", "nous_auth.json": "pair-1"} {
+			for _, name := range []string{"auth.json", "nous_auth.json"} {
 				if err := os.MkdirAll(creds, 0o700); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(filepath.Join(creds, name), []byte(content), 0o600); err != nil {
+				if err := os.WriteFile(filepath.Join(creds, name), []byte(hermesPair(name, 1)), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -128,7 +154,7 @@ func TestHermesLoginIsKeptAsOne(t *testing.T) {
 			if err := os.MkdirAll(filepath.Dir(left), 0o700); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(left, []byte("pair-2"), 0o600); err != nil {
+			if err := os.WriteFile(left, []byte(hermesPair("nous_auth.json", 2)), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			comp, err := ask(t, p, llm.Request{})
@@ -138,9 +164,9 @@ func TestHermesLoginIsKeptAsOne(t *testing.T) {
 			if comp.Content != tc.want {
 				t.Errorf("the call signed in with %s, want the login of record's %s", comp.Content, tc.want)
 			}
-			for name, want := range map[string]string{"auth.json": tc.auth, "nous_auth.json": tc.shared} {
-				if got, _ := os.ReadFile(filepath.Join(creds, name)); string(got) != want {
-					t.Errorf("the login of record's %s holds %q, want %q", name, got, want)
+			for name, want := range map[string]int{"auth.json": tc.auth, "nous_auth.json": tc.shared} {
+				if got, _ := os.ReadFile(filepath.Join(creds, name)); pairOf(got) != want {
+					t.Errorf("the login of record's %s holds %q, want pair-%d", name, got, want)
 				}
 			}
 		})

@@ -1,7 +1,7 @@
 /**
  * THE MODELS PAGE, LAID OUT: who-runs rows a hairline apart, each picker as
- * wide as its value and standing in the one model column, and the first-run
- * card's picture held inside its card on a phone.
+ * wide as its value and standing in the one model column, and the empty state
+ * held inside its card on a phone.
  */
 import "~/styles/models.css";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
@@ -86,15 +86,14 @@ test("each picker is as wide as its value and starts at the model column's edge"
   expect([...starts].every((s) => Math.abs(s) <= 1)).toBe(true);
 });
 
-test("on a phone the first-run card holds its picture inside its edges, six marks to a row", async () => {
+test("on a phone the empty state holds its title, line and add inside its card", async () => {
   await mount(358, modelsData({ entries: [] }));
   const card = host!.querySelector<HTMLElement>(".models-page > .crewlet-card")!;
-  const marks = card.querySelector<HTMLElement>(".models-first-run__marks")!;
   expect(card.scrollWidth).toBeLessThanOrEqual(card.clientWidth);
   const c = card.getBoundingClientRect();
-  const m = marks.getBoundingClientRect();
-  expect(m.left).toBeGreaterThanOrEqual(c.left);
-  expect(m.right).toBeLessThanOrEqual(c.right);
-  const tops = new Set([...marks.children].map((t) => Math.round(t.getBoundingClientRect().top)));
-  expect(tops.size).toBe(Math.ceil(marks.children.length / 6));
+  for (const el of card.querySelectorAll(".crewlet-empty-state *")) {
+    const r = el.getBoundingClientRect();
+    expect(r.left).toBeGreaterThanOrEqual(c.left);
+    expect(r.right).toBeLessThanOrEqual(c.right);
+  }
 });

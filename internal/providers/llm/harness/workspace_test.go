@@ -20,6 +20,7 @@ func testProfile(t *testing.T) harnessprofile.Profile {
 		CompleteArgs:    []string{"-p"},
 		Output:          harnessprofile.OutputText,
 		CredentialPaths: []string{".fake/creds.json"},
+		RefreshKeys:     map[string][]string{"creds.json": {"token"}},
 		VolatilePaths:   []string{".fake/sessions", ".fake/history.jsonl"},
 	}
 }

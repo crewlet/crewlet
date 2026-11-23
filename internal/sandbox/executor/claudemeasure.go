@@ -13,6 +13,17 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
+// meter reads a Claude Code archive for the take's meter ([carrier.meter],
+// [meterArchive]).
+func (ClaudeCode) meter(ctx context.Context, r io.Reader, session, release string,
+	large *passBudget) (meterReading, error) {
+
+	var read meterReading
+	var err error
+	read.tokens, read.count, read.next, err = meterArchive(ctx, r, session, release, large)
+	return read, err
+}
+
 // meterArchive is the input of the last request a Claude Code archive's main
 // thread of session records, zero where it records none, what Claude Code
 // counts the session at, and what it estimates the next request at, read off

@@ -82,11 +82,6 @@
   gap: var(--spacing-2);
 }
 
-.growth-caps {
-  display: grid;
-  gap: var(--spacing-2);
-}
-
 .growth-role {
   display: inline-flex;
   flex-wrap: wrap;
@@ -154,6 +149,49 @@
 .growth-product {
   display: grid;
   gap: var(--spacing-5);
+}
+
+/* The Google Analytics logo under its data: at the policy's 50px floor, one file per ground (AnalyticsAttribution.tsx). */
+.growth-attribution {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-3);
+  margin: var(--spacing-3) 0 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.growth-attribution__link {
+  display: inline-flex;
+  flex: none;
+  border-radius: var(--radius-sm);
+}
+
+.growth-attribution__logo {
+  display: block;
+  width: auto;
+  height: 50px;
+}
+
+/* The file for the ground, chosen as the tokens choose the theme: dark unless the document or the system asks for light. */
+.growth-attribution__logo--light,
+:root[data-theme="light"] .growth-attribution__logo--dark {
+  display: none;
+}
+
+:root[data-theme="light"] .growth-attribution__logo--light {
+  display: block;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .growth-attribution__logo--dark {
+    display: none;
+  }
+
+  :root:not([data-theme="dark"]) .growth-attribution__logo--light {
+    display: block;
+  }
 }
 
 .growth-accounts {
@@ -328,4 +366,10 @@
 
 .growth-step__role {
   font-weight: var(--font-weight-medium);
+}
+/* The roles a product's levels use, then the rest folded under one line. */
+.growth-roles {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
 }

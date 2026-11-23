@@ -571,12 +571,15 @@ func TestABoxWhoseCopyDoesNotHoldTheCarriedArchiveHasItReplaced(t *testing.T) {
 }
 
 // A CARRIED SESSION THE BOX CANNOT RESTORE IS NEVER RESUMED. A box whose harness
-// is below the carry floor, and an archive holding no transcript, each start the
-// session minted for the run instead, say why on the error stream and in the
-// report, and report that the run did not continue.
+// is below the carry floor or names no release this build reads, and an archive
+// holding no transcript, each start the session minted for the run instead, say
+// why on the error stream and in the report, and report that the run did not
+// continue.
 //
-// Mutation: resume whatever the restore did, and the harness fails the run on a
-// session it does not hold; record no reason, and the report says nothing of why.
+// Mutation: resume whatever the restore did, or take an unreadable release (a
+// pre-release, as releaseOf reads one) for a current one, and the run
+// continues a session no rule was read for; record no reason, and the report
+// says nothing of why.
 func TestACarriedSessionTheBoxCannotRestoreStartsANewOne(t *testing.T) {
 	t.Parallel()
 	first, a := sessionBox(t, "2.1.310")
@@ -597,6 +600,10 @@ func TestACarriedSessionTheBoxCannotRestoreStartsANewOne(t *testing.T) {
 		release, archive, why string
 	}{
 		"a box older than the floor": {release: "2.1.309", archive: capture, why: "older than 2.1.310"},
+		"a box whose release does not read": {release: "nightly", archive: capture,
+			why: "named no release this build reads"},
+		"a box on a pre-release": {release: "2.1.311-beta.1", archive: capture,
+			why: "named no release this build reads"},
 		"an archive with no transcript": {release: "2.1.310", archive: empty.String(),
 			why: "could not be restored"},
 		"an archive that is no archive": {release: "2.1.310", archive: "not a tar", why: "could not be restored"},
@@ -677,18 +684,18 @@ func versionBox(printed string, code int, errText string, asked *[]string) *sand
 	return b
 }
 
-// THE CONTINUATION CHECK READS THE BOX HARNESS'S RELEASE AND HOLDS IT TO THE
-// FLOORS. A carried session is continued only by the harness that wrote it, in
-// the format this build restores, on a box at or past its floor (Claude Code
-// 2.1.310, OpenCode 2.0.32) and no older than the writing release; for Claude
-// Code, only a session 2.1.300 or later wrote. An unreadable release counts as
-// current. The printed release is returned for the run's record whatever the
-// answer; a harness that does not answer is no continuation, a box that cannot
-// be asked an error. One login-shell exec reads it, the bin directory first on PATH.
+// THE CONTINUATION CHECK HOLDS THE BOX HARNESS'S RELEASE TO THE FLOORS: the
+// writing harness, this build's format, Claude Code's box at or past 2.1.310
+// and no older than the writer, and only a session 2.1.300 or later wrote; box
+// and writer exactly OpenCode 2.3.2, Codex 0.171.0, Muse Code 1.4.25, Gemini
+// CLI 0.70.0, Qwen Code 0.28.4 and Grok Build 1.0.92. An unread box release or
+// writer refuses, for every harness. The printed release is returned whatever
+// the answer; a harness not answering is no continuation, a box not asked an
+// error; one login-shell exec, its bin first on PATH.
 //
 // Mutation: compare against the writer's floor alone, let an older box take a
-// newer writer's session, or read an unreadable release as too old, and a row
-// goes red.
+// newer writer's session, read an unread box release or writer as current, or
+// let a Gemini or Qwen release but the one continue, and a row goes red.
 func TestTheContinuationCheckHoldsTheBoxsReleaseToTheFloors(t *testing.T) {
 	t.Parallel()
 	claudeArchive := func(release string) sandbox.SessionArchive {
@@ -699,6 +706,28 @@ func TestTheContinuationCheckHoldsTheBoxsReleaseToTheFloors(t *testing.T) {
 		return sandbox.SessionArchive{Harness: executor.OpenCodeName, SessionID: "ses_s",
 			Format: executor.OpenCodeArchiveFormat, Version: release}
 	}
+	geminiArchive := func(release string) sandbox.SessionArchive {
+		return sandbox.SessionArchive{Harness: executor.GeminiCLIName, SessionID: "s",
+			Format: executor.GeminiArchiveFormat, Version: release}
+	}
+	qwenArchive := func(release string) sandbox.SessionArchive {
+		return sandbox.SessionArchive{Harness: executor.QwenCodeName, SessionID: "s",
+			Format: executor.QwenArchiveFormat, Version: release}
+	}
+	codexArchive := func(release string) sandbox.SessionArchive {
+		return sandbox.SessionArchive{Harness: executor.CodexName, SessionID: "019a1f00-0000-7000-8000-000000000001",
+			Format: executor.Codex{}.ArchiveFormat(), Version: release}
+	}
+	museArchive := func(release string) sandbox.SessionArchive {
+		return sandbox.SessionArchive{Harness: executor.MuseName, SessionID: "0b5e0000-0000-4000-8000-000000000001",
+			Format: executor.MuseArchiveFormat, Version: release}
+	}
+	grokArchive := func(release string) sandbox.SessionArchive {
+		return sandbox.SessionArchive{Harness: executor.GrokName, SessionID: "11111111-2222-4333-8444-0000000000a1",
+			Format: executor.GrokArchiveFormat, Version: release}
+	}
+	const muse = "Muse Code 1.4.25 (1.4.25-R9361.1)\n"
+	const grok = "grok 1.0.92 (b06756fd6256)\n"
 	for name, tc := range map[string]struct {
 		runner    *executor.Runner
 		printed   string
@@ -713,17 +742,53 @@ func TestTheContinuationCheckHoldsTheBoxsReleaseToTheFloors(t *testing.T) {
 		"claude below the floor":            {executor.NewClaudeCode(), "2.1.309 (Claude Code)\n", 0, claudeArchive("2.1.300"), false, "2.1.309", "older than 2.1.310"},
 		"claude, a writer too old":          {executor.NewClaudeCode(), "2.1.310 (Claude Code)\n", 0, claudeArchive("2.1.299"), false, "2.1.310", "older than 2.1.300"},
 		"claude older than its writer":      {executor.NewClaudeCode(), "2.1.310 (Claude Code)\n", 0, claudeArchive("2.1.312"), false, "2.1.310", "older than the 2.1.312"},
-		"claude, an unreadable release":     {executor.NewClaudeCode(), "Claude Code nightly\n", 0, claudeArchive("2.1.310"), true, "", ""},
-		"claude, an unreadable writer":      {executor.NewClaudeCode(), "2.1.310 (Claude Code)\n", 0, claudeArchive(""), true, "2.1.310", ""},
-		"claude, another harness's session": {executor.NewClaudeCode(), "2.1.310 (Claude Code)\n", 0, openCodeArchive("2.0.32"), false, "2.1.310", "continued only by the harness that wrote it"},
+		"claude, an unreadable release":     {executor.NewClaudeCode(), "Claude Code nightly\n", 0, claudeArchive("2.1.310"), false, "", "named no release"},
+		"claude, an unreadable writer":      {executor.NewClaudeCode(), "2.1.310 (Claude Code)\n", 0, claudeArchive(""), false, "2.1.310", "named no release"},
+		"claude, another harness's session": {executor.NewClaudeCode(), "2.1.310 (Claude Code)\n", 0, openCodeArchive("2.3.2"), false, "2.1.310", "continued only by the harness that wrote it"},
 		"claude, another format": {executor.NewClaudeCode(), "2.1.310 (Claude Code)\n", 0,
 			sandbox.SessionArchive{Harness: executor.ClaudeCodeName, SessionID: "s", Format: executor.ClaudeArchiveFormat + 1, Version: "2.1.310"},
 			false, "2.1.310", "restores claude-code's format"},
 		"claude that does not answer":         {executor.NewClaudeCode(), "", 127, claudeArchive("2.1.310"), false, "", "did not say its release"},
-		"opencode at the floor":               {executor.NewOpenCode(), "opencode v2.0.32\n", 0, openCodeArchive("2.0.32"), true, "2.0.32", ""},
-		"opencode below the floor":            {executor.NewOpenCode(), "opencode v2.0.31\n", 0, openCodeArchive("2.0.31"), false, "2.0.31", "older than 2.0.32"},
-		"opencode older than its writer":      {executor.NewOpenCode(), "opencode v2.1.4\n", 0, openCodeArchive("2.2.5"), false, "2.1.4", "older than the 2.2.5"},
-		"opencode, another harness's session": {executor.NewOpenCode(), "opencode v2.1.4\n", 0, claudeArchive("2.1.310"), false, "2.1.4", "continued only by the harness that wrote it"},
+		"opencode on its release":             {executor.NewOpenCode(), "opencode v2.3.2\n", 0, openCodeArchive("2.3.2"), true, "2.3.2", ""},
+		"opencode, an older box":              {executor.NewOpenCode(), "opencode v2.2.99\n", 0, openCodeArchive("2.3.2"), false, "2.2.99", "continues only on OpenCode 2.3.2"},
+		"opencode, a newer box":               {executor.NewOpenCode(), "opencode v2.3.3\n", 0, openCodeArchive("2.3.2"), false, "2.3.3", "continues only on OpenCode 2.3.2"},
+		"opencode, an unreadable box":         {executor.NewOpenCode(), "opencode nightly\n", 0, openCodeArchive("2.3.2"), false, "", "named no release"},
+		"opencode, an unreadable writer":      {executor.NewOpenCode(), "opencode v2.3.2\n", 0, openCodeArchive(""), false, "2.3.2", "named no release"},
+		"opencode, an older writer":           {executor.NewOpenCode(), "opencode v2.3.2\n", 0, openCodeArchive("2.2.99"), false, "2.3.2", "only a session 2.3.2 wrote"},
+		"opencode, a newer writer":            {executor.NewOpenCode(), "opencode v2.3.2\n", 0, openCodeArchive("2.3.3"), false, "2.3.2", "only a session 2.3.2 wrote"},
+		"opencode, another harness's session": {executor.NewOpenCode(), "opencode v2.3.2\n", 0, claudeArchive("2.1.310"), false, "2.3.2", "continued only by the harness that wrote it"},
+		"codex at its release":                {executor.NewCodex(), "codex-cli 0.171.0\n", 0, codexArchive("0.171.0"), true, "0.171.0", ""},
+		"codex newer than its release":        {executor.NewCodex(), "codex-cli 0.172.0\n", 0, codexArchive("0.171.0"), false, "0.172.0", "only Codex 0.171.0 continues"},
+		"codex older than its release":        {executor.NewCodex(), "codex-cli 0.170.0\n", 0, codexArchive("0.171.0"), false, "0.170.0", "only Codex 0.171.0 continues"},
+		"codex, another release's writer":     {executor.NewCodex(), "codex-cli 0.171.0\n", 0, codexArchive("0.172.0"), false, "0.171.0", "only a session Codex 0.171.0 wrote"},
+		"codex, an unreadable writer":         {executor.NewCodex(), "codex-cli 0.171.0\n", 0, codexArchive(""), false, "0.171.0", "named no release"},
+		"codex, an unreadable release":        {executor.NewCodex(), "codex-cli dev\n", 0, codexArchive("0.171.0"), false, "", "named no release"},
+		"muse at its release":                 {executor.NewMuse(), muse, 0, museArchive("1.4.25"), true, "1.4.25", ""},
+		"muse newer than its release":         {executor.NewMuse(), "Muse Code 1.4.30 (1.4.30-R1.1)\n", 0, museArchive("1.4.25"), false, "1.4.30", "continues only on 1.4.25"},
+		"muse, a pre-release":                 {executor.NewMuse(), "Muse Code 1.4.25-rc.1\n", 0, museArchive("1.4.25"), false, "", "a release it could not read"},
+		"muse, another release's writer":      {executor.NewMuse(), muse, 0, museArchive("1.4.30"), false, "1.4.25", "only a session 1.4.25 wrote"},
+		"muse, an unreadable writer":          {executor.NewMuse(), muse, 0, museArchive(""), false, "1.4.25", "named no release"},
+		"gemini, exact to exact":              {executor.NewGeminiCLI(), "0.70.0\n", 0, geminiArchive("0.70.0"), true, "0.70.0", ""},
+		"gemini, exact to newer":              {executor.NewGeminiCLI(), "0.71.2\n", 0, geminiArchive("0.70.0"), false, "0.71.2", "only on 0.70.0, and this box runs 0.71.2"},
+		"gemini, newer to exact":              {executor.NewGeminiCLI(), "0.70.0\n", 0, geminiArchive("0.71.0"), false, "0.70.0", "the session was written by 0.71.0"},
+		"gemini, an older box":                {executor.NewGeminiCLI(), "0.65.0\n", 0, geminiArchive("0.70.0"), false, "0.65.0", "this box runs 0.65.0"},
+		"gemini, an older writer":             {executor.NewGeminiCLI(), "0.70.0\n", 0, geminiArchive("0.65.0"), false, "0.70.0", "written by 0.65.0"},
+		"gemini, an unreadable release":       {executor.NewGeminiCLI(), "gemini nightly\n", 0, geminiArchive("0.70.0"), false, "", "named no release"},
+		"gemini, an unrecorded writer":        {executor.NewGeminiCLI(), "0.70.0\n", 0, geminiArchive(""), false, "0.70.0", "named no release"},
+		"qwen, exact to exact":                {executor.NewQwenCode(), "0.28.4\n", 0, qwenArchive("0.28.4"), true, "0.28.4", ""},
+		"qwen, exact to newer":                {executor.NewQwenCode(), "0.29.0\n", 0, qwenArchive("0.28.4"), false, "0.29.0", "only on 0.28.4, and this box runs 0.29.0"},
+		"qwen, newer to exact":                {executor.NewQwenCode(), "0.28.4\n", 0, qwenArchive("0.29.0"), false, "0.28.4", "the session was written by 0.29.0"},
+		"qwen, an older writer":               {executor.NewQwenCode(), "0.28.4\n", 0, qwenArchive("0.26.1"), false, "0.28.4", "written by 0.26.1"},
+		"qwen, an unreadable release":         {executor.NewQwenCode(), "qwen nightly\n", 0, qwenArchive("0.28.4"), false, "", "named no release"},
+		"gemini, a release on a CRLF line":    {executor.NewGeminiCLI(), "0.70.0\r\n", 0, geminiArchive("0.70.0"), true, "0.70.0", ""},
+		"gemini, a pre-release box":           {executor.NewGeminiCLI(), "0.70.0-nightly\n", 0, geminiArchive("0.70.0"), false, "", "named no release"},
+		"qwen, a pre-release box":             {executor.NewQwenCode(), "0.28.4-preview.1\n", 0, qwenArchive("0.28.4"), false, "", "named no release"},
+		"qwen, another harness's session":     {executor.NewQwenCode(), "0.28.4\n", 0, geminiArchive("0.70.0"), false, "0.28.4", "continued only by the harness that wrote it"},
+		"grok at its release":                 {executor.NewGrok(), grok, 0, grokArchive("1.0.92"), true, "1.0.92", ""},
+		"grok newer than its release":         {executor.NewGrok(), "grok 1.0.93 (92384ee02e2d)\n", 0, grokArchive("1.0.92"), false, "1.0.93", "continues only on 1.0.92"},
+		"grok, a pre-release":                 {executor.NewGrok(), "grok 1.0.92-rc1 (x)\n", 0, grokArchive("1.0.92"), false, "", "a release it could not read"},
+		"grok, another release's writer":      {executor.NewGrok(), grok, 0, grokArchive("1.0.93"), false, "1.0.92", "only a session 1.0.92 wrote"},
+		"grok, an unreadable writer":          {executor.NewGrok(), grok, 0, grokArchive(""), false, "1.0.92", "named no release"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -778,9 +843,9 @@ func TestTheContinuationCheckSaysWhetherTheBoxsResumeWasRead(t *testing.T) {
 		"claude 2.1.316":                {runner: cc, printed: "2.1.316 (Claude Code)\n", archive: claude},
 		"claude, an unreadable release": {runner: cc, printed: "Claude Code nightly\n", archive: claude},
 		"claude that does not answer":   {runner: cc, code: 127, archive: claude},
-		"opencode": {runner: executor.NewOpenCode(), printed: "opencode v2.1.4\n",
+		"opencode": {runner: executor.NewOpenCode(), printed: "opencode v2.3.2\n",
 			archive: sandbox.SessionArchive{Harness: executor.OpenCodeName, SessionID: "ses_s",
-				Format: executor.OpenCodeArchiveFormat, Version: "2.1.4"}},
+				Format: executor.OpenCodeArchiveFormat, Version: "2.3.2"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -1082,4 +1147,66 @@ func TestATornTranscriptAPackPaddedWithNULsIsCutBackWhenItIsRestored(t *testing.
 			t.Errorf("the restored transcript was resumed with its torn line and its padding:\n%q", got)
 		}
 	})
+}
+
+// A BOX CONTINUES ITS OWN COPY ONLY WHERE THE RELEASE THAT WROTE IT IS ITS
+// ONE SUPPORTED RELEASE, for every runner whose harness holds a release to its
+// own copy (Codex, Gemini CLI, Qwen Code, Copilot, Kimi Code, Muse Code, Pi,
+// Grok Build): the box on that release still refuses a copy its last run's
+// record says a newer release wrote, as a box downgraded since would hold, and
+// one with no record at all, naming why; the copy that release wrote is
+// continued; a Gemini CLI or Qwen Code box of an unread release refuses its
+// own copy too.
+//
+// Mutation: check the box's release alone in CheckInPlace, read the writer
+// from anywhere but the box's record, take a missing record for a current
+// writer, or name only a carried one for an unread release: a row goes red.
+func TestABoxContinuesOnlyACopyItsOneReleaseWrote(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		runner             *executor.Runner
+		printed, newer     string
+		supported, refused string
+	}{
+		{executor.NewCodex(), "codex-cli 0.171.0", "codex-cli 0.172.0", "0.171.0", "0.172.0"},
+		{executor.NewGeminiCLI(), "0.70.0", "0.71.0", "0.70.0", "0.71.0"},
+		{executor.NewQwenCode(), "0.28.4", "0.28.5", "0.28.4", "0.28.5"},
+		{executor.NewCopilot(), "GitHub Copilot CLI 1.0.114.", "GitHub Copilot CLI 1.0.115.", "1.0.114", "1.0.115"},
+		{executor.NewKimi(), "2.7.2", "2.7.3", "2.7.2", "2.7.3"},
+		{executor.NewMuse(), "Muse Code 1.4.25 (1.4.25-R9361.1)", "Muse Code 1.4.26 (1.4.26-R1.1)", "1.4.25", "1.4.26"},
+		{executor.NewPi(), "1.6.0", "1.7.0", "1.6.0", "1.7.0"},
+		{executor.NewGrok(), "grok 1.0.92 (b06756fd6256)", "grok 1.0.93 (92384ee02e2d)", "1.0.92", "1.0.93"},
+	} {
+		for writer, want := range map[string]string{c.printed: "", c.newer: c.refused, "": "left no record"} {
+			var asked []string
+			b := versionBox(c.printed+"\n", 0, "", &asked)
+			if writer != "" {
+				record := "id s-1\ncontinued yes\nwhy \nrelease " + writer + "\n"
+				if err := b.WriteFile(t.Context(), paths(b).SessionRecord(), []byte(record)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			check, err := c.runner.CheckInPlace(t.Context(), b)
+			if err != nil {
+				t.Fatalf("%s, writer %q: CheckInPlace: %v", c.runner.Name(), writer, err)
+			}
+			if check.Continues != (want == "") || !strings.Contains(check.Why, want) || check.Version != c.supported {
+				t.Errorf("%s, a copy written by %q: %+v, want continued %v naming %q", c.runner.Name(), writer,
+					check, want == "", want)
+			}
+		}
+	}
+	for _, runner := range []*executor.Runner{executor.NewGeminiCLI(), executor.NewQwenCode()} {
+		var asked []string
+		b := versionBox("nightly build\n", 0, "", &asked)
+		record := "id s-1\ncontinued yes\nwhy \nrelease nightly build\n"
+		if err := b.WriteFile(t.Context(), paths(b).SessionRecord(), []byte(record)); err != nil {
+			t.Fatal(err)
+		}
+		check, err := runner.CheckInPlace(t.Context(), b)
+		if err != nil || check.Continues || !strings.Contains(check.Why, "its own copy") || check.Version != "" {
+			t.Errorf("%s, a box whose release does not read: %+v, %v; want its own copy not continued, "+
+				"saying so", runner.Name(), check, err)
+		}
+	}
 }

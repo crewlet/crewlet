@@ -33,12 +33,12 @@ const rowBound = 300
 // refused, and fewer is a number to lower in the same change.
 func TestNoPackageGrowsItsCommentsPastTheBound(t *testing.T) {
 	t.Parallel()
-	over, err := commentsOverBound(sourcetree.Root(t))
+	over, files, err := commentsOverBound(sourcetree.Root(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(over) == 0 {
-		t.Fatal("found no comment block past the bound anywhere, so the walk read nothing")
+	if files == 0 {
+		t.Fatal("read no Go file, so this gate would pass on nothing")
 	}
 	for _, pkg := range keysOf(over, excessInventory) {
 		got, allowed := excessOf(over[pkg]), excessInventory[pkg]
@@ -100,9 +100,10 @@ type block struct {
 
 // commentsOverBound is every comment block past blockBound, by package
 // directory, over the tree's Go files, tests included (they are read as much
-// as the code), outside testdata and generated files.
-func commentsOverBound(root string) (map[string][]block, error) {
-	over := map[string][]block{}
+// as the code), outside testdata and generated files, and how many files it
+// read.
+func commentsOverBound(root string) (map[string][]block, int, error) {
+	over, files := map[string][]block{}, 0
 	err := sourcetree.Walk(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -123,6 +124,7 @@ func commentsOverBound(root string) (map[string][]block, error) {
 		if generatedRE.Match(raw) {
 			return nil
 		}
+		files++
 		rel, err := filepath.Rel(root, path)
 		if err != nil {
 			return err
@@ -135,7 +137,7 @@ func commentsOverBound(root string) (map[string][]block, error) {
 		}
 		return nil
 	})
-	return over, err
+	return over, files, err
 }
 
 var generatedRE = regexp.MustCompile(`(?m)^// Code generated .* DO NOT EDIT\.$`)

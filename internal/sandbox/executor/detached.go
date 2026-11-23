@@ -114,7 +114,7 @@ var prPattern = sync.OnceValue(func() *regexp.Regexp {
 // shared: a runner that could override it would be a second implementation of
 // the completion protocol.
 type Harness interface {
-	// Name is the harness's config name: "claude-code", "opencode".
+	// Name is the harness's config name: "claude-code", "codex", "opencode".
 	Name() string
 
 	// Session is the session req's run works in ([Session]), its ids in the
@@ -142,8 +142,9 @@ type Harness interface {
 	Pins(ctx context.Context, req sandbox.RunRequest, paths Paths) []Pinned
 
 	// Events is a new decoder for one of this harness's event streams, read
-	// whole or followed across many reads ([Decoder]). Asked only when
-	// [Output.Events] is set.
+	// whole or followed across many reads ([Decoder]). Asked for the stream
+	// only when [Output.Events] is set, and for a result file read apart from
+	// it ([Runner.endsRun]).
 	Events() Decoder
 
 	// Parse maps this agent's RESULT, read whole, onto a result: the file
@@ -211,9 +212,15 @@ type carrier interface {
 
 	// Continues reports whether a session written by release writer, carried
 	// from another box, can be continued by release box (each as `--version`
-	// gave it), and if not, why, in a person's words. An unreadable release is
-	// taken for a current one, as the notes gate takes it ([claudeNotesGate]).
+	// gave it), and if not, why, in a person's words: [carrier.ContinuesWriter]'s
+	// answer, and the box's release held to the harness's own. A box release
+	// that does not read refuses ([boxNamedNoRelease]): the box's harness is
+	// one no rule here was read for.
 	Continues(box, writer string) (bool, string)
+
+	// ContinuesWriter is [carrier.Continues] judged of the writer alone, for a
+	// reader with no box to ask ([Runner.Restores]).
+	ContinuesWriter(writer string) (bool, string)
 
 	// Pack is the script that packs session now, the same pack the run's
 	// script makes once its harness exits, for a job that never got to
@@ -229,6 +236,12 @@ type carrier interface {
 	// layout is how the harness's archive is laid out, which the scrub a
 	// capture streams it through reads and writes it as ([scrubArchive]).
 	layout() archiveLayout
+
+	// meter reads an archive of ArchiveFormat, as kept, for what its
+	// session's last request carried, the harness's count of it and its
+	// estimate of the next request ([newContextMeter]), session's as release
+	// wrote it, within ctx and under large; err is the archive's own.
+	meter(ctx context.Context, r io.Reader, session, release string, large *passBudget) (meterReading, error)
 
 	// transcript reads an archive of ArchiveFormat, decompressed, as the
 	// session's transcript entries, handing each to b in recorded order until
@@ -532,8 +545,10 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	// EVERY HARNESS'S, not this run's alone: the box may last have run another.
 	for _, h := range Registered() {
 		if a, ok := h.(artifactHolder); ok {
-			ownFiles, ownDirs := a.artifacts(p)
-			files, dirs = append(files, ownFiles...), append(dirs, ownDirs...)
+			files = append(files, a.artifactFiles(p)...)
+		}
+		if a, ok := h.(artifactDirHolder); ok {
+			dirs = append(dirs, a.artifactDirs(p)...)
 		}
 	}
 	// The stream too, where it lives apart from the result: it is only
@@ -684,14 +699,18 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 		return sandbox.RunHandle{}, err
 	}
 	if out.BriefOnStdin {
-		if err = box.WriteFile(ctx, paths.Brief(), []byte(req.Brief)); err != nil {
+		brief, fresh := req.Brief, req.FreshBrief
+		if _, ok := r.harness.(commandReader); ok {
+			brief, fresh = briefNotACommand(brief), briefNotACommand(fresh)
+		}
+		if err = box.WriteFile(ctx, paths.Brief(), []byte(brief)); err != nil {
 			return sandbox.RunHandle{}, fmt.Errorf("executor: writing the brief: %w", err)
 		}
 		// AND THE BRIEF A SESSION OF ITS OWN IS HANDED, for a run that
 		// continues one: its script points its harness at it where it starts
 		// a new session in the one's place ([sandbox.RunRequest.FreshBrief]).
-		if session.Continues && req.FreshBrief != "" {
-			if err = box.WriteFile(ctx, paths.FreshBrief(), []byte(req.FreshBrief)); err != nil {
+		if session.Continues && fresh != "" {
+			if err = box.WriteFile(ctx, paths.FreshBrief(), []byte(fresh)); err != nil {
 				return sandbox.RunHandle{}, fmt.Errorf("executor: writing the brief a new session is handed: %w", err)
 			}
 		}
@@ -995,6 +1014,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 
 	var (
 		result  sandbox.Result
+		ended   bool
 		spent   *runSpend
 		request contextRead
 		window  int64
@@ -1009,7 +1029,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 			refused = append(refused, refusal)
 		}
 		result, spent, request = streamed.result, streamed.spent, streamed.request
-		window, limits = streamed.window, streamed.limits
+		window, limits, ended = streamed.window, streamed.limits, streamed.ended
 	}
 	// THE STREAM BEFORE THE RESULT FILE, keeping not its last line: what its
 	// reading holds after is the record's halves, so the file is parsed beside
@@ -1053,6 +1073,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 				parsed.TranscriptElidedBytes = result.TranscriptElidedBytes
 			}
 			result = parsed
+			ended = ended || r.endsRun(raw)
 		}
 	}
 	// What the session's newest request carried, off the stream, set once the
@@ -1190,7 +1211,8 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	// The findings file is the result carrier of record: the agent is asked to
 	// write its report there, and it survives a process group that died before
 	// the final message and a tool-only run that parses to no text. So it wins
-	// for the text, and its presence means success unless the process crashed.
+	// for the text, and its presence means success unless the process crashed
+	// or its harness never said how its run ended.
 	findingsText, refusal, err := pieces.findings.text()
 	if err != nil {
 		return sandbox.Result{}, err
@@ -1199,6 +1221,17 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		refused = append(refused, refusal)
 	}
 	findings := strings.TrimSpace(findingsText)
+	// A HARNESS THAT NEVER SAID HOW ITS RUN ENDED did not finish it, whatever
+	// it exited with or left behind ([Decoder.Ended]): a launcher an earlier
+	// run replaced exits 0 having started nothing. It fails in its decoder's
+	// words where they say why, else in [harnessNoResult], and a report it left
+	// makes no success.
+	if !ended {
+		result.Success = false
+		if strings.TrimSpace(result.Error) == "" {
+			result.Error = harnessNoResult
+		}
+	}
 	// What the failure says after any piece that could not be read: the
 	// harness's own account where the run reported something, and where it
 	// produced nothing at all, the exit status, the harness's error and the
@@ -1212,7 +1245,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		// request the other only mentions.
 		result.DeliveredRefs = deliveredRefs(findings, result.Text)
 		result.Text = findings
-		if !crashed {
+		if !crashed && ended {
 			result.Success = true
 			result.Error = ""
 		}
@@ -1262,6 +1295,22 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	// it again ([sandbox.MaxRunTextBytes]).
 	result.Transcript = redact.Secrets(result.Transcript)
 	return result, nil
+}
+
+// harnessNoResult is a run's failure where its harness exited without saying
+// how its run ended and its decoder gave no reason of its own.
+const harnessNoResult = "the harness exited without reporting how its run ended, so it produced no result"
+
+// endsRun reports whether a result file read apart from the stream says the
+// run ended ([Decoder.Ended]), fed whole to a fresh decoder: the file is the
+// stream's last line, copied, and read to [sandbox.MaxFileBytes], where a
+// stream line past [Runner.lineBound] is skipped unread.
+func (r *Runner) endsRun(raw []byte) bool {
+	dec := r.harness.Events()
+	for line := range bytes.Lines(raw) {
+		dec.Line(bytes.TrimRight(line, "\r\n"))
+	}
+	return dec.Ended()
 }
 
 // lastRequest is the measure read, which the collection carries back
@@ -1489,7 +1538,7 @@ func (r *Runner) decodeLines(stream io.Reader, keepLast bool) (decodedStream, st
 	if err := eachLine(stream, dec, r.lineBound); err != nil {
 		return decodedStream{}, "", fmt.Errorf("executor: reading the event stream: %w", err)
 	}
-	out := decodedStream{result: events.Result(), last: kept.last}
+	out := decodedStream{result: events.Result(), last: kept.last, ended: events.Ended()}
 	if spender, ok := events.(runSpender); ok {
 		if spent, stated := spender.runSpend(); stated {
 			out.spent = &spent
@@ -1520,6 +1569,8 @@ type decodedStream struct {
 	window int64
 	// limits is the run's last limit report line ([limitReporter]).
 	limits string
+	// ended is whether the stream said how the run ended ([Decoder.Ended]).
+	ended bool
 }
 
 // streamLast is an event stream's last line, as `tail -n 1` would copy it

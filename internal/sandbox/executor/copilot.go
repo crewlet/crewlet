@@ -3,13 +3,16 @@ package executor
 import (
 	"context"
 	"fmt"
+	"io"
 	"maps"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
 )
@@ -39,6 +42,8 @@ var (
 	_ saver             = Copilot{}
 	_ inboxDelivery     = Copilot{}
 	_ artifactHolder    = Copilot{}
+	_ artifactDirHolder = Copilot{}
+	_ inPlaceGate       = Copilot{}
 	_ notesOffExplainer = Copilot{}
 	_ sessionJudge      = Copilot{}
 	_ recordConfirmer   = Copilot{}
@@ -59,10 +64,14 @@ func (Copilot) Resumes() bool { return true }
 // which [Copilot.WriteConfig] writes where the run is wired to them.
 func (Copilot) NoteInstruction() string { return CopilotSteerInstruction }
 
-// copilotFloor is the one Copilot release supported, the newest measured:
-// every behaviour here was measured on 1.0.114. A run is started on no older
-// one, and a carried session continues only between boxes on exactly it.
-const copilotFloor = "1.0.114"
+// copilotFloor is the one Copilot release supported, the newest measured, as
+// the built-in profile's written_for names it (1.0.114): every behaviour here
+// was measured on it. A run is started on no older one, and a session, the
+// box's own copy as much as a carried one, continues only on exactly it.
+var copilotFloor = sync.OnceValue(func() string {
+	p, _ := harnessprofile.Builtin(CopilotName)
+	return harnessprofile.Release(p.WrittenFor)
+})
 
 // copilotSessionState is the directory under the run's home that Copilot files
 // each session's directory in.
@@ -159,7 +168,7 @@ func copilotScript(req sandbox.RunRequest, session Session, paths Paths, configP
 	b.WriteString(endHarness(""))
 	b.WriteString(copilotRelease)
 	line(`if ! at %s; then printf 'crewlet: this box runs GitHub Copilot CLI %%s, older than %s, the oldest a run is started on\n' "$n" >&2; exit 1; fi`,
-		floorArgs(copilotFloor), copilotFloor)
+		floorArgs(copilotFloor()), copilotFloor())
 	if off := copilotProviderOff(req.Env); len(off) > 0 {
 		line(`unset %s`, strings.Join(off, " "))
 	}
@@ -328,7 +337,12 @@ func copilotSessionGate(session Session, paths Paths, rewired bool) string {
 		line(`if [ -n "$h" ] && [ -n "$d" ] && ! grep -qxF "$s $d" %s 2> /dev/null; then h=; fi`,
 			q(paths.SessionDigests()))
 	}
-	line(`if [ -z "$h" ]; then`)
+	// THE BOX'S RELEASE, for the copy it holds as for an archive, held as the
+	// engine's check holds it ([Copilot.continuesInPlace]): the bare release
+	// (rv, [bareReleaseShell]) exactly [copilotFloor], else nothing continues.
+	line(`%s[ "$rv" = %s ] || w="this box runs GitHub Copilot CLI ${rv:-a release it could not read}, and a session continues only on %s, the release supported, the box's own copy included"`,
+		bareReleaseShell("rv"), copilotFloor(), copilotFloor())
+	line(`if [ -z "$w" ] && [ -z "$h" ]; then`)
 	line(`  if [ ! -s %s ]; then w='it is not in this box, and no archive of it was carried here'`, carried)
 	line(`  elif ! command -v tar > /dev/null 2>&1 || ! command -v gzip > /dev/null 2>&1; then w='this box has no tar and gzip to restore its archive with'`)
 	line(`  elif ! { %s; }; then w='its archive could not be restored'`, restore)
@@ -411,16 +425,48 @@ func (Copilot) layout() archiveLayout { return archiveTar }
 // continued in a box whose Copilot is release box ([carrier]): only where both
 // are [copilotFloor], the one release supported. Any other pair, a release
 // that cannot be read included, starts the session fresh.
-func (Copilot) Continues(box, writer string) (bool, string) {
-	switch {
-	case !sameRelease(box, copilotFloor):
+func (c Copilot) Continues(box, writer string) (bool, string) {
+	if !sameRelease(box, copilotFloor()) {
 		return false, fmt.Sprintf("this box runs GitHub Copilot CLI %q, and a session carried from another "+
-			"box continues only on %s, the release supported", box, copilotFloor)
-	case !sameRelease(writer, copilotFloor):
-		return false, fmt.Sprintf("the session was written by GitHub Copilot CLI %q, and only a session "+
-			"%s wrote continues, the release supported", writer, copilotFloor)
+			"box continues only on %s, the release supported", box, copilotFloor())
+	}
+	return c.ContinuesWriter(writer)
+}
+
+// continuesInPlace reports whether a box whose Copilot is release box
+// continues a session at all, the copy it holds as much as one carried to it
+// ([inPlaceGate]): only on [copilotFloor], as the run's own gate holds it
+// ([copilotSessionGate]), so the engine asks before a relaunch hands the
+// brief that continues the box's copy.
+func (Copilot) continuesInPlace(box string) (bool, string) {
+	if !sameRelease(box, copilotFloor()) {
+		return false, fmt.Sprintf(copilotBoxRefused, box, copilotFloor())
 	}
 	return true, ""
+}
+
+// copilotBoxRefused is why a box whose Copilot is not [copilotFloor]
+// continues no session, its own copy nor a carried one: the engine's check and
+// the run's gate say it alike.
+const copilotBoxRefused = "this box runs GitHub Copilot CLI %q, and a session continues only on %s, the " +
+	"release supported, the box's own copy included"
+
+// ContinuesWriter is [Copilot.Continues] judged of the writer alone
+// ([carrier]): only a session [copilotFloor] wrote.
+func (Copilot) ContinuesWriter(writer string) (bool, string) {
+	if !sameRelease(writer, copilotFloor()) {
+		return false, fmt.Sprintf("the session was written by GitHub Copilot CLI %q, and only a session "+
+			"%s wrote continues, the release supported", writer, copilotFloor())
+	}
+	return true, ""
+}
+
+// meter is the take's meter of a Copilot archive ([carrier.meter]): no figure.
+// This build reads no count or estimate of a Copilot session's next request
+// off its archive. The archive is left to the caller, which drains it
+// ([startMeter]).
+func (Copilot) meter(context.Context, io.Reader, string, string, *passBudget) (meterReading, error) {
+	return meterReading{}, nil
 }
 
 // sameRelease reports whether version is release, false where it cannot be read.
@@ -566,7 +612,8 @@ type copilotSettings struct {
 // extension where it reads notes or has a turn cap ([Paths.CopilotExtension]);
 // and its MCP servers, returning the file `--additional-mcp-config` names, with
 // a fresh session's copies beside them ([sandbox.RunRequest.FreshWiring]).
-// What an earlier run wrote there the clear removes first ([Copilot.artifacts]).
+// What an earlier run wrote there the clear removes first
+// ([Copilot.artifactFiles], [Copilot.artifactDirs]).
 func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
 	paths Paths) (string, error) {
 	settings := copilotSettings{Experimental: true}
@@ -673,13 +720,25 @@ func copilotMCP(s sandbox.MCPServer) map[string]any {
 	return out
 }
 
-// artifacts is what a Copilot run leaves in its box of its own: its standing
-// instructions and its extension in its home, which a later run with neither
-// must not find, and a fresh session's extension beside the work directory.
-// Its settings are written whole by every run, and its sessions are kept.
-func (Copilot) artifacts(p Paths) (files, dirs []string) {
-	return []string{p.CopilotInstructions(), p.CopilotExtensionFresh(), p.CopilotToolEnv()},
-		[]string{p.CopilotExtension()}
+// artifactFiles is the files a Copilot run leaves in its box of its own (its
+// standing instructions, a fresh session's extension beside the work
+// directory, its tool environment) and every other file in its home a run
+// would load that its launch does not write ([Paths.CopilotLoaded]), an
+// earlier run's or the image's: a Copilot run loads only the configuration
+// its launch writes. Its settings are written whole by every run; its login
+// and sessions are kept.
+func (Copilot) artifactFiles(p Paths) []string {
+	loaded, _ := p.CopilotLoaded()
+	return append([]string{p.CopilotInstructions(), p.CopilotExtensionFresh(), p.CopilotToolEnv()}, loaded...)
+}
+
+// artifactDirs is the directories in a Copilot run's home it would load that
+// its launch does not write ([Paths.CopilotLoaded]), removed whole: its
+// extensions (the run's own extension among them, which a later run with
+// none must not find), hooks, plugins, skills, agents and instructions.
+func (Copilot) artifactDirs(p Paths) []string {
+	_, loaded := p.CopilotLoaded()
+	return loaded
 }
 
 // notesOffWhy is what switches Copilot's reading of notes off: a managed policy

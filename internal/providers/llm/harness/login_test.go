@@ -234,8 +234,15 @@ func TestABundleRestoresOnlyIntoTheHarnessItNames(t *testing.T) {
 				want[file] = fmt.Sprintf(`{"harness":%q,"file":%q}`, from, file)
 				if keys, ok := source.profile.LoginKeys[file]; ok {
 					// A file the harness keeps settings in too is a login
-					// only holding one of its keys.
-					want[file] = fmt.Sprintf(`{"harness":%q,"file":%q,%q:"placeholder"}`, from, file, keys[0])
+					// only holding one of its keys, in the file's own format.
+					switch {
+					case strings.HasSuffix(file, ".env"):
+						want[file] = fmt.Sprintf("HARNESS=%s\n%s=placeholder\n", from, keys[0])
+					case strings.HasSuffix(file, ".toml"):
+						want[file] = fmt.Sprintf("harness = %q\n%s = \"placeholder\"\n", from, keys[0])
+					default:
+						want[file] = fmt.Sprintf(`{"harness":%q,"file":%q,%q:"placeholder"}`, from, file, keys[0])
+					}
 				}
 				writeFile(t, filepath.Join(source.ws.CredentialsDir(), file), want[file])
 			}
@@ -718,7 +725,8 @@ func TestBrokeringALoginForAHarnessThatKeepsNoneNamesItsKey(t *testing.T) {
 	dir := t.TempDir()
 	t.Cleanup(func() { forgetWorkspace(dir) })
 	p, err := New(Config{Key: "qwen", Harness: "qwen-code", StateDir: dir, Timeout: time.Second, MaxConcurrent: 1,
-		Overrides: map[string]any{"credential_paths": []any{}, "subscription_args": []any{}}})
+		Overrides: map[string]any{"credential_paths": []any{}, "subscription_args": []any{},
+			"refresh_keys": nil, "identity_keys": nil}})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

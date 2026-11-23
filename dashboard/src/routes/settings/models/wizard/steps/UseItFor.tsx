@@ -12,9 +12,11 @@
  * change of pairing is made in one place.
  *
  * EVERYTHING COMES FIRST, for a company that runs one model for all of it:
- * the seat's `llm` alone, every seat job resolving to it. Ask Crewlet and the
- * Advisor are not seat jobs, so Everything leaves them alone and each is a
- * choice of its own, company-wide, with no seats to pick.
+ * the seat's `llm` alone, every seat job resolving to it, and each helper (Ask
+ * Crewlet, the Advisor) that has no model yet, in the same revision
+ * ([everythingHelpers]). A helper on another model stays there unless its
+ * switch is turned on, as a seat with a model stays unless it is picked. Each
+ * helper is also a choice of its own, company-wide, with no seats to pick.
  *
  * THE ADVISOR IS CHOSEN HERE ALONE, as Ask Crewlet is: as a model's one use,
  * or beside its seat work from the per-seat switch, so a model the Advisor
@@ -209,6 +211,20 @@ export function seatsWithoutModel(
   return data.seats.map((s) => s.handle).filter((h) => !now.has(h));
 }
 
+/**
+ * The helpers Everything gives a model on `harness`: each that runs on none of
+ * the company's models (it names none, or one gone), where the harness runs
+ * helpers. One on a model keeps it, as [seatsWithoutModel] keeps a seat's.
+ */
+export function everythingHelpers(
+  data: Pick<ModelsData, "models" | "assistant" | "advisor">,
+  harness: string,
+): { assistant: boolean; advisor: boolean } {
+  const open = (now: string | null) => !now || !data.models.some((m) => m.key === now);
+  const runs = !!factsOf(harness).assistant;
+  return { assistant: runs && open(data.assistant.key), advisor: runs && open(data.advisor.key) };
+}
+
 const sameSeats = (a: readonly string[], b: readonly string[]) =>
   a.length === b.length && a.every((h) => b.includes(h));
 
@@ -358,12 +374,24 @@ export function UseItFor({
       return {
         value: intent,
         label: (
-          <Tooltip content={EVERYTHING.tip} placement="top">
+          <Tooltip
+            content={
+              factsOf(draft.harness).assistant
+                ? `${EVERYTHING.tip} ${EVERYTHING.helpersTip}`
+                : EVERYTHING.tip
+            }
+            placement="top"
+          >
             <span>{EVERYTHING.label}</span>
           </Tooltip>
         ),
         media: <JobGlyph job="everything" />,
-        detail: <Detail hint={EVERYTHING.hint} />,
+        detail: (
+          <Detail
+            hint={EVERYTHING.hint}
+            {...(factsOf(draft.harness).assistant ? { note: EVERYTHING.helpers } : {})}
+          />
+        ),
         ...(!executor ? { disabled: true, disabledReason: noCoding } : {}),
       };
     }
@@ -388,14 +416,18 @@ export function UseItFor({
 
   const choose = (intent: Intent) => {
     if (intent === "custom") return;
+    const helpers =
+      intent === "all"
+        ? everythingHelpers(data, draft.harness)
+        : { assistant: false, advisor: false };
     onChange({
       intent,
       uses: usesForIntent(
         intent,
         // AN EDIT KEEPS THE SEATS IT SERVES; an add starts from the seats with no model for it.
         served ? servedBy(served) : seatsWithoutModel(data, jobsOf(intent), draft.key),
-        intent === "assistant" || holdsAssistant,
-        intent === "advisor" || (holdsAdvisor && draft.uses.advisor),
+        intent === "assistant" || holdsAssistant || helpers.assistant,
+        intent === "advisor" || (holdsAdvisor && draft.uses.advisor) || helpers.advisor,
       ),
     });
   };
@@ -549,7 +581,7 @@ export function UseItFor({
                 draft.intent === "none" && on
                   ? "assistant"
                   : draft.intent === "assistant" && !on
-                    ? "none"
+                    ? intentOf(uses)
                     : draft.intent;
               onChange({ uses, intent });
             }}

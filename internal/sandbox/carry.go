@@ -122,9 +122,10 @@ type CarriedSession struct {
 // is handed ([ExactTelling]).
 type CarryCheck struct {
 	// Version is the box harness's release as its `--version` gave it
-	// ("2.1.310"); "" where it printed nothing this build can read, which is
-	// taken for a current release, and which matches no release a reading
-	// was read for ([ExactTelling.Resumer]).
+	// ("2.1.310"); "" where it printed nothing this build can read, which
+	// continues no carried session (the box named no release any rule was
+	// read for) and matches no release a reading was read for
+	// ([ExactTelling.Resumer]).
 	Version string
 
 	// ResumeRead says Version is a release whose resume this build read
@@ -223,6 +224,14 @@ type SessionRestorer interface {
 	// which reads the box harness's release. Three answers: it can, it cannot
 	// (and why), and the box could not be asked, an error.
 	CheckCarry(ctx context.Context, box Sandbox, archive SessionArchive) (CarryCheck, error)
+
+	// CheckInPlace asks box whether its harness continues the copy of a
+	// session the box itself holds, before a relaunch there hands the brief
+	// that continues it: [Runner.CheckInPlace] in internal/sandbox/executor,
+	// which holds a harness that continues no session on a release it was not
+	// read for (Codex, Copilot, Kimi Code, Muse Code, Pi, Grok Build) to it, the
+	// box's release and the release that wrote the copy alike. Three answers, as CheckCarry's.
+	CheckInPlace(ctx context.Context, box Sandbox) (CarryCheck, error)
 }
 
 // SessionTaker is a [Runner] whose harness's session a capture takes out of a

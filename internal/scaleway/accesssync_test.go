@@ -150,9 +150,9 @@ func TestAScalewaySeatThroughTheSync(t *testing.T) {
 		!slices.Equal(rec.Credential.Others, []string{sealedAccess}) {
 		t.Fatalf("record = %+v", rec)
 	}
-	app, ok := w.f.appNamed("crewlet-acme-sre")
+	app, ok := w.f.appNamed("crewlet-sre")
 	if !ok || rec.Account.ID != app.ID || app.Org != testOrg {
-		t.Fatalf("application = %+v, want crewlet-acme-sre in the organization, as the ledger records", app)
+		t.Fatalf("application = %+v, want crewlet-sre in the organization, as the ledger records", app)
 	}
 	pol := w.policy(app.ID)
 	if level, projects := scaleway.LevelOf(pol.Rules); pol.Name != app.Name || level != config.ScalewayLevelRead ||
@@ -252,7 +252,7 @@ func TestAScalewaySeatThroughTheSync(t *testing.T) {
 		got[2] != "delete app "+app.ID {
 		t.Errorf("turning off wrote %q, want the key, the policy and the application deleted in that order", got)
 	}
-	if _, ok := w.f.appNamed("crewlet-acme-sre"); ok {
+	if _, ok := w.f.appNamed("crewlet-sre"); ok {
 		t.Error("turning the agent off left its application at Scaleway")
 	}
 	for _, name := range []string{sealedSecret, sealedAccess} {
@@ -306,7 +306,7 @@ func TestAStrangersPolicyAndKeyAreLeftAlone(t *testing.T) {
 	for _, p := range held {
 		level, _ := scaleway.LevelOf(p.Rules)
 		switch p.Name {
-		case "crewlet-acme-sre":
+		case "crewlet-sre":
 			if level != config.ScalewayLevelOperate {
 				t.Errorf("the engine's policy holds %q, want operate", level)
 			}
@@ -369,7 +369,7 @@ func TestARefusedPolicyTakesItsApplicationBack(t *testing.T) {
 		!strings.Contains(report.Findings[0].Remedy, "IAMPolicyManager") {
 		t.Fatalf("findings = %+v, want the seat refused naming what the provisioner needs", report.Findings)
 	}
-	if _, ok := w.f.appNamed("crewlet-acme-sre"); ok {
+	if _, ok := w.f.appNamed("crewlet-sre"); ok {
 		t.Error("a refused policy left its application at Scaleway")
 	}
 	if rec, ok := w.ledger.Record(integration.KindScaleway, "sre"); ok && rec.Held() {
@@ -492,7 +492,7 @@ func TestAFailedApplicationDeleteIsRetried(t *testing.T) {
 	}
 	w.f.edit(func(f *fakeScaleway) { delete(f.refuse, "delete app") })
 	w.sync()
-	if _, ok := w.f.appNamed("crewlet-acme-sre"); ok {
+	if _, ok := w.f.appNamed("crewlet-sre"); ok {
 		t.Error("the next pass left the application at Scaleway")
 	}
 	if _, ok := w.sink.Held(sealedSecret); ok {
@@ -507,7 +507,7 @@ func TestADisconnectAndARemovedSeatDeleteTheirApplications(t *testing.T) {
 	w := newSyncWorld(t, config.ScalewayLevelRead, projectWeb)
 	w.sync()
 	w.syncWith(nil, true)
-	if _, ok := w.f.appNamed("crewlet-acme-sre"); ok {
+	if _, ok := w.f.appNamed("crewlet-sre"); ok {
 		t.Error("a disconnect left the application")
 	}
 
@@ -515,7 +515,7 @@ func TestADisconnectAndARemovedSeatDeleteTheirApplications(t *testing.T) {
 	w.sync()
 	w.company.Roles = nil
 	w.sync()
-	if _, ok := w.f.appNamed("crewlet-acme-sre"); ok {
+	if _, ok := w.f.appNamed("crewlet-sre"); ok {
 		t.Error("a seat that left the document kept its application")
 	}
 	if _, ok := w.ledger.Record(integration.KindScaleway, "sre"); ok {

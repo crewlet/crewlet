@@ -240,8 +240,11 @@ export function explainer(
 export type ViewAction =
   /** The fix's option, re-checked and sent in place ([ApplyPanel]). */
   | { kind: "apply"; label: string; option: number }
-  /** The place to act, in the dashboard or, `external`, outside it. */
-  | { kind: "open"; label: string; href: string; external?: boolean }
+  /**
+   * The place to act, in the dashboard or, `external`, outside it; `acts`
+   * where opening it starts the fix itself (Take a backup).
+   */
+  | { kind: "open"; label: string; href: string; external?: boolean; acts?: boolean }
   /** Ask Crewlet, with a question waiting in its box. */
   | { kind: "ask"; label: string; question: string }
   /** An atlas fix, sent with the atlas's own tools on the entries it names. */
@@ -264,11 +267,17 @@ export interface ViewFinding {
   actions: { primary: ViewAction | null; secondary: ViewAction[] };
 }
 
-/** Where an `open` press is taken, by the page the engine names and what it opens on. */
+/**
+ * Where an `open` press is taken, by the page the engine names and what it
+ * opens on; `acts` where the page opens on the fix itself.
+ */
 export const PAGE_FIXES: Readonly<
-  Record<AdvisorPage, (target: string) => { path: string[]; query?: Record<string, string> } | null>
+  Record<
+    AdvisorPage,
+    (target: string) => { path: string[]; query?: Record<string, string>; acts?: boolean } | null
+  >
 > = {
-  backups: () => ({ path: ["settings", "backups"], query: { take: TAKE_BACKUP } }),
+  backups: () => ({ path: ["settings", "backups"], query: { take: TAKE_BACKUP }, acts: true }),
   item: (key) => (key ? { path: ["worklet", key] } : null),
   seat: (handle) => (handle ? { path: ["company", "org", "seats", handle] } : null),
 };
@@ -293,7 +302,14 @@ export function actionView(a: AdvisorAction, f: AdvisorKeptFinding): ViewAction 
       if (a.page) {
         const page =
           a.page in PAGE_FIXES ? PAGE_FIXES[a.page as AdvisorPage](a.target ?? "") : null;
-        return page ? { kind: "open", label: a.label, href: href(page.path, page.query) } : null;
+        return page
+          ? {
+              kind: "open",
+              label: a.label,
+              href: href(page.path, page.query),
+              ...(page.acts ? { acts: true } : {}),
+            }
+          : null;
       }
       return a.setting
         ? { kind: "open", label: a.label, href: href(["settings", "config"]) }
@@ -366,4 +382,23 @@ export function findingView(f: AdvisorKeptFinding): ViewFinding {
         ? { primary, secondary }
         : { primary: secondary[0] ?? null, secondary: secondary.slice(1) },
   };
+}
+
+/**
+ * Whether a press makes the change itself (an Apply, a move, an atlas fix, a
+ * backup) rather than taking the reader to a page or to Ask Crewlet.
+ */
+export function acts(a: ViewAction): boolean {
+  return a.kind === "open" ? a.acts === true : a.kind !== "ask";
+}
+
+/**
+ * A list row's presses: a button only for one that acts. One that opens a
+ * page ("Open the seat") leads the row's menu instead, beside the title's own
+ * link, so a list is not a column of buttons that only navigate.
+ */
+export function rowActions(v: ViewFinding["actions"]): ViewFinding["actions"] {
+  return v.primary && !acts(v.primary)
+    ? { primary: null, secondary: [v.primary, ...v.secondary] }
+    : v;
 }
