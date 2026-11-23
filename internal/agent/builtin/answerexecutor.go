@@ -32,9 +32,9 @@ const AnswerExecutorTool = "answer_executor"
 type RunDesk interface {
 	Run(ctx context.Context, turnID string) (sandbox.PendingRun, bool, error)
 	Deliver(ctx context.Context, given types.ExecutorAnswerGiven) (uuid.UUID, error)
-	// Answerer is who gave run's recorded answer, empty where the seal does
-	// not open here.
-	Answerer(run sandbox.PendingRun) string
+	// Answered is run's recorded answer as its seal opens, zero where it
+	// does not open here.
+	Answered(run sandbox.PendingRun) sandbox.AnswerWords
 	// AnswerFoldIn records an answer to fold-in id on run's row and tells the
 	// seat holding it ([sandbox.AnswerDesk.AnswerFoldIn]).
 	AnswerFoldIn(ctx context.Context, run sandbox.PendingRun, id string, a sandbox.FoldInAnswered) (sandbox.FoldIn,
@@ -197,7 +197,13 @@ func (t *answerExecutor) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// The first recorded answer wins, and a later one is told whose and
 		// when. A refused oversized reply closed the question the same way,
 		// and is never told as an answer the executor resumes with (ADR-0114).
-		by := t.deps.Desk.Answerer(run)
+		recorded := t.deps.Desk.Answered(run)
+		by := recorded.By
+		if _, isRefusal := run.Refused(); !isRefusal && sameAnswer(recorded, actor, choice, answer) {
+			// THIS PERSON'S OWN ANSWER, LANDED: a retry of a press whose
+			// answer was lost is told it was recorded, and nothing is sent.
+			return answerReceipt(ctx, turn, actor, run, run.AgentHandle, choice, statelog.OutcomeApplied, uuid.Nil)
+		}
 		if refusal, isRefusal := run.Refused(); isRefusal {
 			return toPerson(refused(tools.RefusalAlreadyAnswered, refusedAlready(run, refusal, by)),
 				caveat.RefusedReplyFirst(by)), nil
@@ -262,8 +268,16 @@ func (t *answerExecutor) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"turn_id", run.TurnID, "seat", parties.handle, "error", err.Error())
 		outcome = statelog.OutcomeUnknown
 	}
+	return answerReceipt(ctx, turn, actor, run, parties.handle, choice, outcome, answerID)
+}
+
+// answerReceipt is the answer to a question answered with choice: its outcome,
+// and the answer's id where this call delivered one.
+func answerReceipt(ctx context.Context, turn *turnctx.Turn, actor Actor, run sandbox.PendingRun, handle,
+	choice string, outcome statelog.Outcome, answerID uuid.UUID) (tools.Result, error) {
+
 	result := map[string]any{
-		"turn_id": run.TurnID, "agent_handle": parties.handle,
+		"turn_id": run.TurnID, "agent_handle": handle,
 		"question": run.Question, "outcome": string(outcome),
 		// With answer_id, what the run's record is read against.
 		"launch_id": run.LaunchID,
@@ -277,10 +291,18 @@ func (t *answerExecutor) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// The question is the harness's words, usually read through an assistant:
 	// fenced by [provenance.Executor] like every door to them (ADR-0040).
 	read := newForeignRead(turn, actor.Handle)
-	asked := provenance.Executor(parties.handle)
+	asked := provenance.Executor(handle)
 	read.fenceAt(fieldPath{}.key("question"), asked.Source, asked.Trust, asked.Authors,
 		run.Question)
 	return read.answer(ctx, AnswerExecutorTool, result, "")
+}
+
+// sameAnswer reports whether recorded is the answer actor gives now, by turn
+// and under the same credential: the same press sent again after its answer
+// was lost, never a second person's or a different answer.
+func sameAnswer(recorded sandbox.AnswerWords, actor Actor, choice, answer string) bool {
+	return recorded.By != "" && recorded.By == actor.Handle && recorded.OperatorID == actor.OperatorID &&
+		recorded.Via == types.AnswerViaOperator && recorded.Choice == choice && recorded.Text == answer
 }
 
 // refusedAlready is the model's refusal for a question an oversized reply
