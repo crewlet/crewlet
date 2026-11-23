@@ -5,6 +5,7 @@ import (
 	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/vendortext"
 )
 
 // Requirements says what company still needs for Google Cloud. A nil block
@@ -41,12 +42,11 @@ func Requirements(
 			Connect:    true,
 			Format:     "crewlet-provisioner@<identity project>.iam.gserviceaccount.com",
 			Shape:      setup.ShapeGoogleServiceAccount,
-			Hint:       "The service account Crewlet acts as, in a project kept for it.",
-			More: "Every agent's service account is made in that project. Create it on your {link}, save, " +
-				"then run the block below in Cloud Shell; it creates this account if it does not exist.",
-			LinkText:  "new project page",
-			VendorURL: "https://console.cloud.google.com/projectcreate",
-			Blocks:    integration.FindingCredentialMissing,
+			Hint:       vendortext.Plain("The service account Crewlet acts as, in a project kept for it."),
+			More: vendortext.Of(vendortext.W("Every agent's service account is made in that project. Create it on your "),
+				vendortext.W("new project page").At(newProjectURL), vendortext.W(", save, then run the block below in "),
+				vendortext.W("Cloud Shell").At(cloudShellURL), vendortext.W("; it creates this account if it does not exist.")),
+			Blocks: integration.FindingCredentialMissing,
 		},
 		{
 			Field:      "federation_key",
@@ -61,9 +61,9 @@ func Requirements(
 			// credential at all.
 			Mintable: true,
 			Shape:    setup.ShapeES256Key,
-			Hint:     "Run this block in Cloud Shell.",
-			More: "Crewlet made this key when you saved, and sealed it as " + FederationKeySecret + ". " +
-				"Google holds only its public half; the private half is never shown or exported.",
+			Hint:     vendortext.Of(vendortext.W("Run this block in "), vendortext.W("Cloud Shell").At(cloudShellURL), vendortext.W(".")),
+			More: vendortext.Plain("Crewlet made this key when you saved, and sealed it as " + FederationKeySecret + ". " +
+				"Google holds only its public half; the private half is never shown or exported."),
 			CheckNote: "It is tested with the provider.",
 			Blocks:    integration.FindingCredentialMissing,
 		},
@@ -78,24 +78,23 @@ func Requirements(
 			CheckWith:  []string{"provisioner", "federation_key"},
 			Format:     "projects/<number>/locations/global/workloadIdentityPools/<pool>/providers/<provider>",
 			Shape:      setup.ShapeGoogleProvider,
-			Hint:       "The last line the Cloud Shell block prints.",
-			More: "Find it later under {link}. Test checks federation, the provisioner's grants, the " +
-				"identity project's APIs and every project prepared for Crewlet.",
-			LinkText:  "workload identity pools",
-			VendorURL: ProvidersURL,
-			Blocks:    integration.FindingApprovalRequired,
+			Hint:       vendortext.Plain("The last line the Cloud Shell block prints."),
+			More: vendortext.Of(vendortext.W("Find it later under "), vendortext.UI("Workload Identity Pools").At(ProvidersURL),
+				vendortext.W(". Test checks federation, the provisioner's grants, the "+
+					"identity project's APIs and every project prepared for Crewlet.")),
+			Blocks: integration.FindingApprovalRequired,
 		},
 		{
 			// OPTIONAL, AND NEVER IN THE WAY: no agent depends on it, and on
 			// only adds an account the atlas alone acts as.
 			Field: "atlas_read", Label: "See more in Atlas", Kind: setup.KindToggle,
 			ConfigPath: "integrations.google_cloud.provisioning.atlas_read", Default: "false",
-			Hint: "Lets Atlas list what each project runs, as a service account of its own.",
-			More: "Atlas then shows each project's instances, databases, Cloud Run services, functions, buckets " +
+			Hint: vendortext.Plain("Lets Atlas list what each project runs, as a service account of its own."),
+			More: vendortext.Plain("Atlas then shows each project's instances, databases, Cloud Run services, functions, buckets " +
 				"and topics, by name and type, read hourly as " + AtlasAccountID + " through Cloud Asset Inventory. " +
 				"It reads no configuration, label, environment or data. One step: turn this on and save, then run " +
 				"the Cloud Shell block above again. To undo it, turn this off and delete the " + AtlasAccountID +
-				" service account in the identity project.",
+				" service account in the identity project."),
 		},
 		{
 			// Hidden and on: connecting a switched-off integration is not a
@@ -130,6 +129,12 @@ func Requirements(
 	return reqs
 }
 
+// The console's new project page, and Cloud Shell opened over the console.
+const (
+	newProjectURL = "https://console.cloud.google.com/projectcreate"
+	cloudShellURL = "https://console.cloud.google.com/?cloudshell=true"
+)
+
 // Guide is what the connect form says around its fields: one pass, in order,
 // from an empty project to the provider the Cloud Shell block prints.
 func Guide() setup.Guide {
@@ -137,16 +142,17 @@ func Guide() setup.Guide {
 		Summary: "Crewlet gives each agent its own service account and issues its token for an hour at a " +
 			"time. No service account key is made or downloaded.",
 		Prepare: []setup.Step{
-			{Text: "Create an empty project for Crewlet's service accounts on your {link}.", Link: "provisioner"},
+			{Text: vendortext.Of(vendortext.W("Create an empty project for Crewlet's service accounts on your "),
+				vendortext.W("new project page").At(newProjectURL), vendortext.W("."))},
 			{
-				Text:   "Enter the provisioner's address here and save, so Crewlet makes its key.",
+				Text:   vendortext.Plain("Enter the provisioner's address here and save, so Crewlet makes its key."),
 				Yields: "provisioner",
 			},
 			{
-				Text: "Run the block Crewlet shows in Cloud Shell. It creates the provisioner if needed and " +
-					"uploads Crewlet's public key.",
+				Text: vendortext.Of(vendortext.W("Run the block Crewlet shows in "), vendortext.W("Cloud Shell").At(cloudShellURL),
+					vendortext.W(". It creates the provisioner if needed and uploads Crewlet's public key.")),
 			},
-			{Text: "Paste the last line the block prints, then test it.", Yields: "provider"},
+			{Text: vendortext.Plain("Paste the last line the block prints, then test it."), Yields: "provider"},
 		},
 	}
 }

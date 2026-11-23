@@ -134,15 +134,6 @@
 
 /* ---- the server page ------------------------------------------------------- */
 
-/* Each card its own height, as Models' entry grid: stretched, a short card
-   stood beside a long one with its lower half empty. */
-.mcp-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
-  align-items: start;
-  gap: var(--spacing-3);
-}
-
 .mcp-quote {
   padding-inline-start: var(--spacing-3);
   border-inline-start: 2px solid var(--color-border-default);

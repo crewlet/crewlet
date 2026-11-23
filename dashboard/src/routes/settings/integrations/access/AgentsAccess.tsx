@@ -1450,11 +1450,14 @@ function Details({
               ) : providedExternally(lane, o) ? (
                 "Provided externally"
               ) : saved?.identity && !saved.hand_in ? (
-                // AN ENGINE-HELD LANE seals nothing per agent but its own identity's credential.
-                saved.identity.holds === "own" ? (
-                  `${saved.identity.name ?? saved.identity.id ?? "Its own"}, held by Crewlet`
-                ) : (
+                // AN ENGINE-HELD LANE seals nothing per agent but its own identity's
+                // credential, and an own-only lane with none kept has nothing at all.
+                saved.identity.holds === "company" ? (
                   "The company's, held by Crewlet"
+                ) : saved.identity.name || saved.identity.id ? (
+                  `${saved.identity.name ?? saved.identity.id}, held by Crewlet`
+                ) : (
+                  "Not set up yet"
                 )
               ) : (
                 "Not minted yet"

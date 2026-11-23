@@ -3,6 +3,7 @@ package seataccess_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -46,7 +47,7 @@ func TestTheResolverNeverFallsBackSilently(t *testing.T) {
 		{"own by construction", seataccess.IdentitySpec{Ways: []seataccess.IdentityWay{seataccess.WayInvited}},
 			seataccess.Desired{Enabled: true}, nil, true, false},
 	} {
-		got, err := seataccess.ResolveIdentity(integration.KindAppStoreConnect, c.spec, "growth", c.want, c.rec)
+		got, err := seataccess.ResolveIdentity(integration.KindMetaAds, c.spec, "growth", c.want, c.rec)
 		if _, isRefusal := errors.AsType[*seataccess.IdentityRefusal](err); isRefusal != c.refused {
 			t.Errorf("%s: error %v, want a refusal %v", c.name, err, c.refused)
 		}
@@ -107,12 +108,12 @@ type identityVendor struct {
 	dropped int
 }
 
-const identityLane = seataccess.LaneAppStoreConnect
+const identityLane = seataccess.LaneMetaAds
 
-func (*identityVendor) Kind() integration.Kind { return integration.KindAppStoreConnect }
+func (*identityVendor) Kind() integration.Kind { return integration.KindMetaAds }
 
 func (*identityVendor) Catalog() seataccess.Catalog {
-	return seataccess.Catalog{Kind: integration.KindAppStoreConnect, Lanes: []seataccess.LaneSpec{{
+	return seataccess.Catalog{Kind: integration.KindMetaAds, Lanes: []seataccess.LaneSpec{{
 		Lane: identityLane, Levels: true, CreatedBy: seataccess.ByCrewlet, EnabledBy: seataccess.ByCrewlet,
 		EngineHeld: true, Identity: ownSpec,
 	}}}
@@ -158,6 +159,9 @@ func (v *identityVendor) KeepIdentity(_ context.Context, in seataccess.IdentityI
 	if in.Value == "" {
 		return seataccess.IdentityKept{}, &seataccess.Refusal{Said: "no key was handed in"}
 	}
+	if in.Value == "unsigned" {
+		return seataccess.IdentityKept{}, fmt.Errorf("check the key: %w", vendorAnswer{})
+	}
 	return seataccess.IdentityKept{Check: v.verdict(in.Value), Way: in.Way, ID: in.FileName,
 		Name:   seatname.For(seatname.AppStoreConnect, "Acme", in.Seat.Handle),
 		Minted: []seataccess.Minted{{Field: "KEY", Value: in.Value}}}, nil
@@ -177,13 +181,42 @@ func (v *identityVendor) DropIdentity(context.Context, seataccess.IdentityInput)
 	return seataccess.IdentityDropped{Waiting: &seataccess.Waiting{Detail: "Revoke the key at Apple"}}, nil
 }
 
+// vendorAnswer is a vendor client's error for its definite 4xx answer.
+type vendorAnswer struct{}
+
+func (vendorAnswer) Error() string { return "the vendor answered 403" }
+func (vendorAnswer) VendorRefusal() *seataccess.Refusal {
+	return &seataccess.Refusal{Said: "Accept the latest agreement.", Remedy: "Sign in as the Account Holder."}
+}
+
+// A VENDOR'S DEFINITE ANSWER IS THE ATTEMPT'S REFUSAL, never a fault: the
+// sync answers, the record says the vendor's reason and remedy, and nothing
+// is kept or sealed.
+//
+// Mutation: classify only a *Refusal, and the vendor's 4xx fails the sync
+// the sheet then calls a check that did not finish.
+func TestAVendorsRefusalIsTheAttemptNotAFault(t *testing.T) {
+	t.Parallel()
+	v := &identityVendor{roles: map[string]string{}}
+	ledger, sink := seataccesstest.NewLedger(), seataccesstest.NewSink()
+	got := identitySync(t, v, ledger, sink, growthCompany("own", true), &seataccess.IdentityAsk{Keep: true,
+		Way: seataccess.WayHandedIn, Value: "unsigned", FileName: "id-unsigned"})
+	if got.Kept() || got.Attempt == nil || got.Attempt.Status != seataccess.IdentityRefused ||
+		got.Attempt.Said != "Accept the latest agreement." || got.Attempt.Remedy != "Sign in as the Account Holder." {
+		t.Fatalf("the vendor's refusal is not the attempt: %+v", got)
+	}
+	if _, held := sink.Held("META_ADS_KEY_GROWTH"); held {
+		t.Fatal("a refused key was sealed")
+	}
+}
+
 // growthCompany is one agent seat on the identity lane at mode.
 func growthCompany(mode string, on bool) *config.Company {
 	enabled := on
 	return &config.Company{Name: "Acme", Integrations: config.Integrations{
-		AppStoreConnect: &config.AppStoreConnect{Enabled: true}},
+		MetaAds: &config.MetaAds{Enabled: true}},
 		Roles: []config.Role{{Name: "Growth", Handle: "growth", Integrations: config.RoleIntegrations{
-			AppStoreConnect: &config.RoleAppStoreConnect{Enabled: &enabled, Level: "read", Apps: []string{"1"},
+			MetaAds: &config.RoleMetaAds{Enabled: &enabled, Level: "read", AdAccounts: []string{"act_1"},
 				Identity: mode}}}}}
 }
 
@@ -201,7 +234,7 @@ func identitySync(t *testing.T, v *identityVendor, ledger *seataccesstest.Ledger
 	if _, err := seataccess.Sync(t.Context(), in); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
-	rec, _ := ledger.Record(integration.KindAppStoreConnect, "growth")
+	rec, _ := ledger.Record(integration.KindMetaAds, "growth")
 	return rec.Lanes[identityLane].Identity
 }
 
@@ -215,7 +248,7 @@ func TestASeatIdentityIsCheckedBeforeItIsKeptAndOnEveryPass(t *testing.T) {
 	v := &identityVendor{roles: map[string]string{"wide": "Admin", "good": "Marketing", "next": "Marketing"}}
 	ledger, sink := seataccesstest.NewLedger(), seataccesstest.NewSink()
 	c := growthCompany("own", true)
-	const sealed = "APP_STORE_CONNECT_KEY_GROWTH"
+	const sealed = "META_ADS_KEY_GROWTH"
 
 	got := identitySync(t, v, ledger, sink, c, &seataccess.IdentityAsk{Keep: true, Way: seataccess.WayHandedIn,
 		Value: "wide", FileName: "id-wide"})
@@ -249,7 +282,7 @@ func TestASeatIdentityIsCheckedBeforeItIsKeptAndOnEveryPass(t *testing.T) {
 	if got.Status() != seataccess.IdentityRefused {
 		t.Fatalf("a pass did not find the revoked key refused: %+v", got)
 	}
-	if _, err := seataccess.ResolveIdentity(integration.KindAppStoreConnect, ownSpec, "growth",
+	if _, err := seataccess.ResolveIdentity(integration.KindMetaAds, ownSpec, "growth",
 		seataccess.Desired{Enabled: true, Identity: seataccess.IdentityOwn}, got); err == nil {
 		t.Fatal("a refused key still resolves to a signer")
 	}
@@ -393,7 +426,7 @@ func TestADepartedSeatsIdentityIsGivenUpNotForgotten(t *testing.T) {
 	if _, err := seataccess.Sync(t.Context(), in); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
-	rec, held := ledger.Record(integration.KindAppStoreConnect, "growth")
+	rec, held := ledger.Record(integration.KindMetaAds, "growth")
 	if !held {
 		t.Fatal("the departed seat's record was dropped while its key waits for a revoke")
 	}
@@ -401,7 +434,7 @@ func TestADepartedSeatsIdentityIsGivenUpNotForgotten(t *testing.T) {
 	if id.Kept() || len(id.Retiring) != 1 || id.Retiring[0].ID != "id-good" || v.dropped != 1 {
 		t.Fatalf("departed identity: %+v, dropped %d", id, v.dropped)
 	}
-	if _, sealed := sink.Held("APP_STORE_CONNECT_KEY_GROWTH"); sealed {
+	if _, sealed := sink.Held("META_ADS_KEY_GROWTH"); sealed {
 		t.Fatal("the departed seat's key is still sealed as its credential")
 	}
 }

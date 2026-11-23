@@ -13,6 +13,9 @@
 // property of talking to a third-party app rather than of any one of them.
 // It lives here because this is the leaf all of them already share. See
 // identity.go for what the number is anchored to.
+//
+// It imports nothing of the engine but internal/envfile, internal/envref and
+// internal/secrets, so any layer may import it.
 package provision
 
 import (

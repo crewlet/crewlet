@@ -150,6 +150,22 @@ func (h *fleetHarness) atlasSources() map[string][]byte {
 	return got
 }
 
+func (h *fleetHarness) putAtlasMisses(kind, value string) {
+	h.t.Helper()
+	if err := h.f.PutAtlasSourceMisses(h.ctx, kind, []byte(value)); err != nil {
+		h.t.Fatalf("PutAtlasSourceMisses(%q): %v", kind, err)
+	}
+}
+
+func (h *fleetHarness) atlasMisses(kind string) (string, bool) {
+	h.t.Helper()
+	value, found, err := h.f.AtlasSourceMisses(h.ctx, kind)
+	if err != nil {
+		h.t.Fatalf("AtlasSourceMisses(%q): %v", kind, err)
+	}
+	return string(value), found
+}
+
 func (h *fleetHarness) atlasSourceNames() []string {
 	h.t.Helper()
 	names := slices.Collect(maps.Keys(h.atlasSources()))
@@ -244,94 +260,44 @@ var atlasSourceCases = []fleetCase{
 			h.t.Fatalf("forgetting the integration status took the standing with it: %q", got)
 		}
 	}},
-}
 
-// ---- the atlas code scans' standings ------------------------------------ //
-
-func (h *fleetHarness) putAtlasCodeScan(repo, value string) {
-	h.t.Helper()
-	if err := h.f.PutAtlasCodeScan(h.ctx, repo, []byte(value)); err != nil {
-		h.t.Fatalf("PutAtlasCodeScan(%q): %v", repo, err)
-	}
-}
-
-func (h *fleetHarness) atlasCodeScans() map[string][]byte {
-	h.t.Helper()
-	got, err := h.f.AtlasCodeScans(h.ctx)
-	if err != nil {
-		h.t.Fatalf("AtlasCodeScans: %v", err)
-	}
-	return got
-}
-
-func (h *fleetHarness) atlasCodeScanRepos() []string {
-	h.t.Helper()
-	repos := slices.Collect(maps.Keys(h.atlasCodeScans()))
-	slices.Sort(repos)
-	return repos
-}
-
-var atlasCodeScanCases = []fleetCase{
-	{name: "a recorded standing reads back byte for byte, under a repository's id", fn: func(h *fleetHarness) {
-		// The value is OPAQUE to this store, and the key is a UUID, which
-		// the backend must carry as it is.
-		const repo, standing = "0192f3a0-7c1e-7b3a-9d2e-5f6a7b8c9d0e", `{"name":"shop","tip":"ab12"}`
-		h.putAtlasCodeScan(repo, standing)
-		if got := string(h.atlasCodeScans()[repo]); got != standing {
-			h.t.Fatalf("read back %q, want %q", got, standing)
-		}
-	}},
-
-	{name: "a repository with no standing is absent rather than empty", fn: func(h *fleetHarness) {
-		// The scan reads a missing key as "never scanned, so due now".
-		h.putAtlasCodeScan("repo-b", `{}`)
-		if _, present := h.atlasCodeScans()["repo-a"]; present {
-			h.t.Fatal("a repository nothing recorded came back present")
-		}
-	}},
-
-	{name: "the last write wins", fn: func(h *fleetHarness) {
-		h.putAtlasCodeScan("repo-a", `{"tip":"1"}`)
-		h.putAtlasCodeScan("repo-a", `{"tip":"2"}`)
-		if got := string(h.atlasCodeScans()["repo-a"]); got != `{"tip":"2"}` {
-			h.t.Fatalf("read back %q, want the second write", got)
-		}
-	}},
-
-	{name: "a deleted standing is gone, the rest survive, and deleting it again is fine", fn: func(h *fleetHarness) {
-		h.putAtlasCodeScan("repo-a", `{}`)
-		h.putAtlasCodeScan("repo-b", `{}`)
-		for range 2 {
-			if err := h.f.DeleteAtlasCodeScan(h.ctx, "repo-a"); err != nil {
-				h.t.Fatalf("DeleteAtlasCodeScan: %v", err)
-			}
-		}
-		if got := h.atlasCodeScanRepos(); !slices.Equal(got, []string{"repo-b"}) {
-			h.t.Fatalf("listed %v, want repo-b alone", got)
-		}
-	}},
-
-	{name: "a standing the caller mutates afterwards does not change the store", fn: func(h *fleetHarness) {
-		value := []byte(`{"tip":"1"}`)
-		if err := h.f.PutAtlasCodeScan(h.ctx, "repo-a", value); err != nil {
-			h.t.Fatalf("PutAtlasCodeScan: %v", err)
-		}
-		copy(value, []byte(`{"tip":"9"}`))
-		if got := string(h.atlasCodeScans()["repo-a"]); got != `{"tip":"1"}` {
-			h.t.Fatalf("read back %q after the caller reused its buffer", got)
-		}
-	}},
-
-	{name: "a standing is kept apart from the atlas sources' standings", fn: func(h *fleetHarness) {
-		// The collect duty forgets every key of its bucket that is no source
-		// of its build, which is what a repository's id is to it.
-		h.putAtlasCodeScan("cloudflare", `{"tip":"1"}`)
+	{name: "a source's misses are read by its key and never listed beside the standings", fn: func(h *fleetHarness) {
+		// The tick and every report list the standings, and a listing that
+		// carried each source's misses would wait the crossing of them all.
+		// Mutation: list the misses beside the standings, and datadog is
+		// listed.
 		h.putAtlasSource("cloudflare", `{"calls":1}`)
-		if err := h.f.DeleteAtlasSourceStatus(h.ctx, "cloudflare"); err != nil {
-			h.t.Fatal(err)
+		h.putAtlasMisses("cloudflare", `{"missing":[{"entries":["a"]}]}`)
+		h.putAtlasMisses("datadog", `{"missing":[]}`)
+		if got := h.atlasSourceNames(); !slices.Equal(got, []string{"cloudflare"}) {
+			h.t.Fatalf("the standings listed %v, want cloudflare's alone", got)
 		}
-		if got := string(h.atlasCodeScans()["cloudflare"]); got != `{"tip":"1"}` {
-			h.t.Fatalf("forgetting the source's standing took the scan's with it: %q", got)
+		if got := string(h.atlasSources()["cloudflare"]); got != `{"calls":1}` {
+			h.t.Fatalf("the standing reads %q beside its misses", got)
+		}
+		if got, found := h.atlasMisses("cloudflare"); !found || got != `{"missing":[{"entries":["a"]}]}` {
+			h.t.Fatalf("the misses read back %q (%v)", got, found)
+		}
+		if _, found := h.atlasMisses("scaleway"); found {
+			h.t.Fatal("a source nothing recorded the misses of came back with some")
+		}
+	}},
+
+	{name: "forgetting a source drops its misses with its standing", fn: func(h *fleetHarness) {
+		// A source the company connects again starts its misses afresh
+		// with its standing, never from an earlier connection's.
+		// Mutation: purge the standing alone, and its misses survive.
+		h.putAtlasSource("cloudflare", `{}`)
+		h.putAtlasMisses("cloudflare", `{"missing":[]}`)
+		h.putAtlasMisses("datadog", `{"missing":[]}`)
+		if err := h.f.DeleteAtlasSourceStatus(h.ctx, "cloudflare"); err != nil {
+			h.t.Fatalf("DeleteAtlasSourceStatus: %v", err)
+		}
+		if _, found := h.atlasMisses("cloudflare"); found {
+			h.t.Fatal("the forgotten source's misses survived it")
+		}
+		if _, found := h.atlasMisses("datadog"); !found {
+			h.t.Fatal("forgetting one source took another's misses")
 		}
 	}},
 }

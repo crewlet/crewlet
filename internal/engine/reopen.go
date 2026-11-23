@@ -141,6 +141,9 @@ func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 		// same terms; the box already holds its endpoint and is never handed
 		// the one this opening mints.
 		OnHost: sandbox.Placement(run.Placement) == sandbox.Direct,
+		// AND THE TURN'S CAP AS THE ROW RECORDS IT, which the token this
+		// opening mints ends at as the launch's did ([mcpbridge.Session.Deadline]).
+		Deadline: run.Deadline,
 		// THE SEAT'S FENCE AS THIS NODE HOLDS IT NOW: the grant the launch
 		// was fenced on is another node's, or this one's before a restart.
 		Fence: e.seatFence(handle),

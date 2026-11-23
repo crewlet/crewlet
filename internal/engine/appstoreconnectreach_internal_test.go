@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -24,8 +25,7 @@ import (
 )
 
 // ascTeam is a fake App Store Connect team with two apps, counting each full
-// listing of them (a pass's proof of a key reads one app, which it does not
-// count).
+// listing of them.
 type ascTeam struct {
 	mu    sync.Mutex
 	lists int
@@ -52,21 +52,20 @@ func (a *ascTeam) listed() int {
 	return a.lists
 }
 
-// ascDoc is a company connecting one team with a Marketing key and naming no
-// apps, whose Growth agent is on with app 111.
+// ascDoc is a company connecting one team by its issuer, whose Growth agent is
+// on with app 111.
 const ascDoc = `{
   "name": "Acme",
   "providers": {"sandbox": {"fake": true}, "llm": {"zulu": {"model": "claude-sonnet-5"}}},
   "integrations": {"app_store_connect": {"enabled": true, "connections": {"main": {
-    "issuer_id": "57246542-96fe-1a63-e053-0824d011072a",
-    "keys": {"marketing": {"key_id": "2X9R4HXF34", "private_key": "${ASC_KEY}"}}}}}},
+    "issuer_id": "57246542-96fe-1a63-e053-0824d011072a"}}}},
   "seat_access_migrated": ["app_store_connect"],
   "roles": [{"name": "Growth", "handle": "growth", "llm": "zulu",
     "integrations": {"app_store_connect": {"enabled": true, "level": "read", "apps": ["111"]}}}]
 }`
 
 // ascEngine is an engine running ascDoc whose App Store Connect product calls
-// a fake team.
+// a fake team, its Growth agent holding its own Marketing key there.
 func ascEngine(t *testing.T) (*Engine, *Company, *ascTeam) {
 	t.Helper()
 	company := specCompany(t, ascDoc)
@@ -93,14 +92,21 @@ func ascEngine(t *testing.T) (*Engine, *Company, *ascTeam) {
 			return v
 		},
 		HTTP: srv.Client(), Base: srv.URL,
+		Identity: func(context.Context, string) (seataccess.Signer, error) {
+			return seataccess.Signer{Own: true, Record: &seataccess.IdentityRecord{ID: "7KQ4M2ZX9P",
+				Credential: &seataccess.Credential{Variable: "ASC_KEY"},
+				Check: &seataccess.IdentityCheck{Status: seataccess.IdentityReady, Role: "Marketing",
+					Team: "main"}}}, nil
+		},
 	})
 	e.growthOnce.Do(func() { e.growth = []builtin.GrowthProduct{product} })
 	return e, company, team
 }
 
-// THE AGENTS TAB OFFERS THE APPS THE KEYS REACH, BY NAME: the access routes'
-// offer hands the product's read to the session, so the chooser lists each
-// app with its name and bundle ID, and the reach stays open.
+// THE AGENTS TAB OFFERS THE TEAM'S APPS BY NAME, as an agent's own key lists
+// them: the access routes' offer hands the product's read to the session, so
+// the chooser lists each app with its name and bundle ID, and the reach stays
+// open.
 //
 // Mutation: drop the reads from seatOffers' session, and the chooser lists
 // nothing to tick.
