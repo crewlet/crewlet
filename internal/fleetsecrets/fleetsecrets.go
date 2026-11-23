@@ -365,7 +365,15 @@ func (s *Store) get(ctx context.Context, name string, refuseWriteOnly bool) (str
 	return value, nil
 }
 
-// All unseals every OPERATOR value, for the resolver's boot snapshot.
+// Snapshot is every operator value unsealed, by name, and when the store last
+// wrote each: what a node resolves ${VAR} from, and the instant a credential's
+// expiry is judged from, read in one pass.
+type Snapshot struct {
+	Values  map[string]string
+	Written map[string]time.Time
+}
+
+// All unseals every OPERATOR value, for the resolver's [Snapshot].
 //
 // ONE ROUND TRIP: ${VAR} expansion happens per role, provider and MCP server,
 // so the engine resolves from a snapshot, not the store on every read.
@@ -377,15 +385,15 @@ func (s *Store) get(ctx context.Context, name string, refuseWriteOnly bool) (str
 // let missing names resolve silently from the environment, the stale-.env
 // shadowing this exists to prevent. Every node runs the same Tier A keyring,
 // so an unopenable row is a key dropped from it, a boot failure to read.
-func (s *Store) All(ctx context.Context) (map[string]string, error) {
+func (s *Store) All(ctx context.Context) (Snapshot, error) {
 	if s == nil || s.cipher == nil {
-		return nil, secrets.ErrNoKeyring
+		return Snapshot{}, secrets.ErrNoKeyring
 	}
 	rows, err := s.fleet.SecretValues(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("fleetsecrets: read the secrets: %w", err)
+		return Snapshot{}, fmt.Errorf("fleetsecrets: read the secrets: %w", err)
 	}
-	out := make(map[string]string, len(rows))
+	out := Snapshot{Values: make(map[string]string, len(rows)), Written: make(map[string]time.Time, len(rows))}
 	for _, row := range rows {
 		if secrets.Reserved(row.Name) {
 			continue
@@ -395,9 +403,9 @@ func (s *Store) All(ctx context.Context) (map[string]string, error) {
 			// The NAME, never the envelope: an error that echoed its
 			// input would put ciphertext into a log that a keyring
 			// might later open.
-			return nil, fmt.Errorf("fleetsecrets: open %s: %w", row.Name, err)
+			return Snapshot{}, fmt.Errorf("fleetsecrets: open %s: %w", row.Name, err)
 		}
-		out[row.Name] = value
+		out.Values[row.Name], out.Written[row.Name] = value, row.UpdatedAt
 	}
 	return out, nil
 }

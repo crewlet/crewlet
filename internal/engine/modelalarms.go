@@ -11,7 +11,6 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/envref"
-	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -19,8 +18,9 @@ import (
 // THE MODEL ALARMS' INPUTS (M15 of the Models design): each entry's condition
 // across the fleet, judged at the owner's fixed thresholds
 // ([statelog.KindLLMCredentialExpiring] and the four beside it), read off the
-// live nodes' status records and the secret store, save whether anything signs
-// an entry here and its harness's token lifetime, which are this node's own. A
+// live nodes' status records, save whether anything signs an entry here, its
+// harness's token lifetime and when its token was written, which are this
+// node's own (the last its secret snapshot, [Engine.storedAt]). A
 // read that fails carries the last good one, so a blip neither clears nor
 // raises an alarm; a live node whose record is not counted keeps its last one
 // at the same epoch, all but this node, whose rows are its memory; and one
@@ -34,8 +34,6 @@ type entryInputs struct {
 	// statuses is every live node's status record, by node id, a live node
 	// whose record is not counted keeping the one it last had.
 	statuses map[string]coord.NodeStatusRecord
-	// stored is when the secret store last wrote each secret, by name.
-	stored map[string]time.Time
 	// grants are the MCP servers' OAuth grants, by server.
 	grants map[string]coord.OAuthGrant
 	// runs is the fleet's active runs, read for the calls they hold for a
@@ -78,7 +76,7 @@ func (e *Engine) entriesReading(ctx context.Context, now time.Time, out *statelo
 			Models: e.modelStatus(ctx), MCP: e.mcpStatus(ctx)}
 	}
 	if len(c.Config.Providers.LLM) > 0 {
-		e.modelsReading(ctx, c, statuses, now, out)
+		e.modelsReading(c, statuses, now, out)
 	}
 	if len(c.Config.MCPServers) > 0 {
 		out.MCPServers = mcpConditions(c, statuses, e.grantsReading(ctx, c))
@@ -111,25 +109,14 @@ func (e *Engine) heldRuns(ctx context.Context) []sandbox.PendingRun {
 
 // modelsReading fills the model half of an alarm reading from the status
 // records [Engine.entriesReading] read.
-func (e *Engine) modelsReading(ctx context.Context, c *Company, statuses map[string]coord.NodeStatusRecord,
+func (e *Engine) modelsReading(c *Company, statuses map[string]coord.NodeStatusRecord,
 	now time.Time, out *statelog.Reading) {
 
 	nodes := make(map[string][]coord.ModelStatus, len(statuses))
 	for node, status := range statuses {
 		nodes[node] = status.Models
 	}
-	in := &e.entryInputs
-	stored, err := e.storedAt(ctx)
-	in.mu.Lock()
-	if err != nil {
-		log.WarnContext(ctx, "model_alarms_secrets_unread", "error", err,
-			"detail", "the credential expiries are judged on the last write instants this node read")
-		stored = in.stored
-	} else {
-		in.stored = stored
-	}
-	in.mu.Unlock()
-	out.Models = modelConditions(c, nodes, e.selfNode(), stored, e.namedEntries(c),
+	out.Models = modelConditions(c, nodes, e.selfNode(), e.storedAt(), e.namedEntries(c),
 		e.tokenLifetimes(c), now)
 	out.ModelsAt = now
 }
@@ -211,21 +198,18 @@ func variableOf(source config.CredentialSource) string {
 	return source.Fallback
 }
 
-// storedAt is when the secret store last wrote each secret, by name: empty on a
-// node with no store, an error where the store could not be listed.
-func (e *Engine) storedAt(ctx context.Context) (map[string]time.Time, error) {
-	out := map[string]time.Time{}
-	if e.backends == nil || e.backends.Fleet == nil || e.cipher == nil {
-		return out, nil
+// storedAt is when the secret store last wrote each secret this node resolves
+// from, by name, as its snapshot holds it ([secretView]): empty before one is
+// installed. THE SNAPSHOT, never the store: the expiry judged is that of the
+// value this node sends, and a listing every beat on every node would carry
+// every sealed value across its link (ADR-0175, "The secrets bucket declares
+// its class"). A value written with its reload deferred keeps its earlier
+// instant until the next apply, as it keeps its earlier value.
+func (e *Engine) storedAt() map[string]time.Time {
+	if v := e.env.Load(); v != nil && v.written != nil {
+		return v.written
 	}
-	records, err := fleetsecrets.New(e.backends.Fleet, e.cipher).List(ctx)
-	if err != nil {
-		return nil, err
-	}
-	for _, r := range records {
-		out[r.Name] = r.UpdatedAt
-	}
-	return out, nil
+	return map[string]time.Time{}
 }
 
 // tokenLifetimes is each harness entry's headless-token lifetime, zero where
