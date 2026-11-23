@@ -157,7 +157,7 @@ export function IdentitySheet({
       agent={seat.name}
       vendor={guide.vendor}
       why={guide.why}
-      replacing={identity.holds === OWN}
+      replacing={identity.holds === OWN && identity.replace === true}
       steps={guide.steps.map((s) => (s.copy ? { text: s.text, copy: s.copy } : { text: s.text }))}
       link={{ label: guide.link.label, href: guide.link.url }}
       note={guide.note}
