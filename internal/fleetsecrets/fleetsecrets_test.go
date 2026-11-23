@@ -248,9 +248,9 @@ func TestTheOperatorsViewDoesNotReachTheEnginesKeys(t *testing.T) {
 		t.Errorf("the ${VAR} snapshot holds %d values, the engine key among "+
 			"them: %t", len(values), snapped)
 	}
-	engine, err := s.EngineKeys(t.Context())
-	if err != nil || engine.Total != 1 || engine.ByKey["k1"] != 1 {
-		t.Errorf("the engine keys count %+v (%v), want one under k1", engine, err)
+	held, err := s.Inventory(t.Context())
+	if engine := held.Engine; err != nil || engine.Total != 1 || engine.ByKey["k1"] != 1 {
+		t.Errorf("the engine keys count %+v (%v), want one under k1", held.Engine, err)
 	}
 
 	// A REKEY MOVES IT, and counts rather than names it.
@@ -263,10 +263,10 @@ func TestTheOperatorsViewDoesNotReachTheEnginesKeys(t *testing.T) {
 		t.Errorf("the rekey reported %+v, want the operator row named and the "+
 			"engine key counted", rekeyed)
 	}
-	if engine, err := rotated.EngineKeys(t.Context()); err != nil ||
-		engine.StaleUnder("k2") != 0 {
+	if held, err := rotated.Inventory(t.Context()); err != nil ||
+		held.Engine.StaleUnder("k2") != 0 {
 		t.Errorf("after the rekey %d engine keys are still under a retired key "+
-			"(%v)", engine.StaleUnder("k2"), err)
+			"(%v)", held.Engine.StaleUnder("k2"), err)
 	}
 	if got, err := rotated.Estate().Get(t.Context(), key); err != nil ||
 		got != "the-engine-key" {

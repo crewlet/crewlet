@@ -143,11 +143,12 @@ func (f fleetBackend) Rekey(ctx context.Context, activeKeyID string) (rotation, 
 	return rotation{Rekeyed: rekeyed}, err
 }
 
-// EngineKeys counts the engine's own keys in the store, and nothing of the
-// identity estate, which is not here.
-func (f fleetBackend) EngineKeys(ctx context.Context) (engineHeld, error) {
-	keys, err := f.Store.EngineKeys(ctx)
-	return engineHeld{Keys: keys}, err
+// Inventory reads the store's rows and counts the engine's own keys in one
+// pass ([fleetsecrets.Store.Inventory]), and nothing of the identity estate,
+// which is not here.
+func (f fleetBackend) Inventory(ctx context.Context) (heldSecrets, error) {
+	held, err := f.Store.Inventory(ctx)
+	return heldSecrets{Rows: held.Records, Held: engineHeld{Keys: held.Engine}}, err
 }
 
 // fleetSecrets is the fleet's store, reached directly, under boot's keyring.
