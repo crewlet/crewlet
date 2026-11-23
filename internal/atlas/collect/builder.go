@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/atlas"
 	"github.com/crewlet/crewlet/internal/atlas/derive"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/redact"
 )
@@ -242,8 +243,19 @@ func ZoneOf(name atlas.Ref, zones []atlas.Ref) (atlas.Ref, bool) {
 func (b *Builder) Unread(u Unread) { b.unread = append(b.unread, u) }
 
 // Scope records one part of the world the read visits that keeps a standing
-// of its own, as each server of the SSH source does.
-func (b *Builder) Scope(id string) { b.scopes = append(b.scopes, id) }
+// of its own, as each server of the SSH source does. Its id is a host's
+// ([config.SSHHostID]), which bounds what a standing's scopes may be
+// ([MaxScopes]); any other is withheld, never its text.
+func (b *Builder) Scope(id string) {
+	if !config.SSHHostID(id) {
+		b.Withhold("a scope", errScopeID)
+		return
+	}
+	b.scopes = append(b.scopes, id)
+}
+
+// errScopeID is a scope whose id is no host's.
+var errScopeID = errors.New("not a scope's id: up to 40 lowercase letters, digits and hyphens")
 
 // Read is what the builder gathered.
 func (b *Builder) Read() Read {

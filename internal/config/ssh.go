@@ -182,7 +182,10 @@ const (
 	// SSHDefaultPort is the port a host that names none is reached on.
 	SSHDefaultPort = 22
 
-	sshMaxHosts           = 200
+	// SSHMaxHosts is the most servers a company declares, which also bounds
+	// the scopes an atlas source's standing keeps (internal/atlas/collect's
+	// MaxScopes).
+	SSHMaxHosts           = 200
 	sshMaxAllowlistRules  = 100
 	sshMaxRuleBytes       = 512
 	sshMaxHostKeys        = 8
@@ -451,9 +454,9 @@ func (s *SSH) validate(path Path) error {
 			p.add(here, ErrUnknownValue, "%q is not a regular expression (RE2): %s", pattern, err.Error())
 		}
 	}
-	if len(s.Hosts) > sshMaxHosts {
+	if len(s.Hosts) > SSHMaxHosts {
 		p.add(at(path, "hosts"), ErrOutOfRange, "%d servers is more than the %d one company may register",
-			len(s.Hosts), sshMaxHosts)
+			len(s.Hosts), SSHMaxHosts)
 	}
 	ids := map[string]bool{}
 	for i, h := range s.Hosts {
