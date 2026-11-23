@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -26,8 +27,12 @@ const (
 	NotFound
 	// Fail answers every request 500, as a registry failing on its side.
 	Fail
-	// Corrupt serves playwright-core with one byte flipped, every other
-	// package whole.
+	// Corrupt serves playwright-core with one byte of its gzip header's
+	// MTIME flipped, every other package whole: bytes the lock refuses
+	// that still inflate to the published tarball, so npm's integrity
+	// check is the one thing that can refuse them. A byte flipped in the
+	// deflate data instead fails the gzip trailer's CRC too, and which of
+	// the two npm reports first is a race inside npm (#1929).
 	Corrupt
 	// Hang reads each request and never answers it.
 	Hang
@@ -145,8 +150,10 @@ func (r *StandInRegistry) serve(w http.ResponseWriter, req *http.Request, done <
 		return
 	}
 	if r.mode == Corrupt && strings.Contains(req.URL.Path, "/playwright-core-") {
-		body = bytes.Clone(body)
-		body[len(body)/2] ^= 1
+		if body, err = otherMTime(body); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
@@ -157,6 +164,20 @@ func (r *StandInRegistry) serve(w http.ResponseWriter, req *http.Request, done <
 		return
 	}
 	_, _ = w.Write(body)
+}
+
+// otherMTime is gzip, a tarball as npm publishes it, with its header's MTIME
+// changed (RFC 1952 §2.3: bytes 4 to 7, read by no inflater and covered by
+// no checksum but FHCRC's, which it refuses).
+func otherMTime(gzip []byte) ([]byte, error) {
+	const fhcrc = 1 << 1
+	if len(gzip) < 10 || gzip[0] != 0x1f || gzip[1] != 0x8b || gzip[2] != 8 || gzip[3]&fhcrc != 0 {
+		return nil, fmt.Errorf("the stand-in registry corrupts a gzip member with no header CRC, and the "+
+			"tarball begins % x", gzip[:min(len(gzip), 10)])
+	}
+	other := bytes.Clone(gzip)
+	other[4] ^= 1
+	return other, nil
 }
 
 // Requests is every request the registry was sent, as its method and path,
