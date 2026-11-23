@@ -13,6 +13,7 @@ import {
   AgentIdentitySheet,
   type AgentIdentityBrought,
   type AgentIdentityHandIn,
+  type AgentIdentityStepNote,
   type AgentIdentityVerdict,
 } from "@crewlethq/ui";
 import type {
@@ -22,7 +23,7 @@ import type {
   AccessIdentityGuide,
   AccessSeat,
 } from "~/contract/access.ts";
-import type { SetupVerdict } from "~/contract/setup.ts";
+import type { SetupVerdict, SetupVerdictStep } from "~/contract/setup.ts";
 import { Modal } from "~/components/Modal.tsx";
 import { VendorWords } from "~/ui/VendorWords.tsx";
 import type { IdentityRequest } from "./api.ts";
@@ -113,10 +114,18 @@ export async function identityRequest(brought: AgentIdentityBrought): Promise<Id
   return { way: "invited" };
 }
 
-/** The engine's verdict as the sheet draws it: the sentence, then what each read found. */
+/**
+ * The engine's verdict as the sheet draws it: the sentence, then what each
+ * read found; a refused check marks the read it stopped at, with the reason
+ * and the vendor's answers under each read that ran.
+ */
 export function verdictOf(verdict: SetupVerdict): AgentIdentityVerdict {
+  const steps: Record<string, AgentIdentityStepNote> = {};
+  for (const s of verdict.steps ?? []) steps[s.id] = stepNote(s);
   return {
     ok: verdict.outcome === "works",
+    ...(verdict.failed_at ? { failedAt: verdict.failed_at } : {}),
+    ...(verdict.steps?.length ? { steps } : {}),
     view: (
       <div className="agent-access-verdict">
         <p>{verdict.summary}</p>
@@ -135,6 +144,14 @@ export function verdictOf(verdict: SetupVerdict): AgentIdentityVerdict {
         ))}
       </div>
     ),
+  };
+}
+
+/** What one read found, as the sheet draws it under that read. */
+function stepNote(s: SetupVerdictStep): AgentIdentityStepNote {
+  return {
+    ...(s.said ? { note: s.said } : {}),
+    ...(s.detail ? { detail: s.detail } : {}),
   };
 }
 

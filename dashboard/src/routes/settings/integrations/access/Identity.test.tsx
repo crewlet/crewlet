@@ -4,11 +4,11 @@
  * replaces it, and its sheet is the engine's guide with nothing to bring back.
  */
 
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { LayerHost } from "@crewlethq/ui";
 import type { AccessIdentity, AccessIdentityGuide, AccessSeat } from "~/contract/access.ts";
-import { IdentityBox, IdentitySheet, handInOf, identityRequest } from "./Identity.tsx";
+import { IdentityBox, IdentitySheet, handInOf, identityRequest, verdictOf } from "./Identity.tsx";
 
 afterEach(cleanup);
 
@@ -216,4 +216,70 @@ test("a file's optional detail is asked beside it and sent only when typed", asy
   expect(await identityRequest({ made: false, file, field: "7KQ4M2ZX9P" })).not.toHaveProperty(
     "detail",
   );
+});
+
+// A REFUSED CHECK MARKS THE READ IT STOPPED AT, with the vendor's reason under
+// it, and the reads after it as not run: never every read stopped, and never
+// a later read failed while an earlier one is said done.
+//
+// Mutation: drop failed_at from verdictOf, and the sheet draws the last read
+// failed and the refused first read done.
+test("a refused check marks the read it stopped at, says why, and runs nothing after it", async () => {
+  const reason =
+    "Apple refuses every API call for this team until its Account Holder accepts the latest agreement.";
+  const onCheck = vi.fn(async () =>
+    verdictOf({
+      outcome: "refused",
+      summary: reason,
+      failed_at: "token",
+      steps: [{ id: "token", said: reason }],
+      warnings: [
+        { action: "Sign in to App Store Connect as the Account Holder, then check again." },
+      ],
+    }),
+  );
+  render(
+    <LayerHost>
+      <IdentitySheet
+        seat={SEAT}
+        identity={NOT_ADDED}
+        guide={PLAY_GUIDE}
+        onClose={vi.fn()}
+        onCheck={onCheck}
+      />
+    </LayerHost>,
+  );
+  const sheet = screen.getByRole("dialog");
+  await act(async () => {
+    fireEvent.click(within(sheet).getByRole("button", { name: "Make it for me" }));
+  });
+  const reads = within(sheet).getByRole("list", { name: /Checking Mobile lead's identity/ });
+  const states = [...reads.querySelectorAll(":scope > li")].map(
+    (li) => /crewlet-step-list__step--(\w+)/.exec(li.className)?.[1],
+  );
+  expect(states).toEqual(["failed", "pending", "pending"]);
+  expect(within(reads).getByText(reason)).toBeTruthy();
+  expect(within(sheet).queryByText("The check did not finish")).toBeNull();
+});
+
+// THE VENDOR'S ANSWERS ARE KEPT UNDER THE READ THAT MADE THEM, so a role
+// Crewlet could not tell says which answer disagreed.
+test("verdictOf carries each read's reason and the vendor's answers to the sheet", () => {
+  const v = verdictOf({
+    outcome: "refused",
+    summary: "Apple's answers fit no role.",
+    failed_at: "role",
+    steps: [
+      {
+        id: "role",
+        said: "Apple's answers fit no role.",
+        detail: "financeReports_getCollection 200",
+      },
+    ],
+  });
+  expect(v.failedAt).toBe("role");
+  expect(v.steps).toEqual({
+    role: { note: "Apple's answers fit no role.", detail: "financeReports_getCollection 200" },
+  });
+  expect(verdictOf({ outcome: "works", summary: "Works." })).not.toHaveProperty("failedAt");
 });
