@@ -88,9 +88,9 @@ func (QwenCode) startsByLines() {}
 // layout is a Qwen Code archive's: a gzipped tar of the chat file.
 func (QwenCode) layout() archiveLayout { return archiveTar }
 
-// meters reports whether member is a chat file, the one the meter counts
-// ([carrier.meters], [chatMemberLines]).
-func (QwenCode) meters(_, member string) bool { return qwenChatMember(member) }
+// charges reports whether member is a chat file, the one the meter counts
+// ([carrier.charges], [chatMemberLines]).
+func (QwenCode) charges(_, member string) bool { return qwenChatMember(member) }
 
 // transcript reads a Qwen Code archive ([qwenArchiveFormat]): its chat file,
 // as a session file is read ([transcriptBuilder.qwenSession]).

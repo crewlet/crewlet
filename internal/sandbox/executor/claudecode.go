@@ -1142,9 +1142,9 @@ func claudeOnDemand(paths Paths, session string, at packAt) string {
 // ([claudeArchiveFormat]).
 func (ClaudeCode) layout() archiveLayout { return archiveTar }
 
-// meters reports whether member is session's main thread, the one the meter
-// counts ([carrier.meters], [meterArchive]).
-func (ClaudeCode) meters(session, member string) bool {
+// charges reports whether member is session's main thread, whose lines after
+// the counted reply the count charges ([carrier.charges], [meterArchive]).
+func (ClaudeCode) charges(session, member string) bool {
 	m, ok := claudeMemberOf(session, path.Clean(member))
 	return ok && m.Kind == memberMainThread
 }

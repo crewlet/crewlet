@@ -29,8 +29,8 @@ func (Kimi) VersionCommand() string { return "kimi --version" }
 // layout is a Kimi archive's: a gzipped tar of the session's files.
 func (Kimi) layout() archiveLayout { return archiveTar }
 
-// meters is false: its meter counts nothing ([carrier.meters]).
-func (Kimi) meters(string, string) bool { return false }
+// charges is false: its meter counts nothing ([carrier.charges]).
+func (Kimi) charges(string, string) bool { return false }
 
 // Resumes says Kimi continues a session it reported: KAP opens one its home
 // holds, in whatever directory under `sessions/` it is filed (measured on

@@ -5025,7 +5025,8 @@ output, but a box that resumes its own copy resumes it unscrubbed, and every
 value or redaction the scrub took out may have cost its harness more than the
 marker left in its place: a non-ASCII password shorter than its marker costs
 Gemini CLI more, so a length less its marker's is no bound. So the take tallies,
-for the members its meter counts (`carrier.meters`), what each text loses: its
+for the members whose bytes its meter's count charges (`carrier.charges`; not
+Codex's, a figure its rollout states), what each text loses: its
 charge less that of the own words its kept text holds, each byte charged as
 JSON.stringify writes it, a credential's whole value and a loaded tool
 definition the cut takes out among it. The tally travels with the bytes through
