@@ -2782,17 +2782,21 @@ never starts a gateway. Hermes's plugin API's own `inject_message` queues a
 message as a turn of its own after the run's, so it is not used. The plugin
 confirms nothing: a note is confirmed read only once the session's record
 holds it in this launch's own rows (above the store's newest row as the
-launch began) as an active user message shown as a steer, in Hermes's frame,
-matched by the digest of the text the route served, one note to one serve in
-order, and the model's reply is stored after it (measured: the note rides the
-request after the tool result). Notes steered during one tool call share one
-row, each stripped and joined by a newline (measured), and each is matched in
-turn. One steer runs under a 5-second deadline (2.3 s measured with three busy
-loops a core); one whose answer is lost after it was sent is not sent again,
-since `session.steer` takes no key that would make a repeat harmless, and one
-Hermes rejects (no turn running) is. A notes route that refuses the plugin
-(401 or 404) ends its polls. A note may run to the engine's item bound, 4,505
-UTF-16 units.
+launch began) as a user message of the conversation shown as a steer, in
+Hermes's frame (never one a compaction folded away or its summary), matched by
+the digest of the text the route served, in serve order with a serve the
+record lacks passed over, and a reply the model finished is stored after it
+(measured: the note rides the request after the tool result). Notes steered
+during one tool call share one row, each stripped and joined by a newline
+(measured), and each is matched in turn. Reaching the gateway and resuming the
+session have a 5-second deadline (2.3 s measured with three busy loops a
+core) and are tried again; the steer itself has 30 seconds (under 0.06 s
+measured), and one whose outcome is unknown once sent is not sent again, since
+`session.steer` takes no key that would make a repeat harmless, while one
+Hermes rejects (no turn running) is. A delegated subagent's turn, which fires
+the plugin's turn hooks under its own session, is no turn of the run's
+(measured). A notes route that refuses the plugin (401 or 404) ends its polls.
+A note may run to the engine's item bound, 4,505 UTF-16 units.
 
 ## Mid-run clarification (`ask_and_wait`)
 

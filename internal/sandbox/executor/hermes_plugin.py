@@ -15,6 +15,7 @@ The routes carry the job's token, so each is read from its file at each use and 
 """
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
@@ -26,10 +27,14 @@ import urllib.request
 
 logger = logging.getLogger("crewlet")
 
-# How long one note's steer may take, from finding the gateway to its answer. Measured on 0.23.3 (two cores):
-# 0.3 s idle, 1.0 s with both cores busy, 2.3 s with three busy loops a core (session.resume 1.9 s of it). Half
-# the notes route's 10 s hold, so a gateway that accepts and never answers costs the notes no more than a poll.
-_STEER_SECONDS = 5.0
+# How long the steps before a note's steer may take (finding the gateway, connecting, session.resume), which a
+# retry repeats harmlessly. Measured on 0.23.3 (two cores): 0.3 s idle, 1.0 s with both cores busy, 2.3 s with
+# three busy loops a core (session.resume 1.9 s of it). Half the notes route's 10 s hold, so a gateway that
+# accepts and never answers costs the notes no more than a poll.
+_REACH_SECONDS = 5.0
+# How long session.steer itself may take, which no retry may repeat: measured under 0.06 s at every load above,
+# so 30 s is waited before its note is left to its record, three of the route's holds.
+_STEER_SECONDS = 30.0
 
 _lock = threading.Lock()
 _turn = {"running": False, "session": None}
@@ -80,7 +85,11 @@ def register(ctx):
     notes_file = settings.get("notes_url_file")
     reporting = {"on": bool(skills and skills_file)}
 
+    # A DELEGATED SUBAGENT'S TURN fires these hooks too, under its own session with parent_session_id set, inside
+    # the run's turn (measured on 0.23.3); the notes are the run's session's, so only its own turn counts.
     def turn_started(**kw):
+        if kw.get("parent_session_id"):
+            return
         with _lock:
             _turn["running"] = True
             _turn["session"] = kw.get("session_id") or _turn["session"]
@@ -88,6 +97,8 @@ def register(ctx):
 
     def turn_ended(**kw):
         with _lock:
+            if kw.get("session_id") and kw.get("session_id") != _turn["session"]:
+                return
             _turn["running"] = False
 
     def response(**kw):
@@ -150,30 +161,32 @@ async def _steer_async(session, text, sent):
     from hermes_cli.gateway_client import connect_gateway
     from hermes_cli.gateway_runtime import attachable, discover_gateway_endpoint, gateway_profile_home
 
-    async with asyncio.timeout(_STEER_SECONDS):
-        found = await asyncio.to_thread(discover_gateway_endpoint, gateway_profile_home(get_hermes_home()))
-        if not attachable(found):
-            return False
-        async with connect_gateway(endpoint=found.endpoint) as client:
+    async with contextlib.AsyncExitStack() as stack:
+        async with asyncio.timeout(_REACH_SECONDS):
+            found = await asyncio.to_thread(discover_gateway_endpoint, gateway_profile_home(get_hermes_home()))
+            if not attachable(found):
+                return False
+            client = await stack.enter_async_context(connect_gateway(endpoint=found.endpoint))
             snapshot = await client.rpc("session.resume", session_id=session)
-            sent["steer"] = True
+        sent["steer"] = True
+        async with asyncio.timeout(_STEER_SECONDS):
             answer = await client.rpc("session.steer", session_id=session, text=text,
                                       execution_generation=snapshot["execution_generation"])
-    # 0.23.3 answers queued, redirected or rejected (no turn running, nothing kept); session.steer takes no
-    # key that would make a repeat harmless.
-    return (answer or {}).get("status") in ("queued", "redirected")
+    # 0.23.3's session.steer answers queued (kept for the turn) or rejected (no turn running, nothing kept);
+    # redirected is session.redirect's. It takes no key that would make a repeat harmless.
+    return (answer or {}).get("status") == "queued"
 
 
 def _steer(session, text):
-    """Whether the note was handed over: steered, or its steer sent and its answer lost, which the session's
-    record decides (a repeat would put it in the turn twice); not where it failed before the steer was sent,
-    or Hermes refused it, so it is tried again."""
+    """Whether to move past the note: steered, or its steer sent with its outcome unknown (its answer lost or
+    late), which the session's record decides, since a repeat could put it in the turn twice; not where it failed
+    before the steer was sent, or Hermes rejected it, so it is tried again."""
     sent = {"steer": False}
     try:
         return asyncio.run(_steer_async(session, text, sent))
     except Exception as err:
         if sent["steer"]:
-            logger.warning("crewlet: a note's steer had no answer (%s); its record decides", type(err).__name__)
+            logger.warning("crewlet: a note's steer has an unknown outcome (%s); its record decides", type(err).__name__)
             return True
         logger.warning("crewlet: a note could not be steered into the turn (%s)", type(err).__name__)
         return False

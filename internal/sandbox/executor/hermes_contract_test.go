@@ -200,3 +200,75 @@ func TestHermesReportsASkillLoadOnlyOfTheFileAsInstalled(t *testing.T) {
 		t.Errorf("report = %q, want the skill's listed name", reports[0])
 	}
 }
+
+// hermesTurnsProbe registers the plugin with a stand-in of Hermes's plugin
+// context and fires its turn hooks as 0.23.3 fires them when the run's model
+// delegates (measured): the run's turn, the subagent's turn under its own
+// session with parent_session_id set, the subagent's end, the run's end. It
+// prints the plugin's turn after each of the last three.
+const hermesTurnsProbe = `import importlib.util, json, os, sys
+os.environ["CREWLET_HERMES_PLUGIN"] = sys.argv[2]
+spec = importlib.util.spec_from_file_location("crewlet_plugin", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+hooks = {}
+class Ctx:
+    def register_hook(self, name, fn, **kw):
+        hooks[name] = fn
+m.register(Ctx())
+seen = []
+hooks["pre_llm_call"](session_id="run", parent_session_id="")
+hooks["pre_llm_call"](session_id="sub", parent_session_id="run")
+seen.append(dict(m._turn))
+hooks["post_llm_call"](session_id="sub")
+seen.append(dict(m._turn))
+hooks["post_llm_call"](session_id="run")
+seen.append(dict(m._turn))
+print(json.dumps(seen))
+`
+
+// A DELEGATED SUBAGENT'S TURN IS NO TURN OF THE HERMES RUN'S: 0.23.3 fires
+// the turn hooks for a subagent the model delegates to, under the subagent's
+// own session with parent_session_id set, inside the run's turn (measured).
+// The plugin keeps its notes on the run's session while the subagent's turn
+// starts and ends, and the run's turn ends with its own end alone.
+//
+// Mutation: take the subagent's session for the notes, or end the turn on its
+// end, and a row goes red.
+func TestADelegatedSubagentsTurnIsNoTurnOfTheHermesRuns(t *testing.T) {
+	t.Parallel()
+	python := prereqtest.OnPath(t, "python3", "the case runs Hermes's plugin", "install python3")
+	plugin, settings := hermesPluginOf(t, sandbox.RunRequest{})
+	settings["record"] = filepath.Join(t.TempDir(), "record.jsonl")
+	raw, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(file, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(python, "-I", "-c", hermesTurnsProbe, plugin, file).Output()
+	if err != nil {
+		t.Fatalf("the probe: %v", err)
+	}
+	var seen []struct {
+		Running bool   `json:"running"`
+		Session string `json:"session"`
+	}
+	if err := json.Unmarshal(out, &seen); err != nil {
+		t.Fatalf("the probe printed %q: %v", out, err)
+	}
+	want := []struct {
+		running bool
+		session string
+	}{{true, "run"}, {true, "run"}, {false, "run"}}
+	if len(seen) != len(want) {
+		t.Fatalf("the probe saw %+v", seen)
+	}
+	for i, w := range want {
+		if seen[i].Running != w.running || seen[i].Session != w.session {
+			t.Errorf("after hook %d the plugin's turn is %+v, want running %v on %s", i+2, seen[i], w.running, w.session)
+		}
+	}
+}
