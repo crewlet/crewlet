@@ -68,8 +68,8 @@ func TestAWorkConfigDirIsInsideTheCallAndHoldsWhatTheHarnessReads(t *testing.T) 
 
 // THE BUILT-IN OPENCODE PROFILE'S CHILD READS NO PROJECT CONFIGURATION AND ONLY
 // THE CALL'S OWN. Both variables, with exactly these values: without the first,
-// every ancestor's opencode.json and .opencode/ configures every seat (on 2.0.32
-// an allow-all one handed every call a shell); without the second the seat's
+// every ancestor's opencode.json and .opencode/ configures every seat (on
+// 2.3.2 an allow-all one handed every call a shell, measured); without the second the seat's
 // agent file and tool policy are read from nowhere.
 //
 // The switch is the name OpenCode 2 reads FIRST, OPENCODE_CONFIG_PROJECT_DISABLE

@@ -24,7 +24,7 @@ func TestEveryCarrierRefusesABoxThatNamedNoReleaseAndJudgesAWriterAlone(t *testi
 		writers []string
 	}{
 		{"claude-code", ClaudeCode{}, "2.1.322", []string{"2.1.310", "2.1.300", "2.1.299", ""}},
-		{"opencode", OpenCode{}, "2.2.7", []string{"2.2.7", "2.0.32", "2.0.31", ""}},
+		{"opencode", OpenCode{}, openCodeRelease, []string{openCodeRelease, "2.3.1", "2.3.3", ""}},
 		{"codex", Codex{}, codexCarryRelease, []string{codexCarryRelease, "0.170.0", "0.172.0", ""}},
 		{"pi", Pi{}, piSupported, []string{piSupported, "1.5.9", "1.6.1", ""}},
 	} {
@@ -64,7 +64,7 @@ func TestAnUnreadWriterContinuesInNoBox(t *testing.T) {
 		boxes   []string
 	}{
 		{"claude-code", ClaudeCode{}, []string{"2.1.310", "2.1.322", "9.0.0"}},
-		{"opencode", OpenCode{}, []string{"2.0.32", "2.2.7", "9.0.0"}},
+		{"opencode", OpenCode{}, []string{openCodeRelease, "2.3.3", "9.0.0"}},
 		{"codex", Codex{}, []string{codexCarryRelease}},
 		{"copilot", Copilot{}, []string{copilotFloor()}},
 		{"kimi-code", Kimi{}, []string{kimiSupported}},
@@ -156,7 +156,7 @@ func TestSingleReleaseArchivesAreMeteredAsNoFigure(t *testing.T) {
 func TestAReleaseNamesItsThreeNumbersAndNoMore(t *testing.T) {
 	t.Parallel()
 	for printed, want := range map[string]bool{
-		"1.4.25": true, "v2.1.4": true, "2.1.310 (Claude Code)": true, "GitHub Copilot CLI 1.0.114.": true,
+		"1.4.25": true, "v2.3.2": true, "2.1.310 (Claude Code)": true, "GitHub Copilot CLI 1.0.114.": true,
 		"Muse Code 1.4.25 (1.4.25-R9361.1)": true, "1.4.25.1": false, "1.4.25-rc.1": false, "1.4.25+b": false,
 		"1.4.x": false, "1.4": false, "": false,
 	} {
@@ -169,7 +169,7 @@ func TestAReleaseNamesItsThreeNumbersAndNoMore(t *testing.T) {
 		writer  string
 	}{
 		"claude-code": {ClaudeCode{}, "2.1.310.1"},
-		"opencode":    {OpenCode{}, "2.2.7.1"},
+		"opencode":    {OpenCode{}, openCodeRelease + ".1"},
 		"copilot":     {Copilot{}, copilotFloor() + ".1"},
 	} {
 		if ok, why := c.carrier.ContinuesWriter(c.writer); ok || why == "" {

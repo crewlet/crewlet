@@ -1,0 +1,2 @@
+{"type":"step_start","timestamp":1795393284028,"sessionID":"ses_6679d0cdc584d8950b44fb1ab5aa4a51","part":{"id":"prt_205c767bc001hoW3b3ehDbAEqb","sessionID":"ses_6679d0cdc584d8950b44fb1ab5aa4a51","messageID":"msg_205c75e43001QV4vUSYgRXKeAs","type":"step-start"}}
+{"type":"error","timestamp":1795393284067,"sessionID":"ses_6679d0cdc584d8950b44fb1ab5aa4a51","error":{"type":"aborted","message":"Session interrupted: user"}}

@@ -220,6 +220,14 @@ func (d *hermesEvents) roundCapped() bool {
 	return rounds >= d.capped
 }
 
+// Ended implements [Decoder]: the stream-json `result` event, which the client
+// prints as its run ends. Measured on 0.23.3: a finished run (exit 0), a
+// refused one (exit 1, its error) and one whose client took SIGINT or whose
+// gateway took SIGTERM (exit 130) each end on one; a client killed, by
+// SIGTERM or SIGKILL, prints none. A relaunch after a discard is read on its
+// own result ([hermesEvents.Line]'s `system`).
+func (d *hermesEvents) Ended() bool { return d.done }
+
 // Result implements [Decoder].
 func (d *hermesEvents) Result() sandbox.Result {
 	if !d.sawLine {

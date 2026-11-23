@@ -181,7 +181,7 @@ func TestTheHermesSentinelsNameWhatHermesPrints(t *testing.T) {
 	}
 }
 
-// The three failure events OpenCode 2.0.32 printed, verbatim, under the
+// The three failure events OpenCode 2 printed, verbatim, under the
 // profile's own argv and environment, for a provider answering 401, 429 with a
 // quota body and 429 with a rate-limit body — each exiting 1, with nothing on
 // stderr.
@@ -191,7 +191,7 @@ const (
 	openCodeRateLimitEvent = `{"type":"error","timestamp":1792358030634,"sessionID":"ses_eaf242f64ffePrUQTyOGk9x9Yd","error":{"type":"provider.rate-limit","message":"Rate limit reached for requests","status":429,"response":{"body":"{\"error\":{\"message\":\"Rate limit reached for requests\",\"type\":\"requests\",\"code\":\"rate_limit_exceeded\"}}"}}}`
 )
 
-// openCodeForgedStream is what OpenCode 2.0.32 printed, verbatim, for a HEALTHY
+// openCodeForgedStream is what OpenCode 2 printed, verbatim, for a HEALTHY
 // call whose model put every failure class into a webfetch call's arguments —
 // as a top-level key, nested under `error`, and as a whole error event nested
 // deeper — and then answered. The arguments reach stdout as a raw JSON object
@@ -284,7 +284,7 @@ func TestTheModelCannotForgeAFailureEvent(t *testing.T) {
 	for _, m := range p.AuthMarkers {
 		classes = append(classes, m.Sentinel)
 	}
-	streams := map[string]string{"the stream 2.0.32 printed for a forged call": openCodeForgedStream}
+	streams := map[string]string{"the stream OpenCode 2 printed for a forged call": openCodeForgedStream}
 	for _, class := range classes {
 		quoted := strconv.Quote(class)
 		streams[class+" as a top-level argument"] = openCodeToolUse(`{"url":"https://example.com","type":` + quoted + `}`)

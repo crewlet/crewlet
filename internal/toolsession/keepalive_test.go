@@ -321,7 +321,7 @@ func TestARunningCallsProgressKeepsComingUntilItsToolReturns(t *testing.T) {
 // writes from a goroutine of its own, so a tool can return with a progress
 // half-way out; the answer is handed back only once that write has ended, since
 // a progress for a retired token is logged by a harness as an error (OpenCode
-// 2.1.4: "Received a progress notification for an unknown token"). Held in a
+// 2: "Received a progress notification for an unknown token"). Held in a
 // bubble: the second progress is held in the server's sending middleware, the
 // tool is let go, and the answer must not come until the progress is written.
 //
@@ -483,7 +483,7 @@ func TestAServerThatKeepsNothingGoingSendsNoProgress(t *testing.T) {
 // A CANCELLED CALL IS SENT NO MORE PROGRESS. A harness that cancels a call has
 // retired its progress token, so the beat stops at the cancel, however long the
 // call's tool runs on after it: a progress for a token the harness no longer
-// holds is one more error for it to log (OpenCode 2.1.4: "Received a progress
+// holds is one more error for it to log (OpenCode 2: "Received a progress
 // notification for an unknown token"). Over a pipe that writes whatever
 // context a message is sent under, as the streamable HTTP transport does, so
 // nothing but the beat keeps the progress off the wire; decided in a bubble,
@@ -645,7 +645,7 @@ func TestACallWhoseResponseIsGoneReachesTheDispatcherAsAbandoned(t *testing.T) {
 // ANSWER IS KEPT GOING. A server that keeps a running call's answer going hands
 // its dispatcher the request's end widened to a progress that found the
 // response gone, and a cancel must still close it, as it does where nothing is
-// kept going: Claude Code 2.1.310 and OpenCode 2.1.4 cancel a call at their
+// kept going: Claude Code 2.1.310 and OpenCode 2 cancel a call at their
 // server's timeout in the box's settings, which is how the bridge marks a call
 // that ran past its own bound. Over the streamable HTTP transport the bridge
 // serves a box over, the call held: closed before its tool returns.
