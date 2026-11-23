@@ -4422,28 +4422,20 @@ writer's (no pair has been measured; the writer is the kept capture's stamp,
 or for the copy continued in its box the release the job before's record
 names beside its count, `count_release`, which a company that keeps no
 session has too), a plugin other than the engine's own, a
-provider's `contextManagement`, a source the read cannot size in the box that
-holds the copy, no model, a model the catalog does not list, a native
+provider's `contextManagement`, no model, a model the catalog does not list, a native
 compaction, a limit nothing states (OpenCode's default of 200,000 tokens may
 not be the server's window), a zero limit with compaction on, and a read that
 failed. The read keeps none of what it was answered but the values the point is
 decided by and the plugins' names, and removes its answers from the box.
 
-**What the box hands over first is charged in the box that holds the copy.**
-There OpenCode tells the session every context source that changed since its
-last request in that box: the run's instructions, every instruction file it
-discovers, the run's skills and its MCP servers' guidance, the date and the
-environment, each at most its whole render, but the id of a skill a changed
-list names as gone and a skill OpenCode finds in a skill folder of its own,
-which are not charged. The read sizes them; a box
-document that adds a source the read cannot size, and an MCP server the box
-dials itself, whose instructions nothing here knows, are no point there.
-After an import into another box nothing is charged.
+**Nothing is handed over before the brief.** A continuation that keeps its
+box's copy re-imports it first (the executor runner's session gate), and an
+import keeps no record of what OpenCode told the session, so its first
+request tells no context source as changed.
 
 **The verdict** (`BoxPoint.SendsWhole`): sent whole where compaction is
-off, or where the count's bound, on the launch's provider, with the brief and
-the box's charge at a quarter of their bytes rounded up, is strictly below the
-point. Otherwise, and wherever there is no point, the launch hands the
+off, or where the count's bound, on the launch's provider, with the brief at a
+quarter of its bytes rounded up, is strictly below the point. Otherwise, and wherever there is no point, the launch hands the
 summarized brief (`LaunchDecision.Summarized`), whose guard arms no skill, and
 logs `executor_session_may_compact` in its own form. A brief told by a reading
 is judged on its own brief, as on the runner's side. The launch's floor counts
@@ -4465,12 +4457,8 @@ there; compacting the session before the brief is right only where the first
 request certainly compacts, and the engine holds an upper bound of the count,
 not the count. The overflow route (a server whose window is under OpenCode's
 point), a catalog refreshed or a document changed between the read and the
-run, a credential only a file outside the run's paths names, and the copy
-replaced in the same box charged as an in-box one, each toward over-telling
-but the first, whose margin is the buffer; and the two sources not charged in
-the box, a skill gone from a changed list and one a job put in a skill folder
-of OpenCode's own, which the whole of every other source charged usually
-covers. The base path is judged by neither
+run, and a credential only a file outside the run's paths names, each toward
+over-telling but the first, whose margin is the buffer. The base path is judged by neither
 harness.
 
 ## Amendment: a session the run started of its own is told its task again where it may be a summary

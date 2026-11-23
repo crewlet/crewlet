@@ -505,7 +505,7 @@ func TestTheBriefMatchesWhatTheRunHas(t *testing.T) {
 				req.Continue = &Continuation{SessionID: "sess-ask", Brief: "carry on in the box you left"}
 			}
 			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
-				rig.runner, tc.reused, false, RunSources{})
+				rig.runner, tc.reused, false)
 			t.Cleanup(got.release)
 			wantBrief := map[BriefKind]string{BriefContinued: "carry on in the box you left",
 				BriefContinuedNewBox: "carry on in a box that replaced yours", BriefFresh: "the fresh brief"}[tc.want]
@@ -609,7 +609,7 @@ func TestANotContinuedLineNamesWhatTheLaunchContinuesInstead(t *testing.T) {
 			}
 			req.Continue = &Continuation{SessionID: "sess-ask", Brief: "carry on in the box you left"}
 			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
-				rig.runner, tc.reused, false, RunSources{})
+				rig.runner, tc.reused, false)
 			t.Cleanup(got.release)
 			if got.kind != tc.kind || got.session != tc.session {
 				t.Fatalf("the launch hands a %s brief and session %q, want a %s brief and %q", got.kind,
@@ -721,7 +721,7 @@ func TestARelaunchInItsJobsOwnBoxContinuesTheCopyThatWentPastItsCapture(t *testi
 				req := continuingKept(kept)
 				req.Continue = tc.offered
 				got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
-					rig.runner, tc.reused, false, RunSources{})
+					rig.runner, tc.reused, false)
 				t.Cleanup(got.release)
 				if got.kind != tc.want || got.brief != tc.brief || got.session != tc.session {
 					t.Fatalf("the launch hands brief %q (%s) on session %q; want %q (%s) on %q", got.brief, got.kind,

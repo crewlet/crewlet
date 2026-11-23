@@ -62,7 +62,7 @@ func launchAfter(t *testing.T, rig *coordRig, want SessionCapture, reused bool,
 	req := continuingKept(want)
 	req.Continue = offered
 	got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-2"), rig.runner,
-		reused, false, RunSources{})
+		reused, false)
 	t.Cleanup(got.release)
 	return got
 }
