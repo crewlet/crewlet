@@ -41,11 +41,12 @@ const SeatAccessClass = "seat_access"
 // MaxSeatAccessBytes bounds one seat's record at one integration as stored.
 // Every turn of the seat reads it, and the sync's read of it decides what the
 // vendor is told, so its reply crosses a leaf's link at the slowest pace in
-// 10 s. 256 KiB holds each lane's applied and observed access and the vendor's
-// names for its scope, some 700 scope entries of 60 bytes beside 20 grants
-// (internal/config's MaxSeatGrants) with whole reasons; a typical record is a
-// few KiB. A seat whose access would outgrow it is not synced, and is told why
-// (internal/seataccess's fitsLedger).
+// 10 s. A lane holds its access twice (applied and observed): 20 grants
+// (internal/config's MaxSeatGrants) with whole plain reasons take 85 KB, and
+// 256 KiB holds some 700 scope entries of 60 bytes beside them that the vendor
+// names apart from their ids, 1,400 it does not; a typical record is a few
+// KiB. A lane whose access would outgrow it takes no step, and is told why
+// (internal/seataccess's syncer.fits).
 const MaxSeatAccessBytes = 256 << 10
 
 // SeatAccessKey is one seat's key at one integration.

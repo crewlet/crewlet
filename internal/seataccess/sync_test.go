@@ -904,7 +904,7 @@ func TestASettlingGrantHoldsTheToolNotTheSync(t *testing.T) {
 // the next pass would not know it made it. The vendor is asked nothing, and
 // the seat's record and the integration say why, naming the lane.
 //
-// Mutation: let fitsLedger report every record fitting, and the account is
+// Mutation: let fits report every record fitting, and the account is
 // created.
 func TestASeatWhoseAccessOutgrowsItsLedgerRecordIsNotSynced(t *testing.T) {
 	t.Parallel()

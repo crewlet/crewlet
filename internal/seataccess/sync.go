@@ -2,7 +2,6 @@ package seataccess
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -14,7 +13,6 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/provision"
-	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // SyncInput is one kind's sync: which vendor, the document, the ledger, and
@@ -162,8 +160,8 @@ func Sync(ctx context.Context, in SyncInput) (SyncReport, error) {
 	}
 	s := &syncer{
 		in: in, cat: cat, kind: kind, sess: sess, refs: refs, now: now(),
-		options: map[Lane]Options{},
-		report:  SyncReport{Records: map[string]Record{}},
+		options: map[Lane]Options{}, stored: records,
+		report: SyncReport{Records: map[string]Record{}},
 	}
 	for _, h := range handles {
 		if err := ctx.Err(); err != nil {
@@ -230,6 +228,10 @@ type syncer struct {
 	now     time.Time
 	options map[Lane]Options
 	report  SyncReport
+
+	// stored is each seat's record as the pass read it, which a record the
+	// ledger refuses for its size falls back to ([syncer.put]).
+	stored map[string]Record
 }
 
 // seat syncs one seat. An error is a fault the kind shares.
@@ -242,6 +244,8 @@ func (s *syncer) seat(
 	if inDoc {
 		rec.Name = seat.Name
 	}
+	// ITS OWN LANES, so the record the pass read stays as read.
+	rec.Lanes = maps.Clone(rec.Lanes)
 	if rec.Lanes == nil {
 		rec.Lanes = map[Lane]LaneRecord{}
 	}
@@ -252,17 +256,6 @@ func (s *syncer) seat(
 		for _, lane := range lanes {
 			want[lane], _ = DesiredAt(seat.Role, lane, s.now)
 		}
-	}
-	// A SEAT WHOSE RECORD WOULD OUTGROW ITS KEY is told so before any vendor
-	// step: a step whose record cannot be kept is one the next pass cannot
-	// tell from a change made by hand. A dry run tells the vendor nothing.
-	if lane, ok := fitsLedger(rec, want); !ok && s.in.Sink != nil {
-		d := want[lane]
-		s.failAll(&rec, lanes, &Failure{Step: VerbScope, Actor: ByYou,
-			Said: fmt.Sprintf("%s's access on %s names %d scope entries and %d grants, more than "+
-				"its ledger record holds", h, LaneName(lane), len(d.Scope), len(d.Grants)),
-			Remedy: "Narrow its scope on the integration's Agents tab"})
-		return s.put(ctx, rec)
 	}
 	// AN ACCOUNT THE VENDOR SHOWS ON IS ACTIVE, whoever turned it on: a
 	// disabled state the ledger kept from an earlier off would otherwise
@@ -333,6 +326,7 @@ func (s *syncer) seat(
 	}
 
 	var removed bool
+	held := map[Lane]bool{}
 	err = walk(s.in.Vendor, SeatInput{
 		Seat: ref, Want: want, Have: have, Record: &rec, Ask: s.in.Asks[h],
 		Options: s.options, Company: s.in.Open.Config,
@@ -376,6 +370,17 @@ func (s *syncer) seat(
 				}})
 			return laneEffect{}
 		}
+		// A LANE WHOSE RECORD WOULD OUTGROW ITS KEY takes no step: a step
+		// whose record cannot be kept is one the next pass cannot tell from a
+		// change made by hand. A lane going off is never held, since taking
+		// access away is what a person asked for.
+		if w.Enabled && !s.fits(rec, lane, w, hv, steps, GrantWordsOf(s.options[lane], want[lane])) {
+			f := outgrown(h, lane, want[lane])
+			s.finish(&rec, lane, w, hv, SyncResult{At: s.now, Outcome: OutcomeFailed, Steps: []StepOutcome{}, Error: f})
+			s.finding(integration.FindingIdentityFailed, h, lane, f)
+			held[lane] = true
+			return laneEffect{}
+		}
 		eff := s.take(ctx, &rec, ref, lane, w, hv, steps)
 		removed = removed || eff.removed
 		return eff
@@ -388,7 +393,7 @@ func (s *syncer) seat(
 	for _, lane := range lanes {
 		offer, read := s.options[lane]
 		lr, kept := rec.Lanes[lane]
-		if read && kept && want[lane].Enabled {
+		if read && kept && want[lane].Enabled && !held[lane] {
 			lr.Words = GrantWordsOf(offer, want[lane])
 			rec.Lanes[lane] = lr
 		}
@@ -425,6 +430,8 @@ func (s *syncer) unread(ctx context.Context, h string, seat Seat, inDoc bool, re
 	if inDoc {
 		rec.Name = seat.Name
 	}
+	// ITS OWN LANES, so the record the pass read stays as read.
+	rec.Lanes = maps.Clone(rec.Lanes)
 	if rec.Lanes == nil {
 		rec.Lanes = map[Lane]LaneRecord{}
 	}
@@ -484,9 +491,33 @@ func (s *syncer) adopt(rec *Record, want map[Lane]Desired, have map[Lane]Observe
 	}
 }
 
-// put records the seat's record and reports it.
+// put records the seat's record, each word in it held to its bound
+// ([Record.bounded]), and reports it.
+//
+// A RECORD PAST ITS CLASS is the seat's failure, never the pass's: the record
+// the pass read is kept with the failure on each lane, so the seat's row says
+// why, and the kind's other seats are still synced. One the ledger cannot
+// keep even so (an older build's, past the class) is left as it is.
 func (s *syncer) put(ctx context.Context, rec Record) error {
-	if err := s.in.Ledger.Put(ctx, rec); err != nil {
+	rec = rec.bounded()
+	err := s.in.Ledger.Put(ctx, rec)
+	if errors.Is(err, coord.ErrValueTooLarge) {
+		kept := s.stored[rec.Handle]
+		kept.Kind, kept.Handle, kept.Name = rec.Kind, rec.Handle, rec.Name
+		kept.Lanes = maps.Clone(kept.Lanes)
+		if kept.Lanes == nil {
+			kept.Lanes = map[Lane]LaneRecord{}
+		}
+		s.failAll(&kept, LanesOf(s.kind), &Failure{Step: VerbScope, Actor: ByYou,
+			Said: fmt.Sprintf("%s's record of its %s access outgrew what its ledger holds, so this "+
+				"sync's changes to it are not recorded", rec.Handle, KindName(s.kind)),
+			Remedy: "Narrow its access on the integration's Agents tab"})
+		rec = kept.bounded()
+		if err = s.in.Ledger.Put(ctx, rec); errors.Is(err, coord.ErrValueTooLarge) {
+			return nil
+		}
+	}
+	if err != nil {
 		return fmt.Errorf("seataccess: record %s's %s account: %w", rec.Handle, s.kind, err)
 	}
 	s.report.Records[rec.Handle] = rec
@@ -871,41 +902,56 @@ func (s *syncer) drifted(ctx context.Context, h string, lane Lane, want Desired,
 	}
 }
 
-// fitsLedger reports whether the widest record a pass could write for rec
-// encodes within [coord.MaxSeatAccessBytes]: each lane that is on with its
-// applied and observed access set to want, and the vendor naming each scope
-// entry. Where it does not, it names the lane whose want is widest. A lane
-// that is off is never held: taking access away goes ahead.
-func fitsLedger(rec Record, want map[Lane]Desired) (Lane, bool) {
-	widest := rec
-	widest.Lanes = maps.Clone(rec.Lanes)
-	if widest.Lanes == nil {
-		widest.Lanes = map[Lane]LaneRecord{}
+// fits reports whether rec, once lane's steps are taken, is within its class
+// whichever way they end: converged, with want applied and named in the
+// vendor's words, or stopped, with the vendor's reading kept. Each step is
+// counted at its widest sentence, since a vendor may say what it did in its
+// own, beside a failure and a settling at theirs; every other lane with room
+// for a failure of its own, which a later lane's hold or a fault records.
+func (s *syncer) fits(rec Record, lane Lane, want Desired, have Observed, steps []Step, words *GrantWords) bool {
+	widest := strings.Repeat("a", MaxSeatAccessTextBytes)
+	failure := &Failure{Step: VerbScope, Actor: ByYou, Said: widest, Remedy: widest,
+		ActionURL: strings.Repeat("a", MaxSeatAccessURLBytes)}
+	failed := SyncResult{At: s.now, Outcome: OutcomeFailed, Steps: []StepOutcome{}, Error: failure}
+	taken := make([]StepOutcome, len(steps))
+	for i, step := range steps {
+		step.Text = widest
+		taken[i] = StepOutcome{Step: step, Done: true}
 	}
-	var most Lane
-	for _, lane := range slices.Sorted(maps.Keys(want)) {
-		d := want[lane]
-		if !d.Enabled {
-			continue
+	for _, outcome := range []SyncResult{
+		{At: s.now, Outcome: OutcomeOK, Steps: taken},
+		{At: s.now, Outcome: OutcomeFailed, Steps: taken, Error: failure},
+	} {
+		sized := rec
+		sized.Lanes = maps.Clone(rec.Lanes)
+		for other, lr := range sized.Lanes {
+			if other != lane && (lr.Sync == nil || encodedLen(lr.Sync.bounded()) < encodedLen(failed)) {
+				lr.Sync = &failed
+				sized.Lanes[other] = lr
+			}
 		}
-		lr := widest.Lanes[lane]
-		lr.Applied = &d
-		lr.Observed.Level, lr.Observed.Permissions = d.Level, d.Permissions
-		lr.Observed.Scope, lr.Observed.Grants = d.Scope, d.Grants
-		lr.Words = &GrantWords{ScopeNames: map[string]string{}}
-		for _, entry := range d.Scope {
-			lr.Words.ScopeNames[entry] = entry
-		}
-		widest.Lanes[lane] = lr
-		if most == "" || len(d.Scope)+len(d.Grants) > len(want[most].Scope)+len(want[most].Grants) {
-			most = lane
+		s.finish(&sized, lane, want, have, outcome)
+		lr := sized.Lanes[lane]
+		lr.Words = words
+		lr.Settling = &Settling{Reason: widest, Until: s.now}
+		sized.Lanes[lane] = lr
+		if !sized.fitsItsClass() {
+			return false
 		}
 	}
-	if most == "" {
-		return "", true
+	return true
+}
+
+// outgrown is the failure of h's lane whose access would take its record past
+// its class: a person narrows the scope, or the grants where they weigh more.
+func outgrown(h string, lane Lane, want Desired) *Failure {
+	remedy := "Narrow its scope on the integration's Agents tab"
+	if encodedLen(want.Grants) > encodedLen(want.Scope) {
+		remedy = "Remove the grants it no longer needs on the integration's Agents tab, or shorten their reasons"
 	}
-	raw, err := json.Marshal(widest)
-	return most, err == nil && len(raw) <= coord.MaxSeatAccessBytes
+	return &Failure{Step: VerbScope, Actor: ByYou, Remedy: remedy,
+		Said: fmt.Sprintf("%s's access on %s names %d scope entries and %d grants, more than its ledger "+
+			"record holds", h, LaneName(lane), len(want.Scope), len(want.Grants))}
 }
 
 // failAll records one failure on every lane of a seat that cannot be synced
@@ -962,8 +1008,7 @@ func failureOf(step Step, lane Lane, err error) *Failure {
 		if !actor.Valid() {
 			actor = ByYou
 		}
-		return &Failure{Step: step.Verb, Said: textcut.Within(r.Said, MaxSeatAccessSaidBytes), Remedy: r.Remedy,
-			Actor: actor, ActionURL: r.ActionURL}
+		return &Failure{Step: step.Verb, Said: r.Said, Remedy: r.Remedy, Actor: actor, ActionURL: r.ActionURL}
 	}
 	where := "the vendor"
 	if lane != "" {
@@ -971,7 +1016,7 @@ func failureOf(step Step, lane Lane, err error) *Failure {
 	}
 	return &Failure{
 		Step: step.Verb, Actor: ByCrewlet,
-		Said: textcut.Within(err.Error(), MaxSeatAccessSaidBytes),
+		Said: err.Error(),
 		Remedy: fmt.Sprintf("Crewlet tries again on the next sync; if %s keeps failing, "+
 			"choose Retry once it answers", where),
 	}
