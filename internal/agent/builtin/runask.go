@@ -170,10 +170,19 @@ func (t *AskAndWait) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 	outcome, err := t.deps.Desk.RecordAsk(ctx, runID, launch, ask)
+	onCall := ""
+	if err == nil && outcome == sandbox.AskAlreadyAsked {
+		onCall = t.parkedOnCall(ctx, runID, launch)
+	}
 	switch {
 	case err != nil:
 		return nodeFailure(ctx, AskAndWaitTool, err, AskAndWaitTool+" could not record "+
 			"your question", "Nothing was asked: call it again."), nil
+	case onCall != "":
+		// PARKED ON ITS OWN CALL, which it never asked about: said as that.
+		return refused(tools.RefusalNotRunning, "Your call to "+onCall+
+			" is still running, so this run is parked on it and asks nothing now. END YOUR TURN NOW: you "+
+			"will be resumed with its result, and can ask then if you still need to."), nil
 	case outcome == sandbox.AskAlreadyAsked:
 		// NOT RUNNING, not a conflict: a conflict clears on a retry, and this
 		// never does, since the job stays parked on the question it asked.
@@ -189,6 +198,17 @@ func (t *AskAndWait) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		"answer arrives as your next prompt in this session, on this machine or, if it is " +
 		"gone by then, on a fresh one from your branch; only where this session cannot be " +
 		"continued does a fresh run start from your branch with your question and their answer."}, nil
+}
+
+// parkedOnCall is the tool of the call job of run runID is parked on
+// (internal/sandbox's CallWait), "" where it is parked on none or its row
+// cannot be read.
+func (t *AskAndWait) parkedOnCall(ctx context.Context, runID, job string) string {
+	run, found, err := t.deps.Desk.Get(ctx, runID)
+	if err != nil || !found || !run.AskedBy(job) || !run.WaitsOnCall() {
+		return ""
+	}
+	return run.WaitsFor.Call.Tool
 }
 
 // readAsk reads and checks the arguments into the ask to record, or returns
@@ -298,6 +318,13 @@ func (g *submitGate) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 					" waits for a person's approval, so this run is parked on their answer and "+
 					"takes no submission. END YOUR TURN NOW: their answer, and what the call "+
 					"returned, arrive as your next prompt, and you submit your work once you "+
+					"have finished it."), nil
+			case found && run.AskedBy(launch) && run.WaitsOnCall():
+				// A CALL ANSWERED STILL RUNNING before its harness gave it up
+				// parks the job on it (internal/sandbox's CallWait).
+				return refused(tools.RefusalNotRunning, "Your call to "+run.WaitsFor.Call.Tool+
+					" is still running, so this run is parked on it and takes no submission. END YOUR "+
+					"TURN NOW: you will be resumed with its result, and you submit your work once you "+
 					"have finished it."), nil
 			case found && run.AskedBy(launch) && run.WaitsFor != nil:
 				// A WAIT ON ANOTHER RUN parks the job as a question does
