@@ -18,7 +18,7 @@ import (
 // id of its own with a call, and the record the session file --session-dir
 // names — an assistant message per response, its prose and calls as content
 // blocks and its counts without the cached part, then a tool result per call —
-// with the plain answer on stdout and a failure on stderr (measured on 1.4.0;
+// with the plain answer on stdout and a failure on stderr (measured on 1.6.0;
 // see the profile).
 func init() {
 	fakeHarnesses["pi"] = fakeHarness{

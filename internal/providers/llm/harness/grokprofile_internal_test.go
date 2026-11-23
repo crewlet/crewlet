@@ -274,16 +274,16 @@ func TestGrokPrunesWhatACallLeaves(t *testing.T) {
 	}
 }
 
-// A GROK CALL STARTS WITH NO INSTRUCTIONS, SKILLS, COMMANDS OR HOOKS IN ITS HOME.
-// Planted in a seat's home through the engine, 1.0.92 sent ~/.grok's AGENTS.md,
-// rules, skills and commands, ~/.claude's CLAUDE.md, rules and skills and
-// ~/.cursor's skills with every request, and ran ~/.grok/hooks/hooks.json. The
-// generation's prune takes each and any requirements.toml, the login stays, and
-// the home's config.toml turns the other vendors' skills, rules and instruction
-// files off and carries the key 1.0.92 would otherwise rewrite it to add.
+// A GROK CALL STARTS WITH NOTHING FROM ITS HOME THAT THE PROFILE DOES NOT WRITE,
+// but the login. Each path planted below reached a 1.0.92 request, ran, or set
+// the model's API base (the grok profile's comment has which): the
+// generation's prune takes each, and the home's config.toml turns the other
+// vendors' sources off and carries the key 1.0.92 would otherwise add to it.
 //
-// Mutations, each red: drop .grok/hooks from volatile_paths; drop `skills =
-// false` from the Cursor cell; add .grok to volatile_paths (the login goes).
+// Mutations, each red: drop .grok/hooks, .grok/hooks-paths,
+// .grok/CLAUDE.local.md, .grok/models_cache.json, .agents or .bashrc from
+// volatile_paths; drop `skills = false` from the Cursor cell; add .grok to
+// volatile_paths (the login goes).
 func TestAGrokCallStartsWithNothingItsHomeHeld(t *testing.T) {
 	t.Parallel()
 	p := grok(t)
@@ -296,16 +296,38 @@ func TestAGrokCallStartsWithNothingItsHomeHeld(t *testing.T) {
 	home := t.TempDir()
 	planted := []string{
 		".grok/AGENTS.md",
+		".grok/Agents.md",
+		".grok/AGENT.md",
+		".grok/CLAUDE.md",
+		".grok/Claude.md",
+		".grok/CLAUDE.local.md",
 		".grok/rules/r.md",
 		".grok/skills/s/SKILL.md",
+		".grok/skills/group/s/SKILL.md",
 		".grok/commands/c.md",
+		".grok/agents/a.md",
+		".grok/workflows/w.rhai",
+		".grok/bundled/skills/s/SKILL.md",
 		".grok/hooks/hooks.json",
+		".grok/hooks/other.json",
+		".grok/hooks-paths",
 		".grok/requirements.toml",
+		".grok/models_cache.json",
+		".grok/models_cache.json.lock",
+		".agents/skills/s/SKILL.md",
+		".agents/commands/c.md",
 		".claude/CLAUDE.md",
 		".claude/rules/r.md",
 		".claude/skills/s/SKILL.md",
+		".claude/agents/a.md",
+		".claude/settings.json",
+		".claude/plugins/installed_plugins.json",
 		".cursor/skills/s/SKILL.md",
 		".cursor/rules/r.mdc",
+		".bash_profile",
+		".bash_login",
+		".profile",
+		".bashrc",
 	}
 	const login = ".grok/auth.json"
 	for _, rel := range append(slices.Clone(planted), login) {
@@ -322,7 +344,7 @@ func TestAGrokCallStartsWithNothingItsHomeHeld(t *testing.T) {
 	}
 	for _, rel := range planted {
 		if _, err := os.Stat(filepath.Join(home, rel)); !os.IsNotExist(err) {
-			t.Errorf("%s outlived the prune (%v): the seat's next call would read it", rel, err)
+			t.Errorf("%s outlived the prune (%v): the seat's next call would start with it", rel, err)
 		}
 	}
 	if _, err := os.Stat(filepath.Join(home, login)); err != nil {

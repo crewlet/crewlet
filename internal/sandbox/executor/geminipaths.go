@@ -24,8 +24,16 @@ func (p Paths) GeminiSkills() string { return p.GeminiDir() + "/skills" }
 // run so the run's session is filed where the runner reads it.
 func (p Paths) GeminiProjects() string { return p.GeminiDir() + "/projects.json" }
 
-// GeminiChats is the directory the pinned slug files a run's session under.
-func (p Paths) GeminiChats() string { return p.GeminiDir() + "/tmp/" + GeminiProjectSlug + "/chats" }
+// GeminiSlugDir is the pinned slug's directory, which a carried session's
+// archive names its chat file relative to ([geminiArchiveFormat]).
+func (p Paths) GeminiSlugDir() string { return p.GeminiDir() + "/tmp/" + GeminiProjectSlug }
+
+// GeminiChats is the directory Gemini CLI files a run's session under.
+func (p Paths) GeminiChats() string { return p.GeminiSlugDir() + "/chats" }
+
+// GeminiUsageBefore lists the responses a continued session's chat file holds
+// as its run starts, which the run's spend leaves out ([geminiScript]).
+func (p Paths) GeminiUsageBefore() string { return p.WorkDir() + "/gemini-usage-before" }
 
 // GeminiProjectSlug is the project slug every run's working directory is
 // pinned to: one constant, so the session sits at the same path whatever the

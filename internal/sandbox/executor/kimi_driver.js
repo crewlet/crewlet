@@ -500,7 +500,10 @@ function aborted(signal, value) {
 function sleep(ms, ...signals) {
   return new Promise((resolve) => {
     const { signal, done } = deadline(ms, ...signals)
-    signal.addEventListener("abort", () => (done(), resolve()), { once: true })
+    const end = () => (done(), resolve())
+    // An ended signal fires no listener added later (opencode_steer.js's).
+    if (signal.aborted) end()
+    else signal.addEventListener("abort", end, { once: true })
   })
 }
 

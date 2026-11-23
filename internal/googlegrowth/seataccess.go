@@ -88,11 +88,10 @@ type seatSession struct {
 	identity string
 }
 
-// Options is the levels and the company's scope.
+// Options is the levels; the scope is the document's ([SeatAccess.Reach]),
+// which [seataccess.ReadOptions] applies.
 func (s *seatSession) Options(_ context.Context, lane seataccess.Lane) (seataccess.Options, error) {
-	reach := s.access.Reach(s.company, nil, lane)
-	return seataccess.Options{Lane: lane, Levels: s.access.Levels(), Scoped: true, ScopeRequired: true,
-		Scope: reach.Scope, ScopeOpen: reach.Open, ScopeLive: true}, nil
+	return seataccess.Options{Lane: lane, Levels: s.access.Levels()}, nil
 }
 
 // Observe is each seat's setting in the document, its account the growth

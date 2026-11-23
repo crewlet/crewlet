@@ -371,6 +371,13 @@ var creditBoxes = map[string]func(t *testing.T) (*executor.Runner, sandbox.Sandb
 			"node": "#!/bin/sh\n" + scenarioRun,
 		})
 	},
+	// One `pi` process is the run, and its bash tool's commands run under the
+	// environment its extension hands them; the stand-in answers the release
+	// check every run's script asks first, then runs the scenario.
+	executor.PiName: func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
+		return standInBox(t, executor.NewPi(), map[string]string{"pi": "#!/bin/sh\n" +
+			"case \"$1\" in --version) echo 1.6.0; exit 0;; esac\n" + scenarioRun})
+	},
 }
 
 // scenarioRun is a stand-in's line running $HOME/scenario.sh as its harness's
@@ -408,10 +415,21 @@ func geminiCreditBox(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 }
 
 // geminiBox is a real box with a Gemini CLI runner's plumbing and a stand-in
-// `gemini` that writes a prompt when asked to export one, as the run's script
-// asks first (`false` and `0` ask for none, as Gemini CLI reads them), and
+// `gemini` that prints its release when asked, writes a prompt when asked to
+// export one (`false` and `0` ask for none, as Gemini CLI reads them), and
 // otherwise runs run.
 func geminiBox(t *testing.T, run string) (*executor.Runner, sandbox.Sandbox) {
+	t.Helper()
+	return geminiBoxAt(t, geminiCapturedRelease, run)
+}
+
+// geminiCapturedRelease is the Gemini CLI release whose output the suite's
+// fixtures were captured from (testdata/gemini/0.70.0).
+const geminiCapturedRelease = "0.70.0"
+
+// geminiBoxAt is [geminiBox] whose Gemini CLI prints release to `--version`,
+// as the run's script reads it before its gate.
+func geminiBoxAt(t *testing.T, release, run string) (*executor.Runner, sandbox.Sandbox) {
 	t.Helper()
 	local, err := sandbox.NewLocal(sandbox.LocalOptions{Placement: sandbox.Direct, StateDir: t.TempDir()})
 	if err != nil {
@@ -430,7 +448,8 @@ func geminiBox(t *testing.T, run string) (*executor.Runner, sandbox.Sandbox) {
 	// login shell's profile may reset PATH to the system's.
 	writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/node", "#!/bin/sh\nexec "+shellword.Quote(geminiNode(t))+` "$@"`+"\n")
 	writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/gemini",
-		"#!/bin/sh\ncase ${GEMINI_WRITE_SYSTEM_MD:-false} in false|0) ;; *) echo prompt > \"$GEMINI_WRITE_SYSTEM_MD\"; exit 42;; esac\n"+run)
+		"#!/bin/sh\ncase \"$1\" in --version) echo "+shellword.Quote(release)+"; exit 0;; esac\n"+
+			"case ${GEMINI_WRITE_SYSTEM_MD:-false} in false|0) ;; *) echo prompt > \"$GEMINI_WRITE_SYSTEM_MD\"; exit 42;; esac\n"+run)
 	return runner, b
 }
 

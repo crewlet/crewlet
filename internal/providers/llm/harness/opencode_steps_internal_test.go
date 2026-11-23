@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -13,29 +14,45 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
-// OpenCode's `run --format json` prints a step's events only sometimes: on
-// 2.0.32 and 2.1.4 a step's step_start and step_finish may each be missing
-// (the final step's step_finish was in 7 of 20 runs on 2.0.32 and 8 of 20 on
-// 2.1.4, measured), and on 2.2.7 and 2.3.0 all three always print. The
-// fixtures in testdata/opencode/run-format-json are whole captures of a run
-// with tools (`run --server`) against a stub, one per release and sequence, a
-// 16 KiB answer each.
+// OpenCode 2.3.2's `run --format json` prints a step's step_start, text and
+// step_finish every time (measured over 20 runs of four steps); a dropped
+// step_start or step_finish is read all the same. The fixture
+// in testdata/opencode/run-format-json is a whole 2.3.2 capture of a run with
+// tools (`run --server`) against a stub, a 16 KiB answer; the sequences that
+// drop events are that capture with those lines left out ([dropped]).
 
-// stepFixture is one captured sequence, and whether it closes its step.
+// stepFixture is one sequence, the capture it is read from and the event
+// types it leaves out, and whether it closes its step.
 type stepFixture struct {
 	path     string
+	drop     []string
 	finishes bool
 }
 
+const stepCapture = "2.3.2/step_start-text-step_finish.jsonl"
+
 var stepFixtures = []stepFixture{
-	{"2.0.32/text.jsonl", false},
-	{"2.0.32/step_start-text.jsonl", false},
-	{"2.0.32/step_start-text-step_finish.jsonl", true},
-	{"2.1.4/text.jsonl", false},
-	{"2.1.4/step_start-text.jsonl", false},
-	{"2.1.4/step_start-text-step_finish.jsonl", true},
-	{"2.2.7/step_start-text-step_finish.jsonl", true},
-	{"2.3.0/step_start-text-step_finish.jsonl", true},
+	{stepCapture, nil, true},
+	{stepCapture, []string{"step_finish"}, false},
+	{stepCapture, []string{"step_start", "step_finish"}, false},
+}
+
+// dropped is raw, a capture, without its lines of the event types drop names.
+func dropped(t *testing.T, raw string, drop []string) string {
+	t.Helper()
+	var kept []string
+	for line := range strings.SplitSeq(strings.TrimSuffix(raw, "\n"), "\n") {
+		var event struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatalf("the capture's line does not decode: %v", err)
+		}
+		if !slices.Contains(drop, event.Type) {
+			kept = append(kept, line)
+		}
+	}
+	return strings.Join(kept, "\n") + "\n"
 }
 
 // sessionTotal is a `session.get` report of the counts given, as OpenCode's
@@ -94,14 +111,15 @@ func TestEveryStepSequenceOpenCodePrintsReadsAsItsAnswer(t *testing.T) {
 		t.Fatal("no builtin opencode profile")
 	}
 	for _, f := range stepFixtures {
-		t.Run(f.path, func(t *testing.T) {
+		t.Run(strings.Join(append([]string{f.path}, f.drop...), " less "), func(t *testing.T) {
 			t.Parallel()
-			raw, err := os.ReadFile(filepath.Join("testdata", "opencode", "run-format-json", f.path))
+			captured, err := os.ReadFile(filepath.Join("testdata", "opencode", "run-format-json", f.path))
 			if err != nil {
 				t.Fatal(err)
 			}
-			answer, in, out, cached, closes := fixtureAnswer(t, string(raw))
-			if closes != f.finishes || answer == "" || !strings.HasSuffix(string(raw), "\n") {
+			raw := dropped(t, string(captured), f.drop)
+			answer, in, out, cached, closes := fixtureAnswer(t, raw)
+			if closes != f.finishes || answer == "" || !strings.HasSuffix(raw, "\n") {
 				t.Fatalf("the fixture is not the sequence it is named for (closes %v, answer %d bytes)", closes, len(answer))
 			}
 			if !closes {
@@ -111,7 +129,7 @@ func TestEveryStepSequenceOpenCodePrintsReadsAsItsAnswer(t *testing.T) {
 			total := llm.Usage{Input: p.Usage.PromptTokens(in, cached, 0), Output: out, CacheRead: cached}
 
 			prov := &Provider{profile: p, harness: "opencode", key: "oc", model: "stub/stub-model", now: time.Now}
-			comp, err := prov.completion(t.Context(), "prompt", &rawResult{stdout: string(raw)}, report)
+			comp, err := prov.completion(t.Context(), "prompt", &rawResult{stdout: raw}, report)
 			if err != nil {
 				t.Fatalf("the text function: %v", err)
 			}
@@ -123,7 +141,7 @@ func TestEveryStepSequenceOpenCodePrintsReadsAsItsAnswer(t *testing.T) {
 
 			host := newTestHost(t)
 			reader := newRecordReader(p.Routed(), llm.Request{Tools: host}, "prompt", time.Now)
-			for line := range strings.SplitSeq(strings.TrimSuffix(string(raw), "\n"), "\n") {
+			for line := range strings.SplitSeq(strings.TrimSuffix(raw, "\n"), "\n") {
 				reader.stdoutLine(line)
 			}
 			reader.finish()
@@ -133,7 +151,7 @@ func TestEveryStepSequenceOpenCodePrintsReadsAsItsAnswer(t *testing.T) {
 				t.Fatalf("the record's end told the host %d requests, want the one it showed", len(lastByID(turns)))
 			}
 			tprov := &Provider{profile: p, harness: "opencode", key: "oc", model: "stub/stub-model", now: time.Now}
-			tcomp, err := tprov.toolCompletion(t.Context(), &rawResult{stdout: string(raw)}, report,
+			tcomp, err := tprov.toolCompletion(t.Context(), &rawResult{stdout: raw}, report,
 				&toolRun{reader: reader, connected: true}, true)
 			if err != nil {
 				t.Fatalf("the run with tools: %v", err)

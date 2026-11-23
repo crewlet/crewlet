@@ -293,20 +293,20 @@ func openCodeUser(text string) string {
 }
 
 // openCodeFixtureVersions are the OpenCode releases a real export is kept of,
-// testdata/opencode/<version>/export.json: the oldest this build drives, the
-// runner's floor, and the newest 2.x.
-var openCodeFixtureVersions = []string{"2.0.32", "2.2.5"}
+// testdata/opencode/<version>/export.json: the one release this build drives.
+var openCodeFixtureVersions = []string{"2.3.2"}
 
 // openCodeExportFixture is the export OpenCode version printed for one session:
 // a REAL `opencode session export` of a session the release ran (@opencode/cli
 // in a container, against an OpenAI-compatible stub model), byte for byte but for
 // the container's paths (run directory /work, home /home/crewlet). It holds a
 // brief and its steps (a completed call, a failed read with a note steered in
-// meanwhile, a background shell command and its notice, a subagent); then an
-// API notice, a person's shell command and skill, the agent switched to plan
-// and back, the model switched, a compaction; then, on a server restarted with
-// changed instructions, a run that answered, one its provider refused, one
-// interrupted mid-call and one mid-write; and last a directory move.
+// meanwhile, a background shell command and a subagent, each with its notice
+// and the step it woke); then an API notice, a person's shell command and
+// skill, the agent switched to plan and back, the model switched, a compaction;
+// then, on a server restarted with changed instructions, a run that answered,
+// one its provider refused, one interrupted mid-call and one mid-write; and
+// last a directory move.
 func openCodeExportFixture(t *testing.T, version string) string {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("testdata", "opencode", version, "export.json"))
@@ -322,30 +322,40 @@ func openCodeExportFixture(t *testing.T, version string) string {
 var openCodeMinted = regexp.MustCompile(`\b(?:sh|ses)_[0-9A-Za-z]+|\b[0-9a-f]{40}\b`)
 
 // openCodeBackground is what OpenCode's shell answered a call it ran in the
-// background, the ids it minted read past ([openCodeMinted]): two text items,
-// a line apart. The same words at 2.0.32 and 2.2.5.
-const openCodeBackground = "Command moved to the background (shell ID: <id>).\n" +
-	"Output is streaming to: /work/xdg/data/opencode/shell/<id>/<id>.out\n" +
-	"You will be notified automatically when the command finishes. The notification will include the " +
-	"command's output. Unless the user explicitly asks otherwise, DO NOT poll for completion, even if you " +
-	"need the final result to continue. Repeatedly sleeping and reading or searching the output file is " +
-	"polling, not useful work. You may read the current output if it lets you do useful work now, but do " +
-	"not repeatedly check it while waiting for the command to finish. Keep working on anything that does " +
-	"not depend on the result. If you have nothing else to do, end your response; you will be resumed " +
-	"automatically when the command finishes."
+// background, beside the process it started, the ids it minted read past
+// ([openCodeMinted]): two text items, a line apart, as 2.3.2 writes them.
+func openCodeBackground(pid string) string {
+	return "Command moved to the background (shell ID: <id>).\nPID: " + pid + "\n" +
+		"Output is streaming to: /work/xdg/data/opencode/shell/<id>/<id>.out\n" +
+		"You will be notified automatically when the command finishes. The notification will include the " +
+		"command's output. Unless the user explicitly asks otherwise, DO NOT poll for completion, even if you " +
+		"need the final result to continue. Repeatedly sleeping and reading or searching the output file is " +
+		"polling, not useful work. You may read the current output if it lets you do useful work now, but do " +
+		"not repeatedly check it while waiting for the command to finish. Keep working on anything that does " +
+		"not depend on the result. If you have nothing else to do, end your response; you will be resumed " +
+		"automatically when the command finishes."
+}
+
+// openCodeSubagent is what OpenCode's subagent tool answered a call it started
+// in the background, the session it minted read past, as 2.3.2 writes it.
+const openCodeSubagent = "The subagent is working in the background (sessionID: <id>). You will receive a " +
+	"<subagent> message when it goes idle, and again after each later round of work.\n" +
+	"DO NOT sleep, poll, proactively check on its progress, or duplicate this subagent's work.\n" +
+	"Work on non-overlapping tasks, or briefly tell the user what you launched and end your response.\n" +
+	"To send it follow-ups or change its instructions while it runs, call subagent again with this sessionID."
 
 // openCodeFixtureTranscript is the transcript the fixture's session reads as
 // on the release version, each entry beside the message it was read from
 // (OpenCode's own messages, which read as none, are named where they fall).
 func openCodeFixtureTranscript(version string) []shown {
-	// THE READ'S FAILURE is OpenCode's own words, which 2.2.5 goes on with.
-	notFound := map[string]string{
-		"2.0.32": "File not found: /nonexistent/missing.go",
-		"2.2.5": "File not found: /nonexistent/missing.go\n\nThe folder /nonexistent does not exist. " +
+	// THE READ'S FAILURE is OpenCode's own words, and the shell's pids the
+	// processes the two runs of the steps started.
+	notFound, pids := map[string]string{
+		"2.3.2": "File not found: /nonexistent/missing.go\n\nThe folder /nonexistent does not exist. " +
 			"The nearest folder that does is /.",
-	}[version]
-	subagent := "<subagent sessionID=\"<id>\" state=\"completed\">\nThe cache map is written unlocked.\n</subagent>"
-	steps := func(note []shown) []shown {
+	}[version], map[string][2]string{"2.3.2": {"329", "485"}}[version]
+	fixed := shown{kind: executor.EntryModel, text: "Fixed: the cache takes its lock."}
+	steps := func(note []shown, pid string) []shown {
 		return slices.Concat([]shown{
 			// A step: its reasoning none, its words, and a call that completed.
 			{kind: executor.EntryModel, text: "Running the tests first."},
@@ -358,27 +368,29 @@ func openCodeFixtureTranscript(version string) []shown {
 			// A call run in the background, and a subagent.
 			{kind: executor.EntryToolCall, tool: "shell",
 				text: `{"command":"sleep 2; echo bg-done","background":true}`},
-			{kind: executor.EntryToolResult, tool: "shell", text: openCodeBackground},
+			{kind: executor.EntryToolResult, tool: "shell", text: openCodeBackground(pid)},
 			{kind: executor.EntryToolCall, tool: "subagent",
 				text: `{"agent":"general","description":"find the race","prompt":"Look for the race."}`},
-			{kind: executor.EntryToolResult, tool: "subagent", text: subagent},
-			{kind: executor.EntryModel, text: "Fixed: the cache takes its lock."},
+			{kind: executor.EntryToolResult, tool: "subagent", text: openCodeSubagent},
+			fixed,
 		})
 	}
 	return slices.Concat(
 		[]shown{{kind: executor.EntryBrief, text: "Fix the flaky test in ENG-7."}},
 		steps([]shown{{kind: executor.EntryNote,
-			text: note("ada", "Target the release branch.")}}),
-		// The execution's end; the background call's notice, and the step it
-		// woke.
-		[]shown{{kind: executor.EntryModel, text: "Fixed: the cache takes its lock."}},
-		// The execution's end; a person's shell command, a skill, the agent
-		// switched to plan and back, the model switched — and the compaction.
+			text: note("ada", "Target the release branch.")}}, pids[0]),
+		// The execution's end; the subagent's notice and the step it woke;
+		// the end; the background call's notice and the step it woke; the end.
+		[]shown{fixed, fixed},
+		// A person's shell command, a skill, the agent switched to plan and
+		// back, the model switched — and the compaction.
 		[]shown{{kind: executor.EntrySummary, text: "## Objective\n- Fix the flaky cache test.\n\n" +
 			"## Work State\n### Completed\n- The cache takes its lock.\n\n## Next Move\n1. (none)"}},
 		// Four notices (the API's, the shell command's, plan mode's on and
-		// off), and the steps the session ran again, its history compacted.
-		steps(nil),
+		// off), and the steps the session ran again, its history compacted;
+		// the end, the subagent's notice and the step it woke.
+		steps(nil, pids[1]),
+		[]shown{fixed},
 		// The execution's end; the agent and the model the next run names;
 		// the instructions updated, read by the new server; and the next
 		// runs, each naming its agent and ending its execution: one answered,
@@ -390,7 +402,9 @@ func openCodeFixtureTranscript(version string) []shown {
 			{kind: executor.EntryBrief, text: "Fail now."},
 			{kind: executor.EntryBrief, text: "Wait for it."},
 			{kind: executor.EntryToolCall, tool: "shell", text: `{"command":"sleep 30; echo woke"}`},
-			{kind: executor.EntryToolResult, tool: "shell", failed: true, text: "Tool execution interrupted"},
+			{kind: executor.EntryToolResult, tool: "shell", failed: true,
+				text: "[no output; output file: /work/xdg/data/opencode/shell/<id>/<id>.out]\n\n" +
+					"Command interrupted by the user (shell ID: <id>)."},
 			{kind: executor.EntryBrief, text: "Write slowly."},
 			{kind: executor.EntryToolCall, tool: "write", text: `{}`},
 			{kind: executor.EntryToolResult, tool: "write", failed: true, text: "Tool execution interrupted"},
@@ -433,7 +447,7 @@ func TestAnOpenCodeSessionReadsAsTheTranscriptItsExportHolds(t *testing.T) {
 	}
 }
 
-// openCodeStep is an assistant's step holding items, as OpenCode 2.0.32
+// openCodeStep is an assistant's step holding items, as OpenCode 2
 // exported one: the step's agent, model, finish, cost and tokens beside its
 // content.
 func openCodeStep(items ...string) string {
@@ -464,7 +478,7 @@ func openCodeCall(name, state string) string {
 func TestEachKindOfOpenCodeMessageReadsAsWhatItIsOrAsNothing(t *testing.T) {
 	t.Parallel()
 	// Shapes are the fixture's (testdata/opencode) but where it has no example,
-	// written from OpenCode 2.0.32's schema: a file answer
+	// written from OpenCode 2's schema: a file answer
 	// (packages/schema/src/tool.ts:73-79), a streaming or running call
 	// (packages/schema/src/session-message.ts:126-137; the interrupted session
 	// settled its calls as failed), a failed compaction (:269-276) and a running
@@ -1461,27 +1475,29 @@ func TestTheTranscriptBoundsAreTheEnginesOwn(t *testing.T) {
 	}
 }
 
-// EVERY HARNESS THIS BUILD DRIVES THAT CONTINUES SESSIONS CARRIES THEM, and the
+// EVERY HARNESS THIS BUILD DRIVES CONTINUES AND CARRIES ITS SESSIONS, and the
 // transcript is read for each in the one format its runner packs: the
 // harnesses whose session is read are the harnesses [executor.Names] lists,
-// from one list, but one whose every launch starts a session of its own
-// (Gemini CLI's), which keeps none to carry.
+// from one list.
 //
-// Mutation: list a harness that continues sessions and carries none, or read
-// one in a format its runner does not pack, and a row goes red.
+// Mutation: list a harness that carries none, let a runner start every launch
+// fresh, or read one in a format its runner does not pack, and a row goes red.
 func TestEveryHarnessThisBuildDrivesCarriesItsSession(t *testing.T) {
 	t.Parallel()
 	formats := map[string]int{
 		executor.ClaudeCodeName: executor.ClaudeArchiveFormat,
 		executor.CodexName:      executor.Codex{}.ArchiveFormat(),
 		executor.OpenCodeName:   executor.OpenCodeArchiveFormat,
+		executor.GeminiCLIName:  executor.GeminiArchiveFormat,
+		executor.QwenCodeName:   executor.QwenArchiveFormat,
 		executor.CopilotName:    executor.CopilotArchiveFormat,
 		executor.KimiName:       executor.KimiArchiveFormat,
 		executor.MuseName:       executor.MuseArchiveFormat,
+		executor.PiName:         executor.PiArchiveFormat,
 	}
 	for _, name := range executor.Names() {
 		if executor.RunnerNamed(name).StartsFresh() {
-			// It keeps no session to carry: every launch starts one of its own.
+			t.Errorf("%s starts every launch on a session of its own, so it continues none", name)
 			continue
 		}
 		format, ok := formats[name]

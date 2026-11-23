@@ -223,6 +223,7 @@ describe.each(["light", "dark"] as const)("on a %s document", (theme) => {
         width,
         theme,
         <GrowthConnections
+          kind="search_console"
           product="Search Console"
           roles={[]}
           connections={[
@@ -246,6 +247,7 @@ describe.each(["light", "dark"] as const)("on a %s document", (theme) => {
                   state: "serving",
                 },
               ],
+              open: false,
             },
           ]}
         />,

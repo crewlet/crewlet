@@ -24,8 +24,9 @@ func TestEveryCarrierRefusesABoxThatNamedNoReleaseAndJudgesAWriterAlone(t *testi
 		writers []string
 	}{
 		{"claude-code", ClaudeCode{}, "2.1.322", []string{"2.1.310", "2.1.300", "2.1.299", ""}},
-		{"opencode", OpenCode{}, "2.2.7", []string{"2.2.7", "2.0.32", "2.0.31", ""}},
+		{"opencode", OpenCode{}, openCodeRelease, []string{openCodeRelease, "2.3.1", "2.3.3", ""}},
 		{"codex", Codex{}, codexCarryRelease, []string{codexCarryRelease, "0.170.0", "0.172.0", ""}},
+		{"pi", Pi{}, piSupported, []string{piSupported, "1.5.9", "1.6.1", ""}},
 	} {
 		for _, box := range []string{"", "nightly", "1.2"} {
 			if ok, why := c.carrier.Continues(box, c.writers[0]); ok || !strings.Contains(why, "named no release") {
@@ -44,12 +45,12 @@ func TestEveryCarrierRefusesABoxThatNamedNoReleaseAndJudgesAWriterAlone(t *testi
 	}
 }
 
-// AN UNREAD WRITER CONTINUES IN NO BOX, for every carrier (all six): a
+// AN UNREAD WRITER CONTINUES IN NO BOX, for every carrier (all seven): a
 // session whose writer named no release this build reads (a pre-release, a
 // snapshot, none, which releaseOf reads as "") is refused alone and beside a
 // box of every release, saying why; read as current, it would be carried into
-// a box older than its writer. And a Codex, Copilot, Kimi Code or Muse Code box
-// of another release than its one supported continues not even its own copy
+// a box older than its writer. And a Codex, Copilot, Kimi Code, Muse Code or Pi
+// box of another release than its one supported continues not even its own copy
 // ([inPlaceGate]).
 //
 // Mutation: take an unread writer for a current one in any carrier's
@@ -63,11 +64,12 @@ func TestAnUnreadWriterContinuesInNoBox(t *testing.T) {
 		boxes   []string
 	}{
 		{"claude-code", ClaudeCode{}, []string{"2.1.310", "2.1.322", "9.0.0"}},
-		{"opencode", OpenCode{}, []string{"2.0.32", "2.2.7", "9.0.0"}},
+		{"opencode", OpenCode{}, []string{openCodeRelease, "2.3.3", "9.0.0"}},
 		{"codex", Codex{}, []string{codexCarryRelease}},
 		{"copilot", Copilot{}, []string{copilotFloor()}},
 		{"kimi-code", Kimi{}, []string{kimiSupported}},
 		{"muse-code", Muse{}, []string{museSupported()}},
+		{"pi", Pi{}, []string{piSupported}},
 	} {
 		if ok, why := c.carrier.ContinuesWriter(""); ok || why == "" {
 			t.Errorf("%s: an unread writer continues %v (%q), want refused, saying why", c.name, ok, why)
@@ -81,7 +83,7 @@ func TestAnUnreadWriterContinuesInNoBox(t *testing.T) {
 	// EVERY CARRIER WHOSE BOX HOLDS A RELEASE TO ITS OWN COPY refuses another
 	// release in place, as its run's gate does ([inPlaceGate]).
 	for name, gate := range map[string]inPlaceGate{
-		"codex": Codex{}, "copilot": Copilot{}, "kimi-code": Kimi{}, "muse-code": Muse{},
+		"codex": Codex{}, "copilot": Copilot{}, "kimi-code": Kimi{}, "muse-code": Muse{}, "pi": Pi{},
 	} {
 		if ok, why := gate.continuesInPlace("9.9.9"); ok || why == "" {
 			t.Errorf("%s: a box of 9.9.9 continues its own copy %v (%q), want refused", name, ok, why)
@@ -89,8 +91,8 @@ func TestAnUnreadWriterContinuesInNoBox(t *testing.T) {
 	}
 }
 
-// KIMI CODE, COPILOT AND MUSE CODE JUDGE A WRITER ALONE AS THEY DO BESIDE A
-// BOX: only a session their one supported release wrote continues ([carrier]
+// KIMI CODE, COPILOT, MUSE CODE AND PI JUDGE A WRITER ALONE AS THEY DO BESIDE
+// A BOX: only a session their one supported release wrote continues ([carrier]
 // ContinuesWriter, which the restorer asks with no box), any other writer
 // refused saying why, and Continues beside a supported box answers the same.
 //
@@ -106,6 +108,7 @@ func TestSingleReleaseCarriersContinueOnlyTheirOneReleasesWriter(t *testing.T) {
 		{"kimi-code", Kimi{}, kimiSupported},
 		{"copilot", Copilot{}, copilotFloor()},
 		{"muse-code", Muse{}, museSupported()},
+		{"pi", Pi{}, piSupported},
 	} {
 		for writer, want := range map[string]bool{c.supported: true, "9.9.9": false, "0.0.1": false, "": false} {
 			ok, why := c.carrier.ContinuesWriter(writer)
@@ -120,17 +123,17 @@ func TestSingleReleaseCarriersContinueOnlyTheirOneReleasesWriter(t *testing.T) {
 	}
 }
 
-// KIMI CODE'S, COPILOT'S AND MUSE CODE'S ARCHIVES ARE METERED AS NO FIGURE:
-// this build reads no count or estimate of their sessions' next request off
-// an archive, so the take's meter of each states none and fails nothing,
-// whatever the archive holds.
+// KIMI CODE'S, COPILOT'S, MUSE CODE'S AND PI'S ARCHIVES ARE METERED AS NO
+// FIGURE: this build reads no count or estimate of their sessions' next
+// request off an archive, so the take's meter of each states none and fails
+// nothing, whatever the archive holds.
 //
 // Mutation: hand any of them Claude Code's or Codex's meter, or a figure read
 // off any line, and its row goes red.
 func TestSingleReleaseArchivesAreMeteredAsNoFigure(t *testing.T) {
 	t.Parallel()
 	archive := `{"type":"usage.record","input_tokens":123456}` + "\n"
-	for name, c := range map[string]carrier{"kimi-code": Kimi{}, "copilot": Copilot{}, "muse-code": Muse{}} {
+	for name, c := range map[string]carrier{"kimi-code": Kimi{}, "copilot": Copilot{}, "muse-code": Muse{}, "pi": Pi{}} {
 		read, err := c.meter(t.Context(), strings.NewReader(archive), "s-1", "1.0.0", nil)
 		if err != nil || read != (meterReading{}) {
 			t.Errorf("%s: the meter reads %+v (%v), want no figure", name, read, err)
@@ -149,7 +152,7 @@ func TestSingleReleaseArchivesAreMeteredAsNoFigure(t *testing.T) {
 func TestAReleaseNamesItsThreeNumbersAndNoMore(t *testing.T) {
 	t.Parallel()
 	for printed, want := range map[string]bool{
-		"1.4.25": true, "v2.1.4": true, "2.1.310 (Claude Code)": true, "GitHub Copilot CLI 1.0.114.": true,
+		"1.4.25": true, "v2.3.2": true, "2.1.310 (Claude Code)": true, "GitHub Copilot CLI 1.0.114.": true,
 		"Muse Code 1.4.25 (1.4.25-R9361.1)": true, "1.4.25.1": false, "1.4.25-rc.1": false, "1.4.25+b": false,
 		"1.4.x": false, "1.4": false, "": false,
 	} {
@@ -162,7 +165,7 @@ func TestAReleaseNamesItsThreeNumbersAndNoMore(t *testing.T) {
 		writer  string
 	}{
 		"claude-code": {ClaudeCode{}, "2.1.310.1"},
-		"opencode":    {OpenCode{}, "2.2.7.1"},
+		"opencode":    {OpenCode{}, openCodeRelease + ".1"},
 		"copilot":     {Copilot{}, copilotFloor() + ".1"},
 	} {
 		if ok, why := c.carrier.ContinuesWriter(c.writer); ok || why == "" {

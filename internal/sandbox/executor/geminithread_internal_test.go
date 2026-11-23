@@ -111,3 +111,45 @@ func TestAnEmptyRecordOfTakesSettlesAndAMissingOneWaits(t *testing.T) {
 		})
 	}
 }
+
+// AN EARLIER RUN'S TAKE TAKES NO LATER RUN'S DELIVERY. A continued session's
+// record of takes holds every run's takes, each run's opened by its start
+// line, so a take is confirmed only by a delivery on its own run's lines: job
+// 1 (from line 20) recorded take-a and never delivered it; job 2 (from line
+// 30) recorded take-b of the same text, delivered at line 35. take-b is held,
+// and take-a reads absent once the job is over, never held off job 2's line.
+//
+// Mutation, red: confirm a take on any line past its run's start, as before
+// (take-a takes line 35 and take-b reads absent).
+func TestAnEarlierRunsTakeTakesNoLaterRunsDelivery(t *testing.T) {
+	t.Parallel()
+	const session = "11111111-2222-4333-8444-555555555555"
+	const text = "## A note from Lead, sent while this turn was running: CAP-TWIN-END"
+	raw, err := os.ReadFile(filepath.Join("testdata", "gemini", "0.70.0", "session-twin-end.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := sandbox.NewFakeSandbox("box-1")
+	p := PathsFor(b)
+	files := map[string]string{
+		p.GeminiChats() + "/session-2026-11-21T22-24-11111111.jsonl": string(raw),
+		p.GeminiTakes(session): `{"from":20}` + "\n" + `{"take":"take-a","digest":"` + ItemDigest(text) + `"}` + "\n" +
+			`{"from":30}` + "\n" + `{"take":"take-b","digest":"` + ItemDigest(text) + `"}` + "\n",
+	}
+	for path, content := range files {
+		if err := b.WriteFile(t.Context(), path, []byte(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b.ExecFunc = func(_ context.Context, cmd string, _ sandbox.ExecOptions) (sandbox.ExecResult, error) {
+		if !strings.Contains(cmd, p.GeminiChats()) {
+			return sandbox.ExecResult{ExitCode: 1}, nil
+		}
+		return sandbox.ExecResult{Stdout: "session-2026-11-21T22-24-11111111.jsonl\n"}, nil
+	}
+	got := GeminiCLI{}.readMainThread(t.Context(), b, p, sandbox.MainThreadAsk{Session: session,
+		Takes: []sandbox.AskedTake{{Take: "take-a"}, {Take: "take-b"}}, Ended: true}).Receipts
+	if !slices.Equal(got.Held, []string{"take-b"}) || !slices.Equal(got.Absent, []string{"take-a"}) {
+		t.Errorf("held %q, absent %q; want take-b held and take-a absent", got.Held, got.Absent)
+	}
+}

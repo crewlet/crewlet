@@ -22,15 +22,13 @@ type Set struct {
 	Label string `json:"label"`
 	// Item is what one entry is called in a sentence ("key").
 	Item string `json:"item"`
-	// Hint is the line under the label: what is needed, and which entry first.
+	// Hint is the line under the label, on the form and in what a person has
+	// ready before connecting: what an entry holds, how many, and which first.
 	Hint string `json:"hint"`
 	// Add is the control that adds an entry ("Add a key").
 	Add string `json:"add"`
 	// Pick labels the choice of which entry to add ("Role").
 	Pick string `json:"pick"`
-	// Missing is what a form says when fewer than Min entries are added, in
-	// the operator's words ("Add at least one API key.").
-	Missing string `json:"missing"`
 	// Min is how many entries the integration cannot work with fewer than.
 	Min int `json:"min"`
 	// Entry is the entry this requirement is a field of: its value, the
@@ -55,6 +53,11 @@ func started(r Requirement, among []Requirement, answer func(Requirement) string
 	}
 	return false
 }
+
+// short is the refusal of fewer than Min entries, said in the set's own
+// words: its Add control, then its Hint. A form shows the Hint already and
+// says the first sentence alone.
+func (s *Set) short() string { return s.Add + " to continue. " + s.Hint }
 
 // stored is a requirement's answer as the document holds it.
 func stored(r Requirement) string { return strings.TrimSpace(r.Stored) }
@@ -110,7 +113,7 @@ func CheckSets(reqs []Requirement, values map[string]string) *SetProblem {
 	}
 	for _, id := range order {
 		if t := sets[id]; len(t.entries) < t.set.Min {
-			return &SetProblem{Set: id, Field: t.first.Field, ConfigPath: t.first.ConfigPath, Problem: t.set.Missing}
+			return &SetProblem{Set: id, Field: t.first.Field, ConfigPath: t.first.ConfigPath, Problem: t.set.short()}
 		}
 	}
 	return nil
