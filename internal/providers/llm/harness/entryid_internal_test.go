@@ -141,13 +141,33 @@ func TestAnEntrysIDIsReadOnceWhenItIsBuilt(t *testing.T) {
 	t.Parallel()
 	env := map[string]string{"ANTHROPIC_BASE_URL": "https://gateway-a.example.com/v1"}
 	p, err := New(Config{Key: "gw", Harness: "claude-code", Model: "claude-sonnet-5", StateDir: t.TempDir(),
-		Timeout: time.Minute, Env: env})
+		Timeout: time.Minute, Env: env, Plans: NewPlans([]byte("0123456789abcdef0123456789abcdef"))})
 	if err != nil {
 		t.Fatal(err)
 	}
 	id := p.EntryID()
+	if id == "" {
+		t.Fatal("an entry under the fleet's key has no id")
+	}
 	env["ANTHROPIC_BASE_URL"] = "https://gateway-b.example.com/v1"
 	if got := p.EntryID(); got != id {
 		t.Errorf("an entry's id moved with its env after it was built: %q, then %q", id, got)
+	}
+}
+
+// AN ENTRY UNDER A KEY DRAWN FOR ITS PROCESS HAS NO ID, so nothing it records
+// is matched: such a key (nil Plans, the doctor's) is no other node's or
+// restart's, and an id under it would refuse every session another one ran.
+//
+// Mutation: compute the id under a drawn key, and it is no longer empty.
+func TestAnEntryUnderADrawnKeyHasNoID(t *testing.T) {
+	t.Parallel()
+	p, err := New(Config{Key: "gw", Harness: "claude-code", Model: "claude-sonnet-5", StateDir: t.TempDir(),
+		Timeout: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id := p.EntryID(); id != "" {
+		t.Errorf("an entry under a drawn key has the id %q, want none", id)
 	}
 }

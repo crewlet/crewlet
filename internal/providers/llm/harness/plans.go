@@ -35,6 +35,10 @@ type Plans struct {
 	// key is the HMAC key every SignInID is computed under ([NewPlans]).
 	key []byte
 
+	// drawn is a key drawn for this process, not handed by the fleet: its ids
+	// compare within the process only ([Provider.EntryID] names none).
+	drawn bool
+
 	mu    sync.Mutex
 	plans map[SignInID]*Plan
 }
@@ -50,13 +54,14 @@ const SignInKeyInfo = "crewlet/llm-sign-in-id/v1"
 // to derive from (a `crewlet llm` command): its ids are then comparable within
 // that process only, which is all such a process compares.
 func NewPlans(key []byte) *Plans {
-	if len(key) == 0 {
+	drawn := len(key) == 0
+	if drawn {
 		key = make([]byte, 32)
 		// crypto/rand.Read never returns an error on a supported platform,
 		// and fails the process rather than return a short read.
 		_, _ = rand.Read(key)
 	}
-	return &Plans{key: slices.Clone(key), plans: map[SignInID]*Plan{}}
+	return &Plans{key: slices.Clone(key), drawn: drawn, plans: map[SignInID]*Plan{}}
 }
 
 // For is the Plan of the sign-in id names, created on first use. The empty id

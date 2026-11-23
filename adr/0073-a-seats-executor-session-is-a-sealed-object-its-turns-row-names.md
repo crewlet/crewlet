@@ -4990,7 +4990,8 @@ continue a session another entry created, on whatever that harness kept.
 **Every capture names the entry its session ran under** (`Capture.Entry`,
 record version 6): the job's own launch's (`LaunchRecord.Entry`), never the
 box's word, an identity built from the entry's route and sign-in mode only
-(`harness.Provider.EntryID`: an HMAC, under the fleet's sign-in key, of its key,
+(`harness.Provider.EntryID`: an HMAC, under the fleet's sign-in key (no id
+under a key drawn for one process, which no other node matches), of its key,
 harness, auth mode, the provider its model names where the harness reads one
 there, and the entry's route: the profile's `identity_env` and `sign_in_env`
 switches as its env sets them, read once when the entry is built; an
