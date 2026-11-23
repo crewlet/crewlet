@@ -1110,8 +1110,8 @@ func reconcileRow(state integration.State) map[string]any {
 		"findings":         reconcileFindings(state.Findings),
 		// WHAT THE FINDINGS RECORD LEFT OUT to fit its bound, so a list cut
 		// short says so: findings dropped from its tail, and an agent's own
-		// it folded away (each agent's row still draws those). Zero where it
-		// kept everything.
+		// it kept without their words (each agent's row draws those). Zero
+		// where it kept everything.
 		"findings_omitted":      state.FindingsRecord.Omitted,
 		"seat_findings_omitted": state.FindingsRecord.SeatOmitted,
 		// TRUE WHERE THE FINDINGS COULD NOT BE READ beside the status (a pass
