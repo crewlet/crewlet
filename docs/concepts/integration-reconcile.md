@@ -158,16 +158,18 @@ flowchart LR
 
 **An agent's account at an app is named after the seat's handle.** None of these apps stores a Crewlet seat id or lets the engine attach a field that survives (Atlassian accepts a description on create, answers `200`, and keeps nothing). So the account's **own name is the only thing a later pass can match on**, and the handle makes it one: it is immutable ([ADR-0013](https://github.com/crewlet/crewlet/blob/main/adr/0013-a-seats-identity-is-derived.md)), and a document that changes it removes the seat and creates another. The new seat gets a new account; the old one is a departed seat's, which `-decommission` removes and Datadog's orphan sweep reports.
 
+Every `crewlet-<handle>` below is one rule, `internal/seatname`: lowercase letters, digits and hyphens, the handle cut to the vendor's length where it is too long (30 characters where the vendor publishes none; the level word after it is kept). It holds no company name, since the vendor account it sits in is the company's already.
+
 | App | The account's name | What follows the document instead |
 |---|---|---|
 | Mattermost | `{username_prefix}{handle}`, token description `crewlet-<handle>` | the bot's **display name**, patched to `{role name}{display_name_suffix}` on every pass |
 | GitLab | `{username_prefix}-{handle}`, token name `crewlet-<handle>` | — |
 | Datadog | the account address, `crewlet-<handle>@{email_domain}` | — |
-| Cloudflare | the account API token's name, `crewlet-<company>-<handle>` (company name slugified), beside the token ID recorded at mint | Nothing |
-| Scaleway | the IAM application's name, `crewlet-<company>-<handle>` (company name slugified; its policy shares it), beside the application ID recorded at creation | Nothing |
+| Cloudflare | the account API token's name, `crewlet-<handle>`, beside the token ID recorded at mint | Nothing |
+| Scaleway | the IAM application's name, `crewlet-<handle>` (its policy shares it), beside the application ID recorded at creation | Nothing |
 | Google Cloud | the service account's ID, `crewlet-<handle, at most 17 characters>-<4 characters>`, display name `Crewlet <company> <handle>`, beside the unique ID recorded at creation | Nothing |
-| Expo | the robot user's name, `crewlet-<company>-<handle>`, which a person gives the robot at Expo, beside the robot ID recorded from the first token pasted for the seat | Nothing |
-| DigitalOcean | the personal access token's name, `crewlet-<company>-<handle>-<level>`, which a person gives the token in the control panel, beside a keyed fingerprint of the token and its team's ID, recorded from the token pasted for the seat | Nothing |
+| Expo | the robot user's name, `crewlet-<handle>`, which a person gives the robot at Expo, beside the robot ID recorded from the first token pasted for the seat | Nothing |
+| DigitalOcean | the personal access token's name, `crewlet-<handle>-<level>`, which a person gives the token in the control panel, beside a keyed fingerprint of the token and its team's ID, recorded from the token pasted for the seat | Nothing |
 | AWS | the IAM role's name, `crewlet-<short name>-<seat>` under the path `/crewlet/<short name>/seat/`, beside the role ID recorded at creation; a role of that name the engine has no record of is refused, never adopted | Nothing |
 | Atlassian | the marker inside the display name, `{role} (crewlet:<handle>)` | the `{role}` label in front of the marker |
 

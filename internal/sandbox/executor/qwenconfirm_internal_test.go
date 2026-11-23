@@ -26,7 +26,7 @@ func qwenTakes(items ...string) []ServedTake {
 }
 
 // A QWEN CODE NOTE IS CONFIRMED BY ITS RECORD AND THE REPLY AFTER IT, AS
-// HANDED, ONCE PER RECORD, IN ORDER (0.28.3's chat file of a note handed
+// HANDED, ONCE PER RECORD, IN ORDER (0.28.4's chat file of a note handed
 // mid-turn). The framed text's digest confirms nothing, nor the framed text in
 // a tool result or the prompt; two records before the reply confirm two takes,
 // not three; of two with a reply after the first alone, one. A record with no
@@ -38,7 +38,7 @@ func qwenTakes(items ...string) []ServedTake {
 // pending matches past a skipped line.
 func TestAQwenCodeNoteIsConfirmedByItsRecordAsHanded(t *testing.T) {
 	t.Parallel()
-	raw, err := os.ReadFile(filepath.Join("testdata", "qwen", "0.28.3", "chat-note.jsonl"))
+	raw, err := os.ReadFile(filepath.Join("testdata", "qwen", "0.28.4", "chat-note.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestAQwenCodeNoteIsConfirmedByItsRecordAsHanded(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			got, err := qwenNotesHeld(bytes.NewReader([]byte(tc.session)), tc.takes, qwenTestBound)
+			got, err := qwenNotesHeld(bytes.NewReader([]byte(tc.session)), tc.takes, 0, qwenTestBound)
 			if err != nil || !slices.Equal(got, tc.want) {
 				t.Fatalf("qwenNotesHeld = %v, %v; want %v", got, err, tc.want)
 			}
@@ -123,10 +123,14 @@ func TestAQwenCodeNoteIsConfirmedByItsRecordAsHanded(t *testing.T) {
 // file sits under the home's projects directory in a folder keyed by the
 // run's working directory, which the runner does not know: notesHeld finds
 // it by the session's id alone, reads the notes it holds, holds none where no
-// file names the session, and refuses an id that names a path.
+// file names the session, and refuses an id that names a path. It reads only
+// past where the box's last run began in the session (the note's record is
+// line 12), so an earlier job's record delivers no note of this run's; a start
+// missing, malformed or another session's is an error, never a read from 0.
 //
 // Mutations, each red: look under a fixed project key; answer an error for a
-// session with no file.
+// session with no file; read the record before the run's start; read from 0
+// where the start is missing, malformed or another session's.
 func TestAQwenCodeSessionsRecordIsFoundByItsID(t *testing.T) {
 	t.Parallel()
 	local, err := sandbox.NewLocal(sandbox.LocalOptions{Placement: sandbox.Direct, StateDir: t.TempDir()})
@@ -138,7 +142,7 @@ func TestAQwenCodeSessionsRecordIsFoundByItsID(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	t.Cleanup(func() { box.Close(t.Context()) })
-	raw, err := os.ReadFile(filepath.Join("testdata", "qwen", "0.28.3", "chat-note.jsonl"))
+	raw, err := os.ReadFile(filepath.Join("testdata", "qwen", "0.28.4", "chat-note.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,6 +152,12 @@ func TestAQwenCodeSessionsRecordIsFoundByItsID(t *testing.T) {
 		t.Fatal(err)
 	}
 	takes := qwenTakes("MARK-R6-START drained note MARK-R6-END")
+	if _, err := (QwenCode{}).notesHeld(t.Context(), box, Session{ID: session}, takes); err == nil {
+		t.Error("a box with no record of where its run began was read")
+	}
+	if err := box.WriteFile(t.Context(), PathsFor(box).QwenRunStart(), []byte(session+" 0\n")); err != nil {
+		t.Fatal(err)
+	}
 	held, err := QwenCode{}.notesHeld(t.Context(), box, Session{ID: session}, takes)
 	if err != nil || !slices.Equal(held, []string{"i-1"}) {
 		t.Errorf("notesHeld = %v, %v; want the note's take", held, err)
@@ -159,10 +169,30 @@ func TestAQwenCodeSessionsRecordIsFoundByItsID(t *testing.T) {
 	if _, err = (QwenCode{}).notesHeld(t.Context(), box, Session{ID: "../../x"}, takes); err == nil {
 		t.Error("an id naming a path was read")
 	}
+	for start, want := range map[string]struct {
+		held  []string
+		fails bool
+	}{
+		session + " 13\n":                          {nil, false},
+		session + " 12\n":                          {[]string{"i-1"}, false},
+		"11111111-2222-4333-8444-000000000002 0\n": {nil, true},
+		session + " twelve\n":                      {nil, true},
+		session + " -1\n":                          {nil, true},
+		"garbage":                                  {nil, true},
+	} {
+		if err := box.WriteFile(t.Context(), PathsFor(box).QwenRunStart(), []byte(start)); err != nil {
+			t.Fatal(err)
+		}
+		held, err := (QwenCode{}).notesHeld(t.Context(), box, Session{ID: session}, takes)
+		if (err != nil) != want.fails || !slices.Equal(held, want.held) {
+			t.Errorf("with the run's start %q, notesHeld = %v, %v; want %v, failing %v", start, held, err,
+				want.held, want.fails)
+		}
+	}
 }
 
 // A NOTE A COMPACTION KEEPS ONLY IN ITS SUMMARY IS NOT READ (ADR-0177). On
-// 0.28.3's own chat file of a note drained at the compaction point, whose
+// 0.28.4's own chat file of a note drained at the compaction point, whose
 // chat_compression record keeps it plain past the summary prefix: held. With
 // the note moved from that tail into the summary, the prefix unreadable, a
 // wider contextPrefixLength covering the note, or the note's entry the model's:
@@ -175,7 +205,7 @@ func TestAQwenCodeSessionsRecordIsFoundByItsID(t *testing.T) {
 // entry's text; read only the first entry past the prefix.
 func TestANoteACompactionKeepsOnlyInItsSummaryIsNotRead(t *testing.T) {
 	t.Parallel()
-	raw, err := os.ReadFile(filepath.Join("testdata", "qwen", "0.28.3", "chat-compact.jsonl"))
+	raw, err := os.ReadFile(filepath.Join("testdata", "qwen", "0.28.4", "chat-compact.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +275,7 @@ func TestANoteACompactionKeepsOnlyInItsSummaryIsNotRead(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			got, err := qwenNotesHeld(strings.NewReader(tc.session), qwenTakes(note), maxLineBytes)
+			got, err := qwenNotesHeld(strings.NewReader(tc.session), qwenTakes(note), 0, maxLineBytes)
 			if err != nil || !slices.Equal(got, tc.want) {
 				t.Fatalf("qwenNotesHeld = %v, %v; want %v", got, err, tc.want)
 			}

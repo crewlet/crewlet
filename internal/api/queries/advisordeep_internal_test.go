@@ -34,7 +34,7 @@ func TestTheDeepRunAsksAsTheAdvisor(t *testing.T) {
 }
 
 // A DEEP RUN'S SUMMARY SAYS WHAT IT DID: its kind, its progress lines, what it
-// spent of its bounds and the bound it stopped at. Mutation: read its record as
+// spent of its bounds, the bound it stopped at and how many questions it answered. Mutation: read its record as
 // a daily pass's, and the progress is lost.
 func TestADeepRunsSummarySaysWhatItDid(t *testing.T) {
 	t.Parallel()
@@ -42,6 +42,7 @@ func TestADeepRunsSummarySaysWhatItDid(t *testing.T) {
 	run.Status, run.InputTokens, run.OutputTokens, run.StoppedBy, run.Minutes = "done", 900_000, 100_000, "done", 12.4
 	run.Bounds.Tokens, run.Bounds.Minutes = 2_000_000, 20
 	run.Progress = []modelpass.Progress{{Text: "reading capacity"}}
+	run.Tally = &modelpass.AgendaTally{Items: 4, Confirmed: 2, Refuted: 1, Open: 1}
 	raw, err := json.Marshal(run)
 	if err != nil {
 		t.Fatal(err)
@@ -54,6 +55,9 @@ func TestADeepRunsSummarySaysWhatItDid(t *testing.T) {
 	if got.Kind != "deep" || len(got.Progress) != 1 || got.Budget == nil || got.Budget.Tokens != 1_000_000 ||
 		got.Budget.MinutesCeiling != 20 || got.Budget.Minutes != 13 || got.StoppedBy == nil || *got.StoppedBy != "done" {
 		t.Errorf("summary = %+v, budget %+v", got, got.Budget)
+	}
+	if got.Agenda == nil || *got.Agenda != (AdvisorAgenda{Items: 4, Answered: 3}) {
+		t.Errorf("agenda = %+v, want 3 of 4 answered", got.Agenda)
 	}
 }
 
@@ -104,10 +108,20 @@ func (l liveLog) PendingRequests(context.Context, statelog.Freshness) ([]advisor
 	return l.pending, nil
 }
 
+// Checkpoint keeps three questions, one answered.
+func (liveLog) Checkpoint(_ context.Context, run string, _ statelog.Freshness) (json.RawMessage, bool, error) {
+	if run != "run-1" {
+		return nil, false, nil
+	}
+	return json.RawMessage(`{"agenda":[{"id":"A1","verdict":"confirmed"},{"id":"A2","verdict":"open"},{"id":"A3"}]}`),
+		true, nil
+}
+
 // A DEEP RUN IN FLIGHT IS THE LATEST RUN, WITH ITS PROGRESS: a person's press
-// shows its lines while it runs, and a run at its slot that nobody pressed
-// shows as running from its first line. Mutation: answer the last run that
-// ended, and the page says nothing until the investigation is done.
+// shows its lines and how many of its questions it has answered while it
+// runs, and a run at its slot that nobody pressed shows as running from its
+// first line. Mutation: answer the last run that ended, or leave the
+// checkpoint unread, and the page cannot say how far it is.
 func TestADeepRunInFlightIsTheLatestRunWithItsProgress(t *testing.T) {
 	t.Parallel()
 	got, err := Sources{Advisor: liveLog{}}.latestRun(t.Context())
@@ -119,6 +133,9 @@ func TestADeepRunInFlightIsTheLatestRunWithItsProgress(t *testing.T) {
 	got, err = Sources{Advisor: pressed}.latestRun(t.Context())
 	if err != nil || got.By != "ada" || got.Kind != "deep" || len(got.Progress) != 1 {
 		t.Errorf("latest = %+v (%v), want ada's deep run with its line", got, err)
+	}
+	if got.Agenda == nil || *got.Agenda != (AdvisorAgenda{Items: 3, Answered: 1}) {
+		t.Errorf("agenda = %+v, want 1 of 3 answered", got.Agenda)
 	}
 }
 

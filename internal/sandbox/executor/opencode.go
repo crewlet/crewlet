@@ -56,7 +56,7 @@ const openCodeContextEvent = "crewlet.context"
 // message. A job that ended by itself ends on a step's error at most once, but
 // one that made no request pages back into the session it took up, which an
 // end request may have left with two interrupted steps: the real exports
-// (testdata/opencode/{2.0.32,2.2.5}/export.json) hold the measuring step
+// (testdata/opencode/2.3.2/export.json) hold the measuring step
 // fourth newest, behind two interrupted and one refused. SIX holds that and
 // two failures more. Past it, the job's record keeps the measure carried along
 // its copy's lineage.
@@ -74,9 +74,9 @@ const openCodeContextPages = 6
 const openCodeContextBytes = 1 << 20
 
 // openCodeListenWait bounds the wait for the run's private server to say where
-// it listens: about a second on OpenCode 2.0.32, most of it the runtime
-// starting, so sixty is room for a contended box, short of holding a seat for
-// a server that is never coming up.
+// it listens: 0.4 to 0.5 s on 2.3.2 (six starts, a 2-core container), so
+// sixty is room for a contended box, short of holding a seat for a server
+// that is never coming up.
 const openCodeListenWait = 60 * time.Second
 
 // openCodeClock is the command a run's script reads the time from, in whole
@@ -92,16 +92,16 @@ const openCodeMCPWait = 60 * time.Second
 
 // openCodeCallWait bounds one call a run's script makes to its own server
 // whose answer is a few KiB at most: the readiness `mcp.list`, `session.get`,
-// the leftover steers' inbox list and cancels, the end's `session.interrupt`
-// and the login's `auth export`. Past it the call is ended and the script goes
-// on as where the server is gone ([openCodeBounded]).
+// the leftover steers' inbox list and cancels, the end's `session.interrupt`,
+// the login's export and import, and the stored logins' list and removal. Past
+// it the call is ended and the script goes on as where the server is gone, or,
+// before the client, ends the run ([openCodeBounded], [openCodeForgetLogins]).
 //
-// TEN SECONDS, about fifteen times the slowest such call measured (687 ms, a
-// readiness `mcp.list` on OpenCode 2.2.7; each kind under 0.7 s on 2.0.32 to
-// 2.3.0, a busy 2-core box; crewlet#1088's probe). Past it a call costs only what a gone server
-// costs: a usage line, a steer left, an unsettled step. OpenCode bounds
-// nothing itself: its client waits on a call as long as an answering server
-// takes.
+// TEN SECONDS, about three times the slowest such call measured on 2.3.2: a
+// readiness `mcp.list` answers in 0.4 s, and in 3.5 s where the server's
+// OTLP endpoint refuses connections (a 2-core container; the other kinds
+// untested on 2.3.2). Past it a call costs what a gone server does. OpenCode
+// bounds nothing itself: its client waits as long as an answering server takes.
 const openCodeCallWait = 10 * time.Second
 
 // openCodeSessionCallWait bounds one call a run's script makes to its own
@@ -112,8 +112,8 @@ const openCodeCallWait = 10 * time.Second
 //
 // THIRTY SECONDS, about five times the slowest measured: 6.4 s to export a 256
 // MiB session (the most a kept session's export holds unpacked, the scrub's
-// plaintext bound, [scrubPlainMax]) on a busy 2-core box, OpenCode
-// 2.1.4. Past it only the wait is lost: an export it ended is packed on demand
+// plaintext bound, [scrubPlainMax]) on a busy 2-core box, an earlier
+// OpenCode 2 release. Past it only the wait is lost: an export it ended is packed on demand
 // once the job is over ([OpenCode.Pack]), and a page it ended leaves the
 // figure carried along the copy's lineage.
 const openCodeSessionCallWait = 30 * time.Second
@@ -125,8 +125,8 @@ const openCodeSessionCallWait = 30 * time.Second
 // database until exported, and every production teardown of a run in flight
 // kills it outright ([sandbox.Local.Kill], `docker rm -f`). An OAuth token
 // lives an hour or more, so thirty seconds leaves under one refresh in a
-// hundred in the window, at one export per interval (0.14 s on OpenCode
-// 2.0.32, under half a percent of a core); ten seconds would triple that for a
+// hundred in the window, at one export per interval (0.14 s on an earlier
+// OpenCode 2 release, under half a percent of a core); ten seconds would triple that for a
 // window a mid-run kill already makes rare.
 const openCodeLoginSync = 30 * time.Second
 
@@ -232,11 +232,13 @@ func (OpenCode) Session(req sandbox.RunRequest) Session {
 	return Session{ID: "ses_" + newOpenCodeSession()}
 }
 
-// openCodeCarryFloor is the oldest OpenCode release a box continues a carried
-// session on, and the oldest whose session it continues: 2.0.32, the release
-// the script, the session's export and import, and the import's refusal of an
-// id it holds were measured on. Nothing older is a release this runner drives.
-const openCodeCarryFloor = "2.0.32"
+// openCodeRelease is the one OpenCode release this runner supports, its
+// newest: a box on an older one is refused at the run's start, naming its
+// release ([openCodeScript]); one on a newer runs, a session carried in from
+// another box starting fresh there while the box's own copy continues in
+// place; and a carried session continues only where the box and the writer
+// are both exactly it ([OpenCode.Continues]).
+const openCodeRelease = "2.3.2"
 
 // openCodeArchiveFormat is the layout an OpenCode run packs its session in: the
 // document `opencode session export` prints — the session and its settled
@@ -295,9 +297,12 @@ func openCodePackNow(paths Paths, session, staged, dest string, room bool) strin
 	// A probe read as "no session" recorded a session the box held as none,
 	// and the turn's end named an older capture as its last.
 	q := shellword.Quote
-	answer := q(staged + "/answer")
 	var b strings.Builder
 	b.WriteString("sid=" + q(session) + " packed=\n" + openCodeStandalonePins)
+	// A CONFIGURATION DIRECTORY INSIDE ITS OWN STAGING ONE, which the pack
+	// makes anew and removes ([openCodePack]): a pack loads nothing a run left
+	// in the box. OpenCode makes the directory where it is missing.
+	fmt.Fprintf(&b, "OPENCODE_CONFIG_DIR=%s; export OPENCODE_CONFIG_DIR\n", q(staged+"/opencode-config"))
 	if room {
 		// THE ROOM BEFORE ANY OPENCODE PROCESS, the probe's included: the
 		// probe is a standalone OpenCode too. No database yet is no session
@@ -308,9 +313,7 @@ func openCodePackNow(paths Paths, session, staged, dest string, room bool) strin
 			`if [ -f "$db" ]; then crewlet_memory 2> /dev/null | crewlet_save_fits "$(crewlet_size "$db")" "$(crewlet_size "$db-wal")" || exit %d; bounded=1; fi`+"\n",
 			packNoRoom)
 	}
-	fmt.Fprintf(&b, `rm -rf %[1]s; mkdir -p %[1]s || { echo 'crewlet: the pack could not make its staging directory' >&2; exit %[3]d; }`+"\n"+
-		`if opencode api --standalone session.get --param sessionID="$sid" < /dev/null > %[2]s 2>&1; then probe=$(cat %[2]s); held=$probe; else probe=$(cat %[2]s 2> /dev/null); held=; fi; rm -rf %[1]s`+"\n",
-		q(staged), answer, packFailed)
+	b.WriteString(`if probe=$(opencode api --standalone session.get --param sessionID="$sid" < /dev/null 2>&1); then held=$probe; else held=; fi` + "\n")
 	fmt.Fprintf(&b, `case "$held" in *%s*) ;; *) case "$probe" in %s) exit %d;; esac; `+
 		`printf '%%s\n' "${probe:-OpenCode answered nothing about the session}" >&2; exit %d;; esac`+"\n",
 		shellword.Quote(`"id":"`+session+`"`), openCodeNotHeld, packNothing, packFailed)
@@ -324,22 +327,21 @@ func openCodePackNow(paths Paths, session, staged, dest string, room bool) strin
 }
 
 // openCodeStandalonePins is what every standalone call of a pack on demand runs
-// under: the models fetch and the updater off, and loopback first in NO_PROXY
-// and no_proxy, so a proxy the box's environment names never takes the
-// in-process server a standalone call reaches over HTTP on loopback (2.0.32,
-// which a proxy that does not answer hangs). None measured opened a connection
-// of its own either way; the pins keep a save, which every running job takes
-// every interval, from depending on that.
-const openCodeStandalonePins = `export OPENCODE_DISABLE_MODELS_FETCH=1 OPENCODE_DISABLE_AUTOUPDATE=1` + "\n" +
-	`NO_PROXY="127.0.0.1,localhost,::1${NO_PROXY:+,$NO_PROXY}" no_proxy="127.0.0.1,localhost,::1${no_proxy:+,$no_proxy}"; export NO_PROXY no_proxy` + "\n"
+// under: the models fetch and the updater off, so a save, which every running
+// job takes every interval, reaches nothing off the box (2.3.2 refreshes its
+// models.dev catalogue where the fetch is not switched off, seen in a run's
+// events). No proxy pin: a proxy that never answers held up no 2.3.2
+// standalone export (measured).
+const openCodeStandalonePins = `export OPENCODE_DISABLE_MODELS_FETCH=1 OPENCODE_DISABLE_AUTOUPDATE=1` + "\n"
 
 // openCodeSaveNeedFactor and openCodeSaveNeedBase are the memory an OpenCode
 // save's export is held to need: the factor times its database's bytes and
-// its WAL's, plus the base. Twelve and 128 MiB hold every point measured (the
-// steepest a slope of 9.7 and an intercept of 93 MiB, 2.2.7 with a character
-// past Latin-1 in every string), and a fifth's room for a shape not measured
-// at the bound; an all-ASCII session, about 4.5, is over-counted. The package
-// doc has the measurements.
+// its WAL's, plus the base. Twelve and 128 MiB hold every point measured on
+// 2.3.2 with a fifth's room for a shape not measured at the bound: the
+// steepest a slope of 8.6, the highest intercept 125 MiB, a character past
+// Latin-1 in every string (16 MiB peaked at 253 MiB, held to 328; 66 MiB at
+// 693, held to 917); an all-ASCII session, 3.4 to 4.7, is over-counted. The
+// package doc has the measurements.
 const (
 	openCodeSaveNeedFactor = 12
 	openCodeSaveNeedBase   = 128 << 20
@@ -373,33 +375,61 @@ const openCodeNotHeld = `*'Session not found'*|*NotFoundError*`
 func (OpenCode) layout() archiveLayout { return archiveDocument }
 
 // Continues reports whether a session written by OpenCode release writer can
-// be continued in a box whose OpenCode is release box ([carrier]): both at or
-// after [openCodeCarryFloor], and never a box older than the writer.
-func (OpenCode) Continues(box, writer string) (bool, string) {
+// be continued in a box whose OpenCode is release box ([carrier]): only where
+// both are exactly [openCodeRelease]; a box whose release does not read
+// refuses ([boxNamedNoRelease]), and any other pair starts fresh.
+func (o OpenCode) Continues(box, writer string) (bool, string) {
 	switch {
-	case !releaseAtLeast(box, openCodeCarryFloor):
-		return false, fmt.Sprintf("this box runs OpenCode %s, older than %s, the oldest that "+
-			"continues a session carried from another box", box, openCodeCarryFloor)
-	case !releaseAtLeast(writer, openCodeCarryFloor):
-		return false, fmt.Sprintf("the session was written by OpenCode %s, older than %s, the "+
-			"oldest whose session another box continues", writer, openCodeCarryFloor)
-	case !releaseAtLeast(box, writer):
-		return false, carriedOlder("OpenCode", box, writer)
+	case !releaseReads(box):
+		return false, boxNamedNoRelease("OpenCode")
+	case box != openCodeRelease:
+		return false, fmt.Sprintf("this box runs OpenCode %s, and a carried session continues only on "+
+			"OpenCode %s", box, openCodeRelease)
+	}
+	return o.ContinuesWriter(writer)
+}
+
+// ContinuesWriter reports whether a session OpenCode release writer wrote can
+// be continued at all ([carrier]): exactly [openCodeRelease]. A writer that
+// does not read continues nowhere ([writerNamedNoRelease]).
+func (OpenCode) ContinuesWriter(writer string) (bool, string) {
+	if !releaseReads(writer) {
+		return false, writerNamedNoRelease("OpenCode")
+	}
+	if writer != openCodeRelease {
+		return false, fmt.Sprintf("the session was written by OpenCode %s, and only a session %s wrote "+
+			"continues in another box", writer, openCodeRelease)
 	}
 	return true, ""
 }
 
+// openCodeOlderCheck is the script's refusal of a box whose OpenCode 2 is
+// older than [openCodeRelease], its release read off `$v` as [releaseOf]
+// reads one ([bareReleaseShell]: a pre-release reads as none, and is let
+// run), each number compared as a number.
+func openCodeOlderCheck() string {
+	var maj, mnr, pat int
+	if _, err := fmt.Sscanf(openCodeRelease, "%d.%d.%d", &maj, &mnr, &pat); err != nil {
+		panic("executor: openCodeRelease is no release: " + openCodeRelease)
+	}
+	return bareReleaseShell("r") + fmt.Sprintf(`older() { o=$IFS; IFS=.; set -- $1; IFS=$o; `+
+		`[ "$1" -lt %[1]d ] && return 0; [ "$1" -gt %[1]d ] && return 1; `+
+		`[ "$2" -lt %[2]d ] && return 0; [ "$2" -gt %[2]d ] && return 1; `+
+		`[ "$3" -lt %[3]d ]; }; `+
+		`if [ -n "$r" ] && older "$r"; then echo "crewlet: this box runs OpenCode $r; the opencode runner `+
+		`supports OpenCode %[4]s, its newest — install it in the box image" >&2; exit 1; fi`,
+		maj, mnr, pat, openCodeRelease)
+}
+
 // openCodeScript is the run's script for one session ([OpenCode.Command]).
 // Every command but the run reads /dev/null, not the brief on stdin, and
-// writes only to a file or /dev/null: stdout is the event stream.
+// writes only to a file, a command substitution or /dev/null: stdout is the
+// event stream.
 //
-// EVERY ANSWER OF OPENCODE'S IT READS GOES THROUGH A FILE, never a pipe or
-// `$(opencode …)`: into a pipe, OpenCode 2.0.32 and 2.1.4 stop after a 64 KiB
-// multiple and exit 0 ([openCodePack]). One rule with no exception, rather
-// than an argument per answer about its size: answers go to
-// [openCodeAnswerFile], the message list's pages and a pack's to their own
-// files. TestNoOpenCodeAnswerIsReadThroughAPipe holds every rendered script to
-// it.
+// AN ANSWER GOES THROUGH A FILE WHERE THE FILE DOES WORK: a bounded call's
+// ([openCodeAnswerFile]), the export, measured or bounded ([openCodePack]),
+// and the message list's pages, each measured before it is printed
+// ([openCodeContext]). An unbounded call's answer is read through `$(…)`.
 func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times openCodeTimes) string {
 	doc := shellword.Quote(paths.CredentialDocument())
 	next := shellword.Quote(paths.CredentialDocument() + ".next")
@@ -435,11 +465,11 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	// THE END PROTOCOL BEFORE ANYTHING ELSE (end.go). The run's own end of its
 	// harness interrupts the session through its server first, which settles
 	// the step in flight so the export holds it, then ends the client within
-	// the grace. The client ended alone left the server working: the export
-	// held nothing of the step, and its tool call still ran (2.0.32, 2.1.4,
-	// whose API names it `session.interrupt`, not `session.abort`). On 2.2.7
-	// and 2.3.0 the client never finishes its shutdown at SIGTERM, so it is
-	// killed at the grace and the end recorded as killed. The interrupt is
+	// the grace. Ended alone, the client leaves the server working the step,
+	// its tool call running to the end (measured on 2.3.2; the API names it
+	// `session.interrupt`, not `session.abort`). On
+	// 2.3.2 the interrupted client is gone within 0.2 s of its SIGTERM
+	// (measured), so the end is recorded as asked. The interrupt is
 	// BOUNDED ([openCodeBounded]), never by the request it serves: a server that never answers leaves the step
 	// unsettled, as a gone one does, and no end waits on the server.
 	b.WriteString(endPrologue(paths, times.stop))
@@ -451,15 +481,27 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	// kept, since that stderr is the transcript when nothing else was written.
 	line(`command -v opencode > /dev/null || { echo 'crewlet: no opencode on the box PATH' >&2; exit 127; }`)
 	// 1.x prints a bare version, 2.x `opencode v2.…`.
-	line(`opencode --version < /dev/null > %s 2> %s || { st=$?; echo "crewlet: opencode is on the box PATH, but opencode --version failed with exit $st:" >&2; cat %s >&2; rm -f %s %s; exit 1; }`,
-		ans, vrr, vrr, ans, vrr)
-	line(`v=$(cat %s); rm -f %s %s`, ans, ans, vrr)
+	line(`v=$(opencode --version < /dev/null 2> %s) || { st=$?; echo "crewlet: opencode is on the box PATH, but opencode --version failed with exit $st:" >&2; cat %s >&2; rm -f %s; exit 1; }`,
+		vrr, vrr, vrr)
+	line(`rm -f %s`, vrr)
 	line(`case "$v" in [0-9]*) echo "crewlet: this box runs OpenCode $v; the opencode runner drives OpenCode 2 (the @opencode/cli package) — install it in the box image" >&2; exit 1;; esac`)
+	// AN OLDER 2.x IS REFUSED BY NAME ([openCodeRelease]); a newer runs, and
+	// one whose release does not read (a pre-release among them) is let run,
+	// as a release the engine cannot read is taken for a current one.
+	line(`%s`, openCodeOlderCheck())
+	// THE RUN LOADS ONLY THE CONFIGURATION ITS LAUNCH WRITES, before any
+	// command that reads one: OpenCode's global directory is the run's own,
+	// empty ([Paths.OpenCodeConfigDir]), and what it reads from the home and
+	// the workspace's parent is removed ([openCodeHomeConfig]).
+	line(`rm -rf %[1]s && mkdir -p %[1]s || { echo 'crewlet: the run could not make its OpenCode configuration directory' >&2; exit 1; }`,
+		shellword.Quote(paths.OpenCodeConfigDir()))
+	line(`OPENCODE_CONFIG_DIR=%s; export OPENCODE_CONFIG_DIR`, shellword.Quote(paths.OpenCodeConfigDir()))
+	line(`rm -rf %s`, strings.Join(openCodeHomeConfig(paths), " "))
 	// THE SERVER'S PASSWORD IS ITS OWN: `opencode serve` given
 	// OPENCODE_PASSWORD or OPENCODE_SERVER_PASSWORD prints none, and the
 	// listen wait would run out. So both are unset, the wait asks for the
 	// password line too, and the run's clients are handed it as
-	// OPENCODE_PASSWORD, which a client reads first (2.0.32); the server is
+	// OPENCODE_PASSWORD, which a client reads first; the server is
 	// started without it, so nothing the agent runs inherits it.
 	line(`unset OPENCODE_PASSWORD OPENCODE_SERVER_PASSWORD`)
 	// THE RUN'S CONFIGURATION, refused where there is none: the server would
@@ -473,7 +515,7 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	b.WriteString(openCodeBounded(paths, times))
 	b.WriteString(openCodeCursor())
 	// holds: the file is a whole, non-empty JSON array. A database that
-	// dropped a credential it could not refresh exports `[]` (2.0.32), which
+	// dropped a credential it could not refresh exports `[]`, which
 	// must never replace the box's login: the teardown would write it back
 	// over the shared one.
 	line(`holds() { t=$(tr -d '[:space:]' < "$1") || return 1; case "$t" in '['*']') [ "$t" != '[]' ];; *) return 1;; esac; }`)
@@ -494,14 +536,6 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	line(`quit() { trap '' USR1; trap - EXIT TERM INT HUP; unbound; end "$harness"; harness=; unsync; [ -z "$imported" ] || keep quit %s --standalone; stop; exit "$1"; }`, next)
 	line(`trap 'unsync; stop' EXIT`)
 	line(`trap 'quit 143' TERM; trap 'quit 130' INT; trap 'quit 129' HUP`)
-	// THE LOGIN, where the box was given one ([Paths.CredentialDocument], a
-	// local box's): imported before the server starts, and exported over the
-	// document while the run works and as it ends ([openCodeLoginSync]). A
-	// remote box is given none and signs in with the run environment's key.
-	line(`if [ -s %s ]; then`, doc)
-	line(`  opencode auth import --standalone < %s > /dev/null || { echo 'crewlet: OpenCode refused the login this box was given — sign the engine in again with crewlet llm login' >&2; exit 1; }`, doc)
-	line(`  imported=1`)
-	line(`fi`)
 	b.WriteString(openCodeSessionGate(session, paths, req.FreshWiring != nil))
 	// THE RECORD, before the server and the run, so a run killed or ended
 	// before it reported anything still says which session it took up and why
@@ -520,8 +554,7 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	// configuration, as OPENCODE_CONFIG_CONTENT, which OpenCode ranks above a
 	// repository's opencode.json and .opencode/, and, for a run wired to its
 	// notes, the session its notes plugin admits them to. The client and the
-	// `api` calls are answered by it; the login's import and export are handed
-	// none of it.
+	// `api` calls, the login's import among them, are answered by it.
 	steered := ""
 	if req.Steer.Set() {
 		steered = `CREWLET_STEER_SESSION="$sid" `
@@ -543,6 +576,18 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	line(`url=$(sed -n 's/^server listening on //p' %s)`, srv)
 	line(`OPENCODE_PASSWORD=$(sed -n 's/^server password //p' %s); export OPENCODE_PASSWORD`, srv)
 	line(`rm -f %s`, srv)
+	// THE LOGIN, where the box was given one ([Paths.CredentialDocument], a
+	// local box's): imported through the run's own server, once every login
+	// its database held is removed ([openCodeForgetLogins]), and exported over
+	// the document while the run works and as it ends ([openCodeLoginSync]).
+	// A remote box is given none and signs in with the run environment's key.
+	// Through the server, so no second OpenCode runtime opens the database.
+	// Before the client, so an end request ends each call and starts no run.
+	b.WriteString(openCodeForgetLogins(ans, secs(times.call)))
+	line(`if [ -z "$endasked" ] && [ -s %s ]; then`, doc)
+	line(`  if bounded login %d e opencode auth import --server "$url" %s > /dev/null 2>&1; then imported=1; elif [ -z "$endasked" ]; then echo 'crewlet: OpenCode refused the login this box was given — sign the engine in again with crewlet llm login' >&2; exit 1; fi`,
+		secs(times.call), doc)
+	line(`fi`)
 	line(`if [ -n "$imported" ]; then`)
 	line(`  %s &`, openCodeExporter(times.sync, loop))
 	line(`  xpid=$!`)
@@ -554,10 +599,8 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 		// A REQUEST HERE starts no run, leaving the tail to export the session
 		// through the server that is up, and ends a call it finds in flight.
 		line(`  [ -z "$endasked" ] || break`)
-		// THE ANSWER FROM A FILE ([openCodeScript]): cut, it hid every server
-		// listed past the cut, so a declared one was waited for to the bound,
-		// and one taking the engine's tool names ([openCodeShadowCheck]) let
-		// the run start. EACH CALL BOUNDED BY WHAT IS LEFT OF THE LOOP'S WAIT,
+		// THE ANSWER FROM A FILE, as every bounded call's is
+		// ([openCodeAnswerFile]). EACH CALL BOUNDED BY WHAT IS LEFT OF THE LOOP'S WAIT,
 		// and by [openCodeCallWait], since the deadline is read only between
 		// calls.
 		line(`  mr=$(( deadline - $(%s) )); [ "$mr" -le %d ] || mr=%d; [ "$mr" -ge 1 ] || mr=1`,
@@ -628,15 +671,51 @@ func openCodeRunStart(paths Paths, times openCodeTimes, ans string) string {
 `, secs(times.sessionCall), ans, rec, next)
 }
 
-// openCodeAnswerFile is the file a run's script has OpenCode write the answers
-// it reads to, quoted: one answer at a time, removed once read
-// ([openCodeScript]); the export and the message list's pages have their own
-// ([openCodePack], [openCodeContext]). One file serves because the script
-// makes one OpenCode call at a time and nothing it starts beside itself writes
-// here. A bounded call writes here too, never into a command substitution,
-// whose subshell an end request never reaches ([openCodeBounded]).
+// openCodeAnswerFile is the file a run's script has a BOUNDED call to its
+// server ([openCodeBounded]) write its answer to, quoted, removed once read:
+// `bounded` runs the call in the background so an end request can stop it,
+// and inside a command substitution it would run in a subshell, which an end
+// request never reaches. One file serves because the script makes one
+// OpenCode call at a time and nothing it starts beside itself writes here.
+// The export and the message list's pages have their own ([openCodePack],
+// [openCodeContext]).
 func openCodeAnswerFile(paths Paths) string {
 	return shellword.Quote(paths.WorkDir() + "/opencode-answer")
+}
+
+// openCodeHomeConfig is every path under a box's home OpenCode reads as
+// configuration or instructions besides its global directory, shell-quoted:
+// the skill roots it reads from any home, Claude Code's instructions and
+// skills, and what the project walk finds in the home, the workspace's parent.
+// Measured on 2.3.2: each loaded from a box's home, and none once removed.
+// OPENCODE_DISABLE_CLAUDE_CODE is no substitute: it drops the repository's
+// CLAUDE.md and .claude/skills as well.
+func openCodeHomeConfig(paths Paths) []string {
+	rel := []string{".agents/skills", ".claude/CLAUDE.md", ".claude/skills", ".opencode", "opencode.json",
+		"opencode.jsonc", "AGENTS.md", "CLAUDE.md", "CONTEXT.md"}
+	out := make([]string, len(rel))
+	for i, r := range rel {
+		out[i] = shellword.Quote(paths.Home + "/" + r)
+	}
+	return out
+}
+
+// openCodeForgetLogins removes, through the run's server and ans, every login
+// the box's database holds: an earlier run's import, and whatever else was
+// stored since. The run imports its own after, so only the login it was handed
+// signs it in. A database still holding one ends the run before its client
+// starts. Each call is bounded by wait seconds and ended by an end request,
+// after which nothing more is asked: no run starts.
+func openCodeForgetLogins(ans string, wait int) string {
+	list := fmt.Sprintf(`bounded forget %[2]d e opencode api --server "$url" credential.list > %[1]s 2>&1 || [ -n "$endasked" ] || { echo "crewlet: OpenCode could not list the logins its database holds: $(cat %[1]s)" >&2; exit 1; }`, ans, wait)
+	return `if [ -z "$endasked" ]; then` + "\n" +
+		"  " + list + "\n" +
+		`  if [ -z "$endasked" ] && grep -q '"id":' ` + ans + `; then` + "\n" +
+		`    grep -o '"id":"[^"]*","integrationID":' ` + ans + ` | sed 's/^"id":"\([^"]*\)".*/\1/' > ` + ans + `.ids` + "\n" +
+		fmt.Sprintf(`    while IFS= read -r id; do bounded forget %d e opencode api --server "$url" credential.remove --param credentialID="$id" > /dev/null 2>&1; done < %s.ids; rm -f %s.ids`, wait, ans, ans) + "\n" +
+		"    " + list + "\n" +
+		`    if [ -z "$endasked" ] && grep -q '"id":' ` + ans + `; then echo 'crewlet: OpenCode kept a login the run could not remove, so the run does not start' >&2; exit 1; fi` + "\n" +
+		"  fi\n  rm -f " + ans + "\nfi\n"
 }
 
 // openCodeSessionGate decides, before the run's server starts (it is handed
@@ -663,7 +742,6 @@ func openCodeSessionGate(session Session, paths Paths, rewired bool) string {
 	carried := q(paths.SessionCarried())
 	digests := q(paths.SessionDigests())
 	export := q(staged + "/export.json")
-	ans := openCodeAnswerFile(paths)
 	// Every ask goes to a private server (`--standalone`): the run's has not
 	// started, and a bare command reaches the host's shared service
 	// ([OpenCode.Command]). These calls are not bounded: the job's end and the
@@ -672,7 +750,7 @@ func openCodeSessionGate(session Session, paths Paths, rewired bool) string {
 	// OpenCode's busy_timeout (5 s on every release read), read as a session
 	// not imported.
 	line(`sid=%s k=yes w= h= d= own=`, q(session.ID))
-	line(`if opencode api --standalone session.get --param sessionID="$sid" < /dev/null > %[1]s 2> /dev/null; then held=$(cat %[1]s); else held=; fi; rm -f %[1]s`, ans)
+	line(`held=$(opencode api --standalone session.get --param sessionID="$sid" < /dev/null 2> /dev/null) || held=`)
 	line(`case "$held" in *%s*) h=1;; esac`, q(`"id":"`+session.ID+`"`))
 	// THE EXPORT'S DIGEST, where one was carried in and the box can take it:
 	// the box's copy is kept unless the export is one it does not hold.
@@ -687,13 +765,16 @@ func openCodeSessionGate(session Session, paths Paths, rewired bool) string {
 	}
 	line(`if [ -z "$h" ]; then`)
 	line(`  if [ ! -s %s ]; then w='it is not in this box, and no export of it was carried here'`, carried)
+	// A BOX RELEASE THAT DOES NOT READ continues nothing carried, as the
+	// engine's check holds it ([boxNamedNoRelease]): no bare MAJOR.MINOR.PATCH
+	// in what `--version` printed, as [releaseOf] reads one.
+	line(`  elif ! { %s[ -n "$rv" ]; }; then w=%s`, bareReleaseShell("rv"), q(boxNamedNoRelease("OpenCode")))
 	line(`  elif ! command -v gzip > /dev/null 2>&1; then w='this box has no gzip to unpack its export with'`)
 	line(`  else`)
 	line(`    rm -rf %s`, q(staged))
 	line(`    if ! { mkdir -p %s && gzip -dc < %s > %s 2> /dev/null; }; then w='its export could not be unpacked'`,
 		q(staged), carried, export)
-	line(`    elif [ -n "$own" ] && ! opencode session delete --standalone "$sid" < /dev/null > %[1]s 2>&1; then out=$(cat %[1]s); w="OpenCode did not delete the box's own copy, which the export carried here replaces: $(printf '%%s' "$out" | tr '\n' ' ')"`,
-		ans)
+	line(`    elif [ -n "$own" ] && ! out=$(opencode session delete --standalone "$sid" < /dev/null 2>&1); then w="OpenCode did not delete the box's own copy, which the export carried here replaces: $(printf '%%s' "$out" | tr '\n' ' ')"`)
 	line(`    else`)
 	// IMPORTED under `$PWD`, where `opencode run` works, keeping its id and
 	// restoring its totals, the box's copy deleted (with its children) only
@@ -701,7 +782,7 @@ func openCodeSessionGate(session Session, paths Paths, rewired bool) string {
 	// on an id it holds it answers "Session already exists" with success and
 	// imports nothing, and `run --session` on an id not held makes an empty
 	// session answered as if it remembered.
-	line(`      opencode session import --standalone --directory "$PWD" %s < /dev/null > %s 2>&1; out=$(cat %s)`, export, ans, ans)
+	line(`      out=$(opencode session import --standalone --directory "$PWD" %s < /dev/null 2>&1)`, export)
 	// AN IMPORT IS CONTINUED ONLY ONCE ITS DIGEST IS RECORDED and read back
 	// ([recordDigest]): unrecorded, the copy would go on past an export the
 	// box does not know it holds, which carried in again would be imported
@@ -710,7 +791,7 @@ func openCodeSessionGate(session Session, paths Paths, rewired bool) string {
 	line(`      case "$out" in *%s*) %s || w=%s;; *) w="OpenCode did not import it: $(printf '%%s' "$out" | tr '\n' ' ')";; esac`,
 		q("Imported session: "+session.ID), recordDigest(paths, "sid"), q(restoreDigestUnrecorded))
 	line(`    fi`)
-	line(`    rm -rf %s %s`, q(staged), ans)
+	line(`    rm -rf %s`, q(staged))
 	line(`  fi`)
 	line(`fi`)
 	line(`rm -f %s`, carried)
@@ -722,6 +803,7 @@ func openCodeSessionGate(session Session, paths Paths, rewired bool) string {
 		q("crewlet: this run was asked to continue the OpenCode session "+session.ID+
 			", and starts a new session, "+session.Fresh+", instead: "),
 		q(paths.FreshBrief()), q(paths.FreshBrief()))
+	line(`%s`, openCodeStaleSteers())
 	if rewired {
 		// THE RUN IS WIRED TO THE SESSION IT STARTS
 		// ([sandbox.RunRequest.FreshWiring]): a fresh session's values
@@ -758,16 +840,16 @@ func openCodeCapture(paths Paths, times openCodeTimes) string {
 
 // openCodePack exports sid through server, the run's own (`--server "$url"`)
 // or a pack on demand's private one (`--standalone`), gzips it in staged and
-// moves the archive over dest, its digest kept: ONE PACK for [openCodeCapture]
-// and [openCodePackNow]. An export holds only settled messages, never the
-// session's note inbox; where bounded, one empty or past [heldPlainMax] is
-// refused before gzip, saying which, as the take would refuse it unread.
+// moves it over dest, its digest kept: ONE PACK for [openCodeCapture] and
+// [openCodePackNow]. An export holds settled messages, never the note inbox;
+// bounded, one empty or past [heldPlainMax] is refused before gzip.
 //
-// THE EXPORT GOES TO A FILE that gzip then reads, never a pipe: piped,
-// OpenCode 2.0.32 and 2.1.4 cut a large export at a 64 KiB multiple with
-// status 0. call prefixes the export: the run's script bounds it; a pack on
-// demand runs it bare, under [sandbox.SessionPackWait], since OpenCode's WAL
-// database lets it complete beside a live, stopped, killed or writing server.
+// THE EXPORT GOES TO A FILE that gzip then reads: a pack on demand measures
+// it there, and the run's script calls through `bounded`, which a pipeline's
+// subshell would keep from an end request ([openCodeAnswerFile]). call
+// prefixes the export: bounded in the run's script, bare in a pack on demand,
+// under [sandbox.SessionPackWait], since OpenCode's WAL database lets it
+// complete beside a live, stopped, killed or writing server.
 func openCodePack(paths Paths, staged, dest, server, call string, bounded bool) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
@@ -937,25 +1019,47 @@ func openCodeExporter(sync time.Duration, file string) string {
 		strconv.FormatFloat(sync.Seconds(), 'f', -1, 64), file)
 }
 
+// openCodeSteerIDs reads, from a `session.inbox.list` answer on stdin, the
+// ids of the steers the notes plugin admitted ([OpenCode.inboxID]), one a
+// line, as text, a group so a redirect feeds its grep (a note's quotes are escaped there): the listing is
+// `{"data":[{"id":"msg_…",…}]}` (measured on 2.3.2,
+// testdata/opencode/2.3.2/inbox-list.json), and an id OpenCode minted is
+// never of the plugin's shape.
+const openCodeSteerIDs = `{ grep -o '"id":"msg_[0-9a-f]\{32\}"' | sed 's/^"id":"//; s/"$//' | sort -u; }`
+
 // openCodeLeftoverSteers is the script's line that cancels every steer the
 // run's notes plugin admitted to the session (sid) and OpenCode never
 // delivered, once `opencode run` has exited and before the server stops. Such
 // a note already waits on the run's record for the review or the next brief,
-// but the session's inbox is durable: left pending, OpenCode put it before a
-// continued run's next prompt too, and the model read it twice (2.1.4). Only
-// the plugin's own ids ([OpenCode.inboxID]) are read out of the listing, as
-// text (a note's quotes are escaped there), from the answer file, never a pipe
-// ([openCodeScript]). Each call is bounded ([openCodeCallWait]) and the
+// but the session's inbox is durable: left pending, OpenCode puts it before a
+// continued run's next prompt too, and the model reads it twice (measured on
+// 2.3.2, across a server's restart). The listing goes to the answer file, as
+// every bounded call's does ([openCodeAnswerFile]), its ids read by
+// [openCodeSteerIDs]. Each call is bounded ([openCodeCallWait]) and the
 // cancels share one bound more, so the tail spends two bounds at most
 // ([openCodeEndPath]). A failed listing or cancel costs only the duplicate.
 func openCodeLeftoverSteers(ans string, times openCodeTimes) string {
 	return fmt.Sprintf(`if bounded inbox %[2]d - opencode api --server "$url" session.inbox.list --param sessionID="$sid" > %[1]s 2> /dev/null; then `+
 		`kd=$(( $(%[3]s) + %[2]d )); `+
-		`for id in $(grep -o '"id":"msg_[0-9a-f]\{32\}"' %[1]s | sed 's/^"id":"//; s/"$//' | sort -u); do `+
+		`for id in $(%[4]s < %[1]s); do `+
 		`kr=$(( kd - $(%[3]s) )); [ "$kr" -ge 1 ] || break; `+
 		`bounded cancel "$kr" - opencode api --server "$url" session.inbox.cancel --param sessionID="$sid"`+
 		` --param inboxID="$id" > /dev/null 2>&1; done; fi; rm -f %[1]s`,
-		ans, secs(times.call), times.clock)
+		ans, secs(times.call), times.clock, openCodeSteerIDs)
+}
+
+// openCodeStaleSteers is the session gate's line that cancels, in a session
+// the run continues in its box's own copy, every steer an earlier run's
+// notes plugin admitted and OpenCode never delivered: a run killed mid-way
+// never reached its own cancels ([openCodeLeftoverSteers]), and its pending
+// steers survive in the box's copy (measured on 2.3.2), which OpenCode would
+// hand this run ahead of its brief while the brief retells them. Through
+// private servers and unbounded, as every call of the gate is
+// ([openCodeSessionGate]); this run's own plugin has admitted nothing yet.
+func openCodeStaleSteers() string {
+	return `if [ "$k" = yes ] && inbox=$(opencode api --standalone session.inbox.list --param sessionID="$sid" < /dev/null 2> /dev/null); then ` +
+		`for id in $(printf '%s\n' "$inbox" | ` + openCodeSteerIDs + `); do ` +
+		`opencode api --standalone session.inbox.cancel --param sessionID="$sid" --param inboxID="$id" < /dev/null > /dev/null 2>&1; done; fi`
 }
 
 // openCodeReadiness is the script's test of one `mcp.list` answer, `$s`,
@@ -983,8 +1087,8 @@ func openCodeReadiness(servers map[string]sandbox.MCPServer) string {
 // ($s) lists a server whose tools OpenCode would name like those of a server
 // the run offers directly ([sandbox.MCPServer.AlwaysLoaded]): the engine's
 // own. OpenCode names a tool `<server>_<tool>`, writing every character
-// outside `A-Za-z0-9_-` as `_`, a later registration replacing the earlier
-// (2.0.32 to 2.2.7), so a server `crewlet_x` or `crewlet.x` would answer or
+// outside `A-Za-z0-9_-` as `_`, a later registration replacing the earlier,
+// so a server `crewlet_x` or `crewlet.x` would answer or
 // lose the engine's `x_y`. A seat's server cannot be named so, but the image's
 // or repository's configuration can declare one ([OpenCode.WriteConfig]). The
 // character after the name is listed rather than ranged, so no locale changes
@@ -1011,7 +1115,7 @@ func openCodeShadowCheck(servers map[string]sandbox.MCPServer) string {
 
 // jsonStringify spells s as JavaScript's JSON.stringify does, as OpenCode
 // prints a server's name, not as encoding/json does: Go escapes `&`, `<`, `>`,
-// U+2028 and U+2029, which JSON.stringify leaves literal (2.0.32), so such a
+// U+2028 and U+2029, which JSON.stringify leaves literal, so such a
 // name never matched and the run waited out [openCodeMCPWait]. JSON.stringify
 // escapes exactly `"`, `\` and the control characters below U+0020, five in
 // short form, the rest as `\u` and four lowercase hex digits. A byte that is
@@ -1108,6 +1212,12 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 		// agent, and an image whose own config named another default would
 		// run the brief on an agent the cap never reached.
 		"default_agent": openCodeAgent,
+		// NO BACKGROUND SUMMARY. Within half the room left of its point (at
+		// most 60,000 tokens), 2.3.2 sends a second model request beside the
+		// step's, a compaction summary it keeps for later and writes nowhere
+		// the export holds, so its tokens are spent and never counted. Off,
+		// none goes out (measured); a compaction runs as it always does.
+		"compaction": map[string]any{"background": false},
 	}
 	agent := map[string]any{}
 	// THE RUN'S TURN CAP, as the agent's `steps` (Claude Code's --max-turns,
@@ -1558,6 +1668,8 @@ type openCodeEvents struct {
 	overflowed bool
 	sawEvent   bool
 	sawLine    bool
+	// ended is whether the newest step ended the run ([openCodeEvents.Ended]).
+	ended bool
 
 	// usage is the session's usage report, when the script printed one, and
 	// usageBefore the one a continued run's script printed before the run
@@ -1627,6 +1739,10 @@ func (d *openCodeEvents) Line(line []byte) {
 		d.named[id] = true
 	}
 	switch ev.Type {
+	case "step_start":
+		d.ended = false
+	case "step_finish":
+		d.ended = ev.Part.Reason != openCodeStepCalls
 	case "text":
 		if chunk := strings.TrimSpace(ev.Part.Text); chunk != "" {
 			if !d.following {
@@ -1640,6 +1756,7 @@ func (d *openCodeEvents) Line(line []byte) {
 			d.transcript.add(l)
 		}
 	case "error":
+		d.ended = true
 		d.errText = errorText(ev.Error)
 		d.overflowed = openCodeContextOverflow(ev.Error)
 		d.transcript.add(activityline.Words(activityline.TagError, d.errText))
@@ -1840,6 +1957,17 @@ func (d *openCodeEvents) Skipped(n int64, bound int) {
 	d.transcript.skip(n, bound)
 }
 
+// openCodeStepCalls is the reason a step ends on that another follows: the
+// model called tools, whose results the next step answers.
+const openCodeStepCalls = "tool-calls"
+
+// Ended implements [Decoder]: a step that ended for any reason but tool calls,
+// with no step begun after it, or an `error` event, which `opencode run`
+// prints as it gives up. Measured on 2.3.2: a finished run ends on a `stop`
+// step, a refused request and an interrupted session on an `error`, and a
+// client killed mid-turn on a `tool-calls` step or on nothing.
+func (d *openCodeEvents) Ended() bool { return d.ended }
+
 func (d *openCodeEvents) Result() sandbox.Result {
 	if !d.sawLine {
 		return sandbox.Result{Error: "the harness produced no output"}
@@ -1902,8 +2030,8 @@ func (d *openCodeEvents) Result() sandbox.Result {
 		}
 	}
 	// NO TURN COUNT ([sandbox.Result.Turns]): the session report carries none,
-	// and 2.0.32 prints `step_start` for the first step and rarely for the
-	// later ones, so a count off them would be right only by luck. None
+	// and OpenCode 2 has printed `step_start` for the first step and rarely
+	// for the later ones, so a count off them would be right only by luck. None
 	// reported counts as the one call the engine asked for.
 	if !success {
 		res.Error = d.errText
@@ -2037,9 +2165,12 @@ func (OpenCode) notesOffWhy() string {
 		"failed to load, which its own log names"
 }
 
-// artifacts is what an OpenCode run leaves in its box of its own.
-func (OpenCode) artifacts(p Paths) (files, dirs []string) {
-	return []string{p.OpenCodeConfig()},
-		[]string{p.OpenCodeValues(), p.OpenCodeValuesFresh(), p.OpenCodeSteerPlugin(), p.OpenCodeSkills(),
-			p.OpenCodeSkillsPlugin(), p.OpenCodeToolEnvPlugin()}
+// artifactFiles is the files an OpenCode run leaves in its box of its own.
+func (OpenCode) artifactFiles(p Paths) []string { return []string{p.OpenCodeConfig()} }
+
+// artifactDirs is the directories an OpenCode run leaves in its box of its
+// own.
+func (OpenCode) artifactDirs(p Paths) []string {
+	return []string{p.OpenCodeValues(), p.OpenCodeValuesFresh(), p.OpenCodeSteerPlugin(), p.OpenCodeSkills(),
+		p.OpenCodeSkillsPlugin(), p.OpenCodeToolEnvPlugin(), p.OpenCodeConfigDir()}
 }

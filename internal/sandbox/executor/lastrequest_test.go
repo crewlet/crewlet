@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -216,14 +215,6 @@ func openCodeAbortedWith(id string, n int) string {
 		`"tokens":{"input":5000,"output":30,"reasoning":0,"cache":{"read":200,"write":0}}}`, id, strings.Repeat("a", n))
 }
 
-// openCodeSettledWith is [openCodeSettled] with 1015 uncached and 200 cache-read
-// input tokens, its content a text of n bytes: a page of about that size.
-func openCodeSettledWith(id string, n int) string {
-	return fmt.Sprintf(`{"id":%q,"time":{"created":1794632160771,"completed":1794632160784},"type":"assistant",`+
-		`"agent":"build","content":[{"type":"text","text":%q}],"finish":"stop","cost":0,`+
-		`"tokens":{"input":1015,"output":30,"reasoning":0,"cache":{"read":200,"write":0}}}`, id, strings.Repeat("a", n))
-}
-
 // openCodePage is one page of the session's message list, as the run's server
 // answers one: its messages, and the cursor to the pages either side of it.
 func openCodePage(messages ...string) string {
@@ -290,7 +281,7 @@ func TestOpenCodesFigureIsItsNewestSettledMeasuredMessage(t *testing.T) {
 // read off the export a take streams out of its box (the capture's) and the
 // message list as the job ends (the job's record's), both by one rule. So each
 // release's real export gives one figure either way: its steps handed to the
-// list's reading one a page, newest first, give the export's own 1215, the step
+// list's reading one a page, newest first, give the export's own 1217, the step
 // that answered "Carry on.", behind two interrupted and one its provider refused.
 //
 // Mutation: drop the error check from the rule, and an interrupted step's
@@ -324,8 +315,8 @@ func TestTheRulesForAnExportAndForTheAPIAreOne(t *testing.T) {
 				t.Fatal(err)
 			}
 			exported := openCodeTaken(t, string(all))
-			if listed.Tokens != 1215 || exported != 1215 {
-				t.Errorf("the list's reading gives %d (%s) and the export's %d, want both the export's 1215",
+			if listed.Tokens != 1217 || exported != 1217 {
+				t.Errorf("the list's reading gives %d (%s) and the export's %d, want both the export's 1217",
 					listed.Tokens, why, exported)
 			}
 		})
@@ -531,7 +522,7 @@ func openCodeContextFixture(t *testing.T, version, name string) string {
 }
 
 // openCodeContextVersions are the releases a real run's message list is kept of.
-var openCodeContextVersions = []string{"2.0.32", "2.2.7"}
+var openCodeContextVersions = []string{"2.3.2"}
 
 // linesOf is a run's stream, its lines.
 func linesOf(stream string) []string {
@@ -717,33 +708,6 @@ func TestAPagePastTheBudgetIsSaidAndEndsTheReading(t *testing.T) {
 		got, why, _ := executor.StreamRequest(executor.OpenCode{}, linesOf(run.stdout)...)
 		if got != (sandbox.RequestMeasure{}) || !strings.Contains(why, "past the") {
 			t.Errorf("the run's stream reads %+v (%s), want no figure, the page said past the budget", got, why)
-		}
-	})
-}
-
-// A PAGE PAST WHAT A PIPE HOLDS IS READ WHOLE. Into a pipe, OpenCode 2.0.32 and
-// 2.1.4 stop writing an answer after a 64 KiB multiple and exit 0, so the
-// script has OpenCode write each page to a file and prints it from there, as
-// with its other answers: a settled step's page three times what a pipe holds,
-// from an OpenCode that cuts what it pipes, is printed whole and gives its figure.
-//
-// Mutation: pipe the page into its file, and the page is cut at 64 KiB, which
-// reads as no figure.
-func TestAPagePastWhatAPipeHoldsIsReadWhole(t *testing.T) {
-	t.Parallel()
-	page := openCodePage(openCodeSettledWith("msg_1", 3*pipeCut))
-	forEachShell(t, func(t *testing.T, sh boxShell) {
-		run := runScript(t, scriptOpts{shell: sh, pages: map[string]string{"first": page},
-			env: []string{"FAKE_RUN_MESSAGE=msg_1", "FAKE_PIPE_CUT=" + strconv.Itoa(pipeCut)}})
-		if run.code != 0 {
-			t.Fatalf("exit %d:\n%s", run.code, run.stderr)
-		}
-		if !slices.Contains(linesOf(run.stdout), openCodeContextLine(page)) {
-			t.Errorf("the stream does not hold the %d-byte page whole", len(page))
-		}
-		got, why, _ := executor.StreamRequest(executor.OpenCode{}, linesOf(run.stdout)...)
-		if want := (sandbox.RequestMeasure{Tokens: 1015 + 200, Own: true}); got != want {
-			t.Errorf("the run's stream reads %+v (%s), want %+v, the page's own step", got, why, want)
 		}
 	})
 }

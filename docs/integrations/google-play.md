@@ -26,9 +26,21 @@ The permissions Play Console gives, each on chosen apps or on all of them: **Adm
 
 1. Connect [Google Cloud](google-cloud.md) first; no project needs preparing. Turn Google Play on, then run the Google Cloud connection's Cloud Shell block again: it turns on the Google Play Android Developer and Developer Reporting APIs in the identity project and makes the company reader ([Google's growth products sign in through this identity](google-cloud.md#googles-growth-products-sign-in-through-this-identity)).
 2. Invite the company reader's email, shown on the form, in Play Console, Users and permissions, with **View app information** for all apps (and View financial data for the financial reports). Name each developer account's monthly reports bucket: Download reports, Copy Cloud Storage URI, without `gs://`. Crewlet reads the company's figures and the monthly reports as this identity.
-3. Turn agents on from the Agents tab, each with its apps. Invite each agent's email, shown on its row, with the permissions its level needs on those apps.
+3. Turn agents on from the Agents tab, each with its apps, and give each its identity ([below](#give-an-agent-its-own-identity)).
 
 Building and uploading releases stays with [Expo](expo.md) or your pipeline: Crewlet promotes, rolls out and halts the version codes they upload. It can upload a store image, an APK, a bundle or a mapping file itself, from an artifact, as an approved act.
+
+## Give an agent its own identity
+
+An agent's identity at Google Play is its own Google growth identity, which Crewlet made; what is left is adding it in Play Console. Its row on the Agents tab reads **Needs you** until the identity reaches each of its apps, and **Set up identity** in its box shows the steps, with the email ready to copy:
+
+1. In Play Console, open **Users and permissions** and press **Invite new users**.
+2. Paste the agent's email.
+3. Under **App permissions**, add the agent's apps and tick what its level needs: at `read`, **View app information (read-only)**; at `operate`, also **Reply to reviews**, **Manage store presence**, **Release to testing tracks**, **Manage testing tracks and edit tester lists** and **Release to production**; at `administer`, also **Manage orders and subscriptions**. Leave Account permissions empty and press **Invite user**.
+
+**Add it for me.** With the company's own OAuth client (`oauth`, which Google Analytics may share) and a Play Console admin's sign-in on the Settings tab, **Add it for me** takes those steps through Play's users and grants API, in the developer account `developer_accounts` names that holds each app, with exactly the level's permissions and keeping any the identity holds already. Turning the agent off takes the identity out of those accounts. The sign-in only adds, reads and removes agents' identities; no agent's call is made with it.
+
+**The check, on every pass:** Crewlet signs in as the identity and reads one review of each app; an app Play refuses is not added yet. With the admin sign-in it also reads the identity's permissions on each app: fewer than the level needs is the wrong role, naming what is missing, and Admin below `administer` is a warning. Play can take up to two days to apply new permissions; while the admin sign-in shows the identity added and Play does not let it in yet, the box says so. The agent is ready once every app passes, and reads Needs you again if somebody removes it there; calls Google refuses meanwhile name what is missing.
 
 ## The agents' tools
 
@@ -71,6 +83,9 @@ integrations:
     apps: ["com.example.app"]                    # optional: the apps agents may be given; absent is every one an identity sees
     developer_accounts: ["1234567890123456789"]   # optional: accounts whose users and permissions may be asked about
     reports_buckets: ["pubsite_prod_rev_0123456789"]  # optional: each account's monthly reports bucket
+    oauth:                                       # optional: the client a Play Console admin signs in as, for Add it for me
+      client_id: "123456789012-abc.apps.googleusercontent.com"
+      client_secret: ${GOOGLE_OAUTH_CLIENT_SECRET}
     approvers: [founder]                         # optional: who a held act is routed to first; only an administrator answers
 roles:
   - handle: mobile-lead
@@ -78,7 +93,7 @@ roles:
       google_play: {enabled: true, level: read, apps: ["com.example.app"]}
 ```
 
-The block needs `integrations.google_cloud` on with its provisioning block. It holds no secret.
+The block needs `integrations.google_cloud` on with its provisioning block. Its one secret is the optional OAuth client's.
 
 ## Every method, and its class
 

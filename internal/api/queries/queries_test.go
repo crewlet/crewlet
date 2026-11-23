@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
 func answersWith(v any) queries.Answer {
@@ -610,17 +611,50 @@ func TestBothTransportsReadTheSameParameters(t *testing.T) {
 	fromREST := queries.FromQuery(url.Values{
 		"role": {"Lead"}, "limit": {"25"}, "failed": {"true"},
 	})
+	// A TOOL CALL'S ARGUMENTS, as the Advisor's deep run asks a read: they
+	// decode through json.Number, and read as absent they refused `days=7`.
+	args, err := toolargs.Decode([]byte(`{"role":"Lead","limit":25,"failed":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromTool := queries.FromMap(args)
 
-	for name, p := range map[string]queries.Params{"socket": fromSocket, "rest": fromREST} {
+	for name, p := range map[string]queries.Params{"socket": fromSocket, "rest": fromREST, "tool": fromTool} {
 		if got := p.String("role"); got != "Lead" {
 			t.Errorf("%s: role = %q", name, got)
 		}
 		if got := p.Int("limit", 0); got != 25 {
 			t.Errorf("%s: limit = %d", name, got)
 		}
+		if got, whole := p.WholeInt("limit"); !whole || got != 25 {
+			t.Errorf("%s: whole limit = %d (%v)", name, got, whole)
+		}
 		if got := p.Bool("failed", false); !got {
 			t.Errorf("%s: failed = %v", name, got)
 		}
+	}
+}
+
+// A TOOL CALL'S LARGE ID KEEPS EVERY DIGIT, which is why it decodes through
+// json.Number: a float64 would round it to another id.
+func TestAToolCallsLargeNumberReadsExactly(t *testing.T) {
+	t.Parallel()
+	args, err := toolargs.Decode([]byte(`{"id":9007199254740993,"offset":12.5}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := queries.FromMap(args)
+	if got := p.String("id"); got != "9007199254740993" {
+		t.Errorf("id = %q, want every digit", got)
+	}
+	if got, whole := p.WholeInt("id"); !whole || got != 9007199254740993 {
+		t.Errorf("whole id = %d (%v)", got, whole)
+	}
+	if _, whole := p.WholeInt("offset"); whole {
+		t.Error("12.5 read as a whole number")
+	}
+	if got := p.Int("offset", 0); got != 12 {
+		t.Errorf("offset = %d, want 12 as a socket frame's 12.5 reads", got)
 	}
 }
 

@@ -1,7 +1,6 @@
 package harnessprofile
 
 import (
-	"encoding/json"
 	"fmt"
 	"maps"
 	"path/filepath"
@@ -133,9 +132,11 @@ func (u UsagePaths) PromptTokens(input, cacheRead, cacheWrite int) int {
 // OpenCode 2.0 keeps logins in the same SQLite file as every session, so
 // copying it would carry one seat's conversations to every other seat and
 // pruning it would delete the login. The document is the login of record
-// ([CredentialStoreDocument]); each generation imports it into an empty
-// database and exports at its end, carried back only as a compare-and-swap
-// against the seed under hostbox.LockCredentials (Workspace.syncCredentialsOut).
+// ([CredentialStoreDocument]): a JSON array of credentials, each an object
+// with a string id. Each generation imports it into an empty database and
+// exports at its end, carried back only as a compare-and-swap against the seed
+// under hostbox.LockCredentials (Workspace.syncCredentialsOut), holding the
+// handed logins alone ([KeepHandedCredentials]).
 type CredentialStore struct {
 	// ExportArgs print every login the harness holds as one document on stdout.
 	ExportArgs []string `yaml:"export_args,omitempty"`
@@ -301,7 +302,7 @@ const (
 	// compares each sentinel by EQUALITY with the string at
 	// [Profile.MarkerPath]. A substring search is wrong: tool-call arguments
 	// print as raw JSON, so injected text could bench the credential on a clean
-	// exit 0. Stderr is not searched (empty, measured on 2.0.32).
+	// exit 0. Stderr is not searched (empty, measured on OpenCode 2).
 	// [Profile.Validate] requires jsonl, the discriminator, events and path.
 	MarkerScopeEvents MarkerScope = "events"
 )
@@ -443,6 +444,12 @@ type WebDenial struct {
 	SeedFiles []SeedFile `yaml:"seed_files,omitempty"`
 	// MCP replaces the mcp block's own argv and seeds when web is denied.
 	MCP *WebDenialMCP `yaml:"mcp,omitempty"`
+	// SystemPrompt and AppendSystemPrompt replace the channels of the same
+	// name when web is denied: a harness whose tool allowlist rides the system
+	// prompt's file (kimi-code's agent file) turns its web tools off there.
+	// The channel carries a run with tools too, so no mcp field needs it.
+	SystemPrompt       *Channel `yaml:"system_prompt,omitempty"`
+	AppendSystemPrompt *Channel `yaml:"append_system_prompt,omitempty"`
 }
 
 // WebDenialMCP is what a run with tools uses instead when web is denied: each
@@ -457,6 +464,7 @@ type WebDenialMCP struct {
 // changes reports whether the denial replaces anything at all.
 func (d *WebDenial) changes() bool {
 	return d != nil && (d.CompleteArgs != nil || d.SeedFiles != nil ||
+		d.SystemPrompt != nil || d.AppendSystemPrompt != nil ||
 		(d.MCP != nil && (d.MCP.CompleteArgs != nil || d.MCP.Seed != nil)))
 }
 
@@ -523,7 +531,8 @@ type HomeDaemon struct {
 	// its daemon runs and removes when it stops.
 	PIDFile string `yaml:"pid_file,omitempty"`
 	// StopArgs is the harness's own command that stops the daemon of the home
-	// it runs in, and exits 0 when there is none.
+	// it runs in, a turn the daemon still runs included, and exits 0 when
+	// there is none.
 	StopArgs []string `yaml:"stop_args,omitempty"`
 }
 
@@ -588,6 +597,15 @@ func (c Channel) clone() Channel {
 		out.File = &spec
 	}
 	return out
+}
+
+// clonePtr is a copy of the channel c points at, nil for nil.
+func (c *Channel) clonePtr() *Channel {
+	if c == nil {
+		return nil
+	}
+	out := c.clone()
+	return &out
 }
 
 // Route is where one call's system prompt travels ([Profile.RouteFor]).
@@ -809,7 +827,7 @@ type Profile struct {
 	// respectively: the flag choosing the sign-in, for a harness that picks
 	// one on argv and runs another without it. Qwen Code's `--auth-type
 	// openai` and `--auth-type qwen-subscription`: its OpenAI sign-in otherwise
-	// needs OPENAI_MODEL set beside the key (0.28.3). Lists replace wholesale
+	// needs OPENAI_MODEL set beside the key (0.28.4). Lists replace wholesale
 	// on override, as CompleteArgs does.
 	KeyArgs          []string `yaml:"key_args,omitempty"`
 	SubscriptionArgs []string `yaml:"subscription_args,omitempty"`
@@ -908,8 +926,8 @@ type Profile struct {
 	// UsageArgs is a command run AFTER the call, in the same home, directory and
 	// environment, printing the token counts as one JSON document that
 	// [Profile.Usage] reads; `{session}` is the id [Profile.SessionArgs] gave.
-	// OpenCode 2.0's `run --format json` drops the FINAL `step_finish` (2.0.32),
-	// so stdout would undercharge.
+	// A release whose `run --format json` dropped the FINAL `step_finish`
+	// would leave stdout alone undercharging (2.3.2 dropped none, measured).
 	//
 	// A failed or unreadable report is not a failed call: counts fall back to
 	// stdout (the estimate, where none) with a warning:
@@ -928,7 +946,7 @@ type Profile struct {
 	// which concurrent calls share while each system prompt is its own.
 	// OpenCode 2 reads `opencode.json`, agents and plugins from the working
 	// directory and EVERY ANCESTOR, where a project's permissions beat the
-	// seat's (2.0.32); with that walk off ([Profile.IsolationEnv]) it reads only
+	// seat's; with that walk off ([Profile.IsolationEnv]) it reads only
 	// OPENCODE_CONFIG_DIR, inside the call directory, where the `in: work` seed
 	// and agent file go. A machine-wide MANAGED configuration (`/etc/opencode`)
 	// cannot be switched off. Set only for a command run AS A CALL (login,
@@ -941,7 +959,7 @@ type Profile struct {
 	// [Profile.Env] because env, passthrough_env and an entry's env are layered
 	// OVER the isolation and refused naming [Profile.IsolationVariables]: an
 	// entry's `OPENCODE_CONFIG_PROJECT_DISABLE: "0"` (or empty) silently
-	// restored every ancestor's configuration (2.0.32). The NAME the vendor
+	// restored every ancestor's configuration. The NAME the vendor
 	// reads FIRST, never a fallback (OpenCode 2 reads
 	// `OPENCODE_CONFIG_PROJECT_DISABLE ?? OPENCODE_DISABLE_PROJECT_CONFIG`).
 	// Never a credential, a variable the engine sets ([HomeIsolation]) or empty.
@@ -1013,22 +1031,39 @@ type Profile struct {
 	// in the home is conversation state.
 	CredentialPaths []string `yaml:"credential_paths,omitempty"`
 
-	// LoginKeys names, by a credential file's NAME, the top-level keys that file
-	// holds a login under, for a file that also keeps state: Copilot CLI writes
-	// `firstLaunchAt` into config.json and Cursor Agent settings into
-	// cli-config.json signed in or not, which made the doctor report a sign-in
-	// nobody made. Holding none of its keys such a file is not a login
-	// ([Profile.HoldsLogin]); a credential file not named here is one whenever
-	// it exists. Every key the harness signs in from: one it reads that is not
-	// named leaves a login the engine takes for none.
+	// LoginKeys names, by a credential file's NAME, the key paths (dotted, into
+	// a JSON object or a `.toml` file's tables) that are its login, for a MIXED
+	// file the harness also reads its own settings from: Copilot CLI's
+	// config.json, Cursor Agent's cli-config.json, Kimi Code's config.toml. A
+	// home is seeded with only these fields, and a refresh carries back only
+	// these ([FileRule]); holding none of them the file is not a login
+	// ([Profile.HoldsLogin]). Every field the harness signs in from: one not
+	// named is never seeded. A file not named here is a login file, whole.
 	LoginKeys map[string][]string `yaml:"login_keys,omitempty"`
 
-	// RunKeys names, by a credential file's NAME, the keys (dotted, into a
-	// JSON object) the harness writes into that file during a run, which are
-	// not the login its sign-in made: Muse Code mints an API key as each run
-	// starts and writes it there. A run's login carried out keeps the shared
-	// login's value of each ([KeepLoginKeys]); a login command's takes all.
-	RunKeys map[string][]string `yaml:"run_keys,omitempty"`
+	// CommentLines names the JSON credential files the harness writes lines
+	// opening with `//` into, which are read with those lines set aside:
+	// Copilot CLI's config.json opens with two. Any other JSON file holding one
+	// does not read, so nothing is carried from it ([FileRule.Carry]).
+	CommentLines []string `yaml:"comment_lines,omitempty"`
+
+	// RefreshKeys names, by a credential file's NAME, the key paths (`*` for
+	// every key of an object or index of an array there) a refresh carries back
+	// from a seat's or a local box's copy: its tokens and their expiry. Every
+	// other byte, an endpoint, a provider choice, a key a run minted, stays as
+	// the shared login holds it ([FileRule.Carry]); a file not named here
+	// carries nothing back. A login command takes the whole file.
+	RefreshKeys map[string][]string `yaml:"refresh_keys,omitempty"`
+
+	// IdentityKeys names, by a credential file's NAME, the key paths (`*` for
+	// every key of the object there; a last `@subject` for a JWT's subject
+	// claims) whose values say which login it is: whose account, at which
+	// provider. Codex's auth.json names its ChatGPT account at tokens.account_id
+	// and in its id_token. A refresh a seat's call or a local box's run carries
+	// back is written only where each holds what the shared login's does
+	// ([FileRule.SameAccount]): a refresh keeps its account. A file naming no
+	// account (a token and its expiry alone) has none, and its profile says so.
+	IdentityKeys map[string][]string `yaml:"identity_keys,omitempty"`
 
 	// VolatilePaths are sessions, transcripts, history and todo state,
 	// relative to the seat home, deleted before and after every call: a hidden
@@ -1354,6 +1389,12 @@ func (p Profile) withWebDenied() Profile {
 		}
 		if d.SeedFiles != nil {
 			out.SeedFiles = append([]SeedFile(nil), d.SeedFiles...)
+		}
+		if d.SystemPrompt != nil {
+			out.SystemPrompt = d.SystemPrompt.clone()
+		}
+		if d.AppendSystemPrompt != nil {
+			out.AppendSystemPrompt = d.AppendSystemPrompt.clone()
 		}
 		if dm := d.MCP; dm != nil && out.MCP != nil {
 			if dm.CompleteArgs != nil {
@@ -1918,8 +1959,9 @@ func (p *Profile) validateWebStance(add func(string, ...any)) {
 			"no measured search-only run")
 	}
 	if p.WebDenial != nil && !p.WebDenial.changes() {
-		add("web_denial sets neither complete_args nor seed_files, so it turns " +
-			"nothing off; say what the harness runs with instead, or remove it")
+		add("web_denial sets none of complete_args, seed_files, system_prompt and " +
+			"append_system_prompt, so it turns nothing off; say what the harness runs with " +
+			"instead, or remove it")
 		return
 	}
 	if p.WebDenial != nil && p.WebDenial.MCP != nil && p.MCP == nil {
@@ -2222,22 +2264,51 @@ func (p *Profile) validateHomePaths(add func(string, ...any)) {
 			add("login_keys names %q, which is the file name of no credential_paths entry — "+
 				"a login key says which of the credential files holds a login only once it "+
 				"carries that key", name)
-		case len(p.LoginKeys[name]) == 0 || slices.ContainsFunc(p.LoginKeys[name], func(k string) bool {
-			return strings.TrimSpace(k) == ""
-		}):
-			add("login_keys.%s is empty or names an empty key — name the top-level keys the "+
-				"file holds a login under", name)
+		case len(p.LoginKeys[name]) == 0:
+			add("login_keys.%s is empty — name the key paths the file holds its login under", name)
+		}
+		for i, key := range p.LoginKeys[name] {
+			if slices.Contains(strings.Split(key, "."), "") {
+				add("login_keys.%s[%d] %q is no key path — name the key, its parents' keys "+
+					"before it, each joined by a dot", name, i, key)
+			}
 		}
 	}
-	for _, name := range slices.Sorted(maps.Keys(p.RunKeys)) {
+	for i, name := range p.CommentLines {
 		if byName[name] == "" {
-			add("run_keys names %q, which is the file name of no credential_paths entry — "+
-				"run keys say which keys of a credential file its harness writes during a run", name)
+			add("comment_lines[%d] %q is the file name of no credential_paths entry — comment "+
+				"lines say which credential files the harness writes `//` lines into", i, name)
 		}
-		for i, key := range p.RunKeys[name] {
-			if slices.Contains(strings.Split(key, "."), "") {
-				add("run_keys.%s[%d] %q is no key path — name the key, its parents' keys before "+
-					"it, each joined by a dot", name, i, key)
+	}
+	for _, name := range slices.Sorted(maps.Keys(p.RefreshKeys)) {
+		if byName[name] == "" {
+			add("refresh_keys names %q, which is the file name of no credential_paths entry — "+
+				"refresh keys say which fields of a credential file a refresh carries back", name)
+		}
+		if len(p.RefreshKeys[name]) == 0 {
+			add("refresh_keys.%s is empty — name the token fields a refresh carries back", name)
+		}
+		for i, key := range p.RefreshKeys[name] {
+			if parts := strings.Split(key, "."); slices.Contains(parts, "") || slices.Contains(parts, subjectPart) ||
+				parts[len(parts)-1] == "*" {
+				add("refresh_keys.%s[%d] %q is no key path to a token — name the key, its parents' keys "+
+					"before it, each joined by a dot, and a field last, never *", name, i, key)
+			}
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(p.IdentityKeys)) {
+		if byName[name] == "" {
+			add("identity_keys names %q, which is the file name of no credential_paths entry — "+
+				"identity keys say which keys of a credential file name its login's account", name)
+		}
+		if len(p.IdentityKeys[name]) == 0 {
+			add("identity_keys.%s is empty — name the keys that name the login's account", name)
+		}
+		for i, key := range p.IdentityKeys[name] {
+			if parts := strings.Split(key, "."); slices.Contains(parts, "") ||
+				slices.Index(parts, subjectPart) >= 0 && slices.Index(parts, subjectPart) != len(parts)-1 {
+				add("identity_keys.%s[%d] %q is no key path — name the key, its parents' keys "+
+					"before it, each joined by a dot, and %s only last", name, i, key, subjectPart)
 			}
 		}
 	}
@@ -2783,58 +2854,6 @@ func (p *Profile) ValidateCredentials(name string) error {
 		return nil
 	}
 	return fmt.Errorf("harness profile %q: %s", name, strings.Join(bad, "; "))
-}
-
-// HoldsLogin reports whether the credential file named name, holding content,
-// is a login: one [Profile.LoginKeys] does not name, or one any of whose
-// top-level keys it names is set to something other than null or an empty
-// string, object or array.
-//
-// Read as JSON with every `//` line set aside, since Copilot CLI's plaintext
-// login file opens with two. A file that does not read that way IS taken for a
-// login: guessing harder means parsing a vendor's format, and the opposite
-// wrong guess is a login the engine would not carry, export or keep.
-func (p *Profile) HoldsLogin(name string, content []byte) bool {
-	keys, named := p.LoginKeys[name]
-	if !named {
-		return true
-	}
-	var lines []string
-	for line := range strings.Lines(string(content)) {
-		if !strings.HasPrefix(strings.TrimSpace(line), "//") {
-			lines = append(lines, line)
-		}
-	}
-	var doc map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(strings.Join(lines, "")), &doc); err != nil {
-		return true
-	}
-	for _, key := range keys {
-		if heldValue(doc[key]) {
-			return true
-		}
-	}
-	return false
-}
-
-// heldValue reports whether raw, one top-level value of a login file, holds
-// something: not absent, null, or an empty string, object or array.
-func heldValue(raw json.RawMessage) bool {
-	var value any
-	if err := json.Unmarshal(raw, &value); err != nil {
-		return false
-	}
-	switch v := value.(type) {
-	case nil:
-		return false
-	case string:
-		return v != ""
-	case []any:
-		return len(v) > 0
-	case map[string]any:
-		return len(v) > 0
-	}
-	return true
 }
 
 // EffectivePromptMode is the prompt mode with its default applied.

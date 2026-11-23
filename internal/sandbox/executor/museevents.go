@@ -316,6 +316,10 @@ func (d *museEvents) runSpend() (runSpend, bool) {
 // its failed terminal, only where Muse's own failure names one.
 func (d *museEvents) limitReport() string { return d.limit }
 
+// Ended implements [Decoder]: a terminal line, `run.terminal.completed` or
+// `run.terminal.failed`.
+func (d *museEvents) Ended() bool { return d.completed || d.failure != "" }
+
 // Result implements [Decoder]: the answer, and how the run ended.
 func (d *museEvents) Result() sandbox.Result {
 	if !d.sawLine {

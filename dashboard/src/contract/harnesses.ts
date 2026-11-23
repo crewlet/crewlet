@@ -63,7 +63,7 @@ export const HARNESS_FACTS: Readonly<Record<string, HarnessFacts>> = {
     signIns: ["api-key", "device", "host-login"],
     keyEnv: "CODEX_API_KEY",
     login: "command",
-    efforts: ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+    efforts: ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "persistent"],
   },
   opencode: {
     binary: "opencode",
@@ -125,6 +125,7 @@ export const HARNESS_FACTS: Readonly<Record<string, HarnessFacts>> = {
   },
   "kimi-code": {
     binary: "kimi",
+    webDeniable: true,
     signIns: ["api-key", "host-login"],
     keyEnv: "KIMI_MODEL_API_KEY",
     login: "command",

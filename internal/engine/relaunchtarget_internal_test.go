@@ -87,7 +87,7 @@ func TestTheNodeHoldingTheSeatIsAskedWhatARelaunchIsLaunchedOn(t *testing.T) {
 			local: func(string, string) sandbox.RelaunchTarget { return own }, budget: 2 * time.Second}
 	}
 	claude := sandbox.SessionArchive{Harness: "claude-code", SessionID: "s-1", Format: 1, Version: "2.1.310"}
-	other := sandbox.SessionArchive{Harness: "opencode", SessionID: "ses_1", Format: 1, Version: "2.2.5"}
+	other := sandbox.SessionArchive{Harness: "opencode", SessionID: "ses_1", Format: 1, Version: "2.3.2"}
 	seat := uuid.New()
 
 	got := reader(live("node-a:1")).targets(ctx, seat, "swe", []sandbox.RelaunchAsk{

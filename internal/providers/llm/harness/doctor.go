@@ -548,6 +548,12 @@ func (p *Provider) diagnose(ctx context.Context, opts DiagnoseOptions, refused [
 					"it was written for %s", path, strings.Join(p.profile.VersionArgs, " "),
 				orNone(p.profile.WrittenFor)))
 		}
+		if line, problem := p.executorRelease(ctx, opts, version); line != "" {
+			c.set(CheckExecutor, strings.TrimPrefix(c.at(CheckExecutor).Detail+"\n"+line, "\n"))
+			if problem != "" {
+				c.fail(CheckExecutor, CheckKindConfig, problem)
+			}
+		}
 	}
 
 	for _, problem := range refused {
@@ -1347,21 +1353,26 @@ func (p *Provider) SandboxCredentials() map[string]string {
 	return out
 }
 
-// SandboxCredentialRunKeys is, by each of [Provider.SandboxCredentials]' paths,
-// the keys its harness writes into that file during a run
-// ([harnessprofile.Profile.RunKeys]), which a box writing the login back keeps
-// as the shared login holds them. Nil where it names none.
-func (p *Provider) SandboxCredentialRunKeys() map[string][]string {
-	var out map[string][]string
+// SandboxCredentialRules is, by each of [Provider.SandboxCredentials]' paths,
+// the rule its file is seeded and written back by ([harnessprofile.FileRule]):
+// a mixed file's login fields alone, a refresh's token fields alone, and only
+// a copy of the seeded login's account. Nil where there are no paths.
+func (p *Provider) SandboxCredentialRules() map[string]harnessprofile.FileRule {
+	var out map[string]harnessprofile.FileRule
 	for rel := range p.SandboxCredentials() {
-		if keys := p.profile.RunKeys[filepath.Base(rel)]; len(keys) > 0 {
-			if out == nil {
-				out = map[string][]string{}
-			}
-			out[rel] = slices.Clone(keys)
+		if out == nil {
+			out = map[string]harnessprofile.FileRule{}
 		}
+		out[rel] = p.profile.FileRule(filepath.Base(rel))
 	}
 	return out
+}
+
+// SandboxCredentialDocumentRule is the rule the document
+// [Provider.SandboxCredentialDocument] names is seeded and written back by:
+// held to the logins it was handed ([harnessprofile.KeepHandedCredentials]).
+func (p *Provider) SandboxCredentialDocumentRule() harnessprofile.FileRule {
+	return p.profile.FileRule(harnessprofile.CredentialStoreDocument)
 }
 
 // SandboxCredentialDocument is the shared login a harness keeps in a database of

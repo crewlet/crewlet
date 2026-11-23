@@ -35,6 +35,8 @@ func (accessVendor) Catalog() seataccess.Catalog {
 	return seataccess.Catalog{Kind: Kind, Lanes: []seataccess.LaneSpec{{
 		Lane: seataccess.LaneAdSense, Levels: true, Scoped: true, ScopeRequired: true,
 		CreatedBy: seataccess.ByCrewlet, EnabledBy: seataccess.ByCrewlet, EngineHeld: true,
+		// THE COMPANY'S IDENTITY ONLY: the vendor offers no identity per agent (ADR-0179).
+		Identity: seataccess.CompanyOnly,
 	}}}
 }
 
@@ -74,10 +76,10 @@ func (accessVendor) Open(_ context.Context, in seataccess.OpenInput) (seataccess
 
 type accessSession struct{ company *config.Company }
 
-// Options are the three levels and the accounts the company names.
+// Options are the three levels; the accounts are the document's
+// ([accessVendor.Reach]), which [seataccess.ReadOptions] applies.
 func (s *accessSession) Options(_ context.Context, lane seataccess.Lane) (seataccess.Options, error) {
-	return seataccess.Options{Lane: lane, Levels: accessVendor{}.FixedLevels(lane), Scoped: true, ScopeRequired: true,
-		Scope: s.company.Integrations.AdSense.Accounts, ScopeLive: true}, nil
+	return seataccess.Options{Lane: lane, Levels: accessVendor{}.FixedLevels(lane)}, nil
 }
 
 // Observe is each seat's setting in the document, which there is nothing

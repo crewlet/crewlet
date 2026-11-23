@@ -47,6 +47,7 @@ import {
   Timeline,
   VisuallyHidden,
   type ChangeListRow,
+  ScopeList,
 } from "@crewlethq/ui";
 import { Modal } from "~/components/Modal.tsx";
 import {
@@ -658,6 +659,7 @@ export function ScopeDialog({
   lane,
   want,
   refused,
+  note,
   onChange,
   onClose,
 }: {
@@ -666,6 +668,8 @@ export function ScopeDialog({
   want: AccessDesired;
   /** The engine's refusal of this seat's scope, said over the list until the draft changes. */
   refused?: string | undefined;
+  /** Why the entries show by identifier and not by name, said under the list's label. */
+  note?: string | undefined;
   onChange: (scope: string[]) => void;
   onClose: () => void;
 }) {
@@ -682,10 +686,17 @@ export function ScopeDialog({
   const choices = scopeChoices(lane, held);
   const find = term.trim().toLowerCase();
   const shown = find
-    ? choices.filter((c) => `${c.label} ${c.value}`.toLowerCase().includes(find))
+    ? choices.filter((c) =>
+        `${c.label} ${c.value} ${c.description ?? ""}`.toLowerCase().includes(find),
+      )
     : choices;
+  // A SEARCH IS NOT AN ENTRY: where the lane knows an entry's shape (an Apple
+  // ID's digits), a name or a bundle ID typed to find an app is never offered.
   const typed =
-    lane.scope_open && find && !choices.some((c) => c.value.toLowerCase() === find)
+    lane.scope_open &&
+    find &&
+    (words?.typed?.test(term.trim()) ?? true) &&
+    !choices.some((c) => c.value.toLowerCase() === find)
       ? term.trim()
       : null;
   const add = () => {
@@ -693,10 +704,62 @@ export function ScopeDialog({
     onChange([...held, typed]);
     setTerm("");
   };
-  const searchWords = lane.scope_open ? `Find or add a ${singular}` : `Find a ${singular}`;
+  // "AN APP", "AN AD ACCOUNT": the article follows the noun's own sound.
+  const one = `${/^[aeiou]/i.test(singular) ? "an" : "a"} ${singular}`;
+  const searchWords = lane.scope_open ? `Find or add ${one}` : `Find ${one}`;
   const alone = lane.scope_required || !words;
 
-  const picker = (
+  // APPS ARE CHOSEN BY NAME: where the vendor gives each entry a second
+  // identifier (an app's bundle ID), the kit's scope list draws the name
+  // first, the IDs quiet under it, the chosen ones marked and counted, with
+  // Choose all and Clear. An entry the list does not hold is added by its ID.
+  const named = lane.scope_details !== undefined;
+  const addWords = `Add ${one} by its ID`;
+  const picker = named ? (
+    <Stack gap={3}>
+      <ScopeList
+        label={words?.noun ?? "Scope"}
+        options={choices.map((c) => ({
+          value: c.value,
+          label: c.label,
+          ...(lane.scope_details?.[c.value] ? { detail: lane.scope_details[c.value] } : {}),
+          ...(c.label !== c.value ? { id: c.value } : {}),
+        }))}
+        value={held}
+        onChange={onChange}
+        searchFrom={SCOPE_SEARCH_FROM}
+      />
+      {lane.scope_open && (
+        <Inline gap={2} align="center">
+          <Input
+            aria-label={addWords}
+            placeholder={addWords}
+            inputSize="sm"
+            value={term}
+            onChange={(e) => setTerm(e.target.value)}
+          />
+          <Button
+            size="small"
+            variant="secondary"
+            leadingIcon={<PlusGlyph size="sm" />}
+            disabledReason={typed ? undefined : `Type ${one}'s ID to add it`}
+            onClick={add}
+          >
+            Add
+          </Button>
+        </Inline>
+      )}
+      {(refused || refusedScope(lane, want, seat.name)) && (
+        <p
+          className={refused ? "t-caption agent-access-refused" : "t-caption"}
+          role={refused ? "alert" : undefined}
+        >
+          {refused ?? refusedScope(lane, want, seat.name)}
+        </p>
+      )}
+      {note && <p className="t-caption">{note}</p>}
+    </Stack>
+  ) : (
     <Stack gap={3}>
       {(lane.scope_open || choices.length > SCOPE_SEARCH_FROM) && (
         <Input
@@ -728,7 +791,7 @@ export function ScopeDialog({
         as="fieldset"
         label={words?.noun ?? "Scope"}
         hideLabel={!alone}
-        helper={refusedScope(lane, want, seat.name) ?? undefined}
+        helper={[refusedScope(lane, want, seat.name), note].filter(Boolean).join(" ") || undefined}
         error={refused}
       >
         {shown.length > 0 ? (
@@ -747,7 +810,7 @@ export function ScopeDialog({
           </Stack>
         ) : (
           <Text as="p" variant="caption" tone="secondary">
-            {find ? `No ${singular} matches “${term.trim()}”.` : `Type a ${singular} to add it.`}
+            {find ? `No ${singular} matches “${term.trim()}”.` : `Type ${one} to add it.`}
           </Text>
         )}
       </FormField>

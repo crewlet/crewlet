@@ -1,5 +1,5 @@
-// A stand-in for `qwen --acp` that replays Qwen Code 0.28.3's own ACP
-// messages, captured on the build VM (testdata/qwen/0.28.3/acp-*.jsonl), to
+// A stand-in for `qwen --acp` that replays Qwen Code 0.28.4's own ACP
+// messages, captured on the build VM (testdata/qwen/0.28.4/acp-*.jsonl), to
 // the helper the suite drives (qwen_helper_test.go). Each capture line is the
 // probe's log of one message: `dir` out (the probe's) or in-* (Qwen Code's).
 // The stand-in answers each request of the helper's with the capture's answer
@@ -14,13 +14,18 @@
 //                     connected)
 //   QWEN_FAKE_TURN    the capture whose turn session/prompt replays
 //   QWEN_FAKE_HOME    the home Qwen Code records sessions under
-//   QWEN_FAKE_LOG     where the stand-in writes what it saw, a JSON line each
+//   QWEN_FAKE_LOG     where the stand-in writes what it saw, a JSON line each,
+//                     its argv first
 //   QWEN_FAKE_NEVER_CONNECT  the MCP status never says connected
 //   QWEN_FAKE_AWAIT_NOTES    asks again at a drain until it has been handed
 //                     notes at that many drains (1 for any set value but a
 //                     count), as later tool batches would
 //   QWEN_FAKE_DIE_AFTER_NOTE exits at once after it is handed a note, before
 //                     recording it
+//   QWEN_FAKE_SHRINK_AFTER_NOTE once handed a note, cuts the chat file back
+//                     to its first reply after its first note's record, a
+//                     rewrite shorter than the file was, and exits recording
+//                     nothing
 //   QWEN_FAKE_CHAT_SEED a chat file of Qwen Code's laid in place before the
 //                     prompt is answered
 //   QWEN_FAKE_COMPACT a file of one chat_compression record of Qwen Code's,
@@ -31,9 +36,14 @@
 //                     count) once they are recorded: no reply is recorded,
 //                     and the prompt is answered with an error
 //
+// session/load answers the load of a session the helper continues as ACP's
+// loadSession does: the session's history replayed first as session/update
+// (one agent message here, its text replayedHistory), then the load's answer;
+// the load's parameters are logged.
+//
 // Like Qwen Code it records a drained note in the session's chat file as a
 // `mid_turn_user_message` record, the captured record's shape with the note's
-// text, at once, BEFORE the request that carries it (as 0.28.3 does); the
+// text, at once, BEFORE the request that carries it (as 0.28.4 does); the
 // reply to that request, the captured assistant record, only once the turn
 // goes on; and exits once its stdin closes.
 import fs from "node:fs"
@@ -43,7 +53,11 @@ const env = process.env
 const log = (entry) => fs.appendFileSync(env.QWEN_FAKE_LOG, JSON.stringify(entry) + "\n")
 const capture = (file) => fs.readFileSync(file, "utf8").split("\n").filter((l) => l !== "").map((l) => JSON.parse(l))
 
+log({ argv: process.argv.slice(2) })
 const start = capture(env.QWEN_FAKE_START)
+
+// replayedHistory is the text of the history a load replays.
+const replayedHistory = "REPLAYED-HISTORY of the loaded session"
 const turn = capture(env.QWEN_FAKE_TURN)
 const chatLines = fs.readFileSync(path.join(path.dirname(env.QWEN_FAKE_TURN), "chat-note.jsonl"), "utf8").split("\n")
 const chatTemplate = JSON.parse(chatLines.find((l) => l.includes('"mid_turn_user_message"')))
@@ -100,7 +114,7 @@ function ask(method, params) {
 }
 
 function chatFile() {
-  const key = process.cwd().replace(/[^a-zA-Z0-9]/g, "-")
+  const key = fs.realpathSync(process.cwd()).replace(/[^a-zA-Z0-9]/g, "-")
   return path.join(env.QWEN_FAKE_HOME, "projects", key, "chats", session + ".jsonl")
 }
 function record(notes) {
@@ -134,6 +148,13 @@ async function replay(promptID) {
         log({ drain: notes, ms })
         if (notes.length > 0) {
           handed++
+          if (env.QWEN_FAKE_SHRINK_AFTER_NOTE) {
+            const lines = fs.readFileSync(chatFile(), "utf8").split("\n")
+            const note = lines.findIndex((l) => l.includes('"mid_turn_user_message"'))
+            const answered = lines.findIndex((l, i) => i > note && l.includes('"type":"assistant"'))
+            fs.writeFileSync(chatFile(), lines.slice(0, answered + 1).join("\n") + "\n")
+            process.exit(1)
+          }
           if (env.QWEN_FAKE_DIE_AFTER_NOTE) process.exit(1)
           record(notes)
           if (env.QWEN_FAKE_FAIL_AFTER_NOTE && handed === count(env.QWEN_FAKE_FAIL_AFTER_NOTE)) {
@@ -183,6 +204,13 @@ process.stdin.on("data", (chunk) => {
       case "session/new":
         session = m.params?._meta?.["qwen-code/sessionId"] ?? ""
         answer(m.id, answersTo(start, "session/new")[0], sessionOf(start))
+        break
+      case "session/load":
+        session = m.params?.sessionId ?? ""
+        log({ load: m.params })
+        send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: session,
+          update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: replayedHistory } } } })
+        send({ jsonrpc: "2.0", id: m.id, result: {} })
         break
       case "qwen/status/workspace/mcp":
         statusAsks++

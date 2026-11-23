@@ -23,8 +23,8 @@ type agendaReads struct {
 }
 
 func (*agendaReads) Questions() []Question {
-	return []Question{{Name: "work_items", Params: "{assignee, status_group}", About: "work items"},
-		{Name: "tokens", Params: "{seat, previous}", About: "token spend"},
+	return []Question{{Name: "work_items", Params: "{assignee, status_group}", About: "work items", Words: "work items"},
+		{Name: "tokens", Params: "{seat, previous}", About: "token spend", Words: "token spend"},
 		{Name: "advisor_capacity", Params: "{}", About: "hours each model entry was out"}}
 }
 
@@ -147,10 +147,10 @@ func TestTheDeepRunAnswersItsWholeAgendaInFewTokens(t *testing.T) {
 	if early < 0 || !results[early].Failed || !strings.Contains(results[early].Output, "A1, A2, A3, A4") {
 		t.Errorf("the early submission was answered %+v, want it refused naming the open items", results[early])
 	}
-	// 6b: a line per read and per verdict.
-	for _, want := range []string{"reading the snapshot", "reading work_items assignee=sre status_group=todo",
-		"could not read advisor_capacity", "A1 confirmed: 30 items wait against 10 the week before",
-		"A4 unreadable: the capacity tables could not be read", "reading tokens previous=true seat=app-engineer"} {
+	// 6b: a line per read and per verdict, in words.
+	for _, want := range []string{"Reading the company's numbers", "Reading work items for sre, todo",
+		"Could not read advisor_capacity", "Confirmed: 30 items wait against 10 the week before",
+		"Could not check: the capacity tables could not be read", "Reading token spend for app-engineer"} {
 		if !slices.Contains(told, want) {
 			t.Errorf("progress %q was not told: %q", want, told)
 		}

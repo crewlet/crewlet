@@ -326,8 +326,7 @@ func (d *Duty) pressed(ctx context.Context, now time.Time, requests []Request) e
 // checksSaid is the progress line a run's checks end on, before it goes on
 // into the investigation.
 func checksSaid(r Run) string {
-	return fmt.Sprintf("checks done: %d opened, %d closed; investigating", r.Count(advisor.StepOpen),
-		r.Count(advisor.StepClose))
+	return fmt.Sprintf("Checks done: %d new, %d closed", r.Count(advisor.StepOpen), r.Count(advisor.StepClose))
 }
 
 // withSkipped is a run's model summary saying why its deep part did not run:

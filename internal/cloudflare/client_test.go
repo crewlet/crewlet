@@ -151,7 +151,7 @@ func TestTheTokenRoutes(t *testing.T) {
 	expires := time.Date(2027, 1, 31, 0, 0, 0, 0, time.UTC)
 	policies := []cloudflare.Policy{{Effect: "allow", PermissionGroups: []cloudflare.GroupRef{{ID: groupID("Zone Read")}},
 		Resources: map[string]any{"com.cloudflare.api.account.zone." + zoneExampleID: "*"}}}
-	tok, value, err := c.CreateToken(ctx, cloudflare.TokenSpec{Name: "crewlet-acme-sre", Policies: policies, ExpiresOn: expires})
+	tok, value, err := c.CreateToken(ctx, cloudflare.TokenSpec{Name: "crewlet-sre", Policies: policies, ExpiresOn: expires})
 	if err != nil || value == "" || tok.ID == "" {
 		t.Fatalf("CreateToken = %+v, %q, %v", tok, value, err)
 	}

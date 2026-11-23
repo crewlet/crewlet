@@ -22,14 +22,16 @@ import (
 var _ mainThreadHarness = GeminiCLI{}
 
 // threadTraits is what a Gemini CLI run's main-thread read settles: its hooks'
-// receipts, read off the session's own words. It counts nothing: the runner
-// carries no Gemini CLI session yet, so no relaunch asks.
+// receipts, read off the session's own words. It counts nothing: this build
+// reads no count of a Gemini CLI session's next request.
 func (GeminiCLI) threadTraits() sandbox.ThreadTraits {
 	return sandbox.ThreadTraits{Receipts: true}
 }
 
-// geminiRecordedTake is one line of [Paths.GeminiTakes]: a take, or the
-// record's start line, From, which the run's script writes before the run.
+// geminiRecordedTake is one line of [Paths.GeminiTakes]: a take the script
+// handed Gemini CLI, or the record's start line, From, the count of the
+// session's lines as a run started ([geminiScript]), which every take after
+// it is confirmed past.
 type geminiRecordedTake struct {
 	Take   string `json:"take"`
 	Digest string `json:"digest"`
@@ -57,15 +59,26 @@ func (GeminiCLI) readMainThread(ctx context.Context, box sandbox.Sandbox, paths 
 		return undecided("the run's record of its takes could not be read: " + err.Error())
 	}
 	var recorded []geminiRecordedTake
+	var asked []geminiAskedTake
+	from := 0
 	started := false
 	for line := range bytes.SplitSeq(raw, []byte("\n")) {
 		var t geminiRecordedTake
 		switch {
 		case json.Unmarshal(line, &t) != nil:
-		case t.From != nil:
+		case t.From != nil && *t.From >= 0:
+			// A LATER RUN'S START ENDS THE EARLIER RUNS' LINES: their takes
+			// are confirmed only before it ([geminiAskedTake]).
+			for i := range asked {
+				if asked[i].until < 0 {
+					asked[i].until = *t.From
+				}
+			}
+			from = *t.From
 			started = true
 		case t.Take != "":
 			recorded = append(recorded, t)
+			asked = append(asked, geminiAskedTake{digest: t.Digest, from: from, until: -1})
 		}
 	}
 	// A RECORD WITHOUT ITS START LINE was lost with its box (a box reads a
@@ -79,11 +92,7 @@ func (GeminiCLI) readMainThread(ctx context.Context, box sandbox.Sandbox, paths 
 		if err != nil {
 			return undecided(err.Error())
 		}
-		digests := make([]string, len(recorded))
-		for i, t := range recorded {
-			digests[i] = t.Digest
-		}
-		confirmed, err := geminiConfirmed(session, digests, maxLineBytes)
+		confirmed, err := geminiConfirmed(session, asked, maxLineBytes)
 		_ = session.Close()
 		if err != nil {
 			return undecided("the run's session could not be read whole: " + err.Error())

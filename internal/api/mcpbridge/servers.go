@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/toolsession"
 )
@@ -84,6 +85,36 @@ func Guidance(surface Surface) map[string]string {
 			}
 			out[name] = said
 		}
+	}
+	return out
+}
+
+// Catalogs is the tools each MCP server an opening of surface serves under its
+// own name offers now, by that name ([Servers]), as the surface offers them:
+// what a run's harness may list its model again in the box that holds its
+// session (OpenCode's Code Mode catalog), so a launch charges them. Nil where
+// no such server offers a tool.
+func Catalogs(surface Surface) map[string][]sandbox.CatalogTool {
+	seat := seatOf(surface)
+	if seat == nil {
+		return nil
+	}
+	universe := seat.Universe()
+	var out map[string][]sandbox.CatalogTool
+	for _, def := range seat.ToolDefs() {
+		entry, ok := universe.Lookup(def.Name)
+		if !ok {
+			continue
+		}
+		server, fromMCP := entry.FromMCP()
+		if !fromMCP {
+			continue
+		}
+		if out == nil {
+			out = map[string][]sandbox.CatalogTool{}
+		}
+		out[server] = append(out[server], sandbox.CatalogTool{Name: def.Name, Description: def.Description,
+			Schema: def.Parameters})
 	}
 	return out
 }

@@ -24,8 +24,9 @@ import (
 )
 
 // These cases read an OpenCode session's kept export for which of a round's
-// calls it holds ([readOpenCodeHoldings], [openCodeVerdict]). Every arm that
-// can hold a call has a case where the session lacks the call, and holds none.
+// calls it holds ([readOpenCodeHoldings]); contentverdict_internal_test.go
+// holds the verdict's own rules. Every arm that can hold a call has a case
+// where the session lacks the call, and holds none.
 
 // ohSession is the session every export here is of.
 const ohSession = "ses_0a1b2c3d4e5f60718293a4b5c6d7e8f9"
@@ -109,7 +110,7 @@ func ohRead(t *testing.T, doc string, start sandbox.RunStart, calls ...sandbox.L
 	error) {
 	t.Helper()
 	return readOpenCodeHoldings(t.Context(), strings.NewReader(doc), ohSession, start,
-		sandbox.HoldingsAsk{Calls: calls, Resumer: "2.2.7"})
+		sandbox.HoldingsAsk{Calls: calls, Resumer: "2.3.2"})
 }
 
 // ohBegan is a run that began its session.
@@ -187,10 +188,10 @@ func TestAnOpenCodeReadingReadsOnlyReleasesItWasMeasuredOn(t *testing.T) {
 		version, resumer string
 		read             bool
 	}{
-		"a member":                        {"2.2.7", "2.2.7", true},
-		"a resumer outside the set":       {"2.2.5", "2.2.5", false},
-		"a writer other than the resumer": {"2.1.4", "2.2.7", false},
-		"a member padded with blanks":     {" 2.2.7", " 2.2.7", false},
+		"a member":                        {"2.3.2", "2.3.2", true},
+		"a resumer outside the set":       {"2.3.1", "2.3.1", false},
+		"a writer other than the resumer": {"2.3.1", "2.3.2", false},
+		"a member padded with blanks":     {" 2.3.2", " 2.3.2", false},
 		"a release only the count reads":  {"2.4.0", "2.4.0", false},
 		"a resumer nobody recorded":       {"", "", false},
 	} {
@@ -208,8 +209,8 @@ func TestAnOpenCodeReadingReadsOnlyReleasesItWasMeasuredOn(t *testing.T) {
 		}
 	}
 	// THE READER'S OWN CHECK, apart from the shared one every reading passes.
-	padded := sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{call}, Resumer: " 2.2.7"}
-	if err := (OpenCode{}).checkHoldings(ohArchive(" 2.2.7"), padded); err == nil {
+	padded := sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{call}, Resumer: " 2.3.2"}
+	if err := (OpenCode{}).checkHoldings(ohArchive(" 2.3.2"), padded); err == nil {
 		t.Error("a member padded with blanks passes the reader's check; want it compared whole")
 	}
 }
@@ -235,15 +236,14 @@ func ohGzip(t *testing.T, doc string) []byte {
 	return buf.Bytes()
 }
 
-// THE READING'S RELEASES ARE THE RELEASES MEASURED: 2.0.32, 2.1.4, 2.2.7 and
-// 2.3.0, whose own exports of the engine's bridged calls read as every case
-// predicted; never empty, each one the count reads and of readable numbers.
+// THE READING'S RELEASES ARE THE RELEASES MEASURED: 2.3.2, whose own exports
+// of the engine's bridged calls read as every case predicted; never empty, each one the count reads and of readable numbers.
 //
 // Mutation: empty the set, add a release, or add one the count does not
 // read, and this goes red.
 func TestTheReadingsReleasesAreTheReleasesMeasured(t *testing.T) {
 	t.Parallel()
-	if want := []string{"2.0.32", "2.1.4", "2.2.7", "2.3.0"}; !slices.Equal(openCodeHoldingsReleases, want) {
+	if want := []string{"2.3.2"}; !slices.Equal(openCodeHoldingsReleases, want) {
 		t.Errorf("the reading's releases are %q; want those measured, %q", openCodeHoldingsReleases, want)
 	}
 	for _, release := range openCodeHoldingsReleases {
@@ -264,8 +264,8 @@ func TestTheReadingsFloorIsItsOldestRelease(t *testing.T) {
 	saved := openCodeHoldingsReleases
 	t.Cleanup(func() { openCodeHoldingsReleases = saved })
 	for want, set := range map[string][]string{
-		"2.0.32": {"2.2.7", "2.0.32", "2.1.4"},
-		"2.9.1":  {"2.10.0", "2.9.1"},
+		"2.3.2": {"2.4.0", "2.3.2", "2.3.10"},
+		"2.9.1": {"2.10.0", "2.9.1"},
 	} {
 		openCodeHoldingsReleases = set
 		if got := (OpenCode{}).holdingsFloor(); got != want {
@@ -323,20 +323,20 @@ func TestAnAskIsValidatedByItsReaderBeforeAnyRead(t *testing.T) {
 		archive sandbox.SessionArchive
 		read    bool
 	}{
-		"an ask the log can make":             {[]sandbox.LoggedCall{good, unplaced}, ohArchive("2.2.7"), true},
-		"too many calls":                      {tooMany, ohArchive("2.2.7"), false},
-		"no call":                             {nil, ohArchive("2.2.7"), false},
-		"none asked":                          {with(func(c *sandbox.LoggedCall) { c.Asked = false }), ohArchive("2.2.7"), false},
-		"no admission place":                  {with(func(c *sandbox.LoggedCall) { c.Seq = 0 }), ohArchive("2.2.7"), false},
-		"keyed by another number":             {with(func(c *sandbox.LoggedCall) { c.ID = "7" }), ohArchive("2.2.7"), false},
-		"keyed as its id would be":            {with(func(c *sandbox.LoggedCall) { c.ID = "call_x" }), ohArchive("2.2.7"), false},
-		"no place in the log":                 {with(func(c *sandbox.LoggedCall) { c.Appended, c.ID = 0, "0" }), ohArchive("2.2.7"), false},
-		"held for a person":                   {with(func(c *sandbox.LoggedCall) { c.Held = true }), ohArchive("2.2.7"), false},
-		"a key two calls carry":               {[]sandbox.LoggedCall{good, func() sandbox.LoggedCall { c := good; c.Asked = false; return c }()}, ohArchive("2.2.7"), false},
-		"a run with no known start":           {[]sandbox.LoggedCall{good}, func() sandbox.SessionArchive { a := ohArchive("2.2.7"); a.RunStart = sandbox.RunStart{}; return a }(), false},
-		"a session id of no OpenCode's shape": {[]sandbox.LoggedCall{good}, func() sandbox.SessionArchive { a := ohArchive("2.2.7"); a.SessionID = "5e55100a-0000"; return a }(), false},
+		"an ask the log can make":             {[]sandbox.LoggedCall{good, unplaced}, ohArchive("2.3.2"), true},
+		"too many calls":                      {tooMany, ohArchive("2.3.2"), false},
+		"no call":                             {nil, ohArchive("2.3.2"), false},
+		"none asked":                          {with(func(c *sandbox.LoggedCall) { c.Asked = false }), ohArchive("2.3.2"), false},
+		"no admission place":                  {with(func(c *sandbox.LoggedCall) { c.Seq = 0 }), ohArchive("2.3.2"), false},
+		"keyed by another number":             {with(func(c *sandbox.LoggedCall) { c.ID = "7" }), ohArchive("2.3.2"), false},
+		"keyed as its id would be":            {with(func(c *sandbox.LoggedCall) { c.ID = "call_x" }), ohArchive("2.3.2"), false},
+		"no place in the log":                 {with(func(c *sandbox.LoggedCall) { c.Appended, c.ID = 0, "0" }), ohArchive("2.3.2"), false},
+		"held for a person":                   {with(func(c *sandbox.LoggedCall) { c.Held = true }), ohArchive("2.3.2"), false},
+		"a key two calls carry":               {[]sandbox.LoggedCall{good, func() sandbox.LoggedCall { c := good; c.Asked = false; return c }()}, ohArchive("2.3.2"), false},
+		"a run with no known start":           {[]sandbox.LoggedCall{good}, func() sandbox.SessionArchive { a := ohArchive("2.3.2"); a.RunStart = sandbox.RunStart{}; return a }(), false},
+		"a session id of no OpenCode's shape": {[]sandbox.LoggedCall{good}, func() sandbox.SessionArchive { a := ohArchive("2.3.2"); a.SessionID = "5e55100a-0000"; return a }(), false},
 	} {
-		err := (OpenCode{}).checkHoldings(tc.archive, sandbox.HoldingsAsk{Calls: tc.calls, Resumer: "2.2.7"})
+		err := (OpenCode{}).checkHoldings(tc.archive, sandbox.HoldingsAsk{Calls: tc.calls, Resumer: "2.3.2"})
 		if (err == nil) != tc.read {
 			t.Errorf("%s: checkHoldings = %v; want read %t", name, err, tc.read)
 		}
@@ -372,7 +372,7 @@ func TestAnAskPastTheLogsBoundsIsNeverRead(t *testing.T) {
 		"dropped names past the bound":  {append(slices.Clone(atBound), sandbox.CallIdentity{Name: "y"}), false},
 		"in flight beside dropped ones": {append(identities(sandbox.MaxCallsInFlight, sandbox.CallIdentity{Name: "x", InFlight: true}), atBound...), true},
 	} {
-		err := (OpenCode{}).checkHoldings(ohArchive("2.2.7"), sandbox.HoldingsAsk{Resumer: "2.2.7",
+		err := (OpenCode{}).checkHoldings(ohArchive("2.3.2"), sandbox.HoldingsAsk{Resumer: "2.3.2",
 			Calls: []sandbox.LoggedCall{ohCall(1, "echo", `{}`, "done")}, Unlisted: tc.unlisted})
 		if (err == nil) != tc.read {
 			t.Errorf("%s: checkHoldings = %v; want read %t", label, err, tc.read)
@@ -388,158 +388,6 @@ func ohClass(t *testing.T, c sandbox.LoggedCall) sandbox.CallClass {
 		t.Fatalf("call %d states no class", c.Appended)
 	}
 	return class
-}
-
-// ohVerdict is the verdict on calls, unlisted beside them, where parts are each
-// class's counted parts' steps.
-func ohVerdict(t *testing.T, parts map[sandbox.CallClass][]int, unlisted []sandbox.CallIdentity,
-	calls ...sandbox.LoggedCall) []int {
-	t.Helper()
-	h, err := openCodeVerdict(sandbox.HoldingsAsk{Calls: calls, Unlisted: unlisted, Resumer: "2.2.7"}, parts, false)
-	return ohHeld(t, h, err, calls...)
-}
-
-// A CLASS IS HELD ONLY WHERE EVERY CALL OF IT HAS A PART: two calls and two
-// parts both held; two calls and one part neither; one call and two parts
-// told, the walk counting a class's parts to one past its calls.
-//
-// Mutation: hold min(parts, calls), or where parts are at least calls, or
-// have the walk stop counting at the class's calls, and this goes red.
-func TestAClassIsHeldOnlyWhereEveryCallOfItHasAPart(t *testing.T) {
-	t.Parallel()
-	a, b := ohCall(1, "echo", `{"t":1}`, "same"), ohCall(2, "echo", `{"t":1}`, "same")
-	class := ohClass(t, a)
-	if got := ohVerdict(t, map[sandbox.CallClass][]int{class: {1, 1}}, nil, a, b); !slices.Equal(got, []int{1, 2}) {
-		t.Errorf("two calls, two parts: held %v; want both", got)
-	}
-	if got := ohVerdict(t, map[sandbox.CallClass][]int{class: {1, 2, 3}}, nil, a); got != nil {
-		t.Errorf("one call, more parts: held %v; want none", got)
-	}
-	h, err := openCodeVerdict(sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{a}, Resumer: "2.2.7"},
-		map[sandbox.CallClass][]int{class: {1, 2, 3}}, false)
-	if records := h.Classes[class]; err != nil || records.Held || records.Parts != 2 {
-		t.Errorf("one call, three parts: the class is %+v, %v; want two parts counted and not held", records, err)
-	}
-	part := ohDone("echo", `{"t":1}`, "same")
-	h, err = ohRead(t, ohDoc(ohUser, ohStep(part), ohStep(part)), ohBegan, a)
-	if got := ohHeld(t, h, err, a); got != nil {
-		t.Errorf("one call, two parts in the export: held %v; want told", got)
-	}
-}
-
-// OF TWO IDENTICAL CALLS WITH ONE PART NEITHER IS HELD: which of the two the
-// part is is never decided.
-//
-// Mutation: pair the part with the first call, and this goes red.
-func TestOfTwoIdenticalCallsWithOnePartNeitherIsHeld(t *testing.T) {
-	t.Parallel()
-	a, b := ohCall(1, "echo", `{"t":1}`, "same"), ohCall(2, "echo", `{"t":1}`, "same")
-	if got := ohVerdict(t, map[sandbox.CallClass][]int{ohClass(t, a): {1}}, nil, a, b); got != nil {
-		t.Errorf("two calls, one part: held %v; want neither", got)
-	}
-}
-
-// A CALL THE LOG CANNOT STATE MAKES ITS CLASS WILD: one in flight, a dropped
-// one with its digest, one with none, a listed call with cut arguments, and a
-// late dropped one (the tally holds it) each tell the class of its tool; a
-// dropped one of another digest, where every call of the class has one, does
-// not, nor does one of another tool.
-//
-// Mutation: ignore the wildcards, or compare digests where the class's call
-// has none, and a case goes red.
-func TestACallTheLogCannotStateMakesItsClassWild(t *testing.T) {
-	t.Parallel()
-	c := ohCall(1, "echo", `{"t":1}`, "done")
-	c.Digest = "d1"
-	parts := map[sandbox.CallClass][]int{ohClass(t, c): {1}}
-	cutArgs := ohCall(2, "echo", `{"t":2}`, "other")
-	cutArgs.Args.Whole, cutArgs.Asked = false, false
-	for name, tc := range map[string]struct {
-		unlisted []sandbox.CallIdentity
-		listed   []sandbox.LoggedCall
-		held     bool
-	}{
-		"nothing unstated":        {nil, nil, true},
-		"in flight":               {[]sandbox.CallIdentity{{Name: "echo", Digest: "d1", InFlight: true}}, nil, false},
-		"dropped, its digest":     {[]sandbox.CallIdentity{{Name: "echo", Digest: "d1"}}, nil, false},
-		"dropped, no digest":      {[]sandbox.CallIdentity{{Name: "echo"}}, nil, false},
-		"a late one, dropped":     {[]sandbox.CallIdentity{{Name: "echo", Digest: "d1", OnlyFailed: true}}, nil, false},
-		"cut arguments, listed":   {nil, []sandbox.LoggedCall{cutArgs}, false},
-		"dropped, another digest": {[]sandbox.CallIdentity{{Name: "echo", Digest: "d2"}}, nil, true},
-		"dropped, another tool":   {[]sandbox.CallIdentity{{Name: "post"}}, nil, true},
-	} {
-		got := ohVerdict(t, parts, tc.unlisted, append([]sandbox.LoggedCall{c}, tc.listed...)...)
-		if held := slices.Contains(got, 1); held != tc.held {
-			t.Errorf("%s: held %v; want call 1 held %t", name, got, tc.held)
-		}
-	}
-	digestless := c
-	digestless.Digest = ""
-	got := ohVerdict(t, parts, []sandbox.CallIdentity{{Name: "echo", Digest: "d2"}}, digestless)
-	if got != nil {
-		t.Errorf("a class with a digestless call beside a dropped one of its tool: held %v; want told", got)
-	}
-}
-
-// A HELD CALL IS WILD ONLY FOR THE ANSWER IT WAS GIVEN: its part answers with
-// the held answer, so it tells the class of its tool, failure and text, and
-// leaves another class of its tool held; one whose cut answer does not read
-// back is wild for every class of its tool and failure.
-//
-// Mutation: make a held call wild by its tool alone, or only for a text its
-// log states, and a case goes red.
-func TestAHeldCallIsWildOnlyForTheAnswerItWasGiven(t *testing.T) {
-	t.Parallel()
-	answered := ohCall(1, "post", `{"t":1}`, "Held for approval.")
-	answered.Failed = true
-	other := ohCall(2, "post", `{"t":2}`, "posted")
-	held := sandbox.LoggedCall{ID: "3", Appended: 3, Seq: 3, Name: "post", Held: true, Failed: true,
-		Output: "Held for approval."}
-	parts := map[sandbox.CallClass][]int{ohClass(t, answered): {1}, ohClass(t, other): {1}}
-	if got := ohVerdict(t, parts, nil, answered, other, held); !slices.Equal(got, []int{2}) {
-		t.Errorf("held %v; want the other class's call alone", got)
-	}
-	unstated := held
-	unstated.OutputBytes = 99999
-	if _, stated := sandbox.TextKeyOf(unstated.Output, unstated.OutputBytes); stated {
-		t.Fatal("the held call's cut answer reads back")
-	}
-	if got := ohVerdict(t, parts, nil, answered, other, unstated); !slices.Equal(got, []int{2}) {
-		t.Errorf("a held call of no stated answer: held %v; want its tool's failed class told", got)
-	}
-}
-
-// AN UNNAMED COUNT OF FAILURES IS WILD ONLY FOR FAILURES: a count every call of
-// which failed tells a failed class and leaves a succeeded one held; a count
-// whose outcomes are mixed tells both, and so does an unnamed call in flight
-// beside a count of failures, in either order.
-//
-// Mutation: ignore OnlyFailed, read a count of no failure as one of failures,
-// or let the last unnamed entry decide, and a case goes red.
-func TestAnUnnamedCountOfFailuresIsWildOnlyForFailures(t *testing.T) {
-	t.Parallel()
-	failed := ohCall(1, "post", `{"t":1}`, "refused")
-	failed.Failed = true
-	done := ohCall(2, "post", `{"t":2}`, "posted")
-	parts := map[sandbox.CallClass][]int{ohClass(t, failed): {1}, ohClass(t, done): {1}}
-	if got := ohVerdict(t, parts, []sandbox.CallIdentity{{OnlyFailed: true}}, failed, done); !slices.Equal(got, []int{2}) {
-		t.Errorf("a count of failures: held %v; want the succeeded call alone", got)
-	}
-	if got := ohVerdict(t, parts, []sandbox.CallIdentity{{}}, failed, done); got != nil {
-		t.Errorf("a count of mixed outcomes: held %v; want none", got)
-	}
-	for name, unlisted := range map[string][]sandbox.CallIdentity{
-		"in flight first": {{InFlight: true}, {OnlyFailed: true}},
-		"dropped first":   {{OnlyFailed: true}, {InFlight: true}},
-	} {
-		ask := sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{failed, done}, Resumer: "2.2.7", Unlisted: unlisted}
-		if err := (OpenCode{}).checkHoldings(ohArchive("2.2.7"), ask); err != nil {
-			t.Fatalf("%s: the ask is refused: %v", name, err)
-		}
-		if got := ohVerdict(t, parts, unlisted, failed, done); got != nil {
-			t.Errorf("an unnamed call in flight beside a count of failures, %s: held %v; want none", name, got)
-		}
-	}
 }
 
 // A REPORTED SKILL LOAD IS TOLD: OpenCode's plugin reports a load its own
@@ -567,19 +415,6 @@ func TestAReportedSkillLoadIsTold(t *testing.T) {
 		if got := ohHeld(t, h, err, echo, load); !slices.Equal(got, []int{1}) {
 			t.Errorf("%s: held %v; want the run's echo alone, the load told", name, got)
 		}
-	}
-}
-
-// A CALL HELD AT THE SAVE POINT STAYS IN THE POOL: an unasked call identical
-// to an asked run call makes the class two calls, and one part tells both.
-//
-// Mutation: leave unasked calls out of the pool, and this goes red.
-func TestACallHeldAtTheSavePointStaysInThePool(t *testing.T) {
-	t.Parallel()
-	saved, run := ohCall(1, "echo", `{"t":1}`, "same"), ohCall(2, "echo", `{"t":1}`, "same")
-	saved.Asked = false
-	if got := ohVerdict(t, map[sandbox.CallClass][]int{ohClass(t, run): {1}}, nil, saved, run); got != nil {
-		t.Errorf("held %v; want the run's call told", got)
 	}
 }
 
@@ -765,7 +600,7 @@ func TestAMarkedChangeEndsTheReading(t *testing.T) {
 	}
 }
 
-// A STEP'S FIRSTTOKEN IS READ FOR NOTHING: 2.3.0 stamps every step's `time`
+// A STEP'S FIRSTTOKEN IS READ FOR NOTHING: 2.3.2 stamps every answered step's `time`
 // with `firstToken`, and a step holding it, whatever its value, holds its
 // call as a step without it does; written twice, it is no reading.
 //
@@ -822,36 +657,6 @@ func ohNoneNamed(t *testing.T, name string, h sandbox.SessionHoldings, err error
 	t.Helper()
 	if err == nil || h.Read {
 		t.Errorf("%s: a reading = %+v; want none", name, h)
-	}
-}
-
-// A PART MATCHING TWO CLASSES COUNTS FOR NEITHER: two cut calls of one tool,
-// arguments and size, whose kept openings are 4,090 and 4,091 bytes of one
-// text, are two classes one part matches; it holds neither.
-//
-// Mutation: count the part for each class it matches, and this goes red.
-func TestAPartMatchingTwoClassesCountsForNeither(t *testing.T) {
-	t.Parallel()
-	text := strings.Repeat("x", 9000)
-	short, long := ohCut(ohCall(1, "echo", `{"t":1}`, text)), ohCut(ohCall(2, "echo", `{"t":1}`, text))
-	opening, _ := kept.Record("the run's record").Opening(long.Output, long.OutputBytes)
-	trimmed, _ := kept.Record("the run's record").Opening(short.Output, short.OutputBytes)
-	if len(opening) != len(trimmed) {
-		t.Fatal("the log kept two openings of one text alike")
-	}
-	// The log keeps one opening for one text; a shorter one is a different
-	// cut of the same text, as a release's other budget would make.
-	short.Output = strings.Replace(short.Output, opening, opening[:len(opening)-1], 1)
-	if _, ok := sandbox.ClassOf(short); !ok {
-		t.Fatal("the shorter cut states no class")
-	}
-	h, err := ohRead(t, ohDoc(ohUser, ohStep(ohDone("echo", `{"t":1}`, text))), ohBegan, short, long)
-	if got := ohHeld(t, h, err, short, long); got != nil {
-		t.Errorf("held %v; want neither", got)
-	}
-	h, err = ohRead(t, ohDoc(ohUser, ohStep(ohDone("echo", `{"t":1}`, text))), ohBegan, long)
-	if got := ohHeld(t, h, err, long); !slices.Equal(got, []int{2}) {
-		t.Errorf("one class: held %v; want it", got)
 	}
 }
 
@@ -943,7 +748,7 @@ func TestAnEmptyFailureNeverHoldsAnEmptyOutput(t *testing.T) {
 // builds once (the tool-name bound's profiles) is none of it.
 func ohAllocated(t *testing.T, doc func() io.Reader, calls ...sandbox.LoggedCall) uint64 {
 	t.Helper()
-	ask := sandbox.HoldingsAsk{Calls: calls, Resumer: "2.2.7"}
+	ask := sandbox.HoldingsAsk{Calls: calls, Resumer: "2.3.2"}
 	if _, err := ohRead(t, ohDoc(ohUser, ohStep(ohDone("echo", `{"t":1}`, "done"))), ohBegan, calls...); err != nil {
 		t.Fatalf("no reading: %v", err)
 	}
@@ -1110,38 +915,6 @@ func TestAPartsArgumentsAreReadByTheLogsOwnRule(t *testing.T) {
 	}
 }
 
-// CALLS IN AN ORDER THE EXPORT CONTRADICTS LEAVE THE SESSION UNREAD: calls of
-// K admitted 1 and 3 both in step 1 and a call of L admitted 2 in step 2 are no
-// order a run makes; L in step 1 is.
-//
-// Mutation: drop the order check, and this goes red.
-func TestCallsInAnOrderTheExportContradictsLeaveTheSessionUnread(t *testing.T) {
-	t.Parallel()
-	k1, l, k2 := ohCall(1, "echo", `{"t":"k"}`, "k"), ohCall(2, "echo", `{"t":"l"}`, "l"),
-		ohCall(3, "echo", `{"t":"k"}`, "k")
-	kPart, lPart := ohDone("echo", `{"t":"k"}`, "k"), ohDone("echo", `{"t":"l"}`, "l")
-	h, err := ohRead(t, ohDoc(ohUser, ohStep(kPart, kPart), ohStep(lPart)), ohBegan, k1, l, k2)
-	ohNone(t, h, err)
-	h, err = ohRead(t, ohDoc(ohUser, ohStep(kPart, lPart, kPart)), ohBegan, k1, l, k2)
-	if got := ohHeld(t, h, err, k1, l, k2); !slices.Equal(got, []int{1, 2, 3}) {
-		t.Errorf("one step: held %v; want all", got)
-	}
-}
-
-// PARALLEL CALLS OF ONE STEP ARE READ IN ANY ORDER: a step's parts in another
-// order than the calls were admitted in are a reading.
-//
-// Mutation: compare steps strictly, and this goes red.
-func TestParallelCallsOfOneStepAreReadInAnyOrder(t *testing.T) {
-	t.Parallel()
-	a, b := ohCall(1, "echo", `{"t":"a"}`, "a"), ohCall(2, "echo", `{"t":"b"}`, "b")
-	h, err := ohRead(t, ohDoc(ohUser, ohStep(ohDone("echo", `{"t":"b"}`, "b"), ohDone("echo", `{"t":"a"}`, "a"))),
-		ohBegan, a, b)
-	if got := ohHeld(t, h, err, a, b); !slices.Equal(got, []int{1, 2}) {
-		t.Errorf("held %v; want both", got)
-	}
-}
-
 // A MESSAGE OF A KIND THIS BUILD DOES NOT READ LEAVES THE SESSION UNREAD: a
 // twelfth kind is a release this build was not written for.
 //
@@ -1164,7 +937,7 @@ func TestAnOpenCodeReadingIsHeldToItsBounds(t *testing.T) {
 	t.Parallel()
 	c := ohCall(1, "echo", `{"t":1}`, "done")
 	doc := ohDoc(ohUser, ohStep(ohDone("echo", `{"t":1}`, "done")))
-	ask := sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{c}, Resumer: "2.2.7"}
+	ask := sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{c}, Resumer: "2.3.2"}
 	read := func(plain io.Reader, session string) error {
 		h, err := readOpenCodeHoldings(t.Context(), plain, session, ohBegan, ask)
 		if err == nil && !h.Read {
@@ -1187,7 +960,7 @@ func TestAnOpenCodeReadingIsHeldToItsBounds(t *testing.T) {
 	}
 	archive := ohGzip(t, doc)
 	_, err := (OpenCode{}).readHoldings(t.Context(), io.MultiReader(bytes.NewReader(archive), ohFailing{}),
-		ohArchive("2.2.7"), ask, plainBounds(8<<20))
+		ohArchive("2.3.2"), ask, plainBounds(8<<20))
 	if err == nil {
 		t.Error("a store's stream failing past the archive: read; want no reading")
 	}
@@ -1219,7 +992,7 @@ func TestAnOpenCodeReadingStopsBetweenMessagesWhenItsContextEnds(t *testing.T) {
 	} {
 		ctx := &ohCountdown{Context: t.Context(), left: tc.asks - 1}
 		_, err := readOpenCodeHoldings(ctx, strings.NewReader(tc.doc), ohSession, ohBegan,
-			sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{c}, Resumer: "2.2.7"})
+			sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{c}, Resumer: "2.3.2"})
 		if !errors.Is(err, context.Canceled) {
 			t.Errorf("%s: %v; want the caller's end", name, err)
 		}
@@ -1258,10 +1031,10 @@ func TestTheReaderTakesNoSlotOfItsOwn(t *testing.T) {
 	}
 	done := make(chan reading, 1)
 	go func() {
-		got, err := NewOpenCode().ReadHoldings(t.Context(), ohArchive("2.2.7"), func(context.Context) (io.ReadCloser,
+		got, err := NewOpenCode().ReadHoldings(t.Context(), ohArchive("2.3.2"), func(context.Context) (io.ReadCloser,
 			error) {
 			return io.NopCloser(bytes.NewReader(archive)), nil
-		}, sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{c}, Resumer: "2.2.7"})
+		}, sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{c}, Resumer: "2.3.2"})
 		done <- reading{got, err}
 	}()
 	select {
@@ -1284,7 +1057,7 @@ func TestTheReaderTakesNoSlotOfItsOwn(t *testing.T) {
 func TestAReadingsCauseQuotesNothingOfTheExport(t *testing.T) {
 	t.Parallel()
 	c := ohCall(1, "echo", `{"t":1}`, "done")
-	ask := sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{c}, Resumer: "2.2.7"}
+	ask := sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{c}, Resumer: "2.3.2"}
 	secret := strings.Repeat("the secret words ", 1<<18)
 	for name, plain := range map[string]io.Reader{
 		"inside a part": strings.NewReader(ohDoc(ohUser, ohStep(`{"type":"text","text":"`+secret+"\x01\"}"))),
@@ -1337,7 +1110,7 @@ func TestAReadingHoldsNoMessage(t *testing.T) {
 		}, ohCall(1, "echo", `{"t":1}`, "done")},
 	} {
 		h, err := readOpenCodeHoldings(t.Context(), tc.doc(), ohSession, ohBegan,
-			sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{tc.call}, Resumer: "2.2.7"})
+			sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{tc.call}, Resumer: "2.3.2"})
 		if got := ohHeld(t, h, err, tc.call); !slices.Equal(got, []int{1}) {
 			t.Errorf("%s: held %v; want its call", name, got)
 		}

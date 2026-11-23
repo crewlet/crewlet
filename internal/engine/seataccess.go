@@ -162,11 +162,16 @@ func (e *Engine) syncSeatAccess(
 	if err != nil {
 		return seataccess.SyncReport{}, err
 	}
+	if in.reads == nil {
+		// A SYNC NO PASS STARTED (a change on the Agents tab) offers what
+		// this node's product last read, as the access routes do.
+		in.reads = e.seatReads(ctx, kind)
+	}
 	report, err := seataccess.Sync(ctx, seataccess.SyncInput{
 		Vendor: vendor,
 		Open: seataccess.OpenInput{
 			Config: company.Config, Org: company.Org, Env: e.resolver(), Operator: in.operator,
-			Derive: e.deriveKey,
+			Derive: e.deriveKey, Tokens: seatTokens{engine: e},
 			// A DRY RUN HANDS NEITHER, so a session rotates and registers
 			// nothing (vendor.go).
 			Sink: in.sink, WebhookBase: in.webhookBase,

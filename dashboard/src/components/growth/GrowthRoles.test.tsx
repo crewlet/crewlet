@@ -37,16 +37,21 @@ const ROLES: GrowthRoleOffer[] = [
   { id: "none", name: "No role", note: "No access to the property.", classes: [], levels: [] },
 ];
 
-test("every role is a row with what it allows and what Crewlet offers, the held one marked", () => {
+// COMPACT: the roles that back a level are the table, one line each, the held
+// one marked; the rest fold away under one line. Mutation: draw every role in
+// one table, and the unused one is a row of it.
+test("each role Crewlet uses is one line with what it allows and the level it backs; the rest fold", () => {
   render(<GrowthRoles product="Google Analytics" roles={ROLES} held={["marketer"]} />);
-  const rows = screen.getAllByRole("row").slice(1);
-  expect(rows).toHaveLength(4);
+  const used = screen.getByRole("table", { name: "Google Analytics roles Crewlet uses" });
+  const rows = within(used).getAllByRole("row").slice(1);
+  expect(rows).toHaveLength(3);
   expect(within(rows[1]!).getByText("Held")).toBeTruthy();
   expect(within(rows[0]!).queryByText("Held")).toBeNull();
   // The levels by what they let an agent do, the same names every growth product uses.
   expect(within(rows[1]!).getByText("View, Manage")).toBeTruthy();
   expect(within(rows[2]!).getByText("Administer, each act a decision")).toBeTruthy();
-  expect(within(rows[3]!).getByText("Not used by Crewlet")).toBeTruthy();
+  expect(within(used).queryByText("No role")).toBeNull();
+  expect(screen.getByText("Roles Crewlet does not use (1)")).toBeTruthy();
   expect(levelsWords([])).toBe("Not used by Crewlet");
 });
 
@@ -54,7 +59,7 @@ const CONNECTIONS: GrowthConnection[] = [
   {
     id: "main",
     name: "Nimbus team",
-    identity: "crewlet-g-growth-ab12@identity.example.com",
+    identity: "crewlet-growth-ab12cd@identity.example.com",
     state: "connected",
     roles_held: ["marketer"],
     accounts: [
@@ -75,6 +80,7 @@ const CONNECTIONS: GrowthConnection[] = [
         state: "suspended",
       },
     ],
+    open: false,
   },
   {
     id: "eu",
@@ -83,13 +89,21 @@ const CONNECTIONS: GrowthConnection[] = [
     state: "connecting",
     roles_held: [],
     accounts: [],
+    open: false,
   },
 ];
 
 test("each connection says who Crewlet is there, the roles it holds and every account it reaches", () => {
-  render(<GrowthConnections product="Google Analytics" connections={CONNECTIONS} roles={ROLES} />);
+  render(
+    <GrowthConnections
+      kind="google_analytics"
+      product="Google Analytics"
+      connections={CONNECTIONS}
+      roles={ROLES}
+    />,
+  );
   const main = screen.getByRole("region", { name: "Nimbus team" });
-  expect(within(main).getByText("crewlet-g-growth-ab12@identity.example.com")).toBeTruthy();
+  expect(within(main).getByText("crewlet-growth-ab12cd@identity.example.com")).toBeTruthy();
   expect(within(main).getByText("Marketer")).toBeTruthy();
   expect(within(main).getByText("Nimbus web")).toBeTruthy();
   expect(within(main).getAllByText("987654321")).toHaveLength(1);
@@ -104,14 +118,78 @@ test("each connection says who Crewlet is there, the roles it holds and every ac
   expect(accountStateWords("frozen")).toBe("frozen");
 });
 
+// AN APP STORE CONNECT TEAM SAYS WHAT ITS KEYS HOLD AND REACH: the role each
+// key was added under, every app its keys reach where the company names none
+// (by name, with the bundle ID and no serving state, which an app has none
+// of), and, before Crewlet could list them, that it reaches every app its keys
+// reach and why the list is not read. Mutation: drop `open`, and a working
+// Admin key reads as reaching nothing.
+test("an App Store Connect team names its key's role and the apps it reaches", () => {
+  const roles: GrowthRoleOffer[] = [
+    { id: "ADMIN", name: "Admin", note: "Everything.", classes: ["read"], levels: ["read"] },
+  ];
+  const team = (over: Partial<GrowthConnection>): GrowthConnection => ({
+    id: "main",
+    name: "",
+    identity: "57246542-96fe-1a63-e053-0824d011072a",
+    state: "",
+    roles_held: ["ADMIN"],
+    accounts: [],
+    open: true,
+    ...over,
+  });
+  const { unmount, container } = render(
+    <GrowthConnections
+      kind="app_store_connect"
+      product="App Store Connect"
+      roles={roles}
+      connections={[team({ unread: "Add a Marketing key to list them here" })]}
+    />,
+  );
+  // A LONE CONNECTION IS NOT NAMED by its document key, which tells a reader nothing.
+  expect(screen.queryByRole("heading", { name: "main" })).toBeNull();
+  let main = within(container.querySelector<HTMLElement>(".growth-connection")!);
+  expect(main.getByText("Admin")).toBeTruthy();
+  expect(main.queryByText("Holds no role Crewlet can read.")).toBeNull();
+  expect(main.getByText("Reaches every app its keys reach.")).toBeTruthy();
+  expect(main.getByText("Add a Marketing key to list them here")).toBeTruthy();
+  unmount();
+  const second = render(
+    <GrowthConnections
+      kind="app_store_connect"
+      product="App Store Connect"
+      roles={roles}
+      connections={[
+        team({
+          accounts: [
+            {
+              product: "app_store_connect",
+              connection: "main",
+              account: "6763222842",
+              account_name: "Field Notes",
+              detail: "com.example.notes",
+            },
+          ],
+        }),
+      ]}
+    />,
+  );
+  main = within(second.container.querySelector<HTMLElement>(".growth-connection")!);
+  const apps = main.getByRole("list", { name: "Apps" });
+  expect(within(apps).getByText("Field Notes")).toBeTruthy();
+  expect(within(apps).getByText("6763222842")).toBeTruthy();
+  expect(within(apps).getByText("com.example.notes")).toBeTruthy();
+  expect(within(apps).queryByText("State not read yet")).toBeNull();
+});
+
 test("a product with no connection says so", () => {
-  render(<GrowthConnections product="Meta Ads" connections={[]} roles={[]} />);
+  render(<GrowthConnections kind="meta_ads" product="Meta Ads" connections={[]} roles={[]} />);
   expect(screen.getByText("Meta Ads has no connection yet.")).toBeTruthy();
 });
 
 test("an identity too long for a phone may break after its own @, dots and dashes, and reads whole", () => {
-  const { container } = render(<span>{breakable("crewlet-g-lead@id.example.com")}</span>);
-  expect(container.textContent).toBe("crewlet-g-lead@id.example.com");
+  const { container } = render(<span>{breakable("crewlet-lead-ab12cd@id.example.com")}</span>);
+  expect(container.textContent).toBe("crewlet-lead-ab12cd@id.example.com");
   expect(container.querySelectorAll("wbr")).toHaveLength(5);
 });
 

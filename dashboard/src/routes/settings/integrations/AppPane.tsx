@@ -17,15 +17,15 @@
  * header say what the change left without anybody pressing Check now.
  */
 
-import { GrowthProductSection } from "~/components/growth/GrowthProduct.tsx";
+import { GrowthProductSection, growthDetailsOf } from "~/components/growth/GrowthProduct.tsx";
 import { GROWTH_PRODUCTS } from "~/components/growth/words.ts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Button, Callout, Tabs } from "@crewlethq/ui";
+import { Button, Callout, HeadingLevelProvider, Tabs } from "@crewlethq/ui";
 import { RotateCwGlyph } from "@crewlethq/icons/glyphs";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { SetupForm, heldReason } from "../SetupForm.tsx";
-import { listed } from "~/lib/format.ts";
+import { SetupForm, heldReason, setsIn } from "../SetupForm.tsx";
+import { asSentence, listed } from "~/lib/format.ts";
 import { href } from "~/app/router.tsx";
 import { WATCH_MS } from "../recheck.ts";
 import {
@@ -151,6 +151,13 @@ export function AppPane({
   const stepFor = useMemo(() => seatStepFor(tool, { guarded, managed }), [tool, guarded, managed]);
   const data = access.data;
   const readOnly = useOperatorManaged(data);
+  // WHY A GROWTH PRODUCT'S ENTRIES SHOW BY ID (its connections' list unread),
+  // said once over the agents and in the chooser, where the IDs are.
+  const row = model.rows.get(tool.entry.key);
+  const scopeNote = useMemo(() => {
+    const unread = growthDetailsOf(row).connections.flatMap((c) => (c.unread ? [c.unread] : []));
+    return unread.length > 0 ? [...new Set(unread)].map(asSentence).join(" ") : undefined;
+  }, [row]);
 
   // THE ROWS ARE READ AGAIN when a sync ends, since the engine checked the
   // integration before it let the sync end.
@@ -335,87 +342,106 @@ export function AppPane({
             {refused}
           </p>
         )}
-        {tab === "agents" && (
-          <div className="int-tab">
-            {issues.length > 0 && (
-              <div className="int-issues">
-                {issues.map((issue) => (
-                  <IssueRow key={issue.key} tool={tool} issue={issue} onFix={setOpen} />
+        {/* A TAB'S SECTIONS HEAD ONE LEVEL UNDER THE PAGE'S TITLE. */}
+        <HeadingLevelProvider level={3}>
+          {tab === "agents" && (
+            <div className="int-tab">
+              {issues.length > 0 && (
+                <div className="int-issues">
+                  {issues.map((issue) => (
+                    <IssueRow key={issue.key} tool={tool} issue={issue} onFix={setOpen} />
+                  ))}
+                </div>
+              )}
+              <QueryState
+                error={access.code}
+                refusal={access.refusal}
+                loading={access.loading && !data}
+              >
+                {data && (
+                  <AgentsAccess
+                    kind={tool.entry.key}
+                    name={tool.entry.name}
+                    data={data}
+                    reload={reloadAccess}
+                    held={held}
+                    readOnly={readOnly}
+                    avatarOf={model.avatarOf}
+                    onAnswer={access.adopt}
+                    onReplaceKey={replaceKey}
+                    stepFor={stepFor}
+                    scopeNote={scopeNote}
+                  />
+                )}
+              </QueryState>
+              {/* ADVISORIES ARE SAID, never raised, and under the agents: the
+              tool works, and what the loop noticed is worth reading once. */}
+              <Notes notes={tool.notes} />
+            </div>
+          )}
+          {tab === "activity" && (
+            <div className="int-tab">
+              {kinds.length > 0 && (
+                <SetupPasses key={`passes:${tool.entry.key}`} entry={tool.entry} kinds={kinds} />
+              )}
+              {/* `forge` is a relay rather than a source: its events are filed
+              under the product they belong to. */}
+              {tool.entry.surfaces
+                .filter((s) => s.key !== "forge")
+                .map((s) => (
+                  <SurfaceDeliveries key={s.key} surface={s.key} name={s.name} />
                 ))}
-              </div>
-            )}
-            <QueryState
-              error={access.code}
-              refusal={access.refusal}
-              loading={access.loading && !data}
-            >
-              {data && (
-                <AgentsAccess
+            </div>
+          )}
+          {tab === "settings" && (
+            <div className="int-tab">
+              <SettingsSummary
+                tool={tool}
+                // APP STORE CONNECT'S KEYS, each with its Remove, are the API keys row itself.
+                drawSet={
+                  tool.entry.key === "app_store_connect"
+                    ? (_set, held) => (
+                        <AppStoreKeys
+                          keys={connectedKeys(held.flatMap((e) => e.fields))}
+                          named={
+                            setsIn(tool.sections.flatMap((s) => s.tool.requirements)).length > 1
+                          }
+                        />
+                      )
+                    : undefined
+                }
+              />
+              {/* EDIT SETTINGS EDITS THE SUMMARY ABOVE IT, so it sits under it and
+                never under a section it does not edit (recent agent changes, App
+                Store analytics). */}
+              <Button
+                size="small"
+                variant="secondary"
+                disabledReason={tool.blocked}
+                onClick={() => !tool.blocked && setOpen("settings")}
+              >
+                Edit settings
+              </Button>
+              {/* THE SERVERS, and each one's Atlas inventory: SSH's own answer. */}
+              {tool.entry.key === "ssh" && <SshServers managed={model.managed} />}
+              {/* A GROWTH PRODUCT'S connections, the vendor's roles, and a spending product's caps. */}
+              {GROWTH_PRODUCTS.has(tool.entry.key) && (
+                <GrowthProductSection
                   kind={tool.entry.key}
-                  name={tool.entry.name}
-                  data={data}
-                  reload={reloadAccess}
-                  held={held}
-                  readOnly={readOnly}
-                  avatarOf={model.avatarOf}
-                  onAnswer={access.adopt}
-                  onReplaceKey={replaceKey}
-                  stepFor={stepFor}
+                  product={tool.entry.name}
+                  row={model.rows.get(tool.entry.key)}
                 />
               )}
-            </QueryState>
-            {/* ADVISORIES ARE SAID, never raised, and under the agents: the
-              tool works, and what the loop noticed is worth reading once. */}
-            <Notes notes={tool.notes} />
-          </div>
-        )}
-        {tab === "activity" && (
-          <div className="int-tab">
-            {kinds.length > 0 && (
-              <SetupPasses key={`passes:${tool.entry.key}`} entry={tool.entry} kinds={kinds} />
-            )}
-            {/* `forge` is a relay rather than a source: its events are filed
-              under the product they belong to. */}
-            {tool.entry.surfaces
-              .filter((s) => s.key !== "forge")
-              .map((s) => (
-                <SurfaceDeliveries key={s.key} surface={s.key} name={s.name} />
-              ))}
-          </div>
-        )}
-        {tab === "settings" && (
-          <div className="int-tab">
-            <SettingsSummary tool={tool} />
-            {/* THE SERVERS, and each one's Atlas inventory: SSH's own answer. */}
-            {tool.entry.key === "ssh" && <SshServers managed={model.managed} />}
-            {/* A GROWTH PRODUCT'S connections, the vendor's roles, and a spending product's caps. */}
-            {GROWTH_PRODUCTS.has(tool.entry.key) && (
-              <GrowthProductSection
-                kind={tool.entry.key}
-                product={tool.entry.name}
-                row={model.rows.get(tool.entry.key)}
-              />
-            )}
-            {/* APP STORE ANALYTICS, turned on with an Admin key pasted once. */}
-            {tool.entry.key === "app_store_connect" && (
-              <>
-                <AppStoreKeys keys={connectedKeys(tool.sections.map((s) => s.tool))} />
+              {/* APP STORE ANALYTICS, turned on with an Admin key pasted once. */}
+              {tool.entry.key === "app_store_connect" && (
                 <AppStoreAnalytics
                   connections={analyticsConnections(tool.sections.map((s) => s.tool))}
                 />
-              </>
-            )}
-            <Button
-              size="small"
-              variant="secondary"
-              disabledReason={tool.blocked}
-              onClick={() => !tool.blocked && setOpen("settings")}
-            >
-              Edit settings
-            </Button>
-            <DocsLink tool={tool} />
-          </div>
-        )}
+              )}
+              <DocsLink tool={tool} />
+            </div>
+          )}
+        </HeadingLevelProvider>
       </div>
     </>
   );

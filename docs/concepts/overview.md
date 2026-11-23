@@ -1,6 +1,6 @@
 # Overview
 
-Crewlet is an open-source engine for orchestrating hierarchically organized AI agent companies. It provides the runtime, event system, seat ownership, and knowledge and memory infrastructure needed to operate a network of AI agents modeled after a real corporate structure. Task state lives in a work-item tracker, the engine's own by default or an external one the engine deliberately mirrors none of (see [The Tracker](task-engine.md)).
+Crewlet is a source-available engine for orchestrating hierarchically organized AI agent companies. It provides the runtime, event system, seat ownership, and knowledge and memory infrastructure needed to operate a network of AI agents modeled after a real corporate structure. Task state lives in a work-item tracker, the engine's own by default or an external one the engine deliberately mirrors none of (see [The Tracker](task-engine.md)).
 
 Crewlet ships as **an engine plus a thin operational surface**: a REST API and a web dashboard, served in the engine's own process by every `ingress` node given an API port, provide configuration, webhooks and observability. Anything else (custom UIs, metrics exporters, automations) is built *outside* the process: the engine loads no plugins, and its outside surfaces are the REST API, the `/ws/stream` socket, OTLP, and [MCP](../guides/tools-and-mcp.md#extending-the-engine) for anything an agent should call.
 
@@ -42,7 +42,7 @@ The hierarchy is informational and delegation-routing, with no special upward es
 
 - **Event-driven**: agents are reactive; events trigger agent work, which produces events
 - **Concurrent by default**: a seat's turn, its MCP children and the node's own duties run in parallel; every shared structure is checked under the race detector
-- **Provider-agnostic**: pluggable LLM, storage, tracker, knowledge and embedding backends, each behind a small contract; external tools via MCP. Only the LLM and a place for its runs are required: tracker, knowledge base and chat ship with the engine, and a [code sandbox](code-sandbox.md) cell of `local: {}` with `default_run_in: direct` is the engine host itself. So one signed-in Claude Code, Gemini CLI, Qwen Code, OpenCode, Copilot, Muse Code or Kimi Code plus that cell runs a company, with nothing to sign up for ([Choosing Your Stack](../getting-started/choosing-your-stack.md#code-sandbox-where-every-executor-runs))
+- **Provider-agnostic**: pluggable LLM, storage, tracker, knowledge and embedding backends, each behind a small contract; external tools via MCP. Only the LLM and a place for its runs are required: tracker, knowledge base and chat ship with the engine, and a [code sandbox](code-sandbox.md) cell of `local: {}` with `default_run_in: direct` is the engine host itself. So one signed-in Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, Copilot, Grok Build, Muse Code, Kimi Code or Pi plus that cell runs a company, with nothing to sign up for ([Choosing Your Stack](../getting-started/choosing-your-stack.md#code-sandbox-where-every-executor-runs))
 - **Config-driven**: a company is a YAML document, validated against a schema generated from the types the engine runs on
 - **Extension-oriented**: anything beyond running the company is built outside the process
 - **Observable**: structured logging, OpenTelemetry tracing and an event store the dashboard reads, from day one

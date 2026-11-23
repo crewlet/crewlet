@@ -151,9 +151,10 @@ func everyRule(t *testing.T) []config.Warning {
 		"name: Acme\nproviders:\n  sandbox:\n    local:\n      image: \"example.invalid/box:1\"\n" +
 			"      run_args: [\"-e\", \"UNSET_IN_BOX\"]\n" +
 			"    default_run_in: container\n" +
-			"  llm:\n    cc: {model: sonnet}\n    codex: {model: gpt-5, harness: codex}\n" +
+			"  llm:\n    cc: {model: sonnet}\n" +
+			"    house: {model: house-model, harness: custom, overrides: " + config.RunnerlessProfile + "}\n" +
 			"mcp_servers:\n  - {name: nobody, command: nobody-mcp, shared: false, access: {}}\n" +
-			"roles:\n  - name: Mixed\n    llm: [cc, codex]\n    health_tools: true\n" +
+			"roles:\n  - name: Mixed\n    llm: [cc, house]\n    health_tools: true\n" +
 			"    code: {access: full_access}\n" +
 			"  - {name: Founder, handle: founder, kind: human}\n",
 		// A vendor chat: a person with no account on it, and two teams in one

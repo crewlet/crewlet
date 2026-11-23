@@ -22,7 +22,7 @@
 // image's — is posted too, and the bridge knows it for none of the run's.
 //
 // AWAITED, AND BOUNDED. OpenCode waits for every `execute.after` hook before it
-// hands the tool's answer back to its model (core/src/tool.ts, 2.0.32), so a
+// hands the tool's answer back to its model (core/src/tool.ts), so a
 // load is on record before the request that could call a tool the skill
 // covers. A report is one request, abandoned after reportAbortMs; a failed one
 // is not made again — the model's next call to a covered tool is refused with

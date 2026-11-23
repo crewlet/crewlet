@@ -100,6 +100,9 @@ type Record struct {
 	// the call through (App Store Connect's key role), never the credential;
 	// "" for a product with one.
 	Via string
+	// Signer is whose identity signed the call at the vendor ([SignerOwn] or
+	// [SignerCompany], ADR-0179); "" for a product with no seat identity.
+	Signer Signer
 	// Operation is the SHA-256, in lowercase hex, of the exact vendor
 	// operation; Before the target's before-state's, "" where it held none.
 	Operation, Before string
@@ -118,3 +121,17 @@ type RecordChange struct {
 	Field, Label, Before, After string
 	Money, Text                 bool
 }
+
+// Signer is whose identity signed a call at the vendor (ADR-0179). The values
+// are stored (`signer` on the access log's growth record).
+type Signer string
+
+const (
+	// SignerOwn is the seat's own identity at the vendor.
+	SignerOwn Signer = "own"
+	// SignerCompany is the company's identity, which every seat on it shares.
+	SignerCompany Signer = "company"
+)
+
+// Valid reports whether s is a signer this build writes; "" is none.
+func (s Signer) Valid() bool { return s == "" || s == SignerOwn || s == SignerCompany }

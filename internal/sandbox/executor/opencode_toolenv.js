@@ -10,8 +10,7 @@
 //
 // OpenCode builds each shell command's environment as a copy of its own and
 // hands it to a plugin's `create.before` shell hook before it spawns the
-// command (measured on 2.0.32, 2.1.4, 2.2.7 and 2.3.0, each signed in
-// throughout). Deleting a name there removes it from that
+// command (measured on 2.3.2). Deleting a name there removes it from that
 // command alone: the server's own environment, which its providers read their
 // keys from, is untouched. setup awaits the registration, and OpenCode holds
 // every prompt until every plugin's setup has resolved, so no command starts

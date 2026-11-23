@@ -28,7 +28,19 @@ Google Ads' access levels, least first: **Email only** and **Billing** (no API m
 2. Apply for Explorer or Basic access to the Google Ads API on the identity project's API page; access levels and quotas belong to the project.
 3. Add the company reader's email, shown on the form, to each account at **Read-only**: Google Ads, Admin, Access and security, Users.
 4. Set each account's spending caps (below). An account without both caps refuses every spend call; reads, operate calls and pausing still work.
-5. Turn agents on from the Agents tab, each with its accounts. Add each agent's email, shown on its row, to those accounts at the level its level needs.
+5. Turn agents on from the Agents tab, each with its accounts, and give each its identity ([below](#give-an-agent-its-own-identity)).
+
+## Give an agent its own identity
+
+An agent's identity at Google Ads is its own Google growth identity, which Crewlet made; what is left is an Admin adding it, since Google Ads adds a user by API only as an invitation a mailbox accepts. Its row on the Agents tab reads **Needs you** until the identity reaches each of its accounts, and **Set up identity** in its box shows the steps, with the email ready to copy:
+
+1. In Google Ads, open the account, or the manager account its accounts are reached through (`manager`), then **Admin**, **Access and security**.
+2. On the **Users** tab, press **+** and paste the agent's email.
+3. Pick the access level its level needs, **Read-only** at `read` and **Standard** at `operate` and `administer`, and press **Add account**. Users, links and billing an `administer` agent asks for need **Admin**, which Google Ads gives a service account only by raising it after it is added.
+
+Added once to a manager account, the identity reaches every account under it; one email reaches at most 20 accounts directly.
+
+**The check, on every pass:** Crewlet signs in as the identity and reads each account, through its manager where it has one; an account Google refuses is not added yet. It then reads the identity's own access level as a user of the account it was added to, where Google Ads lets it: one below the level's is the wrong role, and Admin below `administer` is a warning. The agent is ready once every account passes, and reads Needs you again if somebody removes it there; calls Google refuses meanwhile name what is missing.
 
 ## The agents' tools
 

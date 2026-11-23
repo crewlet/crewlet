@@ -18,6 +18,7 @@ package queries
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -254,7 +255,9 @@ func (e *NotFound) Unwrap() error { return ErrNotFound }
 // honoured on one path and ignored on the other comes from.
 type Params struct{ values map[string]any }
 
-// FromMap reads a socket frame's params.
+// FromMap reads a socket frame's params, or a tool call's: those decode their
+// numbers as [json.Number] (internal/tools/toolargs), which every accessor
+// reads as it reads a socket frame's float64.
 func FromMap(m map[string]any) Params { return Params{values: m} }
 
 // Values is the bag itself, for the one caller that needs to hand it on
@@ -320,6 +323,8 @@ func (p Params) String(key string) string {
 		// A socket frame's JSON has one number type, so an id sent as a
 		// number arrives here rather than as a string.
 		return strconv.FormatFloat(v, 'f', -1, 64)
+	case json.Number:
+		return v.String()
 	case bool:
 		return strconv.FormatBool(v)
 	}
@@ -342,6 +347,13 @@ func (p Params) Int(key string, def int) int {
 	switch v := p.values[key].(type) {
 	case float64:
 		return int(v)
+	case json.Number:
+		if n, err := v.Int64(); err == nil {
+			return int(n)
+		}
+		if f, err := v.Float64(); err == nil {
+			return int(f)
+		}
 	case int:
 		return v
 	case string:
@@ -372,6 +384,9 @@ func (p Params) WholeInt(key string) (int64, bool) {
 			return 0, false
 		}
 		return int64(v), true
+	case json.Number:
+		n, err := v.Int64()
+		return n, err == nil
 	case int:
 		return int64(v), true
 	case int64:

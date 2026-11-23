@@ -5,7 +5,7 @@ import "time"
 // jsTimerCeiling is the longest delay, in milliseconds, a JavaScript timer
 // holds (a signed 32-bit count, almost 25 days). Both harnesses time an MCP call
 // with one: Claude Code clamps its tool timeout to it, OpenCode hands
-// `timeout.execution` to its timer as is (2.1.310's and 2.1.4's bundles), so a
+// `timeout.execution` to its timer as is (their bundles), so a
 // longer wait is written as the ceiling, which still outlasts any run.
 const jsTimerCeiling = 1<<31 - 1
 

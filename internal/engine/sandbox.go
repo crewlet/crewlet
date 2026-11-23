@@ -4144,12 +4144,13 @@ type executorRun struct {
 	// webDenied is the entry's `web_tools: denied`, which its executor honours
 	// as its runs on the engine host do ([sandbox.RunRequest.WebDenied]).
 	webDenied bool
-	files     map[string]string
 	env       map[string]string
 
-	// fileKeys is, by a path of files, the keys its harness writes into that
-	// file during a run ([sandbox.Spec.CredentialRunKeys]).
-	fileKeys map[string][]string
+	// logins is, by its path under the box's home, each login file the box is
+	// seeded with: its engine-host source and the rule it is seeded and written
+	// back by, kept together so neither is ever handed without the other
+	// ([executorRun.files], [executorRun.fileRules]).
+	logins map[string]boxLogin
 
 	// signIn is env without the integrations' box defaults and the seat's
 	// own credentials for a tool: what the run's sign-in is judged on, since
@@ -4213,9 +4214,11 @@ func newExecutorRun(agent *harness.Provider, seat runEnv) executorRun {
 		env:         env,
 		signIn:      signIn,
 		signInNames: signInNames(agent, entry),
-		files:       agent.SandboxCredentials(),
-		fileKeys:    agent.SandboxCredentialRunKeys(),
 		homePaths:   integrationsOwn(agent, seat.homePaths),
+	}
+	rules := agent.SandboxCredentialRules()
+	for rel, source := range agent.SandboxCredentials() {
+		run.addLogin(rel, source, rules[rel])
 	}
 	for _, name := range slices.Sorted(maps.Keys(seat.credentials)) {
 		if _, kept := credentials[name]; !kept {
@@ -4227,12 +4230,51 @@ func newExecutorRun(agent *harness.Provider, seat runEnv) executorRun {
 	// path, not the profile's, because the runner is what reads it
 	// ([executor.Paths.CredentialDocument]).
 	if doc := agent.SandboxCredentialDocument(); doc != "" {
-		if run.files == nil {
-			run.files = map[string]string{}
-		}
-		run.files[executor.CredentialDocument] = doc
+		run.addLogin(executor.CredentialDocument, doc, agent.SandboxCredentialDocumentRule())
 	}
 	return run
+}
+
+// boxLogin is one login file of an [executorRun]: its engine-host source and
+// its rule.
+type boxLogin struct {
+	source string
+	rule   harnessprofile.FileRule
+}
+
+// addLogin hands the run's box the login file at rel under its home, read
+// from source and seeded and written back by rule.
+func (r *executorRun) addLogin(rel, source string, rule harnessprofile.FileRule) {
+	if r.logins == nil {
+		r.logins = map[string]boxLogin{}
+	}
+	r.logins[rel] = boxLogin{source: source, rule: rule}
+}
+
+// files is each login file's engine-host source, by its path under the box's
+// home ([sandbox.Spec.CredentialFiles]); nil for none.
+func (r executorRun) files() map[string]string {
+	if len(r.logins) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(r.logins))
+	for rel, login := range r.logins {
+		out[rel] = login.source
+	}
+	return out
+}
+
+// fileRules is each login file's rule, by the same path
+// ([sandbox.Spec.CredentialRules]); nil for none.
+func (r executorRun) fileRules() map[string]harnessprofile.FileRule {
+	if len(r.logins) == 0 {
+		return nil
+	}
+	out := make(map[string]harnessprofile.FileRule, len(r.logins))
+	for rel, login := range r.logins {
+		out[rel] = login.rule
+	}
+	return out
 }
 
 // signInNames is the variables that sign agent's harness in from a run's

@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/es256"
 	"github.com/crewlet/crewlet/internal/growth"
+	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -37,6 +38,9 @@ type Deps struct {
 	Signals Signals
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
+	// Identity is who signs a seat's calls ([seataccess.ResolveSeat]); nil
+	// signs every call with the company's keys.
+	Identity func(ctx context.Context, handle string) (seataccess.Signer, error)
 }
 
 // Audit records the steps of a growth act on the access log (internal/engine's
@@ -72,6 +76,9 @@ type Product struct {
 	mu    sync.Mutex
 	stamp string
 	teams []*team
+
+	// seats are the clients signing with seats' own keys.
+	seats seatKeys
 }
 
 // team is one connection: its client, its connected key slots, its apps.
@@ -80,9 +87,19 @@ type team struct {
 	client     *Client
 	slots      []string
 
+	// mu guards the held list alone, never across a read of Apple, so the
+	// card and the Agents tab answer at once while a read is in flight.
 	mu     sync.Mutex
 	apps   []appInfo
 	appsAt time.Time
+	// unread is why the last read of apps failed, "" where it did not.
+	unread string
+	// started counts the reads begun, and listed is the count of the last
+	// one that listed the apps, so a caller knows a read began after it asked.
+	started, listed int
+	// reading admits one read of the team's apps at a time: a caller that
+	// waits for it gives up when its context ends.
+	reading chan struct{}
 }
 
 // appInfo is one app a team reaches.
@@ -145,9 +162,10 @@ func (p *Product) clock(status int, date time.Time) {
 	}
 }
 
-// stampOf digests the block, so teams are rebuilt when it changes.
+// stampOf digests the block's connections, so teams are rebuilt when one
+// changes; naming apps or approvers keeps every team and the apps it read.
 func stampOf(block *config.AppStoreConnect) string {
-	data, _ := json.Marshal(block)
+	data, _ := json.Marshal(block.Connections)
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }
@@ -182,7 +200,7 @@ func (p *Product) teamsNow() ([]*team, error) {
 		client := NewClient(p.deps.Base, strings.TrimSpace(p.deps.Resolve(c.IssuerID)), keys, p.deps.HTTP)
 		client.now, client.answered = p.deps.Now, p.clock
 		teams = append(teams, &team{id: id, vendor: strings.TrimSpace(p.deps.Resolve(c.VendorNumber)),
-			client: client, slots: slots})
+			client: client, slots: slots, reading: make(chan struct{}, 1)})
 	}
 	p.stamp, p.teams = stamp, teams
 	return teams, nil
@@ -194,17 +212,76 @@ const reachTTL = 10 * time.Minute
 
 // appsOf are the apps t reaches, read with its least-privileged key.
 func (p *Product) appsOf(ctx context.Context, t *team) ([]appInfo, error) {
+	return p.readApps(ctx, t, false)
+}
+
+// readApps is [Product.appsOf], read again where fresh; a failed read is
+// recorded on t for [Product.HeldReach] and keeps the list read before. One
+// read of a team runs at a time. A read that ends while a caller waited
+// answers it, a fresh caller only by one that began after it asked, so an app
+// added just before Check now is in the answer.
+func (p *Product) readApps(ctx context.Context, t *team, fresh bool) ([]appInfo, error) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.apps != nil && p.deps.Now().Sub(t.appsAt) < reachTTL {
+	asked := t.started
+	if !fresh && t.current(p.deps.Now()) {
+		defer t.mu.Unlock()
 		return t.apps, nil
 	}
+	t.mu.Unlock()
+	select {
+	case t.reading <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-t.reading }()
+	t.mu.Lock()
+	if t.answers(fresh, asked, p.deps.Now()) {
+		defer t.mu.Unlock()
+		return t.apps, nil
+	}
+	t.started++
+	read := t.started
+	t.mu.Unlock()
+	apps, err := p.listApps(ctx, t)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if err != nil {
+		// CREWLET'S OWN DEADLINE IS NOT APPLE'S ANSWER: a caller that gave up
+		// leaves the team's last word as it was.
+		if ctx.Err() == nil {
+			t.unread = unreadWords(err)
+		}
+		return nil, err
+	}
+	t.apps, t.appsAt, t.unread, t.listed = apps, p.deps.Now(), "", read
+	return apps, nil
+}
+
+// answers reports t's held list as the answer for a caller who asked when
+// asked reads had begun: a fresh caller's where a read that began after it
+// asked listed the apps, any other caller's where the list is current; t.mu
+// is held.
+func (t *team) answers(fresh bool, asked int, now time.Time) bool {
+	if fresh {
+		return t.listed > asked
+	}
+	return t.current(now)
+}
+
+// current reports t's list read within reachTTL of now; t.mu is held.
+func (t *team) current(now time.Time) bool {
+	return !t.appsAt.IsZero() && now.Sub(t.appsAt) < reachTTL
+}
+
+// listApps reads every app t reaches from Apple, through the least-privileged
+// key that may list them, never the Admin key.
+func (p *Product) listApps(ctx context.Context, t *team) ([]appInfo, error) {
 	op, _ := Catalog().Operation("apps_getCollection")
 	slot, ok := keyFor(op, t.slots, false)
 	if !ok {
 		return nil, fmt.Errorf("%w: listing apps", ErrNoKey)
 	}
-	var apps []appInfo
+	apps := []appInfo{}
 	cursor := ""
 	for range maxAppPages {
 		q := url.Values{"limit": {"200"}, "fields[apps]": {"name,bundleId,sku"}}
@@ -236,7 +313,6 @@ func (p *Product) appsOf(ctx context.Context, t *team) ([]appInfo, error) {
 			break
 		}
 	}
-	t.apps, t.appsAt = apps, p.deps.Now()
 	return apps, nil
 }
 
