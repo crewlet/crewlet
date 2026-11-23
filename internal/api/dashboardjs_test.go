@@ -1053,14 +1053,14 @@ const (
 	// the shell links: everything a reader downloads before the first screen
 	// can draw. It began at 300 KiB, under two seconds on a 1.5 Mbit/s link
 	// (the slow end of a phone tether), and has moved up with each kit release
-	// and frame feature; the last measure was 437.0 KiB, about 2.39 seconds,
-	// on kit 0.179.0, whose one sheet carries the new step, card and stat rules.
+	// and frame feature; the last measure was 440.6 KiB, about 2.41 seconds,
+	// on kit 0.181.0, whose ConfirmModal brings its change and consequence lists.
 	// The one sheet carries every design-system rule by rule (see
 	// TestNoLazyStylesheetCarriesTheDesignSystem), so kit releases grow it even
 	// when no screen joins the entry. A raise names the measured size and its
 	// cause in its commit; a screen's module in the entry is the failure to fix
 	// rather than raise for.
-	initialBudget = 437 << 10
+	initialBudget = 441 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1079,10 +1079,10 @@ const (
 	// at 3 MiB over a 2.3 MB baseline and is set so a bundle that doubled the
 	// baseline is still refused; screens fetched only when opened (the rich
 	// editor, the brand and folder screens, the assistant's panel, Gitlet) and
-	// kit releases account for its growth, and the last measure was 7411.5 KiB,
-	// on kit 0.179.0, whose vendor marks draw the store, ads and analytics logos.
+	// kit releases account for its growth, and the last measure was 7418.6 KiB,
+	// on kit 0.181.0, whose ConfirmModal brings its change and consequence lists.
 	// A raise names the measured size and its cause in its commit.
-	treeBudget = 5<<20 + 2292<<10
+	treeBudget = 5<<20 + 2299<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
