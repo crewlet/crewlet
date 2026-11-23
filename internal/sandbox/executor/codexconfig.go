@@ -15,11 +15,6 @@ import (
 	"github.com/crewlet/crewlet/internal/shellword"
 )
 
-// codexTelemetryEnv is the OTLP exporter's variables, the endpoint and its
-// headers, which carry the run's telemetry credential: excluded from the
-// model's shell commands, kept for Codex's own export.
-const codexTelemetryEnv = "OTEL_EXPORTER_OTLP_*"
-
 // codexMCPStartupWait is how long Codex waits for a required MCP server to
 // finish its handshake before the run fails ([codexConfigTOML]): SIXTY
 // SECONDS, the wait OpenCode's script gives the same bridge
@@ -93,10 +88,8 @@ func waitSeconds(d time.Duration) int {
 // (with all three off a run dials only its model and servers, measured); no
 // request_user_input (a question parks through ask_and_wait); and the model's
 // shell inherits the run's environment less [codexShellExcluded], keeping
-// PATH, HOME, GIT_CONFIG_* and the seat's tool credentials.
+// PATH, HOME, GIT_CONFIG_*, the sign-in and the seat's tool credentials.
 func codexPosture(req sandbox.RunRequest) []string {
-	// WriteConfig refused a run whose names do not read, before any script.
-	excluded, _ := codexShellExcluded(req)
 	set := []string{
 		`sandbox_mode="danger-full-access"`,
 		`approval_policy="never"`,
@@ -106,7 +99,7 @@ func codexPosture(req sandbox.RunRequest) []string {
 		`skills.bundled.enabled=false`,
 		`tools.experimental_request_user_input.enabled=false`,
 		`shell_environment_policy.inherit="all"`,
-		`shell_environment_policy.exclude=` + tomlArray(excluded),
+		`shell_environment_policy.exclude=` + tomlArray(codexShellExcluded()),
 	}
 	// THE ENTRY'S WEB TOOLS OFF where it denies them, as its runs on the engine
 	// host have none: web search is Codex's one web tool, and with `disabled` the
@@ -133,17 +126,11 @@ func codexPosture(req sandbox.RunRequest) []string {
 }
 
 // codexShellExcluded is what the commands a Codex run's model runs start
-// without (its shell_environment_policy.exclude): the names the run signs in
-// by ([sandbox.RunRequest.SignInEnv]) and the note helper's routes, through
-// the one rule every runner keeps ([toolEnvOmitted]), and the telemetry
-// exporter's endpoint and headers ([codexTelemetryEnv], a pattern, which
-// Codex keeps for its own export). A name no runner could keep out is refused.
-func codexShellExcluded(req sandbox.RunRequest) ([]string, error) {
-	names, err := toolEnvOmitted(req.SignInEnv, codexNotesEnv, codexSkillsEnv)
-	if err != nil {
-		return nil, err
-	}
-	return append(names, codexTelemetryEnv), nil
+// without (its shell_environment_policy.exclude, patterns): Crewlet's own
+// variables ([crewletShellOff]), the note helper's routes among them, which
+// Codex keeps for its own telemetry export and the helper's.
+func codexShellExcluded() []string {
+	return crewletShellOff(codexNotesEnv, codexSkillsEnv).globs()
 }
 
 // codexRunHome is what a Codex run may load from the box that its launch did
@@ -233,9 +220,6 @@ func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox
 	paths Paths) (string, error) {
 	// EVERY REFUSAL BEFORE THE BOX IS TOUCHED, the home's prune included: a
 	// refused launch leaves the box as it found it.
-	if _, err := codexShellExcluded(req); err != nil {
-		return "", err
-	}
 	if n := len(paths.CodexSocket()); n > maxCodexSocketPath {
 		return "", fmt.Errorf("executor: a Codex run's socket, %s, is %d bytes, past the %d a unix socket's "+
 			"path holds; a local box's home is under providers.sandbox.local.state_dir, which needs a "+

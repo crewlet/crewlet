@@ -137,10 +137,7 @@ func museScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	if req.Limits.MaxTurns > 0 {
 		parts = append(parts, "--max-model-steps", strconv.Itoa(req.Limits.MaxTurns))
 	}
-	// THE KEY ON STDIN, where the entry signs in by it (META_API_KEY): the
-	// script reads it, and Muse's own environment, which its shell inherits
-	// whole, never holds it (measured on 1.4.25).
-	parts = append(parts, `--prompt-file "$p" $kf`)
+	parts = append(parts, `--prompt-file "$p"`)
 
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
@@ -159,7 +156,10 @@ func museScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$s" "$k" "$w" "$v" > %s`,
 		q(paths.SessionRecord()))
 	b.WriteString(museWiring(paths))
-	b.WriteString(museShellEnvironment(paths, req.SignInEnv))
+	// CREWLET'S OWN VARIABLES GO before Muse starts ([crewletShellOff]): its
+	// shell inherits its environment whole (measured on 1.4.25), and the run
+	// turns no Muse telemetry on.
+	b.WriteString(crewletShellOff().script())
 	before, after := museChildUsage(paths)
 	b.WriteString(before)
 	b.WriteString(launchHarness(strings.Join(parts, " "), paths))
@@ -582,9 +582,6 @@ func museServerName(name string) bool {
 // [museSystemMax].
 func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
 	paths Paths) (string, error) {
-	if _, err := toolEnvOmitted(req.SignInEnv); err != nil {
-		return "", err
-	}
 	system := req.System
 	if req.Steer.Set() {
 		system = withNoteInstruction(system, m.NoteInstruction())
@@ -695,40 +692,6 @@ func museWiring(paths Paths) string {
 	line(`done`)
 	line(`rm -f %s`, errs)
 	return b.String()
-}
-
-// museShellOff is every variable the run's model's shell runs without, since
-// it inherits Muse's environment whole (measured on 1.4.25): the entry's key,
-// which the script hands Muse on stdin instead ([museShellEnvironment]), and
-// OTEL_EXPORTER_OTLP_*, an exporter's address and headers, of which Muse reads
-// the endpoint alone.
-const museShellOff = "OTEL_EXPORTER_OTLP_"
-
-// museShellEnvironment is the part of a run's script that keeps the
-// environment its harness, and so the model's shell, starts with to what it
-// needs: the entry's META_API_KEY, where it has one, written to a file only
-// the script's user reads, opened as the script's stdin, which the launch
-// hands the harness, and removed at once, so Muse reads the key on stdin
-// (`--api-key-stdin`, kf) and no file or variable keeps it; every other
-// variable the run signs in by (signIn, [sandbox.RunRequest.SignInEnv]),
-// which Muse never reads, and every OTEL_EXPORTER_OTLP_* variable unset.
-// A sign-in name no shell can unset is refused by [Muse.WriteConfig].
-func museShellEnvironment(paths Paths, signIn []string) string {
-	key := shellword.Quote(paths.WorkDir() + "/muse-key")
-	unset := "unset META_API_KEY"
-	if names, err := toolEnvOmitted(signIn); err == nil {
-		for _, name := range names {
-			unset += " " + name
-		}
-	}
-	return `kf=
-if [ -n "${META_API_KEY-}" ]; then
-  (umask 077 && printf '%s' "$META_API_KEY" > ` + key + `) && exec 0< ` + key + ` && kf=--api-key-stdin
-  rm -f ` + key + `
-fi
-` + unset + `
-for o in $(env | sed -n 's/^\(` + museShellOff + `[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$o"; done
-`
 }
 
 // artifactFiles is the files a Muse Code run leaves in its box of its own

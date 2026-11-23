@@ -31,7 +31,7 @@ func (p Paths) ClaudeNotesSystem() string { return p.WorkDir() + "/system-notes.
 func (p Paths) ClaudeSettings() string { return p.WorkDir() + "/claude-settings.json" }
 
 // ClaudeToolEnv is the file a Claude Code run's harness runs ahead of each
-// command its model runs, named by CLAUDE_ENV_FILE ([claudeToolEnv]). Under
+// command its model runs, named by CLAUDE_ENV_FILE ([writeClaudeToolEnv]). Under
 // WorkDir beside the settings, for their reasons.
 func (p Paths) ClaudeToolEnv() string { return p.WorkDir() + "/claude-tool-env.sh" }
 

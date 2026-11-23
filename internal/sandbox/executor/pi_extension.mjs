@@ -22,10 +22,10 @@
 //   - reports each load of one of the run's own skills (a `read` of its
 //     SKILL.md) to the skill route, awaited before the model sees the file;
 //   - records the context pi reports at each turn's end;
-//   - runs the model's shell with only what it needs: pi's own bash tool,
-//     registered again with a spawn hook that leaves out the names that sign
-//     pi in and the telemetry exporter's settings, which pi itself still
-//     reads from its own environment.
+//   - runs the model's shell without Crewlet's own variables: pi's own bash
+//     tool, registered again with a spawn hook that leaves out the run's
+//     telemetry and trace context, which pi itself still reads from its own
+//     environment.
 // What it records for the runner is a `custom` session entry (pi.appendEntry),
 // which pi prints on its JSON stream and never sends to the model.
 //

@@ -104,13 +104,13 @@ func TestAGeminiRunsSettingsFollowItsWiring(t *testing.T) {
 	}
 }
 
-// A GEMINI RUN STARTS ITS HARNESS WITHOUT THE TELEMETRY'S NAMES OR A BRIDGE
-// VARIABLE. The run's script starts Gemini CLI without any OTEL_EXPORTER_OTLP_
-// variable, whatever its name, as its telemetry is never on; no variable
-// carries the bridge's address, its notes route or its token, which its
-// settings and its take script's configuration hold; the key it signs in with
-// and the Gitlet names stay. The stand-in records the environment Gemini CLI
-// starts with, in a real box.
+// A GEMINI RUN STARTS ITS HARNESS WITHOUT CREWLET'S OWN VARIABLES OR A BRIDGE
+// VARIABLE. The run's script starts Gemini CLI without any OTEL_ variable,
+// whatever its name, or the trace context, as its telemetry is never on; no
+// variable carries the bridge's address, its notes route or its token, which
+// its settings and its take script's configuration hold; the key it signs in
+// with and the Gitlet names stay. The stand-in records the environment Gemini
+// CLI starts with, in a real box.
 //
 // Mutations, each red: leave the telemetry's names in the environment; match
 // only the names the engine hands; hand the bridge's address through a
@@ -130,6 +130,7 @@ echo '{"type":"result","status":"success"}'`)
 			"OTEL_EXPORTER_OTLP_PROTOCOL":        "http/protobuf",
 			"OTEL_EXPORTER_OTLP_CUSTOM_OPERATOR": "an operator's",
 			"OTEL_RESOURCE_ATTRIBUTES":           "crewlet.turn_id=t",
+			"TRACEPARENT":                        "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
 			sandbox.GitURLVar:                    "https://git.example.com/box/git",
 			sandbox.GitAccessFileVar:             "/home/box/.crewlet/git-access"}})
 	if !res.Success {
@@ -137,11 +138,12 @@ echo '{"type":"result","status":"success"}'`)
 	}
 	env := "\n" + boxFile(t, b, b.Home()+"/harness-env")
 	for _, line := range strings.Split(env, "\n") {
-		if strings.HasPrefix(line, "OTEL_EXPORTER_OTLP_") || strings.Contains(line, "bridge-token-placeholder") {
+		if strings.HasPrefix(line, "OTEL_") || strings.HasPrefix(line, "TRACEPARENT=") ||
+			strings.Contains(line, "bridge-token-placeholder") {
 			t.Errorf("Gemini CLI starts with %q, want it absent", line)
 		}
 	}
-	for _, kept := range []string{"GEMINI_API_KEY=", "OTEL_RESOURCE_ATTRIBUTES=", sandbox.GitURLVar + "=",
+	for _, kept := range []string{"GEMINI_API_KEY=", sandbox.GitURLVar + "=",
 		sandbox.GitAccessFileVar + "="} {
 		if !strings.Contains(env, "\n"+kept) {
 			t.Errorf("Gemini CLI starts without %s, which the run was handed", strings.TrimSuffix(kept, "="))

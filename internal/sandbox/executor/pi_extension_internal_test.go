@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -410,30 +411,28 @@ func TestThePiExtensionReportsASkillLoad(t *testing.T) {
 	p.expect("handled")
 }
 
-// THE MODEL'S SHELL RUNS WITHOUT THE NAMES THAT SIGN PI IN, NOR THE TELEMETRY
-// EXPORTER'S SETTINGS: the extension registers pi's own bash tool again, its
-// spawn hook leaving those names, and every name under a withheld prefix, out
-// of every command's environment and keeping the rest (a seat's own tool
-// credentials among them); a run withholding nothing leaves pi's bash tool as
-// it is.
-// The same, in a real 1.6.0 run: TestAPiRunsShellRunsWithoutItsSignIn.
+// THE MODEL'S SHELL RUNS WITHOUT CREWLET'S OWN VARIABLES: the extension
+// registers pi's own bash tool again, its spawn hook leaving the names it is
+// written with, and every name under a withheld prefix, out of every
+// command's environment and keeping the rest (the sign-in and a seat's own
+// tool credentials among them); a run withholding nothing leaves pi's bash
+// tool as it is. The same, in a real 1.6.0 run: TestAPiRunsShellRunsWithoutCrewletsVariables.
 //
 // Mutation: hand the hook's environment back whole, drop the prefixes, or
 // drop the registration: this goes red.
-func TestThePiExtensionRunsTheShellWithoutTheSignIn(t *testing.T) {
+func TestThePiExtensionRunsTheShellWithoutCrewletsVariables(t *testing.T) {
 	t.Parallel()
-	p := startPiProbe(t, piExtensionSettings{Withheld: []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY"},
-		WithheldPrefixes: piShellWithout})
+	off := crewletShellOff()
+	p := startPiProbe(t, piExtensionSettings{Withheld: off.names, WithheldPrefixes: off.prefixes})
 	if r := p.expect("tool"); r.Name != "bash" {
 		t.Fatalf("the extension registered %q, want pi's bash tool", r.Name)
 	}
 	p.expect("loaded")
 	p.send(map[string]any{"op": "spawn", "name": "bash", "env": map[string]string{"ANTHROPIC_API_KEY": "sk-ant-x",
-		"OPENAI_API_KEY": "sk-y", "GITHUB_TOKEN": "ghs_z", "PATH": "/bin",
+		"GITHUB_TOKEN": "ghs_z", "PATH": "/bin", "TRACEPARENT": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
 		"OTEL_EXPORTER_OTLP_ENDPOINT": "https://otel.example.com", "OTEL_EXPORTER_OTLP_HEADERS": "authorization=x",
 		"OTEL_SERVICE_NAME": "crewlet"}})
-	if got := p.expect("spawned").Names; len(got) != 3 || got[0] != "GITHUB_TOKEN" || got[1] != "OTEL_SERVICE_NAME" ||
-		got[2] != "PATH" {
+	if got := p.expect("spawned").Names; !slices.Equal(got, []string{"ANTHROPIC_API_KEY", "GITHUB_TOKEN", "PATH"}) {
 		t.Fatalf("the shell's environment holds %v", got)
 	}
 

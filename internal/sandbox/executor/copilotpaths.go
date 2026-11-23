@@ -13,8 +13,8 @@ func (p Paths) CopilotHome() string { return p.Home + "/.copilot" }
 // every run ([copilotSettings]).
 func (p Paths) CopilotSettings() string { return p.CopilotHome() + "/settings.json" }
 
-// CopilotToolEnv is the file BASH_ENV names for a Copilot run handed sign-in
-// variables ([copilotToolEnv]). Under WorkDir, as Claude Code's is
+// CopilotToolEnv is the file BASH_ENV names in a Copilot run
+// ([copilotToolEnv]). Under WorkDir, as Claude Code's is
 // ([Paths.ClaudeToolEnv]).
 func (p Paths) CopilotToolEnv() string { return p.WorkDir() + "/copilot-tool-env.sh" }
 
