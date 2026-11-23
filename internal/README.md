@@ -270,6 +270,7 @@
 | `clocktest` | Forges instants whose wall and monotonic clock readings have parted (a host that slept, a wall clock stepped), for tests of code that measures time across them. Imported only by tests |
 | `solo` | Declares a test package must have the runner to itself; `solo/partition` computes `make test`'s and `make test-solo`'s halves and CI shards from the imports, and a roster guard fails both ways |
 | `prereqtest` | Test support: the one rule for a program or directory a machine may lack (fail under the make targets, skip in a bare `go test`), plus pin-file reading. |
+| `imagetest` | Test support: a container image a case runs, built from its Dockerfile once a process, held by the runtime, or loaded from a cache directory CI keeps between runs (`Provide`). |
 | `e2e` | The gates only a whole running node can answer: a real engine, API and scripted-model turn, with the dashboard's own protocol module reading the frames that come out; no exported surface, runs in `make test-solo` |
 | `docsgate` | Test-only gates holding the tree's markdown links, anchors, docs index, coordination-bucket inventories and the always-loaded agent instructions to the files and code they name |
 | `commentgate` | Test-only: holds every comment block outside a package doc to 12 lines and every row of this file to one line, each against an inventory of older code that only shrinks (#1474) |
