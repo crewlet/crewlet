@@ -59,6 +59,9 @@ func (*memAdvisor) LatestRun(context.Context, statelog.Freshness) (advisordomain
 func (*memAdvisor) PendingRequests(context.Context, statelog.Freshness) ([]advisordomain.RunRow, error) {
 	return nil, nil
 }
+func (*memAdvisor) Unowned(context.Context, statelog.Freshness) ([]advisordomain.UnownedRun, error) {
+	return nil, nil
+}
 func (*memAdvisor) LastRunOfClasses(context.Context, statelog.Freshness) (map[string]time.Time, error) {
 	return map[string]time.Time{}, nil
 }

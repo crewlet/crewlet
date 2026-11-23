@@ -5,9 +5,9 @@
  * first screen of a reader who never opens it does not carry it.
  */
 
-/* The Advisor's page head: the run's line, then Run and the range, on one
-   wrapping row. The line takes a row of its own where it cannot have 16rem
-   beside the controls (a phone). */
+/* The Advisor's page head: two lines of one height whatever the run's state
+   (where it stands; what it is doing now, with its toggles), Run and the
+   range at the end, wrapping under on a phone. */
 .advisor-head {
   display: flex;
   flex-wrap: wrap;
@@ -17,32 +17,38 @@
 
 .advisor-head__run {
   display: grid;
-  flex: 1 1 16rem;
+  flex: 1 1 20rem;
   gap: var(--spacing-1);
   min-width: 0;
 }
 
-.advisor-head__run > p {
-  margin: 0;
+.advisor-head__state,
+.advisor-head__trail {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-3);
+  min-width: 0;
+  min-height: var(--size-control-sm);
 }
 
-/* What a running run is doing now: one line, cut where it is longer. */
+.advisor-head__trail {
+  gap: var(--spacing-1);
+}
+
+/* What a running run is doing now, or how it ended: one line, cut where longer. */
 .advisor-run__now {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: 0 var(--spacing-2) 0 0;
 }
 
 .advisor-run__meter {
-  max-width: 20rem;
+  flex: none;
+  width: 8rem;
 }
 
-/* Steps and the checks that could not judge, side by side, folded. */
-.advisor-run__folds {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  gap: 0 var(--spacing-4);
+.advisor-head__skeleton {
+  flex: none;
 }
 
 .advisor-head__controls {
@@ -50,6 +56,25 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--spacing-2) var(--spacing-3);
+  min-height: var(--size-control-sm);
+}
+
+/* The steps or the checks that could not judge, opened under the head: at
+   most half the view, so the findings below stay in reach. */
+.advisor-run__panel {
+  max-height: calc(100cqb / 2);
+  padding: var(--spacing-2) var(--spacing-3);
+  overflow-y: auto;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-subtle);
+}
+
+.advisor-run__silent {
+  display: grid;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding-left: var(--spacing-4);
 }
 
 /* A finding's fix and its menu, side by side at a row's end. */
@@ -109,7 +134,7 @@
   gap: var(--spacing-2);
 }
 
-/* Closed findings, one row each. */
+/* A finding's earlier episodes on its page, one row each. */
 .advisor-history {
   display: grid;
   gap: var(--spacing-2);
@@ -123,6 +148,42 @@
   flex-wrap: wrap;
   align-items: baseline;
   gap: var(--spacing-1) var(--spacing-2);
+}
+
+/* Closed findings by the day they closed: a day's heading, then its rows in
+   three columns (the time, the finding on two lines, how it ended). */
+.advisor-closed {
+  display: grid;
+  gap: var(--spacing-5);
+}
+
+.advisor-closed__day {
+  display: grid;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+.advisor-closed__count {
+  font-variant-numeric: tabular-nums;
+}
+
+.advisor-closed__time {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The finding's title on a line of its own, what it was about under it. */
+.advisor-closed__finding {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* The two-column head of a run that is open under it. */
+.advisor-head-wrap {
+  display: grid;
+  gap: var(--spacing-2);
 }
 
 /* A week's report: its head, then its sections, one under the other. */
@@ -293,15 +354,4 @@
   padding: var(--spacing-3);
   border-radius: var(--radius-md);
   background: var(--color-surface-subtle);
-}
-
-/* Every step a run reported, oldest first, folded under Steps; at most half
-   the view, so the findings below stay in reach. */
-.advisor-run__steps {
-  display: grid;
-  gap: var(--spacing-1);
-  max-height: calc(100cqb / 2);
-  margin: var(--spacing-1) 0 0;
-  padding-left: var(--spacing-4);
-  overflow-y: auto;
 }

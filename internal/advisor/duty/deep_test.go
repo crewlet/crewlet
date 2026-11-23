@@ -23,6 +23,9 @@ type fakeDeep struct {
 	canceled bool
 	// resumed is the checkpoint each run was handed, "" for a fresh one.
 	resumed []string
+	// wrote, where set, is told each time a run has written its line and
+	// its checkpoint.
+	wrote chan struct{}
 }
 
 func (f *fakeDeep) Assigned() bool { return f.assigned }
@@ -33,8 +36,11 @@ func (f *fakeDeep) Deep(ctx context.Context, now time.Time, _, _ []advisor.Store
 	f.runs++
 	f.resumed = append(f.resumed, string(io.Resume))
 	f.mu.Unlock()
-	io.Progress(now, "reading capacity")
+	io.Progress(duty.Line{At: now, Step: advisordomain.ProgressRead, Text: "reading capacity", Detail: "capacity"})
 	io.Checkpoint(now, json.RawMessage(fmt.Sprintf(`{"agenda":[{"id":"A1","verdict":"confirmed"}],"run":%d}`, f.runs)))
+	if f.wrote != nil {
+		f.wrote <- struct{}{}
+	}
 	select {
 	case <-f.release:
 		return duty.ModelRun{Summary: map[string]any{"status": "done"}, Concluded: true}, nil
@@ -75,8 +81,10 @@ func TestADeepRunRunsBesideTheTick(t *testing.T) {
 		t.Errorf("the deep run ran %d times, want once", deep.runs)
 	}
 	if len(l.progress) != 2 || l.progress[0] != "pressed: Checks done: 0 new, 0 closed" ||
-		l.progress[1] != "pressed: reading capacity" {
-		t.Errorf("progress on the log = %v, want the checks' line and the investigation's under the press", l.progress)
+		l.progress[1] != "pressed: reading capacity" || l.lines[0].Step != advisordomain.ProgressChecks ||
+		l.lines[1].Step != advisordomain.ProgressRead || l.lines[1].Detail != "capacity" {
+		t.Errorf("progress on the log = %v (%+v), want the checks' step and the investigation's under the press",
+			l.progress, l.lines)
 	}
 }
 
@@ -143,12 +151,13 @@ func TestATakeoverResumesFromTheCheckpointTheLostHolderWrote(t *testing.T) {
 	t.Parallel()
 	l, c := &fakeLog{}, &clock{now: start}
 	first := newDuty(l, &fakeReader{signature: "r1"}, nil, c)
-	deep := &fakeDeep{assigned: true, release: make(chan struct{})}
+	deep := &fakeDeep{assigned: true, release: make(chan struct{}), wrote: make(chan struct{}, 2)}
 	first.Deep = deep
 	l.requested = []duty.Request{{Run: "pressed", By: "owner", Kind: advisordomain.RunKindDeep}}
 	held := true
 	first.Claim = func(context.Context) (bool, error) { return held, nil }
 	step(t, first)
+	<-deep.wrote
 	held = false
 	step(t, first)
 	first.WaitDeep()
