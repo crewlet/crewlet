@@ -24,15 +24,19 @@ func (p Paths) HermesSkills() string { return p.HermesHome() + "/skills" }
 // ([hermesPluginFiles]), a user plugin Hermes loads in its gateway.
 func (p Paths) HermesPlugin() string { return p.HermesHome() + "/plugins/" + hermesPluginName }
 
-// HermesManaged is the directory a Hermes run names as HERMES_MANAGED_DIR: its
-// `config.yaml` is merged over the box's own per leaf ([hermesOverlay]), so the
-// run's MCP servers and web denial reach Hermes and the box's configuration
-// stays as it is. Under WorkDir, so a `git clean` cannot take it.
+// HermesManaged is the directory a Hermes run names as HERMES_MANAGED_DIR: the
+// box's own managed scope with the run's keys over it ([hermesInstallOverlay]),
+// merged over the box's configuration per leaf, so the run's MCP servers and
+// web denial reach Hermes and the box's configuration stays as it is. Under
+// WorkDir, so a `git clean` cannot take it.
 func (p Paths) HermesManaged() string { return p.WorkDir() + "/hermes-managed" }
 
 // HermesOverlay is the overlay Hermes reads ([Paths.HermesManaged]); the
-// session gate moves the one the run starts with into place.
+// session gate writes the one the run starts with.
 func (p Paths) HermesOverlay() string { return p.HermesManaged() + "/config.yaml" }
+
+// HermesManagedEnv is the box's managed `.env`, copied beside the overlay.
+func (p Paths) HermesManagedEnv() string { return p.HermesManaged() + "/.env" }
 
 // HermesOverlayStaged is the overlay WriteConfig writes for the session the run
 // was asked to work in, and HermesOverlayFresh the same wired to a session of

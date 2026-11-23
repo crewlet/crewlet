@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -318,17 +321,169 @@ func TestAHermesSessionContinuesOnlyOnItsOneRelease(t *testing.T) {
 
 // hermesLauncherStandIn is a directory holding a `hermes` that runs what its
 // launcher's `--run-module cProfile -o /dev/null <script> <args>` runs, the
-// script under the machine's python3, which keeps no exit status either.
+// script under the machine's python3, which keeps no exit status either, with
+// [hermesLoaderStandIn] as Hermes's own modules; the box's managed scope is
+// the directory's `etc-hermes` ([hermesSystemScope]).
 func hermesLauncherStandIn(t *testing.T) string {
 	t.Helper()
 	python := prereqtest.OnPath(t, "python3", "the case runs the run's carry script", "install python3")
 	bin := t.TempDir()
+	modules := filepath.Join(bin, "py", "hermes_cli")
+	if err := os.MkdirAll(modules, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, src := range hermesLoaderStandIn(hermesSystemScope(bin)) {
+		if err := os.WriteFile(filepath.Join(modules, name), []byte(src), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run := "import runpy, sys; sys.path.insert(0, " + strconv.Quote(filepath.Join(bin, "py")) +
+		"); sys.argv = sys.argv[1:]; runpy.run_path(sys.argv[0], run_name='__main__')"
 	launcher := "#!/bin/sh\n[ \"$1 $2 $3 $4\" = '--run-module cProfile -o /dev/null' ] || exit 2\nshift 4\n" +
-		shellword.Quote(python) + " -I \"$@\"\nexit 0\n"
+		shellword.Quote(python) + " -I -c " + shellword.Quote(run) + " \"$@\"\nexit 0\n"
 	if err := os.WriteFile(filepath.Join(bin, "hermes"), []byte(launcher), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	return bin
+}
+
+// hermesSystemScope is the stand-in's `/etc/hermes`.
+func hermesSystemScope(bin string) string { return filepath.Join(bin, "etc-hermes") }
+
+// hermesLoaderStandIn is what the carry script reads of Hermes 0.23.3's own
+// modules, as it reads them (managed_scope.py, config.py; YAML read as the
+// JSON the cases write): the managed scope HERMES_MANAGED_DIR names, else
+// system, where it is a directory; and HERMES_HOME's config.yaml with that
+// scope's merged over it per leaf.
+func hermesLoaderStandIn(system string) map[string]string {
+	return map[string]string{
+		"__init__.py": "",
+		"managed_scope.py": `import json, os
+from pathlib import Path
+def get_managed_dir():
+    p = Path(os.environ.get("HERMES_MANAGED_DIR", "").strip() or ` + strconv.Quote(system) + `)
+    return p if p.is_dir() else None
+def load_managed_config():
+    d = get_managed_dir()
+    return json.loads((d / "config.yaml").read_text()) if d is not None and (d / "config.yaml").is_file() else {}
+`,
+		"config.py": `import json, os
+from hermes_cli import managed_scope
+def merge(under, over):
+    out = dict(under)
+    for k, v in over.items():
+        out[k] = merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+    return out
+def load_config():
+    path = os.path.join(os.environ.get("HERMES_HOME", "/nonexistent"), "config.yaml")
+    user = json.load(open(path)) if os.path.isfile(path) else {}
+    return merge(user, managed_scope.load_managed_config())
+`,
+	}
+}
+
+// THE RUN'S MANAGED SCOPE IS THE BOX'S OWN WITH THE RUN'S KEYS OVER IT: the
+// box's managed config.yaml and .env (which the run's HERMES_MANAGED_DIR would
+// otherwise hide) kept, the run's servers and settings over them per leaf, and
+// a web-denied run's disabled toolsets the box's effective list (its own
+// config under its managed scope, lists whole) and then the run's; a box with
+// no managed scope leaves no .env of an earlier run's.
+//
+// Mutation: write the run's overlay alone, replace the box's list with the
+// run's, read the box's list without its managed scope, or keep an earlier
+// .env, and a case goes red.
+func TestAHermesRunsManagedScopeIsTheBoxsWithTheRunsKeysOver(t *testing.T) {
+	t.Parallel()
+	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
+	servers := map[string]sandbox.MCPServer{"crewlet": {Transport: sandbox.TransportHTTP, URL: "http://bridge.example.com/mcp",
+		AlwaysLoaded: true}}
+	type overlay struct {
+		Servers map[string]map[string]any `json:"mcp_servers"`
+		Model   map[string]string         `json:"model"`
+		Agent   struct {
+			Disabled []string `json:"disabled_toolsets"`
+		} `json:"agent"`
+	}
+	install := func(t *testing.T, scope map[string][]byte, webDenied bool) (overlay, []byte, bool) {
+		t.Helper()
+		bin := hermesLauncherStandIn(t)
+		paths := Paths{Home: t.TempDir()}
+		for _, dir := range []string{paths.HermesManaged(), paths.HermesHome()} {
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		staged, err := hermesOverlay(servers, webDenied)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files := map[string][]byte{
+			paths.HermesCarry():                              hermesCarryScript,
+			paths.HermesOverlayStaged():                      staged,
+			paths.HermesManagedEnv():                         []byte("EARLIER=1\n"),
+			filepath.Join(paths.HermesHome(), "config.yaml"): []byte(`{"agent": {"disabled_toolsets": ["moa"]}}`),
+		}
+		for name, raw := range scope {
+			files[filepath.Join(hermesSystemScope(bin), name)] = raw
+		}
+		for path, raw := range files {
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		cmd := exec.Command(sh, "-c", hermesCarryRun(paths)+hermesInstallOverlay(paths, paths.HermesOverlayStaged()))
+		cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+			"HERMES_HOME="+paths.HermesHome(), "HERMES_MANAGED_DIR="+paths.HermesManaged())
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("the install failed: %v: %s", err, out)
+		}
+		var got overlay
+		raw, err := os.ReadFile(paths.HermesOverlay())
+		if err != nil || json.Unmarshal(raw, &got) != nil {
+			t.Fatalf("the overlay reads %q (%v)", raw, err)
+		}
+		if info, err := os.Stat(paths.HermesOverlay()); err != nil || info.Mode().Perm() != 0o600 {
+			t.Errorf("the overlay, which holds the bridge's token, is %v (%v), want mode 0600", info.Mode(), err)
+		}
+		if _, err := os.Stat(paths.HermesOverlayStaged()); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("the staged overlay was left: %v", err)
+		}
+		env, err := os.ReadFile(paths.HermesManagedEnv())
+		return got, env, err == nil
+	}
+	scope := map[string][]byte{"config.yaml": []byte(`{"agent": {"disabled_toolsets": ["homeassistant"]}, ` +
+		`"mcp_servers": {"it": {"url": "http://it.example.com/mcp"}}, "model": {"default": "pinned-model"}}`),
+		".env": []byte("IT_PINNED=1\n")}
+	t.Run("a box's managed scope, web denied", func(t *testing.T) {
+		got, env, _ := install(t, scope, true)
+		if got.Servers["it"]["url"] != "http://it.example.com/mcp" || got.Servers["crewlet"]["url"] != "http://bridge.example.com/mcp" ||
+			got.Model["default"] != "pinned-model" {
+			t.Errorf("the overlay = %+v, want the box's server and model beside the run's server", got)
+		}
+		if want := []string{"homeassistant", "web", "browser", "x_search"}; !slices.Equal(got.Agent.Disabled, want) {
+			t.Errorf("disabled toolsets = %v, want %v", got.Agent.Disabled, want)
+		}
+		if string(env) != "IT_PINNED=1\n" {
+			t.Errorf("the managed .env = %q, want the box's", env)
+		}
+	})
+	t.Run("a box's managed scope, web allowed", func(t *testing.T) {
+		if got, _, _ := install(t, scope, false); !slices.Equal(got.Agent.Disabled, []string{"homeassistant"}) {
+			t.Errorf("disabled toolsets = %v, want the box's alone", got.Agent.Disabled)
+		}
+	})
+	t.Run("no managed scope, web denied", func(t *testing.T) {
+		got, env, kept := install(t, nil, true)
+		if want := []string{"moa", "web", "browser", "x_search"}; !slices.Equal(got.Agent.Disabled, want) {
+			t.Errorf("disabled toolsets = %v, want %v", got.Agent.Disabled, want)
+		}
+		if kept {
+			t.Errorf("an earlier run's managed .env was kept: %q", env)
+		}
+	})
 }
 
 // hermesGate runs a continued run's session gate in a box at home, its Hermes

@@ -1,4 +1,5 @@
-# A Hermes Agent 0.23.3 session as text, and back (internal/sandbox/executor's hermescarry.go).
+# A Hermes Agent 0.23.3 session as text, and back, and the run's managed scope (internal/sandbox/executor's
+# hermescarry.go).
 #
 #   hermes_carry.py dump DB TITLE POLICY OUT        the session titled TITLE, with its compaction lineage,
 #                                                   written to OUT
@@ -6,6 +7,8 @@
 #                                                   titled TITLE, in place of the ones Hermes froze with it
 #   hermes_carry.py restore MEMBER DB POLICY TITLE  a new session store at DB from MEMBER, the launch kept at
 #                                                   POLICY
+#   hermes_carry.py overlay STAGED MANAGED          the run's managed scope at MANAGED: the box's own with
+#                                                   STAGED's keys over it
 #
 # Run under Hermes's own interpreter through its launcher (`hermes --run-module cProfile -o /dev/null`),
 # which keeps no exit status, so every command ends on one line of its own on stdout: `crewlet-carry ok`
@@ -15,7 +18,7 @@
 # A dump is JSON lines: the store's schema ({"ddl", "kind"}, never the full-text index's own tables, which
 # its triggers fill again), the store's own bookkeeping rows whole, then the session's rows ({"t", "r"}),
 # and the launch Hermes froze with it ({"crewlet_policy"}). Text, so the engine's scrub can rewrite it.
-# Standard library only.
+# Standard library only, but for overlay, which reads the box's configuration through Hermes's own loader.
 import base64
 import json
 import os
@@ -144,12 +147,57 @@ def renew(db_path, title, system_path):
     return "ok"
 
 
-COMMANDS = {"dump": (dump, 4), "renew": (renew, 3), "restore": (restore, 4)}
+def merged(under, over):
+    """over's keys over under's, per leaf as Hermes merges a managed scope: a mapping key by key, any
+    other value (a list among them) whole."""
+    out = dict(under)
+    for k, v in over.items():
+        out[k] = merged(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+    return out
+
+
+def put(path, data):
+    """data at path, mode 0600 (the run's overlay holds the bridge's token), moved into place whole; no
+    file where data is None."""
+    if data is None:
+        if os.path.lexists(path):
+            os.remove(path)
+        return
+    with open(os.open(path + ".next", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "wb") as f:
+        f.write(data)
+    os.replace(path + ".next", path)
+
+
+def overlay(staged_path, managed_dir):
+    """The run's HERMES_MANAGED_DIR hides the box's own managed scope (Hermes's default, /etc/hermes: an
+    administrator's config.yaml and .env), so MANAGED holds that scope, read through Hermes's loader as
+    Hermes reads it, with STAGED's keys over its config.yaml. A list is one leaf, so a run that disables
+    toolsets disables the box's effective list (its config.yaml under that scope) and its own."""
+    os.environ.pop("HERMES_MANAGED_DIR", None)
+    from hermes_cli import managed_scope
+    from hermes_cli.config import load_config
+    with open(staged_path, encoding="utf-8") as f:
+        run = json.load(f)
+    config = merged(managed_scope.load_managed_config(), run)
+    deny = (run.get("agent") or {}).get("disabled_toolsets")
+    if deny is not None:
+        box = (load_config().get("agent") or {}).get("disabled_toolsets")
+        box = box if isinstance(box, list) else []
+        config["agent"]["disabled_toolsets"] = box + [t for t in deny if t not in box]
+    box_dir = managed_scope.get_managed_dir()
+    env = box_dir / ".env" if box_dir is not None else None
+    os.makedirs(managed_dir, exist_ok=True)
+    put(os.path.join(managed_dir, ".env"), env.read_bytes() if env is not None and env.is_file() else None)
+    put(os.path.join(managed_dir, "config.yaml"), json.dumps(config).encode())
+    return "ok"
+
+
+COMMANDS = {"dump": (dump, 4), "renew": (renew, 3), "restore": (restore, 4), "overlay": (overlay, 2)}
 
 if __name__ == "__main__":
     command = COMMANDS.get(sys.argv[1] if len(sys.argv) > 1 else "")
     if command is None or len(sys.argv) != command[1] + 2:
         sys.stderr.write("usage: hermes_carry.py dump DB TITLE POLICY OUT | renew DB TITLE SYSTEM | "
-                         "restore MEMBER DB POLICY TITLE\n")
+                         "restore MEMBER DB POLICY TITLE | overlay STAGED MANAGED\n")
         sys.exit(2)
     sys.stdout.write("crewlet-carry %s\n" % command[0](*sys.argv[2:]))

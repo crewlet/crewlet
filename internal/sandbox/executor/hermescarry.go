@@ -267,13 +267,16 @@ func hermesFreshRoutes(req sandbox.RunRequest, paths Paths) string {
 	return b.String()
 }
 
-// hermesInstallOverlay moves overlay over [Paths.HermesOverlay], ending the run
-// before Hermes starts where it cannot: a run on no overlay reaches none of the
-// seat's tools, and one on another session's is one the bridge cannot tell apart.
+// hermesInstallOverlay writes the run's managed scope from overlay: the box's
+// own (`/etc/hermes`, which the run's HERMES_MANAGED_DIR hides) with overlay's
+// keys over it, through Hermes's own loader (the carry script's `overlay`). It
+// ends the run before Hermes starts where it cannot: a run on no overlay
+// reaches none of the seat's tools, and one on another session's is one the
+// bridge cannot tell apart.
 func hermesInstallOverlay(paths Paths, overlay string) string {
 	q := shellword.Quote
-	return fmt.Sprintf("mkdir -p %s && mv -f %s %s || { echo 'crewlet: the Hermes overlay of the run could not be installed, so the run does not start' >&2; exit 1; }\n",
-		q(paths.HermesManaged()), q(overlay), q(paths.HermesOverlay()))
+	return fmt.Sprintf("if [ \"$(hcarry overlay %s %s)\" = 'crewlet-carry ok' ]; then rm -f %s; else echo 'crewlet: the Hermes overlay of the run could not be installed, so the run does not start' >&2; exit 1; fi\n",
+		q(overlay), q(paths.HermesManaged()), q(overlay))
 }
 
 // hermesRestore is the restore of a carried archive of session sid: unpacked in
