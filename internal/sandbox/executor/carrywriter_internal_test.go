@@ -86,8 +86,7 @@ func TestAnUnreadWriterContinuesInNoBox(t *testing.T) {
 	// release in place, as its run's gate does ([inPlaceGate]).
 	for name, gate := range map[string]inPlaceGate{
 		"codex": Codex{}, "copilot": Copilot{}, "kimi-code": Kimi{}, "muse-code": Muse{}, "hermes": Hermes{},
-		"pi": Pi{},
-		"grok": Grok{},
+		"pi": Pi{}, "grok": Grok{},
 	} {
 		if ok, why := gate.continuesInPlace("9.9.9"); ok || why == "" {
 			t.Errorf("%s: a box of 9.9.9 continues its own copy %v (%q), want refused", name, ok, why)
