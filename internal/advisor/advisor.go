@@ -361,12 +361,19 @@ func readEach(in Inputs) Answer {
 		findings = append(findings, fromWarning(in.Company, w))
 	}
 	unread := []string{}
-	if in.Integrations == nil {
+	if in.Integrations == nil || slices.ContainsFunc(in.Integrations, findingsNotInHand) {
 		unread = append(unread, UnreadIntegrations)
 	}
 	findings = append(findings, FromIntegrations(in.Integrations)...)
 	sortFindings(findings)
 	return Answer{Revision: in.Revision, Findings: findings, Unread: unread}
+}
+
+// findingsNotInHand reports a surface whose findings were not all read: unread
+// beside its status, or cut from its record. Its open findings are then
+// neither resolved nor confirmed, never taken as gone.
+func findingsNotInHand(s integration.State) bool {
+	return s.FindingsUnread || s.FindingsRecord.LeftOut()
 }
 
 // sortFindings orders findings the most costly first, then by area and class.
