@@ -89,6 +89,11 @@ func qwenScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	// older one never runs ([releaseGate]).
 	line(releaseRead(QwenCode{}.VersionCommand()))
 	line(releaseGate("Qwen Code", qwenRelease))
+	// NOTHING OF CREWLET'S OWN SWITCHED OFF by a list no tier undoes
+	// ([qwenGuard]), checked before Qwen Code starts.
+	if guard := qwenGuard(req); guard != "" {
+		line("node " + q(paths.QwenHelper()) + " guard" + guard + " < /dev/null || exit 1")
+	}
 	b.WriteString(chatSessionGate(session, paths, qwenGate(paths, fresh)))
 	// THE RECORD, before the harness starts ([parseSessionRecord]).
 	line(`printf 'id %s\ncontinued %s\nwhy %s\nrelease %s\n' "$s" "$k" "$w" "$v" > ` + q(paths.SessionRecord()))
@@ -307,6 +312,9 @@ func qwenSettings(req sandbox.RunRequest, paths Paths) map[string]any {
 	// directories across its tiers, so the home's own stay listed.
 	if len(req.Skills) > 0 {
 		settings["skills"] = map[string]any{"directories": []string{paths.QwenSkills()}}
+		// A home's or a repository's `disableAllHooks: true` gives way to
+		// this tier's false (measured on 0.28.4), so the hook stays on.
+		settings["disableAllHooks"] = false
 		settings["hooks"] = map[string]any{"PostToolUse": []any{map[string]any{
 			"matcher": "skill",
 			"hooks": []any{map[string]any{
