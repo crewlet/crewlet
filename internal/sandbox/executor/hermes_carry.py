@@ -24,8 +24,10 @@
 # A dump is JSON lines: the store's schema ({"ddl", "kind"}, never the full-text index's own tables, which
 # its triggers fill again), the store's own bookkeeping rows whole, then the session's rows ({"t", "r"}),
 # and the launch Hermes froze with it ({"crewlet_policy"}). Text, so the engine's scrub can rewrite it.
-# Standard library only, but for overlay, which reads the box's configuration through Hermes's own loader.
+# Standard library only, but for overlay and route, which read the box's configuration through Hermes's own
+# modules.
 import base64
+import copy
 import json
 import os
 import sqlite3
@@ -208,11 +210,14 @@ def route(db_path, title, model):
     URL, written before the first request answers), whatever the box's configuration says at a resume
     (measured on 0.23.3: a resume under another provider and base URL still calls the frozen one), so a
     continued session would keep a route its entry no longer names. A resume is right only on the route Hermes
-    resolves for the box now (hermes_cli.runtime_provider, as it resolved the frozen one: measured equal for a
-    named provider and for one found from a key). The model: a run naming one has it compared with its kept
-    launch, since -m's words are not the frozen form (openrouter:m freezes m); a run naming none, the
-    configured default against the one frozen. moved where any differs, none where no route was frozen. The
-    box's own managed scope is read; the run's overlay sets no model key."""
+    resolves for this launch now, as session.create resolved the frozen one: -m's words through
+    resolve_launch_route (anthropic:m names anthropic whatever the box configures), then
+    hermes_cli.runtime_provider (measured equal to the frozen route for -m anthropic:m on a box configured for
+    openrouter, for a named provider and for one found from a key). The model: a run naming one has it
+    compared with its kept launch, since -m's words are not the frozen form (openrouter:m freezes m); a run
+    naming none, the configured default against the frozen configuration's, each over DEFAULT_CONFIG as
+    Hermes's loader reads them (a gateway worker reads its frozen configuration so). moved where any differs,
+    none where no route was frozen. The box's own managed scope is read; the run's overlay sets no model key."""
     os.environ.pop("HERMES_MANAGED_DIR", None)
     db = sqlite3.connect("file:%s?mode=ro" % db_path, uri=True)
     ids = lineage(db, title)
@@ -220,15 +225,20 @@ def route(db_path, title, model):
     frozen = (json.loads(row[0] or "{}") or {}).get("gateway_runtime") if row else None
     if not isinstance(frozen, dict) or not frozen.get("provider"):
         return "none"
-    from hermes_cli.config import load_config
+    from gateway.session_local_route import resolve_launch_route
+    from hermes_cli.config import DEFAULT_CONFIG, _deep_merge, load_config
     from hermes_cli.runtime_provider import resolve_runtime_provider
-    now = resolve_runtime_provider()
+    box = load_config()
+    launch = resolve_launch_route({"model": model}, box) if model else {}
+    now = resolve_runtime_provider(requested=launch.get("provider") or None, explicit_api_key=launch.get("api_key"),
+                                   explicit_base_url=launch.get("base_url"), target_model=launch.get("model"))
     same = (now.get("provider") == frozen.get("provider") and
             (now.get("base_url") or "").rstrip("/") == (frozen.get("base_url") or "").rstrip("/"))
     if same and not model:
         policy = db.execute("select value from state_meta where key = ?", (POLICY_KEY % ids[0],)).fetchone()
         config = json.loads(json.loads(policy[0]).get("policy", {}).get("config_json") or "{}") if policy else {}
-        same = configured_model(load_config().get("model")) == configured_model(config.get("model"))
+        config = _deep_merge(copy.deepcopy(DEFAULT_CONFIG), config)
+        same = configured_model(box.get("model")) == configured_model(config.get("model"))
     return "ok" if same else "moved"
 
 

@@ -342,12 +342,12 @@ func hermesLauncherStandIn(t *testing.T) string {
 	t.Helper()
 	python := prereqtest.OnPath(t, "python3", "the case runs the run's carry script", "install python3")
 	bin := t.TempDir()
-	modules := filepath.Join(bin, "py", "hermes_cli")
-	if err := os.MkdirAll(modules, 0o700); err != nil {
-		t.Fatal(err)
-	}
 	for name, src := range hermesLoaderStandIn(hermesSystemScope(bin)) {
-		if err := os.WriteFile(filepath.Join(modules, name), []byte(src), 0o600); err != nil {
+		module := filepath.Join(bin, "py", name)
+		if err := os.MkdirAll(filepath.Dir(module), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(module, []byte(src), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -365,14 +365,22 @@ func hermesLauncherStandIn(t *testing.T) string {
 func hermesSystemScope(bin string) string { return filepath.Join(bin, "etc-hermes") }
 
 // hermesLoaderStandIn is what the carry script reads of Hermes 0.23.3's own
-// modules, as it reads them (managed_scope.py, config.py, runtime_provider.py;
-// YAML read as the JSON the cases write): the managed scope HERMES_MANAGED_DIR
-// names, else system, where it is a directory; HERMES_HOME's config.yaml with
-// that scope's merged over it per leaf; and the route it names.
+// modules, as it reads them (YAML read as the JSON the cases write): the
+// managed scope HERMES_MANAGED_DIR names, else system, where it is a
+// directory; DEFAULT_CONFIG with HERMES_HOME's config.yaml and that scope's
+// over it per leaf (its default model is a stand-in's, where 0.23.3's is "",
+// so a case can tell a read with defaults from one without); -m's
+// provider:model; and the route a launch resolves, the configured one's
+// endpoint for its own provider, another's as the measured box named it.
 func hermesLoaderStandIn(system string) map[string]string {
 	return map[string]string{
-		"__init__.py": "",
-		"managed_scope.py": `import json, os
+		"gateway/__init__.py": "",
+		"gateway/session_local_route.py": `def resolve_launch_route(params, config):
+    provider, named, model = params["model"].partition(":")
+    return dict(params, model=model, provider=provider) if named else params
+`,
+		"hermes_cli/__init__.py": "",
+		"hermes_cli/managed_scope.py": `import json, os
 from pathlib import Path
 def get_managed_dir():
     p = Path(os.environ.get("HERMES_MANAGED_DIR", "").strip() or ` + strconv.Quote(system) + `)
@@ -381,22 +389,30 @@ def load_managed_config():
     d = get_managed_dir()
     return json.loads((d / "config.yaml").read_text()) if d is not None and (d / "config.yaml").is_file() else {}
 `,
-		"config.py": `import json, os
+		"hermes_cli/config.py": `import copy, json, os
 from hermes_cli import managed_scope
-def merge(under, over):
-    out = dict(under)
-    for k, v in over.items():
-        out[k] = merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
-    return out
+DEFAULT_CONFIG = {"model": {"default": "stand-in-default"}}
+def _deep_merge(base, override):
+    result = base.copy()
+    for k, v in override.items():
+        over_dict = isinstance(result.get(k), dict)
+        if over_dict and isinstance(v, dict):
+            result[k] = _deep_merge(result[k], v)
+        elif not (over_dict and v is None):
+            result[k] = v
+    return result
 def load_config():
     path = os.path.join(os.environ.get("HERMES_HOME", "/nonexistent"), "config.yaml")
     user = json.load(open(path)) if os.path.isfile(path) else {}
-    return merge(user, managed_scope.load_managed_config())
+    return _deep_merge(_deep_merge(copy.deepcopy(DEFAULT_CONFIG), user), managed_scope.load_managed_config())
 `,
-		"runtime_provider.py": `from hermes_cli.config import load_config
-def resolve_runtime_provider():
+		"hermes_cli/runtime_provider.py": `from hermes_cli.config import load_config
+ENDPOINTS = {"anthropic": "http://stub:9000"}
+def resolve_runtime_provider(*, requested=None, explicit_api_key=None, explicit_base_url=None, target_model=None):
     model = load_config().get("model") or {}
-    return {"provider": model.get("provider"), "base_url": model.get("base_url"), "api_mode": "chat_completions"}
+    provider = requested or model.get("provider")
+    base = explicit_base_url or (model.get("base_url") if provider == model.get("provider") else ENDPOINTS.get(provider))
+    return {"provider": provider, "base_url": base, "api_mode": "chat_completions"}
 `,
 	}
 }
@@ -640,6 +656,41 @@ func TestACarriedHermesSessionContinuesOnlyUnderItsLaunch(t *testing.T) {
 		archive := append(bytes.Clone(hermesFixture(t, "0.23.3", "session-steered.jsonl")), append(policy, '\n')...)
 		if got := hermesGate(t, home, hermesFloor(), hermesFixtureRoute, named, archive); got[1] != "yes" {
 			t.Fatalf("gate = %q, want the session continued: 0.23.3 freezes openrouter:m as m", got)
+		}
+	})
+	t.Run("a model named with another provider than the box's", func(t *testing.T) {
+		home := t.TempDir()
+		named := sandbox.RunRequest{Model: "anthropic:stub-model"}
+		policy, _ := json.Marshal(map[string]string{"crewlet_policy": hermesPolicy(named) + home})
+		fixture := hermesFixture(t, "0.23.3", "session-steered.jsonl")
+		archive := append(bytes.Clone(fixture), append(policy, '\n')...)
+		if got := hermesGate(t, home, hermesFloor(), hermesFixtureRoute, named, archive); got[1] != "no" ||
+			!strings.Contains(got[2], "provider") {
+			t.Fatalf("gate = %q under openrouter's frozen route, want the fresh session, saying the provider differs", got)
+		}
+		frozen := bytes.ReplaceAll(fixture, []byte(`\"gateway_runtime\": {\"provider\": \"openrouter\", \"base_url\": \"http://stub:9000/api/v1\"`),
+			[]byte(`\"gateway_runtime\": {\"provider\": \"anthropic\", \"base_url\": \"http://stub:9000\"`))
+		if bytes.Equal(frozen, fixture) {
+			t.Fatal("the fixture's frozen route was not found to edit")
+		}
+		home = t.TempDir()
+		policy, _ = json.Marshal(map[string]string{"crewlet_policy": hermesPolicy(named) + home})
+		if got := hermesGate(t, home, hermesFloor(), hermesFixtureRoute, named, append(frozen, append(policy, '\n')...)); got[1] != "yes" {
+			t.Fatalf("gate = %q, want the session continued: 0.23.3 resolves -m anthropic:m to anthropic as it froze it", got)
+		}
+	})
+	t.Run("no model named or configured", func(t *testing.T) {
+		home := t.TempDir()
+		none := sandbox.RunRequest{}
+		policy, _ := json.Marshal(map[string]string{"crewlet_policy": hermesPolicy(none) + home})
+		fixture := hermesFixture(t, "0.23.3", "session-steered.jsonl")
+		unnamed := bytes.ReplaceAll(fixture, []byte(`, \\\"default\\\": \\\"stub-model\\\"}`), []byte(`}`))
+		if bytes.Equal(unnamed, fixture) {
+			t.Fatal("the fixture's frozen configuration's default model was not found to edit")
+		}
+		box := strings.Replace(hermesFixtureRoute, `, "default": "stub-model"`, "", 1)
+		if got := hermesGate(t, home, hermesFloor(), box, none, append(unnamed, append(policy, '\n')...)); got[1] != "yes" {
+			t.Fatalf("gate = %q, want the session continued: both configurations read Hermes's default model", got)
 		}
 	})
 	t.Run("no route frozen", func(t *testing.T) {
