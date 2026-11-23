@@ -993,6 +993,14 @@ test("a replaced key's Keep is offered only on its own method, and the secret fo
   expect(screen.getByRole("button", { name: /Replace the key/ })).toBeTruthy();
 });
 
+/** A SUBSCRIPTION TOKEN IS ASKED FOR WITH ITS COMMAND ALONE: no notice about whose subscription it is. */
+test("the token sign-in shows its command and no subscription notice", () => {
+  show({ editing: "sonnet", target: { step: "signin", focus: "credential" } });
+  fireEvent.click(document.querySelector('input[type="radio"][value="token"]')!);
+  expect(screen.getByText("claude setup-token")).toBeTruthy();
+  expect(screen.queryByText(/own subscription|terms|serve other people/i)).toBeNull();
+});
+
 /** A model check whose lines are `lines`, as the engine answers one. */
 const checked = (
   lines: { check: string; ok: boolean; detail: string; kind?: string; remedy?: string }[],
