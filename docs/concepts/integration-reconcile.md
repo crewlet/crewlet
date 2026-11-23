@@ -43,7 +43,7 @@ Findings fold into one **report**, which is what an operator reads:
 
 **An agent's own wait is said on its row.** A finding the seat access sync reports about one agent's account (a step waiting on a person, a vendor's refusal) carries `seat`. The Agents tab draws it on that agent's row with the step's own control, so the integration's issue list leaves it out, while it still counts toward the integration's phase and the home's list of what waits on you.
 
-**A finding about many things names three and carries the rest beside the sentence.** A finding's detail is the card's one-line status, capped at 500 characters because the coordination store **refuses** an oversized status row rather than truncating it, which would stop the surface recording anything. So the sentence gives the count and up to three examples (a 36-account list once ended `…@agents.cr…`), and the whole list travels in `subjects`, which the screen folds away. A finding about one thing names it and carries no list.
+**A finding about many things gives the count and carries the list beside the sentence.** A finding's detail is the card's one-line status, capped at 500 bytes, so the sentence gives the count (a 36-account list once ended `…@agents.cr…`) and the list travels in `subjects`, which the screen folds away, cut only past what the surface's findings record keeps ([below](#what-a-surfaces-records-keep)). A finding about one thing names it and carries no list.
 
 **A seat that needs a person shows action required, never a finished status.** Where an act belongs to somebody at the app and the engine can never perform it (creating or installing a GitHub App), the finding is `approval_required`, verdict *awaiting_admin*, owed to an admin. `identity_missing` is the engine's own work and reads *Setting up agents*, which over an act nobody performs waits for a pass that never changes anything. This extends to the tool's own `satisfied`: a surface that requires per-seat identities and has no working seat is not satisfied, whatever its company block says.
 
@@ -275,10 +275,22 @@ GET /query/integrations
     "next_attempt_at": "2026-03-01T13:00:00Z",
     "findings": [
       { "kind": "identity_failed", "subject": "swe", "detail": "...", "action_url": "" }
-    ]
+    ],
+    "findings_omitted": 0,
+    "seat_findings_omitted": 0,
+    "findings_unread": false
   }
 }
 ```
+
+### What a surface's records keep
+
+The fleet keeps each surface in **two records** ([Coordination](coordination.md#what-one-key-holds)): its **status**, at most 16 KiB, read at the read term by every reader that keeps a window (the loop's tick, a turn's atlas, the check of a credential an integration mints, every write's re-read under the surface's lease); and its **findings**, at most 64 KiB, which the status names by size and SHA-256 and only a reader that shows them reads (this answer, the Advisor). A pass writes its findings first, then the status naming them; a reader whose findings do not match the status reads them as unread (`findings_unread`, the list empty until the next read).
+
+Each writer **cuts to fit rather than refuse**, since a refused status would stop the surface recording anything:
+
+- **The status** halves its `last_error`, then its report's `detail`, and drops its `action_url`, each only as far as fitting needs. The address and the registration's name are kept exact, since they are compared with the ones in force; their settings are bounded instead (`api.external_url` and `api.public.external_url` at 2,048 characters, Datadog's `webhook_name` at 255).
+- **The findings** keep every text field to 500 bytes and drop a link past 2 KiB. Past 64 KiB as stored, an agent's own findings (`seat`, which each agent's row draws from its access record) are folded into a count (`seat_findings_omitted`), then every `subjects` list is cut to a common length, each finding counting what it lost (`subjects_omitted`), then findings are dropped from the end (`findings_omitted`). The reported finding is first and never dropped, and the report and its "(and N more)" are decided before the cut. Everything left out is logged whole where the pass ran (`integration_finding_unkept`).
 
 `reconcile` is **three-valued**, like `routes` and `secret_usable` beside it:
 
