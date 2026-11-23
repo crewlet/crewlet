@@ -425,6 +425,13 @@ type LaunchRequest struct {
 	// box that holds its copy ([RunSources.Catalogs]). Nil lists none.
 	MCPCatalogs map[string][]CatalogTool
 
+	// MCPTools is how many tools MCPServers list the run's harness in all, as
+	// the seat's tools hold them: every tool of each, since a box reaches a
+	// server whole. What a harness that hides every MCP server's tools past a
+	// count of them weighs the box's browser against, beside the bridge's
+	// ([Opening.Tools], [EnsureBrowser]). Zero says none.
+	MCPTools int
+
 	// Now is the clock. Nil takes time.Now.
 	Now func() time.Time
 }
@@ -499,6 +506,13 @@ func (r PendingRun) NamedJob(lastSeq int, callIDMeta string) OpenedJob {
 type Opening struct {
 	// Servers join the box's MCP servers.
 	Servers map[string]MCPServer
+
+	// Tools is how many tools Servers list the job's harness in all, as what
+	// serves them lists them now: what a harness that hides every MCP
+	// server's tools past a count of them weighs the box's browser against
+	// ([EnsureBrowser]). Zero for an opening that says none. Read on the
+	// launch's opening alone, never a Fresh's.
+	Tools int
 
 	// Steer is where the job's harness asks for its turn's notes
 	// ([RunRequest.Steer]); the zero value takes none inside the run.
@@ -931,6 +945,8 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// and what that joined: the run's sources tell the two apart ([runSourcesOf]).
 	own := req.MCPServers
 	var bridged map[string]MCPServer
+	// bridgedTools is how many tools bridged lists in all ([Opening.Tools]).
+	var bridgedTools int
 	// fresh is how the job's box is wired where its script starts a session of
 	// its own in place of the one this launch continues — see
 	// [Opening.Fresh] — nil where what named the job answered none.
@@ -948,7 +964,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 			fresh = &Wiring{MCPServers: withServers(req.MCPServers, f.Servers), Steer: f.Steer,
 				SkillLoads: f.SkillLoads}
 		}
-		req.MCPServers, bridged = withServers(req.MCPServers, named.Servers), named.Servers
+		req.MCPServers, bridged, bridgedTools = withServers(req.MCPServers, named.Servers), named.Servers, named.Tools
 		steer = named.Steer
 		skillLoads = named.SkillLoads
 	}
@@ -1045,7 +1061,8 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		began := time.Now()
 		outcome, browserErr := EnsureBrowser(ctx, box, BrowserStep{Placement: req.Spec.Placement,
 			Browser: *req.Browser, Env: req.Spec.Env, LaunchID: opened.LaunchID, WebDenied: req.WebDenied,
-			ProviderKey: req.ProviderKey})
+			ProviderKey: req.ProviderKey, Harness: req.Spec.Harness, DeferAt: defersMCPAt(runner),
+			Bridged: bridgedTools, InBox: req.MCPTools})
 		if browserErr != nil {
 			c.abandon(ctx, m, req, fence, box.ID())
 			return LaunchResult{}, fmt.Errorf("sandbox: readying the seat's browser: %w", browserErr)

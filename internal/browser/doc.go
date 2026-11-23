@@ -92,6 +92,26 @@
 // box's from a launch whose check passed, is stopped there, so its pages run
 // on in no box that may reach the host's loopback.
 //
+// Nor does a browser go where it would hide the run's own tools. A harness
+// that hides every MCP server's tools behind its own search once a run's
+// servers list some number of them (Muse Code, whose runner states the number
+// it was measured to hide them at) would hide submit_work and ask_and_wait
+// with the browser's, which a run needs on every request and a browser cannot
+// make up for. So the launch withholds the browser where the run's servers,
+// the bridge's and the box's own, list fewer tools than that number and with
+// the browser's would reach it (bridge_deferred), counting the browser's from
+// the list a box serves (boxhelper.Tools), never a figure of its own, and the
+// box's own servers' from the seat's tools, each whole, as a box reaches a
+// server. Servers at the number on their own are hidden either way, so their
+// run keeps its browser; a repository's own servers are not counted, since
+// the launch does not know them.
+// It reads only the launch's own counts, so it is decided after web_denied
+// and before host_network, whose check reads the engine's host and runs in
+// the box: no verdict of that check could hand such a run its browser, so it
+// pays for none. And, as for the cell and the web, it stops no browser a kept
+// box already runs: the run is handed no server, and only host_network finds
+// that the box may lead a page to its host's loopback.
+//
 // Chromium keeps its own sandbox in the box unless the catalogue waives it
 // (local.chromium_sandbox). A value this build does not know reads as
 // required, the stricter, so this build runs a later build's revision rather

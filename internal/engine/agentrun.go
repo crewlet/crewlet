@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	seatpkg "github.com/crewlet/crewlet/internal/seat"
+	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -1040,6 +1041,10 @@ func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *b
 	// ([mcpbridge.Bridge.CallTimeout]).
 	wait := e.bridge.CallTimeout(s.Surface)
 	opening := bridgeOpening(endpoint, s, inbox != nil, wait)
+	// AND HOW MANY TOOLS ITS SERVERS LIST, which a harness that hides every MCP
+	// tool past a count of them weighs the box's browser against
+	// ([sandbox.Opening.Tools]).
+	opening.Tools = s.Listed()
 	// AND THE SAME UNDER THE JOB'S OTHER TOKEN, for a session its box starts of
 	// its own in place of the one its launch continues: the token its harness
 	// dials is the box's word on which session it started
@@ -1089,18 +1094,41 @@ func bridgeOpening(endpoint string, s *mcpbridge.Session, steered bool, wait tim
 // withRunsOwn is out with what req says of the run itself beside the launch's
 // decisions: its own context sources, which a launch charges an OpenCode
 // continuation in the box that holds its copy (internal/sandbox's RunSources),
-// what each server the run's bridge serves says it is for and offers; the leads its fresh
-// brief opened with, which the launch keeps for its job; and the read its
-// briefs were built from ([sandbox.LaunchRequest.BriefRead]). Set beside
+// what each server the run's bridge serves says it is for and offers; how
+// many tools the box's own servers list ([boxServersListed]); the leads its
+// fresh brief opened with, which the launch keeps for its job; and the read
+// its briefs were built from ([sandbox.LaunchRequest.BriefRead]). Set beside
 // [agentLauncher.launch]'s literal rather than in it, since that literal is the
 // launch's decisions (member, cell, reach, environment, login), which
 // crewlet-operator mirrors, and none of these is one.
 func withRunsOwn(req runner.AgentRunRequest, out sandbox.LaunchRequest) sandbox.LaunchRequest {
 	out.MCPGuidance = mcpbridge.Guidance(req.Surface)
 	out.MCPCatalogs = mcpbridge.Catalogs(req.Surface)
+	out.MCPTools = boxServersListed(req.Surface, out.MCPServers)
 	out.FreshOwn = req.FreshOwn
 	out.BriefRead = req.BriefRead
 	return out
+}
+
+// boxServersListed is how many tools servers, the box's own, list its harness,
+// as surface's universe holds them ([sandbox.LaunchRequest.MCPTools]): every
+// tool of each, since the launch hands a box a server only whole
+// ([sandboxMCP]), and the bridge offers none of them, so a run's own servers
+// are the bridge's and these. Counted from the seat's tools rather than asked
+// of the box, which lists them only once the harness runs.
+func boxServersListed(surface *tools.Surface, servers map[string]sandbox.MCPServer) int {
+	if surface == nil || len(servers) == 0 {
+		return 0
+	}
+	n := 0
+	for _, e := range surface.Universe().Entries() {
+		if server, fromMCP := e.FromMCP(); fromMCP {
+			if _, inBox := servers[server]; inBox {
+				n++
+			}
+		}
+	}
+	return n
 }
 
 // sandboxContinuation is the runner's carry-on of an asking run in the sandbox

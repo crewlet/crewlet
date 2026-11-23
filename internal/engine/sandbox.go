@@ -156,6 +156,7 @@ func fakeRunners(play fakePlayer) map[string]sandbox.Runner {
 		runner.Thread = sandbox.ThreadTraitsOf(real[name])
 		if r, ok := real[name].(*executor.Runner); ok {
 			runner.Pin, runner.NotesOff, runner.Fresh = r.PinnedWindow, r.NotesOffWhy(), r.StartsFresh()
+			runner.DeferAt = r.DefersMCPAt()
 		}
 		runners[name] = runner
 	}

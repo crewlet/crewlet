@@ -34,13 +34,16 @@ const (
 )
 
 // The engine's reasons, in the order a launch meets them: the box outside a
-// container, or on an entry that denies its harness the web, each before
-// anything runs in the box; then the box's network, which a check in the box
-// finds before anything is written there; then the helper's write; then
-// ensure, silent past its bound or printing no line the engine reads.
+// container, on an entry that denies its harness the web, or on a harness
+// that would then hide the bridge's tools, each read off the launch alone,
+// before the engine asks its own host or the box anything; then the box's
+// network, which a check in the box finds before anything is written there;
+// then the helper's write; then ensure, silent past its bound or printing no
+// line the engine reads.
 const (
 	ReasonCellNotContainer EnsureReason = "cell_not_container"
 	ReasonWebDenied        EnsureReason = "web_denied"
+	ReasonBridgeDeferred   EnsureReason = "bridge_deferred"
 	ReasonHostNetwork      EnsureReason = "host_network"
 	ReasonHelperUnwritten  EnsureReason = "helper_unwritten"
 	ReasonEnsureTimeout    EnsureReason = "ensure_timeout"
@@ -127,6 +130,7 @@ var reasons = []struct {
 	{ReasonSupervisorFailed, true, []EnsureCause{CauseExited, CauseTimeout}},
 	{ReasonCellNotContainer, false, nil},
 	{ReasonWebDenied, false, nil},
+	{ReasonBridgeDeferred, false, nil},
 	{ReasonHostNetwork, false, []EnsureCause{CauseAnotherKernel, CauseLoopback, CauseGateway, CauseHostAlias,
 		CauseRootlessGateway, CauseProxy, CauseUnchecked}},
 	{ReasonHelperUnwritten, false, []EnsureCause{CauseRefused, CauseFailed}},

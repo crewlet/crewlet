@@ -119,6 +119,21 @@ func Catalogs(surface Surface) map[string][]sandbox.CatalogTool {
 	return out
 }
 
+// Listed is how many tools an opening of the session lists its run's harness
+// now, across its servers, the engine's own and each MCP server's: what a
+// launch weighs a harness that hides every MCP tool past a count of them
+// against (internal/sandbox's Opening.Tools). Counted by the rule each server
+// lists by ([Session.lists]), so the count and the lists cannot disagree.
+func (s *Session) Listed() int {
+	n := 0
+	for _, def := range s.Surface.ToolDefs() {
+		if s.lists(def.Name) {
+			n++
+		}
+	}
+	return n
+}
+
 // seatOf is surface where it is a seat's, or nil: the one surface a seat's
 // MCP servers reach an opening through.
 func seatOf(surface Surface) *tools.Surface {
