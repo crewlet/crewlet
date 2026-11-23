@@ -543,7 +543,13 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 		p.JobScript(), p.JobScript() + ".next", p.JobEnded(), p.JobEnded() + ".next"}
 	dirs := []string{p.CommitAttribution(), p.SessionStaging()}
 	// EVERY HARNESS'S, not this run's alone: the box may last have run another.
+	// A home file a killed run left holding its settings, the bridge's token
+	// among them, is put back first ([homeKeeper]).
+	var restores strings.Builder
 	for _, h := range Registered() {
+		if k, ok := h.(homeKeeper); ok {
+			restores.WriteString(k.homeRestore(p) + "; ")
+		}
 		if a, ok := h.(artifactHolder); ok {
 			files = append(files, a.artifactFiles(p)...)
 		}
@@ -563,7 +569,7 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	// archive ([Paths.SessionPackStaging]) are named per taker or per pack, so
 	// they cannot be listed and are matched by a glob outside the quotes: one
 	// whose node stopped part way would otherwise stay for the box's life.
-	cmd := "rm -f " + shellQuoteAll(files) + "; rm -rf " + shellQuoteAll(dirs) +
+	cmd := restores.String() + "rm -f " + shellQuoteAll(files) + "; rm -rf " + shellQuoteAll(dirs) +
 		"; rm -rf " + shellword.Quote(p.WorkDir()) + "/" + saveFiles +
 		"; rm -rf " + shellword.Quote(p.WorkDir()) + "/" + packStagingFiles
 	if _, err := box.Exec(ctx, cmd, sandbox.ExecOptions{}); err != nil {
