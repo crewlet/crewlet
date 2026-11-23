@@ -2655,13 +2655,13 @@ landed while it ran nor bring back a removed login.
 
 **An exported login carries back only the logins it was handed.** For a harness
 keeping its login in its own database (OpenCode), a seat's or a local box's export
-is written back holding each handed credential's refreshed tokens, and only where it
-is still the same login: for OpenCode's credentials, the same credential, OAuth
-method and every field a refresh leaves alone, and, for an access token that is a
-JWT, the same account in its subject claims (an API key never changes on a refresh,
-so a changed one is not carried); for a credential of any other shape, the same
-integration and label, and every JWT in it naming the same account. A credential
-the database gained is dropped. A `crewlet llm login` takes the whole export.
+is written back holding each handed credential's refreshed tokens and expiry alone,
+and only where it is still the same login: the same credential, OAuth method and
+every field a refresh leaves alone, and, for an access token that is a JWT, the same
+account in its subject claims (an API key never changes on a refresh, so a changed
+one is not carried). A credential of any other shape carries nothing, and neither
+does metadata, a credential the database gained, or an export that does not read as
+one JSON array with each key once. A `crewlet llm login` takes the whole export.
 
 The commands that *make* a login are the one exception: what your sign-in stored is
 written whenever it differs from what the command started with, over whatever

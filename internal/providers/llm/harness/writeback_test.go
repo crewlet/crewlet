@@ -124,7 +124,7 @@ func refreshFile(t *testing.T, co *Checkout, body string) {
 func TestAnIdleSeatNeverRevertsAnotherSeatsRefresh(t *testing.T) {
 	t.Parallel()
 	ws := storeWorkspace(t)
-	writeLogin(t, ws, `{"token":"R0"}`, `[{"id":"c","refresh":"R0"}]`)
+	writeLogin(t, ws, `{"token":"R0"}`, `[{"id":"c","value":{"refresh":"R0","type":"oauth"}}]`)
 
 	storeA, storeB := &stubStore{}, &stubStore{}
 	a, err := ws.Acquire(t.Context(), "seat-a", "call", storeA)
@@ -137,11 +137,11 @@ func TestAnIdleSeatNeverRevertsAnotherSeatsRefresh(t *testing.T) {
 	}
 
 	refreshFile(t, a, `{"token":"R1"}`)
-	storeA.exported = []byte(`[{"id":"c","refresh":"R1"}]`)
+	storeA.exported = []byte(`[{"id":"c","value":{"refresh":"R1","type":"oauth"}}]`)
 	if err := a.Release(t.Context()); err != nil {
 		t.Fatalf("Release a: %v", err)
 	}
-	if file, doc := sharedLogin(t, ws); file != `{"token":"R1"}` || doc != `[{"id":"c","refresh":"R1"}]` {
+	if file, doc := sharedLogin(t, ws); file != `{"token":"R1"}` || doc != `[{"id":"c","value":{"refresh":"R1","type":"oauth"}}]` {
 		t.Fatalf("seat a's refresh did not land: file=%q doc=%q", file, doc)
 	}
 
@@ -149,7 +149,7 @@ func TestAnIdleSeatNeverRevertsAnotherSeatsRefresh(t *testing.T) {
 	if err := b.Release(t.Context()); err != nil {
 		t.Fatalf("Release b: %v", err)
 	}
-	if file, doc := sharedLogin(t, ws); file != `{"token":"R1"}` || doc != `[{"id":"c","refresh":"R1"}]` {
+	if file, doc := sharedLogin(t, ws); file != `{"token":"R1"}` || doc != `[{"id":"c","value":{"refresh":"R1","type":"oauth"}}]` {
 		t.Errorf("an idle seat reverted another seat's refresh: file=%q doc=%q", file, doc)
 	}
 }
@@ -161,21 +161,21 @@ func TestAnIdleSeatNeverRevertsAnotherSeatsRefresh(t *testing.T) {
 func TestARefreshNeverWritesOverALoginThatMovedPastItsSeed(t *testing.T) {
 	t.Parallel()
 	ws := storeWorkspace(t)
-	writeLogin(t, ws, `{"token":"R0"}`, `[{"id":"c","refresh":"R0"}]`)
+	writeLogin(t, ws, `{"token":"R0"}`, `[{"id":"c","value":{"refresh":"R0","type":"oauth"}}]`)
 	store := &stubStore{}
 	co, err := ws.Acquire(t.Context(), "dev", "call", store)
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
 	}
 	// Another writer lands first...
-	writeLogin(t, ws, `{"token":"OTHER"}`, `[{"id":"c","refresh":"OTHER"}]`)
+	writeLogin(t, ws, `{"token":"OTHER"}`, `[{"id":"c","value":{"refresh":"OTHER","type":"oauth"}}]`)
 	// ...and this seat's harness refreshed too.
 	refreshFile(t, co, `{"token":"MINE"}`)
-	store.exported = []byte(`[{"id":"c","refresh":"MINE"}]`)
+	store.exported = []byte(`[{"id":"c","value":{"refresh":"MINE","type":"oauth"}}]`)
 	if err := co.Release(t.Context()); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
-	if file, doc := sharedLogin(t, ws); file != `{"token":"OTHER"}` || doc != `[{"id":"c","refresh":"OTHER"}]` {
+	if file, doc := sharedLogin(t, ws); file != `{"token":"OTHER"}` || doc != `[{"id":"c","value":{"refresh":"OTHER","type":"oauth"}}]` {
 		t.Errorf("a refresh was written over a login that had moved past its seed: file=%q doc=%q", file, doc)
 	}
 }
