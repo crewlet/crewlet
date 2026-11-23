@@ -143,12 +143,38 @@ func (p *E2BProvider) Connect(ctx context.Context, sandboxID string) (Sandbox, e
 	if err != nil {
 		var apiErr *E2BError
 		if errors.As(err, &apiErr) && apiErr.Gone() {
-			return nil, boxGone{fmt.Errorf("e2b: sandbox %s is gone: %w", sandboxID, err)}
+			return nil, p.goneOrOlder(ctx, sandboxID, apiErr, err)
 		}
 		return nil, fmt.Errorf("e2b: sandbox %s could not be connected to: %w", sandboxID, err)
 	}
 	e2bLog.Debug("e2b_sandbox_connected", "sandbox_id", sandboxID)
 	return p.box(box), nil
+}
+
+// goneOrOlder is what a connect refused as gone means: the box gone, except
+// where a cluster answered 404, which an API older than [e2bV2Floor] answers
+// for the connect's route itself. There the box is read (`GET /sandboxes/{id}`,
+// which every build serves): found, the connect is refused as configuration
+// naming the floor, since calling the box gone would settle its run and
+// reclaim a box that still exists; not found, it is gone.
+func (p *E2BProvider) goneOrOlder(ctx context.Context, sandboxID string, refused *E2BError, err error) error {
+	gone := boxGone{fmt.Errorf("e2b: sandbox %s is gone: %w", sandboxID, err)}
+	if refused.Status != http.StatusNotFound || p.api.domain == DefaultE2BDomain {
+		return gone
+	}
+	_, readErr := p.api.getBox(ctx, sandboxID)
+	var unread *E2BError
+	switch {
+	case readErr == nil:
+		return Because(WhyConfiguration, fmt.Errorf("e2b: the cluster at api.%s refused to connect "+
+			"to sandbox %s (%w), which it still has: its API is older than %s, which serves the "+
+			"connect this engine calls. Run that build or later on the cluster",
+			p.api.domain, sandboxID, err, e2bV2Floor))
+	case errors.As(readErr, &unread) && unread.Gone():
+		return gone
+	}
+	return fmt.Errorf("e2b: sandbox %s could not be connected to (%w), nor read to tell whether "+
+		"it is gone: %w", sandboxID, err, readErr)
 }
 
 // Attach implements [Provider]: the box READ, never resumed. A paused box has

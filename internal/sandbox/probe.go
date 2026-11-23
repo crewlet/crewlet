@@ -20,8 +20,8 @@ import (
 //   - direct: the platform runs the local backend, and [BoxRoot] is writable;
 //   - container: the runtime resolves on PATH ([ResolveContainerRuntime]) and
 //     its daemon answers a version read within [CellProbeBudget];
-//   - e2b: the API key resolved on this node, and one authenticated read of
-//     the API answers within [CellProbeBudget].
+//   - e2b: the API key resolved on this node, and an authenticated read and
+//     the floor's routes ([e2bV2Floor]) answered within [CellProbeBudget].
 //
 // A probe never makes a box; every refusal names the one thing to do.
 
@@ -105,8 +105,9 @@ func probeRuntime(ctx context.Context, path string, budget time.Duration) CellPr
 	return CellProbe{Ready: true, Detail: name + " " + answer}
 }
 
-// ProbeE2B probes the e2b cell: the key it would authenticate with, and one
-// read of the API with it.
+// ProbeE2B probes the e2b cell: the key it would authenticate with, one read
+// of the API with it, and the routes the cluster's floor adds, which an older
+// cluster answers 404 while its list answers ([e2bAPI.floorRouteMissing]).
 func ProbeE2B(ctx context.Context, opts E2BOptions) CellProbe {
 	if strings.TrimSpace(opts.APIKey) == "" {
 		return CellProbe{Detail: "providers.sandbox.e2b.api_key resolves to nothing on this node",
@@ -116,18 +117,36 @@ func ProbeE2B(ctx context.Context, opts E2BOptions) CellProbe {
 	defer cancel()
 	api := newE2BAPI(opts.APIKey, opts.Domain, opts.HTTP)
 	if err := api.listBoxes(ctx, 1); err != nil {
-		var refused *E2BError
-		switch {
-		case errors.As(err, &refused) && (refused.Status == http.StatusUnauthorized || refused.Status == http.StatusForbidden):
-			return CellProbe{Detail: err.Error(),
-				Fix: "Replace the e2b API key under Settings › Secrets: the API refused it"}
-		case ctx.Err() != nil:
-			return CellProbe{Detail: fmt.Sprintf("the e2b API at %s did not answer within %s", api.base, CellProbeBudget),
-				Fix: "Check this node's network route to the e2b API"}
+		return e2bProbeFailed(ctx, api, err)
+	}
+	missing, routeErr := api.floorRouteMissing(ctx)
+	if routeErr != nil {
+		return e2bProbeFailed(ctx, api, routeErr)
+	}
+	if missing != "" {
+		detail := fmt.Sprintf("the e2b API at %s answers %s 404: it is older than %s, which serves "+
+			"the create and connect this engine calls", api.domain, missing, e2bV2Floor)
+		if api.domain == DefaultE2BDomain {
+			return CellProbe{Detail: detail, Fix: "Report it to E2B, and until it is mended run in another cell (run_in)"}
 		}
-		return CellProbe{Detail: err.Error(), Fix: "Check this node's network route to the e2b API"}
+		return CellProbe{Detail: detail,
+			Fix: "Run " + e2bV2Floor + " or later on the cluster at " + api.domain}
 	}
 	return CellProbe{Ready: true, Detail: "the e2b API at " + api.domain + " answers with this key"}
+}
+
+// e2bProbeFailed is the cell's refusal for a probe's request that failed.
+func e2bProbeFailed(ctx context.Context, api *e2bAPI, err error) CellProbe {
+	var refused *E2BError
+	switch {
+	case errors.As(err, &refused) && (refused.Status == http.StatusUnauthorized || refused.Status == http.StatusForbidden):
+		return CellProbe{Detail: err.Error(),
+			Fix: "Replace the e2b API key under Settings › Secrets: the API refused it"}
+	case ctx.Err() != nil:
+		return CellProbe{Detail: fmt.Sprintf("the e2b API at %s did not answer within %s", api.base, CellProbeBudget),
+			Fix: "Check this node's network route to the e2b API"}
+	}
+	return CellProbe{Detail: err.Error(), Fix: "Check this node's network route to the e2b API"}
 }
 
 // firstLineOf is a command's first line of output, or its error where it said

@@ -2000,16 +2000,16 @@ func TestE2BACommandOutlivesTheControlPlaneTimeout(t *testing.T) {
 	}
 }
 
-// A CREATE REFUSED FOR WHAT IT CARRIES IS CONFIGURATION, AND A CLUSTER'S 404
-// NAMES THE BUILD THAT SERVES THE ROUTE: a 400, 404 or 422 to a create is a
-// person's to change (the template, likeliest), and on a self-hosted cluster a
-// 404 is as likely an API older than the v2 create, which answers it for the
-// route itself, so the refusal names the floor; E2B's cloud serves the route,
-// so its 404 names no cluster's build.
+// A CREATE REFUSED FOR WHAT IT CARRIES IS CONFIGURATION, AND A CLUSTER'S 404 OR
+// 400 NAMES THE BUILD THAT SERVES THE ROUTE: a 400, 404 or 422 to a create is a
+// person's to change (the template, likeliest), and on a self-hosted cluster an
+// API older than the v2 create answers its route 404, or 400 before 2026.04, so
+// the refusal names the floor; E2B's cloud serves the route, so its refusals
+// name no cluster's build.
 //
-// Mutation: class a create's 404 by status alone, or name the floor on the
-// cloud or for a 422, and a row goes red.
-func TestACreateRefusedForWhatItCarriesNamesTheClustersFloorOnA404(t *testing.T) {
+// Mutation: class a create's 404 by status alone, name the floor on the cloud
+// or for a 422, or not for a cluster's 400, and a row goes red.
+func TestACreateRefusedForWhatItCarriesNamesTheClustersFloorOnA404Or400(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name, domain string
@@ -2017,8 +2017,10 @@ func TestACreateRefusedForWhatItCarriesNamesTheClustersFloorOnA404(t *testing.T)
 		floor        bool
 	}{
 		{"a cluster's 404", "test.invalid", http.StatusNotFound, true},
+		{"a cluster's 400", "test.invalid", http.StatusBadRequest, true},
 		{"a cluster's 422", "test.invalid", http.StatusUnprocessableEntity, false},
 		{"E2B's cloud's 404", "", http.StatusNotFound, false},
+		{"E2B's cloud's 400", "", http.StatusBadRequest, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -2040,6 +2042,75 @@ func TestACreateRefusedForWhatItCarriesNamesTheClustersFloorOnA404(t *testing.T)
 			}
 			if named := strings.Contains(err.Error(), "e2b-dev/runtime f5dc6426e"); named != tc.floor {
 				t.Errorf("the refusal names the cluster's floor: %t, want %t: %v", named, tc.floor, err)
+			}
+		})
+	}
+}
+
+// A CLUSTER'S 404 TO A CONNECT IS READ BACK BEFORE THE BOX IS CALLED GONE: an
+// API older than the v2 connect answers its route 404, as a current one does a
+// box it no longer has, and a box called gone has its run settled and its box
+// reclaimed. So on a cluster the box is read (`GET /sandboxes/{id}`, served by
+// every build): there, the connect is refused as configuration naming the
+// floor; not there, it is gone; unread, it is neither. E2B's cloud serves the
+// route, so its 404 is a box gone, unread.
+//
+// Mutation: call a cluster's 404 gone unread, read the box on the cloud, or
+// call a box gone whose read failed, and a row goes red.
+func TestAClustersConnect404IsReadBackBeforeTheBoxIsCalledGone(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, domain string
+		read         int
+		gone, floor  bool
+	}{
+		{"a cluster older than the connect", "test.invalid", http.StatusOK, false, true},
+		{"a cluster whose box is gone", "test.invalid", http.StatusNotFound, true, false},
+		{"a cluster whose read fails", "test.invalid", http.StatusInternalServerError, false, false},
+		{"E2B's cloud", "", http.StatusOK, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var mu sync.Mutex
+			var seen []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				seen = append(seen, r.Method+" "+r.URL.Path)
+				mu.Unlock()
+				switch {
+				case r.Method != http.MethodGet:
+					// The connect, its route missing or its box gone.
+					w.WriteHeader(http.StatusNotFound)
+				case tc.read == http.StatusOK:
+					_, _ = w.Write([]byte(`{"sandboxID": "sbx1", "clientID": "cl1", "state": "paused"}`))
+				default:
+					w.WriteHeader(tc.read)
+				}
+			}))
+			t.Cleanup(server.Close)
+			provider, err := sandbox.NewE2B(sandbox.E2BOptions{
+				APIKey: "k", Domain: tc.domain,
+				HTTP: &http.Client{Transport: httpxtest.Rewrite(t, server)},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = provider.Connect(context.Background(), "sbx1")
+			if err == nil {
+				t.Fatal("a connect answered 404 succeeded")
+			}
+			if gone := errors.Is(err, sandbox.ErrBoxGone); gone != tc.gone {
+				t.Errorf("the box is called gone: %t, want %t: %v", gone, tc.gone, err)
+			}
+			why, marked := sandbox.WhyOf(err)
+			if floor := marked && why == sandbox.WhyConfiguration &&
+				strings.Contains(err.Error(), "e2b-dev/runtime f5dc6426e"); floor != tc.floor {
+				t.Errorf("the refusal is configuration naming the floor: %t, want %t: %v", floor, tc.floor, err)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if read := slices.Contains(seen, "GET /sandboxes/sbx1"); read != (tc.domain != "") {
+				t.Errorf("the box was read back: %t, want %t: %v", read, tc.domain != "", seen)
 			}
 		})
 	}

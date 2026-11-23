@@ -50,6 +50,7 @@ const E2BClientTimeout = 60 * time.Second
 // E2B's own SDKs call too. It carries e2b-dev/infra#1474 and #1482, which
 // mint the traffic token for a private box and exempt envd's port from it,
 // so it is the only floor. Not a release: the newest, 2026.30, predates it.
+// The cell probe asks for both routes ([e2bAPI.floorRouteMissing]).
 const e2bV2Floor = "e2b-dev/runtime f5dc6426e"
 
 // e2bAPI is the control plane for one deployment.
@@ -298,7 +299,7 @@ func (a *e2bAPI) createBox(ctx context.Context, template string, timeoutSec floa
 			// (providers.sandbox.e2b.template, or the harness's), missing or
 			// with envd too old for secured access; the timeout and the
 			// seat's run environment ride the same request. And on a
-			// cluster a 404 is as likely its API, older than the route.
+			// cluster a 404 or 400 is as likely its API, older than the route.
 			return e2bBox{}, Because(WhyConfiguration, a.olderThanTheRoute(err, refused.Status))
 		}
 		return e2bBox{}, err
@@ -346,15 +347,24 @@ func (a *e2bAPI) refusePublic(ctx context.Context, sandboxID string) error {
 }
 
 // olderThanTheRoute is err, a create's refusal with status, naming the
-// cluster's floor where it is a 404 from a cluster: an API from before
-// [e2bV2Floor] has no such route, and its 404 reads as a missing template.
+// cluster's floor where it is a 404 or 400 from a cluster: an API from before
+// [e2bV2Floor] has no such route, and answers it as a missing template does
+// (404) or, before 2026.04, as an unreadable request (400: the path is served
+// for a list alone). The cell probe tells which ([e2bAPI.floorRouteMissing]).
 func (a *e2bAPI) olderThanTheRoute(err error, status int) error {
-	if status != http.StatusNotFound || a.domain == DefaultE2BDomain {
+	if a.domain == DefaultE2BDomain {
 		return err
 	}
-	return fmt.Errorf("%w (the template providers.sandbox.e2b.template or the harness's names is "+
-		"missing, or the cluster at api.%s is older than %s, which serves the create this "+
-		"engine calls)", err, a.domain, e2bV2Floor)
+	switch status {
+	case http.StatusNotFound:
+		return fmt.Errorf("%w (the template providers.sandbox.e2b.template or the harness's names is "+
+			"missing, or the cluster at api.%s is older than %s, which serves the create this "+
+			"engine calls)", err, a.domain, e2bV2Floor)
+	case http.StatusBadRequest:
+		return fmt.Errorf("%w (the request is one E2B cannot read, or the cluster at api.%s is older "+
+			"than %s, which serves the create this engine calls)", err, a.domain, e2bV2Floor)
+	}
+	return err
 }
 
 // createRefusesTemplate reports a status a create answers only about the
@@ -410,11 +420,45 @@ func (a *e2bAPI) getBox(ctx context.Context, sandboxID string) (e2bBox, error) {
 
 // listBoxes lists at most limit sandboxes (`GET /v2/sandboxes`, the spec
 // [e2bAPI.getBox] cites) and discards them: the runner probe's one
-// authenticated read ([ProbeE2B]), proving the key and the route without
-// making or waking a box.
+// authenticated read ([ProbeE2B]), proving the key without making or waking a
+// box.
 func (a *e2bAPI) listBoxes(ctx context.Context, limit int) error {
 	var out []e2bBox
 	return a.do(ctx, http.MethodGet, fmt.Sprintf("/v2/sandboxes?limit=%d", limit), nil, &out)
+}
+
+// e2bFloorRoutes are the routes [e2bV2Floor] adds, each with a body whose field
+// has the wrong JSON type, which every build refuses before acting (its OpenAPI
+// validator answers 400, as its handler's decode would), so a probe of them
+// makes or wakes nothing ([e2bAPI.floorRouteMissing]).
+var e2bFloorRoutes = []struct {
+	path string
+	body json.RawMessage
+}{
+	{"/v2/sandboxes", json.RawMessage(`{"templateID":0}`)},
+	{"/v2/sandboxes/crewlet-probe/connect", json.RawMessage(`{"timeout":"0"}`)},
+}
+
+// floorRouteMissing is the first of [e2bFloorRoutes] the API does not serve,
+// as "POST <path>", or "" where it serves both. A build without the route
+// answers 404 to the connect's path, absent from its spec, and from 2026.04 on
+// to the create's too; before 2026.04 it answers the create's 400, the path
+// being served for a list, so the connect's is what tells such a build apart.
+func (a *e2bAPI) floorRouteMissing(ctx context.Context) (string, error) {
+	for _, route := range e2bFloorRoutes {
+		err := a.do(ctx, http.MethodPost, route.path, route.body, nil)
+		var refused *E2BError
+		switch {
+		case errors.As(err, &refused) && refused.Status == http.StatusNotFound:
+			return http.MethodPost + " " + route.path, nil
+		case err == nil, errors.As(err, &refused) && (refused.Status == http.StatusBadRequest ||
+			refused.Status == http.StatusUnprocessableEntity):
+			// Served: the body refused, as it is meant to be.
+		default:
+			return "", err
+		}
+	}
+	return "", nil
 }
 
 // killBox terminates a sandbox by id without resuming it: the reaper exists
