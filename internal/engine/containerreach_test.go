@@ -12,12 +12,14 @@ import (
 // BOXES, AND SAYS SO: the advisory names the field to change, and stays quiet
 // wherever the bind answers or is not the one a box dials — another OS, a
 // wider bind, a public listener boxes dial instead, a node without ingress, a
-// node starting no container box (no seats, and no Gitlet running checks), or
-// a company with no container cell. A check's box dials Gitlet on its node as
-// a seat's dials the bridge, so a Gitlet node running checks warns too.
+// node starting no container box (no seats in a container, and no Gitlet
+// running checks), or a company with no container cell. A check's box dials
+// Gitlet on its node as a seat's dials the bridge, so a Gitlet node running
+// checks warns too, and a seats node of the same company does not.
 //
-// Mutation: drop the checks arm — the Gitlet node running checks is quiet,
-// red.
+// Mutation: drop the checks arm, and the Gitlet node running checks is quiet;
+// judge the seats arm on every cell the company reaches, and the seats node
+// whose seats run direct warns: red.
 func TestALoopbackBindOnLinuxWarnsAContainerCompany(t *testing.T) {
 	t.Parallel()
 	container := sandboxCompany(t, "container")
@@ -52,6 +54,8 @@ func TestALoopbackBindOnLinuxWarnsAContainerCompany(t *testing.T) {
 		{"a Gitlet node whose checks run in containers, running no seats",
 			config.API{Host: "127.0.0.1", Port: 8000}, []string{"data", "gitlet", "ingress"}, "linux", checks,
 			"api.host"},
+		{"a seats node of a company whose seats run direct and whose checks run in containers",
+			config.API{Host: "127.0.0.1", Port: 8000}, []string{"data", "ingress", "seats"}, "linux", checks, ""},
 		{"a Gitlet node of a company running no checks, running no seats",
 			config.API{Host: "127.0.0.1", Port: 8000}, []string{"data", "gitlet", "ingress"}, "linux", container, ""},
 	} {

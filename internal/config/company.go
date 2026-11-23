@@ -1302,7 +1302,7 @@ func (c *Company) EachRole() iter.Seq2[*Role, Path] {
 // entry naming no cell goes there. So is `container`, on a company whose
 // checks run ([Company.checksAt]).
 func (c *Company) SandboxPlacements() map[Placement]string {
-	reached := c.seatPlacements()
+	reached := c.SeatPlacements()
 	if at := c.checksAt(); at != "" {
 		if _, seen := reached[PlacementContainer]; !seen {
 			reached[PlacementContainer] = at
@@ -1311,10 +1311,11 @@ func (c *Company) SandboxPlacements() map[Placement]string {
 	return reached
 }
 
-// seatPlacements is [Company.SandboxPlacements] of the seats alone: the
+// SeatPlacements is [Company.SandboxPlacements] of the seats alone: the
 // catalogue's default and every cell a seat's box is placed in, each mapped to
-// the path of the first thing that named it.
-func (c *Company) seatPlacements() map[Placement]string {
+// the path of the first thing that named it. A check's container is not one:
+// it starts on a Gitlet node, never on a node for running seats.
+func (c *Company) SeatPlacements() map[Placement]string {
 	reached := make(map[Placement]string)
 	catalogue := c.Providers.Sandbox
 	if !catalogue.Enabled() {
