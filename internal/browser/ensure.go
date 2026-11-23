@@ -33,11 +33,17 @@ const (
 	ReasonSupervisorFailed           EnsureReason = "supervisor_failed"
 )
 
-// The engine's reasons, in the order a launch meets them: the box's network,
-// which a check in the box finds before anything is written there; then
-// ensure printing no line the engine reads.
+// The engine's reasons, in the order a launch meets them: the box outside a
+// container, or on an entry that denies its harness the web, each before
+// anything runs in the box; then the box's network, which a check in the box
+// finds before anything is written there; then the helper's write; then
+// ensure, silent past its bound or printing no line the engine reads.
 const (
+	ReasonCellNotContainer EnsureReason = "cell_not_container"
+	ReasonWebDenied        EnsureReason = "web_denied"
 	ReasonHostNetwork      EnsureReason = "host_network"
+	ReasonHelperUnwritten  EnsureReason = "helper_unwritten"
+	ReasonEnsureTimeout    EnsureReason = "ensure_timeout"
 	ReasonEnsureUnreadable EnsureReason = "ensure_unreadable"
 )
 
@@ -87,6 +93,10 @@ const (
 	CauseRootlessGateway EnsureCause = "rootless_gateway"
 	CauseProxy           EnsureCause = "proxy"
 	CauseUnchecked       EnsureCause = "unchecked"
+	// CauseRefused and CauseFailed are ReasonHelperUnwritten's: the box refused
+	// a path holding something other than a regular file, or the write failed.
+	CauseRefused EnsureCause = "refused"
+	CauseFailed  EnsureCause = "failed"
 	// CauseNoLine and CauseBadLine are ReasonEnsureUnreadable's: no line at
 	// all, or one off the grammar.
 	CauseNoLine  EnsureCause = "no_line"
@@ -94,8 +104,9 @@ const (
 )
 
 // reasons is every reason with the causes it takes, the box's in the order
-// ensure checks them, then the engine's in the order a launch meets them.
-// playwright_missing's causes are in the order an install meets them.
+// ensure checks them, then the engine's in the order a launch meets them; an
+// engine reason with nothing more to tell takes none. playwright_missing's
+// causes are in the order an install meets them.
 var reasons = []struct {
 	reason  EnsureReason
 	printed bool
@@ -114,8 +125,12 @@ var reasons = []struct {
 	{ReasonChromiumStartFailed, true, []EnsureCause{CauseLibraries, CauseProfileHeld, CauseExited, CauseTimeout,
 		CauseUnknown}},
 	{ReasonSupervisorFailed, true, []EnsureCause{CauseExited, CauseTimeout}},
+	{ReasonCellNotContainer, false, nil},
+	{ReasonWebDenied, false, nil},
 	{ReasonHostNetwork, false, []EnsureCause{CauseAnotherKernel, CauseLoopback, CauseGateway, CauseHostAlias,
 		CauseRootlessGateway, CauseProxy, CauseUnchecked}},
+	{ReasonHelperUnwritten, false, []EnsureCause{CauseRefused, CauseFailed}},
+	{ReasonEnsureTimeout, false, nil},
 	{ReasonEnsureUnreadable, false, []EnsureCause{CauseNoLine, CauseBadLine}},
 }
 
@@ -144,7 +159,8 @@ func (r EnsureReason) Printed() bool {
 	return false
 }
 
-// Causes is every cause r takes, none for a reason off the list.
+// Causes is every cause r takes, none for a reason off the list or one that
+// takes none.
 func (r EnsureReason) Causes() []EnsureCause {
 	for _, e := range reasons {
 		if e.reason == r {
@@ -152,6 +168,21 @@ func (r EnsureReason) Causes() []EnsureCause {
 		}
 	}
 	return nil
+}
+
+// Takes reports whether c may be recorded as r's cause: one of r's own, or,
+// for a reason that takes none, no cause at all. The one rule for a valid
+// pair, so a printed line and a launch's record are held to the same one.
+func (r EnsureReason) Takes(c EnsureCause) bool {
+	for _, e := range reasons {
+		if e.reason == r {
+			if c == "" {
+				return len(e.causes) == 0
+			}
+			return slices.Contains(e.causes, c)
+		}
+	}
+	return false
 }
 
 // Valid reports whether c is a cause some reason takes.

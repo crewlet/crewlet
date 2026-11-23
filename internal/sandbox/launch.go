@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/browser"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -222,6 +223,10 @@ type LaunchRequest struct {
 	// WebDenied is whether the run's harness is handed its own web tools
 	// ([RunRequest.WebDenied]).
 	WebDenied bool
+
+	// Browser is a browser seat's setting for the browser the launch readies
+	// in its box, nil for a seat with no browser; see [EnsureBrowser].
+	Browser *BrowserLaunch
 
 	// ProviderKey is the providers.llm entry the run was launched on: the
 	// member of the seat's executor chain that took it, which is not always
@@ -1031,6 +1036,34 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 			return nil
 		})
 	}
+	// A BROWSER SEAT'S BROWSER, READIED IN THE BOX NOW IT IS READY, a fresh one
+	// set up and read and a kept one refreshed, and before its session is
+	// continued and its harness started: ready, its server joins the box's own,
+	// over a server of that name. Only the launch's own context ending fails it.
+	var browserOut *BrowserOutcome
+	if req.Browser != nil {
+		began := time.Now()
+		outcome, browserErr := EnsureBrowser(ctx, box, BrowserStep{Placement: req.Spec.Placement,
+			Browser: *req.Browser, Env: req.Spec.Env, LaunchID: opened.LaunchID, WebDenied: req.WebDenied,
+			ProviderKey: req.ProviderKey})
+		if browserErr != nil {
+			c.abandon(ctx, m, req, fence, box.ID())
+			return LaunchResult{}, fmt.Errorf("sandbox: readying the seat's browser: %w", browserErr)
+		}
+		logBrowser(ctx, req, opened.LaunchID, outcome, time.Since(began))
+		browserOut = &outcome
+		if outcome.Server != nil {
+			served := map[string]MCPServer{browser.ServerName: *outcome.Server}
+			own, req.MCPServers = withServers(own, served), withServers(req.MCPServers, served)
+			if fresh != nil {
+				fresh.MCPServers = withServers(fresh.MCPServers, served)
+			}
+			if _, bridges := bridged[browser.ServerName]; bridges {
+				bridged = maps.Clone(bridged)
+				delete(bridged, browser.ServerName)
+			}
+		}
+	}
 
 	// THE TURN'S SESSION, CONTINUED in whatever box this job got — its kept
 	// capture restored where the box does not hold it, or, in a box of its
@@ -1040,7 +1073,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// the one a session of its own does, for its script to hand over the one
 	// its restore's outcome chose.
 	continued := c.continueSession(ctx, req, opened, box, runner, reused, begun,
-		runSourcesOf(req, own, bridged, steer.Set()))
+		runSourcesOf(req, own, bridged, steer.Set(), browserOut))
 	defer continued.release()
 	if req.Decided != nil {
 		req.Decided(continued.decision())
@@ -1069,7 +1102,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		freshWiring = fresh
 	}
 	handle, err := runner.Start(ctx, box, RunRequest{
-		System:      buildSystem(req),
+		System:      buildSystem(req, browserOut),
 		Brief:       continued.brief,
 		FreshBrief:  continued.fresh,
 		FreshWiring: freshWiring,
@@ -1163,6 +1196,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// AND THE POINT OF THE KEPT CAPTURE IT HANDED, for a later capture of
 		// the job to be raised to ([LaunchRecord.Continued]).
 		Continued: continued.point,
+		// AND A BROWSER SEAT'S BROWSER AS THE LAUNCH READIED IT
+		// ([LaunchRecord.Browser]).
+		Browser: browserOut.record(),
 	}, fence); err != nil {
 		c.abandon(ctx, m, req, fence, box.ID())
 		return LaunchResult{}, fmt.Errorf("sandbox: recording the job: %w", err)
@@ -1187,6 +1223,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		ConversationKey: req.Turn.ConversationKey,
 		WorkItem:        req.Turn.WorkItem,
 		Task:            req.label(),
+		Browser:         browserOut.record(),
 	}
 	ev := events.New(started, events.TraceContext{
 		TraceID: req.Turn.TraceID, ParentSpanID: req.Turn.SpanID,
@@ -1216,7 +1253,8 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		"sandbox_id", box.ID(), "placement", string(req.Spec.Placement),
 		"harness", req.Spec.Harness, "provider_key", req.ProviderKey,
 		"reused", reused, "continues_session", continued.session != "",
-		"restores_session", continued.carried != nil, "brief", string(continued.kind))
+		"restores_session", continued.carried != nil, "brief", string(continued.kind),
+		"browser", string(browserOut.state()))
 
 	return LaunchResult{
 		LaunchID: opened.LaunchID, SandboxID: box.ID(), CommandID: handle.CommandID,
@@ -1497,21 +1535,22 @@ func summarise(brief string) string {
 // to its system prompt ([RunRequest.System]). THREE PARTS, each present only where it says something: the run's own
 // instructions (the seat's executor prompt), what the environment already
 // provides (the setup steps' own briefs, so the agent does not rediscover
-// that git auth is wired), and how to ask a person. The brief is not among
-// them: these hold for every round of the run, which is what a system prompt
-// is for. The runner adds the report it must write (only it knows the box's
-// path). THE RUN'S OWN TEXT FIRST: it is who the model is; the rest are
-// details of where it works. The environment lists the operator's steps
-// alone: a Gitlet repository is not the box's at launch, and `code_checkout`
-// tells the run where each checkout is and how it pushes.
-func buildSystem(req LaunchRequest) string {
+// that git auth is wired, and a browser seat's browser, browserOut's), and
+// how to ask a person. The brief is not among them: these hold for every
+// round of the run, which is what a system prompt is for. The runner adds the
+// report it must write (only it knows the box's path). THE RUN'S OWN TEXT
+// FIRST: it is who the model is; the rest are details of where it works. The
+// environment lists the operator's steps alone: a Gitlet repository is not
+// the box's at launch, and `code_checkout` tells the run where each checkout
+// is and how it pushes.
+func buildSystem(req LaunchRequest, browserOut *BrowserOutcome) string {
 	own := strings.TrimSpace(req.System)
 	if own != "" {
 		own = agentRunNote + "\n\n" + own
 	}
 	parts := []string{
 		own,
-		strings.TrimSpace(EnvironmentBrief(req.Setup, req.MCPServers)),
+		strings.TrimSpace(EnvironmentBrief(req.Setup, req.MCPServers, browserOut.Brief())),
 		strings.TrimSpace(req.Ask),
 	}
 	return strings.Join(slices.DeleteFunc(parts, func(p string) bool { return p == "" }), "\n\n")
@@ -1602,11 +1641,13 @@ func jobEnvFor(m *Manager, req LaunchRequest, box Sandbox) (map[string]string, e
 }
 
 // runSourcesOf is the context sources req's run hands its server
-// ([RunSources]): its instructions as its runner writes them, its skills, what
-// each server its bridge serves says it is for, and, as Unsized, every server
-// of own (the box's own, before the job was named) that bridged (what naming
-// it joined) does not take over, whose instructions only the box knows.
-func runSourcesOf(req LaunchRequest, own, bridged map[string]MCPServer, steered bool) RunSources {
+// ([RunSources]): its instructions as its runner writes them, told of its
+// browser as browserOut came to, its skills, what each server its bridge
+// serves says it is for, and, as Unsized, every server of own (the box's own,
+// a ready browser's among them) that bridged (what naming the job joined)
+// does not take over, whose instructions only the box knows.
+func runSourcesOf(req LaunchRequest, own, bridged map[string]MCPServer, steered bool,
+	browserOut *BrowserOutcome) RunSources {
 	var unsized []string
 	for name := range own {
 		if _, ok := bridged[name]; !ok {
@@ -1614,8 +1655,8 @@ func runSourcesOf(req LaunchRequest, own, bridged map[string]MCPServer, steered 
 		}
 	}
 	slices.Sort(unsized)
-	return RunSources{System: buildSystem(req), Reported: repoNames(Pushable(req.Spec.Repos)), Steered: steered,
-		Skills: req.Skills, Guidance: req.MCPGuidance, Catalogs: req.MCPCatalogs, Unsized: unsized}
+	return RunSources{System: buildSystem(req, browserOut), Reported: repoNames(Pushable(req.Spec.Repos)),
+		Steered: steered, Skills: req.Skills, Guidance: req.MCPGuidance, Catalogs: req.MCPCatalogs, Unsized: unsized}
 }
 
 // withHomePaths is env with each of [LaunchRequest.HomePaths] joined onto box's

@@ -2,10 +2,11 @@
 // one package reads: the oldest major the engine accepts and the suite
 // certifies ([MinChromiumMajor]), the Playwright release a seat's box installs
 // and the Chromium build it expects ([PlaywrightMCPRelease],
-// [ExpectedChromiumVersion]), the closed values of a box's ensure answer
-// ([EnsureReason] and its fellows), the name of a seat's browser server
-// ([ServerName]) and where a seat's browser may run, and that no Go but the
-// artifact render's client speaks DevTools (ADR-0165).
+// [ExpectedChromiumVersion]) and whether a box's is older ([Outdated]), the
+// closed values of a box's ensure answer ([EnsureReason] and its fellows), the
+// name of a seat's browser server ([ServerName]) and where a seat's browser
+// may run, and that no Go but the artifact render's client speaks DevTools
+// (ADR-0165).
 //
 // # The floor
 //
@@ -48,7 +49,8 @@
 // rather than a panic: its verdict ([EnsureVerdict]); why a browser is
 // withheld and the cause ensure could tell ([EnsureReason], [EnsureCause]),
 // every reason with the causes it takes, the box's in the order ensure checks
-// them and then the engine's own ([EnsureReason.Printed]); the build it chose
+// them and then the engine's own ([EnsureReason.Printed]), each pair held to
+// one rule ([EnsureReason.Takes]); the build it chose
 // ([ChromiumBuild]); the cell's sandbox ([ChromiumSandbox], whose zero value
 // is neither setting); and how its supervisor was come by
 // ([SupervisorStart]). They live here, never in the helper that prints them,
@@ -77,10 +79,42 @@
 // that runs depends on it, so a revision another build admitted still
 // applies, with a warning.
 //
+// So the launch holds the rule again: a revision another build admitted, or a
+// default a reload moved, can still land a run outside a container
+// (cell_not_container) or on an entry that denies the web (web_denied), each
+// withheld before anything runs in the box. Whether the box is off its host's
+// network the launch asks the box itself, before it writes the helper
+// (host_network, internal/browser/hostreach): a kept box keeps the network it
+// was made on whatever a later revision says, and a runtime's own
+// configuration or a virtual machine's design leads a box to the host's
+// loopback by no setting config reads. A browser the box already runs, a kept
+// box's from a launch whose check passed, is stopped there, so its pages run
+// on in no box that may reach the host's loopback.
+//
 // Chromium keeps its own sandbox in the box unless the catalogue waives it
 // (local.chromium_sandbox). A value this build does not know reads as
 // required, the stricter, so this build runs a later build's revision rather
 // than refusing it and splitting the fleet's epoch.
+//
+// Every launch writes the helper and runs ensure, a kept box's too, since the
+// engine's build decides the helper and a kept box's supervisor may be another
+// build's. Ensure runs in the box's home with the run's environment, the one
+// its setup ran with, so the box's npm reaches the mirror, token, proxy and CA
+// the run's own npm would; a kept container box holds no environment of its
+// own, so the launch hands it. The supervisor keeps its allowlist.
+//
+// The run is handed the box's browser server only where ensure answered
+// ready: a box that cannot run the browser would hand the model a server that
+// fails its first call. The server is the shim's plain command line for the
+// job, rooted at the box's workspace, with no environment and no secret, the
+// same in a fresh session's wiring, and it replaces a server of its name.
+// What the box prints is read into this package's closed values and never
+// reaches a prompt: the run is told its browser, or why it has none, in the
+// engine's words. An engine reason takes a cause only where one can be told.
+//
+// [Outdated] warns and never withholds: a browser older than the build the
+// pin expects is recorded so, since a floor at the patch level would withhold
+// every image's browser each time the pin moves.
 //
 // # DevTools only through the artifact render's client
 //

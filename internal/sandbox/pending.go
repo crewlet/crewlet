@@ -3247,6 +3247,11 @@ type BoxRef struct {
 	// attach ([LaunchRecord.Continued]). Nil where the launch handed none or one
 	// stating no point above zero.
 	Continued *ContinuedPoint
+
+	// Browser is a browser seat's browser as the launch readied it ([EnsureBrowser]),
+	// written onto the record by the same attach ([LaunchRecord.Browser]). Nil for a
+	// seat with none.
+	Browser *types.ExecutorBrowser
 }
 
 // PriorBox is the box a relaunch found on its run's row ([PendingRun.Prior]).
@@ -3699,6 +3704,13 @@ type LaunchRecord struct {
 	// conversation's base, a session of the run's own, a kept capture stating no point or
 	// zero, and an older build's record.
 	Continued *ContinuedPoint `json:"continued,omitempty"`
+
+	// Browser is a browser seat's browser as the job's launch readied it
+	// ([EnsureBrowser]): ready, or withheld and why. Written by the attach naming the
+	// command ([BoxRef.Browser]), never carried to the next job's record. Nil for a seat
+	// with none. CLOSED like [ContinuedPoint]: [types.ExecutorBrowser] has no Extra, so
+	// a later fact about the job's browser is a key of this record beside it.
+	Browser *types.ExecutorBrowser `json:"browser,omitempty"`
 
 	// Bridged is what this job's BRIDGED calls cost the engine (auxiliary calls the
 	// seat's tools made for the harness and its delegated workers) as the newest total the

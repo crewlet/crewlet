@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"path"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -233,7 +232,7 @@ func ParseEnsure(stdout string) (Ensure, error) {
 		if !e.Reason.Printed() {
 			return bad("%q is no reason a box gives", e.Reason)
 		}
-		if !slices.Contains(e.Reason.Causes(), e.Cause) {
+		if !e.Reason.Takes(e.Cause) {
 			return bad("%q is no cause of %s", e.Cause, e.Reason)
 		}
 	}
