@@ -73,8 +73,8 @@ func (s *Service) accessIdentity(w http.ResponseWriter, r *http.Request) {
 	keep := r.Method == http.MethodPost
 	ask := seataccess.IdentityAsk{Keep: keep, Drop: !keep}
 	if keep {
-		req, ok := readIdentity(w, r)
-		if !ok {
+		req, read := readIdentity(w, r)
+		if !read {
 			return
 		}
 		ask.Way, ask.Value, ask.FileName, ask.ID = req.Way, req.Value, req.FileName, req.ID

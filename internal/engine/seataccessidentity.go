@@ -54,8 +54,8 @@ func (a *SeatAccessAPI) Identity(ctx context.Context, q setupapi.AccessQuery, ha
 	// start, never earlier than this.
 	started := time.Now().UTC()
 	asks := map[string]seataccess.Ask{handle: {Lane: lane, Identity: &ask}}
-	if err := a.syncIdentity(ctx, q.Kind, by, asks, handle); err != nil {
-		return seataccess.IdentityCheck{}, err
+	if syncErr := a.syncIdentity(ctx, q.Kind, by, asks, handle); syncErr != nil {
+		return seataccess.IdentityCheck{}, syncErr
 	}
 	rec, _, err := ledger.SeatRecord(ctx, q.Kind, handle)
 	if errors.Is(err, coord.ErrUnavailable) {
