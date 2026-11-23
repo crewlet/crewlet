@@ -146,13 +146,17 @@ func hermesScript(req sandbox.RunRequest, session Session, paths Paths, times he
 		q(paths.HermesBrief()))
 	line(`rm -f %s %s`, q(paths.HermesRecord()), q(paths.HermesStderr()))
 	line(`sp=; [ ! -s %s ] || sp=$(cat %s)`, q(paths.System()), q(paths.System()))
+	// WHERE THIS LAUNCH'S ROWS BEGIN in the store, for its notes' confirm
+	// ([Hermes.notesHeld]); none written where it cannot be read.
+	line(`rm -f %[1]s; rs=$(hcarry top %[2]s); case "$rs" in 'crewlet-carry ok '[0-9]*) printf '%%s %%s\n' "$sid" "${rs#crewlet-carry ok }" > %[1]s;; esac`,
+		q(paths.HermesRunStart()), q(paths.HermesStateDB()))
 	line(`set -- -c "$sid"; [ "$k" = yes ] || set -- "$@" --create-if-missing`)
 	launch := hermesLaunch(req, paths)
 	b.WriteString(launchHarness(launch, paths))
 	b.WriteString(hermesDiscard(paths, launch))
 	line(`endgw`)
 	line(`st=$(sed -n 's/^Session: *\([A-Za-z0-9_-]*\)$/\1/p' %s 2> /dev/null | head -n 1)`, q(paths.HermesStderr()))
-	b.WriteString(hermesIndex(req, paths))
+	b.WriteString(hermesIndex(paths))
 	line(`[ ! -s %s ] || sed 's/^/{"type":"%s","line":/; s/$/}/' %s`, q(paths.HermesRecord()), hermesRequestEvent,
 		q(paths.HermesRecord()))
 	if limit := req.Limits.MaxTurns; limit > 0 {
@@ -263,14 +267,13 @@ endgw
 }
 
 // hermesIndex records the session the box now holds: its stored id against
-// the runner's ([Paths.HermesSessions]) and, for a session the run created,
-// the launch Hermes froze with it ([Paths.HermesPolicy]).
-func hermesIndex(req sandbox.RunRequest, paths Paths) string {
+// the runner's ([Paths.HermesSessions]). The launch Hermes froze with a session
+// the run creates is kept as the launch starts ([hermesSessionGate]).
+func hermesIndex(paths Paths) string {
 	q := shellword.Quote
 	index := q(paths.HermesSessions())
 	return fmt.Sprintf(`if [ -n "$st" ]; then { grep -v "^$sid " %[1]s 2> /dev/null; printf '%%s %%s\n' "$sid" "$st"; } > %[1]s.next && mv -f %[1]s.next %[1]s; fi
-if [ "$k" = no ] && [ -n "$st" ]; then printf '%%s%%s\n' %[2]s "$PWD" > %[3]s-"$sid"; fi
-`, index, q(hermesPolicy(req)), q(paths.WorkDir()+"/hermes-policy"))
+`, index)
 }
 
 // Output is where a Hermes run's stream lands, which is its result: its
@@ -306,7 +309,7 @@ func (Hermes) artifactFiles(p Paths) []string {
 	return []string{p.HermesOverlay(), p.HermesManagedEnv(), p.HermesOverlayStaged(), p.HermesOverlayFresh(), p.HermesPluginConfig(),
 		p.HermesRecord(), p.HermesNotesURL(), p.HermesNotesURLFresh(), p.HermesSkillsURL(),
 		p.HermesSkillsURLFresh(), p.HermesBrief(), p.HermesStderr(), p.HermesCarry(), p.HermesCarryErrors(),
-		p.HermesRecordRead()}
+		p.HermesRecordRead(), p.HermesRunStart()}
 }
 
 // artifactDirs is the staging directory a Hermes run installs its plugin and

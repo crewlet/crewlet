@@ -499,9 +499,14 @@ func TestAHermesRunsManagedScopeIsTheBoxsWithTheRunsKeysOver(t *testing.T) {
 	})
 }
 
+// hermesFixtureRoute is the model section the steered fixture's session was
+// created under, as the box's configuration holds it.
+const hermesFixtureRoute = `{"model": {"provider": "openrouter", "base_url": "http://stub:9000/api/v1", "default": "stub-model"}}`
+
 // hermesGate runs a continued run's session gate in a box at home, its Hermes
-// having printed release, a carried archive of member, and returns sid, k and w.
-func hermesGate(t *testing.T, home, release string, req sandbox.RunRequest, member []byte) []string {
+// having printed release, its configuration config, a carried archive of
+// member, and returns sid, k and w.
+func hermesGate(t *testing.T, home, release, config string, req sandbox.RunRequest, member []byte) []string {
 	t.Helper()
 	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
 	bin := hermesLauncherStandIn(t)
@@ -521,6 +526,9 @@ func hermesGate(t *testing.T, home, release string, req sandbox.RunRequest, memb
 		t.Fatal(err)
 	}
 	session := Session{ID: hermesFixtureTitle, Continues: true, Fresh: "22222222-0000-4000-8000-000000000002"}
+	if err := os.WriteFile(filepath.Join(paths.HermesHome(), "config.yaml"), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(paths.System(), []byte("THIS RUN'S OWN INSTRUCTIONS"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -528,7 +536,7 @@ func hermesGate(t *testing.T, home, release string, req sandbox.RunRequest, memb
 		hermesSessionGate(req, session, paths, false) + `printf '%s|%s|%s' "$sid" "$k" "$w"`
 	cmd := exec.Command(sh, "-c", script)
 	cmd.Dir = home
-	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "HERMES_HOME="+paths.HermesHome())
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("the gate failed: %v", err)
@@ -538,13 +546,20 @@ func hermesGate(t *testing.T, home, release string, req sandbox.RunRequest, memb
 
 // A CARRIED HERMES SESSION IS RESTORED AND CONTINUED ONLY UNDER THE LAUNCH IT
 // WAS CREATED WITH: restored into a new store and indexed where the box runs
-// the one release and the launch matches; a launch naming another model, one
-// whose working directory the box no longer has (Hermes 0.23.3 then runs
-// nothing and exits 1), or a box on another release, starts the fresh session
-// instead, saying why.
+// the one release and the launch and model route match; a launch naming
+// another model, one whose working directory the box no longer has (Hermes
+// 0.23.3 then runs nothing and exits 1), a box configured for another model
+// provider (which Hermes would ignore for the frozen one), an archive with no
+// launch kept, or a box on another release, starts the fresh session instead,
+// saying why.
 //
-// Mutation: skip the policy check, restore on another release, or continue
-// without indexing the restored session, and a row goes red.
+// The restored store is the archive's alone, so no other session's index line
+// or kept launch stays beside it.
+//
+// Mutation: skip the policy or route check, read a missing launch as a
+// mismatch of its values, restore on another release, continue without
+// indexing the restored session, or keep another session's index line, and a
+// row goes red.
 func TestACarriedHermesSessionContinuesOnlyUnderItsLaunch(t *testing.T) {
 	t.Parallel()
 	req := sandbox.RunRequest{Model: "stub-model"}
@@ -554,14 +569,27 @@ func TestACarriedHermesSessionContinuesOnlyUnderItsLaunch(t *testing.T) {
 	}
 	t.Run("matching", func(t *testing.T) {
 		home := t.TempDir()
-		got := hermesGate(t, home, hermesFloor(), req, member(home))
+		other := "33333333-0000-4000-8000-000000000003"
+		if err := os.MkdirAll(Paths{Home: home}.WorkDir(), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		for path, body := range map[string]string{Paths{Home: home}.HermesSessions(): other + " local-other\n",
+			Paths{Home: home}.HermesPolicy(other): "model x\n"} {
+			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got := hermesGate(t, home, hermesFloor(), hermesFixtureRoute, req, member(home))
 		if got[1] != "yes" || got[2] != "" {
 			t.Fatalf("gate = %q, want the session continued", got)
 		}
 		paths := Paths{Home: home}
 		index, err := os.ReadFile(paths.HermesSessions())
-		if err != nil || !strings.HasPrefix(string(index), hermesFixtureTitle+" local-") {
-			t.Errorf("index = %q (%v), want the restored session's stored id", index, err)
+		if err != nil || !strings.HasPrefix(string(index), hermesFixtureTitle+" local-") || strings.Contains(string(index), other) {
+			t.Errorf("index = %q (%v), want the restored session's stored id alone", index, err)
+		}
+		if _, err := os.Stat(paths.HermesPolicy(other)); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("the replaced store's other session kept its launch: %v", err)
 		}
 		if _, err := os.Stat(paths.HermesStateDB()); err != nil {
 			t.Errorf("no store was restored: %v", err)
@@ -573,21 +601,36 @@ func TestACarriedHermesSessionContinuesOnlyUnderItsLaunch(t *testing.T) {
 	})
 	t.Run("another model", func(t *testing.T) {
 		home := t.TempDir()
-		got := hermesGate(t, home, hermesFloor(), sandbox.RunRequest{Model: "other-model"}, member(home))
+		got := hermesGate(t, home, hermesFloor(), hermesFixtureRoute, sandbox.RunRequest{Model: "other-model"}, member(home))
 		if got[0] != "22222222-0000-4000-8000-000000000002" || got[1] != "no" || !strings.Contains(got[2], "launch") {
 			t.Fatalf("gate = %q, want the fresh session, saying the launch differs", got)
 		}
 	})
 	t.Run("a working directory the box no longer has", func(t *testing.T) {
 		home := t.TempDir()
-		got := hermesGate(t, home, hermesFloor(), req, member(filepath.Join(home, "gone")))
+		got := hermesGate(t, home, hermesFloor(), hermesFixtureRoute, req, member(filepath.Join(home, "gone")))
 		if got[0] != "22222222-0000-4000-8000-000000000002" || got[1] != "no" || !strings.Contains(got[2], "working directory") {
 			t.Fatalf("gate = %q, want the fresh session, saying the working directory differs", got)
 		}
 	})
+	t.Run("another model route", func(t *testing.T) {
+		home := t.TempDir()
+		other := strings.Replace(hermesFixtureRoute, "openrouter", "custom", 1)
+		got := hermesGate(t, home, hermesFloor(), other, req, member(home))
+		if got[1] != "no" || !strings.Contains(got[2], "provider") {
+			t.Fatalf("gate = %q, want the fresh session, saying the provider differs", got)
+		}
+	})
+	t.Run("no launch kept", func(t *testing.T) {
+		home := t.TempDir()
+		got := hermesGate(t, home, hermesFloor(), hermesFixtureRoute, req, hermesFixture(t, "0.23.3", "session-steered.jsonl"))
+		if got[1] != "no" || !strings.Contains(got[2], "no launch of it was kept") {
+			t.Fatalf("gate = %q, want the fresh session, saying no launch was kept", got)
+		}
+	})
 	t.Run("another release", func(t *testing.T) {
 		home := t.TempDir()
-		got := hermesGate(t, home, "0.23.4", req, member(home))
+		got := hermesGate(t, home, "0.23.4", hermesFixtureRoute, req, member(home))
 		if got[1] != "no" || !strings.Contains(got[2], "0.23.4") {
 			t.Fatalf("gate = %q, want no continuation on 0.23.4", got)
 		}
@@ -623,13 +666,14 @@ func hermesCarry(t *testing.T, command string, args ...string) string {
 	return string(raw)
 }
 
-// A HERMES SESSION DUMPS AND RESTORES WHOLE: the carry script's dump of a
-// restored store is the dump it was restored from, row for row, a restore
-// names the restored session's stored id, and a title the store does not
-// hold dumps nothing.
+// A HERMES SESSION DUMPS AND RESTORES WHOLE, AND ALONE: the carry script's
+// dump of a restored store is the dump it was restored from, row for row, the
+// restored store's full-text indexes find its words, a restore names the
+// restored session's stored id, a title the store does not hold dumps nothing,
+// and another session's launch and admission results stay out of a dump.
 //
-// Mutation: drop a table from the dump, or the triggers' second pass from the
-// restore, and this goes red.
+// Mutation: drop a table from the dump, the triggers' second pass from the
+// restore, or the dump's filter on state_meta, and this goes red.
 func TestAHermesSessionDumpsAndRestoresWhole(t *testing.T) {
 	t.Parallel()
 	python := prereqtest.OnPath(t, "python3", "the case runs the run's carry script", "install python3")
@@ -663,6 +707,21 @@ func TestAHermesSessionDumpsAndRestoresWhole(t *testing.T) {
 	if out, _ := exec.Command(python, "-I", carry, "dump", db, "no-such-title", "/dev/null", filepath.Join(dir, "x")).Output(); string(out) != "crewlet-carry none\n" {
 		t.Errorf("dumping an unheld title answered %q, want none", out)
 	}
+	// The restore's triggers fill the full-text indexes again, which the dump never carries.
+	probe := `import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+print(db.execute("select count(*) from messages_fts where messages_fts match 'steer'").fetchone()[0],
+      db.execute("select count(*) from messages_fts_trigram where messages_fts_trigram match 'tee'").fetchone()[0])
+db.execute("insert into state_meta (key, value) values ('gateway.local_policy.v1:local-other', 'OTHER-POLICY'), "
+           "('gateway.admission.result.v1.other', 'OTHER-ADMISSION')")
+db.commit()`
+	if out, err := exec.Command(python, "-I", "-c", probe, db).CombinedOutput(); err != nil || strings.HasPrefix(string(out), "0") ||
+		strings.Contains(string(out), " 0") {
+		t.Errorf("the restored store's full-text indexes find %q (%v), want the session's words", out, err)
+	}
+	if dump := hermesCarry(t, "dump", db, hermesFixtureTitle, "/dev/null"); strings.Contains(dump, "OTHER-") {
+		t.Error("the dump carried another session's launch or admission")
+	}
 }
 
 // A CONTINUED HERMES SESSION IS HANDED THE RUN'S OWN STANDING INSTRUCTIONS:
@@ -671,8 +730,13 @@ func TestAHermesSessionDumpsAndRestoresWhole(t *testing.T) {
 // there, and removes them for a run that has none. Measured on 0.23.3: the
 // resumed request's system message then ends with the renewed text.
 //
-// Mutation: skip the policy's rewrite, or keep the old text for a run with
-// none, and this goes red.
+// The text is the launch's own ($(cat), trailing newlines dropped), the
+// launch is written back compact as Hermes writes it, and a store holding no
+// frozen launch of the session answers none.
+//
+// Mutation: skip the policy's rewrite, keep the old text for a run with none,
+// keep the file's trailing newlines, write the launch back spaced, or answer
+// ok having renewed nothing, and this goes red.
 func TestAContinuedHermesSessionIsHandedTheRunsOwnInstructions(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -680,19 +744,199 @@ func TestAContinuedHermesSessionIsHandedTheRunsOwnInstructions(t *testing.T) {
 	db := filepath.Join(dir, "state.db")
 	system := filepath.Join(dir, "system.md")
 	for path, body := range map[string][]byte{member: hermesFixture(t, "0.23.3", "session-steered.jsonl"),
-		system: []byte("RENEWED STANDING TEXT")} {
+		system: []byte("RENEWED STANDING TEXT\n\n")} {
 		if err := os.WriteFile(path, body, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
 	hermesCarry(t, "restore", member, db, filepath.Join(dir, "policy"), hermesFixtureTitle)
 	hermesCarry(t, "renew", db, hermesFixtureTitle, system)
-	if dump := hermesCarry(t, "dump", db, hermesFixtureTitle, "/dev/null"); !strings.Contains(dump,
-		"RENEWED STANDING TEXT") {
-		t.Fatal("the session's frozen environment does not carry the run's own instructions")
+	dump := hermesCarry(t, "dump", db, hermesFixtureTitle, "/dev/null")
+	if !strings.Contains(dump, `RENEWED STANDING TEXT\\\"`) {
+		t.Fatal("the session's frozen environment does not carry the run's own instructions, as the launch reads them")
+	}
+	for line := range strings.Lines(dump) {
+		var rec struct {
+			T string `json:"t"`
+			R struct {
+				Key   string `json:"key"`
+				Value string `json:"value"`
+			} `json:"r"`
+		}
+		if json.Unmarshal([]byte(line), &rec) != nil || !strings.HasPrefix(rec.R.Key, "gateway.local_policy.v1:") {
+			continue
+		}
+		var compact bytes.Buffer
+		if err := json.Compact(&compact, []byte(rec.R.Value)); err != nil || compact.String() != rec.R.Value {
+			t.Errorf("the renewed launch is not written compact, as Hermes writes it: %.120s (%v)", rec.R.Value, err)
+		}
+	}
+	python := prereqtest.OnPath(t, "python3", "the case runs the run's carry script", "install python3")
+	carry := filepath.Join(dir, "carry.py")
+	if err := os.WriteFile(carry, hermesCarryScript, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	unheld := filepath.Join(dir, "unheld.db")
+	if err := os.WriteFile(member, []byte(strings.ReplaceAll(string(hermesFixture(t, "0.23.3", "session-steered.jsonl")),
+		"gateway.local_policy.v1:", "gateway.local_policy.v0:")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hermesCarry(t, "restore", member, unheld, filepath.Join(dir, "policy2"), hermesFixtureTitle)
+	if out, _ := exec.Command(python, "-I", carry, "renew", unheld, hermesFixtureTitle, system).Output(); string(out) != "crewlet-carry none\n" {
+		t.Errorf("renewing a session with no launch frozen answered %q, want none", out)
 	}
 	hermesCarry(t, "renew", db, hermesFixtureTitle, filepath.Join(dir, "none.md"))
 	if dump := hermesCarry(t, "dump", db, hermesFixtureTitle, "/dev/null"); strings.Contains(dump, "RENEWED STANDING TEXT") {
 		t.Fatal("a run with no standing instructions kept the earlier run's")
+	}
+}
+
+// hermesNoteRows is the steered fixture's record with edit applied to each
+// messages row, keyed by its id.
+func hermesNoteRows(t *testing.T, edit func(id int64, row map[string]any)) []byte {
+	t.Helper()
+	var out []byte
+	for line := range bytes.Lines(hermesFixture(t, "0.23.3", "session-steered.jsonl")) {
+		var rec struct {
+			T string         `json:"t"`
+			R map[string]any `json:"r"`
+		}
+		if json.Unmarshal(line, &rec) != nil || rec.T != "messages" {
+			out = append(out, line...)
+			continue
+		}
+		edit(int64(rec.R["id"].(float64)), rec.R)
+		raw, err := json.Marshal(rec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(append(out, raw...), '\n')
+	}
+	return out
+}
+
+// A HERMES NOTE IS CONFIRMED ONLY BY THIS LAUNCH'S OWN ROWS AND A REPLY AFTER
+// IT: the fixture's note (row 4, a steer, framed) is held where the launch
+// began before it and the model's reply (row 5) is stored after it; not where
+// the row is an earlier launch's, inactive, shown as no steer, or stored after
+// the last reply; two takes of one note's words need two notes; and a row
+// holding several notes joined by newlines (one of several lines) holds each.
+//
+// Mutations, each red: match rows from 0 whatever the launch's start; take an
+// inactive row; drop the display_kind check; settle without a later reply;
+// match by digest set rather than one take per note; match a row whole.
+func TestAHermesNoteIsConfirmedOnlyByThisLaunchsReply(t *testing.T) {
+	t.Parallel()
+	note := ItemDigest(hermesSteeredNote)
+	one := []ServedTake{{InboxID: "a", Digest: note}}
+	keep := func(int64, map[string]any) {}
+	for _, c := range []struct {
+		name  string
+		edit  func(int64, map[string]any)
+		from  int64
+		takes []ServedTake
+		want  []string
+	}{
+		{"this launch's note and reply", keep, 0, one, []string{"a"}},
+		{"an earlier launch's identical words", keep, 5, one, nil},
+		{"an inactive row", func(id int64, r map[string]any) {
+			if id == 4 {
+				r["active"] = 0
+			}
+		}, 0, one, nil},
+		{"a user row shown as no steer", func(id int64, r map[string]any) {
+			if id == 4 {
+				r["display_kind"] = nil
+			}
+		}, 0, one, nil},
+		{"a note stored after the last reply", func(id int64, r map[string]any) {
+			if id == 4 {
+				r["id"] = 6
+			}
+		}, 0, one, nil},
+		{"two takes of one note's words", keep, 0, []ServedTake{{InboxID: "a", Digest: note}, {InboxID: "b", Digest: note}},
+			[]string{"a"}},
+		{"notes steered before one request, one row", func(id int64, r map[string]any) {
+			if id == 4 {
+				r["content"] = hermesNoteOpen + "FIRST\nSECOND\nOF TWO LINES\nTHIRD" + hermesNoteClose
+			}
+		}, 0, []ServedTake{{InboxID: "a", Digest: ItemDigest("FIRST")}, {InboxID: "b", Digest: ItemDigest("SECOND\nOF TWO LINES")},
+			{InboxID: "c", Digest: ItemDigest("THIRD")}, {InboxID: "d", Digest: ItemDigest("NEVER")}}, []string{"a", "b", "c"}},
+	} {
+		got, err := hermesNotesHeld(bytes.NewReader(hermesNoteRows(t, c.edit)), c.takes, c.from)
+		if err != nil || !slices.Equal(got, c.want) {
+			t.Errorf("%s: held %v (%v), want %v", c.name, got, err, c.want)
+		}
+	}
+}
+
+// A HERMES LAUNCH'S START IS ITS OWN SESSION'S: a record naming another
+// session, or none, decides nothing, so no earlier launch's rows confirm.
+//
+// Mutation: read the count whatever session the record names, or read a
+// missing record as 0, and a case goes red.
+func TestAHermesLaunchsStartNamesItsSession(t *testing.T) {
+	t.Parallel()
+	box := sandbox.NewFakeSandbox("b")
+	if _, err := hermesRunFrom(t.Context(), box, hermesFixtureTitle); err == nil {
+		t.Error("a box with no record of the launch's start read as one")
+	}
+	box.Put(PathsFor(box).HermesRunStart(), "22222222-0000-4000-8000-000000000002 7\n")
+	if _, err := hermesRunFrom(t.Context(), box, hermesFixtureTitle); err == nil {
+		t.Error("another session's start was read as this one's")
+	}
+	box.Put(PathsFor(box).HermesRunStart(), hermesFixtureTitle+" 7\n")
+	if n, err := hermesRunFrom(t.Context(), box, hermesFixtureTitle); err != nil || n != 7 {
+		t.Errorf("the launch's start reads %d (%v), want 7", n, err)
+	}
+}
+
+// A HERMES SESSION CUT OFF IN ITS FIRST LAUNCH STILL CONTINUES: the gate keeps
+// the launch as it starts, not once the client exits, so a session whose
+// first launch was killed (no index line, no clean exit) is packed with its
+// launch and continued under it by the next run.
+//
+// Mutation: keep the launch only after a clean exit (hermesIndex), and the
+// continuation starts fresh, saying no launch was kept.
+func TestAHermesSessionCutOffInItsFirstLaunchStillContinues(t *testing.T) {
+	t.Parallel()
+	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
+	home := t.TempDir()
+	paths := Paths{Home: home}
+	bin := hermesLauncherStandIn(t)
+	for _, dir := range []string{paths.WorkDir(), paths.HermesHome()} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for path, body := range map[string][]byte{paths.HermesCarry(): hermesCarryScript, paths.HermesOverlayStaged(): []byte("{}")} {
+		if err := os.WriteFile(path, body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	req := sandbox.RunRequest{Model: "stub-model"}
+	first := hermesCarryRun(paths) + hermesSessionGate(req, Session{ID: hermesFixtureTitle}, paths, false)
+	cmd := exec.Command(sh, "-c", first)
+	cmd.Dir = home
+	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("the first launch's gate failed: %v: %s", err, out)
+	}
+	kept, err := os.ReadFile(paths.HermesPolicy(hermesFixtureTitle))
+	if err != nil || string(kept) != hermesPolicy(req)+home+"\n" {
+		t.Fatalf("the first launch kept %q (%v), want its launch before the client starts", kept, err)
+	}
+	// The killed launch's session, in the store with no index line, packed as the run's end packs it.
+	dir := t.TempDir()
+	member := filepath.Join(dir, "session.jsonl")
+	if err := os.WriteFile(member, hermesFixture(t, "0.23.3", "session-steered.jsonl"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := filepath.Join(dir, "state.db")
+	hermesCarry(t, "restore", member, store, filepath.Join(dir, "unused"), hermesFixtureTitle)
+	packed := hermesCarry(t, "dump", store, hermesFixtureTitle, paths.HermesPolicy(hermesFixtureTitle))
+	got := hermesGate(t, home, hermesFloor(), hermesFixtureRoute, req, []byte(packed))
+	if got[1] != "yes" || got[2] != "" {
+		t.Fatalf("gate = %q, want the cut-off session continued under its kept launch", got)
 	}
 }

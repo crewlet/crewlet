@@ -74,14 +74,15 @@ func HermesWakeRead(t *testing.T, wake string) []TranscriptEntry {
 	return hermesTranscriptOf(t, kimiArchive(t, map[string][]byte{hermesArchiveMember: hermesDumpWith(t, wake)}))
 }
 
-// HermesConfirmsATake holds that a note the plugin steered is confirmed off
-// Hermes's own record of the session, the box's store as the carry script
-// dumps it, and a take it never steered is not.
+// HermesConfirmsATake holds that a note the plugin steered in this launch is
+// confirmed off Hermes's own record of the session, the box's store as the
+// carry script dumps it, and a take it never steered is not.
 func HermesConfirmsATake(t *testing.T) {
 	if !confirms(Hermes{}) || !NewHermes().ThreadTraits().Receipts {
 		t.Fatal("Hermes confirms no take")
 	}
 	box := sandbox.NewFakeSandbox("b")
+	box.Put(PathsFor(box).HermesRunStart(), hermesFixtureTitle+" 0\n")
 	dump := hermesFixture(t, "0.23.3", "session-steered.jsonl")
 	box.ExecFunc = func(_ context.Context, cmd string, _ sandbox.ExecOptions) (sandbox.ExecResult, error) {
 		if !strings.Contains(cmd, "hcarry dump ") || !strings.Contains(cmd, hermesFixtureTitle) {

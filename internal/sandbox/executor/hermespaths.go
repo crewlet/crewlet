@@ -35,6 +35,11 @@ func (p Paths) HermesManaged() string { return p.WorkDir() + "/hermes-managed" }
 // session gate writes the one the run starts with.
 func (p Paths) HermesOverlay() string { return p.HermesManaged() + "/config.yaml" }
 
+// HermesRunStart is where the box's last launch began in its session store:
+// the session and the store's newest message id before it, so its notes are
+// confirmed off its own rows alone ([Hermes.notesHeld]).
+func (p Paths) HermesRunStart() string { return p.WorkDir() + "/hermes-run-start" }
+
 // HermesManagedEnv is the box's managed `.env`, copied beside the overlay.
 func (p Paths) HermesManagedEnv() string { return p.HermesManaged() + "/.env" }
 

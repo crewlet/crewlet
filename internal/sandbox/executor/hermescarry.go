@@ -192,8 +192,12 @@ func hermesSessionGate(req sandbox.RunRequest, session Session, paths Paths, rew
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	q := shellword.Quote
+	// THE LAUNCH KEPT AS IT STARTS, not once it exits, so a session whose
+	// first launch was cut off still continues under it.
+	keep := fmt.Sprintf(`printf '%%s%%s\n' %s "$PWD" > %s-"$sid"`, q(hermesPolicy(req)), q(paths.WorkDir()+"/hermes-policy"))
 	if !session.Continues {
 		line(`sid=%s k=no w=`, q(session.ID))
+		line(`%s`, keep)
 		b.WriteString(hermesInstallOverlay(paths, paths.HermesOverlayStaged()))
 		return b.String()
 	}
@@ -221,8 +225,14 @@ func hermesSessionGate(req sandbox.RunRequest, session Session, paths Paths, rew
 	// THE LAUNCH HERMES FROZE WITH THE SESSION: a resume naming another model,
 	// effort or round cap, or from another working directory, is refused or
 	// runs in the old one (measured on 0.23.3), so it starts a session of its own.
+	line(`if [ -z "$w" ] && [ ! -f %s-"$sid" ]; then w='no launch of it was kept to continue it under'; fi`,
+		q(paths.WorkDir()+"/hermes-policy"))
 	line(`if [ -z "$w" ] && [ "$(cat %s-"$sid" 2> /dev/null)" != "$(printf '%%s%%s' %s "$PWD")" ]; then w='its launch (model, effort, round cap or working directory) is not the one Hermes froze with the session'; fi`,
 		q(paths.WorkDir()+"/hermes-policy"), q(hermesPolicy(req)))
+	// THE MODEL ROUTE HERMES FROZE, which a resume keeps whatever the box's
+	// configuration says (measured on 0.23.3), with no key frozen beside it.
+	line(`if [ -z "$w" ] && [ "$(hcarry route %s "$sid")" != 'crewlet-carry ok' ]; then w='its model provider or base URL is not the one Hermes froze with the session'; fi`,
+		q(paths.HermesStateDB()))
 	// THE RUN'S OWN STANDING INSTRUCTIONS, in place of the ones Hermes froze
 	// with the session (measured on 0.23.3: the resume then carries them).
 	line(`if [ -z "$w" ] && [ "$(hcarry renew %s "$sid" %s)" != 'crewlet-carry ok' ]; then w='its standing instructions could not be renewed to this run'"'"'s'; fi`,
@@ -234,6 +244,7 @@ func hermesSessionGate(req sandbox.RunRequest, session Session, paths Paths, rew
 	b.WriteString(codexIndented(hermesInstallOverlay(paths, paths.HermesOverlayStaged())))
 	line(`else`)
 	line(`  sid=%s k=no`, q(session.Fresh))
+	line(`  %s`, keep)
 	line(`  printf '%%s%%s\n' %s "$w" >&2`, q("crewlet: this run was asked to continue the Hermes session "+
 		session.ID+", and starts a new session instead: "))
 	line(`  [ ! -s %s ] || exec < %s`, q(paths.FreshBrief()), q(paths.FreshBrief()))
@@ -300,8 +311,10 @@ func hermesRestore(paths Paths) string {
 		"case \"$rs\" in 'crewlet-carry ok '?*) rs=${rs#crewlet-carry ok };; *) false;; esac",
 		"rm -f " + q(paths.HermesStateDB()+"-wal") + " " + q(paths.HermesStateDB()+"-shm"),
 		"mv -f " + q(next) + " " + q(paths.HermesStateDB()),
-		"{ grep -v \"^$sid \" " + q(paths.HermesSessions()) + " 2> /dev/null; printf '%s %s\\n' \"$sid\" \"$rs\"; } > " +
-			q(paths.HermesSessions()+".next"),
+		// The store is the archive's alone now: no other session's index line or launch stays.
+		"printf '%s %s\\n' \"$sid\" \"$rs\" > " + q(paths.HermesSessions()+".next"),
+		"for f in " + q(paths.WorkDir()+"/hermes-policy") + "-*; do [ \"$f\" = " + q(paths.WorkDir()+"/hermes-policy") +
+			"-\"$sid\" ] || rm -f \"$f\"; done",
 		"mv -f " + q(paths.HermesSessions()+".next") + " " + q(paths.HermesSessions()),
 	}, " && ")
 }

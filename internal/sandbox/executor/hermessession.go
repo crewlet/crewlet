@@ -29,15 +29,19 @@ type hermesRow struct {
 	Message hermesMessage
 }
 
-// hermesMessage is a `messages` row: its role and words, the calls an
-// assistant message made, and the call a tool message answers.
+// hermesMessage is a `messages` row: its id, whether it is active, how it is
+// shown, its role and words, the calls an assistant message made, and the call
+// a tool message answers.
 type hermesMessage struct {
-	Role       string          `json:"role"`
-	Content    json.RawMessage `json:"content"`
-	ToolCalls  json.RawMessage `json:"tool_calls"`
-	ToolCallID string          `json:"tool_call_id"`
-	ToolName   string          `json:"tool_name"`
-	Timestamp  json.RawMessage `json:"timestamp"`
+	ID          int64           `json:"id"`
+	Active      *int            `json:"active"`
+	DisplayKind *string         `json:"display_kind"`
+	Role        string          `json:"role"`
+	Content     json.RawMessage `json:"content"`
+	ToolCalls   json.RawMessage `json:"tool_calls"`
+	ToolCallID  string          `json:"tool_call_id"`
+	ToolName    string          `json:"tool_name"`
+	Timestamp   json.RawMessage `json:"timestamp"`
 }
 
 // text is the message's words: its content as stored, a string, or the text
@@ -62,6 +66,10 @@ func (m hermesMessage) text() string {
 	}
 	return out
 }
+
+// active is whether the message is in the conversation Hermes goes on with:
+// a row it set inactive (rewound, or folded away) is not; a row with no flag is.
+func (m hermesMessage) active() bool { return m.Active == nil || *m.Active != 0 }
 
 // at is when Hermes recorded the message: seconds since the epoch, a number or
 // a numeral; zero where it holds none.
