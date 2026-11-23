@@ -2,6 +2,49 @@ package coord
 
 import "context"
 
+// The uploads bucket's three key classes (ADR-0175, "The uploads bucket
+// declares its classes"). Each read of one decides a compare-and-set a caller
+// waits on, so it is given its reply's crossing at the class's bound; at the
+// slowest link pace that is 2.5 s for a ledger and 100 s for an upload record
+// at its bound, a typical record of a few dozen files crossing in under one.
+const (
+	// UploadLedgerKey is the company's one reservation ledger: one segment,
+	// which no upload id or seat under the other classes spells.
+	UploadLedgerKey = "ledger"
+	// UploadRecordClass keys one upload's record, `upload.<id>`.
+	UploadRecordClass = "upload"
+	// SaveLedgerClass keys one seat's save ledger, `save.<seat>`.
+	SaveLedgerClass = "save"
+)
+
+// MaxUploadLedgerBytes bounds the reservation ledger as stored. It holds at
+// most 256 holds (internal/artifactupload's MaxOutstandingUploads times
+// internal/artifacts' CompanyPendingFactor), each of an upload id, a 64-byte
+// principal, a count of bytes and two instants: 65,297 bytes with every count
+// at an int64's 19 digits (TestTheWidestReservationLedgerFitsItsBound).
+const MaxUploadLedgerBytes = 64 << 10
+
+// MaxUploadRecordBytes bounds one upload's record as stored, paths in their
+// own bytes. Its widest holds 255 uploaded and 511 generated files and 256
+// carried paths, every path 1,024 bytes JSON writes as two each, and the 50
+// warnings a report keeps and a count: 2,549,511 bytes
+// (TestTheWidestUploadRecordFitsItsBound). Its read may wait 100 s on a link
+// at the floor; keeping less would drop what a retry is answered from. A
+// writer refuses a record past it.
+const MaxUploadRecordBytes = 5 << 19
+
+// MaxSaveLedgerBytes bounds one seat's save ledger as stored: at most 512
+// entries (internal/sandbox's saveLedgerCap) of an id, an instant and a count
+// of bytes, 53,267 bytes at the most a save is charged and 57,875 at 17 digits
+// a count (TestASeatsWidestSaveLedgerFitsItsBound).
+const MaxSaveLedgerBytes = 64 << 10
+
+// UploadRecordKey is one upload's record key.
+func UploadRecordKey(upload string) string { return DocumentKey(UploadRecordClass, upload) }
+
+// SaveLedgerKey is one seat's save ledger key.
+func SaveLedgerKey(seat string) string { return DocumentKey(SaveLedgerClass, seat) }
+
 // UploadReservations holds the bytes upload intents have reserved and no record
 // names yet (internal/artifactupload): one LEDGER of the company's holds, and
 // one RECORD per upload of the keys it minted, which hold bytes, how far it got.
