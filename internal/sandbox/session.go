@@ -485,6 +485,14 @@ type SessionCapture struct {
 	RunBegan bool   `json:"run_began,omitempty"`
 	RunAfter string `json:"run_after,omitempty"`
 
+	// RunAfterLines is where a Gemini CLI or Qwen Code run began in its chat
+	// file: after its first RunAfterLines lines, as the take found the box's
+	// digest of them whole in the archive ([TakenSession.RunLines]); stamped
+	// once the session is spooled, as the count is, never off the box's word
+	// alone. Carried by an older build as RunBegan is, held to
+	// [MaxRunStartLines].
+	RunAfterLines int64 `json:"run_after_lines,omitempty"`
+
 	// Object, ObjectHash, ObjectSize and ContentKey are the sealed object it
 	// was uploaded into, once it was; Home and Workspace the box's paths,
 	// which a later launch maps onto its own.
@@ -544,6 +552,10 @@ func (c SessionCapture) Bounded() error {
 				len(f.value), f.max, ErrCaptureUnbounded)
 		}
 	}
+	if c.RunAfterLines < 0 || c.RunAfterLines > MaxRunStartLines {
+		return fmt.Errorf("sandbox: its run's start is line %d, outside the 0 to %d it may be: %w",
+			c.RunAfterLines, MaxRunStartLines, ErrCaptureUnbounded)
+	}
 	if len(c.BridgeOpen) > maxOpenPlaces {
 		return fmt.Errorf("sandbox: it names %d open places, past the %d it may: %w", len(c.BridgeOpen),
 			maxOpenPlaces, ErrCaptureUnbounded)
@@ -577,7 +589,9 @@ func (c SessionCapture) NextRequest() NextRequest {
 
 // RunStart is where the run that packed c's session began in it, as the stamp
 // keeps it ([SessionCapture.RunBegan]).
-func (c SessionCapture) RunStart() RunStart { return RunStart{Began: c.RunBegan, After: c.RunAfter} }
+func (c SessionCapture) RunStart() RunStart {
+	return RunStart{Began: c.RunBegan, After: c.RunAfter, Lines: c.RunAfterLines}
+}
 
 // maxIncarnationBytes bounds a process incarnation as a run's row carries one:
 // the process that owns the run's seat ([PendingRun.Owner]) and the one that
@@ -1558,8 +1572,8 @@ func (c *Coordinator) besideAnother(ctx context.Context, run PendingRun, stamp S
 // request's context and the harness's own estimate of the next request, read
 // off the archive as it was spooled, for the floor of the launch that
 // continues it, and what the harness counts the archive at with window, the
-// least window the run reported ([capturePoint.window]), and the provider an
-// OpenCode count is anchored on, for its telling, both stamped with the
+// least window the run reported ([capturePoint.window]), the provider an
+// OpenCode count is anchored on and a chat file's run start, each stamped with the
 // capture's outcome, which is the stamp that launch reads; and the kept
 // archive's digest left in its box
 // ([TakenSession.Keep]).
@@ -1590,6 +1604,11 @@ func (c *Coordinator) spooledWhole(ctx context.Context, by time.Time, run Pendin
 			}
 			spooled.stamp.ResumedCount, spooled.stamp.CountProvider = count.provided(provider)
 		}
+	}
+	// AND WHERE ITS RUN BEGAN IN A CHAT FILE, as the take found the box's
+	// digest of the lines before it whole: 0 where it did not.
+	if taken.RunLines != nil {
+		spooled.stamp.RunAfterLines = taken.RunLines()
 	}
 	// AND, FOR A CAPTURE NO READ PLACES, ITS POINT RAISED by that count, on
 	// every path: a save, a take, a standby's spool, whose takeover reserves

@@ -14,8 +14,11 @@ import (
 // held one only where the box's point proves it whole.
 
 // pointAt is a box's point at tokens, the engine's own pair's 170,000 where
-// the cases say nothing else: OpenCode 2.3.2's on a 200,000-token limit.
-func pointAt(tokens int64) BoxPoint { return BoxPoint{Release: "2.3.2", Tokens: tokens, Charge: 4} }
+// the cases say nothing else: OpenCode 2.3.2's on a 200,000-token limit,
+// anchored on its provider as OpenCode's is.
+func pointAt(tokens int64) BoxPoint {
+	return BoxPoint{Release: "2.3.2", Tokens: tokens, Charge: 4, Anchored: true}
+}
 
 // briefOf is a brief of n bytes.
 func briefOf(n int) string { return strings.Repeat("b", n) }
@@ -252,6 +255,26 @@ func TestTheOwnCopyIsReadToo(t *testing.T) {
 	}
 }
 
+// WHAT THE BOX HANDS OVER BESIDE THE BRIEF IS CHARGED. What the box adds to
+// the first request beside the brief (BoxBytes: Gemini CLI's session context,
+// Qwen Code's dated reminder) is charged with it, at the harness's rate: a
+// brief that sends whole with nothing handed over may compact with it.
+//
+// Mutation: leave BoxBytes out of SendsWhole, and this goes red.
+func TestWhatTheBoxHandsOverBesideTheBriefIsCharged(t *testing.T) {
+	t.Parallel()
+	count := &ResumedCount{Tokens: 160000}
+	brief := briefOf(4000)
+	if !pointAt(170000).SendsWhole(count, "stub", "stub", brief) {
+		t.Fatal("a session 9,000 tokens under its point is not sent whole")
+	}
+	point := pointAt(170000)
+	point.BoxBytes = 4 * 9000
+	if point.SendsWhole(count, "stub", "stub", brief) {
+		t.Error("a session whose box hands 9,000 tokens over beside the brief is sent whole")
+	}
+}
+
 // A FAILED READ HANDS THE SUMMARIZED BRIEF. No point is no proof: a box that
 // could not be asked, a runner that reads no point, and every mark are read
 // as a session that may compact, and the summarized brief is handed.
@@ -370,6 +393,30 @@ func TestASummarizedTellIsBounded(t *testing.T) {
 		}
 		if err := tc.req(within).toldBounded(); err != nil {
 			t.Errorf("a %s of a whole log's calls is refused: %v", tc.field, err)
+		}
+	}
+}
+
+// AN UNANCHORED POINT IGNORES THE PROVIDER: a Gemini CLI or Qwen Code count
+// names no provider and is that harness's whatever the launch's model, so it
+// is judged against the point with none named; an anchored point (OpenCode's)
+// still bounds nothing by a count of no provider.
+//
+// Mutation: keep the provider check for every point, and the first row goes
+// red; drop it for an anchored one, and the second does.
+func TestAnUnanchoredPointIgnoresTheProvider(t *testing.T) {
+	t.Parallel()
+	count := &ResumedCount{Tokens: 1000}
+	for name, tc := range map[string]struct {
+		point BoxPoint
+		want  bool
+	}{
+		"unanchored": {point: BoxPoint{Tokens: 167000, Charge: 1}, want: true},
+		"anchored":   {point: BoxPoint{Tokens: 167000, Charge: 1, Anchored: true}},
+	} {
+		if got := tc.point.SendsWhole(count, "", "anthropic", "Continue."); got != tc.want {
+			t.Errorf("%s: a count of 1,000 tokens naming no provider sends whole at %+v: %v, want %v", name,
+				tc.point, got, tc.want)
 		}
 	}
 }

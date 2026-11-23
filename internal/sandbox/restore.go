@@ -1808,7 +1808,7 @@ const exactUnusedOutcome = "the relaunch is handed the telling without the readi
 const exactMayCompact = "its harness may compact the session in this box before it reads the brief told by the " +
 	"reading"
 
-// boxJudge is how a launch judges, in its box, whether an OpenCode session it
+// boxJudge is how a launch judges, in its box, whether a session it
 // continues reaches its first request whole ([BoxPoint.SendsWhole]): the
 // path (`kept` or `in_place`), the count and the anchoring reply's provider,
 // the ask, and the point, read at most once.
@@ -1846,7 +1846,7 @@ func readPoint(ctx context.Context, box Sandbox, runner Runner, ask PointAsk) Bo
 	point, err := reader.ReadBoxPoint(ctx, box, ask)
 	if err != nil {
 		return BoxPoint{Mark: PointUnread,
-			Why: redact.Secrets("the box could not be asked for its OpenCode point: " + err.Error())}
+			Why: redact.Secrets("the box could not be asked for its point: " + err.Error())}
 	}
 	return point
 }
@@ -1864,7 +1864,7 @@ func (c *Coordinator) mayCompact(ctx context.Context, req LaunchRequest, j *boxJ
 		"agent", req.Turn.AgentHandle, "path", j.path, "bound", bound, "mark", string(mark),
 		"provider", j.provider, "model", req.Model, "release", j.point.Release, "point", j.point.Tokens,
 		"never", j.point.Never, "point_mark", string(j.point.Mark), "detail", j.point.Why,
-		"brief_tokens", j.point.Charge.Tokens(int64(len(brief))),
+		"box_tokens", j.point.Charge.Tokens(j.point.BoxBytes), "brief_tokens", j.point.Charge.Tokens(int64(len(brief))),
 		"outcome", mayCompactOutcome)
 }
 

@@ -117,7 +117,7 @@ func (p *E2BProvider) templateFor(spec Spec) string {
 // presents.
 func (p *E2BProvider) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	template := p.templateFor(spec)
-	box, err := p.api.createBox(ctx, template, spec.TimeoutSec, spec.Env)
+	box, err := p.api.createBox(ctx, template, spec.LaunchID, spec.TimeoutSec, spec.Env)
 	if err != nil {
 		return nil, err
 	}
@@ -143,12 +143,38 @@ func (p *E2BProvider) Connect(ctx context.Context, sandboxID string) (Sandbox, e
 	if err != nil {
 		var apiErr *E2BError
 		if errors.As(err, &apiErr) && apiErr.Gone() {
-			return nil, boxGone{fmt.Errorf("e2b: sandbox %s is gone: %w", sandboxID, err)}
+			return nil, p.goneOrOlder(ctx, sandboxID, apiErr, err)
 		}
 		return nil, fmt.Errorf("e2b: sandbox %s could not be connected to: %w", sandboxID, err)
 	}
 	e2bLog.Debug("e2b_sandbox_connected", "sandbox_id", sandboxID)
 	return p.box(box), nil
+}
+
+// goneOrOlder is what a connect refused as gone means: the box gone, except
+// where a cluster answered 404, which an API older than [e2bV2Floor] answers
+// for the connect's route itself. There the box is read (`GET /sandboxes/{id}`,
+// which every build serves): found, the connect is refused as configuration
+// naming the floor, since calling the box gone would settle its run and
+// reclaim a box that still exists; not found, it is gone.
+func (p *E2BProvider) goneOrOlder(ctx context.Context, sandboxID string, refused *E2BError, err error) error {
+	gone := boxGone{fmt.Errorf("e2b: sandbox %s is gone: %w", sandboxID, err)}
+	if refused.Status != http.StatusNotFound || p.api.domain == DefaultE2BDomain {
+		return gone
+	}
+	_, readErr := p.api.getBox(ctx, sandboxID)
+	var unread *E2BError
+	switch {
+	case readErr == nil:
+		return Because(WhyConfiguration, fmt.Errorf("e2b: the cluster at api.%s refused to connect "+
+			"to sandbox %s (%w), which it still has: its API is older than %s, which serves the "+
+			"connect this engine calls. Run that build or later on the cluster",
+			p.api.domain, sandboxID, err, e2bV2Floor))
+	case errors.As(readErr, &unread) && unread.Gone():
+		return gone
+	}
+	return fmt.Errorf("e2b: sandbox %s could not be connected to (%w), nor read to tell whether "+
+		"it is gone: %w", sandboxID, err, readErr)
 }
 
 // Attach implements [Provider]: the box READ, never resumed. A paused box has
@@ -185,6 +211,30 @@ func (p *E2BProvider) Kill(ctx context.Context, sandboxID string) error {
 	}
 	e2bLog.Debug("e2b_sandbox_killed", "sandbox_id", sandboxID)
 	return nil
+}
+
+// KillLaunch kills every box stamped with launch ([e2bLaunchKey]), running or
+// paused: the boxes what made them (a run's row, a check's claim) may never
+// have named, the create's answer lost or the engine gone before the naming.
+// Their ending asks, so none is billed to its TTL ([Spec.LaunchID]). Every
+// kill is attempted; the first failure is returned, a box already gone being
+// none.
+func (p *E2BProvider) KillLaunch(ctx context.Context, launch string) error {
+	ids, err := p.api.launchBoxes(ctx, launch)
+	if err != nil {
+		return fmt.Errorf("e2b: listing the boxes of launch %s: %w", launch, err)
+	}
+	var first error
+	for _, id := range ids {
+		if killErr := p.api.killBox(ctx, id); killErr != nil {
+			if first == nil {
+				first = fmt.Errorf("e2b: killing box %s of launch %s: %w", id, launch, killErr)
+			}
+			continue
+		}
+		e2bLog.Info("e2b_launch_box_killed", "sandbox_id", id, "launch_id", launch)
+	}
+	return first
 }
 
 func (p *E2BProvider) box(b e2bBox) *E2BSandbox {
@@ -406,8 +456,10 @@ func (s *E2BSandbox) Close(ctx context.Context) error {
 	return s.api.killBox(ctx, s.id)
 }
 
-// Both contracts, asserted at compile time.
+// Its contracts, asserted at compile time: a renamed KillLaunch would leave
+// the run's ending a backend that reclaims nothing unnamed.
 var (
-	_ Provider = (*E2BProvider)(nil)
-	_ Sandbox  = (*E2BSandbox)(nil)
+	_ Provider        = (*E2BProvider)(nil)
+	_ Sandbox         = (*E2BSandbox)(nil)
+	_ launchReclaimer = (*E2BProvider)(nil)
 )
