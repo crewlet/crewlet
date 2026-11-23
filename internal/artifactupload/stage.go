@@ -126,6 +126,9 @@ func (r *run) stageProduced(ctx context.Context) error {
 		return err
 	}
 	for _, g := range fresh {
+		r.staged = append(r.staged, g.Key)
+	}
+	for _, g := range fresh {
 		f := r.files[g.Path]
 		stored, err := r.s.objects.PutMinted(ctx, g.Key, bytes.NewReader(f.text), g.Size, //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			objstore.PutMeta{ContentType: g.ContentType})
@@ -403,10 +406,12 @@ func (r *run) kitHint(file string) string {
 func kitFile(version, file string) string { return artifacts.KitPrefix + version + "/" + file }
 
 // fail answers a publish the domain or the pipeline refused, undoing what the
-// run wrote: every object it produced is deleted, dropped from the record and
-// its reservation released, and the caller's upload is open again for another
-// try. An outcome nobody
-// could establish leaves everything for the retry of the same operation.
+// run wrote: every object it staged ([run.staged]) is deleted, dropped from
+// the record and its reservation released, and the caller's upload is open
+// again for another try. An earlier attempt's objects are never undone: its
+// outcome is unknown, and a version it landed may name them, so they are left
+// to the collector. An outcome nobody could establish leaves everything for
+// the retry of the same operation.
 func (r *run) fail(ctx context.Context, cause error) error {
 	if r.stage == nil || r.stageNew {
 		return cause
@@ -425,7 +430,7 @@ func (r *run) fail(ctx context.Context, cause error) error {
 	}
 	var deleted []objstore.Key
 	for _, f := range r.stage.Files {
-		if f.Transport == transportGenerated && f.held() {
+		if f.held() && slices.Contains(r.staged, f.Key) {
 			if err := r.s.objects.Delete(ctx, f.Key); err != nil {
 				log.WarnContext(ctx, "artifact_upload_delete_failed", "key", f.Key.String(),
 					"error", err.Error())

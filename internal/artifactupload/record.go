@@ -236,8 +236,10 @@ func (s *Service) writeRecord(ctx context.Context, r *record, rev uint64) (uint6
 		return 0, fmt.Errorf("artifactupload: encode upload %s: %w", r.ID, err)
 	}
 	if err := coord.HoldValue(coord.UploadRecordKey(r.ID), len(raw), recordBound(r)); err != nil {
-		return 0, fmt.Errorf("%w: upload %s would record %d files: publish it with fewer files, or begin "+
-			"another upload: %w", ErrInvalid, r.ID, len(r.Files), err)
+		return 0, fmt.Errorf("%w: upload %s would record %d files, more than it keeps: earlier attempts of "+
+			"this publish, whose outcomes are unknown, recorded files of other bytes; send the publish again "+
+			"under a new operation key, with a new upload where it named one: %w", ErrInvalid, r.ID,
+			len(r.Files), err)
 	}
 	wrote, err := s.res.SwapUploadRecord(ctx, r.ID, raw, rev)
 	if err != nil {
