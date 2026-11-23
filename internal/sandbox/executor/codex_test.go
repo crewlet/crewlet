@@ -444,7 +444,7 @@ func TestACodexRunReadsItsLoginWhereALocalBoxIsSeededWithIt(t *testing.T) {
 // that run's.
 //
 // Mutations, each red: install the run's alone; leave the run's installed;
-// merge over the live file where a copy is held.
+// put nothing held back as the run starts.
 func TestACodexRunLoadsTheHomesConfigurationWithItsOwnOverIt(t *testing.T) {
 	t.Parallel()
 	const own = "developer_instructions = \"HOME-INSTRUCTIONS\"\n\n[mcp_servers.home]\ncommand = \"home-mcp\"\n\n" +
@@ -492,6 +492,91 @@ func TestACodexRunLoadsTheHomesConfigurationWithItsOwnOverIt(t *testing.T) {
 				t.Errorf("the held copy outlived the run (%v)", err)
 			}
 		})
+	}
+}
+
+// A KILLED CODEX RUN'S LEFTOVERS GO AS THE NEXT RUN STARTS: a run whose job is
+// killed before its script puts the home's config.toml back leaves its own
+// installed, its bridge token in it; the next run's start puts the home's
+// back before anything else, so even a run it refuses leaves that token in no
+// home file, and the run after starts on the home's own entries with its own
+// and puts the home's back byte for byte.
+//
+// Mutations, each red: put nothing back at the start; hold the live file over
+// the held copy.
+func TestAKilledCodexRunsLeftoversGoAsTheNextRunStarts(t *testing.T) {
+	t.Parallel()
+	const own = "[mcp_servers.home]\ncommand = \"home-mcp\"\n"
+	const killedToken = "killed-run-token"
+	runner, box, record := codexBox(t, "0.171.0")
+	p := executor.PathsFor(box)
+	plant(t, box, map[string]string{".codex/config.toml": own})
+	bridge := func(url string) sandbox.RunRequest {
+		return sandbox.RunRequest{Brief: "go", MCPServers: map[string]sandbox.MCPServer{
+			"crewlet": {Transport: sandbox.TransportHTTP, URL: url, AlwaysLoaded: true}}}
+	}
+	plantFile(t, filepath.Join(record, "block"), "")
+	handle, err := runner.Start(t.Context(), box, bridge("http://127.0.0.1:9/mcp/"+killedToken))
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitForFile(t, filepath.Join(record, "working"), "the stand-in to work")
+	killJob(t, p.BinDir()+"/codex exec")
+	awaitOver(t, runner, box, handle, 15*time.Second, "its job was killed")
+	if got := boxFile(t, box, p.CodexLiveConfig()); !strings.Contains(got, killedToken) {
+		t.Fatalf("the killed run left the home's config.toml as\n%s\nnot its own installed", got)
+	}
+	if err := os.Remove(filepath.Join(record, "block")); err != nil {
+		t.Fatal(err)
+	}
+	plantFile(t, filepath.Join(record, "config-read"), `{"id":2,"result":{"config":{},"layers":[`+
+		`{"name":{"type":"project","dotCodexFolder":"/r/.codex"},"config":{"mcp_servers":{"crewlet":{"url":"http://x"}}}}]}}`)
+	if _, err := runner.Start(t.Context(), box, bridge(codexBridgeURL)); err == nil {
+		t.Fatal("a run a repository changes the bridge of started")
+	}
+	if got := boxFile(t, box, p.CodexLiveConfig()); got != own {
+		t.Errorf("after a refused next run the home's config.toml is\n%s\nwant its own:\n%s", got, own)
+	}
+	homeHoldsNo(t, box, killedToken)
+	if err := os.Remove(filepath.Join(record, "config-read")); err != nil {
+		t.Fatal(err)
+	}
+	if _, res := runToEnd(t, runner, box, bridge(codexBridgeURL)); !res.Success {
+		t.Fatalf("the run after failed: %s", res.Error)
+	}
+	if cfg := codexConfigSeen(t, record); !strings.Contains(cfg, "home-mcp") || !strings.Contains(cfg, codexBridgeURL) ||
+		strings.Contains(cfg, killedToken) {
+		t.Errorf("the run after started on\n%s\nwant the home's own server and its own bridge alone", cfg)
+	}
+	if got := boxFile(t, box, p.CodexLiveConfig()); got != own {
+		t.Errorf("after the run the home's config.toml is\n%s\nwant its own back:\n%s", got, own)
+	}
+	homeHoldsNo(t, box, killedToken)
+	homeHoldsNo(t, box, "run-token-placeholder")
+}
+
+// homeHoldsNo fails the case where a file of box's home, the run's work
+// directory aside, holds token.
+func homeHoldsNo(t *testing.T, box sandbox.Sandbox, token string) {
+	t.Helper()
+	work := executor.PathsFor(box).WorkDir()
+	err := filepath.WalkDir(box.Home(), func(path string, d os.DirEntry, err error) error {
+		switch {
+		case err != nil:
+			return err
+		case d.IsDir() && path == work:
+			return filepath.SkipDir
+		case !d.Type().IsRegular():
+			return nil
+		}
+		raw, err := os.ReadFile(path) //nolint:gosec // a file of the test's own box
+		if err == nil && bytes.Contains(raw, []byte(token)) {
+			t.Errorf("%s holds %s", path, token)
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -789,6 +874,36 @@ func killProcess(t *testing.T, prefix string) {
 		return
 	}
 	t.Fatalf("no process runs %s", prefix)
+}
+
+// killJob sends SIGKILL to the process group of the one process whose
+// command line holds marker, a run's job: its script and all it started, as
+// a box's end or a node's death takes it, its traps never run.
+func killJob(t *testing.T, marker string) {
+	t.Helper()
+	dirs, err := os.ReadDir("/proc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range dirs {
+		pid, err := strconv.Atoi(d.Name())
+		if err != nil {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join("/proc", d.Name(), "cmdline")) //nolint:gosec // a process's own record
+		if err != nil || !strings.Contains(strings.ReplaceAll(string(raw), "\x00", " "), marker) {
+			continue
+		}
+		group, err := syscall.Getpgid(pid)
+		if err != nil || group == syscall.Getpgrp() {
+			t.Fatalf("the job running %s has no group of its own (%d, %v)", marker, group, err)
+		}
+		if err := syscall.Kill(-group, syscall.SIGKILL); err != nil {
+			t.Fatalf("killing group %d: %v", group, err)
+		}
+		return
+	}
+	t.Fatalf("no process runs %s", marker)
 }
 
 // codexShellExcluded is the names the app-server's argv excludes from the
