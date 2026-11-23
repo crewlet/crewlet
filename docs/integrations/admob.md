@@ -48,6 +48,10 @@ Google calls ten methods limited access (marked in the table below): they answer
 3. Sign in with Google there, as a person who manages the AdMob account. While every agent reads, the sign-in asks for `admob.readonly` and `admob.report`; once an agent is raised to `operate`, sign in again to add `admob.monetization`, which every change needs.
 4. Turn agents on from the Agents tab, each with its publisher accounts.
 
+## Give an agent its own identity
+
+Not offered: every agent's calls go as the company's consent grant. AdMob refuses service accounts, so an identity per agent would be a Google Account per agent, which Google Workspace's acceptable use policy forbids for accounts assigned to a function rather than a person. On the **Agents** tab the company's identity is the normal state, In sync, with nothing to set up ([ADR-0179](../../adr/0179-a-seat-may-hold-its-own-identity-at-a-growth-vendor.md)); AdMob's change history names the signing person, and the access log names the agent for each call.
+
 ## The agents' tools
 
 | Tool | Class | What it does |

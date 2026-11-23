@@ -7795,6 +7795,8 @@ a.work-cal-chip {
   border: none;
   box-shadow: none;
   resize: none;
+  /* It keeps its bar's gutter, so the words never re-wrap as the bar comes. */
+  scrollbar-gutter: stable;
 }
 .composer-field textarea:focus-visible {
   outline: 2px solid transparent;

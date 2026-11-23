@@ -77,7 +77,7 @@ func New(d Deps) *Product {
 	}
 	return &Product{deps: d, client: &googlegrowth.Client{
 		Kind: string(Kind), Name: "Google Play", Company: d.Company, Env: d.Env, Tokens: d.Tokens,
-		Audit: d.Audit, HTTP: d.HTTP, Refused: vendorRefusal,
+		Audit: d.Audit, HTTP: d.HTTP, Refused: vendorRefusal, Signer: growth.SignerOwn,
 	}}
 }
 

@@ -350,18 +350,18 @@ func TestAClaimReadsInAWindowAsNamingWhatItNames(t *testing.T) {
 	text := strings.Repeat("x", 100)
 	for _, c := range []struct {
 		name  string
-		w     [9]int
+		w     [12]int
 		value bool
 	}{
-		{"no value, its separator's end past the window", [9]int{90, 150, 150, 150, 0, 0, 0, 0, 0}, false},
-		{"no value, its separator's end to come", [9]int{90, -1, -1, -1, 0, 0, 0, 0, 0}, false},
-		{"no value, its separator's end set past the window since", [9]int{90, 150, -1, 150, 0, 0, 0, 0, 0}, false},
-		{"no value, its separator's end set in the window since", [9]int{90, 95, -1, 95, 0, 0, 0, 0, 0}, false},
-		{"a value past the window", [9]int{90, 95, 150, 160, 0, 0, 0, 0, 0}, true},
-		{"a value read open past the window", [9]int{90, 95, 150, -1, 0, 0, 0, 0, 0}, true},
+		{"no value, its separator's end past the window", [12]int{90, 150, 150, 150}, false},
+		{"no value, its separator's end to come", [12]int{90, -1, -1, -1}, false},
+		{"no value, its separator's end set past the window since", [12]int{90, 150, -1, 150}, false},
+		{"no value, its separator's end set in the window since", [12]int{90, 95, -1, 95}, false},
+		{"a value past the window", [12]int{90, 95, 150, 160}, true},
+		{"a value read open past the window", [12]int{90, 95, 150, -1}, true},
 	} {
 		k := &keyStage{}
-		k.sources = []*claimSource{{keys: k, words: [][9]int{c.w}}}
+		k.sources = []*claimSource{{keys: k, words: [][12]int{c.w}}}
 		p := k.claimsIn(text, 0).passwords[0]
 		if got := p[3] > p[2]; got != c.value {
 			t.Errorf("%s: the window reads %v as naming a value: %v, want %v", c.name, p, got, c.value)
@@ -384,7 +384,7 @@ func TestAKeyABlockHoldsCutsNoOtherBlock(t *testing.T) {
 	key := strings.Index(text, "passwd:")
 	value := strings.LastIndex(text, g+testKeyLine) + len(g)
 	spans := [][2]int{{0, line + len(g+testEnd)}, {strings.LastIndex(text, testBegin), len(text) - 1}}
-	c := &claims{text: text, read: true, passwords: [][9]int{{key, key + len("passwd:"), value, value + len(testKeyLine), line + len(g), 0, 0, 0, 0}}}
+	c := &claims{text: text, read: true, passwords: [][12]int{{key, key + len("passwd:"), value, value + len(testKeyLine), line + len(g)}}}
 	c.build()
 	if got := c.apartIn(slices.Clone(spans), spans); !slices.Equal(got, spans) {
 		t.Errorf("the blocks %v were written as %v", spans, got)
@@ -440,7 +440,7 @@ func TestAClaimEndedNamesWhatItNamedOpen(t *testing.T) {
 	k := &keyStage{}
 	src := &claimSource{keys: k}
 	k.sources = []*claimSource{src}
-	src.valued([3]int{10, 15, -1}, 16, [3]int{}, [2]int{})
+	src.valued([3]int{10, 15, -1}, 16, [6]int{}, [2]int{})
 	src.endWord(-1, 30)
 	src.word([3]int{40, -1, -1})
 	src.endWord(45, 45)

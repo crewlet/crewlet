@@ -2895,13 +2895,21 @@ copilot:
     - sentinel: "Authentication failed"
 
 grok:
+  # A seat's executor (internal/sandbox/executor, grok.go), on 1.0.92: an older
+  # release is refused, a newer one runs sessions of its own only. No E2B
+  # template: no prebuilt image is known to hold Grok Build, so a company names
+  # its own (docs/concepts/code-sandbox.md has the recipe).
+  executor:
+    runner: true
   binary: grok
   # xAI'S OWN HARNESS (github.com/xai-org/grok-build, installed from x.ai/cli),
   # NOT the same-named community package on npm. Both put a `grok` on PATH
   # and they are different programs: this profile's `.grok/auth.json`,
   # `--sandbox` and `-p` are the official one's, and the npm build has none
   # of them. If `grok --version` prints a 0.0.x, that is the other one.
-  written_for: "Grok Build CLI 1.0.x, measured on 1.0.92 (`grok --version`) — xAI's OWN, from x.ai/cli"
+  # Its first release word is the one release the executor runner is written
+  # for (harnessprofile.Release; grok.go's grokSupported).
+  written_for: "Grok Build CLI 1.0.92 (`grok --version`) — xAI's OWN, from x.ai/cli"
   version_args: ["--version"]
   # THE WEB TOOLS AND NOTHING ELSE. Measured on 1.0.92 through the engine's
   # own code path, with the API base at a local stand-in and the state
@@ -3210,10 +3218,12 @@ grok:
   #                      running, so they are pruned.
   #   model settings     ~/.grok/models_cache.json and its lock: a home's
   #                      first call writes it, and later calls take the
-  #                      model's API base, temperature and output cap from it
-  #                      without refetching it while it is fresh (an edited
-  #                      copy sent every request of a call to its API base,
-  #                      over GROK_XAI_API_BASE_URL).
+  #                      model's temperature and output cap from it without
+  #                      refetching it while it is fresh. A copy Grok wrote
+  #                      records the base it fetched from, and a call naming
+  #                      another base, or none, follows its own; only a copy
+  #                      edited by hand sent a call's requests to the base it
+  #                      names, over GROK_XAI_API_BASE_URL.
   #
   # Each is pruned every generation, with any requirements.toml, so the
   # generation's first call writes the cache afresh. What only a config.toml
@@ -3277,6 +3287,9 @@ grok:
   # run's answer, never inside it (harnessprofile.MarkerScope).
   limit_markers:
     - sentinel: "status 402 Payment Required"
+    # A 429, as 1.0.92 relays it: the API's code first, then its words, for a
+    # rate limit and for spent credits alike (measured; grokevents.go).
+    - sentinel: "Some resource has been exhausted"
     - sentinel: "Rate limited"
     - sentinel: "usage limit"
     - sentinel: "spending limit"

@@ -10,6 +10,24 @@
 // made for. Each call goes through the least-privileged connected key whose
 // role may make it, and a refused key is never retried with another.
 //
+// # A seat's own key
+//
+// A seat set to `identity: own` signs its calls with its own team key
+// (ADR-0179): a person makes it at Apple at the role the seat's level needs
+// ([LevelRole]: Marketing to read, App Manager to operate or administer),
+// never Admin, and hands in its .p8 file. Apple has no call that names a
+// key's role, so the check reads it from seven list reads whose roles the
+// operation table records, after one read every role may make that tells a
+// dead or foreign key from a narrow one. The key is kept only once the check
+// finds it at a fitting role in the team of the seat's apps, and is read back
+// every pass. A read its role may not make (a sales report) goes through the
+// company's least-privileged key, which the access log records as the
+// company's; an Admin-only act an administrator allowed goes through the
+// company's Admin key; every other change goes through the seat's key or is
+// refused, and a seat whose key Apple refuses has every call refused. Apple
+// lets no key be revoked by API, so a replaced or given-up key stays sealed as
+// retiring until a pass finds Apple refusing it.
+//
 // # Rate budget
 //
 // Apple limits each key per rolling hour and says what is left on every

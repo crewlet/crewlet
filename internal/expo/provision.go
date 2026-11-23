@@ -4,7 +4,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/seatname"
 )
 
 // TokenField is the one credential the engine seals per seat for Expo: the
@@ -21,15 +21,9 @@ const ToolEnv = "EXPO_TOKEN"
 const CLIRelease = "27.2.0"
 
 // RobotName is the name a person gives one seat's robot at Expo, so the
-// account's robot list says which agent of which company it is. It labels the
-// robot and never identifies it.
-func RobotName(company, handle string) string {
-	name := "crewlet-"
-	if slug := org.Slugify(company); slug != "" {
-		name += slug + "-"
-	}
-	return name + strings.TrimSpace(handle)
-}
+// account's robot list says which agent it is. It labels the robot and never
+// identifies it: the robot is known by the token pasted for it.
+func RobotName(company, handle string) string { return seatname.For(seatname.Expo, company, handle) }
 
 // AccessTokensURL is the account's settings page listing its robot users and
 // access tokens, where a person settles what only Expo can.

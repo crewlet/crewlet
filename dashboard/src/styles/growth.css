@@ -82,11 +82,6 @@
   gap: var(--spacing-2);
 }
 
-.growth-caps {
-  display: grid;
-  gap: var(--spacing-2);
-}
-
 .growth-role {
   display: inline-flex;
   flex-wrap: wrap;
@@ -371,4 +366,10 @@
 
 .growth-step__role {
   font-weight: var(--font-weight-medium);
+}
+/* The roles a product's levels use, then the rest folded under one line. */
+.growth-roles {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
 }

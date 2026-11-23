@@ -2,8 +2,6 @@ package executor
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -138,6 +136,7 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 	sock := q(paths.CodexSocket())
 	thread := q(paths.CodexThread())
 	threadNext := q(paths.CodexThread() + ".next")
+	runStart, runStartNext := q(paths.CodexRunStart()), q(paths.CodexRunStart()+".next")
 	serverLog := q(paths.WorkDir() + "/codex-server.log")
 	helped := codexHelped(req)
 
@@ -159,9 +158,10 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 	line(`stop() { end "$tpid"; end "$gpid"; end "$hpid"; end "$apid" again; tpid= gpid= hpid= apid=; rm -f %s; }`, sock)
 	// THE THREAD, off the stream's first line, the one `exec --json` prints as
 	// the server starts the thread, before its turn: written for the helper
-	// and reported for collection. Whole lines only: the pattern ends the line.
-	line(`thread() { t=$(head -n 1 %s 2> /dev/null | sed -n 's/^{"type": *"thread.started", *"thread_id": *"\([0-9A-Za-z-]*\)"}$/\1/p'); [ -n "$t" ] || return 1; tid=$t; printf '%%s\n' "$tid" > %s && mv -f %s %s && %s; }`,
-		stream, threadNext, threadNext, thread, reportSession(paths, "tid"))
+	// and reported for collection, with where the run began in its rollout
+	// ([Paths.CodexRunStart]). Whole lines only: the pattern ends the line.
+	line(`thread() { t=$(head -n 1 %s 2> /dev/null | sed -n 's/^{"type": *"thread.started", *"thread_id": *"\([0-9A-Za-z-]*\)"}$/\1/p'); [ -n "$t" ] || return 1; tid=$t; printf '%%s %%s\n' "$tid" "$before" > %s && mv -f %s %s && printf '%%s\n' "$tid" > %s && mv -f %s %s && %s; }`,
+		stream, runStartNext, runStartNext, runStart, threadNext, threadNext, thread, reportSession(paths, "tid"))
 	b.WriteString(codexFinish(paths))
 	b.WriteString(codexAborted(paths))
 	// quit: a teardown signal's end, as OpenCode's ([openCodeScript]): exec
@@ -186,7 +186,7 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 			codexRolloutPath(paths, session.ID))
 	}
 
-	line(`rm -f %s %s %s`, sock, thread, threadNext)
+	line(`rm -f %s %s %s %s`, sock, thread, threadNext, runStart)
 	// THE REPOSITORIES' INSTRUCTIONS AND SKILLS, none of their configuration
 	// ([codexRepoGate]), and the nested hook that hands a later checkout's
 	// where the box holds the helper it runs ([codexNestedHookFlags]).
@@ -325,7 +325,7 @@ func codexStartHelper(req sandbox.RunRequest, paths Paths) string {
 	if len(req.Skills) > 0 {
 		env += fmt.Sprintf(`%s=$(cat %s) `, codexSkillsEnv, q(paths.CodexSkillsURL()))
 		flags += fmt.Sprintf(" -skills-env %s -skills-dir %s", codexSkillsEnv, q(paths.CodexSkills()))
-		for _, digest := range codexSkillDigests(req.Skills) {
+		for _, digest := range skillDigests(req.Skills) {
 			flags += " -skill-digest " + q(digest)
 		}
 	}
@@ -338,24 +338,6 @@ hpid=$!
 ( while kill -0 $$ 2> /dev/null && kill -0 "$hpid" 2> /dev/null; do sleep %[4]s; done; kill -0 $$ 2> /dev/null || exit 0; : > %[5]s; %[2]s -interrupt-once < /dev/null > /dev/null || end "$apid" again ) &
 gpid=$!
 `, env, base, flags, codexGuardPoll, q(paths.CodexHelperLost()))
-}
-
-// codexSkillDigests is each of skills as the note helper's -skill-digest:
-// `<listed name>=<SHA-256 hex>` of the SKILL.md [writeCodexSkills] writes,
-// handed on the helper's command line, which is fixed before the model runs
-// (the digests of the skills' words, no secret). A skill whose file cannot be
-// made is one WriteConfig refused the run for, before any script.
-func codexSkillDigests(skills []sandbox.Skill) []string {
-	out := make([]string, 0, len(skills))
-	for _, s := range skills {
-		file, err := skillFile(s.Listed(), s.Description, s.Body)
-		if err != nil {
-			continue
-		}
-		sum := sha256.Sum256(file)
-		out = append(out, s.Listed()+"="+hex.EncodeToString(sum[:]))
-	}
-	return out
 }
 
 // codexGuardPoll is how often the guard looks for the helper: half a second,

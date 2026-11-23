@@ -159,8 +159,8 @@ func Sync(ctx context.Context, in SyncInput) (SyncReport, error) {
 	}
 	s := &syncer{
 		in: in, cat: cat, kind: kind, sess: sess, refs: refs, now: now(),
-		options: map[Lane]Options{},
-		report:  SyncReport{Records: map[string]Record{}},
+		options: map[Lane]Options{}, records: records,
+		report: SyncReport{Records: map[string]Record{}},
 	}
 	for _, h := range handles {
 		if err := ctx.Err(); err != nil {
@@ -227,6 +227,9 @@ type syncer struct {
 	now     time.Time
 	options map[Lane]Options
 	report  SyncReport
+	// records is every seat's record of the kind as the pass began, so an
+	// identity another seat keeps is refused.
+	records map[string]Record
 }
 
 // seat syncs one seat. An error is a fault the kind shares.
@@ -379,6 +382,9 @@ func (s *syncer) seat(
 			rec.Lanes[lane] = lr
 		}
 	}
+	if err := s.identities(ctx, &rec, ref, want); err != nil {
+		return err
+	}
 	if removed {
 		if err := s.forget(ctx, &rec, s.cat.Credentials); err != nil {
 			s.faultAll(&rec, lanes, VerbRemove, err)
@@ -389,7 +395,9 @@ func (s *syncer) seat(
 		}
 		return nil
 	}
-	if !inDoc && !rec.Held() {
+	// A SEAT THAT LEFT KEEPS ITS RECORD while an identity of its own is kept or
+	// waits for its revoke: the record is what clears it and says so.
+	if !inDoc && !rec.Held() && !holdsIdentity(rec) {
 		// A SEAT THAT LEFT THE DOCUMENT whose account is gone has nothing
 		// left to report or reach.
 		if err := s.in.Ledger.Drop(ctx, s.kind, h); err != nil {
@@ -1066,4 +1074,14 @@ func LaneName(lane Lane) string {
 	default:
 		return string(lane)
 	}
+}
+
+// holdsIdentity reports a record with an identity a pass must still reach.
+func holdsIdentity(rec Record) bool {
+	for _, lr := range rec.Lanes {
+		if lr.Identity.Waits() {
+			return true
+		}
+	}
+	return false
 }

@@ -872,7 +872,7 @@ func TestASessionWhoseObjectCannotBeReadIsAnsweredAsSuch(t *testing.T) {
 	backend.Corrupt(tampered.Object.Key.Name(), stored)
 	malformed := sealedSession(t, store, "ana", []byte("not an archive"))
 	unsupported := sealedSession(t, store, "ana", archive)
-	unsupported.Harness = "grok"
+	unsupported.Harness = "custom"
 	at := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
 	nothing := executordomain.Session{Handle: "ana", Turn: uuid.NewString(), EndedAt: at,
 		Ending: &executorkeep.Ending{Outcome: executorkeep.OutcomeFailed}}
@@ -892,7 +892,7 @@ func TestASessionWhoseObjectCannotBeReadIsAnsweredAsSuch(t *testing.T) {
 			"does not open"},
 		{"an object that is no archive", malformed, executorread.TranscriptMalformed,
 			"not an archive of its harness's format"},
-		{"a harness this build does not read", unsupported, executorread.TranscriptUnsupported, `"grok"`},
+		{"a harness this build does not read", unsupported, executorread.TranscriptUnsupported, `"custom"`},
 		{"a turn that captured nothing", nothing, executorread.TranscriptNone, "nothing of this turn's"},
 		{"a session the budget released", released, executorread.TranscriptNone, "budget released"},
 	} {
