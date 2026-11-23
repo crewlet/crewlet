@@ -4128,6 +4128,16 @@ kimi-code:
       said_path: ["error", "message"]
 
 hermes:
+  executor:
+    runner: true
+    e2b_template: hermes
+    # The one release the runner was measured on (`chat --format stream-json`,
+    # the gateway's session.steer, its plugin hooks and its session store):
+    # older is refused by the run's script and `crewlet llm doctor`, newer runs
+    # with fresh sessions only. And the command whose success shows a release
+    # has the client the run drives.
+    floor: "0.23.3"
+    probe_args: ["chat", "--help"]
   binary: hermes
   # MEASURED ON 0.23.3, the newest release, with the argv, environment, seat
   # home and seeds this profile has the engine build, against a stub HTTP

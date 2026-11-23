@@ -1,0 +1,439 @@
+package executor
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/prereqtest"
+	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
+)
+
+// hermesStream is a measured stream with the plugin's record of its responses
+// appended as the run's script appends them, and extra lines after.
+func hermesStream(t *testing.T, stream, requests string, extra ...string) []byte {
+	t.Helper()
+	out := bytes.Clone(hermesFixture(t, "0.23.3", stream))
+	if requests != "" {
+		for l := range bytes.Lines(hermesFixture(t, "0.23.3", requests)) {
+			out = append(out, `{"type":"`+hermesRequestEvent+`","line":`...)
+			out = append(out, bytes.TrimSpace(l)...)
+			out = append(out, "}\n"...)
+		}
+	}
+	for _, l := range extra {
+		out = append(out, l+"\n"...)
+	}
+	return out
+}
+
+// A HERMES RUN IS REFUSED BY ITS RELEASE BEFORE ANYTHING IS WRITTEN INTO THE
+// HERMES HOME: the release gate comes before the plugin, the skills and the
+// plugin's enabling, so a box on a release the runner does not drive keeps its
+// home as it was. And WriteConfig itself writes only under the work directory.
+//
+// Mutation: install before the refusal, or have WriteConfig write the plugin
+// or a skill into the Hermes home, and this goes red.
+func TestAHermesRunIsRefusedBeforeItWritesTheHermesHome(t *testing.T) {
+	t.Parallel()
+	box := &writeLog{FakeSandbox: sandbox.NewFakeSandbox("b")}
+	p := PathsFor(box)
+	req := sandbox.RunRequest{System: "be brief", Skills: []sandbox.Skill{{Name: "deploy", Description: "d", Body: "b"}},
+		MCPServers: map[string]sandbox.MCPServer{"crewlet": {Transport: sandbox.TransportHTTP, URL: "http://bridge.example.com/mcp"}}}
+	if _, err := (Hermes{}).WriteConfig(t.Context(), box, req, Session{ID: "s"}, p); err != nil {
+		t.Fatalf("WriteConfig: %v", err)
+	}
+	for _, path := range box.paths {
+		if strings.HasPrefix(path, p.HermesHome()+"/") {
+			t.Errorf("WriteConfig wrote %s into the Hermes home before any release was read", path)
+		}
+	}
+	script := hermesScript(req, Session{ID: "s"}, p, hermesRunTimes())
+	refusal := strings.Index(script, "the hermes runner drives")
+	for _, step := range []string{"cp -R", "hermes plugins enable", "hermes chat"} {
+		if at := strings.Index(script, step); at < 0 || at < refusal {
+			t.Errorf("%q comes before the release refusal (at %d, refusal at %d)", step, at, refusal)
+		}
+	}
+}
+
+// writeLog is a box that keeps the path of every file written to it.
+type writeLog struct {
+	*sandbox.FakeSandbox
+	paths []string
+}
+
+func (w *writeLog) WriteFile(ctx context.Context, p string, content []byte) error {
+	w.paths = append(w.paths, p)
+	return w.FakeSandbox.WriteFile(ctx, p, content)
+}
+
+// A HERMES RUN NAMES ITS SESSION ITSELF AND CREATES IT ONLY WHERE IT IS NEW:
+// the session is the runner's id as Hermes's title, `-c <id>` on every launch
+// and `--create-if-missing` only on one that starts it; a continued run is
+// handed a fresh id beside the one it continues.
+//
+// Mutation: drop --create-if-missing's condition, or mint no fresh id for a
+// continued run, and this goes red.
+func TestAHermesRunNamesItsSessionAndCreatesItOnlyWhereNew(t *testing.T) {
+	t.Parallel()
+	fresh := (Hermes{}).Session(sandbox.RunRequest{})
+	if !sandbox.ValidSessionID(fresh.ID) || fresh.Continues {
+		t.Fatalf("a new run's session = %+v, want a minted id of its own", fresh)
+	}
+	cont := (Hermes{}).Session(sandbox.RunRequest{Resume: hermesFixtureTitle})
+	if cont.ID != hermesFixtureTitle || !cont.Continues || !sandbox.ValidSessionID(cont.Fresh) || cont.Fresh == cont.ID {
+		t.Fatalf("a continued run's session = %+v, want the one it continues and a fresh id beside it", cont)
+	}
+	script := hermesScript(sandbox.RunRequest{}, fresh, PathsFor(sandbox.NewFakeSandbox("b")), hermesRunTimes())
+	if !strings.Contains(script, `set -- -c "$sid"; [ "$k" = yes ] || set -- "$@" --create-if-missing`) {
+		t.Errorf("the script does not name its session by -c and create it only where new:\n%s", script)
+	}
+}
+
+// A HERMES RUN'S END STOPS THE GATEWAY: an end request stops the gateway
+// before the client (killing the client leaves the turn running in it,
+// measured on 0.23.3), and the script's exit stops it however the script ends.
+//
+// Mutation: drop the gateway's stop from endharness or from the EXIT trap, and
+// this goes red.
+func TestAHermesRunsEndStopsItsGateway(t *testing.T) {
+	t.Parallel()
+	script := hermesScript(sandbox.RunRequest{}, Session{ID: "s"}, PathsFor(sandbox.NewFakeSandbox("b")), hermesRunTimes())
+	for _, want := range []string{`endedas=asked; endgw; end "$harness"`, `trap 'endgw' EXIT`,
+		`quit() { trap '' USR1; trap - EXIT TERM INT HUP; endgw;`} {
+		if !strings.Contains(script, want) {
+			t.Errorf("the script lacks %q", want)
+		}
+	}
+}
+
+// A HERMES STREAM READS AS ITS ANSWER, ITS CALLS AND ITS SPEND: the result
+// event's text is the answer, each call is said, and the run's spend is what
+// the plugin recorded of each response, the cache beside the prompt.
+//
+// Mutation: read the answer off the text deltas alone, drop a call, or sum
+// the record wrong, and this goes red.
+func TestAHermesStreamReadsAsItsAnswerCallsAndSpend(t *testing.T) {
+	t.Parallel()
+	res := (Hermes{}).Parse(hermesStream(t, "stream-steered.jsonl", "requests-steered.jsonl"))
+	if !res.Success || res.Text != "STUB-OK" {
+		t.Fatalf("result = %+v, want a success answering STUB-OK", res)
+	}
+	if !strings.Contains(res.Transcript, "terminal") {
+		t.Errorf("the transcript does not say the terminal call:\n%s", res.Transcript)
+	}
+	d := &hermesEvents{}
+	for l := range bytes.Lines(hermesStream(t, "stream-steered.jsonl", "requests-steered.jsonl")) {
+		d.Line(bytes.TrimSpace(l))
+	}
+	spend, ok := d.runSpend()
+	if !ok || spend.input != 20 || spend.output != 4 {
+		t.Errorf("spend = %+v (%v), want the two recorded responses' 20 in and 4 out", spend, ok)
+	}
+	if got := d.reportedWindow(); got != 262144 {
+		t.Errorf("window = %d, want the recorded 262144", got)
+	}
+}
+
+// A HERMES RUN ENDS ON ITS ROUND CAP ONLY WHERE BOTH SAY SO: Hermes's own
+// sentence as it exited 1, which the script turns into the cap's line, and
+// the record's last turn holding the cap's tool rounds. Either alone keeps the
+// run's own cause.
+//
+// Mutation: read the cap off either signal alone, and a row goes red.
+func TestAHermesRunEndsOnItsRoundCapOnlyWhereBothSay(t *testing.T) {
+	t.Parallel()
+	capLine := `{"type":"` + hermesCappedEvent + `","rounds":2}`
+	for _, c := range []struct {
+		name     string
+		stream   []byte
+		want     bool
+		failWith string
+	}{
+		{"summary given", hermesStream(t, "stream-capped-summary.jsonl", "requests-capped-summary.jsonl", capLine), true, ""},
+		{"no summary", hermesStream(t, "stream-capped.jsonl", "requests-capped.jsonl", capLine), true, ""},
+		{"no cap line", hermesStream(t, "stream-capped.jsonl", "requests-capped.jsonl"), false, "iteration limit"},
+		{"no rounds", hermesStream(t, "stream-capped.jsonl", "", capLine), false, "iteration limit"},
+	} {
+		res := (Hermes{}).Parse(c.stream)
+		if res.RoundCapped != c.want || res.Success {
+			t.Errorf("%s: capped %v success %v, want capped %v and no success (%s)", c.name, res.RoundCapped,
+				res.Success, c.want, res.Error)
+		}
+		if c.failWith != "" && !strings.Contains(res.Error, c.failWith) {
+			t.Errorf("%s: error %q, want Hermes's own words", c.name, res.Error)
+		}
+	}
+	if !strings.Contains(string(hermesFixture(t, "0.23.3", "stream-capped-summary.jsonl")), hermesCapSentence) ||
+		!strings.Contains(string(hermesFixture(t, "0.23.3", "stream-capped.jsonl")), hermesCapNoSummary) {
+		t.Error("the cap's sentences are not what 0.23.3 wrote")
+	}
+}
+
+// A REFUSED KEY IS THE RUN'S FAILURE IN HERMES'S OWN WORDS, where the
+// profile's sign-in markers read it.
+//
+// Mutation: drop the result's error or text from the failure, and this goes red.
+func TestARefusedHermesKeyIsTheRunsFailure(t *testing.T) {
+	t.Parallel()
+	res := (Hermes{}).Parse(hermesFixture(t, "0.23.3", "stream-refused.jsonl"))
+	if res.Success || !strings.Contains(res.Error, "401") {
+		t.Fatalf("result = %+v, want a failure naming the refusal", res)
+	}
+}
+
+// A RELAUNCH AFTER A DISCARD IS THE RUN'S ENDING: the refused launch's result
+// is not the run's once the second launch starts its own stream.
+//
+// Mutation: keep the first result past a new init, and this goes red.
+func TestAHermesRelaunchsResultIsTheRuns(t *testing.T) {
+	t.Parallel()
+	refused := `{"type": "system", "subtype": "init"}` + "\n" +
+		`{"type": "result", "exit_code": 3, "text": "", "error": "Your message was not sent. To continue, run ` +
+		"`hermes sessions discard x --yes`" + `"}` + "\n"
+	res := (Hermes{}).Parse(append([]byte(refused), hermesStream(t, "stream-steered.jsonl", "requests-steered.jsonl")...))
+	if !res.Success || res.Text != "STUB-OK" {
+		t.Fatalf("result = %+v, want the relaunch's answer", res)
+	}
+}
+
+// A STEERED NOTE IS READ BACK AS THE NOTE IT FRAMES: Hermes's frame around a
+// steer is taken off byte for byte, and a user message it did not frame is no
+// note.
+//
+// Mutation: loosen or drop the frame's match, and this goes red.
+func TestAHermesSteeredNoteIsReadAsTheNoteItFrames(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		text, note string
+		ok         bool
+	}{
+		{hermesNoteOpen + "fix it" + hermesNoteClose, "fix it", true},
+		{"fix it", "", false},
+		{hermesNoteOpen + "fix it", "", false},
+	} {
+		if note, ok := hermesSteered(c.text); note != c.note || ok != c.ok {
+			t.Errorf("hermesSteered(%q) = %q, %v, want %q, %v", c.text, note, ok, c.note, c.ok)
+		}
+	}
+}
+
+// A HERMES SESSION READS AS ITS TRANSCRIPT: the person's brief, the model's
+// call and its result, the steered note as a person's words and the model's
+// answer, in the order the store wrote them.
+//
+// Mutation: drop a role's entries, or keep the steer's frame, and this goes red.
+func TestAHermesSessionReadsAsItsTranscript(t *testing.T) {
+	t.Parallel()
+	entries := hermesTranscriptOf(t, kimiArchive(t, map[string][]byte{
+		hermesArchiveMember: hermesFixture(t, "0.23.3", "session-steered.jsonl")}))
+	var got []string
+	for _, e := range entries {
+		got = append(got, string(e.Kind)+":"+e.Tool+":"+strings.TrimSpace(e.Text))
+	}
+	want := []string{"brief::steer me", "tool_call:terminal:", "tool_result:terminal:", "brief::" + hermesSteeredNote,
+		"model::STUB-OK"}
+	if len(got) != len(want) {
+		t.Fatalf("entries = %q, want %q", got, want)
+	}
+	for i := range want {
+		if !strings.HasPrefix(got[i], want[i]) {
+			t.Errorf("entry %d = %q, want it to open %q", i, got[i], want[i])
+		}
+	}
+}
+
+// THE OVERLAY CARRIES THE RUN'S SERVERS AND ITS WEB DENIAL, and only those:
+// each server as written, the web, browser and x_search toolsets disabled on
+// a web-denied run alone, and a value Hermes would expand refused.
+//
+// Mutation: drop a server's header, disable the web on an allowed run, or let
+// a `${` through, and a row goes red.
+func TestTheHermesOverlayCarriesTheServersAndTheWebDenial(t *testing.T) {
+	t.Parallel()
+	servers := map[string]sandbox.MCPServer{"crewlet": {Transport: sandbox.TransportHTTP, URL: "http://bridge.example.com/mcp",
+		Headers: map[string]string{"Authorization": "Bearer t"}, CallTimeout: 600 * time.Second}}
+	raw, err := hermesOverlay(servers, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Servers map[string]struct {
+			URL     string            `json:"url"`
+			Headers map[string]string `json:"headers"`
+			Timeout int               `json:"timeout"`
+		} `json:"mcp_servers"`
+		Agent struct {
+			Disabled []string `json:"disabled_toolsets"`
+		} `json:"agent"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	s := got.Servers["crewlet"]
+	if s.URL != "http://bridge.example.com/mcp" || s.Headers["Authorization"] != "Bearer t" || s.Timeout != 600 {
+		t.Errorf("server = %+v", s)
+	}
+	if !slices.Equal(got.Agent.Disabled, []string{"web", "browser", "x_search"}) {
+		t.Errorf("disabled toolsets = %v", got.Agent.Disabled)
+	}
+	allowed, err := hermesOverlay(servers, false)
+	if err != nil || strings.Contains(string(allowed), "disabled_toolsets") {
+		t.Errorf("an allowed run's overlay disables toolsets: %s (%v)", allowed, err)
+	}
+	servers["crewlet"] = sandbox.MCPServer{Transport: sandbox.TransportHTTP, URL: "http://x/${HOME}"}
+	if _, err := hermesOverlay(servers, false); err == nil {
+		t.Error("a value Hermes would expand was let through")
+	}
+}
+
+// A HERMES SESSION CONTINUES ONLY BETWEEN BOXES ON ITS ONE RELEASE, written by
+// it: an older, newer or unread release continues nothing.
+//
+// Mutation: hold the box or the writer loosely, and a row goes red.
+func TestAHermesSessionContinuesOnlyOnItsOneRelease(t *testing.T) {
+	t.Parallel()
+	floor := hermesFloor()
+	for _, c := range []struct {
+		box, writer string
+		ok          bool
+	}{
+		{floor, floor, true}, {"0.23.4", floor, false}, {"0.23.2", floor, false}, {"", floor, false},
+		{floor, "0.23.4", false}, {floor, "", false},
+	} {
+		if ok, why := (Hermes{}).Continues(c.box, c.writer); ok != c.ok || (!ok && why == "") {
+			t.Errorf("Continues(%q, %q) = %v, %q, want %v", c.box, c.writer, ok, why, c.ok)
+		}
+	}
+}
+
+// hermesGate runs a continued run's session gate in a box at home, its Hermes
+// having printed release, a carried archive of member, and returns sid, k and w.
+func hermesGate(t *testing.T, home, release string, req sandbox.RunRequest, member []byte) []string {
+	t.Helper()
+	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
+	prereqtest.OnPath(t, "python3", "the gate restores a session with the run's carry script", "install python3")
+	paths := Paths{Home: home}
+	for _, dir := range []string{paths.WorkDir(), paths.HermesHome()} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(paths.HermesCarry(), hermesCarryScript, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.SessionCarried(), kimiArchive(t, map[string][]byte{hermesArchiveMember: member}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.HermesOverlayStaged(), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	session := Session{ID: hermesFixtureTitle, Continues: true, Fresh: "22222222-0000-4000-8000-000000000002"}
+	script := "n=" + shellword.Quote(release) + "\n" + hermesStopGateway(paths, time.Second) +
+		hermesSessionGate(req, session, paths, false) + `printf '%s|%s|%s' "$sid" "$k" "$w"`
+	cmd := exec.Command(sh, "-c", script)
+	cmd.Dir = home
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("the gate failed: %v", err)
+	}
+	return strings.SplitN(string(out), "|", 3)
+}
+
+// A CARRIED HERMES SESSION IS RESTORED AND CONTINUED ONLY UNDER THE LAUNCH IT
+// WAS CREATED WITH: restored into a new store and indexed where the box runs
+// the one release and the launch matches; a launch naming another model, or a
+// box on another release, starts the fresh session instead, saying why.
+//
+// Mutation: skip the policy check, restore on another release, or continue
+// without indexing the restored session, and a row goes red.
+func TestACarriedHermesSessionContinuesOnlyUnderItsLaunch(t *testing.T) {
+	t.Parallel()
+	req := sandbox.RunRequest{Model: "stub-model"}
+	member := func(home string) []byte {
+		policy, _ := json.Marshal(map[string]string{"crewlet_policy": hermesPolicy(req) + home})
+		return append(bytes.Clone(hermesFixture(t, "0.23.3", "session-steered.jsonl")), append(policy, '\n')...)
+	}
+	t.Run("matching", func(t *testing.T) {
+		home := t.TempDir()
+		got := hermesGate(t, home, hermesFloor(), req, member(home))
+		if got[1] != "yes" || got[2] != "" {
+			t.Fatalf("gate = %q, want the session continued", got)
+		}
+		paths := Paths{Home: home}
+		index, err := os.ReadFile(paths.HermesSessions())
+		if err != nil || !strings.HasPrefix(string(index), hermesFixtureTitle+" local-") {
+			t.Errorf("index = %q (%v), want the restored session's stored id", index, err)
+		}
+		if _, err := os.Stat(paths.HermesStateDB()); err != nil {
+			t.Errorf("no store was restored: %v", err)
+		}
+	})
+	t.Run("another model", func(t *testing.T) {
+		home := t.TempDir()
+		got := hermesGate(t, home, hermesFloor(), sandbox.RunRequest{Model: "other-model"}, member(home))
+		if got[0] != "22222222-0000-4000-8000-000000000002" || got[1] != "no" || !strings.Contains(got[2], "launch") {
+			t.Fatalf("gate = %q, want the fresh session, saying the launch differs", got)
+		}
+	})
+	t.Run("another release", func(t *testing.T) {
+		home := t.TempDir()
+		got := hermesGate(t, home, "0.23.4", req, member(home))
+		if got[1] != "no" || !strings.Contains(got[2], "0.23.4") {
+			t.Fatalf("gate = %q, want no continuation on 0.23.4", got)
+		}
+	})
+}
+
+// A HERMES SESSION DUMPS AND RESTORES WHOLE: the carry script's dump of a
+// restored store is the dump it was restored from, row for row, and a title it
+// does not hold dumps nothing (exit 3).
+//
+// Mutation: drop a table from the dump, or the triggers' second pass from the
+// restore, and this goes red.
+func TestAHermesSessionDumpsAndRestoresWhole(t *testing.T) {
+	t.Parallel()
+	python := prereqtest.OnPath(t, "python3", "the case runs the run's carry script", "install python3")
+	dir := t.TempDir()
+	carry := filepath.Join(dir, "carry.py")
+	member := filepath.Join(dir, "session.jsonl")
+	db := filepath.Join(dir, "state.db")
+	for path, body := range map[string][]byte{carry: hermesCarryScript, member: hermesFixture(t, "0.23.3", "session-steered.jsonl")} {
+		if err := os.WriteFile(path, body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if out, err := exec.Command(python, "-I", carry, "restore", member, db, filepath.Join(dir, "policy"), hermesFixtureTitle).Output(); err != nil ||
+		!strings.HasPrefix(string(out), "local-") {
+		t.Fatalf("restore: %v: %s", err, out)
+	}
+	again, err := exec.Command(python, "-I", carry, "dump", db, hermesFixtureTitle, "/dev/null").Output()
+	if err != nil {
+		t.Fatalf("dump: %v", err)
+	}
+	rows := func(dump []byte) []string {
+		var out []string
+		for l := range bytes.Lines(dump) {
+			if bytes.HasPrefix(l, []byte(`{"t": `)) {
+				out = append(out, string(bytes.TrimSpace(l)))
+			}
+		}
+		return out
+	}
+	if want, got := rows(hermesFixture(t, "0.23.3", "session-steered.jsonl")), rows(again); !slices.Equal(got, want) {
+		t.Errorf("the restored store dumps %d rows, the archive held %d", len(got), len(want))
+	}
+	cmd := exec.Command(python, "-I", carry, "dump", db, "no-such-title", "/dev/null")
+	if err := cmd.Run(); cmd.ProcessState == nil || cmd.ProcessState.ExitCode() != 3 {
+		t.Errorf("dumping an unheld title: %v, want exit 3", err)
+	}
+}
