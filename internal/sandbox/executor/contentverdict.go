@@ -13,10 +13,10 @@ import (
 // calls a session holds where its harness names no call to the engine, from
 // the parts each class of calls ([sandbox.CallClass]) has and the steps they
 // lie in. It is any such reader's, harness-neutral: the reader walks its own
-// records for the facts (OpenCode's, opencodeholdings.go, is today's one),
-// and matches a part to its class here ([matchedClass]). The package doc's
-// "An OpenCode session's calls are read by what they were" has the pool, the
-// order check and why it never holds falsely.
+// records for the facts (OpenCode's, opencodeholdings.go; Qwen Code's,
+// qwenholdings.go), and matches a part to its class here ([matchedClass]). The
+// package doc's "A session's calls are read by what they were" has the pool,
+// the order check and why it never holds falsely.
 
 // contentVerdict is a reading's answer from its walk's facts, parts each
 // stated class's counted parts by the steps they lie in, in the order read:

@@ -157,13 +157,14 @@
 // archive at [threadPlainMax] with the scrub's own meter and handing each
 // member it reads what is left of that budget, and of [threadLinesMax].
 //
-// # An OpenCode session's calls are read by what they were
+// # A session's calls are read by what they were
 //
-// OpenCode names no call to the engine, so its reading (opencodeholdings.go,
-// today's one reader; the verdict, contentverdict.go, is shared) tells a
-// relaunch which of its round's calls a cut-off kept session holds by CLASS
-// ([sandbox.CallClass]): the tool, the arguments' key ([toolargs.Key], the
-// log's own rule on both sides), whether it failed, and the output's text key.
+// OpenCode and Qwen Code name no call to the engine, so a reading
+// (opencodeholdings.go, qwenholdings.go, whose rules are ADR-0073's; the
+// verdict, contentverdict.go, shared) tells a relaunch which of its round's
+// calls a cut-off kept session holds by CLASS ([sandbox.CallClass]): the tool,
+// the arguments' key ([toolargs.Key], the log's rule), whether it failed,
+// the output's key.
 // A class is held only where every call of it in the pool has a part of its own
 // after the run's start and the newest compaction, handed to the model
 // verbatim, and no call the log cannot state may be of it. Which of two
