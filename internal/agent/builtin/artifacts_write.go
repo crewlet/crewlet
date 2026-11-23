@@ -454,7 +454,7 @@ func (t *createArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			ListArtifactsTool+" before creating it a different way: if it landed, it is there."), nil
 	}
 	t.deps.settle(ctx, published.Result.Position)
-	out := t.deps.publishedAnswer(c, published, "created")
+	out := t.deps.publishedAnswer(c, published)
 	if folderPath != "" {
 		out["folder"] = folderPath
 	}
@@ -511,12 +511,11 @@ func (t *createArtifact) requesterShare(c artifactCaller) []artifacts.Share {
 }
 
 // publishedAnswer is a version that landed, as create and publish answer it.
-func (d ArtifactDeps) publishedAnswer(c artifactCaller, p artifactsdomain.Published,
-	outcome string) map[string]any {
+func (d ArtifactDeps) publishedAnswer(c artifactCaller, p artifactsdomain.Published) map[string]any {
 
 	out := map[string]any{
-		"outcome": outcome, "artifact": p.Artifact.String(), "version": p.Number,
-		"write": outcomeOf(p.Result), "position": positionOf(p.Result.Position),
+		"outcome": outcomeOf(p.Result), "artifact": p.Artifact.String(), "version": p.Number,
+		"position": positionOf(p.Result.Position),
 	}
 	if url := d.link(p.Artifact); url != "" {
 		out["url"] = url
@@ -887,7 +886,7 @@ func (t *publishArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			GetArtifactTool+": if its head moved past your base, the publish landed."), nil
 	}
 	t.deps.settle(ctx, published.Result.Position)
-	out := t.deps.publishedAnswer(c, published, "published")
+	out := t.deps.publishedAnswer(c, published)
 	out["base_version"] = base
 	return caveated(out, findingCaveats(report))
 }

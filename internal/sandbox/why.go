@@ -21,18 +21,18 @@ import (
 type Why string
 
 const (
-	// WhyConfiguration is a run the deployment's configuration cannot
-	// start, which no wait changes and a person does: no sandbox runtime or
-	// dialable tool bridge, a cell no backend serves, a chain with no member
-	// a box can run, a sign-in that cannot follow the run to its cell, a
-	// setup step exiting non-zero but not 75 ([WhySetupUnavailable]), a
-	// create refused as malformed or for a missing template, or answered with
-	// a box that is not private, a provider domain that does not resolve or
-	// whose certificate does not match, an image the runtime will not start
-	// (a pull failed on a network blip too, told apart only by the runtime's
-	// words), a mount it cannot share or the box may not write, a probe the
-	// runtime refused, or a box that cannot run its shell, or find or head to
-	// list a build.
+	// WhyConfiguration is a run the deployment's configuration cannot start,
+	// which no wait changes and a person does: no sandbox runtime or dialable
+	// tool bridge, a cell no backend serves, a chain with no member a box can
+	// run, a sign-in that cannot follow the run to its cell, a setup step
+	// exiting non-zero but not 75 ([WhySetupUnavailable]), a create refused as
+	// malformed or for a missing template, or answered with a box that is not
+	// private, a cluster older than the routes this build calls, a provider
+	// domain that does not resolve or whose certificate does not match, an
+	// image the runtime will not start (a pull failed on a network blip too,
+	// told apart only by the runtime's words), a mount it cannot share or the
+	// box may not write, a probe the runtime refused, or a box that cannot run
+	// its shell, or find or head to list a build.
 	WhyConfiguration Why = "configuration"
 
 	// WhySetupUnavailable is a setup step a command of which exited 75

@@ -13,7 +13,6 @@ import {
   LayoutDashboardGlyph,
   BanGlyph,
 } from "@crewlethq/icons/glyphs";
-import { href } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { companyDateLabel } from "~/lib/format.ts";
 import { PROJECT_PAGE } from "~/contract/work.ts";
@@ -24,6 +23,7 @@ import { censusLine } from "~/routes/home/Projects.tsx";
 import type { WorkView } from "~/protocol/index.ts";
 import {
   ChoiceNote,
+  WIDGET_PAGE,
   WidgetCard,
   WidgetNote,
   WidgetQuery,
@@ -31,7 +31,7 @@ import {
   gapsOf,
   type WidgetChoices,
 } from "~/routes/home/board/kit.tsx";
-import { MoreLink, ROWS, TaskList, countLabel } from "~/routes/worklet/taskRows.tsx";
+import { WidgetTasks, countLabel } from "~/routes/worklet/taskRows.tsx";
 import { ago } from "~/lib/ago.ts";
 
 const POLL_MS = 60_000;
@@ -83,7 +83,7 @@ function ViewRows({ view }: { view: WorkView }) {
   const run = viewRun(view);
   const read = useQuery(
     "work_items",
-    { ...view.params, container: containerOf(view), subtasks: "separate", limit: ROWS },
+    { ...view.params, container: containerOf(view), subtasks: "separate", limit: WIDGET_PAGE },
     { pollMs: POLL_MS },
   );
   const rows = read.data?.items ?? [];
@@ -91,11 +91,7 @@ function ViewRows({ view }: { view: WorkView }) {
     <WidgetCard
       title={view.name}
       from="worklet-views"
-      actions={
-        <a className="t-link home-widget-open" href={href(run.path, run.query)}>
-          Open view
-        </a>
-      }
+      open={{ label: "Open view", to: run.path, query: run.query }}
     >
       <WidgetQuery
         error={read.error}
@@ -108,15 +104,11 @@ function ViewRows({ view }: { view: WorkView }) {
             : undefined
         }
       >
-        <TaskList rows={rows} />
-        <MoreLink
-          shown={rows.length}
+        <WidgetTasks
+          rows={rows}
           total={
             read.data ? { total: read.data.total_hint, capped: read.data.total_capped } : undefined
           }
-          to={run.path}
-          query={run.query}
-          noun="task"
         />
       </WidgetQuery>
     </WidgetCard>
@@ -174,7 +166,7 @@ function Project({ params }: { params: Readonly<Record<string, string>> }) {
   const open = useQuery(
     "work_items",
     project
-      ? { container: `project:${project.key}`, subtasks: "separate", limit: ROWS }
+      ? { container: `project:${project.key}`, subtasks: "separate", limit: WIDGET_PAGE }
       : undefined,
     { pollMs: POLL_MS, enabled: project !== null },
   );
@@ -201,11 +193,7 @@ function Project({ params }: { params: Readonly<Record<string, string>> }) {
     <WidgetCard
       title={`${project.key} · ${project.name}`}
       from="worklet"
-      actions={
-        <a className="t-link home-widget-open" href={href(projectPath(project.key))}>
-          Open project
-        </a>
-      }
+      open={{ label: "Open project", to: projectPath(project.key) }}
     >
       <div className="home-widget-pad home-tasks-project">
         <div className="home-tasks-meter">
@@ -236,15 +224,16 @@ function Project({ params }: { params: Readonly<Record<string, string>> }) {
         loading={open.loading && !open.data}
         gaps={gapsOf([read.data, open.data])}
       >
-        {rows.length > 0 ? <TaskList rows={rows} /> : null}
-        <MoreLink
-          shown={rows.length}
-          total={
-            open.data ? { total: open.data.total_hint, capped: open.data.total_capped } : undefined
-          }
-          to={projectPath(project.key)}
-          noun="open task"
-        />
+        {rows.length > 0 ? (
+          <WidgetTasks
+            rows={rows}
+            total={
+              open.data
+                ? { total: open.data.total_hint, capped: open.data.total_capped }
+                : undefined
+            }
+          />
+        ) : null}
       </WidgetQuery>
     </WidgetCard>
   );
@@ -268,14 +257,18 @@ function Filtered({
   const viewer = useViewer();
   const read = useQuery(
     "work_items",
-    { container: "workspace", subtasks: "separate", limit: ROWS, [filter.key]: filter.wire },
+    {
+      container: "workspace",
+      subtasks: "separate",
+      limit: WIDGET_PAGE,
+      [filter.key]: filter.wire,
+    },
     { pollMs: POLL_MS, enabled: viewer.worklet },
   );
   const rows = read.data?.items ?? [];
   const total = read.data
     ? { total: read.data.total_hint, capped: read.data.total_capped }
     : undefined;
-  const to = ["worklet", "tasks"];
   const query = { [filter.key]: filter.address };
   return (
     <WidgetCard
@@ -290,8 +283,7 @@ function Filtered({
         gaps={gapsOf([read.data])}
         empty={read.data && rows.length === 0 ? empty : undefined}
       >
-        <TaskList rows={rows} />
-        <MoreLink shown={rows.length} total={total} to={to} query={query} noun="task" />
+        <WidgetTasks rows={rows} total={total} />
       </WidgetQuery>
     </WidgetCard>
   );

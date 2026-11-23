@@ -968,8 +968,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		req.Secrets = append(slices.Clone(req.Secrets), gitAccess)
 	}
 	// THE BOX IS MADE FOR THIS TURN, which a local box records so its host
-	// can tell when no run names it any more ([Spec.TurnID]).
-	req.Spec.TurnID = req.Turn.TurnID
+	// can tell when no run names it any more ([Spec.TurnID]), AND THIS LAUNCH,
+	// which a remote box carries for the run's ending to find ([Spec.LaunchID]).
+	req.Spec.TurnID, req.Spec.LaunchID = req.Turn.TurnID, opened.LaunchID
 	box, runner, reused, err := c.acquire(ctx, m, req, opened.Prior)
 	if err != nil {
 		// The row is open and this launch is over. Every failure past this

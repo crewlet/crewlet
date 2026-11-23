@@ -457,9 +457,9 @@ func (parkedRun) Deliver(context.Context, types.ExecutorAnswerGiven) (uuid.UUID,
 	return uuid.NewSHA1(uuid.NameSpaceOID, []byte("answer-t1")), nil
 }
 
-// Answerer names nobody: t1 is still waiting, so it holds no answer whose seal
+// Answered is nothing: t1 is still waiting, so it holds no answer whose seal
 // could name who gave it.
-func (parkedRun) Answerer(sandbox.PendingRun) string { return "" }
+func (parkedRun) Answered(sandbox.PendingRun) sandbox.AnswerWords { return sandbox.AnswerWords{} }
 
 // AnswerFoldIn finds no fold-in: no run here holds one.
 func (parkedRun) AnswerFoldIn(context.Context, sandbox.PendingRun, string, sandbox.FoldInAnswered) (sandbox.FoldIn,
