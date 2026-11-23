@@ -1135,9 +1135,9 @@ type RunRequest struct {
 	// The runner hands them to the harness and keeps them, with its own wiring's
 	// variables, out of the environment of the commands the model runs, through
 	// the harness's own mechanism for that environment. The exemptions are
-	// Kimi Code's runner (executor.Kimi, code-sandbox.md "Kimi Code") and Grok
-	// Build's, which reads none of them, its model's shell starting as a
-	// person's does.
+	// Kimi Code's runner (executor.Kimi, code-sandbox.md "Kimi Code"), Hermes
+	// Agent's (executor.Hermes, "Hermes Agent"), and Grok Build's, which reads
+	// none of them, its model's shell starting as a person's does.
 	SignInEnv []string
 
 	Limits Limits
