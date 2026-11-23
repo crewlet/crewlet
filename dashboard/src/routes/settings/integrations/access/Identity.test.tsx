@@ -8,7 +8,7 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { afterEach, expect, test, vi } from "vitest";
 import { LayerHost } from "@crewlethq/ui";
 import type { AccessIdentity, AccessIdentityGuide, AccessSeat } from "~/contract/access.ts";
-import { IdentityBox, IdentitySheet, identityRequest } from "./Identity.tsx";
+import { IdentityBox, IdentitySheet, handInOf, identityRequest } from "./Identity.tsx";
 
 afterEach(cleanup);
 
@@ -17,6 +17,8 @@ const EMAIL = "crewlet-mobile-lead-0a1b2c@acme-crewlet-id.iam.gserviceaccount.co
 const SEAT: AccessSeat = { handle: "mobile-lead", name: "Mobile lead", lanes: {} };
 
 /** Play Console's sheet for Mobile lead's identity at View, as the engine words it. */
+const USERS = "https://play.google.com/console/developers/users-and-permissions";
+
 const PLAY_GUIDE: AccessIdentityGuide = {
   vendor: "Google Play",
   noun: "Google identity",
@@ -27,24 +29,38 @@ const PLAY_GUIDE: AccessIdentityGuide = {
   name_what: "Google identity",
   role: "View app information (read-only)",
   steps: [
-    { text: "Open Play Console, then Users and permissions." },
-    { text: "Press Invite new users." },
-    { text: "Email address:", copy: { label: "identity's email", value: EMAIL } },
-    { text: "Under App permissions, add com.acme.app." },
-    { text: "Tick View app information (read-only)." },
-    { text: "Leave Account permissions empty, then press Invite user." },
+    {
+      text: [
+        { text: "Open " },
+        { ui: ["Play Console", "Users and permissions"], url: USERS },
+        { text: "." },
+      ],
+    },
+    { text: [{ text: "Press " }, { ui: ["Invite new users"] }, { text: "." }] },
+    { text: [{ text: "Email address:" }], copy: { label: "identity's email", value: EMAIL } },
+    { text: [{ text: "Under " }, { ui: ["App permissions"] }, { text: ", add com.acme.app." }] },
+    { text: [{ text: "Tick " }, { ui: ["View app information (read-only)"] }, { text: "." }] },
+    {
+      text: [
+        { text: "Leave " },
+        { ui: ["Account permissions"] },
+        { text: " empty, then press " },
+        { ui: ["Invite user"] },
+        { text: "." },
+      ],
+    },
   ],
-  link: {
-    label: "Open Users and permissions",
-    url: "https://play.google.com/console/developers/users-and-permissions",
-  },
   back: {
     kind: "nothing",
-    text: "Nothing to bring back: Crewlet checks Google Play as the identity.",
+    text: [{ text: "Nothing to bring back: Crewlet checks Google Play as the identity." }],
   },
   make: {
     label: "Add it for me",
-    does: `With a Play Console admin's sign-in, Crewlet adds ${EMAIL} to com.acme.app with View app information (read-only).`,
+    does: [
+      { text: `With a Play Console admin's sign-in, Crewlet adds ${EMAIL} to com.acme.app with ` },
+      { ui: ["View app information (read-only)"] },
+      { text: "." },
+    ],
   },
   checks: [
     { id: "token", label: `Sign in as ${EMAIL}` },
@@ -107,8 +123,33 @@ test("a Google identity nobody added is set up, not replaced, from the engine's 
   expect(within(sheet).getByText(/Set up identity: Mobile lead/)).toBeTruthy();
   expect(within(sheet).queryByText(/Replace identity/)).toBeNull();
   expect(within(sheet).getAllByText(EMAIL).length).toBeGreaterThan(0);
-  expect(within(sheet).getByText("Press Invite new users.")).toBeTruthy();
+  // The steps by hand are folded under Make it for me, so read the list as written.
+  const items = [...sheet.querySelectorAll("li")].map((li) => li.textContent);
+  expect(items).toContain("Press Invite new users.");
   expect(within(sheet).getByText(/Add it for me/)).toBeTruthy();
+});
+
+// THE PAGE IS LINKED WHERE A PERSON FIRST READS ITS NAME: the first step names
+// Users and permissions, so it carries the link and no button repeats it below.
+test("the sheet links the vendor page on the step that names it, with no separate button", () => {
+  render(
+    <LayerHost>
+      <IdentitySheet
+        seat={SEAT}
+        identity={NOT_ADDED}
+        guide={PLAY_GUIDE}
+        onClose={vi.fn()}
+        onCheck={vi.fn()}
+      />
+    </LayerHost>,
+  );
+  const sheet = screen.getByRole("dialog");
+  fireEvent.click(within(sheet).getByRole("button", { name: /make it by hand/i }));
+  const link = within(sheet).getByRole("link", { name: /Play Console then Users and permissions/ });
+  expect(link.getAttribute("href")).toBe(USERS);
+  expect(link.closest("li")?.textContent).toMatch(/^Open Play Console/);
+  expect(within(sheet).queryByRole("link", { name: /^Open Users and permissions/ })).toBeNull();
+  expect(sheet.querySelectorAll(".crewlet-vendor-ui").length).toBeGreaterThan(5);
 });
 
 // A READY STANDING IDENTITY OFFERS NOTHING TO DO: the engine sends neither
@@ -143,4 +184,36 @@ test("a ready Google identity's box offers no action", () => {
 test("Add it for me asks the engine to make it, a bare check to read what was added", async () => {
   expect(await identityRequest({ made: true })).toEqual({ way: "made" });
   expect(await identityRequest({ made: false })).toEqual({ way: "invited" });
+});
+
+// A FILE MAY BRING ONE OPTIONAL VALUE BESIDE IT (Apple's vendor number for a
+// Sales key): the guide's detail is the kit's, asked on a number pad, and the
+// check sends it only where the person typed one. Mutation: drop the detail
+// from either side, and its line below fails.
+test("a file's optional detail is asked beside it and sent only when typed", async () => {
+  const handIn = handInOf({
+    kind: "file",
+    accept: ".p8",
+    hint: [{ text: "The file Apple offered" }],
+    label: "Key ID",
+    detail: { label: "Vendor number", hint: "Only for a Sales key." },
+  });
+  expect(handIn).toMatchObject({
+    kind: "file",
+    detail: { label: "Vendor number", hint: "Only for a Sales key.", inputMode: "numeric" },
+  });
+  expect(handInOf({ kind: "file", accept: ".p8", hint: [] })).not.toHaveProperty("detail");
+  const file = new File(["-----BEGIN PRIVATE KEY-----"], "AuthKey_7KQ4M2ZX9P.p8");
+  expect(
+    await identityRequest({ made: false, file, field: "7KQ4M2ZX9P", detail: "85012345" }),
+  ).toEqual({
+    way: "handed_in",
+    value: "-----BEGIN PRIVATE KEY-----",
+    file_name: "AuthKey_7KQ4M2ZX9P.p8",
+    id: "7KQ4M2ZX9P",
+    detail: "85012345",
+  });
+  expect(await identityRequest({ made: false, file, field: "7KQ4M2ZX9P" })).not.toHaveProperty(
+    "detail",
+  );
 });

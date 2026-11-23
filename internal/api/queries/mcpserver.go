@@ -454,7 +454,8 @@ func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, e
 		Dependants: configapi.MCPDependants{MCPCleared: configapi.MCPCleared{
 			MCPEnv: []configapi.MCPBlockDependant{}, Sandbox: []configapi.MCPSandboxDependant{},
 			MCPLimits: []configapi.MCPBlockDependant{},
-		}, Secrets: []string{}},
+		}, RemovalSecrets: configapi.RemovalSecrets{Secrets: []string{},
+			KeptSecrets: []configapi.KeptSecret{}}},
 	}
 	if at >= 0 {
 		out.Server = status.Servers[at]

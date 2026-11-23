@@ -88,6 +88,22 @@ export function PhaseChart({
         refusal={series.refusal}
         detail={series.detail}
         loading={series.loading && !data}
+        placeholder={
+          <StackedColumns
+            label={`Tokens per company day by ${noun}`}
+            legend="head"
+            head={
+              <div className="spend-chart-head">
+                <h2 className="spend-title">Daily tokens by {noun}</h2>
+              </div>
+            }
+            series={[]}
+            buckets={[]}
+            height="fill"
+            minHeight="12rem"
+            loading
+          />
+        }
         // THE FIGURE IS TOKENS, so it is empty when nothing SPENT, which is
         // not when nothing was called: a call refused or failed is counted
         // and spends nothing, and gated on calls the chart drew an invented

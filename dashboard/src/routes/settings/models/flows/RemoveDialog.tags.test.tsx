@@ -66,7 +66,14 @@ function engine(): Call[] {
         return json(modelsDoc({}), 200, { ETag: DOCUMENT_TAG });
       }
       if (call.method === "GET" && call.path === "/config/llm-providers/sonnet/references") {
-        return json({ revision: "rev-1", references: REFERENCES }, 200);
+        return json(
+          {
+            revision: "rev-1",
+            references: REFERENCES,
+            dependants: { secrets: [], kept_secrets: [] },
+          },
+          200,
+        );
       }
       if (call.method === "GET" && call.path === "/config/llm-providers/sonnet") {
         return json({ harness: "claude-code", model: "sonnet" }, 200, { ETag: ENTRY_TAG });
@@ -91,7 +98,7 @@ function engine(): Call[] {
         }
         return parsed.searchParams.get("dry_run") === "true"
           ? json({ valid: true, base_revision_id: "rev-1", warnings: [], derived: null }, 200)
-          : json({ revision_id: "rev-2", epoch: 3, warnings: [], derived: null }, 201);
+          : json({ revision_id: "rev-2", epoch: 3, warnings: [], derived: null, secrets: [] }, 201);
       }
       return json({ error: "no_route" }, 404);
     }),

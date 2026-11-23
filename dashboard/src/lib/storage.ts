@@ -146,6 +146,11 @@ export const STORAGE_KEYS = {
    * `closed` (`components/ConfigWarnings.tsx`): the surface's name follows it.
    */
   warningsOpen: "crewlet.warnings.open/",
+  /**
+   * How many charts the Advisor's numbers drew last (`routes/advisor/Numbers.tsx`),
+   * the cards its page holds room for while the next answer is read.
+   */
+  advisorCharts: "crewlet.advisor.charts",
 } as const;
 
 export type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];

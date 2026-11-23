@@ -16,8 +16,6 @@
 
 // @vitest-environment node
 
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 import { buildHash, parseHash, samePath } from "./router.tsx";
 import {
@@ -68,7 +66,7 @@ import {
   resolves,
 } from "./routes.ts";
 import { ALL_PROJECTS, scopeAt } from "./scope.ts";
-import { segmentsOf } from "~/test/routes.ts";
+import { documentedRoutes, segmentsOf } from "~/test/routes.ts";
 import { principlesEditHref } from "~/routes/settings/principles/edit/address.ts";
 
 /** A company running every service built into Crewlet. */
@@ -1558,47 +1556,9 @@ test("three fixed ancestors is the deepest trail the route table produces", () =
  * destination the code declares must be written down.
  */
 describe("the information architecture", () => {
-  const DESIGN_DOC = fileURLToPath(
-    new URL("../../../docs/reference/dashboard-design.md", import.meta.url),
-  );
-  const HEADING = "### The routes";
-
-  /** The lines of the route table's own section, and no other section's. */
-  function region(): string[] {
-    const lines = readFileSync(DESIGN_DOC, "utf8").split("\n");
-    const start = lines.findIndex((line) => line.trim() === HEADING);
-    // A GUARD THAT CANNOT FIND ITS SUBJECT IS A GUARD THAT PASSES.
-    expect(
-      start,
-      `“${HEADING}” is not in dashboard-design.md — this guard is asserting nothing`,
-    ).toBeGreaterThan(-1);
-    const rest = lines.slice(start + 1);
-    const end = rest.findIndex((line) => /^#{2,3} /.test(line));
-    expect(end, `no heading closes “${HEADING}” — this guard is asserting nothing`).toBeGreaterThan(
-      -1,
-    );
-    return rest.slice(0, end);
-  }
-
-  /** Every address written in the table's ROUTE column, in document order. */
-  function documented(): string[] {
-    const out: string[] = [];
-    for (const line of region()) {
-      if (!line.startsWith("|")) continue;
-      // THE FIRST CELL ONLY: the Page column's prose names addresses too,
-      // including the ones it says are NOT routes.
-      for (const [token] of (line.split("|")[1] ?? "").matchAll(/`#\/[^`]*`/g)) {
-        out.push(token.slice(1, -1));
-      }
-    }
-    // A FLOOR, so a table that lost its rows cannot pass by holding none.
-    expect(out.length, "the route table holds too few routes to be the table").toBeGreaterThan(30);
-    return out;
-  }
-
   // DOC → CODE. Every address the document promises resolves to a screen.
   test("every route in the design doc resolves to a screen", () => {
-    for (const route of documented()) {
+    for (const route of documentedRoutes()) {
       const where = resolve(segmentsOf(route));
       expect(where.resolved, `${route} resolves to Not Found`).toBe(true);
     }
@@ -1607,7 +1567,7 @@ describe("the information architecture", () => {
   // CODE → DOC. Every workspace, every section and every destination is
   // written down at its own address.
   test("every workspace, section and destination is written down", () => {
-    const routes = new Set(documented().map((r) => r.replace(/^#\/$/, "#/")));
+    const routes = new Set(documentedRoutes().map((r) => r.replace(/^#\/$/, "#/")));
     const paths = [
       ...WORKSPACES.map((w) => w.path),
       ...WORKSPACES.flatMap((w) => w.sections.map((s) => s.path)),
@@ -1631,7 +1591,7 @@ describe("the information architecture", () => {
   // AND A RESERVATION NOTHING ADDRESSES IS ROUTE SPACE HELD FOR A SCREEN THAT
   // DOES NOT EXIST — which is how `audit` sat reserved with no route.
   test("every reserved segment is a segment of some documented route", () => {
-    const written = new Set(documented().flatMap((r) => r.replace(/^#\//, "").split("/")));
+    const written = new Set(documentedRoutes().flatMap((r) => r.replace(/^#\//, "").split("/")));
     for (const segment of RESERVED_SEGMENTS) {
       expect(written.has(segment), `“${segment}” is reserved but no documented route uses it`).toBe(
         true,
