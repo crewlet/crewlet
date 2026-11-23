@@ -31,9 +31,9 @@ func TestTheKeysAreOneListOfAtLeastOneKey(t *testing.T) {
 			t.Errorf("%s is not a leading field of the one set of at least one key: %+v", r.Field, r.Set)
 		}
 	}
-	if first := members[0].Set.Entry; first.Value != "marketing" || !strings.Contains(members[0].Set.Hint, first.Label) {
+	if first := members[0].Set.Entry; first.Value != "marketing" || !strings.Contains(members[0].Set.Hint.String(), first.Label) {
 		t.Errorf("the first role offered is %s and the hint says %q: the recommended role leads",
-			first.Value, members[0].Set.Hint)
+			first.Value, members[0].Set.Hint.String())
 	}
 	if p8 := members[1]; p8.Kind != setup.KindSecret || !p8.Shape.Multiline() || p8.Shape.Accept() != ".p8" {
 		t.Errorf("the .p8 field %s is not a secret that spans lines, offered as a .p8 file", p8.Field)
@@ -43,7 +43,7 @@ func TestTheKeysAreOneListOfAtLeastOneKey(t *testing.T) {
 	}
 	// A CALLER WITH NO FORM is told what to add and what a key holds.
 	if short := setup.CheckSets(reqs, nil); short == nil || !strings.HasPrefix(short.Problem, "Add a key") ||
-		!strings.HasSuffix(short.Problem, members[0].Set.Hint) {
+		!strings.HasSuffix(short.Problem, members[0].Set.Hint.String()) {
 		t.Errorf("a team with no key is refused with %+v, want what to add and the set's hint", short)
 	}
 }

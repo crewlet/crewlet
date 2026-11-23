@@ -25,6 +25,7 @@ import { asSentence } from "~/lib/format.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { pathSegment, rest, RestError } from "~/protocol/index.ts";
 import type { IntegrationRow, IntegrationTool, ReconcileFinding } from "~/contract/integrations.ts";
+import type { VendorTextPart } from "~/contract/vendortext.ts";
 import type { SetupRequirement, SetupSeatState, SetupToolState } from "~/protocol/types.ts";
 import {
   CATALOG,
@@ -65,8 +66,8 @@ export interface ToolStory {
   does: string[];
   /** How each agent gets its own identity there. */
   identity: string;
-  /** What a person does by hand, beyond typing values in. */
-  byHand?: string;
+  /** What a person does by hand, beyond typing values in, its vendor UI names marked. */
+  byHand?: VendorTextPart[];
 }
 
 export const STORIES: Record<string, ToolStory> = {
@@ -78,8 +79,11 @@ export const STORIES: Record<string, ToolStory> = {
     ],
     identity:
       "Agents never hold a Meta token. Crewlet keeps one system user's tokens from your own Meta app and makes every call for them.",
-    byHand:
-      "In your business portfolio, create a Business app and an Employee system user, assign it the ad accounts, generate its tokens and paste them here.",
+    byHand: [
+      { text: "In your business portfolio, create a Business app and an " },
+      { ui: ["Employee"] },
+      { text: " system user, assign it the ad accounts, generate its tokens and paste them here." },
+    ],
   },
   apple_ads: {
     does: [
@@ -89,8 +93,15 @@ export const STORIES: Record<string, ToolStory> = {
     ],
     identity:
       "Agents never hold Apple Ads access. Crewlet keeps the company's API users and makes every call for them.",
-    byHand:
-      "Invite an API user in Apple Ads, make its key pair with OpenSSL, upload the public key under that user's Account Settings, API, and paste the private key and the IDs Apple shows here. Apple has no API that creates users or keys.",
+    byHand: [
+      {
+        text: "Invite an API user in Apple Ads, make its key pair with OpenSSL, upload the public key under that user's ",
+      },
+      { ui: ["Account Settings", "API"] },
+      {
+        text: ", and paste the private key and the IDs Apple shows here. Apple has no API that creates users or keys.",
+      },
+    ],
   },
   app_store_connect: {
     does: [
@@ -100,8 +111,13 @@ export const STORIES: Record<string, ToolStory> = {
     ],
     identity:
       "Agents never hold a key: Crewlet makes every call for them through the least-privileged key that can make it.",
-    byHand:
-      "In App Store Connect, Users and Access, Integrations, the Account Holder requests API access once; then create the keys there. Apple has no API that creates them.",
+    byHand: [
+      { text: "In App Store Connect, " },
+      { ui: ["Users and Access", "Integrations"] },
+      {
+        text: ", the Account Holder requests API access once; then create the keys there. Apple has no API that creates them.",
+      },
+    ],
   },
   slack: {
     does: [
@@ -110,7 +126,7 @@ export const STORIES: Record<string, ToolStory> = {
       "Show they are working before they answer",
     ],
     identity: "Each agent posts as its own Slack app.",
-    byHand: "Create one Slack app per agent from the manifest Crewlet writes.",
+    byHand: [{ text: "Create one Slack app per agent from the manifest Crewlet writes." }],
   },
   mattermost: {
     does: [
@@ -127,7 +143,7 @@ export const STORIES: Record<string, ToolStory> = {
       "Look into failed checks on their own work",
     ],
     identity: "Each agent acts through its own GitHub App.",
-    byHand: "Create and install one app per agent. GitHub has no API for it.",
+    byHand: [{ text: "Create and install one app per agent. GitHub has no API for it." }],
   },
   gitlab: {
     does: [
@@ -160,8 +176,11 @@ export const STORIES: Record<string, ToolStory> = {
       "Purge the cache and edit cache rules, where you allow it",
     ],
     identity: "Crewlet mints a Cloudflare API token for each agent, limited to your zones.",
-    byHand:
-      "Create one account API token at Cloudflare for Crewlet to mint the agents' tokens from. It needs every permission an agent can be given.",
+    byHand: [
+      {
+        text: "Create one account API token at Cloudflare for Crewlet to mint the agents' tokens from. It needs every permission an agent can be given.",
+      },
+    ],
   },
   scaleway: {
     does: [
@@ -171,8 +190,17 @@ export const STORIES: Record<string, ToolStory> = {
     ],
     identity:
       "Crewlet makes a Scaleway IAM application for each agent, with its own policy and API key.",
-    byHand:
-      "Create an IAM application for Crewlet with an API key, and a policy giving it IAMApplicationManager, IAMPolicyManager and ProjectReadOnly on your Organization. That key is equivalent to an Organization administrator for IAM applications and policies, so give it a short expiry and rotate it.",
+    byHand: [
+      { text: "Create an IAM application for Crewlet with an API key, and a policy giving it " },
+      { ui: ["IAMApplicationManager"] },
+      { text: ", " },
+      { ui: ["IAMPolicyManager"] },
+      { text: " and " },
+      { ui: ["ProjectReadOnly"] },
+      {
+        text: " on your Organization. That key is equivalent to an Organization administrator for IAM applications and policies, so give it a short expiry and rotate it.",
+      },
+    ],
   },
   expo: {
     does: [
@@ -181,8 +209,11 @@ export const STORIES: Record<string, ToolStory> = {
       "Use the EAS CLI as themselves, with no login",
     ],
     identity: "Each agent acts at Expo as its own robot, with its own access token.",
-    byHand:
-      "Add a robot for each agent at Expo with the role chosen here, and paste its token. Expo has no API for it.",
+    byHand: [
+      {
+        text: "Add a robot for each agent at Expo with the role chosen here, and paste its token. Expo has no API for it.",
+      },
+    ],
   },
   digitalocean: {
     does: [
@@ -192,8 +223,11 @@ export const STORIES: Record<string, ToolStory> = {
     ],
     identity:
       "Each agent gets its own DigitalOcean token, so you can cut off one agent without touching the others.",
-    byHand:
-      "Create a personal access token for each agent in DigitalOcean's control panel, with the scopes Crewlet lists, and paste it here. DigitalOcean has no API to create one.",
+    byHand: [
+      {
+        text: "Create a personal access token for each agent in DigitalOcean's control panel, with the scopes Crewlet lists, and paste it here. DigitalOcean has no API to create one.",
+      },
+    ],
   },
   aws: {
     does: [
@@ -203,8 +237,11 @@ export const STORIES: Record<string, ToolStory> = {
     ],
     identity:
       "Crewlet makes an IAM role for each agent, limited by a permissions boundary, so CloudTrail names the agent for every call.",
-    byHand:
-      "Run the setup block the form gives you in AWS CloudShell. It creates one CloudFormation stack with Crewlet's sign-in, its provisioner role, the boundary and the level policies, and prints the line you paste back.",
+    byHand: [
+      {
+        text: "Run the setup block the form gives you in AWS CloudShell. It creates one CloudFormation stack with Crewlet's sign-in, its provisioner role, the boundary and the level policies, and prints the line you paste back.",
+      },
+    ],
   },
   google_cloud: {
     does: [
@@ -214,8 +251,11 @@ export const STORIES: Record<string, ToolStory> = {
     ],
     identity:
       "Crewlet makes a Google Cloud service account for each agent, in a project that holds only Crewlet's accounts.",
-    byHand:
-      "Create an empty project for Crewlet's accounts and run the setup block the form gives you. Then, on each project agents may use, run the project block from the docs, which creates Crewlet's Operator role and its limited grants.",
+    byHand: [
+      {
+        text: "Create an empty project for Crewlet's accounts and run the setup block the form gives you. Then, on each project agents may use, run the project block from the docs, which creates Crewlet's Operator role and its limited grants.",
+      },
+    ],
   },
   ssh: {
     does: [
@@ -225,8 +265,11 @@ export const STORIES: Record<string, ToolStory> = {
     ],
     identity:
       "Crewlet signs a certificate for each agent's session that names the agent and its turn, so each server's log says which agent ran each command.",
-    byHand:
-      "Save to create Crewlet's certificate authority, then add each server, compare its host key with the server's console, and run the server setup Crewlet gives you as root.",
+    byHand: [
+      {
+        text: "Save to create Crewlet's certificate authority, then add each server, compare its host key with the server's console, and run the server setup Crewlet gives you as root.",
+      },
+    ],
   },
   google_analytics: {
     does: [
@@ -236,8 +279,13 @@ export const STORIES: Record<string, ToolStory> = {
     ],
     identity:
       "Each agent has its own Google identity in your Google identity project; you add it to the property at the role it may act with. Its tokens never leave Crewlet.",
-    byHand:
-      "Connect Google Cloud first and run its setup block again, which turns on the Analytics APIs, then add each agent's email in Admin, Property access management.",
+    byHand: [
+      {
+        text: "Connect Google Cloud first and run its setup block again, which turns on the Analytics APIs, then add each agent's email in ",
+      },
+      { ui: ["Admin", "Property access management"] },
+      { text: "." },
+    ],
   },
   admob: {
     does: [
@@ -247,8 +295,13 @@ export const STORIES: Record<string, ToolStory> = {
     ],
     identity:
       "A person who manages your AdMob account signs in with Google once, as your own OAuth client; every agent reaches AdMob through that sign-in, which never leaves Crewlet.",
-    byHand:
-      "Make an OAuth client (Web application) in a Google Cloud project you control, turn on the AdMob API there, add Crewlet's callback address and publish its consent screen, then sign in with Google here.",
+    byHand: [
+      { text: "Make an OAuth client (" },
+      { ui: ["Web application"] },
+      {
+        text: ") in a Google Cloud project you control, turn on the AdMob API there, add Crewlet's callback address and publish its consent screen, then sign in with Google here.",
+      },
+    ],
   },
   adsense: {
     does: [
@@ -258,8 +311,13 @@ export const STORIES: Record<string, ToolStory> = {
     ],
     identity:
       "A person who manages your AdSense account signs in with Google once, as your own OAuth client; every agent reaches AdSense through that sign-in, which never leaves Crewlet.",
-    byHand:
-      "Make an OAuth client (Web application) in a Google Cloud project you control, turn on the AdSense Management API there, add Crewlet's callback address and publish its consent screen, then sign in with Google here.",
+    byHand: [
+      { text: "Make an OAuth client (" },
+      { ui: ["Web application"] },
+      {
+        text: ") in a Google Cloud project you control, turn on the AdSense Management API there, add Crewlet's callback address and publish its consent screen, then sign in with Google here.",
+      },
+    ],
   },
   google_ads: {
     does: [
@@ -269,8 +327,13 @@ export const STORIES: Record<string, ToolStory> = {
     ],
     identity:
       "Each agent has its own Google identity in your Google identity project; you add it to the account at the access level it may act with. Its tokens never leave Crewlet.",
-    byHand:
-      "Connect Google Cloud first and run its setup block again, which turns on the Google Ads API, then add each agent's email in Admin, Access and security, and set each account's spending caps.",
+    byHand: [
+      {
+        text: "Connect Google Cloud first and run its setup block again, which turns on the Google Ads API, then add each agent's email in ",
+      },
+      { ui: ["Admin", "Access and security"] },
+      { text: ", and set each account's spending caps." },
+    ],
   },
   search_console: {
     does: [
@@ -280,8 +343,13 @@ export const STORIES: Record<string, ToolStory> = {
     ],
     identity:
       "Each agent has its own Google identity in your Google identity project; you add it to each property at the permission it may act with. Its tokens never leave Crewlet.",
-    byHand:
-      "Connect Google Cloud first and run its setup block again, which turns on the Search Console APIs, then add each agent's email in Settings, Users and permissions.",
+    byHand: [
+      {
+        text: "Connect Google Cloud first and run its setup block again, which turns on the Search Console APIs, then add each agent's email in ",
+      },
+      { ui: ["Settings", "Users and permissions"] },
+      { text: "." },
+    ],
   },
   google_play: {
     does: [
@@ -291,8 +359,13 @@ export const STORIES: Record<string, ToolStory> = {
     ],
     identity:
       "Each agent has its own Google identity in your Google identity project; you invite it in Play Console with the app permissions it may act with. Its tokens never leave Crewlet.",
-    byHand:
-      "Connect Google Cloud first and run its setup block again, which turns on the Play APIs, then invite each agent's email in Play Console, Users and permissions.",
+    byHand: [
+      {
+        text: "Connect Google Cloud first and run its setup block again, which turns on the Play APIs, then invite each agent's email in Play Console, ",
+      },
+      { ui: ["Users and permissions"] },
+      { text: "." },
+    ],
   },
 };
 
@@ -803,7 +876,7 @@ export interface ToolInputs {
 /** One thing to have ready: a field by its label, a set by its heading and line. */
 export interface ReadyItem {
   label: string;
-  hint?: string | undefined;
+  hint?: VendorTextPart[] | undefined;
 }
 
 /**
@@ -815,7 +888,10 @@ export function haveReadyOf(reqs: SetupRequirement[]): ReadyItem[] {
   for (const ask of asksIn(reqs)) {
     const item =
       ask.kind === "set" ? { label: ask.set.label, hint: ask.set.hint } : { label: ask.r.label };
-    if (!out.some((o) => o.label === item.label && o.hint === item.hint)) out.push(item);
+    const same = (o: ReadyItem) =>
+      o.label === item.label &&
+      JSON.stringify(o.hint ?? null) === JSON.stringify(item.hint ?? null);
+    if (!out.some(same)) out.push(item);
   }
   return out;
 }

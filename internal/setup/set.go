@@ -3,6 +3,8 @@ package setup
 import (
 	"fmt"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/vendortext"
 )
 
 // Set is a list a form builds one entry at a time, at least Min entries:
@@ -24,7 +26,7 @@ type Set struct {
 	Item string `json:"item"`
 	// Hint is the line under the label, on the form and in what a person has
 	// ready before connecting: what an entry holds, how many, and which first.
-	Hint string `json:"hint"`
+	Hint vendortext.Text `json:"hint"`
 	// Add is the control that adds an entry ("Add a key").
 	Add string `json:"add"`
 	// Pick labels the choice of which entry to add ("Role").
@@ -57,7 +59,7 @@ func started(r Requirement, among []Requirement, answer func(Requirement) string
 // short is the refusal of fewer than Min entries, said in the set's own
 // words: its Add control, then its Hint. A form shows the Hint already and
 // says the first sentence alone.
-func (s *Set) short() string { return s.Add + " to continue. " + s.Hint }
+func (s *Set) short() string { return s.Add + " to continue. " + s.Hint.String() }
 
 // stored is a requirement's answer as the document holds it.
 func stored(r Requirement) string { return strings.TrimSpace(r.Stored) }

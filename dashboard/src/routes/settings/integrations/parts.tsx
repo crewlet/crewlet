@@ -19,6 +19,7 @@ import {
   StatusDot,
   Tag,
   Text,
+  vendorTextString,
   type CatalogTileStatus,
 } from "@crewlethq/ui";
 import { VendorMark } from "@crewlethq/icons";
@@ -28,6 +29,7 @@ import type { ReconcileFinding } from "~/contract/integrations.ts";
 import type { SetupRequirement, SetupSet } from "~/contract/setup.ts";
 import { asSentence, listed, relTime } from "~/lib/format.ts";
 import { marked } from "~/ui/Problems.tsx";
+import { VendorWords } from "~/ui/VendorWords.tsx";
 import { href } from "~/app/router.tsx";
 import { DisconnectDialog } from "../DisconnectDialog.tsx";
 import { asksIn, type SetEntry } from "../SetupForm.tsx";
@@ -384,11 +386,13 @@ export function BeforeYouStart({ tool }: { tool: Tool }) {
         <h3 className="t-label">Have ready</h3>
         <List variant="numbered">
           {tool.haveReady.map((item) => (
-            <List.Item key={`${item.label}\n${item.hint ?? ""}`}>
+            <List.Item key={`${item.label}\n${vendorTextString(item.hint ?? [])}`}>
               {item.hint ? (
                 <span className="col gap-1">
                   <span>{item.label}</span>
-                  <span className="t-caption secondary">{item.hint}</span>
+                  <span className="t-caption secondary">
+                    <VendorWords text={item.hint} />
+                  </span>
                 </span>
               ) : (
                 item.label
@@ -405,7 +409,9 @@ export function BeforeYouStart({ tool }: { tool: Tool }) {
       {tool.story.byHand && (
         <section aria-label="What you do by hand">
           <h3 className="t-label">You do by hand</h3>
-          <p className="t-body">{tool.story.byHand}</p>
+          <p className="t-body">
+            <VendorWords text={tool.story.byHand} />
+          </p>
         </section>
       )}
     </div>

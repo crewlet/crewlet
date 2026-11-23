@@ -78,7 +78,7 @@ import { href } from "~/app/router.tsx";
 import { useAssistantDraft, useDraftState, writeVia } from "~/app/assistant/draft.ts";
 import { SETUP_ASSISTANT_HELP, setupDraftFields } from "./setupDraft.ts";
 import { linkSegment } from "~/lib/segment.ts";
-import { withLink, type FieldLink } from "./setupWords.tsx";
+import { VendorWords } from "~/ui/VendorWords.tsx";
 import { SetupStepsAside, SetupStepsSheet } from "./SetupSteps.tsx";
 import { AddIdentity } from "~/components/growth/SetupSteps.tsx";
 import { useNarrowerThan } from "~/lib/useNarrowerThan.ts";
@@ -225,29 +225,29 @@ function fieldRefusal(err: RestError): { path: string; said: string } | undefine
 export function FieldHelp({
   r,
   fill,
-  link,
+  resolveUrl,
 }: {
   r: SetupRequirement;
   /** The form's `{field}` filling ([fillTemplate]). */
   fill: (text: string) => string;
-  link: FieldLink | undefined;
+  /** A link's address with the form's values filled in, "" until it can be ([vendorLink]). */
+  resolveUrl: (url: string) => string;
 }) {
-  const more = [r.more, r.check_note].filter((text): text is string => !!text);
+  const more = (r.more ?? []).length > 0;
   // THE SAME WORDS WHATEVER THE FIELD HOLDS: a connected app's settings are
   // the form its operator connected it with, and what a field holds is said
   // by the box, never by its help.
   return (
     <span className="int-help">
-      <span>{withLink(fill(r.hint ?? ""), link)}</span>
-      {more.length > 0 && (
+      <span>
+        <VendorWords text={r.hint} fill={fill} resolveUrl={resolveUrl} />
+      </span>
+      {(more || r.check_note) && (
         <Disclosure title="More" size="compact" flush headingLevel="none">
           <span>
-            {more.map((text, i) => (
-              <Fragment key={i}>
-                {i > 0 && " "}
-                {withLink(fill(text), link)}
-              </Fragment>
-            ))}
+            {more && <VendorWords text={r.more} fill={fill} resolveUrl={resolveUrl} />}
+            {more && r.check_note && " "}
+            {r.check_note && marked(fill(r.check_note))}
           </span>
         </Disclosure>
       )}
@@ -1332,7 +1332,7 @@ export function SetupForm({
           beside ? (
             <SetupStepsAside
               steps={steps}
-              linkOf={linkOf}
+              resolveUrl={stepUrl}
               open={chosen ?? connecting}
               onOpenChange={chooseSteps}
             />
@@ -1349,7 +1349,7 @@ export function SetupForm({
                   ? `Connect ${title}`
                   : `${title} settings`}
             </h3>
-            {steps.length > 0 && narrow && <SetupStepsSheet steps={steps} linkOf={linkOf} />}
+            {steps.length > 0 && narrow && <SetupStepsSheet steps={steps} resolveUrl={stepUrl} />}
           </div>
           {/* ONE FORM OVER THE WHOLE TOOL.
           Atlassian is Jira and Confluence, and it rendered as two blocks
@@ -1638,27 +1638,27 @@ export function SetupForm({
   }
 
   /**
-   * A field's vendor link: its words, and its address once each `{field}` has a
-   * value, typed or what a `${VAR}` reads as (never the reference's name).
+   * A vendor link's address in a section, once each `{field}` has a value,
+   * typed or what a `${VAR}` reads as (never the reference's name); "" until then.
    */
-  function fieldLink(section: SetupSection, r: SetupRequirement): FieldLink | undefined {
-    if (!r.vendor_url || !r.link_text) return undefined;
-    const href = vendorLink(
-      r.vendor_url,
+  function urlIn(section: SetupSection, url: string): string {
+    return vendorLink(
+      url,
       values,
       (field) => refKey(section, field),
       (field) => siblingOf(section, field)?.resolved_value ?? "",
     );
-    return { href, text: r.link_text };
   }
 
-  /** The vendor link of the field a Setup step names, wherever on the form it is. */
-  function linkOf(field: string): FieldLink | undefined {
-    for (const section of sections) {
-      const r = (ownBy.get(sectionKey(section)) ?? []).find((x) => x.field === field);
-      if (r) return fieldLink(section, r);
-    }
-    return undefined;
+  /** A Setup step's link, its `{field}`s read from whichever section of the form asks them. */
+  function stepUrl(url: string): string {
+    const field = /\{([a-z_]+)\}/.exec(url)?.[1];
+    const owner = field
+      ? sections.find((section) =>
+          (ownBy.get(sectionKey(section)) ?? []).some((x) => x.field === field),
+        )
+      : sections[0];
+    return owner ? urlIn(owner, url) : "";
   }
 
   /** A section's fields in order, each set drawn whole ([asksIn]). */
@@ -1734,7 +1734,7 @@ export function SetupForm({
             )}
           </div>
           <span id={`${headingId}-${set.id}-hint`} className="int-set-hint">
-            {set.hint}
+            <VendorWords text={set.hint} />
           </span>
           {shownEntries.map((entry) => (
             <section
@@ -1787,7 +1787,7 @@ export function SetupForm({
     const fill = (text: string) =>
       fillTemplate(text, (field) => values[refKey(section, field)] || defaultOf(section, field));
     const shown = publicView(r);
-    const help = <FieldHelp r={r} fill={fill} link={fieldLink(section, r)} />;
+    const help = <FieldHelp r={r} fill={fill} resolveUrl={(url) => urlIn(section, url)} />;
     return (
       <div key={key} className="col gap-1">
         {r.kind === "add_identity" && r.identity ? (

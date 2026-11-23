@@ -7,6 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/vendortext"
 )
 
 // defaultConnection is the connection the form fills for a company that names
@@ -36,7 +37,8 @@ func keySet(connection, slot string) *setup.Set {
 	words := slotWords[slot]
 	return &setup.Set{
 		ID: connection + "_keys", Label: "API keys", Item: "key", Add: "Add a key", Pick: "Role", Min: 1,
-		Hint:  "A key ID and .p8 file per Apple role: at least one, " + slotWords[firstSlot][0] + " first.",
+		Hint: vendortext.Of(vendortext.W("A key ID and `.p8` file per Apple role: at least one, "),
+			vendortext.UI(slotWords[firstSlot][0]), vendortext.W(" first.")),
 		Entry: setup.Choice{Value: slot, Label: words[0], Hint: words[1]},
 	}
 }
@@ -64,14 +66,16 @@ func Requirements(in *config.AppStoreConnect, resolve func(string) (string, bool
 		base := "integrations." + Kind + ".connections." + id
 		issuer := setup.Requirement{Field: id + "_issuer_id", Label: "Issuer ID", Kind: setup.KindID,
 			ConfigPath: base + ".issuer_id", Required: true, Connect: true, Shape: setup.ShapeUUID,
-			Format: "a UUID", Hint: "Shown above the keys on {link}.",
-			More:     "The Account Holder requests App Store Connect API access once, in Users and Access, Integrations.",
-			LinkText: "Users and Access, Integrations", VendorURL: "https://appstoreconnect.apple.com/access/integrations/api",
+			Format: "a UUID", Hint: vendortext.Of(vendortext.W("Shown above the keys on "),
+				vendortext.UI("Users and Access", "Integrations").At(TeamKeysURL), vendortext.W(".")),
+			More: vendortext.Of(vendortext.W("The Account Holder requests App Store Connect API access once, in "),
+				vendortext.UI("Users and Access", "Integrations").At(TeamKeysURL), vendortext.W(".")),
 			Blocks: integration.FindingCredentialMissing}
 		issuer.Present, issuer.Resolved, issuer.Stored = setup.Held(team.IssuerID, resolve)
 		vendor := setup.Requirement{Field: id + "_vendor_number", Label: "Vendor number", Kind: setup.KindID,
 			ConfigPath: base + ".vendor_number", Format: "digits",
-			Hint: "Optional: on Payments and Financial Reports, for sales reports."}
+			Hint: vendortext.Of(vendortext.W("Optional: on "), vendortext.UI("Payments and Financial Reports"),
+				vendortext.W(", for sales reports."))}
 		vendor.Present, vendor.Resolved, vendor.Stored = setup.Held(team.VendorNumber, resolve)
 		reqs = append(reqs, issuer, vendor)
 		filled := map[string]*config.AppStoreConnectKey{}
@@ -90,13 +94,13 @@ func Requirements(in *config.AppStoreConnect, resolve func(string) (string, bool
 			set := keySet(id, slot)
 			keyID := setup.Requirement{Field: id + "_" + slot + "_key_id", Label: "Key ID", Kind: setup.KindID,
 				ConfigPath: base + ".keys." + slot + ".key_id", Shape: setup.ShapeAppleKeyID, Set: set, Connect: true,
-				Format: "ten capital letters or digits", Hint: "Shown beside the key on {link}.",
-				LinkText: "Users and Access, Integrations", VendorURL: "https://appstoreconnect.apple.com/access/integrations/api"}
+				Format: "ten capital letters or digits", Hint: vendortext.Of(vendortext.W("Shown beside the key on "),
+					vendortext.UI("Users and Access", "Integrations").At(TeamKeysURL), vendortext.W("."))}
 			keyID.Present, keyID.Resolved, keyID.Stored = setup.Held(key.KeyID, resolve)
 			private := setup.Requirement{Field: id + "_" + slot + "_private_key", Label: "Private key (.p8)",
 				Kind: setup.KindSecret, ConfigPath: base + ".keys." + slot + ".private_key",
 				SecretName: secretName(id, slot), Shape: setup.ShapeAppleKey, Set: set, Connect: true,
-				Hint:      "Apple offers the .p8 file once: choose it, or paste it whole.",
+				Hint:      vendortext.Plain("Apple offers the `.p8` file once: choose it, or paste it whole."),
 				CheckNote: "Each key is proven with its team's issuer on the next pass, once saved."}
 			private.Present, private.Resolved, private.Stored = setup.Held(key.PrivateKey, resolve)
 			reqs = append(reqs, keyID, private)
