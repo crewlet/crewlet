@@ -181,6 +181,8 @@ fi
 var kimiRouting = slices.Concat(
 	routes(roleEndpoint, "KIMI_MODEL_PROVIDER_TYPE", "KIMI_MODEL_BASE_URL", "KIMI_CODE_BASE_URL", "KIMI_BASE_URL",
 		"KIMI_CODE_OAUTH_HOST", "KIMI_OAUTH_HOST"),
+	// The headers can carry routing, and are left out of the route as a sign
+	// variable, since they carry sign-in.
 	routes(roleSigns, "KIMI_MODEL_API_KEY", "KIMI_API_KEY", "KIMI_CODE_CUSTOM_HEADERS"),
 	routes(roleShapes, "KIMI_MODEL_NAME", "KIMI_MODEL_MAX_CONTEXT_SIZE", "KIMI_MODEL_MAX_OUTPUT_SIZE",
 		"KIMI_MODEL_CAPABILITIES", "KIMI_MODEL_THINKING_EFFORT", "KIMI_MODEL_ADAPTIVE_THINKING",

@@ -72,20 +72,17 @@ func TestACarriedSessionContinuesOnlyUnderTheEntryItRanUnder(t *testing.T) {
 	}
 }
 
-// EVERY ENDPOINT A RUNNER DECLARES IS ITS ENTRY'S ROUTE. A session continues
-// only under the entry it ran under, whose identity is built from the
-// variables its profile declares a route (harnessprofile.Profile.RouteEnv), so
-// an endpoint missing there lets an entry whose endpoint moved keep its
-// identity. Each registered runner declares, with its role, every variable
-// that moves, signs or shapes its requests ([router]); every one it declares
-// an endpoint is in its profile's route, every role is one of the four, and
-// every variable a pin fills from the entry's env is declared, so nothing a
-// run reads from the entry escapes the declaration.
+// EVERY ENDPOINT A RUNNER DECLARES IS ITS ENTRY'S ROUTE. An entry's identity
+// is built from the variables its profile declares a route
+// (harnessprofile.Profile.RouteEnv), so an endpoint missing there lets an
+// entry whose endpoint moved keep it. Each runner declares, with its role,
+// every variable that moves, signs or shapes its requests ([router]): every
+// endpoint is in the route, every role valid, and every pin that hands the run
+// a value of the entry's env hands its own declared variable's.
 //
-// Mutation: drop an endpoint from a profile's identity_env (Grok's
-// GROK_MODELS_BASE_URL, Copilot's GH_HOST, Gemini's GOOGLE_GEMINI_BASE_URL),
-// or a pinned endpoint from its runner's declaration (Qwen's OPENAI_BASE_URL),
-// and a row goes red.
+// Mutation: drop an endpoint from identity_env (Grok's GROK_MODELS_BASE_URL,
+// Copilot's GH_HOST, Gemini's GOOGLE_GEMINI_BASE_URL) or a pinned one from its
+// runner's declaration (Qwen's), or pin one variable from another's value: red.
 func TestEveryEndpointARunnerDeclaresIsItsEntrysRoute(t *testing.T) {
 	t.Parallel()
 	for _, h := range Registered() {
@@ -99,16 +96,31 @@ func TestEveryEndpointARunnerDeclaresIsItsEntrysRoute(t *testing.T) {
 			if r, ok := h.(router); ok {
 				declared = r.routing()
 			}
-			// A PIN READS THE ENTRY'S ENV where the entry's value is what it
-			// pins: asked again with every pinned name set, it pins that value.
+			// A PIN READS THE ENTRY'S ENV where it hands the run a value the
+			// entry set. Asked with every name it pins unset set, and then
+			// with every declared variable set, each to a value of its own,
+			// every pin holding one must hold its own variable's, declared.
 			paths, entry := Paths{Home: "/home/agent"}, map[string]string{}
+			sentinel := func(name string) string {
+				return "https://entry-" + strings.ToLower(name) + ".example.com"
+			}
 			for _, pin := range h.Pins(t.Context(), sandbox.RunRequest{Env: map[string]string{}}, paths) {
-				entry[pin.Name] = "https://entry-" + strings.ToLower(pin.Name) + ".example.com"
+				entry[pin.Name] = sentinel(pin.Name)
+			}
+			for _, v := range declared {
+				entry[v.Name] = sentinel(v.Name)
 			}
 			for _, pin := range h.Pins(t.Context(), sandbox.RunRequest{Env: entry}, paths) {
-				if pin.Value == entry[pin.Name] && !slices.Contains(routeNames(declared), pin.Name) {
-					t.Errorf("%s pins %s from the entry's env, and its runner declares no role for it: "+
-						"add it to its routing", h.Name(), pin.Name)
+				for name, value := range entry {
+					switch {
+					case pin.Value != value:
+					case name != pin.Name:
+						t.Errorf("%s pins %s from the entry's %s: a pin hands the run its own "+
+							"variable's value", h.Name(), pin.Name, name)
+					case !slices.Contains(routeNames(declared), pin.Name):
+						t.Errorf("%s pins %s from the entry's env, and its runner declares no role "+
+							"for it: add it to its routing", h.Name(), pin.Name)
+					}
 				}
 			}
 			route := profile.RouteEnv()

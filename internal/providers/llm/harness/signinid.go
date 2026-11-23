@@ -149,21 +149,20 @@ func (p *Provider) registry() *Plans {
 }
 
 // EntryID names the providers.llm entry a launch runs under and where its
-// calls go, built from its route and sign-in mode only: 32 hex characters of a
-// SHA-256 over the entry's key, harness and auth mode, the provider its model
-// names where the harness reads one there ([harnessprofile.Profile.ModelNamesProvider]),
-// and the env variables its profile declares a route, each reduced to its host
-// ([harnessprofile.RouteValue]). A carried session continues only under the
+// calls go, built from its route and sign-in mode only: 32 hex characters of an
+// HMAC, under its [Plans]' key as [Provider.SignInID] is, of the entry's key,
+// harness and auth mode, the provider its model names where the harness reads
+// one there ([harnessprofile.Profile.ModelNamesProvider]), and its routes as
+// [New] read them ([readRoutes]). A carried session continues only under the
 // entry it ran under unless its harness resumes on its launch's route
 // (internal/sandbox's EntryContinues). AN ALLOWLIST, never the env less its
-// credential names: the env is secret whole, and a header or an address can
-// carry a credential under any name. A plain digest, unlike
-// [Provider.SignInID], since nothing in it is a credential.
+// credential names: the env is secret whole. Keyed, so a credential that rode
+// into a route is never a plain digest; a keyring rotation moves every id.
 func (p *Provider) EntryID() string {
-	h := sha256.New()
+	mac := hmac.New(sha256.New, p.registry().key)
 	write := func(field string) {
-		h.Write([]byte(field))
-		h.Write([]byte{0})
+		mac.Write([]byte(field))
+		mac.Write([]byte{0})
 	}
 	write(p.key)
 	write(p.harness)
@@ -172,20 +171,10 @@ func (p *Provider) EntryID() string {
 		provider, _, _ := strings.Cut(p.model, "/")
 		write("model-provider=" + provider)
 	}
-	for _, name := range p.profile.RouteEnv() {
-		value := strings.TrimSpace(p.env[name])
-		if value == "" {
-			continue
-		}
-		// NEVER AS IT IS: a value that is no route (refused when the entry is
-		// built, [New]) stands for itself only as unreadable.
-		route, err := harnessprofile.RouteValue(value)
-		if err != nil {
-			route = "?"
-		}
-		write(name + "=" + route)
+	for _, name := range slices.Sorted(maps.Keys(p.routes)) {
+		write(name + "=" + p.routes[name])
 	}
-	return hex.EncodeToString(h.Sum(nil))[:entryIDChars]
+	return hex.EncodeToString(mac.Sum(nil))[:entryIDChars]
 }
 
 // entryIDChars is how much of the digest an [Provider.EntryID] keeps: 128 bits,
@@ -193,19 +182,23 @@ func (p *Provider) EntryID() string {
 // executorkeep.EntryMaxBytes.
 const entryIDChars = 32
 
-// routesRead refuses an entry whose env gives a route variable a value that is
-// no route ([harnessprofile.RouteValue]), as resolved: what its identity would
-// otherwise take whole. The error names the entry and the variable, never the
-// value, which may hold a credential.
-func routesRead(key string, profile harnessprofile.Profile, env map[string]string) error {
+// readRoutes is the routes of an entry's env, as resolved: each variable its
+// profile declares a route ([harnessprofile.Profile.RouteEnv]) the env sets,
+// as [harnessprofile.Profile.RouteValue] reads it, and an error for one that is
+// no route. Read once, by [New], so [Provider.EntryID] never reads a value
+// again. The error names the entry and the variable, never the value.
+func readRoutes(key string, profile harnessprofile.Profile, env map[string]string) (map[string]string, error) {
+	routes := map[string]string{}
 	for _, name := range profile.RouteEnv() {
 		value := strings.TrimSpace(env[name])
 		if value == "" {
 			continue
 		}
-		if _, err := harnessprofile.RouteValue(value); err != nil {
-			return fmt.Errorf("harness %q: env %s: %w", key, name, err)
+		route, err := profile.RouteValue(value)
+		if err != nil {
+			return nil, fmt.Errorf("harness %q: env %s: %w", key, name, err)
 		}
+		routes[name] = route
 	}
-	return nil
+	return routes, nil
 }
