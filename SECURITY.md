@@ -229,8 +229,9 @@ updates.
 - **Only the webhook and sandbox routes need to be public.** The routes a
   vendor or a box calls — `/webhooks/*` (vendor deliveries, verified by each
   vendor's signature or shared token) and the sandbox endpoints
-  `/otlp/{token}`, `/mcp/{token}`, `/box/git/*` and `/box/gitlet/*` (a signed,
-  expiring per-run token in the path, or as git's password) — hold no
+  `/otlp/{token}`, `/mcp/{token}`, `/box/git/*` and `/box/gitlet/*` (a signed
+  per-run token in the path, or as git's password: the tool bridge's has no
+  expiry and ends with its run, the others expire) — hold no
   credential of a person's. A box that does not share its node's loopback (a
   container on the runtime's network, a box on a satellite in another network
   or on a seats node without ingress) reaches only what is published, and it

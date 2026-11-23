@@ -410,13 +410,14 @@ type CoordinatorOptions struct {
 
 	// Ended is called for every run this node finishes with, however, and before
 	// every collection's wait for calls in flight (drain.go), so more than once
-	// per run: it is idempotent. It exists for credentials a run HOLDS: an open
-	// session would let a box that outlived its run keep a working key to a seat's
-	// surface for as long as its token lives. A parked run's session ends at its
-	// park's collection ([Coordinator.drainCalls]); waiting notes stay on the
-	// record ([CoordinatorOptions.SteersEnded]). IT WAITS FOR NO CALL STILL
-	// RUNNING (its update may land later, [BridgeLog.InFlight]): collections wait
-	// for those on the run's log, never the bridge (drain.go).
+	// per run: it is idempotent. It exists for credentials a run HOLDS: a bridge
+	// token carries no expiry, so an open session would let a box that outlived
+	// its run keep a working key to a seat's surface (internal/api/mcpbridge). A
+	// parked run's session ends at its park's collection ([Coordinator.drainCalls]);
+	// waiting notes stay on the record ([CoordinatorOptions.SteersEnded]). IT
+	// WAITS FOR NO CALL STILL RUNNING (its update may land later,
+	// [BridgeLog.InFlight]): collections wait for those on the run's log, never
+	// the bridge (drain.go).
 	Ended func(runID string)
 
 	// Recovered is told of each run this node takes over still RUNNING in its

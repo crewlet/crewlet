@@ -212,7 +212,7 @@ The rotation is a runbook with no window in it:
 
    **The longest token lifetime is the longest of the per-run tokens'**, each its own:
    - a coding box's git credential lives `host.RunTokenTTL`, seven days (dropped sooner, every running box's pushes and fetches are refused, so the drop waits at least that long after step 3);
-   - the tool bridge's lives as long as its run, ended only by the run's end or its turn's own wall-clock cap (a scheduled turn's `timeout_seconds`): an executor launched before step 3 and still working, or parked on a person's answer, holds one, and dropped sooner its every tool call and note is refused;
+   - the tool bridge's has no expiry of its own and lives as long as its run, ended only by the run's end (a scheduled turn's run ends at the collection after its `timeout_seconds`): an executor launched before step 3 and still working, or parked on a person's answer, holds one, and dropped sooner its every tool call and note is refused;
    - the OTLP receiver's, four hours from its job's start, once its box is provisioned (`sandbox.OtelTokenTTL`);
    - an artifact view ticket's, at most an hour and ten minutes.
 
