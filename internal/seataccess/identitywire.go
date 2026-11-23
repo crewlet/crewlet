@@ -107,6 +107,8 @@ type GuideMake struct {
 	Label       string `json:"label"`
 	Does        string `json:"does"`
 	Unavailable string `json:"unavailable,omitempty"`
+	// Reads are what making it does before the check's reads, as its check lists them.
+	Reads []GuideCheck `json:"reads,omitempty"`
 }
 
 // GuideCheck is one read the check makes.

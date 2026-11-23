@@ -44,7 +44,18 @@ func (s *syncer) identities(ctx context.Context, rec *Record, ref SeatRef, want 
 			in.Way, in.Value, in.FileName, in.ID = ask.Way, ask.Value, ask.FileName, ask.ID
 			lr.Identity, err = s.keepIdentity(ctx, maker, spec.Identity, in, rec.Handle)
 		default:
-			lr.Identity, err = s.checkIdentity(ctx, maker, spec.Identity, in, rec.Handle)
+			var unretired error
+			if refresher, ok := maker.(IdentityRefresher); ok && own && lr.Identity.Kept() {
+				lr.Identity, unretired, err = s.refreshIdentity(ctx, refresher, spec.Identity, in, rec.Handle)
+				in.Record = lr.Identity
+			}
+			if err == nil {
+				lr.Identity, err = s.checkIdentity(ctx, maker, spec.Identity, in, rec.Handle)
+			}
+			if unretired != nil && lr.Identity.Kept() && lr.Identity.Check != nil {
+				lr.Identity.Check.Said = strings.TrimSpace(lr.Identity.Check.Said + " Crewlet could not revoke the " +
+					"credential it replaced (" + unretired.Error() + "); it ends on its own.")
+			}
 		}
 		switch {
 		case err != nil && ask == nil:
@@ -158,6 +169,33 @@ func boolRank(b bool) int {
 	return 0
 }
 
+// refreshIdentity seals what a refresh minted over the kept credential, then
+// revokes the one it replaced. A revoke that fails is answered apart, for the
+// check's words: the new credential is sealed and works either way.
+func (s *syncer) refreshIdentity(ctx context.Context, r IdentityRefresher, spec IdentitySpec, in IdentityInput,
+	handle string) (rec *IdentityRecord, unretired, err error) {
+
+	got, err := r.RefreshIdentity(ctx, in)
+	if err != nil {
+		return in.Record, nil, err
+	}
+	if len(got.Minted) == 0 || spec.Credential == "" {
+		return in.Record, nil, s.revokeMinted(ctx, got.Minted)
+	}
+	sealed, err := s.sealIdentity(ctx, spec, got.Minted, handle)
+	if err != nil {
+		return in.Record, nil, errors.Join(err, s.revokeMinted(ctx, got.Minted))
+	}
+	out := *in.Record
+	if sealed != "" {
+		out.Credential = &Credential{Variable: sealed, MintedAt: s.now, By: s.in.By, Source: CredentialMinted}
+	}
+	if got.Retire != nil {
+		unretired = got.Retire(context.WithoutCancel(ctx))
+	}
+	return &out, unretired, nil
+}
+
 // keepIdentity checks what a person handed in, invited or asked Crewlet to
 // make, and keeps it only where the check finds it ready: sealed at the
 // seat's engine-owned name, and the identity it replaces left for a person to
@@ -202,11 +240,26 @@ func (s *syncer) keepIdentity(ctx context.Context, maker IdentityMaker, spec Ide
 			cred.Source = CredentialMinted
 		}
 	}
-	if in.Record.Kept() && in.Record.ID != kept.ID {
+	check := kept.Check
+	var unretired error
+	if kept.Retire != nil && in.Record.Kept() {
+		// THE NEW ONE IS SEALED: only now may what it replaced stop working.
+		unretired = kept.Retire(context.WithoutCancel(ctx))
+		if unretired != nil {
+			check.Said = strings.TrimSpace(check.Said + " Crewlet could not revoke what it replaced (" +
+				unretired.Error() + ").")
+		}
+	}
+	switch {
+	case in.Record.Kept() && in.Record.ID != kept.ID && (kept.Retire == nil || unretired != nil):
 		out.Retiring = append(slices.Clone(out.Retiring),
 			RetiringIdentity{ID: in.Record.ID, Name: in.Record.Name, Since: in.Record.Since})
+	case in.Record.Kept() && in.Record.ID != kept.ID:
+		// NOTHING RETIRES: what the lane sealed to revoke on a later pass is dead.
+		if err := s.clear(ctx, s.sinkOf(spec, in.Record.ID, handle), handle); err != nil {
+			return in.Record, err
+		}
 	}
-	check := kept.Check
 	out.Way, out.ID, out.Name, out.Since = kept.Way, kept.ID, kept.Name, s.now
 	out.Credential, out.Check, out.Attempt = cred, &check, nil
 	return &out, nil
