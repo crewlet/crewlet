@@ -147,6 +147,9 @@ func codingCallHeld(ctx context.Context, args codingArgs, hooks codingHooks, thr
 		return fmt.Errorf("connecting to the bridge at %s: %w", bridge, err)
 	}
 	defer func() { _ = session.Close() }()
+	if err := listBridge(ctx, session); err != nil {
+		return err
+	}
 	id = claudeID("toolu_")
 	submission := map[string]any{"outcome": "delivered", "summary": "Closed before the answer."}
 	stream.toolUse(id, runner.SubmitWorkTool, submission)

@@ -19,7 +19,7 @@ const rowCrossing = time.Hour
 // crossingMarks is a pending store whose connection takes rowCrossing to carry
 // a run's row at its bound, recording when each write was handed over and its
 // context's deadline, on the bubble clock. It answers every write as taken;
-// any other call panics on the nil store underneath, since these two writes
+// any other call panics on the nil store underneath, since these writes
 // call nothing else.
 type crossingMarks struct {
 	sandbox.PendingStore
@@ -50,12 +50,17 @@ func (s *crossingMarks) MarkSessionStart(ctx context.Context, _, _ string, _ san
 	return true, nil
 }
 
+func (s *crossingMarks) MarkBridgeConnected(ctx context.Context, _, _ string) (bool, error) {
+	s.note(ctx, "MarkBridgeConnected")
+	return true, nil
+}
+
 func (s *crossingMarks) MarkPulled(ctx context.Context, _, _ string) (bool, error) {
 	s.note(ctx, "MarkPulled")
 	return true, nil
 }
 
-// The session-start and pull-mark writes of a run's row are given their five
+// The session-start, bridge-connect and pull-mark writes of a run's row are given their five
 // seconds AND the time the store's connection takes to carry a row at its
 // bound, read and written (sandbox.RowBudget): a non-`data` node reaches the
 // store across its leaf link, and a row of up to six megabytes
@@ -80,6 +85,12 @@ func TestTheEnginesWritesOfARunsRowAreGivenItsCrossing(t *testing.T) {
 			write: func(ctx context.Context, store sandbox.PendingStore) {
 				newBridgeLedger(store, nil).recordStart(ctx, "t-session-start", "launch-1",
 					sandbox.SessionStartContinued)
+			},
+		},
+		{
+			name: "a job's harness connecting its bridge", mark: "MarkBridgeConnected", reason: sessionStartRecordBudget,
+			write: func(ctx context.Context, store sandbox.PendingStore) {
+				newBridgeLedger(store, nil).recordConnected(ctx, "t-bridge-connected", "launch-1")
 			},
 		},
 		{

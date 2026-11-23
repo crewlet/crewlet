@@ -54,6 +54,11 @@ func (s *crossingRows) MarkSessionStart(ctx context.Context, turnID, launch stri
 	return s.PendingStore.MarkSessionStart(ctx, turnID, launch, start)
 }
 
+func (s *crossingRows) MarkBridgeConnected(ctx context.Context, turnID, launch string) (bool, error) {
+	s.note(ctx, "MarkBridgeConnected")
+	return s.PendingStore.MarkBridgeConnected(ctx, turnID, launch)
+}
+
 func (s *crossingRows) MarkPulled(ctx context.Context, turnID, launch string) (bool, error) {
 	s.note(ctx, "MarkPulled")
 	return s.PendingStore.MarkPulled(ctx, turnID, launch)
@@ -65,13 +70,13 @@ func (s *crossingRows) SettleTake(ctx context.Context, turnID string, settle san
 	return s.PendingStore.SettleTake(ctx, turnID, settle)
 }
 
-// The engine's own-budget writes of a run's row (the session start, the pull
-// mark, each settle attempt) get their reason's budget plus the time a row at
+// The engine's own-budget writes of a run's row (the session start, the bridge
+// connect, the pull mark, each settle attempt) get their reason's budget plus the time a row at
 // its bound takes to cross (sandbox.RowBudget): a row is written whole, up to
 // six megabytes, at a slow link's pace, and the store keeps a caller's
 // deadline as it is. Exact, in a bubble.
 //
-// Mutation: hold any of the three to its reason alone, and its row reads the
+// Mutation: hold any of them to its reason alone, and its row reads the
 // crossing short.
 func TestTheEnginesWritesOfARunsRowAreGivenTheRowsCrossingBesideTheirReason(t *testing.T) {
 	t.Parallel()
@@ -87,6 +92,13 @@ func TestTheEnginesWritesOfARunsRowAreGivenTheRowsCrossingBesideTheirReason(t *t
 			want: sessionStartRecordBudget + crossing,
 			path: func(ctx context.Context, store sandbox.PendingStore) {
 				newBridgeLedger(store, nil).recordStart(ctx, "t1", "launch-1", sandbox.SessionStartContinued)
+			},
+		},
+		{
+			name: "a job's harness connecting its bridge", write: "MarkBridgeConnected",
+			want: sessionStartRecordBudget + crossing,
+			path: func(ctx context.Context, store sandbox.PendingStore) {
+				newBridgeLedger(store, nil).recordConnected(ctx, "t1", "launch-1")
 			},
 		},
 		{

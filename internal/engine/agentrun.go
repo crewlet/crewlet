@@ -339,6 +339,9 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		// held to it, and the job's record keeps it (internal/api/mcpbridge,
 		// started.go).
 		Started: boxStarted(ledger, l.turn.RunID, continuing.Load, req.Started),
+		// AND THAT ITS HARNESS CONNECTED ITS BRIDGE, on the job's record, which
+		// its collection fails a job that ended without (connected.go there).
+		Connected: func(ctx context.Context) { ledger.connected(ctx, l.turn.RunID) },
 	}
 
 	settings := seatSandbox(company, handle)

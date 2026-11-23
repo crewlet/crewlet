@@ -279,6 +279,26 @@
 // executor's call commonly takes, a reverse proxy or tunnel connecting on 127.0.0.1 and
 // passing the public Host on. A leaked token is bounded by its run ([Session.Deadline]).
 //
+// # A harness that never connected its bridge ran without it
+//
+// A settings file in the box (its home's, the repository's, a system-wide or managed
+// one), a plugin or an extension can switch the server named `crewlet` off, or put
+// one of its own under that name, and a harness that cannot reach the bridge in its
+// startup wait goes on without it (Grok Build after two seconds, OpenCode once its
+// server reports the bridge failed). Such a run has none of its seat's tools, and
+// what it reports is no result. So an opening tells its session ([Session.Connected])
+// the first time the harness LISTS THE ENGINE'S OWN SERVER'S TOOLS: never on
+// `initialize`, which Claude Code's stateless probe and a hook's own client also
+// send, nor on a seat server's list or a notes request, which come without the
+// harness's server. The engine records it on the job's row, which the node collecting
+// the job reads wherever the box dialled, and the collection fails a job its harness
+// ended without it (internal/sandbox/executor's Collect). Every in-box harness lists
+// at startup, before its first model request, even for a run answered in plain text
+// (measured on Claude Code 2.1.330, Codex 0.171.0, Gemini CLI 0.70.0, Qwen Code
+// 0.28.4, OpenCode 2.3.2, Copilot 1.0.114, Grok Build 1.0.92, Muse Code 1.4.25, Kimi
+// Code 2.7.2 and Pi 1.6.0), so none is exempt. Each harness's own guard still says
+// earlier, and by name, what took the server's place.
+//
 // # A hook's cancel is heard before the SDK
 //
 // A harness that gives a hook's call up sends `notifications/cancelled`; the note
@@ -433,6 +453,11 @@ type Session struct {
 	// so no call of the run is admitted against the guard of a session it is
 	// not in (see started.go). Nil tells nobody, which a test's session has.
 	Started func(ctx context.Context, fellBack bool)
+
+	// Connected is told once per opening that the box's harness connected its
+	// bridge: it listed the engine's own server's tools (connected.go), under the
+	// run's context. Nil tells nobody, which a test's session has.
+	Connected func(ctx context.Context)
 
 	mu sync.Mutex
 	// live is the session's current opening; nil until opened.
@@ -1434,6 +1459,10 @@ type binding struct {
 	startMu      sync.Mutex
 	started      bool
 	startedFresh bool
+
+	// listed tells the session once, per opening, that the harness listed the
+	// engine's own server's tools ([binding.listMiddleware]).
+	listed sync.Once
 }
 
 var _ toolsession.Dispatcher = (*binding)(nil)
@@ -1481,6 +1510,9 @@ func newBinding(ctx context.Context, s *Session, where route, calls *bridgedCall
 	own.MCP().AddReceivingMiddleware(opened.steerMiddleware)
 	// skill_loaded, ANSWERED THE SAME WAY: a hook's report, never listed (skills.go).
 	own.MCP().AddReceivingMiddleware(opened.skillMiddleware)
+	// AND THE HARNESS'S LIST OF THESE TOOLS, its word that it connected its bridge
+	// (connected.go): on the engine's own server alone.
+	own.MCP().AddReceivingMiddleware(opened.listMiddleware)
 	// THE ANSWER TO AN ACTIVATION WAITS FOR THE BOX'S RE-LIST
 	// ([toolsession.Server.HoldAnswersForRelist]): Claude Code and OpenCode
 	// re-read their tool list when told it changed, and answered at once one asks
