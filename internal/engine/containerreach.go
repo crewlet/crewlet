@@ -10,7 +10,7 @@ import (
 
 // ContainerReachWarnings is the advisory for a Linux host (goos, as
 // runtime.GOOS) whose container boxes cannot reach the engine: one starts on
-// this node — a seat's, where it runs seats and the company reaches the
+// this node — a seat's, where it runs seats and a seat's box is placed in the
 // `container` cell, or a check's, where it serves Gitlet and the company runs
 // checks — and the listener a box dials binds loopback. Neither tier can say
 // it alone (the bind is Tier A's, the cells the company's). On Linux a box
@@ -25,11 +25,10 @@ func ContainerReachWarnings(boot *config.Bootstrap, c *config.Company, goos stri
 		return nil
 	}
 	profile := boot.Profile("")
+	_, contained := c.SeatPlacements()[config.PlacementContainer]
+	seats := profile.RunsSeats() && contained
 	checks := profile.Roles.Has(placement.RoleGitlet) && c.ChecksRefusal() == ""
-	if !profile.RunsIngress() || (!profile.RunsSeats() && !checks) {
-		return nil
-	}
-	if _, ok := c.SandboxPlacements()[config.PlacementContainer]; !ok {
+	if !profile.RunsIngress() || (!seats && !checks) {
 		return nil
 	}
 	path, host := "api.host", boot.API.Host
