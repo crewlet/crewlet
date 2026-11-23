@@ -142,7 +142,7 @@ func TestAGrokSkillHookReportsOnlyTheRunsOwnWholeRead(t *testing.T) {
 	t.Parallel()
 	read := grokInput(t, "posttooluse-skill-read.json")
 	const child = "01a205c8-9b2b-79e3-9a56-a4594d1d97c3"
-	part := strings.Replace(read, `"raw_output":"---\n`, `"raw_output":"`, 1)
+	part := strings.ReplaceAll(read, `"raw_output":"---\n`, `"raw_output":"`)
 	if part == read {
 		t.Fatal("the captured read's raw_output does not open as the skill file does")
 	}
