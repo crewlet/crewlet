@@ -242,14 +242,16 @@ cut rather than refuse: the status halves its fault, then its report's
 sentence, and drops its link, keeping exact the address and the
 registration's name it compares, whose settings are bounded instead (2,048
 and 255 characters, as written); the findings keep each text to 500 bytes,
-then, only while past the bound and from the tail, cut words before names and
-what nobody owes before what a person does: agents' own findings lose their
-words, findings no person owes lose theirs and then go, those a person owes
-lose theirs, subject lists are cut (the reported finding's last), and those a
-person owes go, the reported finding first and whole. A cut may still hide a
-seat's name, counted apart from everything else: nothing bounds a company's
-seats, and 500 to 1,000 wordless findings naming one fill the record. Its
-widest status is 14,766 bytes stored. 64 KiB, not 256: the dashboard reads
+then, only while past the bound and from the tail, cut every word before any
+name and what nobody owes before what a person does: agents' own findings
+lose their words, then findings no person owes, then those a person owes;
+findings that can name no seat go, nobody's first; subject lists are cut (the
+reported finding's last); the rest go, nobody's first. The reported finding
+stays first, never dropped and never without its words. Each finding is
+counted once, by what the cut left of it, and dropped ones a person owes
+apart; a cut may still hide a seat's name, counted apart again: nothing
+bounds a company's seats, and 500 to 1,000 wordless findings naming one fill
+the record. Its widest status is 14,801 bytes stored. 64 KiB, not 256: the dashboard reads
 every surface's findings in one pass, about 46 s at the floor for 24 at the
 bound, where 256 KiB would take three minutes.
 
