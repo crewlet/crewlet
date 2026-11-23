@@ -1,6 +1,7 @@
 package artifactupload
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
@@ -201,18 +203,38 @@ func (s *Service) readRecord(ctx context.Context, id string) (*record, uint64, e
 }
 
 // writeRecord writes r at rev (0 creating it), answering the revision written
-// and zero for a lost race.
+// and zero for a lost race. A record past [coord.MaxUploadRecordBytes] is
+// refused before it is sent: only retries of one publish that each ended
+// unknown and stored other bytes grow one that far.
 func (s *Service) writeRecord(ctx context.Context, r *record, rev uint64) (uint64, error) {
 	r.V = recordVersion
-	raw, err := json.Marshal(r)
+	raw, err := encodeRecord(r)
 	if err != nil {
 		return 0, fmt.Errorf("artifactupload: encode upload %s: %w", r.ID, err)
+	}
+	if err := coord.HoldValue(coord.UploadRecordKey(r.ID), len(raw), coord.MaxUploadRecordBytes); err != nil {
+		return 0, fmt.Errorf("%w: upload %s would record %d files: publish it with fewer files, or begin "+
+			"another upload: %w", ErrInvalid, r.ID, len(r.Files), err)
 	}
 	wrote, err := s.res.SwapUploadRecord(ctx, r.ID, raw, rev)
 	if err != nil {
 		return 0, fmt.Errorf("artifactupload: write upload %s: %w", r.ID, err)
 	}
 	return wrote, nil
+}
+
+// encodeRecord is r as stored: without HTML escaping, so a path holding `<`,
+// `>` or `&` keeps its own bytes rather than six apiece ([coord.MaxUploadRecordBytes]
+// counts each path byte as two at most). Every reader decodes it with
+// encoding/json, which reads both spellings alike.
+func encodeRecord(r *record) ([]byte, error) {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(r); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(b.Bytes(), []byte("\n")), nil
 }
 
 // updateRecord applies change to the upload's current record and writes it,
