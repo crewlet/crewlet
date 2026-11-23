@@ -130,6 +130,12 @@ type IdentitySpec struct {
 	// Name is the vendor's rule for the name Crewlet gives the identity.
 	Name seatname.Rule
 
+	// Standing is a lane whose identity Crewlet already made for every seat
+	// (a Google growth identity), which a person only adds at the product:
+	// every pass checks it and keeps it exactly while it passes, so nobody
+	// comes back to ask, and one removed at the product reads Needs you again.
+	Standing bool
+
 	// Credential is the field the seat's own identity's credential is sealed
 	// under ([SinkName]: `APP_STORE_CONNECT_KEY_<HANDLE>` for `KEY`), empty
 	// for an identity with none to seal. Never one of [Catalog.Credentials],
@@ -220,6 +226,11 @@ type IdentityRecord struct {
 	// Retiring are the identities a replacement or a drop superseded, which
 	// a person revokes at the vendor, oldest first.
 	Retiring []RetiringIdentity `json:"retiring,omitempty"`
+
+	// Scope is what a standing identity was last checked against, which its
+	// drop takes it off once the seat's own scope is gone (a seat turned off
+	// with nothing left named, or removed).
+	Scope []string `json:"scope,omitempty"`
 }
 
 // Waits reports a record a pass must keep: an identity kept, or one still

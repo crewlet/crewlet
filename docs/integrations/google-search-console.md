@@ -26,7 +26,17 @@ The permissions Search Console gives, least first: **Restricted user** (sees per
 
 1. Connect [Google Cloud](google-cloud.md) first; no project needs preparing. Turn Search Console on, then run the Google Cloud connection's Cloud Shell block again: it turns on the Search Console, Site Verification and Indexing APIs in the identity project and makes the company reader ([Google's growth products sign in through this identity](google-cloud.md#googles-growth-products-sign-in-through-this-identity)).
 2. Add the company reader's email, shown on the form, to each property as a **Restricted user**: Search Console, Settings, Users and permissions, Add user. Crewlet reads the company's own figures as this identity, never as an agent's.
-3. Turn agents on from the Agents tab, each with its sites. Add each agent's email, shown on its row, to those properties at the permission its level needs. An agent at `administer` can also verify a property itself and become its owner, once an administrator approves.
+3. Turn agents on from the Agents tab, each with its sites, and give each its identity ([below](#give-an-agent-its-own-identity)). An agent at `administer` can also verify a property itself and become its owner, once an administrator approves.
+
+## Give an agent its own identity
+
+An agent's identity at Search Console is its own Google growth identity, which Crewlet made; what is left is an owner adding it to each property, since Search Console has no API that adds a user. Search Console keeps no history of who did what, so the agent's own identity is what lets you remove one agent alone. Its row on the Agents tab reads **Needs you** until the identity reaches each of its properties, and **Set up identity** in its box shows the steps, with the email ready to copy:
+
+1. In Search Console, choose the property, then open **Settings**, **Users and permissions**.
+2. Press **Add user** and paste the agent's email.
+3. Pick the permission its level needs, **Restricted user** at `read`, **Full user** at `operate` and **Owner** at `administer`, and save. The Indexing API needs **Owner** at any level.
+
+**The check, on every pass:** Crewlet signs in as the identity and lists its sites, each with the identity's own permission there: a property not listed, or listed with no permission, is not added yet; one below the level's is the wrong role; Owner on a `read` agent is a warning. The agent is ready once every property passes, and reads Needs you again if somebody removes it there; calls Google refuses meanwhile name what is missing.
 
 ## The agents' tools
 

@@ -59,7 +59,7 @@ const CONNECTIONS: GrowthConnection[] = [
   {
     id: "main",
     name: "Nimbus team",
-    identity: "crewlet-g-growth-ab12@identity.example.com",
+    identity: "crewlet-growth-ab12cd@identity.example.com",
     state: "connected",
     roles_held: ["marketer"],
     accounts: [
@@ -103,7 +103,7 @@ test("each connection says who Crewlet is there, the roles it holds and every ac
     />,
   );
   const main = screen.getByRole("region", { name: "Nimbus team" });
-  expect(within(main).getByText("crewlet-g-growth-ab12@identity.example.com")).toBeTruthy();
+  expect(within(main).getByText("crewlet-growth-ab12cd@identity.example.com")).toBeTruthy();
   expect(within(main).getByText("Marketer")).toBeTruthy();
   expect(within(main).getByText("Nimbus web")).toBeTruthy();
   expect(within(main).getAllByText("987654321")).toHaveLength(1);
@@ -188,8 +188,8 @@ test("a product with no connection says so", () => {
 });
 
 test("an identity too long for a phone may break after its own @, dots and dashes, and reads whole", () => {
-  const { container } = render(<span>{breakable("crewlet-g-lead@id.example.com")}</span>);
-  expect(container.textContent).toBe("crewlet-g-lead@id.example.com");
+  const { container } = render(<span>{breakable("crewlet-lead-ab12cd@id.example.com")}</span>);
+  expect(container.textContent).toBe("crewlet-lead-ab12cd@id.example.com");
   expect(container.querySelectorAll("wbr")).toHaveLength(5);
 });
 

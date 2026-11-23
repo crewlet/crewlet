@@ -1077,7 +1077,7 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		// identities, which the Google identity pass makes.
 		block := company.Integrations.GoogleAnalytics
 		guide = googleanalytics.Guide()
-		reqs = googleanalytics.Requirements(company)
+		reqs = googleanalytics.Requirements(company, s.resolve)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindGoogleAds:
@@ -1101,7 +1101,7 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		// for an administrator.
 		block := company.Integrations.GooglePlay
 		guide = googleplay.Guide()
-		reqs = googleplay.Requirements(company)
+		reqs = googleplay.Requirements(company, s.resolve)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindSlack:

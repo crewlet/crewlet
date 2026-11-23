@@ -203,6 +203,9 @@ func IdentityOf(v Vendor, c *config.Company, seat SeatRef, lane Lane, want Desir
 	var g IdentityGuide
 	if guider, ok := v.(IdentityGuider); ok && is.Offered() && c != nil {
 		g = guider.IdentityGuide(c, seat, lane, want)
+		if is.Standing {
+			standingGuide(&g, rec)
+		}
 		out.Guide = &g
 	}
 	out.Needs = g.Role
@@ -256,7 +259,8 @@ func identityOwn(out *IdentityAnswer, is IdentitySpec, rec *IdentityRecord, agen
 	}
 	switch {
 	case status.works():
-		out.Holds, out.Replace = HoldsOwn, true
+		// A STANDING IDENTITY IS THE SEAT'S FOR GOOD: nothing replaces it.
+		out.Holds, out.Replace = HoldsOwn, !is.Standing
 		out.Said = vendor + " sees " + agent + "'s own " + noun
 		if out.Name != "" {
 			out.Said += ", " + out.Name
@@ -281,7 +285,10 @@ func identityOwn(out *IdentityAnswer, is IdentitySpec, rec *IdentityRecord, agen
 		if is.Company {
 			out.Said += " Until then " + vendor + " sees " + company + "."
 		}
-		if rec != nil && rec.Attempt != nil && status != IdentityNone {
+		if is.Standing {
+			out.Said = standingSaid(status, agent, vendor, noun)
+		}
+		if rec != nil && rec.Attempt != nil && (status != IdentityNone || rec.Attempt.Said != "") {
 			out.Problem = problemOf(rec.Attempt, vendor)
 		}
 		if out.Blocked != "" {
@@ -323,6 +330,45 @@ func AccountIdentity(have Observed) *IdentityRecord {
 	}
 	id := firstNonEmpty(have.AccountID, have.Account, have.Credential.Variable)
 	return &IdentityRecord{ID: id, Name: have.Account, Check: check, Since: have.Credential.MintedAt}
+}
+
+// standingSaid is the box's line for a standing identity that does not pass:
+// it exists already, so what a person does depends on what the check found.
+func standingSaid(status IdentityStatus, agent, vendor, noun string) string {
+	switch status {
+	case IdentityWrongRole:
+		return "Needs you: " + agent + "'s own " + noun + " holds the wrong role in " + vendor +
+			", which refuses the calls it needs more for."
+	case IdentityRefused:
+		return "Refused: Google does not let Crewlet sign in as " + agent + "'s own " + noun + ", so " +
+			vendor + " refuses its calls."
+	}
+	return "Needs you: add " + agent + "'s own " + noun + " in " + vendor + ". Until then " + vendor +
+		" refuses its calls."
+}
+
+// standingGuide names, in g, the standing identity rec holds where the
+// vendor knows it by another name than the rule gives now (one made before
+// the company was renamed): the name to add is the one that exists.
+func standingGuide(g *IdentityGuide, rec *IdentityRecord) {
+	var name string
+	switch {
+	case rec.Kept():
+		name = firstNonEmpty(rec.Name, rec.ID)
+	case rec != nil && rec.Attempt != nil:
+		name = firstNonEmpty(rec.Attempt.Name, rec.Attempt.ID)
+	}
+	if name == "" || name == g.Name {
+		return
+	}
+	for i := range g.Steps {
+		if c := g.Steps[i].Copy; c != nil && c.Value == g.Name {
+			copied := *c
+			copied.Value = name
+			g.Steps[i].Copy = &copied
+		}
+	}
+	g.Name = name
 }
 
 // problemOf is a failed check as the box's callout.

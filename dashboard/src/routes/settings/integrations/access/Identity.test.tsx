@@ -1,0 +1,144 @@
+/**
+ * A standing identity (a Google growth identity Crewlet made, which a person
+ * adds at the product) on the one pattern: its box sets it up, never
+ * replaces it, and its sheet is the engine's guide with nothing to bring back.
+ */
+
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, expect, test, vi } from "vitest";
+import { LayerHost } from "@crewlethq/ui";
+import type { AccessIdentity, AccessIdentityGuide, AccessSeat } from "~/contract/access.ts";
+import { IdentityBox, IdentitySheet, identityRequest } from "./Identity.tsx";
+
+afterEach(cleanup);
+
+const EMAIL = "crewlet-mobile-lead-0a1b2c@acme-crewlet-id.iam.gserviceaccount.com";
+
+const SEAT: AccessSeat = { handle: "mobile-lead", name: "Mobile lead", lanes: {} };
+
+/** Play Console's sheet for Mobile lead's identity at View, as the engine words it. */
+const PLAY_GUIDE: AccessIdentityGuide = {
+  vendor: "Google Play",
+  noun: "Google identity",
+  records: "its changes under its own email in the activity log",
+  why: "Google Play lets Mobile lead in as its own Google identity and records its changes under its own email in the activity log.",
+  name: EMAIL,
+  name_rule: "Crewlet made it; it cannot be renamed.",
+  name_what: "Google identity",
+  role: "View app information (read-only)",
+  steps: [
+    { text: "Open Play Console, then Users and permissions." },
+    { text: "Press Invite new users." },
+    { text: "Email address:", copy: { label: "identity's email", value: EMAIL } },
+    { text: "Under App permissions, add com.acme.app." },
+    { text: "Tick View app information (read-only)." },
+    { text: "Leave Account permissions empty, then press Invite user." },
+  ],
+  link: {
+    label: "Open Users and permissions",
+    url: "https://play.google.com/console/developers/users-and-permissions",
+  },
+  back: {
+    kind: "nothing",
+    text: "Nothing to bring back: Crewlet checks Google Play as the identity.",
+  },
+  make: {
+    label: "Add it for me",
+    does: `With a Play Console admin's sign-in, Crewlet adds ${EMAIL} to com.acme.app with View app information (read-only).`,
+  },
+  checks: [
+    { id: "token", label: `Sign in as ${EMAIL}` },
+    { id: "reach", label: "Find each of the agent's apps" },
+    { id: "role", label: "Read its role on each app" },
+  ],
+};
+
+/** Mobile lead's identity not added yet: its own, which Play refuses until it is. */
+const NOT_ADDED: AccessIdentity = {
+  offered: true,
+  mode: "own",
+  holds: "own",
+  status: "none",
+  status_label: "Not set up",
+  name: EMAIL,
+  needs: "View app information (read-only)",
+  said: "Needs you: add Mobile lead's own Google identity in Google Play. Until then Google Play refuses its calls.",
+  problem: {
+    title: "Not set up",
+    body: `${EMAIL} is not added to com.acme.app in Google Play yet.`,
+  },
+  set_up: true,
+  guide: PLAY_GUIDE,
+};
+
+// A STANDING IDENTITY IS SET UP, NEVER REPLACED: it holds its own identity
+// before anybody added it, and the sheet still says Set up identity, with the
+// email to copy, Add it for me, and nothing to bring back.
+//
+// Mutation: title the sheet by `holds` alone, and it reads Replace identity.
+test("a Google identity nobody added is set up, not replaced, from the engine's guide", () => {
+  const onSetUp = vi.fn();
+  render(
+    <LayerHost>
+      <IdentityBox
+        seat={SEAT}
+        vendor="Google Play"
+        identity={NOT_ADDED}
+        checking={false}
+        held={undefined}
+        onSetUp={onSetUp}
+        onUseCompany={vi.fn()}
+      />
+      <IdentitySheet
+        seat={SEAT}
+        identity={NOT_ADDED}
+        guide={PLAY_GUIDE}
+        onClose={vi.fn()}
+        onCheck={vi.fn()}
+      />
+    </LayerHost>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Set up identity: Mobile lead" }));
+  expect(onSetUp).toHaveBeenCalledOnce();
+  expect(screen.getByText(NOT_ADDED.said)).toBeTruthy();
+  const sheet = screen.getByRole("dialog");
+  expect(within(sheet).getByText(/Set up identity: Mobile lead/)).toBeTruthy();
+  expect(within(sheet).queryByText(/Replace identity/)).toBeNull();
+  expect(within(sheet).getAllByText(EMAIL).length).toBeGreaterThan(0);
+  expect(within(sheet).getByText("Press Invite new users.")).toBeTruthy();
+  expect(within(sheet).getByText(/Add it for me/)).toBeTruthy();
+});
+
+// A READY STANDING IDENTITY OFFERS NOTHING TO DO: the engine sends neither
+// Set up nor Replace, so the box draws no action.
+test("a ready Google identity's box offers no action", () => {
+  const ready: AccessIdentity = {
+    ...NOT_ADDED,
+    status: "ready",
+    status_label: "Ready",
+    said: `Google Play sees Mobile lead's own Google identity, ${EMAIL}.`,
+    set_up: undefined,
+    problem: undefined,
+  };
+  render(
+    <LayerHost>
+      <IdentityBox
+        seat={SEAT}
+        vendor="Google Play"
+        identity={ready}
+        checking={false}
+        held={undefined}
+        onSetUp={vi.fn()}
+        onUseCompany={vi.fn()}
+      />
+    </LayerHost>,
+  );
+  expect(screen.queryByRole("button", { name: /Set up identity|Replace identity/ })).toBeNull();
+});
+
+// WHAT THE SHEET SENDS: Add it for me is a way of its own, and a check with
+// nothing brought back asks the engine to read the identity a person added.
+test("Add it for me asks the engine to make it, a bare check to read what was added", async () => {
+  expect(await identityRequest({ made: true })).toEqual({ way: "made" });
+  expect(await identityRequest({ made: false })).toEqual({ way: "invited" });
+});
