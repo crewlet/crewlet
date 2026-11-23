@@ -97,8 +97,9 @@ Pick the harness by whose models you want, then the sign-in by how you pay:
 | GitHub's (Copilot) | `copilot` | a fine-grained PAT with Copilot Requests in `COPILOT_GITHUB_TOKEN` (`auth.mode: api-key`), or a login of Copilot's own | yes |
 | Meta's (Muse) | `muse-code` | a Muse Code login, or a metered `META_API_KEY` (`auth.mode: api-key`) | yes — Muse Code 1.4.25 ([its runner](code-sandbox.md#muse-code)) |
 | Moonshot's (Kimi) | `kimi-code` | a Moonshot API key (`auth.mode: api-key`), or a Kimi Code login in a local cell | yes, on Kimi Code 2.7.2 |
+| Nous Portal or any provider's, through Hermes | `hermes` | the provider's key in `env`, under that provider's own variable, or a login of Hermes's own (local cells only for an executor) | yes, on Hermes Agent 0.23.3 ([its runner](code-sandbox.md#hermes-agent)) |
 | Any provider's, through Pi | `pi` | the provider's key in `env`, under that provider's own variable, or a login of pi's own (local cells only for an executor) | yes, on Pi 1.6.0 ([its runner](code-sandbox.md#pi)) |
-| Cursor, Grok, Hermes | see [Supported harnesses](#supported-harnesses) | the vendor's own login, or a key | no — the other phases only |
+| Cursor, Grok | see [Supported harnesses](#supported-harnesses) | the vendor's own login, or a key | no — the other phases only |
 
 Every agent seat's executor is its harness's own run in a [sandbox](code-sandbox.md),
 doing the seat's work and code work alike; this build has a harness runner for
