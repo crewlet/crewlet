@@ -16,7 +16,8 @@ const accessURL = "https://ads.google.com/aw/accountaccess/users"
 // Requirements says what the company still needs for Google Ads: the
 // integration turned on, and the company's reader added to each account at
 // Read-only, which a person does in Google Ads. Each agent's own identity is
-// the Agents tab's: its row shows the email to add and the level it needs.
+// the Agents tab's: its box shows the email to add, the level it needs, and
+// its check.
 func Requirements(c *config.Company) []setup.Requirement {
 	var enabled bool
 	if c != nil && c.Integrations.GoogleAds != nil {
@@ -39,8 +40,9 @@ func Guide() setup.Guide {
 			{Text: "Apply for Explorer or Basic access to the Google Ads API on the identity project's API page."},
 			{Text: "Add the company reader below to each account at Read-only, and set each account's spending " +
 				"caps before any agent may ask to spend."},
-			{Text: "Turn agents on from the Agents tab, then add each one's email to its accounts at the level its " +
-				"agent level needs: Read-only for read, Standard for operate and administer, Admin for users and links."},
+			{Text: "Turn agents on from the Agents tab, then set up each one's identity there: add its email to its " +
+				"accounts, or once to their manager, at the access level its level needs. Crewlet checks each " +
+				"agent's access on every pass."},
 		},
 	}
 }

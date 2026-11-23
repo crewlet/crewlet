@@ -14,6 +14,20 @@
 // ([googleauth.Transport]). Nothing at Google then tells two seats apart, so
 // the product holds each seat to its level and scope alone.
 //
+// # A seat's own identity at the product
+//
+// A seat's identity at Analytics, Ads, Search Console and Play is its Google
+// growth identity, its own by construction (ADR-0172), so the lane never
+// takes the company's. What a person still does is add it at the product, at
+// the role the seat's level needs ([Identity.Needs]); Play and Analytics can
+// add it themselves with an admin's sign-in, a consent grant that signs no
+// seat's call ([Admin]). The identity is standing ([seataccess.IdentitySpec.Standing]): every pass
+// checks it, as the identity, reaching each entry the seat names and reading
+// its role where the product shows it (to the identity at Search Console and
+// Ads, to the admin at Play and Analytics), and keeps it exactly while it
+// passes, so the seat Needs you until it does. A role the product shows to
+// nobody Crewlet signs in as is read from the first call it refuses.
+//
 // # A request addresses its operation's resource and nothing else
 //
 // [NewRequest] fills an operation's `{name}` path parameters with IDs alone

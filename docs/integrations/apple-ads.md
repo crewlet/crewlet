@@ -45,6 +45,10 @@ The key's variable may be named at its own field alone: the company document ref
 
 For each connection Crewlet signs a client secret with the private key (ES256, ten minutes from a minute back), exchanges it at Apple for an access token, and keeps the token in memory until a minute before it ends. Every call to an ad account names it in `X-AP-Context`; budget orders and new ad accounts are the organization's and name none. A key Apple refuses is a finding on the integration's page.
 
+## Give an agent its own identity
+
+Not offered: every agent's calls go as the company's API users. An API user of its own needs an Apple Account per agent, which a person invites and activates by hand, so on the **Agents** tab the company's identity is the normal state, In sync, with nothing to set up ([ADR-0179](../../adr/0179-a-seat-may-hold-its-own-identity-at-a-growth-vendor.md)). Apple Ads still records Crewlet's changes under the connection's API user, and the access log names the agent for each.
+
 ## Roles
 
 Apple Ads gives an API user a role per ad account in its own interface; the API cannot set one. Crewlet reads each connection's roles from Apple, shows them, and refuses an operation the role on that ad account cannot make, naming the roles that can.

@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/seatname"
 )
 
 // Result is what one pass over the company's half of Mattermost found.
@@ -276,6 +277,9 @@ func orNone(s string) string {
 // administrator created by hand: whether a bot still holds the seat's
 // credential, which tokens a rotation retires, and which tokens turning a
 // seat off revokes.
+//
+// Unhashed, so it needs no company: a decommission rebuilds it from the
+// handle alone.
 func TokenDescription(handle string) string {
-	return "crewlet-" + handle
+	return seatname.For(seatname.Mattermost, "", handle)
 }

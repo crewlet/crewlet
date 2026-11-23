@@ -43,6 +43,10 @@ Google answers five Management API writes (creating and changing ad units, and c
 3. Sign in with Google there, as an Administrator or Standard user of the AdSense account. While every agent reads, the sign-in asks for `adsense.readonly`; once an agent is raised to `operate`, sign in again to add `adsense`, which every change needs.
 4. Turn agents on from the Agents tab, each with its publisher accounts.
 
+## Give an agent its own identity
+
+Not offered: every agent's calls go as the company's consent grant. AdSense refuses service accounts, so an identity per agent would be a Google Account per agent, which Google Workspace's acceptable use policy forbids for accounts assigned to a function rather than a person. On the **Agents** tab the company's identity is the normal state, In sync, with nothing to set up ([ADR-0179](../../adr/0179-a-seat-may-hold-its-own-identity-at-a-growth-vendor.md)); the access log names the agent for each call.
+
 ## The agents' tools
 
 | Tool | Class | What it does |

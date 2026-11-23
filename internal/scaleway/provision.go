@@ -4,7 +4,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/seatname"
 )
 
 // ProvisionerSecret is the sealed name the provisioner's secret key is kept
@@ -60,14 +60,10 @@ const (
 )
 
 // ApplicationName is the name one seat's application and policy are created
-// under, so a person reading the organization's IAM can tell which agent of
-// which company it is. It labels them and never identifies them.
+// under, so a person reading the organization's IAM can tell which agent it
+// is. It labels them and never identifies them: the ledger records the IDs.
 func ApplicationName(company, handle string) string {
-	name := "crewlet-"
-	if slug := org.Slugify(company); slug != "" {
-		name += slug + "-"
-	}
-	return name + strings.TrimSpace(handle)
+	return seatname.For(seatname.Scaleway, company, handle)
 }
 
 // KeyDescription is the description every key the engine mints for a seat

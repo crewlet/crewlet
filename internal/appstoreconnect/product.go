@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/es256"
 	"github.com/crewlet/crewlet/internal/growth"
+	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -37,6 +38,9 @@ type Deps struct {
 	Signals Signals
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
+	// Identity is who signs a seat's calls ([seataccess.ResolveSeat]); nil
+	// signs every call with the company's keys.
+	Identity func(ctx context.Context, handle string) (seataccess.Signer, error)
 }
 
 // Audit records the steps of a growth act on the access log (internal/engine's
@@ -72,6 +76,9 @@ type Product struct {
 	mu    sync.Mutex
 	stamp string
 	teams []*team
+
+	// seats are the clients signing with seats' own keys.
+	seats seatKeys
 }
 
 // team is one connection: its client, its connected key slots, its apps.

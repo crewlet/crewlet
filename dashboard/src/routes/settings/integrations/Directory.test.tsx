@@ -1120,6 +1120,12 @@ test("App Store Connect's Settings tab lists its keys once, by role, each with R
   expect(within(row).getAllByRole("button", { name: "Remove" })).toHaveLength(2);
   expect(screen.queryByText("Key ID", { selector: "dt" })).toBeNull();
   expect(screen.queryByText("App Store Connect keys")).toBeNull();
+  // EDIT SETTINGS EDITS THE SUMMARY, so it sits under it and over App Store
+  // analytics, never under a section it does not edit.
+  const edit = screen.getByRole("button", { name: "Edit settings" });
+  const analytics = screen.getByText("App Store analytics");
+  expect(edit.compareDocumentPosition(analytics) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(term.compareDocumentPosition(edit) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });
 
 test("a reader without Admin is told Doclet's settings are an admin's, and asked nothing of them", async () => {

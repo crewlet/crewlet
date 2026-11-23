@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/growth"
+	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -37,6 +39,9 @@ type Deps struct {
 	Renewals Renewals
 	// Signals keeps Meta calling the pinned version deprecated.
 	Signals Signals
+	// Identity is who signs a seat's calls ([seataccess.ResolveSeat]); nil
+	// signs every call as the company's system user.
+	Identity func(ctx context.Context, handle string) (seataccess.Signer, error)
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
 }
@@ -121,6 +126,48 @@ func (p *Product) seat(handle string) (*config.RoleMetaAds, error) {
 	return b, nil
 }
 
+// ownOf is handle's own system user's token where it keeps one that works,
+// nil for the company's, and a refusal where its own no longer works, never
+// the company's in its place.
+func (p *Product) ownOf(ctx context.Context, handle string, seat *config.RoleMetaAds) (*token, error) {
+	if p.deps.Identity == nil {
+		return nil, nil
+	}
+	signer, err := p.deps.Identity(ctx, handle)
+	if refused, ok := errors.AsType[*seataccess.IdentityRefusal](err); ok {
+		return nil, growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("this agent's own Meta system user is %s: %s. "+
+			"A person sets up its identity again on the integration's Agents tab, or sets it back to the company's. "+
+			"No call was made.", strings.ToLower(refused.Status.Label()), strings.TrimSuffix(refused.Said, ".")))
+	}
+	if err != nil {
+		return nil, fmt.Errorf("metaads: read %s's identity: %w", handle, err)
+	}
+	if !signer.Own {
+		return nil, nil
+	}
+	var value string
+	if cred := signer.Record.Credential; cred != nil {
+		value = strings.TrimSpace(p.deps.Resolve("${" + cred.Variable + "}"))
+	}
+	if value == "" {
+		return nil, growth.Refuse(growth.RefusedForbidden, "this agent's own Meta system user's token is not in the "+
+			"secret store. A person sets up its identity again on the integration's Agents tab. No call was made.")
+	}
+	c, err := p.connNow()
+	if err != nil {
+		return nil, err
+	}
+	level, from := growth.LevelOf(seat.Level), digest(value)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if t := c.own[handle]; t != nil && t.from == from && t.level == level {
+		return t, nil
+	}
+	t := &token{slot: slotOwn, level: level, pasted: value, from: from}
+	c.own[handle] = t
+	return t, nil
+}
+
 // connection is the record's name for the one system user a company connects.
 const connection = "main"
 
@@ -135,6 +182,9 @@ type conn struct {
 	accounts   []adAccount
 	accountsAt time.Time
 	uses       map[string]uses
+	// own are the seats' own tokens in use, by handle, each kept while the
+	// sealed value and the seat's level stay what they were.
+	own map[string]*token
 }
 
 // stampOf digests the block and the values its references resolve to, so the
@@ -176,7 +226,8 @@ func (p *Product) connNow() (*conn, error) {
 			p.deps.Signals.Deprecated(Kind, Version, time.Time{})
 		}
 	}
-	c := &conn{appID: appID, client: client, tokens: map[string]*token{}, uses: map[string]uses{}}
+	c := &conn{appID: appID, client: client, tokens: map[string]*token{}, uses: map[string]uses{},
+		own: map[string]*token{}}
 	for _, s := range slots {
 		pasted := strings.TrimSpace(p.deps.Resolve(s.ref(block)))
 		if pasted == "" {
@@ -233,13 +284,13 @@ func (p *Product) accountsOf(ctx context.Context, c *conn) ([]adAccount, error) 
 	if c.accounts != nil && p.deps.Now().Sub(c.accountsAt) < reachTTL {
 		return c.accounts, nil
 	}
-	tok, err := p.tokenFor(ctx, c, growth.ClassRead, []string{"ads_read"})
+	tok, err := p.tokenFor(ctx, c, nil, growth.ClassRead, []string{"ads_read"})
 	if err != nil {
 		return nil, err
 	}
 	var out []adAccount
 	q := map[string][]string{"fields": {accountFields}, "limit": {"100"}}
-	err = p.pages(ctx, c, tok, "/me/adaccounts", q, "", true, maxAccountPages, func(raw json.RawMessage) error {
+	err = pages(ctx, c.client, tok.valueNow(), "/me/adaccounts", q, "", true, maxAccountPages, func(raw json.RawMessage) error {
 		var a adAccount
 		if uerr := json.Unmarshal(raw, &a); uerr != nil {
 			return fmt.Errorf("metaads: read an ad account: %w", uerr)
