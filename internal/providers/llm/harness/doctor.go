@@ -1368,6 +1368,13 @@ func (p *Provider) SandboxCredentialRules() map[string]harnessprofile.FileRule {
 	return out
 }
 
+// SandboxCredentialDocumentRule is the rule the document
+// [Provider.SandboxCredentialDocument] names is seeded and written back by:
+// held to the logins it was handed ([harnessprofile.KeepHandedCredentials]).
+func (p *Provider) SandboxCredentialDocumentRule() harnessprofile.FileRule {
+	return p.profile.FileRule(harnessprofile.CredentialStoreDocument)
+}
+
 // SandboxCredentialDocument is the shared login a harness keeps in a database of
 // its own ([harnessprofile.CredentialStore]) — the document its export printed —
 // as an absolute path on the engine host, or "" when the profile keeps none.

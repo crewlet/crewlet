@@ -213,26 +213,37 @@ func (r FileRule) encode(doc map[string]any, like []byte) ([]byte, error) {
 		out = buf.Bytes()
 	default:
 		var header []byte
-		body := like
 		if r.CommentLines {
 			header = commentHeader(like)
-			body = like[len(header):]
 		}
-		var buf bytes.Buffer
-		enc := json.NewEncoder(&buf)
-		enc.SetEscapeHTML(false)
-		if like == nil || bytes.Contains(bytes.TrimSpace(body), []byte("\n")) {
-			enc.SetIndent("", "  ")
-		}
-		if err := enc.Encode(doc); err != nil {
-			return nil, fmt.Errorf("writing %s: %w", r.Name, err)
-		}
-		out = append(slices.Clone(header), buf.Bytes()...)
+		return encodeJSON(doc, like, header)
 	}
+	return lastNewlineLike(out, like), nil
+}
+
+// encodeJSON writes v as JSON in like's layout, like being the copy it
+// replaces (nil for none): header first, indented unless like is one line, a
+// last newline only where like ends in one, and HTML left unescaped.
+func encodeJSON(v any, like, header []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if like == nil || bytes.Contains(bytes.TrimSpace(like[len(header):]), []byte("\n")) {
+		enc.SetIndent("", "  ")
+	}
+	if err := enc.Encode(v); err != nil {
+		return nil, fmt.Errorf("writing JSON: %w", err)
+	}
+	return lastNewlineLike(append(slices.Clone(header), buf.Bytes()...), like), nil
+}
+
+// lastNewlineLike is out ending in a newline only where like, the copy it
+// replaces, does (always, where there is none).
+func lastNewlineLike(out, like []byte) []byte {
 	if like != nil && !bytes.HasSuffix(like, []byte("\n")) {
-		out = bytes.TrimRight(out, "\n")
+		return bytes.TrimRight(out, "\n")
 	}
-	return out, nil
+	return out
 }
 
 // encodeEnv writes doc a variable a line, sorted, each as [envfile.FormatAssignment]

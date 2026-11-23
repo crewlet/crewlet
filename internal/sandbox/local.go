@@ -368,8 +368,12 @@ func seedLogin(
 	var written []string
 	for _, relative := range slices.Sorted(maps.Keys(login.files)) {
 		source := login.files[relative]
-		rule := rules[relative]
-		rule.Name = filepath.Base(source)
+		// A FILE WITH NO RULE carries nothing back: its zero rule names no
+		// field and no store; one with a rule is read by its shared name.
+		rule, ruled := rules[relative]
+		if ruled {
+			rule.Name = filepath.Base(source)
+		}
 		content, present := shared[filepath.Base(source)]
 		if !present {
 			seeded[relative] = seededCredential{Source: source, Rule: rule}
@@ -475,7 +479,7 @@ var supersededDetail = map[writeBack]string{
 	writeBackUnreadable: "the box's copy of this login could not be read, so nothing of it was " +
 		"written back, and the shared one was kept",
 	writeBackOtherAccount: "the box's copy of this login names another account than the shared " +
-		"one in its account fields or ID token, so it was not written back, and the shared one was kept",
+		"one in its account fields or named token, so it was not written back, and the shared one was kept",
 	writeBackChanged: "the run refreshed this login, but the shared one changed after the box " +
 		"was seeded — another seat's refresh, or a new crewlet llm login — so the shared one " +
 		"was kept, being the newer",
@@ -622,7 +626,7 @@ func writeBackLogin(
 	if maps.EqualFunc(next, current, bytes.Equal) {
 		return verdict(writeBackHeld), nil
 	}
-	// A COPY WHOSE ACCOUNT FIELDS OR ID TOKEN NAME ANOTHER ACCOUNT is not
+	// A COPY WHOSE ACCOUNT FIELDS OR NAMED TOKEN NAME ANOTHER ACCOUNT is not
 	// written back ([harnessprofile.FileRule.SameAccount]): the whole login
 	// stays as it is. Asked of EVERY file of the box's copy, changed or not,
 	// against the login it was seeded with, which current is here; a file
