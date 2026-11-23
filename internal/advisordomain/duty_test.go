@@ -109,3 +109,35 @@ func TestADismissalReopenedReturnsOnTheNextRun(t *testing.T) {
 		t.Fatalf("live after the reopen %+v (%v), want a new episode that was seen before", live, err)
 	}
 }
+
+// A RUN WHOSE HOLDER STOPPED IS CLOSED ON THE NEXT TICK, through the log: the
+// holder's tick records it interrupted from its first line to its last, and a
+// record of it written again (an earlier attempt that landed unanswered, or
+// the stopped holder's own) is taken as written. Mutation: answer the second
+// record's refusal, and the duty keeps it to write again on every tick.
+func TestARunWhoseHolderStoppedIsClosedOnTheNextTick(t *testing.T) {
+	t.Parallel()
+	n := newWriteNode(t, openAdvisorLog(t), "data-1")
+	orphan := uuid.NewString()
+	for i := range 2 {
+		if _, err := n.writer.Progress(t.Context(), engineCall(), advisordomain.RunProgress{Run: orphan,
+			At: writerClock.Add(-48*time.Hour + time.Duration(i)*time.Minute), Text: "reading capacity"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	log := duty.LogOf(n.reader(), n.writer, n.now)
+	d := &duty.Duty{Log: log, Read: observing{}, NewID: uuid.NewString, Now: n.now,
+		Zone: func() *time.Location { return time.UTC }}
+	if err := d.Step(t.Context()); err != nil {
+		t.Fatalf("the tick failed: %v", err)
+	}
+	run, found, err := n.reader().Run(t.Context(), orphan, stale)
+	if err != nil || !found || run.Status != advisordomain.RunInterrupted || run.Kind != advisordomain.RunKindDeep ||
+		!run.StartedAt.Equal(writerClock.Add(-48*time.Hour)) || !run.EndedAt.Equal(writerClock.Add(-48*time.Hour+time.Minute)) {
+		t.Fatalf("the orphan = %+v, found %v (%v), want it recorded interrupted over its lines", run, found, err)
+	}
+	if err := log.RecordRun(t.Context(), duty.Run{ID: orphan, Trigger: duty.TriggerSchedule, StartedAt: writerClock,
+		EndedAt: writerClock, Status: duty.RunDone, Kind: advisordomain.RunKindDeep}); err != nil {
+		t.Errorf("a second record of a recorded run answered %v, want it taken as written", err)
+	}
+}

@@ -23,6 +23,9 @@ type fakeDeep struct {
 	canceled bool
 	// resumed is the checkpoint each run was handed, "" for a fresh one.
 	resumed []string
+	// wrote, where set, is told each time a run has written its line and
+	// its checkpoint.
+	wrote chan struct{}
 }
 
 func (f *fakeDeep) Assigned() bool { return f.assigned }
@@ -35,6 +38,9 @@ func (f *fakeDeep) Deep(ctx context.Context, now time.Time, _, _ []advisor.Store
 	f.mu.Unlock()
 	io.Progress(now, "reading capacity")
 	io.Checkpoint(now, json.RawMessage(fmt.Sprintf(`{"agenda":[{"id":"A1","verdict":"confirmed"}],"run":%d}`, f.runs)))
+	if f.wrote != nil {
+		f.wrote <- struct{}{}
+	}
 	select {
 	case <-f.release:
 		return duty.ModelRun{Summary: map[string]any{"status": "done"}, Concluded: true}, nil
@@ -143,12 +149,13 @@ func TestATakeoverResumesFromTheCheckpointTheLostHolderWrote(t *testing.T) {
 	t.Parallel()
 	l, c := &fakeLog{}, &clock{now: start}
 	first := newDuty(l, &fakeReader{signature: "r1"}, nil, c)
-	deep := &fakeDeep{assigned: true, release: make(chan struct{})}
+	deep := &fakeDeep{assigned: true, release: make(chan struct{}), wrote: make(chan struct{}, 2)}
 	first.Deep = deep
 	l.requested = []duty.Request{{Run: "pressed", By: "owner", Kind: advisordomain.RunKindDeep}}
 	held := true
 	first.Claim = func(context.Context) (bool, error) { return held, nil }
 	step(t, first)
+	<-deep.wrote
 	held = false
 	step(t, first)
 	first.WaitDeep()

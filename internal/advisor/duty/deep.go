@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -68,6 +71,28 @@ type deepState struct {
 	unrecorded map[string]Run
 	// last is when this holder last started a deep run at a slot.
 	last time.Time
+	// claimedAt is when this holder's last successful claim began, zero
+	// where it holds no lease: what [Duty.holds] proves ownership by.
+	claimedAt time.Time
+}
+
+// claimed notes a successful claim begun at at, or zero for a lease lost.
+func (d *Duty) claimed(at time.Time) {
+	d.deep.mu.Lock()
+	defer d.deep.mu.Unlock()
+	d.deep.claimedAt = at
+}
+
+// holds reports whether this holder provably holds the lease at now: a node
+// with no fleet always does, a holder only within [LeaseTTL] of its last
+// successful claim, past which a peer may hold it.
+func (d *Duty) holds(now time.Time) bool {
+	if d.Claim == nil {
+		return true
+	}
+	d.deep.mu.Lock()
+	defer d.deep.mu.Unlock()
+	return !d.deep.claimedAt.IsZero() && now.Before(d.deep.claimedAt.Add(LeaseTTL))
 }
 
 // deepFlying reports whether a deep run is in flight here.
@@ -135,10 +160,11 @@ func (d *Duty) deepDue(now time.Time, last map[string]time.Time) bool {
 const DeepScope = "deep"
 
 // startDeep starts one deep run beside the tick, recorded under each of ids
-// when it ends (a person's presses), or under a new id at a slot. Where it
-// goes on from a press's checks, rules is that part, recorded with it as one
-// run.
-func (d *Duty) startDeep(ctx context.Context, now time.Time, trigger Trigger, by string, ids []string, rules *Run) {
+// when it ends (a person's presses), or under one id at a slot: a new one, or
+// the id of the run it takes over. prior is what the run did before this
+// investigation, recorded with it as one run: a press's checks, or when the
+// holder it takes the run over from began it.
+func (d *Duty) startDeep(ctx context.Context, now time.Time, trigger Trigger, by string, ids []string, prior *Run) {
 	runCtx, cancel := context.WithCancel(ctx)
 	f := &flight{cancel: cancel, done: make(chan struct{})}
 	d.deep.mu.Lock()
@@ -148,10 +174,17 @@ func (d *Duty) startDeep(ctx context.Context, now time.Time, trigger Trigger, by
 		defer close(f.done)
 		defer cancel()
 		run := d.runDeep(runCtx, now, trigger, by, ids[0])
-		if rules != nil {
-			run = joined(*rules, run)
+		if prior != nil {
+			run = joined(*prior, run)
 		}
-		if runCtx.Err() == nil {
+		switch {
+		case runCtx.Err() != nil:
+			// STOPPED: the lease was lost or the duty stops, and the next
+			// holder runs the press again, or closes the slot's run.
+		case !d.holds(d.Now().UTC()):
+			log.WarnContext(ctx, "advisor_deep_run_not_recorded", "run", ids[0],
+				"error", "the advisor's lease went unrenewed past its TTL during the run, so the next holder closes it")
+		default:
 			var errs []error
 			for _, id := range ids {
 				run.ID = id
@@ -167,16 +200,61 @@ func (d *Duty) startDeep(ctx context.Context, now time.Time, trigger Trigger, by
 	}()
 }
 
-// joined is a press's run: its checks and its investigation as one run,
-// begun when the checks began, failed where either part failed.
-func joined(rules, deep Run) Run {
+// joined is a run of two parts as one: begun when the prior part began (a
+// press's checks), failed where either part failed.
+func joined(prior, deep Run) Run {
 	out := deep
-	out.StartedAt, out.Classes = rules.StartedAt, rules.Classes
-	out.Scopes = append(append([]ScopeRun{}, rules.Scopes...), deep.Scopes...)
-	if rules.Status == RunFailed {
+	out.StartedAt, out.Classes = prior.StartedAt, prior.Classes
+	out.Scopes = append(append([]ScopeRun{}, prior.Scopes...), deep.Scopes...)
+	if prior.Status == RunFailed {
 		out.Status = RunFailed
 	}
 	return out
+}
+
+// InterruptedSaid is what a run recorded interrupted says of why.
+const InterruptedSaid = "The engine stopped during this run, so it did not finish. The next run starts fresh."
+
+// closeUnowned closes every run whose holder stopped mid-run (package doc, "A
+// run whose holder stopped"), and reports whether it took one over, which then
+// runs beside the tick.
+func (d *Duty) closeUnowned(ctx context.Context, now time.Time, last map[string]time.Time) (bool, error) {
+	unowned, err := d.Log.Unowned(ctx)
+	if err != nil {
+		return false, fmt.Errorf("read the runs nobody holds: %w", err)
+	}
+	d.deep.mu.Lock()
+	unowned = slices.DeleteFunc(unowned, func(u Unowned) bool {
+		_, kept := d.deep.unrecorded[u.Run]
+		return kept
+	})
+	d.deep.mu.Unlock()
+	// THE NEWEST BEGUN WITHIN THE SLOT goes on where a deep run is still
+	// due, from its checkpoint, rather than a second run starting afresh.
+	slot, resume := d.deepSlot(now), -1
+	if d.Deep != nil && d.Deep.Assigned() && last[DeepScope].Before(slot) {
+		for i, u := range unowned {
+			if !u.First.Before(slot) && (resume < 0 || u.Last.After(unowned[resume].Last)) {
+				resume = i
+			}
+		}
+	}
+	var errs []error
+	for i, u := range unowned {
+		if i == resume {
+			continue
+		}
+		errs = append(errs, d.conclude(ctx, Run{ID: u.Run, Trigger: TriggerSchedule, StartedAt: u.First,
+			EndedAt: u.Last, Status: RunInterrupted, Kind: advisordomain.RunKindDeep,
+			Model: map[string]any{"status": string(advisor.PassFailed), "reason": InterruptedSaid}}))
+	}
+	if resume < 0 {
+		return false, errors.Join(errs...)
+	}
+	u := unowned[resume]
+	log.InfoContext(ctx, "advisor_deep_run_taken_over", "run", u.Run)
+	d.startDeep(ctx, now, TriggerSchedule, "", []string{u.Run}, &Run{StartedAt: u.First, Status: RunDone})
+	return true, errors.Join(errs...)
 }
 
 // runDeep is one deep run, reconciled with the log where it concluded.
@@ -206,14 +284,20 @@ func (d *Duty) runDeep(ctx context.Context, now time.Time, trigger Trigger, by, 
 	}
 	// EACH LINE AND EACH CHECKPOINT ON THE LOG as it is written, so any node
 	// reads the run's progress while it is in flight, and the next holder
-	// resumes it.
+	// resumes it; none once the lease may be a peer's, which owns the run.
 	result, err := d.Deep.Deep(ctx, now, dismissed, live, DeepIO{
 		Progress: func(at time.Time, text string) {
+			if !d.holds(at) {
+				return
+			}
 			if perr := d.Log.Progress(ctx, id, at, text); perr != nil {
 				log.WarnContext(ctx, "advisor_progress_not_recorded", "run", id, "error", perr.Error())
 			}
 		},
 		Checkpoint: func(at time.Time, body json.RawMessage) {
+			if !d.holds(at) {
+				return
+			}
 			if cerr := d.Log.Checkpoint(ctx, id, at, body); cerr != nil {
 				log.WarnContext(ctx, "advisor_checkpoint_not_recorded", "run", id, "error", cerr.Error())
 			}
@@ -225,7 +309,7 @@ func (d *Duty) runDeep(ctx context.Context, now time.Time, trigger Trigger, by, 
 		log.WarnContext(ctx, "advisor_deep_run_failed", "error", err.Error())
 		return run
 	}
-	if !result.Concluded && !result.Partial {
+	if (!result.Concluded && !result.Partial) || ctx.Err() != nil || !d.holds(d.Now().UTC()) {
 		return run
 	}
 	reading := advisor.Reading{At: now, Groups: []advisor.Group{advisor.GroupModel}, Partial: !result.Concluded}
@@ -275,14 +359,16 @@ const (
 
 // pressed answers every press waiting with one run, recorded under each
 // press's own id, so a press during a run joins the next. A press this
-// holder already ran is recorded, never run again.
+// holder already ran waits for its record, never run again.
 func (d *Duty) pressed(ctx context.Context, now time.Time, requests []Request) error {
-	requests, err := d.recordAgain(ctx, requests)
+	d.deep.mu.Lock()
+	requests = slices.DeleteFunc(requests, func(r Request) bool {
+		_, ran := d.deep.unrecorded[r.Run]
+		return ran
+	})
+	d.deep.mu.Unlock()
 	if len(requests) == 0 {
-		return err
-	}
-	if err != nil {
-		log.WarnContext(ctx, "advisor_run_not_recorded", "error", err.Error())
+		return nil
 	}
 	last, err := d.Log.LastDone(ctx)
 	if err != nil {
@@ -368,7 +454,7 @@ func hoursAgo(d time.Duration) string {
 // the start, spending its whole budget each time. Its record is written again
 // as failed, saying why in a few words: the record that cannot be refused. One
 // the log could not take at all (it was unreachable) is kept here and recorded
-// again on the next tick, which never runs it again.
+// again on every tick that holds the lease, which never runs it again.
 
 // maxFailedWords bounds what a failed record says of why.
 const maxFailedWords = 240
@@ -412,22 +498,17 @@ func (d *Duty) recorded(id string) {
 	d.deep.mu.Unlock()
 }
 
-// recordAgain records each of requests this holder already ran and could not
-// record, and answers the rest, still to run.
-func (d *Duty) recordAgain(ctx context.Context, requests []Request) ([]Request, error) {
-	var rest []Request
+// recordKept records again every run this holder ran and could not record:
+// a press, a slot's deep run or a run of the rules alike.
+func (d *Duty) recordKept(ctx context.Context) error {
+	d.deep.mu.Lock()
+	kept := slices.SortedFunc(maps.Values(d.deep.unrecorded), func(a, b Run) int { return strings.Compare(a.ID, b.ID) })
+	d.deep.mu.Unlock()
 	var errs []error
-	for _, r := range requests {
-		d.deep.mu.Lock()
-		run, ran := d.deep.unrecorded[r.Run]
-		d.deep.mu.Unlock()
-		if !ran {
-			rest = append(rest, r)
-			continue
-		}
+	for _, run := range kept {
 		errs = append(errs, d.conclude(ctx, run))
 	}
-	return rest, errors.Join(errs...)
+	return errors.Join(errs...)
 }
 
 // cutWords is s at most [maxFailedWords] bytes, whole runes.

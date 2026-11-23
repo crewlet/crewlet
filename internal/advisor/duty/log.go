@@ -19,6 +19,7 @@ type LogReads interface {
 	NonClosed(ctx context.Context, fresh statelog.Freshness) ([]advisordomain.FindingRow, error)
 	Findings(ctx context.Context, f advisordomain.Filter, fresh statelog.Freshness) ([]advisordomain.FindingRow, string, error)
 	PendingRequests(ctx context.Context, fresh statelog.Freshness) ([]advisordomain.RunRow, error)
+	Unowned(ctx context.Context, fresh statelog.Freshness) ([]advisordomain.UnownedRun, error)
 	LastRunOfClasses(ctx context.Context, fresh statelog.Freshness) (map[string]time.Time, error)
 	Key(ctx context.Context, key string, fresh statelog.Freshness) (advisordomain.KeyRow, bool, error)
 	Report(ctx context.Context, week string, fresh statelog.Freshness) (advisordomain.ReportRow, bool, error)
@@ -125,6 +126,19 @@ func (l advisorLog) Requested(ctx context.Context) ([]Request, error) {
 	out := make([]Request, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, Request{Run: r.ID, By: r.By, Kind: r.Kind})
+	}
+	return out, nil
+}
+
+// Unowned is every run that wrote progress and has no row.
+func (l advisorLog) Unowned(ctx context.Context) ([]Unowned, error) {
+	rows, err := l.reads.Unowned(ctx, fresh)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Unowned, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, Unowned{Run: r.Run, First: r.First, Last: r.Last})
 	}
 	return out, nil
 }
@@ -277,12 +291,20 @@ func (l advisorLog) RecordRun(ctx context.Context, r Run) error {
 		}
 	}
 	status := advisordomain.RunDone
-	if r.Status == RunFailed {
+	switch r.Status {
+	case RunFailed:
 		status = advisordomain.RunFailed
+	case RunInterrupted:
+		status = advisordomain.RunInterrupted
 	}
 	_, err = l.writes.RecordRun(ctx, l.call("advisor_run"), advisordomain.RunRecord{
 		Run: r.ID, Trigger: advisordomain.Trigger(r.Trigger), By: r.By, StartedAt: r.StartedAt,
 		EndedAt: r.EndedAt, Status: status, Classes: classes, Model: model, RunKind: r.Kind})
+	// A RUN RECORDED FIRST STANDS: an earlier attempt that landed unanswered,
+	// or the next holder closing a run it found nobody held.
+	if errors.Is(err, advisordomain.ErrExists) {
+		return nil
+	}
 	return err
 }
 
