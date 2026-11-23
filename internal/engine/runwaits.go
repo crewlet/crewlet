@@ -286,7 +286,10 @@ func (e *Engine) waitedOf(ctx context.Context, run, target sandbox.PendingRun, f
 		}
 		out.Left, out.Outcome = types.RunLeftEnded, string(ending.Outcome)
 		out.Report = waitReport(wait, ending)
-	case slices.Contains(sandbox.Holding, target.Status):
+	case slices.Contains(sandbox.Holding, target.Status), target.WaitsOnOwnCalls():
+		// A RUN PARKED ON ITS OWN CALLS has not left: the engine answers that
+		// park at once, and the run carries straight on (internal/sandbox's
+		// callwait.go).
 		return out, false
 	default:
 		out.Left, out.Outcome = types.RunLeftParked, string(sandbox.StageOf(target))
