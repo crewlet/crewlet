@@ -218,6 +218,12 @@ func (GeminiCLI) Pins(_ context.Context, req sandbox.RunRequest, _ Paths) []Pinn
 		{Name: "GOOGLE_VERTEX_BASE_URL", Value: req.Env["GOOGLE_VERTEX_BASE_URL"]}}
 }
 
+// routing answers [router] with the endpoints [GeminiCLI.Pins] fills from the
+// entry's env.
+func (GeminiCLI) routing() []routeVar {
+	return routes(roleEndpoint, "CODE_ASSIST_ENDPOINT", "GOOGLE_GEMINI_BASE_URL", "GOOGLE_VERTEX_BASE_URL")
+}
+
 // readsCommands marks Gemini CLI as running a brief that begins with `/` as
 // one of its commands (`/init` wrote a GEMINI.md, measured on 0.70.0).
 func (GeminiCLI) readsCommands() {}

@@ -170,6 +170,10 @@ func (QwenCode) Pins(_ context.Context, req sandbox.RunRequest, paths Paths) []P
 	return pins
 }
 
+// routing answers [router] with the endpoint [QwenCode.Pins] fills from the
+// entry's env.
+func (QwenCode) routing() []routeVar { return routes(roleEndpoint, "OPENAI_BASE_URL") }
+
 // Events is a new decoder for one stream ([qwenEvents]).
 func (QwenCode) Events() Decoder { return &qwenEvents{} }
 

@@ -2,7 +2,9 @@ package harness
 
 import (
 	"maps"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
@@ -17,8 +19,8 @@ import (
 // sign-in mode alone.
 //
 // Mutation: drop the key, the auth mode, the route variables or OpenCode's model
-// provider from the digest, keep a URL's userinfo or query, or digest any other
-// variable of the env, and a row goes red.
+// provider from the digest, keep a URL's userinfo, path or query, drop its
+// port, or digest any other variable of the env, and a row goes red.
 func TestAnEntrysIDMovesWithWhereItsCallsGoAndWithNothingElseOfItsEnv(t *testing.T) {
 	t.Parallel()
 	claude, ok := harnessprofile.Builtin("claude-code")
@@ -58,11 +60,15 @@ func TestAnEntrysIDMovesWithWhereItsCallsGoAndWithNothingElseOfItsEnv(t *testing
 			set("ANTHROPIC_BASE_URL", "https://user:planted-3@gateway-a.example.com/v1")), true},
 		"its gateway's address with a key in its query": {entry("primary", AuthEnv,
 			set("ANTHROPIC_BASE_URL", "https://gateway-a.example.com/v1?key=planted-4")), true},
+		"its gateway's address with a key in its path": {entry("primary", AuthEnv,
+			set("ANTHROPIC_BASE_URL", "https://gateway-a.example.com/key-planted-6/v1")), true},
 		"an oddly named gateway credential": {entry("primary", AuthEnv, set("GW_SESAME", "planted-5")), true},
 		"a tuning variable":                 {entry("primary", AuthEnv, set("MAX_THINKING_TOKENS", "8000")), true},
 		"another entry on the same route":   {entry("secondary", AuthEnv, nil), false},
 		"its gateway moved": {entry("primary", AuthEnv,
 			set("ANTHROPIC_BASE_URL", "https://gateway-b.example.com/v1")), false},
+		"its gateway's port moved": {entry("primary", AuthEnv,
+			set("ANTHROPIC_BASE_URL", "https://gateway-a.example.com:8443/v1")), false},
 		"its region moved":        {entry("primary", AuthEnv, set("AWS_REGION", "eu-west-1")), false},
 		"its cloud switch thrown": {entry("primary", AuthEnv, set("CLAUDE_CODE_USE_BEDROCK", "1")), false},
 		"its auth mode moved":     {entry("primary", AuthAPIKey, nil), false},
@@ -80,5 +86,27 @@ func TestAnEntrysIDMovesWithWhereItsCallsGoAndWithNothingElseOfItsEnv(t *testing
 	}
 	if oc("openrouter/openai/gpt-6").EntryID() != oc("openrouter/anthropic/claude-sonnet-5").EntryID() {
 		t.Error("an OpenCode entry whose model moved within its provider took a new id")
+	}
+}
+
+// AN ENTRY WHOSE ROUTE IS NO ROUTE IS REFUSED, NAMING THE VARIABLE AND NEVER
+// ITS VALUE: built from a resolved env, a route variable's value that parses
+// as no address and no plain name would be digested whole, and may hold a
+// credential.
+//
+// Mutation: build the entry anyway, or put the value in the error, and a row
+// goes red.
+func TestAnEntryWhoseRouteIsNoRouteIsRefusedWithoutItsValue(t *testing.T) {
+	t.Parallel()
+	for _, value := range []string{"user:planted-1@gateway.example.com", "https://user:p#planted-2@gateway.example.com"} {
+		_, err := New(Config{Key: "gw", Harness: "claude-code", Model: "claude-sonnet-5", StateDir: t.TempDir(),
+			Timeout: time.Minute, Env: map[string]string{"ANTHROPIC_BASE_URL": value}})
+		if err == nil || !strings.Contains(err.Error(), "ANTHROPIC_BASE_URL") || strings.Contains(err.Error(), "planted") {
+			t.Errorf("an entry whose gateway is %q built with %v, want refused naming the variable alone", value, err)
+		}
+	}
+	if _, err := New(Config{Key: "gw", Harness: "claude-code", Model: "claude-sonnet-5", StateDir: t.TempDir(),
+		Timeout: time.Minute, Env: map[string]string{"ANTHROPIC_BASE_URL": "https://gateway.example.com/v1"}}); err != nil {
+		t.Errorf("an entry whose gateway is an address was refused: %v", err)
 	}
 }

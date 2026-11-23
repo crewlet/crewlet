@@ -209,14 +209,26 @@ at() { [ -z "$a" ] || [ "$a" -gt "$1" ] || { [ "$a" -eq "$1" ] && { [ "$b" -gt "
 
 // copilotProviders is every variable that routes Copilot's model calls to a
 // provider of the box's own (`copilot help environment`, 1.0.114): set, it
-// replaces the entry's sign-in.
-var copilotProviders = []string{
-	"COPILOT_PROVIDERS_CONFIG", "COPILOT_PROVIDER_BASE_URL", "COPILOT_PROVIDER_TYPE",
-	"COPILOT_PROVIDER_API_KEY", "COPILOT_PROVIDER_API_KEY_COMMAND", "COPILOT_PROVIDER_BEARER_TOKEN",
-	"COPILOT_PROVIDER_WIRE_API", "COPILOT_PROVIDER_TRANSPORT", "COPILOT_PROVIDER_AZURE_API_VERSION",
-	"COPILOT_PROVIDER_MODEL_ID", "COPILOT_PROVIDER_WIRE_MODEL", "COPILOT_PROVIDER_MAX_PROMPT_TOKENS",
-	"COPILOT_PROVIDER_MAX_OUTPUT_TOKENS", "COPILOT_PROVIDER_VISION", "COPILOT_PROVIDER_HEADERS",
-}
+// replaces the entry's sign-in. COPILOT_PROVIDERS_CONFIG is a file's path: a
+// document in its place is not read (measured on 1.0.114), and the file it
+// names carries the providers' addresses and keys.
+var copilotProviders = slices.Concat(
+	routes(roleEndpoint, "COPILOT_PROVIDERS_CONFIG", "COPILOT_PROVIDER_BASE_URL", "COPILOT_PROVIDER_TYPE",
+		"COPILOT_PROVIDER_WIRE_API"),
+	routes(roleSigns, "COPILOT_PROVIDER_API_KEY", "COPILOT_PROVIDER_API_KEY_COMMAND",
+		"COPILOT_PROVIDER_BEARER_TOKEN", "COPILOT_PROVIDER_HEADERS"),
+	routes(roleShapes, "COPILOT_PROVIDER_TRANSPORT", "COPILOT_PROVIDER_AZURE_API_VERSION",
+		"COPILOT_PROVIDER_MODEL_ID", "COPILOT_PROVIDER_WIRE_MODEL", "COPILOT_PROVIDER_MAX_PROMPT_TOKENS",
+		"COPILOT_PROVIDER_MAX_OUTPUT_TOKENS", "COPILOT_PROVIDER_VISION"),
+)
+
+// copilotHosts is where Copilot's GitHub sign-in and API requests go
+// (`copilot help environment`, 1.0.114), left as the box or the entry sets
+// them: the agent's gh reads GH_HOST too.
+var copilotHosts = routes(roleEndpoint, "COPILOT_GH_HOST", "GH_HOST")
+
+// routing answers [router] with [copilotProviders] and [copilotHosts].
+func (Copilot) routing() []routeVar { return slices.Concat(copilotProviders, copilotHosts) }
 
 // copilotProviderOff is every provider variable ([copilotProviders]) the run's
 // own environment (env, the entry's) does not set, which the script unsets:
@@ -226,9 +238,9 @@ var copilotProviders = []string{
 // would write a key into the script.
 func copilotProviderOff(env map[string]string) []string {
 	var off []string
-	for _, name := range copilotProviders {
-		if _, set := env[name]; !set {
-			off = append(off, name)
+	for _, v := range copilotProviders {
+		if _, set := env[v.Name]; !set {
+			off = append(off, v.Name)
 		}
 	}
 	return off

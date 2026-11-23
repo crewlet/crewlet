@@ -293,8 +293,7 @@ func TestAGrokRunsRequestsGoWhereAPersonsWould(t *testing.T) {
 	runner, box := standInBox(t, executor.NewGrok(), map[string]string{"grok": "#!/bin/sh\n" +
 		"case \"$1\" in --version) echo 'grok 1.0.92 (b06756fd6256)'; exit 0;; esac\n" + observedRun})
 	const entry, image = "https://gateway.example.com/v1", "http://image.example.com"
-	routing := []string{"GROK_XAI_API_BASE_URL", "GROK_MODELS_BASE_URL", "GROK_CODE_XAI_API_KEY",
-		"GROK_AUTH_PROVIDER_COMMAND"}
+	routing := executor.GrokRouting
 	var profile strings.Builder
 	for _, name := range routing {
 		if name != "GROK_MODELS_BASE_URL" {
