@@ -363,10 +363,10 @@ const DAYS = [
 /** A box's middle, in px from the viewport's top. */
 const middle = (box: DOMRect) => box.top + box.height / 2;
 
-// A ROW'S MENU STANDS ON ITS MIDDLE, AND A DAY IS A RULE, NOT A ROW.
+// A ROW'S MENU STANDS ON ITS MIDDLE, AND A DAY IS A THIN FILLED BAND, NOT A ROW.
 // Mutation: a kit that pins the tray to the row's top corner puts it 8px
-// over the middle; one that sets the day as a band has no rule after it.
-test("each conversation's menu stands on its row's middle, and each day is a rule between the rows", async () => {
+// over the middle; one that sets the day as a rule has no fill under it.
+test("each conversation's menu stands on its row's middle, and each day is a thin band between the rows", async () => {
   await page.viewport(1440, 900);
   host.style.cssText = "width: 1440px; height: 900px; display: flex; flex-direction: column;";
   vi.mocked(useAskReading).mockReturnValue({
@@ -407,8 +407,11 @@ test("each conversation's menu stands on its row's middle, and each day is a rul
   // Today and three days back: two days at least, however near midnight it runs.
   expect(labels.length).toBeGreaterThanOrEqual(2);
   for (const label of labels) {
-    expect(getComputedStyle(label, "::after").content).not.toBe("none");
-    expect(parseFloat(getComputedStyle(label, "::after").height)).toBe(1);
+    const band = getComputedStyle(label);
+    expect(band.backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+    expect(getComputedStyle(label, "::after").content).toBe("none");
+    // Thin: the day's line and its equal padding, never a row's height.
+    expect(label.getBoundingClientRect().height).toBeLessThan(32);
   }
 });
 
