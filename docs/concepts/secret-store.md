@@ -36,7 +36,8 @@ _secrets (a coordination KV bucket, no TTL)
                    token — the engine's own name for a key or a pass it
                    wrote itself, or the shell's user ($CREWLET_OPERATOR,
                    else $USER, else $LOGNAME) for a command that wrote the
-                   store itself with its node's engine stopped
+                   store itself with its node's engine stopped; at most
+                   64 bytes, as operator_id is, and refused past it
   updated_by_kind  agent | human | operator | system
   operator_id      the credential it was stored through — `pat:<id>`,
                    `session:<lineage>`, a Tier A token's login — and empty

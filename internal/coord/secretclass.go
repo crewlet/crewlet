@@ -15,16 +15,18 @@ import (
 // bounded where it is written: the value is sealed from at most 64 KiB
 // (internal/secrets' MaxValueBytes) under a key id of at most 255 bytes, the
 // name is at most 255 bytes (internal/secrets' MaxNameBytes), and the
-// provenance is a login's 64 bytes and an operation id's 128. Both backends
+// provenance is a login's 64 bytes and an operation id's 128
+// (internal/fleetsecrets' CheckAuthor, checked on every write). Both backends
 // store the record through [EncodeSecret], so the twin refuses what the KV
 // backend does.
 
 // MaxSecretRecordBytes bounds one credential's record as stored
 // ([EncodeSecret]). Its widest holds a 64 KiB value sealed under a 255-byte
 // key id (an envelope of 87,683 bytes) beside that key id, a 255-byte name,
-// every provenance field at its widest and the instant to the nanosecond:
-// 88,651 bytes (internal/fleetsecrets.TestTheWidestSecretRecordFitsItsBound),
-// 9.7 KB under the bound, room for a field a later build widens. At the
+// every provenance field at its widest as JSON spells it and the instant to
+// the nanosecond: 89,931 bytes
+// (internal/fleetsecrets.TestTheWidestSecretRecordFitsItsBound), 8.4 KB under
+// the bound, room for a field a later build widens. At the
 // slowest link pace its read waits 3.8 s beyond the read term, and a pass
 // 2.85 s beyond its idle; the one boot read, the secret snapshot, runs after
 // `engine_recovered`, which no probe bounds.
