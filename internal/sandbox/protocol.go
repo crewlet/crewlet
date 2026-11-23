@@ -101,11 +101,13 @@ type Spec struct {
 	// instead ([Spec.LaunchID]). Set by [Coordinator.Launch], never by a caller.
 	TurnID string
 
-	// LaunchID is the launch the box is made for, which a remote box carries
-	// from its create, so the ending of that launch's run kills a box the
-	// run's row never named: its create's answer lost, or the engine gone
-	// before the attach ([E2BProvider.KillLaunch]), rather than leave it billed
-	// to its TTL. Set by [Coordinator.Launch], never by a caller.
+	// LaunchID is the one create the box is made by, which a remote box
+	// carries from its create, so what made it kills a box it never named:
+	// its create's answer lost, or the engine gone before the naming
+	// ([E2BProvider.KillLaunch]), rather than leave it billed to its TTL. A
+	// run's launch, set by [Coordinator.Launch], never by its caller; or a
+	// check's claim, set by its runner (internal/gitlet/checkrun), whose box
+	// [Manager.AcquireBox] refuses naming none.
 	LaunchID string
 
 	// TimeoutSec is NOT a run deadline: it is the box's initial TTL, which

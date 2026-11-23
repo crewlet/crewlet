@@ -1748,6 +1748,8 @@ These names are **reserved** as Gitlet's are: `code.checks.env`, `role.sandbox.e
 
 **How many run** is bounded per cell: a `container` box on a Gitlet node by that node's `gitlet.max_checks`, an `e2b` box company-wide by `code.checks.remote`: at most `max_running` at once (unset 16) and `box_hours_per_day` hours in a UTC day (unset 192). A check either cap holds back waits queued, claimed by nobody, until there is room ([What a check costs](gitlet.md#what-a-check-costs)).
 
+**A box nothing named is still reclaimed.** A check's box is stamped with its claim (the attempt and the Gitlet node holding it), as a run's box is with its launch. An `e2b` box whose create's answer never reached its runner (a deadline, a reset, the runner stopping) is killed by that stamp as the attempt ends `errored` `box_failed`; one a runner made and never named on the attempt before it died is killed by the repository's home when it ends the attempt `runner_lost`, spelling the same stamp from the attempt's row ([Who runs a check](gitlet.md#who-runs-a-check)). A `container` box is its node's container runtime's to reclaim.
+
 ---
 
 ## Commit attribution

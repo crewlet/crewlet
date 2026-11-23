@@ -56,8 +56,8 @@ const E2BClientTimeout = 60 * time.Second
 const e2bV2Floor = "e2b-dev/runtime f5dc6426e"
 
 // e2bLaunchKey is the metadata key a box carries its launch under
-// ([Spec.LaunchID]), so the ending of that launch's run finds a box whose
-// create never reached the run's row ([E2BProvider.KillLaunch]).
+// ([Spec.LaunchID]), so the ending of what made it (a run, a check's claim)
+// finds a box whose create's answer never reached it ([E2BProvider.KillLaunch]).
 const e2bLaunchKey = "crewlet-launch"
 
 // e2bListPage is the most boxes one list answers, the API's own maximum
@@ -282,9 +282,9 @@ func (b e2bBox) host(domain string) string {
 // TTL is a kill timer every poll tick refreshes ([E2BSandbox.SetTimeout]), never
 // a bound on a job. STAMPED WITH ITS LAUNCH, never sent an Idempotency-Key: a
 // redelivered turn is a new run whose launch sends its own create, so none is
-// sent twice for a key to answer once, and a box whose answer never reached the
-// run's row is killed by its stamp ([E2BProvider.KillLaunch]). Why: the package
-// doc, "AND AN E2B BOX IS PRIVATE".
+// sent twice for a key to answer once, and a box whose answer never reached
+// what made it is killed by its stamp ([E2BProvider.KillLaunch]). Why: the
+// package doc, "AND AN E2B BOX IS PRIVATE".
 func (a *e2bAPI) createBox(ctx context.Context, template, launch string, timeoutSec float64, env map[string]string) (e2bBox, error) {
 	type request struct {
 		TemplateID string            `json:"templateID"`
