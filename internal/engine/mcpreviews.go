@@ -268,7 +268,7 @@ func (e *Engine) autoAcceptMCPChanges(ctx context.Context, now time.Time) {
 	for i := range c.Config.MCPServers {
 		entry := &c.Config.MCPServers[i]
 		if entry.Tools.AutoAcceptChanges && entry.IsEnabled() &&
-			len(mcpreview.AutoAccepts(mcpreview.Changes(byServer[entry.Name], index[entry.Name]))) > 0 {
+			len(mcpreview.AutoAccepts(byServer[entry.Name], index[entry.Name])) > 0 {
 			pending = append(pending, entry.Name)
 		}
 	}
@@ -285,7 +285,7 @@ func (e *Engine) autoAcceptMCPChanges(ctx context.Context, now time.Time) {
 	node := e.nodeID()
 	for _, server := range pending {
 		var accepted []mcpreview.Change
-		for _, change := range mcpreview.AutoAccepts(mcpreview.Changes(byServer[server], stored[server])) {
+		for _, change := range mcpreview.AutoAccepts(byServer[server], stored[server]) {
 			var version uint64
 			if before, ok := stored[server][change.Tool]; ok {
 				version = before.Version
@@ -312,7 +312,7 @@ func (e *Engine) autoAcceptMCPChanges(ctx context.Context, now time.Time) {
 // `mcp_server_acted`, each with what it moved ([types.MCPToolChangeRecord]).
 // The records stand whether or not the audit lands; the log names them too.
 func (e *Engine) auditAutoAccepted(ctx context.Context, server, node string, accepted []mcpreview.Change) {
-	rec := types.MCPServerActed{ActorName: node, ActorKind: string(iam.KindEngine),
+	rec := types.MCPServerActed{ActorName: node, ActorKind: string(iam.ActorSystem),
 		Action: types.MCPServerAutoAcceptChanges, Server: server, Outcome: types.AuditApplied}
 	for _, c := range accepted {
 		rec.Accepted = append(rec.Accepted, c.Tool)
@@ -352,6 +352,14 @@ func changeRecord(c mcpreview.Change) types.MCPToolChangeRecord {
 		out.After = toolWords(a.Digest, a.Title, a.Description, a.Declared)
 	}
 	return out
+}
+
+// digestOfChange is the digest a change lists its tool under, "" for a removal.
+func digestOfChange(c mcpreview.Change) string {
+	if c.After == nil {
+		return ""
+	}
+	return c.After.Digest
 }
 
 // toolWords is one definition as a change record keeps it.
@@ -455,17 +463,16 @@ func (e *Engine) changedConditions(ctx context.Context, c *Company, conds []stat
 			conds[j].ChangesUnread = true
 			continue
 		}
-		changes := mcpreview.Changes(byServer[entry.Name], index[entry.Name])
 		auto := map[string]bool{}
 		if entry.Tools.AutoAcceptChanges {
 			// ACCEPTED AT THE NEXT BEAT, so raised by nothing: the alarm
 			// counts only what waits on a person.
-			for _, c := range mcpreview.AutoAccepts(changes) {
-				auto[c.Tool] = true
+			for _, c := range mcpreview.AutoAccepts(byServer[entry.Name], index[entry.Name]) {
+				auto[c.Tool+"\n"+digestOfChange(c)] = true
 			}
 		}
-		for _, change := range changes {
-			if auto[change.Tool] || !mcpreview.Holds(entry.Tools, change) {
+		for _, change := range mcpreview.Changes(byServer[entry.Name], index[entry.Name]) {
+			if auto[change.Tool+"\n"+digestOfChange(change)] || !mcpreview.Holds(entry.Tools, change) {
 				continue
 			}
 			holding = append(holding, pending{&conds[j], change})

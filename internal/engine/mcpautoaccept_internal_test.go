@@ -73,14 +73,17 @@ func autoAcceptRig(t *testing.T, company *Company, first, now []nodeListing) (*E
 	return e, fleet, published
 }
 
-// setLive makes listings the fleet's live listings as this node reads them.
+// setLive makes listings the fleet's live listings as this node reads them,
+// each written now.
 func setLive(e *Engine, listings ...nodeListing) {
 	e.listings.mu.Lock()
 	defer e.listings.mu.Unlock()
 	e.listings.answered, e.listings.presenceRead = true, true
 	e.listings.fleet = map[string]coord.MCPListing{}
 	nodes := map[string]struct{}{}
+	now := time.Now()
 	for _, l := range listings {
+		l.listing.At = now
 		e.listings.fleet[coord.MCPListingKey(l.listing.Server, l.listing.Node)] = l.listing
 		nodes[l.listing.Node] = struct{}{}
 	}
@@ -160,7 +163,7 @@ mcp_servers:
 	}
 	rec := acted[0]
 	if rec.Action != types.MCPServerAutoAcceptChanges || rec.Server != "tracker" || rec.ActorName != "node-a" ||
-		rec.ActorKind != "engine" || rec.Outcome != types.AuditApplied ||
+		rec.ActorKind != "system" || rec.Outcome != types.AuditApplied ||
 		!slices.Equal(rec.Accepted, []string{"close_items", "purge_items"}) {
 		t.Fatalf("the audit record is %+v, want the node's auto_accept_changes of both tools", rec)
 	}
@@ -263,9 +266,43 @@ mcp_servers:
 		t.Fatal(err)
 	}
 	stored := mcpreview.IndexOf(held)["tracker"]
-	if got := mcpreview.AutoAccepts(mcpreview.Changes([]coord.MCPListing{onA.listing, onB.listing},
-		stored)); len(got) != 0 {
+	e.listings.mu.Lock()
+	live := []coord.MCPListing{e.listings.fleet[coord.MCPListingKey("tracker", "node-a")],
+		e.listings.fleet[coord.MCPListingKey("tracker", "node-b")]}
+	e.listings.mu.Unlock()
+	if got := mcpreview.AutoAccepts(live, stored); len(got) != 0 {
 		t.Errorf("AutoAccepts takes %+v of one tool's two definitions, want none", got)
+	}
+}
+
+// A TOOL ONE NODE STILL LISTS AS ACCEPTED IS LEFT FOR A PERSON, not flipped
+// between the two definitions at every beat, and stands on the condition.
+// Mutation: count only the changes per tool, not the digests listed, and this is red.
+func TestAToolOneNodeStillListsAsAcceptedIsLeftForAPerson(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	company := specCompany(t, `
+name: Acme
+mcp_servers:
+  - {name: tracker, command: tracker-mcp, tools: {default: allow, auto_accept_changes: true}}
+`)
+	tracker := fakeListing("tracker", "node-a", 1, "close_items")
+	onB := reworded(fakeListing("tracker", "node-b", 1, "close_items"), "close_items", "Close them all")
+	e, fleet, published := autoAcceptRig(t, company, []nodeListing{tracker}, []nodeListing{tracker, onB})
+	for range 2 {
+		e.autoAcceptMCPChanges(ctx, time.Now())
+	}
+	if got := storedRecord(t, fleet, "tracker", "close_items"); got.Digest != listedDigest(tracker, "close_items") ||
+		got.Auto {
+		t.Errorf("the tool two nodes list two ways was accepted as %+v, want it left as first accepted", got)
+	}
+	if acted := published.acted(); len(acted) != 0 {
+		t.Errorf("audited %+v, want nothing", acted)
+	}
+	conds := []statelog.MCPServerCondition{{Server: "tracker"}}
+	e.changedConditions(ctx, company, conds)
+	if conds[0].Changes != 1 {
+		t.Errorf("the condition counts %d changes, want the one left for a person", conds[0].Changes)
 	}
 }
 

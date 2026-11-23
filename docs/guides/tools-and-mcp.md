@@ -1653,14 +1653,14 @@ mcp_servers:
   left to its hints that now says it is read-only then runs at `allow`. Turn it
   on only for a server whose changes you would accept unread.
 - **Each acceptance is audited** as an `mcp_server_acted` of the node itself
-  (actor kind `engine`), action `auto_accept_changes`, naming each tool and,
+  (actor kind `system`), action `auto_accept_changes`, naming each tool and,
   in `changes`, what moved: its kind, the parts, whether it claims less risk,
   and the definition before and after (digest, title, description as a listing
   keeps it, and the declared hints). The accepted record says it was accepted
   automatically (`auto_accepted` on the detail's `before`).
 - **It raises no `mcp_tools_changed`**: a change it will accept is not counted,
-  so the server's page shows no Needs attention item for it, and notes that its
-  changes are accepted automatically.
+  so no Needs attention item is raised for it, and the server's page notes that
+  its changes are accepted automatically.
 - **It accepts definitions, nothing else.** Levels still decide every call: a
   tool at `approve` still asks, a `blocked` one stays blocked, and a call
   already waiting for a person's answer still waits for it. Turning it on
@@ -1668,9 +1668,11 @@ mcp_servers:
 - **It is set per server.** No company-wide default exists, and a server added
   later, or added again under the same name, reviews its changes until its own
   entry sets it.
-- **A tool listed under two definitions at once** (two nodes mid-upgrade) is
-  left for a person, since accepting each in turn would flip the record at
-  every beat; it raises `mcp_tools_changed` as ever.
+- **A tool listed under two definitions at once** (two nodes mid-upgrade, one
+  of them still on the accepted definition) is left for a person, since
+  accepting each in turn would flip the record at every beat; it raises
+  `mcp_tools_changed` as ever. So is a removal while the server lists no tool
+  at all, and a change no listing newer than the accepted record shows.
 
 #### Reviewing a changed tool from the dashboard
 
@@ -1696,14 +1698,17 @@ the server and the count, and decides nothing until you press **Accept N
 changes**. The list is fixed when it opens, and the press sends the digest of
 each listed definition, so a definition swapped since is refused by name and
 nothing is decided. Each change is recorded and audited exactly as accepting it
-alone would be.
+alone would be. A tool the fleet lists under two definitions at once is left
+out, said under the list, and decided on its own.
 
 **Accept tool changes automatically**, under **Default for this server** on the
 Tools tab and on the add and edit flow's approvals step, sets
 `tools.auto_accept_changes` ([above](#accepting-a-servers-changes-automatically)).
 Turning it on asks first, saying that the server's tools can then change what
 they do without review and how many changes waiting now it accepts. While it is
-on, the server's Overview says so.
+on, the server's Overview says so, the Tools tab raises only the changes it
+leaves for a person, and an edit that moves the server's address warns on its
+review step that the new address inherits the setting.
 
 When two or more changes only reword a read-only tool, **Accept N wording
 changes** accepts them together. A change qualifies when only its title or
