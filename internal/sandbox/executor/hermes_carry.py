@@ -177,12 +177,12 @@ def renew(db_path, title, system_path):
             env[SYSTEM_ENV] = system
         else:
             env.pop(SYSTEM_ENV, None)
-        # Written back as Hermes writes both (measured on 0.23.3): the environment spaced, the whole compact,
-        # each with its keys sorted.
+        # Written back as Hermes writes both (measured on 0.23.3): the environment spaced with non-ASCII
+        # escaped, the whole compact with it raw, each with its keys sorted.
         policy["client_env_json"] = json.dumps(env, sort_keys=True)
         local["policy"] = policy
         db.execute("update state_meta set value = ? where key = ?",
-                   (json.dumps(local, sort_keys=True, separators=(",", ":")), POLICY_KEY % sid))
+                   (json.dumps(local, sort_keys=True, separators=(",", ":"), ensure_ascii=False), POLICY_KEY % sid))
         renewed += 1
     db.commit()
     return "ok" if renewed else "none"

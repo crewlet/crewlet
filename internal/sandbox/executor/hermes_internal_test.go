@@ -1155,3 +1155,73 @@ func TestTheStoresNewestMessageIsWhereALaunchsRowsBegin(t *testing.T) {
 	}
 }
 
+// hermesPolicyValue is the frozen launch (state_meta's local policy value) a
+// record holds, as stored.
+func hermesPolicyValue(t *testing.T, record []byte) string {
+	t.Helper()
+	for line := range bytes.Lines(record) {
+		var rec struct {
+			T string `json:"t"`
+			R struct {
+				Key   string `json:"key"`
+				Value string `json:"value"`
+			} `json:"r"`
+		}
+		if json.Unmarshal(line, &rec) == nil && rec.T == "state_meta" && strings.HasPrefix(rec.R.Key, "gateway.local_policy.v1:") {
+			return rec.R.Value
+		}
+	}
+	t.Fatal("the record holds no frozen launch")
+	return ""
+}
+
+// A RENEWED HERMES LAUNCH IS WRITTEN AS HERMES WRITES IT (measured on 0.23.3):
+// the whole compact with its keys sorted and non-ASCII raw, the client
+// environment spaced, sorted, non-ASCII escaped. Renewed with the text it was
+// frozen with, the steered fixture's launch comes back byte for byte; renewed
+// with non-ASCII text in a launch whose working directory is non-ASCII, the
+// directory stays raw and the text is escaped.
+//
+// Mutation: escape the whole's non-ASCII, space it, or leave its keys unsorted.
+func TestARenewedHermesLaunchIsWrittenAsHermesWritesIt(t *testing.T) {
+	t.Parallel()
+	renewed := func(t *testing.T, record []byte, text string) string {
+		dir := t.TempDir()
+		member, db, system := filepath.Join(dir, "session.jsonl"), filepath.Join(dir, "state.db"), filepath.Join(dir, "system.md")
+		for path, body := range map[string][]byte{member: record, system: []byte(text)} {
+			if err := os.WriteFile(path, body, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		hermesCarry(t, "restore", member, db, filepath.Join(dir, "policy"), hermesFixtureTitle)
+		hermesCarry(t, "renew", db, hermesFixtureTitle, system)
+		return hermesPolicyValue(t, []byte(hermesCarry(t, "dump", db, hermesFixtureTitle, "/dev/null")))
+	}
+	fixture := hermesFixture(t, "0.23.3", "session-steered.jsonl")
+	frozen := hermesPolicyValue(t, fixture)
+	if got := renewed(t, fixture, "SEAT-TEXT"); got != frozen {
+		t.Errorf("renewed with its own text, the launch reads\n%.300s\nwant it as frozen\n%.300s", got, frozen)
+	}
+	var policy map[string]any
+	if err := json.Unmarshal([]byte(frozen), &policy); err != nil {
+		t.Fatal(err)
+	}
+	policy["policy"].(map[string]any)["cwd"] = "/work/naïve"
+	literal := func(v any) []byte {
+		var b bytes.Buffer
+		enc := json.NewEncoder(&b)
+		enc.SetEscapeHTML(false)
+		if err := enc.Encode(v); err != nil {
+			t.Fatal(err)
+		}
+		return bytes.TrimSuffix(b.Bytes(), []byte("\n"))
+	}
+	edited := bytes.Replace(fixture, literal(frozen), literal(string(literal(policy))), 1)
+	if bytes.Equal(edited, fixture) {
+		t.Fatal("the fixture's frozen launch was not found to edit")
+	}
+	got := renewed(t, edited, "naïve — text")
+	if !strings.Contains(got, `"cwd":"/work/naïve"`) || !strings.Contains(got, `na\\u00efve \\u2014 text`) {
+		t.Errorf("the renewed launch reads %.400s; want its directory raw and its text escaped in the environment", got)
+	}
+}
