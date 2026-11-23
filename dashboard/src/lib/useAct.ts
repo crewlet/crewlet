@@ -18,12 +18,10 @@
  *  - `pending`: "Sent. This node has not applied it yet", because the
  *    reads that follow wait for it and a person watching a spinner deserves
  *    to know why;
- *  - `unknown`: a toast that STAYS: "Could not confirm. It may have
- *    landed", with a Retry that sends the SAME operation key, which the engine
- *    scopes to the person and takes as the write's identity, so a retry is
- *    the first attempt again rather than a second change. Never retried on
- *    its own: whether to try again is the person's call about their own
- *    change. It goes once a later press of the same change is answered;
+ *  - `unknown`: asked again under its key for a few seconds (`protocol/act.ts`)
+ *    under a "Checking" toast; still unknown, a toast that STAYS, "Could not
+ *    confirm. It may have landed", whose Retry sends the SAME key, so a retry
+ *    is the first attempt again. It goes once the same change is answered;
  *  - `refused` — the engine's reason, held on the hook (`refusal`) for the
  *    control to draw beside itself, where it stays until the next press:
  *    a refusal in a toast is gone before the person has read which field it
@@ -151,6 +149,9 @@ export interface Act<T extends ActionTool> {
 /** The sentence a pending answer is shown as. */
 export const PENDING_SENTENCE = "Sent. This node has not applied it yet.";
 
+/** The title a press is shown under while an unknown answer is asked again. */
+export const CHECKING_TITLE = "Checking that it landed";
+
 /** The title an unknown answer is shown under. */
 export const UNKNOWN_TITLE = "Could not confirm. It may have landed";
 
@@ -244,10 +245,26 @@ export function useAct<T extends ActionTool>(tool: T): Act<T> {
       inFlight.current += 1;
       setBusy(true);
       setRefused(null);
+      // ONE TOAST PER PRESS while it is asked again, replaced by what it came
+      // to: the unknown warning under the same id, or gone once it landed.
+      const checking = `act-unknown-${press.opId}`;
+      let rechecked = false;
+      const onRecheck = () => {
+        if (press.label.quiet || rechecked) return;
+        rechecked = true;
+        toast.show({
+          id: checking,
+          variant: "info",
+          title: CHECKING_TITLE,
+          message: `The change: ${press.label.done}.`,
+          duration: 0,
+        });
+      };
       let result: ActResult;
       try {
-        result = await act(tool, press.args, { opId: press.opId, signal });
+        result = await act(tool, press.args, { opId: press.opId, signal, onRecheck });
       } catch (err) {
+        if (rechecked) toast.dismiss(checking);
         // ABANDONED, which is the caller's own doing and not an answer:
         // nothing to report, and nothing to retry.
         if (isAbort(err)) return null;
@@ -256,6 +273,7 @@ export function useAct<T extends ActionTool>(tool: T): Act<T> {
         inFlight.current -= 1;
         setBusy(inFlight.current > 0);
       }
+      if (rechecked && result.kind !== "unknown") toast.dismiss(checking);
       const change = changeKey(press.args);
       if (result.kind !== "unknown") {
         for (const id of unsettled.current.get(change) ?? []) toast.dismiss(id);
@@ -305,7 +323,7 @@ export function useAct<T extends ActionTool>(tool: T): Act<T> {
         case "unknown": {
           // ONE TOAST PER PRESS, replaced rather than stacked when its own
           // Retry comes back unknown again.
-          const id = `act-unknown-${press.opId}`;
+          const id = checking;
           toast.show({
             id,
             variant: "warning",

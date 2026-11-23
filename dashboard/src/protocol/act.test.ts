@@ -7,9 +7,9 @@
  * false about their own change.
  */
 
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { ACT_ERRORS } from "../contract/errors.ts";
-import { act, newActOpID } from "./act.ts";
+import { act, CONFIRM_WAITS_MS, newActOpID } from "./act.ts";
 import { UNCONFIRMED_SENTENCE } from "./writeOutcome.ts";
 import { SessionFloors } from "./session.ts";
 import { currentSessionNeed, sessionRestored, setStepUpConfirmer } from "./signin.ts";
@@ -138,7 +138,16 @@ describe("the request", () => {
   });
 });
 
+/** What a press came to once its re-ask waits ran out on the faked clock. */
+async function settled<T>(press: Promise<T>): Promise<T> {
+  await vi.runAllTimersAsync();
+  return press;
+}
+
 describe("what a change came to", () => {
+  beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }));
+  afterEach(() => vi.useRealTimers());
+
   test("applied raises this tab's floor for the domain to where the record landed", async () => {
     stub(async () => json(APPLIED, 200));
     const floors = new SessionFloors();
@@ -226,29 +235,95 @@ describe("what a change came to", () => {
   test("an unknown outcome raises nothing", async () => {
     stub(async () => json({ ...APPLIED, outcome: "unknown" }, 200));
     const floors = new SessionFloors();
-    const result = await act("set_pins", {}, { floors });
+    const result = await settled(act("set_pins", {}, { floors }));
     expect(result.kind).toBe("unknown");
     expect(floors.floor("tracker")).toBeNull();
   });
 
   test("an outcome this build does not know is unknown, never applied", async () => {
     stub(async () => json({ ...APPLIED, outcome: "committed" }, 200));
-    const result = await act("set_pins", {}, { floors: new SessionFloors() });
+    const result = await settled(act("set_pins", {}, { floors: new SessionFloors() }));
     expect(result.kind).toBe("unknown");
   });
 
   // THE REQUEST LEFT AND NOTHING CAME BACK: it may have landed. Never a
-  // refusal, never retried here.
-  test("a connection lost after the request left is unknown, and is sent once", async () => {
+  // refusal; asked again under the SAME key, once per wait, and then unknown.
+  test("a connection lost after the request left is asked again under its key, then unknown", async () => {
     const calls = stub(() => Promise.reject(new TypeError("Failed to fetch")));
-    const result = await act("set_pins", {}, { floors: new SessionFloors() });
+    const rechecks = vi.fn();
+    const result = await settled(
+      act("set_pins", {}, { floors: new SessionFloors(), onRecheck: rechecks }),
+    );
     expect(result.kind).toBe("unknown");
+    expect(calls).toHaveLength(1 + CONFIRM_WAITS_MS.length);
+    expect(new Set(calls.map(keyOf)).size).toBe(1);
+    expect(rechecks).toHaveBeenCalledTimes(CONFIRM_WAITS_MS.length);
+  });
+
+  // A WRITE THAT LANDED UNDER A SLOW STORE: its first answer could not confirm
+  // it, and the same key asked again finds it applied, at its position.
+  // Mutation: answer the first unknown, and this sees no floor.
+  test("an unknown answer found landed when asked again is applied", async () => {
+    const answers = [
+      () => json({ ...APPLIED, outcome: "unknown", position: null }, 200),
+      () => json(APPLIED, 200),
+    ];
+    const calls = stub(async () => answers[Math.min(calls.length, answers.length) - 1]!());
+    const floors = new SessionFloors();
+    const result = await settled(act("set_pins", {}, { floors }));
+    expect(result).toMatchObject({ kind: "applied", position: "CREWLET_TRACKER_LOG@1:4711" });
+    expect(calls).toHaveLength(2);
+    expect(keyOf(calls[1]!)).toBe(keyOf(calls[0]!));
+    expect(floors.floor("tracker")).toBe("CREWLET_TRACKER_LOG@1:4711");
+  });
+
+  // A WRITE KEYED ON STATE is never asked again on its own: sent after the
+  // state moved, it would change it again. Mutation: drop the row's reask.
+  test("a write keyed on its object's state is sent once and left unknown", async () => {
+    const calls = stub(async () => new Response("bad gateway", { status: 502 }));
+    const result = await settled(
+      act("resume_seat", { handle: "sre" }, { floors: new SessionFloors() }),
+    );
+    expect(result.kind).toBe("unknown");
+    expect(calls).toHaveLength(1);
+  });
+
+  // ASKED AGAIN, A REFUSAL MAY BE THE FIRST ATTEMPT'S OWN EFFECT (a name it
+  // took, a question it answered): nobody can say, so it stays unknown and
+  // nothing more is sent.
+  test("a refusal of the same key asked again leaves it unknown", async () => {
+    const answers = [
+      () => new Response("bad gateway", { status: 502 }),
+      () => json({ error: "exists", tool: "set_pins", detail: "already there" }, 409),
+    ];
+    const calls = stub(async () => answers[Math.min(calls.length, answers.length) - 1]!());
+    const result = await settled(act("set_pins", {}, { floors: new SessionFloors() }));
+    expect(result.kind).toBe("unknown");
+    expect(calls).toHaveLength(2);
+  });
+
+  // ABANDONED WHILE IT WAITS to ask again: the caller's abort, never an answer.
+  test("an abort while an unknown answer waits to be asked again rejects", async () => {
+    const calls = stub(async () => new Response("bad gateway", { status: 502 }));
+    const controller = new AbortController();
+    const pending = act(
+      "set_pins",
+      {},
+      {
+        signal: controller.signal,
+        floors: new SessionFloors(),
+        onRecheck: () => controller.abort(),
+      },
+    );
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
     expect(calls).toHaveLength(1);
   });
 
   test("a gateway's own 502 is unknown: the engine behind it may have written", async () => {
     stub(async () => new Response("<html>bad gateway</html>", { status: 502 }));
-    expect((await act("set_pins", {}, { floors: new SessionFloors() })).kind).toBe("unknown");
+    expect((await settled(act("set_pins", {}, { floors: new SessionFloors() }))).kind).toBe(
+      "unknown",
+    );
   });
 
   // THE ENGINE'S UNKNOWN IS TOLD IN A PERSON'S WORDS: its `detail` is the
@@ -267,7 +342,7 @@ describe("what a change came to", () => {
         503,
       ),
     );
-    const result = await act("set_pins", {}, { floors: new SessionFloors() });
+    const result = await settled(act("set_pins", {}, { floors: new SessionFloors() }));
     expect(result).toMatchObject({ kind: "unknown", reason: UNCONFIRMED_SENTENCE });
     expect(JSON.stringify(result)).not.toMatch(/op_id|Idempotency-Key/);
   });
@@ -280,7 +355,7 @@ describe("what a change came to", () => {
         503,
       ),
     );
-    const result = await act("set_pins", {}, { opId, floors: new SessionFloors() });
+    const result = await settled(act("set_pins", {}, { opId, floors: new SessionFloors() }));
     expect(result).toMatchObject({ kind: "unknown", opId, reason: UNCONFIRMED_SENTENCE });
   });
 

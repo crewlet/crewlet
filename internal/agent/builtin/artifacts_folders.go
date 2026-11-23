@@ -472,12 +472,13 @@ func (t *createArtifactFolder) CallForTurn(ctx context.Context, turn *turnctx.Tu
 	out := map[string]any{"folder": created.Folders[len(created.Folders)-1].ID, "path": path,
 		"folders": chain}
 	if created.Created == 0 {
+		// THE FOLDER EXISTS: nothing appended, so nothing to be behind on.
 		refund()
-		out["outcome"] = "exists"
+		out["outcome"], out["created"] = statelog.OutcomeApplied, 0
 	} else {
 		t.deps.settle(ctx, created.Result.Position)
-		out["outcome"], out["created"] = "created", created.Created
-		out["write"], out["position"] = outcomeOf(created.Result), positionOf(created.Result.Position)
+		out["outcome"], out["created"] = outcomeOf(created.Result), created.Created
+		out["position"] = positionOf(created.Result.Position)
 	}
 	return jsonResult(withArtifactOperation(out, c))
 }
@@ -585,17 +586,22 @@ func (t *moveArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	results := make([]map[string]any, 0, len(refs))
 	var firstCause error
 	landed := 0
+	// THE CALL'S OUTCOME IS ITS LEAST CERTAIN WRITE'S ([statelog.LessCertain]),
+	// `applied` where no item appended anything.
+	outcome := statelog.OutcomeApplied
 	for _, r := range refs {
-		res, cause := t.moveOne(ctx, c, r, dest)
+		res, wrote, cause := t.moveOne(ctx, c, r, dest)
 		if cause != nil && firstCause == nil {
 			firstCause = cause
 		}
-		if o := res["outcome"]; o == "moved" || o == "unchanged" {
+		if o := res["result"]; o == "moved" || o == "unchanged" {
 			landed++
 		}
+		outcome = statelog.LessCertain(outcome, wrote)
 		results = append(results, res)
 	}
-	out := map[string]any{"folder": dest, "path": destPath, "moved": landed, "results": results}
+	out := map[string]any{"folder": dest, "path": destPath, "moved": landed, "results": results,
+		"outcome": outcome}
 	if landed == 0 {
 		rendered, err := jsonResult(withArtifactOperation(out, c))
 		if err != nil {
@@ -613,12 +619,12 @@ func (t *moveArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // and its own record. The result says what happened, and the cause is the
 // refusal's where it did not land.
 func (t *moveArtifact) moveOne(ctx context.Context, c artifactCaller, ref, dest string) (
-	map[string]any, error) {
+	map[string]any, statelog.Outcome, error) {
 
 	res := map[string]any{"artifact": ref}
-	refuse := func(r tools.Result) (map[string]any, error) {
-		res["outcome"], res["message"] = "refused", r.Output
-		return res, r.Cause
+	refuse := func(r tools.Result) (map[string]any, statelog.Outcome, error) {
+		res["result"], res["message"] = "refused", r.Output
+		return res, "", r.Cause
 	}
 	h, _, refusal := t.deps.head(ctx, t.Name(), map[string]any{"artifact": ref})
 	if refusal != nil {
@@ -635,8 +641,8 @@ func (t *moveArtifact) moveOne(ctx context.Context, c artifactCaller, ref, dest 
 				"was moved.", h.ID)))
 	}
 	if h.Folder == dest {
-		res["outcome"] = "unchanged"
-		return res, nil
+		res["result"] = "unchanged"
+		return res, "", nil
 	}
 	t.deps.present(c, h.ID, presence.Editing, presence.Focus{})
 	written, err := t.deps.Writer.Move(ctx, t.deps.call(c, dec.Standing.Role, dec.Elevated), h.ID, dest)
@@ -646,15 +652,15 @@ func (t *moveArtifact) moveOne(ctx context.Context, c artifactCaller, ref, dest 
 	case written.Result.Outcome == statelog.OutcomeUnknown:
 		r := artifactUnknown(t.Name(), c, written.Result, "Read the artifact with "+GetArtifactTool+" "+
 			"or list the folder: if it is there, the move landed.")
-		res["outcome"], res["message"] = "unknown", r.Output
-		return res, r.Cause
+		res["result"], res["message"] = "unknown", r.Output
+		return res, statelog.OutcomeUnknown, r.Cause
 	}
 	t.deps.settle(ctx, written.Result.Position)
-	res["outcome"] = "moved"
+	res["result"] = "moved"
 	if url := t.deps.link(h.ID); url != "" {
 		res["url"] = url
 	}
-	return res, nil
+	return res, outcomeOf(written.Result), nil
 }
 
 // moveRefs reads `artifacts`: one to [artifacts.MaxMovesPerCall] references,
