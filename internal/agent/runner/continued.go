@@ -304,19 +304,32 @@ func (r *Runner) inPlaceAfter(ctx context.Context, carry carried, round roundCal
 }
 
 // leadsHeld is every held call carry's lead tells what became of
-// ([carried.tellsHeld]), which no list in a brief it leads tells
+// ([carried.tellsHeld]), and every call it tells its run parked on
+// ([carried.tellsCalled]), which no list in a brief it leads tells
 // ([Runner.calledAfter]); round is the round the carry carries on, where its
-// call was held.
+// calls were made.
 //
 // BY ITS TOOL, WHATEVER ITS ID: a lead whose held call names no id still tells
 // a call of its tool, which a told call of that tool could be taken for
 // ([partners.couldBeTakenFor]); an empty id picks out no call to leave out of
 // the lists, since only an approved call carries one ([BridgedCall.HeldID]).
 func leadsHeld(carry carried, round int) []toldHeld {
+	var out []toldHeld
 	if id, tool := carry.tellsHeld(); tool != "" {
-		return []toldHeld{{id: id, tool: tool, round: round}}
+		out = append(out, toldHeld{id: id, tool: tool, round: round})
 	}
-	return nil
+	return append(out, parkedOn(carry.tellsCalled(), round)...)
+}
+
+// parkedOn is called, the calls a lead tells its run parked on in round
+// ([Asked.Called]), as the calls no list in its brief tells: the lead tells
+// each, with what it returned, so listed too it would be told twice.
+func parkedOn(called []types.CallReturned, round int) []toldHeld {
+	var out []toldHeld
+	for _, c := range called {
+		out = append(out, toldHeld{tool: c.Tool, round: round, seq: c.Seq})
+	}
+	return out
 }
 
 // inPlaceNotes is what a relaunch carrying the round on in its job's own box
@@ -702,7 +715,10 @@ func (r *Runner) checkoutName() string {
 // after it made the call, reads it placed after every call the log had taken
 // (internal/sandbox's withApproved), so past the save point of every capture
 // before it: one placed after holds it, and listed beside the lead it would be
-// told twice. A call an earlier answer approved is told as any call is.
+// told twice. A call an earlier answer approved is told as any call is. NOR A
+// CALL A LEAD TELLS ITS RUN PARKED ON ([parkedOn]), by its place, late or in
+// flight: nobody waited for it, so it would be listed among the late calls
+// beside the lead's account of what it returned.
 
 // THE LISTS ARE RENDERED AS THE PRIOR-WORK LEDGER RENDERS A ROUND, HELD TO ITS
 // BUDGETS ([ledger.Format]), fitted together: skipped meta-tools left out, an
@@ -824,8 +840,7 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 		// never shows it, and it reads alike every told call of its tool: on the
 		// held side it would be told twice, the second under words saying the
 		// session shows it.
-		toldByLead := call.Approved && call.HeldID != "" &&
-			slices.ContainsFunc(as.leads, func(l toldHeld) bool { return l.id == call.HeldID })
+		toldByLead := as.toldByLead(call, round.of)
 		if heldAt(call, through, owed) {
 			if !toldByLead {
 				held = append(held, call)
@@ -874,7 +889,7 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 	// call did not take effect, so a run checks before repeating it. Never a
 	// submission: it is failed.
 	for _, call := range inAdmissionOrder(round.unfinished) {
-		if !slices.Contains(r.cfg.SkipNames, call.Name) {
+		if !slices.Contains(r.cfg.SkipNames, call.Name) && !as.toldByLead(call, round.of) {
 			late = append(late, call)
 		}
 	}
@@ -1259,7 +1274,7 @@ func (r *Runner) partnersOf(of int, as toldAs) partners {
 //   - A SHOWN CALL OF THE RENDERED ROUNDS that reads alike t ([readAlike]).
 func (p partners) couldBeTakenFor(t BridgedCall, opts ledger.FormatOptions) bool {
 	if slices.ContainsFunc(p.leads, func(l toldHeld) bool {
-		return l.tool == t.Name && (!t.Held || l.round != p.of)
+		return l.tool == t.Name && (l.seq != 0 || !t.Held || l.round != p.of)
 	}) {
 		return true
 	}
@@ -1333,7 +1348,7 @@ func (r *Runner) closedShown(history []ledger.Iteration, of int, as toldAs) []le
 			case slices.Contains(r.cfg.SkipNames, call.Name), call.Name == SubmitWorkTool:
 				continue
 			case call.Withheld && slices.ContainsFunc(as.leads, func(l toldHeld) bool {
-				return l.round == entry.Iteration && l.tool == call.Name
+				return l.seq == 0 && l.round == entry.Iteration && l.tool == call.Name
 			}):
 				continue
 			}
@@ -1343,14 +1358,30 @@ func (r *Runner) closedShown(history []ledger.Iteration, of int, as toldAs) []le
 	return out
 }
 
-// toldHeld is a held call a lead tells what became of: the approved call's id
-// ([BridgedCall.HeldID]), its tool and its round. By id the round's lists leave
-// out the call made for it; by round and tool the closed rounds' listed-again
-// calls leave out its withheld calls ([Runner.closedShown]), a closed list
-// keeping no id.
+// toldHeld is a call a lead tells what became of: a held call, by the approved
+// call's id ([BridgedCall.HeldID]), its tool and its round; or, seq set, a call
+// the run parked on ([Asked.Called]), by its place in the round's log
+// ([BridgedCall.Seq]), its tool and its round. By id or place the round's lists
+// leave out the call ([toldAs.toldByLead]); by round and tool the closed
+// rounds' listed-again calls leave out a held call's withheld calls
+// ([Runner.closedShown]), a closed list keeping no id.
 type toldHeld struct {
 	id, tool string
 	round    int
+	seq      int
+}
+
+// toldByLead reports whether a lead of the brief tells call, a call of round
+// of, so it is told once, by the lead, never in a list ([Runner.calledAfter]):
+// the approved call made for a held call a lead tells, or a call a lead tells
+// its run parked on, found in flight ([Resume.Unfinished]) or not.
+func (as toldAs) toldByLead(call BridgedCall, of int) bool {
+	return slices.ContainsFunc(as.leads, func(l toldHeld) bool {
+		if l.seq != 0 {
+			return l.seq == call.Seq && l.tool == call.Name && l.round == of
+		}
+		return call.Approved && call.HeldID != "" && l.id == call.HeldID
+	})
 }
 
 // toldAs is how a brief tells a round's calls, as [Runner.calledAfter]'s rules
