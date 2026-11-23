@@ -6,8 +6,10 @@
 //       the chat's conversation as the messages of Cursor's own
 //       ConversationHistory, one JSON message a line (the session's archive
 //       member); live reads a store Cursor still writes, without recovering it
-//   doc <in.jsonl> <out.json>
-//       those lines as the document --conversation-history-file reads
+//   doc <in.jsonl> <out.json> [fragment.json]
+//       those lines as the document --conversation-history-file reads, each
+//       call to one of Crewlet's servers under an earlier run's name renamed
+//       to this run's, the fragment's
 //   mcp-add <mcp.json> <fragment.json> <state.json>
 //       the run's servers laid into the home's mcp.json beside its own
 //   mcp-remove <mcp.json> <state.json>
@@ -188,6 +190,7 @@ async function exportChat(store, out, live) {
       return Buffer.from(r.data)
     }
     const messages = []
+    let first = ''
     rootMessages(get(meta.latestRootBlobId)).forEach((id, at) => {
       const raw = get(id)
       let m
@@ -197,6 +200,7 @@ async function exportChat(store, out, live) {
         refuse(`message ${at} is a blob of a kind this run does not carry (not a JSON message)`)
       }
       if (!isObject(m)) refuse(`message ${at} is no JSON object`)
+      if (at === 0) first = m.role
       switch (m.role) {
         case 'system':
           // Cursor writes its system prompt again on every start, an
@@ -205,8 +209,13 @@ async function exportChat(store, out, live) {
         case 'user':
           // CURSOR'S OWN ACCOUNT OF THE BOX, written afresh on every start
           // with the standing rules in it: carried, it would stand beside the
-          // new one and keep the old rules (measured on 2026.11.22).
-          if (typeof m.content === 'string' && m.content.startsWith('<user_info>')) return
+          // new one and keep the old rules (measured on 2026.11.22). Known by
+          // where Cursor writes it, the message after its system prompt, as
+          // text where a person's message is parts; one anywhere else refuses.
+          if (typeof m.content === 'string' && m.content.startsWith('<user_info>')) {
+            if (at === 1 && first === 'system') return
+            refuse(`message ${at} is an account of the box (<user_info>) where Cursor writes none`)
+          }
           messages.push({ user: { content: userContent(m.content, at) } })
           return
         case 'assistant':
@@ -230,7 +239,46 @@ async function exportChat(store, out, live) {
 
 const kinds = new Set(['user', 'assistant', 'tool'])
 
-function doc(lines, out) {
+// renamer maps each of Crewlet's servers, by its name without the run's
+// suffix, to this run's name for it: a history calls them under an earlier
+// run's names, which this run's Cursor does not serve (measured: "MCP server
+// does not exist").
+function renamer(fragment) {
+  const ours = new Map()
+  if (fragment === undefined) return ours
+  const f = readJSON(fragment, "the run's own MCP servers")
+  if (!isObject(f?.mcpServers)) refuse("the run's own MCP servers name no mcpServers")
+  for (const name of Object.keys(f.mcpServers)) {
+    const m = /^(.+)-[0-9a-f]{8}$/.exec(name)
+    if (!m) refuse(`the run's own MCP server ${JSON.stringify(name)} carries no run suffix`)
+    ours.set(m[1], name)
+  }
+  return ours
+}
+
+// renamed is m with each of its calls to one of ours under an earlier run's
+// name (`<server>-<8 hex>`) naming this run's instead.
+function renamed(m, ours) {
+  if (ours.size === 0 || !m.assistant) return m
+  for (const c of m.assistant.content) {
+    if (!c.toolCall) continue
+    let args
+    try {
+      args = JSON.parse(c.toolCall.argsJson)
+    } catch {
+      continue
+    }
+    const was = isObject(args) && typeof args.server === 'string' && /^(.+)-[0-9a-f]{8}$/.exec(args.server)
+    if (was && ours.has(was[1])) {
+      args.server = ours.get(was[1])
+      c.toolCall.argsJson = JSON.stringify(args)
+    }
+  }
+  return m
+}
+
+function doc(lines, out, fragment) {
+  const ours = renamer(fragment)
   let raw
   try {
     raw = fs.readFileSync(lines, 'utf8')
@@ -248,7 +296,7 @@ function doc(lines, out) {
     }
     const keys = isObject(m) ? Object.keys(m) : []
     if (keys.length !== 1 || !kinds.has(keys[0])) refuse(`line ${at + 1} of the session's messages is no message`)
-    messages.push(m)
+    messages.push(renamed(m, ours))
   })
   if (messages.length === 0) refuse("the session's messages hold no conversation")
   writeWhole(out, JSON.stringify({ messages }) + '\n')
@@ -365,7 +413,7 @@ switch (cmd) {
     await exportChat(args[0], args[1], args[2] === 'live')
     break
   case 'doc':
-    doc(args[0], args[1])
+    doc(args[0], args[1], args[2])
     break
   case 'mcp-add':
     mcpAdd(args[0], args[1], args[2])
