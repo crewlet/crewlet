@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -59,9 +60,9 @@ func (f *findingsFleet) findingsRead(ctx context.Context) error {
 // [Engine.mintingStates], read each minting integration's status by its key
 // and keep the read term. A status naming findings a person owes is judged
 // from the copy [mintFindings] holds; one it does not hold is read on the
-// holder's own context, this reading judging that integration as it cannot
-// say (the pass's own judgement, waiting), and the next reading, once the
-// read has landed, judges it stopped. Decided by signals: the context a read
+// holder's own context, this reading holding the child as it cannot say
+// (never waiting), and the next reading, once the read has landed, judges it
+// stopped. Decided by signals: the context a read
 // carries, and the holder telling a read's end.
 //
 // Mutation: read the findings in mintingStates on its caller's context
@@ -91,8 +92,8 @@ func TestTheMintJudgementReadsNoFindingsOnItsCallersPath(t *testing.T) {
 
 	beat := context.WithValue(t.Context(), onCallersPath{}, true)
 	rows := e.mcpStatus(beat)
-	if len(rows) != 1 || rows[0].Waiting != 1 || rows[0].Failed != 0 {
-		t.Fatalf("the first reading's rows = %+v, want the child waiting: its findings are not in hand", rows)
+	if len(rows) != 1 || rows[0].Waiting != 0 || !strings.Contains(rows[0].Error, "cannot be read") {
+		t.Fatalf("the first reading's rows = %+v, want the child held: its findings are not in hand", rows)
 	}
 	if n := fleet.onPath.Load(); n != 0 {
 		t.Fatalf("the judgement read a findings record %d times on its caller's path, want never", n)
