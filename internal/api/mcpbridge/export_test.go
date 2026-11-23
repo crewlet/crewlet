@@ -93,3 +93,6 @@ var (
 	_ bounded = (*crewletmcp.Tool)(nil)
 	_ bounded = (*subagent.Tool)(nil)
 )
+
+// ParkedNote answers a call still running near its harness's ceiling.
+const ParkedNote = parkedNote

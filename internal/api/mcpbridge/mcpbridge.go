@@ -32,8 +32,9 @@
 //   - A CALL IS THE RUN'S, NOT THE REQUEST'S. It runs under the launch context
 //     stripped of cancellation, never the HTTP request's: a box that disconnects
 //     abandons only the answer, never a tool half-way through a write. A call its
-//     harness gave up on, or that its opening's end answered as still running, is
-//     recorded with no outcome though it ran ([Call.Abandoned]).
+//     harness gave up on, or that its opening answered as still running (its end,
+//     or its harness's ceiling), is recorded as one nobody waited for
+//     ([Call.Abandoned]).
 //   - A PANIC IS CONTAINED: answered failed, the run's tools closed to it.
 //   - A RUN THAT IS OVER REFUSES: a call reaching a session after its run ended or
 //     a relaunch replaced it is answered, not run.
@@ -145,10 +146,28 @@
 //
 // # How long a box waits for a call
 //
-// Kept going, a call keeps its harness waiting as long as it runs, and neither harness
-// sets its own tool timeout short. So the box is told the bridge's bound on every server
-// ([Bridge.CallTimeout]): past it the harness cancels the call, recorded as one nobody
-// waited for.
+// Kept going, a call keeps its harness waiting as long as it runs. So the box is told the
+// bridge's bound on every server ([Bridge.CallTimeout]), as the harness's own tool timeout:
+// past it the harness cancels the call, recorded as one nobody waited for.
+//
+// # A call longer than its harness waits
+//
+// A harness may give up on a call at a clock no setting moves: Kimi Code's calls carry no
+// progress token, so a response is silent until its answer, and Node's fetch drops one
+// whose headers have not come in 300 seconds. So a box's runner STATES its harness's
+// ceiling, or that it has none (internal/sandbox/executor's Harness.MCPCallCeiling), the
+// launch names it with the job ([Session.CallCeiling]), and a call still running near it,
+// BY THE TOOL LOOP'S OWN CLOCK (internal/agent/toolloop's ParkBefore), is answered as the
+// tool loop answers one: still running, END YOUR TURN, you will be resumed with its result
+// ([binding.park]). NOT A FAILURE. Its job is PARKED ON THE CALL first, a wait on the run's
+// row ([Session.Park], internal/sandbox's CallWait) put to nobody, as `wait_for_run`
+// parks one (ADR-0176). The call runs on and is recorded as one nobody waited for; the
+// run's collection waits for it before parking the job, the engine answers the park at
+// once, and that answer carries the run on in its own session as a person's answer would,
+// its brief telling the call and what it returned in the brief's own bounds. A job that
+// works on is refused `submit_work` while parked and is handed no item of the call, so its
+// relaunch tells the call once. A ceiling that IS a setting is set to the bridge's bound
+// instead, so the call's own answer reaches the model in its turn.
 //
 // # An opening ends without waiting for its calls
 //
@@ -368,6 +387,13 @@ type Session struct {
 	// names the same model as its run's other writes.
 	Model string
 
+	// CallCeiling is how long the box's harness waits for one call whatever
+	// its settings say, as the runner that starts the box states it
+	// (sandbox.OpenedJob.CallCeiling); zero for none. A call still running
+	// near it is answered first ([binding.park]); none is answered early in a
+	// session stating none.
+	CallCeiling time.Duration
+
 	// CallIDMeta is the key of a call's `_meta` the box's harness hands its own
 	// id for the call under, as the runner that starts the box declares it
 	// (sandbox.OpenedJob.CallIDMeta): the one key every call's id is read by
@@ -411,6 +437,13 @@ type Session struct {
 	// key: a reported load is recorded as the run's own load of the key (skills.go).
 	// Nil hands none: the route answers 404 and load_tool_skill is listed normally.
 	Skills map[string]string
+
+	// Park parks the job on a call of its own answered still running before
+	// its harness's ceiling ([binding.park]): marked on the run's row as a
+	// wait on the call (sandbox.CallWait), which the engine answers once the
+	// run is collected, carrying it on with the call's result. Nil marks
+	// nothing, a test's: the call is then answered still running alone.
+	Park func(ctx context.Context, call sandbox.CallWait) (sandbox.AskOutcome, error)
 
 	// Started is told which session the job's box started, the first time a
 	// request of the job reaches an opening of its session, BEFORE that
@@ -1648,6 +1681,10 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 	// which nobody waits ([callBound]), and a digest unless its tool may hold it
 	// for a person first ([asksFirst]).
 	started := time.Now()
+	// ITS HARNESS'S CEILING COUNTS FROM HERE, as its own clock does from the
+	// request ([binding.park]).
+	parks, stopParks := parkClock(s.CallCeiling)
+	defer stopParks()
 	entry := Begun{Name: in.Name, Seq: seq, StartedAt: started.UTC(), Digest: digest,
 		Until: started.Add(callBound(s.Surface, in.Name) + callMargin).UTC(), CallID: callID}
 	if asksFirst(s.Surface, in.Name) {
@@ -1704,18 +1741,94 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 		return c.answerOf(a)
 	case <-c.cut:
 		if c.unrun {
-			return c.endsAnswer()
+			return c.cutAnswer()
 		}
 	}
 	if in.Running != nil {
 		in.Running()
 	}
-	select {
-	case a := <-concluded:
-		return c.answerOf(a)
-	case <-c.cut:
-		return c.endsAnswer()
+	for {
+		select {
+		case a := <-concluded:
+			return c.answerOf(a)
+		case <-c.cut:
+			return c.cutAnswer()
+		case <-parks:
+			// Answered here where its own answer is not decided first.
+			o.park(c, in.Name, seq, s.CallCeiling, time.Since(started))
+			parks = nil
+		}
 	}
+}
+
+// parkClock is when a call arriving now is answered still running, its tool
+// still running ([binding.park]): [toolloop.ParkBefore] the run's ceiling
+// ([Session.CallCeiling]), the clock the tool loop parks a call by, and never
+// where its runner states none. stop releases the clock.
+func parkClock(ceiling time.Duration) (parks <-chan time.Time, stop func() bool) {
+	if ceiling <= 0 {
+		return nil, func() bool { return false }
+	}
+	t := time.NewTimer(toolloop.ParkBefore(ceiling))
+	return t.C, t.Stop
+}
+
+// parkedNote answers a call still running near its harness's ceiling, its job
+// parked on it ([binding.park]): NOT A FAILURE, as [endedRunningNote] is not.
+// The run is carried on once it ends, its session told the call and what it
+// returned, as the tool loop's own "still running" tells (internal/agent/toolloop).
+const parkedNote = "This call is still running, longer than your harness waits for one call. " +
+	"END YOUR TURN NOW: you will be resumed with its result. Do not make the call again."
+
+// park answers c, still running, before its harness's ceiling gives it up,
+// unless its answer is decided already, and parks its job on it: the run's
+// row is marked ([Session.Park]) BEFORE the answer, so a harness that ends its
+// turn at once is collected parked on the call, and BEFORE the call's record
+// ([binding.conclude] waits for the mark), so the job working on as it lands
+// is handed no item of it that its relaunch then would not tell. NOT A
+// FAILURE. Where the mark is not made, the answer promises no resume: an
+// ended run is told so ([endedRunningNote]), any other only that the call
+// runs on ([stillRunningNote]). See the package doc, "A call longer than its
+// harness waits".
+func (o *binding) park(c *bridgedCall, name string, seq int, ceiling, after time.Duration) {
+	o.mu.Lock()
+	if c.answeredLocked() {
+		o.mu.Unlock()
+		return
+	}
+	marked := make(chan struct{})
+	c.cutFirst, c.marked = true, marked
+	o.mu.Unlock()
+
+	s := o.session
+	note, outcome := stillRunningNote, sandbox.AskNotRunning
+	var err error
+	if s.Park != nil {
+		outcome, err = s.Park(o.ctx, sandbox.CallWait{Tool: name, Seq: seq})
+	}
+	switch {
+	case err != nil:
+		log.WarnContext(o.ctx, "mcp_bridge_call_park_unrecorded", "run_id", s.RunID, "launch_id", o.id,
+			"seat", s.Handle, "tool", name, "seq", seq, "error", err.Error(),
+			"detail", "the call was answered still running without parking its job on it, so its result "+
+				"reaches the run only as a call nobody waited for")
+	case outcome == sandbox.AskRecorded, outcome == sandbox.AskAlreadyAsked:
+		// PARKED, on this call or on what the job asked before it, whose
+		// resume tells this call too.
+		note = parkedNote
+	case s.Park != nil:
+		note = endedRunningNote
+	}
+	close(marked)
+	o.mu.Lock()
+	c.note = note
+	close(c.cut)
+	o.mu.Unlock()
+	log.InfoContext(o.ctx, "mcp_bridge_call_parked", "run_id", s.RunID, "launch_id", o.id,
+		"seat", s.Handle, "tool", name, "seq", seq, "after", after.String(), "ceiling", ceiling.String(),
+		"parked", string(outcome),
+		"detail", "the box was answered that the call is still running, before its harness gives up "+
+			"on it; the call runs on to its own end, and the run is carried on with it once collected")
 }
 
 // writeAhead writes call c's entry ahead of it ([Ledger.Begin]) on the call's
@@ -1749,8 +1862,9 @@ func (o *binding) writeAhead(c *bridgedCall, entry Begun, args map[string]any, d
 	defer o.mu.Unlock()
 	defer close(c.decided)
 	switch {
-	case c.cutByEnd:
-		// THE OPENING'S END ANSWERED IT ([binding.endKeeping]) as not run: that stands,
+	case c.cutFirst:
+		// THE OPENING'S END ANSWERED IT ([binding.endKeeping]) as not run, the one
+		// answer a call not yet begun can get before its own: that stands,
 		// and the entry is withdrawn wherever the log may have taken it.
 		if errors.Is(err, ErrNotTaken) {
 			return answer{}, nil, nil
@@ -1839,20 +1953,20 @@ type answer struct {
 	own    bool
 }
 
-// answerOf is the box's answer to c: a's own, unless the opening's end answered
-// first, though a arrived before the handler saw the end.
+// answerOf is the box's answer to c: a's own, unless the opening answered first
+// (its end or a park), though a arrived before the handler saw it.
 func (c *bridgedCall) answerOf(a answer) toolsession.Result {
 	if a.own {
 		return a.result
 	}
-	return c.endsAnswer()
+	return c.cutAnswer()
 }
 
 // conclude is a bridged call's ONE RECORD STEP, once, on its goroutine after its
 // tool returned. WHO ANSWERS is decided first, under the opening's lock
-// ([binding.claim]): its own result where the opening has not ended, else the
-// end's ([binding.endKeeping]), so answer and record agree on whether anybody
-// waited. It records ONE UPDATE ([binding.record], [Ledger.Record]), marked
+// ([binding.claim]): its own result where the opening has not answered it,
+// else the opening's ([binding.endKeeping], [binding.park]), so answer and
+// record agree on whether anybody waited. It records ONE UPDATE ([binding.record], [Ledger.Record]), marked
 // abandoned where nobody waited; an update the ledger could not land
 // ([ErrUnrecorded]) is asked again ([binding.recordOwed]). It MAY RUN AFTER
 // THE OPENING ENDED, even after the record was deleted: the identity is on the
@@ -1908,10 +2022,11 @@ func (o *binding) conclude(c *bridgedCall, r ran) (answer, func()) {
 	if after := fence(s); after != nil {
 		o.stop(after)
 	}
-	// WHETHER ANYBODY WAITED ([Call.Abandoned]): nobody where the opening's end
-	// answered first, or the harness cancelled, or a progress found the response
-	// gone, by the time the tool returned. A hang-up is seen only at the next
-	// progress, so one in the last cadence before the tool returns is not seen.
+	// WHETHER ANYBODY WAITED ([Call.Abandoned]): nobody where the opening
+	// answered first (its end, or a park), or the harness cancelled, or a
+	// progress found the response gone, by the time the tool returned. A
+	// hang-up is seen only at the next progress, so one in the last cadence
+	// before the tool returns is not seen.
 	abandoned := !own || gone(r.abandoned)
 	recorded, digest := r.args, r.digest
 	if res.Held {
@@ -1938,14 +2053,23 @@ func (o *binding) conclude(c *bridgedCall, r ran) (answer, func()) {
 }
 
 // claim decides who answers c now that its tool has returned, once, under the
-// opening's lock: its own result, unless the opening's end answered it first.
+// opening's lock: its own result, unless the opening answered it first (its
+// end, or its harness's ceiling: [binding.park], whose mark on the run's row
+// it waits for).
 func (o *binding) claim(c *bridgedCall) bool {
 	o.mu.Lock()
-	defer o.mu.Unlock()
-	if c.cutByEnd {
+	marked := c.marked
+	if c.cutFirst {
+		o.mu.Unlock()
+		if marked != nil {
+			// A PARK'S MARK FIRST ([binding.park]): its record is the job's
+			// park's to tell.
+			<-marked
+		}
 		return false
 	}
 	c.own = true
+	o.mu.Unlock()
 	return true
 }
 

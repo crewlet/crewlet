@@ -120,18 +120,22 @@ type bridgedCall struct {
 	// ([binding.conclude]): what [Bridge.AwaitCalls] waits on.
 	recorded chan struct{}
 
-	// own, cutByEnd and note are under the opening's mu, and decided once:
+	// own, cutFirst and note are under the opening's mu, and decided once:
 	// own where the call's own answer answers it — its tool returned while
 	// the opening was live ([binding.claim]), or its entry was refused
-	// ([binding.writeAhead]); cutByEnd where the opening's end answered it with
-	// note first, and closed cut — and unrun where that answer is that the
-	// call was not run, its entry still being written as the end came, which
-	// is a failure: nothing ran.
+	// ([binding.writeAhead]); cutFirst where the opening answered it with note
+	// before its tool returned, and closed cut: its end ([binding.endKeeping])
+	// or its harness's ceiling ([binding.park]) — and unrun where that answer
+	// is that the call was not run, its entry still being written as the end
+	// came, which is a failure: nothing ran.
 	own      bool
-	cutByEnd bool
+	cutFirst bool
 	unrun    bool
 	note     string
 	cut      chan struct{}
+	// marked, set with cutFirst by a park, is closed once the park's mark on
+	// the run's row is decided ([binding.park]); nil for every other call.
+	marked chan struct{}
 
 	// begun is under the opening's mu, and began closed with it: the call's
 	// entry is on the run's log, the call admitted to the run's call log, and
@@ -151,14 +155,14 @@ type bridgedCall struct {
 }
 
 // answeredLocked reports whether the call's answer is decided: its own, or
-// its opening's end's. Under the opening's mu.
-func (c *bridgedCall) answeredLocked() bool { return c.own || c.cutByEnd }
+// the opening's before its tool returned. Under the opening's mu.
+func (c *bridgedCall) answeredLocked() bool { return c.own || c.cutFirst }
 
-// endsAnswer is the answer the opening's end handed the call: not a failure
-// for a call it answered as still running (see the package doc), and a failure
-// for one it answered as not run (unrun). Read only once cut is closed, which
-// the end does after it sets the note.
-func (c *bridgedCall) endsAnswer() toolsession.Result {
+// cutAnswer is the answer the opening handed the call before its tool
+// returned: not a failure for a call it answered as still running (see the
+// package doc), and a failure for one its end answered as not run (unrun).
+// Read only once cut is closed, which is done after the note is set.
+func (c *bridgedCall) cutAnswer() toolsession.Result {
 	return toolsession.Result{Output: c.note, Failed: c.unrun}
 }
 
@@ -345,7 +349,7 @@ func (o *binding) endKeeping(keep SteerInbox, how ending) {
 		if c.answeredLocked() {
 			continue
 		}
-		c.cutByEnd, c.note = true, how.stillRunning()
+		c.cutFirst, c.note = true, how.stillRunning()
 		if !c.begun {
 			c.note, c.unrun = how.notRun(), true
 			unbegun++
