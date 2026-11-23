@@ -4,8 +4,12 @@
  * server reaches, the last thing that went wrong, and a server's menu.
  */
 
+import { useState } from "react";
 import {
+  Button,
+  Inline,
   Menu,
+  Switch,
   RelativeTime,
   Select,
   StatusDot,
@@ -22,16 +26,18 @@ import {
   type GlyphSizeStep,
 } from "@crewlethq/icons/glyphs";
 import type {
+  McpChangeView,
   McpMemberServerNode,
   McpMemberServerStatus,
   McpServerNode,
   McpToolLevel,
   McpToolView,
 } from "~/contract/mcp.ts";
+import { ConfirmModal } from "~/components/Modal.tsx";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { listed, plural } from "~/lib/format.ts";
 import type { McpData } from "./data.ts";
-import { BASELINE, failureWords, LEVEL, LEVELS, RISK, STATE } from "./words.ts";
+import { AUTO_ACCEPT, BASELINE, failureWords, FIX, LEVEL, LEVELS, RISK, STATE } from "./words.ts";
 
 /**
  * The flows the page opens, by the `flow` parameter. `add` and `edit` are the
@@ -39,7 +45,7 @@ import { BASELINE, failureWords, LEVEL, LEVELS, RISK, STATE } from "./words.ts";
  * the dialog that stores one header or variable (`key`); `signin` and
  * `revoke` a server's OAuth sign-in, made and given up; `approve` the calls
  * a server's tools hold for a person's answer; `drift` the review of the tools
- * a server changed.
+ * a server changed (`step=all` opens on Accept all's list).
  */
 export type Flow =
   | "add"
@@ -89,6 +95,103 @@ export function useFlow() {
 
 /** Opens a flow on a server: from the list it names the server, on its page it is the page's. */
 export type OnFlow = (flow: Flow, server?: string, args?: Record<string, string>) => void;
+
+/**
+ * The changes one decision may take together, as the engine's auto-accept
+ * judges them: a tool listed under one definition across the fleet and
+ * changed once. A tool listed under two (mid-upgrade) is decided on its own.
+ */
+export function decidedTogether(
+  changes: readonly McpChangeView[],
+  tools: readonly McpToolView[],
+): McpChangeView[] {
+  return changes.filter(
+    (c) =>
+      changes.filter((o) => o.tool === c.tool).length === 1 &&
+      (tools.find((t) => t.raw === c.tool)?.definitions ?? 0) <= 1,
+  );
+}
+
+/**
+ * The switch for `tools.auto_accept_changes`, on the Tools tab and the add and
+ * edit flow alike: turning it on asks first, saying what it gives up.
+ */
+export function AutoAcceptSwitch({
+  server,
+  checked,
+  disabled = false,
+  waiting,
+  onChange,
+}: {
+  server: string;
+  checked: boolean;
+  disabled?: boolean;
+  /** The changes it would take now and those it leaves; null where not known. */
+  waiting: { taken: number; left: number } | null;
+  onChange: (on: boolean) => unknown;
+}) {
+  const [asking, setAsking] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const now = !waiting
+    ? " Any change waiting now is accepted too."
+    : `${waiting.taken > 0 ? ` The ${plural(waiting.taken, "change")} waiting now ${waiting.taken === 1 ? "is" : "are"} accepted too.` : ""}${
+        waiting.left > 0
+          ? ` ${plural(waiting.left, "change")} to a tool listed under two definitions at once still ${waiting.left === 1 ? "waits" : "wait"} for you.`
+          : ""
+      }`;
+  return (
+    <>
+      <Switch
+        label={AUTO_ACCEPT.label}
+        description={AUTO_ACCEPT.help}
+        checked={checked}
+        disabled={disabled || busy}
+        onCheckedChange={(on) => (on ? setAsking(true) : void onChange(false))}
+      />
+      {asking ? (
+        <ConfirmModal
+          open
+          onClose={() => setAsking(false)}
+          onConfirm={async () => {
+            setBusy(true);
+            try {
+              await onChange(true);
+            } finally {
+              setBusy(false);
+              setAsking(false);
+            }
+          }}
+          submitting={busy}
+          title={`Accept ${server}'s tool changes automatically?`}
+          message={`Its tools can then change what they do without review, a change that claims less risk included. Each change is accepted as it is listed and recorded in the audit log; levels still apply, and a call waiting for an answer still waits.${now} Other servers, and any added later, still ask first.`}
+          confirmLabel="Accept automatically"
+          cancelLabel="Cancel"
+        />
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * What a row saying a server's tools changed offers: Accept all, which lists
+ * every change before it accepts them, and Review. Every such row draws this.
+ */
+export function DriftActions({ server, onFlow }: { server?: string; onFlow: OnFlow }) {
+  return (
+    <Inline gap={2}>
+      <Button
+        size="small"
+        variant="secondary"
+        onClick={() => onFlow("drift", server, { step: "all" })}
+      >
+        Accept all
+      </Button>
+      <Button size="small" variant="secondary" onClick={() => onFlow("drift", server)}>
+        {FIX.review}
+      </Button>
+    </Inline>
+  );
+}
 
 /**
  * A server's mark is drawn at a glyph step, never a number of its own: `xl`

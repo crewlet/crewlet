@@ -31,7 +31,7 @@ func TestAGrowthTokenIsMintedOnlyForAUsableRecordedIdentityWithItsScopes(t *test
 		t.Fatalf("a seat with no identity answered %v", err)
 	}
 	rec := coord.GoogleIdentity{Handle: "builder", UniqueID: "100000000000000000077",
-		Email: "crewlet-g-builder-0a1b@acme-crewlet-id.iam.gserviceaccount.com", CreatedAt: time.Now()}
+		Email: "crewlet-builder-0a1b2c@acme-crewlet-id.iam.gserviceaccount.com", CreatedAt: time.Now()}
 	for _, state := range []struct {
 		name                string
 		disabled, delegated bool

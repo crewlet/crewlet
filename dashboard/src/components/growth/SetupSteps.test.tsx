@@ -13,11 +13,13 @@ test("an identity step shows the email to copy, the role, where, and whether it 
   render(
     <AddIdentity
       product="Google Analytics"
-      why="reads reports and nothing else"
+      why={[{ text: "reads reports and nothing else" }]}
       step={{
         email: "crewlet-gr-nimbus-ab12@identity.example.iam.gserviceaccount.com",
         role: { id: "predefinedRoles/viewer", name: "Viewer" },
-        where: { words: "Admin, Property access management", url: "https://analytics.google.com/" },
+        where: [
+          { ui: ["Admin", "Property access management"], url: "https://analytics.google.com/" },
+        ],
         level: "company",
         state: "missing",
       }}
@@ -26,9 +28,11 @@ test("an identity step shows the email to copy, the role, where, and whether it 
   expect(
     screen.getByText("crewlet-gr-nimbus-ab12@identity.example.iam.gserviceaccount.com"),
   ).toBeTruthy();
-  expect(screen.getByText("Viewer")).toBeTruthy();
+  expect(screen.getByText("Viewer").closest(".crewlet-vendor-ui")).toBeTruthy();
   expect(
-    screen.getByRole("link", { name: /Admin, Property access management/ }).getAttribute("href"),
+    screen
+      .getByRole("link", { name: /Admin then Property access management/ })
+      .getAttribute("href"),
   ).toBe("https://analytics.google.com/");
   expect(screen.getByText("Not added yet")).toBeTruthy();
   expect(screen.getByText(/company's read identity/)).toBeTruthy();
@@ -39,9 +43,9 @@ test("a seat's identity is named by the seat, and is marked added once the engin
     <AddIdentity
       product="Google Ads"
       step={{
-        email: "crewlet-g-growth-ab12@identity.example.iam.gserviceaccount.com",
+        email: "crewlet-growth-ab12cd@identity.example.iam.gserviceaccount.com",
         role: { id: "STANDARD", name: "Standard" },
-        where: { words: "Admin, Access and security", url: "" },
+        where: [{ ui: ["Admin", "Access and security"] }],
         level: "seat",
         seat: "Growth Lead",
         state: "present",
@@ -109,7 +113,7 @@ test("an identity the engine has not looked for yet says so", () => {
       step={{
         email: "a@b.example",
         role: { id: "viewer", name: "Viewer" },
-        where: { url: "", words: "Admin" },
+        where: [{ ui: ["Admin"] }],
         level: "company",
         state: "unknown",
       }}

@@ -4,6 +4,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/vendortext"
 )
 
 // What an operator has to supply before agents can talk on Mattermost.
@@ -42,7 +43,7 @@ func Requirements(in *config.Mattermost, resolve func(string) (string, bool)) []
 			Kind:       setup.KindURL,
 			ConfigPath: "integrations.mattermost.url",
 			Required:   true,
-			Hint:       "Your server's address. No public address is needed.",
+			Hint:       vendortext.Plain("Your server's address. No public address is needed."),
 			Format:     "https://chat.example.com",
 			// AND IT CLEARS NO FINDING, which is why it declares none.
 			//
@@ -62,7 +63,7 @@ func Requirements(in *config.Mattermost, resolve func(string) (string, bool)) []
 			Kind:       setup.KindID,
 			ConfigPath: "integrations.mattermost.team",
 			Required:   true,
-			Hint:       "The team slug the agent bots post in.",
+			Hint:       vendortext.Plain("The team slug the agent bots post in."),
 			// NO BLOCKS EITHER, and for the same reason the URL has
 			// none: without a team the access sync cannot open, so it
 			// faults instead of reporting a finding this field could
@@ -119,18 +120,18 @@ func AdminCredential() setup.Requirement {
 		// document, and an anchor claiming to go there would land
 		// somewhere else and say nothing about it.
 		//
-		// So it is carried in words, in the face this screen gives a
-		// literal: a menu path is a thing to follow exactly, and prose
-		// runs it into the sentence around it.
-		Hint: "A system administrator's personal access token.",
-		More: "Create it under " + tokenPath + ". It is kept so the agents' bots can be disabled again.",
+		// So it is carried as the vendor's menu path, unlinked: a path is a
+		// thing to follow exactly, and prose runs it into the sentence.
+		Hint: vendortext.Plain("A system administrator's personal access token."),
+		More: vendortext.Of(vendortext.W("Create it under "), tokenPath,
+			vendortext.W(". It is kept so the agents' bots can be disabled again.")),
 	}
 }
 
 // tokenPath is where an administrator makes a personal access token, said as
 // a path rather than linked: Mattermost serves user settings as a modal on one
 // route, so the page has no address of its own.
-const tokenPath = "`Profile > Security > Personal Access Tokens`"
+var tokenPath = vendortext.UI("Profile", "Security", "Personal Access Tokens")
 
 // Guide is what the connect form says around its fields.
 func Guide() setup.Guide {
@@ -139,10 +140,11 @@ func Guide() setup.Guide {
 			"reach this engine from outside.",
 		Prepare: []setup.Step{
 			{
-				Text:   "As a system administrator, create a token under " + tokenPath + ".",
+				Text: vendortext.Of(vendortext.W("As a system administrator, create a token under "), tokenPath,
+					vendortext.W(".")),
 				Yields: "admin_token",
 			},
-			{Text: "Paste it here and test it."},
+			{Text: vendortext.Plain("Paste it here and test it.")},
 		},
 	}
 }

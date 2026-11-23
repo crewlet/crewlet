@@ -52,8 +52,12 @@ type Log interface {
 
 // Store is where each source's standing is kept ([CoordStore]).
 type Store interface {
+	// Load is every standing without its misses, which Misses reads for
+	// one source; Save and SaveMisses record each, and Forget both.
 	Load(ctx context.Context) (map[integration.Kind]Status, error)
+	Misses(ctx context.Context, st Status) (Status, error)
 	Save(ctx context.Context, st Status) error
+	SaveMisses(ctx context.Context, st Status) error
 	Forget(ctx context.Context, kind integration.Kind) error
 
 	// Requests is every waiting ask that a source be read now, and Answered
@@ -360,6 +364,18 @@ func (w *Worker) visit(ctx context.Context, src Source, in Input, st Status, now
 	in.Now = now
 	st.LastAttemptAt, st.Completed, st.LastError = now, false, ""
 	st.Recorded, st.Retired, st.Purged = 0, 0, 0
+	// ITS MISSES, BY ITS KEY, before the vendor is asked anything: the one
+	// read of them a visit makes, and the plan cannot be decided without
+	// them. A store that cannot answer costs the vendor no read.
+	st, err := w.store.Misses(bounded, st)
+	if err != nil {
+		w.fault(ctx, st, "atlas_source_misses_unread", err)
+		return
+	}
+	recorded := st.MissingOverflow
+	for _, g := range st.Missing {
+		recorded += len(g.Entries)
+	}
 	read, err := src.Collect(bounded, in)
 	switch {
 	case errors.Is(err, integration.ErrNotConfigured):
@@ -382,6 +398,14 @@ func (w *Worker) visit(ctx context.Context, src Source, in Input, st Status, now
 	st = plan.Status
 	published, err := w.publish(bounded, kind, plan.Records, now, &st)
 	st.Recorded = published
+	// THE MISSES ARE RECORDED BEFORE THE STANDING that counts them, whatever
+	// the records did: what was published retired what it retired. Misses
+	// that did not land are not counted: the standing keeps the count of
+	// those still recorded, the ones this visit read.
+	if missErr := w.store.SaveMisses(ctx, st); missErr != nil {
+		err = errors.Join(err, missErr)
+		st.Missed = recorded
+	}
 	if err != nil {
 		w.fault(ctx, st, "atlas_source_record_failed", err)
 		return
@@ -389,7 +413,7 @@ func (w *Worker) visit(ctx context.Context, src Source, in Input, st Status, now
 	st.Completed, st.LastCompleteAt = true, now
 	log.InfoContext(ctx, "atlas_source_read", "source", kind.String(), "entries", st.Entries,
 		"calls", st.Calls, "withheld", st.Withheld, "recorded", st.Recorded, "retired", st.Retired,
-		"purged", st.Purged, "missing", len(st.Missing), "unread", len(st.Unread))
+		"purged", st.Purged, "missing", st.Missed, "unread", len(st.Unread))
 	w.save(ctx, st)
 }
 

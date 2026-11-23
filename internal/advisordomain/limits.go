@@ -49,8 +49,9 @@ const (
 	// refuses rather than reconciling a slice of the list as if it were all.
 	MaxNonClosed = 5000
 
-	// MaxPending bounds the read of runs requested and not yet recorded: a
-	// press during a run joins it, so a handful at most.
+	// MaxPending bounds the reads of runs not yet recorded, requested or left
+	// by a holder that stopped: a press during a run joins it, and the next
+	// holder closes what the last left, so a handful at most.
 	MaxPending = 100
 
 	// MaxAlarmEpisodes bounds one read of alarm episodes: thirty days of a

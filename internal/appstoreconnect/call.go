@@ -40,9 +40,11 @@ type made struct {
 	query url.Values
 	body  map[string]any
 	// app is the app the call acts on, "" for a team call.
-	app  string
+	app string
+	// team is the team of key, the calling agent's own key, which signs the
+	// call and every read the engine makes for it.
 	team *team
-	slot string
+	key  agentKey
 }
 
 // toolClass is the class each generic tool calls with.
@@ -94,38 +96,22 @@ func (p *Product) concrete(ctx context.Context, handle, tool string, args map[st
 		}
 		m.body = body
 	}
-	if err := p.place(ctx, seat, &m, args); err != nil {
+	if m.key, err = p.keyOf(ctx, handle); err != nil {
 		return made{}, err
 	}
-	slot, ok := keyFor(op, m.team.slots, class == growth.ClassAdmin)
-	if !ok {
-		return made{}, noKey(op, m.team.slots)
+	m.team = m.key.team
+	if err := sign(&m, growth.LevelOf(seat.Level)); err != nil {
+		return made{}, err
 	}
-	m.slot = slot
+	if err := p.place(ctx, seat, &m); err != nil {
+		return made{}, err
+	}
 	if class != op.Class {
 		if err := p.needState(ctx, &m); err != nil {
 			return made{}, err
 		}
 	}
 	return m, nil
-}
-
-// noKey is the refusal of a call no connected key may make, saying why where
-// the Admin key could: it is kept for account changes an administrator allows.
-func noKey(op growth.Operation, connected []string) error {
-	others := slices.DeleteFunc(slices.Clone(op.Roles), func(r string) bool { return r == RoleAdmin })
-	switch {
-	case slices.Contains(connected, adminSlot) && len(rolesNames(others)) == 0:
-		return growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("only the Admin role may make %s, and Crewlet "+
-			"uses the Admin key for account changes an administrator allows alone. No call was made.", op.ID))
-	case slices.Contains(connected, adminSlot):
-		return growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("%s needs a key with the %s role: Crewlet uses "+
-			"the Admin key for account changes an administrator allows alone. A person adds one on the "+
-			"integration's page. No call was made.", op.ID, words.Or(rolesNames(others))))
-	}
-	return growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("no connected key may make %s: it needs a key with "+
-		"the %s role. A person adds one on the integration's page. No call was made.", op.ID,
-		words.Or(rolesNames(op.Roles))))
 }
 
 // rolesNames are roles as setup names them, the Account Holder aside.
@@ -202,10 +188,10 @@ func typeAndID(path string) (typ, id string) {
 // price or availability naming a territory names nothing of the team's.
 var referenceTypes = map[string]bool{"territories": true, "appCategories": true}
 
-// place decides the app m acts on, or that it is a team call, and its team:
-// every owned resource the call names is placed in one of the seat's apps, in
-// one team, and any other resource it names needs team_resources.
-func (p *Product) place(ctx context.Context, seat *config.RoleAppStoreConnect, m *made, args map[string]any) error {
+// place decides the app m acts on, or that it is a team call, in the team of
+// the agent's key: every owned resource the call names is placed in one of
+// the seat's apps, and any other resource it names needs team_resources.
+func (p *Product) place(ctx context.Context, seat *config.RoleAppStoreConnect, m *made) error {
 	named, err := namedBy(m)
 	if err != nil {
 		return err
@@ -213,11 +199,10 @@ func (p *Product) place(ctx context.Context, seat *config.RoleAppStoreConnect, m
 	teamWide := false
 	for _, r := range named {
 		app := r.ID
-		var t *team
 		switch {
 		case r.Type == "apps":
 		case topology().owned[r.Type]:
-			if app, t, err = p.placeOwned(ctx, seat, r.Type, r.ID); err != nil {
+			if app, err = p.placeOwned(ctx, seat, m, r.Type, r.ID); err != nil {
 				return err
 			}
 		case referenceTypes[r.Type]:
@@ -228,10 +213,6 @@ func (p *Product) place(ctx context.Context, seat *config.RoleAppStoreConnect, m
 		}
 		if app == teamOwned {
 			teamWide = true
-			if m.team != nil && m.team != t {
-				return invalid("the call names resources of two teams.")
-			}
-			m.team = t
 			continue
 		}
 		if m.app == "" {
@@ -240,11 +221,9 @@ func (p *Product) place(ctx context.Context, seat *config.RoleAppStoreConnect, m
 			}
 			continue
 		}
-		if !slices.Contains(seat.Apps, app) {
-			return p.placeApp(ctx, seat, &made{}, app)
-		}
-		if other, err := p.teamOf(ctx, app); err != nil || other != m.team {
-			return invalid("the call names resources of two teams.")
+		// A SECOND APP of the seat's is in the key's team too, or refused.
+		if err := p.placeApp(ctx, seat, &made{team: m.team, key: m.key}, app); err != nil {
+			return err
 		}
 	}
 	typ, id := typeAndID(m.path)
@@ -252,16 +231,19 @@ func (p *Product) place(ctx context.Context, seat *config.RoleAppStoreConnect, m
 	case teamWide && !seat.TeamResources:
 		return growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("%s names the team's resources no app owns, "+
 			"and this agent's access does not include them (team_resources). No call was made.", m.op.ID))
-	case m.team != nil:
+	case m.app != "" || teamWide:
 		return nil
 	case typ == "apps" && id == "":
 		// THE TEAM'S APP LIST, cut to the seat's apps when answered.
-		return p.placeAnyApp(ctx, seat, m)
+		return nil
 	case topology().owned[typ] && id == "":
 		return invalid("a list of %s names its app: add query filter[app] with one of this agent's apps, or read it "+
 			"through the app (operation apps_..._getToManyRelated).", typ)
+	case !seat.TeamResources:
+		return growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("%s reaches the team's resources no app owns, "+
+			"and this agent's access does not include them (team_resources). No call was made.", m.op.ID))
 	}
-	return p.placeTeam(seat, m, args)
+	return nil
 }
 
 // namedBy is every resource m names: its path's, its query's ID filters' and
@@ -350,41 +332,21 @@ func bodyTarget(body map[string]any) (resourceRef, bool) {
 	return resourceRef{}, false
 }
 
+// placeApp places m in app: one of the seat's apps, in the team of its key.
 func (p *Product) placeApp(ctx context.Context, seat *config.RoleAppStoreConnect, m *made, app string) error {
 	if !slices.Contains(seat.Apps, app) {
 		return growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("app %s is not one of this agent's apps (%s). A "+
 			"person adds it on the integration's Agents tab. No call was made.", app, words.And(seat.Apps)))
 	}
-	t, err := p.teamOf(ctx, app)
+	apps, err := p.appsOf(ctx, m.team, m.key.client)
 	if err != nil {
-		return err
+		return said(err)
 	}
-	m.app, m.team = app, t
-	return nil
-}
-
-// placeAnyApp is the team of the seat's first reachable app, for the app list.
-func (p *Product) placeAnyApp(ctx context.Context, seat *config.RoleAppStoreConnect, m *made) error {
-	for _, app := range seat.Apps {
-		if t, err := p.teamOf(ctx, app); err == nil {
-			m.team = t
-			return nil
-		}
+	if !slices.ContainsFunc(apps, func(a appInfo) bool { return a.ID == app }) {
+		return growth.Refuse(growth.RefusedNotFound, fmt.Sprintf("app %s is not in the %s team, whose key this "+
+			"agent holds. No call was made.", app, m.team.id))
 	}
-	return growth.Refuse(growth.RefusedNotFound, "none of this agent's apps is in a connected team. No call was made.")
-}
-
-func (p *Product) placeTeam(seat *config.RoleAppStoreConnect, m *made, args map[string]any) error {
-	if !seat.TeamResources {
-		return growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("%s reaches the team's resources no app owns, "+
-			"and this agent's access does not include them (team_resources). No call was made.", m.op.ID))
-	}
-	name, _ := args["connection"].(string)
-	t, err := p.teamNamed(name)
-	if err != nil {
-		return err
-	}
-	m.team = t
+	m.app = app
 	return nil
 }
 
@@ -399,16 +361,14 @@ var readByTemplate = sync.OnceValue(func() map[string]growth.Operation {
 	return out
 })
 
-// readerOf is the least-privileged connected key, never the Admin key, whose
-// role may read path: a read, a placement search or a target's state.
-func readerOf(t *team, path string) (string, bool) {
+// mayRead reports whether role may make the read of path: a placement
+// search or a target's state, made with the agent's own key. A read the table
+// does not hold goes to Apple, which answers for the key itself.
+func mayRead(role, path string) bool {
 	parts := strings.Split(path, "/")
 	if len(parts) >= 4 {
 		parts[3] = "{id}"
 	}
 	op, ok := readByTemplate()[strings.Join(parts, "/")]
-	if !ok {
-		return "", false
-	}
-	return keyFor(op, t.slots, false)
+	return !ok || growth.Permits(op, []string{role})
 }

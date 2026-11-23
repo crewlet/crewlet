@@ -65,7 +65,7 @@ type atlasWorld struct {
 func newAtlasWorld() *atlasWorld {
 	f := newFakeExpo()
 	robot, token := f.robot(expo.AtlasRobotName, expo.RoleViewOnly)
-	_, agent := f.robot("crewlet-acme-nova", expo.RoleDeveloper)
+	_, agent := f.robot("crewlet-nova", expo.RoleDeveloper)
 	f.projects = []map[string]any{
 		atlasProject("app-1", "shop", "Shop", map[string]string{"ANDROID": "FINISHED", "IOS": "ERRORED"}, "Acme", "shop-app"),
 		atlasProject("app-2", "kiosk", "Kiosk [internal]", map[string]string{"IOS": "IN_PROGRESS"}),
@@ -410,7 +410,7 @@ func TestTheConnectFormTestsTheAtlasRobot(t *testing.T) {
 	var field *setup.Requirement
 	for _, r := range expo.Requirements(nil, none) {
 		if r.Kind == setup.KindSecret || r.Checkable {
-			if r.Field != expo.AtlasField || r.Required || r.Connect || !strings.HasPrefix(r.Hint, "See more in Atlas") {
+			if r.Field != expo.AtlasField || r.Required || r.Connect || !strings.HasPrefix(r.Hint.String(), "See more in Atlas") {
 				t.Errorf("%s = %+v", r.Field, r)
 			}
 			field = &r

@@ -185,10 +185,20 @@ type Record struct {
 	Told    []string `json:"told,omitempty"`
 }
 
-// EncodeRecord is r as the coordination store keeps it.
+// EncodeRecord is r as the coordination store keeps it: [MaxTold] marks of
+// each sort, and each change of the closed set once, in its order. So the
+// record is a small value at its widest, under 3 KB, which every read keeps
+// inside the read term (internal/coord's SmallValueBytes).
 func EncodeRecord(r Record) ([]byte, error) {
 	r.Told = r.Told[:min(len(r.Told), MaxTold)]
 	r.Pending = r.Pending[:min(len(r.Pending), MaxTold)]
+	named := r.Changes
+	r.Changes = nil
+	for _, c := range Changes {
+		if slices.Contains(named, c) {
+			r.Changes = append(r.Changes, c)
+		}
+	}
 	return json.Marshal(r)
 }
 

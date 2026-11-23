@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/vendortext"
 )
 
 // AtlasField is the form's field for the atlas's token.
@@ -39,12 +40,11 @@ func Requirements(in *config.DigitalOcean, resolve func(string) (string, bool)) 
 			Required:   true,
 			Connect:    true,
 			Format:     "the team's name as the team menu shows it",
-			Hint:       "Your team's name, as the {link} team menu shows it.",
-			More: "Each agent gets its own personal access token in this team, created when you turn " +
-				"the agent on.",
-			LinkText:  "DigitalOcean control panel",
-			VendorURL: "https://cloud.digitalocean.com/account/team",
-			Blocks:    integration.FindingCredentialMissing,
+			Hint: vendortext.Of(vendortext.W("Your team's name, as the "),
+				vendortext.W("DigitalOcean control panel").At(teamURL), vendortext.W(" team menu shows it.")),
+			More: vendortext.Plain("Each agent gets its own personal access token in this team, created when you turn " +
+				"the agent on."),
+			Blocks: integration.FindingCredentialMissing,
 			// Nothing to test here: the first agent's token proves the team.
 			CheckNote: "The first agent's token proves the team when it is pasted.",
 		},
@@ -68,15 +68,14 @@ func Requirements(in *config.DigitalOcean, resolve func(string) (string, bool)) 
 			ConfigPath: "integrations.digitalocean.atlas.token",
 			Checkable:  true,
 			CheckWith:  []string{"team"},
-			Hint:       "See more in Atlas: a read-only {link} made for the atlas alone.",
-			More: "Optional. In the team above, create a token named " + AtlasTokenName + " with Custom " +
-				"Scopes, ticking these and no other: " + strings.Join(atlasScopes, ", ") + ". The atlas then " +
-				"shows the team's Droplets, Kubernetes clusters, databases, load balancers, domains, apps " +
-				"and Spaces buckets, read again every hour, and reads no password, key or environment " +
-				"value. A token that can change anything is refused. To undo it, delete the token at " +
-				"DigitalOcean and clear this field.",
-			LinkText:  "personal access token",
-			VendorURL: NewTokenURL,
+			Hint: vendortext.Of(vendortext.W("See more in Atlas: a read-only "),
+				vendortext.W("personal access token").At(NewTokenURL), vendortext.W(" made for the atlas alone.")),
+			More: vendortext.Of(vendortext.W("Optional. In the team above, create a token named "+AtlasTokenName+" with "),
+				vendortext.UI("Custom Scopes"), vendortext.W(", ticking these and no other: "+strings.Join(atlasScopes, ", ")+". The atlas then "+
+					"shows the team's Droplets, Kubernetes clusters, databases, load balancers, domains, apps "+
+					"and Spaces buckets, read again every hour, and reads no password, key or environment "+
+					"value. A token that can change anything is refused. To undo it, delete the token at "+
+					"DigitalOcean and clear this field.")),
 		},
 	}
 	reqs[0].Present, reqs[0].Resolved, reqs[0].Stored = setup.Held(team, resolve)
@@ -93,17 +92,23 @@ func Guide() setup.Guide {
 		Summary: "Each agent acts at DigitalOcean with its own personal access token, so you can cut off " +
 			"one agent without touching the others.",
 		Prepare: []setup.Step{
-			{Text: "Find your team's name in the team menu of the {link}.", Link: "team", Yields: "team"},
-			{Text: "Connect, then turn agents on from the Agents tab."},
-			{Text: "Create each agent's token there when asked. The first token proves the team."},
+			{Text: vendortext.Of(vendortext.W("Find your team's name in the team menu of the "),
+				vendortext.W("DigitalOcean control panel").At(teamURL), vendortext.W(".")), Yields: "team"},
+			{Text: vendortext.Plain("Connect, then turn agents on from the Agents tab.")},
+			{Text: vendortext.Plain("Create each agent's token there when asked. The first token proves the team.")},
 			{
-				Text: "Optional, to see more in Atlas: create one more {link} named " + AtlasTokenName +
-					", for the atlas alone, with Custom Scopes and only:",
-				Link: AtlasField, Grants: AtlasScopes(), Yields: AtlasField,
+				Text: vendortext.Of(vendortext.W("Optional, to see more in Atlas: create one more "),
+					vendortext.W("personal access token").At(NewTokenURL),
+					vendortext.W(" named "+AtlasTokenName+", for the atlas alone, with "), vendortext.UI("Custom Scopes"),
+					vendortext.W(" and only:")),
+				Grants: AtlasScopes(), Yields: AtlasField,
 			},
 		},
 	}
 }
+
+// teamURL is the control panel's team page, whose menu shows the team's name.
+const teamURL = "https://cloud.digitalocean.com/account/team"
 
 // probeCallTimeout bounds the whole check inside [setup.VerifyBudget]: about
 // thirty requests, six at a time, each answered in well under a second.

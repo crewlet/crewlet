@@ -127,6 +127,10 @@ const (
 	// CodePasswordField is a password or payment field: a page that asks
 	// for credentials is the shape of phishing, whoever published it.
 	CodePasswordField Code = "password_field"
+
+	// CodeMoreWarnings closes a publish's warnings cut at their bound
+	// (internal/artifactupload's MaxReportWarnings), counting the rest.
+	CodeMoreWarnings Code = "more_warnings"
 )
 
 // Refusing reports whether a finding of code c refuses the publish.

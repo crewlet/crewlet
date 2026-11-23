@@ -99,3 +99,46 @@ test("a refusal about one seat's control says which, in the reader's words", () 
   expect(placedRefusal(new RestError(409, { error: "revision_advanced" }))).toBeNull();
   expect(placedRefusal(new Error("offline"))).toBeNull();
 });
+
+test("an identity is handed in to its own route, and given up with a DELETE there", async () => {
+  const calls = stub(200, {
+    verdict: { outcome: "works", summary: "Works." },
+    access: datadogAnswer(),
+  });
+  await accessApi.identity("app_store_connect", "growth", "app_store_connect", {
+    way: "handed_in",
+    value: "-----BEGIN PRIVATE KEY-----",
+    file_name: "AuthKey_7KQ4M2ZX9P.p8",
+    id: "7KQ4M2ZX9P",
+    detail: "85012345",
+  });
+  const keep = calls.at(-1)!;
+  expect(keep.url).toContain(
+    "/setup/integrations/app_store_connect/access/seats/growth/app_store_connect/identity",
+  );
+  expect(keep.init.method).toBe("POST");
+  expect(JSON.parse(String(keep.init.body))).toEqual({
+    way: "handed_in",
+    value: "-----BEGIN PRIVATE KEY-----",
+    file_name: "AuthKey_7KQ4M2ZX9P.p8",
+    id: "7KQ4M2ZX9P",
+    detail: "85012345",
+  });
+  // GIVEN UP WHERE THE VENDOR KEEPS A COMPANY IDENTITY: App Store Connect keeps none.
+  await accessApi.useCompany("meta_ads", "growth", "meta_ads");
+  const drop = calls.at(-1)!;
+  expect(drop.url).toContain("/setup/integrations/meta_ads/access/seats/growth/meta_ads/identity");
+  expect(drop.init.method).toBe("DELETE");
+});
+
+test("a save never sends an agent's identity, which only its own route changes", async () => {
+  const calls = stub(200, datadogAnswer());
+  await accessApi.save(
+    "meta_ads",
+    { growth: { meta_ads: { enabled: true, level: "read", identity: "own" } } },
+    "rev-7",
+  );
+  expect(JSON.parse(String(calls.at(-1)!.init.body))).toEqual({
+    seats: { growth: { meta_ads: { enabled: true, level: "read" } } },
+  });
+});

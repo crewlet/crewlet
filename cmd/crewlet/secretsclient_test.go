@@ -446,6 +446,64 @@ func TestTheEnginesOwnKeysAreRefusedByTheCommand(t *testing.T) {
 	}
 }
 
+// passCountedFleet counts the whole passes of the secrets bucket it is asked
+// for, each of which carries every sealed value across a node's link.
+type passCountedFleet struct {
+	coord.Fleet
+	passes atomic.Int64
+}
+
+func (f *passCountedFleet) SecretValues(ctx context.Context) ([]coord.SecretRecord, error) {
+	f.passes.Add(1)
+	return f.Fleet.SecretValues(ctx)
+}
+
+// A LISTING AND A REKEY'S DRY RUN READ THE STORE ONCE, through a node and with
+// the engine stopped alike: the names and the counts of what no command names
+// come from one pass, so neither is carried across the link twice and the
+// count a key is retired on describes the same store as the names beside it.
+// Mutation: read the rows and the counts with two calls, and each asks twice.
+func TestAListingAndADryRunReadTheStoreOnce(t *testing.T) {
+	t.Parallel()
+	node := newFakeSecretsNode(t)
+	node.body = `{"secrets":[{"name":"TOKEN","key_id":"k1"}],"engine_keys":{"total":1,"by_key":{"k1":1}}}`
+	cipher, err := secrets.NewCipher(secrets.Keyring{ActiveID: "k1", Keys: map[string][]byte{"k1": make([]byte, 32)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fleet := &passCountedFleet{Fleet: coordmem.NewFleet()}
+	store := fleetsecrets.New(fleet, cipher)
+	if err := store.Set(t.Context(), "TOKEN", "v", secrets.Author{Name: "sam", Kind: "operator"},
+		secrets.SourceCLI, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	for _, way := range []struct {
+		in     string
+		target *secretTarget
+		asked  func() int64
+		reset  func()
+	}{
+		{"through a node", &secretTarget{secretBackend: node.client(t), throughNode: true, where: "the node"},
+			func() int64 { return int64(node.requests) }, func() { node.requests = 0 }},
+		{"directly", &secretTarget{secretBackend: fleetBackend{store}, where: "the store"},
+			fleet.passes.Load, func() { fleet.passes.Store(0) }},
+	} {
+		for what, read := range map[string]func(io.Writer) error{
+			"a listing": func(out io.Writer) error { return listSecrets(t.Context(), way.target, out) },
+			"a dry run": func(out io.Writer) error { return rekeySecrets(t.Context(), way.target, "k2", true, out) },
+		} {
+			way.reset()
+			var out strings.Builder
+			if err := read(&out); err != nil || !strings.Contains(out.String(), "TOKEN") {
+				t.Fatalf("%s %s = %v, printing %q; want TOKEN named", what, way.in, err, out.String())
+			}
+			if n := way.asked(); n != 1 {
+				t.Errorf("%s %s read the store %d times, want once", what, way.in, n)
+			}
+		}
+	}
+}
+
 // A LISTING SAYS HOW MUCH A ROTATION HAS TO MOVE THAT NO COMMAND NAMES, from
 // the counts the node carries beside the names — the engine's keys and the
 // identity estate's values, and names none of it, nor the assistant's values,
@@ -459,10 +517,11 @@ func TestAListingCountsWhatNoCommandNames(t *testing.T) {
 		`"identity_values":{"people":{"k1":5,"k2":2},"invitations":{"k1":1}},` +
 		`"assistant_values":{"values":{"k1":7,"k2":4}},` +
 		`"executor_values":{"values":{"k1":6,"k2":1}}}`
-	held, err := node.client(t).EngineKeys(t.Context())
+	inventory, err := node.client(t).Inventory(t.Context())
 	if err != nil {
-		t.Fatalf("EngineKeys: %v", err)
+		t.Fatalf("Inventory: %v", err)
 	}
+	held := inventory.Held
 	if held.Keys.Total != 4 || held.Keys.StaleUnder("k2") != 3 {
 		t.Errorf("the count reads %+v, want 4 with 3 under a key other than k2",
 			held.Keys)
@@ -492,9 +551,9 @@ func TestAListingCountsWhatNoCommandNames(t *testing.T) {
 
 	node.body = `{"secrets":[],"engine_keys":{"total":0},"identity_values":null,` +
 		`"assistant_values":null,"executor_values":null}`
-	if held, err = node.client(t).EngineKeys(t.Context()); err != nil ||
-		held.Identity != nil || held.Assistant != nil || held.Executor != nil {
-		t.Errorf("a node with no identity estate read back as %+v (%v)", held, err)
+	if inventory, err = node.client(t).Inventory(t.Context()); err != nil ||
+		inventory.Held.Identity != nil || inventory.Held.Assistant != nil || inventory.Held.Executor != nil {
+		t.Errorf("a node with no identity estate read back as %+v (%v)", inventory.Held, err)
 	}
 }
 
@@ -801,7 +860,7 @@ func TestAListingOfHundredsOfSecretsIsReadWhole(t *testing.T) {
 	if len(listed) != len(rows) || listed[len(listed)-1].Name != "SEAT_TOKEN_1999" {
 		t.Errorf("listed %d rows, want all %d", len(listed), len(rows))
 	}
-	if _, err := node.client(t).EngineKeys(t.Context()); err != nil {
+	if _, err := node.client(t).Inventory(t.Context()); err != nil {
 		t.Errorf("the count a rekey reads was refused: %v", err)
 	}
 

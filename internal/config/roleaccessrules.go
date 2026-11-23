@@ -107,6 +107,7 @@ func (c *Company) validateSeatBlocks() error {
 		for _, kind := range growthSeatKeys() {
 			if s := role.growthSeatOf(kind); s != nil {
 				s.check(c, &p, at(base, kind))
+				checkSeatIdentity(&p, at(base, kind), s)
 			}
 		}
 	}

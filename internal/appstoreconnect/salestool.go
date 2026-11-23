@@ -3,6 +3,7 @@ package appstoreconnect
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"slices"
 	"time"
@@ -43,22 +44,29 @@ func (p *Product) sales(ctx context.Context, call growth.Call) (any, error) {
 	if _, perr := time.Parse(time.DateOnly, date); perr != nil {
 		return nil, invalid("`date` is a day as YYYY-MM-DD, or yesterday.")
 	}
-	name, _ := call.Args["connection"].(string)
-	t, err := p.teamNamed(name)
+	key, err := p.keyOf(ctx, call.Handle)
 	if err != nil {
 		return nil, err
 	}
-	if t.vendor == "" {
-		return nil, growth.Refuse(growth.RefusedUnavailable, "add the team's vendor number to read sales. No call was made.")
-	}
 	op, _ := Catalog().Operation(opSales)
-	slot, ok := keyFor(op, t.slots, false)
-	if !ok {
-		return nil, growth.Refuse(growth.RefusedForbidden, "sales need a Finance, Sales or Access to Reports key. No call was made.")
+	if !growth.Permits(op, []string{key.role}) {
+		fix := setUpIdentity
+		if growth.LevelOf(seat.Level) != growth.LevelRead {
+			// A SALES KEY FITS THE READ LEVEL ALONE (roleFit).
+			fix = "Only an agent at the read level holds one; a person sets one up for such an agent."
+		}
+		return nil, growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("this agent's key has the %s role; sales "+
+			"need a Sales key. %s No call was made.", roleName(key.role), fix))
 	}
+	if key.detail == "" {
+		return nil, growth.Refuse(growth.RefusedUnavailable, "sales need the team's vendor number, which this "+
+			"agent's key was handed in without. A person hands the key in again with it, on the integration's "+
+			"Agents tab. No call was made.")
+	}
+	t := key.team
 	q := url.Values{"filter[frequency]": {"DAILY"}, "filter[reportType]": {"SALES"}, "filter[reportSubType]": {"SUMMARY"},
-		"filter[vendorNumber]": {t.vendor}, "filter[reportDate]": {date}}
-	resp, err := t.client.Do(ctx, slot, Request{Method: "GET", Path: "/v1/salesReports", Query: q, Read: true,
+		"filter[vendorNumber]": {key.detail}, "filter[reportDate]": {date}}
+	resp, err := key.client.Do(ctx, ownSlot, Request{Method: "GET", Path: "/v1/salesReports", Query: q, Read: true,
 		Accept: "application/a-gzip"})
 	out := Sales{Date: date, TimeZone: salesZone}
 	var apiErr *APIError
@@ -74,7 +82,7 @@ func (p *Product) sales(ctx context.Context, call growth.Call) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	bySKU, err := p.skusOf(ctx, t, seat.Apps)
+	bySKU, err := p.skusOf(ctx, t, key.client, seat.Apps)
 	if err != nil {
 		return nil, said(err)
 	}
@@ -87,13 +95,13 @@ func (p *Product) sales(ctx context.Context, call growth.Call) (any, error) {
 		out.EmptyReason = growth.EmptyNoData
 	}
 	p.note(ctx, growth.StepMade, recordOf(call, made{op: op, class: growth.ClassRead, team: t, path: "/v1/salesReports",
-		query: q}))
+		query: q, key: key}))
 	return out, nil
 }
 
-// skusOf maps the SKU of each of apps the team reaches to its app.
-func (p *Product) skusOf(ctx context.Context, t *team, apps []string) (map[string]string, error) {
-	infos, err := p.appsOf(ctx, t)
+// skusOf maps the SKU of each of apps the team holds to its app.
+func (p *Product) skusOf(ctx context.Context, t *team, c *Client, apps []string) (map[string]string, error) {
+	infos, err := p.appsOf(ctx, t, c)
 	if err != nil {
 		return nil, err
 	}

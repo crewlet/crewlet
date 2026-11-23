@@ -832,6 +832,21 @@ func TestTheReportsBucketIsReadAsTheCompanyReaderCutToTheSeat(t *testing.T) {
 			t.Errorf("%s was sent with %q", c, w.f.bearers[i])
 		}
 	}
+	// THE ACCESS LOG SAYS THE COMPANY'S READER SIGNED IT, never the seat's own identity.
+	w.audit.mu.Lock()
+	defer w.audit.mu.Unlock()
+	reports := 0
+	for _, r := range w.audit.records {
+		if r.Tool == "google_play_read_report" {
+			reports++
+			if r.Signer != growth.SignerCompany {
+				t.Errorf("a reports bucket read is recorded as signed by %q", r.Signer)
+			}
+		}
+	}
+	if reports == 0 {
+		t.Error("no reports bucket read was recorded")
+	}
 }
 
 // A REPORT'S APP IS READ EXACTLY: the package between the report's kind and

@@ -1,11 +1,11 @@
 package datadog
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/seatname"
 )
 
 // SeatEnv is the mcp_env server whose credentials belong to Datadog.
@@ -45,13 +45,10 @@ const DefaultEmailDomain = "agents.crewlet.invalid"
 // the life of the seat: Datadog will not change an account's address at all.
 func AccountEmail(p *config.DatadogProvisioning, handle string) string {
 	domain := emailDomain(p)
-	// `crewlet-`, the same prefix GitLab's service accounts carry, so a
-	// person reading a user list at either app can see at a glance which
-	// accounts this engine made. NOT `agent-`: that string is a queue
-	// marker (topics.AgentGroupPrefix), and a literal of it here reads to
-	// the hand-built-subject guard exactly like somebody assembling a
-	// consumer group by hand.
-	return fmt.Sprintf("crewlet-%s@%s", handle, domain)
+	// The seat's name at every vendor (internal/seatname), so a person
+	// reading a user list sees at a glance which accounts this engine made.
+	// Unhashed, so it needs no company.
+	return seatname.For(seatname.Datadog, "", handle) + "@" + domain
 }
 
 // AccountName is the display name one seat's account carries, so a person

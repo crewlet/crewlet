@@ -153,3 +153,14 @@
   align-items: baseline;
   gap: var(--spacing-1) var(--spacing-2);
 }
+/* An identity check's verdict in its sheet: what happened, the facts, then
+   what to do; each read is said on its own step. */
+.agent-access-verdict {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+.agent-access-verdict__headline {
+  margin: 0;
+  font-weight: var(--font-weight-medium);
+}

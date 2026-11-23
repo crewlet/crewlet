@@ -1098,13 +1098,13 @@ export function tableColumns(
       header: "Controls",
       // CONTROLS THAT NAME THEMSELVES: the head is read, not seen, and never sorts.
       action: true,
-      // ROOM FOR A REMEDY BESIDE PAUSE, held whether or not any seat has one, which
-      // also holds the three icons. Narrow, Pause or Resume alone.
+      // THE WIDEST SET A ROW DRAWS, held whether or not any seat draws it: a remedy
+      // beside Pause, or Pause, Pause and stop and Steer. Narrow, Pause or Resume alone.
       width: phone
         ? "calc(var(--size-control-sm) + var(--spacing-1) * 2)"
         : narrow
           ? "calc(var(--size-control-sm) * 2 + var(--spacing-2) + var(--spacing-3) * 2)"
-          : "calc(var(--size-control-sm) + 6.5rem + var(--spacing-1) + var(--spacing-3) * 2)",
+          : "calc(max(6.5rem + var(--spacing-1) + var(--size-control-sm), var(--size-control-sm) * 3 + var(--spacing-1) * 2) + var(--spacing-3) * 2)",
     },
     {
       key: "actions",

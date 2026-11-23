@@ -7,6 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/googlegrowth"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/vendortext"
 )
 
 // usersURL is Play Console's users and permissions, where a person invites an
@@ -16,19 +17,24 @@ const usersURL = "https://play.google.com/console/developers/users-and-permissio
 // Requirements says what the company still needs for Google Play: the
 // integration turned on, and the company's reader invited with View app
 // information for every app (account-wide, which the reports bucket needs),
-// which a person does in Play Console. Each agent's own identity is the
-// Agents tab's: its row shows the email to invite and the permissions its
-// level needs.
-func Requirements(c *config.Company) []setup.Requirement {
+// which a person does in Play Console; and, optionally, a Play Console
+// admin's sign-in, with which Crewlet adds each agent's identity itself. Each
+// agent's own identity is the Agents tab's: its box shows the email to
+// invite, the permissions its level needs, and its check.
+func Requirements(c *config.Company, resolve func(string) (string, bool)) []setup.Requirement {
 	var enabled bool
+	var client *config.GoogleOAuthClient
 	if c != nil && c.Integrations.GooglePlay != nil {
 		enabled = c.Integrations.GooglePlay.Enabled
+		client = c.Integrations.GooglePlay.OAuth
 	}
-	return append([]setup.Requirement{googlegrowth.Enabled(string(Kind), "Google Play", enabled)},
+	out := append([]setup.Requirement{googlegrowth.Enabled(string(Kind), "Google Play", enabled)},
 		googlegrowth.Reader(c, setup.IdentityRole{ID: permView + "_GLOBAL",
-			Name: "View app information and download bulk reports (all apps)"},
-			setup.IdentityWhere{URL: usersURL, Words: "Users and permissions, Invite new users, Account permissions"},
-			"enough to read every app, vitals and the monthly reports bucket; it changes nothing.")...)
+			Name: "View app information and download bulk reports (read-only)"},
+			vendortext.Of(vendortext.UI("Users and permissions", "Invite new users", "Account permissions").At(usersURL)),
+			vendortext.Plain("enough to read every app, vitals and the monthly reports bucket; it changes nothing."))...)
+	return append(out, googlegrowth.AdminSignIn(string(Kind), "Play Console", "a Play Console admin", client,
+		resolve)...)
 }
 
 // Guide is what the connect form says around its fields.
@@ -37,14 +43,15 @@ func Guide() setup.Guide {
 		Summary: "Agents use Google Play apps as their own Google identity, with the permissions you give " +
 			"it; what customers see is asked first. No token reaches an agent's box.",
 		Prepare: []setup.Step{
-			{Text: "Connect Google Cloud first; no project needs preparing. Its Cloud Shell block, run again, turns " +
-				"on the Google Play Android Developer and Developer Reporting APIs and makes the company reader."},
-			{Text: "Invite the company reader below in Play Console with View app information for all apps, and " +
-				"name each account's monthly reports bucket (Download reports, Copy Cloud Storage URI)."},
-			{Text: "Turn agents on from the Agents tab, then invite each one's email in Play Console with the app " +
-				"permissions its level needs: View app information for read; add Release to testing tracks, " +
-				"Release to production, Manage store presence, Reply to reviews and Manage testing tracks for " +
-				"operate; Manage orders and subscriptions or Admin only where it asks for refunds or user changes."},
+			{Text: vendortext.Plain("Connect Google Cloud first; no project needs preparing. Its Cloud Shell block, run " +
+				"again, turns on the Google Play Android Developer and Developer Reporting APIs and makes the company reader.")},
+			{Text: vendortext.Of(vendortext.W("Invite the company reader below in "),
+				vendortext.UI("Play Console", "Users and permissions").At(usersURL), vendortext.W(" with "),
+				vendortext.UI("View app information"), vendortext.W(" for all apps, and name each account's monthly "+
+					"reports bucket ("), vendortext.UI("Download reports", "Copy Cloud Storage URI"), vendortext.W(")."))},
+			{Text: vendortext.Plain("Turn agents on from the Agents tab, then set up each one's identity there: invite " +
+				"its email in Play Console with the app permissions its level needs, or press Add it for me once a " +
+				"Play Console admin has signed in below. Crewlet checks each agent's access on every pass.")},
 		},
 	}
 }

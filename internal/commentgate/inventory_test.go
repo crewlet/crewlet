@@ -3,7 +3,6 @@ package commentgate
 // excessInventory is, per package directory, the comment lines past
 // blockBound the package held when the bound arrived. It only moves down.
 var excessInventory = map[string]int{
-	"internal/redact":           961,
 	"internal/sandbox/executor": 34,
 }
 
@@ -11,6 +10,5 @@ var excessInventory = map[string]int{
 // that ran past rowBound when the bound arrived, by its first cell. It only
 // moves down.
 var rowInventory = map[string]int{
-	"logging, secrets, provision, envref, envfile, redact, workkey, backoff, cron, period": 6125,
 	"sandbox": 122839,
 }

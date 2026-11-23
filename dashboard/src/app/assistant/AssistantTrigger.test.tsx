@@ -7,7 +7,7 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import { AssistantTrigger } from "./AssistantTrigger.tsx";
-import { AssistantControlContext, type AssistantControl } from "./control.ts";
+import { ASSISTANT_TRIGGER_ID, AssistantControlContext, type AssistantControl } from "./control.ts";
 import { setAssistantActivity } from "./status.ts";
 import { ariaKeysOf, keyRow, pressText } from "../keymap.ts";
 
@@ -74,11 +74,13 @@ test("wears the dot on the mark's corner, with the reason in its name and its to
   expect(tipOnFocus(button)).toMatch(/\. A change waits on your approval\.$/);
 });
 
-test("an open panel says its state itself, so the button wears no dot", () => {
+// A SECOND WAY IN BESIDE THE ONE ON SCREEN: the panel and the page say their
+// own state. Mutation: draw the button while `open` holds, and this goes red.
+test("is not drawn while Ask Crewlet is open, as the panel or as its page", () => {
   act(() => setAssistantActivity("working"));
   const { container } = draw({ ...ready, open: true });
-  expect(container.querySelector(".crewlet-indicator-anchor__indicator")).toBeNull();
-  expect(screen.getByRole("button", { name: "Ask" })).toBeTruthy();
+  expect(container.childElementCount).toBe(0);
+  expect(document.getElementById(ASSISTANT_TRIGGER_ID)).toBeNull();
 });
 
 test("a command-key press is named for both platforms", () => {

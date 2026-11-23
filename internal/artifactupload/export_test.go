@@ -72,3 +72,19 @@ func Brings(files map[string]bool, path string) bool {
 
 // ReasonOf is the refusals counter's reason for err.
 func ReasonOf(err error) string { return reasonOf(err) }
+
+// UploadFiles is every file an upload's record holds, as `transport:state`,
+// and each one's recorded content type by path.
+func UploadFiles(ctx context.Context, s *Service, upload string) ([]string, map[string]string, error) {
+	r, _, err := s.readRecord(ctx, upload)
+	if err != nil || r == nil {
+		return nil, nil, err
+	}
+	var files []string
+	types := map[string]string{}
+	for _, f := range r.Files {
+		files = append(files, string(f.Transport)+":"+string(f.State))
+		types[f.Path] = f.ContentType
+	}
+	return files, types, nil
+}

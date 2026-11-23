@@ -233,7 +233,27 @@ func CheckValue(value string) error {
 		ErrValueTooLarge, len(value), MaxValueBytes, MaxValueBytes>>10)
 }
 
-// CheckName refuses a name the reference grammar cannot name.
+// MaxNameBytes bounds a secret's name, an operator's or the engine's own. A
+// name is the key its credential's record is stored under and a field of
+// that record, so it needs a widest form for the record to have one
+// (internal/coord's MaxSecretRecordBytes). 255, as a key id is: the longest
+// name a writer makes is crewlet-operator's, 90 bytes, and the engine's own
+// are under 64.
+const MaxNameBytes = 255
+
+// checkNameBytes refuses a name past [MaxNameBytes], saying its length and
+// never the name, which at that length nobody reads.
+func checkNameBytes(name string) error {
+	if len(name) <= MaxNameBytes {
+		return nil
+	}
+	return fmt.Errorf("%w: the name is %d bytes, and a name is at most %d, since a "+
+		"credential's record is stored under it and keeps it; choose a shorter one",
+		ErrInvalidName, len(name), MaxNameBytes)
+}
+
+// CheckName refuses a name the reference grammar cannot name, or one past
+// [MaxNameBytes].
 //
 // EVERY STORE CALLS THIS, and it is a guard rather than a courtesy. The store
 // is keyed by environment-variable name — that is what a ${VAR} in the
@@ -243,6 +263,9 @@ func CheckValue(value string) error {
 // operator's evidence is a provider failing to authenticate hours later, with
 // nothing pointing back at the name they chose.
 func CheckName(name string) error {
+	if err := checkNameBytes(name); err != nil {
+		return err
+	}
 	if envref.ValidName(name) {
 		return nil
 	}

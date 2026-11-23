@@ -6,6 +6,8 @@
 // which seals a value too large to hold whole while it streams, in
 // authenticated chunks (stream.go says why a second format exists). Everything
 // here is about the KEYRING and the two formats; nothing here reads a value.
+// It imports nothing of the engine but internal/envref, internal/redact and
+// internal/words, so internal/config can depend on it.
 //
 // # Where ${VAR} resolution lives, and why not here
 //

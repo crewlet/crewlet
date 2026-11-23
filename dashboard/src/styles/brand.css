@@ -174,29 +174,6 @@
   align-items: center;
   gap: var(--spacing-3);
 }
-/* The adopt dialog's changes: what changed, then what it was and is. */
-.brand-diff {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: var(--spacing-2) var(--spacing-4);
-  margin: 0;
-}
-.brand-diff-row {
-  display: contents;
-}
-.brand-diff-row dt {
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-compact);
-}
-.brand-diff-row dd {
-  margin: 0;
-  color: var(--color-text-primary);
-  font-size: var(--font-size-compact);
-  overflow-wrap: anywhere;
-}
-.brand-diff-was {
-  color: var(--color-text-tertiary);
-}
 /* The brand setup (`#/company/brand/setup`): the Voice step's note. */
 .brand-setup-note {
   margin: 0;

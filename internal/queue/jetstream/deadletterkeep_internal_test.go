@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
-	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -391,8 +390,8 @@ func TestABackendsOwnHandBackIsInFlightUntilSettled(t *testing.T) {
 // ending the loops cut that keep. So the connection closes only once no keep is
 // in flight: here a keep is held at its termination while the queue stops.
 //
-// The witness is the stop itself, found waiting in awaitKeeps among the test
-// binary's goroutines; a fixed wait would decide that by the clock.
+// The witness is the stop's own report that it waits ([Queue.keepsAwaited]),
+// raced against its return, never the clock or a goroutine dump (#1958).
 //
 // Mutation: close the connection without waiting for the keeps (awaitKeeps),
 // and the stop closes it while the keep is still being settled.
@@ -415,11 +414,16 @@ func TestAStopWaitsForADeadLetterBeingKept(t *testing.T) {
 	}()
 	<-terming
 
+	waiting := make(chan struct{})
+	q.keepsAwaited = func() { close(waiting) }
 	stopped := make(chan error, 1)
 	go func() { stopped <- q.Stop(context.WithoutCancel(t.Context())) }()
-	if !stopWaitsForKeeps(t, q) {
+	select {
+	case <-waiting:
+	case err := <-stopped:
 		close(release)
-		t.Fatal("the queue's stop closed its connection while a dead letter was being kept")
+		t.Fatalf("the queue's stop returned (%v) without waiting for the dead letter being kept, "+
+			"closing its connection under the keep", err)
 	}
 	if q.nc.IsClosed() {
 		t.Error("the connection is closed while the stop waits for the keep")
@@ -431,30 +435,5 @@ func TestAStopWaitsForADeadLetterBeingKept(t *testing.T) {
 	}
 	if !q.nc.IsClosed() {
 		t.Error("the stop returned with its connection open")
-	}
-}
-
-// stopWaitsForKeeps waits until a goroutine is inside q's awaitKeeps — a stop
-// waiting for the dead letters in flight — or q's connection has closed, and
-// reports which: true for the stop found waiting.
-func stopWaitsForKeeps(t *testing.T, q *Queue) bool {
-	t.Helper()
-	bound, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	defer cancel()
-	poll := time.NewTicker(time.Millisecond) //fixedwait:liveness
-	defer poll.Stop()
-	buf := make([]byte, 1<<20)
-	for {
-		if bytes.Contains(buf[:runtime.Stack(buf, true)], []byte("(*Queue).awaitKeeps")) {
-			return true
-		}
-		if q.nc.IsClosed() {
-			return false
-		}
-		select {
-		case <-bound.Done():
-			t.Fatal("the stop neither waited for the keep nor closed its connection")
-		case <-poll.C:
-		}
 	}
 }

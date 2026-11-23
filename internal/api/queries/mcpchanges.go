@@ -164,9 +164,12 @@ type MCPAcceptedView struct {
 	MCPDefinitionView
 	// AcceptedBy is who accepted it, null for the server's first listing,
 	// which was accepted as it was listed (FirstListing); AcceptedAt when.
+	// AutoAccepted is a change accepted as listed under the entry's
+	// `tools.auto_accept_changes`, AcceptedBy naming the node.
 	AcceptedBy   *string   `json:"accepted_by"`
 	AcceptedAt   time.Time `json:"accepted_at"`
 	FirstListing bool      `json:"first_listing"`
+	AutoAccepted bool      `json:"auto_accepted"`
 }
 
 // MCPListedView is the definition a server lists for a tool now.
@@ -245,7 +248,7 @@ func changeViews(r MCPReview, definitions map[string]coord.MCPToolDefinition) []
 		if b := c.Before; b != nil {
 			before := &MCPAcceptedView{
 				MCPDefinitionView: definitionView(b.Digest, b.Title, b.Description, b.Hints, record(b.Digest)),
-				AcceptedAt:        b.At, FirstListing: b.First,
+				AcceptedAt:        b.At, FirstListing: b.First, AutoAccepted: b.Auto,
 			}
 			if !b.First {
 				by := b.By

@@ -56,11 +56,11 @@ func (p *Product) generic(ctx context.Context, call growth.Call) (any, error) {
 	}
 	t := m.targets[0]
 	rec := recordOf(call, m, growth.ClassRead, "")
-	tok, err := p.tokenFor(ctx, m.conn, growth.ClassRead, t.row.op.Permissions)
+	tok, err := p.tokenFor(ctx, m.conn, m.own, growth.ClassRead, t.row.op.Permissions)
 	if err != nil {
 		return nil, err
 	}
-	rec.Via = tok.slot
+	rec.Via, rec.Signer = tok.signed()
 	filter := filtered(t.row)
 	params := url.Values{}
 	for k, v := range t.params {

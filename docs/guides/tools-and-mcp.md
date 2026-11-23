@@ -1627,7 +1627,52 @@ asks a person before each call until somebody looks at the change.
   once ([A server's alarms](#a-servers-alarms)), naming the tool and whether it
   now claims less risk. A removal, or a change to a tool that asks anyway,
   raises nothing. Every review is audited as an `mcp_server_acted`, action
-  `review_changes`, naming the tools accepted and kept blocked.
+  `review_changes`, naming the tools accepted and kept blocked. Accepting every
+  change at once is one review naming each change by its digest, written and
+  audited exactly as accepting each alone would be.
+
+#### Accepting a server's changes automatically
+
+A server you trust to change its tools without review (your own, or one whose
+vendor you follow closely) can have each change accepted as it is listed, with
+`tools.auto_accept_changes` on its entry:
+
+```yaml
+mcp_servers:
+  - name: datadog
+    transport: http
+    url: https://mcp.example.com/mcp
+    tools:
+      default: allow
+      auto_accept_changes: true    # off unless set; this entry only
+```
+
+- **Its tools can change what they do without review.** A changed, added or
+  removed tool is accepted by the node that lists it, at the next beat of its
+  listings (fifteen seconds), including a change that claims less risk: a tool
+  left to its hints that now says it is read-only then runs at `allow`. Turn it
+  on only for a server whose changes you would accept unread.
+- **Each acceptance is audited** as an `mcp_server_acted` of the node itself
+  (actor kind `system`), action `auto_accept_changes`, naming each tool and,
+  in `changes`, what moved: its kind, the parts, whether it claims less risk,
+  and the definition before and after (digest, title, description as a listing
+  keeps it, and the declared hints). The accepted record says it was accepted
+  automatically (`auto_accepted` on the detail's `before`).
+- **It raises no `mcp_tools_changed`**: a change it will accept is not counted,
+  so no Needs attention item is raised for it, and the server's page notes that
+  its changes are accepted automatically.
+- **It accepts definitions, nothing else.** Levels still decide every call: a
+  tool at `approve` still asks, a `blocked` one stays blocked, and a call
+  already waiting for a person's answer still waits for it. Turning it on
+  accepts the changes waiting at that moment as well, at the next beat.
+- **It is set per server.** No company-wide default exists, and a server added
+  later, or added again under the same name, reviews its changes until its own
+  entry sets it.
+- **A tool listed under two definitions at once** (two nodes mid-upgrade, one
+  of them still on the accepted definition) is left for a person, since
+  accepting each in turn would flip the record at every beat; it raises
+  `mcp_tools_changed` as ever. So is a removal while the server lists no tool
+  at all, and a change no listing newer than the accepted record shows.
 
 #### Reviewing a changed tool from the dashboard
 
@@ -1645,6 +1690,26 @@ went**. A definition swapped since it was shown is refused and read again. The
 **Servers** tab's **Waiting on you** counts servers with changes to review
 beside calls waiting.
 
+**Accept all N changes** accepts every change of the server in one decision,
+from the review beside **Accept change**, or from the **Needs attention** row on
+the server's page (and on the Tools tab) beside **Review**. It first lists each
+change it accepts, a change that claims less risk flagged, under a title naming
+the server and the count, and decides nothing until you press **Accept N
+changes**. The list is fixed when it opens, and the press sends the digest of
+each listed definition, so a definition swapped since is refused by name and
+nothing is decided. Each change is recorded and audited exactly as accepting it
+alone would be. A tool the fleet lists under two definitions at once is left
+out, said under the list, and decided on its own.
+
+**Accept tool changes automatically**, under **Default for this server** on the
+Tools tab and on the add and edit flow's approvals step, sets
+`tools.auto_accept_changes` ([above](#accepting-a-servers-changes-automatically)).
+Turning it on asks first, saying that the server's tools can then change what
+they do without review and how many changes waiting now it accepts. While it is
+on, the server's Overview says so, the Tools tab raises only the changes it
+leaves for a person, and an edit that moves the server's address warns on its
+review step that the new address inherits the setting.
+
 When two or more changes only reword a read-only tool, **Accept N wording
 changes** accepts them together. A change qualifies when only its title or
 description moved, every part it moved is shown, it claims no less risk, and
@@ -1656,9 +1721,10 @@ list is fixed when it opens: a reading that brings another definition meanwhile
 changes neither what is listed nor what is sent. The press sends the digest of
 every listed definition in one decision, so a definition swapped since is
 refused by name and nothing is decided. Where the engine decides some and could
-not write the rest, the review says which, and reads the changes again. Every
+not write the rest, the review says which, and reads the changes again. Any
 other change (new or changed arguments, changed hints, a claim of less risk, a
-tool that writes, a tool added or removed) is decided one by one.
+tool that writes, a tool added or removed) is decided one by one, or with
+**Accept all N changes**.
 
 ### Each agent's tools, and the budget
 
@@ -1758,11 +1824,12 @@ for an integration under the same name (`github`, `gitlab`, `datadog`,
 The values a server and its blocks read are `${VAR}` references into the
 credential store. Once it is gone some are read by nothing, and the dry run
 lists those the store holds under `dependants.secrets`; name any in
-`"delete_secrets"` and they are deleted once the removal is written. Only
-those: a value another server, a seat's integration or a model still reads is
-refused, since deleting it would sign that reader out. Deleting a value also
-takes `secrets.write`, so Ask Crewlet can remove a server and leaves its values
-to you. The whole request and its answers are in
+`"delete_secrets"` and they are deleted once the removal is written. A value
+another server, a seat's integration or a model still reads is listed under
+`dependants.kept_secrets` with where it is read, and stays even when named,
+since deleting it would sign that reader out. Deleting a value also takes
+`secrets.write`, so Ask Crewlet can remove a server and leaves its values to
+you. Removing a model works the same way. The whole request and its answers are in
 [the API reference](../reference/api-endpoints.md#delete-configmcp-serversid-remove-an-mcp-server-and-clear-what-names-it).
 
 A server the company is [signed in to with OAuth](#signing-in-with-oauth) gives
@@ -2119,7 +2186,7 @@ Each alarm reaches you as every alarm does: the `crewlet.alarm.active` gauge, an
 
 Where a test stops, it names the stage and why, in the classes of [Why a server failed](#why-a-server-failed): a name nobody resolves at the lookup, a refused dial at the connection, a certificate at TLS, a sign-in, a refused credential or a non-MCP page at the handshake, a command not found or an exited process at the launch (with the process's last words). A server that answers and lists no tool it can be offered under is reported as working, with the finding `empty_tools`. Listed tools are shown as an agent would be offered them: risk, starting level (Always allow for a tool asserted read-only, Needs approval for every other), and why a tool would not be offered under its name.
 
-The latest test of each server is kept fleet-wide and shown to every administrator; a later test replaces it, and removing the server removes it. A test never shows a header or variable value, nor an address with a key in it. Each is recorded in the runtime audit as `mcp_server_acted`.
+The latest test of each server is kept fleet-wide and shown to every administrator; a later test replaces it, and removing the server removes it. Its record is at most 64 KiB, which holds 32 nodes: where every node's sentences together are longer, each stage's sentence is cut to its head first, then each reason and failure, then the server's identity (its name, title, version and protocol version), each marked as cut, and no node or stage is left out. A test never shows a header or variable value, nor an address with a key in it. Each is recorded in the runtime audit as `mcp_server_acted`.
 
 **Before you save.** The add and edit flows test the entry you are writing ([`POST /mcp-checks`](../reference/api-endpoints.md#post-mcp-checks)) as it would run once saved, with the values you typed and not stored yet, each read through the variable it will be stored under. The entry and values cross the fleet sealed under its keyring, bound to the one test. A draft runs a command on the engine host or dials an address with your values, so it needs the rights a write does (`config.write` and `secrets.write`, recent step-up) and passes the configuration's own checks first. Neither the test nor the typed values are kept.
 

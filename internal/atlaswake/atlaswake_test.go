@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/atlas"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
@@ -505,5 +506,38 @@ func TestTheNodeThatLosesTheClaimPublishesNothing(t *testing.T) {
 	}
 	if got := w.Pass(context.Background()); got != 0 || len(r.published) != 0 || !lost.raced {
 		t.Fatalf("the node that lost the claim published %d wakes (%v)", got, r.published)
+	}
+}
+
+// THE WIDEST WAKE RECORD IS A SMALL VALUE: past MaxTold marks of each sort and
+// a change named many times over, the record keeps MaxTold of each and every
+// change once, under internal/coord's SmallValueBytes, the bound its key's
+// class holds it to.
+//
+// Mutation: keep the record's changes as they were named, and this fails.
+func TestTheWidestWakeRecordIsASmallValue(t *testing.T) {
+	t.Parallel()
+	r := Record{Day: Day(time.Now()), At: time.Now().UTC(), Kind: atlas.KindService}
+	for i := range MaxTold + 16 {
+		r.Told = append(r.Told, mark("told", strings.Repeat("t", i)))
+		r.Pending = append(r.Pending, mark("pending", strings.Repeat("p", i)))
+	}
+	for range 4 {
+		r.Changes = append(r.Changes, ChangeDisputed, ChangeAlerting, ChangeContested)
+	}
+	raw, err := EncodeRecord(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) > coord.SmallValueBytes {
+		t.Fatalf("the widest wake record is %d bytes, past %d", len(raw), coord.SmallValueBytes)
+	}
+	back, err := DecodeRecord(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(back.Changes, Changes) || len(back.Told) != MaxTold || len(back.Pending) != MaxTold {
+		t.Errorf("the record keeps changes %v and %d, %d marks: want each change once, in its order, "+
+			"and %d of each", back.Changes, len(back.Told), len(back.Pending), MaxTold)
 	}
 }
