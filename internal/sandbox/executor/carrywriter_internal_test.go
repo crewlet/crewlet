@@ -69,6 +69,7 @@ func TestAnUnreadWriterContinuesInNoBox(t *testing.T) {
 		{"copilot", Copilot{}, []string{copilotFloor()}},
 		{"kimi-code", Kimi{}, []string{kimiSupported}},
 		{"muse-code", Muse{}, []string{museSupported()}},
+		{"hermes", Hermes{}, []string{hermesFloor()}},
 		{"pi", Pi{}, []string{piSupported}},
 		{"grok", Grok{}, []string{grokSupported()}},
 	} {
@@ -84,8 +85,8 @@ func TestAnUnreadWriterContinuesInNoBox(t *testing.T) {
 	// EVERY CARRIER WHOSE BOX HOLDS A RELEASE TO ITS OWN COPY refuses another
 	// release in place, as its run's gate does ([inPlaceGate]).
 	for name, gate := range map[string]inPlaceGate{
-		"codex": Codex{}, "copilot": Copilot{}, "kimi-code": Kimi{}, "muse-code": Muse{}, "pi": Pi{},
-		"grok": Grok{},
+		"codex": Codex{}, "copilot": Copilot{}, "kimi-code": Kimi{}, "muse-code": Muse{}, "hermes": Hermes{},
+		"pi": Pi{}, "grok": Grok{},
 	} {
 		if ok, why := gate.continuesInPlace("9.9.9"); ok || why == "" {
 			t.Errorf("%s: a box of 9.9.9 continues its own copy %v (%q), want refused", name, ok, why)
@@ -111,6 +112,7 @@ func TestSingleReleaseCarriersContinueOnlyTheirOneReleasesWriter(t *testing.T) {
 		{"kimi-code", Kimi{}, kimiSupported},
 		{"copilot", Copilot{}, copilotFloor()},
 		{"muse-code", Muse{}, museSupported()},
+		{"hermes", Hermes{}, hermesFloor()},
 		{"pi", Pi{}, piSupported},
 		{"grok", Grok{}, grokSupported()},
 	} {
@@ -137,7 +139,8 @@ func TestSingleReleaseCarriersContinueOnlyTheirOneReleasesWriter(t *testing.T) {
 func TestSingleReleaseArchivesAreMeteredAsNoFigure(t *testing.T) {
 	t.Parallel()
 	archive := `{"type":"usage.record","input_tokens":123456}` + "\n"
-	for name, c := range map[string]carrier{"kimi-code": Kimi{}, "copilot": Copilot{}, "muse-code": Muse{}, "pi": Pi{},
+	for name, c := range map[string]carrier{"kimi-code": Kimi{}, "copilot": Copilot{}, "muse-code": Muse{},
+		"hermes": Hermes{}, "pi": Pi{},
 		"grok": Grok{}} {
 		read, err := c.meter(t.Context(), strings.NewReader(archive), "s-1", "1.0.0", nil)
 		if err != nil || read != (meterReading{}) {

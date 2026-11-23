@@ -84,6 +84,7 @@ func TestAReusedBoxKeepsNoneOfASplitRunnersArtifacts(t *testing.T) {
 		{"copilot", (Copilot{}).artifactFiles(p), (Copilot{}).artifactDirs(p)},
 		{"muse-code", (Muse{}).artifactFiles(p), (Muse{}).artifactDirs(p)},
 		{"qwen-code", (QwenCode{}).artifactFiles(p), (QwenCode{}).artifactDirs(p)},
+		{"hermes", (Hermes{}).artifactFiles(p), (Hermes{}).artifactDirs(p)},
 		{"pi", (Pi{}).artifactFiles(p), (Pi{}).artifactDirs(p)},
 	} {
 		if len(c.files) == 0 || len(c.dirs) == 0 {
