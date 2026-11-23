@@ -2400,7 +2400,7 @@ cursor-agent:
   # A MIXED FILE: cli-config.json is the harness's settings file too, its
   # permissions included, written on every run signed in or not (measured); a
   # login adds the account it is for under authInfo (read from the 2026.10.22
-  # bundle), the one field a home is held to, and nothing of it is carried
+  # bundle), the one field a home is seeded with, and nothing of it is carried
   # back. auth.json is a login file, seeded whole; a refresh carries back its
   # tokens alone, never the apiKey a key entry persists there. The account a
   # login is: authInfo.userId, written from the vendor's GetMe on every start
@@ -2789,9 +2789,9 @@ copilot:
   #
   # A MIXED FILE: the harness's own record and settings too — it writes
   # `firstLaunchAt` there on its first start, signed in or not (measured) —
-  # so a home is seeded with it whole, held to the login alone, and, there
-  # being no refresh, nothing of the file is carried back: the user it signed
-  # in as and its token, which it keeps under two keys:
+  # so a home is seeded with the login alone, and, there being no refresh,
+  # nothing of the file is carried back: the user it signed in as and its
+  # token, which it keeps under two keys:
   # on its first use of a login under `copilotTokens` (`{"https://github.com:
   # <login>": "<token>"}`) it adds the same token under `authTokens`
   # (`{"https://github.com:<login>:github": {"token": "<token>"}}`), and signs
@@ -3365,7 +3365,7 @@ muse-code:
   # with it. The binary also reads CLAUDE_CONFIG_DIR and CODEX_HOME, which an
   # entry's env could point at another harness's real home. Its own personal
   # skills (the home's .agents/skills) are read with or without the flag and
-  # trusted or not; nothing but the harness writes the seat's home.
+  # trusted or not, and are pruned with the volatile paths below.
   #
   # --disable-reminders turns off the harness's REMINDER OBSERVERS, each a
   # model request of its own that re-sends the call's prompt (the engine's
@@ -3625,11 +3625,21 @@ muse-code:
   # an operator's override could, and none of which will ever exist again; and
   # .auth.json.lock is what a killed harness leaves held — the same half-prune the
   # claude-code profile's .claude.json.lock note records.
+  #
+  # And what Muse hands every call from the home as the user's own: the skills
+  # under .agents/skills and .config/muse/skills and the personal
+  # .config/muse/AGENTS.md, read with this profile's flags too (measured on
+  # 1.4.25). Nothing the engine writes; pruned so a call is told only what its
+  # seeds and its prompt say. Installed plugins, whose skills load unapproved,
+  # are under .local/share/muse and go with it.
   volatile_paths:
     - ".local/share/muse"
     - ".local/state/muse"
     - ".config/muse/trust.json"
     - ".config/muse/.auth.json.lock"
+    - ".config/muse/skills"
+    - ".config/muse/AGENTS.md"
+    - ".agents/skills"
   host_credential_paths: [".config/muse/auth.json"]
   # A Meta Model API key, so it is the METERED credential: reached through
   # auth.mode api-key or inherit-env, never forwarded silently. It takes
@@ -4172,6 +4182,14 @@ kimi-code:
   # What else persists carries nothing of a call: `device_id`, one per home;
   # `cache/query-store`, made with empty shards; `locks`, its lock files;
   # `oauth/<key>`, the lock a token refresh takes.
+  #
+  # And what the harness hands every call from the home as the user's own,
+  # read with this profile's flags too (measured on 2.7.2): the skills under
+  # `skills` and `~/.agents/skills`, the personal AGENTS.md in the home and
+  # under `~/.agents`, the installed plugins (their record is seeded empty
+  # again after the prune, below), and the workspaces a trust was saved for.
+  # Nothing the engine writes; pruned so a call is told only what its seeds,
+  # its agent file and its prompt say.
   volatile_paths:
     - ".kimi-code/sessions"
     - ".kimi-code/session_index.jsonl"
@@ -4179,6 +4197,13 @@ kimi-code:
     - ".kimi-code/projects.json"
     - ".kimi-code/.projects-write-lock"
     - ".kimi-code/telemetry"
+    - ".kimi-code/skills"
+    - ".kimi-code/AGENTS.md"
+    - ".kimi-code/plugins"
+    - ".kimi-code/workspace-trust"
+    - ".agents/skills"
+    - ".agents/AGENTS.md"
+    - ".agents/agents.md"
   host_credential_paths:
     - ".kimi-code/credentials/kimi-code.json"
     - ".kimi-code/config.toml"
@@ -4186,9 +4211,9 @@ kimi-code:
   # (2.7.2's applyManagedKimiCodeConfig: the provider with its OAuth
   # reference, the models and defaults, the search and fetch services) into
   # the file the harness also reads hooks, permission rules and tool settings
-  # from (CHECK-HOME-KIMI). A home is seeded with the file whole, as a
-  # person's own home holds it, held to those tables alone, and nothing of it
-  # is carried back. Which login it is: the provider and
+  # from (CHECK-HOME-KIMI), so a seat home on the engine host is seeded with
+  # those tables alone, a box with the file whole, as a person's own home
+  # holds it, and nothing of it is carried back. Which login it is: the provider and
   # services, where its token is sent. A run refreshes only kimi-code.json, a
   # login file seeded whole whose tokens and expiry alone a refresh carries
   # back; it names no account, and where its access token is a JWT its
@@ -4595,7 +4620,7 @@ hermes:
   # one, and its access token's subject, a JWT (measured against stubs).
   # .env is a MIXED FILE: it is every variable the harness
   # starts with, base URLs and tool settings beside the keys, so a home is
-  # held to, and a refresh carries back, only the provider API keys: each
+  # seeded with, and a refresh carries back, only the provider API keys: each
   # provider's api_key_env_vars in 0.23.3's PROVIDER_REGISTRY, enumerated with
   # its own interpreter, and OPENROUTER_API_KEY, which it reads apart. A key
   # names whose account it is and never refreshes, so the same keys are its
