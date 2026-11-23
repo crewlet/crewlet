@@ -281,6 +281,9 @@ func codexLoads(t *testing.T) {
 	if got := boxFile(t, box, p.CodexLiveConfig()); got != own {
 		t.Errorf("after the run the home's config.toml is\n%s\nwant its own back", got)
 	}
+	if got, _ := os.ReadFile(filepath.Join(record, "AGENTS.md")); string(got) != plantedContent(".codex/AGENTS.md") {
+		t.Errorf("Codex started on a CODEX_HOME/AGENTS.md of %q, want the home's own", got)
+	}
 	cfg := codexConfigSeen(t, record)
 	for _, want := range []string{"home-mcp-server", codexBridgeURL, "required = true"} {
 		if !strings.Contains(cfg, want) {

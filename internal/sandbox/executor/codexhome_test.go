@@ -96,8 +96,11 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsACodexRun(t *testing.T) {
 	}
 
 	// Instructions.
-	if got := boxFile(t, box, p.CodexHome()+"/AGENTS.md"); got != "for `repo` with root "+work+"/repo\n\nREPO-INSTRUCTIONS\n" {
-		t.Errorf("instructions: CODEX_HOME/AGENTS.md is %q, want the checkout's alone", got)
+	if got, _ := os.ReadFile(filepath.Join(record, "AGENTS.md")); string(got) != "for `repo` with root "+work+"/repo\n\nREPO-INSTRUCTIONS\n" {
+		t.Errorf("instructions: Codex started on a CODEX_HOME/AGENTS.md of %q, want the checkout's alone", got)
+	}
+	if _, err := os.Stat(p.CodexHome() + "/AGENTS.md"); !os.IsNotExist(err) {
+		t.Errorf("instructions: the run left a CODEX_HOME/AGENTS.md in a home that had none (%v)", err)
 	}
 	// Skills.
 	for listed, want := range map[string]string{
