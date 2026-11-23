@@ -436,3 +436,154 @@ func TestARepositorysConfigurationMayNotChangeCodexsBridge(t *testing.T) {
 		})
 	}
 }
+
+// A HOME OR A REPOSITORY CANNOT TAKE OPENCODE'S BRIDGE TOOLS OR AGENT AWAY.
+// OpenCode 2.3.2 reads an agent's rules after every document's own, and a
+// home's or a repository's agent rules (`agents.build.permissions`,
+// `.opencode/agents/build.md`) before the run's document's, the last match
+// deciding; a server's or the agent's `disabled` is the last document's
+// (measured with `opencode api agent.list` and `mcp.list`). So the run's agent
+// states `disabled: false` and ends its rules allowing every tool of the run's
+// own servers, whatever the turn cap, and allows no seat server's beside them.
+// Mutations, each red: state the agent only with a turn cap; drop the allow;
+// allow every server's tools.
+func TestOpenCodesBridgeToolsAndAgentCannotBeSwitchedOff(t *testing.T) {
+	t.Parallel()
+	for name, web := range map[string]bool{"a run that keeps the web": false, "a web-denied run": true} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			b := sandbox.NewFakeSandbox("box-1")
+			servers := map[string]sandbox.MCPServer{
+				"crewlet": {Transport: sandbox.TransportHTTP, URL: "http://127.0.0.1:7/mcp/t", AlwaysLoaded: true},
+				"linear":  {Transport: sandbox.TransportHTTP, URL: "https://example.com/mcp"}}
+			path, err := executor.OpenCode{}.WriteConfig(t.Context(), b,
+				sandbox.RunRequest{MCPServers: servers, WebDenied: web}, executor.Session{}, executor.PathsFor(b))
+			if err != nil {
+				t.Fatalf("WriteConfig: %v", err)
+			}
+			raw, _ := b.ReadFile(t.Context(), path)
+			var cfg struct {
+				DefaultAgent string `json:"default_agent"`
+				Agents       map[string]struct {
+					Disabled *bool                                       `json:"disabled"`
+					Rules    []struct{ Action, Resource, Effect string } `json:"permissions"`
+				} `json:"agents"`
+			}
+			if err := json.Unmarshal(raw, &cfg); err != nil {
+				t.Fatalf("unmarshal: %v\n%s", err, raw)
+			}
+			agent, ok := cfg.Agents[cfg.DefaultAgent]
+			if !ok || agent.Disabled == nil || *agent.Disabled {
+				t.Errorf("the run's agent %q does not state disabled: false:\n%s", cfg.DefaultAgent, raw)
+			}
+			n := len(agent.Rules)
+			if n == 0 || agent.Rules[n-1].Action != "crewlet_*" || agent.Rules[n-1].Resource != "*" ||
+				agent.Rules[n-1].Effect != "allow" {
+				t.Errorf("the run's agent's rules do not end allowing the bridge's tools:\n%s", raw)
+			}
+			for _, r := range agent.Rules {
+				if r.Effect == "allow" && r.Action != "crewlet_*" {
+					t.Errorf("the run's agent allows %q beside its own servers' tools:\n%s", r.Action, raw)
+				}
+			}
+		})
+	}
+}
+
+// grokInspectStandIn is a stand-in `grok` that prints its release, answers
+// `inspect` with the box home's inspect.json (NAME the run's own server's
+// name off its settings, HOMEDIR the home), failing where there is none, and
+// otherwise records its argv and ends its run as finished.
+const grokInspectStandIn = "#!/bin/sh\ncase \"$1\" in --version) echo 'grok 1.0.92 (b06756fd6256)'; exit 0;;\n" +
+	"inspect) [ -f \"$HOME/inspect.json\" ] || exit 1\n" +
+	"n=$(sed -n 's/^ *\\[mcp_servers\\.\\(crewlet_[0-9a-f]*\\)\\]$/\\1/p' \"$HOME/.grok/config.toml\" | head -n 1)\n" +
+	"sed -e \"s/NAME/$n/g\" -e \"s|HOMEDIR|$HOME|g\" \"$HOME/inspect.json\"; exit 0;; esac\n" +
+	"printf '%s\\n' \"$@\" > \"$HOME/observed.argv\"\n" +
+	"echo '{\"type\":\"text\",\"data\":\"done\"}'; echo '{\"type\":\"end\",\"stopReason\":\"end_turn\"}'\n"
+
+// grokInspect is `grok inspect --json` as Grok Build 1.0.92 prints it, cut to
+// the fields the guard reads, in its layout (measured): perms inside
+// `permissions`, then each of servers, a name and the reason it is disabled
+// where there is one.
+func grokInspect(perms string, servers ...[2]string) string {
+	var items []string
+	for _, s := range servers {
+		item := "    {\n      \"name\": \"" + s[0] + "\",\n      \"transport\": \"http\",\n      \"target\": \"x\",\n" +
+			"      \"source\": {\n        \"type\": \"configToml\",\n        \"path\": \"HOMEDIR/.grok/config.toml\"\n      }"
+		if s[1] != "" {
+			item += ",\n      \"disabledReason\": \"" + s[1] + "\""
+		}
+		items = append(items, item+"\n    }")
+	}
+	return "{\n  \"grokVersion\": \"1.0.92\",\n  \"permissions\": {\n    \"sources\": [],\n" + perms +
+		"    \"claudeBypassLockAdvisory\": false\n  },\n  \"hooks\": [],\n  \"mcpServers\": [\n" +
+		strings.Join(items, ",\n") + "\n  ],\n  \"lspServers\": []\n}\n"
+}
+
+// A HOME CANNOT SWITCH GROK BUILD'S BRIDGE OR HOOKS OFF UNSEEN. Grok Build
+// 1.0.92's policy (`~/.grok/requirements.toml`, `/etc/grok`) blocks a server
+// its `denied_mcp_servers` matches or its `allowed_mcp_servers` leaves out,
+// and its `allow_managed_hooks_only` skips the run's hooks; no layer releases
+// either (measured with `grok inspect --json`). So a run whose inspection
+// reports its own server disabled, or, hooked, that pin engaged, is refused
+// before Grok starts, naming the file, the key and the policy's entries, and
+// the box's settings are put back; a policy blocking another server, a pin on
+// a run with no hooks, or an inspection that fails, start it.
+// Mutations, each red: drop the guard from the script; read another server's
+// reason as the run's; check the pin on a run with no hooks; name no entries.
+func TestGrokBuildsBridgeAndHooksCannotBeSwitchedOffUnseen(t *testing.T) {
+	t.Parallel()
+	const policy = "HOMEDIR/.grok/requirements.toml"
+	allowlist := func(entries ...string) string {
+		return "    \"mcpServerAllowlist\": [\n      \"" + strings.Join(entries, "\",\n      \"") + "\"\n    ],\n"
+	}
+	const pin = "    \"enforced\": [\n      {\n        \"setting\": \"nonManagedHooks\",\n        \"enabled\": false,\n" +
+		"        \"source\": \"" + policy + "\"\n      }\n    ],\n"
+	for name, tc := range map[string]struct {
+		inspect string
+		hooked  bool
+		switchOffCase
+	}{
+		"nothing switches it off": {inspect: grokInspect("", [2]string{"NAME", ""}), hooked: true},
+		"the inspection fails":    {hooked: true},
+		"the policy denies another server": {hooked: true, inspect: grokInspect(allowlist("deny:https://other.example.com/*"),
+			[2]string{"NAME", ""}, [2]string{"other", "matches deniedMcpServers (" + policy + ")"})},
+		"a hooks pin on a run with no hooks": {inspect: grokInspect(pin, [2]string{"NAME", ""})},
+		"the home's policy denies the bridge's URL": {hooked: true,
+			inspect: grokInspect(allowlist("deny:http://127.0.0.1:9/*"), [2]string{"NAME", "matches deniedMcpServers (" + policy + ")"}),
+			switchOffCase: switchOffCase{fails: []string{"Grok Build would start without Crewlet's MCP server crewlet_",
+				"matches deniedMcpServers (", "/.grok/requirements.toml)", "deny:http://127.0.0.1:9/*",
+				"denied_mcp_servers", "refused before Grok Build started"}}},
+		"the home's policy allows only another server": {
+			inspect: grokInspect(allowlist("name:home_srv"), [2]string{"NAME", "not in allowedMcpServers (" + policy + ")"}),
+			switchOffCase: switchOffCase{fails: []string{"Crewlet's MCP server crewlet_", "not in allowedMcpServers (",
+				"name:home_srv", "allowed_mcp_servers"}}},
+		"the home's policy runs managed hooks only": {hooked: true, inspect: grokInspect(pin, [2]string{"NAME", ""}),
+			switchOffCase: switchOffCase{fails: []string{"Grok Build would run none of the run's hooks",
+				"/.grok/requirements.toml sets allow_managed_hooks_only"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			runner, box := standInBox(t, executor.NewGrok(), map[string]string{"grok": grokInspectStandIn})
+			if tc.inspect != "" {
+				plant(t, box, map[string]string{"inspect.json": tc.inspect})
+			}
+			req := sandbox.RunRequest{Brief: "go", MCPServers: loadsBridge}
+			if tc.hooked {
+				req.Steer = loadsSteer
+			}
+			_, res := runToEnd(t, runner, box, req)
+			checkSwitchOff(t, box, res, tc.switchOffCase)
+			_, started := os.Stat(filepath.Join(box.Home(), "observed.argv"))
+			if (started == nil) != (len(tc.fails) == 0) {
+				t.Errorf("grok started %t, want %t", started == nil, len(tc.fails) == 0)
+			}
+			p := executor.PathsFor(box)
+			for _, left := range []string{p.GrokConfig(), p.GrokConfigBox(), p.GrokConfigOurs()} {
+				if got := boxFile(t, box, left); got != "" {
+					t.Errorf("%s is left after the run: %q", left, got)
+				}
+			}
+		})
+	}
+}
