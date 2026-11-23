@@ -31,6 +31,11 @@ func (p Paths) CodexNotesURLFresh() string { return p.WorkDir() + "/codex-notes-
 // ([sandbox.Skill.Listed]).
 func (p Paths) CodexSkills() string { return p.CodexHome() + "/skills" }
 
+// CodexRepo is the run's directory of its repositories' state ([codexRepoGate]):
+// the checkouts handed, the budget left and the nested hook's config, remade
+// by every run.
+func (p Paths) CodexRepo() string { return p.WorkDir() + "/codex-repo" }
+
 // CodexCapFired is the marker the note helper writes, before it interrupts the
 // turn, where the run's round cap ended it (internal/notehelper's -cap-marker).
 func (p Paths) CodexCapFired() string { return p.WorkDir() + "/codex-cap-fired" }
