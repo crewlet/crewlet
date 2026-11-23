@@ -467,58 +467,63 @@ func (e *WriteOnlyError) Error() string {
 
 func (e *WriteOnlyError) Unwrap() error { return secrets.ErrWriteOnly }
 
-// List reports what the operator has stored, without opening anything.
+// Inventory is what the store holds, read in one pass and opening nothing:
+// the operator's rows' metadata, sorted by name, and the engine's own rows
+// counted per keyring key ([Store.EngineKeys]).
+type Inventory struct {
+	Records []secrets.Record
+	Engine  secrets.EngineKeys
+}
+
+// Inventory reads the store's metadata once ([Inventory]). ONE PASS for a
+// reader that answers both halves, as GET /secrets does on every reconcile
+// of crewlet-operator's sync: each pass carries every sealed value across
+// the node's link.
 //
-// NO VALUES, ever — this is what an operator reads to answer "is X set", and
-// it deliberately does not need the keyring, so a node that cannot decrypt can
-// still say what exists. And no engine row: [Store.EngineKeys] counts those.
-func (s *Store) List(ctx context.Context) ([]secrets.Record, error) {
+// NO VALUES, ever, and NO KEYRING NEEDED: this is what an operator reads to
+// answer "is X set", so a node that cannot decrypt can still say what exists,
+// and what it counts of the engine's rows is whether a rotation moved them,
+// which the key id beside each envelope answers.
+func (s *Store) Inventory(ctx context.Context) (Inventory, error) {
 	if s == nil {
-		return nil, secrets.ErrNoKeyring
+		return Inventory{}, secrets.ErrNoKeyring
 	}
 	rows, err := s.fleet.SecretValues(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("fleetsecrets: list the secrets: %w", err)
+		return Inventory{}, fmt.Errorf("fleetsecrets: list the secrets: %w", err)
 	}
-	out := make([]secrets.Record, 0, len(rows))
+	out := Inventory{Records: make([]secrets.Record, 0, len(rows))}
 	for _, row := range rows {
 		if secrets.Reserved(row.Name) {
+			if out.Engine.ByKey == nil {
+				out.Engine.ByKey = map[string]int{}
+			}
+			out.Engine.Total++
+			out.Engine.ByKey[row.KeyID]++
 			continue
 		}
 		// The envelope is dropped on the way out rather than left for a
 		// caller to be careful with. A listing is printed, and the one
 		// thing that must never reach a terminal is the ciphertext.
-		out = append(out, record(row))
+		out.Records = append(out.Records, record(row))
 	}
-	slices.SortFunc(out, func(a, b secrets.Record) int { return cmp.Compare(a.Name, b.Name) })
+	slices.SortFunc(out.Records, func(a, b secrets.Record) int { return cmp.Compare(a.Name, b.Name) })
 	return out, nil
 }
 
-// EngineKeys counts the engine's own rows, per keyring key, naming none.
-//
-// NO KEYRING NEEDED, like [Store.List]: what it answers is whether a rotation
-// has moved them, and the key id rides beside each envelope for exactly that.
+// List reports what the operator has stored, without opening anything: the
+// records of [Store.Inventory], and no engine row, which
+// [Store.EngineKeys] counts.
+func (s *Store) List(ctx context.Context) ([]secrets.Record, error) {
+	held, err := s.Inventory(ctx)
+	return held.Records, err
+}
+
+// EngineKeys counts the engine's own rows, per keyring key, naming none: the
+// count of [Store.Inventory].
 func (s *Store) EngineKeys(ctx context.Context) (secrets.EngineKeys, error) {
-	if s == nil {
-		return secrets.EngineKeys{}, secrets.ErrNoKeyring
-	}
-	rows, err := s.fleet.SecretValues(ctx)
-	if err != nil {
-		return secrets.EngineKeys{}, fmt.Errorf("fleetsecrets: count the "+
-			"engine's keys: %w", err)
-	}
-	var out secrets.EngineKeys
-	for _, row := range rows {
-		if !secrets.Reserved(row.Name) {
-			continue
-		}
-		if out.ByKey == nil {
-			out.ByKey = map[string]int{}
-		}
-		out.Total++
-		out.ByKey[row.KeyID]++
-	}
-	return out, nil
+	held, err := s.Inventory(ctx)
+	return held.Engine, err
 }
 
 // Describe reports one row's metadata without opening it.

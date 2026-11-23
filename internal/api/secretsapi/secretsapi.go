@@ -447,16 +447,14 @@ func (s *Service) Routes(mux authz.Mux) error {
 // waits out (null where none), `executor_values` for the seats' sealed
 // executor sessions, and `access_values` for the recorded SSH commands.
 func (s *Service) list(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.store.List(r.Context())
+	// ONE PASS OF THE BUCKET for the names and the engine's count: each
+	// carries every sealed value across the node's link.
+	held, err := s.store.Inventory(r.Context())
 	if err != nil {
 		s.fail(w, r, "list the secrets", err)
 		return
 	}
-	engine, err := s.store.EngineKeys(r.Context())
-	if err != nil {
-		s.fail(w, r, "count the engine's keys", err)
-		return
-	}
+	rows, engine := held.Records, held.Engine
 	var identity *iamdomain.SealedCount
 	if s.identity != nil {
 		counted, err := s.identity.SealedKeys(r.Context())
