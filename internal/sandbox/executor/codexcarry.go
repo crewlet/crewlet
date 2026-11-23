@@ -58,6 +58,11 @@ func (Codex) VersionCommand() string { return "codex --version" }
 // ([codexArchiveFormat]).
 func (Codex) layout() archiveLayout { return archiveTar }
 
+// charges is false: Codex's count is the figure its rollout's newest
+// token_count states, which no byte the scrub takes out moves
+// ([carrier.charges], [codexCounting.line]).
+func (Codex) charges(string, string) bool { return false }
+
 // Continues reports whether a session written by Codex release writer can be
 // continued in a box whose Codex is release box ([carrier]): only where the
 // box continues any session ([Codex.continuesInPlace]) and the writer is as

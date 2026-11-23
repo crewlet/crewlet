@@ -39,6 +39,9 @@ const hermesArchiveFormat = 1
 // hermesArchiveMember is the one member of a Hermes archive.
 const hermesArchiveMember = "session.jsonl"
 
+// charges is false: its meter counts nothing ([carrier.charges]).
+func (Hermes) charges(string, string) bool { return false }
+
 // Resumes says Hermes continues a session the runner named: `-c <title>`
 // continues the session of that title, and its compaction lineage.
 func (Hermes) Resumes() bool { return true }
