@@ -8,7 +8,7 @@ import { Button, Callout, IconButton, List, VendorUI } from "@crewlethq/ui";
 import { Modal } from "~/components/Modal.tsx";
 import { ListOrderedGlyph, XGlyph } from "@crewlethq/icons/glyphs";
 import type { SetupStep } from "~/protocol/index.ts";
-import { VendorWords } from "./setupWords.tsx";
+import { VendorWords } from "~/ui/VendorWords.tsx";
 
 /** The steps, and the address a step's vendor link opens with the form's values filled in. */
 export interface StepsProps {

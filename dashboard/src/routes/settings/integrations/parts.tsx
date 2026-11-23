@@ -29,7 +29,7 @@ import type { ReconcileFinding } from "~/contract/integrations.ts";
 import type { SetupRequirement, SetupSet } from "~/contract/setup.ts";
 import { asSentence, listed, relTime } from "~/lib/format.ts";
 import { marked } from "~/ui/Problems.tsx";
-import { VendorWords } from "~/routes/settings/setupWords.tsx";
+import { VendorWords } from "~/ui/VendorWords.tsx";
 import { href } from "~/app/router.tsx";
 import { DisconnectDialog } from "../DisconnectDialog.tsx";
 import { asksIn, type SetEntry } from "../SetupForm.tsx";
