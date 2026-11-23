@@ -1223,7 +1223,9 @@ func seatEdits(current seataccess.Answer,
 		for _, lane := range sortedLanes(seats[handle]) {
 			before := seat.Lanes[lane].Desired
 			after := seats[handle][lane].Normalized()
-			if before.Enabled == after.Enabled && before.SameAccess(after) &&
+			// A DRAFT NAMING NO IDENTITY KEEPS THE ONE WRITTEN ([seataccess.SetDesired]).
+			sameIdentity := after.Identity == "" || after.Identity == before.Identity
+			if before.Enabled == after.Enabled && before.SameAccess(after) && sameIdentity &&
 				seataccess.SameStoredGrants(before.Grants, after.Grants) {
 				continue
 			}
