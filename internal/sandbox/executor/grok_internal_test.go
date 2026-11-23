@@ -25,13 +25,13 @@ import (
 // request's counts, the prompt less its cached part beside the cache; a capped
 // run is capped; a refusal is its error, a 402 and both 429s its limit too, one
 // past the model's context its context exhausted alone; a failed call is no
-// failed run; a run cancelled (on an approval or a signal, each named) and one
-// cut before its `end` failed, their spend counted.
+// failed run; a run cancelled, which this runner's is only on a signal, idle on
+// a subagent too, and one cut before its `end` failed, their spend counted.
 //
 // Mutations, each red: read the answer as every text line joined; count the
 // cached part twice; take max_turn_requests for an answer; drop "Some resource
 // has been exhausted" from grokLimitWords; read no overflow, or every failure as
-// one; read a stream without `end` as a success; read every cancel as either.
+// one; read a stream without `end` as a success; read a cancel as a success.
 func TestAGrokStreamReadsAsItsRunEnded(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -49,8 +49,9 @@ func TestAGrokStreamReadsAsItsRunEnded(t *testing.T) {
 		{name: "ratelimit", limited: true},
 		{name: "quota", limited: true},
 		{name: "overflow", exhausted: true},
-		{name: "cancelled", why: "asked for an approval", turns: 1, in: 699 + 400, cache: 400, out: 50},
-		{name: "signalled", why: "stopped by a signal", turns: 1, in: 655 + 400, cache: 400, out: 50},
+		{name: "cancelled", why: "signalled to stop", turns: 1, in: 699 + 400, cache: 400, out: 50},
+		{name: "signalled", why: "signalled to stop", turns: 1, in: 655 + 400, cache: 400, out: 50},
+		{name: "signalled-idle", why: "signalled to stop", turns: 3, in: 1819 + 1200, cache: 1200, out: 150},
 		{name: "cut", why: "stopped before", turns: 1, in: 605 + 400, cache: 400, out: 50},
 	} {
 		var stream []byte
@@ -255,7 +256,7 @@ hooks = [{ type = "command", command = "box-start" }]
 `
 	paths := Paths{Home: "/home/box"}
 	own, err := grokConfig(map[string]sandbox.MCPServer{"crewlet": {Transport: sandbox.TransportHTTP,
-		URL: "http://127.0.0.1:1/mcp"}}, "ab12cd", grokHooks(paths, true, false))
+		URL: "http://127.0.0.1:1/mcp"}}, "ab12cd", grokHooks(paths, true, false, nil))
 	if err != nil {
 		t.Fatal(err)
 	}

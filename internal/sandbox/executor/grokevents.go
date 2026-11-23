@@ -13,7 +13,7 @@ import (
 // (1.0.92) this runner reads: `text {data}`, `tool_call {toolCallId, toolName,
 // rawInput}`, `tool_call_update {toolCallId, status, rawOutput, content}`,
 // `usage {usage}` once per model request, `max_turns_reached`, `error
-// {message}` and the run's `end {stopReason, sessionId, requestId}`. DECODED LOOSELY: a
+// {message}` and the run's `end {stopReason, sessionId}`. DECODED LOOSELY: a
 // field a release retyped reads as zero, and the rest still read.
 type grokEvent struct {
 	Type       string          `json:"type"`
@@ -30,7 +30,6 @@ type grokEvent struct {
 	Usage      grokUsage `json:"usage"`
 	StopReason string    `json:"stopReason"`
 	SessionID  string    `json:"sessionId"`
-	RequestID  *string   `json:"requestId"`
 	Message    string    `json:"message"`
 }
 
@@ -46,9 +45,10 @@ type grokUsage struct {
 }
 
 // The stop reasons of Grok Build's `end` (measured on 1.0.92): a run that ended
-// on its own answer, one its turn cap stopped, and one cancelled: where a call
-// asked for an approval nobody can give, an `end` naming its request, and on a
-// SIGTERM or SIGINT, one whose `requestId` is empty.
+// on its own answer, one its turn cap stopped, and one cancelled, which under
+// `--always-approve` is a run signalled to stop (SIGTERM or SIGINT, mid-request,
+// mid-call or idle on a background subagent); only a run that may ask for an
+// approval, never this runner's, is also cancelled where a call asked.
 const (
 	grokEndTurn   = "end_turn"
 	grokCapped    = "max_turn_requests"
@@ -98,7 +98,6 @@ type grokEvents struct {
 
 	ended       bool
 	stop        string
-	signalled   bool
 	capped      bool
 	failure     string
 	failureLine string
@@ -189,7 +188,6 @@ func (d *grokEvents) Line(line []byte) {
 	case "end":
 		d.flush()
 		d.ended, d.stop = true, e.StopReason
-		d.signalled = e.RequestID != nil && *e.RequestID == ""
 		if e.SessionID != "" {
 			d.sessionID = e.SessionID
 		}
@@ -288,9 +286,9 @@ func (d *grokEvents) spend(u grokUsage) {
 
 // runSpend is the run's own spend ([runSpender]): every request's `usage`, its
 // subagents' included, the prompt not served from the cache as Grok states it.
-// Stated wherever a request was read. Grok's session-title request, which every
-// run makes first, and a session's compaction state no `usage` (measured on
-// 1.0.92), so the run is charged its own requests. Grok's `end` total omits a
+// Stated wherever a request was read. The session-title request every run, and
+// every subagent, makes first, and a session's compaction state no `usage`
+// (measured on 1.0.92), so the run is charged the rest of its requests. Grok's `end` total omits a
 // background subagent's and says `usage_is_incomplete`, so it is not read.
 func (d *grokEvents) runSpend() (runSpend, bool) {
 	if d.requests == 0 {
@@ -339,11 +337,8 @@ func (d *grokEvents) Result() sandbox.Result {
 		res.ContextExhausted = d.overflowed
 	case !d.ended:
 		res.Error = "the harness stopped before it reported how its run ended"
-	case d.stop == grokCancelled && d.signalled:
-		res.Error = "the harness was stopped by a signal before it answered"
 	case d.stop == grokCancelled:
-		res.Error = "the harness cancelled its run: a call asked for an approval, which a headless run cannot " +
-			"give, and its error stream names the call"
+		res.Error = "the harness cancelled its run before it answered: it was signalled to stop"
 	case d.stop != grokEndTurn:
 		res.Error = "the harness ended its run on " + firstNonBlank(d.stop, "no stop reason")
 	case text == "":

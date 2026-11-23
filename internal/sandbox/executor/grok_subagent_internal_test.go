@@ -1,7 +1,10 @@
 package executor
 
 import (
+	"archive/tar"
+	"bytes"
 	"cmp"
+	"compress/gzip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -270,5 +273,46 @@ func TestAGrokSubagentsSessionCarriesWithItsRuns(t *testing.T) {
 				t.Errorf("child under %q: %s is not where the continuing box files it: %v", childKey, name, err)
 			}
 		}
+	}
+}
+
+// A GROK READ'S LINE BOUND HOLDS ACROSS ITS SUBAGENTS' RECORDS: the lines of the
+// main record and of every child's count against the one bound a read has
+// ([TranscriptBounds.ReadLines]), so a session with many children reads no more
+// lines than one with none, and the read says where it stopped.
+//
+// Mutation: count each record's lines from zero.
+func TestAGrokReadsLineBoundHoldsAcrossItsSubagentsRecords(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(zw)
+	for _, id := range []string{"main", "child"} {
+		body := []byte("{\"type\":\"system\"}\n{\"type\":\"system\"}\n")
+		if err := tw.WriteHeader(&tar.Header{Name: "%2Fhome%2Fbox/" + id + "/chat_history.jsonl", Mode: 0o600,
+			Size: int64(len(body)), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write(body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	bounds := TranscriptReadBounds()
+	bounds.ReadLines = 3
+	got, err := newTranscriptBuilder(0, bounds, TranscriptFilter{}).decode(t.Context(), Grok{},
+		bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Cut != CutRead || !slices.ContainsFunc(got.Entries, func(e TranscriptEntry) bool {
+		return e.Kind == EntryUnread && e.Thread == "child" && strings.Contains(e.Text, "past the 3 lines")
+	}) {
+		t.Errorf("four lines over two records read under a bound of three: cut %v, entries %+v", got.Cut, got.Entries)
 	}
 }

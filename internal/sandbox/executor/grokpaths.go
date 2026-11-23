@@ -15,9 +15,10 @@ func (p Paths) GrokHome() string { return p.Home + "/.grok" }
 // where it starts one.
 func (p Paths) GrokConfig() string { return p.GrokHome() + "/config.toml" }
 
-// GrokConfigBox is the box's own ~/.grok/config.toml as it stood before its
-// first Grok Build run ([grokBoxConfig]), which every run's settings start
-// from. Kept for the box's life: the clear leaves it.
+// GrokConfigBox is the box's own ~/.grok/config.toml as it stood before a Grok
+// Build run wrote it ([grokBoxConfig]), which the run's settings start from,
+// kept until the run puts it back ([grokRestoreConfig]). The clear leaves it:
+// a run cut off before that leaves the box's own here.
 func (p Paths) GrokConfigBox() string { return p.WorkDir() + "/grok-config-box.toml" }
 
 // GrokConfigFresh is [Paths.GrokConfig] for a session a continuing run's script

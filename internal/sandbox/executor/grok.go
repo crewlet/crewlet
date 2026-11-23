@@ -139,7 +139,8 @@ func grokScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 		parts = append(parts, "--reasoning-effort", q(req.Effort))
 	}
 	// THE TURN CAP AS GROK'S OWN: past it a `max_turns_reached` event, then
-	// exit 1 ([grokEvents.Result]).
+	// exit 1 ([grokEvents.Result]). Each agent's own: a subagent stops at its
+	// cap and its parent goes on (measured on 1.0.92).
 	if req.Limits.MaxTurns > 0 {
 		parts = append(parts, "--max-turns", strconv.Itoa(req.Limits.MaxTurns))
 	}
@@ -161,9 +162,9 @@ func grokScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	// Grok's.
 	line(`for o in $(env | sed -n 's/^\(OTEL_EXPORTER_OTLP_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$o"; done`)
 	// THE MAIN SESSION NAMED for the note hooks, which fire in a subagent's
-	// session too and take only in this one ([Paths.GrokThread]).
-	if req.Steer.Set() {
-		line(`printf '%%s\n' "$s" > %s || echo 'crewlet: the session could not be named to the note hooks, so the run takes no notes' >&2`,
+	// session too and take or report only in this one ([Paths.GrokThread]).
+	if req.Steer.Set() || req.SkillLoads.Set() {
+		line(`printf '%%s\n' "$s" > %s || echo 'crewlet: the session could not be named to the note hooks, so the run takes no notes and reports no skill load' >&2`,
 			q(paths.GrokThread()))
 	}
 	// THE NOTE HELPER EXECUTABLE, which every hook runs by its path: the box
@@ -175,10 +176,23 @@ func grokScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	// IN THE BOX HOME, whose key its sessions are filed under ([Paths.GrokSessionsKey]).
 	line(`cd %s || { echo 'crewlet: the box home could not be entered' >&2; exit 1; }`, q(paths.Home))
 	b.WriteString(launchHarness(strings.Join(parts, " "), paths))
+	b.WriteString(grokRestoreConfig(paths))
 	b.WriteString(grokMainRecord(paths))
 	b.WriteString(grokCapture(paths))
 	line(`exit "$code"`)
 	return b.String()
+}
+
+// grokRestoreConfig is the part of a run's script that puts the box's own
+// ~/.grok/config.toml back once its harness has exited ([grokBoxConfig]): the
+// file kept, or none where it is empty, and the kept copy then removed, so no
+// bridge of the run's stays in the box's settings and an edit to them between
+// runs stands. A run cut off before it leaves the kept copy, which the next
+// run starts from.
+func grokRestoreConfig(paths Paths) string {
+	q := shellword.Quote
+	return fmt.Sprintf(`if [ -f %[1]s ]; then { if [ -s %[1]s ]; then cp %[1]s %[2]s && mv -f %[2]s %[3]s; else rm -f %[3]s; fi; } && rm -f %[1]s; fi
+`, q(paths.GrokConfigBox()), q(paths.GrokConfig()+".next"), q(paths.GrokConfig()))
 }
 
 // grokMainRecord is the part of a run's script that adds to its stream, once
@@ -186,10 +200,11 @@ func grokScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 // record lines its answer is read from ([grokEvents.record]): each request
 // and each prompt. The stream's lines carry no agent, so a subagent's words
 // there can stand last (measured on 1.0.92); the record is the main agent's
-// alone. Nothing where the session left no record.
+// alone. Nothing where the session left no record; the mark on a line of its
+// own, after a stream a killed harness left mid-line.
 func grokMainRecord(paths Paths) string {
 	return fmt.Sprintf(`x=%s/"$s"
-if [ -f "$x/chat_history.jsonl" ] && [ ! -L "$x" ]; then printf '%%s\n' %s; grep -F -e '"type":"assistant"' -e '"prompt_index"' "$x/chat_history.jsonl" 2> /dev/null; fi
+if [ -f "$x/chat_history.jsonl" ] && [ ! -L "$x" ]; then printf '\n%%s\n' %s; grep -F -e '"type":"assistant"' -e '"prompt_index"' "$x/chat_history.jsonl" 2> /dev/null; fi
 `, shellword.Quote(paths.GrokSessionsKey()), shellword.Quote(`{"type":"`+grokRecordMark+`"}`))
 }
 
@@ -661,9 +676,10 @@ func grokConfig(servers map[string]sandbox.MCPServer, nonce string, hooks string
 	return b.String(), nil
 }
 
-// grokBoxConfig is the box's own ~/.grok/config.toml, as it stood before the
-// first Grok Build run in the box wrote it, kept then at [Paths.GrokConfigBox]
-// (empty where the box had none), so every run lays its tables into the box's
+// grokBoxConfig is the box's own ~/.grok/config.toml, as it stood before this
+// run wrote it, kept at [Paths.GrokConfigBox] (empty where the box had none)
+// until the run puts it back ([grokRestoreConfig]); a copy an earlier run cut
+// off left is the box's own still. So every run lays its tables into the box's
 // settings and none into an earlier run's.
 func grokBoxConfig(ctx context.Context, box sandbox.Sandbox, paths Paths) ([]byte, error) {
 	q := shellword.Quote
@@ -839,7 +855,7 @@ func (g Grok) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 	if err != nil {
 		return "", err
 	}
-	own, err := grokConfig(req.MCPServers, nonce, grokHooks(paths, notes, loads))
+	own, err := grokConfig(req.MCPServers, nonce, grokHooks(paths, notes, loads, req.Skills))
 	if err != nil {
 		return "", err
 	}
@@ -866,7 +882,7 @@ func (g Grok) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 		}
 	}
 	if f := req.FreshWiring; f != nil {
-		freshOwn, ferr := grokConfig(f.MCPServers, nonce, grokHooks(paths, notes, loads))
+		freshOwn, ferr := grokConfig(f.MCPServers, nonce, grokHooks(paths, notes, loads, req.Skills))
 		if ferr != nil {
 			return "", ferr
 		}
@@ -931,9 +947,9 @@ func writeGrokSkills(ctx context.Context, box sandbox.Sandbox, skills []sandbox.
 // artifactFiles is the files a Grok Build run leaves in its box of its own
 // beside its sessions, which a later run must not find ([artifactHolder]): its
 // agent file, renewal, a fresh session's settings, the note helper, its configs
-// and the session it names. Never ~/.grok/config.toml, the box's own settings
-// with the run's tables, which every Grok run writes anew from the box's
-// ([grokBoxConfig]) and no other harness reads, nor its sessions and login.
+// and the session it names. Never ~/.grok/config.toml, the box's own settings,
+// which the run puts back ([grokRestoreConfig]), nor the copy kept of them
+// while a run runs, nor its sessions and login.
 func (Grok) artifactFiles(p Paths) []string {
 	return []string{p.GrokAgent(), p.GrokRules(), p.GrokConfigFresh(), p.GrokTakeConfig(), p.GrokTakeConfigFresh(),
 		p.GrokThread(), p.GrokNoteHelper()}

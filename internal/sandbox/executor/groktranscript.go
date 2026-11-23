@@ -20,7 +20,7 @@ import (
 func (Grok) transcript(ctx context.Context, b *transcriptBuilder, archive io.Reader) error {
 	tr := tar.NewReader(archive)
 	b.handed.r = tr
-	main := ""
+	main, read := "", 0
 	for {
 		h, err := tr.Next()
 		switch {
@@ -47,7 +47,7 @@ func (Grok) transcript(ctx context.Context, b *transcriptBuilder, archive io.Rea
 			}
 			continue
 		}
-		if err := b.grokRecord(ctx, bufio.NewReaderSize(&b.handed, lineChunkBytes)); err != nil {
+		if err := b.grokRecord(ctx, bufio.NewReaderSize(&b.handed, lineChunkBytes), &read); err != nil {
 			return err
 		}
 	}
@@ -64,14 +64,15 @@ func (Grok) transcript(ctx context.Context, b *transcriptBuilder, archive io.Rea
 //     result each call's result.
 //
 // The system message, Grok's own context and its reminders are passed over;
-// the record carries no time. A line that is no JSON is said where it was.
-func (b *transcriptBuilder) grokRecord(ctx context.Context, lines *bufio.Reader) error {
-	read := 0
+// the record carries no time. A line that is no JSON is said where it was, and
+// read counts the lines of every record of the read, a subagent's included,
+// against the one bound a read has ([TranscriptBounds.ReadLines]).
+func (b *transcriptBuilder) grokRecord(ctx context.Context, lines *bufio.Reader, read *int) error {
 	return readLines(lines, maxLineBytes, func(line []byte) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if read++; read > b.bounds.ReadLines {
+		if *read++; *read > b.bounds.ReadLines {
 			return b.linesPast("record", "lines")
 		}
 		return b.grokLine(line)
