@@ -8338,7 +8338,11 @@ A derived name another field already reads is refused `409
 conflict` naming the fields (`readers`): a value sealed there would reach them
 too. A key an integration hands each agent its own value under
 (`seat_credentials`, or a server the engine recognises) is refused `409
-conflict`: nobody stores it.
+conflict`: nobody stores it. A variable, the key's own or the derived one,
+longer than the 255 bytes a secret's name may be ([the secret
+store](../concepts/secret-store.md#the-design)) is refused `400 bad_params`
+before anything is tested or sealed: shorten the key, or point its field at a
+shorter `${VAR}`.
 
 **In this order**, each step only when the one before it passed:
 
@@ -8390,7 +8394,8 @@ conflict`: nobody stores it.
 
 The body is read strictly (`400 invalid_body` for a field it does not read, no
 `value`, an empty one, or one holding a line break or a NUL), and any other query parameter is `400
-invalid_query`. `404 not_found` for a server the configuration does not
+invalid_query`. A `{key}` that is not a header or variable name is `400
+bad_params`: name the header or variable the server reads. `404 not_found` for a server the configuration does not
 declare, `404 no_such_seat` for a seat that is not an agent's, and
 `409 seat_not_granted` for a seat the server is not granted to. **No answer,
 log line or audit record carries the value**, a refusal included: every call is one `mcp_server_acted`
