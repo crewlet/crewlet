@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/seataccess"
+	"github.com/crewlet/crewlet/internal/setup"
 )
 
 // metaIdentityCompany is a company with Meta Ads connected and its growth agent
@@ -241,12 +243,20 @@ func TestARefusedCheckNamesTheStepItStoppedAt(t *testing.T) {
 	guide := &seataccess.IdentityGuide{Checks: []seataccess.GuideCheck{
 		{ID: "sign", Label: "Sign in"}, {ID: "apps", Label: "Find the apps"}, {ID: "role", Label: "Read the role"}}}
 	refusedAtRole := seataccess.IdentityCheck{Status: seataccess.IdentityWrongRole, Said: "Fits no role.",
+		ID: "QD2KH2G8B3", Needs: "App Manager", Team: "main",
 		Reads: []seataccess.IdentityRead{{Label: "Sign in", OK: true}, {Label: "Find the apps", OK: true},
 			{Label: "Read the role", Said: "Fits no role.", Detail: "financeReports_getCollection 200"}}}
 	v := setupapi.IdentityVerdict(refusedAtRole, guide)
 	if v.FailedAt != "role" || len(v.Steps) != 1 || v.Steps[0].ID != "role" ||
 		v.Steps[0].Detail != "financeReports_getCollection 200" {
 		t.Fatalf("a role read that failed: %+v", v)
+	}
+	// EACH READ IS SAID ON ITS STEP, so the facts are the identity alone, its
+	// IDs marked for the mono face.
+	want := []setup.Fact{{Label: "Identity", Value: "QD2KH2G8B3", Identifier: true},
+		{Label: "Role needed", Value: "App Manager"}, {Label: "Team", Value: "main", Identifier: true}}
+	if !reflect.DeepEqual(v.Facts, want) {
+		t.Fatalf("facts %+v, want %+v", v.Facts, want)
 	}
 	if v := setupapi.IdentityVerdict(seataccess.IdentityCheck{Status: seataccess.IdentityRefused,
 		Said: "Accept the agreement."}, guide); v.FailedAt != "sign" {

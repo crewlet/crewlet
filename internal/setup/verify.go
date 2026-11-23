@@ -112,6 +112,10 @@ type Fact struct {
 
 	// Value is what the label is, without a closing full stop: "2027-11-04".
 	Value string `json:"value"`
+
+	// Identifier marks a value that is an ID (a key, a team), drawn in the
+	// mono face.
+	Identifier bool `json:"identifier,omitempty"`
 }
 
 // Warning is one risk or problem a check found, with what to do about it.

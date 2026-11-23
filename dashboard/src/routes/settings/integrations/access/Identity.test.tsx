@@ -283,3 +283,28 @@ test("verdictOf carries each read's reason and the vendor's answers to the sheet
   });
   expect(verdictOf({ outcome: "works", summary: "Works." })).not.toHaveProperty("failedAt");
 });
+
+// THE VERDICT SAYS WHAT HAPPENED, THE IDENTITY'S FACTS AND WHAT TO DO NEXT,
+// and no read twice: each is said on its own step. An ID is in the mono face.
+//
+// Mutation: draw the facts as plain text, and the key's ID reads as prose.
+test("the verdict is the headline, the identity's facts and the next step", () => {
+  const v = verdictOf({
+    outcome: "refused",
+    summary: "Apple's answers fit no role.",
+    facts: [
+      { label: "Identity", value: "QD2KH2G8B3", identifier: true },
+      { label: "Role needed", value: "App Manager" },
+      { label: "Team", value: "main", identifier: true },
+    ],
+    warnings: [{ action: "Check the key's Access in Team Keys." }],
+  });
+  render(<LayerHost>{v.view}</LayerHost>);
+  expect(screen.getByText("Apple's answers fit no role.")).toBeTruthy();
+  const facts = screen.getByText("Identity").closest("dl")!;
+  expect(within(facts).getByText("Role needed")).toBeTruthy();
+  expect(within(facts).getByText("QD2KH2G8B3").className).toMatch(/mono/);
+  expect(within(facts).getByText("App Manager").className).not.toMatch(/mono/);
+  expect(screen.getByText("Next step")).toBeTruthy();
+  expect(screen.getByText("Check the key's Access in Team Keys.")).toBeTruthy();
+});
