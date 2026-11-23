@@ -21,6 +21,7 @@ import {
   docHref,
   entryState,
   findingsNotShown,
+  findingsSilence,
   phaseTone,
 } from "./catalogue.tsx";
 import {
@@ -1146,13 +1147,30 @@ test("a surface whose findings were cut or unread says so under its list", () =>
   const at = (reconcile: IntegrationRow["reconcile"]) => [
     { surface, row: { key: surface.key, configured: true, reconcile } as IntegrationRow },
   ];
-  expect(findingsNotShown(at({ phase: "ready", findings_omitted: 0 }))).toBeNull();
-  // AN AGENT'S OWN, folded away, is drawn on its row: not counted here.
-  expect(findingsNotShown(at({ phase: "ready", seat_findings_omitted: 4 }))).toBeNull();
-  expect(findingsNotShown(at({ phase: "degraded", findings_omitted: 12 }))).toContain(
+  expect(findingsNotShown(at({ phase: "ready", findings_omitted: 0 }), 1)).toBeNull();
+  // AN AGENT'S OWN, kept without its words, is drawn on its row: not counted here.
+  expect(findingsNotShown(at({ phase: "ready", seat_findings_omitted: 4 }), 1)).toBeNull();
+  expect(findingsNotShown(at({ phase: "degraded", findings_omitted: 12 }), 1)).toContain(
     "12 more findings were not kept",
   );
-  expect(findingsNotShown(at({ phase: "degraded", findings_unread: true }))).toContain(
+  expect(findingsNotShown(at({ phase: "degraded", findings_unread: true }), 1)).toContain(
     "could not be read",
   );
+});
+
+// UNREAD IS NOT NONE. Findings this node could not read leave an empty list,
+// and that list must never read as a pass that found nothing; the silence
+// says which it is, once. Mutation: choose the silence from the reconcile
+// alone, and the unread surface reads "found nothing outstanding".
+test("an empty list of findings this node could not read never reads as nothing outstanding", () => {
+  const surface = atlassian.surfaces[0]!;
+  const at = (reconcile: IntegrationRow["reconcile"]) => [
+    { surface, row: { key: surface.key, configured: true, reconcile } as IntegrationRow },
+  ];
+  const unread = at({ phase: "degraded", findings_unread: true });
+  expect(findingsSilence(unread)).toContain("could not read the findings");
+  expect(findingsSilence(unread)).not.toContain("nothing outstanding");
+  expect(findingsNotShown(unread, 0)).toBeNull();
+  expect(findingsSilence(at({ phase: "ready" }))).toBe("The last pass found nothing outstanding.");
+  expect(findingsSilence(at(null))).toBe("No status reported yet.");
 });

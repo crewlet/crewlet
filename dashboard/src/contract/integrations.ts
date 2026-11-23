@@ -141,8 +141,8 @@ export interface ReconcileStatus {
   /**
    * How many findings the engine's record of this surface's findings dropped
    * from the end of `findings` to fit its size, and how many of an agent's
-   * own (`seat`) it folded away, which each agent's row still draws. Zero
-   * where it kept them all. Absent on a setup pass's own report.
+   * own (`seat`) it kept without their words, which each agent's row still
+   * draws. Zero where it kept them all. Absent on a setup pass's own report.
    */
   findings_omitted?: number;
   seat_findings_omitted?: number;

@@ -761,12 +761,26 @@ export function FindingSubjects({
 }
 
 /**
- * What the engine's records of `present`'s findings leave out of the list
- * drawn from them: the findings each dropped to fit its size (an agent's own,
- * which its row draws, are not counted), and whether any surface's findings
- * could not be read beside its status. Null where the list is whole.
+ * What an empty findings list says, which of three silences it is: findings
+ * this node could not read (never "nothing outstanding": unread is not none),
+ * a pass that found nothing, or a surface no pass has reached.
  */
-export function findingsNotShown(present: readonly Present[]): string | null {
+export function findingsSilence(present: readonly Present[]): string {
+  if (present.some((p) => p.row.reconcile?.findings_unread)) {
+    return "This node could not read the findings just now, so it cannot say what is outstanding.";
+  }
+  return present.some((p) => p.row.reconcile)
+    ? "The last pass found nothing outstanding."
+    : "No status reported yet.";
+}
+
+/**
+ * What the engine's records of `present`'s findings leave out of the list
+ * drawn from them: the findings each dropped to fit its size, and whether any
+ * surface's findings could not be read beside its status (said here only under
+ * a list, since an empty one says it itself). Null where the list is whole.
+ */
+export function findingsNotShown(present: readonly Present[], listed: number): string | null {
   let omitted = 0;
   let unread = false;
   for (const p of present) {
@@ -779,7 +793,7 @@ export function findingsNotShown(present: readonly Present[]): string | null {
       `${omitted} more ${omitted === 1 ? "finding was" : "findings were"} not kept: the engine keeps the most important first.`,
     );
   }
-  if (unread) said.push("Some findings could not be read just now.");
+  if (unread && listed > 0) said.push("Some findings could not be read just now.");
   return said.length > 0 ? said.join(" ") : null;
 }
 
@@ -2243,7 +2257,7 @@ export function IntegrationPeek({ kind }: { kind: string }) {
   const present = presentSurfaces(entry, rows);
   const state = entryState(entry, rows, data?.tools);
   const findings = openFindings(present);
-  const notShown = findingsNotShown(present);
+  const notShown = findingsNotShown(present, findings.length);
 
   return (
     <>
@@ -2367,12 +2381,11 @@ export function IntegrationPeek({ kind }: { kind: string }) {
                   </ul>
                 ) : (
                   <span className="t-caption">
-                    {/* WHICH SILENCE THIS IS. A pass that found nothing and a
-                        surface no pass has reached are both an empty list, and
-                        only one of them is good news. */}
-                    {present.some((p) => p.row.reconcile)
-                      ? "The last pass found nothing outstanding."
-                      : "No status reported yet."}
+                    {/* WHICH SILENCE THIS IS. A pass that found nothing, a
+                        surface no pass has reached and findings this node could
+                        not read are all an empty list, and only one of them is
+                        good news. */}
+                    {findingsSilence(present)}
                   </span>
                 )}
                 {notShown && <span className="t-caption">{notShown}</span>}
