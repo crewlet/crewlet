@@ -7165,13 +7165,16 @@ ul.md-tasks > li > input[type="checkbox"] {
   padding: 0;
   list-style: none;
 }
-/* ONE ROW A DECISION: its words on the left (the title over one line of what
-   it is about) and its controls on the right, centred on the words. An
+/* ONE ROW A DECISION: its words (the title over one line of what it is about),
+   then its answers, beside the words while both fit and under them once they
+   do not. The words keep a reading width first, so the wrap is decided by the
+   row's own width and the buttons' own labels, never a fixed breakpoint. An
    asker's questions, a parked run and a stopped seat are all drawn this way,
    each block under its head ([.decision-group-head]). */
 .decision-item {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  container: decision-row / inline-size;
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--spacing-2) var(--spacing-3);
   padding: var(--spacing-3) var(--spacing-4);
@@ -7183,14 +7186,17 @@ ul.md-tasks > li > input[type="checkbox"] {
    own across both columns, one step between its blocks: held to the words'
    column, it left the column under the controls empty for as long as it ran. */
 .decision-detail {
-  grid-column: 1 / -1;
+  flex: 1 1 100%;
   display: flex;
   flex-direction: column;
   gap: var(--spacing-2);
   min-width: 0;
 }
+/* About forty-five characters of the title's size: narrower, a question
+   wrapped every few words beside two long answers. */
 .decision-text {
   display: flex;
+  flex: 1 1 20rem;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
@@ -7234,9 +7240,10 @@ ul.md-tasks > li > input[type="checkbox"] {
 }
 .decision-actions {
   display: flex;
+  flex: 0 1 auto;
   flex-wrap: wrap;
-  justify-content: flex-end;
   gap: 6px;
+  max-width: 100%;
 }
 /* A BLOCK UNDER ONE HEAD: a quiet band with the seat's small face, its name,
    and what every row under it shares (the item, the role, how long ago). */
@@ -7265,11 +7272,12 @@ ul.md-tasks > li > input[type="checkbox"] {
 }
 /* THE OPEN ANSWER, the answered line and a refusal take the row's whole
    width under its words. At rest the row layout's wrapper draws nothing of
-   its own, so Accept and Change are the row's second column. */
+   its own, so Accept and Change are the row's answers. */
 .decision-item > .decision-answer.is-open,
 .decision-item > .decision-answered,
 .decision-answer--row > :not(.decision-answer-actions) {
-  grid-column: 1 / -1;
+  flex: 1 1 100%;
+  min-width: 0;
 }
 .decision-answer--row {
   display: contents;
@@ -7298,8 +7306,10 @@ ul.md-tasks > li > input[type="checkbox"] {
 }
 .decision-answer-actions {
   display: flex;
-  flex: none;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
   gap: 6px;
+  max-width: 100%;
 }
 .decision-answered {
   display: flex;
@@ -7346,20 +7356,13 @@ ul.md-tasks > li > input[type="checkbox"] {
   white-space: pre-wrap;
 }
 
-/* A NARROW LIST STACKS the buttons under the words, which keep the whole
-   width. KEYED ON THE LIST, not the page: the same row sits in Home's half-
-   width card and in the Inbox's list column beside its pane, and a page
-   query left the Inbox's question a hundred and fifty pixels wide beside two
-   buttons on a page that was nowhere near a phone. */
-.decision-list {
-  container: decision-list / inline-size;
-}
-@container decision-list (width < 480px) {
-  .decision-item {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .decision-actions {
-    justify-content: flex-start;
+/* A ROW AS NARROW AS A PHONE shares its width between its answers, each a
+   wide target. Keyed on the row, not the page: the row sits in Home's cards
+   and in the Inbox's list column. */
+@container decision-row (width < 20rem) {
+  .decision-actions > *,
+  .decision-answer-actions > * {
+    flex: 1 1 auto;
   }
 }
 

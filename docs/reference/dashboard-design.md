@@ -1451,9 +1451,13 @@ A tab that was read by somebody (`lib/reader.ts`) and lands here with no session
   its answer to ("answer posted to #releases"). Each question is ONE ROW: the
   question (two lines at most on Home), and under it its key and "Recommended:
   Hold release", with **Accept**, which sends that option, and an outlined
-  **Change** at the row's end, centred on the words. **Change** opens every
-  option as a choice with its detail line and the recommended one tagged
-  (the kit's `ChoiceList`), plus **Something else**, whose field (the kit's
+  **Change** at the row's end, centred on the words while the words keep a
+  reading width beside them, and under the words, which take the whole row,
+  once they do not (the row's own width decides, so long answers such as "Add
+  it to the running work" never squeeze the words). No answer's label breaks,
+  and a quoted item under the words holds two lines, whole on hover.
+  **Change** opens every option as a choice with its detail line and the
+  recommended one tagged (the kit's `ChoiceList`), plus **Something else**, whose field (the kit's
   `Composer`, up to 2,000 characters, Enter to send and Shift+Enter for a new line) sends a reply
   instead of a choice; **Submit** sends what is chosen. While the options are
   open the recommendation line is hidden, and only one ask's options are open
