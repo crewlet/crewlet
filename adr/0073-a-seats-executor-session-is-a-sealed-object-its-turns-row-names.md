@@ -5004,18 +5004,21 @@ or as the scrub escapes it, or a patch ordering the records (`orderIds`)
 `unread`. Qwen Code 0.28.4 compresses on a recorded figure (the newest reply's
 prompt and output, or a newer compression's size) beside a quarter of the
 brief and a dated reminder, at 85% of its window held 33,000 below it; the
-count is that figure's bound, every message after it a token a byte, and
-twenty tool-answer images are `media`. Neither main thread is read in its box,
-so a copy continued there is told as a summary.
+count is that figure's bound, every message after it a token a byte, twenty
+tool-answer images are `media`, and tool answers but an MCP tool's reaching
+the 500,000 characters past which its first request clears the oldest are
+`masked`. A collection counts the box's own copy by the same rules once its
+harness ended its run (the job's `resumed_count`), so a copy continued there,
+and a capture taken whole in it, are judged by the worse of the two.
 
 **The launch reads each box's point** in one exec: the threshold of the window
 its release states for the model, Gemini CLI's session context (its tree and
 `GEMINI.md` files) beside the brief, Qwen Code's reminder; a knob's name found
-in any source it loads, or a Gemini CLI sign-in other than a key, is
-`settings`, a `GEMINI.md` import or a context past 64 KiB `boxsources`, a
-Gemini CLI launch naming no model `nomodel`. `BoxPoint.Anchored` keeps
-OpenCode's provider check to OpenCode's points: the other two count no
-provider.
+in any source it loads, a Gemini CLI sign-in other than a key, or Qwen Code's
+subscription login, is `settings`, a `GEMINI.md` import or a context past 64
+KiB `boxsources`, a Gemini CLI launch naming no model `nomodel`.
+`BoxPoint.Anchored` keeps OpenCode's provider check to OpenCode's points: the
+other two count no provider.
 
 **A run's start is a counted prefix** (`RunStart.Lines`): the script records
 the chat file's line count and the POSIX `cksum` of those lines once the gate
@@ -5034,8 +5037,8 @@ Google login's server flags, a Vertex AI sign-in, a window `modelConfigs`
 sets, what the context keys `includeDirectoryTree`, `fileName` and
 `memoryBoundaryMarkers` do, a `.env` file naming the system settings' paths,
 the window of a launch naming no model, a patch ordering the records
-(`orderIds`), and a provider refusing a Qwen Code first request over its
-window.
+(`orderIds`), Qwen Code's subscription login, and a provider refusing a Qwen
+Code first request over its window.
 
 **Mid-upgrade.** No record version moves. An older build carries
 `run_after_lines` among a capture's unknown keys, reads no start from it, and
