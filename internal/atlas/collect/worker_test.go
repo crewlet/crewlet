@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -178,6 +179,16 @@ func (h *harness) standing() collect.Status {
 	return all[integration.KindCloudflare]
 }
 
+// misses is the source's standing with its misses, read by their key.
+func (h *harness) misses() collect.Status {
+	h.t.Helper()
+	st, err := h.store.Misses(h.t.Context(), collect.Status{Kind: integration.KindCloudflare})
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return st
+}
+
 // A SOURCE IS READ WHEN DUE, RECORDED ONCE, AND AN UNCHANGED READ WRITES
 // NOTHING: the first tick records every entry, a tick before the interval
 // reads nothing, and a tick after it reads again and records nothing.
@@ -231,14 +242,14 @@ func TestAFailedReadRecordsAndRetiresNothing(t *testing.T) {
 		t.Errorf("a failed source was not retried after %s: %d reads", collect.RetryAfter, h.source.reads)
 	}
 	h.tick(2 * collect.RetryAfter)
-	if len(h.standing().Missing) != 0 {
-		t.Errorf("failed reads marked entries missing: %+v", h.standing().Missing)
+	if missed := h.misses(); h.standing().Missed != 0 || len(missed.Missing) != 0 {
+		t.Errorf("failed reads marked entries missing: %d, %+v", h.standing().Missed, missed.Missing)
 	}
 	h.source.set(nil, nil)
 	h.tick(collect.RetryAfter)
-	if h.log.recorded() != 4 || len(h.standing().Missing) != 1 {
-		t.Fatalf("an empty complete read retired at once or missed nothing: %d records, %+v", h.log.recorded(),
-			h.standing().Missing)
+	if missed := h.misses(); h.log.recorded() != 4 || h.standing().Missed != 4 || len(missed.Missing) != 1 {
+		t.Fatalf("an empty complete read retired at once or missed nothing: %d records, %d missed, %+v",
+			h.log.recorded(), h.standing().Missed, missed.Missing)
 	}
 	h.tick(25 * time.Hour)
 	if h.log.recorded() != 8 || h.standing().Retired != 4 {
@@ -296,8 +307,12 @@ func mustLoad(t *testing.T, h *harness) map[integration.Kind]collect.Status {
 	return all
 }
 
-// THE STANDING ROUND-TRIPS THROUGH THE COORDINATION STORE, misses included,
-// and one this build cannot decode is skipped rather than raised.
+// THE STANDING AND ITS MISSES ROUND-TRIP THROUGH THE COORDINATION STORE AS
+// TWO RECORDS: the standing lists without its misses, which are read by
+// their source's key, and a record this build cannot decode is skipped (a
+// standing) or read as nothing missed (misses) rather than raised.
+//
+// Mutation: drop the misses' json:"-", and the standing's record carries them.
 func TestAStandingRoundTripsThroughTheStore(t *testing.T) {
 	t.Parallel()
 	fleet := memory.NewFleet()
@@ -306,7 +321,11 @@ func TestAStandingRoundTripsThroughTheStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := collect.Status{Kind: integration.KindCloudflare, LastAttemptAt: t0, Completed: true, LastCompleteAt: t0,
-		Digest: "ab", Entries: 3, Missing: []collect.Missing{{Since: t0, Entries: []string{"a", "b"}}}}
+		Digest: "ab", Entries: 3, Missed: 3, Missing: []collect.Missing{{Since: t0, Entries: []string{"a", "b"}}},
+		MissingOverflow: 1}
+	if err := store.SaveMisses(t.Context(), want); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.Save(t.Context(), want); err != nil {
 		t.Fatal(err)
 	}
@@ -318,8 +337,24 @@ func TestAStandingRoundTripsThroughTheStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(got) != 1 || !got[want.Kind].LastCompleteAt.Equal(t0) || got[want.Kind].Digest != "ab" ||
-		!slices.Equal(got[want.Kind].Missing[0].Entries, []string{"a", "b"}) {
-		t.Errorf("Load = %+v, want the saved standing alone", got)
+		got[want.Kind].Missed != 3 || got[want.Kind].Missing != nil {
+		t.Errorf("Load = %+v, want the saved standing alone, its misses counted and not carried", got)
+	}
+	raw, err := fleet.AtlasSourceStatuses(t.Context())
+	if err != nil || strings.Contains(string(raw["cloudflare"]), `"a"`) {
+		t.Errorf("the standing's record %s (%v) carries its misses", raw["cloudflare"], err)
+	}
+	missed, err := store.Misses(t.Context(), got[want.Kind])
+	if err != nil || missed.MissingOverflow != 1 || len(missed.Missing) != 1 ||
+		!slices.Equal(missed.Missing[0].Entries, []string{"a", "b"}) || missed.Digest != "ab" {
+		t.Errorf("Misses = %+v (%v), want the standing with its two misses and one held back", missed, err)
+	}
+	if err := fleet.PutAtlasSourceMisses(t.Context(), "datadog", []byte("not json")); err != nil {
+		t.Fatal(err)
+	}
+	if none, err := store.Misses(t.Context(), collect.Status{Kind: integration.KindDatadog}); err != nil ||
+		none.Missing != nil {
+		t.Errorf("undecodable misses read as %+v (%v), want nothing missed", none.Missing, err)
 	}
 	if _, err := collect.NewCoordStore(nil); err == nil {
 		t.Error("a nil backend was wrapped")

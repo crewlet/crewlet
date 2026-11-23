@@ -20,6 +20,11 @@ type SeatAccess interface {
 	// "cannot tell" send a sync down opposite paths.
 	SeatAccessRecords(ctx context.Context, kind string) (map[string][]byte, error)
 
+	// SeatAccessRecord is one seat's record at one integration, false where
+	// it has none: one key, where a listing would carry every other seat's
+	// record too. RAISES on an unreachable store, as the listing does.
+	SeatAccessRecord(ctx context.Context, kind, handle string) ([]byte, bool, error)
+
 	// PutSeatAccessRecord records one seat's record at one integration,
 	// replacing any prior one.
 	PutSeatAccessRecord(ctx context.Context, kind, handle string, value []byte) error
@@ -32,6 +37,17 @@ type SeatAccess interface {
 // SeatAccessClass is the key class a record is filed under in the positions
 // register.
 const SeatAccessClass = "seat_access"
+
+// MaxSeatAccessBytes bounds one seat's record at one integration as stored.
+// Every turn of the seat reads it, and the sync's read of it decides what the
+// vendor is told, so its reply crosses a leaf's link at the slowest pace in
+// 10 s. A lane holds its access twice (applied and observed): 20 grants
+// (internal/config's MaxSeatGrants) with whole plain reasons take 85 KB, and
+// 256 KiB holds some 700 scope entries of 60 bytes beside them that the vendor
+// names apart from their ids, 1,400 it does not; a typical record is a few
+// KiB. A lane whose access would outgrow it takes no step, and is told why
+// (internal/seataccess's syncer.fits).
+const MaxSeatAccessBytes = 256 << 10
 
 // SeatAccessKey is one seat's key at one integration.
 func SeatAccessKey(kind, handle string) string {

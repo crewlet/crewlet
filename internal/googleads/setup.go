@@ -7,6 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/googlegrowth"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/vendortext"
 )
 
 // accessURL is Google Ads' access settings, where a person adds an identity
@@ -25,8 +26,8 @@ func Requirements(c *config.Company) []setup.Requirement {
 	}
 	return append([]setup.Requirement{googlegrowth.Enabled(string(Kind), "Google Ads", enabled)},
 		googlegrowth.Reader(c, setup.IdentityRole{ID: roleReadOnly, Name: "Read-only"},
-			setup.IdentityWhere{URL: accessURL, Words: "Admin, Access and security, Users, add (+)"},
-			"enough to read every report; it changes nothing.")...)
+			vendortext.Of(vendortext.UI("Admin", "Access and security", "Users", "+").At(accessURL)),
+			vendortext.Plain("enough to read every report; it changes nothing."))...)
 }
 
 // Guide is what the connect form says around its fields.
@@ -35,14 +36,15 @@ func Guide() setup.Guide {
 		Summary: "Agents use your Google Ads accounts as their own Google identity, at the level you give it, " +
 			"spend held to your caps. No token reaches an agent's box.",
 		Prepare: []setup.Step{
-			{Text: "Connect Google Cloud first; no project needs preparing. Its Cloud Shell block, run again, " +
-				"turns on the Google Ads API and makes the company reader."},
-			{Text: "Apply for Explorer or Basic access to the Google Ads API on the identity project's API page."},
-			{Text: "Add the company reader below to each account at Read-only, and set each account's spending " +
-				"caps before any agent may ask to spend."},
-			{Text: "Turn agents on from the Agents tab, then set up each one's identity there: add its email to its " +
-				"accounts, or once to their manager, at the access level its level needs. Crewlet checks each " +
-				"agent's access on every pass."},
+			{Text: vendortext.Plain("Connect Google Cloud first; no project needs preparing. Its Cloud Shell block, " +
+				"run again, turns on the Google Ads API and makes the company reader.")},
+			{Text: vendortext.Of(vendortext.W("Apply for "), vendortext.UI("Explorer"), vendortext.W(" or "),
+				vendortext.UI("Basic"), vendortext.W(" access to the Google Ads API on the identity project's API page."))},
+			{Text: vendortext.Of(vendortext.W("Add the company reader below to each account at "),
+				vendortext.UI("Read-only"), vendortext.W(", and set each account's spending caps before any agent may ask to spend."))},
+			{Text: vendortext.Plain("Turn agents on from the Agents tab, then set up each one's identity there: add " +
+				"its email to its accounts, or once to their manager, at the access level its level needs. Crewlet " +
+				"checks each agent's access on every pass.")},
 		},
 	}
 }

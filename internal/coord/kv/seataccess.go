@@ -39,6 +39,21 @@ func (f *FleetStore) SeatAccessRecords(ctx context.Context, kind string) (map[st
 	return out, nil
 }
 
+// SeatAccessRecord is one seat's record at one integration, false where none.
+func (f *FleetStore) SeatAccessRecord(ctx context.Context, kind, handle string) ([]byte, bool, error) {
+	if kind == "" || handle == "" {
+		return nil, false, errors.New("coord/kv: a seat access record is read per integration and seat")
+	}
+	entry, err := f.get(ctx, f.positions, coord.SeatAccessKey(kind, handle))
+	switch {
+	case errors.Is(err, jetstream.ErrKeyNotFound):
+		return nil, false, nil
+	case err != nil:
+		return nil, false, unavailable("read "+handle+"'s "+kind+" access", err)
+	}
+	return bytes.Clone(entry.Value()), true, nil
+}
+
 // PutSeatAccessRecord records one seat's record at one integration.
 func (f *FleetStore) PutSeatAccessRecord(ctx context.Context, kind, handle string, value []byte) error {
 	if kind == "" || handle == "" {

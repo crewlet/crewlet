@@ -53,12 +53,14 @@ func (e *Engine) atlasLog(context.Context) (builtin.AtlasLogReads, bool) {
 // atlasRecords is every record source the atlas reads, as this node reaches
 // it: replicated reads through the router, so a node without the data role
 // answers too, the coordination store's directly. A source it cannot reach is
-// left nil, which the read reports as unread rather than empty.
+// left nil, which the read reports as unread rather than empty. The MCP
+// listings are this node's watched copy, never the store's: a turn's read
+// would wait on each crossing a link (unread until the watch answers).
 func (e *Engine) atlasRecords(ctx context.Context) gather.Sources {
 	var src gather.Sources
 	if e.backends != nil {
 		if e.backends.Fleet != nil {
-			src.ToolServers, src.ServerTests = e.backends.Fleet, e.backends.Fleet
+			src.Listings, src.SignIns, src.ServerTests = e, e.backends.Fleet, e.backends.Fleet
 			src.NodeStatuses = e.backends.Fleet
 		}
 		if e.backends.Coord != nil {

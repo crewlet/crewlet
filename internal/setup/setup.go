@@ -68,13 +68,13 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/vendortext"
 )
 
 // Kind is what sort of value a requirement holds.
@@ -146,8 +146,8 @@ type IdentityStep struct {
 	Email string `json:"email"`
 	// Role is the vendor's own role ID and its name.
 	Role IdentityRole `json:"role"`
-	// Where is the vendor's page for it, and the words of how to reach it.
-	Where IdentityWhere `json:"where"`
+	// Where is how to reach the vendor's page for it, the page linked.
+	Where vendortext.Text `json:"where"`
 	// Level is "company" for the company's own identity, "seat" for one
 	// seat's, which Seat then names.
 	Level string `json:"level"`
@@ -161,12 +161,6 @@ type IdentityStep struct {
 type IdentityRole struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
-}
-
-// IdentityWhere is where at the vendor a person adds an identity.
-type IdentityWhere struct {
-	URL   string `json:"url"`
-	Words string `json:"words"`
 }
 
 // Valid reports whether k is a kind this build knows.
@@ -223,11 +217,6 @@ type Requirement struct {
 	// Nil is the ordinary requirement, answering to [Required] alone.
 	RequiredWhen *Gate `json:"required_when,omitempty"`
 
-	// Set is the list this requirement is one entry's field of, nil for a
-	// field on its own. A member is required once its entry is started, and
-	// the set by its Min, never by Required ([Set]).
-	Set *Set `json:"set,omitempty"`
-
 	// Required reports whether the integration can work without this.
 	// A false one is still worth showing: it is usually the difference
 	// between working and working well.
@@ -279,11 +268,6 @@ type Requirement struct {
 	// region is US1 for most of them — where "Choose one" makes everybody
 	// answer a question that has an obvious answer.
 	Default string `json:"default,omitempty"`
-
-	// LinkText is the words [LinkMark] stands for in this field's Hint or
-	// More, or in a [Step] naming it: the link to VendorURL, set wherever
-	// VendorURL is, so a link reads as part of its sentence.
-	LinkText string `json:"link_text,omitempty"`
 
 	// Mintable reports that the ENGINE can produce this value, so a
 	// person should not be asked for it. A shared webhook token and a
@@ -338,18 +322,14 @@ type Requirement struct {
 	Shape Shape `json:"shape,omitempty"`
 
 	// Hint is the one line under the field, under fifteen words (setupapi's
-	// copy test holds it): what the value is and where it is found. [LinkMark]
-	// places the vendor link, and `{field}` reads another field of the form.
-	Hint string `json:"hint,omitempty"`
+	// copy test holds it): what the value is and where it is found, the
+	// vendor page linked on the words that name it; `{field}` in its words or
+	// a link reads another field of the form.
+	Hint vendortext.Text `json:"hint,omitempty"`
 
 	// More is what a person may want once about the field, behind a
 	// disclosure under its hint. Empty where the hint says it all.
-	More string `json:"more,omitempty"`
-
-	// VendorURL is the page at the vendor the field's value comes from. Its
-	// `{field}` placeholders are filled from the form, which draws plain text
-	// until each has a value (Atlassian's per-organization pages).
-	VendorURL string `json:"vendor_url,omitempty"`
+	More vendortext.Text `json:"more,omitempty"`
 
 	// Choices are the options for a KindChoice.
 	Choices []Choice `json:"choices,omitempty"`
@@ -539,13 +519,6 @@ func Outstanding(reqs []Requirement) []Requirement {
 			out = append(out, r)
 		}
 	}
-	if short := CheckSets(reqs, nil); short != nil {
-		for _, r := range reqs {
-			if r.Field == short.Field && !slices.ContainsFunc(out, func(o Requirement) bool { return o.Field == r.Field }) {
-				out = append(out, r)
-			}
-		}
-	}
 	return out
 }
 
@@ -569,11 +542,7 @@ type Gate struct {
 //
 // A gate naming a field not in the list is CLOSED: reading a typo as "always
 // required" would turn a vendor's mistake into every company's blocked connect.
-// A set's field is needed once its entry is started ([Set]).
 func (r Requirement) Needed(among []Requirement) bool {
-	if r.Set != nil {
-		return started(r, among, stored)
-	}
 	if r.RequiredWhen == nil {
 		return r.Required
 	}

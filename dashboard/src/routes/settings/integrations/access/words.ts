@@ -429,17 +429,18 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     name: "App Store Connect",
     access: "Level on its apps",
     turnOn:
-      "Turning it on lets the agent use the chosen apps at the chosen level through Crewlet's own tools. Nothing is created at Apple, and the agent holds no key.",
+      "Turning it on lets the agent use the chosen apps at the chosen level through Crewlet's own tools, each call signed with its own team key once you set it up.",
     off: "The agent's next App Store Connect call is refused.",
-    remove: "There is nothing to remove: the agent never held a key.",
+    remove: "Crewlet deletes the agent's sealed team key. Revoke the key in App Store Connect too.",
     rotate:
-      "The agent holds no key, so there is nothing to rotate. Replace a team key on the integration's page.",
+      "Make a new team key for the agent in App Store Connect and hand it in with Replace identity, then revoke the old one there.",
     scope: {
       noun: "Apps",
       singular: "app",
       empty: "No app",
-      none: "No apps are reachable yet",
-      noneLink: { label: "Connect a team", doc: "app-store-connect", anchor: "connect-a-team" },
+      // A TEAM'S APPS ARE LISTED WITH AN AGENT'S OWN KEY, and an agent is
+      // turned on with at least one: the first is added by its Apple ID.
+      none: "No app is listed yet: add one by its Apple ID",
       typed: /^\d{1,20}$/,
     },
     tool: "app_store_connect tools, built in",

@@ -2,9 +2,11 @@ package configapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -65,6 +67,7 @@ type Repoint struct {
 // RemovalRequest is the body `DELETE /config/llm-providers/{id}` reads.
 type RemovalRequest struct {
 	Repoint []Repoint `json:"repoint"`
+	SecretsRequest
 }
 
 // RemovalReference is one written reference to the entry, as a refusal names
@@ -148,9 +151,13 @@ func readRemoval(text []byte) (RemovalRequest, string, error) {
 	decoder := json.NewDecoder(bytes.NewReader(text))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&body); err != nil {
-		return RemovalRequest{}, "", fmt.Errorf("the body is not {\"repoint\": [...]}: %w", err)
+		return RemovalRequest{}, "", fmt.Errorf("the body is not {\"repoint\": [...], "+
+			"\"delete_secrets\": [...]}: %w", err)
 	}
 	req, summary := body.RemovalRequest, strings.TrimSpace(body.Summary)
+	if err := req.check(); err != nil {
+		return RemovalRequest{}, "", err
+	}
 	// ONE ANSWER PER REFERENCE: a field named twice would move to whichever
 	// came last, a choice the caller never saw made.
 	first := map[RemovalAt]int{}
@@ -253,9 +260,23 @@ func (s *Service) modelReferences(w http.ResponseWriter, r *http.Request) {
 			map[string]string{"hint": NotFound(EntityLLMProviders, id)})
 		return
 	}
+	values, err := s.removalSecrets(r.Context(), company.VariablesRead(), modelReadsAfter(company, id))
+	if err != nil {
+		s.fail(w, r, "read which values the credential store holds", err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"revision": revision.ID, "references": referencesOf(company, id),
+		"revision": revision.ID, "references": referencesOf(company, id), "dependants": values,
 	})
+}
+
+// modelReadsAfter is every variable c reads once the model id is gone. Its
+// repoints name no variable, so the dry run and the references read share it.
+func modelReadsAfter(c *config.Company, id string) []config.Reference {
+	next := *c
+	next.Providers.LLM = maps.Clone(c.Providers.LLM)
+	delete(next.Providers.LLM, id)
+	return next.VariablesRead()
 }
 
 // repoint answers every written reference to id in c with the request's
@@ -467,18 +488,18 @@ func resolutionMoves(id string) func(next, prior *config.Company) []config.Warni
 // A collection whose members something else names is removed by address, one
 // route per collection: `DELETE /config/<kind>/{id}`, its body read strictly,
 // held to the entry's own If-Match, summarised, tried again while other writes
-// move the revision, and checked by `?dry_run=true`. What differs between two
-// collections is what their body says, the write it drafts, a verb it asks
-// beyond `config.write`, and what only it answers: a [removalRoute] carries
-// that, and [Service.deleteEntity] is the rest, written once.
+// move the revision, and checked by `?dry_run=true`, deleting the stored values
+// its entry alone read where asked (removalsecrets.go). What differs between two
+// collections is what their body says, the write it drafts, and what only it
+// answers: a [removalRoute] carries that, and [Service.deleteEntity] is the rest.
 
 // removalRoute is one collection's removal: how its body is read, and the words
 // only it has.
 type removalRoute struct {
 	// kind is the collection, as its URL segment names it.
 	kind string
-	// what is one member in a sentence: "a model".
-	what string
+	// what is one member in a sentence: "a model"; noun names one: "model".
+	what, noun string
 	// read reads the removal of id from its body strictly, answering it and
 	// the body's `_summary`. An empty body is a removal that answers nothing,
 	// which a dry run of an entry with dependants answers with the list of
@@ -488,23 +509,27 @@ type removalRoute struct {
 	bodyHint string
 	// summaryHint is what a removal sent with no summary is told to name.
 	summaryHint string
+	// logAs is the log attribute naming the removed entry.
+	logAs string
 }
 
 // removing is the removal of one entry, read from its body.
 type removing interface {
-	// admit decides every verb the request asks beyond the route's own,
-	// answering a refusal itself; false when it has.
-	admit(w http.ResponseWriter, r *http.Request) bool
+	// deleting is the stored values the request names to delete.
+	deleting() []string
 	// draft is the removal, built on the revision expect.
 	draft(expect string) draft
 	// refuse answers a refusal only this removal makes, reporting whether
 	// err was one.
 	refuse(w http.ResponseWriter, r *http.Request, err error) bool
-	// checked answers a dry run that passed.
-	checked(w http.ResponseWriter, r *http.Request, p *prepared)
-	// applied answers the removal once it is written, after whatever the
-	// write leaves to do.
-	applied(w http.ResponseWriter, r *http.Request, p *prepared, a Applied)
+	// readsAfter is every variable prior reads once the removal is written,
+	// at prior's paths ([entryReads]).
+	readsAfter(prior *config.Company) ([]config.Reference, error)
+	// checked is what a dry run that passed answers beside the check.
+	checked(ctx context.Context, p *prepared, values RemovalSecrets) (map[string]any, error)
+	// written does what the write leaves to do before its values go, and
+	// answers beside the write.
+	written(ctx context.Context, p *prepared, by iam.Actor) map[string]any
 }
 
 // removalRoutes is every collection removed by address.
@@ -512,26 +537,27 @@ var removalRoutes = []removalRoute{modelRemoval, serverRemoval}
 
 // modelRemoval is `DELETE /config/llm-providers/{id}`.
 var modelRemoval = removalRoute{
-	kind: EntityLLMProviders, what: "a model",
+	kind: EntityLLMProviders, what: "a model", noun: "model",
 	read: func(_ *Service, id string, text []byte) (removing, string, error) {
 		req, summary, err := readRemoval(text)
 		return providerRemoval{id: id, req: req}, summary, err
 	},
 	bodyHint: "name every field that runs on the model by its seat and job, or " +
 		"Ask Crewlet's chat, with the model it moves to " +
-		"(null to leave it unset)",
+		"(null to leave it unset), and \"delete_secrets\" with the stored values it read " +
+		"that should go with it",
 	summaryHint: "name the model removed and where its work moves",
+	logAs:       "provider",
 }
 
-// providerRemoval is a model's removal, read: the entry's key, and the repoint
-// of every reference to it.
+// providerRemoval is a model's removal, read: the entry's key, the repoint of
+// every reference to it, and the values to delete.
 type providerRemoval struct {
 	id  string
 	req RemovalRequest
 }
 
-// admit asks nothing: a model's removal writes the document and nothing else.
-func (providerRemoval) admit(http.ResponseWriter, *http.Request) bool { return true }
+func (m providerRemoval) deleting() []string { return m.req.DeleteSecrets }
 
 func (m providerRemoval) draft(expect string) draft { return removalDraft(m.id, m.req, expect) }
 
@@ -544,13 +570,15 @@ func (providerRemoval) refuse(w http.ResponseWriter, _ *http.Request, err error)
 	return true
 }
 
-func (providerRemoval) checked(w http.ResponseWriter, _ *http.Request, p *prepared) {
-	writeChecked(w, p)
+func (m providerRemoval) readsAfter(prior *config.Company) ([]config.Reference, error) {
+	return modelReadsAfter(prior, m.id), nil
 }
 
-func (providerRemoval) applied(w http.ResponseWriter, _ *http.Request, _ *prepared, a Applied) {
-	writeApplied(w, a)
+func (providerRemoval) checked(_ context.Context, _ *prepared, values RemovalSecrets) (map[string]any, error) {
+	return map[string]any{"dependants": values}, nil
 }
+
+func (providerRemoval) written(context.Context, *prepared, iam.Actor) map[string]any { return nil }
 
 // deleteEntity serves one collection's `DELETE /config/<kind>/{id}`: the entry
 // removed, with what its route takes with it, in one revision, or with
@@ -596,10 +624,9 @@ func (s *Service) deleteEntity(route removalRoute) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		// WHAT THE BODY ASKS BEYOND THE ROUTE'S VERB, decided once and
-		// before anything is read, so a caller who may remove the entry and
-		// may not do the rest is refused with nothing written.
-		if !req.admit(w, r) {
+		// DELETING A VALUE ASKS `secrets.write` beyond the route's verb, decided
+		// once and before anything is read, so nothing is written when it is refused.
+		if !admitSecretDeletion(w, r, req.deleting()) {
 			return
 		}
 		var raced error
@@ -695,12 +722,35 @@ func (s *Service) removeEntity(w http.ResponseWriter, r *http.Request, route rem
 		s.refuseRemovalApply(w, r, route.kind, e.id, err)
 		return true, nil
 	}
+	before := prepared.prior.VariablesRead()
+	after, err := e.req.readsAfter(prepared.prior)
+	if err != nil {
+		s.fail(w, r, "read what the removal leaves the document reading", err)
+		return true, nil
+	}
+	named := fmt.Sprintf("the %s %q", route.noun, e.id)
+	if problems := secretProblems(e.req.deleting(), before, after, named); len(problems) > 0 {
+		refuseSecretDeletion(w, problems)
+		return true, nil
+	}
 	if e.dryRun {
 		if err = s.checks(prepared, e.summary); err != nil {
 			s.refuseApply(w, r, err)
 			return true, nil
 		}
-		e.req.checked(w, r, prepared)
+		values, readErr := s.removalSecrets(ctx, before, after)
+		if readErr != nil {
+			s.fail(w, r, "read which values the credential store holds", readErr)
+			return true, nil
+		}
+		extra, readErr := e.req.checked(ctx, prepared, values)
+		if readErr != nil {
+			s.fail(w, r, "read what the removal takes with it", readErr)
+			return true, nil
+		}
+		answer := checkedAnswer(prepared)
+		maps.Copy(answer, extra)
+		writeJSON(w, http.StatusOK, answer)
 		return true, nil
 	}
 	if !requireSummary(w, e.summary, "a removal needs an audit summary in the "+
@@ -715,8 +765,27 @@ func (s *Service) removeEntity(w http.ResponseWriter, r *http.Request, route rem
 		s.refuseApply(w, r, err)
 		return true, nil
 	}
-	e.req.applied(w, r, prepared, applied)
+	by := attributionOf(r)
+	answer := appliedAnswer(applied)
+	maps.Copy(answer, e.req.written(ctx, prepared, by))
+	answer["secrets"] = s.deleteSecrets(ctx, e.req.deleting(), by, route.logAs, e.id)
+	writeJSON(w, http.StatusCreated, answer)
 	return true, nil
+}
+
+// refuseSecretDeletion answers values a removal may not delete: 422, each at
+// its index in `delete_secrets`.
+func refuseSecretDeletion(w http.ResponseWriter, problems []config.Problem) {
+	messages := make([]string, 0, len(problems))
+	for _, p := range problems {
+		messages = append(messages, p.Message)
+	}
+	httpjson.FailWithFields(w, http.StatusUnprocessableEntity, httpjson.CodeValidationError,
+		httpjson.Detail{
+			"detail": "configapi: " + strings.Join(messages, "; "), "problems": problems,
+			"hint": "delete_secrets may name only values a dry run lists under " +
+				"dependants.secrets or dependants.kept_secrets",
+		})
 }
 
 // refuseRemoval answers repoints that do not answer the entry's references:

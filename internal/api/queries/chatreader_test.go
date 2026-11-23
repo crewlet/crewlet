@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/coord/coordtest"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -136,9 +137,9 @@ func TestTheReadersRecordReachesHerViews(t *testing.T) {
 	saved := time.Date(2031, 5, 6, 7, 0, 0, 0, time.UTC)
 	reads := chatReadsFor(t, "ana", coord.ChatReadDelta{
 		Cursors:  map[string]int64{cEng: 41},
-		Follow:   []coord.ThreadRef{{ChannelID: cEng, RootID: "m-1"}},
-		Unfollow: []coord.ThreadRef{{ChannelID: cEng, RootID: "m-2"}},
-		Save:     []coord.MessageRef{{ChannelID: cEng, MessageID: "m-3"}},
+		Follow:   []coord.ThreadRef{{ChannelID: cEng, RootID: coordtest.ChatID("m-1")}},
+		Unfollow: []coord.ThreadRef{{ChannelID: cEng, RootID: coordtest.ChatID("m-2")}},
+		Save:     []coord.MessageRef{{ChannelID: cEng, MessageID: coordtest.ChatID("m-3")}},
 	})
 	reader := newStubChat()
 	s := chatSources(t, reader, &stubChatSearch{}, reads)
@@ -149,15 +150,15 @@ func TestTheReadersRecordReachesHerViews(t *testing.T) {
 		t.Errorf("Activity over a readable record answered read_state %v", got["read_state"])
 	case marks.Cursors[cEng] != 41:
 		t.Errorf("her place in the room reached the view as %v", marks.Cursors)
-	case len(marks.Following) != 1 || marks.Following[0].RootID != "m-1":
+	case len(marks.Following) != 1 || marks.Following[0].RootID != coordtest.ChatID("m-1"):
 		t.Errorf("her followed thread reached the view as %+v", marks.Following)
-	case len(marks.Unfollowed) != 1 || marks.Unfollowed[0].RootID != "m-2":
+	case len(marks.Unfollowed) != 1 || marks.Unfollowed[0].RootID != coordtest.ChatID("m-2"):
 		t.Errorf("her unfollowed thread reached the view as %+v", marks.Unfollowed)
 	case reader.activity.Kind != chatlet.ActivityMention:
 		t.Errorf("the kind reached the view as %q", reader.activity.Kind)
 	}
 	askChatJSON(t, s, "chat_saved", nil)
-	if len(reader.saved.Saved) != 1 || reader.saved.Saved[0].MessageID != "m-3" ||
+	if len(reader.saved.Saved) != 1 || reader.saved.Saved[0].MessageID != coordtest.ChatID("m-3") ||
 		reader.saved.Saved[0].At.Before(saved) {
 		t.Errorf("her saves reached the view as %+v", reader.saved.Saved)
 	}

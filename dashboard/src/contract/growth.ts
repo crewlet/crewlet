@@ -59,7 +59,7 @@ export interface GrowthAccount {
   roles?: string[];
 }
 
-/** One company connection of a product (`growth.Connection`): a team key set, an owner of ad accounts, an identity. */
+/** One company connection of a product (`growth.Connection`): an App Store Connect team, an owner of ad accounts, an identity. */
 export interface GrowthConnection {
   /** The connection's id in the document. */
   id: string;
@@ -69,7 +69,7 @@ export interface GrowthConnection {
   identity: string;
   /** Where the connection stands, in the engine's words. */
   state: string;
-  /** The roles Crewlet holds through it, by id: read from the vendor, or the role its key was added under. */
+  /** The roles Crewlet holds through it, by id, read from the vendor; none where each agent signs with its own. */
   roles_held: string[];
   accounts: GrowthAccount[];
   /** Whether the company narrows it to no named accounts, so it reaches whatever its credentials reach. */
