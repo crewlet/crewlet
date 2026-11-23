@@ -933,7 +933,7 @@ Drives Nous Research's **Hermes Agent 0.23.3** (`hermes --version` prints `Herme
 
 **The run's own settings ride an overlay**, never the box's configuration: `HERMES_MANAGED_DIR=<home>/.crewlet/hermes-managed`, whose `config.yaml` Hermes merges over the box's per leaf (its other MCP servers stay). That variable hides the box's own managed scope (`/etc/hermes`: an administrator's `config.yaml` and `.env`), so the script writes the overlay over that scope, read through Hermes's own loader, and copies its `.env` beside it (both mode `0600`). The overlay names the run's MCP servers (the bridge with its bearer header, written as a literal and never in argv or an environment; a value holding `${` is refused, since Hermes would expand it) and, for an entry that denies web tools, `agent.disabled_toolsets`: the box's own list (its configuration under its managed scope) and then `web`, `browser` and `x_search`, since a list is one leaf. Measured, the request then offers none of the box's disabled tools and no `web_search`, `web_extract` or `browser_*` tool, on a session created allowing them too. Otherwise the run offers Hermes's own default toolsets, `browser` among them, which installs a browser on first use.
 
-**Hermes's tool search is off** (`tools.tool_search.enabled: off`): it defers every MCP server's tools and exempts none by server (0.23.3), and the bridge's own server is always loaded. Measured, the request then offers the bridge's tools directly, beside every other tool; with it on, it offers `tool_search`, `tool_call` and `tool_describe` and no MCP tool at all.
+**Hermes's tool search is off** (`tools.tool_search.enabled: off`): it defers every MCP server's tools and exempts none by server (0.23.3), and the bridge's own server is always loaded. Measured, the request then offers the bridge's tools directly, beside every other tool; with it on, it offers `tool_search`, `tool_call` and `tool_describe` and no MCP tool at all. So on Hermes Agent 0.23.3 the box's own MCP servers are offered on every request too: the bridge's tools must be, and that release has no way to exempt one server.
 
 **The runner's plugin** (`<home>/.hermes/plugins/crewlet-runner`, plain Python the engine embeds, written over whatever the home held under that name at every launch and enabled once per box with `hermes plugins enable crewlet-runner`, which adds that one line and keeps the box's list, its other keys and its comments, measured) loads in the gateway. It records every response, takes the run's notes ([Hermes Agent's notes](#hermes-agents-notes)) and reports skill loads, each from a file under `<home>/.crewlet` that its settings (`CREWLET_HERMES_PLUGIN`, paths and digests alone) name.
 
@@ -949,11 +949,11 @@ Drives Nous Research's **Hermes Agent 0.23.3** (`hermes --version` prints `Herme
 
 #### A Hermes Agent run's session
 
-**The runner names the session**, as its title: `-c <id> --create-if-missing` creates a session titled with the runner's id, and `-c <id>` continues it, through its compaction lineage; Hermes's own stored id, which the client prints, is indexed beside it in `<home>/.crewlet/hermes-sessions`.
+**The runner names the session**, as its title: `-c <id> --create-if-missing` creates a session titled with the runner's id, and `-c <id>` continues it, through its compaction lineage (a compaction child of a session that ended `compression`; a delegated subagent's session names its parent too, and is none of the run's). Measured, Hermes compacts a session in place, under the same id and title, so the lineage is one session; Hermes's own stored id, which the client prints, is indexed beside it in `<home>/.crewlet/hermes-sessions`.
 
-**It is carried as text.** The session is rows of Hermes's SQLite store, so a pack dumps the store's schema and the session's rows (its messages, usage, admissions and system prompt, with the store's own bookkeeping rows) as JSON lines with the runner's `hermes-carry.py`, standard-library Python run under Hermes's own interpreter (`hermes --run-module cProfile -o /dev/null hermes-carry.py …`, the launcher running modules alone), one `session.jsonl` member, which the scrub rewrites as any transcript; a restore builds a new store from it, the full-text index refilled by the store's own triggers. A restored store resumed its session with its whole history in another home (measured). A run that continues a session takes the box's own copy, or a carried archive where the box holds none or one the archive goes past, as a Claude Code run does.
+**It is carried as text.** The session is rows of Hermes's SQLite store, so a pack dumps the store's schema and the session's rows (its messages, usage, admissions and system prompt, its own launch and admission results, and the store's own bookkeeping rows, all read in one transaction) as JSON lines with the runner's `hermes-carry.py`, standard-library Python run under Hermes's own interpreter (`hermes --run-module cProfile -o /dev/null hermes-carry.py …`, the launcher running modules alone), one `session.jsonl` member, which the scrub rewrites as any transcript; a restore builds a new store from it, holding that session alone, the full-text index refilled by the store's own triggers. A restored store resumed its session with its whole history in another home (measured). A run that continues a session takes the box's own copy, or a carried archive where the box holds none or one the archive goes past, as a Claude Code run does.
 
-**A session continues only under the launch it was created with.** Hermes freezes a session's model, effort, round cap and working directory as it creates it, refuses a resume naming others, and runs a resumed session's tools in its first working directory, or nothing where that directory is gone (exit 1, measured). So the box keeps each session's launch beside it, and a run whose launch differs starts a session of its own, saying why.
+**A session continues only under the launch it was created with.** Hermes freezes a session's model, effort, round cap and working directory as it creates it: a resume repeating them is taken, one naming others is refused (exit 2), and a resumed session's tools run in its first working directory, or nothing runs where that directory is gone (exit 1, all measured). It freezes the model route too (provider and base URL) and keeps a resumed session on it whatever the box's configuration then says, with no key frozen beside it; the bridge's URL and bearer header are not frozen, and each job's new ones reach the resumed session (measured). So the box keeps each session's launch beside it from the moment that launch starts, and a run whose launch or route differs, or whose session has no launch kept, starts a session of its own, saying why.
 
 **Gaps against Claude Code:**
 
@@ -2711,9 +2711,18 @@ Hermes's own gateway client, on the endpoint Hermes's discovery names, so it
 never starts a gateway. Hermes's plugin API's own `inject_message` queues a
 message as a turn of its own after the run's, so it is not used. The plugin
 confirms nothing: a note is confirmed read only once the session's record
-holds it as a user message in Hermes's frame, matched by the digest of the
-text the route served. A notes route that refuses the plugin (401 or 404)
-ends its polls. A note may run to the engine's item bound, 4,505 UTF-16 units.
+holds it in this launch's own rows (above the store's newest row as the
+launch began) as an active user message shown as a steer, in Hermes's frame,
+matched by the digest of the text the route served, one note to one serve in
+order, and the model's reply is stored after it (measured: the note rides the
+request after the tool result). Notes steered during one tool call share one
+row, each stripped and joined by a newline (measured), and each is matched in
+turn. One steer runs under a 5-second deadline (2.3 s measured with three busy
+loops a core); one whose answer is lost after it was sent is not sent again,
+since `session.steer` takes no key that would make a repeat harmless, and one
+Hermes rejects (no turn running) is. A notes route that refuses the plugin
+(401 or 404) ends its polls. A note may run to the engine's item bound, 4,505
+UTF-16 units.
 
 ## Mid-run clarification (`ask_and_wait`)
 
