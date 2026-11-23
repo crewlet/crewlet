@@ -138,11 +138,12 @@ func ResumesOnLaunchRoute(harness string) bool {
 	return ok && h.resumesOnLaunchRoute()
 }
 
-// router is a harness whose runner declares the variables that move, sign or
-// shape its requests (`copilot help environment`, a bundle read, a
-// measurement), each with its [routeRole]: every one a pin fills from the
-// entry's env ([Harness.Pins]) among them. An endpoint it declares is part of
-// an entry's route (TestEveryEndpointARunnerDeclaresIsItsEntrysRoute).
+// router is every runner, declaring the variables that move, sign or shape
+// its requests (`copilot help environment`, a bundle read, a measurement),
+// each with its [routeRole]: every one a pin fills from the entry's env
+// ([Harness.Pins]) among them, and an empty list only beside the measurement
+// that found none. An endpoint it declares is part of an entry's route
+// (TestEveryEndpointARunnerDeclaresIsItsEntrysRoute).
 type router interface{ routing() []routeVar }
 
 // routeRole is what a variable a [router] declares does to the run's requests,
