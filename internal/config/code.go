@@ -155,13 +155,14 @@ const (
 	// repository's checks file is held to it, and so is code.checks.max_timeout_seconds.
 	CodeCheckTimeoutCeiling = 6 * time.Hour
 
-	// CodeDefaultCheckMaxTimeout is an unset code.checks.max_timeout_seconds:
-	// FIFTY MINUTES. It is how long one hung check holds one of its node's
-	// gitlet.max_checks container slots before it ends timed out, and the round
-	// validate prices a merge queue at ([Company.mergeRateWarnings]): a company
-	// whose checks take minutes lowers it, one whose take hours raises it toward
-	// [CodeCheckTimeoutCeiling].
-	CodeDefaultCheckMaxTimeout = 50 * time.Minute
+	// CodeDefaultCheckMaxTimeout is an unset code.checks.max_timeout_seconds: AN
+	// HOUR, GitLab CI's and Azure Pipelines' default job timeout, so a pipeline
+	// moved here keeps its default. It is how long one hung check holds one of
+	// its node's gitlet.max_checks container slots before it ends timed out, and
+	// the round validate prices a merge queue at ([Company.mergeRateWarnings]):
+	// a company whose checks take minutes lowers it, one whose take hours raises
+	// it toward [CodeCheckTimeoutCeiling].
+	CodeDefaultCheckMaxTimeout = time.Hour
 
 	// CodeMinCheckMaxTimeout is the least code.checks.max_timeout_seconds takes: a
 	// MINUTE, under which no build finishes its own setup, so a smaller value is a
@@ -430,7 +431,7 @@ type CodeChecks struct {
 	// MaxTimeoutSeconds is how long the company lets a check run, whatever its
 	// file says: 0 is [CodeDefaultCheckMaxTimeout]; else [CodeMinCheckMaxTimeout]
 	// to [CodeCheckTimeoutCeiling].
-	MaxTimeoutSeconds int `yaml:"max_timeout_seconds,omitempty" json:"max_timeout_seconds,omitempty" js:"min=60;max=21600" desc:"How long the company lets a check run, whatever its checks file's timeout_seconds: 60..21600 seconds; unset is 3000 — the longest a hung check holds one of its Gitlet node's check slots."`
+	MaxTimeoutSeconds int `yaml:"max_timeout_seconds,omitempty" json:"max_timeout_seconds,omitempty" js:"min=60;max=21600" desc:"How long the company lets a check run, whatever its checks file's timeout_seconds: 60..21600 seconds; unset is 3600 — an hour, GitLab CI's and Azure Pipelines' default job timeout, and the longest a hung check holds one of its Gitlet node's check slots."`
 }
 
 // MaxTimeout is code.checks.max_timeout_seconds as a duration, THE ONE PLACE its

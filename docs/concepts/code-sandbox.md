@@ -1714,7 +1714,7 @@ A repository's [checks](gitlet.md#checks) run in boxes of this same catalogue, b
 
 These names are **reserved** as Gitlet's are: `code.checks.env`, `role.sandbox.env` and every setup step's `env` are refused naming one.
 
-**How long it runs** is its file's `timeout_seconds`, held to the company's `code.checks.max_timeout_seconds`, unset 50 minutes, the longest one hung check holds one of its node's `gitlet.max_checks` slots. A check's box is given ten minutes past its timeout for setup. A company whose checks take longer raises it up to six hours, the most any checks file may ask ([Configuration → Code](../getting-started/configuration.md#code)).
+**How long it runs** is its file's `timeout_seconds`, held to the company's `code.checks.max_timeout_seconds`, unset an hour: GitLab CI's and Azure Pipelines' default job timeout, and the longest one hung check holds one of its node's `gitlet.max_checks` slots. A check's box is given ten minutes past its timeout for setup. A company whose checks take longer raises it up to six hours, the most any checks file may ask ([Configuration → Code](../getting-started/configuration.md#code)).
 
 **How many run** is bounded per Gitlet node, by its `gitlet.max_checks`. A check held back waits queued, claimed by nobody, until there is room ([What a check costs](gitlet.md#what-a-check-costs)).
 
