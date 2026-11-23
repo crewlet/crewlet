@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/coord"
 )
@@ -23,8 +24,9 @@ type Scans interface {
 }
 
 // encode is a repository's standing as stored. Every text it holds is
-// bounded where it is made: a voice to an atlas key's 512 bytes, the stamp
-// to a digest ([stampOf]) and the error to collect.MaxErrorLength, so its
+// bounded where it is made: a voice to an atlas key's 512 bytes, a tip to a
+// commit id ([commitID]; git's own for a Gitlet repository), the stamp to a
+// digest ([stampOf]) and the error to collect.MaxErrorLength, so its
 // widest, its error escaped six bytes a byte, is 13,763 bytes of the 16,384
 // it is held to (coord.SmallValueBytes; TestTheWidestCodeScanStandingFitsItsBound).
 func encode(st Status) ([]byte, error) {
@@ -33,6 +35,15 @@ func encode(st Status) ([]byte, error) {
 		return nil, fmt.Errorf("codescan: encode the standing of %s: %w", st.Name, err)
 	}
 	return value, nil
+}
+
+// commitID reports whether tip is a git commit's id as a forge names it: 40
+// lowercase hex digits (SHA-1) or 64 (SHA-256).
+func commitID(tip string) bool {
+	if len(tip) != 40 && len(tip) != 64 {
+		return false
+	}
+	return strings.Trim(tip, "0123456789abcdef") == ""
 }
 
 // stampOf is what a standing keeps of a forge listing's stamp
