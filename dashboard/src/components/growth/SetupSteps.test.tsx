@@ -39,7 +39,7 @@ test("a seat's identity is named by the seat, and is marked added once the engin
     <AddIdentity
       product="Google Ads"
       step={{
-        email: "crewlet-g-growth-ab12@identity.example.iam.gserviceaccount.com",
+        email: "crewlet-growth-ab12cd@identity.example.iam.gserviceaccount.com",
         role: { id: "STANDARD", name: "Standard" },
         where: { words: "Admin, Access and security", url: "" },
         level: "seat",
