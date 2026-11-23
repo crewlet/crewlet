@@ -151,7 +151,9 @@ const earlyRecheck = claimLease
 
 // changeLedger applies change to the current ledger and writes it, reading
 // again on a lost race. Before each round it releases what has lapsed or been
-// abandoned. change may refuse, which writes nothing.
+// abandoned. change may refuse, which writes nothing of it; the round still
+// writes the abandoned uploads it released and the holds it moved on, whose
+// records and objects it has already acted on, and then answers the refusal.
 func (s *Service) changeLedger(ctx context.Context, change func(l *ledger, now time.Time) error) error {
 	// READ AND RELEASED ACROSS ROUNDS: an upload released in a round that
 	// then lost its write has no record left to find in the next, and one
@@ -174,16 +176,25 @@ func (s *Service) changeLedger(ctx context.Context, change func(l *ledger, now t
 		}
 		now := s.now()
 		s.releaseAbandoned(ctx, &l, now, read, released)
+		acted := false
 		for i, h := range l.Holds {
-			if read[h.Upload] && !released[h.Upload] && !h.Expires.After(now) {
-				l.Holds[i].Expires = now.Add(earlyRecheck)
+			switch {
+			case released[h.Upload]:
+				acted = true
+			case read[h.Upload] && !h.Expires.After(now):
+				l.Holds[i].Expires, acted = now.Add(earlyRecheck), true
 			}
 		}
 		l.Holds = slices.DeleteFunc(l.Holds, func(h hold) bool {
 			return !h.Until.After(now) || h.Bytes <= 0 || released[h.Upload]
 		})
-		if err := change(&l, now); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
-			return err
+		kept := slices.Clone(l.Holds)
+		refusal := change(&l, now)
+		if refusal != nil {
+			if !acted {
+				return refusal
+			}
+			l.Holds = kept
 		}
 		l.Holds = slices.DeleteFunc(l.Holds, func(h hold) bool { return h.Bytes <= 0 })
 		l.V = ledgerVersion
@@ -197,7 +208,7 @@ func (s *Service) changeLedger(ctx context.Context, change func(l *ledger, now t
 		}
 		if wrote != 0 {
 			s.gauge(metrics.ArtifactsUploadReservedBytes, float64(l.totals("", now).companyBytes))
-			return nil
+			return refusal
 		}
 	}
 	return errLostLedger
