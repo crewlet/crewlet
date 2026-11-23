@@ -1554,7 +1554,7 @@ func TestEveryHarnessThisBuildDrivesCarriesItsSession(t *testing.T) {
 		executor.GeminiCLIName:   executor.GeminiArchiveFormat,
 		executor.QwenCodeName:    executor.QwenArchiveFormat,
 		executor.CopilotName:     executor.CopilotArchiveFormat,
-		executor.GrokName:       executor.GrokArchiveFormat,
+		executor.GrokName:        executor.GrokArchiveFormat,
 		executor.KimiName:        executor.KimiArchiveFormat,
 		executor.MuseName:        executor.MuseArchiveFormat,
 		executor.PiName:          executor.PiArchiveFormat,
