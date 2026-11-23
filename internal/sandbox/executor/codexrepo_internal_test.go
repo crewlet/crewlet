@@ -20,14 +20,17 @@ import (
 var codexRepoTools = []string{"rm", "mkdir", "chmod", "tr", "readlink", "find", "cp", "awk"}
 
 // codexRepoBox is a box home whose working directory holds files, by path
-// relative to it (a path ending in "/" a directory): the home, and the
-// working directory as `pwd -P` reads it.
+// relative to it (a path ending in "/" a directory), and the Codex home the
+// run's script makes before the gate: the home, and the working directory as
+// `pwd -P` reads it.
 func codexRepoBox(t *testing.T, files map[string]string) (Paths, string) {
 	t.Helper()
 	home := t.TempDir()
 	work := filepath.Join(home, "workspace")
-	if err := os.MkdirAll(work, 0o700); err != nil {
-		t.Fatal(err)
+	for _, dir := range []string{work, Paths{Home: home}.CodexHome()} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for rel, body := range files {
 		path := filepath.Join(work, rel)
