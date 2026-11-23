@@ -91,6 +91,11 @@ func TestAnEntrysIDMovesWithWhereItsCallsGoAndWithNothingElseOfItsEnv(t *testing
 			t.Errorf("%s: EntryID = %q beside %q, want the same: %v", name, got, id, tc.same)
 		}
 	}
+	// AN AWS PROFILE IS NAMED CASE-SENSITIVELY: Prod and prod are two.
+	if entry("primary", AuthEnv, set("AWS_PROFILE", "Prod")).EntryID() ==
+		entry("primary", AuthEnv, set("AWS_PROFILE", "prod")).EntryID() {
+		t.Error("two AWS profiles differing in case share an id")
+	}
 	// A GATEWAY ROUTED BY ITS PATH: one account's gateway is not another's.
 	acct1 := entry("primary", AuthEnv, set("ANTHROPIC_BASE_URL", cloudflare+"0123456789abcdef0123456789abcdef/gw/anthropic"))
 	acct2 := entry("primary", AuthEnv, set("ANTHROPIC_BASE_URL", cloudflare+"fedcba9876543210fedcba9876543210/gw/anthropic"))

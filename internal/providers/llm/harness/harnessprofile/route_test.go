@@ -12,13 +12,13 @@ import (
 // THAT IS NO ROUTE IS REFUSED. An address keeps its scheme, host, port and path
 // (how a gateway such as Cloudflare's routes) and loses its userinfo, query and
 // fragment, where a credential may ride, and what only spells one place two
-// ways (case, a default port, dot segments, a trailing slash). A plain name is
-// lower-cased, a file's path kept; a schemeless name holding '/' and what
-// parses as neither are refused, never with the value.
+// ways (case, a default port, dot segments, a trailing slash). A plain name and
+// a file's path are kept, case included; a schemeless name holding '/' and
+// what parses as neither are refused, never with the value.
 //
 // Mutation: keep the userinfo, query, default port or trailing slash, drop the
-// path, skip the dot segments, lower-case a file's path, admit a schemeless
-// '/', or take an unparsable value as it is, and a row goes red.
+// path, skip the dot segments, fold a plain name's or a file's case, admit a
+// schemeless '/', or take an unparsable value as it is, and a row goes red.
 func TestARouteIsItsCleanedAddressAndAValueThatIsNoRouteIsRefused(t *testing.T) {
 	t.Parallel()
 	profile, ok := harnessprofile.Builtin("claude-code")
@@ -40,7 +40,9 @@ func TestARouteIsItsCleanedAddressAndAValueThatIsNoRouteIsRefused(t *testing.T) 
 		"https://[::1]:8443/v1":                         "https://[::1]:8443/v1",
 		cloudflare:                                      cloudflare,
 		"us-east-1":                                     "us-east-1",
-		"GitHub.Example.com":                            "github.example.com",
+		"GitHub.Example.com":                            "GitHub.Example.com",
+		"Prod":                                          "Prod",
+		"prod":                                          "prod",
 		"1":                                             "1",
 		"/home/agent/.copilot/Providers.json":           "/home/agent/.copilot/Providers.json",
 		"~/Providers.json":                              "~/Providers.json",
