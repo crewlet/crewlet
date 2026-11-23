@@ -7,7 +7,8 @@
  * it is open, why the reader may not ask (null where they may), and the one
  * gesture that opens and closes it. The Ask button in the page bar reads it,
  * and so does a screen that draws its own head (an open artifact), which
- * places the same button.
+ * places the same button. `open` is the one answer to "is Ask Crewlet on
+ * screen", and the button draws nothing while it holds, on every route.
  */
 
 import { createContext, useContext, useSyncExternalStore } from "react";
@@ -17,7 +18,10 @@ import type { AssistantUnavailable } from "./availability.ts";
 export type AssistantFocus = "composer" | "heading";
 
 export interface AssistantControl {
-  /** Whether the panel is open. */
+  /**
+   * Whether Ask Crewlet is open: its panel beside the page, or its own page
+   * as the screen. The Ask button is not drawn while it is.
+   */
   open: boolean;
   /** Why the reader may not ask, or null where they may. */
   unavailable: AssistantUnavailable | null;

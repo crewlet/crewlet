@@ -25,6 +25,10 @@ import { screenScroller } from "~/lib/scroller.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, QueryError, Store, sessionRestored } from "~/protocol/index.ts";
 import { DESTINATIONS, WORKSPACES, closedBy } from "./nav.ts";
+import { resolve } from "./routes.ts";
+import { ASSISTANT_TRIGGER_ID } from "./assistant/control.ts";
+import { writeTab } from "./assistant/tab.ts";
+import { documentedRoutes, segmentsOf } from "~/test/routes.ts";
 import { accessNames } from "~/lib/access.ts";
 import { PAGE_ACTIONS_SLOT } from "./frame/PageActions.tsx";
 import { buildHash } from "./router.tsx";
@@ -497,6 +501,59 @@ describe("routing", () => {
     );
     expect(screen.getByText(/No seat called/)).toBeDefined();
   });
+});
+
+/**
+ * Every button outside Ask Crewlet's panel whose name offers to open it. The
+ * sidebar's Ask Crewlet row is a link to its page, a place like any other.
+ */
+function askOffered(root: HTMLElement): string[] {
+  const named = /^Ask( Crewlet)?(,.*)?$/;
+  return [...root.querySelectorAll<HTMLElement>("button, [role='button'], [role='menuitem']")]
+    .filter((el) => !el.closest(".crewlet-app-shell__aside"))
+    .map((el) => (el.getAttribute("aria-label") ?? el.textContent ?? "").trim())
+    .filter((name) => named.test(name));
+}
+
+// NO ASK BUTTON BESIDE ASK CREWLET. Every address the route table writes,
+// with the panel open as a reload brings it back: no page bar, screen head or
+// other control offers Ask, and Ask Crewlet's own page is its only Ask.
+// Mutation: draw the trigger while `open` holds, or publish `open` as the
+// panel alone, and a route goes red.
+describe("while Ask Crewlet is open", () => {
+  test("no route draws an Ask button", async () => {
+    for (const route of documentedRoutes()) {
+      const path = segmentsOf(route);
+      writeTab({ open: true });
+      location.hash = buildHash(path);
+      // AWAITED: a sign-in screen outside the frame suspends on its first pass.
+      const { view } = await act(async () => mount(ADMIN_VIEWER));
+      await afterMicrotasks();
+      expect(document.getElementById(ASSISTANT_TRIGGER_ID), route).toBeNull();
+      expect(askOffered(view.container), route).toEqual([]);
+      // NOT VACUOUS: in the frame the panel is open, except on Ask Crewlet's page.
+      if (view.container.querySelector(".crewlet-app-shell")) {
+        const where = resolve(path);
+        const page = where.resolved && where.screen === "ask";
+        expect(view.container.querySelector(".crewlet-app-shell__aside") !== null, route).toBe(
+          !page,
+        );
+      }
+      view.unmount();
+    }
+  });
+
+  // THE CONTROL: closed, the page bar and a screen's own head (an artifact's) draw it.
+  test.each(["#/", "#/worklet", "#/artifacts/5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f"])(
+    "%s draws it while Ask Crewlet is closed",
+    async (hash) => {
+      location.hash = hash;
+      const { view } = mount(ADMIN_VIEWER);
+      await afterMicrotasks();
+      expect(document.getElementById(ASSISTANT_TRIGGER_ID)).not.toBeNull();
+      expect(askOffered(view.container)).toEqual(["Ask"]);
+    },
+  );
 });
 
 // A SECTION FOR A READER WHO HOLDS NONE OF ITS GRANTS IS ITS REFUSAL AND

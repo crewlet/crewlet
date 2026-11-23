@@ -10,9 +10,9 @@ Administrators turning it on, choosing its model and answering compliance reques
 
 ## Opening it
 
-Select **Ask** in the page bar, or press `Mod+.` (`Cmd+.` on a Mac, `Ctrl+.` elsewhere). The panel opens beside the current screen and stays open as you move around. Drag its edge to resize; your browser remembers the width.
+Select **Ask** in the page bar, or press `Mod+.` (`Cmd+.` on a Mac, `Ctrl+.` elsewhere). The panel opens beside the current screen and stays open as you move around; while it is open the page bar draws no Ask button, and its own close button shuts it. Drag its edge to resize; your browser remembers the width.
 
-**Ask Crewlet** in the sidebar (or `g q`) opens its own page: all your conversations beside the open one, newest first under the day last used, with a title search. The conversation reads in one centred column, its message box under it at the same width. Page and panel hold the same conversation (an answer still arriving shows in both); **Open in full page** in the panel's head moves it. On the page, the Ask button and `Mod+.` focus its message box. A question asked on the page carries no screen.
+**Ask Crewlet** in the sidebar (or `g q`) opens its own page: all your conversations beside the open one, newest first under the day last used, with a title search. The conversation reads in one centred column, its message box under it at the same width. Page and panel hold the same conversation (an answer still arriving shows in both); **Open in full page** in the panel's head moves it. On the page there is no Ask button, and `Mod+.` focuses its message box. A question asked on the page carries no screen.
 
 **Ask Crewlet about this** (in a finding's menu or an Advisor action that asks, in a chat message's menu, and **Draft with Ask Crewlet** in a room's message box) always starts a new conversation about that thing, with its screen attached; the one you had open stays under **Conversations**. **Ask**, `Mod+.`, a question from the command palette and opening the panel again all go back to the conversation you had open.
 
