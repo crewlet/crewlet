@@ -552,9 +552,10 @@ The prerequisites that legitimately vary by machine:
   `hermes_carry.py`): `hermes_contract_test.go` drives the plugin's notes poll
   against a real bridge's route and its skill-load report against a stand-in
   of the skill route, and `hermes_internal_test.go` restores and dumps a
-  measured session and runs the session gate with them. Both import nothing
-  outside Python's standard library; `make test` requires `python3`, which
-  CI's runner image carries.
+  measured session and runs the session gate with them. A box runs both under
+  Hermes's own interpreter; the suite runs them under the machine's `python3`,
+  which stands in for it since both import nothing outside Python's standard
+  library. `make test` requires `python3`, which CI's runner image carries.
 
   `node` also runs the **box helper** the engine writes into a seat's box
   (`internal/browser/boxhelper`'s `js/` modules): its Go suite lays a box out
