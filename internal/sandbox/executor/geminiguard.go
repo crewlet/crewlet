@@ -3,27 +3,30 @@ package executor
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
 )
 
-// A HOME OR A REPOSITORY CANNOT SWITCH CREWLET'S OWN SERVER OR HOOK OFF
-// UNSEEN. Gemini CLI 0.70.0 adds `mcp.excluded`, `tools.exclude` and
-// `hooksConfig.disabled` up across its settings files and intersects every
-// `mcp.allowed` (measured: an empty or wider list in the run's system tier
-// undid none of them), so the home's `~/.gemini/settings.json`, the working
-// directory's `.gemini/settings.json` or the system defaults can switch the
-// bridge or the run's hook off, and the stream says nothing of it. So the
-// script checks those files before Gemini CLI first starts and refuses the
-// run naming the file (gemini_helper.mjs's guard). What a tier does undo is
-// set: `hooksConfig.enabled` in the run's settings, and a policy denying the
+// A HOME OR A REPOSITORY CANNOT SWITCH CREWLET'S OWN SERVER, HOOK, SIGN-IN OR
+// ROUND CAP OFF UNSEEN. The run's settings stand in the home's own file, the
+// user tier ([Paths.GeminiHomeSettings]), and Gemini CLI 0.70.0 ranks the
+// working directory's `.gemini/settings.json` and the machine's system
+// settings above it: a server of theirs by the bridge's name replaces it,
+// their `hooksConfig.enabled: false` switches every hook off, and their
+// `security.auth.selectedType` the sign-in (measured). It also adds
+// `mcp.excluded`, `tools.exclude` and `hooksConfig.disabled` up across every
+// file and intersects every `mcp.allowed`. So the script checks those files
+// once the run's settings are in place and refuses the run naming the file,
+// the key and the entry (gemini_helper.mjs's guard). A policy denying the
 // bridge's tools gives way to the run's admin-tier one ([geminiAdminPolicy]).
 
 // geminiGuard is the guard's arguments for req, each a flag and its value: the
 // run's own servers ([crewletServers]), its hook's name where it is hooked,
-// and the tools of the bridge's the run's own machinery calls by name.
+// the tools of the bridge's the run's own machinery calls by name, its
+// sign-in ([geminiAuth]) and its round cap where it sets them.
 func geminiGuard(req sandbox.RunRequest) string {
 	var b strings.Builder
 	for _, name := range crewletServers(req) {
@@ -41,6 +44,12 @@ func geminiGuard(req sandbox.RunRequest) string {
 	}
 	for _, tool := range slices.Compact(slices.Sorted(slices.Values(tools))) {
 		b.WriteString(" --tool " + shellword.Quote(tool))
+	}
+	if auth := geminiAuth(req); auth != "" {
+		b.WriteString(" --auth " + auth)
+	}
+	if req.Limits.MaxTurns > 0 {
+		b.WriteString(" --turns " + strconv.Itoa(req.Limits.MaxTurns))
 	}
 	return b.String()
 }
