@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
+	"strconv"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -26,7 +28,7 @@ func (Codex) NoteInstruction() string { return CodexSteerInstruction }
 // inboxID is the id the note helper admits a note under for a job, so a
 // repeat serve is steered once: `note_` and 32 hex digits of a hash of the job
 // and the note. Codex records no id of the engine's, so the confirm matches by
-// the item's digest instead ([Codex.notesHeld]).
+// the item's digest instead ([codexNotesHeld]).
 func (Codex) inboxID(launch, noteID string) string {
 	sum := sha256.Sum256([]byte("crewlet.steer\x00" + launch + "\x00" + noteID))
 	return "note_" + hex.EncodeToString(sum[:])[:32]
@@ -39,17 +41,31 @@ func (Codex) inboxID(launch, noteID string) string {
 // is compacted (ADR-0177's "Confirmed").
 func (Codex) pollCeiling() int { return codexSteerMaxCodePoints }
 
-// notesHeld is the inbox ids of takes whose item Codex's rollout of session
-// holds as a user message, matched by its rendered text's digest
-// ([ItemDigest]): the helper never confirms, so the record is the one confirm
-// path ([recordConfirmer]). A torn last line is never read, and a note found
-// only inside a compaction's summary is no user message ([codexRollout]).
+// A CODEX NOTE IS CONFIRMED BY ITS RECORD IN THE RUN AND THE REPLY AFTER IT,
+// as Qwen Code's is ([qwenNotesHeld]). The rollout of a continued session
+// holds every earlier launch's messages, so only lines past where this run
+// began count ([Paths.CodexRunStart]). Two takes of one text need two
+// records, matched in serve order. The record alone is no proof: Codex writes
+// a steered message before the request that carries it, so a run killed, or a
+// request refused, after the write leaves a record no request carried. A
+// resume handing such a trailing message back was not measured on 0.171.0, so
+// the model's next output, its words, reasoning or a call, settles a match
+// (ADR-0177 §3). A compaction before that reply drops the match: the next
+// request may carry the note only inside the summary.
+
+// notesHeld is the inbox ids of takes, in serve order, that Codex's rollout of
+// session shows reached the model ([codexNotesHeld]): the helper never
+// confirms, so the record is the one confirm path ([recordConfirmer]).
 func (Codex) notesHeld(ctx context.Context, box sandbox.Sandbox, session Session,
 	takes []ServedTake) ([]string, error) {
 
 	find := codexRolloutPath(PathsFor(box), session.ID)
 	if find == "" {
 		return nil, fmt.Errorf("executor: %q is no Codex session the run reported", session.ID)
+	}
+	from, err := codexRunFrom(ctx, box, session.ID)
+	if err != nil {
+		return nil, err
 	}
 	found, err := box.Exec(ctx, find, sandbox.ExecOptions{})
 	if err != nil {
@@ -64,19 +80,116 @@ func (Codex) notesHeld(ctx context.Context, box sandbox.Sandbox, session Session
 		return nil, fmt.Errorf("executor: opening Codex's rollout of session %s: %w", session.ID, err)
 	}
 	defer func() { _ = body.Close() }()
-	rollout, err := readCodexRollout(body)
+	held, err := codexNotesHeld(body, takes, from)
 	if err != nil {
 		return nil, fmt.Errorf("executor: reading Codex's rollout of session %s: %w", session.ID, err)
 	}
-	recorded := make(map[string]bool, len(rollout.UserMessages()))
-	for _, text := range rollout.UserMessages() {
-		recorded[ItemDigest(text)] = true
-	}
-	var held []string
-	for _, take := range takes {
-		if recorded[take.Digest] {
-			held = append(held, take.InboxID)
-		}
-	}
 	return held, nil
+}
+
+// codexRunFrom is how many lines of session's rollout came before the box's
+// last run, off the box's record of where it began ([Paths.CodexRunStart]). A
+// record that cannot be read, does not parse or names another session is an
+// error, never 0: from 0, an earlier launch's message of the same text would
+// confirm a note this run never delivered, so the take stays undecided.
+func codexRunFrom(ctx context.Context, box sandbox.Sandbox, session string) (int, error) {
+	path := PathsFor(box).CodexRunStart()
+	raw, err := box.ReadFile(ctx, path)
+	if err != nil {
+		return 0, fmt.Errorf("executor: reading where the run began in its session (%s): %w", path, err)
+	}
+	id, count, ok := strings.Cut(strings.TrimSpace(string(raw)), " ")
+	n, atoiErr := strconv.Atoi(count)
+	switch {
+	case !ok || atoiErr != nil || n < 0:
+		return 0, fmt.Errorf("executor: %s says %q, not a session and a count of its lines", path, raw)
+	case id != session:
+		return 0, fmt.Errorf("executor: %s names the session %q, and the run's is %s: the box ran another "+
+			"session since", path, id, session)
+	}
+	return n, nil
+}
+
+// codexNotesHeld is the inbox ids of takes, in serve order, whose items the
+// rollout r holds past its first from lines as a person's message that a reply
+// of the model followed with no compaction between ([codexConversation]): each
+// such message whose digest is the next take's matches it.
+func codexNotesHeld(r io.Reader, takes []ServedTake, from int) ([]string, error) {
+	var settled, pending []string
+	next := 0
+	_, err := codexConversation(r, from, func(kind codexTurnKind, text string) {
+		switch kind {
+		case codexPersonsWords:
+			if next < len(takes) && ItemDigest(text) == takes[next].Digest {
+				pending = append(pending, takes[next].InboxID)
+				next++
+			}
+		case codexModelReply:
+			settled = append(settled, pending...)
+			pending = pending[:0]
+		case codexCompacted:
+			pending = pending[:0]
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	return settled, nil
+}
+
+// codexTurnKind is what a rollout line is to the conversation the model reads.
+type codexTurnKind int
+
+const (
+	// codexPersonsWords is a person's message ([codexPersonsMessage]): a
+	// brief or a steered note, its text the input_text parts joined.
+	codexPersonsWords codexTurnKind = iota + 1
+	// codexModelReply is the model's output answering a request
+	// ([codexReply]), never its answer to a compaction.
+	codexModelReply
+	// codexCompacted is a `compacted` line: what came before may reach the
+	// model only inside its summary, never read as a person's words.
+	codexCompacted
+)
+
+// codexConversation hands each the lines of the rollout r past its first from
+// that make the conversation the model reads, in order. It reports whether
+// the last line was torn, which is never read; a fragment is passed over as
+// Codex passes it, and a line past its bound fails the read
+// ([errCodexRolloutLine]).
+func codexConversation(r io.Reader, from int, each func(kind codexTurnKind, text string)) (bool, error) {
+	return codexLines(r, func(n int, body []byte) error {
+		line, record := codexRecordOf(body)
+		if n <= from || !record {
+			return nil
+		}
+		if line.Type == "compacted" {
+			each(codexCompacted, "")
+			return nil
+		}
+		var item codexItemWire
+		if line.Type == "response_item" && wireDecode(line.Payload, &item) == nil {
+			switch {
+			case item.Type == "message" && codexPersonsMessage(item.Role, item.Meta):
+				each(codexPersonsWords, item.text())
+			case codexReply(item) && !line.Metadata.CompactionOutput:
+				each(codexModelReply, "")
+			}
+		}
+		return nil
+	}, func(n int) error {
+		return fmt.Errorf("%w: line %d is over %d bytes", errCodexRolloutLine, n, codexRolloutLineMaxBytes)
+	})
+}
+
+// codexReply reports whether item is the model's output answering a request:
+// its words, its reasoning or a call it made (as the transcript reads them).
+func codexReply(item codexItemWire) bool {
+	switch item.Type {
+	case "message":
+		return item.Role == "assistant"
+	case "reasoning", "function_call", "custom_tool_call", "web_search_call", "local_shell_call":
+		return true
+	}
+	return false
 }
