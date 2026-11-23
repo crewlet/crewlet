@@ -217,3 +217,54 @@ func TestAParkNotMarkedOnTheRowPromisesNoResume(t *testing.T) {
 		})
 	}
 }
+
+// A PARKED CALL IS RECORDED ONLY ONCE ITS PARK IS MARKED. The mark on the run's
+// row (WaitsOnCall) tells the engine the job's park, not a late item, is to
+// tell the call's result: a record landing before it would be filed as a late
+// item and then told again by the park's relaunch. So a tool returning while
+// its park is still being marked leaves nothing recorded until the mark is
+// decided, then is recorded once, as the park's, one nobody waited for.
+//
+// Mutation: drop claim's wait for the park's mark (<-marked), and the call is
+// recorded while its park is still being marked.
+func TestAParkedCallIsRecordedOnlyOnceItsParkIsMarked(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		held := newHeldTool("write")
+		l := &ledger{}
+		p := &parks{}
+		release := make(chan struct{})
+		b := openBubbledWith(t, l, l, withCeilingParking(kimiCeiling, p, func() (sandbox.AskOutcome, error) {
+			<-release
+			return sandbox.AskRecorded, nil
+		}), held)
+		box := b.connect(t, nil)
+		t.Cleanup(held.free)
+		releasePark := sync.OnceFunc(func() { close(release) })
+		t.Cleanup(releasePark)
+
+		answered := callFromBox(context.WithoutCancel(t.Context()), box, "write", map[string]any{"value": "hold"}, "")
+		<-held.entered
+		time.Sleep(toolloop.ParkBefore(kimiCeiling))
+		synctest.Wait()
+		if parked := p.all(); len(parked) != 1 {
+			t.Fatalf("the job's park was asked %+v, want once", parked)
+		}
+		// THE TOOL RETURNS WHILE ITS PARK IS STILL BEING MARKED.
+		held.free()
+		synctest.Wait()
+		if rows := l.rows(); len(rows) != 0 {
+			t.Fatalf("the call is recorded %+v while its park is still being marked, want nothing yet", rows)
+		}
+		releasePark()
+		synctest.Wait()
+		if res := answeredNow(answered); res == nil || res.IsError || text(res) != mcpbridge.ParkedNote {
+			t.Fatalf("the call was answered %+v, want the park's, %q", res, mcpbridge.ParkedNote)
+		}
+		if rows := l.rows(); len(rows) != 1 || rows[0].Output != "write done" || !rows[0].Abandoned {
+			t.Fatalf("the call is recorded %+v, want once, with what it did, as one nobody waited for", rows)
+		}
+		b.bridge.Close("run-1")
+		synctest.Wait()
+	})
+}
