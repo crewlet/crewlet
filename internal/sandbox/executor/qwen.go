@@ -85,10 +85,6 @@ func qwenScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	}
 	b.WriteString(endPrologue(paths, stop))
 	b.WriteString(endHarness(""))
-	// CREWLET'S OWN VARIABLES GO before Qwen Code starts at all, its release
-	// read included ([crewletShellOff]): the run turns no Qwen Code telemetry
-	// on, and Qwen Code offers no way to keep a name from its tools alone.
-	b.WriteString(crewletShellOff().script())
 	// THE RELEASE, read once for the gate, the record and the session's: an
 	// older one never runs ([releaseGate]).
 	line(releaseRead(QwenCode{}.VersionCommand()))

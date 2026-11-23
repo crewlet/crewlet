@@ -40,7 +40,7 @@ func TestAJobIsHandedEachPathJoinedOntoItsOwnBoxsHome(t *testing.T) {
 	if err := direct.WriteFile(t.Context(), tokenPath, []byte("the token")); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	env, err := jobEnvFor(m, req, direct)
+	env, err := jobEnvFor(m, req, direct, nil)
 	if err != nil {
 		t.Fatalf("jobEnvFor: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestAJobIsHandedEachPathJoinedOntoItsOwnBoxsHome(t *testing.T) {
 	}
 
 	container, _ := NewContainerBoxAt(t.TempDir())
-	if env, err = jobEnvFor(m, req, container); err != nil {
+	if env, err = jobEnvFor(m, req, container, nil); err != nil {
 		t.Fatalf("jobEnvFor: %v", err)
 	}
 	if want := "/home/user/" + tokenPath; env["CLI_TOKEN_FILE"] != want {

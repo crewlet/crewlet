@@ -155,10 +155,6 @@ func museScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$s" "$k" "$w" "$v" > %s`,
 		q(paths.SessionRecord()))
 	b.WriteString(museWiring(paths))
-	// CREWLET'S OWN VARIABLES GO before Muse starts ([crewletShellOff]): its
-	// shell inherits its environment whole (measured on 1.4.25), and the run
-	// turns no Muse telemetry on.
-	b.WriteString(crewletShellOff().script())
 	before, after := museChildUsage(paths)
 	b.WriteString(before)
 	b.WriteString(launchHarness(strings.Join(parts, " "), paths))

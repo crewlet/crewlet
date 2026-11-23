@@ -435,7 +435,7 @@ func TestKimisScriptAddsTheReportedSessionsRecords(t *testing.T) {
 // ROUTE: home, its workspace trusted, no update, no telemetry, three attempts
 // a request, the cap a turn's steps; a key-signed run's model as its env model's name; and every
 // routing variable the entry did not set unset, never a pinned one. (The
-// telemetry's variables: TestEveryRunnersShellHoldsItsSignInAndNoneOfCrewletsVariables.)
+// telemetry's variables: TestEveryRunnersShellHoldsWhatItsHarnessIsHanded.)
 //
 // Mutation: drop the cap's or the trust's pin, pin the model without a key, or
 // unset the entry's own base URL: the case fails.

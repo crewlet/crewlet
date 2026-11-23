@@ -35,11 +35,6 @@ func (p Paths) ClaudeNotesSystem() string { return p.WorkDir() + "/system-notes.
 // cannot remove it from under the run.
 func (p Paths) ClaudeSettings() string { return p.WorkDir() + "/claude-settings.json" }
 
-// ClaudeToolEnv is the file a Claude Code run's harness runs ahead of each
-// command its model runs, named by CLAUDE_ENV_FILE ([writeClaudeToolEnv]). Under
-// WorkDir beside the settings, for their reasons.
-func (p Paths) ClaudeToolEnv() string { return p.WorkDir() + "/claude-tool-env.sh" }
-
 // ClaudeNotesSettings is where a Claude Code run wired to its turn's notes has
 // its settings written a second time, with the hooks that hand its main agent a
 // person's notes between its steps ([claudeNotesSettings]): the file the run's

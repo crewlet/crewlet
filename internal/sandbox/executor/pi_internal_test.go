@@ -461,11 +461,10 @@ func TestAPiNoteIsHeldOnlyByAnAnswerOnItsBranch(t *testing.T) {
 // cap, the seat's system text told of notes, each skill by the absolute path it
 // is written at with the name it is listed under; a fresh session's copy with
 // the job's other token; and the mcp.json files whose entry would stand in for
-// one of its servers, which the extension checks at the first turn. Crewlet's
-// own variables are the ones the model's shell runs without, in both copies.
+// one of its servers, which the extension checks at the first turn.
 //
 // Mutation: leave the fresh copy on the continued token, drop the required
-// bridge, drop the withheld names or the mcp.json files, or key a skill by a
+// bridge, drop the mcp.json files, or key a skill by a
 // relative path: this goes red.
 func TestAPiRunsExtensionCarriesItsOwnWiring(t *testing.T) {
 	t.Parallel()
@@ -515,8 +514,7 @@ func TestAPiRunsExtensionCarriesItsOwnWiring(t *testing.T) {
 		}
 		if !slices.Equal(s.Required, []string{"crewlet"}) || s.Cap != 7 || s.Notes != "http://e/mcp/"+token+"/steer" ||
 			s.SkillURL != "http://e/mcp/"+token+"/skill" || s.Skills[skill] != "crewlet:deploy" ||
-			!strings.HasPrefix(s.System, "SEAT\n\n") || !slices.Equal(s.Withheld, []string{"TRACEPARENT", "TRACESTATE"}) ||
-			!slices.Equal(s.WithheldPrefixes, []string{"OTEL_"}) ||
+			!strings.HasPrefix(s.System, "SEAT\n\n") ||
 			!slices.Equal(s.MCPFiles, []string{p.PiAgentDir() + "/mcp.json", ".pi/mcp.json"}) {
 			t.Errorf("%s is written %+v", path, s)
 		}
@@ -628,66 +626,6 @@ func TestACarriedPiSessionReadsBackAsItsTranscript(t *testing.T) {
 	}
 	if last := got.Entries[len(got.Entries)-1]; last.Kind != EntryModel || last.Text != "Finished the tool tour." {
 		t.Fatalf("the transcript ends %+v", last)
-	}
-}
-
-// A PI RUN'S SHELL RUNS WITHOUT CREWLET'S OWN VARIABLES AND WITH ITS SIGN-IN:
-// the extension as WriteConfig writes it, played under node with the
-// environment a real 1.6.0 run's pi had, hands the command the sign-in, a
-// seat's own credential and every other variable, and none of the telemetry's
-// or the trace context's. The capture of that real run shows pi applying the
-// hook: its command saw neither the exporter's endpoint nor its headers.
-//
-// Mutation: drop the names or the prefixes from the extension's settings, or
-// re-capture with the spawn hook removed: this goes red.
-func TestAPiRunsShellRunsWithoutCrewletsVariables(t *testing.T) {
-	t.Parallel()
-	box := sandbox.NewFakeSandbox("b")
-	p := PathsFor(box)
-	if _, err := (Pi{}).WriteConfig(t.Context(), box, sandbox.RunRequest{}, Session{}, p); err != nil {
-		t.Fatal(err)
-	}
-	written, err := box.ReadFile(t.Context(), p.PiExtension())
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, rest, _ := strings.Cut(string(written), "const config = ")
-	line, _, _ := strings.Cut(rest, "\n")
-	var settings piExtensionSettings
-	if err := json.Unmarshal([]byte(line), &settings); err != nil {
-		t.Fatal(err)
-	}
-	probe := startPiProbe(t, settings)
-	probe.expect("tool")
-	probe.expect("loaded")
-	probe.send(map[string]any{"op": "spawn", "name": "bash", "env": map[string]string{
-		"STUB_KEY": "sk-ant-stubkey-PLACEHOLDER", "OTHER_SECRET": "s3", "KEEP_ME": "yes",
-		"OTEL_EXPORTER_OTLP_ENDPOINT": "https://otel.example.com", "OTEL_EXPORTER_OTLP_HEADERS": "authorization=x",
-		"OTEL_SERVICE_NAME": "crewlet", "TRACEPARENT": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
-		"TRACESTATE": "crewlet=t"}})
-	if got := probe.expect("spawned").Names; !slices.Equal(got, []string{"KEEP_ME", "OTHER_SECRET", "STUB_KEY"}) {
-		t.Fatalf("the written extension hands the command %v", got)
-	}
-
-	raw := piFixture(t, "shell.stream.jsonl")
-	if got := (Pi{}).Parse(raw); !got.Success || got.Turns != 2 {
-		t.Fatalf("the run did not reach its model: success %v, %d requests, %q", got.Success, got.Turns, got.Error)
-	}
-	var printed string
-	for l := range bytes.Lines(raw) {
-		ev, ok := decodePiLine(l)
-		if ok && ev.Type == "tool_execution_end" && ev.ToolName == "bash" {
-			var r struct {
-				Content []piContent `json:"content"`
-			}
-			if err := json.Unmarshal(ev.Result, &r); err != nil {
-				t.Fatal(err)
-			}
-			printed = r.Content[0].Text
-		}
-	}
-	if !strings.Contains(printed, " OTHER=s3 KEEP=yes OTEL_ENDPOINT=unset OTEL_HEADERS=unset ") {
-		t.Fatalf("the model's shell printed %q", printed)
 	}
 }
 

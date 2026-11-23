@@ -114,7 +114,7 @@ func copilotLoads(t *testing.T) {
 		}
 		var settings map[string]any
 		if raw := boxFile(t, box, home+"/seen/settings"); json.Unmarshal([]byte(raw), &settings) != nil ||
-			settings["model"] != "home-model" || settings["experimental"] != true || settings["bashEnv"] != true {
+			settings["model"] != "home-model" || settings["experimental"] != true {
 			t.Errorf("the home's settings as copilot started are %s, want its own model beside the run's keys", raw)
 		}
 		if raw := boxFile(t, box, h+"/mcp-config.json"); !strings.Contains(raw, `"home-mcp"`) {

@@ -103,10 +103,6 @@ func kimiScript(req sandbox.RunRequest, session Session, paths Paths, settings s
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	b.WriteString(endPrologue(paths, stop))
 	b.WriteString(endHarness(""))
-	// CREWLET'S OWN VARIABLES GO before Kimi Code starts at all, its release
-	// read included ([crewletShellOff]): it exports no OTLP (2.7.2's bundle
-	// reads no OTEL_ variable), and its shell inherits the driver's environment.
-	b.WriteString(crewletShellOff().script())
 	b.WriteString(kimiRelease)
 	line(`if ! at %s; then printf 'crewlet: this box runs Kimi Code %%s, older than %s, the release Crewlet supports\n' "$n" >&2; exit 1; fi`,
 		floorArgs(kimiSupported), kimiSupported)

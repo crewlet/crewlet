@@ -47,6 +47,22 @@ func (r *Runner) NotesOffWhy() string {
 	return ""
 }
 
+// telemetryHarness is a harness that exports its run's OTLP to the engine's
+// receiver by the environment the run is started with: Copilot's and
+// OpenCode's. No other exports by what a run hands it: Claude Code only under
+// CLAUDE_CODE_ENABLE_TELEMETRY, Codex only under its configuration's `otel`,
+// Gemini CLI, Qwen Code and Muse Code only with their telemetry setting on,
+// which a run never turns on, and Kimi Code and pi read no OTEL_ variable.
+type telemetryHarness interface{ exportsTelemetry() bool }
+
+// ExportsTelemetry reports whether the runner's harness exports its run's
+// OTLP by the environment it is started with, which only such a runner is
+// handed Crewlet's telemetry in ([sandbox] withTelemetry).
+func (r *Runner) ExportsTelemetry() bool {
+	h, ok := r.harness.(telemetryHarness)
+	return ok && h.exportsTelemetry()
+}
+
 // SignIn is how a member signs its harness in, as far as the route it reaches
 // its model by differs: harness-neutral, so the executor reads no config. The
 // zero value is a mode this build does not know, judged as the least window.

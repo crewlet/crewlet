@@ -518,13 +518,11 @@ func TestNoCodexCommandLineCarriesTheBridgesToken(t *testing.T) {
 		}
 	}
 	p := executor.PathsFor(box)
-	// AND THE COMMANDS THE MODEL RUNS START WITHOUT CREWLET'S OWN VARIABLES:
-	// both routes, the trace context and every telemetry variable are what
-	// Codex's shell_environment_policy excludes, and nothing else, the
-	// sign-in included.
+	// AND THE COMMANDS THE MODEL RUNS START WITHOUT THE HELPER'S ROUTES: both
+	// are what Codex's shell_environment_policy excludes, and nothing else,
+	// the sign-in and every OTEL_ variable included.
 	excluded := codexShellExcluded(t, recorded(t, record, "server-argv"))
-	if want := []string{"CREWLET_NOTES_URL", "CREWLET_SKILLS_URL", "TRACEPARENT", "TRACESTATE",
-		"OTEL_*"}; !slices.Equal(excluded, want) {
+	if want := []string{"CREWLET_NOTES_URL", "CREWLET_SKILLS_URL"}; !slices.Equal(excluded, want) {
 		t.Errorf("the commands the model runs start without %q, want %q", excluded, want)
 	}
 	if got := boxFile(t, box, p.CodexNotesURL()); got != codexBridgeURL+"/steer" {
