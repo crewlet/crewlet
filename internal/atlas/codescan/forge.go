@@ -106,7 +106,7 @@ func (f *Forges) Due(ctx context.Context, kind integration.Kind, interval time.D
 		// THE DUTY MAY HAVE MOVED HERE: the standing another node left is
 		// read once, and this node's own writes keep it current after.
 		var err error
-		if fs, _, err = f.store.Load(ctx, kind); err != nil {
+		if fs, err = f.store.LoadForge(ctx, kind); err != nil {
 			log.WarnContext(ctx, "atlas_forge_standing_unreadable", "forge", kind.String(), "error", err)
 			return false
 		}
@@ -123,8 +123,11 @@ func (f *Forges) remember(fs ForgeStatus) {
 }
 
 // readingsID is the id a forge repository's readings are kept under on this
-// node: its voice under its forge, so no Gitlet repository's id is one.
-func readingsID(kind integration.Kind, voice string) string { return forgeRepoKey(kind, voice) }
+// node: its voice under its forge, holding a slash no Gitlet repository's id
+// holds, so no Gitlet repository's id is one.
+func readingsID(kind integration.Kind, voice string) string {
+	return "forge/" + kind.String() + "/" + voice
+}
 
 // Pass implements [collect.CodePass]: one pass over the forge's repositories.
 func (f *Forges) Pass(ctx context.Context, host collect.CodeHost, in collect.Input, now time.Time) {
@@ -240,7 +243,8 @@ func (f *Forges) repository(ctx context.Context, kind integration.Kind, session 
 	repo collect.CodeRepository, id Repo, st Status, b *budget, fs *ForgeStatus, now time.Time) error {
 
 	settled := st.Completed && st.Rules == Rules
-	if settled && repo.Stamp != "" && st.Stamp == repo.Stamp {
+	stamp := stampOf(repo.Stamp)
+	if settled && stamp != "" && st.Stamp == stamp {
 		return nil
 	}
 	before := session.Calls()
@@ -255,10 +259,10 @@ func (f *Forges) repository(ctx context.Context, kind integration.Kind, session 
 	if settled && st.Tip == tip {
 		// THE BRANCH DID NOT MOVE, whatever moved the stamp: the new stamp
 		// is kept so the next pass asks nothing.
-		if st.Stamp == repo.Stamp {
+		if st.Stamp == stamp {
 			return nil
 		}
-		st.Stamp = repo.Stamp
+		st.Stamp = stamp
 		return f.store.Save(ctx, kind, st)
 	}
 	if b.spent() || fs.Trees >= MaxForgeTreesPerPass {
@@ -307,7 +311,7 @@ func (f *Forges) repository(ctx context.Context, kind integration.Kind, session 
 		fs.Waiting++
 		return f.store.Save(ctx, kind, st)
 	}
-	st.Tip, st.Rules, st.Stamp, st.Completed, st.LastCompleteAt = tip, Rules, repo.Stamp, true, now
+	st.Tip, st.Rules, st.Stamp, st.Completed, st.LastCompleteAt = tip, Rules, stamp, true, now
 	return f.store.Save(ctx, kind, st)
 }
 

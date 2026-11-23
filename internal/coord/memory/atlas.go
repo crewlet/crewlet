@@ -116,34 +116,58 @@ func (f *Fleet) DeleteAtlasSourceRefresh(_ context.Context, kind string) error {
 
 // ---- the atlas code scans' standings ------------------------------------ //
 
-// AtlasCodeScans returns every recorded standing, keyed by repository, each
-// cloned on the way out.
-func (f *Fleet) AtlasCodeScans(context.Context) (map[string][]byte, error) {
+// AtlasCodeScans returns the standing of every repository of host, keyed by
+// the repository, each cloned on the way out.
+func (f *Fleet) AtlasCodeScans(_ context.Context, host string) (map[string][]byte, error) {
+	if host == "" {
+		return nil, errors.New("coord/memory: the atlas code scan standings are listed per host")
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := make(map[string][]byte, len(f.atlasCode))
-	for repo, value := range f.atlasCode {
-		out[repo] = bytes.Clone(value)
+	out := map[string][]byte{}
+	for key, value := range f.atlasCode {
+		if repo, ok := coord.AtlasCodeRepoOf(key, host); ok {
+			out[repo] = bytes.Clone(value)
+		}
 	}
 	return out, nil
 }
 
-// PutAtlasCodeScan records one repository's standing.
-func (f *Fleet) PutAtlasCodeScan(_ context.Context, repo string, value []byte) error {
-	if repo == "" {
-		return errors.New("coord/memory: an atlas code scan standing needs a repository")
+// AtlasCodeScan reads one standing.
+func (f *Fleet) AtlasCodeScan(_ context.Context, host, repo string) ([]byte, bool, error) {
+	if host == "" {
+		return nil, false, errors.New("coord/memory: an atlas code scan standing names its host")
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.atlasCode[repo] = bytes.Clone(value)
+	value, ok := f.atlasCode[coord.AtlasCodeScanKey(host, repo)]
+	return bytes.Clone(value), ok, nil
+}
+
+// PutAtlasCodeScan records one standing, held to coord.SmallValueBytes as
+// the KV backend holds it.
+func (f *Fleet) PutAtlasCodeScan(_ context.Context, host, repo string, value []byte) error {
+	if host == "" {
+		return errors.New("coord/memory: an atlas code scan standing names its host")
+	}
+	key := coord.AtlasCodeScanKey(host, repo)
+	if err := coord.HoldValue("the atlas code scan standing "+key, len(value), coord.SmallValueBytes); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.atlasCode[key] = bytes.Clone(value)
 	return nil
 }
 
-// DeleteAtlasCodeScan drops a repository's standing; one that is not there is
-// the outcome asked for.
-func (f *Fleet) DeleteAtlasCodeScan(_ context.Context, repo string) error {
+// DeleteAtlasCodeScan drops one standing; one that is not there is the
+// outcome asked for.
+func (f *Fleet) DeleteAtlasCodeScan(_ context.Context, host, repo string) error {
+	if host == "" {
+		return errors.New("coord/memory: an atlas code scan standing names its host")
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	delete(f.atlasCode, repo)
+	delete(f.atlasCode, coord.AtlasCodeScanKey(host, repo))
 	return nil
 }

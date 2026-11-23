@@ -56,7 +56,9 @@ type Fleet struct {
 	atlasSources map[string][]byte
 	// atlasMisses is each source's misses, by source, apart from its
 	// standing as the KV keeps them under a class a listing never reads.
-	atlasMisses  map[string][]byte
+	atlasMisses map[string][]byte
+	// atlasCode is every code scan standing, by its key in the KV's
+	// grammar ([coord.AtlasCodeScanKey]).
 	atlasCode    map[string][]byte
 	atlasRefresh map[string][]byte
 

@@ -1471,8 +1471,9 @@ type AtlasSources interface {
 // AtlasCodeScans is where the atlas's scan of each repository's deploy and
 // dependency files keeps its standing (internal/atlas/codescan): the default
 // branch's tip last read whole, files listed and read, and what it refused.
-// Keyed by a Gitlet repository's id, or under `forge/` (codescan.ForgeStore)
-// for a forge and its repositories, which no repository's id starts with.
+// Each is filed under the host it is read from ([AtlasCodeScanKey]), beside
+// a forge's own standing of its last pass (repo ""), and held to
+// [SmallValueBytes].
 //
 // A repository's home moves between Gitlet nodes, and the node taking over
 // must know which tip was read. Only the current value is kept; what the
@@ -1480,20 +1481,25 @@ type AtlasSources interface {
 // sources' reader forgets every key that is no source; opaque and unaged for
 // the atlas sources' reasons.
 type AtlasCodeScans interface {
-	// AtlasCodeScans returns every recorded standing, keyed by the
-	// repository's id. RAISES rather than answering empty on an unreachable
-	// store: "never scanned" would read every repository again.
-	AtlasCodeScans(ctx context.Context) (map[string][]byte, error)
+	// AtlasCodeScans returns the standing of every repository of host,
+	// keyed by the repository. RAISES rather than answering empty on an
+	// unreachable store: "never scanned" would read every repository again.
+	AtlasCodeScans(ctx context.Context, host string) (map[string][]byte, error)
 
-	// PutAtlasCodeScan records one repository's standing, replacing any
-	// prior one. LAST WRITE WINS: a repository's home is its one writer, and
-	// two nodes that each take themselves for home write the same reading
-	// of the same commit.
-	PutAtlasCodeScan(ctx context.Context, repo string, value []byte) error
+	// AtlasCodeScan reads one standing, false where none is recorded:
+	// host's repository repo, or host's own for repo "". RAISES as the
+	// listing does.
+	AtlasCodeScan(ctx context.Context, host, repo string) ([]byte, bool, error)
 
-	// DeleteAtlasCodeScan drops a repository's standing once it is no longer
-	// scanned. One that is not there is the outcome asked for.
-	DeleteAtlasCodeScan(ctx context.Context, repo string) error
+	// PutAtlasCodeScan records one standing, replacing any prior one. LAST
+	// WRITE WINS: a repository's home is its one writer, and two nodes that
+	// each take themselves for home write the same reading of the same
+	// commit; a forge's standings are the collect duty's, a fleet singleton.
+	PutAtlasCodeScan(ctx context.Context, host, repo string, value []byte) error
+
+	// DeleteAtlasCodeScan drops one standing once it is no longer kept.
+	// One that is not there is the outcome asked for.
+	DeleteAtlasCodeScan(ctx context.Context, host, repo string) error
 }
 
 // AtlasSourceRefreshes is where a person's ask that an atlas source be read

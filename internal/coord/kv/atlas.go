@@ -129,38 +129,61 @@ func (f *FleetStore) DeleteAtlasSourceRefresh(ctx context.Context, kind string) 
 
 // ---- the atlas code scans' standings ------------------------------------ //
 
-// AtlasCodeScans returns every recorded standing, keyed by repository.
-func (f *FleetStore) AtlasCodeScans(ctx context.Context) (map[string][]byte, error) {
+// AtlasCodeScans returns the standing of every repository of host, keyed by
+// the repository: a pass over host's keys alone.
+func (f *FleetStore) AtlasCodeScans(ctx context.Context, host string) (map[string][]byte, error) {
+	if host == "" {
+		return nil, errors.New("coord/kv: the atlas code scan standings are listed per host")
+	}
 	out := map[string][]byte{}
-	err := f.each(ctx, f.atlasCode, func(kve jetstream.KeyValueEntry) error {
-		// A key this backend did not write is skipped, and the value is
-		// copied, as the atlas sources' are.
-		if repo, ok := decodeKey(kve.Key()); ok {
-			out[repo] = bytes.Clone(kve.Value())
-		}
-		return nil
-	})
+	err := f.eachUnder(ctx, f.atlasCode, coord.AtlasCodeScanFilter(host), "the "+host+" code scan standings",
+		func(kve jetstream.KeyValueEntry) error {
+			// A key this backend did not write is skipped, and the value is
+			// copied, as the atlas sources' are.
+			if repo, ok := coord.AtlasCodeRepoOf(kve.Key(), host); ok {
+				out[repo] = bytes.Clone(kve.Value())
+			}
+			return nil
+		})
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-// PutAtlasCodeScan records one repository's standing.
-func (f *FleetStore) PutAtlasCodeScan(ctx context.Context, repo string, value []byte) error {
-	if repo == "" {
-		return errors.New("coord/kv: an atlas code scan standing needs a repository")
+// AtlasCodeScan reads one standing by its key.
+func (f *FleetStore) AtlasCodeScan(ctx context.Context, host, repo string) ([]byte, bool, error) {
+	if host == "" {
+		return nil, false, errors.New("coord/kv: an atlas code scan standing names its host")
 	}
-	if _, err := f.atlasCode.Put(ctx, encodeKey(repo), value); err != nil {
+	entry, err := f.get(ctx, f.atlasCode, coord.AtlasCodeScanKey(host, repo))
+	switch {
+	case errors.Is(err, jetstream.ErrKeyNotFound):
+		return nil, false, nil
+	case err != nil:
+		return nil, false, unavailable("read the atlas code scan standing", err)
+	}
+	return bytes.Clone(entry.Value()), true, nil
+}
+
+// PutAtlasCodeScan records one standing.
+func (f *FleetStore) PutAtlasCodeScan(ctx context.Context, host, repo string, value []byte) error {
+	if host == "" {
+		return errors.New("coord/kv: an atlas code scan standing names its host")
+	}
+	if _, err := f.atlasCode.Put(ctx, coord.AtlasCodeScanKey(host, repo), value); err != nil {
 		return unavailable("record the atlas code scan standing", err)
 	}
 	return nil
 }
 
-// DeleteAtlasCodeScan drops a repository's standing: PURGED, as every removal
-// from an ageless bucket is (markers.go).
-func (f *FleetStore) DeleteAtlasCodeScan(ctx context.Context, repo string) error {
-	err := f.atlasCode.Purge(ctx, encodeKey(repo))
+// DeleteAtlasCodeScan drops one standing: PURGED, as every removal from an
+// ageless bucket is (markers.go).
+func (f *FleetStore) DeleteAtlasCodeScan(ctx context.Context, host, repo string) error {
+	if host == "" {
+		return errors.New("coord/kv: an atlas code scan standing names its host")
+	}
+	err := f.atlasCode.Purge(ctx, coord.AtlasCodeScanKey(host, repo))
 	if err != nil && !errors.Is(err, jetstream.ErrKeyNotFound) {
 		return unavailable("delete the atlas code scan standing", err)
 	}
