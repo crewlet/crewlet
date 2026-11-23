@@ -116,3 +116,18 @@ func PiTrailingNoteHeld(t *testing.T) bool {
 	}
 	return slices.Contains(held, "inbox-steer-1")
 }
+
+// HermesTrailingNoteHeld is whether a note this launch's record holds as its
+// last row, no reply of the model stored after it, is held.
+func HermesTrailingNoteHeld(t *testing.T) bool {
+	dump := hermesNoteRows(t, func(id int64, r map[string]any) {
+		if id == 4 {
+			r["id"] = 6
+		}
+	})
+	held, err := hermesNotesHeld(bytes.NewReader(dump), []ServedTake{{InboxID: "n-1", Digest: ItemDigest(hermesSteeredNote)}}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return slices.Contains(held, "n-1")
+}
