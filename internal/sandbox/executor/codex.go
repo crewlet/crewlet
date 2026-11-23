@@ -178,11 +178,17 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 	}
 
 	line(`rm -f %s %s %s`, sock, thread, threadNext)
+	// THE REPOSITORIES' INSTRUCTIONS AND SKILLS, none of their configuration
+	// ([codexRepoGate]), and the nested hook that hands a later checkout's
+	// where the box holds the helper it runs ([codexNestedHookFlags]).
+	b.WriteString(codexRepoGate(paths, req.ReportedRepos))
+	hook, state := codexNestedHookFlags(paths)
+	line(`hp=%s; hs=%s`, q(hook), q(state))
 	// No --ignore-user-config: app-server has none, and the config.toml it
 	// always loads is the run's own ([Paths.CodexLiveConfig]). Started in the
 	// script's own directory, exec's: under --remote a relative path and an
 	// item's cwd resolve against the SERVER's (CODEX-MEASURE §18).
-	line(`codex app-server --listen %s %s < /dev/null > %s 2>&1 &`,
+	line(`codex app-server --listen %s %s ${hk:+-c "$hp" -c "$hs"} < /dev/null > %s 2>&1 &`,
 		q("unix://"+paths.CodexSocket()), strings.Join(codexPosture(req), " "), serverLog)
 	line(`apid=$!`)
 	line(`deadline=$(( $(%s) + %d ))`, times.clock, secs(times.listen))
@@ -317,12 +323,12 @@ func codexStartHelper(req sandbox.RunRequest, paths Paths) string {
 	if limit := req.Limits.MaxTurns; limit > 0 {
 		flags += fmt.Sprintf(" -step-cap %d -cap-marker %s", limit, q(paths.CodexCapFired()))
 	}
-	return fmt.Sprintf(`chmod 700 %[1]s || exit 1
-%[2]s%[3]s%[4]s < /dev/null > /dev/null &
+	// The helper is executable: the repository gate made it so ([codexRepoGate]).
+	return fmt.Sprintf(`%[1]s%[2]s%[3]s < /dev/null > /dev/null &
 hpid=$!
-( while kill -0 $$ 2> /dev/null && kill -0 "$hpid" 2> /dev/null; do sleep %[5]s; done; kill -0 $$ 2> /dev/null || exit 0; : > %[6]s; %[3]s -interrupt-once < /dev/null > /dev/null || end "$apid" again ) &
+( while kill -0 $$ 2> /dev/null && kill -0 "$hpid" 2> /dev/null; do sleep %[4]s; done; kill -0 $$ 2> /dev/null || exit 0; : > %[5]s; %[2]s -interrupt-once < /dev/null > /dev/null || end "$apid" again ) &
 gpid=$!
-`, helper, env, base, flags, codexGuardPoll, q(paths.CodexHelperLost()))
+`, env, base, flags, codexGuardPoll, q(paths.CodexHelperLost()))
 }
 
 // codexSkillDigests is each of skills as the note helper's -skill-digest:

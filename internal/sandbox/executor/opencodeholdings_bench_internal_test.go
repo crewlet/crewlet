@@ -53,7 +53,7 @@ func BenchmarkAnOpenCodeReadingAtItsBounds(b *testing.B) {
 		b.Run(bc.name, func(b *testing.B) {
 			file := filepath.Join(b.TempDir(), "export.json.gz")
 			calls := benchExportFile(b, file, bc.write)
-			ask := sandbox.HoldingsAsk{Calls: calls, Resumer: "2.2.7"}
+			ask := sandbox.HoldingsAsk{Calls: calls, Resumer: "2.3.2"}
 			open := func(context.Context) (io.ReadCloser, error) { return benchOpen(file) }
 			fmt.Fprintf(os.Stderr, "oc-reading-bench %s: the read starts\n", bc.name)
 			b.ResetTimer()
@@ -61,7 +61,7 @@ func BenchmarkAnOpenCodeReadingAtItsBounds(b *testing.B) {
 				var wg sync.WaitGroup
 				if bc.reading {
 					wg.Go(func() {
-						got, err := NewOpenCode().ReadHoldings(b.Context(), ohArchive("2.2.7"), open, ask)
+						got, err := NewOpenCode().ReadHoldings(b.Context(), ohArchive("2.3.2"), open, ask)
 						if bc.refused && !errors.Is(err, errOpenCodeMalformed) || !bc.refused && (err != nil || !got.Read) {
 							b.Errorf("the reading = %+v, %v", got, err)
 						}
@@ -129,7 +129,7 @@ const (
 // [ohSession].
 func benchMeasured(b *testing.B, w io.Writer) []sandbox.LoggedCall {
 	b.Helper()
-	f := ohFixtures(b, "2.2.7")["truncation"]
+	f := ohFixtures(b, "2.3.2")["truncation"]
 	zr, err := gzip.NewReader(bytes.NewReader(f.archive))
 	if err != nil {
 		b.Fatal(err)

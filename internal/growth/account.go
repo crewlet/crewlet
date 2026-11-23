@@ -36,10 +36,15 @@ type Account struct {
 	Connection string `json:"connection,omitempty"`
 	ID         string `json:"account"`
 	// Name is the vendor's name for it, somebody's words.
-	Name     string       `json:"account_name" untrusted:"name"`
-	Currency string       `json:"currency,omitempty"`
-	TimeZone string       `json:"time_zone,omitempty"`
-	State    AccountState `json:"state"`
+	Name     string `json:"account_name" untrusted:"name"`
+	Currency string `json:"currency,omitempty"`
+	TimeZone string `json:"time_zone,omitempty"`
+	// Detail is the second identifier the vendor gives it beside its ID (an
+	// app's bundle ID), empty where it gives none.
+	Detail string `json:"detail,omitempty"`
+	// State is whether the vendor serves it; empty for an account the vendor
+	// gives no such state (an app on a connection's card).
+	State AccountState `json:"state,omitempty"`
 	// Roles are the vendor roles the connection holds on it.
 	Roles []string `json:"roles,omitempty"`
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -37,33 +38,90 @@ func NewQwenCode() *Runner { return New(QwenCode{}) }
 // Name is this runner's config name.
 func (QwenCode) Name() string { return QwenCodeName }
 
-// Session mints the run's own session: Qwen Code takes the id a new ACP
-// session is created under (session/new's `_meta` `qwen-code/sessionId`) and
-// refuses one it already holds (session_id_conflict, measured on 0.28.4), so
-// every run gets a fresh uuid. No run continues a Qwen Code session yet: the
-// runner carries none, so a continued conversation starts a fresh one.
-func (QwenCode) Session(sandbox.RunRequest) Session { return Session{ID: uuid.NewString()} }
+// Session is the session a Qwen Code run works in ([Harness.Session]): the one
+// it continues, or a new one under a uuid minted for it — Qwen Code takes the
+// id a new ACP session is created under (session/new's `_meta`
+// `qwen-code/sessionId`) and refuses one it already holds
+// (session_id_conflict, measured on 0.28.4) — and, for a run that continues
+// one, a second uuid for the session it starts instead where its box holds
+// that one neither way.
+func (QwenCode) Session(req sandbox.RunRequest) Session {
+	if req.Resume != "" {
+		return Session{ID: req.Resume, Continues: true, Fresh: uuid.NewString(),
+			Replaces: req.Carried != nil && req.Carried.Replace}
+	}
+	return Session{ID: uuid.NewString()}
+}
 
 // Command is the run's script: the end protocol (end.go), then the helper as
 // the run's harness, reading the brief on stdin ([QwenCode.Output]). An end
 // request reaches the helper as SIGTERM, which it answers with
 // session/cancel, never passing the signal to Qwen Code (qwen_helper.mjs).
 func (QwenCode) Command(req sandbox.RunRequest, session Session, paths Paths, _ string) string {
-	return "sh -c " + shellword.Quote(qwenScript(session, paths, sandbox.JobStopGrace))
+	return "sh -c " + shellword.Quote(qwenScript(req, session, paths, sandbox.JobStopGrace))
 }
 
+// qwenRelease is the Qwen Code release this build drives: the newest, whose
+// ACP messages, chat file and session/load it was measured against
+// (testdata/qwen/0.28.4). An older one is refused at the run's start, a newer
+// one runs on sessions of its own, and only this one continues a carried
+// session ([releaseGate], [exactCarry]).
+const qwenRelease = "0.28.4"
+
 // qwenScript is a Qwen Code run's script, giving its helper stop to go once
-// asked to end. The session goes on the helper's command line, the one input
-// WriteConfig is not handed; an id is no secret.
-func qwenScript(session Session, paths Paths, stop time.Duration) string {
+// asked to end: the end protocol, the box's release read and gated
+// ([releaseGate]), the session named and recorded ([chatSessionGate],
+// [Paths.SessionRecord]), the helper run on it, loading a session the run
+// continues and creating one it starts, and the session packed to be
+// continued in another box ([chatPack]). The session goes on the helper's
+// command line, as the gate settles it; an id is no secret.
+func qwenScript(req sandbox.RunRequest, session Session, paths Paths, stop time.Duration) string {
 	var b strings.Builder
+	line := func(text string) { b.WriteString(text + "\n") }
+	q := shellword.Quote
+	var fresh []freshCopy
+	if req.FreshWiring != nil {
+		fresh = qwenFreshCopies(paths)
+	}
 	b.WriteString(endPrologue(paths, stop))
 	b.WriteString(endHarness(""))
-	b.WriteString(launchHarness("node "+shellword.Quote(paths.QwenHelper())+" run "+
-		shellword.Quote(paths.QwenHelperConfig())+" "+shellword.Quote(session.ID), paths))
-	b.WriteString(`exit "$code"` + "\n")
+	// THE TELEMETRY'S NAMES GO before Qwen Code starts at all, its release
+	// read included: the run turns no Qwen Code telemetry on, so it starts
+	// without them. Its key is in its settings, never the environment
+	// ([QwenCode.Output]).
+	line(otelExportUnset)
+	// AND THE SIGN-IN'S NAMES ([sandbox.RunRequest.SignInEnv]): Qwen Code reads
+	// none of them in a run, its key being in its settings and a subscription
+	// in its login file, and offers no way to keep a name from its tools
+	// alone, so the helper, and with it Qwen Code, starts without them.
+	// WriteConfig has refused a name no shell can unset ([toolEnvOmitted]).
+	if names, err := toolEnvOmitted(req.SignInEnv); err == nil && len(names) > 0 {
+		line("unset " + strings.Join(names, " "))
+	}
+	// THE RELEASE, read once for the gate, the record and the session's: an
+	// older one never runs ([releaseGate]).
+	line(releaseRead(QwenCode{}.VersionCommand()))
+	line(releaseGate("Qwen Code", qwenRelease))
+	b.WriteString(chatSessionGate(session, paths, qwenGate(paths, fresh)))
+	// THE RECORD, before the harness starts ([parseSessionRecord]).
+	line(`printf 'id %s\ncontinued %s\nwhy %s\nrelease %s\n' "$s" "$k" "$w" "$v" > ` + q(paths.SessionRecord()))
+	// WHERE THE RUN BEGINS IN ITS SESSION, which its notes are confirmed past: a
+	// continued session holds an earlier job's records of notes, which a note
+	// of the same text this run is handed was never delivered as.
+	line(`n=0; [ -z "$cf" ] || n=$(wc -l < "$cf" | tr -d ' '); printf '%s %s\n' "$s" "$n" > ` + q(paths.QwenRunStart()))
+	line(`if [ "$k" = yes ]; then m=load; else m=new; fi`)
+	b.WriteString(launchHarness("node "+q(paths.QwenHelper())+" run "+q(paths.QwenHelperConfig())+` "$s" "$m"`, paths))
+	line(qwenLocate(paths))
+	b.WriteString(chatPack(paths, packAt{staged: paths.SessionStaging(), dest: paths.SessionCapture()}, paths.QwenDir()))
+	line(`exit "$code"`)
 	return b.String()
 }
+
+// otelExportUnset is the shell removing every OTEL_EXPORTER_OTLP_ variable
+// from the environment, whatever its name, as an operator may add any: run
+// before a harness whose telemetry the runner never turns on (Gemini CLI's,
+// Qwen Code's), so the harness starts without them.
+const otelExportUnset = `for n in $(env | sed -n 's/^\(OTEL_EXPORTER_OTLP_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$n"; done`
 
 // Output is the helper's stream on stdout, which is also the result: the
 // session/update lines Qwen Code sent and the helper's own, ending with how
@@ -130,43 +188,57 @@ var (
 )
 
 // artifactFiles is what a Qwen Code run leaves in a box beside the shared
-// artefacts ([artifactHolder]): its settings, which hold its key, and the
-// helper and its configuration.
+// artefacts ([artifactHolder]): its settings, which hold its key, the helper
+// and its configuration, a fresh session's copies of both, and where the run
+// began in its session.
 func (QwenCode) artifactFiles(p Paths) []string {
-	return []string{p.QwenSettings(), p.QwenHelper(), p.QwenHelperConfig()}
+	return []string{p.QwenSettings(), p.QwenSettings() + ".fresh", p.QwenHelper(), p.QwenHelperConfig(),
+		p.QwenHelperConfig() + ".fresh", p.QwenRunStart()}
 }
 
 // artifactDirs is the directory a Qwen Code run leaves of its own
 // ([artifactDirHolder]): its skills, removed whole.
 func (QwenCode) artifactDirs(p Paths) []string { return []string{p.QwenSkills()} }
 
-// WriteConfig removes what an earlier run or the image left for Qwen Code
+// WriteConfig refuses a sign-in name no shell can unset ([toolEnvOmitted]),
+// then removes what an earlier run or the image left for Qwen Code
 // ([qwenHome]) and writes what a run's helper and harness read: the run's
 // system text, the helper and its configuration, the settings in the box
 // home, and the run's skills. It returns "": Qwen Code reads its settings
 // from its home, and the helper hands it no MCP servers of its own.
 func (q QwenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
 	paths Paths) (string, error) {
-	if err := qwenHome.prune(ctx, box, paths.Home, "Qwen Code"); err != nil {
+	if _, err := toolEnvOmitted(req.SignInEnv); err != nil {
 		return "", err
 	}
 	system := req.System
 	if req.Steer.Set() {
 		system = withNoteInstruction(system, q.NoteInstruction())
 	}
-	helper, err := json.Marshal(qwenHelperConfigOf(req, paths))
-	if err != nil {
-		return "", fmt.Errorf("executor: rendering the Qwen Code helper's configuration: %w", err)
-	}
-	settings, err := json.MarshalIndent(qwenSettings(req, paths), "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("executor: rendering Qwen Code's settings: %w", err)
-	}
 	files := map[string][]byte{
-		paths.System():           []byte(system),
-		paths.QwenHelper():       qwenHelperScript,
-		paths.QwenHelperConfig(): helper,
-		paths.QwenSettings():     settings,
+		paths.System():     []byte(system),
+		paths.QwenHelper(): qwenHelperScript,
+	}
+	if err := qwenWired(files, req, paths, paths.QwenSettings(), paths.QwenHelperConfig()); err != nil {
+		return "", err
+	}
+	// AND THE SAME FILES UNDER THE JOB'S OTHER BRIDGE TOKEN, for a session the
+	// script starts in place of the continued one, beside the first
+	// ([sandbox.RunRequest.FreshWiring], [chatSessionGate]). A wiring that
+	// changes what the run is wired for would need settings the script did not
+	// choose, so it is refused.
+	if f := req.FreshWiring; f != nil {
+		if f.Steer.Set() != req.Steer.Set() || f.SkillLoads.Set() != req.SkillLoads.Set() {
+			return "", errors.New("executor: the run's two wirings, for the session it continues and for " +
+				"one of its own, are not wired alike, so the run cannot be wired to whichever session its " +
+				"box starts")
+		}
+		rewired := req
+		rewired.MCPServers, rewired.Steer, rewired.SkillLoads = f.MCPServers, f.Steer, f.SkillLoads
+		if err := qwenWired(files, rewired, paths, paths.QwenSettings()+".fresh",
+			paths.QwenHelperConfig()+".fresh"); err != nil {
+			return "", err
+		}
 	}
 	for _, s := range req.Skills {
 		file, fileErr := skillFile(qwenSkillName(s), s.Description, s.Body)
@@ -175,12 +247,32 @@ func (q QwenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 		}
 		files[paths.QwenSkills()+"/"+qwenSkillName(s)+"/SKILL.md"] = file
 	}
+	// THE HOME IS PRUNED ONLY ONCE NOTHING ABOVE REFUSED THE RUN, as Gemini
+	// CLI's is: a refused launch leaves the box as it found it.
+	if err := qwenHome.prune(ctx, box, paths.Home, "Qwen Code"); err != nil {
+		return "", err
+	}
 	for _, path := range slices.Sorted(maps.Keys(files)) {
 		if err := box.WriteFile(ctx, path, files[path]); err != nil {
 			return "", fmt.Errorf("executor: writing %s for Qwen Code: %w", path, err)
 		}
 	}
 	return "", nil
+}
+
+// qwenWired puts into files the two files of req's wiring: its settings, at
+// settingsPath, and its helper's configuration, at helperPath.
+func qwenWired(files map[string][]byte, req sandbox.RunRequest, paths Paths, settingsPath, helperPath string) error {
+	helper, err := json.Marshal(qwenHelperConfigOf(req, paths))
+	if err != nil {
+		return fmt.Errorf("executor: rendering the Qwen Code helper's configuration: %w", err)
+	}
+	settings, err := json.MarshalIndent(qwenSettings(req, paths), "", "  ")
+	if err != nil {
+		return fmt.Errorf("executor: rendering Qwen Code's settings: %w", err)
+	}
+	files[helperPath], files[settingsPath] = helper, settings
+	return nil
 }
 
 // qwenSkillName is the name a run's skill is written and listed under:

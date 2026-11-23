@@ -1762,7 +1762,7 @@ func TestATakeOfAJobStillWorkingNeverMovesItsArchiveOverTheJobsCapture(t *testin
 					strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`, "d="+shellword.Quote(dir), 1))
 				const session = "ses_0123456789abcdef0123456789"
 				if err := b.WriteFile(t.Context(), paths(b).SessionRecord(),
-					[]byte("id "+session+"\nrelease 2.0.32\n")); err != nil {
+					[]byte("id "+session+"\nrelease 2.3.2\n")); err != nil {
 					t.Fatal(err)
 				}
 				if err := os.MkdirAll(filepath.Join(dir, "sessions"), 0o700); err != nil {

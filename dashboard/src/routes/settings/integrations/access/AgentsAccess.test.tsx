@@ -37,6 +37,7 @@ import {
   useGatheredAccessDraft,
 } from "./assistantDraft.ts";
 import {
+  appStoreConnectAnswer,
   awsAnswer,
   cloudflareAnswer,
   cloudflareGrantsAnswer,
@@ -1560,6 +1561,45 @@ test("a scope entry is picked by its name, with its identifier beneath, and the 
   fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
   const review = await screen.findByRole("dialog");
   expect(within(review).getByText("Engineering and Operations")).toBeTruthy();
+});
+
+// AN APP IS CHOSEN BY ITS NAME: the engine reads the apps the team's keys
+// reach, and the chooser lists each by name with its Apple ID and bundle ID
+// beneath, found by any of the three, ticked with no ID typed; an Apple ID it
+// does not list may still be typed, and a search by name is never offered as
+// one. Mutation: drop scope_details from the choice, and the bundle ID neither
+// shows nor finds; drop the lane's entry shape, and the search is offered.
+test("an App Store Connect app is chosen by its name, found by its bundle ID", async () => {
+  draw(appStoreConnectAnswer());
+  expect(cellWith("Field Notes")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Edit Growth's App Store Connect apps" }));
+  const dialog = await screen.findByRole("dialog", { name: "Growth's App Store Connect apps" });
+  expect(
+    within(dialog).getByRole("checkbox", {
+      name: "Field Notes",
+      description: "6763222842 · com.example.notes",
+    }),
+  ).toBeTruthy();
+  const search = within(dialog).getByRole("searchbox", { name: "Find or add an app" });
+  fireEvent.change(search, { target: { value: "example.maps" } });
+  expect(within(dialog).queryByRole("checkbox", { name: "Field Notes" })).toBeNull();
+  // A SEARCH IS NOT AN APP: only an Apple ID's digits are offered to add.
+  expect(within(dialog).queryByRole("button", { name: /^Add “/ })).toBeNull();
+  fireEvent.click(
+    within(dialog).getByRole("checkbox", {
+      name: "Trail Maps",
+      description: "1234567890 · com.example.maps",
+    }),
+  );
+  fireEvent.change(search, { target: { value: "987654321" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Add “987654321”" }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Done" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  await waitFor(() => expect(calls.plan).toHaveLength(1));
+  expect(calls.plan[0]).toMatchObject({
+    seats: { growth: { app_store_connect: { scope: ["6763222842", "1234567890", "987654321"] } } },
+  });
 });
 
 // AN OPEN CONNECTION LISTS NOT ALL IT REACHES (a GitHub installation on every

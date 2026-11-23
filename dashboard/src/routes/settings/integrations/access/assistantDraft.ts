@@ -422,8 +422,16 @@ function scopeField(seat: AccessSeat, lane: Lane, path: string): Field | null {
       const choices = scopeChoices(lane, want.scope);
       const scope: string[] = [];
       for (const typed of typedItems(value)) {
+        // FOUND AS THE DIALOG'S SEARCH FINDS IT: by name, by ID, or by the
+        // vendor's second identifier (an app's bundle ID).
         const found = pick(
-          choices.map((c) => ({ names: [c.label, c.value], value: c.value })),
+          choices.map((c) => {
+            const detail = lane.scope_details?.[c.value];
+            return {
+              names: detail ? [c.label, c.value, detail] : [c.label, c.value],
+              value: c.value,
+            };
+          }),
           typed,
         );
         if (found === "several") {
@@ -431,7 +439,15 @@ function scopeField(seat: AccessSeat, lane: Lane, path: string): Field | null {
             said`More than one ${words.singular} is called “${typed}”: choose it in ${seat.name}'s ${noun} on the tab.`,
           );
         }
-        const id = typeof found === "object" ? found.value : lane.scope_open ? typed : null;
+        // A TYPED ENTRY HAS THE LANE'S SHAPE where it has one, as the dialog
+        // takes it: a name it lists no app by is never stored as an Apple ID.
+        const takes = lane.scope_open && (words.typed?.test(typed.trim()) ?? true);
+        const id = typeof found === "object" ? found.value : takes ? typed.trim() : null;
+        if (id === null && lane.scope_open) {
+          return refuse(
+            said`${lane.name} lists no ${words.singular} called “${typed}”: name one it lists, or give its ID.`,
+          );
+        }
         if (id === null) {
           return refuse(
             said`${lane.name}'s connection reaches no ${words.singular} called “${typed}”. It reaches: ${listing(choices.map((c) => c.label))}.`,

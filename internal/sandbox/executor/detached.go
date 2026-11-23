@@ -142,8 +142,9 @@ type Harness interface {
 	Pins(ctx context.Context, req sandbox.RunRequest, paths Paths) []Pinned
 
 	// Events is a new decoder for one of this harness's event streams, read
-	// whole or followed across many reads ([Decoder]). Asked only when
-	// [Output.Events] is set.
+	// whole or followed across many reads ([Decoder]). Asked for the stream
+	// only when [Output.Events] is set, and for a result file read apart from
+	// it ([Runner.endsRun]).
 	Events() Decoder
 
 	// Parse maps this agent's RESULT, read whole, onto a result: the file
@@ -1013,6 +1014,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 
 	var (
 		result  sandbox.Result
+		ended   bool
 		spent   *runSpend
 		request contextRead
 		window  int64
@@ -1027,7 +1029,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 			refused = append(refused, refusal)
 		}
 		result, spent, request = streamed.result, streamed.spent, streamed.request
-		window, limits = streamed.window, streamed.limits
+		window, limits, ended = streamed.window, streamed.limits, streamed.ended
 	}
 	// THE STREAM BEFORE THE RESULT FILE, keeping not its last line: what its
 	// reading holds after is the record's halves, so the file is parsed beside
@@ -1071,6 +1073,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 				parsed.TranscriptElidedBytes = result.TranscriptElidedBytes
 			}
 			result = parsed
+			ended = ended || r.endsRun(raw)
 		}
 	}
 	// What the session's newest request carried, off the stream, set once the
@@ -1208,7 +1211,8 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	// The findings file is the result carrier of record: the agent is asked to
 	// write its report there, and it survives a process group that died before
 	// the final message and a tool-only run that parses to no text. So it wins
-	// for the text, and its presence means success unless the process crashed.
+	// for the text, and its presence means success unless the process crashed
+	// or its harness never said how its run ended.
 	findingsText, refusal, err := pieces.findings.text()
 	if err != nil {
 		return sandbox.Result{}, err
@@ -1217,6 +1221,17 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		refused = append(refused, refusal)
 	}
 	findings := strings.TrimSpace(findingsText)
+	// A HARNESS THAT NEVER SAID HOW ITS RUN ENDED did not finish it, whatever
+	// it exited with or left behind ([Decoder.Ended]): a launcher an earlier
+	// run replaced exits 0 having started nothing. It fails in its decoder's
+	// words where they say why, else in [harnessNoResult], and a report it left
+	// makes no success.
+	if !ended {
+		result.Success = false
+		if strings.TrimSpace(result.Error) == "" {
+			result.Error = harnessNoResult
+		}
+	}
 	// What the failure says after any piece that could not be read: the
 	// harness's own account where the run reported something, and where it
 	// produced nothing at all, the exit status, the harness's error and the
@@ -1230,7 +1245,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		// request the other only mentions.
 		result.DeliveredRefs = deliveredRefs(findings, result.Text)
 		result.Text = findings
-		if !crashed {
+		if !crashed && ended {
 			result.Success = true
 			result.Error = ""
 		}
@@ -1280,6 +1295,22 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	// it again ([sandbox.MaxRunTextBytes]).
 	result.Transcript = redact.Secrets(result.Transcript)
 	return result, nil
+}
+
+// harnessNoResult is a run's failure where its harness exited without saying
+// how its run ended and its decoder gave no reason of its own.
+const harnessNoResult = "the harness exited without reporting how its run ended, so it produced no result"
+
+// endsRun reports whether a result file read apart from the stream says the
+// run ended ([Decoder.Ended]), fed whole to a fresh decoder: the file is the
+// stream's last line, copied, and read to [sandbox.MaxFileBytes], where a
+// stream line past [Runner.lineBound] is skipped unread.
+func (r *Runner) endsRun(raw []byte) bool {
+	dec := r.harness.Events()
+	for line := range bytes.Lines(raw) {
+		dec.Line(bytes.TrimRight(line, "\r\n"))
+	}
+	return dec.Ended()
 }
 
 // lastRequest is the measure read, which the collection carries back
@@ -1507,7 +1538,7 @@ func (r *Runner) decodeLines(stream io.Reader, keepLast bool) (decodedStream, st
 	if err := eachLine(stream, dec, r.lineBound); err != nil {
 		return decodedStream{}, "", fmt.Errorf("executor: reading the event stream: %w", err)
 	}
-	out := decodedStream{result: events.Result(), last: kept.last}
+	out := decodedStream{result: events.Result(), last: kept.last, ended: events.Ended()}
 	if spender, ok := events.(runSpender); ok {
 		if spent, stated := spender.runSpend(); stated {
 			out.spent = &spent
@@ -1538,6 +1569,8 @@ type decodedStream struct {
 	window int64
 	// limits is the run's last limit report line ([limitReporter]).
 	limits string
+	// ended is whether the stream said how the run ended ([Decoder.Ended]).
+	ended bool
 }
 
 // streamLast is an event stream's last line, as `tail -n 1` would copy it

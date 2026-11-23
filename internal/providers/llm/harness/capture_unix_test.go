@@ -174,7 +174,8 @@ const bigAnswer = 100 << 10
 
 // THE STAND-IN CUTS WHAT A PIPE CARRIES, and only a pipe: given FAKE_PIPE_CUT,
 // the fake harness writes the first pipeCut bytes of an answer into a pipe and
-// exits 0, as OpenCode 2.0.32 and 2.1.4 were measured doing. Without this the
+// exits 0, as a pipe-cutting OpenCode would (2.3.2 cut none to 1 MiB,
+// measured). Without this the
 // case below could pass on a stand-in that never cut anything.
 //
 // Mutation: the stand-in ignores FAKE_PIPE_CUT, and the pipe carries it all.
