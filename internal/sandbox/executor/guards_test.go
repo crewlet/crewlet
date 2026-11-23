@@ -1,6 +1,7 @@
 package executor_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -180,6 +181,59 @@ func TestGeminiCLIsBridgeAndHookCannotBeSwitchedOffUnseen(t *testing.T) {
 			settings := systemTier(t, box, "GEMINI_CLI_SYSTEM_SETTINGS_PATH", p.GeminiSettings())
 			if hooks, _ := settings["hooksConfig"].(map[string]any); hooks["enabled"] != true {
 				t.Errorf("the run's settings do not switch hooks on: %v", settings["hooksConfig"])
+			}
+		})
+	}
+}
+
+// A HOME OR A REPOSITORY CANNOT TAKE OPENCODE'S BRIDGE TOOLS OR AGENT AWAY.
+// OpenCode 2.3.2 reads an agent's rules after every document's own, and a
+// home's or a repository's agent rules (`agents.build.permissions`,
+// `.opencode/agents/build.md`) before the run's document's, the last match
+// deciding; a server's or the agent's `disabled` is the last document's
+// (measured with `opencode api agent.list` and `mcp.list`). So the run's agent
+// states `disabled: false` and ends its rules allowing every tool of the run's
+// own servers, whatever the turn cap, and allows no seat server's beside them.
+// Mutations, each red: state the agent only with a turn cap; drop the allow;
+// allow every server's tools.
+func TestOpenCodesBridgeToolsAndAgentCannotBeSwitchedOff(t *testing.T) {
+	t.Parallel()
+	for name, web := range map[string]bool{"a run that keeps the web": false, "a web-denied run": true} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			b := sandbox.NewFakeSandbox("box-1")
+			servers := map[string]sandbox.MCPServer{
+				"crewlet": {Transport: sandbox.TransportHTTP, URL: "http://127.0.0.1:7/mcp/t", AlwaysLoaded: true},
+				"linear":  {Transport: sandbox.TransportHTTP, URL: "https://example.com/mcp"}}
+			path, err := executor.OpenCode{}.WriteConfig(t.Context(), b,
+				sandbox.RunRequest{MCPServers: servers, WebDenied: web}, executor.Session{}, executor.PathsFor(b))
+			if err != nil {
+				t.Fatalf("WriteConfig: %v", err)
+			}
+			raw, _ := b.ReadFile(t.Context(), path)
+			var cfg struct {
+				DefaultAgent string `json:"default_agent"`
+				Agents       map[string]struct {
+					Disabled *bool                                       `json:"disabled"`
+					Rules    []struct{ Action, Resource, Effect string } `json:"permissions"`
+				} `json:"agents"`
+			}
+			if err := json.Unmarshal(raw, &cfg); err != nil {
+				t.Fatalf("unmarshal: %v\n%s", err, raw)
+			}
+			agent, ok := cfg.Agents[cfg.DefaultAgent]
+			if !ok || agent.Disabled == nil || *agent.Disabled {
+				t.Errorf("the run's agent %q does not state disabled: false:\n%s", cfg.DefaultAgent, raw)
+			}
+			n := len(agent.Rules)
+			if n == 0 || agent.Rules[n-1].Action != "crewlet_*" || agent.Rules[n-1].Resource != "*" ||
+				agent.Rules[n-1].Effect != "allow" {
+				t.Errorf("the run's agent's rules do not end allowing the bridge's tools:\n%s", raw)
+			}
+			for _, r := range agent.Rules {
+				if r.Effect == "allow" && r.Action != "crewlet_*" {
+					t.Errorf("the run's agent allows %q beside its own servers' tools:\n%s", r.Action, raw)
+				}
 			}
 		})
 	}

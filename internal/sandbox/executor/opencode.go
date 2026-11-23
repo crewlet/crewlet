@@ -1084,6 +1084,18 @@ func openCodeShadowCheck(servers map[string]sandbox.MCPServer) string {
 	return b.String()
 }
 
+// openCodeToolPrefix is how OpenCode names each tool of server name, less its
+// `_<tool>`: every character outside `A-Za-z0-9_-` written `_`
+// ([openCodeShadowCheck]).
+func openCodeToolPrefix(name string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '_' || r == '-' || r < 128 && (r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9') {
+			return r
+		}
+		return '_'
+	}, name)
+}
+
 // jsonStringify spells s as JavaScript's JSON.stringify does, as OpenCode
 // prints a server's name, not as encoding/json does: Go escapes `&`, `<`, `>`,
 // U+2028 and U+2029, which JSON.stringify leaves literal, so such a
@@ -1183,31 +1195,43 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 		// none goes out (measured); a compaction runs as it always does.
 		"compaction": map[string]any{"background": false},
 	}
-	agent := map[string]any{}
+	// THE RUN'S AGENT STATED ON, for the reason its servers are: a home's or a
+	// repository's `disabled: true` for it otherwise took it away (2.3.2).
+	agent := map[string]any{"disabled": false}
 	// THE RUN'S TURN CAP, as the agent's `steps` (Claude Code's --max-turns,
 	// [ClaudeCode.Command]): the one bound on an executor's work, already
 	// reconciled into Limits. Absent at zero, which is uncapped: OpenCode
 	// refuses a step count below one.
 	if req.Limits.MaxTurns > 0 {
 		agent["steps"] = req.Limits.MaxTurns
-		agent["disabled"] = false
 	}
+	var rules []map[string]string
 	// THE ENTRY'S WEB DENIED IN THE PERMISSIONS TOO, the run's and its agent's,
 	// beside the web tools' plugins taken out below: Code Mode's `execute`
 	// fetches under the webfetch permission, and on 2.3.2 a repository's agent
 	// rule allowing it outranked the run's own rules until the agent's denied
 	// it as well.
 	if req.WebDenied {
-		denied := []map[string]string{
+		rules = []map[string]string{
 			{"action": "webfetch", "resource": "*", "effect": "deny"},
 			{"action": "websearch", "resource": "*", "effect": "deny"},
 		}
-		cfg["permissions"] = append(cfg["permissions"].([]map[string]string), denied...)
-		agent["permissions"] = denied
+		cfg["permissions"] = append(cfg["permissions"].([]map[string]string), rules...)
 	}
-	if len(agent) > 0 {
-		cfg["agents"] = map[string]any{openCodeAgent: agent}
+	// THE TOOLS OF THE RUN'S OWN SERVERS ALLOWED LAST in its agent's rules: 2.3.2
+	// reads an agent's rules after every document's own, the run's included,
+	// and a home's or a repository's (`agents.build.permissions`,
+	// `.opencode/agents/build.md`) before the run's document's, so their deny of
+	// `crewlet_*` otherwise took the bridge's tools away (measured with
+	// `opencode api agent.list`). A seat's other servers stay a home's to deny.
+	for _, name := range crewletServers(req) {
+		rules = append(rules, map[string]string{"action": openCodeToolPrefix(name) + "_*", "resource": "*",
+			"effect": "allow"})
 	}
+	if len(rules) > 0 {
+		agent["permissions"] = rules
+	}
+	cfg["agents"] = map[string]any{openCodeAgent: agent}
 	values := &openCodeValueFiles{dir: paths.OpenCodeValues()}
 	wired := openCodeWiring(sandbox.Wiring{MCPServers: req.MCPServers, Steer: req.Steer,
 		SkillLoads: req.SkillLoads}, req.Steer.Set(), len(req.Skills) > 0, values)
