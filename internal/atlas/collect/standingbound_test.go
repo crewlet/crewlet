@@ -122,25 +122,38 @@ func TestTheWidestAtlasStandingFitsItsBound(t *testing.T) {
 // vendor wrote that JSON escapes six bytes a byte is what grows it.
 //
 // Mutation: halve the error before the details, and the first case cuts the
-// error it did not need to; encode with no cut, and the store refuses both.
+// error it did not need to; halve the parts before the error, and the second
+// cuts the parts; encode with no cut, and the store refuses every case.
 func TestAStandingPastItsBoundIsCutDetailFirstKeepingEveryCount(t *testing.T) {
 	t.Parallel()
 	plain := func(n int) string { return strings.Repeat("p", n) }
 	escaped := func(n int) string { return strings.Repeat("<", n) }
+	escapedDetails := func() collect.Status {
+		st := widestStanding(plain)
+		for i := range st.Unread {
+			st.Unread[i].Detail = escaped(collect.MaxFindingLength)
+		}
+		return st
+	}
 	for _, c := range []struct {
 		name string
 		st   collect.Status
-		// whole is whether the error and the parts survive whole.
-		whole bool
+		// errorWhole and partsWhole are whether the error and the parts
+		// survive whole.
+		errorWhole, partsWhole bool
 	}{
-		{"escaped details alone", func() collect.Status {
-			st := widestStanding(plain)
+		{"escaped details alone", escapedDetails(), true, true},
+		// PAST THE BOUND ONCE THE DETAILS ARE CUT, by 200 escaped bytes in
+		// each part's scope, and inside it once the error is halved.
+		{"escaped details, error and some of each scope", func() collect.Status {
+			st := escapedDetails()
+			st.LastError = escaped(collect.MaxErrorLength)
 			for i := range st.Unread {
-				st.Unread[i].Detail = escaped(collect.MaxFindingLength)
+				st.Unread[i].Scope = escaped(200) + plain(collect.MaxFindingLength-200)
 			}
 			return st
-		}(), true},
-		{"every text escaped", widestStanding(escaped), false},
+		}(), false, true},
+		{"every text escaped", widestStanding(escaped), false, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -169,9 +182,11 @@ func TestAStandingPastItsBoundIsCutDetailFirstKeepingEveryCount(t *testing.T) {
 			if d := got.Unread[0].Detail; d == c.st.Unread[0].Detail || !strings.HasSuffix(d, "…") {
 				t.Errorf("a part's detail is %d bytes, want it cut and marked", len(d))
 			}
-			kept := got.LastError == c.st.LastError && got.Unread[0].Part == c.st.Unread[0].Part
-			if kept != c.whole {
-				t.Errorf("the error and the parts are kept whole: %t, want %t", kept, c.whole)
+			if kept := got.LastError == c.st.LastError; kept != c.errorWhole {
+				t.Errorf("the error is kept whole: %t, want %t", kept, c.errorWhole)
+			}
+			if kept := got.Unread[0].Part == c.st.Unread[0].Part && got.Unread[0].Scope == c.st.Unread[0].Scope; kept != c.partsWhole {
+				t.Errorf("the parts are kept whole: %t, want %t", kept, c.partsWhole)
 			}
 		})
 	}
