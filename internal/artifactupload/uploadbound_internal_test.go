@@ -280,7 +280,7 @@ func TestAnUploadRecordPastItsBoundIsRefusedByItsWriter(t *testing.T) {
 // THE WIDEST RESERVATION LEDGER FITS ITS BOUND: every hold the budgets admit
 // (MaxOutstandingUploads a principal, CompanyPendingFactor times that for the
 // company), each at its widest principal, an int64's count of bytes, two
-// instants and a direct put.
+// instants, a direct put and an attempt at a uint32's widest.
 //
 // Mutation: raise MaxOutstandingUploads to 80, or lower
 // coord.MaxUploadLedgerBytes below the widest, and this is red.
