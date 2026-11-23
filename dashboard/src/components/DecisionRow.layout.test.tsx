@@ -10,6 +10,7 @@ import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { InertWebSocket, LayoutClient, actsApplied } from "~/test/layout.tsx";
 import type { DecisionSubject } from "~/lib/decisions.ts";
+import { eventually } from "~/test/settle.ts";
 import { DecisionList } from "./DecisionRow.tsx";
 
 const VIEWER = {
@@ -192,14 +193,14 @@ test("answering in a fitted list keeps the ask being answered in view, alone", a
   );
   await document.fonts.ready;
   for (let i = 0; i < 4; i++) await new Promise((r) => requestAnimationFrame(r));
-  const change = await vi.waitFor(() => {
+  const change = await eventually(() => {
     const b = Array.from(host!.querySelectorAll("button")).find((x) => x.textContent === "Change");
     if (!b || b.hasAttribute("disabled") || b.getAttribute("aria-disabled") === "true")
       throw new Error("Change is not ready");
     return b;
   });
   change.click();
-  await vi.waitFor(() => expect(host!.querySelector(".decision-answer.is-open")).not.toBeNull());
+  await eventually(() => expect(host!.querySelector(".decision-answer.is-open")).not.toBeNull());
   const groups = host.querySelectorAll(".decision-group");
   expect(groups).toHaveLength(1);
   expect(getComputedStyle(groups[0]!).visibility).toBe("visible");
