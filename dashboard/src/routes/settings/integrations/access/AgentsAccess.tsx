@@ -32,6 +32,7 @@ import {
   ButtonLink,
   Callout,
   DescriptionList,
+  EmptyValue,
   IconButton,
   Inline,
   InlineCode,
@@ -116,6 +117,7 @@ import {
   sameDesired,
   scopeApplies,
   scopeLabel,
+  scopeQuiet,
   scopeUnavailable,
   scopeWords,
   statusOf,
@@ -158,6 +160,8 @@ export interface AgentsAccessProps {
   onReplaceKey?: (() => void) | undefined;
   /** The gesture a person takes at the vendor for one seat (GitHub's create and install), where there is one. */
   stepFor?: ((handle: string) => ReactNode) | undefined;
+  /** Why the vendor's list of scope entries could not be read (names may be missing), and the fix; said once. */
+  scopeNote?: string | undefined;
 }
 
 /** One row of the table: one agent on one product. */
@@ -171,6 +175,14 @@ interface AccessRow {
   /** The agent's first product, where its name is drawn. */
   first: boolean;
   status: Status;
+}
+
+/** What an off agent's Access, scope and grants cells read, as one dash. */
+const OFF_WORDS = "None while off";
+
+/** A row whose agent is off and still in the company: its access cells hold nothing to show. */
+function offRow(seat: AccessSeat, want: AccessDesired): boolean {
+  return !want.enabled && !seat.departed;
 }
 
 /** The rail a row's status takes: the kit's three, and none for a row at rest. */
@@ -223,6 +235,7 @@ export const AgentsAccess = memo(function AgentsAccess({
   only,
   onReplaceKey,
   stepFor,
+  scopeNote,
 }: AgentsAccessProps) {
   const [draft, setDraft] = useDraftState<AccessDraft>({});
   // WHICH ROWS ARE OPEN, by row key: the grid's expansion is controlled.
@@ -470,17 +483,13 @@ export const AgentsAccess = memo(function AgentsAccess({
       floor: "9rem",
       drop: 2,
       cell: ({ seat, lane, want }) => {
-        const off = !want.enabled;
+        // AN OFF AGENT HOLDS NO ACCESS, so its row says none rather than the
+        // level it would get once on, which read as access it has now.
+        if (offRow(seat, want)) return <EmptyValue label={OFF_WORDS} />;
         return (
           <>
             {managedOutside(lane) ? (
               <span className="agent-access-quiet">{MANAGED_OUTSIDE}</span>
-            ) : off && !seat.departed && !lane.permissions ? (
-              // NOTHING TO CHOOSE WHILE OFF, so no picker: a disabled one with
-              // no value read as an empty control waiting for a choice.
-              <span className="agent-access-quiet">
-                {want.level ? levelName(lane, want.level) : "None while off"}
-              </span>
             ) : readOnly ? (
               <span className="agent-access-quiet">
                 {lane.permissions
@@ -496,7 +505,7 @@ export const AgentsAccess = memo(function AgentsAccess({
                 {...refusedProps(seat, lane, "level")}
                 value={levelIds(want.level)}
                 options={levelOptions(lane)}
-                disabled={off || locked || seat.departed}
+                disabled={locked || seat.departed}
                 placeholder={levelName(lane, "")}
                 onChange={(v) => {
                   const level = joinLevels(lane, (Array.isArray(v) ? v : [v]).map(String));
@@ -515,7 +524,7 @@ export const AgentsAccess = memo(function AgentsAccess({
                 value={want.level ?? ""}
                 options={levelOptions(lane)}
                 placeholder="Choose one"
-                disabled={off || locked || seat.departed}
+                disabled={locked || seat.departed}
                 onChange={(v) => change(seat, lane, (d) => withLevel(d, seat, lane, String(v)))}
               />
             ) : lane.permissions ? (
@@ -529,7 +538,7 @@ export const AgentsAccess = memo(function AgentsAccess({
                   icon={<PencilGlyph size="sm" />}
                   label={`Edit ${seat.name}'s ${lane.name} permissions`}
                   title={permissionWords(lane, want.permissions)}
-                  disabled={off || locked || seat.departed}
+                  disabled={locked || seat.departed}
                   aria-describedby={
                     refusalAt(seat, lane, "permissions") ? refusalId(seat, lane) : undefined
                   }
@@ -553,13 +562,19 @@ export const AgentsAccess = memo(function AgentsAccess({
       drop: 1,
       cell: ({ seat, lane, want }) => {
         const words = laneWords(lane.key).scope;
-        if (!scopeApplies(lane, want) || !words) return null;
+        if (!words || !lane.scoped || managedOutside(lane)) return null;
+        if (offRow(seat, want)) return <EmptyValue label={OFF_WORDS} />;
+        if (!scopeApplies(lane, want)) return null;
         const label = `${seat.name}'s ${lane.name} ${words.noun.toLowerCase()}`;
         const held = want.scope ?? [];
         // THE CHOICE, READ-ONLY, ON ONE LINE: the first entry as a chip and
         // the rest as a count that names them, or the lane's words for none.
         const names = held.map((id) => scopeLabel(lane, id));
         const rest = names.slice(1);
+        // EACH NAME WITH ITS IDS, the chip's on hover and the rest's in the count's.
+        const titled = held.map((id, i) =>
+          [names[i], scopeQuiet(lane, id)].filter(Boolean).join(" · "),
+        );
         const shown =
           names.length === 0 ? (
             <span className="agent-access-quiet">{words.empty}</span>
@@ -569,12 +584,17 @@ export const AgentsAccess = memo(function AgentsAccess({
                   flex item's is its content, so a long name ends in an
                   ellipsis and the count and the control keep their line. */}
               <Inline>
-                <Tag appearance="outline" size="xs" title={names[0]}>
+                <Tag appearance="outline" size="xs" title={titled[0]}>
                   {names[0]}
                 </Tag>
               </Inline>
               {rest.length > 0 && (
-                <Text as="span" variant="caption" tone="secondary" title={rest.join(", ")}>
+                <Text
+                  as="span"
+                  variant="caption"
+                  tone="secondary"
+                  title={titled.slice(1).join(", ")}
+                >
                   <span aria-hidden="true">+{rest.length}</span>
                   <VisuallyHidden>
                     {`${rest.length.toLocaleString()} more ${rest.length === 1 ? words.singular : words.noun.toLowerCase()}`}
@@ -609,7 +629,7 @@ export const AgentsAccess = memo(function AgentsAccess({
               variant="ghost"
               icon={held.length > 0 ? <PencilGlyph size="sm" /> : <PlusGlyph size="sm" />}
               label={`${held.length > 0 ? "Edit" : "Choose"} ${label}`}
-              disabled={!want.enabled || locked || seat.departed}
+              disabled={locked || seat.departed}
               aria-describedby={refusalAt(seat, lane, "scope") ? refusalId(seat, lane) : undefined}
               onClick={() => setScoping({ seat, lane })}
             />
@@ -624,12 +644,14 @@ export const AgentsAccess = memo(function AgentsAccess({
       floor: "12rem",
       drop: 2,
       cell: ({ seat, lane, want }) =>
-        lane.grants === undefined ? null : (
+        lane.grants === undefined ? null : offRow(seat, want) ? (
+          <EmptyValue label={OFF_WORDS} />
+        ) : (
           <GrantsCell
             seat={seat}
             lane={lane}
             want={want}
-            disabled={!want.enabled || locked || seat.departed === true}
+            disabled={locked || seat.departed === true}
             onRemove={(i) => change(seat, lane, (d) => withoutGrant(d, seat, lane, i))}
             onAdd={() => setGranting({ seat, lane })}
           />
@@ -717,6 +739,9 @@ export const AgentsAccess = memo(function AgentsAccess({
           {note}
         </p>
       ))}
+      {scoped && scopeNote && (
+        <p className="t-caption agent-access-quiet">{asSentence(scopeNote)}</p>
+      )}
 
       {/* ONE KEY PER INTEGRATION: an agent's Access tab draws a grid for each
           integration it reaches, and one shared `access` key re-sorted them all. */}
@@ -896,6 +921,7 @@ export const AgentsAccess = memo(function AgentsAccess({
           lane={scoping.lane}
           want={desiredOf(scoping.seat, scoping.lane.key)}
           refused={refusalAt(scoping.seat, scoping.lane, "scope")?.words}
+          note={scopeNote && asSentence(scopeNote)}
           onChange={(scope) =>
             change(scoping.seat, scoping.lane, (d) =>
               withScope(d, scoping.seat, scoping.lane, scope),

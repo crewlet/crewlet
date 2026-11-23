@@ -1062,10 +1062,13 @@ test("the sync fact says when the next sync is, and never puts it in the past", 
   const { syncWords } = await import("./catalogue.tsx");
   const now = Date.parse("2026-10-29T12:00:00Z");
   const at = (minutes: number) => new Date(now + minutes * 60_000).toISOString();
-  expect(syncWords(at(-30), at(10), now)).toBe("30m ago · next in 10m");
-  expect(syncWords(at(-30), at(0), now)).toBe("30m ago · next due now");
-  expect(syncWords(at(-30), at(-20), now)).toBe("30m ago · next overdue by 20m");
-  expect(syncWords(null, null, now)).toBe("Not yet");
+  expect(syncWords(at(-30), at(10), now)).toEqual({ last: "30m ago", next: "next in 10m" });
+  expect(syncWords(at(-30), at(0), now)).toEqual({ last: "30m ago", next: "next due now" });
+  expect(syncWords(at(-30), at(-20), now)).toEqual({
+    last: "30m ago",
+    next: "next overdue by 20m",
+  });
+  expect(syncWords(null, null, now)).toEqual({ last: "Not yet", next: "" });
 });
 
 // THE HEADER'S CLOCK IS A CHECK: Check now moves it without applying anything,
@@ -1083,4 +1086,44 @@ test("the integration's clock reads Last check", async () => {
   const labels = integrationFacts(entry, new Map(), { known: true }).map((f) => f.label);
   expect(labels).toContain("Last check");
   expect(labels).not.toContain("Sync");
+});
+
+// WHEN THE NEXT CHECK IS DUE IS THE FACT'S NOTE, in the quieter register the
+// window under Delivered takes, never a second phrase in the value itself.
+test("the next check is said under the last one, as the fact's note", async () => {
+  const { integrationFacts } = await import("./catalogue.tsx");
+  const entry: Entry = {
+    key: "ssh",
+    name: "SSH",
+    description: "Your own servers",
+    vendor: "ssh",
+    surfaces: [{ key: "ssh", name: "SSH" }],
+    doc: "ssh",
+  };
+  const now = Date.now();
+  const row = {
+    key: "ssh",
+    configured: true,
+    reconcile: {
+      // HALF A MINUTE OF ROOM either way: the shared clock reads a moment behind.
+      last_attempt_at: new Date(now - 10.5 * 60_000).toISOString(),
+      next_attempt_at: new Date(now).toISOString(),
+    },
+  } as unknown as IntegrationRow;
+  const fact = integrationFacts(entry, new Map([["ssh", row]]), { known: true }).find(
+    (f) => f.label === "Last check",
+  )!;
+  render(
+    <>
+      <span data-testid="value">{fact.value}</span>
+      <span data-testid="note">{fact.note}</span>
+    </>,
+  );
+  expect(screen.getByTestId("value").textContent).toBe("10m ago");
+  expect(screen.getByTestId("note").textContent).toBe("next due now");
+  const without = { ...row, reconcile: { ...row.reconcile, next_attempt_at: null } };
+  const quiet = integrationFacts(entry, new Map([["ssh", without as IntegrationRow]]), {
+    known: true,
+  }).find((f) => f.label === "Last check")!;
+  expect(quiet.note).toBeUndefined();
 });
