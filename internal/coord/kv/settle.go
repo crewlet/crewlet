@@ -161,7 +161,7 @@ var (
 		{keys: bodyPrefix + "*", class: bodyClass},
 	}, rest: undeclared}
 	// undeclaredHolding is every bucket's but the runs, the config, the
-	// positions register and the uploads.
+	// positions register, the uploads and the chat reads.
 	undeclaredHolding = holding{rest: undeclared}
 
 	// The positions register's classes, each at the bound its writer holds
@@ -203,6 +203,17 @@ var (
 		{keys: coord.UploadLedgerKey, class: uploadLedgerValue},
 		{keys: coord.DocumentFilter(coord.UploadRecordClass), class: uploadRecordValue},
 		{keys: coord.DocumentFilter(coord.SaveLedgerClass), class: saveLedgerValue},
+	}, rest: undeclared}
+
+	// chatReadValue is a seat's chat read record (ADR-0175, "The chat reads
+	// bucket declares its class"), whose every read decides a flush a person
+	// waits on.
+	chatReadValue = class{bound: coord.MaxChatReadBytes, reply: replyDeciding}
+
+	// chatReadsHolding is the chat reads bucket's: the record, and the rest
+	// undeclared until #1814 makes the default small.
+	chatReadsHolding = holding{classes: []keyClass{
+		{keys: coord.DocumentFilter(coord.ChatReadClass), class: chatReadValue},
 	}, rest: undeclared}
 )
 

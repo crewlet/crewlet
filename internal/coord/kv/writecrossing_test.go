@@ -410,9 +410,9 @@ func TestARunsValueIsGivenItsCrossingOnlyAcrossALink(t *testing.T) {
 // runs, values or headers, is quiet and beats 185 s across a link, 5 s in
 // process. A class is one key at most, at the term only if it crosses in it.
 //
-// Mutation: let leaderFor or most ignore a class, undeclare a positions or
-// uploads class, read bodies at the term, declare a class past one key, or
-// give a headers pass passIdle.
+// Mutation: let leaderFor or most ignore a class, undeclare a positions,
+// uploads or chat reads class, read bodies at the term, declare a class past
+// one key, or give a headers pass passIdle.
 func TestEveryReadIsGivenTheCrossingOfItsClassBound(t *testing.T) {
 	t.Parallel()
 	// THE FIGURES STATED, not derived again: a full value with the most header,
@@ -546,6 +546,32 @@ func TestEveryReadIsGivenTheCrossingOfItsClassBound(t *testing.T) {
 					got, c.idle)
 			}
 		}
+		// THE CHAT READS BUCKET'S CLASS, whose every read decides a flush a
+		// person waits on; a pass or a watch over the bucket waits its raw
+		// crossing.
+		for _, c := range []struct {
+			key, keys  string // key "" for a filter no read names
+			term, idle time.Duration
+		}{
+			{coord.ChatReadKey("founder"), coord.DocumentFilter(coord.ChatReadClass),
+				deciding(coord.MaxChatReadBytes), raw(coord.MaxChatReadBytes)},
+			{"", jetstream.AllKeys, 0, raw(coord.MaxChatReadBytes)},
+		} {
+			if c.key != "" {
+				read, err := newLeaderReader(store.js, store.chatReads)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := read.leaderFor(c.key).Term(); got != c.term {
+					t.Errorf("the chat reads bucket's %q %s is read at a term of %v, want %v", c.key, reach,
+						got, c.term)
+				}
+			}
+			if got := store.chatReads.(settledBucket).quiet(c.keys); got != c.idle {
+				t.Errorf("a pass over the chat reads bucket's %q %s is quiet after %v, want %v", c.keys,
+					reach, got, c.idle)
+			}
+		}
 		standing, err := beginPass(t.Context(), store.js, store.runs, runRecordKeys, "the runs' standing", true)
 		if err != nil {
 			t.Fatalf("begin a pass of the runs' standing %s: %v", reach, err)
@@ -598,7 +624,8 @@ func openedHoldings(t *testing.T, nc *nats.Conn) []holding {
 	for _, kv := range []jetstream.KeyValue{leases.leases.kv, leases.duties.kv, leases.counter.kv} {
 		found = append(found, kv.(settledBucket).holding)
 	}
-	for _, want := range []holding{runsHolding, configHolding, positionsHolding, uploadsHolding, undeclaredHolding} {
+	for _, want := range []holding{runsHolding, configHolding, positionsHolding, uploadsHolding,
+		chatReadsHolding, undeclaredHolding} {
 		if !slices.ContainsFunc(found, want.same) {
 			t.Fatalf("premise: no opened bucket holds %+v, so the walk read the handles wrong", want)
 		}
@@ -640,11 +667,12 @@ func TestASmallClassCrossesTheFloorInsideTheReadTerm(t *testing.T) {
 // A SETTLED WRITE IS HELD TO ITS CLASS'S BOUND, refused before anything is
 // sent: the activation pointer past coord.MaxPointerBytes, read at the term by
 // every probe, while a body of the same size beside it is written; an atlas
-// wake past coord.SmallValueBytes beside a node's positions; and the
-// reservation ledger past coord.MaxUploadLedgerBytes beside an upload record.
+// wake past coord.SmallValueBytes beside a node's positions; the
+// reservation ledger past coord.MaxUploadLedgerBytes beside an upload record;
+// and a chat read record past coord.MaxChatReadBytes beside another key.
 //
 // Mutation: hold every value to coord.MaxValueBytes in carriedBack, and the
-// pointer, the wake and the ledger are written.
+// pointer, the wake, the ledger and the chat read record are written.
 func TestASettledWriteIsHeldToItsClassBound(t *testing.T) {
 	t.Parallel()
 	d := &deadlined{}
@@ -706,6 +734,27 @@ func TestASettledWriteIsHeldToItsClassBound(t *testing.T) {
 	}
 	if len(u.writes) != 1 {
 		t.Errorf("the record reached the client %d times, want once", len(u.writes))
+	}
+
+	// AND IN THE CHAT READS BUCKET: a seat's record past its bound, while a
+	// key of another shape, the rest, takes the same bytes.
+	c := &deadlined{}
+	reads := settled(termed{term: jsapi.RequestTerm}, named{KeyValue: c, bucket: "chat_reads"}, AcrossLink,
+		chatReadsHolding)
+	record := make([]byte, coord.MaxChatReadBytes+1)
+	_, err = reads.Put(t.Context(), coord.ChatReadKey("founder"), record)
+	if !errors.Is(err, coord.ErrValueTooLarge) || !strings.Contains(err.Error(), "147456") {
+		t.Errorf("a chat read record of %d bytes put = %v, want coord.ErrValueTooLarge naming its bound, 147456",
+			len(record), err)
+	}
+	if len(c.writes) != 0 {
+		t.Fatalf("the refused record reached the client %d times, want never", len(c.writes))
+	}
+	if _, err := reads.Put(t.Context(), "other", record); err != nil {
+		t.Errorf("a key of another shape of %d bytes put = %v, want it written", len(record), err)
+	}
+	if len(c.writes) != 1 {
+		t.Errorf("the other key reached the client %d times, want once", len(c.writes))
 	}
 }
 

@@ -616,7 +616,7 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 			cfg.FollowRetention, undeclaredHolding},
 		{&store.chatReads, chatReadsSuffix,
 			"Crewlet per-person chat read state; NO TTL — an expired cursor marks a room unread",
-			0, undeclaredHolding},
+			0, chatReadsHolding},
 		{&store.fires, firesSuffix,
 			"Crewlet scheduled-fire claims; the bucket TTL outlasts the catchup ceiling",
 			cfg.FireRetention, undeclaredHolding},
