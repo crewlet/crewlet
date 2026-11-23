@@ -533,7 +533,7 @@ func kimiEventSocket(t *testing.T, probe *kimiProbe) string {
 // servers, or cannot load them, its error naming the file; a run whose
 // servers are the home file's goes on (measured on 2.7.2).
 //
-// Mutation: drop the guard, or compare the origin to nothing — a case fails.
+// Mutation: drop the guard, or compare the origin to nothing: a case fails.
 func TestTheKimiGuardRefusesARunARepositoryDisplacesTheServersOf(t *testing.T) {
 	for _, c := range []struct {
 		name     string
@@ -582,7 +582,7 @@ func TestTheKimiGuardRefusesARunARepositoryDisplacesTheServersOf(t *testing.T) {
 // first), so the turn is cancelled and the run fails naming Kimi's message; a
 // denied call of another server's tool is the session's own affair.
 //
-// Mutation: drop the event's check, or match any server's tool — a case fails.
+// Mutation: drop the event's check, or match any server's tool: a case fails.
 func TestAKimiRunEndsWhereKimiDeniesItsOwnTool(t *testing.T) {
 	denied := func(tool string) string {
 		return `{"type":"item.ended","item":{"type":"tool_call","name":"` + tool +
