@@ -77,6 +77,26 @@ func TestAnswerNamesTheIntegrationsItCouldNotRead(t *testing.T) {
 	}
 }
 
+// FINDINGS NOT IN HAND ARE NOT NONE. A surface whose findings could not be
+// read beside its status, or whose record cut some away, leaves the
+// integrations unread, so the findings it held open are neither resolved nor
+// confirmed this round.
+//
+// Mutation: read only a nil list as unread, and an arm below reads none.
+func TestIntegrationFindingsNotInHandLeaveTheIntegrationsUnread(t *testing.T) {
+	t.Parallel()
+	unread := reconciled(integration.KindDatadog)
+	unread.FindingsUnread = true
+	cut := reconciled(integration.KindExpo, integration.Finding{Kind: integration.FindingGrantShort, Subject: "sre"})
+	cut.FindingsRecord.Omitted = 3
+	for name, state := range map[string]integration.State{"unread": unread, "cut": cut} {
+		a := advisor.Read(advisor.Inputs{Company: liveShape(t), Revision: "r1", Integrations: []integration.State{state}})
+		if !slices.Equal(a.Unread, []string{advisor.UnreadIntegrations}) {
+			t.Errorf("%s: unread = %v, want the integrations named", name, a.Unread)
+		}
+	}
+}
+
 func TestABlockingIntegrationLeadsTheAnswer(t *testing.T) {
 	t.Parallel()
 	a := advisor.Read(advisor.Inputs{Company: liveShape(t), Revision: "r1",
