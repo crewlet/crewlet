@@ -95,6 +95,11 @@ type MCPAcceptedTool struct {
 	// listing, by the node that listed it first rather than by a person.
 	First bool `json:"first,omitempty"`
 
+	// Auto is a change accepted as its node listed it, because the
+	// server's entry sets `tools.auto_accept_changes`: nobody reviewed it,
+	// and By names the node.
+	Auto bool `json:"auto,omitempty"`
+
 	// By is who accepted it, as the audit names them; "" for a first
 	// listing. At is when.
 	By string    `json:"by,omitempty"`
@@ -142,6 +147,9 @@ func (a MCPAcceptedTool) Validate() error {
 	case !a.First && a.By == "":
 		return fmt.Errorf("coord: the accepted definition of %s on %s needs who accepted it",
 			a.Tool, a.Server)
+	case a.First && a.Auto:
+		return fmt.Errorf("coord: the accepted definition of %s on %s is both a first listing's "+
+			"and a change accepted automatically: it is one or the other", a.Tool, a.Server)
 	}
 	if a.Removed {
 		if a.Digest != "" || a.First || a.Title != "" || a.Description != "" ||

@@ -97,6 +97,13 @@ func (s sinkFlags) open(ctx context.Context, companySecrets *companyStore, stdou
 	if err != nil {
 		return nil, err
 	}
+	// AN AUTHOR THE STORE WOULD REFUSE, refused before the run mints: a
+	// credential a vendor issued that no row then held is one nobody holds.
+	if !store.target.throughNode {
+		if err := hostAuthorFits(hostAuthor()); err != nil {
+			return nil, err
+		}
+	}
 	sink := provision.NewSecretStoreSink(store, hostAuthor())
 	if store.target.throughNode {
 		client, _ := store.target.secretBackend.(*secretsClient)

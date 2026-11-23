@@ -223,6 +223,9 @@ func copilotNotesHeld(ctx context.Context, events io.Reader, takes []ServedTake)
 				pending[inbox] = copilotPending{line: n, at: at}
 			}
 		case "session.usage_record":
+			// A FAILED MAIN REQUEST WRITES NONE (measured on 1.0.114: a
+			// provider answering 500 past its five retries left a
+			// session.error and no usage record), so it settles nothing.
 			if ev.AgentID != "" || ev.Data.Usage.InteractionType != copilotMainRequest {
 				return nil
 			}

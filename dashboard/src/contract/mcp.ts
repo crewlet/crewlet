@@ -783,6 +783,8 @@ export interface McpServerAnswer {
    * start it at (allow for a read-only tool, approve for every other).
    */
   baseline: McpToolLevel | null;
+  /** The entry's `tools.auto_accept_changes`: each tool change is accepted as listed, not reviewed. */
+  auto_accept_changes: boolean;
   /** Tools `tools.levels` names that no live listing names; empty where the listings cannot say. */
   unlisted_levels: string[];
   server_info: McpServerInfo | null;
@@ -839,6 +841,8 @@ interface McpAcceptedView extends McpDefinitionView {
   accepted_by: string | null;
   accepted_at: string;
   first_listing: boolean;
+  /** Accepted as listed under `tools.auto_accept_changes`; `accepted_by` names the node. */
+  auto_accepted: boolean;
 }
 
 /** The definition a server lists for a tool now. */

@@ -157,6 +157,55 @@ func TestAChangeIsAcceptedOrKeptBlockedByTheDefinitionReviewed(t *testing.T) {
 	}
 }
 
+// ACCEPTING EVERY CHANGE AT ONCE RECORDS EACH AS ITS OWN ACCEPTANCE DOES: the
+// same record per tool, and one review naming them all. Mutation: write the
+// batch as another writer, or audit fewer tools than written, and this is red.
+func TestAcceptingEveryChangeAtOnceRecordsEachAsItsOwnAcceptanceDoes(t *testing.T) {
+	t.Parallel()
+	decisions := map[string]string{"close_issue": `"` + reviewDigest("v2") + `"`,
+		"export": `"` + reviewDigest("e1") + `"`, "purge": "null"}
+	one, oneAudit := trackerReview(), &recordedAudit{}
+	single := reviewSurface(t, one, &fakeToolDocuments{}, oneAudit)
+	for _, tool := range []string{"close_issue", "export", "purge"} {
+		body := `{"accept": {"` + tool + `": ` + decisions[tool] + `}}`
+		if code, got := answer(t, single, proved(time.Minute), "/mcp-servers/tracker/changes", body); code != http.StatusOK {
+			t.Fatalf("accepting %s alone = %d %v", tool, code, got)
+		}
+	}
+	all, allAudit := trackerReview(), &recordedAudit{}
+	batch := reviewSurface(t, all, &fakeToolDocuments{}, allAudit)
+	body := `{"accept": {"close_issue": ` + decisions["close_issue"] + `, "export": ` + decisions["export"] +
+		`, "purge": ` + decisions["purge"] + `}, "_summary": "Accepted all 3 changes on tracker"}`
+	code, got := answer(t, batch, proved(time.Minute), "/mcp-servers/tracker/changes", body)
+	if code != http.StatusOK || fmtList(got["accepted"]) != "close_issue,export,purge" {
+		t.Fatalf("accepting all = %d %v", code, got)
+	}
+	same := func(a coord.MCPAcceptedTool) string {
+		return fmt.Sprintf("%s %s removed=%v first=%v auto=%v by=%s", a.Tool, a.Digest, a.Removed, a.First,
+			a.Auto, a.By)
+	}
+	if len(one.written) != 3 || len(all.written) != 3 {
+		t.Fatalf("wrote %d alone and %d at once, want 3 each", len(one.written), len(all.written))
+	}
+	for i := range one.written {
+		if same(one.written[i]) != same(all.written[i]) {
+			t.Errorf("accepted at once as %s, alone as %s", same(all.written[i]), same(one.written[i]))
+		}
+	}
+	var alone []string
+	for _, row := range oneAudit.rows {
+		if row.Action != "review_changes" {
+			t.Errorf("a single acceptance audited %+v", row)
+		}
+		alone = append(alone, row.Accepted...)
+	}
+	rows := allAudit.rows
+	if len(rows) != 1 || rows[0].Action != "review_changes" ||
+		strings.Join(rows[0].Accepted, ",") != strings.Join(alone, ",") || len(rows[0].Changes) != 0 {
+		t.Errorf("accepting all audited %+v, want one review naming %v", rows, alone)
+	}
+}
+
 // A SERVER CANNOT MAKE A CHANGE LOOK ACCEPTED: a decision naming a definition
 // the fleet does not list for the tool now (the server swapped it between the
 // review and the answer) is refused, naming the tool, and nothing is written,
