@@ -432,13 +432,13 @@ func TestKimisScriptAddsTheReportedSessionsRecords(t *testing.T) {
 }
 
 // A KIMI RUN IS PINNED TO ITS HOME AND POSTURE, AND KEEPS ONLY ITS ENTRY'S
-// ROUTE: home, no update, no telemetry, three attempts a request, the cap a
-// turn's steps; a key-signed run's model as its env model's name; and every
+// ROUTE: home, its workspace trusted, no update, no telemetry, three attempts
+// a request, the cap a turn's steps; a key-signed run's model as its env model's name; and every
 // routing variable the entry did not set unset, never a pinned one. (The
 // telemetry's variables: TestEveryRunnersShellHoldsItsSignInAndNoneOfCrewletsVariables.)
 //
-// Mutation: drop the cap's pin, pin the model without a key, or unset the
-// entry's own base URL — the case fails.
+// Mutation: drop the cap's or the trust's pin, pin the model without a key, or
+// unset the entry's own base URL — the case fails.
 func TestAKimiRunIsPinnedToItsHomeAndItsEntrysRoute(t *testing.T) {
 	paths := PathsFor(sandbox.NewFakeSandbox("b"))
 	keyed := sandbox.RunRequest{Model: "kimi-k3", Limits: sandbox.Limits{MaxTurns: 7},
@@ -447,9 +447,9 @@ func TestAKimiRunIsPinnedToItsHomeAndItsEntrysRoute(t *testing.T) {
 	for _, p := range (Kimi{}).Pins(t.Context(), keyed, paths) {
 		pins[p.Name] = p.Value
 	}
-	want := map[string]string{"KIMI_CODE_HOME": paths.KimiHome(), "KIMI_CODE_NO_AUTO_UPDATE": "1",
-		"KIMI_DISABLE_TELEMETRY": "1", "KIMI_LOOP_MAX_ATTEMPTS_PER_STEP": "3", "KIMI_LOOP_MAX_STEPS_PER_TURN": "7",
-		kimiModelEnv: "kimi-k3"}
+	want := map[string]string{"KIMI_CODE_HOME": paths.KimiHome(), "KIMI_CODE_TRUST_WORKSPACE": "1",
+		"KIMI_CODE_NO_AUTO_UPDATE": "1", "KIMI_DISABLE_TELEMETRY": "1", "KIMI_LOOP_MAX_ATTEMPTS_PER_STEP": "3",
+		"KIMI_LOOP_MAX_STEPS_PER_TURN": "7", kimiModelEnv: "kimi-k3"}
 	for name, value := range want {
 		if pins[name] != value {
 			t.Errorf("%s pinned %q, want %q", name, pins[name], value)
@@ -474,22 +474,22 @@ func TestAKimiRunIsPinnedToItsHomeAndItsEntrysRoute(t *testing.T) {
 	if !slices.Contains(kimiRoutingOff(login), kimiModelEnv) {
 		t.Error("a login's run keeps an env model the image set")
 	}
-	for _, name := range []string{"KIMI_CODE_TRUST_WORKSPACE", "KIMI_LOOP_MAX_STEPS_PER_TURN"} {
-		if !slices.Contains((Kimi{}).Output(paths).Unset, name) {
-			t.Errorf("%s is not removed whatever set it", name)
-		}
+	if !slices.Contains((Kimi{}).Output(paths).Unset, "KIMI_LOOP_MAX_STEPS_PER_TURN") {
+		t.Error("KIMI_LOOP_MAX_STEPS_PER_TURN is not removed whatever set it")
 	}
 }
 
 // KIMI'S CONFIG IS ITS RUN'S OWN: a profile of a name no other run has, its
-// allowlist every default tool but the two that ask a person and every engine
+// allowlist every default tool but the two that ask a person and every MCP
 // server's tools, Kimi's prompt first and the run's text after it, told of
-// notes only where it reads them; the home's MCP servers with their bearer, the
-// engine's wait and no deferral; the driver as embedded; and settings naming
-// the profile, the login's model, the notes route and the report.
+// notes only where it reads them; the run's MCP servers in the home's file
+// with their bearer, the engine's wait and no deferral; the driver as
+// embedded; and settings naming the profile, the login's model, the notes
+// route, the report and the servers the guard holds to that file.
 //
 // Mutation: put the text before ${base_prompt}, list AskUserQuestion, defer
-// the bridge, or name a key-signed run's model in the session — the case fails.
+// the bridge, name a key-signed run's model in the session, or leave the
+// guard's servers out — the case fails.
 func TestKimiWriteConfigWritesTheRunsOwnProfileServersAndDriver(t *testing.T) {
 	box := sandbox.NewFakeSandbox("b")
 	paths := PathsFor(box)
@@ -506,7 +506,8 @@ func TestKimiWriteConfigWritesTheRunsOwnProfileServersAndDriver(t *testing.T) {
 	readJSON(t, box, paths.KimiSettings(), &settings)
 	if !strings.HasPrefix(settings.Profile, "crewlet-") || settings.Model != req.Model || settings.Thinking != "high" ||
 		settings.Notes != req.Steer.URL || settings.Report != paths.SessionReport() ||
-		settings.Staging != paths.sessionReportStaging() {
+		settings.Staging != paths.sessionReportStaging() || !slices.Equal(settings.Servers, []string{"crewlet"}) ||
+		settings.MCPConfig != paths.KimiMCPConfig() {
 		t.Errorf("settings = %+v", settings)
 	}
 	profile, err := box.ReadFile(t.Context(), paths.KimiAgents()+"/"+kimiProfileDir+"/"+settings.Profile+".md")
@@ -514,7 +515,7 @@ func TestKimiWriteConfigWritesTheRunsOwnProfileServersAndDriver(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(profile)
-	if !strings.Contains(text, "name: "+settings.Profile+"\n") || !strings.Contains(text, `  - "mcp__crewlet__*"`) ||
+	if !strings.Contains(text, "name: "+settings.Profile+"\n") || !strings.Contains(text, `  - "mcp__*"`) ||
 		strings.Contains(text, "AskUserQuestion") || strings.Contains(text, "ExitPlanMode") ||
 		!strings.Contains(text, "  - Bash\n") {
 		t.Errorf("profile:\n%s", text)
@@ -563,31 +564,24 @@ func readJSON(t *testing.T, box sandbox.Sandbox, file string, v any) {
 	}
 }
 
-// A KIMI RUN'S ARTEFACTS ARE ITS OWN and the home's skills, personal
-// instructions, plugins and saved trust: its profile directory, so no earlier
+// A KIMI RUN'S ARTEFACTS ARE ITS OWN: its profile directory, so no earlier
 // run's profile is a later run's subagent, and its driver files, which hold
-// the notes route's token; never the home's sessions or login.
+// the notes route's token; never the home's skills, instructions, plugins,
+// MCP servers, sessions or login, or the home's own MCP file it holds.
 //
-// Mutation: leave the profile directory or any of the home's places, or clear
-// the home, its sessions or its login.
+// Mutation: leave the profile directory, or clear the home or any of its own
+// places — the case fails.
 func TestAKimiRunsArtifactsAreItsOwnFiles(t *testing.T) {
 	paths := PathsFor(sandbox.NewFakeSandbox("b"))
 	files, dirs := (Kimi{}).artifactFiles(paths), (Kimi{}).artifactDirs(paths)
-	if !slices.Equal(dirs, []string{paths.KimiAgents() + "/crewlet", paths.KimiSkills(), paths.KimiUserSkills(),
-		paths.KimiPlugins(), paths.KimiTrust()}) ||
-		!slices.Contains(files, paths.KimiSettings()) || !slices.Contains(files, paths.KimiDriver()) ||
-		!slices.Contains(files, paths.KimiInstructions()) {
+	if !slices.Equal(dirs, []string{paths.KimiAgents() + "/crewlet"}) ||
+		!slices.Contains(files, paths.KimiSettings()) || !slices.Contains(files, paths.KimiDriver()) {
 		t.Fatalf("artifacts = %v %v", files, dirs)
 	}
-	for _, name := range paths.KimiUserInstructions() {
-		if !slices.Contains(files, name) {
-			t.Errorf("the clear leaves %s", name)
-		}
-	}
 	for _, f := range append(files, dirs...) {
-		if f == paths.KimiHome() || f == paths.KimiSessions() || f == paths.KimiHome()+"/credentials" ||
-			f == paths.KimiConfig() || strings.HasPrefix(paths.KimiHome()+"/credentials/kimi-code.json", f+"/") {
-			t.Errorf("the clear removes %s", f)
+		if !strings.HasPrefix(f, paths.WorkDir()+"/") && f != paths.KimiAgents()+"/crewlet" ||
+			f == paths.KimiHomeMCPConfig() {
+			t.Errorf("the clear removes %s, which is not the run's own", f)
 		}
 	}
 }

@@ -9,7 +9,8 @@
 // so the node that runs it runs this, and nothing is installed.
 //
 // THE RUN, IN ORDER. `kimi web --port 0 --json` started, its one line read
-// (origin, token; the server binds 127.0.0.1) within startBoundMs; the session
+// (origin, token; the server binds 127.0.0.1) within startBoundMs; the guard
+// asked of Kimi's own view of the run's MCP servers (guard); the session
 // created under the run's agent profile in permission mode `auto`; its id
 // reported ONCE, written beside and moved over the report, before any prompt
 // (the seam's sessionMinter); the session's events subscribed; the brief
@@ -17,6 +18,16 @@
 // on with `:wait` until the session is idle. Its events reach stdout, a line
 // each, for the live view and the decoder (kimievents.go); the driver's own
 // lines are `crewlet.*`.
+//
+// THE GUARD. The workspace is trusted, as a person trusts their own, so a
+// repository's MCP servers and permission rules load over the home's, and
+// Kimi has no layer above them (2.7.2: the start directory's
+// `.kimi-code/mcp.json` over its git root's `.mcp.json` over the home's
+// `mcp.json`; every deny rule decided before any allow). A repository could
+// so displace the run's own servers: one of its servers by their name, a file
+// Kimi cannot read (no server loads at all), or a rule denying their tools.
+// The first two end the run before its session is made, the third as Kimi
+// denies a call, each naming what the repository holds (measured on 2.7.2).
 //
 // HOW A NOTE ARRIVES. While the session works, the notes route is polled and
 // each note posted to `/steer` under a prompt_id made of its inbox id
@@ -111,6 +122,8 @@ let sid = ""
 let asked = false
 let socket = null
 let ending = false
+// refused is why the guard ends the run, "" while it may go on.
+let refused = ""
 
 process.on("SIGTERM", () => {
   if (asked) return
@@ -135,6 +148,8 @@ async function run() {
   if (typeof address === "string") return fail(address)
   api = address
   if (asked) return 143
+  const unguarded = await guard()
+  if (unguarded !== "") return fail(unguarded)
 
   const config = { permission_mode: "auto", profile: settings.profile }
   if (settings.model) config.model = settings.model
@@ -159,14 +174,17 @@ async function run() {
 
   await subscribe()
   const posted = await call("POST", `/api/v1/sessions/${sid}/prompts`, { prompt_id: briefPrefix + randomUUID(), content: [{ type: "text", text: brief }] })
+  if (refused !== "") return refuse()
   if (!posted.ok) return fail("Kimi refused the brief: " + posted.why)
 
   const notes = typeof settings.notes === "string" && settings.notes !== "" ? poller(settings.notes) : null
   notes?.open()
   for (;;) {
     if (asked) return end()
+    if (refused !== "") return refuse()
     const waited = await call("POST", `/api/v1/sessions/${sid}:wait`, { timeout_ms: waitMs }, waitBoundMs)
     if (asked) return end()
+    if (refused !== "") return refuse()
     if (!waited.ok) return fail("waiting on the session failed: " + waited.why)
     const session = waited.data?.session ?? {}
     for (const pending of waited.data?.pending_interactions ?? []) await answer(pending)
@@ -189,6 +207,41 @@ async function run() {
     notes?.end()
     return session.last_turn_outcome === "completed" ? 0 : 1
   }
+}
+
+// guard holds the run's own MCP servers to the file the run wrote them in,
+// as Kimi itself reports where each server it loads for this directory comes
+// from: "" where every one does, else why not. A server of the repository's by
+// one of their names replaces it, and a repository file Kimi cannot read
+// leaves no server loaded, its error naming the file.
+async function guard() {
+  const servers = settings.servers ?? []
+  if (servers.length === 0) return ""
+  const listed = await call("GET", "/api/v1/mcp/servers?cwd=" + encodeURIComponent(process.cwd()))
+  if (!listed.ok || !Array.isArray(listed.data)) return "Kimi could not load the MCP servers the run is served by: " + listed.why
+  for (const name of servers) {
+    const found = listed.data.find((s) => s?.name === name)
+    if (found === undefined) return `Kimi did not load the MCP server ${name}, which the run is served by`
+    if (found.origin !== settings.mcpConfig) return `${found.origin} names an MCP server ${name}, which Kimi loads over the one the run is served by; rename it there`
+  }
+  return ""
+}
+
+// denial is why a session event ends the run, "" for none: Kimi denying a call
+// of one of the run's own servers' tools by a permission rule, which no rule
+// the run could add overrides.
+function denial(event) {
+  const item = event?.item
+  if (event?.type !== "item.ended" || item?.type !== "tool_call" || item.outcome !== "failed") return ""
+  if (typeof item.name !== "string" || typeof item.error !== "string" || !item.error.includes("denied by permission rule")) return ""
+  if (!(settings.servers ?? []).some((name) => item.name.startsWith(`mcp__${name}__`))) return ""
+  return `Kimi denied the run's own tool ${item.name} by a permission rule (${item.error}); a deny rule matching it, as a repository's .kimi-code/local.toml may hold, must not name it`
+}
+
+// refuse ends a run the guard stopped: its turn cancelled, and why said.
+async function refuse() {
+  await end()
+  return fail(refused)
 }
 
 // start starts the server and reads its line, or says what it never printed.
@@ -312,13 +365,18 @@ async function subscribe() {
       }
       ws.onmessage = (m) => {
         const text = typeof m.data === "string" ? m.data : ""
-        let type
+        let event
         try {
-          type = JSON.parse(text)?.type
+          event = JSON.parse(text)
         } catch {
           return
         }
-        if (kept.has(type)) process.stdout.write(text.replace(/\n/g, " ") + "\n")
+        if (kept.has(event?.type)) process.stdout.write(text.replace(/\n/g, " ") + "\n")
+        const why = refused === "" ? denial(event) : ""
+        if (why !== "") {
+          refused = why
+          life.abort()
+        }
       }
       ws.onclose = () => {
         if (socket !== ws) return
