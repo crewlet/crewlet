@@ -1860,7 +1860,7 @@ func runnerAsked(asked *sandbox.AskedRun, seal *sandbox.CallSeal) *runner.Asked 
 	out := &runner.Asked{
 		Question: asked.Question, Answer: asked.Answer, By: asked.By,
 		Branch: asked.Branch, SessionID: asked.SessionID, BoxKept: asked.BoxKept,
-		Label: asked.Label, Withdrawn: asked.Withdrawn, Waited: asked.Waited,
+		Label: asked.Label, Withdrawn: asked.Withdrawn, Waited: asked.Waited, Called: asked.Called,
 	}
 	if refused := asked.Refused; refused != nil {
 		// A REFUSAL, NEVER AN EMPTY ANSWER: the run is told the reply did

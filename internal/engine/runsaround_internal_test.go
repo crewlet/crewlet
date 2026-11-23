@@ -719,3 +719,46 @@ func TestAWaitCycleThroughAnotherSeatsRunIsRefused(t *testing.T) {
 		t.Errorf("a wait on another seat's run of another requester was refused %q, want requester", got)
 	}
 }
+
+// A JOB PARKED ON ITS OWN CALL IS ANSWERED ONCE, AT ITS PARK. A call its
+// harness was answered still running before its ceiling parks the job on it,
+// put to nobody; nothing answers it while the job still works, and once its
+// run is collected and parked (which waited for the call first) the wait is
+// answered at once, as an answer by turn to that job naming the call, and
+// only once.
+//
+// Mutation: answer a call wait while its job still works (answer-early), or
+// leave it to the target-run branch, and this goes red.
+func TestAJobParkedOnItsOwnCallIsAnsweredOnceAtItsPark(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	w := newWaitsRig(t)
+	job := w.launch(t, "run-c", "ana", "claude-code", "fix the login page", "ENG-1")
+	call := sandbox.CallWait{Tool: "delegate", Seq: 4}
+	if outcome, err := w.store.RecordAsk(ctx, "run-c", job, sandbox.Ask{
+		Question: sandbox.CallWaitQuestion(call.Tool), Wait: &sandbox.RunWait{Call: &call}}); err != nil ||
+		outcome != sandbox.AskRecorded {
+		t.Fatalf("parking the job on its call: %v, %v", outcome, err)
+	}
+	if waiting, err := w.e.answerWaits(ctx, "swe"); err != nil || len(w.answers()) != 0 {
+		t.Fatalf("while its job still works the call wait is answered %v (%d waiting, %v)", w.answers(),
+			waiting, err)
+	}
+	if err := w.store.MarkAwaiting(ctx, "run-c", sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if _, err := w.e.answerWaits(ctx, "swe"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := w.answers()
+	if len(got) != 1 {
+		t.Fatalf("the call wait was answered %d times, want once: %+v", len(got), got)
+	}
+	if given := got[0]; given.TurnID != "run-c" || given.LaunchID != job || given.Waited != nil ||
+		given.Called == nil || *given.Called != (types.CallReturned{Tool: "delegate", Seq: 4}) ||
+		given.AnsweredByKind != string(iam.ActorSystem) {
+		t.Errorf("the call wait is answered as %+v", given)
+	}
+}
