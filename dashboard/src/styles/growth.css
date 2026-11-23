@@ -82,11 +82,6 @@
   gap: var(--spacing-2);
 }
 
-.growth-caps {
-  display: grid;
-  gap: var(--spacing-2);
-}
-
 .growth-role {
   display: inline-flex;
   flex-wrap: wrap;
