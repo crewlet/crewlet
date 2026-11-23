@@ -2612,10 +2612,19 @@ stream. The same helper holds a run to its round cap and reports its skill loads
 (the route, which carries the job's token, reaches it in its environment alone,
 never on a command line), joins the thread the script wrote from
 `thread.started` over the server's socket, and steers each note into the turn in
-flight. It confirms nothing: a note is confirmed read only once the session's
-rollout holds it as a user message, matched by the digest of the text the route
-served, never inside a compaction's summary and never on a torn last line. A
-note Codex refuses or a turn already over is steered again at the next poll. A
+flight. It confirms nothing; the session's rollout does, as Qwen Code's record
+does: a note is confirmed read only once the part of the rollout the run wrote
+holds it as a user message, matched by the digest of the text the route served,
+and the model replied after it (its words, its reasoning or a call). Codex
+writes the message before the request that carries it, and whether a resume
+hands back a trailing message no reply followed was not measured, so a note
+whose run was killed or whose request failed after that write is served again.
+The run's part starts where its script counted the rollout's lines as it
+began, since a continued session's rollout holds every earlier launch's
+messages. Notes of one text are matched in order, one message each; a
+compaction before the reply, a compaction's summary and a torn last line
+confirm nothing. A note Codex refuses or a turn already over is steered again
+at the next poll. A
 notes route that refuses the helper (401 or 404) ends its polls alone: the cap
 and the skill reports go on.
 
