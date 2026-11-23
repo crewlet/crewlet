@@ -3,8 +3,9 @@
 // certifies ([MinChromiumMajor]), the Playwright release a seat's box installs
 // and the Chromium build it expects ([PlaywrightMCPRelease],
 // [ExpectedChromiumVersion]), the closed values of a box's ensure answer
-// ([EnsureReason] and its fellows), and that no Go but the artifact render's
-// client speaks DevTools (ADR-0165).
+// ([EnsureReason] and its fellows), the name of a seat's browser server
+// ([ServerName]) and where a seat's browser may run, and that no Go but the
+// artifact render's client speaks DevTools (ADR-0165).
 //
 // # The floor
 //
@@ -53,6 +54,33 @@
 // ([SupervisorStart]). They live here, never in the helper that prints them,
 // so a package that reads them, a configuration or an event's record, links
 // none of the helper's embedded modules and depends on no helper.
+//
+// # A seat's browser
+//
+// A seat whose role.sandbox sets browser gets a headless Chromium in its
+// executor's box, driven by its harness through the box's own MCP server,
+// [ServerName], a name config reserves so that no company server takes it.
+//
+// The rule names the one cell it admits: every run of the seat lands in a
+// container box, off its host's network. A direct box is the engine host
+// itself, where a page would reach an agent running as the engine's user
+// beside the fleet's keys, and a container on the host's network reaches
+// every service listening on the host's loopback, where a page could lead
+// the agent. A cell the rule does not name is refused by the same comparison,
+// with no branch of its own, so a cell added later is refused until a
+// decision admits it. A seat whose entry denies its harness the web
+// (web_tools: denied) is refused too: a browser would open the web that
+// denial closes.
+//
+// Config refuses a seat any of whose runs can land elsewhere, by its boxes
+// placed as the engine places them. It is an admission rule, since nothing
+// that runs depends on it, so a revision another build admitted still
+// applies, with a warning.
+//
+// Chromium keeps its own sandbox in the box unless the catalogue waives it
+// (local.chromium_sandbox). A value this build does not know reads as
+// required, the stricter, so this build runs a later build's revision rather
+// than refusing it and splitting the fleet's epoch.
 //
 // # DevTools only through the artifact render's client
 //
