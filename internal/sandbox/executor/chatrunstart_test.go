@@ -97,9 +97,10 @@ func withMember(t *testing.T, archive []byte, edit func(string) string) []byte {
 // carried session whose last line was torn, its record's `from` (before its
 // release) is the count and the POSIX cksum of the whole lines the gate left,
 // as the harness took the file up; a run that began its session records none.
+// (A count taken before the torn line is cut is the same count: `wc -l` and
+// `head -n` see only whole lines either way.)
 //
-// Mutation: count before the torn line is cut, or record `from` after the
-// release, and this goes red.
+// Mutation: record `from` after the release, or none, and this goes red.
 func TestAGeminiRunRecordsTheLinesItsSessionHeldBeforeIt(t *testing.T) {
 	t.Parallel()
 	ran, described, raw := geminiCarried(t, geminiCapturedRelease)
@@ -130,12 +131,13 @@ func mustRanFresh(t *testing.T) sandbox.Sandbox {
 }
 
 // A QWEN CODE RUN RECORDS THE LINES ITS SESSION HELD BEFORE IT: continuing a
-// carried session whose last line was torn, its `from` is the count and the
-// cksum of the whole lines it loads, as the restore rewrote the first line's
+// carried session that ends in a note no reply followed and a torn line, its
+// `from` is the count and the cksum of the whole lines it loads, the note cut
+// by the gate (qwenUnansweredCut), as the restore rewrote the first line's
 // working directory, and the count its notes are confirmed past is that count.
 //
-// Mutation: count before the torn line is cut, or before the restore, and this
-// goes red.
+// Mutation: count before the note is cut, or before the restore, and this goes
+// red.
 func TestAQwenRunRecordsTheLinesItsSessionHeldBeforeIt(t *testing.T) {
 	t.Parallel()
 	standIn := qwenCarryStandIn(t)
@@ -151,7 +153,10 @@ func TestAQwenRunRecordsTheLinesItsSessionHeldBeforeIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	var carried string
-	raw = withMember(t, raw, func(body string) string { carried = body; return body + `{"uuid":"torn` })
+	note := `{"uuid":"aaaaaaaa-0000-4000-8000-000000000001","parentUuid":null,"sessionId":"` + ran.SessionID +
+		`","timestamp":"2026-11-23T00:00:00.000Z","type":"user","subtype":"mid_turn_user_message",` +
+		`"message":{"role":"user","parts":[{"text":"\n[User message received during tool execution]: a note"}]}}` + "\n"
+	raw = withMember(t, raw, func(body string) string { carried = body; return body + note + `{"uuid":"torn` })
 	second, b := qwenBox(t, standIn)
 	runToEnd(t, second, b, sandbox.RunRequest{Brief: "carry on", Resume: ran.SessionID,
 		Carried: &sandbox.CarriedSession{Archive: described, Body: bytes.NewReader(raw)}})
