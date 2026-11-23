@@ -438,7 +438,7 @@ func TestKimisScriptAddsTheReportedSessionsRecords(t *testing.T) {
 // telemetry's variables: TestEveryRunnersShellHoldsItsSignInAndNoneOfCrewletsVariables.)
 //
 // Mutation: drop the cap's or the trust's pin, pin the model without a key, or
-// unset the entry's own base URL — the case fails.
+// unset the entry's own base URL: the case fails.
 func TestAKimiRunIsPinnedToItsHomeAndItsEntrysRoute(t *testing.T) {
 	paths := PathsFor(sandbox.NewFakeSandbox("b"))
 	keyed := sandbox.RunRequest{Model: "kimi-k3", Limits: sandbox.Limits{MaxTurns: 7},
@@ -529,7 +529,7 @@ func TestAWebDeniedKimiRunHasNoWebToolOrService(t *testing.T) {
 //
 // Mutation: put the text before ${base_prompt}, list AskUserQuestion, defer
 // the bridge, name a key-signed run's model in the session, or leave the
-// guard's servers out — the case fails.
+// guard's servers out: the case fails.
 func TestKimiWriteConfigWritesTheRunsOwnProfileServersAndDriver(t *testing.T) {
 	box := sandbox.NewFakeSandbox("b")
 	paths := PathsFor(box)
@@ -610,7 +610,7 @@ func readJSON(t *testing.T, box sandbox.Sandbox, file string, v any) {
 // MCP servers, sessions or login, or the home's own MCP file it holds.
 //
 // Mutation: leave the profile directory, or clear the home or any of its own
-// places — the case fails.
+// places: the case fails.
 func TestAKimiRunsArtifactsAreItsOwnFiles(t *testing.T) {
 	paths := PathsFor(sandbox.NewFakeSandbox("b"))
 	files, dirs := (Kimi{}).artifactFiles(paths), (Kimi{}).artifactDirs(paths)

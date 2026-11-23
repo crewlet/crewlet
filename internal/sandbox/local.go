@@ -328,8 +328,8 @@ func seedCredentials(
 	return seeded
 }
 
-// seedLogin seeds one login into a box — every file the shared directory
-// holds of it, or none — and reports what it seeded. Each file is handed whole,
+// seedLogin seeds one login into a box, every file the shared directory
+// holds of it or none, and reports what it seeded. Each file is handed whole,
 // a mixed one's settings with its login, and held to its login alone
 // ([harnessprofile.FileRule.Login]); one that cannot be read for it fails the
 // whole login.
