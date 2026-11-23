@@ -3,6 +3,7 @@ package setupapi
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"slices"
 	"strings"
@@ -47,6 +48,8 @@ type identityRequest struct {
 	Value    string                 `json:"value,omitempty"`
 	FileName string                 `json:"file_name,omitempty"`
 	ID       string                 `json:"id,omitempty"`
+	// Detail is the optional value the guide asks for beside a file.
+	Detail string `json:"detail,omitempty"`
 }
 
 // accessIdentity serves both identity routes.
@@ -78,7 +81,8 @@ func (s *Service) accessIdentity(w http.ResponseWriter, r *http.Request) {
 		if !read {
 			return
 		}
-		ask.Way, ask.Value, ask.FileName, ask.ID = req.Way, req.Value, req.FileName, req.ID
+		ask.Way, ask.Value, ask.FileName, ask.ID, ask.Detail = req.Way, req.Value, req.FileName, req.ID,
+			strings.TrimSpace(req.Detail)
 	}
 	if !s.mayWriteAccess(w, r) || !s.mayWriteCredentials(w, r) ||
 		!authz.Admit(w, r, s.guard, authz.Policy{Action: authz.ActionSetupAccessRaise}) {
@@ -158,7 +162,7 @@ func readIdentity(w http.ResponseWriter, r *http.Request) (identityRequest, bool
 		problem, field = "way is handed_in, invited or made", "way"
 	case req.Way == seataccess.WayHandedIn && strings.TrimSpace(req.Value) == "":
 		problem = "Choose the file the vendor offered, or paste what it gave."
-	case req.Way != seataccess.WayHandedIn && req.Value != "":
+	case req.Way != seataccess.WayHandedIn && (req.Value != "" || req.Detail != ""):
 		problem = "Only a handed-in identity carries a value."
 	case envref.Has(req.Value):
 		problem = "Hand in the value itself, not a ${VAR} reference: Crewlet seals it under its own name."
@@ -200,7 +204,7 @@ func (s *Service) writeIdentity(w http.ResponseWriter, r *http.Request, q Access
 }
 
 // identityRefused answers err, true where there is none to answer.
-func (s *Service) identityRefused(w http.ResponseWriter, r *http.Request, kind any, handle string,
+func (s *Service) identityRefused(w http.ResponseWriter, r *http.Request, kind integration.Kind, handle string,
 	err error) bool {
 	var refusal *AccessRefusal
 	switch {
@@ -227,15 +231,39 @@ func (s *Service) identityRefused(w http.ResponseWriter, r *http.Request, kind a
 		httpjson.FailWith(w, refusal.Status, httpjson.CodeInvalidInput, map[string]string{
 			"detail": refusal.Reason, "hint": refusal.Remedy, "field": "value",
 		})
-	default:
+	case errors.Is(err, ErrAccessUnavailable):
+		s.accessFault(w, r, kind, "setup_access_identity_unchecked", err)
+	case vendorFault(err):
 		log.WarnContext(r.Context(), "setup_access_identity_unchecked", "kind", kind, "seat", handle,
 			"error", err.Error())
 		httpjson.FailWith(w, http.StatusBadGateway, httpjson.CodeInvalidInput, map[string]string{
 			"detail": "the vendor did not answer, so the identity was not checked. Nothing was kept.",
 			"hint":   "try again in a moment",
 		})
+	default:
+		log.ErrorContext(r.Context(), "setup_access_identity_unchecked", "kind", kind, "seat", handle,
+			"error", err.Error())
+		httpjson.FailWith(w, http.StatusInternalServerError, httpjson.CodeInternalError, map[string]string{
+			"detail": "Crewlet could not finish the check.",
+			"hint": "try again; if it fails again, the engine's log line setup_access_identity_unchecked " +
+				"says why",
+		})
 	}
 	return false
+}
+
+// vendorUnavailable is a vendor's error that says whether the vendor failed
+// to serve the call (a 5xx, a rate limit), declared by each vendor's own type.
+type vendorUnavailable interface{ VendorUnavailable() bool }
+
+// vendorFault reports err as the vendor's: no answer (a network error or a
+// deadline; the fleet's own store faults are answered before this) or an
+// answer saying it is unavailable. Anything else is Crewlet's own.
+func vendorFault(err error) bool {
+	var netErr net.Error
+	var unavailable vendorUnavailable
+	return errors.Is(err, context.DeadlineExceeded) || errors.As(err, &netErr) ||
+		(errors.As(err, &unavailable) && unavailable.VendorUnavailable())
 }
 
 // IdentityVerdict is a check as the sheet's verdict reads it: what works, or
