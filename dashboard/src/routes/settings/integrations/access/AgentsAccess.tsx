@@ -117,6 +117,7 @@ import {
   sameDesired,
   scopeApplies,
   scopeLabel,
+  scopeQuiet,
   scopeUnavailable,
   scopeWords,
   statusOf,
@@ -159,6 +160,8 @@ export interface AgentsAccessProps {
   onReplaceKey?: (() => void) | undefined;
   /** The gesture a person takes at the vendor for one seat (GitHub's create and install), where there is one. */
   stepFor?: ((handle: string) => ReactNode) | undefined;
+  /** Why the vendor's list of scope entries could not be read (names may be missing), and the fix; said once. */
+  scopeNote?: string | undefined;
 }
 
 /** One row of the table: one agent on one product. */
@@ -232,6 +235,7 @@ export const AgentsAccess = memo(function AgentsAccess({
   only,
   onReplaceKey,
   stepFor,
+  scopeNote,
 }: AgentsAccessProps) {
   const [draft, setDraft] = useDraftState<AccessDraft>({});
   // WHICH ROWS ARE OPEN, by row key: the grid's expansion is controlled.
@@ -567,6 +571,10 @@ export const AgentsAccess = memo(function AgentsAccess({
         // the rest as a count that names them, or the lane's words for none.
         const names = held.map((id) => scopeLabel(lane, id));
         const rest = names.slice(1);
+        // EACH NAME WITH ITS IDS, the chip's on hover and the rest's in the count's.
+        const titled = held.map((id, i) =>
+          [names[i], scopeQuiet(lane, id)].filter(Boolean).join(" · "),
+        );
         const shown =
           names.length === 0 ? (
             <span className="agent-access-quiet">{words.empty}</span>
@@ -576,12 +584,17 @@ export const AgentsAccess = memo(function AgentsAccess({
                   flex item's is its content, so a long name ends in an
                   ellipsis and the count and the control keep their line. */}
               <Inline>
-                <Tag appearance="outline" size="xs" title={names[0]}>
+                <Tag appearance="outline" size="xs" title={titled[0]}>
                   {names[0]}
                 </Tag>
               </Inline>
               {rest.length > 0 && (
-                <Text as="span" variant="caption" tone="secondary" title={rest.join(", ")}>
+                <Text
+                  as="span"
+                  variant="caption"
+                  tone="secondary"
+                  title={titled.slice(1).join(", ")}
+                >
                   <span aria-hidden="true">+{rest.length}</span>
                   <VisuallyHidden>
                     {`${rest.length.toLocaleString()} more ${rest.length === 1 ? words.singular : words.noun.toLowerCase()}`}
@@ -726,6 +739,9 @@ export const AgentsAccess = memo(function AgentsAccess({
           {note}
         </p>
       ))}
+      {scoped && scopeNote && (
+        <p className="t-caption agent-access-quiet">{asSentence(scopeNote)}</p>
+      )}
 
       {/* ONE KEY PER INTEGRATION: an agent's Access tab draws a grid for each
           integration it reaches, and one shared `access` key re-sorted them all. */}
@@ -905,6 +921,7 @@ export const AgentsAccess = memo(function AgentsAccess({
           lane={scoping.lane}
           want={desiredOf(scoping.seat, scoping.lane.key)}
           refused={refusalAt(scoping.seat, scoping.lane, "scope")?.words}
+          note={scopeNote && asSentence(scopeNote)}
           onChange={(scope) =>
             change(scoping.seat, scoping.lane, (d) =>
               withScope(d, scoping.seat, scoping.lane, scope),

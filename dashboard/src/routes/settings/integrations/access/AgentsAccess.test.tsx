@@ -194,6 +194,7 @@ function draw(
     readOnly?: string;
     only?: string;
     avatarOf?: (handle: string) => AgentAvatar | null;
+    scopeNote?: string;
   } = {},
 ) {
   const reload = vi.fn();
@@ -216,6 +217,7 @@ function draw(
           readOnly={over.readOnly}
           only={over.only}
           avatarOf={over.avatarOf ?? (() => null)}
+          scopeNote={over.scopeNote}
         />
       </LayerHost>
     </Router>
@@ -1588,6 +1590,34 @@ test("an off agent's access and apps read a dash until it is turned on", () => {
   expect(
     within(row).getByRole("button", { name: "Edit PM's App Store Connect apps" }),
   ).toBeTruthy();
+});
+
+// AN APP IS ITS NAME, WITH ITS IDS AS SECONDARY TEXT; where the names cannot be
+// read, why (and the key to add) is said once over the agents and in the
+// chooser, where the bare IDs are. Mutation: drop `scopeQuiet` from the chip's
+// title, or the note from either place, and its line below fails.
+test("an app reads by name with its IDs beside it, and missing names say why once", async () => {
+  draw(appStoreConnectAnswer(), { scopeNote: "Add a key of any role but Admin" });
+  expect(cellWith("Field Notes").querySelector("[title]")?.getAttribute("title")).toBe(
+    "Field Notes · 6763222842 · com.example.notes",
+  );
+  expect(screen.getAllByText("Add a key of any role but Admin.")).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: "Edit Growth's App Store Connect apps" }));
+  const dialog = await screen.findByRole("dialog", { name: "Growth's App Store Connect apps" });
+  expect(within(dialog).getByText("Add a key of any role but Admin.")).toBeTruthy();
+});
+
+// THE REASON STANDS BESIDE A REFUSAL, not in its place: an agent just turned
+// on with no app yet is told to choose one and why the names are missing.
+test("the chooser says why names are missing while it asks for an app", async () => {
+  const data = appStoreConnectAnswer();
+  data.seats.push(seat("pm", "PM", { app_store_connect: offLane("read") }));
+  draw(data, { scopeNote: "Add a key of any role but Admin" });
+  fireEvent.click(screen.getByRole("switch", { name: "PM on App Store Connect" }));
+  fireEvent.click(screen.getByRole("button", { name: "Choose PM's App Store Connect apps" }));
+  const dialog = await screen.findByRole("dialog", { name: "PM's App Store Connect apps" });
+  expect(dialog.textContent).toContain("Choose at least one app for PM");
+  expect(dialog.textContent).toContain("Add a key of any role but Admin.");
 });
 
 // AN APP IS CHOSEN BY ITS NAME: the engine reads the apps the team's keys
