@@ -17,11 +17,12 @@ import (
 // above `disabledMcpServers` in the home's `.claude.json` for the start
 // directory (measured on 2.1.330): the server is then missing from, or
 // `disabled` in, the `mcp_servers` its stream's init event lists. Nor above a
-// `permissions.deny` entry naming the server (`mcp__crewlet`): it connects, and
-// its tools are missing from the event's `tools`. Either way the run goes on
-// without its notes and its tools, so the script reads that event and ends a
-// run whose own server or tools are not there ([claudeGuard]), saying which
-// file switched them off.
+// `permissions.deny` entry naming the server (`mcp__crewlet`), one of its
+// tools (`mcp__crewlet__<tool>`) or a wildcard over them (`mcp__crewlet__*`,
+// `mcp__*`, `*`): it connects, and those tools are missing from the event's
+// `tools`. So the script reads that event and ends a run whose own server, or
+// any tool the engine says it lists ([sandbox.MCPServer.Tools]), is not there
+// ([claudeGuard]), naming the file and the entry.
 
 // crewletServers is the run's servers of Crewlet's own, by name, which a
 // guard holds the harness to: the engine's own tools, the bridge's `crewlet`
@@ -38,26 +39,31 @@ func crewletServers(req sandbox.RunRequest) []string {
 }
 
 // claudeGuard is the part of a run's script that defines `claudeguard`, which
-// [launchWatched] runs once the harness has started: it waits for the
-// stream's first whole line (or the harness's end, or an end request), and
-// where that is the init event, ends the harness unless each of servers is
-// still `pending` in it, or `connected` with a tool of its own listed, saying
-// why on the error stream.
+// [launchWatched] runs once the harness has started: once the stream's first
+// line is the init event, it ends the harness unless each of servers is
+// `pending` in it, or `connected` with every tool mcp names for it listed (a
+// tool of its own, where it names none), saying why on the error stream.
 //
 // AN INIT EVENT IT CANNOT FIND, OR ONE LISTING NO TOOLS, IS NO VERDICT: every
-// release measured opens its stream with one, keys in this order, so a stream
-// that does not is not one a switch-off shows in. The reason names the file
-// that switched the server off: each settings file holding a deny or allow
-// list or naming its tools, or the state file that disables it.
-func claudeGuard(paths Paths, servers []string) string {
+// release measured opens its stream with one. The reason names what switched
+// the server off: a settings file holding a deny or allow list, each file and
+// entry that can take the missing tools away (`claudedenies`: the verdict is
+// the init event's, so one outside `permissions.deny` is named too), or the
+// state file that disables it.
+func claudeGuard(paths Paths, servers []string, mcp map[string]sandbox.MCPServer) string {
 	q := shellword.Quote
 	stream := q(paths.Stream())
 	state := q(paths.ClaudeConfigDir() + "/.claude.json")
 	lists := strings.Join([]string{"/etc/claude-code/managed-settings.json",
 		"/etc/claude-code/managed-settings.d/*.json", q(paths.ClaudeConfigDir() + "/settings.json"),
 		`"$PWD/.claude/settings.json"`, `"$PWD/.claude/settings.local.json"`}, " ")
+	read := "none of those it reads (the managed settings of the box, ~/.claude/settings.json, and " +
+		".claude/settings.json and .claude/settings.local.json in the start directory), so the error " +
+		"stream says what blocked it"
 	var b strings.Builder
-	b.WriteString(`claudeguard() {
+	b.WriteString(`claudedenies() { gn=; for gf in ` + lists + `; do [ -f "$gf" ] || continue; for ge; do ` +
+		`grep -q -F -e "\"$ge\"" "$gf" 2> /dev/null && gn="$gn${gn:+, }$gf ($ge)"; done; done; }
+claudeguard() {
 while [ -z "$endhalted" ] && kill -0 "$harness" 2> /dev/null; do case $(wc -l < ` + stream + ` 2> /dev/null) in *[1-9]*) break ;; esac; sleep 0.1; done
 [ -z "$endhalted" ] || return 0
 gl=$(head -n 1 ` + stream + ` 2> /dev/null)
@@ -68,14 +74,24 @@ gw=
 		entry := claudeServerEntry(name)
 		said := "Crewlet's MCP server " + name + ", which the run's notes and tools go through"
 		tool := claudeToolPrefix(name)
+		wild := q(tool) + " " + q(tool+"__*") + " 'mcp__*' '*'"
+		var each strings.Builder
+		for _, t := range slices.Sorted(slices.Values(mcp[name].Tools)) {
+			listed := tool + "__" + claudeMCPName(t)
+			each.WriteString(`case "$gt" in *` + q(`"`+listed+`"`) + `*) ;; *) gm="$gm ` + listed + `" ;; esac
+`)
+		}
 		b.WriteString(`[ -n "$gw" ] || case "$gl" in
 *` + q(entry+`"connected"`) + `*) case "$gl" in *'"tools":['*) gt=${gl#*'"tools":['}; gt=${gt%%']'*} ;; *) gt= ;; esac
-case "$gt" in *` + q(`"`+tool+`__`) + `*|'') ;; *) gf=$(grep -l -F -e ` + q(tool) + ` ` + lists +
-			` 2> /dev/null | tr '\n' ' '); gw="Claude Code started with ` + said + ` connected, and none of its ` +
-			`tools: a permissions.deny entry naming it (` + tool + `) or its tools takes them away, and no setting ` +
-			`of the run's undoes that. Settings naming it: ${gf:-none of those it reads (the managed settings of ` +
-			`the box, ~/.claude/settings.json, and .claude/settings.json and .claude/settings.local.json in the ` +
-			`start directory), so the error stream says what blocked it}" ;; esac ;;
+case "$gt" in '') ;;
+*` + q(`"`+tool+`__`) + `*) gm=
+` + each.String() + `[ -z "$gm" ] || { claudedenies $gm ` + wild + `; gw="Claude Code started with ` + said +
+			` connected, and without its tools$gm: a permissions.deny entry naming them, or a wildcard ` +
+			`matching them, takes them away, and no setting of the run's undoes that. Entries that can: ` +
+			`${gn:-` + read + `}"; } ;;
+*) claudedenies ` + wild + `; gw="Claude Code started with ` + said + ` connected, and none of its ` +
+			`tools: a permissions.deny entry naming it (` + tool + `), its tools or a wildcard matching them ` +
+			`takes them away, and no setting of the run's undoes that. Entries that can: ${gn:-` + read + `}" ;; esac ;;
 *` + q(entry+`"pending"`) + `*) ;;
 *` + q(entry+`"disabled"`) + `*) gf=` + state + `; [ ! -L "$gf" ] || gf=` + q(paths.ClaudeState()) +
 			`; gw="Claude Code started with ` + said + `, disabled: $gf disables it for the start directory ` +
@@ -85,9 +101,7 @@ case "$gt" in *` + q(`"`+tool+`__`) + `*|'') ;; *) gf=$(grep -l -F -e ` + q(tool
 *) gf=$(grep -l -e deniedMcpServers -e allowedMcpServers ` + lists + ` 2> /dev/null | tr '\n' ' '); ` +
 			`gw="Claude Code started without ` + said + `: the servers its init event lists leave it out, ` +
 			`as a deniedMcpServers entry naming it or an allowedMcpServers list without it does, and no setting ` +
-			`of the run's undoes either. Settings holding one: ${gf:-none of those it reads (the managed ` +
-			`settings of the box, ~/.claude/settings.json, and .claude/settings.json and ` +
-			`.claude/settings.local.json in the start directory), so the error stream says what blocked it}" ;;
+			`of the run's undoes either. Settings holding one: ${gf:-` + read + `}" ;;
 esac
 `)
 	}
@@ -98,10 +112,13 @@ esac
 }
 
 // claudeToolPrefix is how each tool of server name is named, less its `__`
-// and tool: `mcp__<name>`, every character but letters, digits, `_` and `-`
-// made `_`, as 2.1.330 names it ([claudeBridgedToolPrefix]).
-func claudeToolPrefix(name string) string {
-	return "mcp__" + strings.Map(func(r rune) rune {
+// and tool: `mcp__<name>` ([claudeMCPName]).
+func claudeToolPrefix(name string) string { return "mcp__" + claudeMCPName(name) }
+
+// claudeMCPName is a server's or a tool's name as Claude Code 2.1.330 writes
+// it into a tool's: every character but letters, digits, `_` and `-` made `_`.
+func claudeMCPName(name string) string {
+	return strings.Map(func(r rune) rune {
 		if r == '_' || r == '-' || r < 128 && (r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9') {
 			return r
 		}

@@ -1058,7 +1058,7 @@ func (e *Engine) callRunner() string {
 // under THE SAME NAMES THE BRIDGE SERVES, so the box and the bridge cannot
 // disagree about where they are.
 func bridgeOpening(endpoint string, s *mcpbridge.Session, steered bool, wait time.Duration) sandbox.Opening {
-	opening := sandbox.Opening{Servers: bridgeServers(endpoint, s.Surface, wait)}
+	opening := sandbox.Opening{Servers: bridgeServers(endpoint, s, wait)}
 	if steered {
 		opening.Steer = sandbox.SteerWiring{Server: config.ToolServerName,
 			Tool: mcpbridge.SteerTool, URL: mcpbridge.SteerURL(endpoint)}
@@ -1220,13 +1220,15 @@ func executorHeadroom(ctx context.Context, remaining runner.Remaining, floor lau
 // server, and are always loaded ([sandbox.MCPServer.AlwaysLoaded]). Each of the
 // seat's servers the surface offers a tool of follows under its own name at
 // its bridge route ([mcpbridge.ServerURL], [mcpbridge.Servers]). Every call
-// waits as long as wait ([mcpbridge.Bridge.CallTimeout]).
-func bridgeServers(endpoint string, surface mcpbridge.Surface, wait time.Duration) map[string]sandbox.MCPServer {
+// waits as long as wait ([mcpbridge.Bridge.CallTimeout]). The engine's server
+// names the tools it lists as the run starts ([mcpbridge.Listed]), which a
+// runner holds its harness's offer to.
+func bridgeServers(endpoint string, s *mcpbridge.Session, wait time.Duration) map[string]sandbox.MCPServer {
 	out := map[string]sandbox.MCPServer{config.ToolServerName: {
 		Name: config.ToolServerName, Transport: sandbox.TransportHTTP, URL: endpoint,
-		AlwaysLoaded: true, CallTimeout: wait,
+		AlwaysLoaded: true, CallTimeout: wait, Tools: mcpbridge.Listed(s),
 	}}
-	for _, name := range mcpbridge.Servers(surface) {
+	for _, name := range mcpbridge.Servers(s.Surface) {
 		out[name] = sandbox.MCPServer{Name: name, Transport: sandbox.TransportHTTP,
 			URL: mcpbridge.ServerURL(endpoint, name), CallTimeout: wait}
 	}
