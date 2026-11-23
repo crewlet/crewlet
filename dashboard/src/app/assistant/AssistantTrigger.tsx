@@ -5,10 +5,15 @@
  * pill sits above the panel it opens), and a screen that draws its own head
  * places this same component, so there is one Ask in the product.
  *
- * NEVER HIDDEN: where the reader may not ask it is drawn disabled, with the
- * reason after its name and in its tooltip (`availability.ts`), and it is
- * still reachable by Tab. On a phone it keeps its place as an icon button,
- * because it is how a reader reaches help on a screen they do not follow.
+ * NEVER HIDDEN FOR ACCESS: where the reader may not ask it is drawn disabled,
+ * with the reason after its name and in its tooltip (`availability.ts`), and
+ * it is still reachable by Tab. On a phone it keeps its place as an icon
+ * button, because it is how a reader reaches help on a screen they do not
+ * follow.
+ *
+ * GONE WHILE ASK CREWLET IS OPEN, as the panel or as its own page (the
+ * control's `open`): a second way in beside the one on screen says nothing.
+ * The panel's own Close shuts it, and the frame hands focus back here.
  *
  * AND IT SAYS WHEN THE ASSISTANT NEEDS THEM while the panel is closed: a dot
  * on the mark's corner, and the reason in its name and its tooltip, when an
@@ -43,8 +48,8 @@ export function AssistantTrigger() {
   const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
   const keyHints = useKeyHints();
   const press = keyRow("assistant.open").presses[0]!;
-  // THE DOT IS FOR A CLOSED PANEL: open, the panel says it itself.
-  const shown = !open && activity !== "idle" ? activity : null;
+  if (open) return null;
+  const shown = activity !== "idle" ? activity : null;
   // THE DOT IS WORN ON THE MARK'S CORNER (the kit's IndicatorAnchor), ringed
   // in the button's own fill, never set after the word, where it sat on the
   // text's baseline against the last letter.
@@ -76,7 +81,6 @@ export function AssistantTrigger() {
         {...common}
         size="md"
         variant="secondary"
-        pressed={open}
         icon={mark}
         label={shown ? `Ask Crewlet, ${ACTIVITY_WORDS[shown]}` : "Ask Crewlet"}
         tooltip={tooltip}
@@ -89,7 +93,6 @@ export function AssistantTrigger() {
       variant="secondary"
       shape="pill"
       size="medium"
-      pressed={open}
       leadingIcon={mark}
       tooltip={tooltip}
     >
