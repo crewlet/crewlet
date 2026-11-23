@@ -85,10 +85,10 @@ type secretView struct {
 	// an engine with no store holds no view at all.
 	values map[string]string
 
-	// written is when the store last wrote each of values, read in the same
-	// pass: the instant a credential's expiry alarm judges the value this
-	// node resolves from ([Engine.storedAt]).
-	written map[string]time.Time
+	// records is each of values' row, metadata only, read in the same pass:
+	// when and by whom the value this node resolves was written, which its
+	// expiry alarm and Settings › Models both judge from ([Engine.storedRecords]).
+	records map[string]secrets.Record
 }
 
 // installSecrets publishes values as this node's snapshot, with no instant
@@ -104,7 +104,7 @@ func (e *Engine) installSnapshot(snapshot fleetsecrets.Snapshot) {
 	e.env.Store(&secretView{
 		resolver: config.NewResolver(config.MapSource(snapshot.Values), e.environment()),
 		values:   snapshot.Values,
-		written:  snapshot.Written,
+		records:  snapshot.Records,
 	})
 }
 
