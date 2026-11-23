@@ -804,7 +804,7 @@ func grokHookList(v any) ([]map[string]any, bool) {
 // verification (measured). A file, never argv, for the reason Claude Code's
 // are one.
 func grokAgentFile(system string) []byte {
-	return []byte("---\nname: crewlet-seat\ndescription: The Crewlet seat this run serves.\n---\n" +
+	return []byte("---\nname: crewlet-agent\ndescription: The Crewlet seat this run serves.\n---\n" +
 		grokRulesOpen + "\n" + system + "\n" + grokRulesClose + "\n")
 }
 
