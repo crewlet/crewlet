@@ -141,8 +141,8 @@ func TestACodexRunThatContinuesItsSessionIsChargedOnlyItsOwnTurns(t *testing.T) 
 	if res.InputTokens != 300 || res.OutputTokens != 40 {
 		t.Errorf("the run is charged %d in, %d out; want its own turn's 300, 40", res.InputTokens, res.OutputTokens)
 	}
-	if got := boxFile(t, box, p.CodexRunStart()); got != thread+" 1\n" {
-		t.Errorf("the run began at %q in its session, want past the 1 earlier line", got)
+	if got := boxFile(t, box, p.CodexRunStart()); got != thread+" 2\n" {
+		t.Errorf("the run began at %q in its session, want past the 2 earlier lines", got)
 	}
 }
 
