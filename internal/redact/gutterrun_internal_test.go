@@ -29,26 +29,22 @@ func loggedToo(texts map[string]string) map[string]string {
 }
 
 // A KEY'S LAST RUN IS NO GUTTER: where a key's END line goes on to a password's
-// key and a line below repeats the key's last run, glued to the armour or a
-// space before it, as the gutter, under no wrapping, a timestamp, an echo, a
-// table row, a quoted string or a JSON array's strings, the run is a block of
-// the key's on each line that spells it, and the text writes as Secrets does.
+// key and a line below repeats the key's last run as the gutter, read back from
+// the END or under a body line, an echo, a table row, a quoted string or a
+// JSON array's strings, the run is a block of the key's on each line that
+// spells it, and the text writes as Secrets does.
 //
-// Mutation: write no block over the runs ([claims.keyRuns]), note none on a
-// blank line ([valueRead.runOn]) or where no value is read below
-// ([valueRead.decided]), drop the decoded reading's ([decodedReading]), or
-// leave the gutter seam past the run ([valueRead.withRuns]), and the run or the
-// value is shown, or the key's line is two blocks.
+// Mutation: write no block over the runs ([claims.keyRuns]), note none where
+// no value is read below ([valueRead.decided]), drop the decoded reading's
+// ([decodedReading]), or leave the gutter seam past the run
+// ([valueRead.withRuns]), and the run or the value is shown, or the key's line
+// is two blocks.
 func TestAKeysLastRunIsNoGutter(t *testing.T) {
 	t.Parallel()
-	begin, ts, last, kl, end := "-----BEGIN RSA PRIVATE KEY-----\n", "2026-10-06T09:00:00.123Z ", gutterRunLast, gutterRunKL, gutterRunEnd
+	begin, last, kl, end := "-----BEGIN RSA PRIVATE KEY-----\n", gutterRunLast, gutterRunKL, gutterRunEnd
 	for name, text := range loggedToo(map[string]string{
-		"glued, from a BEGIN":        begin + kl + "\n" + last + end + "|passwd:\n" + last + "-placeholder9x\n",
 		"glued, back from END":       kl + "\n" + last + end + "|passwd:\n" + last + "-placeholder9x\n",
-		"a space before the END":     kl + "\n" + last + " " + end + "|passwd:\n" + last + " placeholder9x\n",
 		"a body line before the END": begin + kl + "\n" + kl + " " + end + "|passwd:\n" + kl + " placeholder9x\n",
-		"alone on a line under a timestamp": begin + kl + "\n" + ts + last + end + "|passwd:\n" + ts + last + "-\n" +
-			ts + "placeholder9x\n",
 		"under an echo": kl + "\n" + last + "\necho \"u1SU1Lf=-----END DSA PRIVATE KEY-----\" ; pwd=\" >> k\n" +
 			"echo \"u1SU1Lf=\" >> k\n",
 		"under an echo, a value after the run": kl + "\necho \"" + last + " -----END DSA PRIVATE KEY-----\" ; pwd=\" >> k\n" +
@@ -69,6 +65,46 @@ func TestAKeysLastRunIsNoGutter(t *testing.T) {
 			t.Errorf("%s: the key's line is written as two blocks, its run apart:\n text %q\n once %q", name, text, once)
 		}
 		writesAsSecrets(t, name, text, once)
+	}
+}
+
+// A KEY'S LAST RUN IS NO GUTTER WHATEVER STANDS BETWEEN ITS END AND THE KEY:
+// nothing, a `|`, a space, a tab or two spaces, under no gutter or a log's
+// timestamp, the run glued to the END or a space before it, and repeated glued
+// to the value below or alone on a blank line above it. The run is hidden on
+// every line, the value too, the key's line is one block, and the text writes
+// as Secrets does ([writesAsSecrets]).
+//
+// Mutation: let a marker matched whole end no word of both lines ([gutterLen]),
+// and under a key's line that spaces its END from the key, the value glued to
+// the run's marker is shown; or note no run on a blank line
+// ([valueRead.runOn]), and the run alone above the value is.
+func TestAKeysLastRunIsNoGutterWhateverStandsBeforeItsKey(t *testing.T) {
+	t.Parallel()
+	begin, last, kl, end := "-----BEGIN RSA PRIVATE KEY-----\n", gutterRunLast, gutterRunKL, gutterRunEnd
+	for _, sep := range []struct{ name, s string }{{"nothing", ""}, {"a bar", "|"}, {"a space", " "}, {"a tab", "\t"}, {"two spaces", "  "}} {
+		for _, gutter := range []struct{ name, s string }{{"no gutter", ""}, {"a timestamp", "2026-10-06T09:00:00.123Z "}} {
+			for _, run := range []struct{ name, key, below string }{
+				{"glued to the END and the value", last, last + "-placeholder9x\n"},
+				{"glued to the END, alone above the value", last, last + "-\n" + gutter.s + "placeholder9x\n"},
+				{"a space before the END", last + " ", last + " placeholder9x\n"},
+			} {
+				name := sep.name + " before the key, " + gutter.name + ", the run " + run.name
+				text := begin + kl + "\n" + gutter.s + run.key + end + sep.s + "passwd:\n" + gutter.s + run.below + gutter.s + "done\n"
+				for form, text := range loggedToo(map[string]string{name: text}) {
+					once := Secrets(text)
+					for _, w := range []string{"placeholder9x", last, kl[:40]} {
+						if strings.Contains(once, w) {
+							t.Errorf("%s: %q is shown:\n text %q\n once %q", form, w, text, once)
+						}
+					}
+					if strings.Contains(once, keyMarker+" "+keyMarker) {
+						t.Errorf("%s: the key's line is written as two blocks:\n text %q\n once %q", form, text, once)
+					}
+					writesAsSecrets(t, form, text, once)
+				}
+			}
+		}
 	}
 }
 
