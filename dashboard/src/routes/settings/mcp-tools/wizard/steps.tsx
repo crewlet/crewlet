@@ -20,6 +20,7 @@ import {
   KeyValueRows,
   NoticeList,
   Select,
+  Switch,
   TableTwoLineCell,
   Text,
   Textarea,
@@ -53,7 +54,14 @@ import { Testing, TestResult } from "../flows/TestDialog.tsx";
 import { CLIENT_SECRET } from "../api.ts";
 import { GrantPicker } from "../GrantPicker.tsx";
 import { BaselineSelect, LevelSelect, RiskChips, ServerMark } from "../parts.tsx";
-import { BASELINE, LEVEL, OAUTH_CLIENT, SIGN_IN, type SignInChoice } from "../words.ts";
+import {
+  AUTO_ACCEPT,
+  BASELINE,
+  LEVEL,
+  OAUTH_CLIENT,
+  SIGN_IN,
+  type SignInChoice,
+} from "../words.ts";
 import {
   argsOf,
   fixedValues,
@@ -1025,6 +1033,12 @@ export function ApprovalsStep({
           For tools without a level of their own, and tools added later.
         </Text>
       </div>
+      <Switch
+        label={AUTO_ACCEPT.label}
+        description={AUTO_ACCEPT.help}
+        checked={draft.autoAccept}
+        onCheckedChange={(autoAccept) => set({ autoAccept })}
+      />
       {draft.listed.length === 0 ? (
         listing ? (
           <Testing />
@@ -1166,6 +1180,7 @@ export function ReviewStep({
           ],
           ["Who gets it", who],
           ["Tools", tools],
+          ...(draft.autoAccept ? ([["Tool changes", "Accepted automatically"]] as const) : []),
           ...(fixed.length > 0
             ? ([
                 [
