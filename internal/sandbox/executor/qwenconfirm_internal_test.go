@@ -2,6 +2,8 @@ package executor
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -31,7 +33,7 @@ func qwenTakes(items ...string) []ServedTake {
 // a tool result or the prompt; two records before the reply confirm two takes,
 // not three; of two with a reply after the first alone, one. A record with no
 // reply, a torn reply, or a line past the bound or undecodable before the
-// reply confirms nothing.
+// reply confirms nothing; a take the session lacks leaves the next to match.
 //
 // Mutations, each red: hash the framed part; drop the subtype check; match out
 // of order; confirm whatever the digest; hold a match no reply follows; keep
@@ -100,7 +102,7 @@ func TestAQwenCodeNoteIsConfirmedByItsRecordAsHanded(t *testing.T) {
 		"the note with its framing":            {string(raw), qwenTakes("\n" + qwenNoteFraming + note), nil},
 		"two of one text, two records":         {twice, qwenTakes(note, note), []string{"i-1", "i-2"}},
 		"three of one text, two records":       {twice, qwenTakes(note, note, note), []string{"i-1", "i-2"}},
-		"a note the session lacks first":       {string(raw), qwenTakes("another note", note), nil},
+		"a note the session lacks first":       {string(raw), qwenTakes("another note", note), []string{"i-2"}},
 		"a prefix of the text":                 {string(raw), qwenTakes("MARK-R6-START"), nil},
 		"the framed text in a tool result":     {strings.Replace(string(raw), result, forged, 1), qwenTakes("FORGED"), nil},
 		"the framed text as a prompt":          {strings.Replace(string(raw), prompt, asPrompt, 1), qwenTakes("FORGED"), nil},
@@ -280,5 +282,80 @@ func TestANoteACompactionKeepsOnlyInItsSummaryIsNotRead(t *testing.T) {
 				t.Fatalf("qwenNotesHeld = %v, %v; want %v", got, err, tc.want)
 			}
 		})
+	}
+}
+
+// A QWEN NOTE THE HELPER NEVER HANDED LEAVES THE LATER ONES TO MATCH: a take
+// polled and never handed is unheld, and each later record matches the first
+// take after the last one matched with its words.
+//
+// Mutation: match a record against the next take alone, and C reads unheld.
+func TestAQwenNoteNeverHandedLeavesTheLaterOnesToMatch(t *testing.T) {
+	t.Parallel()
+	const (
+		a    = "## A note from ada, sent while this turn was running\n\nuse main"
+		lost = "## A note from ada, sent while this turn was running\n\nnever handed"
+		c    = "## A note from ada, sent while this turn was running\n\nrun the tests"
+	)
+	line := func(v map[string]any) string {
+		raw, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw) + "\n"
+	}
+	handed := func(text string) string {
+		return line(map[string]any{"type": "user", "subtype": "mid_turn_user_message",
+			"message": map[string]any{"parts": []map[string]string{{"text": "\n" + qwenNoteFraming + text}}}})
+	}
+	reply := line(map[string]any{"type": "assistant", "message": map[string]any{"parts": []map[string]string{{"text": "ok"}}}})
+	session := handed(a) + reply + handed(c) + reply
+	got, err := qwenNotesHeld(strings.NewReader(session), qwenTakes(a, lost, c), 0, qwenTestBound)
+	if err != nil || !slices.Equal(got, []string{"i-1", "i-3"}) {
+		t.Errorf("qwenNotesHeld = %v, %v; want A and C held and the lost one not", got, err)
+	}
+}
+
+// A READ QWEN NOTE KEEPS ITS PLACE: the run's read notes are matched in their
+// places among its serves, so a read note's record settles no later note of
+// the same words, which a run killed before its reply leaves unheld.
+//
+// Mutation: match the record against the asked takes alone, and B reads held
+// off A's record and reply.
+func TestAReadQwenNoteKeepsItsPlace(t *testing.T) {
+	t.Parallel()
+	const session = "33333333-3333-4333-8333-333333333333"
+	const note = "## A note from eve, sent while this turn was running\nuse staging"
+	line := func(v map[string]any) string {
+		raw, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw) + "\n"
+	}
+	handed := line(map[string]any{"type": "user", "subtype": "mid_turn_user_message",
+		"message": map[string]any{"parts": []map[string]string{{"text": "\n" + qwenNoteFraming + note}}}})
+	reply := line(map[string]any{"type": "assistant", "message": map[string]any{"parts": []map[string]string{{"text": "ok"}}}})
+	a := sandbox.AskedTake{Take: "qwen_a", Digest: ItemDigest(note), Read: true}
+	b := sandbox.AskedTake{Take: "qwen_b", Digest: ItemDigest(note)}
+	ask := sandbox.MainThreadAsk{Session: session, Takes: []sandbox.AskedTake{b}, Served: []sandbox.AskedTake{a, b}}
+	for name, tc := range map[string]struct {
+		chat string
+		held bool
+	}{
+		"B killed before its reply": {handed + reply + handed, false},
+		"B answered":                {handed + reply + handed + reply, true},
+	} {
+		box := sandbox.NewFakeSandbox("qwen-read")
+		file := PathsFor(box).QwenDir() + "/projects/work/chats/" + session + ".jsonl"
+		box.Put(file, tc.chat)
+		box.Put(PathsFor(box).QwenRunStart(), session+" 0\n")
+		box.ExecFunc = func(context.Context, string, sandbox.ExecOptions) (sandbox.ExecResult, error) {
+			return sandbox.ExecResult{Stdout: file + "\n"}, nil
+		}
+		got := NewQwenCode().ReadMainThread(t.Context(), box, ask).Receipts
+		if held := slices.Equal(got.Held, []string{"qwen_b"}); held != tc.held {
+			t.Errorf("%s: B reads %+v, want held %v", name, got, tc.held)
+		}
 	}
 }

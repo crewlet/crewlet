@@ -11,7 +11,7 @@
  */
 
 import { useMemo } from "react";
-import { List, ListItem, Meter } from "@crewlethq/ui";
+import { ListItem, Meter } from "@crewlethq/ui";
 import {
   CoinsGlyph,
   CpuGlyph,
@@ -34,7 +34,13 @@ import { ExpensiveTasksCard } from "~/routes/spend/ExpensiveTasks.tsx";
 import { Hero } from "~/routes/spend/Hero.tsx";
 import { windowWords } from "~/routes/spend/model.ts";
 import type { BudgetWindow } from "~/protocol/types.ts";
-import { WidgetCard, WidgetQuery, defineWidgets, useHomeRange } from "~/routes/home/board/kit.tsx";
+import {
+  WidgetCard,
+  WidgetList,
+  WidgetQuery,
+  defineWidgets,
+  useHomeRange,
+} from "~/routes/home/board/kit.tsx";
 import { ChoiceFace } from "~/ui/SeatAvatar.tsx";
 
 /** As Company › Budgets re-reads the counters: the gate reports every 15s. */
@@ -140,27 +146,25 @@ function NearLimit() {
               : undefined
         }
       >
-        <div className="home-widget-pad">
-          <List variant="plain">
-            {rows.map(({ seat, w }) => (
-              <ListItem
-                key={seat.agent_id || seat.role}
-                leading={<ChoiceFace seat={seatBadge(seat.role)} />}
-              >
-                <Meter
-                  value={w.used}
-                  max={w.limit ?? w.used}
-                  state={w.state}
-                  label={`${seatBadge(seat.role).name}, ${PERIOD_ADJECTIVE[w.period]}`}
-                  valueText={`${fmtExact(w.used)} of ${fmtExact(w.limit)} tokens, ${
-                    w.state === "refusing" ? "refusing charges" : "nearly spent"
-                  }`}
-                  hint={`${fmtCount(w.used)} of ${fmtCount(w.limit)}`}
-                />
-              </ListItem>
-            ))}
-          </List>
-        </div>
+        <WidgetList variant="plain" className="home-widget-pad" rows={rows.length}>
+          {rows.map(({ seat, w }) => (
+            <ListItem
+              key={seat.agent_id || seat.role}
+              leading={<ChoiceFace seat={seatBadge(seat.role)} />}
+            >
+              <Meter
+                value={w.used}
+                max={w.limit ?? w.used}
+                state={w.state}
+                label={`${seatBadge(seat.role).name}, ${PERIOD_ADJECTIVE[w.period]}`}
+                valueText={`${fmtExact(w.used)} of ${fmtExact(w.limit)} tokens, ${
+                  w.state === "refusing" ? "refusing charges" : "nearly spent"
+                }`}
+                hint={`${fmtCount(w.used)} of ${fmtCount(w.limit)}`}
+              />
+            </ListItem>
+          ))}
+        </WidgetList>
       </WidgetQuery>
     </WidgetCard>
   );

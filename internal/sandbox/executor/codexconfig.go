@@ -105,8 +105,8 @@ func codexPosture(req sandbox.RunRequest) []string {
 	// host have none: web search is Codex's one web tool, and with `disabled` the
 	// request offers none (measured through the app-server on 0.171.0, under
 	// this posture; without it the request offers `web_search`). A hosted tool:
-	// Codex runs nothing for it, so none is left to refuse. The shell's reach is
-	// the box cell's egress policy's.
+	// Codex runs nothing for it, so none is left to refuse. The shell still
+	// reaches whatever the box's network does.
 	if req.WebDenied {
 		set = append(set, `web_search="disabled"`)
 	}

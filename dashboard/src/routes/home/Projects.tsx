@@ -11,7 +11,7 @@
 
 import { useServicesAsk } from "~/lib/services.ts";
 import { useMemo } from "react";
-import { Card, SegmentedMeter, StatusDot, Text } from "@crewlethq/ui";
+import { SegmentedMeter, StatusDot, Text } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { href } from "~/app/router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -20,13 +20,13 @@ import { WORKLET, needsWords } from "~/lib/access.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { indexOrg } from "~/lib/seats.ts";
-import { companyDateLabel, plural } from "~/lib/format.ts";
+import { companyDateLabel } from "~/lib/format.ts";
 import type { WorkProjectRow } from "~/protocol/index.ts";
 import { PROJECT_PAGE } from "~/contract/work.ts";
 import { projectPath } from "~/lib/work.ts";
-import { WidgetQuery, gapsOf } from "./board/kit.tsx";
+import { WidgetCard, WidgetList, WidgetQuery, gapsOf } from "./board/kit.tsx";
 
-/** How many projects the card draws before "All projects". */
+/** How many projects the card draws at its content's height. */
 export const PROJECT_ROWS = 3;
 
 export function Projects() {
@@ -46,28 +46,26 @@ export function Projects() {
   const rows = read.data?.projects?.filter((p) => !p.archived) ?? [];
   // THE MOST OPEN WORK FIRST: the projects with the most still to do are
   // the ones a reader looks at this card for.
-  const shown = [...rows]
-    .sort((a, b) => open(b) - open(a) || a.key.localeCompare(b.key))
-    .slice(0, PROJECT_ROWS);
+  const busiest = [...rows].sort((a, b) => open(b) - open(a) || a.key.localeCompare(b.key));
   return (
-    <Card padding="none" className="home-card">
-      <Card.Header
-        actions={
-          <span className="home-legend" aria-hidden="true">
-            <span>
-              <StatusDot tone="success" /> Done
-            </span>
-            <span>
-              <StatusDot tone="info" /> Active
-            </span>
-            <span>
-              <StatusDot tone="neutral" /> To do
-            </span>
+    <WidgetCard
+      title="Projects"
+      from="worklet"
+      open={{ label: "Open Worklet", to: ["worklet"] }}
+      actions={
+        <span className="home-legend" aria-hidden="true">
+          <span>
+            <StatusDot tone="success" /> Done
           </span>
-        }
-      >
-        <Card.Title as="h3">Projects</Card.Title>
-      </Card.Header>
+          <span>
+            <StatusDot tone="info" /> Active
+          </span>
+          <span>
+            <StatusDot tone="neutral" /> To do
+          </span>
+        </span>
+      }
+    >
       {!viewer.loading && !viewer.worklet ? (
         <p className="home-card-note">{needsWords("Projects", [WORKLET])}</p>
       ) : (
@@ -94,8 +92,13 @@ export function Projects() {
               : undefined
           }
         >
-          <ul className="project-list">
-            {shown.map((p) => (
+          <WidgetList
+            variant="plain"
+            className="project-list"
+            rows={PROJECT_ROWS}
+            capped={Boolean(read.data?.truncated)}
+          >
+            {busiest.map((p) => (
               <ProjectRow
                 key={p.key}
                 project={p}
@@ -107,17 +110,10 @@ export function Projects() {
                 }
               />
             ))}
-          </ul>
-          {rows.length > PROJECT_ROWS && (
-            <a className="home-card-more t-link" href={href(["worklet"])}>
-              {read.data?.truncated
-                ? `All ${rows.length.toLocaleString()}+ projects`
-                : `All ${plural(rows.length, "project")}`}
-            </a>
-          )}
+          </WidgetList>
         </WidgetQuery>
       )}
-    </Card>
+    </WidgetCard>
   );
 }
 

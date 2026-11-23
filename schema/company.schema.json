@@ -2086,7 +2086,7 @@
           ]
         },
         "template": {
-          "description": "Box template. This is where vCPU/RAM/disk are set: at template build time.",
+          "description": "Box template, which sizes the box: its vCPU, RAM and disk are set when the template is built.",
           "type": [
             "string",
             "number",

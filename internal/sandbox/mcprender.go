@@ -47,7 +47,7 @@ type MCPServer struct {
 	// AlwaysLoaded asks the harness to offer this server's tools on every
 	// request rather than defer them: Claude Code's `alwaysLoad` (exempt from
 	// its tool search), OpenCode's `codemode: false` (not behind Code Mode's
-	// `execute`).
+	// `execute`), Hermes's tool search turned off (it exempts no server).
 	//
 	// Set on THE ENGINE'S OWN TOOLS ALONE: the bridge's `crewlet` server
 	// (submit_work, ask_and_wait, the seat's colleagues, work and knowledge).
