@@ -614,11 +614,20 @@ export function scopeChoices(lane: Lane, held: string[] | undefined): ScopeChoic
   for (const id of held ?? []) if (!ids.includes(id)) ids.push(id);
   return ids.map((id) => {
     const label = scopeLabel(lane, id);
-    const quiet = [label === id ? "" : id, lane.scope_details?.[id] ?? ""]
-      .filter(Boolean)
-      .join(" · ");
+    const quiet = scopeQuiet(lane, id);
     return quiet ? { value: id, label, description: quiet } : { value: id, label };
   });
+}
+
+/**
+ * An entry's secondary text under or beside its name: the identifier where the
+ * name differs from it, and the vendor's second identifier (an app's bundle
+ * ID). Empty where the name is the identifier and the vendor gives no other.
+ */
+export function scopeQuiet(lane: Lane, id: string): string {
+  return [scopeLabel(lane, id) === id ? "" : id, lane.scope_details?.[id] ?? ""]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 /** What a scope picker says in place of itself, and where a person makes an entry to offer. */
@@ -847,27 +856,6 @@ export function offSentence(lane: Lane, saved: AccessSeatLane, departed = false)
   return saved.observed.exists
     ? "Off. Its account is disabled and kept, so turning it on again restores it."
     : `Off. ${laneWords(lane.key).turnOn}`;
-}
-
-/**
- * What turning an off agent on does, said once per distinct sentence over the
- * off agents it is true of ("2 agents are off. Turning one on creates ..."),
- * where every off row said it again in its details.
- */
-export function offNote(
-  rows: readonly { lane: Lane; saved: AccessSeatLane; seat: { departed?: boolean | undefined } }[],
-): string[] {
-  const counts = new Map<string, number>();
-  for (const { lane, saved, seat } of rows) {
-    if (saved.desired.enabled || seat.departed) continue;
-    const said = offSentence(lane, saved).replace(/^Off\. /, "");
-    counts.set(said, (counts.get(said) ?? 0) + 1);
-  }
-  return [...counts].map(([said, n]) =>
-    n === 1
-      ? `One agent is off. ${said}`
-      : `${n} agents are off. ${said.replace(/^Turning it on/, "Turning one on")}`,
-  );
 }
 
 const STATUS_ORDER: Record<string, number> = {

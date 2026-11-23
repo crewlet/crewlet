@@ -625,7 +625,7 @@ func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 			return "", err
 		}
 		if notes || loads {
-			take, err := museTakeConfig(f.MCPServers, f.Steer, f.SkillLoads)
+			take, err := hookTakeConfig(f.MCPServers, f.Steer, f.SkillLoads, "")
 			if err != nil {
 				return "", err
 			}
@@ -646,10 +646,10 @@ func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 }
 
 // writeMuseNotes writes a run's notes plugin ([musePluginManifest]), its take
-// config ([museTakeConfig]) and the note helper's build for the box's
+// config ([hookTakeConfig]) and the note helper's build for the box's
 // machine ([writeNoteHelper]).
 func writeMuseNotes(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) error {
-	take, err := museTakeConfig(req.MCPServers, req.Steer, req.SkillLoads)
+	take, err := hookTakeConfig(req.MCPServers, req.Steer, req.SkillLoads, "")
 	if err != nil {
 		return err
 	}

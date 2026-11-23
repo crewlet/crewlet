@@ -76,6 +76,11 @@ type OpenInput struct {
 	// the caller holds no keyring, as a migration's read does.
 	Derive func(info string) []byte
 
+	// Tokens issues what a session checks an identity with where nothing is
+	// sealed ([IssuedTokens]); nil on a preview or a migration's read, which
+	// check no identity.
+	Tokens IssuedTokens
+
 	// Reads is what the company half of the same pass already read at the
 	// vendor, handed on so the session reads it no second time: Cloudflare's
 	// inspection of the token and the account (its permission groups and
@@ -433,6 +438,10 @@ type LaneSpec struct {
 	// GrantTerms is how an agent reads the lane's grants ([GrantTerms]):
 	// set wherever Grants is.
 	GrantTerms GrantTerms
+
+	// Identity is how the lane offers a seat its own identity at the vendor
+	// ([IdentitySpec]); zero on a lane that offers none.
+	Identity IdentitySpec
 }
 
 // Granter is the session of a vendor whose lane takes grants

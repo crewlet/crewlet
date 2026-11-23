@@ -44,7 +44,7 @@ func (p *Product) generic(ctx context.Context, call growth.Call) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	resp, err := m.team.client.Do(ctx, m.slot, Request{Method: m.op.Method, Path: m.path, Query: m.query,
+	resp, err := m.do(ctx, Request{Method: m.op.Method, Path: m.path, Query: m.query,
 		Body: m.body, Read: m.op.Method == "GET"})
 	rec := recordOf(call, m)
 	if err != nil {

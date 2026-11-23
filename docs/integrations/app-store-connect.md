@@ -1,6 +1,6 @@
 # App Store Connect
 
-Agents read and work on your App Store apps through Crewlet's own tools: listings, ratings and reviews and replies to them, TestFlight, custom product pages, in-app events, in-app purchases and subscriptions, prices and availability, sales and analytics, and the team's users, devices, certificates and profiles. Every operation of Apple's App Store Connect API is offered ([the full list](../reference/app-store-connect-operations.md)), each in one class, and no agent ever holds a key: Crewlet keeps your team's API keys and makes every call ([ADR-0170](../../adr/0170-a-growth-integrations-credential-stays-in-the-engine.md)).
+Agents read and work on your App Store apps through Crewlet's own tools: listings, ratings and reviews and replies to them, TestFlight, custom product pages, in-app events, in-app purchases and subscriptions, prices and availability, sales and analytics, and the team's users, devices, certificates and profiles. Every operation of Apple's App Store Connect API is offered ([the full list](../reference/app-store-connect-operations.md)), each in one class, and no agent ever holds a key: Crewlet keeps your team's API keys, and each agent's own key where it has one, and makes every call ([ADR-0170](../../adr/0170-a-growth-integrations-credential-stays-in-the-engine.md)).
 
 ## Connect a team
 
@@ -49,6 +49,37 @@ Each call goes through the connected key with the least access whose role may ma
 
 The Account Holder has no key: an act only it may take is done in App Store Connect by that person.
 
+## Give an agent its own identity
+
+By default every agent's calls go as the company's team keys, so Apple's history shows one actor for every agent. Give an agent a team key of its own and Apple records its submissions under that key, its calls get their own hourly budget, and you can revoke it alone ([ADR-0179](../../adr/0179-a-seat-may-hold-its-own-identity-at-a-growth-vendor.md)). Until it has one, the agent's row on the **Agents** tab reads **Needs you**.
+
+1. On the integration's **Agents** tab, open the agent and press **Set up identity**.
+2. In App Store Connect, **Users and Access**, **Integrations**, **Team Keys**, press **Generate API Key** (or **+**). Only the Account Holder or an Admin can.
+3. Name it as the sheet shows (`crewlet-<handle>`, from the one rule Crewlet names every agent identity by) and give it the role the agent's level needs. Never Admin.
+4. Press **Generate**, then **Download API Key** on its row: Apple offers the `AuthKey_<Key ID>.p8` file once.
+5. Back on the sheet, choose the file. Crewlet reads the key ID from its name, checks the key, and keeps it only if it works.
+
+| Level | Role of the agent's key |
+|---|---|
+| `read` | Marketing (App Manager or Developer work, with a warning: they reach more) |
+| `operate` | App Manager |
+| `administer` | App Manager |
+
+**The check** makes reads only: it signs with each connected team's issuer to find the key's team, makes a read every role may make (a key that fails it is revoked or another team's), reads the key's role from seven list reads whose roles Apple's role matrix fixes (Apple has no call that names a key's role), and confirms the agent's apps are in that team. An Admin key, a key at a role that does not fit the level, another team's key, a key another agent keeps and one of the company's own keys are refused and kept nowhere. A kept key is sealed under `APP_STORE_CONNECT_KEY_<HANDLE>`, reaches no box, and is checked again on every pass. The document records the choice on the seat:
+
+```yaml
+roles:
+  - handle: growth
+    integrations:
+      app_store_connect: {enabled: true, level: read, apps: ["1234567890"], identity: own}
+```
+
+**Which key signs a call.** A call the agent's key may make goes through it. A read its role may not make (a sales report, for a Marketing key) goes through the company's least-privileged key that can, and the access log records it as the company's. An account change only Admin may make goes through the company's Admin key once an administrator allows it. Every other change goes through the agent's key or is refused before Apple is asked. Each record on the access log names whose identity signed it (`signer`: `own` or `company`).
+
+**When Apple refuses it.** A key revoked at Apple, or one whose team or role no longer fits, stops the agent's calls: they are refused with the reason, never sent as the company's, until you give it a new key or press **Use the company's for now**.
+
+**Replacing and giving one up.** Apple cannot change a key's role or revoke one by API. To replace a key, set up a new one: Crewlet switches once it works and asks you to revoke the old one at Apple. Turning the agent off, or back to the company's keys, clears its sealed key and asks for the same revoke. Either way the row says which key to revoke until a pass finds Apple refusing it.
+
 ## Levels
 
 | Level | The agent may |
@@ -57,7 +88,7 @@ The Account Holder has no key: an act only it may take is done in App Store Conn
 | `operate` (Manage) | Also make changes nobody outside the team sees at once (a draft version's text, a draft custom product page or in-app event, internal TestFlight), and ask for anything customers or external testers see |
 | `administer` (Administer) | Also ask for account changes: users, invitations, devices, certificates, bundle IDs, profiles, sandbox testers, webhooks, and deletes that cannot be undone |
 
-A seat names the apps it may touch (`apps`, required while on). The company's `apps` narrows what a seat may name; without it, a seat may name any app the team's keys reach. On the integration's **Agents** tab, an agent's app chooser lists the apps the keys reach by name, each with its Apple ID and bundle ID, to tick and search; an app it does not list can still be added by its Apple ID. Crewlet reads the list with the least-privileged key that may list apps (never the Admin key, so a team with only an Admin key lists none), keeps it for ten minutes, and reads it again on every pass and on **Check now**. Each connection on the integration's page names the Apple role of each key it holds and the apps it reaches.
+A seat names the apps it may touch (`apps`, required while on). The company's `apps` narrows what a seat may name; without it, a seat may name any app the team's keys reach. On the integration's **Agents** tab, an agent's app chooser lists the apps the keys reach by name, each with its Apple ID and bundle ID, to tick and search; an app it does not list can still be added by its Apple ID. Crewlet reads the list with the least-privileged key that may list apps (never the Admin key, so a team with only an Admin key lists none, and its apps show by Apple ID), keeps it for ten minutes, and reads it again on every pass and on **Check now**. The integration's **Settings** tab lists the apps each connection reaches; where no key may list them, it, the **Agents** tab and the chooser say which key to add.
 
 Every resource a call names that belongs to an app, in its path, its filters or the body it sends, must be in one of those apps; Crewlet finds its app before anything is sent. Resources no app owns (users, beta testers, devices, certificates, reports across apps) need `team_resources: true` on the seat; Apple's own reference data (territories, app categories) needs nothing. An answer never shows an app outside the seat's apps, and a read through a resource no app owns that would show another app's resources (a tester's beta groups) is refused unless the seat's apps are all of the team's: read them through one of its apps instead.
 

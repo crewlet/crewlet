@@ -37,11 +37,11 @@ export function AppStoreAnalytics({ connections }: { connections: readonly strin
       ? "Connect a team first: the key turns analytics on for a connection's apps."
       : undefined;
   return (
-    <Section title="App Store analytics">
+    <Section spacing="tight" title="App Store analytics">
       <Stack gap={2}>
-        <Text>
-          Impressions and product page views need a report request for each app that only an Admin
-          key can create. Paste one here to turn them on: Crewlet uses it once and keeps no copy.
+        <Text tone="secondary">
+          Impressions and page views need a report request per app, which only an Admin key can
+          make. Crewlet uses the key once and keeps no copy.
         </Text>
         {answer && (
           <Callout variant={answer.apps.some((a) => a.state === "failed") ? "warning" : "success"}>

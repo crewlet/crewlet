@@ -67,7 +67,7 @@ func outstandingCloudflare(t *testing.T, tb integrationtest.TB) *cloudflareWorld
 		f.provisionerOwn = []cloudflare.Policy{own}
 		// AND A TOKEN NAMED FOR AN AGENT THAT NOTHING RECORDS, an advisory
 		// owed by an admin and never touched.
-		f.tokens["tok-stray"] = &fakeToken{ID: "tok-stray", Name: "crewlet-acme-old-sre",
+		f.tokens["tok-stray"] = &fakeToken{ID: "tok-stray", Name: "crewlet-old-sre",
 			Status: cloudflare.StatusActive}
 	})
 	return w
@@ -209,19 +209,20 @@ func TestALevelNoAgentHoldsIsANoteNotAFault(t *testing.T) {
 	}
 }
 
-// ONLY AN ACTIVE TOKEN NAMED FOR THIS COMPANY'S AGENTS AND RECORDED NOWHERE IS
-// AN ORPHAN: the ledger's tokens, the provisioner, an inert token and another
-// company's are not, and the pass deletes nothing.
+// ONLY AN ACTIVE TOKEN NAMED LIKE AN AGENT'S AND RECORDED NOWHERE IS AN
+// ORPHAN: the ledger's tokens, the provisioner, an inert token and a person's
+// are not. A name holds no company, so another company's agent token in a
+// shared account is listed too; the pass deletes nothing.
 func TestAnUnrecordedAgentTokenIsReportedAndLeftAlone(t *testing.T) {
 	t.Parallel()
 	w := convergedCloudflare(t, t)
 	w.opt.Managed = []string{"tok-managed"}
 	w.f.set(func(f *fakeCloudflare) {
 		for _, tok := range []*fakeToken{
-			{ID: "tok-managed", Name: "crewlet-acme-sre", Status: cloudflare.StatusActive},
-			{ID: "tok-stray", Name: "crewlet-acme-sre", Status: cloudflare.StatusActive},
-			{ID: "tok-off", Name: "crewlet-acme-ops", Status: cloudflare.StatusDisabled},
-			{ID: "tok-other", Name: "crewlet-globex-sre", Status: cloudflare.StatusActive},
+			{ID: "tok-managed", Name: "crewlet-sre", Status: cloudflare.StatusActive},
+			{ID: "tok-stray", Name: "crewlet-sre", Status: cloudflare.StatusActive},
+			{ID: "tok-off", Name: "crewlet-ops", Status: cloudflare.StatusDisabled},
+			{ID: "tok-other", Name: "crewlet-growth", Status: cloudflare.StatusActive},
 			{ID: "tok-human", Name: "deploy", Status: cloudflare.StatusActive},
 		} {
 			f.tokens[tok.ID] = tok
@@ -232,8 +233,8 @@ func TestAnUnrecordedAgentTokenIsReportedAndLeftAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(findings) != 1 || findings[0].Kind != integration.FindingRegistrationOrphaned ||
-		!slices.Equal(findings[0].Subjects, []string{"crewlet-acme-sre (tok-stray)"}) {
-		t.Fatalf("findings = %+v, want the one unrecorded active agent token", findings)
+		!slices.Equal(findings[0].Subjects, []string{"crewlet-growth (tok-other)", "crewlet-sre (tok-stray)"}) {
+		t.Fatalf("findings = %+v, want the two unrecorded active agent tokens", findings)
 	}
 	if got := w.f.wrote(); len(got) != 0 {
 		t.Errorf("the advisory wrote %v", got)

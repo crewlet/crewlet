@@ -37,7 +37,7 @@ type wholeHoldings struct{ *openCodeHoldingsWalk }
 // scrub's output), for the calls ask marks asked: the one export walk, each
 // value held to lineBytes, the reading its visitor ([openCodeHoldingsWalk]);
 // nothing but whitespace after the document; then the verdict
-// ([openCodeVerdict]), a pure function of the walk's facts and the ask. A
+// ([contentVerdict]), a pure function of the walk's facts and the ask. A
 // take reads a session through it too, inside its own budget and slot.
 func readOpenCodeHoldingsWhole(ctx context.Context, plain io.Reader, lineBytes int, session string,
 	start sandbox.RunStart, ask sandbox.HoldingsAsk) (sandbox.SessionHoldings, error) {

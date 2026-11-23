@@ -4,7 +4,7 @@
  * offers the caps editor exactly the accounts the vendor reports, once each.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import type { IntegrationRow } from "~/contract/integrations.ts";
 import { GrowthProductSection, capAccountsOf, growthDetailsOf } from "./GrowthProduct.tsx";
@@ -157,4 +157,41 @@ test("the logo waits for data, and no other product shows it", () => {
   );
   expect(screen.queryByRole("link", { name: /Google Analytics/ })).toBeNull();
   expect(document.querySelector("img")).toBeNull();
+});
+
+// APP STORE CONNECT'S LONE TEAM IS ITS APPS: the issuer and the key's role are
+// the settings above, so the section is titled by what it reaches and draws
+// only that, and the roles reference waits closed. Mutation: drop `bare`, and
+// the issuer and the role's tag are drawn twice on the page.
+test("a lone App Store Connect team is titled by its apps, and the roles wait closed", () => {
+  const row = {
+    key: "app_store_connect",
+    configured: true,
+    connections: [
+      {
+        id: "main",
+        identity: "57246542-96fe-1a63-e053-0824d011072a",
+        roles_held: ["ADMIN"],
+        accounts: [{ product: "app_store_connect", account: "6763222842", account_name: "" }],
+        unread: "App names need a key of any role but Admin",
+      },
+    ],
+    roles: [
+      { id: "ADMIN", name: "Admin", note: "Everything.", classes: ["read"], levels: ["read"] },
+    ],
+  } as unknown as IntegrationRow;
+  render(<GrowthProductSection kind="app_store_connect" product="App Store Connect" row={row} />);
+  const apps = screen.getByRole("region", { name: "Apps" });
+  expect(within(apps).getByText("6763222842")).toBeTruthy();
+  expect(within(apps).getByText("App names need a key of any role but Admin")).toBeTruthy();
+  expect(within(apps).queryByText("57246542-96fe-1a63-e053-0824d011072a")).toBeNull();
+  expect(within(apps).queryByText("Admin")).toBeNull();
+  expect(screen.queryByRole("region", { name: "Connections" })).toBeNull();
+  const roles = screen.getByRole("region", { name: "App Store Connect roles" });
+  const fold = within(roles).getByRole("button", { name: "What each role allows" });
+  expect(fold.getAttribute("aria-expanded")).toBe("false");
+  fireEvent.click(fold);
+  expect(
+    within(roles).getByRole("table", { name: "App Store Connect roles Crewlet uses" }),
+  ).toBeTruthy();
 });

@@ -1,0 +1,49 @@
+package engine
+
+import (
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/seataccess"
+)
+
+// A SEAT ACCESS SESSION IS ISSUED A SEAT'S TOKEN ONLY FOR ITS USABLE GROWTH
+// IDENTITY, named by the email the record keeps, and an admin token only
+// where somebody signed in: anything else is ErrNotIssued, which the check
+// reads as a person's or the pass's step, never a fault.
+//
+// Mutation: answer the identity's name rule rather than the record's email,
+// and an identity made under another name is checked as one nobody added.
+func TestASessionIsIssuedTokensOnlyForWhatTheEngineHolds(t *testing.T) {
+	t.Parallel()
+	g := newSeatGoogle(t)
+	e := googleCloudEngine(t, googleCloudCompany(t), g, time.Now().Add(-time.Hour))
+	tokens := seatTokens{engine: e, hc: g.client}
+	if _, _, err := tokens.SeatToken(t.Context(), integration.KindGooglePlay, "builder",
+		[]string{analyticsReadonly}); !errors.Is(err, seataccess.ErrNotIssued) {
+		t.Fatalf("a seat with no identity: %v", err)
+	}
+	rec := coord.GoogleIdentity{Handle: "builder", UniqueID: "100000000000000000077", Delegated: true,
+		Email: "crewlet-g-builder-0a1b@acme-crewlet-id.iam.gserviceaccount.com", CreatedAt: time.Now()}
+	if _, _, err := e.backends.Fleet.CreateGoogleIdentity(t.Context(), rec); err != nil {
+		t.Fatal(err)
+	}
+	token, email, err := tokens.SeatToken(t.Context(), integration.KindGooglePlay, "builder",
+		[]string{analyticsReadonly})
+	if err != nil || !strings.Contains(token, rec.UniqueID) || email != rec.Email {
+		t.Fatalf("a usable identity: %q %q %v", token, email, err)
+	}
+	if _, _, err := tokens.SeatToken(t.Context(), integration.KindSlack, "builder",
+		[]string{analyticsReadonly}); !errors.Is(err, seataccess.ErrNotIssued) {
+		t.Errorf("a kind with no growth identity: %v", err)
+	}
+	for _, kind := range []integration.Kind{integration.KindGooglePlay, integration.KindSearchConsole} {
+		if _, err := tokens.AdminToken(t.Context(), kind); !errors.Is(err, seataccess.ErrNotIssued) {
+			t.Errorf("%s with nobody signed in: %v", kind, err)
+		}
+	}
+}
