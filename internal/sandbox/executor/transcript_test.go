@@ -1234,7 +1234,7 @@ func TestAnArchiveIsBlamedOnlyForItsOwnFaults(t *testing.T) {
 	for _, c := range []struct {
 		harness string
 		format  int
-	}{{"cursor-agent", 1}, {executor.ClaudeCodeName, executor.ClaudeArchiveFormat + 1}} {
+	}{{"custom", 1}, {executor.ClaudeCodeName, executor.ClaudeArchiveFormat + 1}} {
 		_, err := executor.ReadTranscript(t.Context(), c.harness, c.format,
 			neverOpened(t, "an archive of a format this build does not read"), 0)
 		if !errors.Is(err, executor.ErrUnsupportedArchive) {

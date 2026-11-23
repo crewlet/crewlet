@@ -12,24 +12,32 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 )
 
+// customProfile is the `overrides` of a `custom` entry that can be handed a
+// seat's tools: `custom` never gets an in-box runner (#1818), so an executor
+// moved onto it is refused for that alone.
+const customProfile = "{binary: my-cli, complete_args: [run], output: text, " +
+	"model_args: [--model, '{model}'], " +
+	"mcp: {args: [--mcp-server, '{relay_argv_json}'], concurrency: in_turn, tool_timeout_seconds: 60}}"
+
 // removalDoc is a company whose models are named every way a removal has to
-// answer: pm names none (its jobs run on `default`), qa names cursor-review for
-// its reviewing flat and sonnet as its executor, backend names cursor-review
+// answer: pm names none (its jobs run on `default`), qa names house-review for
+// its reviewing flat and sonnet as its executor, backend names house-review
 // inside its `llm` mapping, and Ask Crewlet runs on aux
 // sonnet.
 const removalDoc = `
 name: Acme
 providers:
   sandbox: {fake: true}
-  llm_order: [default, sonnet, cursor-review, aux]
+  llm_order: [default, sonnet, house-review, aux]
   llm:
     default:
       model: claude-opus-5-5
     sonnet:
       model: sonnet
-    cursor-review:
-      harness: cursor-agent
-      model: gpt-5.5
+    house-review:
+      harness: custom
+      model: house-model
+      overrides: ` + customProfile + `
     aux:
       model: haiku
       overrides: {web_tools: denied}
@@ -39,12 +47,12 @@ roles:
   - name: QA
     handle: qa
     llm: sonnet
-    llm_review: [cursor-review, aux]
+    llm_review: [house-review, aux]
   - name: Backend
     handle: backend
     llm:
       default: sonnet
-      subagent: cursor-review
+      subagent: house-review
 assistant:
   model: aux
 `
@@ -76,7 +84,7 @@ func TestARemovalNamesEveryDependantItLeavesUnanswered(t *testing.T) {
 	s := newSurface(t)
 	s.seed(t, removalDoc)
 
-	code, body := removeModel(t, s, "cursor-review", "?dry_run=true", "", nil)
+	code, body := removeModel(t, s, "house-review", "?dry_run=true", "", nil)
 	if code != http.StatusUnprocessableEntity || body["error"] != "validation_error" {
 		t.Fatalf("dry run with no repoint = %d %v, want 422 validation_error", code, body)
 	}
@@ -91,7 +99,7 @@ func TestARemovalNamesEveryDependantItLeavesUnanswered(t *testing.T) {
 	if segs, _ := json.Marshal(first["segments"]); string(segs) != `["roles",1,"llm_review"]` {
 		t.Errorf("segments = %s, want the written field", segs)
 	}
-	if chain, _ := json.Marshal(first["chain"]); string(chain) != `["cursor-review","aux"]` {
+	if chain, _ := json.Marshal(first["chain"]); string(chain) != `["house-review","aux"]` {
 		t.Errorf("chain = %s, want the whole written chain", chain)
 	}
 	problems, _ := body["problems"].([]any)
@@ -100,14 +108,14 @@ func TestARemovalNamesEveryDependantItLeavesUnanswered(t *testing.T) {
 	}
 	p, _ := problems[0].(map[string]any)
 	if p["kind"] != "conflict" || p["seat"] != "qa" ||
-		!strings.Contains(p["message"].(string), "qa's reviewing work still names cursor-review") {
+		!strings.Contains(p["message"].(string), "qa's reviewing work still names house-review") {
 		t.Errorf("problem = %v", p)
 	}
 	if segs, _ := json.Marshal(p["segments"]); string(segs) != `["roles",1,"llm_review"]` {
 		t.Errorf("problem segments = %s", segs)
 	}
 	// NOTHING MOVED.
-	if _, ok := activeCompany(t, s).Providers.LLM["cursor-review"]; !ok {
+	if _, ok := activeCompany(t, s).Providers.LLM["house-review"]; !ok {
 		t.Error("a refused removal removed the entry")
 	}
 }
@@ -120,7 +128,7 @@ func TestAModelsReferencesAreReadWithNoWriteAsked(t *testing.T) {
 	s := newSurface(t)
 	s.seed(t, removalDoc)
 
-	res := s.do(t, http.MethodGet, "/config/llm-providers/cursor-review/references", "", nil)
+	res := s.do(t, http.MethodGet, "/config/llm-providers/house-review/references", "", nil)
 	body := decode(t, res)
 	if res.Code != http.StatusOK {
 		t.Fatalf("references = %d %v, want 200", res.Code, body)
@@ -130,7 +138,7 @@ func TestAModelsReferencesAreReadWithNoWriteAsked(t *testing.T) {
 		t.Fatalf("references = %v, want qa's reviewing and backend's delegated tasks", refs)
 	}
 	// THE SAME LIST the dry run's refusal names, reference for reference.
-	_, refused := removeModel(t, s, "cursor-review", "?dry_run=true", "", nil)
+	_, refused := removeModel(t, s, "house-review", "?dry_run=true", "", nil)
 	read, _ := json.Marshal(refs)
 	said, _ := json.Marshal(refused["references"])
 	if string(read) != string(said) {
@@ -157,16 +165,16 @@ func TestARemovalIsDecidedOnTheEntrysOwnTag(t *testing.T) {
 	s := newSurface(t)
 	s.seed(t, removalDoc)
 	document := s.do(t, http.MethodGet, "/config", "", nil).Header().Get("ETag")
-	entry := s.do(t, http.MethodGet, "/config/llm-providers/cursor-review", "", nil).Header().Get("ETag")
+	entry := s.do(t, http.MethodGet, "/config/llm-providers/house-review", "", nil).Header().Get("ETag")
 	if document == "" || entry == "" || document == entry {
 		t.Fatalf("tags: document %q, entry %q, want two different tags", document, entry)
 	}
-	code, body := removeModel(t, s, "cursor-review", "?dry_run=true", "",
+	code, body := removeModel(t, s, "house-review", "?dry_run=true", "",
 		map[string]string{"If-Match": document})
 	if code != http.StatusPreconditionFailed || body["error"] != "version_moved" {
 		t.Errorf("removal on the document's tag = %d %v, want 412 version_moved", code, body)
 	}
-	code, body = removeModel(t, s, "cursor-review", "?dry_run=true", "",
+	code, body = removeModel(t, s, "house-review", "?dry_run=true", "",
 		map[string]string{"If-Match": entry})
 	if code != http.StatusUnprocessableEntity || body["error"] != "validation_error" {
 		t.Errorf("removal on the entry's tag = %d %v, want 422 naming its dependants", code, body)
@@ -185,31 +193,31 @@ func TestARemovalRepointsEveryDependantInOneRevision(t *testing.T) {
 		{"at": {"seat": "qa", "job": "review"}, "to": "sonnet"},
 		{"at": {"seat": "backend", "job": "subagent"}, "to": null}]}`
 
-	code, checked := removeModel(t, s, "cursor-review", "?dry_run=true", body, nil)
+	code, checked := removeModel(t, s, "house-review", "?dry_run=true", body, nil)
 	if code != http.StatusOK || checked["valid"] != true {
 		t.Fatalf("dry run = %d %v", code, checked)
 	}
-	if before := activeCompany(t, s); before.Providers.LLM["cursor-review"].Harness == "" {
+	if before := activeCompany(t, s); before.Providers.LLM["house-review"].Harness == "" {
 		t.Fatal("a dry run removed the entry")
 	}
 
-	code, applied := removeModel(t, s, "cursor-review", "", body,
-		map[string]string{"X-Summary": "remove cursor-review"})
+	code, applied := removeModel(t, s, "house-review", "", body,
+		map[string]string{"X-Summary": "remove house-review"})
 	if code != http.StatusCreated || applied["revision_id"] == "" || applied["epoch"] == nil {
 		t.Fatalf("removal = %d %v, want 201 with the revision and its epoch", code, applied)
 	}
 	after := activeCompany(t, s)
-	if _, ok := after.Providers.LLM["cursor-review"]; ok {
+	if _, ok := after.Providers.LLM["house-review"]; ok {
 		t.Error("the entry is still there")
 	}
-	if slices.Contains(after.Providers.LLMOrder, "cursor-review") {
+	if slices.Contains(after.Providers.LLMOrder, "house-review") {
 		t.Errorf("llm_order = %v still names it", after.Providers.LLMOrder)
 	}
 	for role := range after.EachRole() {
 		switch role.IdentityKey() {
 		case "qa":
 			if !slices.Equal(role.LLMReview, config.ProviderKeys{"sonnet", "aux"}) {
-				t.Errorf("qa's review = %v, want sonnet where cursor-review stood", role.LLMReview)
+				t.Errorf("qa's review = %v, want sonnet where house-review stood", role.LLMReview)
 			}
 		case "backend":
 			if len(role.LLM.Subagent) != 0 || !slices.Equal(role.LLM.Default, config.ProviderKeys{"sonnet"}) {
@@ -367,7 +375,7 @@ func TestARemovalRefusesARepointTheCompanyCannotRun(t *testing.T) {
 	s := newSurface(t)
 	s.seed(t, removalDoc)
 
-	code, body := removeModel(t, s, "cursor-review", "?dry_run=true", `{"repoint": [
+	code, body := removeModel(t, s, "house-review", "?dry_run=true", `{"repoint": [
 		{"at": {"seat": "qa", "job": "review"}, "to": null},
 		{"at": {"seat": "backend", "job": "subagent"}, "to": null},
 		{"at": {"seat": "pm", "job": "executor"}, "to": "aux"}]}`, nil)
@@ -382,8 +390,8 @@ func TestARemovalRefusesARepointTheCompanyCannotRun(t *testing.T) {
 	}
 
 	// A FIELD MOVED ONTO THE ENTRY THIS WRITE REMOVES is refused at the field.
-	code, body = removeModel(t, s, "cursor-review", "?dry_run=true", `{"repoint": [
-		{"at": {"seat": "qa", "job": "review"}, "to": "cursor-review"},
+	code, body = removeModel(t, s, "house-review", "?dry_run=true", `{"repoint": [
+		{"at": {"seat": "qa", "job": "review"}, "to": "house-review"},
 		{"at": {"seat": "backend", "job": "subagent"}, "to": null}]}`, nil)
 	problems, _ := body["problems"].([]any)
 	if code != http.StatusUnprocessableEntity || len(problems) != 1 ||
@@ -392,12 +400,12 @@ func TestARemovalRefusesARepointTheCompanyCannotRun(t *testing.T) {
 		t.Errorf("a repoint onto the removed entry = %d %v, want 422 at the field", code, body)
 	}
 
-	// CURSOR AGENT CANNOT RUN AN EXECUTOR: the whole document is validated.
+	// CUSTOM CANNOT RUN AN EXECUTOR: the whole document is validated.
 	code, body = removeModel(t, s, "sonnet", "?dry_run=true", `{"repoint": [
-		{"at": {"seat": "qa", "job": "executor"}, "to": "cursor-review"},
+		{"at": {"seat": "qa", "job": "executor"}, "to": "house-review"},
 		{"at": {"seat": "backend", "job": "executor"}, "to": "default"}]}`, nil)
 	if code != http.StatusUnprocessableEntity || body["error"] != "validation_error" {
-		t.Fatalf("an executor moved to cursor-agent = %d %v, want 422 validation_error", code, body)
+		t.Fatalf("an executor moved to custom = %d %v, want 422 validation_error", code, body)
 	}
 	if problems, _ := body["problems"].([]any); len(problems) == 0 {
 		t.Errorf("the refusal carries no field-mapped problem: %v", body)
@@ -405,7 +413,7 @@ func TestARemovalRefusesARepointTheCompanyCannotRun(t *testing.T) {
 
 	for _, bad := range []string{`{"repoint": [{"at": {"seat": "qa"}, "to": "x"}]}`,
 		`{"repoint": [], "extra": 1}`, `{"repoint": [{"at": {"assistant": "voice"}}]}`} {
-		if code, body := removeModel(t, s, "cursor-review", "?dry_run=true", bad, nil); code != http.StatusBadRequest {
+		if code, body := removeModel(t, s, "house-review", "?dry_run=true", bad, nil); code != http.StatusBadRequest {
 			t.Errorf("%s = %d %v, want 400", bad, code, body)
 		}
 	}
@@ -427,17 +435,17 @@ func TestARemovalIsAWriteLikeAnyOther(t *testing.T) {
 		strings.Contains(got["hint"].(string), "If-None-Match") {
 		t.Errorf("an absent entry = %d %v, want 404 saying there is nothing to remove", code, got)
 	}
-	if code, got := removeModel(t, s, "cursor-review", "", body,
+	if code, got := removeModel(t, s, "house-review", "", body,
 		map[string]string{"If-Match": `"llm-providers-0000"`}); code != http.StatusPreconditionFailed {
 		t.Errorf("a stale If-Match = %d %v, want 412", code, got)
 	}
-	if code, got := removeModel(t, s, "cursor-review", "", body, nil); code != http.StatusBadRequest ||
+	if code, got := removeModel(t, s, "house-review", "", body, nil); code != http.StatusBadRequest ||
 		got["error"] != "summary_required" {
 		t.Errorf("no summary = %d %v, want 400 summary_required", code, got)
 	}
-	tag := s.do(t, http.MethodGet, "/config/llm-providers/cursor-review", "", nil).Header().Get("ETag")
-	if code, got := removeModel(t, s, "cursor-review", "", body,
-		map[string]string{"If-Match": tag, "X-Summary": "remove cursor-review"}); code != http.StatusCreated {
+	tag := s.do(t, http.MethodGet, "/config/llm-providers/house-review", "", nil).Header().Get("ETag")
+	if code, got := removeModel(t, s, "house-review", "", body,
+		map[string]string{"If-Match": tag, "X-Summary": "remove house-review"}); code != http.StatusCreated {
 		t.Errorf("with the entry's own tag = %d %v", code, got)
 	}
 }
@@ -452,14 +460,14 @@ func TestARemovalTakesItsSummaryInTheBody(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
 	s.seed(t, removalDoc)
-	body := `{"_summary": "remove cursor-review", "repoint": [
+	body := `{"_summary": "remove house-review", "repoint": [
 		{"at": {"seat": "qa", "job": "review"}, "to": null},
 		{"at": {"seat": "backend", "job": "subagent"}, "to": null}]}`
-	if code, got := removeModel(t, s, "cursor-review", "?dry_run=true", body, nil); code != http.StatusOK ||
+	if code, got := removeModel(t, s, "house-review", "?dry_run=true", body, nil); code != http.StatusOK ||
 		got["valid"] != true {
 		t.Fatalf("a dry run with _summary = %d %v", code, got)
 	}
-	code, applied := removeModel(t, s, "cursor-review", "", body, nil)
+	code, applied := removeModel(t, s, "house-review", "", body, nil)
 	if code != http.StatusCreated {
 		t.Fatalf("a removal summarised in its body = %d %v, want 201", code, applied)
 	}
@@ -467,7 +475,7 @@ func TestARemovalTakesItsSummaryInTheBody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if active.ID != applied["revision_id"] || active.Summary != "remove cursor-review" {
+	if active.ID != applied["revision_id"] || active.Summary != "remove house-review" {
 		t.Errorf("the revision is %s summarised %q, want the body's summary", active.ID, active.Summary)
 	}
 }
@@ -484,13 +492,13 @@ func TestARemovalRefusesAFieldAnsweredTwice(t *testing.T) {
 		{"at": {"seat": "qa", "job": "review"}, "to": "sonnet"},
 		{"at": {"seat": "backend", "job": "subagent"}, "to": null},
 		{"at": {"seat": "qa", "job": "review"}, "to": null}]}`
-	code, got := removeModel(t, s, "cursor-review", "", body,
-		map[string]string{"X-Summary": "remove cursor-review"})
+	code, got := removeModel(t, s, "house-review", "", body,
+		map[string]string{"X-Summary": "remove house-review"})
 	if code != http.StatusBadRequest || got["error"] != "invalid_body" ||
 		!strings.Contains(got["detail"].(string), "repoint[2].at names the same field as repoint[0]") {
 		t.Fatalf("a field answered twice = %d %v, want 400 invalid_body naming both", code, got)
 	}
-	if _, ok := activeCompany(t, s).Providers.LLM["cursor-review"]; !ok {
+	if _, ok := activeCompany(t, s).Providers.LLM["house-review"]; !ok {
 		t.Error("a refused removal removed the entry")
 	}
 }

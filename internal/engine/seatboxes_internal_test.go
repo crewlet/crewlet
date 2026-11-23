@@ -37,7 +37,7 @@ providers:
     remote: {harness: claude-code, model: sonnet, run_in: e2b, state_dir: %q}
     near: {harness: claude-code, model: haiku, run_in: direct, state_dir: %q}
     boxed: {harness: opencode, model: anthropic/claude-sonnet-5, run_in: container, state_dir: %q}
-    cursor: {harness: cursor-agent, model: cursor-golden, state_dir: %q}
+    house: {harness: custom, model: house-golden, state_dir: %q, overrides: %s}
 roles:
   - name: Founder
     handle: founder
@@ -57,8 +57,8 @@ roles:
     llm: [main, near]
   - name: Mixed
     handle: mixed
-    llm: [cursor, boxed]
-`, t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir())
+    llm: [house, boxed]
+`, t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir(), customProfile)
 	cfg, err := config.ParseCompanyDocument([]byte(doc))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
