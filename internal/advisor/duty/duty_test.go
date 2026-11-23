@@ -79,10 +79,13 @@ func (l *fakeLog) Unowned(context.Context) ([]duty.Unowned, error) {
 			slices.ContainsFunc(l.requested, func(r duty.Request) bool { return r.Run == run }) {
 			continue
 		}
-		out = append(out, duty.Unowned{Run: run, First: slices.MinFunc(at, time.Time.Compare),
-			Last: slices.MaxFunc(at, time.Time.Compare)})
+		out = append(out, duty.Unowned{Run: run,
+			First: slices.MinFunc(at, time.Time.Compare),  //fixedwait:stated the lines' instants the test's clock set
+			Last:  slices.MaxFunc(at, time.Time.Compare)}) //fixedwait:stated the lines' instants the test's clock set
 	}
-	slices.SortFunc(out, func(a, b duty.Unowned) int { return a.First.Compare(b.First) })
+	slices.SortFunc(out, func(a, b duty.Unowned) int {
+		return a.First.Compare(b.First) //fixedwait:stated the runs' first instants the test's clock set
+	})
 	return out, nil
 }
 
