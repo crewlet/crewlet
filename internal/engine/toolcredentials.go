@@ -501,18 +501,14 @@ func (m *credentialMissing) judged(states map[integration.Kind]integration.State
 			// No pass has run: the first boot, where the claim comes first.
 			continue
 		}
-		if state.FindingsUnread {
-			// CANNOT SAY for this one: its findings are not in hand, so it
-			// keeps m's judgement, as an unread record does whole.
-			if why, ok := m.stopped[kind]; ok {
-				if out.stopped == nil {
-					out.stopped = map[integration.Kind]string{}
-				}
-				out.stopped[kind] = why
-			}
-			continue
+		why, stopped := mintStopped(state, m.seat)
+		if !stopped && unsaid(state) {
+			// CANNOT SAY for this one: findings a person owes may name the
+			// seat and are not in hand (unread, or cut from the record), so
+			// it keeps m's judgement, as an unread record does whole.
+			why, stopped = m.stopped[kind]
 		}
-		if why, stopped := mintStopped(state, m.seat); stopped {
+		if stopped {
 			if out.stopped == nil {
 				out.stopped = map[integration.Kind]string{}
 			}
@@ -520,6 +516,15 @@ func (m *credentialMissing) judged(states map[integration.Kind]integration.State
 		}
 	}
 	return &out
+}
+
+// unsaid reports whether what state's findings say of a seat is not all in
+// hand: a person owes findings naming something, and they were unread or the
+// record cut what they name ([integration.FindingsRecord.NamesOmitted]). Only
+// a stop such findings show is then certain.
+func unsaid(state integration.State) bool {
+	rec := state.FindingsRecord
+	return rec.NeedsFindingsFor() && (state.FindingsUnread || rec.NamesOmitted > 0)
 }
 
 // mintStopped reports whether an integration's last recorded pass says it will

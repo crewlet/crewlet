@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -589,6 +590,47 @@ func TestAMintIsStoppedOnlyWhereTheIntegrationsLastPassSaysAPersonMustAct(t *tes
 		if tc.stopped && !strings.Contains(why, tc.says) {
 			t.Errorf("%s: the reason %q does not say %q", name, why, tc.says)
 		}
+	}
+}
+
+// A MINT IS NEVER JUDGED FROM FINDINGS A RECORD CUT AWAY. A pass whose
+// findings outgrow their record (400 agents each waiting on an administrator,
+// and the vendor's findings beside them) still holds up the last agent: the
+// cut keeps every agent's own finding without its words. And where the record
+// says it dropped or cut a finding naming something and the kept ones do not
+// name this seat, the judgement cannot say, keeping its last.
+//
+// Mutation: drop an agent's own findings in the cut, or judge a seat the kept
+// findings do not name as waiting whatever the record left out, and it fails.
+func TestAMintIsNeverJudgedFromFindingsARecordCutAway(t *testing.T) {
+	t.Parallel()
+	var findings []integration.Finding
+	for i := range 400 {
+		findings = append(findings,
+			integration.Finding{Kind: integration.FindingApprovalRequired, Seat: true,
+				Subject: fmt.Sprintf("agent-%03d", i), Detail: strings.Repeat("a", 400)},
+			integration.Finding{Kind: integration.FindingGrantPending, Subject: fmt.Sprintf("agent-%03d", i),
+				Detail: strings.Repeat("v", 400), Remedy: strings.Repeat("r", 400)})
+	}
+	state := statedAs(integration.KindAtlassian, findings...)
+	if !state.FindingsRecord.LeftOut() {
+		t.Fatalf("premise: the record kept every finding (%+v), so no cut is held", state.FindingsRecord)
+	}
+	if _, stopped := mintStopped(state, "agent-399"); !stopped {
+		t.Error("the last agent, held up by an administrator, reads as minted for once the record was cut")
+	}
+
+	m := &credentialMissing{seat: "ceo", server: "tracker",
+		minting: map[string]integration.Kind{"TRACKER_TOKEN": integration.KindAtlassian},
+		stopped: map[integration.Kind]string{integration.KindAtlassian: "until a person acts"}}
+	// A RECORD THAT DROPPED A FINDING NAMING SOMETHING, its kept one about
+	// another seat, its report past where a pass reaches seats.
+	kept := []integration.Finding{{Kind: integration.FindingGrantShort, Subject: "cto"}}
+	cut := integration.State{Kind: integration.KindAtlassian, Report: integration.Classify(kept), Findings: kept,
+		FindingsRecord: integration.FindingsRecord{Bytes: 40, SHA256: "aa", Count: 1, PersonOwes: 2, Naming: 2,
+			Omitted: 1, NamesOmitted: 1}}
+	if got := m.judged(map[integration.Kind]integration.State{integration.KindAtlassian: cut}); got.waiting() {
+		t.Error("a seat the cut record may have named was judged waiting, over its last judgement")
 	}
 }
 
