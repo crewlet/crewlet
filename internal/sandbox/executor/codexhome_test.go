@@ -59,19 +59,14 @@ func TestACodexRunLoadsOnlyWhatItsLaunchWrites(t *testing.T) {
 	}
 }
 
-// WHAT A CHECKOUT BELOW THE START DIRECTORY BRINGS A CODEX RUN, by kind, in a
-// real box whose working directory holds its own AGENTS.md and a checkout at
-// ./repo, as code_checkout places one, with every layer a repository brings:
-//   - instructions: the checkout's are handed, under its root
-//     (CODEX_HOME/AGENTS.md); the working directory's own are not, since
-//     Codex reads them itself;
-//   - skills: the checkout's .codex/skills and .agents/skills, whole, as
-//     `repo:<skill>`;
-//   - config, MCP servers, rules and hooks of the checkout's .codex: nowhere
-//     in the Codex home nor on the app-server's command line, and no trust
-//     for the checkout, since Codex loads them only for the directory a
-//     thread starts in; the one hook declared is the run's own, which hands
-//     a later checkout its instructions, its helper executable.
+// WHAT A CHECKOUT BELOW THE START DIRECTORY BRINGS A CODEX RUN: a real box
+// whose working directory holds its own AGENTS.md and a checkout at ./repo,
+// as code_checkout places one, with every layer a repository brings. Its
+// instructions are handed under its root, the working directory's not (Codex
+// reads them itself); its skills come whole as `repo:<skill>`; its .codex
+// config, MCP servers, rules and hooks reach neither the Codex home nor the
+// app-server's command line, with no trust for it, since Codex loads them only
+// for the directory a thread starts in. The one hook trusted is the run's own.
 //
 // Mutation: drop the gate, hand the working directory's own file, filter a
 // skill, copy the checkout's config, or test the helper with -x.
