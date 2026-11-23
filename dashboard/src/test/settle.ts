@@ -37,6 +37,7 @@ import { act } from "@testing-library/react";
 import { vi } from "vitest";
 
 import { WAIT_BOUND_MS } from "./bounds.ts";
+import { CONFIRM_WAITS_MS } from "~/protocol/act.ts";
 
 /**
  * The runtime's own timer, taken when this module loads, before any case can
@@ -86,4 +87,22 @@ export async function settled(...asked: (() => number)[]): Promise<void> {
  */
 export function eventually<T>(condition: () => T | Promise<T>): Promise<T> {
   return vi.waitFor(condition, { timeout: WAIT_BOUND_MS });
+}
+
+/** How many times one press is sent when no answer ever confirms it. */
+export const SENDS_UNCONFIRMED = 1 + CONFIRM_WAITS_MS.length;
+
+/**
+ * Runs out an unconfirmed press's re-ask waits on a `shouldAdvanceTime` faked
+ * clock until `sent` (the stub's request count) reaches `want`.
+ */
+export async function runOutConfirmWaits(sent: () => number, want: number): Promise<void> {
+  const step = Math.min(...CONFIRM_WAITS_MS);
+  for (let waited = 0; sent() < want; waited += step) {
+    if (waited > 2 * CONFIRM_WAITS_MS.reduce((a, b) => a + b, 0)) {
+      throw new Error(`runOutConfirmWaits: ${sent()} requests, want ${want}`);
+    }
+    await act(() => vi.advanceTimersByTimeAsync(step));
+    await afterMicrotasks();
+  }
 }

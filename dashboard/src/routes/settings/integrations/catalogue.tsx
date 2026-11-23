@@ -28,6 +28,8 @@ import {
   EmptyState,
   EmptyValue,
   InlineCode,
+  overflowWords,
+  shownBeforeOverflow,
   Skeleton,
   TableDateCell,
   TableEntityCell,
@@ -85,6 +87,7 @@ import { Clocked } from "./Clocked.tsx";
 import { useStableValue } from "~/lib/useStableValue.ts";
 import { growthProductName } from "~/components/growth/words.ts";
 import type { Model, Tool } from "./model.ts";
+import { SUBJECT_NOUN } from "~/lib/listNouns.ts";
 
 // THE TONE VOCABULARY IS uilet's NOW. This screen used to declare its own
 // five-value union beside the one the design system publishes, which is the
@@ -731,7 +734,7 @@ export function FindingSubjects({
 }) {
   const [open, setOpen] = useState(false);
   if (all.length === 0 && omitted === 0) return null;
-  const shown = open ? all : all.slice(0, SUBJECT_CHIPS);
+  const shown = open ? all : all.slice(0, shownBeforeOverflow(all.length, SUBJECT_CHIPS));
   const hidden = all.length - shown.length;
   return (
     <ul className="int-subjects" aria-label={`what this is about, ${all.length + omitted}`}>
@@ -747,7 +750,7 @@ export function FindingSubjects({
             className="int-subject int-subject-more"
             onClick={() => setOpen(true)}
           >
-            +{hidden} more
+            {overflowWords(hidden, SUBJECT_NOUN)}
           </button>
         </li>
       )}

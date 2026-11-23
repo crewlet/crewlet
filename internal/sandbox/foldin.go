@@ -99,6 +99,12 @@ type FoldIn struct {
 // Open reports whether f still waits for its answer.
 func (f FoldIn) Open() bool { return f.Answer == "" }
 
+// Answered reports whether f's recorded answer is a by b: the same press sent
+// again, which finds its own answer landed rather than somebody else's.
+func (f FoldIn) Answered(by string, a FoldInAnswer) bool {
+	return by != "" && f.AnsweredBy == by && f.Answer == a
+}
+
 // AnswerableBy reports whether by may be recorded as f's answerer: anybody but
 // its asker, whose request it is. Who else may is the authority's to decide
 // (internal/runanswer's FoldIn), before the answer reaches the store.
