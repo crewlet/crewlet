@@ -360,9 +360,23 @@ func (w *Writer) Progress(ctx context.Context, c Call, p RunProgress) (statelog.
 	case len(p.Checkpoint) > 0 && (!json.Valid(p.Checkpoint) || !bytes.HasPrefix(bytes.TrimSpace(p.Checkpoint), []byte("{"))):
 		return statelog.Result{}, invalid("a checkpoint is one JSON object")
 	}
-	// A CHECKPOINT ALONE SAYS NO LINE: its text is empty, or a line.
+	// A CHECKPOINT ALONE SAYS NO LINE: its text is empty, or a line, which
+	// says what step it is.
 	if len(p.Checkpoint) == 0 || p.Text != "" {
 		if err := printable("text", p.Text, MaxProgressBytes); err != nil {
+			return statelog.Result{}, err
+		}
+		if !p.Step.Valid() {
+			return statelog.Result{}, invalid("step %q is not one of %s", p.Step, words.Or(ProgressSteps))
+		}
+	} else if p.Step != "" || p.Failed || p.Detail != "" || p.Why != "" {
+		return statelog.Result{}, invalid("a checkpoint alone says no step, detail or why")
+	}
+	for _, f := range []struct{ name, value string }{{"detail", p.Detail}, {"why", p.Why}} {
+		if f.value == "" {
+			continue
+		}
+		if err := printable(f.name, f.value, MaxProgressBytes); err != nil {
 			return statelog.Result{}, err
 		}
 	}

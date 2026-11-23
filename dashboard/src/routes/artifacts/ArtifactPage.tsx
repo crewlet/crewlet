@@ -100,7 +100,7 @@ import { href, useNavigator, useParam, useRoute } from "~/app/router.tsx";
 import { useFillScreen } from "~/app/fill.tsx";
 import { capsOf, keyRow, useKeymap } from "~/app/keymap.ts";
 import { FrameNavToggle, OwnPageHeader } from "~/app/frame/OwnHeader.tsx";
-import { AssistantTrigger } from "~/app/assistant/AssistantTrigger.tsx";
+import { useAssistantTriggerSlot } from "~/app/assistant/AssistantTrigger.tsx";
 import { useOwnStar, usePageLabels } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { utf8Bytes } from "~/lib/format.ts";
@@ -195,6 +195,7 @@ export function ArtifactPage({ id, standalone = false }: { id: string; standalon
   );
   const head = detail.data;
   const live = head?.status === "live";
+  const ask = useAssistantTriggerSlot();
   // THE STAR IS IN THIS PAGE'S MORE MENU, beside Pin, so the frame draws none.
   useOwnStar();
 
@@ -239,7 +240,7 @@ export function ArtifactPage({ id, standalone = false }: { id: string; standalon
             never drawn for a moment and then swapped for this one. */}
         <OwnPageHeader>
           <ArtifactBar
-            end={<AssistantTrigger />}
+            end={ask}
             title=""
             kind="html"
             kindLabel="Artifact"
@@ -276,6 +277,7 @@ export function ArtifactPage({ id, standalone = false }: { id: string; standalon
 
 /** A trashed artifact's page: what it was, and the way back for its owner. */
 function Trashed({ detail, onChanged }: { detail: ArtifactDetail; onChanged: () => void }) {
+  const ask = useAssistantTriggerSlot();
   const people = useArtifactPeople();
   const restore = useArtifactAccess({ role: "owner", held: detail.role, person: true });
   const gesture = useKeyedGesture();
@@ -285,7 +287,7 @@ function Trashed({ detail, onChanged }: { detail: ArtifactDetail; onChanged: () 
     <>
       <OwnPageHeader>
         <ArtifactBar
-          end={<AssistantTrigger />}
+          end={ask}
           title={detail.title}
           kind={detail.kind}
           icon={detail.icon}
@@ -369,6 +371,7 @@ function Loaded({
   useFillScreen(true);
   const { place: kept, back: wayBack } = useWayBack(detail.folder);
   const back = standalone ? BACK : wayBack;
+  const ask = useAssistantTriggerSlot();
   const people = useArtifactPeople();
   const toast = useToast();
   const connection = useConnection();
@@ -975,7 +978,7 @@ function Loaded({
       <div className="artifact-page">
         <OwnPageHeader>
           <ArtifactBar
-            end={<AssistantTrigger />}
+            end={ask}
             title={detail.title}
             kind={detail.kind}
             icon={detail.icon}

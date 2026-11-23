@@ -19,7 +19,7 @@ import type { BuilderState } from "./model/reducer.ts";
 import { builderReducer } from "./model/reducer.ts";
 import { fixtureCompany } from "./model/testkit.ts";
 import { toDocument } from "./model/document.ts";
-import { renderInBuilder, type HarnessOptions } from "./viewTestkit.tsx";
+import { changeLines, renderInBuilder, type HarnessOptions } from "./viewTestkit.tsx";
 import { keyedState } from "./testState.ts";
 import { pick } from "~/testing.tsx";
 
@@ -41,7 +41,10 @@ describe("a unit", () => {
     expect(
       screen.getByText(/Deletes the unit Engineering with 1 unit and 3 seats inside it./),
     ).toBeDefined();
-    expect(screen.getByText("CEO no longer manages Engineering.")).toBeDefined();
+    const cleared = screen
+      .getByRole("heading", { name: "References that are cleared" })
+      .closest("section") as HTMLElement;
+    expect(changeLines(cleared)).toContain("CEO · Manages: Removed: Engineering");
     replaceFallback("CEO");
     fireEvent.click(deleteButton());
     expect(view.state().log.ops[0]).toMatchObject({ type: "remove", target: "unit:engineering" });
@@ -55,10 +58,10 @@ describe("a unit", () => {
     const section = screen
       .getByRole("heading", { name: "Seats placed here by unit reference" })
       .closest("section") as HTMLElement;
-    expect(within(section).getByText("Designer")).toBeDefined();
-    expect(
-      screen.getByText("Designer loses its unit reference to Platform and stays at the top level."),
-    ).toBeDefined();
+    expect(within(section).getByText(/point to this team: Designer\./)).toBeDefined();
+    expect(changeLines()).toContain(
+      "Designer · Unit reference: Removed: PlatformStays at the top level.",
+    );
     replaceFallback("CEO");
     fireEvent.click(deleteButton());
     expect(locate(view.state().draft, "seat:designer")).toBeDefined();
@@ -183,6 +186,10 @@ describe("outside the chart", () => {
     expect(entry.textContent).toContain("its Atlassian account");
     expect(entry.textContent).toContain("DEV_GITHUB_KEY");
     expect(entry.textContent).toContain("DEV_MM_TOKEN");
+    // Named as the kit's code chips, which cut with the whole name on hover.
+    expect([...entry.querySelectorAll(".crewlet-resource-name")].map((c) => c.textContent)).toEqual(
+      ["DEV_GITHUB_KEY", "DEV_MM_TOKEN"],
+    );
     const html = view.container.ownerDocument.body.innerHTML;
     expect(html).not.toContain("__redacted__");
     expect(screen.getByRole("link", { name: "Open Secrets" }).getAttribute("href")).toBe(

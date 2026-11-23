@@ -1887,9 +1887,7 @@ growth product's catalog lists is admin's with that product's seat grant at the
 least level its tool's class needs (`google_analytics_read`, `_operate` or
 `_administer`), which an agent's role carries where its lane is on at that
 level or above. Its held acts are answered on `growth.spend.approve`,
-`growth.public.approve` and `growth.admin.approve`, **human-only**, and App
-Store analytics is turned on with an Admin key pasted once on
-`app_store_connect.analytics.enable`, the same. See
+`growth.public.approve` and `growth.admin.approve`, **human-only**. See
 [ADR-0170](../../adr/0170-a-growth-integrations-credential-stays-in-the-engine.md).
 
 **And a delegate's verdict.** `review_delegated` is admin's, and its row names

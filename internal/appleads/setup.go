@@ -6,6 +6,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/vendortext"
 )
 
 // defaultConnection is the connection the form fills for a company that names
@@ -37,25 +38,29 @@ func Requirements(in *config.AppleAds, resolve func(string) (string, bool)) []se
 		base := "integrations." + Kind + ".connections." + id
 		client := setup.Requirement{Field: id + "_client_id", Label: "Client ID", Kind: setup.KindID,
 			ConfigPath: base + ".client_id", Required: true, Connect: true, Shape: setup.ShapeAppleAdsID,
-			Format: "SEARCHADS. and an identifier", Hint: "Shown on {link} once the public key is uploaded.",
-			More:     "An account administrator invites an API user with the role agents need; signed in as that user, upload the public key of the private key below under Account Settings, API.",
-			LinkText: "Account Settings, API", VendorURL: apiSettings, Blocks: integration.FindingCredentialMissing}
+			Format: "SEARCHADS. and an identifier",
+			Hint: vendortext.Of(vendortext.W("Shown on "), vendortext.UI("Account Settings", "API").At(apiSettings),
+				vendortext.W(" once the public key is uploaded.")),
+			More: vendortext.Of(vendortext.W("An account administrator invites an API user with the role agents need; "+
+				"signed in as that user, upload the public key of the private key below under "),
+				vendortext.UI("Account Settings", "API").At(apiSettings), vendortext.W(".")),
+			Blocks: integration.FindingCredentialMissing}
 		client.Present, client.Resolved, client.Stored = setup.Held(c.ClientID, resolve)
 		team := setup.Requirement{Field: id + "_team_id", Label: "Team ID", Kind: setup.KindID,
 			ConfigPath: base + ".team_id", Required: true, Shape: setup.ShapeAppleAdsID,
-			Format: "SEARCHADS. and an identifier", Hint: "Shown beside the client ID."}
+			Format: "SEARCHADS. and an identifier", Hint: vendortext.Plain("Shown beside the client ID.")}
 		team.Present, team.Resolved, team.Stored = setup.Held(c.TeamID, resolve)
 		key := setup.Requirement{Field: id + "_key_id", Label: "Key ID", Kind: setup.KindID,
 			ConfigPath: base + ".key_id", Required: true, Format: "as Apple shows it",
-			Hint: "Shown beside the client ID."}
+			Hint: vendortext.Plain("Shown beside the client ID.")}
 		key.Present, key.Resolved, key.Stored = setup.Held(c.KeyID, resolve)
 		org := setup.Requirement{Field: id + "_org_id", Label: "Organization ID", Kind: setup.KindID,
 			ConfigPath: base + ".org_id", Format: "digits",
-			Hint: "Optional: when set, the pass checks the API user answers this organization."}
+			Hint: vendortext.Plain("Optional: when set, the pass checks the API user answers this organization.")}
 		org.Present, org.Resolved, org.Stored = setup.Held(c.OrgID, resolve)
 		private := setup.Requirement{Field: id + "_private_key", Label: "Private key", Kind: setup.KindSecret,
 			ConfigPath: base + ".private_key", SecretName: secretName(id), Required: true, Shape: setup.ShapeAppleAdsKey,
-			Hint:      "The whole file openssl ecparam wrote; its public half is uploaded to Apple Ads.",
+			Hint:      vendortext.Plain("The whole file `openssl ecparam` wrote; its public half is uploaded to Apple Ads."),
 			CheckNote: "The key is proven with Apple on the next pass, once saved."}
 		private.Present, private.Resolved, private.Stored = setup.Held(c.PrivateKey, resolve)
 		reqs = append(reqs, client, team, key, org, private)

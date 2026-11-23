@@ -12,7 +12,7 @@
 // the whole company, and handing it to a box running generated code is the
 // failure the sandbox exists to prevent. So what
 // authenticates a request there is a credential that is worth nothing outside
-// one run and expires with it, and it rides in the path because the first two
+// one run and ends with it, and it rides in the path because the first two
 // clients are a vendor's OTLP exporter and a vendor's MCP client: neither
 // takes an arbitrary header the engine chooses. git takes none either, and
 // presents a credential only as a Basic password its credential helper
@@ -28,6 +28,20 @@
 // visible only as retry noise inside a sandbox nobody is watching. Expiry
 // rides in the token too, so nothing is reaped and a restart does not
 // invalidate a live run's endpoint.
+//
+// # Every domain's tokens expire but the tool bridge's
+//
+// ONE DOMAIN MINTS A TOKEN WITH NO EXPIRY OF ITS OWN ([Options.Lifelong],
+// [Signer.MintLifelong]): the tool bridge's (internal/api/mcpbridge's
+// KeyDomain). There every request is answered only by the node holding the
+// run's seat, against the job's live opening, which the run's end closes, a
+// capped run's at the collection after its cap; a job id is never minted
+// again; and the box holds the one endpoint its launch wrote into its
+// harness's configuration, which nothing renews. An expiry there could only
+// refuse a run still working, and each node would read it on its own clock,
+// which may run ahead of the holder's. Every other domain's endpoint relies on
+// its expiry, to end a token or as a backstop, so a token with none is refused
+// there both ways ([ErrLifelong]).
 //
 // # The token names the key that signed it
 //
@@ -195,6 +209,7 @@ type Signer struct {
 	activeTag string
 	keys      map[string][]byte
 	now       func() time.Time
+	lifelong  bool
 }
 
 // Options configure [New].
@@ -216,6 +231,12 @@ type Options struct {
 	// processes and a monotonic reading's epoch is per-boot — meaningless
 	// anywhere but where it was taken.
 	Now func() time.Time
+
+	// Lifelong lets this domain's tokens carry no expiry of their own
+	// ([Signer.MintLifelong]): the tool bridge's alone (package doc, "Every
+	// domain's tokens expire but the tool bridge's"). A signer without it
+	// refuses to mint one ([ErrLifelong]) and to validate one.
+	Lifelong bool
 }
 
 // New builds a signer, or refuses a keyring that cannot sign for the fleet.
@@ -235,7 +256,7 @@ func New(opts Options) (*Signer, error) {
 	if now == nil {
 		now = time.Now
 	}
-	s := &Signer{keys: map[string][]byte{}, now: now}
+	s := &Signer{keys: map[string][]byte{}, now: now, lifelong: opts.Lifelong}
 	for _, key := range opts.Material.Keys {
 		tag := KeyTag(opts.Domain, key.ID)
 		s.keys[tag] = DeriveKey(opts.Domain, key.ID, key.Material)
@@ -250,6 +271,15 @@ func New(opts Options) (*Signer, error) {
 // would not know a token over by its shape.
 var ErrSubject = errors.New("runtoken: a token over this subject would not be redacted")
 
+// ErrLifelong reports a token with no expiry asked of, or shown to, a signer
+// whose domain did not declare its tokens may carry none ([Options.Lifelong]).
+var ErrLifelong = errors.New("runtoken: this domain's tokens expire")
+
+// lifelong is the expiry a token with none carries: an instant no token of an
+// expiring domain names, since every one is minted at least [minTTL] past a
+// clock that reads past the epoch, and digits, as internal/redact reads one.
+const lifelong = "0"
+
 // Mint returns a token scoped to one subject, valid for ttl, signed under the
 // keyring's active key and naming it, or refuses a subject its token could
 // not carry ([ErrSubject]).
@@ -262,14 +292,25 @@ var ErrSubject = errors.New("runtoken: a token over this subject would not be re
 // what redaction keys on"), persisted as printed. An error, never a panic: a
 // subject can carry what a person named.
 func (s *Signer) Mint(subject string, ttl time.Duration) (string, error) {
+	return s.mint(subject, strconv.FormatInt(s.now().Add(max(ttl, minTTL)).Unix(), 10))
+}
+
+// MintLifelong is [Signer.Mint] for a token with no expiry of its own, which
+// only a signer of a [Options.Lifelong] domain mints ([ErrLifelong]).
+func (s *Signer) MintLifelong(subject string) (string, error) {
+	if !s.lifelong {
+		return "", ErrLifelong
+	}
+	return s.mint(subject, lifelong)
+}
+
+// mint signs subject and expiry under the active key, or refuses a subject
+// its token could not carry ([ErrSubject]).
+func (s *Signer) mint(subject, expiry string) (string, error) {
 	if err := redactable(subject); err != nil {
 		return "", err
 	}
-	if ttl < minTTL {
-		ttl = minTTL
-	}
-	payload := version + "." + s.activeTag + "." + subject + "." +
-		strconv.FormatInt(s.now().Add(ttl).Unix(), 10)
+	payload := version + "." + s.activeTag + "." + subject + "." + expiry
 	return payload + "." + s.sign(s.keys[s.activeTag], payload), nil
 }
 
@@ -297,7 +338,8 @@ func redactable(subject string) error {
 }
 
 // Validate returns the token's subject, or empty for one that is forged,
-// malformed, expired, or signed under a key this node does not hold.
+// malformed, expired, signed under a key this node does not hold, or with no
+// expiry in a domain whose tokens expire ([Options.Lifelong]).
 //
 // A FOUR-WAY ANSWER COLLAPSED TO ONE ON PURPOSE. The caller's only move for
 // any of them is to refuse the request, and telling a caller which of its
@@ -320,6 +362,12 @@ func (s *Signer) Validate(token string) string {
 	// are deliberately reachable without other credentials.
 	if !hmac.Equal([]byte(parts[4]), []byte(s.sign(key, payload))) {
 		return ""
+	}
+	if parts[3] == lifelong {
+		if !s.lifelong {
+			return ""
+		}
+		return parts[2]
 	}
 	expiry, err := strconv.ParseInt(parts[3], 10, 64)
 	if err != nil || !s.now().Before(time.Unix(expiry, 0)) {

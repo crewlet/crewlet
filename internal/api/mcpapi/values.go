@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -425,6 +426,11 @@ func refuseSlot(w http.ResponseWriter, name, seat, key string, err error) {
 	case errors.Is(err, config.ErrMCPValueKey):
 		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeBadParams,
 			httpjson.Detail{"detail": quoted(key) + " is not a header or variable name"})
+	case errors.Is(err, config.ErrMCPValueVariableLong):
+		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeBadParams,
+			httpjson.Detail{"detail": "a value of " + quoted(key) + " would be stored under a variable longer " +
+				"than the " + strconv.Itoa(secrets.MaxNameBytes) + " bytes a secret's name may be: shorten " +
+				"the key, or point its field at a shorter ${VAR}"})
 	case errors.Is(err, config.ErrMCPValueNoSecret):
 		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeConflict,
 			httpjson.Detail{"detail": "MCP server " + quoted(name) + " signs in with no client secret: " +
@@ -488,7 +494,7 @@ func refusePointer(w http.ResponseWriter, slot config.MCPValueSlot, err error, s
 // isSlotErr reports whether err is one of the slot's own refusals.
 func isSlotErr(err error) bool {
 	for _, sentinel := range []error{config.ErrNoMCPServerEntry, config.ErrMCPValueSeatOnShared,
-		config.ErrMCPValueNoSeat, config.ErrMCPValueNotGranted, config.ErrMCPValueBound, config.ErrMCPValueKey} {
+		config.ErrMCPValueNoSeat, config.ErrMCPValueNotGranted, config.ErrMCPValueBound, config.ErrMCPValueKey, config.ErrMCPValueVariableLong} {
 		if errors.Is(err, sentinel) {
 			return true
 		}

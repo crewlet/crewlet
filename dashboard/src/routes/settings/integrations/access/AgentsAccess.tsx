@@ -39,12 +39,12 @@ import {
   Inline,
   InlineCode,
   Link,
+  ListOverflow,
   Select,
   SelectionBar,
   Spinner,
   Switch,
   Tag,
-  Text,
   VisuallyHidden,
   type DataGridColumn,
   type DataGridRowTone,
@@ -650,17 +650,15 @@ export const AgentsAccess = memo(function AgentsAccess({
                 </Tag>
               </Inline>
               {rest.length > 0 && (
-                <Text
-                  as="span"
-                  variant="caption"
-                  tone="secondary"
-                  title={titled.slice(1).join(", ")}
-                >
-                  <span aria-hidden="true">+{rest.length}</span>
-                  <VisuallyHidden>
-                    {`${rest.length.toLocaleString()} more ${rest.length === 1 ? words.singular : words.noun.toLowerCase()}`}
-                  </VisuallyHidden>
-                </Text>
+                <ListOverflow
+                  size="xs"
+                  noun={{ one: words.singular, other: words.noun.toLowerCase() }}
+                  items={rest.map((name, i) => (
+                    <Tag key={`${i}:${name}`} appearance="outline" size="xs" title={titled[i + 1]}>
+                      {name}
+                    </Tag>
+                  ))}
+                />
               )}
             </>
           );
@@ -1450,11 +1448,14 @@ function Details({
               ) : providedExternally(lane, o) ? (
                 "Provided externally"
               ) : saved?.identity && !saved.hand_in ? (
-                // AN ENGINE-HELD LANE seals nothing per agent but its own identity's credential.
-                saved.identity.holds === "own" ? (
-                  `${saved.identity.name ?? saved.identity.id ?? "Its own"}, held by Crewlet`
-                ) : (
+                // AN ENGINE-HELD LANE seals nothing per agent but its own identity's
+                // credential, and an own-only lane with none kept has nothing at all.
+                saved.identity.holds === "company" ? (
                   "The company's, held by Crewlet"
+                ) : saved.identity.name || saved.identity.id ? (
+                  `${saved.identity.name ?? saved.identity.id}, held by Crewlet`
+                ) : (
+                  "Not set up yet"
                 )
               ) : (
                 "Not minted yet"

@@ -29,7 +29,8 @@ func TestAWriteOnlyValueIsResolvedAndNeverRevealed(t *testing.T) {
 	mustSetWriteOnly(t, s, "MCP_LINEAR_AUTHORIZATION", fakeHeader)
 	mustSet(t, s, "GITLAB_TOKEN", "glpat-not-a-real-token")
 
-	all, err := s.All(t.Context())
+	snapshot, err := s.All(t.Context())
+	all := snapshot.Values
 	if err != nil {
 		t.Fatalf("All: %v", err)
 	}
@@ -83,7 +84,8 @@ func TestAWriteOverAWriteOnlyRowKeepsTheMark(t *testing.T) {
 	if _, err := s.Get(t.Context(), "MCP_LINEAR_AUTHORIZATION"); !errors.Is(err, secrets.ErrWriteOnly) {
 		t.Fatalf("a plain write over a write-only row made it readable: %v", err)
 	}
-	all, err := s.All(t.Context())
+	snapshot, err := s.All(t.Context())
+	all := snapshot.Values
 	if err != nil || all["MCP_LINEAR_AUTHORIZATION"] != "Bearer lin_api_rotated-not-real" {
 		t.Fatalf("the rotation did not land: %v", err)
 	}
@@ -109,7 +111,7 @@ func TestARekeyKeepsTheWriteOnlyMark(t *testing.T) {
 	if _, err := rotated.Get(t.Context(), "MCP_LINEAR_AUTHORIZATION"); !errors.Is(err, secrets.ErrWriteOnly) {
 		t.Fatalf("the rekey made a write-only row readable: %v", err)
 	}
-	if all, err := rotated.All(t.Context()); err != nil || all["MCP_LINEAR_AUTHORIZATION"] != fakeHeader {
+	if snapshot, err := rotated.All(t.Context()); err != nil || snapshot.Values["MCP_LINEAR_AUTHORIZATION"] != fakeHeader {
 		t.Fatalf("the re-sealed row no longer resolves: %v", err)
 	}
 }

@@ -225,6 +225,20 @@ export interface AdvisorModelSummary {
   reason: string;
 }
 
+/** One step a run took, in plain words, with where it stands. */
+export interface AdvisorRunStep {
+  at: string;
+  text: string;
+  /** What the step did: a note on what the run is doing, a read, a verdict, a question it added, its checks. */
+  step: "note" | "read" | "verdict" | "question" | "checks" | (string & {});
+  /** `running` is the step a running run is on. */
+  state: "done" | "failed" | "running" | (string & {});
+  /** The call behind the step as the engine ran it ("tokens days=7"); "" where none. */
+  detail: string;
+  /** Why the step failed, in the engine's words; "" where it did not. */
+  why: string;
+}
+
 /** One run of the Advisor; `running` is a press the duty has not taken yet. */
 export interface AdvisorRunSummary {
   run_id: string;
@@ -232,7 +246,8 @@ export interface AdvisorRunSummary {
   by: string;
   started_at: string;
   ended_at: string | null;
-  status: "running" | "done" | "failed" | "ceiling" | (string & {});
+  /** `interrupted`: its owner stopped before it ended, and the engine closed it. */
+  status: "running" | "done" | "failed" | "ceiling" | "interrupted" | (string & {});
   classes_run: number;
   /** The sources it could not read, by their words. */
   unread: string[];
@@ -241,8 +256,8 @@ export interface AdvisorRunSummary {
   model: AdvisorModelSummary | null;
   /** The rule classes alone, or a deep run on the Advisor's model. */
   kind: "rules" | "deep" | (string & {});
-  /** What a deep run reported doing, newest last; empty for a rules run. */
-  progress: { at: string; text: string }[];
+  /** What a deep run reported doing, oldest first; empty for a rules run. */
+  progress: AdvisorRunStep[];
   /** A deep run's spend against its ceilings, null for a rules run. */
   budget: {
     tokens: number;

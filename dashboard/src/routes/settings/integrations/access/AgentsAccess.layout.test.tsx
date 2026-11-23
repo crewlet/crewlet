@@ -83,9 +83,8 @@ test.each([1440, 390])(
     )!;
     const line = edit.parentElement!;
     const chip = line.querySelector<HTMLElement>(`[title="${LONG}"]`)!;
-    const count = [...line.querySelectorAll<HTMLElement>("[title]")].find((el) =>
-      el.textContent?.startsWith("+2"),
-    )!;
+    const count = line.querySelector<HTMLElement>(".crewlet-list-overflow")!;
+    expect(count.textContent).toBe("+2 more repositories");
     const table = edit.closest<HTMLElement>('[role="table"]')!.getBoundingClientRect();
     const [c, n, e] = [chip, count, edit].map((el) => el.getBoundingClientRect());
     const middle = (r: DOMRect) => r.top + r.height / 2;
@@ -147,7 +146,7 @@ test.each([1440, 390])(
 // the box holds. Mutation: draw the action under the facts, or at the left,
 // and a bound fails.
 test("Set up identity sits at the top right of the agent's box at 1440px", async () => {
-  await mount(1440, appStoreConnectIdentityAnswer("company"));
+  await mount(1440, appStoreConnectIdentityAnswer("none"));
   document
     .querySelector<HTMLElement>(`[aria-label="Show Growth's App Store Connect details"]`)!
     .click();

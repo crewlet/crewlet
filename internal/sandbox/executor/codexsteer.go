@@ -113,16 +113,23 @@ func codexRunFrom(ctx context.Context, box sandbox.Sandbox, session string) (int
 // codexNotesHeld is the inbox ids of takes, in serve order, whose items the
 // rollout r holds past its first from lines as a person's message that a reply
 // of the model followed with no compaction between ([codexConversation]): each
-// such message whose digest is the next take's matches it.
+// such message matches the first unmatched take after the last one matched
+// with its digest, as Gemini CLI's do ([geminiConfirmed]), so a take Codex
+// never recorded leaves the later ones to be matched, unheld itself. Whether
+// 0.171.0 can accept a turn/steer and not record it was not measured; the
+// helper takes an accepted steer as delivered, so the match never assumes.
 func codexNotesHeld(r io.Reader, takes []ServedTake, from int) ([]string, error) {
 	var settled, pending []string
 	next := 0
 	_, err := codexConversation(r, from, func(kind codexTurnKind, text string) {
 		switch kind {
 		case codexPersonsWords:
-			if next < len(takes) && ItemDigest(text) == takes[next].Digest {
-				pending = append(pending, takes[next].InboxID)
-				next++
+			digest := ItemDigest(text)
+			for i := next; i < len(takes); i++ {
+				if takes[i].Digest == digest {
+					pending, next = append(pending, takes[i].InboxID), i+1
+					break
+				}
 			}
 		case codexModelReply:
 			settled = append(settled, pending...)

@@ -30,8 +30,8 @@ import (
 // holds; a new epoch writes everything again, since the sweep may have removed it.
 // Each definition is stored create-only under its digest before the listing naming
 // it (a reader misses one only across a sweep, answered as unknown), one awaiting
-// review first so a change is shown whole. The writes run on a pass of their own
-// with no beat deadline ([Engine.startListingPass]); the beat's keep [mcpBeatBound].
+// review first so a change is shown whole. The writes ([Engine.startListingPass])
+// and a moved catalogue's definition reads keep no beat deadline ([mcpBeatBound]).
 
 // mcpListingSweepPasses is how many consecutive sweeps, a maintenance interval
 // apart, must find a definition named by no listing before it is removed: two,
@@ -39,11 +39,12 @@ import (
 // reading between the two would remove a definition about to be named.
 const mcpListingSweepPasses = 2
 
-// mcpBeatBound bounds one beat's own steps (reading the fleet's presence and the
-// definitions a moved catalogue names, accepting a server's first listing), all
-// small records: the beat's interval, so a beat whose broker does not answer
-// ends before the next starts. The listings' writes are not held to it
-// ([Engine.startListingPass]).
+// mcpBeatBound bounds one beat's own steps (reading the fleet's presence,
+// accepting a server's first listing), all small records: the beat's interval,
+// so a beat whose broker does not answer ends before the next starts. The
+// listings' writes are not held to it ([Engine.startListingPass]), nor the
+// definitions a moved catalogue reads one after another, each up to 128 KiB
+// and given its own read's crossing by the store.
 const mcpBeatBound = coord.ReconcileInterval
 
 // mcpListings is this node's half of the fleet's MCP listings.
@@ -412,9 +413,10 @@ func listedDigests(listings []coord.MCPListing) []string {
 // publishMCPListings is one beat of this node's publisher: read the fleet's
 // presence, derive this node's listings, start a pass writing each that moved
 // and removing each for a server this node no longer runs
-// ([Engine.startListingPass]), and accept the first listing of each server
-// nobody has accepted a listing of ([Engine.baselineMCPTools]). Its own steps
-// are held to [mcpBeatBound]; the pass's writes are not.
+// ([Engine.startListingPass]), and accept each server's first listing
+// ([Engine.baselineMCPTools]) and the changes of one set to auto-accept them
+// ([Engine.autoAcceptMCPChanges]). Its own steps are held to [mcpBeatBound];
+// the pass's writes and the definitions read are not.
 func (e *Engine) publishMCPListings(ctx context.Context) {
 	beatCtx, cancel := context.WithTimeout(ctx, mcpBeatBound)
 	defer cancel()
@@ -426,8 +428,9 @@ func (e *Engine) publishMCPListings(ctx context.Context) {
 		if answered {
 			// A NODE THAT WENT is a catalogue that moved, with nothing
 			// on the watch to say so: its listing stays until the
-			// sweep, and stopped counting with its presence.
-			e.fleetCatalogueMoved(beatCtx)
+			// sweep, and stopped counting with its presence. On the
+			// loop's context: see mcpBeatBound.
+			e.fleetCatalogueMoved(ctx)
 		}
 	} else if ctx.Err() == nil {
 		log.WarnContext(ctx, "mcp_listing_presence_unread", "error", err,
@@ -447,6 +450,7 @@ func (e *Engine) publishMCPListings(ctx context.Context) {
 	desired := e.nodeMCPListings(node, epoch, now)
 	e.startListingPass(ctx, node, epoch, desired)
 	e.baselineMCPTools(beatCtx, desired, now)
+	e.autoAcceptMCPChanges(beatCtx, now)
 }
 
 // startListingPass starts a pass writing desired under epoch

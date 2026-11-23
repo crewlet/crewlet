@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/coord`
-- **Enforced-by:** `internal/coord/kv.TestAPointerReadAcrossALeafsLinkCarriesNoBody`, `internal/coord/kv.TestABodyAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk`, `internal/coord/kv.TestABodysReadIsGivenTheArrivalOfItsRecordedSize`, `internal/coord/kv.TestAFlipLandsWithinHalfTheBodysRetentionOfItsWrite`, `internal/coord/kv.TestAFlipIsGivenTwiceTheBodysWriteAtItsBound`, `internal/coord/kv.TestABodysCrossingIsHeldToWhatAKeyHolds`, `internal/maintenance.TestTheBodySweepRunsUnderTheDutyAtItsOwnHorizon`, `internal/engine.TestAPostureAcrossASlowLinkIsReadNotAssumed`, `internal/engine.TestAReconcilerAcrossASlowLinkAppliesARevisionAtItsBound`, `internal/coord/kv.TestEveryReadIsGivenTheCrossingOfItsClassBound`, `internal/coord/kv.TestASmallClassCrossesTheFloorInsideTheReadTerm`, `internal/coord/kv.TestASettledWriteIsHeldToItsClassBound`, `internal/coord/kv.TestARunsListingAcrossALeafsLinkDeliversItsRecordsInItsPass`, `internal/coord/kv.TestAWatchAcrossASlowLinkDeliversARecordLongerThanTwoHeartbeatsToCross`, `internal/coord/kv.TestTheMarkerSweepAcrossALinkCarriesHeadersOnly`, `internal/coord/kv.TestNothingWatchesASettledBucketThroughTheClient`, `internal/coord/kv.TestEveryClientWatchOfASettledBucketIsRefused`, `internal/coord/kv.TestAPassOpensNoConsumerUntilItsKeyIndexAnswers`, `internal/coord/kv.TestARunsStandingCrossesALeafsLinkWithoutItsRecords`, `internal/coord/kv.TestAStandingLandsInTheMessageOfItsRecord`, `internal/coord/kv.TestTheWidestStandingIsCountedInKvHeaderBytes`, `internal/coord/kv.TestACoordinationValueIsHeldToWhatItsLeadersReadCarriesBackAcrossALink`, `internal/sandbox.TestEveryWriteOfARunStatesItsStanding`, `internal/sandbox.TestTheEpochFloorReadsNoStatedRecordWhole`, `internal/sandbox.TestASeatsListingReadsOnlyItsOwnRecordsWhole`, `internal/engine.TestALeafBootsBesideRunsAtTheirBound`
+- **Enforced-by:** `internal/coord/kv.TestAPointerReadAcrossALeafsLinkCarriesNoBody`, `internal/coord/kv.TestABodyAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk`, `internal/coord/kv.TestABodysReadIsGivenTheArrivalOfItsRecordedSize`, `internal/coord/kv.TestAFlipLandsWithinHalfTheBodysRetentionOfItsWrite`, `internal/coord/kv.TestAFlipIsGivenTwiceTheBodysWriteAtItsBound`, `internal/coord/kv.TestABodysCrossingIsHeldToWhatAKeyHolds`, `internal/maintenance.TestTheBodySweepRunsUnderTheDutyAtItsOwnHorizon`, `internal/engine.TestAPostureAcrossASlowLinkIsReadNotAssumed`, `internal/engine.TestAReconcilerAcrossASlowLinkAppliesARevisionAtItsBound`, `internal/coord/kv.TestEveryReadIsGivenTheCrossingOfItsClassBound`, `internal/coord/kv.TestASmallClassCrossesTheFloorInsideTheReadTerm`, `internal/coord/kv.TestASettledWriteIsHeldToItsClassBound`, `internal/coord/kv.TestARunsListingAcrossALeafsLinkDeliversItsRecordsInItsPass`, `internal/coord/kv.TestAWatchAcrossASlowLinkDeliversARecordLongerThanTwoHeartbeatsToCross`, `internal/coord/kv.TestTheMarkerSweepAcrossALinkCarriesHeadersOnly`, `internal/coord/kv.TestNothingWatchesASettledBucketThroughTheClient`, `internal/coord/kv.TestEveryClientWatchOfASettledBucketIsRefused`, `internal/coord/kv.TestAPassOpensNoConsumerUntilItsKeyIndexAnswers`, `internal/coord/kv.TestARunsStandingCrossesALeafsLinkWithoutItsRecords`, `internal/coord/kv.TestAStandingLandsInTheMessageOfItsRecord`, `internal/coord/kv.TestTheWidestStandingIsCountedInKvHeaderBytes`, `internal/coord/kv.TestACoordinationValueIsHeldToWhatItsLeadersReadCarriesBackAcrossALink`, `internal/sandbox.TestEveryWriteOfARunStatesItsStanding`, `internal/sandbox.TestTheEpochFloorReadsNoStatedRecordWhole`, `internal/sandbox.TestASeatsListingReadsOnlyItsOwnRecordsWhole`, `internal/engine.TestALeafBootsBesideRunsAtTheirBound`, `internal/engine.TestAnMCPCheckOfEveryNodeAtItsWidestIsRecordedWithinItsBound`, `internal/engine.TestADeviceSignInsDetailIsCutToFitItsRecord`, `internal/seataccess.TestASeatWhoseAccessOutgrowsItsLedgerRecordIsNotSynced`, `internal/coord.TestEveryPositionsClassesWidestRecordFitsItsBound`, `internal/coord/kv.TestEveryPositionsClassAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk`, `internal/engine.TestTheMCPBeatReadsDefinitionsOnTheLoopsContext`, `internal/engine.TestTheAtlasReadsTheFleetsListingsFromTheWatchedCopy`, `internal/seataccess.TestALaneIsSizedInItsVendorsWords`, `internal/seataccess.TestAHeldLaneHoldsOnlyItself`, `internal/seataccess.TestAVendorsLongRefusalIsKeptAtItsHead`, `internal/seataccess.TestARecordPastItsClassFailsItsSeatNotThePass`, `internal/engine.TestOneSeatsAccessRecordIsReadByItsKey`, `internal/coord/kv.TestTheAccessReviewsRevisionsCrossALinkAsHeadersAlone`, `internal/coord/kv.TestEveryUploadsClassAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk`, `internal/artifactupload.TestTheWidestUploadRecordFitsItsBound`, `internal/artifactupload.TestTheWidestReservationLedgerFitsItsBound`, `internal/sandbox.TestASeatsWidestSaveLedgerFitsItsBound`, `internal/artifactupload.TestAnUploadRecordPastItsBoundIsRefusedByItsWriter`, `internal/artifactupload.TestARefusedPublishDropsTheGeneratedFilesItDeleted`, `internal/artifactupload.TestAVersionPastItsFileCountIsRefusedBeforeAByteMoves`, `internal/artifactupload.TestAPublishsWarningsAreCutToWhatItsRecordKeeps`, `internal/artifactupload.TestAnUploadRecordsTheTypeAFileIsServedAs`, `internal/artifactupload.TestALedgerChangeReadsABoundedNumberOfRecords`, `internal/artifactupload.TestTheWidestOutcomeFitsWhatARecordKeepsForIt`, `internal/artifactupload.TestAStagedRecordAtItsBoundClosesWithItsOutcome`, `internal/artifactupload.TestASizeRefusalUndoesNoEarlierAttemptsObjects`, `internal/artifactupload.TestARetryRefusedAsMovedLeavesWhatAnEarlierAttemptLanded`, `internal/artifactupload.TestAnAbandonedUploadIsReleasedBehindHoldsThatCannotBe`, `internal/artifactupload.TestARefusedReservationKeepsTheReleaseItMade`, `internal/artifactupload.TestARefusedReservationIsAnsweredHoweverItsReleasesWriteEnds`, `internal/artifactupload.TestAReleaseLeavesAHoldARetriedIntentTookUp`, `internal/artifactupload.TestARetriedIntentTakesUpTheHoldItsFirstAttemptLeft`, `internal/artifactupload.TestAnEarlierAttemptsBytesStayReservedThroughARetrysRefusal`, `internal/artifactupload.TestATakenUpHoldIsNeverWeakened`, `internal/artifactupload.TestAReleaseDropsAHoldAnotherNodeOnlyRechecked`, `internal/artifactupload.TestAReleaseDropsWhatAnotherReleaseLeftOfItsHold`, `internal/artifactupload.TestAHoldMadeForAReleasedUploadIsNeverTakenForTheReleasedOne`, `internal/coord.TestTheWidestChatReadRecordFitsItsBound`, `internal/coord.TestAChatReadRecordPastItsBoundIsRefusedWhereItIsEncoded`, `internal/coord.TestAFlushNamingAnIDChatletDidNotMintIsRefusedNamingItsField`, `internal/coord/kv.TestEveryChatReadAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk`, `internal/agent/builtin.TestAMarkNamingAnIDChatletDidNotMintIsRefusedNamingItsArgument`, `internal/coord/kv.TestEveryAtlasClassAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk`, `internal/atlas/collect.TestTheWidestAtlasStandingFitsItsBound`, `internal/atlas/collect.TestAStandingPastItsBoundIsCutDetailFirstKeepingEveryCount`, `internal/atlas/collect.TestTheWidestAtlasMissesFitTheirBound`, `internal/atlas/collect.TestOnlyAVisitReadsItsSourcesMissesByItsKey`, `internal/atlas/collect.TestAScopeWhoseIDIsNoHostsIsWithheld`, `internal/engine.TestAnAtlasSourceReportReadsNoSourcesMisses`, `internal/atlas/codescan.TestTheWidestCodeScanStandingFitsItsBound`, `internal/atlas/codescan.TestAForgesStampIsKeptAsItsDigest`, `internal/atlas/codescan.TestAPassReadsItsOwnStandingAndTheListingReadsThemOnce`, `internal/coord/kv.TestAnAtlasListingCarriesNoRecordOutsideItsFilterAcrossALink`, `internal/atlas/collect.TestAVisitWhoseMissesCannotBeReadReadsNothing`, `internal/atlas/collect.TestAVisitWhoseMissesCannotBeWrittenCountsOnlyThoseRecorded`, `internal/atlas/codescan.TestAForgesTipIsACommitIDOrNoRead`, `internal/coord/kv.TestEverySecretAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk`, `internal/fleetsecrets.TestTheWidestSecretRecordFitsItsBound`, `internal/fleetsecrets.TestAProvenanceNoRecordKeepsIsRefusedByEveryWrite`, `cmd/crewlet.TestAnAuthorNoRecordKeepsIsRefusedNamingItsVariable`, `internal/fleetsecrets.TestANamePastItsBoundIsRefusedByEveryWriteAndNamesNoRow`, `internal/secrets.TestANameIsHeldToTheLengthItsRecordKeeps`, `internal/api/secretsapi.TestANamePastItsBoundIsRefusedAsAnInvalidName`, `internal/api/secretsapi.TestAListingReadsTheBucketOnce`, `cmd/crewlet.TestAListingAndADryRunReadTheStoreOnce`, `internal/engine.TestTheAlarmBeatReadsNoSealedValueFromTheStore`, `internal/engine.TestLocalModelsDateTheValueTheAlarmJudges`, `internal/api/queries.TestAModelsExpiryIsTheValueThisNodeResolves`
 - **Measured:** at the slowest link pace allowed (30 s a MiB), a leader read's reply is a third larger than the value, so no record above 47.1 KiB is read inside a probe's 1.875 s and above 127.1 KiB every read without a deadline fails at the five-second read term; a company at its bound made the activation pointer an 8 MiB reply, 240 s. The pointer at its 8 KiB bound is a 12,404-byte reply, 0.35 s; a typical one about 0.06 s. A class read at the term is at most 16 KiB (`coord.SmallValueBytes`): a 23,328-byte reply, 0.67 s. A run's standing is 196 bytes of header at its widest, so the most header a write carries is 342 bytes; listed beside its message's other headers it is about 1.3 KB a run across the link (counted, not measured), 37 ms at the slowest pace, so a boot's 300 s ceiling fits the floor of about 8,000 runs, where three records at their bound read whole take nine minutes (counted). A pass's quiet and a watch's heartbeat are 5 s plus the raw crossing of the largest value under the filter: 185.0 s for a run's value across a link, 5 s in process, and the same for the runs' standing, whose headers wait behind any record on the link; the marker sweep's headers-only consumer beats at 5 s. Measured 2026-11-22 under `-race` (Go 1.27.2, the build that added the bucket's watcher and the index-first pass): the client's KV watch, at its fixed 5 s heartbeat, never delivered a record taking 20 s or 25 s to cross (3.92 and 3.95 copies carried in four times its crossing); the bucket's own watcher delivered each once, at 20.5 s and 25.6 s.
 - **Cost-when-tried:** the company document inside the activation pointer (#1149): every probe, heartbeat and tick on every node read it whole, so on a leaf a large company failed `/ready`, every reconcile tick and the boot, and above about 50 KB the pointer reads alone filled a floor link.
 - **Tag-status:** unreleased
@@ -68,6 +68,157 @@ carries. No status rides: every status a record holds is one the listings keep.
 The executor sessions' retention, which asks only which turns still have a
 record, lists the same pass.
 
+**The positions register declares its classes**, each at the bound its writer
+holds a record to, a read deciding a write waiting its reply's crossing and
+one deciding none its arrival (the reply at the floor in brackets):
+
+| Class | Bound | Reads |
+|---|---|---|
+| `mcp_listing` | `coord.MaxMCPListingBytes`, 896 KiB | carrying (35.0 s) |
+| `mcp_definition` | `coord.MaxMCPDefinitionBytes`, both of its bounds and 512 bytes | carrying (5.1 s) |
+| `mcp_check` | `coord.MaxMCPCheckBytes`, 64 KiB | deciding (2.5 s) |
+| `access_review` | `coord.MaxAccessReviewBytes`, 40 KiB | deciding (1.6 s) |
+| `seat_access` | `coord.MaxSeatAccessBytes`, 256 KiB | deciding (10.0 s) |
+| `home_board` | `coord.MaxHomeBoardRecordBytes`, the board and 256 bytes | deciding (20.1 s) |
+| `atlas_wake`, `llm_device_sign_in` | `coord.SmallValueBytes` | the term |
+
+Three writers cut to fit rather than refuse: an MCP check halves its
+sentences, then its server's identity, keeping every node and stage; a device
+sign-in halves its detail; an atlas wake names each change once. A seat's
+access record holds every sentence and name a vendor or a step writes to a
+kilobyte as encoded, and drops a link past two; a lane whose access would
+outgrow the record, in its vendor's names and whichever way its steps end,
+takes no step and is told to narrow it, while a lane going off is never held.
+Every other key, every class a boot lists among them, stays undeclared, so no
+boot window moves. Two readers that cannot wait a crossing read less: the atlas
+lists the MCP listings from the node's watched copy, never the store, and one
+seat's access record (a turn's, a Google Cloud token's, a Slack install
+link's) is read by its key, never its integration's ledger. The MCP beat reads the definitions a moved
+catalogue names on its loop's context, each under its own read's crossing,
+since a few at their bound outlast the beat's 15 s.
+
+**The uploads bucket declares its classes**, each at the bound its writer
+holds a record to. Every read of each decides a compare-and-set a caller
+waits on, so each is deciding:
+
+| Class | Bound | Reads |
+|---|---|---|
+| the reservation ledger, `ledger` | `coord.MaxUploadLedgerBytes`, 72 KiB | deciding (2.9 s) |
+| an upload's record, `upload.<id>` | `coord.MaxUploadRecordBytes`, 2.5 MiB | deciding (100.0 s) |
+| a seat's save ledger, `save.<seat>` | `coord.MaxSaveLedgerBytes`, 64 KiB | deciding (2.5 s) |
+
+The two ledgers fit by their counts: 256 holds at most, and 512 saves. An
+upload's record holds an intent's files and carried paths and a publish's
+generated files, every path at its bound written as two bytes a byte at
+most, since the record is stored without HTML escaping; its widest is
+2,549,551 bytes. So a publish names at most a version's files before a byte
+moves, and its warnings are cut to 50, each to 512 bytes, with one counting
+the rest, in its first answer as in a retry's. Each file's type is the one it
+is served as, never the client's. The outcome is written after the version
+has landed, where a refusal could undo nothing, so every write before it
+leaves room for the widest outcome (262,713 bytes) and close always fits. A
+record past that, which only retries ending unknown that record other bytes
+can reach, is refused by its writer before the retry stores a byte.
+
+A refusal deletes and drops only the generated files its own attempt staged.
+A generated file an earlier attempt recorded is dropped from the record
+without being deleted, since that attempt's outcome is unknown and a version
+it landed may name it: the object collector alone judges it, and its bytes
+stay reserved, kept as a count on the record, until the hold lapses, when the
+collector could have taken it. A record keeping such bytes is never released
+early. The files an upload transferred stay held on the upload the refusal
+reopens, so its next publish's close, or its early release where it keeps no
+such bytes, still deletes those a landed version names (#1986).
+
+A change of the ledger reads at most four records across its rounds to
+release abandoned uploads, since each read is a record's crossing inside a
+request, and a hold it read and could not release waits 15 minutes to be
+read again, so the holds behind it are read. A change refused for its budget
+still writes the releases and the waits it decided, and answers its refusal
+however that write ends. A later round drops a released hold only while it
+is what remains of the one released: the same attempt's, no more bytes (a
+release lowers them) and no later lapse, whatever its window. Each hold names
+the intent attempt it reserves for; only a retried intent that found its
+record released takes the hold up, as a new attempt, never weakening it
+(direct where either attempt is, the later window, lapse and bytes), and a
+hold the releasing change makes for that upload draws an attempt of its own.
+No boot or probe reads the bucket, so no boot window moves.
+
+**The chat reads bucket declares its class**, a seat's read record, held to
+the bound its writer keeps it within. Every read of it decides a flush a
+person waits on, so it is deciding:
+
+| Class | Bound | Reads |
+|---|---|---|
+| a seat's read record, `chatread.<handle>` | `coord.MaxChatReadBytes`, 144 KiB | deciding (5.7 s) |
+
+Its sets are capped at 256 each; what gives the record a widest form
+is that every room, message and thread root id it keeps is the UUID Chatlet
+minted for it, 36 bytes JSON writes as itself. So a flush naming any other id
+is refused, by the `mark_chat_read` tool naming its argument and by the merge
+both backends share, and both store the record through one encoding that
+refuses it past the bound. Its widest, every set at its cap, every position at
+19 digits and every instant to the nanosecond, is 137,953 bytes. A pass or the
+watch every node serving sockets keeps waits its raw crossing, 9.3 s at the
+floor. No boot, probe or tick reads the bucket, so no boot window moves.
+
+**The secrets bucket declares its class**, a credential's record, one key
+per name. Its reads decide writes a caller waits on (a put keeping a
+write-only mark, a create's lost round, a rekey's re-read, a grant's
+renewal, a delete's existence read), so it is deciding:
+
+| Class | Bound | Reads |
+|---|---|---|
+| a credential's record, under its name | `coord.MaxSecretRecordBytes`, 96 KiB | deciding (3.8 s) |
+
+Every field the record keeps is bounded where it is written: the value is
+sealed from at most 64 KiB under a key id of at most 255 bytes, the
+provenance is a login's 64 bytes and an operation id's 128, refused past
+them by every write of the store, and the name,
+which is also the key, is at most 255 bytes (`secrets.MaxNameBytes`),
+refused past it as an invalid name by every write, an operator's and the
+engine's. Both backends store the record through one encoding that refuses
+it past the bound. Its widest, every field at its bound in the
+characters JSON spells longest, is 89,931 bytes. A pass waits its raw
+crossing, 7.9 s at the floor. The one boot read, the secret snapshot, runs
+after the node has recovered, where no probe bounds it, so no boot window
+moves. The readers that read more than they need read less: the alarm beat,
+every 10 s on every node, judges a token's expiry from the instant the
+node's snapshot holds beside its value, never listing the store, as
+Settings › Models dates it, and
+`GET /secrets`, `crewlet secrets list` and its rekey's dry run answer their
+names and the engine's count from one pass.
+
+**The atlas buckets declare their classes**, each at the bound its writer
+holds a record to:
+
+| Class | Bound | Reads |
+|---|---|---|
+| a source's standing, `standing.<kind>` | `coord.MaxAtlasSourceStandingBytes`, 64 KiB | deciding (2.5 s) |
+| a source's misses, `missing.<kind>` | `coord.MaxAtlasSourceMissesBytes`, 768 KiB | carrying (31.0 s) |
+| a refresh ask; a code scan standing, `repo.<host>.<repo>` and `host.<host>` | `coord.SmallValueBytes` | the term |
+
+A source's standing was one record holding the ids of every entry the source
+stopped seeing, up to 1.1 MiB, and the collect duty's tick and every report
+of the sources (a person's question, the dashboard's poll, the
+`atlas_refresh` tool) listed every source's whole: at the floor a delivery
+past about 169 KiB outlasts a pass's quiet. Clause 3 splits it. The standing
+is what those readers need, the misses a count on it, and its read decides a
+person's ask for a read. Its widest plain form is 53,043 bytes, 200 scopes
+(one per server a company may declare, each id a host's) beside 16 refused
+listings, and its writer cuts a vendor's text that escaping widens past the
+bound: each listing's detail, then the last fault, then each listing's name,
+keeping every count and scope. The misses, 8,192 entry ids at most, 770,092
+bytes at the widest, are read by their key by the duty's visit of the one
+source alone, and written before the standing that counts them: a visit
+that cannot read them asks the vendor nothing, and one that cannot write
+them leaves the standing counting those still recorded. A code scan
+standing's widest is 13,763 bytes, a forge listing's stamp kept as its digest
+and a forge's tip taken only as a commit id; each is filed under the host it
+is read from, so a repository's pass reads its own by its key and a forge
+lists its own repositories alone, the broker filtering each listing. No boot
+or probe reads the buckets, so no boot window moves.
+
 ## Why the obvious alternatives are wrong
 
 **A longer deadline for every read.** A probe's budget is the orchestrator's,
@@ -83,9 +234,10 @@ bytes its own key.
 
 ## What this does not decide
 
-Every bucket but the runs and the config bucket's pointer and bodies declares
-no class yet: its values are held to `coord.MaxValueBytes` and read at the
-term, which only its records' own fields keep small. The rest of #1814 declares
-them: the positions register's classes,
-the other buckets, then presence rows and a default class of
+Every bucket but the runs, the config, the uploads, the chat reads, the
+secrets, the three atlas buckets and the positions register's classes above
+declares no class yet: its values are held to `coord.MaxValueBytes` and read
+at the term, which only its records' own fields keep small. The rest of
+#1814 declares them: the other buckets and the positions register's rest,
+then presence status rows on keys of their own and a default class of
 `coord.SmallValueBytes`, with a gate holding every key to a declared class.

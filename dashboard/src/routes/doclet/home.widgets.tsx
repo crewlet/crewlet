@@ -9,7 +9,7 @@
  */
 
 import { useMemo, type ReactNode } from "react";
-import { List, ListItem, Skeleton } from "@crewlethq/ui";
+import { ListItem, Skeleton } from "@crewlethq/ui";
 import {
   BrainGlyph,
   EyeGlyph,
@@ -38,7 +38,9 @@ import {
 } from "~/routes/doclet/parts.tsx";
 import {
   ChoiceNote,
+  WIDGET_PAGE,
   WidgetCard,
+  WidgetList,
   WidgetNote,
   WidgetQuery,
   defineWidgets,
@@ -49,15 +51,30 @@ import { ago } from "~/lib/ago.ts";
 
 /** What the landing counts as writing: a new page, a save, a rename, a comment. */
 const WRITTEN_KINDS = "created,saved,renamed,comment";
-/** Rows a widget lists before its Open link takes over. */
+/** Rows a widget lists at its content's height. */
 const ROWS = 5;
 
-/** A list of rows at the landing tile's inset. */
-function Rows({ children }: { children: ReactNode }) {
+/** A list of rows at the landing tile's inset, fitted to the card. */
+function Rows({
+  total,
+  capped,
+  children,
+}: {
+  total?: number | undefined;
+  /** Whether the read stopped at its page, so `total` is a floor. */
+  capped?: boolean | undefined;
+  children: ReactNode;
+}) {
   return (
-    <div className="knowledge-tile-rows">
-      <List variant="plain">{children}</List>
-    </div>
+    <WidgetList
+      variant="plain"
+      className="knowledge-tile-rows"
+      rows={ROWS}
+      total={total}
+      capped={capped}
+    >
+      {children}
+    </WidgetList>
   );
 }
 
@@ -68,14 +85,14 @@ function Written({ container }: { container?: string }) {
   const now = useNow();
   const feed = useQuery(
     "page_activity",
-    { kinds: WRITTEN_KINDS, limit: ROWS * 6, ...(container ? { container } : {}) },
+    { kinds: WRITTEN_KINDS, limit: WIDGET_PAGE * 6, ...(container ? { container } : {}) },
     { pollMs: SPACES_POLL_MS },
   );
   // ONE ROW PER PAGE, its newest change (`pageRows`): a page discussed all
   // morning was every row of the widget. Read well past the rows it draws for
   // the same reason.
   const runs = useMemo(
-    () => pageRows(foldRuns(feed.data?.changes ?? [], zone), -1, ROWS),
+    () => pageRows(foldRuns(feed.data?.changes ?? [], zone), -1, WIDGET_PAGE),
     [feed.data, zone],
   );
   return (
@@ -95,7 +112,7 @@ function Written({ container }: { container?: string }) {
           : undefined
       }
     >
-      <Rows>
+      <Rows capped={Boolean(feed.data?.next_cursor)}>
         {runs.map((run) => {
           const change = run[0];
           const by = changedBy(change);
@@ -168,11 +185,7 @@ function SpaceActivity({ params }: WidgetProps) {
     <WidgetCard
       title={space.name || space.key}
       from="doclet"
-      actions={
-        <a className="t-link home-widget-open" href={href(["doclet", space.key])}>
-          Open space
-        </a>
-      }
+      open={{ label: "Open space", to: ["doclet", space.key] }}
     >
       <Written container={space.key} />
     </WidgetCard>
@@ -185,7 +198,7 @@ function Watching() {
   const now = useNow();
   const watched = useQuery(
     "pages",
-    { watcher: viewer.handle, status: "published,draft", skills: false, limit: ROWS },
+    { watcher: viewer.handle, status: "published,draft", skills: false, limit: WIDGET_PAGE },
     { enabled: viewer.handle !== "", pollMs: SPACES_POLL_MS },
   );
   const rows = watched.data?.pages ?? [];
@@ -205,7 +218,7 @@ function Watching() {
               : undefined
           }
         >
-          <Rows>
+          <Rows total={watched.data?.total}>
             {rows.map((page) => (
               <ListItem
                 key={page.id}
@@ -242,7 +255,7 @@ const NEWEST_SKILLS = {
   skills: true,
   status: "published",
   order: "newest" satisfies (typeof PAGE_LIST_ORDERS)[number],
-  limit: ROWS,
+  limit: WIDGET_PAGE,
 } as const;
 
 function Skills() {
@@ -266,7 +279,7 @@ function Skills() {
             : undefined
         }
       >
-        <Rows>
+        <Rows total={total}>
           {newest.map((page) => (
             <ListItem
               key={page.id}
@@ -293,8 +306,7 @@ function Diaries() {
     () =>
       [...(overview.data?.seats ?? [])]
         .filter((s) => !uncounted(s) && s.last_reflection_at)
-        .sort((a, b) => tsKey(b.last_reflection_at) - tsKey(a.last_reflection_at))
-        .slice(0, ROWS),
+        .sort((a, b) => tsKey(b.last_reflection_at) - tsKey(a.last_reflection_at)),
     [overview.data],
   );
   const total = overview.data?.seats.length ?? 0;

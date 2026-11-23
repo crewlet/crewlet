@@ -648,7 +648,7 @@ describe("moving a card", () => {
       answer(
         new Response(
           JSON.stringify({ error: "stale_version", tool: "place_work_item", detail: "" }),
-          { status: 409, headers: { "Content-Type": "application/json" } },
+          { status: 409, headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" } },
         ),
       );
     });

@@ -43,6 +43,9 @@ type qwenNote struct {
 	Inbox   string `json:"inbox"`
 	Message string `json:"message"`
 	After   string `json:"-"`
+	// Later serves the note only to a poll past every note before it, so it
+	// reaches a later drain than they do whatever becomes of them.
+	Later bool `json:"-"`
 }
 
 // qwenBridge is a stand-in for the run's notes and skill routes: it serves
@@ -73,7 +76,8 @@ func (b *qwenBridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		after, _ := strconv.Atoi(r.URL.Query().Get("after"))
 		served := []qwenNote{}
 		for _, n := range b.notes {
-			if n.Seq > after && !slices.Contains(b.reads, n.ID) && (n.After == "" || slices.Contains(b.reads, n.After)) {
+			if n.Seq > after && !slices.Contains(b.reads, n.ID) && (n.After == "" || slices.Contains(b.reads, n.After)) &&
+				(!n.Later || after >= n.Seq-1) {
 				served = append(served, n)
 			}
 		}
@@ -386,6 +390,30 @@ func TestOfTwoIdenticalQwenNotesOnlyTheRepliedOneIsConfirmed(t *testing.T) {
 	}
 	if got := bridge.read(); !slices.Equal(got, []string{"n-1"}) {
 		t.Errorf("the notes confirmed read are %v, want n-1 alone", got)
+	}
+}
+
+// A QWEN NOTE NEVER RECORDED LEAVES THE LATER ONES TO BE CONFIRMED. The
+// first note's drain records nothing (the stand-in goes on as though it had),
+// the second's records it and is answered: the helper passes the first over,
+// unconfirmed and served again, and confirms the second.
+//
+// Mutation: match a record against the oldest note handed alone, and the
+// second is never confirmed.
+func TestAQwenNoteNeverRecordedLeavesTheLaterOnesToBeConfirmed(t *testing.T) {
+	t.Parallel()
+	bridge := newQwenBridge(t,
+		qwenNote{Seq: 1, ID: "n-1", Inbox: "qwen_1", Message: "## A note from eve, sent while this turn was running\nfirst"},
+		qwenNote{Seq: 2, ID: "n-2", Inbox: "qwen_2", Message: "## A note from eve, sent while this turn was running\nsecond",
+			Later: true})
+	run := startQwenHelper(t, bridge.steer(), "acp-note.jsonl", nil, "QWEN_FAKE_AWAIT_NOTES=2",
+		"QWEN_FAKE_UNRECORDED_NOTE=1")
+	lines, code := run.finish(t)
+	if notes := typed(lines, "crewlet_qwen_note"); code != 0 || len(notes) != 2 {
+		t.Fatalf("the run exited %d having handed %v, want both notes handed", code, notes)
+	}
+	if got := bridge.read(); !slices.Equal(got, []string{"n-2"}) {
+		t.Errorf("the notes confirmed read are %v, want n-2 alone", got)
 	}
 }
 

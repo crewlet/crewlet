@@ -13,6 +13,7 @@ import { VendorMark } from "@crewlethq/icons";
 import {
   ActivityStrip,
   Card,
+  CardGrid,
   Legend,
   Link,
   Skeleton,
@@ -167,7 +168,7 @@ export function Band({
               </Text>
             )
           ) : (
-            <div className="atlas-band__attention">
+            <CardGrid min="sm" gap={2}>
               {attention.slice(0, ATTENTION_SHOWN).map((row) => (
                 // THE CARD IS THE ACTION: pressing it selects the entry on the map.
                 // ITS WHOLE REASON IS REACHABLE, cut to two lines on the card:
@@ -206,7 +207,7 @@ export function Band({
                   </Card>
                 </Tooltip>
               ))}
-            </div>
+            </CardGrid>
           )}
         </div>
       </Card>

@@ -14,6 +14,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/coord/coordtest"
 )
 
 // chatReadFleet opens a fleet store on its own buckets with one person's
@@ -23,7 +24,7 @@ func chatReadFleet(t *testing.T, handle string) (*FleetStore, *nats.Conn) {
 	nc := embeddedNATS(t)
 	f := openFleetForTest(t, nc, fmt.Sprintf("f%d", bucketSeq.Add(1)))
 	if _, err := f.AdvanceChatRead(t.Context(), handle, coord.ChatReadDelta{
-		Cursors: map[string]int64{"room-a": 7, "room-b": 9}, At: chatReadAt0,
+		Cursors: map[string]int64{coordtest.ChatID("room-a"): 7, coordtest.ChatID("room-b"): 9}, At: chatReadAt0,
 	}); err != nil {
 		t.Fatalf("AdvanceChatRead: %v", err)
 	}
@@ -49,14 +50,14 @@ func TestAChatReadPurgeBoundToAStaleRevisionDoesNotFire(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	f, _ := chatReadFleet(t, "leaver")
-	key := chatReadKey("leaver")
+	key := coord.ChatReadKey("leaver")
 	_, judged, err := f.chatReadAt(ctx, "leaver")
 	if err != nil {
 		t.Fatalf("chatReadAt: %v", err)
 	}
 	// A flush lands between the judgement and the purge.
 	if _, err := f.AdvanceChatRead(ctx, "leaver", coord.ChatReadDelta{
-		Cursors: map[string]int64{"room-c": 11}, At: chatReadAt0,
+		Cursors: map[string]int64{coordtest.ChatID("room-c"): 11}, At: chatReadAt0,
 	}); err != nil {
 		t.Fatalf("the flush in the window: %v", err)
 	}
@@ -159,7 +160,7 @@ func TestAnUndecodableChatReadIsRaisedNotSkipped(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	f, _ := chatReadFleet(t, "reader")
-	if _, err := f.chatReads.Put(ctx, chatReadKey("broken"), []byte("{not json")); err != nil {
+	if _, err := f.chatReads.Put(ctx, coord.ChatReadKey("broken"), []byte("{not json")); err != nil {
 		t.Fatalf("planting the corrupt record: %v", err)
 	}
 
@@ -198,14 +199,14 @@ func TestAReadStateWriteWhoseAnswerWasLostMayHaveLanded(t *testing.T) {
 		f.chatReads = &answerLost{KeyValue: f.chatReads, land: true}
 
 		_, err := f.AdvanceChatRead(ctx, "founder", coord.ChatReadDelta{
-			Cursors: map[string]int64{"room-c": 11}, At: chatReadAt0,
+			Cursors: map[string]int64{coordtest.ChatID("room-c"): 11}, At: chatReadAt0,
 		})
 		if !errors.Is(err, coord.ErrWriteUnknown) || !errors.Is(err, coord.ErrUnavailable) {
 			t.Fatalf("a flush whose answer was lost = %v, want ErrWriteUnknown and "+
 				"ErrUnavailable", err)
 		}
 		f.chatReads = f.chatReads.(*answerLost).KeyValue
-		if state, err := f.ChatRead(ctx, "founder"); err != nil || state.Cursors["room-c"] != 11 {
+		if state, err := f.ChatRead(ctx, "founder"); err != nil || state.Cursors[coordtest.ChatID("room-c")] != 11 {
 			t.Fatalf("the record reads %v (err %v): the case staged a write that "+
 				"landed, which is the one the error must not deny", state.Cursors, err)
 		}
@@ -241,7 +242,7 @@ func TestAReadStateWriteWhoseAnswerWasLostMayHaveLanded(t *testing.T) {
 		gone, cancel := context.WithCancel(t.Context())
 		cancel()
 		_, err := f.AdvanceChatRead(gone, "founder", coord.ChatReadDelta{
-			Cursors: map[string]int64{"room-c": 11}, At: chatReadAt0,
+			Cursors: map[string]int64{coordtest.ChatID("room-c"): 11}, At: chatReadAt0,
 		})
 		if !errors.Is(err, coord.ErrUnavailable) {
 			t.Fatalf("a flush whose read could not be made = %v, want ErrUnavailable", err)
@@ -263,7 +264,7 @@ func TestAReadStateWriteWhoseAnswerWasLostMayHaveLanded(t *testing.T) {
 // recorded", against the ChatReads contract.
 func TestAFirstReadStateWriteIsUnknownOnlyWhenItsOwnWriteWasUnanswered(t *testing.T) {
 	t.Parallel()
-	flush := coord.ChatReadDelta{Cursors: map[string]int64{"room-c": 11}, At: chatReadAt0}
+	flush := coord.ChatReadDelta{Cursors: map[string]int64{coordtest.ChatID("room-c"): 11}, At: chatReadAt0}
 
 	t.Run("a create whose write landed and went unanswered", func(t *testing.T) {
 		t.Parallel()
@@ -277,7 +278,7 @@ func TestAFirstReadStateWriteIsUnknownOnlyWhenItsOwnWriteWasUnanswered(t *testin
 				"ErrWriteUnknown and ErrUnavailable", err)
 		}
 		f.chatReads = lost.KeyValue
-		if state, err := f.ChatRead(ctx, "newcomer"); err != nil || state.Cursors["room-c"] != 11 {
+		if state, err := f.ChatRead(ctx, "newcomer"); err != nil || state.Cursors[coordtest.ChatID("room-c")] != 11 {
 			t.Fatalf("the record reads %v (err %v): the case staged a create that "+
 				"landed, which is the one the error must not deny", state.Cursors, err)
 		}
@@ -431,7 +432,7 @@ func TestAFlushThatLosesEveryAttemptSaysNothingLanded(t *testing.T) {
 	}
 
 	_, err := f.AdvanceChatRead(ctx, "founder", coord.ChatReadDelta{
-		Cursors: map[string]int64{"room-c": 11}, At: chatReadAt0,
+		Cursors: map[string]int64{coordtest.ChatID("room-c"): 11}, At: chatReadAt0,
 	})
 	if !errors.Is(err, coord.ErrUnavailable) || !strings.Contains(err.Error(), "lost every compare-and-swap") {
 		t.Fatalf("AdvanceChatRead = %v, want an unavailable store naming the contention", err)
@@ -454,7 +455,7 @@ func TestAFlushThatLosesEveryAttemptSaysNothingLanded(t *testing.T) {
 	}
 	f.chatReads = refusing.KeyValue
 	state, err := f.ChatRead(ctx, "founder")
-	if err != nil || len(state.Cursors) != 2 || state.Cursors["room-c"] != 0 {
+	if err != nil || len(state.Cursors) != 2 || state.Cursors[coordtest.ChatID("room-c")] != 0 {
 		t.Fatalf("ChatRead = (%v, %v), want the two cursors it held and no room-c: "+
 			"nothing landed", state.Cursors, err)
 	}
@@ -494,7 +495,7 @@ func TestAFlushTheLeaderNeverDecidedMayHaveLanded(t *testing.T) {
 		js: termed{term: 50 * time.Millisecond, publish: pending.publish}, holding: undeclaredHolding}
 
 	_, err := f.AdvanceChatRead(ctx, "founder", coord.ChatReadDelta{
-		Cursors: map[string]int64{"room-c": 11}, At: chatReadAt0,
+		Cursors: map[string]int64{coordtest.ChatID("room-c"): 11}, At: chatReadAt0,
 	})
 	if !errors.Is(err, coord.ErrWriteUnknown) || !errors.Is(err, coord.ErrUnavailable) {
 		t.Fatalf("a flush the leader never decided = %v, want ErrWriteUnknown and "+
@@ -538,13 +539,13 @@ func TestAChatReadWatchsFirstAnswerIsCertifiedAndNotUndoneByAnOlderRevision(t *t
 	defer cancel()
 	f, _ := chatReadFleet(t, "founder")
 	if _, err := f.AdvanceChatRead(ctx, "designer", coord.ChatReadDelta{
-		Cursors: map[string]int64{"room-a": 1}, At: chatReadAt0,
+		Cursors: map[string]int64{coordtest.ChatID("room-a"): 1}, At: chatReadAt0,
 	}); err != nil {
 		t.Fatalf("AdvanceChatRead: %v", err)
 	}
 	var stale jetstream.KeyValueEntry
 	for _, kve := range recordPass(ctx, t, f.chatReads) {
-		if kve.Key() == chatReadKey("founder") {
+		if kve.Key() == coord.ChatReadKey("founder") {
 			stale = kve
 		}
 	}
@@ -552,7 +553,7 @@ func TestAChatReadWatchsFirstAnswerIsCertifiedAndNotUndoneByAnOlderRevision(t *t
 		t.Fatal("setup: the recorded pass holds no record for founder")
 	}
 	newer, err := f.AdvanceChatRead(ctx, "founder", coord.ChatReadDelta{
-		Cursors: map[string]int64{"room-a": 8}, At: chatReadAt0,
+		Cursors: map[string]int64{coordtest.ChatID("room-a"): 8}, At: chatReadAt0,
 	})
 	if err != nil {
 		t.Fatalf("AdvanceChatRead: %v", err)
@@ -581,17 +582,17 @@ func TestAChatReadWatchsFirstAnswerIsCertifiedAndNotUndoneByAnOlderRevision(t *t
 			"marker came before either record, and an answer that trusted it holds "+
 			"neither", answer)
 	}
-	if got := answer["founder"]; got.Cursors["room-a"] != 8 || got.Revision != newer.Revision {
+	if got := answer["founder"]; got.Cursors[coordtest.ChatID("room-a")] != 8 || got.Revision != newer.Revision {
 		t.Errorf("founder answered as %+v, want the newer flush at revision %d", got, newer.Revision)
 	}
 
 	flushed, err := f.AdvanceChatRead(ctx, "ops", coord.ChatReadDelta{
-		Cursors: map[string]int64{"room-b": 2}, At: chatReadAt0,
+		Cursors: map[string]int64{coordtest.ChatID("room-b"): 2}, At: chatReadAt0,
 	})
 	if err != nil {
 		t.Fatalf("AdvanceChatRead: %v", err)
 	}
-	fresh, err := getLatest(ctx, f.js, f.chatReads, chatReadKey("ops"))
+	fresh, err := getLatest(ctx, f.js, f.chatReads, coord.ChatReadKey("ops"))
 	if err != nil {
 		t.Fatalf("read ops's record: %v", err)
 	}
