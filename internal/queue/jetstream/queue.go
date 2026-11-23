@@ -364,6 +364,9 @@ type Queue struct {
 	// right now ([attachment.retire]): what [Queue.Stop] waits for before
 	// it closes the connection under them.
 	keeping queue.Inflight
+	// keepsAwaited, when set, is called as a stop begins to wait for a keep
+	// in flight ([Queue.awaitKeeps]): this package's tests' witness.
+	keepsAwaited func()
 
 	// marks is the failure marks' stream as this client reads and purges
 	// it (failuremarks.go).
@@ -2081,6 +2084,9 @@ func (q *Queue) Stop(ctx context.Context) error {
 // ([Queue.keeping]), or ctx ends — a keep begun while it waits, by a loop
 // still settling what it handed back, waited for too.
 func (q *Queue) awaitKeeps(ctx context.Context) {
+	if q.keepsAwaited != nil && q.keeping.Count() > 0 {
+		q.keepsAwaited()
+	}
 	for q.keeping.Count() > 0 {
 		if _, err := q.keeping.Wait(ctx, 0); err != nil {
 			q.log.WarnContext(ctx, "dead_letter_keep_cut", "keeping", q.keeping.Count(),
