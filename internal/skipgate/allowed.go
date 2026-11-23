@@ -215,11 +215,11 @@ var allowed = []Allowance{
 	},
 
 	// -----------------------------------------------------------------
-	// Environment: a container runtime. It does NOT skip in CI — the run's
-	// own log carries zero SKIP lines and `--- PASS:
-	// TestTheContainerModeRunsTheSameProtocol` — so this entry covers a
-	// workstation without docker or podman. If it ever starts skipping in
-	// CI, this gate is what says so.
+	// Environment: a container runtime. These do NOT skip in CI, whose
+	// runners are Linux with docker — the run's own log carries zero SKIP
+	// lines and `--- PASS: TestTheContainerModeRunsTheSameProtocol` — so each
+	// entry covers a workstation without docker or podman. If one ever starts
+	// skipping in CI, this gate is what says so.
 	// -----------------------------------------------------------------
 	{
 		Package: "internal/e2e",
@@ -228,6 +228,24 @@ var allowed = []Allowance{
 		Why: "Needs a usable docker or podman. It is the only place containerBox's " +
 			"in-box paths are exercised against a real container; the direct mode covers " +
 			"the run protocol itself.",
+	},
+	{
+		Package: "internal/e2e",
+		Test:    "TestABrowserSeatsBoxRunsItsBrowserInAContainer",
+		When:    Environment,
+		Why: "Needs a usable docker or podman on a Linux host, whose newest Chromium pin is a build a " +
+			"Linux container can run. The one case that runs a seat's browser in a real container: the " +
+			"helper's own suite proves the browser on the host, and the launch's step is proven against " +
+			"the sandbox's fakes.",
+	},
+	{
+		Package: "internal/e2e",
+		Test:    "TestABrowserIsWithheldWhereItsBoxReachesItsHostsLoopback",
+		When:    Environment,
+		Why: "Needs a usable docker or podman on a Linux host. The one case that runs the launch's network " +
+			"check in real container boxes: on the bridge, on the host's network and through a relayed host " +
+			"alias; hostreach's own suite proves the protocol on the host and the box's half against " +
+			"fixtures.",
 	},
 
 	// -----------------------------------------------------------------

@@ -91,12 +91,13 @@ concurrency:
 # gits (0.06 GB, Linux's and macOS's), the pinned Chromiums (0.36 GB), the
 # floor Node (0.04 GB, its linux-x64 build with its npm as actions/cache packs
 # it, measured on a development machine), the Playwright tree (0.01 GB, measured
-# the same way), npm's cache (0.05 GB) and the sshd test images (0.11 GB).
-# `caches`, at the end of the run, then deletes every entry a newer one of its
-# kind supersedes. So the repository holds one set, 5.78 GB in 22 entries, and
-# a push's saves take it to about 10.7 GB until that job runs, 15.6 GB while
-# two pushes' runs overlap: past the 10 GB, so eviction takes entries again,
-# the newest of a kind among them.
+# the same way), npm's cache (0.05 GB), the sshd test images (0.11 GB) and the
+# browser box image (0.21 GB, measured the same way). `caches`, at the end of
+# the run, then deletes every entry a newer one of its kind supersedes. So the
+# repository holds one set, 5.99 GB in 23 entries, and a push's saves take it
+# to about 10.9 GB until that job runs, 15.8 GB while two pushes' runs
+# overlap: past the 10 GB, so eviction takes entries again, the newest of a
+# kind among them.
 #
 # Nothing here can make a test pass that should fail. A build-cache entry is
 # keyed by an action ID that hashes the inputs, the flags (-race), the
@@ -1128,7 +1129,8 @@ jobs:
           node-version: latest
       # The pinned gits and Chromiums, the floor Node and the Playwright tree,
       # as in the race shards above, whose comments say why. Restored here and
-      # never saved: the first race shard is their one saver.
+      # never saved: the first race shard is their one saver. The browser box
+      # image after them is this job's own.
       - *git-cache-dir
       - *git-restore
       - *git-deps
@@ -1138,10 +1140,40 @@ jobs:
       - *node-restore
       - *playwright-tree-cache-dir
       - *playwright-tree-restore
+      # THE BROWSER BOX IMAGE, the one internal/e2e's
+      # TestABrowserSeatsBoxRunsItsBrowserInAContainer runs a seat's browser
+      # in, kept as a tar in CREWLET_BROWSERBOX_CACHE and loaded through
+      # internal/imagetest, as the sshd test images are and for their reasons
+      # (the race shards above): its build runs apt too. KEYED ON the test,
+      # which holds the Dockerfile, on what that names (the tree's installed
+      # digest and the floor Node's pin), and on imagetest.go, which names the
+      # tar, with no restore-keys. Every shard restores it, since the plan
+      # decides which one runs internal/e2e.
+      - name: name the browser box image's cache directory
+        run: echo "CREWLET_BROWSERBOX_CACHE=$HOME/.cache/crewlet/browserbox" >> "$GITHUB_ENV"
+      - name: restore the browser box image main built
+        id: browserbox
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.CREWLET_BROWSERBOX_CACHE }}
+          key: browserbox-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('internal/e2e/browserbox_test.go', 'internal/browser/boxhelper/tree/installed.sha256', 'scripts/node-pin.env', 'internal/imagetest/imagetest.go') }}
       - name: this shard of the packages that run alone
         env:
           TEST_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
         run: make test-solo TEST_SHARD="$TEST_SHARD" TEST_WEIGHTS="$RUNNER_TEMP/plan/test-weights.tsv" TEST_TIMINGS="$RUNNER_TEMP/test-timings.tsv"
+      # The browser box image, main only and a miss only, from the shard that
+      # ran internal/e2e: imagetest writes a tar whole or not at all, and only
+      # that shard built one.
+      - name: is the browser box image's cache complete
+        id: browserbox-complete
+        run: |
+          if compgen -G "$CREWLET_BROWSERBOX_CACHE/*.tar" >/dev/null; then echo "complete=true" >> "$GITHUB_OUTPUT"; fi
+      - name: save the browser box image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.browserbox.outputs.cache-hit != 'true' && steps.browserbox-complete.outputs.complete == 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.CREWLET_BROWSERBOX_CACHE }}
+          key: browserbox-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('internal/e2e/browserbox_test.go', 'internal/browser/boxhelper/tree/installed.sha256', 'scripts/node-pin.env', 'internal/imagetest/imagetest.go') }}
       - *timings-upload
       - *gobuild-prune
       - *gobuild-save
@@ -1420,10 +1452,10 @@ jobs:
   # entry's kind is its key without the last part, which is the commit for an
   # entry saved on every push and the hash of what it holds for the rest (the
   # modules, the pinned gits, the pinned Chromiums, the floor Node, the
-  # Playwright tree, npm's cache, the sshd test images). Only main's entries of
-  # the kinds this file saves are listed, newest first, and the first of each
-  # kind is kept. So no kind is ever emptied, and a job that failed, and
-  # therefore saved nothing, keeps the entry it saved last.
+  # Playwright tree, npm's cache, the sshd test images, the browser box image).
+  # Only main's entries of the kinds this file saves are listed, newest first,
+  # and the first of each kind is kept. So no kind is ever emptied, and a job
+  # that failed, and therefore saved nothing, keeps the entry it saved last.
   #
   # This is the one job here that changes anything outside its own run, so
   # every line of it is security review:
@@ -1458,7 +1490,7 @@ jobs:
           kept=0 count=0
           while IFS=$'\t' read -r id key size; do
             case "$key" in
-              gobuild-*|gomod-*|git-*|chromium-*|node-*|playwright-tree-*|sshdtest-*|test-weights-*|golangci-lint-*|npm-*) ;;
+              gobuild-*|gomod-*|git-*|chromium-*|node-*|playwright-tree-*|sshdtest-*|browserbox-*|test-weights-*|golangci-lint-*|npm-*) ;;
               *) continue ;;
             esac
             kind="${key%-*}-"
