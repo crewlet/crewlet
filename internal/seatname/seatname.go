@@ -83,6 +83,31 @@ var (
 	// DigitalOcean is a token's name: DigitalOcean publishes no rule.
 	DigitalOcean = with(Crewlet, "Token name")
 
+	// GitLab is a personal access token's name: GitLab publishes no rule.
+	GitLab = with(Crewlet, "Token name")
+
+	// Cloudflare is an account API token's name: at most 120
+	// (developers.cloudflare.com/api/resources/accounts/subresources/tokens/methods/create/).
+	Cloudflare = Rule{What: "Token name", Min: 1, Max: 120, LetterFirst: true,
+		Words: "Cloudflare's rule: at most 120 characters."}
+
+	// Scaleway is an IAM application's name, which its policy shares: at most
+	// 64 (scaleway-sdk-go api/iam/v1alpha1, CreateApplicationRequest.Name).
+	Scaleway = Rule{What: "Application name", Min: 1, Max: 64, LetterFirst: true,
+		Words: "Scaleway's rule: at most 64 characters."}
+
+	// Mattermost is a personal access token's description, by which the engine
+	// knows the tokens it minted: at most 255 bytes (the server's
+	// UserAccessToken.IsValid, mattermost/mattermost
+	// server/public/model/user_access_token.go; the API docs state none).
+	Mattermost = Rule{What: "Token description", Min: 1, Max: 255, LetterFirst: true,
+		Words: "Mattermost's rule: at most 255 characters."}
+
+	// Datadog is the local part of a service account's address: at most 64,
+	// the longest local part mail allows (RFC 5321, section 4.5.3.1.1).
+	Datadog = Rule{What: "Service account address (local part)", Min: 1, Max: 64, LetterFirst: true,
+		Words: "Mail's rule: at most 64 characters before the @."}
+
 	// Google is a service account's ID: 6 to 30 lowercase letters, digits and
 	// hyphens, a letter first and no hyphen last, unique in an identity
 	// project that companies may share, so hashed
@@ -156,22 +181,38 @@ func Slug(s, sep string) string {
 // cut to fit, with the hash where r is hashed. It panics where the name breaks
 // r, which only a rule too narrow for `crewlet` itself can cause: a programming
 // error in a [Rule], never an input's.
-func For(r Rule, company, handle string) string {
+func For(r Rule, company, handle string) string { return ForWith(r, company, handle) }
+
+// ForWith is [For] with words after the handle, for a vendor where one seat
+// holds several identities a person tells apart by name (a token per level):
+// `crewlet-<handle>-<word>...`. The handle is cut first, so the words survive
+// the vendor's length; only words too long to sit beside `crewlet` are cut.
+func ForWith(r Rule, company, handle string, words ...string) string {
 	sep := r.sep()
 	slug := Slug(handle, sep)
 	if slug == "" {
 		slug = fallback
 	}
-	var suffix string
+	var tail string
+	for _, w := range words {
+		if w = Slug(w, sep); w != "" {
+			tail += sep + w
+		}
+	}
+	var hash string
 	if r.Hashed {
 		sum := sha256.Sum256([]byte(strings.TrimSpace(company) + "/" + strings.TrimSpace(handle)))
-		suffix = sep + hex.EncodeToString(sum[:])[:r.HashChars]
+		hash = sep + hex.EncodeToString(sum[:])[:r.HashChars]
 	}
-	base := Prefix + sep + slug
-	if room := r.Max - len(suffix); len(base) > room {
-		base = strings.TrimRight(base[:room], sep)
+	head := Prefix + sep + slug
+	if room := r.Max - len(tail) - len(hash); len(head) > room {
+		if room < len(Prefix) {
+			head, room = head+tail, r.Max-len(hash)
+			tail = ""
+		}
+		head = strings.TrimRight(head[:min(room, len(head))], sep)
 	}
-	name := base + suffix
+	name := head + tail + hash
 	if err := r.Check(name); err != nil {
 		panic(err)
 	}

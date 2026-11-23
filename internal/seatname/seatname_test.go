@@ -13,6 +13,11 @@ var rules = map[string]seatname.Rule{
 	"expo":              seatname.Expo,
 	"digitalocean":      seatname.DigitalOcean,
 	"google":            seatname.Google,
+	"gitlab":            seatname.GitLab,
+	"cloudflare":        seatname.Cloudflare,
+	"scaleway":          seatname.Scaleway,
+	"mattermost":        seatname.Mattermost,
+	"datadog":           seatname.Datadog,
 	"underscores":       {What: "Name", Min: 3, Max: 30, Underscores: true, LetterFirst: true},
 }
 
@@ -86,5 +91,45 @@ func TestCheckRefusesWhatTheVendorRefuses(t *testing.T) {
 	}
 	if seatname.Google.Check("crewl") == nil {
 		t.Error("Google allowed a five-character ID")
+	}
+}
+
+// Each vendor's length is the one it publishes, or Crewlet's cap: a longer
+// handle is cut to exactly that, and never past it.
+func TestEachVendorCutsToItsOwnLength(t *testing.T) {
+	long := strings.Repeat("handle", 50)
+	for _, c := range []struct {
+		rule seatname.Rule
+		max  int
+	}{
+		{seatname.GitLab, 30}, {seatname.Expo, 30}, {seatname.DigitalOcean, 30},
+		{seatname.Cloudflare, 120}, {seatname.Scaleway, 64},
+		{seatname.Mattermost, 255}, {seatname.Datadog, 64},
+	} {
+		if got := seatname.For(c.rule, "Example Co", long); len(got) != c.max {
+			t.Errorf("%s: a %d-character handle gave %d characters, want the vendor's %d",
+				c.rule.What, len(long), len(got), c.max)
+		}
+	}
+}
+
+// Words after the handle survive a cut: a seat's tokens at two levels stay
+// two names a person tells apart, the handle giving way rather than the level.
+func TestWordsAfterTheHandleSurviveTheCut(t *testing.T) {
+	if got := seatname.ForWith(seatname.DigitalOcean, "Example Co", "growth", "Operate"); got != "crewlet-growth-operate" {
+		t.Fatalf("ForWith = %q, want crewlet-growth-operate", got)
+	}
+	long := strings.Repeat("handle", 10)
+	read := seatname.ForWith(seatname.DigitalOcean, "Example Co", long, "read")
+	admin := seatname.ForWith(seatname.DigitalOcean, "Example Co", long, "administer")
+	if !strings.HasSuffix(read, "-read") || !strings.HasSuffix(admin, "-administer") || len(admin) != 30 {
+		t.Fatalf("cut names %q and %q lost their level or the cap", read, admin)
+	}
+	if got := seatname.ForWith(seatname.Crewlet, "Example Co", "growth", strings.Repeat("word", 20)); seatname.Crewlet.Check(got) != nil ||
+		!strings.HasPrefix(got, "crewlet-growth-word") {
+		t.Fatalf("words longer than the cap gave %q", got)
+	}
+	if got := seatname.ForWith(seatname.Expo, "Example Co", "growth", "", "--"); got != "crewlet-growth" {
+		t.Fatalf("empty words gave %q, want crewlet-growth", got)
 	}
 }
