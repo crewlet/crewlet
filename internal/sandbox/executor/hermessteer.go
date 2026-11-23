@@ -133,18 +133,18 @@ func hermesRunFrom(ctx context.Context, box sandbox.Sandbox, session string) (in
 	return n, nil
 }
 
-// hermesNotesHeld is the inbox ids of takes, in serve order, whose items the
-// record r holds as notes the model was sent. Each user row above from (this
-// launch's own), in the conversation ([hermesMessage.current]), shown as a
-// steer and framed, holds the notes steered before one request, stripped and
-// joined by newlines (three steered during one tool call are one row, measured
-// on 0.23.3); its parts match takes as an in-order subsequence, so a take the
-// record lacks is passed over and stays unheld, and two takes of one note's
-// words need two parts. A match is settled only by a completed reply stored
-// after it ([hermesMessage.replied]): the note rides the request after the
-// tool result, its row stored before that reply's though stamped later
-// (measured, testdata request-steered.json); one no reply follows is not held,
-// so it is served again. A row past [hermesRowMaxBytes] drops every pending match.
+// hermesNotesHeld is the inbox ids of takes (the launch's serves in order,
+// read notes' included, [sandbox.MainThreadAsk.Served]) whose items the record
+// r holds as notes the model was sent. Each user row of this launch (above
+// from, no copy of an earlier row) in the conversation ([hermesMessage.current]),
+// shown as a steer and framed, holds the notes steered before one request,
+// joined by newlines (measured on 0.23.3); its parts match takes as an
+// in-order subsequence, so a take the record lacks stays unheld, and two takes
+// of one note's words need two parts. A match is settled only by a finished
+// reply stored after it ([hermesMessage.replied]; the note rides the request
+// after the tool result, testdata request-steered.json); one no reply follows
+// is not held, so it is served again. A row past [hermesRowMaxBytes] drops
+// every pending match.
 func hermesNotesHeld(r io.Reader, takes []ServedTake, from int64) ([]string, error) {
 	type match struct {
 		inbox string
@@ -153,9 +153,22 @@ func hermesNotesHeld(r io.Reader, takes []ServedTake, from int64) ([]string, err
 	var settled []string
 	var pending []match
 	next := 0
+	// A COMPACTION'S REWRITTEN TAIL keeps each row's message_uid under a new
+	// id (measured on 0.23.3), so a copy of an earlier launch's row is no row
+	// of this launch's, however high its id.
+	earlier := map[string]bool{}
 	err := hermesRows(r, func(row hermesRow) error {
 		m := row.Message
-		if row.Table != "messages" || m.ID <= from || !m.current() {
+		if row.Table != "messages" {
+			return nil
+		}
+		if m.ID <= from {
+			if m.UID != "" {
+				earlier[m.UID] = true
+			}
+			return nil
+		}
+		if !m.current() || earlier[m.UID] {
 			return nil
 		}
 		switch {

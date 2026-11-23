@@ -1081,24 +1081,32 @@ func TestAHermesNoteTheRecordLacksHoldsNoLaterOneBack(t *testing.T) {
 
 // A HERMES NOTE SURVIVES AN IN-PLACE COMPACTION ONLY AS A ROW OF THE
 // CONVERSATION: in 0.23.3's in-place compaction (measured,
-// session-compacted.jsonl) the folded rows go inactive, the summary is a user
-// row of its own, and the kept tail is written again under new ids. A note in
-// the kept tail (row 14) is held by the reply after it; one only the summary
-// holds (row 10) is not.
+// session-compacted.jsonl) the folded rows go inactive and compacted, the
+// summary is a user row of its own, and the kept tail is written again under
+// new ids, each keeping its message_uid. A note of this launch (row 7, from 6)
+// is held through its copy (row 14); a copy of an earlier launch's (from 9) is
+// not; nor are a note only the summary holds (row 10) or one folded (row 1).
 //
-// Mutation: take the summary row as a note, and the second case goes red.
+// Mutation: take the summary or a folded row as a note, or a copy for this
+// launch's row, and its case goes red.
 func TestAHermesNoteSurvivesAnInPlaceCompactionOnlyAsAConversationRow(t *testing.T) {
 	t.Parallel()
 	take := []ServedTake{{InboxID: "a", Digest: ItemDigest(hermesSteeredNote)}}
-	for row, want := range map[int64][]string{14: {"a"}, 10: nil} {
+	for _, c := range []struct {
+		rows []int64
+		from int64
+		want []string
+	}{
+		{[]int64{7, 14}, 6, []string{"a"}}, {[]int64{7, 14}, 9, nil}, {[]int64{10}, 9, nil}, {[]int64{1}, 0, nil},
+	} {
 		record := hermesFixtureRows(t, "session-compacted.jsonl", func(id int64, r map[string]any) {
-			if id == row {
+			if slices.Contains(c.rows, id) {
 				r["display_kind"] = "steer"
 				r["content"] = hermesNoteOpen + hermesSteeredNote + hermesNoteClose
 			}
 		})
-		if got, err := hermesNotesHeld(bytes.NewReader(record), take, 9); err != nil || !slices.Equal(got, want) {
-			t.Errorf("the note as row %d: held %v (%v), want %v", row, got, err, want)
+		if got, err := hermesNotesHeld(bytes.NewReader(record), take, c.from); err != nil || !slices.Equal(got, c.want) {
+			t.Errorf("the note as rows %v from %d: held %v (%v), want %v", c.rows, c.from, got, err, c.want)
 		}
 	}
 }
@@ -1225,6 +1233,7 @@ func TestARenewedHermesLaunchIsWrittenAsHermesWritesIt(t *testing.T) {
 		t.Errorf("the renewed launch reads %.400s; want its directory raw and its text escaped in the environment", got)
 	}
 }
+
 // hermesReceiptsOf is the receipts Hermes's record confirm answers ask with,
 // on a box whose session store dumps as record and whose launch began at 0.
 func hermesReceiptsOf(t *testing.T, record []byte, ask sandbox.MainThreadAsk) sandbox.TakeReceipts {
@@ -1285,3 +1294,27 @@ func TestAReadHermesNoteSpendsItsOwnRow(t *testing.T) {
 	}
 }
 
+// A FAILED HERMES TURN SETTLES NO NOTE: 0.23.3 stores a turn whose request
+// failed as an assistant row with no finish reason, shown as failed_turn
+// (measured, session-failed.jsonl). A note before it is not held; the same
+// row with a finish reason, a reply the model finished, holds it.
+//
+// Mutation: settle on any assistant row, and the first case goes red.
+func TestAFailedHermesTurnSettlesNoNote(t *testing.T) {
+	t.Parallel()
+	take := []ServedTake{{InboxID: "a", Digest: ItemDigest(hermesSteeredNote)}}
+	for finished, want := range map[bool][]string{false: nil, true: {"a"}} {
+		record := hermesFixtureRows(t, "session-failed.jsonl", func(id int64, r map[string]any) {
+			switch {
+			case id == 1:
+				r["display_kind"] = "steer"
+				r["content"] = hermesNoteOpen + hermesSteeredNote + hermesNoteClose
+			case id == 2 && finished:
+				r["finish_reason"] = "stop"
+			}
+		})
+		if got, err := hermesNotesHeld(bytes.NewReader(record), take, 0); err != nil || !slices.Equal(got, want) {
+			t.Errorf("a reply finished %v: held %v (%v), want %v", finished, got, err, want)
+		}
+	}
+}
