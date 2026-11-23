@@ -316,9 +316,6 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		// it over the box's calls reach their holder only relayed from this
 		// node, which a session held to loopback would refuse.
 		OnHost: cell == sandbox.Direct,
-		// THE TURN'S OWN WALL-CLOCK CAP, the one limit a run's tokens end at:
-		// none, and they live as long as the run ([mcpbridge.Session.Deadline]).
-		Deadline: l.turn.Deadline,
 		// THE SEAT'S FENCE, built HERE, inside the turn the run is the
 		// executor of, so it closes on the grant that turn was admitted
 		// under — the same check the turn's own phases run, now asked
