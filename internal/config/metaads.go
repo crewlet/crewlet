@@ -50,6 +50,8 @@ type RoleMetaAds struct {
 	AdAccounts []string `yaml:"ad_accounts,omitempty" json:"ad_accounts,omitempty" desc:"IDs of the ad accounts this agent may touch, act_ and its digits. Required while enabled."`
 
 	BusinessResources bool `yaml:"business_resources,omitempty" json:"business_resources,omitempty" desc:"Optional. Let this agent reach what no ad account owns (the business portfolio, Pages, Instagram accounts, pixels, catalogs, apps, billing), within its level, and name it in a change."`
+
+	Identity string `yaml:"identity,omitempty" json:"identity,omitempty" js:"enum=own|company" desc:"Optional. own: calls go as this agent's own system user (Crewlet makes it with the company's admin token, or a person makes it in Business settings), which Meta records under it and Crewlet checks before it keeps it and on every pass; until one is kept the agent reads Needs you. company (the default): calls go as the company's system user."`
 }
 
 // Meta's own shapes.
@@ -200,13 +202,16 @@ func (*RoleMetaAds) GrowthKind() string { return (*MetaAds)(nil).GrowthKind() }
 
 // SeatAccess is the block as seat access reads it.
 func (r *RoleMetaAds) SeatAccess() GrowthSeatAccess {
-	return GrowthSeatAccess{On: r.Enabled, Level: string(growth.LevelOf(r.Level)), Scope: r.AdAccounts}
+	return GrowthSeatAccess{On: r.Enabled, Level: string(growth.LevelOf(r.Level)), Scope: r.AdAccounts,
+		Identity: r.Identity}
 }
 
 // SetSeatAccess writes the block from seat access; business_resources is kept.
 func (r *RoleMetaAds) SetSeatAccess(a GrowthSeatAccess) {
-	r.Enabled, r.Level, r.AdAccounts = a.On, a.Level, a.Scope
+	r.Enabled, r.Level, r.AdAccounts, r.Identity = a.On, a.Level, a.Scope, a.Identity
 }
+
+func (r *RoleMetaAds) seatIdentity() *string { return &r.Identity }
 
 func (r *RoleMetaAds) seatScopeKey() string { return "ad_accounts" }
 func (r *RoleMetaAds) seatEnabled() **bool  { return &r.Enabled }

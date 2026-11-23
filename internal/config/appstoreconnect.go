@@ -108,6 +108,8 @@ type RoleAppStoreConnect struct {
 	Apps []string `yaml:"apps,omitempty" json:"apps,omitempty" desc:"Apple IDs of the apps this agent may touch. Required while enabled."`
 
 	TeamResources bool `yaml:"team_resources,omitempty" json:"team_resources,omitempty" desc:"Optional. Let this agent reach the team's resources no app owns (users, devices, certificates, profiles, sandbox testers, reports across apps), within its level."`
+
+	Identity string `yaml:"identity,omitempty" json:"identity,omitempty" js:"enum=own|company" desc:"Optional. own: calls go as this agent's own team key (a person makes it at Apple with the role its level needs and hands in its file), which Apple records under it and Crewlet checks before it keeps it and on every pass; until one is kept the agent reads Needs you. company (the default): calls go as the company's team keys."`
 }
 
 // AppStoreConnect's own shapes.
@@ -231,13 +233,16 @@ func (*RoleAppStoreConnect) GrowthKind() string { return (*AppStoreConnect)(nil)
 
 // SeatAccess is the block as seat access reads it.
 func (r *RoleAppStoreConnect) SeatAccess() GrowthSeatAccess {
-	return GrowthSeatAccess{On: r.Enabled, Level: string(growth.LevelOf(r.Level)), Scope: r.Apps}
+	return GrowthSeatAccess{On: r.Enabled, Level: string(growth.LevelOf(r.Level)), Scope: r.Apps,
+		Identity: r.Identity}
 }
 
 // SetSeatAccess writes the block from seat access; team_resources is kept.
 func (r *RoleAppStoreConnect) SetSeatAccess(a GrowthSeatAccess) {
-	r.Enabled, r.Level, r.Apps = a.On, a.Level, a.Scope
+	r.Enabled, r.Level, r.Apps, r.Identity = a.On, a.Level, a.Scope, a.Identity
 }
+
+func (r *RoleAppStoreConnect) seatIdentity() *string { return &r.Identity }
 
 func (r *RoleAppStoreConnect) seatScopeKey() string { return "apps" }
 func (r *RoleAppStoreConnect) seatEnabled() **bool  { return &r.Enabled }

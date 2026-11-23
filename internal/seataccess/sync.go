@@ -159,8 +159,8 @@ func Sync(ctx context.Context, in SyncInput) (SyncReport, error) {
 	}
 	s := &syncer{
 		in: in, cat: cat, kind: kind, sess: sess, refs: refs, now: now(),
-		options: map[Lane]Options{},
-		report:  SyncReport{Records: map[string]Record{}},
+		options: map[Lane]Options{}, records: records,
+		report: SyncReport{Records: map[string]Record{}},
 	}
 	for _, h := range handles {
 		if err := ctx.Err(); err != nil {
@@ -227,6 +227,9 @@ type syncer struct {
 	now     time.Time
 	options map[Lane]Options
 	report  SyncReport
+	// records is every seat's record of the kind as the pass began, so an
+	// identity another seat keeps is refused.
+	records map[string]Record
 }
 
 // seat syncs one seat. An error is a fault the kind shares.
@@ -378,6 +381,9 @@ func (s *syncer) seat(
 			lr.Words = GrantWordsOf(offer, want[lane])
 			rec.Lanes[lane] = lr
 		}
+	}
+	if err := s.identities(ctx, &rec, ref, want); err != nil {
+		return err
 	}
 	if removed {
 		if err := s.forget(ctx, &rec, s.cat.Credentials); err != nil {

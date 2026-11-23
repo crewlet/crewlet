@@ -103,6 +103,40 @@ type GrowthSeatAccess struct {
 	On    *bool
 	Level string
 	Scope []string
+
+	// Identity is who signs the seat's calls ([SeatIdentityOwn] or
+	// [SeatIdentityCompany]), "" for the lane's default; only a block whose
+	// vendor offers a seat its own identity keeps it ([identitySeat]).
+	Identity string
+}
+
+// The values of a growth seat block's `identity`: who the vendor sees when the
+// engine calls it for the seat (internal/seataccess.IdentityMode).
+const (
+	SeatIdentityOwn     = "own"
+	SeatIdentityCompany = "company"
+)
+
+// identitySeat is a growth seat block whose vendor offers each seat an
+// identity of its own beside the company's, so the block says which signs.
+type identitySeat interface {
+	growthSeat
+	// seatIdentity is where its `identity` is kept.
+	seatIdentity() *string
+}
+
+// checkSeatIdentity holds a seat block's `identity` to the two values.
+func checkSeatIdentity(p *problems, here Path, s growthSeat) {
+	is, ok := s.(identitySeat)
+	if !ok {
+		return
+	}
+	switch v := *is.seatIdentity(); v {
+	case "", SeatIdentityOwn, SeatIdentityCompany:
+	default:
+		p.add(at(here, "identity"), ErrUnknownValue, "%q is not an identity; give %s", v,
+			words.Or([]string{SeatIdentityOwn, SeatIdentityCompany}))
+	}
 }
 
 // GrowthSeatAccess is the role's seat block for growth product kind, false

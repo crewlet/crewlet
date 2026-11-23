@@ -433,6 +433,10 @@ type LaneSpec struct {
 	// GrantTerms is how an agent reads the lane's grants ([GrantTerms]):
 	// set wherever Grants is.
 	GrantTerms GrantTerms
+
+	// Identity is how the lane offers a seat its own identity at the vendor
+	// ([IdentitySpec]); zero on a lane that offers none.
+	Identity IdentitySpec
 }
 
 // Granter is the session of a vendor whose lane takes grants

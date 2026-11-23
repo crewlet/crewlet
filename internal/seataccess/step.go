@@ -211,6 +211,10 @@ type Ask struct {
 	// HandIn is a credential a person pasted for the seat ([HandsIn]),
 	// which the step that checks it seals. Never logged or marshalled.
 	HandIn string `json:"-"`
+
+	// Identity is a person keeping or giving up the seat's own identity on
+	// Lane ([IdentityAsk]); nil where they asked nothing of it.
+	Identity *IdentityAsk `json:"-"`
 }
 
 // Zero reports an ask for nothing.
