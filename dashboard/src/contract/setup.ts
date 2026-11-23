@@ -236,6 +236,8 @@ export type VerifyOutcome = "works" | "refused" | "unreachable" | "unchecked";
 export interface SetupVerdictFact {
   label: string;
   value: string;
+  /** The value is an ID (a key, a team), drawn in the mono face. */
+  identifier?: boolean;
 }
 
 /** One risk or problem a Test found, with what to do. A failed Test may leave the title to its summary. */
@@ -250,6 +252,17 @@ export interface SetupVerdict {
   summary: string;
   facts?: SetupVerdictFact[];
   warnings?: SetupVerdictWarning[];
+  /** The step a refused check stopped at, by its id; the steps after it did not run. */
+  failed_at?: string;
+  /** What each step that ran found, by its id. */
+  steps?: SetupVerdictStep[];
+}
+
+/** What one step of a check found: why it failed or what it read, and the vendor's answers in a machine's line. */
+export interface SetupVerdictStep {
+  id: string;
+  said?: string;
+  detail?: string;
 }
 
 /** A consent sign-in (`POST /setup/integrations/{kind}/consent`, `GET /setup/consent-sign-ins/{id}`). */

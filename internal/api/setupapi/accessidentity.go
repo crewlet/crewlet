@@ -139,7 +139,8 @@ func (s *Service) accessIdentity(w http.ResponseWriter, r *http.Request) {
 		answer.ManagedBy = seataccess.ManagedByOperator
 	}
 	w.Header().Set("ETag", `"`+answer.Revision+`"`)
-	httpjson.Write(w, http.StatusOK, seataccess.CredentialAnswer{Verdict: IdentityVerdict(check), Access: answer})
+	httpjson.Write(w, http.StatusOK, seataccess.CredentialAnswer{
+		Verdict: IdentityVerdict(check, la.Identity.Guide), Access: answer})
 }
 
 // readIdentity reads and holds a POST body to its shape.
@@ -233,6 +234,15 @@ func (s *Service) identityRefused(w http.ResponseWriter, r *http.Request, kind i
 		})
 	case errors.Is(err, ErrAccessUnavailable):
 		s.accessFault(w, r, kind, "setup_access_identity_unchecked", err)
+	case vendorRefusal(err) != nil:
+		// THE VENDOR ANSWERED: its refusal is the person's to act on, never Crewlet's fault.
+		said := vendorRefusal(err)
+		log.InfoContext(r.Context(), "setup_access_identity_refused", "kind", kind, "seat", handle,
+			"error", err.Error())
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeInvalidInput, map[string]string{
+			"detail": said.Said, "hint": said.Remedy,
+		})
+		s.accessFault(w, r, kind, "setup_access_identity_unchecked", err)
 	case vendorFault(err):
 		log.WarnContext(r.Context(), "setup_access_identity_unchecked", "kind", kind, "seat", handle,
 			"error", err.Error())
@@ -256,6 +266,12 @@ func (s *Service) identityRefused(w http.ResponseWriter, r *http.Request, kind i
 // to serve the call (a 5xx, a rate limit), declared by each vendor's own type.
 type vendorUnavailable interface{ VendorUnavailable() bool }
 
+// vendorRefusal is err as the vendor's definite refusal, nil where it is none.
+func vendorRefusal(err error) *seataccess.Refusal {
+	r, _ := seataccess.RefusalOf(err)
+	return r
+}
+
 // vendorFault reports err as the vendor's: no answer (a network error or a
 // deadline; the fleet's own store faults are answered before this) or an
 // answer saying it is unavailable. Anything else is Crewlet's own.
@@ -267,22 +283,40 @@ func vendorFault(err error) bool {
 }
 
 // IdentityVerdict is a check as the sheet's verdict reads it: what works, or
-// what failed and what to do, with what each read found.
-func IdentityVerdict(c seataccess.IdentityCheck) setup.Verdict {
+// what failed and what to do, with what each read found and, from guide's
+// steps, the one a refused check stopped at.
+func IdentityVerdict(c seataccess.IdentityCheck, guide *seataccess.IdentityGuide) setup.Verdict {
 	v := setup.Verdict{Outcome: setup.VerifyRefused, Summary: c.Said}
 	switch c.Status {
 	case seataccess.IdentityReady, seataccess.IdentityReplacing, seataccess.IdentityCompanys:
 		v.Outcome = setup.VerifyWorks
 	}
+	if guide != nil {
+		if v.Outcome == setup.VerifyRefused {
+			v.FailedAt = failedAt(c.Reads, guide.Checks)
+		}
+		for _, read := range c.Reads {
+			if id := checkID(read, guide.Checks); id != "" && (read.Said != "" || read.Detail != "") {
+				v.Steps = append(v.Steps, setup.StepNote{ID: id, Said: read.Said, Detail: read.Detail})
+			}
+		}
+	}
 	if v.Summary == "" {
 		v.Summary = c.Status.Label() + "."
 	}
-	for _, f := range [][2]string{{"Identity", c.ID}, {"Role", c.Role}, {"Role needed", c.Needs}, {"Team", c.Team}} {
-		if f[1] != "" {
-			v.Facts = append(v.Facts, setup.Fact{Label: f[0], Value: f[1]})
+	for _, f := range []setup.Fact{{Label: "Identity", Value: c.ID, Identifier: true},
+		{Label: "Role found", Value: c.Role}, {Label: "Role needed", Value: c.Needs},
+		{Label: "Team", Value: c.Team, Identifier: true}} {
+		if f.Value != "" {
+			v.Facts = append(v.Facts, f)
 		}
 	}
+	// A READ THE GUIDE LISTS IS SAID ON ITS STEP (Steps); only one it does not
+	// list is a fact, so nothing is said twice.
 	for _, read := range c.Reads {
+		if guide != nil && checkID(read, guide.Checks) != "" {
+			continue
+		}
 		value := "Failed"
 		if read.OK {
 			value = "Passed"
@@ -300,6 +334,32 @@ func IdentityVerdict(c seataccess.IdentityCheck) setup.Verdict {
 			Action: "The agent's calls stay on the company's identity until the vendor allows one more."})
 	}
 	return v
+}
+
+// failedAt is the step a refused check stopped at: the first read that
+// failed, or the first step where it read nothing at all (the vendor refused
+// before any step passed); "" where every read passed.
+func failedAt(reads []seataccess.IdentityRead, checks []seataccess.GuideCheck) string {
+	if len(reads) == 0 && len(checks) > 0 {
+		return checks[0].ID
+	}
+	for _, read := range reads {
+		if !read.OK {
+			return checkID(read, checks)
+		}
+	}
+	return ""
+}
+
+// checkID is the step read reports on, "" where the guide lists none: a
+// read carries its step's label, as the sheet lists it.
+func checkID(read seataccess.IdentityRead, checks []seataccess.GuideCheck) string {
+	for _, c := range checks {
+		if c.Label == read.Label {
+			return c.ID
+		}
+	}
+	return ""
 }
 
 // sharesCompanyIdentity reports whether kind's lane has a company identity a

@@ -5,18 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/integration"
 )
-
-// forgePrefix starts every key of the scan standings that is a forge's: the
-// pass's own standing at forge/<kind>, and each repository's at
-// forge/<kind>/<voice>. A Gitlet repository's standing is keyed by its id,
-// which holds no slash, so the two readers of the bucket never take each
-// other's keys for their own.
-const forgePrefix = "forge/"
 
 // ForgeStatus is one forge's standing: what its last pass over the forge's
 // repositories listed, read and left for a later pass.
@@ -69,7 +61,9 @@ func (s ForgeStatus) due(interval time.Duration, now time.Time) bool {
 }
 
 // ForgeStore is the forges' half of the scan standings, on the same bucket
-// of the coordination store as Gitlet's ([CoordStore]) under keys of its own.
+// of the coordination store as Gitlet's ([CoordStore]): each forge's own and
+// its repositories' filed under the forge's kind (coord.AtlasCodeScanKey), so
+// a forge's reader lists its own repositories alone.
 type ForgeStore struct{ scans Scans }
 
 // NewForgeStore wraps the fleet's standings, refusing a nil backend.
@@ -81,19 +75,15 @@ func NewForgeStore(scans Scans) (*ForgeStore, error) {
 	return &ForgeStore{scans: scans}, nil
 }
 
-func forgeKey(kind integration.Kind) string { return forgePrefix + kind.String() }
-
-func forgeRepoKey(kind integration.Kind, voice string) string { return forgeKey(kind) + "/" + voice }
-
-// Load reads one forge's standing and each of its repositories', by voice.
-// A record this build cannot decode is skipped, and read again.
-func (s *ForgeStore) Load(ctx context.Context, kind integration.Kind) (ForgeStatus, map[string]Status, error) {
-	raw, err := s.scans.AtlasCodeScans(ctx)
+// LoadForge reads one forge's own standing by its key: a forge never passed
+// over, or one this build cannot decode, reads as a pass owed now.
+func (s *ForgeStore) LoadForge(ctx context.Context, kind integration.Kind) (ForgeStatus, error) {
+	value, found, err := s.scans.AtlasCodeScan(ctx, kind.String(), "")
 	if err != nil {
-		return ForgeStatus{}, nil, fmt.Errorf("codescan: read the scan standings: %w", err)
+		return ForgeStatus{}, fmt.Errorf("codescan: read the standing of %s: %w", kind, err)
 	}
 	fs := ForgeStatus{Kind: kind}
-	if value, ok := raw[forgeKey(kind)]; ok {
+	if found {
 		if err := json.Unmarshal(value, &fs); err != nil {
 			log.WarnContext(ctx, "atlas_forge_standing_undecodable", "forge", kind.String(), "error", err,
 				"detail", "the forge's repositories are read again and its standing rewritten")
@@ -102,12 +92,22 @@ func (s *ForgeStore) Load(ctx context.Context, kind integration.Kind) (ForgeStat
 		// THE KEY IS AUTHORITATIVE, not the field inside the document.
 		fs.Kind = kind
 	}
+	return fs, nil
+}
+
+// Load reads one forge's standing and each of its repositories', by voice.
+// A record this build cannot decode is skipped, and read again.
+func (s *ForgeStore) Load(ctx context.Context, kind integration.Kind) (ForgeStatus, map[string]Status, error) {
+	fs, err := s.LoadForge(ctx, kind)
+	if err != nil {
+		return ForgeStatus{}, nil, err
+	}
+	raw, err := s.scans.AtlasCodeScans(ctx, kind.String())
+	if err != nil {
+		return ForgeStatus{}, nil, fmt.Errorf("codescan: read the scan standings of %s: %w", kind, err)
+	}
 	repos := map[string]Status{}
-	for key, value := range raw {
-		voice, ok := strings.CutPrefix(key, forgeKey(kind)+"/")
-		if !ok || voice == "" {
-			continue
-		}
+	for voice, value := range raw {
 		var st Status
 		if err := json.Unmarshal(value, &st); err != nil {
 			log.WarnContext(ctx, "atlas_code_standing_undecodable", "repo", voice, "error", err,
@@ -128,7 +128,7 @@ func (s *ForgeStore) SaveForge(ctx context.Context, fs ForgeStatus) error {
 	if err != nil {
 		return fmt.Errorf("codescan: encode the standing of %s: %w", fs.Kind, err)
 	}
-	if err := s.scans.PutAtlasCodeScan(ctx, forgeKey(fs.Kind), value); err != nil {
+	if err := s.scans.PutAtlasCodeScan(ctx, fs.Kind.String(), "", value); err != nil {
 		return fmt.Errorf("codescan: record the standing of %s: %w", fs.Kind, err)
 	}
 	return nil
@@ -136,11 +136,11 @@ func (s *ForgeStore) SaveForge(ctx context.Context, fs ForgeStatus) error {
 
 // Save records one repository's standing.
 func (s *ForgeStore) Save(ctx context.Context, kind integration.Kind, st Status) error {
-	value, err := json.Marshal(st)
+	value, err := encode(st)
 	if err != nil {
-		return fmt.Errorf("codescan: encode the standing of %s: %w", st.Name, err)
+		return err
 	}
-	if err := s.scans.PutAtlasCodeScan(ctx, forgeRepoKey(kind, st.Name), value); err != nil {
+	if err := s.scans.PutAtlasCodeScan(ctx, kind.String(), st.Name, value); err != nil {
 		return fmt.Errorf("codescan: record the standing of %s: %w", st.Name, err)
 	}
 	return nil
@@ -148,7 +148,7 @@ func (s *ForgeStore) Save(ctx context.Context, kind integration.Kind, st Status)
 
 // Forget drops one repository's standing.
 func (s *ForgeStore) Forget(ctx context.Context, kind integration.Kind, voice string) error {
-	if err := s.scans.DeleteAtlasCodeScan(ctx, forgeRepoKey(kind, voice)); err != nil {
+	if err := s.scans.DeleteAtlasCodeScan(ctx, kind.String(), voice); err != nil {
 		return fmt.Errorf("codescan: forget the standing of %s: %w", voice, err)
 	}
 	return nil
@@ -156,7 +156,7 @@ func (s *ForgeStore) Forget(ctx context.Context, kind integration.Kind, voice st
 
 // ForgetForge drops a forge's own standing.
 func (s *ForgeStore) ForgetForge(ctx context.Context, kind integration.Kind) error {
-	if err := s.scans.DeleteAtlasCodeScan(ctx, forgeKey(kind)); err != nil {
+	if err := s.scans.DeleteAtlasCodeScan(ctx, kind.String(), ""); err != nil {
 		return fmt.Errorf("codescan: forget the standing of %s: %w", kind, err)
 	}
 	return nil

@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/seataccess"
+	"github.com/crewlet/crewlet/internal/setup"
 )
 
 // metaIdentityCompany is a company with Meta Ads connected and its growth agent
@@ -118,9 +120,18 @@ type unavailable bool
 func (u unavailable) Error() string           { return "the vendor answered" }
 func (u unavailable) VendorUnavailable() bool { return bool(u) }
 
+// refused is a vendor's error carrying its definite answer, as a 4xx is.
+type refused struct{ said, remedy string }
+
+func (r refused) Error() string { return "the vendor answered 403" }
+func (r refused) VendorRefusal() *seataccess.Refusal {
+	return &seataccess.Refusal{Said: r.said, Remedy: r.remedy}
+}
+
 // THE ENGINE'S REFUSALS MAP TO THE ROUTE'S, beside the field, and only the
 // vendor's own fault says the vendor did not answer: no answer, a timeout or a
-// 5xx, told by the error's type. Anything of Crewlet's own says so instead.
+// 5xx, told by the error's type. A vendor's definite answer is its refusal in
+// its own words. Anything of Crewlet's own says so instead.
 //
 // Mutation: answer every error as the vendor not answering, and a key the
 // engine could not check for a reason of its own sends a person to wait on
@@ -145,6 +156,8 @@ func TestAnAgentsIdentityAnswersTheEnginesRefusals(t *testing.T) {
 		{&net.DNSError{Err: "no such host", IsTimeout: true}, http.StatusBadGateway, vendor},
 		{fmt.Errorf("check: %w", unavailable(true)), http.StatusBadGateway, vendor},
 		{fmt.Errorf("check: %w", unavailable(false)), http.StatusInternalServerError, crewlet},
+		{fmt.Errorf("seataccess: identity for growth: %w", refused{"Accept the agreement first.", "Sign in as the Account Holder."}),
+			http.StatusConflict, "Accept the agreement first."},
 		{errors.New("seal META_ADS_KEY_GROWTH: the store is down"), http.StatusInternalServerError, crewlet},
 		{fmt.Errorf("%w: %w", setupapi.ErrAccessUnavailable, context.DeadlineExceeded), http.StatusServiceUnavailable,
 			""},
@@ -215,5 +228,42 @@ func TestAnOwnByConstructionIdentityCannotGoBackToTheCompanys(t *testing.T) {
 	}
 	if len(s.access.identities) != 0 {
 		t.Errorf("the engine was asked %+v", s.access.identities)
+	}
+}
+
+// A REFUSED CHECK NAMES THE STEP IT STOPPED AT, so the sheet draws that step
+// failed and the ones after it not run: the first failed read, or the first
+// step where the vendor refused before any read passed. Each step that ran
+// carries what it found and the vendor's answers.
+//
+// Mutation: leave failed_at out, and the sheet draws the last step failed
+// whichever read failed, and every earlier one done.
+func TestARefusedCheckNamesTheStepItStoppedAt(t *testing.T) {
+	t.Parallel()
+	guide := &seataccess.IdentityGuide{Checks: []seataccess.GuideCheck{
+		{ID: "sign", Label: "Sign in"}, {ID: "apps", Label: "Find the apps"}, {ID: "role", Label: "Read the role"}}}
+	refusedAtRole := seataccess.IdentityCheck{Status: seataccess.IdentityWrongRole, Said: "Fits no role.",
+		ID: "QD2KH2G8B3", Needs: "App Manager", Team: "main",
+		Reads: []seataccess.IdentityRead{{Label: "Sign in", OK: true}, {Label: "Find the apps", OK: true},
+			{Label: "Read the role", Said: "Fits no role.", Detail: "financeReports_getCollection 200"}}}
+	v := setupapi.IdentityVerdict(refusedAtRole, guide)
+	if v.FailedAt != "role" || len(v.Steps) != 1 || v.Steps[0].ID != "role" ||
+		v.Steps[0].Detail != "financeReports_getCollection 200" {
+		t.Fatalf("a role read that failed: %+v", v)
+	}
+	// EACH READ IS SAID ON ITS STEP, so the facts are the identity alone, its
+	// IDs marked for the mono face.
+	want := []setup.Fact{{Label: "Identity", Value: "QD2KH2G8B3", Identifier: true},
+		{Label: "Role needed", Value: "App Manager"}, {Label: "Team", Value: "main", Identifier: true}}
+	if !reflect.DeepEqual(v.Facts, want) {
+		t.Fatalf("facts %+v, want %+v", v.Facts, want)
+	}
+	if v := setupapi.IdentityVerdict(seataccess.IdentityCheck{Status: seataccess.IdentityRefused,
+		Said: "Accept the agreement."}, guide); v.FailedAt != "sign" {
+		t.Fatalf("a refusal before any read: failed at %q, want the first step", v.FailedAt)
+	}
+	if v := setupapi.IdentityVerdict(seataccess.IdentityCheck{Status: seataccess.IdentityReady,
+		Reads: []seataccess.IdentityRead{{Label: "Sign in", OK: true}}}, guide); v.FailedAt != "" {
+		t.Fatalf("a check that works names a failed step %q", v.FailedAt)
 	}
 }
