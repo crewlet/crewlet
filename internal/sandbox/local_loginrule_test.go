@@ -36,7 +36,7 @@ type testLogin struct {
 // ([Spec.CredentialRules]); a refresh writes back exactly the shared login the
 // fixture writes out, its tokens alone; a setting written beside an unchanged
 // login, and a copy that does not read, a key named twice or a commented
-// change, leave the shared login as it was; a copy whose account fields or ID
+// change, leave the shared login as it was; a copy whose account fields or named
 // token name another account, or that dropped a file holding them, is refused
 // and said by file, never by value. A box with no rule writes nothing back.
 //
