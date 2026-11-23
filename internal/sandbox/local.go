@@ -1181,7 +1181,12 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	// on fail silently and only much later — see verifyMount — so the box is
 	// torn down here rather than returned to do half its job.
 	if err := verifyMount(ctx, box, layout); err != nil {
-		_, _ = runHost(context.WithoutCancel(ctx), l.cli.command(0, "rm", "-f", name))
+		// The caller hears the mount's failure; a container left is this
+		// line's, and keeps its box for the reclaimer its record names.
+		if kept := box.remove(context.WithoutCancel(ctx)); kept != nil {
+			localLog.Warn("local_sandbox_container_kept", "sandbox_id", id, "error", kept.Error())
+			return nil, err
+		}
 		_ = os.RemoveAll(layout.root)
 		return nil, err
 	}
@@ -1311,8 +1316,9 @@ func (l *Local) reattach(sandboxID string) (Sandbox, error) {
 // Kill terminates a box by id WITHOUT resuming it.
 //
 // The pause reaper's primitive: Connect resumes, so reclaiming a paused box
-// through it would restart the work purely to stop it. Best-effort — a box
-// that is already gone is not an error.
+// through it would restart the work purely to stop it. A box already gone is
+// not an error; a container its runtime keeps is, and the box is left whole,
+// its record with it, for the caller's next reclaim ([containerBox.remove]).
 func (l *Local) Kill(ctx context.Context, sandboxID string) error {
 	layout, err := l.layout(sandboxID)
 	if err != nil {
@@ -1322,7 +1328,10 @@ func (l *Local) Kill(ctx context.Context, sandboxID string) error {
 		return nil
 	}
 	if l.opts.Placement == Container {
-		_, _ = runHost(ctx, l.cli.command(0, "rm", "-f", l.containerName(sandboxID)))
+		box := &containerBox{layout: layout, cli: l.cli, container: l.containerName(sandboxID)}
+		if err := box.remove(ctx); err != nil {
+			return err
+		}
 	} else if signalJob(layout, "kill", procgroup.Kill) {
 		// SIGKILL alone, with NO SIGCONT first: SIGKILL takes a stopped process
 		// directly, and waking the group would let a paused run execute again on

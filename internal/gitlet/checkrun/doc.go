@@ -167,19 +167,21 @@
 // its start and at each walk, every check box on its node whose attempt it
 // does not run itself and whose row has ended, runs in another box or is gone,
 // or whose record names no attempt it reads, is killed through the backend its
-// record names (Local's Kill: `docker rm -f`, then its directory) and logged
-// once. A row still running in the box, or naming none yet (its box still
-// being made), keeps it: a predecessor's attempt is ended first, by the home's
-// sweep above, and its box reclaimed at a walk after. Only the node can do it,
-// since no other node's runtime reaches its containers.
+// record names (Local's Kill: `docker rm -f`, then, once the runtime lists the
+// container no more, its directory) and logged once. A box whose close at its
+// run's end could not remove its container is left the same way, recorded. A
+// row still running in the box, or naming none yet (its box still being made),
+// keeps it: a predecessor's attempt is ended first, by the home's sweep above,
+// and its box reclaimed at a walk after. Only the node can do it, since no
+// other node's runtime reaches its containers.
 //
 // Each judgement reads the attempt's row at `linearizable`, since a kill is
 // final and a copy behind the claim holds no row; a walk judges at most
 // [ReclaimPerWalk] boxes, and a box kept, or one not judged or killed, waits a
-// poll for the next, so a box left costs the reads a running check does. The
-// kill runs under a context the runner's stop does not reach: one cut short
-// still removes the box's directory, and with it the record, leaving the
-// container.
+// poll for the next, so a box left costs the reads a running check does. A
+// kill that fails keeps the box, listed by its record, for that next judgement;
+// one the runner's stop cut short would leave it to the runner's next start,
+// so the kill runs under a context the stop does not reach.
 //
 // # Its imports
 //

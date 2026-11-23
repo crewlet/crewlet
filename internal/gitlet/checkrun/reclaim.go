@@ -106,8 +106,10 @@ func (r *Runner) left(ctx context.Context, box sandbox.CheckBox, attempt gitlet.
 }
 
 // kill reclaims box through the backend its record names, UNDER A CONTEXT THE
-// RUNNER'S STOP DOES NOT REACH: a kill cut short still removes the box's
-// directory, and with it the record that lists the box, leaving its container.
+// RUNNER'S STOP DOES NOT REACH: one cut short would leave a box whose attempt
+// is over running until this node's runner starts again. A kill that fails
+// keeps the box listed, its record with it ([sandbox.Provider.Kill]), so it is
+// never logged reclaimed and is tried again a poll later.
 func (r *Runner) kill(ctx context.Context, boxes Boxes, box sandbox.CheckBox, attempt gitlet.CheckKey,
 	why string) {
 	provider, err := boxes.Provider(box.Placement)

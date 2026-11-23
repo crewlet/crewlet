@@ -414,9 +414,9 @@ func hostBoxFree(run PendingRun, box HostBox) bool {
 }
 
 // reclaimHostBox kills one box on this host that no run names, through the
-// backend its own record names, under a context of its own: nothing else will
-// ever name it again, so a kill abandoned with the task would leave it for
-// good.
+// backend its own record names, under a context of its own, so a pass's end
+// does not cut it short. A kill that fails leaves the box listed, its record
+// kept ([Provider.Kill]), for the next pass to try again.
 func (w *Waiter) reclaimHostBox(ctx context.Context, manager *Manager, box HostBox, run PendingRun, found bool) {
 	provider, err := manager.Provider(box.Placement)
 	if err != nil {

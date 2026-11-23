@@ -305,12 +305,12 @@
 //
 // # A box left on its host
 //
-// Each box has one reclaimer, by its record. One recording its run is its
-// host's sweep's ([Waiter.sweep]), off the run's row, so a parked box, its job
-// ended and its stamp untouched, lives to its pause TTL; one recording a
-// check's attempt its node's check runner's ([CheckBox]), off the attempt's
-// row; any other the orphan reaper's ([Local.reapOrphans]), once nothing runs
-// in it or touches it.
+// Each box has one reclaimer, by its record, which a kill deletes only with the
+// box ([Provider.Kill]), so a failed one is retried. One recording its run is
+// its host's sweep's ([Waiter.sweep]), off its row, so a parked box lives to
+// its pause TTL. A check's is its node's check runner's ([CheckBox]); any
+// other the orphan reaper's ([Local.reapOrphans]), once nothing runs in it or
+// touches it.
 //
 // # Releasing a claim
 //

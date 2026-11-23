@@ -1094,30 +1094,32 @@ func (w *Waiter) reapOne(ctx context.Context, manager *Manager, run PendingRun) 
 	// to be destroyed. The id survives only here, in the snapshot the reaper
 	// is acting on.
 	sandboxID := run.SandboxID
-	// THE KILL OUTLIVES THE TASK'S BOUND. The flip has already released the
-	// row and nothing else names this box now, so a kill abandoned when the
-	// task's deadline or a stop cancelled it would leave a paused box held
-	// with nobody left to reclaim it — a teardown takes a context of its own
-	// for exactly that.
+	// THE KILL OUTLIVES THE TASK'S BOUND, a teardown's context of its own: the
+	// flip has released the row, so a kill the task's deadline or a stop cut
+	// short would hold the paused box until its host's sweep came round.
 	killCtx, cancel := detached(ctx)
 	defer cancel()
 	// Kill by id: Connect would auto-resume the box, letting its frozen
 	// processes run again purely to shut them down.
+	killed := false
 	provider, err := manager.Provider(Placement(run.Placement))
 	if err != nil {
 		log.WarnContext(ctx, "sandbox_pause_reap_no_backend",
 			"turn_id", run.TurnID, "placement", run.Placement, "error", err.Error())
 	} else if err := provider.Kill(killCtx, sandboxID); err != nil {
-		// An already-gone box is the normal case for an old pause; the row
-		// is released either way.
+		// THE ROW IS RELEASED EITHER WAY: the box keeps the record of its run,
+		// which no row names now, so its host's sweep tries again.
 		log.WarnContext(ctx, "sandbox_pause_reap_kill_failed",
 			"turn_id", run.TurnID, "sandbox_id", sandboxID, "error", err.Error())
+	} else {
+		killed = true
 	}
 	heldSince, _ := run.HeldSince()
-	// Said out loud: a reaped box is a checkout an operator will find gone,
-	// and the pause TTL is the knob that decides it.
+	// Said out loud: a reaped pause's box is a checkout an operator will find
+	// gone, now or once its host's sweep kills it, and the pause TTL is the
+	// knob that decides it.
 	log.InfoContext(ctx, "sandbox_pause_ttl_reaped",
-		"turn_id", run.TurnID, "agent", run.AgentHandle, "sandbox_id", sandboxID,
+		"turn_id", run.TurnID, "agent", run.AgentHandle, "sandbox_id", sandboxID, "box_killed", killed,
 		"paused_for_s", w.now().Sub(heldSince).Seconds(), "pause_ttl_s", run.PauseTTLSeconds)
 	return true
 }

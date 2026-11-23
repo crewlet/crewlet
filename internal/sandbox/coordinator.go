@@ -4207,7 +4207,8 @@ func endingEventID(run PendingRun) uuid.UUID {
 }
 
 // teardown reclaims a run's box and clears the record's reference to it, for
-// a run that goes on without its box: one parked straight into reseed.
+// a run that goes on without its box: one parked straight into reseed. A box
+// whose kill failed is its host's sweep's then, the row naming it no more.
 func (c *Coordinator) teardown(ctx context.Context, run PendingRun) {
 	killCtx, cancel := detached(ctx)
 	_ = c.reclaimBox(ctx, killCtx, run)
@@ -4569,7 +4570,8 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk, 
 		}
 		if run.Ending.Reclaim && !reclaimed {
 			// THE BOX THE ROW NAMES, on a context of its own (often dead on failure
-			// paths).
+			// paths). One whose kill failed keeps its own record, and its host's
+			// sweep tries again once the row is gone.
 			killCtx, cancel := detached(ctx)
 			_ = c.reclaimBox(ctx, killCtx, run)
 			cancel()
@@ -5710,9 +5712,11 @@ func (c *Coordinator) RetireSeat(ctx context.Context, seat uuid.UUID, handle, ow
 			wait.add(run, waiting)
 			continue
 		}
-		// A box that could not be reclaimed keeps its record, so the next tick's
-		// retry knows it exists; deleting it would leave a held box named by
-		// nothing (a settle accepts that only because nothing retries it).
+		// A box that could not be reclaimed keeps its run's record, and the
+		// seat its mailbox: the next tick retries, each within the
+		// retirement's budget, until the box is gone. Nothing else waits on
+		// it (a settle leaves such a box to its host's sweep, off its own
+		// record).
 		if err := c.reclaimBox(ctx, ctx, run); err != nil {
 			errs = append(errs, fmt.Errorf("sandbox: run %s of retired seat %s was not ended: %w",
 				run.TurnID, label, err))

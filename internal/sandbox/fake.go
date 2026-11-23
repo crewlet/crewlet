@@ -70,6 +70,11 @@ type FakeSandbox struct {
 	// to freeze the box, or one that could not.
 	PauseFunc func(ctx context.Context) error
 
+	// CloseFunc, when set, is asked first by every Close, and a non-nil
+	// answer is that close's error, leaving the box open and its provider
+	// listing it: a local backend whose runtime kept the box's container.
+	CloseFunc func(ctx context.Context) error
+
 	// ReadErr, when set, is consulted by every read with the file's path,
 	// and a non-nil answer is that read's error — standing in for a box
 	// whose file could not be read back (a transport failure, not a size).
@@ -411,8 +416,14 @@ func (s *FakeSandbox) Pause(ctx context.Context) error {
 	return nil
 }
 
-// Close marks the box torn down; [FakeSandbox.Closed] reports it.
+// Close marks the box torn down, once [FakeSandbox.CloseFunc] answers no
+// error where one is set; [FakeSandbox.Closed] reports it.
 func (s *FakeSandbox) Close(ctx context.Context) error {
+	if s.CloseFunc != nil {
+		if err := s.CloseFunc(ctx); err != nil {
+			return err
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.closed = true
