@@ -464,7 +464,7 @@ func (c *Company) relaunchTarget(seat *org.Role, manager *sandbox.Manager, node 
 			continue
 		}
 		target := sandbox.RelaunchTarget{Harness: agent.Harness(), Placement: memberCell(c, manager, m.Key),
-			Node: node}
+			Node: node, Entry: agent.EntryID(), LaunchRouted: executor.ResumesOnLaunchRoute(agent.Harness())}
 		run, err := manager.RunnerFor(agent.Harness())
 		if err != nil {
 			target.Why = err.Error()
