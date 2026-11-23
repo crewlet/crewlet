@@ -940,3 +940,61 @@ func TestAHermesSessionCutOffInItsFirstLaunchStillContinues(t *testing.T) {
 		t.Fatalf("gate = %q, want the cut-off session continued under its kept launch", got)
 	}
 }
+
+// WHAT A CHECKOUT BELOW THE START DIRECTORY BRINGS A HERMES RUN: a box whose
+// working directory holds its own AGENTS.md and a checkout at ./repo, as
+// code_checkout places one, with every layer a repository brings. The runner
+// hands none of it: Hermes 0.23.3's own subdirectory hints add a checkout's
+// instructions (the first of AGENTS.override.md, AGENTS.md, agents.md,
+// CLAUDE.md, claude.md and .cursorrules in each directory the model touches,
+// up to the working directory) to the tool result that first touches it
+// (measured), and it loads none of a checkout's .hermes.md, .cursor rules,
+// skills, plugins or configuration, which it reads from the working directory
+// alone. So no file the run writes, nor its script, carries any of them.
+//
+// Mutation: hand the checkout's instructions, skills, plugins or settings to
+// the run in any file it writes or in its script, and its kind goes red.
+func TestWhatACheckoutBelowTheStartDirectoryBringsAHermesRun(t *testing.T) {
+	t.Parallel()
+	fake := sandbox.NewFakeSandbox("b")
+	for rel, body := range map[string]string{
+		"workspace/AGENTS.md":                           "WORKDIR-INSTRUCTIONS\n",
+		"workspace/repo/.git/HEAD":                      "ref: refs/heads/main\n",
+		"workspace/repo/AGENTS.md":                      "REPO-INSTRUCTIONS\n",
+		"workspace/repo/.hermes.md":                     "REPO-HERMES-MD\n",
+		"workspace/repo/.cursor/rules/r.mdc":            "REPO-CURSOR-RULE\n",
+		"workspace/repo/.hermes/skills/check/SKILL.md":  "---\nname: check\ndescription: REPO-SKILL\n---\nCheck.\n",
+		"workspace/repo/.hermes/plugins/rp/plugin.yaml": "name: rp\ndescription: REPO-PLUGIN\n",
+		"workspace/repo/.hermes/config.yaml":            "agent:\n  personality: REPO-CONFIG\n",
+		"workspace/repo/.hermes/plugins/rp/__init__.py": "REPO-PLUGIN-CODE\n",
+	} {
+		if err := fake.WriteFile(t.Context(), fake.Home()+"/"+rel, []byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	box := &writeLog{FakeSandbox: fake}
+	p := PathsFor(box)
+	req := sandbox.RunRequest{System: "be brief", Skills: []sandbox.Skill{{Name: "deploy", Description: "d", Body: "b"}},
+		MCPServers: map[string]sandbox.MCPServer{"crewlet": {Transport: sandbox.TransportHTTP, URL: "http://bridge.example.com/mcp",
+			AlwaysLoaded: true}}}
+	if _, err := (Hermes{}).WriteConfig(t.Context(), box, req, Session{ID: "s"}, p); err != nil {
+		t.Fatalf("WriteConfig: %v", err)
+	}
+	written := []string{hermesScript(req, Session{ID: "s"}, p, hermesRunTimes())}
+	for _, path := range box.paths {
+		raw, err := box.ReadFile(t.Context(), path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		written = append(written, path+": "+string(raw))
+	}
+	for _, where := range written {
+		for kind, mark := range map[string]string{"instructions": "REPO-INSTRUCTIONS", ".hermes.md": "REPO-HERMES-MD",
+			"cursor rules": "REPO-CURSOR-RULE", "skills": "REPO-SKILL", "plugins": "REPO-PLUGIN", "settings": "REPO-CONFIG",
+			"the working directory's own instructions": "WORKDIR-INSTRUCTIONS"} {
+			if strings.Contains(where, mark) {
+				t.Errorf("%s: the checkout reached the run's own files: %.300s", kind, where)
+			}
+		}
+	}
+}
