@@ -47,6 +47,12 @@ type hold struct {
 	Direct bool `json:"direct,omitempty"`
 }
 
+// same reports whether h is o unchanged.
+func (h hold) same(o hold) bool {
+	return h.Upload == o.Upload && h.Principal == o.Principal && h.Bytes == o.Bytes &&
+		h.Until.Equal(o.Until) && h.Expires.Equal(o.Expires) && h.Direct == o.Direct
+}
+
 // live reports a hold that still counts.
 func (h hold) live(now time.Time) bool { return h.Until.After(now) && h.Bytes > 0 }
 
@@ -157,8 +163,11 @@ const earlyRecheck = claimLease
 func (s *Service) changeLedger(ctx context.Context, change func(l *ledger, now time.Time) error) error {
 	// READ AND RELEASED ACROSS ROUNDS: an upload released in a round that
 	// then lost its write has no record left to find in the next, and one
-	// read and kept is not read again.
-	read, released := map[string]bool{}, map[string]bool{}
+	// read and kept is not read again. A released hold is the one released,
+	// so a later round drops it only while it is unchanged: a retried intent
+	// may have taken it up since ([Service.reserve]).
+	read, released := map[string]bool{}, map[string]hold{}
+	var refusal error
 	for range ledgerAttempts {
 		raw, rev, err := s.res.UploadLedger(ctx)
 		if err != nil {
@@ -176,20 +185,22 @@ func (s *Service) changeLedger(ctx context.Context, change func(l *ledger, now t
 		}
 		now := s.now()
 		s.releaseAbandoned(ctx, &l, now, read, released)
-		acted := false
+		acted, drop := false, map[string]bool{}
 		for i, h := range l.Holds {
-			switch {
-			case released[h.Upload]:
-				acted = true
-			case read[h.Upload] && !h.Expires.After(now):
+			if seen, ok := released[h.Upload]; ok {
+				drop[h.Upload] = h.same(seen)
+				acted = acted || drop[h.Upload]
+				continue
+			}
+			if read[h.Upload] && !h.Expires.After(now) {
 				l.Holds[i].Expires, acted = now.Add(earlyRecheck), true
 			}
 		}
 		l.Holds = slices.DeleteFunc(l.Holds, func(h hold) bool {
-			return !h.Until.After(now) || h.Bytes <= 0 || released[h.Upload]
+			return !h.Until.After(now) || h.Bytes <= 0 || drop[h.Upload]
 		})
 		kept := slices.Clone(l.Holds)
-		refusal := change(&l, now)
+		refusal = change(&l, now)
 		if refusal != nil {
 			if !acted {
 				return refusal
@@ -218,11 +229,13 @@ func (s *Service) changeLedger(ctx context.Context, change func(l *ledger, now t
 // transfer window has closed with no publish having claimed them, where the
 // engine knows every put: it deletes the upload's record first (so no transfer
 // or finalize can take it after), then every object it stored, and adds the
-// uploads whose holds may go to released. A hold whose objects could not all
-// be deleted is kept, and lapses on its own. It reads at most [earlyReads]
-// records not in read, adding each to it; the change moves each kept one's
-// Expires on, so a hold it cannot release never pins the reads to itself.
-func (s *Service) releaseAbandoned(ctx context.Context, l *ledger, now time.Time, read, released map[string]bool) {
+// holds that may go to released, as it saw them. A hold whose objects could
+// not all be deleted is kept, and lapses on its own. It reads at most
+// [earlyReads] records not in read, adding each to it; the change moves each
+// kept one's Expires on, so a hold it cannot release never pins the reads.
+func (s *Service) releaseAbandoned(ctx context.Context, l *ledger, now time.Time, read map[string]bool,
+	released map[string]hold) {
+
 	for _, h := range l.Holds {
 		if len(read) >= earlyReads {
 			return
@@ -243,7 +256,7 @@ func (s *Service) releaseAbandoned(ctx context.Context, l *ledger, now time.Time
 			continue
 		}
 		if s.deleteStored(ctx, r.Files) {
-			released[h.Upload] = true
+			released[h.Upload] = h
 		}
 	}
 }
@@ -268,9 +281,19 @@ func (s *Service) deleteStored(ctx context.Context, files []file) bool {
 // reserve adds a hold, refused past the budgets.
 func (s *Service) reserve(ctx context.Context, h hold, named int64) error {
 	return s.changeLedger(ctx, func(l *ledger, now time.Time) error {
-		if l.holdOf(h.Upload) >= 0 {
-			// A RETRIED INTENT whose first attempt wrote its hold and lost
-			// its answer: the hold is the one it would write.
+		if i := l.holdOf(h.Upload); i >= 0 {
+			// A RETRIED INTENT whose first attempt wrote its hold and no
+			// record, or whose record an early release deleted: the hold
+			// becomes this intent's, which a release that read the old one
+			// then leaves alone.
+			old := l.Holds[i]
+			if h.Bytes > old.Bytes {
+				if err := l.admit(h.Principal, h.Bytes-old.Bytes, false, s.limits(), named, now); err != nil {
+					return err
+				}
+			}
+			h.Bytes, h.Until = max(h.Bytes, old.Bytes), maxTime(h.Until, old.Until)
+			l.Holds[i] = h
 			return nil
 		}
 		if err := l.admit(h.Principal, h.Bytes, true, s.limits(), named, now); err != nil {
@@ -279,6 +302,14 @@ func (s *Service) reserve(ctx context.Context, h hold, named int64) error {
 		l.Holds = append(l.Holds, h)
 		return nil
 	})
+}
+
+// maxTime is the later of a and b.
+func maxTime(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
 }
 
 // grow adds bytes to an upload's hold, or adds the hold, extending it to
