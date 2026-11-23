@@ -14,14 +14,14 @@ import (
 )
 
 // auxiliaryTimeout bounds one AUXILIARY command, a short run of the harness that
-// brackets the call: a [harnessprofile.CredentialStore]'s import and export
-// around a seat's generation, and a [harnessprofile.Profile.UsageArgs] report.
+// brackets the call: a [harnessprofile.CredentialStore]'s import and export, a
+// [harnessprofile.Profile.UsageArgs] report and a [harnessprofile.HomeDaemon]'s stop.
 //
-// Each takes about half a second on an idle host (OpenCode 2; the private
-// server `--standalone` starts). Thirty seconds is sixty times that, so a host at
-// max_concurrent harnesses does not fail a generation or lose a call's counts
-// over a slow start, and a twentieth of the per-call cap (timeout_seconds, 600),
-// so a wedged command cannot spend much of the call it brackets, inside its slot.
+// The first two take about half a second on an idle host (OpenCode 2's private
+// `--standalone` server starting); the longest, Hermes Agent 0.23.3's `gateway
+// stop --yes` interrupting a live turn, took 11 s. Thirty seconds holds that on a
+// host at max_concurrent harnesses and is a twentieth of the per-call cap
+// (timeout_seconds, 600), so a wedged command cannot spend much of its call.
 //
 // A constant: the work is a fixed-size local round trip, and the per-call cap is
 // the setting an operator already reaches for when a host is slow.
