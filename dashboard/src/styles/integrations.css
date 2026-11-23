@@ -35,6 +35,10 @@
   gap: var(--spacing-5);
   min-width: 0;
 }
+/* A tab's sections head at the small step, under the tab bar they never outrank. */
+.int-tab {
+  --crewlet-section-title-size: var(--font-size-sm);
+}
 .int-service-off {
   max-width: 44rem;
 }
