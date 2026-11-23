@@ -43,6 +43,7 @@ import { useNow } from "~/lib/clock.ts";
 import { fmtCount, fmtDate, readerDay, relTime } from "~/lib/format.ts";
 import { dateTimeFormat } from "~/lib/formatters.ts";
 import { zone } from "~/lib/prefs.ts";
+import { shiftDay } from "~/lib/timeline.ts";
 import { GoLiveReview } from "./GoLiveReview.tsx";
 import { ApplyPanel } from "./ApplyPanel.tsx";
 import { useFindings } from "./api.ts";
@@ -218,7 +219,7 @@ export function historyDays(
   now: number,
 ): { key: string; heading: string; rows: AdvisorKeptFinding[] }[] {
   const today = readerDay(now);
-  const yesterday = readerDay(now - 86_400_000);
+  const yesterday = shiftDay(today, -1);
   const days = new Map<string, AdvisorKeptFinding[]>();
   for (const f of rows) {
     const at = Date.parse(f.closed_at ?? "");
