@@ -261,19 +261,20 @@ const ContainerHome = "/home/user"
 // validates and boxes that fail at setup. Relative paths are under home;
 // absolute ones only beneath it after cleaning. Refused: "..", the home
 // itself, an empty path. A LEADING "~" IS THE HOME as a shell reads it ("~/x"
-// is "x"; "~name/x" refused); read as plain relative, "~/.npmrc" would land in
-// a directory named "~". home is the path inside
-// the box ([ContainerHome], or a direct box's host directory); EMPTY is one no
-// path can name, so only a relative path lands in it.
+// is "x"; "~name/x" and "~\x" refused, a backslash being a filename character
+// to a POSIX host, not a separator); read as plain relative, "~/.npmrc" would
+// land in a directory named "~". home is the path inside the box
+// ([ContainerHome], or a direct box's host directory); EMPTY is one no path
+// can name, so only a relative path lands in it.
 func InHome(home, path string) (string, bool) {
 	if path == "" {
 		return "", false
 	}
 	if path[0] == '~' {
-		// A slash or a backslash after the tilde; what follows is then
-		// relative to the home, and an empty rest is the home itself, which
-		// the check below refuses.
-		if len(path) > 1 && path[1] != '/' && path[1] != '\\' {
+		// Only a slash may follow the tilde; what follows is then relative
+		// to the home, and an empty rest is the home itself, which the
+		// check below refuses.
+		if len(path) > 1 && path[1] != '/' {
 			return "", false
 		}
 		path = "." + string(filepath.Separator) + path[1:]

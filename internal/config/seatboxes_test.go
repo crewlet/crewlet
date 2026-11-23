@@ -100,6 +100,20 @@ func TestASetupFileABoxRefusesIsRefusedOnTheWrite(t *testing.T) {
 			says: []string{"another account's home"},
 		},
 		{
+			// No shell reads ~\ as the home: to a POSIX host the backslash
+			// is part of a file name, so the file would be named "\.npmrc".
+			name: "a backslash after the tilde in a direct box",
+			doc:  setupFileDoc(directOnly, fileStep("      ", "rc", `'~\.npmrc'`), "", plainSeat),
+			path: shared + `~\.npmrc`,
+			says: []string{"only before a /", "backslash is a character of a file name", "~/.npmrc"},
+		},
+		{
+			name: "a backslash after the tilde in a container box",
+			doc:  setupFileDoc(directAndImg, fileStep("      ", "rc", `'~\.npmrc'`), containerLLM, plainSeat),
+			path: shared + `~\.npmrc`,
+			says: []string{"container box", "backslash is a character of a file name"},
+		},
+		{
 			name: "the tilde alone, which is the home itself",
 			doc:  setupFileDoc(directOnly, fileStep("      ", "rc", `"~"`), "", plainSeat),
 			path: shared + "~",
