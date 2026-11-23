@@ -39,6 +39,7 @@ import {
   Checkbox,
   SegmentedControl,
   SegmentedMeter,
+  shownBeforeOverflow,
   Tag,
   Textarea,
 } from "@crewlethq/ui";
@@ -777,14 +778,22 @@ function Faces({
     .flatMap((p) => (p.waits_on ?? []).map((w) => w.handle));
   const handles = [...new Set([...standings.map((s) => s.handle), ...waiting])];
   if (handles.length === 0) return null;
-  const shown = handles.slice(0, 5);
+  const shown = handles.slice(0, shownBeforeOverflow(handles.length, 5));
+  const hidden = handles.slice(shown.length).map((h) => whoName(h));
   const names = namesSaid(handles.map((h) => whoName(h)));
   return (
     <span className="code-merge-box__faces" role="img" aria-label={`Reviewers: ${names}`}>
       {shown.map((h) => (
         <Face key={h} who={h} ring={h === viewer.handle ? "brand" : undefined} />
       ))}
-      {handles.length > 5 && <span className="code-merge-box__more">+{handles.length - 5}</span>}
+      {hidden.length > 0 && (
+        <span
+          className="code-merge-box__more"
+          title={`${hidden.length} more: ${hidden.join(", ")}`}
+        >
+          +{hidden.length}
+        </span>
+      )}
     </span>
   );
 }

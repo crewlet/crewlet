@@ -554,11 +554,12 @@ test("a working seat's panel says its word once where the line already begins wi
   expect(line.split("Working")).toHaveLength(2);
 });
 
-test("the tools name their source, and more than three fold into a count", async () => {
+test("the tools name their source, and one past three is drawn rather than counted", async () => {
   await mount(ANONYMOUS);
   expect(screen.getByText("Built-in")).toBeTruthy();
   expect(screen.getByText("gitlab")).toBeTruthy();
-  expect(screen.getByText("+1")).toBeTruthy();
+  expect(screen.getByText("sentry")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /more tool/ })).toBeNull();
 });
 
 // WHICH TURN THIS IS: the running turn is written when it ends, so it is the

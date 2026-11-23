@@ -88,7 +88,7 @@ import {
 } from "./board/model.ts";
 import { LeafView } from "./board/widgets.tsx";
 import { keptBoard } from "./board/kept.ts";
-import { widgetShown } from "./board/kit.tsx";
+import { WidgetSized, widgetShown } from "./board/kit.tsx";
 import { widgetDef } from "./board/registry.tsx";
 import { useServicesRun } from "~/lib/services.ts";
 import { WidgetSettings, configurable, widgetName } from "./board/settings.tsx";
@@ -409,7 +409,9 @@ export function Home() {
           setSettingsId((s) => (s === id ? null : s));
         }}
       >
-        <LeafView widget={w} />
+        <WidgetSized sized={w.h !== null}>
+          <LeafView widget={w} />
+        </WidgetSized>
       </ArrangeFrame>
     );
   };
