@@ -42,13 +42,13 @@ func (s *Service) Run(ctx context.Context, now time.Time, dismissed, live []advi
 	}
 	d, err := s.Read(ctx, now)
 	if err != nil {
-		return failed("the company's records could not be read: ", err)
+		return failed("the company's records could not be read: ", stopped(ctx, err))
 	}
 	d.Answers = AnswersOf(dismissed)
 	d.Unexplained = advisor.Unexplained(live)
 	deps, err := s.Models.Deps(ctx, d.Company)
 	if err != nil {
-		return failed("the Advisor's model could not start: ", err)
+		return failed("the Advisor's model could not start: ", stopped(ctx, err))
 	}
 	if deps.DryRun == nil {
 		deps.DryRun = func(ch advisor.Change) error { return advisor.CheckChange(d.Company, ch) }
@@ -106,7 +106,9 @@ func (s *DeepService) Assigned() bool { return s.Models.Assigned() }
 
 // Deep is one deep run at now: what it found, grounded, as observations, and
 // its record. It concluded only where it submitted within its bounds, so a
-// run cut short leaves earlier model findings as they stand.
+// run cut short leaves earlier model findings as they stand. Every part has a
+// deadline: its reads [duty.ObserveFor], its loop its minutes, and the rest
+// is the engine's own checks.
 func (s *DeepService) Deep(ctx context.Context, now time.Time, dismissed, live []advisor.Stored,
 	io duty.DeepIO) (duty.ModelRun, error) {
 	failed := func(reason string, err error) (duty.ModelRun, error) {
@@ -114,15 +116,20 @@ func (s *DeepService) Deep(ctx context.Context, now time.Time, dismissed, live [
 			Dropped: map[advisor.Drop]int{}, Unread: []string{}}, Progress: []Progress{}}
 		return duty.ModelRun{Summary: run.Kept()}, fmt.Errorf("modelpass: %s%w", reason, err)
 	}
-	d, err := s.Read(ctx, now)
+	// ITS READS ARE THE RULE PASS'S, with the snapshot, held to its deadline.
+	readCtx, cancel := context.WithTimeoutCause(ctx, duty.ObserveFor,
+		fmt.Errorf("its reads did not finish within %d minutes", int(duty.ObserveFor/time.Minute)))
+	defer cancel()
+	d, err := s.Read(readCtx, now)
 	if err != nil {
-		return failed("the company's records could not be read: ", err)
+		return failed("the company's records could not be read: ", stopped(readCtx, err))
 	}
 	d.Answers = AnswersOf(dismissed)
-	deps, err := s.Models.Deps(ctx, d.Company)
+	deps, err := s.Models.Deps(readCtx, d.Company)
 	if err != nil {
-		return failed("the Advisor's model could not start: ", err)
+		return failed("the Advisor's model could not start: ", stopped(readCtx, err))
 	}
+	cancel()
 	if deps.DryRun == nil {
 		deps.DryRun = func(ch advisor.Change) error { return advisor.CheckChange(d.Company, ch) }
 	}
@@ -158,7 +165,7 @@ func (s *DeepService) Deep(ctx context.Context, now time.Time, dismissed, live [
 	}
 	run := RunDeepFrom(ctx, deps, d, bounds, func(p Progress) {
 		if io.Progress != nil {
-			io.Progress(p.At, p.Text)
+			io.Progress(duty.Line{At: p.At, Text: p.Text, Step: p.Step, Failed: p.Failed, Detail: p.Detail, Why: p.Why})
 		}
 	}, resume, keep)
 	// ITS RECORD KEEPS WHAT FITS: the lines and verdicts are on its progress.

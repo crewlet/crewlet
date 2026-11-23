@@ -22,7 +22,7 @@
 
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
-import { NodeProblems, ScreenLink } from "./dialogParts.tsx";
+import { acknowledgementChoice, NodeProblems, ScreenLink } from "./dialogParts.tsx";
 import type { PlacedProblem } from "./model/problems.ts";
 
 afterEach(cleanup);
@@ -112,5 +112,31 @@ describe("NodeProblems", () => {
     expect(callout.className).not.toContain("crewlet-callout--quiet");
     expect(callout.getAttribute("role")).toBe("alert");
     expect(callout.querySelector(".crewlet-notice-list--compact")).toBeNull();
+  });
+});
+
+// Each acknowledgement is a required choice; danger only where it accepts a loss.
+describe("acknowledgementChoice", () => {
+  const ask = (a: Parameters<typeof acknowledgementChoice>[0]) =>
+    acknowledgementChoice(a, {
+      checked: false,
+      onCheckedChange: () => {},
+      massRemoval: { removed: 4, total: 6 },
+    });
+
+  test("holds the confirm, says what it accepts, and counts a mass removal", () => {
+    expect(ask("company_rename")).toMatchObject({
+      required: true,
+      tone: "danger",
+      label: "I understand what renaming the company does",
+      description:
+        "Every agent onboards again and loses its diary. Handles, mailboxes and episodes stay.",
+    });
+    expect(ask("mass_removal")).toMatchObject({
+      required: true,
+      tone: "danger",
+      label: "Delete 4 of the 6 seats the company has",
+    });
+    expect(ask("credential_servers")).toMatchObject({ required: true, tone: "default" });
   });
 });

@@ -42,7 +42,7 @@ func (v *refreshingVendor) RefreshIdentity(_ context.Context, in seataccess.Iden
 	return seataccess.IdentityRefreshed{
 		Minted: []seataccess.Minted{{Field: "KEY", Value: fresh}},
 		Retire: func(context.Context) error {
-			held, _ := v.sink.Held("APP_STORE_CONNECT_KEY_GROWTH")
+			held, _ := v.sink.Held("META_ADS_KEY_GROWTH")
 			v.retired, v.sealedAtRetire = append(v.retired, old), append(v.sealedAtRetire, held)
 			return v.retireErr
 		},
@@ -57,7 +57,7 @@ func TestAKeptIdentityIsRefreshedBeforeItsCheck(t *testing.T) {
 	ledger, sink := seataccesstest.NewLedger(), seataccesstest.NewSink()
 	v := &refreshingVendor{identityVendor: &identityVendor{roles: map[string]string{"good": "Marketing"}}, sink: sink}
 	c := growthCompany("own", true)
-	const sealed = "APP_STORE_CONNECT_KEY_GROWTH"
+	const sealed = "META_ADS_KEY_GROWTH"
 	keep := &seataccess.IdentityAsk{Keep: true, Way: seataccess.WayHandedIn, Value: "good", FileName: "id-good"}
 	if got := identitySync(t, v.identityVendor, ledger, sink, c, keep); !got.Kept() {
 		t.Fatalf("not kept: %+v", got)
@@ -106,7 +106,7 @@ func syncWith(t *testing.T, v seataccess.Vendor, ledger *seataccesstest.Ledger, 
 	if _, err := seataccess.Sync(t.Context(), in); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
-	rec, _ := ledger.Record(integration.KindAppStoreConnect, "growth")
+	rec, _ := ledger.Record(integration.KindMetaAds, "growth")
 	return rec.Lanes[identityLane].Identity
 }
 
@@ -127,7 +127,7 @@ func (v *retiringVendor) Open(context.Context, seataccess.OpenInput) (seataccess
 func (v *retiringVendor) KeepIdentity(ctx context.Context, in seataccess.IdentityInput) (seataccess.IdentityKept, error) {
 	kept, err := v.identityVendor.KeepIdentity(ctx, in)
 	kept.Retire = func(context.Context) error {
-		held, _ := v.sink.Held("APP_STORE_CONNECT_KEY_GROWTH")
+		held, _ := v.sink.Held("META_ADS_KEY_GROWTH")
 		v.sealedAtRetire = append(v.sealedAtRetire, held)
 		return v.fail
 	}

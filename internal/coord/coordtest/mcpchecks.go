@@ -1,6 +1,9 @@
 package coordtest
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -115,6 +118,33 @@ var mcpCheckCases = []fleetCase{{
 		}
 		if all, _ := h.f.ListMCPChecks(h.ctx); len(all) != 0 {
 			h.t.Errorf("a refused check left %+v behind", all)
+		}
+	},
+}, {
+	// BOUNDED AS STORED: every sentence within its own bound, in a byte JSON
+	// writes as six, takes the record past MaxMCPCheckBytes though its text
+	// is within it. Refused before anything is written, on every backend.
+	name: "an MCP check past its bound as stored is refused as too large",
+	fn: func(h *fleetHarness) {
+		c := coord.MCPCheck{Server: "tracker", At: h.now(), By: "jane-doe", ByKind: iam.ActorHuman}
+		for i := range coord.MaxMCPCheckNodes {
+			n := checkedNode(fmt.Sprintf("node-%02d", i))
+			for j := range n.Steps {
+				n.Steps[j].Detail = strings.Repeat("<", 400)
+			}
+			c.Nodes = append(c.Nodes, n)
+		}
+		var plain bytes.Buffer
+		enc := json.NewEncoder(&plain)
+		enc.SetEscapeHTML(false)
+		if err := enc.Encode(c); err != nil || plain.Len() > coord.MaxMCPCheckBytes {
+			h.t.Fatalf("the check's text is %d bytes (%v): want it within the bound, escaped past it",
+				plain.Len(), err)
+		}
+		_, err := h.f.PutMCPCheck(h.ctx, c)
+		h.tooLarge("an MCP check past its bound as stored", err)
+		if _, found, _ := h.f.MCPCheck(h.ctx, "tracker"); found {
+			h.t.Error("an MCP check past its bound was stored")
 		}
 	},
 }, {

@@ -51,13 +51,13 @@ func (l *CoordLedger) Records(ctx context.Context, kind integration.Kind) (map[s
 	return out, nil
 }
 
-// SeatRecord implements [Ledger].
+// SeatRecord implements [Ledger]: the seat's one key, read on a turn, where a
+// listing of its integration's ledger would carry every other seat's record.
 func (l *CoordLedger) SeatRecord(ctx context.Context, kind integration.Kind, handle string) (Record, bool, error) {
-	raw, err := l.store.SeatAccessRecords(ctx, string(kind))
+	value, found, err := l.store.SeatAccessRecord(ctx, string(kind), handle)
 	if err != nil {
-		return Record{}, false, fmt.Errorf("seataccess: read the %s ledger: %w", kind, err)
+		return Record{}, false, fmt.Errorf("seataccess: read %s's %s ledger record: %w", handle, kind, err)
 	}
-	value, found := raw[handle]
 	if !found {
 		return Record{}, false, nil
 	}

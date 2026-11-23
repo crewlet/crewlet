@@ -103,7 +103,7 @@ import {
   type UnitForm,
 } from "./editorForm.ts";
 import {
-  ACKNOWLEDGEMENT_TEXT,
+  acknowledgementChoice,
   EditorSection,
   NodeProblems,
   ReadOnlyFact,
@@ -164,6 +164,7 @@ import {
   Button,
   Callout,
   Checkbox,
+  ConsequenceList,
   EmptyState,
   FactList,
   FormField,
@@ -818,14 +819,14 @@ function CompanyEditor({ onClose }: { onClose: () => void }) {
         error={errorFor(["name"])}
       />
       {renaming && (
-        <Checkbox
-          framed
-          tone="danger"
-          label="I understand what renaming the company does"
-          description={ACKNOWLEDGEMENT_TEXT.company_rename}
-          checked={acknowledged}
-          onCheckedChange={setAcknowledged}
-          disabled={disabled}
+        <ConsequenceList
+          items={[
+            acknowledgementChoice("company_rename", {
+              checked: acknowledged,
+              onCheckedChange: setAcknowledged,
+              disabled,
+            }),
+          ]}
         />
       )}
       <p className="builder-note muted">

@@ -560,16 +560,16 @@ func TestWritingTheSameContentAgainStoresNothing(t *testing.T) {
 	}
 	first := write(map[string]any{"path": "r.md", "content": "same"})
 	again := write(map[string]any{"path": "r.md", "content": "same"})
-	if again["outcome"] != "unchanged" || again["version"] != first["version"] ||
+	if again["outcome"] != "applied" || again["unchanged"] != true || again["version"] != first["version"] ||
 		objects.count() != 1 || files.puts != 1 {
 		t.Fatalf("writing the same content again answered %v, storing %d objects "+
 			"and %d writes", again, objects.count(), files.puts)
 	}
-	if changed := write(map[string]any{"path": "r.md", "content": "other"}); changed["outcome"] == "unchanged" {
+	if changed := write(map[string]any{"path": "r.md", "content": "other"}); changed["unchanged"] != nil {
 		t.Fatalf("a change of content was skipped: %v", changed)
 	}
 	if retyped := write(map[string]any{"path": "r.md", "content": "other",
-		"content_type": "text/plain"}); retyped["outcome"] == "unchanged" {
+		"content_type": "text/plain"}); retyped["unchanged"] != nil {
 		t.Fatalf("a change of type was skipped: %v", retyped)
 	}
 	if objects.count() != 3 || files.puts != 3 {

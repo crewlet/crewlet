@@ -41,21 +41,26 @@ vi.mock("../api.ts", async (actual) => ({
 const onDone = vi.fn();
 const onClose = vi.fn();
 
-function tree() {
+function tree(start?: "all") {
   const server = mcpData("admin").server("linear")!;
   return (
     <TestClient>
       <ToastProvider>
         <LayerHost>
-          <DriftDialog server={server} onClose={onClose} onDone={onDone} />
+          <DriftDialog
+            server={server}
+            {...(start ? { start } : {})}
+            onClose={onClose}
+            onDone={onDone}
+          />
         </LayerHost>
       </ToastProvider>
     </TestClient>
   );
 }
 
-function mount() {
-  return render(tree());
+function mount(start?: "all") {
+  return render(tree(start));
 }
 
 beforeEach(() => {
@@ -486,4 +491,146 @@ test("a decision written in part says what was decided and what was not", async 
   expect(screen.queryByText("Nothing was changed")).toBeNull();
   expect(reload).toHaveBeenCalled();
   expect(onDone).toHaveBeenCalled();
+});
+
+/** The terms and definitions the open list shows. */
+function listedRows(dialog: HTMLElement) {
+  return {
+    terms: within(dialog)
+      .getAllByRole("term")
+      .map((t) => t.textContent),
+    words: within(dialog)
+      .getAllByRole("definition")
+      .map((d) => d.textContent),
+  };
+}
+
+// ACCEPT ALL LISTS EVERY CHANGE FIRST, the one claiming less risk flagged, then
+// sends each by its digest in one decision. Mutation: send on the first press,
+// or accept by name without the digest, and this is red.
+test("accept all lists every change, then accepts each by its digest in one decision", async () => {
+  vi.mocked(reviewChanges).mockResolvedValue({
+    kind: "ok",
+    status: 200,
+    value: {
+      server: "linear",
+      accepted: ["delete_issue", "export_board"],
+      blocked: [],
+      moved: [],
+      revision: null,
+    },
+  });
+  mount();
+  expect(screen.getByRole("button", { name: "Accept change" })).toBeDefined();
+  fireEvent.click(screen.getByRole("button", { name: "Accept all 2 changes" }));
+  await afterMicrotasks();
+  expect(reviewChanges).not.toHaveBeenCalled();
+  const listed = screen.getByRole("dialog");
+  expect(within(listed).getByText("Accept all 2 changes on Linear?")).toBeDefined();
+  expect(within(listed).getByText("1 change now claims less risk")).toBeDefined();
+  expect(listedRows(listed)).toEqual({
+    terms: ["delete_issue", "export_board"],
+    words: ["Description, HintsClaims less risk", "Removed"],
+  });
+  fireEvent.click(within(listed).getByRole("button", { name: "Accept 2 changes" }));
+  await afterMicrotasks();
+  expect(reviewChanges).toHaveBeenCalledTimes(1);
+  expect(reviewChanges).toHaveBeenLastCalledWith(
+    "linear",
+    { accept: { delete_issue: "c".repeat(64), export_board: null } },
+    "Accepted all 2 changes on linear",
+  );
+  expect(onDone).toHaveBeenCalled();
+  expect(onClose).toHaveBeenCalled();
+});
+
+// OPENED FROM THE ATTENTION ROW the dialog starts on Accept all's list, naming
+// the server and the count, and Cancel closes it with nothing sent. Mutation:
+// open on the review, or send on Cancel, and this is red.
+test("opened from the attention row, it starts on Accept all's list and Cancel closes it", async () => {
+  mount("all");
+  const listed = screen.getByRole("dialog");
+  expect(within(listed).getByText("Accept all 2 changes on Linear?")).toBeDefined();
+  expect(screen.queryByRole("button", { name: "Accept change" })).toBeNull();
+  fireEvent.click(within(listed).getByRole("button", { name: "Cancel" }));
+  await afterMicrotasks();
+  expect(onClose).toHaveBeenCalled();
+  expect(reviewChanges).not.toHaveBeenCalled();
+});
+
+// A TOOL LISTED UNDER TWO DEFINITIONS IS LEFT OUT, said under the list, since a
+// decision names a tool once; one change alone is accepted with Accept change.
+test("accept all leaves out a tool listed under two definitions, and needs two changes", () => {
+  const [moved, removed] = LINEAR_CHANGES;
+  const twin = { ...moved!, after: { ...moved!.after!, digest: "e".repeat(64) } };
+  detail = { ...LINEAR_DETAIL, changes: [moved!, twin, removed!] };
+  mount();
+  expect(screen.queryByRole("button", { name: /^Accept all/ })).toBeNull();
+  // EACH DEFINITION IS ITS OWN ROW, chosen apart.
+  fireEvent.click(screen.getByRole("button", { name: "delete_issue (definition 2 of 2)" }));
+  expect(
+    screen.getByRole("button", { name: "delete_issue (definition 2 of 2)", current: "page" }),
+  ).toBeDefined();
+  detail = {
+    ...LINEAR_DETAIL,
+    changes: [moved!, twin, removed!, { ...removed!, tool: "old_board" }],
+  };
+  cleanup();
+  mount();
+  fireEvent.click(screen.getByRole("button", { name: "Accept all 2 changes" }));
+  const listed = screen.getByRole("dialog");
+  expect(listedRows(listed).terms).toEqual(["export_board", "old_board"]);
+  expect(listed.textContent).toContain(
+    "Left to decide one by one: 2 changes to a tool listed under two definitions at once.",
+  );
+});
+
+// A TOOL THE FLEET LISTS UNDER TWO DEFINITIONS (one node still on the accepted
+// one) IS LEFT OUT of Accept all, which would only bring the other back as a
+// change. Mutation: judge by the changes alone, and this is red.
+test("accept all leaves out a tool the fleet lists under two definitions", () => {
+  const [moved, removed] = LINEAR_CHANGES;
+  detail = {
+    ...LINEAR_DETAIL,
+    tools: LINEAR_DETAIL.tools.map((t) =>
+      t.raw === "delete_issue" ? { ...t, definitions: 2 } : t,
+    ),
+    changes: [moved!, removed!, { ...removed!, tool: "old_board" }],
+  };
+  mount();
+  fireEvent.click(screen.getByRole("button", { name: "Accept all 2 changes" }));
+  const listed = screen.getByRole("dialog");
+  expect(listedRows(listed).terms).toEqual(["export_board", "old_board"]);
+  expect(listed.textContent).toContain("Left to decide one by one: 1 change");
+});
+
+// THE LIST STAYS AS FROZEN, its left-out count included, whatever is read
+// meanwhile; a refusal as stale goes back to the review, since the frozen list
+// could only be refused again. Mutation: count left from the live changes, or
+// keep the list after a stale refusal, and this is red.
+test("the list keeps its count, and a stale refusal returns to the review", async () => {
+  vi.mocked(reviewChanges).mockResolvedValue({
+    kind: "refused",
+    status: 409,
+    code: "stale_version",
+    sentence: "delete_issue changed again since it was reviewed; nothing was written.",
+    body: { tools: ["delete_issue"] },
+  });
+  const { rerender } = mount("all");
+  const before = screen.getByRole("dialog").textContent;
+  detail = {
+    ...LINEAR_DETAIL,
+    changes: [...LINEAR_CHANGES, { ...LINEAR_CHANGES[1]!, tool: "new_board" }],
+  };
+  rerender(tree("all"));
+  expect(screen.getByRole("dialog").textContent).toBe(before);
+  fireEvent.click(screen.getByRole("button", { name: "Accept 2 changes" }));
+  await afterMicrotasks();
+  expect(reload).toHaveBeenCalled();
+  expect(onClose).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Accept change" })).toBeDefined();
+  fireEvent.click(screen.getByRole("button", { name: /^Accept all/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(onClose).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Accept change" })).toBeDefined();
 });

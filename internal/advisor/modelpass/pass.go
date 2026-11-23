@@ -95,7 +95,7 @@ func Run(ctx context.Context, deps Deps, d Data, ceiling int) advisor.Pass {
 		out.Status, out.Reason = advisor.PassFailed, "The company's token budget is spent for now, so the pass stopped."
 		return out
 	case err != nil:
-		out.Status, out.Reason = advisor.PassFailed, "The Advisor's model did not answer: "+err.Error()
+		out.Status, out.Reason = advisor.PassFailed, "The Advisor's model did not answer: "+stopped(ctx, err).Error()
 		return out
 	case !accepted:
 		out.Status = advisor.PassDeclined
@@ -119,6 +119,17 @@ func Run(ctx context.Context, deps Deps, d Data, ceiling int) advisor.Pass {
 	out.Findings, out.Dropped, out.Repaired = findings, grounded.Dropped, grounded.Repaired
 	out.Listed = len(out.Findings)
 	return out
+}
+
+// stopped is err, or why ctx ended where it ended the step: a deadline's
+// cause names the step and its limit.
+func stopped(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		if cause := context.Cause(ctx); cause != nil {
+			return cause
+		}
+	}
+	return err
 }
 
 // ceilingMeter charges the company's meter, then holds the run to its own

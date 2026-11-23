@@ -30,8 +30,8 @@ var e2bLog = logging.Get("sandbox.e2b")
 // subscription still works through the scoped headless token the run
 // environment exports; a harness that mints none needs the local backend.
 //
-// A template is how a box is SIZED: vCPU and RAM are fixed when it is built,
-// and the create API takes no resource arguments ([E2BProvider.templateFor]).
+// A template SIZES a box (vCPU, memory, disk, and the most vCPU and memory a
+// create may ask for); the engine asks for none ([E2BProvider.templateFor]).
 
 // E2BKind is the backend's name on the operator surface.
 const E2BKind = "e2b"
@@ -303,7 +303,7 @@ func (s *E2BSandbox) EndJob(ctx context.Context, _ string, script int) error {
 //
 // kill(-1) spares its caller, and the script's shell is the process envd
 // answers by: envd runs `/bin/sh -c` of a line that execs, through ionice and
-// nice, the script's `/bin/bash -l -c` (e2b-dev/infra's envd process handler),
+// nice, the script's `/bin/bash -l -c` (e2b-dev/runtime's envd process handler),
 // one process all the way down, so the call returns once the script has run
 // its waits. Whether what it killed is over is the job's poll to say.
 func (s *E2BSandbox) KillJob(ctx context.Context, _ string) error {

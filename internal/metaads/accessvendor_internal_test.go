@@ -214,6 +214,16 @@ func TestMakeItForMeWithoutTheAdminTokenSaysHowToGetIt(t *testing.T) {
 	if g.Make == nil || g.Make.Unavailable == "" || g.Name != "crewlet-growth" || g.Back.Kind != seataccess.BackToken {
 		t.Fatalf("guide %+v", g)
 	}
+	if err := g.Check(); err != nil {
+		t.Errorf("the guide is not of the one form: %v", err)
+	}
+	if first := g.Steps[0].Text; g.Link != nil || len(first.URLs()) != 1 || first.URLs()[0] != systemUsersPage {
+		t.Errorf("step 1 %q links %v and the button is %+v: System users goes on the step that names it",
+			first.String(), first.URLs(), g.Link)
+	}
+	if s := g.Steps[5].Text.String(); s != "Press Generate token. App: 987654321012345. Expiry: 60 days. Tick ads_management and ads_read." {
+		t.Errorf("the token step reads %q", s)
+	}
 }
 
 func TestAKeptTokenIsRenewedBeforeItsEndAndTheOldOneRevoked(t *testing.T) {

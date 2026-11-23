@@ -9,7 +9,8 @@
  * that answered with an error is never said not to have answered.
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { ToastProvider } from "@crewlethq/ui";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Router } from "~/app/router.tsx";
 import type { ModelReference } from "~/protocol/models.ts";
@@ -20,6 +21,11 @@ import {
   runs,
   seat,
 } from "~/routes/settings/models/fixtures.ts";
+
+/** A consequence line by its whole words, its chips and text read as one. */
+function line(words: string): HTMLElement {
+  return screen.getByText((_, el) => el?.tagName === "P" && el.textContent === words);
+}
 import {
   defaultChoice,
   leftWithNoModel,
@@ -53,6 +59,9 @@ const REFS: ModelReference[] = [
   { at: { assistant: "chat" }, segments: ["assistant", "model"], chain: ["sonnet"] },
 ];
 
+/** A model whose sign-in the store holds nothing for. */
+const NO_VALUES = { secrets: [], kept_secrets: [] };
+
 const refusal = {
   outcome: { kind: "problems", problems: [], derived: null, code: "validation_error", hint: "" },
   references: REFS,
@@ -60,10 +69,13 @@ const refusal = {
 const valid = {
   outcome: { kind: "valid", baseRevisionId: "rev-1", warnings: [], derived: null },
   references: [],
+  secrets: [],
 };
 
 beforeEach(() => {
-  modelReferences.mockImplementation(() => Promise.resolve({ references: REFS }));
+  modelReferences.mockImplementation(() =>
+    Promise.resolve({ references: REFS, values: NO_VALUES }),
+  );
   removeModel.mockImplementation((_key, removal: { repoint: unknown[] }) =>
     Promise.resolve(removal.repoint.length === 0 ? refusal : valid),
   );
@@ -169,7 +181,10 @@ test("the one choice moves every place, and each set of moves is checked by a dr
   // big fits every place (codex's default cannot run Ask Crewlet), so all of it moves there.
   expect(choice.textContent).toContain("big");
   const checked = removeModel.mock.calls.at(-1)!;
-  expect(checked[1]).toEqual({ repoint: REFS.map((r) => ({ at: r.at, to: "big" })) });
+  expect(checked[1]).toEqual({
+    repoint: REFS.map((r) => ({ at: r.at, to: "big" })),
+    deleteSecrets: [],
+  });
   expect(checked[2]).toMatchObject({ etag: '"llm-providers-sonnet"', dryRun: true });
 
   // ONLY WHAT FITS EVERY PLACE is offered, then Leave unset.
@@ -183,6 +198,7 @@ test("the one choice moves every place, and each set of moves is checked by a dr
   await settle();
   expect(removeModel.mock.calls.at(-1)![1]).toEqual({
     repoint: REFS.map((r) => ({ at: r.at, to: null })),
+    deleteSecrets: [],
   });
 });
 
@@ -209,6 +225,7 @@ test("Choose per seat opens a row per place, just its name and a picker, and a r
       { at: REFS[1]!.at, to: "default" },
       { at: REFS[2]!.at, to: "big" },
     ],
+    deleteSecrets: [],
   });
   // A SPLIT READS AS ONE: the one choice no longer names a model.
   expect(screen.getByRole("combobox", { name: "Move them to" }).textContent).toContain(
@@ -218,6 +235,7 @@ test("Choose per seat opens a row per place, just its name and a picker, and a r
   await pick(screen.getByRole("combobox", { name: "Move them to" }), /^big/);
   expect(removeModel.mock.calls.at(-1)![1]).toEqual({
     repoint: REFS.map((r) => ({ at: r.at, to: "big" })),
+    deleteSecrets: [],
   });
 });
 
@@ -270,12 +288,16 @@ test("when everything moves to another model, the button alone removes it, with 
   removeModel.mockResolvedValueOnce({
     outcome: { kind: "saved", revisionId: "rev-2", epoch: 3, warnings: [], derived: null },
     references: [],
+    secrets: [],
   });
   await act(async () => {
     fireEvent.click(button());
   });
   const sent = removeModel.mock.calls.at(-1)!;
-  expect(sent[1]).toEqual({ repoint: REFS.map((r) => ({ at: r.at, to: "big" })) });
+  expect(sent[1]).toEqual({
+    repoint: REFS.map((r) => ({ at: r.at, to: "big" })),
+    deleteSecrets: [],
+  });
   expect(sent[2]).toEqual({
     etag: '"llm-providers-sonnet"',
     dryRun: false,
@@ -358,12 +380,13 @@ test("with no model the places already use, the removal asks for one and holds t
   await pick(choice, /^healthy/);
   expect(removeModel.mock.calls.at(-1)![1]).toEqual({
     repoint: [{ at: REFS[0]!.at, to: "healthy" }],
+    deleteSecrets: [],
   });
   expect(button().disabled).toBe(false);
 });
 
 test("a model nothing uses says so in one line, and the button removes it", async () => {
-  modelReferences.mockImplementation(() => Promise.resolve({ references: [] }));
+  modelReferences.mockImplementation(() => Promise.resolve({ references: [], values: NO_VALUES }));
   removeModel.mockImplementation(() => Promise.resolve(valid));
   open(true);
   expect(await screen.findByText("Nothing uses this model.")).toBeDefined();
@@ -421,6 +444,7 @@ test("a removal that has started finishes after the dialog closed, and moves not
     answer({
       outcome: { kind: "saved", revisionId: "rev-2", epoch: 3, warnings: [], derived: null },
       references: [],
+      secrets: [],
     }),
   );
   expect(onDone).not.toHaveBeenCalled();
@@ -572,6 +596,134 @@ test("the audit summary says each move once, and Ask Crewlet turned off", () => 
         { at: REFS[1]!.at, to: null },
         { at: REFS[2]!.at, to: null },
       ],
+      deleteSecrets: [],
     }),
   ).toBe("Remove the model sonnet, move 1 use to big, leave 1 unset, and turn Ask Crewlet off");
+});
+
+/** The dialog on `sonnet` with nothing naming it, its stored values as the engine lists them. */
+function openHolding(values: {
+  secrets: string[];
+  kept_secrets: { name: string; read_by: string[] }[];
+}) {
+  modelReferences.mockImplementation(() => Promise.resolve({ references: [], values }));
+  const data = modelsData({
+    entries: [apiKeyEntry({ key: "sonnet" }), apiKeyEntry({ key: "big" })],
+  });
+  const onDone = vi.fn();
+  view = render(
+    <ToastProvider>
+      <Router>
+        <RemoveDialog
+          model={data.models[0]!}
+          data={data}
+          onClose={() => {}}
+          onDone={onDone}
+          onRemoved={onRemoved}
+        />
+      </Router>
+    </ToastProvider>,
+  );
+  return onDone;
+}
+
+const SONNET_VALUES = {
+  secrets: ["ANTHROPIC_API_KEY_SONNET"],
+  kept_secrets: [{ name: "ANTHROPIC_API_KEY", read_by: ["providers.llm.big.auth.api_key"] }],
+};
+
+/**
+ * ITS OWN SECRETS GO WITH IT BY DEFAULT, said in one line naming them; one
+ * something else uses stays, and says so. Unticked, none is asked to go.
+ */
+test("a model's own secrets are deleted with it by default, and a shared one stays", async () => {
+  removeModel.mockImplementation(() => Promise.resolve(valid));
+  openHolding(SONNET_VALUES);
+  const own = await screen.findByRole("checkbox", {
+    name: "Delete its secret ANTHROPIC_API_KEY_SONNET",
+  });
+  await settle();
+  expect((own as HTMLInputElement).checked).toBe(true);
+  // THE NAME IS A CHIP inside the line that says it stays.
+  const kept = line("ANTHROPIC_API_KEY stays: something else still uses it.");
+  expect(kept.querySelector("code")?.textContent).toBe("ANTHROPIC_API_KEY");
+  expect(removeModel.mock.calls.at(-1)![1]).toEqual({
+    repoint: [],
+    deleteSecrets: ["ANTHROPIC_API_KEY_SONNET"],
+  });
+
+  fireEvent.click(own);
+  await settle();
+  expect(removeModel.mock.calls.at(-1)![1]).toEqual({ repoint: [], deleteSecrets: [] });
+  fireEvent.click(own);
+  await settle();
+  removeModel.mockResolvedValueOnce({
+    outcome: { kind: "saved", revisionId: "rev-2", epoch: 3, warnings: [], derived: null },
+    references: [],
+    secrets: [{ name: "ANTHROPIC_API_KEY_SONNET", outcome: "deleted" }],
+  });
+  await act(async () => {
+    fireEvent.click(button());
+  });
+  expect(removeModel.mock.calls.at(-1)![1]).toEqual({
+    repoint: [],
+    deleteSecrets: ["ANTHROPIC_API_KEY_SONNET"],
+  });
+  expect(await screen.findByText("Deleted ANTHROPIC_API_KEY_SONNET.")).toBeDefined();
+});
+
+/**
+ * A CALLER WHO MAY NOT DELETE SECRETS is told they stay and where they are
+ * deleted, and the model is removed without them: the engine refused the
+ * values alone, so the same removal keeping them is allowed.
+ */
+test("a caller who may not delete secrets is told they stay and where, and removes the model alone", async () => {
+  const guarded = {
+    outcome: { kind: "guarded", code: "unauthorized" },
+    references: [],
+    secrets: [],
+  };
+  removeModel.mockImplementation((_k, removal: { deleteSecrets: string[] }) =>
+    Promise.resolve(removal.deleteSecrets.length > 0 ? guarded : valid),
+  );
+  openHolding({ secrets: ["ANTHROPIC_API_KEY_SONNET"], kept_secrets: [] });
+  await waitFor(() =>
+    line(
+      "Its secret ANTHROPIC_API_KEY_SONNET stays: you can't delete secrets. An admin can delete it in Settings › Secrets.",
+    ),
+  );
+  await settle();
+  expect(screen.queryByRole("checkbox")).toBeNull();
+  expect(button().disabled).toBe(false);
+  removeModel.mockResolvedValueOnce({
+    outcome: { kind: "saved", revisionId: "rev-2", epoch: 3, warnings: [], derived: null },
+    references: [],
+    secrets: [],
+  });
+  await act(async () => {
+    fireEvent.click(button());
+  });
+  expect(removeModel.mock.calls.at(-1)![1]).toEqual({ repoint: [], deleteSecrets: [] });
+});
+
+/** A VALUE THE ENGINE COULD NOT DELETE is said once the model is gone, with where to delete it. */
+test("a secret that may not have been deleted is said after the removal", async () => {
+  removeModel.mockImplementation(() => Promise.resolve(valid));
+  const onDone = openHolding({ secrets: ["ANTHROPIC_API_KEY_SONNET"], kept_secrets: [] });
+  await screen.findByRole("checkbox");
+  await settle();
+  removeModel.mockResolvedValueOnce({
+    outcome: { kind: "saved", revisionId: "rev-2", epoch: 3, warnings: [], derived: null },
+    references: [],
+    secrets: [{ name: "ANTHROPIC_API_KEY_SONNET", outcome: "failed" }],
+  });
+  await act(async () => {
+    fireEvent.click(button());
+  });
+  await waitFor(() => expect(onDone).toHaveBeenCalled());
+  expect(
+    await screen.findByText(
+      "ANTHROPIC_API_KEY_SONNET may not have been deleted: delete it in Settings › Secrets.",
+    ),
+  ).toBeDefined();
 });

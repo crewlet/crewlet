@@ -48,7 +48,7 @@ type Integrations struct {
 
 	MetaAds *MetaAds `yaml:"meta_ads,omitempty" json:"meta_ads,omitempty" desc:"The company's Meta app and one system user's tokens, through which the engine makes every Marketing API call for the agents. Absent = disabled."`
 
-	AppStoreConnect *AppStoreConnect `yaml:"app_store_connect,omitempty" json:"app_store_connect,omitempty" desc:"App Store Connect teams and their API keys, one per Apple role, through which the engine makes every call for the agents. Absent = disabled."`
+	AppStoreConnect *AppStoreConnect `yaml:"app_store_connect,omitempty" json:"app_store_connect,omitempty" desc:"App Store Connect teams by their issuer IDs; each agent signs every call with its own team key, handed in on the Agents tab. Absent = disabled."`
 	AppleAds        *AppleAds        `yaml:"apple_ads,omitempty" json:"apple_ads,omitempty" desc:"Apple Ads API users, each one organization's client credentials and private key, through which the engine makes every Apple Ads Platform API call for the agents. Absent = disabled."`
 
 	// ForgeAppID verifies the Forge app's invocation tokens: the JWT's
