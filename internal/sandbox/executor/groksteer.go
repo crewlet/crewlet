@@ -107,10 +107,12 @@ func (Grok) hookAnswer(event, take string, notes []HookNote) string {
 var grokHookEvents = []string{"PostToolUse", "PostToolUseFailure", "Stop"}
 
 // grokHooks is the run's hooks in its settings: one per [grokHookEvents] where
-// notes says so, each the note helper at its path once per firing, the first
-// also reporting skill loads where loads says so, and PostToolUse alone,
-// taking nothing, where the run reports loads and takes no notes.
-func grokHooks(paths Paths, notes, loads bool) string {
+// notes says so, each the note helper at its path once per firing, held to the
+// run's own session ([Paths.GrokThread]), the first also reporting a load of
+// one of skills, read whole as written (its -skill-digest), where loads says
+// so, and PostToolUse alone, taking nothing, where the run reports loads and
+// takes no notes.
+func grokHooks(paths Paths, notes, loads bool, skills []sandbox.Skill) string {
 	if !notes && !loads {
 		return ""
 	}
@@ -121,12 +123,13 @@ func grokHooks(paths Paths, notes, loads bool) string {
 		if !takes && !reports {
 			continue
 		}
-		command := []string{paths.GrokNoteHelper(), "-adapter", "grok-hook", "-config", paths.GrokTakeConfig()}
-		if takes {
-			command = append(command, "-thread-file", paths.GrokThread())
-		}
+		command := []string{paths.GrokNoteHelper(), "-adapter", "grok-hook", "-config", paths.GrokTakeConfig(),
+			"-thread-file", paths.GrokThread()}
 		if reports {
 			command = append(command, "-skill-loads")
+			for _, digest := range skillDigests(skills) {
+				command = append(command, "-skill-digest", digest)
+			}
 		}
 		if !takes {
 			command = append(command, "-loads-only")
@@ -142,9 +145,12 @@ func grokHooks(paths Paths, notes, loads bool) string {
 }
 
 // notesOffWhy is what switches a Grok Build run's reading of notes off: a
-// managed policy that allows only managed hooks, or a note helper that could
-// not reach the run's notes route, which its hooks' errors name in the session.
+// managed policy that allows only managed hooks, the box's own switches that
+// turn its settings' hooks off (`~/.grok/disabled-hooks`, `requirements.toml`,
+// which a run loads as a person's Grok does), or a note helper that could not
+// reach the run's notes route, which its hooks' errors name in the session.
 func (Grok) notesOffWhy() string {
-	return "a managed policy that allows only managed hooks, or a note helper that could not reach the run's " +
+	return "a managed policy that allows only managed hooks, the box's own ~/.grok/disabled-hooks or " +
+		"requirements.toml turning its settings' hooks off, or a note helper that could not reach the run's " +
 		"notes route, which the session's hook errors name"
 }

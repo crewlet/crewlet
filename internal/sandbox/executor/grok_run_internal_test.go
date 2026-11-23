@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"maps"
 	"os"
@@ -173,13 +175,13 @@ func TestEveryGrokRunNamesItsServersUnderANonceOfItsOwn(t *testing.T) {
 // A GROK RUN REPORTS EACH SKILL IT READS FROM WHERE ITS LAUNCH WROTE IT: each
 // skill is written at <skills>/<listed name>/SKILL.md, the helper's config
 // names that directory under the key the helper reads (`skillsDir`), and the
-// PostToolUse hook reports loads beside the notes, or alone (`-loads-only`,
-// the run's one hook) where the run takes no notes; a hook that takes names
-// the file the run's main session is named in.
+// PostToolUse hook reports loads, each skill's digest as written on its line,
+// beside the notes, or alone (`-loads-only`, the run's one hook) where the run
+// takes no notes; every hook names the file the main session is named in.
 //
-// Mutations, each red: pass "" for the skills directory; drop -skill-loads;
-// drop -loads-only; drop -thread-file from a hook that takes; rename the
-// config's key.
+// Mutations, each red: pass "" for the skills directory; drop -skill-loads,
+// -skill-digest or -loads-only; drop -thread-file from a hook that only
+// reports; rename the config's key.
 func TestAGrokRunReportsEachSkillItReadsFromWhereItsLaunchWroteIt(t *testing.T) {
 	t.Parallel()
 	const bridge = "http://127.0.0.1:7/mcp/run-token-placeholder"
@@ -217,14 +219,15 @@ func TestAGrokRunReportsEachSkillItReadsFromWhereItsLaunchWroteIt(t *testing.T) 
 		got := slices.Sorted(maps.Keys(read.Hooks))
 		for _, event := range got {
 			command := read.Hooks[event][0].Hooks[0].Command
-			want := shellword.Quote(paths.GrokTakeConfig())
-			switch {
-			case event == "PostToolUse" && tc.req.Steer.Set():
-				want += " '-thread-file' " + shellword.Quote(paths.GrokThread()) + " '-skill-loads'"
-			case event == "PostToolUse":
-				want += " '-skill-loads' '-loads-only'"
-			default:
-				want += " '-thread-file' " + shellword.Quote(paths.GrokThread())
+			want := shellword.Quote(paths.GrokTakeConfig()) + " '-thread-file' " + shellword.Quote(paths.GrokThread())
+			if event == "PostToolUse" {
+				want += " '-skill-loads'"
+				for _, digest := range skillDigests(tc.req.Skills) {
+					want += " '-skill-digest' " + shellword.Quote(digest)
+				}
+				if !tc.req.Steer.Set() {
+					want += " '-loads-only'"
+				}
 			}
 			if !strings.HasSuffix(command, want) {
 				t.Errorf("%s: the %s hook runs %s, want it to end %q", name, event, command, want)
@@ -503,5 +506,83 @@ func TestOnlyAHookOfTheRunsOwnSettingsHoldsAGrokTake(t *testing.T) {
 		answer, []byte("\n"))))
 	if err != nil || held[token] {
 		t.Errorf("a repository's hook held %v (%v)", held, err)
+	}
+}
+
+// A GROK SKILL'S DIGEST IS WHAT GROK'S READ OF IT RETURNS: the note helper counts
+// a load only where the text a read_file returned (`raw_output`) holds the
+// -skill-digest the runner names, so the SKILL.md the runner writes and 1.0.92's
+// whole read of it must hash alike (the helper's capture, of a skill the runner
+// wrote).
+//
+// Mutation: digest anything but the file [skillFile] makes.
+func TestAGrokSkillsDigestIsWhatGroksReadOfItReturns(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile(filepath.Join("..", "..", "notehelper", "testdata", "grok", "1.0.92",
+		"posttooluse-skill-read.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var in struct {
+		Response struct {
+			Content struct {
+				Read string `json:"raw_output"`
+			} `json:"FileContent"`
+		} `json:"tool_response"`
+	}
+	if err = json.Unmarshal(raw, &in); err != nil || in.Response.Content.Read == "" {
+		t.Fatalf("the captured read holds no raw_output (%v)", err)
+	}
+	sum := sha256.Sum256([]byte(in.Response.Content.Read))
+	want := "crewlet:probe-skill=" + hex.EncodeToString(sum[:])
+	skill := sandbox.Skill{Name: "probe-skill", Description: "Use for probes.", Body: "Step one.\n"}
+	if got := skillDigests([]sandbox.Skill{skill}); len(got) != 1 || got[0] != want {
+		t.Errorf("the runner names %v, want %s: Grok's whole read of the skill as written", got, want)
+	}
+}
+
+// A GROK RUN PUTS THE BOX'S OWN SETTINGS BACK ONCE GROK EXITS: the kept copy
+// replaces the run's settings, bridge and hooks with them, and is removed, so
+// an edit to the box's settings between runs stands; an empty copy (the box
+// had none) leaves none; with no copy kept the settings are left as they are.
+// The script does this after the harness, before the record is read.
+//
+// Mutations, each red: drop the restore from the script; keep the copy after
+// restoring; write an empty file where the box had none.
+func TestAGrokRunPutsTheBoxsOwnSettingsBackOnceGrokExits(t *testing.T) {
+	t.Parallel()
+	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
+	for _, tc := range []struct {
+		name, kept, want string
+		keep, absent     bool
+	}{
+		{name: "the box's own", kept: "model = \"grok-4.6\"\n", keep: true, want: "model = \"grok-4.6\"\n"},
+		{name: "none", kept: "", keep: true, absent: true},
+		{name: "no copy kept", want: "RUN"},
+	} {
+		paths := Paths{Home: t.TempDir()}
+		writeHere(t, paths.GrokConfig())
+		_ = os.WriteFile(paths.GrokConfig(), []byte("RUN"), 0o600)
+		if tc.keep {
+			writeHere(t, paths.GrokConfigBox())
+			_ = os.WriteFile(paths.GrokConfigBox(), []byte(tc.kept), 0o600)
+		}
+		if out, err := exec.Command(sh, "-c", grokRestoreConfig(paths)).CombinedOutput(); err != nil { //nolint:gosec // the runner's own script
+			t.Fatalf("%s: %v %s", tc.name, err, out)
+		}
+		got, err := os.ReadFile(paths.GrokConfig())
+		if tc.absent != os.IsNotExist(err) || !tc.absent && string(got) != tc.want {
+			t.Errorf("%s: the settings are %q (%v), want %q (absent: %v)", tc.name, got, err, tc.want, tc.absent)
+		}
+		if _, err := os.Stat(paths.GrokConfigBox()); !os.IsNotExist(err) {
+			t.Errorf("%s: the kept copy is still there (%v)", tc.name, err)
+		}
+	}
+	script := grokScript(sandbox.RunRequest{Brief: "x"}, Session{ID: "s"}, Paths{Home: "/home/box"}, time.Second)
+	restore := strings.Index(script, grokRestoreConfig(Paths{Home: "/home/box"}))
+	if restore < 0 || restore < strings.Index(script, `wait "$harness"`) ||
+		restore > strings.Index(script, grokRecordMark) {
+		t.Errorf("the script puts the settings back at %d, want after the harness and before the record:\n%s",
+			restore, script)
 	}
 }

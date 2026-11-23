@@ -316,7 +316,7 @@ func codexStartHelper(req sandbox.RunRequest, paths Paths) string {
 	if len(req.Skills) > 0 {
 		env += fmt.Sprintf(`%s=$(cat %s) `, codexSkillsEnv, q(paths.CodexSkillsURL()))
 		flags += fmt.Sprintf(" -skills-env %s -skills-dir %s", codexSkillsEnv, q(paths.CodexSkills()))
-		for _, digest := range codexSkillDigests(req.Skills) {
+		for _, digest := range skillDigests(req.Skills) {
 			flags += " -skill-digest " + q(digest)
 		}
 	}
@@ -329,24 +329,6 @@ hpid=$!
 ( while kill -0 $$ 2> /dev/null && kill -0 "$hpid" 2> /dev/null; do sleep %[4]s; done; kill -0 $$ 2> /dev/null || exit 0; : > %[5]s; %[2]s -interrupt-once < /dev/null > /dev/null || end "$apid" again ) &
 gpid=$!
 `, env, base, flags, codexGuardPoll, q(paths.CodexHelperLost()))
-}
-
-// codexSkillDigests is each of skills as the note helper's -skill-digest:
-// `<listed name>=<SHA-256 hex>` of the SKILL.md [writeCodexSkills] writes,
-// handed on the helper's command line, which is fixed before the model runs
-// (the digests of the skills' words, no secret). A skill whose file cannot be
-// made is one WriteConfig refused the run for, before any script.
-func codexSkillDigests(skills []sandbox.Skill) []string {
-	out := make([]string, 0, len(skills))
-	for _, s := range skills {
-		file, err := skillFile(s.Listed(), s.Description, s.Body)
-		if err != nil {
-			continue
-		}
-		sum := sha256.Sum256(file)
-		out = append(out, s.Listed()+"="+hex.EncodeToString(sum[:]))
-	}
-	return out
 }
 
 // codexGuardPoll is how often the guard looks for the helper: half a second,
