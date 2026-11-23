@@ -195,9 +195,13 @@ func (c *Company) validateSetupFileHomes() error {
 // the file's absolute path itself.
 func setupFileRefusal(step, file string, cell Placement, first SeatBox, others int) string {
 	var why string
-	otherHome := strings.HasPrefix(file, "~") && len(file) > 1 && file[1] != '/' && file[1] != '\\'
+	// hostbox.InHome's tilde grammar: only a slash may follow a leading ~.
+	tilde := len(file) > 1 && file[0] == '~' && file[1] != '/'
 	switch {
-	case otherHome:
+	case tilde && file[1] == '\\':
+		why = "a leading ~ is the box's home only before a /, and a backslash is a " +
+			"character of a file name, not a separator"
+	case tilde:
 		why = "a path starting ~name names another account's home, and a box writes " +
 			"a setup file only under its own"
 	case !filepath.IsAbs(file):

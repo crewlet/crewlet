@@ -328,7 +328,8 @@ func TestDirectModeRefusesToWriteOutsideTheBox(t *testing.T) {
 
 // A TILDE IS THE BOX'S HOME, in a direct box as in a container, as a shell
 // expands it, so a setup file lands in one place whatever the cell; never a
-// directory named "~". Another account's home is refused.
+// directory named "~". Another account's home is refused, and so is "~\x",
+// whose backslash is part of a file name, never a separator.
 func TestADirectBoxWritesATildePathInItsHome(t *testing.T) {
 	t.Parallel()
 	box := mustCreate(t, newDirect(t), Spec{})
@@ -342,9 +343,10 @@ func TestADirectBoxWritesATildePathInItsHome(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(box.Home(), "~")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("a directory named ~ was made in the home: %v", err)
 	}
-	for _, path := range []string{"~", "~bob/.npmrc"} {
+	for _, path := range []string{"~", "~bob/.npmrc", `~\.npmrc`} {
 		if err := box.WriteFile(t.Context(), path, []byte("x")); err == nil {
-			t.Errorf("WriteFile(%q) succeeded; it names the home itself or another account's", path)
+			t.Errorf("WriteFile(%q) succeeded; it names the home itself, another account's, "+
+				"or no home at all", path)
 		}
 	}
 }
