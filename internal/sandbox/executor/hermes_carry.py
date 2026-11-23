@@ -206,8 +206,9 @@ def model_route(model):
 def route(db_path, title):
     """Hermes keeps a session on the model route it froze as it created it, whatever the box's configuration
     says at a resume (measured on 0.23.3: a resume under another provider and base URL still calls the frozen
-    one, and no API key is frozen), so a resume is right only on the same route. The box's route is read as
-    hermes_cli.config reads it under the box's own managed scope; the run's overlay sets no model key."""
+    one), so a continued session would keep a route its entry no longer names; a resume is right only on the
+    same route. The box's route is read as hermes_cli.config reads it under the box's own managed scope; the
+    run's overlay sets no model key."""
     os.environ.pop("HERMES_MANAGED_DIR", None)
     from hermes_cli.config import load_config
     db = sqlite3.connect("file:%s?mode=ro" % db_path, uri=True)
