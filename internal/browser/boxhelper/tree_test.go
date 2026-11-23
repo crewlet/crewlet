@@ -288,10 +288,10 @@ func TestATreeNPMLeftShortIsNeverPublished(t *testing.T) {
 	boxhelpertest.EachNode(t, func(t *testing.T, env boxhelpertest.Env) {
 		t.Parallel()
 		for _, tc := range []struct{ name, alter string }{
-			{"a file npm left out", `rm "$PREFIX/node_modules/playwright-core/lib/webp_codec.wasm"`},
-			{"a file npm cut short", `f="$PREFIX/node_modules/playwright-core/browsers.json"; ` +
+			{"a file npm left out", `rm "$DIR/node_modules/playwright-core/lib/webp_codec.wasm"`},
+			{"a file npm cut short", `f="$DIR/node_modules/playwright-core/browsers.json"; ` +
 				`head -c 64 "$f" >"$f.cut" && mv "$f.cut" "$f"`},
-			{"a file npm never installed", `echo stray >"$PREFIX/node_modules/playwright-core/stray.js"`},
+			{"a file npm never installed", `echo stray >"$DIR/node_modules/playwright-core/stray.js"`},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				t.Parallel()
@@ -477,8 +477,8 @@ func TestTheBoxsNPMConfigurationCannotChangeTheTree(t *testing.T) {
 	})
 }
 
-// npmFlags is every flag the helper's npm ci carries but --prefix and the
-// bounds, as the package doc lists them.
+// npmFlags is every flag the helper's npm ci carries but the bounds, as the
+// package doc lists them.
 var npmFlags = []string{"--ignore-scripts", "--install-strategy=hoisted", "--no-bin-links", "--no-workspaces",
 	"--no-global", "--location=user", "--no-dry-run", "--no-package-lock-only", "--no-prefer-online",
 	"--replace-registry-host=npmjs", "--no-audit", "--no-fund", "--no-update-notifier", "--no-progress",
@@ -486,14 +486,15 @@ var npmFlags = []string{"--ignore-scripts", "--install-strategy=hoisted", "--no-
 
 // NPM RUNS WITH EVERY FLAG AND BOUND ON ITS COMMAND LINE: the box's npm is
 // asked its version with --loglevel=error, then run as `npm ci` with exactly
-// the helper's flags, --prefix the directory it installs into beside the
-// tree's name, and each bound at config.json's value (the case's own, so none
-// is spelled in the helper), with no --cache, --offline or --registry, which
-// would take the box's own cache or registry from it. A stand-in records each
-// command line, then runs the box's npm.
+// the helper's flags and each bound at config.json's value (the case's own,
+// so none is spelled in the helper), in the directory it installs into beside
+// the tree's name, with no --cache, --offline or --registry, which would take
+// the box's own cache or registry from it, nor --prefix, which would take its
+// global npmrc. A stand-in records each command line and where npm ci ran,
+// then runs the box's npm.
 //
 // Mutations, each red: any flag dropped; a bound read from anywhere but
-// config.json; a --cache of the helper's own added.
+// config.json; a --cache of the helper's own added; --prefix added.
 func TestNPMRunsWithEveryFlagAndBoundOnItsCommandLine(t *testing.T) {
 	t.Parallel()
 	boxhelpertest.EachNode(t, func(t *testing.T, env boxhelpertest.Env) {
@@ -502,7 +503,7 @@ func TestNPMRunsWithEveryFlagAndBoundOnItsCommandLine(t *testing.T) {
 			"install": map[string]any{"timeout_ms": 61_000, "fetch_timeout_ms": 21_000, "fetch_retries": 2,
 				"fetch_retry_wait_ms": 2_100},
 		}})
-		box.StandInNPM(t, "11.0.0", `exec "$REAL_NPM" "$@"`)
+		box.StandInNPM(t, "11.0.0", `printf '%s' "$DIR" >"$HOME/npm-ran-in"; exec "$REAL_NPM" "$@"`)
 		got := install(box.Probe(t), box, nil)
 		ready(t, box, got, true)
 		calls := box.NPMCalls(t)
@@ -510,12 +511,15 @@ func TestNPMRunsWithEveryFlagAndBoundOnItsCommandLine(t *testing.T) {
 			t.Fatalf("npm was run as %q, want --version --loglevel=error, then ci", calls)
 		}
 		ci := calls[1]
-		at := slices.Index(ci, "--prefix")
-		if len(ci) == 0 || ci[0] != "ci" || at < 0 || at+1 >= len(ci) ||
-			!regexp.MustCompile(`^`+regexp.QuoteMeta(got.Dir)+`\.[^/]+$`).MatchString(ci[at+1]) {
-			t.Fatalf("npm ci was run as %q, want ci with --prefix a directory of its own beside %s", ci, got.Dir)
+		ran, err := os.ReadFile(filepath.Join(box.Home, "npm-ran-in"))
+		// Both read physically: a temporary directory may lie behind a link.
+		dir, dirErr := filepath.EvalSymlinks(got.Dir)
+		if len(ci) == 0 || ci[0] != "ci" || err != nil || dirErr != nil ||
+			!regexp.MustCompile(`^`+regexp.QuoteMeta(dir)+`\.[^/]+$`).Match(ran) {
+			t.Fatalf("npm ci was run as %q in %q (%v, %v), want ci in a directory of its own beside %s", ci, ran,
+				err, dirErr, got.Dir)
 		}
-		rest := slices.Concat(ci[1:at], ci[at+2:])
+		rest := slices.Clone(ci[1:])
 		want := slices.Concat(npmFlags, []string{"--fetch-timeout=21000", "--fetch-retries=2",
 			"--fetch-retry-mintimeout=2100", "--fetch-retry-maxtimeout=2100"})
 		slices.Sort(rest)
@@ -631,7 +635,8 @@ func cacheDigest(t *testing.T, cache string) string {
 // cache is writable by any user (the package doc).
 //
 // Mutations, each red: drop --no-prefer-online; pass a --cache of the
-// helper's own; read npm's EACCES as install_failed.
+// helper's own; read npm's EACCES as install_failed; pass a --prefix (npm
+// then reads its global npmrc from there).
 func TestAWarmCacheInstallsWithNoRequest(t *testing.T) {
 	t.Parallel()
 	boxhelpertest.EachNode(t, func(t *testing.T, env boxhelpertest.Env) {
@@ -780,8 +785,8 @@ func TestAnInstallPastItsBoundIsStopped(t *testing.T) {
 }
 
 // NPM IS REAPED BEFORE ITS DIRECTORY GOES: an npm that outlives its TERM, as a
-// stand-in does that, on TERM, waits for the directory its --prefix names to
-// go and then writes into it again by that absolute path, leaves nothing in
+// stand-in does that, on TERM, waits for the directory it runs in to go and
+// then writes into it again by that absolute path, leaves nothing in
 // pw/ once the install has answered and the stand-in is gone, since the
 // helper kills npm's group and waits for it before it removes what npm was
 // installing into. A helper that removed it sooner would see it made again,
@@ -799,8 +804,8 @@ func TestNPMIsReapedBeforeItsDirectoryGoes(t *testing.T) {
 		// grace, so one before the KILL is seen inside it; and it stops by
 		// itself ten minutes on, past every wait a case makes, if a failed
 		// case leaves it.
-		box.StandInNPM(t, "11.0.0", `trap 'while [ -e "$PREFIX" ]; do sleep 0.05; done; `+
-			`mkdir -p "$PREFIX/node_modules/late"; exit 0' TERM`+"\ni=0\n"+
+		box.StandInNPM(t, "11.0.0", `trap 'while [ -e "$DIR" ]; do sleep 0.05; done; `+
+			`mkdir -p "$DIR/node_modules/late"; exit 0' TERM`+"\ni=0\n"+
 			`while [ "$i" -lt 600 ]; do sleep 1; i=$((i + 1)); done`)
 		got := install(box.Probe(t), box, nil)
 		stopAtEnd(t, got.PIDs...)
@@ -896,7 +901,7 @@ func TestAnInstallADeadHelperLeftRunningIsStopped(t *testing.T) {
 			// spawn, looking every 10 ms; kills its probe, as SIGKILL would a
 			// helper; and stops by itself ten minutes on, past every wait a
 			// case makes, if a failed case leaves it.
-			box.StandInNPM(t, "11.0.0", `while [ ! -e "$PREFIX/install.json" ]; do sleep 0.01; done`+
+			box.StandInNPM(t, "11.0.0", `while [ ! -e "$DIR/install.json" ]; do sleep 0.01; done`+
 				"\nkill -KILL $PPID\nexec sleep 600")
 			box.Probe(t).Killed(installCommand(box, nil, false))
 			left := inPW(t, box)
