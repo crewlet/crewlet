@@ -187,8 +187,8 @@ var chatReadsValueCases = []fleetCase{
 		if err != nil {
 			h.t.Fatalf("flush the widest record: %v", err)
 		}
-		if exists, err := h.f.SetChatReadAbsence(h.ctx, "founder", at); err != nil || !exists {
-			h.t.Fatalf("stamp the widest record absent = %v, %v", exists, err)
+		if exists, stampErr := h.f.SetChatReadAbsence(h.ctx, "founder", at); stampErr != nil || !exists {
+			h.t.Fatalf("stamp the widest record absent = %v, %v", exists, stampErr)
 		}
 		written, _ = written.WithAbsence(at)
 		read, err := h.f.ChatRead(h.ctx, "founder")
