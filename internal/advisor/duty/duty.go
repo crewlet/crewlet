@@ -28,6 +28,17 @@
 // younger than [LeaseTTL]. A renewal that fails for that long stops its deep
 // run, and a deep run ending past it records nothing, for the next holder.
 //
+// # Every step has a deadline
+//
+// The rule pass's reading ([ObserveFor]), the daily model pass
+// ([ModelPassFor]) and a report's summary ([SummaryFor]) each have one, and a
+// deep run's reads before its loop take [ObserveFor] while its loop takes its
+// own minutes. Every read and write of the log is the estate router's, bounded
+// a node at a time (internal/estate's ReadAttempt and writeAttempt). A step
+// past its deadline says so on its record: a rules run fails with the reason
+// on every class, a model pass's summary gives it, and a report is written
+// without its summary.
+//
 // # What it never does
 //
 // It calls no model in a detector and applies no fix: a fix is sent by a
@@ -64,6 +75,21 @@ const RulePassEvery = time.Hour
 // ModelPassHour is the company-clock hour the daily model pass starts at,
 // before a working day, after the night's schedules have run.
 const ModelPassHour = 6
+
+// The deadlines of what a tick runs (package doc, "Every step has a deadline").
+const (
+	// ObserveFor bounds one reading of the company: fifteen-odd sources read one
+	// after another, each within the estate's 10 s attempt, take 150 s at worst,
+	// and the atlas's repositories the rest.
+	ObserveFor = 5 * time.Minute
+	// ModelPassFor bounds the daily model pass: MaxRounds (16) rounds at 30 s,
+	// a round over a busy week's 70k tokens, is eight minutes, and its reads
+	// before them the rest.
+	ModelPassFor = 10 * time.Minute
+	// SummaryFor bounds a report's summary: three rounds over a report of a few
+	// thousand tokens, a minute each at most.
+	SummaryFor = 3 * time.Minute
+)
 
 // Trigger is what started a run.
 type Trigger string
@@ -398,7 +424,9 @@ func (d *Duty) report(ctx context.Context, now time.Time) error {
 	// THE MODEL'S SUMMARY, where the company assigns one, from the report
 	// alone: a report is written without it rather than not at all.
 	if d.Model != nil && d.Model.Assigned() {
-		summary, err := d.Model.Summarize(ctx, now, r)
+		summaryCtx, cancel := deadline(ctx, SummaryFor, "the report's summary")
+		summary, err := d.Model.Summarize(summaryCtx, now, r)
+		cancel()
 		if err != nil {
 			log.WarnContext(ctx, "advisor_report_summary_not_written", "week", week, "error", err.Error())
 		}
@@ -452,10 +480,15 @@ func (d *Duty) run(ctx context.Context, now time.Time, rules, model bool, trigge
 	reading := advisor.Reading{At: now}
 	var observed []advisor.Observation
 	if rules {
-		o, err := d.Read.Observe(ctx, now)
+		observeCtx, cancel := deadline(ctx, ObserveFor, "the rule pass's reading")
+		o, err := d.Read.Observe(observeCtx, now)
+		err = causeOf(observeCtx, err)
+		cancel()
 		if err != nil {
+			// EVERY CLASS UNJUDGED, saying why, so the failed run says it.
 			log.WarnContext(ctx, "advisor_rule_pass_unread", "error", err.Error())
 			run.Status = RunFailed
+			run.Classes = unjudged("The rules could not read the company: " + err.Error())
 		} else {
 			reading.Groups = append(reading.Groups, advisor.GroupSetup, advisor.GroupEvidence)
 			reading.Unread, reading.Held = o.Unread, o.Held
@@ -592,7 +625,9 @@ func (d *Duty) modelPass(ctx context.Context, now time.Time, reading *advisor.Re
 		log.WarnContext(ctx, "advisor_findings_unread", "error", err.Error())
 		return nil
 	}
-	pass, err := d.Model.Run(ctx, now, dismissed, live)
+	passCtx, cancel := deadline(ctx, ModelPassFor, "the model pass")
+	defer cancel()
+	pass, err := d.Model.Run(passCtx, now, dismissed, live)
 	run.Model = pass.Summary
 	if err != nil {
 		log.WarnContext(ctx, "advisor_model_pass_failed", "error", err.Error())
@@ -629,3 +664,27 @@ func scopesOf(r advisor.Reading) []ScopeRun {
 	return out
 }
 
+// unjudged is every rule class unread, saying why: a reading that failed
+// judged none of them.
+func unjudged(why string) []advisor.ClassOutcome {
+	out := advisor.Outcomes(nil, nil, nil)
+	for i := range out {
+		out[i].Outcome, out[i].Reason = advisor.OutcomeUnread, cutWords(why)
+	}
+	return out
+}
+
+// deadline is ctx ending within limit, its cause naming the step that ran out
+// of time, which the step's record says ([causeOf]).
+func deadline(ctx context.Context, limit time.Duration, step string) (context.Context, context.CancelFunc) {
+	return context.WithTimeoutCause(ctx, limit,
+		fmt.Errorf("%s did not finish within %d minutes", step, int(limit/time.Minute)))
+}
+
+// causeOf is err, or the deadline's cause where ctx's deadline ended the step.
+func causeOf(ctx context.Context, err error) error {
+	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return context.Cause(ctx)
+	}
+	return err
+}
