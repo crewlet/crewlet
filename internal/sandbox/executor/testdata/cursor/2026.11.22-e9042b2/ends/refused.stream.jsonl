@@ -1,0 +1,4 @@
+{"type":"system","subtype":"init","apiKeySource":"login","cwd":"/w","session_id":"11111111-2222-4333-8444-555555555555","model":"stub-model","permissionMode":"default"}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"PROMPT-ONE"}]},"session_id":"11111111-2222-4333-8444-555555555555"}
+
+{"type":"turn_ended","status":"error","error":"Unauthorized (HTTP 401): your API key/token was rejected — refresh it and try again. (invalid_api_key: stand-in: invalid api key)"}

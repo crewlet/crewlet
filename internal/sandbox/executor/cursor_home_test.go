@@ -1,0 +1,335 @@
+package executor_test
+
+import (
+	"encoding/json"
+	"io/fs"
+	"maps"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
+	"github.com/crewlet/crewlet/internal/shellword"
+)
+
+// cursorStandIns is a stand-in `cursor-agent` of the supported release that
+// runs body, then prints a run's stream as Cursor does, ending on its result,
+// under the session --new-session-id names; and the `node` Cursor's package
+// ships beside it, the machine's own, which the run's helper runs on.
+func cursorStandIns(t *testing.T, body string) map[string]string {
+	t.Helper()
+	return map[string]string{
+		"cursor-agent": "#!/bin/sh\n" +
+			"case \"$1\" in --version) echo " + executor.CursorAgentSupported + "; exit 0;; esac\n" +
+			"s=; prev=; for a; do case \"$prev\" in --new-session-id) s=$a;; esac; prev=$a; done\n" +
+			body +
+			`printf '{"type":"system","subtype":"init","session_id":"%s"}\n' "$s"` + "\n" +
+			`printf '{"type":"assistant","message":{"content":[{"type":"text","text":"done"}]},"session_id":"%s"}\n' "$s"` + "\n" +
+			`printf '{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"%s"}\n' "$s"` + "\n",
+		"node": "#!/bin/sh\nexec " + shellword.Quote(nodeForNotes(t)) + " \"$@\"\n",
+	}
+}
+
+// cursorRecording is a stand-in's body that records, into record, its argv,
+// its working directory's rules, the home's MCP servers and the history it
+// was handed, as they stood while the harness ran.
+func cursorRecording(record string) string {
+	r := shellword.Quote(record)
+	return `for a; do printf '%s\n' "$a"; done > ` + r + `/argv
+cp -R .cursor/rules ` + r + `/rules 2> /dev/null
+cp "$HOME/.cursor/mcp.json" ` + r + `/mcp.json 2> /dev/null
+h=; prev=; for a; do case "$prev" in --conversation-history-file) h=$a;; esac; prev=$a; done
+[ -z "$h" ] || cp "$h" ` + r + `/history.json
+ls "$HOME"/.cursor/chats/*/ > ` + r + `/chats 2> /dev/null
+`
+}
+
+// cursorBox is a real box with the Cursor runner and its stand-ins.
+func cursorBox(t *testing.T, body string) (*executor.Runner, sandbox.Sandbox) {
+	t.Helper()
+	return standInBox(t, executor.NewCursorAgent(), cursorStandIns(t, body))
+}
+
+// plant writes each file of files, by its path under the box's home.
+func plant(t *testing.T, box sandbox.Sandbox, files map[string]string) {
+	t.Helper()
+	for rel, body := range files {
+		path := filepath.Join(box.Home(), rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// recordedFile is a file the stand-in recorded, "" for none.
+func recordedFile(t *testing.T, record, name string) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(record, name))
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+// cursorToken is the run's bridge token, as its MCP server's header carries
+// it.
+const cursorToken = "STANDIN-BRIDGE-TOKEN-0123456789"
+
+// WHAT A CURSOR RUN LOADS, AND WHAT A CHECKOUT BELOW ITS DIRECTORY BRINGS IT, in
+// a real box with a checkout at ./repo and a home MCP server: while it runs,
+// its standing instructions are a rule; the checkout's instructions a rule of
+// their own (not the working directory's, which Cursor reads), its rules
+// copied, `--add-dir` naming it for its skills, its MCP servers and hooks
+// nowhere; the run's server beside the home's own. Once over, the home's file
+// holds its own server alone, no home file the bridge's token, and the rules
+// are gone.
+//
+// Mutation: hand the working directory's AGENTS.md, drop --add-dir, copy the
+// checkout's mcp.json, replace the home's server rather than add beside it,
+// or leave the run's server in the file: this goes red.
+func TestWhatACursorRunLoadsAndWhatACheckoutBelowItBringsIt(t *testing.T) {
+	t.Parallel()
+	record := t.TempDir()
+	runner, box := cursorBox(t, cursorRecording(record))
+	plant(t, box, map[string]string{
+		"workspace/AGENTS.md":                  "WORKDIR-INSTRUCTIONS\n",
+		"workspace/repo/.git/HEAD":             "ref: refs/heads/main\n",
+		"workspace/repo/AGENTS.md":             "REPO-INSTRUCTIONS\n",
+		"workspace/repo/.cursor/rules/own.mdc": "---\nalwaysApply: true\n---\nREPO-RULE\n",
+		"workspace/repo/.cursor/mcp.json":      `{"mcpServers":{"repo-mcp":{"command":"repo-mcp-server"}}}`,
+		"workspace/repo/.cursor/hooks.json":    `{"version":1,"hooks":{"sessionStart":[{"command":"repo-hook"}]}}`,
+		".cursor/mcp.json":                     `{"mcpServers":{"home-mcp":{"command":"home-mcp-server"}}}`,
+	})
+	_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go", System: "STANDING-TEXT",
+		MCPServers: map[string]sandbox.MCPServer{"crewlet": {Name: "crewlet", Transport: sandbox.TransportHTTP,
+			URL: "http://127.0.0.1:9/mcp", Headers: map[string]string{"Authorization": "Bearer " + cursorToken}}}})
+	if !res.Success {
+		t.Fatalf("the run failed: %s\n%s", res.Error, boxFile(t, box, paths(box).Err()))
+	}
+	work, err := filepath.EvalSymlinks(filepath.Join(box.Home(), "workspace"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Instructions.
+	if got := recordedFile(t, record, "rules/crewlet-standing.mdc"); !strings.Contains(got, "alwaysApply: true") ||
+		!strings.Contains(got, "---\nSTANDING-TEXT") {
+		t.Errorf("standing instructions: the run's rule is %q, want them, always applied", got)
+	}
+	checkout := recordedFile(t, record, "rules/crewlet-checkout-repo.mdc")
+	if !strings.Contains(checkout, "REPO-INSTRUCTIONS") || strings.Contains(checkout, "WORKDIR-INSTRUCTIONS") ||
+		!strings.Contains(checkout, work+"/repo") {
+		t.Errorf("the checkout's instructions: its rule is %q, want its own AGENTS.md under its root", checkout)
+	}
+	if got := recordedFile(t, record, "rules/crewlet-checkout-repo--own.mdc"); !strings.Contains(got, "REPO-RULE") {
+		t.Errorf("the checkout's own rule was not copied beside the run's: %q", got)
+	}
+	// Skills, through Cursor's own --add-dir.
+	argv := strings.Split(recordedFile(t, record, "argv"), "\n")
+	if i := slices.Index(argv, "--add-dir"); i < 0 || argv[i+1] != work+"/repo" {
+		t.Errorf("skills: the run's argv %q names no --add-dir of the checkout", argv)
+	}
+	// MCP servers and hooks.
+	var mcp struct {
+		Servers map[string]json.RawMessage `json:"mcpServers"`
+	}
+	if err = json.Unmarshal([]byte(recordedFile(t, record, "mcp.json")), &mcp); err != nil {
+		t.Fatalf("the home's MCP servers while the run ran do not read: %v", err)
+	}
+	var ours []string
+	for name, server := range mcp.Servers {
+		if strings.HasPrefix(name, "crewlet-") && strings.Contains(string(server), cursorToken) {
+			ours = append(ours, name)
+		}
+	}
+	if _, home := mcp.Servers["home-mcp"]; !home || len(ours) != 1 || len(mcp.Servers) != 2 {
+		t.Errorf("while the run ran, the home's MCP servers were %v, want the home's own beside one of the run's",
+			slices.Sorted(maps.Keys(mcp.Servers)))
+	}
+	if strings.Contains(recordedFile(t, record, "mcp.json"), "repo-mcp") || strings.Contains(strings.Join(argv, " "), "repo-hook") {
+		t.Error("the checkout's MCP servers or hooks reached the run")
+	}
+
+	// After the run.
+	if got := boxFile(t, box, paths(box).CursorMCP()); !strings.Contains(got, "home-mcp") || strings.Contains(got, "crewlet-") {
+		t.Errorf("after the run, the home's MCP servers are %s, want the home's own alone", got)
+	}
+	if err = filepath.WalkDir(box.Home(), func(path string, d fs.DirEntry, err error) error {
+		if err != nil || !d.Type().IsRegular() {
+			return err
+		}
+		raw, readErr := os.ReadFile(path)
+		if readErr == nil && strings.Contains(string(raw), cursorToken) {
+			t.Errorf("after the run, %s holds the bridge's token", path)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	left, _ := filepath.Glob(filepath.Join(work, ".cursor", "rules", "crewlet-*"))
+	if len(left) != 0 {
+		t.Errorf("after the run, its rules are still in its directory: %v", left)
+	}
+}
+
+// A CONTINUED CURSOR SESSION IS HANDED BACK AS ITS CONVERSATION: a run whose
+// box holds the session's chat (a real store of the measured release) starts
+// its harness with that chat's conversation as Cursor's own history, under
+// the session's own id, the old chat gone so Cursor files the conversation
+// afresh with the run's current instructions; a run asked to continue a
+// session its box neither holds nor was carried starts a new session under
+// another id, saying why.
+//
+// Mutation: resume the chat with --resume, keep the old chat, hand the
+// history under a new id, or continue a session that is not there: this goes
+// red.
+func TestAContinuedCursorSessionIsHandedBackAsItsConversation(t *testing.T) {
+	t.Parallel()
+	fixture, err := os.ReadFile(executor.CursorAgentFixture("stores/plain.store.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := t.TempDir()
+	store := filepath.Join(t.TempDir(), "store.db")
+	if err = os.WriteFile(store, fixture, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The first run files the fixture as its chat, as Cursor would.
+	file := `case " $* " in *" --conversation-history-file "*) ;; *) mkdir -p "$HOME/.cursor/chats/digest/$s" && cp ` +
+		shellword.Quote(store) + ` "$HOME/.cursor/chats/digest/$s/store.db";; esac` + "\n"
+	runner, box := cursorBox(t, file+cursorRecording(record))
+	first, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go"})
+	if !res.Success {
+		t.Fatalf("the first run failed: %s", res.Error)
+	}
+	_, res = runToEnd(t, runner, box, sandbox.RunRequest{Brief: "carry on", Resume: first.SessionID})
+	if !res.Success || !res.Continued {
+		t.Fatalf("the second run did not continue the session: %+v\n%s", res, boxFile(t, box, paths(box).Err()))
+	}
+	argv := strings.Split(recordedFile(t, record, "argv"), "\n")
+	if slices.Contains(argv, "--resume") || !slices.Contains(argv, "--conversation-history-file") {
+		t.Errorf("the second run's argv %q hands no history, or resumes the chat", argv)
+	}
+	if i := slices.Index(argv, "--new-session-id"); i < 0 || argv[i+1] != first.SessionID {
+		t.Errorf("the second run's argv %q does not start the session's own id %s", argv, first.SessionID)
+	}
+	var history struct {
+		Messages []map[string]json.RawMessage `json:"messages"`
+	}
+	if err = json.Unmarshal([]byte(recordedFile(t, record, "history.json")), &history); err != nil ||
+		len(history.Messages) != 6 {
+		t.Errorf("the history handed holds %d messages (%v), want the chat's six", len(history.Messages), err)
+	}
+	if got := recordedFile(t, record, "chats"); strings.Contains(got, first.SessionID) {
+		t.Errorf("the old chat was still filed when the harness started: %s", got)
+	}
+
+	other := uuid.NewString()
+	_, res = runToEnd(t, runner, box, sandbox.RunRequest{Brief: "carry on", Resume: other})
+	argv = strings.Split(recordedFile(t, record, "argv"), "\n")
+	i := slices.Index(argv, "--new-session-id")
+	if res.Continued || i < 0 || argv[i+1] == other || slices.Contains(argv, "--conversation-history-file") ||
+		!strings.Contains(boxFile(t, box, paths(box).Err()), "it is not in this box") {
+		t.Errorf("a session the box does not hold: continued %v, argv %q; want a new session, saying why",
+			res.Continued, argv)
+	}
+}
+
+// A CURSOR RUN IS STOPPED AT ITS TURN CAP: with a cap of one, a run whose first
+// model response calls a tool is interrupted there (Cursor has no cap of its
+// own) and collects as stopped at its cap, never a success; with a cap of two
+// the same run finishes.
+//
+// Mutation: count a call's start and its completion as two responses, stop
+// at the response after the cap, or leave out the cap line: this goes red.
+func TestACursorRunIsStoppedAtItsTurnCap(t *testing.T) {
+	t.Parallel()
+	// ON NODE, as Cursor runs: a background job starts with SIGINT ignored, which
+	// a shell cannot trap again, and node, as Cursor does, handles it anyway.
+	body := `exec "${0%/*}/node" -e '
+const s = process.argv[1]
+process.on("SIGINT", () => process.exit(130))
+console.log(JSON.stringify({type: "tool_call", subtype: "started", call_id: "c1", model_call_id: "m1",
+  tool_call: {shellToolCall: {args: {command: "true"}}}, session_id: s}))
+setTimeout(() => console.log(JSON.stringify({type: "result", subtype: "success", is_error: false,
+  result: "done", session_id: s})), 5000)
+' "$s"
+`
+	for turns, capped := range map[int]bool{1: true, 2: false} {
+		runner, box := cursorBox(t, body)
+		_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go", Limits: sandbox.Limits{MaxTurns: turns}})
+		if res.RoundCapped != capped || res.Success == capped {
+			t.Errorf("a cap of %d: capped %v, success %v (%q); want capped %v", turns, res.RoundCapped,
+				res.Success, res.Error, capped)
+		}
+	}
+}
+
+// A CURSOR RUN'S FAILURE CARRIES NO TOKEN: Cursor's own words for a refused
+// turn, which can quote what the service answered, are collected redacted, a
+// token by its shape.
+//
+// Mutation: collect the decoder's error unredacted: this goes red.
+func TestACursorRunsFailureCarriesNoToken(t *testing.T) {
+	t.Parallel()
+	const minted = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhdXRoMHxTVEFORElOIn0.c3RhbmRpbi1zaWduYXR1cmUtMDEyMzQ1Njc4OQ"
+	runner := executor.NewCursorAgent()
+	b := box(t, runner)
+	p := paths(b)
+	b.Put(p.Result(), `{"type":"system","subtype":"init","session_id":"s"}`+"\n"+
+		`{"type":"turn_ended","status":"error","error":"refused the token `+minted+`"}`+"\n")
+	b.Put(p.ExitCode(), "1")
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Success || !strings.Contains(res.Error, "refused the token") || strings.Contains(res.Error, minted) {
+		t.Errorf("the failure collected as %q, want Cursor's words without the token", res.Error)
+	}
+}
+
+// A CONTINUED CURSOR RUN ENDS ONLY ON ITS OWN END: its session's transcript
+// ends in the earlier run's turn_ended, and a run that then records none of its
+// own, here exiting 0 beside a report having printed only its start, never
+// ended, so it is no success.
+//
+// Mutation: add the transcript's last turn_ended whoever wrote it: this goes
+// red.
+func TestAContinuedCursorRunEndsOnlyOnItsOwnEnd(t *testing.T) {
+	t.Parallel()
+	fixture, err := os.ReadFile(executor.CursorAgentFixture("stores/plain.store.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := filepath.Join(t.TempDir(), "store.db")
+	if err = os.WriteFile(store, fixture, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The first run files its chat and its transcript's end, as Cursor does;
+	// the second prints its start, writes a report and exits.
+	body := `case " $* " in *" --conversation-history-file "*)
+  printf '{"type":"system","subtype":"init","session_id":"%s"}\n' "$s"; echo 'Outcome: succeeded' > "$HOME/.crewlet/findings.md"; exit 0;;
+esac
+mkdir -p "$HOME/.cursor/chats/digest/$s" "$HOME/.cursor/projects/w/agent-transcripts/$s" && cp ` + shellword.Quote(store) +
+		` "$HOME/.cursor/chats/digest/$s/store.db"
+printf '{"type":"turn_ended","status":"success"}\n' > "$HOME/.cursor/projects/w/agent-transcripts/$s/$s.jsonl"
+`
+	runner, box := cursorBox(t, body)
+	first, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go"})
+	if !res.Success {
+		t.Fatalf("the first run failed: %s", res.Error)
+	}
+	_, res = runToEnd(t, runner, box, sandbox.RunRequest{Brief: "carry on", Resume: first.SessionID})
+	if res.Success {
+		t.Fatalf("a continued run that recorded no end of its own collected as a success: %+v", res)
+	}
+}

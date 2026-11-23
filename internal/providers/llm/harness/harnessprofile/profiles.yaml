@@ -2302,6 +2302,12 @@ opencode:
     - sentinel: "provider.auth"
 
 cursor-agent:
+  # The in-box runner (internal/sandbox/executor's cursor.go), on
+  # 2026.11.22-e9042b2, the one release it supports. No e2b_template: E2B
+  # prebuilds no image holding cursor-agent (its cursor-agents templates run
+  # Cursor's own self-hosted workers), so an e2b box runs the company's own.
+  executor:
+    runner: true
   binary: cursor-agent
   written_for: "Cursor Agent 2026.09.x and 2026.10.x, measured on 2026.09.10 and 2026.10.22 (`cursor-agent --version`), which versions by DATE"
   version_args: ["--version"]
@@ -2355,7 +2361,7 @@ cursor-agent:
   # a server planted there was started; with this file in its place, none was
   # listed. Rewritten every generation, for text functions too.
   local_tools: denied
-  web_tools_note: "no web denial: the seeded permissions name WebFetch, but whether any setting turns off the agent's web search has not been measured, so this profile cannot serve the assistant"
+  web_tools_note: "no web denial: Cursor's service offers its web search and fetch, and its client approves both under --force without reading permissions.deny (read from the 2026.11.22-e9042b2 bundle; its local-loop build offers neither to a stand-in model), so neither a call here nor an executor run can turn them off"
   seed_files:
     - path: .cursor/cli.json
       in: work
