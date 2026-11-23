@@ -28,17 +28,17 @@ func hostOnlyBridge(t *testing.T) *mcpbridge.Bridge {
 // and is classed as configuration: the operator sets it, and no wait does.
 //
 // Mutation: open every session off the host and the direct row is refused;
-// open every session on it and the e2b row dials a loopback it cannot reach;
-// drop the cell refusal's class and the e2b row goes red.
+// open every session on it and the container row dials a loopback it cannot
+// reach; drop the cell refusal's class and the container row goes red.
 func TestALaunchDialsTheBridgeWhereItsCellReachesIt(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
 		runIn  config.Placement
 		refuse bool
 	}{
-		"a direct box":  {runIn: config.PlacementDirect},
-		"an e2b box":    {runIn: config.PlacementE2B, refuse: true},
-		"the default's": {},
+		"a direct box":    {runIn: config.PlacementDirect},
+		"a container box": {runIn: config.PlacementContainer, refuse: true},
+		"the default's":   {},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -120,23 +120,22 @@ roles:
 }
 
 // bridgeReachCompany is a company with one seat whose executor can land in
-// the direct cell (its head) and the e2b cell (its fallback), and one whose
-// executor lands in direct alone.
+// the direct cell (its head) and the container cell (its fallback), and one
+// whose executor lands in direct alone.
 const bridgeReachCompany = `name: Acme
 providers:
   sandbox:
-    local: {}
-    e2b: {api_key: k}
+    local: {image: example.com/coding:1}
     default_run_in: direct
   llm:
     main:
       model: claude-golden
-    remote:
+    boxed:
       model: sonnet
-      run_in: e2b
+      run_in: container
 roles:
   - name: SWE
-    llm: [main, remote]
+    llm: [main, boxed]
   - name: PM
     llm: main
 `
@@ -170,8 +169,9 @@ func TestAnExecutorIsRefusedOnANodeWithNoBridge(t *testing.T) {
 // alone where it has no bridge, a direct cell on the node's own listener, any
 // other cell on the variable alone.
 //
-// Mutation: weigh only the catalogue's default and the e2b row is never said;
-// give every cell the host address and the e2b row reads as reachable.
+// Mutation: weigh only the catalogue's default and the container row is never
+// said; give every cell the host address and the container row reads as
+// reachable.
 func TestEveryCellAnExecutorCannotReachIsSaidOnceAtApply(t *testing.T) {
 	t.Parallel()
 	cfg, err := config.ParseCompany([]byte(bridgeReachCompany))
@@ -192,16 +192,16 @@ func TestEveryCellAnExecutorCannotReachIsSaidOnceAtApply(t *testing.T) {
 				Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 			}),
 			want: map[config.Placement]string{config.PlacementDirect: "api.port",
-				config.PlacementE2B: "api.port"},
+				config.PlacementContainer: "api.port"},
 		},
 		"a node with no bridge": {
 			bridge: nil,
 			want: map[config.Placement]string{config.PlacementDirect: mcpbridge.BaseURLVar,
-				config.PlacementE2B: mcpbridge.BaseURLVar},
+				config.PlacementContainer: mcpbridge.BaseURLVar},
 		},
 		"its own listener alone": {
 			bridge: hostOnlyBridge(t),
-			want:   map[config.Placement]string{config.PlacementE2B: mcpbridge.BaseURLVar},
+			want:   map[config.Placement]string{config.PlacementContainer: mcpbridge.BaseURLVar},
 		},
 		"its own listener and the variable": {
 			bridge: both, want: map[config.Placement]string{},

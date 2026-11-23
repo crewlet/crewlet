@@ -22,8 +22,9 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
-// tailRig is two nodes on one broker and one fleet record: `asker` serves the
-// dashboard, `owner` drives the run's box.
+// tailRig is nodes on one broker and one fleet record: n1 serves the
+// dashboard, and the node that launched the run's box (n2, unless a case says
+// otherwise) hosts it, while the run's seat is held elsewhere.
 type tailRig struct {
 	pending  *CoordStore
 	provider *FakeProvider
@@ -34,17 +35,18 @@ type tailRig struct {
 }
 
 const (
-	askerOwner = "n1:asker"
-	boxOwner   = "n2:owner"
+	askerNode  = "n1"
+	boxHost    = "n2"
+	seatHolder = "n4:holder"
 )
 
 func newTailRig(t *testing.T) *tailRig {
 	t.Helper()
-	return newTailRigOn(t, "")
+	return newTailRigOn(t, boxHost)
 }
 
 // newTailRigOn is a rig whose run's box was launched by launchNode — on its
-// host, the direct cell's — while its seat is boxOwner's.
+// host, the direct cell's — while its seat is seatHolder's.
 func newTailRigOn(t *testing.T, launchNode string) *tailRig {
 	t.Helper()
 	rig := &tailRig{
@@ -77,7 +79,7 @@ func newTailRigOn(t *testing.T, launchNode string) *tailRig {
 	if ok, err := rig.pending.MarkSuspended(ctx, "t1", Suspension{State: json.RawMessage(`{"x":1}`)}); err != nil || !ok {
 		t.Fatalf("mark suspended: %v %v", ok, err)
 	}
-	if ok, err := rig.pending.ClaimOwnership(ctx, "t1", boxOwner, 1); err != nil || !ok {
+	if ok, err := rig.pending.ClaimOwnership(ctx, "t1", seatHolder, 1); err != nil || !ok {
 		t.Fatalf("claim ownership: %v %v", ok, err)
 	}
 	got, _, err := rig.pending.Get(ctx, "t1")
@@ -106,17 +108,17 @@ func (rig *tailRig) feeds(t *testing.T) *LiveFeeds {
 	return feeds
 }
 
-// serve makes an incarnation an answerer, with readings of its own.
-func (rig *tailRig) serve(t *testing.T, owner string) *LiveFeeds {
+// serve makes a node an answerer, with readings of its own.
+func (rig *tailRig) serve(t *testing.T, node string) *LiveFeeds {
 	t.Helper()
 	feeds := rig.feeds(t)
-	rig.serveWith(t, owner, rig.client(t), feeds)
+	rig.serveWith(t, node, rig.client(t), feeds)
 	return feeds
 }
 
-func (rig *tailRig) serveWith(t *testing.T, owner string, q TailServer, feeds *LiveFeeds) {
+func (rig *tailRig) serveWith(t *testing.T, node string, q TailServer, feeds *LiveFeeds) {
 	t.Helper()
-	stop, err := ServeTail(t.Context(), q, owner, nodeOf(owner), rig.pending, feeds, isCondition, queue.NewAnswerBudget(nil))
+	stop, err := ServeTail(t.Context(), q, node, rig.pending, feeds, isCondition, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("serve: %v", err)
 	}
@@ -126,14 +128,14 @@ func (rig *tailRig) serveWith(t *testing.T, owner string, q TailServer, feeds *L
 // reader is the asking node's reader. ITS BUDGET IS ROOM TO ANSWER, not the
 // case's clock: a scatter returns on its one reply, so a generous budget costs
 // a passing case nothing, while a tight one reads a loaded race-enabled run's
-// late reply as a silent owner. The one case that waits the budget out sets
-// its own ([TestASilentOwnerIsNamedNotEmpty]).
+// late reply as a silent host. The one case that waits the budget out sets
+// its own ([TestASilentHostIsNamedNotEmpty]).
 func (rig *tailRig) reader(t *testing.T) *TailReader {
 	return &TailReader{
-		Owner: askerOwner, Pending: rig.pending, Queue: rig.client(t),
+		Node: askerNode, Pending: rig.pending, Queue: rig.client(t),
 		Budget: 30 * time.Second, Condition: isCondition,
 		// The ASKER has no readings of its own: an answer that came from
-		// here instead of from the owner would fail loudly.
+		// here instead of from the box's host would fail loudly.
 	}
 }
 
@@ -172,46 +174,42 @@ func (h *held) take(t *testing.T, a TailAnswer) *Output {
 	return out
 }
 
-// ONLY THE OWNER ANSWERS, and it answers with the box's own output.
+// ONLY THE BOX'S HOST ANSWERS, and it answers with the box's own output.
 //
 // Every node serves the subject, so a second answerer — the node that asked,
-// or any other — replying with ITS read of a box it does not drive would put a
+// or any other — replying with ITS read of a box it does not host would put a
 // stranger's answer (or an empty one) first in a scatter that takes one reply.
-func TestOnlyTheOwnerAnswersATailRequest(t *testing.T) {
+func TestOnlyTheBoxsHostAnswersATailRequest(t *testing.T) {
 	t.Parallel()
 	rig := newTailRig(t)
 	rig.runner.Say(SourceTranscript, "running go test ./...\n")
 	// A bystander that serves too and CAN read the box (the same backend), so
 	// only the addressing keeps it from answering. Its handler is captured so
 	// the refusal is asserted directly below: through the broker it is a race
-	// the asker's owner filter hides.
+	// the asker's node filter hides.
 	bystander := &capturingServer{TailServer: rig.client(t)}
-	rig.serveWith(t, "n3:bystander", bystander, rig.feeds(t))
-	rig.serve(t, boxOwner)
+	rig.serveWith(t, "n3", bystander, rig.feeds(t))
+	rig.serve(t, boxHost)
 
 	got := rig.tail(t, rig.reader(t), TailCursor{})
 	if got.Outcome != TailRunning || got.Output == nil {
-		t.Fatalf("outcome = %q with output %v; want the owner's tail", got.Outcome, got.Output)
+		t.Fatalf("outcome = %q with output %v; want the host's tail", got.Outcome, got.Output)
 	}
-	if got.Output.Text != "running go test ./...\n" || got.Node != "n2" {
-		t.Errorf("answer = %+v from %q; want the owner's box, named n2", got.Output, got.Node)
+	if got.Output.Text != "running go test ./...\n" || got.Node != boxHost {
+		t.Errorf("answer = %+v from %q; want the host's box, named %s", got.Output, got.Node, boxHost)
 	}
 	if rig.runner.Reads() != 1 {
-		t.Errorf("the box was read %d times; want exactly once, by its owner", rig.runner.Reads())
+		t.Errorf("the box was read %d times; want exactly once, by its host", rig.runner.Reads())
 	}
 
-	// And the bystander, handed the very request the owner answered, answers
+	// And the bystander, handed the very request the host answered, answers
 	// nothing and reads nothing.
-	req, err := json.Marshal(tailRequest{Version: tailWireVersion, TurnID: "t1", LaunchID: rig.launch, Owner: boxOwner})
-	if err != nil {
-		t.Fatal(err)
-	}
-	reply, err := bystander.handler(t.Context(), req)
+	reply, err := bystander.handler(t.Context(), tailRequestTo(t, rig, boxHost))
 	if !errors.Is(err, errTailNotAddressed) || reply != nil {
-		t.Errorf("a bystander asked for %s's run answered %q, %v; want no answer", boxOwner, reply, err)
+		t.Errorf("a bystander asked for %s's box answered %q, %v; want no answer", boxHost, reply, err)
 	}
 	if rig.runner.Reads() != 1 {
-		t.Errorf("the bystander read a box it does not own (%d reads)", rig.runner.Reads())
+		t.Errorf("the bystander read a box it does not host (%d reads)", rig.runner.Reads())
 	}
 }
 
@@ -229,12 +227,12 @@ func (c *capturingServer) Serve(ctx context.Context, subject string, answers int
 	return c.TailServer.Serve(ctx, subject, answers, h)
 }
 
-// A SILENT OWNER IS NAMED, NOT EMPTY.
+// A SILENT HOST IS NAMED, NOT EMPTY.
 //
 // Nobody serving the subject is a node gone, wedged or partitioned. Read as an
 // empty tail, a viewer would see a run that "said nothing", and a polling
 // screen could never tell the difference.
-func TestASilentOwnerIsNamedNotEmpty(t *testing.T) {
+func TestASilentHostIsNamedNotEmpty(t *testing.T) {
 	t.Parallel()
 	rig := newTailRig(t)
 	rig.runner.Say(SourceTranscript, "never read\n")
@@ -243,8 +241,8 @@ func TestASilentOwnerIsNamedNotEmpty(t *testing.T) {
 	reader := rig.reader(t)
 	reader.Budget = 200 * time.Millisecond
 	got := rig.tail(t, reader, TailCursor{})
-	if got.Outcome != TailOwnerSilent || got.Node != "n2" || got.Output != nil {
-		t.Errorf("answer = %+v; want owner_silent naming n2 and no output", got)
+	if got.Outcome != TailHostSilent || got.Node != boxHost || got.Output != nil {
+		t.Errorf("answer = %+v; want host_silent naming %s and no output", got, boxHost)
 	}
 }
 
@@ -253,7 +251,7 @@ func TestASilentOwnerIsNamedNotEmpty(t *testing.T) {
 func TestATailOfAJobThatIsNotRunningSaysWhy(t *testing.T) {
 	t.Parallel()
 	rig := newTailRig(t)
-	rig.serve(t, boxOwner)
+	rig.serve(t, boxHost)
 	reader := rig.reader(t)
 	got, err := reader.Tail(t.Context(), TailQuery{TurnID: "t1", LaunchID: "an-earlier-job"})
 	if err != nil || got.Outcome != TailNotRunning || got.Status != StatusReplaced {
@@ -287,7 +285,7 @@ func TestALaunchingJobIsLaunchingNotStopped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rig.serve(t, boxOwner)
+	rig.serve(t, boxHost)
 	got, err := rig.reader(t).Tail(t.Context(),
 		TailQuery{TurnID: "t2", LaunchID: launching.LaunchID})
 	if err != nil || got.Outcome != TailLaunching || got.Status != StatusLaunching {
@@ -295,7 +293,7 @@ func TestALaunchingJobIsLaunchingNotStopped(t *testing.T) {
 	}
 }
 
-// isCondition is the rig's rule for a condition of the owning node, standing in
+// isCondition is the rig's rule for a condition of the box's host, standing in
 // for the engine's (builtin.Condition): a coordination store that did not
 // answer, and a wait that ran out.
 func isCondition(err error) bool {
@@ -303,21 +301,21 @@ func isCondition(err error) bool {
 }
 
 // errBoxHost is a provider's own words beneath its mark, naming a host: what
-// the owner's log holds and no reply may.
-var errBoxHost = errors.New("e2b: GET https://49983-box.e2b.example.com/files: 502 Bad Gateway")
+// the host's log holds and no reply may.
+var errBoxHost = errors.New("docker: cannot connect to the daemon at tcp://runtime.example.com:2376")
 
-// THE OWNER'S OWN FAILURE IS AN ERROR CLASSED BY WHAT CLEARS IT — never a tail
+// THE HOST'S OWN FAILURE IS AN ERROR CLASSED BY WHAT CLEARS IT — never a tail
 // that is merely empty, never "silent", since it answered, and never its text,
-// which stays in the owner's log. A box its provider could not read is a class
-// a wait clears, a setup somebody fixes is one no wait does, a condition of
-// the owner's own is [ErrTailUnanswered], and a fault is classed as nothing;
-// the asker's error names the owner and the run, which is where the detail is.
-// Sent the text, the asker could only answer it as a fault of its own: a
-// provider outage read as a node that broke.
+// which stays in the host's log. A box its runtime could not read is a class a
+// wait clears, a setup somebody fixes is one no wait does, a condition of the
+// host's own is [ErrTailUnanswered], and a fault is classed as nothing; the
+// asker's error names the host and the run, which is where the detail is. Sent
+// the text, the asker could only answer it as a fault of its own: a runtime
+// outage read as a node that broke.
 //
 // Mutation: put the error's text back on the reply, class every failure as a
-// fault, or read a condition of the owner's as a fault, and a row goes red.
-func TestAnOwnerThatCannotReadTheBoxSaysWhatClearsIt(t *testing.T) {
+// fault, or read a condition of the host's as a fault, and a row goes red.
+func TestAHostThatCannotReadTheBoxSaysWhatClearsIt(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
 		read       error
@@ -326,97 +324,84 @@ func TestAnOwnerThatCannotReadTheBoxSaysWhatClearsIt(t *testing.T) {
 	}{
 		"a provider that did not answer": {read: Because(WhyProviderUnavailable, errBoxHost),
 			why: WhyProviderUnavailable},
-		"a key the provider refused": {read: Because(WhyProviderRefused, errBoxHost),
-			why: WhyProviderRefused},
-		"a store the owner could not reach": {read: fmt.Errorf("read: %w: %w",
+		"a box its configuration cannot start": {read: Because(WhyConfiguration, errBoxHost),
+			why: WhyConfiguration},
+		"a store the host could not reach": {read: fmt.Errorf("read: %w: %w",
 			coord.ErrUnavailable, errBoxHost), unanswered: true},
-		"a fault of the owner's own": {read: fmt.Errorf("read: %w", errBoxHost)},
+		"a fault of the host's own": {read: fmt.Errorf("read: %w", errBoxHost)},
 	} {
 		rig := newTailRig(t)
 		rig.runner.LiveErr = c.read
-		owner := &capturingServer{TailServer: rig.client(t)}
-		rig.serveWith(t, boxOwner, owner, rig.feeds(t))
+		host := &capturingServer{TailServer: rig.client(t)}
+		rig.serveWith(t, boxHost, host, rig.feeds(t))
 
-		raw, err := owner.handler(t.Context(), tailRequestFor(t, rig, boxOwner))
+		raw, err := host.handler(t.Context(), tailRequestTo(t, rig, boxHost))
 		if err != nil {
-			t.Fatalf("%s: the owner's handler: %v", name, err)
+			t.Fatalf("%s: the host's handler: %v", name, err)
 		}
-		if strings.Contains(string(raw), "e2b.example.com") || strings.Contains(string(raw), "502") {
-			t.Errorf("%s: the owner's reply carries the failure's text: %s", name, raw)
+		if strings.Contains(string(raw), "runtime.example.com") || strings.Contains(string(raw), "2376") {
+			t.Errorf("%s: the host's reply carries the failure's text: %s", name, raw)
 		}
 
 		_, err = rig.reader(t).Tail(t.Context(), TailQuery{TurnID: "t1", LaunchID: rig.launch})
 		why, classed := WhyOf(err)
 		switch {
 		case err == nil:
-			t.Errorf("%s: Tail answered; want the owner's failure", name)
+			t.Errorf("%s: Tail answered; want the host's failure", name)
 		case !strings.Contains(err.Error(), "n2 reads run t1's box") ||
-			strings.Contains(err.Error(), "e2b.example.com"):
-			t.Errorf("%s: Tail err = %v; want the owner and the run named, and no box's words", name, err)
+			strings.Contains(err.Error(), "runtime.example.com"):
+			t.Errorf("%s: Tail err = %v; want the host and the run named, and no box's words", name, err)
 		case why != c.why || classed != (c.why != ""):
 			t.Errorf("%s: classed %q (%v); want %q", name, why, classed, c.why)
 		case errors.Is(err, ErrTailUnanswered) != c.unanswered:
-			t.Errorf("%s: a condition of the owner's = %v; want %v", name,
+			t.Errorf("%s: a condition of the host's = %v; want %v", name,
 				errors.Is(err, ErrTailUnanswered), c.unanswered)
 		}
 	}
 }
 
-// AN OWNER WITH NO BACKEND, AND A NODE THE RUN LEFT — its seat, or its box on an
-// engine host — each say so by class: a setup somebody fixes, and a wait. And a
-// failure a newer build named that this one does not know is classed as
-// nothing, which is what a fault is.
+// A HOST WITH NO BACKEND, AND A NODE THE RUN'S BOX IS NOT ON, each say so by
+// class: a setup somebody fixes, and a wait. And a failure a newer build named
+// that this one does not know is classed as nothing, which is what a fault is.
 //
-// Mutation: answer either moved run with a read of a box this node no longer
-// drives, or class a failure this build does not know as a wait, and a check
-// goes red.
-func TestAnOwnerThatCannotAnswerSaysWhyByClass(t *testing.T) {
+// Mutation: answer a request for a box on another node's host with a read of
+// it, or class a failure this build does not know as a wait, and a check goes
+// red.
+func TestAHostThatCannotAnswerSaysWhyByClass(t *testing.T) {
 	t.Parallel()
 	rig := newTailRig(t)
 	rig.runner.Say(SourceTranscript, "never read\n")
 	bare := &capturingServer{TailServer: rig.client(t)}
-	rig.serveWith(t, boxOwner, bare, nil)
-	if got := replyTo(t, bare, tailRequestFor(t, rig, boxOwner)); got.Failed != TailFailure(WhyConfiguration) {
-		t.Errorf("an owner with no backend failed %q; want configuration", got.Failed)
+	rig.serveWith(t, boxHost, bare, nil)
+	if got := replyTo(t, bare, tailRequestTo(t, rig, boxHost)); got.Failed != TailFailure(WhyConfiguration) {
+		t.Errorf("a host with no backend failed %q; want configuration", got.Failed)
 	}
 
-	moved := &capturingServer{TailServer: rig.client(t)}
-	rig.serveWith(t, "n3:moved-from", moved, rig.feeds(t))
-	if got := replyTo(t, moved, tailRequestFor(t, rig, "n3:moved-from")); got.Failed != TailFailedMoving {
-		t.Errorf("an owner the run left failed %q; want moving", got.Failed)
-	}
-	if rig.runner.Reads() != 0 {
-		t.Errorf("a box was read by a node that does not drive it (%d reads)", rig.runner.Reads())
-	}
-
-	// A NODE THE RUN'S BOX IS NOT ON, by its own read of the record, says
-	// the same: the request named it as the host of a box on an engine
-	// host, and the box moved between the asker's read and this node's.
-	hosted := newTailRigOn(t, "n3")
-	hosted.runner.Say(SourceTranscript, "never read\n")
-	formerHost := &capturingServer{TailServer: hosted.client(t)}
-	hosted.serveWith(t, "n4:former-host", formerHost, hosted.feeds(t))
-	if got := replyTo(t, formerHost, tailRequestOn(t, hosted, "n4")); got.Failed != TailFailedMoving {
+	// A NODE THE RUN'S BOX IS NOT ON, by its own read of the record: the
+	// request named it as the box's host, and the record names another.
+	former := &capturingServer{TailServer: rig.client(t)}
+	rig.serveWith(t, "n3", former, rig.feeds(t))
+	if got := replyTo(t, former, tailRequestTo(t, rig, "n3")); got.Failed != TailFailedMoving {
 		t.Errorf("a node the run's box is not on failed %q; want moving", got.Failed)
 	}
-	if hosted.runner.Reads() != 0 {
-		t.Errorf("a box was read by a node it is not on (%d reads)", hosted.runner.Reads())
+	if rig.runner.Reads() != 0 {
+		t.Errorf("a box was read by a node that does not host it (%d reads)", rig.runner.Reads())
 	}
 
 	// A READING WHOSE NODE LOST ITS BACKEND (an apply removed
 	// providers.sandbox while the run went on) is a setup somebody fixes,
-	// whether a peer asked or the owner answered for itself.
+	// whether a peer asked or the host answered for itself.
 	noBackend := NewLiveFeeds(t.Context(), LiveFeedsOptions{Manager: func() *Manager { return nil }})
 	t.Cleanup(noBackend.Stop)
 	removed := &capturingServer{TailServer: rig.client(t)}
-	rig.serveWith(t, boxOwner, removed, noBackend)
-	if got := replyTo(t, removed, tailRequestFor(t, rig, boxOwner)); got.Failed != TailFailure(WhyConfiguration) {
-		t.Errorf("an owner whose backend an apply removed failed %q; want configuration", got.Failed)
+	rig.serveWith(t, boxHost, removed, noBackend)
+	if got := replyTo(t, removed, tailRequestTo(t, rig, boxHost)); got.Failed != TailFailure(WhyConfiguration) {
+		t.Errorf("a host whose backend an apply removed failed %q; want configuration", got.Failed)
 	}
-	local := &TailReader{Owner: boxOwner, Pending: rig.pending, Feeds: noBackend, Condition: isCondition}
+	local := &TailReader{Node: boxHost, Pending: rig.pending, Feeds: noBackend, Condition: isCondition}
 	_, err := local.Tail(t.Context(), TailQuery{TurnID: "t1", LaunchID: rig.launch})
 	if why, _ := WhyOf(err); why != WhyConfiguration {
-		t.Errorf("the owner answering for itself with no backend classed %q (%v); want "+
+		t.Errorf("the host answering for itself with no backend classed %q (%v); want "+
 			"configuration", why, err)
 	}
 
@@ -426,12 +411,12 @@ func TestAnOwnerThatCannotAnswerSaysWhyByClass(t *testing.T) {
 	}
 	for _, f := range []TailFailure{TailFailedMoving, TailFailedUnanswered, TailFailedFault} {
 		if !f.Valid() || Why(f).Valid() {
-			t.Errorf("%q is not an owner's own failure apart from every class", f)
+			t.Errorf("%q is not a host's own failure apart from every class", f)
 		}
 	}
 	for _, why := range Whys {
 		if !TailFailure(why).Valid() {
-			t.Errorf("the class %q is not a failure an owner may answer", why)
+			t.Errorf("the class %q is not a failure a host may answer", why)
 		}
 	}
 }
@@ -441,26 +426,15 @@ func TestAnOwnerThatCannotAnswerSaysWhyByClass(t *testing.T) {
 func TestATailAnswererNeedsAConditionRule(t *testing.T) {
 	t.Parallel()
 	rig := newTailRig(t)
-	if _, err := ServeTail(t.Context(), rig.client(t), boxOwner, nodeOf(boxOwner), rig.pending,
+	if _, err := ServeTail(t.Context(), rig.client(t), boxHost, rig.pending,
 		rig.feeds(t), nil, queue.NewAnswerBudget(nil)); err == nil {
 		t.Error("ServeTail took no rule for a condition")
 	}
 }
 
-// tailRequestFor is a request for the rig's launch, addressed to owner.
-func tailRequestFor(t *testing.T, rig *tailRig, owner string) []byte {
-	t.Helper()
-	raw, err := json.Marshal(tailRequest{Version: tailWireVersion, TurnID: "t1",
-		LaunchID: rig.launch, Owner: owner})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return raw
-}
-
-// tailRequestOn is a request for the rig's launch, addressed to node as the
-// host of a box on an engine host ([tailHost]).
-func tailRequestOn(t *testing.T, rig *tailRig, node string) []byte {
+// tailRequestTo is a request for the rig's launch, addressed to node as its
+// box's host.
+func tailRequestTo(t *testing.T, rig *tailRig, node string) []byte {
 	t.Helper()
 	raw, err := json.Marshal(tailRequest{Version: tailWireVersion, TurnID: "t1",
 		LaunchID: rig.launch, Node: node})
@@ -484,13 +458,16 @@ func replyTo(t *testing.T, server *capturingServer, req []byte) tailReply {
 	return rep
 }
 
-// A node that owns the run answers from its own box without a round trip.
-func TestTheOwnerReadsItsOwnBoxDirectly(t *testing.T) {
+// THE BOX'S HOST ANSWERS FROM ITS OWN BOX without a round trip.
+//
+// Mutation: ask the broker whoever hosts the box, and with nobody serving the
+// host answers itself silent.
+func TestTheHostReadsItsOwnBoxDirectly(t *testing.T) {
 	t.Parallel()
 	rig := newTailRig(t)
 	rig.runner.Say(SourceStderr, "local\n")
 	reader := &TailReader{
-		Owner: boxOwner, Pending: rig.pending, Queue: rig.client(t),
+		Node: boxHost, Pending: rig.pending, Queue: rig.client(t),
 		Feeds: rig.feeds(t), Condition: isCondition,
 	}
 	got := rig.tail(t, reader, TailCursor{})
@@ -501,7 +478,7 @@ func TestTheOwnerReadsItsOwnBoxDirectly(t *testing.T) {
 
 // A PEEK NEVER WAKES A BOX. A running record whose box is paused — the moment
 // between a collection pausing the box and the record moving on — is answered
-// as what it is, `box_paused`, and the box is left paused, on the owner's own
+// as what it is, `box_paused`, and the box is left paused, on the host's own
 // read and across the fleet alike.
 //
 // Mutation: read through Reconnect, and the box is woken to be read.
@@ -517,12 +494,12 @@ func TestAPeekNeverWakesAPausedBox(t *testing.T) {
 	if err := box.Pause(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	rig.serve(t, boxOwner)
-	local := &TailReader{Owner: boxOwner, Pending: rig.pending, Feeds: rig.feeds(t),
+	rig.serve(t, boxHost)
+	local := &TailReader{Node: boxHost, Pending: rig.pending, Feeds: rig.feeds(t),
 		Condition: isCondition}
 	for name, reader := range map[string]*TailReader{
 		"across the fleet": rig.reader(t),
-		"on the owner":     local,
+		"on its host":      local,
 	} {
 		got, err := reader.Tail(t.Context(), TailQuery{TurnID: "t1", LaunchID: rig.launch})
 		if err != nil || got.Outcome != TailBoxPaused || got.Output != nil {
@@ -548,12 +525,12 @@ func TestATailOfAGoneBoxIsGoneNotAFailure(t *testing.T) {
 	rig.provider.AttachFunc = func(context.Context, string) error {
 		return fmt.Errorf("fake: the box was reaped: %w", ErrBoxGone)
 	}
-	rig.serve(t, boxOwner)
-	local := &TailReader{Owner: boxOwner, Pending: rig.pending, Feeds: rig.feeds(t),
+	rig.serve(t, boxHost)
+	local := &TailReader{Node: boxHost, Pending: rig.pending, Feeds: rig.feeds(t),
 		Condition: isCondition}
 	for name, reader := range map[string]*TailReader{
 		"across the fleet": rig.reader(t),
-		"on the owner":     local,
+		"on its host":      local,
 	} {
 		got, err := reader.Tail(t.Context(), TailQuery{TurnID: "t1", LaunchID: rig.launch})
 		if err != nil || got.Outcome != TailBoxGone || got.Output != nil || got.Node != "n2" {
@@ -565,10 +542,10 @@ func TestATailOfAGoneBoxIsGoneNotAFailure(t *testing.T) {
 	}
 }
 
-// A LAUNCH THAT STOPPED IS LET GO, on the owner's own read as on a peer's
+// A LAUNCH THAT STOPPED IS LET GO, on the host's own read as on a peer's
 // answer: nobody asks about it again, so its reading — up to [liveHold] of
 // text — is dropped by the request that learned it stopped rather than a
-// sweep later ([TestAReadingNobodyAsksAboutIsLetGoOnItsOwnClock] is the owner
+// sweep later ([TestAReadingNobodyAsksAboutIsLetGoOnItsOwnClock] is the host
 // that is never asked again).
 //
 // Mutation: drop either Forget, and that path's reading stays.
@@ -576,12 +553,12 @@ func TestAStoppedLaunchsReadingIsLetGo(t *testing.T) {
 	t.Parallel()
 	rig := newTailRig(t)
 	rig.runner.Say(SourceTranscript, "working\n")
-	served := rig.serve(t, boxOwner)
+	served := rig.serve(t, boxHost)
 	own := rig.feeds(t)
-	local := &TailReader{Owner: boxOwner, Pending: rig.pending, Feeds: own,
+	local := &TailReader{Node: boxHost, Pending: rig.pending, Feeds: own,
 		Condition: isCondition}
 	remote := rig.reader(t)
-	for name, reader := range map[string]*TailReader{"across the fleet": remote, "on the owner": local} {
+	for name, reader := range map[string]*TailReader{"across the fleet": remote, "on its host": local} {
 		if got := rig.tail(t, reader, TailCursor{}); got.Outcome != TailRunning {
 			t.Fatalf("%s: answer = %+v; want a tail", name, got)
 		}
@@ -593,7 +570,7 @@ func TestAStoppedLaunchsReadingIsLetGo(t *testing.T) {
 	if err := rig.pending.SetStatus(t.Context(), "t1", StatusAwaiting, Fence{}); err != nil {
 		t.Fatal(err)
 	}
-	for name, reader := range map[string]*TailReader{"across the fleet": remote, "on the owner": local} {
+	for name, reader := range map[string]*TailReader{"across the fleet": remote, "on its host": local} {
 		if got := rig.tail(t, reader, TailCursor{}); got.Outcome != TailNotRunning {
 			t.Fatalf("%s: answer = %+v; want not_running", name, got)
 		}
@@ -602,7 +579,7 @@ func TestAStoppedLaunchsReadingIsLetGo(t *testing.T) {
 	// peer is told only by its own read; ask it the way an asker that read
 	// the record a moment earlier would.
 	raw, err := json.Marshal(tailRequest{Version: tailWireVersion, TurnID: "t1",
-		LaunchID: rig.launch, Owner: boxOwner})
+		LaunchID: rig.launch, Node: boxHost})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -616,13 +593,13 @@ func TestAStoppedLaunchsReadingIsLetGo(t *testing.T) {
 }
 
 // A READING NOBODY ASKS ABOUT IS LET GO ON ITS OWN CLOCK, with no request to
-// prompt it. In a fleet the owner is never told a launch stopped: the node
+// prompt it. In a fleet the host is never told a launch stopped: the node
 // serving the dashboard reads the run's record, answers `not_running` itself
-// and never asks the owner again — and a viewer who closes the tab asks
-// nobody anything. Swept only inside a request, a quiet owner would keep every
+// and never asks the host again — and a viewer who closes the tab asks
+// nobody anything. Swept only inside a request, a quiet host would keep every
 // watched reading until the node stopped.
 //
-// Mutation: sweep only inside a request (drop the tick's drop), and the owner
+// Mutation: sweep only inside a request (drop the tick's drop), and the host
 // keeps the reading however long nobody asks.
 func TestAReadingNobodyAsksAboutIsLetGoOnItsOwnClock(t *testing.T) {
 	t.Parallel()
@@ -630,11 +607,11 @@ func TestAReadingNobodyAsksAboutIsLetGoOnItsOwnClock(t *testing.T) {
 	rig.runner.Say(SourceTranscript, "working\n")
 	clock := &stepClock{at: time.Date(2026, 10, 6, 9, 0, 0, 0, time.UTC)}
 	ticks := make(chan time.Time)
-	owner := startLiveFeeds(t.Context(), LiveFeedsOptions{
+	host := startLiveFeeds(t.Context(), LiveFeedsOptions{
 		Manager: func() *Manager { return rig.manager }, Now: clock.now,
 	}, ticks)
-	t.Cleanup(owner.Stop)
-	rig.serveWith(t, boxOwner, rig.client(t), owner)
+	t.Cleanup(host.Stop)
+	rig.serveWith(t, boxHost, rig.client(t), host)
 	asker := rig.reader(t)
 
 	if got := rig.tail(t, asker, TailCursor{}); got.Outcome != TailRunning {
@@ -646,21 +623,21 @@ func TestAReadingNobodyAsksAboutIsLetGoOnItsOwnClock(t *testing.T) {
 	if got := rig.tail(t, asker, TailCursor{}); got.Outcome != TailNotRunning {
 		t.Fatalf("answer = %+v; want not_running", got)
 	}
-	if readings(owner) != 1 {
-		t.Fatalf("the owner holds %d readings; the asker answered not_running without asking it, "+
-			"so want the one it was asked for", readings(owner))
+	if readings(host) != 1 {
+		t.Fatalf("the host holds %d readings; the asker answered not_running without asking it, "+
+			"so want the one it was asked for", readings(host))
 	}
 
 	// Within liveIdle of the last request, a tick keeps it.
 	clock.advance(liveIdle)
 	sweepOnce(ticks, clock.now())
-	if readings(owner) != 1 {
+	if readings(host) != 1 {
 		t.Fatalf("a reading asked about %v ago was dropped; want it kept for %v", liveIdle, liveIdle)
 	}
 	// Past it, the next tick lets it go — and nothing else had to ask.
 	clock.advance(time.Second)
 	sweepOnce(ticks, clock.now())
-	eventually(t, func() bool { return readings(owner) == 0 }, "the owner kept a reading nobody "+
+	eventually(t, func() bool { return readings(host) == 0 }, "the host kept a reading nobody "+
 		"has asked about for longer than liveIdle")
 }
 
@@ -740,7 +717,7 @@ func TestAStoppedNodeReadsNoBox(t *testing.T) {
 	rig.runner.Say(SourceTranscript, "working\n")
 	feeds := rig.feeds(t)
 	feeds.Stop()
-	local := &TailReader{Owner: boxOwner, Pending: rig.pending, Feeds: feeds,
+	local := &TailReader{Node: boxHost, Pending: rig.pending, Feeds: feeds,
 		Condition: isCondition}
 	if got, err := local.Tail(t.Context(), TailQuery{TurnID: "t1", LaunchID: rig.launch}); !errors.Is(err, ErrTailUnanswered) {
 		t.Errorf("answer = %+v, %v; want the read's failure from a node that stopped, "+
@@ -774,7 +751,7 @@ func readings(feeds *LiveFeeds) int {
 func TestAViewerIsSentOnlyWhatItLacks(t *testing.T) {
 	t.Parallel()
 	rig := newTailRig(t)
-	feeds := rig.serve(t, boxOwner)
+	feeds := rig.serve(t, boxHost)
 	reader := rig.reader(t)
 	rig.runner.Say(SourceTranscript, "[tool] bash: go test ./...\n")
 
@@ -805,7 +782,7 @@ func TestAViewerIsSentOnlyWhatItLacks(t *testing.T) {
 func TestACursorAnswerAlwaysStatesItsOffsets(t *testing.T) {
 	t.Parallel()
 	rig := newTailRig(t)
-	rig.serve(t, boxOwner)
+	rig.serve(t, boxHost)
 	reader := rig.reader(t)
 	wire := func(a TailAnswer) map[string]any {
 		t.Helper()
@@ -865,7 +842,7 @@ func waitPastReuse(feeds *LiveFeeds) {
 func TestACursorThatDoesNotMatchIsAReset(t *testing.T) {
 	t.Parallel()
 	rig := newTailRig(t)
-	rig.serve(t, boxOwner)
+	rig.serve(t, boxHost)
 	reader := rig.reader(t)
 	rig.runner.Say(SourceTranscript, "one\ntwo\n")
 	var view held
@@ -877,7 +854,7 @@ func TestACursorThatDoesNotMatchIsAReset(t *testing.T) {
 		"past the end":   {Epoch: view.cursor.Epoch, Offset: view.cursor.Offset + 10, Digest: view.cursor.Digest},
 		// A peer's request is decoded off the wire, where nothing held the
 		// offset to a whole number: a negative one is a reset, not a slice
-		// out of range in the owner's answer.
+		// out of range in the host's answer.
 		"before the start": {Epoch: view.cursor.Epoch, Offset: -1, Digest: view.cursor.Digest},
 	} {
 		got := rig.tail(t, reader, cursor)
@@ -887,42 +864,42 @@ func TestACursorThatDoesNotMatchIsAReset(t *testing.T) {
 	}
 }
 
-// AN OWNER MOVE ON THE SAME BUILD CONTINUES, and one onto a build that derives
-// the stream differently RESETS. The new owner's reading of the same stream
-// from the same origin is the same text, which the digest proves; under a
-// changed parser it is not, which the digest catches though the epoch and the
-// offset both match.
-func TestAnOwnerMoveContinuesOnTheSameBuildAndResetsOnAnother(t *testing.T) {
+// A MOVE OF THE SEAT CONTINUES THE READING, and a reading its host begins
+// again under a build that derives the stream differently RESETS. The box is
+// read on its host whoever holds the seat, so a viewer's cursor stays good
+// across the move; a host's new reading of the same stream from the same
+// origin under a changed parser is other text, which the digest catches
+// though the epoch and the offset both match.
+//
+// Mutation: drop the digest's check, and the other derivation's text is sent
+// as a delta.
+func TestASeatMoveContinuesTheReadingAndAnotherDerivationResets(t *testing.T) {
 	t.Parallel()
 	rig := newTailRig(t)
 	rig.runner.Say(SourceTranscript, "first\n")
-	const nextOwner = "n4:next"
-	first := rig.serve(t, boxOwner)
-	rig.serve(t, nextOwner)
+	host := rig.serve(t, boxHost)
+	rig.serve(t, "n5")
 	reader := rig.reader(t)
 	var view held
 	view.take(t, rig.tail(t, reader, view.cursor))
 
-	if ok, err := rig.pending.ClaimOwnership(t.Context(), "t1", nextOwner, 2); err != nil || !ok {
-		t.Fatalf("move the run: %v %v", ok, err)
+	if ok, err := rig.pending.ClaimOwnership(t.Context(), "t1", "n5:next", 2); err != nil || !ok {
+		t.Fatalf("move the seat: %v %v", ok, err)
 	}
 	rig.runner.Say(SourceTranscript, "second\n")
+	waitPastReuse(host)
 	moved := view.take(t, rig.tail(t, reader, view.cursor))
 	if moved.Reset || moved.Text != "second\n" {
-		t.Errorf("after a move on the same build = %+v; want only the new line", moved)
+		t.Errorf("after a move of the seat = %+v; want only the new line", moved)
 	}
 
-	if ok, err := rig.pending.ClaimOwnership(t.Context(), "t1", boxOwner, 3); err != nil || !ok {
-		t.Fatalf("move the run back: %v %v", ok, err)
-	}
-	// The first owner's reading is long gone — a restart — and the one it
-	// starts reads the same stream under a build that derives it
-	// differently.
-	first.Forget("t1", rig.launch)
+	// The host's reading is long gone — a restart — and the one it starts
+	// reads the same stream under a build that derives it differently.
+	host.Forget("t1", rig.launch)
 	rig.runner.Rewrite("FIRST\nSECOND\nthird\n")
 	got := view.take(t, rig.tail(t, reader, view.cursor))
 	if !got.Reset || view.text != "FIRST\nSECOND\nthird\n" {
-		t.Errorf("after a move onto another derivation = %+v; want a reset", got)
+		t.Errorf("after a restart onto another derivation = %+v; want a reset", got)
 	}
 }
 
@@ -932,7 +909,7 @@ func TestAnOwnerMoveContinuesOnTheSameBuildAndResetsOnAnother(t *testing.T) {
 func TestAViewerTooFarBehindIsReset(t *testing.T) {
 	t.Parallel()
 	rig := newTailRig(t)
-	feeds := rig.serve(t, boxOwner)
+	feeds := rig.serve(t, boxHost)
 	reader := rig.reader(t)
 	rig.runner.Say(SourceTranscript, "start\n")
 	var view held
@@ -956,7 +933,7 @@ func TestAViewerTooFarBehindIsReset(t *testing.T) {
 //
 // EVERY VIEWER WAITS ON THE ONE READ before it is let through: synctest.Wait
 // returns once every goroutine of the case is blocked, so each request has
-// reached the owner and waits on the read in flight. A nap for a head start
+// reached the host and waits on the read in flight. A nap for a head start
 // would let a late viewer ride the reuse window and leave the in-flight
 // sharing untested.
 //
@@ -969,7 +946,7 @@ func TestManyViewersCostOneReadOfTheBox(t *testing.T) {
 		rig.runner.Say(SourceTranscript, "busy\n")
 		gate := make(chan struct{})
 		rig.runner.LiveGate = gate
-		rig.serve(t, boxOwner)
+		rig.serve(t, boxHost)
 		reader := rig.reader(t)
 
 		const viewers = 8
@@ -1002,15 +979,15 @@ func TestManyViewersCostOneReadOfTheBox(t *testing.T) {
 	})
 }
 
-// AN ABANDONED REQUEST FREES ITS ANSWER SLOT. The owner waits for the box only
+// AN ABANDONED REQUEST FREES ITS ANSWER SLOT. The host waits for the box only
 // its share of the asker's budget, then says the read is still going; the read
 // goes on for the reading, so the next request is answered from it unread.
 //
-// Put to the owner's own handler, since the owner answers at three quarters of
+// Put to the host's own handler, since the host answers at three quarters of
 // the budget and across the broker a loaded run's reply can miss the last
-// quarter and read as a silent owner. In a bubble, with the box's read held on
+// quarter and read as a silent host. In a bubble, with the box's read held on
 // the gate, the answer comes at exactly its timer's share, where a wall-clock
-// bound would pass an owner that overstays and fail one a loaded runner delays.
+// bound would pass a host that overstays and fail one a loaded runner delays.
 //
 // Mutation: answer under the registration's own context, and the answer waits
 // as long as the box does.
@@ -1021,11 +998,11 @@ func TestAnAbandonedRequestFreesItsAnswerSlot(t *testing.T) {
 		rig.runner.Say(SourceTranscript, "slow\n")
 		gate := make(chan struct{})
 		rig.runner.LiveGate = gate
-		owner := &capturingServer{TailServer: rig.client(t)}
-		rig.serveWith(t, boxOwner, owner, rig.feeds(t))
+		host := &capturingServer{TailServer: rig.client(t)}
+		rig.serveWith(t, boxHost, host, rig.feeds(t))
 
 		ask := tailRequest{
-			Version: tailWireVersion, TurnID: "t1", LaunchID: rig.launch, Owner: boxOwner,
+			Version: tailWireVersion, TurnID: "t1", LaunchID: rig.launch, Node: boxHost,
 			Cursor: TailCursor{}, BudgetMS: 400,
 		}
 		req, err := json.Marshal(ask)
@@ -1035,9 +1012,9 @@ func TestAnAbandonedRequestFreesItsAnswerSlot(t *testing.T) {
 		answered := make(chan []byte, 1)
 		began := time.Now()
 		go func() {
-			raw, err := owner.handler(t.Context(), req)
+			raw, err := host.handler(t.Context(), req)
 			if err != nil {
-				t.Errorf("the owner's handler: %v", err)
+				t.Errorf("the host's handler: %v", err)
 			}
 			answered <- raw
 		}()
@@ -1046,17 +1023,17 @@ func TestAnAbandonedRequestFreesItsAnswerSlot(t *testing.T) {
 		case raw = <-answered:
 		case <-time.After(5 * time.Second):
 			close(gate)
-			t.Fatal("the owner's answer waited on a box that never answered; want its share of the budget")
+			t.Fatal("the host's answer waited on a box that never answered; want its share of the budget")
 		}
 		if waited := time.Since(began); waited != ask.answerBudget() {
-			t.Errorf("the owner answered after %v on a 400 ms budget; want its share, %v", waited, ask.answerBudget())
+			t.Errorf("the host answered after %v on a 400 ms budget; want its share, %v", waited, ask.answerBudget())
 		}
 		var rep tailReply
 		if err := json.Unmarshal(raw, &rep); err != nil {
 			t.Fatal(err)
 		}
 		if rep.Failed != TailFailure(WhyProviderUnavailable) {
-			t.Fatalf("the owner's answer on a slow box = %+v; want the box not answering yet", rep)
+			t.Fatalf("the host's answer on a slow box = %+v; want the box not answering yet", rep)
 		}
 		close(gate)
 		eventually(t, func() bool { return rig.runner.Reads() == 1 }, "the read did not go on")
@@ -1068,9 +1045,56 @@ func TestAnAbandonedRequestFreesItsAnswerSlot(t *testing.T) {
 	})
 }
 
-// THE OWNER ANSWERS INSIDE THE BUDGET ITS ASKER SENT, and inside the fleet read
+// A REQUEST ITS CALLER CANCELLED IS NO CLASS, the box's read still in flight:
+// a drain, a lost lease or a stopped turn is the caller's own act, and classed,
+// a reader that cannot see the context would send an operator to the provider.
+// A request its own bound ended, on the same read, is the box not answering yet.
+//
+// IN A BUBBLE, with the box's read held on the gate, so the cancel lands while
+// the read is in flight and the bound runs out on its timer alone.
+//
+// Mutation: drop the caller's-cancel exception in unanswered, and the cancelled
+// request is classed as the provider's; mark nothing there, and the bounded one
+// is not.
+func TestARequestItsCallerCancelledIsNoClass(t *testing.T) {
+	t.Parallel()
+	inBubble(t, func(t *testing.T) {
+		rig := newTailRig(t)
+		rig.runner.Say(SourceTranscript, "slow\n")
+		gate := make(chan struct{})
+		rig.runner.LiveGate = gate
+		host := &TailReader{Node: boxHost, Pending: rig.pending, Feeds: rig.feeds(t), Condition: isCondition}
+		q := TailQuery{TurnID: "t1", LaunchID: rig.launch}
+
+		ctx, cancel := context.WithCancel(t.Context())
+		failed := make(chan error, 1)
+		go func() {
+			_, err := host.Tail(ctx, q)
+			failed <- err
+		}()
+		synctest.Wait()
+		cancel()
+		err := <-failed
+		if why, classed := WhyOf(err); classed || !errors.Is(err, context.Canceled) {
+			t.Errorf("a request its caller cancelled was classed %q (%v): %v; want no class, and "+
+				"the cancel", why, classed, err)
+		}
+
+		_, err = host.Tail(t.Context(), q)
+		if why, _ := WhyOf(err); why != WhyProviderUnavailable || !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("a request its own bound ended was classed %q: %v; want the provider not "+
+				"answering yet", why, err)
+		}
+		if n := rig.runner.Waiting(); n != 1 {
+			t.Errorf("%d reads of the box were in flight through both requests; want the one", n)
+		}
+		close(gate)
+	})
+}
+
+// THE HOST ANSWERS INSIDE THE BUDGET ITS ASKER SENT, and inside the fleet read
 // budget for a request that names none — the zero value's meaning.
-func TestTheOwnerAnswersInsideTheAskersBudget(t *testing.T) {
+func TestTheHostAnswersInsideTheAskersBudget(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
 		budgetMS int64
@@ -1110,19 +1134,19 @@ func eventually(t *testing.T, done func() bool, msg string) {
 	}
 }
 
-// THE OWNER LOGS WHAT IT MET, with its text, the one place the text goes: at
+// THE HOST LOGS WHAT IT MET, with its text, the one place the text goes: at
 // WARN for a fault or a class no wait clears, at DEBUG for one a wait clears.
-// ONE EVENT, `sandbox_tail_failed`, whether the owner serves a peer or answers
+// ONE EVENT, `sandbox_tail_failed`, whether the host serves a peer or answers
 // for itself (every single-node deployment). What reaches the query surface is
-// marked as logged there, so its own line is a trace. A class a newer owner
+// marked as logged there, so its own line is a trace. A class a newer host
 // named that this build doesn't know is said by the asker.
 //
 // NOT PARALLEL: it swaps the process-wide logger.
 //
-// Mutation: drop the log line from ServeTail's failure or from the owner's own
+// Mutation: drop the log line from ServeTail's failure or from the host's own
 // read, log a waiting class at WARN, leave the local failure unmarked, or say
 // nothing of an unknown class, and a check goes red.
-func TestTheOwnerLogsATailFailureByWhatClearsIt(t *testing.T) {
+func TestTheHostLogsATailFailureByWhatClearsIt(t *testing.T) {
 	var out syncBuffer
 	logging.Configure(slog.LevelDebug, logging.FormatText, &out)
 	t.Cleanup(func() { logging.Configure(slog.LevelError, logging.FormatText, io.Discard) })
@@ -1139,28 +1163,28 @@ func TestTheOwnerLogsATailFailureByWhatClearsIt(t *testing.T) {
 		failure TailFailure
 		level   string
 	}{
-		"a fault":                       {fmt.Errorf("read: %w", errBoxHost), TailFailedFault, "level=WARN"},
-		"a refused key":                 {Because(WhyProviderRefused, errBoxHost), TailFailure(WhyProviderRefused), "level=WARN"},
-		"a provider that waits":         {Because(WhyProviderUnavailable, errBoxHost), TailFailure(WhyProviderUnavailable), "level=DEBUG"},
-		"a store the owner can't reach": {fmt.Errorf("read: %w: %w", coord.ErrUnavailable, errBoxHost), TailFailedUnanswered, "level=DEBUG"},
+		"a fault":                      {fmt.Errorf("read: %w", errBoxHost), TailFailedFault, "level=WARN"},
+		"a configuration":              {Because(WhyConfiguration, errBoxHost), TailFailure(WhyConfiguration), "level=WARN"},
+		"a provider that waits":        {Because(WhyProviderUnavailable, errBoxHost), TailFailure(WhyProviderUnavailable), "level=DEBUG"},
+		"a store the host can't reach": {fmt.Errorf("read: %w: %w", coord.ErrUnavailable, errBoxHost), TailFailedUnanswered, "level=DEBUG"},
 	} {
 		rig := newTailRig(t)
 		rig.runner.LiveErr = c.read
 		for how, ask := range map[string]func(){
 			"serving a peer": func() {
-				owner := &capturingServer{TailServer: rig.client(t)}
-				rig.serveWith(t, boxOwner, owner, rig.feeds(t))
-				if _, err := owner.handler(t.Context(), tailRequestFor(t, rig, boxOwner)); err != nil {
-					t.Fatalf("%s: the owner's handler: %v", name, err)
+				host := &capturingServer{TailServer: rig.client(t)}
+				rig.serveWith(t, boxHost, host, rig.feeds(t))
+				if _, err := host.handler(t.Context(), tailRequestTo(t, rig, boxHost)); err != nil {
+					t.Fatalf("%s: the host's handler: %v", name, err)
 				}
 			},
 			"answering for itself": func() {
-				local := &TailReader{Owner: boxOwner, Pending: rig.pending, Feeds: rig.feeds(t),
+				local := &TailReader{Node: boxHost, Pending: rig.pending, Feeds: rig.feeds(t),
 					Condition: isCondition}
 				_, err := local.Tail(t.Context(), TailQuery{TurnID: "t1", LaunchID: rig.launch})
 				var logged interface{ LoggedAtSource() bool }
 				if !errors.As(err, &logged) || !logged.LoggedAtSource() {
-					t.Errorf("%s, %s: the owner's own failure %v reaches the query surface "+
+					t.Errorf("%s, %s: the host's own failure %v reaches the query surface "+
 						"unmarked as logged", name, "answering for itself", err)
 				}
 			},
@@ -1168,7 +1192,7 @@ func TestTheOwnerLogsATailFailureByWhatClearsIt(t *testing.T) {
 			before := len(out.String())
 			ask()
 			line := lineAfter(before, "sandbox_tail_failed")
-			for _, want := range []string{c.level, "failure=" + string(c.failure), "e2b.example.com"} {
+			for _, want := range []string{c.level, "failure=" + string(c.failure), "runtime.example.com"} {
 				if !strings.Contains(line, want) {
 					t.Errorf("%s, %s: logged %q; want %s in it", name, how, line, want)
 				}
@@ -1176,13 +1200,13 @@ func TestTheOwnerLogsATailFailureByWhatClearsIt(t *testing.T) {
 		}
 	}
 
-	// A CLASS A NEWER OWNER NAMED is said by the asker, then answered as a
+	// A CLASS A NEWER HOST NAMED is said by the asker, then answered as a
 	// fault.
 	rig := newTailRig(t)
 	newer := rig.client(t)
 	stop, err := newer.Serve(t.Context(), topics.ObserveExecutorTail, queue.ConcurrentAnswers,
 		func(context.Context, []byte) ([]byte, error) {
-			return json.Marshal(tailReply{Version: tailWireVersion, Owner: boxOwner,
+			return json.Marshal(tailReply{Version: tailWireVersion, Node: boxHost,
 				Failed: "a_class_from_a_newer_build"})
 		})
 	if err != nil {
@@ -1200,21 +1224,21 @@ func TestTheOwnerLogsATailFailureByWhatClearsIt(t *testing.T) {
 	}
 }
 
-// A BOX ON AN ENGINE HOST IS READ ON THAT HOST, whoever holds the run's seat:
-// the seat moved while the job worked, and the box is a process tree on the
-// node that launched it, which no other node can reach. So the request is
-// addressed to that node, and the seat's holder — which could not read the box
-// — is not asked.
+// A BOX IS READ ON ITS HOST, whoever holds the run's seat: the seat moved while
+// the job worked, and the box is a process tree or a container on the node that
+// launched it, which no other node can reach. So the request is addressed to
+// that node, and the seat's holder — which could not read the box — is not
+// asked.
 //
-// Mutation: address every tail to the run's owner, and the seat's holder
-// answers for a box it cannot reach.
+// Mutation: address the tail to the seat's holder, and the holder answers for
+// a box it cannot reach while the host is never asked.
 func TestALocalBoxsTailIsReadOnTheNodeThatLaunchedIt(t *testing.T) {
 	t.Parallel()
 	rig := newTailRigOn(t, "n3")
 	rig.runner.Say(SourceTranscript, "running go test ./...\n")
 	holder := &capturingServer{TailServer: rig.client(t)}
-	rig.serveWith(t, boxOwner, holder, rig.feeds(t))
-	rig.serve(t, "n3:host")
+	rig.serveWith(t, nodeOf(seatHolder), holder, rig.feeds(t))
+	rig.serve(t, "n3")
 
 	got := rig.tail(t, rig.reader(t), TailCursor{})
 	if got.Outcome != TailRunning || got.Output == nil || got.Node != "n3" {
@@ -1225,19 +1249,38 @@ func TestALocalBoxsTailIsReadOnTheNodeThatLaunchedIt(t *testing.T) {
 	}
 
 	// THE SEAT'S HOLDER, handed the same request, answers nothing.
-	req, err := json.Marshal(tailRequest{Version: tailWireVersion, TurnID: "t1",
-		LaunchID: rig.launch, Node: "n3"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if reply, err := holder.handler(t.Context(), req); !errors.Is(err, errTailNotAddressed) || reply != nil {
+	if reply, err := holder.handler(t.Context(), tailRequestTo(t, rig, "n3")); !errors.Is(err, errTailNotAddressed) ||
+		reply != nil {
 		t.Errorf("the seat's holder answered a request for n3's box: %q, %v", reply, err)
 	}
 
 	// And the box's own node answers it from its own readings.
-	local := &TailReader{Owner: "n3:host", Node: "n3", Pending: rig.pending, Feeds: rig.feeds(t),
-		Condition: isCondition}
+	local := &TailReader{Node: "n3", Pending: rig.pending, Feeds: rig.feeds(t), Condition: isCondition}
 	if answer := rig.tail(t, local, TailCursor{}); answer.Outcome != TailRunning || answer.Node != "n3" {
 		t.Errorf("the box's host answered %+v from its own readings; want its tail", answer)
+	}
+}
+
+// A RUNNING ROW THAT NAMES NO LAUNCH NODE IS NO NODE'S TO READ in a fleet:
+// every launch names its node with its box, so the row is one no host can be
+// asked about, and is an error rather than a silence naming nobody. A node
+// with no broker is the whole fleet, whose every box is its own, and reads it.
+//
+// Mutation: ask the broker for a nodeless row, and the answer is a silence
+// naming no node; drop the no-broker fallback (`|| r.Queue == nil`), and a node
+// with no broker errors on its own box.
+func TestARunningRowNamingNoLaunchNodeIsNoNodesToRead(t *testing.T) {
+	t.Parallel()
+	rig := newTailRigOn(t, "")
+	rig.runner.Say(SourceTranscript, "working\n")
+	answer, err := rig.reader(t).Tail(t.Context(), TailQuery{TurnID: "t1", LaunchID: rig.launch})
+	if err == nil {
+		t.Errorf("a running row naming no node was answered %+v; want an error", answer)
+	}
+	// A NODE WITH AN ID, as every engine's reader has, so the row reaches its
+	// own readings through the no-broker branch alone, never by matching "".
+	alone := &TailReader{Node: "n3", Pending: rig.pending, Feeds: rig.feeds(t), Condition: isCondition}
+	if got := rig.tail(t, alone, TailCursor{}); got.Outcome != TailRunning || got.Output.Text != "working\n" {
+		t.Errorf("a node with no broker answered %+v; want its own box's tail", got)
 	}
 }

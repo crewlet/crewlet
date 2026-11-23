@@ -639,10 +639,10 @@ func (s *fileSources) streamedInline(f artifactFile) artifactFile {
 
 // boxFailure is a failed read of a publish's source, nothing published, as a
 // model is told it: by the class the sandbox backend marked it with
-// ([sandbox.WhyOf]) — the provider not answering, at a limit, refusing the
-// company's key, or a setup that cannot reach the box — and otherwise as the
-// condition or fault of this node it is ([nodeFailure]). A provider's outage
-// is never told as this node's fault, which would say waiting cannot help.
+// ([sandbox.WhyOf]) — the box not answering, or a setup that cannot reach the
+// box — and otherwise as the condition or fault of this node it is
+// ([nodeFailure]). A box's outage is never told as this node's fault, which
+// would say waiting cannot help.
 // The error goes to the node's log here, as a fault's does in [faulted]. A
 // project file's content is told by [fileContentFailure] instead.
 func boxFailure(ctx context.Context, tool string, err error, stopped string) tools.Result {
@@ -650,8 +650,8 @@ func boxFailure(ctx context.Context, tool string, err error, stopped string) too
 	why, classed := sandbox.WhyOf(err)
 	switch {
 	case ctx.Err() != nil:
-		// The call's own context ended: told as that, whatever the
-		// provider's request it ended said.
+		// The call's own context ended: told as that, whatever the box
+		// read it ended said.
 		log.WarnContext(ctx, "builtin_box_read_failed", "tool", tool, "error", err.Error())
 		return nodeFailure(ctx, tool, ctx.Err(), stopped, fact)
 	case !classed:
@@ -668,21 +668,8 @@ func boxFailure(ctx context.Context, tool string, err error, stopped string) too
 	switch why {
 	case sandbox.WhyProviderUnavailable:
 		return refusedBy(tools.RefusalUnavailable, waits(), sentence(stopped+" (the executor's "+
-			"box didn't answer, or its provider failed on its side).", fact,
+			"box didn't answer, or the sandbox failed on its side).", fact,
 			"Try again shortly."))
-	case sandbox.WhyProviderLimit:
-		return refusedBy(tools.RefusalUnavailable, waits(), sentence(stopped+" (the sandbox "+
-			"provider is at a limit of the company's account).", fact, "Try again later."))
-	case sandbox.WhyProviderBilling:
-		return refusedBy(tools.RefusalUnavailable, waitless(), sentence(stopped+" (the "+
-			"sandbox provider's account for the company needs paying for, and waiting "+
-			"won't change that).", fact, "Tell whoever asked that an administrator needs "+
-			"to check the sandbox provider's account."))
-	case sandbox.WhyProviderRefused:
-		return refusedBy(tools.RefusalUnavailable, waitless(), sentence(stopped+" (the "+
-			"sandbox provider refused the company's credentials, and waiting won't change "+
-			"that).", fact, "Tell whoever asked that an administrator needs to fix the "+
-			"sandbox provider's credentials."))
 	case sandbox.WhyConfiguration:
 		return refusedBy(tools.RefusalUnavailable, waitless(), sentence(stopped+" (the "+
 			"sandbox isn't set up so this node can reach the box, and waiting won't change "+

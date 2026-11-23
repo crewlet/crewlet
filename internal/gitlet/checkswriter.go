@@ -885,7 +885,7 @@ func decideStarted(s CheckStarted, d checksDecision, held bool, named func(Check
 		// THE HOLDER'S OWN: its claim again, or its record naming its box.
 		switch {
 		case s.Placement != row.Placement:
-			return checksDecision{}, refusedf("%w: started.placement: %s is claimed for a %s cell, and its "+
+			return checksDecision{}, refusedf("%w: started.placement: %s is claimed in placement %s, and its "+
 				"holder names %s", ErrInvalidProposal, named(s.CheckKey), row.Placement, s.Placement)
 		case s.Box != "" && row.Box != "" && s.Box != row.Box:
 			return checksDecision{}, refusedf("%w: started.box: %s runs in box %s, and its holder names "+

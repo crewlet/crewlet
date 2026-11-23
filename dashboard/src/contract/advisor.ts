@@ -19,8 +19,6 @@ export const ACCESS_OPTION_PREFIX = "grant-";
  */
 export const PAUSED_SEAT_CLASSES = [
   "models.credential_refused",
-  "sandbox.billing_refused",
-  "sandbox.credential_refused",
   "sandbox.image_unstartable",
 ] as const;
 

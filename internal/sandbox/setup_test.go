@@ -90,8 +90,8 @@ func TestASetupFailureSaysWhatFailed(t *testing.T) {
 		t.Parallel()
 		box := NewFakeSandbox("unreachable")
 		box.ExecFunc = func(context.Context, string, ExecOptions) (ExecResult, error) {
-			// What an E2B box answers for a command whose stream ended
-			// without a verdict: it may well have started.
+			// A box that could not report how a command ended, such as a
+			// runtime that died mid-exec: it may well have started.
 			return ExecResult{ExitCode: 1}, errors.New("box went away mid-command")
 		}
 		err := ApplySetup(t.Context(), box, []SetupStep{{

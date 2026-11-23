@@ -345,9 +345,6 @@ func (r CheckRow) encodedBytes() int {
 	if r.Required {
 		n += field("required", trueBytes, false)
 	}
-	if r.RunIn != "" {
-		n += field("run_in", stringBytes(string(r.RunIn)), false)
-	}
 	if r.TimeoutSeconds != 0 {
 		n += field("timeout_seconds", intBytes(int64(r.TimeoutSeconds)), false)
 	}

@@ -205,7 +205,6 @@ func (r NodeStatusRecord) Encode() ([]byte, error) {
 		out["runners"] = map[string]any{
 			"direct":    r.Runners.Direct.meta(),
 			"container": r.Runners.Container.meta(),
-			"e2b":       r.Runners.E2B.meta(),
 		}
 	}
 	if infra := r.Infra.Meta(); infra != nil {
@@ -263,7 +262,6 @@ func DecodeNodeStatusRecord(node string, raw []byte) (NodeStatusRecord, error) {
 		r.Runners = &RunnerStatus{
 			Direct:    cellFromMeta(runners["direct"]),
 			Container: cellFromMeta(runners["container"]),
-			E2B:       cellFromMeta(runners["e2b"]),
 		}
 	}
 	if infra, ok := meta["infra"].(map[string]any); ok {
@@ -573,7 +571,7 @@ func (s RunnerState) Valid() bool {
 
 // RunnerStatus is each executor cell's readiness on one node.
 type RunnerStatus struct {
-	Direct, Container, E2B RunnerCell
+	Direct, Container RunnerCell
 }
 
 // RunnerCell is one cell's probe result: its state, what the probe found, and

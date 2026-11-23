@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -175,33 +175,55 @@ func TestABoxThatCouldNotBeStartedIsNamedByItsClass(t *testing.T) {
 	t.Parallel()
 	for _, why := range sandbox.Whys {
 		err := fmt.Errorf("launching the executor's run: %w",
-			sandbox.Because(why, errors.New("e2b: create: 503 Service Unavailable")))
+			sandbox.Because(why, errors.New("starting the box: the runtime did not answer")))
 		if got := ErrorKind(err); got != builtin.SandboxKindPrefix+string(why) {
 			t.Errorf("a box %s failure is kind %q; want %q", why, got,
 				builtin.SandboxKindPrefix+string(why))
 		}
 	}
 	timedOut := sandbox.Because(sandbox.WhyProviderUnavailable,
-		fmt.Errorf("e2b: create: %w", context.DeadlineExceeded))
+		fmt.Errorf("starting the box: %w", context.DeadlineExceeded))
 	if got := ErrorKind(timedOut); got != "sandbox_provider_unavailable" {
-		t.Errorf("a provider request that ran out of time is kind %q", got)
+		t.Errorf("a box start that ran out of time is kind %q", got)
 	}
 	if got := ErrorKind(errors.New("a broken thing")); got != "error" {
 		t.Errorf("an unclassed failure is kind %q, want error", got)
 	}
+}
 
-	// A LAUNCH THIS NODE CANCELLED (a drain, a lost lease) is `canceled`, never
-	// the provider: the backend leaves the caller's own cancellation unclassed.
-	provider, err := sandbox.NewE2B(sandbox.E2BOptions{APIKey: "k", Domain: "e2b.example.com",
-		HTTP: &http.Client{Transport: refusedTransport{context.Canceled}}})
+// A LAUNCH THIS NODE CANCELLED (a drain, a lost lease) IS `canceled`, never the
+// sandbox's: the container backend leaves its caller's own cancellation
+// unclassed, so the turn's record never sends a person to fix a setup a drain
+// interrupted. Not parallel: the backend finds its runtime on PATH, here a
+// stand-in whose every command waits until it is killed.
+//
+// Mutation: class a cancelled container start in internal/sandbox's Create, or
+// read a sandbox class before the cancellation in ErrorKind, and this goes red.
+func TestALaunchThisNodeCancelledIsCanceled(t *testing.T) {
+	dir := t.TempDir()
+	// Under the fork lock, as internal/sandbox's own stand-ins are written: a
+	// fork while the file is open for writing makes its exec fail (ETXTBSY).
+	syscall.ForkLock.RLock()
+	err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/bin/sh\nexec sleep 60\n"), 0o700) //nolint:gosec // the case's own program, to be run
+	syscall.ForkLock.RUnlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	provider, err := sandbox.NewLocal(sandbox.LocalOptions{Placement: sandbox.Container,
+		StateDir: t.TempDir(), Image: "img", Runtime: "docker"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	cancelled, cancel := context.WithCancel(t.Context())
 	cancel()
-	_, err = provider.Create(cancelled, sandbox.Spec{})
+	box, err := provider.Create(cancelled, sandbox.Spec{})
+	if err == nil {
+		_ = box.Close(t.Context())
+		t.Fatal("Create handed out a box its caller cancelled")
+	}
 	if got := ErrorKind(fmt.Errorf("launching the executor's run: %w", err)); got != "canceled" {
-		t.Errorf("a launch this node cancelled is kind %q, want canceled", got)
+		t.Errorf("a launch this node cancelled (%v) is kind %q, want canceled", err, got)
 	}
 }
 
@@ -256,11 +278,6 @@ func TestAnOutageIsRecordedUnderItsOwnKind(t *testing.T) {
 		}
 	}
 }
-
-// refusedTransport fails every request with err, before any host answers.
-type refusedTransport struct{ err error }
-
-func (r refusedTransport) RoundTrip(*http.Request) (*http.Response, error) { return nil, r.err }
 
 // A TURN'S CALLS TO EACH MCP TOOL ARE COUNTED ONCE, IN ONE OUTCOME, across
 // every phase, delegated worker and bridged executor call: the tally the

@@ -261,7 +261,7 @@ func TestTheProbeSurfaceServesItsOwnBoxesOnThisHostAlone(t *testing.T) {
 	if err != nil || receiver == nil {
 		t.Fatalf("the receiver: %v, %v", receiver, err)
 	}
-	env, err := receiver.RunEnv("trace-abc", "span", "turn-1", "engineer", true, time.Hour)
+	env, err := receiver.RunEnv("trace-abc", "span", "turn-1", "engineer", true)
 	if err != nil {
 		t.Fatalf("RunEnv: %v", err)
 	}

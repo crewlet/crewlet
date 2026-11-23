@@ -25,10 +25,10 @@
 //
 // Every subject a run is reached on is named by its row's seat ID, derived from
 // the immutable handle (ADR-0013); the handle is this node's bookkeeping key,
-// never an address. A `direct` or `container` box is touched only on its
-// launching node's host (ADR-0065, boxhost.go). What a run pushed to Gitlet is
-// the push record's account ([RunPushes]); an unreadable record is said
-// unknown, never left out, since silence reads as "nothing pushed".
+// never an address. A box is touched only on its launching node's host
+// (ADR-0065, boxhost.go). What a run pushed to Gitlet is the push record's
+// account ([RunPushes]); an unreadable record is said unknown, never left out,
+// since silence reads as "nothing pushed".
 //
 // AND A HOOK'S NOTE IS READ ONLY ONCE ITS JOB'S SESSION SHOWS IT: a hook only
 // SERVES it ([PendingStore.ServeHook]). Every read of a job's box at its end
@@ -43,11 +43,6 @@
 // estimate of a session's next request ([NextRequest]) is never carried along
 // a lineage nor put on the executor log: a copy grown by its brief would be
 // understated.
-//
-// AND AN E2B BOX IS PRIVATE ([e2bAPI.createBox]): one E2B made without a
-// traffic token is public, so it is killed and its launch refused as
-// configuration ([e2bAPI.refusePublic]): no wait clears it, and a class that
-// waits would mint and kill a billed box on every retry.
 //
 // # A launch's harness session is kept, and a turn's end recorded
 //
@@ -126,14 +121,14 @@
 //
 // # A save is offered by the poll, from memory
 //
-// The poll already reaches every running box under its duty; any other trigger
-// would be a second way in. The offer decides from memory and never blocks the
-// keepalive; [maxConcurrentSaves] slots bound packs and uploads.
+// The poll already reaches every running box on its launching node; any other
+// trigger would be a second way in. The offer decides from memory and never
+// blocks the keepalive; [maxConcurrentSaves] slots bound packs and uploads.
 //
 // # A save as its node drains
 //
 // A draining node saves each direct job it launched ([Coordinator.SaveHosted]),
-// most stale first; container and E2B boxes outlive it. Every pack in a box
+// most stale first; container boxes outlive it. Every pack in a box
 // sharing the node's memory takes the node's one slot ([Coordinator.sharedPack]),
 // and an OpenCode save checks its room first ([ErrSaveNoRoom]); a final pack
 // does not, since refusing it loses the job's newest state.
@@ -285,7 +280,7 @@
 // # The clock on a box host's store
 //
 // [hostUnsettled]: a host whose own store alone is silent is given up after the
-// box timeout, as a silent host is, its job lost with it. Kept until the run
+// host grace, as a silent host is, its job lost with it. Kept until the run
 // settles.
 //
 // # Unannounced jobs

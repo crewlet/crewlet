@@ -39,7 +39,7 @@ func (w waitedTool) Call(context.Context, map[string]any) (tools.Result, error) 
 func TestEveryServerABoxIsHandedWaitsAsLongAsItsBridgeCanTakeToAnswer(t *testing.T) {
 	t.Parallel()
 	c, seat := chainCompany(t, chainMember{key: "api", agent: "claude-code",
-		model: "claude-golden", runIn: config.PlacementE2B})
+		model: "claude-golden", runIn: config.PlacementContainer})
 	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	}))

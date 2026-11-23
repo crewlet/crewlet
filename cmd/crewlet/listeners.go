@@ -85,17 +85,18 @@ func bindListeners(ctx context.Context, boot *config.Bootstrap, nodeID string,
 	return l, nil
 }
 
-// boxHostURL is where a box on this node's own host (the `direct` cell) reaches
-// the tool bridge and the telemetry receiver: this node's listener serving them,
-// as this host dials it ([engine.Options.BoxHostURL]). Empty where the node runs
-// no seat, or binds no listener a box reaches (api.port 0): such boxes dial
-// CREWLET_MCP_BRIDGE_URL like any other. THE LISTENER THEY ARE SERVED ON. An ingress node serves them on api.public
-// where it binds one, else api.port, dialled at the address it bound
-// ([loopbackURL]). A node without the role serves them on api.port to this host's
-// loopback ALONE (internal/api's Probes), so that listener must be one loopback
-// reaches: bound on every interface or on loopback. One bound to a single
-// non-loopback address derives none, since a call from this host to it arrives
-// from that address, not loopback, and would be refused as from off the host.
+// boxHostURL is where a box that shares this node's loopback (the `direct`
+// cell) reaches the tool bridge and the telemetry receiver: this node's
+// listener serving them, as this host dials it ([engine.Options.BoxHostURL]).
+// Empty where the node runs no seat, or binds no listener a box reaches
+// (api.port 0): such boxes dial CREWLET_MCP_BRIDGE_URL like any other. THE
+// LISTENER THEY ARE SERVED ON. An ingress node serves them on api.public where
+// it binds one, else api.port, dialled at the address it bound ([loopbackURL]).
+// A node without the role serves them on api.port to this host's loopback ALONE
+// (internal/api's Probes), so that listener must be one loopback reaches: bound
+// on every interface or on loopback. One bound to a single non-loopback address
+// derives none, since a call from this host to it arrives from that address,
+// not loopback, and would be refused as from off the host.
 func (l *nodeListeners) boxHostURL(boot *config.Bootstrap, nodeID string) string {
 	profile := boot.Profile(nodeID)
 	if l == nil || !profile.RunsSeats() {

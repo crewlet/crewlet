@@ -62,8 +62,8 @@ const (
 	MaxRateWindow = time.Minute
 
 	// MaxCounterWindow is the longest window [Counter.Allow] counts: a DAY,
-	// the window of the remote check cells' box-time cap
-	// (internal/gitlet/checkrun), the longest any caller counts in. A backend
+	// the window of a seat's atlas records (internal/agent/builtin's
+	// AtlasRecordsPerDay), the longest any caller counts in. A backend
 	// keeps a window's count until the window has closed, and a window up to
 	// a day long is kept beside the valve's seconds in a store whose age
 	// outlasts it — never in theirs, which reaps a second-wide window within
@@ -238,10 +238,11 @@ const (
 )
 
 // Counter is the fleet's shared fixed-window counter, behind the notification
-// valve (a second wide) and the remote check cells' box-time cap (a day wide).
+// valve (a second wide), the Dashboard Assistant's turn rate (a minute),
+// delegated work (an hour) and a seat's atlas records (a day).
 //
 // A FIXED window, not a sliding one: the operator's number reads as "N per
-// seat per second" or "N box-hours a day", and the arithmetic a fixed window
+// seat per second" or "N records a day", and the arithmetic a fixed window
 // needs is one increment against one key — which is the only shape that stays
 // correct when four nodes increment it at once. A window is now truncated to a
 // multiple of its width from the zero time, which is UTC: a day's window runs

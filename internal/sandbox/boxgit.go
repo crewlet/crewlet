@@ -35,7 +35,7 @@ const (
 
 // GitAccessFile is where the run's Gitlet credential is written, relative to
 // the box's home ([GitAccessStep]), whose absolute path [GitAccessFileVar]
-// holds. A local cell writes it readable by the box's user alone (0600).
+// holds. Each cell writes it readable by the box's user alone (0600).
 const GitAccessFile = ".crewlet/git-access"
 
 // GitAccessStep is the setup step writing token, a box's Gitlet credential, to

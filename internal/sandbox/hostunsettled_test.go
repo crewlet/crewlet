@@ -43,7 +43,7 @@ func handedBackUnsettled(t *testing.T, rig *coordRig, step string) {
 
 // lostWithItsHost collects t1 past the bound and holds it to a job its
 // collection recorded LOST with the host its box is on, because that host's
-// store alone did not answer it for the box timeout: nothing handed back for a
+// store alone did not answer it for the host grace: nothing handed back for a
 // retry, nothing ended or announced, the loss on the claim's row at the
 // collection's instant as the turn resumes, and the turn resumed once to carry
 // the round on in a fresh box, the round's first loss; and the clock on the host
@@ -61,7 +61,7 @@ func lostWithItsHost(t *testing.T, rig *coordRig) {
 		onRow = rig.getIn(ctx, "t1").Lost
 	}
 	if err := collectAgain(t, rig); err != nil {
-		t.Fatalf("the collection past the box timeout = %v; want the job lost with its host and its round "+
+		t.Fatalf("the collection past the host grace = %v; want the job lost with its host and its round "+
 			"carried on", err)
 	}
 	if failed := rig.failures(); len(failed) != 0 {
@@ -140,7 +140,7 @@ func (s *movedOnBeforeLoss) MarkClaimLost(ctx context.Context, turnID, launch st
 }
 
 // A COLLECTION WHOSE HOST ALONE HAS A SILENT STORE IS GIVEN UP AS A SILENT HOST
-// IS: handed back uncounted until the box timeout of the host's silence, one
+// IS: handed back uncounted until the host grace of the host's silence, one
 // answer after another, then lost with that host and carried on, never ended
 // unreachable. A host that answered resets the clock; one that did not answer
 // keeps it, never acknowledged; this node's own silence, a collection it cut
@@ -153,15 +153,15 @@ func (s *movedOnBeforeLoss) MarkClaimLost(ctx context.Context, turnID, launch st
 // unended at its deadline.
 func TestACollectionWhoseHostAloneHasASilentStoreIsGivenUpAsASilentHostIs(t *testing.T) {
 	t.Parallel()
-	timeout := DefaultBoxTimeout
+	timeout := DefaultHostGrace
 
-	t.Run("a host whose store stays silent for the box timeout", func(t *testing.T) {
+	t.Run("a host whose store stays silent for the host grace", func(t *testing.T) {
 		t.Parallel()
 		rig := newCoordRig(t)
 		unsettledHost(t, rig)
 		handedBackUnsettled(t, rig, "the host's store did not answer")
 		rig.now = rig.now.Add(timeout - time.Second)
-		handedBackUnsettled(t, rig, "within the box timeout")
+		handedBackUnsettled(t, rig, "within the host grace")
 		rig.now = rig.now.Add(time.Second)
 		lostWithItsHost(t, rig)
 	})
@@ -206,7 +206,7 @@ func TestACollectionWhoseHostAloneHasASilentStoreIsGivenUpAsASilentHostIs(t *tes
 		}
 		rig.now = rig.now.Add(time.Minute)
 		if err := collectAgain(t, rig); !errors.Is(err, ErrStoreSilent) {
-			t.Fatalf("a collection the box timeout after the first silence, a minute into the second, = %v; "+
+			t.Fatalf("a collection the host grace after the first silence, a minute into the second, = %v; "+
 				"want it handed back on the second's clock", err)
 		}
 		if failed := rig.failures(); len(failed) != 0 {
@@ -249,7 +249,7 @@ func TestACollectionWhoseHostAloneHasASilentStoreIsGivenUpAsASilentHostIs(t *tes
 		rig.coordinator.pending = mine
 		handedBackUnsettled(t, rig, "the host's store did not answer")
 		rig.now = rig.now.Add(timeout)
-		handedBackUnsettled(t, rig, "past the box timeout, its loss this node's store did not record")
+		handedBackUnsettled(t, rig, "past the host grace, its loss this node's store did not record")
 		if got := rig.get("t1"); got.Lost != nil {
 			t.Fatalf("the row records %+v for a loss the store did not take", *got.Lost)
 		}
@@ -309,7 +309,7 @@ func TestACollectionWhoseHostAloneHasASilentStoreIsGivenUpAsASilentHostIs(t *tes
 		})
 	}
 
-	t.Run("a collection this node cuts short past the box timeout", func(t *testing.T) {
+	t.Run("a collection this node cuts short past the host grace", func(t *testing.T) {
 		t.Parallel()
 		rig := newCoordRig(t)
 		unsettledHost(t, rig)
@@ -363,7 +363,7 @@ func TestACollectionWhoseHostAloneHasASilentStoreIsGivenUpAsASilentHostIs(t *tes
 		handedBackUnsettled(t, rig, "the host's store did not answer")
 		rig.now = rig.now.Add(timeout)
 		if err := collectAgain(t, rig); err != nil {
-			t.Fatalf("the lost job's carry past the box timeout = %v; want its round carried on", err)
+			t.Fatalf("the lost job's carry past the host grace = %v; want its round carried on", err)
 		}
 		resumed := rig.resumer.calls()
 		if len(resumed) != 1 || resumed[0].Lost == nil || resumed[0].Lost.Cause != LossEngineRestarted {
@@ -483,11 +483,11 @@ func TestNoOtherPartyEndsARunWhoseHostThisNodeClocks(t *testing.T) {
 // as the round is carried on, before its resume has landed.
 func TestAClockOnAHostsStoreGoesWithTheCollectionItTimed(t *testing.T) {
 	t.Parallel()
-	timeout := DefaultBoxTimeout
+	timeout := DefaultHostGrace
 
 	// lostOnASilentHost has t1's job lost with its engine on node-a's host
 	// while node-a's store does not answer node-a's reads of the row, and its
-	// first carry handed back for that, the clock started, and the box timeout
+	// first carry handed back for that, the clock started, and the host grace
 	// passed since.
 	lostOnASilentHost := func(t *testing.T) *coordRig {
 		t.Helper()
@@ -515,7 +515,7 @@ func TestAClockOnAHostsStoreGoesWithTheCollectionItTimed(t *testing.T) {
 			}
 		}
 		if err := collectAgain(t, rig); err != nil {
-			t.Fatalf("the carry past the box timeout = %v", err)
+			t.Fatalf("the carry past the host grace = %v", err)
 		}
 		if resumed := rig.resumer.calls(); len(resumed) != 1 || resumed[0].Lost == nil {
 			t.Fatalf("the turn resumed %d times; want the lost round carried on once", len(resumed))
@@ -529,7 +529,7 @@ func TestAClockOnAHostsStoreGoesWithTheCollectionItTimed(t *testing.T) {
 		t.Parallel()
 		rig := lostOnASilentHost(t)
 		if err := collectAgain(t, rig); err != nil {
-			t.Fatalf("the carry past the box timeout = %v", err)
+			t.Fatalf("the carry past the host grace = %v", err)
 		}
 		rig.finished("t1")
 		if clocked(rig) {

@@ -25,9 +25,9 @@
 // ([SessionObjectReferences]): the collector's audit reports a session whose
 // object is gone, and every backup carries the sessions the rows name, reading
 // this log past its store copy through the applier's own decoder for the
-// captures a restore replays. Not a volume per node (a box on another node, or
-// on e2b, could not reach it, and the collector, the audit and the backup could
-// not see it), not the memory changelog (a compacted subject per seat cannot
+// captures a restore replays. Not a volume per node (a box on another node
+// could not reach it, and the collector, the audit and the backup could not
+// see it), not the memory changelog (a compacted subject per seat cannot
 // carry a conversation's ordering rules), and not the coordination store (a
 // value of mebibytes in a bucket every lease shares).
 //

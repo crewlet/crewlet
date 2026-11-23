@@ -41,7 +41,8 @@ const saveLedgerVersion = 1
 const saveLedgerCap = 512
 
 // saveLedgerRaces is how many lost races a save's charge reads again past: a
-// seat runs one job at a time, so a race is a duty handover, never a crowd.
+// seat's saves are charged by the nodes that launched its few runs, so a race
+// is two of those at once, never a crowd.
 const saveLedgerRaces = 3
 
 // saveLedgerWait bounds each read of a seat's ledger and each charge of it:

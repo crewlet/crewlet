@@ -17,7 +17,6 @@ import type { ModelView } from "../../data.ts";
 import { product } from "../../words.ts";
 import {
   CLOUD_FIELDS,
-  canExecute,
   cloudsOf,
   credentialWord,
   factsOf,
@@ -342,9 +341,6 @@ export function SignInStep({
             </>
           )}{" "}
           The model's page then shows whether it is signed in.
-          {canExecute(draft)
-            ? " A harness login stays on its node and never travels to an E2B sandbox."
-            : ""}
         </Callout>
       ) : null}
 

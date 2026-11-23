@@ -247,8 +247,8 @@ func TestAHandBackRetiresOnlyASpentMessage(t *testing.T) {
 // with no sandbox as none.
 func TestAReportsTopologyIsTheClosedSets(t *testing.T) {
 	t.Parallel()
-	got := issuereport.NewTopology(3, string(config.StreamEmbedded), string(config.CoordinationEmbeddedKV), string(config.PlacementE2B))
-	want := issuereport.Topology{Nodes: "2-3", Stream: "embedded", Coordination: "embedded-kv", Sandbox: "e2b"}
+	got := issuereport.NewTopology(3, string(config.StreamEmbedded), string(config.CoordinationEmbeddedKV), string(config.PlacementContainer))
+	want := issuereport.Topology{Nodes: "2-3", Stream: "embedded", Coordination: "embedded-kv", Sandbox: "container"}
 	if got != want {
 		t.Errorf("topology = %+v, want %+v", got, want)
 	}

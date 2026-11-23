@@ -9,13 +9,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitlet/gitlettest"
-	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/gitlet/host"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -139,29 +137,11 @@ func boxRecipes(t *testing.T, opts gitlettest.SoloOptions, git string) {
 			hooks)
 	}
 
-	// GIT'S MONITOR is no clone's: the coding clone leaves it unset, and the
-	// monitor's own step (run only in a cell whose boxes own their kernel,
-	// sandbox.CodingSteps) sets it exactly where the box can keep it
-	// (monitorable). Its daemon, which the box's first commit below starts, is
-	// stopped before the case's directories go.
+	// NO MONITOR: the coding clone leaves git's file-system monitor unset, and
+	// no step turns it on (sandbox.CodingSteps), since its daemon would spend
+	// the engine user's inotify budget beside every other seat's.
 	if out, _, _ := client.Try(t, clone, nil, "config", "--get", "core.fsmonitor"); strings.TrimSpace(out) != "" {
-		t.Errorf("the coding clone set core.fsmonitor to %q: the monitor is the cell's to decide", out)
-	}
-	runStep(t, dir, box, sandbox.MonitorStep([]sandbox.RunRepo{repo}))
-	monitored := monitorable(t, box, dir)
-	if out, _, _ := client.Try(t, clone, nil, "config", "--get", "core.fsmonitor"); (strings.TrimSpace(out) ==
-		"true") != monitored {
-		t.Errorf("the checkout's core.fsmonitor is %q, want it set exactly where the box can keep a monitor (%v)",
-			strings.TrimSpace(out), monitored)
-	}
-	if monitored {
-		t.Cleanup(func() {
-			// Not under t's context, which is cancelled before a cleanup
-			// runs: a daemon left running outlives the case.
-			stop := exec.Command("/bin/sh", "-c", "git fsmonitor--daemon stop")
-			stop.Dir, stop.Env = clone, box
-			_ = stop.Run()
-		})
+		t.Errorf("the coding clone set core.fsmonitor to %q, want it unset", out)
 	}
 
 	// A COMMIT MADE IN THE BOX pushes AS THE RUN (the engine's helper answering
@@ -366,52 +346,6 @@ func runGit(t *testing.T, dir string, env []string, args ...string) string {
 		t.Fatalf("git %s in the box: %v\n%s", strings.Join(args, " "), err, stderr.String())
 	}
 	return out.String()
-}
-
-// monitorable reports whether a box under env, working in dir, could keep
-// git's monitor for its checkouts: its git at gitproc.NodeMinVersion or
-// newer, and the checkouts at dir's top together at most half of the
-// kernel's watches (their directories) and of its instances (their count),
-// each the least of the host's and the namespace's — what sandbox.MonitorStep
-// asks before it turns the monitor on.
-func monitorable(t *testing.T, env []string, dir string) bool {
-	t.Helper()
-	v, err := gitproc.ParseVersion(runGit(t, dir, env, "version"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	least := func(paths ...string) int {
-		n := -1
-		for _, p := range paths {
-			raw, err := os.ReadFile(p)
-			if err != nil {
-				continue
-			}
-			if v, err := strconv.Atoi(strings.TrimSpace(string(raw))); err == nil && (n < 0 || v < n) {
-				n = v
-			}
-		}
-		return max(n, 0)
-	}
-	watches := least("/proc/sys/fs/inotify/max_user_watches", "/proc/sys/user/max_inotify_watches")
-	instances := least("/proc/sys/fs/inotify/max_user_instances", "/proc/sys/user/max_inotify_instances")
-	checkouts, dirs := 0, 0
-	tops, err := filepath.Glob(filepath.Join(dir, "*", ".git"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, top := range tops {
-		checkouts++
-		if err := filepath.WalkDir(filepath.Dir(top), func(_ string, d fs.DirEntry, err error) error {
-			if err == nil && d.IsDir() {
-				dirs++
-			}
-			return err
-		}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return v.AtLeast(gitproc.NodeMinVersion) && dirs <= watches/2 && checkouts <= instances/2
 }
 
 // pushRowsOf is every push row of the fleet's repository, read linearizable.

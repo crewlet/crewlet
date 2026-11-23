@@ -127,7 +127,7 @@ func TestALaterSandboxRevisionReconfiguresTheRunningRuntime(t *testing.T) {
 	}
 	before := first.coordinator.Manager()
 
-	applied := applyOK(t, e, sandboxDoc("    default_timeout_seconds: 7200"))
+	applied := applyOK(t, e, sandboxDoc("    host_grace_seconds: 7200"))
 	if slices.Contains(applied, "sandbox_runtime") || !slices.Contains(applied, "sandbox") {
 		t.Errorf("a second sandbox revision got through %v, want the swap and no second start",
 			applied)
@@ -136,9 +136,9 @@ func TestALaterSandboxRevisionReconfiguresTheRunningRuntime(t *testing.T) {
 		t.Fatal("a revision rebuilt the runtime, forgetting which seats are mid-run")
 	}
 	after := first.coordinator.Manager()
-	if after == before || after.BoxTimeout() != 2*time.Hour {
-		t.Fatalf("the coordinator serves a manager with box timeout %v, want the "+
-			"revision's 2h", after.BoxTimeout())
+	if after == before || after.HostGrace() != 2*time.Hour {
+		t.Fatalf("the coordinator serves a manager with host grace %v, want the "+
+			"revision's 2h", after.HostGrace())
 	}
 	if !e.SeatHeldBySandbox("swe") {
 		t.Error("the reload forgot the job still holding the seat")
@@ -245,10 +245,12 @@ func TestARevisionWithoutASandboxKeepsTheRuntimeForTheRunsInFlight(t *testing.T)
 // A CATALOGUE THAT CANNOT BE BUILT IS REFUSED ON A NODE THAT RUNS NO SANDBOX
 // YET, as on one that does — before anything changes — so no revision whose
 // providers.sandbox can never mint a box is published.
+//
+// NOT PARALLEL: it points PATH where no container runtime is.
 func TestABrokenSandboxCatalogueIsRefusedOnANodeWithoutOne(t *testing.T) {
-	t.Parallel()
 	e := sandboxNode(t, nil)
-	broken := e2bExecutorDoc(t, "${CREWLET_TEST_E2B_KEY_NEVER_SET}")
+	broken := containerExecutorDoc(t, "anthropic/claude-sonnet-5")
+	withNoContainerRuntime(t)
 	status, applied, err := e.Apply(t.Context(), parseCompany(t, broken), time.Now())
 	if err == nil || status != configplane.StatusError {
 		t.Fatalf("Apply = (%s, %v, %v), want a refusal", status, applied, err)
@@ -269,23 +271,27 @@ func TestABrokenSandboxCatalogueIsRefusedOnANodeWithoutOne(t *testing.T) {
 // `crewlet run` holds the Tier B file it imports to [Engine.Buildable] before
 // storing or activating it, since nothing else builds it before the fleet is
 // pointed at it. Building less than an apply (no sandbox catalogue) passes a
-// file every apply refuses; resolving from the environment alone refuses a key
-// the node's secret store holds.
+// file every apply refuses; resolving from the environment alone refuses a
+// variable the node's secret store holds. NOT PARALLEL: it sets PATH.
 //
-// Mutations: drop the catalogue from [buildRevision] and the unset key builds;
-// resolve from the environment alone and the stored key does not.
+// Mutations: drop the catalogue from [buildRevision] and the runtime-less
+// cell builds; resolve from the environment alone and the stored model does not.
 func TestBuildableIsTheApplysBuildOverThisNodesChain(t *testing.T) {
-	t.Parallel()
-	company := parseCompany(t, e2bExecutorDoc(t, "${CREWLET_TEST_E2B_KEY}"))
+	company := parseCompany(t, containerExecutorDoc(t, "anthropic/${CREWLET_TEST_MODEL}"))
 	// AN EMPTY ENVIRONMENT, so the process's own can answer nothing here.
 	e := &Engine{environ: config.MapSource{}}
 	e.installSecrets(map[string]string{})
+	stubVendorHarness(t, "docker")
+	if err := e.Buildable(company); err == nil {
+		t.Error("a revision whose model resolves to nothing on this node was buildable")
+	}
+	e.installSecrets(map[string]string{"CREWLET_TEST_MODEL": "claude-sonnet-5"})
+	if err := e.Buildable(company); err != nil {
+		t.Errorf("a revision whose model this node's secret store holds was refused: %v", err)
+	}
+	withNoContainerRuntime(t)
 	if err := e.Buildable(company); err == nil {
 		t.Error("a revision whose sandbox catalogue cannot be built was buildable")
-	}
-	e.installSecrets(map[string]string{"CREWLET_TEST_E2B_KEY": "e2b_test_key"})
-	if err := e.Buildable(company); err != nil {
-		t.Errorf("a revision whose key this node's secret store holds was refused: %v", err)
 	}
 	if e.Company() != nil || e.sandbox.Load() != nil {
 		t.Error("checking a revision installed it or started a sandbox runtime")
@@ -393,29 +399,29 @@ func newSandboxNodeIn(t testing.TB, company *config.Company, environment config.
 	return e
 }
 
-// e2bExecutorDoc is a one-seat company whose executor's entry runs its runs in
-// the remote cell, keyed by key — the one cell whose backend a catalogue can
-// fail to build for want of a credential.
-func e2bExecutorDoc(t *testing.T, key string) string {
+// containerExecutorDoc is a one-seat company whose executor's entry, on
+// model, runs its runs in the container cell under docker: a catalogue that
+// cannot be built where docker is on no PATH ([withNoContainerRuntime]). An
+// OpenCode entry, which runs as root too, so the case reads the same under
+// any user.
+func containerExecutorDoc(t *testing.T, model string) string {
 	t.Helper()
 	return fmt.Sprintf(`
 name: Nimbus
 providers:
   llm:
     cc:
-      harness: claude-code
-      model: sonnet
-      run_in: e2b
+      harness: opencode
+      model: %q
+      run_in: container
       state_dir: %q
-      auth: {mode: api-key, api_key: "sk-ant-not-real"}
   sandbox:
-    e2b:
-      api_key: %q
+    local: {image: example.invalid/box:1, runtime: docker}
 roles:
   - name: SWE
     handle: swe
     llm: cc
-`, t.TempDir(), key)
+`, model, t.TempDir())
 }
 
 // sandboxDoc is [sandboxCompanyDoc] with extra lines in its providers.sandbox

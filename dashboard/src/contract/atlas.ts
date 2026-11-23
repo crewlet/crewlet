@@ -66,7 +66,6 @@ export type AtlasVendor =
   | "cursor"
   | "datadog"
   | "digitalocean"
-  | "e2b"
   | "expo"
   | "github"
   | "gitlab"
@@ -734,7 +733,6 @@ export const ATLAS_FACT_SPECS = {
       "cursor",
       "datadog",
       "digitalocean",
-      "e2b",
       "expo",
       "github",
       "gitlab",

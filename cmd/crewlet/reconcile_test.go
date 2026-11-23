@@ -1057,7 +1057,7 @@ func TestAnOverrideIsJudgedAgainstTheFleetsRevision(t *testing.T) {
 //
 // The engine boots unconfigured where the file is to be imported, so nothing
 // builds it until the first reconcile, after the seed has stored it and
-// pointed the fleet at it. A company this node could not build (an E2B key
+// pointed the fleet at it. A company this node could not build (a model
 // resolving to nothing) would be refused by every apply and next boot. So the
 // seed builds first and a refusal writes nothing. A node restarting into a
 // running fleet with a stale file it ignores must not be refused over it.
@@ -1065,7 +1065,7 @@ func TestAnOverrideIsJudgedAgainstTheFleetsRevision(t *testing.T) {
 // pointer is read and the ignored file refuses the boot.
 func TestAFileThisNodeCannotBuildIsNeverImported(t *testing.T) {
 	t.Parallel()
-	unbuildable := errors.New("e2b: providers.sandbox.e2b.api_key resolved empty")
+	unbuildable := errors.New(`engine: provider "coder": model is "${CODER_MODEL}" and CODER_MODEL resolved to nothing`)
 	refuses := func(*config.Company) error { return unbuildable }
 	file := parse(t, companyYAML)
 

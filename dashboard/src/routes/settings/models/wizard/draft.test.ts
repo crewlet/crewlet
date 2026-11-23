@@ -635,11 +635,11 @@ test("a coding model on a company with no sandbox block writes this host as the 
   const next = nextDocument(doc, draft()).doc as Record<string, any>;
   expect(next.providers.sandbox).toEqual({ local: {}, default_run_in: "direct" });
   // A COMPANY THAT HAS ONE keeps it as it is.
-  const own = { name: "Acme", providers: { sandbox: { e2b: {}, default_run_in: "e2b" } } } as never;
-  expect((nextDocument(own, draft()).doc as Record<string, any>).providers.sandbox).toEqual({
-    e2b: {},
-    default_run_in: "e2b",
-  });
+  const sandbox = { local: { image: "ghcr.io/example/agent:1" }, default_run_in: "container" };
+  const own = { name: "Acme", providers: { sandbox: structuredClone(sandbox) } } as never;
+  expect((nextDocument(own, draft()).doc as Record<string, any>).providers.sandbox).toEqual(
+    sandbox,
+  );
   // A HARNESS THAT RUNS NO CODING needs none.
   const helperOnly = nextDocument(doc, draft({ harness: "gemini-cli" })).doc as Record<string, any>;
   expect(helperOnly.providers.sandbox).toBeUndefined();

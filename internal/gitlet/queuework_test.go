@@ -347,11 +347,11 @@ func (n *node) trainAttempt(repoID, oid, name string, state gitlet.CheckState, p
 		finished = at
 	}
 	n.exec(`INSERT INTO code_checks (repo_id, commit_oid, target_ref, name, attempt, state, purpose, change_id,
-		revision, candidate_id, entry_id, base_oid, defs_oid, required, run_in, timeout_seconds, reason,
+		revision, candidate_id, entry_id, base_oid, defs_oid, required, timeout_seconds, reason,
 		runner_node, placement, box_handle, reporter, queued_at, started_at, finished_at,
 		duration_ms, exit_code, failures_omitted, queued_position, finished_position, row_bytes, overdue_at,
 		url, summary, def, failures, tail)
-		VALUES (?, ?, ?, ?, 1, ?, ?, '', 0, ?, '', '', '', 1, '', 600, '', '', '', '', '', ?, ?, ?, 0, NULL,
+		VALUES (?, ?, ?, ?, 1, ?, ?, '', 0, ?, '', '', '', 1, 600, '', '', '', '', '', ?, ?, ?, 0, NULL,
 			0, 1, 0, 4, ?, '', '', '', '', '')`,
 		repoID, oid, mainRef, name, string(state), string(purpose), candidate, at, started, finished,
 		store.EncodeTime(harnessAt.Add(600*time.Second)))

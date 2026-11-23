@@ -42,12 +42,12 @@ func TestALoopbackHostIsTheEngineHostInsideTheBox(t *testing.T) {
 }
 
 // A BOX ON THE HOST'S OWN NETWORK IS HANDED THE ADDRESS AS WRITTEN. A direct
-// box shares the engine's loopback, and a remote one has no name for it at
-// all, so neither may be given a container runtime's alias.
+// box shares the engine's loopback, and a box that names no host alias has
+// none to take, so neither may be given a container runtime's alias.
 func TestOnlyABoxWithANetworkOfItsOwnIsHandedTheAlias(t *testing.T) {
 	t.Parallel()
 	const raw = "http://127.0.0.1:8000/mcp"
-	for _, box := range []Sandbox{&directBox{}, NewFakeSandbox("remote")} {
+	for _, box := range []Sandbox{&directBox{}, NewFakeSandbox("unaliased")} {
 		if got := EngineAddress(box, raw); got != raw {
 			t.Errorf("%T: EngineAddress = %q, want %q unchanged", box, got, raw)
 		}

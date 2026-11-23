@@ -17,7 +17,6 @@ const (
 	VendorCursor       Vendor = "cursor"
 	VendorDatadog      Vendor = "datadog"
 	VendorDigitalOcean Vendor = "digitalocean"
-	VendorE2B          Vendor = "e2b"
 	VendorExpo         Vendor = "expo"
 	VendorGitHub       Vendor = "github"
 	VendorGitLab       Vendor = "gitlab"
@@ -36,7 +35,7 @@ const (
 // Vendors is every vendor, [VendorOther] last.
 var Vendors = []Vendor{
 	VendorAWS, VendorAnthropic, VendorApple, VendorAtlassian, VendorCloudflare, VendorCursor,
-	VendorDatadog, VendorDigitalOcean, VendorE2B, VendorExpo, VendorGitHub,
+	VendorDatadog, VendorDigitalOcean, VendorExpo, VendorGitHub,
 	VendorGitLab, VendorGitlet, VendorGoogle, VendorGoogleCloud, VendorMattermost, VendorMeta,
 	VendorOpenAI, VendorScaleway, VendorSlack, VendorXAI, VendorOther,
 }

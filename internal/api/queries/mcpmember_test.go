@@ -87,19 +87,17 @@ func TestTheServersListAdmitsWhomItsRoutesVerbDoes(t *testing.T) {
 	}
 }
 
-// memberCompany declares a local server boxes are given (one an e2b box runs
-// outside the company's network), a remote server on a private address with a
-// header, and a per-agent server the engine binds each seat's credential to.
+// memberCompany declares a local server container boxes are given, a remote
+// server on a private address with a header, and a per-agent server the engine
+// binds each seat's credential to.
 const memberCompany = `
 name: Acme
 providers:
   sandbox:
     local: {image: "ghcr.io/example/box:1"}
-    e2b: {api_key: "${E2B_API_KEY}"}
     default_run_in: container
   llm:
     main: {model: sonnet}
-    cloud: {model: sonnet, run_in: e2b}
 mcp_servers:
   - name: docs
     command: docs-mcp
@@ -124,7 +122,7 @@ roles:
     sandbox: {mcp: {servers: [docs]}}
   - name: Researcher
     handle: researcher
-    llm: cloud
+    llm: main
     sandbox: {mcp: {servers: [intranet, docs]}}
 `
 

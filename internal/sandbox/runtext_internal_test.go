@@ -296,7 +296,7 @@ func TestAFilePastTheCapIsRefusedNotClipped(t *testing.T) {
 // fake, a direct box from Create, and a reattached box of either placement
 // (Create's container branch needs a runtime, and gives no cap like the rest).
 // The contract suite certifies the fake and local boxes at a cap of its own,
-// so this ties that cap to the engine's; E2B's contract runs at MaxFileBytes.
+// so this ties that cap to the engine's.
 func TestEveryBoxReadsWholeUpToMaxFileBytes(t *testing.T) {
 	t.Parallel()
 	if MaxFileBytes != 32<<20 {

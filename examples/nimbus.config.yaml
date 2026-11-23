@@ -220,11 +220,11 @@ api:
   # seat's tools reach that box back over /mcp/{token} here.  A `direct`
   # box on this machine dials this port on loopback, which the node
   # derives from the socket it binds — nothing to set, and `port: 0`
-  # would leave every executor launch refused.  A `container` or `e2b`
-  # box needs CREWLET_MCP_BRIDGE_URL, a URL that box can dial.  In a
-  # fleet the URL is the fleet's, the same on every node: any node
-  # serving the API, a load balancer in front of several included,
-  # relays each call to the node holding the seat.
+  # would leave every executor launch refused.  A `container` box, on
+  # the runtime's own network, needs CREWLET_MCP_BRIDGE_URL, a URL that
+  # box can dial.  In a fleet the URL is the fleet's, the same on every
+  # node: any node serving the API, a load balancer in front of several
+  # included, relays each call to the node holding the seat.
   #
   # AND THE BOXES' GIT: /box/git/ is mounted here on a node whose roles
   # name `gitlet` (every role, as here), which is what the

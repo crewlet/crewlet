@@ -496,7 +496,7 @@ function series() {
   };
 }
 
-/** A finished phase as the engine publishes it, sandbox price and all. */
+/** A finished phase as the engine publishes it, price and all. */
 function pricedPhase(at: string) {
   return {
     id: `phase-${at}`,
@@ -516,7 +516,6 @@ function pricedPhase(at: string) {
       iteration: 1,
       role: "CEO",
       model: "claude-sonnet-5",
-      backend: "e2b",
       harness: "claude-code",
       sandbox_id: "sbx-1",
       input_tokens: TOKENS - 321,

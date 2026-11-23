@@ -28,11 +28,6 @@ type Executor struct {
 	// harness refuses for uid 0, named in the refusal of an engine running as
 	// root; "" for a harness that refuses none.
 	RefusesRoot string `yaml:"refuses_root,omitempty"`
-	// E2BTemplate is E2B's prebuilt image holding the harness, which a
-	// company naming no template of its own gets; "" for a harness E2B
-	// prebuilds none of, whose e2b box needs the company's own template
-	// (config refuses one without).
-	E2BTemplate string `yaml:"e2b_template,omitempty"`
 	// TempEnv is the variable the harness roots its own temporary directory
 	// at beside the standard ones, pointed at a host box's own; "" for none.
 	TempEnv string `yaml:"temp_env,omitempty"`

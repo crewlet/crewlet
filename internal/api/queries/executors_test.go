@@ -403,13 +403,14 @@ func TestAnUnreachableRunRecordIsUnavailableRatherThanFailed(t *testing.T) {
 	}
 }
 
-// WHERE A RUN IS RUNNING IS AN OPERATOR QUESTION now that providers.sandbox is
-// a catalogue: one company runs some seats on the engine host and others in a
-// remote box, and this board is the only surface that could answer it.
+// WHERE A RUN IS RUNNING IS AN OPERATOR QUESTION once providers.sandbox serves
+// two cells: one company runs some seats as a process tree on their node's
+// host and others in a container there, and this board is the only surface
+// that says which isolation a job has.
 func TestTheBoardSaysWhereEachRunIs(t *testing.T) {
 	store := seedRuns(t,
 		sandbox.PendingRun{TurnID: "t1", AgentHandle: "swe", Role: "SWE",
-			Placement: "e2b", Status: sandbox.StatusRunning, CreatedAt: runBase},
+			Placement: "container", Status: sandbox.StatusRunning, CreatedAt: runBase},
 		sandbox.PendingRun{TurnID: "t2", AgentHandle: "swe", Role: "SWE",
 			Placement: "direct", Status: sandbox.StatusRunning, CreatedAt: runBase},
 	)
@@ -417,7 +418,7 @@ func TestTheBoardSaysWhereEachRunIs(t *testing.T) {
 	for _, row := range askRuns(t, store) {
 		where[row["turn_id"].(string)] = row["placement"]
 	}
-	for turn, want := range map[string]string{"t1": "e2b", "t2": "direct"} {
+	for turn, want := range map[string]string{"t1": "container", "t2": "direct"} {
 		if got := where[turn]; got != want {
 			t.Errorf("run %s reports placement %v, want %q", turn, got, want)
 		}

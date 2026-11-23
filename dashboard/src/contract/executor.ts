@@ -21,7 +21,7 @@ export const EXECUTOR_TAIL_OUTCOMES = [
   "tail",
   "launching",
   "not_running",
-  "owner_silent",
+  "host_silent",
   "box_paused",
   "box_gone",
 ] as const;
@@ -37,11 +37,11 @@ export const LIVE_OUTPUT_MAX_BYTES = 262_144;
  * How often an open executor's live output is asked for, in ms.
  *
  * THREE SECONDS, chained after each answer, so an open view has one request in
- * flight. Above the owner's reuse window (`sandbox.LiveReuse`, two seconds) so
- * a single viewer is read fresh on every poll while any number of viewers
+ * flight. Above the box host's reuse window (`sandbox.LiveReuse`, two seconds)
+ * so a single viewer is read fresh on every poll while any number of viewers
  * share one read of the box, and above the fleet read budget
  * (`sandbox.TailReadBudget`) so a poll never starts before the last one's
- * owner could have answered. Short enough that the agent's current step is on
+ * host could have answered. Short enough that the agent's current step is on
  * screen while it is still the current step; it costs nothing while nobody
  * looks.
  */

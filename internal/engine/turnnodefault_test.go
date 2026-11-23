@@ -33,7 +33,7 @@ import (
 //
 // Mutation: NAK any of the three as the message's, drop the infrastructure's
 // conditions or the coordinator's marks from nodesFailure, read every condition
-// as the node's, or put a refusing sandbox provider on the work's side: red.
+// as the node's, or put a sandbox class no wait clears on the work's side: red.
 func TestAFailureOfThisNodesIsNeverTheMailsOwn(t *testing.T) {
 	t.Parallel()
 	live := t.Context()
@@ -65,9 +65,11 @@ func TestAFailureOfThisNodesIsNeverTheMailsOwn(t *testing.T) {
 		"a deadline the turn ran past": {
 			err: fmt.Errorf("runner: the harness's run: %w", context.DeadlineExceeded)},
 		"a sandbox provider that did not answer": {err: fmt.Errorf("runner: launching the executor's "+
-			"run: %w", sandbox.Because(sandbox.WhyProviderUnavailable, errors.New("e2b: 503"))), nodes: true},
-		"a sandbox provider refusing the company's key": {err: fmt.Errorf("runner: launching the executor's run: %w",
-			sandbox.Because(sandbox.WhyProviderRefused, errors.New("e2b: 401"))), nodes: true},
+			"run: %w", sandbox.Because(sandbox.WhyProviderUnavailable,
+			errors.New("docker: the daemon did not answer"))), nodes: true},
+		"a sandbox this node's configuration cannot start": {err: fmt.Errorf("runner: launching the "+
+			"executor's run: %w", sandbox.Because(sandbox.WhyConfiguration,
+			errors.New("docker: the runtime refused the image"))), nodes: true},
 		"the mail's own": {err: errors.New("the payload is larger than the broker takes")},
 	}
 	sites := map[string]func(t *testing.T, failed error) (*engine.Dispatcher, []*events.Event){

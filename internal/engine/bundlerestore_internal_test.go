@@ -100,7 +100,7 @@ func TestABootRestoresTheConfiguredBundle(t *testing.T) {
 // seats in as an account no published revision names — and outlive every
 // retry, since the next revision's restore finds a login present and keeps it.
 //
-// NOT PARALLEL: it sets the variable the bundle is read from.
+// NOT PARALLEL: it sets the variable the bundle is read from, and PATH.
 //
 // Mutation: drop the restore from Apply, and the first half is red; make it
 // before the stages that can still refuse the revision, and the second is.
@@ -108,6 +108,7 @@ func TestAnApplyRestoresTheBundleOnlyForARevisionItPublishes(t *testing.T) {
 	login := bundledLogin(t)
 	e := bundleNode(t, nil)
 
+	path := withNoContainerRuntime(t)
 	status, stages, err := e.Apply(t.Context(), parseBundled(t, refusedBundledCompanyDoc), time.Now())
 	if err == nil || status != configplane.StatusError {
 		t.Fatalf("the premise: Apply = (%s, %v, %v), want the revision refused", status, stages, err)
@@ -116,6 +117,7 @@ func TestAnApplyRestoresTheBundleOnlyForARevisionItPublishes(t *testing.T) {
 		t.Fatalf("a refused revision restored its bundle (%v) into the directory the running "+
 			"epoch's seats share", statErr)
 	}
+	t.Setenv("PATH", path)
 
 	status, stages, err = e.Apply(t.Context(), parseBundled(t, bundledCompanyDoc), time.Now())
 	if err != nil || status != configplane.StatusOK {
@@ -272,9 +274,11 @@ func parseBundled(t *testing.T, doc string) *config.Company {
 	return c
 }
 
-// refusedBundledCompanyDoc is [bundledCompanyDoc] with a sandbox catalogue that
-// builds no backend — its key resolves to nothing — which the apply refuses
-// after the company itself has been built.
+// refusedBundledCompanyDoc is [bundledCompanyDoc]'s bundled entry with a
+// sandbox catalogue that builds no backend under [withNoContainerRuntime] — its
+// container cell's runtime is on no PATH — which the apply refuses after the
+// company itself has been built. The seat runs on an OpenCode entry, which
+// runs as root too, so the refusal is the catalogue's under any user.
 const refusedBundledCompanyDoc = `
 name: Acme
 providers:
@@ -282,14 +286,16 @@ providers:
     subscription:
       model: sonnet
       harness: claude-code
-      run_in: e2b
+    boxed:
+      model: anthropic/claude-sonnet-5
+      harness: opencode
+      run_in: container
   sandbox:
-    e2b:
-      api_key: "${CREWLET_TEST_E2B_KEY_NEVER_SET}"
+    local: {image: example.invalid/box:1, runtime: docker}
 roles:
   - name: CEO
     handle: ceo
-    llm: subscription
+    llm: boxed
 `
 
 // AN EPOCH DOES NOT UNDO A LOGOUT. `crewlet llm logout` empties the directory
@@ -426,6 +432,17 @@ func stubVendorHarness(t *testing.T, name string) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// withNoContainerRuntime points PATH at an empty directory, so a container
+// cell's runtime resolves nowhere and its catalogue cannot be built
+// ([sandbox.ResolveContainerRuntime]), and answers the PATH it replaced. Not
+// for a parallel test.
+func withNoContainerRuntime(t *testing.T) string {
+	t.Helper()
+	path := os.Getenv("PATH")
+	t.Setenv("PATH", t.TempDir())
+	return path
 }
 
 // bundleLog is a log sink the logger may write to from any goroutine.

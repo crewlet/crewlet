@@ -101,7 +101,8 @@ func TestNoSecretReachesTheAtlas(t *testing.T) {
 
 // THE SETTINGS DECLARE WHAT THE COMPANY RUNS ON: the account of every
 // integration, the zones and the host names in them, the servers, the tool
-// servers, the models and the sandbox, each confirmed by the settings.
+// servers and the models, each confirmed by the settings. The sandbox it
+// declares is no account: its boxes run on the engine's own nodes.
 func TestTheSettingsDeclareWhatTheCompanyRunsOn(t *testing.T) {
 	t.Parallel()
 	v := read(derive.AcmeCompany())
@@ -114,9 +115,9 @@ func TestTheSettingsDeclareWhatTheCompanyRunsOn(t *testing.T) {
 			t.Errorf("%s is %s, %s: what the settings declare is confirmed", e.Ref, e.State, e.Word)
 		}
 	}
-	if accounts != 15 {
+	if accounts != 14 {
 		t.Errorf("%d accounts, want one for each of the 13 integrations that name one (Jira and Confluence "+
-			"share a site), the sandbox's and Gitlet's", accounts)
+			"share a site) and Gitlet's, and none for the sandbox", accounts)
 	}
 	cf := find(t, v, atlas.KindAccount, "cloudflare/0123456789abcdef0123456789abcdef")
 	if got := factOf(cf, atlas.FactCapability); !slices.Equal(got, []string{"cdn", "dns"}) {
@@ -147,7 +148,6 @@ func TestTheSettingsDeclareWhatTheCompanyRunsOn(t *testing.T) {
 			t.Errorf("the main model's %s is %v, want %s", f, got, want)
 		}
 	}
-	find(t, v, atlas.KindAccount, "e2b")
 	find(t, v, atlas.KindToolServer, "mcp/tickets")
 	aws := find(t, v, atlas.KindAccount, "aws/123456789012")
 	if got := factOf(aws, atlas.FactRegion); !slices.Equal(got, []string{"eu-west-1", "us-east-2"}) {

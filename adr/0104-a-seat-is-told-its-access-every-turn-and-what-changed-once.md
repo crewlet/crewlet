@@ -38,7 +38,7 @@ chain places a run in is told with the memory the box is held to and whether
 its image has a browser and a container runtime. A fresh box is read once
 after its setup, into closed values only, and the reading is kept per seat and
 cell in the coordination store under a fingerprint of what made the box (its
-cell, image or template, run arguments and setup steps), so a reading is told
+cell, image, run arguments and setup steps), so a reading is told
 only while the document still makes the box that way and a box nobody has read
 yet is told as such. A box change is told only between two facts both sides
 know, and a baseline written before boxes were told (snapshot version 1) is no

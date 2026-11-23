@@ -692,7 +692,7 @@ test("a parked run is a row of Waiting on a person with its audience and Answer"
             paused_at: ago(2_280_000),
             pause_ttl_seconds: 7_200,
             task_description: "fleet map",
-            placement: "remote",
+            placement: "container",
             harness: "claude",
             box_exists: true,
             // PUT TO THE READER, as the engine states it.
@@ -733,7 +733,7 @@ test("a parked run put to somebody else says whom it waits on, and answers only 
     updated_at: ago(2_000_000),
     paused_at: ago(2_280_000),
     pause_ttl_seconds: 7_200,
-    placement: "remote",
+    placement: "container",
     harness: "claude",
     box_exists: true,
     put_to: ["jane"],

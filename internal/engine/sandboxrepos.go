@@ -48,10 +48,9 @@ type launchRepos struct {
 // a credential's holds the box to its own grant, which pushes nothing (ADR-0110).
 // deps are the seat's own code-tool seams on this epoch ([CodeToolDeps] in a
 // running engine), an argument rather than state so a test replaces them; their
-// zero value serves no code. placement is the box's cell, which decides whether
-// git's file-system monitor runs.
+// zero value serves no code.
 func (e *Engine) resolveRunRepos(ctx context.Context, deps builtin.CodeDeps, t *turnctx.Turn,
-	reqs []builtin.RepoRequest, placement sandbox.Placement) (launchRepos, error) {
+	reqs []builtin.RepoRequest) (launchRepos, error) {
 
 	if len(reqs) == 0 {
 		return launchRepos{}, nil
@@ -89,7 +88,7 @@ func (e *Engine) resolveRunRepos(ctx context.Context, deps builtin.CodeDeps, t *
 		return launchRepos{}, fmt.Errorf("engine: Gitlet answered this checkout's reads at %s, no "+
 			"position of the code log", resolved.Floor)
 	}
-	clone, err := sandbox.CodingSteps(placement, resolved.Repos)
+	clone, err := sandbox.CodingSteps(resolved.Repos)
 	if err != nil {
 		return launchRepos{}, fmt.Errorf("engine: %w", err)
 	}
@@ -135,8 +134,7 @@ func (d runCheckouts) Checkout(ctx context.Context, turn *turnctx.Turn, launch s
 	if d.deps != nil {
 		deps = func(*Engine) builtin.CodeDeps { return d.deps() }
 	}
-	resolved, err := e.resolveRunRepos(ctx, deps(e), turn, []builtin.RepoRequest{req},
-		sandbox.Placement(run.Placement))
+	resolved, err := e.resolveRunRepos(ctx, deps(e), turn, []builtin.RepoRequest{req})
 	if err != nil {
 		return builtin.Checkout{}, err
 	}
@@ -187,8 +185,7 @@ func (d runCheckouts) Checkout(ctx context.Context, turn *turnctx.Turn, launch s
 			granted.Base = head
 			out.Repo = granted
 		}
-		if out.Steps, err = sandbox.CodingSteps(sandbox.Placement(run.Placement),
-			[]sandbox.RunRepo{granted}); err != nil {
+		if out.Steps, err = sandbox.CodingSteps([]sandbox.RunRepo{granted}); err != nil {
 			return builtin.Checkout{}, fmt.Errorf("engine: %w", err)
 		}
 	}

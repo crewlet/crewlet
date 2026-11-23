@@ -126,11 +126,11 @@ func HoldNamedDuty(backend coord.Backend, duty, owner, nodeID string, ttl time.D
 
 // ClaimNamedDuty is [ClaimDuty] for any fleet singleton.
 //
-// The scheduler is not the only one: the sandbox waiter polls every active run
-// in the company rather than only this node's seats, so N nodes running it
-// unclaimed means N reconnects per box per tick and N racing pause reapers.
-// Both want exactly this arrangement, and a second copy of it is how the two
-// come to disagree about what a duty record means.
+// The scheduler is not the only one: the launch-node watch (internal/sandbox)
+// judges every launch node in the fleet gone for good or not, so N nodes
+// running it unclaimed means N judges recording the same runs lost. Both want
+// exactly this arrangement, and a second copy of it is how the two come to
+// disagree about what a duty record means.
 func ClaimNamedDuty(backend coord.Backend, duty, owner, nodeID string, ttl time.Duration) DutyFunc {
 	if backend == nil {
 		// No coordination store is the single-node case, which always holds

@@ -160,7 +160,7 @@ var dutyCases = []testCase{
 		// routing decision nothing had to make.
 		duties := coord.AcquireOptions{Owner: "node-a:1", TTL: coord.MaxDutyTTL, Ungated: true}
 		h.claim(coord.WorkerResource("scheduler"), duties)
-		h.claim(coord.WorkerResource("sandbox-waiter"), duties)
+		h.claim(coord.WorkerResource("launch-node-watch"), duties)
 		h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-a:1", TTL: LongTTL})
 		h.claim(coord.NodeResource("node-a"), coord.AcquireOptions{
 			Owner: "node-a:1", TTL: LongTTL, Ungated: true,
@@ -173,7 +173,7 @@ var dutyCases = []testCase{
 		// reached the duty store but stopped at the first record would
 		// pass a single-duty case and still leave the second duty unrun.
 		h.requireResources("live duties", h.listLive(coord.ClassWorker),
-			"worker:scheduler", "worker:sandbox-waiter")
+			"worker:scheduler", "worker:launch-node-watch")
 		h.requireResources("live seats", h.listLive(coord.ClassSeat), "seat:ceo")
 		// The membership read, on a fleet where duties outnumber both the
 		// seats and the nodes. It is what a node divides the seats by, so
@@ -191,7 +191,7 @@ var dutyCases = []testCase{
 		// itself drained while its duty is still running.
 		h.requireResources("everything node-a:1 holds", h.listOwned("node-a:1"),
 			"claim:node-a", "node:node-a", "seat:ceo", "worker:scheduler",
-			"worker:sandbox-waiter")
+			"worker:launch-node-watch")
 	}},
 
 	{"a_released_duty_is_free_at_once_and_its_epoch_keeps_climbing", func(h *harness) {

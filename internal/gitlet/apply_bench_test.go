@@ -960,7 +960,7 @@ func widestCheck(tb testing.TB, key CheckKey, at time.Time) (CheckQueued, CheckF
 	report := func(lead string) string { return lead + strings.Repeat("/"+wide(254), 15) + "/x" }
 	def := CheckDef{Name: key.Name, Run: wide(MaxCheckRunBytes),
 		TimeoutSeconds: int(CheckTimeoutCeiling / time.Second),
-		Report:         CheckReport{JUnit: report(wide(254)), SARIF: report("s" + wide(253))}, RunIn: CellE2B}
+		Report:         CheckReport{JUnit: report(wide(254)), SARIF: report("s" + wide(253))}}
 	for i := range MaxCheckPaths {
 		head := fmt.Sprintf("%02d/", i)
 		def.Paths = append(def.Paths, head+wide(128-len(head)))
@@ -1007,12 +1007,12 @@ func (e *estate) seedPastTheHorizon(repo string, at time.Time) {
 	ended, overdue := store.EncodeTime(at), store.EncodeTime(at.Add(600*time.Second))
 	e.exec(`WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?)
 		INSERT INTO code_checks (repo_id, commit_oid, target_ref, name, attempt, state, purpose, change_id,
-			revision, candidate_id, entry_id, base_oid, defs_oid, required, run_in, timeout_seconds,
+			revision, candidate_id, entry_id, base_oid, defs_oid, required, timeout_seconds,
 			reason, runner_node, placement, box_handle, reporter, queued_at, started_at, finished_at,
 			duration_ms, exit_code, failures_omitted, queued_position, finished_position, row_bytes, overdue_at,
 			url, summary, def, failures, tail)
 		SELECT ?, printf('%040d', i), 'refs/heads/main', 'unit', 1, 'failed', 'tip', '', 0, '', '', '', '', 0,
-			'container', 600, 'exit', 'node-a', 'container', 'box', '', ?, ?, ?, 1000, 1, 0, 1, 2, 76, ?, '',
+			600, 'exit', 'node-a', 'container', 'box', '', ?, ?, ?, 1000, 1, 0, 1, 2, 76, ?, '',
 			'1 test failed', '{"name":"unit","run":"make test","timeout_seconds":600}', '', '--- FAIL' FROM k`,
 		n, repo, ended, ended, ended, overdue)
 	e.exec(`INSERT INTO code_check_logs (repo_id, commit_oid, target_ref, name, attempt, object, hash, size)

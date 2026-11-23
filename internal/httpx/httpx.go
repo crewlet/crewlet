@@ -39,7 +39,7 @@
 // httptest.Server.Close ends by sweeping http.DefaultTransport's idle
 // connections for every server in the binary rather than its own, so on the
 // shared pool a parallel neighbour's cleanup can fail a request the server
-// already answered. internal/sandbox lost a CI run to it.
+// already answered.
 //
 // processpool_guard_test.go is what keeps all three halves true: written down
 // and checked by nobody, this rule had four prose copies and seven packages

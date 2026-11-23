@@ -76,7 +76,6 @@ The settings are read only through the same redacting copy the configuration sur
 | `api.external_url` and `api.public.external_url` | the host name the deployment answers at, in its zone where the settings declare it |
 | `providers.llm` and `providers.embeddings` | each model entry, its vendor, harness, model, sign-in mode and place in the fallback chain |
 | `mcp_servers` | each enabled tool server, its transport, its address or the base name of its command (never its arguments) |
-| `providers.sandbox` | the E2B account, where the sandbox runs boxes there |
 | Gitlet | each repository the reader may read, with default branch, visibility, status and owner, the hosts it mirrors from and to, and each check its default branch runs with its latest result |
 
 Gitlet's repositories are read as the person reading the atlas, so a repository only its unit may read appears only to that unit. A value the atlas would refuse (a label shaped like a token, an address with credentials, an unresolved `${VAR}` reference) is left out, and the read says where it sat and why, never what it was.

@@ -34,13 +34,13 @@ func (p *specsSeen) seen() []Spec {
 	return slices.Clone(p.specs)
 }
 
-// boxManager is a manager over the three cells, each its own backend, with the
+// boxManager is a manager over the two cells, each its own backend, with the
 // direct cell as the catalogue's default and one operator setup step: a default
 // no check may take and steps no check may run.
 func boxManager(t *testing.T, cells map[Placement]Provider) (*Manager, *FakeRunner) {
 	t.Helper()
 	runner := NewFakeRunner("claude-code")
-	providers := map[Placement]Provider{Direct: NewFakeProvider(), Container: NewFakeProvider(), E2B: NewFakeProvider()}
+	providers := map[Placement]Provider{Direct: NewFakeProvider(), Container: NewFakeProvider()}
 	maps.Copy(providers, cells)
 	m, err := NewManager(ManagerOptions{
 		Providers:        providers,
@@ -75,7 +75,7 @@ func TestABoxForACheckInstallsNoAgent(t *testing.T) {
 		t.Parallel()
 		container := newSpecsSeen()
 		m, runner := boxManager(t, map[Placement]Provider{Container: container})
-		box, err := m.AcquireBox(t.Context(), Spec{Placement: Container, TimeoutSec: 660, Env: env}, steps)
+		box, err := m.AcquireBox(t.Context(), Spec{Placement: Container, Env: env}, steps)
 		if err != nil {
 			t.Fatalf("AcquireBox: %v", err)
 		}
@@ -96,7 +96,7 @@ func TestABoxForACheckInstallsNoAgent(t *testing.T) {
 			t.Error("a box that provisioned whole was torn down")
 		}
 		if specs := container.seen(); len(specs) != 1 || specs[0].Harness != "" ||
-			len(specs[0].CredentialFiles) != 0 || specs[0].TimeoutSec != 660 {
+			len(specs[0].CredentialFiles) != 0 {
 			t.Errorf("the backend was asked for %+v, want one box naming no agent and seeded no login", specs)
 		}
 	})
@@ -132,7 +132,7 @@ func TestABoxForACheckInstallsNoAgent(t *testing.T) {
 	} {
 		t.Run("refused: "+name, func(t *testing.T) {
 			t.Parallel()
-			cells := map[Placement]Provider{Direct: newSpecsSeen(), Container: newSpecsSeen(), E2B: newSpecsSeen()}
+			cells := map[Placement]Provider{Direct: newSpecsSeen(), Container: newSpecsSeen()}
 			m, runner := boxManager(t, cells)
 			box, err := m.AcquireBox(t.Context(), tc.spec, steps)
 			if box != nil || err == nil || !strings.Contains(err.Error(), tc.says) {

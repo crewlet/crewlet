@@ -82,10 +82,11 @@ var valveCases = []fleetCase{{
 		}
 	},
 }, {
-	// The remote check cells' box-time cap counts box-minutes in a DAY'S
-	// window (internal/gitlet/checkrun). A backend that kept a window only
-	// as long as the valve's seconds would forget the day's count between
-	// two charges an hour apart and hand the day back its whole allowance.
+	// A seat's atlas records are counted in a DAY'S window
+	// (internal/agent/builtin's AtlasRecordsPerDay). A backend that kept a
+	// window only as long as the valve's seconds would forget the day's
+	// count between two records an hour apart and hand the day back its
+	// whole allowance.
 	// The window is the UTC day: midnight to midnight.
 	name: "a day's window is one count from one UTC midnight to the next",
 	fn: func(h *fleetHarness) {
@@ -93,16 +94,16 @@ var valveCases = []fleetCase{{
 		if midnight.Hour() != 0 || midnight.Minute() != 0 {
 			h.t.Fatalf("a day's window starts at %s, not at a UTC midnight", midnight)
 		}
-		if !h.allow("code-checks-remote-minutes", 2, 24*time.Hour, midnight) {
+		if !h.allow("atlas-records:ceo", 2, 24*time.Hour, midnight) {
 			h.t.Fatal("the day's first charge was refused")
 		}
-		if !h.allow("code-checks-remote-minutes", 2, 24*time.Hour, midnight.Add(23*time.Hour)) {
+		if !h.allow("atlas-records:ceo", 2, 24*time.Hour, midnight.Add(23*time.Hour)) {
 			h.t.Fatal("a charge late in the day was refused with room left")
 		}
-		if h.allow("code-checks-remote-minutes", 2, 24*time.Hour, midnight.Add(24*time.Hour-time.Second)) {
+		if h.allow("atlas-records:ceo", 2, 24*time.Hour, midnight.Add(24*time.Hour-time.Second)) {
 			h.t.Fatal("a third charge in the day passed a limit of two: the day's count was forgotten")
 		}
-		if !h.allow("code-checks-remote-minutes", 2, 24*time.Hour, midnight.Add(24*time.Hour)) {
+		if !h.allow("atlas-records:ceo", 2, 24*time.Hour, midnight.Add(24*time.Hour)) {
 			h.t.Fatal("the next day inherited the previous one's count")
 		}
 	},

@@ -4,7 +4,7 @@
  * The placement rules are `lib/waterfall.test.ts`'s. What these hold is the
  * part a pure model cannot: that an executor's live output from its box is asked
  * for ONLY while a reader has its span open (and stops the moment they close
- * it), that a silent owner is named rather than drawn as an empty tail, and
+ * it), that a silent host is named rather than drawn as an empty tail, and
  * that a person's note is drawn as what became of it.
  */
 
@@ -173,7 +173,7 @@ describe("an executor's live output from its box", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /^Launch/ }));
     await flush();
-    // HOLDING NOTHING YET, it names no cursor: the owner answers what there is.
+    // HOLDING NOTHING YET, it names no cursor: the host answers what there is.
     expect(asked).toEqual([{ turn_id: "turn-1", launch_id: "L1" }]);
     expect(screen.getByText("running go test ./...")).toBeTruthy();
 
@@ -192,10 +192,10 @@ describe("an executor's live output from its box", () => {
     expect(asked).toHaveLength(2);
   });
 
-  test("a silent owner is named, never drawn as an empty tail", async () => {
+  test("a silent host is named, never drawn as an empty tail", async () => {
     mount(
       PARKED,
-      { outcome: "owner_silent", turn_id: "turn-1", launch_id: "L1", node: "node-b" },
+      { outcome: "host_silent", turn_id: "turn-1", launch_id: "L1", node: "node-b" },
       { selected: "run:L1" },
     );
     expect(await screen.findByText("node-b didn’t answer. Retrying.")).toBeTruthy();
@@ -287,7 +287,7 @@ describe("an executor's live output from its box", () => {
   // A REFUSAL NO WAIT CLEARS ENDS THE POLL: its zero `retry_after` is the
   // engine saying nothing should ask again on a timer, and asked every three
   // seconds it was answered the same each time and logged at warn on the
-  // owning node each time. One a wait clears keeps asking.
+  // box's host each time. One a wait clears keeps asking.
   //
   // Mutation: keep polling on a refusal with no wait, and the first row goes
   // red; stop on every refusal, and the second does.
@@ -315,7 +315,7 @@ describe("an executor's live output from its box", () => {
     }
   });
 
-  test("a run that has written nothing says so, which is not a silent owner", async () => {
+  test("a run that has written nothing says so, which is not a silent host", async () => {
     mount(
       PARKED,
       { ...RUNNING, output: { ...RUNNING.output!, text: "", source: "none" } },
@@ -912,7 +912,7 @@ describe("a live tail's announcements", () => {
     expect(liveState(undefined, false)).toBe("Asking the node that runs it.");
     expect(liveState(undefined, true)).toBe("The executor's output could not be read.");
     expect(
-      liveState({ outcome: "owner_silent", turn_id: "t", launch_id: "L", node: "n" }, false),
+      liveState({ outcome: "host_silent", turn_id: "t", launch_id: "L", node: "n" }, false),
     ).toBe("The node that runs it did not answer.");
     expect(
       liveState(

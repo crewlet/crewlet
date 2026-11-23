@@ -28,7 +28,7 @@ import (
 // text blocks to the plaintext's bound, read with the count and the next
 // request's estimate in one walk, takes 9.45 to 9.49 s on a dedicated two-core
 // slot (the executor's BenchmarkTheMainThreadReadAtItsBound; no slower under
-// the engine's memory limit), twice that loaded or through envd, and the wait
+// the engine's memory limit), twice that loaded, and the wait
 // keeps holdingsReadWait's headroom over that, about 1.4x. Lines no release
 // writes run past it loaded and are cut, the safe side (the executor's package
 // doc, "A collection's read of a thread"): a read past it answers [CountUnread]

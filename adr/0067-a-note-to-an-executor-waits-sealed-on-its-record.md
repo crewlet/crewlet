@@ -484,7 +484,7 @@ release whose resume this build has not read decides nothing. A hook whose call
 id the bridge cannot read is served with no call, so a cancel of it is not
 matched and only the session settles it (`mcp_bridge_steer_call_unread`). A
 serve whose verdict the read of a lost job on another node's host cannot land
-for the box timeout is given up with that host, and its note is reported
+for the host grace is given up with that host, and its note is reported
 `unconfirmed`.
 
 **Mid-upgrade.** Additive throughout: a note's serves and place, a read's

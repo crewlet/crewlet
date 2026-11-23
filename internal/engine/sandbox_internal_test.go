@@ -438,28 +438,20 @@ func TestEveryConfiguredPlacementCanBeBuilt(t *testing.T) {
 	// those machines. The stub is only found, never run: building a
 	// provider starts no container.
 	stubVendorHarness(t, "docker")
+	spec := &config.SandboxProvider{
+		// An image, because one of the two cells needs it and a backend
+		// that cannot be built for `container` is exactly what this test
+		// exists to catch. That cell needs a runtime on PATH as well, which
+		// the stub above stands in for, so a failure here means the engine
+		// cannot build the cell, never that this machine has no docker.
+		Local: &config.LocalSandbox{Image: "example.invalid/box:1"},
+	}
+	if !spec.Enabled() {
+		t.Fatal("a catalogue with local: configures no box")
+	}
 	for _, placement := range config.Placements {
-		spec := &config.SandboxProvider{
-			// The one backend with a required credential of its own: the
-			// API authenticates every call, so a provider built without
-			// a key would report a configured sandbox and 401 at the
-			// first create.
-			E2B: &config.E2BSandbox{APIKey: "e2b_test_key"},
-			// An image, because one of the two local cells needs it and
-			// a backend that cannot be built for `container` is exactly
-			// what this test exists to catch. That cell needs a runtime
-			// on PATH as well, which the stub above stands in for, so a
-			// failure here means the engine cannot build the cell, never
-			// that this machine has no docker.
-			Local: &config.LocalSandbox{Image: "example.invalid/box:1"},
-		}
-		if !spec.Configured(placement) {
-			t.Fatalf("a catalogue with every backend does not configure %q, so "+
-				"the closed set names a cell providers.sandbox cannot hold", placement)
-		}
 		// NO RESOLVER: this asks whether each backend can be CONSTRUCTED,
-		// and a nil resolver hands the literal through, which is what an
-		// in-process caller wrote.
+		// and the catalogue holds no reference to resolve.
 		provider, err := buildSandboxProvider(spec, nil, placement)
 		if err != nil {
 			t.Errorf("run_in %q is accepted by the config and cannot be "+
@@ -482,14 +474,14 @@ func TestEveryConfiguredPlacementCanBeBuilt(t *testing.T) {
 func TestTheRuntimesDeclaredEnvironmentIsResolvedAtTheEdge(t *testing.T) {
 	t.Setenv("SSH_AUTH_SOCK", "/run/user/1000/ssh-agent.sock")
 	env := config.WithStore(config.MapSource{"REGISTRY_ROLE": "arn:aws:iam::123456789012:role/pull"})
-	got := localOptions(&config.LocalSandbox{
+	got := localOptions(&config.SandboxProvider{Local: &config.LocalSandbox{
 		Image: "example.invalid/box:1",
 		RuntimeEnv: map[string]string{
 			"SSH_AUTH_SOCK": "${SSH_AUTH_SOCK}",
 			"AWS_ROLE_ARN":  "${REGISTRY_ROLE}",
 			"AWS_PROFILE":   "registry-pull",
 		},
-	}, env, config.PlacementContainer).RuntimeEnv
+	}}, env, config.PlacementContainer).RuntimeEnv
 	want := map[string]string{
 		"SSH_AUTH_SOCK": "/run/user/1000/ssh-agent.sock",
 		"AWS_ROLE_ARN":  "arn:aws:iam::123456789012:role/pull",
@@ -497,6 +489,53 @@ func TestTheRuntimesDeclaredEnvironmentIsResolvedAtTheEdge(t *testing.T) {
 	}
 	if !maps.Equal(got, want) {
 		t.Fatalf("RuntimeEnv = %v, want %v", got, want)
+	}
+}
+
+// THE ORPHAN REAPER'S CUTOFF IS THE MANAGER'S HOST GRACE: one value judges how
+// long a launch node may be away and which stamped box on its root is an
+// orphan, so a box the grace still keeps is never reaped under it. Unset, both
+// take sandbox.DefaultHostGrace, applied in that package alone.
+//
+// Mutation: leave HostGrace off the local options, or default it in config or
+// here, and a check below goes red.
+func TestTheReapersCutoffIsTheManagersHostGrace(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		line    string
+		manager time.Duration
+		local   time.Duration
+	}{
+		{line: "host_grace_seconds: 600", manager: 10 * time.Minute, local: 10 * time.Minute},
+		{manager: sandbox.DefaultHostGrace},
+	} {
+		c, err := config.ParseCompany([]byte(fmt.Sprintf(`
+name: Acme
+providers:
+  sandbox:
+    local: {state_dir: %q}
+    default_run_in: direct
+    %s
+  llm:
+    main: {model: sonnet}
+roles:
+  - name: SWE
+    llm: main
+`, t.TempDir(), tc.line)))
+		if err != nil {
+			t.Fatalf("the fixture does not parse: %v", err)
+		}
+		spec := c.Providers.Sandbox
+		if got := localOptions(spec, nil, config.PlacementDirect).HostGrace; got != tc.local {
+			t.Errorf("%q hands the reaper %v, want %v", tc.line, got, tc.local)
+		}
+		manager, err := buildSandbox(c, nil, nil, nil)
+		if err != nil || manager == nil {
+			t.Fatalf("buildSandbox = %v, %v", manager, err)
+		}
+		if got := manager.HostGrace(); got != tc.manager {
+			t.Errorf("%q gives the manager %v, want %v", tc.line, got, tc.manager)
+		}
 	}
 }
 
@@ -524,8 +563,8 @@ func TestTheDoubleAnswersEveryPlacement(t *testing.T) {
 		if err != nil {
 			t.Fatalf("the double cannot serve %q: %v", placement, err)
 		}
-		if provider.Kind() != "fake" {
-			t.Errorf("placement %q built %q, not the double", placement, provider.Kind())
+		if _, double := provider.(*sandbox.FakeProvider); !double {
+			t.Errorf("placement %q built %T, not the double", placement, provider)
 		}
 	}
 }
@@ -538,7 +577,8 @@ func TestTheDoubleAnswersEveryPlacement(t *testing.T) {
 //
 // Marking the record failed is what this used to do, and it stranded the box:
 // a record that is not active is read by no recovery pass and polled by no
-// waiter, so the job ran on in a box billed to its provider's TTL.
+// waiter, so the job ran on in its box, holding its node's disk and memory,
+// with nothing left to reclaim it.
 func TestAnUnrecordableSuspensionReclaimsTheRunsBox(t *testing.T) {
 	t.Parallel()
 	store := sandbox.NewCoordStore(memory.NewFleet())
@@ -1069,10 +1109,10 @@ func (e *Engine) useSandbox(pending sandbox.PendingStore, coordinator *sandbox.C
 
 // THE COORDINATOR COUNTS A FAILED RESUME TOWARD ITS GIVE-UP BY THE ANSWER THE
 // SEAT'S DELIVERIES ARE NAKED BY (nodesFailure): a resume the coordination
-// store, the queue or a stop failed is the node's, and ends no run, while one
-// the run itself failed, a deadline among them, is counted. Unwired, every
-// failure is the run's, and half an hour of an outage ends every run whose job
-// finished during it.
+// store, the queue, a stop or this node's sandbox configuration failed is the
+// node's, and ends no run, while one the run itself failed, a deadline among
+// them, is counted. Unwired, every failure is the run's, and half an hour of an
+// outage ends every run whose job finished during it.
 //
 // Mutation: leave NodesFailure off the coordinator's options, or hand it any
 // answer but nodesFailure's, and a row goes red.
@@ -1092,6 +1132,9 @@ func TestTheEnginesCoordinatorCountsOnlyTheRunsOwnFailures(t *testing.T) {
 			"nats: timeout", coord.ErrUnavailable), nodes: true},
 		"a step the coordination store was silent on": {err: fmt.Errorf("%w: sandbox: read run t1",
 			sandbox.ErrStoreSilent), nodes: true},
+		"a relaunch this node's configuration cannot start": {err: fmt.Errorf("sandbox: resuming t1: %w",
+			sandbox.Because(sandbox.WhyConfiguration, errors.New("docker: the runtime refused the image"))),
+			nodes: true},
 		"a resume that ran past its deadline": {err: fmt.Errorf("runner: %w", context.DeadlineExceeded)},
 		"the run's own":                       {err: errors.New("the turn could not be re-entered")},
 	} {

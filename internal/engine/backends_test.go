@@ -712,7 +712,7 @@ func TestTheFleetStoreSurvivesARestartOnLocalCoordination(t *testing.T) {
 	}
 	if _, found, err := second.Fleet.SandboxRun(t.Context(), "turn-1"); err != nil || !found {
 		t.Errorf("the detached run did not survive the restart (found=%v err=%v) — "+
-			"its box is billing with nobody to collect it", found, err)
+			"its box runs on, holding its node, with nobody to collect it", found, err)
 	}
 }
 

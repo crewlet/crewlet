@@ -166,7 +166,6 @@ export const VENDORS: Readonly<Record<AtlasVendor, { name: string; mark?: MarkVe
   cursor: { name: "Cursor" },
   datadog: { name: "Datadog", mark: "datadog" },
   digitalocean: { name: "DigitalOcean", mark: "digitalocean" },
-  e2b: { name: "E2B" },
   expo: { name: "Expo", mark: "expo" },
   github: { name: "GitHub", mark: "github" },
   gitlab: { name: "GitLab", mark: "gitlab" },

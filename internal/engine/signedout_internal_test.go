@@ -132,7 +132,7 @@ func TestAResumeWhoseModelsRefuseTheirSignInPausesTheSeatAndWaits(t *testing.T) 
 	// THE PERSON SIGNS THE MODEL IN AND RESUMES THE SEAT: the kept completion
 	// resumes on the lift and its review reaches the model once. The waiters
 	// are stopped first, so only the lift can bring the job back.
-	stopWaiters(e)
+	stopWaiter(e)
 	model.out.Store(false)
 	settled = admitted.Load()
 	if lifted, err := e.backends.Fleet.DeleteSeatPause(t.Context(), seat, p.Version); err != nil || !lifted {

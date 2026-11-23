@@ -282,7 +282,7 @@ func (c *Coordinator) renew(ctx context.Context, ev types.ExecutorFinished, trig
 		"detail", "the job's box is on a node whose coordination store does not answer it, so that "+
 			"node's waiter cannot announce the job again; this node announced it afresh, in place of a "+
 			"delivery about to run out or of a re-fire that had none, and the collection is asked again "+
-			"until the store answers or the box timeout records the job lost with that node")
+			"until the store answers or the host grace records the job lost with that node")
 	return nil
 }
 

@@ -28,7 +28,7 @@ var boxReadingCases = []fleetCase{
 		for _, r := range []coord.BoxReading{
 			reading("swe", "container", "b1", 2<<30, ""),
 			reading("swe", "container", "b2", 4<<30, "chromium"),
-			reading("swe", "e2b", "b3", 8<<30, ""),
+			reading("swe", "direct", "b3", 8<<30, ""),
 			reading("qa", "container", "b1", 2<<30, ""),
 		} {
 			if err := h.f.PutBoxReading(h.ctx, r); err != nil {
@@ -55,7 +55,7 @@ var boxReadingCases = []fleetCase{
 		for _, kept := range []struct {
 			seat string
 			cell string
-		}{{"swe", "e2b"}, {"qa", "container"}} {
+		}{{"swe", "direct"}, {"qa", "container"}} {
 			if _, ok, err := h.f.BoxReading(h.ctx, seatID(kept.seat), kept.cell); err != nil || !ok {
 				h.t.Errorf("dropping swe's container reading took %s's %s one (%v)", kept.seat, kept.cell, err)
 			}

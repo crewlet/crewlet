@@ -27,10 +27,10 @@ func TestANodePacksOneSessionAtATimeInItsOwnMemory(t *testing.T) {
 		second                  Placement
 	}{
 		{name: "a save's pack, then a direct save's", second: Direct},
-		{name: "a save's pack, then an e2b save's", second: E2B},
+		{name: "a save's pack, then a container save's", second: Container},
 		{name: "a save's pack, then a direct take's on demand", secondTakes: true, second: Direct},
 		{name: "a take's pack on demand, then a direct save's", firstTakes: true, second: Direct},
-		{name: "a take's pack on demand, then an e2b save's", firstTakes: true, second: E2B},
+		{name: "a take's pack on demand, then a container save's", firstTakes: true, second: Container},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

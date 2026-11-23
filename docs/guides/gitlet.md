@@ -472,9 +472,11 @@ checks:
 
 Required keys: `name`, the command to `run`, and `timeout_seconds`. The rest
 narrow it: `paths` runs a check only for a change touching one of its globs,
-`report` names the JUnit or SARIF file it writes, `run_in` picks a container on
-a Gitlet node or a remote `e2b` box, `checkout` checks out a cone of directories
-(or `none`), and `env` names the company's check secrets it is given. Every key,
+`report` names the JUnit or SARIF file it writes, `checkout` checks out a cone
+of directories (or `none`), and `env` names the company's check secrets it is
+given. Every check runs in a container made from the company's
+`providers.sandbox.local.image` on a Gitlet node; a company that sets none runs
+no check. Every key,
 bound and reason is in [The checks
 file](../concepts/gitlet.md#the-checks-file).
 
@@ -504,10 +506,7 @@ file](../concepts/gitlet.md#the-checks-file).
      "warnings": [] }
    ```
 
-2. **Never `run_in: direct`.** A check runs a change's own code; `direct` would
-   run it as the engine's user on the engine host, so the file refuses it.
-
-3. **Land it on the branch it governs.** A change's checks are the ones its
+2. **Land it on the branch it governs.** A change's checks are the ones its
    *target* branch defines, never its own: a change that edits `checks.yaml` is
    checked by the file it edits, and its edit governs the changes after it
    lands.

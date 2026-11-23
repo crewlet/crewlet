@@ -83,9 +83,9 @@ func TestTheBoxIsListedThroughItselfAndBounded(t *testing.T) {
 	}
 }
 
-// A LISTING IS TOLD BY ITS EXIT, through a real shell, under sh (a local box)
-// and bash (an E2B box): a dir the workspace holds lists its files, one it does
-// not hold as a directory (missing, a file, a link) is [builtin.ErrNotADirectory]
+// A LISTING IS TOLD BY ITS EXIT, through a real shell, under sh as a box runs
+// it: a dir the workspace holds lists its files, one it does not hold as a
+// directory (missing, a file, a link) is [builtin.ErrNotADirectory]
 // and a gone workspace [builtin.ErrNoWorkspace], never an empty list from a
 // pipeline whose status is head's. FIND'S OWN EXIT IS READ: a walk stopped
 // partway is [builtin.ErrListIncomplete], never the part it printed, unless head
@@ -97,108 +97,99 @@ func TestTheBoxIsListedThroughItselfAndBounded(t *testing.T) {
 // cut as a failure, and a row goes red.
 func TestABoxListingIsToldByItsExitThroughAShell(t *testing.T) {
 	t.Parallel()
-	shells := []string{"sh"}
-	if _, err := exec.LookPath("bash"); err == nil {
-		shells = append(shells, "bash")
+	root := t.TempDir()
+	for name, body := range map[string]string{
+		"dist/index.html": "<p>hi</p>", "dist/js/app.js": "x", "notes.txt": "n",
+		"-delete/out.html": "o",
+	} {
+		full := filepath.Join(root, "workspace", name)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
-	for _, shell := range shells {
-		t.Run(shell, func(t *testing.T) {
-			t.Parallel()
-			root := t.TempDir()
-			for name, body := range map[string]string{
-				"dist/index.html": "<p>hi</p>", "dist/js/app.js": "x", "notes.txt": "n",
-				"-delete/out.html": "o",
-			} {
-				full := filepath.Join(root, "workspace", name)
-				if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(full, []byte(body), 0o600); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if err := os.Symlink(filepath.Join(root, "workspace", "dist"),
-				filepath.Join(root, "workspace", "linked")); err != nil {
-				t.Fatal(err)
-			}
-			// PATH is what a row swaps to stand a box's own tools in.
-			path := os.Getenv("PATH")
-			box := sandbox.NewFakeSandbox("box-1")
-			box.ExecFunc = func(ctx context.Context, cmd string, _ sandbox.ExecOptions) (sandbox.ExecResult, error) {
-				var stdout, stderr strings.Builder
-				run := exec.CommandContext(ctx, shell, "-c", cmd)
-				run.Env = append(os.Environ(), "PATH="+path)
-				run.Stdout, run.Stderr = &stdout, &stderr
-				err := run.Run()
-				var exit *exec.ExitError
-				switch {
-				case errors.As(err, &exit):
-					return sandbox.ExecResult{ExitCode: exit.ExitCode(), Stdout: stdout.String(),
-						Stderr: stderr.String()}, nil
-				case err != nil:
-					return sandbox.ExecResult{}, err
-				}
-				return sandbox.ExecResult{Stdout: stdout.String(), Stderr: stderr.String()}, nil
-			}
-			b := &runBox{box: box, root: filepath.Join(root, "workspace"), listed: map[string]bool{}}
-			got, err := b.Files(t.Context(), "dist", 10)
-			slices.Sort(got)
-			if err != nil || !slices.Equal(got, []string{"dist/index.html", "dist/js/app.js"}) {
-				t.Fatalf("a dir the workspace holds listed %q, %v", got, err)
-			}
-			whole, err := b.Files(t.Context(), ".", 10)
-			if err != nil || !slices.Contains(whole, "notes.txt") || !slices.Contains(whole, "dist/index.html") {
-				t.Errorf("the workspace itself listed %q, %v", whole, err)
-			}
-			for _, dir := range []string{"missing", "notes.txt", "linked"} {
-				if got, err := b.Files(t.Context(), dir, 10); !errors.Is(err, builtin.ErrNotADirectory) {
-					t.Errorf("%s listed %q, %v; want ErrNotADirectory", dir, got, err)
-				}
-			}
-			gone := &runBox{box: box, root: filepath.Join(root, "no-workspace"), listed: map[string]bool{}}
-			if got, err := gone.Files(t.Context(), "dist", 10); !errors.Is(err, builtin.ErrNoWorkspace) ||
-				errors.Is(err, builtin.ErrNotADirectory) {
-				t.Errorf("a workspace that is gone listed %q, %v; want ErrNoWorkspace", got, err)
-			}
-
-			// A DIR NAMED LIKE A FIND EXPRESSION is listed, and nothing
-			// beside it is touched.
-			got, err = b.Files(t.Context(), "-delete", 10)
-			if err != nil || !slices.Equal(got, []string{"-delete/out.html"}) {
-				t.Errorf("a dir named -delete listed %q, %v", got, err)
-			}
-			for _, kept := range []string{"dist/index.html", "notes.txt", "-delete/out.html"} {
-				if _, err := os.Stat(filepath.Join(root, "workspace", kept)); err != nil {
-					t.Errorf("listing a dir named -delete removed %s: %v", kept, err)
-				}
-			}
-
-			// THE BOX'S OWN TOOLS, stood in on PATH: a find that stops
-			// partway, one that stops past what head keeps, and none at all.
-			tools := t.TempDir()
-			head, err := exec.LookPath("head")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := os.Symlink(head, filepath.Join(tools, "head")); err != nil {
-				t.Fatal(err)
-			}
-			path = tools
-			if got, err := b.Files(t.Context(), "dist", 10); sandboxWhy(err) != sandbox.WhyConfiguration {
-				t.Errorf("a box with no find listed %q, %v; want its image named", got, err)
-			}
-			writeTool(t, tools, "find", `printf './dist/index.html\0'; `+
-				`echo "find: './dist/assets': Permission denied" >&2; exit 1`)
-			if got, err := b.Files(t.Context(), "dist", 10); !errors.Is(err, builtin.ErrListIncomplete) {
-				t.Errorf("a walk that stopped partway listed %q, %v; want ErrListIncomplete", got, err)
-			}
-			writeTool(t, tools, "find", `head -c 4000 /dev/zero; exit 1`)
-			if got, err := b.Files(t.Context(), "dist", 1); err != nil || len(got) != 2 {
-				t.Errorf("a walk head cut listed %d entries, %v; want one too many", len(got), err)
-			}
-			path = os.Getenv("PATH")
-		})
+	if err := os.Symlink(filepath.Join(root, "workspace", "dist"),
+		filepath.Join(root, "workspace", "linked")); err != nil {
+		t.Fatal(err)
 	}
+	// PATH is what a row swaps to stand a box's own tools in.
+	path := os.Getenv("PATH")
+	box := sandbox.NewFakeSandbox("box-1")
+	box.ExecFunc = func(ctx context.Context, cmd string, _ sandbox.ExecOptions) (sandbox.ExecResult, error) {
+		var stdout, stderr strings.Builder
+		run := exec.CommandContext(ctx, "sh", "-c", cmd)
+		run.Env = append(os.Environ(), "PATH="+path)
+		run.Stdout, run.Stderr = &stdout, &stderr
+		err := run.Run()
+		var exit *exec.ExitError
+		switch {
+		case errors.As(err, &exit):
+			return sandbox.ExecResult{ExitCode: exit.ExitCode(), Stdout: stdout.String(),
+				Stderr: stderr.String()}, nil
+		case err != nil:
+			return sandbox.ExecResult{}, err
+		}
+		return sandbox.ExecResult{Stdout: stdout.String(), Stderr: stderr.String()}, nil
+	}
+	b := &runBox{box: box, root: filepath.Join(root, "workspace"), listed: map[string]bool{}}
+	got, err := b.Files(t.Context(), "dist", 10)
+	slices.Sort(got)
+	if err != nil || !slices.Equal(got, []string{"dist/index.html", "dist/js/app.js"}) {
+		t.Fatalf("a dir the workspace holds listed %q, %v", got, err)
+	}
+	whole, err := b.Files(t.Context(), ".", 10)
+	if err != nil || !slices.Contains(whole, "notes.txt") || !slices.Contains(whole, "dist/index.html") {
+		t.Errorf("the workspace itself listed %q, %v", whole, err)
+	}
+	for _, dir := range []string{"missing", "notes.txt", "linked"} {
+		if got, err := b.Files(t.Context(), dir, 10); !errors.Is(err, builtin.ErrNotADirectory) {
+			t.Errorf("%s listed %q, %v; want ErrNotADirectory", dir, got, err)
+		}
+	}
+	gone := &runBox{box: box, root: filepath.Join(root, "no-workspace"), listed: map[string]bool{}}
+	if got, err := gone.Files(t.Context(), "dist", 10); !errors.Is(err, builtin.ErrNoWorkspace) ||
+		errors.Is(err, builtin.ErrNotADirectory) {
+		t.Errorf("a workspace that is gone listed %q, %v; want ErrNoWorkspace", got, err)
+	}
+
+	// A DIR NAMED LIKE A FIND EXPRESSION is listed, and nothing
+	// beside it is touched.
+	got, err = b.Files(t.Context(), "-delete", 10)
+	if err != nil || !slices.Equal(got, []string{"-delete/out.html"}) {
+		t.Errorf("a dir named -delete listed %q, %v", got, err)
+	}
+	for _, kept := range []string{"dist/index.html", "notes.txt", "-delete/out.html"} {
+		if _, err := os.Stat(filepath.Join(root, "workspace", kept)); err != nil {
+			t.Errorf("listing a dir named -delete removed %s: %v", kept, err)
+		}
+	}
+
+	// THE BOX'S OWN TOOLS, stood in on PATH: a find that stops
+	// partway, one that stops past what head keeps, and none at all.
+	tools := t.TempDir()
+	head, err := exec.LookPath("head")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(head, filepath.Join(tools, "head")); err != nil {
+		t.Fatal(err)
+	}
+	path = tools
+	if got, err := b.Files(t.Context(), "dist", 10); sandboxWhy(err) != sandbox.WhyConfiguration {
+		t.Errorf("a box with no find listed %q, %v; want its image named", got, err)
+	}
+	writeTool(t, tools, "find", `printf './dist/index.html\0'; `+
+		`echo "find: './dist/assets': Permission denied" >&2; exit 1`)
+	if got, err := b.Files(t.Context(), "dist", 10); !errors.Is(err, builtin.ErrListIncomplete) {
+		t.Errorf("a walk that stopped partway listed %q, %v; want ErrListIncomplete", got, err)
+	}
+	writeTool(t, tools, "find", `head -c 4000 /dev/zero; exit 1`)
+	if got, err := b.Files(t.Context(), "dist", 1); err != nil || len(got) != 2 {
+		t.Errorf("a walk head cut listed %d entries, %v; want one too many", len(got), err)
+	}
+	path = os.Getenv("PATH")
 }
 
 // sandboxWhy is err's class, or none.
@@ -343,7 +334,8 @@ func TestOnlyTheRunWorkingInItsBoxIsABox(t *testing.T) {
 		{"the run working in it", sandbox.PendingRun{AgentHandle: "analyst", SandboxID: box.ID(), Status: sandbox.StatusRunning}, true},
 	} {
 		row := tc.row
-		row.TurnID, row.Placement, row.Harness = turn.RunID, string(sandbox.E2B), "claude-code"
+		row.TurnID, row.Placement, row.Harness = turn.RunID, string(sandbox.Container), "claude-code"
+		row.LaunchNode = "node-a"
 		e := artifactBoxEngine(t, "node-a", row, manager)
 		got, err := (artifactBoxes{engine: e}).Box(t.Context(), turn)
 		switch {
@@ -356,9 +348,9 @@ func TestOnlyTheRunWorkingInItsBoxIsABox(t *testing.T) {
 }
 
 // A RUNNING RECORD'S BOX IS READ, NEVER WOKEN: the job is working in it, and a
-// reconnect resumes a box and moves a remote one's kill timer to its own. A box
-// paused under a running record — a collection that has not moved the record
-// on yet — is no box, and is left paused.
+// reconnect resumes a paused box. A box paused under a running record — a
+// collection that has not moved the record on yet — is no box, and is left
+// paused.
 //
 // Mutation: read the box through Reconnect again, and the paused box is woken
 // and handed to the publish.
@@ -375,7 +367,8 @@ func TestARunningRecordsBoxIsAttachedNeverWoken(t *testing.T) {
 		t.Fatal(err)
 	}
 	row := sandbox.PendingRun{TurnID: turn.RunID, AgentHandle: "analyst", SandboxID: box.ID(),
-		Placement: string(sandbox.E2B), Harness: "claude-code", Status: sandbox.StatusRunning}
+		Placement: string(sandbox.Container), Harness: "claude-code", Status: sandbox.StatusRunning,
+		LaunchNode: "node-a"}
 	e := artifactBoxEngine(t, "node-a", row, manager)
 	if _, err := (artifactBoxes{engine: e}).Box(t.Context(), turn); !errors.Is(err, builtin.ErrNoBox) {
 		t.Errorf("a paused box under a running record answered %v, want ErrNoBox", err)
@@ -385,13 +378,12 @@ func TestARunningRecordsBoxIsAttachedNeverWoken(t *testing.T) {
 	}
 }
 
-// artifactBoxManager is a manager over one fake provider, in the e2b cell and
-// the direct one.
+// artifactBoxManager is a manager over one fake provider, in both cells.
 func artifactBoxManager(t *testing.T) (*sandbox.FakeProvider, *sandbox.Manager) {
 	t.Helper()
 	provider := sandbox.NewFakeProvider()
 	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
-		Providers: map[sandbox.Placement]sandbox.Provider{sandbox.Direct: provider, sandbox.E2B: provider},
+		Providers: map[sandbox.Placement]sandbox.Provider{sandbox.Direct: provider, sandbox.Container: provider},
 		Runners:   map[string]sandbox.Runner{"claude-code": sandbox.NewFakeRunner("claude-code")},
 	})
 	if err != nil {
