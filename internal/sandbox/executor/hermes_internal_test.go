@@ -370,8 +370,10 @@ func hermesGate(t *testing.T, home, release string, req sandbox.RunRequest, memb
 
 // A CARRIED HERMES SESSION IS RESTORED AND CONTINUED ONLY UNDER THE LAUNCH IT
 // WAS CREATED WITH: restored into a new store and indexed where the box runs
-// the one release and the launch matches; a launch naming another model, or a
-// box on another release, starts the fresh session instead, saying why.
+// the one release and the launch matches; a launch naming another model, one
+// whose working directory the box no longer has (Hermes 0.23.3 then runs
+// nothing and exits 1), or a box on another release, starts the fresh session
+// instead, saying why.
 //
 // Mutation: skip the policy check, restore on another release, or continue
 // without indexing the restored session, and a row goes red.
@@ -406,6 +408,13 @@ func TestACarriedHermesSessionContinuesOnlyUnderItsLaunch(t *testing.T) {
 		got := hermesGate(t, home, hermesFloor(), sandbox.RunRequest{Model: "other-model"}, member(home))
 		if got[0] != "22222222-0000-4000-8000-000000000002" || got[1] != "no" || !strings.Contains(got[2], "launch") {
 			t.Fatalf("gate = %q, want the fresh session, saying the launch differs", got)
+		}
+	})
+	t.Run("a working directory the box no longer has", func(t *testing.T) {
+		home := t.TempDir()
+		got := hermesGate(t, home, hermesFloor(), req, member(filepath.Join(home, "gone")))
+		if got[0] != "22222222-0000-4000-8000-000000000002" || got[1] != "no" || !strings.Contains(got[2], "working directory") {
+			t.Fatalf("gate = %q, want the fresh session, saying the working directory differs", got)
 		}
 	})
 	t.Run("another release", func(t *testing.T) {
