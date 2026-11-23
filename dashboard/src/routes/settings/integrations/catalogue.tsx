@@ -603,6 +603,8 @@ export function integrationFacts(
   traffic: { known: boolean; since?: string | null },
 ): Fact[] {
   const present = presentSurfaces(entry, rows);
+  const last = latestOf(present, (r) => r.reconcile?.last_attempt_at);
+  const next = soonestOf(present, (r) => r.reconcile?.next_attempt_at);
   const covered = !traffic.known
     ? "this node could not read its event log"
     : traffic.since
@@ -642,36 +644,37 @@ export function integrationFacts(
       // reports what the last pass CONCLUDED and never when that was. A CHECK,
       // since Check now moves it without applying anything.
       label: "Last check",
-      // A LEAF OF THE CLOCK, so the header around it does not re-render each second.
-      value: (
-        <Clocked
-          text={(now) =>
-            syncWords(
-              latestOf(present, (r) => r.reconcile?.last_attempt_at),
-              soonestOf(present, (r) => r.reconcile?.next_attempt_at),
-              now,
-            )
-          }
-        />
-      ),
+      // A LEAF OF THE CLOCK, so the header around it does not re-render each
+      // second; when the next check is due is the value's note, as a count's
+      // window is under Delivered.
+      value: <Clocked text={(now) => syncWords(last, next, now).last} />,
+      note: next ? <Clocked text={(now) => syncWords(last, next, now).next} /> : undefined,
     },
   ];
 }
 
 /**
- * The loop's clock as one value: "30m ago · next in 10m". A next sync whose
- * time has passed is DUE or OVERDUE, never "ago": a time in the past is not
- * when the next one is.
+ * The loop's clock: when it last checked ("30m ago") and when it checks next
+ * ("next in 10m"). A next check whose time has passed is DUE or OVERDUE, never
+ * "ago": a time in the past is not when the next one is.
  */
-export function syncWords(last: string | null, next: string | null, now: number): string {
-  const parts = [last ? relTime(last, now) : "Not yet"];
-  if (next) {
-    const until = tsKey(next) - now;
-    if (until > 30_000) parts.push(`next ${inTime(next, now)}`);
-    else if (until > -60_000) parts.push("next due now");
-    else parts.push(`next overdue by ${fmtDuration(Math.round(-until / 60_000) * 60_000)}`);
-  }
-  return parts.join(" · ");
+export function syncWords(
+  last: string | null,
+  next: string | null,
+  now: number,
+): { last: string; next: string } {
+  const said = last ? relTime(last, now) : "Not yet";
+  if (!next) return { last: said, next: "" };
+  const until = tsKey(next) - now;
+  return {
+    last: said,
+    next:
+      until > 30_000
+        ? `next ${inTime(next, now)}`
+        : until > -60_000
+          ? "next due now"
+          : `next overdue by ${fmtDuration(Math.round(-until / 60_000) * 60_000)}`,
+  };
 }
 
 /**

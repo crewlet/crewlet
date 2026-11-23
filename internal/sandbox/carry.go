@@ -230,8 +230,8 @@ type SessionRestorer interface {
 	// session the box itself holds, before a relaunch there hands the brief
 	// that continues it: [Runner.CheckInPlace] in internal/sandbox/executor,
 	// which holds a harness that continues no session on a release it was not
-	// read for (Codex, Copilot, Kimi Code, Muse Code, Pi) to it, the box's release
-	// and the release that wrote the copy alike. Three answers, as CheckCarry's.
+	// read for (Codex, Copilot, Kimi Code, Muse Code, Pi, Grok Build) to it, the
+	// box's release and the release that wrote the copy alike. Three answers, as CheckCarry's.
 	CheckInPlace(ctx context.Context, box Sandbox) (CarryCheck, error)
 }
 

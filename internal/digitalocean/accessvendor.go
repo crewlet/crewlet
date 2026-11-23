@@ -220,9 +220,20 @@ func display(acct Account) string {
 }
 
 // retiredLabel names a seat's replaced token without its level, which the pass
-// no longer knows: every token of the seat begins with it.
+// no longer knows: what its names at every level begin with, since a long
+// handle is cut further for a longer level word.
 func (s *accessSession) retiredLabel(handle string) string {
-	return strings.TrimSuffix(TokenName(s.company, handle, ""), "-") + "-…"
+	levels := config.DigitalOceanLevels()
+	common := TokenName(s.company, handle, levels[0])
+	for _, level := range levels[1:] {
+		name := TokenName(s.company, handle, level)
+		n := 0
+		for n < len(common) && n < len(name) && common[n] == name[n] {
+			n++
+		}
+		common = common[:n]
+	}
+	return common + "…"
 }
 
 // Options is the three levels, each with the scopes it grants, and the scopes

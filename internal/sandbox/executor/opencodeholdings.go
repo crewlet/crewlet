@@ -2,7 +2,6 @@ package executor
 
 import (
 	"bytes"
-	"cmp"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -24,14 +23,15 @@ import (
 // WHICH OF A ROUND'S CALLS AN OPENCODE SESSION HOLDS, read off its kept export
 // by what each call was ([Runner.ReadHoldings]): OpenCode names no call to the
 // engine, so the reading counts the run's parts of each class of calls
-// ([sandbox.CallClass]), and a class is held only where every call of it has a
-// part the continuation hands its model verbatim. The reading is a visitor of
-// the one export walk ([scanExport]), keeping what it asks of each member as
-// the walk reads it and deciding each item and message at its end; it holds no
-// value whole. The package doc's "An OpenCode session's calls are read by what
-// they were" has the rules, the pool, the order check, the bounds and the
-// memory; ADR-0073's amendment "a cut-off OpenCode session is read by content,
-// held to its run and its class" what they leave.
+// ([sandbox.CallClass]) the continuation hands its model verbatim, and the
+// verdict of a reading by content ([contentVerdict]) holds a class only where
+// every call of it has a part. The reading is a visitor of the one export walk
+// ([scanExport]), keeping what it asks of each member as the walk reads it and
+// deciding each item and message at its end; it holds no value whole. The
+// package doc's "An OpenCode session's calls are read by what they were" has
+// the rules, the pool, the order check, the bounds and the memory; ADR-0073's
+// amendment "a cut-off OpenCode session is read by content, held to its run
+// and its class" what they leave.
 
 // openCodeBridgedPrefix opens the name OpenCode gives each tool of the
 // engine's own MCP server, offered directly ([openCodeMCP]): the server's
@@ -80,61 +80,10 @@ func (OpenCode) checkHoldings(archive sandbox.SessionArchive, ask sandbox.Holdin
 	case !archive.RunStart.Known():
 		return &holdingsError{why: "the run that packed the session recorded no place it began in it"}
 	}
-	if why := openCodeAskFault(ask); why != "" {
+	if why := logPlaceAskFault(ask); why != "" {
 		return &holdingsError{why: "the relaunch asked about calls its log cannot have: " + why}
 	}
 	return nil
-}
-
-// openCodeAskFault is why ask is not one a round's log can make, "" where it
-// is ([OpenCode.checkHoldings]).
-func openCodeAskFault(ask sandbox.HoldingsAsk) string {
-	if len(ask.Calls) == 0 || len(ask.Calls) > sandbox.MaxBridgeCalls {
-		return fmt.Sprintf("%d calls, where a round's log lists 1 to %d", len(ask.Calls), sandbox.MaxBridgeCalls)
-	}
-	carried, asked := make(map[string]int, len(ask.Calls)), 0
-	for _, c := range ask.Calls {
-		carried[c.ID]++
-		if c.Asked {
-			asked++
-		}
-	}
-	if asked == 0 {
-		return "none of them asked about"
-	}
-	for i, c := range ask.Calls {
-		switch {
-		case c.Seq <= 0:
-			return fmt.Sprintf("call %d has no admission place", i+1)
-		case !c.Asked:
-		case c.Appended <= 0 || c.ID != strconv.Itoa(c.Appended):
-			return fmt.Sprintf("call %d is asked about, and is not keyed by its place in the log", i+1)
-		case c.Held:
-			return fmt.Sprintf("call %d is asked about, and a person's approval held it", i+1)
-		case carried[c.ID] > 1:
-			return fmt.Sprintf("call %d is asked about, and another call of the ask carries its key", i+1)
-		}
-	}
-	inFlight, unnamed, named := 0, 0, 0
-	for _, id := range ask.Unlisted {
-		switch {
-		case id.InFlight:
-			inFlight++
-		case id.Name == "":
-			unnamed++
-		default:
-			named += len(id.Name) + len(id.Digest)
-		}
-	}
-	switch {
-	case inFlight > sandbox.MaxCallsInFlight:
-		return fmt.Sprintf("%d calls in flight, where the log holds at most %d", inFlight, sandbox.MaxCallsInFlight)
-	case unnamed > 1:
-		return "more than one count of dropped calls with no name"
-	case named > sandbox.MaxElidedIdentityBytes:
-		return "dropped calls whose names and digests weigh more than the log's tally holds"
-	}
-	return ""
 }
 
 // readHoldings reads body, archive's gzipped export, within bounds' plain
@@ -164,7 +113,7 @@ func (OpenCode) readHoldings(ctx context.Context, body io.Reader, archive sandbo
 // readOpenCodeHoldings reads plain, a session's export as kept (the take's
 // scrub's output), for the calls ask marks asked: the one export walk
 // ([scanExport]), the reading its visitor ([openCodeHoldingsWalk]), nothing
-// but white space after the document; then the verdict ([openCodeVerdict]), a
+// but white space after the document; then the verdict ([contentVerdict]), a
 // pure function of the walk's facts and the ask. No value is held whole, so no
 // part of an export is past a bound but the plaintext's.
 func readOpenCodeHoldings(ctx context.Context, plain io.Reader, session string, start sandbox.RunStart,
@@ -785,51 +734,9 @@ var (
 	openCodeFailedState    = namesMask(stateStatus, stateInput, stateError)
 )
 
-// matchedClass is the one class of classes whose output a part's text is,
-// read off its digest d, false where none is or more than one: a part two cut
-// classes both match could hold both classes' calls, so it counts for
-// neither. A completed part's empty or blank text never counts, since a
-// provider may hand it otherwise.
-func matchedClass(classes []sandbox.CallClass, d *textDigest, failed bool) (sandbox.CallClass, bool) {
-	if !slices.ContainsFunc(classes, func(c sandbox.CallClass) bool { return d.mayBe(c.Text) }) ||
-		!failed && d.blank {
-		return sandbox.CallClass{}, false
-	}
-	var (
-		found   sandbox.CallClass
-		matches int
-	)
-	for _, c := range classes {
-		if d.mayBe(c.Text) && d.matches(c.Text) {
-			found, matches = c, matches+1
-		}
-	}
-	return found, matches == 1
-}
-
-// mayBe reports whether d's text can be the output key is of: of its size,
-// and never of a key of size zero, so an empty failed part never holds a call
-// logged with an empty output. The decode walk also held a text's span as
-// written to within a third and six times the size; that span holds of every
-// text of the size (a byte as written decodes to at most three, an escape of
-// at most six bytes to at least one), so the size decides alone.
-func (d *textDigest) mayBe(key sandbox.TextKey) bool { return key.Bytes > 0 && d.n == key.Bytes }
-
-// matches reports whether d's text, of key's size, is the output key is of:
-// every byte, where the log kept it whole; all the opening the log kept,
-// where it cut it, never a text the take's scrub rewrote, which may differ
-// past it.
-func (d *textDigest) matches(key sandbox.TextKey) bool {
-	if key.Whole {
-		return d.whole == key.Sum
-	}
-	i, kept := slices.BinarySearch(d.openings, key.Opening)
-	return kept && key.Opening <= d.n && !d.marker && d.sums[i] == key.Sum
-}
-
 // ended is the reading once the walk read the export whole: no reading where
 // `info` is absent or names another session, or the run's start was never
-// read; else the verdict ([openCodeVerdict]).
+// read; else the verdict ([contentVerdict]).
 func (w *openCodeHoldingsWalk) ended(ask sandbox.HoldingsAsk) (sandbox.SessionHoldings, error) {
 	switch {
 	case w.infos == 0:
@@ -844,143 +751,5 @@ func (w *openCodeHoldingsWalk) ended(ask sandbox.HoldingsAsk) (sandbox.SessionHo
 	for class, p := range w.classes {
 		parts[class] = p.steps
 	}
-	return openCodeVerdict(ask, parts, w.compacted)
-}
-
-// openCodeVerdict is the reading's answer from the walk's facts, parts each
-// stated class's counted parts by the steps they lie in, in the order read:
-// the pool's calls counted by class, each class held where every call of it
-// has a part and no call the log cannot state may be of it, and the held
-// classes' parts in an order the log's explains (the order check). A PURE
-// FUNCTION of the facts and the ask, so a take can take it outside a relaunch.
-func openCodeVerdict(ask sandbox.HoldingsAsk, parts map[sandbox.CallClass][]int,
-	compacted bool) (sandbox.SessionHoldings, error) {
-
-	pool := openCodePool(ask)
-	classes := make(map[sandbox.CallClass]sandbox.ClassRecords, len(pool.calls))
-	for class, calls := range pool.calls {
-		counted := min(len(parts[class]), calls+1)
-		records := sandbox.ClassRecords{Calls: calls, Parts: counted, Wild: pool.wild(class)}
-		records.Held = records.Calls >= 1 && records.Parts == records.Calls && !records.Wild
-		classes[class] = records
-	}
-	if !openCodeInOrder(ask, parts, classes) {
-		return sandbox.SessionHoldings{}, &holdingsError{why: "the session holds the run's calls in an order its " +
-			"log does not explain"}
-	}
-	members := map[string]sandbox.CallClass{}
-	for _, c := range ask.Calls {
-		if class, ok := sandbox.ClassOf(c); ok && c.Asked {
-			members[c.ID] = class
-		}
-	}
-	return sandbox.SessionHoldings{Read: true, Kind: sandbox.HoldingsByContent, Members: members, Classes: classes,
-		Compacted: compacted}, nil
-}
-
-// openCodeInOrder reports whether the held classes' calls, taken in admission
-// order, meet each class's next part in a step never before the last one met:
-// a step's calls run at once, and the next step's only after they all joined.
-func openCodeInOrder(ask sandbox.HoldingsAsk, parts map[sandbox.CallClass][]int,
-	classes map[sandbox.CallClass]sandbox.ClassRecords) bool {
-
-	calls := slices.Clone(ask.Calls)
-	slices.SortStableFunc(calls, func(a, b sandbox.LoggedCall) int { return cmp.Compare(a.Seq, b.Seq) })
-	next, at := map[sandbox.CallClass]int{}, 0
-	for _, c := range calls {
-		class, ok := sandbox.ClassOf(c)
-		if !ok || c.Held || !classes[class].Held {
-			continue
-		}
-		step := parts[class][next[class]]
-		if step < at {
-			return false
-		}
-		next[class]++
-		at = step
-	}
-	return true
-}
-
-// openCodeCallPool is a reading's pool: the calls of each stated class, the
-// digests they carry and whether one carries none; and the wildcards, every
-// call that may have left a part the log cannot state the class of.
-type openCodeCallPool struct {
-	calls      map[sandbox.CallClass]int
-	digests    map[sandbox.CallClass]map[string]bool
-	digestless map[sandbox.CallClass]bool
-	// named are the wildcards known by tool and digest ("" where none); held
-	// the calls a person's approval held, by tool, failure and answer; and
-	// unnamed whether a call or count unlisted names no tool, onlyFailed
-	// whether every call they count failed, never so for one in flight.
-	named               []sandbox.CallIdentity
-	held                []heldWildcard
-	unnamed, onlyFailed bool
-}
-
-// heldWildcard is a call a person's approval held: its part, if any, answers
-// with the held answer, whose text key is text where stated.
-type heldWildcard struct {
-	name   string
-	failed bool
-	text   sandbox.TextKey
-	stated bool
-}
-
-// openCodePool is ask's pool: every call but a held one by its class, or a
-// wildcard where its class is not stated; each held call, in flight or
-// dropped call a wildcard.
-func openCodePool(ask sandbox.HoldingsAsk) openCodeCallPool {
-	pool := openCodeCallPool{calls: map[sandbox.CallClass]int{}, digests: map[sandbox.CallClass]map[string]bool{},
-		digestless: map[sandbox.CallClass]bool{}, onlyFailed: true}
-	for _, c := range ask.Calls {
-		if c.Held {
-			text, stated := sandbox.TextKeyOf(c.Output, c.OutputBytes)
-			pool.held = append(pool.held, heldWildcard{name: c.Name, failed: c.Failed, text: text, stated: stated})
-			continue
-		}
-		class, ok := sandbox.ClassOf(c)
-		if !ok {
-			pool.named = append(pool.named, sandbox.CallIdentity{Name: c.Name, Digest: c.Digest})
-			continue
-		}
-		pool.calls[class]++
-		if c.Digest == "" {
-			pool.digestless[class] = true
-			continue
-		}
-		if pool.digests[class] == nil {
-			pool.digests[class] = map[string]bool{}
-		}
-		pool.digests[class][c.Digest] = true
-	}
-	for _, id := range ask.Unlisted {
-		if id.Name == "" {
-			pool.unnamed, pool.onlyFailed = true, pool.onlyFailed && !id.InFlight && id.OnlyFailed
-			continue
-		}
-		pool.named = append(pool.named, id)
-	}
-	return pool
-}
-
-// wild reports whether a call the log cannot state the class of may be of
-// class: one of its tool whose digest is none, or one a call of the class
-// carries, or whose class lacks a digest; a held call of its tool, failure
-// and answer; or a count with no name, of failures only where it says so.
-func (p openCodeCallPool) wild(class sandbox.CallClass) bool {
-	if p.unnamed && (!p.onlyFailed || class.Failed) {
-		return true
-	}
-	for _, id := range p.named {
-		if id.Name == class.Name && (id.Digest == "" || p.digestless[class] || p.digests[class][id.Digest]) {
-			return true
-		}
-	}
-	for _, h := range p.held {
-		if h.name == class.Name && h.failed == class.Failed && (!h.stated || h.text == class.Text) {
-			return true
-		}
-	}
-	return false
+	return contentVerdict(ask, parts, w.compacted)
 }

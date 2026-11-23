@@ -3,7 +3,7 @@
  * alarms), how the models stand in three figures, every model with its
  * condition, its sign-in and who runs on it, then the section saying who runs
  * on which model, Ask Crewlet and the Advisor then every seat (`SeatJobs.tsx`).
- * With no model it is one first-run card ([FirstRun]).
+ * With no model it is one empty state ([FirstRun]): what a model is, and the add.
  *
  * A member reads the same list without the sign-in, the tokens or the actions
  * (`llm_entries`' member reading names no credential and no usage), so the one
@@ -16,12 +16,10 @@
 
 import { useId, type ReactNode } from "react";
 import {
-  AvatarStack,
   Button,
   Callout,
   Card,
   EmptyState,
-  IconTile,
   PageNote,
   RelativeTime,
   StatCard,
@@ -39,9 +37,8 @@ import { fmtCount, listed, plural } from "~/lib/format.ts";
 import { UNSPENT_CALLS, callsWords } from "~/lib/spend.ts";
 import { CATEGORY_JOBS, CATEGORY_ORDER, SEAT_JOBS, everythingSeats } from "~/lib/modelUses.ts";
 import type { Seat } from "~/lib/seats.ts";
-import { seatBadge } from "~/ui/SeatAvatar.tsx";
 import { Alarms } from "./Alarms.tsx";
-import { HARNESS_MARKS, HarnessMark, MARK_SIZE } from "./HarnessMark.tsx";
+import { HarnessMark, MARK_SIZE } from "./HarnessMark.tsx";
 import type { ModelsData, ModelView } from "./data.ts";
 import { JobGlyph, type Job } from "./JobGlyph.tsx";
 import { EntryMenu, HealthLine, SignInLine, type OnFlow } from "./parts.tsx";
@@ -455,8 +452,7 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
       ) : null}
 
       {/* UNDER THE MODELS: who runs on which, the helpers then the seats. Drawn
-          once there is a model to pick; before that the first-run card names
-          who waits. */}
+          once there is a model to pick. */}
       {models.length > 0 ? <WhoRuns data={data} /> : null}
     </div>
   );
@@ -465,55 +461,17 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
 /** What the page is for, said once under the page bar as every Settings section's lede is. */
 const LEDE = "The models your company runs, and who runs on each.";
 
-/**
- * The page with no model: one card picturing the harnesses a model can run on,
- * naming who waits for one, and offering the add. With nothing to pick, no
- * row per seat is drawn; the waiting seats are this card's stack and sentence.
- */
+/** The page with no model: what a model is, in a line, and the add. */
 function FirstRun({ data, onAdd }: { data: ModelsData; onAdd: () => void }) {
-  const waiting = data.seats.map((s) => ({
-    id: s.handle,
-    ...seatBadge(s.name || s.handle, s.kind, s.avatar),
-  }));
-  const who = listed([
-    ASSISTANT_USE.label,
-    "the Advisor",
-    ...(waiting.length > 0 ? [plural(waiting.length, "seat")] : []),
-  ]);
   return (
     <Card padding="none">
       <EmptyState
         size="compact"
-        illustration={
-          <span className="models-first-run__marks" aria-hidden="true">
-            {Object.keys(HARNESS_MARKS).map((h) => (
-              <IconTile key={h} shape="disc" tone="neutral" size="sm">
-                <HarnessMark harness={h} size={16} />
-              </IconTile>
-            ))}
-          </span>
-        }
+        icon={false}
         title="No model yet"
-        description={
-          <span className="models-first-run__body">
-            <span>
-              A model is a coding harness, such as Claude Code or Codex, signed in to its vendor.{" "}
-              {data.admin ? "Add one and choose who runs on it." : "An admin adds models here."}
-            </span>
-            <span className="models-first-run__waiting">
-              {waiting.length > 0 ? (
-                <AvatarStack
-                  members={waiting}
-                  size="xs"
-                  label={`Waiting for a model: ${listed(waiting.map((w) => w.name))}`}
-                />
-              ) : null}
-              <Text as="span" variant="caption" tone="secondary">
-                {`${who} are waiting for one.`}
-              </Text>
-            </span>
-          </span>
-        }
+        description={`A model is a coding harness, such as Claude Code or Codex, signed in to its vendor. ${
+          data.admin ? "Add one and choose who runs on it." : "An admin adds models here."
+        }`}
         {...(data.admin
           ? {
               action: (

@@ -11,7 +11,7 @@ import type { AccessAnswer } from "~/contract/access.ts";
 import { AppAnnouncer } from "~/app/announcer.tsx";
 import { Router } from "~/app/router.tsx";
 import { AgentsAccess } from "./AgentsAccess.tsx";
-import { cloudflareGrantsAnswer, githubAnswer } from "./fixtures.ts";
+import { appStoreConnectIdentityAnswer, cloudflareGrantsAnswer, githubAnswer } from "./fixtures.ts";
 
 // LONGER THAN THE COLUMN at either width, so the chip has to give way: the
 // longest name GitHub allows, a 39 character owner and a 100 character
@@ -55,7 +55,13 @@ async function mount(width: number, data: AccessAnswer = githubWithLongScope()) 
           <AppAnnouncer />
           <AgentsAccess
             kind={data.kind}
-            name={data.kind === "github" ? "GitHub" : "Cloudflare"}
+            name={
+              {
+                github: "GitHub",
+                cloudflare: "Cloudflare",
+                app_store_connect: "App Store Connect",
+              }[data.kind] ?? data.kind
+            }
             data={data}
             reload={() => {}}
             held={undefined}
@@ -135,3 +141,30 @@ test.each([1440, 390])(
     expect(panel.querySelector('[aria-selected="true"]')?.textContent).toContain("Secure");
   },
 );
+
+// THE ONE IDENTITY ACTION SITS AT THE TOP RIGHT OF THE AGENT'S BOX: on the
+// identity's own first line, at the box's right edge, above everything else
+// the box holds. Mutation: draw the action under the facts, or at the left,
+// and a bound fails.
+test("Set up identity sits at the top right of the agent's box at 1440px", async () => {
+  await mount(1440, appStoreConnectIdentityAnswer("company"));
+  document
+    .querySelector<HTMLElement>(`[aria-label="Show Growth's App Store Connect details"]`)!
+    .click();
+  await new Promise((r) => requestAnimationFrame(() => r(null)));
+  const action = document.querySelector<HTMLElement>(`[aria-label="Set up identity: Growth"]`)!;
+  const box = action.closest<HTMLElement>(".agent-access-details")!.getBoundingClientRect();
+  const title = [...document.querySelectorAll<HTMLElement>("*")].find(
+    (el) => el.textContent === "Identity at Apple" && el.children.length === 0,
+  )!;
+  const a = action.getBoundingClientRect();
+  const t = title.getBoundingClientRect();
+  expect(box.right - a.right).toBeLessThan(24);
+  expect(a.left).toBeGreaterThan(box.left + box.width / 2);
+  expect(Math.abs(a.top + a.height / 2 - (t.top + t.height / 2))).toBeLessThan(8);
+  for (const el of action
+    .closest(".agent-access-details")!
+    .querySelectorAll<HTMLElement>("dl, .agent-access-off")) {
+    expect(el.getBoundingClientRect().top).toBeGreaterThanOrEqual(a.bottom);
+  }
+});

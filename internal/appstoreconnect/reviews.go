@@ -80,11 +80,9 @@ func (p *Product) reviewCall(ctx context.Context, handle, app string, opID strin
 	if err := p.placeApp(ctx, seat, &m, app); err != nil {
 		return made{}, err
 	}
-	slot, ok := keyFor(op, m.team.slots, m.class == growth.ClassAdmin)
-	if !ok {
-		return made{}, noKey(op, m.team.slots)
+	if err := p.sign(ctx, handle, &m); err != nil {
+		return made{}, err
 	}
-	m.slot = slot
 	return m, nil
 }
 
@@ -117,7 +115,7 @@ func (p *Product) reviews(ctx context.Context, call growth.Call) (any, error) {
 		}
 	}
 	m.path = "/v1/apps/" + url.PathEscape(app) + "/customerReviews"
-	resp, err := m.team.client.Do(ctx, m.slot, Request{Method: "GET", Path: m.path, Query: q, Read: true})
+	resp, err := m.do(ctx, Request{Method: "GET", Path: m.path, Query: q, Read: true})
 	if err != nil {
 		return nil, said(err)
 	}
@@ -203,7 +201,7 @@ func (p *Product) replies(ctx context.Context, call growth.Call) (made, []reply,
 
 // readReview reads a review and its current reply.
 func (p *Product) readReview(ctx context.Context, m made, id string) (reply, error) {
-	resp, err := m.team.client.Do(ctx, m.slot, Request{Method: "GET", Path: "/v1/customerReviews/" + url.PathEscape(id),
+	resp, err := m.do(ctx, Request{Method: "GET", Path: "/v1/customerReviews/" + url.PathEscape(id),
 		Query: url.Values{"include": {"response"}}, Read: true, Reserved: true})
 	if err != nil {
 		return reply{}, err
@@ -333,7 +331,7 @@ func (p *Product) applyReplies(ctx context.Context, call growth.Call, approved s
 		body := map[string]any{"data": map[string]any{"type": "customerReviewResponses",
 			"attributes":    map[string]any{"responseBody": r.text},
 			"relationships": map[string]any{"review": map[string]any{"data": map[string]any{"type": "customerReviews", "id": r.review.ID}}}}}
-		_, err := m.team.client.Do(act, m.slot, Request{Method: "POST", Path: "/v1/customerReviewResponses", Body: body,
+		_, err := m.do(act, Request{Method: "POST", Path: "/v1/customerReviewResponses", Body: body,
 			Reserved: true})
 		pr := PostedReply{Review: r.review.ID, Status: "posted"}
 		switch {

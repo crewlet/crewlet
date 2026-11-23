@@ -15,6 +15,7 @@
 | `search` | Knowledge search: the BM25 lexical index, the 1-bit semantic first stage (an IVF index replicated on the vector log) with exact rerank and rank fusion, the chat and change indexes, and the cross-node fan-out. |
 | `events` | The event envelope and the typed-payload registry that reconstructs events off the wire, with the event-type catalogue and its feed and rate rules. |
 | `org` | The organization model: the hierarchy, the seats that hold it, and the derived seat identity every node shares. |
+| `seatname` | The one name Crewlet suggests or creates for an agent seat's identity at any vendor, held to each vendor's rule (ADR-0179). |
 | `iam` | The engine's identity vocabulary, a leaf of values only: principals, the three login grammars, permissions and proof recency, and the one `OwnerOf` that resolves whose record a name is. |
 | `authz` | The one authority table: whether a principal may do a verb to an object, decided by `Decide` over a row per verb, the route policy and refusal envelope, and the artifact, assistant and requester-ceiling rules. |
 | `authz/orgchart` | `authz.Chart` over one `org.Organization`: who leads a person, project, unit or page container, who sits in a unit, and which grants a seat's role carries, as pure arithmetic over a tree for the engine and `/config` writes alike. |

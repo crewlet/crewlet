@@ -51,6 +51,12 @@
 //     vendor permission each beside the level, stored in the seat's block
 //     and saved as the level is, never applied past its expiry ([Grant]).
 //
+//   - On a lane whose vendor offers it, a seat may hold its own identity
+//     (ADR-0179): checked before it is kept and on every pass, the
+//     company's identity the fallback only where the seat keeps none, never
+//     where the vendor refused its own ([ResolveIdentity]), and the row
+//     Needs you until it works ([IdentityOf]).
+//
 // What is NOT the same for every vendor is each step's call, and that is the
 // [Vendor] interface each vendor package implements and registers ([Register]).
 //
@@ -278,6 +284,12 @@ type Desired struct {
 	// them ([LaneSpec.Grants]), as the document stores them. A plan reads
 	// only the live ones ([LiveGrants]): the sync filters at its clock.
 	Grants []Grant `json:"grants,omitempty"`
+
+	// Identity is who signs the seat's calls on a lane whose vendor offers a
+	// seat its own identity ([IdentitySpec]); empty reads as the lane's
+	// default. Not access: changing it changes who the vendor sees, never what
+	// the seat may do, so [Desired.SameAccess] leaves it out.
+	Identity IdentityMode `json:"identity,omitempty"`
 }
 
 // SameAccess reports whether two settings grant the same level, permissions,
