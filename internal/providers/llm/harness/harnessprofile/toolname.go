@@ -34,6 +34,22 @@ var toolNameChars = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 // characters a model's tool name may hold: letters, digits, `_` and `-`.
 func ToolNameChars(name string) bool { return toolNameChars.MatchString(name) }
 
+// bridgeToolName is the grammar of a name the engine's own server lists:
+// runs of letters and digits joined by single `_`.
+var bridgeToolName = regexp.MustCompile(`^[A-Za-z0-9]+(_[A-Za-z0-9]+)*$`)
+
+// BridgeToolName reports whether the engine's own server (the bridge's
+// `crewlet`) may list a tool under name: one NO OTHER SERVER'S TOOL CAN BE
+// NAMED LIKE in a harness that joins server and tool with `__` or `-`. Such a
+// harness hands its model `<prefix><server><sep><tool>`, writing what a name
+// may not hold as `_`; a server whose name is not the bridge's spells
+// `<prefix>crewlet<sep>x` only by opening `crewlet_` (`crewlet` then `_` or a
+// character written as one), and then the part after the bridge's prefix
+// opens with `_` or holds `__`, or `-` beside `crewlet-`, which this grammar
+// never holds. Each runner's docs section says which grammar its harness has;
+// one joining with a single `_` (Gemini CLI, OpenCode) is checked at run time.
+func BridgeToolName(name string) bool { return bridgeToolName.MatchString(name) }
+
 // ToolNameMax is the longest tool name the engine files: what the longest
 // prefix a built-in harness puts in front of one of its tools leaves of
 // [ModelToolNameMax]. 50 while Claude Code's `mcp__crewlet__` is the longest.

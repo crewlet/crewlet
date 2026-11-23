@@ -135,6 +135,35 @@ func TestEachServerIsServedUnderItsOwnNameBeneathTheJob(t *testing.T) {
 	}
 }
 
+// THE ENGINE'S OWN SERVER LISTS NO NAME ANOTHER SERVER COULD SPELL. Qwen Code
+// 0.28.4 named a user server `crewlet_`'s tool `x` and a repository server
+// `crewlet__dup`'s tool `x` as the bridge's `_x` and `dup__x` (MEASURE-P3 N1,
+// N2), and a harness joining with `-` spells another server `crewlet-a`'s
+// tool `b` as a tool `a-b` of the bridge's. The job's endpoint lists none of
+// those, whoever registered them; a seat's server lists its own as they are.
+//
+// Mutation: drop the job endpoint's name check, or apply it to every server.
+func TestTheEnginesOwnServerListsNoNameAnotherServerCouldSpell(t *testing.T) {
+	t.Parallel()
+	reg := tools.NewRegistry()
+	for _, name := range []string{"read_page", "_x", "dup__x", "a-b", "x_"} {
+		if err := reg.Register(&stubTool{name: name}, tools.OriginBuiltin); err != nil {
+			t.Fatalf("Register(%s): %v", name, err)
+		}
+	}
+	if err := reg.Register(&stubTool{name: "get-issue"}, tools.Origin("github")); err != nil {
+		t.Fatalf("Register(get-issue): %v", err)
+	}
+	f := openServers(t, tools.NewSurface("execute", reg.Snapshot(),
+		[]string{"read_page", "_x", "dup__x", "a-b", "x_", "get-issue"}).ForTurn(seatTurn()))
+	if own, _ := listed(t, f.endpoint); !slices.Equal(own, []string{"read_page"}) {
+		t.Errorf("the job's endpoint lists %v, want read_page alone", own)
+	}
+	if github, _ := listed(t, mcpbridge.ServerURL(f.endpoint, "github")); !slices.Equal(github, []string{"get-issue"}) {
+		t.Errorf("github's endpoint lists %v, want its own tool as it is named", github)
+	}
+}
+
 // A LAUNCH IS HANDED WHAT EACH BRIDGED SERVER SAYS IT IS FOR, as its endpoint
 // says it: OpenCode lists a session's MCP servers' instructions among the
 // context it hands over before a continued run's first request, so the launch
