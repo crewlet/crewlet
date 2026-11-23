@@ -32,9 +32,12 @@ logger = logging.getLogger("crewlet")
 # three busy loops a core (session.resume 1.9 s of it). Half the notes route's 10 s hold, so a gateway that
 # accepts and never answers costs the notes no more than a poll.
 _REACH_SECONDS = 5.0
-# How long session.steer itself may take, which no retry may repeat: measured under 0.06 s at every load above,
-# so 30 s is waited before its note is left to its record, three of the route's holds.
-_STEER_SECONDS = 30.0
+# How long session.steer itself may take, which no retry may repeat. Measured on 0.23.3: 0.003 to 0.028 s idle,
+# 0.005 to 0.055 s with both cores busy, 0.006 to 0.015 s with three busy loops a core. Past it the steer's
+# outcome is unknown and the session's record decides (a note that landed late is held; one that did not is
+# served again), so waiting longer buys nothing but a later note's delay. 10 s is the gateway stop's wait
+# (hermes.go's hermesGatewayStop): a gateway slower than that to answer is one the run would be stopping.
+_STEER_SECONDS = 10.0
 
 _lock = threading.Lock()
 _turn = {"running": False, "session": None}
@@ -86,13 +89,17 @@ def register(ctx):
     reporting = {"on": bool(skills and skills_file)}
 
     # A DELEGATED SUBAGENT'S TURN fires these hooks too, under its own session with parent_session_id set, inside
-    # the run's turn (measured on 0.23.3); the notes are the run's session's, so only its own turn counts.
+    # the run's turn (measured on 0.23.3); the notes are the run's session's, so only its own turns count: the
+    # first top-level session the gateway turns for (a compaction keeps the session in place, measured).
     def turn_started(**kw):
-        if kw.get("parent_session_id"):
+        session = kw.get("session_id")
+        if kw.get("parent_session_id") or not session:
             return
         with _lock:
+            if _turn["session"] and _turn["session"] != session:
+                return
             _turn["running"] = True
-            _turn["session"] = kw.get("session_id") or _turn["session"]
+            _turn["session"] = session
         _wake.set()
 
     def turn_ended(**kw):

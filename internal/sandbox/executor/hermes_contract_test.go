@@ -204,8 +204,9 @@ func TestHermesReportsASkillLoadOnlyOfTheFileAsInstalled(t *testing.T) {
 // hermesTurnsProbe registers the plugin with a stand-in of Hermes's plugin
 // context and fires its turn hooks as 0.23.3 fires them when the run's model
 // delegates (measured): the run's turn, the subagent's turn under its own
-// session with parent_session_id set, the subagent's end, the run's end. It
-// prints the plugin's turn after each of the last three.
+// session with parent_session_id set, another top-level session's turn, the
+// subagent's end, the run's end. It prints the plugin's turn after each of
+// the last three.
 const hermesTurnsProbe = `import importlib.util, json, os, sys
 os.environ["CREWLET_HERMES_PLUGIN"] = sys.argv[2]
 spec = importlib.util.spec_from_file_location("crewlet_plugin", sys.argv[1])
@@ -219,6 +220,7 @@ m.register(Ctx())
 seen = []
 hooks["pre_llm_call"](session_id="run", parent_session_id="")
 hooks["pre_llm_call"](session_id="sub", parent_session_id="run")
+hooks["pre_llm_call"](session_id="other", parent_session_id="")
 seen.append(dict(m._turn))
 hooks["post_llm_call"](session_id="sub")
 seen.append(dict(m._turn))
@@ -230,11 +232,12 @@ print(json.dumps(seen))
 // A DELEGATED SUBAGENT'S TURN IS NO TURN OF THE HERMES RUN'S: 0.23.3 fires
 // the turn hooks for a subagent the model delegates to, under the subagent's
 // own session with parent_session_id set, inside the run's turn (measured).
-// The plugin keeps its notes on the run's session while the subagent's turn
-// starts and ends, and the run's turn ends with its own end alone.
+// The plugin keeps its notes on the run's session, the first top-level one,
+// while the subagent's turn or another session's starts and ends, and the
+// run's turn ends with its own end alone.
 //
-// Mutation: take the subagent's session for the notes, or end the turn on its
-// end, and a row goes red.
+// Mutation: take the subagent's or a later session for the notes, or end the
+// turn on another's end, and a row goes red.
 func TestADelegatedSubagentsTurnIsNoTurnOfTheHermesRuns(t *testing.T) {
 	t.Parallel()
 	python := prereqtest.OnPath(t, "python3", "the case runs Hermes's plugin", "install python3")
