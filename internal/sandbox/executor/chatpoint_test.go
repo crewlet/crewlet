@@ -18,15 +18,12 @@ func inBox(t *testing.T, box sandbox.Sandbox, shell string) {
 }
 
 // A GEMINI CLI OR QWEN CODE POINT IS MARKED WHERE A BOX SETTING MOVES IT: a
-// knob's name in the workspace's or the run's own settings, a system settings
-// or defaults file an environment variable names, a `.env` file (the
-// workspace's, one above it, the home's) or the environment itself, a model a
-// `.env` names for a run that pins none, a sign-in but the measured key (a
-// Google login or Vertex AI for Gemini CLI, the paid login for Qwen Code), a
-// GEMINI.md that imports another, a Gemini CLI launch naming no model, or a
-// release other than the measured one or the writer's; and a box with none,
-// the run's own settings beside it, is the threshold of its window, with what
-// the box hands over beside the brief.
+// knob in the workspace's or run's settings, a system file an environment
+// variable names, a `.env` file (the workspace's, above it, the home's) or the
+// environment, a model a `.env` names for an unpinned run, a sign-in but the
+// measured key (Gemini CLI's Google login or Vertex AI, Qwen Code's paid
+// login), a GEMINI.md import, a Gemini CLI launch naming no model, or another
+// release; a box with none is its window's threshold, with what it hands over.
 //
 // Mutation: skip any one source but the /etc files (no test box writes there),
 // search the run's own Qwen Code settings for "model", read a sign-in as the

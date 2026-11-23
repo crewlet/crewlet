@@ -10,15 +10,12 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
-// A GEMINI CLI OR QWEN CODE CONTINUATION IS JUDGED AT ITS FIRST REQUEST, as
-// their runners state it (executor.SessionTraits): both compress there, before
-// the brief, at a point the box sets, so neither is held whatever its brief.
-// A kept capture taken whole in its box is judged by the worse of its count
-// and its copy's, which the job's collection counts as the take does (the
-// executor's chatCopyCount): both bounded, it is handed both tellings, the
-// held one picked and the summarized one beside it for the launch to judge in
-// its box; a copy counted nothing (nil, as no collection asked) or unread (its
-// harness cut off) hands the summarized telling alone. A copy continued in
+// A GEMINI CLI OR QWEN CODE CONTINUATION IS JUDGED AT ITS FIRST REQUEST
+// (executor.SessionTraits), in the box, never held whatever its brief. A kept
+// capture taken whole in its box is judged by the worse of its count and its
+// copy's, which its collection counts as the take does: both bounded, it gets
+// both tellings, the held one picked; a copy counted nothing (nil) or unread
+// (its harness cut off) gets the summarized telling alone. A copy continued in
 // its box is judged by its own count the same way.
 //
 // Mutations, each red: give either harness no traits (held whatever its

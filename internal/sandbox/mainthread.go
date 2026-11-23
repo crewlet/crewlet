@@ -13,14 +13,13 @@ import (
 // before its first request (resumed.go); the event stream measures only the
 // newest request's input ([Result.LastRequest]), so only the box's thread (a
 // Claude Code job's main thread, an OpenCode job's export, a Gemini CLI or
-// Qwen Code job's chat file) bounds its count.
-// The read of a job's box reads it ONCE, on the box's host, before the take
-// ([Coordinator.readMainThread]), every reading sharing the read
-// ([MainThreadAsk]): the count and next request, written after the take in the
-// collection's one write of the job's end ([EndRead]), and a Claude Code
-// hook's serves' receipts ([TakeReceipts]). A stop's and a loss's read ask
-// receipts and no count: no relaunch carries their round on in place. A job
-// not over is counted unread, its receipts read.
+// Qwen Code job's chat file) bounds its count. It is read ONCE, on the box's
+// host, before the take ([Coordinator.readMainThread]), every reading sharing
+// the read ([MainThreadAsk]): the count and next request, written after the
+// take in the collection's one write of the job's end ([EndRead]), and a
+// Claude Code hook's serves' receipts ([TakeReceipts]). A stop's and a loss's
+// read ask receipts and no count: no relaunch carries their round on in place.
+// A job not over is counted unread, its receipts read.
 
 // MainThreadReadWait bounds the read of a job's main thread at its collection
 // ([Coordinator.readMainThread]): one wait every reading of the read shares.
